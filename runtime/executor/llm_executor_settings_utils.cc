@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "runtime/executor/llm_executor_config_utils.h"
+#include "runtime/executor/llm_executor_settings_utils.h"
 
 #include "absl/status/status.h"  // from @abseil-cpp
 #include "absl/status/statusor.h"  // from @abseil-cpp
 #include "absl/strings/str_cat.h"  // from @abseil-cpp
 #include "third_party/odml/infra/genai/inference/proto/llm_inference_engine.proto.h"
-#include "runtime/executor/llm_executor_config.h"
+#include "runtime/executor/llm_executor_settings.h"
 
 namespace litert::lm {
 

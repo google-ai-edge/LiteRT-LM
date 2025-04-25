@@ -5,9 +5,11 @@
 
 #include "absl/status/status.h"  // from @abseil-cpp
 #include "absl/strings/str_cat.h"  // from @abseil-cpp
+#include "absl/time/clock.h"  // from @abseil-cpp
+#include "absl/time/time.h"  // from @abseil-cpp
 #include "absl/types/span.h"  // from @abseil-cpp
 #include "litert/litert/cc/litert_tensor_buffer.h"  // from @litert
-#include "runtime/executor/llm_executor.h"
+#include "runtime/executor/llm_executor_base.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/status_macros.h"
 
@@ -76,6 +78,12 @@ absl::Status FakeLlmExecutor::Prefill(const Inputs& inputs) {
 
 absl::Status FakeLlmExecutor::Prefill(
     const Inputs& inputs, const PrefillQueryParams& prefill_query_params) {
+  if (prefill_query_params.wait_for_completion) {
+    // Sleep some time here to simulate a synchronous prefill.
+    // We can time the function time in test to make sure the code calls prefill
+    // with a correct wait_for_completion flag.
+    absl::SleepFor(absl::Milliseconds(100));
+  }
   return Prefill(inputs);
 }
 

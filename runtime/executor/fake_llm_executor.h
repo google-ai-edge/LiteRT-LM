@@ -22,7 +22,7 @@
 #include "absl/strings/string_view.h"  // from @abseil-cpp
 #include "litert/litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/executor/llm_executor.h"
-#include "runtime/executor/llm_executor_config.h"
+#include "runtime/executor/llm_executor_settings.h"
 
 namespace litert::lm {
 

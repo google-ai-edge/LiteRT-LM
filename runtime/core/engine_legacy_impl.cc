@@ -33,7 +33,7 @@
 #include "runtime/engine/engine.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/executor/llm_executor.h"
-#include "runtime/executor/llm_executor_config.h"
+#include "runtime/executor/llm_executor_settings.h"
 #include "runtime/proto/sampler_params.proto.h"
 #include "runtime/util/external_file.proto.h"
 #include "runtime/util/model_asset_bundle_resources.h"

@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_LLM_EXECUTOR_CONFIG_UTILS_H_
-#define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_LLM_EXECUTOR_CONFIG_UTILS_H_
+#ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_LLM_EXECUTOR_SETTINGS_UTILS_H_
+#define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_LLM_EXECUTOR_SETTINGS_UTILS_H_
 
 #include "absl/status/statusor.h"  // from @abseil-cpp
 #include "third_party/odml/infra/genai/inference/proto/llm_inference_engine.proto.h"
-#include "runtime/executor/llm_executor_config.h"
+#include "runtime/executor/llm_executor_settings.h"
 
 namespace litert::lm {
 
@@ -34,4 +34,4 @@ absl::StatusOr<ActivationDataType> ConvertActivationDataType(
 
 }  // namespace litert::lm
 
-#endif  // THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_LLM_EXECUTOR_CONFIG_UTILS_H_
+#endif  // THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_LLM_EXECUTOR_SETTINGS_UTILS_H_

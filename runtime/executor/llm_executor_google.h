@@ -21,7 +21,7 @@
 #include "third_party/odml/infra/genai/inference/utils/llm_utils/constraint_utils.h"
 #include "litert/litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/executor/llm_executor_base.h"
-#include "runtime/executor/llm_executor_config.h"
+#include "runtime/executor/llm_executor_settings.h"
 
 namespace litert::lm {
 

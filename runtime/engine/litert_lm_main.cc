@@ -35,7 +35,7 @@
 #include "absl/strings/string_view.h"  // from @abseil-cpp
 #include "runtime/engine/engine.h"
 #include "runtime/engine/engine_settings.h"
-#include "runtime/executor/llm_executor_config.h"
+#include "runtime/executor/llm_executor_settings.h"
 
 ABSL_FLAG(std::optional<std::string>, backend, "gpu",
           "Executor backend to use for LLM execution (cpu, gpu, etc.)");
@@ -49,7 +49,7 @@ using ::litert::lm::Backend;
 using ::litert::lm::CpuConfig;
 using ::litert::lm::EngineSettings;
 using ::litert::lm::GpuConfig;
-using ::litert::lm::LlmExecutorConfig;
+using ::litert::lm::LlmExecutorSettings;
 using ::litert::lm::ModelAssets;
 
 absl::Status MainHelper(int argc, char** argv) {
@@ -62,7 +62,7 @@ absl::Status MainHelper(int argc, char** argv) {
   ABSL_LOG(INFO) << "Model path: " << model_path;
   ModelAssets model_assets;
   model_assets.model_paths.push_back(model_path);
-  LlmExecutorConfig executor_settings(model_assets);
+  LlmExecutorSettings executor_settings(model_assets);
 
   std::string backend_str = absl::GetFlag(FLAGS_backend).value();
   ABSL_LOG(INFO) << "Choose backend: " << backend_str;

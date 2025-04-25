@@ -1,9 +1,10 @@
 module(
-  name = "litert_lm",
-  version = "0.1.0",
+    name = "litert_lm",
+    version = "0.1.0",
 )
 
 bazel_dep(name = "abseil-cpp", version = "20250127.1")
+bazel_dep(name = "protobuf", version = "31.0.rc1")
 bazel_dep(name = "zlib", version = "1.3.1.bcr.5")
 
 archives_ext = use_extension("//:EXTENSIONS.bzl", "http_archives_extension")

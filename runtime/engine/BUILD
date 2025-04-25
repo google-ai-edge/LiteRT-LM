@@ -1,22 +1,8 @@
-# Copyright 2025 The ODML Authors.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 package(
-    default_applicable_licenses = ["//third_party/odml:license"],
+    default_applicable_licenses = ["//:license"],
     default_hdrs_check = "strict",
     default_visibility = [
-        "//third_party/odml/litert_lm:__subpackages__",
+        "//:__subpackages__",
     ],
 )
 
@@ -75,7 +61,7 @@ cc_binary(
         "@abseil-cpp//absl/status",
         "@abseil-cpp//absl/status:statusor",
         "@abseil-cpp//absl/strings:string_view",
-        "//runtime/executor:llm_executor_config",
+        "//runtime/executor:llm_executor_settings",
     ] + select({
         "//conditions:default": ["//runtime/core:engine_impl"],
     }),
@@ -85,7 +71,7 @@ cc_library(
     name = "engine_settings",
     hdrs = ["engine_settings.h"],
     deps = [
-        "//runtime/executor:llm_executor_config",
+        "//runtime/executor:llm_executor_settings",
     ],
 )
 
@@ -95,6 +81,6 @@ cc_test(
     deps = [
         ":engine_settings",
         "@com_google_googletest//:gtest_main",
-        "//runtime/executor:llm_executor_config",
+        "//runtime/executor:llm_executor_settings",
     ],
 )

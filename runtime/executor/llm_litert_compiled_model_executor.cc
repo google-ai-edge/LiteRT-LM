@@ -26,7 +26,7 @@
 #include "runtime/components/top_p_cpu_sampler.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/executor/llm_executor.h"
-#include "runtime/executor/llm_executor_config.h"
+#include "runtime/executor/llm_executor_settings.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/litert_status_util.h"
 #include "runtime/util/status_macros.h"
@@ -345,8 +345,8 @@ absl::StatusOr<int> LlmLiteRtCompiledModelExecutor::GetVocabSize() {
 // static
 // Creates a LlmLiteRtCompiledModelExecutor from a LiteRt model.
 absl::StatusOr<std::unique_ptr<LlmLiteRtCompiledModelExecutor>>
-LlmLiteRtCompiledModelExecutor::Create(const LlmExecutorConfig& executor_config,
-                                       ::litert::Model& litert_model) {
+LlmLiteRtCompiledModelExecutor::Create(
+    const LlmExecutorSettings& executor_config, ::litert::Model& litert_model) {
   // For the LlmLiteRtCompiledModelExecutor, ML_DRIFT backend is used by
   // default.
   // TODO(b/405424188): - Add support for NPU backends.

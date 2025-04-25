@@ -14,7 +14,7 @@
 #include "litert/litert/cc/litert_expected.h"  // from @litert
 #include "litert/litert/cc/litert_model.h"  // from @litert
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
-#include "runtime/executor/llm_executor_config.h"
+#include "runtime/executor/llm_executor_settings.h"
 #include "runtime/util/model_asset_bundle_resources.h"
 #include "runtime/util/status_macros.h"
 
@@ -58,7 +58,7 @@ TEST(LlmLiteRTCompiledModelExecutorTest, CreateExecutorTest) {
                        CreateExecutorModelResources(model_path.string()));
   ModelAssets model_assets;
   model_assets.model_paths.push_back(model_path);
-  LlmExecutorConfig executor_config(model_assets);
+  LlmExecutorSettings executor_config(model_assets);
   executor_config.SetBackend(Backend::CPU);
   ASSERT_OK_AND_ASSIGN(auto executor,
                        LlmLiteRtCompiledModelExecutor::Create(

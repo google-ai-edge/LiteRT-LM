@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "runtime/executor/llm_executor_config.h"
+#include "runtime/executor/llm_executor_settings.h"
 
 #include <iostream>
 #include <variant>
@@ -108,7 +108,7 @@ std::ostream& operator<<(std::ostream& os, const CpuConfig& config) {
   return os;
 }
 
-std::ostream& operator<<(std::ostream& os, const LlmExecutorConfig& config) {
+std::ostream& operator<<(std::ostream& os, const LlmExecutorSettings& config) {
   os << "backend: " << config.GetBackend() << "\n";
   std::visit(
       [&os](const auto& backend_config) {

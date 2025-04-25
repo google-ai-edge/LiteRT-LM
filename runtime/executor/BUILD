@@ -1,22 +1,10 @@
-# Copyright 2024 The ODML Authors.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+load("//third_party/bazel_rules/rules_cc/cc:cc_test.bzl", "cc_test")
 
 package(
-    default_applicable_licenses = ["//third_party/odml:license"],
+    default_applicable_licenses = ["//:license"],
     default_hdrs_check = "strict",
     default_visibility = [
-        "//visibility:public",
+        "//:__subpackages__",
     ],
 )
 
@@ -49,7 +37,7 @@ cc_library(
     deps = [
         ":litert_compiled_model_executor_utils",
         ":llm_executor",
-        ":llm_executor_config",
+        ":llm_executor_settings",
         "@abseil-cpp//absl/container:flat_hash_map",
         "@abseil-cpp//absl/log:absl_log",
         "@abseil-cpp//absl/memory",
@@ -80,7 +68,7 @@ cc_test(
     tags = ["requires-gpu-nvidia"],
     deps = [
         ":litert_compiled_model_executor_utils",
-        ":llm_executor_config",
+        ":llm_executor_settings",
         ":llm_litert_compiled_model_executor",
         "@com_google_googletest//:gtest_main",
         "@abseil-cpp//absl/status:statusor",
@@ -90,7 +78,6 @@ cc_test(
         "@litert//litert/litert/cc:litert_model",
         "//runtime/util:litert_status_util",
         "//runtime/util:model_asset_bundle_resources",
-        "@tensorflow//tensorflow/lite:model_builder",
     ],
 )
 
@@ -100,11 +87,13 @@ cc_library(
     hdrs = ["fake_llm_executor.h"],
     deps = [
         ":llm_executor",
-        ":llm_executor_config",
+        ":llm_executor_base",
+        ":llm_executor_settings",
         "@abseil-cpp//absl/status",
         "@abseil-cpp//absl/status:statusor",
         "@abseil-cpp//absl/strings",
         "@abseil-cpp//absl/strings:string_view",
+        "@abseil-cpp//absl/time",
         "@abseil-cpp//absl/types:span",
         "@litert//litert/litert/cc:litert_tensor_buffer",
         "//runtime/util:convert_tensor_buffer",
@@ -161,26 +150,48 @@ cc_test(
 )
 
 cc_library(
-    name = "llm_executor_config",
-    srcs = ["llm_executor_config.cc"],
-    hdrs = ["llm_executor_config.h"],
+    name = "llm_executor_settings",
+    srcs = ["llm_executor_settings.cc"],
+    hdrs = ["llm_executor_settings.h"],
     deps = [
         "@abseil-cpp//absl/status",
         "@abseil-cpp//absl/status:statusor",
         "@abseil-cpp//absl/strings",
-        "//third_party/odml/infra/genai/inference/proto:sampler_params_cc_proto",
-        "//third_party/odml/infra/genai/inference/utils/llm_utils:constraint_utils",
         "//runtime/util:logging",
         "//runtime/util:scoped_file",
     ],
 )
 
 cc_test(
-    name = "llm_executor_config_test",
-    srcs = ["llm_executor_config_test.cc"],
+    name = "llm_executor_settings_test",
+    srcs = ["llm_executor_settings_test.cc"],
     deps = [
-        ":llm_executor_config",
+        ":llm_executor_settings",
         "@com_google_googletest//:gtest_main",
         "@abseil-cpp//absl/status",
+    ],
+)
+
+cc_library(
+    name = "llm_executor_io_types",
+    srcs = ["llm_executor_io_types.cc"],
+    hdrs = ["llm_executor_io_types.h"],
+    deps = [
+        "@litert//litert/litert/cc:litert_tensor_buffer",
+        "//runtime/util:logging_tensor_buffer",
+    ],
+)
+
+cc_test(
+    name = "llm_executor_io_types_test",
+    srcs = ["llm_executor_io_types_test.cc"],
+    deps = [
+        ":llm_executor_io_types",
+        "@com_google_googletest//:gtest_main",
+        "@litert//litert/litert/c:litert_dispatch_headers",
+        "@litert//litert/litert/cc:litert_element_type",
+        "@litert//litert/litert/cc:litert_layout",
+        "@litert//litert/litert/cc:litert_model",
+        "@litert//litert/litert/cc:litert_tensor_buffer",
     ],
 )

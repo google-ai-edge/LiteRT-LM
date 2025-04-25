@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "runtime/executor/llm_executor_config.h"
+#include "runtime/executor/llm_executor_settings.h"
 
 #include <sstream>
 #include <string>
@@ -122,11 +122,11 @@ enable_decode_logits: 1
   EXPECT_EQ(oss.str(), expected_output);
 }
 
-TEST(LlmExecutorConfigTest, LlmExecutorConfig) {
+TEST(LlmExecutorConfigTest, LlmExecutorSettings) {
   ModelAssets model_assets;
   model_assets.model_paths = {"/path/to/model1"};
   model_assets.fake_weights_mode = FakeWeightsMode::FAKE_WEIGHTS_NONE;
-  LlmExecutorConfig config(model_assets);
+  LlmExecutorSettings config(model_assets);
   config.SetBackend(Backend::GPU_ARTISAN);
   config.SetBackendConfig(CreateGpuArtisanConfig());
   config.SetMaxNumTokens(1024);
@@ -159,7 +159,7 @@ fake_weights_mode: FAKE_WEIGHTS_NONE
 
 TEST(LlmExecutorConfigTest, GetBackendConfig) {
   ModelAssets model_assets;
-  LlmExecutorConfig config(model_assets);
+  LlmExecutorSettings config(model_assets);
   config.SetBackendConfig(CreateGpuArtisanConfig());
 
   auto gpu_config = config.GetBackendConfig<GpuArtisanConfig>();
@@ -170,7 +170,7 @@ TEST(LlmExecutorConfigTest, GetBackendConfig) {
 
 TEST(LlmExecutorConfigTest, MutableBackendConfig) {
   ModelAssets model_assets;
-  LlmExecutorConfig config(model_assets);
+  LlmExecutorSettings config(model_assets);
   config.SetBackendConfig(CreateGpuArtisanConfig());
 
   auto gpu_config = config.MutableBackendConfig<GpuArtisanConfig>();

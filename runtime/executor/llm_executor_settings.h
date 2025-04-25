@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef THIRD_PARTY_ODML_LITE_RT_LLM_EXECUTOR_LLM_EXECUTOR_CONFIG_H_
-#define THIRD_PARTY_ODML_LITE_RT_LLM_EXECUTOR_LLM_EXECUTOR_CONFIG_H_
+#ifndef THIRD_PARTY_ODML_LITE_RT_LLM_EXECUTOR_LLM_EXECUTOR_SETTINGS_H_
+#define THIRD_PARTY_ODML_LITE_RT_LLM_EXECUTOR_LLM_EXECUTOR_SETTINGS_H_
 
 #include <cstdint>
 #include <iostream>
@@ -145,18 +145,18 @@ struct CpuConfig {
 };
 std::ostream& operator<<(std::ostream& os, const CpuConfig& config);
 
-// Configuration for the LLM executor.
+// Settings for the LLM executor.
 //
-// This class holds the configuration for the LLM executor, including the
+// This class holds the settings for the LLM executor, including the
 // model assets, cache directory, maximum number of tokens, backend,
-// activation data type, and backend-specific configurations.
+// activation data type, and backend-specific settings.
 //
 // The user should construct the class using ModelAssets and then set the
-// remaining configurations using the setter APIs.
-class LlmExecutorConfig {
+// remaining settings using the setter APIs.
+class LlmExecutorSettings {
  public:
   // TODO(b/397975034): Set default values in the constructor.
-  explicit LlmExecutorConfig(const ModelAssets& model_assets)
+  explicit LlmExecutorSettings(const ModelAssets& model_assets)
       : model_assets_(model_assets) {}
 
   // Getter APIs.
@@ -234,12 +234,12 @@ class LlmExecutorConfig {
   std::optional<ActivationDataType> activation_data_type_;
 
   // Declare the output stream operator as a friend such that it can be used
-  // to print the LlmExecutorConfig private member.
+  // to print the LlmExecutorSettings private member.
   friend std::ostream& operator<<(std::ostream& os,
-                                  const LlmExecutorConfig& config);
+                                  const LlmExecutorSettings& config);
 };
-std::ostream& operator<<(std::ostream& os, const LlmExecutorConfig& config);
+std::ostream& operator<<(std::ostream& os, const LlmExecutorSettings& config);
 
 }  // namespace litert::lm
 
-#endif  // THIRD_PARTY_ODML_LITE_RT_LLM_EXECUTOR_LLM_EXECUTOR_CONFIG_H_
+#endif  // THIRD_PARTY_ODML_LITE_RT_LLM_EXECUTOR_LLM_EXECUTOR_SETTINGS_H_

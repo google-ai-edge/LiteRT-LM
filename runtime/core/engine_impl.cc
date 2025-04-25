@@ -32,7 +32,7 @@
 #include "runtime/engine/engine_settings.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/executor/llm_executor.h"
-#include "runtime/executor/llm_executor_config.h"
+#include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/llm_litert_compiled_model_executor.h"
 #include "runtime/proto/sampler_params.proto.h"
 #include "runtime/util/external_file.proto.h"
@@ -45,7 +45,7 @@ namespace {
 // Builds the LiteRT compiled model executor.
 absl::StatusOr<std::unique_ptr<LlmExecutor>> BuildLitertCompiledModelExecutor(
     const std::unique_ptr<ExecutorModelResources>& model_resources,
-    const LlmExecutorConfig& executor_config) {
+    const LlmExecutorSettings& executor_config) {
   std::vector<std::string> model_paths =
       executor_config.GetModelAssets().model_paths;
   if (model_paths.size() != 1) {

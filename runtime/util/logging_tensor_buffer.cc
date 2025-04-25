@@ -7,6 +7,7 @@
 #include "absl/strings/str_join.h"  // from @abseil-cpp
 #include "absl/strings/string_view.h"  // from @abseil-cpp
 #include "absl/types/span.h"  // from @abseil-cpp
+#include "litert/litert/c/litert_tensor_buffer_types.h"  // from @litert
 #include "litert/litert/cc/litert_element_type.h"  // from @litert
 #include "litert/litert/cc/litert_tensor_buffer.h"  // from @litert
 

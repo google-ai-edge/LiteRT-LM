@@ -22,7 +22,7 @@
 #include "absl/status/statusor.h"  // from @abseil-cpp
 #include "runtime/engine/engine.h"
 #include "runtime/engine/engine_settings.h"
-#include "runtime/executor/llm_executor_config.h"
+#include "runtime/executor/llm_executor_settings.h"
 
 namespace litert::lm {
 namespace {
@@ -33,7 +33,7 @@ TEST(EngineTest, CreateEngine) {
       "runtime/testdata/test_lm.task";
   ModelAssets model_assets;
   model_assets.model_paths.push_back(task_path.string());
-  LlmExecutorConfig executor_settings(model_assets);
+  LlmExecutorSettings executor_settings(model_assets);
   executor_settings.SetBackend(Backend::CPU);
   executor_settings.SetBackendConfig(CpuConfig());
   executor_settings.SetMaxNumTokens(160);
@@ -64,7 +64,7 @@ TEST(EngineTest, CreateEngineGPU) {
       "runtime/testdata/test_lm.task";
   ModelAssets model_assets;
   model_assets.model_paths.push_back(task_path.string());
-  LlmExecutorConfig executor_settings(model_assets);
+  LlmExecutorSettings executor_settings(model_assets);
 
   executor_settings.SetBackend(Backend::GPU);
   executor_settings.SetBackendConfig(GpuConfig());

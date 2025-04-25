@@ -33,7 +33,7 @@
 #include "runtime/components/top_p_cpu_sampler.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/executor/llm_executor.h"
-#include "runtime/executor/llm_executor_config.h"
+#include "runtime/executor/llm_executor_settings.h"
 
 namespace litert::lm {
 
@@ -45,7 +45,8 @@ class LlmLiteRtCompiledModelExecutor : public ::litert::lm::LlmExecutor {
  public:
   // Creates a LlmLiteRtCompiledModelExecutor from a LiteRt model.
   static absl::StatusOr<std::unique_ptr<LlmLiteRtCompiledModelExecutor>> Create(
-      const LlmExecutorConfig& executor_config, ::litert::Model& litert_model);
+      const LlmExecutorSettings& executor_config,
+      ::litert::Model& litert_model);
 
   // Input APIs:
   // Basic API to trigger the "prefill" or "prefix" process.
