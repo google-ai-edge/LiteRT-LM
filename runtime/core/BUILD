@@ -1,72 +1,8 @@
-# Copyright 2025 The ODML Authors.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 package(
-    default_applicable_licenses = ["//third_party/odml:license"],
+    default_applicable_licenses = ["//:license"],
     default_hdrs_check = "strict",
     default_visibility = [
-        "//third_party/odml/litert_lm:__subpackages__",
-    ],
-)
-
-licenses(["notice"])
-
-cc_library(
-    name = "engine_impl",
-    srcs = ["engine_impl.cc"],
-    deps = [
-        ":session_factory",
-        "@abseil-cpp//absl/log",
-        "@abseil-cpp//absl/log:absl_check",
-        "@abseil-cpp//absl/log:absl_log",
-        "@abseil-cpp//absl/log:check",
-        "@abseil-cpp//absl/status",
-        "@abseil-cpp//absl/status:statusor",
-        "@abseil-cpp//absl/strings",
-        "@abseil-cpp//absl/strings:string_view",
-        "//runtime/components:sentencepiece_tokenizer",
-        "//runtime/components:tokenizer",
-        "//runtime/engine:engine_interface",
-        "//runtime/engine:engine_settings",
-        "//runtime/executor:litert_compiled_model_executor_utils",
-        "//runtime/executor:llm_executor",
-        "//runtime/executor:llm_executor_config",
-        "//runtime/executor:llm_litert_compiled_model_executor",
-        "//runtime/proto:sampler_params_cc_proto",
-        "//runtime/util:external_file_cc_proto",
-        "//runtime/util:litert_status_util",
-        "//runtime/util:model_asset_bundle_resources",
-    ],
-)
-
-cc_test(
-    name = "engine_impl_test",
-    srcs = ["engine_impl_test.cc"],
-    # The LiteRT GPU path is not ready yet. Only test the CPU path.
-    args = ["--gunit_filter=EngineTest.CreateEngine"],
-    data = ["//runtime/testdata"],
-    deps = [
-        ":engine_impl",  # buildcleaner: keep
-        "@com_google_googletest//:gtest_main",
-        "@abseil-cpp//absl/log:absl_check",
-        "@abseil-cpp//absl/status",
-        "@abseil-cpp//absl/status:statusor",
-        "//runtime/engine:engine_interface",
-        "//runtime/engine:engine_settings",
-        "//runtime/executor:llm_executor_config",
-    ],
-)
+        "//third_party/odml/infra/genai/inference:__subpackages__",
 
 cc_library(
     name = "pipeline",

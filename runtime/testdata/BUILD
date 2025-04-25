@@ -1,9 +1,7 @@
 package(
-    default_applicable_licenses = ["//third_party/odml:license"],
+    default_applicable_licenses = ["//:license"],
     default_hdrs_check = "strict",
-    default_visibility = [
-        "//visibility:public",
-    ],
+    default_visibility = ["//:__subpackages__"],
 )
 
 filegroup(
