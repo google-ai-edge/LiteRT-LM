@@ -1,0 +1,139 @@
+// Copyright 2025 The ODML Authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "third_party/absl/log/absl_check.h"
+#include "third_party/absl/log/absl_log.h"
+#include "third_party/absl/log/check.h"
+#include "third_party/absl/log/log.h"
+#include "third_party/absl/status/status.h"
+#include "third_party/absl/status/statusor.h"
+#include "third_party/absl/strings/str_cat.h"
+#include "third_party/absl/strings/string_view.h"
+#include "third_party/odml/litert_lm/runtime/components/sentencepiece_tokenizer.h"
+#include "third_party/odml/litert_lm/runtime/components/tokenizer.h"
+#include "third_party/odml/litert_lm/runtime/core/session_factory.h"
+#include "third_party/odml/litert_lm/runtime/engine/engine.h"
+#include "third_party/odml/litert_lm/runtime/engine/llm_model_settings.h"
+#include "third_party/odml/litert_lm/runtime/executor/litert_compiled_model_executor_utils.h"
+#include "third_party/odml/litert_lm/runtime/executor/llm_executor.h"
+#include "third_party/odml/litert_lm/runtime/executor/llm_executor_config.h"
+#include "third_party/odml/litert_lm/runtime/executor/llm_litert_compiled_model_executor.h"
+#include "third_party/odml/litert_lm/runtime/proto/sampler_params.proto.h"
+#include "third_party/odml/litert_lm/runtime/util/external_file.proto.h"
+#include "third_party/odml/litert_lm/runtime/util/model_asset_bundle_resources.h"
+#include "third_party/odml/litert_lm/runtime/util/status_macros.h"
+
+namespace litert::lm {
+namespace {
+
+// Builds the LiteRT compiled model executor.
+absl::StatusOr<std::unique_ptr<LlmExecutor>> BuildLitertCompiledModelExecutor(
+    const std::unique_ptr<ExecutorModelResources>& model_resources,
+    const LlmExecutorConfig& executor_config) {
+  std::vector<std::string> model_paths =
+      executor_config.GetModelAssets().model_paths;
+  if (model_paths.size() != 1) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Model paths size must be 1. Got ", model_paths.size()));
+  }
+  // Create executor that creates and owns the interpreter and kv cache.
+  std::unique_ptr<LlmExecutor> executor;
+  ASSIGN_OR_RETURN(executor,
+                   LlmLiteRtCompiledModelExecutor::Create(
+                       executor_config, model_resources->litert_model));
+  return executor;
+}
+
+}  // namespace
+
+class EngineImpl : public Engine {
+ public:
+  ~EngineImpl() override = default;
+
+  explicit EngineImpl(const LlmModelSettings& llm_model_settings) {
+    const std::string& model_path = llm_model_settings.GetMainExecutorSettings()
+                                        .GetModelAssets()
+                                        .model_paths[0];
+    auto model_resources = BuildLiteRtCompiledModelResources(model_path);
+    ABSL_CHECK_OK(model_resources);
+    litert_model_resources_ = std::move(*model_resources);
+    auto executor = BuildLitertCompiledModelExecutor(
+        litert_model_resources_, llm_model_settings.GetMainExecutorSettings());
+
+    ABSL_QCHECK_OK(executor);
+    executor_ = std::move(*executor);
+
+    // TODO(b/397975034): factor out the tokenizer creation logic once the model
+    // loading mechanism of the new file format is determined.
+    auto external_file = std::make_unique<proto::ExternalFile>();
+    external_file->set_file_name(model_path);
+    auto resources = ModelAssetBundleResources::Create(
+        /*tag=*/"", std::move(external_file));
+    auto vocab_buffer = (*resources)->GetFile("TOKENIZER_MODEL");
+    tokenizer_ =
+        std::move(*SentencePieceTokenizer::CreateFromBuffer(*vocab_buffer));
+
+    // TODO(b/397975034) Add support for stop tokens loading from the model
+    // file, most likely by creating a simplified DeriveLlmModelSettingsStruct.
+    AddStopTokenIds("<eos>");
+    AddStopTokenIds("<end_of_turn>");
+    // TODO(b/412390852): Add logics to initialize the sampler.
+    sampler_params_.set_type(proto::SamplerParameters::TOP_P);
+    sampler_params_.set_k(1);
+    sampler_params_.set_p(0.95f);
+    sampler_params_.set_temperature(1.0f);
+    sampler_params_.set_seed(0);
+  }
+
+  // Method to create the Session.
+  absl::StatusOr<std::unique_ptr<Session>> CreateSession() const override {
+    return InitializeSession(executor_, tokenizer_, stop_token_ids_,
+                             sampler_params_);
+  }
+
+ private:
+  void AddStopTokenIds(const std::string& stop_token) {
+    auto stop_token_ids = tokenizer_->TextToTokenIds(stop_token);
+    if ((*stop_token_ids).size() == 1) {
+      stop_token_ids_.push_back((*stop_token_ids)[0]);
+    } else {
+      ABSL_LOG(ERROR) << "Stop token \"" << stop_token
+                      << "\" maps to multiple token ids: "
+                      << (*stop_token_ids).size();
+    }
+  }
+
+  // Shared executor for all sessions.
+  std::shared_ptr<LlmExecutor> executor_;
+  // Shared tokenizer for all sessions.
+  std::shared_ptr<Tokenizer> tokenizer_;
+  // Default stop token ids for all sessions loaded from the model file.
+  std::vector<int> stop_token_ids_;
+  std::unique_ptr<ExecutorModelResources> litert_model_resources_;
+  proto::SamplerParameters sampler_params_;
+};
+
+// Method to create Engine.
+absl::StatusOr<std::unique_ptr<Engine>> Engine::CreateEngine(
+    const LlmModelSettings& settings_struct) {
+  auto llm_impl = std::make_unique<EngineImpl>(settings_struct);
+  return llm_impl;
+};
+
+}  // namespace litert::lm
