@@ -26,10 +26,10 @@ cc_library(
     name = "tokenizer",
     hdrs = ["tokenizer.h"],
     deps = [
-        "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/strings:string_view",
-        "@com_google_absl//absl/types:span",
+        "@abseil-cpp//absl/status",
+        "@abseil-cpp//absl/status:statusor",
+        "@abseil-cpp//absl/strings:string_view",
+        "@abseil-cpp//absl/types:span",
         "@litert//litert/litert/cc:litert_macros",
         "@litert//litert/litert/cc:litert_tensor_buffer",
         "//runtime/util:convert_tensor_buffer",
@@ -41,11 +41,11 @@ cc_library(
     srcs = ["sampling_cpu_util.cc"],
     hdrs = ["sampling_cpu_util.h"],
     deps = [
-        "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/strings",
-        "@com_google_absl//absl/strings:str_format",
-        "@com_google_absl//absl/types:span",
+        "@abseil-cpp//absl/status",
+        "@abseil-cpp//absl/status:statusor",
+        "@abseil-cpp//absl/strings",
+        "@abseil-cpp//absl/strings:str_format",
+        "@abseil-cpp//absl/types:span",
     ],
 )
 
@@ -53,7 +53,7 @@ cc_library(
     name = "sampler",
     hdrs = ["sampler.h"],
     deps = [
-        "@com_google_absl//absl/status",
+        "@abseil-cpp//absl/status",
         "@litert//litert/litert/cc:litert_tensor_buffer",
     ],
 )
@@ -64,7 +64,7 @@ cc_test(
     deps = [
         ":sampling_cpu_util",
         "@com_google_googletest//:gtest_main",
-        "@com_google_absl//absl/types:span",
+        "@abseil-cpp//absl/types:span",
     ],
 )
 
@@ -74,11 +74,11 @@ cc_library(
     hdrs = ["sentencepiece_tokenizer.h"],
     deps = [
         ":tokenizer",
-        "@com_google_absl//absl/memory",
-        "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/strings:string_view",
-        "@com_google_sentencepiece//:sentencepiece_processor",
+        "@abseil-cpp//absl/memory",
+        "@abseil-cpp//absl/status",
+        "@abseil-cpp//absl/status:statusor",
+        "@abseil-cpp//absl/strings:string_view",
+        "@sentencepiece//src:sentencepiece_processor",
     ],
 )
 
@@ -89,10 +89,10 @@ cc_test(
     deps = [
         ":sentencepiece_tokenizer",
         "@com_google_googletest//:gtest_main",
-        "@com_google_absl//absl/cleanup",
-        "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/strings",
+        "@abseil-cpp//absl/cleanup",
+        "@abseil-cpp//absl/status",
+        "@abseil-cpp//absl/status:statusor",
+        "@abseil-cpp//absl/strings",
         "@litert//litert/litert/cc:litert_layout",
         "@litert//litert/litert/cc:litert_tensor_buffer",
         "//runtime/util:convert_tensor_buffer",
@@ -104,10 +104,10 @@ cc_library(
     srcs = ["token_id_util.cc"],
     hdrs = ["token_id_util.h"],
     deps = [
-        "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/strings:str_format",
-        "@com_google_absl//absl/types:span",
+        "@abseil-cpp//absl/status",
+        "@abseil-cpp//absl/status:statusor",
+        "@abseil-cpp//absl/strings:str_format",
+        "@abseil-cpp//absl/types:span",
     ],
 )
 
@@ -117,7 +117,7 @@ cc_test(
     deps = [
         ":token_id_util",
         "@com_google_googletest//:gtest_main",
-        "@com_google_absl//absl/status",
+        "@abseil-cpp//absl/status",
     ],
 )
 
@@ -128,11 +128,11 @@ cc_library(
     deps = [
         ":sampler",
         ":sampling_cpu_util",
-        "@com_google_absl//absl/memory",
-        "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/strings",
-        "@com_google_absl//absl/types:span",
+        "@abseil-cpp//absl/memory",
+        "@abseil-cpp//absl/status",
+        "@abseil-cpp//absl/status:statusor",
+        "@abseil-cpp//absl/strings",
+        "@abseil-cpp//absl/types:span",
         "@litert//litert/litert/cc:litert_macros",
         "@litert//litert/litert/cc:litert_tensor_buffer",
         "//runtime/util:convert_tensor_buffer",
@@ -146,7 +146,7 @@ cc_test(
     deps = [
         ":top_p_cpu_sampler",
         "@com_google_googletest//:gtest_main",
-        "@com_google_absl//absl/types:span",
+        "@abseil-cpp//absl/types:span",
         "@litert//litert/litert/cc:litert_tensor_buffer",
         "//runtime/util:convert_tensor_buffer",
     ],

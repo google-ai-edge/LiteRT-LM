@@ -1,4 +1,4 @@
-#include "runtime/engine/llm_model_settings.h"
+#include "runtime/engine/engine_settings.h"
 
 #include <string>
 
@@ -9,18 +9,17 @@
 namespace litert::lm {
 namespace {
 
+using ::litert::lm::EngineSettings;
 using ::litert::lm::LlmExecutorConfig;
-using ::litert::lm::LlmModelSettings;
 using ::testing::Eq;
 
-class LlmModelSettingsTest : public ::testing::Test {
-};
+class LlmModelSettingsTest : public ::testing::Test {};
 
 TEST_F(LlmModelSettingsTest, GetModelPath) {
   ModelAssets model_assets;
   model_assets.model_paths.push_back("test_model_path_1");
   LlmExecutorConfig executor_settings(model_assets);
-  LlmModelSettings settings(executor_settings);
+  EngineSettings settings(executor_settings);
 
   EXPECT_EQ(settings.GetMainExecutorSettings().GetModelAssets().model_paths[0],
             "test_model_path_1");
@@ -31,7 +30,7 @@ TEST_F(LlmModelSettingsTest, SetAndGetCacheDir) {
   model_assets.model_paths.push_back("test_model_path_1");
   LlmExecutorConfig executor_settings(model_assets);
   executor_settings.SetCacheDir("test_cache_dir");
-  LlmModelSettings settings(executor_settings);
+  EngineSettings settings(executor_settings);
   EXPECT_EQ(settings.GetMainExecutorSettings().GetCacheDir(), "test_cache_dir");
 }
 
@@ -40,7 +39,7 @@ TEST_F(LlmModelSettingsTest, SetAndGetMaxNumTokens) {
   model_assets.model_paths.push_back("test_model_path_1");
   LlmExecutorConfig executor_settings(model_assets);
   executor_settings.SetMaxNumTokens(128);
-  LlmModelSettings settings(executor_settings);
+  EngineSettings settings(executor_settings);
   EXPECT_EQ(settings.GetMainExecutorSettings().GetMaxNumTokens(), 128);
 }
 
@@ -49,7 +48,7 @@ TEST_F(LlmModelSettingsTest, SetAndGetExecutorBackend) {
   model_assets.model_paths.push_back("test_model_path_1");
   LlmExecutorConfig executor_settings(model_assets);
   executor_settings.SetBackend(Backend::GPU);
-  LlmModelSettings settings(executor_settings);
+  EngineSettings settings(executor_settings);
   EXPECT_THAT(settings.GetMainExecutorSettings().GetBackend(),
               Eq(Backend::GPU));
 }
@@ -58,7 +57,7 @@ TEST_F(LlmModelSettingsTest, DefaultExecutorBackend) {
   ModelAssets model_assets;
   model_assets.model_paths.push_back("test_model_path_1");
   LlmExecutorConfig executor_settings(model_assets);
-  LlmModelSettings settings(executor_settings);
+  EngineSettings settings(executor_settings);
   EXPECT_THAT(settings.GetMainExecutorSettings().GetBackend(),
               Eq(Backend::CPU));
 }

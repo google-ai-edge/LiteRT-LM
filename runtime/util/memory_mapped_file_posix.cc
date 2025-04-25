@@ -22,9 +22,9 @@
 #include <cstring>
 #include <memory>
 
-#include "absl/cleanup/cleanup.h"  // from @com_google_absl
-#include "absl/status/statusor.h"  // from @com_google_absl
-#include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/cleanup/cleanup.h"  // from @abseil-cpp
+#include "absl/status/statusor.h"  // from @abseil-cpp
+#include "absl/strings/string_view.h"  // from @abseil-cpp
 #include "runtime/util/memory_mapped_file.h"
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/status_macros.h"

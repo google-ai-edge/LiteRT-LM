@@ -17,19 +17,19 @@
 #include <utility>
 #include <vector>
 
-#include "absl/log/absl_check.h"  // from @com_google_absl
-#include "absl/log/absl_log.h"  // from @com_google_absl
-#include "absl/log/check.h"  // from @com_google_absl
-#include "absl/log/log.h"  // from @com_google_absl
-#include "absl/status/status.h"  // from @com_google_absl
-#include "absl/status/statusor.h"  // from @com_google_absl
-#include "absl/strings/str_cat.h"  // from @com_google_absl
-#include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/log/absl_check.h"  // from @abseil-cpp
+#include "absl/log/absl_log.h"  // from @abseil-cpp
+#include "absl/log/check.h"  // from @abseil-cpp
+#include "absl/log/log.h"  // from @abseil-cpp
+#include "absl/status/status.h"  // from @abseil-cpp
+#include "absl/status/statusor.h"  // from @abseil-cpp
+#include "absl/strings/str_cat.h"  // from @abseil-cpp
+#include "absl/strings/string_view.h"  // from @abseil-cpp
 #include "runtime/components/sentencepiece_tokenizer.h"
 #include "runtime/components/tokenizer.h"
 #include "runtime/core/session_factory.h"
 #include "runtime/engine/engine.h"
-#include "runtime/engine/llm_model_settings.h"
+#include "runtime/engine/engine_settings.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/executor/llm_executor.h"
 #include "runtime/executor/llm_executor_config.h"
@@ -66,15 +66,15 @@ class EngineImpl : public Engine {
  public:
   ~EngineImpl() override = default;
 
-  explicit EngineImpl(const LlmModelSettings& llm_model_settings) {
-    const std::string& model_path = llm_model_settings.GetMainExecutorSettings()
+  explicit EngineImpl(const EngineSettings& engine_settings) {
+    const std::string& model_path = engine_settings.GetMainExecutorSettings()
                                         .GetModelAssets()
                                         .model_paths[0];
     auto model_resources = BuildLiteRtCompiledModelResources(model_path);
     ABSL_CHECK_OK(model_resources);
     litert_model_resources_ = std::move(*model_resources);
     auto executor = BuildLitertCompiledModelExecutor(
-        litert_model_resources_, llm_model_settings.GetMainExecutorSettings());
+        litert_model_resources_, engine_settings.GetMainExecutorSettings());
 
     ABSL_QCHECK_OK(executor);
     executor_ = std::move(*executor);
@@ -131,7 +131,7 @@ class EngineImpl : public Engine {
 
 // Method to create Engine.
 absl::StatusOr<std::unique_ptr<Engine>> Engine::CreateEngine(
-    const LlmModelSettings& settings_struct) {
+    const EngineSettings& settings_struct) {
   auto llm_impl = std::make_unique<EngineImpl>(settings_struct);
   return llm_impl;
 };

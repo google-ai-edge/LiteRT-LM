@@ -17,9 +17,9 @@
 
 #include <vector>
 
-#include "absl/status/status.h"  // from @com_google_absl
-#include "absl/status/statusor.h"  // from @com_google_absl
-#include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/status/status.h"  // from @abseil-cpp
+#include "absl/status/statusor.h"  // from @abseil-cpp
+#include "absl/strings/string_view.h"  // from @abseil-cpp
 #include "litert/litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/executor/llm_executor.h"
 #include "runtime/executor/llm_executor_config.h"

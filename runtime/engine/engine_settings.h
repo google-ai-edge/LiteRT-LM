@@ -1,5 +1,5 @@
-#ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_ENGINE_LLM_MODEL_SETTINGS_H_
-#define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_ENGINE_LLM_MODEL_SETTINGS_H_
+#ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_ENGINE_ENGINE_SETTINGS_H_
+#define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_ENGINE_ENGINE_SETTINGS_H_
 
 #include "runtime/executor/llm_executor_config.h"
 
@@ -11,9 +11,9 @@ namespace litert::lm {
 // model and are not expected to change during the inference process.
 // The model assets are required to initialize the LiteRT LM.
 // TODO(b/397975034) Add overloading << operator for debugging.
-class LlmModelSettings {
+class EngineSettings {
  public:
-  explicit LlmModelSettings(const LlmExecutorConfig& executor_settings)
+  explicit EngineSettings(const LlmExecutorConfig& executor_settings)
       : main_executor_settings_(executor_settings) {}
 
   const LlmExecutorConfig& GetMainExecutorSettings() const {
@@ -27,4 +27,4 @@ class LlmModelSettings {
 
 }  // namespace litert::lm
 
-#endif  // THIRD_PARTY_ODML_LITERT_LM_RUNTIME_ENGINE_LLM_MODEL_SETTINGS_H_
+#endif  // THIRD_PARTY_ODML_LITERT_LM_RUNTIME_ENGINE_ENGINE_SETTINGS_H_

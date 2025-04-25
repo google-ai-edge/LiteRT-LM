@@ -25,16 +25,16 @@
 #include <optional>
 #include <string>
 
-#include "absl/flags/flag.h"  // from @com_google_absl
-#include "absl/flags/parse.h"  // from @com_google_absl
-#include "absl/log/absl_check.h"  // from @com_google_absl
-#include "absl/log/absl_log.h"  // from @com_google_absl
-#include "absl/log/check.h"  // from @com_google_absl
-#include "absl/status/status.h"  // from @com_google_absl
-#include "absl/status/statusor.h"  // from @com_google_absl
-#include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/flags/flag.h"  // from @abseil-cpp
+#include "absl/flags/parse.h"  // from @abseil-cpp
+#include "absl/log/absl_check.h"  // from @abseil-cpp
+#include "absl/log/absl_log.h"  // from @abseil-cpp
+#include "absl/log/check.h"  // from @abseil-cpp
+#include "absl/status/status.h"  // from @abseil-cpp
+#include "absl/status/statusor.h"  // from @abseil-cpp
+#include "absl/strings/string_view.h"  // from @abseil-cpp
 #include "runtime/engine/engine.h"
-#include "runtime/engine/llm_model_settings.h"
+#include "runtime/engine/engine_settings.h"
 #include "runtime/executor/llm_executor_config.h"
 
 ABSL_FLAG(std::optional<std::string>, backend, "gpu",
@@ -47,9 +47,9 @@ namespace {
 
 using ::litert::lm::Backend;
 using ::litert::lm::CpuConfig;
+using ::litert::lm::EngineSettings;
 using ::litert::lm::GpuConfig;
 using ::litert::lm::LlmExecutorConfig;
-using ::litert::lm::LlmModelSettings;
 using ::litert::lm::ModelAssets;
 
 absl::Status MainHelper(int argc, char** argv) {
@@ -84,7 +84,7 @@ absl::Status MainHelper(int argc, char** argv) {
   // TODO(b/397975034) Set the max num tokens based on the model.
   executor_settings.SetMaxNumTokens(160);
 
-  LlmModelSettings model_settings(executor_settings);
+  EngineSettings model_settings(executor_settings);
 
   absl::StatusOr<std::unique_ptr<litert::lm::Engine>> llm =
       litert::lm::Engine::CreateEngine(model_settings);

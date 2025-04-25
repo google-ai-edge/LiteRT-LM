@@ -17,11 +17,11 @@
 
 #include <memory>
 
-#include "absl/status/status.h"  // from @com_google_absl
-#include "absl/status/statusor.h"  // from @com_google_absl
-#include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/status/status.h"  // from @abseil-cpp
+#include "absl/status/statusor.h"  // from @abseil-cpp
+#include "absl/strings/string_view.h"  // from @abseil-cpp
+#include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
-#include "runtime/engine/llm_model_settings.h"
 
 namespace litert::lm {
 
@@ -48,7 +48,7 @@ class Engine {
 
   // Method to create Engine.
   static absl::StatusOr<std::unique_ptr<Engine>> CreateEngine(
-      const LlmModelSettings& settings_struct);
+      const EngineSettings& settings);
 
   // Method to create the Session.
   virtual absl::StatusOr<std::unique_ptr<Session>> CreateSession() const = 0;
