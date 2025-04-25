@@ -1,10 +1,10 @@
-#include "third_party/odml/litert_lm/runtime/components/token_id_util.h"
+#include "runtime/components/token_id_util.h"
 
 #include <vector>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include "third_party/absl/status/status.h"
+#include "absl/status/status.h"  // from @com_google_absl
 
 namespace litert::lm {
 namespace {

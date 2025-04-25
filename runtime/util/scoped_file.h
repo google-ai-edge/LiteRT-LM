@@ -19,8 +19,8 @@
 #include <Windows.h>
 #endif
 
-#include "third_party/absl/status/statusor.h"
-#include "third_party/absl/strings/string_view.h"
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 
 namespace litert::lm {
 

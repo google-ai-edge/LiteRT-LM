@@ -1,4 +1,4 @@
-#include "third_party/odml/litert_lm/runtime/core/session_factory.h"
+#include "runtime/core/session_factory.h"
 
 #include <memory>
 #include <string>
@@ -6,11 +6,11 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include "third_party/absl/status/statusor.h"
-#include "third_party/absl/strings/string_view.h"
-#include "third_party/odml/litert_lm/runtime/components/tokenizer.h"
-#include "third_party/odml/litert_lm/runtime/executor/fake_llm_executor.h"
-#include "third_party/odml/litert_lm/runtime/executor/llm_executor.h"
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
+#include "runtime/components/tokenizer.h"
+#include "runtime/executor/fake_llm_executor.h"
+#include "runtime/executor/llm_executor.h"
 
 namespace litert::lm {
 namespace {

@@ -6,14 +6,14 @@
 #include <utility>
 #include <vector>
 
-#include "third_party/absl/flags/flag.h"
-#include "third_party/absl/flags/parse.h"
-#include "third_party/absl/log/absl_log.h"
+#include "absl/flags/flag.h"  // from @com_google_absl
+#include "absl/flags/parse.h"  // from @com_google_absl
+#include "absl/log/absl_log.h"  // from @com_google_absl
 #include "third_party/odml/infra/genai/inference/executor/llm_litert_npu_compiled_model_executor.h"
-#include "third_party/odml/litert_lm/runtime/components/sentencepiece_tokenizer.h"
-#include "third_party/odml/litert_lm/runtime/components/tokenizer.h"
-#include "third_party/odml/litert_lm/runtime/core/session_basic.h"
-#include "third_party/odml/litert_lm/runtime/proto/sampler_params.proto.h"
+#include "runtime/components/sentencepiece_tokenizer.h"
+#include "runtime/components/tokenizer.h"
+#include "runtime/core/session_basic.h"
+#include "runtime/proto/sampler_params.proto.h"
 
 constexpr char kModelPathLlm[] = "gemma3_npu_f32_ekv1280.tflite";
 constexpr char kModelPathTokenizer[] = "gemma3_tokenizer.spiece";

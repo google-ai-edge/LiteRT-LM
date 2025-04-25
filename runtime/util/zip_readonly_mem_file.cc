@@ -13,12 +13,12 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include "third_party/odml/litert_lm/runtime/util/zip_readonly_mem_file.h"
+#include "runtime/util/zip_readonly_mem_file.h"
 
 #include <cstdio>
 #include <cstring>
 
-#include "third_party/absl/strings/string_view.h"
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "third_party/minizip/ioapi.h"
 #include "third_party/zlib/src/zconf.h"
 

@@ -13,7 +13,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include "third_party/odml/litert_lm/runtime/util/zip_utils.h"
+#include "runtime/util/zip_utils.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -21,16 +21,16 @@ limitations under the License.
 #include <string>
 #include <utility>
 
-#include "third_party/absl/cleanup/cleanup.h"
-#include "third_party/absl/container/flat_hash_map.h"
-#include "third_party/absl/log/absl_log.h"
-#include "third_party/absl/status/status.h"
-#include "third_party/absl/status/statusor.h"
-#include "third_party/absl/strings/string_view.h"
+#include "absl/cleanup/cleanup.h"  // from @com_google_absl
+#include "absl/container/flat_hash_map.h"  // from @com_google_absl
+#include "absl/log/absl_log.h"  // from @com_google_absl
+#include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "third_party/minizip/ioapi.h"
 #include "third_party/minizip/unzip.h"
-#include "third_party/odml/litert_lm/runtime/util/status_macros.h"
-#include "third_party/odml/litert_lm/runtime/util/zip_readonly_mem_file.h"
+#include "runtime/util/status_macros.h"
+#include "runtime/util/zip_readonly_mem_file.h"
 #include "third_party/zlib/src/zlib.h"
 
 namespace litert::lm {

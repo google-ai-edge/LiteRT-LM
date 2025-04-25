@@ -6,10 +6,10 @@
 #include <utility>
 #include <vector>
 
-#include "third_party/absl/status/statusor.h"
-#include "third_party/absl/strings/string_view.h"
-#include "third_party/odml/litert_lm/runtime/components/tokenizer.h"
-#include "third_party/sentencepiece/src/sentencepiece_processor.h"
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
+#include "runtime/components/tokenizer.h"
+#include "sentencepiece/src/sentencepiece_processor.h"  // from @com_google_sentencepiece
 
 namespace litert::lm {
 

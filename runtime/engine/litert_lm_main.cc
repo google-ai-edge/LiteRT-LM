@@ -25,17 +25,17 @@
 #include <optional>
 #include <string>
 
-#include "third_party/absl/flags/flag.h"
-#include "third_party/absl/flags/parse.h"
-#include "third_party/absl/log/absl_check.h"
-#include "third_party/absl/log/absl_log.h"
-#include "third_party/absl/log/check.h"
-#include "third_party/absl/status/status.h"
-#include "third_party/absl/status/statusor.h"
-#include "third_party/absl/strings/string_view.h"
-#include "third_party/odml/litert_lm/runtime/engine/engine.h"
-#include "third_party/odml/litert_lm/runtime/engine/llm_model_settings.h"
-#include "third_party/odml/litert_lm/runtime/executor/llm_executor_config.h"
+#include "absl/flags/flag.h"  // from @com_google_absl
+#include "absl/flags/parse.h"  // from @com_google_absl
+#include "absl/log/absl_check.h"  // from @com_google_absl
+#include "absl/log/absl_log.h"  // from @com_google_absl
+#include "absl/log/check.h"  // from @com_google_absl
+#include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
+#include "runtime/engine/engine.h"
+#include "runtime/engine/llm_model_settings.h"
+#include "runtime/executor/llm_executor_config.h"
 
 ABSL_FLAG(std::optional<std::string>, backend, "gpu",
           "Executor backend to use for LLM execution (cpu, gpu, etc.)");

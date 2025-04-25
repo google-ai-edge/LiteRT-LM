@@ -1,10 +1,10 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_UTIL_LITERT_STATUS_UTIL_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_UTIL_LITERT_STATUS_UTIL_H_
 
-#include "third_party/absl/status/status.h"
-#include "third_party/absl/status/statusor.h"
-#include "litert/cc/litert_expected.h"
-#include "litert/cc/litert_macros.h"
+#include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "litert/litert/cc/litert_expected.h"  // from @litert
+#include "litert/litert/cc/litert_macros.h"  // from @litert
 
 namespace litert::lm {
 

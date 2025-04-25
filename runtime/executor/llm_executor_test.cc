@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "third_party/odml/litert_lm/runtime/executor/llm_executor.h"
+#include "runtime/executor/llm_executor.h"
 
 #include <atomic>
 #include <cstdint>
@@ -20,10 +20,10 @@
 #include <utility>
 
 #include <gtest/gtest.h>
-#include "litert/c/litert_tensor_buffer.h"
-#include "litert/cc/litert_element_type.h"
-#include "litert/cc/litert_model.h"
-#include "litert/cc/litert_tensor_buffer.h"
+#include "litert/litert/c/litert_tensor_buffer.h"  // from @litert
+#include "litert/litert/cc/litert_element_type.h"  // from @litert
+#include "litert/litert/cc/litert_model.h"  // from @litert
+#include "litert/litert/cc/litert_tensor_buffer.h"  // from @litert
 
 namespace litert::lm {
 namespace {

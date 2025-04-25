@@ -1,4 +1,4 @@
-#include "third_party/odml/litert_lm/runtime/executor/llm_litert_compiled_model_executor.h"
+#include "runtime/executor/llm_litert_compiled_model_executor.h"
 
 #include <cstdint>
 #include <filesystem>  // NOLINT: Required for path manipulation.
@@ -8,15 +8,15 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include "third_party/absl/status/statusor.h"
-#include "third_party/absl/strings/string_view.h"
-#include "litert/cc/litert_buffer_ref.h"
-#include "litert/cc/litert_expected.h"
-#include "litert/cc/litert_model.h"
-#include "third_party/odml/litert_lm/runtime/executor/litert_compiled_model_executor_utils.h"
-#include "third_party/odml/litert_lm/runtime/executor/llm_executor_config.h"
-#include "third_party/odml/litert_lm/runtime/util/model_asset_bundle_resources.h"
-#include "third_party/odml/litert_lm/runtime/util/status_macros.h"
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
+#include "litert/litert/cc/litert_buffer_ref.h"  // from @litert
+#include "litert/litert/cc/litert_expected.h"  // from @litert
+#include "litert/litert/cc/litert_model.h"  // from @litert
+#include "runtime/executor/litert_compiled_model_executor_utils.h"
+#include "runtime/executor/llm_executor_config.h"
+#include "runtime/util/model_asset_bundle_resources.h"
+#include "runtime/util/status_macros.h"
 
 namespace litert::lm {
 namespace {

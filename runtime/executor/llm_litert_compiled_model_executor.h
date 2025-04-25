@@ -20,20 +20,20 @@
 #include <utility>
 #include <vector>
 
-#include "third_party/absl/container/flat_hash_map.h"
-#include "third_party/absl/log/absl_log.h"
-#include "third_party/absl/status/status.h"
-#include "third_party/absl/status/statusor.h"
-#include "third_party/absl/strings/string_view.h"
-#include "third_party/absl/types/span.h"
-#include "litert/cc/litert_compiled_model.h"
-#include "litert/cc/litert_environment.h"
-#include "litert/cc/litert_model.h"
-#include "litert/cc/litert_tensor_buffer.h"
-#include "third_party/odml/litert_lm/runtime/components/top_p_cpu_sampler.h"
-#include "third_party/odml/litert_lm/runtime/executor/litert_compiled_model_executor_utils.h"
-#include "third_party/odml/litert_lm/runtime/executor/llm_executor.h"
-#include "third_party/odml/litert_lm/runtime/executor/llm_executor_config.h"
+#include "absl/container/flat_hash_map.h"  // from @com_google_absl
+#include "absl/log/absl_log.h"  // from @com_google_absl
+#include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
+#include "litert/litert/cc/litert_compiled_model.h"  // from @litert
+#include "litert/litert/cc/litert_environment.h"  // from @litert
+#include "litert/litert/cc/litert_model.h"  // from @litert
+#include "litert/litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "runtime/components/top_p_cpu_sampler.h"
+#include "runtime/executor/litert_compiled_model_executor_utils.h"
+#include "runtime/executor/llm_executor.h"
+#include "runtime/executor/llm_executor_config.h"
 
 namespace litert::lm {
 

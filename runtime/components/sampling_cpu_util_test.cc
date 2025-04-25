@@ -1,11 +1,11 @@
-#include "third_party/odml/litert_lm/runtime/components/sampling_cpu_util.h"
+#include "runtime/components/sampling_cpu_util.h"
 
 #include <random>
 #include <vector>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include "third_party/absl/types/span.h"
+#include "absl/types/span.h"  // from @com_google_absl
 
 namespace litert::lm {
 namespace {

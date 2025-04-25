@@ -1,8 +1,8 @@
-#include "third_party/odml/litert_lm/runtime/util/litert_status_util.h"
+#include "runtime/util/litert_status_util.h"
 
-#include "third_party/absl/status/status.h"
-#include "litert/c/litert_common.h"
-#include "litert/cc/litert_expected.h"
+#include "absl/status/status.h"  // from @com_google_absl
+#include "litert/litert/c/litert_common.h"  // from @litert
+#include "litert/litert/cc/litert_expected.h"  // from @litert
 
 namespace litert::lm {
 

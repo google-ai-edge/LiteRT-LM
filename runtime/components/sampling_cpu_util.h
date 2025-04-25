@@ -4,8 +4,8 @@
 #include <random>
 #include <vector>
 
-#include "third_party/absl/status/statusor.h"
-#include "third_party/absl/types/span.h"
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 
 namespace litert::lm {
 

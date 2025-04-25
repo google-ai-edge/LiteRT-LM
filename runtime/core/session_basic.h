@@ -19,15 +19,15 @@
 #include <utility>
 #include <vector>
 
-#include "third_party/absl/status/status.h"
-#include "third_party/absl/status/statusor.h"
-#include "third_party/absl/strings/string_view.h"
-#include "third_party/odml/litert_lm/runtime/components/sampler.h"
-#include "third_party/odml/litert_lm/runtime/components/tokenizer.h"
-#include "third_party/odml/litert_lm/runtime/engine/engine.h"
-#include "third_party/odml/litert_lm/runtime/engine/io_types.h"
-#include "third_party/odml/litert_lm/runtime/executor/llm_executor.h"
-#include "third_party/odml/litert_lm/runtime/proto/sampler_params.proto.h"
+#include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
+#include "runtime/components/sampler.h"
+#include "runtime/components/tokenizer.h"
+#include "runtime/engine/engine.h"
+#include "runtime/engine/io_types.h"
+#include "runtime/executor/llm_executor.h"
+#include "runtime/proto/sampler_params.proto.h"
 
 namespace litert::lm {
 

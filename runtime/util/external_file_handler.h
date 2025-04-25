@@ -19,10 +19,10 @@ limitations under the License.
 #include <cstdint>
 #include <memory>
 
-#include "third_party/absl/status/status.h"
-#include "third_party/absl/status/statusor.h"
-#include "third_party/absl/strings/string_view.h"
-#include "third_party/odml/litert_lm/runtime/util/external_file.proto.h"
+#include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
+#include "runtime/util/external_file.proto.h"
 
 namespace litert::lm {
 

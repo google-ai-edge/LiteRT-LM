@@ -12,17 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "third_party/odml/litert_lm/runtime/util/convert_tensor_buffer.h"
+#include "runtime/util/convert_tensor_buffer.h"
 
 #include <cstdint>
 #include <vector>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include "third_party/absl/types/span.h"
-#include "litert/c/litert_common.h"
-#include "litert/cc/litert_model.h"
-#include "litert/cc/litert_tensor_buffer.h"
+#include "absl/types/span.h"  // from @com_google_absl
+#include "litert/litert/c/litert_common.h"  // from @litert
+#include "litert/litert/cc/litert_model.h"  // from @litert
+#include "litert/litert/cc/litert_tensor_buffer.h"  // from @litert
 
 namespace litert::lm {
 namespace {

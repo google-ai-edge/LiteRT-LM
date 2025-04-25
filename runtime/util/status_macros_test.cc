@@ -1,13 +1,13 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include "third_party/absl/status/status.h"
-#include "third_party/absl/status/statusor.h"
+#include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
 
 // Re-define status macros.
 #undef ASSIGN_OR_RETURN  // NOLINT: for testing
 #undef RETURN_IF_ERROR   // NOLINT: for testing
 #undef RET_CHECK         // NOLINT: for testing
-#include "third_party/odml/litert_lm/runtime/util/status_macros.h"
+#include "runtime/util/status_macros.h"
 
 namespace litert::lm {
 namespace {

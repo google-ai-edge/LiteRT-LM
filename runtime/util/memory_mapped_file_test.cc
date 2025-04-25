@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "third_party/odml/litert_lm/runtime/util/memory_mapped_file.h"
+#include "runtime/util/memory_mapped_file.h"
 
 #include <cstddef>
 #include <filesystem>  // NOLINT: Required for path manipulation.
@@ -25,9 +25,9 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include "third_party/absl/status/statusor.h"
-#include "third_party/absl/strings/string_view.h"
-#include "third_party/odml/litert_lm/runtime/util/scoped_file.h"
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
+#include "runtime/util/scoped_file.h"
 
 namespace litert::lm {
 namespace {

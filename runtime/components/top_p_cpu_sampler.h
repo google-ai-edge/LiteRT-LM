@@ -4,10 +4,10 @@
 #include <memory>
 #include <random>
 
-#include "third_party/absl/status/status.h"
-#include "third_party/absl/status/statusor.h"
-#include "litert/cc/litert_tensor_buffer.h"
-#include "third_party/odml/litert_lm/runtime/components/sampler.h"
+#include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "litert/litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "runtime/components/sampler.h"
 
 namespace litert::lm {
 

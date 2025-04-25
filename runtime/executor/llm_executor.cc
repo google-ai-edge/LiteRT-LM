@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "third_party/odml/litert_lm/runtime/executor/llm_executor.h"
+#include "runtime/executor/llm_executor.h"
 
 #include <iostream>
 
-#include "third_party/odml/litert_lm/runtime/util/logging_tensor_buffer.h"
+#include "runtime/util/logging_tensor_buffer.h"
 
 namespace litert::lm {
 

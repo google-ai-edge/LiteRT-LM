@@ -1,4 +1,4 @@
-#include "third_party/odml/litert_lm/runtime/components/top_p_cpu_sampler.h"
+#include "runtime/components/top_p_cpu_sampler.h"
 
 #include <cmath>
 #include <limits>
@@ -7,8 +7,8 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include "third_party/absl/types/span.h"
-#include "third_party/odml/litert_lm/runtime/util/convert_tensor_buffer.h"
+#include "absl/types/span.h"  // from @com_google_absl
+#include "runtime/util/convert_tensor_buffer.h"
 
 namespace litert::lm {
 namespace {

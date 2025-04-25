@@ -3,7 +3,7 @@
 
 #include <iostream>
 
-#include "litert/cc/litert_tensor_buffer.h"
+#include "litert/litert/cc/litert_tensor_buffer.h"  // from @litert
 
 namespace litert::lm {
 

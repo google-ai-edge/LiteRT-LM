@@ -1,15 +1,15 @@
-#include "third_party/odml/litert_lm/runtime/components/sentencepiece_tokenizer.h"
+#include "runtime/components/sentencepiece_tokenizer.h"
 
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "third_party/absl/memory/memory.h"
-#include "third_party/absl/status/status.h"
-#include "third_party/absl/status/statusor.h"
-#include "third_party/absl/strings/string_view.h"
-#include "third_party/sentencepiece/src/sentencepiece_processor.h"
+#include "absl/memory/memory.h"  // from @com_google_absl
+#include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
+#include "sentencepiece/src/sentencepiece_processor.h"  // from @com_google_sentencepiece
 
 namespace litert::lm {
 

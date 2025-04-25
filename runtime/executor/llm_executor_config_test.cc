@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "third_party/odml/litert_lm/runtime/executor/llm_executor_config.h"
+#include "runtime/executor/llm_executor_config.h"
 
 #include <sstream>
 #include <string>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include "third_party/absl/status/status.h"
+#include "absl/status/status.h"  // from @com_google_absl
 
 namespace litert::lm {
 namespace {

@@ -12,7 +12,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
-#include "third_party/odml/litert_lm/runtime/util/external_file_handler.h"
+#include "runtime/util/external_file_handler.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -36,14 +36,14 @@ limitations under the License.
 #include <memory>
 #include <string>
 
-#include "third_party/absl/memory/memory.h"
-#include "third_party/absl/status/status.h"
-#include "third_party/absl/status/statusor.h"
-#include "third_party/absl/strings/match.h"
-#include "third_party/absl/strings/str_format.h"
-#include "third_party/absl/strings/string_view.h"
-#include "third_party/odml/litert_lm/runtime/util/external_file.proto.h"
-#include "third_party/odml/litert_lm/runtime/util/status_macros.h"
+#include "absl/memory/memory.h"  // from @com_google_absl
+#include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/match.h"  // from @com_google_absl
+#include "absl/strings/str_format.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
+#include "runtime/util/external_file.proto.h"
+#include "runtime/util/status_macros.h"
 
 namespace litert::lm {
 namespace {

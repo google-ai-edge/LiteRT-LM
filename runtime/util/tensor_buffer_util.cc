@@ -1,7 +1,7 @@
-#include "third_party/odml/litert_lm/runtime/util/tensor_buffer_util.h"
+#include "runtime/util/tensor_buffer_util.h"
 
-#include "litert/cc/litert_macros.h"
-#include "litert/cc/litert_tensor_buffer.h"
+#include "litert/litert/cc/litert_macros.h"  // from @litert
+#include "litert/litert/cc/litert_tensor_buffer.h"  // from @litert
 
 namespace litert::lm {
 

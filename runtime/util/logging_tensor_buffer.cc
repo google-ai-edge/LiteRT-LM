@@ -1,14 +1,14 @@
-#include "third_party/odml/litert_lm/runtime/util/logging_tensor_buffer.h"
+#include "runtime/util/logging_tensor_buffer.h"
 
 #include <cstdint>
 #include <iostream>
 
-#include "third_party/absl/log/absl_check.h"
-#include "third_party/absl/strings/str_join.h"
-#include "third_party/absl/strings/string_view.h"
-#include "third_party/absl/types/span.h"
-#include "litert/cc/litert_element_type.h"
-#include "litert/cc/litert_tensor_buffer.h"
+#include "absl/log/absl_check.h"  // from @com_google_absl
+#include "absl/strings/str_join.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
+#include "litert/litert/cc/litert_element_type.h"  // from @litert
+#include "litert/litert/cc/litert_tensor_buffer.h"  // from @litert
 
 namespace litert::lm {
 namespace {

@@ -1,4 +1,4 @@
-#include "third_party/odml/litert_lm/runtime/util/logging.h"
+#include "runtime/util/logging.h"
 
 #include <cstdint>
 #include <optional>
@@ -8,11 +8,11 @@
 #include <vector>
 
 #include <gtest/gtest.h>
-#include "litert/c/litert_tensor_buffer.h"
-#include "litert/cc/litert_element_type.h"
-#include "litert/cc/litert_model.h"
-#include "litert/cc/litert_tensor_buffer.h"
-#include "third_party/odml/litert_lm/runtime/util/logging_tensor_buffer.h"
+#include "litert/litert/c/litert_tensor_buffer.h"  // from @litert
+#include "litert/litert/cc/litert_element_type.h"  // from @litert
+#include "litert/litert/cc/litert_model.h"  // from @litert
+#include "litert/litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "runtime/util/logging_tensor_buffer.h"
 
 namespace litert::lm {
 namespace {

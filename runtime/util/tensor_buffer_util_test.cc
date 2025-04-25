@@ -1,8 +1,8 @@
-#include "third_party/odml/litert_lm/runtime/util/tensor_buffer_util.h"
+#include "runtime/util/tensor_buffer_util.h"
 #include <cstdint>
 
 #include <gtest/gtest.h>
-#include "third_party/odml/litert_lm/runtime/util/convert_tensor_buffer.h"
+#include "runtime/util/convert_tensor_buffer.h"
 
 namespace litert::lm {
 namespace {

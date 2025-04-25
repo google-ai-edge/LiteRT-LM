@@ -16,8 +16,7 @@ package(
     default_applicable_licenses = ["//third_party/odml:license"],
     default_hdrs_check = "strict",
     default_visibility = [
-        "//third_party/odml/infra/genai/inference:__subpackages__",
-        "//third_party/odml/litert_lm:__subpackages__",
+        "//visibility:public",
     ],
 )
 
@@ -27,13 +26,13 @@ cc_library(
     name = "tokenizer",
     hdrs = ["tokenizer.h"],
     deps = [
-        "//third_party/absl/status",
-        "//third_party/absl/status:statusor",
-        "//third_party/absl/strings:string_view",
-        "//third_party/absl/types:span",
-        "@litert//litert/cc:litert_macros",
-        "@litert//litert/cc:litert_tensor_buffer",
-        "//third_party/odml/litert_lm/runtime/util:convert_tensor_buffer",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/types:span",
+        "@litert//litert/litert/cc:litert_macros",
+        "@litert//litert/litert/cc:litert_tensor_buffer",
+        "//runtime/util:convert_tensor_buffer",
     ],
 )
 
@@ -42,11 +41,11 @@ cc_library(
     srcs = ["sampling_cpu_util.cc"],
     hdrs = ["sampling_cpu_util.h"],
     deps = [
-        "//third_party/absl/status",
-        "//third_party/absl/status:statusor",
-        "//third_party/absl/strings",
-        "//third_party/absl/strings:str_format",
-        "//third_party/absl/types:span",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/types:span",
     ],
 )
 
@@ -54,8 +53,8 @@ cc_library(
     name = "sampler",
     hdrs = ["sampler.h"],
     deps = [
-        "//third_party/absl/status",
-        "@litert//litert/cc:litert_tensor_buffer",
+        "@com_google_absl//absl/status",
+        "@litert//litert/litert/cc:litert_tensor_buffer",
     ],
 )
 
@@ -65,7 +64,7 @@ cc_test(
     deps = [
         ":sampling_cpu_util",
         "@com_google_googletest//:gtest_main",
-        "//third_party/absl/types:span",
+        "@com_google_absl//absl/types:span",
     ],
 )
 
@@ -75,11 +74,11 @@ cc_library(
     hdrs = ["sentencepiece_tokenizer.h"],
     deps = [
         ":tokenizer",
-        "//third_party/absl/memory",
-        "//third_party/absl/status",
-        "//third_party/absl/status:statusor",
-        "//third_party/absl/strings:string_view",
-        "//third_party/sentencepiece/src:sentencepiece_processor",
+        "@com_google_absl//absl/memory",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_sentencepiece//:sentencepiece_processor",
     ],
 )
 
@@ -90,13 +89,13 @@ cc_test(
     deps = [
         ":sentencepiece_tokenizer",
         "@com_google_googletest//:gtest_main",
-        "//third_party/absl/cleanup",
-        "//third_party/absl/status",
-        "//third_party/absl/status:statusor",
-        "//third_party/absl/strings",
-        "@litert//litert/cc:litert_layout",
-        "@litert//litert/cc:litert_tensor_buffer",
-        "//third_party/odml/litert_lm/runtime/util:convert_tensor_buffer",
+        "@com_google_absl//absl/cleanup",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@litert//litert/litert/cc:litert_layout",
+        "@litert//litert/litert/cc:litert_tensor_buffer",
+        "//runtime/util:convert_tensor_buffer",
     ],
 )
 
@@ -105,10 +104,10 @@ cc_library(
     srcs = ["token_id_util.cc"],
     hdrs = ["token_id_util.h"],
     deps = [
-        "//third_party/absl/status",
-        "//third_party/absl/status:statusor",
-        "//third_party/absl/strings:str_format",
-        "//third_party/absl/types:span",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/types:span",
     ],
 )
 
@@ -118,7 +117,7 @@ cc_test(
     deps = [
         ":token_id_util",
         "@com_google_googletest//:gtest_main",
-        "//third_party/absl/status",
+        "@com_google_absl//absl/status",
     ],
 )
 
@@ -129,15 +128,15 @@ cc_library(
     deps = [
         ":sampler",
         ":sampling_cpu_util",
-        "//third_party/absl/memory",
-        "//third_party/absl/status",
-        "//third_party/absl/status:statusor",
-        "//third_party/absl/strings",
-        "//third_party/absl/types:span",
-        "@litert//litert/cc:litert_macros",
-        "@litert//litert/cc:litert_tensor_buffer",
-        "//third_party/odml/litert_lm/runtime/util:convert_tensor_buffer",
-        "//third_party/odml/litert_lm/runtime/util:tensor_buffer_util",
+        "@com_google_absl//absl/memory",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/types:span",
+        "@litert//litert/litert/cc:litert_macros",
+        "@litert//litert/litert/cc:litert_tensor_buffer",
+        "//runtime/util:convert_tensor_buffer",
+        "//runtime/util:tensor_buffer_util",
     ],
 )
 
@@ -147,8 +146,8 @@ cc_test(
     deps = [
         ":top_p_cpu_sampler",
         "@com_google_googletest//:gtest_main",
-        "//third_party/absl/types:span",
-        "@litert//litert/cc:litert_tensor_buffer",
-        "//third_party/odml/litert_lm/runtime/util:convert_tensor_buffer",
+        "@com_google_absl//absl/types:span",
+        "@litert//litert/litert/cc:litert_tensor_buffer",
+        "//runtime/util:convert_tensor_buffer",
     ],
 )
