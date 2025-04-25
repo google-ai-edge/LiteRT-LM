@@ -17,26 +17,26 @@
 #include <utility>
 #include <vector>
 
-#include "third_party/absl/log/absl_check.h"
-#include "third_party/absl/log/absl_log.h"
-#include "third_party/absl/log/check.h"
-#include "third_party/absl/log/log.h"
-#include "third_party/absl/status/status.h"
-#include "third_party/absl/status/statusor.h"
-#include "third_party/absl/strings/str_cat.h"
+#include "absl/log/absl_check.h"  // from @com_google_absl
+#include "absl/log/absl_log.h"  // from @com_google_absl
+#include "absl/log/check.h"  // from @com_google_absl
+#include "absl/log/log.h"  // from @com_google_absl
+#include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "third_party/odml/infra/genai/inference/executor/litert_executor_utils.h"
 #include "third_party/odml/infra/genai/inference/executor/llm_litert_opencl_executor.h"
 #include "third_party/odml/infra/genai/inference/executor/llm_litert_xnnpack_executor.h"
-#include "third_party/odml/litert_lm/runtime/components/sentencepiece_tokenizer.h"
-#include "third_party/odml/litert_lm/runtime/components/tokenizer.h"
-#include "third_party/odml/litert_lm/runtime/core/session_factory.h"
-#include "third_party/odml/litert_lm/runtime/engine/engine.h"
-#include "third_party/odml/litert_lm/runtime/engine/llm_model_settings.h"
-#include "third_party/odml/litert_lm/runtime/executor/llm_executor.h"
-#include "third_party/odml/litert_lm/runtime/executor/llm_executor_config.h"
-#include "third_party/odml/litert_lm/runtime/proto/sampler_params.proto.h"
-#include "third_party/odml/litert_lm/runtime/util/external_file.proto.h"
-#include "third_party/odml/litert_lm/runtime/util/model_asset_bundle_resources.h"
+#include "runtime/components/sentencepiece_tokenizer.h"
+#include "runtime/components/tokenizer.h"
+#include "runtime/core/session_factory.h"
+#include "runtime/engine/engine.h"
+#include "runtime/engine/llm_model_settings.h"
+#include "runtime/executor/llm_executor.h"
+#include "runtime/executor/llm_executor_config.h"
+#include "runtime/proto/sampler_params.proto.h"
+#include "runtime/util/external_file.proto.h"
+#include "runtime/util/model_asset_bundle_resources.h"
 #include "util/task/status_macros.h"
 
 namespace litert::lm {

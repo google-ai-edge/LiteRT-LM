@@ -1,8 +1,8 @@
-#include "third_party/odml/litert_lm/runtime/engine/io_types.h"
+#include "runtime/engine/io_types.h"
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include "third_party/absl/status/status.h"
+#include "absl/status/status.h"  // from @com_google_absl
 
 namespace litert::lm {
 namespace {

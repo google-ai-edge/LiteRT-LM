@@ -3,8 +3,8 @@
 
 #include <sstream>
 
-#include "third_party/absl/status/status.h"
-#include "litert/cc/litert_macros.h"
+#include "absl/status/status.h"  // from @com_google_absl
+#include "litert/litert/cc/litert_macros.h"  // from @litert
 
 // Minimal implementations of status_macros.h and ret_check.h.
 

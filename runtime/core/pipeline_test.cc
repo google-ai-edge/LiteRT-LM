@@ -1,4 +1,4 @@
-#include "third_party/odml/litert_lm/runtime/core/pipeline.h"
+#include "runtime/core/pipeline.h"
 
 #include <filesystem>  // NOLINT: Required for path manipulation.
 #include <memory>
@@ -8,13 +8,13 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include "third_party/odml/litert_lm/runtime/components/sentencepiece_tokenizer.h"
-#include "third_party/odml/litert_lm/runtime/components/tokenizer.h"
-#include "third_party/odml/litert_lm/runtime/components/top_p_cpu_sampler.h"
-#include "third_party/odml/litert_lm/runtime/engine/io_types.h"
-#include "third_party/odml/litert_lm/runtime/executor/fake_llm_executor.h"
-#include "third_party/odml/litert_lm/runtime/executor/llm_executor.h"
-#include "third_party/odml/litert_lm/runtime/util/convert_tensor_buffer.h"
+#include "runtime/components/sentencepiece_tokenizer.h"
+#include "runtime/components/tokenizer.h"
+#include "runtime/components/top_p_cpu_sampler.h"
+#include "runtime/engine/io_types.h"
+#include "runtime/executor/fake_llm_executor.h"
+#include "runtime/executor/llm_executor.h"
+#include "runtime/util/convert_tensor_buffer.h"
 
 namespace litert::lm {
 namespace {

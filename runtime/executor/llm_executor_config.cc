@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "third_party/odml/litert_lm/runtime/executor/llm_executor_config.h"
+#include "runtime/executor/llm_executor_config.h"
 
 #include <iostream>
 #include <variant>
 #include <vector>
 
-#include "third_party/odml/litert_lm/runtime/util/logging.h"
+#include "runtime/util/logging.h"
 
 namespace litert::lm {
 

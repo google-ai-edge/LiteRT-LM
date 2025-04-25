@@ -14,8 +14,8 @@
 
 #include <windows.h>
 
-#include "third_party/odml/litert_lm/runtime/util/scoped_file.h"
-#include "third_party/odml/litert_lm/runtime/util/status_macros.h"
+#include "runtime/util/scoped_file.h"
+#include "runtime/util/status_macros.h"
 
 namespace litert::lm {
 namespace {

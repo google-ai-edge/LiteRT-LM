@@ -1,15 +1,15 @@
-#include "third_party/odml/litert_lm/runtime/executor/fake_llm_executor.h"
+#include "runtime/executor/fake_llm_executor.h"
 
 #include <limits>
 #include <vector>
 
-#include "third_party/absl/status/status.h"
-#include "third_party/absl/strings/str_cat.h"
-#include "third_party/absl/types/span.h"
-#include "litert/cc/litert_tensor_buffer.h"
-#include "third_party/odml/litert_lm/runtime/executor/llm_executor.h"
-#include "third_party/odml/litert_lm/runtime/util/convert_tensor_buffer.h"
-#include "third_party/odml/litert_lm/runtime/util/status_macros.h"
+#include "absl/status/status.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
+#include "litert/litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "runtime/executor/llm_executor.h"
+#include "runtime/util/convert_tensor_buffer.h"
+#include "runtime/util/status_macros.h"
 
 namespace litert::lm {
 namespace {

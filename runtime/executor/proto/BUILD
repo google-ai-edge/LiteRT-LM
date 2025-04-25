@@ -11,21 +11,3 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
-load("//third_party/odml/infra:build_config.bzl", "odml_proto_library")
-
-package(
-    default_applicable_licenses = ["//third_party/odml:license"],
-    default_hdrs_check = "strict",
-    default_visibility = [
-        "//third_party/odml/infra/genai/inference:__subpackages__",
-        "//third_party/odml/litert:__subpackages__",
-    ],
-)
-
-licenses(["notice"])
-
-odml_proto_library(
-    name = "constrained_decoding_options_proto",
-    srcs = ["constrained_decoding_options.proto"],
-)

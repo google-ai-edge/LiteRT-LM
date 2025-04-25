@@ -1,10 +1,10 @@
-#include "third_party/odml/litert_lm/runtime/engine/llm_model_settings.h"
+#include "runtime/engine/llm_model_settings.h"
 
 #include <string>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include "third_party/odml/litert_lm/runtime/executor/llm_executor_config.h"
+#include "runtime/executor/llm_executor_config.h"
 
 namespace litert::lm {
 namespace {

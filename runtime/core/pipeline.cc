@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "third_party/odml/litert_lm/runtime/core/pipeline.h"
+#include "runtime/core/pipeline.h"
 
 #include <algorithm>
 #include <limits>
@@ -21,19 +21,19 @@
 #include <utility>
 #include <vector>
 
-#include "third_party/absl/status/status.h"
-#include "third_party/absl/status/statusor.h"
-#include "third_party/absl/strings/str_replace.h"
-#include "third_party/absl/strings/string_view.h"
-#include "litert/cc/litert_tensor_buffer.h"
-#include "third_party/odml/litert_lm/runtime/components/sampler.h"
-#include "third_party/odml/litert_lm/runtime/components/token_id_util.h"
-#include "third_party/odml/litert_lm/runtime/components/tokenizer.h"
-#include "third_party/odml/litert_lm/runtime/engine/io_types.h"
-#include "third_party/odml/litert_lm/runtime/executor/llm_executor.h"
-#include "third_party/odml/litert_lm/runtime/util/convert_tensor_buffer.h"
-#include "third_party/odml/litert_lm/runtime/util/litert_status_util.h"
-#include "third_party/odml/litert_lm/runtime/util/status_macros.h"
+#include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/str_replace.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
+#include "litert/litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "runtime/components/sampler.h"
+#include "runtime/components/token_id_util.h"
+#include "runtime/components/tokenizer.h"
+#include "runtime/engine/io_types.h"
+#include "runtime/executor/llm_executor.h"
+#include "runtime/util/convert_tensor_buffer.h"
+#include "runtime/util/litert_status_util.h"
+#include "runtime/util/status_macros.h"
 
 namespace litert::lm {
 

@@ -17,11 +17,11 @@
 
 #include <memory>
 
-#include "third_party/absl/status/status.h"
-#include "third_party/absl/status/statusor.h"
-#include "third_party/absl/strings/string_view.h"
-#include "third_party/odml/litert_lm/runtime/engine/io_types.h"
-#include "third_party/odml/litert_lm/runtime/engine/llm_model_settings.h"
+#include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
+#include "runtime/engine/io_types.h"
+#include "runtime/engine/llm_model_settings.h"
 
 namespace litert::lm {
 

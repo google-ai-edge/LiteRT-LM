@@ -14,10 +14,10 @@
 
 #include <windows.h>
 
-#include "third_party/absl/cleanup/cleanup.h"
-#include "third_party/odml/litert_lm/runtime/util/memory_mapped_file.h"
-#include "third_party/odml/litert_lm/runtime/util/scoped_file.h"
-#include "third_party/odml/litert_lm/runtime/util/status_macros.h"
+#include "absl/cleanup/cleanup.h"  // from @com_google_absl
+#include "runtime/util/memory_mapped_file.h"
+#include "runtime/util/scoped_file.h"
+#include "runtime/util/status_macros.h"
 
 namespace litert::lm {
 namespace {

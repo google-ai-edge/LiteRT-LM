@@ -13,7 +13,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include "third_party/odml/litert_lm/runtime/util/model_asset_bundle_resources.h"
+#include "runtime/util/model_asset_bundle_resources.h"
 
 #include <cstddef>
 #include <memory>
@@ -21,15 +21,15 @@ limitations under the License.
 #include <utility>
 #include <vector>
 
-#include "third_party/absl/memory/memory.h"
-#include "third_party/absl/status/status.h"
-#include "third_party/absl/status/statusor.h"
-#include "third_party/absl/strings/str_format.h"
-#include "third_party/absl/strings/str_join.h"
-#include "third_party/absl/strings/string_view.h"
-#include "third_party/odml/litert_lm/runtime/util/external_file_handler.h"
-#include "third_party/odml/litert_lm/runtime/util/status_macros.h"
-#include "third_party/odml/litert_lm/runtime/util/zip_utils.h"
+#include "absl/memory/memory.h"  // from @com_google_absl
+#include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/str_format.h"  // from @com_google_absl
+#include "absl/strings/str_join.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
+#include "runtime/util/external_file_handler.h"
+#include "runtime/util/status_macros.h"
+#include "runtime/util/zip_utils.h"
 
 namespace litert::lm {
 

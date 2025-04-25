@@ -14,10 +14,10 @@
 
 #include <fcntl.h>
 
-#include "third_party/absl/status/statusor.h"
-#include "third_party/absl/strings/string_view.h"
-#include "third_party/odml/litert_lm/runtime/util/scoped_file.h"
-#include "third_party/odml/litert_lm/runtime/util/status_macros.h"
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
+#include "runtime/util/scoped_file.h"
+#include "runtime/util/status_macros.h"
 
 namespace litert::lm {
 

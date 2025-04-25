@@ -1,25 +1,25 @@
-#include "third_party/odml/litert_lm/runtime/core/session_basic.h"
+#include "runtime/core/session_basic.h"
 
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "third_party/absl/log/absl_log.h"
-#include "third_party/absl/memory/memory.h"
-#include "third_party/absl/status/status.h"
-#include "third_party/absl/status/statusor.h"
-#include "third_party/absl/strings/str_cat.h"
-#include "third_party/absl/strings/string_view.h"
-#include "third_party/odml/litert_lm/runtime/components/sampler.h"
-#include "third_party/odml/litert_lm/runtime/components/tokenizer.h"
-#include "third_party/odml/litert_lm/runtime/components/top_p_cpu_sampler.h"
-#include "third_party/odml/litert_lm/runtime/core/pipeline.h"
-#include "third_party/odml/litert_lm/runtime/engine/io_types.h"
-#include "third_party/odml/litert_lm/runtime/executor/llm_executor.h"
-#include "third_party/odml/litert_lm/runtime/proto/sampler_params.proto.h"
-#include "third_party/odml/litert_lm/runtime/util/convert_tensor_buffer.h"
-#include "third_party/odml/litert_lm/runtime/util/status_macros.h"
+#include "absl/log/absl_log.h"  // from @com_google_absl
+#include "absl/memory/memory.h"  // from @com_google_absl
+#include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
+#include "runtime/components/sampler.h"
+#include "runtime/components/tokenizer.h"
+#include "runtime/components/top_p_cpu_sampler.h"
+#include "runtime/core/pipeline.h"
+#include "runtime/engine/io_types.h"
+#include "runtime/executor/llm_executor.h"
+#include "runtime/proto/sampler_params.proto.h"
+#include "runtime/util/convert_tensor_buffer.h"
+#include "runtime/util/status_macros.h"
 
 namespace litert::lm {
 namespace {

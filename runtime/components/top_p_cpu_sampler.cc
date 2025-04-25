@@ -1,20 +1,20 @@
-#include "third_party/odml/litert_lm/runtime/components/top_p_cpu_sampler.h"
+#include "runtime/components/top_p_cpu_sampler.h"
 
 #include <cmath>
 #include <memory>
 #include <string>
 #include <vector>
 
-#include "third_party/absl/memory/memory.h"
-#include "third_party/absl/status/status.h"
-#include "third_party/absl/status/statusor.h"
-#include "third_party/absl/strings/str_cat.h"
-#include "third_party/absl/types/span.h"
-#include "litert/cc/litert_macros.h"
-#include "litert/cc/litert_tensor_buffer.h"
-#include "third_party/odml/litert_lm/runtime/components/sampling_cpu_util.h"
-#include "third_party/odml/litert_lm/runtime/util/convert_tensor_buffer.h"
-#include "third_party/odml/litert_lm/runtime/util/tensor_buffer_util.h"
+#include "absl/memory/memory.h"  // from @com_google_absl
+#include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
+#include "litert/litert/cc/litert_macros.h"  // from @litert
+#include "litert/litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "runtime/components/sampling_cpu_util.h"
+#include "runtime/util/convert_tensor_buffer.h"
+#include "runtime/util/tensor_buffer_util.h"
 
 namespace litert::lm {
 namespace {

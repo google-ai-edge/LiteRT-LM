@@ -1,7 +1,7 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_ENGINE_LLM_MODEL_SETTINGS_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_ENGINE_LLM_MODEL_SETTINGS_H_
 
-#include "third_party/odml/litert_lm/runtime/executor/llm_executor_config.h"
+#include "runtime/executor/llm_executor_config.h"
 
 namespace litert::lm {
 

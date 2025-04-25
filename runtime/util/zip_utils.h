@@ -18,9 +18,9 @@ limitations under the License.
 
 #include <string>
 
-#include "third_party/absl/container/flat_hash_map.h"
-#include "third_party/absl/status/status.h"
-#include "third_party/odml/litert_lm/runtime/util/external_file.proto.h"
+#include "absl/container/flat_hash_map.h"  // from @com_google_absl
+#include "absl/status/status.h"  // from @com_google_absl
+#include "runtime/util/external_file.proto.h"
 
 namespace litert::lm {
 

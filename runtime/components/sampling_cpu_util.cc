@@ -1,4 +1,4 @@
-#include "third_party/odml/litert_lm/runtime/components/sampling_cpu_util.h"
+#include "runtime/components/sampling_cpu_util.h"
 
 #include <algorithm>
 #include <cmath>
@@ -8,11 +8,11 @@
 #include <random>
 #include <vector>
 
-#include "third_party/absl/status/status.h"
-#include "third_party/absl/status/statusor.h"
-#include "third_party/absl/strings/str_cat.h"
-#include "third_party/absl/strings/str_format.h"
-#include "third_party/absl/types/span.h"
+#include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/str_format.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 
 namespace litert::lm {
 

@@ -12,16 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "third_party/odml/litert_lm/runtime/executor/fake_llm_executor.h"
+#include "runtime/executor/fake_llm_executor.h"
 
 #include <vector>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include "third_party/absl/status/status.h"
-#include "third_party/absl/types/span.h"
-#include "third_party/odml/litert_lm/runtime/executor/llm_executor.h"
-#include "third_party/odml/litert_lm/runtime/util/convert_tensor_buffer.h"
+#include "absl/status/status.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
+#include "runtime/executor/llm_executor.h"
+#include "runtime/util/convert_tensor_buffer.h"
 
 namespace litert::lm {
 namespace {

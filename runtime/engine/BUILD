@@ -33,9 +33,9 @@ cc_library(
     deps = [
         ":io_types",
         ":llm_model_settings",
-        "//third_party/absl/status",
-        "//third_party/absl/status:statusor",
-        "//third_party/absl/strings:string_view",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
     ],
 )
 
@@ -44,10 +44,10 @@ cc_library(
     srcs = ["io_types.cc"],
     hdrs = ["io_types.h"],
     deps = [
-        "//third_party/absl/status",
-        "//third_party/absl/status:statusor",
-        "//third_party/absl/strings",
-        "//third_party/absl/strings:string_view",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
     ],
 )
 
@@ -57,7 +57,7 @@ cc_test(
     deps = [
         ":io_types",
         "@com_google_googletest//:gtest_main",
-        "//third_party/absl/status",
+        "@com_google_absl//absl/status",
     ],
 )
 
@@ -67,17 +67,17 @@ cc_binary(
     deps = [
         ":engine_interface",
         ":llm_model_settings",
-        "//third_party/absl/flags:flag",
-        "//third_party/absl/flags:parse",
-        "//third_party/absl/log:absl_check",
-        "//third_party/absl/log:absl_log",
-        "//third_party/absl/log:check",
-        "//third_party/absl/status",
-        "//third_party/absl/status:statusor",
-        "//third_party/absl/strings:string_view",
-        "//third_party/odml/litert_lm/runtime/executor:llm_executor_config",
+        "@com_google_absl//absl/flags:flag",
+        "@com_google_absl//absl/flags:parse",
+        "@com_google_absl//absl/log:absl_check",
+        "@com_google_absl//absl/log:absl_log",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+        "//runtime/executor:llm_executor_config",
     ] + select({
-        "//conditions:default": ["//third_party/odml/litert_lm/runtime/core:engine_impl"],
+        "//conditions:default": ["//runtime/core:engine_impl"],
     }),
 )
 
@@ -85,7 +85,7 @@ cc_library(
     name = "llm_model_settings",
     hdrs = ["llm_model_settings.h"],
     deps = [
-        "//third_party/odml/litert_lm/runtime/executor:llm_executor_config",
+        "//runtime/executor:llm_executor_config",
     ],
 )
 
@@ -95,6 +95,6 @@ cc_test(
     deps = [
         ":llm_model_settings",
         "@com_google_googletest//:gtest_main",
-        "//third_party/odml/litert_lm/runtime/executor:llm_executor_config",
+        "//runtime/executor:llm_executor_config",
     ],
 )

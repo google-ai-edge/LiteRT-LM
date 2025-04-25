@@ -19,9 +19,9 @@
 #include <cstdint>
 #include <memory>
 
-#include "third_party/absl/status/statusor.h"
-#include "third_party/absl/strings/string_view.h"
-#include "third_party/odml/litert_lm/runtime/util/scoped_file.h"
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
+#include "runtime/util/scoped_file.h"
 
 namespace litert::lm {
 

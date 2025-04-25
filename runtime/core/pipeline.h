@@ -18,14 +18,14 @@
 #include <memory>
 #include <vector>
 
-#include "third_party/absl/status/status.h"
-#include "third_party/absl/status/statusor.h"
-#include "third_party/absl/strings/string_view.h"
-#include "litert/cc/litert_tensor_buffer.h"
-#include "third_party/odml/litert_lm/runtime/components/sampler.h"
-#include "third_party/odml/litert_lm/runtime/components/tokenizer.h"
-#include "third_party/odml/litert_lm/runtime/engine/io_types.h"
-#include "third_party/odml/litert_lm/runtime/executor/llm_executor.h"
+#include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
+#include "litert/litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "runtime/components/sampler.h"
+#include "runtime/components/tokenizer.h"
+#include "runtime/engine/io_types.h"
+#include "runtime/executor/llm_executor.h"
 
 namespace litert::lm {
 
