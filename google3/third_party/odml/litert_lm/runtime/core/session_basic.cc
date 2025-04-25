@@ -1,0 +1,92 @@
+#include "third_party/odml/litert_lm/runtime/core/session_basic.h"
+
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "third_party/absl/log/absl_log.h"
+#include "third_party/absl/memory/memory.h"
+#include "third_party/absl/status/status.h"
+#include "third_party/absl/status/statusor.h"
+#include "third_party/absl/strings/str_cat.h"
+#include "third_party/absl/strings/string_view.h"
+#include "third_party/odml/litert_lm/runtime/components/sampler.h"
+#include "third_party/odml/litert_lm/runtime/components/tokenizer.h"
+#include "third_party/odml/litert_lm/runtime/components/top_p_cpu_sampler.h"
+#include "third_party/odml/litert_lm/runtime/core/pipeline.h"
+#include "third_party/odml/litert_lm/runtime/engine/io_types.h"
+#include "third_party/odml/litert_lm/runtime/executor/llm_executor.h"
+#include "third_party/odml/litert_lm/runtime/proto/sampler_params.proto.h"
+#include "third_party/odml/litert_lm/runtime/util/convert_tensor_buffer.h"
+#include "third_party/odml/litert_lm/runtime/util/status_macros.h"
+
+namespace litert::lm {
+namespace {
+
+// Default batch size for the output. This should be configurable in the
+// future.
+constexpr int kOutputBatchSize = 1;
+
+}  // namespace
+
+absl::StatusOr<std::unique_ptr<SessionBasic>> SessionBasic::Create(
+    std::shared_ptr<LlmExecutor> executor, std::shared_ptr<Tokenizer> tokenizer,
+    const std::vector<int>& stop_token_ids,
+    const proto::SamplerParameters& sampler_params) {
+  std::unique_ptr<Sampler> sampler;
+  // TODO(b/407086356): Add test or factor out the logic to create the sampler.
+  switch (sampler_params.type()) {
+    case proto::SamplerParameters::TYPE_UNSPECIFIED:
+      ABSL_LOG(INFO) << "Sampler type is unspecified. Assume the LLM Executor "
+                        "handles the sampling logic.";
+      break;
+    case proto::SamplerParameters::TOP_P: {
+      absl::StatusOr<std::unique_ptr<Sampler>> sampler_or;
+      sampler_or = TopPSampler::Create(
+          sampler_params.k(), sampler_params.p(), sampler_params.temperature(),
+          /*batch_size=*/kOutputBatchSize, sampler_params.seed());
+      if (!sampler_or.ok()) {
+        return sampler_or.status();
+      }
+      sampler = std::move(*sampler_or);
+    } break;
+    default:
+      return absl::UnimplementedError(absl::StrCat(
+          "Sampler type: ", sampler_params.type(), " not implemented yet."));
+  }
+  return absl::WrapUnique(new SessionBasic(executor, tokenizer, stop_token_ids,
+                                           std::move(sampler)));
+}
+
+absl::Status SessionBasic::AddTextPrompt(absl::string_view input) {
+  // TODO(b/397975034): factor out the prompt formatting logic into a
+  // separate library/class.
+  const std::string prompt = absl::StrCat(
+      "<start_of_turn>user\n", input, "<end_of_turn>\n<start_of_turn>model\n");
+  ABSL_LOG(INFO) << "AddTextPrompt: " << prompt;
+  ASSIGN_OR_RETURN(last_prefill_token_id_,
+                   Prefill(executor_, tokenizer_, prompt, /*bos_token_id=*/2));
+  ABSL_LOG(INFO) << "Prefill done";
+  return absl::OkStatus();
+}
+
+absl::StatusOr<Responses> SessionBasic::PredictSync() {
+  ABSL_LOG(INFO) << "PredictSync";
+  if (sampler_ == nullptr) {
+    ASSIGN_OR_RETURN(auto responses,
+                     Decode(executor_, tokenizer_, stop_token_ids_));
+    return responses;
+  } else {
+    std::vector<int> decoded_ids(kOutputBatchSize, last_prefill_token_id_);
+    auto decoded_ids_buffer =
+        CopyToTensorBuffer<int>(decoded_ids, {kOutputBatchSize, 1});
+    ASSIGN_OR_RETURN(auto responses, DecodeCustomSampling(
+                                         executor_, tokenizer_, stop_token_ids_,
+                                         /*num_output_candidates=*/1, *sampler_,
+                                         *decoded_ids_buffer));
+    return responses;
+  }
+}
+
+}  // namespace litert::lm
