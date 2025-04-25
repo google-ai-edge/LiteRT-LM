@@ -1,7 +1,7 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_COMPONENTS_SAMPLER_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_COMPONENTS_SAMPLER_H_
 
-#include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status.h"  // from @abseil-cpp
 #include "litert/litert/cc/litert_tensor_buffer.h"  // from @litert
 
 namespace litert::lm {

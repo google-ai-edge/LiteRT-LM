@@ -7,7 +7,7 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include "absl/types/span.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @abseil-cpp
 #include "runtime/util/convert_tensor_buffer.h"
 
 namespace litert::lm {

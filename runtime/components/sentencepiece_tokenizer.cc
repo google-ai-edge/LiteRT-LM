@@ -5,11 +5,11 @@
 #include <utility>
 #include <vector>
 
-#include "absl/memory/memory.h"  // from @com_google_absl
-#include "absl/status/status.h"  // from @com_google_absl
-#include "absl/status/statusor.h"  // from @com_google_absl
-#include "absl/strings/string_view.h"  // from @com_google_absl
-#include "sentencepiece/src/sentencepiece_processor.h"  // from @com_google_sentencepiece
+#include "absl/memory/memory.h"  // from @abseil-cpp
+#include "absl/status/status.h"  // from @abseil-cpp
+#include "absl/status/statusor.h"  // from @abseil-cpp
+#include "absl/strings/string_view.h"  // from @abseil-cpp
+#include "sentencepiece/src/sentencepiece_processor.h"  // from @sentencepiece
 
 namespace litert::lm {
 

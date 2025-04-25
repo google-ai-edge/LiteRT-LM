@@ -3,7 +3,7 @@
 #include <memory>
 #include <vector>
 
-#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @abseil-cpp
 #include "runtime/components/tokenizer.h"
 #include "runtime/core/session_basic.h"
 #include "runtime/engine/engine.h"

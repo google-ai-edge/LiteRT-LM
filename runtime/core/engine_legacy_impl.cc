@@ -17,13 +17,13 @@
 #include <utility>
 #include <vector>
 
-#include "absl/log/absl_check.h"  // from @com_google_absl
-#include "absl/log/absl_log.h"  // from @com_google_absl
-#include "absl/log/check.h"  // from @com_google_absl
-#include "absl/log/log.h"  // from @com_google_absl
-#include "absl/status/status.h"  // from @com_google_absl
-#include "absl/status/statusor.h"  // from @com_google_absl
-#include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/log/absl_check.h"  // from @abseil-cpp
+#include "absl/log/absl_log.h"  // from @abseil-cpp
+#include "absl/log/check.h"  // from @abseil-cpp
+#include "absl/log/log.h"  // from @abseil-cpp
+#include "absl/status/status.h"  // from @abseil-cpp
+#include "absl/status/statusor.h"  // from @abseil-cpp
+#include "absl/strings/str_cat.h"  // from @abseil-cpp
 #include "third_party/odml/infra/genai/inference/executor/litert_executor_utils.h"
 #include "third_party/odml/infra/genai/inference/executor/llm_litert_opencl_executor.h"
 #include "third_party/odml/infra/genai/inference/executor/llm_litert_xnnpack_executor.h"
@@ -31,7 +31,7 @@
 #include "runtime/components/tokenizer.h"
 #include "runtime/core/session_factory.h"
 #include "runtime/engine/engine.h"
-#include "runtime/engine/llm_model_settings.h"
+#include "runtime/engine/engine_settings.h"
 #include "runtime/executor/llm_executor.h"
 #include "runtime/executor/llm_executor_config.h"
 #include "runtime/proto/sampler_params.proto.h"
@@ -48,29 +48,28 @@ using litert::lm::proto::ExternalFile;
 absl::StatusOr<std::unique_ptr<LlmExecutor>> BuildExecutor(
     const std::unique_ptr<::odml::infra::ExecutorModelResources>&
         model_resources,
-    const LlmModelSettings& llm_model_settings) {
+    const EngineSettings& engine_settings) {
   if (!(model_resources && model_resources->model)) {
     return absl::InternalError("Failed to build TF_LITE_PREFILL_DECODE model.");
   }
   // Create executor that creates and owns the interpreter and kv cache.
   std::unique_ptr<LlmExecutor> executor;
   ABSL_LOG(INFO) << "Executor settings: "
-                 << llm_model_settings.GetMainExecutorSettings();
+                 << engine_settings.GetMainExecutorSettings();
 
-  if (llm_model_settings.GetMainExecutorSettings().GetBackend() ==
-      Backend::CPU) {
+  if (engine_settings.GetMainExecutorSettings().GetBackend() == Backend::CPU) {
     ASSIGN_OR_RETURN(executor, oi::LlmLiteRTXnnpackExecutor::Create(
-                                   llm_model_settings.GetMainExecutorSettings(),
+                                   engine_settings.GetMainExecutorSettings(),
                                    *model_resources->model));
-  } else if (llm_model_settings.GetMainExecutorSettings().GetBackend() ==
+  } else if (engine_settings.GetMainExecutorSettings().GetBackend() ==
              Backend::GPU) {
     ASSIGN_OR_RETURN(executor, oi::LlmLiteRTOpenClExecutor::Create(
-                                   llm_model_settings.GetMainExecutorSettings(),
+                                   engine_settings.GetMainExecutorSettings(),
                                    *model_resources->model));
   } else {
-    return absl::InvalidArgumentError(absl::StrCat(
-        "Unsupported backend: ",
-        llm_model_settings.GetMainExecutorSettings().GetBackend()));
+    return absl::InvalidArgumentError(
+        absl::StrCat("Unsupported backend: ",
+                     engine_settings.GetMainExecutorSettings().GetBackend()));
   }
 
   return std::move(executor);
@@ -82,15 +81,15 @@ class EngineImpl : public Engine {
  public:
   ~EngineImpl() override = default;
 
-  explicit EngineImpl(const LlmModelSettings& llm_model_settings) {
+  explicit EngineImpl(const EngineSettings& engine_settings) {
     ABSL_LOG(INFO) << "Constructing legacy EngineImpl...";
-    const std::string& model_path = llm_model_settings.GetMainExecutorSettings()
+    const std::string& model_path = engine_settings.GetMainExecutorSettings()
                                         .GetModelAssets()
                                         .model_paths[0];
     auto model_resources = oi::BuildModelResources(model_path);
     ABSL_QCHECK_OK(model_resources);
     model_resources_ = std::move(*model_resources);
-    auto executor = BuildExecutor(model_resources_, llm_model_settings);
+    auto executor = BuildExecutor(model_resources_, engine_settings);
     ABSL_QCHECK_OK(executor);
     executor_ = std::move(*executor);
 
@@ -149,7 +148,7 @@ class EngineImpl : public Engine {
 
 // Method to create Engine.
 absl::StatusOr<std::unique_ptr<Engine>> Engine::CreateEngine(
-    const LlmModelSettings& settings_struct) {
+    const EngineSettings& settings_struct) {
   auto llm_impl = std::make_unique<EngineImpl>(settings_struct);
   return llm_impl;
 };

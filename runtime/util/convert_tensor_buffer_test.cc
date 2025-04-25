@@ -19,7 +19,7 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include "absl/types/span.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @abseil-cpp
 #include "litert/litert/c/litert_common.h"  // from @litert
 #include "litert/litert/cc/litert_model.h"  // from @litert
 #include "litert/litert/cc/litert_tensor_buffer.h"  // from @litert

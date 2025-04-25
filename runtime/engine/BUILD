@@ -31,11 +31,11 @@ cc_library(
     name = "engine_interface",
     hdrs = ["engine.h"],
     deps = [
+        ":engine_settings",
         ":io_types",
-        ":llm_model_settings",
-        "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/strings:string_view",
+        "@abseil-cpp//absl/status",
+        "@abseil-cpp//absl/status:statusor",
+        "@abseil-cpp//absl/strings:string_view",
     ],
 )
 
@@ -44,10 +44,10 @@ cc_library(
     srcs = ["io_types.cc"],
     hdrs = ["io_types.h"],
     deps = [
-        "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/strings",
-        "@com_google_absl//absl/strings:string_view",
+        "@abseil-cpp//absl/status",
+        "@abseil-cpp//absl/status:statusor",
+        "@abseil-cpp//absl/strings",
+        "@abseil-cpp//absl/strings:string_view",
     ],
 )
 
@@ -57,7 +57,7 @@ cc_test(
     deps = [
         ":io_types",
         "@com_google_googletest//:gtest_main",
-        "@com_google_absl//absl/status",
+        "@abseil-cpp//absl/status",
     ],
 )
 
@@ -66,15 +66,15 @@ cc_binary(
     srcs = ["litert_lm_main.cc"],
     deps = [
         ":engine_interface",
-        ":llm_model_settings",
-        "@com_google_absl//absl/flags:flag",
-        "@com_google_absl//absl/flags:parse",
-        "@com_google_absl//absl/log:absl_check",
-        "@com_google_absl//absl/log:absl_log",
-        "@com_google_absl//absl/log:check",
-        "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/strings:string_view",
+        ":engine_settings",
+        "@abseil-cpp//absl/flags:flag",
+        "@abseil-cpp//absl/flags:parse",
+        "@abseil-cpp//absl/log:absl_check",
+        "@abseil-cpp//absl/log:absl_log",
+        "@abseil-cpp//absl/log:check",
+        "@abseil-cpp//absl/status",
+        "@abseil-cpp//absl/status:statusor",
+        "@abseil-cpp//absl/strings:string_view",
         "//runtime/executor:llm_executor_config",
     ] + select({
         "//conditions:default": ["//runtime/core:engine_impl"],
@@ -82,18 +82,18 @@ cc_binary(
 )
 
 cc_library(
-    name = "llm_model_settings",
-    hdrs = ["llm_model_settings.h"],
+    name = "engine_settings",
+    hdrs = ["engine_settings.h"],
     deps = [
         "//runtime/executor:llm_executor_config",
     ],
 )
 
 cc_test(
-    name = "llm_model_settings_test",
-    srcs = ["llm_model_settings_test.cc"],
+    name = "engine_settings_test",
+    srcs = ["engine_settings_test.cc"],
     deps = [
-        ":llm_model_settings",
+        ":engine_settings",
         "@com_google_googletest//:gtest_main",
         "//runtime/executor:llm_executor_config",
     ],

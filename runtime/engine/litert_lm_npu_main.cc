@@ -6,9 +6,9 @@
 #include <utility>
 #include <vector>
 
-#include "absl/flags/flag.h"  // from @com_google_absl
-#include "absl/flags/parse.h"  // from @com_google_absl
-#include "absl/log/absl_log.h"  // from @com_google_absl
+#include "absl/flags/flag.h"  // from @abseil-cpp
+#include "absl/flags/parse.h"  // from @abseil-cpp
+#include "absl/log/absl_log.h"  // from @abseil-cpp
 #include "third_party/odml/infra/genai/inference/executor/llm_litert_npu_compiled_model_executor.h"
 #include "runtime/components/sentencepiece_tokenizer.h"
 #include "runtime/components/tokenizer.h"

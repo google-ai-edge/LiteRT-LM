@@ -17,11 +17,11 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include "absl/log/absl_check.h"  // from @com_google_absl
-#include "absl/status/status.h"  // from @com_google_absl
-#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/log/absl_check.h"  // from @abseil-cpp
+#include "absl/status/status.h"  // from @abseil-cpp
+#include "absl/status/statusor.h"  // from @abseil-cpp
 #include "runtime/engine/engine.h"
-#include "runtime/engine/llm_model_settings.h"
+#include "runtime/engine/engine_settings.h"
 #include "runtime/executor/llm_executor_config.h"
 
 namespace litert::lm {
@@ -37,7 +37,7 @@ TEST(EngineTest, CreateEngine) {
   executor_settings.SetBackend(Backend::CPU);
   executor_settings.SetBackendConfig(CpuConfig());
   executor_settings.SetMaxNumTokens(160);
-  LlmModelSettings llm_settings(executor_settings);
+  EngineSettings llm_settings(executor_settings);
 
   absl::StatusOr<std::unique_ptr<Engine>> llm =
       Engine::CreateEngine(llm_settings);
@@ -71,7 +71,7 @@ TEST(EngineTest, CreateEngineGPU) {
   executor_settings.SetMaxNumTokens(160);
   // MLD OpenCL only supports fp32 on Linux TAP test.
   executor_settings.SetActivationDataType(ActivationDataType::FLOAT32);
-  LlmModelSettings llm_settings(executor_settings);
+  EngineSettings llm_settings(executor_settings);
 
   absl::StatusOr<std::unique_ptr<Engine>> llm =
       Engine::CreateEngine(llm_settings);

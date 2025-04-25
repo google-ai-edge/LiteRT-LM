@@ -1,8 +1,8 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_UTIL_LITERT_STATUS_UTIL_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_UTIL_LITERT_STATUS_UTIL_H_
 
-#include "absl/status/status.h"  // from @com_google_absl
-#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/status/status.h"  // from @abseil-cpp
+#include "absl/status/statusor.h"  // from @abseil-cpp
 #include "litert/litert/cc/litert_expected.h"  // from @litert
 #include "litert/litert/cc/litert_macros.h"  // from @litert
 
