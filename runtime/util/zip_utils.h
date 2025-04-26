@@ -18,8 +18,8 @@ limitations under the License.
 
 #include <string>
 
-#include "absl/container/flat_hash_map.h"  // from @abseil-cpp
-#include "absl/status/status.h"  // from @abseil-cpp
+#include "absl/container/flat_hash_map.h"  // from @com_google_absl
+#include "absl/status/status.h"  // from @com_google_absl
 #include "runtime/util/external_file.proto.h"
 
 namespace litert::lm {

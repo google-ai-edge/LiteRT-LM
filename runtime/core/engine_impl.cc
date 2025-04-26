@@ -17,14 +17,14 @@
 #include <utility>
 #include <vector>
 
-#include "absl/log/absl_check.h"  // from @abseil-cpp
-#include "absl/log/absl_log.h"  // from @abseil-cpp
-#include "absl/log/check.h"  // from @abseil-cpp
-#include "absl/log/log.h"  // from @abseil-cpp
-#include "absl/status/status.h"  // from @abseil-cpp
-#include "absl/status/statusor.h"  // from @abseil-cpp
-#include "absl/strings/str_cat.h"  // from @abseil-cpp
-#include "absl/strings/string_view.h"  // from @abseil-cpp
+#include "absl/log/absl_check.h"  // from @com_google_absl
+#include "absl/log/absl_log.h"  // from @com_google_absl
+#include "absl/log/check.h"  // from @com_google_absl
+#include "absl/log/log.h"  // from @com_google_absl
+#include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "runtime/components/sentencepiece_tokenizer.h"
 #include "runtime/components/tokenizer.h"
 #include "runtime/core/session_factory.h"
@@ -45,9 +45,9 @@ namespace {
 // Builds the LiteRT compiled model executor.
 absl::StatusOr<std::unique_ptr<LlmExecutor>> BuildLitertCompiledModelExecutor(
     const std::unique_ptr<ExecutorModelResources>& model_resources,
-    const LlmExecutorSettings& executor_config) {
+    const LlmExecutorSettings& executor_settings) {
   std::vector<std::string> model_paths =
-      executor_config.GetModelAssets().model_paths;
+      executor_settings.GetModelAssets().model_paths;
   if (model_paths.size() != 1) {
     return absl::InvalidArgumentError(
         absl::StrCat("Model paths size must be 1. Got ", model_paths.size()));
@@ -56,7 +56,7 @@ absl::StatusOr<std::unique_ptr<LlmExecutor>> BuildLitertCompiledModelExecutor(
   std::unique_ptr<LlmExecutor> executor;
   ASSIGN_OR_RETURN(executor,
                    LlmLiteRtCompiledModelExecutor::Create(
-                       executor_config, model_resources->litert_model));
+                       executor_settings, model_resources->litert_model));
   return executor;
 }
 

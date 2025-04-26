@@ -19,8 +19,8 @@
 #include <utility>
 #include <vector>
 
-#include "absl/log/absl_check.h"  // from @abseil-cpp
-#include "absl/types/span.h"  // from @abseil-cpp
+#include "absl/log/absl_check.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "litert/litert/c/litert_common.h"  // from @litert
 #include "litert/litert/cc/litert_element_type.h"  // from @litert
 #include "litert/litert/cc/litert_expected.h"  // from @litert

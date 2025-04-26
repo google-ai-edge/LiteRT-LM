@@ -16,8 +16,8 @@ limitations under the License.
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_UTIL_MODEL_ASSET_BUNDLE_RESOURCES_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_UTIL_MODEL_ASSET_BUNDLE_RESOURCES_H_
 
-#include "absl/container/flat_hash_map.h"  // from @abseil-cpp
-#include "absl/status/statusor.h"  // from @abseil-cpp
+#include "absl/container/flat_hash_map.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
 #include "runtime/util/external_file.proto.h"
 #include "runtime/util/external_file_handler.h"
 

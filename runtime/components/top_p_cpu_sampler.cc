@@ -5,11 +5,11 @@
 #include <string>
 #include <vector>
 
-#include "absl/memory/memory.h"  // from @abseil-cpp
-#include "absl/status/status.h"  // from @abseil-cpp
-#include "absl/status/statusor.h"  // from @abseil-cpp
-#include "absl/strings/str_cat.h"  // from @abseil-cpp
-#include "absl/types/span.h"  // from @abseil-cpp
+#include "absl/memory/memory.h"  // from @com_google_absl
+#include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "litert/litert/cc/litert_macros.h"  // from @litert
 #include "litert/litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/sampling_cpu_util.h"

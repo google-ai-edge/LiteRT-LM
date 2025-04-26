@@ -17,9 +17,9 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include "absl/log/absl_check.h"  // from @abseil-cpp
-#include "absl/status/status.h"  // from @abseil-cpp
-#include "absl/status/statusor.h"  // from @abseil-cpp
+#include "absl/log/absl_check.h"  // from @com_google_absl
+#include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
 #include "runtime/engine/engine.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/executor/llm_executor_settings.h"

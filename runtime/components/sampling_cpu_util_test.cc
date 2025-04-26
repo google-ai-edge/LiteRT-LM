@@ -5,7 +5,7 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include "absl/types/span.h"  // from @abseil-cpp
+#include "absl/types/span.h"  // from @com_google_absl
 
 namespace litert::lm {
 namespace {

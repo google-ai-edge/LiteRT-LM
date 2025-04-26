@@ -18,9 +18,9 @@
 #include <memory>
 #include <vector>
 
-#include "absl/status/status.h"  // from @abseil-cpp
-#include "absl/status/statusor.h"  // from @abseil-cpp
-#include "absl/strings/string_view.h"  // from @abseil-cpp
+#include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/sampler.h"
 #include "runtime/components/tokenizer.h"

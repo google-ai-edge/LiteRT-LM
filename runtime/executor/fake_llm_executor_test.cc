@@ -18,8 +18,8 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include "absl/status/status.h"  // from @abseil-cpp
-#include "absl/types/span.h"  // from @abseil-cpp
+#include "absl/status/status.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "runtime/executor/llm_executor.h"
 #include "runtime/util/convert_tensor_buffer.h"
 

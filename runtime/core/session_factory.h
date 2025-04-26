@@ -18,7 +18,7 @@
 #include <memory>
 #include <vector>
 
-#include "absl/status/statusor.h"  // from @abseil-cpp
+#include "absl/status/statusor.h"  // from @com_google_absl
 #include "runtime/components/tokenizer.h"
 #include "runtime/engine/engine.h"
 #include "runtime/executor/llm_executor.h"

@@ -8,8 +8,8 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include "absl/status/statusor.h"  // from @abseil-cpp
-#include "absl/strings/string_view.h"  // from @abseil-cpp
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/litert/cc/litert_buffer_ref.h"  // from @litert
 #include "litert/litert/cc/litert_expected.h"  // from @litert
 #include "litert/litert/cc/litert_model.h"  // from @litert
@@ -58,11 +58,11 @@ TEST(LlmLiteRTCompiledModelExecutorTest, CreateExecutorTest) {
                        CreateExecutorModelResources(model_path.string()));
   ModelAssets model_assets;
   model_assets.model_paths.push_back(model_path);
-  LlmExecutorSettings executor_config(model_assets);
-  executor_config.SetBackend(Backend::CPU);
+  LlmExecutorSettings executor_settings(model_assets);
+  executor_settings.SetBackend(Backend::CPU);
   ASSERT_OK_AND_ASSIGN(auto executor,
                        LlmLiteRtCompiledModelExecutor::Create(
-                           executor_config, model_resources->litert_model));
+                           executor_settings, model_resources->litert_model));
   ASSERT_NE(executor, nullptr);
 }
 

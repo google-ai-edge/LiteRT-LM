@@ -20,12 +20,12 @@
 #include <utility>
 #include <vector>
 
-#include "absl/container/flat_hash_map.h"  // from @abseil-cpp
-#include "absl/log/absl_log.h"  // from @abseil-cpp
-#include "absl/status/status.h"  // from @abseil-cpp
-#include "absl/status/statusor.h"  // from @abseil-cpp
-#include "absl/strings/string_view.h"  // from @abseil-cpp
-#include "absl/types/span.h"  // from @abseil-cpp
+#include "absl/container/flat_hash_map.h"  // from @com_google_absl
+#include "absl/log/absl_log.h"  // from @com_google_absl
+#include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "litert/litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/litert/cc/litert_environment.h"  // from @litert
 #include "litert/litert/cc/litert_model.h"  // from @litert
@@ -45,7 +45,7 @@ class LlmLiteRtCompiledModelExecutor : public ::litert::lm::LlmExecutor {
  public:
   // Creates a LlmLiteRtCompiledModelExecutor from a LiteRt model.
   static absl::StatusOr<std::unique_ptr<LlmLiteRtCompiledModelExecutor>> Create(
-      const LlmExecutorSettings& executor_config,
+      const LlmExecutorSettings& executor_settings,
       ::litert::Model& litert_model);
 
   // Input APIs:
