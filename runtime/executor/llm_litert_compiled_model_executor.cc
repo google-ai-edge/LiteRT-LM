@@ -22,10 +22,8 @@
 #include "litert/litert/cc/litert_model.h"  // from @litert
 #include "litert/litert/cc/litert_options.h"  // from @litert
 #include "litert/litert/cc/litert_tensor_buffer.h"  // from @litert
-#include "litert/litert/runtime/accelerators/gpu/accelerator_options.h"  // from @litert
 #include "runtime/components/top_p_cpu_sampler.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
-#include "runtime/executor/llm_executor.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/litert_status_util.h"
@@ -36,9 +34,7 @@ namespace {
 
 using ::absl::Span;
 using ::litert::Expected;
-using ::litert::Model;
 using ::litert::TensorBuffer;
-using ::litert::ml_drift::GpuOptions;
 
 // Names of the signature runners, used to get the signature runners from the
 // interpreter.
@@ -352,19 +348,6 @@ LlmLiteRtCompiledModelExecutor::Create(
   // TODO(b/405424188): - Add support for NPU backends.
   auto compilation_options = ::litert::Options::Create();
   switch (executor_config.GetBackend()) {
-    case Backend::GPU: {
-      // TODO: b/403132820 - Add accelerator compilation options for ML_DRIFT.
-      Expected<GpuOptions> gpu_compilation_options = GpuOptions::Create();
-      gpu_compilation_options->EnableConstantTensorSharing(true);
-      gpu_compilation_options->EnableInfiniteFloatCapping(true);
-      gpu_compilation_options->EnableAllowSrcQuantizedFcConvOps(true);
-      gpu_compilation_options->SetDelegatePrecision(
-          LiteRtDelegatePrecision::kLiteRtDelegatePrecisionFp16);
-      compilation_options->AddOpaqueOptions(
-          std::move(*gpu_compilation_options));
-      compilation_options->SetHardwareAccelerators(kLiteRtHwAcceleratorGpu);
-      break;
-    }
     case Backend::CPU:
       // TODO: b/403132820 - Add accelerator compilation options for XNNPACK.
       compilation_options->SetHardwareAccelerators(kLiteRtHwAcceleratorCpu);
