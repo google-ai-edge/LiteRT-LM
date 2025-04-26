@@ -16,8 +16,8 @@ cc_library(
         "@abseil-cpp//absl/status:statusor",
         "@abseil-cpp//absl/strings:string_view",
         "@abseil-cpp//absl/types:span",
-        "@litert//litert/litert/cc:litert_macros",
-        "@litert//litert/litert/cc:litert_tensor_buffer",
+        "@litert//litert/cc:litert_macros",
+        "@litert//litert/cc:litert_tensor_buffer",
         "//runtime/util:convert_tensor_buffer",
     ],
 )
@@ -40,7 +40,7 @@ cc_library(
     hdrs = ["sampler.h"],
     deps = [
         "@abseil-cpp//absl/status",
-        "@litert//litert/litert/cc:litert_tensor_buffer",
+        "@litert//litert/cc:litert_tensor_buffer",
     ],
 )
 
@@ -64,7 +64,7 @@ cc_library(
         "@abseil-cpp//absl/status",
         "@abseil-cpp//absl/status:statusor",
         "@abseil-cpp//absl/strings:string_view",
-        "@sentencepiece//src:sentencepiece_processor",
+        "@sentencepiece//:sentencepiece_processor",
     ],
 )
 
@@ -79,8 +79,8 @@ cc_test(
         "@abseil-cpp//absl/status",
         "@abseil-cpp//absl/status:statusor",
         "@abseil-cpp//absl/strings",
-        "@litert//litert/litert/cc:litert_layout",
-        "@litert//litert/litert/cc:litert_tensor_buffer",
+        "@litert//litert/cc:litert_layout",
+        "@litert//litert/cc:litert_tensor_buffer",
         "//runtime/util:convert_tensor_buffer",
     ],
 )
@@ -119,8 +119,8 @@ cc_library(
         "@abseil-cpp//absl/status:statusor",
         "@abseil-cpp//absl/strings",
         "@abseil-cpp//absl/types:span",
-        "@litert//litert/litert/cc:litert_macros",
-        "@litert//litert/litert/cc:litert_tensor_buffer",
+        "@litert//litert/cc:litert_macros",
+        "@litert//litert/cc:litert_tensor_buffer",
         "//runtime/util:convert_tensor_buffer",
         "//runtime/util:tensor_buffer_util",
     ],
@@ -133,7 +133,7 @@ cc_test(
         ":top_p_cpu_sampler",
         "@com_google_googletest//:gtest_main",
         "@abseil-cpp//absl/types:span",
-        "@litert//litert/litert/cc:litert_tensor_buffer",
+        "@litert//litert/cc:litert_tensor_buffer",
         "//runtime/util:convert_tensor_buffer",
     ],
 )
