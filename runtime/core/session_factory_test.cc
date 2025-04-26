@@ -6,8 +6,8 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include "absl/status/statusor.h"  // from @abseil-cpp
-#include "absl/strings/string_view.h"  // from @abseil-cpp
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "runtime/components/tokenizer.h"
 #include "runtime/executor/fake_llm_executor.h"
 #include "runtime/executor/llm_executor.h"

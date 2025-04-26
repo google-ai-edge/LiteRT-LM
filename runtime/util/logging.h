@@ -5,7 +5,7 @@
 #include <optional>
 #include <vector>
 #include <variant>
-#include "absl/strings/str_join.h"  // from @abseil-cpp
+#include "absl/strings/str_join.h"  // from @com_google_absl
 
 namespace litert::lm {
 

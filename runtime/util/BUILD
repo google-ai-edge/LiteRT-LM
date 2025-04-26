@@ -14,8 +14,8 @@ cc_library(
     name = "convert_tensor_buffer",
     hdrs = ["convert_tensor_buffer.h"],
     deps = [
-        "@abseil-cpp//absl/log:absl_check",
-        "@abseil-cpp//absl/types:span",
+        "@com_google_absl//absl/log:absl_check",
+        "@com_google_absl//absl/types:span",
         "@litert//litert/c:litert_common",
         "@litert//litert/cc:litert_element_type",
         "@litert//litert/cc:litert_expected",
@@ -31,7 +31,7 @@ cc_test(
     deps = [
         ":convert_tensor_buffer",
         "@com_google_googletest//:gtest_main",
-        "@abseil-cpp//absl/types:span",
+        "@com_google_absl//absl/types:span",
         "@litert//litert/c:litert_common",
         "@litert//litert/cc:litert_model",
         "@litert//litert/cc:litert_tensor_buffer",
@@ -46,8 +46,8 @@ cc_library(
         "status_macros.h",
     ],
     deps = [
-        "@abseil-cpp//absl/status",
-        "@abseil-cpp//absl/status:statusor",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
         "@litert//litert/c:litert_common",
         "@litert//litert/cc:litert_expected",
         "@litert//litert/cc:litert_macros",
@@ -60,8 +60,8 @@ cc_test(
     deps = [
         ":litert_status_util",
         "@com_google_googletest//:gtest_main",
-        "@abseil-cpp//absl/status",
-        "@abseil-cpp//absl/status:statusor",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
         "@litert//litert/c:litert_common",
         "@litert//litert/cc:litert_expected",
     ],
@@ -73,8 +73,8 @@ cc_test(
     deps = [
         ":litert_status_util",
         "@com_google_googletest//:gtest_main",
-        "@abseil-cpp//absl/status",
-        "@abseil-cpp//absl/status:statusor",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
     ],
 )
 
@@ -82,7 +82,7 @@ cc_library(
     name = "logging",
     hdrs = ["logging.h"],
     deps = [
-        "@abseil-cpp//absl/strings",
+        "@com_google_absl//absl/strings",
     ],
 )
 
@@ -91,9 +91,9 @@ cc_library(
     srcs = ["logging_tensor_buffer.cc"],
     hdrs = ["logging_tensor_buffer.h"],
     deps = [
-        "@abseil-cpp//absl/log:absl_check",
-        "@abseil-cpp//absl/strings",
-        "@abseil-cpp//absl/types:span",
+        "@com_google_absl//absl/log:absl_check",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/types:span",
         "@litert//litert/c:litert_tensor_buffer_types",
         "@litert//litert/cc:litert_element_type",
         "@litert//litert/cc:litert_tensor_buffer",
@@ -146,9 +146,9 @@ cc_library(
     ],
     deps = [
         ":scoped_file",
-        "@abseil-cpp//absl/cleanup",
-        "@abseil-cpp//absl/status:statusor",
-        "@abseil-cpp//absl/strings",
+        "@com_google_absl//absl/cleanup",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
         "//runtime/util:litert_status_util",
     ],
 )
@@ -161,8 +161,8 @@ cc_test(
         ":scoped_file",
         "//testing/base/public:gunit",
         "@com_google_googletest//:gtest_main",
-        "@abseil-cpp//absl/status:statusor",
-        "@abseil-cpp//absl/strings:string_view",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
     ],
 )
 
@@ -174,8 +174,8 @@ cc_library(
     }),
     hdrs = ["scoped_file.h"],
     deps = [
-        "@abseil-cpp//absl/status:statusor",
-        "@abseil-cpp//absl/strings:string_view",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
         "//runtime/util:litert_status_util",
     ],
 )
@@ -192,12 +192,12 @@ cc_library(
         ":external_file_cc_proto",
         ":external_file_handler",
         ":zip_utils",
-        "@abseil-cpp//absl/container:flat_hash_map",
-        "@abseil-cpp//absl/memory",
-        "@abseil-cpp//absl/status",
-        "@abseil-cpp//absl/status:statusor",
-        "@abseil-cpp//absl/strings",
-        "@abseil-cpp//absl/strings:str_format",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/memory",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
         "@litert//litert/cc:litert_macros",
     ],
 )
@@ -222,11 +222,11 @@ cc_library(
     ],
     deps = [
         ":external_file_cc_proto",
-        "@abseil-cpp//absl/memory",
-        "@abseil-cpp//absl/status",
-        "@abseil-cpp//absl/status:statusor",
-        "@abseil-cpp//absl/strings",
-        "@abseil-cpp//absl/strings:str_format",
+        "@com_google_absl//absl/memory",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
         "@litert//litert/cc:litert_macros",
     ],
 )
@@ -236,7 +236,7 @@ cc_library(
     srcs = ["zip_readonly_mem_file.cc"],
     hdrs = ["zip_readonly_mem_file.h"],
     deps = [
-        "@abseil-cpp//absl/strings",
+        "@com_google_absl//absl/strings",
         "@minizip-ng//:zlib_minizip",
         "@zlib//:zlib",
     ],
@@ -252,12 +252,12 @@ cc_library(
     deps = [
         ":external_file_cc_proto",
         ":zip_readonly_mem_file",
-        "@abseil-cpp//absl/cleanup",
-        "@abseil-cpp//absl/container:flat_hash_map",
-        "@abseil-cpp//absl/log:absl_log",
-        "@abseil-cpp//absl/status",
-        "@abseil-cpp//absl/status:statusor",
-        "@abseil-cpp//absl/strings:string_view",
+        "@com_google_absl//absl/cleanup",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/log:absl_log",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
         "@minizip-ng//:zlib_minizip",
         "@litert//litert/cc:litert_macros",
         "@zlib//:zlib",

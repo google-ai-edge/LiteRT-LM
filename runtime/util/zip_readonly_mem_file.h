@@ -18,7 +18,7 @@ limitations under the License.
 
 #include <cstdlib>
 
-#include "absl/strings/string_view.h"  // from @abseil-cpp
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "minizip/ioapi.h"  // from @minizip-ng
 
 namespace litert::lm {

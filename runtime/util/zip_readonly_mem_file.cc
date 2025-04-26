@@ -18,7 +18,7 @@ limitations under the License.
 #include <cstdio>
 #include <cstring>
 
-#include "absl/strings/string_view.h"  // from @abseil-cpp
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "minizip/ioapi.h"  // from @minizip-ng
 #include "zlib/src/zconf.h"  // from @zlib
 

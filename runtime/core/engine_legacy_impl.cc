@@ -17,13 +17,13 @@
 #include <utility>
 #include <vector>
 
-#include "absl/log/absl_check.h"  // from @abseil-cpp
-#include "absl/log/absl_log.h"  // from @abseil-cpp
-#include "absl/log/check.h"  // from @abseil-cpp
-#include "absl/log/log.h"  // from @abseil-cpp
-#include "absl/status/status.h"  // from @abseil-cpp
-#include "absl/status/statusor.h"  // from @abseil-cpp
-#include "absl/strings/str_cat.h"  // from @abseil-cpp
+#include "absl/log/absl_check.h"  // from @com_google_absl
+#include "absl/log/absl_log.h"  // from @com_google_absl
+#include "absl/log/check.h"  // from @com_google_absl
+#include "absl/log/log.h"  // from @com_google_absl
+#include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "third_party/odml/infra/genai/inference/executor/litert_executor_utils.h"
 #include "third_party/odml/infra/genai/inference/executor/llm_litert_opencl_executor.h"
 #include "third_party/odml/infra/genai/inference/executor/llm_litert_xnnpack_executor.h"

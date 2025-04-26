@@ -18,8 +18,8 @@
 #include <string>
 #include <vector>
 
-#include "absl/status/statusor.h"  // from @abseil-cpp
-#include "absl/strings/string_view.h"  // from @abseil-cpp
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 
 namespace litert::lm {
 

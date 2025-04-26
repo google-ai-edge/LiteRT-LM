@@ -15,7 +15,7 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_LLM_EXECUTOR_SETTINGS_UTILS_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_LLM_EXECUTOR_SETTINGS_UTILS_H_
 
-#include "absl/status/statusor.h"  // from @abseil-cpp
+#include "absl/status/statusor.h"  // from @com_google_absl
 #include "third_party/odml/infra/genai/inference/proto/llm_inference_engine.proto.h"
 #include "runtime/executor/llm_executor_settings.h"
 

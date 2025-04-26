@@ -19,9 +19,9 @@ cc_library(
     deps = [
         ":engine_settings",
         ":io_types",
-        "@abseil-cpp//absl/status",
-        "@abseil-cpp//absl/status:statusor",
-        "@abseil-cpp//absl/strings:string_view",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
     ],
 )
 
@@ -30,10 +30,10 @@ cc_library(
     srcs = ["io_types.cc"],
     hdrs = ["io_types.h"],
     deps = [
-        "@abseil-cpp//absl/status",
-        "@abseil-cpp//absl/status:statusor",
-        "@abseil-cpp//absl/strings",
-        "@abseil-cpp//absl/strings:string_view",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
     ],
 )
 
@@ -43,7 +43,7 @@ cc_test(
     deps = [
         ":io_types",
         "@com_google_googletest//:gtest_main",
-        "@abseil-cpp//absl/status",
+        "@com_google_absl//absl/status",
     ],
 )
 
@@ -53,14 +53,14 @@ cc_binary(
     deps = [
         ":engine_interface",
         ":engine_settings",
-        "@abseil-cpp//absl/flags:flag",
-        "@abseil-cpp//absl/flags:parse",
-        "@abseil-cpp//absl/log:absl_check",
-        "@abseil-cpp//absl/log:absl_log",
-        "@abseil-cpp//absl/log:check",
-        "@abseil-cpp//absl/status",
-        "@abseil-cpp//absl/status:statusor",
-        "@abseil-cpp//absl/strings:string_view",
+        "@com_google_absl//absl/flags:flag",
+        "@com_google_absl//absl/flags:parse",
+        "@com_google_absl//absl/log:absl_check",
+        "@com_google_absl//absl/log:absl_log",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
         "//runtime/executor:llm_executor_settings",
     ] + select({
         "//conditions:default": ["//runtime/core:engine_impl"],

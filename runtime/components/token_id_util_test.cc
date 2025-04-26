@@ -4,7 +4,7 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include "absl/status/status.h"  // from @abseil-cpp
+#include "absl/status/status.h"  // from @com_google_absl
 
 namespace litert::lm {
 namespace {
