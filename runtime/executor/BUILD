@@ -52,8 +52,6 @@ cc_library(
         "@litert//litert/cc:litert_model",
         "@litert//litert/cc:litert_options",
         "@litert//litert/cc:litert_tensor_buffer",
-        "@litert//litert/runtime/accelerators/gpu:accelerator_options",
-        "@litert//litert/runtime/accelerators/gpu:ml_drift_cl_accelerator",
         "//runtime/components:top_p_cpu_sampler",
         "//runtime/util:convert_tensor_buffer",
         "//runtime/util:litert_status_util",
