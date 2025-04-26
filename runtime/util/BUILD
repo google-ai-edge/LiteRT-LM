@@ -238,7 +238,7 @@ cc_library(
     deps = [
         "@abseil-cpp//absl/strings",
         "@minizip-ng//:zlib_minizip",
-        "@zlib//zlib:zlib",
+        "@zlib//:zlib",
     ],
 )
 
@@ -260,6 +260,6 @@ cc_library(
         "@abseil-cpp//absl/strings:string_view",
         "@minizip-ng//:zlib_minizip",
         "@litert//litert/cc:litert_macros",
-        "@zlib//zlib:zlib",
+        "@zlib//:zlib",
     ],
 )
