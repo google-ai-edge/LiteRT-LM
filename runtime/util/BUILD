@@ -16,12 +16,12 @@ cc_library(
     deps = [
         "@abseil-cpp//absl/log:absl_check",
         "@abseil-cpp//absl/types:span",
-        "@litert//litert/litert/c:litert_common",
-        "@litert//litert/litert/cc:litert_element_type",
-        "@litert//litert/litert/cc:litert_expected",
-        "@litert//litert/litert/cc:litert_layout",
-        "@litert//litert/litert/cc:litert_model",
-        "@litert//litert/litert/cc:litert_tensor_buffer",
+        "@litert//litert/c:litert_common",
+        "@litert//litert/cc:litert_element_type",
+        "@litert//litert/cc:litert_expected",
+        "@litert//litert/cc:litert_layout",
+        "@litert//litert/cc:litert_model",
+        "@litert//litert/cc:litert_tensor_buffer",
     ],
 )
 
@@ -32,9 +32,9 @@ cc_test(
         ":convert_tensor_buffer",
         "@com_google_googletest//:gtest_main",
         "@abseil-cpp//absl/types:span",
-        "@litert//litert/litert/c:litert_common",
-        "@litert//litert/litert/cc:litert_model",
-        "@litert//litert/litert/cc:litert_tensor_buffer",
+        "@litert//litert/c:litert_common",
+        "@litert//litert/cc:litert_model",
+        "@litert//litert/cc:litert_tensor_buffer",
     ],
 )
 
@@ -48,9 +48,9 @@ cc_library(
     deps = [
         "@abseil-cpp//absl/status",
         "@abseil-cpp//absl/status:statusor",
-        "@litert//litert/litert/c:litert_common",
-        "@litert//litert/litert/cc:litert_expected",
-        "@litert//litert/litert/cc:litert_macros",
+        "@litert//litert/c:litert_common",
+        "@litert//litert/cc:litert_expected",
+        "@litert//litert/cc:litert_macros",
     ],
 )
 
@@ -62,8 +62,8 @@ cc_test(
         "@com_google_googletest//:gtest_main",
         "@abseil-cpp//absl/status",
         "@abseil-cpp//absl/status:statusor",
-        "@litert//litert/litert/c:litert_common",
-        "@litert//litert/litert/cc:litert_expected",
+        "@litert//litert/c:litert_common",
+        "@litert//litert/cc:litert_expected",
     ],
 )
 
@@ -94,9 +94,9 @@ cc_library(
         "@abseil-cpp//absl/log:absl_check",
         "@abseil-cpp//absl/strings",
         "@abseil-cpp//absl/types:span",
-        "@litert//litert/litert/c:litert_tensor_buffer_types",
-        "@litert//litert/litert/cc:litert_element_type",
-        "@litert//litert/litert/cc:litert_tensor_buffer",
+        "@litert//litert/c:litert_tensor_buffer_types",
+        "@litert//litert/cc:litert_element_type",
+        "@litert//litert/cc:litert_tensor_buffer",
     ],
 )
 
@@ -107,10 +107,10 @@ cc_test(
         ":logging",
         ":logging_tensor_buffer",
         "@com_google_googletest//:gtest_main",
-        "@litert//litert/litert/c:litert_tensor_buffer",
-        "@litert//litert/litert/cc:litert_element_type",
-        "@litert//litert/litert/cc:litert_model",
-        "@litert//litert/litert/cc:litert_tensor_buffer",
+        "@litert//litert/c:litert_tensor_buffer",
+        "@litert//litert/cc:litert_element_type",
+        "@litert//litert/cc:litert_model",
+        "@litert//litert/cc:litert_tensor_buffer",
     ],
 )
 
@@ -119,8 +119,8 @@ cc_library(
     srcs = ["tensor_buffer_util.cc"],
     hdrs = ["tensor_buffer_util.h"],
     deps = [
-        "@litert//litert/litert/cc:litert_macros",
-        "@litert//litert/litert/cc:litert_tensor_buffer",
+        "@litert//litert/cc:litert_macros",
+        "@litert//litert/cc:litert_tensor_buffer",
     ],
 )
 
@@ -198,7 +198,7 @@ cc_library(
         "@abseil-cpp//absl/status:statusor",
         "@abseil-cpp//absl/strings",
         "@abseil-cpp//absl/strings:str_format",
-        "@litert//litert/litert/cc:litert_macros",
+        "@litert//litert/cc:litert_macros",
     ],
 )
 
@@ -227,7 +227,7 @@ cc_library(
         "@abseil-cpp//absl/status:statusor",
         "@abseil-cpp//absl/strings",
         "@abseil-cpp//absl/strings:str_format",
-        "@litert//litert/litert/cc:litert_macros",
+        "@litert//litert/cc:litert_macros",
     ],
 )
 
@@ -237,8 +237,8 @@ cc_library(
     hdrs = ["zip_readonly_mem_file.h"],
     deps = [
         "@abseil-cpp//absl/strings",
-        "@minizip-ng//minizip:zlib_minizip",
-        "@zlib//zlib:zlibheaders",
+        "@minizip-ng//:zlib_minizip",
+        "@zlib//zlib:zlib",
     ],
 )
 
@@ -258,8 +258,8 @@ cc_library(
         "@abseil-cpp//absl/status",
         "@abseil-cpp//absl/status:statusor",
         "@abseil-cpp//absl/strings:string_view",
-        "@minizip-ng//minizip:zlib_minizip",
-        "@litert//litert/litert/cc:litert_macros",
-        "@zlib//zlib:zlibheaders",
+        "@minizip-ng//:zlib_minizip",
+        "@litert//litert/cc:litert_macros",
+        "@zlib//zlib:zlib",
     ],
 )

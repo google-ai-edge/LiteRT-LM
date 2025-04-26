@@ -1,0 +1,45 @@
+package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "zlib_minizip",
+    srcs = [
+        "ioapi.c",
+        "iomem_simple.c",
+        "miniunz.c",
+        "minizip.c",
+        "unzip.c",
+        "zip.c",
+        "zip_additions.c",
+    ] + select({
+        "@platforms//os:windows": ["iowin32.c"],
+        "//conditions:default": [],
+    }),
+    hdrs = [
+        "crypt.h",
+        "ioapi.h",
+        "mztools.h",
+        "unzip.h",
+        "zip.h",
+        "zip_additions.h",
+    ] + select({
+        "@platforms//os:windows": ["iowin32.h"],
+        "//conditions:default": [],
+    }),
+    copts = [
+        "-DZLIB_MINIZIP_LIB",
+        "-std=gnu17",  # Does not compile in C23; uses non-prototype function definitions.
+        "-Wno-dangling-else",
+        "-Wno-format",
+        "-Wno-incompatible-pointer-types",
+        "-Wno-incompatible-pointer-types-discards-qualifiers",
+        "-Wno-parentheses",
+    ] + select({
+        "@platforms//os:android": ["-DIOAPI_NO_64"],
+        "@platforms//os:windows": [
+            "-D_UNICODE",
+            "-DUNICODE",
+        ],
+        "//conditions:default": [],
+    }),
+    deps = ["@zlib//:zlib"],
+)

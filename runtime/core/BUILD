@@ -63,7 +63,7 @@ cc_library(
         "@abseil-cpp//absl/status:statusor",
         "@abseil-cpp//absl/strings",
         "@abseil-cpp//absl/strings:string_view",
-        "@litert//litert/litert/cc:litert_tensor_buffer",
+        "@litert//litert/cc:litert_tensor_buffer",
         "//runtime/components:sampler",
         "//runtime/components:token_id_util",
         "//runtime/components:tokenizer",
