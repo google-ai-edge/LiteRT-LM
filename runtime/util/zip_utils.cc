@@ -27,11 +27,11 @@ limitations under the License.
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
-#include "minizip/ioapi.h"  // from @minizip-ng
-#include "minizip/unzip.h"  // from @minizip-ng
+#include "minizip/ioapi.h"  // from @minizip
+#include "minizip/unzip.h"  // from @minizip
 #include "runtime/util/status_macros.h"
 #include "runtime/util/zip_readonly_mem_file.h"
-#include "zlib/src/zlib.h"  // from @zlib
+#include "zlib.h"  // from @zlib
 
 namespace litert::lm {
 

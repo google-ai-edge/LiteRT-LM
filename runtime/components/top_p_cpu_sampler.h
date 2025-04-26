@@ -6,7 +6,7 @@
 
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "litert/litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/sampler.h"
 
 namespace litert::lm {

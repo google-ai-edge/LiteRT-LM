@@ -1,5 +1,3 @@
-load("@protobuf//bazel:cc_proto_library.bzl", "cc_proto_library")
-load("@protobuf//bazel:proto_library.bzl", "proto_library")
 
 package(
     default_applicable_licenses = ["//:license"],

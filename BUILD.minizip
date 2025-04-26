@@ -4,12 +4,10 @@ cc_library(
     name = "zlib_minizip",
     srcs = [
         "ioapi.c",
-        "iomem_simple.c",
         "miniunz.c",
         "minizip.c",
         "unzip.c",
         "zip.c",
-        "zip_additions.c",
     ] + select({
         "@platforms//os:windows": ["iowin32.c"],
         "//conditions:default": [],
@@ -20,7 +18,6 @@ cc_library(
         "mztools.h",
         "unzip.h",
         "zip.h",
-        "zip_additions.h",
     ] + select({
         "@platforms//os:windows": ["iowin32.h"],
         "//conditions:default": [],

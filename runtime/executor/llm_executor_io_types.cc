@@ -20,7 +20,7 @@
 #include <ostream>
 #include <string>
 
-#include "litert/litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/util/logging_tensor_buffer.h"
 
 namespace litert::lm {

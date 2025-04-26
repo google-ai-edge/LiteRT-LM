@@ -15,10 +15,10 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
-#include "litert/litert/cc/litert_buffer_ref.h"  // from @litert
-#include "litert/litert/cc/litert_expected.h"  // from @litert
-#include "litert/litert/cc/litert_model.h"  // from @litert
-#include "litert/litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "litert/cc/litert_buffer_ref.h"  // from @litert
+#include "litert/cc/litert_expected.h"  // from @litert
+#include "litert/cc/litert_model.h"  // from @litert
+#include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/util/external_file.proto.h"
 #include "runtime/util/model_asset_bundle_resources.h"
 #include "runtime/util/status_macros.h"

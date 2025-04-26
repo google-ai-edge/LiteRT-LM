@@ -21,11 +21,11 @@
 #include <utility>
 
 #include <gtest/gtest.h>
-#include "litert/litert/c/litert_tensor_buffer.h"  // from @litert
-#include "litert/litert/cc/litert_element_type.h"  // from @litert
-#include "litert/litert/cc/litert_layout.h"  // from @litert
-#include "litert/litert/cc/litert_model.h"  // from @litert
-#include "litert/litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "litert/c/litert_tensor_buffer.h"  // from @litert
+#include "litert/cc/litert_element_type.h"  // from @litert
+#include "litert/cc/litert_layout.h"  // from @litert
+#include "litert/cc/litert_model.h"  // from @litert
+#include "litert/cc/litert_tensor_buffer.h"  // from @litert
 
 namespace litert::lm {
 namespace {

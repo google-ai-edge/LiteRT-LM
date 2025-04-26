@@ -19,8 +19,8 @@ limitations under the License.
 #include <cstring>
 
 #include "absl/strings/string_view.h"  // from @com_google_absl
-#include "minizip/ioapi.h"  // from @minizip-ng
-#include "zlib/src/zconf.h"  // from @zlib
+#include "minizip/ioapi.h"  // from @minizip
+#include "zconf.h"  // from @zlib
 
 namespace litert::lm {
 

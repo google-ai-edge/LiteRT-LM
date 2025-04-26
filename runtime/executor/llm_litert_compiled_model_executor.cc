@@ -15,13 +15,13 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
-#include "litert/litert/c/litert_common.h"  // from @litert
-#include "litert/litert/cc/litert_compiled_model.h"  // from @litert
-#include "litert/litert/cc/litert_environment.h"  // from @litert
-#include "litert/litert/cc/litert_expected.h"  // from @litert
-#include "litert/litert/cc/litert_model.h"  // from @litert
-#include "litert/litert/cc/litert_options.h"  // from @litert
-#include "litert/litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "litert/c/litert_common.h"  // from @litert
+#include "litert/cc/litert_compiled_model.h"  // from @litert
+#include "litert/cc/litert_environment.h"  // from @litert
+#include "litert/cc/litert_expected.h"  // from @litert
+#include "litert/cc/litert_model.h"  // from @litert
+#include "litert/cc/litert_options.h"  // from @litert
+#include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/top_p_cpu_sampler.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/executor/llm_executor_settings.h"
