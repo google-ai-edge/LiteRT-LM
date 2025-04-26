@@ -4,7 +4,37 @@ module(
 )
 
 bazel_dep(name = "abseil-cpp", version = "20250127.1")
-bazel_dep(name = "protobuf", version = "31.0.rc1")
+bazel_dep(name = "platforms", version = "0.0.11")
+bazel_dep(name = "protobuf", version = "31.0-rc1")
+bazel_dep(name = "rules_license", version = "1.0.0")
 bazel_dep(name = "zlib", version = "1.3.1.bcr.5")
 
-archives_ext = use_extension("//:EXTENSIONS.bzl", "http_archives_extension")
+http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+http_archive(
+    name = "minizip-ng",
+    url = "https://github.com/zlib-ng/minizip-ng/archive/refs/tags/4.0.9.tar.gz",
+    sha256 = "353a9e1c1170c069417c9633cc94ced74f826319d6d0b46d442c2cd7b00161c1",
+    strip_prefix = "minizip-ng-4.0.9",
+)
+
+http_archive(
+    name = "litert",
+    url = "https://github.com/google-ai-edge/LiteRT/archive/refs/tags/v1.2.0.tar.gz",
+    sha256 = "6ee80a0890f35de97b96d438bd99f2b1c852c81182a95a1059aacd7e2f5146ed",
+    strip_prefix = "LiteRT-1.2.0",
+)
+
+http_archive(
+    name = "sentencepiece",
+    url = "https://github.com/google/sentencepiece/archive/refs/tags/v0.2.0.tar.gz",
+    sha256 = "9970f0a0afee1648890293321665e5b2efa04eaec9f1671fcf8048f456f5bb86",
+    strip_prefix = "sentencepiece-0.2.0",
+)
+
+http_archive(
+    name = "tensorflow",
+    url = "https://github.com/tensorflow/tensorflow/archive/refs/tags/v2.18.1.tar.gz",
+    sha256 = "467c512b631e72ad5c9d5c16b23669bcf89675de630cfbb58f9dde746d34afa8",
+    strip_prefix = "tensorflow-2.18.1",
+)

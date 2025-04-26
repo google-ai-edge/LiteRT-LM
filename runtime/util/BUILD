@@ -1,5 +1,4 @@
 load("@protobuf//bazel:proto_library.bzl", "proto_library")
-load("//tools/build_defs/proto/cpp:cc_proto_library.bzl", "cc_proto_library")
 
 package(
     default_applicable_licenses = ["//:license"],
@@ -138,7 +137,7 @@ cc_test(
 cc_library(
     name = "memory_mapped_file",
     srcs = select({
-        "//tools/cc_target_os:windows": ["memory_mapped_file_win.cc"],
+        "@platforms//os:windows": ["memory_mapped_file_win.cc"],
         "//conditions:default": ["memory_mapped_file_posix.cc"],
     }),
     hdrs = ["memory_mapped_file.h"],
@@ -170,7 +169,7 @@ cc_test(
 cc_library(
     name = "scoped_file",
     srcs = select({
-        "//tools/cc_target_os:windows": ["scoped_file_win.cc"],
+        "@platforms//os:windows": ["scoped_file_win.cc"],
         "//conditions:default": ["scoped_file_posix.cc"],
     }),
     hdrs = ["scoped_file.h"],
