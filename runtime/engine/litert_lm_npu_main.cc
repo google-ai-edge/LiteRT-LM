@@ -13,7 +13,7 @@
 #include "runtime/components/sentencepiece_tokenizer.h"
 #include "runtime/components/tokenizer.h"
 #include "runtime/core/session_basic.h"
-#include "runtime/proto/sampler_params.proto.h"
+#include "runtime/proto/sampler_params.pb.h"
 
 constexpr char kModelPathLlm[] = "gemma3_npu_f32_ekv1280.tflite";
 constexpr char kModelPathTokenizer[] = "gemma3_tokenizer.spiece";

@@ -34,8 +34,8 @@
 #include "runtime/engine/engine_settings.h"
 #include "runtime/executor/llm_executor.h"
 #include "runtime/executor/llm_executor_settings.h"
-#include "runtime/proto/sampler_params.proto.h"
-#include "runtime/util/external_file.proto.h"
+#include "runtime/proto/sampler_params.pb.h"
+#include "runtime/util/external_file.pb.h"
 #include "runtime/util/model_asset_bundle_resources.h"
 #include "util/task/status_macros.h"
 

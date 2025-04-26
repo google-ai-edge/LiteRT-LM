@@ -8,7 +8,7 @@
 #include "runtime/core/session_basic.h"
 #include "runtime/engine/engine.h"
 #include "runtime/executor/llm_executor.h"
-#include "runtime/proto/sampler_params.proto.h"
+#include "runtime/proto/sampler_params.pb.h"
 
 namespace litert::lm {
 

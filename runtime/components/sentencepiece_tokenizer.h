@@ -9,7 +9,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "runtime/components/tokenizer.h"
-#include "sentencepiece/src/sentencepiece_processor.h"  // from @sentencepiece
+#include "sentencepiece_processor.h"  // from @sentencepiece
 
 namespace litert::lm {
 

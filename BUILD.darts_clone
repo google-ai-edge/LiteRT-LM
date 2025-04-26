@@ -1,0 +1,5 @@
+cc_library(
+    name = "darts_clone",
+    hdrs = ["include/darts.h"],
+    visibility = ["//visibility:public"],
+)

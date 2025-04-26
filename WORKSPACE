@@ -195,8 +195,23 @@ http_archive(
     url = "https://github.com/google/sentencepiece/archive/refs/tags/v0.2.0.tar.gz",
     sha256 = "9970f0a0afee1648890293321665e5b2efa04eaec9f1671fcf8048f456f5bb86",
     strip_prefix = "sentencepiece-0.2.0/src",
-    add_prefix = "sentencepiece/src",
+    patch_cmds = [
+        # Empty config.h seems enough.
+	"touch config.h",
+        # Replace third_party/absl/ with absl/ in *.h and *.cc files.
+        "sed -i -e 's|#include \"third_party/absl/|#include \"absl/|g' *.h *.cc",
+	# Replace third_party/darts_clone/ with include/ in *.h and *.cc files.
+        "sed -i -e 's|#include \"third_party/darts_clone/|#include \"include/|g' *.h *.cc",
+    ],
     build_file = "@//:BUILD.sentencepiece",
+)
+
+http_archive(
+    name = "darts_clone",
+    url = "https://github.com/s-yata/darts-clone/archive/e40ce4627526985a7767444b6ed6893ab6ff8983.tar.gz",
+    sha256 = "4a562824ec2fbb0ef7bd0058d9f73300173d20757b33bb69baa7e50349f65820",
+    strip_prefix = "darts-clone-e40ce4627526985a7767444b6ed6893ab6ff8983",
+    build_file = "@//:BUILD.darts_clone",
 )
 
 http_archive(

@@ -16,7 +16,7 @@
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_LLM_EXECUTOR_SETTINGS_UTILS_H_
 
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "third_party/odml/infra/genai/inference/proto/llm_inference_engine.proto.h"
+#include "third_party/odml/infra/genai/inference/proto/llm_inference_engine.pb.h"
 #include "runtime/executor/llm_executor_settings.h"
 
 namespace litert::lm {

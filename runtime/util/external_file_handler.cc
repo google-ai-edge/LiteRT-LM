@@ -42,7 +42,7 @@ limitations under the License.
 #include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_format.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
-#include "runtime/util/external_file.proto.h"
+#include "runtime/util/external_file.pb.h"
 #include "runtime/util/status_macros.h"
 
 namespace litert::lm {
