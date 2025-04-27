@@ -318,14 +318,6 @@ absl::StatusOr<std::vector<int>> LlmLiteRtCompiledModelExecutor::SampleLogits(
   return *ids;
 }
 
-absl::Status LlmLiteRtCompiledModelExecutor::Reset() {
-  current_step_ = 0;
-  next_input_token_id_ = -1;
-  processed_tokens_.clear();
-  cpu_sampler_.reset();
-  return absl::OkStatus();
-}
-
 absl::StatusOr<int> LlmLiteRtCompiledModelExecutor::GetVocabSize() {
   if (!decode_output_buffers_.contains(signatures_.output_logits)) {
     return absl::NotFoundError("Output logits info not found.");

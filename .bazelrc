@@ -39,6 +39,8 @@
 #     elinux_armhf:    Embedded Linux options for armhf (ARMv7) CPU support.
 #
 # Default build options. These are applied first and unconditionally.
+build --action_env=CC=clang
+build --action_env=CXX=clang++
 
 # For projects which use TensorFlow as part of a Bazel build process, putting
 # nothing in a bazelrc will default to a monolithic build. The following line

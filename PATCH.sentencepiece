@@ -1,0 +1,77 @@
+--- sentencepiece_processor.h	2025-04-27 15:47:21.057722872 -0700
++++ sentencepiece_processor.h	2025-04-27 15:50:12.601047364 -0700
+@@ -22,6 +22,8 @@
+ #include <utility>
+ #include <vector>
+ 
++#include "absl/status/status.h"
++
+ #ifndef SWIG
+ namespace absl {
+ using std::string_view;
+@@ -30,50 +32,8 @@
+ 
+ namespace sentencepiece {
+ namespace util {
+-
+-enum class StatusCode : int {
+-  kOk = 0,
+-  kCancelled = 1,
+-  kUnknown = 2,
+-  kInvalidArgument = 3,
+-  kDeadlineExceeded = 4,
+-  kNotFound = 5,
+-  kAlreadyExists = 6,
+-  kPermissionDenied = 7,
+-  kResourceExhausted = 8,
+-  kFailedPrecondition = 9,
+-  kAborted = 10,
+-  kOutOfRange = 11,
+-  kUnimplemented = 12,
+-  kInternal = 13,
+-  kUnavailable = 14,
+-  kDataLoss = 15,
+-  kUnauthenticated = 16,
+-};
+-
+-class Status {
+- public:
+-  Status();
+-  ~Status();
+-  Status(StatusCode code, absl::string_view error_message);
+-  Status(const Status &s);
+-  void operator=(const Status &s);
+-  bool operator==(const Status &s) const;
+-  bool operator!=(const Status &s) const;
+-  inline bool ok() const { return rep_ == nullptr; }
+-
+-  void set_error_message(const char *str);
+-  const char *error_message() const;
+-  const char *message() const { return error_message(); }
+-  StatusCode code() const;
+-  std::string ToString() const;
+-
+-  void IgnoreError();
+-
+- private:
+-  struct Rep;
+-  std::unique_ptr<Rep> rep_;
+-};
++using StatusCode = absl::StatusCode;
++using Status = absl::Status;
+ }  // namespace util
+ 
+ // SentencePieceProcessor:
+
+--- common.h	2025-04-27 15:55:22.642953123 -0700
++++ common.h	2025-04-27 16:02:22.377904469 -0700
+@@ -94,7 +94,7 @@
+   ~Die() {
+     std::cerr << std::endl;
+     if (die_) {
+-      Abort();
++      exit(-1);
+     }
+   }
+   int operator&(std::ostream &) { return 0; }
+
