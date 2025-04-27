@@ -17,7 +17,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
-#include "third_party/odml/infra/genai/inference/proto/llm_inference_engine.proto.h"
+#include "third_party/odml/infra/genai/inference/proto/llm_inference_engine.pb.h"
 #include "runtime/executor/llm_executor_settings.h"
 
 namespace {

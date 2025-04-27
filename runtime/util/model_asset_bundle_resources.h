@@ -18,7 +18,7 @@ limitations under the License.
 
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "runtime/util/external_file.proto.h"
+#include "runtime/util/external_file.pb.h"
 #include "runtime/util/external_file_handler.h"
 
 namespace litert::lm {

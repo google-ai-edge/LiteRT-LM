@@ -3,23 +3,23 @@ package(default_visibility = ["//visibility:public"])
 cc_library(
     name = "zlib_minizip",
     srcs = [
-        "ioapi.c",
-        "miniunz.c",
-        "minizip.c",
-        "unzip.c",
-        "zip.c",
+        "minizip/ioapi.c",
+        "minizip/miniunz.c",
+        "minizip/minizip.c",
+        "minizip/unzip.c",
+        "minizip/zip.c",
     ] + select({
         "@platforms//os:windows": ["iowin32.c"],
         "//conditions:default": [],
     }),
     hdrs = [
-        "crypt.h",
-        "ioapi.h",
-        "mztools.h",
-        "unzip.h",
-        "zip.h",
+        "minizip/crypt.h",
+        "minizip/ioapi.h",
+        "minizip/mztools.h",
+        "minizip/unzip.h",
+        "minizip/zip.h",
     ] + select({
-        "@platforms//os:windows": ["iowin32.h"],
+        "@platforms//os:windows": ["minizip/iowin32.h"],
         "//conditions:default": [],
     }),
     copts = [

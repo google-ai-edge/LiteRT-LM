@@ -17,7 +17,7 @@
 #include "runtime/core/pipeline.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/llm_executor.h"
-#include "runtime/proto/sampler_params.proto.h"
+#include "runtime/proto/sampler_params.pb.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/status_macros.h"
 
