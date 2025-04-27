@@ -19,7 +19,7 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "third_party/odml/infra/genai/inference/utils/llm_utils/constraint_utils.h"
-#include "litert/litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/executor/llm_executor_base.h"
 #include "runtime/executor/llm_executor_settings.h"
 

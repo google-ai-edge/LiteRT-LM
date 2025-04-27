@@ -4,8 +4,8 @@
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "litert/litert/c/litert_common.h"  // from @litert
-#include "litert/litert/cc/litert_expected.h"  // from @litert
+#include "litert/c/litert_common.h"  // from @litert
+#include "litert/cc/litert_expected.h"  // from @litert
 
 namespace litert::lm {
 namespace {
