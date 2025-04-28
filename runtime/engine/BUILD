@@ -81,7 +81,7 @@ cc_binary(
     linkopts = select({
         "@platforms//os:android": ["-lEGL", "-lGLESv3"],
         "//conditions:default": [],
-    ],
+    }),
 )
 
 cc_library(
