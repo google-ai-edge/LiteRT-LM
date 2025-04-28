@@ -16,18 +16,10 @@ http_archive(
 # Tensorflow
 http_archive(
     name = "org_tensorflow",
-    patch_cmds = [
-        # Update XNNPACK latest for litert.
-        "sed -i -e 's|24794834234a7926d2f553d34e84204c8ac99dfd|d10bb18be825fab45f43e3958238f0df61101426|g' tensorflow/workspace2.bzl",  # git SHA-1 tag
-        "sed -i -e 's|04291b4c49693988f8c95d07968f6f3da3fd89d85bd9e4e26f73abbdfd7a8a45|5f55c355247e380e26d12758d74a22a2fc8e427b87813e998ae44e009cb48f5f|g' tensorflow/workspace2.bzl",  # SHA256
-        # Update pthreadpool latest for XNNPACK.
-        "sed -i -e 's|b1aee199d54003fb557076a201bcac3398af580b|bd09d5ca9155863fc47a9cbf0df1908ef9d8cad2|g' tensorflow/workspace2.bzl",  # git SHA-1 tag
-        "sed -i -e 's|215724985c4845cdcadcb5f26a2a8777943927bb5a172a00e7716fe16a6f3c1b|034a78c0ef8cce1cc2ac4c90234bbb04c334000e68f7813db91ea42766870925|g' tensorflow/workspace2.bzl",  # SHA256
-    ],
-    sha256 = "c18d887db64ec045681c61923b74365dd7231d9731e5be3055e60bc809eb61f4",
-    strip_prefix = "tensorflow-f61e140e1610f155e34908b36790bb1c8e2341c3",
-    # 2025-03-04 when lite_headers_filegroup got public.
-    url = "https://github.com/tensorflow/tensorflow/archive/f61e140e1610f155e34908b36790bb1c8e2341c3.tar.gz",
+    sha256 = "ac2bbd6be2fa67f00bd6dd6bcfec9d1d2acb378d02b9391dae5f035a100b2687",
+    strip_prefix = "tensorflow-5744ab80be91c0bee68c50dda34eea49a259da0d",
+    # 2025-04-27, has tools/toolchains/android/BUILD and lite_headers_filegroup public.
+    url = "https://github.com/tensorflow/tensorflow/archive/5744ab80be91c0bee68c50dda34eea49a259da0d.tar.gz",
 )
 
 # Initialize the TensorFlow repository and all dependencies.
@@ -89,7 +81,14 @@ load("@org_tensorflow//tensorflow:workspace0.bzl", "tf_workspace0")
 tf_workspace0()
 
 load(
-    "@local_tsl//third_party/gpus/cuda/hermetic:cuda_json_init_repository.bzl",
+    "@local_xla//third_party/py:python_wheel.bzl",
+    "python_wheel_version_suffix_repository",
+)
+
+python_wheel_version_suffix_repository(name = "tf_wheel_version_suffix")
+
+load(
+    "@local_xla//third_party/gpus/cuda/hermetic:cuda_json_init_repository.bzl",
     "cuda_json_init_repository",
 )
 
@@ -101,7 +100,7 @@ load(
     "CUDNN_REDISTRIBUTIONS",
 )
 load(
-    "@local_tsl//third_party/gpus/cuda/hermetic:cuda_redist_init_repositories.bzl",
+    "@local_xla//third_party/gpus/cuda/hermetic:cuda_redist_init_repositories.bzl",
     "cuda_redist_init_repositories",
     "cudnn_redist_init_repository",
 )
@@ -115,21 +114,21 @@ cudnn_redist_init_repository(
 )
 
 load(
-    "@local_tsl//third_party/gpus/cuda/hermetic:cuda_configure.bzl",
+    "@local_xla//third_party/gpus/cuda/hermetic:cuda_configure.bzl",
     "cuda_configure",
 )
 
 cuda_configure(name = "local_config_cuda")
 
 load(
-    "@local_tsl//third_party/nccl/hermetic:nccl_redist_init_repository.bzl",
+    "@local_xla//third_party/nccl/hermetic:nccl_redist_init_repository.bzl",
     "nccl_redist_init_repository",
 )
 
 nccl_redist_init_repository()
 
 load(
-    "@local_tsl//third_party/nccl/hermetic:nccl_configure.bzl",
+    "@local_xla//third_party/nccl/hermetic:nccl_configure.bzl",
     "nccl_configure",
 )
 
@@ -214,3 +213,18 @@ http_archive(
     # 2025-04-25. Tags don't include litert/.
     url = "https://github.com/google-ai-edge/LiteRT/archive/5a816dca891292a96e4562f879cd74c1e3dd851e.tar.gz",
 )
+
+# Android rules. Need latest rules_android_ndk to use NDK 26+.
+http_archive(
+    name = "rules_android_ndk",
+    sha256 = "89bf5012567a5bade4c78eac5ac56c336695c3bfd281a9b0894ff6605328d2d5",
+    strip_prefix = "rules_android_ndk-0.1.3",
+    url = "https://github.com/bazelbuild/rules_android_ndk/releases/download/v0.1.3/rules_android_ndk-v0.1.3.tar.gz",
+)
+
+load("@rules_android_ndk//:rules.bzl", "android_ndk_repository")
+
+# Set ANDROID_NDK_HOME shell env var.
+android_ndk_repository(name = "androidndk")
+
+register_toolchains("@androidndk//:all")
