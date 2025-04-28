@@ -368,6 +368,10 @@ build:xla     --define=with_xla_support=true # TODO: remove, it's on by default.
 build:android --define=with_xla_support=false
 build:ios     --define=with_xla_support=false
 
+# Enable string absl flags on mobile which is disabled by default.
+build:android --copt=-DABSL_FLAGS_STRIP_NAMES=0
+build:ios     --copt=-DABSL_FLAGS_STRIP_NAMES=0
+
 # Flag to enable remote config
 common --experimental_repo_remote_exec
 
@@ -479,7 +483,3 @@ test:bulk_test_cpu --build_tests_only
 
 # TODO: b/397625618 Enable bzlmod
 common --noenable_bzlmod
-
-# TODO: Migrate for https://github.com/bazelbuild/bazel/issues/7260
-common --noincompatible_enable_cc_toolchain_resolution
-common --noincompatible_enable_android_toolchain_resolution
