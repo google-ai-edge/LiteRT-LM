@@ -26,6 +26,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_replace.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/sampler.h"
 #include "runtime/components/token_id_util.h"
@@ -44,8 +45,9 @@ namespace litert::lm {
 constexpr int kMaxDecodeStop = 128;
 
 absl::StatusOr<int> Prefill(std::shared_ptr<LlmExecutor> executor,
-                     std::shared_ptr<Tokenizer> tokenizer,
-                     absl::string_view prompt, int bos_token_id) {
+                            std::shared_ptr<Tokenizer> tokenizer,
+                            absl::string_view prompt, int bos_token_id,
+                            bool wait_for_completion) {
   ASSIGN_OR_RETURN(auto ids_buffer,
                    tokenizer->TextToTensorBuffer(
                        prompt, /*prepend_token_ids=*/{bos_token_id}));
@@ -56,7 +58,7 @@ absl::StatusOr<int> Prefill(std::shared_ptr<LlmExecutor> executor,
   }
   const int last_token_id = ids_buffer_span.back();
   ExecutorPrefillParams params;
-  params.SetWaitForCompletion(true);
+  params.SetWaitForCompletion(wait_for_completion);
   RETURN_IF_ERROR(
       executor->Prefill(ExecutorInputs(ExecutorTextData(std::move(ids_buffer)),
                                        std::nullopt, std::nullopt),
@@ -116,7 +118,9 @@ absl::StatusOr<Responses> DecodeCustomSampling(
   std::fill(scores.begin(), scores.end(), 0.0f);
   std::vector<int> num_decoded_tokens(num_output_candidates, 0);
   for (int i = 0; i < kMaxDecodeStop; ++i) {
-    ExecutorInputs inputs(ExecutorTextData(*decoded_ids.Duplicate()),
+    LITERT_ASSIGN_OR_RETURN(auto duplicate_decoded_ids,
+                            decoded_ids.Duplicate());
+    ExecutorInputs inputs(ExecutorTextData(std::move(duplicate_decoded_ids)),
                           std::nullopt, std::nullopt);
     RETURN_IF_ERROR(executor->Decode(inputs, output_logits));
     RETURN_IF_ERROR(sampler.SampleToIdAndScoreBuffer(output_logits, decoded_ids,

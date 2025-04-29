@@ -6,13 +6,10 @@
 namespace litert::lm {
 
 int NumSignificantDims(const ::litert::TensorBuffer& tensor_buffer) {
-  LITERT_ASSIGN_OR_RETURN(auto tensor_type, tensor_buffer.TensorType());
-  auto dims = tensor_type.Layout().Dimensions();
+  LITERT_ASSIGN_OR_ABORT(auto tensor_type, tensor_buffer.TensorType());
   int num_significant_dims = 0;
-  for (int i = 0; i < dims.size(); ++i) {
-    if (dims[i] > 1) {
-      num_significant_dims++;
-    }
+  for (int d : tensor_type.Layout().Dimensions()) {
+    num_significant_dims += (d > 1);
   }
   return num_significant_dims;
 }
