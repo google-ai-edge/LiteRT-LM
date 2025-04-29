@@ -48,10 +48,10 @@ TEST(EngineTest, CreateEngine) {
       (*llm)->CreateSession();
   ABSL_CHECK_OK(session);
 
-  absl::Status status = (*session)->AddTextPrompt("Hello world!");
+  absl::Status status = (*session)->RunPrefill("Hello world!");
   ABSL_CHECK_OK(status);
 
-  auto responses = (*session)->PredictSync();
+  auto responses = (*session)->RunDecode();
 
   EXPECT_OK(responses);
   EXPECT_EQ(responses->GetNumOutputCandidates(), 1);

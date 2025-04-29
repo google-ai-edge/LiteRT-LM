@@ -8,6 +8,7 @@
 
 #include "absl/flags/flag.h"  // from @com_google_absl
 #include "absl/flags/parse.h"  // from @com_google_absl
+#include "absl/log/absl_check.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "third_party/odml/infra/genai/inference/executor/llm_litert_npu_compiled_model_executor.h"
 #include "runtime/components/sentencepiece_tokenizer.h"
@@ -63,17 +64,10 @@ int main(int argc, char* argv[]) {
       litert::lm::proto::SamplerParameters());
 
   // Run the session.
-  auto status = (*session)->AddTextPrompt(
+  auto status = (*session)->RunPrefill(
       "Write a poem about the greatness of the gemma LLM");
-  auto responses = (*session)->PredictSync();
-  if (responses.ok()) {
-    for (int i = 0; i < responses->GetNumOutputCandidates(); ++i) {
-      auto response_text = responses->GetResponseTextAt(i);
-      ABSL_LOG(INFO) << "Generated response: " << (*response_text);
-    }
-  } else {
-    ABSL_LOG(ERROR) << "response failed: " << responses.status();
-  }
-
+  auto responses = (*session)->RunDecode();
+  ABSL_CHECK_OK(responses) << "response failed: " << responses.status();
+  ABSL_LOG(INFO) << "Responses: " << *responses;
   return 0;
 }
