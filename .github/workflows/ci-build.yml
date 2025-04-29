@@ -1,0 +1,59 @@
+name: "CI"
+on:
+  push:
+    branches:
+    - main
+  pull_request:
+    branches:
+    - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  presubmit:
+    name: "Presubmit"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup bazel cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/bazel
+            ~/.cache/bazel-linux
+            ~/.cache/bazel-android
+          key: ${{ github.workflow }}-bazel-${{ hashFiles('**/WORKSPACE') }}
+          restore-keys: ${{ github.workflow }}-bazel-
+
+      - name: Run bazel build on Linux
+        run: |
+          bazel build --disk_cache=~/.cache/bazel-linux \
+          //runtime/engine:litert_lm_main
+
+      - name: Run bazel test on Linux
+        run: |
+          bazel test --disk_cache=~/.cache/bazel-linux \
+            //runtime/components:all \
+            //runtime/core:all \
+            //runtime/engine:all \
+            //runtime/executor:all \
+            //runtime/util:all
+
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r28b
+          add-to-path: false
+
+      - name: Run bazel build on Android
+        run: |
+          bazel build --disk_cache=~/.cache/bazel-android \
+            --config=android_arm64 \
+            //runtime/engine:litert_lm_main
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
