@@ -15,6 +15,7 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_ENGINE_PIPELINE_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_ENGINE_PIPELINE_H_
 
+#include <stdbool.h>
 #include <memory>
 #include <vector>
 
@@ -36,9 +37,12 @@ namespace litert::lm {
 // - bos_token_id: The token id of the start token.
 // Returns the last token id of the prefill ids. It is used for
 //   the next decode process to determine the token id to start from.
+// - wait_for_completion: If true, wait for the prefill to complete before
+//   returning.
 absl::StatusOr<int> Prefill(std::shared_ptr<LlmExecutor> executor,
-                     std::shared_ptr<Tokenizer> tokenizer,
-                     absl::string_view prompt, int bos_token_id);
+                            std::shared_ptr<Tokenizer> tokenizer,
+                            absl::string_view prompt, int bos_token_id,
+                            bool wait_for_completion = true);
 
 // Runs the pipeline to decode the input prompt.
 // - executor: The initialized LLM Executor to call.

@@ -59,20 +59,30 @@ absl::StatusOr<std::unique_ptr<SessionBasic>> SessionBasic::Create(
                                            std::move(sampler)));
 }
 
-absl::Status SessionBasic::AddTextPrompt(absl::string_view input) {
+absl::Status SessionBasic::PrefillInternal(absl::string_view input,
+                                           bool wait_for_completion) {
   // TODO(b/397975034): factor out the prompt formatting logic into a
   // separate library/class.
   const std::string prompt = absl::StrCat(
       "<start_of_turn>user\n", input, "<end_of_turn>\n<start_of_turn>model\n");
-  ABSL_LOG(INFO) << "AddTextPrompt: " << prompt;
+  ABSL_LOG(INFO) << "RunPrefillSync: " << prompt;
   ASSIGN_OR_RETURN(last_prefill_token_id_,
-                   Prefill(executor_, tokenizer_, prompt, /*bos_token_id=*/2));
+                   Prefill(executor_, tokenizer_, prompt, /*bos_token_id=*/2,
+                           wait_for_completion));
   ABSL_LOG(INFO) << "Prefill done";
   return absl::OkStatus();
 }
 
-absl::StatusOr<Responses> SessionBasic::PredictSync() {
-  ABSL_LOG(INFO) << "PredictSync";
+absl::Status SessionBasic::RunPrefill(absl::string_view input) {
+  return PrefillInternal(input, /*wait_for_completion=*/true);
+}
+
+absl::Status SessionBasic::RunPrefillAsync(absl::string_view input) {
+  return PrefillInternal(input, /*wait_for_completion=*/false);
+}
+
+absl::StatusOr<Responses> SessionBasic::RunDecode() {
+  ABSL_LOG(INFO) << "RunDecodeSync";
   if (sampler_ == nullptr) {
     ASSIGN_OR_RETURN(auto responses,
                      Decode(executor_, tokenizer_, stop_token_ids_));
