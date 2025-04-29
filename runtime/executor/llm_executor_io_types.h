@@ -18,17 +18,17 @@
 #include <atomic>
 #include <optional>
 #include <ostream>
-#include <utility>
 
+#include "absl/status/statusor.h"  // from @com_google_absl
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 
 namespace litert::lm {
 
 // Note: Use the operator << to print values only for debugging purposes. It may
-// creates copy of the underlying TensorBuffer and make the memory consumption
+// create a copy of the underlying TensorBuffer and make the memory consumption
 // high and increase the latency.
 
-// Class to host the text input
+// Class to host the text input data.
 class ExecutorTextData {
  public:
   // Default constructor
@@ -36,32 +36,54 @@ class ExecutorTextData {
 
   // Constructor that moves a TensorBuffer
   // New tokens to be processed. Shape `[batch_size, tokens_per_batch]`.
-  explicit ExecutorTextData(::litert::TensorBuffer&& token_ids)
-      : token_ids_(std::move(token_ids)) {}
+  explicit ExecutorTextData(::litert::TensorBuffer&& token_ids);
 
-  // Getter for token_ids
-  const ::litert::TensorBuffer& GetTokenIds() const { return token_ids_; }
-  // Getter for mutable token_ids
-  ::litert::TensorBuffer& GetMutableTokenIds() { return token_ids_; }
+  // Getter for token_ids.
+  const ::litert::TensorBuffer& GetTokenIds() const;
+  // Getter for mutable token_ids.
+  ::litert::TensorBuffer& GetMutableTokenIds();
 
-  // Setter for token_ids (moves the input)
-  void SetTokenIds(::litert::TensorBuffer&& token_ids) {
-    token_ids_ = std::move(token_ids);
-  }
+  // Setter for token_ids (moves the input).
+  void SetTokenIds(::litert::TensorBuffer&& token_ids);
 
  private:
   ::litert::TensorBuffer token_ids_;
 };
 std::ostream& operator<<(std::ostream& os, const ExecutorTextData& text_data);
 
-// Class to host the vision embeddings input
+// ExecutorVisionData (if present) must have a number of
+// rows equal to the count of kVisionSpecialToken in
+// ExecutorTextData.GetTokenIds(). Each kVisionSpecialToken in
+// ExecutorTextData.GetTokenIds() indicates the position for one corresponding
+// row in the visual embeddings. The shape of
+// ExecutorVisionData.GetEmbeddings() is: [num_vision_tokens, model_dimension].
+//
+// Similarly, ExecutorVisionData.GetPerLayerEmbeddings() must also
+// correspond to the kVisionSpecialToken count. The shape of
+// per_layer_embeddings is: [num_layers, num_vision_tokens,
+// per_layer_embedding_dimension].
+//
+// Example:
+// token_ids = [2, kSpecialToken, kSpecialToken, kSpecialToken, 106, 77, (other
+// text token ids)...] (contains 3 vision tokens)
+//
+// Then, the vision embeddings should have shape [3,
+// model_dimension]:
+// [[0.1, ...],  // Embedding for the 1st kVisionSpecialToken
+//  [0.5, ...],  // Embedding for the 2nd kVisionSpecialToken
+//  [0.9, ...]]  // Embedding for the 3rd kVisionSpecialToken
+//
+// And the per_layer_embeddings should have shape [num_layers, 3,
+// per_layer_embedding_dimension]:
+// [[[0.01, ...], [0.06, ...], [0.11, ...]], // Layer 1 embeddings
+//  [[0.02, ...], [0.07, ...], [0.12, ...]], // Layer 2 embeddings
+//  [..., ...]]
 class ExecutorVisionData {
  public:
-  // Special tokens are token ids place holders for vision embeddings
+  // Special tokens are token ids placeholders for vision embeddings
   // input.
   static constexpr int kSpecialToken = -1;
 
-  // Default constructor
   ExecutorVisionData() = default;
 
   // Constructor that moves optional TensorBuffers. Note that the embeddings are
@@ -74,33 +96,19 @@ class ExecutorVisionData {
   //   shape [stack_size, vision_tokens_num, per_layer_embedding_dimension].
   ExecutorVisionData(
       std::optional<::litert::TensorBuffer>&& embeddings,
-      std::optional<::litert::TensorBuffer>&& per_layer_embeddings)
-      : embeddings_(std::move(embeddings)),
-        per_layer_embeddings_(std::move(per_layer_embeddings)) {}
+      std::optional<::litert::TensorBuffer>&& per_layer_embeddings);
 
-  // Getters
-  const std::optional<::litert::TensorBuffer>& GetEmbeddings() const {
-    return embeddings_;
-  }
-  std::optional<::litert::TensorBuffer>& GetMutableEmbeddings() {
-    return embeddings_;
-  }
+  // Getters:
+  absl::StatusOr<const ::litert::TensorBuffer*> GetEmbeddingsPtr() const;
+  absl::StatusOr<::litert::TensorBuffer*> GetMutableEmbeddingsPtr();
+  absl::StatusOr<const ::litert::TensorBuffer*> GetPerLayerEmbeddingsPtr()
+      const;
+  absl::StatusOr<::litert::TensorBuffer*> GetMutablePerLayerEmbeddingsPtr();
 
-  const std::optional<::litert::TensorBuffer>& GetPerLayerEmbeddings() const {
-    return per_layer_embeddings_;
-  }
-  std::optional<::litert::TensorBuffer>& GetMutablePerLayerEmbeddings() {
-    return per_layer_embeddings_;
-  }
-
-  // Setters
-  void SetEmbeddings(std::optional<::litert::TensorBuffer>&& embeddings) {
-    embeddings_ = std::move(embeddings);
-  }
+  // Setters:
+  void SetEmbeddings(std::optional<::litert::TensorBuffer>&& embeddings);
   void SetPerLayerEmbeddings(
-      std::optional<::litert::TensorBuffer>&& per_layer_embeddings) {
-    per_layer_embeddings_ = std::move(per_layer_embeddings);
-  }
+      std::optional<::litert::TensorBuffer>&& per_layer_embeddings);
 
  private:
   std::optional<::litert::TensorBuffer> embeddings_;
@@ -109,14 +117,26 @@ class ExecutorVisionData {
 std::ostream& operator<<(std::ostream& os,
                          const ExecutorVisionData& vision_data);
 
-// Class to host the audio embeddings input
+// ExecutorAudioData.GetEmbeddings() (if present) must have a number of
+// rows equal to the count of ExecutorAudioData::kSpecialToken in
+// ExecutorTextData.GetTokenIds(). Each kSpecialToken in
+// ExecutorTextData.GetTokenIds() indicates the position for one corresponding
+// row in the audio embeddings. The shape of
+// ExecutorAudioData.GetEmbeddings() is: [num_audio_tokens,
+// model_dimension].
+//
+// Similarly, ExecutorAudioData.GetPerLayerEmbeddings() must also
+// correspond to the kSpecialToken count. The shape of
+// ExecutorAudioData.GetPerLayerEmbeddings() is: [num_layers,
+// num_audio_tokens, per_layer_embedding_dimension].
+//
+// Example: Similar to vision input.
 class ExecutorAudioData {
  public:
   // Special tokens are token ids place holders for vision or audio embeddings
   // input.
   static constexpr int kSpecialToken = -2;
 
-  // Default constructor
   ExecutorAudioData() = default;
 
   // Constructor that moves optional TensorBuffers
@@ -126,33 +146,19 @@ class ExecutorAudioData {
   //   shape [stack_size, audio_tokens_num, per_layer_embedding_dimension].
   ExecutorAudioData(
       std::optional<::litert::TensorBuffer>&& embeddings,
-      std::optional<::litert::TensorBuffer>&& per_layer_embeddings)
-      : embeddings_(std::move(embeddings)),
-        per_layer_embeddings_(std::move(per_layer_embeddings)) {}
+      std::optional<::litert::TensorBuffer>&& per_layer_embeddings);
 
-  // Getters
-  const std::optional<::litert::TensorBuffer>& GetEmbeddings() const {
-    return embeddings_;
-  }
-  std::optional<::litert::TensorBuffer>& GetMutableEmbeddings() {
-    return embeddings_;
-  }
+  // Getters:
+  absl::StatusOr<const ::litert::TensorBuffer*> GetEmbeddingsPtr() const;
+  absl::StatusOr<::litert::TensorBuffer*> GetMutableEmbeddingsPtr();
+  absl::StatusOr<const ::litert::TensorBuffer*> GetPerLayerEmbeddingsPtr()
+      const;
+  absl::StatusOr<::litert::TensorBuffer*> GetMutablePerLayerEmbeddingsPtr();
 
-  const std::optional<::litert::TensorBuffer>& GetPerLayerEmbeddings() const {
-    return per_layer_embeddings_;
-  }
-  std::optional<::litert::TensorBuffer>& GetMutablePerLayerEmbeddings() {
-    return per_layer_embeddings_;
-  }
-
-  // Setters
-  void SetEmbeddings(std::optional<::litert::TensorBuffer>&& embeddings) {
-    embeddings_ = std::move(embeddings);
-  }
+  // Setters:
+  void SetEmbeddings(std::optional<::litert::TensorBuffer>&& embeddings);
   void SetPerLayerEmbeddings(
-      std::optional<::litert::TensorBuffer>&& per_layer_embeddings) {
-    per_layer_embeddings_ = std::move(per_layer_embeddings);
-  }
+      std::optional<::litert::TensorBuffer>&& per_layer_embeddings);
 
  private:
   std::optional<::litert::TensorBuffer> embeddings_;
@@ -160,99 +166,42 @@ class ExecutorAudioData {
 };
 std::ostream& operator<<(std::ostream& os, const ExecutorAudioData& audio_data);
 
-// Class to bundle all executor inputs
 class ExecutorInputs {
  public:
-  // Default constructor
   ExecutorInputs() = default;
 
-  // Constructor moving all components
   ExecutorInputs(std::optional<ExecutorTextData>&& text_data,
                  std::optional<ExecutorVisionData>&& vision_data,
-                 std::optional<ExecutorAudioData>&& audio_data)
-      : text_data_(std::move(text_data)),
-        vision_data_(std::move(vision_data)),
-        audio_data_(std::move(audio_data)) {}
+                 std::optional<ExecutorAudioData>&& audio_data);
 
-  // Getter/Setter for text_data
-  // New tokens to be processed. Shape `[batch_size, tokens_per_batch]`.
-  const std::optional<ExecutorTextData>& GetTextData() const {
-    return text_data_;
-  }
-  std::optional<ExecutorTextData>& GetMutableTextData() { return text_data_; }
-  void SetTextData(ExecutorTextData&& text_data) {
-    text_data_ = std::move(text_data);
-  }
+  // Getters for top-level optional members
+  absl::StatusOr<const ExecutorTextData*> GetTextDataPtr() const;
+  absl::StatusOr<ExecutorTextData*> GetMutableTextDataPtr();
+  absl::StatusOr<const ExecutorVisionData*> GetVisionDataPtr() const;
+  absl::StatusOr<ExecutorVisionData*> GetMutableVisionDataPtr();
+  absl::StatusOr<const ExecutorAudioData*> GetAudioDataPtr() const;
+  absl::StatusOr<ExecutorAudioData*> GetMutableAudioDataPtr();
 
-  // Getter/Setter for vision_data
-  // Embeddings and per-layer embeddings for visual input.
-  //
-  // GetVisionData().value().GetEmbeddings() (if present) must have a number of
-  // rows equal to the count of kVisionSpecialToken in
-  // GetTextData().GetTokenIds(). Each kVisionSpecialToken in
-  // GetTextData().GetTokenIds() indicates the position for one corresponding
-  // row in the visual embeddings. The shape of
-  // GetVisionData().value().GetEmbeddings().value() is: [num_vision_tokens,
-  // model_dimension].
-  //
-  // Similarly, GetVisionData().value().GetPerLayerEmbeddings() must also
-  // correspond to the kVisionSpecialToken count. The shape of
-  // GetVisionData().value().GetPerLayerEmbeddings().value() is: [num_layers,
-  // num_vision_tokens, per_layer_embedding_dimension].
-  //
-  // Example:
-  // GetTextData().GetTokenIds() = [2, kVisionSpecialToken, kVisionSpecialToken,
-  // kVisionSpecialToken, 106, 77, (otehr text token ids)...] (contains 3 vision
-  // tokens)
-  //
-  // Then, the vision embeddings should have shape [3,
-  // model_dimension]: GetVisionData().value().GetEmbeddings().value() =
-  // [[0.1, ...],  // Embedding for the 1st kVisionSpecialToken
-  //  [0.5, ...],  // Embedding for the 2nd kVisionSpecialToken
-  //  [0.9, ...]]  // Embedding for the 3rd kVisionSpecialToken
-  //
-  // And the per_layer_embeddings should have shape [num_layers, 3,
-  // per_layer_embedding_dimension]:
-  // GetVisionData().value().GetPerLayerEmbeddings().value() =
-  // [[[0.01, ...], [0.06, ...], [0.11, ...]], // Layer 1 embeddings
-  //  [[0.02, ...], [0.07, ...], [0.12, ...]], // Layer 2 embeddings
-  //  [..., ...]]
-  const std::optional<ExecutorVisionData>& GetVisionData() const {
-    return vision_data_;
-  }
-  std::optional<ExecutorVisionData>& GetMutableVisionData() {
-    return vision_data_;
-  }
-  void SetVisionData(std::optional<ExecutorVisionData>&& vision_data) {
-    vision_data_ = std::move(vision_data);
-  }
+  // Getters for NESTED members
+  absl::StatusOr<const ::litert::TensorBuffer*> GetTextTokenIdsPtr() const;
+  absl::StatusOr<::litert::TensorBuffer*> GetMutableTextTokenIdsPtr();
+  absl::StatusOr<const ::litert::TensorBuffer*> GetVisionEmbeddingsPtr() const;
+  absl::StatusOr<::litert::TensorBuffer*> GetMutableVisionEmbeddingsPtr();
+  absl::StatusOr<const ::litert::TensorBuffer*> GetVisionPerLayerEmbeddingsPtr()
+      const;
+  absl::StatusOr<::litert::TensorBuffer*>
+  GetMutableVisionPerLayerEmbeddingsPtr();
+  absl::StatusOr<const ::litert::TensorBuffer*> GetAudioEmbeddingsPtr() const;
+  absl::StatusOr<::litert::TensorBuffer*> GetMutableAudioEmbeddingsPtr();
+  absl::StatusOr<const ::litert::TensorBuffer*> GetAudioPerLayerEmbeddingsPtr()
+      const;
+  absl::StatusOr<::litert::TensorBuffer*>
+  GetMutableAudioPerLayerEmbeddingsPtr();
 
-  // Getter/Setter for audio_data
-  // Embeddings and per-layer embeddings for audio input.
-  //
-  // GetAudioData().value().GetEmbeddings() (if present) must have a number of
-  // rows equal to the count of kAudioSpecialToken in
-  // GetTextData().GetTokenIds(). Each kAudioSpecialToken in
-  // GetTextData().GetTokenIds() indicates the position for one corresponding
-  // row in the audio embeddings. The shape of
-  // GetAudioData().value().GetEmbeddings().value() is: [num_audio_tokens,
-  // model_dimension].
-  //
-  // Similarly, GetAudioData().value().GetPerLayerEmbeddings() must also
-  // correspond to the kAudioSpecialToken count. The shape of
-  // GetAudioData().value().GetPerLayerEmbeddings().value() is: [num_layers,
-  // num_audio_tokens, per_layer_embedding_dimension].
-  //
-  // Example: Similar to vision input.
-  const std::optional<ExecutorAudioData>& GetAudioData() const {
-    return audio_data_;
-  }
-  std::optional<ExecutorAudioData>& GetMutableAudioData() {
-    return audio_data_;
-  }
-  void SetAudioData(std::optional<ExecutorAudioData>&& audio_data) {
-    audio_data_ = std::move(audio_data);
-  }
+  // Setters:
+  void SetTextData(ExecutorTextData&& text_data);
+  void SetVisionData(std::optional<ExecutorVisionData>&& vision_data);
+  void SetAudioData(std::optional<ExecutorAudioData>&& audio_data);
 
  private:
   std::optional<ExecutorTextData> text_data_;
@@ -265,38 +214,27 @@ std::ostream& operator<<(std::ostream& os, const ExecutorInputs& inputs);
 class ExecutorPrefillParams {
  public:
   // Default constructor: Initializes members to default values.
-  // - current_step: 0
+  // - current_step: -1
   // - wait_for_completion: false
   // - cancel: nullptr
   ExecutorPrefillParams() = default;
 
   // Parameterized constructor for all values
   ExecutorPrefillParams(int current_step, bool wait_for_completion,
-                        const std::atomic_bool* cancel)
-      : current_step_(current_step),
-        wait_for_completion_(wait_for_completion),
-        cancel_(cancel) {}
+                        const std::atomic_bool* cancel);
 
-  // Getter for current_step
-  int GetCurrentStep() const { return current_step_; }
-  // Setter for current_step
-  void SetCurrentStep(int current_step) { current_step_ = current_step; }
+  int GetCurrentStep() const;
+  void SetCurrentStep(int current_step);
 
-  // Getter for wait_for_completion
-  bool GetWaitForCompletion() const { return wait_for_completion_; }
-  // Setter for wait_for_completion
-  void SetWaitForCompletion(bool wait_for_completion) {
-    wait_for_completion_ = wait_for_completion;
-  }
+  bool GetWaitForCompletion() const;
+  void SetWaitForCompletion(bool wait_for_completion);
 
-  // Getter for cancel flag
-  const std::atomic_bool* GetCancelFlag() const { return cancel_; }
-  // Setter for cancel flag
-  void SetCancelFlag(const std::atomic_bool* cancel) { cancel_ = cancel; }
+  const std::atomic_bool* GetCancelFlag() const;
+  void SetCancelFlag(const std::atomic_bool* cancel);
 
  private:
   // The current step to prefill.
-  int current_step_ = 0;
+  int current_step_ = -1;
 
   // Whether to wait for the prefill to complete before returning.
   bool wait_for_completion_ = false;

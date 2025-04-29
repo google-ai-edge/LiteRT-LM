@@ -8,6 +8,7 @@
 #undef RETURN_IF_ERROR   // NOLINT: for testing
 #undef RET_CHECK         // NOLINT: for testing
 #include "runtime/util/status_macros.h"
+#include "runtime/util/test_utils.h"  // NOLINT
 
 namespace litert::lm {
 namespace {

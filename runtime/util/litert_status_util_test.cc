@@ -6,6 +6,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "litert/c/litert_common.h"  // from @litert
 #include "litert/cc/litert_expected.h"  // from @litert
+#include "runtime/util/test_utils.h"  // NOLINT
 
 namespace litert::lm {
 namespace {

@@ -23,6 +23,7 @@
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/executor/llm_executor.h"
 #include "runtime/executor/llm_executor_settings.h"
+#include "runtime/executor/llm_executor_io_types.h"
 
 namespace litert::lm {
 
@@ -42,13 +43,13 @@ class FakeLlmExecutor : public LlmExecutor {
                   const std::vector<std::vector<int>>& prefill_tokens_set,
                   const std::vector<std::vector<int>>& decode_tokens_set);
 
-  absl::Status Prefill(const Inputs& inputs) override;
-  absl::Status Prefill(const Inputs& inputs,
-                       const PrefillQueryParams& prefill_query_params) override;
+  absl::Status Prefill(const ExecutorInputs& inputs) override;
+  absl::Status Prefill(const ExecutorInputs& inputs,
+                       const ExecutorPrefillParams& prefill_params) override;
 
   absl::Status Decode(::litert::TensorBuffer& output_tokens) override;
 
-  absl::Status Decode(const Inputs& inputs,
+  absl::Status Decode(const ExecutorInputs& inputs,
                       ::litert::TensorBuffer& output_logits) override;
 
   absl::string_view ExecutorBackendName() const override {
@@ -56,11 +57,6 @@ class FakeLlmExecutor : public LlmExecutor {
   };
 
   absl::StatusOr<int> GetVocabSize() override { return vocab_size_; }
-
-  absl::Status UpdateRuntimeConfig(
-    const RuntimeConfig& runtime_config) override {
-    return absl::OkStatus();
-  }
 
  private:
   int vocab_size_;
