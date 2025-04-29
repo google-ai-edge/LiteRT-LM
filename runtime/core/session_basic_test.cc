@@ -53,19 +53,19 @@ class SessionBasicTest : public testing::Test {
   proto::SamplerParameters sampler_params_;
 };
 
-TEST_F(SessionBasicTest, AddTextPrompt) {
+TEST_F(SessionBasicTest, RunPrefill) {
   std::vector<int> stop_token_ids = {2294};
   auto session = SessionBasic::Create(executor_, tokenizer_, stop_token_ids,
                                       sampler_params_);
-  EXPECT_OK((*session)->AddTextPrompt("Hello World!"));
+  EXPECT_OK((*session)->RunPrefill("Hello World!"));
 }
 
-TEST_F(SessionBasicTest, PredictSync) {
+TEST_F(SessionBasicTest, RunDecode) {
   std::vector<int> stop_token_ids = {2294};
   auto session = SessionBasic::Create(executor_, tokenizer_, stop_token_ids,
                                       sampler_params_);
-  EXPECT_OK((*session)->AddTextPrompt("Hello World!"));
-  auto responses = (*session)->PredictSync();
+  EXPECT_OK((*session)->RunPrefill("Hello World!"));
+  auto responses = (*session)->RunDecode();
   EXPECT_OK(responses);
   EXPECT_EQ(responses->GetNumOutputCandidates(), 1);
   EXPECT_EQ(*(responses->GetResponseTextAt(0)), " How's it going?!");

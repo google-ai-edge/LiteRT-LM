@@ -96,18 +96,13 @@ absl::Status MainHelper(int argc, char** argv) {
 
   ABSL_LOG(INFO) << "Adding prompt: " << absl::GetFlag(FLAGS_input_prompt);
   absl::Status status =
-      (*session)->AddTextPrompt(absl::GetFlag(FLAGS_input_prompt));
+      (*session)->RunPrefill(absl::GetFlag(FLAGS_input_prompt));
   ABSL_CHECK_OK(status);
 
-  auto responses = (*session)->PredictSync();
+  auto responses = (*session)->RunDecode();
 
   ABSL_CHECK_OK(responses);
-  for (int i = 0; i < responses->GetNumOutputCandidates(); ++i) {
-    ABSL_LOG(INFO) << "Response " << i << ": "
-                   << responses->GetResponseTextAt(i).value();
-    ABSL_LOG(INFO) << "Response " << i << " score: "
-                   << responses->GetScoreAt(i).value();
-  }
+  ABSL_LOG(INFO) << "Responses: " << *responses;
   return absl::OkStatus();
 }
 
