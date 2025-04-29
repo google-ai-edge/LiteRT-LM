@@ -1,6 +1,7 @@
 #include "runtime/engine/io_types.h"
 
 #include <limits>
+#include <ostream>
 #include <string>
 #include <vector>
 
@@ -28,6 +29,9 @@ absl::StatusOr<absl::string_view> Responses::GetResponseTextAt(
 }
 
 absl::StatusOr<float> Responses::GetScoreAt(int index) const {
+  if (scores_.empty()) {
+    return absl::InvalidArgumentError("Scores are not set.");
+  }
   if (index < 0 || index >= scores_.size()) {
     return absl::InvalidArgumentError(absl::StrCat(
         "Index ", index, " is out of range [0, ", scores_.size(), ")."));
@@ -45,6 +49,34 @@ std::vector<float>& Responses::GetMutableScores() {
                                  -std::numeric_limits<float>::infinity());
   }
   return scores_;
+}
+
+std::ostream& operator<<(std::ostream& os, const Responses& responses) {
+  if (responses.GetNumOutputCandidates() == 0) {
+    os << " No reponses." << std::endl;
+    return os;
+  }
+  os << "Total candidates: " << responses.GetNumOutputCandidates() << ":"
+     << std::endl;
+
+  for (int i = 0; i < responses.GetNumOutputCandidates(); ++i) {
+    absl::StatusOr<float> score_status = responses.GetScoreAt(i);
+    if (score_status.ok()) {
+      os << "  Candidate " << i << " (score: " << *score_status
+         << "):" << std::endl;
+    } else {
+      os << "  Candidate " << i << " (score: N/A):" << std::endl;
+    }
+
+    absl::StatusOr<absl::string_view> text_status =
+        responses.GetResponseTextAt(i);
+    if (text_status.ok()) {
+      os << "    Text: \"" << *text_status << "\"" << std::endl;
+    } else {
+      os << "    Text: Error - " << text_status.status().message() << std::endl;
+    }
+  }
+  return os;  // Return the ostream to allow chaining
 }
 
 }  // namespace litert::lm

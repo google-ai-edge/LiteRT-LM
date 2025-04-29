@@ -299,10 +299,12 @@ absl::Status LlmLiteRtCompiledModelExecutor::Decode(
 absl::StatusOr<std::vector<int>> LlmLiteRtCompiledModelExecutor::SampleLogits(
     Span<const float> logits) {
   if (cpu_sampler_ == nullptr) {
+    LITERT_ASSIGN_OR_RETURN_ABSL(const auto decoded_logits_tensor_type,
+                                 decoded_logits_.TensorType());
     ASSIGN_OR_RETURN(cpu_sampler_,
                      TopPSampler::Create(
                          /*k=*/1, /*p=*/0.0f, /*temperature=*/1.0f,
-                         decoded_logits_.TensorType()->Layout().Dimensions()[0],
+                         decoded_logits_tensor_type.Layout().Dimensions()[0],
                          /*seed=*/0));
   }
   ASSIGN_OR_RETURN(auto vocab_size, GetVocabSize());
@@ -378,7 +380,8 @@ LlmLiteRtCompiledModelExecutor::Create(
 
   absl::string_view prefill_signature_key = "";
   for (int i = 0; i < litert_model.GetNumSignatures(); ++i) {
-    absl::string_view key = litert_model.GetSignature(i)->Key();
+    LITERT_ASSIGN_OR_RETURN_ABSL(auto sig, litert_model.GetSignature(i));
+    absl::string_view key = sig.Key();
     if (absl::StartsWith(key, kPrefillSignatureRunner)) {
       prefill_signature_key = key;
       break;
@@ -460,12 +463,13 @@ LlmLiteRtCompiledModelExecutor::Create(
       decode_output_buffers[signatures.output_logits].Duplicate();
   RET_CHECK(output_logits_buffer)
       << "Failed to duplicate output logits buffer.";
-  RET_CHECK(output_logits_buffer->TensorType()->Layout().Dimensions().size() ==
-            3)
+  LITERT_ASSIGN_OR_RETURN_ABSL(auto output_logits_buffer_tensor_type,
+                               output_logits_buffer->TensorType());
+  RET_CHECK(output_logits_buffer_tensor_type.Layout().Dimensions().size() == 3)
       << "Output logits must be (batch, seq, vocab)";
-  RET_CHECK(output_logits_buffer->TensorType()->Layout().Dimensions()[0] == 1)
+  RET_CHECK(output_logits_buffer_tensor_type.Layout().Dimensions()[0] == 1)
       << "Only support batch size 1 for now.";
-  int batch_size = output_logits_buffer->TensorType()->Layout().Dimensions()[0];
+  int batch_size = output_logits_buffer_tensor_type.Layout().Dimensions()[0];
 
   ASSIGN_OR_RETURN(auto prefill_runner_set,
                    GetPrefillRunnerSetFromModel(

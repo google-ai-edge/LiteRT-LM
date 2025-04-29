@@ -44,6 +44,11 @@ struct ElementTypeFor<int8_t> {
 };
 
 template <>
+struct ElementTypeFor<int16_t> {
+  static constexpr ::litert::ElementType kType = ::litert::ElementType::Int16;
+};
+
+template <>
 struct ElementTypeFor<int32_t> {
   static constexpr ::litert::ElementType kType = ::litert::ElementType::Int32;
 };

@@ -1,6 +1,7 @@
 #include "runtime/components/top_p_cpu_sampler.h"
 
 #include <cmath>
+#include <cstddef>
 #include <memory>
 #include <string>
 #include <vector>
@@ -61,7 +62,9 @@ absl::StatusOr<std::unique_ptr<TopPSampler>> TopPSampler::Create(
 absl::Status TopPSampler::SampleToIdAndScoreBuffer(
     const TensorBuffer& logits_tensor, TensorBuffer& ids_tensor,
     TensorBuffer* scores_tensor) {
-  auto num_elements = *logits_tensor.TensorType()->Layout().NumElements();
+  LITERT_ASSIGN_OR_RETURN(auto logits_tensor_type, logits_tensor.TensorType());
+  LITERT_ASSIGN_OR_RETURN(size_t num_elements,
+                          logits_tensor_type.Layout().NumElements());
   const int vocab_size = num_elements / batch_size_;
   auto status = ValidateTensor(logits_tensor, /*max_num_dims=*/2, batch_size_,
                                "input logits");
