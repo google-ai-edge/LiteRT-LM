@@ -14,14 +14,16 @@
 
 #include "runtime/executor/fake_llm_executor.h"
 
+#include <utility>
 #include <vector>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
-#include "runtime/executor/llm_executor.h"
+#include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/util/convert_tensor_buffer.h"
+#include "runtime/util/test_utils.h"
 
 namespace litert::lm {
 namespace {
@@ -33,19 +35,20 @@ TEST(FakeLlmExecutorTest, Prefill) {
   const std::vector<std::vector<int>> decode_tokens_set = {{3, 2}, {0, 0}};
   FakeLlmExecutor fake_llm_executor(3, prefill_tokens_set, decode_tokens_set);
 
-  Inputs inputs;
+  ExecutorInputs inputs;
   // Create a tensor buffer with 3 elements but only the first two elements
   // match the expected prefill tokens.
   const std::vector<int> input_tokens = {1, 2, 0};
-  inputs.text_input = TextInput{.token_ids = *CopyToTensorBuffer<int>(
-                                    absl::MakeSpan(input_tokens), {1, 3})};
+  inputs.SetTextData(ExecutorTextData(std::move(
+      *CopyToTensorBuffer<int>(absl::MakeSpan(input_tokens), {1, 3}))));
 
   // Fail because the input tokens do not match the expected prefill tokens.
   EXPECT_THAT(fake_llm_executor.Prefill(inputs),
               StatusIs(absl::StatusCode::kInvalidArgument));
 
   // Succeed because the input tokens match the expected prefill tokens.
-  auto ids_span = ReferTensorBufferAsSpan<int>(inputs.text_input.token_ids);
+  auto ids_span =
+      ReferTensorBufferAsSpan<int>(*(*inputs.GetTextTokenIdsPtr()));
   ;
   (*ids_span)[2] = 3;
   EXPECT_OK(fake_llm_executor.Prefill(inputs));
@@ -80,12 +83,12 @@ TEST(FakeLlmExecutorTest, DecodeToLogits) {
   FakeLlmExecutor fake_llm_executor(/*vocab_size=*/4, prefill_tokens_set,
                                     decode_tokens_set);
 
-  Inputs inputs;
+  ExecutorInputs inputs;
   // Create a tensor buffer with 3 elements but only the first two elements
   // match the expected prefill tokens.
   const std::vector<int> input_tokens = {3};
-  inputs.text_input.token_ids =
-      *CopyToTensorBuffer<int>(absl::MakeSpan(input_tokens), {1, 1});
+  inputs.SetTextData(ExecutorTextData(std::move(
+      *CopyToTensorBuffer<int>(absl::MakeSpan(input_tokens), {1, 1}))));
 
   auto output_logits = CreateTensorBuffer<float>({1, 1, 4});
   // Call Decode for the 1st time. The output logits should have values:

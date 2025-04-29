@@ -57,6 +57,7 @@ cc_test(
         ":io_types",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
+        "//runtime/util:test_utils",
     ],
 )
 

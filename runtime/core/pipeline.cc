@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -31,6 +32,7 @@
 #include "runtime/components/tokenizer.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/llm_executor.h"
+#include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/litert_status_util.h"
 #include "runtime/util/status_macros.h"
@@ -53,9 +55,12 @@ absl::StatusOr<int> Prefill(std::shared_ptr<LlmExecutor> executor,
     return absl::InternalError("Input token ids are empty.");
   }
   const int last_token_id = ids_buffer_span.back();
-  RETURN_IF_ERROR(executor->Prefill(
-      Inputs{.text_input = TextInput{.token_ids = std::move(ids_buffer)}},
-      PrefillQueryParams{.wait_for_completion = true}));
+  ExecutorPrefillParams params;
+  params.SetWaitForCompletion(true);
+  RETURN_IF_ERROR(
+      executor->Prefill(ExecutorInputs(ExecutorTextData(std::move(ids_buffer)),
+                                       std::nullopt, std::nullopt),
+                        params));
   return last_token_id;
 }
 
@@ -111,10 +116,9 @@ absl::StatusOr<Responses> DecodeCustomSampling(
   std::fill(scores.begin(), scores.end(), 0.0f);
   std::vector<int> num_decoded_tokens(num_output_candidates, 0);
   for (int i = 0; i < kMaxDecodeStop; ++i) {
-    RETURN_IF_ERROR(executor->Decode(
-        Inputs{.text_input =
-                   TextInput{.token_ids = *(decoded_ids.Duplicate())}},
-        output_logits));
+    ExecutorInputs inputs(ExecutorTextData(*decoded_ids.Duplicate()),
+                          std::nullopt, std::nullopt);
+    RETURN_IF_ERROR(executor->Decode(inputs, output_logits));
     RETURN_IF_ERROR(sampler.SampleToIdAndScoreBuffer(output_logits, decoded_ids,
                                                      &(*scores_tensor)));
 

@@ -23,6 +23,7 @@
 #include "runtime/engine/engine.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/executor/llm_executor_settings.h"
+#include "runtime/util/test_utils.h"
 
 namespace litert::lm {
 namespace {

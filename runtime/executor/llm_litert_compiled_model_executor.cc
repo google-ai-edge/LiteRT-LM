@@ -24,6 +24,7 @@
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/top_p_cpu_sampler.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
+#include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/litert_status_util.h"
@@ -63,15 +64,15 @@ bool IsCalculationPrecisionF16() { return true; }
 }  // namespace
 
 absl::Status LlmLiteRtCompiledModelExecutor::Prefill(
-    const Inputs& inputs, const litert::lm::PrefillQueryParams& query_params) {
+    const ExecutorInputs& inputs, const ExecutorPrefillParams& params) {
   LITERT_ASSIGN_OR_RETURN_ABSL(auto tensor_type,
-                               inputs.text_input.token_ids.TensorType());
+                               (*inputs.GetTextTokenIdsPtr())->TensorType());
   // Only accept batch size 1 for now.
   RET_CHECK_EQ(tensor_type.Layout().Dimensions()[0], 1);
   RET_CHECK_GT(tensor_type.Layout().Dimensions()[1], 0)
       << "Prefill token ids must be non-empty.";
-  LITERT_ASSIGN_OR_RETURN_ABSL(
-      auto ids, ReferTensorBufferAsSpan<int32_t>(inputs.text_input.token_ids));
+  LITERT_ASSIGN_OR_RETURN_ABSL(auto ids, ReferTensorBufferAsSpan<int32_t>(
+                                             *(*inputs.GetTextTokenIdsPtr())));
 
   ASSIGN_OR_RETURN(auto work_groups, GetOptimizedPrefillWorkGroups(
                                          prefill_signature_map_, ids.size()));
@@ -193,7 +194,7 @@ absl::Status LlmLiteRtCompiledModelExecutor::Decode(
     LITERT_ASSIGN_OR_RETURN_ABSL(decoded_logits_,
                                  CreateTensorBuffer<float>({1, 1, vocab_size}));
   }
-  RETURN_IF_ERROR(Decode(Inputs(), decoded_logits_));
+  RETURN_IF_ERROR(Decode(ExecutorInputs(), decoded_logits_));
   LITERT_ASSIGN_OR_RETURN_ABSL(auto logits,
                                ReferTensorBufferAsSpan<float>(decoded_logits_));
   ASSIGN_OR_RETURN(std::vector<int> output_ids, SampleLogits(logits));
@@ -202,17 +203,20 @@ absl::Status LlmLiteRtCompiledModelExecutor::Decode(
 }
 
 absl::Status LlmLiteRtCompiledModelExecutor::Decode(
-    const Inputs& inputs, ::litert::TensorBuffer& output_logits) {
+    const ExecutorInputs& inputs, ::litert::TensorBuffer& output_logits) {
   int id = next_input_token_id_;
 
-  auto input_tensor_size = inputs.text_input.token_ids.PackedSize();
-  if (input_tensor_size && *input_tensor_size != 0) {
-    // Input token ids provided, so use it regardless of whether next input
-    // token id is set. Only accept batch size 1 and a single token for now.
-    RET_CHECK_EQ(*input_tensor_size, 1 * sizeof(int32_t));
-    LITERT_ASSIGN_OR_RETURN_ABSL(auto ids, ReferTensorBufferAsSpan<int32_t>(
-                                               inputs.text_input.token_ids));
-    id = ids[0];
+  if (inputs.GetTextDataPtr().ok()) {
+    auto input_tensor_size = (*inputs.GetTextTokenIdsPtr())->PackedSize();
+    if (input_tensor_size && *input_tensor_size != 0) {
+      // Input token ids provided, so use it regardless of whether next input
+      // token id is set. Only accept batch size 1 and a single token for now.
+      RET_CHECK_EQ(*input_tensor_size, 1 * sizeof(int32_t));
+      LITERT_ASSIGN_OR_RETURN_ABSL(
+          auto ids,
+          ReferTensorBufferAsSpan<int32_t>(*(*inputs.GetTextTokenIdsPtr())));
+      id = ids[0];
+    }
   }
   if (id == -1) {
     return absl::InvalidArgumentError("No id available to be decoded.");
@@ -334,20 +338,19 @@ absl::StatusOr<int> LlmLiteRtCompiledModelExecutor::GetVocabSize() {
 // Creates a LlmLiteRtCompiledModelExecutor from a LiteRt model.
 absl::StatusOr<std::unique_ptr<LlmLiteRtCompiledModelExecutor>>
 LlmLiteRtCompiledModelExecutor::Create(
-    const LlmExecutorSettings& executor_settings,
-    ::litert::Model& litert_model) {
+    const LlmExecutorSettings& executor_config, ::litert::Model& litert_model) {
   // For the LlmLiteRtCompiledModelExecutor, ML_DRIFT backend is used by
   // default.
   // TODO(b/405424188): - Add support for NPU backends.
   auto compilation_options = ::litert::Options::Create();
-  switch (executor_settings.GetBackend()) {
+  switch (executor_config.GetBackend()) {
     case Backend::CPU:
       // TODO: b/403132820 - Add accelerator compilation options for XNNPACK.
       compilation_options->SetHardwareAccelerators(kLiteRtHwAcceleratorCpu);
       break;
     default:
-      return absl::InvalidArgumentError(absl::StrCat(
-          "Unsupported backend: ", executor_settings.GetBackend()));
+      return absl::InvalidArgumentError(
+          absl::StrCat("Unsupported backend: ", executor_config.GetBackend()));
   }
 
   auto lrt_env = ::litert::Environment::Create({});

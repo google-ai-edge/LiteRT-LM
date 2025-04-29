@@ -12,6 +12,7 @@
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/fake_llm_executor.h"
 #include "runtime/executor/llm_executor.h"
+#include "runtime/util/test_utils.h"
 
 namespace litert::lm {
 namespace {

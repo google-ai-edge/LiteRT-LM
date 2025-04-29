@@ -11,6 +11,7 @@
 #include "runtime/components/tokenizer.h"
 #include "runtime/executor/fake_llm_executor.h"
 #include "runtime/executor/llm_executor.h"
+#include "runtime/util/test_utils.h"
 
 namespace litert::lm {
 namespace {
