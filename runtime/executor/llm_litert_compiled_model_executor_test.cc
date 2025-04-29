@@ -54,7 +54,7 @@ CreateExecutorModelResources(absl::string_view model_path) {
 TEST(LlmLiteRTCompiledModelExecutorTest, CreateExecutorTest) {
   auto model_path =
       std::filesystem::path(::testing::SrcDir()) /
-      "runtime/testdata/test_lm.task";
+      "litert_lm/runtime/testdata/test_lm.task";
   ASSERT_OK_AND_ASSIGN(auto model_resources,
                        CreateExecutorModelResources(model_path.string()));
   ModelAssets model_assets;

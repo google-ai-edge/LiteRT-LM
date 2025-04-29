@@ -25,7 +25,7 @@ namespace litert::lm {
 namespace {
 
 constexpr char kTestdataDir[] =
-    "runtime/components/testdata/";
+    "litert_lm/runtime/components/testdata/";
 
 std::string GetSentencePieceModelPath() {
   return (std::filesystem::path(::testing::SrcDir()) / kTestdataDir /
