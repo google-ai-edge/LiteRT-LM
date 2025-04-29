@@ -19,8 +19,8 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup bazel cache
-        uses: actions/cache@v4
+      - name: Restore bazel cache
+        uses: actions/cache/restore@v4
         id: bazel-cache
         with:
           path: |
@@ -34,7 +34,6 @@ jobs:
 
       - name: Check cache hit
         run: |
-          echo "Cache step 'bazel-cache' outputs:"
           echo "Cache Hit: ${{ steps.bazel-cache.outputs.cache-hit }}"
           echo "Cache Primary Key: ${{ steps.bazel-cache.outputs.cache-primary-key }}"
           echo "Cache Matched Key: ${{ steps.bazel-cache.outputs.cache-matched-key }}"
@@ -67,3 +66,14 @@ jobs:
             //runtime/engine:litert_lm_main
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+
+      - name: Save bazel cache if new or changed on push.
+        uses: actions/cache/save@v4
+        if: ${{ steps.bazel-cache.outputs.cache-hit }} != 'true' || ${{ github.event_name }} == 'push'
+        with:
+          path: |
+            ~/.cache/bazel
+            ~/.cache/bazel-linux
+            ~/.cache/bazel-android
+          key: ${{ github.workflow }}-${{ hashFiles('**/WORKSPACE') }}-${{ hashFiles('**/BUILD*') }}
+
