@@ -44,8 +44,11 @@ cc_test(
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/types:span",
         "@litert//litert/c:litert_common",
+        "@litert//litert/c:litert_tensor_buffer_types",
+        "@litert//litert/cc:litert_layout",
         "@litert//litert/cc:litert_model",
         "@litert//litert/cc:litert_tensor_buffer",
+        "@litert//litert/test:matchers",
     ],
 )
 
@@ -144,6 +147,7 @@ cc_test(
         ":convert_tensor_buffer",
         ":tensor_buffer_util",
         "@com_google_googletest//:gtest_main",
+        "@litert//litert/test:matchers",
     ],
 )
 
