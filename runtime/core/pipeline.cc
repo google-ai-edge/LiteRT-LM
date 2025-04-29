@@ -44,8 +44,9 @@ namespace litert::lm {
 constexpr int kMaxDecodeStop = 128;
 
 absl::StatusOr<int> Prefill(std::shared_ptr<LlmExecutor> executor,
-                     std::shared_ptr<Tokenizer> tokenizer,
-                     absl::string_view prompt, int bos_token_id) {
+                            std::shared_ptr<Tokenizer> tokenizer,
+                            absl::string_view prompt, int bos_token_id,
+                            bool wait_for_completion) {
   ASSIGN_OR_RETURN(auto ids_buffer,
                    tokenizer->TextToTensorBuffer(
                        prompt, /*prepend_token_ids=*/{bos_token_id}));
@@ -56,7 +57,7 @@ absl::StatusOr<int> Prefill(std::shared_ptr<LlmExecutor> executor,
   }
   const int last_token_id = ids_buffer_span.back();
   ExecutorPrefillParams params;
-  params.SetWaitForCompletion(true);
+  params.SetWaitForCompletion(wait_for_completion);
   RETURN_IF_ERROR(
       executor->Prefill(ExecutorInputs(ExecutorTextData(std::move(ids_buffer)),
                                        std::nullopt, std::nullopt),
