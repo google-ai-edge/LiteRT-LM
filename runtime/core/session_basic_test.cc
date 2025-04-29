@@ -18,7 +18,7 @@ namespace litert::lm {
 namespace {
 
 constexpr char kTestdataDir[] =
-    "runtime/components/testdata/";
+    "litert_lm/runtime/components/testdata/";
 
 class SessionBasicTest : public testing::Test {
  protected:

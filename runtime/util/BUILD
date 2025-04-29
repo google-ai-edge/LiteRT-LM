@@ -282,7 +282,7 @@ cc_library(
     testonly = 1,
     hdrs = ["test_utils.h"],
     deps = [
-        "@com_google_googletest//:gtest_for_library_testonly",
+        "@com_google_googletest//:gtest_for_library",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@litert//litert/cc:litert_macros",

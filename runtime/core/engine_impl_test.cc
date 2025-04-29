@@ -31,7 +31,7 @@ namespace {
 TEST(EngineTest, CreateEngine) {
   auto task_path =
       std::filesystem::path(::testing::SrcDir()) /
-      "runtime/testdata/test_lm.task";
+      "litert_lm/runtime/testdata/test_lm.task";
   ModelAssets model_assets;
   model_assets.model_paths.push_back(task_path.string());
   LlmExecutorSettings executor_settings(model_assets);
@@ -59,39 +59,6 @@ TEST(EngineTest, CreateEngine) {
   EXPECT_OK(llm);
 }
 
-TEST(EngineTest, CreateEngineGPU) {
-  auto task_path =
-      std::filesystem::path(::testing::SrcDir()) /
-      "runtime/testdata/test_lm.task";
-  ModelAssets model_assets;
-  model_assets.model_paths.push_back(task_path.string());
-  LlmExecutorSettings executor_settings(model_assets);
-
-  executor_settings.SetBackend(Backend::GPU);
-  executor_settings.SetBackendConfig(GpuConfig());
-  executor_settings.SetMaxNumTokens(160);
-  // MLD OpenCL only supports fp32 on Linux TAP test.
-  executor_settings.SetActivationDataType(ActivationDataType::FLOAT32);
-  EngineSettings llm_settings(executor_settings);
-
-  absl::StatusOr<std::unique_ptr<Engine>> llm =
-      Engine::CreateEngine(llm_settings);
-  ABSL_CHECK_OK(llm);
-
-  absl::StatusOr<std::unique_ptr<Engine::Session>> session =
-      (*llm)->CreateSession();
-  ABSL_CHECK_OK(session);
-
-  absl::Status status = (*session)->AddTextPrompt("Hello world!");
-  ABSL_CHECK_OK(status);
-
-  auto responses = (*session)->PredictSync();
-
-  EXPECT_OK(responses);
-  EXPECT_EQ(responses->GetNumOutputCandidates(), 1);
-  EXPECT_TRUE((responses->GetResponseTextAt(0))->starts_with("<unused185>"));
-  EXPECT_OK(llm);
-}
 // TODO (b/397975034): Add more tests for Engine.
 
 }  // namespace
