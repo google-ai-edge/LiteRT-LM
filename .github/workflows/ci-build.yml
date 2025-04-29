@@ -14,20 +14,30 @@ concurrency:
 jobs:
   presubmit:
     name: "Presubmit"
-    runs-on: ubuntu-latest
+    runs-on: Linux_runner_8_core
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Setup bazel cache
         uses: actions/cache@v4
+        id: bazel-cache
         with:
           path: |
             ~/.cache/bazel
             ~/.cache/bazel-linux
             ~/.cache/bazel-android
-          key: ${{ github.workflow }}-bazel-${{ hashFiles('**/WORKSPACE') }}
-          restore-keys: ${{ github.workflow }}-bazel-
+          key: ${{ github.workflow }}-${{ hashFiles('**/WORKSPACE') }}-${{ hashFiles('**/BUILD*') }}
+          restore-keys: |
+            ${{ github.workflow }}-${{ hashFiles('**/WORKSPACE') }}-
+            ${{ github.workflow }}-
+
+      - name: Check cache hit
+        run: |
+          echo "Cache step 'bazel-cache' outputs:"
+          echo "Cache Hit: ${{ steps.bazel-cache.outputs.cache-hit }}"
+          echo "Cache Primary Key: ${{ steps.bazel-cache.outputs.cache-primary-key }}"
+          echo "Cache Matched Key: ${{ steps.bazel-cache.outputs.cache-matched-key }}"
 
       - name: Run bazel build on Linux
         run: |
