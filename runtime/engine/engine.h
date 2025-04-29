@@ -38,12 +38,18 @@ class Engine {
     // Adds the input prompt/query to the model for starting the prefilling
     // process. Note that the user can break down their prompt/query into
     // multiple chunks and call this function multiple times.
-    virtual absl::Status AddTextPrompt(absl::string_view input) = 0;
+    //
+    // This is a blocking call and the function will return when the prefill
+    // process is done.
+    virtual absl::Status RunPrefill(absl::string_view input) = 0;
+    // This is a not blocking call and the function will return right away.
+    virtual absl::Status RunPrefillAsync(absl::string_view input) = 0;
 
     // Starts the decoding process for the model to predict the response based
-    // on the input prompt/query added after using AddTextPrompt (or
-    // AddImagePrompt) functions.
-    virtual absl::StatusOr<Responses> PredictSync() = 0;
+    // on the input prompt/query added after using RunPrefill* functions.
+    // This is a blocking call and the function will return when the decoding
+    // process is done.
+    virtual absl::StatusOr<Responses> RunDecode() = 0;
   };
 
   // Method to create Engine.

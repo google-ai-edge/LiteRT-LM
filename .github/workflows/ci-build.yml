@@ -1,0 +1,32 @@
+name: "CI"
+on:
+  push:
+    branches:
+    - main
+  pull_request:
+    branches:
+    - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  presubmit:
+    name: "Presubmit"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup bazel cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/bazel
+            ~/.cache/bazel-disk-cache
+          key: ${{ github.workflow }}-bazel-${{ hashFiles('**/WORKSPACE') }}
+          restore-keys: ${{ github.workflow }}-bazel-
+
+      - name: Run bazel build on Linux
+        run: bazel build --disk_cache=~/.cache/bazel-disk-cache //runtime/engine:litert_lm_main

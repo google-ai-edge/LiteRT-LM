@@ -15,6 +15,7 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_ENGINE_IO_TYPES_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_ENGINE_IO_TYPES_H_
 
+#include <ostream>
 #include <string>
 #include <vector>
 
@@ -61,6 +62,7 @@ class Responses {
   // from the probability of the last token in the response text.
   std::vector<float> scores_;
 };
+std::ostream& operator<<(std::ostream& os, const Responses& responses);
 
 }  // namespace litert::lm
 
