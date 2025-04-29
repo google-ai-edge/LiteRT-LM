@@ -205,8 +205,8 @@ http_archive(
 http_archive(
     name = "litert",
     patch_cmds = [
-        # Update visibility to public for litert/c/BUILD and litert/cc/BUILD.
-        "sed -i -e 's|//litert:litert_stable_abi_users|//visibility:public|g' litert/c/BUILD litert/cc/BUILD",
+        # Update visibility to public for litert/*/BUILD.
+        "sed -i -e 's|//litert:litert_stable_abi_users|//visibility:public|g' litert/*/BUILD",
     ],
     sha256 = "1c5745dd56c968da23e48b8194914e5154a71d40d5aef6613e2d6ac9261f852a",
     strip_prefix = "LiteRT-5a816dca891292a96e4562f879cd74c1e3dd851e",

@@ -13,8 +13,8 @@
 #if !defined(ASSERT_OK)
 #define ASSERT_OK(status) ASSERT_TRUE(status.ok())
 #endif  // defined(ASSERT_OK)
-#if !defined(ASSERT_OK_AND_ASSIGN)
 
+#if !defined(ASSERT_OK_AND_ASSIGN)
 #define ASSERT_OK_AND_ASSIGN(DECL, EXPR) \
   _ASSERT_OK_AND_ASSIGN_IMPL(_CONCAT_NAME(_statusor_, __LINE__), DECL, EXPR)
 #define _ASSERT_OK_AND_ASSIGN_IMPL(TMP_VAR, DECL, EXPR) \

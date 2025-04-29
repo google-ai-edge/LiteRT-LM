@@ -19,6 +19,7 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_layout.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "litert/test/matchers.h"  // from @litert
 #include "runtime/util/convert_tensor_buffer.h"
 
 namespace litert::lm {
@@ -104,8 +105,8 @@ TEST(SentencePieceTokenizerTest, TextToTensorBuffer) {
   absl::string_view text = "Hello World!";
   auto tensor_or = tokenizer->TextToTensorBuffer(text);
   auto tensor = std::move(tensor_or.value());
-  EXPECT_EQ(tensor.TensorType()->Layout().Dimensions(),
-            ::litert::Dimensions({1, 7}));
+  LITERT_ASSERT_OK_AND_ASSIGN(auto tensor_type, tensor.TensorType());
+  EXPECT_EQ(tensor_type.Layout().Dimensions(), ::litert::Dimensions({1, 7}));
 
   auto copied_data = CopyFromTensorBuffer2D<int>(tensor);
   EXPECT_TRUE(copied_data.HasValue());
@@ -122,8 +123,8 @@ TEST(SentencePieceTokenizerTest, TextToTensorBufferWithPrependAndPostpend) {
   absl::string_view text = "Hello World!";
   auto tensor_or = tokenizer->TextToTensorBuffer(text, {2}, {100});
   auto tensor = std::move(tensor_or.value());
-  EXPECT_EQ(tensor.TensorType()->Layout().Dimensions(),
-            ::litert::Dimensions({1, 9}));
+  LITERT_ASSERT_OK_AND_ASSIGN(auto tensor_type, tensor.TensorType());
+  EXPECT_EQ(tensor_type.Layout().Dimensions(), ::litert::Dimensions({1, 9}));
 
   auto copied_data = CopyFromTensorBuffer2D<int>(tensor);
   EXPECT_TRUE(copied_data.HasValue());
@@ -152,12 +153,14 @@ TEST(SentencePieceTokenizerTest, TensorBufferToText) {
 
   const std::vector<int> ids = {90,  547, 58, 735, 210, 466, 2294,
                                 224, 24,  8,  66,  246, 18,  2295};
-  auto tensor_buffer = CopyToTensorBuffer<int>(ids, {2, 7});
-  EXPECT_TRUE(tensor_buffer.HasValue());
-  EXPECT_EQ(tensor_buffer->TensorType()->Layout().Dimensions(),
+  LITERT_ASSERT_OK_AND_ASSIGN(TensorBuffer tensor_buffer,
+                              CopyToTensorBuffer<int>(ids, {2, 7}));
+  LITERT_ASSERT_OK_AND_ASSIGN(auto tensor_buffer_type,
+                              tensor_buffer.TensorType());
+  EXPECT_EQ(tensor_buffer_type.Layout().Dimensions(),
             ::litert::Dimensions({2, 7}));
 
-  auto texts_or = tokenizer->TensorBufferToText(*tensor_buffer);
+  auto texts_or = tokenizer->TensorBufferToText(tensor_buffer);
   EXPECT_TRUE(texts_or.ok());
   EXPECT_EQ(texts_or.value().size(), 2);
   EXPECT_EQ(texts_or.value()[0], "▁Hello▁World!");

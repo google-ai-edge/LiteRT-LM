@@ -121,6 +121,7 @@ cc_test(
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/types:span",
+        "@litert//litert/test:matchers",
         "//runtime/util:convert_tensor_buffer",
         "//runtime/util:test_utils",
     ],
