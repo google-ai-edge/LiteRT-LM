@@ -48,6 +48,7 @@ cc_library(
     deps = [
         ":litert_compiled_model_executor_utils",
         ":llm_executor",
+        ":llm_executor_io_types",
         ":llm_executor_settings",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/log:absl_log",
@@ -87,6 +88,7 @@ cc_test(
         "@litert//litert/cc:litert_model",
         "//runtime/util:litert_status_util",
         "//runtime/util:model_asset_bundle_resources",
+        "//runtime/util:test_utils",
     ],
 )
 
@@ -96,7 +98,7 @@ cc_library(
     hdrs = ["fake_llm_executor.h"],
     deps = [
         ":llm_executor",
-        ":llm_executor_base",
+        ":llm_executor_io_types",
         ":llm_executor_settings",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
@@ -115,17 +117,17 @@ cc_test(
     srcs = ["fake_llm_executor_test.cc"],
     deps = [
         ":fake_llm_executor",
-        ":llm_executor",
+        ":llm_executor_io_types",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/types:span",
         "//runtime/util:convert_tensor_buffer",
+        "//runtime/util:test_utils",
     ],
 )
 
 cc_library(
     name = "llm_executor",
-    srcs = ["llm_executor.cc"],
     hdrs = ["llm_executor.h"],
     deps = [
         ":llm_executor_base",
@@ -137,23 +139,11 @@ cc_library(
     name = "llm_executor_base",
     hdrs = ["llm_executor_base.h"],
     deps = [
+        ":llm_executor_io_types",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
-        "@litert//litert/cc:litert_tensor_buffer",
-    ],
-)
-
-cc_test(
-    name = "llm_executor_test",
-    srcs = ["llm_executor_test.cc"],
-    deps = [
-        ":llm_executor",
-        "@com_google_googletest//:gtest_main",
-        "@litert//litert/c:litert_tensor_buffer",
-        "@litert//litert/cc:litert_element_type",
-        "@litert//litert/cc:litert_model",
         "@litert//litert/cc:litert_tensor_buffer",
     ],
 )
@@ -178,6 +168,7 @@ cc_test(
         ":llm_executor_settings",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
+        "//runtime/util:test_utils",
     ],
 )
 
@@ -186,6 +177,9 @@ cc_library(
     srcs = ["llm_executor_io_types.cc"],
     hdrs = ["llm_executor_io_types.h"],
     deps = [
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
         "@litert//litert/cc:litert_tensor_buffer",
         "//runtime/util:logging_tensor_buffer",
     ],
@@ -197,6 +191,7 @@ cc_test(
     deps = [
         ":llm_executor_io_types",
         "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status:statusor",
         "@litert//litert/c:litert_dispatch_headers",
         "@litert//litert/cc:litert_element_type",
         "@litert//litert/cc:litert_layout",

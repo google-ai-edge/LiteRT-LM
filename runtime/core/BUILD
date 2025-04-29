@@ -64,6 +64,7 @@ cc_test(
         "//runtime/engine:engine_interface",
         "//runtime/engine:engine_settings",
         "//runtime/executor:llm_executor_settings",
+        "//runtime/util:test_utils",
     ],
 )
 
@@ -82,6 +83,7 @@ cc_library(
         "//runtime/components:tokenizer",
         "//runtime/engine:io_types",
         "//runtime/executor:llm_executor",
+        "//runtime/executor:llm_executor_io_types",
         "//runtime/util:convert_tensor_buffer",
         "//runtime/util:litert_status_util",
     ],
@@ -103,6 +105,7 @@ cc_test(
         "//runtime/executor:fake_llm_executor",
         "//runtime/executor:llm_executor",
         "//runtime/util:convert_tensor_buffer",
+        "//runtime/util:test_utils",
     ],
 )
 
@@ -144,6 +147,7 @@ cc_test(
         "//runtime/engine:io_types",
         "//runtime/executor:fake_llm_executor",
         "//runtime/executor:llm_executor",
+        "//runtime/util:test_utils",
     ],
 )
 
@@ -172,5 +176,6 @@ cc_test(
         "//runtime/components:tokenizer",
         "//runtime/executor:fake_llm_executor",
         "//runtime/executor:llm_executor",
+        "//runtime/util:test_utils",
     ],
 )

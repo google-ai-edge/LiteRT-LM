@@ -4,8 +4,6 @@ cc_library(
     name = "zlib_minizip",
     srcs = [
         "minizip/ioapi.c",
-        "minizip/miniunz.c",
-        "minizip/minizip.c",
         "minizip/unzip.c",
         "minizip/zip.c",
     ] + select({

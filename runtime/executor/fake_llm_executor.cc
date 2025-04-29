@@ -9,7 +9,7 @@
 #include "absl/time/time.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
-#include "runtime/executor/llm_executor_base.h"
+#include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/status_macros.h"
 
@@ -62,14 +62,15 @@ FakeLlmExecutor::FakeLlmExecutor(
       prefill_times_(0),
       decode_times_(0) {}
 
-absl::Status FakeLlmExecutor::Prefill(const Inputs& inputs) {
+absl::Status FakeLlmExecutor::Prefill(const ExecutorInputs& inputs) {
   if (prefill_times_ >= prefill_tokens_set_.size()) {
     return absl::InvalidArgumentError(absl::StrCat(
         "Prefill function has been called more times than the number of "
         "expected prefill tokens.",
         prefill_times_));
   }
-  auto input_span = ReferTensorBufferAsSpan<int>(inputs.text_input.token_ids);
+  auto input_span =
+      ReferTensorBufferAsSpan<int>(*(*inputs.GetTextTokenIdsPtr()));
   RETURN_IF_ERROR(CheckEquivalent(
       absl::MakeSpan(prefill_tokens_set_[prefill_times_]), *input_span));
   prefill_times_++;
@@ -77,8 +78,8 @@ absl::Status FakeLlmExecutor::Prefill(const Inputs& inputs) {
 }
 
 absl::Status FakeLlmExecutor::Prefill(
-    const Inputs& inputs, const PrefillQueryParams& prefill_query_params) {
-  if (prefill_query_params.wait_for_completion) {
+    const ExecutorInputs& inputs, const ExecutorPrefillParams& prefill_params) {
+  if (prefill_params.GetWaitForCompletion()) {
     // Sleep some time here to simulate a synchronous prefill.
     // We can time the function time in test to make sure the code calls prefill
     // with a correct wait_for_completion flag.
@@ -102,7 +103,7 @@ absl::Status FakeLlmExecutor::Decode(::litert::TensorBuffer& output_tokens) {
   return absl::OkStatus();
 }
 
-absl::Status FakeLlmExecutor::Decode(const Inputs& inputs,
+absl::Status FakeLlmExecutor::Decode(const ExecutorInputs& inputs,
                                      ::litert::TensorBuffer& output_logits) {
   if (decode_times_ >= decode_tokens_set_.size()) {
     return absl::InvalidArgumentError(absl::StrCat(
@@ -112,7 +113,8 @@ absl::Status FakeLlmExecutor::Decode(const Inputs& inputs,
   }
   if (decode_times_ > 0) {
     // Check that the input tokens match the decode tokens from the last call.
-    auto input_span = ReferTensorBufferAsSpan<int>(inputs.text_input.token_ids);
+    auto input_span = ReferTensorBufferAsSpan<int>(
+        *(*inputs.GetTextTokenIdsPtr()));
     RETURN_IF_ERROR(CheckEquivalent(
         absl::MakeSpan(decode_tokens_set_[decode_times_ - 1]), *input_span));
   }

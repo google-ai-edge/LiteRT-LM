@@ -70,6 +70,7 @@ cc_test(
     srcs = ["litert_status_util_test.cc"],
     deps = [
         ":litert_status_util",
+        ":test_utils",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
@@ -83,6 +84,7 @@ cc_test(
     srcs = ["status_macros_test.cc"],
     deps = [
         ":litert_status_util",
+        ":test_utils",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
@@ -170,6 +172,7 @@ cc_test(
     deps = [
         ":memory_mapped_file",
         ":scoped_file",
+        ":test_utils",
         "//testing/base/public:gunit",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status:statusor",
@@ -272,5 +275,17 @@ cc_library(
         "@minizip//:zlib_minizip",
         "@litert//litert/cc:litert_macros",
         "@zlib//:zlib",
+    ],
+)
+
+cc_library(
+    name = "test_utils",
+    testonly = 1,
+    hdrs = ["test_utils.h"],
+    deps = [
+        "//testing/base/public:gunit_for_library_testonly",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@litert//litert/cc:litert_macros",
     ],
 )

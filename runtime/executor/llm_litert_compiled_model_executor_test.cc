@@ -17,6 +17,7 @@
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/util/model_asset_bundle_resources.h"
 #include "runtime/util/status_macros.h"
+#include "runtime/util/test_utils.h"  // NOLINT
 
 namespace litert::lm {
 namespace {
@@ -34,7 +35,7 @@ CreateExecutorModelResources(absl::string_view model_path) {
   litert::Expected<Model> litert_model;
   std::unique_ptr<ModelAssetBundleResources> resources;
   auto external_file = std::make_unique<ExternalFile>();
-  external_file->set_file_name(model_path);
+  external_file->set_file_name(std::string(model_path));
   ASSIGN_OR_RETURN(resources,  // NOLINT: wrongly detected.
                    ModelAssetBundleResources::Create(
                        /*tag=*/"", std::move(external_file)));

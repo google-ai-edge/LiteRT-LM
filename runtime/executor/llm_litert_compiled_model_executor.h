@@ -33,6 +33,7 @@
 #include "runtime/components/top_p_cpu_sampler.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/executor/llm_executor.h"
+#include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/llm_executor_settings.h"
 
 namespace litert::lm {
@@ -41,7 +42,7 @@ namespace litert::lm {
 // (OpenCl/WebGpu/Metal/etc.). Note that this class itself is not instantiable,
 // since the Create() function is not implemented.
 // TODO: b/361667248 - Add test for LlmTfLiteGpuExecutor.
-class LlmLiteRtCompiledModelExecutor : public ::litert::lm::LlmExecutor {
+class LlmLiteRtCompiledModelExecutor : public LlmExecutor {
  public:
   // Creates a LlmLiteRtCompiledModelExecutor from a LiteRt model.
   static absl::StatusOr<std::unique_ptr<LlmLiteRtCompiledModelExecutor>> Create(
@@ -51,17 +52,16 @@ class LlmLiteRtCompiledModelExecutor : public ::litert::lm::LlmExecutor {
   // Input APIs:
   // Basic API to trigger the "prefill" or "prefix" process.
   // Input is token ids with shape `[batch, sequence_length]`
-  absl::Status Prefill(const ::litert::lm::Inputs& inputs) override {
-    ::litert::lm::PrefillQueryParams query_params = {
-        .current_step = -1, .wait_for_completion = false, .cancel = nullptr};
-    return Prefill(inputs, query_params);
+  absl::Status Prefill(const ExecutorInputs& inputs) override {
+    ExecutorPrefillParams params;
+    return Prefill(inputs, params);
   };
 
   // Advanced API to allow customized query parameters.
   // Input is token ids with shape `[batch, sequence_length]`
   absl::Status Prefill(
-      const ::litert::lm::Inputs& inputs,
-      const ::litert::lm::PrefillQueryParams& query_params) override;
+      const ExecutorInputs& inputs,
+      const ExecutorPrefillParams& params) override;
 
   // Output APIs:
   // Basic API to trigger the "decode" process.
@@ -72,7 +72,7 @@ class LlmLiteRtCompiledModelExecutor : public ::litert::lm::LlmExecutor {
   // Output is logits with shape `[batch, sequence_length, vocab_size]`
   // TODO: b/355310550 - Shall we change the function naming here to not
   // overload Decode?
-  absl::Status Decode(const ::litert::lm::Inputs& inputs,
+  absl::Status Decode(const ExecutorInputs& inputs,
                       ::litert::TensorBuffer& output_logits) override;
 
   absl::string_view ExecutorBackendName() const override {
@@ -125,7 +125,7 @@ class LlmLiteRtCompiledModelExecutor : public ::litert::lm::LlmExecutor {
 
   // Decode internal implementation, without result downloading.
   // Caller of this function is responsible for capturing the output.
-  absl::Status DecodeInternal(::litert::lm::Inputs inputs);
+  absl::Status DecodeInternal(ExecutorInputs inputs);
 
   ::litert::Environment env_;
   ::litert::Model model_;
