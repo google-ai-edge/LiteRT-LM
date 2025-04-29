@@ -28,7 +28,7 @@ TEST(StatusMacrosTest, AssignOrReturn_Failure) {
   auto status_or = []() -> absl::StatusOr<int> {
     ASSIGN_OR_RETURN(
         int x,
-        absl::StatusOr<int>(absl::InternalError("It's an internal error.")));
+        absl::StatusOr<int>(absl::InternalError("It's internal error.")));
     return x;
   }();
   EXPECT_THAT(status_or,
