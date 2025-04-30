@@ -33,6 +33,7 @@ TEST(StatusMacrosTest, AssignOrReturn_Failure) {
   }();
   EXPECT_THAT(status_or,
               StatusIs(absl::StatusCode::kInternal, "It's an internal error."));
+  EXPECT_TRUE(false);
 }
 
 TEST(StatusMacrosTest, ReturnIfError_Success) {
