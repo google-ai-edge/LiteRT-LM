@@ -52,12 +52,24 @@ class LlmExecutorBase {
   // tensor buffer of shape `[batch, sequence_length]` of int32_t.
   virtual absl::Status Decode(::litert::TensorBuffer& output_tokens) = 0;
 
-  // Basic API to trigger the "decode" process but without sampling.
+  // [Deprecated]Basic API to trigger the "decode" process but without sampling.
   // Input is token ids with shape `[batch, sequence_length]`
   // Output is logits with shape `[batch, sequence_length, vocab_size]` of
   // float32_t.
+  // TODO(b/416293708): remove this API once the new API is ready and tested.
   virtual absl::Status Decode(const ExecutorInputs& inputs,
                               ::litert::TensorBuffer& output_logits) {
+    return absl::UnimplementedError(
+        absl::StrCat("Decode for logits output not implemented for backend: ",
+                     ExecutorBackendName()));
+  };
+
+  // Basic API to trigger the "decode" process but without sampling.
+  // Input is token ids with shape `[batch, sequence_length]`
+  // Output is logits with shape `[batch, sequence_length, vocab_size]` of
+  // float32_t on the host memory.
+  virtual absl::StatusOr<::litert::TensorBuffer> DecodeLogits(
+      const ExecutorInputs& inputs) {
     return absl::UnimplementedError(
         absl::StrCat("Decode for logits output not implemented for backend: ",
                      ExecutorBackendName()));

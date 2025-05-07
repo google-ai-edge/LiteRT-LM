@@ -73,6 +73,9 @@ class LlmLiteRtCompiledModelExecutor : public LlmExecutor {
   absl::Status Decode(const ExecutorInputs& inputs,
                       ::litert::TensorBuffer& output_logits) override;
 
+  absl::StatusOr<::litert::TensorBuffer> DecodeLogits(
+      const ExecutorInputs& inputs) override;
+
   absl::string_view ExecutorBackendName() const override {
     return "LiteRT Compiled Model";
   }

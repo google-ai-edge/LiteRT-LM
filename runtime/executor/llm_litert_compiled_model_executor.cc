@@ -199,17 +199,7 @@ absl::Status LlmLiteRtCompiledModelExecutor::PrefillInternal(
 
 absl::Status LlmLiteRtCompiledModelExecutor::Decode(
     ::litert::TensorBuffer& output_tokens) {
-  if (!decoded_logits_) {
-    // When external output handler not provided or sampling not initialized,
-    // use CPU sampling. Note that this will introduce extra overhead for
-    // downloading the logits from GPU to CPU.
-    // Provide empty input to use the next_input_token_id_.
-    LITERT_ASSIGN_OR_RETURN_ABSL(
-        decoded_logits_,
-        compiled_model_.CreateOutputBuffer(kDecodeSignatureRunner,
-                                           signatures_.output_logits));
-  }
-  RETURN_IF_ERROR(Decode(ExecutorInputs(), decoded_logits_));
+  ASSIGN_OR_RETURN(decoded_logits_, DecodeLogits(ExecutorInputs()));
   LITERT_ASSIGN_OR_RETURN_ABSL(auto size, decoded_logits_.PackedSize());
   if (decoded_logits_vector_.empty()) {
     decoded_logits_vector_ = std::vector<float>(size / sizeof(float));
@@ -316,6 +306,103 @@ absl::Status LlmLiteRtCompiledModelExecutor::Decode(
 
   ++current_step_;
   return absl::OkStatus();
+}
+
+absl::StatusOr<::litert::TensorBuffer>
+LlmLiteRtCompiledModelExecutor::DecodeLogits(const ExecutorInputs& inputs) {
+  int id = next_input_token_id_;
+
+  if (inputs.GetTextDataPtr().ok()) {
+    auto input_tensor_size = (*inputs.GetTextTokenIdsPtr())->PackedSize();
+    if (input_tensor_size && *input_tensor_size != 0) {
+      // Input token ids provided, so use it regardless of whether next input
+      // token id is set. Only accept batch size 1 and a single token for now.
+      RET_CHECK_EQ(*input_tensor_size, 1 * sizeof(int32_t));
+      LITERT_ASSIGN_OR_RETURN_ABSL(
+          auto ids,
+          ReferTensorBufferAsSpan<int32_t>(*(*inputs.GetTextTokenIdsPtr())));
+      id = ids[0];
+    }
+  }
+  if (id == -1) {
+    return absl::InvalidArgumentError("No id available to be decoded.");
+  }
+
+  // Invalidate the previous next_input_token_id_, regardless of whether it is
+  // used.
+  next_input_token_id_ = -1;
+
+  {
+    // Fill the input buffers with scoped locks.
+    auto& decode_input_buffer = decode_input_buffers_[signatures_.input_tokens];
+    auto decode_input_lock_and_addr =
+        ::litert::TensorBufferScopedLock::Create(decode_input_buffer);
+    RET_CHECK(decode_input_lock_and_addr)
+        << "Failed to lock decode input buffer.";
+    int32_t* decode_input_ptr =
+        static_cast<int32_t*>(decode_input_lock_and_addr->second);
+    auto& decode_input_pos_buffer =
+        decode_input_buffers_[signatures_.input_positions];
+    auto decode_input_pos_lock_and_addr =
+        ::litert::TensorBufferScopedLock::Create(decode_input_pos_buffer);
+    RET_CHECK(decode_input_pos_lock_and_addr)
+        << "Failed to lock decode input position buffer.";
+    auto* decode_input_pos_ptr =
+        static_cast<int32_t*>(decode_input_pos_lock_and_addr->second);
+    bool has_input_attn_mask = signatures_.input_attn_mask.has_value();
+    decode_input_ptr[0] = id;
+    if (has_input_attn_mask) {
+      RET_CHECK(signatures_.input_attn_mask_data_type.has_value())
+          << "Attention mask data type is not provided.";
+      RETURN_IF_ERROR(InitializeAttentionMask(
+          decode_input_buffers_[signatures_.input_attn_mask.value()],
+          signatures_.input_attn_mask_data_type.value(),
+          IsCalculationPrecisionF16()));
+      RETURN_IF_ERROR(FillAttentionMask(
+          decode_input_buffers_[signatures_.input_attn_mask.value()],
+          current_step_, /*steps=*/1,
+          signatures_.input_attn_mask_data_type.value()));
+    }
+    decode_input_pos_ptr[0] = current_step_;
+  }
+
+  absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
+      decode_input_buffers;
+  for (const auto& [input_name, input_buffer] : decode_input_buffers_) {
+    auto duplicated_input_buffer = input_buffer.Duplicate();
+    RET_CHECK(duplicated_input_buffer) << "Failed to duplicate input buffer.";
+    decode_input_buffers[input_name] = std::move(*duplicated_input_buffer);
+  }
+  for (const auto& [input_name, input_buffer] : *input_kv_cache_buffers_) {
+    auto duplicated_input_buffer = input_buffer.Duplicate();
+    RET_CHECK(duplicated_input_buffer) << "Failed to duplicate input buffer.";
+    decode_input_buffers[input_name] = std::move(*duplicated_input_buffer);
+  }
+  absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
+      decode_output_buffers;
+  for (const auto& [output_name, output_buffer] : decode_output_buffers_) {
+    auto duplicated_output_buffer = output_buffer.Duplicate();
+    RET_CHECK(duplicated_output_buffer) << "Failed to duplicate output buffer.";
+    decode_output_buffers[output_name] = std::move(*duplicated_output_buffer);
+  }
+  for (const auto& [output_name, output_buffer] : *output_kv_cache_buffers_) {
+    auto duplicated_output_buffer = output_buffer.Duplicate();
+    RET_CHECK(duplicated_output_buffer) << "Failed to duplicate output buffer.";
+    decode_output_buffers[output_name] = std::move(*duplicated_output_buffer);
+  }
+
+  auto res = compiled_model_.Run(kDecodeSignatureRunner, decode_input_buffers,
+                                 decode_output_buffers);
+  RET_CHECK(res) << "Failed to run compiled model: " << res.Error().Message();
+  std::swap(input_kv_cache_buffers_, output_kv_cache_buffers_);
+
+  ++current_step_;
+  auto output_logits =
+      decode_output_buffers[signatures_.output_logits].Duplicate();
+  if (!output_logits.HasValue()) {
+    return absl::InternalError(output_logits.Error().Message());
+  }
+  return std::move(*output_logits);
 }
 
 absl::StatusOr<std::vector<int>> LlmLiteRtCompiledModelExecutor::SampleLogits(
