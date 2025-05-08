@@ -217,3 +217,19 @@ cc_library(
         "@litert//litert/cc:litert_tensor_buffer",  # copybara:comment_replace "@litert//litert/cc/internal:litert_tensor_buffer",
     ],
 )
+
+cc_library(
+    name = "audio_executor",
+    hdrs = ["audio_executor.h"],
+    deps = [":audio_executor_base"],
+)
+
+cc_library(
+    name = "audio_executor_base",
+    hdrs = ["audio_executor_base.h"],
+    deps = [
+        ":llm_executor_io_types",
+        "@com_google_absl//absl/status:statusor",
+        "@litert//litert/cc:litert_tensor_buffer",  # copybara:comment_replace "@litert//litert/cc/internal:litert_tensor_buffer",
+    ],
+)
