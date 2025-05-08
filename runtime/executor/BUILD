@@ -41,6 +41,17 @@ cc_library(
     ],
 )
 
+cc_test(
+    name = "litert_compiled_model_executor_utils_test",
+    srcs = ["litert_compiled_model_executor_utils_test.cc"],
+    deps = [
+        ":litert_compiled_model_executor_utils",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/strings:string_view",
+    ],
+)
+
 cc_library(
     name = "llm_litert_compiled_model_executor",
     srcs = ["llm_litert_compiled_model_executor.cc"],
@@ -65,6 +76,7 @@ cc_library(
         "@litert//litert/cc/internal:litert_environment",
         "@litert//litert/cc/internal:litert_options",
         "@litert//litert/cc/internal:litert_tensor_buffer",
+        "@litert//litert/cc/options:litert_cpu_options",
         "//runtime/components:sampler",
         "//runtime/components:sampler_factory",
         "//runtime/util:convert_tensor_buffer",

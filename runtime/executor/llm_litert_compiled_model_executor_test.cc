@@ -1,3 +1,17 @@
+// Copyright 2025 The ODML Authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #include "runtime/executor/llm_litert_compiled_model_executor.h"
 
 #include <cstdint>
@@ -22,6 +36,8 @@
 namespace litert::lm {
 namespace {
 constexpr char kPrefillDecodeModelNameInTaskBundle[] = "TF_LITE_PREFILL_DECODE";
+const int kMaxNumTokens = 32;
+const int kNumThreads = 4;
 
 using ::litert::Expected;
 using ::litert::Model;
@@ -60,6 +76,10 @@ TEST(LlmLiteRTCompiledModelExecutorTest, CreateExecutorTest) {
   ModelAssets model_assets;
   model_assets.model_paths.push_back(model_path);
   LlmExecutorSettings executor_settings(model_assets);
+  executor_settings.SetMaxNumTokens(kMaxNumTokens);
+  ::litert::lm::CpuConfig config;
+  config.number_of_threads = kNumThreads;
+  executor_settings.SetBackendConfig(config);
   executor_settings.SetBackend(Backend::CPU);
   ASSERT_OK_AND_ASSIGN(auto executor,
                        LlmLiteRtCompiledModelExecutor::Create(

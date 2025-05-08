@@ -1,3 +1,17 @@
+// Copyright 2025 The ODML Authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 
 #include <algorithm>
@@ -14,6 +28,7 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/match.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_buffer_ref.h"  // from @litert
 #include "litert/cc/litert_expected.h"  // from @litert
@@ -337,6 +352,41 @@ BuildLiteRtCompiledModelResources(const std::string& model_path) {
     executor_model_resources->litert_model = std::move(*litert_model);
   }
   return executor_model_resources;
+}
+
+// 40% of the time in JoinPath() is from calls with 2 arguments, so we
+// specialize that case.
+absl::StatusOr<std::string> JoinPath(absl::string_view path1,
+                                     absl::string_view path2) {
+  if (path1.empty()) return absl::InvalidArgumentError("Empty path1.");
+  if (path2.empty()) return absl::InvalidArgumentError("Empty path2.");
+  if (path1.back() == '/') {
+    if (path2.front() == '/')
+      return absl::StrCat(path1, absl::ClippedSubstr(path2, 1));
+  } else {
+    if (path2.front() != '/') return absl::StrCat(path1, "/", path2);
+  }
+  return absl::StrCat(path1, path2);
+}
+
+std::pair<absl::string_view, absl::string_view> SplitPath(
+    absl::string_view path) {
+  absl::string_view::size_type pos = path.find_last_of('/');
+
+  // Handle the case with no '/' in 'path'.
+  if (pos == absl::string_view::npos)
+    return std::make_pair(path.substr(0, 0), path);
+
+  // Handle the case with a single leading '/' in 'path'.
+  if (pos == 0)
+    return std::make_pair(path.substr(0, 1), absl::ClippedSubstr(path, 1));
+
+  return std::make_pair(path.substr(0, pos),
+                        absl::ClippedSubstr(path, pos + 1));
+}
+
+absl::string_view Basename(absl::string_view path) {
+  return SplitPath(path).second;
 }
 
 }  // namespace litert::lm

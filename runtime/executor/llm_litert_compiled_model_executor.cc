@@ -1,3 +1,17 @@
+// Copyright 2025 The ODML Authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #include "runtime/executor/llm_litert_compiled_model_executor.h"
 
 #include <cstdint>
@@ -22,6 +36,7 @@
 #include "litert/cc/litert_model.h"  // from @litert
 #include "litert/cc/litert_options.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "litert/cc/options/litert_cpu_options.h"  // from @litert
 #include "runtime/components/sampler_factory.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/executor/llm_executor_io_types.h"
@@ -456,19 +471,41 @@ absl::StatusOr<int> LlmLiteRtCompiledModelExecutor::GetVocabSize() {
 // Creates a LlmLiteRtCompiledModelExecutor from a LiteRt model.
 absl::StatusOr<std::unique_ptr<LlmLiteRtCompiledModelExecutor>>
 LlmLiteRtCompiledModelExecutor::Create(
-    const LlmExecutorSettings& executor_config, ::litert::Model& litert_model) {
+    const LlmExecutorSettings& executor_settings,
+    ::litert::Model& litert_model) {
   // For the LlmLiteRtCompiledModelExecutor, ML_DRIFT backend is used by
   // default.
   // TODO(b/405424188): - Add support for NPU backends.
   auto compilation_options = ::litert::Options::Create();
-  switch (executor_config.GetBackend()) {
-    case Backend::CPU:
+  switch (executor_settings.GetBackend()) {
+    case Backend::CPU: {
       // TODO: b/403132820 - Add accelerator compilation options for XNNPACK.
+      Expected<CpuOptions> cpu_compilation_options = CpuOptions::Create();
+      const uint32_t num_threads =
+          executor_settings.GetBackendConfig<CpuConfig>()->number_of_threads;
+      cpu_compilation_options->SetNumThreads(num_threads);
+      std::string weight_cache_path = executor_settings.GetCacheDir();
+      if (weight_cache_path != ":nocache") {
+        std::string model_path =
+            executor_settings.GetModelAssets().model_paths[0];
+        if (weight_cache_path.empty()) {
+          weight_cache_path = absl::StrCat(model_path, ".xnnpack_cache");
+        } else {
+          ASSIGN_OR_RETURN(weight_cache_path,
+                           JoinPath(weight_cache_path, Basename(model_path)));
+        }
+
+        cpu_compilation_options->SetXNNPackWeightCachePath(
+            weight_cache_path.c_str());
+      }
+      compilation_options->AddOpaqueOptions(
+          std::move(*cpu_compilation_options));
       compilation_options->SetHardwareAccelerators(kLiteRtHwAcceleratorCpu);
       break;
+    }
     default:
-      return absl::InvalidArgumentError(
-          absl::StrCat("Unsupported backend: ", executor_config.GetBackend()));
+      return absl::InvalidArgumentError(absl::StrCat(
+          "Unsupported backend: ", executor_settings.GetBackend()));
   }
 
   auto lrt_env = ::litert::Environment::Create({});
