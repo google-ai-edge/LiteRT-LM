@@ -45,6 +45,8 @@ using odml::infra::LlmLiteRtNpuCompiledModelExecutor::ModelQuantization::
     kAllQuantized;
 using odml::infra::LlmLiteRtNpuCompiledModelExecutor::ModelQuantization::
     kTransformerStackOnlyQuantized;
+using litert::lm::ThreadPool;
+using litert::lm::ThreadOptions;
 
 odml::infra::LlmLiteRtNpuCompiledModelExecutor::ModelQuantization
 GetQuantizationSchema() {

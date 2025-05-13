@@ -21,6 +21,7 @@
 #include <optional>
 #include <vector>
 
+#include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
@@ -50,12 +51,23 @@ absl::StatusOr<int> Prefill(std::shared_ptr<LlmExecutor> executor,
 // - executor: The initialized LLM Executor to call.
 // - tokenizer: The tokenizer to decode the token ids into text.
 // - stop_token_ids: The token ids to stop the decoding process.
+// - benchmark_info: The benchmark info to record the performance metrics.
 // TODO(b/397975034): support batched output and update the logic to avoid
 // detokenizing the stop tokens.
 absl::StatusOr<Responses> Decode(std::shared_ptr<LlmExecutor> executor,
                                  std::shared_ptr<Tokenizer> tokenizer,
                                  const std::vector<int>& stop_token_ids,
                                  std::optional<BenchmarkInfo>& benchmark_info);
+
+// Runs the pipeline to decode the input prompt. The function is similar to
+// Decode, but it outputs the result using the observer to achieve streaming
+// behavior.
+// - observer: The inference observer to receive the intermediate results.
+absl::Status DecodeStreaming(
+    std::shared_ptr<LlmExecutor> executor, std::shared_ptr<Tokenizer> tokenizer,
+    const std::vector<int>& stop_token_ids,
+    std::optional<BenchmarkInfo>& benchmark_info,
+    InferenceObservable* observer);
 
 // Runs the pipeline to decode the input prompt.
 // - executor: The initialized LLM Executor to call.
@@ -64,11 +76,23 @@ absl::StatusOr<Responses> Decode(std::shared_ptr<LlmExecutor> executor,
 // - num_output_candidates: The number of output candidates to generate.
 // - sampler: The sampler to sample the token ids from the logits.
 // - decoded_ids: The decoded token ids from the external sampling process.
+// - benchmark_info: The benchmark info to record the performance metrics.
 absl::StatusOr<Responses> DecodeCustomSampling(
     std::shared_ptr<LlmExecutor> executor, std::shared_ptr<Tokenizer> tokenizer,
     const std::vector<int>& stop_token_ids, int num_output_candidates,
     Sampler& sampler, litert::TensorBuffer& decoded_ids,
     std::optional<BenchmarkInfo>& benchmark_info);
+
+// Runs the pipeline to decode the input prompt. The function is similar to
+// DecodeCustomSampling, but it outputs the result using the observer to achieve
+// streaming behavior.
+// - observer: The inference observer to receive the intermediate results.
+absl::Status DecodeCustomSamplingStreaming(
+    std::shared_ptr<LlmExecutor> executor, std::shared_ptr<Tokenizer> tokenizer,
+    const std::vector<int>& stop_token_ids, int num_output_candidates,
+    Sampler& sampler, litert::TensorBuffer& decoded_ids,
+    std::optional<BenchmarkInfo>& benchmark_info,
+    InferenceObservable* observer);
 
 }  // namespace litert::lm
 

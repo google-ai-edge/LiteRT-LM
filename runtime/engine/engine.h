@@ -20,6 +20,7 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/time/time.h"  // from @com_google_absl
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
 
@@ -42,15 +43,27 @@ class Engine {
     // This is a blocking call and the function will return when the prefill
     // process is done.
     virtual absl::Status RunPrefill(absl::string_view input) = 0;
-    // This is a not blocking call and the function will return right away.
+
+    // This is a not blocking call and the function will return right away. The
+    // processing status will be signaled through the observer.
     virtual absl::Status RunPrefillAsync(absl::string_view input,
-                                         InferenceObservable* observer) = 0;
+                                         InferenceObservable* observer) {
+      return absl::UnimplementedError("Not implemented.");
+    }
 
     // Starts the decoding process for the model to predict the response based
     // on the input prompt/query added after using RunPrefill* functions.
     // This is a blocking call and the function will return when the decoding
     // process is done.
     virtual absl::StatusOr<Responses> RunDecode() = 0;
+
+    // Startes the decoding process for the model to predict the response based
+    // on the input prompt/query added after using RunPrefill* functions.
+    // This is a not blocking call and the function will return right away. The
+    // result will be streamed through the observer.
+    virtual absl::Status RunDecodeAsync(InferenceObservable* observer) {
+      return absl::UnimplementedError("Not implemented.");
+    }
 
     // Returns the benchmark info for the session. Returns error if the
     // benchmark is not enabled.
@@ -64,9 +77,14 @@ class Engine {
   // Method to create the Session.
   virtual absl::StatusOr<std::unique_ptr<Session>> CreateSession(
       const SessionConfig& session_config) const = 0;
+
+  // Waits until the engine is done with all the tasks. The function will
+  // return error if the timeout is reached.
+  virtual absl::Status WaitUntilDone(absl::Duration timeout) {
+    return absl::UnimplementedError("Not implemented.");
+  }
 };
 
 }  // namespace litert::lm
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_RUNTIME_ENGINE_ENGINE_H_
-

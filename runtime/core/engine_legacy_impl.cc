@@ -25,6 +25,7 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/time/time.h"  // from @com_google_absl
 #include "third_party/odml/infra/genai/inference/executor/litert_executor_utils.h"
 #include "third_party/odml/infra/genai/inference/executor/llm_litert_opencl_executor.h"
 #include "third_party/odml/infra/genai/inference/executor/llm_litert_xnnpack_executor.h"
@@ -83,7 +84,9 @@ absl::StatusOr<std::unique_ptr<LlmExecutor>> BuildExecutor(
 
 class EngineImpl : public Engine {
  public:
-  ~EngineImpl() override = default;
+  ~EngineImpl() override {
+    ABSL_QCHECK_OK(WaitUntilDone(absl::Minutes(10)));
+  }
 
   explicit EngineImpl(const EngineSettings& engine_settings) {
     ABSL_LOG(INFO) << "Constructing legacy EngineImpl...";
@@ -156,6 +159,10 @@ class EngineImpl : public Engine {
         proto::SamplerParameters::TYPE_UNSPECIFIED);
     return InitializeSession(executor_, tokenizer_, stop_token_ids_, config,
                              benchmark_info_, worker_thread_pool_);
+  }
+
+  absl::Status WaitUntilDone(absl::Duration timeout) override {
+    return worker_thread_pool_->WaitUntilDone(timeout);
   }
 
  private:

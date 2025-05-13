@@ -33,6 +33,7 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/time/time.h"  // from @com_google_absl
 #include "runtime/engine/engine.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
@@ -64,6 +65,9 @@ using ::litert::lm::GpuConfig;
 using ::litert::lm::InferenceObservable;
 using ::litert::lm::LlmExecutorSettings;
 using ::litert::lm::ModelAssets;
+
+// Timeout duration for waiting until the engine is done with all the tasks.
+const absl::Duration kWaitUntilDoneTimeout = absl::Minutes(10);
 
 absl::Status MainHelper(int argc, char** argv) {
   absl::ParseCommandLine(argc, argv);
@@ -123,10 +127,9 @@ absl::Status MainHelper(int argc, char** argv) {
     absl::Status status =
         (*session)->RunPrefillAsync(input_prompt, &observable);
     ABSL_CHECK_OK(status);
-    // TODO(b/415861485): Use the RunDecodeAsync when it is ready.
-    auto responses = (*session)->RunDecode();
-    ABSL_CHECK_OK(responses);
-    ABSL_LOG(INFO) << "Responses: " << *responses;
+    status = (*session)->RunDecodeAsync(&observable);
+    ABSL_CHECK_OK(status);
+    ABSL_CHECK_OK((*llm)->WaitUntilDone(kWaitUntilDoneTimeout));
   } else {
     absl::Status status = (*session)->RunPrefill(input_prompt);
     auto responses = (*session)->RunDecode();

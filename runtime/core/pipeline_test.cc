@@ -24,6 +24,23 @@ namespace {
 constexpr char kTestdataDir[] =
     "litert_lm/runtime/components/testdata/";
 
+// Test observer to collect the streaming results.
+class TestObserver : public InferenceObservable {
+ public:
+  explicit TestObserver(int num_candidates) {
+    responses_.resize(num_candidates);
+  }
+  void OnNext(const Responses& responses) override {
+    for (int i = 0; i < responses.GetNumOutputCandidates(); ++i) {
+      responses_[i] += *(responses.GetResponseTextAt(i));
+    }
+  }
+  const std::vector<std::string>& GetResponses() const { return responses_; }
+
+ private:
+  std::vector<std::string> responses_;
+};
+
 class PipelineTest : public testing::Test {
  protected:
   void SetUp() override {
@@ -68,6 +85,14 @@ TEST_F(PipelineTest, Decode) {
       Decode(executor_, tokenizer_, /*stop_token_ids=*/{2294}, benchmark_info);
   EXPECT_OK(responses);
   EXPECT_EQ(*(responses->GetResponseTextAt(0)), " How's it going?!");
+}
+
+TEST_F(PipelineTest, DecodeStreaming) {
+  std::optional<BenchmarkInfo> benchmark_info;
+  TestObserver observer(/*num_candidates=*/1);
+  EXPECT_OK(DecodeStreaming(executor_, tokenizer_, /*stop_token_ids=*/{2294},
+                            benchmark_info, &observer));
+  EXPECT_EQ(observer.GetResponses()[0], " How's it going?!");
 }
 
 class PipelineCustomSamplingTest : public testing::Test {
@@ -132,6 +157,27 @@ TEST_F(PipelineCustomSamplingTest, DecodeCustomSampling) {
   // The scores are all equal to 0.0f (log(1.0f)).
   EXPECT_EQ(*(responses->GetScoreAt(0)), 0.0f);
   EXPECT_EQ(*(responses->GetScoreAt(1)), 0.0f);
+}
+
+TEST_F(PipelineCustomSamplingTest, DecodeCustomSamplingStreaming) {
+  auto sampler_or = TopPSampler::Create(/*k=*/1, /*p=*/0.5, /*temperature=*/1.0,
+                                        /*batch_size=*/2, /*seed=*/1);
+  EXPECT_TRUE(sampler_or.ok());
+  std::unique_ptr<TopPSampler> sampler = std::move(sampler_or.value());
+
+  auto decoded_ids = CreateTensorBuffer<int>({2, 1});
+  TestObserver observer(/*num_candidates=*/2);
+  std::optional<BenchmarkInfo> benchmark_info;
+
+  EXPECT_OK(DecodeCustomSamplingStreaming(executor_, tokenizer_,
+                                          /*stop_token_ids=*/{0},
+                                          /*num_output_candidates=*/2, *sampler,
+                                          *decoded_ids, benchmark_info,
+                                          &observer));
+  // First candidate: " How's it going?!".
+  EXPECT_EQ(observer.GetResponses()[0], " How's it going?!");
+  // Second candidate: " Hello World!".
+  EXPECT_EQ(observer.GetResponses()[1], " Hello World!");
 }
 
 }  // namespace

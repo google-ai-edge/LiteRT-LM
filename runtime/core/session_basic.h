@@ -62,6 +62,9 @@ class SessionBasic : public Engine::Session {
 
   absl::StatusOr<Responses> RunDecode() override;
 
+  absl::Status RunDecodeAsync(
+      InferenceObservable* observer) override;
+
   absl::StatusOr<BenchmarkInfo> GetBenchmarkInfo() override;
 
  private:
@@ -85,9 +88,11 @@ class SessionBasic : public Engine::Session {
   absl::Status PrefillInternal(absl::string_view input,
                                bool wait_for_completion);
 
-  // The internal function to decode the input prompt. It is for convenience to
+  // The internal functions to decode the input prompt. It is for convenience to
   // wrap it with lambda function for scheduling.
   absl::StatusOr<Responses> DecodeInternal();
+  absl::Status DecodeInternalStreaming(
+      InferenceObservable* observer = nullptr);
 
   // The executor used for run the LLM for prefill/decode.
   std::shared_ptr<LlmExecutor> executor_;

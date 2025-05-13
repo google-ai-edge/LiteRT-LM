@@ -26,6 +26,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/time/time.h"  // from @com_google_absl
 #include "runtime/components/sentencepiece_tokenizer.h"
 #include "runtime/components/tokenizer.h"
 #include "runtime/core/session_factory.h"
@@ -36,12 +37,12 @@
 #include "runtime/executor/llm_executor.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/llm_litert_compiled_model_executor.h"
+#include "runtime/framework/thread_options.h"
+#include "runtime/framework/threadpool.h"
 #include "runtime/proto/sampler_params.pb.h"
 #include "runtime/util/external_file.pb.h"
 #include "runtime/util/model_asset_bundle_resources.h"
 #include "runtime/util/status_macros.h"
-#include "runtime/framework/threadpool.h"
-#include "runtime/framework/thread_options.h"
 
 namespace litert::lm {
 namespace {
@@ -68,7 +69,7 @@ absl::StatusOr<std::unique_ptr<LlmExecutor>> BuildLitertCompiledModelExecutor(
 
 class EngineImpl : public Engine {
  public:
-  ~EngineImpl() override = default;
+  ~EngineImpl() override { ABSL_QCHECK_OK(WaitUntilDone(absl::Minutes(10))); }
 
   explicit EngineImpl(const EngineSettings& engine_settings) {
     if (engine_settings.IsBenchmarkEnabled()) {
@@ -129,6 +130,9 @@ class EngineImpl : public Engine {
     return InitializeSession(executor_, tokenizer_, stop_token_ids_,
                              session_config, benchmark_info_,
                              worker_thread_pool_);
+  }
+  absl::Status WaitUntilDone(absl::Duration timeout) override {
+    return worker_thread_pool_->WaitUntilDone(timeout);
   }
 
  private:

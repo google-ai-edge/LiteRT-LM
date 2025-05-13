@@ -8,7 +8,6 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include "absl/time/clock.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "runtime/components/sentencepiece_tokenizer.h"
 #include "runtime/components/tokenizer.h"
@@ -86,13 +85,9 @@ TEST_F(SessionBasicTest, RunDecode) {
 
 class TestObserver : public InferenceObservable {
  public:
-  void OnDone() override {
-    done_ = true;
-  }
+  void OnDone() override { done_ = true; }
 
-  bool IsDone() {
-    return done_;
-  }
+  bool IsDone() { return done_; }
 
  private:
   bool done_ = false;
@@ -106,7 +101,19 @@ TEST_F(SessionBasicTest, RunPrefillAsync) {
   TestObserver observer;
   EXPECT_OK((*session)->RunPrefillAsync("Hello World!", &observer));
   // Wait for the async call to finish.
-  absl::SleepFor(absl::Seconds(1));
+  EXPECT_OK(worker_thread_pool_->WaitUntilDone(absl::Seconds(100)));
+  EXPECT_TRUE(observer.IsDone());
+}
+
+TEST_F(SessionBasicTest, RunDecodeAsync) {
+  std::vector<int> stop_token_ids = {2294};
+  auto session = SessionBasic::Create(executor_, tokenizer_, stop_token_ids,
+                                      SessionConfig(sampler_params_),
+                                      std::nullopt, worker_thread_pool_);
+  TestObserver observer;
+  EXPECT_OK((*session)->RunPrefillAsync("Hello World!", &observer));
+  EXPECT_OK((*session)->RunDecodeAsync(&observer));
+  EXPECT_OK(worker_thread_pool_->WaitUntilDone(absl::Seconds(100)));
   EXPECT_TRUE(observer.IsDone());
 }
 

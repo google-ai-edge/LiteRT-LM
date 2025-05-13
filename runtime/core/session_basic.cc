@@ -64,11 +64,10 @@ absl::Status SessionBasic::PrefillInternal(absl::string_view input,
 absl::Status SessionBasic::RunPrefill(absl::string_view input) {
   ABSL_LOG(INFO) << "RunPrefillSync: " << input;
   absl::Status status;
-  worker_thread_pool_->Schedule(
-      [this, input_copy = std::string(input), &status]() {
-        status =
-            this->PrefillInternal(input_copy, /*wait_for_completion=*/true);
-      });
+  worker_thread_pool_->Schedule([this, input_copy = std::string(input),
+                                 &status]() {
+    status = this->PrefillInternal(input_copy, /*wait_for_completion=*/true);
+  });
   // Wait until the task is finished and timeout after 10 minutes;
   RETURN_IF_ERROR(worker_thread_pool_->WaitUntilDone(absl::Minutes(10)));
   return status;
@@ -76,17 +75,17 @@ absl::Status SessionBasic::RunPrefill(absl::string_view input) {
 
 absl::Status SessionBasic::RunPrefillAsync(absl::string_view input,
                                            InferenceObservable* observer) {
-  worker_thread_pool_->Schedule([this, input_copy = std::string(input),
-                                 observer]() {
-    absl::Status status =
-        this->PrefillInternal(input_copy, /*wait_for_completion=*/false);
-    ABSL_LOG(INFO) << "RunPrefillAsync status: " << status;
-    if (status.ok()) {
-      observer->OnDone();
-    } else {
-      observer->OnError(status);
-    }
-  });
+  worker_thread_pool_->Schedule(
+      [this, input_copy = std::string(input), observer]() {
+        absl::Status status =
+            this->PrefillInternal(input_copy, /*wait_for_completion=*/false);
+        ABSL_LOG(INFO) << "RunPrefillAsync status: " << status;
+        if (status.ok()) {
+          observer->OnDone();
+        } else {
+          observer->OnError(status);
+        }
+      });
   return absl::OkStatus();
 }
 
@@ -106,6 +105,23 @@ absl::StatusOr<Responses> SessionBasic::DecodeInternal() {
     return responses;
   }
 }
+
+absl::Status SessionBasic::DecodeInternalStreaming(
+    InferenceObservable* observer) {
+  if (sampler_ == nullptr) {
+    RETURN_IF_ERROR(DecodeStreaming(executor_, tokenizer_, stop_token_ids_,
+                                    benchmark_info_, observer));
+  } else {
+    std::vector<int> decoded_ids(kOutputBatchSize, last_prefill_token_id_);
+    auto decoded_ids_buffer =
+        CopyToTensorBuffer<int>(decoded_ids, {kOutputBatchSize, 1});
+    RETURN_IF_ERROR(DecodeCustomSamplingStreaming(
+        executor_, tokenizer_, stop_token_ids_, /*num_output_candidates=*/1,
+        *sampler_, *decoded_ids_buffer, benchmark_info_, observer));
+  }
+  return absl::OkStatus();
+}
+
 absl::StatusOr<Responses> SessionBasic::RunDecode() {
   ABSL_LOG(INFO) << "RunDecodeSync";
   absl::StatusOr<Responses> responses;
@@ -113,6 +129,14 @@ absl::StatusOr<Responses> SessionBasic::RunDecode() {
       [this, &responses]() { responses = this->DecodeInternal(); });
   RETURN_IF_ERROR(worker_thread_pool_->WaitUntilDone(kTimeoutDuration));
   return responses;
+}
+
+absl::Status SessionBasic::RunDecodeAsync(InferenceObservable* observer) {
+  ABSL_LOG(INFO) << "RunDecodeAsync";
+  worker_thread_pool_->Schedule([this, observer]() {
+    absl::Status staus = this->DecodeInternalStreaming(observer);
+  });
+  return absl::OkStatus();
 }
 
 absl::StatusOr<BenchmarkInfo> SessionBasic::GetBenchmarkInfo() {
