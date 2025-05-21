@@ -38,6 +38,7 @@
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/cc/options/accelerator_options.h"  // from @litert
 #include "litert/cc/options/litert_cpu_options.h"  // from @litert
+#include "litert/cc/options/litert_runtime_options.h"  // from @litert
 #include "runtime/components/model_resources.h"
 #include "runtime/components/sampler_factory.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
@@ -527,6 +528,10 @@ LlmLiteRtCompiledModelExecutor::Create(
         cpu_compilation_options->SetXNNPackWeightCachePath(
             weight_cache_path.c_str());
       }
+      Expected<RuntimeOptions> runtime_options =
+          RuntimeOptions::Create();
+      runtime_options->SetShloCompositeInlining(true);
+      compilation_options->AddRuntimeOptions(std::move(*runtime_options));
       compilation_options->AddOpaqueOptions(
           std::move(*cpu_compilation_options));
       compilation_options->SetHardwareAccelerators(kLiteRtHwAcceleratorCpu);
