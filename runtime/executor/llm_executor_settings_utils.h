@@ -15,13 +15,9 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_LLM_EXECUTOR_SETTINGS_UTILS_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_LLM_EXECUTOR_SETTINGS_UTILS_H_
 
-#include <memory>
-
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "third_party/odml/infra/genai/inference/proto/llm_inference_engine.pb.h"
 #include "runtime/executor/llm_executor_settings.h"
-#include "runtime/util/scoped_file.h"
 
 namespace litert::lm {
 
@@ -35,22 +31,6 @@ absl::StatusOr<Backend> ConvertBackend(const SessionConfig::Backend& backend);
 // conversion fails, return the error.
 absl::StatusOr<ActivationDataType> ConvertActivationDataType(
     const SessionConfig::ActivationDataType& activation_data_type);
-
-// Infer the file format from the contents of the file, or return an error if
-// the file format cannot be inferred.
-absl::StatusOr<FileFormat> GetFileFormatFromFileContents(
-    absl::string_view contents);
-
-// Infer the file format from the file path, or return an error if the file
-// format cannot be inferred.
-absl::StatusOr<FileFormat> GetFileFormatFromPath(absl::string_view model_path);
-
-// Infer the file format from the file path or the file contents, or return an
-// error if the file format cannot be inferred. This will prefer the model path
-// if provided.
-absl::StatusOr<FileFormat> GetFileFormat(
-    absl::string_view model_path,
-    std::shared_ptr<ScopedFile> scoped_file = nullptr);
 
 }  // namespace litert::lm
 

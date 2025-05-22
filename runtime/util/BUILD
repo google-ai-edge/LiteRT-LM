@@ -65,6 +65,38 @@ cc_test(
 )
 
 cc_library(
+    name = "file_format_util",
+    srcs = ["file_format_util.cc"],
+    hdrs = ["file_format_util.h"],
+    deps = [
+        ":litert_status_util",
+        ":memory_mapped_file",
+        ":scoped_file",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "//runtime/executor:llm_executor_settings",
+    ],
+)
+
+cc_test(
+    name = "file_format_util_test",
+    srcs = ["file_format_util_test.cc"],
+    data = ["//runtime/testdata"],
+    deps = [
+        ":file_format_util",
+        ":memory_mapped_file",
+        ":scoped_file",
+        ":test_utils",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/strings:string_view",
+        "//runtime/executor:llm_executor_settings",
+    ],
+)
+
+cc_library(
     name = "litert_status_util",
     srcs = ["litert_status_util.cc"],
     hdrs = [
