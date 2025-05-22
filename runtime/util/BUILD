@@ -347,6 +347,19 @@ cc_library(
 )
 
 cc_library(
+    name = "status_macros",
+    hdrs = ["status_macros.h"],
+    compatible_with = [
+        "//buildenv/target:prod",
+        "//buildenv/target:non_prod",
+    ],
+    deps = [
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+    ],
+)
+
+cc_library(
     name = "litert_lm_loader",
     srcs = ["litert_lm_loader.cc"],
     hdrs = ["litert_lm_loader.h"],
