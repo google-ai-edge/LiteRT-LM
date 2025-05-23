@@ -83,5 +83,5 @@ message TokenUnion {
 }
 
 message TokenIds {
-  repeated int32 token_ids = 1;
+  repeated int32 ids = 1;
 }

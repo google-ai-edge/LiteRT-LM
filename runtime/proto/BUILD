@@ -15,7 +15,7 @@
 package(
     default_hdrs_check = "strict",
     default_visibility = [
-        "//:__subpackages__",
+        "//third_party/odml:__subpackages__",
     ],
 )
 
