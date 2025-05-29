@@ -65,6 +65,8 @@ absl::StatusOr<Backend> GetBackendFromString(absl::string_view backend_str) {
     backend = Backend::CPU_ARTISAN;
   } else if (absl::EqualsIgnoreCase(backend_str, "google_tensor_artisan")) {
     backend = Backend::GOOGLE_TENSOR_ARTISAN;
+  } else if (absl::EqualsIgnoreCase(backend_str, "google_tensor")) {
+    backend = Backend::GOOGLE_TENSOR;
   } else {
     return absl::InvalidArgumentError(
         absl::StrCat("Unsupported backend: ", backend_str));

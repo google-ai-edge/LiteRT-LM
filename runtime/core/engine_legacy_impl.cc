@@ -26,6 +26,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
+#include "third_party/odml/infra/genai/inference/executor/google_tensor_single_graph/llm_litert_google_tensor_single_graph_executor.h"
 #include "third_party/odml/infra/genai/inference/executor/litert_executor_utils.h"
 #include "third_party/odml/infra/genai/inference/executor/llm_litert_opencl_executor.h"
 #include "third_party/odml/infra/genai/inference/executor/llm_litert_xnnpack_executor.h"
@@ -70,6 +71,12 @@ absl::StatusOr<std::unique_ptr<LlmExecutor>> BuildExecutor(
     ASSIGN_OR_RETURN(executor, oi::LlmLiteRTOpenClExecutor::Create(
                                    engine_settings.GetMainExecutorSettings(),
                                    *model_resources));
+  } else if (engine_settings.GetMainExecutorSettings().GetBackend() ==
+             Backend::GOOGLE_TENSOR) {
+    ASSIGN_OR_RETURN(executor,
+                     oi::LlmLiteRTGoogleTensorSingleGraphExecutor::Create(
+                         engine_settings.GetMainExecutorSettings(),
+                         *model_resources->model));
   } else {
     return absl::InvalidArgumentError(
         absl::StrCat("Unsupported backend: ",
