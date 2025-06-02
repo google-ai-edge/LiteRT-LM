@@ -504,7 +504,7 @@ LlmLiteRtCompiledModelExecutor::Create(
         gpu_compilation_options->SetSerializeProgramCache(false);
         gpu_compilation_options->SetSerializeExternalTensors(true);
       }
-      gpu_compilation_options->EnableNoImmutableExternalTensorsMode(true);
+      gpu_compilation_options->EnableNoExternalTensorsMode(true);
       compilation_options->AddOpaqueOptions(
           std::move(*gpu_compilation_options));
       compilation_options->SetHardwareAccelerators(kLiteRtHwAcceleratorGpu);
