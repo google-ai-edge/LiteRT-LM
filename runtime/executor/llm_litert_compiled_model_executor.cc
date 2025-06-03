@@ -614,6 +614,9 @@ LlmLiteRtCompiledModelExecutor::Create(
         gpu_compilation_options->SetSerializeExternalTensors(true);
       }
       gpu_compilation_options->EnableNoImmutableExternalTensorsMode(true);
+      // This option prevents KVCache handling from being affected by
+      // NoExternalTensorsMode.
+      gpu_compilation_options->AddExternalTensorPattern("kv_cache_");
       compilation_options->AddOpaqueOptions(
           std::move(*gpu_compilation_options));
       compilation_options->SetHardwareAccelerators(kLiteRtHwAcceleratorGpu);
