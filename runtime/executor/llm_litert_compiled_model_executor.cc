@@ -285,7 +285,7 @@ absl::Status LlmLiteRtCompiledModelExecutor::Decode(
   RETURN_IF_ERROR(SampleLogits(decoded_logits_, output_tokens));
   LITERT_ASSIGN_OR_RETURN_ABSL(
       auto lock_and_addr, ::litert::TensorBufferScopedLock::Create(
-                              output_tokens, TensorBuffer::LockMode::kWrite));
+                              output_tokens));
   auto output_tokens_ptr = static_cast<int32_t*>(lock_and_addr.second);
   if (output_tokens_ptr[0] < 0) {
     ABSL_LOG(WARNING) << "Invalid decode and sample result. The sampled token "
