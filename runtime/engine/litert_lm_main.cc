@@ -47,7 +47,7 @@
 
 ABSL_FLAG(std::optional<std::string>, backend, "gpu",
           "Executor backend to use for LLM execution (cpu, gpu, etc.)");
-ABSL_FLAG(std::string, model_path, "", "Model path to use for LLM execution.");
+ABSL_FLAG(std::string, model, "", "Model file to use for LLM execution.");
 ABSL_FLAG(std::string, input_prompt,
           "What is the tallest building in the world?",
           "Input prompt to use for testing LLM execution.");
@@ -107,7 +107,7 @@ absl::Status MainHelper(int argc, char** argv) {
       LiteRtGetDefaultLogger(),
       AbslMinLogLevelToLiteRtLogSeverity(absl::MinLogLevel()));
 
-  const std::string model_path = absl::GetFlag(FLAGS_model_path);
+  const std::string model_path = absl::GetFlag(FLAGS_model);
   if (model_path.empty()) {
     return absl::InvalidArgumentError("Model path is empty.");
   }

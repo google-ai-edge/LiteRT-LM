@@ -20,7 +20,7 @@ bazel build //runtime/engine:litert_lm_main
 # Run litert_lm_main with a model .litertlm file.
 bazel-bin/runtime/engine/litert_lm_main \
     --backend=cpu \
-    --model_path=<model .litertlm file>
+    --model=<model .litertlm file>
 ```
 
 ### Android
@@ -42,7 +42,7 @@ adb push <model .litertlm file> /data/local/tmp
 # Run litert_lm_main with a model .litertlm file on target device.
 adb shell /data/local/tmp/litert_lm_main \
     --backend=cpu \
-    --model_path=<model .litertlm file>
+    --model=<model .litertlm file>
 ```
 
 To run on GPU, `libLiteRtGpuAccelerator.so` and `libLiteRtTopKOpenClSampler.so`
@@ -59,7 +59,7 @@ adb push prebuilt/android_arm64/*.so /data/local/tmp
 adb shell LD_LIBRARY_PATH=/data/local/tmp \
     /data/local/tmp/litert_lm_main \
     --backend=gpu \
-    --model_path=<model .litertlm file>
+    --model=<model .litertlm file>
 ```
 
 To run on Qualcomm NPU, `libLiteRtDispatch_Qualcomm.so` and
@@ -91,7 +91,7 @@ adb push <model .tflite file> /data/local/tmp
 adb shell LD_LIBRARY_PATH=/data/local/tmp \
     /data/local/tmp/litert_lm_main \
     --backend=qnn \
-    --model_path=<model .tflite file>
+    --model=<model .tflite file>
 ```
 
 ### MacOS
@@ -106,7 +106,7 @@ bazel build //runtime/engine:litert_lm_main
 # Run litert_lm_main with a model .litertlm file on MacOS.
 bazel-bin/runtime/engine/litert_lm_main \
     --backend=cpu \
-    --model_path=<model .litertlm file>
+    --model=<model .litertlm file>
 ```
 
 If bazel can't figure out the right version of MacOS SDK, append
