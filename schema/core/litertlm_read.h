@@ -118,6 +118,14 @@ absl::Status ReadTFLiteFileFromSection(
     std::unique_ptr<tflite::FlatBufferModel>* tflite_model,
     std::unique_ptr<MemoryMappedFile>* mapped_file);
 
+// Read a TF Lite file from the specified section in the LiteRT-LM file.
+// Returns InvalidArgumentError if no TFLite is found in that section.
+// In this version, the FlatBufferModel creates and owns an Allocation
+// that holds the memory for the TFLite model.
+absl::Status ReadTFLiteFileFromSection(
+    const std::string& litertlm_path, int section_idx,
+    std::unique_ptr<tflite::FlatBufferModel>* tflite_model);
+
 // Read any TF Lite from the file (convenience function if the caller knows
 // that only 1 TF Lite file exists in the LiteRT-LM file). This function will
 // not return an error if there are more than 1 TF Lite sections.
@@ -126,6 +134,14 @@ absl::Status ReadAnyTFLiteFile(
     const std::string& litertlm_path,
     std::unique_ptr<tflite::FlatBufferModel>* tflite_model,
     std::unique_ptr<MemoryMappedFile>* mapped_file);
+
+// Read any TF Lite from the file (convenience function if the caller knows
+// that only 1 TF Lite file exists in the LiteRT-LM file). This function will
+// not return an error if there are more than 1 TF Lite sections.
+// Same semantics as above (FlatBufferModel creates and owns the allocation).
+absl::Status ReadAnyTFLiteFile(
+    const std::string& litertlm_path,
+    std::unique_ptr<tflite::FlatBufferModel>* tflite_model);
 
 // Read a LlmMetadata from the specified section in the LiteRT-LM file.
 // Returns InvalidArgumentError if no LlmMetadata are found in that section.

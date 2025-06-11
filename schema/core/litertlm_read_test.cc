@@ -94,6 +94,18 @@ TEST(LiteRTLMReadTest, TFLiteRead) {
   ASSERT_EQ(model->GetModel()->subgraphs()->size(), 1);
 }
 
+TEST(LiteRTLMReadTest, TFLiteReadOwnedAllocation) {
+  const std::string input_filename =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/schema/testdata/test_tok_tfl_llm.litertlm";
+
+  std::unique_ptr<tflite::FlatBufferModel> model;
+  absl::Status result = ReadTFLiteFileFromSection(input_filename, 1, &model);
+  ASSERT_TRUE(result.ok());
+  // Verify that buffer backing TFLite is still valid and reading data works.
+  ASSERT_EQ(model->GetModel()->subgraphs()->size(), 1);
+}
+
 TEST(LiteRTLMReadTest, TFLiteReadBinaryData) {
   const auto input_filename =
       std::filesystem::path(::testing::SrcDir()) /

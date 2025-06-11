@@ -17,12 +17,14 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "runtime/util/memory_mapped_file.h"
 #include "runtime/util/scoped_file.h"
-#include "runtime/util/status_macros.h" // NOLINT
+#include "runtime/util/status_macros.h"  // NOLINT
 #include "schema/core/litertlm_header.h"
 #include "schema/core/litertlm_header_schema_generated.h"
 #include "schema/core/litertlm_utils.h"
 #include "sentencepiece_processor.h"  // from @sentencepiece
+#include "tensorflow/compiler/mlir/lite/allocation.h"  // from @tensorflow
 #include "tflite/model_builder.h"  // from @litert
+#include "tflite/stderr_reporter.h"  // from @litert
 
 namespace litert {
 namespace lm {
@@ -177,6 +179,25 @@ absl::Status ReadValueTFromSection(
 // Function to read TFLite model data from a section.
 absl::Status ReadSectionIntoTFLite(
     const std::string& litertlm_path, uint64_t begin_offset,
+    uint64_t end_offset,
+    std::unique_ptr<tflite::FlatBufferModel>* tflite_model) {
+  size_t model_size = end_offset - begin_offset;
+
+  // Create the MMappedAllocation
+  std::unique_ptr<tflite::Allocation> mmap_alloc =
+      std::make_unique<tflite::MMAPAllocation>(litertlm_path.c_str(),
+                                               begin_offset, model_size,
+                                               tflite::DefaultErrorReporter());
+
+  // Move the allocation into the FlatBufferModel and build the TFLite
+  *tflite_model =
+      tflite::FlatBufferModel::BuildFromAllocation(std::move(mmap_alloc));
+  return absl::OkStatus();
+}
+
+// Function to read TFLite model data from a section.
+absl::Status ReadSectionIntoTFLiteMappedFile(
+    const std::string& litertlm_path, uint64_t begin_offset,
     uint64_t end_offset, std::unique_ptr<tflite::FlatBufferModel>* tflite_model,
     std::unique_ptr<MemoryMappedFile>* mapped_file) {
   size_t model_size = end_offset - begin_offset;
@@ -271,6 +292,14 @@ absl::Status ReadSectionIntoBinaryData(const std::string& litertlm_path,
   return absl::OkStatus();
 }
 
+// Aliases to help disambiguate the overload of ReadTFLiteFromSection.
+using TFLiteSectionReaderFn = absl::Status (*)(
+    const std::string&, int, std::unique_ptr<tflite::FlatBufferModel>*);
+
+using TFLiteSectionReaderWithMemoryMapFn = absl::Status (*)(
+    const std::string&, int, std::unique_ptr<tflite::FlatBufferModel>*,
+    std::unique_ptr<MemoryMappedFile>*);
+
 absl::Status ReadTFLiteFileFromSection(
     const std::string& litertlm_path, int section_idx,
     std::unique_ptr<tflite::FlatBufferModel>* tflite_model,
@@ -282,8 +311,19 @@ absl::Status ReadTFLiteFileFromSection(
       std::function<absl::Status(const std::string&, uint64_t, uint64_t,
                                  std::unique_ptr<tflite::FlatBufferModel>*,
                                  std::unique_ptr<MemoryMappedFile>*)>(
-          ReadSectionIntoTFLite),
+          ReadSectionIntoTFLiteMappedFile),
       std::forward<std::unique_ptr<MemoryMappedFile>*>(mapped_file));
+}
+
+absl::Status ReadTFLiteFileFromSection(
+    const std::string& litertlm_path, int section_idx,
+    std::unique_ptr<tflite::FlatBufferModel>* tflite_model) {
+  return ReadValueTFromSection<AnySectionDataType_TFLiteModel,
+                               std::unique_ptr<tflite::FlatBufferModel>>(
+      litertlm_path, section_idx, tflite_model,
+      std::function<absl::Status(const std::string&, uint64_t, uint64_t,
+                                 std::unique_ptr<tflite::FlatBufferModel>*)>(
+          ReadSectionIntoTFLite));
 }
 
 absl::Status ReadLlmMetadataFromSection(const std::string& litertlm_path,
@@ -316,12 +356,11 @@ absl::Status ReadBinaryDataFromSection(const std::string& litertlm_path,
                                  std::string*)>(ReadSectionIntoBinaryData));
 }
 
-template <AnySectionDataType SectionT, typename T, typename... Args>
-absl::Status ReadAnyT(
-    const std::string& litertlm_path, T* data,
-    std::function<absl::Status(const std::string&, int, T*, Args...)>
-        read_data_from_section,
-    Args&&... additional_args) {
+template <AnySectionDataType SectionT, typename T, typename Callable,
+          typename... Args>
+absl::Status ReadAnyT(const std::string& litertlm_path, T* data,
+                      Callable&& read_data_from_section,
+                      Args&&... additional_args) {
   LitertlmHeader header;
 
   // Read the header information.
@@ -343,8 +382,9 @@ absl::Status ReadAnyT(
   }
 
   // Read the data from the found section.
-  return read_data_from_section(litertlm_path, section_index, data,
-                                std::forward<Args>(additional_args)...);
+  return std::forward<Callable>(read_data_from_section)(
+      litertlm_path, section_index, data,
+      std::forward<Args>(additional_args)...);
 }
 
 // Instantiation of ReadAnyT for TFLite models.
@@ -352,14 +392,22 @@ absl::Status ReadAnyTFLiteFile(
     const std::string& litertlm_path,
     std::unique_ptr<tflite::FlatBufferModel>* tflite_model,
     std::unique_ptr<MemoryMappedFile>* mapped_file) {
-  return ReadAnyT<AnySectionDataType_TFLiteModel,
-                  std::unique_ptr<tflite::FlatBufferModel>,
-                  std::unique_ptr<MemoryMappedFile>*>(
+  return ReadAnyT<
+      AnySectionDataType_TFLiteModel, std::unique_ptr<tflite::FlatBufferModel>,
+      TFLiteSectionReaderWithMemoryMapFn, std::unique_ptr<MemoryMappedFile>*>(
       litertlm_path, tflite_model,
-      std::function<absl::Status(
-          const std::string&, int, std::unique_ptr<tflite::FlatBufferModel>*,
-          std::unique_ptr<MemoryMappedFile>*)>(ReadTFLiteFileFromSection),
+      static_cast<TFLiteSectionReaderWithMemoryMapFn>(
+          ReadTFLiteFileFromSection),
       std::forward<std::unique_ptr<MemoryMappedFile>*>(mapped_file));
+}
+
+absl::Status ReadAnyTFLiteFile(
+    const std::string& litertlm_path,
+    std::unique_ptr<tflite::FlatBufferModel>* tflite_model) {
+  return ReadAnyT<AnySectionDataType_TFLiteModel,
+                  std::unique_ptr<tflite::FlatBufferModel>>(
+      litertlm_path, tflite_model,
+      static_cast<TFLiteSectionReaderFn>(ReadTFLiteFileFromSection));
 }
 
 // Instantiation of ReadAnyT for LlmMetadata.
