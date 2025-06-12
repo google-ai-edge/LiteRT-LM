@@ -21,14 +21,23 @@
 
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/memory/memory.h"  // from @com_google_absl
+#include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "litert/cc/litert_buffer_ref.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
 #include "runtime/components/model_resources.h"
-#include "runtime/components/sentencepiece_tokenizer.h"
+#include "runtime/components/tokenizer.h"
 #include "runtime/util/litert_lm_loader.h"
 #include "runtime/util/status_macros.h"  //NOLINT
+
+#if !DISABLE_SENTENCEPIECE_TOKENIZER
+#include "runtime/components/sentencepiece_tokenizer.h"
+#endif  // !DISABLE_SENTENCEPIECE_TOKENIZER
+
+#if !DISABLE_HUGGINGFACE_TOKENIZER
+#include "runtime/components/huggingface_tokenizer.h"
+#endif  // !DISABLE_HUGGINGFACE_TOKENIZER
 
 namespace litert::lm {
 
@@ -53,17 +62,56 @@ ModelResourcesLitertLm::GetTFLiteModel(ModelType model_type) {
   return model_map_[model_type];
 }
 
-absl::StatusOr<std::shared_ptr<SentencePieceTokenizer>>
+absl::StatusOr<std::shared_ptr<Tokenizer>>
 ModelResourcesLitertLm::GetTokenizer() {
   if (tokenizer_ != nullptr) {
     return tokenizer_;
   }
-  auto buffer_ref = litert_lm_loader_->GetTokenizer();
-  ASSIGN_OR_RETURN(  // NOLINT
-      auto tokenizer,
-      SentencePieceTokenizer::CreateFromBuffer(buffer_ref.StrView()));
-  tokenizer_ = (std::move(tokenizer));
-  return tokenizer_;
+
+  // Get both tokenizers. The loader will only return the first available
+  // tokenizer.
+  auto sp_tokenizer = litert_lm_loader_->GetSentencePieceTokenizer();
+  auto hf_tokenizer = litert_lm_loader_->GetHuggingFaceTokenizer();
+
+#if !DISABLE_SENTENCEPIECE_TOKENIZER
+  if (sp_tokenizer) {
+    ASSIGN_OR_RETURN(  // NOLINT
+        auto tokenizer,
+        SentencePieceTokenizer::CreateFromBuffer(sp_tokenizer->StrView()));
+    tokenizer_ = std::move(tokenizer);
+    return tokenizer_;
+  }
+#endif  // !DISABLE_SENTENCEPIECE_TOKENIZER
+
+#if !DISABLE_HUGGINGFACE_TOKENIZER
+  if (hf_tokenizer) {
+    std::string json_data(hf_tokenizer->StrData(),
+                          hf_tokenizer->StrData() + hf_tokenizer->Size());
+    ASSIGN_OR_RETURN(  // NOLINT
+        auto tokenizer, HuggingFaceTokenizer::CreateFromJson(json_data));
+    litert_lm_loader_->ClearHuggingFaceTokenizerJson();
+    tokenizer_ = std::move(tokenizer);
+    return tokenizer_;
+  }
+#endif  // !DISABLE_HUGGINGFACE_TOKENIZER
+
+#if DISABLE_SENTENCEPIECE_TOKENIZER
+  if (sp_tokenizer) {
+    return absl::UnimplementedError(
+        "SentencePiece tokenizer found, but LiteRT LM was built with "
+        "--define=DISABLE_SENTENCEPIECE_TOKENIZER.");
+  }
+#endif  // !DISABLE_SENTENCEPIECE_TOKENIZER
+
+#if DISABLE_HUGGINGFACE_TOKENIZER
+  if (hf_tokenizer) {
+    return absl::UnimplementedError(
+        "HuggingFace tokenizer found, but LiteRT LM was built with "
+        "--define=DISABLE_HUGGINGFACE_TOKENIZER.");
+  }
+#endif  // !DISABLE_HUGGINGFACE_TOKENIZER
+
+  return absl::NotFoundError("No tokenizer found in the model.");
 }
 
 absl::StatusOr<std::shared_ptr<proto::LlmMetadata>>

@@ -22,7 +22,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "litert/cc/litert_model.h"  // from @litert
 #include "runtime/components/model_resources.h"
-#include "runtime/components/sentencepiece_tokenizer.h"
+#include "runtime/components/tokenizer.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/litert_lm_loader.h"
 
@@ -37,8 +37,7 @@ class ModelResourcesLitertLm : public ModelResources {
   absl::StatusOr<std::shared_ptr<litert::Model>> GetTFLiteModel(
       ModelType model_type) override;
 
-  absl::StatusOr<std::shared_ptr<SentencePieceTokenizer>> GetTokenizer()
-      override;
+  absl::StatusOr<std::shared_ptr<Tokenizer>> GetTokenizer() override;
 
   absl::StatusOr<std::shared_ptr<proto::LlmMetadata>> GetLlmMetadata() override;
 
@@ -48,7 +47,7 @@ class ModelResourcesLitertLm : public ModelResources {
       : litert_lm_loader_(std::move(litert_lm_loader)) {}
 
   std::unordered_map<ModelType, std::shared_ptr<litert::Model>> model_map_;
-  std::shared_ptr<SentencePieceTokenizer> tokenizer_;
+  std::shared_ptr<Tokenizer> tokenizer_;
   std::shared_ptr<proto::LlmMetadata> llm_metadata_;
   // The litert lm loader, used to mmap the tokenizer and tflite model etc from
   // the .litertlm model file.

@@ -33,6 +33,7 @@
 #include "runtime/components/model_resources.h"
 #include "runtime/util/memory_mapped_file.h"
 #include "runtime/util/scoped_file.h"
+#include "runtime/util/status_macros.h"  // NOLINT
 #include "schema/core/litertlm_header_schema_generated.h"
 #include "schema/core/litertlm_read.h"
 
@@ -69,12 +70,16 @@ absl::Status LitertLmLoader::MapSections() {
     return status;
   }
 
+  bool tokenizer_found = false;
+
   // Loop through the sections and map them to the section buffers.
   auto sections = header.metadata->section_metadata()->objects();
   for (size_t i = 0; i < sections->size(); ++i) {
     const schema::SectionObject* section = sections->Get(i);
     auto items = section->items();
     BufferKey buffer_key(section->data_type());
+    BufferRef<uint8_t> buffer_ref;
+
     // Extract the specific model type from the section items KeyValuePairs.
     if (section->data_type() ==
         schema::AnySectionDataType_TFLiteModel) {
@@ -101,10 +106,50 @@ absl::Status LitertLmLoader::MapSections() {
         buffer_key =
             BufferKey(section->data_type(), ModelType::kTfLitePrefillDecode);
       }
+      buffer_ref =
+          BufferRef<uint8_t>(static_cast<uint8_t*>(memory_mapped_file_->data()),
+                             section->end_offset(), section->begin_offset());
+    } else if (section->data_type() ==
+               schema::AnySectionDataType_SP_Tokenizer) {
+#if DISABLE_SENTENCEPIECE_TOKENIZER
+      continue;
+#else
+      if (tokenizer_found) {
+        // Only load the first tokenizer that is supported, which allows users
+        // to specify a preferred tokenizer.
+        continue;
+      }
+      tokenizer_found = true;
+      buffer_ref =
+          BufferRef<uint8_t>(static_cast<uint8_t*>(memory_mapped_file_->data()),
+                             section->end_offset(), section->begin_offset());
+#endif  // DISABLE_SENTENCEPIECE_TOKENIZER
+    } else if (section->data_type() ==
+               schema::AnySectionDataType_HF_Tokenizer_Zlib) {
+#if DISABLE_HUGGINGFACE_TOKENIZER
+      continue;
+#else
+      if (tokenizer_found) {
+        // Only load the first tokenizer that is supported, which allows users
+        // to specify a preferred tokenizer.
+        continue;
+      }
+      tokenizer_found = true;
+      RETURN_IF_ERROR(schema::DecompressData(  // NOLINT
+          static_cast<uint8_t*>(memory_mapped_file_->data()) +
+              section->begin_offset(),
+          section->end_offset() - section->begin_offset(),
+          &this->hf_tokenizer_data_));
+      buffer_ref = BufferRef<uint8_t>(this->hf_tokenizer_data_.data(),
+                                      this->hf_tokenizer_data_.size(), 0);
+
+#endif  // DISABLE_HUGGINGFACE_TOKENIZER
+    } else {
+      buffer_ref =
+          BufferRef<uint8_t>(static_cast<uint8_t*>(memory_mapped_file_->data()),
+                             section->end_offset(), section->begin_offset());
     }
-    section_buffers_[buffer_key] =
-        BufferRef<uint8_t>(static_cast<uint8_t*>(memory_mapped_file_->data()),
-                           section->end_offset(), section->begin_offset());
+    section_buffers_[buffer_key] = std::move(buffer_ref);
     ABSL_LOG(INFO) << "section_index: " << i;
     ABSL_LOG(INFO) << "section_data_type: "
                    << EnumNameAnySectionDataType(section->data_type());
