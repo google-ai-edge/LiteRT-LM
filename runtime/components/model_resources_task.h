@@ -35,8 +35,7 @@ class ModelResourcesTask : public ModelResources {
   absl::StatusOr<std::shared_ptr<litert::Model>> GetTFLiteModel(
       ModelType model_type) override;
 
-  absl::StatusOr<std::shared_ptr<SentencePieceTokenizer>> GetTokenizer()
-      override;
+  absl::StatusOr<std::shared_ptr<Tokenizer>> GetTokenizer() override;
 
   absl::StatusOr<std::shared_ptr<proto::LlmMetadata>> GetLlmMetadata() override;
 

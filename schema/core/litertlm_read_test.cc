@@ -1,11 +1,13 @@
 #include "schema/core/litertlm_read.h"
 
+#include <cstdint>
 #include <filesystem>  // NOLINT: Required for path manipulation.
 #include <fstream>
 #include <ios>
 #include <iterator>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -122,11 +124,12 @@ TEST(LiteRTLMReadTest, TFLiteReadBinaryData) {
       std::filesystem::path(::testing::SrcDir()) /
       "litert_lm/schema/testdata/test_tok_tfl_llm.litertlm";
 
-  std::string data;
+  std::vector<uint8_t> data;
   absl::Status result =
       ReadBinaryDataFromSection(input_filename.string(), 3, &data);
   ASSERT_OK(result);
-  EXPECT_EQ(data, "Dummy Binary Data Content");
+  EXPECT_EQ(std::string(reinterpret_cast<char*>(data.data()), data.size()),
+            "Dummy Binary Data Content");
 }
 
 TEST(LiteRTLMReadTest, TFLiteReadAny) {

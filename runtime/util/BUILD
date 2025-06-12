@@ -373,6 +373,7 @@ cc_library(
     srcs = ["litert_lm_loader.cc"],
     hdrs = ["litert_lm_loader.h"],
     deps = [
+        ":litert_status_util",
         ":memory_mapped_file",
         ":scoped_file",
         "@com_google_absl//absl/log:absl_check",

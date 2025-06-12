@@ -7,6 +7,7 @@
 #include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "absl/status/status.h"  // from @com_google_absl
 #include "runtime/proto/llm_metadata.pb.h"
@@ -165,12 +166,20 @@ absl::Status ReadAnyHfTokenizerJson(const std::string& litertlm_path,
 // Read binary data from the specified section in the LiteRT-LM file.
 // Returns InvalidArgumentError if binary data is not found in that section.
 absl::Status ReadBinaryDataFromSection(const std::string& litertlm_path,
-                                       int section_idx, std::string* data);
+                                       int section_idx,
+                                       std::vector<uint8_t>* data);
 
 // Read any binary data from the file (convenience function if the caller knows
 // that only 1 binary data block exists in the LiteRT-LM file).
 absl::Status ReadAnyBinaryData(const std::string& litertlm_path,
-                               std::string* data);
+                               std::vector<uint8_t>* data);
+
+// Decompressed Zlib data. The first uint64_t bytes should contain the
+// uncompressed data size, the remaining bytes contain the compressed data.
+absl::Status DecompressData(uint8_t* compressed_data,
+                            size_t compressed_data_length,
+                            std::vector<uint8_t>* output);
+
 }  // end namespace schema
 }  // end namespace lm
 }  // end namespace litert

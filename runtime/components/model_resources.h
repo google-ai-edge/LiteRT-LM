@@ -26,7 +26,7 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_model.h"  // from @litert
-#include "runtime/components/sentencepiece_tokenizer.h"
+#include "runtime/components/tokenizer.h"
 #include "runtime/proto/llm_metadata.pb.h"
 
 namespace litert::lm {
@@ -93,8 +93,7 @@ class ModelResources {
   virtual absl::StatusOr<std::shared_ptr<litert::Model>> GetTFLiteModel(
       ModelType model_type) = 0;
   // Returns the tokenizer.
-  virtual absl::StatusOr<std::shared_ptr<SentencePieceTokenizer>>
-  GetTokenizer() = 0;
+  virtual absl::StatusOr<std::shared_ptr<Tokenizer>> GetTokenizer() = 0;
 
   // Returns the llm metadata.
   virtual absl::StatusOr<std::shared_ptr<proto::LlmMetadata>>

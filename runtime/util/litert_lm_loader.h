@@ -86,11 +86,33 @@ class LitertLmLoader {
       : model_file_(std::move(model_file)) {
     ABSL_CHECK_OK(Initialize());
   }
-  // Returns the tokenizer section buffer.
-  litert::BufferRef<uint8_t> GetTokenizer() {
+  // Returns the tokenizer section buffer for the SentencePiece tokenizer.
+  std::optional<litert::BufferRef<uint8_t>> GetSentencePieceTokenizer() {
+    if (!section_buffers_.contains(
+            BufferKey(schema::AnySectionDataType_SP_Tokenizer))) {
+      return std::nullopt;
+    }
     return section_buffers_[BufferKey(
         schema::AnySectionDataType_SP_Tokenizer)];
   }
+
+  // Returns the tokenizer section buffer for the HuggingFace tokenizer.
+  std::optional<litert::BufferRef<uint8_t>> GetHuggingFaceTokenizer() {
+    if (!section_buffers_.contains(
+            BufferKey(schema::AnySectionDataType_HF_Tokenizer_Zlib))) {
+      return std::nullopt;
+    }
+    if (this->hf_tokenizer_data_.empty()) {
+      ABSL_LOG(ERROR) << " HuggingFace tokenizer data already cleared.";
+      return std::nullopt;
+    }
+    return section_buffers_[BufferKey(
+        schema::AnySectionDataType_HF_Tokenizer_Zlib)];
+  }
+
+  // Clears the HuggingFace tokenizer json data to remove the JSON data from
+  // memory.
+  void ClearHuggingFaceTokenizerJson() { this->hf_tokenizer_data_.clear(); }
 
   // Returns the TFLite model section buffer.
   litert::BufferRef<uint8_t> GetTFLiteModel(ModelType model_type) {
@@ -114,6 +136,8 @@ class LitertLmLoader {
   ScopedFile model_file_;
   // The model_file_ mapped to a MemoryMappedFile.
   ::std::unique_ptr<MemoryMappedFile> memory_mapped_file_;
+  // The HuggingFace tokenizer JSON data while needed.
+  std::vector<uint8_t> hf_tokenizer_data_;
 
   // TODO (b/413793273): Add the extra names to the key to differentiate
   // between the TFLite models.

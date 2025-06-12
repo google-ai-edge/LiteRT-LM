@@ -25,17 +25,40 @@ namespace litert::lm {
 
 namespace {
 
-TEST(LitertLmLoaderTest, InitializeWithValidFile) {
+TEST(LitertLmLoaderTest, InitializeWithSentencePieceFile) {
   const auto model_path =
       std::filesystem::path(::testing::SrcDir()) /
       "litert_lm/runtime/testdata/test_lm.litertlm";
   auto model_file = ScopedFile::Open(model_path.string());
   ASSERT_TRUE(model_file.ok());
   LitertLmLoader loader(std::move(model_file.value()));
-  ASSERT_GT(loader.GetTokenizer().Size(), 0);
+  ASSERT_FALSE(loader.GetHuggingFaceTokenizer());
+  ASSERT_GT(loader.GetSentencePieceTokenizer()->Size(), 0);
   ASSERT_GT(loader.GetTFLiteModel(ModelType::kTfLitePrefillDecode).Size(), 0);
   ASSERT_GT(loader.GetLlmMetadata().Size(), 0);
 }
 
+TEST(LitertLmLoaderTest, InitializeWithHuggingFaceFile) {
+  const auto model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_hf_tokenizer.litertlm";
+  auto model_file = ScopedFile::Open(model_path.string());
+  ASSERT_TRUE(model_file.ok());
+  LitertLmLoader loader(std::move(model_file.value()));
+  ASSERT_GT(loader.GetHuggingFaceTokenizer()->Size(), 0);
+  ASSERT_FALSE(loader.GetSentencePieceTokenizer());
+}
+
+TEST(LitertLmLoaderTest, CannotLoadHuggingFaceTokenizerAfterClearing) {
+  const auto model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_hf_tokenizer.litertlm";
+  auto model_file = ScopedFile::Open(model_path.string());
+  ASSERT_TRUE(model_file.ok());
+  LitertLmLoader loader(std::move(model_file.value()));
+  ASSERT_GT(loader.GetHuggingFaceTokenizer()->Size(), 0);
+  loader.ClearHuggingFaceTokenizerJson();
+  ASSERT_FALSE(loader.GetHuggingFaceTokenizer());
+}
 }  // namespace
 }  // namespace litert::lm

@@ -257,7 +257,8 @@ absl::Status ReadSectionIntoSPTokenizer(
 
 absl::Status ReadSectionIntoBinaryData(const std::string& litertlm_path,
                                        uint64_t begin_offset,
-                                       uint64_t end_offset, std::string* data) {
+                                       uint64_t end_offset,
+                                       std::vector<uint8_t>* data) {
   // Create an ifstream from the file.
   std::ifstream input_file_stream(litertlm_path, std::ios::binary);
   if (!input_file_stream.is_open()) {
@@ -268,7 +269,7 @@ absl::Status ReadSectionIntoBinaryData(const std::string& litertlm_path,
 
   size_t size = end_offset - begin_offset;
   data->resize(size);
-  input_file_stream.read(data->data(), size);
+  input_file_stream.read(reinterpret_cast<char*>(data->data()), size);
   if (!input_file_stream) {
     return absl::InternalError(
         absl::StrFormat("Could not read %d bytes from stream.", size));
@@ -276,32 +277,25 @@ absl::Status ReadSectionIntoBinaryData(const std::string& litertlm_path,
   return absl::OkStatus();
 }
 
-absl::Status ReadSectionIntoHfTokenizerJsonData(
-    const std::string& litertlm_path, uint64_t begin_offset,
-    uint64_t end_offset, std::string* output) {
-  std::string full_binary_data;
-  RETURN_IF_ERROR(ReadSectionIntoBinaryData(litertlm_path, begin_offset,
-                                            end_offset, &full_binary_data));
-
+absl::Status DecompressData(uint8_t* compressed_data,
+                            size_t compressed_data_length,
+                            std::vector<uint8_t>* output) {
   // The first uint64_t bytes contain the compressed data size. Initialize the
   // uncompressed buffer.
-  if (full_binary_data.length() < sizeof(uint64_t)) {
+  if (compressed_data_length < sizeof(uint64_t)) {
     return absl::InternalError("Data too short to contain compressed size.");
   }
   size_t uncompressed_buffer_size;
-  std::memcpy(&uncompressed_buffer_size, full_binary_data.data(),
-              sizeof(uint64_t));
-  std::vector<Bytef> uncompressed_buffer(uncompressed_buffer_size);
+  std::memcpy(&uncompressed_buffer_size, compressed_data, sizeof(uint64_t));
+  output->resize(uncompressed_buffer_size);
 
   // Decompress the data.
-  int result = uncompress(uncompressed_buffer.data(), &uncompressed_buffer_size,
-                          reinterpret_cast<const Bytef*>(
-                              full_binary_data.data() + sizeof(uint64_t)),
-                          full_binary_data.length() - sizeof(uint64_t));
+  int result = uncompress(
+      output->data(), &uncompressed_buffer_size,
+      reinterpret_cast<const Bytef*>(compressed_data + sizeof(uint64_t)),
+      compressed_data_length - sizeof(uint64_t));
   switch (result) {
     case Z_OK:
-      output->assign(reinterpret_cast<const char*>(uncompressed_buffer.data()),
-                     uncompressed_buffer_size);
       return absl::OkStatus();
     case Z_BUF_ERROR:
       return absl::InternalError("Output buffer was not large enough.");
@@ -313,6 +307,24 @@ absl::Status ReadSectionIntoHfTokenizerJsonData(
       return absl::InternalError("Unknown decompression error " +
                                  std::to_string(result));
   }
+}
+
+absl::Status ReadSectionIntoHfTokenizerJsonData(
+    const std::string& litertlm_path, uint64_t begin_offset,
+    uint64_t end_offset, std::string* output) {
+  std::vector<uint8_t> compressed_data;
+  RETURN_IF_ERROR(ReadSectionIntoBinaryData(litertlm_path, // NOLINT
+                                            begin_offset,
+                                            end_offset, &compressed_data));
+
+  std::vector<uint8_t> uncompressed_data;
+  RETURN_IF_ERROR(DecompressData(compressed_data.data(), // NOLINT
+                                 compressed_data.size(),
+                                 &uncompressed_data));
+  output->assign(reinterpret_cast<char*>(uncompressed_data.data()),
+                 uncompressed_data.size());
+
+  return absl::OkStatus();
 }
 
 absl::Status ReadTFLiteFileFromSection(
@@ -363,12 +375,14 @@ absl::Status ReadHfTokenizerJsonFromSection(const std::string& litertlm_path,
 }
 
 absl::Status ReadBinaryDataFromSection(const std::string& litertlm_path,
-                                       int section_idx, std::string* data) {
+                                       int section_idx,
+                                       std::vector<uint8_t>* data) {
   return ReadValueTFromSection<AnySectionDataType_GenericBinaryData,
-                               std::string>(
+                               std::vector<uint8_t>>(
       litertlm_path, section_idx, data,
       std::function<absl::Status(const std::string&, uint64_t, uint64_t,
-                                 std::string*)>(ReadSectionIntoBinaryData));
+                                 std::vector<uint8_t>*)>(
+          ReadSectionIntoBinaryData));
 }
 
 template <AnySectionDataType SectionT, typename T, typename... Args>
@@ -441,10 +455,11 @@ absl::Status ReadAnySPTokenizer(
 // Read any binary data from the file (convenience function if the caller knows
 // that only 1 binary data block exists in the LiteRT-LM file).
 absl::Status ReadAnyBinaryData(const std::string& litertlm_path,
-                               std::string* data) {
-  return ReadAnyT<AnySectionDataType_GenericBinaryData, std::string>(
+                               std::vector<uint8_t>* data) {
+  return ReadAnyT<AnySectionDataType_GenericBinaryData, std::vector<uint8_t>>(
       litertlm_path, data,
-      std::function<absl::Status(const std::string&, int, std::string*)>(
+      std::function<absl::Status(const std::string&, int,
+                                 std::vector<uint8_t>*)>(
           ReadBinaryDataFromSection));
 }
 
