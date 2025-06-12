@@ -267,6 +267,7 @@ cc_library(
         "@litert//litert/cc:litert_layout",
         "@litert//litert/cc:litert_macros",
         "@litert//litert/cc:litert_model",
+        "//runtime/components:model_resources_litert_lm",
         "//runtime/util:convert_tensor_buffer",
         "//runtime/util:litert_status_util",
     ] + select({
