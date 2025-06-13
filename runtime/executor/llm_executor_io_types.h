@@ -136,6 +136,9 @@ class ExecutorAudioData {
   // Special tokens are token ids place holders for vision or audio embeddings
   // input.
   static constexpr int kSpecialToken = -2;
+  // TODO: b/410085735 - Define this to be -4 after the end of audio embedding
+  // lookup model is ready.
+  static constexpr int kEndToken = -4;
 
   ExecutorAudioData() = default;
 
