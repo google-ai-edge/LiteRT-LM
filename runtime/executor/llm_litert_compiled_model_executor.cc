@@ -184,8 +184,15 @@ absl::Status LlmLiteRtCompiledModelExecutor::PrefillInternal(
     // the next prefill or decode.
     int start_step = current_step_;
     std::vector<int> tokens_to_lookup;
-    for (int i = 0, input_idx = 0; i < ids.size() - 1;
-         input_idx++, current_step_++) {
+    int input_idx = 0;
+    int prefill_length = ids.size();
+    if (prefill_length > 1) {
+      // If the prefill length is larger than 1, we will not use the last token
+      // of the current input. Last token will be used as input in the next
+      // prefill.
+      prefill_length = ids.size() - 1;
+    }
+    for (int i = 0; i < prefill_length; input_idx++, current_step_++) {
       if (next_input_token_id_ != -1) {
         // Use next_input_token_id_ if it is valid.
         // Currently we use -1 to indicate that next_input_token_id_ is
@@ -195,7 +202,7 @@ absl::Status LlmLiteRtCompiledModelExecutor::PrefillInternal(
         // the loop.
         next_input_token_id_ = -1;
       } else {
-        tokens_to_lookup.push_back(ids[i]);
+        tokens_to_lookup.push_back(ids[input_idx]);
         // Only increase i if we used the token inside ids.
         i++;
       }
