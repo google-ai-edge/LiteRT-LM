@@ -565,6 +565,44 @@ absl::Status LlmLiteRtCompiledModelExecutor::SampleLogits(
   return absl::OkStatus();
 }
 
+absl::Status LlmLiteRtCompiledModelExecutor::SetCurrentStep(int new_step) {
+  ASSIGN_OR_RETURN(int current_external_step, GetCurrentStep());
+  RET_CHECK_LE(new_step, current_external_step)
+          .SetCode(absl::StatusCode::kInvalidArgument)
+      << "New step cannot be greater than the current step: "
+      << current_external_step;
+  RET_CHECK_GE(new_step, 0).SetCode(absl::StatusCode::kInvalidArgument)
+      << "New step cannot be negative.";
+  if (new_step == current_external_step) {
+    return absl::OkStatus();
+  }
+  // Diff indicates how many steps the user wants to roll back from current.
+  const int diff = current_external_step - new_step;
+  current_step_ -= diff;
+  if (current_step_ < 0) {
+    // Current step is negative after rolling back. This can only happen when
+    // the user wants to set the step to 0 while we have a next_input_token_id_
+    // pending. Thus we can roll back executor state to step 0.
+    current_step_ = 0;
+    next_input_token_id_ = -1;
+    processed_tokens_.clear();
+    return absl::OkStatus();
+  }
+  if (next_input_token_id_ != -1) {
+    if (next_input_token_id_ < 0) {
+      return absl::InvalidArgumentError(
+          "SetCurrentStep does not currently support rolling back vision or "
+          "audio tokens.");
+    }
+    // If we have a valid next_input_token_id_, we should still maintain one
+    // after rolling back. This is the next processed token after the new
+    // current step.
+    next_input_token_id_ = processed_tokens_[current_step_];
+  }
+  processed_tokens_.resize(current_step_);
+  return absl::OkStatus();
+}
+
 absl::Status LlmLiteRtCompiledModelExecutor::Reset() {
   current_step_ = 0;
   next_input_token_id_ = -1;
