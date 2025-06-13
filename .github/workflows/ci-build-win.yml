@@ -53,7 +53,7 @@ jobs:
 
       - name: Run bazel build on Windows
         run: |
-          bazel build --disk_cache=~/.cache/bazel-windows //...
+          bazel build --disk_cache=~/.cache/bazel-windows --define DISABLE_HUGGINGFACE_TOKENIZER=1 -- //... -//runtime/components:huggingface_tokenizer -//runtime/components:huggingface_tokenizer_test
 
       - name: Update litert_lm_main prebuilt for Windows if new version tag is pushed.
         if: github.ref_type == 'tag'
@@ -63,7 +63,7 @@ jobs:
 
       - name: Run bazel test on Windows
         run: |
-          bazel test --disk_cache=~/.cache/bazel-windows --test_output=errors //...
+          bazel test --disk_cache=~/.cache/bazel-windows --define DISABLE_HUGGINGFACE_TOKENIZER=1 --test_output=errors -- //... -//runtime/components:huggingface_tokenizer_test
 
       - name: Save bazel cache if new or changed on push.
         uses: actions/cache/save@v4
