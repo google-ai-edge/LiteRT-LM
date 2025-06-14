@@ -102,5 +102,5 @@ jobs:
             ~/.cache/bazel
             ~/.cache/bazel-linux
             ~/.cache/bazel-android
-          key: ${{ github.workflow }}-${{ hashFiles('**/WORKSPACE', '**/.bazelrc') }}-${{ hashFiles('**/BUILD*') }}-{{ github.sha }}
+          key: ${{ github.workflow }}-${{ hashFiles('**/WORKSPACE', '**/.bazelrc') }}-${{ hashFiles('**/BUILD*') }}-${{ github.sha }}
 

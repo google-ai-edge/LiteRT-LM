@@ -40,7 +40,7 @@ jobs:
           path: |
             ~/.cache/bazel
             ~/.cache/bazel-windows
-          key: ${{ github.workflow }}-${{ hashFiles('**/WORKSPACE', '**/.bazelrc') }}-${{ hashFiles('**/BUILD*') }}-{{ github.sha }}
+          key: ${{ github.workflow }}-${{ hashFiles('**/WORKSPACE', '**/.bazelrc') }}-${{ hashFiles('**/BUILD*') }}-${{ github.sha }}
           restore-keys: |
             ${{ github.workflow }}-${{ hashFiles('**/WORKSPACE', '**/.bazelrc') }}-${{ hashFiles('**/BUILD*') }}-
             ${{ github.workflow }}-${{ hashFiles('**/WORKSPACE', '**/.bazelrc') }}-
@@ -73,4 +73,4 @@ jobs:
           path: |
             ~/.cache/bazel
             ~/.cache/bazel-windows
-          key: ${{ github.workflow }}-${{ hashFiles('**/WORKSPACE', '**/.bazelrc') }}-${{ hashFiles('**/BUILD*') }}-{{ github.sha }}
+          key: ${{ github.workflow }}-${{ hashFiles('**/WORKSPACE', '**/.bazelrc') }}-${{ hashFiles('**/BUILD*') }}-${{ github.sha }}
