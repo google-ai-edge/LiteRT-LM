@@ -4,8 +4,11 @@ workspace(name = "litert_lm")
 
 # UPDATED = 2025-06-13
 LITERT_REF = "c8f55dfbf3f9cefa93528f060e0982d5247d23ae"
+
 LITERT_SHA256 = "89321b71b20102d656db92d9223280ac307286d7c45a0d1ceeb7932455e94950"
+
 TENSORFLOW_REF = "734f70856ea65331526cecb608f9f14c76aee2f2"
+
 TENSORFLOW_SHA256 = "9c5be243c8fb3d5aebce920c2df731a30649530d0f0d38a195ad5f0d7fbcb487"
 
 # buildifier: disable=load-on-top
@@ -310,6 +313,8 @@ qairt()
 load("@litert//third_party/neuro_pilot:workspace.bzl", "neuro_pilot")
 
 neuro_pilot()
+
+# Importing test.
 
 # GOOGLE TENSOR ----------------------------------------------------------------------------------
 load("@litert//third_party/google_tensor:workspace.bzl", "google_tensor")
