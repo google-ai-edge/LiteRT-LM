@@ -189,14 +189,14 @@ absl::Status LlmLiteRtCompiledModelExecutor::PrefillInternal(
     std::vector<int> tokens_to_lookup;
     // TODO(b/425396146): Add the unit tests for checking the prefill length.
     int input_idx = 0;
-    int prefill_length = ids.size();
+    std::size_t prefill_length = ids.size();
     if (prefill_length > 1) {
       // If the prefill length is larger than 1, we will not use the last token
       // of the current input. Last token will be used as input in the next
       // prefill.
       prefill_length = ids.size() - 1;
     }
-    for (int i = 0; i < prefill_length; input_idx++, current_step_++) {
+    for (std::size_t i = 0; i < prefill_length; input_idx++, current_step_++) {
       if (next_input_token_id_ != -1) {
         // Use next_input_token_id_ if it is valid.
         // Currently we use -1 to indicate that next_input_token_id_ is

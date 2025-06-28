@@ -33,7 +33,7 @@ absl::StatusOr<bool> StopTokenFound(absl::Span<const int> decoded_token_ids,
         "token found vector is %d. They should be the same.",
         decoded_token_ids.size(), stop_token_found.size()));
   }
-  for (int i = 0; i < decoded_token_ids.size(); ++i) {
+  for (size_t i = 0; i < decoded_token_ids.size(); ++i) {
     if (stop_token_found[i]) {
       continue;
     }

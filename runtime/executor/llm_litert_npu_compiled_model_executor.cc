@@ -601,7 +601,7 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::PrefillInternal(
     // prefill or decode.
     int start_step = current_step_;
     prefill_timestep_ptr[0] = start_step;
-    for (int i = 0, input_idx = 0; i < ids.size() - 1;
+    for (std::size_t i = 0, input_idx = 0; i < ids.size() - 1;
          input_idx++, current_step_++) {
       if (next_input_token_id_ != -1) {
         // Use next_input_token_id_ if it is valid.

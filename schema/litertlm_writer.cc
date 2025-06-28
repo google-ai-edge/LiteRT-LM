@@ -48,20 +48,20 @@ namespace {
 // --- Utility function to format numbers with commas ---
 std::string PrettyPrintBytes(uint64_t bytes) {
   std::string num_str = std::to_string(bytes);
-  int len = num_str.length();
+  const std::size_t len = num_str.length();
   if (len <= 3) {
     return num_str;  // No commas needed
   }
 
   std::string result = "";
-  int first_segment_len = len % 3;
+  const std::size_t first_segment_len = len % 3;
   if (first_segment_len == 0) {
     first_segment_len = 3;
   }
 
   result += num_str.substr(0, first_segment_len);
 
-  for (int i = first_segment_len; i < len; i += 3) {
+  for (std::size_t i = first_segment_len; i < len; i += 3) {
     result += ',';
     result += num_str.substr(i, 3);
   }

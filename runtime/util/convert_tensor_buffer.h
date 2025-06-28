@@ -182,7 +182,7 @@ template <typename TargetType, typename SourceType>
   auto lock_and_addr = ::litert::TensorBufferScopedLock::Create(*tensor_buffer);
   ABSL_DCHECK(lock_and_addr.HasValue());
   auto* target = static_cast<TargetType*>(lock_and_addr->second);
-  for (int i = 0; i < source.size(); ++i) {
+  for (std::size_t i = 0; i < source.size(); ++i) {
     target[i] = static_cast<TargetType>(source[i]);
   }
   return std::move(*tensor_buffer);

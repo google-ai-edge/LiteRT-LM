@@ -28,7 +28,7 @@ std::ostream& LogNestedTensorBuffer(std::ostream& os, const void* data,
   } else {
     // Log nested tensor buffers.
     int num_elements_per_col = 1;
-    for (int i = 1; i < dimensions.size(); ++i) {
+    for (std::size_t i = 1; i < dimensions.size(); ++i) {
       num_elements_per_col *= dimensions[i];
     }
 

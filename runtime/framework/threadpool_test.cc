@@ -48,7 +48,7 @@ TEST(ThreadPoolTest, SingleThread) {
     EXPECT_EQ(thread_pool.max_num_threads(), 1);
     EXPECT_EQ(thread_pool.num_threads(), 0);
 
-    for (int i = 0; i < 100; ++i) {
+    for (uint8_t i = 0; i < 100; ++i) {
       EXPECT_OK(thread_pool.Schedule([&n]() { --n; }));
     }
     EXPECT_EQ(thread_pool.num_threads(), 1);
@@ -64,7 +64,7 @@ TEST(ThreadPoolTest, MultiThreadsScheduledFast) {
     EXPECT_EQ(thread_pool.num_threads(), 0);
 
     // Schedule 100 tasks back to back.
-    for (int i = 0; i < 100; ++i) {
+    for (uint8_t i = 0; i < 100; ++i) {
       EXPECT_OK(thread_pool.Schedule([&n]() { --n; }));
     }
     // Need more workers up to max, 10.
@@ -81,7 +81,7 @@ TEST(ThreadPoolTest, MultiThreadsScheduledSlow) {
     EXPECT_EQ(thread_pool.num_threads(), 0);
 
     // Schedule 100 tasks with a delay.
-    for (int i = 0; i < 100; ++i) {
+    for (uint8_t i = 0; i < 100; ++i) {
       EXPECT_OK(thread_pool.Schedule([&n]() { --n; }));
       absl::SleepFor(absl::Milliseconds(10));
     }
@@ -120,7 +120,7 @@ TEST(ThreadPoolTest, WaitUntilIdle) {
 
   absl::Mutex mu;
   std::vector<int> v;
-  for (int i = 0; i < 10; ++i) {
+  for (uint8_t i = 0; i < 10; ++i) {
     EXPECT_OK(thread_pool.Schedule([&v, &mu, i]() {
       // Simulate a task that takes some time to execute.
       absl::SleepFor(absl::Milliseconds(50));
@@ -148,7 +148,7 @@ TEST(ThreadPoolTest, WaitUntilDone) {
 
   absl::Mutex mu;
   std::vector<int> v;
-  for (int i = 0; i < 10; ++i) {
+  for (uint8_t i = 0; i < 10; ++i) {
     EXPECT_OK(thread_pool.Schedule([&v, &mu, i]() {
       // Simulate a task that takes some time to execute.
       absl::SleepFor(absl::Milliseconds(50));

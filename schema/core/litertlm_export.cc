@@ -40,7 +40,7 @@ absl::Status WriteHeader(
 
   // All Section Object data.
   std::vector<flatbuffers::Offset<SectionObject>> section_objects_vector;
-  for (int i = 0; i < section_types.size(); ++i) {
+  for (std::size_t i = 0; i < section_types.size(); ++i) {
     auto section_object = CreateSectionObject(
         builder, builder.CreateVector(section_items_maps[i]),
         section_offsets[i].first, section_offsets[i].second, section_types[i]);

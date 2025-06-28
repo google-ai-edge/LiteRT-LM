@@ -216,7 +216,7 @@ absl::Status EmbeddingLookupText::LookupPrefill(absl::Span<const int> tokens,
   // the remaining tokens as if they were 0.
   size_t starting_token = token_offset + tokens.size();
   size_t num_tokens_to_fill = prefill_output_layout.Dimensions()[1];
-  for (int i = starting_token; i < num_tokens_to_fill; ++i) {
+  for (size_t i = starting_token; i < num_tokens_to_fill; ++i) {
     memcpy(prefill_output_ptr, default_embedding_vector_.data(),
            bytes_per_token);
     prefill_output_ptr += bytes_per_token;

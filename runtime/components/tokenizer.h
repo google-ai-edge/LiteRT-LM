@@ -74,7 +74,7 @@ class Tokenizer {
       return absl::InvalidArgumentError(
           "The previous and next token ids must have the same size.");
     }
-    for (int i = 0; i < previous_token_ids.size(); ++i) {
+    for (uint8_t i = 0; i < previous_token_ids.size(); ++i) {
       merged_token_ids[i] = previous_token_ids[i];
       merged_token_ids[i].insert(merged_token_ids[i].end(),
                                  next_token_ids[i].begin(),

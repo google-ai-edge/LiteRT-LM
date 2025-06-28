@@ -89,8 +89,8 @@ TEST_F(EmbeddingLookupTextTest, LookupDecodeVector) {
 
   size_t offset = 0;
   // Dimensions 0 and 1 both have size 1.
-  for (int idx2 = 0; idx2 < 4; ++idx2) {
-    for (int idx3 = 0; idx3 < 32; ++idx3) {
+  for (uint8_t idx2 = 0; idx2 < 4; ++idx2) {
+    for (uint8_t idx3 = 0; idx3 < 32; ++idx3) {
       // Dimensions 0 and 1 both have size 1 so offset and expected value can
       // ignore them.
       float expected_value = 10000.0 * token + 100.0 * idx2 + idx3;
@@ -125,8 +125,8 @@ TEST_F(EmbeddingLookupTextTest, LookupDecodeVectorNegativeToken) {
 
   size_t offset = 0;
   // Dimensions 0 and 1 both have size 1.
-  for (int idx2 = 0; idx2 < 4; ++idx2) {
-    for (int idx3 = 0; idx3 < 32; ++idx3) {
+  for (uint8_t idx2 = 0; idx2 < 4; ++idx2) {
+    for (uint8_t idx3 = 0; idx3 < 32; ++idx3) {
       // Dimensions 0 and 1 both have size 1 so offset and expected value can
       // ignore them.
       float expected_value = 10000.0 * 0 + 100.0 * idx2 + idx3;
@@ -152,8 +152,8 @@ TEST_F(EmbeddingLookupTextTest, LookupDecode) {
       reinterpret_cast<float*>(output_tensor_lock_and_addr->second);
 
   // Dimensions 0 and 1 both have size 1.
-  for (int idx2 = 0; idx2 < dimensions[2]; ++idx2) {
-    for (int idx3 = 0; idx3 < dimensions[3]; ++idx3) {
+  for (uint8_t idx2 = 0; idx2 < dimensions[2]; ++idx2) {
+    for (uint8_t idx3 = 0; idx3 < dimensions[3]; ++idx3) {
       // Dimensions 0 and 1 both have size 1 so offset and expected value can
       // ignore them.
       size_t offset = idx2 * dimensions[3] + idx3;
@@ -216,8 +216,8 @@ TEST_F(EmbeddingLookupTextTest, LookupPrefillVector) {
 
   size_t offset = 0;
   // Dimensions 0 and 1 both have size 1.
-  for (int idx2 = 0; idx2 < 4; ++idx2) {
-    for (int idx3 = 0; idx3 < 32; ++idx3) {
+  for (uint8_t idx2 = 0; idx2 < 4; ++idx2) {
+    for (uint8_t idx3 = 0; idx3 < 32; ++idx3) {
       // Dimensions 0 and 1 both have size 1 so offset and expected value can
       // ignore them.
       float expected_value = 10000.0 * token + 100.0 * idx2 + idx3;
@@ -252,8 +252,8 @@ TEST_F(EmbeddingLookupTextTest, LookupPrefillVectorNegativeToken) {
 
   size_t offset = 0;
   // Dimensions 0 and 1 both have size 1.
-  for (int idx2 = 0; idx2 < 4; ++idx2) {
-    for (int idx3 = 0; idx3 < 32; ++idx3) {
+  for (uint8_t idx2 = 0; idx2 < 4; ++idx2) {
+    for (uint8_t idx3 = 0; idx3 < 32; ++idx3) {
       // Dimensions 0 and 1 both have size 1 so offset and expected value can
       // ignore them.
       float expected_value = 10000.0 * 0 + 100.0 * idx2 + idx3;
@@ -285,10 +285,10 @@ TEST_F(EmbeddingLookupTextTest, LookupPrefill) {
   auto output_tensor_ptr =
       reinterpret_cast<float*>(output_tensor_lock_and_addr->second);
 
-  for (int idx0 = 0; idx0 < tokens.size(); ++idx0) {
+  for (std::size_t idx0 = 0; idx0 < tokens.size(); ++idx0) {
     int token = tokens[idx0];
-    for (int idx2 = 0; idx2 < dimensions[2]; ++idx2) {
-      for (int idx3 = 0; idx3 < dimensions[3]; ++idx3) {
+    for (std::size_t idx2 = 0; idx2 < dimensions[2]; ++idx2) {
+      for (std::size_t idx3 = 0; idx3 < dimensions[3]; ++idx3) {
         // Since dimension 1 is of size 1, the offset and expected value can
         // ignore it.
         size_t offset =
@@ -317,10 +317,10 @@ TEST_F(EmbeddingLookupTextTest, LookupPrefillDecendingTokens) {
   auto output_tensor_ptr =
       reinterpret_cast<float*>(output_tensor_lock_and_addr->second);
 
-  for (int idx0 = 0; idx0 < tokens.size(); ++idx0) {
+  for (std::size_t idx0 = 0; idx0 < tokens.size(); ++idx0) {
     int token = tokens[idx0];
-    for (int idx2 = 0; idx2 < dimensions[2]; ++idx2) {
-      for (int idx3 = 0; idx3 < dimensions[3]; ++idx3) {
+    for (std::size_t idx2 = 0; idx2 < dimensions[2]; ++idx2) {
+      for (std::size_t idx3 = 0; idx3 < dimensions[3]; ++idx3) {
         // Since dimension 1 is of size 1, the offset and expected value can
         // ignore it.
         size_t offset =
@@ -349,10 +349,10 @@ TEST_F(EmbeddingLookupTextTest, LookupPrefillRepeatedToken) {
   auto output_tensor_ptr =
       reinterpret_cast<float*>(output_tensor_lock_and_addr->second);
 
-  for (int idx0 = 0; idx0 < tokens.size(); ++idx0) {
+  for (std::size_t idx0 = 0; idx0 < tokens.size(); ++idx0) {
     int token = tokens[idx0];
-    for (int idx2 = 0; idx2 < dimensions[2]; ++idx2) {
-      for (int idx3 = 0; idx3 < dimensions[3]; ++idx3) {
+    for (std::size_t idx2 = 0; idx2 < dimensions[2]; ++idx2) {
+      for (std::size_t idx3 = 0; idx3 < dimensions[3]; ++idx3) {
         // Since dimension 1 is of size 1, the offset and expected value can
         // ignore it.
         size_t offset =
@@ -454,13 +454,13 @@ TEST_F(EmbeddingLookupTextTest, LookupPrefillLargerOutputTensor) {
   auto output_tensor_ptr =
       reinterpret_cast<float*>(output_tensor_lock_and_addr->second);
 
-  for (int idx0 = 0; idx0 < tokens.size() + 1; ++idx0) {
+  for (std::size_t idx0 = 0; idx0 < tokens.size() + 1; ++idx0) {
     int token = 0;
     if (idx0 < tokens.size()) {
       token = tokens[idx0];
     }
-    for (int idx2 = 0; idx2 < dimensions[2]; ++idx2) {
-      for (int idx3 = 0; idx3 < dimensions[3]; ++idx3) {
+    for (std::size_t idx2 = 0; idx2 < dimensions[2]; ++idx2) {
+      for (std::size_t idx3 = 0; idx3 < dimensions[3]; ++idx3) {
         // Since dimension 1 is of size 1, the offset and expected value can
         // ignore it.
         size_t offset =
@@ -501,7 +501,7 @@ TEST_F(EmbeddingLookupTextTest, LookupPrefillNegativeToken) {
 
     LITERT_ASSERT_OK_AND_ASSIGN(size_t output_tensor_size,
                                 output_tensor.Size());
-    for (int i = 0; i < output_tensor_size / sizeof(float); ++i) {
+    for (std::size_t i = 0; i < output_tensor_size / sizeof(float); ++i) {
       output_tensor_ptr[i] = filler_value;
     }
   }
@@ -515,7 +515,7 @@ TEST_F(EmbeddingLookupTextTest, LookupPrefillNegativeToken) {
   auto output_tensor_ptr =
       reinterpret_cast<float*>(output_tensor_lock_and_addr->second);
 
-  for (int idx0 = 0; idx0 < tokens.size(); ++idx0) {
+  for (std::size_t idx0 = 0; idx0 < tokens.size(); ++idx0) {
     int token = tokens[idx0];
     for (int idx2 = 0; idx2 < dimensions[2]; ++idx2) {
       for (int idx3 = 0; idx3 < dimensions[3]; ++idx3) {
@@ -570,11 +570,11 @@ TEST_F(EmbeddingLookupTextTest, LookupPrefillWithOffset) {
   auto output_tensor_ptr =
       reinterpret_cast<float*>(output_tensor_lock_and_addr->second);
 
-  for (int i = 0; i < byte_offset; ++i) {
+  for (size_t i = 0; i < byte_offset; ++i) {
     ASSERT_EQ(reinterpret_cast<uint8_t*>(output_tensor_ptr)[i], 99);
   }
 
-  for (int idx0 = 0; idx0 < tokens.size(); ++idx0) {
+  for (std::size_t idx0 = 0; idx0 < tokens.size(); ++idx0) {
     int token = tokens[idx0];
     for (int idx2 = 0; idx2 < dimensions[2]; ++idx2) {
       for (int idx3 = 0; idx3 < dimensions[3]; ++idx3) {
@@ -623,11 +623,11 @@ TEST_F(EmbeddingLookupTextTest, LookupPrefillWithOffsetAndDefaultEmbedding) {
   auto output_tensor_ptr =
       reinterpret_cast<float*>(output_tensor_lock_and_addr->second);
 
-  for (int i = 0; i < byte_offset; ++i) {
+  for (size_t i = 0; i < byte_offset; ++i) {
     ASSERT_EQ(reinterpret_cast<uint8_t*>(output_tensor_ptr)[i], 99);
   }
 
-  for (int idx0 = 0; idx0 < tokens.size(); ++idx0) {
+  for (size_t idx0 = 0; idx0 < tokens.size(); ++idx0) {
     int token = tokens[idx0];
     for (int idx2 = 0; idx2 < dimensions[2]; ++idx2) {
       for (int idx3 = 0; idx3 < dimensions[3]; ++idx3) {

@@ -131,7 +131,7 @@ TEST(LiteRTLMSectionTest, TestProtoSectionStream) {
             params_read_back.start_token().token_str());
   EXPECT_EQ(metadata.stop_tokens().size(),
             params_read_back.stop_tokens().size());
-  for (int i = 0; i < metadata.stop_tokens().size(); ++i) {
+  for (size_t i = 0; i < metadata.stop_tokens().size(); ++i) {
     EXPECT_EQ(metadata.stop_tokens(i).token_str(),
               params_read_back.stop_tokens(i).token_str());
   }

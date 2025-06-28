@@ -26,7 +26,7 @@ namespace {
 void DecodeIdsToLogits(const std::vector<int>& ids, int vocab_size,
                        ::litert::TensorBuffer& output_logits) {
   auto logits_span = ReferTensorBufferAsSpan<float>(output_logits);
-  for (int i = 0; i < ids.size(); ++i) {
+  for (std::size_t i = 0; i < ids.size(); ++i) {
     for (int j = 0; j < vocab_size; ++j) {
       int index = i * vocab_size + j;
       if (ids[i] == j) {
@@ -46,7 +46,7 @@ absl::Status CheckEquivalent(absl::Span<int> expected, absl::Span<int> actual) {
                                                    expected.size(), " but got ",
                                                    actual.size()));
   }
-  for (int i = 0; i < expected.size(); ++i) {
+  for (std::size_t i = 0; i < expected.size(); ++i) {
     if (expected[i] != actual[i]) {
       return absl::InvalidArgumentError(absl::StrCat("Expected token at index ",
                                                      i, " is ", expected[i],
@@ -116,7 +116,7 @@ absl::Status FakeLlmExecutor::Decode(
         decode_times_));
   }
   auto tokens_span = ReferTensorBufferAsSpan<int>(output_tokens);
-  for (int i = 0; i < decode_tokens_set_[decode_times_].size(); ++i) {
+  for (std::size_t i = 0; i < decode_tokens_set_[decode_times_].size(); ++i) {
     (*tokens_span)[i] = decode_tokens_set_[decode_times_][i];
   }
   decode_times_++;
