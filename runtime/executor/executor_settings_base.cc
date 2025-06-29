@@ -15,6 +15,7 @@
 #include "runtime/executor/executor_settings_base.h"
 
 #include <iostream>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <utility>
@@ -25,7 +26,6 @@
 #include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
-#include "runtime/util/file_util.h"
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/status_macros.h"  // NOLINT
 
@@ -199,10 +199,12 @@ ExecutorSettingsBase::GetWeightCacheFile(absl::string_view suffix) const {
   }
 
   if (GetCacheDir().empty()) {
-    return absl::StrCat(model_path, suffix);
+    return std::string(model_path) + std::string(suffix);
   }
 
-  return JoinPath(GetCacheDir(), absl::StrCat(Basename(model_path), suffix));
+  return (std::filesystem::path(GetCacheDir()) /
+         (std::filesystem::path(model_path).filename().string() +
+           std::string(suffix))).string();
 }
 
 }  // namespace litert::lm

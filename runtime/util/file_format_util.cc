@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 
 #include "absl/status/status.h"  // from @com_google_absl
@@ -50,11 +51,12 @@ absl::StatusOr<FileFormat> GetFileFormatFromFileContents(
 }
 
 absl::StatusOr<FileFormat> GetFileFormatFromPath(absl::string_view model_path) {
-  if (absl::EndsWith(model_path, ".tflite")) {
+  const std::string extension = std::filesystem::path(model_path).extension().string();
+  if (extension == ".tflite") {
     return FileFormat::TFLITE;
-  } else if (absl::EndsWith(model_path, ".task")) {
+  } else if (extension == ".task") {
     return FileFormat::TASK;
-  } else if (absl::EndsWith(model_path, ".litertlm")) {
+  } else if (extension == ".litertlm") {
     return FileFormat::LITERT_LM;
   }
   return absl::InvalidArgumentError("Unsupported or unknown file format.");

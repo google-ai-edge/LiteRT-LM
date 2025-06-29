@@ -16,6 +16,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <utility>
@@ -49,7 +50,6 @@
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/util/convert_tensor_buffer.h"
-#include "runtime/util/file_util.h"
 #include "runtime/util/litert_status_util.h"
 #include "runtime/util/status_macros.h"  // IWYU pragma: keep
 
@@ -631,11 +631,12 @@ LlmLiteRtCompiledModelExecutor::Create(LlmExecutorSettings executor_settings,
         ASSIGN_OR_RETURN(auto model_path,
                          executor_settings.GetModelAssets().GetPath());
         if (weight_cache_path.empty()) {
-          weight_cache_path = Dirname(model_path);
+          weight_cache_path = std::filesystem::path(model_path).parent_path().string();
         }
         gpu_compilation_options.SetSerializationDir(weight_cache_path.c_str());
-        absl::string_view model_name = Basename(model_path);
-        gpu_compilation_options.SetModelCacheKey(model_name.data());
+        std::string model_name =
+          std::filesystem::path(model_path).filename().string();
+        gpu_compilation_options.SetModelCacheKey(model_name.c_str());
         gpu_compilation_options.SetSerializeProgramCache(false);
         gpu_compilation_options.SetSerializeExternalTensors(true);
       }
@@ -659,8 +660,9 @@ LlmLiteRtCompiledModelExecutor::Create(LlmExecutorSettings executor_settings,
         if (weight_cache_path.empty()) {
           weight_cache_path = absl::StrCat(model_path, ".xnnpack_cache");
         } else {
-          ASSIGN_OR_RETURN(weight_cache_path,
-                           JoinPath(weight_cache_path, Basename(model_path)));
+          weight_cache_path = (std::filesystem::path(weight_cache_path) /
+                               std::filesystem::path(model_path).filename()
+                              ).string();
         }
         cpu_compilation_options->SetXNNPackWeightCachePath(
             weight_cache_path.c_str());

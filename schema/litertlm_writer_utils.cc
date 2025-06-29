@@ -103,7 +103,7 @@ absl::Status LitertLmWrite(const std::vector<std::string>& command_args,
   }
 
   for (const auto& filename : command_args) {
-    std::string extension = GetFileExtension(filename);
+    std::string extension = std::filesystem::path(filename).extension().string();
     ABSL_LOG(INFO) << "Processing file: " << filename
                    << " with extension: " << extension;
 

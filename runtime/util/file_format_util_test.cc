@@ -26,7 +26,6 @@
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/util/memory_mapped_file.h"
 #include "runtime/util/scoped_file.h"
-#include "runtime/util/test_utils.h"  // NOLINT
 
 namespace litert::lm {
 namespace {
