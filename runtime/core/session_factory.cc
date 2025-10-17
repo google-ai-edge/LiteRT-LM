@@ -19,8 +19,6 @@
 
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "runtime/components/preprocessor/audio_preprocessor.h"
-#include "runtime/components/preprocessor/image_preprocessor.h"
 #include "runtime/components/tokenizer.h"
 #include "runtime/core/session_basic.h"
 #include "runtime/engine/engine.h"
@@ -37,14 +35,12 @@ namespace litert::lm {
 
 absl::StatusOr<std::unique_ptr<Engine::Session>> InitializeSession(
     LlmExecutor* executor, Tokenizer* tokenizer,
-    ImagePreprocessor* image_preprocessor, VisionExecutor* vision_executor,
-    AudioPreprocessor* audio_preprocessor, AudioExecutor* audio_executor,
+    VisionExecutor* vision_executor, AudioExecutor* audio_executor,
     const SessionConfig& session_config,
     std::optional<BenchmarkInfo> benchmark_info,
     ThreadPool* absl_nonnull worker_thread_pool) {
   auto session =
-      SessionBasic::Create(executor, tokenizer, image_preprocessor,
-                           vision_executor, audio_preprocessor, audio_executor,
+      SessionBasic::Create(executor, tokenizer, vision_executor, audio_executor,
                            session_config, benchmark_info, worker_thread_pool);
   return session;
 }

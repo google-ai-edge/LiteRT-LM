@@ -38,7 +38,6 @@
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/test/matchers.h"  // from @litert
 #include "runtime/components/constrained_decoding/fake_constraint.h"
-#include "runtime/components/preprocessor/by_pass_audio_preprocessor.h"
 #include "runtime/components/sentencepiece_tokenizer.h"
 #include "runtime/components/tokenizer.h"
 #include "runtime/engine/engine_settings.h"
@@ -268,9 +267,7 @@ TEST_F(SessionBasicTest, RunPrefill) {
           /*decode_tokens=*/{
               {224}, {24}, {8}, {66}, {246}, {18}, {2295}, {2294}}));
   auto session = SessionBasic::Create(
-      executor.get(), tokenizer_.get(),
-      /*image_preprocessor=*/nullptr,
-      /*vision_executor=*/nullptr, /*audio_preprocessor=*/nullptr,
+      executor.get(), tokenizer_.get(), /*vision_executor=*/nullptr,
       /*audio_executor=*/nullptr, session_config, std::nullopt,
       worker_thread_pool_.get());
   std::vector<InputData> inputs;
@@ -294,9 +291,7 @@ TEST_F(SessionBasicTest, RunDecode) {
           /*decode_tokens=*/{
               {224}, {24}, {8}, {66}, {246}, {18}, {2295}, {2294}}));
   auto session = SessionBasic::Create(
-      executor.get(), tokenizer_.get(),
-      /*image_preprocessor=*/nullptr,
-      /*vision_executor=*/nullptr, /*audio_preprocessor=*/nullptr,
+      executor.get(), tokenizer_.get(), /*vision_executor=*/nullptr,
       /*audio_executor=*/nullptr, session_config, std::nullopt,
       worker_thread_pool_.get());
   std::vector<InputData> inputs;
@@ -326,14 +321,16 @@ TEST_F(SessionBasicTest, RunDecodeWithMultipleOutputCandidates) {
           // "Hello World!"
           /*prefill_tokens=*/{{2, 90, 547, 58, 735, 210, 466, 2294}},
           // "How's it going?", "Hello World", "How's it going?"
-          /*decode_tokens=*/{
-             {224, 90, 224},  {24, 547, 24},   {8, 58, 8},
-             {66, 735, 66},   {246, 210, 246}, {18, 466, 18},
-             {2295, 2294, 2295}, {2294, 0, 2294}}));
+          /*decode_tokens=*/{{224, 90, 224},
+                             {24, 547, 24},
+                             {8, 58, 8},
+                             {66, 735, 66},
+                             {246, 210, 246},
+                             {18, 466, 18},
+                             {2295, 2294, 2295},
+                             {2294, 0, 2294}}));
   auto session = SessionBasic::Create(
-      executor.get(), tokenizer_.get(),
-      /*image_preprocessor=*/nullptr,
-      /*vision_executor=*/nullptr, /*audio_preprocessor=*/nullptr,
+      executor.get(), tokenizer_.get(), /*vision_executor=*/nullptr,
       /*audio_executor=*/nullptr, session_config, std::nullopt,
       worker_thread_pool_.get());
   std::vector<InputData> inputs;
@@ -378,9 +375,7 @@ TEST_F(SessionBasicTest, RunDecodeWithSamplerAndConstrainedDecoding) {
           /*decode_tokens=*/{
               {224}, {24}, {8}, {66}, {246}, {18}, {2295}, {2294}}));
   auto session = SessionBasic::Create(
-      executor.get(), tokenizer_.get(),
-      /*image_preprocessor=*/nullptr,
-      /*vision_executor=*/nullptr, /*audio_preprocessor=*/nullptr,
+      executor.get(), tokenizer_.get(), /*vision_executor=*/nullptr,
       /*audio_executor=*/nullptr, session_config,
       /*benchmark_info=*/std::nullopt, worker_thread_pool_.get());
 
@@ -413,9 +408,7 @@ TEST_F(SessionBasicTest, RunDecodeWithConstrainedDecodingNoSampler) {
           /*decode_tokens=*/{
               {224}, {24}, {8}, {66}, {246}, {18}, {2295}, {2294}}));
   auto session = SessionBasic::Create(
-      executor.get(), tokenizer_.get(),
-      /*image_preprocessor=*/nullptr,
-      /*vision_executor=*/nullptr, /*audio_preprocessor=*/nullptr,
+      executor.get(), tokenizer_.get(), /*vision_executor=*/nullptr,
       /*audio_executor=*/nullptr, session_config,
       /*benchmark_info=*/std::nullopt, worker_thread_pool_.get());
 
@@ -455,9 +448,7 @@ TEST_F(SessionBasicTest, RunPrefillAsync) {
           /*decode_tokens=*/{
               {224}, {24}, {8}, {66}, {246}, {18}, {2295}, {2294}}));
   auto session = SessionBasic::Create(
-      executor.get(), tokenizer_.get(),
-      /*image_preprocessor=*/nullptr,
-      /*vision_executor=*/nullptr, /*audio_preprocessor=*/nullptr,
+      executor.get(), tokenizer_.get(), /*vision_executor=*/nullptr,
       /*audio_executor=*/nullptr, session_config, std::nullopt,
       worker_thread_pool_.get());
 
@@ -487,9 +478,7 @@ TEST_F(SessionBasicTest, RunDecodeAsync) {
           /*decode_tokens=*/{
               {224}, {24}, {8}, {66}, {246}, {18}, {2295}, {2294}}));
   auto session = SessionBasic::Create(
-      executor.get(), tokenizer_.get(),
-      /*image_preprocessor=*/nullptr,
-      /*vision_executor=*/nullptr, /*audio_preprocessor=*/nullptr,
+      executor.get(), tokenizer_.get(), /*vision_executor=*/nullptr,
       /*audio_executor=*/nullptr, session_config, std::nullopt,
       worker_thread_pool_.get());
 
@@ -533,9 +522,7 @@ TEST_F(SessionBasicTest, RunDecodeAsyncWithSamplerAndConstrainedDecoding) {
           /*decode_tokens=*/{
               {224}, {24}, {8}, {66}, {246}, {18}, {2295}, {2294}}));
   auto session = SessionBasic::Create(
-      executor.get(), tokenizer_.get(),
-      /*image_preprocessor=*/nullptr,
-      /*vision_executor=*/nullptr, /*audio_preprocessor=*/nullptr,
+      executor.get(), tokenizer_.get(), /*vision_executor=*/nullptr,
       /*audio_executor=*/nullptr, session_config,
       /*benchmark_info=*/std::nullopt, worker_thread_pool_.get());
 
@@ -579,9 +566,7 @@ TEST_F(SessionBasicTest, RunDecodeAsyncWithConstrainedDecodingNoSampler) {
           /*decode_tokens=*/{
               {224}, {24}, {8}, {66}, {246}, {18}, {2295}, {2294}}));
   auto session = SessionBasic::Create(
-      executor.get(), tokenizer_.get(),
-      /*image_preprocessor=*/nullptr,
-      /*vision_executor=*/nullptr, /*audio_preprocessor=*/nullptr,
+      executor.get(), tokenizer_.get(), /*vision_executor=*/nullptr,
       /*audio_executor=*/nullptr, session_config,
       /*benchmark_info=*/std::nullopt, worker_thread_pool_.get());
 
@@ -622,9 +607,7 @@ TEST_F(SessionBasicTest, RunTextScoringEmptyTargetTextFailure) {
           /*decode_tokens=*/{
               {224}, {24}, {8}, {66}, {246}, {18}, {2295}, {2294}}));
   auto session = SessionBasic::Create(
-      executor.get(), tokenizer_.get(),
-      /*image_preprocessor=*/nullptr,
-      /*vision_executor=*/nullptr, /*audio_preprocessor=*/nullptr,
+      executor.get(), tokenizer_.get(), /*vision_executor=*/nullptr,
       /*audio_executor=*/nullptr, session_config, std::nullopt,
       worker_thread_pool_.get());
   std::vector<absl::string_view> target_text;
@@ -649,9 +632,7 @@ TEST_F(SessionBasicTest, RunTextScoringSuccess) {
           /*decode_tokens=*/{
               {224}, {24}, {8}, {66}, {246}, {18}, {2295}, {2294}}));
   auto session = SessionBasic::Create(
-      executor.get(), tokenizer_.get(),
-      /*image_preprocessor=*/nullptr,
-      /*vision_executor=*/nullptr, /*audio_preprocessor=*/nullptr,
+      executor.get(), tokenizer_.get(), /*vision_executor=*/nullptr,
       /*audio_executor=*/nullptr, session_config, std::nullopt,
       worker_thread_pool_.get());
   std::vector<InputData> inputs;
@@ -681,9 +662,7 @@ TEST_F(SessionBasicTest, GenerateContentStream) {
           /*decode_tokens=*/{
               {224}, {24}, {8}, {66}, {246}, {18}, {2295}, {2294}}));
   auto session = SessionBasic::Create(
-      executor.get(), tokenizer_.get(),
-      /*image_preprocessor=*/nullptr,
-      /*vision_executor=*/nullptr, /*audio_preprocessor=*/nullptr,
+      executor.get(), tokenizer_.get(), /*vision_executor=*/nullptr,
       /*audio_executor=*/nullptr, session_config,
       /*benchmark_info=*/std::nullopt, worker_thread_pool_.get());
 
@@ -718,9 +697,7 @@ TEST_F(SessionBasicTest, GenerateContentStreamEmptyInput) {
           /*decode_tokens=*/{
               {224}, {24}, {8}, {66}, {246}, {18}, {2295}, {2294}}));
   auto session = SessionBasic::Create(
-      executor.get(), tokenizer_.get(),
-      /*image_preprocessor=*/nullptr,
-      /*vision_executor=*/nullptr, /*audio_preprocessor=*/nullptr,
+      executor.get(), tokenizer_.get(), /*vision_executor=*/nullptr,
       /*audio_executor=*/nullptr, session_config, std::nullopt,
       worker_thread_pool_.get());
 
@@ -756,9 +733,7 @@ TEST_F(SessionBasicTest, GenerateContentStreamPrefillError) {
   session_config.SetStartTokenId(2);
   session_config.SetSamplerBackend(Backend::CPU);
   auto session = SessionBasic::Create(
-      executor.get(), tokenizer_.get(),
-      /*image_preprocessor=*/nullptr,
-      /*vision_executor=*/nullptr, /*audio_preprocessor=*/nullptr,
+      executor.get(), tokenizer_.get(), /*vision_executor=*/nullptr,
       /*audio_executor=*/nullptr, session_config, std::nullopt,
       worker_thread_pool_.get());
 
@@ -796,9 +771,7 @@ TEST_F(SessionBasicTest, GenerateContentStreamDecodeError) {
   session_config.SetStartTokenId(2);
   session_config.SetSamplerBackend(Backend::CPU);
   auto session = SessionBasic::Create(
-      executor.get(), tokenizer_.get(),
-      /*image_preprocessor=*/nullptr,
-      /*vision_executor=*/nullptr, /*audio_preprocessor=*/nullptr,
+      executor.get(), tokenizer_.get(), /*vision_executor=*/nullptr,
       /*audio_executor=*/nullptr, session_config, std::nullopt,
       worker_thread_pool_.get());
 
@@ -829,9 +802,7 @@ TEST_F(SessionBasicTest, ApplyPromptTemplatesFails) {
   ASSERT_OK_AND_ASSIGN(
       auto session,
       SessionBasic::Create(executor.get(), tokenizer_.get(),
-                           /*image_preprocessor=*/nullptr,
                            /*vision_executor=*/nullptr,
-                           /*audio_preprocessor=*/nullptr,
                            /*audio_executor=*/nullptr, session_config,
                            std::nullopt, worker_thread_pool_.get()));
 
@@ -879,9 +850,7 @@ TEST_F(SessionBasicTest, ApplyPromptTemplatesWithSingleTextChunk) {
   ASSERT_OK_AND_ASSIGN(
       auto session,
       SessionBasic::Create(executor.get(), tokenizer_.get(),
-                           /*image_preprocessor=*/nullptr,
                            /*vision_executor=*/nullptr,
-                           /*audio_preprocessor=*/nullptr,
                            /*audio_executor=*/nullptr, session_config,
                            std::nullopt, worker_thread_pool_.get()));
   std::vector<InputData> single_chunk;
@@ -921,9 +890,7 @@ TEST_F(SessionBasicTest, ApplyPromptTemplatesWithTwoTextChunks) {
   ASSERT_OK_AND_ASSIGN(
       auto session,
       SessionBasic::Create(executor.get(), tokenizer_.get(),
-                           /*image_preprocessor=*/nullptr,
                            /*vision_executor=*/nullptr,
-                           /*audio_preprocessor=*/nullptr,
                            /*audio_executor=*/nullptr, session_config,
                            std::nullopt, worker_thread_pool_.get()));
   std::vector<InputData> two_chunks;
@@ -964,9 +931,7 @@ TEST_F(SessionBasicTest, ApplyPromptTemplatesWithThreeTextChunks) {
   ASSERT_OK_AND_ASSIGN(
       auto session,
       SessionBasic::Create(executor.get(), tokenizer_.get(),
-                           /*image_preprocessor=*/nullptr,
                            /*vision_executor=*/nullptr,
-                           /*audio_preprocessor=*/nullptr,
                            /*audio_executor=*/nullptr, session_config,
                            std::nullopt, worker_thread_pool_.get()));
   std::vector<InputData> three_chunks;
@@ -1010,9 +975,7 @@ TEST_F(SessionBasicTest, ApplyPromptTemplatesWithMixedChunksTextAndImage) {
   ASSERT_OK_AND_ASSIGN(
       auto session,
       SessionBasic::Create(executor.get(), tokenizer_.get(),
-                           /*image_preprocessor=*/nullptr,
                            /*vision_executor=*/nullptr,
-                           /*audio_preprocessor=*/nullptr,
                            /*audio_executor=*/nullptr, session_config,
                            std::nullopt, worker_thread_pool_.get()));
   std::vector<InputData> mixed_chunks;
@@ -1056,9 +1019,7 @@ TEST_F(SessionBasicTest, ApplyPromptTemplatesWithSubsequentTurn) {
   ASSERT_OK_AND_ASSIGN(
       auto session,
       SessionBasic::Create(executor.get(), tokenizer_.get(),
-                           /*image_preprocessor=*/nullptr,
                            /*vision_executor=*/nullptr,
-                           /*audio_preprocessor=*/nullptr,
                            /*audio_executor=*/nullptr, session_config,
                            std::nullopt, worker_thread_pool_.get()));
   std::vector<InputData> single_chunk_again;
@@ -1106,9 +1067,7 @@ TEST_F(SessionBasicTest, ApplyPromptTemplatesWithSingleImageInput) {
   ASSERT_OK_AND_ASSIGN(
       auto session,
       SessionBasic::Create(executor.get(), tokenizer_.get(),
-                           /*image_preprocessor=*/nullptr,
                            /*vision_executor=*/nullptr,
-                           /*audio_preprocessor=*/nullptr,
                            /*audio_executor=*/nullptr, session_config,
                            std::nullopt, worker_thread_pool_.get()));
   std::vector<InputData> single_image;
@@ -1138,9 +1097,7 @@ TEST_F(SessionBasicTest, PreprocessContents) {
   ASSERT_OK_AND_ASSIGN(
       auto session,
       SessionBasic::Create(executor.get(), tokenizer_.get(),
-                           /*image_preprocessor=*/nullptr,
                            /*vision_executor=*/nullptr,
-                           /*audio_preprocessor=*/nullptr,
                            /*audio_executor=*/nullptr, session_config,
                            std::nullopt, worker_thread_pool_.get()));
   std::vector<InputData> contents;
@@ -1317,9 +1274,7 @@ TEST_F(SessionBasicTest, ProcessAndCombineContentsSingleText) {
   ASSERT_OK_AND_ASSIGN(
       auto session,
       SessionBasic::Create(executor.get(), tokenizer_.get(),
-                           /*image_preprocessor=*/nullptr,
                            /*vision_executor=*/nullptr,
-                           /*audio_preprocessor=*/nullptr,
                            /*audio_executor=*/nullptr, session_config,
                            std::nullopt, worker_thread_pool_.get()));
 
@@ -1365,9 +1320,7 @@ TEST_F(SessionBasicTest, ProcessAndCombineContentsMultiText) {
   ASSERT_OK_AND_ASSIGN(
       auto session,
       SessionBasic::Create(executor.get(), tokenizer_.get(),
-                           /*image_preprocessor=*/nullptr,
                            /*vision_executor=*/nullptr,
-                           /*audio_preprocessor=*/nullptr,
                            /*audio_executor=*/nullptr, session_config,
                            std::nullopt, worker_thread_pool_.get()));
 
@@ -1407,9 +1360,7 @@ TEST_F(SessionBasicTest, ProcessAndCombineContentsEmptyFails) {
   ASSERT_OK_AND_ASSIGN(
       auto session,
       SessionBasic::Create(executor.get(), tokenizer_.get(),
-                           /*image_preprocessor=*/nullptr,
                            /*vision_executor=*/nullptr,
-                           /*audio_preprocessor=*/nullptr,
                            /*audio_executor=*/nullptr, session_config,
                            std::nullopt, worker_thread_pool_.get()));
 
@@ -1430,7 +1381,6 @@ TEST_F(SessionBasicTest, ProcessAndCombineContentsAudioSuccess) {
   session_config.GetMutableLlmModelType().mutable_gemma3n();
   LITERT_ASSERT_OK_AND_ASSIGN(
       auto env, Environment::Create(std::vector<Environment::Option>()));
-  ByPassAudioPreprocessor bypass_audio_preprocessor;
   ASSERT_OK_AND_ASSIGN(
       auto audio_executor,
       CreateAudioExecutor(env,
@@ -1452,9 +1402,7 @@ TEST_F(SessionBasicTest, ProcessAndCombineContentsAudioSuccess) {
   ASSERT_OK_AND_ASSIGN(
       auto session, SessionBasic::Create(
                         executor.get(), tokenizer_.get(),
-                        /*image_preprocessor=*/nullptr,
                         /*vision_executor=*/nullptr,
-                        /*audio_preprocessor=*/&bypass_audio_preprocessor,
                         /*audio_executor=*/audio_executor.get(), session_config,
                         std::nullopt, worker_thread_pool_.get()));
 
@@ -1503,7 +1451,6 @@ TEST_F(SessionBasicTest, ProcessAndCombineContentsTextAndAudioSuccess) {
 
   LITERT_ASSERT_OK_AND_ASSIGN(
       auto env, Environment::Create(std::vector<Environment::Option>()));
-  ByPassAudioPreprocessor bypass_audio_preprocessor;
   ASSERT_OK_AND_ASSIGN(
       auto audio_executor,
       CreateAudioExecutor(env,
@@ -1528,9 +1475,7 @@ TEST_F(SessionBasicTest, ProcessAndCombineContentsTextAndAudioSuccess) {
   ASSERT_OK_AND_ASSIGN(
       auto session, SessionBasic::Create(
                         executor.get(), tokenizer_.get(),
-                        /*image_preprocessor=*/nullptr,
                         /*vision_executor=*/nullptr,
-                        /*audio_preprocessor=*/&bypass_audio_preprocessor,
                         /*audio_executor=*/audio_executor.get(), session_config,
                         std::nullopt, worker_thread_pool_.get()));
 
@@ -1563,7 +1508,6 @@ TEST_F(SessionBasicTest, ProcessAndCombineContentsTextAudioTextSuccess) {
 
   LITERT_ASSERT_OK_AND_ASSIGN(
       auto env, Environment::Create(std::vector<Environment::Option>()));
-  ByPassAudioPreprocessor bypass_audio_preprocessor;
   ASSERT_OK_AND_ASSIGN(
       auto audio_executor,
       CreateAudioExecutor(env,
@@ -1593,9 +1537,7 @@ TEST_F(SessionBasicTest, ProcessAndCombineContentsTextAudioTextSuccess) {
   ASSERT_OK_AND_ASSIGN(
       auto session, SessionBasic::Create(
                         executor.get(), tokenizer_.get(),
-                        /*image_preprocessor=*/nullptr,
                         /*vision_executor=*/nullptr,
-                        /*audio_preprocessor=*/&bypass_audio_preprocessor,
                         /*audio_executor=*/audio_executor.get(), session_config,
                         std::nullopt, worker_thread_pool_.get()));
 
@@ -1632,12 +1574,11 @@ TEST_F(SessionBasicTest, GenerateContentStreamWithCancellation) {
   session_config.GetMutableStopTokenIds() = stop_token_ids;
   session_config.SetStartTokenId(2);
   session_config.SetSamplerBackend(Backend::CPU);
-  auto session = SessionBasic::Create(
-      fake_executor.get(), tokenizer_.get(),
-      /*image_preprocessor=*/nullptr,
-      /*vision_executor=*/nullptr, /*audio_preprocessor=*/nullptr,
-      /*audio_executor=*/nullptr, session_config, std::nullopt,
-      worker_thread_pool_.get());
+  auto session =
+      SessionBasic::Create(fake_executor.get(), tokenizer_.get(),
+                           /*vision_executor=*/nullptr,
+                           /*audio_executor=*/nullptr, session_config,
+                           std::nullopt, worker_thread_pool_.get());
   ASSERT_OK(session);
 
   std::vector<InputData> inputs;
@@ -1712,12 +1653,11 @@ TEST_P(SessionBasicCancellationTest,
     proto::BenchmarkParams benchmark_params;
     benchmark_info.emplace(benchmark_params);
   }
-  auto session = SessionBasic::Create(
-      fake_executor.get(), tokenizer_.get(),
-      /*image_preprocessor=*/nullptr,
-      /*vision_executor=*/nullptr, /*audio_preprocessor=*/nullptr,
-      /*audio_executor=*/nullptr, session_config, benchmark_info,
-      worker_thread_pool_.get());
+  auto session =
+      SessionBasic::Create(fake_executor.get(), tokenizer_.get(),
+                           /*vision_executor=*/nullptr,
+                           /*audio_executor=*/nullptr, session_config,
+                           benchmark_info, worker_thread_pool_.get());
   ASSERT_OK(session);
 
   std::vector<InputData> inputs;
@@ -1771,12 +1711,11 @@ TEST_F(SessionBasicTest, GenerateContentStreamOnCancelledSession) {
   session_config.GetMutableStopTokenIds() = stop_token_ids;
   session_config.SetStartTokenId(2);
   session_config.SetSamplerBackend(Backend::CPU);
-  auto session = SessionBasic::Create(
-      fake_executor.get(), tokenizer_.get(),
-      /*image_preprocessor=*/nullptr,
-      /*vision_executor=*/nullptr, /*audio_preprocessor=*/nullptr,
-      /*audio_executor=*/nullptr, session_config, std::nullopt,
-      worker_thread_pool_.get());
+  auto session =
+      SessionBasic::Create(fake_executor.get(), tokenizer_.get(),
+                           /*vision_executor=*/nullptr,
+                           /*audio_executor=*/nullptr, session_config,
+                           std::nullopt, worker_thread_pool_.get());
   ASSERT_OK(session);
 
   (*session)->CancelProcess();
@@ -1824,9 +1763,7 @@ TEST_F(SessionBasicTest,
   BenchmarkInfo benchmark_info(benchmark_params);
 
   auto session = SessionBasic::Create(
-      executor.get(), tokenizer_.get(),
-      /*image_preprocessor=*/nullptr,
-      /*vision_executor=*/nullptr, /*audio_preprocessor=*/nullptr,
+      executor.get(), tokenizer_.get(), /*vision_executor=*/nullptr,
       /*audio_executor=*/nullptr, session_config, benchmark_info,
       worker_thread_pool_.get());
   ASSERT_OK(session);
@@ -1864,9 +1801,7 @@ TEST_F(SessionBasicTest,
   BenchmarkInfo benchmark_info(benchmark_params);
 
   auto session = SessionBasic::Create(
-      executor.get(), tokenizer_.get(),
-      /*image_preprocessor=*/nullptr,
-      /*vision_executor=*/nullptr, /*audio_preprocessor=*/nullptr,
+      executor.get(), tokenizer_.get(), /*vision_executor=*/nullptr,
       /*audio_executor=*/nullptr, session_config, benchmark_info,
       worker_thread_pool_.get());
   ASSERT_OK(session);
@@ -1905,9 +1840,7 @@ TEST_F(SessionBasicTest,
           /*decode_tokens=*/{
               {224}, {24}, {8}, {66}, {246}, {18}, {2295}, {2294}}));
   auto session = SessionBasic::Create(
-      executor.get(), tokenizer_.get(),
-      /*image_preprocessor=*/nullptr,
-      /*vision_executor=*/nullptr, /*audio_preprocessor=*/nullptr,
+      executor.get(), tokenizer_.get(), /*vision_executor=*/nullptr,
       /*audio_executor=*/nullptr, session_config,
       /*benchmark_info=*/std::nullopt, worker_thread_pool_.get());
 

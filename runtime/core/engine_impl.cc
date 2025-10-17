@@ -32,10 +32,6 @@
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "runtime/components/model_resources.h"
-#include "runtime/components/preprocessor/audio_preprocessor.h"
-#include "runtime/components/preprocessor/audio_preprocessor_miniaudio.h"
-#include "runtime/components/preprocessor/image_preprocessor.h"
-#include "runtime/components/preprocessor/stb_image_preprocessor.h"
 #include "runtime/core/session_factory.h"
 #include "runtime/engine/engine.h"
 #include "runtime/engine/engine_settings.h"
@@ -72,23 +68,19 @@ class EngineImpl : public Engine {
   explicit EngineImpl(EngineSettings engine_settings,
                       std::unique_ptr<ModelResources> litert_model_resources,
                       std::unique_ptr<Environment> lrt_env,
-                      std::unique_ptr<ImagePreprocessor> image_preprocessor,
                       std::unique_ptr<LlmExecutor> executor,
                       std::unique_ptr<VisionExecutor> vision_executor,
-                      std::unique_ptr<AudioPreprocessor> audio_preprocessor,
                       std::unique_ptr<AudioExecutor> audio_executor,
                       std::optional<BenchmarkInfo> benchmark_info,
                       std::unique_ptr<ThreadPool> worker_thread_pool)
       : engine_settings_(std::move(engine_settings)),
         litert_model_resources_(std::move(litert_model_resources)),
         lrt_env_(std::move(lrt_env)),
-        image_preprocessor_(std::move(image_preprocessor)),
         executor_(std::move(executor)),
         vision_executor_(std::move(vision_executor)),
+        audio_executor_(std::move(audio_executor)),
         stop_token_ids_(),
         sampler_params_(),
-        audio_preprocessor_(std::move(audio_preprocessor)),
-        audio_executor_(std::move(audio_executor)),
         benchmark_info_(std::move(benchmark_info)),
         worker_thread_pool_(std::move(worker_thread_pool)) {}
 
@@ -103,9 +95,7 @@ class EngineImpl : public Engine {
     ABSL_CHECK(litert_model_resources_ != nullptr);
     ASSIGN_OR_RETURN(auto* tokenizer, litert_model_resources_->GetTokenizer());
     return InitializeSession(executor_.get(), tokenizer,
-                             /*image_preprocessor=*/image_preprocessor_.get(),
                              /*vision_executor=*/vision_executor_.get(),
-                             /*audio_preprocessor=*/audio_preprocessor_.get(),
                              /*audio_executor=*/audio_executor_.get(), config,
                              benchmark_info_, worker_thread_pool_.get());
   }
@@ -124,19 +114,15 @@ class EngineImpl : public Engine {
   std::unique_ptr<ModelResources> litert_model_resources_;
   // LiteRT environment.
   std::unique_ptr<Environment> lrt_env_;
-  // Image preprocessor for the vision model.
-  std::unique_ptr<ImagePreprocessor> image_preprocessor_;
   // Shared executor for all sessions.
   std::unique_ptr<LlmExecutor> executor_;
   // Shared vision executor for all sessions.
   std::unique_ptr<VisionExecutor> vision_executor_;
+  // shared audio executor for all sessions.
+  std::unique_ptr<AudioExecutor> audio_executor_;
   // Default stop token ids for all sessions loaded from the model file.
   std::vector<std::vector<int>> stop_token_ids_;
   proto::SamplerParameters sampler_params_;
-
-  // Shared audio preprocessor and executor for all sessions.
-  std::unique_ptr<AudioPreprocessor> audio_preprocessor_;
-  std::unique_ptr<AudioExecutor> audio_executor_;
 
   // Benchmark info for the engine.
   std::optional<BenchmarkInfo> benchmark_info_;
@@ -247,7 +233,6 @@ absl::StatusOr<std::unique_ptr<Engine>> Engine::CreateEngine(
   // TODO - b/436674053: Modularize the executor creation logic into a
   // separate executor class, and have unit test for it.
   std::unique_ptr<VisionExecutor> vision_executor;
-  std::unique_ptr<ImagePreprocessor> image_preprocessor;
   if (engine_settings.GetVisionExecutorSettings().has_value()) {
     ASSIGN_OR_RETURN(
         auto vision_executor_settings,
@@ -258,13 +243,9 @@ absl::StatusOr<std::unique_ptr<Engine>> Engine::CreateEngine(
             /*adapter_backend=*/Backend::CPU));
     ASSIGN_OR_RETURN(vision_executor, VisionLiteRtCompiledModelExecutor::Create(
                                           vision_executor_settings, *lrt_env));
-    // Create the image preprocessor for processing the image input only if
-    // vision executor is enabled.
-    image_preprocessor = std::make_unique<StbImagePreprocessor>();
   }
 
   std::unique_ptr<AudioExecutor> audio_executor;
-  std::unique_ptr<AudioPreprocessor> audio_preprocessor;
   if (engine_settings.GetAudioExecutorSettings().has_value()) {
     ASSIGN_OR_RETURN(
         auto audio_executor_settings,
@@ -274,9 +255,6 @@ absl::StatusOr<std::unique_ptr<Engine>> Engine::CreateEngine(
             engine_settings.GetAudioExecutorSettings()->GetBackend()));
     ASSIGN_OR_RETURN(audio_executor, AudioLiteRtCompiledModelExecutor::Create(
                                          audio_executor_settings, *lrt_env));
-    ASSIGN_OR_RETURN(audio_preprocessor,
-                     AudioPreprocessorMiniAudio::Create(
-                         AudioPreprocessorConfig::CreateDefaultUsmConfig()));
   }
 
   if (benchmark_info.has_value()) {
@@ -290,8 +268,7 @@ absl::StatusOr<std::unique_ptr<Engine>> Engine::CreateEngine(
                                    /*max_num_threads=*/1);
   auto llm_impl = std::make_unique<EngineImpl>(
       std::move(engine_settings), std::move(model_resources),
-      std::move(lrt_env), std::move(image_preprocessor), std::move(executor),
-      std::move(vision_executor), std::move(audio_preprocessor),
+      std::move(lrt_env), std::move(executor), std::move(vision_executor),
       std::move(audio_executor), std::move(benchmark_info),
       std::move(worker_thread_pool));
 
