@@ -35,8 +35,6 @@
 #include "litert/cc/litert_layout.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
-#include "runtime/components/preprocessor/audio_preprocessor.h"
-#include "runtime/components/preprocessor/image_preprocessor.h"
 #include "runtime/components/sampler.h"
 #include "runtime/components/sampler_factory.h"
 #include "runtime/components/stop_token_detector.h"
@@ -155,8 +153,7 @@ absl::StatusOr<T> CombineExecutorDataImpl(std::vector<T>& executor_data) {
 // static
 absl::StatusOr<std::unique_ptr<SessionBasic>> SessionBasic::Create(
     LlmExecutor* executor, Tokenizer* tokenizer,
-    ImagePreprocessor* image_preprocessor, VisionExecutor* vision_executor,
-    AudioPreprocessor* audio_preprocessor, AudioExecutor* audio_executor,
+    VisionExecutor* vision_executor, AudioExecutor* audio_executor,
     const SessionConfig& session_config,
     std::optional<BenchmarkInfo> benchmark_info,
     ThreadPool* worker_thread_pool) {
@@ -185,9 +182,8 @@ absl::StatusOr<std::unique_ptr<SessionBasic>> SessionBasic::Create(
         stop_token_detector.AddStopTokenSequence(stop_token_sequence));
   }
   return absl::WrapUnique(new SessionBasic(
-      executor, tokenizer, image_preprocessor, vision_executor,
-      audio_preprocessor, audio_executor, std::move(sampler), session_config,
-      benchmark_info, worker_thread_pool, stop_token_detector));
+      executor, tokenizer, vision_executor, audio_executor, std::move(sampler),
+      session_config, benchmark_info, worker_thread_pool, stop_token_detector));
 }
 
 SessionBasic::~SessionBasic() {
@@ -404,38 +400,16 @@ absl::StatusOr<std::vector<InputData>> SessionBasic::PreprocessContents(
         ASSIGN_OR_RETURN(auto input_image_copy, input_image->CreateCopy());
         preprocessed_contents.emplace_back(std::move(input_image_copy));
       } else {
-        if (image_preprocessor_ == nullptr) {
-          return absl::InternalError("Image preprocessor is not available.");
-        }
-        ASSIGN_OR_RETURN(const auto& target_dims_vector,
-                         vision_executor_->GetExpectedInputDimension());
-
-        Dimensions target_dims(target_dims_vector.begin(),
-                               target_dims_vector.end());
-
-        ImagePreprocessParameter input_preprocess_parameters;
-        input_preprocess_parameters.SetTargetDimensions(target_dims);
-
-        ASSIGN_OR_RETURN(auto preprocessed_image,
-                         image_preprocessor_->Preprocess(
-                             *input_image, input_preprocess_parameters));
-
-        preprocessed_contents.emplace_back(
-            InputImage(std::move(preprocessed_image)));
+        return absl::InternalError(
+            "Image must be preprocessed before being used in SessionBasic.");
       }
     } else if (const auto* input_audio = std::get_if<InputAudio>(&content)) {
       if (input_audio->IsTensorBuffer()) {
         ASSIGN_OR_RETURN(auto input_audio_copy, input_audio->CreateCopy());
         preprocessed_contents.emplace_back(std::move(input_audio_copy));
       } else {
-        if (audio_preprocessor_ == nullptr) {
-          return absl::InternalError("Audio preprocessor is not available.");
-        }
-        ASSIGN_OR_RETURN(auto preprocessed_audio,
-                         audio_preprocessor_->Preprocess(*input_audio));
-        audio_preprocessor_->Reset();
-        preprocessed_contents.emplace_back(
-            InputAudio(std::move(preprocessed_audio)));
+        return absl::InternalError(
+            "Audio must be preprocessed before being used in SessionBasic.");
       }
     }
   }
