@@ -132,14 +132,13 @@ class LlmLiteRtCompiledModelExecutor : public LlmExecutor {
       absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
           output_kv_cache_buffers,
       SortedPrefillSignatureMap prefill_signature_map,
-      ModelSignatures signatures, int batch_size, std::string weight_cache_path,
+      ModelSignatures signatures, std::string weight_cache_path,
       std::unique_ptr<EmbeddingLookupManager> embedding_lookup = nullptr,
       std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup =
           nullptr,
       LogitsDataType logits_data_type = LogitsDataType::FLOAT32)
       : executor_settings_(std::move(executor_settings)),
         env_(env),
-        model_(*model),
         compiled_model_(std::move(compiled_model)),
         decode_input_buffers_(std::move(decode_input_buffers)),
         decode_output_buffers_(std::move(decode_output_buffers)),
@@ -149,7 +148,6 @@ class LlmLiteRtCompiledModelExecutor : public LlmExecutor {
         output_kv_cache_buffers_(&kv_cache_buffers_2_),
         prefill_signature_map_(std::move(prefill_signature_map)),
         signatures_(signatures),
-        output_batch_size_(batch_size),
         weight_cache_path_(std::move(weight_cache_path)),
         embedding_lookup_(std::move(embedding_lookup)),
         per_layer_embedding_lookup_(std::move(per_layer_embedding_lookup)),
@@ -194,7 +192,6 @@ class LlmLiteRtCompiledModelExecutor : public LlmExecutor {
 
   LlmExecutorSettings executor_settings_;
   ::litert::Environment& env_;
-  const ::litert::Model& model_;
   ::litert::CompiledModel compiled_model_;
   // The prefill input buffers for each signature.
   // The key is the prefill signature name, and the value is a map of input
@@ -229,8 +226,6 @@ class LlmLiteRtCompiledModelExecutor : public LlmExecutor {
   // e.g. for output_batch_size=2, the layout is:
   // {batch_0_seq_0, batch_1_seq_0, batch_0_seq_1, batch_1_seq_1, ...}
   std::vector<int> sampled_ids_;
-  // Output batch size for the sampled ids.
-  int output_batch_size_ = 0;
 
   // Sampler for sampling logits.
   // For now, only CPU sampler is supported.

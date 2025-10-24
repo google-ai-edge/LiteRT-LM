@@ -1029,7 +1029,6 @@ LlmLiteRtCompiledModelExecutor::Create(LlmExecutorSettings executor_settings,
       << "Output logits must be (batch, seq, vocab)";
   RET_CHECK(output_logits_buffer_tensor_type.Layout().Dimensions()[0] == 1)
       << "Only support batch size 1 for now.";
-  int batch_size = output_logits_buffer_tensor_type.Layout().Dimensions()[0];
 
   ASSIGN_OR_RETURN(auto prefill_runner_set,
                    GetPrefillRunnerSetFromModel(
@@ -1046,7 +1045,7 @@ LlmLiteRtCompiledModelExecutor::Create(LlmExecutorSettings executor_settings,
       std::move(compiled_model), std::move(decode_input_buffers),
       std::move(decode_output_buffers), std::move(input_kv_cache_buffers),
       std::move(output_kv_cache_buffers), std::move(prefill_runner_set),
-      signatures, batch_size, std::move(weight_cache_path),
+      signatures, std::move(weight_cache_path),
       std::move(embedding_lookup), std::move(per_layer_embedding_lookup),
       activation_data_type));
 }
