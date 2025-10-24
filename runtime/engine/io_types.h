@@ -289,7 +289,7 @@ class DecodeConfig {
   }
 
   // Returns a pointer to the constraint, or nullptr if no constraint is set.
-  Constraint* GetConstraint() const { return constraint_; }
+  Constraint* absl_nullable GetConstraint() const { return constraint_; }
 
  private:
   DecodeConfig() = default;
