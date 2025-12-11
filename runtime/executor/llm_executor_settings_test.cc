@@ -261,6 +261,7 @@ TEST(LlmExecutorConfigTest, LlmExecutorSettingsWithAdvancedSettings) {
       .num_logits_to_print_after_decode = 10,
       .gpu_madvise_original_shared_tensors = true,
       .is_benchmark = true,
+      .preferred_device_substr = "nvidia",
   });
 
   std::stringstream oss;
@@ -295,6 +296,7 @@ clear_kv_cache_before_prefill: 1
 num_logits_to_print_after_decode: 10
 gpu_madvise_original_shared_tensors: 1
 is_benchmark: 1
+preferred_device_substr: nvidia
 
 )");
   EXPECT_EQ(oss.str(), expected_output);

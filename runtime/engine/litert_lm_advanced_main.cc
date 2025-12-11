@@ -154,7 +154,7 @@ absl::Status MainHelper(int argc, char** argv) {
            "[--num_logits_to_print_after_decode=<num_logits_to_print>]"
            "[--score_target_text=<target_text>]"
            "[--gpu_madvise_original_shared_tensors=<true|false>]"
-           ;
+           "[--preferred_device_substr=<device_substr>]";
     ABSL_LOG(INFO)
         << "To provide data for multimodality, use [image:/path/to/image.jpg] "
            "or [audio:/path/to/audio.wav] in the input prompt. e.g. \"Describe "
@@ -203,6 +203,8 @@ absl::Status MainHelper(int argc, char** argv) {
   settings.gpu_madvise_original_shared_tensors =
       absl::GetFlag(FLAGS_gpu_madvise_original_shared_tensors);
   settings.disable_cache = absl::GetFlag(FLAGS_disable_cache);
+  settings.preferred_device_substr =
+      absl::GetFlag(FLAGS_preferred_device_substr);
 
   // Adjust max_num_tokens and prefill_batch_size if not set on benchmark mode.
   if (settings.benchmark && settings.benchmark_prefill_tokens > 0) {

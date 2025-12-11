@@ -83,6 +83,7 @@ struct LiteRtLmSettings {
   bool disable_cache = false;
   bool run_with_two_sessions = false;
   int prefill_chunk_size = -1;
+  std::string preferred_device_substr = "";
 };
 
 // Runs the LLM inference with the given settings.

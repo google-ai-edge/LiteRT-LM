@@ -49,5 +49,6 @@ ABSL_DECLARE_FLAG(int, num_logits_to_print_after_decode);
 ABSL_DECLARE_FLAG(std::string, score_target_text);
 ABSL_DECLARE_FLAG(bool, gpu_madvise_original_shared_tensors);
 ABSL_DECLARE_FLAG(bool, disable_cache);
+ABSL_DECLARE_FLAG(std::string, preferred_device_substr);
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_RUNTIME_ENGINE_SHARED_FLAGS_H_
