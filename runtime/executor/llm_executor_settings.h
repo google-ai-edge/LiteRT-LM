@@ -150,6 +150,12 @@ struct AdvancedSettings {
   // If true, the executor is running a benchmark.
   bool is_benchmark = false;
 
+  // Preferred WebGPU device name substring, case-insensitive.
+  // If not empty, the adapter which the device name contains the substring will
+  // be chosen.
+  // If empty, the device will be determined by other factors.
+  std::string preferred_device_substr;
+
   bool operator==(const AdvancedSettings& other) const {
     return prefill_batch_sizes == other.prefill_batch_sizes &&
            num_output_candidates == other.num_output_candidates &&
@@ -161,7 +167,8 @@ struct AdvancedSettings {
                other.num_logits_to_print_after_decode &&
            gpu_madvise_original_shared_tensors ==
                other.gpu_madvise_original_shared_tensors &&
-           is_benchmark == other.is_benchmark;
+           is_benchmark == other.is_benchmark &&
+           preferred_device_substr == other.preferred_device_substr;
   }
 };
 std::ostream& operator<<(std::ostream& os, const AdvancedSettings& settings);

@@ -190,6 +190,7 @@ absl::StatusOr<EngineSettings> CreateEngineSettings(
       .gpu_madvise_original_shared_tensors =
           settings.gpu_madvise_original_shared_tensors,
       .is_benchmark = settings.benchmark,
+      .preferred_device_substr = settings.preferred_device_substr,
   };
   if (advanced_settings != AdvancedSettings()) {
     engine_settings.GetMutableMainExecutorSettings().SetAdvancedSettings(

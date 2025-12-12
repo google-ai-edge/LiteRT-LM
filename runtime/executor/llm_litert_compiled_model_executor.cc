@@ -1170,6 +1170,10 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
           gpu_compilation_options.SetSyncExecutionModeWaitType(
               GpuOptions::SyncExecutionModeWaitType::kActive);
         }
+        if (!advanced_settings->preferred_device_substr.empty()) {
+          gpu_compilation_options.SetPreferredDeviceSubstr(
+              advanced_settings->preferred_device_substr.c_str());
+        }
       }
       // TODO b/441627719 - Select backend by runtime options.
 #if defined(LITERT_USE_WEBGPU_ACCELERATOR)

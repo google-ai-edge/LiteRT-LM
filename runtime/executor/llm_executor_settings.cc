@@ -69,6 +69,7 @@ std::ostream& operator<<(std::ostream& os, const AdvancedSettings& settings) {
   os << "gpu_madvise_original_shared_tensors: "
      << settings.gpu_madvise_original_shared_tensors << "\n";
   os << "is_benchmark: " << settings.is_benchmark << "\n";
+  os << "preferred_device_substr: " << settings.preferred_device_substr << "\n";
   return os;
 }
 
