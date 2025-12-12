@@ -131,8 +131,8 @@ class EngineImpl : public Engine {
       const SessionConfig& session_config) const override {
     auto config = session_config;
     RETURN_IF_ERROR(config.MaybeUpdateAndValidate(engine_settings_));
-    return InitializeSessionAdvanced(execution_manager_.get(), tokenizer_,
-                                     config, benchmark_info_);
+    return InitializeSessionAdvanced(execution_manager_, tokenizer_, config,
+                                     benchmark_info_);
   }
 
   absl::Status WaitUntilDone(absl::Duration timeout) override {
@@ -151,7 +151,7 @@ class EngineImpl : public Engine {
   std::unique_ptr<oi::ExecutorModelResources> model_resources_;
 
   // Execution manager for all sessions.
-  std::unique_ptr<ExecutionManager> execution_manager_;
+  std::shared_ptr<ExecutionManager> execution_manager_;
 
   // Tokenizer from task file, that is not owned by the model resources.
   // So we keep it here to avoid the model resources being destroyed.

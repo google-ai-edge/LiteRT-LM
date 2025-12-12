@@ -51,14 +51,23 @@ class SessionAdvanced : public Engine::Session {
   //   the sampler_params.type is TYPE_UNSPECIFIED, the sampling logic will be
   //   handled by the LLM Executor.
   static absl::StatusOr<std::unique_ptr<SessionAdvanced>> Create(
-      ExecutionManager* absl_nonnull execution_manager,
+      std::weak_ptr<ExecutionManager> execution_manager,
       Tokenizer* absl_nonnull tokenizer, const SessionConfig& session_config,
       std::optional<BenchmarkInfo> benchmark_info);
 
   // TODO b/409401231 - Call execution manager's release session instead.
   ~SessionAdvanced() override {
     CancelProcess();
-    execution_manager_.WaitUntilAllDone(Engine::kDefaultTimeout).IgnoreError();
+    auto execution_manager_lock = execution_manager_.lock();
+    if (execution_manager_lock != nullptr) {
+      auto status = execution_manager_lock->ReleaseSession(session_id_);
+      if (!status.ok()) {
+        ABSL_LOG(ERROR) << "Failed to release session: " << status;
+      }
+    } else {
+      ABSL_LOG(ERROR) << "Execution manager should not be deleted before "
+                         "Session is deleted.";
+    }
   };
 
   absl::StatusOr<Responses> GenerateContent(
@@ -125,10 +134,15 @@ class SessionAdvanced : public Engine::Session {
     return session_info_->session_config;
   }
 
-  const Tokenizer& GetTokenizer() const override { return tokenizer_; }
+  const Tokenizer& GetTokenizer() const override { return *tokenizer_; }
 
   absl::Status WaitUntilDone() override {
-    return execution_manager_.WaitUntilAllDone(Engine::kDefaultTimeout);
+    auto execution_manager_lock = execution_manager_.lock();
+    if (execution_manager_lock == nullptr) {
+      return absl::FailedPreconditionError(
+          "Execution manager is not available.");
+    }
+    return execution_manager_lock->WaitUntilAllDone(Engine::kDefaultTimeout);
   }
 
   // TODO b/409401231 - Add unit tests for this function.
@@ -137,7 +151,7 @@ class SessionAdvanced : public Engine::Session {
 
  private:
   explicit SessionAdvanced(SessionId session_id,
-                           ExecutionManager* absl_nonnull execution_manager,
+                           std::weak_ptr<ExecutionManager> execution_manager,
                            Tokenizer* absl_nonnull tokenizer,
                            std::shared_ptr<const SessionInfo> session_info,
                            bool is_first_turn = true,
@@ -145,8 +159,8 @@ class SessionAdvanced : public Engine::Session {
                            std::shared_ptr<std::atomic<bool>> cancelled =
                                std::make_shared<std::atomic<bool>>(false))
       : session_id_(session_id),
-        execution_manager_(*execution_manager),
-        tokenizer_(*tokenizer),
+        execution_manager_(execution_manager),
+        tokenizer_(tokenizer),
         session_info_(session_info),
         is_first_turn_(is_first_turn),
         last_task_ids_(last_task_ids),
@@ -156,10 +170,10 @@ class SessionAdvanced : public Engine::Session {
   SessionId session_id_;
 
   // The execution manager used for the session.
-  ExecutionManager& execution_manager_;
+  std::weak_ptr<ExecutionManager> execution_manager_;
 
   // The tokenizer used for the session.
-  Tokenizer& tokenizer_;
+  Tokenizer* absl_nonnull tokenizer_;
 
   // The session info used for the session.
   std::shared_ptr<const SessionInfo> session_info_;
