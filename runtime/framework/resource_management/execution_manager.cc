@@ -112,6 +112,8 @@ absl::Status ExecutionManager::ReleaseSession(SessionId session_id) {
     return absl::InvalidArgumentError(
         absl::StrCat("Session ", session_id, " not found in session list."));
   }
+  // TODO b/409401231 - Update to use cancellation of all tasks instead of
+  // directly update to cancelled state.
   RETURN_IF_ERROR(UpdateAllTasksToState(
       session_lookup_.at(session_id)->active_tasks, TaskState::kCancelled));
   session_lookup_.at(session_id)->context_handler = nullptr;
@@ -375,8 +377,7 @@ ExecutionManager::FollowingWaitingTasks(TaskId task_id) {
           absl::StrCat("Following task ", following_task_id,
                        " does not depend on task ", task_id));
     }
-    if (task_lookup_.at(following_task_id).task_state ==
-        TaskState::kCreated) {
+    if (!IsTaskEndState(task_lookup_.at(following_task_id).task_state)) {
       following_waiting_tasks.insert(following_task_id);
       ASSIGN_OR_RETURN(auto next_following_waiting_tasks,
                        FollowingWaitingTasks(following_task_id));
