@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "runtime/components/prompt_template.h"
 #include "runtime/components/tokenizer.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/config_registry.h"
@@ -35,12 +36,14 @@ namespace litert::lm {
 // - tokenizer: The tokenizer used by the LLM model.
 // - stop_token_ids: The stop token ids used by the LLM model.
 // - enable_constrained_decoding: Whether to enable constrained decoding.
+// - capabilities: The capabilities of the prompt template.
 absl::StatusOr<std::unique_ptr<ModelDataProcessor>> CreateModelDataProcessor(
     const DataProcessorConfig& config,
     std::optional<Preface> preface = std::nullopt,
     const Tokenizer* tokenizer = nullptr,
     const std::vector<std::vector<int>>& stop_token_ids = {},
-    bool enable_constrained_decoding = false);
+    bool enable_constrained_decoding = false,
+    PromptTemplateCapabilities capabilities = PromptTemplateCapabilities());
 
 // Creates data processor config from the given LlmModelType. The
 // DataProcessorConfig has default values if the corresponding fields are not

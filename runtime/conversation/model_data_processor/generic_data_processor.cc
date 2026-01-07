@@ -23,6 +23,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "nlohmann/json_fwd.hpp"  // from @nlohmann_json
+#include "runtime/components/prompt_template.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/generic_data_processor_config.h"
 #include "runtime/conversation/model_data_processor/model_data_processor.h"
@@ -32,8 +33,9 @@
 namespace litert::lm {
 
 absl::StatusOr<std::unique_ptr<ModelDataProcessor>>
-GenericDataProcessor::Create(GenericDataProcessorConfig config) {
-  return absl::WrapUnique(new GenericDataProcessor(config));
+GenericDataProcessor::Create(GenericDataProcessorConfig config,
+                             const PromptTemplateCapabilities& capabilities) {
+  return absl::WrapUnique(new GenericDataProcessor(config, capabilities));
 }
 
 absl::StatusOr<std::vector<InputData>>
@@ -59,6 +61,29 @@ absl::StatusOr<Message> GenericDataProcessor::ToMessageImpl(
   }
   return nlohmann::ordered_json::object(
       {{"role", GetConfig().model_role}, {"content", content}});
+}
+
+absl::StatusOr<nlohmann::ordered_json>
+GenericDataProcessor::MessageToTemplateInput(
+    const nlohmann::ordered_json& message) const {
+  if (message["content"].is_string() && capabilities_.requires_typed_content) {
+    // If the content is a string and the template requires typed content,
+    // convert the content to a typed content.
+    return nlohmann::ordered_json::object(
+        {{"role", message["role"]},
+         {"content", nlohmann::ordered_json::array(
+                         {{{"type", "text"}, {"text", message["content"]}}})}});
+  } else if (message["content"].is_array() && message["content"].size() == 1 &&
+             message["content"][0]["type"] == "text" &&
+             !capabilities_.requires_typed_content) {
+    // If the content is a typed content and the template does not require
+    // typed content, always convert the content to a string.
+    return nlohmann::ordered_json::object(
+        {{"role", message["role"]},
+         {"content", message["content"][0]["text"]}});
+  } else {
+    return message;
+  }
 }
 
 }  // namespace litert::lm

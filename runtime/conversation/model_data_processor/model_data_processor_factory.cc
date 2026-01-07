@@ -23,6 +23,7 @@
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "runtime/components/prompt_template.h"
 #include "runtime/components/tokenizer.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/config_registry.h"
@@ -232,7 +233,7 @@ absl::StatusOr<std::unique_ptr<ModelDataProcessor>> CreateModelDataProcessor(
     const DataProcessorConfig& config, std::optional<Preface> preface,
     const Tokenizer* tokenizer,
     const std::vector<std::vector<int>>& stop_token_ids,
-    bool enable_constrained_decoding) {
+    bool enable_constrained_decoding, PromptTemplateCapabilities capabilities) {
   if (std::holds_alternative<Gemma3DataProcessorConfig>(config)) {
     ABSL_LOG(INFO) << "Creating Gemma3DataProcessor";
     return Gemma3DataProcessor::Create(
@@ -245,7 +246,7 @@ absl::StatusOr<std::unique_ptr<ModelDataProcessor>> CreateModelDataProcessor(
   } else if (std::holds_alternative<GenericDataProcessorConfig>(config)) {
     ABSL_LOG(INFO) << "Creating GenericDataProcessor";
     return GenericDataProcessor::Create(
-        std::get<GenericDataProcessorConfig>(config));
+        std::get<GenericDataProcessorConfig>(config), capabilities);
   } else if (std::holds_alternative<FunctionGemmaDataProcessorConfig>(config)) {
     ABSL_LOG(INFO) << "Creating FunctionGemmaDataProcessor";
     return FunctionGemmaDataProcessor::Create(

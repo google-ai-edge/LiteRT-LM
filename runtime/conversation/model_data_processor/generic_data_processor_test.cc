@@ -21,6 +21,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "nlohmann/json_fwd.hpp"  // from @nlohmann_json
+#include "runtime/components/prompt_template.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/generic_data_processor_config.h"
 #include "runtime/engine/io_types.h"
@@ -100,6 +101,48 @@ TEST(GenericDataProcessorTest, ToMessageModelRole) {
       json_message,
       json({{"role", "model"},
             {"content", {{{"type", "text"}, {"text", "test response"}}}}}));
+}
+
+TEST(GenericDataProcessorTest, ToTemplateInputNoTypedContent) {
+  ASSERT_OK_AND_ASSIGN(
+      auto processor,
+      GenericDataProcessor::Create(
+          GenericDataProcessorConfig{.model_role = "model"},
+          PromptTemplateCapabilities{.requires_typed_content = false}));
+  ASSERT_OK_AND_ASSIGN(const json template_input_1,
+                       processor->MessageToTemplateInput(json(
+                           {{"role", "user"}, {"content", "test prompt"}})));
+  EXPECT_EQ(template_input_1,
+            json({{"role", "user"}, {"content", "test prompt"}}));
+  ASSERT_OK_AND_ASSIGN(
+      const json template_input_2,
+      processor->MessageToTemplateInput(
+          json({{"role", "user"},
+                {"content", {{{"type", "text"}, {"text", "test prompt"}}}}})));
+  EXPECT_EQ(template_input_2,
+            json({{"role", "user"}, {"content", "test prompt"}}));
+}
+
+TEST(GenericDataProcessorTest, ToTemplateInputTypedContent) {
+  ASSERT_OK_AND_ASSIGN(
+      auto processor,
+      GenericDataProcessor::Create(
+          GenericDataProcessorConfig{.model_role = "model"},
+          PromptTemplateCapabilities{.requires_typed_content = true}));
+  ASSERT_OK_AND_ASSIGN(const json template_input_1,
+                       processor->MessageToTemplateInput(json(
+                           {{"role", "user"}, {"content", "test prompt"}})));
+  EXPECT_EQ(template_input_1,
+            json({{"role", "user"},
+                  {"content", {{{"type", "text"}, {"text", "test prompt"}}}}}));
+  ASSERT_OK_AND_ASSIGN(
+      const json template_input_2,
+      processor->MessageToTemplateInput(
+          json({{"role", "user"},
+                {"content", {{{"type", "text"}, {"text", "test prompt"}}}}})));
+  EXPECT_EQ(template_input_2,
+            json({{"role", "user"},
+                  {"content", {{{"type", "text"}, {"text", "test prompt"}}}}}));
 }
 
 }  // namespace
