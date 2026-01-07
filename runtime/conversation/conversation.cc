@@ -221,7 +221,8 @@ absl::StatusOr<std::unique_ptr<Conversation>> Conversation::Create(
       CreateModelDataProcessor(config.GetProcessorConfig(), config.GetPreface(),
                                &session->GetTokenizer(),
                                session->GetSessionConfig().GetStopTokenIds(),
-                               config.constrained_decoding_enabled()));
+                               config.constrained_decoding_enabled(),
+                               config.GetPromptTemplate().GetCapabilities()));
   auto conversation = absl::WrapUnique(new Conversation(
       std::move(session), std::move(model_data_processor), config.GetPreface(),
       config.GetPromptTemplate(), config));
