@@ -179,8 +179,9 @@ TEST(EngineCTest, CreateConversationConfig) {
   const std::string system_message =
       R"({"type":"text","text":"You are a helpful assistant."})";
   ConversationConfigPtr conversation_config(
-      litert_lm_conversation_config_create(engine.get(), session_config.get(),
-                                           system_message.c_str()),
+      litert_lm_conversation_config_create(
+          engine.get(), session_config.get(), system_message.c_str(),
+          /*tools_json=*/nullptr, /*enable_constrained_decoding=*/false),
       &litert_lm_conversation_config_delete);
   ASSERT_NE(conversation_config, nullptr);
 
@@ -227,8 +228,9 @@ TEST(EngineCTest, CreateConversationConfigWithNoSamplerParams) {
                                   &litert_lm_session_config_delete);
   ASSERT_NE(session_config, nullptr);
   ConversationConfigPtr conversation_config(
-      litert_lm_conversation_config_create(engine.get(), session_config.get(),
-                                           system_message.c_str()),
+      litert_lm_conversation_config_create(
+          engine.get(), session_config.get(), system_message.c_str(),
+          /*tools_json=*/nullptr, /*enable_constrained_decoding=*/false),
       &litert_lm_conversation_config_delete);
   ASSERT_NE(conversation_config, nullptr);
 
@@ -265,8 +267,12 @@ TEST(EngineCTest, CreateConversationConfigWithNoSamplerParamsNoSystemMessage) {
                                   &litert_lm_session_config_delete);
   ASSERT_NE(session_config, nullptr);
   ConversationConfigPtr conversation_config(
-      litert_lm_conversation_config_create(engine.get(), session_config.get(),
-                                           /*system_message_json=*/nullptr),
+      litert_lm_conversation_config_create(
+          engine.get(),
+          /*session_config=*/session_config.get(),
+          /*system_message_json=*/nullptr,
+          /*tools_json=*/nullptr,
+          /*enable_constrained_decoding=*/false),
       &litert_lm_conversation_config_delete);
   ASSERT_NE(conversation_config, nullptr);
 
@@ -274,6 +280,159 @@ TEST(EngineCTest, CreateConversationConfigWithNoSamplerParamsNoSystemMessage) {
   const auto& preface = std::get<litert::lm::JsonPreface>(
       conversation_config->config->GetPreface());
   EXPECT_EQ(preface.messages, nullptr);
+}
+
+TEST(EngineCTest, CreateConversationConfigWithTools) {
+  // 1. Create an engine.
+  const std::string task_path = GetTestdataPath(
+      "litert_lm/runtime/testdata/test_lm_new_metadata.task");
+
+  EngineSettingsPtr settings(
+      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
+                                       /* vision_backend_str */ nullptr,
+                                       /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+  litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
+
+  EnginePtr engine(litert_lm_engine_create(settings.get()),
+                   &litert_lm_engine_delete);
+  ASSERT_NE(engine, nullptr);
+
+  // 2. Create a Conversation Config with tools.
+  const std::string tools_json = R"([
+    {
+      "type": "function",
+      "function": {
+        "name": "get_current_weather",
+        "description": "Get the current weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "location": {"type": "string", "description": "The city and state, e.g. San Francisco, CA"},
+            "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]}
+          },
+          "required": ["location"]
+        }
+      }
+    }
+  ])";
+
+  ConversationConfigPtr conversation_config(
+      litert_lm_conversation_config_create(
+          engine.get(), /*session_config=*/nullptr,
+          /*system_message_json=*/nullptr, tools_json.c_str(),
+          /*enable_constrained_decoding=*/false),
+      &litert_lm_conversation_config_delete);
+  ASSERT_NE(conversation_config, nullptr);
+
+  // 3. Test to see if the Conversation Config has the correct tools.
+  const auto& preface = std::get<litert::lm::JsonPreface>(
+      conversation_config->config->GetPreface());
+  EXPECT_EQ(preface.tools, nlohmann::ordered_json::parse(tools_json));
+}
+
+TEST(EngineCTest, CreateConversationConfigWithInvalidTools) {
+  // 1. Create an engine.
+  const std::string task_path = GetTestdataPath(
+      "litert_lm/runtime/testdata/test_lm_new_metadata.task");
+
+  EngineSettingsPtr settings(
+      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
+                                       /* vision_backend_str */ nullptr,
+                                       /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+  litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
+
+  EnginePtr engine(litert_lm_engine_create(settings.get()),
+                   &litert_lm_engine_delete);
+  ASSERT_NE(engine, nullptr);
+
+  // 2. Create a Conversation Config with an invalid tools json.
+  const std::string tools_json = R"({"type": "function"})";  // Not an array
+
+  ConversationConfigPtr conversation_config(
+      litert_lm_conversation_config_create(
+          engine.get(), /*session_config=*/nullptr,
+          /*system_message_json=*/nullptr, tools_json.c_str(),
+          /*enable_constrained_decoding=*/false),
+      &litert_lm_conversation_config_delete);
+  ASSERT_NE(conversation_config, nullptr);
+
+  // 3. Test to see if the Conversation Config has no tools.
+  const auto& preface = std::get<litert::lm::JsonPreface>(
+      conversation_config->config->GetPreface());
+  EXPECT_TRUE(preface.tools.is_null());
+}
+
+TEST(EngineCTest, CreateConversationConfigWithEmptyToolsArray) {
+  // 1. Create an engine.
+  const std::string task_path = GetTestdataPath(
+      "litert_lm/runtime/testdata/test_lm_new_metadata.task");
+
+  EngineSettingsPtr settings(
+      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
+                                       /* vision_backend_str */ nullptr,
+                                       /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+  litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
+
+  EnginePtr engine(litert_lm_engine_create(settings.get()),
+                   &litert_lm_engine_delete);
+  ASSERT_NE(engine, nullptr);
+
+  // 2. Create a Conversation Config with an empty tools array.
+  const std::string tools_json = R"([])";
+
+  ConversationConfigPtr conversation_config(
+      litert_lm_conversation_config_create(
+          engine.get(), /*session_config=*/nullptr,
+          /*system_message_json=*/nullptr, tools_json.c_str(),
+          /*enable_constrained_decoding=*/false),
+      &litert_lm_conversation_config_delete);
+  ASSERT_NE(conversation_config, nullptr);
+
+  // 3. Test to see if the Conversation Config has empty tools.
+  const auto& preface = std::get<litert::lm::JsonPreface>(
+      conversation_config->config->GetPreface());
+  EXPECT_TRUE(preface.tools.is_array());
+  EXPECT_TRUE(preface.tools.empty());
+}
+
+TEST(EngineCTest, CreateConversationConfigWithMalformedToolsJson) {
+  // 1. Create an engine.
+  const std::string task_path = GetTestdataPath(
+      "litert_lm/runtime/testdata/test_lm_new_metadata.task");
+
+  EngineSettingsPtr settings(
+      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
+                                       /* vision_backend_str */ nullptr,
+                                       /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+  litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
+
+  EnginePtr engine(litert_lm_engine_create(settings.get()),
+                   &litert_lm_engine_delete);
+  ASSERT_NE(engine, nullptr);
+
+  // 2. Create a Conversation Config with malformed tools json.
+  const std::string tools_json = R"([{"type": "function", ...}])";
+
+  ConversationConfigPtr conversation_config(
+      litert_lm_conversation_config_create(
+          engine.get(), /*session_config=*/nullptr,
+          /*system_message_json=*/nullptr, tools_json.c_str(),
+          /*enable_constrained_decoding=*/false),
+      &litert_lm_conversation_config_delete);
+  ASSERT_NE(conversation_config, nullptr);
+
+  // 3. Test to see if the Conversation Config has no tools.
+  const auto& preface = std::get<litert::lm::JsonPreface>(
+      conversation_config->config->GetPreface());
+  EXPECT_TRUE(preface.tools.is_null());
 }
 
 TEST(EngineCTest, CreateConversationConfigWithNoSystemMessage) {
@@ -308,8 +467,9 @@ TEST(EngineCTest, CreateConversationConfigWithNoSystemMessage) {
 
   // 3. Create a Conversation Config with the Engine Handle and Session Config.
   ConversationConfigPtr conversation_config(
-      litert_lm_conversation_config_create(engine.get(), session_config.get(),
-                                           /*system_message_json=*/nullptr),
+      litert_lm_conversation_config_create(
+          engine.get(), session_config.get(), /*system_message_json=*/nullptr,
+          /*tools_json=*/nullptr, /*enable_constrained_decoding=*/false),
       &litert_lm_conversation_config_delete);
   ASSERT_NE(conversation_config, nullptr);
 
@@ -509,8 +669,9 @@ TEST(EngineCTest, ConversationSendMessageWithConfig) {
   const std::string system_message =
       R"({"type":"text","text":"You are a helpful assistant."})";
   ConversationConfigPtr conversation_config(
-      litert_lm_conversation_config_create(engine.get(), session_config.get(),
-                                           system_message.c_str()),
+      litert_lm_conversation_config_create(
+          engine.get(), session_config.get(), system_message.c_str(),
+          /*tools_json=*/nullptr, /*enable_constrained_decoding=*/false),
       &litert_lm_conversation_config_delete);
   ASSERT_NE(conversation_config, nullptr);
 

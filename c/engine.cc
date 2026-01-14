@@ -191,7 +191,8 @@ void litert_lm_session_config_delete(LiteRtLmSessionConfig* config) {
 
 LiteRtLmConversationConfig* litert_lm_conversation_config_create(
     LiteRtLmEngine* engine, const LiteRtLmSessionConfig* session_config,
-    const char* system_message_json) {
+    const char* system_message_json, const char* tools_json,
+    bool enable_constrained_decoding) {
   if (!engine || !engine->engine) {
     return nullptr;
   }
@@ -220,6 +221,17 @@ LiteRtLmConversationConfig* litert_lm_conversation_config_create(
     default_session_config =
         std::make_unique<SessionConfig>(SessionConfig::CreateDefault());
     config_to_use = default_session_config.get();
+  }
+
+  if (tools_json) {
+    auto tool_json_parsed =
+        nlohmann::ordered_json::parse(tools_json, nullptr, false);
+    if (!tool_json_parsed.is_discarded() && tool_json_parsed.is_array()) {
+      json_preface.tools = tool_json_parsed;
+    } else {
+      ABSL_LOG(ERROR) << "Failed to parse tools JSON or not an array: "
+                      << tools_json;
+    }
   }
 
   auto conversation_config = litert::lm::ConversationConfig::Builder()

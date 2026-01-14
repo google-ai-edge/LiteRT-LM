@@ -116,11 +116,14 @@ void litert_lm_session_config_delete(LiteRtLmSessionConfig* config);
 // @param session_config The session config to use. If NULL, default
 // session config will be used.
 // @param system_message_json The system message in JSON format.
+// @param tools_json The tools description in JSON array format.
+// @param enable_constrained_decoding Whether to enable constrained decoding.
 // @return A pointer to the created config, or NULL on failure.
 LITERT_LM_C_API_EXPORT
 LiteRtLmConversationConfig* litert_lm_conversation_config_create(
     LiteRtLmEngine* engine, const LiteRtLmSessionConfig* session_config,
-    const char* system_message_json);
+    const char* system_message_json, const char* tools_json,
+    bool enable_constrained_decoding);
 
 // Destroys a LiteRT LM Conversation Config.
 // @param config The config to destroy.
