@@ -116,6 +116,18 @@ load("@cxxbridge_cmd_deps//:defs.bzl", cxxbridge_cmd_deps = "crate_repositories"
 
 cxxbridge_cmd_deps()
 
+# Apple Support (must be declared before TensorFlow to apply our patch)
+# This fixes the LC_UUID missing error on macOS by removing -Wl,-no_uuid flag
+http_archive(
+    name = "build_bazel_apple_support",
+    patch_cmds = [
+        # Remove -Wl,-no_uuid flag to fix LC_UUID missing error on macOS
+        "sed -i.bak 's/\"-Wl,-no_uuid\",//' crosstool/osx_cc_configure.bzl || true",
+    ],
+    sha256 = "1ae6fcf983cff3edab717636f91ad0efff2e5ba75607fdddddfd6ad0dbdfaf10",
+    url = "https://github.com/bazelbuild/apple_support/releases/download/1.24.5/apple_support.1.24.5.tar.gz",
+)
+
 # TensorFlow
 http_archive(
     name = "org_tensorflow",
