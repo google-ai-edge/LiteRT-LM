@@ -35,7 +35,22 @@ namespace litert::lm {
 namespace {
 
 std::vector<bool> SampleMaskToVector(const uint32_t* sample_mask,
-                                     size_t vocab_size) {
+                                     size_t vocab_size, bool is_stop,
+                                     int eos_token_id) {
+  if (sample_mask == nullptr) {
+    if (is_stop) {
+      // If stopped, only allow EOS.
+      std::vector<bool> mask_vector(vocab_size, false);
+      if (eos_token_id >= 0 && eos_token_id < vocab_size) {
+        mask_vector[eos_token_id] = true;
+      }
+      return mask_vector;
+    } else {
+      // If not stopped but mask is null, it implies no constraints are active
+      // (unconstrained), so we allow all tokens.
+      return std::vector<bool>(vocab_size, true);
+    }
+  }
   std::vector<bool> mask_vector;
   mask_vector.reserve(vocab_size);
   for (size_t i = 0; i < vocab_size; ++i) {
@@ -92,8 +107,8 @@ absl::StatusOr<std::unique_ptr<Bitmap>> LlgConstraint::ComputeBitmap(
         absl::StrCat("Failed to compute mask: ", error_message));
   }
 
-  std::vector<bool> mask_vector =
-      SampleMaskToVector(mask_res.sample_mask, vocab_size_);
+  std::vector<bool> mask_vector = SampleMaskToVector(
+      mask_res.sample_mask, vocab_size_, mask_res.is_stop, eos_token_id_);
   return std::make_unique<LlgBitmap>(std::move(mask_vector));
 }
 

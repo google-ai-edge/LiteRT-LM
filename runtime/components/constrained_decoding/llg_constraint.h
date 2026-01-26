@@ -71,8 +71,11 @@ class LlgConstraint : public Constraint {
   };
 
   // LlgConstraint takes ownership of llg_constraint.
-  explicit LlgConstraint(::LlgConstraint* llg_constraint, int vocab_size)
-      : llg_constraint_owner_(llg_constraint), vocab_size_(vocab_size) {}
+  explicit LlgConstraint(::LlgConstraint* llg_constraint, int vocab_size,
+                         int eos_token_id)
+      : llg_constraint_owner_(llg_constraint),
+        vocab_size_(vocab_size),
+        eos_token_id_(eos_token_id) {}
 
   // Gets the start state of the constraint.
   std::unique_ptr<State> Start() const override;
@@ -95,6 +98,7 @@ class LlgConstraint : public Constraint {
  private:
   LlgConstraintOwner llg_constraint_owner_;
   int vocab_size_;
+  int eos_token_id_;
 };
 
 }  // namespace litert::lm

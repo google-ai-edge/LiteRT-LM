@@ -150,7 +150,8 @@ LlgConstraintProvider::CreateConstraint(ConstraintArg constraint_arg) const {
   }
 
   return std::make_unique<LlgConstraint>(llg_constraint,
-                                         static_cast<int>(token_lens_.size()));
+                                         static_cast<int>(token_lens_.size()),
+                                         *llg_config_.eos_id);
 }
 
 }  // namespace litert::lm
