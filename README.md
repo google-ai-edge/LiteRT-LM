@@ -225,12 +225,14 @@ device and your development platform.
 
 > Note: In order to run on GPU on all platforms, we need to take extra steps:
 >
+> 1. Install [Git LFS](https://git-lfs.com), then run `git lfs checkout` to fetch
+  prebuilt binaries. These steps are required only once if not done before.
 > 1. Add `--define=litert_link_capi_so=true`
   `--define=resolve_symbols_in_exec=false` in the build command.
-> 2. `mkdir -p <test_dir>; cp <your litert_lm_main> <test_dir>; cp ./prebuilt/<your OS>/<shared libaries> <test_dir>/`
+> 1. `mkdir -p <test_dir>; cp <your litert_lm_main> <test_dir>; cp ./prebuilt/<your OS>/<shared libaries> <test_dir>/`
  and make sure the prebuilt .so/.dll/.dylib files are in the same directory as
   `litert_lm_main` binary
-> 3. Running GPU on Windows needs DirectXShaderCompiler. See
+> 1. Running GPU on Windows needs DirectXShaderCompiler. See
  [this Note](#windows_gpu) for more details.
 
 <details>
