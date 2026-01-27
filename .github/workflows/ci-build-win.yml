@@ -36,6 +36,8 @@ jobs:
     steps:
       - name: Checkout code.
         uses: actions/checkout@v4
+        with:
+          lfs: true
 
       - name : Set up cache keys and bazel output base.
         id: cache-keys
