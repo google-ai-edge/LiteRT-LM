@@ -82,7 +82,6 @@ class EmbeddingLookupTextTest : public testing::Test {
   }
 
   Expected<TensorBuffer> GetTensorBuffer(Dimensions& dimensions) {
-    LITERT_ASSIGN_OR_RETURN(auto env, ::litert::Environment::Create({}));
     size_t buffer_size = sizeof(float);
     for (auto dim : dimensions) {
       buffer_size *= dim;
@@ -91,11 +90,12 @@ class EmbeddingLookupTextTest : public testing::Test {
     RankedTensorType ranked_tensor_type(ElementType::Float32,
                                         std::move(layout));
 
-    return TensorBuffer::CreateManaged(env,
+    return TensorBuffer::CreateManaged(*env_,
                                        ::litert::TensorBufferType::kHostMemory,
                                        ranked_tensor_type, buffer_size);
   }
 
+  Expected<Environment> env_ = Environment::Create({});
   std::optional<Model> model_;
 };
 

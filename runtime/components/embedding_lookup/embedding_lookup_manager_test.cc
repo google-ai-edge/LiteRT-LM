@@ -181,7 +181,6 @@ class EmbeddingLookupManagerTest : public ::testing::Test {
   }
 
   Expected<TensorBuffer> GetTensorBuffer(Dimensions& dimensions) {
-    LITERT_ASSIGN_OR_RETURN(auto env, ::litert::Environment::Create({}));
     size_t buffer_size = sizeof(float);
     for (auto dim : dimensions) {
       buffer_size *= dim;
@@ -190,12 +189,13 @@ class EmbeddingLookupManagerTest : public ::testing::Test {
     RankedTensorType ranked_tensor_type(ElementType::Float32,
                                         std::move(layout));
 
-    return TensorBuffer::CreateManaged(env,
+    return TensorBuffer::CreateManaged(*env_,
                                        ::litert::TensorBufferType::kHostMemory,
                                        ranked_tensor_type, buffer_size);
   }
 
  protected:
+  Expected<Environment> env_ = Environment::Create({});
   std::unique_ptr<EmbeddingLookupManager> embedding_lookup_manager_;
   Model text_embedding_model_;
   Model end_of_multi_modal_model_;

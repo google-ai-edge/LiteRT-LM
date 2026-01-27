@@ -62,7 +62,6 @@ class EmbeddingLookupMultiModalTest : public testing::Test {
 
   Expected<TensorBuffer> GetTensorBuffer(
       Dimensions& dimensions, ElementType element_type = ElementType::Float32) {
-    LITERT_ASSIGN_OR_RETURN(auto env, ::litert::Environment::Create({}));
     size_t buffer_size = sizeof(float);
     for (auto dim : dimensions) {
       buffer_size *= dim;
@@ -72,7 +71,7 @@ class EmbeddingLookupMultiModalTest : public testing::Test {
 
     LITERT_ASSIGN_OR_RETURN(auto buffer,
                             TensorBuffer::CreateManaged(
-                                env, ::litert::TensorBufferType::kHostMemory,
+                                *env_, ::litert::TensorBufferType::kHostMemory,
                                 ranked_tensor_type, buffer_size));
 
     // Clear the buffer to 0.
@@ -85,6 +84,7 @@ class EmbeddingLookupMultiModalTest : public testing::Test {
     return buffer;
   }
 
+  Expected<Environment> env_ = Environment::Create({});
   int special_token_ = -1;
   litert::TensorBuffer buffer_;
 };

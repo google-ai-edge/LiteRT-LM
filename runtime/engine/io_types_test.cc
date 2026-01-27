@@ -38,7 +38,6 @@
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/test_utils.h"  // NOLINT
 
-
 namespace litert::lm {
 namespace {
 
@@ -365,6 +364,7 @@ TEST(InputAudioTest, CreateCopyFromFloatVector) {
 }
 
 TEST(CreateInputDataCopyTest, InputText) {
+  LITERT_ASSERT_OK_AND_ASSIGN(auto env, litert::Environment::Create({}));
   InputData original_data = InputText("Test Text");
   ASSERT_OK_AND_ASSIGN(InputData copied_data,
                        CreateInputDataCopy(original_data));
@@ -372,7 +372,6 @@ TEST(CreateInputDataCopyTest, InputText) {
   EXPECT_THAT(std::get<InputText>(copied_data).GetRawTextString(),
               IsOkAndHolds("Test Text"));
 
-  LITERT_ASSERT_OK_AND_ASSIGN(auto env, litert::Environment::Create({}));
   const RankedTensorType kTensorType(kTestTensorType);
   constexpr auto kTensorBufferType = ::litert::TensorBufferType::kHostMemory;
   const size_t kTensorSize = sizeof(kTensorData);
@@ -387,6 +386,8 @@ TEST(CreateInputDataCopyTest, InputText) {
 }
 
 TEST(CreateInputDataCopyTest, InputImage) {
+  LITERT_ASSERT_OK_AND_ASSIGN(auto env, litert::Environment::Create({}));
+
   InputData original_data = InputImage("Test Image");
   ASSERT_OK_AND_ASSIGN(InputData copied_data,
                        CreateInputDataCopy(original_data));
@@ -394,7 +395,6 @@ TEST(CreateInputDataCopyTest, InputImage) {
   EXPECT_THAT(std::get<InputImage>(copied_data).GetRawImageBytes(),
               IsOkAndHolds("Test Image"));
 
-  LITERT_ASSERT_OK_AND_ASSIGN(auto env, litert::Environment::Create({}));
   const RankedTensorType kTensorType(kTestTensorType);
   constexpr auto kTensorBufferType = ::litert::TensorBufferType::kHostMemory;
   const size_t kTensorSize = sizeof(kTensorData);
@@ -409,6 +409,8 @@ TEST(CreateInputDataCopyTest, InputImage) {
 }
 
 TEST(CreateInputDataCopyTest, InputAudio) {
+  LITERT_ASSERT_OK_AND_ASSIGN(auto env, litert::Environment::Create({}));
+
   InputData original_data = InputAudio("Test Audio");
   ASSERT_OK_AND_ASSIGN(InputData copied_data,
                        CreateInputDataCopy(original_data));
@@ -416,7 +418,6 @@ TEST(CreateInputDataCopyTest, InputAudio) {
   EXPECT_THAT(std::get<InputAudio>(copied_data).GetRawAudioBytes(),
               IsOkAndHolds("Test Audio"));
 
-  LITERT_ASSERT_OK_AND_ASSIGN(auto env, litert::Environment::Create({}));
   const RankedTensorType kTensorType(kTestTensorType);
   constexpr auto kTensorBufferType = ::litert::TensorBufferType::kHostMemory;
   const size_t kTensorSize = sizeof(kTensorData);
