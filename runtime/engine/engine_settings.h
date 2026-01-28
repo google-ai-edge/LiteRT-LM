@@ -28,6 +28,7 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "runtime/components/tokenizer.h"
 #include "runtime/executor/audio_executor_settings.h"
+#include "runtime/executor/audio_litert_compiled_model_utils.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/vision_executor_settings.h"
@@ -35,7 +36,6 @@
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/proto/llm_model_type.pb.h"
 #include "runtime/proto/sampler_params.pb.h"
-#include "litert/cc/internal/scoped_file.h"  // from @litert
 
 namespace litert::lm {
 
@@ -168,6 +168,16 @@ class SessionConfig {
     audio_modality_enabled_ = enable_audio_modality;
   }
 
+  // Returns the AudioExecutorProperties. These properties are populated in the
+  // Session creation time and only available if the audio modality is enabled.
+  std::optional<AudioExecutorProperties> GetAudioExecutorProperties() const {
+    return audio_executor_properties_;
+  }
+  // Returns the mutable AudioExecutorProperties.
+  std::optional<AudioExecutorProperties>& GetMutableAudioExecutorProperties() {
+    return audio_executor_properties_;
+  }
+
   // Configures the vision modality in the session.
   bool VisionModalityEnabled() const { return vision_modality_enabled_; }
   void SetVisionModalityEnabled(bool enable_vision_modality) {
@@ -230,8 +240,7 @@ class SessionConfig {
   // Scoped LoRA file:
   // Getters for the scoped LoRA file.
   std::shared_ptr<ScopedFile> GetScopedLoraFile() const;
-  void SetScopedLoraFile(
-      std::shared_ptr<ScopedFile> scoped_lora_file);
+  void SetScopedLoraFile(std::shared_ptr<ScopedFile> scoped_lora_file);
 
   // The maximum number of tokens to generate in a single request:
   // Getters for the max output tokens.
@@ -247,6 +256,10 @@ class SessionConfig {
 
   // Whether to enable audio modality in the session.
   bool audio_modality_enabled_ = false;
+
+  // Properties for the audio executor. These properties are populated in the
+  // Session creation time and only available if the audio modality is enabled.
+  std::optional<AudioExecutorProperties> audio_executor_properties_;
 
   // Whether to enable vision modality in the session.
   bool vision_modality_enabled_ = false;

@@ -728,6 +728,7 @@ cc_library(
     name = "audio_executor_base",
     hdrs = ["audio_executor_base.h"],
     deps = [
+        ":audio_executor_settings",
         ":llm_executor_io_types",
         "@com_google_absl//absl/status:statusor",
     ] + select({
@@ -747,6 +748,7 @@ cc_library(
     deps = [
         ":audio_executor",
         ":audio_executor_settings",
+        ":audio_litert_compiled_model_utils",
         ":executor_settings_base",
         ":litert_compiled_model_executor_utils",
         ":llm_executor_io_types",
@@ -814,6 +816,21 @@ cc_test(
             "@litert//litert/cc:litert_environment",
         ],
     }),
+)
+
+cc_library(
+    name = "audio_litert_compiled_model_utils",
+    srcs = ["audio_litert_compiled_model_utils.cc"],
+    hdrs = ["audio_litert_compiled_model_utils.h"],
+    deps = [
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@litert//litert/cc:litert_macros",
+        "@litert//litert/cc:litert_model",
+        "//runtime/components:model_resources",
+        "//runtime/util:litert_status_util",
+    ],
 )
 
 cc_library(

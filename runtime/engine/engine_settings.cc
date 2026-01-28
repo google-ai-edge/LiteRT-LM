@@ -338,14 +338,12 @@ std::ostream& operator<<(std::ostream& os, const EngineSettings& settings) {
     os << "  BenchmarkParams: Not set" << std::endl;
   }
   if (settings.GetVisionExecutorSettings().has_value()) {
-    os << "  VisionExecutorSettings: "
-       << settings.GetVisionExecutorSettings().value();
+    os << "  " << settings.GetVisionExecutorSettings().value();
   } else {
     os << "  VisionExecutorSettings: Not set" << std::endl;
   }
   if (settings.GetAudioExecutorSettings().has_value()) {
-    os << "  AudioExecutorSettings: "
-       << settings.GetAudioExecutorSettings().value();
+    os << "  " << settings.GetAudioExecutorSettings().value();
   } else {
     os << "  AudioExecutorSettings: Not set" << std::endl;
   }
@@ -521,6 +519,11 @@ std::ostream& operator<<(std::ostream& os, const SessionConfig& config) {
   os << "SessionConfig: " << std::endl;
   os << "  AudioModalityEnabled: " << config.AudioModalityEnabled()
      << std::endl;
+  if (config.GetAudioExecutorProperties().has_value()) {
+    os << "  " << config.GetAudioExecutorProperties().value() << std::endl;
+  } else {
+    os << "  AudioExecutorProperties: Not set" << std::endl;
+  }
   os << "  VisionModalityEnabled: " << config.VisionModalityEnabled()
      << std::endl;
   os << "  SamplerParams: " << config.GetSamplerParams().DebugString()

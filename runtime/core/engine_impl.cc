@@ -40,6 +40,7 @@
 #include "runtime/executor/audio_executor.h"
 #include "runtime/executor/audio_executor_settings.h"
 #include "runtime/executor/audio_litert_compiled_model_executor.h"
+#include "runtime/executor/audio_litert_compiled_model_utils.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/executor/llm_executor.h"
@@ -180,6 +181,14 @@ class EngineImpl : public Engine {
 
     ABSL_CHECK(litert_model_resources_ != nullptr);
     ASSIGN_OR_RETURN(auto* tokenizer, litert_model_resources_->GetTokenizer());
+
+    if (config.AudioModalityEnabled()) {
+      ASSIGN_OR_RETURN(auto audio_executor_properties,
+                       GetAudioExecutorPropertiesFromModelResources(
+                           *litert_model_resources_));
+      config.GetMutableAudioExecutorProperties() = audio_executor_properties;
+    }
+
     ASSIGN_OR_RETURN(
         auto session,
         InitializeSessionBasic(executor_.get(), tokenizer,

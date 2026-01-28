@@ -43,6 +43,7 @@
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/audio_executor_settings.h"
+#include "runtime/executor/audio_litert_compiled_model_utils.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/llm_executor.h"
 #include "runtime/executor/llm_executor_settings.h"
@@ -167,6 +168,13 @@ absl::StatusOr<std::unique_ptr<Engine::Session>>
 EngineAdvancedLegacyImpl::CreateSession(const SessionConfig& session_config) {
   auto config = session_config;
   RETURN_IF_ERROR(config.MaybeUpdateAndValidate(engine_settings_));
+  if (config.AudioModalityEnabled() &&
+      model_resources_->litert_lm_model_resources != nullptr) {
+    ASSIGN_OR_RETURN(auto audio_executor_properties,
+                     GetAudioExecutorPropertiesFromModelResources(
+                         *model_resources_->litert_lm_model_resources));
+    config.GetMutableAudioExecutorProperties() = audio_executor_properties;
+  }
   return InitializeSessionAdvanced(execution_manager_, tokenizer_, config,
                                    benchmark_info_);
 }

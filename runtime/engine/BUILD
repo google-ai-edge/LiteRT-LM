@@ -279,6 +279,7 @@ cc_library(
         "@litert//litert/cc/internal:scoped_file",
         "//runtime/components:tokenizer",
         "//runtime/executor:audio_executor_settings",
+        "//runtime/executor:audio_litert_compiled_model_utils",
         "//runtime/executor:executor_settings_base",
         "//runtime/executor:llm_executor_settings",
         "//runtime/executor:vision_executor_settings",

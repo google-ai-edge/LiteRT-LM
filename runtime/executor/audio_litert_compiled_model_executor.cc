@@ -47,6 +47,7 @@
 #include "litert/cc/options/litert_gpu_options.h"  // from @litert
 #include "runtime/components/model_resources.h"
 #include "runtime/executor/audio_executor_settings.h"
+#include "runtime/executor/audio_litert_compiled_model_utils.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/executor/llm_executor_io_types.h"
@@ -564,11 +565,14 @@ AudioLiteRtCompiledModelExecutor::Create(
   ABSL_LOG(INFO) << "AudioLiteRtCompiledModelExecutor created with "
                     "encoder_shrinking_factor: "
                  << encoder_shrinking_factor;
+  LITERT_ASSIGN_OR_RETURN(
+      auto executor_properties,
+      GetAudioExecutorPropertiesFromModelResources(*resources));
   return absl::WrapUnique(new AudioLiteRtCompiledModelExecutor(
-      std::move(executor_settings), env, std::move(resources),
-      std::move(audio_encoder), std::move(audio_adapter), sequence_length,
-      spectrogram_feature_dimensions, audio_embedding_dimensions,
-      encoder_shrinking_factor, is_streaming_encoder));
+      std::move(executor_settings), std::move(executor_properties), env,
+      std::move(resources), std::move(audio_encoder), std::move(audio_adapter),
+      sequence_length, spectrogram_feature_dimensions,
+      audio_embedding_dimensions, encoder_shrinking_factor));
 }
 
 absl::StatusOr<int> AudioLiteRtCompiledModelExecutor::EncodeInternal(
@@ -593,7 +597,7 @@ absl::StatusOr<int> AudioLiteRtCompiledModelExecutor::EncodeInternal(
       audio_adapter_->GetMutableOutputBuffers()[0].Read<float>(
           absl::MakeSpan(audio_embeddings.data(),
                          chunk_valid_tokens * audio_embedding_dimensions_)));
-  if (is_streaming_) {
+  if (executor_properties_.is_streaming_model) {
     reinterpret_cast<AudioStreamingEncoder*>(audio_encoder_.get())
         ->SwapInternalStateBuffers();
   }
