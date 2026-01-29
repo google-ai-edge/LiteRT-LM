@@ -101,6 +101,11 @@ cc_library(
 cc_library(
     name = "engine_impl_cpu_only",
     srcs = ["engine_impl.cc"],
+    visibility = [
+        ":engine_impl_users",
+        "//:clients",
+        "//:internal",
+    ],
     deps = ENGINE_IMPL_COMMON_DEPS,
     alwayslink = 1,
 )
