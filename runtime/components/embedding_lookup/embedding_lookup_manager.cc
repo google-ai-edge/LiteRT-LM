@@ -195,18 +195,15 @@ absl::Status EmbeddingLookupManager::LookupPrefill(
     // If fully_supports_multi_modal_ is false, then we need to fill in the
     // missing embeddings with the default embedding vector.
     const size_t bytes_per_token = floats_per_token * sizeof(float);
+    auto output_tensor_lock_and_addr = ::litert::TensorBufferScopedLock::Create(
+        *output_tensor, ::litert::TensorBuffer::LockMode::kWrite);
+    auto output_tensor_ptr =
+        reinterpret_cast<uint8_t*>(output_tensor_lock_and_addr->second);
     for (int i = 0; i < tokens.size(); ++i) {
       if (tokens[i] >= 0) {
         continue;
       }
       size_t byte_offset_for_token = byte_offset + i * bytes_per_token;
-
-      auto output_tensor_lock_and_addr =
-          ::litert::TensorBufferScopedLock::Create(
-              *output_tensor, ::litert::TensorBuffer::LockMode::kRead);
-      auto output_tensor_ptr =
-          reinterpret_cast<uint8_t*>(output_tensor_lock_and_addr->second);
-
       memcpy(output_tensor_ptr + byte_offset_for_token,
              default_embedding_vector_.data(),
              default_embedding_vector_.size() * sizeof(float));
