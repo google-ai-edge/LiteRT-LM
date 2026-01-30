@@ -41,15 +41,21 @@ class AudioExecutorSettings : public ExecutorSettingsBase {
 
   absl::Status SetBackend(const Backend& backend) override;
 
+  // Getter for num_threads for CPU backend.
+  int GetNumThreads() const { return num_threads_; }
+  // Setter for num_threads for CPU backend.
+  void SetNumThreads(int num_threads) { num_threads_ = num_threads; }
+
  private:
   explicit AudioExecutorSettings(const ModelAssets& model_assets,
-                                 int max_sequence_length)
+                                 int max_sequence_length, int num_threads)
       : ExecutorSettingsBase(model_assets),
-        max_sequence_length_(max_sequence_length) {}
+        max_sequence_length_(max_sequence_length),
+        num_threads_(num_threads) {}
 
   int max_sequence_length_;
-
   bool bundled_with_main_model_;
+  int num_threads_ = 4;
 };
 
 std::ostream& operator<<(std::ostream& os,

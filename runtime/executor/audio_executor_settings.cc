@@ -31,13 +31,15 @@ std::ostream& operator<<(std::ostream& os,
   os << "Backend: " << settings.GetBackend() << std::endl;
   os << "BundledWithMainModel: " << settings.GetBundledWithMainModel()
      << std::endl;
+  os << "NumThreads(CPU only): " << settings.GetNumThreads() << std::endl;
   return os;
 }
 
 absl::StatusOr<AudioExecutorSettings> AudioExecutorSettings::CreateDefault(
     const ModelAssets& model_assets, int max_sequence_length, Backend backend,
     bool bundled_with_main_model) {
-  AudioExecutorSettings settings(model_assets, max_sequence_length);
+  AudioExecutorSettings settings(model_assets, max_sequence_length,
+                                 /*num_threads=*/4);
   RETURN_IF_ERROR(settings.SetBackend(backend));
   settings.SetBundledWithMainModel(bundled_with_main_model);
   return settings;

@@ -55,6 +55,16 @@ TEST(AudioExecutorSettingsTest, GetAndSetBackend) {
   EXPECT_EQ(settings.GetBackend(), Backend::GPU_ARTISAN);
 }
 
+TEST(AudioExecutorSettingsTest, GetAndSetNumThreads) {
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets, ModelAssets::Create(""));
+  ASSERT_OK_AND_ASSIGN(
+      AudioExecutorSettings settings,
+      AudioExecutorSettings::CreateDefault(model_assets, 10, Backend::CPU));
+  EXPECT_EQ(settings.GetNumThreads(), 4);
+  settings.SetNumThreads(8);
+  EXPECT_EQ(settings.GetNumThreads(), 8);
+}
+
 TEST(AudioExecutorSettingsTest, CreateDefaultWithInvalidBackend) {
   ASSERT_OK_AND_ASSIGN(ModelAssets model_assets, ModelAssets::Create(""));
   EXPECT_THAT(AudioExecutorSettings::CreateDefault(model_assets, 10,

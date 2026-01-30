@@ -123,19 +123,15 @@ AudioLiteRtCompiledModelExecutor::AudioStaticEncoder::Create(
 absl::Status
 AudioLiteRtCompiledModelExecutor::AudioStaticEncoder::Initialize() {
   LITERT_ASSIGN_OR_RETURN(auto options, Options::Create());
-  // TODO(b/437363890): Allow configuring the LiteRT settings via options.
   if (executor_settings_.GetBackend() == Backend::GPU) {
-    LITERT_ASSIGN_OR_RETURN(GpuOptions gpu_compilation_options,
-                            GpuOptions::Create());
-    gpu_compilation_options.EnableConstantTensorSharing(true);
-    gpu_compilation_options.SetPrecision(GpuOptions::Precision::kFp32);
-    gpu_compilation_options.SetPreferTextureWeights(true);
-    options.AddOpaqueOptions(std::move(gpu_compilation_options));
+    LITERT_ASSIGN_OR_RETURN(auto& gpu_options, options.GetGpuOptions());
+    gpu_options.EnableConstantTensorSharing(true);
+    gpu_options.SetPrecision(GpuOptions::Precision::kFp32);
+    gpu_options.SetPreferTextureWeights(true);
     options.SetHardwareAccelerators(litert::HwAccelerators::kGpu);
   } else if (executor_settings_.GetBackend() == Backend::CPU) {
-    CpuOptions cpu_options;
-    cpu_options.SetNumThreads(4);
-    options.AddOpaqueOptions(std::move(cpu_options));
+    LITERT_ASSIGN_OR_RETURN(auto& cpu_options, options.GetCpuOptions());
+    cpu_options.SetNumThreads(executor_settings_.GetNumThreads());
     options.SetHardwareAccelerators(litert::HwAccelerators::kCpu);
   } else {
     return absl::InvalidArgumentError(
@@ -240,19 +236,15 @@ AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::Create(
 absl::Status
 AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::Initialize() {
   LITERT_ASSIGN_OR_RETURN(auto options, Options::Create());
-  // TODO(b/437363890): Allow configuring the LiteRT settings via options.
   if (executor_settings_.GetBackend() == Backend::GPU) {
-    LITERT_ASSIGN_OR_RETURN(GpuOptions gpu_compilation_options,
-                            GpuOptions::Create());
-    gpu_compilation_options.EnableConstantTensorSharing(true);
-    gpu_compilation_options.SetPrecision(GpuOptions::Precision::kFp32);
-    gpu_compilation_options.SetPreferTextureWeights(true);
-    options.AddOpaqueOptions(std::move(gpu_compilation_options));
+    LITERT_ASSIGN_OR_RETURN(auto& gpu_options, options.GetGpuOptions());
+    gpu_options.EnableConstantTensorSharing(true);
+    gpu_options.SetPrecision(GpuOptions::Precision::kFp32);
+    gpu_options.SetPreferTextureWeights(true);
     options.SetHardwareAccelerators(litert::HwAccelerators::kGpu);
   } else if (executor_settings_.GetBackend() == Backend::CPU) {
-    CpuOptions cpu_options;
-    cpu_options.SetNumThreads(4);
-    options.AddOpaqueOptions(std::move(cpu_options));
+    LITERT_ASSIGN_OR_RETURN(auto& cpu_options, options.GetCpuOptions());
+    cpu_options.SetNumThreads(executor_settings_.GetNumThreads());
     options.SetHardwareAccelerators(litert::HwAccelerators::kCpu);
   } else {
     return absl::InvalidArgumentError(
@@ -414,20 +406,15 @@ AudioLiteRtCompiledModelExecutor::AudioAdapter::Create(
 
 absl::Status AudioLiteRtCompiledModelExecutor::AudioAdapter::Initialize() {
   LITERT_ASSIGN_OR_RETURN(auto options, Options::Create());
-  // TODO(b/437363890): Allow configuring the LiteRT settings via
-  // AudioExecutorSettings.
   if (executor_settings_.GetBackend() == Backend::GPU) {
-    LITERT_ASSIGN_OR_RETURN(GpuOptions gpu_compilation_options,
-                            GpuOptions::Create());
-    gpu_compilation_options.EnableConstantTensorSharing(true);
-    gpu_compilation_options.SetPrecision(GpuOptions::Precision::kFp32);
-    gpu_compilation_options.SetPreferTextureWeights(true);
-    options.AddOpaqueOptions(std::move(gpu_compilation_options));
+    LITERT_ASSIGN_OR_RETURN(auto& gpu_options, options.GetGpuOptions());
+    gpu_options.EnableConstantTensorSharing(true);
+    gpu_options.SetPrecision(GpuOptions::Precision::kFp32);
+    gpu_options.SetPreferTextureWeights(true);
     options.SetHardwareAccelerators(litert::HwAccelerators::kGpu);
   } else if (executor_settings_.GetBackend() == Backend::CPU) {
-    CpuOptions cpu_options;
-    cpu_options.SetNumThreads(4);
-    options.AddOpaqueOptions(std::move(cpu_options));
+    LITERT_ASSIGN_OR_RETURN(auto& cpu_options, options.GetCpuOptions());
+    cpu_options.SetNumThreads(executor_settings_.GetNumThreads());
     options.SetHardwareAccelerators(litert::HwAccelerators::kCpu);
   } else {
     return absl::InvalidArgumentError(
