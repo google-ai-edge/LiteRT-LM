@@ -1139,10 +1139,9 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::InitializeSampler(
   sampler_params.set_p(0.0f);
   sampler_params.set_temperature(1.0f);
   sampler_params.set_seed(0);
-  ASSIGN_OR_RETURN(
-      sampler_,
-      CreateSampler(sampler_backend, output_heads, std::move(sampler_params),
-                    env_.Get(), vocab_size, data_type));
+  ASSIGN_OR_RETURN(sampler_, CreateSampler(sampler_backend, output_heads,
+                                           std::move(sampler_params),
+                                           env_.Get(), vocab_size, data_type));
 
   // If the sampler can handle input, prepare the input tensors for it.
   sampler_handles_input_ =
@@ -1538,6 +1537,9 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
       cpu_compilation_options.SetXNNPackFlags(
           default_xnnpack_flags |
           TFLITE_XNNPACK_DELEGATE_FLAG_ENABLE_LATEST_OPERATORS);
+      LITERT_ASSIGN_OR_RETURN(auto& runtime_options,
+                             compilation_options.GetRuntimeOptions());
+      runtime_options.SetCompressQuantizationZeroPoints(true);
       compilation_options.SetHardwareAccelerators(litert::HwAccelerators::kCpu);
       break;
     }
@@ -1935,6 +1937,9 @@ LlmLiteRtCompiledModelExecutorDynamic::Create(
     cpu_compilation_options.SetXNNPackFlags(
         default_xnnpack_flags |
         TFLITE_XNNPACK_DELEGATE_FLAG_ENABLE_LATEST_OPERATORS);
+    LITERT_ASSIGN_OR_RETURN(auto& runtime_options,
+                            compilation_options.GetRuntimeOptions());
+    runtime_options.SetCompressQuantizationZeroPoints(true);
     compilation_options.SetHardwareAccelerators(litert::HwAccelerators::kCpu);
   }
 
