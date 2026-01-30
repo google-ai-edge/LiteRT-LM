@@ -170,9 +170,10 @@ struct AdvancedSettings {
   // determined by the runtime.
   int num_threads_to_compile = -1;
 
-  // If true, the executor will convert weights on GPU. It's an experimental
-  // feature.
-  bool convert_weights_on_gpu = false;
+  // If true, the executor will convert weights on GPU.
+  // It is not supported by the all backends so this flag is ignored when using
+  // non-OpenCL and non-WebGPU backends.
+  bool convert_weights_on_gpu = true;
 
   // If true (by default), the executor enables Vulkan kernel shader
   // optimization.

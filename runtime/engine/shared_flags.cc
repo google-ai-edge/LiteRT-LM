@@ -106,9 +106,11 @@ ABSL_FLAG(int, num_threads_to_upload, -1,
 ABSL_FLAG(int, num_threads_to_compile, -1,
           "Number of threads for WebGPU kernel compilation. By default (-1), "
           "it's determined by the runtime.");
-ABSL_FLAG(bool, convert_weights_on_gpu, false,
-          "If true, the executor will convert weights on GPU. It's an "
-          "experimental feature.");
+ABSL_FLAG(
+    bool, convert_weights_on_gpu, true,
+    "If true, the executor will convert weights on GPU. It is not supported by "
+    "the all backends so this flag is ignored when using non-OpenCL and "
+    "non-WebGPU backends.");
 ABSL_FLAG(bool, optimize_shader_compilation, true,
           "If true, optimize Vulkan shader compilation.");
 ABSL_FLAG(bool, share_constant_tensors, true,
