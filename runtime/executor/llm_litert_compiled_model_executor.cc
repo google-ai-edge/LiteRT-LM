@@ -1389,6 +1389,8 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
       LITERT_ASSIGN_OR_RETURN(auto& gpu_compilation_options,
                               compilation_options.GetGpuOptions());
       gpu_compilation_options.EnableInfiniteFloatCapping(true);
+      // Setting this to true could lead to improved latency but lower quality
+      // on high end GPUs.
       gpu_compilation_options.EnableAllowSrcQuantizedFcConvOps(false);
       if (activation_data_type == ActivationDataType::FLOAT32) {
         gpu_compilation_options.SetPrecision(GpuOptions::Precision::kFp32);
