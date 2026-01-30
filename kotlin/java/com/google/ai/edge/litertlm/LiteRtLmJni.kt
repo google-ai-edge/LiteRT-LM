@@ -38,6 +38,8 @@ internal object LiteRtLmJni {
    *   non-positive, use the engine's default.
    * @param enableBenchmark Whether to enable benchmark mode or not.
    * @param cacheDir The directory for cache files.
+   * @param enableBenchmark Whether to enable benchmark or not.
+   * @param npuLibrariesDir The directory for the NPU libraries.
    * @return A pointer to the native engine instance.
    */
   external fun nativeCreateEngine(
@@ -48,6 +50,7 @@ internal object LiteRtLmJni {
     maxNumTokens: Int,
     cacheDir: String,
     enableBenchmark: Boolean,
+    npuLibrariesDir: String,
   ): Long
 
   /**
