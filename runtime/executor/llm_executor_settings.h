@@ -190,6 +190,11 @@ struct AdvancedSettings {
   // tensors including tokens, positions, and mask.
   bool sampler_handles_input = true;
 
+  // If true, the executor allows src quantized fc conv ops on the GPU.
+  // This feature is only supported by some GPUs. It can greatly improve
+  // performance at the risk of reducing quality.
+  bool allow_src_quantized_fc_conv_ops = false;
+
   bool operator==(const AdvancedSettings& other) const {
     return prefill_batch_sizes == other.prefill_batch_sizes &&
            num_output_candidates == other.num_output_candidates &&
@@ -208,7 +213,9 @@ struct AdvancedSettings {
            convert_weights_on_gpu == other.convert_weights_on_gpu &&
            optimize_shader_compilation == other.optimize_shader_compilation &&
            share_constant_tensors == other.share_constant_tensors &&
-           sampler_handles_input == other.sampler_handles_input;
+           sampler_handles_input == other.sampler_handles_input &&
+           allow_src_quantized_fc_conv_ops ==
+               other.allow_src_quantized_fc_conv_ops;
   }
 };
 std::ostream& operator<<(std::ostream& os, const AdvancedSettings& settings);

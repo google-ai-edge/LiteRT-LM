@@ -61,7 +61,6 @@ message Gemma3N {
   TokenUnion end_of_audio_token = 6;
 }
 
-
 // The constraint mode when constrained decoding is enabled.
 enum ConstraintMode {
   CONSTRAINT_MODE_UNSPECIFIED = 0;

@@ -236,6 +236,18 @@ absl::Status EngineSettings::MaybeUpdateAndValidate(
     ASSIGN_OR_RETURN(*metadata.mutable_llm_model_type(),
                      InferLlmModelType(metadata, tokenizer));
   }
+
+  if (metadata.has_llm_model_type() &&
+      metadata.llm_model_type().model_type_case() ==
+          proto::LlmModelType::kGemma3N) {
+    auto advanced_settings = AdvancedSettings();
+    if (main_executor_settings_.GetAdvancedSettings()) {
+      advanced_settings = *main_executor_settings_.GetAdvancedSettings();
+    }
+    advanced_settings.allow_src_quantized_fc_conv_ops = true;
+    main_executor_settings_.SetAdvancedSettings(advanced_settings);
+  }
+
   if (!metadata.has_jinja_prompt_template()) {
     ASSIGN_OR_RETURN(*metadata.mutable_jinja_prompt_template(),
                      GetDefaultJinjaPromptTemplate(metadata.prompt_templates(),

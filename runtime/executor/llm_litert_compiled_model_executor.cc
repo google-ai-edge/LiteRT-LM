@@ -1498,6 +1498,8 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
         if (!advanced_settings->optimize_shader_compilation) {
           gpu_compilation_options.DisableShaderOptimization(true);
         }
+        gpu_compilation_options.EnableAllowSrcQuantizedFcConvOps(
+            advanced_settings->allow_src_quantized_fc_conv_ops);
         enable_constant_tensor_sharing =
             advanced_settings->share_constant_tensors;
       }
