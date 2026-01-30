@@ -540,10 +540,6 @@ cc_library(
     name = "prompt_template",
     srcs = ["prompt_template.cc"],
     hdrs = ["prompt_template.h"],
-    linkopts = select({
-        "@platforms//os:windows": ["ntdll.lib"],
-        "//conditions:default": [],
-    }),
     deps = [
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
@@ -551,8 +547,7 @@ cc_library(
         "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/time",
         "@nlohmann_json//:json",
-        "//runtime/components/rust:minijinja_template_cpp",
-        "@com_googlesource_code_re2//:re2",
+        "@minja//:minja_google",
     ],
 )
 
