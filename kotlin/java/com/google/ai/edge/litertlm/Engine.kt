@@ -73,6 +73,7 @@ class Engine(val engineConfig: EngineConfig) : AutoCloseable {
           engineConfig.maxNumTokens ?: -1,
           engineConfig.cacheDir ?: "",
           @OptIn(ExperimentalApi::class) ExperimentalFlags.enableBenchmark,
+          @OptIn(ExperimentalApi::class) ExperimentalFlags.npuLibrariesDir,
         )
     }
   }

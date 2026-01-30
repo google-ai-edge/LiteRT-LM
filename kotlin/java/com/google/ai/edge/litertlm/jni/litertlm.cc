@@ -344,7 +344,7 @@ LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeSetMinLogSeverity)(
 LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateEngine)(
     JNIEnv* env, jclass thiz, jstring model_path, jstring backend,
     jstring vision_backend, jstring audio_backend, jint max_num_tokens,
-    jstring cache_dir, jboolean enable_benchmark) {
+    jstring cache_dir, jboolean enable_benchmark, jstring npu_libraries_dir) {
   const char* model_path_chars = env->GetStringUTFChars(model_path, nullptr);
   std::string model_path_str(model_path_chars);
   env->ReleaseStringUTFChars(model_path, model_path_chars);
@@ -426,6 +426,23 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateEngine)(
     }
     if (audio_backend_optional.has_value()) {
       settings->GetMutableAudioExecutorSettings()->SetCacheDir(cache_dir_str);
+    }
+  }
+
+  const char* npu_libraries_dir_chars =
+      env->GetStringUTFChars(npu_libraries_dir, nullptr);
+  std::string npu_libraries_dir_str(npu_libraries_dir_chars);
+  env->ReleaseStringUTFChars(npu_libraries_dir, npu_libraries_dir_chars);
+  if (!npu_libraries_dir_str.empty()) {
+    settings->GetMutableMainExecutorSettings().SetLitertDispatchLibDir(
+        npu_libraries_dir_str);
+    if (vision_backend_optional.has_value()) {
+      settings->GetMutableVisionExecutorSettings()->SetLitertDispatchLibDir(
+          npu_libraries_dir_str);
+    }
+    if (audio_backend_optional.has_value()) {
+      settings->GetMutableAudioExecutorSettings()->SetLitertDispatchLibDir(
+          npu_libraries_dir_str);
     }
   }
 
