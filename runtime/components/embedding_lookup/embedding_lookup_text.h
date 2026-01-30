@@ -32,6 +32,7 @@
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
+#include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/embedding_lookup/embedding_lookup.h"
 
@@ -105,6 +106,11 @@ class EmbeddingLookupText : public EmbeddingLookup {
   // the lookup table.
   std::vector<float> GetDefaultEmbeddingVector() const {
     return default_embedding_vector_;
+  }
+
+  // Returns the signature key to use for the embedding model.
+  std::optional<litert::RankedTensorType> GetOutputBufferType() const {
+    return output_buffer_type_;
   }
 
  protected:

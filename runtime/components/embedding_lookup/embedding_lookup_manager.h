@@ -76,8 +76,8 @@ class EmbeddingLookupManager {
   // Intended to be called at the end of the prefill pass.
   absl::Status CleanupMultiModalEmbeddings();
 
-  // For a given token, looks up the embedding and stores it in the
-  // output tensor.
+  // For a given token, looks up the embedding and stores it in the output
+  // vector.
   //
   // This is used for the case where the llm_litert_executor needs to look up
   // embeddings for the current step and then use the result for the next step.
@@ -88,10 +88,10 @@ class EmbeddingLookupManager {
   // output tensor.
   absl::Status LookupDecode(int token, litert::TensorBuffer* output_tensor);
 
-  // For a given token, looks up the embedding and stores it in the
-  // provided vector. This function is responsible for setting the size of the
-  // vector to the correct size and filling it with the embedding. Any data that
-  // was previously in the vector will be overwritten.
+  // For a given token, looks up the embedding and stores it in the provided
+  // vector. This function is responsible for setting the size of the vector to
+  // the correct size and filling it with the embedding. Any data that was
+  // previously in the vector will be overwritten.
   //
   // This is used for the case where the llm_litert_executor needs to look up
   // embeddings for the current step and then use the result for the next step.
@@ -108,6 +108,10 @@ class EmbeddingLookupManager {
   absl::Status LookupPrefill(absl::Span<const int> tokens,
                              litert::TensorBuffer* output_tensor,
                              size_t token_offset);
+
+  EmbeddingLookupText* GetTextEmbeddingLookup() const {
+    return text_embedding_lookup_.get();
+  }
 
  protected:
   absl::Status Initialize(

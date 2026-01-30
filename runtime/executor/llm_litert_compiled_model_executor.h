@@ -15,6 +15,7 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_LLM_LITERT_COMPILED_MODEL_EXECUTOR_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_LLM_LITERT_COMPILED_MODEL_EXECUTOR_H_
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -211,7 +212,10 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
 
   // Helper function of DecodeInternal to bind input/output tensors for decode
   // and run decode signature.
-  absl::Status BindTensorsAndRunDecode(TensorBuffer* output_logits);
+  absl::Status BindTensorsAndRunDecode(
+      const absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+          input_buffers,
+      TensorBuffer* output_logits);
   // Static version of BindTensorsAndRunDecode to be used as a callback for
   // sampler.
   static int BindTensorsAndRunDecodeStatic(void* arg);

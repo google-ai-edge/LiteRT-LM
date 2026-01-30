@@ -15,6 +15,7 @@
 #include "runtime/executor/llm_litert_compiled_model_executor.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>  // NOLINT(build/c++17) for std::filesystem::path
@@ -884,14 +885,16 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::DecodeInternal(
         /*steps=*/1));
   }
 
-  return BindTensorsAndRunDecode(&output_logits);
+  return BindTensorsAndRunDecode(decode_input_buffers_, &output_logits);
 }
 
 absl::Status LlmLiteRtCompiledModelExecutorBase::BindTensorsAndRunDecode(
+    const absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+        input_buffers,
     TensorBuffer* output_logits) {
   absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
       decode_input_buffers;
-  for (const auto& [input_name, input_buffer] : decode_input_buffers_) {
+  for (const auto& [input_name, input_buffer] : input_buffers) {
     LITERT_ASSIGN_OR_RETURN(auto input_buffer_dup, input_buffer.Duplicate());
     decode_input_buffers[input_name] = std::move(input_buffer_dup);
   }
@@ -932,7 +935,8 @@ int LlmLiteRtCompiledModelExecutorBase::BindTensorsAndRunDecodeStatic(
     void* arg) {
   auto self = static_cast<LlmLiteRtCompiledModelExecutorBase*>(arg);
   // Run decode with default output_logits.
-  auto status = self->BindTensorsAndRunDecode(/*output_logits=*/nullptr);
+  auto status = self->BindTensorsAndRunDecode(self->decode_input_buffers_,
+                                              /*output_logits=*/nullptr);
   if (!status.ok()) {
     ABSL_LOG(ERROR) << "Failed to bind tensors and run decode: " << status;
   }
