@@ -41,11 +41,8 @@ constexpr char kTestdataDir[] =
     "litert_lm/runtime/components/testdata/";
 
 constexpr absl::string_view kTestModelTemplates[] = {
-    "google-gemma-3n-e2b-it",
-    "Qwen-Qwen3-0.6B",
-    "HuggingFaceTB-SmolLM3-3B",
-    "microsoft-Phi-4-mini-instruct",
-};
+    "google-gemma-3n-e2b-it", "Qwen-Qwen3-0.6B", "HuggingFaceTB-SmolLM3-3B",
+    "microsoft-Phi-4-mini-instruct", "bos-token-test"};
 
 json GetMessageSystem() {
   return {

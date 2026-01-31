@@ -14,83 +14,122 @@
 
 #include "runtime/components/prompt_template.h"
 
-#include <memory>
 #include <string>
 #include <utility>
 
+#include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "absl/strings/match.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
+#include "runtime/components/rust/minijinja_template.rs.h"
+#include "re2/re2.h"  // from @com_googlesource_code_re2
 
 namespace litert::lm {
+namespace {
 
-using json = nlohmann::ordered_json;
-using minja_chat_template = ::minja::chat_template;
-using minja_chat_template_inputs = ::minja::chat_template_inputs;
-
-constexpr absl::string_view kIsAppendingToPrefill = "is_appending_to_prefill";
-
-PromptTemplate::PromptTemplate(absl::string_view template_content) {
-  minja_template_ = std::make_unique<minja_chat_template>(
-      std::string(template_content), /*bos_token=*/"", /*eos_token=*/"");
-
-  const auto& original_caps = minja_template_->original_caps();
-  capabilities_ = PromptTemplateCapabilities{
-      .supports_tools = original_caps.supports_tools,
-      .supports_tool_calls = original_caps.supports_tool_calls,
-      .supports_tool_responses = original_caps.supports_tool_responses,
-      .supports_system_role = original_caps.supports_system_role,
-      .supports_parallel_tool_calls =
-          original_caps.supports_parallel_tool_calls,
-      .supports_tool_call_id = original_caps.supports_tool_call_id,
-      .requires_object_arguments = original_caps.requires_object_arguments,
-      .requires_non_null_content = original_caps.requires_non_null_content,
-      .requires_typed_content = original_caps.requires_typed_content,
-      .supports_single_turn =
-          absl::StrContains(template_content, kIsAppendingToPrefill)};
+// Post-process the template to make it compatible with Minijinja.
+//
+// Minijinja is a Rust implementation of Jinja2, but it is not 100% compatible
+// with the Python implementation. In particular, it does not support calling
+// arbitrary Python methods on objects (e.g. `s.startswith("foo")`).
+//
+// This function uses regexes to rewrite common Python idioms found in
+// tokenizer_config.json templates into Minijinja-compatible syntax.
+std::string EditTemplateForMinijinja(absl::string_view template_content) {
+  std::string modified_template = std::string(template_content);
+  RE2::GlobalReplace(&modified_template, R"regex(\.startswith\((.*?)\))regex",
+                     R"( is startingwith \1)");
+  RE2::GlobalReplace(&modified_template, R"regex(\.endswith\((.*?)\))regex",
+                     R"( is endingwith \1)");
+  RE2::GlobalReplace(&modified_template,
+                     R"regex(\.replace\((.*?),(.*?)\))regex",
+                     R"( | replace(\1,\2))");
+  RE2::GlobalReplace(&modified_template, R"regex(\.split\((.*?)\)\[0\])regex",
+                     R"( | split(\1) | first)");
+  RE2::GlobalReplace(&modified_template, R"regex(\.split\((.*?)\)\[-1\])regex",
+                     R"( | split(\1) | last)");
+  RE2::GlobalReplace(&modified_template, R"regex(\.split\((.*?)\))regex",
+                     R"( | split(\1))");
+  RE2::GlobalReplace(&modified_template, R"regex(\.join\((.*?)\))regex",
+                     R"( | join(\1))");
+  RE2::GlobalReplace(&modified_template, R"regex(\.[l,r]strip\(\))regex",
+                     " | trim");
+  RE2::GlobalReplace(&modified_template, R"regex(\.[l,r]strip\((.*?)\))regex",
+                     R"( | trim(\1))");
+  RE2::GlobalReplace(&modified_template, R"regex(\.items\(\))regex",
+                     " | items");
+  RE2::GlobalReplace(&modified_template, R"regex({% generation %})regex", "");
+  RE2::GlobalReplace(&modified_template, R"regex({% endgeneration %})regex",
+                     "");
+  return modified_template;
 }
 
-PromptTemplate::PromptTemplate(const PromptTemplate& other) {
-  minja_template_ = std::make_unique<minja_chat_template>(
-      other.minja_template_->source(), other.minja_template_->bos_token(),
-      other.minja_template_->eos_token());
+}  // namespace
+
+using json = nlohmann::ordered_json;
+
+PromptTemplate::PromptTemplate(absl::string_view template_content,
+                               bool edit_template_for_minijinja)
+    : minijinja_template_(new_minijinja_template(
+          edit_template_for_minijinja
+              ? EditTemplateForMinijinja(template_content)
+              : std::string(template_content))) {
+  const auto caps = minijinja_template_->get_capabilities();
+  capabilities_ = PromptTemplateCapabilities{
+      .supports_tools = caps.supports_tools,
+      .supports_tool_calls = caps.supports_tool_calls,
+      .supports_system_role = caps.supports_system_role,
+      .supports_parallel_tool_calls = caps.supports_parallel_tool_calls,
+      .supports_tool_call_id = caps.supports_tool_call_id,
+      .requires_typed_content = caps.requires_typed_content,
+      .supports_single_turn = caps.supports_single_turn};
+}
+
+PromptTemplate::PromptTemplate(const PromptTemplate& other)
+    : minijinja_template_(other.minijinja_template_->clone_template()) {
   capabilities_ = other.capabilities_;
 }
 
 PromptTemplate& PromptTemplate::operator=(const PromptTemplate& other) {
-  minja_template_ = std::make_unique<minja_chat_template>(
-      other.minja_template_->source(), other.minja_template_->bos_token(),
-      other.minja_template_->eos_token());
+  minijinja_template_ = other.minijinja_template_->clone_template();
   capabilities_ = other.capabilities_;
   return *this;
 }
 
-PromptTemplate::PromptTemplate(PromptTemplate&& other) {
-  minja_template_ = std::move(other.minja_template_);
+PromptTemplate::PromptTemplate(PromptTemplate&& other)
+    : minijinja_template_(std::move(other.minijinja_template_)) {
   capabilities_ = other.capabilities_;
 }
 
 PromptTemplate& PromptTemplate::operator=(PromptTemplate&& other) {
-  minja_template_ = std::move(other.minja_template_);
+  minijinja_template_ = std::move(other.minijinja_template_);
   capabilities_ = other.capabilities_;
   return *this;
 }
 
 absl::StatusOr<std::string> PromptTemplate::Apply(
     const PromptTemplateInput& input) const {
-  minja_chat_template_inputs minja_inputs;
-  minja_inputs.messages = input.messages;
-  minja_inputs.tools = input.tools;
-  minja_inputs.add_generation_prompt = input.add_generation_prompt;
-  minja_inputs.extra_context = input.extra_context;
-  minja_inputs.now = absl::ToChronoTime(input.now);
-  return minja_template_->apply(minja_inputs, {.apply_polyfills = false});
+  nlohmann::ordered_json minijinja_inputs;
+  minijinja_inputs["messages"] = input.messages;
+  minijinja_inputs["tools"] = input.tools;
+  minijinja_inputs["add_generation_prompt"] = input.add_generation_prompt;
+  minijinja_inputs["extra_context"] = input.extra_context;
+  minijinja_inputs["now"] = absl::ToUnixSeconds(input.now);
+  minijinja_inputs["bos_token"] = input.bos_token;
+  minijinja_inputs["eos_token"] = input.eos_token;
+  auto result = minijinja_template_->apply(minijinja_inputs.dump());
+  if (!result.is_ok) {
+    return absl::InternalError(
+        absl::StrCat("Failed to apply template: ", std::string(result.error)));
+  }
+  return std::string(result.content);
 }
 
 absl::string_view PromptTemplate::GetTemplateSource() const {
-  return minja_template_->source();
+  auto source = minijinja_template_->source();
+  return absl::string_view(source.data(), source.size());
 }
 
 }  // namespace litert::lm

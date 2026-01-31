@@ -15,7 +15,6 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_COMPONENTS_PROMPT_TEMPLATE_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_COMPONENTS_PROMPT_TEMPLATE_H_
 
-#include <memory>
 #include <string>
 
 #include "absl/status/statusor.h"  // from @com_google_absl
@@ -23,7 +22,7 @@
 #include "absl/time/clock.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
-#include "minja/chat-template.hpp"  // from @minja
+#include "runtime/components/rust/minijinja_template.rs.h"
 
 namespace litert::lm {
 
@@ -90,6 +89,12 @@ struct PromptTemplateInput {
   // The time when the prompt template is applied. This is used to support
   // things time-aware knowledge cut models, e.g. SmolLM-V3,
   absl::Time now = absl::Now();
+
+  // The beginning of sequence token.
+  nlohmann::ordered_json bos_token = "";
+
+  // The end of sequence token.
+  nlohmann::ordered_json eos_token = "";
 };
 
 // The capabilities of the prompt template.
@@ -98,24 +103,12 @@ struct PromptTemplateCapabilities {
   bool supports_tools = false;
   // Whether the template supports tool calls.
   bool supports_tool_calls = false;
-  // Whether the template supports tool responses.
-  bool supports_tool_responses = false;
   // Whether the template supports system role.
   bool supports_system_role = false;
   // Whether the template supports parallel tool calls.
   bool supports_parallel_tool_calls = false;
   // Whether the template supports tool call id.
   bool supports_tool_call_id = false;
-
-  // Whether the template requires object arguments, or simply stringified
-  // arguments.
-  // meta-llama/Llama-3.1-8B-Instruct expects arguments to be an object.
-  // Most other templates (and OpenAI's API) expect the arguments object to be
-  // stringified.
-  bool requires_object_arguments = false;
-
-  // Whether the template requires non-null content.
-  bool requires_non_null_content = false;
 
   // Whether the template requires typed content. {"type": "text"}, {"type":
   // "image"}, {"type": "audio"}, {"type": "video"} etc.
@@ -131,7 +124,10 @@ class PromptTemplate {
  public:
   // Creates a PromptTemplate from the string content.
   // template_content: the jinja template string.
-  explicit PromptTemplate(absl::string_view template_content);
+  // edit_template_for_minijinja: whether to edit the template to be compatible
+  // with Mini Jinja.
+  explicit PromptTemplate(absl::string_view template_content,
+                          bool edit_template_for_minijinja = true);
 
   // Copying constructor.
   PromptTemplate(const PromptTemplate&);
@@ -157,7 +153,7 @@ class PromptTemplate {
   }
 
  private:
-  std::unique_ptr<::minja::chat_template> minja_template_;
+  rust::Box<MinijinjaTemplate> minijinja_template_;
 
   // The capabilities of the prompt template. Auto inferred from the template
   // source string.

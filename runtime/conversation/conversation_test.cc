@@ -65,8 +65,12 @@ constexpr char kGemma3ToolsMultiPrefillTemplatePath[] =
 
 constexpr absl::string_view kTestJinjaPromptTemplate = R"jinja(
 {%- for message in messages -%}
-  {{ '<start_of_turn>' + message.role }}
-  {{ message.content + '<end_of_turn>\n' }}
+  {{- '<start_of_turn>' + message.role + '\n' -}}
+  {%- if message.content is string -%}
+    {{- message.content + '<end_of_turn>\n' -}}
+  {%- else -%}
+    {{- message.content[0].text + '<end_of_turn>\n' -}}
+  {%- endif -%}
 {%- endfor -%}
 )jinja";
 
