@@ -43,6 +43,7 @@
 #include "runtime/util/litert_lm_loader.h"
 #include "runtime/util/model_asset_bundle_resources.h"
 #include "runtime/util/status_macros.h"  //NOLINT
+#include "tflite/types/half.h"  // from @litert
 
 namespace litert::lm {
 
@@ -273,6 +274,14 @@ absl::Status InitializeAttentionMask(litert::TensorBuffer& mask, bool is_f16) {
                 is_f16 ? -45824 : -0.7f * std::numeric_limits<float>::max());
       break;
     }
+    case litert::ElementType::Float16: {
+      // Float16 mask: Default value is -45824.
+      tflite::half* mask_ptr =
+          static_cast<tflite::half*>(mask_lock_and_addr.second);
+      std::fill(mask_ptr, mask_ptr + mask_size / sizeof(tflite::half),
+                tflite::half(-45824.0f));
+      break;
+    }
     default:
       return absl::InvalidArgumentError(
           "Unsupported attention mask data type.");
@@ -318,6 +327,8 @@ absl::Status FillAttentionMask(litert::TensorBuffer& mask, int start_timestep,
     batch_offset /= sizeof(bool);
   } else if (mask_tensor_type.ElementType() == litert::ElementType::Float32) {
     batch_offset /= sizeof(float);
+  } else if (mask_tensor_type.ElementType() == litert::ElementType::Float16) {
+    batch_offset /= sizeof(tflite::half);
   } else {
     return absl::InvalidArgumentError("Unsupported attention mask data type.");
   }
@@ -332,6 +343,13 @@ absl::Status FillAttentionMask(litert::TensorBuffer& mask, int start_timestep,
         bool* bool_ptr = static_cast<bool*>(mask_lock_and_addr.second);
         std::fill(bool_ptr + offset, bool_ptr + offset + current_step + 1,
                   true);
+      } else if (mask_tensor_type.ElementType() ==
+                 litert::ElementType::Float16) {
+        // Float16 mask: Fill value = 0.0f.
+        tflite::half* half_ptr =
+            static_cast<tflite::half*>(mask_lock_and_addr.second);
+        std::fill(half_ptr + offset, half_ptr + offset + current_step + 1,
+                  tflite::half(0.0f));
       } else {  // litert::ElementType::Float32, checked above.
         // Float mask: Fill value = 0.0f.
         float* float_ptr = static_cast<float*>(mask_lock_and_addr.second);
