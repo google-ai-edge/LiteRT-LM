@@ -93,12 +93,14 @@ absl::StatusOr<SessionId> ExecutionManager::RegisterNewSession(
     }
   }
   SessionId session_id = next_session_id_.fetch_add(1);
+  auto lora_id = session_config.GetLoraId();
   auto session_info = std::make_shared<SessionInfo>(SessionInfo{
       .session_config = std::move(session_config),
       .context_handler = std::move(context_handler),
       .sampler = std::move(sampler),
       .stop_token_detector = std::move(stop_token_detector),
       .benchmark_info = std::move(benchmark_info),
+      .lora_id = lora_id,
   });
   {
     absl::MutexLock lock(session_and_task_lookup_mutex_);
@@ -498,6 +500,18 @@ absl::Status ExecutionManager::UpdateAllTasksToState(
   return absl::OkStatus();
 }
 
+absl::Status ExecutionManager::ActivateLoraForSession(
+    const SessionInfo& session_info) {
+  if (lora_manager_ == nullptr) {
+    return absl::OkStatus();
+  }
+  if (session_info.lora_id.has_value()) {
+    return lora_manager_->UseLoRA(session_info.lora_id.value());
+  }
+  lora_manager_->ClearLoRA();
+  return absl::OkStatus();
+}
+
 absl::StatusOr<ExecutorInputs> ExecutionManager::ProcessAndCombineContents(
     const std::vector<InputData>& preprocessed_contents,
     std::optional<BenchmarkInfo>& benchmark_info) {
@@ -688,6 +702,13 @@ absl::Status ExecutionManager::AddPrefillTask(
 
     RETURN_IF_CANCELLED(cancelled, task_id, callback);
 
+    // Activate the LoRA adapter for this session before the forward pass.
+    auto lora_status = ActivateLoraForSession(*session_info);
+    if (!lora_status.ok()) {
+      FinishTaskAndLogErrors(task_id, lora_status, std::move(callback));
+      return;
+    }
+
     auto llm_executor = resource_manager_->AcquireExecutorWithContextHandler(
         session_info->context_handler);
     if (!llm_executor.ok()) {
@@ -761,6 +782,13 @@ absl::Status ExecutionManager::AddDecodeTask(
     }
 
     RETURN_IF_CANCELLED(cancelled, task_id, callback);
+
+    // Activate the LoRA adapter for this session before the forward pass.
+    auto lora_status = ActivateLoraForSession(*session_info);
+    if (!lora_status.ok()) {
+      FinishTaskAndLogErrors(task_id, lora_status, std::move(callback));
+      return;
+    }
 
     auto llm_executor = resource_manager_->AcquireExecutorWithContextHandler(
         session_info->context_handler);
@@ -942,6 +970,13 @@ absl::Status ExecutionManager::AddTextScoringTask(
     }
 
     RETURN_IF_CANCELLED(cancelled, task_id, callback);
+
+    // Activate the LoRA adapter for this session before the forward pass.
+    auto lora_status = ActivateLoraForSession(*session_info);
+    if (!lora_status.ok()) {
+      FinishTaskAndLogErrors(task_id, lora_status, std::move(callback));
+      return;
+    }
 
     auto llm_executor = resource_manager_->AcquireExecutorWithContextHandler(
         session_info->context_handler);

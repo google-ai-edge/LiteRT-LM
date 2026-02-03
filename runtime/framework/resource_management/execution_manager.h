@@ -34,6 +34,7 @@
 #include "absl/time/time.h"  // from @com_google_absl
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "runtime/components/constrained_decoding/constraint.h"
+#include "runtime/components/lora_manager.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/components/sampler.h"
 #include "runtime/components/stop_token_detector.h"
@@ -70,6 +71,9 @@ struct SessionInfo {
   std::unique_ptr<StopTokenDetector> stop_token_detector;
   std::optional<BenchmarkInfo> benchmark_info = std::nullopt;
   absl::flat_hash_set<TaskId> active_tasks = {};
+  // The LoRA ID to activate before each forward pass for this session.
+  // If nullopt, no LoRA adapter is used (base model).
+  std::optional<uint32_t> lora_id = std::nullopt;
 };
 
 // All the information about a task.
@@ -226,6 +230,12 @@ class ExecutionManager {
       absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback)
       ABSL_LOCKS_EXCLUDED(session_and_task_lookup_mutex_);
 
+  // Sets the LoRA manager used for per-session adapter switching.
+  // The caller retains ownership of the LoraManager.
+  void SetLoraManager(LoraManager* lora_manager) {
+    lora_manager_ = lora_manager;
+  }
+
   // Adds a text scoring task to the execution manager.
   // - session_id: The ID of the session that created the task.
   // - task_id: The task ID of the task.
@@ -345,6 +355,10 @@ class ExecutionManager {
       const absl::flat_hash_set<TaskId>& task_ids, TaskState task_state)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(session_and_task_lookup_mutex_);
 
+  // Activates the LoRA adapter for the given session, or clears LoRA if the
+  // session has no adapter configured.
+  absl::Status ActivateLoraForSession(const SessionInfo& session_info);
+
   // Processes and combines the contents of the preprocessed contents.
   // - preprocessed_contents: The preprocessed contents of the task.
   // Returns:
@@ -394,6 +408,9 @@ class ExecutionManager {
   // TODO b/476205457 - Consider updating all the callback triggering to use
   // this thread pool, and remove the syncing logic.
   std::unique_ptr<ThreadPool> absl_nonnull callback_thread_pool_;
+
+  // Optional LoRA manager for per-session adapter switching. Not owned.
+  LoraManager* lora_manager_ = nullptr;
 };
 
 }  // namespace litert::lm

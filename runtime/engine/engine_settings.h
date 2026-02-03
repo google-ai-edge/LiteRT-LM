@@ -15,6 +15,7 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_ENGINE_ENGINE_SETTINGS_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_ENGINE_ENGINE_SETTINGS_H_
 
+#include <cstdint>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -227,6 +228,12 @@ class SessionConfig {
     use_external_sampler_ = use_external_sampler;
   }
 
+  // LoRA ID:
+  // The LoRA adapter ID to activate for this session. If nullopt, no LoRA
+  // adapter is used (base model).
+  std::optional<uint32_t> GetLoraId() const { return lora_id_; }
+  void SetLoraId(std::optional<uint32_t> lora_id) { lora_id_ = lora_id; }
+
   // Scoped LoRA file:
   // Getters for the scoped LoRA file.
   std::shared_ptr<ScopedFile> GetScopedLoraFile() const;
@@ -286,6 +293,9 @@ class SessionConfig {
   // Whether to use external sampler.
   // notice: this is only used in advanced engine.
   bool use_external_sampler_ = false;
+
+  // The LoRA adapter ID to activate for this session.
+  std::optional<uint32_t> lora_id_;
 
   // Scoped file for the LoRA weights.
   std::shared_ptr<ScopedFile> scoped_lora_file_;
