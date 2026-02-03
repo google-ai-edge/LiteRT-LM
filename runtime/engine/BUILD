@@ -277,6 +277,17 @@ cc_library(
     ],
 )
 
+cc_test(
+    name = "mezo_test",
+    srcs = ["mezo_test.cc"],
+    deps = [
+        ":mezo",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+    ],
+)
+
 cc_library(
     name = "engine_settings",
     srcs = ["engine_settings.cc"],
