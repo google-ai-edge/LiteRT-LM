@@ -288,6 +288,19 @@ cc_test(
     ],
 )
 
+cc_test(
+    name = "mezo_multi_session_test",
+    srcs = ["mezo_multi_session_test.cc"],
+    deps = [
+        ":engine_settings",
+        ":mezo",
+        "//runtime/components:lora_manager",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+    ],
+)
+
 cc_library(
     name = "engine_settings",
     srcs = ["engine_settings.cc"],
