@@ -56,6 +56,7 @@ cc_library(
         "//runtime/engine:engine_interface",
         "//runtime/engine:engine_settings",
         "//runtime/engine:io_types",
+        "//runtime/engine:mezo",
         "//runtime/executor:executor_settings_base",
         "//runtime/proto:engine_cc_proto",
         "//runtime/proto:sampler_params_cc_proto",

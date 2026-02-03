@@ -266,6 +266,18 @@ cc_binary(
 )
 
 cc_library(
+    name = "mezo",
+    srcs = ["mezo.cc"],
+    hdrs = ["mezo.h"],
+    deps = [
+        "@com_google_absl//absl/functional:any_invocable",
+        "@com_google_absl//absl/log:absl_log",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+    ],
+)
+
+cc_library(
     name = "engine_settings",
     srcs = ["engine_settings.cc"],
     hdrs = ["engine_settings.h"],

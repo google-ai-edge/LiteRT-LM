@@ -35,6 +35,7 @@
 #include "runtime/engine/engine_factory.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
+#include "runtime/engine/mezo.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/proto/sampler_params.pb.h"
 
@@ -97,9 +98,11 @@ using ::litert::lm::EngineFactory;
 using ::litert::lm::EngineSettings;
 using ::litert::lm::InputText;
 using ::litert::lm::JsonMessage;
-using ::litert::lm::EngineFactory;
 using ::litert::lm::Message;
+using ::litert::lm::MeZoConfig;
+using ::litert::lm::MeZoFineTuner;
 using ::litert::lm::ModelAssets;
+using ::litert::lm::NamedParameter;
 using ::litert::lm::Responses;
 using ::litert::lm::SessionConfig;
 using ::litert::lm::proto::SamplerParameters;
@@ -138,6 +141,14 @@ struct LiteRtLmSessionConfig {
 
 struct LiteRtLmConversationConfig {
   std::unique_ptr<ConversationConfig> config;
+};
+
+struct LiteRtLmMeZoConfig {
+  MeZoConfig config;
+};
+
+struct LiteRtLmMeZoFineTuner {
+  std::unique_ptr<MeZoFineTuner> finetuner;
 };
 
 extern "C" {
@@ -677,6 +688,132 @@ LiteRtLmBenchmarkInfo* litert_lm_conversation_get_benchmark_info(
     return nullptr;
   }
   return new LiteRtLmBenchmarkInfo{std::move(*benchmark_info)};
+}
+
+// ---------------------------------------------------------------------------
+// MeZO Fine-Tuning C API
+// ---------------------------------------------------------------------------
+
+LiteRtLmMeZoConfig* litert_lm_mezo_config_create() {
+  return new LiteRtLmMeZoConfig;
+}
+
+void litert_lm_mezo_config_delete(LiteRtLmMeZoConfig* config) {
+  delete config;
+}
+
+void litert_lm_mezo_config_set_learning_rate(LiteRtLmMeZoConfig* config,
+                                             float learning_rate) {
+  if (config) {
+    config->config.SetLearningRate(learning_rate);
+  }
+}
+
+void litert_lm_mezo_config_set_epsilon(LiteRtLmMeZoConfig* config,
+                                       float epsilon) {
+  if (config) {
+    config->config.SetEpsilon(epsilon);
+  }
+}
+
+void litert_lm_mezo_config_set_weight_decay(LiteRtLmMeZoConfig* config,
+                                            float weight_decay) {
+  if (config) {
+    config->config.SetWeightDecay(weight_decay);
+  }
+}
+
+void litert_lm_mezo_config_set_seed(LiteRtLmMeZoConfig* config,
+                                    uint64_t seed) {
+  if (config) {
+    config->config.SetSeed(seed);
+  }
+}
+
+LiteRtLmMeZoFineTuner* litert_lm_mezo_finetuner_create(
+    const LiteRtLmMeZoConfig* config) {
+  if (!config) {
+    return nullptr;
+  }
+  auto finetuner = MeZoFineTuner::Create(config->config);
+  if (!finetuner.ok()) {
+    ABSL_LOG(ERROR) << "Failed to create MeZO fine-tuner: "
+                    << finetuner.status();
+    return nullptr;
+  }
+  auto* c_finetuner = new LiteRtLmMeZoFineTuner;
+  c_finetuner->finetuner = *std::move(finetuner);
+  return c_finetuner;
+}
+
+void litert_lm_mezo_finetuner_delete(LiteRtLmMeZoFineTuner* finetuner) {
+  delete finetuner;
+}
+
+int litert_lm_mezo_finetuner_step(LiteRtLmMeZoFineTuner* finetuner,
+                                  const LiteRtLmMeZoParameter* parameters,
+                                  size_t num_parameters,
+                                  LiteRtLmMeZoLossFn loss_fn, void* user_data,
+                                  float* loss_out) {
+  if (!finetuner || !finetuner->finetuner || !parameters || !loss_fn ||
+      !loss_out) {
+    return -1;
+  }
+
+  // Convert C parameters to C++ NamedParameter vector.
+  std::vector<NamedParameter> cpp_params;
+  cpp_params.reserve(num_parameters);
+  for (size_t i = 0; i < num_parameters; ++i) {
+    NamedParameter p;
+    p.name = parameters[i].name ? parameters[i].name : "";
+    p.data = parameters[i].data;
+    p.num_elements = parameters[i].num_elements;
+    p.is_bias_or_layernorm = !parameters[i].apply_weight_decay;
+    cpp_params.push_back(std::move(p));
+  }
+
+  // Wrap the C loss callback as a C++ invocable.
+  auto cpp_loss_fn =
+      [loss_fn, user_data]() -> absl::StatusOr<float> {
+    float loss = 0.0f;
+    int result = loss_fn(user_data, &loss);
+    if (result != 0) {
+      return absl::InternalError("Loss function callback failed.");
+    }
+    return loss;
+  };
+
+  auto result =
+      finetuner->finetuner->Step(cpp_params, std::move(cpp_loss_fn));
+  if (!result.ok()) {
+    ABSL_LOG(ERROR) << "MeZO step failed: " << result.status();
+    return static_cast<int>(result.status().code());
+  }
+  *loss_out = *result;
+  return 0;
+}
+
+uint64_t litert_lm_mezo_finetuner_get_step_count(
+    const LiteRtLmMeZoFineTuner* finetuner) {
+  if (!finetuner || !finetuner->finetuner) {
+    return 0;
+  }
+  return finetuner->finetuner->GetStepCount();
+}
+
+void litert_lm_mezo_finetuner_set_learning_rate(
+    LiteRtLmMeZoFineTuner* finetuner, float learning_rate) {
+  if (finetuner && finetuner->finetuner) {
+    finetuner->finetuner->SetLearningRate(learning_rate);
+  }
+}
+
+float litert_lm_mezo_finetuner_get_learning_rate(
+    const LiteRtLmMeZoFineTuner* finetuner) {
+  if (!finetuner || !finetuner->finetuner) {
+    return 0.0f;
+  }
+  return finetuner->finetuner->GetLearningRate();
 }
 
 }  // extern "C"

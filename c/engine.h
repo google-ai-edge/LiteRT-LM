@@ -62,6 +62,12 @@ typedef struct LiteRtLmSessionConfig LiteRtLmSessionConfig;
 // Opaque pointer for LiteRT LM Conversation Config.
 typedef struct LiteRtLmConversationConfig LiteRtLmConversationConfig;
 
+// Opaque pointer for LiteRT LM MeZO Config.
+typedef struct LiteRtLmMeZoConfig LiteRtLmMeZoConfig;
+
+// Opaque pointer for LiteRT LM MeZO Fine-Tuner.
+typedef struct LiteRtLmMeZoFineTuner LiteRtLmMeZoFineTuner;
+
 // Represents the type of sampler.
 typedef enum {
   kTypeUnspecified = 0,
@@ -455,6 +461,135 @@ void litert_lm_conversation_cancel_process(LiteRtLmConversation* conversation);
 LITERT_LM_C_API_EXPORT
 LiteRtLmBenchmarkInfo* litert_lm_conversation_get_benchmark_info(
     LiteRtLmConversation* conversation);
+
+// ---------------------------------------------------------------------------
+// MeZO (Memory-efficient Zeroth-Order) Fine-Tuning API
+// ---------------------------------------------------------------------------
+//
+// MeZO estimates gradients using only forward passes, achieving the same
+// memory footprint as inference. It is suitable for on-device fine-tuning
+// of LLMs where backpropagation is infeasible.
+
+// Represents a single named model parameter for MeZO fine-tuning.
+typedef struct {
+  // Name of the parameter (e.g., "attention.query_weight_0").
+  const char* name;
+  // Pointer to the mutable weight data (float32).
+  float* data;
+  // Number of float elements in the parameter.
+  size_t num_elements;
+  // Whether this parameter is a bias or layer normalization weight. When true,
+  // weight decay is not applied during updates.
+  bool apply_weight_decay;
+} LiteRtLmMeZoParameter;
+
+// Callback for computing the loss during a MeZO step.
+// @param user_data User-provided context pointer.
+// @param loss_out Pointer to store the computed loss value.
+// @return 0 on success, non-zero on failure.
+typedef int (*LiteRtLmMeZoLossFn)(void* user_data, float* loss_out);
+
+// Creates a MeZO config with default values (lr=1e-6, eps=1e-3, wd=0).
+// The caller is responsible for destroying the config using
+// `litert_lm_mezo_config_delete`.
+//
+// @return A pointer to the created config, or NULL on failure.
+LITERT_LM_C_API_EXPORT
+LiteRtLmMeZoConfig* litert_lm_mezo_config_create();
+
+// Destroys a MeZO config.
+//
+// @param config The config to destroy.
+LITERT_LM_C_API_EXPORT
+void litert_lm_mezo_config_delete(LiteRtLmMeZoConfig* config);
+
+// Sets the learning rate for MeZO. Must be positive.
+//
+// @param config The config to modify.
+// @param learning_rate The learning rate.
+LITERT_LM_C_API_EXPORT
+void litert_lm_mezo_config_set_learning_rate(LiteRtLmMeZoConfig* config,
+                                             float learning_rate);
+
+// Sets the perturbation scale (epsilon) for MeZO. Must be positive.
+//
+// @param config The config to modify.
+// @param epsilon The perturbation scale.
+LITERT_LM_C_API_EXPORT
+void litert_lm_mezo_config_set_epsilon(LiteRtLmMeZoConfig* config,
+                                       float epsilon);
+
+// Sets the weight decay coefficient for MeZO. Must be non-negative.
+//
+// @param config The config to modify.
+// @param weight_decay The weight decay coefficient.
+LITERT_LM_C_API_EXPORT
+void litert_lm_mezo_config_set_weight_decay(LiteRtLmMeZoConfig* config,
+                                            float weight_decay);
+
+// Sets the random seed for reproducibility. A value of 0 uses a random seed.
+//
+// @param config The config to modify.
+// @param seed The random seed.
+LITERT_LM_C_API_EXPORT
+void litert_lm_mezo_config_set_seed(LiteRtLmMeZoConfig* config,
+                                    uint64_t seed);
+
+// Creates a MeZO fine-tuner from the given config. The caller is responsible
+// for destroying the fine-tuner using `litert_lm_mezo_finetuner_delete`.
+//
+// @param config The MeZO config.
+// @return A pointer to the created fine-tuner, or NULL on failure.
+LITERT_LM_C_API_EXPORT
+LiteRtLmMeZoFineTuner* litert_lm_mezo_finetuner_create(
+    const LiteRtLmMeZoConfig* config);
+
+// Destroys a MeZO fine-tuner.
+//
+// @param finetuner The fine-tuner to destroy.
+LITERT_LM_C_API_EXPORT
+void litert_lm_mezo_finetuner_delete(LiteRtLmMeZoFineTuner* finetuner);
+
+// Performs one MeZO optimization step. The loss function is called twice
+// (once with positive perturbation, once with negative perturbation).
+//
+// @param finetuner The fine-tuner to use.
+// @param parameters An array of named parameters to optimize.
+// @param num_parameters The number of parameters in the array.
+// @param loss_fn Callback function that computes the forward-pass loss.
+// @param user_data User-provided context pointer passed to loss_fn.
+// @param loss_out Pointer to store the loss from the positive perturbation.
+// @return 0 on success, non-zero on failure.
+LITERT_LM_C_API_EXPORT
+int litert_lm_mezo_finetuner_step(LiteRtLmMeZoFineTuner* finetuner,
+                                  const LiteRtLmMeZoParameter* parameters,
+                                  size_t num_parameters,
+                                  LiteRtLmMeZoLossFn loss_fn, void* user_data,
+                                  float* loss_out);
+
+// Returns the number of completed optimization steps.
+//
+// @param finetuner The fine-tuner to query.
+// @return The step count.
+LITERT_LM_C_API_EXPORT
+uint64_t litert_lm_mezo_finetuner_get_step_count(
+    const LiteRtLmMeZoFineTuner* finetuner);
+
+// Updates the learning rate (e.g., for scheduling).
+//
+// @param finetuner The fine-tuner to modify.
+// @param learning_rate The new learning rate.
+LITERT_LM_C_API_EXPORT
+void litert_lm_mezo_finetuner_set_learning_rate(
+    LiteRtLmMeZoFineTuner* finetuner, float learning_rate);
+
+// Returns the current learning rate.
+//
+// @param finetuner The fine-tuner to query.
+// @return The current learning rate, or 0.0f if finetuner is NULL.
+LITERT_LM_C_API_EXPORT
+float litert_lm_mezo_finetuner_get_learning_rate(
+    const LiteRtLmMeZoFineTuner* finetuner);
 
 #ifdef __cplusplus
 }  // extern "C"
