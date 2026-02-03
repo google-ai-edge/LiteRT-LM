@@ -703,6 +703,16 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::PrefillInternal(
     LITERT_ASSIGN_OR_RETURN(auto input_buffer_dup, input_buffer.Duplicate());
     input_buffers[input_name] = std::move(input_buffer_dup);
   }
+  // Inject LoRA buffers for the active adapter, if any.
+  if (lora_manager_ != nullptr &&
+      lora_manager_->GetCurrentLoRAId().has_value()) {
+    auto lora_buffers = lora_manager_->GetLoRABuffers();
+    if (lora_buffers.ok()) {
+      for (auto& [name, buffer] : *lora_buffers) {
+        input_buffers[name] = std::move(buffer);
+      }
+    }
+  }
   absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer> output_buffers;
   for (const auto& [output_name, output_buffer] : *output_kv_cache_buffers_) {
     LITERT_ASSIGN_OR_RETURN(auto output_buffer_dup, output_buffer.Duplicate());
@@ -901,6 +911,16 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::BindTensorsAndRunDecode(
   for (const auto& [input_name, input_buffer] : *input_kv_cache_buffers_) {
     LITERT_ASSIGN_OR_RETURN(auto input_buffer_dup, input_buffer.Duplicate());
     decode_input_buffers[input_name] = std::move(input_buffer_dup);
+  }
+  // Inject LoRA buffers for the active adapter, if any.
+  if (lora_manager_ != nullptr &&
+      lora_manager_->GetCurrentLoRAId().has_value()) {
+    auto lora_buffers = lora_manager_->GetLoRABuffers();
+    if (lora_buffers.ok()) {
+      for (auto& [name, buffer] : *lora_buffers) {
+        decode_input_buffers[name] = std::move(buffer);
+      }
+    }
   }
   absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
       decode_output_buffers;
