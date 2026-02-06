@@ -144,6 +144,54 @@ TEST(EngineCTest, CreateSessionConfigWithNoSamplerParams) {
             litert::lm::proto::SamplerParameters::TYPE_UNSPECIFIED);
 }
 
+TEST(EngineCTest, SessionConfigLoraIdDefaultIsUnset) {
+  SessionConfigPtr config(litert_lm_session_config_create(),
+                          &litert_lm_session_config_delete);
+  ASSERT_NE(config, nullptr);
+
+  // Default should be -1 (no LoRA).
+  EXPECT_EQ(litert_lm_session_config_get_lora_id(config.get()), -1);
+  EXPECT_EQ(config->config->GetLoraId(), std::nullopt);
+}
+
+TEST(EngineCTest, SessionConfigSetAndGetLoraId) {
+  SessionConfigPtr config(litert_lm_session_config_create(),
+                          &litert_lm_session_config_delete);
+  ASSERT_NE(config, nullptr);
+
+  // Set a LoRA ID.
+  litert_lm_session_config_set_lora_id(config.get(), 42);
+  EXPECT_EQ(litert_lm_session_config_get_lora_id(config.get()), 42);
+  EXPECT_EQ(config->config->GetLoraId(), std::optional<uint32_t>(42));
+
+  // Change the LoRA ID.
+  litert_lm_session_config_set_lora_id(config.get(), 99);
+  EXPECT_EQ(litert_lm_session_config_get_lora_id(config.get()), 99);
+  EXPECT_EQ(config->config->GetLoraId(), std::optional<uint32_t>(99));
+
+  // Clear LoRA ID with -1.
+  litert_lm_session_config_set_lora_id(config.get(), -1);
+  EXPECT_EQ(litert_lm_session_config_get_lora_id(config.get()), -1);
+  EXPECT_EQ(config->config->GetLoraId(), std::nullopt);
+}
+
+TEST(EngineCTest, SessionConfigLoraIdZeroIsValid) {
+  SessionConfigPtr config(litert_lm_session_config_create(),
+                          &litert_lm_session_config_delete);
+  ASSERT_NE(config, nullptr);
+
+  // LoRA ID 0 is a valid ID (first adapter).
+  litert_lm_session_config_set_lora_id(config.get(), 0);
+  EXPECT_EQ(litert_lm_session_config_get_lora_id(config.get()), 0);
+  EXPECT_EQ(config->config->GetLoraId(), std::optional<uint32_t>(0));
+}
+
+TEST(EngineCTest, SessionConfigLoraIdNullConfigHandling) {
+  // Should not crash with null config.
+  litert_lm_session_config_set_lora_id(nullptr, 42);
+  EXPECT_EQ(litert_lm_session_config_get_lora_id(nullptr), -1);
+}
+
 TEST(EngineCTest, CreateConversationConfig) {
   // 1. Create an engine.
   const std::string task_path = GetTestdataPath(

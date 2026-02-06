@@ -70,6 +70,20 @@ internal object LiteRtLmJni {
   external fun nativeCreateSession(enginePointer: Long, samplerConfig: SamplerConfig?): Long
 
   /**
+   * Creates a new LiteRT-LM session with a specific LoRA adapter.
+   *
+   * @param enginePointer A pointer to the native engine instance.
+   * @param samplerConfig The sampler configuration.
+   * @param loraId The LoRA adapter ID to use, or -1 for base model.
+   * @return A pointer to the native session instance.
+   */
+  external fun nativeCreateSessionWithLora(
+    enginePointer: Long,
+    samplerConfig: SamplerConfig?,
+    loraId: Int
+  ): Long
+
+  /**
    * Delete the LiteRT-LM session.
    *
    * @param sessionPointer A pointer to the native session instance.
@@ -168,6 +182,27 @@ internal object LiteRtLmJni {
     messageJsonString: String,
     toolsDescriptionJsonString: String,
     enableConversationConstrainedDecoding: Boolean,
+  ): Long
+
+  /**
+   * Creates a new LiteRT-LM conversation with a specific LoRA adapter.
+   *
+   * @param enginePointer A pointer to the native engine instance.
+   * @param samplerConfig The sampler configuration.
+   * @param messageJsonString The system instruction to be used in the conversation.
+   * @param toolsDescriptionJsonString A json string of a list of tool definitions (Open API json).
+   * @param enableConversationConstrainedDecoding Whether to enable conversation constrained
+   *   decoding.
+   * @param loraId The LoRA adapter ID to use, or -1 for base model.
+   * @return A pointer to the native conversation instance.
+   */
+  external fun nativeCreateConversationWithLora(
+    enginePointer: Long,
+    samplerConfig: SamplerConfig?,
+    messageJsonString: String,
+    toolsDescriptionJsonString: String,
+    enableConversationConstrainedDecoding: Boolean,
+    loraId: Int,
   ): Long
 
   /**

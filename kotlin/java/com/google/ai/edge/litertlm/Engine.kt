@@ -122,16 +122,25 @@ class Engine(val engineConfig: EngineConfig) : AutoCloseable {
         }
 
       @OptIn(ExperimentalApi::class) // opt-in experimental flags
-      return Conversation(
+      val conversationHandle = if (conversationConfig.loraId != null) {
+        LiteRtLmJni.nativeCreateConversationWithLora(
+          handle!!, // Using !! is okay. Checked initialization already.
+          conversationConfig.samplerConfig,
+          messagesJson.toString(),
+          toolManager.getToolsDescription().toString(),
+          ExperimentalFlags.enableConversationConstrainedDecoding,
+          conversationConfig.loraId,
+        )
+      } else {
         LiteRtLmJni.nativeCreateConversation(
           handle!!, // Using !! is okay. Checked initialization already.
           conversationConfig.samplerConfig,
           messagesJson.toString(),
           toolManager.getToolsDescription().toString(),
           ExperimentalFlags.enableConversationConstrainedDecoding,
-        ),
-        toolManager,
-      )
+        )
+      }
+      return Conversation(conversationHandle, toolManager)
     }
   }
 
@@ -147,7 +156,16 @@ class Engine(val engineConfig: EngineConfig) : AutoCloseable {
       checkInitialized()
 
       // Using !! is okay. Checked initialization already.
-      return Session(LiteRtLmJni.nativeCreateSession(handle!!, sessionConfig.samplerConfig))
+      val sessionHandle = if (sessionConfig.loraId != null) {
+        LiteRtLmJni.nativeCreateSessionWithLora(
+          handle!!,
+          sessionConfig.samplerConfig,
+          sessionConfig.loraId
+        )
+      } else {
+        LiteRtLmJni.nativeCreateSession(handle!!, sessionConfig.samplerConfig)
+      }
+      return Session(sessionHandle)
     }
   }
 

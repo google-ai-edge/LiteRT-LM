@@ -65,6 +65,8 @@ data class EngineConfig(
  *   default values.
  * @property systemMessage The system message to be used in the conversation. If set, it will
  *   prepend to [initialMessages].
+ * @property loraId The LoRA adapter ID to use for this conversation. Pass `null` to use the base
+ *   model without any adapter. LoRA IDs are assigned when adapters are loaded into the engine.
  */
 data class ConversationConfig(
   val systemInstruction: Contents? = null,
@@ -74,7 +76,14 @@ data class ConversationConfig(
   val samplerConfig: SamplerConfig? = null,
   @Deprecated("Use systemInstruction instead. e.g., systemInstrction = Contents.of(\"Be helpful\")")
   val systemMessage: Message? = null,
-)
+  val loraId: Int? = null,
+) {
+  init {
+    require(loraId == null || loraId >= 0) {
+      "loraId must be non-negative or null, got $loraId"
+    }
+  }
+}
 
 /**
  * Configuration for the sampling process.
@@ -102,5 +111,16 @@ data class SamplerConfig(
  *
  * @property samplerConfig Configuration for the sampling process. If `null`, then uses the engine's
  *   default values.
+ * @property loraId The LoRA adapter ID to use for this session. Pass `null` to use the base model
+ *   without any adapter. LoRA IDs are assigned when adapters are loaded into the engine.
  */
-data class SessionConfig(val samplerConfig: SamplerConfig? = null)
+data class SessionConfig(
+  val samplerConfig: SamplerConfig? = null,
+  val loraId: Int? = null
+) {
+  init {
+    require(loraId == null || loraId >= 0) {
+      "loraId must be non-negative or null, got $loraId"
+    }
+  }
+}

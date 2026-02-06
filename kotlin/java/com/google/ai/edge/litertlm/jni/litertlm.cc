@@ -489,6 +489,33 @@ JNI_METHOD(nativeCreateSession)(JNIEnv* env, jclass thiz, jlong engine_pointer,
   return reinterpret_cast<jlong>(session->release());
 }
 
+LITERTLM_JNIEXPORT jlong JNICALL
+JNI_METHOD(nativeCreateSessionWithLora)(JNIEnv* env, jclass thiz,
+                                        jlong engine_pointer,
+                                        jobject sampler_config_obj,
+                                        jint lora_id) {
+  auto session_config = SessionConfig::CreateDefault();
+
+  if (sampler_config_obj != nullptr) {
+    session_config.GetMutableSamplerParams() =
+        CreateSamplerParamsFromJni(env, sampler_config_obj);
+  }
+
+  // Set LoRA ID if specified (>= 0).
+  if (lora_id >= 0) {
+    session_config.SetLoraId(static_cast<uint32_t>(lora_id));
+  }
+
+  Engine* engine = reinterpret_cast<Engine*>(engine_pointer);
+  auto session = engine->CreateSession(session_config);
+  if (!session.ok()) {
+    ThrowLiteRtLmJniException(
+        env, "Failed to create session: " + session.status().ToString());
+    return 0;
+  }
+  return reinterpret_cast<jlong>(session->release());
+}
+
 LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeDeleteSession)(
     JNIEnv* env, jclass thiz, jlong session_pointer) {
   delete reinterpret_cast<Engine::Session*>(session_pointer);
@@ -685,6 +712,72 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateConversation)(
   if (sampler_config_obj != nullptr) {
     session_config.GetMutableSamplerParams() =
         CreateSamplerParamsFromJni(env, sampler_config_obj);
+  }
+
+  // Create the Preface from the system instruction and tools.
+  JsonPreface json_preface;
+
+  const char* messages_chars =
+      env->GetStringUTFChars(messages_json_string, nullptr);
+  std::string messages_json_str(messages_chars);
+  env->ReleaseStringUTFChars(messages_json_string, messages_chars);
+  json_preface.messages = nlohmann::ordered_json::parse(messages_json_str);
+
+  const char* tools_description_chars =
+      env->GetStringUTFChars(tools_description_json_string, nullptr);
+  auto tool_json = nlohmann::ordered_json::parse(tools_description_chars);
+  env->ReleaseStringUTFChars(tools_description_json_string,
+                             tools_description_chars);
+
+  if (tool_json.is_array()) {
+    nlohmann::ordered_json::array_t tool_json_array =
+        tool_json.get<nlohmann::ordered_json::array_t>();
+    json_preface.tools = tool_json_array;
+  } else {
+    ThrowLiteRtLmJniException(
+        env, "tools_json should be a json array. Got: " + tool_json.dump());
+    return 0;
+  }
+
+  // Create the conversation
+  auto conversation_config =
+      ConversationConfig::Builder()
+          .SetSessionConfig(session_config)
+          .SetPreface(json_preface)
+          .SetEnableConstrainedDecoding(enable_constrained_decoding)
+          .Build(*engine);
+
+  if (!conversation_config.ok()) {
+    ThrowLiteRtLmJniException(env, "Failed to create conversation config: " +
+                                       conversation_config.status().ToString());
+    return 0;
+  }
+  auto conversation = Conversation::Create(*engine, *conversation_config);
+  if (!conversation.ok()) {
+    ThrowLiteRtLmJniException(env, "Failed to create conversation: " +
+                                       conversation.status().ToString());
+    return 0;
+  }
+
+  return reinterpret_cast<jlong>(conversation->release());
+}
+
+LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateConversationWithLora)(
+    JNIEnv* env, jclass thiz, jlong engine_pointer, jobject sampler_config_obj,
+    jstring messages_json_string, jstring tools_description_json_string,
+    jboolean enable_constrained_decoding, jint lora_id) {
+  Engine* engine = reinterpret_cast<Engine*>(engine_pointer);
+
+  // Create a native SessionConfig
+  auto session_config = SessionConfig::CreateDefault();
+  if (sampler_config_obj != nullptr) {
+    session_config.GetMutableSamplerParams() =
+        CreateSamplerParamsFromJni(env, sampler_config_obj);
+  }
+
+  // Set LoRA ID if specified (>= 0).
+  if (lora_id >= 0) {
+    session_config.SetLoraId(static_cast<uint32_t>(lora_id));
   }
 
   // Create the Preface from the system instruction and tools.

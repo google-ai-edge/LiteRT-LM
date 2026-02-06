@@ -196,6 +196,26 @@ void litert_lm_session_config_set_sampler_params(
   }
 }
 
+void litert_lm_session_config_set_lora_id(LiteRtLmSessionConfig* config,
+                                          int32_t lora_id) {
+  if (config && config->config) {
+    if (lora_id >= 0) {
+      config->config->SetLoraId(static_cast<uint32_t>(lora_id));
+    } else {
+      config->config->SetLoraId(std::nullopt);
+    }
+  }
+}
+
+int32_t litert_lm_session_config_get_lora_id(
+    const LiteRtLmSessionConfig* config) {
+  if (!config || !config->config) {
+    return -1;
+  }
+  auto lora_id = config->config->GetLoraId();
+  return lora_id.has_value() ? static_cast<int32_t>(*lora_id) : -1;
+}
+
 void litert_lm_session_config_delete(LiteRtLmSessionConfig* config) {
   delete config;
 }

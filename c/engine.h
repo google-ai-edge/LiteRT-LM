@@ -110,6 +110,21 @@ LITERT_LM_C_API_EXPORT
 void litert_lm_session_config_set_sampler_params(
     LiteRtLmSessionConfig* config, const LiteRtLmSamplerParams* sampler_params);
 
+// Sets the LoRA adapter ID for this session config.
+// Sessions created with this config will use the specified LoRA adapter.
+// @param config The config to modify.
+// @param lora_id The LoRA adapter ID to use. Pass -1 to clear (use base model).
+LITERT_LM_C_API_EXPORT
+void litert_lm_session_config_set_lora_id(LiteRtLmSessionConfig* config,
+                                          int32_t lora_id);
+
+// Gets the LoRA adapter ID from this session config.
+// @param config The config to query.
+// @return The LoRA adapter ID, or -1 if no LoRA is set.
+LITERT_LM_C_API_EXPORT
+int32_t litert_lm_session_config_get_lora_id(
+    const LiteRtLmSessionConfig* config);
+
 // Destroys a LiteRT LM Session Config.
 // @param config The config to destroy.
 LITERT_LM_C_API_EXPORT

@@ -31,10 +31,26 @@ kt_jvm_library(
 
 kt_android_library(
     name = "litertlm-android",
-    srcs = glob(["*.kt"]),
+    srcs = glob(
+        ["*.kt"],
+        exclude = ["*Test.kt"],
+    ),
     deps = [
         "@rules_kotlin//kotlin/compiler:kotlin-reflect",
         "@maven//:com_google_code_gson_gson",
         "@maven//:org_jetbrains_kotlinx_kotlinx_coroutines_android"
     ],
+)
+
+kt_jvm_library(
+    name = "config_test_lib",
+    srcs = ["ConfigTest.kt"],
+    deps = [":litertlm-jvm"],
+)
+
+java_test(
+    name = "config_test",
+    main_class = "com.google.ai.edge.litertlm.ConfigTest",
+    use_testrunner = False,
+    runtime_deps = [":config_test_lib"],
 )
