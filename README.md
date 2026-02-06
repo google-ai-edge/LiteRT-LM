@@ -805,6 +805,14 @@ auto responses = (*session)->RunDecode();
 std::cout << *responses << std::endl;
 ```
 
+## Model Hosting and Deployment 
+
+When a model exceeds 1.5GB, it often surpasses the "over-the-air" download limits of cellular networks or the internal limits of standard app bundles. A remote fetch strategy is required.
+
+Host your model file, then have your app fetch the latest version of your model URL for download. [Firebase](https://firebase.google.com/) provides solutions for downloading large files on [Android](https://firebase.google.com/docs/storage/android/download-files) and [iOS](https://firebase.google.com/docs/storage/ios/download-files). 
+
+Alternatively, you can fetch a model directly from HuggingFace by using the [HuggingFace API](https://huggingface.co/docs/huggingface_hub/guides/download). For private or gated models, you will need to include a Hugging Face User Access Token in the `Authorization: Bearer <TOKEN>` header of your download request.
+
 ## FAQ
 
 ### LiteRT vs LiteRT-LM vs MediaPipe GenAI Tasks
