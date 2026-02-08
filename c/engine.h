@@ -577,6 +577,23 @@ LITERT_LM_C_API_EXPORT
 void litert_lm_mezo_config_set_cone_angle(LiteRtLmMeZoConfig* config,
                                           float cone_angle);
 
+// Sets the optimizer mode for MeZO. 0=vanilla, 1=ConMeZO, 2=AGZO.
+//
+// @param config The config to modify.
+// @param mode The optimizer mode (0, 1, or 2).
+LITERT_LM_C_API_EXPORT
+void litert_lm_mezo_config_set_optimizer_mode(LiteRtLmMeZoConfig* config,
+                                              int mode);
+
+// Sets the AGZO subspace rank. Only used when optimizer mode is AGZO (2).
+// Must be positive. Memory cost: rank * num_params * sizeof(float).
+//
+// @param config The config to modify.
+// @param rank The subspace rank.
+LITERT_LM_C_API_EXPORT
+void litert_lm_mezo_config_set_agzo_subspace_rank(LiteRtLmMeZoConfig* config,
+                                                   int rank);
+
 // Creates a MeZO fine-tuner from the given config. The caller is responsible
 // for destroying the fine-tuner using `litert_lm_mezo_finetuner_delete`.
 //

@@ -36,10 +36,17 @@ class MeZoFineTuner::Impl {
       : learning_rate_(config.GetLearningRate()),
         epsilon_(config.GetEpsilon()),
         weight_decay_(config.GetWeightDecay()),
-        use_conmezo_(config.GetUseConMeZo()),
+        use_conmezo_(config.GetUseConMeZo() ||
+                     config.GetOptimizerMode() == OptimizerMode::kConMeZo),
         momentum_decay_(config.GetMomentumDecay()),
         cone_angle_(config.GetConeAngle()),
+        mode_(config.GetOptimizerMode()),
+        agzo_subspace_rank_(config.GetAgzoSubspaceRank()),
         step_count_(0) {
+    // Reconcile: if use_conmezo was set but mode wasn't, promote to kConMeZo.
+    if (config.GetUseConMeZo() && mode_ == OptimizerMode::kVanillaMeZo) {
+      mode_ = OptimizerMode::kConMeZo;
+    }
     if (config.GetSeed() != 0) {
       global_rng_.seed(config.GetSeed());
     } else {
@@ -59,6 +66,11 @@ class MeZoFineTuner::Impl {
         return absl::InvalidArgumentError(
             "Parameter data must not be null and num_elements must be > 0.");
       }
+    }
+
+    // Dispatch to AGZO if mode is kAgzo.
+    if (mode_ == OptimizerMode::kAgzo) {
+      return AgzoStep(parameters, std::move(loss_fn));
     }
 
     // Sample a random seed for this step's perturbation vector.
@@ -360,18 +372,159 @@ class MeZoFineTuner::Impl {
     }
   }
 
+  // --- AGZO: Random-subspace projected perturbation ---
+  //
+  // AGZO perturbs parameters in a low-rank random subspace:
+  //   z = U * v,  where U is d x k and v ~ N(0, I_k)
+  // This reduces the effective dimensionality from d to k, improving the
+  // gradient estimator's SNR at the cost of O(d*k) memory for the subspace.
+  //
+  // For LoRA-only training with d~100K params and k=16, this is ~6.4MB.
+
+  // Lazily initializes the AGZO subspace from a fixed seed.
+  void InitAgzoSubspace(size_t total_elements) {
+    if (agzo_subspace_initialized_) return;
+    const int k = agzo_subspace_rank_;
+    // Use a deterministic seed derived from global_rng_ so the subspace
+    // is reproducible given the same config seed.
+    uint64_t subspace_seed = global_rng_();
+    std::mt19937_64 sub_rng(subspace_seed);
+    std::normal_distribution<float> dist(0.0f, 1.0f);
+
+    agzo_subspace_.resize(k);
+    for (int j = 0; j < k; ++j) {
+      agzo_subspace_[j].resize(total_elements);
+      // Generate and normalize each basis vector.
+      float norm_sq = 0.0f;
+      for (size_t i = 0; i < total_elements; ++i) {
+        float val = dist(sub_rng);
+        agzo_subspace_[j][i] = val;
+        norm_sq += val * val;
+      }
+      float inv_norm = 1.0f / std::sqrt(norm_sq);
+      for (size_t i = 0; i < total_elements; ++i) {
+        agzo_subspace_[j][i] *= inv_norm;
+      }
+    }
+    agzo_subspace_initialized_ = true;
+  }
+
+  // AGZO perturbation: z = sum_j(v_j * U_j), applied as theta += scale * z.
+  void AgzoPerturbParameters(const std::vector<NamedParameter>& parameters,
+                             float scale,
+                             const std::vector<float>& v_coeffs) {
+    const int k = static_cast<int>(v_coeffs.size());
+    size_t idx = 0;
+    for (const auto& param : parameters) {
+      for (size_t i = 0; i < param.num_elements; ++i) {
+        float z_i = 0.0f;
+        for (int j = 0; j < k; ++j) {
+          z_i += v_coeffs[j] * agzo_subspace_[j][idx];
+        }
+        param.data[i] += scale * z_i;
+        ++idx;
+      }
+    }
+  }
+
+  // AGZO update: theta_i -= lr * (projected_grad * z_i + wd * theta_i).
+  void AgzoUpdateParameters(const std::vector<NamedParameter>& parameters,
+                            float projected_grad,
+                            const std::vector<float>& v_coeffs) {
+    const int k = static_cast<int>(v_coeffs.size());
+    size_t idx = 0;
+    for (const auto& param : parameters) {
+      for (size_t i = 0; i < param.num_elements; ++i) {
+        float z_i = 0.0f;
+        for (int j = 0; j < k; ++j) {
+          z_i += v_coeffs[j] * agzo_subspace_[j][idx];
+        }
+        float update = projected_grad * z_i;
+        if (!param.is_bias_or_layernorm && weight_decay_ != 0.0f) {
+          update += weight_decay_ * param.data[i];
+        }
+        param.data[i] -= learning_rate_ * update;
+        ++idx;
+      }
+    }
+  }
+
+  // Full AGZO step.
+  absl::StatusOr<float> AgzoStep(
+      const std::vector<NamedParameter>& parameters,
+      absl::AnyInvocable<absl::StatusOr<float>()> loss_fn) {
+    // Lazily initialize subspace.
+    size_t total_elements = 0;
+    for (const auto& param : parameters) {
+      total_elements += param.num_elements;
+    }
+    InitAgzoSubspace(total_elements);
+
+    // Sample v ~ N(0, I_k).
+    const int k = agzo_subspace_rank_;
+    std::vector<float> v(k);
+    std::normal_distribution<float> dist(0.0f, 1.0f);
+    for (int j = 0; j < k; ++j) {
+      v[j] = dist(global_rng_);
+    }
+
+    // Step 1: theta += eps * U * v.
+    AgzoPerturbParameters(parameters, epsilon_, v);
+
+    // Step 2: f(theta + eps * z).
+    absl::StatusOr<float> loss_plus = loss_fn();
+    if (!loss_plus.ok()) {
+      AgzoPerturbParameters(parameters, -epsilon_, v);
+      return loss_plus.status();
+    }
+
+    // Step 3: theta -= 2 * eps * U * v.
+    AgzoPerturbParameters(parameters, -2.0f * epsilon_, v);
+
+    // Step 4: f(theta - eps * z).
+    absl::StatusOr<float> loss_minus = loss_fn();
+    if (!loss_minus.ok()) {
+      AgzoPerturbParameters(parameters, epsilon_, v);
+      return loss_minus.status();
+    }
+
+    // Step 5: Restore.
+    AgzoPerturbParameters(parameters, epsilon_, v);
+
+    // Step 6: Projected gradient.
+    float projected_grad = (*loss_plus - *loss_minus) / (2.0f * epsilon_);
+
+    // Step 7: Update.
+    AgzoUpdateParameters(parameters, projected_grad, v);
+
+    ++step_count_;
+
+    ABSL_LOG(INFO) << "MeZO step " << step_count_
+                   << ": loss=" << *loss_plus
+                   << ", projected_grad=" << projected_grad
+                   << " [AGZO k=" << k << "]";
+
+    return *loss_plus;
+  }
+
   float learning_rate_;
   float epsilon_;
   float weight_decay_;
   bool use_conmezo_;
   float momentum_decay_;
   float cone_angle_;
+  OptimizerMode mode_;
+  int agzo_subspace_rank_;
   uint64_t step_count_;
   std::mt19937_64 global_rng_;
 
   // ConMeZO state.
   std::vector<float> momentum_;
   bool momentum_initialized_ = false;
+
+  // AGZO state: k normalized basis vectors, each of dimension d.
+  std::vector<std::vector<float>> agzo_subspace_;
+  bool agzo_subspace_initialized_ = false;
 };
 
 MeZoFineTuner::MeZoFineTuner(std::unique_ptr<Impl> impl)
@@ -398,6 +551,11 @@ absl::StatusOr<std::unique_ptr<MeZoFineTuner>> MeZoFineTuner::Create(
   if (config.GetConeAngle() < 0.0f || config.GetConeAngle() > kPiOver2) {
     return absl::InvalidArgumentError(
         "Cone angle must be in [0, pi/2].");
+  }
+  if (config.GetOptimizerMode() == OptimizerMode::kAgzo &&
+      config.GetAgzoSubspaceRank() <= 0) {
+    return absl::InvalidArgumentError(
+        "AGZO subspace rank must be positive.");
   }
   return absl::WrapUnique(
       new MeZoFineTuner(std::make_unique<Impl>(config)));

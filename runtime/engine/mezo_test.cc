@@ -734,5 +734,185 @@ TEST(ConMeZoFineTunerTest, VanillaUnchangedWhenDisabled) {
   }
 }
 
+// --- AGZO Tests ---
+
+TEST(AgzoConfigTest, DefaultValues) {
+  MeZoConfig config;
+  EXPECT_EQ(config.GetOptimizerMode(), OptimizerMode::kVanillaMeZo);
+  EXPECT_EQ(config.GetAgzoSubspaceRank(), 16);
+}
+
+TEST(AgzoConfigTest, SettersAndGetters) {
+  MeZoConfig config;
+  config.SetOptimizerMode(OptimizerMode::kAgzo);
+  config.SetAgzoSubspaceRank(8);
+
+  EXPECT_EQ(config.GetOptimizerMode(), OptimizerMode::kAgzo);
+  EXPECT_EQ(config.GetAgzoSubspaceRank(), 8);
+}
+
+TEST(AgzoConfigTest, CreateFailsWithInvalidRank) {
+  MeZoConfig config;
+  config.SetOptimizerMode(OptimizerMode::kAgzo);
+  config.SetAgzoSubspaceRank(0);
+  auto finetuner = MeZoFineTuner::Create(config);
+  ASSERT_FALSE(finetuner.ok());
+  EXPECT_EQ(finetuner.status().code(), absl::StatusCode::kInvalidArgument);
+
+  config.SetAgzoSubspaceRank(-1);
+  finetuner = MeZoFineTuner::Create(config);
+  ASSERT_FALSE(finetuner.ok());
+  EXPECT_EQ(finetuner.status().code(), absl::StatusCode::kInvalidArgument);
+}
+
+TEST(AgzoFineTunerTest, StepUpdatesParameters) {
+  MeZoConfig config;
+  config.SetLearningRate(1e-2f);
+  config.SetEpsilon(1e-3f);
+  config.SetSeed(12345);
+  config.SetOptimizerMode(OptimizerMode::kAgzo);
+  config.SetAgzoSubspaceRank(4);
+  auto finetuner = MeZoFineTuner::Create(config);
+  ASSERT_TRUE(finetuner.ok()) << finetuner.status();
+
+  constexpr size_t kN = 8;
+  std::vector<float> weights(kN, 1.0f);
+  std::vector<float> original_weights = weights;
+
+  NamedParameter param;
+  param.name = "test_weight";
+  param.data = weights.data();
+  param.num_elements = kN;
+  param.is_bias_or_layernorm = false;
+
+  std::vector<NamedParameter> params = {param};
+
+  auto loss_fn = [&]() -> absl::StatusOr<float> {
+    float loss = 0.0f;
+    for (size_t i = 0; i < kN; ++i) loss += weights[i] * weights[i];
+    return loss;
+  };
+
+  auto result = (*finetuner)->Step(params, std::move(loss_fn));
+  ASSERT_TRUE(result.ok()) << result.status();
+
+  bool any_changed = false;
+  for (size_t i = 0; i < kN; ++i) {
+    if (weights[i] != original_weights[i]) {
+      any_changed = true;
+      break;
+    }
+  }
+  EXPECT_TRUE(any_changed);
+  EXPECT_EQ((*finetuner)->GetStepCount(), 1u);
+}
+
+TEST(AgzoFineTunerTest, Reproducibility) {
+  auto run_agzo = [](uint64_t seed) -> std::vector<float> {
+    MeZoConfig config;
+    config.SetLearningRate(1e-2f);
+    config.SetEpsilon(1e-3f);
+    config.SetSeed(seed);
+    config.SetOptimizerMode(OptimizerMode::kAgzo);
+    config.SetAgzoSubspaceRank(4);
+    auto finetuner = MeZoFineTuner::Create(config);
+    if (!finetuner.ok()) return {};
+
+    constexpr size_t kN = 8;
+    std::vector<float> weights(kN, 2.0f);
+
+    NamedParameter param;
+    param.name = "w";
+    param.data = weights.data();
+    param.num_elements = kN;
+    param.is_bias_or_layernorm = false;
+
+    std::vector<NamedParameter> params = {param};
+
+    for (int step = 0; step < 5; ++step) {
+      auto loss_fn = [&]() -> absl::StatusOr<float> {
+        float l = 0;
+        for (size_t i = 0; i < kN; ++i) l += weights[i] * weights[i];
+        return l;
+      };
+      auto result = (*finetuner)->Step(params, std::move(loss_fn));
+      if (!result.ok()) return {};
+    }
+    return weights;
+  };
+
+  std::vector<float> run1 = run_agzo(42);
+  std::vector<float> run2 = run_agzo(42);
+  ASSERT_FALSE(run1.empty());
+  ASSERT_EQ(run1.size(), run2.size());
+  for (size_t i = 0; i < run1.size(); ++i) {
+    EXPECT_FLOAT_EQ(run1[i], run2[i]);
+  }
+
+  std::vector<float> run3 = run_agzo(99);
+  ASSERT_FALSE(run3.empty());
+  bool any_different = false;
+  for (size_t i = 0; i < run1.size(); ++i) {
+    if (run1[i] != run3[i]) {
+      any_different = true;
+      break;
+    }
+  }
+  EXPECT_TRUE(any_different);
+}
+
+TEST(AgzoFineTunerTest, MultipleStepsDecreaseLoss) {
+  MeZoConfig config;
+  config.SetLearningRate(1e-1f);
+  config.SetEpsilon(1e-3f);
+  config.SetSeed(42);
+  config.SetOptimizerMode(OptimizerMode::kAgzo);
+  config.SetAgzoSubspaceRank(4);
+  auto finetuner = MeZoFineTuner::Create(config);
+  ASSERT_TRUE(finetuner.ok()) << finetuner.status();
+
+  constexpr size_t kN = 8;
+  std::vector<float> weights(kN, 5.0f);
+
+  NamedParameter param;
+  param.name = "w";
+  param.data = weights.data();
+  param.num_elements = kN;
+  param.is_bias_or_layernorm = false;
+
+  std::vector<NamedParameter> params = {param};
+
+  float first_loss = 0.0f;
+  for (int step = 0; step < 50; ++step) {
+    auto loss_fn = [&]() -> absl::StatusOr<float> {
+      float l = 0.0f;
+      for (size_t i = 0; i < kN; ++i) l += weights[i] * weights[i];
+      return l;
+    };
+    auto result = (*finetuner)->Step(params, std::move(loss_fn));
+    ASSERT_TRUE(result.ok()) << result.status();
+    if (step == 0) first_loss = *result;
+  }
+
+  float final_loss = 0.0f;
+  for (size_t i = 0; i < kN; ++i) {
+    final_loss += weights[i] * weights[i];
+  }
+  EXPECT_LT(final_loss, first_loss);
+}
+
+TEST(AgzoFineTunerTest, OptimizerModeEnum) {
+  // Verify all three modes can be set and retrieved.
+  MeZoConfig config;
+  config.SetOptimizerMode(OptimizerMode::kVanillaMeZo);
+  EXPECT_EQ(config.GetOptimizerMode(), OptimizerMode::kVanillaMeZo);
+
+  config.SetOptimizerMode(OptimizerMode::kConMeZo);
+  EXPECT_EQ(config.GetOptimizerMode(), OptimizerMode::kConMeZo);
+
+  config.SetOptimizerMode(OptimizerMode::kAgzo);
+  EXPECT_EQ(config.GetOptimizerMode(), OptimizerMode::kAgzo);
+}
+
 }  // namespace
 }  // namespace litert::lm

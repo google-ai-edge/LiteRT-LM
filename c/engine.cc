@@ -771,6 +771,21 @@ void litert_lm_mezo_config_set_cone_angle(LiteRtLmMeZoConfig* config,
   }
 }
 
+void litert_lm_mezo_config_set_optimizer_mode(LiteRtLmMeZoConfig* config,
+                                              int mode) {
+  if (config) {
+    config->config.SetOptimizerMode(
+        static_cast<litert::lm::OptimizerMode>(mode));
+  }
+}
+
+void litert_lm_mezo_config_set_agzo_subspace_rank(LiteRtLmMeZoConfig* config,
+                                                   int rank) {
+  if (config) {
+    config->config.SetAgzoSubspaceRank(rank);
+  }
+}
+
 LiteRtLmMeZoFineTuner* litert_lm_mezo_finetuner_create(
     const LiteRtLmMeZoConfig* config) {
   if (!config) {

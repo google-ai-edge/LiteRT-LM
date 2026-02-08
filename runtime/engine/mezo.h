@@ -26,6 +26,13 @@
 
 namespace litert::lm {
 
+// Optimizer mode for the MeZO family of zeroth-order optimizers.
+enum class OptimizerMode {
+  kVanillaMeZo = 0,  // Standard MeZO (SPSA gradient estimator).
+  kConMeZo = 1,      // ConMeZO (cone-constrained momentum).
+  kAgzo = 2,         // AGZO (random-subspace projected perturbation).
+};
+
 // Configuration for MeZO (Memory-efficient Zeroth-Order) fine-tuning.
 //
 // MeZO estimates gradients using only forward passes, achieving the same
@@ -74,6 +81,19 @@ class MeZoConfig {
   float GetConeAngle() const { return cone_angle_; }
   void SetConeAngle(float cone_angle) { cone_angle_ = cone_angle; }
 
+  // Optimizer mode selection. Setting this overrides use_conmezo_.
+  // kVanillaMeZo: standard MeZO.
+  // kConMeZo: equivalent to SetUseConMeZo(true).
+  // kAgzo: random-subspace AGZO (proof-of-concept).
+  OptimizerMode GetOptimizerMode() const { return mode_; }
+  void SetOptimizerMode(OptimizerMode mode) { mode_ = mode; }
+
+  // AGZO subspace rank: number of basis vectors for the random subspace.
+  // Only used when mode is kAgzo. Must be positive.
+  // Memory: rank * num_params * sizeof(float) bytes.
+  int GetAgzoSubspaceRank() const { return agzo_subspace_rank_; }
+  void SetAgzoSubspaceRank(int rank) { agzo_subspace_rank_ = rank; }
+
  private:
   float learning_rate_ = 1e-6f;
   float epsilon_ = 1e-3f;
@@ -82,6 +102,8 @@ class MeZoConfig {
   bool use_conmezo_ = false;
   float momentum_decay_ = 0.9f;
   float cone_angle_ = 0.7854f;  // pi/4 radians
+  OptimizerMode mode_ = OptimizerMode::kVanillaMeZo;
+  int agzo_subspace_rank_ = 16;
 };
 
 // A named parameter buffer for MeZO optimization. Represents a contiguous
