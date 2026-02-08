@@ -693,6 +693,17 @@ LITERT_LM_C_API_EXPORT
 void litert_lm_mezo_config_set_agzo_subspace_rank(LiteRtLmMeZoConfig* config,
                                                    int rank);
 
+// ConMeZO momentum warm-up schedule (per paper arXiv:2511.02757):
+//   steps [0, cold_steps): beta = momentum_init
+//   steps [cold_steps, warm_steps): cubic interpolation to momentum_decay
+//   steps [warm_steps, ...): beta = momentum_decay
+// Set warm_steps=0 to disable warm-up (constant momentum_decay).
+LITERT_LM_C_API_EXPORT
+void litert_lm_mezo_config_set_momentum_warmup(LiteRtLmMeZoConfig* config,
+                                                float momentum_init,
+                                                int cold_steps,
+                                                int warm_steps);
+
 // Creates a MeZO fine-tuner from the given config. The caller is responsible
 // for destroying the fine-tuner using `litert_lm_mezo_finetuner_delete`.
 //

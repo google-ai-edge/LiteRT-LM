@@ -829,6 +829,17 @@ void litert_lm_mezo_config_set_agzo_subspace_rank(LiteRtLmMeZoConfig* config,
   }
 }
 
+void litert_lm_mezo_config_set_momentum_warmup(LiteRtLmMeZoConfig* config,
+                                                float momentum_init,
+                                                int cold_steps,
+                                                int warm_steps) {
+  if (config) {
+    config->config.SetMomentumInit(momentum_init);
+    config->config.SetMomentumColdSteps(cold_steps);
+    config->config.SetMomentumWarmSteps(warm_steps);
+  }
+}
+
 LiteRtLmMeZoFineTuner* litert_lm_mezo_finetuner_create(
     const LiteRtLmMeZoConfig* config) {
   if (!config) {

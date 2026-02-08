@@ -42,10 +42,11 @@
 // Configuration
 // ---------------------------------------------------------------------------
 struct BenchConfig {
-  // Synthetic mode settings.
-  int dim = 10000;            // Parameter dimension (simulates LoRA params).
-  float noise_std = 0.01f;    // Stochastic noise on loss evaluations.
-  float condition_number = 100.0f;  // Eigenvalue spread of quadratic.
+  // Synthetic mode settings (paper defaults: d=1000, kappa=d).
+  int dim = 1000;
+  float noise_std = 0.0f;
+  float condition_number = 1000.0f;
+  float init_norm = 10.0f;      // ||w_0|| for synthetic (paper uses 10.0).
 
   // Model mode settings (optional).
   std::string model_path;
@@ -58,12 +59,17 @@ struct BenchConfig {
   int lora_rank = 4;
 
   // Shared settings.
-  int num_steps = 3000;
-  int eval_every = 300;
+  int num_steps = 100000;
+  int eval_every = 10000;
   float lr = 1e-7f;
   float epsilon = 1e-3f;
   uint64_t seed = 42;
   int agzo_rank = 16;
+
+  // ConMeZO paper hyperparameters (arXiv:2511.02757).
+  float conmezo_momentum_decay = 0.99f;
+  float conmezo_cone_angle = 1.4f;
+  float conmezo_momentum_init = 0.1f;
 
   // Sweep / filter settings.
   int optimizer = -1;           // -1 = all, 0 = vanilla, 1 = conmezo, 2 = agzo
@@ -167,8 +173,12 @@ RunResult RunSyntheticOptimizer(const BenchConfig& config,
   printf("\n=== %s (lr=%.1e, mode=%d, dim=%d) ===\n",
          name.c_str(), config.lr, optimizer_mode, config.dim);
 
-  // Allocate parameter buffer, initialized to zero (far from optimum).
-  std::vector<float> params(config.dim, 0.0f);
+  // Allocate parameter buffer with ||w_0|| = init_norm (uniform direction).
+  std::vector<float> params(config.dim);
+  float per_dim = config.init_norm / std::sqrt(static_cast<float>(config.dim));
+  for (int i = 0; i < config.dim; ++i) {
+    params[i] = per_dim;
+  }
 
   // Create MeZO parameter descriptor (single parameter block).
   LiteRtLmMeZoParameter mezo_param;
@@ -183,9 +193,16 @@ RunResult RunSyntheticOptimizer(const BenchConfig& config,
   litert_lm_mezo_config_set_epsilon(mezo_config, config.epsilon);
   litert_lm_mezo_config_set_seed(mezo_config, config.seed);
   litert_lm_mezo_config_set_optimizer_mode(mezo_config, optimizer_mode);
-  if (optimizer_mode == 1) {  // ConMeZO
-    litert_lm_mezo_config_set_momentum_decay(mezo_config, 0.9f);
-    litert_lm_mezo_config_set_cone_angle(mezo_config, 0.7854f);
+  if (optimizer_mode == 1) {  // ConMeZO (paper hyperparameters)
+    litert_lm_mezo_config_set_momentum_decay(mezo_config,
+                                              config.conmezo_momentum_decay);
+    litert_lm_mezo_config_set_cone_angle(mezo_config,
+                                          config.conmezo_cone_angle);
+    // Warm-up schedule: 1% cold, 10% ramp, then constant.
+    int cold = config.num_steps / 100;
+    int warm = config.num_steps / 10;
+    litert_lm_mezo_config_set_momentum_warmup(
+        mezo_config, config.conmezo_momentum_init, cold, warm);
   }
   if (optimizer_mode == 2) {  // AGZO
     litert_lm_mezo_config_set_agzo_subspace_rank(mezo_config, config.agzo_rank);
@@ -385,9 +402,15 @@ RunResult RunModelOptimizer(const BenchConfig& config, const std::string& name,
   litert_lm_mezo_config_set_epsilon(mezo_config, config.epsilon);
   litert_lm_mezo_config_set_seed(mezo_config, config.seed);
   litert_lm_mezo_config_set_optimizer_mode(mezo_config, optimizer_mode);
-  if (optimizer_mode == 1) {
-    litert_lm_mezo_config_set_momentum_decay(mezo_config, 0.9f);
-    litert_lm_mezo_config_set_cone_angle(mezo_config, 0.7854f);
+  if (optimizer_mode == 1) {  // ConMeZO (paper hyperparameters)
+    litert_lm_mezo_config_set_momentum_decay(mezo_config,
+                                              config.conmezo_momentum_decay);
+    litert_lm_mezo_config_set_cone_angle(mezo_config,
+                                          config.conmezo_cone_angle);
+    int cold = config.num_steps / 100;
+    int warm = config.num_steps / 10;
+    litert_lm_mezo_config_set_momentum_warmup(
+        mezo_config, config.conmezo_momentum_init, cold, warm);
   }
   if (optimizer_mode == 2) {
     litert_lm_mezo_config_set_agzo_subspace_rank(mezo_config, config.agzo_rank);
@@ -542,7 +565,10 @@ BenchConfig ParseArgs(int argc, char** argv) {
     else if (key == "--dim") config.dim = std::stoi(val);
     else if (key == "--noise") config.noise_std = std::stof(val);
     else if (key == "--condition") config.condition_number = std::stof(val);
+    else if (key == "--init_norm") config.init_norm = std::stof(val);
     else if (key == "--agzo_rank") config.agzo_rank = std::stoi(val);
+    else if (key == "--cone_angle") config.conmezo_cone_angle = std::stof(val);
+    else if (key == "--momentum_decay") config.conmezo_momentum_decay = std::stof(val);
     else if (key == "--lora_rank") config.lora_rank = std::stoi(val);
     else if (key == "--optimizer") config.optimizer = std::stoi(val);
     else if (key == "--lr_sweep") config.lr_sweep = val;
@@ -599,35 +625,41 @@ int main(int argc, char** argv) {
     printf("  Eval every: %d steps\n", config.eval_every);
 
     // Generate ill-conditioned quadratic: eigenvalues log-spaced from 1 to κ.
+    // Paper setup: optimum at origin, initial params with ||w0|| = init_norm.
     std::vector<float> eigenvalues(config.dim);
-    std::vector<float> optimum(config.dim);
-    std::mt19937 setup_rng(config.seed);
-    std::normal_distribution<float> normal(0.0f, 0.1f);
+    std::vector<float> optimum(config.dim, 0.0f);  // Optimum at origin.
 
     for (int i = 0; i < config.dim; ++i) {
       float t = static_cast<float>(i) / std::max(config.dim - 1, 1);
       eigenvalues[i] = std::pow(config.condition_number, t);
-      optimum[i] = normal(setup_rng);  // Random target near zero.
     }
 
     printf("\n  Eigenvalue range: [%.1f, %.1f]\n", eigenvalues[0],
            eigenvalues[config.dim - 1]);
 
-    // Initial loss at w=0.
-    float init_loss = SyntheticEvalLoss(
-        std::vector<float>(config.dim, 0.0f).data(), config.dim,
-        eigenvalues.data(), optimum.data());
-    printf("  Initial loss at w=0: %.6f\n", init_loss);
+    // Initial loss at w_0 (||w_0|| = init_norm).
+    float per_dim = config.init_norm / std::sqrt(static_cast<float>(config.dim));
+    std::vector<float> w0(config.dim, per_dim);
+    float init_loss = SyntheticEvalLoss(w0.data(), config.dim,
+                                        eigenvalues.data(), optimum.data());
+    printf("  Initial loss at ||w0||=%.1f: %.6f\n", config.init_norm, init_loss);
 
-    // Run each optimizer with the same starting point.
-    results.push_back(RunSyntheticOptimizer(config, "Vanilla MeZO",
-                                            /*mode=*/0, eigenvalues, optimum));
-    results.push_back(RunSyntheticOptimizer(config, "ConMeZO",
-                                            /*mode=*/1, eigenvalues, optimum));
-    results.push_back(RunSyntheticOptimizer(config, "AGZO (k=" +
-                                            std::to_string(config.agzo_rank) +
-                                            ")",
-                                            /*mode=*/2, eigenvalues, optimum));
+    // Determine which optimizers to run.
+    std::vector<std::pair<int, std::string>> opt_list;
+    if (config.optimizer >= 0) {
+      std::string name = OptimizerName(config.optimizer);
+      if (config.optimizer == 2) name += " (k=" + std::to_string(config.agzo_rank) + ")";
+      opt_list.push_back({config.optimizer, name});
+    } else {
+      opt_list.push_back({0, "Vanilla MeZO"});
+      opt_list.push_back({1, "ConMeZO"});
+      opt_list.push_back({2, "AGZO (k=" + std::to_string(config.agzo_rank) + ")"});
+    }
+
+    for (const auto& [mode, name] : opt_list) {
+      results.push_back(RunSyntheticOptimizer(config, name, mode,
+                                              eigenvalues, optimum));
+    }
 
     PrintComparison(results, /*is_synthetic=*/true);
 

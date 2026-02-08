@@ -94,6 +94,18 @@ class MeZoConfig {
   int GetAgzoSubspaceRank() const { return agzo_subspace_rank_; }
   void SetAgzoSubspaceRank(int rank) { agzo_subspace_rank_ = rank; }
 
+  // ConMeZO momentum warm-up schedule (from the paper):
+  //   steps [0, cold_steps): beta = momentum_init
+  //   steps [cold_steps, warm_steps): cubic interpolation to momentum_decay
+  //   steps [warm_steps, ...): beta = momentum_decay
+  // Set warm_steps=0 to disable warm-up (use constant momentum_decay).
+  float GetMomentumInit() const { return momentum_init_; }
+  void SetMomentumInit(float v) { momentum_init_ = v; }
+  int GetMomentumColdSteps() const { return momentum_cold_steps_; }
+  void SetMomentumColdSteps(int v) { momentum_cold_steps_ = v; }
+  int GetMomentumWarmSteps() const { return momentum_warm_steps_; }
+  void SetMomentumWarmSteps(int v) { momentum_warm_steps_ = v; }
+
  private:
   float learning_rate_ = 1e-6f;
   float epsilon_ = 1e-3f;
@@ -104,6 +116,9 @@ class MeZoConfig {
   float cone_angle_ = 0.7854f;  // pi/4 radians
   OptimizerMode mode_ = OptimizerMode::kVanillaMeZo;
   int agzo_subspace_rank_ = 16;
+  float momentum_init_ = 0.1f;
+  int momentum_cold_steps_ = 0;   // 0 = no warm-up
+  int momentum_warm_steps_ = 0;
 };
 
 // A named parameter buffer for MeZO optimization. Represents a contiguous

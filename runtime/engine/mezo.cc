@@ -42,6 +42,9 @@ class MeZoFineTuner::Impl {
         cone_angle_(config.GetConeAngle()),
         mode_(config.GetOptimizerMode()),
         agzo_subspace_rank_(config.GetAgzoSubspaceRank()),
+        momentum_init_(config.GetMomentumInit()),
+        momentum_cold_steps_(config.GetMomentumColdSteps()),
+        momentum_warm_steps_(config.GetMomentumWarmSteps()),
         step_count_(0) {
     // Reconcile: if use_conmezo was set but mode wasn't, promote to kConMeZo.
     if (config.GetUseConMeZo() && mode_ == OptimizerMode::kVanillaMeZo) {
@@ -375,9 +378,10 @@ class MeZoFineTuner::Impl {
           z = z_raw;
         }
 
-        // Update momentum: EMA of projected_grad * z.
-        momentum_[m_idx] = momentum_decay_ * momentum_[m_idx] +
-                           (1.0f - momentum_decay_) * projected_grad * z;
+        // Update momentum: EMA of projected_grad * z (with warm-up schedule).
+        float beta = EffectiveMomentumDecay(step_count_);
+        momentum_[m_idx] = beta * momentum_[m_idx] +
+                           (1.0f - beta) * projected_grad * z;
 
         // Update parameter.
         float update = projected_grad * z;
@@ -541,6 +545,19 @@ class MeZoFineTuner::Impl {
     return *loss_plus;
   }
 
+  // Returns the effective momentum decay at the given step, implementing
+  // the ConMeZO warm-up schedule: constant cold phase, cubic ramp, then final.
+  float EffectiveMomentumDecay(uint64_t step) const {
+    if (momentum_warm_steps_ <= 0) return momentum_decay_;
+    if (static_cast<int>(step) < momentum_cold_steps_) return momentum_init_;
+    if (static_cast<int>(step) >= momentum_warm_steps_) return momentum_decay_;
+    // Cubic interpolation from momentum_init_ to momentum_decay_.
+    float t = static_cast<float>(step - momentum_cold_steps_) /
+              static_cast<float>(momentum_warm_steps_ - momentum_cold_steps_);
+    float t3 = t * t * t;
+    return momentum_init_ + (momentum_decay_ - momentum_init_) * t3;
+  }
+
   float learning_rate_;
   float epsilon_;
   float weight_decay_;
@@ -549,6 +566,9 @@ class MeZoFineTuner::Impl {
   float cone_angle_;
   OptimizerMode mode_;
   int agzo_subspace_rank_;
+  float momentum_init_;
+  int momentum_cold_steps_;
+  int momentum_warm_steps_;
   uint64_t step_count_;
   std::mt19937_64 global_rng_;
 
