@@ -634,6 +634,22 @@ int main(int argc, char** argv) {
     }
     printf("  Engine created successfully\n");
 
+    // Load LoRA adapter if provided.
+    if (!config.lora_path.empty()) {
+      printf("  Loading LoRA adapter: %s\n", config.lora_path.c_str());
+      int lora_rc = litert_lm_engine_load_lora(engine, 0,
+                                                config.lora_path.c_str());
+      if (lora_rc != 0) {
+        fprintf(stderr, "ERROR: Failed to load LoRA adapter\n");
+        litert_lm_engine_delete(engine);
+        return 1;
+      }
+      printf("  LoRA adapter loaded successfully\n");
+    } else {
+      printf("  WARNING: No --lora_path provided. "
+             "Trainable parameters may not be available.\n");
+    }
+
     LiteRtLmSessionConfig* session_config = litert_lm_session_config_create();
     litert_lm_session_config_set_lora_id(session_config, 0);
 
