@@ -344,6 +344,10 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
   // When created via InitLoraManager(), owned by owned_lora_manager_.
   LoraManager* lora_manager_ = nullptr;
   std::unique_ptr<LoraManager> owned_lora_manager_;
+
+  // The decode signature name, which may include a LoRA suffix (e.g.
+  // "decode_lora_r4") when lora_rank > 0.
+  std::string decode_signature_name_ = "decode";
 };
 
 // The static executor for the prefill-decode compiled model.

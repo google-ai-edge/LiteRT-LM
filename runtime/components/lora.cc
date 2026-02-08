@@ -12,6 +12,7 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/match.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/str_format.h"  // from @com_google_absl
 #include "absl/strings/str_replace.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
@@ -46,10 +47,49 @@ absl::StatusOr<std::unique_ptr<LoRA>> LoRA::Create(
 }
 
 absl::Status LoRA::Init() {
-  // Get the input names from the default signature.
+  // Get the input names from the decode signature. When the model has separate
+  // LoRA signatures (e.g. "decode_lora_r4"), try those first.
+  std::string decode_sig = kDecodeSignatureRunner;
+
+  // Try 1: Use the LoRA rank from LoraData metadata to construct the signature
+  // name directly.
+  bool found_lora_sig = false;
+  if (lora_data_) {
+    auto rank = lora_data_->GetLoRARank();
+    if (rank.ok() && *rank > 0) {
+      std::string lora_sig =
+          absl::StrCat(kDecodeSignatureRunner, "_lora_r", *rank);
+      auto lora_names = compiled_model_.GetSignatureInputNames(lora_sig);
+      if (lora_names.HasValue()) {
+        decode_sig = std::move(lora_sig);
+        found_lora_sig = true;
+      }
+    }
+  }
+
+  // Try 2: If LoRA metadata didn't provide the rank (e.g. litert-torch
+  // generated LoRA files), scan the model's signatures for a decode_lora_r*
+  // pattern.
+  if (!found_lora_sig) {
+    auto sig_keys = compiled_model_.GetSignatureKeys();
+    if (sig_keys.HasValue()) {
+      constexpr absl::string_view kLoraPrefix = "decode_lora_r";
+      for (const auto& key : sig_keys.Value()) {
+        if (absl::StartsWith(key, kLoraPrefix)) {
+          // Verify this signature actually has LoRA inputs.
+          auto names = compiled_model_.GetSignatureInputNames(key);
+          if (names.HasValue()) {
+            decode_sig = std::string(key);
+            break;
+          }
+        }
+      }
+    }
+  }
+
   LITERT_ASSIGN_OR_RETURN(
       auto input_names,
-      compiled_model_.GetSignatureInputNames(kDecodeSignatureRunner));
+      compiled_model_.GetSignatureInputNames(decode_sig));
 
   for (const auto& input_name : input_names) {
     if (!IsLoRAInputName(input_name)) {
@@ -58,7 +98,7 @@ absl::Status LoRA::Init() {
     // Create the input buffer for the LoRA tensor.
     LITERT_ASSIGN_OR_RETURN(
         litert::TensorBuffer tensor_buffer,
-        compiled_model_.CreateInputBuffer(kDecodeSignatureRunner, input_name));
+        compiled_model_.CreateInputBuffer(decode_sig, input_name));
 
     LITERT_ASSIGN_OR_RETURN(
         auto lock_and_addr, litert::TensorBufferScopedLock::Create(

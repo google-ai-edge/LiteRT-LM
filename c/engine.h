@@ -217,6 +217,15 @@ LITERT_LM_C_API_EXPORT
 void litert_lm_engine_settings_set_activation_data_type(
     LiteRtLmEngineSettings* settings, int activation_data_type_int);
 
+// Sets the LoRA rank for the engine. Must be set before engine creation if the
+// model has LoRA signatures (e.g. rank 4). 0 means LoRA is disabled (default).
+//
+// @param settings The engine settings.
+// @param lora_rank The LoRA rank.
+LITERT_LM_C_API_EXPORT
+void litert_lm_engine_settings_set_lora_rank(LiteRtLmEngineSettings* settings,
+                                             int lora_rank);
+
 // Enables benchmarking for the engine.
 //
 // @param settings The engine settings.
@@ -267,6 +276,15 @@ LiteRtLmSession* litert_lm_engine_create_session(LiteRtLmEngine* engine,
 // @param session The session to destroy.
 LITERT_LM_C_API_EXPORT
 void litert_lm_session_delete(LiteRtLmSession* session);
+
+// Resets a session's internal state (step counter, KV cache, processed tokens)
+// so it can be reused for a fresh forward pass. This is much cheaper than
+// deleting and recreating the session.
+//
+// @param session The session to reset.
+// @return 0 on success, non-zero on failure.
+LITERT_LM_C_API_EXPORT
+int litert_lm_session_reset(LiteRtLmSession* session);
 
 // Generates content from the input prompt.
 //

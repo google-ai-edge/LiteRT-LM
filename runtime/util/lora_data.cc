@@ -39,9 +39,11 @@ namespace litert::lm {
 namespace {
 
 constexpr absl::string_view kLoRARank = "lora_rank";
-// The maximum size of the metadata buffer.
-// This is the max length we need to mmap to build the flatbuffer model.
-constexpr int kMetadataMaxSize = 1024 * 1024;  // 1MB
+// Map the entire file when building the FlatBuffer model. Passing 0 to
+// MemoryMappedFileWithAutoAlignment::Create maps to end-of-file. This is
+// needed for inline TFLite LoRA files where tensor data is part of the
+// FlatBuffer (e.g. litert-torch to_tflite() output).
+constexpr int kMetadataMaxSize = 0;
 
 absl::StatusOr<std::unique_ptr<tflite::FlatBufferModel>>
 CreateFlatBufferModelFromBuffer(const void* buffer_addr, size_t buffer_size) {
@@ -77,6 +79,13 @@ class FlatBufferLoraData : public LoraData {
     if (buffer == nullptr) {
       return absl::NotFoundError(
           absl::StrCat("No buffer found for tensor: ", name));
+    }
+    // Inline TFLite files (e.g. litert-torch to_tflite() output) store tensor
+    // data in buffer->data() instead of at an external offset. Check for inline
+    // data first.
+    if (buffer->data() && buffer->data()->size() > 0) {
+      return std::make_unique<BufferRef<uint8_t>>(
+          buffer->data()->data(), buffer->data()->size());
     }
     return ReadData(buffer->offset(), buffer->size());
   }

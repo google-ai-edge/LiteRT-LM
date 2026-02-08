@@ -351,6 +351,13 @@ void litert_lm_engine_settings_set_cache_dir(LiteRtLmEngineSettings* settings,
   }
 }
 
+void litert_lm_engine_settings_set_lora_rank(LiteRtLmEngineSettings* settings,
+                                             int lora_rank) {
+  if (settings && settings->settings) {
+    settings->settings->GetMutableMainExecutorSettings().SetLoraRank(lora_rank);
+  }
+}
+
 void litert_lm_engine_settings_enable_benchmark(
     LiteRtLmEngineSettings* settings) {
   if (settings && settings->settings) {
@@ -425,6 +432,18 @@ LiteRtLmSession* litert_lm_engine_create_session(
 }
 
 void litert_lm_session_delete(LiteRtLmSession* session) { delete session; }
+
+int litert_lm_session_reset(LiteRtLmSession* session) {
+  if (!session || !session->session) {
+    return -1;
+  }
+  auto status = session->session->Reset();
+  if (!status.ok()) {
+    ABSL_LOG(ERROR) << "Failed to reset session: " << status;
+    return -1;
+  }
+  return 0;
+}
 
 LiteRtLmResponses* litert_lm_session_generate_content(LiteRtLmSession* session,
                                                       const InputData* inputs,

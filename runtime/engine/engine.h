@@ -260,6 +260,13 @@ class Engine {
     GetTrainableParameters() {
       return absl::UnimplementedError("Not implemented.");
     }
+
+    // Resets the session state (executor step counter, KV cache, processed
+    // tokens) so it can be reused for a fresh forward pass without the
+    // overhead of destroying and recreating the session.
+    virtual absl::Status Reset() {
+      return absl::UnimplementedError("Not implemented.");
+    }
   };
 
   // Method to create the Session.
