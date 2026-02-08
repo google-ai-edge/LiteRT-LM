@@ -79,6 +79,8 @@ using litert::lm::NamedParameter;
 using litert::lm::Preface;
 using litert::lm::Responses;
 using litert::lm::SessionConfig;
+using litert::lm::TrainableParameter;
+using litert::lm::TrainableParameterHandle;
 using litert::lm::proto::SamplerParameters;
 
 void ThrowLiteRtLmJniException(JNIEnv* env, const std::string& message) {
@@ -1164,6 +1166,131 @@ JNI_METHOD(nativeMeZoFineTunerGetLearningRate)(
   auto* finetuner = reinterpret_cast<MeZoFineTuner*>(finetuner_pointer);
   if (!finetuner) return 0.0f;
   return finetuner->GetLearningRate();
+}
+
+// ---------------------------------------------------------------------------
+// Session: Prefill, TextScoring, Trainable Parameters
+// ---------------------------------------------------------------------------
+
+LITERTLM_JNIEXPORT jint JNICALL
+JNI_METHOD(nativeSessionRunPrefill)(
+    JNIEnv* env, jclass thiz, jlong session_pointer, jstring input_text) {
+  auto* session = reinterpret_cast<Engine::Session*>(session_pointer);
+  if (!session || !input_text) return -1;
+
+  const char* text = env->GetStringUTFChars(input_text, nullptr);
+  std::vector<InputData> inputs;
+  inputs.emplace_back(InputText(std::string(text)));
+  env->ReleaseStringUTFChars(input_text, text);
+
+  auto status = session->RunPrefill(inputs);
+  if (!status.ok()) {
+    ABSL_LOG(ERROR) << "RunPrefill failed: " << status;
+    return static_cast<jint>(status.code());
+  }
+  return 0;
+}
+
+LITERTLM_JNIEXPORT jfloatArray JNICALL
+JNI_METHOD(nativeSessionRunTextScoring)(
+    JNIEnv* env, jclass thiz, jlong session_pointer,
+    jobjectArray target_texts) {
+  auto* session = reinterpret_cast<Engine::Session*>(session_pointer);
+  if (!session || !target_texts) return nullptr;
+
+  int num_targets = env->GetArrayLength(target_texts);
+  std::vector<std::string> target_strs;
+  std::vector<absl::string_view> target_views;
+  target_strs.reserve(num_targets);
+  target_views.reserve(num_targets);
+
+  for (int i = 0; i < num_targets; ++i) {
+    auto jstr = static_cast<jstring>(env->GetObjectArrayElement(target_texts, i));
+    const char* text = env->GetStringUTFChars(jstr, nullptr);
+    target_strs.emplace_back(text);
+    env->ReleaseStringUTFChars(jstr, text);
+    target_views.emplace_back(target_strs.back());
+  }
+
+  auto responses = session->RunTextScoring(target_views, false);
+  if (!responses.ok()) {
+    ABSL_LOG(ERROR) << "RunTextScoring failed: " << responses.status();
+    return nullptr;
+  }
+
+  const auto& scores = responses->GetScores();
+  jfloatArray result = env->NewFloatArray(scores.size());
+  env->SetFloatArrayRegion(result, 0, scores.size(), scores.data());
+  return result;
+}
+
+LITERTLM_JNIEXPORT jlong JNICALL
+JNI_METHOD(nativeSessionGetTrainableParameters)(
+    JNIEnv* env, jclass thiz, jlong session_pointer) {
+  auto* session = reinterpret_cast<Engine::Session*>(session_pointer);
+  if (!session) return 0;
+
+  auto handle = session->GetTrainableParameters();
+  if (!handle.ok()) {
+    ABSL_LOG(ERROR) << "GetTrainableParameters failed: " << handle.status();
+    return 0;
+  }
+  // Transfer ownership to a raw pointer the Kotlin side will manage.
+  return reinterpret_cast<jlong>(handle->release());
+}
+
+LITERTLM_JNIEXPORT jint JNICALL
+JNI_METHOD(nativeTrainableParamsCount)(
+    JNIEnv* env, jclass thiz, jlong handle_pointer) {
+  auto* handle = reinterpret_cast<TrainableParameterHandle*>(handle_pointer);
+  if (!handle) return 0;
+  return static_cast<jint>(handle->GetParameters().size());
+}
+
+LITERTLM_JNIEXPORT jstring JNICALL
+JNI_METHOD(nativeTrainableParamsGetName)(
+    JNIEnv* env, jclass thiz, jlong handle_pointer, jint index) {
+  auto* handle = reinterpret_cast<TrainableParameterHandle*>(handle_pointer);
+  if (!handle) return nullptr;
+  const auto& params = handle->GetParameters();
+  if (index < 0 || index >= static_cast<jint>(params.size())) return nullptr;
+  return env->NewStringUTF(params[index].name.c_str());
+}
+
+LITERTLM_JNIEXPORT jlong JNICALL
+JNI_METHOD(nativeTrainableParamsGetDataPointer)(
+    JNIEnv* env, jclass thiz, jlong handle_pointer, jint index) {
+  auto* handle = reinterpret_cast<TrainableParameterHandle*>(handle_pointer);
+  if (!handle) return 0;
+  const auto& params = handle->GetParameters();
+  if (index < 0 || index >= static_cast<jint>(params.size())) return 0;
+  return reinterpret_cast<jlong>(params[index].data);
+}
+
+LITERTLM_JNIEXPORT jlong JNICALL
+JNI_METHOD(nativeTrainableParamsGetNumElements)(
+    JNIEnv* env, jclass thiz, jlong handle_pointer, jint index) {
+  auto* handle = reinterpret_cast<TrainableParameterHandle*>(handle_pointer);
+  if (!handle) return 0;
+  const auto& params = handle->GetParameters();
+  if (index < 0 || index >= static_cast<jint>(params.size())) return 0;
+  return static_cast<jlong>(params[index].num_elements);
+}
+
+LITERTLM_JNIEXPORT jboolean JNICALL
+JNI_METHOD(nativeTrainableParamsIsBiasOrLayerNorm)(
+    JNIEnv* env, jclass thiz, jlong handle_pointer, jint index) {
+  auto* handle = reinterpret_cast<TrainableParameterHandle*>(handle_pointer);
+  if (!handle) return JNI_FALSE;
+  const auto& params = handle->GetParameters();
+  if (index < 0 || index >= static_cast<jint>(params.size())) return JNI_FALSE;
+  return params[index].is_bias_or_layernorm ? JNI_TRUE : JNI_FALSE;
+}
+
+LITERTLM_JNIEXPORT void JNICALL
+JNI_METHOD(nativeTrainableParamsDelete)(
+    JNIEnv* env, jclass thiz, jlong handle_pointer) {
+  delete reinterpret_cast<TrainableParameterHandle*>(handle_pointer);
 }
 
 }  // extern "C"

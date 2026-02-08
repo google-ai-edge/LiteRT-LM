@@ -16,6 +16,7 @@
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_ENGINE_ENGINE_H_
 
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "absl/functional/any_invocable.h"  // from @com_google_absl
@@ -29,6 +30,23 @@
 #include "runtime/engine/io_types.h"
 
 namespace litert::lm {
+
+// A single trainable parameter (e.g., a LoRA weight tensor).
+struct TrainableParameter {
+  std::string name;
+  float* data;
+  size_t num_elements;
+  bool is_bias_or_layernorm;
+};
+
+// Handle that holds trainable parameters and keeps their memory alive.
+// The float* pointers in the parameters are valid as long as this handle
+// exists and the owning session is alive.
+class TrainableParameterHandle {
+ public:
+  virtual ~TrainableParameterHandle() = default;
+  virtual const std::vector<TrainableParameter>& GetParameters() const = 0;
+};
 
 // Engine is the interface for the LLM runtime. It is responsible for
 // - Initializing the LLM model and related resources, e.g. tokenizer,
@@ -234,6 +252,14 @@ class Engine {
 
     // Get the reference to the tokenizer for the session.
     virtual const Tokenizer& GetTokenizer() const = 0;
+
+    // Returns a handle to the trainable parameters (e.g., LoRA weights) for
+    // fine-tuning. The returned float* pointers are valid as long as both the
+    // handle and the session are alive.
+    virtual absl::StatusOr<std::unique_ptr<TrainableParameterHandle>>
+    GetTrainableParameters() {
+      return absl::UnimplementedError("Not implemented.");
+    }
   };
 
   // Method to create the Session.

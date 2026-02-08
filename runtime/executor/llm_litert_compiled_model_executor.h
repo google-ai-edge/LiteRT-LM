@@ -126,6 +126,8 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
     lora_manager_ = lora_manager;
   }
 
+  LoraManager* GetLoraManager() override { return lora_manager_; }
+
   const ProcessedTokens& processed_tokens_for_testing() const {
     return llm_context_->processed_context().processed_tokens();
   }

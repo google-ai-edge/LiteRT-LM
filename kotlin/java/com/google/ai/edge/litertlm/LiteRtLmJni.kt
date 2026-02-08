@@ -355,4 +355,38 @@ internal object LiteRtLmJni {
 
   /** Returns the current learning rate from a native MeZO fine-tuner. */
   external fun nativeMeZoFineTunerGetLearningRate(finetunerPointer: Long): Float
+
+  // ---------------------------------------------------------------------------
+  // Session: Prefill, TextScoring, Trainable Parameters
+  // ---------------------------------------------------------------------------
+
+  /** Runs prefill on a session with a text input. Returns 0 on success. */
+  external fun nativeSessionRunPrefill(sessionPointer: Long, inputText: String): Int
+
+  /** Runs text scoring after prefill. Returns float array of scores, or null on failure. */
+  external fun nativeSessionRunTextScoring(
+    sessionPointer: Long,
+    targetTexts: Array<String>
+  ): FloatArray?
+
+  /** Gets trainable parameter handle from a session. Returns handle pointer, or 0 on failure. */
+  external fun nativeSessionGetTrainableParameters(sessionPointer: Long): Long
+
+  /** Returns the number of trainable parameters. */
+  external fun nativeTrainableParamsCount(handlePointer: Long): Int
+
+  /** Returns the name of the trainable parameter at the given index. */
+  external fun nativeTrainableParamsGetName(handlePointer: Long, index: Int): String?
+
+  /** Returns the native data pointer for the trainable parameter at the given index. */
+  external fun nativeTrainableParamsGetDataPointer(handlePointer: Long, index: Int): Long
+
+  /** Returns the number of elements in the trainable parameter at the given index. */
+  external fun nativeTrainableParamsGetNumElements(handlePointer: Long, index: Int): Long
+
+  /** Returns whether the parameter at the given index is a bias or layer norm weight. */
+  external fun nativeTrainableParamsIsBiasOrLayerNorm(handlePointer: Long, index: Int): Boolean
+
+  /** Destroys a trainable parameter handle. */
+  external fun nativeTrainableParamsDelete(handlePointer: Long)
 }

@@ -478,6 +478,34 @@ LiteRtLmBenchmarkInfo* litert_lm_conversation_get_benchmark_info(
     LiteRtLmConversation* conversation);
 
 // ---------------------------------------------------------------------------
+// Low-level Session APIs (Prefill, TextScoring, Trainable Parameters)
+// ---------------------------------------------------------------------------
+
+// Runs the prefill step with a text input. Must be called before
+// `litert_lm_session_run_text_scoring`.
+//
+// @param session The session to prefill.
+// @param input_text The prompt text to prefill with.
+// @return 0 on success, non-zero on failure.
+LITERT_LM_C_API_EXPORT
+int litert_lm_session_run_prefill(LiteRtLmSession* session,
+                                  const char* input_text);
+
+// Scores target text(s) after prefill. Returns the negative log-probability
+// for each target text. Must be called after `litert_lm_session_run_prefill`.
+//
+// @param session The session (must have been prefilled).
+// @param target_texts Array of target text strings to score.
+// @param num_targets Number of target texts.
+// @param scores_out Output array for scores (caller allocates, size >= num_targets).
+// @return Number of scores written, or -1 on failure.
+LITERT_LM_C_API_EXPORT
+int litert_lm_session_run_text_scoring(LiteRtLmSession* session,
+                                       const char** target_texts,
+                                       size_t num_targets,
+                                       float* scores_out);
+
+// ---------------------------------------------------------------------------
 // MeZO (Memory-efficient Zeroth-Order) Fine-Tuning API
 // ---------------------------------------------------------------------------
 //
@@ -497,6 +525,46 @@ typedef struct {
   // weight decay is not applied during updates.
   bool apply_weight_decay;
 } LiteRtLmMeZoParameter;
+
+// ---------------------------------------------------------------------------
+// Trainable Parameter Extraction (LoRA weights from loaded model)
+// ---------------------------------------------------------------------------
+
+// Opaque pointer for trainable parameter handle.
+typedef struct LiteRtLmTrainableParams LiteRtLmTrainableParams;
+
+// Extracts trainable parameters (e.g., LoRA weights) from a session.
+// The returned handle keeps the float* pointers valid. The caller must
+// destroy it with `litert_lm_trainable_params_delete` when done.
+//
+// @param session The session with LoRA adapter loaded.
+// @return A handle to the parameters, or NULL on failure.
+LITERT_LM_C_API_EXPORT
+LiteRtLmTrainableParams* litert_lm_session_get_trainable_parameters(
+    LiteRtLmSession* session);
+
+// Returns the number of trainable parameters.
+//
+// @param params The parameter handle.
+// @return The number of parameters.
+LITERT_LM_C_API_EXPORT
+size_t litert_lm_trainable_params_count(const LiteRtLmTrainableParams* params);
+
+// Returns the trainable parameter at the given index as a MeZoParameter.
+// The returned pointer is valid as long as the handle is alive.
+//
+// @param params The parameter handle.
+// @param index The parameter index.
+// @return Pointer to the parameter, or NULL if index is out of bounds.
+LITERT_LM_C_API_EXPORT
+const LiteRtLmMeZoParameter* litert_lm_trainable_params_get(
+    const LiteRtLmTrainableParams* params, size_t index);
+
+// Destroys a trainable parameter handle.
+//
+// @param params The handle to destroy.
+LITERT_LM_C_API_EXPORT
+void litert_lm_trainable_params_delete(LiteRtLmTrainableParams* params);
 
 // Callback for computing the loss during a MeZO step.
 // @param user_data User-provided context pointer.

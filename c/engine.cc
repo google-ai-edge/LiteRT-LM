@@ -151,6 +151,15 @@ struct LiteRtLmMeZoFineTuner {
   std::unique_ptr<MeZoFineTuner> finetuner;
 };
 
+using ::litert::lm::TrainableParameterHandle;
+
+struct LiteRtLmTrainableParams {
+  std::unique_ptr<TrainableParameterHandle> handle;
+  // Cached C-compatible parameter array (name strings owned by params_names).
+  std::vector<LiteRtLmMeZoParameter> c_params;
+  std::vector<std::string> param_names;  // Owns the name strings.
+};
+
 extern "C" {
 
 SamplerParameters::Type ToSamplerParametersType(Type type) {
@@ -870,6 +879,99 @@ float litert_lm_mezo_finetuner_get_learning_rate(
     return 0.0f;
   }
   return finetuner->finetuner->GetLearningRate();
+}
+
+// ---------------------------------------------------------------------------
+// Low-level Session APIs (Prefill, TextScoring, Trainable Parameters)
+// ---------------------------------------------------------------------------
+
+int litert_lm_session_run_prefill(LiteRtLmSession* session,
+                                  const char* input_text) {
+  if (!session || !session->session || !input_text) {
+    return -1;
+  }
+  std::vector<litert::lm::InputData> inputs;
+  inputs.emplace_back(InputText(std::string(input_text)));
+  auto status = session->session->RunPrefill(inputs);
+  if (!status.ok()) {
+    ABSL_LOG(ERROR) << "Failed to run prefill: " << status;
+    return static_cast<int>(status.code());
+  }
+  return 0;
+}
+
+int litert_lm_session_run_text_scoring(LiteRtLmSession* session,
+                                       const char** target_texts,
+                                       size_t num_targets,
+                                       float* scores_out) {
+  if (!session || !session->session || !target_texts || !scores_out ||
+      num_targets == 0) {
+    return -1;
+  }
+  std::vector<absl::string_view> targets;
+  targets.reserve(num_targets);
+  for (size_t i = 0; i < num_targets; ++i) {
+    if (!target_texts[i]) return -1;
+    targets.emplace_back(target_texts[i]);
+  }
+  auto responses =
+      session->session->RunTextScoring(targets, /*store_token_lengths=*/false);
+  if (!responses.ok()) {
+    ABSL_LOG(ERROR) << "Failed to run text scoring: " << responses.status();
+    return -1;
+  }
+  const auto& scores = responses->GetScores();
+  int n = static_cast<int>(scores.size());
+  for (int i = 0; i < n; ++i) {
+    scores_out[i] = scores[i];
+  }
+  return n;
+}
+
+LiteRtLmTrainableParams* litert_lm_session_get_trainable_parameters(
+    LiteRtLmSession* session) {
+  if (!session || !session->session) {
+    return nullptr;
+  }
+  auto handle = session->session->GetTrainableParameters();
+  if (!handle.ok()) {
+    ABSL_LOG(ERROR) << "Failed to get trainable parameters: "
+                    << handle.status();
+    return nullptr;
+  }
+
+  auto* result = new LiteRtLmTrainableParams;
+  result->handle = *std::move(handle);
+  const auto& params = result->handle->GetParameters();
+
+  result->param_names.reserve(params.size());
+  result->c_params.reserve(params.size());
+  for (const auto& p : params) {
+    result->param_names.push_back(p.name);
+    LiteRtLmMeZoParameter c_param;
+    c_param.name = result->param_names.back().c_str();
+    c_param.data = p.data;
+    c_param.num_elements = p.num_elements;
+    c_param.apply_weight_decay = !p.is_bias_or_layernorm;
+    result->c_params.push_back(c_param);
+  }
+  return result;
+}
+
+size_t litert_lm_trainable_params_count(
+    const LiteRtLmTrainableParams* params) {
+  if (!params) return 0;
+  return params->c_params.size();
+}
+
+const LiteRtLmMeZoParameter* litert_lm_trainable_params_get(
+    const LiteRtLmTrainableParams* params, size_t index) {
+  if (!params || index >= params->c_params.size()) return nullptr;
+  return &params->c_params[index];
+}
+
+void litert_lm_trainable_params_delete(LiteRtLmTrainableParams* params) {
+  delete params;
 }
 
 }  // extern "C"

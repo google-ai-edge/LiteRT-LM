@@ -135,6 +135,9 @@ class LlmExecutorBase {
     return absl::UnimplementedError(absl::StrCat(
         "Reset not implemented for backend: ", ExecutorBackendName()));
   };
+
+  // Returns the LoRA manager, if available. Returns nullptr if no LoRA support.
+  virtual class LoraManager* GetLoraManager() { return nullptr; }
 };
 
 }  // namespace litert::lm

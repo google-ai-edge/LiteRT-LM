@@ -53,8 +53,10 @@
 #include "runtime/executor/vision_executor.h"
 #include "runtime/framework/threadpool.h"
 #include "runtime/proto/sampler_params.pb.h"
+#include "runtime/components/lora_manager.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/executor_data_util.h"
+#include "runtime/util/lora_util.h"
 #include "runtime/util/status_macros.h"  // IWYU pragma: keep
 #include "runtime/util/tensor_buffer_util.h"
 
@@ -128,6 +130,79 @@ SessionBasic::~SessionBasic() {
   }
   absl::MutexLock lock(occupied_executors_mu_);  // NOLINT
   occupied_executors_->erase(&executor_);
+}
+
+namespace {
+
+// Concrete TrainableParameterHandle that holds LoRA TensorBuffers alive.
+class LoraTrainableParameterHandle : public TrainableParameterHandle {
+ public:
+  // Takes ownership of the duplicated TensorBuffer map.
+  static absl::StatusOr<std::unique_ptr<LoraTrainableParameterHandle>> Create(
+      absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer> buffers) {
+    auto handle = std::make_unique<LoraTrainableParameterHandle>();
+
+    for (auto& [name, buffer] : buffers) {
+      // Lock briefly to discover the float* address.
+      LITERT_ASSIGN_OR_RETURN(
+          auto lock_and_addr,
+          ::litert::TensorBufferScopedLock::Create(
+              buffer, ::litert::TensorBuffer::LockMode::kWrite));
+      float* data = static_cast<float*>(lock_and_addr.second);
+
+      LITERT_ASSIGN_OR_RETURN(auto tensor_type, buffer.TensorType());
+      LITERT_ASSIGN_OR_RETURN(auto num_elements,
+                              tensor_type.Layout().NumElements());
+
+      bool is_bias_or_ln = !IsLoRAInputName(name);
+
+      TrainableParameter param;
+      param.name = std::string(name);
+      param.data = data;
+      param.num_elements = num_elements;
+      param.is_bias_or_layernorm = is_bias_or_ln;
+      handle->parameters_.push_back(std::move(param));
+
+      // Keep the lock alive to maintain the float* validity.
+      handle->locks_.push_back(std::move(lock_and_addr.first));
+      // Keep the TensorBuffer alive.
+      handle->buffers_.push_back(std::move(buffer));
+    }
+
+    return handle;
+  }
+
+  const std::vector<TrainableParameter>& GetParameters() const override {
+    return parameters_;
+  }
+
+ private:
+  friend class std::unique_ptr<LoraTrainableParameterHandle>;
+  std::vector<TrainableParameter> parameters_;
+  std::vector<::litert::TensorBuffer> buffers_;
+  std::vector<::litert::TensorBufferScopedLock> locks_;
+};
+
+}  // namespace
+
+absl::StatusOr<std::unique_ptr<TrainableParameterHandle>>
+SessionBasic::GetTrainableParameters() {
+  LoraManager* lora_manager = executor_.GetLoraManager();
+  if (lora_manager == nullptr) {
+    return absl::FailedPreconditionError(
+        "No LoRA manager available. The executor does not support LoRA.");
+  }
+  ASSIGN_OR_RETURN(auto buffers, lora_manager->GetLoRABuffers());
+  if (buffers.empty()) {
+    return absl::NotFoundError("No trainable LoRA parameters found.");
+  }
+  auto handle = LoraTrainableParameterHandle::Create(std::move(buffers));
+  if (!handle.ok()) {
+    return absl::InternalError(
+        absl::StrCat("Failed to create trainable parameter handle: ",
+                     handle.status().ToString()));
+  }
+  return std::unique_ptr<TrainableParameterHandle>(*std::move(handle));
 }
 
 // TODO - b/436674053: Modularize the preprocessing logic into a separate

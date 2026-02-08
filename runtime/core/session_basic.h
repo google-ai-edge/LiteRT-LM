@@ -140,6 +140,9 @@ class SessionBasic : public Engine::Session {
 
   const Tokenizer& GetTokenizer() const override { return tokenizer_; }
 
+  absl::StatusOr<std::unique_ptr<TrainableParameterHandle>>
+  GetTrainableParameters() override;
+
   // Util function for creating the combined ExecutorInputs from the
   // preprocessed contents.
   // TODO - b/436674053: Modularize the preprocessing logic into a separate
