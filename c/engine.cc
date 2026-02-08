@@ -388,6 +388,21 @@ LiteRtLmEngine* litert_lm_engine_create(
 
 void litert_lm_engine_delete(LiteRtLmEngine* engine) { delete engine; }
 
+int litert_lm_engine_load_lora(LiteRtLmEngine* engine, int32_t lora_id,
+                               const char* lora_path) {
+  if (!engine || !engine->engine || !lora_path) {
+    ABSL_LOG(ERROR) << "Invalid arguments to litert_lm_engine_load_lora";
+    return -1;
+  }
+  auto status = engine->engine->LoadLoRA(static_cast<uint32_t>(lora_id),
+                                         std::string(lora_path));
+  if (!status.ok()) {
+    ABSL_LOG(ERROR) << "Failed to load LoRA: " << status;
+    return -1;
+  }
+  return 0;
+}
+
 LiteRtLmSession* litert_lm_engine_create_session(
     LiteRtLmEngine* engine, LiteRtLmSessionConfig* config) {
   if (!engine || !engine->engine) {

@@ -31,6 +31,7 @@
 #include "absl/time/time.h"  // from @com_google_absl
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
+#include "runtime/components/lora_manager.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/core/session_factory.h"
 #include "runtime/engine/engine.h"
@@ -204,6 +205,18 @@ class EngineImpl : public Engine {
     return engine_settings_;
   }
 
+  absl::Status LoadLoRA(uint32_t lora_id,
+                        const std::string& lora_path) override {
+    auto* lora_manager = executor_->GetLoraManager();
+    if (lora_manager == nullptr) {
+      return absl::FailedPreconditionError(
+          "No LoRA manager available. The executor does not support LoRA.");
+    }
+    ASSIGN_OR_RETURN(auto model_assets, ModelAssets::Create(lora_path));
+    RETURN_IF_ERROR(lora_manager->LoadLoRA(lora_id, model_assets));
+    return lora_manager->UseLoRA(lora_id);
+  }
+
  private:
   // Stored engine settings.
   EngineSettings engine_settings_;
@@ -295,6 +308,10 @@ absl::StatusOr<std::unique_ptr<Engine>> EngineImpl::Create(
                            main_executor_settings, env, *model_resources));
     }
   };
+
+  // Initialize the LoRA manager so that sessions can access trainable
+  // LoRA parameters for fine-tuning (e.g. via MeZO).
+  RETURN_IF_ERROR(executor->InitLoraManager());
 
   // TODO - b/436674053: Modularize the executor creation logic into a
   // separate executor class, and have unit test for it.

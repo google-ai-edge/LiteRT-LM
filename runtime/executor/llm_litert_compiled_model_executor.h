@@ -128,6 +128,17 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
 
   LoraManager* GetLoraManager() override { return lora_manager_; }
 
+  // Creates and owns a LoraManager from the internal compiled model.
+  absl::Status InitLoraManager() override {
+    auto lora_manager_or = LoraManager::Create(compiled_model_);
+    if (!lora_manager_or.ok()) {
+      return lora_manager_or.status();
+    }
+    owned_lora_manager_ = *std::move(lora_manager_or);
+    lora_manager_ = owned_lora_manager_.get();
+    return absl::OkStatus();
+  }
+
   const ProcessedTokens& processed_tokens_for_testing() const {
     return llm_context_->processed_context().processed_tokens();
   }
@@ -329,8 +340,10 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
   bool gpu_optimized_single_buffer_cache_ = false;
 
   // Optional LoRA manager for injecting LoRA buffers into forward passes.
-  // Not owned by the executor.
+  // When set externally via SetLoraManager(), not owned by the executor.
+  // When created via InitLoraManager(), owned by owned_lora_manager_.
   LoraManager* lora_manager_ = nullptr;
+  std::unique_ptr<LoraManager> owned_lora_manager_;
 };
 
 // The static executor for the prefill-decode compiled model.

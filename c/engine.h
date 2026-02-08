@@ -238,6 +238,19 @@ LiteRtLmEngine* litert_lm_engine_create(const LiteRtLmEngineSettings* settings);
 LITERT_LM_C_API_EXPORT
 void litert_lm_engine_delete(LiteRtLmEngine* engine);
 
+// Loads a LoRA adapter into the engine from the given file path. The adapter
+// is assigned the given lora_id. Sessions created afterwards can reference
+// this adapter via `litert_lm_session_config_set_lora_id`. The adapter is
+// also immediately activated so that sessions can get trainable parameters.
+//
+// @param engine The engine to load the adapter into.
+// @param lora_id The ID to assign to the adapter (must be >= 0).
+// @param lora_path Path to the LoRA adapter file (.tflite).
+// @return 0 on success, non-zero on failure.
+LITERT_LM_C_API_EXPORT
+int litert_lm_engine_load_lora(LiteRtLmEngine* engine, int32_t lora_id,
+                               const char* lora_path);
+
 // Creates a LiteRT LM Session. The caller is responsible for destroying the
 // session using `litert_lm_session_delete`.
 //

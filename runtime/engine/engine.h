@@ -272,6 +272,13 @@ class Engine {
     return absl::UnimplementedError("Not implemented.");
   }
 
+  // Loads a LoRA adapter from the given path and assigns it the given ID.
+  // The adapter must be loaded before creating sessions that reference it.
+  virtual absl::Status LoadLoRA(uint32_t lora_id,
+                                const std::string& lora_path) {
+    return absl::UnimplementedError("LoadLoRA not implemented.");
+  }
+
   // Returns the EngineSettings currently used by the engine.
   virtual const EngineSettings& GetEngineSettings() const = 0;
 
