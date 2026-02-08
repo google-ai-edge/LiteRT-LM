@@ -55,6 +55,7 @@ struct BenchConfig {
   std::string eval_data_path = "benchmark/data/wiki.test.raw";
   int seq_len = 256;
   int num_eval_samples = 10;
+  int lora_rank = 4;
 
   // Shared settings.
   int num_steps = 3000;
@@ -63,6 +64,10 @@ struct BenchConfig {
   float epsilon = 1e-3f;
   uint64_t seed = 42;
   int agzo_rank = 16;
+
+  // Sweep / filter settings.
+  int optimizer = -1;           // -1 = all, 0 = vanilla, 1 = conmezo, 2 = agzo
+  std::string lr_sweep;         // Comma-separated lr values, e.g. "1e-4,1e-3,1e-2"
 };
 
 // ---------------------------------------------------------------------------
@@ -306,8 +311,7 @@ std::vector<DataSample> LoadWikiText(const std::string& path, int seq_len,
 }
 
 struct ModelLossContext {
-  LiteRtLmEngine* engine;
-  LiteRtLmSessionConfig* session_config;
+  LiteRtLmSession* session;  // Persistent session, reset between evaluations.
   const std::vector<DataSample>* train_data;
   int current_sample_idx;
 };
@@ -315,23 +319,18 @@ struct ModelLossContext {
 int ModelLossFn(void* user_data, float* loss_out) {
   auto* ctx = static_cast<ModelLossContext*>(user_data);
 
-  LiteRtLmSession* session =
-      litert_lm_engine_create_session(ctx->engine, ctx->session_config);
-  if (!session) return -1;
+  // Reset session state (step counter, KV cache) for a fresh forward pass.
+  if (litert_lm_session_reset(ctx->session) != 0) return -1;
 
   const auto& sample =
       ctx->train_data->at(ctx->current_sample_idx % ctx->train_data->size());
 
-  int rc = litert_lm_session_run_prefill(session, sample.prompt.c_str());
-  if (rc != 0) {
-    litert_lm_session_delete(session);
-    return -1;
-  }
+  int rc = litert_lm_session_run_prefill(ctx->session, sample.prompt.c_str());
+  if (rc != 0) return -1;
 
   const char* target = sample.target.c_str();
   float score = 0.0f;
-  int n = litert_lm_session_run_text_scoring(session, &target, 1, &score);
-  litert_lm_session_delete(session);
+  int n = litert_lm_session_run_text_scoring(ctx->session, &target, 1, &score);
 
   if (n < 1) return -1;
   *loss_out = -score;
@@ -348,20 +347,23 @@ RunResult RunModelOptimizer(const BenchConfig& config, const std::string& name,
   printf("\n=== %s (lr=%.1e, mode=%d) ===\n", name.c_str(), config.lr,
          optimizer_mode);
 
-  LiteRtLmSession* param_session =
+  // Create one session and reuse it for both parameter extraction and loss
+  // evaluation. Session::Reset() clears internal state between forward passes,
+  // avoiding the overhead of create/delete per loss evaluation.
+  LiteRtLmSession* session =
       litert_lm_engine_create_session(engine, session_config);
-  if (!param_session) {
+  if (!session) {
     fprintf(stderr, "ERROR: Cannot create session\n");
     return result;
   }
 
   LiteRtLmTrainableParams* params =
-      litert_lm_session_get_trainable_parameters(param_session);
+      litert_lm_session_get_trainable_parameters(session);
   if (!params) {
     fprintf(stderr,
             "ERROR: Cannot get trainable parameters. "
             "Model may not have LoRA signatures.\n");
-    litert_lm_session_delete(param_session);
+    litert_lm_session_delete(session);
     return result;
   }
 
@@ -398,13 +400,11 @@ RunResult RunModelOptimizer(const BenchConfig& config, const std::string& name,
   if (!finetuner) {
     fprintf(stderr, "ERROR: Cannot create fine-tuner\n");
     litert_lm_trainable_params_delete(params);
-    litert_lm_session_delete(param_session);
     return result;
   }
 
   ModelLossContext ctx;
-  ctx.engine = engine;
-  ctx.session_config = session_config;
+  ctx.session = session;
   ctx.train_data = &train_data;
   ctx.current_sample_idx = 0;
 
@@ -439,7 +439,7 @@ RunResult RunModelOptimizer(const BenchConfig& config, const std::string& name,
 
   litert_lm_mezo_finetuner_delete(finetuner);
   litert_lm_trainable_params_delete(params);
-  litert_lm_session_delete(param_session);
+  litert_lm_session_delete(session);
 
   return result;
 }
@@ -543,8 +543,36 @@ BenchConfig ParseArgs(int argc, char** argv) {
     else if (key == "--noise") config.noise_std = std::stof(val);
     else if (key == "--condition") config.condition_number = std::stof(val);
     else if (key == "--agzo_rank") config.agzo_rank = std::stoi(val);
+    else if (key == "--lora_rank") config.lora_rank = std::stoi(val);
+    else if (key == "--optimizer") config.optimizer = std::stoi(val);
+    else if (key == "--lr_sweep") config.lr_sweep = val;
   }
   return config;
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+std::vector<float> ParseLrSweep(const std::string& s) {
+  std::vector<float> lrs;
+  if (s.empty()) return lrs;
+  size_t pos = 0;
+  while (pos < s.size()) {
+    size_t comma = s.find(',', pos);
+    if (comma == std::string::npos) comma = s.size();
+    lrs.push_back(std::stof(s.substr(pos, comma - pos)));
+    pos = comma + 1;
+  }
+  return lrs;
+}
+
+const char* OptimizerName(int mode) {
+  switch (mode) {
+    case 0: return "Vanilla MeZO";
+    case 1: return "ConMeZO";
+    case 2: return "AGZO";
+    default: return "Unknown";
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -626,6 +654,10 @@ int main(int argc, char** argv) {
       return 1;
     }
 
+    if (!config.lora_path.empty() && config.lora_rank > 0) {
+      litert_lm_engine_settings_set_lora_rank(settings, config.lora_rank);
+    }
+
     LiteRtLmEngine* engine = litert_lm_engine_create(settings);
     litert_lm_engine_settings_delete(settings);
     if (!engine) {
@@ -653,12 +685,34 @@ int main(int argc, char** argv) {
     LiteRtLmSessionConfig* session_config = litert_lm_session_config_create();
     litert_lm_session_config_set_lora_id(session_config, 0);
 
-    results.push_back(RunModelOptimizer(config, "Vanilla MeZO", 0, engine,
-                                        session_config, train_data));
-    results.push_back(RunModelOptimizer(config, "ConMeZO", 1, engine,
-                                        session_config, train_data));
-    results.push_back(RunModelOptimizer(config, "AGZO", 2, engine,
-                                        session_config, train_data));
+    // Determine which optimizers to run.
+    std::vector<int> modes_to_run;
+    if (config.optimizer >= 0) {
+      modes_to_run.push_back(config.optimizer);
+    } else {
+      modes_to_run = {0, 1, 2};
+    }
+
+    // Determine learning rates to sweep.
+    std::vector<float> lr_values = ParseLrSweep(config.lr_sweep);
+    if (lr_values.empty()) {
+      lr_values.push_back(config.lr);
+    }
+
+    for (float lr : lr_values) {
+      BenchConfig run_config = config;
+      run_config.lr = lr;
+      for (int mode : modes_to_run) {
+        std::string name = OptimizerName(mode);
+        if (lr_values.size() > 1) {
+          char buf[64];
+          snprintf(buf, sizeof(buf), " (lr=%.0e)", lr);
+          name += buf;
+        }
+        results.push_back(RunModelOptimizer(run_config, name, mode, engine,
+                                            session_config, train_data));
+      }
+    }
 
     PrintComparison(results, /*is_synthetic=*/false);
 
