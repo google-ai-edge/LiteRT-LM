@@ -138,9 +138,10 @@ object ConfigTest {
       assertEquals(1e-3f, config.epsilon)
       assertEquals(0.0f, config.weightDecay)
       assertEquals(0L, config.seed)
-      assertEquals(false, config.useConMeZo)
+      assertEquals(OptimizerMode.VANILLA_MEZO, config.optimizerMode)
       assertEquals(0.9f, config.momentumDecay)
       assertEquals(0.7854f, config.coneAngle)
+      assertEquals(16, config.agzoSubspaceRank)
     }
 
     test("mezoConfig_customValues") {
@@ -149,7 +150,7 @@ object ConfigTest {
         epsilon = 2e-3f,
         weightDecay = 0.01f,
         seed = 42L,
-        useConMeZo = true,
+        optimizerMode = OptimizerMode.CON_MEZO,
         momentumDecay = 0.95f,
         coneAngle = 0.5f,
       )
@@ -157,9 +158,33 @@ object ConfigTest {
       assertEquals(2e-3f, config.epsilon)
       assertEquals(0.01f, config.weightDecay)
       assertEquals(42L, config.seed)
-      assertEquals(true, config.useConMeZo)
+      assertEquals(OptimizerMode.CON_MEZO, config.optimizerMode)
       assertEquals(0.95f, config.momentumDecay)
       assertEquals(0.5f, config.coneAngle)
+    }
+
+    test("mezoConfig_agzoMode") {
+      val config = MeZoConfig(
+        optimizerMode = OptimizerMode.AGZO,
+        agzoSubspaceRank = 32,
+      )
+      assertEquals(OptimizerMode.AGZO, config.optimizerMode)
+      assertEquals(32, config.agzoSubspaceRank)
+    }
+
+    test("mezoConfig_agzoInvalidRankThrows") {
+      assertThrows<IllegalArgumentException> {
+        MeZoConfig(agzoSubspaceRank = 0)
+      }
+      assertThrows<IllegalArgumentException> {
+        MeZoConfig(agzoSubspaceRank = -1)
+      }
+    }
+
+    test("mezoConfig_optimizerModeNativeValues") {
+      assertEquals(0, OptimizerMode.VANILLA_MEZO.nativeValue)
+      assertEquals(1, OptimizerMode.CON_MEZO.nativeValue)
+      assertEquals(2, OptimizerMode.AGZO.nativeValue)
     }
 
     test("mezoConfig_negativeLearningRateThrows") {
@@ -200,10 +225,18 @@ object ConfigTest {
 
     test("mezoConfig_copyWithConMeZo") {
       val original = MeZoConfig()
-      val copied = original.copy(useConMeZo = true, momentumDecay = 0.95f)
-      assertEquals(false, original.useConMeZo)
-      assertEquals(true, copied.useConMeZo)
+      val copied = original.copy(optimizerMode = OptimizerMode.CON_MEZO, momentumDecay = 0.95f)
+      assertEquals(OptimizerMode.VANILLA_MEZO, original.optimizerMode)
+      assertEquals(OptimizerMode.CON_MEZO, copied.optimizerMode)
       assertEquals(0.95f, copied.momentumDecay)
+    }
+
+    test("mezoConfig_copyToAgzo") {
+      val original = MeZoConfig(optimizerMode = OptimizerMode.CON_MEZO)
+      val agzo = original.copy(optimizerMode = OptimizerMode.AGZO, agzoSubspaceRank = 8)
+      assertEquals(OptimizerMode.CON_MEZO, original.optimizerMode)
+      assertEquals(OptimizerMode.AGZO, agzo.optimizerMode)
+      assertEquals(8, agzo.agzoSubspaceRank)
     }
 
     // --- MeZoParameter Tests ---

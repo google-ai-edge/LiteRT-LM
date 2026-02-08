@@ -315,6 +315,12 @@ internal object LiteRtLmJni {
   /** Sets the cone angle on a native MeZO config. */
   external fun nativeMeZoConfigSetConeAngle(configPointer: Long, coneAngle: Float)
 
+  /** Sets the optimizer mode on a native MeZO config (0=VanillaMeZo, 1=ConMeZo, 2=Agzo). */
+  external fun nativeMeZoConfigSetOptimizerMode(configPointer: Long, mode: Int)
+
+  /** Sets the AGZO subspace rank on a native MeZO config. */
+  external fun nativeMeZoConfigSetAgzoSubspaceRank(configPointer: Long, rank: Int)
+
   /** Creates a native MeZO fine-tuner from a config. */
   external fun nativeMeZoFineTunerCreate(configPointer: Long): Long
 

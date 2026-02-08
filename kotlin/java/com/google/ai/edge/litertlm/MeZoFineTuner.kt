@@ -24,7 +24,7 @@ package com.google.ai.edge.litertlm
  *
  * Example:
  * ```kotlin
- * val config = MeZoConfig(learningRate = 1e-7f, useConMeZo = true)
+ * val config = MeZoConfig(learningRate = 1e-7f, optimizerMode = OptimizerMode.CON_MEZO)
  * MeZoFineTuner(config).use { finetuner ->
  *   val loss = finetuner.step(parameters) { computeForwardPassLoss() }
  *   println("Step ${finetuner.stepCount}: loss=$loss")
@@ -45,9 +45,14 @@ class MeZoFineTuner(config: MeZoConfig) : AutoCloseable {
     LiteRtLmJni.nativeMeZoConfigSetEpsilon(nativeConfigPointer, config.epsilon)
     LiteRtLmJni.nativeMeZoConfigSetWeightDecay(nativeConfigPointer, config.weightDecay)
     LiteRtLmJni.nativeMeZoConfigSetSeed(nativeConfigPointer, config.seed)
-    LiteRtLmJni.nativeMeZoConfigSetUseConMeZo(nativeConfigPointer, config.useConMeZo)
+    LiteRtLmJni.nativeMeZoConfigSetOptimizerMode(
+      nativeConfigPointer, config.optimizerMode.nativeValue
+    )
     LiteRtLmJni.nativeMeZoConfigSetMomentumDecay(nativeConfigPointer, config.momentumDecay)
     LiteRtLmJni.nativeMeZoConfigSetConeAngle(nativeConfigPointer, config.coneAngle)
+    LiteRtLmJni.nativeMeZoConfigSetAgzoSubspaceRank(
+      nativeConfigPointer, config.agzoSubspaceRank
+    )
 
     nativePointer = LiteRtLmJni.nativeMeZoFineTunerCreate(nativeConfigPointer)
     require(nativePointer != 0L) { "Failed to create native MeZO fine-tuner." }

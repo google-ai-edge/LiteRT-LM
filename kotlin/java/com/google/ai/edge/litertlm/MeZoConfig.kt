@@ -19,26 +19,33 @@ package com.google.ai.edge.litertlm
  * Configuration for MeZO (Memory-efficient Zeroth-Order) fine-tuning.
  *
  * MeZO estimates gradients using only forward passes, achieving the same memory footprint as
- * inference. ConMeZO extends MeZO with cone-constrained momentum for faster convergence.
+ * inference. Three optimizer variants are available:
+ * - **VANILLA_MEZO**: Standard MeZO (SPSA gradient estimator).
+ * - **CON_MEZO**: ConMeZO — cone-constrained momentum for faster convergence.
+ * - **AGZO**: Random-subspace projected perturbation (proof-of-concept).
  *
  * @property learningRate Learning rate for parameter updates. Must be positive.
  * @property epsilon Perturbation scale for finite difference gradient estimation. Must be positive.
  * @property weightDecay Weight decay coefficient. Must be non-negative.
  * @property seed Random seed for reproducibility. 0 uses a random seed.
- * @property useConMeZo Enable ConMeZO (cone-constrained momentum). When enabled, perturbation
- *   directions are biased toward a momentum vector from past gradients.
- * @property momentumDecay EMA decay for the ConMeZO momentum vector. Must be in [0, 1].
- * @property coneAngle Half-angle of the sampling cone in radians. Must be in [0, pi/2]. Smaller
- *   values concentrate perturbations closer to the momentum direction.
+ * @property optimizerMode Selects the optimizer variant. Setting [CON_MEZO][OptimizerMode.CON_MEZO]
+ *   is equivalent to the legacy `useConMeZo = true`.
+ * @property momentumDecay EMA decay for the ConMeZO momentum vector. Must be in [0, 1]. Only used
+ *   when [optimizerMode] is [CON_MEZO][OptimizerMode.CON_MEZO].
+ * @property coneAngle Half-angle of the sampling cone in radians. Must be in [0, pi/2]. Only used
+ *   when [optimizerMode] is [CON_MEZO][OptimizerMode.CON_MEZO].
+ * @property agzoSubspaceRank Number of basis vectors for the AGZO random subspace. Must be
+ *   positive. Only used when [optimizerMode] is [AGZO][OptimizerMode.AGZO].
  */
 data class MeZoConfig(
   val learningRate: Float = 1e-6f,
   val epsilon: Float = 1e-3f,
   val weightDecay: Float = 0.0f,
   val seed: Long = 0L,
-  val useConMeZo: Boolean = false,
+  val optimizerMode: OptimizerMode = OptimizerMode.VANILLA_MEZO,
   val momentumDecay: Float = 0.9f,
   val coneAngle: Float = 0.7854f,
+  val agzoSubspaceRank: Int = 16,
 ) {
   init {
     require(learningRate > 0) { "learningRate must be positive, got $learningRate." }
@@ -49,6 +56,9 @@ data class MeZoConfig(
     }
     require(coneAngle in 0.0f..PI_OVER_2) {
       "coneAngle must be in [0, pi/2], got $coneAngle."
+    }
+    require(agzoSubspaceRank > 0) {
+      "agzoSubspaceRank must be positive, got $agzoSubspaceRank."
     }
   }
 

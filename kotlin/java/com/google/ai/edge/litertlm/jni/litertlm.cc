@@ -73,6 +73,7 @@ using litert::lm::JsonPreface;
 using litert::lm::Message;
 using litert::lm::MeZoConfig;
 using litert::lm::MeZoFineTuner;
+using litert::lm::OptimizerMode;
 using litert::lm::ModelAssets;
 using litert::lm::NamedParameter;
 using litert::lm::Preface;
@@ -1019,6 +1020,21 @@ LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeMeZoConfigSetConeAngle)(
     JNIEnv* env, jclass thiz, jlong config_pointer, jfloat cone_angle) {
   auto* config = reinterpret_cast<MeZoConfig*>(config_pointer);
   if (config) config->SetConeAngle(cone_angle);
+}
+
+LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeMeZoConfigSetOptimizerMode)(
+    JNIEnv* env, jclass thiz, jlong config_pointer, jint mode) {
+  auto* config = reinterpret_cast<MeZoConfig*>(config_pointer);
+  if (config) {
+    config->SetOptimizerMode(
+        static_cast<litert::lm::OptimizerMode>(mode));
+  }
+}
+
+LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeMeZoConfigSetAgzoSubspaceRank)(
+    JNIEnv* env, jclass thiz, jlong config_pointer, jint rank) {
+  auto* config = reinterpret_cast<MeZoConfig*>(config_pointer);
+  if (config) config->SetAgzoSubspaceRank(rank);
 }
 
 LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeMeZoFineTunerCreate)(
