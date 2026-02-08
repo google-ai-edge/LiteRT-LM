@@ -57,11 +57,31 @@ class MeZoConfig {
   uint64_t GetSeed() const { return seed_; }
   void SetSeed(uint64_t seed) { seed_ = seed; }
 
+  // Enable ConMeZO (cone-constrained momentum MeZO). When enabled, the
+  // perturbation direction is biased toward an exponential moving average of
+  // past projected gradients, accelerating convergence.
+  bool GetUseConMeZo() const { return use_conmezo_; }
+  void SetUseConMeZo(bool use_conmezo) { use_conmezo_ = use_conmezo; }
+
+  // EMA decay for the ConMeZO momentum vector. Must be in [0, 1].
+  float GetMomentumDecay() const { return momentum_decay_; }
+  void SetMomentumDecay(float momentum_decay) {
+    momentum_decay_ = momentum_decay;
+  }
+
+  // Half-angle of the sampling cone in radians. Must be in [0, pi/2].
+  // Smaller values concentrate perturbations closer to the momentum direction.
+  float GetConeAngle() const { return cone_angle_; }
+  void SetConeAngle(float cone_angle) { cone_angle_ = cone_angle; }
+
  private:
   float learning_rate_ = 1e-6f;
   float epsilon_ = 1e-3f;
   float weight_decay_ = 0.0f;
   uint64_t seed_ = 0;
+  bool use_conmezo_ = false;
+  float momentum_decay_ = 0.9f;
+  float cone_angle_ = 0.7854f;  // pi/4 radians
 };
 
 // A named parameter buffer for MeZO optimization. Represents a contiguous

@@ -750,6 +750,27 @@ void litert_lm_mezo_config_set_seed(LiteRtLmMeZoConfig* config,
   }
 }
 
+void litert_lm_mezo_config_set_use_conmezo(LiteRtLmMeZoConfig* config,
+                                           bool use_conmezo) {
+  if (config) {
+    config->config.SetUseConMeZo(use_conmezo);
+  }
+}
+
+void litert_lm_mezo_config_set_momentum_decay(LiteRtLmMeZoConfig* config,
+                                              float momentum_decay) {
+  if (config) {
+    config->config.SetMomentumDecay(momentum_decay);
+  }
+}
+
+void litert_lm_mezo_config_set_cone_angle(LiteRtLmMeZoConfig* config,
+                                          float cone_angle) {
+  if (config) {
+    config->config.SetConeAngle(cone_angle);
+  }
+}
+
 LiteRtLmMeZoFineTuner* litert_lm_mezo_finetuner_create(
     const LiteRtLmMeZoConfig* config) {
   if (!config) {

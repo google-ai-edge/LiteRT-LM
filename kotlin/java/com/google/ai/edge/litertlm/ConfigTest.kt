@@ -130,6 +130,104 @@ object ConfigTest {
       assertEquals(20, copied.loraId)
     }
 
+    // --- MeZoConfig Tests ---
+
+    test("mezoConfig_defaultValues") {
+      val config = MeZoConfig()
+      assertEquals(1e-6f, config.learningRate)
+      assertEquals(1e-3f, config.epsilon)
+      assertEquals(0.0f, config.weightDecay)
+      assertEquals(0L, config.seed)
+      assertEquals(false, config.useConMeZo)
+      assertEquals(0.9f, config.momentumDecay)
+      assertEquals(0.7854f, config.coneAngle)
+    }
+
+    test("mezoConfig_customValues") {
+      val config = MeZoConfig(
+        learningRate = 1e-4f,
+        epsilon = 2e-3f,
+        weightDecay = 0.01f,
+        seed = 42L,
+        useConMeZo = true,
+        momentumDecay = 0.95f,
+        coneAngle = 0.5f,
+      )
+      assertEquals(1e-4f, config.learningRate)
+      assertEquals(2e-3f, config.epsilon)
+      assertEquals(0.01f, config.weightDecay)
+      assertEquals(42L, config.seed)
+      assertEquals(true, config.useConMeZo)
+      assertEquals(0.95f, config.momentumDecay)
+      assertEquals(0.5f, config.coneAngle)
+    }
+
+    test("mezoConfig_negativeLearningRateThrows") {
+      assertThrows<IllegalArgumentException> {
+        MeZoConfig(learningRate = -1e-5f)
+      }
+    }
+
+    test("mezoConfig_zeroEpsilonThrows") {
+      assertThrows<IllegalArgumentException> {
+        MeZoConfig(epsilon = 0.0f)
+      }
+    }
+
+    test("mezoConfig_negativeWeightDecayThrows") {
+      assertThrows<IllegalArgumentException> {
+        MeZoConfig(weightDecay = -0.01f)
+      }
+    }
+
+    test("mezoConfig_invalidMomentumDecayThrows") {
+      assertThrows<IllegalArgumentException> {
+        MeZoConfig(momentumDecay = -0.1f)
+      }
+      assertThrows<IllegalArgumentException> {
+        MeZoConfig(momentumDecay = 1.1f)
+      }
+    }
+
+    test("mezoConfig_invalidConeAngleThrows") {
+      assertThrows<IllegalArgumentException> {
+        MeZoConfig(coneAngle = -0.1f)
+      }
+      assertThrows<IllegalArgumentException> {
+        MeZoConfig(coneAngle = 2.0f)
+      }
+    }
+
+    test("mezoConfig_copyWithConMeZo") {
+      val original = MeZoConfig()
+      val copied = original.copy(useConMeZo = true, momentumDecay = 0.95f)
+      assertEquals(false, original.useConMeZo)
+      assertEquals(true, copied.useConMeZo)
+      assertEquals(0.95f, copied.momentumDecay)
+    }
+
+    // --- MeZoParameter Tests ---
+
+    test("mezoParameter_validCreation") {
+      val param = MeZoParameter(name = "w", dataPointer = 12345L, numElements = 100L)
+      assertEquals("w", param.name)
+      assertEquals(12345L, param.dataPointer)
+      assertEquals(100L, param.numElements)
+      assertEquals(false, param.isBiasOrLayerNorm)
+    }
+
+    test("mezoParameter_nullPointerThrows") {
+      assertThrows<IllegalArgumentException> {
+        MeZoParameter(name = "w", dataPointer = 0L, numElements = 100L)
+      }
+    }
+
+    test("mezoParameter_zeroElementsThrows") {
+      assertThrows<IllegalArgumentException> {
+        MeZoParameter(name = "w", dataPointer = 1L, numElements = 0L)
+      }
+    }
+
     println()
     println("Results: $testsPassed passed, $testsFailed failed")
 

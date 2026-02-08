@@ -36,6 +36,7 @@
 #include "runtime/engine/engine_factory.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
+#include "runtime/engine/mezo.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/proto/sampler_params.pb.h"
 #include "tflite/logger.h"  // from @litert
@@ -70,7 +71,10 @@ using litert::lm::InputText;
 using litert::lm::JsonMessage;
 using litert::lm::JsonPreface;
 using litert::lm::Message;
+using litert::lm::MeZoConfig;
+using litert::lm::MeZoFineTuner;
 using litert::lm::ModelAssets;
+using litert::lm::NamedParameter;
 using litert::lm::Preface;
 using litert::lm::Responses;
 using litert::lm::SessionConfig;
@@ -958,6 +962,192 @@ LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeConversationCancelProcess)(
   Conversation* conversation =
       reinterpret_cast<Conversation*>(conversation_pointer);
   conversation->CancelProcess();
+}
+
+// ---------------------------------------------------------------------------
+// MeZO Fine-Tuning JNI Methods
+// ---------------------------------------------------------------------------
+
+LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeMeZoConfigCreate)(
+    JNIEnv* env, jclass thiz) {
+  auto* config = new MeZoConfig();
+  return reinterpret_cast<jlong>(config);
+}
+
+LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeMeZoConfigDelete)(
+    JNIEnv* env, jclass thiz, jlong config_pointer) {
+  delete reinterpret_cast<MeZoConfig*>(config_pointer);
+}
+
+LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeMeZoConfigSetLearningRate)(
+    JNIEnv* env, jclass thiz, jlong config_pointer, jfloat learning_rate) {
+  auto* config = reinterpret_cast<MeZoConfig*>(config_pointer);
+  if (config) config->SetLearningRate(learning_rate);
+}
+
+LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeMeZoConfigSetEpsilon)(
+    JNIEnv* env, jclass thiz, jlong config_pointer, jfloat epsilon) {
+  auto* config = reinterpret_cast<MeZoConfig*>(config_pointer);
+  if (config) config->SetEpsilon(epsilon);
+}
+
+LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeMeZoConfigSetWeightDecay)(
+    JNIEnv* env, jclass thiz, jlong config_pointer, jfloat weight_decay) {
+  auto* config = reinterpret_cast<MeZoConfig*>(config_pointer);
+  if (config) config->SetWeightDecay(weight_decay);
+}
+
+LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeMeZoConfigSetSeed)(
+    JNIEnv* env, jclass thiz, jlong config_pointer, jlong seed) {
+  auto* config = reinterpret_cast<MeZoConfig*>(config_pointer);
+  if (config) config->SetSeed(static_cast<uint64_t>(seed));
+}
+
+LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeMeZoConfigSetUseConMeZo)(
+    JNIEnv* env, jclass thiz, jlong config_pointer, jboolean use_conmezo) {
+  auto* config = reinterpret_cast<MeZoConfig*>(config_pointer);
+  if (config) config->SetUseConMeZo(use_conmezo);
+}
+
+LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeMeZoConfigSetMomentumDecay)(
+    JNIEnv* env, jclass thiz, jlong config_pointer, jfloat momentum_decay) {
+  auto* config = reinterpret_cast<MeZoConfig*>(config_pointer);
+  if (config) config->SetMomentumDecay(momentum_decay);
+}
+
+LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeMeZoConfigSetConeAngle)(
+    JNIEnv* env, jclass thiz, jlong config_pointer, jfloat cone_angle) {
+  auto* config = reinterpret_cast<MeZoConfig*>(config_pointer);
+  if (config) config->SetConeAngle(cone_angle);
+}
+
+LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeMeZoFineTunerCreate)(
+    JNIEnv* env, jclass thiz, jlong config_pointer) {
+  auto* config = reinterpret_cast<MeZoConfig*>(config_pointer);
+  if (!config) {
+    ThrowLiteRtLmJniException(env, "MeZO config pointer is null.");
+    return 0;
+  }
+  auto finetuner = MeZoFineTuner::Create(*config);
+  if (!finetuner.ok()) {
+    ThrowLiteRtLmJniException(
+        env, "Failed to create MeZO fine-tuner: " +
+                 finetuner.status().ToString());
+    return 0;
+  }
+  return reinterpret_cast<jlong>(finetuner->release());
+}
+
+LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeMeZoFineTunerDelete)(
+    JNIEnv* env, jclass thiz, jlong finetuner_pointer) {
+  delete reinterpret_cast<MeZoFineTuner*>(finetuner_pointer);
+}
+
+LITERTLM_JNIEXPORT jfloat JNICALL JNI_METHOD(nativeMeZoFineTunerStep)(
+    JNIEnv* env, jclass thiz, jlong finetuner_pointer,
+    jobjectArray names, jlongArray data_pointers, jlongArray num_elements,
+    jbooleanArray is_bias_or_layernorm, jobject loss_callback) {
+  auto* finetuner = reinterpret_cast<MeZoFineTuner*>(finetuner_pointer);
+  if (!finetuner) {
+    ThrowLiteRtLmJniException(env, "MeZO fine-tuner pointer is null.");
+    return 0.0f;
+  }
+
+  jsize num_params = env->GetArrayLength(names);
+  jlong* ptrs = env->GetLongArrayElements(data_pointers, nullptr);
+  jlong* elems = env->GetLongArrayElements(num_elements, nullptr);
+  jboolean* bias_flags = env->GetBooleanArrayElements(is_bias_or_layernorm,
+                                                       nullptr);
+
+  std::vector<NamedParameter> params;
+  params.reserve(num_params);
+  for (jsize i = 0; i < num_params; ++i) {
+    NamedParameter p;
+    jstring name_jstr = (jstring)env->GetObjectArrayElement(names, i);
+    const char* name_chars = env->GetStringUTFChars(name_jstr, nullptr);
+    p.name = name_chars;
+    env->ReleaseStringUTFChars(name_jstr, name_chars);
+    env->DeleteLocalRef(name_jstr);
+    p.data = reinterpret_cast<float*>(ptrs[i]);
+    p.num_elements = static_cast<size_t>(elems[i]);
+    p.is_bias_or_layernorm = bias_flags[i];
+    params.push_back(std::move(p));
+  }
+
+  env->ReleaseLongArrayElements(data_pointers, ptrs, JNI_ABORT);
+  env->ReleaseLongArrayElements(num_elements, elems, JNI_ABORT);
+  env->ReleaseBooleanArrayElements(is_bias_or_layernorm, bias_flags, JNI_ABORT);
+
+  // Get the JavaVM for callback thread attachment.
+  JavaVM* jvm = nullptr;
+  env->GetJavaVM(&jvm);
+
+  // Cache callback method ID.
+  jclass callback_class = env->GetObjectClass(loss_callback);
+  jmethodID compute_loss_mid =
+      env->GetMethodID(callback_class, "computeLoss", "()F");
+  env->DeleteLocalRef(callback_class);
+
+  // Wrap the Java callback as a C++ invocable.
+  jobject callback_global = env->NewGlobalRef(loss_callback);
+  auto cpp_loss_fn = [jvm, callback_global,
+                      compute_loss_mid]() -> absl::StatusOr<float> {
+    bool attached = false;
+    JNIEnv* cb_env = GetJniEnvAndAttach(jvm, &attached);
+    if (!cb_env) {
+      return absl::InternalError("Failed to attach JNI env for loss callback.");
+    }
+
+    jfloat loss = cb_env->CallFloatMethod(callback_global, compute_loss_mid);
+
+    if (cb_env->ExceptionCheck()) {
+      cb_env->ExceptionClear();
+      if (attached && jvm->DetachCurrentThread() != JNI_OK) {
+        ABSL_LOG(ERROR) << "Failed to detach JVM in loss callback.";
+      }
+      return absl::InternalError("Java loss callback threw an exception.");
+    }
+
+    if (attached && jvm->DetachCurrentThread() != JNI_OK) {
+      ABSL_LOG(ERROR) << "Failed to detach JVM in loss callback.";
+    }
+
+    return loss;
+  };
+
+  auto result = finetuner->Step(params, std::move(cpp_loss_fn));
+
+  env->DeleteGlobalRef(callback_global);
+
+  if (!result.ok()) {
+    ThrowLiteRtLmJniException(
+        env, "MeZO step failed: " + result.status().ToString());
+    return 0.0f;
+  }
+
+  return *result;
+}
+
+LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeMeZoFineTunerGetStepCount)(
+    JNIEnv* env, jclass thiz, jlong finetuner_pointer) {
+  auto* finetuner = reinterpret_cast<MeZoFineTuner*>(finetuner_pointer);
+  if (!finetuner) return 0;
+  return static_cast<jlong>(finetuner->GetStepCount());
+}
+
+LITERTLM_JNIEXPORT void JNICALL
+JNI_METHOD(nativeMeZoFineTunerSetLearningRate)(
+    JNIEnv* env, jclass thiz, jlong finetuner_pointer, jfloat learning_rate) {
+  auto* finetuner = reinterpret_cast<MeZoFineTuner*>(finetuner_pointer);
+  if (finetuner) finetuner->SetLearningRate(learning_rate);
+}
+
+LITERTLM_JNIEXPORT jfloat JNICALL
+JNI_METHOD(nativeMeZoFineTunerGetLearningRate)(
+    JNIEnv* env, jclass thiz, jlong finetuner_pointer) {
+  auto* finetuner = reinterpret_cast<MeZoFineTuner*>(finetuner_pointer);
+  if (!finetuner) return 0.0f;
+  return finetuner->GetLearningRate();
 }
 
 }  // extern "C"

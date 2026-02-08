@@ -283,4 +283,70 @@ internal object LiteRtLmJni {
    * @param logSeverity The minimum log level to set. See [LogSeverity].
    */
   external fun nativeSetMinLogSeverity(logSeverity: Int)
+
+  // ---------------------------------------------------------------------------
+  // MeZO Fine-Tuning JNI Methods
+  // ---------------------------------------------------------------------------
+
+  /** Creates a native MeZO config with default values. */
+  external fun nativeMeZoConfigCreate(): Long
+
+  /** Destroys a native MeZO config. */
+  external fun nativeMeZoConfigDelete(configPointer: Long)
+
+  /** Sets the learning rate on a native MeZO config. */
+  external fun nativeMeZoConfigSetLearningRate(configPointer: Long, learningRate: Float)
+
+  /** Sets the epsilon on a native MeZO config. */
+  external fun nativeMeZoConfigSetEpsilon(configPointer: Long, epsilon: Float)
+
+  /** Sets the weight decay on a native MeZO config. */
+  external fun nativeMeZoConfigSetWeightDecay(configPointer: Long, weightDecay: Float)
+
+  /** Sets the random seed on a native MeZO config. */
+  external fun nativeMeZoConfigSetSeed(configPointer: Long, seed: Long)
+
+  /** Enables or disables ConMeZO on a native MeZO config. */
+  external fun nativeMeZoConfigSetUseConMeZo(configPointer: Long, useConMeZo: Boolean)
+
+  /** Sets the momentum decay on a native MeZO config. */
+  external fun nativeMeZoConfigSetMomentumDecay(configPointer: Long, momentumDecay: Float)
+
+  /** Sets the cone angle on a native MeZO config. */
+  external fun nativeMeZoConfigSetConeAngle(configPointer: Long, coneAngle: Float)
+
+  /** Creates a native MeZO fine-tuner from a config. */
+  external fun nativeMeZoFineTunerCreate(configPointer: Long): Long
+
+  /** Destroys a native MeZO fine-tuner. */
+  external fun nativeMeZoFineTunerDelete(finetunerPointer: Long)
+
+  /**
+   * Performs one MeZO optimization step.
+   *
+   * @param finetunerPointer Pointer to the native fine-tuner.
+   * @param names Parameter names.
+   * @param dataPointers Native pointers to float32 weight data.
+   * @param numElements Number of elements per parameter.
+   * @param isBiasOrLayerNorm Whether each parameter is bias/layernorm.
+   * @param lossCallback Callback to compute the loss.
+   * @return The loss from the positive perturbation.
+   */
+  external fun nativeMeZoFineTunerStep(
+    finetunerPointer: Long,
+    names: Array<String>,
+    dataPointers: LongArray,
+    numElements: LongArray,
+    isBiasOrLayerNorm: BooleanArray,
+    lossCallback: MeZoLossCallback,
+  ): Float
+
+  /** Returns the step count from a native MeZO fine-tuner. */
+  external fun nativeMeZoFineTunerGetStepCount(finetunerPointer: Long): Long
+
+  /** Sets the learning rate on a native MeZO fine-tuner. */
+  external fun nativeMeZoFineTunerSetLearningRate(finetunerPointer: Long, learningRate: Float)
+
+  /** Returns the current learning rate from a native MeZO fine-tuner. */
+  external fun nativeMeZoFineTunerGetLearningRate(finetunerPointer: Long): Float
 }

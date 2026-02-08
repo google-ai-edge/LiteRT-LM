@@ -550,6 +550,33 @@ LITERT_LM_C_API_EXPORT
 void litert_lm_mezo_config_set_seed(LiteRtLmMeZoConfig* config,
                                     uint64_t seed);
 
+// Enables or disables ConMeZO (cone-constrained momentum MeZO).
+// When enabled, perturbation directions are biased toward a momentum vector
+// derived from past gradients, accelerating convergence.
+//
+// @param config The config to modify.
+// @param use_conmezo Whether to enable ConMeZO.
+LITERT_LM_C_API_EXPORT
+void litert_lm_mezo_config_set_use_conmezo(LiteRtLmMeZoConfig* config,
+                                           bool use_conmezo);
+
+// Sets the momentum decay rate for ConMeZO. Must be in [0, 1].
+//
+// @param config The config to modify.
+// @param momentum_decay The EMA decay rate for the momentum vector.
+LITERT_LM_C_API_EXPORT
+void litert_lm_mezo_config_set_momentum_decay(LiteRtLmMeZoConfig* config,
+                                              float momentum_decay);
+
+// Sets the cone half-angle for ConMeZO in radians. Must be in [0, pi/2].
+// Smaller values concentrate perturbations closer to the momentum direction.
+//
+// @param config The config to modify.
+// @param cone_angle The half-angle of the sampling cone in radians.
+LITERT_LM_C_API_EXPORT
+void litert_lm_mezo_config_set_cone_angle(LiteRtLmMeZoConfig* config,
+                                          float cone_angle);
+
 // Creates a MeZO fine-tuner from the given config. The caller is responsible
 // for destroying the fine-tuner using `litert_lm_mezo_finetuner_delete`.
 //
