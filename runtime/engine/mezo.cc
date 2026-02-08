@@ -147,10 +147,10 @@ class MeZoFineTuner::Impl {
 
     ++step_count_;
 
-    ABSL_LOG(INFO) << "MeZO step " << step_count_
-                   << ": loss=" << *loss_plus
-                   << ", projected_grad=" << projected_grad
-                   << (use_conmezo_ ? " [ConMeZO]" : "");
+    ABSL_DLOG(INFO) << "MeZO step " << step_count_
+                    << ": loss=" << *loss_plus
+                    << ", projected_grad=" << projected_grad
+                    << (use_conmezo_ ? " [ConMeZO]" : "");
 
     return *loss_plus;
   }
@@ -218,10 +218,13 @@ class MeZoFineTuner::Impl {
   // Cone-constrained perturbation using three-pass seed replay.
   //
   // The perturbation direction is biased toward the momentum direction:
-  //   z = cos(theta) * m_hat + sin(theta) * z_perp_hat
+  //   z = sqrt(d) * (cos(theta) * m_hat + sin(theta) * z_perp_hat)
   // where z_perp = z_raw - (z_raw . m_hat) * m_hat is the component of
-  // random noise orthogonal to the momentum. Three passes over the RNG
-  // stream avoid allocating a d-sized temporary vector.
+  // random noise orthogonal to the momentum. The sqrt(d) scaling ensures
+  // ||z|| ~ sqrt(d), matching vanilla MeZO's perturbation norm so that
+  // the SPSA gradient estimator has comparable magnitude.
+  //
+  // Three passes over the RNG stream avoid allocating a d-sized temporary.
   void ConePerturbParameters(const std::vector<NamedParameter>& parameters,
                              float scale, uint64_t seed) {
     const float m_norm = MomentumNorm();
@@ -232,6 +235,13 @@ class MeZoFineTuner::Impl {
     const float inv_m_norm = 1.0f / m_norm;
     const float cos_a = std::cos(cone_angle_);
     const float sin_a = std::sin(cone_angle_);
+
+    // Compute total dimensionality for norm scaling.
+    size_t total_d = 0;
+    for (const auto& param : parameters) {
+      total_d += param.num_elements;
+    }
+    const float norm_scale = std::sqrt(static_cast<float>(total_d));
 
     // Pass 1: Compute dot(z_raw, m_hat).
     float dot = 0.0f;
@@ -268,7 +278,7 @@ class MeZoFineTuner::Impl {
     const float inv_z_perp_norm =
         (z_perp_norm > 1e-10f) ? (1.0f / z_perp_norm) : 0.0f;
 
-    // Pass 3: Apply z = cos(a) * m_hat + sin(a) * z_perp_hat, scaled.
+    // Pass 3: Apply z = sqrt(d) * (cos(a) * m_hat + sin(a) * z_perp_hat).
     {
       std::mt19937_64 rng(seed);
       std::normal_distribution<float> dist(0.0f, 1.0f);
@@ -279,7 +289,7 @@ class MeZoFineTuner::Impl {
           float m_hat_i = momentum_[m_idx] * inv_m_norm;
           float z_perp_i = z_raw - dot * m_hat_i;
           float z_cone = cos_a * m_hat_i + sin_a * z_perp_i * inv_z_perp_norm;
-          param.data[i] += scale * z_cone;
+          param.data[i] += scale * norm_scale * z_cone;
           ++m_idx;
         }
       }
@@ -298,6 +308,13 @@ class MeZoFineTuner::Impl {
 
     float cos_a = std::cos(cone_angle_);
     float sin_a = std::sin(cone_angle_);
+
+    // Compute total dimensionality for norm scaling (same as ConePerturbParameters).
+    size_t total_d = 0;
+    for (const auto& param : parameters) {
+      total_d += param.num_elements;
+    }
+    const float norm_scale = std::sqrt(static_cast<float>(total_d));
 
     // For cone mode, we need dot and z_perp_norm (same as ConePerturbParameters).
     float dot = 0.0f;
@@ -351,7 +368,9 @@ class MeZoFineTuner::Impl {
         if (used_cone) {
           float m_hat_i = momentum_[m_idx] * inv_m_norm;
           float z_perp_i = z_raw - dot * m_hat_i;
-          z = cos_a * m_hat_i + sin_a * z_perp_i * inv_z_perp_norm;
+          // Scale by sqrt(d) to match vanilla MeZO's perturbation norm.
+          z = norm_scale *
+              (cos_a * m_hat_i + sin_a * z_perp_i * inv_z_perp_norm);
         } else {
           z = z_raw;
         }
@@ -409,11 +428,19 @@ class MeZoFineTuner::Impl {
     agzo_subspace_initialized_ = true;
   }
 
-  // AGZO perturbation: z = sum_j(v_j * U_j), applied as theta += scale * z.
+  // AGZO perturbation: z = sqrt(d/k) * sum_j(v_j * U_j), applied as
+  // theta += scale * z. The sqrt(d/k) scaling ensures ||z|| ~ sqrt(d),
+  // matching vanilla MeZO's perturbation norm for comparable gradient
+  // estimates. Without this, ||z|| ~ sqrt(k) << sqrt(d).
   void AgzoPerturbParameters(const std::vector<NamedParameter>& parameters,
                              float scale,
                              const std::vector<float>& v_coeffs) {
     const int k = static_cast<int>(v_coeffs.size());
+    size_t total_d = 0;
+    for (const auto& param : parameters) {
+      total_d += param.num_elements;
+    }
+    const float norm_scale = std::sqrt(static_cast<float>(total_d) / k);
     size_t idx = 0;
     for (const auto& param : parameters) {
       for (size_t i = 0; i < param.num_elements; ++i) {
@@ -421,17 +448,23 @@ class MeZoFineTuner::Impl {
         for (int j = 0; j < k; ++j) {
           z_i += v_coeffs[j] * agzo_subspace_[j][idx];
         }
-        param.data[i] += scale * z_i;
+        param.data[i] += scale * norm_scale * z_i;
         ++idx;
       }
     }
   }
 
-  // AGZO update: theta_i -= lr * (projected_grad * z_i + wd * theta_i).
+  // AGZO update: theta_i -= lr * (projected_grad * z_i + wd * theta_i),
+  // where z_i includes the sqrt(d/k) norm scaling.
   void AgzoUpdateParameters(const std::vector<NamedParameter>& parameters,
                             float projected_grad,
                             const std::vector<float>& v_coeffs) {
     const int k = static_cast<int>(v_coeffs.size());
+    size_t total_d = 0;
+    for (const auto& param : parameters) {
+      total_d += param.num_elements;
+    }
+    const float norm_scale = std::sqrt(static_cast<float>(total_d) / k);
     size_t idx = 0;
     for (const auto& param : parameters) {
       for (size_t i = 0; i < param.num_elements; ++i) {
@@ -439,6 +472,7 @@ class MeZoFineTuner::Impl {
         for (int j = 0; j < k; ++j) {
           z_i += v_coeffs[j] * agzo_subspace_[j][idx];
         }
+        z_i *= norm_scale;
         float update = projected_grad * z_i;
         if (!param.is_bias_or_layernorm && weight_decay_ != 0.0f) {
           update += weight_decay_ * param.data[i];
@@ -499,10 +533,10 @@ class MeZoFineTuner::Impl {
 
     ++step_count_;
 
-    ABSL_LOG(INFO) << "MeZO step " << step_count_
-                   << ": loss=" << *loss_plus
-                   << ", projected_grad=" << projected_grad
-                   << " [AGZO k=" << k << "]";
+    ABSL_DLOG(INFO) << "MeZO step " << step_count_
+                    << ": loss=" << *loss_plus
+                    << ", projected_grad=" << projected_grad
+                    << " [AGZO k=" << k << "]";
 
     return *loss_plus;
   }
