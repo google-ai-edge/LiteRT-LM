@@ -318,20 +318,14 @@ class LockedLlmExecutor : public LlmExecutor {
     return llm_executor_->Prefill(new_inputs, new_prefill_query_params);
   }
 
-  absl::Status Decode(TensorBuffer& output_tokens) override {
-    return Decode(output_tokens, ExecutorDecodeParams());
+  absl::StatusOr<std::vector<std::vector<int>>> Decode() override {
+    return Decode(ExecutorDecodeParams());
   }
 
-  absl::Status Decode(TensorBuffer& output_tokens,
-                      const ExecutorDecodeParams& decode_params) override {
+  absl::StatusOr<std::vector<std::vector<int>>> Decode(
+      const ExecutorDecodeParams& decode_params) override {
     RETURN_IF_ERROR(MaybeTruncateProcessedTokens());
-    return llm_executor_->Decode(output_tokens, decode_params);
-  }
-
-  absl::Status Decode(const ExecutorInputs& inputs,
-                      TensorBuffer& output_logits) override {
-    RETURN_IF_ERROR(MaybeTruncateProcessedTokens());
-    return llm_executor_->Decode(output_logits);
+    return llm_executor_->Decode(decode_params);
   }
 
   absl::StatusOr<TensorBuffer> DecodeLogits(

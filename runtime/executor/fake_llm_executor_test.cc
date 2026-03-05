@@ -30,7 +30,7 @@
 #include "runtime/components/constrained_decoding/fake_constraint.h"
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/util/convert_tensor_buffer.h"
-#include "runtime/util/test_utils.h"  // NOLINT
+#include "runtime/util/test_utils.h"  // IWYU pragma: keep
 
 namespace litert::lm {
 namespace {
@@ -120,9 +120,7 @@ TEST(FakeLlmExecutorTest, DecodeWithoutPrefillFailed) {
   FakeLlmExecutor fake_llm_executor(/*vocab_size=*/4, prefill_tokens_set,
                                     decode_tokens_set);
 
-  LITERT_ASSERT_OK_AND_ASSIGN(auto output_tokens,
-                              CreateTensorBuffer<int>({1, 1}));
-  EXPECT_THAT(fake_llm_executor.Decode(output_tokens),
+  EXPECT_THAT(fake_llm_executor.Decode(),
               StatusIs(absl::StatusCode::kFailedPrecondition));
 }
 
@@ -140,24 +138,20 @@ TEST(FakeLlmExecutorTest, DecodeToIds) {
   EXPECT_OK(fake_llm_executor.Prefill(inputs));
   EXPECT_EQ(fake_llm_executor.GetCurrentStep().value(), 3);
 
-  LITERT_ASSERT_OK_AND_ASSIGN(auto output_tokens,
-                              CreateTensorBuffer<int>({1, 1}));
   // Call Decode for the 1st time. The output tokens should be the 1st decode
   // tokens: 3.
-  EXPECT_OK(fake_llm_executor.Decode(output_tokens));
+  ASSERT_OK_AND_ASSIGN(auto output_tokens, fake_llm_executor.Decode());
   EXPECT_EQ(fake_llm_executor.GetCurrentStep().value(), 4);
-  auto output_tokens_span = ReferTensorBufferAsSpan<int>(output_tokens);
-  EXPECT_EQ((*output_tokens_span)[0], 3);
+  EXPECT_EQ(output_tokens[0][0], 3);
 
   // Call Decode for the 2nd time. The output tokens should be the 2nd decode
   // tokens: 0.
-  EXPECT_OK(fake_llm_executor.Decode(output_tokens));
+  ASSERT_OK_AND_ASSIGN(output_tokens, fake_llm_executor.Decode());
   EXPECT_EQ(fake_llm_executor.GetCurrentStep().value(), 5);
-  output_tokens_span = ReferTensorBufferAsSpan<int>(output_tokens);
-  EXPECT_EQ((*output_tokens_span)[0], 0);
+  EXPECT_EQ(output_tokens[0][0], 0);
 
   // Call Decode for the 3nd time. Should fail.
-  EXPECT_THAT(fake_llm_executor.Decode(output_tokens),
+  EXPECT_THAT(fake_llm_executor.Decode(),
               StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
@@ -276,10 +270,8 @@ TEST(FakeLlmExecutorTest, DecodeDelay) {
   inputs.SetTextData(ExecutorTextData(std::move(input_tokens_buffer)));
   EXPECT_OK(fake_llm_executor.Prefill(inputs));
 
-  LITERT_ASSERT_OK_AND_ASSIGN(auto output_tokens,
-                              CreateTensorBuffer<int>({1, 1}));
   const absl::Time start = absl::Now();
-  EXPECT_OK(fake_llm_executor.Decode(output_tokens));
+  ASSERT_OK_AND_ASSIGN(auto output_tokens, fake_llm_executor.Decode());
   const absl::Duration elapsed = absl::Now() - start;
   EXPECT_GE(elapsed, delay);
 }
@@ -301,15 +293,12 @@ TEST(FakeLlmExecutorTest, MultiplePrefillTriggers) {
     EXPECT_OK(fake_llm_executor.Prefill(inputs));
     EXPECT_EQ(fake_llm_executor.GetCurrentStep().value(), 3);
 
-    LITERT_ASSERT_OK_AND_ASSIGN(auto output_tokens,
-                                CreateTensorBuffer<int>({1, 1}));
-    EXPECT_OK(fake_llm_executor.Decode(output_tokens));
+    ASSERT_OK_AND_ASSIGN(auto output_tokens, fake_llm_executor.Decode());
     EXPECT_EQ(fake_llm_executor.GetCurrentStep().value(), 4);
-    auto output_tokens_span = ReferTensorBufferAsSpan<int>(output_tokens);
-    EXPECT_EQ((*output_tokens_span)[0], 6);
-    EXPECT_OK(fake_llm_executor.Decode(output_tokens));
+    EXPECT_EQ(output_tokens[0][0], 6);
+    ASSERT_OK_AND_ASSIGN(output_tokens, fake_llm_executor.Decode());
     EXPECT_EQ(fake_llm_executor.GetCurrentStep().value(), 5);
-    EXPECT_EQ((*output_tokens_span)[0], 7);
+    EXPECT_EQ(output_tokens[0][0], 7);
   }
 
   // Trigger the second prefill/decode sequence.
@@ -323,15 +312,12 @@ TEST(FakeLlmExecutorTest, MultiplePrefillTriggers) {
     EXPECT_OK(fake_llm_executor.Prefill(inputs));
     EXPECT_EQ(fake_llm_executor.GetCurrentStep().value(), 7);
 
-    LITERT_ASSERT_OK_AND_ASSIGN(auto output_tokens,
-                                CreateTensorBuffer<int>({1, 1}));
-    EXPECT_OK(fake_llm_executor.Decode(output_tokens));
+    ASSERT_OK_AND_ASSIGN(auto output_tokens, fake_llm_executor.Decode());
     EXPECT_EQ(fake_llm_executor.GetCurrentStep().value(), 8);
-    auto output_tokens_span = ReferTensorBufferAsSpan<int>(output_tokens);
-    EXPECT_EQ((*output_tokens_span)[0], 8);
-    EXPECT_OK(fake_llm_executor.Decode(output_tokens));
+    EXPECT_EQ(output_tokens[0][0], 8);
+    ASSERT_OK_AND_ASSIGN(output_tokens, fake_llm_executor.Decode());
     EXPECT_EQ(fake_llm_executor.GetCurrentStep().value(), 9);
-    EXPECT_EQ((*output_tokens_span)[0], 9);
+    EXPECT_EQ(output_tokens[0][0], 9);
   }
 
   // Call Prefill for the 3rd time. Should fail.
@@ -366,8 +352,6 @@ TEST(FakeLlmExecutorTest, DecodeWithConstraint) {
   EXPECT_OK(fake_llm_executor.Prefill(inputs));
   EXPECT_EQ(fake_llm_executor.GetCurrentStep().value(), 3);
 
-  LITERT_ASSERT_OK_AND_ASSIGN(auto output_tokens,
-                              CreateTensorBuffer<int>({1, 1}));
   auto constrained_decoder =
       std::make_unique<ConstrainedDecoder>(&constraint,
                                            /*num_output_candidates=*/1);
@@ -375,34 +359,31 @@ TEST(FakeLlmExecutorTest, DecodeWithConstraint) {
   decode_params.SetConstraintDecoder(constrained_decoder.get());
   // Call Decode for the 1st time. The output tokens should be the 1st decode
   // tokens: 4. (first constraint token)
-  EXPECT_OK(fake_llm_executor.Decode(output_tokens, decode_params));
+  ASSERT_OK_AND_ASSIGN(auto output_tokens,
+                       fake_llm_executor.Decode(decode_params));
   EXPECT_EQ(fake_llm_executor.GetCurrentStep().value(), 4);
-  auto output_tokens_span = ReferTensorBufferAsSpan<int>(output_tokens);
-  EXPECT_EQ((*output_tokens_span)[0], 4);
+  EXPECT_EQ(output_tokens[0][0], 4);
 
   // Call Decode for the 2nd time. The output tokens should be the 2nd decode
   // tokens: 0. (second constraint token)
-  EXPECT_OK(fake_llm_executor.Decode(output_tokens, decode_params));
+  ASSERT_OK_AND_ASSIGN(output_tokens, fake_llm_executor.Decode(decode_params));
   EXPECT_EQ(fake_llm_executor.GetCurrentStep().value(), 5);
-  output_tokens_span = ReferTensorBufferAsSpan<int>(output_tokens);
-  EXPECT_EQ((*output_tokens_span)[0], 0);
+  EXPECT_EQ(output_tokens[0][0], 0);
 
   // Call Decode for the 3rd time. The output tokens should be the 3rd decode
   // tokens: 4. (first constraint token again)
-  EXPECT_OK(fake_llm_executor.Decode(output_tokens, decode_params));
+  ASSERT_OK_AND_ASSIGN(output_tokens, fake_llm_executor.Decode(decode_params));
   EXPECT_EQ(fake_llm_executor.GetCurrentStep().value(), 6);
-  output_tokens_span = ReferTensorBufferAsSpan<int>(output_tokens);
-  EXPECT_EQ((*output_tokens_span)[0], 4);
+  EXPECT_EQ(output_tokens[0][0], 4);
 
   // Call Decode for the 2nd time. The output tokens should be the 2nd decode
   // tokens: 0. (second constraint token again)
-  EXPECT_OK(fake_llm_executor.Decode(output_tokens, decode_params));
+  ASSERT_OK_AND_ASSIGN(output_tokens, fake_llm_executor.Decode(decode_params));
   EXPECT_EQ(fake_llm_executor.GetCurrentStep().value(), 7);
-  output_tokens_span = ReferTensorBufferAsSpan<int>(output_tokens);
-  EXPECT_EQ((*output_tokens_span)[0], 0);
+  EXPECT_EQ(output_tokens[0][0], 0);
 
   // Call Decode for the 5nd time. Should fail.
-  EXPECT_THAT(fake_llm_executor.Decode(output_tokens, decode_params),
+  EXPECT_THAT(fake_llm_executor.Decode(decode_params),
               StatusIs(absl::StatusCode::kInvalidArgument));
 }
 

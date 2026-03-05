@@ -60,10 +60,10 @@ class FakeLlmExecutor : public LlmExecutor {
   absl::Status Prefill(const ExecutorInputs& inputs,
                        const ExecutorPrefillParams& prefill_params) override;
 
-  absl::Status Decode(::litert::TensorBuffer& output_tokens) override;
+  absl::StatusOr<std::vector<std::vector<int>>> Decode() override;
 
-  absl::Status Decode(::litert::TensorBuffer& output_tokens,
-                      const ExecutorDecodeParams& decode_params) override;
+  absl::StatusOr<std::vector<std::vector<int>>> Decode(
+      const ExecutorDecodeParams& decode_params) override;
 
   absl::Status Decode(const ExecutorInputs& inputs,
                       ::litert::TensorBuffer& output_logits) override;
@@ -100,9 +100,7 @@ class FakeLlmExecutor : public LlmExecutor {
 
   // Sets the delay before decoding. Useful for testing the cancellation
   // logic. The default value is 0, which means no delay.
-  void SetDecodeDelay(absl::Duration delay) {
-    decode_delay_ = delay;
-  }
+  void SetDecodeDelay(absl::Duration delay) { decode_delay_ = delay; }
 
   absl::Status Reset() override;
 

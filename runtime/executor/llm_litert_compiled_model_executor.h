@@ -65,11 +65,11 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
 
   // Output APIs:
   // Basic API to trigger the "decode" process.
-  absl::Status Decode(TensorBuffer& output_tokens) override;
+  absl::StatusOr<std::vector<std::vector<int>>> Decode() override;
 
   // Advanced API to allow customized query parameters.
-  absl::Status Decode(TensorBuffer& output_tokens,
-                      const ExecutorDecodeParams& decode_params) override;
+  absl::StatusOr<std::vector<std::vector<int>>> Decode(
+      const ExecutorDecodeParams& decode_params) override;
 
   // Basic API to trigger the "decode" process but without sampling.
   // Input is token ids with shape `[batch, sequence_length]`

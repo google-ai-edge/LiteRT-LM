@@ -57,12 +57,12 @@ void DecodeIdsToLogits(const std::vector<int>& ids, int vocab_size,
 
 // Converts the given logits TensorBuffer to ids TensorBuffer. If no token is
 // selected, use the last token in the decode tokens set which is the EOS token.
-void DecodeLogitsToIds(int batch_size, int vocab_size,
-                       ::litert::TensorBuffer& output_tokens,
-                       ::litert::TensorBuffer& output_logits,
-                       const std::vector<std::vector<int>>& decode_tokens_set) {
+std::vector<std::vector<int>> DecodeLogitsToIds(
+    int batch_size, int vocab_size, ::litert::TensorBuffer& output_logits,
+    const std::vector<std::vector<int>>& decode_tokens_set) {
   auto masked_logits_span = ReferTensorBufferAsSpan<float>(output_logits);
-  auto tokens_span = ReferTensorBufferAsSpan<int>(output_tokens);
+  std::vector<std::vector<int>> output_tokens_vector;
+  output_tokens_vector.resize(batch_size);
   for (int i = 0; i < batch_size; ++i) {
     auto batch_start = masked_logits_span->begin() + i * vocab_size;
     auto batch_end = batch_start + vocab_size;
@@ -78,8 +78,9 @@ void DecodeLogitsToIds(int batch_size, int vocab_size,
       // default to the last token in the decode tokens set (EOS token).
       best_token_id = decode_tokens_set.back().back();
     }
-    (*tokens_span)[i] = best_token_id;
+    output_tokens_vector[i].push_back(best_token_id);
   }
+  return output_tokens_vector;
 }
 
 // Checks if the given expected and actual spans are equivalent in terms of the
@@ -168,12 +169,11 @@ absl::Status FakeLlmExecutor::Prefill(
   return Prefill(inputs);
 }
 
-absl::Status FakeLlmExecutor::Decode(::litert::TensorBuffer& output_tokens) {
-  return Decode(output_tokens, ExecutorDecodeParams());
+absl::StatusOr<std::vector<std::vector<int>>> FakeLlmExecutor::Decode() {
+  return Decode(ExecutorDecodeParams());
 }
 
-absl::Status FakeLlmExecutor::Decode(
-    ::litert::TensorBuffer& output_tokens,
+absl::StatusOr<std::vector<std::vector<int>>> FakeLlmExecutor::Decode(
     const ExecutorDecodeParams& decode_params) {
   TryDecodeDelay();
   RETURN_IF_ERROR(decode_status_);
@@ -187,6 +187,7 @@ absl::Status FakeLlmExecutor::Decode(
         "expected decode tokens.",
         decode_times_));
   }
+  std::vector<std::vector<int>> output_tokens;
   if (decode_params.HasConstraintDecoder()) {
     // If constraint decoder is set, we will decode logits and apply the mask
     // from the constraint decoder to generate the final output tokens.
@@ -216,19 +217,18 @@ absl::Status FakeLlmExecutor::Decode(
                       output_logits);
     // Apply the mask from the constraint decoder to the logits.
     RETURN_IF_ERROR(constraint_decoder->MaskLogits(output_logits));
-    DecodeLogitsToIds(batch_size_, vocab_size_, output_tokens, output_logits,
-                      decode_tokens_set_);
+    output_tokens = DecodeLogitsToIds(batch_size_, vocab_size_, output_logits,
+                                      decode_tokens_set_);
   } else {
-    auto tokens_span = ReferTensorBufferAsSpan<int>(output_tokens);
     for (int i = 0; i < decode_tokens_set_[decode_times_].size(); ++i) {
-      (*tokens_span)[i] = decode_tokens_set_[decode_times_][i];
+      output_tokens.push_back({decode_tokens_set_[decode_times_][i]});
     }
   }
   last_op_ = LastOp::kDecode;
   processed_tokens_.AddProcessedTokens(decode_tokens_set_[decode_times_]);
   decode_times_++;
   current_step_++;
-  return absl::OkStatus();
+  return output_tokens;
 }
 
 absl::Status FakeLlmExecutor::Decode(const ExecutorInputs& inputs,

@@ -90,10 +90,10 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
 
   // Output APIs:
   // Basic API to trigger the "decode" process.
-  absl::Status Decode(::litert::TensorBuffer& output_tokens) override;
+  absl::StatusOr<std::vector<std::vector<int>>> Decode() override;
 
-  absl::Status Decode(::litert::TensorBuffer& output_tokens,
-                      const ExecutorDecodeParams& decode_params) override;
+  absl::StatusOr<std::vector<std::vector<int>>> Decode(
+      const ExecutorDecodeParams& decode_params);
 
   absl::string_view ExecutorBackendName() const override {
     return "LiteRT NPU Compiled Model";

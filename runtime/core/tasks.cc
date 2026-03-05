@@ -113,10 +113,7 @@ class DecodeOneStep {
       constrained_decoder_ = std::make_unique<ConstrainedDecoder>(
           constraint, num_output_candidates_);
     }
-    if (!sampler_.has_value()) {  // Internal sampling setup
-      auto output_tokens = CreateTensorBuffer<int>({num_output_candidates_, 1});
-      output_tokens_ = std::move(*output_tokens);
-    } else {  // External sampling setup
+    if (sampler_.has_value()) {  // External sampling setup
       auto scores_tensor = CreateTensorBuffer<float>({num_output_candidates_});
       scores_tensor_ = std::move(*scores_tensor);
     }
@@ -133,22 +130,15 @@ class DecodeOneStep {
   // For internal sampling, `decoded_ids` is ignored.
   absl::StatusOr<bool> Run(
       std::optional<litert::TensorBuffer> decoded_ids = std::nullopt) {
-    ASSIGN_OR_RETURN(litert::TensorBuffer next_tokens_buffer,
-                     DecodeAndSample(std::move(decoded_ids)));
+    ASSIGN_OR_RETURN(auto token_ids, DecodeAndSample(std::move(decoded_ids)));
 
-    // Post-processing the next tokens.
-    ASSIGN_OR_RETURN(auto token_ids,
-                     tokenizer_.TensorBufferToTokenIds(next_tokens_buffer));
+    // Regardless of BPE, we always process the next tokens to detect stop
+    // tokens.
+    RETURN_IF_ERROR(stop_token_detector_.ProcessTokens(token_ids));
 
     // Merge BPE partial token ids with the next token ids if any.
     ASSIGN_OR_RETURN(
         token_ids, tokenizer_.MergeTokenIds(bpe_partial_token_ids_, token_ids));
-
-    // Regardless of BPE, we always process the next tokens to detect stop
-    // tokens.
-    LITERT_ASSIGN_OR_RETURN(auto next_tokens_span,
-                            ReferTensorBufferAsSpan<int>(next_tokens_buffer));
-    RETURN_IF_ERROR(stop_token_detector_.ProcessTokens(next_tokens_span));
 
     auto decoded_result =
         tokenizer_.TokenIdsToTexts(num_output_candidates_, token_ids);
@@ -181,8 +171,8 @@ class DecodeOneStep {
     }
 
     if (sampler_.has_value()) {
-      LITERT_ASSIGN_OR_RETURN(
-          scores_span_, ReferTensorBufferAsSpan<float>(scores_tensor_));
+      LITERT_ASSIGN_OR_RETURN(scores_span_,
+                              ReferTensorBufferAsSpan<float>(scores_tensor_));
     }
 
     is_first_step_ = false;
@@ -238,7 +228,7 @@ class DecodeOneStep {
   // Runs the core decoding and sampling step, for either internal or external
   // sampling. Returns a pointer to the tensor buffer containing the next token
   // IDs.
-  absl::StatusOr<litert::TensorBuffer> DecodeAndSample(
+  absl::StatusOr<std::vector<std::vector<int>>> DecodeAndSample(
       std::optional<litert::TensorBuffer> decoded_ids) {
     if (sampler_) {  // External sampling path
       if (!decoded_ids) {
@@ -281,27 +271,28 @@ class DecodeOneStep {
         RETURN_IF_ERROR(benchmark_info_->TimeMarkDelta("sampling"));
       }
 
-      return std::move(decoded_ids.value());
+      ASSIGN_OR_RETURN(auto token_ids,
+                       tokenizer_.TensorBufferToTokenIds(decoded_ids.value()));
+      return token_ids;
     } else {  // Internal sampling path
       // Benchmark executor_decode_and_sample section.
       if (benchmark_info_.has_value()) {
         RETURN_IF_ERROR(
             benchmark_info_->TimeMarkDelta("executor_decode_and_sample"));
       }
+      std::vector<std::vector<int>> output_tokens;
       if (constrained_decoder_) {
         auto decode_params = ExecutorDecodeParams();
         decode_params.SetConstraintDecoder(constrained_decoder_.get());
-        RETURN_IF_ERROR(executor_.Decode(output_tokens_, decode_params));
+        ASSIGN_OR_RETURN(output_tokens, executor_.Decode(decode_params));
       } else {
-        RETURN_IF_ERROR(executor_.Decode(output_tokens_));
+        ASSIGN_OR_RETURN(output_tokens, executor_.Decode());
       }
       if (benchmark_info_.has_value()) {
         RETURN_IF_ERROR(
             benchmark_info_->TimeMarkDelta("executor_decode_and_sample"));
       }
-      LITERT_ASSIGN_OR_RETURN(auto cloned_output_tokens,
-                              output_tokens_.Duplicate());
-      return std::move(cloned_output_tokens);
+      return output_tokens;
     }
   }
 
@@ -312,10 +303,6 @@ class DecodeOneStep {
   std::unique_ptr<ConstrainedDecoder> constrained_decoder_;
   std::optional<BenchmarkInfo> benchmark_info_;
   StopTokenDetector stop_token_detector_;
-
-  // For internal sampling.
-  // Holds the output token IDs. Dim: {num_output_candidates, 1}
-  litert::TensorBuffer output_tokens_;
 
   // For external sampling.
   // Holds the scores for the output candidates. Dim: {num_output_candidates}

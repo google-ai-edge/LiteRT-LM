@@ -1110,60 +1110,61 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::PrepareFirstDecode() {
   return absl::OkStatus();
 }
 
-absl::Status LlmLiteRtCompiledModelExecutorBase::Decode(
-    TensorBuffer& output_tokens) {
-  return Decode(output_tokens, ExecutorDecodeParams());
+absl::StatusOr<std::vector<std::vector<int>>>
+LlmLiteRtCompiledModelExecutorBase::Decode() {
+  return Decode(ExecutorDecodeParams());
 }
 
-absl::Status LlmLiteRtCompiledModelExecutorBase::Decode(
-    TensorBuffer& output_tokens, const ExecutorDecodeParams& decode_params) {
+absl::StatusOr<std::vector<std::vector<int>>>
+LlmLiteRtCompiledModelExecutorBase::Decode(
+    const ExecutorDecodeParams& decode_params) {
 
   ASSIGN_OR_RETURN(auto decoded_logits,
                    DecodeLogits(ExecutorInputs(), decode_params));
-  RETURN_IF_ERROR(SampleLogits(decoded_logits, output_tokens));
-
-  LITERT_ASSIGN_OR_RETURN(auto output_tokens_size, output_tokens.PackedSize());
-  int output_heads = 1;
-  if (llm_context_->runtime_config().output_heads.has_value()) {
-    output_heads = llm_context_->runtime_config().output_heads.value();
-  }
-  RET_CHECK_EQ(output_tokens_size, output_heads * sizeof(int32_t));
-
-  bool has_invalid_output_token = false;
+  std::optional<TensorBuffer> output_tokens;
   {
-    std::vector<std::shared_ptr<TokenData>> tokens;
-    tokens.reserve(output_heads);
-    LITERT_ASSIGN_OR_RETURN(auto lock_and_addr,
-                            TensorBufferScopedLock::Create(
-                                output_tokens, TensorBuffer::LockMode::kRead));
-    auto output_token_span = absl::MakeConstSpan(
-        static_cast<int32_t*>(lock_and_addr.second), output_heads);
-    for (auto tid : output_token_span) {
-      has_invalid_output_token |= tid < 0;
-      tokens.push_back(std::make_shared<TokenData>(tid < 0 ? 0 : tid));
-    }
-    RETURN_IF_ERROR(llm_context_->processed_context()
-                        .processed_tokens()
-                        .AddPendingInputToken(tokens));
+    LITERT_ASSIGN_OR_RETURN(auto decoded_logits_type,
+                            decoded_logits.TensorType());
+    auto dimensions = decoded_logits_type.Layout().Dimensions();
+    // Shape of decoded_logits is [batch_size, Token_length, vocab_size].
+    RET_CHECK_EQ(dimensions.size(), 3);
+    LITERT_ASSIGN_OR_RETURN(
+        output_tokens, CreateTensorBuffer<int>({dimensions[0], dimensions[1]}));
   }
 
-  // Reset invalid token IDs if any.
-  if (has_invalid_output_token) {
-    ABSL_LOG(WARNING) << "Invalid decode and sample result. The sampled token "
-                         "is casted to 0 to avoid crash.";
-    LITERT_ASSIGN_OR_RETURN(
-        auto lock_and_addr,
-        TensorBufferScopedLock::Create(output_tokens,
-                                       TensorBuffer::LockMode::kReadWrite));
-    auto output_token_span = absl::MakeSpan(
-        static_cast<int32_t*>(lock_and_addr.second), output_heads);
-    for (auto& tid : output_token_span) {
-      if (tid < 0) {
-        tid = 0;
+  RETURN_IF_ERROR(SampleLogits(decoded_logits, *output_tokens));
+  LITERT_ASSIGN_OR_RETURN(std::vector<std::vector<int>> output_tokens_vector,
+                          CopyFromTensorBuffer2D<int>(*output_tokens));
+
+  // Check for any invalid token ids and set them to zero, if any.
+  bool has_invalid_output_token = false;
+  for (int batch = 0; batch < output_tokens_vector.size(); ++batch) {
+    for (int token_idx = 0; token_idx < output_tokens_vector[batch].size();
+         ++token_idx) {
+      if (output_tokens_vector[batch][token_idx] < 0) {
+        has_invalid_output_token = true;
+        output_tokens_vector[batch][token_idx] = 0;
       }
     }
   }
-  return absl::OkStatus();
+  if (has_invalid_output_token) {
+    ABSL_LOG(WARNING) << "Invalid decode and sample result. The sampled token "
+                         "is casted to 0 to avoid crash.";
+  }
+
+  // Update context with the assumption that there is one output per head.
+  // We must change this when doing drafter based decoding.
+  std::vector<std::shared_ptr<TokenData>> tokens;
+  tokens.reserve(output_tokens_vector.size());
+  for (auto& output_head_tokens : output_tokens_vector) {
+    RET_CHECK_EQ(output_head_tokens.size(), 1);
+    tokens.push_back(std::make_shared<TokenData>(output_head_tokens[0]));
+  }
+  RETURN_IF_ERROR(
+      llm_context_->processed_context().processed_tokens().AddPendingInputToken(
+          tokens));
+
+  return output_tokens_vector;
 }
 
 absl::Status LlmLiteRtCompiledModelExecutorBase::Decode(

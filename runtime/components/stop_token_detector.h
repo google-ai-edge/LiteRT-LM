@@ -66,6 +66,13 @@ class StopTokenDetector {
   // Returns an error status on precondition failure.
   absl::Status ProcessTokens(absl::Span<const int> latest_tokens);
 
+  // Processes the latest incoming token for each sequence in the batch.
+  //   - latest_tokens Span of token IDs, one per batch sequence. Size must
+  //     match batch_size.
+  // Returns an error status on precondition failure.
+  absl::Status ProcessTokens(
+      const std::vector<std::vector<int>>& latest_tokens);
+
   // Returns a const reference to the vector containing the lengths of the
   // matched stop token sequences for all batch items. If a batch item has not
   // yet matched a stop sequence, its corresponding value in the vector will be

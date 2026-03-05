@@ -1003,13 +1003,14 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::Prefill(
   return absl::OkStatus();
 }
 
-absl::Status LlmLiteRtNpuCompiledModelExecutor::Decode(
-    ::litert::TensorBuffer& output_tokens) {
-  return Decode(output_tokens, ExecutorDecodeParams());
+absl::StatusOr<std::vector<std::vector<int>>>
+LlmLiteRtNpuCompiledModelExecutor::Decode() {
+  return Decode(ExecutorDecodeParams());
 }
 
-absl::Status LlmLiteRtNpuCompiledModelExecutor::Decode(
-    TensorBuffer& output_tokens, const ExecutorDecodeParams& decode_params) {
+absl::StatusOr<std::vector<std::vector<int>>>
+LlmLiteRtNpuCompiledModelExecutor::Decode(
+    const ExecutorDecodeParams& decode_params) {
   if (decode_params.HasConstraintDecoder()) {
     return absl::UnimplementedError(
         "Constrained decoding is not supported on NPU.");
@@ -1057,12 +1058,12 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::Decode(
       processed_tokens_.AddPendingInputToken({std::move(last_output_token)}));
   ++current_step_;
 
-  output_tokens.Write(absl::MakeConstSpan({max_index}));
   auto end = absl::Now();
   latency_stats_.decode_e2e_latency_us +=
       absl::ToInt64Microseconds(end - start);
   latency_stats_.decode_num_tokens += 1;
-  return absl::OkStatus();
+
+  return std::vector<std::vector<int>>{{max_index}};
 }
 
 // Prefill internal implementation, for one prefill call to the compiled model
