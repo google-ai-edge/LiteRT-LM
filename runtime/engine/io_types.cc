@@ -75,6 +75,9 @@ absl::StatusOr<absl::string_view> InputImage::GetRawImageBytes() const {
   if (std::holds_alternative<std::string>(data_)) {
     return absl::string_view(std::get<std::string>(data_));
   }
+  if (std::holds_alternative<absl::string_view>(data_)) {
+    return std::get<absl::string_view>(data_);
+  }
   return absl::FailedPreconditionError(
       "The image is preprocessed and does not have raw image bytes.");
 }
@@ -101,6 +104,9 @@ InputImage::GetPreprocessedImageTensorMap() const {
 absl::StatusOr<InputImage> InputImage::CreateCopy() const {
   if (std::holds_alternative<std::string>(data_)) {
     return InputImage(std::move(std::get<std::string>(data_)));
+  } else if (std::holds_alternative<absl::string_view>(data_)) {
+    // Deep copy the string view.
+    return InputImage(std::string(std::get<absl::string_view>(data_)));
   } else if (std::holds_alternative<TensorBuffer>(data_)) {
     LITERT_ASSIGN_OR_RETURN(auto tensor_buffer_clone,
                             std::get<TensorBuffer>(data_).Duplicate());

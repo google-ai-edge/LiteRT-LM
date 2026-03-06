@@ -96,10 +96,12 @@ class InputImage {
   // Constructs an InputImage from a raw image bytes string or a TensorBuffer of
   // processed image bytes. The InputImage takes ownership of the provided data.
   explicit InputImage(
-      std::variant<std::string, TensorBuffer,
+      std::variant<std::string, absl::string_view, TensorBuffer,
                    absl::flat_hash_map<std::string, TensorBuffer>>
           data)
       : data_(std::move(data)) {}
+  // Useful for testing with const char* or const char[].
+  explicit InputImage(const char* data) : data_(absl::string_view(data)) {}
 
   // Copy constructor.
   InputImage(const InputImage& other) = delete;
@@ -139,7 +141,7 @@ class InputImage {
   absl::StatusOr<InputImage> CreateCopy() const;
 
  private:
-  std::variant<std::string, TensorBuffer,
+  std::variant<std::string, absl::string_view, TensorBuffer,
                absl::flat_hash_map<std::string, TensorBuffer>>
       data_;
 };
