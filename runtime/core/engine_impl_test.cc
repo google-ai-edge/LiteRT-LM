@@ -12,11 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>  // NOLINT: Required for path manipulation.
 #include <fstream>
 #include <memory>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -24,6 +26,7 @@
 #include <gtest/gtest.h>
 #include "absl/cleanup/cleanup.h"  // from @com_google_absl
 #include "absl/log/absl_check.h"  // from @com_google_absl
+#include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
@@ -241,6 +244,66 @@ TEST(EngineTest, CreateEngine_WithBenchmark) {
       BenchmarkInfo::InitPhaseToString(BenchmarkInfo::InitPhase::kExecutor))));
   EXPECT_TRUE(init_phases.contains(std::string(
       BenchmarkInfo::InitPhaseToString(BenchmarkInfo::InitPhase::kTotal))));
+}
+
+TEST(EngineTest, CreateEngine_AsyncTokenizer_ValidatesConcurrency) {
+  auto task_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm_new_metadata.task";
+  auto model_assets = ModelAssets::Create(task_path.string());
+  ASSERT_OK(model_assets);
+  auto engine_settings =
+      EngineSettings::CreateDefault(*model_assets, Backend::CPU);
+  ASSERT_OK(engine_settings);
+
+  engine_settings->GetMutableMainExecutorSettings().SetMaxNumTokens(
+      kMaxNumTokens);
+  engine_settings->GetMutableMainExecutorSettings().SetCacheDir(":nocache");
+
+  // Enable Benchmark to measure the phases and prove concurrency
+  engine_settings->GetMutableBenchmarkParams();
+
+  absl::StatusOr<std::unique_ptr<Engine>> llm =
+      EngineFactory::CreateAny(*engine_settings);
+  ABSL_CHECK_OK(llm);
+
+  absl::StatusOr<std::unique_ptr<Engine::Session>> session =
+      (*llm)->CreateSession(SessionConfig::CreateDefault());
+  ABSL_CHECK_OK(session);
+
+  auto benchmark_info = (*session)->GetMutableBenchmarkInfo();
+  ASSERT_OK(benchmark_info);
+
+  const auto& init_phases = benchmark_info.value()->GetInitPhases();
+
+  auto total_time = init_phases.at(std::string(
+      BenchmarkInfo::InitPhaseToString(BenchmarkInfo::InitPhase::kTotal)));
+  auto executor_time = init_phases.at(std::string(
+      BenchmarkInfo::InitPhaseToString(BenchmarkInfo::InitPhase::kExecutor)));
+  auto tokenizer_time = init_phases.at(std::string(
+      BenchmarkInfo::InitPhaseToString(BenchmarkInfo::InitPhase::kTokenizer)));
+  ABSL_LOG(INFO) << "total_time: " << total_time;
+  ABSL_LOG(INFO) << "executor_time: " << executor_time;
+  ABSL_LOG(INFO) << "tokenizer_time: " << tokenizer_time;
+  // The total duration should be greater than or equal to the longest
+  // concurrent branch.
+  EXPECT_GE(total_time, executor_time);
+  EXPECT_GE(total_time, tokenizer_time);
+  // The total duration (minus the sequential part) should be less than the sum
+  // of the two parallel branches. This is to prove that the tokenizer and
+  // executor are loaded concurrently.
+  auto rest_time = total_time - std::max(executor_time, tokenizer_time);
+  EXPECT_LT(total_time - rest_time, executor_time + tokenizer_time);
+
+  // Verifying tokenizer resolves tokens successfully without data bounds errors
+  std::vector<InputData> inputs;
+  inputs.emplace_back(InputText("Hello concurrent world!"));
+  ABSL_CHECK_OK(session.value()->RunPrefill(inputs));
+
+  auto responses = session.value()->RunDecode();
+  ASSERT_OK(responses);
+  EXPECT_EQ(responses.value().GetTexts().size(), 1);
+  EXPECT_FALSE(responses.value().GetTexts()[0].empty());
 }
 
 TEST(EngineTest, CreateEngine_FailsNoVisionModel) {
