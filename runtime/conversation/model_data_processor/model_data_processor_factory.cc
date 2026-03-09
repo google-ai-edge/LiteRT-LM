@@ -47,7 +47,8 @@ absl::StatusOr<std::string> GetTokenString(
   if (token_union.has_token_str()) {
     return token_union.token_str();
   } else {
-    return absl::InvalidArgumentError("TokenUnion does not have a token_str.");
+    return absl::InvalidArgumentError(
+        "token_str field is not set in TokenUnion.");
   }
 }
 
