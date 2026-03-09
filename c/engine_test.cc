@@ -131,6 +131,24 @@ TEST(EngineCTest, SetPrefillChunkSize) {
   EXPECT_EQ(config->prefill_chunk_size, prefill_chunk_size);
 }
 
+TEST(EngineCTest, BenchmarkSettings) {
+  const std::string task_path = "test_model_path_1";
+  EngineSettingsPtr settings(
+      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
+                                       /* vision_backend_str */ nullptr,
+                                       /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+
+  litert_lm_engine_settings_enable_benchmark(settings.get());
+  litert_lm_engine_settings_set_num_prefill_tokens(settings.get(), 100);
+  litert_lm_engine_settings_set_num_decode_tokens(settings.get(), 200);
+
+  const auto& params = settings->settings->GetBenchmarkParams();
+  EXPECT_EQ(params->num_prefill_tokens(), 100);
+  EXPECT_EQ(params->num_decode_tokens(), 200);
+}
+
 TEST(EngineCTest, CreateSessionConfigWithSamplerParams) {
   LiteRtLmSamplerParams sampler_params;
   sampler_params.type = kTopP;
@@ -900,6 +918,9 @@ TEST(EngineCTest, Benchmark) {
   EXPECT_GT(
       litert_lm_benchmark_info_get_time_to_first_token(benchmark_info.get()),
       0.0);
+  EXPECT_GT(litert_lm_benchmark_info_get_total_init_time_in_second(
+                benchmark_info.get()),
+            0.0);
   int num_prefill_turns =
       litert_lm_benchmark_info_get_num_prefill_turns(benchmark_info.get());
   EXPECT_GT(num_prefill_turns, 0);
