@@ -168,6 +168,96 @@ struct PyBenchmarkInfo {
   double last_decode_tokens_per_second;
 };
 
+class Benchmark {
+ public:
+  Benchmark(std::string model_path, Backend backend, int prefill_tokens,
+            int decode_tokens, std::string cache_dir)
+      : model_path_(std::move(model_path)),
+        backend_(backend),
+        prefill_tokens_(prefill_tokens),
+        decode_tokens_(decode_tokens),
+        cache_dir_(std::move(cache_dir)) {}
+
+  PyBenchmarkInfo Run() {
+    auto model_assets = VALUE_OR_THROW(ModelAssets::Create(model_path_));
+    auto settings =
+        VALUE_OR_THROW(EngineSettings::CreateDefault(model_assets, backend_));
+
+    if (!cache_dir_.empty()) {
+      settings.GetMutableMainExecutorSettings().SetCacheDir(cache_dir_);
+    }
+
+    auto& benchmark_params = settings.GetMutableBenchmarkParams();
+    benchmark_params.set_num_prefill_tokens(prefill_tokens_);
+    benchmark_params.set_num_decode_tokens(decode_tokens_);
+
+    auto engine =
+        VALUE_OR_THROW(EngineFactory::CreateDefault(std::move(settings)));
+
+    auto conversation_config =
+        VALUE_OR_THROW(ConversationConfig::CreateDefault(*engine));
+    auto conversation =
+        VALUE_OR_THROW(Conversation::Create(*engine, conversation_config));
+
+    // Trigger benchmark
+    nlohmann::json dummy_message = {
+        {"role", "user"},
+        {"content", "Engine ignore this message in this mode."}};
+    (void)VALUE_OR_THROW(conversation->SendMessage(dummy_message));
+
+    auto benchmark_info_cpp = VALUE_OR_THROW(conversation->GetBenchmarkInfo());
+
+    PyBenchmarkInfo result;
+
+    double total_init_time_ms = 0.0;
+    for (const auto& phase : benchmark_info_cpp.GetInitPhases()) {
+      total_init_time_ms += absl::ToDoubleMilliseconds(phase.second);
+    }
+    result.init_time_in_second = total_init_time_ms / 1000.0;
+    result.time_to_first_token_in_second =
+        benchmark_info_cpp.GetTimeToFirstToken();
+
+    int last_prefill_token_count = 0;
+    double last_prefill_tokens_per_second = 0.0;
+    if (benchmark_info_cpp.GetTotalPrefillTurns() > 0) {
+      int last_index =
+          static_cast<int>(benchmark_info_cpp.GetTotalPrefillTurns()) - 1;
+      auto turn = benchmark_info_cpp.GetPrefillTurn(last_index);
+      if (turn.ok()) {
+        last_prefill_token_count = static_cast<int>(turn->num_tokens);
+      }
+      last_prefill_tokens_per_second =
+          benchmark_info_cpp.GetPrefillTokensPerSec(last_index);
+    }
+    result.last_prefill_token_count = last_prefill_token_count;
+    result.last_prefill_tokens_per_second = last_prefill_tokens_per_second;
+
+    int last_decode_token_count = 0;
+    double last_decode_tokens_per_second = 0.0;
+    if (benchmark_info_cpp.GetTotalDecodeTurns() > 0) {
+      int last_index =
+          static_cast<int>(benchmark_info_cpp.GetTotalDecodeTurns()) - 1;
+      auto turn = benchmark_info_cpp.GetDecodeTurn(last_index);
+      if (turn.ok()) {
+        last_decode_token_count = static_cast<int>(turn->num_tokens);
+      }
+      last_decode_tokens_per_second =
+          benchmark_info_cpp.GetDecodeTokensPerSec(last_index);
+    }
+    result.last_decode_token_count = last_decode_token_count;
+    result.last_decode_tokens_per_second = last_decode_tokens_per_second;
+
+    return result;
+  }
+
+ private:
+  std::string model_path_;
+  Backend backend_;
+  int prefill_tokens_;
+  int decode_tokens_;
+  std::string cache_dir_;
+};
+
 NB_MODULE(litert_lm_ext, module) {
   nb::enum_<LogSeverity>(module, "LogSeverity")
       .value("VERBOSE", LogSeverity::VERBOSE)
@@ -349,80 +439,20 @@ NB_MODULE(litert_lm_ext, module) {
       .def("__next__", &MessageIterator::Next);
 
   module.def(
-      "benchmark",
+      "Benchmark",
       [](absl::string_view model_path, const nb::handle& backend,
          int prefill_tokens, int decode_tokens, absl::string_view cache_dir) {
-        Backend main_backend = ParseBackend(backend);
-        auto model_assets = VALUE_OR_THROW(ModelAssets::Create(model_path));
-        auto settings = VALUE_OR_THROW(
-            EngineSettings::CreateDefault(model_assets, main_backend));
+        auto benchmark = std::make_unique<Benchmark>(
+            std::string(model_path), ParseBackend(backend), prefill_tokens,
+            decode_tokens, std::string(cache_dir));
 
-        if (!cache_dir.empty()) {
-          settings.GetMutableMainExecutorSettings().SetCacheDir(
-              std::string(cache_dir));
-        }
-
-        auto& benchmark_params = settings.GetMutableBenchmarkParams();
-        benchmark_params.set_num_prefill_tokens(prefill_tokens);
-        benchmark_params.set_num_decode_tokens(decode_tokens);
-
-        auto engine =
-            VALUE_OR_THROW(EngineFactory::CreateDefault(std::move(settings)));
-
-        auto conversation_config =
-            VALUE_OR_THROW(ConversationConfig::CreateDefault(*engine));
-        auto conversation =
-            VALUE_OR_THROW(Conversation::Create(*engine, conversation_config));
-
-        // Trigger benchmark
-        nlohmann::json dummy_message = {
-            {"role", "user"},
-            {"content", "Engine ignore this message in this mode."}};
-        (void)VALUE_OR_THROW(conversation->SendMessage(dummy_message));
-
-        auto benchmark_info = VALUE_OR_THROW(conversation->GetBenchmarkInfo());
-
-        PyBenchmarkInfo result;
-
-        double total_init_time_ms = 0.0;
-        for (const auto& phase : benchmark_info.GetInitPhases()) {
-          total_init_time_ms += absl::ToDoubleMilliseconds(phase.second);
-        }
-        result.init_time_in_second = total_init_time_ms / 1000.0;
-        result.time_to_first_token_in_second =
-            benchmark_info.GetTimeToFirstToken();
-
-        int last_prefill_token_count = 0;
-        double last_prefill_tokens_per_second = 0.0;
-        if (benchmark_info.GetTotalPrefillTurns() > 0) {
-          int last_index =
-              static_cast<int>(benchmark_info.GetTotalPrefillTurns()) - 1;
-          auto turn = benchmark_info.GetPrefillTurn(last_index);
-          if (turn.ok()) {
-            last_prefill_token_count = static_cast<int>(turn->num_tokens);
-          }
-          last_prefill_tokens_per_second =
-              benchmark_info.GetPrefillTokensPerSec(last_index);
-        }
-        result.last_prefill_token_count = last_prefill_token_count;
-        result.last_prefill_tokens_per_second = last_prefill_tokens_per_second;
-
-        int last_decode_token_count = 0;
-        double last_decode_tokens_per_second = 0.0;
-        if (benchmark_info.GetTotalDecodeTurns() > 0) {
-          int last_index =
-              static_cast<int>(benchmark_info.GetTotalDecodeTurns()) - 1;
-          auto turn = benchmark_info.GetDecodeTurn(last_index);
-          if (turn.ok()) {
-            last_decode_token_count = static_cast<int>(turn->num_tokens);
-          }
-          last_decode_tokens_per_second =
-              benchmark_info.GetDecodeTokensPerSec(last_index);
-        }
-        result.last_decode_token_count = last_decode_token_count;
-        result.last_decode_tokens_per_second = last_decode_tokens_per_second;
-
-        return result;
+        nb::object py_benchmark = nb::cast(std::move(benchmark));
+        py_benchmark.attr("model_path") = model_path;
+        SetBackendAttr(py_benchmark, backend);
+        py_benchmark.attr("prefill_tokens") = prefill_tokens;
+        py_benchmark.attr("decode_tokens") = decode_tokens;
+        py_benchmark.attr("cache_dir") = cache_dir;
+        return py_benchmark;
       },
       nb::arg("model_path"), nb::arg("backend") = nb::none(),
       nb::arg("prefill_tokens") = 256, nb::arg("decode_tokens") = 256,
@@ -451,6 +481,9 @@ NB_MODULE(litert_lm_ext, module) {
       .def_rw("last_decode_tokens_per_second",
               &PyBenchmarkInfo::last_decode_tokens_per_second,
               "The number of tokens processed per second in the last decode.");
+
+  nb::class_<Benchmark>(module, "_Benchmark", nb::dynamic_attr())
+      .def("run", &Benchmark::Run);
 }
 
 }  // namespace litert::lm

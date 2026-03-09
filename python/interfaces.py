@@ -102,3 +102,50 @@ class AbstractConversation(abc.ABC):
         An iterator yielding dictionaries containing chunks of the model's
         response.
     """
+
+
+@dataclasses.dataclass
+class BenchmarkInfo(abc.ABC):
+  """Results from a benchmark run.
+
+  Attributes:
+      init_time_in_second: The time in seconds to initialize the engine and the
+        conversation.
+      time_to_first_token_in_second: The time in seconds to the first token.
+      last_prefill_token_count: The number of tokens in the last prefill.
+      last_prefill_tokens_per_second: The number of tokens processed per second
+        in the last prefill.
+      last_decode_token_count: The number of tokens in the last decode.
+      last_decode_tokens_per_second: The number of tokens processed per second
+        in the last decode.
+  """
+
+  init_time_in_second: float
+  time_to_first_token_in_second: float
+  last_prefill_token_count: int
+  last_prefill_tokens_per_second: float
+  last_decode_token_count: int
+  last_decode_tokens_per_second: float
+
+
+@dataclasses.dataclass
+class AbstractBenchmark(abc.ABC):
+  """Abstract base class for LiteRT-LM benchmarks.
+
+  Attributes:
+      model_path: Path to the model file.
+      backend: The hardware backend used for inference.
+      prefill_tokens: Number of tokens for the prefill phase.
+      decode_tokens: Number of tokens for the decode phase.
+      cache_dir: Directory for caching compiled model artifacts.
+  """
+
+  model_path: str
+  backend: Backend
+  prefill_tokens: int = 256
+  decode_tokens: int = 256
+  cache_dir: str = ""
+
+  @abc.abstractmethod
+  def run(self) -> BenchmarkInfo:
+    """Runs the benchmark and returns the result."""
