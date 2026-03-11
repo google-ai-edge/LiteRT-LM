@@ -299,6 +299,25 @@ LITERT_LM_C_API_EXPORT
 const char* litert_lm_responses_get_response_text_at(
     const LiteRtLmResponses* responses, int index);
 
+// Returns the response score at a given index.
+//
+// @param responses The responses object.
+// @param index The index of the response.
+// @return The response score. Returns 0.0 if index is out of bounds.
+LITERT_LM_C_API_EXPORT
+float litert_lm_responses_get_score_at(const LiteRtLmResponses* responses,
+                                       int index);
+
+// Returns the response token length at a given index.
+//
+// @param responses The responses object.
+// @param index The index of the response.
+// @return The response token length. Returns -1 if index is out of bounds or
+//   token length is not available.
+LITERT_LM_C_API_EXPORT
+int litert_lm_responses_get_token_length_at(const LiteRtLmResponses* responses,
+                                            int index);
+
 // Retrieves the benchmark information from the session. The caller is
 // responsible for destroying the benchmark info using
 // `litert_lm_benchmark_info_delete`.
@@ -414,6 +433,41 @@ int litert_lm_session_generate_content_stream(LiteRtLmSession* session,
                                               size_t num_inputs,
                                               LiteRtLmStreamCallback callback,
                                               void* callback_data);
+
+// Prefills the model with the given input data.
+//
+// @param session The session to use for prefilling.
+// @param inputs An array of InputData structs representing the multimodal
+//   input.
+// @param num_inputs The number of InputData structs in the array.
+// @return 0 on success, non-zero on failure.
+LITERT_LM_C_API_EXPORT
+int litert_lm_session_run_prefill(LiteRtLmSession* session,
+                                  const InputData* inputs, size_t num_inputs);
+
+// Decodes the response from the prefilled input data.
+//
+// @param session The session to use for decoding.
+// @return A pointer to the responses, or NULL on failure. The caller is
+//   responsible for deleting the responses using `litert_lm_responses_delete`.
+LITERT_LM_C_API_EXPORT
+LiteRtLmResponses* litert_lm_session_run_decode(LiteRtLmSession* session);
+
+// Scores the target text based on the prefilled input data.
+//
+// @param session The session to use for scoring.
+// @param inputs An array of InputData structs representing the multimodal
+//   input. Only text input is supported for scoring.
+// @param num_inputs The number of InputData structs in the array.
+// @param store_token_lengths Whether to store the token lengths of the target
+//   texts in the result.
+// @return A pointer to the responses, or NULL on failure. The caller is
+//   responsible for deleting the responses using `litert_lm_responses_delete`.
+LITERT_LM_C_API_EXPORT
+LiteRtLmResponses* litert_lm_session_run_text_scoring(LiteRtLmSession* session,
+                                                      const InputData* inputs,
+                                                      size_t num_inputs,
+                                                      bool store_token_lengths);
 
 // Creates a LiteRT LM Conversation. The caller is responsible for destroying
 // the conversation using `litert_lm_conversation_delete`.

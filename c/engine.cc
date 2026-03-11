@@ -524,6 +524,86 @@ int litert_lm_session_generate_content_stream(LiteRtLmSession* session,
   return 0;  // The call is non-blocking and returns immediately.
 }
 
+int litert_lm_session_run_prefill(LiteRtLmSession* session,
+                                  const InputData* inputs, size_t num_inputs) {
+  if (!session || !session->session) {
+    return -1;
+  }
+  std::vector<litert::lm::InputData> engine_inputs;
+  engine_inputs.reserve(num_inputs);
+  for (size_t i = 0; i < num_inputs; ++i) {
+    switch (inputs[i].type) {
+      case kInputText:
+        engine_inputs.emplace_back(InputText(std::string(
+            static_cast<const char*>(inputs[i].data), inputs[i].size)));
+        break;
+      case kInputImage:
+        engine_inputs.emplace_back(litert::lm::InputImage(std::string(
+            static_cast<const char*>(inputs[i].data), inputs[i].size)));
+        break;
+      case kInputImageEnd:
+        engine_inputs.emplace_back(litert::lm::InputImageEnd());
+        break;
+      case kInputAudio:
+        engine_inputs.emplace_back(litert::lm::InputAudio(std::string(
+            static_cast<const char*>(inputs[i].data), inputs[i].size)));
+        break;
+      case kInputAudioEnd:
+        engine_inputs.emplace_back(litert::lm::InputAudioEnd());
+        break;
+    }
+  }
+
+  absl::Status status = session->session->RunPrefill(std::move(engine_inputs));
+  if (!status.ok()) {
+    ABSL_LOG(ERROR) << "Failed to run prefill: " << status;
+    return static_cast<int>(status.code());
+  }
+  return 0;
+}
+
+LiteRtLmResponses* litert_lm_session_run_decode(LiteRtLmSession* session) {
+  if (!session || !session->session) {
+    return nullptr;
+  }
+  auto responses = session->session->RunDecode();
+  if (!responses.ok()) {
+    ABSL_LOG(ERROR) << "Failed to run decode: " << responses.status();
+    return nullptr;
+  }
+
+  auto* c_responses = new LiteRtLmResponses{std::move(*responses)};
+  return c_responses;
+}
+
+LiteRtLmResponses* litert_lm_session_run_text_scoring(
+    LiteRtLmSession* session, const InputData* inputs, size_t num_inputs,
+    bool store_token_lengths) {
+  if (!session || !session->session) {
+    return nullptr;
+  }
+  std::vector<absl::string_view> target_texts;
+  target_texts.reserve(num_inputs);
+  for (size_t i = 0; i < num_inputs; ++i) {
+    if (inputs[i].type != kInputText) {
+      ABSL_LOG(ERROR) << "Only text input is supported for scoring.";
+      return nullptr;
+    }
+    target_texts.emplace_back(static_cast<const char*>(inputs[i].data),
+                              inputs[i].size);
+  }
+
+  auto responses =
+      session->session->RunTextScoring(target_texts, store_token_lengths);
+  if (!responses.ok()) {
+    ABSL_LOG(ERROR) << "Failed to run text scoring: " << responses.status();
+    return nullptr;
+  }
+
+  auto* c_responses = new LiteRtLmResponses{std::move(*responses)};
+  return c_responses;
+}
+
 void litert_lm_responses_delete(LiteRtLmResponses* responses) {
   delete responses;
 }
@@ -546,6 +626,31 @@ const char* litert_lm_responses_get_response_text_at(
 
   // The string_view's data is valid as long as the responses object is alive.
   return responses->responses.GetTexts()[index].data();
+}
+
+float litert_lm_responses_get_score_at(const LiteRtLmResponses* responses,
+                                       int index) {
+  if (!responses) {
+    return 0.0f;
+  }
+  const auto& scores = responses->responses.GetScores();
+  if (index < 0 || index >= scores.size()) {
+    return 0.0f;
+  }
+  return scores[index];
+}
+
+int litert_lm_responses_get_token_length_at(const LiteRtLmResponses* responses,
+                                            int index) {
+  if (!responses) {
+    return -1;
+  }
+  const auto& token_lengths = responses->responses.GetTokenLengths();
+  if (!token_lengths.has_value() || index < 0 ||
+      index >= token_lengths->size()) {
+    return -1;
+  }
+  return (*token_lengths)[index];
 }
 
 LiteRtLmBenchmarkInfo* litert_lm_session_get_benchmark_info(

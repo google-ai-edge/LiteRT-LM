@@ -51,6 +51,17 @@
     return std::move(status_or_value).value();                      \
   }())
 
+#define STATUS_OR_THROW(status)                                     \
+  {                                                                 \
+    auto status_value = (status);                                   \
+    if (!status_value.ok()) {                                       \
+      std::stringstream ss;                                         \
+      ss << __FILE__ << ":" << __LINE__ << ": " << __func__ << ": " \
+         << status_value;                                           \
+      throw std::runtime_error(ss.str());                           \
+    }                                                               \
+  }
+
 namespace litert::lm {
 
 namespace nb = nanobind;
@@ -120,6 +131,15 @@ void SetBackendAttr(nb::object& py_engine, const nb::handle& backend_handle) {
   } else {
     py_engine.attr("backend") = backend_handle;
   }
+}
+
+// Helper to convert C++ Responses to Python Responses dataclass.
+nb::object ToPyResponses(const Responses& responses) {
+  nb::object py_responses_class = nb::module_::import_(
+                                      "litert_lm.python.interfaces")
+                                      .attr("Responses");
+  return py_responses_class(responses.GetTexts(), responses.GetScores(),
+                             responses.GetTokenLengths());
 }
 
 // Note: Consider move to C++ API.

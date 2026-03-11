@@ -569,6 +569,103 @@ TEST(EngineCTest, GenerateContent) {
   EXPECT_GT(strlen(response_text), 0);
 }
 
+TEST(EngineCTest, SessionPrefillAndDecode) {
+  const std::string task_path = GetTestdataPath(
+      "litert_lm/runtime/testdata/test_lm_new_metadata.task");
+
+  EngineSettingsPtr settings(
+      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
+                                       /* vision_backend_str */ nullptr,
+                                       /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+  litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
+
+  EnginePtr engine(litert_lm_engine_create(settings.get()),
+                   &litert_lm_engine_delete);
+  ASSERT_NE(engine, nullptr);
+
+  SessionPtr session(litert_lm_engine_create_session(
+                         engine.get(), /* session_config */ nullptr),
+                     &litert_lm_session_delete);
+  ASSERT_NE(session, nullptr);
+
+  const char* prompt = "Hello world!";
+  InputData input_data;
+  input_data.type = kInputText;
+  input_data.data = prompt;
+  input_data.size = strlen(prompt);
+
+  // Test RunPrefill
+  int prefill_result =
+      litert_lm_session_run_prefill(session.get(), &input_data, 1);
+  EXPECT_EQ(prefill_result, 0);
+
+  // Test RunDecode
+  ResponsesPtr decode_responses(litert_lm_session_run_decode(session.get()),
+                                &litert_lm_responses_delete);
+  ASSERT_NE(decode_responses, nullptr);
+  EXPECT_GT(litert_lm_responses_get_num_candidates(decode_responses.get()), 0);
+  const char* decode_text =
+      litert_lm_responses_get_response_text_at(decode_responses.get(), 0);
+  ASSERT_NE(decode_text, nullptr);
+  EXPECT_GT(strlen(decode_text), 0);
+}
+
+TEST(EngineCTest, SessionPrefillAndRunTextScoring) {
+  const std::string task_path = GetTestdataPath(
+      "litert_lm/runtime/testdata/test_lm_new_metadata.task");
+
+  EngineSettingsPtr settings(
+      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
+                                       /* vision_backend_str */ nullptr,
+                                       /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+  litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
+
+  EnginePtr engine(litert_lm_engine_create(settings.get()),
+                   &litert_lm_engine_delete);
+  ASSERT_NE(engine, nullptr);
+
+  SessionPtr session(litert_lm_engine_create_session(
+                         engine.get(), /* session_config */ nullptr),
+                     &litert_lm_session_delete);
+  ASSERT_NE(session, nullptr);
+
+  const char* prompt = "Hello world!";
+  InputData input_data;
+  input_data.type = kInputText;
+  input_data.data = prompt;
+  input_data.size = strlen(prompt);
+
+  // Test RunPrefill
+  int prefill_result =
+      litert_lm_session_run_prefill(session.get(), &input_data, 1);
+  EXPECT_EQ(prefill_result, 0);
+
+  // Test RunTextScoring
+  const char* target_text = "Hello";
+  InputData target_input_data;
+  target_input_data.type = kInputText;
+  target_input_data.data = target_text;
+  target_input_data.size = strlen(target_text);
+  ResponsesPtr scoring_responses(
+      litert_lm_session_run_text_scoring(session.get(), &target_input_data, 1,
+                                         /*store_token_lengths=*/true),
+      &litert_lm_responses_delete);
+  ASSERT_NE(scoring_responses, nullptr);
+
+  // Note: similar to Go test, we might get empty responses for text scoring
+  // with the test model.
+  if (litert_lm_responses_get_num_candidates(scoring_responses.get()) > 0) {
+    EXPECT_GT(
+        litert_lm_responses_get_token_length_at(scoring_responses.get(), 0), 0);
+  } else {
+    LOG(WARNING) << "RunTextScoring returned 0 candidates";
+  }
+}
+
 TEST(EngineCTest, CreateSessionWithMaxOutputTokens) {
   const std::string task_path = GetTestdataPath(
       "litert_lm/runtime/testdata/test_lm_new_metadata.task");

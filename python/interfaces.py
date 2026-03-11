@@ -66,6 +66,14 @@ class AbstractEngine(abc.ABC):
   ) -> AbstractConversation:
     """Creates a new conversation for this engine."""
 
+  @abc.abstractmethod
+  def create_session(self) -> AbstractSession:
+    """Creates a new session for this engine.
+
+    Returns:
+        A new session instance for low-level interaction with the model.
+    """
+
 
 class AbstractConversation(abc.ABC):
   """Abstract base class for managing LiteRT-LM conversations."""
@@ -119,53 +127,69 @@ class AbstractConversation(abc.ABC):
         response.
     """
 
-  def cancel_process(self) -> None:
-    """Cancels the current inference process."""
-    pass
-
 
 @dataclasses.dataclass
-class BenchmarkInfo(abc.ABC):
-  """Results from a benchmark run.
+class Responses:
+  """A container to host the model responses.
+
+  Note: This class is only used in the Session API.
 
   Attributes:
-      init_time_in_second: The time in seconds to initialize the engine and the
-        conversation.
-      time_to_first_token_in_second: The time in seconds to the first token.
-      last_prefill_token_count: The number of tokens in the last prefill.
-      last_prefill_tokens_per_second: The number of tokens processed per second
-        in the last prefill.
-      last_decode_token_count: The number of tokens in the last decode.
-      last_decode_tokens_per_second: The number of tokens processed per second
-        in the last decode.
+      texts: The generated text(s) from the model.
+      scores: The scores associated with the generated text(s).
+      token_lengths: The number of tokens in each generated text.
   """
 
-  init_time_in_second: float
-  time_to_first_token_in_second: float
-  last_prefill_token_count: int
-  last_prefill_tokens_per_second: float
-  last_decode_token_count: int
-  last_decode_tokens_per_second: float
+  texts: list[str]
+  scores: list[float]
+  token_lengths: list[int] | None = None
 
 
-@dataclasses.dataclass
-class AbstractBenchmark(abc.ABC):
-  """Abstract base class for LiteRT-LM benchmarks.
+class AbstractSession(abc.ABC):
+  """Abstract base class for managing LiteRT-LM sessions."""
 
-  Attributes:
-      model_path: Path to the model file.
-      backend: The hardware backend used for inference.
-      prefill_tokens: Number of tokens for the prefill phase.
-      decode_tokens: Number of tokens for the decode phase.
-      cache_dir: Directory for caching compiled model artifacts.
-  """
+  def __init__(self):
+    """Initializes the instance."""
 
-  model_path: str
-  backend: Backend
-  prefill_tokens: int = 256
-  decode_tokens: int = 256
-  cache_dir: str = ""
+  def __enter__(self) -> AbstractSession:
+    """Initializes the session."""
+    return self
+
+  def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+    """Releases the session."""
+    del exc_type, exc_val, exc_tb
 
   @abc.abstractmethod
-  def run(self) -> BenchmarkInfo:
-    """Runs the benchmark and returns the result."""
+  def run_prefill(self, contents: list[str]) -> None:
+    """Runs the prefill stage of the session.
+
+    Args:
+        contents: A list of input strings to prefill the model with. Note that
+          the user can break down their prompt/query into multiple chunks and
+          call this function multiple times.
+    """
+
+  @abc.abstractmethod
+  def run_decode(self) -> Responses:
+    """Runs the decode stage of the session.
+
+    Returns:
+        The generated response from the model based on the input prompt/query
+        added after using run_prefill.
+    """
+
+  @abc.abstractmethod
+  def run_text_scoring(
+      self, target_text: list[str], store_token_lengths: bool = False
+  ) -> Responses:
+    """Runs the scoring stage of the session.
+
+    Args:
+        target_text: A list of target strings to score.
+        store_token_lengths: Whether to store the token lengths of the target
+          texts in the result.
+
+    Returns:
+        Responses: The log likelihood scores of the target text given the
+        existing session state.
+    """
