@@ -73,6 +73,42 @@ Backend ParseBackend(const nb::handle& handle,
   return static_cast<Backend>(nb::cast<int>(nb::object(handle.attr("value"))));
 }
 
+// Helper to handle tool calls.
+nlohmann::json HandleToolCalls(const nlohmann::json& response,
+                               const nb::dict& tool_map) {
+  nlohmann::json tool_responses = nlohmann::json::array();
+  for (const auto& tool_call : response["tool_calls"]) {
+    if (!tool_call.contains("function")) continue;
+    std::string name = tool_call["function"]["name"];
+    nlohmann::json arguments = tool_call["function"]["arguments"];
+
+    nlohmann::json json_result;
+    if (tool_map.contains(name.c_str())) {
+      nb::object tool_obj = tool_map[name.c_str()];
+      nb::object py_args = nb::cast(arguments);
+      try {
+        nb::object py_result = tool_obj.attr("execute")(py_args);
+        json_result = nb::cast<nlohmann::json>(py_result);
+      } catch (const std::exception& e) {
+        json_result = "Error executing tool: " + std::string(e.what());
+      }
+    } else {
+      json_result = "Error: Tool not found.";
+    }
+
+    tool_responses.push_back({
+        {"type", "tool_response"},
+        {"tool_response",
+         {
+             {"name", name},
+             {"response", json_result},
+         }},
+    });
+  }
+
+  return {{"role", "tool"}, {"content", tool_responses}};
+}
+
 // Helper to inject Python backend attribute.
 void SetBackendAttr(nb::object& py_engine, const nb::handle& backend_handle) {
   if (backend_handle.is_none()) {
@@ -375,17 +411,50 @@ NB_MODULE(litert_lm_ext, module) {
              nb::handle traceback) { nb::inst_destruct(self); },
           nb::arg("exc_type").none(), nb::arg("exc_value").none(),
           nb::arg("traceback").none())
-      .def("create_conversation", [](const nb::object& self) {
-        Engine& engine = nb::cast<Engine&>(self);
+      .def(
+          "create_conversation",
+          [](const nb::object& self, const nb::handle& tools) {
+            Engine& engine = nb::cast<Engine&>(self);
 
-        auto config = ConversationConfig::Builder().Build(engine);
+            auto builder = ConversationConfig::Builder();
+            nb::dict py_tool_map;
 
-        auto conversation =
-            VALUE_OR_THROW(Conversation::Create(engine, *config));
+            if (!tools.is_none()) {
+              static const nb::object tool_from_function =
+                  nb::module_::import_(
+                      "litert_lm.python.tools")
+                      .attr("tool_from_function");
 
-        nb::object py_conversation = nb::cast(std::move(conversation));
-        return py_conversation;
-      });
+              nlohmann::json json_tools = nlohmann::json::array();
+              for (auto tool : nb::cast<nb::list>(tools)) {
+                auto tool_obj = tool_from_function(tool);
+                auto description = tool_obj.attr("get_tool_description")();
+                std::string name = nb::cast<std::string>(description["name"]);
+                py_tool_map[name.c_str()] = tool_obj;
+                json_tools.push_back(nb::cast<nlohmann::json>(description));
+              }
+
+              JsonPreface json_preface;
+              json_preface.tools = std::move(json_tools);
+              builder.SetPreface(json_preface);
+              builder.SetEnableConstrainedDecoding(true);
+            }
+
+            auto config = VALUE_OR_THROW(builder.Build(engine));
+
+            auto conversation =
+                VALUE_OR_THROW(Conversation::Create(engine, config));
+
+            nb::object py_conversation = nb::cast(std::move(conversation));
+            py_conversation.attr("_tool_map") = py_tool_map;
+            if (tools.is_none()) {
+              py_conversation.attr("tools") = nb::list();
+            } else {
+              py_conversation.attr("tools") = tools;
+            }
+            return py_conversation;
+          },
+          nb::arg("tools") = nb::none());
 
   nb::class_<Conversation>(module, "Conversation", nb::dynamic_attr())
       // Support for Python context managers (with statement).
@@ -402,30 +471,113 @@ NB_MODULE(litert_lm_ext, module) {
       .def("cancel_process", &Conversation::CancelProcess)
       .def(
           "send_message",
-          [](Conversation& self, const nb::handle& message) {
-            nlohmann::json json_message = ParseJsonMessage(message);
-            absl::StatusOr<Message> result = self.SendMessage(json_message);
-            Message message_variant = VALUE_OR_THROW(std::move(result));
+          [](nb::object self, const nb::handle& message) {
+            Conversation& conversation = nb::cast<Conversation&>(self);
+            nlohmann::json current_message = ParseJsonMessage(message);
 
-            if (!std::holds_alternative<JsonMessage>(message_variant)) {
-              throw std::runtime_error(
-                  "SendMessage did not return a JsonMessage.");
+            nb::dict tool_map;
+            if (nb::hasattr(self, "_tool_map")) {
+              tool_map = nb::cast<nb::dict>(self.attr("_tool_map"));
             }
 
-            return static_cast<nlohmann::json>(
-                std::get<JsonMessage>(message_variant));
+            for (int i = 0; i < 25; ++i) {
+              absl::StatusOr<Message> result =
+                  conversation.SendMessage(current_message);
+              Message message_variant = VALUE_OR_THROW(std::move(result));
+
+              if (!std::holds_alternative<JsonMessage>(message_variant)) {
+                throw std::runtime_error(
+                    "SendMessage did not return a JsonMessage.");
+              }
+
+              nlohmann::json response = std::get<JsonMessage>(message_variant);
+
+              if (response.contains("tool_calls") &&
+                  !response["tool_calls"].empty()) {
+                current_message = HandleToolCalls(response, tool_map);
+              } else {
+                return response;
+              }
+            }
+            throw std::runtime_error(
+                "Exceeded recurring tool call limit of 25");
           },
           nb::arg("message"))
       .def(
           "send_message_async",
-          [](Conversation& self, const nb::handle& message) {
+          [](nb::object self, const nb::handle& message) {
+            Conversation& conversation = nb::cast<Conversation&>(self);
             nlohmann::json json_message = ParseJsonMessage(message);
             auto iterator = std::make_shared<MessageIterator>();
 
-            absl::Status status = self.SendMessageAsync(
-                json_message, [iterator](absl::StatusOr<Message> message) {
+            nb::dict tool_map;
+            if (nb::hasattr(self, "_tool_map")) {
+              tool_map = nb::cast<nb::dict>(self.attr("_tool_map"));
+            }
+
+            struct AsyncState {
+              int tool_call_count = 0;
+              nlohmann::json pending_tool_response = nullptr;
+            };
+            auto state = std::make_shared<AsyncState>();
+
+            struct Callback {
+              nb::object self;
+              std::shared_ptr<MessageIterator> iterator;
+              nb::dict tool_map;
+              std::shared_ptr<AsyncState> state;
+
+              void operator()(absl::StatusOr<Message> message) const {
+                if (!message.ok()) {
                   iterator->Push(std::move(message));
-                });
+                  return;
+                }
+
+                if (!std::holds_alternative<JsonMessage>(*message)) {
+                  iterator->Push(absl::InternalError(
+                      "SendMessageAsync did not return a JsonMessage."));
+                  return;
+                }
+
+                auto& json_msg = std::get<JsonMessage>(*message);
+
+                if (json_msg.contains("tool_calls") &&
+                    !json_msg["tool_calls"].empty()) {
+                  nb::gil_scoped_acquire acquire;
+                  state->pending_tool_response =
+                      HandleToolCalls(json_msg, tool_map);
+                }
+
+                if (json_msg.contains("content")) {
+                  iterator->Push(std::move(message));
+                } else if (json_msg.empty()) {
+                  if (state->pending_tool_response != nullptr) {
+                    if (state->tool_call_count >= 25) {
+                      iterator->Push(absl::InternalError(
+                          "Exceeded recurring tool call limit of 25"));
+                      return;
+                    }
+                    state->tool_call_count++;
+                    nlohmann::json next_message =
+                        std::move(state->pending_tool_response);
+                    state->pending_tool_response = nullptr;
+
+                    nb::gil_scoped_acquire acquire;
+                    Conversation& conv = nb::cast<Conversation&>(self);
+                    absl::Status status =
+                        conv.SendMessageAsync(next_message, *this);
+                    if (!status.ok()) {
+                      iterator->Push(status);
+                    }
+                  } else {
+                    iterator->Push(std::move(message));
+                  }
+                }
+              }
+            };
+
+            absl::Status status = conversation.SendMessageAsync(
+                json_message, Callback{self, iterator, tool_map, state});
 
             if (!status.ok()) {
               std::stringstream error_msg_stream;
@@ -435,7 +587,6 @@ NB_MODULE(litert_lm_ext, module) {
             return iterator;
           },
           nb::arg("message"));
-
   // Expose the MessageIterator to Python so that it can be used in a
   // standard `for chunk in stream:` loop. We bind Python's iterator protocol
   // (__iter__ and __next__) to our C++ implementation.

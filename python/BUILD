@@ -23,6 +23,11 @@ pytype_strict_library(
     srcs = ["interfaces.py"],
 )
 
+pytype_strict_library(
+    name = "tools",
+    srcs = ["tools.py"],
+)
+
 pybind_extension(
     name = "litert_lm_ext",
     srcs = ["litert_lm.cc"],
@@ -39,7 +44,6 @@ pybind_extension(
         "//runtime/engine:engine_factory",
         "//runtime/engine:engine_impl_selected",  # buildcleaner: keep
         "//runtime/engine:engine_interface",
-        "//runtime/engine:engine_settings",
         "@litert//tflite:minimal_logging",
         "@litert//tflite/core/c:private_c_api_types",
     ],

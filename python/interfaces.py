@@ -58,15 +58,30 @@ class AbstractEngine(abc.ABC):
     del exc_type, exc_val, exc_tb
 
   @abc.abstractmethod
-  def create_conversation(self) -> AbstractConversation:
+  def create_conversation(
+      self,
+      tools: (
+          collections.abc.Sequence[collections.abc.Callable[..., Any]] | None
+      ) = None,
+  ) -> AbstractConversation:
     """Creates a new conversation for this engine."""
 
 
 class AbstractConversation(abc.ABC):
-  """Abstract base class for managing GenAI conversations."""
+  """Abstract base class for managing LiteRT-LM conversations."""
 
-  def __init__(self):
-    """Initializes the instance."""
+  def __init__(
+      self,
+      tools: (
+          collections.abc.Sequence[collections.abc.Callable[..., Any]] | None
+      ) = None,
+  ):
+    """Initializes the instance.
+
+    Args:
+        tools: A list of Python functions to be used as tools.
+    """
+    self.tools = tools or []
 
   def __enter__(self) -> AbstractConversation:
     """Initializes the conversation."""
