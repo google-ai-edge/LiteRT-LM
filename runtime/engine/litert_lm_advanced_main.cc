@@ -30,13 +30,10 @@
 #include <string>
 #include <vector>
 
-#include "absl/base/log_severity.h"  // from @com_google_absl
 #include "absl/flags/flag.h"  // from @com_google_absl
-#include "absl/flags/marshalling.h"  // from @com_google_absl
 #include "absl/flags/parse.h"  // from @com_google_absl
 #include "absl/log/absl_check.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
-#include "absl/log/globals.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/numbers.h"  // from @com_google_absl
@@ -44,6 +41,7 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "runtime/engine/litert_lm_lib.h"
 #include "runtime/engine/shared_flags.h"
+#include "runtime/executor/executor_settings_base.h"
 #include "runtime/util/status_macros.h"
 
 ABSL_FLAG(std::string, backend, "cpu",
@@ -128,8 +126,8 @@ absl::Status MainHelper(int argc, char** argv) {
            "[--benchmark_prefill_tokens=<num_prefill_tokens>] "
            "[--benchmark_decode_tokens=<num_decode_tokens>] "
            "[--async=<true|false>] [--force_f32=<true|false] "
-           "[--report_peak_memory_footprint] [--multi_turns=<true|false>] "
-           "[--num_cpu_threads=<num_cpu_threads>] "
+           "[--force_f32_16=<true|false>] [--report_peak_memory_footprint] "
+           "[--multi_turns=<true|false>] [--num_cpu_threads=<num_cpu_threads>] "
            "[--gpu_external_tensor_mode=<true|false>] "
            "[--configure_magic_numbers=<true|false>] "
            "[--verify_magic_numbers=<true|false>] "
@@ -186,7 +184,11 @@ absl::Status MainHelper(int argc, char** argv) {
   settings.async = absl::GetFlag(FLAGS_async);
   settings.report_peak_memory_footprint =
       absl::GetFlag(FLAGS_report_peak_memory_footprint);
-  settings.force_f32 = absl::GetFlag(FLAGS_force_f32);
+  if (absl::GetFlag(FLAGS_force_f32)) {
+    settings.precision = litert::lm::ActivationDataType::FLOAT32;
+  } else if (absl::GetFlag(FLAGS_force_f32_16)) {
+    settings.precision = litert::lm::ActivationDataType::FLOAT32_16;
+  }
   settings.multi_turns = absl::GetFlag(FLAGS_multi_turns);
   settings.num_cpu_threads = absl::GetFlag(FLAGS_num_cpu_threads);
   settings.gpu_external_tensor_mode =

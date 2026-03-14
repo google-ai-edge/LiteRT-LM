@@ -41,6 +41,7 @@ ABSL_DECLARE_FLAG(int, benchmark_decode_tokens);
 ABSL_DECLARE_FLAG(bool, async);
 ABSL_DECLARE_FLAG(bool, report_peak_memory_footprint);
 ABSL_DECLARE_FLAG(bool, force_f32);
+ABSL_DECLARE_FLAG(bool, force_f32_16);
 ABSL_DECLARE_FLAG(bool, multi_turns);
 ABSL_DECLARE_FLAG(int, num_cpu_threads);
 ABSL_DECLARE_FLAG(bool, gpu_external_tensor_mode);

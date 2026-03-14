@@ -171,9 +171,7 @@ cc_library(
     name = "shared_flags",
     srcs = ["shared_flags.cc"],
     hdrs = ["shared_flags.h"],
-    deps = [
-        "@com_google_absl//absl/flags:flag",
-    ],
+    deps = ["@com_google_absl//absl/flags:flag"],
     alwayslink = 1,
 )
 

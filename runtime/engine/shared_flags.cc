@@ -68,6 +68,9 @@ ABSL_FLAG(bool, report_peak_memory_footprint, false,
           "Report peak memory footprint.");
 ABSL_FLAG(bool, force_f32, false,
           "Force float 32 precision for the activation data type.");
+ABSL_FLAG(bool, force_f32_16, false,
+          "Force float 32_16 precision for the activation data type. "
+          "Meaningful only when --force_f32 is false.");
 ABSL_FLAG(bool, multi_turns, false,
           "If true, the command line will ask for multi-turns input.");
 ABSL_FLAG(int, num_cpu_threads, 0,

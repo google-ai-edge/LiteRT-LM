@@ -29,6 +29,7 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "runtime/engine/io_types.h"
+#include "runtime/executor/executor_settings_base.h"
 
 namespace litert {
 namespace lm {
@@ -81,7 +82,7 @@ struct LiteRtLmSettings {
   int benchmark_decode_tokens = 0;
   bool async = true;
   bool report_peak_memory_footprint = false;
-  bool force_f32 = false;
+  std::optional<ActivationDataType> precision;
   bool multi_turns = false;
   int num_cpu_threads = 0;
   // Set external tensor mode false by default since it runs slightly faster

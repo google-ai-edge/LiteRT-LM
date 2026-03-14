@@ -148,16 +148,16 @@ absl::StatusOr<EngineSettings> CreateEngineSettings(
     engine_settings.GetMutableMainExecutorSettings().SetMaxNumTokens(
         settings.max_num_tokens);
   }
-  if (settings.force_f32) {
+  if (settings.precision.has_value()) {
     engine_settings.GetMutableMainExecutorSettings().SetActivationDataType(
-        litert::lm::ActivationDataType::FLOAT32);
+        *settings.precision);
     if (settings.vision_backend.has_value()) {
       engine_settings.GetMutableVisionExecutorSettings()->SetActivationDataType(
-          litert::lm::ActivationDataType::FLOAT32);
+          *settings.precision);
     }
     if (settings.audio_backend.has_value()) {
       engine_settings.GetMutableAudioExecutorSettings()->SetActivationDataType(
-          litert::lm::ActivationDataType::FLOAT32);
+          *settings.precision);
     }
   }
   if (settings.disable_cache) {

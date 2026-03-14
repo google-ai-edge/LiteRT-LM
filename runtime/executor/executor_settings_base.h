@@ -64,6 +64,11 @@ enum class ActivationDataType {
   // Use float16 as the activation data type.
   FLOAT16,
 
+  // Use float16 as the activation data type.
+  // Use float32 for some cases where float32 is needed, e.g. accumulation in
+  // convolutions.
+  FLOAT32_16,
+
   // Use int16 as the activation data type.
   INT16,
 
