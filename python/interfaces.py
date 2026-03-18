@@ -33,6 +33,37 @@ class Backend(enum.Enum):
   NPU = 6
 
 
+class ToolEventHandler(abc.ABC):
+  """Handler for tool call and tool response events."""
+
+  @abc.abstractmethod
+  def approve_tool_call(self, tool_call: dict[str, Any]) -> bool:
+    """Handles a tool call.
+
+    Args:
+        tool_call: The tool call JSON, including the tool name and args.
+
+    Returns:
+        True to allow the tool call, False to disallow.
+    """
+
+  @abc.abstractmethod
+  def process_tool_response(
+      self, tool_response: dict[str, Any]
+  ) -> dict[str, Any]:
+    """Handles a tool response.
+
+    This allows the user to clean up or modify the response before it is sent
+    to the model (e.g., stripping away sensitive content).
+
+    Args:
+        tool_response: The tool response.
+
+    Returns:
+        The tool response that will be sent to the model.
+    """
+
+
 @dataclasses.dataclass(kw_only=True)
 class AbstractEngine(abc.ABC):
   """Abstract base class for LiteRT-LM engines.
@@ -67,6 +98,7 @@ class AbstractEngine(abc.ABC):
       tools: (
           collections.abc.Sequence[collections.abc.Callable[..., Any]] | None
       ) = None,
+      tool_event_handler: ToolEventHandler | None = None,
   ) -> AbstractConversation:
     """Creates a new conversation for this engine.
 
@@ -74,6 +106,7 @@ class AbstractEngine(abc.ABC):
         messages: A sequence of messages for the conversation preface. Each
           message is a mapping that should contain 'role' and 'content' keys.
         tools: A list of Python functions to be used as tools.
+        tool_event_handler: A handler for tool call and tool response events.
     """
 
 
@@ -83,6 +116,7 @@ class AbstractConversation(abc.ABC):
   Attributes:
       messages: A sequence of messages for the conversation preface.
       tools: A list of Python functions to be used as tools.
+      tool_event_handler: A handler for tool call and tool response events.
   """
 
   def __init__(
@@ -94,6 +128,7 @@ class AbstractConversation(abc.ABC):
       tools: (
           collections.abc.Sequence[collections.abc.Callable[..., Any]] | None
       ) = None,
+      tool_event_handler: ToolEventHandler | None = None,
   ):
     """Initializes the instance.
 
@@ -101,9 +136,11 @@ class AbstractConversation(abc.ABC):
         messages: A sequence of messages for the conversation preface. Each
           message is a mapping that should contain 'role' and 'content' keys.
         tools: A list of Python functions to be used as tools.
+        tool_event_handler: A handler for tool call and tool response events.
     """
     self.messages = messages or []
     self.tools = tools or []
+    self.tool_event_handler = tool_event_handler
 
   def __enter__(self) -> AbstractConversation:
     """Initializes the conversation."""
