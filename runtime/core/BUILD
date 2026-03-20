@@ -37,6 +37,7 @@ package_group(
         "//c/...",
         "//python/...",
         # for SpeechProcessor
+        # for AI Edge Hub
     ],
 )
 
