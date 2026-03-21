@@ -39,6 +39,7 @@
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/llm_executor_settings.h"
+#include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/proto/sampler_params.pb.h"
 #include "tflite/logger.h"  // from @litert
 #include "tflite/minimal_logging.h"  // from @litert
@@ -389,7 +390,7 @@ LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeSetMinLogSeverity)(
 LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateEngine)(
     JNIEnv* env, jclass thiz, jstring model_path, jstring backend,
     jstring vision_backend, jstring audio_backend, jint max_num_tokens,
-    jstring cache_dir, jboolean enable_benchmark,
+    jstring cache_dir, jstring llm_meta_data, jboolean enable_benchmark,
     jstring main_npu_native_library_dir, jstring vision_npu_native_library_dir,
     jstring audio_npu_native_library_dir, jint main_backend_num_threads,
     jint audio_backend_num_threads) {
@@ -475,6 +476,19 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateEngine)(
     if (audio_backend_optional.has_value()) {
       settings->GetMutableAudioExecutorSettings()->SetCacheDir(cache_dir_str);
     }
+  }
+
+  const char* llm_meta_data_chars =
+      env->GetStringUTFChars(llm_meta_data, nullptr);
+  std::string llm_meta_data_str(llm_meta_data_chars);
+  env->ReleaseStringUTFChars(llm_meta_data, llm_meta_data_chars);
+  if (!llm_meta_data_str.empty()) {
+    litert::lm::proto::LlmMetadata llm_metadata;
+    if (!llm_metadata.ParseFromString(llm_meta_data_str)) {
+      ThrowLiteRtLmJniException(env, "Failed to parse llmMetaData textproto.");
+      return 0;
+    }
+    settings->GetMutableLlmMetadata().CopyFrom(llm_metadata);
   }
 
   const char* main_npu_native_library_dir_chars =

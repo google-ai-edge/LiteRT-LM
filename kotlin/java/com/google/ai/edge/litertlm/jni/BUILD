@@ -43,6 +43,7 @@ cc_binary(
         "//runtime/engine:io_types",
         "//runtime/executor:executor_settings_base",
         "//runtime/executor:llm_executor_settings",
+        "//runtime/proto:llm_metadata_cc_proto",
         "//runtime/proto:sampler_params_cc_proto",
         "@litert//tflite:minimal_logging",
     ] + select({

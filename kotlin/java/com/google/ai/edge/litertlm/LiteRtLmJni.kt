@@ -53,6 +53,7 @@ internal object LiteRtLmJni {
     audioBackend: String,
     maxNumTokens: Int,
     cacheDir: String,
+    llmMetaData: String,
     enableBenchmark: Boolean,
     mainNpuNativeLibraryDir: String,
     visionNpuNativeLibraryDir: String,

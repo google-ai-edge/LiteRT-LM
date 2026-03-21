@@ -78,6 +78,7 @@ class Engine(val engineConfig: EngineConfig) : AutoCloseable {
           // convert the null value to -1 to avoid passing nullable object in JNI.
           engineConfig.maxNumTokens ?: -1,
           engineConfig.cacheDir ?: "",
+          engineConfig.llmMetaData ?: "",
           @OptIn(ExperimentalApi::class) ExperimentalFlags.enableBenchmark,
           (engineConfig.backend as? Backend.NPU)?.getNativeLibraryDir() ?: "",
           (engineConfig.visionBackend as? Backend.NPU)?.getNativeLibraryDir() ?: "",

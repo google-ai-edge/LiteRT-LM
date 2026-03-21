@@ -64,6 +64,8 @@ internal fun Backend.NPU.getNativeLibraryDir(): String {
  * @property cacheDir The directory for placing cache files. It should be a directory with write
  *   access. If not set, it uses the directory of the [modelPath]. Set to ":nocache" to disable
  *   caching at all.
+ * @property llmMetaData Optional: A string in textproto format (LlmMetadata) to override the
+ *   model's existing metadata. If not set, the model's default metadata is used.
  */
 data class EngineConfig(
   val modelPath: String,
@@ -72,6 +74,7 @@ data class EngineConfig(
   val audioBackend: Backend? = null,
   val maxNumTokens: Int? = null,
   val cacheDir: String? = null,
+  val llmMetaData: String? = null,
 ) {
   init {
     require(maxNumTokens == null || maxNumTokens > 0) {
