@@ -101,6 +101,9 @@ std::ostream& operator<<(std::ostream& os, const AdvancedSettings& settings) {
   } else {
     os << "gpu_context_low_priority: Not set\n";
   }
+  os << "enable_litert_dump: " << settings.enable_litert_dump << "\n";
+  os << "enable_prefill_performance_logging: "
+     << settings.enable_prefill_performance_logging << "\n";
   return os;
 }
 

@@ -305,6 +305,7 @@ cc_test(
 cc_library(
     name = "scoped_file",
     hdrs = ["scoped_file.h"],
+    visibility = ["//visibility:public"],
     deps = [
         "@litert//litert/cc/internal:scoped_file",
     ],

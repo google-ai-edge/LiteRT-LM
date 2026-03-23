@@ -25,6 +25,7 @@
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_layout.h"  // from @litert
@@ -576,6 +577,26 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
                        BuildLiteRtCompiledModelResources(*model_assets));
   ASSERT_NE(model_resources, nullptr);
   ASSERT_OK(model_resources->GetTFLiteModel(ModelType::kTfLitePrefillDecode));
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     WrapOrCreateTensorBufferFromHostMemory_SizeMismatch) {
+  auto tensor_type = MakeRankedTensorType<float>({1, 1536});
+  std::vector<float> host_data(2560, 0.0f);
+  absl::Span<float> host_span = absl::MakeSpan(host_data);
+
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto maybe_wrapped,
+      WrapOrCreateTensorBufferFromHostMemory(tensor_type, host_span));
+
+  // The behavior depends on whether the underlying runtime allows wrapping
+  // mismatched sizes. If it fails, it should return a non-wrapped managed
+  // buffer.
+  if (!maybe_wrapped.wrapped) {
+    LITERT_ASSERT_OK_AND_ASSIGN(auto packed_size,
+                                maybe_wrapped.buffer.PackedSize());
+    EXPECT_EQ(packed_size, 1536 * sizeof(float));
+  }
 }
 
 }  // namespace

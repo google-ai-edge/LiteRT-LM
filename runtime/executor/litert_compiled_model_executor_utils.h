@@ -28,6 +28,7 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_model.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/proto/sampler_params.pb.h"
@@ -70,7 +71,7 @@ struct ModelSignatures {
 };
 
 // Get the corresponding ModelSignatures struct for the given model using
-// the signature runner. Returns an error if the the runner's signature does not
+// the signature runner. Returns an error if the runner's signature does not
 // match any of the predefined signature set.
 // For now, we should use decode runner, since it contains all input and output
 // signatures of the model.
@@ -131,10 +132,51 @@ absl::Status FillAttentionMask(::litert::TensorBuffer& mask, int start_timestep,
 absl::Status FillSingleBufferCacheParamTensor(
     ::litert::TensorBuffer& param_tensor, int start_index, int update_length);
 
-// Builds the model resources from the model_path for compiled model only.
-// Supports .task and .litertlm formats.
+class EmbeddingLookupManager;
+
 absl::StatusOr<std::unique_ptr<ModelResources>>
 BuildLiteRtCompiledModelResources(const ModelAssets& model_assets);
+
+// Computes token embeddings using the given lookup managers.
+absl::Status GenericComputeTokenEmbeddings(
+    const TensorBuffer& input_tokens, absl::Span<float> output_embeddings,
+    absl::Span<float> output_ple_embeddings,
+    EmbeddingLookupManager* embedding_lookup_manager,
+    EmbeddingLookupManager* per_layer_embedding_lookup_manager);
+
+struct MaybeWrappedTensorBuffer {
+  TensorBuffer buffer;
+  bool wrapped;
+};
+
+// Generic helper to compute token embeddings using the embedding lookup
+// managers. This should be used by all LiteRT compiled model executors to
+// ensure consistent implementation.
+absl::Status GenericComputeTokenEmbeddings(
+    const TensorBuffer& input_tokens, absl::Span<float> output_embeddings,
+    absl::Span<float> output_ple_embeddings,
+    EmbeddingLookupManager* embedding_lookup,
+    EmbeddingLookupManager* per_layer_embedding_lookup);
+
+template <typename T>
+absl::StatusOr<MaybeWrappedTensorBuffer> WrapOrCreateTensorBufferFromHostMemory(
+    RankedTensorType tensor_type, absl::Span<T> data) {
+  size_t size = data.size() * sizeof(T);
+  // First try to wrap the memory with a TensorBuffer.
+  auto wrapped_buffer =
+      TensorBuffer::CreateFromHostMemory(tensor_type, data.data(), size);
+  if (wrapped_buffer.HasValue()) {
+    return MaybeWrappedTensorBuffer{.buffer = std::move(*wrapped_buffer),
+                                    .wrapped = true};
+  }
+
+  LITERT_ASSIGN_OR_RETURN(const size_t packed_size, tensor_type.Bytes());
+  LITERT_ASSIGN_OR_RETURN(
+      auto new_buffer,
+      TensorBuffer::CreateManagedHostMemory(tensor_type, packed_size));
+  return MaybeWrappedTensorBuffer{.buffer = std::move(new_buffer),
+                                  .wrapped = false};
+}
 
 }  // namespace litert::lm
 

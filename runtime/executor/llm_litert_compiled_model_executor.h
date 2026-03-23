@@ -121,6 +121,8 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
   absl::Status InitializeSampler(
       std::optional<ActivationDataType> logits_data_type = std::nullopt);
 
+  ::litert::Environment* GetEnvironment() const override { return &env_; }
+
   using LogitsDataType = ActivationDataType;
 
   const ProcessedTokens& processed_tokens_for_testing() const {

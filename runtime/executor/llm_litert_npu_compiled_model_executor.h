@@ -71,7 +71,10 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
     uint64_t decode_llm_inference_latency_us = 0;
     uint64_t decode_cache_update_inference_latency_us = 0;
     uint64_t decode_sampling_latency_us = 0;
+    std::string DebugString() const;
   };
+
+  bool ShouldLogPerformance() const;
 
   // Creates an executor from the resources.
   static absl::StatusOr<std::unique_ptr<LlmLiteRtNpuCompiledModelExecutor>>
@@ -99,6 +102,8 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
     return "LiteRT NPU Compiled Model";
   }
 
+  ~LlmLiteRtNpuCompiledModelExecutor() override;
+
   // Gets the current step of the executor.
   // Public API, the return value is the current step that user expects (e.g.
   // users prefill 100 tokens, then they expect the current step to be 100).
@@ -109,6 +114,8 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
   absl::StatusOr<LlmExecutorSettings> GetExecutorSettings() const override {
     return executor_settings_;
   };
+
+  ::litert::Environment* GetEnvironment() const override { return &env_; }
   // Prints the latency stats for the executor.  Intended to be used for
   // profiling.
   LatencyStats GetLatencyStats() const;
@@ -116,7 +123,18 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
   // Resets all of the internal states.
   absl::Status Reset() override;
 
+  absl::Status UseLoRA(std::optional<uint32_t> lora_id) override;
+
+  void SetEmbeddingApiMode(absl::string_view mode) override {
+    is_bulk_embedding_ = (mode == "bulk");
+  }
+
  private:
+  static litert::Expected<litert::Options> CreateLiteRtOptions(
+      const LlmExecutorSettings& settings);
+
+  static litert::Expected<litert::Options> CreateCpuLiteRtOptions();
+
   // Holds the tensor buffer maps for the inference of a precompiled model,
   // both for prefill and decode.
   struct InferenceContext {
@@ -197,25 +215,9 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
       SortedPrefillSignatureMap prefill_signature_map,
       std::optional<std::unique_ptr<EmbeddingLookupManager>>
           embedding_lookup_manager,
-      std::optional<EmbedderPerLayerContext> embedder_per_layer_context)
-      : executor_settings_(std::move(executor_settings)),
-        env_(llm_env),
-        embedder_context_(std::move(embedder_context)),
-        npu_auxiliary_context_(std::move(npu_auxiliary_context)),
-        mask_context_(std::move(mask_context)),
-        rope_context_(std::move(rope_context)),
-        llm_compiled_model_(std::move(llm_compiled_model)),
-        embedding_lookup_manager_(std::move(embedding_lookup_manager)),
-        embedder_per_layer_context_(std::move(embedder_per_layer_context)),
-        llm_inference_context_(std::move(llm_inference_context)),
-        cache_update_inference_context_(
-            std::move(cache_update_inference_context)),
-        prefill_signature_map_(std::move(prefill_signature_map)) {
-    if (embedder_per_layer_context_.has_value()) {
-      latency_stats_.prefill_embedder_per_layer_inference_latency_us = 0;
-      latency_stats_.decode_embedder_per_layer_inference_latency_us = 0;
-    }
-  }
+      std::optional<std::unique_ptr<EmbeddingLookupManager>>
+          per_layer_embedding_lookup_manager,
+      std::optional<EmbedderPerLayerContext> embedder_per_layer_context);
 
  private:
   // Prefill internal implementation, for one prefill call to the Interpreter
@@ -227,7 +229,14 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
   // token and uses the specified 'step' as the current time step.  The
   // logits from the decode step are stored in the 'logits' output buffer of
   // the transformer model when this function returns absl::OkStatus().
-  absl::Status DecodeInternal(int step, std::shared_ptr<TokenData> token);
+  absl::Status DecodeInternal(int step, std::shared_ptr<TokenData> token,
+                              bool run_rope_and_mask = true);
+
+  // Bulk prefill from raw embeddings directly into the Transformer graph.
+  absl::Status PrefillInternalFromEmbeddings(
+      absl::string_view prefill_signature, absl::Span<const float> embeddings,
+      absl::Span<const float> ple_embeddings,
+      absl::Span<const int32_t> seq_positions);
 
   // Creates the context for the embedder model.  Instead of creating new
   // output buffers for the embedder, the context will use the input buffers
@@ -242,7 +251,8 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
       absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
           gemma_prefill_input_buffers,
       absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-          gemma_decode_input_buffers);
+          gemma_decode_input_buffers,
+      const LlmExecutorSettings& settings);
 
   // Creates the context for the embedder per layer model.  Instead of creating
   // new output buffers for the embedder, the context will use the input buffers
@@ -259,11 +269,13 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
       absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
           gemma_prefill_input_buffers,
       absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-          gemma_decode_input_buffers);
+          gemma_decode_input_buffers,
+      const LlmExecutorSettings& settings);
 
   // Creates the context for the NPU auxiliary model.
   static absl::StatusOr<NpuAuxiliaryContext> CreateNpuAuxiliaryContext(
-      ::litert::Environment& env, const litert::Model& npu_auxiliary_model);
+      ::litert::Environment& env, const litert::Model& npu_auxiliary_model,
+      const LlmExecutorSettings& settings);
 
   // Creates the context for the mask model.  Instead of creating new
   // output buffers for the mask model, the context will use the input buffers
@@ -370,6 +382,8 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
   ::litert::CompiledModel llm_compiled_model_;
   std::optional<std::unique_ptr<EmbeddingLookupManager>>
       embedding_lookup_manager_;
+  std::optional<std::unique_ptr<EmbeddingLookupManager>>
+      per_layer_embedding_lookup_manager_;
   std::optional<EmbedderPerLayerContext> embedder_per_layer_context_;
   InferenceContext llm_inference_context_;
   InferenceContext cache_update_inference_context_;
@@ -384,9 +398,17 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
   // Internal timestep.
   int current_step_ = 0;
 
+  bool is_bulk_embedding_ = false;
+
+  // Logits quantization parameters.
+  float logits_scale_ = 1.0f;
+  int32_t logits_zero_point_ = 0;
+
   // The processed tokens.  This is also used to store the pending input token
   // for next prefill or decode steps.
   litert::lm::ProcessedTokens processed_tokens_;
+
+  bool ShouldDump() const;
 };
 
 }  // namespace litert::lm

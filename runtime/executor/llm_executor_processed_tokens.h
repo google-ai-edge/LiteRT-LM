@@ -105,7 +105,7 @@ class ProcessedTokens {
   StepAndToken GetNextUnprocessedToken() const;
 
   // Appends the given tokens to the list of processed tokens.
-  void AddProcessedTokens(const std::vector<int>& token_ids);
+  void AddProcessedTokens(absl::Span<const int> token_ids);
 
   // Add token (or tokens during Decode) as "pending" input token(s), which
   // indicates that the token has not yet been processed by the LLM, but is part

@@ -20,6 +20,7 @@
 
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "litert/cc/litert_tensor_buffer.h"  // from @litert
 
 namespace litert::lm::executor::utils {
 
@@ -35,6 +36,12 @@ namespace litert::lm::executor::utils {
 absl::Status ExpandBuffer(const uint8_t* src_data,
                           absl::Span<const int> src_shape, uint8_t* dst_data,
                           absl::Span<const int> dst_shape, size_t element_size);
+
+// Copy from source buffer to destination buffer with offset and size. This
+// is used by multiple executor implementations to avoid code duplication.
+absl::Status CopyBuffer(const TensorBuffer& src_buffer,
+                        TensorBuffer& dst_buffer, size_t src_offset = 0,
+                        size_t dst_offset = 0, int64_t size = -1);
 
 }  // namespace litert::lm::executor::utils
 

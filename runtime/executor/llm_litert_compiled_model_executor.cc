@@ -15,7 +15,6 @@
 #include "runtime/executor/llm_litert_compiled_model_executor.h"
 
 #include <algorithm>
-#include <atomic>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>  // NOLINT(build/c++17) for std::filesystem::path
@@ -45,6 +44,7 @@
 #include "litert/cc/litert_layout.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
+#include "litert/cc/litert_model_types.h"  // from @litert
 #include "litert/cc/litert_options.h"  // from @litert
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
@@ -351,83 +351,11 @@ absl::StatusOr<TensorBuffer> ResizeKVCacheTensorBuffer(
   return new_tensor_buffer;
 }
 
-absl::Status CopyBuffer(const TensorBuffer& src_buffer,
-                        TensorBuffer& dst_buffer, size_t src_offset = 0,
-                        size_t dst_offset = 0, int64_t size = -1) {
-  LITERT_ASSIGN_OR_RETURN(auto src_buffer_size, src_buffer.PackedSize());
-  LITERT_ASSIGN_OR_RETURN(auto dst_buffer_size, dst_buffer.PackedSize());
-  if (size == -1) {
-    size = src_buffer_size - src_offset;
-  }
-  LITERT_RETURN_IF_ERROR(src_offset + size <= src_buffer_size);
-  LITERT_RETURN_IF_ERROR(dst_offset + size <= dst_buffer_size);
-
-  // TODO: b/452977992: For GPU, we could use a shader to copy the buffer. If we
-  // were to do it this way for GPU, then it might make more sense just to keep
-  // the copy on the host. Also for GPU, consider optionally keeping its buffer
-  // copies in CPU memory to save on GPU memory.
-  LITERT_ASSIGN_OR_RETURN(auto src_read_lock,
-                          TensorBufferScopedLock::Create(
-                              src_buffer, TensorBuffer::LockMode::kRead));
-  LITERT_ASSIGN_OR_RETURN(auto dst_write_lock,
-                          TensorBufferScopedLock::Create(
-                              dst_buffer, TensorBuffer::LockMode::kWrite));
-
-  memcpy(static_cast<char*>(dst_write_lock.second) + dst_offset,
-         static_cast<const char*>(src_read_lock.second) + src_offset, size);
-  return absl::OkStatus();
-}
+using ::litert::lm::executor::utils::CopyBuffer;
 
 // Builds the output tensor type for the embedding lookup. The output tensor
 // type is the same as the input tensor type, except the first dimension is the
 // number of tokens.
-absl::StatusOr<RankedTensorType> GetEmbeddingLookupOutputTensorType(
-    int num_tokens, const RankedTensorType& output_element_type) {
-  if (num_tokens == 1) {
-    return output_element_type;
-  } else if (num_tokens == 0) {
-    return absl::InvalidArgumentError(
-        "Number of tokens must be greater than 0.");
-  }
-
-  const auto& dims = output_element_type.Layout().Dimensions();
-  if (dims.size() < 3) {
-    return absl::InvalidArgumentError("Tensor type must have rank 3 or more.");
-  }
-  if (dims[0] != 1 || dims[1] != 1) {
-    return absl::InvalidArgumentError(
-        "Element type must have first two dimensions as 1.");
-  }
-  Dimensions embedding_dims(dims.begin(), dims.end());
-  embedding_dims[1] = num_tokens;
-  return RankedTensorType(output_element_type.ElementType(),
-                          Layout(std::move(embedding_dims)));
-}
-
-struct MaybeWrappedTensorBuffer {
-  TensorBuffer buffer;
-  bool wrapped;
-};
-
-template <typename T>
-absl::StatusOr<MaybeWrappedTensorBuffer> WrapOrCreateTensorBufferFromHostMemory(
-    RankedTensorType tensor_type, absl::Span<T> data) {
-  size_t size = data.size() * sizeof(T);
-  // First try to wrap the memory with a TensorBuffer.
-  auto wrapped_buffer =
-      TensorBuffer::CreateFromHostMemory(tensor_type, data.data(), size);
-  if (wrapped_buffer.HasValue()) {
-    return MaybeWrappedTensorBuffer{.buffer = std::move(*wrapped_buffer),
-                                    .wrapped = true};
-  }
-
-  LITERT_ASSIGN_OR_RETURN(
-      auto new_buffer,
-      TensorBuffer::CreateManagedHostMemory(tensor_type, size));
-  return MaybeWrappedTensorBuffer{.buffer = std::move(new_buffer),
-                                  .wrapped = false};
-}
-
 // Returns a subspan of the given span for a chunk at the given index.
 template <typename T>
 absl::Span<const T> GetSpanForChunk(absl::Span<T> span, int num_chunks,
@@ -859,18 +787,21 @@ LlmLiteRtCompiledModelExecutorBase::GetTokenToDecode(
     const ExecutorInputs& inputs) {
   RETURN_IF_ERROR(RollBackProcessedTokens());
 
-  if (inputs.GetTextDataPtr().ok()) {
-    auto input_tensor_size = (*inputs.GetTextTokenIdsPtr())->PackedSize();
-    if (input_tensor_size && *input_tensor_size != 0) {
+  if (auto text_token_ids_or = inputs.GetTextTokenIdsPtr();
+      text_token_ids_or.ok()) {
+    const auto* text_token_ids_ptr = text_token_ids_or.value();
+    auto input_tensor_size_or = text_token_ids_ptr->PackedSize();
+    if (input_tensor_size_or.HasValue() && *input_tensor_size_or != 0) {
+      int32_t input_tensor_size = *input_tensor_size_or;
       int output_heads = 1;
       if (llm_context_->runtime_config().output_heads.has_value()) {
         output_heads = llm_context_->runtime_config().output_heads.value();
       }
       // Input token ids provided, so use it regardless of whether next input
       // token id is set.
-      RET_CHECK_EQ(*input_tensor_size, output_heads * sizeof(int32_t));
-      LITERT_ASSIGN_OR_RETURN(auto ids, ReferTensorBufferAsSpan<int32_t>(
-                                            *(*inputs.GetTextTokenIdsPtr())));
+      RET_CHECK_EQ(input_tensor_size, output_heads * sizeof(int32_t));
+      LITERT_ASSIGN_OR_RETURN(
+          auto ids, ReferTensorBufferAsSpan<int32_t>(*text_token_ids_ptr));
       if (ids[0] >= 0) {
         // If the input token id is >= 0, it means the input token is provided
         // by the user. In this case, we should invalidate the pending input
@@ -1465,8 +1396,10 @@ absl::Status LlmLiteRtCompiledModelExecutorStatic::Prefill(
   constexpr int kTokenIndexToReduce = 0;
   LITERT_RETURN_IF_ERROR(PrepareFirstPrefillAfterDecode(kTokenIndexToReduce));
 
-  LITERT_ASSIGN_OR_RETURN(auto tensor_type,
-                          (*inputs.GetTextTokenIdsPtr())->TensorType());
+  LITERT_ASSIGN_OR_RETURN(const ::litert::TensorBuffer* id_ptr,
+                          inputs.GetTextTokenIdsPtr());
+  RET_CHECK(id_ptr != nullptr);
+  LITERT_ASSIGN_OR_RETURN(auto tensor_type, id_ptr->TensorType());
   // Accept batch size 1 or output_heads though prefill handles only the
   // first batch element.
   int32_t input_batch_size = tensor_type.Layout().Dimensions()[0];
@@ -1480,8 +1413,7 @@ absl::Status LlmLiteRtCompiledModelExecutorStatic::Prefill(
     RETURN_IF_ERROR(embedding_lookup_->UpdateMultiModalEmbeddings(inputs));
   }
 
-  LITERT_ASSIGN_OR_RETURN(auto ids, ReferTensorBufferAsSpan<int32_t>(
-                                        *(*inputs.GetTextTokenIdsPtr())));
+  LITERT_ASSIGN_OR_RETURN(auto ids, ReferTensorBufferAsSpan<int32_t>(*id_ptr));
   // Reduce the input ids only with one user selected.
   auto input_length = ids.size() / input_batch_size;
   ids = ids.subspan(kTokenIndexToReduce * input_length, input_length);
@@ -1535,7 +1467,7 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
                    resources.GetTFLiteModel(ModelType::kTfLitePrefillDecode));
   // For the LlmLiteRtCompiledModelExecutorStatic, ML_DRIFT backend is used by
   // default.
-  // TODO(b/405424188): - Add support for NPU backends.
+  // TODO(b/405424188): Add support for NPU backends.
   LITERT_ASSIGN_OR_RETURN(auto compilation_options, Options::Create());
   std::string cache_path = executor_settings.GetCacheDir();
   auto activation_data_type = ActivationDataType::FLOAT16;
@@ -1669,8 +1601,9 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
       }
 
       // Use NoExternalTensorsMode to get better performance.
-      bool external_tensor_mode =
-          executor_settings.GetBackendConfig<GpuConfig>()->external_tensor_mode;
+      ASSIGN_OR_RETURN(auto gpu_config,
+                       executor_settings.GetBackendConfig<GpuConfig>());
+      bool external_tensor_mode = gpu_config.external_tensor_mode;
       gpu_compilation_options.EnableExternalTensorsMode(external_tensor_mode);
       if (!external_tensor_mode) {
         // This option prevents KVCache handling from being affected by
@@ -1745,15 +1678,17 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
       use_fp16_precision = false;
       LITERT_ASSIGN_OR_RETURN(auto& cpu_compilation_options,
                               compilation_options.GetCpuOptions());
-      const uint32_t num_threads =
-          executor_settings.GetBackendConfig<CpuConfig>()->number_of_threads;
-      cpu_compilation_options.SetNumThreads(num_threads);
+      ASSIGN_OR_RETURN(const auto& cpu_config,
+                       executor_settings.GetBackendConfig<CpuConfig>());
+      cpu_compilation_options.SetNumThreads(cpu_config.number_of_threads);
       auto weight_cache_file =
           executor_settings.GetWeightCacheFile(".xnnpack_cache");
       if (weight_cache_file.ok()) {
         if (std::holds_alternative<std::string>(*weight_cache_file)) {
-          cache_path = std::get<std::string>(*weight_cache_file);
-          cpu_compilation_options.SetXNNPackWeightCachePath(cache_path.c_str());
+          std::string weight_cache_path =
+              std::get<std::string>(*weight_cache_file);
+          cpu_compilation_options.SetXNNPackWeightCachePath(
+              weight_cache_path.c_str());
         } else {
           auto scoped_cache_file =
               std::get<std::shared_ptr<ScopedFile>>(*weight_cache_file);
@@ -1848,7 +1783,7 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
       // For CPU, we will use single buffer for kv cache input and output to
       // improve performance and memory usage.
     } else {
-      // TODO b/444063139 - Support non-kv_cache tensors as prefill outputs.
+      // TODO: b/444063139 - Support non-kv_cache tensors as prefill outputs.
       // This should be done once we have a model that has non-kv_cache tensors
       // as prefill outputs. It should be done in the same place as the prefill
       // inputs are created.
@@ -1981,14 +1916,15 @@ absl::Status LlmLiteRtCompiledModelExecutorDynamic::Prefill(
   // Only accept batch size 1 for now.
   LITERT_RETURN_IF_ERROR(PrepareFirstPrefillAfterDecode(0));
 
-  LITERT_ASSIGN_OR_RETURN(auto tensor_type,
-                          (*inputs.GetTextTokenIdsPtr())->TensorType());
+  LITERT_ASSIGN_OR_RETURN(const ::litert::TensorBuffer* text_token_ids_ptr,
+                          inputs.GetTextTokenIdsPtr());
+  LITERT_ASSIGN_OR_RETURN(auto tensor_type, text_token_ids_ptr->TensorType());
   RET_CHECK_EQ(tensor_type.Layout().Dimensions()[0], 1);
   RET_CHECK_GT(tensor_type.Layout().Dimensions()[1], 0)
       << "Prefill token ids must be non-empty.";
   LITERT_ASSIGN_OR_RETURN(
-      absl::Span<int> ids,
-      ReferTensorBufferAsSpan<int32_t>(*(*inputs.GetTextTokenIdsPtr())));
+      absl::Span<int32_t> ids,
+      ReferTensorBufferAsSpan<int32_t>(*text_token_ids_ptr));
 
   if (prefill_chunk_size_ <= 0) {
     return PrefillInternal(ids, params);

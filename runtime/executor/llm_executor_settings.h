@@ -226,6 +226,13 @@ struct AdvancedSettings {
   // (most OSS models), we would set this flag to true to ensure smooth UI.
   std::optional<bool> gpu_context_low_priority;
 
+  // If true, the executor will dump LiteRT NPU executor internal state
+  // buffers for debugging purpose.
+  bool enable_litert_dump = false;
+
+  // If true, the executor will log performance metrics for each prefill block.
+  bool enable_prefill_performance_logging = false;
+
   bool operator==(const AdvancedSettings& other) const {
     return prefill_batch_sizes == other.prefill_batch_sizes &&
            num_output_candidates == other.num_output_candidates &&
@@ -251,7 +258,10 @@ struct AdvancedSettings {
            allow_src_quantized_fc_conv_ops ==
                other.allow_src_quantized_fc_conv_ops &&
            hint_waiting_for_completion == other.hint_waiting_for_completion &&
-           gpu_context_low_priority == other.gpu_context_low_priority;
+           gpu_context_low_priority == other.gpu_context_low_priority &&
+           enable_litert_dump == other.enable_litert_dump &&
+           enable_prefill_performance_logging ==
+               other.enable_prefill_performance_logging;
   }
 };
 std::ostream& operator<<(std::ostream& os, const AdvancedSettings& settings);

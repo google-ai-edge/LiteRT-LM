@@ -102,21 +102,21 @@ TEST(LlmExecutorConfigTest, Backend) {
 }
 
 TEST(LlmExecutorConfigTest, StringToBackend) {
-  auto backend = GetBackendFromString("cpu_artisan");
-  EXPECT_EQ(*backend, Backend::CPU_ARTISAN);
-  backend = GetBackendFromString("gpu_artisan");
-  EXPECT_EQ(*backend, Backend::GPU_ARTISAN);
-  backend = GetBackendFromString("gpu");
-  EXPECT_EQ(*backend, Backend::GPU);
-  backend = GetBackendFromString("cpu");
-  EXPECT_EQ(*backend, Backend::CPU);
-  backend = GetBackendFromString("google_tensor_artisan");
-  EXPECT_EQ(*backend, Backend::GOOGLE_TENSOR_ARTISAN);
-  backend = GetBackendFromString("npu");
-  EXPECT_EQ(*backend, Backend::NPU);
+  ASSERT_OK_AND_ASSIGN(auto backend, GetBackendFromString("cpu_artisan"));
+  EXPECT_EQ(backend, Backend::CPU_ARTISAN);
+  ASSERT_OK_AND_ASSIGN(backend, GetBackendFromString("gpu_artisan"));
+  EXPECT_EQ(backend, Backend::GPU_ARTISAN);
+  ASSERT_OK_AND_ASSIGN(backend, GetBackendFromString("gpu"));
+  EXPECT_EQ(backend, Backend::GPU);
+  ASSERT_OK_AND_ASSIGN(backend, GetBackendFromString("cpu"));
+  EXPECT_EQ(backend, Backend::CPU);
+  ASSERT_OK_AND_ASSIGN(backend, GetBackendFromString("google_tensor_artisan"));
+  EXPECT_EQ(backend, Backend::GOOGLE_TENSOR_ARTISAN);
+  ASSERT_OK_AND_ASSIGN(backend, GetBackendFromString("npu"));
+  EXPECT_EQ(backend, Backend::NPU);
 }
 
-TEST(LlmExecutorConfigTest, ActivatonDataType) {
+TEST(LlmExecutorConfigTest, ActivationDataType) {
   ActivationDataType act;
   std::stringstream oss;
   act = ActivationDataType::FLOAT32;
@@ -207,16 +207,17 @@ use_submodel: 1
 TEST(LlmExecutorConfigTest, LlmExecutorSettings) {
   auto model_assets = ModelAssets::Create(kPathToModel1);
   ASSERT_OK(model_assets);
-  auto settings = LlmExecutorSettings::CreateDefault(*std::move(model_assets),
-                                                     Backend::GPU_ARTISAN);
-  (*settings).SetBackendConfig(CreateGpuArtisanConfig());
-  (*settings).SetMaxNumTokens(1024);
-  (*settings).SetActivationDataType(ActivationDataType::FLOAT16);
-  (*settings).SetMaxNumImages(1);
-  (*settings).SetCacheDir(std::string(kPathToCache));
+  ASSERT_OK_AND_ASSIGN(auto settings,
+                       LlmExecutorSettings::CreateDefault(
+                           *std::move(model_assets), Backend::GPU_ARTISAN));
+  settings.SetBackendConfig(CreateGpuArtisanConfig());
+  settings.SetMaxNumTokens(1024);
+  settings.SetActivationDataType(ActivationDataType::FLOAT16);
+  settings.SetMaxNumImages(1);
+  settings.SetCacheDir(std::string(kPathToCache));
 
   std::stringstream oss;
-  oss << (*settings);
+  oss << settings;
   const std::string expected_output = absl::StrCat(
       R"(backend: GPU_ARTISAN
 backend_config:
@@ -250,14 +251,15 @@ advanced_settings: Not set
 TEST(LlmExecutorConfigTest, LlmExecutorSettingsWithAdvancedSettings) {
   auto model_assets = ModelAssets::Create(kPathToModel1);
   ASSERT_OK(model_assets);
-  auto settings = LlmExecutorSettings::CreateDefault(*std::move(model_assets),
-                                                     Backend::GPU_ARTISAN);
-  (*settings).SetBackendConfig(CreateGpuArtisanConfig());
-  (*settings).SetMaxNumTokens(1024);
-  (*settings).SetActivationDataType(ActivationDataType::FLOAT16);
-  (*settings).SetMaxNumImages(1);
-  (*settings).SetCacheDir(std::string(kPathToCache));
-  (*settings).SetAdvancedSettings(AdvancedSettings{
+  ASSERT_OK_AND_ASSIGN(auto settings,
+                       LlmExecutorSettings::CreateDefault(
+                           *std::move(model_assets), Backend::GPU_ARTISAN));
+  settings.SetBackendConfig(CreateGpuArtisanConfig());
+  settings.SetMaxNumTokens(1024);
+  settings.SetActivationDataType(ActivationDataType::FLOAT16);
+  settings.SetMaxNumImages(1);
+  settings.SetCacheDir(std::string(kPathToCache));
+  settings.SetAdvancedSettings(AdvancedSettings{
       .prefill_batch_sizes = {128, 256},
       .num_output_candidates = 3,
       .configure_magic_numbers = true,
@@ -280,7 +282,7 @@ TEST(LlmExecutorConfigTest, LlmExecutorSettingsWithAdvancedSettings) {
   });
 
   std::stringstream oss;
-  oss << (*settings);
+  oss << settings;
   const std::string expected_output = absl::StrCat(
       R"(backend: GPU_ARTISAN
 backend_config:
@@ -326,6 +328,8 @@ sampler_handles_input: 0
 allow_src_quantized_fc_conv_ops: 1
 hint_waiting_for_completion: 0
 gpu_context_low_priority: Not set
+enable_litert_dump: 0
+enable_prefill_performance_logging: 0
 
 )");
   EXPECT_EQ(oss.str(), expected_output);
@@ -334,33 +338,33 @@ gpu_context_low_priority: Not set
 TEST(LlmExecutorConfigTest, AdvancedSettingsWithGpuContextLowPriority) {
   auto model_assets = ModelAssets::Create(kPathToModel1);
   ASSERT_OK(model_assets);
-  auto settings = LlmExecutorSettings::CreateDefault(*std::move(model_assets),
-                                                     Backend::GPU_ARTISAN);
-  ASSERT_OK(settings);
-  (*settings).SetAdvancedSettings(AdvancedSettings{
+  ASSERT_OK_AND_ASSIGN(auto settings,
+                       LlmExecutorSettings::CreateDefault(
+                           *std::move(model_assets), Backend::GPU_ARTISAN));
+  settings.SetAdvancedSettings(AdvancedSettings{
       .gpu_context_low_priority = true,
   });
 
   std::stringstream oss;
-  oss << (*settings);
+  oss << settings;
   EXPECT_THAT(oss.str(), ::testing::HasSubstr("gpu_context_low_priority: 1"));
 
-  (*settings).SetAdvancedSettings(AdvancedSettings{
+  settings.SetAdvancedSettings(AdvancedSettings{
       .gpu_context_low_priority = false,
   });
   oss.str("");
-  oss << (*settings);
+  oss << settings;
   EXPECT_THAT(oss.str(), ::testing::HasSubstr("gpu_context_low_priority: 0"));
 }
 
 TEST(GetWeightCacheFileTest, CacheDirAndModelPath) {
   auto model_assets = ModelAssets::Create(kPathToModel1Tflite);
   ASSERT_OK(model_assets);
-  auto settings = LlmExecutorSettings::CreateDefault(*std::move(model_assets));
-  EXPECT_OK(settings);
-  settings->SetCacheDir(std::string(kWeightCachePath));
+  ASSERT_OK_AND_ASSIGN(auto settings, LlmExecutorSettings::CreateDefault(
+                                          *std::move(model_assets)));
+  settings.SetCacheDir(std::string(kWeightCachePath));
 
-  ASSERT_OK_AND_ASSIGN(auto weight_cache_file, settings->GetWeightCacheFile());
+  ASSERT_OK_AND_ASSIGN(auto weight_cache_file, settings.GetWeightCacheFile());
   EXPECT_THAT(weight_cache_file,
               VariantWith<std::string>(std::string(kWeightCachePathFile)));
 }
@@ -368,11 +372,11 @@ TEST(GetWeightCacheFileTest, CacheDirAndModelPath) {
 TEST(GetWeightCacheFileTest, CacheDirHasTrailingSeparator) {
   auto model_assets = ModelAssets::Create(kPathToModel1Tflite);
   ASSERT_OK(model_assets);
-  auto settings = LlmExecutorSettings::CreateDefault(*std::move(model_assets));
-  EXPECT_OK(settings);
-  settings->SetCacheDir(std::string(kWeightCachePathWithSeparator));
+  ASSERT_OK_AND_ASSIGN(auto settings, LlmExecutorSettings::CreateDefault(
+                                          *std::move(model_assets)));
+  settings.SetCacheDir(std::string(kWeightCachePathWithSeparator));
 
-  ASSERT_OK_AND_ASSIGN(auto weight_cache_file, settings->GetWeightCacheFile());
+  ASSERT_OK_AND_ASSIGN(auto weight_cache_file, settings.GetWeightCacheFile());
   EXPECT_THAT(weight_cache_file,
               VariantWith<std::string>(std::string(kWeightCachePathFile)));
 }
@@ -380,12 +384,12 @@ TEST(GetWeightCacheFileTest, CacheDirHasTrailingSeparator) {
 TEST(GetWeightCacheFileTest, CacheDirAndModelPathAndCustomSuffix) {
   auto model_assets = ModelAssets::Create(kPathToModel1Tflite);
   ASSERT_OK(model_assets);
-  auto settings = LlmExecutorSettings::CreateDefault(*std::move(model_assets));
-  EXPECT_OK(settings);
-  settings->SetCacheDir(std::string(kWeightCachePath));
+  ASSERT_OK_AND_ASSIGN(auto settings, LlmExecutorSettings::CreateDefault(
+                                          *std::move(model_assets)));
+  settings.SetCacheDir(std::string(kWeightCachePath));
 
   ASSERT_OK_AND_ASSIGN(auto weight_cache_file,
-                       settings->GetWeightCacheFile(".xnnpack_cache"));
+                       settings.GetWeightCacheFile(".xnnpack_cache"));
   EXPECT_THAT(weight_cache_file, VariantWith<std::string>(
                                      std::string(kWeightCachePathXnnpackFile)));
 }
@@ -393,10 +397,10 @@ TEST(GetWeightCacheFileTest, CacheDirAndModelPathAndCustomSuffix) {
 TEST(LlmExecutorConfigTest, ModelPathOnly) {
   auto model_assets = ModelAssets::Create(kPathToModel1Tflite);
   ASSERT_OK(model_assets);
-  auto settings = LlmExecutorSettings::CreateDefault(*std::move(model_assets));
-  EXPECT_OK(settings);
+  ASSERT_OK_AND_ASSIGN(auto settings, LlmExecutorSettings::CreateDefault(
+                                          *std::move(model_assets)));
 
-  ASSERT_OK_AND_ASSIGN(auto weight_cache_file, settings->GetWeightCacheFile());
+  ASSERT_OK_AND_ASSIGN(auto weight_cache_file, settings.GetWeightCacheFile());
   EXPECT_THAT(weight_cache_file,
               VariantWith<std::string>(std::string(kPathToModel1TfliteCache)));
 }
@@ -404,11 +408,11 @@ TEST(LlmExecutorConfigTest, ModelPathOnly) {
 TEST(GetWeightCacheFileTest, ModelPathAndSuffix) {
   auto model_assets = ModelAssets::Create(kPathToModel1Tflite);
   ASSERT_OK(model_assets);
-  auto settings = LlmExecutorSettings::CreateDefault(*std::move(model_assets));
-  EXPECT_OK(settings);
+  ASSERT_OK_AND_ASSIGN(auto settings, LlmExecutorSettings::CreateDefault(
+                                          *std::move(model_assets)));
 
   ASSERT_OK_AND_ASSIGN(auto weight_cache_file,
-                       settings->GetWeightCacheFile(".custom_suffix"));
+                       settings.GetWeightCacheFile(".custom_suffix"));
   EXPECT_THAT(weight_cache_file,
               VariantWith<std::string>(std::string(kModel1TfliteCustomSuffix)));
 }
@@ -423,12 +427,12 @@ TEST(GetWeightCacheFileTest, PreferScopedCacheFileToCacheDir) {
 
   auto model_assets = ModelAssets::Create(kPathToModel1Tflite);
   ASSERT_OK(model_assets);
-  auto settings = LlmExecutorSettings::CreateDefault(*std::move(model_assets));
-  EXPECT_OK(settings);
-  settings->SetScopedCacheFile(shared_cache_file);
-  settings->SetCacheDir(std::string(kWeightCachePath));
+  ASSERT_OK_AND_ASSIGN(auto settings, LlmExecutorSettings::CreateDefault(
+                                          *std::move(model_assets)));
+  settings.SetScopedCacheFile(shared_cache_file);
+  settings.SetCacheDir(std::string(kWeightCachePath));
 
-  ASSERT_OK_AND_ASSIGN(auto weight_cache_file, settings->GetWeightCacheFile());
+  ASSERT_OK_AND_ASSIGN(auto weight_cache_file, settings.GetWeightCacheFile());
   EXPECT_THAT(weight_cache_file,
               VariantWith<std::shared_ptr<ScopedFile>>(shared_cache_file));
 }
@@ -448,11 +452,11 @@ TEST(GetWeightCacheFileTest, PreferScopedCacheFileToScopedModelFile) {
   auto model_assets =
       ModelAssets::Create(std::make_shared<ScopedFile>(std::move(model_file)));
   ASSERT_OK(model_assets);
-  auto settings = LlmExecutorSettings::CreateDefault(*std::move(model_assets));
-  EXPECT_OK(settings);
-  settings->SetScopedCacheFile(shared_cache_file);
+  ASSERT_OK_AND_ASSIGN(auto settings, LlmExecutorSettings::CreateDefault(
+                                          *std::move(model_assets)));
+  settings.SetScopedCacheFile(shared_cache_file);
 
-  ASSERT_OK_AND_ASSIGN(auto weight_cache_file, settings->GetWeightCacheFile());
+  ASSERT_OK_AND_ASSIGN(auto weight_cache_file, settings.GetWeightCacheFile());
   EXPECT_THAT(weight_cache_file,
               VariantWith<std::shared_ptr<ScopedFile>>(shared_cache_file));
 }
@@ -460,11 +464,11 @@ TEST(GetWeightCacheFileTest, PreferScopedCacheFileToScopedModelFile) {
 TEST(GetWeightCacheFileTest, EmptyModelPath) {
   auto model_assets = ModelAssets::Create("");
   ASSERT_OK(model_assets);
-  auto settings = LlmExecutorSettings::CreateDefault(*std::move(model_assets));
-  EXPECT_OK(settings);
-  settings->SetCacheDir(std::string(kWeightCachePath));
+  ASSERT_OK_AND_ASSIGN(auto settings, LlmExecutorSettings::CreateDefault(
+                                          *std::move(model_assets)));
+  settings.SetCacheDir(std::string(kWeightCachePath));
 
-  EXPECT_THAT(settings->GetWeightCacheFile(".xnnpack_cache"),
+  EXPECT_THAT(settings.GetWeightCacheFile(".xnnpack_cache"),
               StatusIs(kInvalidArgument));
 }
 
@@ -477,69 +481,70 @@ TEST(GetWeightCacheFileTest, CacheDisabled) {
 
   auto model_assets = ModelAssets::Create(kPathToModel1Tflite);
   ASSERT_OK(model_assets);
-  auto settings = LlmExecutorSettings::CreateDefault(*std::move(model_assets));
-  EXPECT_OK(settings);
-  settings->SetCacheDir(":nocache");
+  ASSERT_OK_AND_ASSIGN(auto settings, LlmExecutorSettings::CreateDefault(
+                                          *std::move(model_assets)));
+  settings.SetCacheDir(":nocache");
   // This should be ignored in favor of the explicitly disabled cache dir.
-  settings->SetScopedCacheFile(
+  settings.SetScopedCacheFile(
       std::make_shared<ScopedFile>(std::move(cache_file)));
 
-  EXPECT_THAT(settings->GetWeightCacheFile(), StatusIs(kInvalidArgument));
+  EXPECT_THAT(settings.GetWeightCacheFile(), StatusIs(kInvalidArgument));
 }
 
 TEST(LlmExecutorConfigTest, GetBackendConfig) {
   auto model_assets = ModelAssets::Create(kPathToModel1);
   ASSERT_OK(model_assets);
-  auto settings = LlmExecutorSettings::CreateDefault(*std::move(model_assets),
-                                                     Backend::GPU_ARTISAN);
+  ASSERT_OK_AND_ASSIGN(auto settings,
+                       LlmExecutorSettings::CreateDefault(
+                           *std::move(model_assets), Backend::GPU_ARTISAN));
 
-  (*settings).SetBackendConfig(CreateGpuArtisanConfig());
+  settings.SetBackendConfig(CreateGpuArtisanConfig());
 
-  auto gpu_config = (*settings).GetBackendConfig<GpuArtisanConfig>();
-  EXPECT_OK(gpu_config);
-  EXPECT_EQ(gpu_config->num_output_candidates, 1);
-  EXPECT_TRUE(gpu_config->use_submodel);
+  ASSERT_OK_AND_ASSIGN(auto gpu_config,
+                       settings.GetBackendConfig<GpuArtisanConfig>());
+  EXPECT_EQ(gpu_config.num_output_candidates, 1);
+  EXPECT_TRUE(gpu_config.use_submodel);
 
   // Test setting via MutableBackendConfig
   ASSERT_OK_AND_ASSIGN(auto mutable_gpu_config,
-                       settings->MutableBackendConfig<GpuArtisanConfig>());
+                       settings.MutableBackendConfig<GpuArtisanConfig>());
   mutable_gpu_config.use_submodel = false;
-  settings->SetBackendConfig(mutable_gpu_config);
+  settings.SetBackendConfig(mutable_gpu_config);
   ASSERT_OK_AND_ASSIGN(auto updated_gpu_config,
-                       settings->GetBackendConfig<GpuArtisanConfig>());
+                       settings.GetBackendConfig<GpuArtisanConfig>());
   EXPECT_FALSE(updated_gpu_config.use_submodel);
 
-  EXPECT_THAT((*settings).GetBackendConfig<CpuConfig>(),
+  EXPECT_THAT(settings.GetBackendConfig<CpuConfig>(),
               StatusIs(kInvalidArgument));
 }
 
 TEST(LlmExecutorConfigTest, MutableBackendConfig) {
   auto model_assets = ModelAssets::Create(kPathToModel1);
   ASSERT_OK(model_assets);
-  auto settings = LlmExecutorSettings::CreateDefault(*std::move(model_assets),
-                                                     Backend::GPU_ARTISAN);
-  (*settings).SetBackendConfig(CreateGpuArtisanConfig());
+  ASSERT_OK_AND_ASSIGN(auto settings,
+                       LlmExecutorSettings::CreateDefault(
+                           *std::move(model_assets), Backend::GPU_ARTISAN));
+  settings.SetBackendConfig(CreateGpuArtisanConfig());
 
-  auto gpu_config = (*settings).MutableBackendConfig<GpuArtisanConfig>();
-  EXPECT_OK(gpu_config);
-  gpu_config->num_output_candidates = 2;
-  (*settings).SetBackendConfig(gpu_config.value());
+  ASSERT_OK_AND_ASSIGN(auto gpu_config,
+                       settings.MutableBackendConfig<GpuArtisanConfig>());
+  gpu_config.num_output_candidates = 2;
+  settings.SetBackendConfig(gpu_config);
 
-  auto gpu_config_after_change =
-      (*settings).GetBackendConfig<GpuArtisanConfig>();
-  EXPECT_EQ(gpu_config_after_change->num_output_candidates, 2);
-  EXPECT_THAT((*settings).MutableBackendConfig<CpuConfig>(),
+  ASSERT_OK_AND_ASSIGN(auto gpu_config_after_change,
+                       settings.GetBackendConfig<GpuArtisanConfig>());
+  EXPECT_EQ(gpu_config_after_change.num_output_candidates, 2);
+  EXPECT_THAT(settings.MutableBackendConfig<CpuConfig>(),
               StatusIs(kInvalidArgument));
 }
 
 TEST(LlmExecutorConfigTest, SetSupportedLoraRanks) {
   auto model_assets = ModelAssets::Create(kPathToModel1);
   ASSERT_OK(model_assets);
-  auto settings = LlmExecutorSettings::CreateDefault(*std::move(model_assets),
-                                                     Backend::GPU_ARTISAN,
-                                                     Backend::GPU);
-  ASSERT_OK(settings);
-  EXPECT_EQ((*settings).GetSamplerBackend(), Backend::GPU);
+  ASSERT_OK_AND_ASSIGN(auto settings, LlmExecutorSettings::CreateDefault(
+                                          *std::move(model_assets),
+                                          Backend::GPU_ARTISAN, Backend::GPU));
+  EXPECT_EQ(settings.GetSamplerBackend(), Backend::GPU);
 }
 
 }  // namespace

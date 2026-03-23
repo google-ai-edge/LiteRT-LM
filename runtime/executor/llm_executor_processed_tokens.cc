@@ -22,6 +22,7 @@
 #include "absl/log/absl_check.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 
 namespace litert::lm {
 
@@ -66,7 +67,7 @@ ProcessedTokens::StepAndToken ProcessedTokens::GetNextUnprocessedToken() const {
   return StepAndToken{.step = GetStep(), .token = GetPendingInputToken()};
 }
 
-void ProcessedTokens::AddProcessedTokens(const std::vector<int>& token_ids) {
+void ProcessedTokens::AddProcessedTokens(absl::Span<const int> token_ids) {
   for (auto& t : tokens_) {
     t.token_ids.insert(t.token_ids.end(), token_ids.begin(), token_ids.end());
   }
