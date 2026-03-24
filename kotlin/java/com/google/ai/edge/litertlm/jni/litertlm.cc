@@ -908,6 +908,7 @@ LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeSendMessageAsync)(
   const char* json_chars = env->GetStringUTFChars(messageJSONString, nullptr);
   litert::lm::JsonMessage json_message =
       nlohmann::ordered_json::parse(json_chars);
+  ABSL_LOG(INFO) << "MLOG: json_message: " << json_message.dump();
   env->ReleaseStringUTFChars(messageJSONString, json_chars);
 
   litert::lm::OptionalArgs optional_args;
