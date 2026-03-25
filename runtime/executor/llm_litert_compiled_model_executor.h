@@ -344,6 +344,8 @@ class LlmLiteRtCompiledModelExecutorStatic
   absl::Status Prefill(const ExecutorInputs& inputs,
                        const ExecutorPrefillParams& params) override;
 
+  ::litert::Environment* GetEnvironment() const override { return &env_; }
+
  private:
   LlmLiteRtCompiledModelExecutorStatic(
       LlmExecutorSettings executor_settings, Environment& env,
@@ -404,6 +406,8 @@ class LlmLiteRtCompiledModelExecutorDynamic
 
   absl::Status Prefill(const ExecutorInputs& inputs,
                        const ExecutorPrefillParams& params) override;
+
+  ::litert::Environment* GetEnvironment() const override { return &env_; }
 
  private:
   LlmLiteRtCompiledModelExecutorDynamic(

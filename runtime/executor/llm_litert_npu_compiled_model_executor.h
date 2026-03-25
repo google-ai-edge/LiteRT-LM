@@ -109,6 +109,7 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
   absl::StatusOr<LlmExecutorSettings> GetExecutorSettings() const override {
     return executor_settings_;
   };
+  ::litert::Environment* GetEnvironment() const override { return &env_; }
   // Prints the latency stats for the executor.  Intended to be used for
   // profiling.
   LatencyStats GetLatencyStats() const;

@@ -21,6 +21,8 @@
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "litert/cc/litert_macros.h"  // from @litert
+#include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/util/status_macros.h"
 
 namespace litert::lm {
@@ -103,10 +105,6 @@ absl::Status CopyBuffer(const TensorBuffer& src_buffer,
   LITERT_RETURN_IF_ERROR(src_offset + size <= src_buffer_size);
   LITERT_RETURN_IF_ERROR(dst_offset + size <= dst_buffer_size);
 
-  // TODO: b/452977992: For GPU, we could use a shader to copy the buffer. If we
-  // were to do it this way for GPU, then it might make more sense just to keep
-  // the copy on the host. Also for GPU, consider optionally keeping its buffer
-  // copies in CPU memory to save on GPU memory.
   LITERT_ASSIGN_OR_RETURN(auto src_read_lock,
                           TensorBufferScopedLock::Create(
                               src_buffer, TensorBuffer::LockMode::kRead));
@@ -119,4 +117,4 @@ absl::Status CopyBuffer(const TensorBuffer& src_buffer,
   return absl::OkStatus();
 }
 
-}  // namespace litert::lm
+}  // namespace litert::lm::executor::utils
