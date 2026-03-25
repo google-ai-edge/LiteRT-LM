@@ -354,7 +354,7 @@ class Conversation(
         }
         toolCallCount++
         pendingToolResponseJSONMessage = handleToolCalls(messageJsonObject)
-      } else if (messageJsonObject.has("content")) {
+      } else if (messageJsonObject.has("content") or messageJsonObject.has("channels")) {
         callback.onMessage(jsonToMessage(messageJsonObject))
       }
     }
