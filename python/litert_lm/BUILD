@@ -192,7 +192,7 @@ genrule(
 )
 
 py_package(
-    name = "litert_lm_pkg",
+    name = "package",
     # Explicitly specify packages to avoid including transitively linked shared
     # libraries (like duplicate .so files in _solib_*/...) in the wheel.
     packages = ["python.litert_lm"],
@@ -204,7 +204,7 @@ py_package(
 # $ bazel build \
 #     --repo_env=HERMETIC_PYTHON_VERSION=${PYTHON_VERSION} \
 #     --@rules_python//python/config_settings:python_version=${PYTHON_VERSION} \
-#     -c opt //python/litert_lm:litert_lm_wheel
+#     -c opt //python/litert_lm:wheel
 #
 # To build nightly wheel:
 # $ PYTHON_VERSION=3.10
@@ -214,9 +214,9 @@ py_package(
 #     --@rules_python//python/config_settings:python_version=${PYTHON_VERSION} \
 #     --define=PYPI_NIGHTLY=1 \
 #     --define=PYPI_NIGHTLY_DATE=${DATE} \
-#     -c opt //python/litert_lm:litert_lm_wheel
+#     -c opt //python/litert_lm:wheel
 py_wheel(
-    name = "litert_lm_wheel",
+    name = "wheel",
     abi = select({
         "@rules_python//python/config_settings:is_python_3.10": "cp310",
         "@rules_python//python/config_settings:is_python_3.11": "cp311",
@@ -225,8 +225,8 @@ py_wheel(
         "//conditions:default": "none",
     }),
     distribution = select({
-        ":is_nightly": "litert-lm-nightly",
-        "//conditions:default": "litert-lm",
+        ":is_nightly": "litert-lm-api-nightly",
+        "//conditions:default": "litert-lm-api",
     }),
     platform = select({
         "//build_config:linux_x86_64": "manylinux_2_35_x86_64",
@@ -262,5 +262,5 @@ py_wheel(
         ":is_nightly": VERSION + ".dev$(PYPI_NIGHTLY_DATE)",
         "//conditions:default": VERSION,
     }),
-    deps = [":litert_lm_pkg"],
+    deps = [":package"],
 )

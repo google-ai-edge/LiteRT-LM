@@ -73,17 +73,17 @@ config_setting(
 )
 
 py_package(
-    name = "litert_lm_cli_pkg",
+    name = "package",
     packages = ["python.litert_lm_cli"],
     deps = [":litert-lm"],
 )
 
 py_wheel(
-    name = "litert_lm_cli_wheel",
+    name = "wheel",
     abi = "none",
     distribution = select({
-        ":is_nightly": "litert-lm-cli-nightly",
-        "//conditions:default": "litert-lm-cli",
+        ":is_nightly": "litert-lm-nightly",
+        "//conditions:default": "litert-lm",
     }),
     platform = "any",
     python_tag = "py3",
@@ -110,10 +110,10 @@ py_wheel(
         ],
     },
     requires = select({
-        ":is_nightly": ["litert-lm-nightly"],
-        "//conditions:default": ["litert-lm"],
+        ":is_nightly": ["litert-lm-api-nightly"],
+        "//conditions:default": ["litert-lm-api"],
     }) + [
         "fire",
     ],
-    deps = [":litert_lm_cli_pkg"],
+    deps = [":package"],
 )

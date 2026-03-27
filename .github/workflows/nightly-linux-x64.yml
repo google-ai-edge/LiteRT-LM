@@ -2,6 +2,9 @@ name: "Nightly-Linux-x64"
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches:
+    - main
   schedule:
     - cron: '0 21 * * *'
       timezone: 'America/Los_Angeles'
@@ -25,7 +28,7 @@ jobs:
         # is used to maintain compatibility with Google Colab environments.
         run: |
           PYTHON_VERSION=${{ matrix.python-version }}
-          DATE=$(date +'%Y%m%d')
+          DATE=$(TZ=America/Los_Angeles date +'%Y%m%d2')
           bazel build \
             --repo_env=HERMETIC_PYTHON_VERSION=${PYTHON_VERSION} \
             --@rules_python//python/config_settings:python_version=${PYTHON_VERSION} \
@@ -34,7 +37,7 @@ jobs:
             --define=litert_link_capi_so=true \
             --define=resolve_symbols_in_exec=false \
             --define=xnn_enable_avxvnniint8=false \
-            -c opt //python/litert_lm:litert_lm_wheel
+            -c opt //python/litert_lm:wheel
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
@@ -63,12 +66,12 @@ jobs:
       - name: Build CLI Python Wheel
         if: matrix.python-version == '3.13'
         run: |
-          DATE=$(date +'%Y%m%d')
+          DATE=$(TZ=America/Los_Angeles date +'%Y%m%d2')
           bazel build \
             --define=PYPI_NIGHTLY=1 \
             --define=PYPI_NIGHTLY_DATE=${DATE} \
             --define=xnn_enable_avxvnniint8=false \
-            -c opt //python/litert_lm_cli:litert_lm_cli_wheel
+            -c opt //python/litert_lm_cli:wheel
 
       - name: Test CLI Python Wheel
         if: matrix.python-version == '3.13'
