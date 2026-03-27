@@ -21,19 +21,7 @@ if(CMAKE_VERSION VERSION_LESS "3.25")
     )
 endif()
 
-cmake_minimum_required(VERSION 3.25 FATAL_ERROR)
-project(LiteRT-LM LANGUAGES C CXX)
-
-# --- Global Paths
-set(PROJECT_ROOT ${CMAKE_CURRENT_SOURCE_DIR})
-set(LITERTLM_ROOT_DIR "${PROJECT_ROOT}"
-    CACHE PATH "LiteRT-LM: Root of the LiteRT-LM workspace")
-set(LITERTLM_PACKAGES_DIR "${LITERTLM_ROOT_DIR}/cmake/packages"
-    CACHE PATH "LiteRT-LM: Directory for build packages")
-set(LITERTLM_PATCHES_DIR "${LITERTLM_ROOT_DIR}/cmake/patches"
-    CACHE PATH "LiteRT-LM: Directory for build patches")
-set(LITERTLM_MODULES_DIR "${LITERTLM_ROOT_DIR}/cmake/modules"
-    CACHE PATH "LiteRT-LM: Modules path, appended to CMAKE_MODULE_PATH")
+cmakiteRT-LM: Modules path, appended to CMAKE_MODULE_PATH")
 set(LITERTLM_SCRIPTS_DIR "${LITERTLM_ROOT_DIR}/cmake/scripts"
     CACHE PATH "LiteRT-LM: Directory for internal build and automation scripts")
 set(LITERTLM_LOCAL_STAGING_DIR "${CMAKE_BINARY_DIR}/staging/lib"
