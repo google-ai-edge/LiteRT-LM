@@ -123,6 +123,10 @@ class AudioLiteRtCompiledModelExecutor : public AudioExecutor {
   // Clone the audio context for the audio executor.
   absl::StatusOr<std::unique_ptr<AudioContext>> CloneContext() override;
 
+  // Clone the audio context from the given audio context.
+  absl::StatusOr<std::unique_ptr<AudioContext>> CloneContext(
+      const AudioContext& audio_context) override;
+
   // Restore the audio context for the audio executor.
   absl::Status RestoreContext(
       std::unique_ptr<AudioContext> audio_context) override;

@@ -146,6 +146,11 @@ class LockedAudioExecutor : public AudioExecutor {
     return audio_executor_->CloneContext();
   }
 
+  absl::StatusOr<std::unique_ptr<AudioContext>> CloneContext(
+      const AudioContext& audio_context) override {
+    return audio_executor_->CloneContext(audio_context);
+  }
+
   absl::Status RestoreContext(
       std::unique_ptr<AudioContext> audio_context) override {
     return audio_executor_->RestoreContext(std::move(audio_context));
@@ -612,8 +617,10 @@ ResourceManager::CloneContextHandler(
 
   std::unique_ptr<AudioContext> audio_context;
   if (llm_context_handler->HasAudioContext()) {
-    const auto& audio_context_ref = llm_context_handler->GetAudioContext();
-    ASSIGN_OR_RETURN(audio_context, audio_context_ref.Clone());
+    ASSIGN_OR_RETURN(auto audio_executor, AcquireAudioExecutor());
+    ASSIGN_OR_RETURN(
+        audio_context,
+        audio_executor->CloneContext(llm_context_handler->GetAudioContext()));
   }
   return ContextHandler::Bundle(
       processed_context, std::make_unique<RuntimeConfig>(runtime_config),
@@ -725,8 +732,9 @@ ResourceManager::AcquireExecutorWithContextHandler(
     // the audio context from the new handler.
     if (new_context_handler->HasAudioContext()) {
       ASSIGN_OR_RETURN(auto audio_executor, AcquireAudioExecutor());
-      ASSIGN_OR_RETURN(auto audio_context_cloned,
-                       new_context_handler->GetAudioContext().Clone());
+      ASSIGN_OR_RETURN(
+          auto audio_context_cloned,
+          audio_executor->CloneContext(new_context_handler->GetAudioContext()));
       RETURN_IF_ERROR(
           audio_executor->RestoreContext(std::move(audio_context_cloned)));
     }

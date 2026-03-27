@@ -817,6 +817,18 @@ AudioLiteRtCompiledModelExecutor::CloneContext() {
   return std::move(audio_encoder_context);
 }
 
+absl::StatusOr<std::unique_ptr<AudioContext>>
+AudioLiteRtCompiledModelExecutor::CloneContext(
+    const AudioContext& audio_context) {
+  if (!executor_properties_.is_streaming_model) {
+    return absl::UnimplementedError(
+        "CloneContext is only supported for streaming models.");
+  }
+  const AudioStreamingContext& audio_streaming_context =
+      reinterpret_cast<const AudioStreamingContext&>(audio_context);
+  return audio_streaming_context.Clone();
+}
+
 absl::Status AudioLiteRtCompiledModelExecutor::RestoreContext(
     std::unique_ptr<AudioContext> audio_context) {
   if (!executor_properties_.is_streaming_model) {

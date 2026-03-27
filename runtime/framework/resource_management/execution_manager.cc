@@ -127,6 +127,12 @@ absl::Status ExecutionManager::ReleaseSession(SessionId session_id) {
     return absl::InvalidArgumentError(
         absl::StrCat("Session ", session_id, " not found in session list."));
   }
+  if (session_lookup_.at(session_id)->session_config.AudioModalityEnabled() &&
+      session_lookup_.size() == 1) {
+    ASSIGN_OR_RETURN(auto audio_executor,
+                     resource_manager_->AcquireAudioExecutor());
+    audio_executor->Reset().IgnoreError();
+  }
   session_lookup_.erase(session_id);
   return absl::OkStatus();
 }

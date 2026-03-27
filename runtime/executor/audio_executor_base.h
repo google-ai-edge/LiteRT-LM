@@ -52,6 +52,12 @@ class AudioExecutorBase {
     return absl::UnimplementedError("Not implemented.");
   }
 
+  // Clone the audio context from the given audio context.
+  virtual absl::StatusOr<std::unique_ptr<AudioContext>> CloneContext(
+      const AudioContext& audio_context) {
+    return absl::UnimplementedError("Not implemented.");
+  }
+
   // Restore the audio context for the audio executor.
   virtual absl::Status RestoreContext(
       std::unique_ptr<AudioContext> audio_context) {
