@@ -327,6 +327,7 @@ class ExecutorInputs {
                  std::optional<ExecutorAudioData>&& audio_data);
 
   // Getters for top-level optional members
+  int GetNextPosition() const;
   absl::StatusOr<const ExecutorTextData*> GetTextDataPtr() const;
   absl::StatusOr<ExecutorTextData*> GetMutableTextDataPtr();
   absl::StatusOr<const ExecutorVisionData*> GetVisionDataPtr() const;
@@ -351,11 +352,14 @@ class ExecutorInputs {
   GetMutableAudioPerLayerEmbeddingsPtr();
 
   // Setters:
+  void SetNextPosition(int next_position);
   void SetTextData(ExecutorTextData&& text_data);
   void SetVisionData(std::optional<ExecutorVisionData>&& vision_data);
   void SetAudioData(std::optional<ExecutorAudioData>&& audio_data);
 
  private:
+  // The next prefill/decode position to be used.
+  int next_position_ = 0;
   std::optional<ExecutorTextData> text_data_;
   std::optional<ExecutorVisionData> vision_data_;
   std::optional<ExecutorAudioData> audio_data_;

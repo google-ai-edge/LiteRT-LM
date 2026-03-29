@@ -23,10 +23,11 @@
 
 #include <gtest/gtest.h>
 #include "absl/types/span.h"  // from @com_google_absl
+#include "litert/c/litert_tensor_buffer_types.h"  // from @litert
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_layout.h"  // from @litert
-#include "litert/cc/litert_model.h"  // from @litert
+#include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/constrained_decoding/constrained_decoder.h"
 #include "runtime/components/constrained_decoding/fake_constraint.h"
@@ -64,6 +65,7 @@ TEST(LlmExecutorIoTypesTest, InputsPrint) {
   // messages.
   const std::string expected_output =
       "ExecutorInputs: {\n"
+      "  NextPosition: 0\n"
       "  TextData: ExecutorTextData: {\n"
       "  TokenIds: TensorBuffer: [[1, 2], [3, 4], [5, 6]] shape=(3, "
       "2)\n"  // Assuming TensorBuffer prints this way
