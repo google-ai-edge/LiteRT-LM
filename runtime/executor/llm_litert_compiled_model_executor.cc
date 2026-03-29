@@ -1280,7 +1280,7 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::InitializeSampler(
   ASSIGN_OR_RETURN(
       sampler_,
       CreateSampler(sampler_backend, output_heads, std::move(sampler_params),
-                    env_.Get(), /*sequence_size=*/1, vocab_size, data_type));
+                    &env_, /*sequence_size=*/1, vocab_size, data_type));
 
   // If the sampler can handle input, prepare the input tensors for it.
   sampler_handles_input_ =

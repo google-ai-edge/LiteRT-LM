@@ -59,7 +59,7 @@ absl::StatusOr<std::unique_ptr<Sampler>> CreateGreedySampler(Environment& env,
   sampler_params.set_temperature(1.0f);
   sampler_params.set_seed(0);
   return CreateSampler(backend, output_heads, std::move(sampler_params),
-                       env.Get(), sequence_size, vocab_size);
+                       &env, sequence_size, vocab_size);
 }
 
 absl::Status ConcatenateEmbeddingsAndActivations(

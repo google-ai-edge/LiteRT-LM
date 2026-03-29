@@ -86,7 +86,7 @@ absl::StatusOr<SessionId> ExecutionManager::RegisterNewSession(
                      CreateSampler(session_config.GetSamplerBackend(),
                                    session_config.GetNumOutputCandidates(),
                                    session_config.GetSamplerParams(),
-                                   litert_env_ ? litert_env_->Get() : nullptr));
+                                   litert_env_));
   }
   auto stop_token_detector = std::make_unique<StopTokenDetector>(1);
   for (const auto& stop_token_sequence : session_config.GetStopTokenIds()) {

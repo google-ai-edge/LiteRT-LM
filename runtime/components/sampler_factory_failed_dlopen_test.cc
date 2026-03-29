@@ -42,7 +42,7 @@ TEST(SamplerFactoryFailedDlopenTest,
   sampler_params.set_type(proto::SamplerParameters::TOP_P);
   auto result =
       CreateSampler(Backend::GPU, /*batch_size=*/1, std::move(sampler_params),
-                    litert_env.Get(), /*sequence_size=*/1, /*vocab_size=*/201,
+                    &litert_env, /*sequence_size=*/1, /*vocab_size=*/201,
                     /*activation_data_type=*/std::nullopt);
 
   // Should fall back to CPU sampler.

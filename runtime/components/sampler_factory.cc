@@ -596,11 +596,10 @@ absl::StatusOr<std::unique_ptr<Sampler>> CreateCpuSampler(
 
 absl::StatusOr<std::unique_ptr<Sampler>> CreateGpuSampler(
     int batch_size, proto::SamplerParameters sampler_params,
-    LiteRtEnvironment env, int sequence_size, int vocab_size,
+    litert::Environment& env, int sequence_size, int vocab_size,
     std::optional<ActivationDataType> activation_data_type) {
   // Check environment options to determine the preferred backend.
-  auto cpp_env = litert::Environment::WrapCObject(env, litert::OwnHandle::kNo);
-  auto options_or = cpp_env.GetOptions();
+  auto options_or = env.GetOptions();
   bool use_metal = false;
   bool use_webgpu = false;
   if (options_or.HasValue()) {
@@ -615,9 +614,9 @@ absl::StatusOr<std::unique_ptr<Sampler>> CreateGpuSampler(
 
 #ifdef __ANDROID__
 #if LITERT_HAS_OPENCL_SUPPORT  // NOLINT(misc-include-cleaner)
-  auto opencl_sampler =
-      TopKOpenClCApiSampler::Create(env, batch_size, sequence_size, vocab_size,
-                                    activation_data_type, sampler_params);
+  auto opencl_sampler = TopKOpenClCApiSampler::Create(
+      env.Get(), batch_size, sequence_size, vocab_size, activation_data_type,
+      sampler_params);
   if (opencl_sampler.ok() ||
       opencl_sampler.status().code() != absl::StatusCode::kUnavailable) {
     return opencl_sampler;
@@ -627,9 +626,9 @@ absl::StatusOr<std::unique_ptr<Sampler>> CreateGpuSampler(
 #endif  // LITERT_HAS_OPENCL_SUPPORT
 
 #if LITERT_HAS_WEBGPU_SUPPORT  // NOLINT(misc-include-cleaner)
-  auto webgpu_sampler =
-      TopKWebGpuCApiSampler::Create(env, batch_size, sequence_size, vocab_size,
-                                    activation_data_type, sampler_params);
+  auto webgpu_sampler = TopKWebGpuCApiSampler::Create(
+      env.Get(), batch_size, sequence_size, vocab_size, activation_data_type,
+      sampler_params);
   if (webgpu_sampler.ok() ||
       webgpu_sampler.status().code() != absl::StatusCode::kUnavailable) {
     return webgpu_sampler;
@@ -641,9 +640,9 @@ absl::StatusOr<std::unique_ptr<Sampler>> CreateGpuSampler(
 #else  // !__ANDROID__
 #if defined(__APPLE__)
   if (use_metal || !use_webgpu) {
-    auto metal_sampler =
-        TopKMetalCApiSampler::Create(env, batch_size, sequence_size, vocab_size,
-                                     activation_data_type, sampler_params);
+    auto metal_sampler = TopKMetalCApiSampler::Create(
+        env.Get(), batch_size, sequence_size, vocab_size, activation_data_type,
+        sampler_params);
     if (metal_sampler.ok() ||
         metal_sampler.status().code() != absl::StatusCode::kUnavailable) {
       return metal_sampler;
@@ -659,9 +658,9 @@ absl::StatusOr<std::unique_ptr<Sampler>> CreateGpuSampler(
 #endif  // __APPLE__
 
 #if LITERT_HAS_WEBGPU_SUPPORT  // NOLINT(misc-include-cleaner)
-  auto webgpu_sampler =
-      TopKWebGpuCApiSampler::Create(env, batch_size, sequence_size, vocab_size,
-                                    activation_data_type, sampler_params);
+  auto webgpu_sampler = TopKWebGpuCApiSampler::Create(
+      env.Get(), batch_size, sequence_size, vocab_size, activation_data_type,
+      sampler_params);
   if (webgpu_sampler.ok() ||
       webgpu_sampler.status().code() != absl::StatusCode::kUnavailable) {
     return webgpu_sampler;
@@ -671,9 +670,9 @@ absl::StatusOr<std::unique_ptr<Sampler>> CreateGpuSampler(
 #endif                         // LITERT_HAS_WEBGPU_SUPPORT
 
 #if LITERT_HAS_OPENCL_SUPPORT  // NOLINT(misc-include-cleaner)
-  auto opencl_sampler =
-      TopKOpenClCApiSampler::Create(env, batch_size, sequence_size, vocab_size,
-                                    activation_data_type, sampler_params);
+  auto opencl_sampler = TopKOpenClCApiSampler::Create(
+      env.Get(), batch_size, sequence_size, vocab_size, activation_data_type,
+      sampler_params);
   if (opencl_sampler.ok() ||
       opencl_sampler.status().code() != absl::StatusCode::kUnavailable) {
     return opencl_sampler;
@@ -690,7 +689,7 @@ absl::StatusOr<std::unique_ptr<Sampler>> CreateGpuSampler(
 
 absl::StatusOr<std::unique_ptr<Sampler>> CreateSampler(
     Backend backend, int batch_size, proto::SamplerParameters sampler_params,
-    LiteRtEnvironment env, std::optional<int> sequence_size,
+    litert::Environment* env, std::optional<int> sequence_size,
     std::optional<int> vocab_size,
     std::optional<ActivationDataType> activation_data_type) {
   int sequence_size_value = sequence_size.value_or(1);
@@ -700,9 +699,9 @@ absl::StatusOr<std::unique_ptr<Sampler>> CreateSampler(
           << "LiteRT environment is needed for GPU sampling.";
       RET_CHECK(vocab_size.has_value())
           << "Vocabulary size is needed for GPU sampling.";
-      auto sampler_or =
-          CreateGpuSampler(batch_size, sampler_params, env, sequence_size_value,
-                           vocab_size.value(), activation_data_type);
+      auto sampler_or = CreateGpuSampler(
+          batch_size, sampler_params, *env, sequence_size_value,
+          vocab_size.value(), activation_data_type);
       if (sampler_or.ok() ||
           sampler_or.status().code() != absl::StatusCode::kUnavailable) {
         // For a normal failure or success, return the result.

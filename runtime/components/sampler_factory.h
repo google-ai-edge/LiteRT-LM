@@ -23,6 +23,10 @@
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/proto/sampler_params.pb.h"
 
+namespace litert {
+class Environment;
+}  // namespace litert
+
 namespace litert::lm {
 
 // Creates a Sampler instance based on the provided parameters.
@@ -41,7 +45,7 @@ namespace litert::lm {
 //   The created Sampler instance.
 absl::StatusOr<std::unique_ptr<Sampler>> CreateSampler(
     Backend backend, int batch_size, proto::SamplerParameters sampler_params,
-    LiteRtEnvironment env = nullptr,
+    litert::Environment* env = nullptr,
     std::optional<int> sequence_size = std::nullopt,
     std::optional<int> vocab_size = std::nullopt,
     std::optional<ActivationDataType> activation_data_type = std::nullopt);
