@@ -73,8 +73,7 @@ ExecutorVisionData::GetMutableEmbeddingsPtr() {
   if (embeddings_.has_value()) {
     return &embeddings_.value();
   }
-  return absl::NotFoundError(
-      "ExecutorVisionData::embeddings_ is not set.");
+  return absl::NotFoundError("ExecutorVisionData::embeddings_ is not set.");
 }
 
 absl::StatusOr<const ::litert::TensorBuffer*>
@@ -158,8 +157,7 @@ ExecutorAudioData::GetMutableEmbeddingsPtr() {
   if (embeddings_.has_value()) {
     return &embeddings_.value();
   }
-  return absl::NotFoundError(
-      "ExecutorAudioData::embeddings_ is not set.");
+  return absl::NotFoundError("ExecutorAudioData::embeddings_ is not set.");
 }
 
 absl::StatusOr<const ::litert::TensorBuffer*>
@@ -219,6 +217,8 @@ ExecutorInputs::ExecutorInputs(std::optional<ExecutorTextData>&& text_data,
       vision_data_(std::move(vision_data)),
       audio_data_(std::move(audio_data)) {}
 
+int ExecutorInputs::GetNextPosition() const { return next_position_; }
+
 absl::StatusOr<const ExecutorTextData*> ExecutorInputs::GetTextDataPtr() const {
   if (text_data_.has_value()) {
     return &text_data_.value();
@@ -230,8 +230,7 @@ absl::StatusOr<ExecutorTextData*> ExecutorInputs::GetMutableTextDataPtr() {
   if (text_data_.has_value()) {
     return &text_data_.value();
   }
-  return absl::NotFoundError(
-      "ExecutorInputs::text_data_ is not set.");
+  return absl::NotFoundError("ExecutorInputs::text_data_ is not set.");
 }
 
 absl::StatusOr<const ExecutorVisionData*> ExecutorInputs::GetVisionDataPtr()
@@ -246,8 +245,7 @@ absl::StatusOr<ExecutorVisionData*> ExecutorInputs::GetMutableVisionDataPtr() {
   if (vision_data_.has_value()) {
     return &vision_data_.value();
   }
-  return absl::NotFoundError(
-      "ExecutorInputs::vision_data_ is not set.");
+  return absl::NotFoundError("ExecutorInputs::vision_data_ is not set.");
 }
 
 absl::StatusOr<const ExecutorAudioData*> ExecutorInputs::GetAudioDataPtr()
@@ -262,8 +260,7 @@ absl::StatusOr<ExecutorAudioData*> ExecutorInputs::GetMutableAudioDataPtr() {
   if (audio_data_.has_value()) {
     return &audio_data_.value();
   }
-  return absl::NotFoundError(
-      "ExecutorInputs::audio_data_ is not set.");
+  return absl::NotFoundError("ExecutorInputs::audio_data_ is not set.");
 }
 
 absl::StatusOr<const ::litert::TensorBuffer*>
@@ -312,10 +309,9 @@ ExecutorInputs::GetMutableVisionEmbeddingsPtr() {
   absl::StatusOr<::litert::TensorBuffer*> embeddings_ptr_status =
       vision_data_->GetMutableEmbeddingsPtr();
   if (!embeddings_ptr_status.ok()) {
-    return absl::Status(
-        embeddings_ptr_status.status().code(),
-        absl::StrCat("Within ExecutorInputs::vision_data_: ",
-                     embeddings_ptr_status.status().message()));
+    return absl::Status(embeddings_ptr_status.status().code(),
+                        absl::StrCat("Within ExecutorInputs::vision_data_: ",
+                                     embeddings_ptr_status.status().message()));
   }
   return embeddings_ptr_status.value();
 }
@@ -347,10 +343,9 @@ ExecutorInputs::GetMutableVisionPerLayerEmbeddingsPtr() {
   absl::StatusOr<::litert::TensorBuffer*> per_layer_ptr_status =
       vision_data_->GetMutablePerLayerEmbeddingsPtr();
   if (!per_layer_ptr_status.ok()) {
-    return absl::Status(
-        per_layer_ptr_status.status().code(),
-        absl::StrCat("Within ExecutorInputs::vision_data_: ",
-                     per_layer_ptr_status.status().message()));
+    return absl::Status(per_layer_ptr_status.status().code(),
+                        absl::StrCat("Within ExecutorInputs::vision_data_: ",
+                                     per_layer_ptr_status.status().message()));
   }
   return per_layer_ptr_status.value();
 }
@@ -382,10 +377,9 @@ ExecutorInputs::GetMutableAudioEmbeddingsPtr() {
   absl::StatusOr<::litert::TensorBuffer*> embeddings_ptr_status =
       audio_data_->GetMutableEmbeddingsPtr();
   if (!embeddings_ptr_status.ok()) {
-    return absl::Status(
-        embeddings_ptr_status.status().code(),
-        absl::StrCat("Within ExecutorInputs::audio_data_: ",
-                     embeddings_ptr_status.status().message()));
+    return absl::Status(embeddings_ptr_status.status().code(),
+                        absl::StrCat("Within ExecutorInputs::audio_data_: ",
+                                     embeddings_ptr_status.status().message()));
   }
   return embeddings_ptr_status.value();
 }
@@ -417,12 +411,15 @@ ExecutorInputs::GetMutableAudioPerLayerEmbeddingsPtr() {
   absl::StatusOr<::litert::TensorBuffer*> per_layer_ptr_status =
       audio_data_->GetMutablePerLayerEmbeddingsPtr();
   if (!per_layer_ptr_status.ok()) {
-    return absl::Status(
-        per_layer_ptr_status.status().code(),
-        absl::StrCat("Within ExecutorInputs::audio_data_: ",
-                     per_layer_ptr_status.status().message()));
+    return absl::Status(per_layer_ptr_status.status().code(),
+                        absl::StrCat("Within ExecutorInputs::audio_data_: ",
+                                     per_layer_ptr_status.status().message()));
   }
   return per_layer_ptr_status.value();
+}
+
+void ExecutorInputs::SetNextPosition(int next_position) {
+  next_position_ = next_position;
 }
 
 void ExecutorInputs::SetTextData(ExecutorTextData&& text_data) {
@@ -441,6 +438,8 @@ void ExecutorInputs::SetAudioData(
 
 std::ostream& operator<<(std::ostream& os, const ExecutorInputs& inputs) {
   os << "ExecutorInputs: {\n";
+
+  os << kFieldIndent << "NextPosition: " << inputs.GetNextPosition() << "\n";
 
   os << kFieldIndent << "TextData: ";
   absl::StatusOr<const ExecutorTextData*> text_data_status =
