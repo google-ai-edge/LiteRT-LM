@@ -1,0 +1,71 @@
+name: "Nightly-Win-x64"
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+    - main
+  schedule:
+    # Runs at 9:00 UTC. It is
+    # - 1:00 AM Pacific Standard Time, UTC-8, or
+    # - 2:00 AM Pacific Daylight Time, UTC-7.
+    - cron: "0 9 * * *"
+
+jobs:
+  build-win-wheel:
+    name: "Build Python Wheel ${{ matrix.python-version }}"
+    runs-on: Windows_x64
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      # Clear ANDROID_NDK_HOME as Windows_x64 has NDK where jobs don't have permission for
+      # androidndk rulesto create symlinks.
+      ANDROID_NDK_HOME:
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - name: Checkout code.
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name : Set up bazel output base.
+        run: |
+          # D: is faster than C: for I/O and helps avoid long path issues.
+          $SHORT_SHA=$("${{ github.sha }}".SubString(0, 8))
+          echo "BAZEL_OUTPUT_BASE=D:/w-$SHORT_SHA" >> "$env:GITHUB_ENV"
+
+      - name: Build Python Wheel
+        run: |
+          $PYTHON_VERSION = "${{ matrix.python-version }}"
+          $DATE = Get-Date -Format "yyyyMMdd"
+          bazel --output_base="$env:BAZEL_OUTPUT_BASE" build `
+            --repo_env=HERMETIC_PYTHON_VERSION=$PYTHON_VERSION `
+            --@rules_python//python/config_settings:python_version=$PYTHON_VERSION `
+            --define=PYPI_NIGHTLY=1 `
+            --define=PYPI_NIGHTLY_DATE=$DATE `
+            -c opt //python/litert_lm:litert_lm_wheel
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Test Python Wheel
+        run: |
+          $PYTHON_VERSION = "${{ matrix.python-version }}"
+          uv venv --python=$PYTHON_VERSION
+
+          # Install the built wheel
+          $WHEEL_PATH = (Get-ChildItem -Path "$env:BAZEL_OUTPUT_BASE/execroot/litert_lm/bazel-out/x64_windows-opt/bin/python/litert_lm" -Filter *.whl -Recurse | Select-Object -First 1).FullName
+          uv pip install $WHEEL_PATH
+
+          # Run the verification script
+          uv run python python/litert_lm/examples/simple_main.py
+
+      - name: Publish to PyPI
+        env:
+          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_UPLOAD_TOKEN }}
+        run: |
+          $WHEEL_PATH = (Get-ChildItem -Path "$env:BAZEL_OUTPUT_BASE/execroot/litert_lm/bazel-out/x64_windows-opt/bin/python/litert_lm" -Filter *.whl -Recurse | Select-Object -First 1).FullName
+          uv publish $WHEEL_PATH
