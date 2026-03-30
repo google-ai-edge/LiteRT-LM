@@ -62,7 +62,7 @@ pytype_strict_binary(
         ":model",
         ":venv_manager",
         "//python/litert_lm",
-        requirement("fire"),
+        requirement("rich_click"),
     ],
     imports = [".."],
 )
@@ -113,7 +113,7 @@ py_wheel(
         ":is_nightly": ["litert-lm-api-nightly"],
         "//conditions:default": ["litert-lm-api"],
     }) + [
-        "fire",
+        "rich-click",
     ],
     deps = [":package"],
 )

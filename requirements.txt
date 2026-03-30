@@ -1,2 +1,6 @@
-fire==0.7.1
-termcolor==3.3.0
+rich-click==1.9.7
+click==8.3.1
+rich==14.3.3
+markdown-it-py==4.0.0
+mdurl==0.1.2
+pygments==2.20.0
