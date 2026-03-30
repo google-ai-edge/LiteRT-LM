@@ -57,8 +57,8 @@ class LlmExecutorInternalSamplerInterface : public LlmExecutorBaseInterface {
   // the KV Cache with the provided input data. The internal sampling allows to
   // minimize data movement. Additionally, the grouped num_steps allows
   // scheduling multiple back to back decode steps.
-  // The function returns the sampled token ids.
-  virtual absl::StatusOr<std::vector<int>> SampleTokens(
+  // The function returns the sampled token ids with shape `[batch, num_steps]`.
+  virtual absl::StatusOr<std::vector<std::vector<int>>> SampleTokens(
       int num_steps, ExecutorInputs&& input_data, KVCacheInterface& kv_cache,
       std::optional<int> lora_id) = 0;
 };
