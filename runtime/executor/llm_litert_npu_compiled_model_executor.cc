@@ -1531,15 +1531,19 @@ LlmLiteRtNpuCompiledModelExecutor::CreateForModelHasPerLayerEmbedding(
   // Gemma3n specific fix: KV cache buffer 19 of *prefill* is not connected
   // to any OPs in the model, making the LiteRT runtime allocate host memory
   // for it. This is incompatible when running the transformer model on the NPU.
-  if (input_kv_cache_buffers.contains(cache_k19)) {
-    LITERT_ASSIGN_OR_RETURN(
-        input_kv_cache_buffers[cache_k19],
-        llm_compiled_model.CreateInputBuffer(kDecodeSignature, cache_k19));
-    input_kv_cache_buffers[cache_k19].Clear();
-    LITERT_ASSIGN_OR_RETURN(
-        input_kv_cache_buffers[cache_v19],
-        llm_compiled_model.CreateInputBuffer(kDecodeSignature, cache_v19));
-    input_kv_cache_buffers[cache_v19].Clear();
+  if (auto it_k = input_kv_cache_buffers.find(cache_k19);
+      it_k != input_kv_cache_buffers.end()) {
+    TensorBuffer& buffer_k = it_k->second;
+    LITERT_ASSIGN_OR_RETURN(buffer_k, llm_compiled_model.CreateInputBuffer(
+                                          kDecodeSignature, cache_k19));
+    buffer_k.Clear();
+    if (auto it_v = input_kv_cache_buffers.find(cache_v19);
+        it_v != input_kv_cache_buffers.end()) {
+      TensorBuffer& buffer_v = it_v->second;
+      LITERT_ASSIGN_OR_RETURN(buffer_v, llm_compiled_model.CreateInputBuffer(
+                                            kDecodeSignature, cache_v19));
+      buffer_v.Clear();
+    }
   }
   ASSIGN_OR_RETURN(
       auto llm_inference_context,
