@@ -17,7 +17,6 @@
 #include <memory>
 #include <string>
 #include <utility>
-#include <variant>
 #include <vector>
 
 #include <gmock/gmock.h>
@@ -65,12 +64,10 @@ absl::AnyInvocable<void(absl::StatusOr<Message>)> CreateUserMessageCallback(
       status = message.status();
       return;
     }
-    if (auto json_message = std::get_if<JsonMessage>(&*message)) {
-      if (json_message->is_null()) {
-        done = true;
-      } else {
-        output.push_back(*json_message);
-      }
+    if (message->is_null()) {
+      done = true;
+    } else {
+      output.push_back(*message);
     }
   };
 }
@@ -659,13 +656,11 @@ TEST_F(InternalCallbackChannelTest, IncompleteChannel) {
 
 TEST_F(InternalCallbackChannelTest, ChannelStreamWithCompleteMessageCallback) {
   auto user_callback = CreateUserMessageCallback(output_, done_, status_);
-  JsonMessage final_message;
+  Message final_message;
   bool final_done = false;
   auto complete_message_callback = [&](const Message& message) {
-    if (auto json_message = std::get_if<JsonMessage>(&message)) {
-      final_message = *json_message;
-      final_done = true;
-    }
+    final_message = message;
+    final_done = true;
   };
 
   auto callback = CreateInternalCallback(
@@ -681,7 +676,7 @@ TEST_F(InternalCallbackChannelTest, ChannelStreamWithCompleteMessageCallback) {
   callback(Responses(TaskState::kDone));
 
   EXPECT_TRUE(final_done);
-  EXPECT_THAT(final_message, testing::Eq(JsonMessage::parse(R"json({
+  EXPECT_THAT(final_message, testing::Eq(Message::parse(R"json({
                 "role": "assistant",
                 "content": [{"type": "text", "text": "Hello World!"}],
                 "channels": {
@@ -693,13 +688,11 @@ TEST_F(InternalCallbackChannelTest, ChannelStreamWithCompleteMessageCallback) {
 TEST_F(InternalCallbackChannelTest,
        ChannelStreamUnclosedWithCompleteMessageCallback) {
   auto user_callback = CreateUserMessageCallback(output_, done_, status_);
-  JsonMessage final_message;
+  Message final_message;
   bool final_done = false;
   auto complete_message_callback = [&](const Message& message) {
-    if (auto json_message = std::get_if<JsonMessage>(&message)) {
-      final_message = *json_message;
-      final_done = true;
-    }
+    final_message = message;
+    final_done = true;
   };
 
   auto callback = CreateInternalCallback(

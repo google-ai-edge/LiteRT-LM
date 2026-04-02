@@ -58,7 +58,7 @@ CHECK_OK(conversation);
 
 // 4. Send message to the LLM with blocking call.
 absl::StatusOr<Message> model_message = (*conversation)->SendMessage(
-    JsonMessage{
+    Message{
         {"role", "user"},
         {"content", "What is the tallest building in the world?"}
     });
@@ -72,7 +72,7 @@ std::cout << *model_message << std::endl;
 // process the message once a chunk of message output is received.
 std::stringstream captured_output;
 (*conversation)->SendMessageAsync(
-    JsonMessage{
+    Message{
         {"role", "user"},
         {"content", "What is the tallest building in the world?"}
     },
@@ -97,18 +97,16 @@ absl::AnyInvocable<void(absl::StatusOr<Message>)> CreatePrintMessageCallback(
       std::cout << message.status().message() << std::endl;
       return;
     }
-    if (auto json_message = std::get_if<JsonMessage>(&(*message))) {
-      if (json_message->is_null()) {
-        std::cout << std::endl << std::flush;
-        return;
-      }
-      ABSL_CHECK_OK(PrintJsonMessage(*json_message, captured_output,
-                                     /*streaming=*/true));
+    if (message->empty()) {
+      std::cout << std::endl << std::flush;
+      return;
     }
+    ABSL_CHECK_OK(PrintMessage(*message, captured_output,
+                               /*streaming=*/true));
   };
 }
 
-absl::Status PrintJsonMessage(const JsonMessage& message,
+absl::Status PrintMessage(const Message& message,
                               std::stringstream& captured_output,
                               bool streaming = false) {
   if (message["content"].is_array()) {
@@ -162,7 +160,7 @@ auto engine_settings = EngineSettings::CreateDefault(
 
 // Send message to the LLM with image data.
 absl::StatusOr<Message> model_message = (*conversation)->SendMessage(
-    JsonMessage{
+    Message{
         {"role", "user"},
         {"content", { // Now content must be an array.
           {{"type", "text"}, {"text", "Describe the following image: "}},
@@ -176,7 +174,7 @@ std::cout << *model_message << std::endl;
 
 // Send message to the LLM with audio data.
 model_message = (*conversation)->SendMessage(
-    JsonMessage{
+    Message{
         {"role", "user"},
         {"content", { // Now content must be an array.
           {{"type", "text"}, {"text", "Transcribe the audio: "}},
@@ -190,7 +188,7 @@ std::cout << *model_message << std::endl;
 
 // The content can include multiple image or audio data.
 model_message = (*conversation)->SendMessage(
-    JsonMessage{
+    Message{
         {"role", "user"},
         {"content", { // Now content must be an array.
           {{"type", "text"}, {"text", "First briefly describe the two images "}},
@@ -223,7 +221,7 @@ data to Session.
 
 The core input and output format for the Conversation API is
 [`Message`][Message]. Currently, this is implemented as
-[`JsonMessage`][JsonMessage], which is a type alias for
+[`Message`][Message], which is a type alias for
 [`ordered_json`][ordered_json], a flexible nested key-value data structure.
 
 The [`Conversation`][Conversation] API operates on a message-in-message-out
@@ -492,7 +490,7 @@ This function is triggered under the following conditions:
 *   When a new chunk of the [`Message`][Message] is received from the Model.
 *   If an error occurs during LiteRT-LM's message processing.
 *   Upon completion of the LLM's inference, the callback is triggered with an
-    empty [`Message`][Message] (e.g., `JsonMessage()`) to signal the end of the
+    empty [`Message`][Message] (e.g., `Message()`) to signal the end of the
     response.
 
 Refer to the [Step 6 asynchronous call](#text-only-content) for an example
@@ -584,7 +582,7 @@ the asynchronous call is complete.
 [Jinja]: https://jinja.palletsprojects.com/en/stable/ "jinja prompt template"
 [PromptTemplate]: https://github.com/google-ai-edge/LiteRT-LM/blob/main/runtime/components/prompt_template.h "litert::lm::PromptTemplate"
 [message]: https://github.com/google-ai-edge/LiteRT-LM/blob/63f7dec93ac85560e64194a00b5d7c407de40846/runtime/conversation/io_types.h#L28 "litert::lm::Message"
-[jsonmessage]: https://github.com/google-ai-edge/LiteRT-LM/blob/63f7dec93ac85560e64194a00b5d7c407de40846/runtime/conversation/io_types.h#L25 "litert::lm::JsonMessage"
+
 [ordered_json]: https://json.nlohmann.me/api/ordered_json/ "ordered_json"
 [preface]: https://github.com/google-ai-edge/LiteRT-LM/blob/63f7dec93ac85560e64194a00b5d7c407de40846/runtime/conversation/io_types.h#L48 "litert::lm::Preface"
 [ConversationConfig]: https://github.com/google-ai-edge/LiteRT-LM/blob/63f7dec93ac85560e64194a00b5d7c407de40846/runtime/conversation/conversation.h#L44 "litert::lm::ConversationConfig"

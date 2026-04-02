@@ -242,11 +242,8 @@ TEST_F(Gemma3DataProcessorTest, ToMessage) {
       processor->ToMessage(Responses(TaskState::kProcessing, {"test response"}),
                            std::monostate{}));
 
-  ASSERT_TRUE(std::holds_alternative<nlohmann::ordered_json>(message));
-  const nlohmann::ordered_json& json_message =
-      std::get<nlohmann::ordered_json>(message);
   EXPECT_EQ(
-      json_message,
+      message,
       json({{"role", "assistant"},
             {"content", {{{"type", "text"}, {"text", "test response"}}}}}));
 }
@@ -275,10 +272,7 @@ TEST_F(Gemma3DataProcessorTest, ToMessageWithToolCall) {
                     {"This is some text.\n```tool_code\ntool_name(x=1)\n```"}),
           std::monostate{}));
 
-  ASSERT_TRUE(std::holds_alternative<nlohmann::ordered_json>(message));
-  const nlohmann::ordered_json& json_message =
-      std::get<nlohmann::ordered_json>(message);
-  EXPECT_EQ(json_message, nlohmann::ordered_json::parse(R"json({
+  EXPECT_EQ(message, nlohmann::ordered_json::parse(R"json({
     "role": "assistant",
     "content": [
       {
@@ -325,8 +319,7 @@ TEST_F(Gemma3DataProcessorTest, ToMessageWithToolCallUsingToolCodeRegex) {
 print(tool_name(x=1))
 ```)"}),
                                             std::monostate{}));
-  ASSERT_TRUE(std::holds_alternative<nlohmann::ordered_json>(message1));
-  EXPECT_EQ(std::get<nlohmann::ordered_json>(message1),
+  EXPECT_EQ(message1,
             nlohmann::ordered_json::parse(R"json({
               "role": "assistant",
               "content": [
@@ -356,8 +349,7 @@ print(tool_name(x=1))
 print(default_api.tool_name(x=2, y="hello"))
 ```)"}),
                                             std::monostate{}));
-  ASSERT_TRUE(std::holds_alternative<nlohmann::ordered_json>(message2));
-  EXPECT_EQ(std::get<nlohmann::ordered_json>(message2),
+  EXPECT_EQ(message2,
             nlohmann::ordered_json::parse(R"json({
               "role": "assistant",
               "content": [
@@ -389,8 +381,7 @@ print(tool_name(x=3, y="world", z=True))
 print(default_api.another_tool())
 ```)"}),
                            std::monostate{}));
-  ASSERT_TRUE(std::holds_alternative<nlohmann::ordered_json>(message3));
-  EXPECT_EQ(std::get<nlohmann::ordered_json>(message3),
+  EXPECT_EQ(message3,
             nlohmann::ordered_json::parse(R"json({
               "role": "assistant",
               "content": [

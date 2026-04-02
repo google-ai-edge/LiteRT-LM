@@ -120,17 +120,14 @@ TEST(ExtractChannelTextTest, MissingEndDelimiter) {
   EXPECT_THAT(responses.GetTexts()[0], Eq("Hello "));
 }
 
-TEST(InsertChannelContentIntoMessageTest, JsonMessageInsertion) {
-  JsonMessage json_msg = {{"role", "assistant"}, {"content", "Hello!"}};
-  Message message(json_msg);
+TEST(InsertChannelContentIntoMessageTest, MessageInsertion) {
+  Message message = {{"role", "assistant"}, {"content", "Hello!"}};
   absl::flat_hash_map<std::string, std::string> channel_content = {
       {"thought", "hmm"}};
 
   InsertChannelContentIntoMessage(channel_content, message);
 
-  auto* result_json = std::get_if<JsonMessage>(&message);
-  ASSERT_NE(result_json, nullptr);
-  EXPECT_THAT((*result_json)["channels"]["thought"], Eq("hmm"));
+  EXPECT_THAT(message["channels"]["thought"], Eq("hmm"));
 }
 
 }  // namespace

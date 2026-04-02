@@ -276,29 +276,29 @@ struct OptionalArgs {
   // stage.
   //
   // ASSERT_OK(conversation->SendMessage(
-  //   JsonMessage{{"role", "user"}, {"content", "Hello world!"}},
+  //   Message{{"role", "user"}, {"content", "Hello world!"}},
   //   {.has_pending_message = true}));
   //
   // ASSERT_OK(conversation->SendMessage(
-  //   JsonMessage{{"role", "user"}, {"content", " This is a long message."}},
+  //   Message{{"role", "user"}, {"content", " This is a long message."}},
   //   {.has_pending_message = true}));
   //
   // By sending a message with has_pending_message set to false, the decode
   // stage will be triggered, and the decode result will be returned.
   //
   // ASSERT_OK(conversation->SendMessage(
-  //   JsonMessage{{"role", "user"}, {"content", " This is the last message."}},
+  //   Message{{"role", "user"}, {"content", " This is the last message."}},
   //   {.has_pending_message = false}));
   //
   // Alternatively, send an empty message with has_pending_message set to false
   // to only trigger the decode stage.
   //
   // ASSERT_OK(conversation->SendMessage(
-  //   JsonMessage{{"role", "user"}, {"content", " This is the last message."}},
+  //   Message{{"role", "user"}, {"content", " This is the last message."}},
   //   {.has_pending_message = true}));
   //
   // ASSERT_OK(conversation->SendMessage(
-  //   JsonMessage{{"role", "user"}, {"content", ""}},
+  //   Message{{"role", "user"}, {"content", ""}},
   //   {.has_pending_message = false}));
   bool has_pending_message = false;
 
@@ -350,14 +350,14 @@ struct OptionalArgs {
 //
 //   // Send a message to the LLM and returns the complete message.
 //   ASSIGN_OR_RETURN(const Message message,
-//                    conversation->SendMessage(JsonMessage{
+//                    conversation->SendMessage(Message{
 //                        {"role", "user"}, {"content", "Hello world!"}}));
 //
 //   // Send a message to the LLM and process the asynchronous message results
 //   // via the user_callback. The user_callback is a user-defined callback
 //   // function that handles the message results.
 //   EXPECT_OK(conversation->SendMessageAsync(
-//       JsonMessage{{"role", "user"}, {"content", "Hello world!"}},
+//       Message{{"role", "user"}, {"content", "Hello world!"}},
 //       [](absl::StatusOr<Message> message) {
 //         // Handle the message results.
 //         if (message.ok()) {
@@ -520,10 +520,10 @@ class Conversation {
       const Message& message, const OptionalArgs& optional_args);
 
   absl::StatusOr<std::string> GetSingleTurnTextFromFullHistory(
-      const JsonMessage& json_message, const OptionalArgs& optional_args);
+      const Message& message, const OptionalArgs& optional_args);
 
   absl::StatusOr<std::string> GetSingleTurnTextFromSingleTurnTemplate(
-      const JsonMessage& json_message, const OptionalArgs& optional_args);
+      const Message& message, const OptionalArgs& optional_args);
 
   absl::StatusOr<DecodeConfig> CreateDecodeConfig(
       std::optional<ConstraintArg> decoding_constraint = std::nullopt,

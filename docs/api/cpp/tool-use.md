@@ -143,7 +143,7 @@ Example:
 
 ```c++
 // Construct the user message as a JSON object.
-JsonMessage user_message = JsonMessage::parse(R"({
+Message user_message = Message::parse(R"({
   "role": "user",
   "content": {
     "type": "text",
@@ -234,7 +234,7 @@ know the result. Pass the tool result as a message with the `role` set to
 
 ```c++
 // Construct the tool message containing the result.
-JsonMessage tool_message = {{"role", "tool"}, {"content", weather_report}};
+Message tool_message = {{"role", "tool"}, {"content", weather_report}};
 
 // Send the tool message to the model.
 ASSIGN_OR_RETURN(model_message, conversation->SendMessage(tool_message));
@@ -362,7 +362,7 @@ while (true) {
   }
 
   // Construct the user message.
-  JsonMessage input_message = {
+  Message input_message = {
       {"role", "user"},
       {"content", {{{"type", "text"}, {"text", input_prompt}}}}};
 
@@ -372,41 +372,35 @@ while (true) {
     ASSIGN_OR_RETURN(Message message,
                       conversation->SendMessage(input_message));
 
-    // Get the JSON message from the model's response.
-    if (std::holds_alternative<json>(message)) {
-      JsonMessage message_json =
-          std::get<nlohmann::ordered_json>(message);
+    // Check for tool calls.
+    if (message.contains("tool_calls") &&
+        message["tool_calls"].is_array() &&
+        !message["tool_calls"].empty()) {
+      // This JSON array will hold the tool response messages.
+      nlohmann::ordered_json tool_messages = nlohmann::ordered_json::array();
 
-      // Check for tool calls.
-      if (message_json.contains("tool_calls") &&
-          message_json["tool_calls"].is_array() &&
-          !message_json["tool_calls"].empty()) {
-        // This JSON array will hold the tool response messages.
-        nlohmann::ordered_json tool_messages = nlohmann::ordered_json::array();
-
-        // For each tool call, call the tool and add the response.
-        for (const auto& tool_call : message_json["tool_calls"]) {
-          JsonMessage tool_message = {{"role", "tool"},
-                                                  {"content", {}}};
-          const nlohmann::ordered_json& function = tool_call["function"];
-          tool_message["content"] =
-              tools.CallTool(function["name"], function["arguments"]);
-          tool_messages.push_back(tool_message);
-        }
-
-        // The next input message is the tool response.
-        input_message = tool_messages;
-      } else {
-        // If there are no tool calls, print the model's response and exit the
-        // tool calling loop.
-        for (const auto& item : message_json["content"]) {
-          if (item.contains("type") && item["type"] == "text") {
-            std::cout << item["text"].get<std::string>() << std::endl;
-          }
-        }
-
-        break;
+      // For each tool call, call the tool and add the response.
+      for (const auto& tool_call : message["tool_calls"]) {
+        Message tool_message = {{"role", "tool"},
+                                                {"content", {}}};
+        const nlohmann::ordered_json& function = tool_call["function"];
+        tool_message["content"] =
+            tools.CallTool(function["name"], function["arguments"]);
+        tool_messages.push_back(tool_message);
       }
+
+      // The next input message is the tool response.
+      input_message = tool_messages;
+    } else {
+      // If there are no tool calls, print the model's response and exit the
+      // tool calling loop.
+      for (const auto& item : message["content"]) {
+        if (item.contains("type") && item["type"] == "text") {
+          std::cout << item["text"].get<std::string>() << std::endl;
+        }
+      }
+
+      break;
     }
   }
 }
@@ -449,24 +443,17 @@ while (true) {
       return;
     }
 
-    if (!std::holds_alternative<nlohmann::json>(*message)) {
-      return;
-    }
-
-    // Get JSON from the message.
-    JsonMessage message_json = std::get<JsonMessage>(*message);
-
     // An empty message indicates the model is done generating.
-    if (message_json.is_null()) {
+    if (message->empty()) {
       std::cout << std::endl << std::flush;
       done.Notify();
       return;
     }
 
     // Print any text content.
-    if (message_json.contains("content") &&
-        message_json["content"].is_array()) {
-      for (const auto& item : message_json["content"]) {
+    if (message->contains("content") &&
+        (*message)["content"].is_array()) {
+      for (const auto& item : (*message)["content"]) {
         if (item.contains("text")) {
           std::cout << item["text"] << std::endl << std::flush;
         }
@@ -474,10 +461,10 @@ while (true) {
     }
 
     // Collect any tool calls, if present.
-    if (message_json.contains("tool_calls") &&
-        message_json["tool_calls"].is_array() &&
-        !message_json["tool_calls"].empty()) {
-      for (const auto& tool_call : message_json["tool_calls"]) {
+    if (message->contains("tool_calls") &&
+        (*message)["tool_calls"].is_array() &&
+        !(*message)["tool_calls"].empty()) {
+      for (const auto& tool_call : (*message)["tool_calls"]) {
         tool_calls.push_back(tool_call);
       }
     }

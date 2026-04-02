@@ -73,19 +73,19 @@ void SendMessage(
 }
 
 // Sends streamed text associated with a specific channel. It wraps the text in
-// a JsonMessage under the provided `target_channel_name` with a role of
-// "assistant" and bypasses `model_data_processor.ToMessage` formatting.
+// a Message under the provided `target_channel_name` with a role of "assistant"
+// and bypasses `model_data_processor.ToMessage` formatting.
 void SendMessageToChannel(
     absl::AnyInvocable<void(absl::StatusOr<Message>)>& user_callback,
     absl::string_view text, absl::string_view channel_name) {
   if (text.empty()) {
     return;
   }
-  JsonMessage json_msg;
-  json_msg["role"] = "assistant";
-  json_msg["channels"] = nlohmann::ordered_json::object();
-  json_msg["channels"][std::string(channel_name)] = std::string(text);
-  user_callback(Message(json_msg));
+  Message message;
+  message["role"] = "assistant";
+  message["channels"] = nlohmann::ordered_json::object();
+  message["channels"][std::string(channel_name)] = std::string(text);
+  user_callback(std::move(message));
 }
 
 // Sends remaining un-flushed text at the end of generation and then invokes
@@ -130,7 +130,7 @@ void SendCompleteMessage(
   if (complete_message_callback) {
     complete_message_callback(*complete_message);
   }
-  user_callback(Message(JsonMessage()));
+  user_callback(Message());
 }
 
 // Returns the complete list of channels the parser should search for, including

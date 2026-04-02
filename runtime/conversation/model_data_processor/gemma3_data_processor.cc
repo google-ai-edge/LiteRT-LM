@@ -348,7 +348,6 @@ Gemma3DataProcessor::RenderSingleTurnTemplate(
     const Message& message, const PromptTemplate& prompt_template,
     bool current_is_appending_message, bool append_message,
     std::optional<nlohmann::ordered_json> extra_context) const {
-  const JsonMessage& json_message = std::get<nlohmann::ordered_json>(message);
   const auto& json_preface = std::get<JsonPreface>(preface);
   std::string prefill_text = "";
   bool is_first_part = false;
@@ -371,17 +370,16 @@ Gemma3DataProcessor::RenderSingleTurnTemplate(
 
   bool is_role_changed = false;
   if (!history.empty()) {
-    const auto& last_json_message =
-        std::get<nlohmann::ordered_json>(history.back());
+    const auto& last_message = history.back();
     // If the last message is in appending state and the current message is
     // different role, then we need to add a closing message to the prefill.
     if (current_is_appending_message &&
-        (last_json_message["role"] != json_message["role"] &&
-         last_json_message["role"] != "system")) {
+        (last_message["role"] != message["role"] &&
+         last_message["role"] != "system")) {
       is_role_changed = true;
       PromptTemplateInput closing_tmpl_input;
       nlohmann::ordered_json closing_message = {
-          {"role", last_json_message["role"]},
+          {"role", last_message["role"]},
           {"content", ""},
       };
       ASSIGN_OR_RETURN(nlohmann::ordered_json message_tmpl_input,
@@ -402,7 +400,7 @@ Gemma3DataProcessor::RenderSingleTurnTemplate(
     if (!json_preface.messages.empty() || !json_preface.tools.empty() ||
         !json_preface.extra_context.is_null()) {
       preface_tmpl_input.messages.push_back(
-          JsonMessage{{"role", "user"}, {"content", ""}});
+          Message{{"role", "user"}, {"content", ""}});
       preface_tmpl_input.add_generation_prompt = false;
 
       if (extra_context.has_value()) {
@@ -416,10 +414,10 @@ Gemma3DataProcessor::RenderSingleTurnTemplate(
       prefill_text += preface_text;
     }
   }
-  if (json_message.is_object()) {
+  if (message.is_object()) {
     PromptTemplateInput tmpl_input;
     ASSIGN_OR_RETURN(tmpl_input.extra_context["message"],
-                     MessageToTemplateInput(json_message));
+                     MessageToTemplateInput(message));
     tmpl_input.extra_context["is_appending_to_prefill"] = true;
     tmpl_input.extra_context["is_first_part"] =
         is_first_part || is_role_changed;
@@ -442,7 +440,7 @@ absl::StatusOr<Message> Gemma3DataProcessor::ToMessageImpl(
     const Responses& responses,
     const Gemma3DataProcessorArguments& args) const {
   absl::string_view response_text = responses.GetTexts()[0];
-  ordered_json message = {{"role", "assistant"}};
+  Message message = {{"role", "assistant"}};
   if (preface_.has_value() && std::holds_alternative<JsonPreface>(*preface_) &&
       !std::get<JsonPreface>(*preface_).tools.empty()) {
     ASSIGN_OR_RETURN(

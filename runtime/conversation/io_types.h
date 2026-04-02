@@ -17,16 +17,22 @@
 
 #include <ostream>
 #include <string>
+#include <utility>
 #include <variant>
 
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 
 namespace litert::lm {
 
-using JsonMessage = nlohmann::ordered_json;
-
-// Message is the data container for a single turn of the conversation.
-using Message = std::variant<JsonMessage>;
+class Message : public nlohmann::ordered_json {
+ public:
+  using nlohmann::ordered_json::ordered_json;
+  Message() = default;
+  explicit Message(const nlohmann::ordered_json& json)
+      : nlohmann::ordered_json(json) {}
+  explicit Message(nlohmann::ordered_json&& json)
+      : nlohmann::ordered_json(std::move(json)) {}
+};
 
 std::ostream& operator<<(std::ostream& os, const Message& message);
 

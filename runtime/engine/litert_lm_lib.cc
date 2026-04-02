@@ -75,7 +75,7 @@ using ::litert::lm::Engine;
 using ::litert::lm::EngineSettings;
 using ::litert::lm::InputData;
 using ::litert::lm::InputText;
-using ::litert::lm::JsonMessage;
+
 using ::litert::lm::LlmExecutorSettings;
 using ::litert::lm::Message;
 using ::litert::lm::ModelAssets;
@@ -303,9 +303,9 @@ SessionConfig CreateSessionConfig(const LiteRtLmSettings& settings) {
   return session_config;
 }
 
-absl::Status PrintJsonMessage(const JsonMessage& message,
-                              std::stringstream& captured_output,
-                              bool streaming = false) {
+absl::Status PrintMessage(const Message& message,
+                          std::stringstream& captured_output,
+                          bool streaming = false) {
   if (message["content"].is_array()) {
     for (const auto& content : message["content"]) {
       if (content["type"] == "text") {
@@ -348,14 +348,12 @@ absl::AnyInvocable<void(absl::StatusOr<Message>)> CreatePrintMessageCallback(
     if (benchmark) {
       return;
     }
-    if (auto json_message = std::get_if<JsonMessage>(&(*message))) {
-      if (json_message->is_null()) {
-        std::cout << std::endl << std::flush;
-        return;
-      }
-      ABSL_CHECK_OK(PrintJsonMessage(*json_message, captured_output,
-                                     /*streaming=*/true));
+    if (message->is_null()) {
+      std::cout << std::endl << std::flush;
+      return;
     }
+    ABSL_CHECK_OK(PrintMessage(*message, captured_output,
+                               /*streaming=*/true));
   };
 }
 
@@ -457,8 +455,7 @@ absl::Status RunSingleTurnConversation(const std::string& input_prompt,
     ASSIGN_OR_RETURN(auto model_message,
                      conversation->SendMessage(json::object(
                          {{"role", "user"}, {"content", content_list}})));
-    RETURN_IF_ERROR(PrintJsonMessage(std::get<JsonMessage>(model_message),
-                                     captured_output));
+    RETURN_IF_ERROR(PrintMessage(model_message, captured_output));
   }
   CheckExpectedOutput(captured_output.str(), settings);
   return absl::OkStatus();
@@ -496,8 +493,7 @@ absl::Status RunMultiTurnConversation(const LiteRtLmSettings& settings,
       ASSIGN_OR_RETURN(auto model_message,
                        conversation->SendMessage(json::object(
                            {{"role", "user"}, {"content", content_list}})));
-      RETURN_IF_ERROR(PrintJsonMessage(std::get<JsonMessage>(model_message),
-                                       captured_output));
+      RETURN_IF_ERROR(PrintMessage(model_message, captured_output));
     }
   } while (true);
   CheckExpectedOutput(captured_output.str(), settings);

@@ -306,7 +306,7 @@ absl::StatusOr<Message> FunctionGemmaDataProcessor::ToMessageImpl(
     const Responses& responses,
     const FunctionGemmaDataProcessorArguments& args) const {
   absl::string_view response_text = responses.GetTexts()[0];
-  nlohmann::ordered_json message = {{"role", "assistant"}};
+  Message message = {{"role", "assistant"}};
   if (preface_.has_value() && std::holds_alternative<JsonPreface>(*preface_) &&
       !std::get<JsonPreface>(*preface_).tools.empty()) {
     ASSIGN_OR_RETURN(

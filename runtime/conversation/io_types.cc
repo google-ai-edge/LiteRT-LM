@@ -15,17 +15,11 @@
 #include "runtime/conversation/io_types.h"
 
 #include <ostream>
-#include <variant>
 
 namespace litert::lm {
 
 std::ostream& operator<<(std::ostream& os, const Message& message) {
-  if (std::holds_alternative<JsonMessage>(message)) {
-    const JsonMessage& json_message = std::get<JsonMessage>(message);
-    os << json_message.dump();
-  } else {
-    os << "[ERROR] Unsupported message type";
-  }
+  os << message.dump();
   return os;
 }
 

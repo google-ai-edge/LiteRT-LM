@@ -158,7 +158,7 @@ absl::StatusOr<ConversationConfig> ConversationConfig::CreateInternal(
 
 absl::StatusOr<std::string>
 Conversation::GetSingleTurnTextFromSingleTurnTemplate(
-    const JsonMessage& message, const OptionalArgs& optional_args) {
+    const Message& message, const OptionalArgs& optional_args) {
   absl::MutexLock lock(history_mutex_);  // NOLINT
   ASSIGN_OR_RETURN(
       auto result,
@@ -174,7 +174,7 @@ Conversation::GetSingleTurnTextFromSingleTurnTemplate(
 }
 
 absl::StatusOr<std::string> Conversation::GetSingleTurnTextFromFullHistory(
-    const JsonMessage& json_message, const OptionalArgs& optional_args) {
+    const Message& message, const OptionalArgs& optional_args) {
   PromptTemplateInput old_tmpl_input;
   RETURN_IF_ERROR(FillPrefaceForPromptTemplateInput(
       preface_, model_data_processor_.get(), old_tmpl_input));
@@ -189,18 +189,14 @@ absl::StatusOr<std::string> Conversation::GetSingleTurnTextFromFullHistory(
 
   absl::MutexLock lock(history_mutex_);  // NOLINT
   for (const auto& history_msg : history_) {
-    if (std::holds_alternative<nlohmann::ordered_json>(history_msg)) {
-      ASSIGN_OR_RETURN(nlohmann::ordered_json message_tmpl_input,
-                       model_data_processor_->MessageToTemplateInput(
-                           std::get<nlohmann::ordered_json>(history_msg)));
-      old_tmpl_input.messages.push_back(message_tmpl_input);
-    } else {
-      return absl::UnimplementedError("Message type is not supported yet");
-    }
+    ASSIGN_OR_RETURN(
+        nlohmann::ordered_json message_tmpl_input,
+        model_data_processor_->MessageToTemplateInput(history_msg));
+    old_tmpl_input.messages.push_back(message_tmpl_input);
   }
   nlohmann::ordered_json messages =
-      json_message.is_array() ? json_message
-                              : nlohmann::ordered_json::array({json_message});
+      message.is_array() ? message
+                         : Message(nlohmann::ordered_json::array({message}));
   if (history_.empty() && !config_.prefill_preface_on_init()) {
     PromptTemplateInput new_tmpl_input = std::move(old_tmpl_input);
     for (const auto& message : messages) {
@@ -239,11 +235,6 @@ absl::StatusOr<std::string> Conversation::GetSingleTurnTextFromFullHistory(
 
 absl::StatusOr<std::string> Conversation::GetSingleTurnText(
     const Message& message, const OptionalArgs& optional_args) {
-  if (!std::holds_alternative<nlohmann::ordered_json>(message)) {
-    return absl::InvalidArgumentError("Json message is required for now.");
-  }
-  nlohmann::ordered_json json_message =
-      std::get<nlohmann::ordered_json>(message);
   if (!prompt_template_.GetCapabilities().supports_single_turn &&
       optional_args.has_pending_message) {
     return absl::InvalidArgumentError(
@@ -254,12 +245,12 @@ absl::StatusOr<std::string> Conversation::GetSingleTurnText(
   }
   if (prompt_template_.GetCapabilities().supports_single_turn) {
     auto single_turn_text =
-        GetSingleTurnTextFromSingleTurnTemplate(json_message, optional_args);
+        GetSingleTurnTextFromSingleTurnTemplate(message, optional_args);
     if (!absl::IsUnimplemented(single_turn_text.status())) {
       return single_turn_text;
     }
   }
-  return GetSingleTurnTextFromFullHistory(json_message, optional_args);
+  return GetSingleTurnTextFromFullHistory(message, optional_args);
 }
 
 absl::StatusOr<DecodeConfig> Conversation::CreateDecodeConfig(
@@ -325,7 +316,7 @@ absl::StatusOr<std::unique_ptr<Conversation>> Conversation::Create(
         !conversation->prompt_template_.GetCapabilities().supports_single_turn;
     const auto render_result =
         conversation->model_data_processor_->RenderSingleTurnTemplate(
-            tmp_history, config.GetPreface(), JsonMessage(),
+            tmp_history, config.GetPreface(), Message(),
             config.GetPromptTemplate(),
             /*current_is_appending_message=*/false,
             /*append_message=*/false,
@@ -375,28 +366,24 @@ void Conversation::AddTaskController(
 
 absl::StatusOr<Message> Conversation::SendMessage(const Message& message,
                                                   OptionalArgs optional_args) {
-  if (!std::holds_alternative<nlohmann::ordered_json>(message)) {
-    return absl::InvalidArgumentError("Json message is required for now.");
-  }
-  auto json_message = std::get<nlohmann::ordered_json>(message);
   ASSIGN_OR_RETURN(const std::string& single_turn_text,
                    GetSingleTurnText(message, optional_args));
   absl::MutexLock lock(history_mutex_);  // NOLINT
-  if (json_message.is_array()) {
-    for (const auto& message : json_message) {
-      history_.push_back(message);
+  if (message.is_array()) {
+    for (const auto& message : message) {
+      history_.push_back(Message(message));
     }
   } else {
-    history_.push_back(json_message);
+    history_.push_back(Message(message));
   }
   ASSIGN_OR_RETURN(
       const auto session_inputs,
       model_data_processor_->ToInputDataVector(
-          single_turn_text, nlohmann::ordered_json::array({json_message}),
+          single_turn_text, nlohmann::ordered_json::array({message}),
           optional_args.args.value_or(std::monostate())));
   RETURN_IF_ERROR(IgnoreEmptyInputError(session_->RunPrefill(session_inputs)));
   if (is_appending_message_) {
-    return JsonMessage();
+    return Message();
   } else {
     ASSIGN_OR_RETURN(
         auto decode_config,
@@ -426,27 +413,23 @@ absl::Status Conversation::SendMessageAsync(
     const Message& message,
     absl::AnyInvocable<void(absl::StatusOr<Message>)> user_callback,
     OptionalArgs optional_args) {
-  if (!std::holds_alternative<nlohmann::ordered_json>(message)) {
-    return absl::InvalidArgumentError("Json message is required for now.");
-  }
-  auto json_message = std::get<nlohmann::ordered_json>(message);
   ASSIGN_OR_RETURN(const std::string& single_turn_text,
                    GetSingleTurnText(message, optional_args));
   {
     absl::MutexLock lock(history_mutex_);  // NOLINT
-    if (json_message.is_array()) {
-      for (const auto& message : json_message) {
-        history_.push_back(message);
+    if (message.is_array()) {
+      for (const auto& message : message) {
+        history_.push_back(Message(message));
       }
     } else {
-      history_.push_back(json_message);
+      history_.push_back(Message(message));
     }
   }
 
   ASSIGN_OR_RETURN(
       const auto session_inputs,
       model_data_processor_->ToInputDataVector(
-          single_turn_text, nlohmann::ordered_json::array({json_message}),
+          single_turn_text, nlohmann::ordered_json::array({message}),
           optional_args.args.value_or(std::monostate())));
 
   absl::AnyInvocable<void(Message)> complete_message_callback =

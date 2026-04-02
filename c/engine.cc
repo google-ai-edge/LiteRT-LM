@@ -75,17 +75,12 @@ CreateConversationCallback(LiteRtLmStreamCallback callback, void* user_data) {
       callback(user_data, nullptr, true, const_cast<char*>(error_str.c_str()));
       return;
     }
-    if (auto* json_msg = std::get_if<litert::lm::JsonMessage>(&*message)) {
-      if (json_msg->is_null()) {  // End of stream marker
-        callback(user_data, nullptr, true, nullptr);
-      } else {
-        std::string json_str = json_msg->dump();
-        callback(user_data, const_cast<char*>(json_str.c_str()), false,
-                 nullptr);
-      }
+    if (message->empty()) {  // End of stream marker
+      callback(user_data, nullptr, true, nullptr);
     } else {
-      std::string error_str = "Unsupported message type";
-      callback(user_data, nullptr, true, const_cast<char*>(error_str.c_str()));
+      std::string json_str = message->dump();
+      callback(user_data, const_cast<char*>(json_str.c_str()), false,
+               nullptr);
     }
   };
 }
@@ -110,7 +105,7 @@ using ::litert::lm::Engine;
 using ::litert::lm::EngineFactory;
 using ::litert::lm::EngineSettings;
 using ::litert::lm::InputText;
-using ::litert::lm::JsonMessage;
+
 using ::litert::lm::Message;
 using ::litert::lm::ModelAssets;
 using ::litert::lm::Responses;
@@ -712,13 +707,8 @@ LiteRtLmJsonResponse* litert_lm_conversation_send_message(
     ABSL_LOG(ERROR) << "Failed to send message: " << response.status();
     return nullptr;
   }
-  auto* json_response = std::get_if<JsonMessage>(&*response);
-  if (!json_response) {
-    ABSL_LOG(ERROR) << "Response is not a JSON message.";
-    return nullptr;
-  }
   auto* c_response = new LiteRtLmJsonResponse;
-  c_response->json_string = json_response->dump();
+  c_response->json_string = response->dump();
   return c_response;
 }
 

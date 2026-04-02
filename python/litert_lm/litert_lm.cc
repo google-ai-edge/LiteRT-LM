@@ -87,7 +87,7 @@ namespace nb = nanobind;
 constexpr int kRecurringToolCallLimit = 25;
 
 // Helper to convert Python dict or str to JSON message.
-nlohmann::json ParseJsonMessage(const nb::handle& message) {
+nlohmann::json ParseMessage(const nb::handle& message) {
   if (nb::isinstance<nb::dict>(message)) {
     return nb::cast<nb::dict>(message);
   }
@@ -239,17 +239,11 @@ class MessageIterator {
       throw std::runtime_error(message.status().ToString());
     }
 
-    if (!std::holds_alternative<JsonMessage>(*message)) {
-      throw std::runtime_error(
-          "SendMessageAsync did not return a JsonMessage.");
-    }
-
-    auto& json_msg = std::get<JsonMessage>(*message);
-    if (json_msg.empty()) {
+    if (message->empty()) {
       throw nb::stop_iteration();
     }
 
-    return static_cast<nlohmann::json>(json_msg);
+    return nlohmann::json(*message);
   }
 
   bool HasData() const ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_) {
@@ -738,7 +732,7 @@ NB_MODULE(litert_lm_ext, module) {
           "send_message",
           [](nb::object self, const nb::handle& message) {
             Conversation& conversation = nb::cast<Conversation&>(self);
-            nlohmann::json current_message = ParseJsonMessage(message);
+            nlohmann::json current_message = ParseMessage(message);
 
             nb::dict tool_map;
             if (nb::hasattr(self, "_tool_map")) {
@@ -753,21 +747,14 @@ NB_MODULE(litert_lm_ext, module) {
             for (int i = 0; i < kRecurringToolCallLimit; ++i) {
               absl::StatusOr<Message> result =
                   conversation.SendMessage(current_message);
-              Message message_variant = VALUE_OR_THROW(std::move(result));
-
-              if (!std::holds_alternative<JsonMessage>(message_variant)) {
-                throw std::runtime_error(
-                    "SendMessage did not return a JsonMessage.");
-              }
-
-              nlohmann::json response = std::get<JsonMessage>(message_variant);
+              Message response = VALUE_OR_THROW(std::move(result));
 
               if (response.contains("tool_calls") &&
                   !response["tool_calls"].empty()) {
                 current_message =
                     HandleToolCalls(response, tool_map, tool_event_handler);
               } else {
-                return response;
+                return nlohmann::json(response);
               }
             }
             throw std::runtime_error("Exceeded recurring tool call limit of " +
@@ -778,7 +765,7 @@ NB_MODULE(litert_lm_ext, module) {
           "send_message_async",
           [](nb::object self, const nb::handle& message) {
             Conversation& conversation = nb::cast<Conversation&>(self);
-            nlohmann::json json_message = ParseJsonMessage(message);
+            nlohmann::json json_message = ParseMessage(message);
             auto iterator = std::make_shared<MessageIterator>();
 
             nb::dict tool_map;
@@ -810,25 +797,17 @@ NB_MODULE(litert_lm_ext, module) {
                   return;
                 }
 
-                if (!std::holds_alternative<JsonMessage>(*message)) {
-                  iterator->Push(absl::InternalError(
-                      "SendMessageAsync did not return a JsonMessage."));
-                  return;
-                }
-
-                auto& json_msg = std::get<JsonMessage>(*message);
-
-                if (json_msg.contains("tool_calls") &&
-                    !json_msg["tool_calls"].empty()) {
+                if (message->contains("tool_calls") &&
+                    !(*message)["tool_calls"].empty()) {
                   nb::gil_scoped_acquire acquire;
                   state->pending_tool_response =
-                      HandleToolCalls(json_msg, tool_map, tool_event_handler);
+                      HandleToolCalls(*message, tool_map, tool_event_handler);
                 }
 
-                if (json_msg.contains("content") ||
-                    json_msg.contains("channels")) {
-                  iterator->Push(std::move(message));
-                } else if (json_msg.empty()) {
+                if (message->contains("content") ||
+                    message->contains("channels")) {
+                  iterator->Push(std::move(*message));
+                } else if (message->empty()) {
                   if (state->pending_tool_response != nullptr) {
                     if (state->tool_call_count >= kRecurringToolCallLimit) {
                       iterator->Push(absl::InternalError(

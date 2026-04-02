@@ -61,10 +61,8 @@ namespace {
 using ::litert::lm::Backend;
 using ::litert::lm::Conversation;
 using ::litert::lm::ConversationConfig;
-using ::litert::lm::Engine;
 using ::litert::lm::EngineSettings;
 using ::litert::lm::InputData;
-using ::litert::lm::JsonMessage;
 using ::litert::lm::Message;
 using ::litert::lm::ModelAssets;
 using ::nlohmann::json;
@@ -75,17 +73,14 @@ absl::AnyInvocable<void(absl::StatusOr<Message>)> CreateMessageCallback() {
       std::cout << "Error: " << message.status() << std::endl;
       return;
     }
-    if (std::holds_alternative<JsonMessage>(*message)) {
-      const auto& json_message = std::get<JsonMessage>(*message);
-      if (json_message.is_null()) {
-        std::cout << std::endl << std::flush;
-        return;
-      }
-      for (const auto& content : json_message["content"]) {
-        std::cout << content["text"].get<std::string>();
-      }
-      std::cout << std::flush;
+    if (message->is_null()) {
+      std::cout << std::endl << std::flush;
+      return;
     }
+    for (const auto& content : (*message)["content"]) {
+      std::cout << content["text"].get<std::string>();
+    }
+    std::cout << std::flush;
   };
 }
 

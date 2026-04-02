@@ -75,11 +75,8 @@ TEST(GenericDataProcessorTest, ToMessageDefault) {
       processor->ToMessage(Responses(TaskState::kProcessing, {"test response"}),
                            std::monostate{}));
 
-  ASSERT_TRUE(std::holds_alternative<nlohmann::ordered_json>(message));
-  const nlohmann::ordered_json& json_message =
-      std::get<nlohmann::ordered_json>(message);
   EXPECT_EQ(
-      json_message,
+      message,
       json({{"role", "assistant"},
             {"content", {{{"type", "text"}, {"text", "test response"}}}}}));
 }
@@ -94,11 +91,8 @@ TEST(GenericDataProcessorTest, ToMessageModelRole) {
       processor->ToMessage(Responses(TaskState::kProcessing, {"test response"}),
                            std::monostate{}));
 
-  ASSERT_TRUE(std::holds_alternative<nlohmann::ordered_json>(message));
-  const nlohmann::ordered_json& json_message =
-      std::get<nlohmann::ordered_json>(message);
   EXPECT_EQ(
-      json_message,
+      message,
       json({{"role", "model"},
             {"content", {{{"type", "text"}, {"text", "test response"}}}}}));
 }

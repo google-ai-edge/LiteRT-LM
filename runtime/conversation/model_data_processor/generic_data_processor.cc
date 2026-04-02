@@ -59,8 +59,7 @@ absl::StatusOr<Message> GenericDataProcessor::ToMessageImpl(
     content = nlohmann::ordered_json::array(
         {{{"type", "text"}, {"text", std::string(response_text)}}});
   }
-  return nlohmann::ordered_json::object(
-      {{"role", GetConfig().model_role}, {"content", content}});
+  return Message({{"role", GetConfig().model_role}, {"content", content}});
 }
 
 absl::StatusOr<nlohmann::ordered_json>

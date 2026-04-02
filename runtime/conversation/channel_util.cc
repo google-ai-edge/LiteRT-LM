@@ -15,14 +15,12 @@
 #include "runtime/conversation/channel_util.h"
 
 #include <string>
-#include <variant>
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
-#include "nlohmann/json_fwd.hpp"  // from @nlohmann_json
 #include "runtime/conversation/io_types.h"
 #include "runtime/engine/io_types.h"
 #include "re2/re2.h"  // from @com_googlesource_code_re2
@@ -81,11 +79,8 @@ ExtractChannelContent(const std::vector<Channel>& channels,
 void InsertChannelContentIntoMessage(
     const absl::flat_hash_map<std::string, std::string>& channel_content,
     Message& assistant_message) {
-  if (std::holds_alternative<nlohmann::ordered_json>(assistant_message)) {
-    auto& json_msg = std::get<nlohmann::ordered_json>(assistant_message);
-    for (const auto& [channel_name, value] : channel_content) {
-      json_msg[std::string(kChannelsKey)][channel_name] = value;
-    }
+  for (const auto& [channel_name, value] : channel_content) {
+    assistant_message[std::string(kChannelsKey)][channel_name] = value;
   }
 }
 
