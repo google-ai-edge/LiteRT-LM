@@ -54,7 +54,7 @@ models immediately on your device.
 | [Bring state-of-the-art agentic skills to the edge with Gemma 4](https://developers.googleblog.com/bring-state-of-the-art-agentic-skills-to-the-edge-with-gemma-4/) | Deploy Gemma 4 in-app and across a broader range of devices with stellar performance and broad reach using LiteRT-LM. |
 | [On-device GenAI in Chrome, Chromebook Plus and Pixel Watch](https://developers.googleblog.com/on-device-genai-in-chrome-chromebook-plus-and-pixel-watch-with-litert-lm/) | Deploy language models on wearables and browser-based platforms using LiteRT-LM at scale. |
 | [On-device Function Calling in Google AI Edge Gallery](https://developers.googleblog.com/on-device-function-calling-in-google-ai-edge-gallery/) | Explore how to fine-tune FunctionGemma and enable function calling capabilities powered by LiteRT-LM Tool Use APIs. |
-| [Google AI Edge small language models, multimodality, and function calling](https://developers.googleblog.com/google-ai-edge-small-language-models-multimodality-rag-function-calling/) | Latest insights on RAG, multimodality, and function calling for edge language models. |
+| [Google AI Edge small language models, multimodality, and function calling](https://developers.googleblog.com/google-ai-edge-small-language-models-multimodality-rag-function-calling/) | May 2025 announcement on on-device RAG, multimodality, and function calling. Note: linked MediaPipe GenAI docs are deprecated — refer to current [LiteRT-LM APIs](https://ai.google.dev/edge/litert-lm/overview) for implementation. |
 
 ---
 
