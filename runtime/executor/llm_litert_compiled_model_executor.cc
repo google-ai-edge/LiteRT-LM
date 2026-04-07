@@ -320,30 +320,6 @@ absl::StatusOr<RankedTensorType> GetEmbeddingLookupOutputTensorType(
                           Layout(std::move(embedding_dims)));
 }
 
-struct MaybeWrappedTensorBuffer {
-  TensorBuffer buffer;
-  bool wrapped;
-};
-
-template <typename T>
-absl::StatusOr<MaybeWrappedTensorBuffer> WrapOrCreateTensorBufferFromHostMemory(
-    RankedTensorType tensor_type, absl::Span<T> data) {
-  size_t size = data.size() * sizeof(T);
-  // First try to wrap the memory with a TensorBuffer.
-  auto wrapped_buffer =
-      TensorBuffer::CreateFromHostMemory(tensor_type, data.data(), size);
-  if (wrapped_buffer.HasValue()) {
-    return MaybeWrappedTensorBuffer{.buffer = std::move(*wrapped_buffer),
-                                    .wrapped = true};
-  }
-
-  LITERT_ASSIGN_OR_RETURN(
-      auto new_buffer,
-      TensorBuffer::CreateManagedHostMemory(tensor_type, size));
-  return MaybeWrappedTensorBuffer{.buffer = std::move(new_buffer),
-                                  .wrapped = false};
-}
-
 // Returns a subspan of the given span for a chunk at the given index.
 template <typename T>
 absl::Span<const T> GetSpanForChunk(absl::Span<T> span, int num_chunks,

@@ -190,7 +190,8 @@ template <typename T>
         ::litert::Status::kErrorInvalidArgument,
         "Environment is required for non-host memory buffer.");
   }
-  ::litert::Expected<::litert::TensorBuffer> output_tensor_buffer;
+  ::litert::Expected<::litert::TensorBuffer> output_tensor_buffer =
+      ::litert::Unexpected(::litert::Status::kErrorUnknown);
   if (buffer_type == ::litert::TensorBufferType::kHostMemory) {
     output_tensor_buffer = ::litert::TensorBuffer::CreateManagedHostMemory(
         ::litert::RankedTensorType(ElementTypeFor<T>::kType,
@@ -223,7 +224,8 @@ template <typename TargetType, typename SourceType>
         ::litert::Status::kErrorInvalidArgument,
         "Environment is required for non-host memory buffer.");
   }
-  ::litert::Expected<::litert::TensorBuffer> tensor_buffer;
+  ::litert::Expected<::litert::TensorBuffer> tensor_buffer =
+      ::litert::Unexpected(::litert::Status::kErrorUnknown);
   if (buffer_type == ::litert::TensorBufferType::kHostMemory) {
     tensor_buffer = ::litert::TensorBuffer::CreateManagedHostMemory(
         ::litert::RankedTensorType(ElementTypeFor<TargetType>::kType,
