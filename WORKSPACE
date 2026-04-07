@@ -2,10 +2,13 @@
 
 workspace(name = "litert_lm")
 
-# UPDATED = 2026-04-01
-LITERT_REF = "5c42d07c5e457ea535d1a2144a376c95e79a06d5"
+# UPDATED = 2026-04-07 (LiteRT main HEAD; includes commit 36ab4fc which fixes
+# the iOS Metal accelerator dynamic-linking crash by passing Metal device +
+# command queue across the static-lib ↔ dylib boundary via env options instead
+# of transient raw pointers — required for iOS GPU to work at all)
+LITERT_REF = "b5d47c827a4944cc71c31c5e05b5702cf5868d45"
 
-LITERT_SHA256 = "9e7f8f3e9152007a71766332147f6d2deecb3f9178749bc9ed9d76e69178a1c4"
+LITERT_SHA256 = "b9e114c93bf053e399201f076e19246adbb09f3343eefb19c211797d9f78f72b"
 
 TENSORFLOW_REF = "e6f36bd7a12f87aac6f21a5068719dfc91bed3eb"
 
