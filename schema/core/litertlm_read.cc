@@ -36,6 +36,7 @@
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/status_macros.h"  // NOLINT
 #include "schema/core/litertlm_header.h"
+#include "flatbuffers/verifier.h"  // from @flatbuffers
 #include "schema/core/litertlm_header_schema_generated.h"
 #include "schema/core/litertlm_utils.h"
 #include "zconf.h"  // from @zlib
@@ -133,6 +134,15 @@ absl::Status ReadHeaderFromLiteRTLM(std::istream& litertlm_stream,
                        header_size);
   if (!litertlm_stream) {
     return absl::InternalError("Failed to read header data.");
+  }
+
+  // Verify FlatBuffer integrity before interpreting the header.
+  // Without this, a crafted .litertlm file with malicious internal offsets
+  // can cause out-of-bounds heap reads when metadata fields are accessed.
+  flatbuffers::Verifier verifier(header_buffer.get(), header_size);
+  if (!VerifyLiteRTLMMetaDataBuffer(verifier)) {
+    return absl::InvalidArgumentError(
+        "LiteRTLM header contains invalid FlatBuffer metadata.");
   }
 
   header->reset(std::move(header_buffer));
