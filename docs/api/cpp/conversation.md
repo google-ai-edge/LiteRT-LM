@@ -208,7 +208,7 @@ std::cout << *model_message << std::endl;
 
 ### Use Conversation with Tools
 
-Please refer to [Tool Use](./tool_use.md) for detailed Tool Usage with
+Please refer to [Tool Use](./tool-use.md) for detailed Tool Usage with
 Conversation API
 
 ## Components in Conversation
