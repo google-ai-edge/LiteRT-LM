@@ -80,6 +80,12 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
       LITERT_ASSIGN_OR_RETURN(auto& gpu_compilation_options,
                               compilation_options.GetGpuOptions());
       gpu_compilation_options.EnableInfiniteFloatCapping(true);
+
+      gpu_compilation_options.AddExternalTensorPattern("kv_cache_");
+      gpu_compilation_options.AddBufferStorageTensorPattern("kv_cache_");
+      gpu_compilation_options.AddBufferStorageTensorPattern("param_tensor");
+      gpu_compilation_options.AddExternalTensorPattern("param_tensor");
+
       if (activation_data_type == ActivationDataType::FLOAT32) {
         gpu_compilation_options.SetPrecision(GpuOptions::Precision::kFp32);
       } else {
