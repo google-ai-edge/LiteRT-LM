@@ -966,10 +966,19 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::BindTensorsAndRunDecode(
     decode_output_buffers[output_name] = std::move(output_buffer_dup);
   }
 
-  bool async = true;
-  LITERT_RETURN_IF_ERROR(
-      compiled_model_.RunAsync(kDecodeSignatureRunner, decode_input_buffers,
-                               decode_output_buffers, async));
+  // Use the same sync/async decision as prefill. The prefill path sets
+  // do_prefill_sync_ = true when buffers use Metal memory (see
+  // TODO(b/494284915)). Without this guard, RunAsync crashes on Metal
+  // backends (process killed, no signal).
+  bool async = !(do_prefill_sync_.has_value() && *do_prefill_sync_);
+  if (async) {
+    LITERT_RETURN_IF_ERROR(compiled_model_.RunAsync(
+        kDecodeSignatureRunner, decode_input_buffers, decode_output_buffers,
+        async));
+  } else {
+    LITERT_RETURN_IF_ERROR(compiled_model_.Run(
+        kDecodeSignatureRunner, decode_input_buffers, decode_output_buffers));
+  }
 
   if (!gpu_optimized_single_buffer_cache_) {
     std::swap(input_kv_cache_buffers_, output_kv_cache_buffers_);
