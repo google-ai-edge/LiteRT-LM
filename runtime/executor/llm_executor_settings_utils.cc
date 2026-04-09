@@ -203,6 +203,8 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
       gpu_compilation_options.HintWaitingForCompletion(
           advanced_settings.hint_waiting_for_completion.has_value() &&
           advanced_settings.hint_waiting_for_completion.value());
+      gpu_compilation_options.SetGpuFlushPeriod(
+          advanced_settings.hint_gpu_flush_period);
       if (advanced_settings.is_benchmark) {
         gpu_compilation_options.SetSyncExecutionModeWaitType(
             GpuOptions::SyncExecutionModeWaitType::kActive);

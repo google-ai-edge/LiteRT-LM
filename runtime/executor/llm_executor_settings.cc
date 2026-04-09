@@ -105,6 +105,7 @@ std::ostream& operator<<(std::ostream& os, const AdvancedSettings& settings) {
      << "\n";
   os << "disable_delegate_clustering: " << settings.disable_delegate_clustering
      << "\n";
+  os << "hint_gpu_flush_period: " << settings.hint_gpu_flush_period << "\n";
   return os;
 }
 

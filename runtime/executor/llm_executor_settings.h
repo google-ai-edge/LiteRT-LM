@@ -233,6 +233,10 @@ struct AdvancedSettings {
   // where the default model delegate partitioning is not optimal.
   bool disable_delegate_clustering = false;
 
+  // If > 0, specifies the period (number of ops) for GPU flushing. This is to
+  // flush the enqueued commands periodically to ensure smooth UI.
+  int hint_gpu_flush_period = -1;
+
   bool operator==(const AdvancedSettings& other) const {
     return prefill_batch_sizes == other.prefill_batch_sizes &&
            num_output_candidates == other.num_output_candidates &&
@@ -260,7 +264,8 @@ struct AdvancedSettings {
            hint_waiting_for_completion == other.hint_waiting_for_completion &&
            gpu_context_low_priority == other.gpu_context_low_priority &&
            enable_speculative_decoding == other.enable_speculative_decoding &&
-           disable_delegate_clustering == other.disable_delegate_clustering;
+           disable_delegate_clustering == other.disable_delegate_clustering &&
+           hint_gpu_flush_period == other.hint_gpu_flush_period;
   }
 };
 std::ostream& operator<<(std::ostream& os, const AdvancedSettings& settings);
