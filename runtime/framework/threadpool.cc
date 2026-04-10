@@ -38,6 +38,8 @@ ThreadPool::ThreadPool(const std::string& name_prefix, size_t max_num_threads,
     : name_prefix_(name_prefix),
       max_num_threads_(max_num_threads == 0 ? 1 : max_num_threads),
       thread_options_(std::move(thread_options)) {
+  // Pre-allocate thread pool vector to avoid reallocation overhead
+  threads_.reserve(max_num_threads_);
   ABSL_LOG(INFO) << "ThreadPool '" << name_prefix_ << "': Running up to "
                  << max_num_threads_ << " threads.";
 }

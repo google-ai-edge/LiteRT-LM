@@ -160,13 +160,13 @@ absl::Status CopyKvCacheBuffers(
       RET_CHECK_EQ(src_buffer_size, dst_buffer_size * decode_batch_size);
       RET_CHECK_LT(src_index_to_copy_on_prefill, decode_batch_size);
       src_buffer_ptr += src_index_to_copy_on_prefill * dst_buffer_size;
-      memcpy(dst_buffer_ptr, src_buffer_ptr, dst_buffer_size);
+      std::copy_n(src_buffer_ptr, dst_buffer_size, dst_buffer_ptr);
     } else {
       // This is the case of the first decode after prefill. It broadcasts the
       // KV cache contents to all the batches.
       RET_CHECK_EQ(src_buffer_size * decode_batch_size, dst_buffer_size);
       for (int i = 0; i < decode_batch_size; ++i) {
-        memcpy(dst_buffer_ptr, src_buffer_ptr, src_buffer_size);
+        std::copy_n(src_buffer_ptr, src_buffer_size, dst_buffer_ptr);
         dst_buffer_ptr += src_buffer_size;
       }
     }
@@ -487,16 +487,17 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::FillInputBufferWithToken(
     } else if (is_per_layer_embedding) {
       size_to_fill = token->per_layer_embedding().size() * sizeof(float);
       RET_CHECK_GE(stride, size_to_fill);
-      memcpy(input_buffer_ptr, token->per_layer_embedding().data(),
-             size_to_fill);
+      std::copy_n(reinterpret_cast<const char*>(token->per_layer_embedding().data()),
+                  size_to_fill, input_buffer_ptr);
     } else {
       size_to_fill = token->embedding().size() * sizeof(float);
       RET_CHECK_GE(stride, size_to_fill);
-      memcpy(input_buffer_ptr, token->embedding().data(), size_to_fill);
+      std::copy_n(reinterpret_cast<const char*>(token->embedding().data()),
+                  size_to_fill, input_buffer_ptr);
     }
 
     if (stride > size_to_fill) {
-      memset(input_buffer_ptr + size_to_fill, 0, stride - size_to_fill);
+      std::fill_n(input_buffer_ptr + size_to_fill, stride - size_to_fill, 0);
     }
     input_buffer_ptr += stride;
   }

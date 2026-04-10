@@ -117,6 +117,8 @@ absl::StatusOr<std::unique_ptr<MemoryMappedFile>> MemoryMappedFile::Create(
   // Mark it not needed to avoid unnecessary page loading on MacOS or iOS.
   RET_CHECK_EQ(madvise(data, length, MADV_DONTNEED), 0) << "madvise failed.";
 #else
+  // Use MADV_SEQUENTIAL for better sequential read performance
+  RET_CHECK_EQ(madvise(data, length, MADV_SEQUENTIAL), 0) << "madvise failed.";
   RET_CHECK_EQ(madvise(data, length, MADV_WILLNEED), 0) << "madvise failed.";
 #endif
 
