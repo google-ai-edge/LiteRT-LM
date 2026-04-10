@@ -302,7 +302,13 @@ absl::Status EngineSettings::MaybeUpdateAndValidate(
     advanced_settings.is_benchmark = true;
     main_executor_settings_.SetAdvancedSettings(advanced_settings);
   }
-
+  // Set the hint kernel batch size for generic models on GPU.
+  if (!advanced_settings.hint_kernel_batch_size.has_value() &&
+      metadata.has_llm_model_type() &&
+      metadata.llm_model_type().has_generic_model()) {
+    advanced_settings.hint_kernel_batch_size = 4;
+    main_executor_settings_.SetAdvancedSettings(advanced_settings);
+  }
   if (!metadata.has_jinja_prompt_template()) {
     ASSIGN_OR_RETURN(*metadata.mutable_jinja_prompt_template(),
                      GetDefaultJinjaPromptTemplate(metadata.prompt_templates(),

@@ -233,6 +233,14 @@ struct AdvancedSettings {
   // where the default model delegate partitioning is not optimal.
   bool disable_delegate_clustering = false;
 
+  // If > 0, specifies the batch size of kernels (ops) for GPU flushing. This is
+  // to flush the enqueued commands periodically to ensure smooth UI.
+  // This feature is by default not enabled.
+  // For runtime, by default, it is -1. If we are running a Generic model (most
+  // OSS models), we would set this flag to a positive value to ensure smooth
+  // UI.
+  std::optional<int> hint_kernel_batch_size;
+
   bool operator==(const AdvancedSettings& other) const {
     return prefill_batch_sizes == other.prefill_batch_sizes &&
            num_output_candidates == other.num_output_candidates &&
@@ -260,7 +268,8 @@ struct AdvancedSettings {
            hint_waiting_for_completion == other.hint_waiting_for_completion &&
            gpu_context_low_priority == other.gpu_context_low_priority &&
            enable_speculative_decoding == other.enable_speculative_decoding &&
-           disable_delegate_clustering == other.disable_delegate_clustering;
+           disable_delegate_clustering == other.disable_delegate_clustering &&
+           hint_kernel_batch_size == other.hint_kernel_batch_size;
   }
 };
 std::ostream& operator<<(std::ostream& os, const AdvancedSettings& settings);

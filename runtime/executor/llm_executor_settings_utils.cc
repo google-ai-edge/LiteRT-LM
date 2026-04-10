@@ -203,6 +203,10 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
       gpu_compilation_options.HintWaitingForCompletion(
           advanced_settings.hint_waiting_for_completion.has_value() &&
           advanced_settings.hint_waiting_for_completion.value());
+      if (advanced_settings.hint_kernel_batch_size.has_value()) {
+        gpu_compilation_options.SetKernelBatchSize(
+            advanced_settings.hint_kernel_batch_size.value());
+      }
       if (advanced_settings.is_benchmark) {
         gpu_compilation_options.SetSyncExecutionModeWaitType(
             GpuOptions::SyncExecutionModeWaitType::kActive);
