@@ -55,8 +55,8 @@ macro(generate_absl_aggregate)
             endif()
         endforeach()
 
-        set(absl_FOUND TRUE CACHE BOOL "" FORCE)
-        set(Abseil_FOUND TRUE CACHE BOOL "" FORCE)
+        set(absl_FOUND TRUE CACHE BOOL "${ABSL_CONFIG_CMAKE_FILE}" FORCE)
+        set(Abseil_FOUND TRUE CACHE BOOL "${ABSL_CONFIG_CMAKE_FILE}" FORCE)
         set(absl_DIR "Abseil merged archive" CACHE PATH "" FORCE)
 
         get_target_property(_ABSL_PAYLOAD LiteRTLM::absl::absl INTERFACE_LINK_LIBRARIES)

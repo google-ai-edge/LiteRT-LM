@@ -117,6 +117,7 @@ target_link_libraries(runtime_executor_audio_litert_compiled_model_executor
     LiteRTLM::Runtime::Components::ModelResources::Interface
     runtime_util_litert_status_util
     LiteRTLM::Runtime::Executor::LiteRTCompiledModelExecutorUtils
+    LiteRTLM::Runtime::Util::LoggingTensorBuffer
 
     LITERTLM_DEPS
 )
