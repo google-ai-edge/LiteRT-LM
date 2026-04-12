@@ -36,8 +36,6 @@ internal object LiteRtLmJni {
    *   `litert::lm::Backend`.
    * @param maxNumTokens The maximum number of tokens to be processed by the engine. When
    *   non-positive, use the engine's default.
-   * @param maxNumImages The maximum number of images the model can handle. When non-positive, use
-   *   the engine's default.
    * @param enableBenchmark Whether to enable benchmark mode or not.
    * @param cacheDir The directory for cache files.
    * @param enableBenchmark Whether to enable benchmark or not.
@@ -55,7 +53,6 @@ internal object LiteRtLmJni {
     visionBackend: String,
     audioBackend: String,
     maxNumTokens: Int,
-    maxNumImages: Int,
     cacheDir: String,
     enableBenchmark: Boolean,
     enableSpeculativeDecoding: Boolean,

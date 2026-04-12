@@ -77,7 +77,6 @@ class Engine(val engineConfig: EngineConfig) : AutoCloseable {
           engineConfig.audioBackend?.name ?: "",
           // convert the null value to -1 to avoid passing nullable object in JNI.
           engineConfig.maxNumTokens ?: -1,
-          engineConfig.maxNumImages ?: -1,
           engineConfig.cacheDir ?: "",
           @OptIn(ExperimentalApi::class) ExperimentalFlags.enableBenchmark,
           @OptIn(ExperimentalApi::class) ExperimentalFlags.enableSpeculativeDecoding,

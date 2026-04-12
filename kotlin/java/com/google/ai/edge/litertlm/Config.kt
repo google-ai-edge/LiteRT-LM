@@ -70,8 +70,6 @@ sealed class Backend(val name: String) {
  *   not be initialized.
  * @property maxNumTokens The maximum number of the sum of input and output tokens. It is equivalent
  *   to the size of the kv-cache. When `null`, use the default value from the model or the engine.
- * @property maxNumImages The maximum number of images the model can handle. When `null`, use the
- *   default value from the model or the engine.
  * @property cacheDir The directory for placing cache files. It should be a directory with write
  *   access. If not set, it uses the directory of the [modelPath]. Set to ":nocache" to disable
  *   caching at all.
@@ -82,15 +80,11 @@ data class EngineConfig(
   val visionBackend: Backend? = null,
   val audioBackend: Backend? = null,
   val maxNumTokens: Int? = null,
-  val maxNumImages: Int? = null,
   val cacheDir: String? = null,
 ) {
   init {
     require(maxNumTokens == null || maxNumTokens > 0) {
       "maxNumToken must be positive or null (use the default from model or engine)."
-    }
-    require(maxNumImages == null || maxNumImages > 0) {
-      "maxNumImages must be positive or null (use the default from model or engine)."
     }
   }
 }

@@ -389,7 +389,7 @@ LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeSetMinLogSeverity)(
 LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateEngine)(
     JNIEnv* env, jclass thiz, jstring model_path, jstring backend,
     jstring vision_backend, jstring audio_backend, jint max_num_tokens,
-    jint max_num_images, jstring cache_dir, jboolean enable_benchmark,
+    jstring cache_dir, jboolean enable_benchmark,
     jboolean enable_speculative_decoding, jstring main_npu_native_library_dir,
     jstring vision_npu_native_library_dir, jstring audio_npu_native_library_dir,
     jint main_backend_num_threads, jint audio_backend_num_threads) {
@@ -514,9 +514,6 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateEngine)(
 
   if (max_num_tokens > 0) {
     settings->GetMutableMainExecutorSettings().SetMaxNumTokens(max_num_tokens);
-  }
-  if (max_num_images > 0) {
-    settings->GetMutableMainExecutorSettings().SetMaxNumImages(max_num_images);
   }
 
   if (main_backend_num_threads > 0) {
