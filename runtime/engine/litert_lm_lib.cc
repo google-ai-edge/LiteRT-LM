@@ -319,44 +319,22 @@ absl::StatusOr<std::vector<litert::lm::ScorerOutput>> RunScoreText(
   std::vector<litert::lm::InputData> inputs;
   inputs.emplace_back(InputText(std::string(input_prompt)));
   RETURN_IF_ERROR(session->RunPrefill(inputs));
-  ASSIGN_OR_RETURN(litert::lm::Responses response,
+  ASSIGN_OR_RETURN(litert::lm::ScoringResponses response,
                    session->RunTextScoring(target_text_vector,
                                            store_char_and_token_lengths));
-  const std::vector<float>& scores = response.GetScores();
-  if (scores.empty()) {
+  const std::vector<ScorerOutput>& scorer_outputs = response.GetScorerOutputs();
+  if (scorer_outputs.empty()) {
     ABSL_LOG(WARNING) << "No score found.";
   } else {
     // Multiply by -1 to get the negative log likelihood.
-    ABSL_LOG(INFO) << "Score: " << -1 * (scores[0]) << std::endl;
+    ABSL_LOG(INFO) << "Score: " << -1 * (scorer_outputs[0].score) << std::endl;
   }
-  if (scores.size() != target_text_vector.size()) {
-    return absl::InternalError(absl::StrCat("Scores size ", scores.size(),
-                                            " does not match target text size ",
-                                            target_text_vector.size()));
+  if (scorer_outputs.size() != target_text_vector.size()) {
+    return absl::InternalError(absl::StrCat(
+        "Scorer outputs size ", scorer_outputs.size(),
+        " does not match target text size ", target_text_vector.size()));
   }
-  const std::optional<std::vector<int>>& token_lengths =
-      response.GetTokenLengths();
-  if (store_char_and_token_lengths) {
-    if (!token_lengths.has_value()) {
-      return absl::InternalError("Token lengths are not available.");
-    }
-    if (scores.size() != token_lengths->size()) {
-      return absl::InternalError(absl::StrCat(
-          "Scores size ", scores.size(), " does not match token lengths size ",
-          token_lengths->size()));
-    }
-  }
-  // Write the scores and char/token lengths (if requested) to `ScorerOutputs`.
-  std::vector<litert::lm::ScorerOutput> scorer_outputs;
-  scorer_outputs.reserve(scores.size());
-  for (int i = 0; i < scores.size(); ++i) {
-    litert::lm::ScorerOutput& scorer_output = scorer_outputs.emplace_back();
-    scorer_output.score = scores[i];
-    if (store_char_and_token_lengths) {
-      scorer_output.option_text_char_length = target_text_vector[i].size();
-      scorer_output.option_text_token_length = (*token_lengths)[i];
-    }
-  }
+
   return scorer_outputs;
 }
 

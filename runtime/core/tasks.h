@@ -48,7 +48,7 @@ absl::StatusOr<Responses> Decode(
     std::atomic<bool>* cancelled,
     int max_output_tokens = std::numeric_limits<int>::max());
 
-absl::StatusOr<Responses> Score(
+absl::StatusOr<ScoringResponses> Score(
     LlmExecutor& executor, Tokenizer& tokenizer,
     const std::vector<absl::string_view>& target_texts, float temperature,
     litert::TensorBuffer decoded_ids, bool store_token_lengths = false);

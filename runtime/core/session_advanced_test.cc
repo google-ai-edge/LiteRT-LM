@@ -351,7 +351,7 @@ TEST_F(SessionAdvancedTest, RunDecodeWithInternalSampler) {
   inputs.emplace_back(InputText("Hello World!"));
   EXPECT_OK(session->RunPrefill(inputs));
   auto responses = session->RunDecode();
-  EXPECT_OK(responses);
+  ASSERT_OK(responses);
   // Expect a single output candidate.
   EXPECT_EQ(responses->GetTexts().size(), 1);
   // The response is " How's it going?" since "!" is the stop token which is
@@ -392,7 +392,7 @@ TEST_F(SessionAdvancedTest, RunDecodeWithMaxOutputTokens) {
   auto decode_config = DecodeConfig::CreateDefault();
   decode_config.SetMaxOutputTokens(2);
   auto responses = session->RunDecode(decode_config);
-  EXPECT_OK(responses);
+  ASSERT_OK(responses);
   // Expect a single output candidate.
   EXPECT_EQ(responses->GetTexts().size(), 1);
   EXPECT_EQ(responses->GetTexts()[0], " How'");
@@ -430,7 +430,7 @@ TEST_F(SessionAdvancedTest, RunDecodeWithExternalSampler) {
   inputs.emplace_back(InputText("Hello World!"));
   EXPECT_OK(session->RunPrefill(inputs));
   auto responses = session->RunDecode();
-  EXPECT_OK(responses);
+  ASSERT_OK(responses);
   // Expect a single output candidate.
   EXPECT_EQ(responses->GetTexts().size(), 1);
   // The response is " How's it going?" since "!" is the stop token which is
@@ -476,7 +476,7 @@ TEST_F(SessionAdvancedTest,
   inputs.emplace_back(InputText("Hello World!"));
   EXPECT_OK(session->RunPrefill(inputs));
   auto responses = session->RunDecode();
-  EXPECT_OK(responses);
+  ASSERT_OK(responses);
   EXPECT_EQ(responses->GetTexts().size(), 3);
   // The response is " How's it going?" since "!" is the stop token which is
   // not included in the response.
@@ -525,7 +525,7 @@ TEST_F(SessionAdvancedTest,
   inputs.emplace_back(InputText("Hello World!"));
   EXPECT_OK(session->RunPrefill(inputs));
   auto responses = session->RunDecode();
-  EXPECT_OK(responses);
+  ASSERT_OK(responses);
   EXPECT_EQ(responses->GetTexts().size(), 3);
   // The response is " How's it going?" since "!" is the stop token which is
   // not included in the response.
@@ -2118,11 +2118,12 @@ TEST_F(SessionAdvancedTest, RunTextScoringWithoutTokenLengthsSuccess) {
   target_texts.push_back("How's it going?");
   const auto responses = session->RunTextScoring(target_texts,
                                                  /*store_token_lengths=*/false);
-  EXPECT_OK(responses);
+  ASSERT_OK(responses);
   // Expect a single output candidate with score 0.0f.
-  EXPECT_EQ(responses->GetScores().size(), 1);
-  EXPECT_EQ(responses->GetScores()[0], 0.0f);
-  EXPECT_FALSE(responses->GetTokenLengths().has_value());
+  EXPECT_EQ(responses->GetScorerOutputs().size(), 1);
+  EXPECT_EQ(responses->GetScorerOutputs()[0].score, 0.0f);
+  EXPECT_FALSE(
+      responses->GetScorerOutputs()[0].option_text_token_length.has_value());
 }
 
 TEST_F(SessionAdvancedTest, RunTextScoringWithTokenLengthsSuccess) {
@@ -2134,20 +2135,20 @@ TEST_F(SessionAdvancedTest, RunTextScoringWithTokenLengthsSuccess) {
   target_texts.push_back("How's it going?");
   const auto responses = session->RunTextScoring(target_texts,
                                                  /*store_token_lengths=*/true);
-  EXPECT_OK(responses);
+  ASSERT_OK(responses);
   // Expect a single output candidate with score 0.0f and token length 7.
-  EXPECT_EQ(responses->GetScores().size(), 1);
-  EXPECT_EQ(responses->GetScores()[0], 0.0f);
-  EXPECT_TRUE(responses->GetTokenLengths().has_value());
-  EXPECT_EQ(responses->GetTokenLengths()->size(), 1);
-  EXPECT_EQ((*responses->GetTokenLengths())[0], 7);
+  EXPECT_EQ(responses->GetScorerOutputs().size(), 1);
+  EXPECT_EQ(responses->GetScorerOutputs()[0].score, 0.0f);
+  EXPECT_TRUE(
+      responses->GetScorerOutputs()[0].option_text_token_length.has_value());
+  EXPECT_EQ(*responses->GetScorerOutputs()[0].option_text_token_length, 7);
 }
 
 TEST_F(SessionAdvancedTest, RunTextScoringAsyncEmptyTargetTextFailure) {
   ASSERT_OK_AND_ASSIGN(auto session, CreateTestSession());
   std::vector<absl::string_view> target_text;
   auto controller = session->RunTextScoringAsync(
-      target_text, [](absl::StatusOr<Responses> r) {},
+      target_text, [](absl::StatusOr<ScoringResponses> r) {},
       /*store_token_lengths=*/false);
   EXPECT_THAT(controller.status(), StatusIs(absl::StatusCode::kInvalidArgument,
                                             "Target text size should be 1."));
@@ -2159,7 +2160,7 @@ TEST_F(SessionAdvancedTest, RunTextScoringAsyncMultipleTargetTextFailure) {
   target_text.push_back("How's it going?");
   target_text.push_back("How are you?");
   auto controller = session->RunTextScoringAsync(
-      target_text, [](absl::StatusOr<Responses> r) {},
+      target_text, [](absl::StatusOr<ScoringResponses> r) {},
       /*store_token_lengths=*/false);
   EXPECT_THAT(controller.status(), StatusIs(absl::StatusCode::kInvalidArgument,
                                             "Target text size should be 1."));
@@ -2174,12 +2175,12 @@ TEST_F(SessionAdvancedTest, RunTextScoringAsyncWithoutTokenLengthsSuccess) {
   target_texts.push_back("How's it going?");
 
   absl::Status status;
-  std::optional<Responses> responses;
+  std::optional<ScoringResponses> responses;
 
   ASSERT_OK_AND_ASSIGN(auto controller,
                        session->RunTextScoringAsync(
                            target_texts,
-                           [&](absl::StatusOr<Responses> r) {
+                           [&](absl::StatusOr<ScoringResponses> r) {
                              if (!r.ok()) {
                                status = r.status();
                                return;
@@ -2195,9 +2196,10 @@ TEST_F(SessionAdvancedTest, RunTextScoringAsyncWithoutTokenLengthsSuccess) {
   EXPECT_OK(status);
   ASSERT_TRUE(responses.has_value());
   // Expect a single output candidate with score 0.0f.
-  EXPECT_EQ(responses->GetScores().size(), 1);
-  EXPECT_EQ(responses->GetScores()[0], 0.0f);
-  EXPECT_FALSE(responses->GetTokenLengths().has_value());
+  EXPECT_EQ(responses->GetScorerOutputs().size(), 1);
+  EXPECT_EQ(responses->GetScorerOutputs()[0].score, 0.0f);
+  EXPECT_FALSE(
+      responses->GetScorerOutputs()[0].option_text_token_length.has_value());
 }
 
 TEST_F(SessionAdvancedTest, RunTextScoringAsyncWithTokenLengthsSuccess) {
@@ -2209,12 +2211,12 @@ TEST_F(SessionAdvancedTest, RunTextScoringAsyncWithTokenLengthsSuccess) {
   target_texts.push_back("How's it going?");
 
   absl::Status status;
-  std::optional<Responses> responses;
+  std::optional<ScoringResponses> responses;
 
   ASSERT_OK_AND_ASSIGN(auto controller,
                        session->RunTextScoringAsync(
                            target_texts,
-                           [&](absl::StatusOr<Responses> r) {
+                           [&](absl::StatusOr<ScoringResponses> r) {
                              if (!r.ok()) {
                                status = r.status();
                                return;
@@ -2230,11 +2232,11 @@ TEST_F(SessionAdvancedTest, RunTextScoringAsyncWithTokenLengthsSuccess) {
   EXPECT_OK(status);
   ASSERT_TRUE(responses.has_value());
   // Expect a single output candidate with score 0.0f and token length 7.
-  EXPECT_EQ(responses->GetScores().size(), 1);
-  EXPECT_EQ(responses->GetScores()[0], 0.0f);
-  EXPECT_TRUE(responses->GetTokenLengths().has_value());
-  EXPECT_EQ(responses->GetTokenLengths()->size(), 1);
-  EXPECT_EQ((*responses->GetTokenLengths())[0], 7);
+  EXPECT_EQ(responses->GetScorerOutputs().size(), 1);
+  EXPECT_EQ(responses->GetScorerOutputs()[0].score, 0.0f);
+  EXPECT_TRUE(
+      responses->GetScorerOutputs()[0].option_text_token_length.has_value());
+  EXPECT_EQ(*responses->GetScorerOutputs()[0].option_text_token_length, 7);
 }
 
 }  // namespace

@@ -30,6 +30,7 @@
 #include "absl/time/clock.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "litert/c/litert_model_types.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_layout.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
@@ -686,19 +687,19 @@ TEST(ResponsesTest, GetMutableScores) {
   EXPECT_FLOAT_EQ(responses.GetMutableScores()[1], 0.2f);
 }
 
-TEST(ResponsesTest, GetTokenScores) {
-  Responses responses(TaskState::kProcessing);
-  EXPECT_FALSE(responses.GetTokenScores().has_value());
-}
+TEST(ScoringResponsesTest, GetScorerOutputs) {
+  ScorerOutput output;
+  output.score = 0.5;
+  output.option_text_token_length = 10;
+  output.token_scores = std::vector<float>{0.1f, 0.2f};
 
-TEST(ResponsesTest, GetMutableTokenScores) {
-  Responses responses = Responses(TaskState::kProcessing);
-  responses.GetMutableTokenScores() =
-      std::vector<std::vector<float>>{{0.1f, 0.2f}, {0.3f, 0.4f}};
-  ASSERT_TRUE(responses.GetTokenScores().has_value());
-  EXPECT_EQ(responses.GetTokenScores()->size(), 2);
-  EXPECT_THAT(responses.GetTokenScores()->at(0), ElementsAre(0.1f, 0.2f));
-  EXPECT_THAT(responses.GetTokenScores()->at(1), ElementsAre(0.3f, 0.4f));
+  ScoringResponses responses(TaskState::kDone, {output});
+
+  EXPECT_EQ(responses.GetScorerOutputs().size(), 1);
+  EXPECT_DOUBLE_EQ(responses.GetScorerOutputs()[0].score, 0.5);
+  EXPECT_EQ(*responses.GetScorerOutputs()[0].option_text_token_length, 10);
+  EXPECT_THAT(*responses.GetScorerOutputs()[0].token_scores,
+              ElementsAre(0.1f, 0.2f));
 }
 
 TEST(ResponsesTest, HandlesMultipleCandidatesWithTextAndScores) {

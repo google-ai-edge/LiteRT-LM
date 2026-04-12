@@ -585,7 +585,7 @@ absl::Status Conversation::SendMessageAsync(
   return absl::OkStatus();
 };
 
-absl::StatusOr<Responses> Conversation::RunTextScoring(
+absl::StatusOr<ScoringResponses> Conversation::RunTextScoring(
     const std::vector<absl::string_view>& target_text,
     OptionalArgs optional_args) {
   ASSIGN_OR_RETURN(std::unique_ptr<Engine::Session> cloned_session,
@@ -596,7 +596,7 @@ absl::StatusOr<Responses> Conversation::RunTextScoring(
 
 absl::Status Conversation::RunTextScoringAsync(
     const std::vector<absl::string_view>& target_text,
-    absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback,
+    absl::AnyInvocable<void(absl::StatusOr<ScoringResponses>)> callback,
     OptionalArgs optional_args) {
   ASSIGN_OR_RETURN(std::unique_ptr<Engine::Session> cloned_session,
                    session_->CloneAsync(nullptr));

@@ -211,6 +211,31 @@ bool IsTaskEndState(const TaskState& task_state) {
          task_state == TaskState::kDependentTaskCancelled;
 }
 
+std::ostream& operator<<(std::ostream& os,
+                         const ScoringResponses& scoring_responses) {
+  os << "Task State: " << scoring_responses.GetTaskState() << std::endl;
+  if (scoring_responses.GetScorerOutputs().empty()) {
+    os << " No scorer outputs." << std::endl;
+    return os;
+  }
+  os << "Total candidates: " << scoring_responses.GetScorerOutputs().size()
+     << ":" << std::endl;
+
+  for (int i = 0; i < scoring_responses.GetScorerOutputs().size(); ++i) {
+    const auto& output = scoring_responses.GetScorerOutputs()[i];
+    os << "  Candidate " << i << " (score: " << output.score
+       << "):" << std::endl;
+    if (output.option_text_char_length.has_value()) {
+      os << "    Char length: " << *output.option_text_char_length << std::endl;
+    }
+    if (output.option_text_token_length.has_value()) {
+      os << "    Token length: " << *output.option_text_token_length
+         << std::endl;
+    }
+  }
+  return os;
+}
+
 std::ostream& operator<<(std::ostream& os, const Responses& responses) {
   os << "Task State: " << responses.GetTaskState() << std::endl;
   if (responses.GetTexts().empty()) {

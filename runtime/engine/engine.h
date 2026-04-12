@@ -144,11 +144,11 @@ class Engine {
     // This function should be called after the prefill process is done.
     // - target_text: The target text to score.
     // - store_token_lengths: Whether to store the token lengths of the target
-    //   texts in `Responses`.
+    //   texts in `ScoringResponses`.
     // - returns: This function returns the score associated with the target
     // text after the model has been prefilled. The returned score is the sum of
     // the negative log probability of seeing the target text during decode.
-    virtual absl::StatusOr<Responses> RunTextScoring(
+    virtual absl::StatusOr<ScoringResponses> RunTextScoring(
         const std::vector<absl::string_view>& target_text,
         bool store_token_lengths) = 0;
 
@@ -158,10 +158,10 @@ class Engine {
     // - target_text: The target text to score.
     // - callback: Callback to receive the scoring results.
     // - store_token_lengths: Whether to store the token lengths of the target
-    //   texts in `Responses`.
+    //   texts in `ScoringResponses`.
     virtual absl::StatusOr<std::unique_ptr<TaskController>> RunTextScoringAsync(
         const std::vector<absl::string_view>& target_text,
-        absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback,
+        absl::AnyInvocable<void(absl::StatusOr<ScoringResponses>)> callback,
         bool store_token_lengths) {
       return absl::UnimplementedError("Not implemented.");
     }

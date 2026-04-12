@@ -93,7 +93,7 @@ struct TaskInfo {
   absl::flat_hash_set<TaskId> dependent_tasks = {};
   absl::flat_hash_set<TaskId> following_tasks = {};
   std::shared_ptr<std::atomic<bool>> cancelled = nullptr;
-  absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback;
+  absl::AnyInvocable<void(absl::StatusOr<AnyResponses>)> callback;
 };
 
 // The execution manager is responsible for managing the execution of the tasks.
@@ -251,7 +251,7 @@ class ExecutionManager {
       const std::vector<absl::string_view>& target_text,
       bool store_token_lengths,
       std::shared_ptr<std::atomic<bool>> absl_nonnull cancelled,
-      absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback)
+      absl::AnyInvocable<void(absl::StatusOr<ScoringResponses>)> callback)
       ABSL_LOCKS_EXCLUDED(session_and_task_lookup_mutex_);
 
   // Returns the current step of the session.
@@ -308,8 +308,8 @@ class ExecutionManager {
       absl::AnyInvocable<void()> absl_nonnull task,
       absl::flat_hash_set<TaskId> dependent_tasks,
       std::shared_ptr<std::atomic<bool>> absl_nonnull cancelled,
-      absl::AnyInvocable<void(absl::StatusOr<Responses>)> absl_nonnull callback)
-      ABSL_LOCKS_EXCLUDED(session_and_task_lookup_mutex_);
+      absl::AnyInvocable<void(absl::StatusOr<AnyResponses>)> absl_nonnull
+      callback) ABSL_LOCKS_EXCLUDED(session_and_task_lookup_mutex_);
 
   // Queues the task with the given task ID.
   // - task_id: The task ID of the task.
@@ -326,7 +326,7 @@ class ExecutionManager {
   // Note: StartTask will acquire the task lookup mutex.
   absl::StatusOr<std::tuple<
       std::shared_ptr<SessionInfo>, std::shared_ptr<std::atomic<bool>>,
-      absl::AnyInvocable<void(absl::StatusOr<Responses>)>>>
+      absl::AnyInvocable<void(absl::StatusOr<AnyResponses>)>>>
   StartTask(TaskId task_id) ABSL_LOCKS_EXCLUDED(session_and_task_lookup_mutex_);
 
   // Finishes the task with the given task ID, responses, and callback.
@@ -335,9 +335,9 @@ class ExecutionManager {
   // - callback: The callback function.
   // Note: FinishTask will acquire the task lookup mutex.
   absl::Status FinishTask(
-      TaskId task_id, absl::StatusOr<Responses> responses,
-      absl::AnyInvocable<void(absl::StatusOr<Responses>)> absl_nonnull callback)
-      ABSL_LOCKS_EXCLUDED(session_and_task_lookup_mutex_);
+      TaskId task_id, absl::StatusOr<AnyResponses> responses,
+      absl::AnyInvocable<void(absl::StatusOr<AnyResponses>)> absl_nonnull
+      callback) ABSL_LOCKS_EXCLUDED(session_and_task_lookup_mutex_);
 
   // Finishes the task with the given task ID, responses, and callback. If the
   // task fails, the error will be logged.
@@ -346,9 +346,9 @@ class ExecutionManager {
   // - callback: The callback function.
   // Note: FinishTaskAndLogErrors will acquire the task lookup mutex.
   void FinishTaskAndLogErrors(
-      TaskId task_id, absl::StatusOr<Responses> responses,
-      absl::AnyInvocable<void(absl::StatusOr<Responses>)> absl_nonnull callback)
-      ABSL_LOCKS_EXCLUDED(session_and_task_lookup_mutex_);
+      TaskId task_id, absl::StatusOr<AnyResponses> responses,
+      absl::AnyInvocable<void(absl::StatusOr<AnyResponses>)> absl_nonnull
+      callback) ABSL_LOCKS_EXCLUDED(session_and_task_lookup_mutex_);
 
   // Returns all following tasks that are waiting.
   // - task_id: The task ID of the task.

@@ -521,12 +521,12 @@ absl::StatusOr<Responses> SessionBasic::GenerateContent(
   return RunDecode(DecodeConfig::CreateDefault());
 }
 
-absl::StatusOr<Responses> SessionBasic::RunTextScoring(
+absl::StatusOr<ScoringResponses> SessionBasic::RunTextScoring(
     const std::vector<absl::string_view>& target_text,
     bool store_token_lengths) {
-  absl::StatusOr<Responses> collected_responses;
+  absl::StatusOr<ScoringResponses> collected_responses;
   auto scoring_sync_callback =
-      [&collected_responses](absl::StatusOr<Responses> responses) {
+      [&collected_responses](absl::StatusOr<ScoringResponses> responses) {
         collected_responses = std::move(responses);
       };
 
@@ -541,7 +541,7 @@ absl::StatusOr<Responses> SessionBasic::RunTextScoring(
 absl::StatusOr<std::unique_ptr<Engine::Session::TaskController>>
 SessionBasic::RunTextScoringAsync(
     const std::vector<absl::string_view>& target_text,
-    absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback,
+    absl::AnyInvocable<void(absl::StatusOr<ScoringResponses>)> callback,
     bool store_token_lengths) {
   if (target_text.size() != 1) {
     return absl::InvalidArgumentError("Target text size should be 1.");

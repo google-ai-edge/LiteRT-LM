@@ -97,7 +97,7 @@ absl::StatusOr<std::unique_ptr<FakeLlmExecutor>> CreateFakeLlmExecutor(
   return std::move(fake_executor);
 }
 
-absl::StatusOr<Responses> RunTextScoring(
+absl::StatusOr<ScoringResponses> RunTextScoring(
     const std::vector<std::vector<int>>& prefill_tokens,
     const std::vector<std::vector<int>>& decode_tokens,
     absl::string_view input_prompt, absl::string_view target_text,
@@ -405,7 +405,7 @@ TEST_F(SessionBasicTest, RunDecodeWithMaxOutputTokens) {
   auto decode_config = DecodeConfig::CreateDefault();
   decode_config.SetMaxOutputTokens(2);
   auto responses = (*session)->RunDecode(decode_config);
-  EXPECT_OK(responses);
+  ASSERT_OK(responses);
   // Expect a single output candidate.
   EXPECT_EQ(responses->GetTexts().size(), 1);
   EXPECT_EQ(responses->GetTexts()[0], " How'");
@@ -441,7 +441,7 @@ TEST_F(SessionBasicTest, RunDecodeWithMultipleOutputCandidates) {
   inputs.emplace_back(InputText("Hello World!"));
   EXPECT_OK((*session)->RunPrefill(inputs));
   auto responses = (*session)->RunDecode();
-  EXPECT_OK(responses);
+  ASSERT_OK(responses);
   EXPECT_EQ(responses->GetTexts().size(), 3);
   // The response is " How's it going?" since "!" is the stop token which is
   // not included in the response.
@@ -761,9 +761,10 @@ TEST_F(SessionBasicTest, RunTextScoringWithoutTokenLengthsSuccess) {
       worker_thread_pool_.get());
   EXPECT_OK(responses_without_token_lengths);
   // Expect a single output candidate with score 0.0f.
-  EXPECT_EQ(responses_without_token_lengths->GetScores().size(), 1);
-  EXPECT_EQ(responses_without_token_lengths->GetScores()[0], 0.0f);
-  EXPECT_FALSE(responses_without_token_lengths->GetTokenLengths().has_value());
+  EXPECT_EQ(responses_without_token_lengths->GetScorerOutputs().size(), 1);
+  EXPECT_EQ(responses_without_token_lengths->GetScorerOutputs()[0].score, 0.0f);
+  EXPECT_FALSE(responses_without_token_lengths->GetScorerOutputs()[0]
+                   .option_text_token_length.has_value());
 }
 
 TEST_F(SessionBasicTest, RunTextScoringWithTokenLengthsSuccess) {
@@ -778,11 +779,13 @@ TEST_F(SessionBasicTest, RunTextScoringWithTokenLengthsSuccess) {
       worker_thread_pool_.get());
   EXPECT_OK(responses_with_token_lengths);
   // Expect a single output candidate with score 0.0f and token length 7.
-  EXPECT_EQ(responses_with_token_lengths->GetScores().size(), 1);
-  EXPECT_EQ(responses_with_token_lengths->GetScores()[0], 0.0f);
-  EXPECT_TRUE(responses_with_token_lengths->GetTokenLengths().has_value());
-  EXPECT_EQ(responses_with_token_lengths->GetTokenLengths()->size(), 1);
-  EXPECT_EQ((*responses_with_token_lengths->GetTokenLengths())[0], 7);
+  EXPECT_EQ(responses_with_token_lengths->GetScorerOutputs().size(), 1);
+  EXPECT_EQ(responses_with_token_lengths->GetScorerOutputs()[0].score, 0.0f);
+  EXPECT_TRUE(responses_with_token_lengths->GetScorerOutputs()[0]
+                  .option_text_token_length.has_value());
+  EXPECT_EQ(*responses_with_token_lengths->GetScorerOutputs()[0]
+                 .option_text_token_length,
+            7);
 }
 
 TEST_F(SessionBasicTest, RunTextScoringAsyncWithTokenLengthsSuccess) {
@@ -809,8 +812,8 @@ TEST_F(SessionBasicTest, RunTextScoringAsyncWithTokenLengthsSuccess) {
   EXPECT_OK((*session)->RunPrefill(inputs));
 
   absl::Notification done;
-  absl::StatusOr<Responses> responses;
-  auto callback = [&done, &responses](absl::StatusOr<Responses> r) {
+  absl::StatusOr<ScoringResponses> responses;
+  auto callback = [&done, &responses](absl::StatusOr<ScoringResponses> r) {
     responses = std::move(r);
     done.Notify();
   };
@@ -824,11 +827,11 @@ TEST_F(SessionBasicTest, RunTextScoringAsyncWithTokenLengthsSuccess) {
 
   EXPECT_OK(responses);
   // Expect a single output candidate with score 0.0f and token length 7.
-  EXPECT_EQ(responses->GetScores().size(), 1);
-  EXPECT_EQ(responses->GetScores()[0], 0.0f);
-  EXPECT_TRUE(responses->GetTokenLengths().has_value());
-  EXPECT_EQ(responses->GetTokenLengths()->size(), 1);
-  EXPECT_EQ((*responses->GetTokenLengths())[0], 7);
+  EXPECT_EQ(responses->GetScorerOutputs().size(), 1);
+  EXPECT_EQ(responses->GetScorerOutputs()[0].score, 0.0f);
+  EXPECT_TRUE(
+      responses->GetScorerOutputs()[0].option_text_token_length.has_value());
+  EXPECT_EQ(*responses->GetScorerOutputs()[0].option_text_token_length, 7);
 }
 
 TEST_F(SessionBasicTest, GenerateContentStream) {

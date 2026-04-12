@@ -450,7 +450,7 @@ class Conversation {
   //   - returns: This function returns the score associated with each of the
   //     target texts. The scores are the log likelihood of the target text
   //     given the existing context history.
-  absl::StatusOr<Responses> RunTextScoring(
+  absl::StatusOr<ScoringResponses> RunTextScoring(
       const std::vector<absl::string_view>& target_text,
       OptionalArgs optional_args = OptionalArgs());
 
@@ -459,7 +459,7 @@ class Conversation {
   // be signaled through the callback.
   absl::Status RunTextScoringAsync(
       const std::vector<absl::string_view>& target_text,
-      absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback,
+      absl::AnyInvocable<void(absl::StatusOr<ScoringResponses>)> callback,
       OptionalArgs optional_args = OptionalArgs());
 
   // Returns the history of the conversation.

@@ -132,7 +132,7 @@ absl::Status DecodeCustomSamplingStreaming(
   return task_respones.status();
 }
 
-absl::StatusOr<Responses> ScoreCustomSampling(
+absl::StatusOr<ScoringResponses> ScoreCustomSampling(
     LlmExecutor& executor, Tokenizer& tokenizer,
     const std::vector<absl::string_view>& target_texts, const float temperature,
     litert::TensorBuffer decoded_ids, bool store_token_lengths) {

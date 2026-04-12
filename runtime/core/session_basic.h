@@ -87,18 +87,18 @@ class SessionBasic : public Engine::Session {
   // This function should be called after the prefill process is done.
   // - target_text: The target text to score.
   // - store_token_lengths: Whether to store the token lengths of the target
-  //   texts in `Responses`.
+  //   texts in `ScoringResponses`.
   // - return: This function returns the score associated with the target
   // text after the model has been prefilled. The returned score is the sum of
   // the negative log probability of seeing the target text during decode.
-  absl::StatusOr<Responses> RunTextScoring(
+  absl::StatusOr<ScoringResponses> RunTextScoring(
       const std::vector<absl::string_view>& target_text,
       bool store_token_lengths) override;
 
   absl::StatusOr<std::unique_ptr<Engine::Session::TaskController>>
   RunTextScoringAsync(
       const std::vector<absl::string_view>& target_text,
-      absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback,
+      absl::AnyInvocable<void(absl::StatusOr<ScoringResponses>)> callback,
       bool store_token_lengths) override;
 
   absl::Status RunPrefill(const std::vector<InputData>& contents) override;

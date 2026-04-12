@@ -261,7 +261,7 @@ absl::StatusOr<std::unique_ptr<TaskController>> SessionAdvanced::RunDecodeAsync(
                                                   execution_manager_);
 }
 
-absl::StatusOr<Responses> SessionAdvanced::RunTextScoring(
+absl::StatusOr<ScoringResponses> SessionAdvanced::RunTextScoring(
     const std::vector<absl::string_view>& target_text,
     bool store_token_lengths) {
   if (target_text.size() != 1) {
@@ -273,9 +273,9 @@ absl::StatusOr<Responses> SessionAdvanced::RunTextScoring(
     return absl::FailedPreconditionError("Execution manager is not available.");
   }
 
-  absl::StatusOr<Responses> collected_responses;
+  absl::StatusOr<ScoringResponses> collected_responses;
   auto scoring_sync_callback =
-      [&collected_responses](absl::StatusOr<Responses> responses) {
+      [&collected_responses](absl::StatusOr<ScoringResponses> responses) {
         collected_responses = std::move(responses);
       };
 
@@ -290,7 +290,7 @@ absl::StatusOr<Responses> SessionAdvanced::RunTextScoring(
 absl::StatusOr<std::unique_ptr<Engine::Session::TaskController>>
 SessionAdvanced::RunTextScoringAsync(
     const std::vector<absl::string_view>& target_text,
-    absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback,
+    absl::AnyInvocable<void(absl::StatusOr<ScoringResponses>)> callback,
     bool store_token_lengths) {
   absl::MutexLock lock(mutex_);
   if (target_text.size() != 1) {

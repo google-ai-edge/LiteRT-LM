@@ -591,7 +591,7 @@ absl::StatusOr<Responses> Decode(
                    std::move(final_scores));
 }
 
-absl::StatusOr<Responses> Score(
+absl::StatusOr<ScoringResponses> Score(
     LlmExecutor& executor, Tokenizer& tokenizer,
     const std::vector<absl::string_view>& target_texts, const float temperature,
     litert::TensorBuffer decoded_ids, bool store_token_lengths) {
@@ -623,8 +623,9 @@ absl::StatusOr<Responses> Score(
 
   // The scores for each candidate. The scores are accumulated over the course
   // of the decoding process.
-  std::vector<float> scores(num_output_candidates);
-  std::vector<std::vector<float>> token_scores(num_output_candidates);
+  std::vector<double> accumulated_scores(num_output_candidates, 0.0);
+  std::vector<std::vector<float>> accumulated_token_scores(
+      num_output_candidates);
   // We support multiple targets by padding the targets with a null token which
   // does not exist in the vocabulary and thus does not contribute to the
   // perplexity.
@@ -650,24 +651,26 @@ absl::StatusOr<Responses> Score(
       const int size_of_jth_target = ids_for_each_target_in_batch[j].size();
       // Only add the log likelihood of the non-padded tokens to the score.
       if (i < size_of_jth_target) {
-        scores[j] += step_log_likelihoods[j];
-        token_scores[j].push_back(step_log_likelihoods[j]);
+        accumulated_scores[j] += step_log_likelihoods[j];
+        accumulated_token_scores[j].push_back(step_log_likelihoods[j]);
       }
     }
   }
-  std::vector<int> token_lengths;
-  if (store_token_lengths) {
-    // Store the token lengths of the target texts for each candidate into
-    // `Responses`. This is optional.
-    token_lengths.reserve(num_output_candidates);
-    for (int j = 0; j < num_output_candidates; ++j) {
-      token_lengths.push_back(ids_for_each_target_in_batch[j].size());
+
+  std::vector<ScorerOutput> scorer_outputs;
+  scorer_outputs.reserve(num_output_candidates);
+  for (int j = 0; j < num_output_candidates; ++j) {
+    ScorerOutput output;
+    output.score = accumulated_scores[j];
+    output.option_text_char_length = target_texts[j].length();
+    output.token_scores = std::move(accumulated_token_scores[j]);
+    if (store_token_lengths) {
+      output.option_text_token_length = ids_for_each_target_in_batch[j].size();
     }
+    scorer_outputs.push_back(std::move(output));
   }
-  auto responses = Responses(TaskState::kDone, /*response_texts=*/{},
-                             std::move(scores), std::move(token_lengths));
-  responses.GetMutableTokenScores() = std::move(token_scores);
-  return responses;
+
+  return ScoringResponses(TaskState::kDone, std::move(scorer_outputs));
 }
 
 }  // namespace litert::lm::Tasks

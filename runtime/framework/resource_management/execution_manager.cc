@@ -186,7 +186,8 @@ absl::Status ExecutionManager::CreateTask(
     absl::AnyInvocable<void()> absl_nonnull task,
     absl::flat_hash_set<TaskId> dependent_tasks,
     std::shared_ptr<std::atomic<bool>> absl_nonnull cancelled,
-    absl::AnyInvocable<void(absl::StatusOr<Responses>)> absl_nonnull callback) {
+    absl::AnyInvocable<void(absl::StatusOr<AnyResponses>)> absl_nonnull
+    callback) {
   absl::MutexLock lock(session_and_task_lookup_mutex_);
   if (!session_lookup_.contains(session_id)) {
     return absl::InvalidArgumentError(absl::StrCat(
@@ -311,7 +312,7 @@ absl::Status ExecutionManager::QueueTask(TaskId task_id) {
 
 absl::StatusOr<
     std::tuple<std::shared_ptr<SessionInfo>, std::shared_ptr<std::atomic<bool>>,
-               absl::AnyInvocable<void(absl::StatusOr<Responses>)>>>
+               absl::AnyInvocable<void(absl::StatusOr<AnyResponses>)>>>
 ExecutionManager::StartTask(TaskId task_id) {
   absl::MutexLock lock(session_and_task_lookup_mutex_);
   if (!task_lookup_.contains(task_id)) {
@@ -347,8 +348,9 @@ ExecutionManager::StartTask(TaskId task_id) {
 }
 
 absl::Status ExecutionManager::FinishTask(
-    TaskId task_id, absl::StatusOr<Responses> responses,
-    absl::AnyInvocable<void(absl::StatusOr<Responses>)> absl_nonnull callback) {
+    TaskId task_id, absl::StatusOr<AnyResponses> responses,
+    absl::AnyInvocable<void(absl::StatusOr<AnyResponses>)> absl_nonnull
+    callback) {
   auto invoke_callback_and_return =
       [&](absl::Status status) ABSL_EXCLUSIVE_LOCKS_REQUIRED(
           session_and_task_lookup_mutex_) -> absl::Status {
@@ -367,7 +369,14 @@ absl::Status ExecutionManager::FinishTask(
           absl::StrCat("Task ", task_id, " is not in Processing state."));
       return invoke_callback_and_return(error_status);
     }
-    if (!responses.ok() || responses->GetTaskState() == TaskState::kCancelled) {
+
+    TaskState response_task_state = TaskState::kUnknown;
+    if (responses.ok()) {
+      std::visit([&](auto&& arg) { response_task_state = arg.GetTaskState(); },
+                 *responses);
+    }
+
+    if (!responses.ok() || response_task_state == TaskState::kCancelled) {
       auto following_waiting_tasks = FollowingWaitingTasks(task_id);
       if (!following_waiting_tasks.ok()) {
         return invoke_callback_and_return(following_waiting_tasks.status());
@@ -379,8 +388,8 @@ absl::Status ExecutionManager::FinishTask(
       if (!status.ok()) {
         return invoke_callback_and_return(status);
       }
-    } else if (responses->GetTaskState() == TaskState::kDone ||
-               responses->GetTaskState() == TaskState::kMaxNumTokensReached) {
+    } else if (response_task_state == TaskState::kDone ||
+               response_task_state == TaskState::kMaxNumTokensReached) {
       for (TaskId following_task_id :
            task_lookup_.at(task_id).following_tasks) {
         if (!task_lookup_.contains(following_task_id)) {
@@ -412,14 +421,14 @@ absl::Status ExecutionManager::FinishTask(
           RETURN_IF_ERROR(QueueTask(following_task_id));
         }
       }
-    } else if (!IsTaskEndState(responses->GetTaskState())) {
+    } else if (!IsTaskEndState(response_task_state)) {
       return invoke_callback_and_return(absl::InvalidArgumentError(absl::StrCat(
           "Expected task state for responses to be end state, but got ",
-          responses->GetTaskState())));
+          response_task_state)));
     }
 
     TaskState next_task_state =
-        responses.ok() ? responses->GetTaskState() : TaskState::kFailed;
+        responses.ok() ? response_task_state : TaskState::kFailed;
     if (callback_thread_pool_ != nullptr) {
       RETURN_IF_ERROR(callback_thread_pool_->Schedule(
           [callback = std::move(callback), responses = std::move(responses),
@@ -451,8 +460,9 @@ absl::Status ExecutionManager::FinishTask(
 }
 
 void ExecutionManager::FinishTaskAndLogErrors(
-    TaskId task_id, absl::StatusOr<Responses> responses,
-    absl::AnyInvocable<void(absl::StatusOr<Responses>)> absl_nonnull callback) {
+    TaskId task_id, absl::StatusOr<AnyResponses> responses,
+    absl::AnyInvocable<void(absl::StatusOr<AnyResponses>)> absl_nonnull
+    callback) {
   auto status = FinishTask(task_id, std::move(responses), std::move(callback));
   if (!status.ok()) {
     ABSL_LOG(ERROR) << "Failed to finish task: " << status
@@ -704,7 +714,7 @@ absl::Status ExecutionManager::AddPrefillTask(
     auto task_info = StartTask(task_id);
     if (!task_info.ok()) {
       FinishTaskAndLogErrors(task_id, task_info.status(),
-                             [](absl::StatusOr<Responses> responses) {});
+                             [](absl::StatusOr<AnyResponses> responses) {});
       return;
     }
     auto [session_info, cancelled, callback] = std::move(task_info.value());
@@ -773,8 +783,21 @@ absl::Status ExecutionManager::AddPrefillTask(
     return;
   };
 
+  auto wrapped_callback =
+      [cb = std::move(callback)](absl::StatusOr<AnyResponses> res) mutable {
+        if (!res.ok()) {
+          cb(res.status());
+          return;
+        }
+        if (auto* r = std::get_if<Responses>(&*res)) {
+          cb(*r);
+        } else {
+          cb(Responses(std::get<ScoringResponses>(*res).GetTaskState()));
+        }
+      };
+
   return CreateTask(session_id, task_id, std::move(task), std::move(dep_tasks),
-                    cancelled, std::move(callback));
+                    cancelled, std::move(wrapped_callback));
 }
 
 absl::Status ExecutionManager::AddDecodeTask(
@@ -792,7 +815,7 @@ absl::Status ExecutionManager::AddDecodeTask(
     auto task_info = StartTask(task_id);
     if (!task_info.ok()) {
       FinishTaskAndLogErrors(task_id, task_info.status(),
-                             [](absl::StatusOr<Responses> responses) {});
+                             [](absl::StatusOr<AnyResponses> responses) {});
       return;
     }
     auto [session_info, cancelled, callback] = std::move(task_info.value());
@@ -832,11 +855,20 @@ absl::Status ExecutionManager::AddDecodeTask(
       decoded_ids_buffer = std::move(decoded_ids_buffer_or.Value());
     }
 
+    absl::AnyInvocable<void(absl::StatusOr<Responses>)> wrapped_task_callback =
+        [&callback](absl::StatusOr<Responses> responses) mutable {
+          if (!responses.ok()) {
+            callback(responses.status());
+          } else {
+            callback(AnyResponses(*responses));
+          }
+        };
+
     auto responses = Tasks::Decode(
         *llm_executor.value(), *tokenizer_, *session_info->stop_token_detector,
         num_output_candidates, session_info->benchmark_info, optional_sampler,
-        constraint, std::move(decoded_ids_buffer), callback, cancelled.get(),
-        max_output_tokens);
+        constraint, std::move(decoded_ids_buffer), wrapped_task_callback,
+        cancelled.get(), max_output_tokens);
     if (!responses.ok() && absl::IsCancelled(responses.status())) {
       responses = Responses(TaskState::kCancelled);
     }
@@ -849,8 +881,21 @@ absl::Status ExecutionManager::AddDecodeTask(
     return;
   };
 
+  auto wrapped_callback =
+      [cb = std::move(callback)](absl::StatusOr<AnyResponses> res) mutable {
+        if (!res.ok()) {
+          cb(res.status());
+          return;
+        }
+        if (auto* r = std::get_if<Responses>(&*res)) {
+          cb(*r);
+        } else {
+          cb(Responses(std::get<ScoringResponses>(*res).GetTaskState()));
+        }
+      };
+
   return CreateTask(session_id, task_id, std::move(task), std::move(dep_tasks),
-                    cancelled, std::move(callback));
+                    cancelled, std::move(wrapped_callback));
 }
 
 absl::Status ExecutionManager::AddCloneSessionTask(
@@ -866,7 +911,7 @@ absl::Status ExecutionManager::AddCloneSessionTask(
     auto task_info = StartTask(task_id);
     if (!task_info.ok()) {
       FinishTaskAndLogErrors(task_id, task_info.status(),
-                             [](absl::StatusOr<Responses> responses) {});
+                             [](absl::StatusOr<AnyResponses> responses) {});
       return;
     }
     auto [session_info, cancelled, callback] = std::move(task_info.value());
@@ -903,7 +948,8 @@ absl::Status ExecutionManager::AddCloneSessionTask(
         auto sampler = CreateSampler(
             original_session_info->session_config.GetSamplerBackend(),
             original_session_info->session_config.GetNumOutputCandidates(),
-            original_session_info->session_config.GetSamplerParams());
+            original_session_info->session_config.GetSamplerParams(),
+            litert_env_ ? litert_env_->Get() : nullptr);
         if (!sampler.ok()) {
           result = sampler.status();
           return;
@@ -953,17 +999,30 @@ absl::Status ExecutionManager::AddCloneSessionTask(
     return;
   };
 
+  auto wrapped_callback =
+      [cb = std::move(callback)](absl::StatusOr<AnyResponses> res) mutable {
+        if (!res.ok()) {
+          cb(res.status());
+          return;
+        }
+        if (auto* r = std::get_if<Responses>(&*res)) {
+          cb(*r);
+        } else {
+          cb(Responses(std::get<ScoringResponses>(*res).GetTaskState()));
+        }
+      };
+
   return CreateTask(session_id, task_id, std::move(task), std::move(dep_tasks),
-                    cancelled, std::move(callback));
+                    cancelled, std::move(wrapped_callback));
 }
 
 absl::Status ExecutionManager::AddTextScoringTask(
     SessionId session_id, TaskId task_id, absl::flat_hash_set<TaskId> dep_tasks,
     const std::vector<absl::string_view>& target_text, bool store_token_lengths,
     std::shared_ptr<std::atomic<bool>> absl_nonnull cancelled,
-    absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback) {
+    absl::AnyInvocable<void(absl::StatusOr<ScoringResponses>)> callback) {
   if (callback == nullptr) {
-    callback = [](absl::StatusOr<Responses> responses) {};
+    callback = [](absl::StatusOr<ScoringResponses> responses) {};
   }
 
   auto task = [this, task_id, target_text,
@@ -971,7 +1030,7 @@ absl::Status ExecutionManager::AddTextScoringTask(
     auto task_info = StartTask(task_id);
     if (!task_info.ok()) {
       FinishTaskAndLogErrors(task_id, task_info.status(),
-                             [](absl::StatusOr<Responses> responses) {});
+                             [](absl::StatusOr<AnyResponses> responses) {});
       return;
     }
     auto [session_info, cancelled, callback] = std::move(task_info.value());
@@ -1015,15 +1074,28 @@ absl::Status ExecutionManager::AddTextScoringTask(
         std::move(decoded_ids_buffer.Value()), store_token_lengths);
 
     if (cancelled != nullptr && cancelled->load()) {
-      responses = Responses(TaskState::kCancelled);
+      responses = ScoringResponses(TaskState::kCancelled, {});
     }
 
     FinishTaskAndLogErrors(task_id, std::move(responses), std::move(callback));
     return;
   };
 
+  auto wrapped_callback =
+      [cb = std::move(callback)](absl::StatusOr<AnyResponses> res) mutable {
+        if (!res.ok()) {
+          cb(res.status());
+          return;
+        }
+        if (auto* r = std::get_if<ScoringResponses>(&*res)) {
+          cb(*r);
+        } else {
+          cb(ScoringResponses(std::get<Responses>(*res).GetTaskState(), {}));
+        }
+      };
+
   return CreateTask(session_id, task_id, std::move(task), std::move(dep_tasks),
-                    cancelled, std::move(callback));
+                    cancelled, std::move(wrapped_callback));
 }
 
 absl::StatusOr<int> ExecutionManager::GetCurrentStep(

@@ -826,12 +826,12 @@ TEST_F(ExecutionManagerTest, AddTextScoringTask) {
 
   std::vector<TaskState> task_states;
   std::vector<float> scores;
-  absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback =
-      [&task_states, &scores](absl::StatusOr<Responses> responses) {
+  absl::AnyInvocable<void(absl::StatusOr<ScoringResponses>)> callback =
+      [&task_states, &scores](absl::StatusOr<ScoringResponses> responses) {
         ASSERT_OK(responses);
         task_states.push_back(responses->GetTaskState());
-        if (!responses->GetScores().empty()) {
-          scores.push_back(responses->GetScores()[0]);
+        if (!responses->GetScorerOutputs().empty()) {
+          scores.push_back(responses->GetScorerOutputs()[0].score);
         }
       };
 

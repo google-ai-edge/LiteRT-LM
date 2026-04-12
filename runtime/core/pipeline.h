@@ -127,7 +127,7 @@ absl::Status DecodeCustomSamplingStreaming(
 // - store_token_lengths: Whether to store the token lengths of the target
 //   texts in `Responses`.
 //   The supported shape is [num_output_candidates, 1].
-absl::StatusOr<Responses> ScoreCustomSampling(
+absl::StatusOr<ScoringResponses> ScoreCustomSampling(
     LlmExecutor& executor, Tokenizer& tokenizer,
     const std::vector<absl::string_view>& target_text, float temperature,
     litert::TensorBuffer decoded_ids, bool store_token_lengths = false);

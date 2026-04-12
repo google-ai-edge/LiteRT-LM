@@ -112,16 +112,17 @@ class MockSession : public Engine::Session {
        absl::AnyInvocable<void(absl::StatusOr<Responses>)> user_callback,
        const DecodeConfig& decode_config),
       (override));
-  MOCK_METHOD(absl::StatusOr<Responses>, RunTextScoring,
+  MOCK_METHOD(absl::StatusOr<ScoringResponses>, RunTextScoring,
               (const std::vector<absl::string_view>& target_text,
                bool store_token_lengths),
               (override));
-  MOCK_METHOD(absl::StatusOr<std::unique_ptr<Engine::Session::TaskController>>,
-              RunTextScoringAsync,
-              (const std::vector<absl::string_view>& target_text,
-               absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback,
-               bool store_token_lengths),
-              (override));
+  MOCK_METHOD(
+      absl::StatusOr<std::unique_ptr<Engine::Session::TaskController>>,
+      RunTextScoringAsync,
+      (const std::vector<absl::string_view>& target_text,
+       absl::AnyInvocable<void(absl::StatusOr<ScoringResponses>)> callback,
+       bool store_token_lengths),
+      (override));
 
   MOCK_METHOD(absl::Status, RunPrefill,
               (const std::vector<InputData>& contents), (override));
@@ -1153,16 +1154,17 @@ TEST_P(ConversationTest, RunTextScoring) {
 
   // Test sync scoring.
   auto cloned_session_sync = std::make_unique<MockSession>();
+  ScorerOutput output;
+  output.score = 0.5;
   EXPECT_CALL(*cloned_session_sync,
               RunTextScoring(testing::ElementsAre("I am good."), true))
-      .WillOnce(
-          testing::Return(Responses(TaskState::kProcessing, {"I am good."})));
+      .WillOnce(testing::Return(ScoringResponses(TaskState::kDone, {output})));
   EXPECT_CALL(*mock_session_ptr, Clone())
       .WillOnce(testing::Return(std::move(cloned_session_sync)));
 
-  ASSERT_OK_AND_ASSIGN(const Responses response,
+  ASSERT_OK_AND_ASSIGN(const ScoringResponses response,
                        conversation->RunTextScoring({"I am good."}));
-  EXPECT_EQ(response.GetTexts()[0], "I am good.");
+  EXPECT_EQ(response.GetScorerOutputs()[0].score, 0.5);
 
   // Test async scoring.
   auto cloned_session_async = std::make_unique<MockSession>();
@@ -1170,24 +1172,29 @@ TEST_P(ConversationTest, RunTextScoring) {
       *cloned_session_async,
       RunTextScoringAsync(testing::ElementsAre("I am good."), testing::_, true))
       .WillOnce([](const std::vector<absl::string_view>& target_text,
-                   absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback,
+                   absl::AnyInvocable<void(absl::StatusOr<ScoringResponses>)>
+                       callback,
                    bool store_token_lengths) {
-        callback(Responses(TaskState::kProcessing, {"I am good."}));
+        ScorerOutput output;
+        output.score = 0.5;
+        callback(ScoringResponses(TaskState::kDone, {output}));
         return nullptr;
       });
   EXPECT_CALL(*mock_session_ptr, CloneAsync(testing::_))
       .WillOnce(testing::Return(std::move(cloned_session_async)));
 
   absl::Notification done;
-  std::string response_text;
+  float response_score;
   EXPECT_OK(conversation->RunTextScoringAsync(
-      {"I am good."}, [&](absl::StatusOr<Responses> responses) {
+      {"I am good."}, [&](absl::StatusOr<ScoringResponses> responses) {
         ASSERT_OK(responses);
-        response_text = responses->GetTexts()[0];
-        done.Notify();
+        if (responses->GetTaskState() == TaskState::kDone) {
+          response_score = responses->GetScorerOutputs()[0].score;
+          done.Notify();
+        }
       }));
   done.WaitForNotificationWithTimeout(absl::Seconds(10));
-  EXPECT_EQ(response_text, "I am good.");
+  EXPECT_EQ(response_score, 0.5);
 }
 
 TEST_P(ConversationTest, SendMessageAsync) {
@@ -1988,20 +1995,18 @@ TEST_P(ConversationTest, CancelGroupWithRunTextScoringAsync) {
   EXPECT_CALL(
       *cloned_session_ptr,
       RunTextScoringAsync(testing::ElementsAre("I am good."), testing::_, true))
-      .WillOnce(
-          [&](const std::vector<absl::string_view>& target_text,
-              absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback,
-              bool store_token_lengths) {
-            return std::move(mock_task_controller);
-          });
+      .WillOnce([&](const std::vector<absl::string_view>& target_text,
+                    absl::AnyInvocable<void(absl::StatusOr<ScoringResponses>)>
+                        callback,
+                    bool store_token_lengths) {
+        return std::move(mock_task_controller);
+      });
 
   absl::Notification done;
-  std::string response_text;
   EXPECT_OK(conversation->RunTextScoringAsync(
       {"I am good."},
-      [&](absl::StatusOr<Responses> responses) {
+      [&](absl::StatusOr<ScoringResponses> responses) {
         ASSERT_OK(responses);
-        response_text = responses->GetTexts()[0];
         done.Notify();
       },
       {.task_group_id = "group1"}));
