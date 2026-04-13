@@ -109,6 +109,8 @@ using ::litert::lm::Message;
 using ::litert::lm::ModelAssets;
 using ::litert::lm::Responses;
 using ::litert::lm::SessionConfig;
+using ::litert::lm::TokenIds;
+using ::litert::lm::Tokenizer;
 using ::litert::lm::proto::SamplerParameters;
 
 struct LiteRtLmEngineSettings {
@@ -429,6 +431,15 @@ LiteRtLmEngine* litert_lm_engine_create(
 }
 
 void litert_lm_engine_delete(LiteRtLmEngine* engine) { delete engine; }
+
+int litert_lm_engine_count_tokens(LiteRtLmEngine* engine, const char* text) {
+  if (!engine || !engine->engine || !text) return -1;
+  absl::StatusOr<TokenIds> ids =
+      const_cast<Tokenizer&>(engine->engine->GetTokenizer())
+          .TextToTokenIds(absl::string_view(text));
+  if (!ids.ok()) return -1;
+  return static_cast<int>(ids->size());
+}
 
 LiteRtLmSession* litert_lm_engine_create_session(
     LiteRtLmEngine* engine, LiteRtLmSessionConfig* config) {
