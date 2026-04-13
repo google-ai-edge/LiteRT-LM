@@ -363,6 +363,14 @@ void litert_lm_engine_settings_set_cache_dir(LiteRtLmEngineSettings* settings,
   }
 }
 
+void litert_lm_engine_settings_set_max_num_images(
+    LiteRtLmEngineSettings* settings, int max_num_images) {
+  if (settings && settings->settings) {
+    settings->settings->GetMutableMainExecutorSettings().SetMaxNumImages(
+        static_cast<uint32_t>(max_num_images));
+  }
+}
+
 void litert_lm_engine_settings_enable_benchmark(
     LiteRtLmEngineSettings* settings) {
   if (settings && settings->settings) {

@@ -199,6 +199,15 @@ LITERT_LM_C_API_EXPORT
 void litert_lm_engine_settings_set_cache_dir(LiteRtLmEngineSettings* settings,
                                              const char* cache_dir);
 
+// Sets the maximum number of images that can appear in a single prompt.
+// Must be > 0 to enable vision inputs. Default is 0 (vision disabled).
+//
+// @param settings The engine settings.
+// @param max_num_images The maximum number of images per prompt.
+LITERT_LM_C_API_EXPORT
+void litert_lm_engine_settings_set_max_num_images(
+    LiteRtLmEngineSettings* settings, int max_num_images);
+
 // Sets the activation data type.
 //
 // @param settings The engine settings.
