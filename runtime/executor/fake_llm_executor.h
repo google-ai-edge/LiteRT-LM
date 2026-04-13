@@ -84,6 +84,12 @@ class FakeLlmExecutor : public LlmExecutor {
     return &executor_settings_;
   };
   absl::StatusOr<int> GetCurrentStep() const override { return current_step_; }
+  absl::StatusOr<RuntimeConfig> GetRuntimeConfig() const override {
+    return runtime_config_;
+  };
+  absl::StatusOr<RuntimeState> GetRuntimeState() const override {
+    return runtime_state_;
+  };
 
   absl::Status SetCurrentStep(int current_step) override {
     current_step_ = current_step;
@@ -152,6 +158,9 @@ class FakeLlmExecutor : public LlmExecutor {
     kDecode,
   };
   LastOp last_op_ = LastOp::kNone;
+
+  RuntimeConfig runtime_config_;
+  RuntimeState runtime_state_;
 };
 
 }  // namespace litert::lm
