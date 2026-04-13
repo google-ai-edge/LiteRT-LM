@@ -31,6 +31,7 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/ascii.h"  // from @com_google_absl
+#include "absl/strings/str_format.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "litert/cc/litert_buffer_ref.h"  // from @litert
@@ -67,8 +68,9 @@ ExtractBufferKeyAndBackendConstraint(const schema::SectionObject* section) {
   BufferKey buffer_key(section->data_type());
   std::optional<std::string> backend_constraint;
   // Extract the specific model type from the section items KeyValuePairs.
-  if (section->data_type() == schema::AnySectionDataType_TFLiteModel ||
-      section->data_type() == schema::AnySectionDataType_TFLiteWeights) {
+  if ((section->data_type() == schema::AnySectionDataType_TFLiteModel ||
+       section->data_type() == schema::AnySectionDataType_TFLiteWeights) &&
+      items != nullptr) {
     bool found_model_type = false;
     std::string model_type;
     for (size_t j = 0; j < items->size(); ++j) {
@@ -153,11 +155,20 @@ LitertLmLoader::GetScopedFile() {
       "Model source is not a ScopedFile, cannot get ScopedFile.");
 }
 
-// This constructor is used when the model file is already loaded into memory.
-LitertLmLoader::LitertLmLoader(
-    std::shared_ptr<MemoryMappedFile> memory_mapped_model_file)
-    : model_source_(std::move(memory_mapped_model_file)) {
-  ABSL_CHECK_OK(Initialize());
+absl::StatusOr<std::unique_ptr<LitertLmLoader>> LitertLmLoader::Create(
+    ScopedFile model_file) {
+  auto loader = std::unique_ptr<LitertLmLoader>(
+      new LitertLmLoader(std::move(model_file)));
+  RETURN_IF_ERROR(loader->Initialize());
+  return loader;
+}
+
+absl::StatusOr<std::unique_ptr<LitertLmLoader>> LitertLmLoader::Create(
+    std::shared_ptr<MemoryMappedFile> memory_mapped_model_file) {
+  auto loader = std::unique_ptr<LitertLmLoader>(
+      new LitertLmLoader(std::move(memory_mapped_model_file)));
+  RETURN_IF_ERROR(loader->Initialize());
+  return loader;
 }
 
 absl::Status LitertLmLoader::Initialize() {
@@ -209,6 +220,12 @@ absl::Status LitertLmLoader::Initialize() {
       section_backend_constraint_[buffer_key] = *key_and_constraint.second;
       ABSL_LOG(INFO) << "section_backend_constraint: "
                      << *key_and_constraint.second;
+    }
+    if (section->begin_offset() > section->end_offset()) {
+      return absl::InvalidArgumentError(
+          absl::StrFormat("Section %d has invalid offsets: begin_offset (%d) > "
+                          "end_offset (%d).",
+                          i, section->begin_offset(), section->end_offset()));
     }
     section_locations_[buffer_key] =
         std::make_pair(section->begin_offset(), section->end_offset());

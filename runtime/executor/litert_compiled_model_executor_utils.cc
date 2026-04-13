@@ -104,14 +104,14 @@ BuildModelResourcesFromLitertLmFormat(const ModelAssets& model_assets) {
   if (model_assets.HasMemoryMappedFile()) {
     ASSIGN_OR_RETURN(auto memory_mapped_file,
                      model_assets.GetMemoryMappedFile());
-    loader = std::make_unique<LitertLmLoader>(memory_mapped_file);
+    ASSIGN_OR_RETURN(loader, LitertLmLoader::Create(memory_mapped_file));
   } else {
     // `BuildModelResourcesFromLitertLmFormat` expects a ScopedFile that it
     // takes ownership of, so we need to duplicate the ScopedFile to keep
     // the original alive.
     ASSIGN_OR_RETURN(auto scoped_file, model_assets.GetOrCreateScopedFile());
     ASSIGN_OR_RETURN(auto duplicate_file, scoped_file->Duplicate());
-    loader = std::make_unique<LitertLmLoader>(std::move(duplicate_file));
+    ASSIGN_OR_RETURN(loader, LitertLmLoader::Create(std::move(duplicate_file)));
   }
   return ModelResourcesLitertLm::Create(std::move(loader));
 }

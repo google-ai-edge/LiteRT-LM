@@ -83,8 +83,8 @@ CreateExecutorModelResourcesTask(absl::string_view model_path) {
 absl::StatusOr<std::unique_ptr<ModelResources>>
 CreateExecutorModelResourcesLitertLm(absl::string_view model_path) {
   ASSIGN_OR_RETURN(auto scoped_file, ScopedFile::Open(model_path));
-  return ModelResourcesLitertLm::Create(
-      std::make_unique<LitertLmLoader>(std::move(scoped_file)));
+  ASSIGN_OR_RETURN(auto loader, LitertLmLoader::Create(std::move(scoped_file)));
+  return ModelResourcesLitertLm::Create(std::move(loader));
 }
 
 TEST(LlmLiteRtCompiledModelExecutorStaticTest,

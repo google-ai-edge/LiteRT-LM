@@ -129,7 +129,13 @@ absl::StatusOr<Environment&> GetEnvironment(EngineSettings& engine_settings,
 class EngineImpl : public Engine {
  public:
   ~EngineImpl() override {
-    ABSL_QCHECK_OK(WaitUntilDone(Engine::kDefaultTimeout));
+    absl::Status status = WaitUntilDone(Engine::kDefaultTimeout);
+    if (!status.ok()) {
+      ABSL_LOG(ERROR)
+          << "Failed to wait for engine tasks to complete in destructor: "
+          << status;
+      ABSL_DCHECK(false);
+    }
   }
 
   static absl::StatusOr<std::unique_ptr<Engine>> Create(

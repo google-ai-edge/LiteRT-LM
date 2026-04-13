@@ -94,14 +94,14 @@ class LitertLmLoader {
  public:
   // Creates a LitertLmLoader from the model file. The loader will read the
   // model header from and map the sections to the section buffers.
-  explicit LitertLmLoader(ScopedFile model_file)
-      : model_source_(std::move(model_file)) {
-    ABSL_CHECK_OK(Initialize());
-  }
+  // Creates a LitertLmLoader from the model file. The loader will read the
+  // model header from and map the sections to the section buffers.
+  static absl::StatusOr<std::unique_ptr<LitertLmLoader>> Create(
+      ScopedFile model_file);
 
   // Creates a LitertLmLoader from an already memory-mapped model file.
   // This is useful when the file is managed externally.
-  explicit LitertLmLoader(
+  static absl::StatusOr<std::unique_ptr<LitertLmLoader>> Create(
       std::shared_ptr<MemoryMappedFile> memory_mapped_model_file);
 
   // Returns the tokenizer section buffer for the SentencePiece tokenizer.
@@ -165,6 +165,13 @@ class LitertLmLoader {
   absl::StatusOr<std::reference_wrapper<ScopedFile>> GetScopedFile();
 
  private:
+  explicit LitertLmLoader(ScopedFile model_file)
+      : model_source_(std::move(model_file)) {}
+
+  explicit LitertLmLoader(
+      std::shared_ptr<MemoryMappedFile> memory_mapped_model_file)
+      : model_source_(std::move(memory_mapped_model_file)) {}
+
   // Initializes the LitertLmLoader. Includes reading the model header and
   // recording the section locations for on-demand loading later.
   absl::Status Initialize();
