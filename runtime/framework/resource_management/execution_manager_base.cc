@@ -1,4 +1,4 @@
-// Copyright 2025 The ODML Authors.
+// Copyright 2026 The ODML Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,60 +12,46 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "runtime/framework/resource_management/execution_manager.h"
+#include "runtime/framework/resource_management/execution_manager_base.h"
 
 #include <atomic>
 #include <memory>
 #include <optional>
 #include <string>
 #include <tuple>
-#include <type_traits>
 #include <utility>
 #include <variant>
 #include <vector>
 
-#include "absl/base/attributes.h"  // from @com_google_absl
 #include "absl/base/nullability.h"  // from @com_google_absl
-#include "absl/base/thread_annotations.h"  // from @com_google_absl
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/container/flat_hash_set.h"  // from @com_google_absl
 #include "absl/functional/any_invocable.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
-#include "absl/memory/memory.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
-#include "absl/strings/string_view.h"  // from @com_google_absl
-#include "absl/synchronization/mutex.h"  // from @com_google_absl
-#include "absl/time/time.h"  // from @com_google_absl
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/constrained_decoding/constraint.h"
-#include "runtime/components/model_resources.h"
 #include "runtime/components/sampler.h"
 #include "runtime/components/sampler_factory.h"
 #include "runtime/components/stop_token_detector.h"
 #include "runtime/components/tokenizer.h"
 #include "runtime/core/tasks.h"
-#include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/audio_executor.h"
-#include "runtime/executor/audio_executor_settings.h"
-#include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/llm_executor.h"
 #include "runtime/executor/llm_executor_io_types.h"
-#include "runtime/executor/vision_executor_settings.h"
-#include "runtime/framework/resource_management/resource_manager.h"
-#include "runtime/proto/token.pb.h"
+#include "runtime/framework/resource_management/execution_manager.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/executor_data_util.h"
-#include "runtime/util/status_macros.h"  // IWYU pragma: keep
+#include "runtime/util/status_macros.h"
 #include "runtime/util/tensor_buffer_util.h"
 
 namespace litert::lm {
 
-// Helper macro to check if the task has been cancelled.
 #define RETURN_IF_CANCELLED(cancelled, task_id, callback)             \
   if (cancelled != nullptr && cancelled->load()) {                    \
     FinishTaskAndLogErrors(task_id, Responses(TaskState::kCancelled), \
@@ -73,7 +59,8 @@ namespace litert::lm {
     return;                                                           \
   }
 
-absl::StatusOr<SessionId> ExecutionManager::RegisterNewSession(
+absl::StatusOr<std::shared_ptr<SessionInfo>>
+ExecutionManagerBase::CreateSessionInfo(
     SessionConfig session_config, std::optional<BenchmarkInfo> benchmark_info) {
   ASSIGN_OR_RETURN(auto context_handler,
                    resource_manager_->CreateContextHandler(session_config));
@@ -97,7 +84,7 @@ absl::StatusOr<SessionId> ExecutionManager::RegisterNewSession(
       ABSL_LOG(ERROR) << "Failed to add stop token sequence: " << status;
     }
   }
-  SessionId session_id = next_session_id_.fetch_add(1);
+
   auto session_info = std::make_shared<SessionInfo>(SessionInfo{
       .session_config = std::move(session_config),
       .context_handler = std::move(context_handler),
@@ -105,25 +92,31 @@ absl::StatusOr<SessionId> ExecutionManager::RegisterNewSession(
       .stop_token_detector = std::move(stop_token_detector),
       .benchmark_info = std::move(benchmark_info),
   });
-  {
-    absl::MutexLock lock(session_and_task_lookup_mutex_);
-    if (session_lookup_.contains(session_id)) {
-      return absl::InvalidArgumentError(absl::StrCat(
-          "Session ", session_id, " already exists in session list."));
-    }
-    if (session_info->session_config.AudioModalityEnabled()) {
-      RETURN_IF_ERROR(resource_manager_->TryLoadingAudioExecutor());
-    }
-    if (session_info->session_config.VisionModalityEnabled()) {
-      RETURN_IF_ERROR(resource_manager_->TryLoadingVisionExecutor());
-    }
-    session_lookup_.insert({session_id, std::move(session_info)});
+
+  if (session_info->session_config.AudioModalityEnabled()) {
+    RETURN_IF_ERROR(resource_manager_->TryLoadingAudioExecutor());
   }
+  if (session_info->session_config.VisionModalityEnabled()) {
+    RETURN_IF_ERROR(resource_manager_->TryLoadingVisionExecutor());
+  }
+
+  return session_info;
+}
+
+absl::StatusOr<SessionId> ExecutionManagerBase::RegisterNewSessionUnlocked(
+    std::shared_ptr<SessionInfo> session_info) {
+  SessionId session_id = next_session_id_++;
+  if (session_lookup_.contains(session_id)) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Session ", session_id, " already exists in session list."));
+  }
+  session_lookup_.insert({session_id, std::move(session_info)});
+
   return session_id;
 }
 
-absl::Status ExecutionManager::ReleaseSession(SessionId session_id) {
-  absl::MutexLock lock(session_and_task_lookup_mutex_);
+absl::Status ExecutionManagerBase::ReleaseSessionUnlocked(
+    SessionId session_id) {
   if (!session_lookup_.contains(session_id)) {
     return absl::InvalidArgumentError(
         absl::StrCat("Session ", session_id, " not found in session list."));
@@ -141,8 +134,8 @@ absl::Status ExecutionManager::ReleaseSession(SessionId session_id) {
   return absl::OkStatus();
 }
 
-absl::Status ExecutionManager::CancelAllTasksInSession(SessionId session_id) {
-  absl::MutexLock lock(session_and_task_lookup_mutex_);
+absl::Status ExecutionManagerBase::CancelAllTasksInSessionUnlocked(
+    SessionId session_id) {
   if (!session_lookup_.contains(session_id)) {
     return absl::InvalidArgumentError(
         absl::StrCat("Session ", session_id, " not found in session list."));
@@ -154,8 +147,7 @@ absl::Status ExecutionManager::CancelAllTasksInSession(SessionId session_id) {
 }
 
 absl::StatusOr<std::shared_ptr<const SessionInfo>>
-ExecutionManager::GetSessionInfo(SessionId session_id) {
-  absl::MutexLock lock(session_and_task_lookup_mutex_);
+ExecutionManagerBase::GetSessionInfoUnlocked(SessionId session_id) {
   if (!session_lookup_.contains(session_id)) {
     return absl::InvalidArgumentError(
         absl::StrCat("Session ", session_id, " not found in session list."));
@@ -163,9 +155,8 @@ ExecutionManager::GetSessionInfo(SessionId session_id) {
   return session_lookup_.at(session_id);
 }
 
-absl::StatusOr<BenchmarkInfo*> ExecutionManager::GetMutableBenchmarkInfo(
-    SessionId session_id) {
-  absl::MutexLock lock(session_and_task_lookup_mutex_);
+absl::StatusOr<BenchmarkInfo*>
+ExecutionManagerBase::GetMutableBenchmarkInfoUnlocked(SessionId session_id) {
   if (!session_lookup_.contains(session_id)) {
     return absl::InvalidArgumentError(
         absl::StrCat("Session ", session_id, " not found in session list."));
@@ -177,17 +168,12 @@ absl::StatusOr<BenchmarkInfo*> ExecutionManager::GetMutableBenchmarkInfo(
   return &session_lookup_.at(session_id)->benchmark_info.value();
 }
 
-absl::StatusOr<TaskId> ExecutionManager::GetNewTaskId() {
-  return next_task_id_.fetch_add(1);
-}
-
-absl::Status ExecutionManager::CreateTask(
+absl::Status ExecutionManagerBase::CreateTaskUnlocked(
     SessionId session_id, TaskId task_id,
     absl::AnyInvocable<void()> absl_nonnull task,
     absl::flat_hash_set<TaskId> dependent_tasks,
     std::shared_ptr<std::atomic<bool>> absl_nonnull cancelled,
     absl::AnyInvocable<void(absl::StatusOr<Responses>)> absl_nonnull callback) {
-  absl::MutexLock lock(session_and_task_lookup_mutex_);
   if (!session_lookup_.contains(session_id)) {
     return absl::InvalidArgumentError(absl::StrCat(
         "Session ", session_id, " not found in session list. Task ", task_id,
@@ -276,49 +262,14 @@ absl::Status ExecutionManager::CreateTask(
   return absl::OkStatus();
 }
 
-absl::Status ExecutionManager::QueueTask(TaskId task_id) {
-  if (!task_lookup_.contains(task_id)) {
-    return absl::InvalidArgumentError(
-        absl::StrCat("Task ", task_id, " not found in task list."));
-  }
-  if (task_lookup_.at(task_id).task_state != TaskState::kCreated) {
-    auto error_status = absl::FailedPreconditionError(
-        absl::StrCat("Task ", task_id, " is not in Created state."));
-    task_lookup_.at(task_id).callback(error_status);
-    return error_status;
-  }
-  if (!task_lookup_.at(task_id).dependent_tasks.empty()) {
-    auto error_status = absl::InvalidArgumentError(
-        absl::StrCat("Task ", task_id, " has dependent tasks not finished."));
-    task_lookup_.at(task_id).callback(error_status);
-    return error_status;
-  }
-
-  auto task = std::move(task_lookup_.at(task_id).task);
-
-  if (execution_thread_pool_ != nullptr) {
-    RETURN_IF_ERROR(execution_thread_pool_->Schedule(std::move(task)));
-  } else {
-    ABSL_LOG(ERROR) << "Execution thread pool is null, skipping task: "
-                    << task_id;
-  }
-
-  task_lookup_.at(task_id).callback(Responses(TaskState::kQueued));
-  RETURN_IF_ERROR(UpdateTaskState(task_id, TaskState::kQueued));
-
-  return absl::OkStatus();
-}
-
 absl::StatusOr<
     std::tuple<std::shared_ptr<SessionInfo>, std::shared_ptr<std::atomic<bool>>,
                absl::AnyInvocable<void(absl::StatusOr<Responses>)>>>
-ExecutionManager::StartTask(TaskId task_id) {
-  absl::MutexLock lock(session_and_task_lookup_mutex_);
+ExecutionManagerBase::StartTaskUnlocked(TaskId task_id) {
   if (!task_lookup_.contains(task_id)) {
     return absl::InvalidArgumentError(
         absl::StrCat("Task ", task_id, " not found in task list."));
   }
-  // If the task is cancelled, we don't need to start it.
   if (task_lookup_.at(task_id).task_state == TaskState::kCancelled) {
     return std::make_tuple(nullptr, nullptr, nullptr);
   }
@@ -333,7 +284,7 @@ ExecutionManager::StartTask(TaskId task_id) {
     return error_status;
   }
   task_lookup_.at(task_id).callback(Responses(TaskState::kProcessing));
-  RETURN_IF_ERROR(UpdateTaskState(task_id, TaskState::kProcessing));
+  RETURN_IF_ERROR(UpdateTaskStateUnlocked(task_id, TaskState::kProcessing));
 
   if (!session_lookup_.contains(task_lookup_.at(task_id).session_id)) {
     return absl::InvalidArgumentError(
@@ -346,122 +297,78 @@ ExecutionManager::StartTask(TaskId task_id) {
                          std::move(task_lookup_.at(task_id).callback));
 }
 
-absl::Status ExecutionManager::FinishTask(
+absl::Status ExecutionManagerBase::FinishTaskUnlocked(
     TaskId task_id, absl::StatusOr<Responses> responses,
-    absl::AnyInvocable<void(absl::StatusOr<Responses>)> absl_nonnull callback) {
-  auto invoke_callback_and_return =
-      [&](absl::Status status) ABSL_EXCLUSIVE_LOCKS_REQUIRED(
-          session_and_task_lookup_mutex_) -> absl::Status {
+    absl::AnyInvocable<void(absl::StatusOr<Responses>)>& callback) {
+  auto invoke_callback_and_return = [&](absl::Status status) -> absl::Status {
     callback(status);
-    RETURN_IF_ERROR(UpdateTaskState(task_id, TaskState::kFailed));
+    RETURN_IF_ERROR(UpdateTaskStateUnlocked(task_id, TaskState::kFailed));
     return status;
   };
-  {
-    absl::MutexLock lock(session_and_task_lookup_mutex_);
-    if (!task_lookup_.contains(task_id)) {
-      return absl::InvalidArgumentError(
-          absl::StrCat("Task ", task_id, " not found in task list."));
-    }
-    if (task_lookup_.at(task_id).task_state != TaskState::kProcessing) {
-      auto error_status = absl::FailedPreconditionError(
-          absl::StrCat("Task ", task_id, " is not in Processing state."));
-      return invoke_callback_and_return(error_status);
-    }
-    if (!responses.ok() || responses->GetTaskState() == TaskState::kCancelled) {
-      auto following_waiting_tasks = FollowingWaitingTasks(task_id);
-      if (!following_waiting_tasks.ok()) {
-        return invoke_callback_and_return(following_waiting_tasks.status());
-      }
-      auto status = UpdateAllTasksToState(
-          following_waiting_tasks.value(),
-          responses.ok() ? TaskState::kDependentTaskCancelled
-                         : TaskState::kDependentTaskFailed);
-      if (!status.ok()) {
-        return invoke_callback_and_return(status);
-      }
-    } else if (responses->GetTaskState() == TaskState::kDone ||
-               responses->GetTaskState() == TaskState::kMaxNumTokensReached) {
-      for (TaskId following_task_id :
-           task_lookup_.at(task_id).following_tasks) {
-        if (!task_lookup_.contains(following_task_id)) {
-          auto error_status = absl::InvalidArgumentError(
-              absl::StrCat("Following task ", following_task_id,
-                           " not found in task list."));
-          return invoke_callback_and_return(error_status);
-        }
-        if (IsTaskEndState(task_lookup_.at(following_task_id).task_state)) {
-          continue;
-        }
-        if (task_lookup_.at(following_task_id).task_state !=
-            TaskState::kCreated) {
-          auto error_status = absl::InvalidArgumentError(
-              absl::StrCat("Following task ", following_task_id,
-                           " is not in Created state. Task state: ",
-                           task_lookup_.at(following_task_id).task_state));
-          return invoke_callback_and_return(error_status);
-        }
-        if (!task_lookup_.at(following_task_id)
-                 .dependent_tasks.contains(task_id)) {
-          auto error_status = absl::InvalidArgumentError(
-              absl::StrCat("Following task ", following_task_id,
-                           " does not depend on task ", task_id));
-          return invoke_callback_and_return(error_status);
-        }
-        task_lookup_.at(following_task_id).dependent_tasks.erase(task_id);
-        if (task_lookup_.at(following_task_id).dependent_tasks.empty()) {
-          RETURN_IF_ERROR(QueueTask(following_task_id));
-        }
-      }
-    } else if (!IsTaskEndState(responses->GetTaskState())) {
-      return invoke_callback_and_return(absl::InvalidArgumentError(absl::StrCat(
-          "Expected task state for responses to be end state, but got ",
-          responses->GetTaskState())));
-    }
 
-    TaskState next_task_state =
-        responses.ok() ? responses->GetTaskState() : TaskState::kFailed;
-    if (callback_thread_pool_ != nullptr) {
-      RETURN_IF_ERROR(callback_thread_pool_->Schedule(
-          [callback = std::move(callback), responses = std::move(responses),
-           task_id = task_id, next_task_state = std::move(next_task_state),
-           this]() mutable {
-            callback(std::move(responses));
-            absl::MutexLock lock(session_and_task_lookup_mutex_);
-            auto status = UpdateTaskState(task_id, next_task_state);
-            if (!status.ok()) {
-              ABSL_LOG(ERROR) << "Failed to update task state: " << status
-                              << " with task id: " << task_id;
-            }
-          }));
-      RETURN_IF_ERROR(UpdateTaskState(task_id, TaskState::kLastCallbackQueued));
-    } else {
-      callback(
-          absl::InternalError("Callback thread pool is null, skipping "
-                              "callback and ignoring task state."));
-    }
+  if (!task_lookup_.contains(task_id)) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Task ", task_id, " not found in task list."));
   }
-
-  if (callback_thread_pool_ != nullptr) {
-    // TODO b/476205457 - Consider to use a asynchronous approach to handle the
-    // callback, and remove this WaitUntilDone.
-    RETURN_IF_ERROR(callback_thread_pool_->WaitUntilDone(absl::Seconds(10)));
+  if (task_lookup_.at(task_id).task_state != TaskState::kProcessing) {
+    auto error_status = absl::FailedPreconditionError(
+        absl::StrCat("Task ", task_id, " is not in Processing state."));
+    return invoke_callback_and_return(error_status);
+  }
+  if (!responses.ok() || responses->GetTaskState() == TaskState::kCancelled) {
+    auto following_waiting_tasks = FollowingWaitingTasksUnlocked(task_id);
+    if (!following_waiting_tasks.ok()) {
+      return invoke_callback_and_return(following_waiting_tasks.status());
+    }
+    auto status = UpdateAllTasksToStateUnlocked(
+        following_waiting_tasks.value(),
+        responses.ok() ? TaskState::kDependentTaskCancelled
+                       : TaskState::kDependentTaskFailed);
+    if (!status.ok()) {
+      return invoke_callback_and_return(status);
+    }
+  } else if (responses->GetTaskState() == TaskState::kDone ||
+             responses->GetTaskState() == TaskState::kMaxNumTokensReached) {
+    for (TaskId following_task_id : task_lookup_.at(task_id).following_tasks) {
+      if (!task_lookup_.contains(following_task_id)) {
+        auto error_status = absl::InvalidArgumentError(absl::StrCat(
+            "Following task ", following_task_id, " not found in task list."));
+        return invoke_callback_and_return(error_status);
+      }
+      if (IsTaskEndState(task_lookup_.at(following_task_id).task_state)) {
+        continue;
+      }
+      if (task_lookup_.at(following_task_id).task_state !=
+          TaskState::kCreated) {
+        auto error_status = absl::InvalidArgumentError(
+            absl::StrCat("Following task ", following_task_id,
+                         " is not in Created state. Task state: ",
+                         task_lookup_.at(following_task_id).task_state));
+        return invoke_callback_and_return(error_status);
+      }
+      if (!task_lookup_.at(following_task_id)
+               .dependent_tasks.contains(task_id)) {
+        auto error_status = absl::InvalidArgumentError(
+            absl::StrCat("Following task ", following_task_id,
+                         " does not depend on task ", task_id));
+        return invoke_callback_and_return(error_status);
+      }
+      task_lookup_.at(following_task_id).dependent_tasks.erase(task_id);
+      if (task_lookup_.at(following_task_id).dependent_tasks.empty()) {
+        RETURN_IF_ERROR(QueueTask(following_task_id));
+      }
+    }
+  } else if (!IsTaskEndState(responses->GetTaskState())) {
+    return invoke_callback_and_return(absl::InvalidArgumentError(absl::StrCat(
+        "Expected task state for responses to be end state, but got ",
+        responses->GetTaskState())));
   }
 
   return absl::OkStatus();
 }
 
-void ExecutionManager::FinishTaskAndLogErrors(
-    TaskId task_id, absl::StatusOr<Responses> responses,
-    absl::AnyInvocable<void(absl::StatusOr<Responses>)> absl_nonnull callback) {
-  auto status = FinishTask(task_id, std::move(responses), std::move(callback));
-  if (!status.ok()) {
-    ABSL_LOG(ERROR) << "Failed to finish task: " << status
-                    << " with task id: " << task_id;
-  }
-}
-
 absl::StatusOr<absl::flat_hash_set<TaskId>>
-ExecutionManager::FollowingWaitingTasks(TaskId task_id) {
+ExecutionManagerBase::FollowingWaitingTasksUnlocked(TaskId task_id) {
   absl::flat_hash_set<TaskId> following_waiting_tasks;
   for (TaskId following_task_id : task_lookup_.at(task_id).following_tasks) {
     if (!task_lookup_.contains(following_task_id)) {
@@ -476,7 +383,7 @@ ExecutionManager::FollowingWaitingTasks(TaskId task_id) {
     if (!IsTaskEndState(task_lookup_.at(following_task_id).task_state)) {
       following_waiting_tasks.insert(following_task_id);
       ASSIGN_OR_RETURN(auto next_following_waiting_tasks,
-                       FollowingWaitingTasks(following_task_id));
+                       FollowingWaitingTasksUnlocked(following_task_id));
       following_waiting_tasks.insert(next_following_waiting_tasks.begin(),
                                      next_following_waiting_tasks.end());
     }
@@ -484,8 +391,8 @@ ExecutionManager::FollowingWaitingTasks(TaskId task_id) {
   return following_waiting_tasks;
 }
 
-absl::Status ExecutionManager::UpdateTaskState(TaskId task_id,
-                                               TaskState task_state) {
+absl::Status ExecutionManagerBase::UpdateTaskStateUnlocked(
+    TaskId task_id, TaskState task_state) {
   if (!task_lookup_.contains(task_id)) {
     return absl::InvalidArgumentError(
         absl::StrCat("Task ", task_id, " not found in task list."));
@@ -510,19 +417,19 @@ absl::Status ExecutionManager::UpdateTaskState(TaskId task_id,
   return absl::OkStatus();
 }
 
-absl::Status ExecutionManager::UpdateAllTasksToState(
+absl::Status ExecutionManagerBase::UpdateAllTasksToStateUnlocked(
     const absl::flat_hash_set<TaskId>& task_ids, TaskState task_state) {
   for (TaskId task_id : task_ids) {
     task_lookup_.at(task_id).dependent_tasks.clear();
     if (task_lookup_.at(task_id).callback) {
       task_lookup_.at(task_id).callback(Responses(task_state));
     }
-    RETURN_IF_ERROR(UpdateTaskState(task_id, task_state));
+    RETURN_IF_ERROR(UpdateTaskStateUnlocked(task_id, task_state));
   }
   return absl::OkStatus();
 }
 
-absl::StatusOr<ExecutorInputs> ExecutionManager::ProcessAndCombineContents(
+absl::StatusOr<ExecutorInputs> ExecutionManagerBase::ProcessAndCombineContents(
     const std::vector<InputData>& preprocessed_contents,
     std::optional<BenchmarkInfo>& benchmark_info) {
   std::vector<int> combined_token_ids;
@@ -633,65 +540,17 @@ absl::StatusOr<ExecutorInputs> ExecutionManager::ProcessAndCombineContents(
   return inputs;
 }
 
-absl::StatusOr<std::unique_ptr<ExecutionManager>> ExecutionManager::Create(
-    Tokenizer* absl_nonnull tokenizer,
-    ModelResources* absl_nullable model_resources,
-    std::unique_ptr<LlmExecutor> absl_nonnull llm_executor,
-    std::unique_ptr<VisionExecutorSettings> absl_nullable
-    vision_executor_settings,
-    std::unique_ptr<AudioExecutorSettings> absl_nullable
-    audio_executor_settings,
-    ::litert::Environment* absl_nullable litert_env,
-    std::unique_ptr<AudioExecutor> absl_nullable audio_executor) {
-  std::unique_ptr<Sampler> sampler;
-  ASSIGN_OR_RETURN(
-      auto resource_manager,
-      ResourceManager::Create(model_resources, std::move(llm_executor),
-                              std::move(vision_executor_settings),
-                              std::move(audio_executor_settings), litert_env,
-                              std::move(audio_executor)));
-  return absl::WrapUnique(
-      new ExecutionManager(tokenizer, std::move(resource_manager), litert_env));
+absl::StatusOr<AudioExecutorProperties>
+ExecutionManagerBase::GetAudioExecutorProperties() const {
+  return resource_manager_->GetAudioExecutorProperties();
 }
 
-absl::Status ExecutionManager::WaitUntilDone(TaskId task_id,
-                                             absl::Duration timeout) {
-  auto task_done = [this, task_id]() {
-    session_and_task_lookup_mutex_.AssertReaderHeld();
-    return task_lookup_.contains(task_id) &&
-           IsTaskEndState(task_lookup_.at(task_id).task_state);
-  };
-  absl::MutexLock lock(session_and_task_lookup_mutex_);
-  return session_and_task_lookup_mutex_.AwaitWithTimeout(
-             absl::Condition(&task_done), timeout)
-             ? absl::OkStatus()
-             : absl::DeadlineExceededError(absl::StrCat(
-                   "Task ", task_id, " did not complete within the timeout of ",
-                   absl::FormatDuration(timeout), "."));
+absl::StatusOr<VisionExecutorProperties>
+ExecutionManagerBase::GetVisionExecutorProperties() const {
+  return resource_manager_->GetVisionExecutorProperties();
 }
 
-absl::Status ExecutionManager::WaitUntilSessionDone(SessionId session_id,
-                                                    absl::Duration timeout) {
-  auto session_done = [this, session_id]() {
-    session_and_task_lookup_mutex_.AssertReaderHeld();
-    return session_lookup_.contains(session_id) &&
-           session_lookup_.at(session_id)->active_tasks.empty();
-  };
-  absl::MutexLock lock(session_and_task_lookup_mutex_);
-  return session_and_task_lookup_mutex_.AwaitWithTimeout(
-             absl::Condition(&session_done), timeout)
-             ? absl::OkStatus()
-             : absl::DeadlineExceededError(
-                   absl::StrCat("Session ", session_id,
-                                " did not complete within the timeout of ",
-                                absl::FormatDuration(timeout), "."));
-}
-
-absl::Status ExecutionManager::WaitUntilAllDone(absl::Duration timeout) {
-  return execution_thread_pool_->WaitUntilDone(timeout);
-}
-
-absl::Status ExecutionManager::AddPrefillTask(
+absl::Status ExecutionManagerBase::AddPrefillTask(
     SessionId session_id, TaskId task_id, std::vector<InputData> inputs,
     absl::flat_hash_set<TaskId> dep_tasks,
     std::shared_ptr<std::atomic<bool>> absl_nonnull cancelled,
@@ -716,57 +575,61 @@ absl::Status ExecutionManager::AddPrefillTask(
 
     RETURN_IF_CANCELLED(cancelled, task_id, callback);
 
-    // Note AcquireExecutorWithContextHandler include context switching logic,
-    // so it should be called before any executor running.
-    auto llm_executor = resource_manager_->AcquireExecutorWithContextHandler(
-        session_info->context_handler);
-    if (!llm_executor.ok()) {
-      FinishTaskAndLogErrors(task_id, llm_executor.status(),
-                             std::move(callback));
-      return;
-    }
-
-    RETURN_IF_CANCELLED(cancelled, task_id, callback);
-
-    auto executor_inputs =
-        ProcessAndCombineContents(inputs, session_info->benchmark_info);
-    if (!executor_inputs.ok()) {
-      FinishTaskAndLogErrors(task_id, executor_inputs.status(),
-                             std::move(callback));
-      return;
-    }
-
-    RETURN_IF_CANCELLED(cancelled, task_id, callback);
-
-    auto responses =
-        Tasks::Prefill(*llm_executor.value(), *executor_inputs,
-                       /*wait_for_completion=*/true,
-                       /*benchmark_info=*/session_info->benchmark_info);
-    if (!responses.ok()) {
-      FinishTaskAndLogErrors(task_id, responses.status(), std::move(callback));
-      return;
-    }
-
-    if (cancelled != nullptr && cancelled->load()) {
-      responses = Responses(TaskState::kCancelled);
-    } else {
-      // Keep track of the last_prefill_token_id after prefill is done.
-      auto processed_tokens = llm_executor.value()->GetProcessedTokens();
-      if (!processed_tokens.ok()) {
-        FinishTaskAndLogErrors(task_id, processed_tokens.status(),
+    absl::StatusOr<Responses> responses;
+    {
+      // Note AcquireExecutorWithContextHandler includes context switching
+      // logic, so it should be called before any executor running.
+      auto llm_executor = resource_manager_->AcquireExecutorWithContextHandler(
+          session_info->context_handler);
+      if (!llm_executor.ok()) {
+        FinishTaskAndLogErrors(task_id, llm_executor.status(),
                                std::move(callback));
         return;
       }
-      auto current_step = llm_executor.value()->GetCurrentStep();
-      if (!current_step.ok()) {
-        FinishTaskAndLogErrors(task_id, current_step.status(),
+
+      RETURN_IF_CANCELLED(cancelled, task_id, callback);
+
+      auto executor_inputs =
+          ProcessAndCombineContents(inputs, session_info->benchmark_info);
+      if (!executor_inputs.ok()) {
+        FinishTaskAndLogErrors(task_id, executor_inputs.status(),
                                std::move(callback));
         return;
       }
-      session_info->last_prefill_token_id =
-          processed_tokens.value()
-              ->GetTokenAtStep(current_step.value() - 1)
-              .at(0);
+
+      RETURN_IF_CANCELLED(cancelled, task_id, callback);
+
+      responses =
+          Tasks::Prefill(*llm_executor.value(), *executor_inputs,
+                         /*wait_for_completion=*/true,
+                         /*benchmark_info=*/session_info->benchmark_info);
+      if (!responses.ok()) {
+        FinishTaskAndLogErrors(task_id, responses.status(),
+                               std::move(callback));
+        return;
+      }
+
+      if (cancelled != nullptr && cancelled->load()) {
+        responses = Responses(TaskState::kCancelled);
+      } else {
+        // Keep track of the last_prefill_token_id after prefill is done.
+        auto processed_tokens = llm_executor.value()->GetProcessedTokens();
+        if (!processed_tokens.ok()) {
+          FinishTaskAndLogErrors(task_id, processed_tokens.status(),
+                                 std::move(callback));
+          return;
+        }
+        auto current_step = llm_executor.value()->GetCurrentStep();
+        if (!current_step.ok()) {
+          FinishTaskAndLogErrors(task_id, current_step.status(),
+                                 std::move(callback));
+          return;
+        }
+        session_info->last_prefill_token_id =
+            processed_tokens.value()
+                ->GetTokenAtStep(current_step.value() - 1)
+                .at(0);
+      }
     }
 
     FinishTaskAndLogErrors(task_id, std::move(responses), std::move(callback));
@@ -777,7 +640,7 @@ absl::Status ExecutionManager::AddPrefillTask(
                     cancelled, std::move(callback));
 }
 
-absl::Status ExecutionManager::AddDecodeTask(
+absl::Status ExecutionManagerBase::AddDecodeTask(
     SessionId session_id, TaskId task_id, absl::flat_hash_set<TaskId> dep_tasks,
     Constraint* absl_nullable constraint,
     std::shared_ptr<std::atomic<bool>> absl_nonnull cancelled,
@@ -804,45 +667,52 @@ absl::Status ExecutionManager::AddDecodeTask(
 
     RETURN_IF_CANCELLED(cancelled, task_id, callback);
 
-    auto llm_executor = resource_manager_->AcquireExecutorWithContextHandler(
-        session_info->context_handler);
-    if (!llm_executor.ok()) {
-      FinishTaskAndLogErrors(task_id, llm_executor.status(),
-                             std::move(callback));
-      return;
-    }
-
-    RETURN_IF_CANCELLED(cancelled, task_id, callback);
-
-    auto num_output_candidates =
-        session_info->session_config.GetNumOutputCandidates();
-    session_info->stop_token_detector->ResetBatch(num_output_candidates);
-    std::optional<Sampler*> optional_sampler = std::nullopt;
-    std::optional<litert::TensorBuffer> decoded_ids_buffer = std::nullopt;
-    if (session_info->sampler != nullptr) {
-      optional_sampler = session_info->sampler.get();
-      std::vector<int> decoded_ids(num_output_candidates,
-                                   session_info->last_prefill_token_id);
-      auto decoded_ids_buffer_or =
-          CopyToTensorBuffer<int>(decoded_ids, {num_output_candidates, 1});
-      if (!decoded_ids_buffer_or.HasValue()) {
-        callback(absl::InternalError(decoded_ids_buffer_or.Error().Message()));
+    absl::StatusOr<Responses> responses;
+    {
+      auto llm_executor = resource_manager_->AcquireExecutorWithContextHandler(
+          session_info->context_handler);
+      if (!llm_executor.ok()) {
+        FinishTaskAndLogErrors(task_id, llm_executor.status(),
+                               std::move(callback));
         return;
       }
-      decoded_ids_buffer = std::move(decoded_ids_buffer_or.Value());
-    }
 
-    auto responses = Tasks::Decode(
-        *llm_executor.value(), *tokenizer_, *session_info->stop_token_detector,
-        num_output_candidates, session_info->benchmark_info, optional_sampler,
-        constraint, std::move(decoded_ids_buffer), callback, cancelled.get(),
-        max_output_tokens);
-    if (!responses.ok() && absl::IsCancelled(responses.status())) {
-      responses = Responses(TaskState::kCancelled);
-    }
+      RETURN_IF_CANCELLED(cancelled, task_id, callback);
 
-    if (cancelled != nullptr && cancelled->load()) {
-      responses = Responses(TaskState::kCancelled);
+      auto num_output_candidates =
+          session_info->session_config.GetNumOutputCandidates();
+      session_info->stop_token_detector->ResetBatch(num_output_candidates);
+      std::optional<Sampler*> optional_sampler = std::nullopt;
+      std::optional<litert::TensorBuffer> decoded_ids_buffer = std::nullopt;
+      if (session_info->sampler != nullptr) {
+        optional_sampler = session_info->sampler.get();
+        std::vector<int> decoded_ids(num_output_candidates,
+                                     session_info->last_prefill_token_id);
+        auto decoded_ids_buffer_or =
+            CopyToTensorBuffer<int>(decoded_ids, {num_output_candidates, 1});
+        if (!decoded_ids_buffer_or.HasValue()) {
+          FinishTaskAndLogErrors(
+              task_id,
+              absl::InternalError(decoded_ids_buffer_or.Error().Message()),
+              std::move(callback));
+          return;
+        }
+        decoded_ids_buffer = std::move(decoded_ids_buffer_or.Value());
+      }
+
+      responses = Tasks::Decode(
+          *llm_executor.value(), *tokenizer_,
+          *session_info->stop_token_detector, num_output_candidates,
+          session_info->benchmark_info, optional_sampler, constraint,
+          std::move(decoded_ids_buffer), callback, cancelled.get(),
+          max_output_tokens);
+      if (!responses.ok() && absl::IsCancelled(responses.status())) {
+        responses = Responses(TaskState::kCancelled);
+      }
+
+      if (cancelled != nullptr && cancelled->load()) {
+        responses = Responses(TaskState::kCancelled);
+      }
     }
 
     FinishTaskAndLogErrors(task_id, std::move(responses), std::move(callback));
@@ -853,111 +723,7 @@ absl::Status ExecutionManager::AddDecodeTask(
                     cancelled, std::move(callback));
 }
 
-absl::Status ExecutionManager::AddCloneSessionTask(
-    SessionId session_id, TaskId task_id, absl::flat_hash_set<TaskId> dep_tasks,
-    SessionId cloned_session_id,
-    std::shared_ptr<std::atomic<bool>> absl_nonnull cancelled,
-    absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback) {
-  if (callback == nullptr) {
-    callback = [](absl::StatusOr<Responses> responses) {};
-  }
-
-  auto task = [this, task_id, session_id, cloned_session_id]() mutable -> void {
-    auto task_info = StartTask(task_id);
-    if (!task_info.ok()) {
-      FinishTaskAndLogErrors(task_id, task_info.status(),
-                             [](absl::StatusOr<Responses> responses) {});
-      return;
-    }
-    auto [session_info, cancelled, callback] = std::move(task_info.value());
-    // If the session info is nullptr, it means the task is cancelled before it
-    // is started.
-    if (session_info == nullptr) {
-      return;
-    }
-
-    RETURN_IF_CANCELLED(cancelled, task_id, callback);
-
-    absl::StatusOr<Responses> result = Responses(TaskState::kDone);
-    [&] {
-      std::shared_ptr<const SessionInfo> original_session_info;
-      {
-        absl::MutexLock lock(session_and_task_lookup_mutex_);
-        if (!session_lookup_.contains(session_id)) {
-          result = absl::InvalidArgumentError(absl::StrCat(
-              "Session ", session_id, " not found in session list."));
-          return;
-        }
-        original_session_info = session_lookup_.at(session_id);
-      }
-
-      auto cloned_context_handler_or = resource_manager_->CloneContextHandler(
-          original_session_info->context_handler);
-      if (!cloned_context_handler_or.ok()) {
-        result = cloned_context_handler_or.status();
-        return;
-      }
-
-      std::unique_ptr<Sampler> cloned_sampler;
-      if (original_session_info->sampler != nullptr) {
-        auto sampler = CreateSampler(
-            original_session_info->session_config.GetSamplerBackend(),
-            original_session_info->session_config.GetNumOutputCandidates(),
-            original_session_info->session_config.GetSamplerParams());
-        if (!sampler.ok()) {
-          result = sampler.status();
-          return;
-        }
-        cloned_sampler = std::move(*sampler);
-      }
-
-      auto cloned_stop_token_detector = std::make_unique<StopTokenDetector>(1);
-      for (const auto& stop_token_sequence :
-           original_session_info->session_config.GetStopTokenIds()) {
-        auto status = cloned_stop_token_detector->AddStopTokenSequence(
-            stop_token_sequence);
-        if (!status.ok()) {
-          result = status;
-          return;
-        }
-      }
-
-      {
-        absl::MutexLock lock(session_and_task_lookup_mutex_);
-        if (!session_lookup_.contains(cloned_session_id)) {
-          result = absl::InvalidArgumentError(
-              absl::StrCat("Cloned session ", cloned_session_id,
-                           " not found in session list."));
-          return;
-        }
-        session_lookup_.at(cloned_session_id)->session_config =
-            original_session_info->session_config;
-        session_lookup_.at(cloned_session_id)->context_handler =
-            std::move(cloned_context_handler_or.value());
-        session_lookup_.at(cloned_session_id)->sampler =
-            std::move(cloned_sampler);
-        session_lookup_.at(cloned_session_id)->last_prefill_token_id =
-            original_session_info->last_prefill_token_id;
-        session_lookup_.at(cloned_session_id)->stop_token_detector =
-            std::move(cloned_stop_token_detector);
-        session_lookup_.at(cloned_session_id)->benchmark_info =
-            original_session_info->benchmark_info;
-      }
-    }();
-
-    if (cancelled != nullptr && cancelled->load()) {
-      result = Responses(TaskState::kCancelled);
-    }
-
-    FinishTaskAndLogErrors(task_id, result, std::move(callback));
-    return;
-  };
-
-  return CreateTask(session_id, task_id, std::move(task), std::move(dep_tasks),
-                    cancelled, std::move(callback));
-}
-
-absl::Status ExecutionManager::AddTextScoringTask(
+absl::Status ExecutionManagerBase::AddTextScoringTask(
     SessionId session_id, TaskId task_id, absl::flat_hash_set<TaskId> dep_tasks,
     const std::vector<absl::string_view>& target_text, bool store_token_lengths,
     std::shared_ptr<std::atomic<bool>> absl_nonnull cancelled,
@@ -983,39 +749,42 @@ absl::Status ExecutionManager::AddTextScoringTask(
 
     RETURN_IF_CANCELLED(cancelled, task_id, callback);
 
-    auto llm_executor = resource_manager_->AcquireExecutorWithContextHandler(
-        session_info->context_handler);
-    if (!llm_executor.ok()) {
-      FinishTaskAndLogErrors(task_id, llm_executor.status(),
-                             std::move(callback));
-      return;
-    }
+    absl::StatusOr<Responses> responses;
+    {
+      auto llm_executor = resource_manager_->AcquireExecutorWithContextHandler(
+          session_info->context_handler);
+      if (!llm_executor.ok()) {
+        FinishTaskAndLogErrors(task_id, llm_executor.status(),
+                               std::move(callback));
+        return;
+      }
 
-    RETURN_IF_CANCELLED(cancelled, task_id, callback);
+      RETURN_IF_CANCELLED(cancelled, task_id, callback);
 
-    const int num_output_candidates =
-        session_info->session_config.GetNumOutputCandidates();
-    std::vector<int> decoded_ids(num_output_candidates,
-                                 session_info->last_prefill_token_id);
-    auto decoded_ids_buffer =
-        CopyToTensorBuffer<int>(decoded_ids, {num_output_candidates, 1});
-    if (!decoded_ids_buffer.HasValue()) {
-      FinishTaskAndLogErrors(
-          task_id, absl::InternalError(decoded_ids_buffer.Error().Message()),
-          std::move(callback));
-      return;
-    }
+      const int num_output_candidates =
+          session_info->session_config.GetNumOutputCandidates();
+      std::vector<int> decoded_ids(num_output_candidates,
+                                   session_info->last_prefill_token_id);
+      auto decoded_ids_buffer =
+          CopyToTensorBuffer<int>(decoded_ids, {num_output_candidates, 1});
+      if (!decoded_ids_buffer.HasValue()) {
+        FinishTaskAndLogErrors(
+            task_id, absl::InternalError(decoded_ids_buffer.Error().Message()),
+            std::move(callback));
+        return;
+      }
 
-    // TODO(b/435040163): Handle the temperature. Should it be calculated from
-    // the sampler or the sampler parameters? For now, hardcode it to 1.0f for
-    // testing.
-    auto temperature = 1.0f;
-    auto responses = Tasks::Score(
-        *llm_executor.value(), *tokenizer_, target_text, temperature,
-        std::move(decoded_ids_buffer.Value()), store_token_lengths);
+      // TODO(b/435040163): Handle the temperature. Should it be calculated from
+      // the sampler or the sampler parameters? For now, hardcode it to 1.0f for
+      // testing.
+      auto temperature = 1.0f;
+      responses = Tasks::Score(
+          *llm_executor.value(), *tokenizer_, target_text, temperature,
+          std::move(decoded_ids_buffer.Value()), store_token_lengths);
 
-    if (cancelled != nullptr && cancelled->load()) {
-      responses = Responses(TaskState::kCancelled);
+      if (cancelled != nullptr && cancelled->load()) {
+        responses = Responses(TaskState::kCancelled);
+      }
     }
 
     FinishTaskAndLogErrors(task_id, std::move(responses), std::move(callback));
@@ -1026,7 +795,50 @@ absl::Status ExecutionManager::AddTextScoringTask(
                     cancelled, std::move(callback));
 }
 
-absl::StatusOr<int> ExecutionManager::GetCurrentStep(
+// TODO b/409401231 - Add unit tests for this function.
+absl::Status ExecutionManagerBase::AddCloneSessionTask(
+    SessionId session_id, TaskId task_id, absl::flat_hash_set<TaskId> dep_tasks,
+    SessionId cloned_session_id,
+    std::shared_ptr<std::atomic<bool>> absl_nonnull cancelled,
+    absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback) {
+  if (callback == nullptr) {
+    callback = [](absl::StatusOr<Responses> responses) {};
+  }
+
+  auto task = [this, task_id, session_id, cloned_session_id]() mutable -> void {
+    auto task_info = StartTask(task_id);
+    if (!task_info.ok()) {
+      FinishTaskAndLogErrors(task_id, task_info.status(),
+                             [](absl::StatusOr<Responses> responses) {});
+      return;
+    }
+    auto [session_info, cancelled, callback] = std::move(task_info.value());
+    // If the session info is nullptr, it means the task is cancelled before it
+    // is started.
+    if (session_info == nullptr) {
+      return;
+    }
+
+    RETURN_IF_CANCELLED(cancelled, task_id, callback);
+
+    auto status = CloneSession(session_id, cloned_session_id);
+    absl::StatusOr<Responses> responses;
+    if (!status.ok()) {
+      responses = status;
+    } else if (cancelled != nullptr && cancelled->load()) {
+      responses = Responses(TaskState::kCancelled);
+    } else {
+      responses = Responses(TaskState::kDone);
+    }
+
+    FinishTaskAndLogErrors(task_id, std::move(responses), std::move(callback));
+  };
+
+  return CreateTask(session_id, task_id, std::move(task), std::move(dep_tasks),
+                    cancelled, std::move(callback));
+}
+
+absl::StatusOr<int> ExecutionManagerBase::GetCurrentStepUnlocked(
     const SessionInfo& session_info) {
   ASSIGN_OR_RETURN(auto llm_executor,
                    resource_manager_->AcquireExecutorWithContextHandler(
@@ -1034,8 +846,8 @@ absl::StatusOr<int> ExecutionManager::GetCurrentStep(
   return llm_executor->GetCurrentStep();
 }
 
-absl::Status ExecutionManager::SetCurrentStep(const SessionInfo& session_info,
-                                              int target_step) {
+absl::Status ExecutionManagerBase::SetCurrentStepUnlocked(
+    const SessionInfo& session_info, int target_step) {
   ASSIGN_OR_RETURN(auto llm_executor,
                    resource_manager_->AcquireExecutorWithContextHandler(
                        session_info.context_handler));
@@ -1045,6 +857,55 @@ absl::Status ExecutionManager::SetCurrentStep(const SessionInfo& session_info,
         "Target step is greater than the current step: ", current_step));
   }
   return llm_executor->SetCurrentStep(target_step);
+}
+
+absl::Status ExecutionManagerBase::CloneSessionUnlocked(
+    SessionId session_id, SessionId cloned_session_id) {
+  if (!session_lookup_.contains(session_id)) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Session ", session_id, " not found in session list."));
+  }
+  if (!session_lookup_.contains(cloned_session_id)) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Cloned session ", cloned_session_id, " not found in session list."));
+  }
+  const SessionInfo& source = *session_lookup_.at(session_id);
+  SessionInfo& target = *session_lookup_.at(cloned_session_id);
+
+  auto cloned_context_handler =
+      resource_manager_->CloneContextHandler(source.context_handler);
+  if (!cloned_context_handler.ok()) {
+    return cloned_context_handler.status();
+  }
+
+  std::unique_ptr<Sampler> cloned_sampler;
+  if (source.sampler != nullptr) {
+    ASSIGN_OR_RETURN(
+        cloned_sampler,
+        CreateSampler(source.session_config.GetSamplerBackend(),
+                      source.session_config.GetNumOutputCandidates(),
+                      source.session_config.GetSamplerParams(),
+                      litert_env_ ? litert_env_->Get() : nullptr));
+  }
+
+  auto cloned_stop_token_detector = std::make_unique<StopTokenDetector>(1);
+  for (const auto& stop_token_sequence :
+       source.session_config.GetStopTokenIds()) {
+    auto status =
+        cloned_stop_token_detector->AddStopTokenSequence(stop_token_sequence);
+    if (!status.ok()) {
+      return status;
+    }
+  }
+
+  target.session_config = source.session_config;
+  target.context_handler = std::move(cloned_context_handler.value());
+  target.sampler = std::move(cloned_sampler);
+  target.last_prefill_token_id = source.last_prefill_token_id;
+  target.stop_token_detector = std::move(cloned_stop_token_detector);
+  target.benchmark_info = source.benchmark_info;
+
+  return absl::OkStatus();
 }
 
 }  // namespace litert::lm

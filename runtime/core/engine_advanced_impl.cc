@@ -51,6 +51,7 @@
 #include "runtime/executor/vision_executor_settings.h"
 #include "runtime/executor/vision_executor_utils.h"
 #include "runtime/framework/resource_management/execution_manager.h"
+#include "runtime/framework/resource_management/threaded_execution_manager.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/proto/sampler_params.pb.h"
 #include "runtime/util/status_macros.h"  // NOLINT
@@ -374,7 +375,7 @@ absl::StatusOr<std::unique_ptr<Engine>> EngineAdvancedImpl::Create(
   }
   ASSIGN_OR_RETURN(
       auto execution_manager,
-      ExecutionManager::Create(
+      ThreadedExecutionManager::Create(
           tokenizer.get(), model_resources.get(), std::move(executor),
           std::move(vision_executor_settings_ptr),
           std::move(audio_executor_settings_ptr), &litert_env));

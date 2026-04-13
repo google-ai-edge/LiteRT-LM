@@ -15,6 +15,7 @@
 #include "runtime/framework/resource_management/execution_manager.h"
 
 #include <atomic>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -40,6 +41,8 @@
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/fake_llm_executor.h"
 #include "runtime/executor/llm_executor_io_types.h"
+#include "runtime/framework/resource_management/serial_execution_manager.h"
+#include "runtime/framework/resource_management/threaded_execution_manager.h"
 #include "runtime/proto/token.pb.h"
 #include "runtime/util/status_macros.h"  // IWYU pragma: keep
 #include "runtime/util/test_utils.h"  // NOLINT
@@ -70,7 +73,13 @@ class FakeAudioExecutor : public AudioExecutor {
   }
 };
 
-class ExecutionManagerTest : public ::testing::Test {
+enum class ExecutionManagerType {
+  kThreaded,
+  kSerial,
+};
+
+class ExecutionManagerTest
+    : public ::testing::TestWithParam<ExecutionManagerType> {
  protected:
   void SetUp() override {
     tokenizer_ = std::make_unique<MockTokenizer>();
@@ -117,15 +126,32 @@ class ExecutionManagerTest : public ::testing::Test {
       std::unique_ptr<AudioExecutor> audio_executor = nullptr) {
     // The objects are moved to execution_manager_ so we can't access them
     // after creation.
-    ASSERT_OK_AND_ASSIGN(
-        execution_manager_,
-        ExecutionManager::Create(
-            /*tokenizer=*/tokenizer_.get(),
-            /*model_resources=*/model_resources_.get(),
-            /*llm_executor=*/std::move(fake_llm_executor),
-            /*vision_executor_settings=*/nullptr,
-            std::move(audio_executor_settings),
-            /*litert_env=*/nullptr, std::move(audio_executor)));
+    switch (GetParam()) {
+      case ExecutionManagerType::kThreaded: {
+        ASSERT_OK_AND_ASSIGN(
+            execution_manager_,
+            ThreadedExecutionManager::Create(
+                /*tokenizer=*/tokenizer_.get(),
+                /*model_resources=*/model_resources_.get(),
+                /*llm_executor=*/std::move(fake_llm_executor),
+                /*vision_executor_settings=*/nullptr,
+                std::move(audio_executor_settings),
+                /*litert_env=*/nullptr, std::move(audio_executor)));
+        break;
+      }
+      case ExecutionManagerType::kSerial: {
+        ASSERT_OK_AND_ASSIGN(
+            execution_manager_,
+            SerialExecutionManager::Create(
+                /*tokenizer=*/tokenizer_.get(),
+                /*model_resources=*/model_resources_.get(),
+                /*llm_executor=*/std::move(fake_llm_executor),
+                /*vision_executor_settings=*/nullptr,
+                std::move(audio_executor_settings),
+                /*litert_env=*/nullptr, std::move(audio_executor)));
+        break;
+      }
+    }
   }
 
   std::unique_ptr<FakeLlmExecutor> CreateDefaultFakeLlmExecutor(
@@ -149,7 +175,7 @@ class ExecutionManagerTest : public ::testing::Test {
   std::unique_ptr<ExecutionManager> execution_manager_;
 };
 
-TEST_F(ExecutionManagerTest, CanGetMutableBenchmarkInfo) {
+TEST_P(ExecutionManagerTest, CanGetMutableBenchmarkInfo) {
   CreateExecutionManager(CreateDefaultFakeLlmExecutor());
   ASSERT_OK_AND_ASSIGN(auto session_config, CreateDefaultSessionConfig());
   ASSERT_OK_AND_ASSIGN(const SessionId session_id,
@@ -161,7 +187,7 @@ TEST_F(ExecutionManagerTest, CanGetMutableBenchmarkInfo) {
   EXPECT_NE(benchmark_info, nullptr);
 }
 
-TEST_F(ExecutionManagerTest, GetMutableBenchmarkInfoFailsIfNoBenchmarkInfo) {
+TEST_P(ExecutionManagerTest, GetMutableBenchmarkInfoFailsIfNoBenchmarkInfo) {
   CreateExecutionManager(CreateDefaultFakeLlmExecutor());
   ASSERT_OK_AND_ASSIGN(auto session_config, CreateDefaultSessionConfig());
   ASSERT_OK_AND_ASSIGN(const SessionId session_id,
@@ -170,7 +196,7 @@ TEST_F(ExecutionManagerTest, GetMutableBenchmarkInfoFailsIfNoBenchmarkInfo) {
               testing::status::StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
-TEST_F(ExecutionManagerTest, AddPrefillTask) {
+TEST_P(ExecutionManagerTest, AddPrefillTask) {
   CreateExecutionManager(CreateDefaultFakeLlmExecutor({{{1, 2, 3, -4}}}));
   ASSERT_OK_AND_ASSIGN(auto session_config, CreateDefaultSessionConfig());
   ASSERT_OK_AND_ASSIGN(const SessionId session_id,
@@ -203,7 +229,7 @@ TEST_F(ExecutionManagerTest, AddPrefillTask) {
                           TaskState::kProcessing, TaskState::kDone));
 }
 
-TEST_F(ExecutionManagerTest, AddPrefillTaskWithAudioModality) {
+TEST_P(ExecutionManagerTest, AddPrefillTaskWithAudioModality) {
   auto fake_llm_executor = CreateDefaultFakeLlmExecutor();
 
   ASSERT_OK_AND_ASSIGN(auto* settings,
@@ -243,7 +269,7 @@ TEST_F(ExecutionManagerTest, AddPrefillTaskWithAudioModality) {
   EXPECT_OK(execution_manager_->WaitUntilDone(task_id, absl::Seconds(3)));
 }
 
-TEST_F(ExecutionManagerTest, AddPrefillTaskInvalidAudioInput) {
+TEST_P(ExecutionManagerTest, AddPrefillTaskInvalidAudioInput) {
   CreateExecutionManager(CreateDefaultFakeLlmExecutor());
   ASSERT_OK_AND_ASSIGN(auto session_config, CreateDefaultSessionConfig());
   ASSERT_OK_AND_ASSIGN(const SessionId session_id,
@@ -285,7 +311,7 @@ TEST_F(ExecutionManagerTest, AddPrefillTaskInvalidAudioInput) {
                           TaskState::kProcessing, TaskState::kFailed));
 }
 
-TEST_F(ExecutionManagerTest, AddPrefillTaskInvalidImageInput) {
+TEST_P(ExecutionManagerTest, AddPrefillTaskInvalidImageInput) {
   CreateExecutionManager(CreateDefaultFakeLlmExecutor());
   ASSERT_OK_AND_ASSIGN(auto session_config, CreateDefaultSessionConfig());
   ASSERT_OK_AND_ASSIGN(const SessionId session_id,
@@ -328,7 +354,7 @@ TEST_F(ExecutionManagerTest, AddPrefillTaskInvalidImageInput) {
                           TaskState::kProcessing, TaskState::kFailed));
 }
 
-TEST_F(ExecutionManagerTest, AddDecodeTaskWithInternalSampler) {
+TEST_P(ExecutionManagerTest, AddDecodeTaskWithInternalSampler) {
   // The default execution manager is using the internal sampler.
   CreateExecutionManager(CreateDefaultFakeLlmExecutor());
 
@@ -382,7 +408,7 @@ TEST_F(ExecutionManagerTest, AddDecodeTaskWithInternalSampler) {
   EXPECT_THAT(responses_texts, ElementsAre("4", "5"));
 }
 
-TEST_F(ExecutionManagerTest, AddDecodeTaskWithExternalSampler) {
+TEST_P(ExecutionManagerTest, AddDecodeTaskWithExternalSampler) {
   std::vector<std::vector<int>> prefill_tokens = {{1, 2, 3}, {6}};
   std::vector<std::vector<int>> decode_tokens = {{4}, {5}, {6}};
 
@@ -442,7 +468,7 @@ TEST_F(ExecutionManagerTest, AddDecodeTaskWithExternalSampler) {
   EXPECT_THAT(responses_texts, ElementsAre("4", "5"));
 }
 
-TEST_F(ExecutionManagerTest, CreateAndRunDependentTasks) {
+TEST_P(ExecutionManagerTest, CreateAndRunDependentTasks) {
   CreateExecutionManager(CreateDefaultFakeLlmExecutor());
 
   ASSERT_OK_AND_ASSIGN(auto session_config, CreateDefaultSessionConfig());
@@ -469,13 +495,13 @@ TEST_F(ExecutionManagerTest, CreateAndRunDependentTasks) {
       /*dependency_task_ids=*/{task_a_id},
       /*constraint=*/nullptr,
       /*cancelled=*/std::make_shared<std::atomic<bool>>(false),
-      /*callback=*/nullptr));
+      /*callback=*/nullptr, std::numeric_limits<int>::max()));
 
   EXPECT_OK(execution_manager_->WaitUntilDone(task_b_id, absl::Seconds(1)));
   EXPECT_OK(execution_manager_->WaitUntilDone(task_a_id, absl::Seconds(1)));
 }
 
-TEST_F(ExecutionManagerTest, CreateTaskWithInvalidDependency) {
+TEST_P(ExecutionManagerTest, CreateTaskWithInvalidDependency) {
   CreateExecutionManager(CreateDefaultFakeLlmExecutor());
 
   ASSERT_OK_AND_ASSIGN(auto session_config, CreateDefaultSessionConfig());
@@ -496,7 +522,7 @@ TEST_F(ExecutionManagerTest, CreateTaskWithInvalidDependency) {
   EXPECT_EQ(add_task_status.code(), absl::StatusCode::kInvalidArgument);
 }
 
-TEST_F(ExecutionManagerTest, CreateTaskWithInvalidDependencyId) {
+TEST_P(ExecutionManagerTest, CreateTaskWithInvalidDependencyId) {
   CreateExecutionManager(CreateDefaultFakeLlmExecutor());
 
   ASSERT_OK_AND_ASSIGN(auto session_config, CreateDefaultSessionConfig());
@@ -535,7 +561,11 @@ TEST_F(ExecutionManagerTest, CreateTaskWithInvalidDependencyId) {
               testing::HasSubstr("Dependency task 99999 not found"));
 }
 
-TEST_F(ExecutionManagerTest, WaitUntilTaskDoneTimeout) {
+TEST_P(ExecutionManagerTest, WaitUntilTaskDoneTimeout) {
+  if (GetParam() == ExecutionManagerType::kSerial) {
+    GTEST_SKIP() << "SerialExecutionManager executes synchronously and cannot "
+                    "timeout while running.";
+  }
   auto prefill_tokens = std::vector<std::vector<int>>{};
   auto decode_tokens = std::vector<std::vector<int>>{};
   decode_tokens.push_back({4});
@@ -575,7 +605,11 @@ TEST_F(ExecutionManagerTest, WaitUntilTaskDoneTimeout) {
   EXPECT_OK(execution_manager_->WaitUntilDone(task_id, absl::Seconds(3)));
 }
 
-TEST_F(ExecutionManagerTest, WaitUntilAllDoneTimeout) {
+TEST_P(ExecutionManagerTest, WaitUntilAllDoneTimeout) {
+  if (GetParam() == ExecutionManagerType::kSerial) {
+    GTEST_SKIP() << "SerialExecutionManager executes synchronously and cannot "
+                    "timeout while running.";
+  }
   auto prefill_tokens = std::vector<std::vector<int>>{};
   auto decode_tokens = std::vector<std::vector<int>>{};
   decode_tokens.push_back({4});
@@ -613,7 +647,7 @@ TEST_F(ExecutionManagerTest, WaitUntilAllDoneTimeout) {
   EXPECT_OK(execution_manager_->WaitUntilDone(task_id, absl::Seconds(3)));
 }
 
-TEST_F(ExecutionManagerTest, TaskReturnsError) {
+TEST_P(ExecutionManagerTest, TaskReturnsError) {
   auto prefill_tokens = std::vector<std::vector<int>>{};
   auto decode_tokens = std::vector<std::vector<int>>{};
   prefill_tokens.push_back({1, 2, 3});
@@ -651,7 +685,7 @@ TEST_F(ExecutionManagerTest, TaskReturnsError) {
   EXPECT_EQ(final_status, absl::InternalError("Executor failed"));
 }
 
-TEST_F(ExecutionManagerTest, CreateDependentTaskOnFailedTask) {
+TEST_P(ExecutionManagerTest, CreateDependentTaskOnFailedTask) {
   auto prefill_tokens = std::vector<std::vector<int>>{};
   auto decode_tokens = std::vector<std::vector<int>>{};
   prefill_tokens.push_back({1, 2, 3});
@@ -711,7 +745,7 @@ TEST_F(ExecutionManagerTest, CreateDependentTaskOnFailedTask) {
   EXPECT_THAT(task_b_states, ElementsAre(TaskState::kDependentTaskFailed));
 }
 
-TEST_F(ExecutionManagerTest, AddDecodeTaskWithConstraintWithInternalSampler) {
+TEST_P(ExecutionManagerTest, AddDecodeTaskWithConstraintWithInternalSampler) {
   // The default execution manager is using the internal sampler.
   CreateExecutionManager(CreateDefaultFakeLlmExecutor());
 
@@ -759,7 +793,7 @@ TEST_F(ExecutionManagerTest, AddDecodeTaskWithConstraintWithInternalSampler) {
   EXPECT_THAT(response_texts, ElementsAre("4"));
 }
 
-TEST_F(ExecutionManagerTest, AddDecodeTaskWithConstraintWithExternalSampler) {
+TEST_P(ExecutionManagerTest, AddDecodeTaskWithConstraintWithExternalSampler) {
   auto prefill_tokens = std::vector<std::vector<int>>{};
   auto decode_tokens = std::vector<std::vector<int>>{};
   prefill_tokens.push_back({1, 2, 3});
@@ -818,7 +852,7 @@ TEST_F(ExecutionManagerTest, AddDecodeTaskWithConstraintWithExternalSampler) {
   EXPECT_THAT(response_texts, ElementsAre("4"));
 }
 
-TEST_F(ExecutionManagerTest, AddTextScoringTask) {
+TEST_P(ExecutionManagerTest, AddTextScoringTask) {
   CreateExecutionManager(CreateDefaultFakeLlmExecutor());
   ASSERT_OK_AND_ASSIGN(auto session_config, CreateDefaultSessionConfig());
   ASSERT_OK_AND_ASSIGN(const SessionId session_id,
@@ -879,7 +913,51 @@ TEST_F(ExecutionManagerTest, AddTextScoringTask) {
   EXPECT_FLOAT_EQ(scores[0], 0.0f);
 }
 
-TEST_F(ExecutionManagerTest, GetCurrentStep) {
+TEST_P(ExecutionManagerTest, AddCloneSessionTask) {
+  CreateExecutionManager(CreateDefaultFakeLlmExecutor());
+  ASSERT_OK_AND_ASSIGN(auto session_config, CreateDefaultSessionConfig());
+  ASSERT_OK_AND_ASSIGN(const SessionId session_id,
+                       execution_manager_->RegisterNewSession(session_config));
+
+  ASSERT_OK_AND_ASSIGN(const TaskId prefill_task_id,
+                       execution_manager_->GetNewTaskId());
+
+  std::vector<InputData> inputs;
+  ASSERT_OK_AND_ASSIGN(auto input_text,
+                       tokenizer_->TokenIdsToTensorBuffer({1, 2, 3}));
+  inputs.push_back(InputText(std::move(input_text)));
+  ASSERT_OK(execution_manager_->AddPrefillTask(
+      session_id, prefill_task_id, std::move(inputs), {},
+      std::make_shared<std::atomic<bool>>(false), nullptr));
+  EXPECT_OK(
+      execution_manager_->WaitUntilDone(prefill_task_id, absl::Seconds(3)));
+
+  ASSERT_OK_AND_ASSIGN(const SessionId cloned_session_id,
+                       execution_manager_->RegisterNewSession(session_config));
+  ASSERT_OK_AND_ASSIGN(const TaskId clone_task_id,
+                       execution_manager_->GetNewTaskId());
+
+  bool clone_task_done = false;
+  ASSERT_OK(execution_manager_->AddCloneSessionTask(
+      session_id, clone_task_id, {}, cloned_session_id,
+      std::make_shared<std::atomic<bool>>(false),
+      [&clone_task_done](absl::StatusOr<Responses> responses) {
+        ASSERT_OK(responses);
+        if (responses->GetTaskState() == TaskState::kDone) {
+          clone_task_done = true;
+        }
+      }));
+
+  EXPECT_OK(execution_manager_->WaitUntilDone(clone_task_id, absl::Seconds(3)));
+  EXPECT_TRUE(clone_task_done);
+
+  // Verify cloned session state.
+  ASSERT_OK_AND_ASSIGN(auto cloned_session_info,
+                       execution_manager_->GetSessionInfo(cloned_session_id));
+  EXPECT_EQ(cloned_session_info->last_prefill_token_id, 3);
+}
+
+TEST_P(ExecutionManagerTest, GetCurrentStep) {
   CreateExecutionManager(CreateDefaultFakeLlmExecutor());
   ASSERT_OK_AND_ASSIGN(auto session_config, CreateDefaultSessionConfig());
   ASSERT_OK_AND_ASSIGN(const SessionId session_id,
@@ -910,7 +988,7 @@ TEST_F(ExecutionManagerTest, GetCurrentStep) {
   EXPECT_EQ(step2, 3);
 }
 
-TEST_F(ExecutionManagerTest, SetCurrentStep) {
+TEST_P(ExecutionManagerTest, SetCurrentStep) {
   CreateExecutionManager(CreateDefaultFakeLlmExecutor());
   ASSERT_OK_AND_ASSIGN(auto session_config, CreateDefaultSessionConfig());
   ASSERT_OK_AND_ASSIGN(const SessionId session_id,
@@ -948,5 +1026,8 @@ TEST_F(ExecutionManagerTest, SetCurrentStep) {
               testing::status::StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
+INSTANTIATE_TEST_SUITE_P(ExecutionManagerTests, ExecutionManagerTest,
+                         ::testing::Values(ExecutionManagerType::kThreaded,
+                                           ExecutionManagerType::kSerial));
 }  // namespace
 }  // namespace litert::lm
