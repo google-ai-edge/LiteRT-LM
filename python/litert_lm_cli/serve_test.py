@@ -14,7 +14,13 @@
 
 """Unit tests for the LiteRT-LM serve command."""
 
+import http.client
+import http.server
+import json
+import socket
 import sys
+import threading
+import time
 from unittest import mock
 
 from absl.testing import absltest
@@ -298,6 +304,99 @@ class ServeTest(parameterized.TestCase):
     self.assertFalse(
         serve.GEN_CONTENT_RE.fullmatch("/v1/models/gemma-2b:generateContent")
     )
+
+  def test_run_server_uses_threading_http_server(self):
+    mock_httpd = mock.Mock()
+    mock_httpd.serve_forever.side_effect = KeyboardInterrupt()
+
+    with mock.patch.object(
+        serve.http.server,
+        "ThreadingHTTPServer",
+        return_value=mock_httpd,
+    ) as mock_server:
+      serve.run_server("127.0.0.1", 1234)
+
+    mock_server.assert_called_once_with(("127.0.0.1", 1234), serve.GeminiHandler)
+    mock_httpd.serve_forever.assert_called_once()
+
+  def test_threading_server_does_not_block_other_requests(self):
+    mock_model = mock.Mock(spec_set=["exists", "model_path"])
+    mock_model.exists.return_value = True
+    mock_model.model_path = "/tmp/fake-model.litertlm"
+    mock_model_mod.Model.from_model_id.return_value = mock_model
+
+    mock_conv = mock.MagicMock()
+    mock_conv.__enter__.return_value = mock_conv
+    mock_conv.__exit__.return_value = None
+    mock_conv.send_message.return_value = {
+        "role": "assistant",
+        "content": [{"type": "text", "text": "ok"}],
+    }
+
+    mock_engine = mock.MagicMock(spec=interfaces.AbstractEngine)
+    mock_engine.__enter__.return_value = mock_engine
+    mock_engine.__exit__.return_value = None
+    mock_engine.create_conversation.return_value = mock_conv
+    mock_litert_lm.Engine.return_value = mock_engine
+
+    server = http.server.ThreadingHTTPServer(("localhost", 0), serve.GeminiHandler)
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+
+    try:
+      with mock.patch.object(serve.click, "echo"):
+        slow_sock = socket.create_connection(
+            ("localhost", server.server_port), timeout=5
+        )
+        partial = b'{"contents": ['
+        headers = (
+            b"POST /v1beta/models/gemma3:generateContent HTTP/1.1\r\n"
+            b"Host: localhost\r\n"
+            b"Content-Type: application/json\r\n"
+            b"Content-Length: 100\r\n\r\n"
+        )
+        slow_sock.sendall(headers + partial)
+
+        result = {}
+
+        def normal_request():
+          start = time.time()
+          conn = http.client.HTTPConnection(
+              "localhost", server.server_port, timeout=10
+          )
+          body = json.dumps(
+              {"contents": [{"role": "user", "parts": [{"text": "hi"}]}]}
+          )
+          conn.request(
+              "POST",
+              "/v1beta/models/gemma3:generateContent",
+              body=body,
+              headers={"Content-Type": "application/json"},
+          )
+          response = conn.getresponse()
+          result["status"] = response.status
+          result["elapsed"] = time.time() - start
+          result["body"] = response.read().decode()
+          conn.close()
+
+        worker = threading.Thread(target=normal_request)
+        worker.start()
+        worker.join(timeout=1)
+
+        self.assertFalse(worker.is_alive(), "Threaded server should not block")
+        self.assertEqual(result["status"], 200)
+        self.assertLess(result["elapsed"], 1.0)
+
+        slow_sock.sendall(b"] }" + b" " * (100 - len(partial) - 3))
+        try:
+          slow_sock.recv(4096)
+        except OSError:
+          pass
+        slow_sock.close()
+    finally:
+      server.shutdown()
+      server.server_close()
+      server_thread.join(timeout=5)
 
 
 if __name__ == "__main__":
