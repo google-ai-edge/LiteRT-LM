@@ -69,6 +69,23 @@ extern "C" int (*LiteRtTopKOpenClSampler_UpdateConfig_Static)(
     const LiteRtTopKSampler_SamplerParameters* sampler_params, int batch_size,
     void* rand_gen_shared_ptr, char** error_msg) = nullptr;
 
+extern "C" int (*LiteRtTopKOpenClSampler_CanHandleInput_Static)(
+    LiteRtTopKSampler_Sampler* sampler) = nullptr;
+
+extern "C" int (*LiteRtTopKOpenClSampler_HandlesInput_Static)(
+    LiteRtTopKSampler_Sampler* sampler) = nullptr;
+
+extern "C" int (
+    *LiteRtTopKOpenClSampler_SetInputTensorsAndInferenceFunc_Static)(
+    LiteRtTopKSampler_Sampler* sampler,
+    LiteRtTensorBuffer absl_nullable ids_tensor,
+    LiteRtTensorBuffer absl_nullable prev_input_positions_tensor,
+    LiteRtTensorBuffer absl_nullable input_positions_tensor,
+    LiteRtTensorBuffer absl_nullable prev_mask_tensor,
+    LiteRtTensorBuffer absl_nullable mask_tensor,
+    int (*run_inference_func)(void* arg), void* arg,
+    char** error_msg) = nullptr;
+
 // WebGPU Sampler C API function pointers.
 extern "C" int (*LiteRtTopKWebGpuSampler_Create_Static)(
     LiteRtEnvironment env, int batch_size, int sequence_size, int vocab_size,
@@ -361,7 +378,10 @@ class TopKOpenClCApiSampler : public TopKCApiSampler {
         "libLiteRtTopKOpenClSampler.so", "LiteRtTopKOpenClSampler_Create",
         "LiteRtTopKOpenClSampler_Destroy",
         "LiteRtTopKOpenClSampler_SampleToIdAndScoreBuffer",
-        "LiteRtTopKOpenClSampler_UpdateConfig");
+        "LiteRtTopKOpenClSampler_UpdateConfig",
+        "LiteRtTopKOpenClSampler_CanHandleInput",
+        "LiteRtTopKOpenClSampler_HandlesInput",
+        "LiteRtTopKOpenClSampler_SetInputTensorsAndInferenceFunc");
     if (capi_or.ok()) {
       capi = std::move(capi_or.value());
       ABSL_LOG(INFO) << "Dynamically loaded LiteRtTopKOpenClSampler C API.";
@@ -403,7 +423,11 @@ class TopKOpenClCApiSampler : public TopKCApiSampler {
     if (LiteRtTopKOpenClSampler_Create_Static == nullptr ||
         LiteRtTopKOpenClSampler_Destroy_Static == nullptr ||
         LiteRtTopKOpenClSampler_SampleToIdAndScoreBuffer_Static == nullptr ||
-        LiteRtTopKOpenClSampler_UpdateConfig_Static == nullptr) {
+        LiteRtTopKOpenClSampler_UpdateConfig_Static == nullptr ||
+        LiteRtTopKOpenClSampler_CanHandleInput_Static == nullptr ||
+        LiteRtTopKOpenClSampler_HandlesInput_Static == nullptr ||
+        LiteRtTopKOpenClSampler_SetInputTensorsAndInferenceFunc_Static ==
+            nullptr) {
       return absl::UnavailableError(
           "Static LiteRtTopKOpenClSampler C API not available.");
     }
@@ -411,7 +435,10 @@ class TopKOpenClCApiSampler : public TopKCApiSampler {
         /*lib=*/std::nullopt, LiteRtTopKOpenClSampler_Create_Static,
         LiteRtTopKOpenClSampler_Destroy_Static,
         LiteRtTopKOpenClSampler_SampleToIdAndScoreBuffer_Static,
-        LiteRtTopKOpenClSampler_UpdateConfig_Static);
+        LiteRtTopKOpenClSampler_UpdateConfig_Static,
+        LiteRtTopKOpenClSampler_CanHandleInput_Static,
+        LiteRtTopKOpenClSampler_HandlesInput_Static,
+        LiteRtTopKOpenClSampler_SetInputTensorsAndInferenceFunc_Static);
   }
 };
 

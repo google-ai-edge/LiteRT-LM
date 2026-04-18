@@ -178,36 +178,6 @@ absl::StatusOr<std::unique_ptr<MetalEnv>> CreateMetalEnvFromLiteRtEnv(const Envi
 
 }  // namespace
 
-ml_drift::TensorDescriptor GetTensorDescriptor(const TensorBuffer* tensor_buffer) {
-  if (!tensor_buffer) {
-    return ml_drift::TensorDescriptor();
-  }
-  auto tensor_type_status = tensor_buffer->TensorType();
-  if (!tensor_type_status.HasValue()) {
-    return ml_drift::TensorDescriptor();
-  }
-  const auto& tensor_type = *tensor_type_status;
-  ml_drift::DataType type;
-  if (tensor_type.ElementType() == litert::ElementType::Float32) {
-    type = ml_drift::DataType::FLOAT32;
-  } else if (tensor_type.ElementType() == litert::ElementType::Float16) {
-    type = ml_drift::DataType::FLOAT16;
-  } else if (tensor_type.ElementType() == litert::ElementType::Int32) {
-    type = ml_drift::DataType::INT32;
-  } else {
-    // Unsupported type.
-    return ml_drift::TensorDescriptor();
-  }
-  auto dims = tensor_type.Layout().Dimensions();
-  ml_drift::BHWC shape(
-      dims.size() > 3 ? dims[dims.size() - 4] : 1, dims.size() > 2 ? dims[dims.size() - 3] : 1,
-      dims.size() > 1 ? dims[dims.size() - 2] : 1, dims.size() > 0 ? dims[dims.size() - 1] : 1);
-  ml_drift::TensorDescriptor td(type, ml_drift::TensorStorageType::BUFFER,
-                                shape.b == 1 ? ml_drift::Layout::HWC : ml_drift::Layout::BHWC);
-  td.SetBHWCShape(shape);
-  return td;
-}
-
 absl::Status BindTensor(const TensorBuffer& tensor_buffer, ml_drift::ValueId tensor_id,
                         ml_drift::metal::InferenceContext& inference_context,
                         std::vector<ml_drift::metal::MetalSpatialTensor>& shared_tensors) {
