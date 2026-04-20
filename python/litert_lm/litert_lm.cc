@@ -621,11 +621,26 @@ NB_MODULE(litert_lm_ext, module) {
           [](const nb::object& self, const nb::handle& messages,
              const nb::handle& tools, const nb::handle& tool_event_handler,
              bool automatic_tool_calling, const nb::handle& extra_context,
-             bool filter_channel_content_from_kv_cache) {
+             bool filter_channel_content_from_kv_cache,
+             const nb::handle& sampler_config) {
             Engine& engine = nb::cast<Engine&>(self);
 
             auto builder = ConversationConfig::Builder();
             nb::dict py_tool_map;
+
+            if (!sampler_config.is_none()) {
+              auto session_config = SessionConfig::CreateDefault();
+              auto& sampler_params = session_config.GetMutableSamplerParams();
+              sampler_params.set_type(proto::SamplerParameters::TOP_P);
+              sampler_params.set_k(nb::cast<int>(sampler_config.attr("top_k")));
+              sampler_params.set_p(
+                  nb::cast<double>(sampler_config.attr("top_p")));
+              sampler_params.set_temperature(
+                  nb::cast<double>(sampler_config.attr("temperature")));
+              sampler_params.set_seed(
+                  nb::cast<int>(sampler_config.attr("seed")));
+              builder.SetSessionConfig(session_config);
+            }
 
             bool has_preface = false;
             JsonPreface json_preface;
@@ -692,6 +707,7 @@ NB_MODULE(litert_lm_ext, module) {
             py_conversation.attr("automatic_tool_calling") =
                 automatic_tool_calling;
             py_conversation.attr("extra_context") = extra_context;
+            py_conversation.attr("sampler_config") = sampler_config;
             if (messages.is_none()) {
               py_conversation.attr("messages") = nb::list();
             } else {
@@ -709,16 +725,30 @@ NB_MODULE(litert_lm_ext, module) {
           nb::arg("tool_event_handler") = nb::none(),
           nb::arg("automatic_tool_calling") = true,
           nb::arg("extra_context") = nb::none(),
-          nb::arg("filter_channel_content_from_kv_cache") = false)
+          nb::arg("filter_channel_content_from_kv_cache") = false,
+          nb::arg("sampler_config") = nb::none())
       .def(
           "create_session",
-          [](Engine& self, bool apply_prompt_template) {
+          [](Engine& self, bool apply_prompt_template,
+             const nb::handle& sampler_config) {
             auto session_config = SessionConfig::CreateDefault();
             session_config.SetApplyPromptTemplateInSession(
                 apply_prompt_template);
+            if (!sampler_config.is_none()) {
+              auto& sampler_params = session_config.GetMutableSamplerParams();
+              sampler_params.set_type(proto::SamplerParameters::TOP_P);
+              sampler_params.set_k(nb::cast<int>(sampler_config.attr("top_k")));
+              sampler_params.set_p(
+                  nb::cast<double>(sampler_config.attr("top_p")));
+              sampler_params.set_temperature(
+                  nb::cast<double>(sampler_config.attr("temperature")));
+              sampler_params.set_seed(
+                  nb::cast<int>(sampler_config.attr("seed")));
+            }
             return VALUE_OR_THROW(self.CreateSession(session_config));
           },
           nb::kw_only(), nb::arg("apply_prompt_template") = true,
+          nb::arg("sampler_config") = nb::none(),
           "Creates a new session for this engine.")
       .def("tokenize", &Tokenize, nb::arg("text"),
            "Tokenizes text using the engine's tokenizer.")

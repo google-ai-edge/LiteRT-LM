@@ -153,6 +153,10 @@ class Model:
       no_template: bool = False,
       max_num_tokens: int | None = None,
       filter_channel_content_from_kv_cache: bool = False,
+      top_k: int | None = None,
+      top_p: float | None = None,
+      temperature: float | None = None,
+      seed: int | None = None,
   ):
     """Runs the model interactively or with a single prompt.
 
@@ -169,6 +173,10 @@ class Model:
       max_num_tokens: Maximum number of tokens for the KV cache.
       filter_channel_content_from_kv_cache: Whether to filter channel content
         from the KV cache.
+      top_k: The number of top logits used during sampling.
+      top_p: The cumulative probability threshold for nucleus sampling.
+      temperature: The temperature to use for sampling.
+      seed: The seed to use for randomization.
     """
     if not self.exists():
       click.echo(
@@ -181,6 +189,20 @@ class Model:
 
     try:
       backend_val = _parse_backend(backend)
+
+      sampler_config = None
+      if (
+          top_k is not None
+          or top_p is not None
+          or temperature is not None
+          or seed is not None
+      ):
+        sampler_config = litert_lm.SamplerConfig(
+            top_k=top_k if top_k is not None else 40,
+            top_p=top_p if top_p is not None else 1.0,
+            temperature=temperature if temperature is not None else 1.0,
+            seed=seed if seed is not None else 0,
+        )
 
       if is_android:
         if not _HAS_ADB:
@@ -200,7 +222,9 @@ class Model:
 
       with engine_cm as engine:
         if no_template:
-          runner_cm = engine.create_session(apply_prompt_template=False)
+          runner_cm = engine.create_session(
+              apply_prompt_template=False, sampler_config=sampler_config
+          )
         else:
           tools = None
           messages = None
@@ -218,6 +242,7 @@ class Model:
               tool_event_handler=handler,
               extra_context=extra_context,
               filter_channel_content_from_kv_cache=filter_channel_content_from_kv_cache,
+              sampler_config=sampler_config,
           )
 
         with runner_cm as runner:

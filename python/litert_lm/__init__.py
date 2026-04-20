@@ -21,6 +21,7 @@ from .interfaces import AbstractSession
 from .interfaces import Backend
 from .interfaces import BenchmarkInfo
 from .interfaces import Responses
+from .interfaces import SamplerConfig
 from .interfaces import Tool
 from .interfaces import ToolEventHandler
 from .litert_lm_ext import _Benchmark  # pytype: disable=import-error
@@ -57,6 +58,7 @@ __all__ = (
     "Engine",
     "LogSeverity",
     "Responses",
+    "SamplerConfig",
     "Session",
     "Tool",
     "ToolEventHandler",

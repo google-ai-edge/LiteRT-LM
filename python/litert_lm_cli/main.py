@@ -459,6 +459,42 @@ def benchmark(
     default=False,
     help="Whether to filter channel content from the KV cache.",
 )
+@click.option(
+    "--top-k",
+    type=int,
+    default=None,
+    help=(
+        "The number of top logits used during sampling. If not set, use the"
+        " default from the model or engine."
+    ),
+)
+@click.option(
+    "--top-p",
+    type=float,
+    default=None,
+    help=(
+        "The cumulative probability threshold for nucleus sampling. If not set,"
+        " use the default from the model or engine."
+    ),
+)
+@click.option(
+    "--temperature",
+    type=float,
+    default=None,
+    help=(
+        "The temperature to use for sampling. If not set, use the default from"
+        " the model or engine."
+    ),
+)
+@click.option(
+    "--seed",
+    type=int,
+    default=None,
+    help=(
+        "The seed to use for randomization. If not set, use the default from"
+        " the model or engine."
+    ),
+)
 @common_inference_options
 def run(
     model_reference,
@@ -473,6 +509,10 @@ def run(
     huggingface_token=None,
     max_num_tokens=None,
     filter_channel_content_from_kv_cache=False,
+    top_k=None,
+    top_p=None,
+    temperature=None,
+    seed=None,
 ):
   r"""Runs a LiteRT-LM model interactively or with a single prompt.
 
@@ -495,6 +535,10 @@ def run(
     max_num_tokens: Maximum number of tokens for the KV cache.
     filter_channel_content_from_kv_cache: Whether to filter channel content from
       the KV cache.
+    top_k: The number of top logits used during sampling.
+    top_p: The cumulative probability threshold for nucleus sampling.
+    temperature: The temperature to use for sampling.
+    seed: The seed to use for randomization.
   """
   # If the stdin is not connected to the terminal, e.g., piped or redirected
   # input, then handle the input as the one-shot prompt.
@@ -558,6 +602,10 @@ def run(
       no_template=no_template,
       max_num_tokens=max_num_tokens,
       filter_channel_content_from_kv_cache=filter_channel_content_from_kv_cache,
+      top_k=top_k,
+      top_p=top_p,
+      temperature=temperature,
+      seed=seed,
   )
 
 

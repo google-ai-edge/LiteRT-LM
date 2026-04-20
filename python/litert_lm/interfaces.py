@@ -81,6 +81,35 @@ class Tool(abc.ABC):
     """
 
 
+@dataclasses.dataclass
+class SamplerConfig:
+  """Configuration for the sampling process.
+
+  Attributes:
+      top_k: The number of top logits used during sampling.
+      top_p: The cumulative probability threshold for nucleus sampling.
+      temperature: The temperature to use for sampling.
+      seed: The seed to use for randomization. Default to 0.
+  """
+
+  top_k: int
+  top_p: float
+  temperature: float
+  seed: int = 0
+
+  def __post_init__(self):
+    if self.top_k <= 0:
+      raise ValueError(f"top_k should be positive, but got {self.top_k}.")
+    if not (0 <= self.top_p <= 1):
+      raise ValueError(
+          f"top_p should between 0 and 1 inclusively, but got {self.top_p}."
+      )
+    if self.temperature < 0:
+      raise ValueError(
+          f"temperature should be non-negative, but got {self.temperature}."
+      )
+
+
 @dataclasses.dataclass(kw_only=True)
 class AbstractEngine(abc.ABC):
   """Abstract base class for LiteRT-LM engines.
@@ -132,6 +161,7 @@ class AbstractEngine(abc.ABC):
       automatic_tool_calling: bool = True,
       extra_context: collections.abc.Mapping[str, Any] | None = None,
       filter_channel_content_from_kv_cache: bool = False,
+      sampler_config: SamplerConfig | None = None,
   ) -> AbstractConversation:
     """Creates a new conversation for this engine.
 
@@ -147,17 +177,24 @@ class AbstractEngine(abc.ABC):
           from the KV cache. This is useful when the model responds with
           "channel" content, e.g. thinking/reasoning tokens, that should not be
           persisted in the KV cache.
+        sampler_config: Configuration for the sampling process. If None, then
+          uses the engine's default values.
     """
 
   @abc.abstractmethod
   def create_session(
-      self, *, apply_prompt_template: bool = True
+      self,
+      *,
+      apply_prompt_template: bool = True,
+      sampler_config: SamplerConfig | None = None,
   ) -> AbstractSession:
     """Creates a new session for this engine.
 
     Args:
         apply_prompt_template: Whether to apply the basic prompt templates in
           the session.
+        sampler_config: Configuration for the sampling process. If None, then
+          uses the engine's default values.
 
     Returns:
         A new session instance for low-level interaction with the model.
@@ -191,6 +228,7 @@ class AbstractConversation(abc.ABC):
       tool_event_handler: A handler for tool call and tool response events.
       automatic_tool_calling: Whether to automatically call tools.
       extra_context: Extra context for the chat template.
+      sampler_config: Configuration for the sampling process.
   """
 
   def __init__(
@@ -206,6 +244,7 @@ class AbstractConversation(abc.ABC):
       tool_event_handler: ToolEventHandler | None = None,
       automatic_tool_calling: bool = True,
       extra_context: collections.abc.Mapping[str, Any] | None = None,
+      sampler_config: SamplerConfig | None = None,
   ):
     """Initializes the instance.
 
@@ -217,12 +256,15 @@ class AbstractConversation(abc.ABC):
         automatic_tool_calling: Whether to automatically call tools. If False,
           tool calls will be returned to the user to execute.
         extra_context: Extra context for the chat template.
+        sampler_config: Configuration for the sampling process. If None, then
+          uses the engine's default values.
     """
     self.messages = messages or []
     self.tools = tools or []
     self.tool_event_handler = tool_event_handler
     self.automatic_tool_calling = automatic_tool_calling
     self.extra_context = extra_context or {}
+    self.sampler_config = sampler_config
 
   def __enter__(self) -> AbstractConversation:
     """Initializes the conversation."""

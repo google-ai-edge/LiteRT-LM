@@ -110,6 +110,41 @@ class MainTest(absltest.TestCase):
     self.assertTrue(any("Escape" in k and "ControlM" in k for k in keys))
     self.assertTrue(any("ControlC" in k for k in keys))
 
+  def test_run_sampling_flags(self):
+    with unittest.mock.patch(
+        "litert_lm_cli.model.Model.from_model_reference"
+    ) as mock_from_model_ref:
+      mock_model = unittest.mock.MagicMock()
+      mock_from_model_ref.return_value = mock_model
+      mock_model.exists.return_value = True
+
+      runner = CliRunner()
+      result = runner.invoke(
+          main.cli,
+          [
+              "run",
+              "my-model",
+              "--prompt",
+              "hi",
+              "--top-k",
+              "10",
+              "--top-p",
+              "0.9",
+              "--temperature",
+              "0.8",
+              "--seed",
+              "42",
+          ],
+      )
+
+      self.assertEqual(result.exit_code, 0)
+      mock_model.run_interactive.assert_called_once()
+      kwargs = mock_model.run_interactive.call_args.kwargs
+      self.assertEqual(kwargs["top_k"], 10)
+      self.assertEqual(kwargs["top_p"], 0.9)
+      self.assertEqual(kwargs["temperature"], 0.8)
+      self.assertEqual(kwargs["seed"], 42)
+
   def test_run_no_template_flag(self):
     runner = CliRunner()
     # Test that --no-template is a valid option for the run command.
