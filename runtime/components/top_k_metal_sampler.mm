@@ -477,11 +477,28 @@ absl::Status TopKMetalSampler::DownloadSampledIds(void* dst) {
 absl::Status TopKMetalSampler::UpdateConfig(const proto::SamplerParameters& sampler_params,
                                             int batch_size,
                                             std::shared_ptr<std::default_random_engine> rand_gen) {
+  bool needs_reinit = sampler_params.k() > config_.max_top_k ||
+                      (sampler_params.k() == 1 && config_.max_top_k > 1) ||
+                      (sampler_params.k() > 1 && config_.max_top_k == 1) ||
+                      batch_size != config_.batch_size;
+
   sampler_params_ = sampler_params;
   if (rand_gen != nullptr) {
     rand_gen_ = rand_gen;
   }
   config_.batch_size = batch_size;
+  if (sampler_params.k() == 1) {
+    config_.max_top_k = 1;
+  } else if (sampler_params.k() > config_.max_top_k) {
+    config_.max_top_k = sampler_params.k();
+  }
+
+  if (needs_reinit) {
+    input_handling_.reset();
+    input_handling_ids_.clear();
+    RETURN_IF_ERROR(InitSampling());
+  }
+
   return absl::OkStatus();
 }
 
