@@ -19,9 +19,9 @@ import subprocess
 
 from absl.testing import absltest
 
+from litert_lm_builder import litertlm_core
+from litert_lm_builder import litertlm_peek
 from litert_lm.runtime.proto import llm_metadata_pb2
-from litert_lm.schema.py import litertlm_core
-from litert_lm.schema.py import litertlm_peek
 
 from python import runfiles
 

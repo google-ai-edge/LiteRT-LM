@@ -15,13 +15,13 @@
 
 import os
 import struct
-from typing import IO, Optional, Any
+from typing import Any, IO, Optional
 
 from google.protobuf import text_format
 
+from litert_lm_builder import litertlm_core
 from litert_lm.runtime.proto import llm_metadata_pb2
 from litert_lm.schema.core import litertlm_header_schema_py_generated as schema
-from litert_lm.schema.py import litertlm_core
 
 # --- ANSI Escape Code Definitions ---
 ANSI_BOLD = "\033[1m"
@@ -519,7 +519,7 @@ def peek_litertlm_file(
 
           if model_type:
             if model_type.startswith("tf_lite_"):
-              model_type = model_type[len("tf_lite_"):]
+              model_type = model_type[len("tf_lite_") :]
             section_info["model_type"] = model_type
 
           if backend_constraint:

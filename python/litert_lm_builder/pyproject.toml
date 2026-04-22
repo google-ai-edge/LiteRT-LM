@@ -43,14 +43,14 @@ Python tools for building, inspecting, and unpacking LiteRT-LM files.
 Use the CLI tool:
 
 ```bash
-litertlm-builder [options]
+litert-lm-builder [options]
 ```
 
 ### 🔍 Inspect and Unpack a LiteRT-LM File
 Use the CLI tool:
 
 ```bash
-litertlm-peek [options]
+litert-lm-peek [options]
 ```
 """, content-type = "text/markdown" }
 

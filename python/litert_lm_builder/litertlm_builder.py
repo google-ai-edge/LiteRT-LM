@@ -54,9 +54,9 @@ import flatbuffers
 from google.protobuf import message
 from google.protobuf import text_format
 
+from litert_lm_builder import litertlm_core
 from litert_lm.runtime.proto import llm_metadata_pb2
 from litert_lm.schema.core import litertlm_header_schema_py_generated as schema
-from litert_lm.schema.py import litertlm_core
 
 
 @enum.unique

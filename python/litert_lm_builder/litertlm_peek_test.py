@@ -20,8 +20,8 @@ from unittest import mock
 
 from absl.testing import absltest
 
-from litert_lm.schema.py import litertlm_builder
-from litert_lm.schema.py import litertlm_peek
+from litert_lm_builder import litertlm_builder
+from litert_lm_builder import litertlm_peek
 
 
 class LitertlmPeekPyTest(absltest.TestCase):

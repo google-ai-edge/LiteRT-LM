@@ -18,7 +18,7 @@ There are two ways to use this tool:
 1. Building the file by specifying the components as CLI arguments:
 
 ```
-bazel run //schema/py:litertlm_builder_cli -- \
+bazel run //python/litert_lm_builder:litertlm_builder_cli -- \
   system_metadata --str Authors "ODML team" \
   llm_metadata --path llm.pb \
   tflite_model --path embedder.tflite --model_type embedder  --str_metadata model_version "1.0.1" \
@@ -69,7 +69,7 @@ additional_metadata = [
 ```
 
 ```
-bazel run //schema/py:litertlm_builder_cli -- \
+bazel run //python/litert_lm_builder:litertlm_builder_cli -- \
   toml --path example.toml output --path output.litertlm
 ```
 
@@ -80,8 +80,8 @@ import os
 import sys
 from typing import BinaryIO, cast
 
-from litert_lm.schema.py import litertlm_builder
-from litert_lm.schema.py import litertlm_core
+from litert_lm_builder import litertlm_builder
+from litert_lm_builder import litertlm_core
 
 _SUBCOMMANDS = (
     "toml",

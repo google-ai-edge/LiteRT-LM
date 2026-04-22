@@ -39,9 +39,9 @@ echo "Setting up staging directory: ${STAGING_DIR}"
 rm -rf "${STAGING_DIR}"
 mkdir -p "${STAGING_DIR}"
 
-# Copy the Python package source files from schema/py
-# This assumes pyproject.toml is in ${WORKSPACE_ROOT}/schema/py
-echo "Copying schema/py contents..."
+# Copy the Python package source files from python/litert_lm_builder
+# This assumes pyproject.toml is in ${WORKSPACE_ROOT}/python/litert_lm_builder
+echo "Copying python/litert_lm_builder contents..."
 mkdir -p "${STAGING_DIR}/litert_lm_builder"
 mkdir -p "${STAGING_DIR}/litert_lm_builder/schema/core"
 mkdir -p "${STAGING_DIR}/litert_lm_builder/runtime/proto"
@@ -53,10 +53,10 @@ touch "${STAGING_DIR}/litert_lm_builder/runtime/__init__.py"
 touch "${STAGING_DIR}/litert_lm_builder/runtime/proto/__init__.py"
 
 # Copy python files to litert_lm_builder directory
-cp "${WORKSPACE_ROOT}/schema/py/"*.py "${STAGING_DIR}/litert_lm_builder/"
+cp "${WORKSPACE_ROOT}/python/litert_lm_builder/"*.py "${STAGING_DIR}/litert_lm_builder/"
 
 # Copy pyproject.toml to the root of staging
-cp "${WORKSPACE_ROOT}/schema/py/pyproject.toml" "${STAGING_DIR}/"
+cp "${WORKSPACE_ROOT}/python/litert_lm_builder/pyproject.toml" "${STAGING_DIR}/"
 
 # Copy the generated Protobuf Python files
 echo "Copying Protobuf bindings..."
@@ -72,7 +72,7 @@ find "${WORKSPACE_ROOT}/bazel-bin/schema/core" -name "*.py" -exec cp -f {} "${ST
 
 # Rewrite imports in all Python files in the package to use the new layout
 echo "Rewriting imports in all Python files..."
-find "${STAGING_DIR}/litert_lm_builder" -name "*.py" -exec sed -i -e 's/from litert_lm\.schema\.py/from litert_lm_builder/g' -e 's/from litert_lm\./from litert_lm_builder\./g' {} \;
+find "${STAGING_DIR}/litert_lm_builder" -name "*.py" -exec sed -i -e 's/from litert_lm\.python\.litert_lm_builder/from litert_lm_builder/g' -e 's/from litert_lm\./from litert_lm_builder\./g' {} \;
 
 cd "${STAGING_DIR}"
 

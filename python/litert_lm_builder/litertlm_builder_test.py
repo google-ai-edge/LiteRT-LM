@@ -19,10 +19,10 @@ import zlib
 from absl.testing import absltest
 from absl.testing import parameterized
 from google.protobuf import text_format
+from litert_lm_builder import litertlm_builder
+from litert_lm_builder import litertlm_core
+from litert_lm_builder import litertlm_peek
 from litert_lm.runtime.proto import llm_metadata_pb2
-from litert_lm.schema.py import litertlm_builder
-from litert_lm.schema.py import litertlm_core
-from litert_lm.schema.py import litertlm_peek
 
 _TOML_TEMPLATE = """
 # A template for testing the TOML parser.
