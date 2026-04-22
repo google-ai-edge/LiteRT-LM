@@ -380,11 +380,16 @@ class Responses:
         length is equal to length of the "target_text" in "run_text_scoring".
         This field is only used in `run_text_scoring` when `store_token_lengths`
         is True.
+      token_scores: The log likelihood scores of the target text given the
+        existing session state. The list length is equal to length of the
+        "target_text" in "run_text_scoring". This field is only used in
+        `run_text_scoring`.
   """
 
   texts: list[str] = dataclasses.field(default_factory=list)
   scores: list[float] = dataclasses.field(default_factory=list)
   token_lengths: list[int] = dataclasses.field(default_factory=list)
+  token_scores: list[list[float]] = dataclasses.field(default_factory=list)
 
 
 # TODO(b/482060476): Add clone() API once switching to advanced engine.

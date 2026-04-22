@@ -230,7 +230,9 @@ nb::object ToPyResponses(const Responses& responses) {
                                             : responses.GetTexts();
   auto scores = responses.GetScores();
   auto token_lengths = responses.GetTokenLengths().value_or(std::vector<int>());
-  return py_responses_class(texts, scores, token_lengths);
+  auto token_scores =
+      responses.GetTokenScores().value_or(std::vector<std::vector<float>>());
+  return py_responses_class(texts, scores, token_lengths, token_scores);
 }
 
 // MessageIterator bridges the asynchronous, callback-based C++ API
@@ -877,16 +879,20 @@ NB_MODULE(litert_lm_ext, module) {
               bool automatic_tool_calling = true;
             };
             auto state = std::make_shared<AsyncState>();
+
             if (nb::hasattr(self, "automatic_tool_calling")) {
               state->automatic_tool_calling =
                   nb::cast<bool>(self.attr("automatic_tool_calling"));
             }
 
+            // By using nb::handle, we don't manage Python refcounts. The Python
+            // main thread keeps the Conversation alive, ensuring these are safe
+            // to use while operations are active.
             struct Callback {
-              nb::object self;
+              nb::handle self;
               std::shared_ptr<MessageIterator> iterator;
-              nb::dict tool_map;
-              nb::object tool_event_handler;
+              nb::handle tool_map;
+              nb::handle tool_event_handler;
               std::shared_ptr<AsyncState> state;
 
               void operator()(absl::StatusOr<Message> message) const {
@@ -899,8 +905,11 @@ NB_MODULE(litert_lm_ext, module) {
                     message->contains("tool_calls") &&
                     !(*message)["tool_calls"].empty()) {
                   nb::gil_scoped_acquire acquire;
+                  nb::dict py_tool_map = nb::cast<nb::dict>(tool_map);
+                  nb::object py_event_handler =
+                      nb::cast<nb::object>(tool_event_handler);
                   state->pending_tool_response =
-                      HandleToolCalls(*message, tool_map, tool_event_handler);
+                      HandleToolCalls(*message, py_tool_map, py_event_handler);
                 }
 
                 if (message->contains("content") ||

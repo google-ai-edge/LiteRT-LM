@@ -1295,11 +1295,11 @@ TEST_F(PipelineCustomSamplingTest,
 
   std::atomic<bool> cancelled = false;
 
-  ThreadPool pool("test_pool", 1);
   absl::Status status;
   absl::Status callback_status;
   std::vector<std::string> responses(2);
   bool done = false;
+  ThreadPool pool("test_pool", 1);
   ASSERT_OK(pool.Schedule([&]() {
     status = DecodeCustomSamplingStreaming(
         delayed_executor, *tokenizer_, stop_token_detector,

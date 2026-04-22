@@ -1501,11 +1501,11 @@ TEST_F(TasksCustomSamplingTest, DecodeCustomSamplingStreamingWithCancellation) {
 
   std::atomic<bool> cancelled = false;
 
-  ThreadPool pool("test_pool", 1);
   absl::StatusOr<Responses> task_responses;
   absl::Status callback_status;
   std::vector<std::string> responses(2);
   bool done = false;
+  ThreadPool pool("test_pool", 1);
   absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback =
       CreateTestCallback(responses, callback_status, done,
                          /*delay_on_next=*/true);

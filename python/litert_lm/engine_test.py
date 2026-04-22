@@ -299,6 +299,10 @@ class EngineTest(LiteRtLmTestBase):
       self.assertEmpty(scoring_responses.texts)
       self.assertLen(scoring_responses.scores, 1)
       self.assertLen(scoring_responses.token_lengths, 1)
+      self.assertIsInstance(scoring_responses.token_scores, list)
+      if scoring_responses.token_scores:
+        self.assertLen(scoring_responses.token_scores, 1)
+        self.assertIsInstance(scoring_responses.token_scores[0], list)
 
   def test_session_api_run_text_scoring_no_token_lengths(self):
     with (
@@ -314,6 +318,10 @@ class EngineTest(LiteRtLmTestBase):
       self.assertEmpty(scoring_responses.texts)
       self.assertLen(scoring_responses.scores, 1)
       self.assertEmpty(scoring_responses.token_lengths)
+      self.assertIsInstance(scoring_responses.token_scores, list)
+      if scoring_responses.token_scores:
+        self.assertLen(scoring_responses.token_scores, 1)
+        self.assertIsInstance(scoring_responses.token_scores[0], list)
 
   def test_session_api_run_decode_async(self):
     with (

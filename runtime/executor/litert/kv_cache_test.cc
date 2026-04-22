@@ -134,6 +134,7 @@ TEST_F(LitertKVCacheTest, StaticKVNotResizeable) {
               StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
+#ifndef _WIN32
 TEST_F(LitertKVCacheTest, InplaceDynamicKVResizeable) {
   ASSERT_NO_FATAL_FAILURE(
       SetUpKV(kTestDynamicModelPath, /*inplace_update=*/true));
@@ -148,6 +149,7 @@ TEST_F(LitertKVCacheTest, OutOfPlaceDynamicKVNotResizeable) {
   EXPECT_THAT(kv_cache_->Resize(100),
               StatusIs(absl::StatusCode::kInvalidArgument));
 }
+#endif  // !_WIN32
 
 }  // namespace
 }  // namespace litert::lm
