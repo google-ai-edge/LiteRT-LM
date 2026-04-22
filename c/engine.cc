@@ -370,19 +370,12 @@ void litert_lm_engine_settings_enable_benchmark(
   }
 }
 
-void litert_lm_engine_settings_set_num_prefill_tokens(
-    LiteRtLmEngineSettings* settings, int num_prefill_tokens) {
+void litert_lm_engine_settings_set_benchmark_params(
+    LiteRtLmEngineSettings* settings, int prefill_tokens, int decode_tokens) {
   if (settings && settings->settings) {
-    settings->settings->GetMutableBenchmarkParams().set_num_prefill_tokens(
-        num_prefill_tokens);
-  }
-}
-
-void litert_lm_engine_settings_set_num_decode_tokens(
-    LiteRtLmEngineSettings* settings, int num_decode_tokens) {
-  if (settings && settings->settings) {
-    settings->settings->GetMutableBenchmarkParams().set_num_decode_tokens(
-        num_decode_tokens);
+    auto& benchmark_params = settings->settings->GetMutableBenchmarkParams();
+    benchmark_params.set_num_prefill_tokens(prefill_tokens);
+    benchmark_params.set_num_decode_tokens(decode_tokens);
   }
 }
 
@@ -587,7 +580,7 @@ double litert_lm_benchmark_info_get_time_to_first_token(
   return benchmark_info->benchmark_info.GetTimeToFirstToken();
 }
 
-double litert_lm_benchmark_info_get_total_init_time_in_second(
+double litert_lm_benchmark_info_get_total_init_time(
     const LiteRtLmBenchmarkInfo* benchmark_info) {
   if (!benchmark_info) {
     return 0.0;

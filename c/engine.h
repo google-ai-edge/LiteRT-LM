@@ -225,21 +225,14 @@ LITERT_LM_C_API_EXPORT
 void litert_lm_engine_settings_enable_benchmark(
     LiteRtLmEngineSettings* settings);
 
-// Sets the number of prefill tokens for benchmarking.
+// Sets the benchmark parameters for the engine.
 //
 // @param settings The engine settings.
-// @param num_prefill_tokens The number of prefill tokens.
+// @param prefill_tokens The number of tokens to prefill.
+// @param decode_tokens The number of tokens to decode.
 LITERT_LM_C_API_EXPORT
-void litert_lm_engine_settings_set_num_prefill_tokens(
-    LiteRtLmEngineSettings* settings, int num_prefill_tokens);
-
-// Sets the number of decode tokens for benchmarking.
-//
-// @param settings The engine settings.
-// @param num_decode_tokens The number of decode tokens.
-LITERT_LM_C_API_EXPORT
-void litert_lm_engine_settings_set_num_decode_tokens(
-    LiteRtLmEngineSettings* settings, int num_decode_tokens);
+void litert_lm_engine_settings_set_benchmark_params(
+    LiteRtLmEngineSettings* settings, int prefill_tokens, int decode_tokens);
 
 // Creates a LiteRT LM Engine from the given settings. The caller is responsible
 // for destroying the engine using `litert_lm_engine_delete`.
@@ -341,7 +334,7 @@ double litert_lm_benchmark_info_get_time_to_first_token(
 // @param benchmark_info The benchmark info object.
 // @return The total initialization time in seconds.
 LITERT_LM_C_API_EXPORT
-double litert_lm_benchmark_info_get_total_init_time_in_second(
+double litert_lm_benchmark_info_get_total_init_time(
     const LiteRtLmBenchmarkInfo* benchmark_info);
 
 // Returns the number of prefill turns.
