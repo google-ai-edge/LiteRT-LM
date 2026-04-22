@@ -14,7 +14,10 @@
 
 """Core library with shared constants and utilities for LiteRT-LM tools."""
 
-import os  # pylint: disable=unused-import
+import os
+import sys
+
+from absl import app
 
 from litert_lm.schema.core import litertlm_header_schema_py_generated as schema
 
@@ -47,3 +50,8 @@ def path_exists(file_path: str) -> bool:
 def open_file(file_path: str, mode: str = "rb"):
   """Opens a file using the given mode."""
   return open(file_path, mode)
+
+
+def run_app(main_func):
+  """Shared run logic for LiteRT-LM tools."""
+  app.run(main_func, sys.argv[:1])

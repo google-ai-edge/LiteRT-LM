@@ -129,7 +129,10 @@ absl::StatusOr<Environment&> GetEnvironment(EngineSettings& engine_settings,
 class EngineImpl : public Engine {
  public:
   ~EngineImpl() override {
-    ABSL_QCHECK_OK(WaitUntilDone(Engine::kDefaultTimeout));
+    auto status = WaitUntilDone(Engine::kDefaultTimeout);
+    if (!status.ok()) {
+      ABSL_LOG(ERROR) << "Failed to wait for engine to finish: " << status;
+    }
   }
 
   static absl::StatusOr<std::unique_ptr<Engine>> Create(
@@ -170,7 +173,10 @@ class EngineImpl : public Engine {
     // class.
     RETURN_IF_ERROR(config.MaybeUpdateAndValidate(engine_settings_));
 
-    ABSL_CHECK(litert_model_resources_ != nullptr);
+    if (litert_model_resources_ == nullptr) {
+      return absl::FailedPreconditionError(
+          "Model resources are not initialized.");
+    }
     ASSIGN_OR_RETURN(
         auto session,
         InitializeSessionBasic(executor_.get(), tokenizer_.get(),

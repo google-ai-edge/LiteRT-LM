@@ -105,6 +105,12 @@ std::ostream& operator<<(std::ostream& os, const AdvancedSettings& settings) {
      << "\n";
   os << "disable_delegate_clustering: " << settings.disable_delegate_clustering
      << "\n";
+  if (settings.hint_kernel_batch_size.has_value()) {
+    os << "hint_kernel_batch_size: " << settings.hint_kernel_batch_size.value()
+       << "\n";
+  } else {
+    os << "hint_kernel_batch_size: Not set\n";
+  }
   return os;
 }
 

@@ -505,6 +505,7 @@ build:rbe_linux --linkopt=-lm
 build:rbe_linux --host_linkopt=-lm
 
 build:rbe_linux_cpu --config=rbe_linux
+
 # Linux cpu and cuda builds share the same toolchain now.
 build:rbe_linux_cpu --host_crosstool_top="@local_config_cuda//crosstool:toolchain"
 build:rbe_linux_cpu --crosstool_top="@local_config_cuda//crosstool:toolchain"
@@ -542,3 +543,14 @@ build --host_features=-layering_check
 
 build --features=-header_modules
 build --host_features=-header_modules
+
+# TODO : b/501457260 Investigate supporting C++20 by upgrading to glibc 2.35 sysroot in future.
+# Hermetic Linux x86_64 build targeting glibc 2.31 (used by Kokoro)
+build:hermetic_linux --@rules_ml_toolchain//common:enable_hermetic_cc=True
+build:hermetic_linux --repo_env=USE_HERMETIC_CC_TOOLCHAIN=1
+build:hermetic_linux --extra_toolchains=@rules_ml_toolchain//cc:linux_x86_64_linux_x86_64
+build:hermetic_linux --host_crosstool_top=@rules_ml_toolchain//cc:linux_x86_64_linux_x86_64
+build:hermetic_linux --cxxopt=-std=c++17
+build:hermetic_linux --host_cxxopt=-std=c++17
+build:hermetic_linux --repo_env=SYSROOT_DIST=linux_glibc_2_31
+

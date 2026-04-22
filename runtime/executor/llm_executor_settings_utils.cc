@@ -96,8 +96,8 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
           executor_settings.GetModelAssets().GetScopedFile().ok() &&
           executor_settings.GetModelAssets().GetScopedFile().value()->IsValid();
 
-      auto program_cache_file =
-          executor_settings.GetProgramCacheFile(".mldrift_program_cache.bin");
+      auto program_cache_file = executor_settings.GetProgramCacheFile(
+          ExecutorSettingsBase::kMlDriftCacheSuffix, /*check_and_clean=*/true);
       bool has_valid_program_cache_fd =
           program_cache_file.ok() &&
           !std::holds_alternative<std::string>(*program_cache_file);
@@ -107,7 +107,10 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
         // If the model path is available, use the model name as the cache key.
         absl::string_view model_path = *model_path_or_status;
         absl::string_view model_name = Basename(model_path);
-        gpu_compilation_options.SetModelCacheKey(model_name.data());
+        LITERT_ASSIGN_OR_RETURN(std::string metadata_id,
+                                GetFileCacheIdentifier(model_path));
+        std::string cache_key = absl::StrCat(model_name, "_", metadata_id);
+        gpu_compilation_options.SetModelCacheKey(cache_key.c_str());
       } else if (has_valid_model_fd && has_valid_program_cache_fd) {
         // If the model is loaded from an fd, there is no way to automatically
         // generate a cache key. But if we are loading a model from an fd, it is
@@ -203,6 +206,10 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
       gpu_compilation_options.HintWaitingForCompletion(
           advanced_settings.hint_waiting_for_completion.has_value() &&
           advanced_settings.hint_waiting_for_completion.value());
+      if (advanced_settings.hint_kernel_batch_size.has_value()) {
+        gpu_compilation_options.SetKernelBatchSize(
+            advanced_settings.hint_kernel_batch_size.value());
+      }
       if (advanced_settings.is_benchmark) {
         gpu_compilation_options.SetSyncExecutionModeWaitType(
             GpuOptions::SyncExecutionModeWaitType::kActive);
@@ -248,7 +255,9 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
       const uint32_t num_threads = cpu_config.number_of_threads;
       cpu_compilation_options.SetNumThreads(num_threads);
       auto weight_cache_file = executor_settings.GetWeightCacheFile(
-          cache_suffix.value_or("") + ".xnnpack_cache");
+          cache_suffix.value_or("") +
+              std::string(ExecutorSettingsBase::kXnnpackCacheSuffix),
+          /*check_and_clean=*/true);
       if (weight_cache_file.ok()) {
         if (std::holds_alternative<std::string>(*weight_cache_file)) {
           cache_path = std::get<std::string>(*weight_cache_file);

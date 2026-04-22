@@ -412,6 +412,32 @@ class Conversation(
   }
 
   /**
+   * Renders the message into a string for testing and logging.
+   *
+   * This function does not need to be called for actual message sending, as the `SendMessage` and
+   * `SendMessageAsync` functions will handle rendering internally.
+   *
+   * @param message The message to render.
+   * @param extraContext Optional context used for prompt template rendering.
+   * @return The rendered message string.
+   * @throws IllegalStateException if the conversation is not alive.
+   * @throws LiteRtLmJniException if an error occurs during the native call.
+   */
+  @ExperimentalApi
+  fun renderMessageIntoString(
+    message: Message,
+    extraContext: Map<String, Any> = emptyMap(),
+  ): String {
+    checkIsAlive()
+    val extraContextJsonString = extraContext.toJsonObject().toString()
+    return LiteRtLmJni.nativeConversationRenderMessageIntoString(
+      handle,
+      message.toJson().toString(),
+      extraContextJsonString,
+    )
+  }
+
+  /**
    * Closes the conversation and releases the native conversation's resources.
    *
    * @throws IllegalStateException if the conversation has already been closed.

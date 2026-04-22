@@ -22,6 +22,7 @@
 #include <cstring>
 #include <memory>
 
+#include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
@@ -115,9 +116,13 @@ absl::StatusOr<std::unique_ptr<MemoryMappedFile>> MemoryMappedFile::Create(
   RET_CHECK_NE(data, nullptr) << "Failed to map.";
 #ifdef __APPLE__
   // Mark it not needed to avoid unnecessary page loading on MacOS or iOS.
-  RET_CHECK_EQ(madvise(data, length, MADV_DONTNEED), 0) << "madvise failed.";
+  if (madvise(data, length, MADV_DONTNEED) != 0) {
+    ABSL_LOG(WARNING) << "madvise failed: " << strerror(errno);
+  }
 #else
-  RET_CHECK_EQ(madvise(data, length, MADV_WILLNEED), 0) << "madvise failed.";
+  if (madvise(data, length, MADV_WILLNEED) != 0) {
+    ABSL_LOG(WARNING) << "madvise failed: " << strerror(errno);
+  }
 #endif
 
   return std::make_unique<MemoryMappedFilePosix>(length, data);

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <algorithm>
 #include <deque>
 #include <exception>
 #include <map>
@@ -54,6 +55,7 @@
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/proto/token.pb.h"
+#include "runtime/util/logging.h"
 #include "tflite/logger.h"  // from @litert
 #include "tflite/minimal_logging.h"  // from @litert
 
@@ -114,7 +116,8 @@ nlohmann::json HandleToolCalls(const nlohmann::json& response,
   for (const auto& tool_call : response["tool_calls"]) {
     if (!tool_call.contains("function")) continue;
     std::string name = tool_call["function"]["name"];
-    nlohmann::json arguments = tool_call["function"]["arguments"];
+    nlohmann::json arguments =
+        tool_call["function"].value("arguments", nlohmann::json::object());
 
     if (!tool_event_handler.is_none()) {
       bool allowed = nb::cast<bool>(
@@ -229,17 +232,6 @@ nb::object ToPyResponses(const Responses& responses) {
   auto token_lengths = responses.GetTokenLengths().value_or(std::vector<int>());
   return py_responses_class(texts, scores, token_lengths);
 }
-
-// Note: Consider move to C++ API.
-enum class LogSeverity {
-  kVerbose = 0,
-  kDebug = 1,
-  kInfo = 2,
-  kWarning = 3,
-  kError = 4,
-  kFatal = 5,
-  kSilent = 1000,
-};
 
 // MessageIterator bridges the asynchronous, callback-based C++ API
 // (Conversation::SendMessageAsync) to Python's synchronous iterator protocol
@@ -383,6 +375,10 @@ class Benchmark {
       settings.GetMutableMainExecutorSettings().SetCacheDir(cache_dir_);
     }
 
+    // TODO - b/499315290: Remove the 1024 once the bug is fixed.
+    settings.GetMutableMainExecutorSettings().SetMaxNumTokens(
+        std::max(prefill_tokens_ + decode_tokens_, 1024));
+
     if (enable_speculative_decoding_.has_value()) {
       AdvancedSettings advanced_settings;
       if (settings.GetMutableMainExecutorSettings()
@@ -489,7 +485,7 @@ NB_MODULE(litert_lm_ext, module) {
   module.def(
       "Engine",
       [](std::string_view model_path, const nb::handle& backend,
-         int max_num_tokens, std::string_view cache_dir,
+         std::optional<int> max_num_tokens, std::string_view cache_dir,
          const nb::handle& vision_backend, const nb::handle& audio_backend,
          std::string_view input_prompt_as_hint,
          std::optional<bool> enable_speculative_decoding) {
@@ -507,8 +503,10 @@ NB_MODULE(litert_lm_ext, module) {
         auto settings = VALUE_OR_THROW(EngineSettings::CreateDefault(
             model_assets, main_backend, vision_backend_opt, audio_backend_opt));
 
-        settings.GetMutableMainExecutorSettings().SetMaxNumTokens(
-            max_num_tokens);
+        if (max_num_tokens.has_value()) {
+          settings.GetMutableMainExecutorSettings().SetMaxNumTokens(
+              *max_num_tokens);
+        }
         if (!cache_dir.empty()) {
           settings.GetMutableMainExecutorSettings().SetCacheDir(
               std::string(cache_dir));
@@ -543,7 +541,7 @@ NB_MODULE(litert_lm_ext, module) {
         return py_engine;
       },
       nb::arg("model_path"), nb::arg("backend") = nb::none(),
-      nb::arg("max_num_tokens") = 4096, nb::arg("cache_dir") = "",
+      nb::arg("max_num_tokens") = nb::none(), nb::arg("cache_dir") = "",
       nb::arg("vision_backend") = nb::none(),
       nb::arg("audio_backend") = nb::none(),
       nb::arg("input_prompt_as_hint") = "",
@@ -551,49 +549,7 @@ NB_MODULE(litert_lm_ext, module) {
 
   module.def(
       "set_min_log_severity",
-      [](LogSeverity log_severity) {
-        struct SeverityMapping {
-          absl::LogSeverityAtLeast absl_severity;
-          LiteRtLogSeverity litert_severity;
-          tflite::LogSeverity tflite_severity;
-        };
-
-        static const std::map<LogSeverity, SeverityMapping> mapping = {
-            {LogSeverity::kVerbose,
-             {absl::LogSeverityAtLeast::kInfo, kLiteRtLogSeverityVerbose,
-              tflite::TFLITE_LOG_VERBOSE}},
-            {LogSeverity::kDebug,
-             {absl::LogSeverityAtLeast::kInfo, kLiteRtLogSeverityDebug,
-              tflite::TFLITE_LOG_VERBOSE}},
-            {LogSeverity::kInfo,
-             {absl::LogSeverityAtLeast::kInfo, kLiteRtLogSeverityInfo,
-              tflite::TFLITE_LOG_INFO}},
-            {LogSeverity::kWarning,
-             {absl::LogSeverityAtLeast::kWarning, kLiteRtLogSeverityWarning,
-              tflite::TFLITE_LOG_WARNING}},
-            {LogSeverity::kError,
-             {absl::LogSeverityAtLeast::kError, kLiteRtLogSeverityError,
-              tflite::TFLITE_LOG_ERROR}},
-            {LogSeverity::kFatal,
-             {absl::LogSeverityAtLeast::kFatal, kLiteRtLogSeverityError,
-              tflite::TFLITE_LOG_ERROR}},
-            {LogSeverity::kSilent,
-             {absl::LogSeverityAtLeast::kInfinity, kLiteRtLogSeveritySilent,
-              tflite::TFLITE_LOG_SILENT}},
-        };
-
-        auto mapping_it = mapping.find(log_severity);
-        const SeverityMapping& severity_mapping =
-            (mapping_it != mapping.end()) ? mapping_it->second
-                                          : mapping.at(LogSeverity::kSilent);
-
-        absl::SetMinLogLevel(severity_mapping.absl_severity);
-        absl::SetStderrThreshold(severity_mapping.absl_severity);
-        LiteRtSetMinLoggerSeverity(LiteRtGetDefaultLogger(),
-                                   severity_mapping.litert_severity);
-        tflite::logging_internal::MinimalLogger::SetMinimumLogSeverity(
-            severity_mapping.tflite_severity);
-      },
+      [](LogSeverity log_severity) { SetMinLogSeverity(log_severity); },
       nb::arg("log_severity"));
 
   nb::class_<Engine>(module, "_Engine", nb::dynamic_attr())
@@ -612,11 +568,53 @@ NB_MODULE(litert_lm_ext, module) {
           "create_conversation",
           [](const nb::object& self, const nb::handle& messages,
              const nb::handle& tools, const nb::handle& tool_event_handler,
-             const nb::handle& extra_context) {
+             bool automatic_tool_calling, const nb::handle& extra_context,
+             bool filter_channel_content_from_kv_cache,
+             const nb::handle& sampler_config) {
             Engine& engine = nb::cast<Engine&>(self);
 
             auto builder = ConversationConfig::Builder();
             nb::dict py_tool_map;
+
+            if (!sampler_config.is_none()) {
+              auto session_config = SessionConfig::CreateDefault();
+              auto& sampler_params = session_config.GetMutableSamplerParams();
+              sampler_params.set_type(proto::SamplerParameters::TOP_P);
+              // We are defining a default here because b/476499445 preventing
+              // us from changing individual params without changing the others.
+              //
+              // e.g., setting temperature to 1.5 alone change topK and topP
+              // both to zero.
+              //
+              // Values below are taken from Gemma3-1B-IT from Gallery app.
+              //
+              // TODO(b/476499445): Use the defaults from the engine/metadata.
+              int top_k = 64;
+              if (!sampler_config.attr("top_k").is_none()) {
+                top_k = nb::cast<int>(sampler_config.attr("top_k"));
+              }
+              sampler_params.set_k(top_k);
+
+              double top_p = 0.95;
+              if (!sampler_config.attr("top_p").is_none()) {
+                top_p = nb::cast<double>(sampler_config.attr("top_p"));
+              }
+              sampler_params.set_p(top_p);
+
+              double temperature = 1.0;
+              if (!sampler_config.attr("temperature").is_none()) {
+                temperature =
+                    nb::cast<double>(sampler_config.attr("temperature"));
+              }
+              sampler_params.set_temperature(temperature);
+
+              int seed = 0;
+              if (!sampler_config.attr("seed").is_none()) {
+                seed = nb::cast<int>(sampler_config.attr("seed"));
+              }
+              sampler_params.set_seed(seed);
+              builder.SetSessionConfig(session_config);
+            }
 
             bool has_preface = false;
             JsonPreface json_preface;
@@ -627,6 +625,10 @@ NB_MODULE(litert_lm_ext, module) {
             }
 
             if (!tools.is_none()) {
+              nb::object tool_class =
+                  nb::module_::import_(
+                      "litert_lm")
+                      .attr("Tool");
               nb::object tool_from_function =
                   nb::module_::import_(
                       "litert_lm."
@@ -635,10 +637,18 @@ NB_MODULE(litert_lm_ext, module) {
 
               nlohmann::json json_tools = nlohmann::json::array();
               for (auto tool : nb::cast<nb::list>(tools)) {
-                auto tool_obj = tool_from_function(tool);
+                nb::object tool_obj = nb::borrow(tool);
+                if (!nb::isinstance(tool_obj, tool_class)) {
+                  tool_obj = tool_from_function(tool_obj);
+                }
                 auto description = tool_obj.attr("get_tool_description")();
-                std::string name =
-                    nb::cast<std::string>(description["function"]["name"]);
+                std::string name;
+                try {
+                  name = nb::cast<std::string>(description["function"]["name"]);
+                } catch (...) {
+                  throw std::invalid_argument(
+                      "Tool description must contain ['function']['name']");
+                }
                 py_tool_map[name.c_str()] = tool_obj;
                 json_tools.push_back(nb::cast<nlohmann::json>(description));
               }
@@ -657,6 +667,9 @@ NB_MODULE(litert_lm_ext, module) {
               builder.SetPreface(json_preface);
             }
 
+            builder.SetFilterChannelContentFromKvCache(
+                filter_channel_content_from_kv_cache);
+
             auto config = VALUE_OR_THROW(builder.Build(engine));
 
             auto conversation =
@@ -665,7 +678,10 @@ NB_MODULE(litert_lm_ext, module) {
             nb::object py_conversation = nb::cast(std::move(conversation));
             py_conversation.attr("_tool_map") = py_tool_map;
             py_conversation.attr("tool_event_handler") = tool_event_handler;
+            py_conversation.attr("automatic_tool_calling") =
+                automatic_tool_calling;
             py_conversation.attr("extra_context") = extra_context;
+            py_conversation.attr("sampler_config") = sampler_config;
             if (messages.is_none()) {
               py_conversation.attr("messages") = nb::list();
             } else {
@@ -681,16 +697,32 @@ NB_MODULE(litert_lm_ext, module) {
           nb::kw_only(), nb::arg("messages") = nb::none(),
           nb::arg("tools") = nb::none(),
           nb::arg("tool_event_handler") = nb::none(),
-          nb::arg("extra_context") = nb::none())
+          nb::arg("automatic_tool_calling") = true,
+          nb::arg("extra_context") = nb::none(),
+          nb::arg("filter_channel_content_from_kv_cache") = false,
+          nb::arg("sampler_config") = nb::none())
       .def(
           "create_session",
-          [](Engine& self, bool apply_prompt_template) {
+          [](Engine& self, bool apply_prompt_template,
+             const nb::handle& sampler_config) {
             auto session_config = SessionConfig::CreateDefault();
             session_config.SetApplyPromptTemplateInSession(
                 apply_prompt_template);
+            if (!sampler_config.is_none()) {
+              auto& sampler_params = session_config.GetMutableSamplerParams();
+              sampler_params.set_type(proto::SamplerParameters::TOP_P);
+              sampler_params.set_k(nb::cast<int>(sampler_config.attr("top_k")));
+              sampler_params.set_p(
+                  nb::cast<double>(sampler_config.attr("top_p")));
+              sampler_params.set_temperature(
+                  nb::cast<double>(sampler_config.attr("temperature")));
+              sampler_params.set_seed(
+                  nb::cast<int>(sampler_config.attr("seed")));
+            }
             return VALUE_OR_THROW(self.CreateSession(session_config));
           },
           nb::kw_only(), nb::arg("apply_prompt_template") = true,
+          nb::arg("sampler_config") = nb::none(),
           "Creates a new session for this engine.")
       .def("tokenize", &Tokenize, nb::arg("text"),
            "Tokenizes text using the engine's tokenizer.")
@@ -799,12 +831,18 @@ NB_MODULE(litert_lm_ext, module) {
               tool_event_handler = self.attr("tool_event_handler");
             }
 
+            bool automatic_tool_calling = true;
+            if (nb::hasattr(self, "automatic_tool_calling")) {
+              automatic_tool_calling =
+                  nb::cast<bool>(self.attr("automatic_tool_calling"));
+            }
+
             for (int i = 0; i < kRecurringToolCallLimit; ++i) {
               absl::StatusOr<Message> result =
                   conversation.SendMessage(current_message);
               Message response = VALUE_OR_THROW(std::move(result));
 
-              if (response.contains("tool_calls") &&
+              if (automatic_tool_calling && response.contains("tool_calls") &&
                   !response["tool_calls"].empty()) {
                 current_message =
                     HandleToolCalls(response, tool_map, tool_event_handler);
@@ -836,8 +874,13 @@ NB_MODULE(litert_lm_ext, module) {
             struct AsyncState {
               int tool_call_count = 0;
               nlohmann::json pending_tool_response = nullptr;
+              bool automatic_tool_calling = true;
             };
             auto state = std::make_shared<AsyncState>();
+            if (nb::hasattr(self, "automatic_tool_calling")) {
+              state->automatic_tool_calling =
+                  nb::cast<bool>(self.attr("automatic_tool_calling"));
+            }
 
             struct Callback {
               nb::object self;
@@ -852,7 +895,8 @@ NB_MODULE(litert_lm_ext, module) {
                   return;
                 }
 
-                if (message->contains("tool_calls") &&
+                if (state->automatic_tool_calling &&
+                    message->contains("tool_calls") &&
                     !(*message)["tool_calls"].empty()) {
                   nb::gil_scoped_acquire acquire;
                   state->pending_tool_response =

@@ -254,6 +254,9 @@ absl::StatusOr<DataProcessorConfig> CreateGemma4DataProcessorConfig(
   if (gemma4.max_num_patches() != default_gemma4.max_num_patches()) {
     config.max_num_patches = gemma4.max_num_patches();
   }
+  if (gemma4.pooling_kernel_size() != default_gemma4.pooling_kernel_size()) {
+    config.pooling_kernel_size = gemma4.pooling_kernel_size();
+  }
   return config;
 }
 

@@ -31,6 +31,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/cleanup/cleanup.h"  // from @com_google_absl
+#include "absl/memory/memory.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
@@ -83,8 +84,8 @@ CreateExecutorModelResourcesTask(absl::string_view model_path) {
 absl::StatusOr<std::unique_ptr<ModelResources>>
 CreateExecutorModelResourcesLitertLm(absl::string_view model_path) {
   ASSIGN_OR_RETURN(auto scoped_file, ScopedFile::Open(model_path));
-  return ModelResourcesLitertLm::Create(
-      std::make_unique<LitertLmLoader>(std::move(scoped_file)));
+  ASSIGN_OR_RETURN(auto loader, LitertLmLoader::Create(std::move(scoped_file)));
+  return ModelResourcesLitertLm::Create(std::move(loader));
 }
 
 TEST(LlmLiteRtCompiledModelExecutorStaticTest,
@@ -431,13 +432,20 @@ constexpr int kVocabSize = 16000;
 
 class TfLiteModelResources : public ModelResources {
  public:
-  explicit TfLiteModelResources(const ModelAssets& model_assets,
-                                bool with_mtp_drafter = false)
-      : with_mtp_drafter_(with_mtp_drafter) {
-    LITERT_ASSIGN_OR_ABORT(auto path, model_assets.GetPath());
-    LITERT_ASSIGN_OR_ABORT(model_, Model::CreateFromFile(std::string(path)));
+  static absl::StatusOr<std::unique_ptr<TfLiteModelResources>> Create(
+      const ModelAssets& model_assets, bool with_mtp_drafter = false) {
+    LITERT_ASSIGN_OR_RETURN(auto path, model_assets.GetPath());
+    LITERT_ASSIGN_OR_RETURN(auto model,
+                            Model::CreateFromFile(std::string(path)));
+    return absl::WrapUnique(
+        new TfLiteModelResources(std::move(model), with_mtp_drafter));
   }
 
+ private:
+  explicit TfLiteModelResources(Model model, bool with_mtp_drafter = false)
+      : model_(std::move(model)), with_mtp_drafter_(with_mtp_drafter) {}
+
+ public:
   // ModelResources implementation:
   absl::StatusOr<const Model*> GetTFLiteModel(ModelType model_type) override {
     if (model_type == ModelType::kTfLitePrefillDecode) {
@@ -497,11 +505,12 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest,
                        LlmExecutorSettings::CreateDefault(model_assets));
   LITERT_ASSERT_OK_AND_ASSIGN(
       auto env, Environment::Create(std::vector<Environment::Option>()));
-  TfLiteModelResources model_resources(model_assets,
-                                       /*with_mtp_drafter=*/true);
-  ASSERT_OK_AND_ASSIGN(auto executor,
-                       LlmLiteRtCompiledModelExecutorStatic::Create(
-                           std::move(executor_settings), env, model_resources));
+  ASSERT_OK_AND_ASSIGN(auto model_resources,
+                       TfLiteModelResources::Create(model_assets,
+                                                    /*with_mtp_drafter=*/true));
+  ASSERT_OK_AND_ASSIGN(
+      auto executor, LlmLiteRtCompiledModelExecutorStatic::Create(
+                         std::move(executor_settings), env, *model_resources));
   EXPECT_TRUE(executor);
 }
 
@@ -510,16 +519,18 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest, MultipleOutput_Decode) {
       std::filesystem::path(::testing::SrcDir()) /
       "litert_lm/runtime/testdata/magic_test_decode_batch.tflite";
   auto model_assets = ModelAssets::Create(model_path.string());
-  EXPECT_OK(model_assets);
+  ASSERT_OK(model_assets);
   auto executor_settings = LlmExecutorSettings::CreateDefault(*model_assets);
-  EXPECT_OK(executor_settings);
+  ASSERT_OK(executor_settings);
   auto env = Environment::Create(std::vector<Environment::Option>());
-  EXPECT_TRUE(env);
-  TfLiteModelResources model_resources(*model_assets);
+  LITERT_ASSERT_OK(env);
+  ASSERT_OK_AND_ASSIGN(auto model_resources,
+                       TfLiteModelResources::Create(*model_assets));
 
   ASSERT_OK_AND_ASSIGN(
-      auto executor, LlmLiteRtCompiledModelExecutorStatic::Create(
-                         std::move(*executor_settings), *env, model_resources));
+      auto executor,
+      LlmLiteRtCompiledModelExecutorStatic::Create(
+          std::move(*executor_settings), *env, *model_resources));
   auto step = executor->GetCurrentStep();
   EXPECT_OK(step);
   EXPECT_EQ(*step, 0);
@@ -585,14 +596,15 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest,
       std::filesystem::path(::testing::SrcDir()) /
       "litert_lm/runtime/testdata/magic_test_decode_batch.tflite";
   auto model_assets = ModelAssets::Create(model_path.string());
-  EXPECT_OK(model_assets);
+  ASSERT_OK(model_assets);
   auto executor_settings = LlmExecutorSettings::CreateDefault(*model_assets);
-  EXPECT_OK(executor_settings);
+  ASSERT_OK(executor_settings);
   auto env = Environment::Create(std::vector<Environment::Option>());
-  EXPECT_TRUE(env);
-  TfLiteModelResources model_resources(*model_assets);
+  LITERT_ASSERT_OK(env);
+  ASSERT_OK_AND_ASSIGN(auto model_resources,
+                       TfLiteModelResources::Create(*model_assets));
   auto executor = LlmLiteRtCompiledModelExecutorStatic::Create(
-      std::move(*executor_settings), *env, model_resources);
+      std::move(*executor_settings), *env, *model_resources);
   EXPECT_OK(executor);
   EXPECT_TRUE(*executor);
   auto step = (*executor)->GetCurrentStep();
@@ -680,14 +692,15 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest,
       std::filesystem::path(::testing::SrcDir()) /
       "litert_lm/runtime/testdata/magic_test_decode_batch.tflite";
   auto model_assets = ModelAssets::Create(model_path.string());
-  EXPECT_OK(model_assets);
+  ASSERT_OK(model_assets);
   auto executor_settings = LlmExecutorSettings::CreateDefault(*model_assets);
-  EXPECT_OK(executor_settings);
+  ASSERT_OK(executor_settings);
   auto env = Environment::Create(std::vector<Environment::Option>());
-  EXPECT_TRUE(env);
-  TfLiteModelResources model_resources(*model_assets);
+  LITERT_ASSERT_OK(env);
+  ASSERT_OK_AND_ASSIGN(auto model_resources,
+                       TfLiteModelResources::Create(*model_assets));
   auto executor = LlmLiteRtCompiledModelExecutorStatic::Create(
-      std::move(*executor_settings), *env, model_resources);
+      std::move(*executor_settings), *env, *model_resources);
   EXPECT_OK(executor);
   EXPECT_TRUE(*executor);
   auto step = (*executor)->GetCurrentStep();

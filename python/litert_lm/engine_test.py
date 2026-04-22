@@ -59,6 +59,54 @@ class EngineTest(LiteRtLmTestBase):
 
   _EXPECTED_RESPONSE = "TarefaByte دارایेत्र investigaciónప్రదేశ"
 
+  def test_sampler_config_validation(self):
+    # Invalid top_k
+    with self.assertRaisesRegex(ValueError, "top_k should be positive"):
+      litert_lm.SamplerConfig(top_k=0, top_p=0.9, temperature=0.7)
+
+    # Invalid top_p (low)
+    with self.assertRaisesRegex(ValueError, "top_p should between 0 and 1"):
+      litert_lm.SamplerConfig(top_k=40, top_p=-0.1, temperature=0.7)
+
+    # Invalid top_p (high)
+    with self.assertRaisesRegex(ValueError, "top_p should between 0 and 1"):
+      litert_lm.SamplerConfig(top_k=40, top_p=1.1, temperature=0.7)
+
+    # Invalid temperature
+    with self.assertRaisesRegex(
+        ValueError, "temperature should be non-negative"
+    ):
+      litert_lm.SamplerConfig(top_k=40, top_p=0.9, temperature=-0.1)
+
+  def test_conversation_with_sampler_config(self):
+    sampler_config = litert_lm.SamplerConfig(
+        top_k=10, top_p=0.95, temperature=0.8, seed=123
+    )
+    with (
+        self._create_engine() as engine,
+        engine.create_conversation(
+            sampler_config=sampler_config
+        ) as conversation,
+    ):
+      self.assertEqual(conversation.sampler_config, sampler_config)
+      user_message = {"role": "user", "content": "Hello world!"}
+      message = conversation.send_message(user_message)
+      self.assertIn("role", message)
+      self.assertEqual(message["role"], "assistant")
+
+  def test_session_with_sampler_config(self):
+    sampler_config = litert_lm.SamplerConfig(
+        top_k=10, top_p=0.95, temperature=0.8, seed=123
+    )
+    with (
+        self._create_engine() as engine,
+        engine.create_session(sampler_config=sampler_config) as session,
+    ):
+      self.assertIsNotNone(session)
+      session.run_prefill(["Hello world!"])
+      responses = session.run_decode()
+      self.assertIsNotNone(responses.texts)
+
   def test_conversation_send_message(self):
     with (
         self._create_engine() as engine,

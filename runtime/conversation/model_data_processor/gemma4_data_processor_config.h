@@ -46,6 +46,10 @@ struct Gemma4DataProcessorConfig {
   // ratio, before patchifying.
   int max_num_patches = 2520;
 
+  // The pooling kernel size that the image preprocessor should use for
+  // patchifying the image.
+  int pooling_kernel_size = 3;
+
   // The string for beginning of audio token.
   std::string boa_token = "<|audio>";
   // The string for end of audio token.

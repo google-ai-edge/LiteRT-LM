@@ -56,8 +56,8 @@ litertlm-peek [options]
 
 
 [project.scripts]
-litertlm-builder = "litert_lm_builder.litertlm_builder_cli:run"
-litertlm-peek = "litert_lm_builder.litertlm_peek_main:run"
+"litert-lm-builder" = "litert_lm_builder.litertlm_builder_cli:run"
+"litert-lm-peek" = "litert_lm_builder.litertlm_peek_main:run"
 
 
 [project.urls]

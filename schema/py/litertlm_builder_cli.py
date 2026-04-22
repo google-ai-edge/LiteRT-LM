@@ -80,8 +80,6 @@ import os
 import sys
 from typing import BinaryIO, cast
 
-from absl import app
-
 from litert_lm.schema.py import litertlm_builder
 from litert_lm.schema.py import litertlm_core
 
@@ -519,7 +517,8 @@ def main(_) -> None:
 
 def run():
   """Entry point for console_scripts."""
-  app.run(main, sys.argv[:1])
+  litertlm_core.run_app(main)
+
 
 if __name__ == "__main__":
-  app.run(main, sys.argv[:1])
+  run()

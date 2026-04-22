@@ -51,6 +51,7 @@
 #include "runtime/executor/vision_executor_settings.h"
 #include "runtime/executor/vision_executor_utils.h"
 #include "runtime/framework/resource_management/execution_manager.h"
+#include "runtime/framework/resource_management/threaded_execution_manager.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/proto/sampler_params.pb.h"
 #include "runtime/util/status_macros.h"  // NOLINT
@@ -130,7 +131,10 @@ absl::StatusOr<Environment&> GetEnvironment(EngineSettings& engine_settings,
 class EngineAdvancedImpl : public Engine {
  public:
   ~EngineAdvancedImpl() override {
-    ABSL_QCHECK_OK(WaitUntilDone(Engine::kDefaultTimeout));
+    auto status = WaitUntilDone(Engine::kDefaultTimeout);
+    if (!status.ok()) {
+      ABSL_LOG(ERROR) << "Failed to wait for engine to finish: " << status;
+    }
   }
 
   static absl::StatusOr<std::unique_ptr<Engine>> Create(
@@ -164,7 +168,10 @@ class EngineAdvancedImpl : public Engine {
     // class.
     RETURN_IF_ERROR(config.MaybeUpdateAndValidate(engine_settings_));
 
-    ABSL_CHECK(litert_model_resources_ != nullptr);
+    if (litert_model_resources_ == nullptr) {
+      return absl::FailedPreconditionError(
+          "Model resources are not initialized.");
+    }
 
     ASSIGN_OR_RETURN(
         auto session,
@@ -374,7 +381,7 @@ absl::StatusOr<std::unique_ptr<Engine>> EngineAdvancedImpl::Create(
   }
   ASSIGN_OR_RETURN(
       auto execution_manager,
-      ExecutionManager::Create(
+      ThreadedExecutionManager::Create(
           tokenizer.get(), model_resources.get(), std::move(executor),
           std::move(vision_executor_settings_ptr),
           std::move(audio_executor_settings_ptr), &litert_env));

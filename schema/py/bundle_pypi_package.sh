@@ -24,13 +24,14 @@
 # Ensure script stops on error
 set -ex
 
-WORKSPACE_ROOT=$(pwd)
+WORKSPACE_ROOT=$(bazel info workspace)
 echo "Workspace Root: ${WORKSPACE_ROOT}"
 STAGING_DIR="/tmp/litertlm_builder"
 
 echo "Building Proto and FlatBuffer bindings..."
-bazel build //runtime/proto:all
-bazel build //schema/core:litertlm_header_schema_py
+bazel build --config=hermetic_linux //runtime/proto:all
+bazel build --config=hermetic_linux //schema/core:litertlm_header_schema_py
+
 
 # Create a temporary staging directory
 echo "Setting up staging directory: ${STAGING_DIR}"
@@ -75,24 +76,27 @@ find "${STAGING_DIR}/litert_lm_builder" -name "*.py" -exec sed -i -e 's/from lit
 
 cd "${STAGING_DIR}"
 
-# Create a fresh, isolated virtual environment inside staging!
-python3 -m venv .venv
+# Install uv using its official installer without relying on pip
+curl -LsSf https://astral.sh/uv/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"
+
+# Build the wheel (uv handles isolation and dependencies automatically!)
+export UV_NO_CONFIG=1
+export UV_INDEX_URL=https://pypi.org/simple
+uv build
+
+# Verify CLI works
+uv tool install dist/litert_lm_builder-*.whl
+litert-lm-builder --help
+litert-lm-peek --help
+
+# Create a fresh isolated environment to test wheel installation
+mkdir -p ${STAGING_DIR}/test_venv
+cd ${STAGING_DIR}/test_venv
+uv venv
 source .venv/bin/activate
 
-# Install uv and build tools into this fresh environment
-python3 -m pip install uv
-uv pip install --upgrade pip
-uv pip install setuptools wheel
+uv pip install ${STAGING_DIR}/dist/litert_lm_builder-*.whl
 
-# Build without isolation (uses the setuptools we just installed!)
-uv build --no-build-isolation
-
-# Install the wheel we just built to verify it works!
-uv pip install dist/litert_lm_builder-*.whl
-
-# Verification checks using the new tools
-litertlm-builder --help
-litertlm-peek --help
-
-# Python API check (verifies __init__.py)
+# Verify successful import
 python3 -c "import litert_lm_builder; print(litert_lm_builder.LitertLmFileBuilder)"

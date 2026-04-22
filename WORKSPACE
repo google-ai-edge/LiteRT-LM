@@ -2,14 +2,14 @@
 
 workspace(name = "litert_lm")
 
-# UPDATED = 2026-04-07
-LITERT_REF = "ceaf89c65502a698f2a368cfabc1cb2a8a65183d"
+# UPDATED = 2026-04-14
+LITERT_REF = "472d1c0f6cc0cc89ac968b2d5394ebb66195e1d4"
 
-LITERT_SHA256 = "d8fec1eaabf81402d6d17b0d7ad6e6a727c2b4c16c9fdb0d56c4ff3c7076f5d1"
+LITERT_SHA256 = "52b9041d0b0840360e3a4ad6212f454be58822ccd5f9fc384d1ff7841928e685"
 
-TENSORFLOW_REF = "3b6337f1146f8b4b61dbdd635a5cf14ef3a7d678"
+TENSORFLOW_REF = "5cdb51d9c84e3194235e49a0b8e72da2df75bf1e"
 
-TENSORFLOW_SHA256 = "af5ef7b10547191f4147f07cddec6ad6828bf66d32c5933fbf2ff2d219ee5c85"
+TENSORFLOW_SHA256 = "8c1a4fe0a49e5dd0e94ff406b9be91ce8c865a298dab25a7b637f7af39bea323"
 
 # buildifier: disable=load-on-top
 
@@ -246,16 +246,14 @@ nccl_configure(name = "local_config_nccl")
 # Kotlin rules
 http_archive(
     name = "rules_kotlin",
-    sha256 = "e1448a56b2462407b2688dea86df5c375b36a0991bd478c2ddd94c97168125e2",
-    url = "https://github.com/bazelbuild/rules_kotlin/releases/download/v2.1.3/rules_kotlin-v2.1.3.tar.gz",
+    sha256 = "13d5b767d697473ced9b55547a18a6ab65ab3fae5440555deee8a44c886b50aa",
+    url = "https://github.com/bazelbuild/rules_kotlin/releases/download/v2.3.20/rules_kotlin-v2.3.20.tar.gz",
 )
 
 load("@rules_kotlin//kotlin:repositories.bzl", "kotlin_repositories")
-
 kotlin_repositories()  # if you want the default. Otherwise see custom kotlinc distribution below
 
 load("@rules_kotlin//kotlin:core.bzl", "kt_register_toolchains")
-
 kt_register_toolchains()  # to use the default toolchain, otherwise see toolchains below
 
 # Rust (for HuggingFace Tokenizers)

@@ -23,6 +23,18 @@
 
 namespace litert::lm {
 
+enum class LogSeverity {
+  kVerbose = 0,
+  kDebug = 1,
+  kInfo = 2,
+  kWarning = 3,
+  kError = 4,
+  kFatal = 5,
+  kSilent = 1000,
+};
+
+void SetMinLogSeverity(LogSeverity severity);
+
 // Helper function to print a vector of elements.
 template <typename T>
 std::ostream& operator<<(std::ostream& os, const std::vector<T>& data) {

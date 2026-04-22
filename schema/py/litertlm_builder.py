@@ -40,12 +40,14 @@ interface used must support `seek`.
 """
 
 import dataclasses
+import datetime
 import enum
 import os
 import pathlib
 import shutil
 import tomllib
 from typing import Any, BinaryIO, Callable, Optional, TypeVar
+import uuid
 import zlib
 
 import flatbuffers
@@ -267,6 +269,11 @@ class LitertLmFileBuilder:
           )
         elif section["section_type"] == "HF_Tokenizer":
           builder.add_hf_tokenizer(
+              _resolve_path(section["data_path"], parent_dir),
+              additional_metadata=additional_metadata,
+          )
+        elif section["section_type"] == "GenericBinaryData":
+          builder.add_generic_binary_data(
               _resolve_path(section["data_path"], parent_dir),
               additional_metadata=additional_metadata,
           )
@@ -532,8 +539,65 @@ class LitertLmFileBuilder:
     self._sections.append(section_object)
     return self
 
+  def add_generic_binary_data(
+      self,
+      generic_binary_data_path: str,
+      additional_metadata: Optional[list[Metadata]] = None,
+  ) -> LitertLmFileBuilderT:
+    """Adds generic binary data to the litertlm file.
+
+    Args:
+      generic_binary_data_path: The path to the generic binary data file.
+      additional_metadata: Additional metadata to add to the sentencepiece
+        tokenizer.
+
+    Returns:
+      The current LitertLmFileBuilder object.
+
+    Raises:
+      FileNotFoundError: If the generic binary data file is not found.
+    """
+    if not litertlm_core.path_exists(generic_binary_data_path):
+      raise FileNotFoundError(
+          f"Generic binary data file not found: {generic_binary_data_path}"
+      )
+
+    def data_writer(stream: BinaryIO):
+      with litertlm_core.open_file(generic_binary_data_path, "rb") as f:
+        _copy_file_to_stream(f, stream)
+
+    section_object = _SectionObject(
+        metadata=additional_metadata if additional_metadata else [],
+        data_type=schema.AnySectionDataType.GenericBinaryData,
+        data_writer=data_writer,
+    )
+    self._sections.append(section_object)
+    return self
+
   def build(self, stream: BinaryIO) -> None:
     """Builds the litertlm into the given stream."""
+    # Add UUID if not already present, but always generate a new timestamp.
+    system_metadata_keys = {m.key for m in self._system_metadata}
+    if "uuid" not in system_metadata_keys:
+      self._system_metadata.append(
+          Metadata(
+              key="uuid",
+              value=str(uuid.uuid4()),
+              dtype=DType.STRING,
+          )
+      )
+
+    self._system_metadata = [
+        m for m in self._system_metadata if m.key != "creation_timestamp"
+    ]
+    self._system_metadata.append(
+        Metadata(
+            key="creation_timestamp",
+            value=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            dtype=DType.STRING,
+        )
+    )
+
     stream.seek(0)
     # To simplify the build logic, we reserved the first block for the header.
     # This translates to the first block will be padded to `BLOCK_SIZE`.

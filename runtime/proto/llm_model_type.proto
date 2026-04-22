@@ -156,6 +156,10 @@ message Gemma4 {
   // ratio, before patchifying.
   int32 max_num_patches = 17;
 
+  // The pooling kernel size that the image preprocessor should use for
+  // patchifying the image.
+  int32 pooling_kernel_size = 18;
+
   // Audio modality.
   // The start of audio token indicates the start of audio in the prompt.
   TokenUnion start_of_audio_token = 3;

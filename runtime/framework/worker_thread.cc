@@ -18,6 +18,7 @@
 
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/log/absl_check.h"  // from @com_google_absl
+#include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "runtime/framework/threadpool.h"
 
@@ -27,7 +28,12 @@ WorkerThread::WorkerThread(ThreadPool* absl_nonnull pool,
                            const std::string& name_prefix)
     : pool_(*pool), name_prefix_(name_prefix), joined_(false) {}
 
-WorkerThread::~WorkerThread() { ABSL_CHECK(joined_); }
+WorkerThread::~WorkerThread() {
+  if (!joined_) {
+    ABSL_LOG(ERROR) << "WorkerThread '" << name_prefix_
+                    << "' destroyed without being joined.";
+  }
+}
 
 absl::Status WorkerThread::Join() {
   if (joined_) {

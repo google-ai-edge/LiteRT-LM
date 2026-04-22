@@ -1954,11 +1954,13 @@ LlmLiteRtCompiledModelExecutorDynamic::Create(
     kv_increament_size = cpu_config.kv_increment_size;
     prefill_chunk_size = cpu_config.prefill_chunk_size;
     cpu_compilation_options.SetNumThreads(cpu_config.number_of_threads);
-    auto weight_cache_file =
-        executor_settings.GetWeightCacheFile(".xnnpack_cache");
+    auto weight_cache_file = executor_settings.GetWeightCacheFile(
+        ExecutorSettingsBase::kXnnpackCacheSuffix, /*check_and_clean=*/true);
     if (weight_cache_file.ok()) {
       if (std::holds_alternative<std::string>(*weight_cache_file)) {
         weight_cache_path = std::get<std::string>(*weight_cache_file);
+        ABSL_LOG(INFO) << "Setting XNNPACK weight cache path: "
+                       << weight_cache_path;
         cpu_compilation_options.SetXNNPackWeightCachePath(
             weight_cache_path.c_str());
       } else {

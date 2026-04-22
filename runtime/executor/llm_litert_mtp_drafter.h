@@ -74,6 +74,7 @@ class LlmLiteRtMtpDrafter {
 
  private:
   LlmLiteRtMtpDrafter(CompiledModel mtp_drafter_model, CompiledModel base_model,
+                      SimpleSignature drafter_signature,
                       SimpleSignature verify_signature,
                       EmbeddingLookupManager& embedding_manager,
                       EmbeddingLookupManager& ple_manager,
@@ -91,6 +92,7 @@ class LlmLiteRtMtpDrafter {
                       int num_draft_steps)
       : mtp_drafter_model_(std::move(mtp_drafter_model)),
         base_model_(std::move(base_model)),
+        drafter_signature_(std::move(drafter_signature)),
         verify_signature_(std::move(verify_signature)),
         embedding_manager_(embedding_manager),
         ple_manager_(ple_manager),
@@ -101,45 +103,51 @@ class LlmLiteRtMtpDrafter {
         drafter_output_buffers_(std::move(drafter_output_buffers)),
         verifier_input_buffers_(std::move(verifier_input_buffers)),
         verifier_output_buffers_(std::move(verifier_output_buffers)),
-        num_draft_steps_(num_draft_steps) {}
+        num_draft_steps_(num_draft_steps) {
+    for (const auto& [name, buffer] : drafter_input_buffers_) {
+      auto expected = buffer.Duplicate();
+      active_drafter_input_buffers_[name] = std::move(expected.Value());
+    }
+    for (const auto& [name, buffer] : drafter_output_buffers_) {
+      auto expected = buffer.Duplicate();
+      active_drafter_output_buffers_[name] = std::move(expected.Value());
+    }
+    for (const auto& [name, buffer] : verifier_input_buffers_) {
+      auto expected = buffer.Duplicate();
+      active_verifier_input_buffers_[name] = std::move(expected.Value());
+    }
+    for (const auto& [name, buffer] : verifier_output_buffers_) {
+      auto expected = buffer.Duplicate();
+      active_verifier_output_buffers_[name] = std::move(expected.Value());
+    }
+  }
 
-  absl::StatusOr<absl::flat_hash_map<absl::string_view, TensorBuffer>>
-  PrepareDrafterInputBuffers(
+  absl::Status PrepareDrafterInputBuffers(
       int position, absl::flat_hash_map<absl::string_view, TensorBuffer>&
                         output_kv_cache_buffers);
 
-  absl::StatusOr<absl::flat_hash_map<absl::string_view, TensorBuffer>>
-  PrepareDrafterOutputBuffers();
+  absl::Status PrepareDrafterOutputBuffers();
 
   absl::StatusOr<std::vector<int>> RunDraftingLoop(
-      int token_id, std::optional<TensorBuffer>& activations,
-      absl::flat_hash_map<absl::string_view, TensorBuffer>&
-          mtp_drafter_input_buffers,
-      absl::flat_hash_map<absl::string_view, TensorBuffer>&
-          mtp_drafter_output_buffers);
+      int token_id, std::optional<TensorBuffer>& activations);
 
-  absl::StatusOr<absl::flat_hash_map<absl::string_view, TensorBuffer>>
-  PrepareVerifierInputBuffers(
+  absl::Status PrepareVerifierInputBuffers(
       int position, int token_id, const std::vector<int>& drafted_tokens,
       absl::flat_hash_map<absl::string_view, TensorBuffer>&
           input_kv_cache_buffers);
 
-  absl::StatusOr<absl::flat_hash_map<absl::string_view, TensorBuffer>>
-  PrepareVerifierOutputBuffers(
+  absl::Status PrepareVerifierOutputBuffers(
       absl::flat_hash_map<absl::string_view, TensorBuffer>&
           output_kv_cache_buffers);
 
-  absl::StatusOr<std::vector<int>> RunVerification(
-      const absl::flat_hash_map<absl::string_view, TensorBuffer>&
-          verifier_input_buffers,
-      absl::flat_hash_map<absl::string_view, TensorBuffer>&
-          verifier_output_buffers);
+  absl::StatusOr<std::vector<int>> RunVerification();
 
   // The MTP drafter model.
   CompiledModel mtp_drafter_model_;
 
   // The base model, used for verification.
   CompiledModel base_model_;
+  SimpleSignature drafter_signature_;
   SimpleSignature verify_signature_;
 
   EmbeddingLookupManager& embedding_manager_;
@@ -153,7 +161,7 @@ class LlmLiteRtMtpDrafter {
   // The names of the key/value cache input tensors for the MTP drafter model.
   std::vector<std::string> kv_cache_input_names_;
 
-  // MTP drafter owned buffers. This includes:
+  // MTP drafter owned buffers. This includes tokens, positions, results.
   //   - input_position [batch, sequence_length]
   //   - mask [batch, 1, sequence_length = 1, context]
   //   - activations [batch, sequence_length = 1, hidden_size * 2]
@@ -162,7 +170,7 @@ class LlmLiteRtMtpDrafter {
   //   - projected_logits [batch, sequence_length, hidden_size]
   absl::flat_hash_map<absl::string_view, TensorBuffer> drafter_output_buffers_;
 
-  // Verifier owned buffers. This includes:
+  // Verifier owned buffers.
   //   - input_position [batch, draft_steps + 1]
   //   - mask [batch, 1, draft_steps + 1, context]
   //   - embeddings [batch, draft_steps + 1, hidden_size]
@@ -171,6 +179,20 @@ class LlmLiteRtMtpDrafter {
   //   - logits [batch, draft_steps + 1, vocab_size]
   //   - activations [batch, draft_steps + 1, hidden_size]
   absl::flat_hash_map<absl::string_view, TensorBuffer> verifier_output_buffers_;
+
+  // Cached maps for Run to avoid map creation overhead.
+  absl::flat_hash_map<absl::string_view, TensorBuffer>
+      active_drafter_input_buffers_;
+  absl::flat_hash_map<absl::string_view, TensorBuffer>
+      active_drafter_output_buffers_;
+  absl::flat_hash_map<absl::string_view, TensorBuffer>
+      active_verifier_input_buffers_;
+  absl::flat_hash_map<absl::string_view, TensorBuffer>
+      active_verifier_output_buffers_;
+
+  // Pre-allocated temporary tensors for sampling.
+  TensorBuffer drafter_id_tensor_;
+  TensorBuffer verifier_id_tensor_;
 
   // The number of draft steps.
   const int num_draft_steps_;

@@ -25,8 +25,7 @@ import argparse
 import struct
 import sys
 
-from absl import app
-
+from litert_lm.schema.py import litertlm_core
 from litert_lm.schema.py import litertlm_peek
 
 
@@ -63,7 +62,8 @@ def main(_):
 
 def run():
   """Entry point for console_scripts."""
-  app.run(main, sys.argv[:1])
+  litertlm_core.run_app(main)
+
 
 if __name__ == "__main__":
-  app.run(main, sys.argv[:1])
+  run()

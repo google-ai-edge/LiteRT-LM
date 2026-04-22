@@ -26,7 +26,6 @@
 #include <utility>
 #include <variant>
 
-#include "absl/log/absl_check.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
@@ -58,10 +57,11 @@ struct BufferKey {
   // Constructor for TFLiteModel or TFLiteWeights case
   explicit BufferKey(schema::AnySectionDataType type, ModelType model_type)
       : data_type(type), model_type(model_type) {
-    ABSL_CHECK(
-        (type == schema::AnySectionDataType_TFLiteModel ||
-         type == schema::AnySectionDataType_TFLiteWeights) &&
-        "ModelType should only be provided for TFLiteModel or TFLiteWeights");
+    if (type != schema::AnySectionDataType_TFLiteModel &&
+        type != schema::AnySectionDataType_TFLiteWeights) {
+      ABSL_LOG(ERROR) << "ModelType should only be provided for TFLiteModel or "
+                         "TFLiteWeights";
+    }
   }
 
   // Equality operator (REQUIRED for std::unordered_map, good for std::map)
@@ -94,14 +94,12 @@ class LitertLmLoader {
  public:
   // Creates a LitertLmLoader from the model file. The loader will read the
   // model header from and map the sections to the section buffers.
-  explicit LitertLmLoader(ScopedFile model_file)
-      : model_source_(std::move(model_file)) {
-    ABSL_CHECK_OK(Initialize());
-  }
+  static absl::StatusOr<std::unique_ptr<LitertLmLoader>> Create(
+      ScopedFile model_file);
 
   // Creates a LitertLmLoader from an already memory-mapped model file.
   // This is useful when the file is managed externally.
-  explicit LitertLmLoader(
+  static absl::StatusOr<std::unique_ptr<LitertLmLoader>> Create(
       std::shared_ptr<MemoryMappedFile> memory_mapped_model_file);
 
   // Returns the tokenizer section buffer for the SentencePiece tokenizer.
@@ -165,6 +163,12 @@ class LitertLmLoader {
   absl::StatusOr<std::reference_wrapper<ScopedFile>> GetScopedFile();
 
  private:
+  explicit LitertLmLoader(ScopedFile model_file)
+      : model_source_(std::move(model_file)) {}
+
+  explicit LitertLmLoader(
+      std::shared_ptr<MemoryMappedFile> memory_mapped_model_file)
+      : model_source_(std::move(memory_mapped_model_file)) {}
   // Initializes the LitertLmLoader. Includes reading the model header and
   // recording the section locations for on-demand loading later.
   absl::Status Initialize();

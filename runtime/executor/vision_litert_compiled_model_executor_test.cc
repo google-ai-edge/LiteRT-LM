@@ -47,7 +47,8 @@ TEST(VisionLiteRtCompiledModelExecutorTest, CreateExecutorTest) {
       "litert_lm/runtime/testdata/test_lm.litertlm";
 
   ASSERT_OK_AND_ASSIGN(auto scoped_file, ScopedFile::Open(model_path.string()));
-  auto loader = std::make_unique<LitertLmLoader>(std::move(scoped_file));
+  ASSERT_OK_AND_ASSIGN(auto loader,
+                       LitertLmLoader::Create(std::move(scoped_file)));
   ASSERT_OK_AND_ASSIGN(auto resources,
                        ModelResourcesLitertLm::Create(std::move(loader)));
 

@@ -255,6 +255,7 @@ cc_test(
     srcs = ["file_util_test.cc"],
     deps = [
         ":file_util",
+        ":test_utils",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings",
@@ -291,9 +292,15 @@ cc_test(
 
 cc_library(
     name = "logging",
+    srcs = ["logging.cc"],
     hdrs = ["logging.h"],
     deps = [
+        "@com_google_absl//absl/base:log_severity",
+        "@com_google_absl//absl/base:no_destructor",
+        "@com_google_absl//absl/log:globals",
         "@com_google_absl//absl/strings",
+        "@litert//litert/c/internal:litert_logging",
+        "@litert//tflite:minimal_logging",
     ],
 )
 
@@ -387,6 +394,7 @@ cc_library(
         ":litert_status_util",
         ":scoped_file",
         "@com_google_absl//absl/cleanup",
+        "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/memory",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
@@ -511,9 +519,11 @@ cc_library(
         ":scoped_file",
         "@com_google_absl//absl/log:absl_check",
         "@com_google_absl//absl/log:absl_log",
+        "@com_google_absl//absl/memory",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/synchronization",
         "@litert//litert/cc:litert_buffer_ref",

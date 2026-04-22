@@ -15,10 +15,12 @@ import io
 import os
 import shutil
 import tempfile
+import textwrap
 from unittest import mock
 
 from absl.testing import absltest
 
+from litert_lm.schema.py import litertlm_builder
 from litert_lm.schema.py import litertlm_peek
 
 
@@ -130,12 +132,83 @@ class LitertlmPeekPyTest(absltest.TestCase):
     self.assertTrue(
         os.path.exists(os.path.join(dump_dir, "Section0_SP_Tokenizer.spiece"))
     )
+    tflite_model_filename = "Section1_TFLiteModel_tf_lite_prefill_decode.tflite"
     self.assertTrue(
-        os.path.exists(os.path.join(dump_dir, "Section1_TFLiteModel.tflite"))
+        os.path.exists(os.path.join(dump_dir, tflite_model_filename))
     )
     self.assertTrue(
         os.path.exists(os.path.join(dump_dir, "LlmMetadataProto.pbtext"))
     )
+    toml_path = os.path.join(dump_dir, "model.toml")
+    self.assertTrue(os.path.exists(toml_path))
+
+    with open(os.path.join(dump_dir, "model.toml"), "r") as f:
+      toml_content = f.read()
+      self.assertEqual(textwrap.dedent("""\
+          [system_metadata]
+          entries = [
+            { key = "arch", value_type = "String", value = "all" },
+            { key = "version", value_type = "String", value = "0.1" },
+          ]
+
+          [[section]]
+          additional_metadata = [
+            { key = "vocab_size", value_type = "Int32", value = 10000 },
+            { key = "algorithm", value_type = "String", value = "bpe" },
+          ]
+          section_type = "SP_Tokenizer"
+          data_path = "Section0_SP_Tokenizer.spiece"
+
+          [[section]]
+          additional_metadata = [
+            { key = "quantized", value_type = "Bool", value = true },
+            { key = "model_size", value_type = "Int32", value = 1234567 },
+          ]
+          model_type = "prefill_decode"
+          section_type = "TFLiteModel"
+          data_path = "Section1_TFLiteModel_tf_lite_prefill_decode.tflite"
+
+          [[section]]
+          additional_metadata = [
+            { key = "model", value_type = "String", value = "gemma3" },
+          ]
+          section_type = "LlmMetadata"
+          data_path = "LlmMetadataProto.pbtext"
+
+          [[section]]
+          section_type = "GenericBinaryData"
+          data_path = "Section3_GenericBinaryData.bin"
+          """), toml_content)
+
+  def test_dumped_litertlm_file_can_be_rebuilt(self):
+    """Tests the process_litertlm_file function with dump_files_dir."""
+    test_data_path = os.path.join(
+        os.environ.get("TEST_SRCDIR", ""),
+        "litert_lm/schema/testdata/test_tok_tfl_llm.litertlm",
+    )
+
+    # Create a temporary directory for dumping files.
+    dump_dir = self.create_tempdir().full_path
+
+    # Use an in-memory stream to capture the output.
+    output_stream = io.StringIO()
+
+    # Call the function directly with dump_files_dir.
+    litertlm_peek.peek_litertlm_file(test_data_path, dump_dir, output_stream)
+
+    toml_path = os.path.join(dump_dir, "model.toml")
+    self.assertTrue(os.path.exists(toml_path))
+
+    # Check that the model can be rebuilt from the dumped files.
+    rebuilt_model = self.create_tempfile("rebuilt.litertlm")
+    with open(rebuilt_model.full_path, "wb") as f:
+      builder = litertlm_builder.LitertLmFileBuilder.from_toml_file(toml_path)
+      builder.build(f)
+      # Ideally we'd compare the contents of the rebuilt model with the
+      # original, but the contents may differ over time as the .litertlm
+      # format evolves. Rather than requiring the test to be updated every time
+      # the format changes, we only check that rebuilding the model runs
+      # successfully.
 
 
 class LitertlmPeekUtilTest(absltest.TestCase):

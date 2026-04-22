@@ -117,9 +117,18 @@ void SendCompleteMessage(
   Responses responses(TaskState::kProcessing,
                       {std::string(accumulated_response_text)});
 
+  // Exclude tool call channel (indicated by empty channel_name) from extraction
+  // so it gets properly parsed by model_data_processor.ToMessage.
+  std::vector<Channel> custom_channels;
+  for (const auto& channel : channels) {
+    if (!channel.channel_name.empty()) {
+      custom_channels.push_back(channel);
+    }
+  }
+
   // Extract channel content from the responses. Modifies responses in place.
-  auto extracted_channels =
-      ExtractChannelContent(channels, responses, initial_open_channel_name);
+  auto extracted_channels = ExtractChannelContent(custom_channels, responses,
+                                                  initial_open_channel_name);
   if (!extracted_channels.ok()) {
     user_callback(extracted_channels.status());
     return;

@@ -25,8 +25,9 @@
 
 namespace litert::lm {
 
-int NumSignificantDims(const ::litert::TensorBuffer& tensor_buffer) {
-  const auto& dims = TensorBufferDims(tensor_buffer);
+absl::StatusOr<int> NumSignificantDims(
+    const ::litert::TensorBuffer& tensor_buffer) {
+  LITERT_ASSIGN_OR_RETURN(const auto& dims, TensorBufferDims(tensor_buffer));
   int num_significant_dims = 0;
   for (int d : dims) {
     num_significant_dims += (d > 1);
@@ -34,8 +35,9 @@ int NumSignificantDims(const ::litert::TensorBuffer& tensor_buffer) {
   return num_significant_dims;
 }
 
-std::vector<int> TensorBufferDims(const ::litert::TensorBuffer& tensor_buffer) {
-  LITERT_ASSIGN_OR_ABORT(auto tensor_type, tensor_buffer.TensorType());
+absl::StatusOr<std::vector<int>> TensorBufferDims(
+    const ::litert::TensorBuffer& tensor_buffer) {
+  LITERT_ASSIGN_OR_RETURN(auto tensor_type, tensor_buffer.TensorType());
   auto dims = tensor_type.Layout().Dimensions();
   return std::vector<int>(dims.begin(), dims.end());
 }

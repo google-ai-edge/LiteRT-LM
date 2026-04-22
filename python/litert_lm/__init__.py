@@ -21,6 +21,8 @@ from .interfaces import AbstractSession
 from .interfaces import Backend
 from .interfaces import BenchmarkInfo
 from .interfaces import Responses
+from .interfaces import SamplerConfig
+from .interfaces import Tool
 from .interfaces import ToolEventHandler
 from .litert_lm_ext import _Benchmark  # pytype: disable=import-error
 from .litert_lm_ext import _Engine  # pytype: disable=import-error
@@ -31,7 +33,6 @@ from .litert_lm_ext import Engine  # pytype: disable=import-error
 from .litert_lm_ext import LogSeverity  # pytype: disable=import-error
 from .litert_lm_ext import Session  # pytype: disable=import-error
 from .litert_lm_ext import set_min_log_severity  # pytype: disable=import-error
-from .tools import Tool
 from .tools import tool_from_function
 
 # Because the C++ class is created by nanobind and the Python
@@ -57,6 +58,7 @@ __all__ = (
     "Engine",
     "LogSeverity",
     "Responses",
+    "SamplerConfig",
     "Session",
     "Tool",
     "ToolEventHandler",

@@ -14,6 +14,8 @@
 
 #include "runtime/executor/executor_settings_base.h"
 
+#include <filesystem>  // NOLINT
+#include <fstream>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -24,11 +26,20 @@
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "runtime/util/file_data_stream.h"
+#include "runtime/util/file_util.h"
 #include "runtime/util/memory_mapped_file.h"
 #include "runtime/util/test_utils.h"  // NOLINT
 
 namespace litert::lm {
 namespace {
+
+std::string GetTestModelPath() {
+  const auto model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm.litertlm";
+  return model_path.string();
+}
 
 TEST(LlmExecutorConfigTest, Backend) {
   Backend backend;
@@ -175,6 +186,72 @@ TEST(LlmExecutorConfigTest, ModelAssetsMemoryMapped) {
   EXPECT_THAT(oss.str(), testing::HasSubstr("FAKE_WEIGHTS_NONE"));
 }
 
+TEST(LlmExecutorConfigTest, ModelAssetsDataStream) {
+  ASSERT_OK_AND_ASSIGN(auto data_stream,
+                       FileDataStream::Create(GetTestModelPath()));
+
+  auto model_assets = ModelAssets::Create(data_stream);
+  ASSERT_OK(model_assets);
+  EXPECT_TRUE(model_assets->HasDataStream());
+  ASSERT_OK_AND_ASSIGN(auto retrieved_stream, model_assets->GetDataStream());
+  EXPECT_EQ(retrieved_stream, data_stream);
+
+  std::stringstream oss;
+  oss << *model_assets;
+  EXPECT_THAT(oss.str(),
+              testing::HasSubstr("model_file is loading from a data stream"));
+  EXPECT_THAT(oss.str(), testing::HasSubstr("FAKE_WEIGHTS_NONE"));
+}
+
+TEST(LlmExecutorConfigTest, GetCacheSuffixValidCpu) {
+  auto result = ExecutorSettingsBase::GetCacheSuffix(
+      Backend::CPU, "/path/to/model.litertlm", "");
+  ASSERT_OK(result);
+  EXPECT_EQ(result->weight_suffix, ".xnnpack_cache");
+  EXPECT_TRUE(result->program_suffix.empty());
+  EXPECT_TRUE(result->gpu_weight_cache_suffix.empty());
+
+  result = ExecutorSettingsBase::GetCacheSuffix(
+      Backend::CPU, "/path/to/model.litertlm", "vision_encoder");
+  ASSERT_OK(result);
+  EXPECT_EQ(result->weight_suffix, ".vision_encoder.xnnpack_cache");
+  EXPECT_TRUE(result->program_suffix.empty());
+  EXPECT_TRUE(result->gpu_weight_cache_suffix.empty());
+}
+
+TEST(LlmExecutorConfigTest, GetCacheSuffixValidGpu) {
+  auto result = ExecutorSettingsBase::GetCacheSuffix(
+      Backend::GPU, "/path/to/model.litertlm", "");
+  ASSERT_OK(result);
+  EXPECT_TRUE(result->weight_suffix.empty());
+  EXPECT_EQ(result->program_suffix, "_mldrift_program_cache.bin");
+  EXPECT_EQ(result->gpu_weight_cache_suffix, "model.litertlm");
+
+  result = ExecutorSettingsBase::GetCacheSuffix(
+      Backend::GPU, "/path/to/model.litertlm", "vision_encoder");
+  ASSERT_OK(result);
+  EXPECT_TRUE(result->weight_suffix.empty());
+  EXPECT_EQ(result->program_suffix,
+            ".mldrift_program_cache.vision_encoder.bin");
+  EXPECT_EQ(result->gpu_weight_cache_suffix, "model.litertlm.vision_encoder");
+}
+
+TEST(LlmExecutorConfigTest, GetCacheSuffixInvalidBackend) {
+  auto result = ExecutorSettingsBase::GetCacheSuffix(
+      Backend::NPU, "/path/to/model.litertlm", "");
+  EXPECT_FALSE(result.ok());
+  EXPECT_THAT(result.status().message(),
+              testing::HasSubstr("Unsupported backend"));
+}
+
+TEST(LlmExecutorConfigTest, GetCacheSuffixInvalidModule) {
+  auto result = ExecutorSettingsBase::GetCacheSuffix(
+      Backend::CPU, "/path/to/model.litertlm", "invalid_module");
+  EXPECT_FALSE(result.ok());
+  EXPECT_THAT(result.status().message(),
+              testing::HasSubstr("Invalid module name"));
+}
+
 class TestExecutorSettings : public ExecutorSettingsBase {
  public:
   explicit TestExecutorSettings(ModelAssets model_assets)
@@ -205,6 +282,27 @@ TEST(LlmExecutorConfigTest, GetProgramCacheFileWithSuffix) {
   EXPECT_TRUE(std::holds_alternative<std::string>(*result));
   EXPECT_THAT(std::get<std::string>(*result),
               testing::HasSubstr("model.tflite.mysuffix"));
+}
+
+TEST(LlmExecutorConfigTest, GetProgramCacheFileWithIdentifier) {
+  ASSERT_OK_AND_ASSIGN(std::string temp_file,
+                       JoinPath(testing::TempDir(), "test_model.tflite"));
+  std::ofstream ofs(temp_file);
+  ofs << "test data";
+  ofs.close();
+
+  auto model_assets = ModelAssets::Create(temp_file);
+  ASSERT_OK(model_assets);
+  TestExecutorSettings settings(*model_assets);
+  settings.SetCacheDir("/cache/dir");
+
+  auto result = settings.GetProgramCacheFile();
+  ASSERT_OK(result);
+  EXPECT_TRUE(std::holds_alternative<std::string>(*result));
+  std::string path = std::get<std::string>(*result);
+
+  EXPECT_THAT(path, testing::HasSubstr("test_model.tflite_"));
+  EXPECT_THAT(path, testing::EndsWith("_9.program_cache"));
 }
 
 }  // namespace

@@ -281,6 +281,7 @@ TEST(LlmExecutorConfigTest, LlmExecutorSettingsWithAdvancedSettings) {
       .hint_waiting_for_completion = false,
       .enable_speculative_decoding = false,
       .disable_delegate_clustering = false,
+      .hint_kernel_batch_size = 10,
   });
 
   std::stringstream oss;
@@ -332,6 +333,7 @@ hint_waiting_for_completion: 0
 gpu_context_low_priority: Not set
 enable_speculative_decoding: 0
 disable_delegate_clustering: 0
+hint_kernel_batch_size: 10
 
 )");
   EXPECT_EQ(oss.str(), expected_output);
@@ -357,6 +359,28 @@ TEST(LlmExecutorConfigTest, AdvancedSettingsWithGpuContextLowPriority) {
   oss.str("");
   oss << settings;
   EXPECT_THAT(oss.str(), ::testing::HasSubstr("gpu_context_low_priority: 0"));
+}
+
+TEST(LlmExecutorConfigTest, AdvancedSettingsWithHintKernelBatchSize) {
+  auto model_assets = ModelAssets::Create(kPathToModel1);
+  ASSERT_OK(model_assets);
+  ASSERT_OK_AND_ASSIGN(auto settings,
+                       LlmExecutorSettings::CreateDefault(
+                           *std::move(model_assets), Backend::GPU_ARTISAN));
+  settings.SetAdvancedSettings(AdvancedSettings{
+      .hint_kernel_batch_size = 10,
+  });
+
+  std::stringstream oss;
+  oss << settings;
+  EXPECT_THAT(oss.str(), ::testing::HasSubstr("hint_kernel_batch_size: 10"));
+
+  settings.SetAdvancedSettings(AdvancedSettings{
+      .hint_kernel_batch_size = -1,
+  });
+  oss.str("");
+  oss << settings;
+  EXPECT_THAT(oss.str(), ::testing::HasSubstr("hint_kernel_batch_size: -1"));
 }
 
 TEST(GetWeightCacheFileTest, CacheDirAndModelPath) {

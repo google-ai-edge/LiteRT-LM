@@ -1,8 +1,7 @@
-# LiteRT-LM Builder
+# Internal Development & Package Creation
 
-Python tools for building, inspecting, and unpacking LiteRT-LM files.
-
-This directory contains the source code for the `litert-lm-builder` Python package.
+This document outlines how to build, test, and package the
+`litert-lm-builder` Python tools.
 
 ## Project Structure
 
@@ -10,69 +9,43 @@ This directory contains the source code for the `litert-lm-builder` Python packa
 - `litertlm_builder_cli.py`: Command-line interface for the builder.
 - `litertlm_peek.py`: Core logic for inspecting LiteRT-LM files.
 - `litertlm_peek_main.py`: Command-line interface for the peek tool.
-- `pyproject.toml`: PEP 517 configuration for the package.
+- `pyproject.toml`: Build configurations.
 - `bundle_pypi_package.sh`: Script to bundle the package into a PyPI-ready wheel.
 
 ## Building and Packaging
 
-To build the package and create a wheel, run the bundle script:
+To build the package and create a `.whl` distribution, use the helper script:
 
 ```bash
 ./bundle_pypi_package.sh
 ```
 
-This script will:
-1. Stage the files in a temporary directory.
-2. Build Protobuf and FlatBuffer bindings using Bazel.
-3. Rewrite imports to match the package structure.
-4. Build the wheel using `uv`.
+### What happens during the build?
 
-## Usage
+1.  **Bazel Bindings**: It delegates to Bazel to generate Protobuf (`.pb2`) and
+    FlatBuffer bindings for the LiteRT-LM schemas.
+2.  **Staging**: Files are copied into a temporary directory
+    (`/tmp/litertlm_builder/`). All python files and generated bindings are put
+    into a `litert_lm_builder` sub-directory to form the package structure.
+    `pyproject.toml` is copied to the root.
+3.  **Import Rewriting**: It searches and rewrites Protobuf/FlatBuffer internal
+    imports and imports in all python files so they match the expected
+    `litert_lm_builder` packaged namespace.
+4.  **Wheel Generation**: It sets up a virtual environment, installs `uv`, and
+    invokes `uv build --no-build-isolation` to generate a self-contained `.whl`
+    artifact in `/tmp/litertlm_builder/dist/`.
+5.  **Verification**: The script installs the generated wheel and runs `--help`
+    on CLI tools to verify installation.
 
-After installing the package, you can use the CLI tools:
+## Testing locally
 
-### litertlm-builder
-
-```bash
-litertlm-builder [options]
-```
-
-The tool supports two options: Subcommand Chaining (passing options directly) and TOML Configuration.
-
-#### Example: Subcommand Chaining (Direct Arguments)
-
-```bash
-litertlm-builder \
-  system_metadata --str Authors "ODML team" --int version 1 \
-  llm_metadata --path schema/testdata/llm_metadata.pb \
-  sp_tokenizer --path runtime/components/testdata/sentencepiece.model \
-  tflite_model --path runtime/components/testdata/dummy_embedding_cpu_model.tflite --model_type embedder \
-  output --path real.litertlm
-```
-
-#### Example: Using a TOML Configuration File
+Once built, you can test the wheel by creating a virtual environment, installing
+the wheel directly, and verifying the CLIs:
 
 ```bash
-litertlm-builder toml --path example.toml output --path real_via_toml.litertlm
+uv venv
+source .venv/bin/activate
+uv pip install /tmp/litertlm_builder/dist/*.whl
+litert-lm-builder --help
+litert-lm-peek --help
 ```
-
-### litertlm-peek
-
-```bash
-litertlm-peek [options]
-```
-
-#### Example Usage
-
-To inspect a `.litertlm` file:
-
-```bash
-litertlm-peek --litertlm_file real.litertlm
-```
-
-To extract (dump) the contents of a `.litertlm` file:
-
-```bash
-litertlm-peek --litertlm_file real.litertlm --dump_files_dir ./extracted_files
-```
-

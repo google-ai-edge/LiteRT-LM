@@ -65,10 +65,10 @@ class LitertKVCacheTest : public ::testing::Test {
     auto path = std::filesystem::path(::testing::SrcDir()) /
                 std::filesystem::path(model_path);
     ASSERT_OK_AND_ASSIGN(auto scoped_file, ScopedFile::Open(path.string()));
-    ASSERT_OK_AND_ASSIGN(
-        resources_,
-        ModelResourcesLitertLm::Create(
-            std::make_unique<LitertLmLoader>(std::move(scoped_file))));
+    ASSERT_OK_AND_ASSIGN(auto loader,
+                         LitertLmLoader::Create(std::move(scoped_file)));
+    ASSERT_OK_AND_ASSIGN(resources_,
+                         ModelResourcesLitertLm::Create(std::move(loader)));
     LITERT_ASSERT_OK_AND_ASSIGN(
         auto env, Environment::Create(std::vector<Environment::Option>()));
     env_ = std::move(env);

@@ -42,6 +42,7 @@
 #include "runtime/engine/litert_lm_lib.h"
 #include "runtime/engine/shared_flags.h"
 #include "runtime/proto/litert_lm_metrics.pb.h"
+#include "runtime/util/logging.h"
 #include "runtime/util/metrics_util.h"
 #include "runtime/util/status_macros.h"
 
@@ -69,6 +70,9 @@ ABSL_FLAG(bool, use_session, false,
           "Note that session does not use Jinja templates. As such, if using "
           "Jinja in LLM Metadata, the user is responsible for manually "
           "applying the prompt template to the input prompt.");
+ABSL_FLAG(int, min_log_severity, -1,
+          "Minimum log severity (-1:Default Behavior, 0:Verbose, 1:Debug, "
+          "2:Info, 3:Warning, 4:Error, 5:Fatal, 1000:Silent)");
 
 namespace {
 
@@ -137,6 +141,12 @@ absl::Status WriteMetricsToFile(
 
 absl::Status MainHelper(int argc, char** argv) {
   absl::ParseCommandLine(argc, argv);
+
+  int min_log_severity = absl::GetFlag(FLAGS_min_log_severity);
+  if (min_log_severity >= 0) {
+    litert::lm::SetMinLogSeverity(
+        static_cast<litert::lm::LogSeverity>(min_log_severity));
+  }
 
   if (argc <= 1) {
     ABSL_LOG(INFO)

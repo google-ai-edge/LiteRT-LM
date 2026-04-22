@@ -56,6 +56,11 @@ data_path = "{PREFILL_DECODE_PATH}"
 additional_metadata = [
   { key = "License", value_type = "String", value = "Example" }
 ]
+
+[[section]]
+# Section 4: GenericBinaryData
+section_type = "GenericBinaryData"
+data_path = "{GENERIC_BINARY_PATH}"
 """
 
 
@@ -97,6 +102,45 @@ class LitertlmBuilderTest(parameterized.TestCase):
     ss = self._build_and_read_litertlm(builder)
     self.assertIn("Key: sys_test_k, Value (String): sys_test_v", ss)
     self.assertIn("Sections (0)", ss)
+
+  def test_auto_generated_metadata(self):
+    """Tests that uuid and creation_timestamp are automatically added."""
+    builder = litertlm_builder.LitertLmFileBuilder()
+    self._add_system_metadata(builder)
+    ss = self._build_and_read_litertlm(builder)
+    self.assertIn("Key: uuid, Value (String):", ss)
+    self.assertIn("Key: creation_timestamp, Value (String):", ss)
+
+  def test_override_existing_timestamp(self):
+    """Tests that existing creation_timestamp is overridden."""
+    builder = litertlm_builder.LitertLmFileBuilder()
+    custom_time = "2020-01-01T00:00:00Z"
+    builder.add_system_metadata(
+        litertlm_builder.Metadata(
+            key="creation_timestamp",
+            value=custom_time,
+            dtype=litertlm_builder.DType.STRING,
+        )
+    )
+    ss = self._build_and_read_litertlm(builder)
+    self.assertNotIn(
+        f"Key: creation_timestamp, Value (String): {custom_time}", ss
+    )
+    self.assertIn("Key: creation_timestamp, Value (String):", ss)
+
+  def test_preserve_existing_uuid(self):
+    """Tests that existing uuid is not overridden."""
+    builder = litertlm_builder.LitertLmFileBuilder()
+    custom_uuid = "my-custom-uuid-123"
+    builder.add_system_metadata(
+        litertlm_builder.Metadata(
+            key="uuid",
+            value=custom_uuid,
+            dtype=litertlm_builder.DType.STRING,
+        )
+    )
+    ss = self._build_and_read_litertlm(builder)
+    self.assertIn(f"Key: uuid, Value (String): {custom_uuid}", ss)
 
   def test_add_system_metadata_duplicate_key(self):
     """Tests that adding system metadata with a duplicate key raises a ValueError."""
@@ -307,6 +351,35 @@ class LitertlmBuilderTest(parameterized.TestCase):
     self.assertIn("Data Type:    SP_Tokenizer", ss)
     self.assertIn("Key: test_key, Value (String): test_value", ss)
 
+  def test_add_generic_binary_data(self):
+    """Tests that generic binary data can be added correctly."""
+    binary_content = b"dummy binary content"
+    binary_path = self._create_dummy_file("data.bin", binary_content)
+    additional_metadata = [
+        litertlm_builder.Metadata(
+            key="test_key",
+            value="test_value",
+            dtype=litertlm_builder.DType.STRING,
+        )
+    ]
+    builder = litertlm_builder.LitertLmFileBuilder()
+    self._add_system_metadata(builder)
+    builder.add_generic_binary_data(
+        binary_path, additional_metadata=additional_metadata
+    )
+    ss = self._build_and_read_litertlm(builder)
+    self.assertIn("Sections (1)", ss)
+    self.assertIn("Data Type:    GenericBinaryData", ss)
+    self.assertIn("Key: test_key, Value (String): test_value", ss)
+
+    # Verify content
+    with litertlm_core.open_file(
+        os.path.join(self.temp_dir, "litertlm.litertlm"), "rb"
+    ) as f:
+      f.seek(litertlm_core.BLOCK_SIZE)
+      read_content = f.read(len(binary_content))
+      self.assertEqual(read_content, binary_content)
+
   def test_add_hf_tokenizer(self):
     """Tests that a HuggingFace tokenizer can be added correctly."""
     hf_content = b'{"version": "1.0"}'
@@ -431,15 +504,21 @@ class LitertlmBuilderTest(parameterized.TestCase):
         metadata_filename,
         llm_metadata_pb2.LlmMetadata(max_num_tokens=123).SerializeToString(),
     )
+    generic_binary_filename = "data.bin"
+    generic_binary_path_abs = self._create_dummy_file(
+        generic_binary_filename, b"dummy binary content"
+    )
 
     if use_relative_path:
       sp_path = sp_filename
       tflite_path = tflite_filename
       metadata_path = metadata_filename
+      generic_binary_path = generic_binary_filename
     else:
       sp_path = pathlib.Path(sp_path_abs).as_posix()
       tflite_path = pathlib.Path(tflite_path_abs).as_posix()
       metadata_path = pathlib.Path(metadata_path_abs).as_posix()
+      generic_binary_path = pathlib.Path(generic_binary_path_abs).as_posix()
 
     toml_path = self._create_dummy_file(
         "test.toml",
@@ -447,17 +526,19 @@ class LitertlmBuilderTest(parameterized.TestCase):
         .replace("{SP_TOKENIZER_PATH}", sp_path)
         .replace("{EMBEDDER_PATH}", tflite_path)
         .replace("{PREFILL_DECODE_PATH}", tflite_path)
+        .replace("{GENERIC_BINARY_PATH}", generic_binary_path)
         .encode("utf-8"),
     )
     builder = litertlm_builder.LitertLmFileBuilder.from_toml_file(toml_path)
     ss = self._build_and_read_litertlm(builder)
-    self.assertIn("Sections (4)", ss)
+    self.assertIn("Sections (5)", ss)
     self.assertIn("Data Type:    SP_Tokenizer", ss)
     self.assertIn("Data Type:    TFLiteModel", ss)
     self.assertIn("Key: model_type, Value (String): tf_lite_embedder", ss)
     self.assertIn("Key: model_type, Value (String): tf_lite_prefill_decode", ss)
     self.assertIn("Data Type:    LlmMetadataProto", ss)
     self.assertIn("max_num_tokens: 123", ss)
+    self.assertIn("Data Type:    GenericBinaryData", ss)
 
 
 if __name__ == "__main__":

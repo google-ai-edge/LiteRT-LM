@@ -49,6 +49,10 @@ jobs:
       - name : Set up cache keys and bazel output base.
         id: cache-keys
         run: |
+          $BAZEL_OUTPUT_BASE = "C:/w"
+          if ($env:GITHUB_WORKSPACE -match "^[Dd]:") {
+              $BAZEL_OUTPUT_BASE = "D:/w"
+          }
           $CACHE_RESTORE_KEY_2="${{ github.workflow }}"
           $CACHE_RESTORE_KEY_1="$CACHE_RESTORE_KEY_2-${{ hashFiles('**/WORKSPACE', '**/.bazelrc') }}"
           $CACHE_RESTORE_KEY_0="$CACHE_RESTORE_KEY_1-${{ hashFiles('**/BUILD*') }}"
@@ -62,7 +66,7 @@ jobs:
           echo "CACHE_KEY=$CACHE_KEY" >> "$env:GITHUB_OUTPUT"
           # D: is faster than C: for I/O.
           $SHORT_SHA=$("${{ github.sha }}".SubString(0, 8))
-          echo "BAZEL_OUTPUT_BASE=D:/w-$SHORT_SHA" >> "$env:GITHUB_ENV"
+          echo "BAZEL_OUTPUT_BASE=${BAZEL_OUTPUT_BASE}-$SHORT_SHA" >> "$env:GITHUB_ENV"
 
       - name: Clean build outputs if cache is being refreshed.
         if: env.REFRESH_CACHE == 'true'

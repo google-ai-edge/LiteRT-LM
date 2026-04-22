@@ -559,6 +559,49 @@ TEST_F(InternalCallbackTest, InvalidFunctionCall) {
   EXPECT_THAT(status_, StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
+// Verifies that when the system flushes the `complete_message` (e.g. used for
+// capturing history during `async=true` queries), tool call blocks aren't
+// accidentally stripped out as raw channels before the message formatter can
+// parse them into structured `tool_calls`.
+TEST_F(InternalCallbackTest, ToolCallWithCompleteMessageCallback) {
+  auto user_callback = CreateUserMessageCallback(output_, done_, status_);
+  Message final_message;
+  bool final_done = false;
+  auto complete_message_callback = [&](const Message& message) {
+    final_message = message;
+    final_done = true;
+  };
+
+  auto callback = CreateInternalCallback(
+      *model_data_processor_, processor_args_, channels_,
+      std::move(user_callback), /*cancel_callback=*/nullptr,
+      std::move(complete_message_callback));
+
+  callback(Responses(TaskState::kProcessing, {"```tool_code\n"}));
+  callback(Responses(TaskState::kProcessing, {"tool_name"}));
+  callback(Responses(TaskState::kProcessing, {"(x=1)"}));
+  callback(Responses(TaskState::kProcessing, {"\n```"}));
+  callback(Responses(TaskState::kProcessing, {"some text"}));
+  callback(Responses(TaskState::kDone));
+
+  EXPECT_TRUE(final_done);
+  EXPECT_THAT(final_message, testing::Eq(Message::parse(R"json({
+                "role": "assistant",
+                "content": [{"type": "text", "text": "some text"}],
+                "tool_calls": [
+                  {
+                    "type": "function",
+                    "function": {
+                      "name": "tool_name",
+                      "arguments": {
+                        "x": 1
+                      }
+                    }
+                  }
+                ]
+              })json")));
+}
+
 class InternalCallbackChannelTest : public testing::Test {
  protected:
   void SetUp() override {
