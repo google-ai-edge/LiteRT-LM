@@ -29,7 +29,7 @@ from litert_lm.schema.py import litertlm_core
 from litert_lm.schema.py import litertlm_peek
 
 
-def main(_):
+def main(_=None) -> None:
   """Parses command-line arguments and runs the litertlm_peek tool."""
   parser = argparse.ArgumentParser(
       description="Inspect the contents of a LiteRT-LM file."

@@ -507,7 +507,7 @@ def _build_litertlm_file(parsed_args: list[argparse.Namespace]) -> None:
   print(f"LiteRT-LM file successfully created at {output_path}")
 
 
-def main(_) -> None:
+def main(_=None) -> None:
   parser = _build_parser()
   parsed_args = _parse_args(parser)
   if not parsed_args:
