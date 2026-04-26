@@ -110,8 +110,17 @@ absl::StatusOr<std::unique_ptr<MemoryMappedFile>> MemoryMappedFile::Create(
     length = file_size - offset;
   }
 
+  // Drop PROT_WRITE so iOS does not eagerly commit the full mapping up
+  // front; weights are read-only anyway. Fall back to PROT_READ|PROT_WRITE
+  // only if the read-only mmap fails (preserves prior behaviour).
   void* data =
-      mmap(nullptr, length, PROT_READ | PROT_WRITE, MAP_PRIVATE, file, offset);
+      mmap(nullptr, length, PROT_READ, MAP_PRIVATE, file, offset);
+  if (data == MAP_FAILED) {
+    ABSL_LOG(WARNING) << "PROT_READ mmap failed (" << strerror(errno)
+                      << "); retrying with PROT_READ|PROT_WRITE.";
+    data = mmap(nullptr, length, PROT_READ | PROT_WRITE, MAP_PRIVATE, file,
+                offset);
+  }
   RET_CHECK_NE(data, MAP_FAILED) << "Failed to map, error: " << strerror(errno);
   RET_CHECK_NE(data, nullptr) << "Failed to map.";
 #ifdef __APPLE__
