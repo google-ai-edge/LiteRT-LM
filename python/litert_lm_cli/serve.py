@@ -312,7 +312,7 @@ class GeminiHandler(http.server.BaseHTTPRequestHandler):
 def run_server(host: str, port: int):
   """Starts the HTTP server."""
   server_address = (host, port)
-  httpd = http.server.HTTPServer(server_address, GeminiHandler)
+  httpd = http.server.ThreadingHTTPServer(server_address, GeminiHandler)
   click.echo(
       click.style(
           f"Starting LiteRT-LM Gemini API server on {host}:{port}...",
