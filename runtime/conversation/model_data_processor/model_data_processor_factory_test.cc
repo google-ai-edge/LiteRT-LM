@@ -23,10 +23,14 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_matchers.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl  // IWYU pragma: keep
+#include "runtime/util/test_utils.h"  // IWYU pragma: keep
 #include "runtime/components/sentencepiece_tokenizer.h"
 #include "runtime/components/tokenizer.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/config_registry.h"
+#include "runtime/conversation/model_data_processor/fastvlm_data_processor_config.h"
 #include "runtime/conversation/model_data_processor/function_gemma_data_processor_config.h"
 #include "runtime/conversation/model_data_processor/gemma3_data_processor_config.h"
 #include "runtime/conversation/model_data_processor/gemma4_data_processor_config.h"
@@ -35,13 +39,11 @@
 #include "runtime/conversation/model_data_processor/qwen3_data_processor_config.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/proto/llm_model_type.pb.h"
-#include "runtime/util/status_macros.h"  // NOLINT
-#include "runtime/util/test_utils.h"     // NOLINT
 
 namespace litert::lm {
 namespace {
 
-using ::testing::status::StatusIs;
+using ::absl_testing::StatusIs;
 
 constexpr char kTestdataDir[] =
     "litert_lm/runtime/components/testdata/";
@@ -220,6 +222,28 @@ TEST_F(ModelDataProcessorFactoryTest, CreateGemma4DataProcessor) {
   EXPECT_EQ(gemma4_config.max_num_patches, 1280);
   EXPECT_EQ(gemma4_config.patch_width, 8);
   EXPECT_EQ(gemma4_config.patch_height, 8);
+}
+
+TEST_F(ModelDataProcessorFactoryTest, CreateFastVlmDataProcessor) {
+  proto::LlmModelType llm_model_type;
+  llm_model_type.mutable_fast_vlm();
+  ASSERT_OK_AND_ASSIGN(
+      auto config, CreateDataProcessorConfigFromLlmModelType(llm_model_type));
+  ASSERT_TRUE(std::holds_alternative<FastVlmDataProcessorConfig>(config));
+  ASSERT_OK_AND_ASSIGN(auto processor, CreateModelDataProcessor(config));
+  EXPECT_OK(processor->ToInputDataVector("test prompt", {},
+                                         FastVlmDataProcessorArguments()));
+  EXPECT_THAT(processor->ToInputDataVector("test prompt", {},
+                                           GenericDataProcessorArguments()),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  EXPECT_OK(
+      processor->ToMessage(Responses(TaskState::kProcessing, {"test response"}),
+                           FastVlmDataProcessorArguments()));
+
+  auto fastvlm_config = std::get<FastVlmDataProcessorConfig>(config);
+  EXPECT_EQ(fastvlm_config.image_tensor_height, 1024);
+  EXPECT_EQ(fastvlm_config.image_tensor_width, 1024);
 }
 
 }  // namespace

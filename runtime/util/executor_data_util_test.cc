@@ -203,7 +203,8 @@ TEST(ExecutorDataUtilTest, CombineExecutorAudioDataMultiSuccess) {
   LITERT_ASSERT_OK_AND_ASSIGN(
       auto combined_embeddings_span,
       ReferTensorBufferAsSpan<float>(*combined_embeddings_ptr));
-  const auto& dimensions = TensorBufferDims(*combined_embeddings_ptr);
+  ASSERT_OK_AND_ASSIGN(const auto& dimensions,
+                       TensorBufferDims(*combined_embeddings_ptr));
   EXPECT_THAT(dimensions, ElementsAre(1, 6, 2));
   EXPECT_THAT(std::vector<float>(combined_embeddings_span.begin(),
                                  combined_embeddings_span.end()),
@@ -269,7 +270,8 @@ TEST(ExecutorDataUtilTest, CombineExecutorVisionDataMultiSuccess) {
   LITERT_ASSERT_OK_AND_ASSIGN(
       auto combined_embeddings_span,
       ReferTensorBufferAsSpan<float>(*combined_embeddings_ptr));
-  const auto& dimensions = TensorBufferDims(*combined_embeddings_ptr);
+  ASSERT_OK_AND_ASSIGN(const auto& dimensions,
+                       TensorBufferDims(*combined_embeddings_ptr));
   EXPECT_THAT(dimensions, ElementsAre(1, 1, 6, 2));
   EXPECT_THAT(std::vector<float>(combined_embeddings_span.begin(),
                                  combined_embeddings_span.end()),

@@ -42,10 +42,11 @@ absl::Status ValidateTensor(const TensorBuffer& tensor, int max_num_dims,
                             int batch_size, const std::string& tensor_name) {
   LITERT_ASSIGN_OR_RETURN(auto tensor_type, tensor.TensorType());
   auto dims = tensor_type.Layout().Dimensions();
-  if (NumSignificantDims(tensor) > max_num_dims) {
+  LITERT_ASSIGN_OR_RETURN(int num_significant_dims, NumSignificantDims(tensor));
+  if (num_significant_dims > max_num_dims) {
     return absl::InvalidArgumentError(absl::StrCat(
         "The output ", tensor_name, " tensor must have <=", max_num_dims,
-        " significant dimension, but got ", NumSignificantDims(tensor)));
+        " significant dimension, but got ", num_significant_dims));
   }
   if (dims[0] != batch_size) {
     return absl::InvalidArgumentError(

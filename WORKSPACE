@@ -2,14 +2,14 @@
 
 workspace(name = "litert_lm")
 
-# UPDATED = 2026-04-10
-LITERT_REF = "576fe2d1143545253358d237c462dab5fc427de9"
+# UPDATED = 2026-04-27
+LITERT_REF = "47615eb6eaec25e8dfcd1aba922c560a57cba0a2"
 
-LITERT_SHA256 = "ebd9f5f19ccf034339e370814599c78257ba079776460d72272e03b4fc81e928"
+LITERT_SHA256 = "1d198ae395ba47d64dec282602de56b568ea964963861451933f00c6a39fbf2d"
 
-TENSORFLOW_REF = "2f48f627261a902dec3a4ea4f5377e54d5f30fe4"
+TENSORFLOW_REF = "49e7f1937d1509dd7fea41bff9ccc994baa97258"
 
-TENSORFLOW_SHA256 = "daf8a50f4fd344ccdd146c009b096799883e7d29f82de797a2869b63ffc9f731"
+TENSORFLOW_SHA256 = "977114079cda0d6aa9d05bc73ae2c2e3d36705fbb041e631a564e4d42e1e1dd9"
 
 # buildifier: disable=load-on-top
 
@@ -246,8 +246,8 @@ nccl_configure(name = "local_config_nccl")
 # Kotlin rules
 http_archive(
     name = "rules_kotlin",
-    sha256 = "e1448a56b2462407b2688dea86df5c375b36a0991bd478c2ddd94c97168125e2",
-    url = "https://github.com/bazelbuild/rules_kotlin/releases/download/v2.1.3/rules_kotlin-v2.1.3.tar.gz",
+    sha256 = "13d5b767d697473ced9b55547a18a6ab65ab3fae5440555deee8a44c886b50aa",
+    url = "https://github.com/bazelbuild/rules_kotlin/releases/download/v2.3.20/rules_kotlin-v2.3.20.tar.gz",
 )
 
 load("@rules_kotlin//kotlin:repositories.bzl", "kotlin_repositories")

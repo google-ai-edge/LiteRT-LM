@@ -84,10 +84,13 @@ class AudioPreprocessorMiniAudio : public AudioPreprocessor {
         input_queue_(other.input_queue_),
         samples_to_next_step_(other.samples_to_next_step_) {
     mel_filterbank_ = std::make_unique<MelFilterbank>();
-    ABSL_CHECK_OK(mel_filterbank_->Initialize(
+    auto status = mel_filterbank_->Initialize(
         other.config_.GetFftBins(), other.config_.GetSampleRateHz(),
         other.config_.GetNumMelBins(), other.config_.GetMelLowHz(),
-        other.config_.GetMelHighHz()));
+        other.config_.GetMelHighHz());
+    if (!status.ok()) {
+      ABSL_LOG(ERROR) << "Failed to initialize mel filterbank: " << status;
+    }
   }
 
   // Copy assignment operator for cloning the audio preprocessor.
@@ -95,10 +98,13 @@ class AudioPreprocessorMiniAudio : public AudioPreprocessor {
       const AudioPreprocessorMiniAudio& other) {
     config_ = other.config_;
     mel_filterbank_ = std::make_unique<MelFilterbank>();
-    ABSL_CHECK_OK(mel_filterbank_->Initialize(
+    auto status = mel_filterbank_->Initialize(
         other.config_.GetFftBins(), other.config_.GetSampleRateHz(),
         other.config_.GetNumMelBins(), other.config_.GetMelLowHz(),
-        other.config_.GetMelHighHz()));
+        other.config_.GetMelHighHz());
+    if (!status.ok()) {
+      ABSL_LOG(ERROR) << "Failed to initialize mel filterbank: " << status;
+    }
     input_queue_ = other.input_queue_;
     samples_to_next_step_ = other.samples_to_next_step_;
     return *this;

@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <ostream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -29,6 +30,7 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_compiled_model.h"  // from @litert
+#include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_expected.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
@@ -41,6 +43,7 @@
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/llm_executor_processed_tokens.h"
 #include "runtime/executor/llm_executor_settings.h"
+#include "runtime/executor/llm_litert_npu_compiled_model_executor_utils.h"
 
 namespace litert::lm {
 
@@ -78,6 +81,9 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
     uint64_t decode_drafter_inference_latency_us = 0;
     uint64_t decode_cache_update_inference_latency_us = 0;
     uint64_t decode_sampling_latency_us = 0;
+    uint64_t decode_mtp_rejection_sampling_latency_us = 0;
+    uint64_t decode_mtp_activation_copy_latency_us = 0;
+    uint64_t decode_token_queue_latency_us = 0;
 
     // MTP / Speculative Decoding latency stats.
     int mtp_num_draft_tokens = 0;
@@ -145,6 +151,16 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
   enum class SpeculativeDecodingType {
     kNone,
     kMTP,
+  };
+
+  enum class KVCacheUpdateMethod {
+    kModel,
+    kWH,
+  };
+
+  enum class MaskUpdateMethod {
+    kModel,
+    kWH,
   };
 
   struct InferenceContext {
@@ -289,6 +305,11 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
       std::unique_ptr<EmbeddingLookupManager> embedding_lookup_manager,
       std::optional<EmbedderPerLayerContext> embedder_per_layer_context,
       LogitsQuantizationParams quantization_params,
+      std::vector<const uint8_t*> ple_table_ptrs = {},
+      std::vector<HWQuantizationParams> ple_quant_params = {},
+      std::vector<float> ple_per_tensor_scales = {}, int num_tables = 0,
+      litert::ElementType output_type = litert::ElementType::None,
+      float final_scale = 1.0f, int32_t final_zero_point = 0,
       SpeculativeDecodingType speculative_decoding_type =
           SpeculativeDecodingType::kNone,
       std::optional<DrafterContext> drafter_context = std::nullopt,
@@ -306,11 +327,35 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
         cache_update_inference_context_(
             std::move(cache_update_inference_context)),
         prefill_signature_map_(std::move(prefill_signature_map)),
+        ple_table_ptrs_(std::move(ple_table_ptrs)),
+        ple_quant_params_(std::move(ple_quant_params)),
+        ple_per_tensor_scales_(std::move(ple_per_tensor_scales)),
+        num_tables_(num_tables),
+        output_type_(output_type),
+        final_scale_(final_scale),
+        final_zero_point_(final_zero_point),
         speculative_decoding_type_(speculative_decoding_type),
         drafter_context_(std::move(drafter_context)),
         drafter_aux_context_(std::move(drafter_aux_context)),
         per_tensor_logits_scale_(quantization_params.scale),
         per_tensor_logits_zero_point_(quantization_params.zero_point) {
+    auto npu_config_status = executor_settings_.GetBackendConfig<NpuConfig>();
+    if (npu_config_status.ok()) {
+      npu_config_ = *npu_config_status;
+      if (npu_config_.use_hw_masking_for_npu) {
+        prefill_mask_update_method_ = MaskUpdateMethod::kWH;
+        decode_mask_update_method_ = MaskUpdateMethod::kWH;
+        mtp_mask_update_method_ = MaskUpdateMethod::kWH;
+        verify_mask_update_method_ = MaskUpdateMethod::kWH;
+      }
+      if (npu_config_.use_hw_cache_update_for_npu) {
+        prefill_kv_cache_update_method_ = KVCacheUpdateMethod::kWH;
+        decode_kv_cache_update_method_ = KVCacheUpdateMethod::kWH;
+      }
+      if (npu_config_.use_hw_ple_for_npu) {
+        use_hw_ple_for_npu_ = true;
+      }
+    }
     if (embedder_per_layer_context_.has_value()) {
       latency_stats_.prefill_embedder_per_layer_inference_latency_us = 0;
       latency_stats_.decode_embedder_per_layer_inference_latency_us = 0;
@@ -547,6 +592,16 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
       LogitsQuantizationParams quantization_params);
 
   LlmExecutorSettings executor_settings_;
+  NpuConfig npu_config_;
+  KVCacheUpdateMethod prefill_kv_cache_update_method_ =
+      KVCacheUpdateMethod::kModel;
+  KVCacheUpdateMethod decode_kv_cache_update_method_ =
+      KVCacheUpdateMethod::kModel;
+  MaskUpdateMethod prefill_mask_update_method_ = MaskUpdateMethod::kModel;
+  MaskUpdateMethod decode_mask_update_method_ = MaskUpdateMethod::kModel;
+  MaskUpdateMethod mtp_mask_update_method_ = MaskUpdateMethod::kModel;
+  MaskUpdateMethod verify_mask_update_method_ = MaskUpdateMethod::kModel;
+
   ::litert::Environment& env_;
   std::unique_ptr<ModelResources> resources_;
   LatencyStats latency_stats_;
@@ -560,6 +615,15 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
   InferenceContext llm_inference_context_;
   InferenceContext cache_update_inference_context_;
   SortedPrefillSignatureMap prefill_signature_map_;
+
+  bool use_hw_ple_for_npu_ = false;
+  std::vector<const uint8_t*> ple_table_ptrs_;
+  std::vector<HWQuantizationParams> ple_quant_params_;
+  std::vector<float> ple_per_tensor_scales_;
+  int num_tables_ = 0;
+  litert::ElementType output_type_ = litert::ElementType::None;
+  float final_scale_ = 1.0f;
+  int32_t final_zero_point_ = 0;
 
   // MTP / Speculative Decoding members.
   SpeculativeDecodingType speculative_decoding_type_ =

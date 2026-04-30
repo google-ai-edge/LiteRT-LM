@@ -29,6 +29,7 @@ kt_jvm_library(
     ],
 )
 
+# Note: To build with dynamic linking, use the following build flags:
 kt_android_library(
     name = "litertlm-android",
     srcs = glob(["*.kt"]),
@@ -36,5 +37,12 @@ kt_android_library(
         "@rules_kotlin//kotlin/compiler:kotlin-reflect",
         "@maven//:com_google_code_gson_gson",
         "@maven//:org_jetbrains_kotlinx_kotlinx_coroutines_android"
-    ],
+    ] + select({
+        # When link LiteRT dynamically, includes the shared lib.
+        "@litert//litert:litert_link_capi_so": [
+            "@litert//litert/c:litert_runtime_c_api_shared_lib",
+            "@litert//litert/runtime/accelerators/gpu:ml_drift_cl_gl_accelerator_shared_lib",
+        ],
+        "//conditions:default": [],
+    }),
 )

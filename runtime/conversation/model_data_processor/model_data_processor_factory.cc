@@ -27,6 +27,8 @@
 #include "runtime/components/tokenizer.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/config_registry.h"
+#include "runtime/conversation/model_data_processor/fastvlm_data_processor.h"
+#include "runtime/conversation/model_data_processor/fastvlm_data_processor_config.h"
 #include "runtime/conversation/model_data_processor/function_gemma_data_processor.h"
 #include "runtime/conversation/model_data_processor/function_gemma_data_processor_config.h"
 #include "runtime/conversation/model_data_processor/gemma3_data_processor.h"
@@ -254,6 +256,37 @@ absl::StatusOr<DataProcessorConfig> CreateGemma4DataProcessorConfig(
   if (gemma4.max_num_patches() != default_gemma4.max_num_patches()) {
     config.max_num_patches = gemma4.max_num_patches();
   }
+  if (gemma4.pooling_kernel_size() != default_gemma4.pooling_kernel_size()) {
+    config.pooling_kernel_size = gemma4.pooling_kernel_size();
+  }
+  return config;
+}
+
+absl::StatusOr<DataProcessorConfig> CreateFastVlmDataProcessorConfig(
+    const proto::LlmModelType& model_type) {
+  if (!model_type.has_fast_vlm()) {
+    return absl::InvalidArgumentError(
+        "FastVlm LlmModelType is required to create "
+        "FastVlmDataProcessorConfig.");
+  }
+  FastVlmDataProcessorConfig config;
+  proto::FastVlm fast_vlm = model_type.fast_vlm();
+  if (fast_vlm.has_start_of_image_token()) {
+    ASSIGN_OR_RETURN(config.boi_token,
+                     GetTokenString(fast_vlm.start_of_image_token()));
+  }
+  if (fast_vlm.has_end_of_image_token()) {
+    ASSIGN_OR_RETURN(config.eoi_token,
+                     GetTokenString(fast_vlm.end_of_image_token()));
+  }
+  const auto& default_fast_vlm = proto::FastVlm::default_instance();
+  if (fast_vlm.image_tensor_height() !=
+      default_fast_vlm.image_tensor_height()) {
+    config.image_tensor_height = fast_vlm.image_tensor_height();
+  }
+  if (fast_vlm.image_tensor_width() != default_fast_vlm.image_tensor_width()) {
+    config.image_tensor_width = fast_vlm.image_tensor_width();
+  }
   return config;
 }
 
@@ -327,6 +360,8 @@ absl::StatusOr<DataProcessorConfig> CreateDataProcessorConfigFromLlmModelType(
       return CreateQwen3DataProcessorConfig(model_type);
     case proto::LlmModelType::kGenericModel:
       return CreateGenericDataProcessorConfig(model_type);
+    case proto::LlmModelType::kFastVlm:
+      return CreateFastVlmDataProcessorConfig(model_type);
     case proto::LlmModelType::kFunctionGemma:
       return CreateFunctionGemmaDataProcessorConfig(model_type);
     default:
@@ -361,6 +396,11 @@ absl::StatusOr<std::unique_ptr<ModelDataProcessor>> CreateModelDataProcessor(
     ABSL_LOG(INFO) << "Creating Gemma4DataProcessor";
     return Gemma4DataProcessor::Create(
         std::get<Gemma4DataProcessorConfig>(config), preface, tokenizer,
+        stop_token_ids, enable_constrained_decoding);
+  } else if (std::holds_alternative<FastVlmDataProcessorConfig>(config)) {
+    ABSL_LOG(INFO) << "Creating FastVlmDataProcessor";
+    return FastVlmDataProcessor::Create(
+        std::get<FastVlmDataProcessorConfig>(config), preface, tokenizer,
         stop_token_ids, enable_constrained_decoding);
   } else {
     return absl::InvalidArgumentError("Unsupported data processor config type");

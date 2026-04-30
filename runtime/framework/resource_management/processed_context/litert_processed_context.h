@@ -16,11 +16,14 @@
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_FRAMEWORK_RESOURCE_MANAGEMENT_PROCESSED_CONTEXT_LITERT_PROCESSED_CONTEXT_H_
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <utility>
 
 #include "absl/log/absl_check.h"  // from @com_google_absl
+#include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
 #include "third_party/odml/infra/genai/inference/utils/tflite_utils/litert_kv_cache.h"
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/llm_executor_processed_tokens.h"
@@ -51,8 +54,12 @@ class LiteRTProcessedContext : public ::litert::lm::ProcessedContext {
     return processed_tokens_;
   }
 
-  odml::infra::tflite_utils::LiteRTKVCache& mutable_kv_cache() {
-    ABSL_CHECK(kv_cache_) << "KV cache is not initialized.";
+  absl::StatusOr<
+      std::reference_wrapper<odml::infra::tflite_utils::LiteRTKVCache>>
+  mutable_kv_cache() {
+    if (!kv_cache_) {
+      return absl::FailedPreconditionError("KV cache is not initialized.");
+    }
     return *kv_cache_;
   }
 

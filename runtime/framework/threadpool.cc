@@ -54,13 +54,23 @@ ThreadPool::~ThreadPool() {
 
   for (auto& thread_ptr : threads_to_join) {
     // Wait for each worker thread to finish.
-    ABSL_CHECK_OK(thread_ptr->Join());
+    auto status = thread_ptr->Join();
+    if (!status.ok()) {
+      ABSL_LOG(ERROR) << "Failed to join worker thread: " << status;
+    }
   }
 
   {
     absl::MutexLock lock(mutex_);
-    ABSL_CHECK(threads_.empty());
-    ABSL_CHECK_EQ(num_active_tasks_, 0);
+    if (!threads_.empty()) {
+      ABSL_LOG(ERROR) << "ThreadPool '" << name_prefix_
+                      << "': threads_ is not empty during shutdown.";
+    }
+    if (num_active_tasks_ != 0) {
+      ABSL_LOG(ERROR) << "ThreadPool '" << name_prefix_
+                      << "': num_active_tasks_ is " << num_active_tasks_
+                      << " during shutdown.";
+    }
   }
   ABSL_LOG(INFO) << "ThreadPool '" << name_prefix_ << "': Shutdown complete.";
 }
@@ -153,7 +163,11 @@ void ThreadPool::RunWorker() {
     mutex_.Await(absl::Condition(&is_task_available_or_stopped));
 
     if (tasks_.empty()) {
-      ABSL_CHECK(stopped_);
+      if (!stopped_) {
+        ABSL_LOG(ERROR) << "ThreadPool '" << name_prefix_
+                        << "': Theoretical invariant violation: Worker "
+                           "thread woke up with no tasks but not stopped.";
+      }
       ABSL_LOG(INFO) << "ThreadPool '" << name_prefix_
                      << "': Worker thread stopped.";
       return;

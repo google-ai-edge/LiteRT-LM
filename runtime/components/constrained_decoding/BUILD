@@ -234,9 +234,20 @@ cc_library(
 
 cc_library(
     name = "llguidance_schema_utils",
-    srcs = ["llguidance_schema_utils.cc"],
-    hdrs = ["llguidance_schema_utils.h"],
+    srcs = [
+        "llg_fc_tool_calls.cc",
+        "llg_python_tool_calls.cc",
+        "llg_tool_call_utils.cc",
+        "llguidance_schema_utils.cc",
+    ],
+    hdrs = [
+        "llg_fc_tool_calls.h",
+        "llg_python_tool_calls.h",
+        "llg_tool_call_utils.h",
+        "llguidance_schema_utils.h",
+    ],
     deps = [
+        "@com_google_absl//absl/functional:any_invocable",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
@@ -249,6 +260,60 @@ cc_library(
 cc_test(
     name = "llguidance_schema_utils_test",
     srcs = ["llguidance_schema_utils_test.cc"],
+    deps = [
+        ":bitmap",
+        ":constraint",
+        ":llg_constraint_config",
+        ":llg_constraint_provider",
+        ":llguidance_schema_utils",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@nlohmann_json//:json",
+        "//runtime/components:tokenizer",
+        "//runtime/util:litert_status_util",
+        "//runtime/util:test_utils",
+    ],
+)
+
+cc_test(
+    name = "llg_tool_call_utils_test",
+    srcs = ["llg_tool_call_utils_test.cc"],
+    deps = [
+        ":llguidance_schema_utils",
+        "@com_google_googletest//:gtest_main",
+        "@nlohmann_json//:json",
+    ],
+)
+
+cc_test(
+    name = "llg_fc_tool_calls_test",
+    srcs = ["llg_fc_tool_calls_test.cc"],
+    deps = [
+        ":bitmap",
+        ":constraint",
+        ":llg_constraint_config",
+        ":llg_constraint_provider",
+        ":llguidance_schema_utils",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@nlohmann_json//:json",
+        "//runtime/components:tokenizer",
+        "//runtime/util:litert_status_util",
+        "//runtime/util:test_utils",
+    ],
+)
+
+cc_test(
+    name = "llg_python_tool_calls_test",
+    srcs = ["llg_python_tool_calls_test.cc"],
     deps = [
         ":bitmap",
         ":constraint",

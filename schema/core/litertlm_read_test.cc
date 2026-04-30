@@ -222,6 +222,17 @@ TEST(LiteRTLMReadTest, TFLiteRead_HFTokenizer) {
   EXPECT_EQ(actual_tokenizer_json, expected_tokenizer_json);
 }
 
+TEST(LiteRTLMReadTest, DecompressData_InvalidSize) {
+  uint64_t huge_size = 2ULL << 30;  // 2 GB
+  std::vector<uint8_t> output;
+  absl::Status status = DecompressData(
+      reinterpret_cast<const uint8_t*>(&huge_size), sizeof(uint64_t), &output);
+  ASSERT_FALSE(status.ok());
+  EXPECT_EQ(status.code(), absl::StatusCode::kInvalidArgument);
+  EXPECT_THAT(status.message(),
+              ::testing::HasSubstr("exceeds maximum allowed size"));
+}
+
 }  // namespace
 }  // namespace schema
 }  // namespace lm

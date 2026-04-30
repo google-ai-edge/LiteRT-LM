@@ -18,14 +18,17 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>  // NOLINT: Required for std::filesystem::path.
 #include <iterator>
 #include <limits>
 #include <memory>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "absl/algorithm/container.h"  // from @com_google_absl
+#include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/match.h"  // from @com_google_absl
@@ -37,6 +40,8 @@
 #include "litert/cc/litert_model.h"  // from @litert
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "litert/cc/options/litert_cpu_options.h"  // from @litert
+#include "litert/cc/options/litert_gpu_options.h"  // from @litert
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
 #include "runtime/components/embedding_lookup/embedding_lookup_text.h"
 #include "runtime/components/model_resources.h"
@@ -47,6 +52,7 @@
 #include "runtime/util/file_format_util.h"
 #include "runtime/util/litert_lm_loader.h"
 #include "runtime/util/model_asset_bundle_resources.h"
+#include "runtime/util/scoped_file.h"
 #include "runtime/util/status_macros.h"  //NOLINT
 #include "runtime/util/tensor_buffer_util.h"
 #include "tflite/types/half.h"  // from @litert
@@ -104,14 +110,14 @@ BuildModelResourcesFromLitertLmFormat(const ModelAssets& model_assets) {
   if (model_assets.HasMemoryMappedFile()) {
     ASSIGN_OR_RETURN(auto memory_mapped_file,
                      model_assets.GetMemoryMappedFile());
-    loader = std::make_unique<LitertLmLoader>(memory_mapped_file);
+    ASSIGN_OR_RETURN(loader, LitertLmLoader::Create(memory_mapped_file));
   } else {
     // `BuildModelResourcesFromLitertLmFormat` expects a ScopedFile that it
     // takes ownership of, so we need to duplicate the ScopedFile to keep
     // the original alive.
     ASSIGN_OR_RETURN(auto scoped_file, model_assets.GetOrCreateScopedFile());
     ASSIGN_OR_RETURN(auto duplicate_file, scoped_file->Duplicate());
-    loader = std::make_unique<LitertLmLoader>(std::move(duplicate_file));
+    ASSIGN_OR_RETURN(loader, LitertLmLoader::Create(std::move(duplicate_file)));
   }
   return ModelResourcesLitertLm::Create(std::move(loader));
 }
@@ -447,6 +453,87 @@ absl::Status GenericComputeTokenEmbeddings(
     RETURN_IF_ERROR(per_layer_embedding_lookup_manager->LookupPrefill(
         input_tokens_span, &wrapped_ple_embeddings.buffer,
         0 /*token_offset=*/));
+  }
+  return absl::OkStatus();
+}
+
+absl::Status SetCpuCacheOptions(
+    const absl::StatusOr<
+        std::variant<std::string, std::shared_ptr<litert::lm::ScopedFile>>>&
+        weight_cache_file,
+    absl::string_view logging_prefix,
+    litert::CpuOptions& cpu_options) {
+  if (!weight_cache_file.ok()) {
+    ABSL_LOG(INFO) << logging_prefix << " does not use cache.";
+    return absl::OkStatus();
+  }
+
+  if (std::holds_alternative<std::shared_ptr<litert::lm::ScopedFile>>(
+          *weight_cache_file)) {
+    auto scoped_cache_file =
+        std::get<std::shared_ptr<litert::lm::ScopedFile>>(*weight_cache_file);
+    if (scoped_cache_file != nullptr) {
+      ASSIGN_OR_RETURN(auto duplicated, scoped_cache_file->Duplicate());
+      ASSIGN_OR_RETURN(int fd, duplicated.Release());
+      cpu_options.SetXNNPackWeightCacheFileDescriptor(fd);
+      ABSL_LOG(INFO) << logging_prefix
+                     << " use provided cache file descriptor: " << fd;
+    }
+  } else if (std::holds_alternative<std::string>(*weight_cache_file)) {
+    const std::string& weight_cache_path =
+        std::get<std::string>(*weight_cache_file);
+    cpu_options.SetXNNPackWeightCachePath(weight_cache_path.c_str());
+    ABSL_LOG(INFO) << logging_prefix
+                   << " use cache path: " << weight_cache_path;
+  }
+  return absl::OkStatus();
+}
+
+absl::Status SetGpuCacheOptions(
+    const std::string& weight_cache_path,
+    const absl::StatusOr<
+        std::variant<std::string, std::shared_ptr<litert::lm::ScopedFile>>>&
+        program_cache_file,
+    const ExecutorSettingsBase& executor_settings,
+    absl::string_view cache_key,
+    absl::string_view logging_prefix,
+    litert::GpuOptions& gpu_options) {
+  gpu_options.SetModelCacheKey(cache_key.data());
+  std::string cache_path = weight_cache_path;
+  bool serialization_dir_set = false;
+  if (cache_path != ":nocache") {
+    if (cache_path.empty()) {
+      ASSIGN_OR_RETURN(auto model_path,
+                       executor_settings.GetModelAssets().GetPath());
+      cache_path =
+          std::filesystem::path(std::string(model_path)).parent_path().string();
+      if (cache_path.empty()) {
+        cache_path = std::filesystem::current_path().string();
+      }
+    }
+    gpu_options.SetSerializationDir(cache_path.c_str());
+    gpu_options.SetSerializeExternalTensors(true);
+    serialization_dir_set = true;
+  }
+  if (program_cache_file.ok()) {
+    if (std::holds_alternative<std::string>(*program_cache_file)) {
+      if (!serialization_dir_set) {
+        cache_path =
+            std::filesystem::path(std::get<std::string>(*program_cache_file))
+                .parent_path()
+                .string();
+        gpu_options.SetSerializationDir(cache_path.c_str());
+      }
+    } else {
+      auto scoped_cache_file =
+          std::get<std::shared_ptr<lm::ScopedFile>>(*program_cache_file);
+      ASSIGN_OR_RETURN(auto duplicated, scoped_cache_file->Duplicate());
+      ASSIGN_OR_RETURN(int fd, duplicated.Release());
+      gpu_options.SetProgramCacheFd(fd);
+    }
+    gpu_options.SetSerializeProgramCache(true);
+  } else {
+    gpu_options.SetSerializeProgramCache(false);
   }
   return absl::OkStatus();
 }

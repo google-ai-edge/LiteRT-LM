@@ -37,6 +37,8 @@ class ImagePreprocessParameter {
     int patch_height;
     // The maximum number of patches.
     int max_num_patches;
+    // The pooling kernel size.
+    int pooling_kernel_size;
   };
 
   // Gets the target dimensions for preprocessing.

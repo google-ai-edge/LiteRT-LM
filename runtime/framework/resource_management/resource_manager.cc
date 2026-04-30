@@ -29,6 +29,7 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "litert/cc/litert_environment_options.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/model_resources.h"
 #include "runtime/engine/engine_settings.h"
@@ -46,6 +47,7 @@
 #include "runtime/framework/resource_management/utils/movable_mutex_lock.h"
 #include "runtime/framework/resource_management/utils/resource_manager_utils.h"
 #include "runtime/util/convert_tensor_buffer.h"
+#include "runtime/util/logging.h"
 #include "runtime/util/status_macros.h"  // IWYU pragma: keep
 
 namespace litert::lm {
@@ -487,9 +489,15 @@ absl::Status ResourceManager::MaybeCreateLitertEnv() {
   if (litert_env_ != nullptr) {
     return absl::OkStatus();
   }
+  std::vector<::litert::EnvironmentOptions::Option> env_options;
+  if (auto severity = GetMinLogSeverity()) {
+    env_options.push_back(::litert::EnvironmentOptions::Option{
+        ::litert::EnvironmentOptions::Tag::kMinLoggerSeverity,
+        ToLiteRtLogSeverityInt8(*severity)});
+  }
   LITERT_ASSIGN_OR_RETURN(
       auto new_litert_env,
-      litert::Environment::Create(std::vector<litert::Environment::Option>()));
+      litert::Environment::Create(::litert::EnvironmentOptions(env_options)));
   backup_litert_env_ =
       std::make_unique<litert::Environment>(std::move(new_litert_env));
   litert_env_ = backup_litert_env_.get();

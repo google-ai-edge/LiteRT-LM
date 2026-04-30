@@ -290,6 +290,14 @@ absl::AnyInvocable<void(absl::StatusOr<Responses>)> CreateInternalCallback(
       return;
     }
 
+    if (responses->GetTaskState() == TaskState::kCancelled) {
+      if (cancel_callback) {
+        cancel_callback();
+      }
+      user_callback(absl::CancelledError("Task cancelled"));
+      return;
+    }
+
     // If there are no more new responses, it means the model has finished
     // generating content, trigger the complete message callback and return an
     // OK status to indicate the inference is done.

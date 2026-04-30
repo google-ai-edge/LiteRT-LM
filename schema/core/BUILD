@@ -84,25 +84,6 @@ cc_test(
 )
 
 cc_library(
-    name = "litertlm_export",
-    srcs = ["litertlm_export.cc"],
-    hdrs = ["litertlm_export.h"],
-    deps = [
-        ":litertlm_header",
-        ":litertlm_header_schema",
-        ":litertlm_section",
-        ":litertlm_utils",
-        "@com_google_absl//absl/log:absl_log",
-        "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/strings",
-        "@com_google_absl//absl/strings:str_format",
-        "@flatbuffers",
-        "//runtime/util:litert_status_util",
-    ],
-)
-
-cc_library(
     name = "litertlm_header",
     hdrs = ["litertlm_header.h"],
     deps = [

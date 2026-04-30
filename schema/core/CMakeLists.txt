@@ -118,30 +118,7 @@ target_link_libraries(schema_core_litertlm_section
 )
 
 # ==============================================================================
-# 6. Export
-# ==============================================================================
-add_litertlm_library(schema_core_litertlm_export STATIC
-  litertlm_export.cc
-)
-add_library(LiteRTLM::Schema::Core::Export ALIAS schema_core_litertlm_export)
-
-target_include_directories(schema_core_litertlm_export
-  PRIVATE
-    ${GENERATED_SRC_DIR}
-    ${LITERTLM_INCLUDE_PATHS}
-)
-
-target_link_libraries(schema_core_litertlm_export
-  PUBLIC
-    LiteRTLM::Schema::Core::Header
-    LiteRTLM::Schema::Core::HeaderSchema
-    LiteRTLM::Schema::Core::Section
-    LiteRTLM::Schema::Core::Utils
-    LITERTLM_DEPS
-)
-
-# ==============================================================================
-# 7. Print
+# 6. Print
 # ==============================================================================
 add_litertlm_library(schema_core_litertlm_print STATIC
   litertlm_print.cc
@@ -163,13 +140,12 @@ target_link_libraries(schema_core_litertlm_print
 )
 
 # ==============================================================================
-# 8. Folder Facade
+# 7. Folder Facade
 # ==============================================================================
 add_library(schema_core_libs INTERFACE)
 add_library(LiteRTLM::Schema::Core ALIAS schema_core_libs)
 
 target_link_libraries(schema_core_libs INTERFACE
-  LiteRTLM::Schema::Core::Export
   LiteRTLM::Schema::Core::Header
   LiteRTLM::Schema::Core::HeaderSchema
   LiteRTLM::Schema::Core::Print

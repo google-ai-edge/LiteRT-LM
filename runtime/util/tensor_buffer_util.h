@@ -29,10 +29,12 @@ namespace litert::lm {
 
 // Returns the number of dimensions that are greater than 1 in the given
 // tensor buffer.
-int NumSignificantDims(const litert::TensorBuffer& tensor_buffer);
+absl::StatusOr<int> NumSignificantDims(
+    const litert::TensorBuffer& tensor_buffer);
 
-// Returns the dimensions of the given tensor buffer as a vector.
-std::vector<int> TensorBufferDims(const litert::TensorBuffer& tensor_buffer);
+// Returns the dimensions of the given tensor buffer.
+absl::StatusOr<std::vector<int>> TensorBufferDims(
+    const ::litert::TensorBuffer& tensor_buffer);
 
 // Creates a deep copy of the given tensor buffer.
 absl::StatusOr<litert::TensorBuffer> CopyTensorBuffer(

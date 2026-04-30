@@ -36,10 +36,13 @@ object ExperimentalFlags {
   /**
    * Whether to enable speculative decoding.
    *
+   * If null, use the model's default. If true, enable speculative decoding; an error will be thrown
+   * if the model does not support it. If false, disable it.
+   *
    * Note: This flag is read only when a new [Engine] is created. Changing this value will not
    * affect any existing [Engine] or [Conversation] instances.
    */
-  var enableSpeculativeDecoding: Boolean = false
+  var enableSpeculativeDecoding: Boolean? = null
 
   /**
    * Whether to enable conversation constrained decoding. This is primarily used for function
@@ -69,6 +72,24 @@ object ExperimentalFlags {
    * affect any existing [Conversation] instances.
    */
   var convertCamelToSnakeCaseInToolDescription: Boolean = true
+
+  /**
+   * Whether to filter channel content from the KV cache.
+   *
+   * If true, channel content (e.g. reasoning) will be filtered from the KV cache.
+   *
+   * Note: This flag is read only when a new [Conversation] is created. Changing this value will not
+   * affect any existing [Conversation] instances.
+   */
+  var filterChannelContentFromKvCache: Boolean = false
+
+  /**
+   * A prompt template to overwrite the default one.
+   *
+   * Note: This flag is read only when a new [Conversation] is created. Changing this value will not
+   * affect any existing [Conversation] instances.
+   */
+  var overwritePromptTemplate: String? = null
 }
 
 // Mark this annotation itself as requiring opt-in

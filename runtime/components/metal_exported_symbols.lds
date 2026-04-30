@@ -1,0 +1,3 @@
+_LiteRtTopKMetalSampler_Create
+_LiteRtTopKMetalSampler_Destroy
+_LiteRtTopKMetalSampler_SampleToIdAndScoreBuffer

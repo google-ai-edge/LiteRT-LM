@@ -32,29 +32,32 @@ namespace {
 
 using ::testing::ElementsAre;
 using ::testing::Eq;
+using ::testing::litert::IsOkAndHolds;
 
 TEST(TensorBufferUtilTest, NumSignificantDims) {
   LITERT_ASSERT_OK_AND_ASSIGN(auto tensor_buffer,
                               CreateTensorBuffer<int8_t>({2, 5}));
-  EXPECT_THAT(NumSignificantDims(tensor_buffer), Eq(2));
+  EXPECT_THAT(NumSignificantDims(tensor_buffer), IsOkAndHolds(Eq(2)));
   LITERT_ASSERT_OK_AND_ASSIGN(tensor_buffer,
                               CreateTensorBuffer<int8_t>({2, 1, 5}));
-  EXPECT_THAT(NumSignificantDims(tensor_buffer), Eq(2));
+  EXPECT_THAT(NumSignificantDims(tensor_buffer), IsOkAndHolds(Eq(2)));
   LITERT_ASSERT_OK_AND_ASSIGN(tensor_buffer,
                               CreateTensorBuffer<int8_t>({1, 1, 5}));
-  EXPECT_THAT(NumSignificantDims(tensor_buffer), Eq(1));
+  EXPECT_THAT(NumSignificantDims(tensor_buffer), IsOkAndHolds(Eq(1)));
 }
 
 TEST(TensorBufferUtilTest, TensorBufferDims) {
   LITERT_ASSERT_OK_AND_ASSIGN(auto tensor_buffer,
                               CreateTensorBuffer<int8_t>({2, 5}));
-  EXPECT_THAT(TensorBufferDims(tensor_buffer), ElementsAre(2, 5));
+  EXPECT_THAT(TensorBufferDims(tensor_buffer), IsOkAndHolds(ElementsAre(2, 5)));
   LITERT_ASSERT_OK_AND_ASSIGN(tensor_buffer,
                               CreateTensorBuffer<int8_t>({2, 1, 5}));
-  EXPECT_THAT(TensorBufferDims(tensor_buffer), ElementsAre(2, 1, 5));
+  EXPECT_THAT(TensorBufferDims(tensor_buffer),
+              IsOkAndHolds(ElementsAre(2, 1, 5)));
   LITERT_ASSERT_OK_AND_ASSIGN(tensor_buffer,
                               CreateTensorBuffer<int8_t>({1, 1, 5}));
-  EXPECT_THAT(TensorBufferDims(tensor_buffer), ElementsAre(1, 1, 5));
+  EXPECT_THAT(TensorBufferDims(tensor_buffer),
+              IsOkAndHolds(ElementsAre(1, 1, 5)));
 }
 
 TEST(TensorBufferUtilTest, CopyTensorBuffer) {
@@ -66,7 +69,7 @@ TEST(TensorBufferUtilTest, CopyTensorBuffer) {
 
   LITERT_ASSERT_OK_AND_ASSIGN(auto copy, CopyTensorBuffer(env, tensor_buffer));
 
-  EXPECT_THAT(TensorBufferDims(copy), ElementsAre(5));
+  EXPECT_THAT(TensorBufferDims(copy), IsOkAndHolds(ElementsAre(5)));
   LITERT_ASSERT_OK_AND_ASSIGN(auto copy_data,
                               CopyFromTensorBuffer<int8_t>(copy));
   EXPECT_THAT(copy_data, ElementsAre(1, 2, 3, 4, 5));

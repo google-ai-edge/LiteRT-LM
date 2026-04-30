@@ -66,5 +66,10 @@ ABSL_DECLARE_FLAG(bool, cache_compiled_shaders_only);
 ABSL_DECLARE_FLAG(std::string, constraint_regex);
 ABSL_DECLARE_FLAG(bool, use_submodel);
 ABSL_DECLARE_FLAG(bool, enable_speculative_decoding);
+ABSL_DECLARE_FLAG(bool, enable_neon_for_npu_greedy_sampling);
+ABSL_DECLARE_FLAG(bool, use_hw_masking_for_npu);
+ABSL_DECLARE_FLAG(bool, use_hw_cache_update_for_npu);
+ABSL_DECLARE_FLAG(bool, use_hw_ple_for_npu);
+ABSL_DECLARE_FLAG(bool, enable_npu_debug_logging);
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_RUNTIME_ENGINE_SHARED_FLAGS_H_

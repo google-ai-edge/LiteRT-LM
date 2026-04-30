@@ -58,6 +58,16 @@ std::ostream& operator<<(std::ostream& os, const CpuConfig& config) {
   return os;
 }
 
+std::ostream& operator<<(std::ostream& os, const NpuConfig& config) {
+  os << "enable_neon_for_npu_greedy_sampling: "
+     << config.enable_neon_for_npu_greedy_sampling << "\n";
+  os << "use_hw_masking_for_npu: " << config.use_hw_masking_for_npu << "\n";
+  os << "use_hw_cache_update_for_npu: " << config.use_hw_cache_update_for_npu
+     << "\n";
+  os << "enable_npu_debug_logging: " << config.enable_npu_debug_logging << "\n";
+  return os;
+}
+
 std::ostream& operator<<(std::ostream& os, const AdvancedSettings& settings) {
   os << "prefill_batch_sizes: ["
      << absl::StrJoin(settings.prefill_batch_sizes, ", ") << "]\n";
@@ -163,6 +173,7 @@ absl::StatusOr<LlmExecutorSettings> LlmExecutorSettings::CreateDefault(
     config.max_top_k = 1;
     settings.SetBackendConfig(config);
   } else if (backend == Backend::NPU) {
+    settings.SetBackendConfig(NpuConfig());
   } else if (backend == Backend::GPU_ARTISAN) {
     settings.SetBackendConfig(GpuArtisanConfig());
   } else {

@@ -49,14 +49,14 @@ absl::StatusOr<T> CombineExecutorDataImpl(std::vector<T>& executor_data) {
   ASSIGN_OR_RETURN(const auto* first_tensor,
                    executor_data[0].GetEmbeddingsPtr());
   LITERT_ASSIGN_OR_RETURN(auto first_tensor_type, first_tensor->TensorType());
-  auto first_tensor_dims = TensorBufferDims(*first_tensor);
+  ASSIGN_OR_RETURN(auto first_tensor_dims, TensorBufferDims(*first_tensor));
   int total_token_num = 0;
   int total_packed_size = 0;
   std::vector<int> combined_token_num;
   for (const auto& executor_data : executor_data) {
     ASSIGN_OR_RETURN(const auto* embeddings_ptr,
                      executor_data.GetEmbeddingsPtr());
-    auto dims = TensorBufferDims(*embeddings_ptr);
+    ASSIGN_OR_RETURN(auto dims, TensorBufferDims(*embeddings_ptr));
     if (dims.size() != 3 && dims.size() != 4) {
       return absl::InvalidArgumentError(
           "The embedding tensor type must have 3 or 4 dimensions.");

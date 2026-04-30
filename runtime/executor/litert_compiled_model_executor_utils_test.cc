@@ -15,10 +15,12 @@
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 
 #include <filesystem>  // NOLINT: Required for path manipulation.
+#include <fstream>
 #include <limits>
 #include <memory>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <gmock/gmock.h>
@@ -32,6 +34,8 @@
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
+#include "litert/cc/options/litert_cpu_options.h"  // from @litert
+#include "litert/cc/options/litert_gpu_options.h"  // from @litert
 #include "litert/test/matchers.h"  // from @litert
 #include "runtime/components/model_resources.h"
 #include "runtime/executor/executor_settings_base.h"
@@ -196,9 +200,9 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
   LITERT_ASSERT_OK_AND_ASSIGN(auto env, ::litert::Environment::Create({}));
   auto layout = ::litert::Layout(::litert::Dimensions({12}));
   RankedTensorType ranked_tensor_type(ElementType::Int32, std::move(layout));
-  auto param_tensor = TensorBuffer::CreateManaged(
-      env, ::litert::TensorBufferType::kHostMemory, ranked_tensor_type,
-      sizeof(int) * 12);
+  auto param_tensor =
+      TensorBuffer::CreateManaged(env, ::litert::TensorBufferType::kHostMemory,
+                                  ranked_tensor_type, sizeof(int) * 12);
   ASSERT_TRUE(param_tensor);
 
   ASSERT_OK(FillSingleBufferCacheParamTensor(*param_tensor, /*start_index=*/5,
@@ -577,6 +581,82 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
                        BuildLiteRtCompiledModelResources(*model_assets));
   ASSERT_NE(model_resources, nullptr);
   ASSERT_OK(model_resources->GetTFLiteModel(ModelType::kTfLitePrefillDecode));
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     SetCpuCacheOptions_WithScopedFile) {
+  LITERT_ASSERT_OK_AND_ASSIGN(auto env, ::litert::Environment::Create({}));
+  LITERT_ASSERT_OK_AND_ASSIGN(auto cpu_options, ::litert::CpuOptions::Create());
+
+  std::string test_file_path =
+      (std::filesystem::path(::testing::TempDir()) / "cpu_cache_test.bin")
+          .string();
+  {
+    std::ofstream touch_file(test_file_path);
+  }
+  ASSERT_OK_AND_ASSIGN(auto scoped_file,
+                       ScopedFile::OpenWritable(test_file_path));
+  auto scoped_file_ptr = std::make_shared<ScopedFile>(std::move(scoped_file));
+
+  std::variant<std::string, std::shared_ptr<litert::lm::ScopedFile>>
+      weight_cache = scoped_file_ptr;
+  ASSERT_OK(SetCpuCacheOptions(weight_cache, "test_prefix", cpu_options));
+
+  auto fd_expected = cpu_options.GetXNNPackWeightCacheFileDescriptor();
+  ASSERT_TRUE(fd_expected.HasValue());
+  EXPECT_GT(fd_expected.Value(), 0);
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     SetCpuCacheOptions_WithWeightCacheFile) {
+  LITERT_ASSERT_OK_AND_ASSIGN(auto env, ::litert::Environment::Create({}));
+  LITERT_ASSERT_OK_AND_ASSIGN(auto cpu_options, ::litert::CpuOptions::Create());
+
+  std::variant<std::string, std::shared_ptr<litert::lm::ScopedFile>>
+      weight_cache = "weight_cache.bin";
+  ASSERT_OK(SetCpuCacheOptions(weight_cache, "test_prefix", cpu_options));
+
+  auto path_expected = cpu_options.GetXNNPackWeightCachePath();
+  ASSERT_TRUE(path_expected.HasValue());
+  EXPECT_EQ(path_expected.Value(), "weight_cache.bin");
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest, SetCpuCacheOptions_WithoutCache) {
+  LITERT_ASSERT_OK_AND_ASSIGN(auto env, ::litert::Environment::Create({}));
+  LITERT_ASSERT_OK_AND_ASSIGN(auto cpu_options, ::litert::CpuOptions::Create());
+
+  ASSERT_OK(SetCpuCacheOptions(absl::NotFoundError("No cache file"),
+                               "test_prefix", cpu_options));
+
+  auto path_expected = cpu_options.GetXNNPackWeightCachePath();
+  ASSERT_TRUE(path_expected.HasValue());
+  EXPECT_TRUE(path_expected.Value().empty());
+
+  auto fd_expected = cpu_options.GetXNNPackWeightCacheFileDescriptor();
+  ASSERT_TRUE(fd_expected.HasValue());
+  EXPECT_EQ(fd_expected.Value(), -1);
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest, SetGpuCacheOptions_Nocache) {
+  LITERT_ASSERT_OK_AND_ASSIGN(auto env, ::litert::Environment::Create({}));
+  LITERT_ASSERT_OK_AND_ASSIGN(auto gpu_options, ::litert::GpuOptions::Create());
+
+  auto model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "google3/runtime/testdata/test_lm.task";
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(model_path.string()));
+
+  class StubExecutorSettings : public ExecutorSettingsBase {
+   public:
+    explicit StubExecutorSettings(const ModelAssets& model_assets)
+        : ExecutorSettingsBase(model_assets) {}
+  };
+  StubExecutorSettings executor_settings(model_assets);
+
+  ASSERT_OK(SetGpuCacheOptions(
+      ":nocache", absl::NotFoundError("No program cache"), executor_settings,
+      "test_key", "test_prefix", gpu_options));
 }
 
 }  // namespace

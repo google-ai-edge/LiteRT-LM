@@ -292,6 +292,7 @@ cc_library(
     hdrs = ["stb_image_preprocessor.h"],
     deps = [
         ":image_preprocessor",
+        ":image_preprocessor_utils",
         "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/log:absl_log",
@@ -332,5 +333,29 @@ cc_test(
         "@litert//litert/cc:litert_tensor_buffer_types",
         "//runtime/engine:io_types",
         "//runtime/util:test_utils",
+    ],
+)
+
+cc_library(
+    name = "image_preprocessor_utils",
+    srcs = ["image_preprocessor_utils.cc"],
+    hdrs = ["image_preprocessor_utils.h"],
+    deps = [
+        ":image_preprocessor",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+    ],
+)
+
+cc_test(
+    name = "image_preprocessor_utils_test",
+    srcs = ["image_preprocessor_utils_test.cc"],
+    deps = [
+        ":image_preprocessor",
+        ":image_preprocessor_utils",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
     ],
 )

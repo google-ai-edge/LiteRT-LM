@@ -23,6 +23,7 @@ pytype_strict_binary(
         "@absl_py//absl:app",
         "@absl_py//absl/flags",
     ],
+    imports = ["../.."],
 )
 
 pytype_strict_binary(
@@ -34,4 +35,5 @@ pytype_strict_binary(
         "@absl_py//absl:app",
         "@absl_py//absl/flags",
     ],
+    imports = ["../.."],
 )

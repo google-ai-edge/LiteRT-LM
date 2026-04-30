@@ -14,6 +14,7 @@
 
 """Unit tests for the main litert-lm CLI."""
 
+import os
 import unittest.mock
 
 from absl.testing import absltest
@@ -110,6 +111,42 @@ class MainTest(absltest.TestCase):
     self.assertTrue(any("Escape" in k and "ControlM" in k for k in keys))
     self.assertTrue(any("ControlC" in k for k in keys))
 
+  def test_run_sampling_flags(self):
+    with unittest.mock.patch(
+        "litert_lm_cli.model.Model.from_model_reference",
+        autospec=True,
+    ) as mock_from_model_ref:
+      mock_model = unittest.mock.MagicMock()
+      mock_from_model_ref.return_value = mock_model
+      mock_model.exists.return_value = True
+
+      runner = CliRunner()
+      result = runner.invoke(
+          main.cli,
+          [
+              "run",
+              "my-model",
+              "--prompt",
+              "hi",
+              "--top-k",
+              "10",
+              "--top-p",
+              "0.9",
+              "--temperature",
+              "0.8",
+              "--seed",
+              "42",
+          ],
+      )
+
+      self.assertEqual(result.exit_code, 0)
+      mock_model.run_interactive.assert_called_once()
+      kwargs = mock_model.run_interactive.call_args.kwargs
+      self.assertEqual(kwargs["top_k"], 10)
+      self.assertEqual(kwargs["top_p"], 0.9)
+      self.assertEqual(kwargs["temperature"], 0.8)
+      self.assertEqual(kwargs["seed"], 42)
+
   def test_run_no_template_flag(self):
     runner = CliRunner()
     # Test that --no-template is a valid option for the run command.
@@ -117,6 +154,255 @@ class MainTest(absltest.TestCase):
     result = runner.invoke(main.cli, ["run", "--help"])
     self.assertEqual(result.exit_code, 0)
     self.assertIn("--no-template", result.output)
+
+  @unittest.mock.patch(
+      "litert_lm_cli.model.Model.from_model_reference"
+  )
+  def test_run_with_vision_and_audio_backends(self, mock_from_model_ref):
+    mock_model = unittest.mock.MagicMock()
+    mock_from_model_ref.return_value = mock_model
+    mock_model.exists.return_value = True
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main.cli,
+        [
+            "run",
+            "my-model",
+            "--vision-backend",
+            "gpu",
+            "--audio-backend",
+            "cpu",
+            "--prompt",
+            "Hi",
+        ],
+    )
+
+    self.assertEqual(result.exit_code, 0)
+    mock_model.run_interactive.assert_called_once()
+    kwargs = mock_model.run_interactive.call_args.kwargs
+    self.assertEqual(kwargs["vision_backend"], "gpu")
+    self.assertEqual(kwargs["audio_backend"], "cpu")
+
+  @unittest.mock.patch(
+      "litert_lm_cli.model.Model.from_model_reference"
+  )
+  def test_run_with_default_backends(self, mock_from_model_ref):
+    mock_model = unittest.mock.MagicMock()
+    mock_from_model_ref.return_value = mock_model
+    mock_model.exists.return_value = True
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main.cli,
+        [
+            "run",
+            "my-model",
+            "--prompt",
+            "Hi",
+        ],
+    )
+
+    self.assertEqual(result.exit_code, 0)
+    mock_model.run_interactive.assert_called_once()
+    kwargs = mock_model.run_interactive.call_args.kwargs
+    self.assertIsNone(kwargs["vision_backend"])
+    self.assertIsNone(kwargs["audio_backend"])
+
+  @unittest.mock.patch("os.path.expanduser")
+  @unittest.mock.patch(
+      "litert_lm_cli.model.Model.from_model_reference"
+  )
+  def test_run_with_attachments(self, mock_from_model_ref, mock_expanduser):
+    mock_model = unittest.mock.MagicMock()
+    mock_from_model_ref.return_value = mock_model
+    mock_model.exists.return_value = True
+    # Mock expanduser to return the path as is, or a fake expanded path
+    mock_expanduser.side_effect = lambda x: x.replace("~", "/home/user")
+
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+      # We need to make sure the "expanded" path exists for the check in main.py
+      # Since we are in an isolated filesystem, we'll just use simple names
+      with open("image.jpg", "w") as f:
+        f.write("image content")
+
+      # For tilde expansion test, we mock os.path.exists as well if needed,
+      # or just use paths that will exist.
+      with unittest.mock.patch("os.path.exists", return_value=True):
+        result = runner.invoke(
+            main.cli,
+            [
+                "run",
+                "my-model",
+                "--vision-backend",
+                "gpu",
+                "--audio-backend",
+                "cpu",
+                "--attachment",
+                "~/audio.wav",
+                "--attachment",
+                "image.jpg",
+                "--prompt",
+                "Hi",
+            ],
+        )
+
+    self.assertEqual(result.exit_code, 0)
+    mock_model.run_interactive.assert_called_once()
+    kwargs = mock_model.run_interactive.call_args.kwargs
+    self.assertEqual(kwargs["vision_backend"], "gpu")
+    self.assertEqual(kwargs["audio_backend"], "cpu")
+    self.assertEqual(
+        kwargs["attachments"], ("/home/user/audio.wav", "image.jpg")
+    )
+
+  @unittest.mock.patch("os.path.exists", return_value=True)
+  @unittest.mock.patch(
+      "litert_lm_cli.model.Model.from_model_reference"
+  )
+  def test_run_with_audio_attachment_missing_backend(
+      self, mock_from_model_ref, mock_exists
+  ):
+    mock_model = unittest.mock.MagicMock()
+    mock_from_model_ref.return_value = mock_model
+    mock_model.exists.return_value = True
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main.cli,
+        [
+            "run",
+            "my-model",
+            "--attachment",
+            "audio.wav",
+            "--prompt",
+            "Hi",
+        ],
+    )
+
+    self.assertEqual(result.exit_code, 0)
+    self.assertIn(
+        "Error: Audio attachments require --audio-backend to be set.",
+        result.output,
+    )
+    mock_model.run_interactive.assert_not_called()
+
+  @unittest.mock.patch("os.path.exists", return_value=True)
+  @unittest.mock.patch(
+      "litert_lm_cli.model.Model.from_model_reference"
+  )
+  def test_run_with_image_attachment_missing_backend(
+      self, mock_from_model_ref, mock_exists
+  ):
+    mock_model = unittest.mock.MagicMock()
+    mock_from_model_ref.return_value = mock_model
+    mock_model.exists.return_value = True
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main.cli,
+        [
+            "run",
+            "my-model",
+            "--attachment",
+            "image.jpg",
+            "--prompt",
+            "Hi",
+        ],
+    )
+
+    self.assertEqual(result.exit_code, 0)
+    self.assertIn(
+        "Error: Image attachments require --vision-backend to be set.",
+        result.output,
+    )
+    mock_model.run_interactive.assert_not_called()
+
+  @unittest.mock.patch("os.path.exists", return_value=True)
+  @unittest.mock.patch(
+      "litert_lm_cli.model.Model.from_model_reference"
+  )
+  def test_run_with_unsupported_attachment_type(
+      self, mock_from_model_ref, mock_exists
+  ):
+    mock_model = unittest.mock.MagicMock()
+    mock_from_model_ref.return_value = mock_model
+    mock_model.exists.return_value = True
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main.cli,
+        [
+            "run",
+            "my-model",
+            "--attachment",
+            "test.txt",
+            "--prompt",
+            "Hi",
+        ],
+    )
+
+    self.assertNotEqual(result.exit_code, 0)
+    self.assertIn("Unsupported attachment type", result.output)
+    mock_model.run_interactive.assert_not_called()
+
+  @unittest.mock.patch("os.path.exists", return_value=False)
+  @unittest.mock.patch(
+      "litert_lm_cli.model.Model.from_model_reference"
+  )
+  def test_run_with_non_existent_attachment(
+      self, mock_from_model_ref, mock_exists
+  ):
+    mock_model = unittest.mock.MagicMock()
+    mock_from_model_ref.return_value = mock_model
+    mock_model.exists.return_value = True
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main.cli,
+        [
+            "run",
+            "my-model",
+            "--attachment",
+            "ghost.jpg",
+            "--prompt",
+            "Hi",
+        ],
+    )
+
+    self.assertNotEqual(result.exit_code, 0)
+    self.assertIn("File 'ghost.jpg' does not exist.", result.output)
+    mock_model.run_interactive.assert_not_called()
+
+  @unittest.mock.patch(
+      "litert_lm_cli.model.Model.from_model_reference"
+  )
+  def test_run_with_attachments_and_no_template(self, mock_from_model_ref):
+    mock_model = unittest.mock.MagicMock()
+    mock_from_model_ref.return_value = mock_model
+    mock_model.exists.return_value = True
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main.cli,
+        [
+            "run",
+            "my-model",
+            "--attachment",
+            "image.jpg",
+            "--no-template",
+            "--prompt",
+            "Hi",
+        ],
+    )
+
+    self.assertEqual(result.exit_code, 0)
+    self.assertIn(
+        "Error: Attachments are not supported with --no-template.",
+        result.output,
+    )
+    mock_model.run_interactive.assert_not_called()
 
 
 if __name__ == "__main__":

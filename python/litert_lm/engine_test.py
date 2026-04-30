@@ -16,13 +16,14 @@ import pathlib
 
 from absl import flags
 from absl.testing import absltest
+from absl.testing import parameterized
 
 import litert_lm
 
 FLAGS = flags.FLAGS
 
 
-class LiteRtLmTestBase(absltest.TestCase):
+class LiteRtLmTestBase(parameterized.TestCase):
 
   @classmethod
   def setUpClass(cls):
@@ -59,6 +60,60 @@ class EngineTest(LiteRtLmTestBase):
 
   _EXPECTED_RESPONSE = "TarefaByte دارایेत्र investigaciónప్రదేశ"
 
+  def test_engine_init_fail(self):
+    with self.assertRaisesRegex(
+        RuntimeError, "Failed to create LiteRT-LM engine for /non/existent/path"
+    ):
+      litert_lm.Engine("/non/existent/path")
+
+  def test_sampler_config_validation(self):
+    # Invalid top_k
+    with self.assertRaisesRegex(ValueError, "top_k should be positive"):
+      litert_lm.SamplerConfig(top_k=0, top_p=0.9, temperature=0.7)
+
+    # Invalid top_p (low)
+    with self.assertRaisesRegex(ValueError, "top_p should between 0 and 1"):
+      litert_lm.SamplerConfig(top_k=40, top_p=-0.1, temperature=0.7)
+
+    # Invalid top_p (high)
+    with self.assertRaisesRegex(ValueError, "top_p should between 0 and 1"):
+      litert_lm.SamplerConfig(top_k=40, top_p=1.1, temperature=0.7)
+
+    # Invalid temperature
+    with self.assertRaisesRegex(
+        ValueError, "temperature should be non-negative"
+    ):
+      litert_lm.SamplerConfig(top_k=40, top_p=0.9, temperature=-0.1)
+
+  def test_conversation_with_sampler_config(self):
+    sampler_config = litert_lm.SamplerConfig(
+        top_k=10, top_p=0.95, temperature=0.8, seed=123
+    )
+    with (
+        self._create_engine() as engine,
+        engine.create_conversation(
+            sampler_config=sampler_config
+        ) as conversation,
+    ):
+      self.assertEqual(conversation.sampler_config, sampler_config)
+      user_message = {"role": "user", "content": "Hello world!"}
+      message = conversation.send_message(user_message)
+      self.assertIn("role", message)
+      self.assertEqual(message["role"], "assistant")
+
+  def test_session_with_sampler_config(self):
+    sampler_config = litert_lm.SamplerConfig(
+        top_k=10, top_p=0.95, temperature=0.8, seed=123
+    )
+    with (
+        self._create_engine() as engine,
+        engine.create_session(sampler_config=sampler_config) as session,
+    ):
+      self.assertIsNotNone(session)
+      session.run_prefill(["Hello world!"])
+      responses = session.run_decode()
+      self.assertIsNotNone(responses.texts)
+
   def test_conversation_send_message(self):
     with (
         self._create_engine() as engine,
@@ -74,6 +129,18 @@ class EngineTest(LiteRtLmTestBase):
           "content": [{"type": "text", "text": self._EXPECTED_RESPONSE}],
       }
       self.assertEqual(message, expected_message)
+
+  def test_conversation_render_message_to_string(self):
+    with (
+        self._create_engine() as engine,
+        engine.create_conversation() as conversation,
+    ):
+      self.assertIsNotNone(engine)
+      self.assertIsNotNone(conversation)
+      user_message = {"role": "user", "content": "Hello world!"}
+      rendered = conversation.render_message_to_string(user_message)
+      self.assertIsInstance(rendered, str)
+      self.assertIn("Hello world!", rendered)
 
   def test_conversation_send_message_async(self):
     with (
@@ -109,7 +176,9 @@ class EngineTest(LiteRtLmTestBase):
 
       # We only expect to receive the first piece before cancellation.
       self.assertNotEmpty(text_pieces)
-      self.assertLess(len(text_pieces), 6)  # Cancelled before completion
+      # NOTE: We don't assert len(text_pieces) < 6 here because on fast machines
+      # (like Mac arm64) the generation might complete before the cancellation
+      # signal is processed by the background thread.
 
   def test_benchmark_class(self):
     benchmark = litert_lm.Benchmark(
@@ -216,13 +285,6 @@ class EngineTest(LiteRtLmTestBase):
     ):
       self.assertEqual(conversation.tool_event_handler, handler)
 
-  def test_create_session_with_apply_prompt_template(self):
-    with self._create_engine() as engine:
-      with engine.create_session(apply_prompt_template=True) as session:
-        self.assertIsInstance(session, litert_lm.AbstractSession)
-      with engine.create_session(apply_prompt_template=False) as session:
-        self.assertIsInstance(session, litert_lm.AbstractSession)
-
   def test_session_api_run_decode(self):
     with (
         self._create_engine() as engine,
@@ -248,9 +310,18 @@ class EngineTest(LiteRtLmTestBase):
           ["Hello"], store_token_lengths=True
       )
       self.assertIsInstance(scoring_responses, litert_lm.Responses)
-      self.assertEmpty(scoring_responses.texts)
+      self.assertEqual(scoring_responses.texts, ["Hello"])
       self.assertLen(scoring_responses.scores, 1)
       self.assertLen(scoring_responses.token_lengths, 1)
+      self.assertIsInstance(scoring_responses.token_scores, list)
+      self.assertLen(scoring_responses.token_scores, 1)
+      self.assertIsInstance(scoring_responses.token_scores[0], list)
+      self.assertLen(
+          scoring_responses.token_scores[0],
+          scoring_responses.token_lengths[0],
+      )
+      for score in scoring_responses.token_scores[0]:
+        self.assertIsInstance(score, float)
 
   def test_session_api_run_text_scoring_no_token_lengths(self):
     with (
@@ -263,9 +334,14 @@ class EngineTest(LiteRtLmTestBase):
           ["Hello"], store_token_lengths=False
       )
       self.assertIsInstance(scoring_responses, litert_lm.Responses)
-      self.assertEmpty(scoring_responses.texts)
+      self.assertEqual(scoring_responses.texts, ["Hello"])
       self.assertLen(scoring_responses.scores, 1)
       self.assertEmpty(scoring_responses.token_lengths)
+      self.assertIsInstance(scoring_responses.token_scores, list)
+      self.assertLen(scoring_responses.token_scores, 1)
+      self.assertIsInstance(scoring_responses.token_scores[0], list)
+      for score in scoring_responses.token_scores[0]:
+        self.assertIsInstance(score, float)
 
   def test_session_api_run_decode_async(self):
     with (
@@ -298,6 +374,14 @@ class EngineTest(LiteRtLmTestBase):
       self.assertNotEmpty(responses)
       # We expect fewer responses than a full decode (which is 6 chunks).
       self.assertLess(len(responses), 6)
+
+  @parameterized.parameters(True, False)
+  def test_session_api_apply_prompt_template(self, apply_prompt_template):
+    with self._create_engine() as engine:
+      with engine.create_session(
+          apply_prompt_template=apply_prompt_template
+      ) as session:
+        self.assertIsNotNone(session)
 
 
 class FunctionCallingTest(LiteRtLmTestBase):

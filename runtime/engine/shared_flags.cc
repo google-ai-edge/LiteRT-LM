@@ -144,3 +144,12 @@ ABSL_FLAG(bool, use_submodel, false,
           "Whether the submodel should be used if available.");
 ABSL_FLAG(bool, enable_speculative_decoding, false,
           "Whether to use speculative decoding.");
+ABSL_FLAG(bool, enable_neon_for_npu_greedy_sampling, true,
+          "If true, enable NEON for NPU greedy sampling.");
+ABSL_FLAG(bool, use_hw_masking_for_npu, true,
+          "If true, use HW masking for NPU.");
+ABSL_FLAG(bool, use_hw_cache_update_for_npu, true,
+          "If true, use HW cache update for NPU.");
+ABSL_FLAG(bool, use_hw_ple_for_npu, true, "If true, use HW PLE for NPU.");
+ABSL_FLAG(bool, enable_npu_debug_logging, false,
+          "If true, enable debug logging for NPU.");

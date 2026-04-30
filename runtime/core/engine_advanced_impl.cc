@@ -32,6 +32,7 @@
 #include "absl/time/clock.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "litert/cc/litert_environment.h"  // from @litert
+#include "litert/cc/litert_environment_options.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "runtime/components/model_resources.h"
 #include "runtime/components/tokenizer.h"
@@ -51,8 +52,11 @@
 #include "runtime/executor/vision_executor_settings.h"
 #include "runtime/executor/vision_executor_utils.h"
 #include "runtime/framework/resource_management/execution_manager.h"
+#include "runtime/framework/resource_management/serial_execution_manager.h"
+#include "runtime/framework/resource_management/threaded_execution_manager.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/proto/sampler_params.pb.h"
+#include "runtime/util/logging.h"
 #include "runtime/util/status_macros.h"  // NOLINT
 
 namespace litert::lm {
@@ -69,7 +73,12 @@ absl::StatusOr<Environment&> GetEnvironment(EngineSettings& engine_settings,
   static absl::NoDestructor<MagicNumberConfigsHelper> helper;
   static absl::NoDestructor<absl::StatusOr<Environment>> kEnvironment(
       [&]() -> absl::StatusOr<Environment> {
-        std::vector<Environment::Option> env_options;
+        std::vector<EnvironmentOptions::Option> env_options;
+        if (auto severity = GetMinLogSeverity()) {
+          env_options.push_back(::litert::EnvironmentOptions::Option{
+              ::litert::EnvironmentOptions::Tag::kMinLoggerSeverity,
+              ToLiteRtLogSeverityInt8(*severity)});
+        }
         const auto& main_executor_settings =
             engine_settings.GetMainExecutorSettings();
 
@@ -89,8 +98,8 @@ absl::StatusOr<Environment&> GetEnvironment(EngineSettings& engine_settings,
 #else
           if (!main_executor_settings.GetLitertDispatchLibDir().empty()) {
             // If the dispatch library directory is provided, use it.
-            env_options.push_back(::litert::Environment::Option{
-                ::litert::Environment::OptionTag::DispatchLibraryDir,
+            env_options.push_back(::litert::EnvironmentOptions::Option{
+                ::litert::EnvironmentOptions::Tag::kDispatchLibraryDir,
                 main_executor_settings.GetLitertDispatchLibDir()});
             ABSL_LOG(INFO) << "Setting dispatch library path from "
                               "main_executor_settings: "
@@ -107,8 +116,8 @@ absl::StatusOr<Environment&> GetEnvironment(EngineSettings& engine_settings,
             if (!kDispatchLibraryPath->empty()) {
               ABSL_LOG(INFO)
                   << "Setting dispatch library path: " << *kDispatchLibraryPath;
-              env_options.push_back(::litert::Environment::Option{
-                  ::litert::Environment::OptionTag::DispatchLibraryDir,
+              env_options.push_back(::litert::EnvironmentOptions::Option{
+                  ::litert::EnvironmentOptions::Tag::kDispatchLibraryDir,
                   absl::string_view(*kDispatchLibraryPath)});
             } else {
               ABSL_LOG(INFO) << "No dispatch library path provided.";
@@ -116,7 +125,8 @@ absl::StatusOr<Environment&> GetEnvironment(EngineSettings& engine_settings,
           }
 #endif  // defined(LITERT_DISABLE_NPU)
         }
-        LITERT_ASSIGN_OR_RETURN(auto env, Environment::Create(env_options));
+        LITERT_ASSIGN_OR_RETURN(
+            auto env, Environment::Create(EnvironmentOptions(env_options)));
         return std::move(env);
       }());
   if (!kEnvironment->ok()) {
@@ -130,7 +140,10 @@ absl::StatusOr<Environment&> GetEnvironment(EngineSettings& engine_settings,
 class EngineAdvancedImpl : public Engine {
  public:
   ~EngineAdvancedImpl() override {
-    ABSL_QCHECK_OK(WaitUntilDone(Engine::kDefaultTimeout));
+    auto status = WaitUntilDone(Engine::kDefaultTimeout);
+    if (!status.ok()) {
+      ABSL_LOG(ERROR) << "Failed to wait for engine to finish: " << status;
+    }
   }
 
   static absl::StatusOr<std::unique_ptr<Engine>> Create(
@@ -164,7 +177,10 @@ class EngineAdvancedImpl : public Engine {
     // class.
     RETURN_IF_ERROR(config.MaybeUpdateAndValidate(engine_settings_));
 
-    ABSL_CHECK(litert_model_resources_ != nullptr);
+    if (litert_model_resources_ == nullptr) {
+      return absl::FailedPreconditionError(
+          "Model resources are not initialized.");
+    }
 
     ASSIGN_OR_RETURN(
         auto session,
@@ -372,12 +388,22 @@ absl::StatusOr<std::unique_ptr<Engine>> EngineAdvancedImpl::Create(
     RETURN_IF_ERROR(benchmark_info->InitPhaseRecord(
         BenchmarkInfo::InitPhase::kTokenizer, tokenizer_duration));
   }
-  ASSIGN_OR_RETURN(
-      auto execution_manager,
-      ExecutionManager::Create(
-          tokenizer.get(), model_resources.get(), std::move(executor),
-          std::move(vision_executor_settings_ptr),
-          std::move(audio_executor_settings_ptr), &litert_env));
+  std::unique_ptr<ExecutionManager> execution_manager;
+  if (!engine_settings.GetSingleThreadedExecution()) {
+    ASSIGN_OR_RETURN(
+        execution_manager,
+        ThreadedExecutionManager::Create(
+            tokenizer.get(), model_resources.get(), std::move(executor),
+            std::move(vision_executor_settings_ptr),
+            std::move(audio_executor_settings_ptr), &litert_env));
+  } else {
+    ASSIGN_OR_RETURN(
+        execution_manager,
+        SerialExecutionManager::Create(
+            tokenizer.get(), model_resources.get(), std::move(executor),
+            std::move(vision_executor_settings_ptr),
+            std::move(audio_executor_settings_ptr), &litert_env));
+  }
 
   if (benchmark_info.has_value()) {
     RETURN_IF_ERROR(

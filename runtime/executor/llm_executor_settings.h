@@ -111,6 +111,24 @@ struct CpuConfig {
 };
 std::ostream& operator<<(std::ostream& os, const CpuConfig& config);
 
+struct NpuConfig {
+  // Whether to use NEON optimizations for greedy sampling on NPU.
+  bool enable_neon_for_npu_greedy_sampling = true;
+
+  // Whether to use manual mask update logic on NPU.
+  bool use_hw_masking_for_npu = true;
+
+  // Whether to use manual KV-cache update logic on NPU.
+  bool use_hw_cache_update_for_npu = true;
+
+  // Whether to use manual per-layer embedding lookup on NPU.
+  bool use_hw_ple_for_npu = true;
+
+  // Whether enable debug logging for NPU.
+  bool enable_npu_debug_logging = false;
+};
+std::ostream& operator<<(std::ostream& os, const NpuConfig& config);
+
 // Optional advanced settings for the LLM executor.
 struct AdvancedSettings {
   // Ordered set of the maximum number of prefill tokens processed at once when
@@ -321,8 +339,8 @@ class LlmExecutorSettings : public ExecutorSettingsBase {
     return absl::InvalidArgumentError("Backend config is not valid.");
   }
 
-  void SetBackendConfig(
-      const std::variant<GpuArtisanConfig, GpuConfig, CpuConfig>& config) {
+  void SetBackendConfig(const std::variant<GpuArtisanConfig, GpuConfig,
+                                           CpuConfig, NpuConfig>& config) {
     backend_config_ = config;
   }
 
@@ -368,7 +386,8 @@ class LlmExecutorSettings : public ExecutorSettingsBase {
   uint32_t lora_rank_ = 0;
 
   // Backend specific config.
-  std::variant<GpuArtisanConfig, GpuConfig, CpuConfig> backend_config_;
+  std::variant<GpuArtisanConfig, GpuConfig, CpuConfig, NpuConfig>
+      backend_config_;
 
   // Backend to use for sampling.
   Backend sampler_backend_ = Backend::UNSPECIFIED;

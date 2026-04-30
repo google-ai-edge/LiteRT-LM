@@ -139,7 +139,6 @@ jobs:
             //runtime/engine:litert_lm_main \
             -- \
             -//python/... \
-            -//schema/py:* \
             -//kotlin/...
 
       - name: Update litert_lm_main prebuilt for iOS Simulator if new version tag is pushed.

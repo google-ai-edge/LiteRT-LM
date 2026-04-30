@@ -19,6 +19,8 @@
 #include <ostream>
 #include <string>
 #include <utility>
+#include <variant>
+#include <vector>
 
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
@@ -33,6 +35,14 @@ class AudioExecutorSettings : public ExecutorSettingsBase {
   static absl::StatusOr<AudioExecutorSettings> CreateDefault(
       const ModelAssets& model_assets, int max_sequence_length, Backend backend,
       bool bundled_with_main_model = true);
+
+  // Suffix constants
+  static constexpr absl::string_view kStaticEncoderName =
+      ".static_audio_encoder";
+  static constexpr absl::string_view kStreamingEncoderName =
+      ".streaming_audio_encoder";
+  static constexpr absl::string_view kAdapterName = ".audio_adapter";
+  static constexpr absl::string_view kEncoderName = ".audio_encoder";
 
   // Getter for max_sequence_length.
   int GetMaxSequenceLength() const;
@@ -73,14 +83,45 @@ class AudioExecutorSettings : public ExecutorSettingsBase {
     scoped_adapter_cache_file_ = std::move(cache_file);
   }
 
+  // Getter for scoped_encoder_program_cache_file.
+  std::shared_ptr<litert::lm::ScopedFile> GetScopedEncoderProgramCacheFile()
+      const {
+    return scoped_encoder_program_cache_file_;
+  }
+
+  // Setter for scoped_encoder_program_cache_file.
+  void SetScopedEncoderProgramCacheFile(
+      std::shared_ptr<litert::lm::ScopedFile> cache_file) {
+    scoped_encoder_program_cache_file_ = std::move(cache_file);
+  }
+
+  // Getter for scoped_adapter_program_cache_file.
+  std::shared_ptr<litert::lm::ScopedFile> GetScopedAdapterProgramCacheFile()
+      const {
+    return scoped_adapter_program_cache_file_;
+  }
+
+  // Setter for scoped_adapter_program_cache_file.
+  void SetScopedAdapterProgramCacheFile(
+      std::shared_ptr<litert::lm::ScopedFile> cache_file) {
+    scoped_adapter_program_cache_file_ = std::move(cache_file);
+  }
+
   // Returns the weight cache file path for the audio encoder or adapter
   // model.
   // Note users should not use the ExecutorSettingsBase::GetWeightCacheFile()
   // method to get the weight cache file for the audio encoder or adapter
   // model, because the base class does not distinguish between the two
   // models.
-  absl::StatusOr<std::string> GetWeightCacheFile(
-      absl::string_view suffix) const;
+  absl::StatusOr<
+      std::variant<std::string, std::shared_ptr<litert::lm::ScopedFile>>>
+  GetWeightCacheFile(absl::string_view suffix,
+                     bool check_and_clean = false) const;
+
+  absl::StatusOr<
+      std::variant<std::string, std::shared_ptr<litert::lm::ScopedFile>>>
+  GetProgramCacheFile(absl::string_view suffix,
+                      bool check_and_clean = false) const;
 
  private:
   explicit AudioExecutorSettings(const ModelAssets& model_assets,
@@ -98,6 +139,12 @@ class AudioExecutorSettings : public ExecutorSettingsBase {
 
   // The cache file to use for the audio adapter model.
   std::shared_ptr<litert::lm::ScopedFile> scoped_adapter_cache_file_;
+
+  // The program cache file to use for the audio encoder model.
+  std::shared_ptr<litert::lm::ScopedFile> scoped_encoder_program_cache_file_;
+
+  // The program cache file to use for the audio adapter model.
+  std::shared_ptr<litert::lm::ScopedFile> scoped_adapter_program_cache_file_;
 };
 
 std::ostream& operator<<(std::ostream& os,

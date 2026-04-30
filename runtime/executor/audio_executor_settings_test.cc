@@ -13,12 +13,15 @@
 // limitations under the License.
 
 #include "runtime/executor/audio_executor_settings.h"
+#include <memory>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
 #include "runtime/executor/executor_settings_base.h"
+#include "litert/cc/internal/scoped_file.h"  // from @litert
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
+
 
 namespace litert::lm {
 namespace {
@@ -78,5 +81,88 @@ TEST(AudioExecutorSettingsTest, CreateDefaultWithInvalidBackend) {
       StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
+TEST(AudioExecutorSettingsTest, GetAndSetBundledWithMainModel) {
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets, ModelAssets::Create(""));
+  ASSERT_OK_AND_ASSIGN(AudioExecutorSettings settings,
+                       AudioExecutorSettings::CreateDefault(
+                           model_assets, 10, Backend::GPU_ARTISAN));
+  EXPECT_TRUE(settings.GetBundledWithMainModel());
+  settings.SetBundledWithMainModel(false);
+  EXPECT_FALSE(settings.GetBundledWithMainModel());
+}
+
+TEST(AudioExecutorSettingsTest, GetAndSetScopedFiles) {
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets, ModelAssets::Create(""));
+  ASSERT_OK_AND_ASSIGN(AudioExecutorSettings settings,
+                       AudioExecutorSettings::CreateDefault(
+                           model_assets, 10, Backend::GPU_ARTISAN));
+
+  auto encoder_cache = std::make_shared<litert::ScopedFile>();
+  auto adapter_cache = std::make_shared<litert::ScopedFile>();
+  auto encoder_program = std::make_shared<litert::ScopedFile>();
+  auto adapter_program = std::make_shared<litert::ScopedFile>();
+
+  settings.SetScopedEncoderCacheFile(encoder_cache);
+  settings.SetScopedAdapterCacheFile(adapter_cache);
+  settings.SetScopedEncoderProgramCacheFile(encoder_program);
+  settings.SetScopedAdapterProgramCacheFile(adapter_program);
+
+  EXPECT_EQ(settings.GetScopedEncoderCacheFile(), encoder_cache);
+  EXPECT_EQ(settings.GetScopedAdapterCacheFile(), adapter_cache);
+  EXPECT_EQ(settings.GetScopedEncoderProgramCacheFile(), encoder_program);
+  EXPECT_EQ(settings.GetScopedAdapterProgramCacheFile(), adapter_program);
+}
+
+TEST(AudioExecutorSettingsTest, GetWeightCacheFile) {
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets, ModelAssets::Create(""));
+  ASSERT_OK_AND_ASSIGN(AudioExecutorSettings settings,
+                       AudioExecutorSettings::CreateDefault(
+                           model_assets, 10, Backend::GPU_ARTISAN));
+
+  auto encoder_cache = std::make_shared<litert::ScopedFile>();
+  auto adapter_cache = std::make_shared<litert::ScopedFile>();
+
+  settings.SetScopedEncoderCacheFile(encoder_cache);
+  settings.SetScopedAdapterCacheFile(adapter_cache);
+
+  ASSERT_OK_AND_ASSIGN(
+      auto result1,
+      settings.GetWeightCacheFile(AudioExecutorSettings::kEncoderName));
+  EXPECT_EQ(std::get<std::shared_ptr<litert::ScopedFile>>(result1),
+            encoder_cache);
+
+  ASSERT_OK_AND_ASSIGN(
+      auto result2,
+      settings.GetWeightCacheFile(AudioExecutorSettings::kAdapterName));
+  EXPECT_EQ(std::get<std::shared_ptr<litert::ScopedFile>>(result2),
+            adapter_cache);
+}
+
+TEST(AudioExecutorSettingsTest, GetProgramCacheFile) {
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets, ModelAssets::Create(""));
+  ASSERT_OK_AND_ASSIGN(AudioExecutorSettings settings,
+                       AudioExecutorSettings::CreateDefault(
+                           model_assets, 10, Backend::GPU_ARTISAN));
+
+  auto encoder_program = std::make_shared<litert::ScopedFile>();
+  auto adapter_program = std::make_shared<litert::ScopedFile>();
+
+  settings.SetScopedEncoderProgramCacheFile(encoder_program);
+  settings.SetScopedAdapterProgramCacheFile(adapter_program);
+
+  ASSERT_OK_AND_ASSIGN(
+      auto result1,
+      settings.GetProgramCacheFile(AudioExecutorSettings::kEncoderName));
+  EXPECT_EQ(std::get<std::shared_ptr<litert::ScopedFile>>(result1),
+            encoder_program);
+
+  ASSERT_OK_AND_ASSIGN(
+      auto result2,
+      settings.GetProgramCacheFile(AudioExecutorSettings::kAdapterName));
+  EXPECT_EQ(std::get<std::shared_ptr<litert::ScopedFile>>(result2),
+            adapter_program);
+}
+
 }  // namespace
 }  // namespace litert::lm
+

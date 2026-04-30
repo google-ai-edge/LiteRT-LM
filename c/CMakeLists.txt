@@ -20,7 +20,6 @@ set(PKG_ROOT ${CMAKE_CURRENT_SOURCE_DIR})
 # ==============================================================================
 add_litertlm_library(c_engine STATIC
   engine.cc
-  litert_lm_logging.cc
 )
 add_library(LiteRTLM::C::Engine ALIAS c_engine)
 

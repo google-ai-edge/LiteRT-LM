@@ -14,6 +14,11 @@
 
 """LiteRT LM is a library for running GenAI models on devices."""
 
+from ._ffi import LogSeverity
+from ._ffi import set_min_log_severity
+from .benchmark import Benchmark
+from .conversation import Conversation
+from .engine import Engine
 from .interfaces import AbstractBenchmark
 from .interfaces import AbstractConversation
 from .interfaces import AbstractEngine
@@ -21,29 +26,11 @@ from .interfaces import AbstractSession
 from .interfaces import Backend
 from .interfaces import BenchmarkInfo
 from .interfaces import Responses
+from .interfaces import SamplerConfig
+from .interfaces import Tool
 from .interfaces import ToolEventHandler
-from .litert_lm_ext import _Benchmark  # pytype: disable=import-error
-from .litert_lm_ext import _Engine  # pytype: disable=import-error
-from .litert_lm_ext import Benchmark  # pytype: disable=import-error
-from .litert_lm_ext import BenchmarkInfo as _BenchmarkInfo  # pytype: disable=import-error
-from .litert_lm_ext import Conversation  # pytype: disable=import-error
-from .litert_lm_ext import Engine  # pytype: disable=import-error
-from .litert_lm_ext import LogSeverity  # pytype: disable=import-error
-from .litert_lm_ext import Session  # pytype: disable=import-error
-from .litert_lm_ext import set_min_log_severity  # pytype: disable=import-error
-from .tools import Tool
+from .session import Session
 from .tools import tool_from_function
-
-# Because the C++ class is created by nanobind and the Python
-# interface is a standard ABC, they cannot easily share a formal
-# inheritance tree across the C++/Python boundary. Instead, we use the
-# register() method in the package's entry point to set the
-# relationship.
-AbstractEngine.register(_Engine)
-AbstractConversation.register(Conversation)
-AbstractBenchmark.register(_Benchmark)
-BenchmarkInfo.register(_BenchmarkInfo)
-AbstractSession.register(Session)
 
 __all__ = (
     "AbstractBenchmark",
@@ -57,6 +44,7 @@ __all__ = (
     "Engine",
     "LogSeverity",
     "Responses",
+    "SamplerConfig",
     "Session",
     "Tool",
     "ToolEventHandler",

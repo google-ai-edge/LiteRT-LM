@@ -173,5 +173,26 @@ TEST(LoggingTest, LogTensorBuffer_Tensor) {
             " [9.9, 10.1], [11.11, 12.12]]] shape=(2, 3, 2)");
 }
 
+TEST(LoggingTest, MinLogSeverity) {
+  // Initially should be nullopt or whatever it was set to by previous tests.
+  // We'll set it and verify.
+  SetMinLogSeverity(LogSeverity::kInfo);
+  auto severity = GetMinLogSeverity();
+  ASSERT_TRUE(severity.has_value());
+  // kLiteRtLogSeverityInfo is usually 1 (check litert_logging.h if unsure,
+  // but we can just check it's consistent).
+  auto info_val = *severity;
+
+  SetMinLogSeverity(LogSeverity::kError);
+  severity = GetMinLogSeverity();
+  ASSERT_TRUE(severity.has_value());
+  EXPECT_NE(*severity, info_val);
+
+  SetMinLogSeverity(LogSeverity::kSilent);
+  severity = GetMinLogSeverity();
+  ASSERT_TRUE(severity.has_value());
+  EXPECT_NE(*severity, info_val);
+}
+
 }  // namespace
 }  // namespace litert::lm
