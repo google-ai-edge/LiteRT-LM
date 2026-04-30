@@ -25,6 +25,7 @@
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/config_registry.h"
 #include "runtime/conversation/model_data_processor/model_data_processor.h"
+#include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/proto/llm_model_type.pb.h"
 
 namespace litert::lm {

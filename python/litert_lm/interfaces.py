@@ -62,6 +62,54 @@ class ToolEventHandler(abc.ABC):
     """
 
 
+class Tool(abc.ABC):
+  """A tool that can be executed."""
+
+  @abc.abstractmethod
+  def get_tool_description(self) -> dict[str, Any]:
+    """Returns a JSON representing the tool in OpenAPI schema."""
+
+  @abc.abstractmethod
+  def execute(self, param: collections.abc.Mapping[str, Any]) -> Any:
+    """Executes the underlying function and returns the result.
+
+    Args:
+        param: A dictionary containing the parameters for the tool.
+
+    Returns:
+        The result of the tool execution.
+    """
+
+
+@dataclasses.dataclass
+class SamplerConfig:
+  """Configuration for the sampling process.
+
+  Attributes:
+      top_k: The number of top logits used during sampling.
+      top_p: The cumulative probability threshold for nucleus sampling.
+      temperature: The temperature to use for sampling.
+      seed: The seed to use for randomization. Defaults to None.
+  """
+
+  top_k: int | None = None
+  top_p: float | None = None
+  temperature: float | None = None
+  seed: int | None = None
+
+  def __post_init__(self):
+    if self.top_k is not None and self.top_k <= 0:
+      raise ValueError(f"top_k should be positive, but got {self.top_k}.")
+    if self.top_p is not None and not (0 <= self.top_p <= 1):
+      raise ValueError(
+          f"top_p should between 0 and 1 inclusively, but got {self.top_p}."
+      )
+    if self.temperature is not None and self.temperature < 0:
+      raise ValueError(
+          f"temperature should be non-negative, but got {self.temperature}."
+      )
+
+
 @dataclasses.dataclass(kw_only=True)
 class AbstractEngine(abc.ABC):
   """Abstract base class for LiteRT-LM engines.
@@ -69,7 +117,8 @@ class AbstractEngine(abc.ABC):
   Attributes:
       model_path: Path to the model file.
       backend: The hardware backend used for inference.
-      max_num_tokens: Maximum number of tokens for the KV cache.
+      max_num_tokens: Maximum number of tokens for the KV cache. If None, use
+        the engine/model's default.
       cache_dir: Directory for caching compiled model artifacts.
       vision_backend: The hardware backend used for vision encoding.
       audio_backend: The hardware backend used for audio encoding.
@@ -83,7 +132,7 @@ class AbstractEngine(abc.ABC):
 
   model_path: str
   backend: Backend
-  max_num_tokens: int = 4096
+  max_num_tokens: int | None = None
   cache_dir: str = ""
   vision_backend: Backend | None = None
   audio_backend: Backend | None = None
@@ -105,30 +154,47 @@ class AbstractEngine(abc.ABC):
           collections.abc.Sequence[collections.abc.Mapping[str, Any]] | None
       ) = None,
       tools: (
-          collections.abc.Sequence[collections.abc.Callable[..., Any]] | None
+          collections.abc.Sequence[collections.abc.Callable[..., Any] | Tool]
+          | None
       ) = None,
       tool_event_handler: ToolEventHandler | None = None,
+      automatic_tool_calling: bool = True,
       extra_context: collections.abc.Mapping[str, Any] | None = None,
+      filter_channel_content_from_kv_cache: bool = False,
+      sampler_config: SamplerConfig | None = None,
   ) -> AbstractConversation:
     """Creates a new conversation for this engine.
 
     Args:
         messages: A sequence of messages for the conversation preface. Each
           message is a mapping that should contain 'role' and 'content' keys.
-        tools: A list of Python functions to be used as tools.
+        tools: A list of Python functions or Tool instances to be used as tools.
         tool_event_handler: A handler for tool call and tool response events.
+        automatic_tool_calling: Whether to automatically call tools. If False,
+          tool calls will be returned to the user to execute.
         extra_context: Extra context for the conversation.
+        filter_channel_content_from_kv_cache: Whether to filter channel content
+          from the KV cache. This is useful when the model responds with
+          "channel" content, e.g. thinking/reasoning tokens, that should not be
+          persisted in the KV cache.
+        sampler_config: Configuration for the sampling process. If None, then
+          uses the engine's default values.
     """
 
   @abc.abstractmethod
   def create_session(
-      self, *, apply_prompt_template: bool = True
+      self,
+      *,
+      apply_prompt_template: bool = True,
+      sampler_config: SamplerConfig | None = None,
   ) -> AbstractSession:
     """Creates a new session for this engine.
 
     Args:
         apply_prompt_template: Whether to apply the basic prompt templates in
           the session.
+        sampler_config: Configuration for the sampling process. If None, then
+          uses the engine's default values.
 
     Returns:
         A new session instance for low-level interaction with the model.
@@ -158,9 +224,11 @@ class AbstractConversation(abc.ABC):
 
   Attributes:
       messages: A sequence of messages for the conversation preface.
-      tools: A list of Python functions to be used as tools.
+      tools: A list of Python functions or Tool instances to be used as tools.
       tool_event_handler: A handler for tool call and tool response events.
+      automatic_tool_calling: Whether to automatically call tools.
       extra_context: Extra context for the chat template.
+      sampler_config: Configuration for the sampling process.
   """
 
   def __init__(
@@ -170,24 +238,33 @@ class AbstractConversation(abc.ABC):
           collections.abc.Sequence[collections.abc.Mapping[str, Any]] | None
       ) = None,
       tools: (
-          collections.abc.Sequence[collections.abc.Callable[..., Any]] | None
+          collections.abc.Sequence[collections.abc.Callable[..., Any] | Tool]
+          | None
       ) = None,
       tool_event_handler: ToolEventHandler | None = None,
+      automatic_tool_calling: bool = True,
       extra_context: collections.abc.Mapping[str, Any] | None = None,
+      sampler_config: SamplerConfig | None = None,
   ):
     """Initializes the instance.
 
     Args:
         messages: A sequence of messages for the conversation preface. Each
           message is a mapping that should contain 'role' and 'content' keys.
-        tools: A list of Python functions to be used as tools.
+        tools: A list of Python functions or Tool instances to be used as tools.
         tool_event_handler: A handler for tool call and tool response events.
+        automatic_tool_calling: Whether to automatically call tools. If False,
+          tool calls will be returned to the user to execute.
         extra_context: Extra context for the chat template.
+        sampler_config: Configuration for the sampling process. If None, then
+          uses the engine's default values.
     """
     self.messages = messages or []
     self.tools = tools or []
     self.tool_event_handler = tool_event_handler
+    self.automatic_tool_calling = automatic_tool_calling
     self.extra_context = extra_context or {}
+    self.sampler_config = sampler_config
 
   def __enter__(self) -> AbstractConversation:
     """Initializes the conversation."""
@@ -227,12 +304,26 @@ class AbstractConversation(abc.ABC):
         response.
     """
 
+  @abc.abstractmethod
+  def render_message_to_string(
+      self, message: str | collections.abc.Mapping[str, Any]
+  ) -> str:
+    """Renders a message into a string according to the template.
+
+    Args:
+        message: The input message to render. Example: "Hello" or {"role":
+          "user", "content": "Hello"}.
+
+    Returns:
+        The rendered string.
+    """
+
   def cancel_process(self) -> None:
     """Cancels the current inference process."""
 
 
 @dataclasses.dataclass
-class BenchmarkInfo(abc.ABC):
+class BenchmarkInfo:
   """Results from a benchmark run.
 
   Attributes:
@@ -293,9 +384,10 @@ class Responses:
   parallel response processed in decode. Most models have batch size equals 1.
 
   Attributes:
-      texts: The generated text(s) from the model. The list length is equal to
-        the batch size in "run_decode".  This field is only used in
-        "run_decode". "run_text_scoring".
+      texts: The generated text(s) from the model in "run_decode", or the target
+        text(s) in "run_text_scoring". The list length is equal to the batch
+        size in "run_decode" or the length of "target_text" in
+        "run_text_scoring".
       scores: The scores associated with the generated text(s). The list length
         is equal to length of the "target_text" in "run_text_scoring" or the
         batch size in "run_decode".
@@ -303,11 +395,17 @@ class Responses:
         length is equal to length of the "target_text" in "run_text_scoring".
         This field is only used in `run_text_scoring` when `store_token_lengths`
         is True.
+      token_scores: The log likelihood scores of the target text given the
+        existing session state. The list length is equal to length of the
+        "target_text" in "run_text_scoring". The inner list contains the log
+        likelihood score for each token in the corresponding "target_text"
+        element. This field is only used in `run_text_scoring`.
   """
 
   texts: list[str] = dataclasses.field(default_factory=list)
   scores: list[float] = dataclasses.field(default_factory=list)
   token_lengths: list[int] = dataclasses.field(default_factory=list)
+  token_scores: list[list[float]] = dataclasses.field(default_factory=list)
 
 
 # TODO(b/482060476): Add clone() API once switching to advanced engine.

@@ -25,6 +25,7 @@ import click
 import litert_lm
 from litert_lm_cli import help_formatter
 from litert_lm_cli import model
+from litert_lm_cli import serve as _serve_module
 from litert_lm_cli import venv_manager
 from litert_lm_cli import version
 
@@ -41,6 +42,9 @@ from litert_lm_cli import version
 @click.version_option(version=version.VERSION)
 def cli():
   """CLI tool for LiteRT-LM models."""
+
+
+_serve_module.register(cli)
 
 
 @cli.command(name="list")
@@ -318,9 +322,14 @@ Speculative decoding mode ("auto", "true", "false").
 """,
   )(f)
   f = click.option(
-      "-b",
       "--backend",
-      type=click.Choice(["cpu", "gpu"], case_sensitive=False),
+      type=click.Choice(
+          [
+              "cpu",
+              "gpu",
+          ],
+          case_sensitive=False,
+      ),
       default="cpu",
       help="The backend to use.",
   )(f)
@@ -443,6 +452,89 @@ def benchmark(
         " expected."
     ),
 )
+@click.option(
+    "--max-num-tokens",
+    type=int,
+    default=None,
+    help="Maximum number of tokens for the KV cache.",
+)
+@click.option(
+    "--filter-channel-content-from-kv-cache",
+    is_flag=True,
+    default=False,
+    help="Whether to filter channel content from the KV cache.",
+)
+@click.option(
+    "--vision-backend",
+    type=click.Choice(
+        [
+            "cpu",
+            "gpu",
+            "",
+        ],
+        case_sensitive=False,
+    ),
+    default=None,
+    help="The backend to use for vision encoding.",
+)
+@click.option(
+    "--audio-backend",
+    type=click.Choice(
+        [
+            "cpu",
+            "gpu",
+            "",
+        ],
+        case_sensitive=False,
+    ),
+    default=None,
+    help="The backend to use for audio encoding.",
+)
+@click.option(
+    "--attachment",
+    multiple=True,
+    type=click.Path(dir_okay=False),
+    help=(
+        "Path to an attachment (image or audio only). Can be specified multiple"
+        " times. Attachements are placed before the first user text prompt."
+    ),
+)
+@click.option(
+    "--top-k",
+    type=click.IntRange(min=1),
+    default=None,
+    help=(
+        "The number of top logits used during sampling. If not set, use the"
+        " default from the model or engine."
+    ),
+)
+@click.option(
+    "--top-p",
+    type=click.FloatRange(min=0.0, max=1.0),
+    default=None,
+    help=(
+        "The cumulative probability threshold for nucleus sampling. If not set,"
+        " use the default from the model or engine."
+    ),
+)
+@click.option(
+    "--temperature",
+    type=click.FloatRange(min=0.0),
+    default=None,
+    help=(
+        "The temperature to use for sampling. If not set, use the default from"
+        " the model or engine."
+    ),
+)
+@click.option(
+    "--seed",
+    type=int,
+    default=None,
+    help=(
+        "The seed to use for randomization. If not set, use the default from"
+        " the model or engine."
+    ),
+)
 @common_inference_options
 def run(
     model_reference,
@@ -455,6 +547,15 @@ def run(
     no_template=False,
     from_huggingface_repo=None,
     huggingface_token=None,
+    max_num_tokens=None,
+    filter_channel_content_from_kv_cache=False,
+    vision_backend=None,
+    audio_backend=None,
+    attachment=(),
+    top_k: int | None = None,
+    top_p: float | None = None,
+    temperature: float | None = None,
+    seed: int | None = None,
 ):
   r"""Runs a LiteRT-LM model interactively or with a single prompt.
 
@@ -474,7 +575,63 @@ def run(
       templates or stripping stop tokens.
     from_huggingface_repo: The HuggingFace repository ID.
     huggingface_token: The HuggingFace API token.
+    max_num_tokens: Maximum number of tokens for the KV cache.
+    filter_channel_content_from_kv_cache: Whether to filter channel content from
+      the KV cache.
+    vision_backend: The backend to use for vision tasks.
+    audio_backend: The backend to use for audio tasks.
+    attachment: Path to an attachment (e.g., image or audio).
+    top_k: The number of top logits used during sampling.
+    top_p: The cumulative probability threshold for nucleus sampling.
+    temperature: The temperature to use for sampling.
+    seed: The seed to use for randomization.
   """
+  if attachment and no_template:
+    click.echo(
+        click.style(
+            "Error: Attachments are not supported with --no-template.",
+            fg="red",
+        )
+    )
+    return
+
+  expanded_attachments = []
+  has_audio = False
+  has_image = False
+
+  for a in attachment:
+    expanded = os.path.expanduser(a)
+    if not os.path.exists(expanded):
+      raise click.BadParameter(f"File '{a}' does not exist.")
+    expanded_attachments.append(expanded)
+
+    try:
+      a_type = model.get_attachment_type(expanded)
+      if a_type == "audio":
+        has_audio = True
+      elif a_type == "image":
+        has_image = True
+    except ValueError as e:
+      raise click.BadParameter(str(e)) from e
+
+  if has_audio and not audio_backend:
+    click.echo(
+        click.style(
+            "Error: Audio attachments require --audio-backend to be set.",
+            fg="red",
+        )
+    )
+    return
+
+  if has_image and not vision_backend:
+    click.echo(
+        click.style(
+            "Error: Image attachments require --vision-backend to be set.",
+            fg="red",
+        )
+    )
+    return
+
   # If the stdin is not connected to the terminal, e.g., piped or redirected
   # input, then handle the input as the one-shot prompt.
   #
@@ -535,6 +692,15 @@ def run(
       preset=preset,
       enable_speculative_decoding=enable_speculative_decoding,
       no_template=no_template,
+      max_num_tokens=max_num_tokens,
+      filter_channel_content_from_kv_cache=filter_channel_content_from_kv_cache,
+      vision_backend=vision_backend,
+      audio_backend=audio_backend,
+      attachments=tuple(expanded_attachments),
+      top_k=top_k,
+      top_p=top_p,
+      temperature=temperature,
+      seed=seed,
   )
 
 

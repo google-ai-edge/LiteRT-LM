@@ -160,7 +160,6 @@ jobs:
             @litert//litert/vendors/qualcomm/dispatch:dispatch_api_so \
             -- \
             -//python/... \
-            -//schema/py:* \
             -//kotlin/java/com/google/ai/edge/litertlm/example/...
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}

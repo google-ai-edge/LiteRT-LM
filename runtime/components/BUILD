@@ -656,6 +656,33 @@ cc_library(
     }),
 )
 
+cc_library(
+    name = "model_resources_streaming",
+    srcs = ["model_resources_streaming.cc"],
+    hdrs = ["model_resources_streaming.h"],
+    deps = [
+        ":model_resources",
+        ":tokenizer",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+        "@litert//litert/cc:litert_model",
+        "//runtime/proto:llm_metadata_cc_proto",
+        "//runtime/util:scoped_file",
+    ],
+)
+
+cc_test(
+    name = "model_resources_streaming_test",
+    srcs = ["model_resources_streaming_test.cc"],
+    deps = [
+        ":model_resources",
+        ":model_resources_streaming",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+    ],
+)
+
 cc_test(
     name = "lora_manager_test",
     srcs = ["lora_manager_test.cc"],

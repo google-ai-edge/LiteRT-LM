@@ -131,7 +131,8 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
  protected:
   LlmLiteRtCompiledModelExecutorBase(
       LlmExecutorSettings executor_settings, Environment& env,
-      const Model* absl_nonnull model, CompiledModel compiled_model,
+      const Model* absl_nonnull model,
+      std::unique_ptr<CompiledModel> compiled_model,
       absl::flat_hash_map<absl::string_view, TensorBuffer> decode_input_buffers,
       absl::flat_hash_map<absl::string_view, TensorBuffer>
           decode_output_buffers,
@@ -270,7 +271,7 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
   LlmExecutorSettings executor_settings_;
   Environment& env_;
   const Model& model_;
-  CompiledModel compiled_model_;
+  std::unique_ptr<CompiledModel> compiled_model_;
 
   absl::flat_hash_map<absl::string_view, TensorBuffer> decode_input_buffers_;
   absl::flat_hash_map<absl::string_view, TensorBuffer> decode_output_buffers_;
@@ -348,7 +349,8 @@ class LlmLiteRtCompiledModelExecutorStatic
  private:
   LlmLiteRtCompiledModelExecutorStatic(
       LlmExecutorSettings executor_settings, Environment& env,
-      const Model* absl_nonnull model, CompiledModel compiled_model,
+      const Model* absl_nonnull model,
+      std::unique_ptr<CompiledModel> compiled_model,
       absl::flat_hash_map<absl::string_view, TensorBuffer> decode_input_buffers,
       absl::flat_hash_map<absl::string_view, TensorBuffer>
           decode_output_buffers,
@@ -409,7 +411,8 @@ class LlmLiteRtCompiledModelExecutorDynamic
  private:
   LlmLiteRtCompiledModelExecutorDynamic(
       LlmExecutorSettings executor_settings, Environment& env,
-      const Model* absl_nonnull model, CompiledModel compiled_model,
+      const Model* absl_nonnull model,
+      std::unique_ptr<CompiledModel> compiled_model,
       absl::flat_hash_map<absl::string_view, TensorBuffer> decode_input_buffers,
       absl::flat_hash_map<absl::string_view, TensorBuffer>
           decode_output_buffers,

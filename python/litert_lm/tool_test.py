@@ -13,6 +13,8 @@
 # limitations under the License.
 
 from collections.abc import Sequence
+import os
+import pathlib
 
 from absl.testing import absltest
 from absl.testing import parameterized
@@ -160,6 +162,141 @@ class ToolTest(parameterized.TestCase):
         desc["function"]["parameters"]["properties"], expected_properties
     )
     self.assertEqual(tool.execute({"numbers": [2.0, 3.5]}), 7.0)
+
+  def test_create_conversation_with_open_api_tools(self):
+    test_srcdir = os.environ.get("TEST_SRCDIR", "")
+    model_path = str(
+        pathlib.Path(test_srcdir)
+        / "litert_lm/runtime/testdata/test_lm.litertlm"
+    )
+
+    class TestTool(litert_lm.Tool):
+
+      def __init__(self, definition):
+        self._definition = definition
+
+      def get_tool_description(self):
+        return self._definition
+
+      def execute(self, param):
+        return "sunny"
+
+    engine = litert_lm.Engine(model_path)
+    open_api_tools = [
+        TestTool({
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get the weather",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"location": {"type": "string"}},
+                    "required": ["location"],
+                },
+            },
+        })
+    ]
+    with engine.create_conversation(
+        tools=open_api_tools, automatic_tool_calling=False
+    ) as conv:
+      self.assertLen(conv.tools, 1)
+      self.assertEqual(conv.tools[0], open_api_tools[0])
+      self.assertFalse(conv.automatic_tool_calling)
+
+  def test_tool_execution_exception(self):
+    def fail(a: int):
+      """This tool always fails."""
+      raise ValueError("Planned failure")
+
+    tool = litert_lm.tool_from_function(fail)
+    # The C++ layer catches exceptions and returns them as strings.
+    # We can't easily test the C++ try-catch here without a full engine run,
+    # but we can verify the tool itself behaves as expected.
+    with self.assertRaises(ValueError):
+      tool.execute({"a": 1})
+
+  def test_tool_execution_non_json_serializable(self):
+    class Unserializable:
+      pass
+
+    def get_complex():
+      """Returns an unserializable object."""
+      return Unserializable()
+
+    tool = litert_lm.tool_from_function(get_complex)
+    # Again, the C++ nb::cast<nlohmann::json> would fail and be caught,
+    # but we can verify the Python part returns the object.
+    self.assertIsInstance(tool.execute({}), Unserializable)
+
+  def test_create_conversation_with_mixed_tools(self):
+    test_srcdir = os.environ.get("TEST_SRCDIR", "")
+    model_path = str(
+        pathlib.Path(test_srcdir)
+        / "litert_lm/runtime/testdata/test_lm.litertlm"
+    )
+
+    class TestTool(litert_lm.Tool):
+
+      def __init__(self, definition):
+        self._definition = definition
+
+      def get_tool_description(self):
+        return self._definition
+
+      def execute(self, param):
+        return "result"
+
+    def my_func(x: int) -> int:
+      """A function tool."""
+      return x
+
+    engine = litert_lm.Engine(model_path)
+    tools = [
+        my_func,
+        TestTool({
+            "type": "function",
+            "function": {
+                "name": "custom_tool",
+                "description": "desc",
+            },
+        }),
+    ]
+    with engine.create_conversation(tools=tools) as conv:
+      self.assertLen(conv.tools, 2)
+      self.assertEqual(conv.tools[0], my_func)
+
+  def test_tool_with_no_arguments(self):
+    def get_time() -> str:
+      """Returns the current time."""
+      return "2026-04-14 20:00:00"
+
+    tool = litert_lm.tool_from_function(get_time)
+    desc = tool.get_tool_description()
+    self.assertEqual(desc["function"]["name"], "get_time")
+    self.assertEmpty(desc["function"]["parameters"]["properties"])
+    # Verify it can be executed with empty args
+    self.assertEqual(tool.execute({}), "2026-04-14 20:00:00")
+
+  def test_create_conversation_with_malformed_tool_description(self):
+    test_srcdir = os.environ.get("TEST_SRCDIR", "")
+    model_path = str(
+        pathlib.Path(test_srcdir)
+        / "litert_lm/runtime/testdata/test_lm.litertlm"
+    )
+
+    class MalformedTool(litert_lm.Tool):
+
+      def get_tool_description(self):
+        return {"missing": "function_key"}
+
+      def execute(self, param):
+        return None
+
+    engine = litert_lm.Engine(model_path)
+    with self.assertRaisesRegex(
+        ValueError, "Tool description must contain \\['function'\\]\\['name'\\]"
+    ):
+      engine.create_conversation(tools=[MalformedTool()])
 
 
 if __name__ == "__main__":

@@ -42,7 +42,9 @@ pytype_strict_library(
         "//python/litert_lm",
         requirement("click"),
         requirement("prompt_toolkit"),
-    ],
+    ] + select({
+        "//conditions:default": [],
+    }),
     imports = [".."],
 )
 
@@ -72,6 +74,17 @@ pytype_strict_library(
     imports = [".."],
 )
 
+pytype_strict_library(
+    name = "serve",
+    srcs = ["serve.py"],
+    deps = [
+        ":model",
+        "//python/litert_lm",
+        requirement("click"),
+    ],
+    imports = [".."],
+)
+
 py_test(
     name = "venv_manager_test",
     srcs = ["venv_manager_test.py"],
@@ -94,6 +107,7 @@ pytype_strict_library(
     deps = [
         ":help_formatter",
         ":model",
+        ":serve",
         ":venv_manager",
         ":version",
         "//python/litert_lm",
@@ -115,6 +129,22 @@ py_test(
         "@absl_py//absl/testing:absltest",
         requirement("click"),
         requirement("prompt_toolkit"),
+    ],
+    imports = [".."],
+)
+
+py_test(
+    name = "serve_test",
+    srcs = ["serve_test.py"],
+    tags = [
+        "nowindows",
+    ],
+    deps = [
+        ":serve",
+        "//python/litert_lm",
+        "//python/litert_lm:interfaces",
+        "@absl_py//absl/testing:absltest",
+        "@absl_py//absl/testing:parameterized",
     ],
     imports = [".."],
 )
@@ -157,10 +187,6 @@ py_wheel(
     homepage = "https://github.com/google-ai-edge/LiteRT-LM",
     classifiers = [
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.10",
-        "Programming Language :: Python :: 3.11",
-        "Programming Language :: Python :: 3.12",
-        "Programming Language :: Python :: 3.13",
         "License :: OSI Approved :: Apache Software License",
         "Operating System :: OS Independent",
     ],

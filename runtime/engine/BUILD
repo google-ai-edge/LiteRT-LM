@@ -269,6 +269,7 @@ cc_binary(
         "//runtime/executor:executor_settings_base",
         "//runtime/proto:litert_lm_metrics_cc_proto",
         "//runtime/util:litert_status_util",
+        "//runtime/util:logging",
         "//runtime/util:metrics_util",
     ] + select({
         "@platforms//os:windows": [

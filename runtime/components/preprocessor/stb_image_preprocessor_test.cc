@@ -109,7 +109,7 @@ TEST(StbImagePreprocessorTest, PreprocessSuccess) {
   EXPECT_NEAR(data[idx_0_0 + 2], expected_0_0_b, kTolerance) << "B at (0,0)";
 
   // --- Sample 2: Top-Right Pixel (0, 223) ---
-  const float expected_0_223_r = 0.96078432f;
+  const float expected_0_223_r = 0.96470588f;
   const float expected_0_223_g = 0.96078432f;
   const float expected_0_223_b = 0.94509804f;
   int idx_0_223 = get_pixel_index(0, width - 1);
@@ -121,7 +121,7 @@ TEST(StbImagePreprocessorTest, PreprocessSuccess) {
       << "B at (0,223)";
 
   // --- Sample 3: Center Pixel (112, 112) ---
-  const float expected_112_112_r = 0.38039216f;
+  const float expected_112_112_r = 0.37647059f;
   const float expected_112_112_g = 0.00784314f;
   const float expected_112_112_b = 0.00392157f;
   int idx_112_112 = get_pixel_index(height / 2, width / 2);
@@ -145,9 +145,9 @@ TEST(StbImagePreprocessorTest, PreprocessSuccess) {
       << "B at (223,0)";
 
   // --- Sample 5: Bottom-Right Pixel (223, 223) ---
-  const float expected_223_223_r = 0.79607844f;
-  const float expected_223_223_g = 0.72941178f;
-  const float expected_223_223_b = 0.65490198f;
+  const float expected_223_223_r = 0.78823530f;
+  const float expected_223_223_g = 0.72156864f;
+  const float expected_223_223_b = 0.64705884f;
   int idx_223_223 = get_pixel_index(height - 1, width - 1);
   EXPECT_NEAR(data[idx_223_223 + 0], expected_223_223_r, kTolerance)
       << "R at (223,223)";
@@ -198,7 +198,8 @@ TEST(StbImagePreprocessorTest, PreprocessWithPatchify) {
   constexpr int kPatchSize = 16;
   parameter.SetPatchifyConfig({.patch_width = kPatchSize,
                                .patch_height = kPatchSize,
-                               .max_num_patches = 4096});
+                               .max_num_patches = 4096,
+                               .pooling_kernel_size = 3});
 
   auto input_image = InputImage(image_bytes);
   ASSERT_OK_AND_ASSIGN(auto preprocessed_image,
@@ -218,13 +219,13 @@ TEST(StbImagePreprocessorTest, PreprocessWithPatchify) {
   // 1024 / 16 = 64. 64 * 64 = 4096 patches.
   // 16 * 16 * 3 = 768 elements per patch.
   EXPECT_THAT(images_tensor_type.Value().Layout().Dimensions(),
-              ElementsAre(1, 4096, 768));
+              ElementsAre(1, 3969, 768));
 
   const auto& positions_tensor = tensor_map->at("positions_xy");
   auto positions_tensor_type = positions_tensor.TensorType();
   ASSERT_TRUE(positions_tensor_type.HasValue());
   EXPECT_THAT(positions_tensor_type.Value().Layout().Dimensions(),
-              ElementsAre(1, 4096, 2));
+              ElementsAre(1, 3969, 2));
 
   // Verify positions.
   auto positions_lock = ::litert::TensorBufferScopedLock::Create(
@@ -232,9 +233,9 @@ TEST(StbImagePreprocessorTest, PreprocessWithPatchify) {
   ASSERT_TRUE(positions_lock.HasValue());
   const int32_t* positions_ptr =
       reinterpret_cast<const int32_t*>(positions_lock->second);
-  for (int h = 0; h < 64; ++h) {
-    for (int w = 0; w < 64; ++w) {
-      int idx = h * 64 + w;
+  for (int h = 0; h < 63; ++h) {
+    for (int w = 0; w < 63; ++w) {
+      int idx = h * 63 + w;
       EXPECT_EQ(positions_ptr[idx * 2], w);
       EXPECT_EQ(positions_ptr[idx * 2 + 1], h);
     }
@@ -247,8 +248,8 @@ TEST(StbImagePreprocessorTest, PreprocessWithPatchify) {
   const float* data = reinterpret_cast<const float*>(images_lock->second);
 
   constexpr float kTolerance = 1e-6f;
-  constexpr int height = 1024;
-  constexpr int width = 1024;
+  constexpr int height = 1008;
+  constexpr int width = 1008;
   constexpr int channels = 3;
 
   // Helper to get the starting index for a pixel (y, x).
@@ -335,7 +336,8 @@ TEST(StbImagePreprocessorTest, PreprocessWithPatchifyResize) {
   constexpr int kPatchSize = 16;
   parameter.SetPatchifyConfig({.patch_width = kPatchSize,
                                .patch_height = kPatchSize,
-                               .max_num_patches = 49});
+                               .max_num_patches = 49,
+                               .pooling_kernel_size = 3});
 
   auto input_image = InputImage(image_bytes);
   ASSERT_OK_AND_ASSIGN(auto preprocessed_image,
@@ -348,13 +350,13 @@ TEST(StbImagePreprocessorTest, PreprocessWithPatchifyResize) {
   auto images_tensor_type = images_tensor.TensorType();
   ASSERT_TRUE(images_tensor_type.HasValue());
   EXPECT_THAT(images_tensor_type.Value().Layout().Dimensions(),
-              ElementsAre(1, 49, 768));
+              ElementsAre(1, 36, 768));
 
   const auto& positions_tensor = tensor_map->at("positions_xy");
   auto positions_tensor_type = positions_tensor.TensorType();
   ASSERT_TRUE(positions_tensor_type.HasValue());
   EXPECT_THAT(positions_tensor_type.Value().Layout().Dimensions(),
-              ElementsAre(1, 49, 2));
+              ElementsAre(1, 36, 2));
 
   // Verify image values.
   auto images_lock = ::litert::TensorBufferScopedLock::Create(
@@ -363,8 +365,8 @@ TEST(StbImagePreprocessorTest, PreprocessWithPatchifyResize) {
   const float* data = reinterpret_cast<const float*>(images_lock->second);
 
   constexpr float kTolerance = 1e-6f;
-  constexpr int height = 112;
-  constexpr int width = 112;
+  constexpr int height = 96;
+  constexpr int width = 96;
   constexpr int channels = 3;
 
   // Helper to get the starting index for a pixel (y, x).
@@ -385,8 +387,8 @@ TEST(StbImagePreprocessorTest, PreprocessWithPatchifyResize) {
 
   // --- Sample 2: Top-Right Pixel (0, 111) ---
   const float expected_0_111_r = 0.94901961f;
-  const float expected_0_111_g = 0.94509804f;
-  const float expected_0_111_b = 0.92549020f;
+  const float expected_0_111_g = 0.94117647f;
+  const float expected_0_111_b = 0.92156863f;
   int idx_0_111 = get_pixel_index(0, width - 1);
   EXPECT_NEAR(data[idx_0_111 + 0], expected_0_111_r, kTolerance)
       << "R at (0,111)";
@@ -397,7 +399,7 @@ TEST(StbImagePreprocessorTest, PreprocessWithPatchifyResize) {
 
   // --- Sample 3: Center Pixel (56, 56) ---
   const float expected_56_56_r = 0.41568628f;
-  const float expected_56_56_g = 0.015686275f;
+  const float expected_56_56_g = 0.01176471f;
   const float expected_56_56_b = 0.011764706f;
   int idx_56_56 = get_pixel_index(height / 2, width / 2);
   EXPECT_NEAR(data[idx_56_56 + 0], expected_56_56_r, kTolerance)
@@ -408,9 +410,9 @@ TEST(StbImagePreprocessorTest, PreprocessWithPatchifyResize) {
       << "B at (56,56)";
 
   // --- Sample 4: Bottom-Left Pixel (111, 0) ---
-  const float expected_111_0_r = 0.42352942f;
-  const float expected_111_0_g = 0.27058824f;
-  const float expected_111_0_b = 0.16470589f;
+  const float expected_111_0_r = 0.42745098f;
+  const float expected_111_0_g = 0.27450982f;
+  const float expected_111_0_b = 0.16862746f;
   int idx_111_0 = get_pixel_index(height - 1, 0);
   EXPECT_NEAR(data[idx_111_0 + 0], expected_111_0_r, kTolerance)
       << "R at (111,0)";
@@ -420,9 +422,9 @@ TEST(StbImagePreprocessorTest, PreprocessWithPatchifyResize) {
       << "B at (111,0)";
 
   // --- Sample 5: Bottom-Right Pixel (111, 111) ---
-  const float expected_111_111_r = 0.82745099f;
-  const float expected_111_111_g = 0.76470589f;
-  const float expected_111_111_b = 0.69803923f;
+  const float expected_111_111_r = 0.83137256f;
+  const float expected_111_111_g = 0.76862746f;
+  const float expected_111_111_b = 0.70196080f;
   int idx_111_111 = get_pixel_index(height - 1, width - 1);
   EXPECT_NEAR(data[idx_111_111 + 0], expected_111_111_r, kTolerance)
       << "R at (111,111)";

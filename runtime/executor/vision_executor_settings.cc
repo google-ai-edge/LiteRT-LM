@@ -16,13 +16,16 @@
 
 #include <ostream>
 #include <string>
+#include <variant>
+#include <memory>
 
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/strings/match.h"  // from @com_google_absl
 #include "runtime/executor/executor_settings_base.h"
-#include "runtime/util/file_util.h"
+#include "runtime/util/scoped_file.h"
 #include "runtime/util/status_macros.h"
 
 namespace litert::lm {
@@ -64,25 +67,33 @@ absl::Status VisionExecutorSettings::SetAdapterBackend(Backend backend) {
   return absl::OkStatus();
 }
 
-absl::StatusOr<std::string> VisionExecutorSettings::GetWeightCacheFile(
-    absl::string_view suffix) const {
-  // Cache is explicitly disabled.
-  if (GetCacheDir() == ":nocache") {
-    return absl::InvalidArgumentError("Cache is explicitly disabled.");
-  }
-  auto model_path = GetModelAssets().GetPath().value_or("");
-
-  // There is no model path to suffix.
-  if (model_path.empty()) {
-    return absl::InvalidArgumentError(
-        "Cache path cannot be computed without knowing the model path.");
+absl::StatusOr<
+    std::variant<std::string, std::shared_ptr<litert::lm::ScopedFile>>>
+VisionExecutorSettings::GetWeightCacheFile(absl::string_view suffix,
+                                           bool check_and_clean) const {
+  if (absl::StrContains(suffix, kAdapterName) && GetScopedAdapterCacheFile()) {
+    return GetScopedAdapterCacheFile();
+  } else if (absl::StrContains(suffix, kEncoderName) &&
+             GetScopedEncoderCacheFile()) {
+    return GetScopedEncoderCacheFile();
   }
 
-  if (GetCacheDir().empty()) {
-    return absl::StrCat(model_path, suffix);
+  return ExecutorSettingsBase::GetWeightCacheFile(suffix, check_and_clean);
+}
+
+absl::StatusOr<
+    std::variant<std::string, std::shared_ptr<litert::lm::ScopedFile>>>
+VisionExecutorSettings::GetProgramCacheFile(absl::string_view suffix,
+                                            bool check_and_clean) const {
+  if (absl::StrContains(suffix, kAdapterName) &&
+      GetScopedAdapterProgramCacheFile()) {
+    return GetScopedAdapterProgramCacheFile();
+  } else if (absl::StrContains(suffix, kEncoderName) &&
+             GetScopedEncoderProgramCacheFile()) {
+    return GetScopedEncoderProgramCacheFile();
   }
 
-  return JoinPath(GetCacheDir(), absl::StrCat(Basename(model_path), suffix));
+  return ExecutorSettingsBase::GetProgramCacheFile(suffix, check_and_clean);
 }
 
 std::ostream& operator<<(std::ostream& os,

@@ -31,6 +31,7 @@ message LlmModelType {
     Qwen3 qwen3 = 5;
     Qwen2p5 qwen2p5 = 7;
     Gemma4 gemma4 = 8;
+    FastVlm fast_vlm = 9;
   }
 }
 
@@ -156,6 +157,10 @@ message Gemma4 {
   // ratio, before patchifying.
   int32 max_num_patches = 17;
 
+  // The pooling kernel size that the image preprocessor should use for
+  // patchifying the image.
+  int32 pooling_kernel_size = 18;
+
   // Audio modality.
   // The start of audio token indicates the start of audio in the prompt.
   TokenUnion start_of_audio_token = 3;
@@ -183,5 +188,18 @@ message Gemma4 {
   bool use_template_for_fc_format = 13;
   // The constraint mode when constrained decoding is enabled.
   ConstraintMode constraint_mode = 14;
+}
+
+// FastVLM model.
+message FastVlm {
+  // Vision modality.
+  // The start of image token indicates the start of image in the prompt.
+  TokenUnion start_of_image_token = 1;
+  // The end of image token indicates the end of image in the prompt.
+  TokenUnion end_of_image_token = 2;
+  // The height of the image tensor that image preprocessor should resize to.
+  int32 image_tensor_height = 3;
+  // The width of the image tensor that image preprocessor should resize to.
+  int32 image_tensor_width = 4;
 }
 

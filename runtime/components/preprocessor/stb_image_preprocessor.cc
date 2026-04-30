@@ -14,8 +14,6 @@
 
 #include "runtime/components/preprocessor/stb_image_preprocessor.h"
 
-#include <algorithm>
-#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -34,6 +32,7 @@
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/preprocessor/image_preprocessor.h"
+#include "runtime/components/preprocessor/image_preprocessor_utils.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/util/status_macros.h"  // IWYU pragma: keep
 #ifndef STB_IMAGE_IMPLEMENTATION
@@ -64,43 +63,16 @@ absl::Status MaybeResizeImageWithSameAspectRatio(
   const int patch_width = parameter.GetPatchifyConfig()->patch_width;
   const int patch_height = parameter.GetPatchifyConfig()->patch_height;
   const int max_num_patches = parameter.GetPatchifyConfig()->max_num_patches;
-  const int num_patches_h = height / patch_height;
-  const int num_patches_w = width / patch_width;
-  const int num_patches = num_patches_h * num_patches_w;
-  if (num_patches <= max_num_patches && (height % patch_height == 0) &&
-      (width % patch_width == 0)) {
+
+  ASSIGN_OR_RETURN(auto size,
+                   GetAspectRatioPreservingSize(
+                       width, height, parameter.GetPatchifyConfig().value()));
+  int new_height = size.first;
+  int new_width = size.second;
+
+  if (new_height == height && new_width == width) {
     resized_image_data = std::move(image_data);
     return absl::OkStatus();
-  }
-
-  int new_height = height;
-  int new_width = width;
-  if (num_patches > max_num_patches) {
-    float scale = std::sqrt(static_cast<float>(max_num_patches) /
-                            static_cast<float>(num_patches));
-    new_height = static_cast<int>(height * scale);
-    new_width = static_cast<int>(width * scale);
-  }
-
-  // Make sure the new dimensions are multiples of patch size.
-  new_height = (new_height / patch_height) * patch_height;
-  new_width = (new_width / patch_width) * patch_width;
-
-  // Ensure we have at least one patch.
-  new_height = std::max(new_height, patch_height);
-  new_width = std::max(new_width, patch_width);
-
-  // If still too many patches (due to rounding up), reduce dimensions.
-  while (static_cast<int>(new_height / patch_height) *
-             (new_width / patch_width) >
-         max_num_patches) {
-    if (new_height >= new_width) {
-      new_height -= patch_height;
-    } else {
-      new_width -= patch_width;
-    }
-    new_height = std::max(new_height, patch_height);
-    new_width = std::max(new_width, patch_width);
   }
   ABSL_LOG(INFO) << "Resize image from " << width << "x" << height << " to "
                  << new_width << "x" << new_height << " which will result in "
@@ -134,13 +106,14 @@ absl::Status MaybeResizeImageWithSameAspectRatio(
                      new_height, 0,
                      static_cast<stbir_pixel_layout>(channels),
                      STBIR_TYPE_UINT8_SRGB, STBIR_EDGE_CLAMP,
-                     STBIR_FILTER_MITCHELL) == 0) {
+                     STBIR_FILTER_CATMULLROM) == 0) {
       return absl::InternalError("Failed to resize image.");
     }
   }
 
   return absl::OkStatus();
 }
+
 
 }  // namespace
 
@@ -327,7 +300,7 @@ absl::StatusOr<InputImage> StbImagePreprocessor::Preprocess(
                      resized_image.data(), target_width, target_height, 0,
                      static_cast<stbir_pixel_layout>(target_channels),
                      STBIR_TYPE_UINT8_SRGB, STBIR_EDGE_CLAMP,
-                     STBIR_FILTER_MITCHELL) == 0) {
+                     STBIR_FILTER_CATMULLROM) == 0) {
       return absl::InternalError("Failed to resize image.");
     }
     const int num_elements =

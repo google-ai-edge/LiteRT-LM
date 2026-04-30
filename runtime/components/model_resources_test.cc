@@ -47,7 +47,8 @@ TEST(ModelResourcesTest, InitializeWithValidLitertLmLoader) {
       "litert_lm/runtime/testdata/test_lm.litertlm";
   auto model_file = ScopedFile::Open(model_path.string());
   ASSERT_TRUE(model_file.ok());
-  auto loader = std::make_unique<LitertLmLoader>(std::move(model_file.value()));
+  ASSERT_OK_AND_ASSIGN(auto loader,
+                       LitertLmLoader::Create(std::move(model_file.value())));
   ASSERT_GT(loader->GetSentencePieceTokenizer()->Size(), 0);
   ASSERT_GT(loader->GetTFLiteModel(ModelType::kTfLitePrefillDecode).Size(), 0);
 
@@ -70,7 +71,8 @@ TEST(ModelResourcesTest, InitializeWithExternalWeights) {
       "litert_lm/runtime/testdata/test_lm_external_weights.litertlm";
   auto model_file = ScopedFile::Open(model_path.string());
   ASSERT_TRUE(model_file.ok());
-  auto loader = std::make_unique<LitertLmLoader>(std::move(model_file.value()));
+  ASSERT_OK_AND_ASSIGN(auto loader,
+                       LitertLmLoader::Create(std::move(model_file.value())));
   ASSERT_GT(loader->GetSentencePieceTokenizer()->Size(), 0);
   ASSERT_GT(loader->GetTFLiteModel(ModelType::kTfLitePrefillDecode).Size(), 0);
   ASSERT_GT(loader->GetTFLiteWeights(ModelType::kTfLitePrefillDecode).Size(),
@@ -97,7 +99,8 @@ TEST(ModelResourcesTest, InitializeWithHuggingFaceTokenizer) {
       "litert_lm/runtime/testdata/test_hf_tokenizer.litertlm";
   auto model_file = ScopedFile::Open(model_path.string());
   ASSERT_TRUE(model_file.ok());
-  auto loader = std::make_unique<LitertLmLoader>(std::move(model_file.value()));
+  ASSERT_OK_AND_ASSIGN(auto loader,
+                       LitertLmLoader::Create(std::move(model_file.value())));
   ASSERT_GT(loader->GetHuggingFaceTokenizer()->Size(), 0);
 
   auto model_resources = ModelResourcesLitertLm::Create(std::move(loader));
@@ -140,7 +143,8 @@ TEST(ModelResourcesTest, GetTFLiteModelNotFound) {
       "litert_lm/runtime/testdata/test_lm.litertlm";
   auto model_file = ScopedFile::Open(model_path.string());
   ASSERT_TRUE(model_file.ok());
-  auto loader = std::make_unique<LitertLmLoader>(std::move(model_file.value()));
+  ASSERT_OK_AND_ASSIGN(auto loader,
+                       LitertLmLoader::Create(std::move(model_file.value())));
 
   auto model_resources = ModelResourcesLitertLm::Create(std::move(loader));
   ASSERT_OK(model_resources);

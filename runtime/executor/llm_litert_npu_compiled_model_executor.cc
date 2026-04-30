@@ -18,7 +18,6 @@
 #include <atomic>
 #include <cstdint>
 #include <cstring>
-#include <limits>
 #include <memory>
 #include <optional>
 #include <ostream>
@@ -41,6 +40,9 @@
 #include "absl/time/clock.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "litert/c/litert_model_types.h"  // from @litert
+#include "litert/c/litert_op_code.h"  // from @litert
+#include "litert/cc/internal/litert_extended_model.h"  // from @litert
 #include "litert/cc/litert_common.h"  // from @litert
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_element_type.h"  // from @litert
@@ -53,6 +55,7 @@
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #if defined(__ANDROID__)
+#include "litert/cc/options/litert_google_tensor_options.h"  // from @litert
 #include "litert/cc/options/litert_qualcomm_options.h"  // from @litert
 #endif
 
@@ -62,6 +65,7 @@
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/llm_executor_processed_tokens.h"
 #include "runtime/executor/llm_executor_settings.h"
+#include "runtime/executor/llm_litert_npu_compiled_model_executor_utils.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/status_macros.h"  // NOLINT
 
@@ -88,8 +92,17 @@ constexpr char cache_v17[] = "kv_cache_v_17";
 constexpr absl::string_view kv_cache_k_root_name = "kv_cache_k_";
 constexpr absl::string_view kv_cache_v_root_name = "kv_cache_v_";
 
-constexpr bool kEnableDecodingDebugLogging = false;
-#define NPU_EXECUTOR_LOG(X) ABSL_LOG_IF(X, kEnableDecodingDebugLogging)
+constexpr absl::string_view kv_cache_slice_k_root_name = "kv_slice_k_";
+constexpr absl::string_view kv_cache_slice_v_root_name = "kv_slice_v_";
+
+namespace {
+
+using LogitsQuantizationParams =
+    LlmLiteRtNpuCompiledModelExecutor::LogitsQuantizationParams;
+
+}  // namespace
+
+#define NPU_EXECUTOR_LOG(X) ABSL_LOG_IF(X, npu_config_.enable_npu_debug_logging)
 
 // Signature names for the embedder.
 struct EmbedderSignatures {
@@ -225,23 +238,6 @@ absl::Status SetFirstElement(::litert::TensorBuffer& buffer, int32_t value) {
   return absl::OkStatus();
 }
 
-template <typename T>
-absl::StatusOr<int> FindMaxIndex(const TensorBuffer& decoded_logits) {
-  LITERT_ASSIGN_OR_RETURN(auto logits_buffer,
-                          CopyFromTensorBuffer<T>(decoded_logits));
-  if (logits_buffer.empty()) {
-    return absl::InvalidArgumentError("Logits buffer is empty.");
-  }
-  int max_index = 0;
-  T max_value = std::numeric_limits<T>::min();
-  for (int i = 0; i < logits_buffer.size(); ++i) {
-    if (logits_buffer[i] > max_value) {
-      max_value = logits_buffer[i];
-      max_index = i;
-    }
-  }
-  return max_index;
-}
 // Copies the raw bytes from the tensor buffer.
 absl::StatusOr<std::vector<uint8_t>> CopyRawBytesFromTensorBuffer(
     const TensorBuffer& buffer) {
@@ -266,25 +262,6 @@ absl::StatusOr<std::vector<uint8_t>> CopyRawBytesFromTensorBuffer(
     return absl::InvalidArgumentError(
         absl::StrCat("Unsupported tensor element type for copying: ",
                      tensor_type.ElementType()));
-  }
-}
-
-// Applies greedy sampling to the decoded logits. TODO(b/416702864) this logic
-// should be replaced by the LiteRT-LM sampler once it supports greedy sampling
-// for quantized tensors.
-absl::StatusOr<int> ApplyGreedySampling(const TensorBuffer& decoded_logits) {
-  LITERT_ASSIGN_OR_RETURN(RankedTensorType logits_tensor_type,
-                          decoded_logits.TensorType());
-  if (logits_tensor_type.ElementType() == ::litert::ElementType::Float32) {
-    return FindMaxIndex<float>(decoded_logits);
-  } else if (logits_tensor_type.ElementType() == ::litert::ElementType::Int16) {
-    return FindMaxIndex<int16_t>(decoded_logits);
-  } else if (logits_tensor_type.ElementType() == ::litert::ElementType::Int8) {
-    return FindMaxIndex<int8_t>(decoded_logits);
-  } else {
-    return absl::InvalidArgumentError(
-        absl::StrCat("Unsupported tensor element type for greedy sampling: ",
-                     logits_tensor_type.ElementType()));
   }
 }
 
@@ -480,6 +457,28 @@ std::ostream& operator<<(
      << ((stats.decode_sampling_latency_us * 100) /
          (float)stats.decode_e2e_latency_us)
      << "%)";
+  if (stats.decode_mtp_rejection_sampling_latency_us > 0) {
+    os << "\n"
+       << "Total decode MTP rejection sampling latency [us]: "
+       << stats.decode_mtp_rejection_sampling_latency_us << " ("
+       << ((stats.decode_mtp_rejection_sampling_latency_us * 100) /
+           (float)stats.decode_e2e_latency_us)
+       << "%)";
+  }
+  if (stats.decode_mtp_activation_copy_latency_us > 0) {
+    os << "\n"
+       << "Total decode MTP activation copy latency [us]: "
+       << stats.decode_mtp_activation_copy_latency_us << " ("
+       << ((stats.decode_mtp_activation_copy_latency_us * 100) /
+           (float)stats.decode_e2e_latency_us)
+       << "%)";
+  }
+  os << "\n"
+     << "Total decode token queue latency [us]: "
+     << stats.decode_token_queue_latency_us << " ("
+     << ((stats.decode_token_queue_latency_us * 100) /
+         (float)stats.decode_e2e_latency_us)
+     << "%)";
 
   return os;
 }
@@ -498,6 +497,10 @@ LlmLiteRtNpuCompiledModelExecutor::CreateLiteRtNpuOptions(
   qnn_opts.SetLogLevel(::litert::qualcomm::QualcommOptions::LogLevel::kOff);
   qnn_opts.SetHtpPerformanceMode(
       ::litert::qualcomm::QualcommOptions::HtpPerformanceMode::kBurst);
+  LITERT_ASSIGN_OR_RETURN(auto& google_tensor_opts,
+                          options.GetGoogleTensorOptions());
+  google_tensor_opts.SetPerformanceMode(
+      ::litert::google_tensor::GoogleTensorOptions::PerformanceMode::kBurst);
 #endif
   return options;
 }
@@ -509,12 +512,6 @@ LlmLiteRtNpuCompiledModelExecutor::CreateLiteRtCpuOptions(
   options.SetHardwareAccelerators(litert::HwAccelerators::kCpu);
   return options;
 }
-namespace {
-
-using LogitsQuantizationParams =
-    LlmLiteRtNpuCompiledModelExecutor::LogitsQuantizationParams;
-
-}  // namespace
 
 LlmLiteRtNpuCompiledModelExecutor::~LlmLiteRtNpuCompiledModelExecutor() {
   ABSL_VLOG(1) << "LatencyStats: " << GetLatencyStats();
@@ -851,9 +848,6 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::AllocateTransformerBuffers(
         verify_output_kv_cache_slice_buffers) {
   auto prefill_signature = transformer_model->FindSignature(kPrefillSignature);
 
-  constexpr absl::string_view kv_cache_slice_k_root_name = "kv_slice_k_";
-  constexpr absl::string_view kv_cache_slice_v_root_name = "kv_slice_v_";
-
   // Create input buffers for prefill signature.
   for (auto input_name : prefill_signature->InputNames()) {
     if (absl::StartsWith(input_name, kv_cache_k_root_name) ||
@@ -915,9 +909,7 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::AllocateTransformerBuffers(
   auto verify_signature =
       transformer_model->FindSignature(LlmSignatures::kVerifyLlm);
   if (verify_signature) {
-    NPU_EXECUTOR_LOG(INFO) << "Verify signature found. Inputs:";
     for (auto input_name : verify_signature->InputNames()) {
-      NPU_EXECUTOR_LOG(INFO) << "  - " << input_name;
       LITERT_ASSIGN_OR_RETURN(gemma_verify_input_buffers[input_name],
                               llm_compiled_model.CreateInputBuffer(
                                   LlmSignatures::kVerifyLlm, input_name));
@@ -1521,10 +1513,14 @@ LlmLiteRtNpuCompiledModelExecutor::Decode(
   }
 
   if (processed_tokens_.TokenCount() != current_step_) {
+    auto start_queue = absl::Now();
     LITERT_RETURN_IF_ERROR(processed_tokens_.RollBackToStep(current_step_));
+    latency_stats_.decode_token_queue_latency_us +=
+        absl::ToInt64Microseconds(absl::Now() - start_queue);
   }
 
   if (!pending_accepted_tokens_.empty()) {
+    auto start_queue = absl::Now();
     int next_token_id = pending_accepted_tokens_.front();
     pending_accepted_tokens_.erase(pending_accepted_tokens_.begin());
 
@@ -1535,8 +1531,11 @@ LlmLiteRtNpuCompiledModelExecutor::Decode(
     std::shared_ptr<TokenData> next_token =
         std::make_shared<TokenData>(next_token_id);
     if (UseEmbeddingLookupManager()) {
+      auto start_lookup = absl::Now();
       RETURN_IF_ERROR(embedding_lookup_manager_->LookupDecode(
           next_token->id(), next_token->mutable_embedding()));
+      latency_stats_.decode_embedder_inference_latency_us +=
+          absl::ToInt64Microseconds(absl::Now() - start_lookup);
     }
     // We must add it as a pending input token so that the NEXT Decode call
     // can find it via GetNextUnprocessedToken if the queue is empty.
@@ -1547,6 +1546,8 @@ LlmLiteRtNpuCompiledModelExecutor::Decode(
     RETURN_IF_ERROR(
         processed_tokens_.AddPendingInputToken({std::move(next_token)}));
     current_step_++;
+    latency_stats_.decode_token_queue_latency_us +=
+        absl::ToInt64Microseconds(absl::Now() - start_queue);
 
     latency_stats_.decode_e2e_latency_us +=
         absl::ToInt64Microseconds(absl::Now() - start);
@@ -1554,8 +1555,12 @@ LlmLiteRtNpuCompiledModelExecutor::Decode(
     return std::vector<std::vector<int>>{{next_token_id}};
   }
   // No tokens in queue, run a full Speculative or Normal Decode cycle.
+  auto start_get_token = absl::Now();
   auto [internal_start_step, pending_input_token] =
       processed_tokens_.GetNextUnprocessedToken();
+  latency_stats_.decode_token_queue_latency_us +=
+      absl::ToInt64Microseconds(absl::Now() - start_get_token);
+
   if (pending_input_token.empty()) {
     return absl::InvalidArgumentError("No id available to be decoded.");
   }
@@ -1568,14 +1573,22 @@ LlmLiteRtNpuCompiledModelExecutor::Decode(
                            << ": Running Main Decode Signature";
     RETURN_IF_ERROR(
         DecodeInternal(internal_start_step, pending_input_token[0]));
+
+    auto start_mark = absl::Now();
     RETURN_IF_ERROR(processed_tokens_.MarkPendingInputTokenAsProcessed());
+    latency_stats_.decode_token_queue_latency_us +=
+        absl::ToInt64Microseconds(absl::Now() - start_mark);
 
     // Sample the output of the main decode to get the 'good' token for MTP.
+    auto start_sample = absl::Now();
     LITERT_ASSIGN_OR_RETURN(
         mtp_start_token_id,
         ApplyGreedySampling(
             llm_inference_context_
-                .decode_output_buffers[LlmSignatures::kDecodeLogitsOutput]));
+                .decode_output_buffers[LlmSignatures::kDecodeLogitsOutput],
+            npu_config_.enable_neon_for_npu_greedy_sampling));
+    latency_stats_.decode_sampling_latency_us +=
+        absl::ToInt64Microseconds(absl::Now() - start_sample);
 
     // The MTP drafter starts from the position of the token we just
     // generated.
@@ -1595,8 +1608,6 @@ LlmLiteRtNpuCompiledModelExecutor::Decode(
              last_verify_activations_.data(), last_verify_activations_.size());
     }
     RETURN_IF_ERROR(processed_tokens_.MarkPendingInputTokenAsProcessed());
-    // mtp_start_step and mtp_start_token_id are already correct from
-    // internal_start_step.
   }
 
   if (speculative_decoding_type_ == SpeculativeDecodingType::kMTP) {
@@ -1614,12 +1625,15 @@ LlmLiteRtNpuCompiledModelExecutor::Decode(
     latency_stats_.decode_llm_inference_latency_us +=
         absl::ToInt64Microseconds(absl::Now() - start_verify);
 
+    auto start_rs = absl::Now();
     LITERT_ASSIGN_OR_RETURN(
         auto rs_result,
         PerformRejectionSampling(
             draft_tokens,
             llm_inference_context_
                 .verify_output_buffers[LlmSignatures::kVerifyLogitsOutput]));
+    latency_stats_.decode_mtp_rejection_sampling_latency_us +=
+        absl::ToInt64Microseconds(absl::Now() - start_rs);
 
     NPU_EXECUTOR_LOG(INFO) << "  MTP Accepted " << rs_result.num_accepted
                            << " draft tokens. Bonus: "
@@ -1643,6 +1657,7 @@ LlmLiteRtNpuCompiledModelExecutor::Decode(
 
     // Prepare next activation slice.
     {
+      auto start_act_copy = absl::Now();
       const auto& verify_activations_buffer =
           llm_inference_context_.verify_output_buffers
               [LlmSignatures::kLastLayerActivationsOutput];
@@ -1659,6 +1674,8 @@ LlmLiteRtNpuCompiledModelExecutor::Decode(
                  rs_result.num_accepted * hidden_size_in_bytes,
              hidden_size_in_bytes);
       has_valid_verify_activations_ = true;
+      latency_stats_.decode_mtp_activation_copy_latency_us +=
+          absl::ToInt64Microseconds(absl::Now() - start_act_copy);
     }
 
     // Return the first token now, queue the rest for future Decode() calls.
@@ -1675,8 +1692,11 @@ LlmLiteRtNpuCompiledModelExecutor::Decode(
     std::shared_ptr<TokenData> first_token =
         std::make_shared<TokenData>(first_token_id);
     if (UseEmbeddingLookupManager()) {
+      auto start_lookup = absl::Now();
       RETURN_IF_ERROR(embedding_lookup_manager_->LookupDecode(
           first_token->id(), first_token->mutable_embedding()));
+      latency_stats_.decode_embedder_inference_latency_us +=
+          absl::ToInt64Microseconds(absl::Now() - start_lookup);
     }
     // For MTP, we need to mark them as processed so the next step's
     // GetNextUnprocessedToken works correctly.
@@ -1695,8 +1715,10 @@ LlmLiteRtNpuCompiledModelExecutor::Decode(
         llm_inference_context_
             .decode_output_buffers[LlmSignatures::kDecodeLogitsOutput];
     auto start_sample = absl::Now();
-    LITERT_ASSIGN_OR_RETURN(const int max_index,
-                            ApplyGreedySampling(decoded_logits));
+    LITERT_ASSIGN_OR_RETURN(
+        const int max_index,
+        ApplyGreedySampling(decoded_logits,
+                            npu_config_.enable_neon_for_npu_greedy_sampling));
     latency_stats_.decode_sampling_latency_us +=
         absl::ToInt64Microseconds(absl::Now() - start_sample);
 
@@ -1706,16 +1728,23 @@ LlmLiteRtNpuCompiledModelExecutor::Decode(
         std::make_shared<TokenData>(max_index);
 
     if (UseEmbeddingLookupManager()) {
+      auto start_lookup = absl::Now();
       RETURN_IF_ERROR(embedding_lookup_manager_->LookupDecode(
           last_output_token->id(), last_output_token->mutable_embedding()));
+      latency_stats_.decode_embedder_inference_latency_us +=
+          absl::ToInt64Microseconds(absl::Now() - start_lookup);
     }
     // For Gemma3 we don't need to do anything here because we invoke
     // the Embedder before invoking the transformer during prefill/decode. All
     // we need to do is keep the token id around (which is stored as the pending
     // token).
 
+    auto start_add = absl::Now();
     RETURN_IF_ERROR(
         processed_tokens_.AddPendingInputToken({std::move(last_output_token)}));
+    latency_stats_.decode_token_queue_latency_us +=
+        absl::ToInt64Microseconds(absl::Now() - start_add);
+
     ++current_step_;
 
     latency_stats_.decode_e2e_latency_us +=
@@ -1876,7 +1905,24 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::PrefillInternal(
   }
 
   // Invoke embedder per layer signature if it exists.
-  if (embedder_per_layer_context_.has_value()) {
+  if (use_hw_ple_for_npu_ && !ple_table_ptrs_.empty()) {
+    auto start = absl::Now();
+    auto& ple_output_buffer =
+        llm_inference_context_.prefill_input_buffers[kPerLayerEmbedderTensor];
+    LITERT_ASSIGN_OR_RETURN(
+        auto lock,
+        ::litert::TensorBufferScopedLock::Create(
+            ple_output_buffer, ::litert::TensorBuffer::LockMode::kWrite));
+    void* output_ptr = lock.second;
+
+    RETURN_IF_ERROR(HWPerLayerEmbeddingLookup(
+        ids.data(), ids.size(), ple_table_ptrs_.data(),
+        ple_quant_params_.data(), num_tables_, 256, output_ptr, output_type_,
+        final_scale_, final_zero_point_));
+
+    latency_stats_.prefill_embedder_per_layer_inference_latency_us +=
+        absl::ToInt64Microseconds(absl::Now() - start);
+  } else if (embedder_per_layer_context_.has_value()) {
     auto start = absl::Now();
     auto res =
         embedder_per_layer_context_->embedder_per_layer_compiled_model.Run(
@@ -1906,10 +1952,16 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::PrefillInternal(
   // Invoke mask signature.
   {
     auto start = absl::Now();
-    auto res = npu_auxiliary_context_.npu_auxiliary_compiled_model.Run(
-        MaskSignatures::kPrefillMask, mask_context_.prefill_input_buffers,
-        mask_context_.prefill_output_buffers);
-    RET_CHECK(res) << "Failed to run compiled model." << res.Error().Message();
+    if (prefill_mask_update_method_ == MaskUpdateMethod::kWH) {
+      RETURN_IF_ERROR(HWMaskUpdate(mask_context_.prefill_input_buffers,
+                                   mask_context_.prefill_output_buffers));
+    } else {
+      auto res = npu_auxiliary_context_.npu_auxiliary_compiled_model.Run(
+          MaskSignatures::kPrefillMask, mask_context_.prefill_input_buffers,
+          mask_context_.prefill_output_buffers);
+      RET_CHECK(res) << "Failed to run compiled model."
+                     << res.Error().Message();
+    }
     auto end = absl::Now();
     latency_stats_.prefill_mask_inference_latency_us +=
         absl::ToInt64Microseconds(end - start);
@@ -1931,15 +1983,21 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::PrefillInternal(
   // Cache update.
   {
     auto start = absl::Now();
-    auto res = npu_auxiliary_context_.npu_auxiliary_compiled_model.Run(
-        CacheUpdateSignatures::kPrefillCacheUpdate,
-        cache_update_inference_context_.prefill_input_buffers,
-        cache_update_inference_context_.prefill_output_buffers);
+    if (prefill_kv_cache_update_method_ == KVCacheUpdateMethod::kWH) {
+      RETURN_IF_ERROR(HWKVCacheUpdate(
+          cache_update_inference_context_.prefill_input_buffers,
+          cache_update_inference_context_.prefill_output_buffers));
+    } else {
+      auto res = npu_auxiliary_context_.npu_auxiliary_compiled_model.Run(
+          CacheUpdateSignatures::kPrefillCacheUpdate,
+          cache_update_inference_context_.prefill_input_buffers,
+          cache_update_inference_context_.prefill_output_buffers);
+      RET_CHECK(res) << "Failed to run cache update model."
+                     << res.Error().Message();
+    }
     auto end = absl::Now();
     latency_stats_.prefill_cache_update_inference_latency_us +=
         absl::ToInt64Microseconds(end - start);
-    RET_CHECK(res) << "Failed to run cache update model."
-                   << res.Error().Message();
   }
   return absl::OkStatus();
 }
@@ -2025,7 +2083,24 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::DecodeInternal(
   }
 
   {
-    if (embedder_per_layer_context_.has_value()) {
+    if (use_hw_ple_for_npu_ && !ple_table_ptrs_.empty()) {
+      auto start = absl::Now();
+      auto& ple_output_buffer =
+          llm_inference_context_.decode_input_buffers[kPerLayerEmbedderTensor];
+      LITERT_ASSIGN_OR_RETURN(
+          auto lock,
+          ::litert::TensorBufferScopedLock::Create(
+              ple_output_buffer, ::litert::TensorBuffer::LockMode::kWrite));
+      void* output_ptr = lock.second;
+
+      int id = token->id();
+      RETURN_IF_ERROR(HWPerLayerEmbeddingLookup(
+          &id, 1, ple_table_ptrs_.data(), ple_quant_params_.data(), num_tables_,
+          256, output_ptr, output_type_, final_scale_, final_zero_point_));
+
+      latency_stats_.decode_embedder_per_layer_inference_latency_us +=
+          absl::ToInt64Microseconds(absl::Now() - start);
+    } else if (embedder_per_layer_context_.has_value()) {
       auto start = absl::Now();
       auto res =
           embedder_per_layer_context_->embedder_per_layer_compiled_model.Run(
@@ -2056,10 +2131,16 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::DecodeInternal(
   // Invoke mask signature.
   {
     auto start = absl::Now();
-    auto res = npu_auxiliary_context_.npu_auxiliary_compiled_model.Run(
-        MaskSignatures::kDecodeMask, mask_context_.decode_input_buffers,
-        mask_context_.decode_output_buffers);
-    RET_CHECK(res) << "Failed to run compiled model." << res.Error().Message();
+    if (decode_mask_update_method_ == MaskUpdateMethod::kWH) {
+      RETURN_IF_ERROR(HWMaskUpdate(mask_context_.decode_input_buffers,
+                                   mask_context_.decode_output_buffers));
+    } else {
+      auto res = npu_auxiliary_context_.npu_auxiliary_compiled_model.Run(
+          MaskSignatures::kDecodeMask, mask_context_.decode_input_buffers,
+          mask_context_.decode_output_buffers);
+      RET_CHECK(res) << "Failed to run compiled model."
+                     << res.Error().Message();
+    }
     auto end = absl::Now();
     latency_stats_.decode_mask_inference_latency_us +=
         absl::ToInt64Microseconds(end - start);
@@ -2080,12 +2161,18 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::DecodeInternal(
   // Cache update.
   {
     auto start = absl::Now();
-    auto res = npu_auxiliary_context_.npu_auxiliary_compiled_model.Run(
-        CacheUpdateSignatures::kDecodeCacheUpdate,
-        cache_update_inference_context_.decode_input_buffers,
-        cache_update_inference_context_.decode_output_buffers);
-    RET_CHECK(res) << "Failed to run cache update model."
-                   << res.Error().Message();
+    if (decode_kv_cache_update_method_ == KVCacheUpdateMethod::kWH) {
+      RETURN_IF_ERROR(HWKVCacheUpdate(
+          cache_update_inference_context_.decode_input_buffers,
+          cache_update_inference_context_.decode_output_buffers));
+    } else {
+      auto res = npu_auxiliary_context_.npu_auxiliary_compiled_model.Run(
+          CacheUpdateSignatures::kDecodeCacheUpdate,
+          cache_update_inference_context_.decode_input_buffers,
+          cache_update_inference_context_.decode_output_buffers);
+      RET_CHECK(res) << "Failed to run cache update model."
+                     << res.Error().Message();
+    }
     auto end = absl::Now();
     latency_stats_.decode_cache_update_inference_latency_us +=
         absl::ToInt64Microseconds(end - start);
@@ -2168,9 +2255,14 @@ LlmLiteRtNpuCompiledModelExecutor::RunDrafterLoop(int start_step,
       absl::ToInt64Microseconds(end - start);
 
   start = absl::Now();
-  LITERT_RETURN_IF_ERROR(aux_ctx.mtp_aux_compiled_model.Run(
-      MtpSignatures::kMtpMask, aux_ctx.mask_input_buffers,
-      aux_ctx.mask_output_buffers));
+  if (mtp_mask_update_method_ == MaskUpdateMethod::kWH) {
+    RETURN_IF_ERROR(
+        HWMaskUpdate(aux_ctx.mask_input_buffers, aux_ctx.mask_output_buffers));
+  } else {
+    LITERT_RETURN_IF_ERROR(aux_ctx.mtp_aux_compiled_model.Run(
+        MtpSignatures::kMtpMask, aux_ctx.mask_input_buffers,
+        aux_ctx.mask_output_buffers));
+  }
   end = absl::Now();
   latency_stats_.decode_mask_inference_latency_us +=
       absl::ToInt64Microseconds(end - start);
@@ -2221,9 +2313,9 @@ LlmLiteRtNpuCompiledModelExecutor::RunDrafterLoop(int start_step,
 
     start = absl::Now();
     LITERT_ASSIGN_OR_RETURN(
-        int draft_id,
-        ApplyGreedySampling(
-            ctx.mtp_output_buffers[MtpSignatures::kOutputLogits]));
+        int draft_id, ApplyGreedySampling(
+                          ctx.mtp_output_buffers[MtpSignatures::kOutputLogits],
+                          npu_config_.enable_neon_for_npu_greedy_sampling));
     end = absl::Now();
     latency_stats_.decode_sampling_latency_us +=
         absl::ToInt64Microseconds(end - start);
@@ -2246,7 +2338,8 @@ LlmLiteRtNpuCompiledModelExecutor::RunDrafterLoop(int start_step,
 namespace {
 // Helper to sample from a batch of logits at a specific index.
 absl::StatusOr<int> GetLogitsAtBatchIndex(const TensorBuffer& logits_buffer,
-                                          int batch_idx) {
+                                          int batch_idx,
+                                          bool enable_neon_sampling) {
   LITERT_ASSIGN_OR_RETURN(RankedTensorType tensor_type,
                           logits_buffer.TensorType());
   LITERT_ASSIGN_OR_RETURN(
@@ -2254,7 +2347,14 @@ absl::StatusOr<int> GetLogitsAtBatchIndex(const TensorBuffer& logits_buffer,
       ::litert::TensorBufferScopedLock::Create(
           logits_buffer, ::litert::TensorBuffer::LockMode::kRead));
 
+  if (tensor_type.Layout().Dimensions().size() < 3) {
+    return absl::InvalidArgumentError(
+        "Logits tensor must have at least 3 dimensions.");
+  }
   const int vocab_size = tensor_type.Layout().Dimensions()[2];
+  if (vocab_size == 0) {
+    return absl::InvalidArgumentError("Vocab size cannot be 0.");
+  }
   size_t element_size = 0;
   switch (tensor_type.ElementType()) {
     case ::litert::ElementType::Float32:
@@ -2275,7 +2375,7 @@ absl::StatusOr<int> GetLogitsAtBatchIndex(const TensorBuffer& logits_buffer,
   const uint8_t* logits_ptr =
       base_ptr + (batch_idx * vocab_size * element_size);
 
-  auto find_max_index = [&](auto ptr) {
+  auto find_max_index_plain = [&](auto ptr) {
     int max_idx = 0;
     auto max_val = ptr[0];
     for (int i = 1; i < vocab_size; ++i) {
@@ -2288,11 +2388,29 @@ absl::StatusOr<int> GetLogitsAtBatchIndex(const TensorBuffer& logits_buffer,
   };
 
   if (tensor_type.ElementType() == ::litert::ElementType::Float32) {
-    return find_max_index(reinterpret_cast<const float*>(logits_ptr));
+#if defined(__ANDROID__) && defined(__ARM_NEON)
+    if (enable_neon_sampling) {
+      return FindMaxIndexFloatNeon(reinterpret_cast<const float*>(logits_ptr),
+                                   vocab_size);
+    }
+#endif
+    return find_max_index_plain(reinterpret_cast<const float*>(logits_ptr));
   } else if (tensor_type.ElementType() == ::litert::ElementType::Int16) {
-    return find_max_index(reinterpret_cast<const int16_t*>(logits_ptr));
+#if defined(__ANDROID__) && defined(__ARM_NEON)
+    if (enable_neon_sampling) {
+      return FindMaxIndexInt16Neon(reinterpret_cast<const int16_t*>(logits_ptr),
+                                   vocab_size);
+    }
+#endif
+    return find_max_index_plain(reinterpret_cast<const int16_t*>(logits_ptr));
   } else if (tensor_type.ElementType() == ::litert::ElementType::Int8) {
-    return find_max_index(reinterpret_cast<const int8_t*>(logits_ptr));
+#if defined(__ANDROID__) && defined(__ARM_NEON)
+    if (enable_neon_sampling) {
+      return FindMaxIndexInt8Neon(reinterpret_cast<const int8_t*>(logits_ptr),
+                                  vocab_size);
+    }
+#endif
+    return find_max_index_plain(reinterpret_cast<const int8_t*>(logits_ptr));
   }
 
   return absl::UnimplementedError("Unsupported logit type for batch sampling.");
@@ -2337,7 +2455,24 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::RunVerifierBatch(
     return absl::InternalError("EmbeddingLookupManager not available for MTP.");
   }
 
-  if (embedder_per_layer_context_.has_value()) {
+  if (use_hw_ple_for_npu_ && !ple_table_ptrs_.empty()) {
+    auto start = absl::Now();
+    auto& ple_output_buffer =
+        llm_inference_context_.verify_input_buffers[kPerLayerEmbedderTensor];
+    LITERT_ASSIGN_OR_RETURN(
+        auto lock,
+        ::litert::TensorBufferScopedLock::Create(
+            ple_output_buffer, ::litert::TensorBuffer::LockMode::kWrite));
+    void* output_ptr = lock.second;
+
+    RETURN_IF_ERROR(HWPerLayerEmbeddingLookup(
+        verify_ids.data(), verify_ids.size(), ple_table_ptrs_.data(),
+        ple_quant_params_.data(), num_tables_, 256, output_ptr, output_type_,
+        final_scale_, final_zero_point_));
+
+    latency_stats_.decode_embedder_per_layer_inference_latency_us +=
+        absl::ToInt64Microseconds(absl::Now() - start);
+  } else if (embedder_per_layer_context_.has_value()) {
     {
       LITERT_ASSIGN_OR_RETURN(
           auto verify_ple_input_lock,
@@ -2406,10 +2541,15 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::RunVerifierBatch(
       npu_auxiliary_context_.npu_auxiliary_compiled_model.Run(
           RopeSignatures::kVerifyRope, rope_context_.verify_input_buffers,
           rope_context_.verify_output_buffers));
-  LITERT_RETURN_IF_ERROR(
-      npu_auxiliary_context_.npu_auxiliary_compiled_model.Run(
-          MaskSignatures::kVerifyMask, mask_context_.verify_input_buffers,
-          mask_context_.verify_output_buffers));
+  if (verify_mask_update_method_ == MaskUpdateMethod::kWH) {
+    LITERT_RETURN_IF_ERROR(HWMaskUpdate(mask_context_.verify_input_buffers,
+                                        mask_context_.verify_output_buffers));
+  } else {
+    LITERT_RETURN_IF_ERROR(
+        npu_auxiliary_context_.npu_auxiliary_compiled_model.Run(
+            MaskSignatures::kVerifyMask, mask_context_.verify_input_buffers,
+            mask_context_.verify_output_buffers));
+  }
 
   LITERT_RETURN_IF_ERROR(llm_compiled_model_.Run(
       LlmSignatures::kVerifyLlm, llm_inference_context_.verify_input_buffers,
@@ -2428,8 +2568,10 @@ LlmLiteRtNpuCompiledModelExecutor::PerformRejectionSampling(
   // Log all sampled tokens from the verifier for transparency.
   std::vector<int> all_verifier_sampled;
   for (int i = 0; i < draft_tokens.size() + 1; ++i) {
-    LITERT_ASSIGN_OR_RETURN(int sampled_token,
-                            GetLogitsAtBatchIndex(verifier_logits_buffer, i));
+    LITERT_ASSIGN_OR_RETURN(
+        int sampled_token,
+        GetLogitsAtBatchIndex(verifier_logits_buffer, i,
+                              npu_config_.enable_neon_for_npu_greedy_sampling));
     all_verifier_sampled.push_back(sampled_token);
   }
   NPU_EXECUTOR_LOG(INFO) << "    [RS] Verifier Sampled Tokens: ["
@@ -2453,7 +2595,8 @@ LlmLiteRtNpuCompiledModelExecutor::PerformRejectionSampling(
   if (num_accepted == draft_tokens.size()) {
     LITERT_ASSIGN_OR_RETURN(
         bonus_token_id,
-        GetLogitsAtBatchIndex(verifier_logits_buffer, num_accepted));
+        GetLogitsAtBatchIndex(verifier_logits_buffer, num_accepted,
+                              npu_config_.enable_neon_for_npu_greedy_sampling));
   }
   latency_stats_.mtp_num_draft_tokens += draft_tokens.size();
   latency_stats_.mtp_num_accepted_tokens += num_accepted;
@@ -2482,11 +2625,17 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::CommitVerifiedKVCache(
       pos_ptr[i] = start_step + i;
     }
   }
-  LITERT_RETURN_IF_ERROR(
-      npu_auxiliary_context_.npu_auxiliary_compiled_model.Run(
-          CacheUpdateSignatures::kVerifyCacheUpdate,
-          cache_update_inference_context_.verify_input_buffers,
-          cache_update_inference_context_.verify_output_buffers));
+  if (prefill_kv_cache_update_method_ == KVCacheUpdateMethod::kWH) {
+    RETURN_IF_ERROR(
+        HWKVCacheUpdate(cache_update_inference_context_.verify_input_buffers,
+                        cache_update_inference_context_.verify_output_buffers));
+  } else {
+    LITERT_RETURN_IF_ERROR(
+        npu_auxiliary_context_.npu_auxiliary_compiled_model.Run(
+            CacheUpdateSignatures::kVerifyCacheUpdate,
+            cache_update_inference_context_.verify_input_buffers,
+            cache_update_inference_context_.verify_output_buffers));
+  }
   return absl::OkStatus();
 }
 
@@ -2712,21 +2861,83 @@ LlmLiteRtNpuCompiledModelExecutor::CreateForModelHasPerLayerEmbedding(
                                      end_of_multi_modal_embedding_models, true,
                                      "decode_embedder"));
 
+  bool use_hw_ple_for_npu = false;
+  auto npu_config_status = executor_settings.GetBackendConfig<NpuConfig>();
+  if (npu_config_status.ok()) {
+    use_hw_ple_for_npu = npu_config_status->use_hw_ple_for_npu;
+  }
+
   std::optional<EmbedderPerLayerContext> embedder_per_layer_context =
       std::nullopt;
 
   LITERT_ASSIGN_OR_RETURN(
       const litert::Model* embedder_per_layer_model,
       resources.GetTFLiteModel(ModelType::kTfLitePerLayerEmbedder));
-  LITERT_ASSIGN_OR_RETURN(
-      embedder_per_layer_context,
-      CreateEmbedderPerLayerContextWithBufferSharing(
-          env, *embedder_per_layer_model,
-          mask_context.prefill_input_buffers[MaskSignatures::kMaskInputTokens],
-          mask_context.decode_input_buffers[MaskSignatures::kMaskInputTokens],
-          mask_context.verify_input_buffers[MaskSignatures::kMaskInputTokens],
-          gemma_prefill_input_buffers, gemma_decode_input_buffers,
-          gemma_verify_input_buffers, executor_settings));
+
+  std::vector<const uint8_t*> ple_table_ptrs;
+  std::vector<HWQuantizationParams> ple_quant_params;
+  std::vector<float> ple_per_tensor_scales;
+
+  int table_count = 0;
+  litert::ElementType output_type = litert::ElementType::None;
+  float final_scale = 1.0f;
+  int32_t final_zero_point = 0;
+
+  if (use_hw_ple_for_npu) {
+    auto extended_model = ExtendedModel::CreateFromNonOwnedHandle(
+        embedder_per_layer_model->Get());
+    LITERT_ASSIGN_OR_RETURN(auto subgraph, extended_model.MainSubgraph());
+    auto ops = subgraph.Ops();
+    for (const auto& op : ops) {
+      if (op.Code() == kLiteRtOpCodeTflEmbeddingLookup) {
+        LITERT_ASSIGN_OR_RETURN(auto table_tensor, op.Input(1));
+        auto weights = table_tensor.Weights();
+        ple_table_ptrs.push_back(weights.Bytes().data());
+
+        HWQuantizationParams qp;
+        qp.scales = nullptr;
+        qp.is_per_channel = false;
+
+        if (table_tensor.HasQuantization()) {
+          auto q_type = table_tensor.QTypeId();
+          if (q_type == kLiteRtQuantizationPerTensor) {
+            auto q_params = table_tensor.PerTensorQuantization();
+            ple_per_tensor_scales.push_back(q_params.scale);
+            qp.scales = &ple_per_tensor_scales.back();
+          } else if (q_type == kLiteRtQuantizationPerChannel) {
+            auto q_params = table_tensor.PerChannelQuantization();
+            qp.scales = q_params.scales;
+            qp.is_per_channel = true;
+          }
+        }
+        ple_quant_params.push_back(qp);
+        table_count++;
+      }
+    }
+
+    auto outputs = subgraph.Outputs();
+    RET_CHECK(!outputs.empty()) << "No outputs in subgraph";
+    auto output_tensor = outputs[0];
+    output_type = output_tensor.ElementType();
+
+    if (output_type == litert::ElementType::Int16) {
+      RET_CHECK(output_tensor.HasQuantization());
+      auto q_params = output_tensor.PerTensorQuantization();
+      final_scale = q_params.scale;
+      final_zero_point = q_params.zero_point;
+    }
+  } else {
+    LITERT_ASSIGN_OR_RETURN(
+        embedder_per_layer_context,
+        CreateEmbedderPerLayerContextWithBufferSharing(
+            env, *embedder_per_layer_model,
+            mask_context
+                .prefill_input_buffers[MaskSignatures::kMaskInputTokens],
+            mask_context.decode_input_buffers[MaskSignatures::kMaskInputTokens],
+            mask_context.verify_input_buffers[MaskSignatures::kMaskInputTokens],
+            gemma_prefill_input_buffers, gemma_decode_input_buffers,
+            gemma_verify_input_buffers, executor_settings));
+  }
 
   SpeculativeDecodingType speculative_decoding_type =
       SpeculativeDecodingType::kNone;
@@ -2765,7 +2976,9 @@ LlmLiteRtNpuCompiledModelExecutor::CreateForModelHasPerLayerEmbedding(
       std::move(cache_update_inference_context), std::move(prefill_runner_set),
       std::move(embedding_lookup_manager),
       std::move(embedder_per_layer_context), quantization_params,
-      speculative_decoding_type, std::move(drafter_context),
+      std::move(ple_table_ptrs), std::move(ple_quant_params),
+      std::move(ple_per_tensor_scales), table_count, output_type, final_scale,
+      final_zero_point, speculative_decoding_type, std::move(drafter_context),
       std::move(drafter_aux_context)));
   return executor;
 }
@@ -2968,9 +3181,9 @@ LlmLiteRtNpuCompiledModelExecutor::CreateForModelWithoutPerLayerEmbedding(
       std::move(llm_inference_context),
       std::move(cache_update_inference_context), std::move(prefill_runner_set),
       std::move(maybe_embedding_lookup_manager),
-      /*embedder_per_layer_context=*/std::nullopt, quantization_params,
-      speculative_decoding_type, std::move(drafter_context),
-      std::move(drafter_aux_context)));
+      /*embedder_per_layer_context=*/std::nullopt, quantization_params, {}, {},
+      {}, 0, litert::ElementType::None, 1.0f, 0, speculative_decoding_type,
+      std::move(drafter_context), std::move(drafter_aux_context)));
   return executor;
 }
 

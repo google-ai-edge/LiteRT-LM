@@ -20,6 +20,7 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "absl/container/btree_map.h"  // from @com_google_absl
@@ -30,8 +31,11 @@
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
 #include "runtime/components/model_resources.h"
+#include "litert/cc/options/litert_cpu_options.h"  // from @litert
+#include "litert/cc/options/litert_gpu_options.h"  // from @litert
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/proto/sampler_params.pb.h"
+#include "runtime/util/scoped_file.h"
 
 namespace litert::lm {
 
@@ -143,6 +147,41 @@ absl::Status GenericComputeTokenEmbeddings(
     absl::Span<float> output_ple_embeddings,
     EmbeddingLookupManager* embedding_lookup_manager,
     EmbeddingLookupManager* per_layer_embedding_lookup_manager);
+
+// Set the CPU weight cache options for XNNPACK.
+// Args:
+//   - weight_cache_file: An optional weight cache file path.
+//   - scoped_cache_file: An optional ScopedFile pointer holding an open file
+//     descriptor to the weight cache file.
+//   - logging_prefix: A prefix string for logging information.
+//   - cpu_options: The CpuOptions reference to apply the settings to.
+absl::Status SetCpuCacheOptions(
+    const absl::StatusOr<
+        std::variant<std::string, std::shared_ptr<litert::lm::ScopedFile>>>&
+        weight_cache_file,
+    absl::string_view logging_prefix,
+    litert::CpuOptions& cpu_options);
+
+// Set the GPU weight cache options for ML Drift.
+// Args:
+//   - weight_cache_path: An optional weight cache file path.
+//   - program_cache_file: An optional ScopedFile pointer holding an open file
+//     descriptor to the program cache file.
+//   - executor_settings: The ExecutorSettingsBase reference to query the model
+//     path.
+//   - cache_key: A string that defines the unique cache identifier for the
+//     model weight cache and program cache files.
+//   - logging_prefix: A prefix string for logging information.
+//   - gpu_options: The GpuOptions reference to apply the settings to.
+absl::Status SetGpuCacheOptions(
+    const std::string& weight_cache_path,
+    const absl::StatusOr<
+        std::variant<std::string, std::shared_ptr<litert::lm::ScopedFile>>>&
+        program_cache_file,
+    const ExecutorSettingsBase& executor_settings,
+    absl::string_view cache_key,
+    absl::string_view logging_prefix,
+    litert::GpuOptions& gpu_options);
 
 }  // namespace litert::lm
 

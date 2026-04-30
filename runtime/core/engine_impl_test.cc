@@ -93,7 +93,7 @@ TEST(EngineTest, CreateEngine_WithoutCache) {
   EXPECT_FALSE(responses->GetTexts()[0].empty());
 }
 
-TEST(EngineTestWithoutParallelLoading, CreateEngineAndRunInference) {
+TEST(EngineTest, CreateEngine_WithNoParallelFileSectionLoading_RunsInference) {
   auto task_path =
       std::filesystem::path(::testing::SrcDir()) /
       "litert_lm/runtime/testdata/test_lm_new_metadata.task";

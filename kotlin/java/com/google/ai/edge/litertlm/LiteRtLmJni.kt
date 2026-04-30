@@ -58,7 +58,7 @@ internal object LiteRtLmJni {
     maxNumImages: Int,
     cacheDir: String,
     enableBenchmark: Boolean,
-    enableSpeculativeDecoding: Boolean,
+    enableSpeculativeDecoding: Boolean?,
     mainNpuNativeLibraryDir: String,
     visionNpuNativeLibraryDir: String,
     audioNpuNativeLibraryDir: String,
@@ -195,6 +195,7 @@ internal object LiteRtLmJni {
    *   default from the model or engine. If empty, channels will be disabled.
    * @param enableConversationConstrainedDecoding Whether to enable conversation constrained
    *   decoding.
+   * @param filterChannelContentFromKvCache Whether to filter channel content from the KV cache.
    * @return A pointer to the native conversation instance.
    */
   external fun nativeCreateConversation(
@@ -205,6 +206,8 @@ internal object LiteRtLmJni {
     channelsJsonString: String?,
     extraContextJsonString: String,
     enableConversationConstrainedDecoding: Boolean,
+    filterChannelContentFromKvCache: Boolean,
+    overwritePromptTemplate: String?,
   ): Long
 
   /**
@@ -260,6 +263,20 @@ internal object LiteRtLmJni {
   external fun nativeConversationGetBenchmarkInfo(conversationPointer: Long): BenchmarkInfo
 
   /**
+   * Renders the message into a string for testing purposes.
+   *
+   * @param conversationPointer A pointer to the native conversation instance.
+   * @param messageJsonString The message in JSON string format.
+   * @param extraContextJsonString The extra context in JSON string format.
+   * @return The rendered message string.
+   */
+  external fun nativeConversationRenderMessageIntoString(
+    conversationPointer: Long,
+    messageJsonString: String,
+    extraContextJsonString: String,
+  ): String
+
+  /**
    * Callback for the nativeSendMessageAsync.
    *
    * <p>Keep the data type simple (string) to avoid constructing complex JVM object in native layer.
@@ -290,4 +307,13 @@ internal object LiteRtLmJni {
    * @param logSeverity The minimum log level to set. See [LogSeverity].
    */
   external fun nativeSetMinLogSeverity(logSeverity: Int)
+
+  /** Loads a LiteRT-LM file from the given path for capability queries. */
+  external fun nativeCreateCapabilities(modelPath: String): Long
+
+  /** Deletes a loaded LiteRT-LM file. */
+  external fun nativeDeleteCapabilities(capabilitiesPointer: Long)
+
+  /** Returns true if the loaded LiteRT-LM file supports speculative decoding. */
+  external fun nativeHasSpeculativeDecodingSupport(capabilitiesPointer: Long): Boolean
 }

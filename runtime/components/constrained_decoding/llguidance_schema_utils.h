@@ -26,6 +26,7 @@ namespace litert::lm {
 enum class FuncallFormat {
   // Simplified JSON-based FC format.
   kFc,
+  kPython,
 };
 
 // Supported constraint modes.
@@ -37,21 +38,20 @@ enum class LlgConstraintMode {
 
 // Options for formatting constraints.
 struct LlgConstraintsOptions {
-  FuncallFormat funcall_format = FuncallFormat::kFc;
-  LlgConstraintMode constraint_mode =
-      LlgConstraintMode::kTextAndOrFunctionCalls;
+  FuncallFormat funcall_format;
+  LlgConstraintMode constraint_mode;
 
-  // The FC control tokens.
-  std::string fc_code_fence_start = "<start_function_call>";
-  std::string fc_code_fence_end = "<end_function_call>";
-  std::string fc_open_quote = "<escape>";
-  std::string fc_close_quote = "<escape>";
-  std::string fc_function_response_start = "<start_function_response>";
+  std::string code_fence_start;
+  std::string code_fence_end;
+  std::string open_quote;
+  std::string close_quote;
+  std::string function_response_start;
 };
 
 // Converts tools to a Lark grammar string.
 absl::StatusOr<std::string> CreateLarkGrammarForTools(
     const nlohmann::ordered_json& tools, const LlgConstraintsOptions& options);
+
 }  // namespace litert::lm
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_RUNTIME_COMPONENTS_CONSTRAINED_DECODING_LLGUIDANCE_SCHEMA_UTILS_H_

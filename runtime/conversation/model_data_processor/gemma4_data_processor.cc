@@ -369,7 +369,8 @@ Gemma4DataProcessor::ToInputDataVectorImpl(
   image_params.SetPatchifyConfig(ImagePreprocessParameter::PatchifyConfig{
       .patch_width = config_.patch_width,
       .patch_height = config_.patch_height,
-      .max_num_patches = config_.max_num_patches});
+      .max_num_patches = config_.max_num_patches,
+      .pooling_kernel_size = config_.pooling_kernel_size});
   // Replace the placeholders with the actual data.
   while (RE2::FindAndConsume(&prompt_view, re_delimiter, &part)) {
     absl::string_view text_part(start, prompt_view.data() - part.size());

@@ -13,9 +13,10 @@ on:
         required: true
         default: false
         type: boolean
-  schedule:
-    - cron: '0 21 * * *'
-      timezone: 'America/Los_Angeles'
+  # TODO - b/503516226: Pause nightly until the new build is ready.
+  # schedule:
+  #   - cron: '0 21 * * *'
+  #     timezone: 'America/Los_Angeles'
 
 jobs:
   build-linux-wheel:

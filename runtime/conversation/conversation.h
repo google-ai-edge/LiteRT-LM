@@ -525,6 +525,14 @@ class Conversation {
   // continue using the Conversation after cancellation.
   void CancelGroup(absl::string_view task_group_id);
 
+  // Renders the message into a string for testing and logging purposes.
+  //
+  // This function does not need to be called for actual message sending, as the
+  // `SendMessage` and `SendMessageAsync` functions will handle rendering
+  // internally.
+  absl::StatusOr<std::string> RenderMessageIntoString(
+      const Message& message, OptionalArgs optional_args);
+
  private:
   explicit Conversation(
       Engine& engine, std::unique_ptr<Engine::Session> session,
@@ -572,10 +580,13 @@ class Conversation {
   // - `old_messages`: The old messages that have already been prefilled.
   // - `new_messages`: The new messages to be prefilled.
   // - `optional_args`: The optional arguments for template rendering.
+  // - `include_preface`: Include the preface in the returned text when
+  //   `old_messages` is empty.
   absl::StatusOr<std::string> GetPrefillTextForMessages(
       absl::Span<const Message> old_messages,
       absl::Span<const Message> new_messages,
-      const OptionalArgs& optional_args = OptionalArgs());
+      const OptionalArgs& optional_args = OptionalArgs(),
+      bool include_preface = true);
 
   // Returns the input data vector for the given messages.
   //
@@ -586,14 +597,18 @@ class Conversation {
   // - `old_messages`: The old messages that have already been prefilled.
   // - `new_messages`: The new messages to be prefilled.
   // - `optional_args`: The optional arguments for template rendering.
+  // - `include_preface`: Include the preface in the returned input data vector
+  //   when `old_messages` is empty.
   absl::StatusOr<std::vector<InputData>> GetInputDataVectorForMessages(
       absl::Span<const Message> old_messages,
       absl::Span<const Message> new_messages,
-      const OptionalArgs& optional_args = OptionalArgs());
+      const OptionalArgs& optional_args = OptionalArgs(),
+      bool include_preface = true);
 
   // Rewinds the session to the checkpoint after the most recent channel content
   // and return the input data vector for all messages from that point onward.
-  absl::StatusOr<std::vector<InputData>> RewindAndGetInputDataVector();
+  absl::StatusOr<std::vector<InputData>> RewindAndGetInputDataVector(
+      const OptionalArgs& optional_args = OptionalArgs());
 
   // Keep a reference to the creator engine to enable access to the shared
   // resources that might be required for features like cloning.
@@ -625,19 +640,12 @@ class Conversation {
   // memory corruption and null-pointer deference issues.
   std::unique_ptr<Engine::Session> session_;
 
-  // Whether checkpointing and rewinding are supported by the session.
-
-  // Assumed to be true initially but on the first error from SaveCheckpoint,
-  // will be set to false.  Rewinding is supported by SessionBasic but not by
-  // SessionAdvanced.
-  //
-  //  TODO(b/494425377): Support rewinding in SessionAdvanced and remove
-  //  session_checkpoint_supported_.
-  bool session_checkpoint_supported_ = true;
-
   // The index of the message you have to rewind to in order to remove channel
   // content from the KV cache. nullopt means no rewind is needed.
   std::optional<int> checkpoint_message_index_ = std::nullopt;
+
+  // Whether there is channel content present since the last user message.
+  bool channel_content_since_last_user_message_ = false;
 };
 }  // namespace litert::lm
 

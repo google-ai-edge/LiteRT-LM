@@ -25,7 +25,7 @@ Here you will find detailed information about the LiteRT-LM APIs.
 *   **Kotlin API**
     *   [Kotlin API](./api/kotlin/getting_started.md)
 *   **Python API**
-    *   [Python API](./api/python/getting_started.md)
+    *   [Python API](https://ai.google.dev/edge/litert-lm/python)
 
 ## Reporting Issues
 

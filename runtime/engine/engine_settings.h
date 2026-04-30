@@ -132,6 +132,14 @@ class EngineSettings {
   // in parallel.
   void SetParallelFileSectionLoading(bool parallel_file_section_loading);
 
+  // Returns true if the engine should run tasks in a single thread. Defaults
+  // to false. Typically enabled when running in Wasm (and required for wasm
+  // without pthreads).
+  bool GetSingleThreadedExecution() const;
+  // Sets whether the engine should run tasks in a single thread. Defaults to
+  // false.
+  void SetSingleThreadedExecution(bool single_threaded_execution);
+
  private:
   explicit EngineSettings(
       LlmExecutorSettings executor_settings,
@@ -158,6 +166,9 @@ class EngineSettings {
   // Whether the engine should load different sections of the litertlm file in
   // parallel.
   bool parallel_file_section_loading_ = true;
+
+  // Whether the advanced engine should run tasks in a single thread.
+  bool single_threaded_execution_ = false;
 };
 std::ostream& operator<<(std::ostream& os, const EngineSettings& settings);
 

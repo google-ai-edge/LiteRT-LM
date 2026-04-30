@@ -59,100 +59,45 @@
 #include "runtime/util/file_util.h"
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/status_macros.h"  //NOLINT
+#include "tflite/types/half.h"  // from @litert
 
 namespace litert::lm {
 namespace {
 
-absl::Status SetCpuCacheOptions(
-    const absl::StatusOr<std::string>& weight_cache_file,
-    std::shared_ptr<litert::lm::ScopedFile> scoped_cache_file,
-    litert::CpuOptions& cpu_options, absl::string_view logging_prefix) {
-  if (scoped_cache_file != nullptr) {
-    ASSIGN_OR_RETURN(auto duplicated, scoped_cache_file->Duplicate());
-    ASSIGN_OR_RETURN(int fd, duplicated.Release());
-    cpu_options.SetXNNPackWeightCacheFileDescriptor(fd);
-    ABSL_LOG(INFO) << logging_prefix
-                   << " use provided cache file descriptor: " << fd;
-  } else if (weight_cache_file.ok()) {
-    const std::string& weight_cache_path = *weight_cache_file;
-    cpu_options.SetXNNPackWeightCachePath(weight_cache_path.c_str());
-    ABSL_LOG(INFO) << logging_prefix
-                   << " use cache path: " << weight_cache_path;
-  } else {
-    ABSL_LOG(INFO) << logging_prefix << " does not use cache.";
-  }
-  return absl::OkStatus();
-}
-
-absl::Status SetGpuOptions(
-    const std::string& weight_cache_path,
-    std::shared_ptr<litert::lm::ScopedFile> scoped_cache_file,
-    const absl::StatusOr<
-        std::variant<std::string, std::shared_ptr<litert::lm::ScopedFile>>>&
-        program_cache_file,
-    const AudioExecutorSettings& executor_settings, absl::string_view cache_key,
-    absl::string_view logging_prefix, litert::GpuOptions& gpu_options) {
-#if defined(LITERT_USE_WEBGPU_ACCELERATOR)
+// Set the default GPU options for the model.
+absl::Status SetGpuOptions(const AudioExecutorSettings& executor_settings,
+                           litert::GpuOptions& gpu_options) {
+  #if defined(LITERT_USE_WEBGPU_ACCELERATOR)
   gpu_options.SetBackend(GpuOptions::Backend::kWebGpu);
 #endif  // defined(LITERT_USE_WEBGPU_ACCELERATOR)
   gpu_options.EnableConstantTensorSharing(true);
-  // TODO(b/484646529): Re-enable precision setting once the GPU audio
-  // encoder precision is fixed. Similar to vision encoder, we force FP32 for
-  // now.
-  // if (executor_settings.GetActivationDataType().has_value()) {
-  //   if (executor_settings.GetActivationDataType().value() ==
-  //       ActivationDataType::FLOAT32) {
-  //     gpu_options.SetPrecision(GpuOptions::Precision::kFp32);
-  //   } else {
-  //     gpu_options.SetPrecision(GpuOptions::Precision::kFp16);
-  //   }
-  // } else {
-  //   gpu_options.SetPrecision(GpuOptions::Precision::kFp32);
-  // }
-  gpu_options.SetPrecision(GpuOptions::Precision::kFp32);
+  // Mixed precision setting overrides the activation data type setting. The
+  // underlying delegate uses fp32 precision to represent mixed precision, so we
+  // set it to fp32 here.
+  if (executor_settings.IsMixedPrecisionEnabled()) {
+    gpu_options.SetPrecision(GpuOptions::Precision::kFp32);
+  } else if (executor_settings.GetActivationDataType().has_value()) {
+    if (executor_settings.GetActivationDataType().value() ==
+        ActivationDataType::FLOAT32) {
+      gpu_options.SetPrecision(GpuOptions::Precision::kFp32);
+    } else {
+      gpu_options.SetPrecision(GpuOptions::Precision::kFp16);
+    }
+  } else {
+    // Default to fp32 if no activation data type is specified, for backward
+    // compatibility with previous launched models.
+    gpu_options.SetPrecision(GpuOptions::Precision::kFp32);
+  }
 #if defined(__APPLE__)
   gpu_options.SetPreferTextureWeights(false);
   gpu_options.SetUseMetalArgumentBuffers(true);
 #else   // !__APPLE__
   gpu_options.SetPreferTextureWeights(true);
 #endif  // !__APPLE__
-  gpu_options.SetModelCacheKey(cache_key.data());
-  std::string cache_path = weight_cache_path;
-  bool serialization_dir_set = false;
-  if (cache_path != ":nocache") {
-    if (cache_path.empty()) {
-      ASSIGN_OR_RETURN(auto model_path,
-                       executor_settings.GetModelAssets().GetPath());
-      cache_path =
-          std::filesystem::path(std::string(model_path)).parent_path().string();
-      if (cache_path.empty()) {
-        cache_path = std::filesystem::current_path().string();
-      }
-    }
-    gpu_options.SetSerializationDir(cache_path.c_str());
-    gpu_options.SetSerializeExternalTensors(true);
-    serialization_dir_set = true;
-  }
-  if (program_cache_file.ok()) {
-    if (std::holds_alternative<std::string>(*program_cache_file)) {
-      if (!serialization_dir_set) {
-        cache_path =
-            std::filesystem::path(std::get<std::string>(*program_cache_file))
-                .parent_path()
-                .string();
-        gpu_options.SetSerializationDir(cache_path.c_str());
-      }
-    } else {
-      auto scoped_cache_file =
-          std::get<std::shared_ptr<lm::ScopedFile>>(*program_cache_file);
-      ASSIGN_OR_RETURN(auto duplicated, scoped_cache_file->Duplicate());
-      ASSIGN_OR_RETURN(int fd, duplicated.Release());
-      gpu_options.SetProgramCacheFd(fd);
-    }
-    gpu_options.SetSerializeProgramCache(true);
-  } else {
-    gpu_options.SetSerializeProgramCache(false);
-  }
+  gpu_options.SetMadviseOriginalSharedTensors(true);
+  gpu_options.SetConvertWeightsOnGpu(true);
+  gpu_options.SetHintFullyDelegatedToSingleDelegate(true);
+  gpu_options.EnableInfiniteFloatCapping(true);
   return absl::OkStatus();
 }
 
@@ -242,7 +187,9 @@ absl::Status
 AudioLiteRtCompiledModelExecutor::AudioStaticEncoder::Initialize() {
   LITERT_ASSIGN_OR_RETURN(auto options, Options::Create());
   auto weight_cache_file = executor_settings_.GetWeightCacheFile(
-      ".static_audio_encoder.xnnpack_cache");
+      absl::StrCat(AudioExecutorSettings::kStaticEncoderName,
+                   ExecutorSettingsBase::kXnnpackCacheSuffix),
+      /*check_and_clean=*/true);
   std::string weight_cache_path = executor_settings_.GetCacheDir();
   if (executor_settings_.GetBackend() == Backend::GPU) {
     LITERT_ASSIGN_OR_RETURN(auto& gpu_options, options.GetGpuOptions());
@@ -250,21 +197,21 @@ AudioLiteRtCompiledModelExecutor::AudioStaticEncoder::Initialize() {
                      executor_settings_.GetModelAssets().GetPath());
     absl::string_view model_basename = Basename(model_path);
     auto program_cache_file = executor_settings_.GetProgramCacheFile(
-        ".mldrift_program_cache.static_audio_encoder.bin");
-    RETURN_IF_ERROR(SetGpuOptions(
-        weight_cache_path, executor_settings_.GetScopedEncoderCacheFile(),
-        program_cache_file, executor_settings_,
-        absl::StrCat(model_basename, ".static_audio_encoder"), "audio_encoder",
+        absl::StrCat(AudioExecutorSettings::kStaticEncoderName,
+                     ExecutorSettingsBase::kMlDriftCacheSuffix),
+        /*check_and_clean=*/true);
+    RETURN_IF_ERROR(SetGpuOptions(executor_settings_, gpu_options));
+    RETURN_IF_ERROR(SetGpuCacheOptions(
+        weight_cache_path, program_cache_file, executor_settings_,
+        absl::StrCat(model_basename, AudioExecutorSettings::kStaticEncoderName),
+        /*logging_prefix=*/AudioExecutorSettings::kStaticEncoderName,
         gpu_options));
     options.SetHardwareAccelerators(litert::HwAccelerators::kGpu);
   } else if (executor_settings_.GetBackend() == Backend::CPU) {
     LITERT_ASSIGN_OR_RETURN(auto& cpu_options, options.GetCpuOptions());
     cpu_options.SetNumThreads(executor_settings_.GetNumThreads());
-    std::shared_ptr<ScopedFile> scoped_encoder_cache_file =
-        executor_settings_.GetScopedEncoderCacheFile();
-    RETURN_IF_ERROR(SetCpuCacheOptions(weight_cache_file,
-                                       scoped_encoder_cache_file, cpu_options,
-                                       "audio_encoder"));
+    RETURN_IF_ERROR(SetCpuCacheOptions(
+        weight_cache_file, AudioExecutorSettings::kEncoderName, cpu_options));
 
     options.SetHardwareAccelerators(litert::HwAccelerators::kCpu);
   } else {
@@ -372,7 +319,9 @@ absl::Status
 AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::Initialize() {
   LITERT_ASSIGN_OR_RETURN(auto options, Options::Create());
   auto weight_cache_file = executor_settings_.GetWeightCacheFile(
-      ".streaming_audio_encoder.xnnpack_cache");
+      absl::StrCat(AudioExecutorSettings::kStreamingEncoderName,
+                   ExecutorSettingsBase::kXnnpackCacheSuffix),
+      /*check_and_clean=*/true);
   std::string weight_cache_path = executor_settings_.GetCacheDir();
   if (executor_settings_.GetBackend() == Backend::GPU) {
     LITERT_ASSIGN_OR_RETURN(auto& gpu_options, options.GetGpuOptions());
@@ -380,22 +329,23 @@ AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::Initialize() {
                      executor_settings_.GetModelAssets().GetPath());
     absl::string_view model_basename = Basename(model_path);
     auto program_cache_file = executor_settings_.GetProgramCacheFile(
-        ".mldrift_program_cache.streaming_audio_encoder.bin");
-    RETURN_IF_ERROR(SetGpuOptions(
-        weight_cache_path, executor_settings_.GetScopedEncoderCacheFile(),
-        program_cache_file, executor_settings_,
-        absl::StrCat(model_basename, ".streaming_audio_encoder"),
-        "audio_encoder", gpu_options));
+        absl::StrCat(AudioExecutorSettings::kStreamingEncoderName,
+                     ExecutorSettingsBase::kMlDriftCacheSuffix),
+        /*check_and_clean=*/true);
+    RETURN_IF_ERROR(SetGpuOptions(executor_settings_, gpu_options));
+    RETURN_IF_ERROR(SetGpuCacheOptions(
+        weight_cache_path, program_cache_file, executor_settings_,
+        absl::StrCat(model_basename,
+                     AudioExecutorSettings::kStreamingEncoderName),
+        /*logging_prefix=*/AudioExecutorSettings::kStreamingEncoderName,
+        gpu_options));
     options.SetHardwareAccelerators(litert::HwAccelerators::kGpu);
   } else if (executor_settings_.GetBackend() == Backend::CPU) {
     LITERT_ASSIGN_OR_RETURN(auto& cpu_options, options.GetCpuOptions());
     cpu_options.SetNumThreads(executor_settings_.GetNumThreads());
 
-    std::shared_ptr<ScopedFile> scoped_encoder_cache_file =
-        executor_settings_.GetScopedEncoderCacheFile();
-    RETURN_IF_ERROR(SetCpuCacheOptions(weight_cache_file,
-                                       scoped_encoder_cache_file, cpu_options,
-                                       "audio_encoder"));
+    RETURN_IF_ERROR(SetCpuCacheOptions(
+        weight_cache_file, AudioExecutorSettings::kEncoderName, cpu_options));
 
     options.SetHardwareAccelerators(litert::HwAccelerators::kCpu);
   } else {
@@ -561,8 +511,10 @@ AudioLiteRtCompiledModelExecutor::AudioAdapter::Create(
 
 absl::Status AudioLiteRtCompiledModelExecutor::AudioAdapter::Initialize() {
   LITERT_ASSIGN_OR_RETURN(auto options, Options::Create());
-  auto weight_cache_file =
-      executor_settings_.GetWeightCacheFile(".audio_adapter.xnnpack_cache");
+  auto weight_cache_file = executor_settings_.GetWeightCacheFile(
+      absl::StrCat(AudioExecutorSettings::kAdapterName,
+                   ExecutorSettingsBase::kXnnpackCacheSuffix),
+      /*check_and_clean=*/true);
   if (executor_settings_.GetBackend() == Backend::GPU) {
     LITERT_ASSIGN_OR_RETURN(auto& gpu_options, options.GetGpuOptions());
     gpu_options.EnableConstantTensorSharing(true);
@@ -576,11 +528,8 @@ absl::Status AudioLiteRtCompiledModelExecutor::AudioAdapter::Initialize() {
     LITERT_ASSIGN_OR_RETURN(auto& cpu_options, options.GetCpuOptions());
     cpu_options.SetNumThreads(executor_settings_.GetNumThreads());
 
-    std::shared_ptr<ScopedFile> scoped_adapter_cache_file =
-        executor_settings_.GetScopedAdapterCacheFile();
-    RETURN_IF_ERROR(SetCpuCacheOptions(weight_cache_file,
-                                       scoped_adapter_cache_file, cpu_options,
-                                       "audio_adapter"));
+    RETURN_IF_ERROR(SetCpuCacheOptions(
+        weight_cache_file, AudioExecutorSettings::kAdapterName, cpu_options));
 
     options.SetHardwareAccelerators(litert::HwAccelerators::kCpu);
   } else {
@@ -700,10 +649,30 @@ AudioLiteRtCompiledModelExecutor::Create(
                           audio_encoder->GetOutputMaskBuffer().Duplicate());
   audio_adapter->GetMutableInputBuffers()[0] = std::move(encoder_mask_tensor);
   LITERT_ASSIGN_OR_RETURN(
-      auto encoder_features_tensor,
-      audio_encoder->GetMutableOutputFeaturesBuffer().Duplicate());
-  audio_adapter->GetMutableInputBuffers()[1] =
-      std::move(encoder_features_tensor);
+      auto encoder_features_type,
+      audio_encoder->GetOutputFeaturesBuffer().TensorType());
+  LITERT_ASSIGN_OR_RETURN(auto adapter_features_type,
+                          audio_adapter->GetInputBuffers()[1].TensorType());
+
+  if (encoder_features_type.ElementType() == litert::ElementType::Float16 &&
+      adapter_features_type.ElementType() == litert::ElementType::Float32) {
+    // Handled in EncodeInternal by conversion.
+  } else if (encoder_features_type.ElementType() ==
+             adapter_features_type.ElementType()) {
+    LITERT_ASSIGN_OR_RETURN(
+        auto encoder_features_tensor,
+        audio_encoder->GetMutableOutputFeaturesBuffer().Duplicate());
+    audio_adapter->GetMutableInputBuffers()[1] =
+        std::move(encoder_features_tensor);
+  } else {
+    ABSL_LOG(ERROR) << "Unsupported type mismatch between audio encoder ("
+                    << static_cast<int>(encoder_features_type.ElementType())
+                    << ") and audio adapter ("
+                    << static_cast<int>(adapter_features_type.ElementType())
+                    << ")";
+    return absl::InvalidArgumentError(
+        "Unsupported type mismatch between audio encoder and adapter");
+  }
   ABSL_LOG(INFO) << "AudioLiteRtCompiledModelExecutor created with "
                     "encoder_shrinking_factor: "
                  << encoder_shrinking_factor;
@@ -718,20 +687,57 @@ absl::StatusOr<int> AudioLiteRtCompiledModelExecutor::EncodeInternal(
     absl::Span<float> spectrogram_tensor, absl::Span<uint8_t> spectrogram_mask,
     absl::Span<float> audio_embeddings) {
   RETURN_IF_ERROR(audio_encoder_->ClearInputBuffers());
-  LITERT_RETURN_IF_ERROR(
-      audio_encoder_->GetMutableInputSpectrogramBuffer().Write<float>(
-          spectrogram_tensor));
+  auto& input_buffer = audio_encoder_->GetMutableInputSpectrogramBuffer();
+  LITERT_ASSIGN_OR_RETURN(auto tensor_type, input_buffer.TensorType());
+  if (tensor_type.ElementType() == litert::ElementType::Float16) {
+    LITERT_ASSIGN_OR_RETURN(auto buffer_lock_and_addr,
+                            TensorBufferScopedLock::Create<tflite::half>(
+                                input_buffer, TensorBuffer::LockMode::kWrite));
+    tflite::half* half_data = buffer_lock_and_addr.second;
+    for (size_t i = 0; i < spectrogram_tensor.size(); ++i) {
+      half_data[i] = static_cast<tflite::half>(spectrogram_tensor[i]);
+    }
+  } else {
+    LITERT_RETURN_IF_ERROR(input_buffer.Write<float>(spectrogram_tensor));
+  }
   LITERT_RETURN_IF_ERROR(
       audio_encoder_->GetMutableInputMaskBuffer().Write<uint8_t>(
           spectrogram_mask));
   LITERT_RETURN_IF_ERROR(audio_encoder_->GetMutableCompiledModel().Run(
       audio_encoder_->GetMutableInputBuffersMap(),
       audio_encoder_->GetMutableOutputBuffersMap()));
+
   ASSIGN_OR_RETURN(int chunk_valid_tokens,
                    GetValidCount(audio_encoder_->GetOutputMaskBuffer()));
+  auto& encoder_output = audio_encoder_->GetOutputFeaturesBuffer();
+  auto& adapter_input = audio_adapter_->GetMutableInputBuffers()[1];
+
+  LITERT_ASSIGN_OR_RETURN(auto encoder_type, encoder_output.TensorType());
+  LITERT_ASSIGN_OR_RETURN(auto adapter_type, adapter_input.TensorType());
+
+  if (encoder_type.ElementType() == litert::ElementType::Float16 &&
+      adapter_type.ElementType() == litert::ElementType::Float32) {
+    LITERT_ASSIGN_OR_RETURN(auto encoder_lock_and_addr,
+                            TensorBufferScopedLock::Create<const tflite::half>(
+                                encoder_output, TensorBuffer::LockMode::kRead));
+    const tflite::half* encoder_data = encoder_lock_and_addr.second;
+
+    LITERT_ASSIGN_OR_RETURN(auto adapter_lock_and_addr,
+                            TensorBufferScopedLock::Create<float>(
+                                adapter_input, TensorBuffer::LockMode::kWrite));
+    float* adapter_data = adapter_lock_and_addr.second;
+
+    LITERT_ASSIGN_OR_RETURN(auto elements, encoder_type.Layout().NumElements());
+
+    for (size_t i = 0; i < elements; ++i) {
+      adapter_data[i] = static_cast<float>(encoder_data[i]);
+    }
+  }
+
   LITERT_RETURN_IF_ERROR(audio_adapter_->GetMutableCompiledModel().Run(
       audio_adapter_->GetMutableInputBuffers(),
       audio_adapter_->GetMutableOutputBuffers()));
+
   LITERT_RETURN_IF_ERROR(
       audio_adapter_->GetMutableOutputBuffers()[0].Read<float>(
           absl::MakeSpan(audio_embeddings.data(),
@@ -937,3 +943,4 @@ absl::Status AudioLiteRtCompiledModelExecutor::RestoreContext(
 }
 
 }  // namespace litert::lm
+

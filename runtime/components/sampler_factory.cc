@@ -388,7 +388,7 @@ class TopKOpenClCApiSampler : public TopKCApiSampler {
                                          : nullptr,
         &sampler_params, &sampler, &error_msg);
     RETURN_IF_ERROR(CreateStatusAndFreeErrorMsg(error_code, error_msg));
-    ABSL_CHECK(sampler);
+    RET_CHECK(sampler) << "Failed to create sampler";
     return absl::WrapUnique(
         new TopKOpenClCApiSampler(std::move(capi), sampler));
   }
@@ -464,7 +464,7 @@ class TopKWebGpuCApiSampler : public TopKCApiSampler {
                                          : nullptr,
         &sampler_params, &sampler, &error_msg);
     RETURN_IF_ERROR(CreateStatusAndFreeErrorMsg(error_code, error_msg));
-    ABSL_CHECK(sampler);
+    RET_CHECK(sampler) << "Failed to create sampler";
     return absl::WrapUnique(
         new TopKWebGpuCApiSampler(std::move(capi), sampler));
   }

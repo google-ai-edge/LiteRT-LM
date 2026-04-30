@@ -41,10 +41,10 @@ using ::testing::status::StatusIs;
 
 TEST(BuildContentListTest, TextOnly) {
   LiteRtLmSettings settings;
-  json content_list = json::array();
   std::vector<InputData> input_data;
   input_data.push_back(InputText("Hello world"));
-  EXPECT_OK(BuildContentList(input_data, settings, content_list));
+  ASSERT_OK_AND_ASSIGN(json content_list,
+                       BuildContentList(input_data, settings));
   ASSERT_EQ(content_list.size(), 1);
   EXPECT_EQ(content_list[0]["type"], "text");
   EXPECT_EQ(content_list[0]["text"], "Hello world");
@@ -58,13 +58,12 @@ TEST(BuildContentListTest, MediaTagsSuccess) {
 
   LiteRtLmSettings settings;
   settings.vision_backend = "cpu";
-  json content_list = json::array();
-
   const std::string prompt =
       absl::StrCat("Describe this [image:", image_path, "].");
   std::vector<InputData> input_data;
   input_data.push_back(InputText(prompt));
-  EXPECT_OK(BuildContentList(input_data, settings, content_list));
+  ASSERT_OK_AND_ASSIGN(json content_list,
+                       BuildContentList(input_data, settings));
 
   ASSERT_EQ(content_list.size(), 3);
   EXPECT_EQ(content_list[0]["type"], "text");
@@ -82,18 +81,15 @@ TEST(BuildContentListTest, MediaTagsMissingBackend) {
 
   LiteRtLmSettings settings;
   settings.vision_backend = std::nullopt;  // Explicitly missing
-  json content_list = json::array();
-
   std::string prompt = absl::StrCat("Describe this [image:", image_path, "].");
   std::vector<InputData> input_data;
   input_data.push_back(InputText(prompt));
-  EXPECT_THAT(BuildContentList(input_data, settings, content_list),
+  EXPECT_THAT(BuildContentList(input_data, settings).status(),
               StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
 TEST(BuildContentListTest, ImageDataSuccess) {
   LiteRtLmSettings settings;
-  json content_list = json::array();
   const std::vector<std::string> images = {"image_blob_1", "image_blob_2"};
 
   std::vector<InputData> input_data;
@@ -103,7 +99,8 @@ TEST(BuildContentListTest, ImageDataSuccess) {
   input_data.push_back(InputImage(images[1]));
   input_data.push_back(InputText("."));
 
-  EXPECT_OK(BuildContentList(input_data, settings, content_list));
+  ASSERT_OK_AND_ASSIGN(json content_list,
+                       BuildContentList(input_data, settings));
 
   ASSERT_EQ(content_list.size(), 5);
   EXPECT_EQ(content_list[0]["text"], "Image 1: ");
@@ -115,6 +112,30 @@ TEST(BuildContentListTest, ImageDataSuccess) {
   EXPECT_EQ(content_list[4]["text"], ".");
 }
 
+TEST(BuildContentListTest, AudioDataSuccess) {
+  LiteRtLmSettings settings;
+  std::vector<std::string> audios = {"audio_blob_1", "audio_blob_2"};
+
+  std::vector<InputData> input_data;
+  input_data.push_back(InputText("Audio 1: "));
+  input_data.push_back(InputAudio(audios[0]));
+  input_data.push_back(InputText(", Audio 2: "));
+  input_data.push_back(InputAudio(audios[1]));
+  input_data.push_back(InputText("."));
+
+  ASSERT_OK_AND_ASSIGN(json content_list,
+                       BuildContentList(input_data, settings));
+
+  ASSERT_EQ(content_list.size(), 5);
+  EXPECT_EQ(content_list[0]["text"], "Audio 1: ");
+  EXPECT_EQ(content_list[1]["type"], "audio");
+  EXPECT_EQ(content_list[1]["blob"], absl::Base64Escape("audio_blob_1"));
+  EXPECT_EQ(content_list[2]["text"], ", Audio 2: ");
+  EXPECT_EQ(content_list[3]["type"], "audio");
+  EXPECT_EQ(content_list[3]["blob"], absl::Base64Escape("audio_blob_2"));
+  EXPECT_EQ(content_list[4]["text"], ".");
+}
+
 TEST(BuildContentListTest, MixedModality) {
   const std::string temp_dir = testing::TempDir();
   const std::string audio_path = temp_dir + "/test_audio.wav";
@@ -122,25 +143,31 @@ TEST(BuildContentListTest, MixedModality) {
 
   LiteRtLmSettings settings;
   settings.audio_backend = "cpu";
-  json content_list = json::array();
   std::vector<std::string> images = {"image_blob_1"};
+  std::vector<std::string> audios = {"audio_blob_1"};
 
   std::string prompt =
       absl::StrCat("Listen to [audio:", audio_path, "] and look at ");
   std::vector<InputData> input_data;
   input_data.push_back(InputText(prompt));
   input_data.push_back(InputImage(images[0]));
+  input_data.push_back(InputText(" and listen to "));
+  input_data.push_back(InputAudio(audios[0]));
   input_data.push_back(InputText("."));
-  EXPECT_OK(BuildContentList(input_data, settings, content_list));
+  ASSERT_OK_AND_ASSIGN(json content_list,
+                       BuildContentList(input_data, settings));
 
-  ASSERT_EQ(content_list.size(), 5);
+  ASSERT_EQ(content_list.size(), 7);
   EXPECT_EQ(content_list[0]["text"], "Listen to ");
   EXPECT_EQ(content_list[1]["type"], "audio");
   EXPECT_EQ(content_list[1]["path"], audio_path);
   EXPECT_EQ(content_list[2]["text"], " and look at ");
   EXPECT_EQ(content_list[3]["type"], "image");
   EXPECT_EQ(content_list[3]["blob"], absl::Base64Escape("image_blob_1"));
-  EXPECT_EQ(content_list[4]["text"], ".");
+  EXPECT_EQ(content_list[4]["text"], " and listen to ");
+  EXPECT_EQ(content_list[5]["type"], "audio");
+  EXPECT_EQ(content_list[5]["blob"], absl::Base64Escape("audio_blob_1"));
+  EXPECT_EQ(content_list[6]["text"], ".");
 }
 
 TEST(LiteRtLmLibTest, RunLiteRtLmWithEmptyModelPathReturnsError) {

@@ -24,12 +24,16 @@ package(
 
 licenses(["notice"])
 
+exports_files([
+    "engine.cc",
+    "engine.h",
+])
+
 ENGINE_COMMON_DEPS = [
     "@com_google_absl//absl/base:core_headers",
     "@com_google_absl//absl/base:log_severity",
     "@com_google_absl//absl/functional:any_invocable",
     "@com_google_absl//absl/log:absl_log",
-    "@com_google_absl//absl/log:globals",
     "@com_google_absl//absl/log:initialize",
     "@com_google_absl//absl/log:log_sink_registry",
     "@com_google_absl//absl/status",
@@ -38,7 +42,6 @@ ENGINE_COMMON_DEPS = [
     "@com_google_absl//absl/strings:string_view",
     "@com_google_absl//absl/time",
     "@nlohmann_json//:json",
-    "@litert//litert/c/internal:litert_logging",
     "//runtime/conversation",
     "//runtime/conversation:io_types",
     "//runtime/engine:engine_factory",
@@ -48,18 +51,19 @@ ENGINE_COMMON_DEPS = [
     "//runtime/executor:executor_settings_base",
     "//runtime/executor:llm_executor_settings",
     "//runtime/proto:engine_cc_proto",
+    "//runtime/proto:llm_metadata_cc_proto",
     "//runtime/proto:sampler_params_cc_proto",
+    "//runtime/proto:token_cc_proto",
+    "//runtime/util:logging",
 ]
 
 cc_library(
     name = "engine",
     srcs = [
         "engine.cc",
-        "litert_lm_logging.cc",
     ],
     hdrs = [
         "engine.h",
-        "litert_lm_logging.h",
     ],
     visibility = ["//visibility:public"],
     deps = ENGINE_COMMON_DEPS + [
@@ -71,11 +75,9 @@ cc_library(
     name = "engine_cpu",
     srcs = [
         "engine.cc",
-        "litert_lm_logging.cc",
     ],
     hdrs = [
         "engine.h",
-        "litert_lm_logging.h",
     ],
     visibility = ["//visibility:public"],
     deps = ENGINE_COMMON_DEPS + [

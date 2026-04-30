@@ -16,12 +16,13 @@
 
 from __future__ import annotations
 
-import abc
 import collections.abc
 import inspect
 import re
 import typing
 from typing import Any
+
+from .interfaces import Tool
 
 
 def _parse_param_descriptions(docstring: str) -> dict[str, str]:
@@ -55,25 +56,6 @@ def _parse_param_descriptions(docstring: str) -> dict[str, str]:
     elif not stripped:
       current_arg = None
   return descriptions
-
-
-class Tool(abc.ABC):
-  """A tool that can be executed."""
-
-  @abc.abstractmethod
-  def get_tool_description(self) -> dict[str, Any]:
-    """Returns a JSON representing the tool in openapi schema."""
-
-  @abc.abstractmethod
-  def execute(self, param: collections.abc.Mapping[str, Any]) -> Any:
-    """Executes the underlying function and returns the result.
-
-    Args:
-        param: A dictionary containing the parameters for the tool.
-
-    Returns:
-        The result of the tool execution.
-    """
 
 
 def _py_type_to_openapi(py_type: Any) -> dict[str, Any]:
@@ -112,18 +94,23 @@ class _FunctionTool(Tool):
 
     parameters = {
         "type": "object",
-        "properties": {},
-        "required": [],
+        "properties": {
+            name: {
+                **_py_type_to_openapi(param.annotation),
+                **(
+                    {"description": param_descriptions[name]}
+                    if name in param_descriptions
+                    else {}
+                ),
+            }
+            for name, param in sig.parameters.items()
+        },
+        "required": [
+            name
+            for name, param in sig.parameters.items()
+            if param.default is inspect.Parameter.empty
+        ],
     }
-
-    for name, param in sig.parameters.items():
-      parameters["properties"][name] = _py_type_to_openapi(param.annotation)
-
-      if name in param_descriptions:
-        parameters["properties"][name]["description"] = param_descriptions[name]
-
-      if param.default is inspect.Parameter.empty:
-        parameters["required"].append(name)
 
     return {
         "type": "function",

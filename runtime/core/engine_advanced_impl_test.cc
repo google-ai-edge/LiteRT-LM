@@ -100,7 +100,7 @@ TEST(EngineTest, CreateEngine_WithoutCache) {
   EXPECT_FALSE(responses->GetTexts()[0].empty());
 }
 
-TEST(EngineTestWithoutParallelLoading, CreateEngineAndRunInference) {
+TEST(EngineTest, CreateEngine_WithNoParallelFileSectionLoading_RunsInference) {
   auto task_path =
       std::filesystem::path(::testing::SrcDir()) /
       "litert_lm/runtime/testdata/test_lm_new_metadata.task";
@@ -113,6 +113,37 @@ TEST(EngineTestWithoutParallelLoading, CreateEngineAndRunInference) {
       kMaxNumTokens);
   engine_settings->GetMutableMainExecutorSettings().SetCacheDir(":nocache");
   engine_settings->SetParallelFileSectionLoading(false);
+
+  absl::StatusOr<std::unique_ptr<Engine>> llm = CreateEngine(*engine_settings);
+  ABSL_CHECK_OK(llm);
+
+  absl::StatusOr<std::unique_ptr<Engine::Session>> session =
+      (*llm)->CreateSession(SessionConfig::CreateDefault());
+  ABSL_CHECK_OK(session);
+
+  std::vector<InputData> inputs;
+  inputs.emplace_back(InputText("Hello world!"));
+  ABSL_CHECK_OK((*session)->RunPrefill(inputs));
+
+  auto responses = (*session)->RunDecode();
+  ASSERT_OK(responses);
+  EXPECT_EQ(responses->GetTexts().size(), 1);
+  EXPECT_FALSE(responses->GetTexts()[0].empty());
+}
+
+TEST(EngineTest, CreateEngine_WithSingleThreadedExecution_RunsInference) {
+  auto task_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm_new_metadata.task";
+  auto model_assets = ModelAssets::Create(task_path.string());
+  ASSERT_OK(model_assets);
+  auto engine_settings =
+      EngineSettings::CreateDefault(*model_assets, Backend::CPU);
+  ASSERT_OK(engine_settings);
+  engine_settings->GetMutableMainExecutorSettings().SetMaxNumTokens(
+      kMaxNumTokens);
+  engine_settings->GetMutableMainExecutorSettings().SetCacheDir(":nocache");
+  engine_settings->SetSingleThreadedExecution(true);
 
   absl::StatusOr<std::unique_ptr<Engine>> llm = CreateEngine(*engine_settings);
   ABSL_CHECK_OK(llm);

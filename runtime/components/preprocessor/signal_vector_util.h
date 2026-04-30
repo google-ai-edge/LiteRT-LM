@@ -42,7 +42,7 @@ inline float SmootherCoefficientFromScale(float scale) {
   if (scale <= 0.01) return 1.0;  // Negligible smoothing requested.
   const float t = scale * scale;  // Kernel variance, TP Lindeberg's t notation.
   const float coefficient =
-      std::sqrt(std::powf(1.0 + 2.0 / t, 2) - 1.0) - 2.0 / t;
+      std::sqrt(powf(1.0 + 2.0 / t, 2) - 1.0) - 2.0 / t;
   return coefficient;
 }
 

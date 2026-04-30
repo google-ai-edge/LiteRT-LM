@@ -1,0 +1,66 @@
+# Copyright 2026 The ODML Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# This file contains the configuration for the litert-lm-builder Python package.
+# It defines metadata, dependencies, and entry points for the package.
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "litert-lm-builder"
+version = "0.9.0"
+description = "Python tools for building LiteRT-LM"
+dependencies = [
+    "protobuf",
+    "flatbuffers",
+    "absl-py",
+    "tomli",
+]
+keywords = ["On-Device ML", "AI", "Google", "TFLite", "LiteRT", "PyTorch", "LLMs", "GenAI"]
+requires-python = ">=3.10"
+
+readme = { text = """
+# LiteRT-LM Builder
+
+Python tools for building, inspecting, and unpacking LiteRT-LM files.
+
+## Usage
+
+### 🛠️ Build a LiteRT-LM File
+Use the CLI tool:
+
+```bash
+litert-lm-builder [options]
+```
+
+### 🔍 Inspect and Unpack a LiteRT-LM File
+Use the CLI tool:
+
+```bash
+litert-lm-peek [options]
+```
+""", content-type = "text/markdown" }
+
+
+[project.scripts]
+"litert-lm-builder" = "litert_lm_builder.litertlm_builder_cli:run"
+"litert-lm-peek" = "litert_lm_builder.litertlm_peek_main:run"
+
+
+[project.urls]
+Homepage = "https://github.com/google-ai-edge/LiteRT-LM"
+Repository = "https://github.com/google-ai-edge/LiteRT-LM"
+

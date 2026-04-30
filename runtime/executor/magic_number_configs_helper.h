@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "litert/cc/litert_environment.h"  // from @litert
+#include "litert/cc/litert_environment_options.h"  // from @litert
 #include "litert/cc/options/litert_magic_number_options.h"  // from @litert
 #include "runtime/components/model_resources.h"
 #include "runtime/executor/llm_executor_settings.h"
@@ -37,7 +38,7 @@ class MagicNumberConfigsHelper {
   // Note that the returned options contain pointers to the internal memory of
   // this class, and the caller should make sure the helper outlives the usage
   // of the returned options.
-  std::vector<Environment::Option> GetLiteRtEnvOptions(
+  std::vector<EnvironmentOptions::Option> GetLiteRtEnvOptions(
       ModelResources& resources, const LlmExecutorSettings& executor_settings);
 
   const LiteRtMagicNumberConfigs* magic_number_configs() const {

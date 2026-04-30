@@ -79,12 +79,14 @@ ENGINE_IMPL_COMMON_DEPS = [
     "//runtime/executor:llm_litert_compiled_model_executor_factory",
     "//runtime/util:file_format_util",
     "//runtime/util:litert_status_util",
+    "//runtime/util:logging",
 ] + select({
     "@litert//litert:litert_link_capi_so": [
         "@litert//litert/cc:litert_api_with_dynamic_runtime",
     ],
     "//conditions:default": [
         "@litert//litert/cc:litert_environment",
+        "@litert//litert/cc:litert_environment_options",
     ],
 })
 
@@ -299,6 +301,7 @@ cc_test(
         ],
         "//conditions:default": [
             "@litert//litert/cc:litert_environment",
+            "@litert//litert/cc:litert_environment_options",
         ],
     }),
 )

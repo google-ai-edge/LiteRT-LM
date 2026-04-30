@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstring>
 #include <memory>
+#include <optional>
 #include <string>
 
 #include <gmock/gmock.h>
@@ -17,16 +18,32 @@
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/llm_executor_settings.h"
 
+using ::litert::lm::Conversation;
+using ::litert::lm::EngineSettings;
+using ::litert::lm::SessionConfig;
+
 struct LiteRtLmEngineSettings {
-  std::unique_ptr<litert::lm::EngineSettings> settings;
+  std::unique_ptr<EngineSettings> settings;
 };
 
 struct LiteRtLmSessionConfig {
-  std::unique_ptr<litert::lm::SessionConfig> config;
+  std::unique_ptr<SessionConfig> config;
 };
 
 struct LiteRtLmConversationConfig {
-  std::unique_ptr<litert::lm::ConversationConfig> config;
+  std::optional<SessionConfig> session_config;
+  std::string system_message_json;
+  std::string tools_json;
+  std::string messages_json;
+  bool enable_constrained_decoding = false;
+};
+
+struct LiteRtLmConversation {
+  std::unique_ptr<Conversation> conversation;
+};
+
+struct LiteRtLmJsonResponse {
+  std::string json_string;
 };
 
 namespace {
@@ -61,6 +78,17 @@ using SessionConfigPtr =
 using ConversationConfigPtr =
     std::unique_ptr<LiteRtLmConversationConfig,
                     decltype(&litert_lm_conversation_config_delete)>;
+using TokenizeResultPtr =
+    std::unique_ptr<LiteRtLmTokenizeResult,
+                    decltype(&litert_lm_tokenize_result_delete)>;
+using DetokenizeResultPtr =
+    std::unique_ptr<LiteRtLmDetokenizeResult,
+                    decltype(&litert_lm_detokenize_result_delete)>;
+using TokenUnionPtr = std::unique_ptr<LiteRtLmTokenUnion,
+                                      decltype(&litert_lm_token_union_delete)>;
+using TokenUnionsPtr =
+    std::unique_ptr<LiteRtLmTokenUnions,
+                    decltype(&litert_lm_token_unions_delete)>;
 
 TEST(EngineCTest, CreateSettingsWithNoVisionAndAudioBackend) {
   const std::string task_path = "test_model_path_1";
@@ -169,9 +197,39 @@ TEST(EngineCTest, BenchmarkSettings) {
   EXPECT_EQ(params->num_decode_tokens(), 200);
 }
 
+TEST(EngineCTest, SetEnableSpeculativeDecoding) {
+  const std::string task_path = "test_model_path_1";
+  EngineSettingsPtr settings(
+      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
+                                       /* vision_backend_str */ nullptr,
+                                       /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+
+  // Default should be false.
+  EXPECT_FALSE(settings->settings->GetMainExecutorSettings()
+                   .GetAdvancedSettings()
+                   .value_or(litert::lm::AdvancedSettings())
+                   .enable_speculative_decoding);
+
+  litert_lm_engine_settings_set_enable_speculative_decoding(settings.get(),
+                                                            true);
+  EXPECT_TRUE(settings->settings->GetMainExecutorSettings()
+                  .GetAdvancedSettings()
+                  .value_or(litert::lm::AdvancedSettings())
+                  .enable_speculative_decoding);
+
+  litert_lm_engine_settings_set_enable_speculative_decoding(settings.get(),
+                                                            false);
+  EXPECT_FALSE(settings->settings->GetMainExecutorSettings()
+                   .GetAdvancedSettings()
+                   .value_or(litert::lm::AdvancedSettings())
+                   .enable_speculative_decoding);
+}
+
 TEST(EngineCTest, CreateSessionConfigWithSamplerParams) {
   LiteRtLmSamplerParams sampler_params;
-  sampler_params.type = kTopP;
+  sampler_params.type = kLiteRtLmSamplerTypeTopP;
   sampler_params.top_k = 10;
   sampler_params.top_p = 0.5f;
   sampler_params.temperature = 0.1f;
@@ -200,6 +258,21 @@ TEST(EngineCTest, CreateSessionConfigWithNoSamplerParams) {
             litert::lm::proto::SamplerParameters::TYPE_UNSPECIFIED);
 }
 
+TEST(EngineCTest, CreateSessionConfigWithApplyPromptTemplate) {
+  SessionConfigPtr config(litert_lm_session_config_create(),
+                          &litert_lm_session_config_delete);
+  ASSERT_NE(config, nullptr);
+
+  // By default, it is true.
+  EXPECT_TRUE(config->config->GetApplyPromptTemplateInSession());
+
+  litert_lm_session_config_set_apply_prompt_template(config.get(), false);
+  EXPECT_FALSE(config->config->GetApplyPromptTemplateInSession());
+
+  litert_lm_session_config_set_apply_prompt_template(config.get(), true);
+  EXPECT_TRUE(config->config->GetApplyPromptTemplateInSession());
+}
+
 TEST(EngineCTest, CreateConversationConfig) {
   // 1. Create an engine.
   const std::string task_path = GetTestdataPath(
@@ -219,7 +292,7 @@ TEST(EngineCTest, CreateConversationConfig) {
 
   // 2. Create Sampler Params.
   LiteRtLmSamplerParams sampler_params;
-  sampler_params.type = kTopP;
+  sampler_params.type = kLiteRtLmSamplerTypeTopP;
   sampler_params.top_k = 10;
   sampler_params.top_p = 0.5f;
   sampler_params.temperature = 0.1f;
@@ -235,24 +308,31 @@ TEST(EngineCTest, CreateConversationConfig) {
   const std::string system_message =
       R"({"type":"text","text":"You are a helpful assistant."})";
   ConversationConfigPtr conversation_config(
-      litert_lm_conversation_config_create(
-          engine.get(), session_config.get(), system_message.c_str(),
-          /*tools_json=*/nullptr, /*messages_json=*/nullptr,
-          /*enable_constrained_decoding=*/false),
+      litert_lm_conversation_config_create(),
       &litert_lm_conversation_config_delete);
   ASSERT_NE(conversation_config, nullptr);
+  litert_lm_conversation_config_set_session_config(conversation_config.get(),
+                                                   session_config.get());
+  litert_lm_conversation_config_set_system_message(conversation_config.get(),
+                                                   system_message.c_str());
 
-  // 4. Test to see if the Conversation Config has the Sampler Params.
-  const auto& params =
-      conversation_config->config->GetSessionConfig().GetSamplerParams();
+  // 4. Test to see if the Conversation has the Sampler Params.
+  ConversationPtr conversation(
+      litert_lm_conversation_create(engine.get(), conversation_config.get()),
+      &litert_lm_conversation_delete);
+  ASSERT_NE(conversation, nullptr);
+
+  const auto& params = conversation->conversation->GetConfig()
+                           .GetSessionConfig()
+                           .GetSamplerParams();
   EXPECT_EQ(params.k(), 10);
   EXPECT_FLOAT_EQ(params.p(), 0.5f);
   EXPECT_FLOAT_EQ(params.temperature(), 0.1f);
   EXPECT_EQ(params.seed(), 1234);
 
-  // 5. Test to see if the Conversation Config has the correct System Message.
+  // 5. Test to see if the Conversation has the correct System Message.
   const auto& preface = std::get<litert::lm::JsonPreface>(
-      conversation_config->config->GetPreface());
+      conversation->conversation->GetConfig().GetPreface());
   nlohmann::ordered_json message;
   message["role"] = "system";
   message["content"] = nlohmann::ordered_json::parse(system_message);
@@ -278,23 +358,24 @@ TEST(EngineCTest, CreateConversationConfigWithNoSamplerParams) {
                    &litert_lm_engine_delete);
   ASSERT_NE(engine, nullptr);
 
-  // 2. Create a Conversation Config with the Engine Handle and System Message.
+  // 2. Create a Conversation Config with the System Message.
   const std::string system_message =
       R"({"type":"text","text":"You are a helpful assistant."})";
-  SessionConfigPtr session_config(litert_lm_session_config_create(),
-                                  &litert_lm_session_config_delete);
-  ASSERT_NE(session_config, nullptr);
   ConversationConfigPtr conversation_config(
-      litert_lm_conversation_config_create(
-          engine.get(), session_config.get(), system_message.c_str(),
-          /*tools_json=*/nullptr, /*messages_json=*/nullptr,
-          /*enable_constrained_decoding=*/false),
+      litert_lm_conversation_config_create(),
       &litert_lm_conversation_config_delete);
   ASSERT_NE(conversation_config, nullptr);
+  litert_lm_conversation_config_set_system_message(conversation_config.get(),
+                                                   system_message.c_str());
 
-  // 3. Test to see if the Conversation Config has the correct System Message.
+  // 3. Test to see if the Conversation has the correct System Message.
+  ConversationPtr conversation(
+      litert_lm_conversation_create(engine.get(), conversation_config.get()),
+      &litert_lm_conversation_delete);
+  ASSERT_NE(conversation, nullptr);
+
   const auto& preface = std::get<litert::lm::JsonPreface>(
-      conversation_config->config->GetPreface());
+      conversation->conversation->GetConfig().GetPreface());
   nlohmann::ordered_json message;
   message["role"] = "system";
   message["content"] = nlohmann::ordered_json::parse(system_message);
@@ -320,24 +401,25 @@ TEST(EngineCTest, CreateConversationConfigWithNoSamplerParamsNoSystemMessage) {
                    &litert_lm_engine_delete);
   ASSERT_NE(engine, nullptr);
 
-  // 2. Create a Conversation Config with the Engine Handle and System Message.
+  // 2. Create a Conversation Config with the Session Config.
   SessionConfigPtr session_config(litert_lm_session_config_create(),
                                   &litert_lm_session_config_delete);
   ASSERT_NE(session_config, nullptr);
   ConversationConfigPtr conversation_config(
-      litert_lm_conversation_config_create(
-          engine.get(),
-          /*session_config=*/session_config.get(),
-          /*system_message_json=*/nullptr,
-          /*tools_json=*/nullptr,
-          /*messages_json=*/nullptr,
-          /*enable_constrained_decoding=*/false),
+      litert_lm_conversation_config_create(),
       &litert_lm_conversation_config_delete);
   ASSERT_NE(conversation_config, nullptr);
+  litert_lm_conversation_config_set_session_config(conversation_config.get(),
+                                                   session_config.get());
 
-  // 4. Test to see if the Conversation Config has the correct System Message.
+  // 4. Test to see if the Conversation has the correct System Message.
+  ConversationPtr conversation(
+      litert_lm_conversation_create(engine.get(), conversation_config.get()),
+      &litert_lm_conversation_delete);
+  ASSERT_NE(conversation, nullptr);
+
   const auto& preface = std::get<litert::lm::JsonPreface>(
-      conversation_config->config->GetPreface());
+      conversation->conversation->GetConfig().GetPreface());
   EXPECT_EQ(preface.messages, nullptr);
 }
 
@@ -378,17 +460,20 @@ TEST(EngineCTest, CreateConversationConfigWithTools) {
   ])";
 
   ConversationConfigPtr conversation_config(
-      litert_lm_conversation_config_create(
-          engine.get(), /*session_config=*/nullptr,
-          /*system_message_json=*/nullptr, tools_json.c_str(),
-          /*messages_json=*/nullptr,
-          /*enable_constrained_decoding=*/false),
+      litert_lm_conversation_config_create(),
       &litert_lm_conversation_config_delete);
   ASSERT_NE(conversation_config, nullptr);
+  litert_lm_conversation_config_set_tools(conversation_config.get(),
+                                          tools_json.c_str());
 
-  // 3. Test to see if the Conversation Config has the correct tools.
+  // 3. Test to see if the Conversation has the correct tools.
+  ConversationPtr conversation(
+      litert_lm_conversation_create(engine.get(), conversation_config.get()),
+      &litert_lm_conversation_delete);
+  ASSERT_NE(conversation, nullptr);
+
   const auto& preface = std::get<litert::lm::JsonPreface>(
-      conversation_config->config->GetPreface());
+      conversation->conversation->GetConfig().GetPreface());
   EXPECT_EQ(preface.tools, nlohmann::ordered_json::parse(tools_json));
 }
 
@@ -413,17 +498,20 @@ TEST(EngineCTest, CreateConversationConfigWithInvalidTools) {
   const std::string tools_json = R"({"type": "function"})";  // Not an array
 
   ConversationConfigPtr conversation_config(
-      litert_lm_conversation_config_create(
-          engine.get(), /*session_config=*/nullptr,
-          /*system_message_json=*/nullptr, tools_json.c_str(),
-          /*messages_json=*/nullptr,
-          /*enable_constrained_decoding=*/false),
+      litert_lm_conversation_config_create(),
       &litert_lm_conversation_config_delete);
   ASSERT_NE(conversation_config, nullptr);
+  litert_lm_conversation_config_set_tools(conversation_config.get(),
+                                          tools_json.c_str());
 
-  // 3. Test to see if the Conversation Config has no tools.
+  // 3. Test to see if the Conversation has no tools.
+  ConversationPtr conversation(
+      litert_lm_conversation_create(engine.get(), conversation_config.get()),
+      &litert_lm_conversation_delete);
+  ASSERT_NE(conversation, nullptr);
+
   const auto& preface = std::get<litert::lm::JsonPreface>(
-      conversation_config->config->GetPreface());
+      conversation->conversation->GetConfig().GetPreface());
   EXPECT_TRUE(preface.tools.is_null());
 }
 
@@ -448,17 +536,20 @@ TEST(EngineCTest, CreateConversationConfigWithEmptyToolsArray) {
   const std::string tools_json = R"([])";
 
   ConversationConfigPtr conversation_config(
-      litert_lm_conversation_config_create(
-          engine.get(), /*session_config=*/nullptr,
-          /*system_message_json=*/nullptr, tools_json.c_str(),
-          /*messages_json=*/nullptr,
-          /*enable_constrained_decoding=*/false),
+      litert_lm_conversation_config_create(),
       &litert_lm_conversation_config_delete);
   ASSERT_NE(conversation_config, nullptr);
+  litert_lm_conversation_config_set_tools(conversation_config.get(),
+                                          tools_json.c_str());
 
-  // 3. Test to see if the Conversation Config has empty tools.
+  // 3. Test to see if the Conversation has empty tools.
+  ConversationPtr conversation(
+      litert_lm_conversation_create(engine.get(), conversation_config.get()),
+      &litert_lm_conversation_delete);
+  ASSERT_NE(conversation, nullptr);
+
   const auto& preface = std::get<litert::lm::JsonPreface>(
-      conversation_config->config->GetPreface());
+      conversation->conversation->GetConfig().GetPreface());
   EXPECT_TRUE(preface.tools.is_array());
   EXPECT_TRUE(preface.tools.empty());
 }
@@ -484,17 +575,20 @@ TEST(EngineCTest, CreateConversationConfigWithMalformedToolsJson) {
   const std::string tools_json = R"([{"type": "function", ...}])";
 
   ConversationConfigPtr conversation_config(
-      litert_lm_conversation_config_create(
-          engine.get(), /*session_config=*/nullptr,
-          /*system_message_json=*/nullptr, tools_json.c_str(),
-          /*messages_json=*/nullptr,
-          /*enable_constrained_decoding=*/false),
+      litert_lm_conversation_config_create(),
       &litert_lm_conversation_config_delete);
   ASSERT_NE(conversation_config, nullptr);
+  litert_lm_conversation_config_set_tools(conversation_config.get(),
+                                          tools_json.c_str());
 
-  // 3. Test to see if the Conversation Config has no tools.
+  // 3. Test to see if the Conversation has no tools.
+  ConversationPtr conversation(
+      litert_lm_conversation_create(engine.get(), conversation_config.get()),
+      &litert_lm_conversation_delete);
+  ASSERT_NE(conversation, nullptr);
+
   const auto& preface = std::get<litert::lm::JsonPreface>(
-      conversation_config->config->GetPreface());
+      conversation->conversation->GetConfig().GetPreface());
   EXPECT_TRUE(preface.tools.is_null());
 }
 
@@ -517,7 +611,7 @@ TEST(EngineCTest, CreateConversationConfigWithNoSystemMessage) {
 
   // 2. Create Sampler Params.
   LiteRtLmSamplerParams sampler_params;
-  sampler_params.type = kTopP;
+  sampler_params.type = kLiteRtLmSamplerTypeTopP;
   sampler_params.top_k = 10;
   sampler_params.top_p = 0.5f;
   sampler_params.temperature = 0.1f;
@@ -528,27 +622,101 @@ TEST(EngineCTest, CreateConversationConfigWithNoSystemMessage) {
   litert_lm_session_config_set_sampler_params(session_config.get(),
                                               &sampler_params);
 
-  // 3. Create a Conversation Config with the Engine Handle and Session Config.
+  // 3. Create a Conversation Config with the Session Config.
   ConversationConfigPtr conversation_config(
-      litert_lm_conversation_config_create(
-          engine.get(), session_config.get(), /*system_message_json=*/nullptr,
-          /*tools_json=*/nullptr, /*messages_json=*/nullptr,
-          /*enable_constrained_decoding=*/false),
+      litert_lm_conversation_config_create(),
       &litert_lm_conversation_config_delete);
   ASSERT_NE(conversation_config, nullptr);
+  litert_lm_conversation_config_set_session_config(conversation_config.get(),
+                                                   session_config.get());
 
-  // 4. Test to see if the Conversation Config has the default Sampler Params.
-  const auto& params =
-      conversation_config->config->GetSessionConfig().GetSamplerParams();
+  // 4. Test to see if the Conversation has the default Sampler Params.
+  ConversationPtr conversation(
+      litert_lm_conversation_create(engine.get(), conversation_config.get()),
+      &litert_lm_conversation_delete);
+  ASSERT_NE(conversation, nullptr);
+
+  const auto& params = conversation->conversation->GetConfig()
+                           .GetSessionConfig()
+                           .GetSamplerParams();
   EXPECT_EQ(params.k(), 10);
   EXPECT_FLOAT_EQ(params.p(), 0.5f);
   EXPECT_FLOAT_EQ(params.temperature(), 0.1f);
   EXPECT_EQ(params.seed(), 1234);
 
-  // 5. Test to see if the Conversation Config has the correct System Message.
+  // 5. Test to see if the Conversation has the correct System Message.
   const auto& preface = std::get<litert::lm::JsonPreface>(
-      conversation_config->config->GetPreface());
+      conversation->conversation->GetConfig().GetPreface());
   EXPECT_EQ(preface.messages, nullptr);
+}
+
+TEST(EngineCTest, TokenizerTest) {
+  const std::string task_path = GetTestdataPath(
+      "litert_lm/runtime/testdata/test_lm.litertlm");
+  EngineSettingsPtr settings(litert_lm_engine_settings_create(
+                                 task_path.c_str(), "cpu", nullptr, nullptr),
+                             &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+
+  EnginePtr engine(litert_lm_engine_create(settings.get()),
+                   &litert_lm_engine_delete);
+  ASSERT_NE(engine, nullptr);
+
+  const char* text = "hello";
+  TokenizeResultPtr tokenize_result(
+      litert_lm_engine_tokenize(engine.get(), text),
+      &litert_lm_tokenize_result_delete);
+  ASSERT_NE(tokenize_result, nullptr);
+  size_t num_tokens =
+      litert_lm_tokenize_result_get_num_tokens(tokenize_result.get());
+  EXPECT_GT(num_tokens, 0);
+
+  const int* tokens =
+      litert_lm_tokenize_result_get_tokens(tokenize_result.get());
+  DetokenizeResultPtr detokenize_result(
+      litert_lm_engine_detokenize(engine.get(), tokens, num_tokens),
+      &litert_lm_detokenize_result_delete);
+  ASSERT_NE(detokenize_result, nullptr);
+  EXPECT_STREQ(litert_lm_detokenize_result_get_string(detokenize_result.get()),
+               text);
+
+  TokenUnionPtr start_token(litert_lm_engine_get_start_token(engine.get()),
+                            &litert_lm_token_union_delete);
+  if (start_token != nullptr) {
+    if (litert_lm_token_union_get_type(start_token.get()) ==
+        kLiteRtLmTokenUnionTypeIds) {
+      const int* ids;
+      size_t num_ids;
+      EXPECT_EQ(
+          litert_lm_token_union_get_ids(start_token.get(), &ids, &num_ids), 0);
+      EXPECT_GT(num_ids, 0);
+    } else {
+      EXPECT_NE(litert_lm_token_union_get_string(start_token.get()), nullptr);
+    }
+  }
+
+  TokenUnionsPtr stop_tokens(litert_lm_engine_get_stop_tokens(engine.get()),
+                             &litert_lm_token_unions_delete);
+  if (stop_tokens != nullptr) {
+    size_t num_tokens =
+        litert_lm_token_unions_get_num_tokens(stop_tokens.get());
+    for (size_t i = 0; i < num_tokens; ++i) {
+      TokenUnionPtr stop_token(
+          litert_lm_token_unions_get_token_at(stop_tokens.get(), i),
+          &litert_lm_token_union_delete);
+      ASSERT_NE(stop_token, nullptr);
+      if (litert_lm_token_union_get_type(stop_token.get()) ==
+          kLiteRtLmTokenUnionTypeIds) {
+        const int* ids;
+        size_t num_ids;
+        EXPECT_EQ(
+            litert_lm_token_union_get_ids(stop_token.get(), &ids, &num_ids), 0);
+        EXPECT_GT(num_ids, 0);
+      } else {
+        EXPECT_NE(litert_lm_token_union_get_string(stop_token.get()), nullptr);
+      }
+    }
+  }
 }
 
 TEST(EngineCTest, GenerateContent) {
@@ -573,8 +741,8 @@ TEST(EngineCTest, GenerateContent) {
   ASSERT_NE(session, nullptr);
 
   const char* prompt = "Hello world!";
-  InputData input_data;
-  input_data.type = kInputText;
+  LiteRtLmInputData input_data;
+  input_data.type = kLiteRtLmInputDataTypeText;
   input_data.data = prompt;
   input_data.size = strlen(prompt);
   ResponsesPtr responses(
@@ -618,8 +786,8 @@ TEST(EngineCTest, CreateSessionWithMaxOutputTokens) {
     ASSERT_NE(session, nullptr);
 
     const char* prompt = "Hello world!";
-    InputData input_data;
-    input_data.type = kInputText;
+    LiteRtLmInputData input_data;
+    input_data.type = kLiteRtLmInputDataTypeText;
     input_data.data = prompt;
     input_data.size = strlen(prompt);
     ResponsesPtr responses(
@@ -647,8 +815,8 @@ TEST(EngineCTest, CreateSessionWithMaxOutputTokens) {
     ASSERT_NE(session, nullptr);
 
     const char* prompt = "Hello world!";
-    InputData input_data;
-    input_data.type = kInputText;
+    LiteRtLmInputData input_data;
+    input_data.type = kLiteRtLmInputDataTypeText;
     input_data.data = prompt;
     input_data.size = strlen(prompt);
     ResponsesPtr responses(
@@ -718,7 +886,7 @@ TEST(EngineCTest, ConversationSendMessageWithConfig) {
 
   // 2. Create Sampler Params.
   LiteRtLmSamplerParams sampler_params;
-  sampler_params.type = kTopP;
+  sampler_params.type = kLiteRtLmSamplerTypeTopP;
   sampler_params.top_k = 10;
   sampler_params.top_p = 0.5f;
   sampler_params.temperature = 0.1f;
@@ -729,17 +897,18 @@ TEST(EngineCTest, ConversationSendMessageWithConfig) {
   litert_lm_session_config_set_sampler_params(session_config.get(),
                                               &sampler_params);
 
-  // 3. Create a Conversation Config with the Engine Handle, Session Config
+  // 3. Create a Conversation Config with the Session Config
   // and System Message.
   const std::string system_message =
       R"({"type":"text","text":"You are a helpful assistant."})";
   ConversationConfigPtr conversation_config(
-      litert_lm_conversation_config_create(
-          engine.get(), session_config.get(), system_message.c_str(),
-          /*tools_json=*/nullptr, /*messages_json=*/nullptr,
-          /*enable_constrained_decoding=*/false),
+      litert_lm_conversation_config_create(),
       &litert_lm_conversation_config_delete);
   ASSERT_NE(conversation_config, nullptr);
+  litert_lm_conversation_config_set_session_config(conversation_config.get(),
+                                                   session_config.get());
+  litert_lm_conversation_config_set_system_message(conversation_config.get(),
+                                                   system_message.c_str());
 
   // 4. Create a Conversation with the Conversation Config.
   ConversationPtr conversation(
@@ -780,10 +949,7 @@ TEST(EngineCTest, ConversationSendMessageWithExtraContext) {
 
   // 2. Create a Conversation Config.
   ConversationConfigPtr conversation_config(
-      litert_lm_conversation_config_create(
-          engine.get(), /*session_config=*/nullptr,
-          /*system_message_json=*/nullptr, /*tools_json=*/nullptr,
-          /*messages_json=*/nullptr, /*enable_constrained_decoding=*/false),
+      litert_lm_conversation_config_create(),
       &litert_lm_conversation_config_delete);
   ASSERT_NE(conversation_config, nullptr);
 
@@ -850,8 +1016,8 @@ TEST(EngineCTest, GenerateContentStream) {
   ASSERT_NE(session, nullptr);
 
   const char* prompt = "Hello world!";
-  InputData input_data;
-  input_data.type = kInputText;
+  LiteRtLmInputData input_data;
+  input_data.type = kLiteRtLmInputDataTypeText;
   input_data.data = prompt;
   input_data.size = strlen(prompt);
   StreamCallbackData callback_data;
@@ -870,6 +1036,47 @@ TEST(EngineCTest, GenerateContentStream) {
                          absl::StatusCode::kInternal,
                          testing::HasSubstr("Max number of tokens reached."))));
   EXPECT_GT(callback_data.response.length(), 0);
+}
+
+TEST(EngineCTest, SessionGenerateContentStreamAndCancel) {
+  const std::string task_path = GetTestdataPath(
+      "litert_lm/runtime/testdata/test_lm_new_metadata.task");
+
+  EngineSettingsPtr settings(
+      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
+                                       /* vision_backend_str */ nullptr,
+                                       /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+  litert_lm_engine_settings_set_max_num_tokens(settings.get(), 128);
+
+  EnginePtr engine(litert_lm_engine_create(settings.get()),
+                   &litert_lm_engine_delete);
+  ASSERT_NE(engine, nullptr);
+
+  SessionPtr session(litert_lm_engine_create_session(
+                         engine.get(), /* session_config */ nullptr),
+                     &litert_lm_session_delete);
+  ASSERT_NE(session, nullptr);
+
+  const char* prompt =
+      "Hello world! Write a long essay about the history of Rome.";
+  LiteRtLmInputData input_data;
+  input_data.type = kLiteRtLmInputDataTypeText;
+  input_data.data = prompt;
+  input_data.size = strlen(prompt);
+  StreamCallbackData callback_data;
+  int result = litert_lm_session_generate_content_stream(
+      session.get(), &input_data, 1, &StreamCallback, &callback_data);
+  ASSERT_EQ(result, 0);
+
+  litert_lm_session_cancel_process(session.get());
+
+  callback_data.done.WaitForNotification();
+
+  EXPECT_THAT(callback_data.status,
+              absl_testing::StatusIs(absl::StatusCode::kInternal,
+                                     testing::HasSubstr("CANCELLED")));
 }
 
 TEST(EngineCTest, ConversationSendMessageStream) {
@@ -1007,8 +1214,8 @@ TEST(EngineCTest, Benchmark) {
   ASSERT_NE(session, nullptr);
 
   const char* prompt = "Hello world!";
-  InputData input_data;
-  input_data.type = kInputText;
+  LiteRtLmInputData input_data;
+  input_data.type = kLiteRtLmInputDataTypeText;
   input_data.data = prompt;
   input_data.size = strlen(prompt);
   ResponsesPtr responses(
@@ -1051,5 +1258,195 @@ TEST(EngineCTest, Benchmark) {
                   benchmark_info.get(), i),
               0.0);
   }
+}
+
+TEST(EngineCTest, RunPrefillSuccess) {
+  const std::string task_path = GetTestdataPath(
+      "litert_lm/runtime/testdata/test_lm_new_metadata.task");
+
+  EngineSettingsPtr settings(
+      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
+                                       /* vision_backend_str */ nullptr,
+                                       /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+  litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
+
+  EnginePtr engine(litert_lm_engine_create(settings.get()),
+                   &litert_lm_engine_delete);
+  ASSERT_NE(engine, nullptr);
+
+  SessionPtr session(litert_lm_engine_create_session(
+                         engine.get(), /* session_config */ nullptr),
+                     &litert_lm_session_delete);
+  ASSERT_NE(session, nullptr);
+
+  const char* prompt = "Hello world!";
+  LiteRtLmInputData input_data;
+  input_data.type = kLiteRtLmInputDataTypeText;
+  input_data.data = prompt;
+  input_data.size = strlen(prompt);
+
+  int prefill_result =
+      litert_lm_session_run_prefill(session.get(), &input_data, 1);
+  EXPECT_EQ(prefill_result, 0);
+}
+
+TEST(EngineCTest, RunPrefillAndDecode) {
+  const std::string task_path = GetTestdataPath(
+      "litert_lm/runtime/testdata/test_lm_new_metadata.task");
+
+  EngineSettingsPtr settings(
+      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
+                                       /* vision_backend_str */ nullptr,
+                                       /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+  litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
+
+  EnginePtr engine(litert_lm_engine_create(settings.get()),
+                   &litert_lm_engine_delete);
+  ASSERT_NE(engine, nullptr);
+
+  SessionPtr session(litert_lm_engine_create_session(
+                         engine.get(), /* session_config */ nullptr),
+                     &litert_lm_session_delete);
+  ASSERT_NE(session, nullptr);
+
+  const char* prompt = "Hello world!";
+  LiteRtLmInputData input_data;
+  input_data.type = kLiteRtLmInputDataTypeText;
+  input_data.data = prompt;
+  input_data.size = strlen(prompt);
+
+  litert_lm_session_run_prefill(session.get(), &input_data, 1);
+
+  ResponsesPtr responses(litert_lm_session_run_decode(session.get()),
+                         &litert_lm_responses_delete);
+  ASSERT_NE(responses, nullptr);
+
+  EXPECT_EQ(litert_lm_responses_get_num_candidates(responses.get()), 1);
+  const char* response_text =
+      litert_lm_responses_get_response_text_at(responses.get(), 0);
+  ASSERT_NE(response_text, nullptr);
+  EXPECT_GT(strlen(response_text), 0);
+}
+
+TEST(EngineCTest, TextScoringBasic) {
+  const std::string task_path = GetTestdataPath(
+      "litert_lm/runtime/testdata/test_lm_new_metadata.task");
+
+  EngineSettingsPtr settings(
+      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
+                                       /* vision_backend_str */ nullptr,
+                                       /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+  litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
+
+  EnginePtr engine(litert_lm_engine_create(settings.get()),
+                   &litert_lm_engine_delete);
+  ASSERT_NE(engine, nullptr);
+
+  SessionPtr session(litert_lm_engine_create_session(
+                         engine.get(), /* session_config */ nullptr),
+                     &litert_lm_session_delete);
+  ASSERT_NE(session, nullptr);
+
+  const char* prompt = "Hello world!";
+  LiteRtLmInputData input_data;
+  input_data.type = kLiteRtLmInputDataTypeText;
+  input_data.data = prompt;
+  input_data.size = strlen(prompt);
+
+  litert_lm_session_run_prefill(session.get(), &input_data, 1);
+
+  const char* target_texts[] = {"apple"};
+  ResponsesPtr responses(
+      litert_lm_session_run_text_scoring(session.get(), target_texts, 1,
+                                         /*store_token_lengths=*/true),
+      &litert_lm_responses_delete);
+  ASSERT_NE(responses, nullptr);
+
+  EXPECT_EQ(litert_lm_responses_get_num_candidates(responses.get()), 1);
+}
+
+TEST(EngineCTest, TextScoringVerifyScores) {
+  const std::string task_path = GetTestdataPath(
+      "litert_lm/runtime/testdata/test_lm_new_metadata.task");
+
+  EngineSettingsPtr settings(
+      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
+                                       /* vision_backend_str */ nullptr,
+                                       /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+  litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
+
+  EnginePtr engine(litert_lm_engine_create(settings.get()),
+                   &litert_lm_engine_delete);
+  ASSERT_NE(engine, nullptr);
+
+  SessionPtr session(litert_lm_engine_create_session(
+                         engine.get(), /* session_config */ nullptr),
+                     &litert_lm_session_delete);
+  ASSERT_NE(session, nullptr);
+
+  const char* prompt = "Hello world!";
+  LiteRtLmInputData input_data;
+  input_data.type = kLiteRtLmInputDataTypeText;
+  input_data.data = prompt;
+  input_data.size = strlen(prompt);
+
+  litert_lm_session_run_prefill(session.get(), &input_data, 1);
+
+  const char* target_texts[] = {"apple"};
+  ResponsesPtr responses(
+      litert_lm_session_run_text_scoring(session.get(), target_texts, 1,
+                                         /*store_token_lengths=*/true),
+      &litert_lm_responses_delete);
+  ASSERT_NE(responses, nullptr);
+
+  EXPECT_TRUE(litert_lm_responses_has_score_at(responses.get(), 0));
+}
+
+TEST(EngineCTest, TextScoringVerifyTokenLengths) {
+  const std::string task_path = GetTestdataPath(
+      "litert_lm/runtime/testdata/test_lm_new_metadata.task");
+
+  EngineSettingsPtr settings(
+      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
+                                       /* vision_backend_str */ nullptr,
+                                       /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+  litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
+
+  EnginePtr engine(litert_lm_engine_create(settings.get()),
+                   &litert_lm_engine_delete);
+  ASSERT_NE(engine, nullptr);
+
+  SessionPtr session(litert_lm_engine_create_session(
+                         engine.get(), /* session_config */ nullptr),
+                     &litert_lm_session_delete);
+  ASSERT_NE(session, nullptr);
+
+  const char* prompt = "Hello world!";
+  LiteRtLmInputData input_data;
+  input_data.type = kLiteRtLmInputDataTypeText;
+  input_data.data = prompt;
+  input_data.size = strlen(prompt);
+
+  litert_lm_session_run_prefill(session.get(), &input_data, 1);
+
+  const char* target_texts[] = {"apple"};
+  ResponsesPtr responses(
+      litert_lm_session_run_text_scoring(session.get(), target_texts, 1,
+                                         /*store_token_lengths=*/true),
+      &litert_lm_responses_delete);
+  ASSERT_NE(responses, nullptr);
+
+  EXPECT_TRUE(litert_lm_responses_has_token_length_at(responses.get(), 0));
+  EXPECT_GT(litert_lm_responses_get_token_length_at(responses.get(), 0), 0);
 }
 }  // namespace
