@@ -34,28 +34,22 @@ cc_binary(
         "@com_google_absl//absl/time",
         "@nlohmann_json//:json",
         "@litert//litert/c/internal:litert_logging",
-        "//runtime/components:model_resources",
         "//runtime/components:prompt_template",
         "//runtime/conversation",
         "//runtime/conversation:io_types",
         "//runtime/engine:engine_factory",
+        "//runtime/engine:engine_impl_selected",  # buildcleaner: keep
         "//runtime/engine:engine_interface",
         "//runtime/engine:engine_settings",
         "//runtime/engine:io_types",
         "//runtime/executor:executor_settings_base",
         "//runtime/executor:llm_executor_settings",
         "//runtime/proto:sampler_params_cc_proto",
-        "//runtime/util:litert_lm_loader",
         "//runtime/util:logging",
         "//schema/capabilities:capabilities_c",
-        "//schema/core:litertlm_header_schema",
         "@litert//tflite:minimal_logging",
     ] + select({
         "@platforms//os:android": [],
-        "//conditions:default": [
-            "@rules_java//toolchains:jni"
-        ],
-    }) + [
-        "//runtime/core:engine_impl",  # buildcleaner: keep
-    ],
+        "//conditions:default": ["@rules_java//toolchains:jni"],
+    }),
 )

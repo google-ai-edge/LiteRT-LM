@@ -509,7 +509,7 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateEngine)(
         advanced_settings);
   }
 
-  auto engine = EngineFactory::CreateDefault(*settings);
+  auto engine = EngineFactory::CreateAny(*settings);
   if (!engine.ok()) {
     ThrowLiteRtLmJniException(
         env, "Failed to create engine: " + engine.status().ToString());
@@ -580,7 +580,7 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateBenchmark)(
   benchmark_params.set_num_prefill_tokens(prefill_tokens);
   benchmark_params.set_num_decode_tokens(decode_tokens);
 
-  auto engine = EngineFactory::CreateDefault(*settings);
+  auto engine = EngineFactory::CreateAny(*settings);
   if (!engine.ok()) {
     ThrowLiteRtLmJniException(
         env, "Failed to create engine: " + engine.status().ToString());
