@@ -46,6 +46,15 @@ py_test(
 )
 
 pytype_strict_library(
+    name = "litertlm_utils",
+    srcs = ["litertlm_utils.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":litertlm_core",
+    ],
+)
+
+pytype_strict_library(
     name = "litertlm_peek",
     srcs = ["litertlm_peek.py"],
     deps = [
@@ -88,6 +97,7 @@ pytype_strict_library(
     visibility = ["//visibility:public"],
     deps = [
         ":litertlm_core",
+        ":litertlm_utils",
         "@flatbuffers//:runtime_py",
         "//runtime/proto:llm_metadata_py_pb2",
         "//schema/core:litertlm_header_schema_py",
