@@ -116,7 +116,7 @@ patch_file_content("${LITERT_SRC_DIR}/cc/internal/litert_runtime_builtin.cc"
 file(READ "${LITERT_PACKAGE_DIR}/shims/litert_cc_options_shim.cmake" litert_cc_options_shim_CONTENT)
 patch_file_content("${LITERT_SRC_DIR}/cc/options/CMakeLists.txt"
     "cmake_minimum_required\\(VERSION 3.20\\).*"
-    ${litert_cc_options_shim_CONTENT}
+    "${litert_cc_options_shim_CONTENT}"
     TRUE
 )
 

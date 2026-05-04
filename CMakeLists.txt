@@ -17,14 +17,20 @@
 cmake_minimum_required(VERSION 3.25 FATAL_ERROR)
 project(LiteRT-LM-Orchestrator LANGUAGES NONE)
 
-if(NOT DEFINED LITERTLM_HOST_PROTOC)
-    set(LITERTLM_HOST_PROTOC "${CMAKE_CURRENT_BINARY_DIR}/prebuild/build/external/protobuf/install/bin/protoc")
-    set(LITERTLM_HOST_PROTOC_BIN_DIR "${CMAKE_CURRENT_BINARY_DIR}/prebuild/build/external/protobuf/install/bin")
-endif()
+# Host tool paths are only relevant when cross-compiling — the prebuild phase
+# below runs only if LITERTLM_TOOLCHAIN_ARGS is non-empty. For a native build,
+# leaving LITERTLM_HOST_PROTOC / LITERTLM_HOST_FLATC undefined lets the inner
+# project build its own protoc/flatc via ExternalProject.
+if(LITERTLM_TOOLCHAIN_ARGS)
+    if(NOT DEFINED LITERTLM_HOST_PROTOC)
+        set(LITERTLM_HOST_PROTOC "${CMAKE_CURRENT_BINARY_DIR}/prebuild/build/external/protobuf/install/bin/protoc")
+        set(LITERTLM_HOST_PROTOC_BIN_DIR "${CMAKE_CURRENT_BINARY_DIR}/prebuild/build/external/protobuf/install/bin")
+    endif()
 
-if(NOT DEFINED LITERTLM_HOST_FLATC)
-    set(LITERTLM_HOST_FLATC "${CMAKE_CURRENT_BINARY_DIR}/prebuild/build/external/flatbuffers/install/bin/flatc")
-    set(LITERTLM_HOST_FLATC_BIN_DIR "${CMAKE_CURRENT_BINARY_DIR}/prebuild/build/external/flatbuffers/install/bin")
+    if(NOT DEFINED LITERTLM_HOST_FLATC)
+        set(LITERTLM_HOST_FLATC "${CMAKE_CURRENT_BINARY_DIR}/prebuild/build/external/flatbuffers/install/bin/flatc")
+        set(LITERTLM_HOST_FLATC_BIN_DIR "${CMAKE_CURRENT_BINARY_DIR}/prebuild/build/external/flatbuffers/install/bin")
+    endif()
 endif()
 
 include(ExternalProject)
