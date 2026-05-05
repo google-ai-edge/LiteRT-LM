@@ -278,6 +278,21 @@ class ToolTest(parameterized.TestCase):
     # Verify it can be executed with empty args
     self.assertEqual(tool.execute({}), "2026-04-14 20:00:00")
 
+  def test_tool_execute_sanitizes_gemma_quote_tokens(self):
+    def echo(location: str, metadata: dict[str, str]):
+      """Echoes the received location and metadata."""
+      return location, metadata
+
+    tool = litert_lm.tool_from_function(echo)
+
+    self.assertEqual(
+        tool.execute({
+            "location": '<|"|>Hanoi<|"|>',
+            "metadata": {"country": '<|"|>Vietnam<|"|>'},
+        }),
+        ("Hanoi", {"country": "Vietnam"}),
+    )
+
   def test_create_conversation_with_malformed_tool_description(self):
     test_srcdir = os.environ.get("TEST_SRCDIR", "")
     model_path = str(
@@ -336,6 +351,77 @@ class ConversationToolHandlingTest(absltest.TestCase):
                 "response": "mock_result",
             }],
         }],
+    )
+
+  def test_handle_multiple_tool_calls_returns_single_tool_message(self):
+    response = {
+        "tool_calls": [
+            {"function": {"name": "my_tool", "arguments": {"arg1": "value1"}}},
+            {"function": {"name": "my_tool", "arguments": {"arg1": "value2"}}},
+        ]
+    }
+    self.mock_tool.execute.side_effect = ["result1", "result2"]
+
+    tool_responses = self.conv._handle_tool_calls(response)
+
+    self.mock_tool.execute.assert_has_calls([
+        mock.call({"arg1": "value1"}),
+        mock.call({"arg1": "value2"}),
+    ])
+    self.assertEqual(
+        tool_responses,
+        [{
+            "role": "tool",
+            "content": [
+                {
+                    "type": "tool_response",
+                    "name": "my_tool",
+                    "response": "result1",
+                },
+                {
+                    "type": "tool_response",
+                    "name": "my_tool",
+                    "response": "result2",
+                },
+            ],
+        }],
+    )
+
+  def test_merge_tool_call_response_accumulates_streamed_tool_calls(self):
+    first_response = {
+        "tool_calls": [
+            {"function": {"name": "my_tool", "arguments": {"arg1": "value1"}}}
+        ]
+    }
+    second_response = {
+        "tool_calls": [
+            {"function": {"name": "my_tool", "arguments": {"arg1": "value2"}}}
+        ]
+    }
+
+    merged_response = self.conv._merge_tool_call_response(None, first_response)
+    merged_response = self.conv._merge_tool_call_response(
+        merged_response, second_response
+    )
+
+    self.assertEqual(
+        merged_response,
+        {
+            "tool_calls": [
+                {
+                    "function": {
+                        "name": "my_tool",
+                        "arguments": {"arg1": "value1"},
+                    }
+                },
+                {
+                    "function": {
+                        "name": "my_tool",
+                        "arguments": {"arg1": "value2"},
+                    }
+                },
+            ]
+        },
     )
 
   def test_handle_tool_calls_missing_function_key(self):

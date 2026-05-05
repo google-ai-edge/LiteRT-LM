@@ -24,6 +24,8 @@ from typing import Any
 
 from .interfaces import Tool
 
+_GEMMA_QUOTE_TOKEN = '<|"|>'
+
 
 def _parse_param_descriptions(docstring: str) -> dict[str, str]:
   """Parses Args section of docstring."""
@@ -80,6 +82,17 @@ def _py_type_to_openapi(py_type: Any) -> dict[str, Any]:
   return {"type": "string"}
 
 
+def _sanitize_tool_arg(value: Any) -> Any:
+  """Sanitizes parsed tool arguments before invoking Python functions."""
+  if isinstance(value, str):
+    return value.replace(_GEMMA_QUOTE_TOKEN, "")
+  if isinstance(value, collections.abc.Mapping):
+    return {k: _sanitize_tool_arg(v) for k, v in value.items()}
+  if isinstance(value, list):
+    return [_sanitize_tool_arg(v) for v in value]
+  return value
+
+
 class _FunctionTool(Tool):
   """A Tool implementation that wraps a Python function."""
 
@@ -122,7 +135,10 @@ class _FunctionTool(Tool):
     }
 
   def execute(self, param: collections.abc.Mapping[str, Any]) -> Any:
-    return self._func(**param)
+    sanitized_param = {
+        key: _sanitize_tool_arg(value) for key, value in param.items()
+    }
+    return self._func(**sanitized_param)
 
 
 def tool_from_function(func: collections.abc.Callable[..., Any]) -> Tool:

@@ -70,13 +70,35 @@ class Conversation(interfaces.AbstractConversation):
   def __exit__(self, exc_type, exc_val, exc_tb):
     self.close()
 
+  def _merge_tool_call_response(
+      self,
+      current: dict[str, Any] | None,
+      response_dict: collections.abc.Mapping[str, Any],
+  ) -> dict[str, Any]:
+    """Accumulates streamed tool call chunks into one response."""
+    if current is None:
+      current = dict(response_dict)
+      current["tool_calls"] = []
+
+    seen = {
+        json.dumps(tool_call, sort_keys=True, default=str)
+        for tool_call in current.get("tool_calls", [])
+    }
+    for tool_call in response_dict.get("tool_calls", []):
+      key = json.dumps(tool_call, sort_keys=True, default=str)
+      if key in seen:
+        continue
+      seen.add(key)
+      current["tool_calls"].append(tool_call)
+    return current
+
   def _handle_tool_calls(
       self, response_dict: collections.abc.Mapping[str, Any]
   ) -> list[collections.abc.Mapping[str, Any]] | None:
     if "tool_calls" not in response_dict:
       return None
 
-    tool_responses = []
+    tool_response_content = []
     for tool_call in response_dict.get("tool_calls"):
       if "function" not in tool_call:
         raise ValueError("Missing 'function' in tool_call")
@@ -101,16 +123,19 @@ class Conversation(interfaces.AbstractConversation):
       if self.tool_event_handler:
         result = self.tool_event_handler.process_tool_response(result)
 
-      tool_responses.append({
-          "role": "tool",
-          "content": [{
-              "type": "tool_response",
-              "name": name,
-              "response": result,
-          }],
+      tool_response_content.append({
+          "type": "tool_response",
+          "name": name,
+          "response": result,
       })
 
-    return tool_responses
+    if not tool_response_content:
+      return None
+
+    return [{
+        "role": "tool",
+        "content": tool_response_content,
+    }]
 
   def send_message(
       self, message: str | collections.abc.Mapping[str, Any]
@@ -207,7 +232,12 @@ class Conversation(interfaces.AbstractConversation):
                 )
 
               if is_tool_call:
-                full_response_for_tools = msg_dict
+                if "tool_calls" in msg_dict:
+                  full_response_for_tools = self._merge_tool_call_response(
+                      full_response_for_tools, msg_dict
+                  )
+                else:
+                  full_response_for_tools = msg_dict
               else:
                 yield msg_dict
             else:
