@@ -408,6 +408,14 @@ void litert_lm_engine_settings_set_cache_dir(LiteRtLmEngineSettings* settings,
                                              const char* cache_dir) {
   if (settings && settings->settings) {
     settings->settings->GetMutableMainExecutorSettings().SetCacheDir(cache_dir);
+    if (settings->settings->GetVisionExecutorSettings().has_value()) {
+      settings->settings->GetMutableVisionExecutorSettings()->SetCacheDir(
+          cache_dir);
+    }
+    if (settings->settings->GetAudioExecutorSettings().has_value()) {
+      settings->settings->GetMutableAudioExecutorSettings()->SetCacheDir(
+          cache_dir);
+    }
   }
 }
 
