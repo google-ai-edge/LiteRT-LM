@@ -560,8 +560,7 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
           drafter_aux_output_buffers);
 
   static absl::Status AllocateTransformerBuffers(
-      litert::Environment& env, const litert::Model* transformer_model,
-      CompiledModel& llm_compiled_model,
+      litert::Environment& env, CompiledModel& llm_compiled_model,
       absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
           gemma_prefill_input_buffers,
       absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&

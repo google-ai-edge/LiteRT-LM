@@ -203,6 +203,7 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
       gpu_compilation_options.EnableAllowSrcQuantizedFcConvOps(
           !advanced_settings.allow_src_quantized_fc_conv_ops.has_value() ||
           advanced_settings.allow_src_quantized_fc_conv_ops.value());
+      gpu_compilation_options.WaitForWeightsConversionComplete(true);
       gpu_compilation_options.HintWaitingForCompletion(
           advanced_settings.hint_waiting_for_completion.has_value() &&
           advanced_settings.hint_waiting_for_completion.value());

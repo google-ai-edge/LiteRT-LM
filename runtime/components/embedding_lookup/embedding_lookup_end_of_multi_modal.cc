@@ -154,13 +154,13 @@ EndOfMultiModalEmbedding::Create(litert::Environment& env,
                                  const litert::Model* absl_nonnull model,
                                  int special_token) {
   auto handler = std::unique_ptr<EndOfMultiModalEmbedding>(
-      new EndOfMultiModalEmbedding(env, model, special_token));
+      new EndOfMultiModalEmbedding(env, special_token));
   RETURN_IF_ERROR(  // IWYU pragma: keep as is included by status_macros.h
-      handler->Initialize());
+      handler->Initialize(*model));
   return handler;
 }
 
-absl::Status EndOfMultiModalEmbedding::Initialize() {
+absl::Status EndOfMultiModalEmbedding::Initialize(const Model& model) {
   LITERT_ASSIGN_OR_RETURN(auto options, Options::Create());
 #if defined(__ANDROID__)
   options.SetHardwareAccelerators(litert::HwAccelerators::kNpu |
@@ -179,8 +179,8 @@ absl::Status EndOfMultiModalEmbedding::Initialize() {
 
   LITERT_ASSIGN_OR_RETURN(
       litert::CompiledModel compiled_model,
-      litert::CompiledModel::Create(env_, model_.Get(), options));
-  if (auto num_signatures = model_.GetNumSignatures(); num_signatures != 1) {
+      litert::CompiledModel::Create(env_, model.Get(), options));
+  if (auto num_signatures = model.GetNumSignatures(); num_signatures != 1) {
     return absl::InvalidArgumentError(absl::StrCat(
         "The Embedding model must have exactly one signature but got ",
         num_signatures));
@@ -236,6 +236,10 @@ absl::Status EndOfMultiModalEmbedding::Initialize() {
       reinterpret_cast<uint8_t*>(end_of_multi_modal_embedding_.data());
   size_t bytes = end_of_multi_modal_embedding_.size() * sizeof(float);
   output_buffers[0].Read(absl::MakeSpan(data_ptr, bytes));
+
+  if (auto res = compiled_model.IsFullyAccelerated(); res.HasValue()) {
+    is_fully_accelerated_ = *res;
+  }
 
   return absl::OkStatus();
 }

@@ -73,4 +73,8 @@ ModelResourcesStreaming::GetLlmMetadata() {
   return absl::UnimplementedError("Not implemented.");
 }
 
+absl::Status ModelResourcesStreaming::ReleaseTFLiteModel(ModelType model_type) {
+  return absl::UnimplementedError("Not implemented.");
+}
+
 }  // namespace litert::lm

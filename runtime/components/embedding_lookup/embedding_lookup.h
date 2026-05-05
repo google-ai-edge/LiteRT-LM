@@ -22,6 +22,7 @@
 
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "litert/cc/litert_expected.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 
 namespace litert::lm {
@@ -69,6 +70,9 @@ class EmbeddingLookup {
   virtual absl::Status LookupPrefill(absl::Span<const int> tokens,
                                      litert::TensorBuffer* output_tensor,
                                      size_t byte_offset) = 0;
+
+  // Returns whether the embedding lookup compiled model is fully accelerated.
+  virtual litert::Expected<bool> IsFullyAccelerated() = 0;
 };
 
 }  // namespace litert::lm

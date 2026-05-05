@@ -28,7 +28,6 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_model.h"  // from @litert
 #include "runtime/components/model_resources.h"
-#include "runtime/components/sentencepiece_tokenizer.h"
 #include "runtime/components/tokenizer.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/model_asset_bundle_resources.h"
@@ -56,6 +55,7 @@ class ModelResourcesTask : public ModelResources {
     // Task model does not support prefer activation type.
     return std::nullopt;
   };
+  absl::Status ReleaseTFLiteModel(ModelType model_type) override;
   absl::StatusOr<std::unique_ptr<Tokenizer>> GetTokenizer() override;
   absl::StatusOr<const proto::LlmMetadata*> GetLlmMetadata() override;
   absl::StatusOr<std::reference_wrapper<ScopedFile>> GetScopedFile() override {
@@ -74,7 +74,8 @@ class ModelResourcesTask : public ModelResources {
       : model_asset_bundle_resources_(std::move(model_asset_bundle_resources)) {
   }
 
-  absl::flat_hash_map<ModelType, std::shared_ptr<litert::Model>> model_map_;
+  absl::flat_hash_map<ModelType, std::unique_ptr<litert::Model>> model_map_;
+
   std::unique_ptr<proto::LlmMetadata> llm_metadata_;
 
   // The model asset bundle resources produced by reading task bundle. Not null

@@ -462,6 +462,10 @@ class TfLiteModelResources : public ModelResources {
     return absl::UnimplementedError("Unsupported model type");
   }
 
+  absl::Status ReleaseTFLiteModel(ModelType model_type) override {
+    return absl::UnimplementedError("ReleaseTFLiteModel not implemented");
+  }
+
   absl::StatusOr<absl::string_view> GetTFLiteModelBuffer(
       ModelType model_type) override {
     return absl::UnimplementedError("GetTFLiteModelBuffer not implemented.");

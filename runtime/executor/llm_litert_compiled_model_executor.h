@@ -23,7 +23,6 @@
 #include <utility>
 #include <vector>
 
-#include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
@@ -55,6 +54,25 @@ namespace litert::lm {
 class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
  public:
   using LlmExecutor::Prefill;
+
+  struct TensorMetadata {
+    size_t signature_index;
+    size_t input_index;
+    litert::ElementType element_type;
+    std::vector<int> dimensions;
+  };
+
+  struct CachedMetadata {
+    std::string prefill_signature_key;
+    absl::flat_hash_map<std::string, size_t> signature_key_to_idx;
+    absl::flat_hash_map<size_t, std::vector<std::string>>
+        input_names_by_sig_idx;
+    absl::flat_hash_map<size_t, std::vector<std::string>>
+        output_names_by_sig_idx;
+    absl::flat_hash_map<std::string, TensorMetadata> input_tensor_metadata;
+  };
+
+  static absl::StatusOr<CachedMetadata> CacheTensorMetadata(const Model& model);
 
   // Input APIs:
   // Basic API to trigger the "prefill" or "prefix" process.
@@ -131,18 +149,15 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
  protected:
   LlmLiteRtCompiledModelExecutorBase(
       LlmExecutorSettings executor_settings, Environment& env,
-      const Model* absl_nonnull model,
       std::unique_ptr<CompiledModel> compiled_model,
-      absl::flat_hash_map<absl::string_view, TensorBuffer> decode_input_buffers,
-      absl::flat_hash_map<absl::string_view, TensorBuffer>
-          decode_output_buffers,
-      absl::flat_hash_map<absl::string_view, TensorBuffer>
-          input_kv_cache_buffers,
-      absl::flat_hash_map<absl::string_view, TensorBuffer>
-          output_kv_cache_buffers,
-      std::optional<absl::flat_hash_map<absl::string_view, TensorBuffer>>
+      CachedMetadata cached_metadata,
+      absl::flat_hash_map<std::string, TensorBuffer> decode_input_buffers,
+      absl::flat_hash_map<std::string, TensorBuffer> decode_output_buffers,
+      absl::flat_hash_map<std::string, TensorBuffer> input_kv_cache_buffers,
+      absl::flat_hash_map<std::string, TensorBuffer> output_kv_cache_buffers,
+      std::optional<absl::flat_hash_map<std::string, TensorBuffer>>
           decode_input_kv_cache_buffers,
-      std::optional<absl::flat_hash_map<absl::string_view, TensorBuffer>>
+      std::optional<absl::flat_hash_map<std::string, TensorBuffer>>
           decode_output_kv_cache_buffers,
       ModelSignatures signatures, int output_batch_size,
       std::string weight_cache_path,
@@ -152,8 +167,16 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
       std::unique_ptr<LlmLiteRtMtpDrafter> mtp_drafter)
       : executor_settings_(std::move(executor_settings)),
         env_(env),
-        model_(*model),
         compiled_model_(std::move(compiled_model)),
+        prefill_signature_key_(
+            std::move(cached_metadata.prefill_signature_key)),
+        signature_key_to_idx_(std::move(cached_metadata.signature_key_to_idx)),
+        input_names_by_sig_idx_(
+            std::move(cached_metadata.input_names_by_sig_idx)),
+        output_names_by_sig_idx_(
+            std::move(cached_metadata.output_names_by_sig_idx)),
+        input_tensor_metadata_(
+            std::move(cached_metadata.input_tensor_metadata)),
         decode_input_buffers_(std::move(decode_input_buffers)),
         decode_output_buffers_(std::move(decode_output_buffers)),
         kv_cache_buffers_1_(std::move(input_kv_cache_buffers)),
@@ -170,7 +193,7 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
         logits_data_type_(logits_data_type),
         mtp_drafter_(std::move(mtp_drafter)) {
     auto processed_context = std::make_unique<LlmProcessedContext>(
-        std::nullopt, absl::flat_hash_map<absl::string_view, TensorBuffer>(),
+        std::nullopt, absl::flat_hash_map<std::string, TensorBuffer>(),
         ProcessedTokens());
     auto runtime_config = std::make_unique<RuntimeConfig>();
     runtime_config->output_heads = output_batch_size;
@@ -208,7 +231,7 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
   // with a certain length synchronously or asynchronously.
   absl::Status PrefillInternal(
       absl::string_view prefill_signature,
-      absl::flat_hash_map<absl::string_view /*input_name*/, TensorBuffer>&
+      absl::flat_hash_map<std::string /*input_name*/, TensorBuffer>&
           prefill_input_buffers,
       absl::Span<const int> ids, bool async);
 
@@ -216,7 +239,7 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
   // and run prefill signature.
   absl::Status BindTensorsAndRunPrefill(
       absl::string_view prefill_signature,
-      absl::flat_hash_map<absl::string_view /*input_name*/, TensorBuffer>&
+      absl::flat_hash_map<std::string /*input_name*/, TensorBuffer>&
           prefill_input_buffers,
       bool async);
 
@@ -239,8 +262,7 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
   absl::Status CreatePrefillInputBuffers(
       absl::string_view prefill_signature, int sequence_length,
       int context_length,
-      absl::flat_hash_map<absl::string_view, TensorBuffer>&
-          prefill_input_buffers);
+      absl::flat_hash_map<std::string, TensorBuffer>& prefill_input_buffers);
 
   // Fills the input buffer from the unprocessed token.
   absl::Status FillInputBufferWithToken(
@@ -270,22 +292,37 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
 
   LlmExecutorSettings executor_settings_;
   Environment& env_;
-  const Model& model_;
   std::unique_ptr<CompiledModel> compiled_model_;
 
-  absl::flat_hash_map<absl::string_view, TensorBuffer> decode_input_buffers_;
-  absl::flat_hash_map<absl::string_view, TensorBuffer> decode_output_buffers_;
+  std::string prefill_signature_key_;
+  size_t decode_signature_idx_ = 0;
+
+  absl::flat_hash_map<std::string, size_t> signature_key_to_idx_;
+  absl::flat_hash_map<size_t, std::vector<std::string>> input_names_by_sig_idx_;
+  absl::flat_hash_map<size_t, std::vector<std::string>>
+      output_names_by_sig_idx_;
+
+  absl::flat_hash_map<std::string, TensorMetadata> input_tensor_metadata_;
+  absl::Status ResolveDynamicShape(absl::string_view signature,
+                                   absl::string_view tensor_name,
+                                   int new_value);
+  absl::StatusOr<bool> HasDynamicDim(absl::string_view signature,
+                                     absl::string_view tensor_name);
+  absl::StatusOr<litert::TensorBuffer> CreateInputBuffer(
+      absl::string_view signature, absl::string_view tensor_name) const;
+
+  absl::flat_hash_map<std::string, TensorBuffer> decode_input_buffers_;
+  absl::flat_hash_map<std::string, TensorBuffer> decode_output_buffers_;
   // KV cache double buffers because some GPU backends can't allocate one buffer
   // for both read and write at the same time.
-  absl::flat_hash_map<absl::string_view, TensorBuffer> kv_cache_buffers_1_;
-  absl::flat_hash_map<absl::string_view, TensorBuffer> kv_cache_buffers_2_;
-  absl::flat_hash_map<absl::string_view, TensorBuffer>* input_kv_cache_buffers_;
-  absl::flat_hash_map<absl::string_view, TensorBuffer>*
-      output_kv_cache_buffers_;
+  absl::flat_hash_map<std::string, TensorBuffer> kv_cache_buffers_1_;
+  absl::flat_hash_map<std::string, TensorBuffer> kv_cache_buffers_2_;
+  absl::flat_hash_map<std::string, TensorBuffer>* input_kv_cache_buffers_;
+  absl::flat_hash_map<std::string, TensorBuffer>* output_kv_cache_buffers_;
   // KV cache (double) buffers used during decode when output_batch_size_ > 1.
-  std::optional<absl::flat_hash_map<absl::string_view, TensorBuffer>>
+  std::optional<absl::flat_hash_map<std::string, TensorBuffer>>
       decode_kv_cache_buffers_1_;
-  std::optional<absl::flat_hash_map<absl::string_view, TensorBuffer>>
+  std::optional<absl::flat_hash_map<std::string, TensorBuffer>>
       decode_kv_cache_buffers_2_;
 
   // The signatures of the model.
@@ -349,18 +386,15 @@ class LlmLiteRtCompiledModelExecutorStatic
  private:
   LlmLiteRtCompiledModelExecutorStatic(
       LlmExecutorSettings executor_settings, Environment& env,
-      const Model* absl_nonnull model,
       std::unique_ptr<CompiledModel> compiled_model,
-      absl::flat_hash_map<absl::string_view, TensorBuffer> decode_input_buffers,
-      absl::flat_hash_map<absl::string_view, TensorBuffer>
-          decode_output_buffers,
-      absl::flat_hash_map<absl::string_view, TensorBuffer>
-          input_kv_cache_buffers,
-      absl::flat_hash_map<absl::string_view, TensorBuffer>
-          output_kv_cache_buffers,
-      std::optional<absl::flat_hash_map<absl::string_view, TensorBuffer>>
+      CachedMetadata cached_metadata,
+      absl::flat_hash_map<std::string, TensorBuffer> decode_input_buffers,
+      absl::flat_hash_map<std::string, TensorBuffer> decode_output_buffers,
+      absl::flat_hash_map<std::string, TensorBuffer> input_kv_cache_buffers,
+      absl::flat_hash_map<std::string, TensorBuffer> output_kv_cache_buffers,
+      std::optional<absl::flat_hash_map<std::string, TensorBuffer>>
           decode_input_kv_cache_buffers,
-      std::optional<absl::flat_hash_map<absl::string_view, TensorBuffer>>
+      std::optional<absl::flat_hash_map<std::string, TensorBuffer>>
           decode_output_kv_cache_buffers,
       SortedPrefillSignatureMap prefill_signature_map,
       ModelSignatures signatures, int output_batch_size,
@@ -372,9 +406,9 @@ class LlmLiteRtCompiledModelExecutorStatic
       LogitsDataType logits_data_type = LogitsDataType::FLOAT32,
       std::unique_ptr<LlmLiteRtMtpDrafter> mtp_drafter = nullptr)
       : LlmLiteRtCompiledModelExecutorBase(
-            std::move(executor_settings), env, model, std::move(compiled_model),
-            std::move(decode_input_buffers), std::move(decode_output_buffers),
-            std::move(input_kv_cache_buffers),
+            std::move(executor_settings), env, std::move(compiled_model),
+            std::move(cached_metadata), std::move(decode_input_buffers),
+            std::move(decode_output_buffers), std::move(input_kv_cache_buffers),
             std::move(output_kv_cache_buffers),
             std::move(decode_input_kv_cache_buffers),
             std::move(decode_output_kv_cache_buffers), signatures,
@@ -388,7 +422,7 @@ class LlmLiteRtCompiledModelExecutorStatic
   // to refer to them by just their unique name.
   absl::flat_hash_map<
       std::string /*prefill_signature_name*/,
-      absl::flat_hash_map<absl::string_view /*input_name*/, TensorBuffer>>
+      absl::flat_hash_map<std::string /*input_name*/, TensorBuffer>>
       prefill_input_buffers_;
   std::optional<bool> do_prefill_sync_;
 };
@@ -411,11 +445,10 @@ class LlmLiteRtCompiledModelExecutorDynamic
  private:
   LlmLiteRtCompiledModelExecutorDynamic(
       LlmExecutorSettings executor_settings, Environment& env,
-      const Model* absl_nonnull model,
       std::unique_ptr<CompiledModel> compiled_model,
-      absl::flat_hash_map<absl::string_view, TensorBuffer> decode_input_buffers,
-      absl::flat_hash_map<absl::string_view, TensorBuffer>
-          decode_output_buffers,
+      CachedMetadata cached_metadata,
+      absl::flat_hash_map<std::string, TensorBuffer> decode_input_buffers,
+      absl::flat_hash_map<std::string, TensorBuffer> decode_output_buffers,
       int prefill_chunk_size, int key_dynamic_dim_index,
       int value_dynamic_dim_index, int kv_increament_size,
       std::vector<std::string> key_cache_input_names,
@@ -429,8 +462,9 @@ class LlmLiteRtCompiledModelExecutorDynamic
       LogitsDataType logits_data_type = LogitsDataType::FLOAT32,
       std::unique_ptr<LlmLiteRtMtpDrafter> mtp_drafter = nullptr)
       : LlmLiteRtCompiledModelExecutorBase(
-            std::move(executor_settings), env, model, std::move(compiled_model),
-            std::move(decode_input_buffers), std::move(decode_output_buffers),
+            std::move(executor_settings), env, std::move(compiled_model),
+            std::move(cached_metadata), std::move(decode_input_buffers),
+            std::move(decode_output_buffers),
             /*input_kv_cache_buffers=*/{},
             /*output_kv_cache_buffers=*/{},
             /*decode_input_kv_cache_buffers=*/std::nullopt,

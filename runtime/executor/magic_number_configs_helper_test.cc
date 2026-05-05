@@ -24,6 +24,7 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_macros.h"  // from @litert
@@ -112,6 +113,8 @@ class ModelResourcesMock : public ModelResources {
               (), (override));
   MOCK_METHOD((absl::StatusOr<std::pair<size_t, size_t>>),
               GetWeightsSectionOffset, (ModelType model_type), (override));
+  MOCK_METHOD(absl::Status, ReleaseTFLiteModel, (ModelType model_type),
+              (override));
 
   absl::StatusOr<const litert::Model*> GetTFLiteModel(
       ModelType model_type) override {

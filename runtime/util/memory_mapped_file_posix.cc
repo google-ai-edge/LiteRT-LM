@@ -39,6 +39,7 @@ class MemoryMappedFilePosix : public MemoryMappedFile {
       : length_(length), data_(data) {}
   ~MemoryMappedFilePosix() override {
     if (data_) {
+      ABSL_LOG(INFO) << "munmap address " << data_ << " length " << length_;
       munmap(data_, length_);
     }
   }
@@ -112,6 +113,7 @@ absl::StatusOr<std::unique_ptr<MemoryMappedFile>> MemoryMappedFile::Create(
 
   void* data =
       mmap(nullptr, length, PROT_READ | PROT_WRITE, MAP_PRIVATE, file, offset);
+  ABSL_LOG(INFO) << "mmap address " << data << " length " << length;
   RET_CHECK_NE(data, MAP_FAILED) << "Failed to map, error: " << strerror(errno);
   RET_CHECK_NE(data, nullptr) << "Failed to map.";
 #ifdef __APPLE__

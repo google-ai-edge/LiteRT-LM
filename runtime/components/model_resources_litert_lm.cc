@@ -162,4 +162,14 @@ ModelResourcesLitertLm::GetWeightsSectionOffset(ModelType model_type) {
       BufferKey(schema::AnySectionDataType_TFLiteWeights, model_type));
 }
 
+absl::Status ModelResourcesLitertLm::ReleaseTFLiteModel(ModelType model_type) {
+  model_map_.erase(model_type);
+  RETURN_IF_ERROR(litert_lm_loader_->ReleaseSection(
+      BufferKey(schema::AnySectionDataType_TFLiteModel, model_type)));
+  RETURN_IF_ERROR(litert_lm_loader_->ReleaseSection(
+      BufferKey(schema::AnySectionDataType_TFLiteWeights, model_type)));
+
+  return absl::OkStatus();
+}
+
 }  // namespace litert::lm

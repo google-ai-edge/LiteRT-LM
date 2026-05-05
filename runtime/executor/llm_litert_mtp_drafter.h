@@ -68,30 +68,23 @@ class LlmLiteRtMtpDrafter {
   //   [batch_size, num_tokens].
   absl::StatusOr<std::vector<std::vector<int>>> Draft(
       int position, int token_id, std::optional<TensorBuffer> activations,
-      absl::flat_hash_map<absl::string_view, TensorBuffer>&
-          input_kv_cache_buffers,
-      absl::flat_hash_map<absl::string_view, TensorBuffer>&
-          output_kv_cache_buffers);
+      absl::flat_hash_map<std::string, TensorBuffer>& input_kv_cache_buffers,
+      absl::flat_hash_map<std::string, TensorBuffer>& output_kv_cache_buffers);
 
  private:
-  LlmLiteRtMtpDrafter(CompiledModel mtp_drafter_model,
-                      SimpleSignature drafter_signature,
-                      CompiledModel& base_model,
-                      SimpleSignature verify_signature,
-                      EmbeddingLookupManager& embedding_manager,
-                      EmbeddingLookupManager& ple_manager,
-                      std::unique_ptr<Sampler> drafter_sampler,
-                      std::unique_ptr<Sampler> verifier_sampler,
-                      std::vector<std::string> kv_cache_input_names,
-                      absl::flat_hash_map<absl::string_view, TensorBuffer>
-                          drafter_input_buffers,
-                      absl::flat_hash_map<absl::string_view, TensorBuffer>
-                          drafter_output_buffers,
-                      absl::flat_hash_map<absl::string_view, TensorBuffer>
-                          verifier_input_buffers,
-                      absl::flat_hash_map<absl::string_view, TensorBuffer>
-                          verifier_output_buffers,
-                      int num_draft_steps)
+  LlmLiteRtMtpDrafter(
+      CompiledModel mtp_drafter_model, SimpleSignature drafter_signature,
+      CompiledModel& base_model, SimpleSignature verify_signature,
+      EmbeddingLookupManager& embedding_manager,
+      EmbeddingLookupManager& ple_manager,
+      std::unique_ptr<Sampler> drafter_sampler,
+      std::unique_ptr<Sampler> verifier_sampler,
+      std::vector<std::string> kv_cache_input_names,
+      absl::flat_hash_map<std::string, TensorBuffer> drafter_input_buffers,
+      absl::flat_hash_map<std::string, TensorBuffer> drafter_output_buffers,
+      absl::flat_hash_map<std::string, TensorBuffer> verifier_input_buffers,
+      absl::flat_hash_map<std::string, TensorBuffer> verifier_output_buffers,
+      int num_draft_steps)
       : mtp_drafter_model_(std::move(mtp_drafter_model)),
         drafter_signature_(std::move(drafter_signature)),
         base_model_(base_model),
@@ -125,8 +118,8 @@ class LlmLiteRtMtpDrafter {
   }
 
   absl::Status PrepareDrafterInputBuffers(
-      int position, absl::flat_hash_map<absl::string_view, TensorBuffer>&
-                        output_kv_cache_buffers);
+      int position,
+      absl::flat_hash_map<std::string, TensorBuffer>& output_kv_cache_buffers);
 
   absl::Status PrepareDrafterOutputBuffers();
 
@@ -135,12 +128,10 @@ class LlmLiteRtMtpDrafter {
 
   absl::Status PrepareVerifierInputBuffers(
       int position, int token_id, const std::vector<int>& drafted_tokens,
-      absl::flat_hash_map<absl::string_view, TensorBuffer>&
-          input_kv_cache_buffers);
+      absl::flat_hash_map<std::string, TensorBuffer>& input_kv_cache_buffers);
 
   absl::Status PrepareVerifierOutputBuffers(
-      absl::flat_hash_map<absl::string_view, TensorBuffer>&
-          output_kv_cache_buffers);
+      absl::flat_hash_map<std::string, TensorBuffer>& output_kv_cache_buffers);
 
   absl::StatusOr<std::vector<int>> RunVerification();
 
@@ -168,29 +159,26 @@ class LlmLiteRtMtpDrafter {
   //   - input_position [batch, sequence_length]
   //   - mask [batch, 1, sequence_length = 1, context]
   //   - activations [batch, sequence_length = 1, hidden_size * 2]
-  absl::flat_hash_map<absl::string_view, TensorBuffer> drafter_input_buffers_;
+  absl::flat_hash_map<std::string, TensorBuffer> drafter_input_buffers_;
   //   - logits [batch, sequence_length, vocab_size]
   //   - projected_logits [batch, sequence_length, hidden_size]
-  absl::flat_hash_map<absl::string_view, TensorBuffer> drafter_output_buffers_;
+  absl::flat_hash_map<std::string, TensorBuffer> drafter_output_buffers_;
 
   // Verifier owned buffers.
   //   - input_position [batch, draft_steps + 1]
   //   - mask [batch, 1, draft_steps + 1, context]
   //   - embeddings [batch, draft_steps + 1, hidden_size]
   //   - per_layer_embeddings [batch, draft_steps + 1, ...]
-  absl::flat_hash_map<absl::string_view, TensorBuffer> verifier_input_buffers_;
+  absl::flat_hash_map<std::string, TensorBuffer> verifier_input_buffers_;
   //   - logits [batch, draft_steps + 1, vocab_size]
   //   - activations [batch, draft_steps + 1, hidden_size]
-  absl::flat_hash_map<absl::string_view, TensorBuffer> verifier_output_buffers_;
+  absl::flat_hash_map<std::string, TensorBuffer> verifier_output_buffers_;
 
   // Cached maps for Run to avoid map creation overhead.
-  absl::flat_hash_map<absl::string_view, TensorBuffer>
-      active_drafter_input_buffers_;
-  absl::flat_hash_map<absl::string_view, TensorBuffer>
-      active_drafter_output_buffers_;
-  absl::flat_hash_map<absl::string_view, TensorBuffer>
-      active_verifier_input_buffers_;
-  absl::flat_hash_map<absl::string_view, TensorBuffer>
+  absl::flat_hash_map<std::string, TensorBuffer> active_drafter_input_buffers_;
+  absl::flat_hash_map<std::string, TensorBuffer> active_drafter_output_buffers_;
+  absl::flat_hash_map<std::string, TensorBuffer> active_verifier_input_buffers_;
+  absl::flat_hash_map<std::string, TensorBuffer>
       active_verifier_output_buffers_;
 
   // Pre-allocated temporary tensors for sampling.

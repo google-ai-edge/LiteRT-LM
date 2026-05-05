@@ -29,7 +29,9 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "litert/c/litert_common.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
+#include "litert/cc/litert_expected.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
@@ -263,6 +265,23 @@ absl::Status EmbeddingLookupManager::Initialize(
         std::move(end_of_multi_modal_embedding_lookup));
   }
   return absl::OkStatus();
+}
+
+litert::Expected<bool> EmbeddingLookupManager::IsFullyAccelerated() const {
+  if (text_embedding_lookup_ == nullptr) {
+    return litert::Error(kLiteRtStatusErrorRuntimeFailure,
+                         "Text embedding lookup has not been created.");
+  }
+  if (auto res = text_embedding_lookup_->IsFullyAccelerated();
+      !res.HasValue() || !*res) {
+    return res;
+  }
+  for (const auto& lookup : end_of_multi_modal_embedding_lookups_) {
+    if (auto res = lookup->IsFullyAccelerated(); !res.HasValue() || !*res) {
+      return res;
+    }
+  }
+  return true;
 }
 
 }  // namespace litert::lm

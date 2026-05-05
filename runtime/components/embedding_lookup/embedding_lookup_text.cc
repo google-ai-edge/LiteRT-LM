@@ -31,10 +31,7 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_common.h"  // from @litert
-#include "litert/cc/litert_compiled_model.h"  // from @litert
-#include "litert/cc/litert_element_type.h"  // from @litert
-#include "litert/cc/litert_environment.h"  // from @litert
-#include "litert/cc/litert_macros.h"  // from @litert
+#include "litert/cc/litert_expected.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
 #include "litert/cc/litert_options.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
@@ -248,12 +245,12 @@ EmbeddingLookupText::Create(litert::Environment& env,
                             const litert::Model* absl_nonnull model,
                             std::optional<std::string> signature_key) {
   auto handler = std::unique_ptr<EmbeddingLookupText>(
-      new EmbeddingLookupText(env, model, signature_key));
-  RETURN_IF_ERROR(handler->Initialize());
+      new EmbeddingLookupText(env, signature_key));
+  RETURN_IF_ERROR(handler->Initialize(*model));
   return handler;
 }
 
-absl::Status EmbeddingLookupText::Initialize() {
+absl::Status EmbeddingLookupText::Initialize(const litert::Model& model) {
   LITERT_ASSIGN_OR_RETURN(auto options, Options::Create());
 #if defined(__ANDROID__)
   options.SetHardwareAccelerators(litert::HwAccelerators::kNpu |
@@ -271,8 +268,8 @@ absl::Status EmbeddingLookupText::Initialize() {
 #endif
 
   LITERT_ASSIGN_OR_RETURN(compiled_model_, litert::CompiledModel::Create(
-                                               env_, model_.Get(), options));
-  LITERT_ASSIGN_OR_RETURN(auto signatures, model_.GetSignatures());
+                                               env_, model.Get(), options));
+  LITERT_ASSIGN_OR_RETURN(auto signatures, model.GetSignatures());
 
   if (signature_key_.has_value()) {
     bool found = false;
@@ -352,6 +349,14 @@ absl::Status EmbeddingLookupText::Initialize() {
              floats_per_token_output_ * sizeof(float))));
 
   return absl::OkStatus();
+}
+
+litert::Expected<bool> EmbeddingLookupText::IsFullyAccelerated() {
+  if (!compiled_model_.has_value()) {
+    return litert::Error(litert::Status::kErrorRuntimeFailure,
+                         "Compiled model has not been created.");
+  }
+  return compiled_model_->IsFullyAccelerated();
 }
 
 }  // namespace litert::lm

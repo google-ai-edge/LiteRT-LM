@@ -62,8 +62,36 @@
 #include "runtime/util/tensor_buffer_util.h"
 #include "tflite/types/half.h"  // from @litert
 
+#if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
+#include <sys/mman.h>
+#include <unistd.h>
+#endif
+
 namespace litert::lm {
 namespace {
+
+void MadviseMemoryBuffer(absl::string_view buffer) {
+#if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
+  if (buffer.empty()) return;
+  size_t page_size = getpagesize();
+  uintptr_t addr = reinterpret_cast<uintptr_t>(buffer.data());
+  size_t size = buffer.size();
+
+  // We perform proper system page alignment to guarantee that the advisor
+  // does not fail on non-aligned offsets.
+  uintptr_t aligned_addr = (addr + page_size - 1) & ~(page_size - 1);
+  if (aligned_addr > addr) {
+    size_t gap = aligned_addr - addr;
+    if (gap >= size) return;
+    size -= gap;
+  }
+  size &= ~(page_size - 1);
+
+  if (size > 0) {
+    (void)madvise(reinterpret_cast<void*>(aligned_addr), size, MADV_DONTNEED);
+  }
+#endif
+}
 
 // Set the default GPU options for the model.
 absl::Status SetGpuOptions(const AudioExecutorSettings& executor_settings,
@@ -99,6 +127,7 @@ absl::Status SetGpuOptions(const AudioExecutorSettings& executor_settings,
   gpu_options.SetConvertWeightsOnGpu(true);
   gpu_options.SetHintFullyDelegatedToSingleDelegate(true);
   gpu_options.EnableInfiniteFloatCapping(true);
+  gpu_options.WaitForWeightsConversionComplete(true);
   return absl::OkStatus();
 }
 
@@ -179,13 +208,13 @@ AudioLiteRtCompiledModelExecutor::AudioStaticEncoder::Create(
     const AudioExecutorSettings& executor_settings, Environment& env,
     const Model* absl_nonnull model) {
   auto handler = std::unique_ptr<AudioStaticEncoder>(
-      new AudioStaticEncoder(executor_settings, env, model));
-  RETURN_IF_ERROR(handler->Initialize());
+      new AudioStaticEncoder(executor_settings, env));
+  RETURN_IF_ERROR(handler->Initialize(*model));
   return handler;
 }
 
-absl::Status
-AudioLiteRtCompiledModelExecutor::AudioStaticEncoder::Initialize() {
+absl::Status AudioLiteRtCompiledModelExecutor::AudioStaticEncoder::Initialize(
+    const Model& model) {
   LITERT_ASSIGN_OR_RETURN(auto options, Options::Create());
   auto weight_cache_file = executor_settings_.GetWeightCacheFile(
       absl::StrCat(AudioExecutorSettings::kStaticEncoderName,
@@ -222,15 +251,15 @@ AudioLiteRtCompiledModelExecutor::AudioStaticEncoder::Initialize() {
   }
 
   LITERT_ASSIGN_OR_RETURN(compiled_model_,
-                          CompiledModel::Create(env_, model_.Get(), options));
-  LITERT_ASSIGN_OR_RETURN(auto signatures, model_.GetSignatures());
+                          CompiledModel::Create(env_, model.Get(), options));
+  LITERT_ASSIGN_OR_RETURN(auto signatures, model.GetSignatures());
   if (signatures.size() != 1) {
     return absl::InvalidArgumentError(
         absl::StrCat("The Audio Static Encoder model must have exactly one "
                      "signature but got ",
                      signatures.size()));
   }
-  LITERT_ASSIGN_OR_RETURN(auto signature, model_.GetSignature(0));
+  LITERT_ASSIGN_OR_RETURN(auto signature, model.GetSignature(0));
 
   // Initialize the input buffers.
   LITERT_ASSIGN_OR_RETURN(auto input_buffers,
@@ -311,13 +340,14 @@ AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::Create(
     const AudioExecutorSettings& executor_settings, Environment& env,
     const Model* absl_nonnull model) {
   auto handler = std::unique_ptr<AudioStreamingEncoder>(
-      new AudioStreamingEncoder(executor_settings, env, model));
-  RETURN_IF_ERROR(handler->Initialize());
+      new AudioStreamingEncoder(executor_settings, env));
+  RETURN_IF_ERROR(handler->Initialize(*model));
   return handler;
 }
 
 absl::Status
-AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::Initialize() {
+AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::Initialize(
+    const Model& model) {
   LITERT_ASSIGN_OR_RETURN(auto options, Options::Create());
   auto weight_cache_file = executor_settings_.GetWeightCacheFile(
       absl::StrCat(AudioExecutorSettings::kStreamingEncoderName,
@@ -356,15 +386,15 @@ AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::Initialize() {
   }
 
   LITERT_ASSIGN_OR_RETURN(compiled_model_,
-                          CompiledModel::Create(env_, model_.Get(), options));
-  LITERT_ASSIGN_OR_RETURN(auto signatures, model_.GetSignatures());
+                          CompiledModel::Create(env_, model.Get(), options));
+  LITERT_ASSIGN_OR_RETURN(auto signatures, model.GetSignatures());
   if (signatures.size() != 1) {
     return absl::InvalidArgumentError(absl::StrCat(
         "The Audio Encoder model must have exactly one signature but got ",
         signatures.size()));
   }
 
-  LITERT_ASSIGN_OR_RETURN(auto signature, model_.GetSignature(0));
+  LITERT_ASSIGN_OR_RETURN(auto signature, model.GetSignature(0));
 
   // Initialize the input buffers.
   LITERT_ASSIGN_OR_RETURN(auto input_buffers,
@@ -504,13 +534,14 @@ absl::StatusOr<std::unique_ptr<AudioLiteRtCompiledModelExecutor::AudioAdapter>>
 AudioLiteRtCompiledModelExecutor::AudioAdapter::Create(
     const AudioExecutorSettings& executor_settings, Environment& env,
     const Model* absl_nonnull model) {
-  auto handler = std::unique_ptr<AudioAdapter>(
-      new AudioAdapter(executor_settings, env, model));
-  RETURN_IF_ERROR(handler->Initialize());
+  auto handler =
+      std::unique_ptr<AudioAdapter>(new AudioAdapter(executor_settings, env));
+  RETURN_IF_ERROR(handler->Initialize(*model));
   return handler;
 }
 
-absl::Status AudioLiteRtCompiledModelExecutor::AudioAdapter::Initialize() {
+absl::Status AudioLiteRtCompiledModelExecutor::AudioAdapter::Initialize(
+    const Model& model) {
   LITERT_ASSIGN_OR_RETURN(auto options, Options::Create());
   auto weight_cache_file = executor_settings_.GetWeightCacheFile(
       absl::StrCat(AudioExecutorSettings::kAdapterName,
@@ -524,6 +555,7 @@ absl::Status AudioLiteRtCompiledModelExecutor::AudioAdapter::Initialize() {
 #if defined(LITERT_USE_WEBGPU_ACCELERATOR)
     gpu_options.SetBackend(GpuOptions::Backend::kWebGpu);
 #endif  // defined(LITERT_USE_WEBGPU_ACCELERATOR)
+    gpu_options.WaitForWeightsConversionComplete(true);
     options.SetHardwareAccelerators(litert::HwAccelerators::kGpu);
   } else if (executor_settings_.GetBackend() == Backend::CPU) {
     LITERT_ASSIGN_OR_RETURN(auto& cpu_options, options.GetCpuOptions());
@@ -540,8 +572,8 @@ absl::Status AudioLiteRtCompiledModelExecutor::AudioAdapter::Initialize() {
   }
 
   LITERT_ASSIGN_OR_RETURN(compiled_model_,
-                          CompiledModel::Create(env_, model_.Get(), options));
-  LITERT_ASSIGN_OR_RETURN(auto signatures, model_.GetSignatures());
+                          CompiledModel::Create(env_, model.Get(), options));
+  LITERT_ASSIGN_OR_RETURN(auto signatures, model.GetSignatures());
   if (signatures.size() != 1) {
     return absl::InvalidArgumentError(absl::StrCat(
         "The Audio Adapter model must have exactly one signature but got ",
@@ -565,7 +597,7 @@ absl::Status AudioLiteRtCompiledModelExecutor::AudioAdapter::Initialize() {
                      output_buffers_.size()));
   }
 
-  LITERT_ASSIGN_OR_RETURN(auto signature, model_.GetSignature(0));
+  LITERT_ASSIGN_OR_RETURN(auto signature, model.GetSignature(0));
   for (int i = 0; i < signature.InputNames().size(); ++i) {
     if (absl::StrContains(signature.InputNames()[i], kFeaturesName)) {
       features_buffer_ = &input_buffers_[i];
@@ -599,6 +631,10 @@ AudioLiteRtCompiledModelExecutor::Create(
                    resources->GetTFLiteModel(ModelType::kTfLiteAudioEncoderHw));
   ASSIGN_OR_RETURN(auto audio_adapter_model,
                    resources->GetTFLiteModel(ModelType::kTfLiteAudioAdapter));
+  LITERT_ASSIGN_OR_RETURN(
+      auto executor_properties,
+      GetAudioExecutorPropertiesFromModelResources(*resources));
+  const int encoder_shrinking_factor = executor_properties.audio_shrink_factor;
   std::unique_ptr<AudioEncoder> audio_encoder;
   LITERT_ASSIGN_OR_RETURN(auto encoder_signature,
                           audio_encoder_model->GetSignature(0));
@@ -613,9 +649,35 @@ AudioLiteRtCompiledModelExecutor::Create(
                      AudioStaticEncoder::Create(executor_settings, env,
                                                 audio_encoder_model));
   }
+
+  if (auto is_fully_accelerated =
+          audio_encoder->GetMutableCompiledModel().IsFullyAccelerated();
+      is_fully_accelerated.HasValue() && *is_fully_accelerated) {
+    // Instead of destructively unmapping the model which invalidates underlying
+    // interpreter dependencies, we dynamically advise the kernel that the pages
+    // are no longer needed. This guarantees transparent, non-crashing, stable
+    // runtime while freeing full resident RAM pages immediately.
+    auto buf_status =
+        resources->GetTFLiteModelBuffer(ModelType::kTfLiteAudioEncoderHw);
+    if (buf_status.ok()) {
+      MadviseMemoryBuffer(*buf_status);
+    }
+  }
+
   LITERT_ASSIGN_OR_RETURN(
       auto audio_adapter,
       AudioAdapter::Create(executor_settings, env, audio_adapter_model));
+
+  if (auto is_fully_accelerated =
+          audio_adapter->GetMutableCompiledModel().IsFullyAccelerated();
+      is_fully_accelerated.HasValue() && *is_fully_accelerated) {
+    auto buf_status =
+        resources->GetTFLiteModelBuffer(ModelType::kTfLiteAudioAdapter);
+    if (buf_status.ok()) {
+      MadviseMemoryBuffer(*buf_status);
+    }
+  }
+
   const auto& tmp = audio_encoder->GetInputMaskBuffer();
   LITERT_ASSIGN_OR_RETURN(auto mask_tensor_type, tmp.TensorType());
   LITERT_ASSIGN_OR_RETURN(int sequence_length,
@@ -629,10 +691,7 @@ AudioLiteRtCompiledModelExecutor::Create(
                           audio_adapter->GetOutputBuffers()[0].TensorType());
   const auto dims = adapter_output_tensor_type.Layout().Dimensions();
   const int audio_embedding_dimensions = dims.back();
-  LITERT_ASSIGN_OR_RETURN(
-      auto executor_properties,
-      GetAudioExecutorPropertiesFromModelResources(*resources));
-  const int encoder_shrinking_factor = executor_properties.audio_shrink_factor;
+
   if (!is_streaming_encoder) {
     if (audio_encoder->GetOutputBuffersMap().size() !=
         audio_adapter->GetInputBuffers().size()) {
@@ -832,7 +891,7 @@ absl::StatusOr<ExecutorAudioData> AudioLiteRtCompiledModelExecutor::Encode(
 absl::StatusOr<std::unique_ptr<AudioStreamingContext>>
 AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::CreateNewContext() {
   absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer> state_buffers;
-  LITERT_ASSIGN_OR_RETURN(auto signature, compiled_model_.GetSignature(0));
+  // Removed redundant GetSignature call that crashes post-release.
   for (auto& [name, buffer] : input_buffers_map_) {
     if (name == kSegmentValuesName || name == kSegmentMaskName) {
       // Skip the segment values and mask buffers as they are not part of the
@@ -859,7 +918,7 @@ AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::CreateNewContext() {
 absl::StatusOr<std::unique_ptr<AudioStreamingContext>>
 AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::CloneContext() {
   absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer> state_buffers;
-  LITERT_ASSIGN_OR_RETURN(auto signature, compiled_model_.GetSignature(0));
+  // Removed redundant GetSignature call that crashes post-release.
   for (const auto& [name, buffer] : input_buffers_map_) {
     if (name == kSegmentValuesName || name == kSegmentMaskName) {
       // Skip the segment values and mask buffers as they are not part of the

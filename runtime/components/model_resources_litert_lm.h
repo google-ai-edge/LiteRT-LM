@@ -23,6 +23,7 @@
 #include <utility>
 
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
+#include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_model.h"  // from @litert
@@ -63,6 +64,8 @@ class ModelResourcesLitertLm : public ModelResources {
 
   absl::StatusOr<std::pair<size_t, size_t>> GetWeightsSectionOffset(
       ModelType model_type) override;
+
+  absl::Status ReleaseTFLiteModel(ModelType model_type) override;
 
  protected:
   explicit ModelResourcesLitertLm(

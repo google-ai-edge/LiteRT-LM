@@ -190,6 +190,11 @@ class LitertLmLoader {
   absl::StatusOr<std::pair<size_t, size_t>> GetSectionLocation(
       BufferKey buffer_key) const;
 
+  // Releases the section buffer and the memory mapped file associated with the
+  // given buffer key.
+  absl::Status ReleaseSection(BufferKey buffer_key)
+      ABSL_LOCKS_EXCLUDED(section_buffers_mutex_);
+
   absl::StatusOr<std::reference_wrapper<ScopedFile>> GetScopedFile();
 
  private:

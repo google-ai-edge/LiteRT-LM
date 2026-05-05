@@ -192,11 +192,12 @@ VisionLiteRtCompiledModelExecutor::VisionEncoder::Create(
     const VisionExecutorProperties& vision_executor_properties) {
   auto handler = std::unique_ptr<VisionEncoder>(new VisionEncoder(
       env, model, vision_executor_settings, vision_executor_properties));
-  RETURN_IF_ERROR(handler->Initialize());
+  RETURN_IF_ERROR(handler->Initialize(*model));
   return handler;
 }
 
-absl::Status VisionLiteRtCompiledModelExecutor::VisionEncoder::Initialize() {
+absl::Status VisionLiteRtCompiledModelExecutor::VisionEncoder::Initialize(
+    const Model& model) {
   // TODO(b/405424188): - Add support for NPU backends.
   LITERT_ASSIGN_OR_RETURN(auto options, Options::Create());
   auto weight_cache_file = vision_executor_settings_.GetWeightCacheFile(
@@ -269,8 +270,13 @@ absl::Status VisionLiteRtCompiledModelExecutor::VisionEncoder::Initialize() {
   }
 
   LITERT_ASSIGN_OR_RETURN(compiled_model_,
-                          CompiledModel::Create(env_, model_.Get(), options));
+                          CompiledModel::Create(env_, model.Get(), options));
   if (!vision_executor_properties_.patch_num_shrink_factor.has_value()) {
+    if (auto num_signatures = model.GetNumSignatures(); num_signatures != 1) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "The Vision Encoder model must have exactly one signature but got ",
+          num_signatures));
+    }
     // Only create input buffer at initialization for non-VIT models.
     LITERT_ASSIGN_OR_RETURN(input_buffers_,
                             compiled_model_.CreateInputBuffers(0));
@@ -288,11 +294,12 @@ VisionLiteRtCompiledModelExecutor::VisionAdapter::Create(
     const VisionExecutorProperties& vision_executor_properties) {
   auto handler = std::unique_ptr<VisionAdapter>(new VisionAdapter(
       env, model, vision_executor_settings, vision_executor_properties));
-  RETURN_IF_ERROR(handler->Initialize());
+  RETURN_IF_ERROR(handler->Initialize(*model));
   return handler;
 }
 
-absl::Status VisionLiteRtCompiledModelExecutor::VisionAdapter::Initialize() {
+absl::Status VisionLiteRtCompiledModelExecutor::VisionAdapter::Initialize(
+    const Model& model) {
   // TODO(b/405424188): - Add support for NPU backends.
   LITERT_ASSIGN_OR_RETURN(auto options, Options::Create());
   auto weight_cache_file = vision_executor_settings_.GetWeightCacheFile(
@@ -329,7 +336,7 @@ absl::Status VisionLiteRtCompiledModelExecutor::VisionAdapter::Initialize() {
   }
 
   LITERT_ASSIGN_OR_RETURN(compiled_model_,
-                          CompiledModel::Create(env_, model_.Get(), options));
+                          CompiledModel::Create(env_, model.Get(), options));
   // This check verifies if signature 0 of the adapter model contains any
   // inputs. This is used to infer whether input buffers should be created at
   // initialization time (for single-signature models that use signature 0 by
@@ -337,7 +344,7 @@ absl::Status VisionLiteRtCompiledModelExecutor::VisionAdapter::Initialize() {
   // input buffers on-demand in `Encode` for a specific signature). This is a
   // more direct check than relying on `patch_num_shrink_factor` which was
   // previously used to detect multi-signature models.
-  auto signature_or = model_.GetSignature(0);
+  auto signature_or = model.GetSignature(0);
   if (signature_or.HasValue() && !signature_or->InputNames().empty()) {
     LITERT_ASSIGN_OR_RETURN(input_buffers_,
                             compiled_model_.CreateInputBuffers(0));
@@ -373,16 +380,6 @@ litert::lm::VisionLiteRtCompiledModelExecutor::Create(
       auto vision_executor_properties,
       GetVisionExecutorPropertiesFromModelResources(*resources.get()));
 
-  ASSIGN_OR_RETURN(
-      auto vision_encoder,
-      VisionEncoder::Create(env, vision_encoder_model, vision_executor_settings,
-                            vision_executor_properties));
-
-  ASSIGN_OR_RETURN(
-      auto vision_adapter,
-      VisionAdapter::Create(env, vision_adapter_model, vision_executor_settings,
-                            vision_executor_properties));
-
   LITERT_ASSIGN_OR_RETURN(auto tensor_type,
                           vision_encoder_model->GetInputTensorType(0, 0));
   const auto& dimensions = tensor_type.Layout().Dimensions();
@@ -399,6 +396,16 @@ litert::lm::VisionLiteRtCompiledModelExecutor::Create(
   }
   auto expected_input_dimension =
       std::vector<int>(dimensions.begin(), dimensions.end());
+
+  ASSIGN_OR_RETURN(
+      auto vision_encoder,
+      VisionEncoder::Create(env, vision_encoder_model, vision_executor_settings,
+                            vision_executor_properties));
+
+  ASSIGN_OR_RETURN(
+      auto vision_adapter,
+      VisionAdapter::Create(env, vision_adapter_model, vision_executor_settings,
+                            vision_executor_properties));
 
   return absl::WrapUnique(new VisionLiteRtCompiledModelExecutor(
       vision_executor_settings, env, std::move(resources),

@@ -90,7 +90,7 @@ class VisionLiteRtCompiledModelExecutor : public VisionExecutor {
 
     // Initialize the VisionEncoder, which will create the input and output
     // buffers for the vision encoder model.
-    absl::Status Initialize();
+    absl::Status Initialize(const Model& model);
 
     // Returns the CompiledModel for the vision encoder model.
     const CompiledModel& GetCompiledModel() const { return compiled_model_; }
@@ -149,7 +149,6 @@ class VisionLiteRtCompiledModelExecutor : public VisionExecutor {
 
     // The vision executor properties.
     const VisionExecutorProperties& vision_executor_properties_;
-
     // The vision encoder compiled model.
     CompiledModel compiled_model_;
 
@@ -180,7 +179,7 @@ class VisionLiteRtCompiledModelExecutor : public VisionExecutor {
         const VisionExecutorProperties& vision_executor_properties);
 
     // Initialize the VisionAdapter.
-    absl::Status Initialize();
+    absl::Status Initialize(const Model& model);
 
     // Returns the CompiledModel for the vision adapter model.
     const CompiledModel& GetCompiledModel() const { return compiled_model_; }
@@ -226,7 +225,6 @@ class VisionLiteRtCompiledModelExecutor : public VisionExecutor {
 
     // The vision executor properties.
     const VisionExecutorProperties& vision_executor_properties_;
-
     // The vision adapter compiled model.
     CompiledModel compiled_model_;
 

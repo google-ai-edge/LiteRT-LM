@@ -185,6 +185,11 @@ class ModelResources {
 
   // Returns the llm metadata.
   virtual absl::StatusOr<const proto::LlmMetadata*> GetLlmMetadata() = 0;
+
+  // Releases the TFLite model from RAM. This is used to reduce peak memory
+  // usage after the model has been compiled into a hardware-specific
+  // executable.
+  virtual absl::Status ReleaseTFLiteModel(ModelType model_type) = 0;
 };
 
 }  // namespace litert::lm

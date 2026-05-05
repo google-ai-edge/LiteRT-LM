@@ -14,6 +14,10 @@
 
 #include "runtime/util/litert_lm_loader.h"
 
+#if defined(__linux__) || defined(__ANDROID__)
+#include <sys/mman.h>
+#endif
+
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -294,6 +298,18 @@ absl::StatusOr<std::pair<size_t, size_t>> LitertLmLoader::GetSectionLocation(
     return absl::NotFoundError("Section not found.");
   }
   return section_location_it->second;
+}
+
+absl::Status LitertLmLoader::ReleaseSection(BufferKey buffer_key) {
+  absl::MutexLock lock(section_buffers_mutex_);
+  auto it = section_buffers_.find(buffer_key);
+  if (it != section_buffers_.end()) {
+    section_buffers_.erase(it);
+  }
+
+  section_memory_mapped_files_.erase(buffer_key);
+  section_locations_.erase(buffer_key);
+  return absl::OkStatus();
 }
 
 std::optional<litert::OwningBufferRef<uint8_t>>

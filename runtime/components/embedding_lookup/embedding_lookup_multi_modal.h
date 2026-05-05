@@ -91,6 +91,8 @@ class EmbeddingLookupMultiModal : public EmbeddingLookup {
   // Returns true if there are any embeddings left to be read.
   bool HasRemainingEmbeddings() const { return embedding_.size() > 0; }
 
+  litert::Expected<bool> IsFullyAccelerated() override { return true; }
+
  protected:
   absl::Status Initialize(const ::litert::TensorBuffer* embedding_buffer,
                           int special_token);

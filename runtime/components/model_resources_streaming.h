@@ -22,6 +22,7 @@
 #include <string>
 #include <utility>
 
+#include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_model.h"  // from @litert
@@ -60,6 +61,8 @@ class ModelResourcesStreaming : public ModelResources {
   absl::StatusOr<std::unique_ptr<Tokenizer>> GetTokenizer() override;
 
   absl::StatusOr<const proto::LlmMetadata*> GetLlmMetadata() override;
+
+  absl::Status ReleaseTFLiteModel(ModelType model_type) override;
 };
 
 }  // namespace litert::lm

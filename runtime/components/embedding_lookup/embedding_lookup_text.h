@@ -22,7 +22,6 @@
 #include <memory>
 #include <optional>
 #include <string>
-#include <utility>
 #include <vector>
 
 #include "absl/base/nullability.h"  // from @com_google_absl
@@ -31,6 +30,7 @@
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
+#include "litert/cc/litert_expected.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
 #include "litert/cc/litert_options.h"  // from @litert
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
@@ -103,6 +103,8 @@ class EmbeddingLookupText : public EmbeddingLookup {
   // Returns number of floats per token in the output tensor.
   size_t GetFloatsPerToken();
 
+  litert::Expected<bool> IsFullyAccelerated() override;
+
   // Returns the default embedding vector to use when a token is not found in
   // the lookup table.
   const std::vector<float>& GetDefaultEmbeddingVector() const {
@@ -116,12 +118,11 @@ class EmbeddingLookupText : public EmbeddingLookup {
 
  protected:
   EmbeddingLookupText(litert::Environment& env,
-                      const litert::Model* absl_nonnull model,
                       std::optional<std::string> signature_key)
-      : env_(env), model_(*model), signature_key_(signature_key) {}
+      : env_(env), signature_key_(signature_key) {}
 
   // Loads the provided model. This must be called before Lookup.
-  absl::Status Initialize();
+  absl::Status Initialize(const litert::Model& model);
 
   // Internal implementation of Lookup for both the single and multiple token
   // cases.
@@ -129,9 +130,6 @@ class EmbeddingLookupText : public EmbeddingLookup {
 
   // The environment for the embedding lookup.
   litert::Environment& env_;
-  // The model for the embedding lookup. The actual model instance is owned by
-  // the model resources.
-  const litert::Model& model_;
   // The compiled model for the embedding model.
   std::optional<litert::CompiledModel> compiled_model_;
 

@@ -27,6 +27,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_environment.h"  // from @litert
+#include "litert/cc/litert_expected.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/embedding_lookup/embedding_lookup_end_of_multi_modal.h"
@@ -115,6 +116,8 @@ class EmbeddingLookupManager {
   EmbeddingLookupText* GetTextEmbeddingLookup() const {
     return text_embedding_lookup_.get();
   }
+
+  litert::Expected<bool> IsFullyAccelerated() const;
 
  protected:
   absl::Status Initialize(

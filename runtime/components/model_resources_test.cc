@@ -65,6 +65,58 @@ TEST(ModelResourcesTest, InitializeWithValidLitertLmLoader) {
   ASSERT_NE(tokenizer.value(), nullptr);
 }
 
+TEST(ModelResourcesTest, ReleaseTFLiteModel) {
+  const auto model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm.litertlm";
+  auto model_file = ScopedFile::Open(model_path.string());
+  ASSERT_TRUE(model_file.ok());
+  ASSERT_OK_AND_ASSIGN(auto loader,
+                       LitertLmLoader::Create(std::move(model_file.value())));
+
+  auto model_resources = ModelResourcesLitertLm::Create(std::move(loader));
+  ASSERT_OK(model_resources);
+
+  // Load the model.
+  auto tflite_model =
+      model_resources.value()->GetTFLiteModel(ModelType::kTfLitePrefillDecode);
+  ASSERT_OK(tflite_model);
+
+  // Release the model.
+  ASSERT_OK(model_resources.value()->ReleaseTFLiteModel(
+      ModelType::kTfLitePrefillDecode));
+
+  // Subsequent GetTFLiteModelBuffer should return NotFound.
+  EXPECT_THAT(model_resources.value()->GetTFLiteModelBuffer(
+                  ModelType::kTfLitePrefillDecode),
+              testing::status::StatusIs(absl::StatusCode::kNotFound));
+}
+
+TEST(ModelResourcesTest, ReleaseTFLiteModelDoesNotBreakSubsequentLoads) {
+  const auto model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm.litertlm";
+  auto model_file = ScopedFile::Open(model_path.string());
+  ASSERT_TRUE(model_file.ok());
+  ASSERT_OK_AND_ASSIGN(auto loader,
+                       LitertLmLoader::Create(std::move(model_file.value())));
+
+  auto model_resources = ModelResourcesLitertLm::Create(std::move(loader));
+  ASSERT_OK(model_resources);
+
+  // Load one model and release it.
+  ASSERT_OK(model_resources.value()
+                ->GetTFLiteModel(ModelType::kTfLitePrefillDecode)
+                .status());
+  ASSERT_OK(model_resources.value()->ReleaseTFLiteModel(
+      ModelType::kTfLitePrefillDecode));
+
+  // Subsequent loads should still succeed (e.g., Tokenizer or other models).
+  // test_lm.litertlm contains a tokenizer.
+  auto tokenizer = model_resources.value()->GetTokenizer();
+  EXPECT_OK(tokenizer.status());
+}
+
 TEST(ModelResourcesTest, InitializeWithExternalWeights) {
   const auto model_path =
       std::filesystem::path(::testing::SrcDir()) /

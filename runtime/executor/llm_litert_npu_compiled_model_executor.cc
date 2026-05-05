@@ -830,8 +830,7 @@ LlmLiteRtNpuCompiledModelExecutor::CreateRopeContextWithBufferSharing(
 }
 
 absl::Status LlmLiteRtNpuCompiledModelExecutor::AllocateTransformerBuffers(
-    litert::Environment& env, const litert::Model* transformer_model,
-    CompiledModel& llm_compiled_model,
+    litert::Environment& env, CompiledModel& llm_compiled_model,
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
         gemma_prefill_input_buffers,
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
@@ -846,10 +845,15 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::AllocateTransformerBuffers(
         decode_output_kv_cache_slice_buffers,
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
         verify_output_kv_cache_slice_buffers) {
-  auto prefill_signature = transformer_model->FindSignature(kPrefillSignature);
+  LITERT_ASSIGN_OR_RETURN(
+      auto prefill_input_names,
+      llm_compiled_model.GetSignatureInputNames(kPrefillSignature));
+  LITERT_ASSIGN_OR_RETURN(
+      auto prefill_output_names,
+      llm_compiled_model.GetSignatureOutputNames(kPrefillSignature));
 
   // Create input buffers for prefill signature.
-  for (auto input_name : prefill_signature->InputNames()) {
+  for (auto input_name : prefill_input_names) {
     if (absl::StartsWith(input_name, kv_cache_k_root_name) ||
         absl::StartsWith(input_name, kv_cache_v_root_name)) {
       LITERT_ASSIGN_OR_RETURN(
@@ -865,8 +869,13 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::AllocateTransformerBuffers(
   }
   // Create input buffers for decode signature. Skip kv cache input buffers as
   // they are already created in the prefill signature.
-  auto decode_signature = transformer_model->FindSignature(kDecodeSignature);
-  for (auto input_name : decode_signature->InputNames()) {
+  LITERT_ASSIGN_OR_RETURN(
+      auto decode_input_names,
+      llm_compiled_model.GetSignatureInputNames(kDecodeSignature));
+  LITERT_ASSIGN_OR_RETURN(
+      auto decode_output_names,
+      llm_compiled_model.GetSignatureOutputNames(kDecodeSignature));
+  for (auto input_name : decode_input_names) {
     if (absl::StartsWith(input_name, kv_cache_k_root_name) ||
         absl::StartsWith(input_name, kv_cache_v_root_name)) {
       // Create the input kv cache buffer for the decode signature if it is not
@@ -886,7 +895,7 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::AllocateTransformerBuffers(
   }
 
   // Create output buffers for prefill signature.
-  for (auto output_name : prefill_signature->OutputNames()) {
+  for (auto output_name : prefill_output_names) {
     if (absl::StartsWith(output_name, kv_cache_slice_k_root_name) ||
         absl::StartsWith(output_name, kv_cache_slice_v_root_name)) {
       LITERT_ASSIGN_OR_RETURN(
@@ -896,7 +905,7 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::AllocateTransformerBuffers(
     }
   }
   // Create output buffers for decode signature.
-  for (auto output_name : decode_signature->OutputNames()) {
+  for (auto output_name : decode_output_names) {
     if (absl::StartsWith(output_name, kv_cache_slice_k_root_name) ||
         absl::StartsWith(output_name, kv_cache_slice_v_root_name)) {
       LITERT_ASSIGN_OR_RETURN(
@@ -906,16 +915,21 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::AllocateTransformerBuffers(
   }
 
   // Create input/output buffers for verify signature if it exists.
-  auto verify_signature =
-      transformer_model->FindSignature(LlmSignatures::kVerifyLlm);
-  if (verify_signature) {
-    for (auto input_name : verify_signature->InputNames()) {
+  if (auto verify_input_names_res = llm_compiled_model.GetSignatureInputNames(
+          LlmSignatures::kVerifyLlm)) {
+    ABSL_LOG(INFO) << "Verify signature found. Inputs:";
+    for (auto input_name : *verify_input_names_res) {
+      ABSL_LOG(INFO) << "  - " << input_name;
       LITERT_ASSIGN_OR_RETURN(gemma_verify_input_buffers[input_name],
                               llm_compiled_model.CreateInputBuffer(
                                   LlmSignatures::kVerifyLlm, input_name));
       gemma_verify_input_buffers[input_name].Clear();
     }
-    for (auto output_name : verify_signature->OutputNames()) {
+
+    LITERT_ASSIGN_OR_RETURN(
+        auto verify_output_names,
+        llm_compiled_model.GetSignatureOutputNames(LlmSignatures::kVerifyLlm));
+    for (auto output_name : verify_output_names) {
       if (absl::StartsWith(output_name, kv_cache_slice_k_root_name) ||
           absl::StartsWith(output_name, kv_cache_slice_v_root_name)) {
         LITERT_ASSIGN_OR_RETURN(
@@ -2742,8 +2756,14 @@ LlmLiteRtNpuCompiledModelExecutor::CreateForModelHasPerLayerEmbedding(
   absl::flat_hash_map<absl::string_view, TensorBuffer>
       verify_output_kv_cache_slice_buffers;
 
+  if (auto is_fully_accelerated = llm_compiled_model.IsFullyAccelerated();
+      is_fully_accelerated.HasValue() && *is_fully_accelerated) {
+    RETURN_IF_ERROR(
+        resources.ReleaseTFLiteModel(ModelType::kTfLitePrefillDecode));
+  }
+
   RETURN_IF_ERROR(AllocateTransformerBuffers(
-      env, transformer_model, llm_compiled_model, gemma_prefill_input_buffers,
+      env, llm_compiled_model, gemma_prefill_input_buffers,
       gemma_decode_input_buffers, gemma_verify_input_buffers,
       input_kv_cache_buffers, prefill_output_kv_cache_slice_buffers,
       decode_output_kv_cache_slice_buffers,
@@ -2772,6 +2792,12 @@ LlmLiteRtNpuCompiledModelExecutor::CreateForModelHasPerLayerEmbedding(
           verify_output_kv_cache_slice_buffers, gemma_prefill_input_buffers,
           gemma_decode_input_buffers, gemma_verify_input_buffers));
 
+  if (auto is_fully_accelerated = llm_compiled_model.IsFullyAccelerated();
+      is_fully_accelerated.HasValue() && *is_fully_accelerated) {
+    RETURN_IF_ERROR(
+        resources.ReleaseTFLiteModel(ModelType::kTfLitePrefillDecode));
+  }
+
   LITERT_ASSIGN_OR_RETURN(auto npu_auxiliary_lrt_model,
                           resources.GetTFLiteModel(ModelType::kTfLiteAux));
 
@@ -2779,6 +2805,11 @@ LlmLiteRtNpuCompiledModelExecutor::CreateForModelHasPerLayerEmbedding(
       auto npu_auxiliary_context,
       CreateNpuAuxiliaryContext(env, *npu_auxiliary_lrt_model,
                                 executor_settings));
+
+  if (auto is_fully_accelerated = llm_compiled_model.IsFullyAccelerated();
+      is_fully_accelerated.HasValue() && *is_fully_accelerated) {
+    RETURN_IF_ERROR(resources.ReleaseTFLiteModel(ModelType::kTfLiteAux));
+  }
 
   LITERT_ASSIGN_OR_RETURN(
       auto mask_context,
@@ -2855,10 +2886,15 @@ LlmLiteRtNpuCompiledModelExecutor::CreateForModelHasPerLayerEmbedding(
   add_multi_modal_end_model(ModelType::kTfLiteEndOfVision,
                             litert::lm::ExecutorVisionData::kEndToken);
 
+  absl::flat_hash_map<int, const Model*> raw_end_of_multi_modal_models;
+  for (const auto& [token, model] : end_of_multi_modal_embedding_models) {
+    raw_end_of_multi_modal_models[token] = model;
+  }
+
   LITERT_ASSIGN_OR_RETURN(
       std::unique_ptr<EmbeddingLookupManager> embedding_lookup_manager,
       EmbeddingLookupManager::Create(env, embedder_lrt_model,
-                                     end_of_multi_modal_embedding_models, true,
+                                     raw_end_of_multi_modal_models, true,
                                      "decode_embedder"));
 
   bool use_hw_ple_for_npu = false;
@@ -2867,6 +2903,10 @@ LlmLiteRtNpuCompiledModelExecutor::CreateForModelHasPerLayerEmbedding(
     use_hw_ple_for_npu = npu_config_status->use_hw_ple_for_npu;
   }
 
+  if (auto is_fully_accelerated = llm_compiled_model.IsFullyAccelerated();
+      is_fully_accelerated.HasValue() && *is_fully_accelerated) {
+    RETURN_IF_ERROR(resources.ReleaseTFLiteModel(ModelType::kTfLiteEmbedder));
+  }
   std::optional<EmbedderPerLayerContext> embedder_per_layer_context =
       std::nullopt;
 
@@ -2965,6 +3005,14 @@ LlmLiteRtNpuCompiledModelExecutor::CreateForModelHasPerLayerEmbedding(
 
       RETURN_IF_ERROR(WarmupDrafterInference(drafter_context.value(),
                                              drafter_aux_context.value()));
+
+      if (auto is_fully_accelerated = llm_compiled_model.IsFullyAccelerated();
+          is_fully_accelerated.HasValue() && *is_fully_accelerated) {
+        RETURN_IF_ERROR(
+            resources.ReleaseTFLiteModel(ModelType::kTfLiteMtpDrafter));
+
+        RETURN_IF_ERROR(resources.ReleaseTFLiteModel(ModelType::kTfLiteMtpAux));
+      }
     }
   }
 
@@ -3013,8 +3061,14 @@ LlmLiteRtNpuCompiledModelExecutor::CreateForModelWithoutPerLayerEmbedding(
   absl::flat_hash_map<absl::string_view, TensorBuffer>
       verify_output_kv_cache_slice_buffers;
 
+  if (auto is_fully_accelerated = llm_compiled_model.IsFullyAccelerated();
+      is_fully_accelerated.HasValue() && *is_fully_accelerated) {
+    RETURN_IF_ERROR(
+        resources.ReleaseTFLiteModel(ModelType::kTfLitePrefillDecode));
+  }
+
   RETURN_IF_ERROR(AllocateTransformerBuffers(
-      env, transformer_model, llm_compiled_model, gemma_prefill_input_buffers,
+      env, llm_compiled_model, gemma_prefill_input_buffers,
       gemma_decode_input_buffers, gemma_verify_input_buffers,
       input_kv_cache_buffers, prefill_output_kv_cache_slice_buffers,
       decode_output_kv_cache_slice_buffers,
@@ -3063,6 +3117,12 @@ LlmLiteRtNpuCompiledModelExecutor::CreateForModelWithoutPerLayerEmbedding(
     llm_inference_context.decode_input_buffers[cache_v17] = std::move(buffer_v);
   }
 
+  if (auto is_fully_accelerated = llm_compiled_model.IsFullyAccelerated();
+      is_fully_accelerated.HasValue() && *is_fully_accelerated) {
+    RETURN_IF_ERROR(
+        resources.ReleaseTFLiteModel(ModelType::kTfLitePrefillDecode));
+  }
+
   LITERT_ASSIGN_OR_RETURN(auto npu_auxiliary_lrt_model,
                           resources.GetTFLiteModel(ModelType::kTfLiteAux));
 
@@ -3070,6 +3130,11 @@ LlmLiteRtNpuCompiledModelExecutor::CreateForModelWithoutPerLayerEmbedding(
       auto npu_auxiliary_context,
       CreateNpuAuxiliaryContext(env, *npu_auxiliary_lrt_model,
                                 executor_settings));
+
+  if (auto is_fully_accelerated = llm_compiled_model.IsFullyAccelerated();
+      is_fully_accelerated.HasValue() && *is_fully_accelerated) {
+    RETURN_IF_ERROR(resources.ReleaseTFLiteModel(ModelType::kTfLiteAux));
+  }
 
   LITERT_ASSIGN_OR_RETURN(
       auto mask_context,
@@ -3154,6 +3219,17 @@ LlmLiteRtNpuCompiledModelExecutor::CreateForModelWithoutPerLayerEmbedding(
         EmbeddingLookupManager::Create(env, embedder_lrt_model,
                                        end_of_multi_modal_embedding_models,
                                        true, "decode_embedder"));
+
+    if (auto is_fully_accelerated = llm_compiled_model.IsFullyAccelerated();
+        is_fully_accelerated.HasValue() && *is_fully_accelerated) {
+      RETURN_IF_ERROR(resources.ReleaseTFLiteModel(ModelType::kTfLiteEmbedder));
+
+      RETURN_IF_ERROR(
+          resources.ReleaseTFLiteModel(ModelType::kTfLiteEndOfAudio));
+      RETURN_IF_ERROR(
+          resources.ReleaseTFLiteModel(ModelType::kTfLiteEndOfVision));
+      end_of_multi_modal_embedding_models.clear();
+    }
   }
 
   SpeculativeDecodingType speculative_decoding_type =

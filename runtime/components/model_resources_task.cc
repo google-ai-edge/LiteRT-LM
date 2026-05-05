@@ -75,6 +75,11 @@ absl::StatusOr<const litert::Model*> ModelResourcesTask::GetTFLiteModel(
   return model_map_[model_type].get();
 }
 
+absl::Status ModelResourcesTask::ReleaseTFLiteModel(ModelType model_type) {
+  model_map_.erase(model_type);
+  return absl::OkStatus();
+}
+
 absl::StatusOr<std::unique_ptr<Tokenizer>> ModelResourcesTask::GetTokenizer() {
   ASSIGN_OR_RETURN(auto string_view,
                    model_asset_bundle_resources_->GetFile("TOKENIZER_MODEL"));

@@ -17,10 +17,10 @@
 
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <utility>
 
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
-#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/llm_executor_processed_tokens.h"
@@ -34,8 +34,7 @@ class LlmProcessedContext : public ProcessedContext {
  public:
   explicit LlmProcessedContext(
       std::optional<uint32_t> lora_id,
-      absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
-          kv_cache_buffers,
+      absl::flat_hash_map<std::string, ::litert::TensorBuffer> kv_cache_buffers,
       ::litert::lm::ProcessedTokens processed_tokens = {})
       : lora_id_(lora_id),
         processed_tokens_(std::move(processed_tokens)),
@@ -47,16 +46,14 @@ class LlmProcessedContext : public ProcessedContext {
   }
   ProcessedTokens& processed_tokens() override { return processed_tokens_; }
 
-  absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-  kv_cache_buffers() {
+  absl::flat_hash_map<std::string, ::litert::TensorBuffer>& kv_cache_buffers() {
     return kv_cache_buffers_;
   }
 
  private:
   std::optional<uint32_t> lora_id_;
   ProcessedTokens processed_tokens_;
-  absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
-      kv_cache_buffers_;
+  absl::flat_hash_map<std::string, ::litert::TensorBuffer> kv_cache_buffers_;
 };
 
 }  // namespace litert::lm

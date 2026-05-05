@@ -19,7 +19,6 @@
 
 #include <cstddef>
 #include <memory>
-#include <utility>
 #include <vector>
 
 #include "absl/base/nullability.h"  // from @com_google_absl
@@ -29,7 +28,6 @@
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_layout.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
-#include "litert/cc/litert_options.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/embedding_lookup/embedding_lookup.h"
 
@@ -74,20 +72,19 @@ class EndOfMultiModalEmbedding : public EmbeddingLookup {
                              litert::TensorBuffer* prefill_output,
                              size_t byte_offset) override;
 
+  litert::Expected<bool> IsFullyAccelerated() override {
+    return is_fully_accelerated_;
+  }
+
  protected:
-  EndOfMultiModalEmbedding(litert::Environment& env,
-                           const litert::Model* absl_nonnull model,
-                           int special_token)
-      : env_(env), model_(*model), special_token_(special_token) {}
+  EndOfMultiModalEmbedding(litert::Environment& env, int special_token)
+      : env_(env), special_token_(special_token) {}
 
   // Loads the provided model. This must be called before Lookup functions.
-  absl::Status Initialize();
+  absl::Status Initialize(const litert::Model& model);
 
   // The environment for the embedding lookup.
   litert::Environment& env_;
-  // The model for the embedding lookup. The actual model instance is owned by
-  // the model resources.
-  const litert::Model& model_;
 
   // The layout of the output tensor from the embedding model.
   litert::Layout output_buffer_layout_;
@@ -99,6 +96,8 @@ class EndOfMultiModalEmbedding : public EmbeddingLookup {
   // Contains the end of multi-modal embedding that was looked up from the
   // model.
   std::vector<float> end_of_multi_modal_embedding_;
+
+  bool is_fully_accelerated_ = false;
 };
 
 }  // namespace litert::lm
