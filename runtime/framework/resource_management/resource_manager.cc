@@ -29,13 +29,16 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_environment_options.h"  // from @litert
+#include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/model_resources.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/audio_executor.h"
 #include "runtime/executor/audio_executor_settings.h"
+#include "runtime/executor/audio_litert_compiled_model_executor.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/llm_executor.h"
 #include "runtime/executor/llm_executor_io_types.h"
@@ -43,12 +46,13 @@
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/vision_executor.h"
 #include "runtime/executor/vision_executor_settings.h"
+#include "runtime/executor/vision_litert_compiled_model_executor.h"
 #include "runtime/framework/resource_management/context_handler/context_handler.h"
 #include "runtime/framework/resource_management/utils/movable_mutex_lock.h"
 #include "runtime/framework/resource_management/utils/resource_manager_utils.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/logging.h"
-#include "runtime/util/status_macros.h"  // IWYU pragma: keep
+#include "runtime/util/status_macros.h"
 
 namespace litert::lm {
 namespace {
@@ -401,11 +405,6 @@ class LockedLlmExecutor : public LlmExecutor {
     return llm_executor_->GetProcessedTokens();
   }
 
-  absl::Status LoadLoRA(uint32_t lora_id,
-                        const ModelAssets& model_assets) override {
-    return llm_executor_->LoadLoRA(lora_id, model_assets);
-  }
-
   absl::Status Reset() override { return llm_executor_->Reset(); }
 
   absl::StatusOr<int> GetVocabSize() override {
@@ -527,45 +526,12 @@ ResourceManager::CreateContextHandler(const SessionConfig& session_config) {
     ASSIGN_OR_RETURN(ModelAssets model_assets,
                      ModelAssets::Create(session_config.GetScopedLoraFile(),
                                          /*model_path=*/""));
-    MovableMutexLock lock(&executor_mutex_);
-    RETURN_IF_ERROR(llm_executor_->LoadLoRA(lora_id.value(), model_assets));
+    return absl::InvalidArgumentError("Lora is not supported.");
   }
-  // TODO: b/462517405 - Remove this conversion from SamplerParams to
-  // SamplerParams once the SamplerParams is cleaned up.
-  odml::infra::proto::SamplerParameters sampler_params;
-  switch (session_config.GetSamplerParams().type()) {
-    case proto::SamplerParameters::TYPE_UNSPECIFIED: {
-      sampler_params.set_type(
-          odml::infra::proto::SamplerParameters::TYPE_UNSPECIFIED);
-      break;
-    }
-    case proto::SamplerParameters::TOP_K: {
-      sampler_params.set_type(odml::infra::proto::SamplerParameters::TOP_K);
-      break;
-    }
-    case proto::SamplerParameters::TOP_P: {
-      sampler_params.set_type(odml::infra::proto::SamplerParameters::TOP_P);
-      break;
-    }
-    case proto::SamplerParameters::GREEDY: {
-      sampler_params.set_type(odml::infra::proto::SamplerParameters::GREEDY);
-      break;
-    }
-    default:
-      return absl::InvalidArgumentError(
-          absl::StrCat("Unsupported sampler type: ",
-                       session_config.GetSamplerParams().type()));
-  }
-  sampler_params.set_k(session_config.GetSamplerParams().k());
-  sampler_params.set_p(session_config.GetSamplerParams().p());
-  sampler_params.set_temperature(
-      session_config.GetSamplerParams().temperature());
 
   auto runtime_config = RuntimeConfig{
-      .sampler_params = sampler_params,
-      .output_heads = session_config.GetNumOutputCandidates(),
-      // b/368348506 - Make tokens_per_decode configurable.
-      .tokens_per_decode = 1,
+    .output_heads = session_config.GetNumOutputCandidates(),
+    .tokens_per_decode = 1,
   };
 
   std::unique_ptr<litert::lm::LlmContext> llm_context;
@@ -814,9 +780,9 @@ absl::StatusOr<std::unique_ptr<ResourceManager>> ResourceManager::Create(
     ModelResources* absl_nullable model_resources,
     std::unique_ptr<LlmExecutor> absl_nonnull llm_executor,
     std::unique_ptr<VisionExecutorSettings> absl_nullable
-        vision_executor_settings,
+    vision_executor_settings,
     std::unique_ptr<litert::lm::AudioExecutorSettings> absl_nullable
-        audio_executor_settings,
+    audio_executor_settings,
     ::litert::Environment* absl_nullable litert_env,
     std::unique_ptr<AudioExecutor> absl_nullable audio_executor) {
   if (llm_executor == nullptr) {

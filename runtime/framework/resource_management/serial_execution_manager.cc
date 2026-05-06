@@ -122,9 +122,9 @@ absl::Status SerialExecutionManager::WaitUntilDone(TaskId task_id,
           "Task ", task_id, " not finished but ready queue is empty."));
     }
     if (absl::Now() - start_time >= timeout) {
-      return absl::DeadlineExceededError(absl::StrCat(
-          "WaitUntilDone timed out for task ", task_id, " after ",
-          absl::FormatDuration(timeout)));
+      return absl::DeadlineExceededError(
+          absl::StrCat("WaitUntilDone timed out for task ", task_id, " after ",
+                       absl::FormatDuration(timeout)));
     }
     RETURN_IF_ERROR(RunNextTask());
   }
@@ -146,9 +146,9 @@ absl::Status SerialExecutionManager::WaitUntilSessionDone(
           "Session ", session_id, " not finished but ready queue is empty."));
     }
     if (absl::Now() - start_time >= timeout) {
-      return absl::DeadlineExceededError(absl::StrCat(
-          "WaitUntilSessionDone timed out for session ", session_id, " after ",
-          absl::FormatDuration(timeout)));
+      return absl::DeadlineExceededError(
+          absl::StrCat("WaitUntilSessionDone timed out for session ",
+                       session_id, " after ", absl::FormatDuration(timeout)));
     }
     RETURN_IF_ERROR(RunNextTask());
   }
@@ -499,11 +499,9 @@ SerialExecutionManager::FollowingWaitingTasks(TaskId task_id) {
       return absl::InvalidArgumentError(absl::StrCat(
           "Following task ", following_task_id, " not found in task list."));
     }
-    if (!task_lookup_.at(following_task_id)
-             .dependent_tasks.contains(task_id)) {
-      return absl::InternalError(absl::StrCat("Task ", following_task_id,
-                                               " does not depend on task ",
-                                               task_id));
+    if (!task_lookup_.at(following_task_id).dependent_tasks.contains(task_id)) {
+      return absl::InternalError(absl::StrCat(
+          "Task ", following_task_id, " does not depend on task ", task_id));
     }
     if (!IsTaskEndState(task_lookup_.at(following_task_id).task_state)) {
       following_waiting_tasks.insert(following_task_id);
@@ -713,20 +711,22 @@ absl::Status SerialExecutionManager::AddPrefillTask(
     if (cancelled != nullptr && cancelled->load()) {
       responses = Responses(TaskState::kCancelled);
     } else {
-      ASSIGN_OR_RETURN(auto processed_tokens,
-                       llm_executor.value()->GetProcessedTokens(),
-                       _.With([&](const absl::Status& status) {
-                         FinishTaskAndLogErrors(task_id, status,
-                                                std::move(callback));
-                       }));
-      ASSIGN_OR_RETURN(auto current_step,
-                       llm_executor.value()->GetCurrentStep(),
-                       _.With([&](const absl::Status& status) {
-                         FinishTaskAndLogErrors(task_id, status,
-                                                std::move(callback));
-                       }));
+      auto processed_tokens = llm_executor.value()->GetProcessedTokens();
+      if (!processed_tokens.ok()) {
+        FinishTaskAndLogErrors(task_id, processed_tokens.status(),
+                               std::move(callback));
+        return;
+      }
+      auto current_step = llm_executor.value()->GetCurrentStep();
+      if (!current_step.ok()) {
+        FinishTaskAndLogErrors(task_id, current_step.status(),
+                               std::move(callback));
+        return;
+      }
       session_info->last_prefill_token_id =
-          processed_tokens->GetTokenAtStep(current_step - 1).at(0);
+          processed_tokens.value()
+              ->GetTokenAtStep(current_step.value() - 1)
+              .at(0);
     }
 
     FinishTaskAndLogErrors(task_id, std::move(responses), std::move(callback));

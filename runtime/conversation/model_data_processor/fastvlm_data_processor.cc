@@ -75,7 +75,7 @@ absl::StatusOr<ordered_json> FastVlmDataProcessor::MessageToTemplateInput(
 
 absl::StatusOr<ordered_json> FastVlmDataProcessor::FormatTools(
     const ordered_json& tools) const {
-  return absl::UnimplementedError("FastVLM does not support tool calling.");
+  return tools;
 }
 
 absl::StatusOr<std::vector<InputData>>

@@ -197,13 +197,19 @@ py_wheel(
             "litert-lm = litert_lm_cli.main:main",
         ],
     },
-    requires = select({
-        "//python:dev_build": ["litert-lm-api-nightly"],
-        "//conditions:default": ["litert-lm-api"],
-    }) + [
-        "click",
-        "huggingface_hub",
-        "prompt_toolkit",
-    ],
+    requires_file = ":gen_requires",
     deps = [":package"],
+)
+
+genrule(
+    name = "gen_requires",
+    outs = ["requires.txt"],
+    cmd = select({
+        "//python:dev_build": "echo 'litert-lm-api-nightly==" + VERSION + ".dev$(DEV_VERSION)' > $@",
+        "//conditions:default": "echo 'litert-lm-api==" + VERSION + "' > $@",
+    }) + """
+        echo 'click' >> $@
+        echo 'huggingface_hub' >> $@
+        echo 'prompt_toolkit' >> $@
+    """,
 )

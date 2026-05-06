@@ -5,19 +5,26 @@ framework for deploying Large Language Models on edge devices.
 
 🔗 [Product Website](https://ai.google.dev/edge/litert-lm)
 
-## 🔥 What's New: Gemma 4 support with LiteRT-LM
+## 🔥 What's New: `v0.11.0`
 
-Deploy [Gemma 4](https://blog.google/innovation-and-ai/technology/developers-tools/gemma-4/)
-across a broad range of hardware with stellar performance
-([blog](https://developers.googleblog.com/bring-state-of-the-art-agentic-skills-to-the-edge-with-gemma-4/)).
+-   **Gemma 4 Multi-token Prediction (MTP) Support**: Supercharge Gemma 4
+on-device inference with Single Position Multi Token Prediction (MTP), delivering >2x faster decode speeds on mobile GPUs
+with zero quality degradation
+([blog](https://blog.google/innovation-and-ai/technology/developers-tools/multi-token-prediction-gemma-4/),
+[documentation](https://ai.google.dev/edge/litert-lm/models/gemma-4)).
 
-👉 Try on Linux, macOS, Windows (WSL) or Raspberry Pi with the
+-   **Windows Native Support**: The [LiteRT-LM CLI](https://ai.google.dev/edge/litert-lm/cli)
+now runs natively on Windows with both CPU and GPU backend support.
+
+👉 Try Gemma4-E4B with MTP on Linux, macOS, Windows or Raspberry Pi with the
 [LiteRT-LM CLI](https://ai.google.dev/edge/litert-lm/cli):
 
 ```bash
 litert-lm run  \
-   --from-huggingface-repo=litert-community/gemma-4-E2B-it-litert-lm \
-   gemma-4-E2B-it.litertlm \
+   --from-huggingface-repo=litert-community/gemma-4-E4B-it-litert-lm \
+   gemma-4-E4B-it.litertlm \
+   --backend=gpu \
+   --enable-speculative-decoding=true \
    --prompt="What is the capital of France?"
 ```
 
@@ -102,6 +109,7 @@ Release](https://img.shields.io/github/v/release/google-ai-edge/LiteRT-LM)](http
 
 ## 📦 Releases
 
+-   **v0.11.0**: Support Single Position Multi-token Prediction (MTP) for Gemma 4. Expand LiteRT-LM CLI to run natively on Windows with CPU and GPU backends.
 -   **v0.10.1**: Deploy [Gemma 4](https://blog.google/innovation-and-ai/technology/developers-tools/gemma-4/) with stellar performance ([blog](https://developers.googleblog.com/bring-state-of-the-art-agentic-skills-to-the-edge-with-gemma-4/)) and introduce [LiteRT-LM CLI](https://ai.google.dev/edge/litert-lm/cli).
 -   **v0.9.0**: Improvements to function calling capabilities, better app performance stability.
 -   **v0.8.0**: Desktop GPU support and Multi-Modality.

@@ -23,41 +23,17 @@ package(
 licenses(["notice"])
 
 cc_library(
-    name = "movable_mutex_lock",
-    hdrs = ["movable_mutex_lock.h"],
+    name = "context_handler",
+    srcs = ["context_handler.cc"],
+    hdrs = ["context_handler.h"],
     deps = [
         "@com_google_absl//absl/base:core_headers",
-        "@com_google_absl//absl/base:nullability",
-        "@com_google_absl//absl/synchronization",
-    ],
-)
-
-cc_test(
-    name = "movable_mutex_lock_test",
-    srcs = ["movable_mutex_lock_test.cc"],
-    deps = [
-        ":movable_mutex_lock",
-        "@com_google_googletest//:gtest_main",
-        "@com_google_absl//absl/synchronization",
-    ],
-)
-
-cc_library(
-    name = "resource_manager_utils",
-    srcs = ["resource_manager_utils.cc"],
-    hdrs = ["resource_manager_utils.h"],
-    deps = [
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/synchronization",
+        "//runtime/executor:llm_executor",
+        "//runtime/executor:llm_executor_io_types",
+        "//runtime/executor:llm_executor_settings",
         "//runtime/util:litert_status_util",
-    ],
-)
-
-cc_test(
-    name = "resource_manager_utils_test",
-    srcs = ["resource_manager_utils_test.cc"],
-    deps = [
-        ":resource_manager_utils",
-        "@com_google_googletest//:gtest_main",
-        "//runtime/util:test_utils",
     ],
 )

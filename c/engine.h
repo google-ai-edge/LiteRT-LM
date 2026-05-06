@@ -271,6 +271,16 @@ LITERT_LM_C_API_EXPORT
 void litert_lm_engine_settings_set_parallel_file_section_loading(
     LiteRtLmEngineSettings* settings, bool parallel_file_section_loading);
 
+// Sets the maximum number of images for the engine.
+//
+// This is only used for the legacy implementation of the engine.
+//
+// @param settings The engine settings.
+// @param max_num_images The maximum number of images.
+LITERT_LM_C_API_EXPORT
+void litert_lm_engine_settings_set_max_num_images(
+    LiteRtLmEngineSettings* settings, int max_num_images);
+
 // Sets the cache directory for the engine.
 //
 // @param settings The engine settings.

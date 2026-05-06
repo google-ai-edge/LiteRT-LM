@@ -64,7 +64,7 @@ TEST(EngineTest, CreateEngine_WithoutCache) {
   engine_settings->GetMutableMainExecutorSettings().SetCacheDir(":nocache");
 
   absl::StatusOr<std::unique_ptr<Engine>> llm =
-      EngineFactory::CreateAny(*engine_settings);
+      EngineFactory::CreateDefault(*engine_settings);
   ABSL_CHECK_OK(llm);
 
   absl::StatusOr<std::unique_ptr<Engine::Session>> session =
@@ -108,7 +108,7 @@ TEST(EngineTest, CreateEngine_WithNoParallelFileSectionLoading_RunsInference) {
   engine_settings->SetParallelFileSectionLoading(false);
 
   absl::StatusOr<std::unique_ptr<Engine>> llm =
-      EngineFactory::CreateAny(*engine_settings);
+      EngineFactory::CreateDefault(*engine_settings);
   ABSL_CHECK_OK(llm);
 
   absl::StatusOr<std::unique_ptr<Engine::Session>> session =
@@ -148,7 +148,7 @@ TEST(EngineTest, CreateEngine_WithCache) {
 
   // 1st run to populate the cache.
   absl::StatusOr<std::unique_ptr<Engine>> llm =
-      EngineFactory::CreateAny(*engine_settings);
+      EngineFactory::CreateDefault(*engine_settings);
   ABSL_CHECK_OK(llm);
 
   absl::StatusOr<std::unique_ptr<Engine::Session>> session =
@@ -179,7 +179,7 @@ TEST(EngineTest, CreateEngine_WithCache) {
   // 3rd run with a new engine and the same cache.
   session->reset();  // Destroy the previous first.
   llm->reset();
-  llm = EngineFactory::CreateAny(*engine_settings);
+  llm = EngineFactory::CreateDefault(*engine_settings);
   ABSL_CHECK_OK(llm);
 
   session = (*llm)->CreateSession(SessionConfig::CreateDefault());
@@ -227,7 +227,7 @@ TEST(EngineTest, CreateEngine_WithModelAndCacheFromFileDescriptor) {
       shared_scoped_cache_file);
 
   absl::StatusOr<std::unique_ptr<Engine>> llm =
-      EngineFactory::CreateAny(*engine_settings);
+      EngineFactory::CreateDefault(*engine_settings);
   ABSL_CHECK_OK(llm);
 
   absl::StatusOr<std::unique_ptr<Engine::Session>> session =
@@ -258,7 +258,7 @@ TEST(EngineTest, CreateEngine_WithBenchmark) {
   engine_settings->GetMutableBenchmarkParams();
 
   absl::StatusOr<std::unique_ptr<Engine>> llm =
-      EngineFactory::CreateAny(*engine_settings);
+      EngineFactory::CreateDefault(*engine_settings);
   ABSL_CHECK_OK(llm);
 
   absl::StatusOr<std::unique_ptr<Engine::Session>> session =
@@ -296,7 +296,7 @@ TEST(EngineTest, CreateEngine_AsyncTokenizer_ValidatesConcurrency) {
   engine_settings->GetMutableBenchmarkParams();
 
   absl::StatusOr<std::unique_ptr<Engine>> llm =
-      EngineFactory::CreateAny(*engine_settings);
+      EngineFactory::CreateDefault(*engine_settings);
   ABSL_CHECK_OK(llm);
 
   absl::StatusOr<std::unique_ptr<Engine::Session>> session =
@@ -347,10 +347,11 @@ TEST(EngineTest, CreateEngine_FailsNoVisionModel) {
   auto engine_settings = EngineSettings::CreateDefault(
       *model_assets, /*backend=*/Backend::CPU, /*vision_backend=*/Backend::CPU,
       /*audio_backend=*/std::nullopt);
+  ASSERT_OK(engine_settings);
   engine_settings->GetMutableMainExecutorSettings().SetMaxNumTokens(
       kMaxNumTokens);
   engine_settings->GetMutableMainExecutorSettings().SetCacheDir(":nocache");
-  EXPECT_THAT(EngineFactory::CreateAny(*engine_settings),
+  EXPECT_THAT(EngineFactory::CreateDefault(*engine_settings),
               testing::status::StatusIs(
                   absl::StatusCode::kNotFound,
                   "TF_LITE_VISION_ENCODER not found in the model."));
@@ -365,10 +366,11 @@ TEST(EngineTest, CreateEngine_FailsNoAudioModel) {
   auto engine_settings = EngineSettings::CreateDefault(
       *model_assets, /*backend=*/Backend::CPU, /*vision_backend=*/std::nullopt,
       /*audio_backend=*/Backend::CPU);
+  ASSERT_OK(engine_settings);
   engine_settings->GetMutableMainExecutorSettings().SetMaxNumTokens(
       kMaxNumTokens);
   engine_settings->GetMutableMainExecutorSettings().SetCacheDir(":nocache");
-  EXPECT_THAT(EngineFactory::CreateAny(*engine_settings),
+  EXPECT_THAT(EngineFactory::CreateDefault(*engine_settings),
               testing::status::StatusIs(
                   absl::StatusCode::kNotFound,
                   "TF_LITE_AUDIO_ENCODER_HW not found in the model."));

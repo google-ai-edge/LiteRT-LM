@@ -142,6 +142,19 @@ TEST(EngineCTest, SetCacheDir) {
             cache_dir);
 }
 
+TEST(EngineCTest, SetMaxNumImages) {
+  const std::string task_path = "test_model_path_1";
+  EngineSettingsPtr settings(
+      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
+                                       /* vision_backend_str */ nullptr,
+                                       /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+  litert_lm_engine_settings_set_max_num_images(settings.get(), 10);
+  EXPECT_EQ(settings->settings->GetMainExecutorSettings().GetMaxNumImages(),
+            10);
+}
+
 TEST(EngineCTest, SetPrefillChunkSize) {
   const std::string task_path = "test_model_path_1";
   EngineSettingsPtr settings(
