@@ -329,6 +329,9 @@ nlohmann::ordered_json GetExtraContextJson(JNIEnv* env,
   return extra_context_json;
 }
 
+static litert::lm::PerformanceMode g_performance_mode =
+    litert::lm::PerformanceMode::kBalanced;
+
 }  // namespace
 
 extern "C" {
@@ -341,6 +344,11 @@ LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeSetMinLogSeverity)(
     JNIEnv* env, jclass thiz, jint log_severity) {
   litert::lm::SetMinLogSeverity(
       static_cast<litert::lm::LogSeverity>(log_severity));
+}
+
+LITERTLM_JNIEXPORT void JNICALL
+JNI_METHOD(nativeSetPerformanceMode)(JNIEnv* env, jclass thiz, jint mode) {
+  g_performance_mode = static_cast<litert::lm::PerformanceMode>(mode);
 }
 
 LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateEngine)(
@@ -417,6 +425,15 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateEngine)(
     ThrowLiteRtLmJniException(env, "Failed to create engine settings: " +
                                        settings.status().ToString());
     return 0;
+  }
+
+  {
+    auto advanced_settings_setup =
+        settings->GetMainExecutorSettings().GetAdvancedSettings().value_or(
+            litert::lm::AdvancedSettings());
+    advanced_settings_setup.performance_mode = g_performance_mode;
+    settings->GetMutableMainExecutorSettings().SetAdvancedSettings(
+        advanced_settings_setup);
   }
 
   const char* cache_dir_chars = env->GetStringUTFChars(cache_dir, nullptr);

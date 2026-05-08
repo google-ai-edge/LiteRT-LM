@@ -29,6 +29,7 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/synchronization/notification.h"  // from @com_google_absl
 #include "absl/time/clock.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "litert/cc/litert_environment.h"  // from @litert
@@ -55,6 +56,7 @@
 #include "runtime/framework/threadpool.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/proto/sampler_params.pb.h"
+#include "runtime/util/cpu_util.h"
 #include "runtime/util/logging.h"
 #include "runtime/util/status_macros.h"  // NOLINT
 
@@ -153,7 +155,7 @@ class EngineImpl : public Engine {
              std::unique_ptr<VisionExecutor> vision_executor,
              std::unique_ptr<AudioExecutor> audio_executor,
              std::optional<BenchmarkInfo> benchmark_info,
-             std::unique_ptr<ThreadPool> worker_thread_pool)
+             std::unique_ptr<ThreadPool> inference_thread_pool)
       : engine_settings_(std::move(engine_settings)),
         litert_model_resources_(std::move(litert_model_resources)),
         tokenizer_(std::move(tokenizer)),
@@ -163,7 +165,7 @@ class EngineImpl : public Engine {
         stop_token_ids_(),
         sampler_params_(),
         benchmark_info_(std::move(benchmark_info)),
-        worker_thread_pool_(std::move(worker_thread_pool)) {}
+        inference_thread_pool_(std::move(inference_thread_pool)) {}
   // Method to create the Session.
   absl::StatusOr<std::unique_ptr<Session>> CreateSession(
       const SessionConfig& session_config) override {
@@ -191,7 +193,7 @@ class EngineImpl : public Engine {
                              /*vision_executor=*/vision_executor_.get(),
                              /*audio_executor=*/audio_executor_.get(), config,
                              std::move(session_benchmark_info),
-                             worker_thread_pool_.get()));
+                             inference_thread_pool_.get()));
     if (benchmark_info_.has_value()) {
       auto session_benchmark_info_or = session->GetMutableBenchmarkInfo();
       if (session_benchmark_info_or.ok()) {
@@ -202,7 +204,7 @@ class EngineImpl : public Engine {
     return session;
   }
   absl::Status WaitUntilDone(absl::Duration timeout) override {
-    return worker_thread_pool_->WaitUntilDone(timeout);
+    return inference_thread_pool_->WaitUntilDone(timeout);
   }
 
   const EngineSettings& GetEngineSettings() const override {
@@ -248,193 +250,232 @@ class EngineImpl : public Engine {
   std::optional<BenchmarkInfo> benchmark_info_;
 
   // Thread pool for the engine to execute the works.
-  std::unique_ptr<ThreadPool> worker_thread_pool_;
+  std::unique_ptr<ThreadPool> inference_thread_pool_;
 };
 
 // Method to create Engine.
 absl::StatusOr<std::unique_ptr<Engine>> EngineImpl::Create(
     EngineSettings engine_settings, absl::string_view input_prompt_as_hint) {
-  std::optional<BenchmarkInfo> benchmark_info =
-      engine_settings.IsBenchmarkEnabled()
-          ? std::make_optional<BenchmarkInfo>(
-                engine_settings.GetBenchmarkParams().value())
-          : std::nullopt;
-
-  if (benchmark_info.has_value()) {
-    RETURN_IF_ERROR(
-        benchmark_info->TimeInitPhaseStart(BenchmarkInfo::InitPhase::kTotal));
-    RETURN_IF_ERROR(benchmark_info->TimeInitPhaseStart(
-        BenchmarkInfo::InitPhase::kModelAssets));
-  }
-  const auto& model_assets =
-      engine_settings.GetMutableMainExecutorSettings().GetModelAssets();
-  ASSIGN_OR_RETURN(auto model_resources,
-                   BuildLiteRtCompiledModelResources(model_assets));
-  if (benchmark_info.has_value()) {
-    RETURN_IF_ERROR(benchmark_info->TimeInitPhaseEnd(
-        BenchmarkInfo::InitPhase::kModelAssets));
-  }
-
-  if (benchmark_info.has_value()) {
-    RETURN_IF_ERROR(benchmark_info->TimeInitPhaseStart(
-        BenchmarkInfo::InitPhase::kLlmMetadata));
-  }
-  ASSIGN_OR_RETURN(auto* llm_metadata, model_resources->GetLlmMetadata());
-  if (benchmark_info.has_value()) {
-    RETURN_IF_ERROR(benchmark_info->TimeInitPhaseEnd(
-        BenchmarkInfo::InitPhase::kLlmMetadata));
-  }
-  bool hasLlmModelType = llm_metadata->has_llm_model_type();
-  absl::Duration tokenizer_duration = absl::ZeroDuration();
-  // This lambda is used to create the tokenizer asynchronously if the model
-  // type is available, such that the tokenizer can be created in parallel with
-  // the executor.
-  auto create_tokenizer =
-      [&tokenizer_duration,
-       &model_resources]() -> absl::StatusOr<std::unique_ptr<Tokenizer>> {
-    absl::Time start_time = absl::Now();
-    ASSIGN_OR_RETURN(std::unique_ptr<Tokenizer> tokenizer,
-                     model_resources->GetTokenizer());
-    tokenizer_duration = absl::Now() - start_time;
-    return tokenizer;
-  };
-
-  const auto& main_executor_settings =
-      engine_settings.GetMainExecutorSettings();
-
-  std::future<absl::StatusOr<std::unique_ptr<Tokenizer>>> tokenizer_future;
-  std::unique_ptr<Tokenizer> tokenizer;
-  if (!hasLlmModelType) {
-    ABSL_LOG(INFO)
-        << "Legacy model files don't have LlmModelType, loading tokenizer now";
-    ASSIGN_OR_RETURN(tokenizer, create_tokenizer());
-    // Update and load the parameters from the model file and convert the
-    // tokens to ids.
-    RETURN_IF_ERROR(engine_settings.MaybeUpdateAndValidate(
-        tokenizer.get(), llm_metadata, input_prompt_as_hint,
-        model_resources->GetTFLiteModelBackendConstraint(
-            ModelType::kTfLitePrefillDecode),
-        model_resources->GetTFLiteModelBackendConstraint(
-            ModelType::kTfLiteVisionEncoder),
-        model_resources->GetTFLiteModelBackendConstraint(
-            ModelType::kTfLiteAudioEncoderHw),
-        model_resources->GetTFLiteModelPreferActivationType(
-            ModelType::kTfLitePrefillDecode),
-        model_resources->GetTFLiteModelPreferActivationType(
-            ModelType::kTfLiteVisionEncoder),
-        model_resources->GetTFLiteModelPreferActivationType(
-            ModelType::kTfLiteAudioEncoderHw)));
-  } else {
-    // If the model type is available, wait for the tokenizer to be created
-    // after the model is loaded.
-    ABSL_LOG(INFO) << "New model files have LlmModelType, loading tokenizer "
-                      "asynchronously";
-
-    if (engine_settings.GetParallelFileSectionLoading()) {
-      tokenizer_future = std::async(std::launch::async, create_tokenizer);
-    } else {
-      tokenizer_future = std::async(std::launch::deferred, create_tokenizer);
-    }
-
-    RETURN_IF_ERROR(engine_settings.MaybeUpdateAndValidate(
-        nullptr, llm_metadata, input_prompt_as_hint,
-        model_resources->GetTFLiteModelBackendConstraint(
-            ModelType::kTfLitePrefillDecode),
-        model_resources->GetTFLiteModelBackendConstraint(
-            ModelType::kTfLiteVisionEncoder),
-        model_resources->GetTFLiteModelBackendConstraint(
-            ModelType::kTfLiteAudioEncoderHw),
-        model_resources->GetTFLiteModelPreferActivationType(
-            ModelType::kTfLitePrefillDecode),
-        model_resources->GetTFLiteModelPreferActivationType(
-            ModelType::kTfLiteVisionEncoder),
-        model_resources->GetTFLiteModelPreferActivationType(
-            ModelType::kTfLiteAudioEncoderHw)));
-  }
-
-  if (benchmark_info.has_value()) {
-    RETURN_IF_ERROR(benchmark_info->TimeInitPhaseStart(
-        BenchmarkInfo::InitPhase::kExecutor));
-  }
-  std::unique_ptr<LlmExecutor> executor;
-  ASSIGN_OR_RETURN(auto& env,
-                   GetEnvironment(engine_settings, *model_resources));
-
-  switch (main_executor_settings.GetBackend()) {
-    default: {
-      ASSIGN_OR_RETURN(executor,
-                       CreateLlmLiteRtCompiledModelExecutor(
-                           main_executor_settings, env, *model_resources));
-    }
-  };
-
-  // TODO - b/436674053: Modularize the executor creation logic into a
-  // separate executor class, and have unit test for it.
-  std::unique_ptr<VisionExecutor> vision_executor;
-  if (engine_settings.GetVisionExecutorSettings().has_value()) {
-    ASSIGN_OR_RETURN(
-        vision_executor,
-        VisionLiteRtCompiledModelExecutor::Create(
-            engine_settings.GetMutableVisionExecutorSettings().value(), env));
-  }
-
-  std::unique_ptr<AudioExecutor> audio_executor;
-  if (engine_settings.GetAudioExecutorSettings().has_value()) {
-    ASSIGN_OR_RETURN(
-        audio_executor,
-        AudioLiteRtCompiledModelExecutor::Create(
-            engine_settings.GetAudioExecutorSettings().value(), env));
-  }
-
-  if (benchmark_info.has_value()) {
-    RETURN_IF_ERROR(
-        benchmark_info->TimeInitPhaseEnd(BenchmarkInfo::InitPhase::kExecutor));
-  }
-
-  if (hasLlmModelType) {
-    // Now load the tokenizer and update the engine settings.
-    ASSIGN_OR_RETURN(tokenizer, tokenizer_future.get());
-    RETURN_IF_ERROR(engine_settings.MaybeUpdateAndValidate(
-        tokenizer.get(), llm_metadata, input_prompt_as_hint,
-        model_resources->GetTFLiteModelBackendConstraint(
-            ModelType::kTfLitePrefillDecode),
-        model_resources->GetTFLiteModelBackendConstraint(
-            ModelType::kTfLiteVisionEncoder),
-        model_resources->GetTFLiteModelBackendConstraint(
-            ModelType::kTfLiteAudioEncoderHw),
-        model_resources->GetTFLiteModelPreferActivationType(
-            ModelType::kTfLitePrefillDecode),
-        model_resources->GetTFLiteModelPreferActivationType(
-            ModelType::kTfLiteVisionEncoder),
-        model_resources->GetTFLiteModelPreferActivationType(
-            ModelType::kTfLiteAudioEncoderHw)));
-    // As we load the tokenizer asynchronously, we need to update the executor
-    // settings after the tokenizer is loaded.
-    RETURN_IF_ERROR(executor->UpdateExecutorSettings(
-        engine_settings.GetMainExecutorSettings()));
-  }
-  if (benchmark_info.has_value()) {
-    RETURN_IF_ERROR(benchmark_info->InitPhaseRecord(
-        BenchmarkInfo::InitPhase::kTokenizer, tokenizer_duration));
-  }
-
   // Creating the thread pool of a single thread to execute the works.
-  auto worker_thread_pool =
-      std::make_unique<ThreadPool>(/*name_prefix=*/"engine",
-                                   /*max_num_threads=*/1);
+  // Automatically select big cores to maximize inference speed.
+  // Create this first, so initialization tasks can run on the correctly pinned
+  // thread!
+  ThreadOptions thread_options;
+#if defined(__linux__) || defined(__ANDROID__)
+  const auto& advanced_settings =
+      engine_settings.GetMainExecutorSettings().GetAdvancedSettings();
+  if (advanced_settings.has_value() &&
+      advanced_settings->performance_mode ==
+          PerformanceMode::kSustainedPerformance) {
+    thread_options.set_cpu_set(GetBigCoreIds());
+    // A nice value of -19 perfectly aligns with Android Process priority
+    // THREAD_PRIORITY_URGENT_AUDIO to heavily favor the inference thread
+    // against background noise and OS preemption.
+    thread_options.set_nice_priority_level(-19);
+  }
+#endif
 
-  if (benchmark_info.has_value()) {
-    RETURN_IF_ERROR(
-        benchmark_info->TimeInitPhaseEnd(BenchmarkInfo::InitPhase::kTotal));
+  auto inference_thread_pool =
+      std::make_unique<ThreadPool>(/*name_prefix=*/"engine",
+                                   /*max_num_threads=*/1, thread_options);
+
+  // Hold state and results that will be filled inside the worker thread lambda.
+  absl::StatusOr<std::unique_ptr<Engine>> create_result;
+  absl::Notification done_notification;
+
+  // Schedule ALL initialization onto the pinned worker thread.
+  absl::Status schedule_status = inference_thread_pool->Schedule([&]() {
+    auto perform_initialization =
+        [&]() -> absl::StatusOr<std::unique_ptr<Engine>> {
+      std::optional<BenchmarkInfo> benchmark_info =
+          engine_settings.IsBenchmarkEnabled()
+              ? std::make_optional<BenchmarkInfo>(
+                    engine_settings.GetBenchmarkParams().value())
+              : std::nullopt;
+
+      if (benchmark_info.has_value()) {
+        RETURN_IF_ERROR(benchmark_info->TimeInitPhaseStart(
+            BenchmarkInfo::InitPhase::kTotal));
+        RETURN_IF_ERROR(benchmark_info->TimeInitPhaseStart(
+            BenchmarkInfo::InitPhase::kModelAssets));
+      }
+      const auto& model_assets =
+          engine_settings.GetMutableMainExecutorSettings().GetModelAssets();
+      ASSIGN_OR_RETURN(auto model_resources,
+                       BuildLiteRtCompiledModelResources(model_assets));
+      if (benchmark_info.has_value()) {
+        RETURN_IF_ERROR(benchmark_info->TimeInitPhaseEnd(
+            BenchmarkInfo::InitPhase::kModelAssets));
+      }
+
+      if (benchmark_info.has_value()) {
+        RETURN_IF_ERROR(benchmark_info->TimeInitPhaseStart(
+            BenchmarkInfo::InitPhase::kLlmMetadata));
+      }
+      ASSIGN_OR_RETURN(auto* llm_metadata, model_resources->GetLlmMetadata());
+      if (benchmark_info.has_value()) {
+        RETURN_IF_ERROR(benchmark_info->TimeInitPhaseEnd(
+            BenchmarkInfo::InitPhase::kLlmMetadata));
+      }
+      bool hasLlmModelType = llm_metadata->has_llm_model_type();
+      absl::Duration tokenizer_duration = absl::ZeroDuration();
+      // This lambda is used to create the tokenizer asynchronously if the model
+      // type is available, such that the tokenizer can be created in parallel
+      // with the executor.
+      auto create_tokenizer =
+          [&tokenizer_duration,
+           &model_resources]() -> absl::StatusOr<std::unique_ptr<Tokenizer>> {
+        absl::Time start_time = absl::Now();
+        ASSIGN_OR_RETURN(std::unique_ptr<Tokenizer> tokenizer,
+                         model_resources->GetTokenizer());
+        tokenizer_duration = absl::Now() - start_time;
+        return tokenizer;
+      };
+
+      const auto& main_executor_settings =
+          engine_settings.GetMainExecutorSettings();
+
+      std::future<absl::StatusOr<std::unique_ptr<Tokenizer>>> tokenizer_future;
+      std::unique_ptr<Tokenizer> tokenizer;
+      if (!hasLlmModelType) {
+        ABSL_LOG(INFO) << "Legacy model files don't have LlmModelType, loading "
+                          "tokenizer now";
+        ASSIGN_OR_RETURN(tokenizer, create_tokenizer());
+        // Update and load the parameters from the model file and convert the
+        // tokens to ids.
+        RETURN_IF_ERROR(engine_settings.MaybeUpdateAndValidate(
+            tokenizer.get(), llm_metadata, input_prompt_as_hint,
+            model_resources->GetTFLiteModelBackendConstraint(
+                ModelType::kTfLitePrefillDecode),
+            model_resources->GetTFLiteModelBackendConstraint(
+                ModelType::kTfLiteVisionEncoder),
+            model_resources->GetTFLiteModelBackendConstraint(
+                ModelType::kTfLiteAudioEncoderHw),
+            model_resources->GetTFLiteModelPreferActivationType(
+                ModelType::kTfLitePrefillDecode),
+            model_resources->GetTFLiteModelPreferActivationType(
+                ModelType::kTfLiteVisionEncoder),
+            model_resources->GetTFLiteModelPreferActivationType(
+                ModelType::kTfLiteAudioEncoderHw)));
+      } else {
+        // If the model type is available, wait for the tokenizer to be created
+        // after the model is loaded.
+        ABSL_LOG(INFO)
+            << "New model files have LlmModelType, loading tokenizer "
+               "asynchronously";
+
+        if (engine_settings.GetParallelFileSectionLoading()) {
+          tokenizer_future = std::async(std::launch::async, create_tokenizer);
+        } else {
+          tokenizer_future =
+              std::async(std::launch::deferred, create_tokenizer);
+        }
+
+        RETURN_IF_ERROR(engine_settings.MaybeUpdateAndValidate(
+            nullptr, llm_metadata, input_prompt_as_hint,
+            model_resources->GetTFLiteModelBackendConstraint(
+                ModelType::kTfLitePrefillDecode),
+            model_resources->GetTFLiteModelBackendConstraint(
+                ModelType::kTfLiteVisionEncoder),
+            model_resources->GetTFLiteModelBackendConstraint(
+                ModelType::kTfLiteAudioEncoderHw),
+            model_resources->GetTFLiteModelPreferActivationType(
+                ModelType::kTfLitePrefillDecode),
+            model_resources->GetTFLiteModelPreferActivationType(
+                ModelType::kTfLiteVisionEncoder),
+            model_resources->GetTFLiteModelPreferActivationType(
+                ModelType::kTfLiteAudioEncoderHw)));
+      }
+
+      if (benchmark_info.has_value()) {
+        RETURN_IF_ERROR(benchmark_info->TimeInitPhaseStart(
+            BenchmarkInfo::InitPhase::kExecutor));
+      }
+      std::unique_ptr<LlmExecutor> executor;
+      ASSIGN_OR_RETURN(auto& env,
+                       GetEnvironment(engine_settings, *model_resources));
+
+      switch (main_executor_settings.GetBackend()) {
+        default: {
+          ASSIGN_OR_RETURN(executor,
+                           CreateLlmLiteRtCompiledModelExecutor(
+                               main_executor_settings, env, *model_resources));
+        }
+      };
+
+      // TODO - b/436674053: Modularize the executor creation logic into a
+      // separate executor class, and have unit test for it.
+      std::unique_ptr<VisionExecutor> vision_executor;
+      if (engine_settings.GetVisionExecutorSettings().has_value()) {
+        ASSIGN_OR_RETURN(
+            vision_executor,
+            VisionLiteRtCompiledModelExecutor::Create(
+                engine_settings.GetMutableVisionExecutorSettings().value(),
+                env));
+      }
+
+      std::unique_ptr<AudioExecutor> audio_executor;
+      if (engine_settings.GetAudioExecutorSettings().has_value()) {
+        ASSIGN_OR_RETURN(
+            audio_executor,
+            AudioLiteRtCompiledModelExecutor::Create(
+                engine_settings.GetAudioExecutorSettings().value(), env));
+      }
+
+      if (benchmark_info.has_value()) {
+        RETURN_IF_ERROR(benchmark_info->TimeInitPhaseEnd(
+            BenchmarkInfo::InitPhase::kExecutor));
+      }
+
+      if (hasLlmModelType) {
+        // Now load the tokenizer and update the engine settings.
+        ASSIGN_OR_RETURN(tokenizer, tokenizer_future.get());
+        RETURN_IF_ERROR(engine_settings.MaybeUpdateAndValidate(
+            tokenizer.get(), llm_metadata, input_prompt_as_hint,
+            model_resources->GetTFLiteModelBackendConstraint(
+                ModelType::kTfLitePrefillDecode),
+            model_resources->GetTFLiteModelBackendConstraint(
+                ModelType::kTfLiteVisionEncoder),
+            model_resources->GetTFLiteModelBackendConstraint(
+                ModelType::kTfLiteAudioEncoderHw),
+            model_resources->GetTFLiteModelPreferActivationType(
+                ModelType::kTfLitePrefillDecode),
+            model_resources->GetTFLiteModelPreferActivationType(
+                ModelType::kTfLiteVisionEncoder),
+            model_resources->GetTFLiteModelPreferActivationType(
+                ModelType::kTfLiteAudioEncoderHw)));
+        // As we load the tokenizer asynchronously, we need to update the
+        // executor settings after the tokenizer is loaded.
+        RETURN_IF_ERROR(executor->UpdateExecutorSettings(
+            engine_settings.GetMainExecutorSettings()));
+      }
+      if (benchmark_info.has_value()) {
+        RETURN_IF_ERROR(benchmark_info->InitPhaseRecord(
+            BenchmarkInfo::InitPhase::kTokenizer, tokenizer_duration));
+      }
+
+      if (benchmark_info.has_value()) {
+        RETURN_IF_ERROR(
+            benchmark_info->TimeInitPhaseEnd(BenchmarkInfo::InitPhase::kTotal));
+      }
+
+      return std::make_unique<EngineImpl>(
+          std::move(engine_settings), std::move(model_resources),
+          std::move(tokenizer), std::move(executor), std::move(vision_executor),
+          std::move(audio_executor), std::move(benchmark_info),
+          std::move(inference_thread_pool));
+    };
+
+    create_result = perform_initialization();
+    done_notification.Notify();
+  });
+
+  if (!schedule_status.ok()) {
+    return schedule_status;
   }
 
-  auto llm_impl = std::make_unique<EngineImpl>(
-      std::move(engine_settings), std::move(model_resources),
-      std::move(tokenizer), std::move(executor), std::move(vision_executor),
-      std::move(audio_executor), std::move(benchmark_info),
-      std::move(worker_thread_pool));
-
-  return llm_impl;
+  done_notification.WaitForNotification();
+  return create_result;
 };
 
 LITERT_LM_REGISTER_ENGINE(EngineFactory::EngineType::kLiteRTCompiledModel,

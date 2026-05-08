@@ -35,6 +35,7 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
+#include "absl/synchronization/notification.h"  // from @com_google_absl
 #include "litert/cc/litert_layout.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
@@ -77,7 +78,7 @@ absl::StatusOr<std::unique_ptr<SessionBasic>> SessionBasic::Create(
     VisionExecutor* vision_executor, AudioExecutor* audio_executor,
     const SessionConfig& session_config,
     std::optional<BenchmarkInfo> benchmark_info,
-    ThreadPool* worker_thread_pool) {
+    ThreadPool* inference_thread_pool) {
   // Check if the session already exists.
   absl::MutexLock lock(occupied_executors_mu_);  // NOLINT
   if (occupied_executors_->contains(executor)) {
@@ -124,9 +125,10 @@ absl::StatusOr<std::unique_ptr<SessionBasic>> SessionBasic::Create(
   }
 
   occupied_executors_->insert(executor);
-  return absl::WrapUnique(new SessionBasic(
-      executor, tokenizer, vision_executor, audio_executor, std::move(sampler),
-      session_config, benchmark_info, worker_thread_pool, stop_token_detector));
+  return absl::WrapUnique(
+      new SessionBasic(executor, tokenizer, vision_executor, audio_executor,
+                       std::move(sampler), session_config, benchmark_info,
+                       inference_thread_pool, stop_token_detector));
 }
 
 SessionBasic::~SessionBasic() {
@@ -331,8 +333,16 @@ absl::Status SessionBasic::RunPrefill(const std::vector<InputData>& contents) {
                                         tokenizer_, benchmark_info_));
   }
 
-  return PrefillInternal(preprocessed_contents,
-                         /*wait_for_completion=*/true);
+  absl::Status result_status;
+  absl::Notification done_notification;
+  RETURN_IF_ERROR(inference_thread_pool_.Schedule([&]() {
+    result_status = PrefillInternal(preprocessed_contents,
+                                    /*wait_for_completion=*/true);
+    done_notification.Notify();
+  }));
+  done_notification.WaitForNotification();
+
+  return result_status;
 }
 
 absl::StatusOr<std::unique_ptr<TaskController>> SessionBasic::RunPrefillAsync(
@@ -374,7 +384,7 @@ absl::StatusOr<std::unique_ptr<TaskController>> SessionBasic::RunPrefillAsync(
                      PreprocessContents(templated_contents, session_config_,
                                         tokenizer_, benchmark_info_));
   }
-  RETURN_IF_ERROR(worker_thread_pool_.Schedule(
+  RETURN_IF_ERROR(inference_thread_pool_.Schedule(
       [this, preprocessed_contents = std::move(preprocessed_contents),
        callback = std::move(callback)]() mutable {
         absl::Status status = this->PrefillInternal(
@@ -488,7 +498,16 @@ absl::StatusOr<Responses> SessionBasic::RunDecode(
     // Reset the cancelled flag before processing the next turn.
     cancelled_ = false;
   }
-  return DecodeInternal(decode_config);
+
+  absl::StatusOr<Responses> decode_result;
+  absl::Notification done_notification;
+  RETURN_IF_ERROR(inference_thread_pool_.Schedule([&]() {
+    decode_result = DecodeInternal(decode_config);
+    done_notification.Notify();
+  }));
+  done_notification.WaitForNotification();
+
+  return decode_result;
 }
 
 absl::StatusOr<std::unique_ptr<TaskController>> SessionBasic::RunDecodeAsync(
@@ -504,7 +523,7 @@ absl::StatusOr<std::unique_ptr<TaskController>> SessionBasic::RunDecodeAsync(
     // Reset the cancelled flag before processing the next turn.
     cancelled_ = false;
   }
-  RETURN_IF_ERROR(worker_thread_pool_.Schedule(
+  RETURN_IF_ERROR(inference_thread_pool_.Schedule(
       [this, callback = std::move(callback), decode_config]() mutable {
         this->DecodeInternalStreaming(std::move(callback), decode_config)
             .IgnoreError();
@@ -535,7 +554,8 @@ absl::StatusOr<Responses> SessionBasic::RunTextScoring(
       auto task_controller,
       RunTextScoringAsync(target_text, std::move(scoring_sync_callback),
                           store_token_lengths));
-  RETURN_IF_ERROR(worker_thread_pool_.WaitUntilDone(Engine::kDefaultTimeout));
+  RETURN_IF_ERROR(
+      inference_thread_pool_.WaitUntilDone(Engine::kDefaultTimeout));
   return collected_responses;
 }
 
@@ -552,7 +572,7 @@ SessionBasic::RunTextScoringAsync(
   // the sampler or the sampler parameters? For now, hardcode it to 1.0f for
   // testing.
   auto temperature = 1.0f;
-  RETURN_IF_ERROR(worker_thread_pool_.Schedule(
+  RETURN_IF_ERROR(inference_thread_pool_.Schedule(
       [this, callback = std::move(callback), target_text, store_token_lengths,
        temperature]() mutable {
         std::vector<int> decoded_ids(session_config_.GetNumOutputCandidates(),

@@ -316,4 +316,7 @@ internal object LiteRtLmJni {
 
   /** Returns true if the loaded LiteRT-LM file supports speculative decoding. */
   external fun nativeHasSpeculativeDecodingSupport(capabilitiesPointer: Long): Boolean
+
+  /** Explicitly configures the engine execution priority mode. */
+  external fun nativeSetPerformanceMode(mode: Int)
 }

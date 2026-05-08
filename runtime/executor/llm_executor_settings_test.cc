@@ -573,5 +573,28 @@ TEST(LlmExecutorConfigTest, SetSupportedLoraRanks) {
   EXPECT_EQ(settings.GetSamplerBackend(), Backend::GPU);
 }
 
+TEST(LlmExecutorConfigTest, AdvancedSettingsWithPerformanceMode) {
+  auto model_assets = ModelAssets::Create(kPathToModel1);
+  ASSERT_OK(model_assets);
+  ASSERT_OK_AND_ASSIGN(auto settings,
+                       LlmExecutorSettings::CreateDefault(
+                           *std::move(model_assets), Backend::GPU_ARTISAN));
+
+  // Default should evaluate to kBalanced inside a
+  // default-constructed AdvancedSettings
+  EXPECT_EQ(settings.GetAdvancedSettings()
+                .value_or(AdvancedSettings{})
+                .performance_mode,
+            PerformanceMode::kBalanced);
+
+  // Verify setting custom PerformanceMode
+  settings.SetAdvancedSettings(AdvancedSettings{
+      .performance_mode = PerformanceMode::kSustainedPerformance,
+  });
+
+  EXPECT_EQ(settings.GetAdvancedSettings()->performance_mode,
+            PerformanceMode::kSustainedPerformance);
+}
+
 }  // namespace
 }  // namespace litert::lm

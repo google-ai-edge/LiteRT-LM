@@ -129,8 +129,22 @@ struct NpuConfig {
 };
 std::ostream& operator<<(std::ostream& os, const NpuConfig& config);
 
+// Defines the desired performance profile for the engine.
+// Note: Core pinning and affinity options currently apply to Linux/Android
+// environments only. On non-Linux platforms, all modes gracefully default to
+// standard unpinned thread behavior.
+enum class PerformanceMode {
+  // Balanced performance for standard background/interactive sessions.
+  kBalanced,
+  // Maximizes throughput and minimizes latency (Applies Big/Prime core
+  // pinning).
+  kSustainedPerformance,
+};
+
 // Optional advanced settings for the LLM executor.
 struct AdvancedSettings {
+  // Configures overall intent for resource utilization and thread affinity.
+  PerformanceMode performance_mode = PerformanceMode::kBalanced;
   // Ordered set of the maximum number of prefill tokens processed at once when
   // the graph has dynamic prefill lengths.
   std::set<int> prefill_batch_sizes;
@@ -289,7 +303,8 @@ struct AdvancedSettings {
            gpu_context_low_priority == other.gpu_context_low_priority &&
            enable_speculative_decoding == other.enable_speculative_decoding &&
            disable_delegate_clustering == other.disable_delegate_clustering &&
-           hint_kernel_batch_size == other.hint_kernel_batch_size;
+           hint_kernel_batch_size == other.hint_kernel_batch_size &&
+           performance_mode == other.performance_mode;
   }
 };
 std::ostream& operator<<(std::ostream& os, const AdvancedSettings& settings);

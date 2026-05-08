@@ -66,7 +66,7 @@ class SessionBasic : public Engine::Session {
       VisionExecutor* vision_executor, AudioExecutor* audio_executor,
       const SessionConfig& session_config,
       std::optional<BenchmarkInfo> benchmark_info,
-      ThreadPool* absl_nonnull worker_thread_pool);
+      ThreadPool* absl_nonnull inference_thread_pool);
 
   virtual ~SessionBasic();
 
@@ -133,7 +133,7 @@ class SessionBasic : public Engine::Session {
   }
 
   absl::Status WaitUntilDone() override {
-    return worker_thread_pool_.WaitUntilDone(Engine::kDefaultTimeout);
+    return inference_thread_pool_.WaitUntilDone(Engine::kDefaultTimeout);
   }
 
   const SessionConfig& GetSessionConfig() const override {
@@ -168,7 +168,7 @@ class SessionBasic : public Engine::Session {
                         std::unique_ptr<Sampler> sampler,
                         const SessionConfig& session_config,
                         std::optional<BenchmarkInfo> benchmark_info,
-                        ThreadPool* absl_nonnull worker_thread_pool,
+                        ThreadPool* absl_nonnull inference_thread_pool,
                         const StopTokenDetector& stop_token_detector)
       : executor_(*executor),
         tokenizer_(*tokenizer),
@@ -177,7 +177,7 @@ class SessionBasic : public Engine::Session {
         sampler_(std::move(sampler)),
         session_config_(session_config),
         benchmark_info_(benchmark_info),
-        worker_thread_pool_(*worker_thread_pool),
+        inference_thread_pool_(*inference_thread_pool),
         stop_token_detector_(stop_token_detector) {}
 
   // The internal function to prefill the input prompt. It is for convenience to
@@ -218,8 +218,10 @@ class SessionBasic : public Engine::Session {
   // The benchmark info used for the session.
   std::optional<BenchmarkInfo> benchmark_info_;
 
-  // The thread pool used for the session.
-  ThreadPool& worker_thread_pool_;
+  // The dedicated thread pool used to orchestrate the serial token prefill and
+  // autoregressive inference decoding loops (effectively the inference
+  // thread pool).
+  ThreadPool& inference_thread_pool_;
 
   // The stop token detector used for the session.
   StopTokenDetector stop_token_detector_;

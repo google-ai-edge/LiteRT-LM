@@ -93,3 +93,14 @@ fun benchmark(
     LiteRtLmJni.nativeDeleteEngine(enginePointer)
   }
 }
+
+/** Available runtime execution priority modes for the native backing threads. */
+object PerformanceMode {
+  const val BALANCED = 0
+  const val SUSTAINED_PERFORMANCE = 1
+}
+
+/** Explicitly sets the runtime performance mode configuration for backing threads. */
+fun setPerformanceMode(mode: Int) {
+  LiteRtLmJni.nativeSetPerformanceMode(mode)
+}

@@ -95,9 +95,12 @@ cc_library(
     srcs = ["engine_impl.cc"],
     visibility = [":engine_impl_users"],
     deps = ENGINE_IMPL_COMMON_DEPS + [
+        "@com_google_absl//absl/synchronization",
         "//runtime/components:default_static_gpu_samplers",
         "//runtime/core:session_basic",
         "//runtime/executor:default_static_gpu_accelerator",
+        "//runtime/framework:thread_options",
+        "//runtime/util:cpu_util",
     ] + select({
         "//conditions:default": [],
     }),
@@ -107,9 +110,7 @@ cc_library(
 cc_library(
     name = "engine_impl_cpu_only",
     srcs = ["engine_impl.cc"],
-    deps = ENGINE_IMPL_COMMON_DEPS + [
-        "//runtime/core:session_basic",
-    ],
+    deps = ENGINE_IMPL_COMMON_DEPS,
     alwayslink = 1,
 )
 

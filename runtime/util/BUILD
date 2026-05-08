@@ -724,3 +724,13 @@ cc_test(
         "//runtime/proto:litert_lm_metrics_cc_proto",
     ],
 )
+
+cc_library(
+    name = "cpu_util",
+    srcs = ["cpu_util.cc"],
+    hdrs = ["cpu_util.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_google_absl//absl/base:no_destructor",
+    ],
+)
