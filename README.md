@@ -1,9 +1,10 @@
 # LiteRT-LM
 
-LiteRT-LM is Google's production-ready, high-performance, open-source inference
-framework for deploying Large Language Models on edge devices.
+**LiteRT-LM** is Google's production-ready, high-performance, open-source inference framework for deploying Large Language Models (LLMs) on edge devices, built on top of the **[LiteRT](https://github.com/google-ai-edge/LiteRT)** core ML runtime.
 
-🔗 [Product Website](https://ai.google.dev/edge/litert-lm)
+<p align="center">
+  📖 <a href="https://ai.google.dev/edge/litert-lm">Website</a> | 🛠️ <a href="https://ai.google.dev/edge/litert-lm/cli">LiteRT-LM CLI</a> | 📱 <a href="https://github.com/google-ai-edge/gallery">AI Edge Gallery</a> | 📜 <a href="https://github.com/google-ai-edge/LiteRT/blob/main/LICENSE">License</a>
+</p>
 
 ## 🔥 What's New: `v0.11.0`
 
