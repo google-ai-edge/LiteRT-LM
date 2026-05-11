@@ -192,6 +192,8 @@ class EngineFactory {
              }},
             {Backend::GPU_ARTISAN,
              {
+                 EngineType::kAdvancedLiteRTCompiledModel,
+                 EngineType::kLiteRTCompiledModel,
                  EngineType::kAdvancedLegacyTfLite,
                  EngineType::kLegacyTfLite,
              }},

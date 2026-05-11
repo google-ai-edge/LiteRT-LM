@@ -83,7 +83,8 @@ absl::StatusOr<Environment&> GetEnvironment(EngineSettings& engine_settings,
             engine_settings.GetMainExecutorSettings();
 
         if ((main_executor_settings.GetBackend() == Backend::CPU) ||
-            (main_executor_settings.GetBackend() == Backend::GPU)) {
+            (main_executor_settings.GetBackend() == Backend::GPU) ||
+            (main_executor_settings.GetBackend() == Backend::GPU_ARTISAN)) {
           if (!main_executor_settings
                    .GetAdvancedSettings() ||  // Default is true.
               main_executor_settings.GetAdvancedSettings()
@@ -94,7 +95,7 @@ absl::StatusOr<Environment&> GetEnvironment(EngineSettings& engine_settings,
         } else {
 #if defined(LITERT_DISABLE_NPU)
           return absl::InvalidArgumentError(
-              "Only CPU and GPU backends are supported.");
+              "Only CPU, GPU, and GPU_ARTISAN backends are supported.");
 #else
           if (!main_executor_settings.GetLitertDispatchLibDir().empty()) {
             // If the dispatch library directory is provided, use it.
@@ -208,14 +209,12 @@ class EngineAdvancedImpl : public Engine {
 
   absl::StatusOr<AudioExecutorProperties> GetAudioExecutorProperties()
       const override {
-    return GetAudioExecutorPropertiesFromModelResources(
-        *litert_model_resources_);
+    return execution_manager_->GetAudioExecutorProperties();
   }
 
   absl::StatusOr<VisionExecutorProperties> GetVisionExecutorProperties()
       const override {
-    return GetVisionExecutorPropertiesFromModelResources(
-        *litert_model_resources_);
+    return execution_manager_->GetVisionExecutorProperties();
   }
 
  private:

@@ -188,6 +188,9 @@ absl::StatusOr<EngineSettings> EngineSettings::CreateDefault(
       ABSL_LOG(INFO) << "Artisan model detected. Switching backend from GPU to "
                         "GPU_ARTISAN.";
       backend = Backend::GPU_ARTISAN;
+      if (audio_backend.has_value() && audio_backend.value() == Backend::GPU) {
+        audio_backend = Backend::GPU_ARTISAN;
+      }
     }
   }
 
