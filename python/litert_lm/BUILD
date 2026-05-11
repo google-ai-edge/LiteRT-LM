@@ -34,6 +34,7 @@ cc_binary(
     features = ["-legacy_whole_archive"],
     linkopts = select({
         "@platforms//os:macos": [],
+        "@platforms//os:ios": [],
         "@platforms//os:windows": [],
         "//conditions:default": [
             # Report unresolved symbol references as errors during linking.

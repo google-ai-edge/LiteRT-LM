@@ -53,6 +53,16 @@ absl::StatusOr<OwnedEnvironment> CreateEnvironment(
     }
   }
 
+  if ((backend == Backend::CPU || backend == Backend::GPU) &&
+      !main_executor_settings.GetLitertDispatchLibDir().empty()) {
+    env_options.push_back(::litert::EnvironmentOptions::Option{
+        ::litert::EnvironmentOptions::Tag::kRuntimeLibraryDir,
+        main_executor_settings.GetLitertDispatchLibDir()});
+    ABSL_LOG(INFO) << "Setting LiteRT runtime library path from "
+                      "main_executor_settings: "
+                   << main_executor_settings.GetLitertDispatchLibDir();
+  }
+
   bool uses_npu = (backend == Backend::NPU ||
                    (engine_settings.GetVisionExecutorSettings().has_value() &&
                     engine_settings.GetVisionExecutorSettings()->GetBackend() ==
