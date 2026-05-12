@@ -95,10 +95,9 @@ cc_library(
     srcs = ["engine_impl.cc"],
     visibility = [":engine_impl_users"],
     deps = ENGINE_IMPL_COMMON_DEPS + [
-        ":session_basic",
         "//runtime/components:default_static_gpu_samplers",
+        "//runtime/core:session_basic",
         "//runtime/executor:default_static_gpu_accelerator",
-        "//runtime/util:litert_util",
     ] + select({
         "//conditions:default": [],
     }),
@@ -109,11 +108,8 @@ cc_library(
     name = "engine_impl_cpu_only",
     srcs = ["engine_impl.cc"],
     deps = ENGINE_IMPL_COMMON_DEPS + [
-        ":session_basic",
-        "//runtime/util:litert_util",
-    ] + select({
-        "//conditions:default": [],
-    }),
+        "//runtime/core:session_basic",
+    ],
     alwayslink = 1,
 )
 

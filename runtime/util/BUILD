@@ -513,32 +513,6 @@ cc_library(
 )
 
 cc_library(
-    name = "litert_util",
-    srcs = ["litert_util.cc"],
-    hdrs = ["litert_util.h"],
-    deps = [
-        ":logging",
-        "@com_google_absl//absl/base:no_destructor",
-        "@com_google_absl//absl/log:absl_log",
-        "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/strings:string_view",
-        "@litert//litert/cc:litert_macros",
-        "//runtime/components:model_resources",
-        "//runtime/engine:engine_settings",
-        "//runtime/executor:magic_number_configs_helper",
-    ] + select({
-        "@litert//litert:litert_link_capi_so": [
-            "@litert//litert/cc:litert_api_with_dynamic_runtime",
-        ],
-        "//conditions:default": [
-            "@litert//litert/cc:litert_environment",
-            "@litert//litert/cc:litert_environment_options",
-        ],
-    }),
-)
-
-cc_library(
     name = "litert_lm_loader",
     srcs = ["litert_lm_loader.cc"],
     hdrs = ["litert_lm_loader.h"],
