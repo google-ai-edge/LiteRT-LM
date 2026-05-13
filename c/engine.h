@@ -679,6 +679,16 @@ LiteRtLmConversation* litert_lm_conversation_create(
 LITERT_LM_C_API_EXPORT
 void litert_lm_conversation_delete(LiteRtLmConversation* conversation);
 
+// Clones a LiteRT LM Conversation, duplicating its prefilled state.
+// The caller is responsible for destroying the cloned conversation using
+// `litert_lm_conversation_delete`.
+//
+// @param conversation The conversation to clone.
+// @return A pointer to the cloned conversation, or NULL on failure.
+LITERT_LM_C_API_EXPORT
+LiteRtLmConversation* litert_lm_conversation_clone(
+    LiteRtLmConversation* conversation);
+
 // Sends a message to the conversation and returns the response.
 // This is a blocking call.
 //

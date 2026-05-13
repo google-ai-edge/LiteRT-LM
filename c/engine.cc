@@ -933,6 +933,21 @@ void litert_lm_conversation_delete(LiteRtLmConversation* conversation) {
   delete conversation;
 }
 
+LiteRtLmConversation* litert_lm_conversation_clone(
+    LiteRtLmConversation* conversation) {
+  if (!conversation || !conversation->conversation) {
+    return nullptr;
+  }
+  auto cloned = conversation->conversation->Clone();
+  if (!cloned.ok()) {
+    ABSL_LOG(ERROR) << "Failed to clone conversation: " << cloned.status();
+    return nullptr;
+  }
+  auto c_conversation = std::make_unique<LiteRtLmConversation>();
+  c_conversation->conversation = std::move(*cloned);
+  return c_conversation.release();
+}
+
 LiteRtLmJsonResponse* litert_lm_conversation_send_message(
     LiteRtLmConversation* conversation, const char* message_json,
     const char* extra_context) {

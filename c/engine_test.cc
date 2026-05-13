@@ -1009,6 +1009,41 @@ TEST(EngineCTest, ConversationSendMessageWithExtraContext) {
   EXPECT_GT(strlen(response_str), 0);
 }
 
+TEST(EngineCTest, ConversationCloneNull) {
+  EXPECT_EQ(litert_lm_conversation_clone(nullptr), nullptr);
+}
+
+TEST(EngineCTest, ConversationCloneSuccess) {
+  // 1. Create an engine.
+  const std::string task_path = GetTestdataPath(
+      "litert_lm/runtime/testdata/test_lm.litertlm");
+
+  EngineSettingsPtr settings(
+      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
+                                       /* vision_backend_str */ nullptr,
+                                       /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+  litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
+
+  EnginePtr engine(litert_lm_engine_create(settings.get()),
+                   &litert_lm_engine_delete);
+  ASSERT_NE(engine, nullptr);
+
+  // 2. Create a Conversation.
+  ConversationPtr conversation(
+      litert_lm_conversation_create(engine.get(),
+                                    /*conversation_config=*/nullptr),
+      &litert_lm_conversation_delete);
+  ASSERT_NE(conversation, nullptr);
+
+  // 3. Clone the conversation.
+  ConversationPtr cloned_conversation(
+      litert_lm_conversation_clone(conversation.get()),
+      &litert_lm_conversation_delete);
+  ASSERT_NE(cloned_conversation, nullptr);
+}
+
 struct StreamCallbackData {
   std::string response;
   absl::Notification done;
