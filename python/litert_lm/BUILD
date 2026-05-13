@@ -155,7 +155,17 @@ pytype_strict_library(
     srcs = ["__init__.py"],
     data = select({
         ":use_prebuilt_c_api": [":prebuilt_litert_lm_lib"],
-        "//conditions:default": [":default_libs"],
+        "//conditions:default": [":litert-lm"],
+    }) + select({
+        ":wheel_platform_macos_arm64": [":copy_prebuilt_libs_dylib"],
+        ":wheel_platform_windows_x86_64": [":copy_prebuilt_libs_dll"],
+        "//conditions:default":  [":copy_prebuilt_libs_so"],
+    }) + select({
+        ":wheel_platform_windows_x86_64": [
+            ":copy_dxcompiler_dll",
+            ":copy_dxil_dll",
+        ],
+        "//conditions:default":  [],
     }),
     deps = [
         ":_ffi",
@@ -209,8 +219,8 @@ _PREBUILT_LIBS = [
 genrule(
     name = "copy_prebuilt_libs_so",
     srcs = select({
-        "//build_config:linux_x86_64": ["//prebuilt/linux_x86_64:" + lib + ".so" for lib in _PREBUILT_LIBS],
-        "//build_config:linux_arm64": ["//prebuilt/linux_arm64:" + lib + ".so" for lib in _PREBUILT_LIBS],
+        ":wheel_platform_linux_x86_64": ["//prebuilt/linux_x86_64:" + lib + ".so" for lib in _PREBUILT_LIBS],
+        ":wheel_platform_linux_arm64": ["//prebuilt/linux_arm64:" + lib + ".so" for lib in _PREBUILT_LIBS],
         "//conditions:default": [],
     }),
     outs = [lib + ".so" for lib in _PREBUILT_LIBS],
@@ -235,10 +245,33 @@ genrule(
 genrule(
     name = "copy_prebuilt_libs_dylib",
     srcs = select({
-        "@platforms//os:macos": ["//prebuilt/macos_arm64:" + lib + ".dylib" for lib in _PREBUILT_LIBS],
+        ":wheel_platform_macos_arm64": ["//prebuilt/macos_arm64:" + lib + ".dylib" for lib in _PREBUILT_LIBS],
         "//conditions:default": [],
     }),
     outs = [lib + ".dylib" for lib in _PREBUILT_LIBS],
+    cmd = """
+        SRCS_ARRAY=($(SRCS))
+        OUTS_ARRAY=($(OUTS))
+        if [ $${#SRCS_ARRAY[@]} -gt 0 ]; then
+            for i in $${!SRCS_ARRAY[@]}; do
+                cp $${SRCS_ARRAY[$$i]} $${OUTS_ARRAY[$$i]}
+            done
+        else
+            for out in $${OUTS_ARRAY[@]}; do
+                touch $$out
+            done
+        fi
+    """,
+    tags = ["manual"],
+)
+
+genrule(
+    name = "copy_prebuilt_libs_dll",
+    srcs = select({
+        ":wheel_platform_windows_x86_64": ["//prebuilt/windows_x86_64:" + lib + ".dll" for lib in _PREBUILT_LIBS],
+        "//conditions:default": [],
+    }),
+    outs = [lib + ".dll" for lib in _PREBUILT_LIBS],
     cmd = """
         SRCS_ARRAY=($(SRCS))
         OUTS_ARRAY=($(OUTS))
@@ -309,30 +342,13 @@ filegroup(
         # Use "wheel_platform_*" as condition to allow cross-compilation since
         # no native binaries is built.
         ":wheel_platform_macos_arm64": [":copy_prebuilt_litert_lm_dylib"],
-        ":wheel_platform_windows_x86_64": [
-            ":copy_prebuilt_litert_lm_dll",
-            ":copy_dxcompiler_dll",
-            ":copy_dxil_dll",
-        ],
+        ":wheel_platform_windows_x86_64": [":copy_prebuilt_litert_lm_dll"],
         ":wheel_platform_linux_x86_64": [":copy_prebuilt_litert_lm_so"],
         ":wheel_platform_linux_arm64": [":copy_prebuilt_litert_lm_so"],
         # default is empty since the prebuilt_litert_lm_lib might not exist.
         "//conditions:default": [],
     }),
 )
-
-filegroup(
-    name = "default_libs",
-    srcs = ["//python/litert_lm:litert-lm"] + select({
-        "@platforms//os:macos": [":copy_prebuilt_libs_dylib"],
-        "@platforms//os:windows": [
-            ":copy_dxcompiler_dll",
-            ":copy_dxil_dll",
-        ],
-        "//conditions:default":  [":copy_prebuilt_libs_so"],
-    }),
-)
-
 
 # Use "wheel_platform" to allow cross-compliling the wheel package.
 config_setting(
