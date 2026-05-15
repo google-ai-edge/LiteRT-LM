@@ -106,6 +106,9 @@ cc_library(
     name = "embedding_lookup_end_of_multi_modal",
     srcs = ["embedding_lookup_end_of_multi_modal.cc"],
     hdrs = ["embedding_lookup_end_of_multi_modal.h"],
+    visibility = [
+        "//:__subpackages__",
+    ],
     deps = [
         ":embedding_lookup",
         "@com_google_absl//absl/base:nullability",

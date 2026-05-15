@@ -972,7 +972,13 @@ absl::Status DequantizeLogits(const ::litert::TensorBuffer& src,
       dst_ptr[i] = scale * (static_cast<float>(src_ptr[i]) -
                             static_cast<float>(zero_point));
     }
-  } else {
+  } else if (src_elem_type == ::litert::ElementType::Float32) {
+      // This is for dealing with unquantized float 32 logits.
+      const float* src_ptr = static_cast<const float*>(src_raw_ptr);
+      for (size_t i = 0; i < num_elements; ++i) {
+        dst_ptr[i] = src_ptr[i];
+      }
+    } else {
     return absl::InvalidArgumentError(absl::StrCat(
         "Unsupported source type for dequantization: ", (int)src_elem_type));
   }

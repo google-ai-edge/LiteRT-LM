@@ -313,14 +313,9 @@ absl::Status VisionLiteRtCompiledModelExecutor::VisionAdapter::Initialize() {
       break;
     }
     case Backend::GPU: {
-      // TODO: b/403132820 - Add accelerator compilation options for ML_DRIFT.
       LITERT_ASSIGN_OR_RETURN(auto& gpu_options, options.GetGpuOptions());
-      gpu_options.EnableConstantTensorSharing(true);
-      gpu_options.EnableAllowSrcQuantizedFcConvOps(true);
-
-      gpu_options.SetPrecision(GpuOptions::Precision::kFp16);
-      gpu_options.SetPreferTextureWeights(true);
-      options.SetHardwareAccelerators(litert::HwAccelerators::kGpu);
+      LITERT_RETURN_IF_ERROR(
+          SetGpuOptions(vision_executor_settings_, gpu_options));
       break;
     }
 #if !defined(LITERT_DISABLE_NPU)

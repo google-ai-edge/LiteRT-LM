@@ -2740,8 +2740,9 @@ absl::StatusOr<int> LlmLiteRtNpuCompiledModelExecutor::GetVocabSize() {
       llm_inference_context_
           .decode_output_buffers[LlmSignatures::kDecodeLogitsOutput]
           .TensorType());
-  RET_CHECK_EQ(logits_tensor_type.Layout().Dimensions().size(), 2);
-  return logits_tensor_type.Layout().Dimensions()[1];
+  const auto rank = logits_tensor_type.Layout().Dimensions().size();
+  RET_CHECK(rank == 2 || rank == 3) << "Logits must be a 2D or 3D tensor.";
+  return logits_tensor_type.Layout().Dimensions()[rank - 1];
 }
 
 const LlmLiteRtNpuCompiledModelExecutor::LatencyStats&

@@ -14,6 +14,8 @@
 
 # [Google-internal load of `cc_library`]
 # [Google-internal load of `cc_test`]
+# [Google-internal load of `objc_library`]
+load("@build_bazel_rules_apple//apple:apple_xcframework.bzl", "apple_xcframework")
 
 package(
     default_hdrs_check = "strict",
@@ -71,6 +73,7 @@ cc_library(
     deps = ENGINE_COMMON_DEPS + [
         "//runtime/core:engine_impl",
     ],
+    alwayslink = True,
 )
 
 cc_library(
@@ -113,5 +116,39 @@ cc_test(
         "//runtime/engine:engine_settings",
         "//runtime/executor:executor_settings_base",
         "//runtime/executor:llm_executor_settings",
+    ],
+)
+
+objc_library(
+    name = "CLiteRTLM_objc",
+    deps = [
+        ":engine",
+        "//schema/capabilities:capabilities_c",
+    ],
+)
+
+apple_xcframework(
+    name = "CLiteRTLM",
+    bundle_id = "com.google.odml.litertlm.CLiteRTLM",
+    features = ["exported_symbols"],
+    infoplists = ["Info.plist"],
+    ios = {
+        "simulator": [
+            "arm64",
+            "x86_64",
+        ],
+        "device": [
+            "arm64",
+        ],
+    },
+    minimum_os_versions = {
+        "ios": "15.0",
+    },
+    public_hdrs = [
+        "engine.h",
+        "//schema/capabilities:capabilities_c.h",
+    ],
+    deps = [
+        ":CLiteRTLM_objc",
     ],
 )

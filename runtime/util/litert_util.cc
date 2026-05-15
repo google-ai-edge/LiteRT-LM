@@ -15,15 +15,14 @@
 #include "runtime/util/litert_util.h"
 
 #include <cstdint>
-#include <filesystem>  // NOLINT: Required for path manipulation.
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
 #include "absl/base/no_destructor.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_environment_options.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
@@ -41,77 +40,85 @@ absl::StatusOr<Environment&> GetEnvironment(EngineSettings& engine_settings,
   // called. Since env is used multiple times, it should also be static.
   static absl::NoDestructor<MagicNumberConfigsHelper> helper;
 
-  static absl::NoDestructor<absl::StatusOr<Environment>> kEnvironment(
-      [&]() -> absl::StatusOr<Environment> {
-        const auto& main_executor_settings =
-            engine_settings.GetMainExecutorSettings();
-        std::vector<EnvironmentOptions::Option> env_options;
+  const auto& main_executor_settings =
+      engine_settings.GetMainExecutorSettings();
+  Backend backend = main_executor_settings.GetBackend();
 
-        if (model_resources != nullptr &&
-            (main_executor_settings.GetBackend() == Backend::CPU ||
-             main_executor_settings.GetBackend() == Backend::GPU)) {
-          if (!main_executor_settings.GetAdvancedSettings() ||
-              main_executor_settings.GetAdvancedSettings()
-                  ->configure_magic_numbers) {
-            env_options = helper->GetLiteRtEnvOptions(*model_resources,
-                                                      main_executor_settings);
-          }
+  static absl::NoDestructor<
+      std::unordered_map<Backend, absl::StatusOr<Environment>>>
+      kEnvironments;
+
+  auto it = kEnvironments->find(backend);
+  if (it == kEnvironments->end()) {
+    auto env_res = [&]() -> absl::StatusOr<Environment> {
+      std::vector<EnvironmentOptions::Option> env_options;
+
+      if (model_resources != nullptr &&
+          (backend == Backend::CPU || backend == Backend::GPU)) {
+        if (!main_executor_settings.GetAdvancedSettings() ||
+            main_executor_settings.GetAdvancedSettings()
+                ->configure_magic_numbers) {
+          env_options = helper->GetLiteRtEnvOptions(*model_resources,
+                                                    main_executor_settings);
         }
+      }
 
 #if !defined(LITERT_DISABLE_NPU)
-        if (!main_executor_settings.GetLitertDispatchLibDir().empty()) {
-          // If the dispatch library directory is provided, use it.
+      if (!main_executor_settings.GetLitertDispatchLibDir().empty()) {
+        // If the dispatch library directory is provided, use it.
+        env_options.push_back(::litert::EnvironmentOptions::Option{
+            ::litert::EnvironmentOptions::Tag::kDispatchLibraryDir,
+            main_executor_settings.GetLitertDispatchLibDir()});
+        ABSL_LOG(INFO) << "Setting dispatch library path from "
+                          "main_executor_settings: "
+                       << main_executor_settings.GetLitertDispatchLibDir();
+      } else {
+#if defined(__ANDROID__) || defined(__EMSCRIPTEN__)
+        // Otherwise, use the directory of the model file.
+        std::string model_path(
+            main_executor_settings.GetModelAssets().GetPath().value_or(""));
+        std::filesystem::path path(model_path);
+        // Note: Existence check for path was here, but it's better to check
+        // before calling this function if needed.
+        std::string dispatch_library_path = path.parent_path().string();
+        // In WASM, the parent path is often just "/" which is usually not
+        // what we want for dispatch libraries.
+#ifdef __EMSCRIPTEN__
+        bool should_set_path =
+            !dispatch_library_path.empty() && dispatch_library_path != "/";
+#else
+        bool should_set_path = !dispatch_library_path.empty();
+#endif
+        if (should_set_path) {
+          ABSL_LOG(INFO) << "Setting dispatch library path: "
+                         << dispatch_library_path;
           env_options.push_back(::litert::EnvironmentOptions::Option{
               ::litert::EnvironmentOptions::Tag::kDispatchLibraryDir,
-              main_executor_settings.GetLitertDispatchLibDir()});
-          ABSL_LOG(INFO) << "Setting dispatch library path from "
-                            "main_executor_settings: "
-                           << main_executor_settings.GetLitertDispatchLibDir();
+              absl::string_view(dispatch_library_path)});
         } else {
-#if defined(__ANDROID__) || defined(__EMSCRIPTEN__)
-          // Otherwise, use the directory of the model file.
-          std::string model_path(
-              main_executor_settings.GetModelAssets().GetPath().value_or(""));
-          std::filesystem::path path(model_path);
-          // Note: Existence check for path was here, but it's better to check
-          // before calling this function if needed.
-          std::string dispatch_library_path = path.parent_path().string();
-          // In WASM, the parent path is often just "/" which is usually not
-          // what we want for dispatch libraries.
-#ifdef __EMSCRIPTEN__
-          bool should_set_path =
-              !dispatch_library_path.empty() && dispatch_library_path != "/";
-#else
-          bool should_set_path = !dispatch_library_path.empty();
-#endif
-          if (should_set_path) {
-            ABSL_LOG(INFO) << "Setting dispatch library path: "
-                           << dispatch_library_path;
-            env_options.push_back(::litert::EnvironmentOptions::Option{
-                ::litert::EnvironmentOptions::Tag::kDispatchLibraryDir,
-                absl::string_view(dispatch_library_path)});
-          } else {
-            ABSL_LOG(INFO) << "No dispatch library path provided.";
-          }
-#endif  // defined(__ANDROID__) || defined(__EMSCRIPTEN__)
+          ABSL_LOG(INFO) << "No dispatch library path provided.";
         }
+#endif  // defined(__ANDROID__) || defined(__EMSCRIPTEN__)
+      }
 #endif  // defined(LITERT_DISABLE_NPU)
 
-        if (auto severity = GetMinLogSeverity()) {
-          env_options.push_back(::litert::EnvironmentOptions::Option{
-              ::litert::EnvironmentOptions::Tag::kMinLoggerSeverity,
-              static_cast<int64_t>(ToLiteRtLogSeverityInt8(*severity))});
-        }
+      if (auto severity = GetMinLogSeverity()) {
+        env_options.push_back(::litert::EnvironmentOptions::Option{
+            ::litert::EnvironmentOptions::Tag::kMinLoggerSeverity,
+            static_cast<int64_t>(ToLiteRtLogSeverityInt8(*severity))});
+      }
 
-        LITERT_ASSIGN_OR_RETURN(
-            auto env, Environment::Create(EnvironmentOptions(env_options)));
-        return std::move(env);
-      }());
-
-  if (!kEnvironment->ok()) {
-    return kEnvironment->status();
+      LITERT_ASSIGN_OR_RETURN(
+          auto env, Environment::Create(EnvironmentOptions(env_options)));
+      return std::move(env);
+    }();
+    it = kEnvironments->emplace(backend, std::move(env_res)).first;
   }
-  return **kEnvironment;
+
+  if (!it->second.ok()) {
+    return it->second.status();
+  }
+  return *it->second;
 }
 
 }  // namespace litert::lm
