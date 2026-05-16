@@ -509,3 +509,29 @@ http_archive(
     sha256 = "a1e89031421cf3c1fca6627766ab3020ca4f962ac7e2caa7fab2b33a8436151e",
     url = "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2602/dxc_2026_02_20.zip",
 )
+
+http_archive(
+    name = "patchelf_linux_x86_64",
+    build_file_content = """
+filegroup(
+    name = "patchelf",
+    srcs = ["bin/patchelf"],
+    visibility = ["//visibility:public"],
+)
+""",
+    sha256 = "ce84f2447fb7a8679e58bc54a20dc2b01b37b5802e12c57eece772a6f14bf3f0",
+    url = "https://github.com/NixOS/patchelf/releases/download/0.18.0/patchelf-0.18.0-x86_64.tar.gz",
+)
+
+http_archive(
+    name = "patchelf_linux_arm64",
+    build_file_content = """
+filegroup(
+    name = "patchelf",
+    srcs = ["bin/patchelf"],
+    visibility = ["//visibility:public"],
+)
+""",
+    sha256 = "ae13e2effe077e829be759182396b931d8f85cfb9cfe9d49385516ea367ef7b2",
+    url = "https://github.com/NixOS/patchelf/releases/download/0.18.0/patchelf-0.18.0-aarch64.tar.gz",
+)

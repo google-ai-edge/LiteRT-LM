@@ -244,7 +244,7 @@ genrule(
             for i in $${!SRCS_ARRAY[@]}; do
                 cp $${SRCS_ARRAY[$$i]} $${OUTS_ARRAY[$$i]}
                 # Set the rpath to '$$ORIGIN'
-                patchelf --set-rpath '$$ORIGIN' $${OUTS_ARRAY[$$i]}
+                $(location //build_config:patchelf_exe) --set-rpath '$$ORIGIN' $${OUTS_ARRAY[$$i]}
             done
         else
             for out in $${OUTS_ARRAY[@]}; do
@@ -253,6 +253,7 @@ genrule(
         fi
     """,
     tags = ["manual"],
+    tools = ["//build_config:patchelf_exe"],
 )
 
 genrule(
@@ -292,12 +293,13 @@ genrule(
         if [ $${#SRCS_ARRAY[@]} -gt 0 ]; then
             cp $${SRCS_ARRAY[0]} $${OUTS_ARRAY[0]}
             chmod +w $${OUTS_ARRAY[0]}
-            patchelf --set-rpath '$$ORIGIN' $${OUTS_ARRAY[0]}
+            $(location //build_config:patchelf_exe) --set-rpath '$$ORIGIN' $${OUTS_ARRAY[0]}
         else
             touch $${OUTS_ARRAY[0]}
         fi
     """,
     tags = ["manual"],
+    tools = ["//build_config:patchelf_exe"],
 )
 
 copy_file(

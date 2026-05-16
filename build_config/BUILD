@@ -59,3 +59,13 @@ config_setting(
     name = "ios_sim_arm64",
     values = { "apple_platform_type": "ios", "cpu": "ios_sim_arm64",},
 )
+
+alias(
+    name = "patchelf_exe",
+    actual = select({
+        ":linux_x86_64": "@patchelf_linux_x86_64//:patchelf",
+        ":linux_arm64": "@patchelf_linux_arm64//:patchelf",
+        "//conditions:default": "@patchelf_linux_x86_64//:patchelf",
+    }),
+    visibility = ["//visibility:public"],
+)
