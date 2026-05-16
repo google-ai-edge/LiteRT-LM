@@ -423,6 +423,7 @@ SessionAdvanced::CloneAsyncLocked(
 }
 
 SessionAdvanced::~SessionAdvanced() {
+  CancelProcess();
   WaitUntilDone().IgnoreError();
   auto execution_manager_lock = execution_manager_.lock();
   if (execution_manager_lock == nullptr) {

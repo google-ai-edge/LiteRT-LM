@@ -130,6 +130,7 @@ absl::StatusOr<std::unique_ptr<SessionBasic>> SessionBasic::Create(
 }
 
 SessionBasic::~SessionBasic() {
+  CancelProcess();
   WaitUntilDone().IgnoreError();
   auto status = executor_.Reset();
   if (!status.ok()) {
