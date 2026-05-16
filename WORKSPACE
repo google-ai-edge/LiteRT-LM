@@ -495,6 +495,7 @@ load("@rules_python//python:pip.bzl", "pip_parse")
 
 pip_parse(
     name = "custom_pip_deps",
+    extra_pip_args = ["--index-url=https://pypi.org/simple"],
     requirements_lock = "//:requirements.txt",
 )
 
