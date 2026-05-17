@@ -101,6 +101,11 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
       bool has_valid_program_cache_fd =
           program_cache_file.ok() &&
           !std::holds_alternative<std::string>(*program_cache_file);
+      auto weight_cache_file = executor_settings.GetWeightCacheFile(
+          ExecutorSettingsBase::kMlDriftCacheSuffix, /*check_and_clean=*/true);
+      bool has_valid_weight_cache_fd =
+          weight_cache_file.ok() &&
+          !std::holds_alternative<std::string>(*weight_cache_file);
 
       auto model_path_or_status = executor_settings.GetModelAssets().GetPath();
       if (model_path_or_status.ok()) {
@@ -111,7 +116,9 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
                                 GetFileCacheIdentifier(model_path));
         std::string cache_key = absl::StrCat(model_name, "_", metadata_id);
         gpu_compilation_options.SetModelCacheKey(cache_key.c_str());
-      } else if (has_valid_model_fd && has_valid_program_cache_fd) {
+      } else if (has_valid_model_fd &&
+                 (has_valid_program_cache_fd || has_valid_weight_cache_fd)) {
+        // If the model is loaded from an fd, there is no way to automatically
         // Generate a unique cache key from the file descriptor.
         LITERT_ASSIGN_OR_RETURN(
             std::string metadata_id,
@@ -127,20 +134,22 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
       }
 
       bool serialization_dir_set = false;
-      if (cache_path != ":nocache") {
-        if (cache_path.empty()) {
-          ASSIGN_OR_RETURN(auto model_path,
-                           executor_settings.GetModelAssets().GetPath());
-          cache_path = std::filesystem::path(std::string(model_path))
-                           .parent_path()
-                           .string();
-          if (cache_path.empty()) {
-            cache_path = std::filesystem::current_path().string();
-          }
+      if (weight_cache_file.ok()) {
+        if (std::holds_alternative<std::string>(*weight_cache_file)) {
+          cache_path =
+              std::filesystem::path(std::get<std::string>(*weight_cache_file))
+                  .parent_path()
+                  .string();
+          ABSL_LOG(INFO) << "Setting serialization dir: " << cache_path;
+          gpu_compilation_options.SetSerializationDir(cache_path.c_str());
+          serialization_dir_set = true;
+        } else {
+          auto scoped_cache_file =
+              std::get<std::shared_ptr<lm::ScopedFile>>(*weight_cache_file);
+          ASSIGN_OR_RETURN(auto duplicated, scoped_cache_file->Duplicate());
+          ASSIGN_OR_RETURN(int fd, duplicated.Release());
+          gpu_compilation_options.SetWeightCacheFd(fd);
         }
-        ABSL_LOG(INFO) << "Setting serialization dir: " << cache_path;
-        gpu_compilation_options.SetSerializationDir(cache_path.c_str());
-        serialization_dir_set = true;
         gpu_compilation_options.SetSerializeExternalTensors(true);
         gpu_compilation_options.CacheCompiledProgramsOnly(
             advanced_settings.cache_compiled_shaders_only);
