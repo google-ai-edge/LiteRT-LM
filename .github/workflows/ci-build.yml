@@ -128,7 +128,6 @@ jobs:
         run: |
           bazel build --config=linux_x86_64 \
             --define=litert_link_capi_so=true \
-            --define=resolve_symbols_in_exec=false \
             //runtime/engine:litert_lm_main
 
       - name: Check if litert_lm_main has only LiteRt symbols undefined.

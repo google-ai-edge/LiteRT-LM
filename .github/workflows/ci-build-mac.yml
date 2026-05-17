@@ -143,7 +143,6 @@ jobs:
         run: |
           bazel build --disk_cache=~/.cache/bazel-macos-dylib \
             --define=litert_link_capi_so=true \
-            --define=resolve_symbols_in_exec=false \
             //runtime/engine:litert_lm_main
 
       - name: Run bazel build for iOS Simulator.
