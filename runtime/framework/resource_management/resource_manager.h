@@ -74,7 +74,7 @@ class ResourceManager {
       ::litert::Environment* absl_nullable litert_env,
       std::unique_ptr<AudioExecutor> absl_nullable audio_executor = nullptr);
 
-  ~ResourceManager() = default;
+  ~ResourceManager();
 
   // Assigns the lora id from the given lora path or scoped file. If no lora is
   // used, will return std::nullopt instead of an uint32_t id.

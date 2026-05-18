@@ -455,6 +455,22 @@ class LockedLlmExecutor : public LlmExecutor {
   MovableMutexLock lock_;
 };
 
+ResourceManager::~ResourceManager() {
+  {
+    absl::MutexLock lock(vision_executor_mutex_);
+    vision_executor_.reset();
+  }
+  {
+    absl::MutexLock lock(audio_executor_mutex_);
+    audio_executor_.reset();
+  }
+  {
+    absl::MutexLock lock(executor_mutex_);
+    llm_executor_.reset();
+  }
+  backup_litert_env_.reset();
+}
+
 std::optional<uint32_t> ResourceManager::AssignLoraId(
     std::string lora_path, bool has_scoped_lora_file) {
   if (lora_path.empty() && !has_scoped_lora_file) {
