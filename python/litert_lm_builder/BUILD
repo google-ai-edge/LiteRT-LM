@@ -13,7 +13,7 @@
 # limitations under the License.
 
 load("@org_tensorflow//tensorflow:pytype.default.bzl", "pytype_strict_binary", "pytype_strict_library")
-load("@rules_python//python:defs.bzl", "py_test")
+load("//third_party/bazel_rules/rules_python/python:py_test.bzl", "py_test")
 
 package(
     default_hdrs_check = "strict",
