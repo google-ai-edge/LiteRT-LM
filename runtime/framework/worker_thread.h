@@ -50,6 +50,9 @@ class WorkerThread {
   ThreadPool& pool_;
   const std::string name_prefix_;
 
+  // Track if this thread was successfully started.
+  std::atomic<bool> started_;
+
   // Track if this thread is joined.
   std::atomic<bool> joined_;
 };

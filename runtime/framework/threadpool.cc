@@ -36,7 +36,7 @@ namespace litert::lm {
 ThreadPool::ThreadPool(const std::string& name_prefix, size_t max_num_threads,
                        ThreadOptions thread_options)
     : name_prefix_(name_prefix),
-      max_num_threads_(max_num_threads == 0 ? 1 : max_num_threads),
+      max_num_threads_(max_num_threads),
       thread_options_(std::move(thread_options)) {
   ABSL_LOG(INFO) << "ThreadPool '" << name_prefix_ << "': Running up to "
                  << max_num_threads_ << " threads.";
@@ -76,46 +76,62 @@ ThreadPool::~ThreadPool() {
 }
 
 absl::Status ThreadPool::Schedule(absl::AnyInvocable<void() &&> callback) {
-  absl::MutexLock lock(mutex_);
-  if (stopped_) {
-    ABSL_LOG(WARNING) << "ThreadPool '" << name_prefix_
-                      << "': Schedule called on a stopped pool.";
-    return absl::FailedPreconditionError(
-        absl::StrCat("ThreadPool '", name_prefix_, "' is stopped."));
-  }
+  absl::AnyInvocable<void() &&> callback_to_run_sync;
+  {
+    absl::MutexLock lock(mutex_);
+    if (stopped_) {
+      ABSL_LOG(WARNING) << "ThreadPool '" << name_prefix_
+                        << "': Schedule called on a stopped pool.";
+      return absl::FailedPreconditionError(
+          absl::StrCat("ThreadPool '", name_prefix_, "' is stopped."));
+    }
 
-  // If all worker threads are (supposed to be) busy, instantiates a new worker
-  // thread to run the task.
-  size_t num_threads = threads_.size();
-  if (num_threads < max_num_threads_) {
-    size_t num_tasks = num_active_tasks_ + tasks_.size();
-    if (num_threads <= num_tasks) {
-      auto thread = WorkerThread::Create(this, name_prefix_);
-      if (thread.ok()) {
-        threads_.push_back(std::move(*thread));
-        ABSL_LOG(INFO) << "ThreadPool '" << name_prefix_
-                       << "': Created a worker thread since all " << num_threads
-                       << " worker threads are (supposed to be) busy.";
-      } else if (num_threads == 0) {
-        ABSL_LOG(ERROR) << "ThreadPool '" << name_prefix_
-                        << "': Failed to create the first worker thread: "
-                        << thread.status();
-        // Return the error to the caller since it would be fatal.
-        return thread.status();
-      } else {
-        ABSL_LOG(WARNING) << "ThreadPool '" << name_prefix_
-                          << "': Failed to create a worker thread when all "
-                          << num_threads
-                          << " worker threads are (supposed to be) busy. "
-                          << "Waits for some worker threads to finish: "
-                          << thread.status();
-        // Ignore the error since tasks can still be scheduled by existing
-        // worker threads.
+    if (max_num_threads_ == 0) {
+      callback_to_run_sync = std::move(callback);
+    } else {
+      // If all worker threads are (supposed to be) busy, instantiates a new
+      // worker thread to run the task.
+      size_t num_threads = threads_.size();
+      if (num_threads < max_num_threads_) {
+        size_t num_tasks = num_active_tasks_ + tasks_.size();
+        if (num_threads <= num_tasks) {
+          auto thread = WorkerThread::Create(this, name_prefix_);
+          if (thread.ok()) {
+            threads_.push_back(std::move(*thread));
+            ABSL_LOG(INFO) << "ThreadPool '" << name_prefix_
+                           << "': Created a worker thread since all "
+                           << num_threads
+                           << " worker threads are (supposed to be) busy.";
+          } else if (num_threads == 0) {
+            ABSL_LOG(ERROR) << "ThreadPool '" << name_prefix_
+                            << "': Failed to create the first worker thread: "
+                            << thread.status();
+            // Return the error to the caller since it would be fatal.
+            return thread.status();
+          } else {
+            ABSL_LOG(WARNING)
+                << "ThreadPool '" << name_prefix_
+                << "': Failed to create a worker thread when all "
+                << num_threads
+                << " worker threads are (supposed to be) busy. "
+                << "Waits for some worker threads to finish: "
+                << thread.status();
+            // Ignore the error since tasks can still be scheduled by existing
+            // worker threads.
+          }
+        }
       }
     }
+
+    if (!callback_to_run_sync) {
+      tasks_.push_back(std::move(callback));
+    }
+  }  // lock goes out of scope here
+
+  if (callback_to_run_sync) {
+    std::move(callback_to_run_sync)();
   }
 
-  tasks_.push_back(std::move(callback));
   return absl::OkStatus();
 }
 

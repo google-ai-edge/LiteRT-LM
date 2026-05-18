@@ -335,9 +335,14 @@ absl::StatusOr<std::unique_ptr<Engine>> EngineImpl::Create(
   }
 
   // Creating the thread pool of a single thread to execute the works.
+#if defined(__EMSCRIPTEN__)
+  size_t max_num_threads = 0;
+#else
+  size_t max_num_threads = 1;
+#endif
   auto worker_thread_pool =
       std::make_unique<ThreadPool>(/*name_prefix=*/"engine",
-                                   /*max_num_threads=*/1);
+                                   /*max_num_threads=*/max_num_threads);
 
   if (benchmark_info.has_value()) {
     RETURN_IF_ERROR(

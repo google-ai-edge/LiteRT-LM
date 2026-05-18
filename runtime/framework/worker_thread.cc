@@ -26,10 +26,13 @@ namespace litert::lm {
 
 WorkerThread::WorkerThread(ThreadPool* absl_nonnull pool,
                            const std::string& name_prefix)
-    : pool_(*pool), name_prefix_(name_prefix), joined_(false) {}
+    : pool_(*pool),
+      name_prefix_(name_prefix),
+      started_(false),
+      joined_(false) {}
 
 WorkerThread::~WorkerThread() {
-  if (!joined_) {
+  if (started_ && !joined_) {
     ABSL_LOG(ERROR) << "WorkerThread '" << name_prefix_
                     << "' destroyed without being joined.";
   }

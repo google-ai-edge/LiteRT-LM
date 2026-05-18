@@ -37,14 +37,13 @@ class WorkerThreadStdThread : public WorkerThread {
   static void* ThreadBody(void* arg);
 
   std::thread thread_;
-  // Track if this thread is joined.
-  std::atomic<bool> joined_;
 };
 
 WorkerThreadStdThread::WorkerThreadStdThread(ThreadPool* absl_nonnull pool,
                                              const std::string& name_prefix)
     : WorkerThread(pool, name_prefix) {
   thread_ = std::thread(ThreadBody, this);
+  started_ = true;
 }
 
 absl::Status WorkerThreadStdThread::JoinImpl() {

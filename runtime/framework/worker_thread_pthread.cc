@@ -76,6 +76,7 @@ WorkerThreadPthread::WorkerThreadPthread(ThreadPool* absl_nonnull pool,
 absl::Status WorkerThreadPthread::Start() {
   int res = pthread_create(&thread_, nullptr, ThreadBody, this);
   if (res == 0) {
+    started_ = true;
     return absl::OkStatus();
   }
 
