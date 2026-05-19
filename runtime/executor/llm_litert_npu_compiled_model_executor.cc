@@ -455,8 +455,11 @@ LlmLiteRtNpuCompiledModelExecutor::CreateLiteRtNpuOptions(
       ::litert::qualcomm::QualcommOptions::HtpPerformanceMode::kBurst);
   LITERT_ASSIGN_OR_RETURN(auto& google_tensor_opts,
                           options.GetGoogleTensorOptions());
-  google_tensor_opts.SetPerformanceMode(
-      ::litert::google_tensor::GoogleTensorOptions::PerformanceMode::kBurst);
+  // TODO: re-enable once pinned LiteRT in cmake/packages/litert/litert.cmake
+  // includes GoogleTensorOptions::SetPerformanceMode. Disabled to unblock build.
+  // google_tensor_opts.SetPerformanceMode(
+  //     ::litert::google_tensor::GoogleTensorOptions::PerformanceMode::kBurst);
+  (void)google_tensor_opts;
 #endif
   return options;
 }

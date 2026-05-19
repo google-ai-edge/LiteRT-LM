@@ -149,7 +149,10 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
           LITERT_ASSIGN_OR_RETURN(auto duplicated,
                                   scoped_cache_file->Duplicate());
           LITERT_ASSIGN_OR_RETURN(int fd, duplicated.Release());
-          gpu_compilation_options.SetWeightCacheFd(fd);
+          // TODO: re-enable once pinned LiteRT in cmake/packages/litert/litert.cmake
+          // includes GpuOptions::SetWeightCacheFd. Disabled to unblock local build.
+          // gpu_compilation_options.SetWeightCacheFd(fd);
+          (void)fd;
         }
         gpu_compilation_options.SetSerializeExternalTensors(true);
         gpu_compilation_options.CacheCompiledProgramsOnly(
@@ -217,10 +220,12 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
       gpu_compilation_options.HintWaitingForCompletion(
           advanced_settings.hint_waiting_for_completion.has_value() &&
           advanced_settings.hint_waiting_for_completion.value());
-      if (advanced_settings.hint_kernel_batch_size.has_value()) {
-        gpu_compilation_options.SetKernelBatchSize(
-            advanced_settings.hint_kernel_batch_size.value());
-      }
+      // TODO: re-enable once pinned LiteRT in cmake/packages/litert/litert.cmake
+      // includes GpuOptions::SetKernelBatchSize. Disabled to unblock local build.
+      // if (advanced_settings.hint_kernel_batch_size.has_value()) {
+      //   gpu_compilation_options.SetKernelBatchSize(
+      //       advanced_settings.hint_kernel_batch_size.value());
+      // }
       if (advanced_settings.is_benchmark) {
         gpu_compilation_options.SetSyncExecutionModeWaitType(
             GpuOptions::SyncExecutionModeWaitType::kActive);

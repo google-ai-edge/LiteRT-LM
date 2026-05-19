@@ -253,6 +253,7 @@ target_link_libraries(runtime_conversation_model_data_processor_qwen3_data_proce
 # ==============================================================================
 add_litertlm_library(runtime_conversation_model_data_processor_factory STATIC
   model_data_processor_factory.cc
+  fastvlm_data_processor.cc
 )
 add_library(LiteRTLM::Runtime::Conversation::Processor::Factory ALIAS runtime_conversation_model_data_processor_factory)
 
@@ -326,7 +327,7 @@ target_link_libraries(runtime_conversation_model_data_processor_libs INTERFACE
   LiteRTLM::Runtime::Conversation::Processor::DataUtils
   LiteRTLM::Runtime::Conversation::Processor::Gemma3
   LiteRTLM::Runtime::Conversation::Processor::Gemma3Config
-  
+
   LiteRTLM::Runtime::Conversation::FunctionDataProcessor
 
   LiteRTLM::Runtime::Conversation::Processor::Generic

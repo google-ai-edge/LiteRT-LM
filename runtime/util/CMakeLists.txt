@@ -248,17 +248,19 @@ target_link_libraries(runtime_util_litert_lm_loader
 # ==============================================================================
 # Logging
 # ==============================================================================
-add_litertlm_library(runtime_util_logging INTERFACE)
+add_litertlm_library(runtime_util_logging STATIC
+  logging.cc
+)
 add_library(LiteRTLM::Runtime::Util::Logging ALIAS runtime_util_logging)
 
 target_include_directories(runtime_util_logging
-  INTERFACE
+  PUBLIC
     ${GENERATED_SRC_DIR}
     ${LITERTLM_INCLUDE_PATHS}
 )
 
 target_link_libraries(runtime_util_logging
-  INTERFACE
+  PUBLIC
     LITERTLM_DEPS
 )
 

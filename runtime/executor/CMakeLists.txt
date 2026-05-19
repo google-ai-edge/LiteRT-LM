@@ -462,6 +462,7 @@ target_link_libraries(runtime_executor_llm_litert_compiled_model_executor
 # ==============================================================================
 add_litertlm_library(runtime_executor_llm_litert_npu_compiled_model_executor STATIC
   llm_litert_npu_compiled_model_executor.cc
+  llm_litert_npu_compiled_model_executor_utils.cc
 )
 add_library(LiteRTLM::Runtime::Executor::LLM::NpuCompiledModel ALIAS runtime_executor_llm_litert_npu_compiled_model_executor)
 

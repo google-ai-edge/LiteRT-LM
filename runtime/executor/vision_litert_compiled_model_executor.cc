@@ -256,8 +256,11 @@ absl::Status VisionLiteRtCompiledModelExecutor::VisionEncoder::Initialize() {
           qualcomm::QualcommOptions::HtpPerformanceMode::kBurst);
       LITERT_ASSIGN_OR_RETURN(auto& google_tensor_options,
                               options.GetGoogleTensorOptions());
-      google_tensor_options.SetPerformanceMode(
-          google_tensor::GoogleTensorOptions::PerformanceMode::kBurst);
+      // TODO: re-enable once pinned LiteRT in cmake/packages/litert/litert.cmake
+      // includes GoogleTensorOptions::SetPerformanceMode. Disabled to unblock build.
+      // google_tensor_options.SetPerformanceMode(
+      //     google_tensor::GoogleTensorOptions::PerformanceMode::kBurst);
+      (void)google_tensor_options;
       // TODO: yunandrew - Add support for other NPU backends.
       options.SetHardwareAccelerators(litert::HwAccelerators::kCpu);
       break;
@@ -327,8 +330,11 @@ absl::Status VisionLiteRtCompiledModelExecutor::VisionAdapter::Initialize() {
           qualcomm::QualcommOptions::HtpPerformanceMode::kBurst);
       LITERT_ASSIGN_OR_RETURN(auto& google_tensor_options,
                               options.GetGoogleTensorOptions());
-      google_tensor_options.SetPerformanceMode(
-          google_tensor::GoogleTensorOptions::PerformanceMode::kBurst);
+      // TODO: re-enable once pinned LiteRT in cmake/packages/litert/litert.cmake
+      // includes GoogleTensorOptions::SetPerformanceMode. Disabled to unblock build.
+      // google_tensor_options.SetPerformanceMode(
+      //     google_tensor::GoogleTensorOptions::PerformanceMode::kBurst);
+      (void)google_tensor_options;
 
       options.SetHardwareAccelerators(litert::HwAccelerators::kCpu);
       break;
