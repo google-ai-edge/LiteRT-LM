@@ -21,22 +21,6 @@ set(GTEST_INSTALL_PREFIX ${GTEST_EXT_PREFIX}/install)
 set(GTEST_INCLUDE_DIR ${GTEST_INSTALL_PREFIX}/include)
 set(GTEST_CONFIG_CMAKE_FILE "${GTEST_INSTALL_PREFIX}/lib/cmake/GTest/GTestConfig.cmake")
 
-set(absl_DIR "${ABSL_INSTALL_PREFIX}/lib/cmake/absl" CACHE PATH "Path to absl config")
-set(ABSL_DIR "${ABSL_INSTALL_PREFIX}/lib/cmake/absl" CACHE PATH "Path to absl config")
-set(absl_ROOT "${ABSL_INSTALL_PREFIX}" CACHE PATH "absl root dir")
-set(ABSL_ROOT "${ABSL_INSTALL_PREFIX}" CACHE PATH "absl root dir")
-
-list(APPEND CMAKE_PREFIX_PATH "${ABSL_INSTALL_PREFIX}")
-list(APPEND CMAKE_SYSTEM_PREFIX_PATH "${ABSL_INSTALL_PREFIX}")
-
-set(ABSL_INCLUDE_DIR "${ABSL_INSTALL_PREFIX}/include" CACHE PATH "absl include dir")
-set(ABSL_INCLUDE_DIRS "${ABSL_INSTALL_PREFIX}/include" CACHE PATH "absl include dirs")
-set(absl_INCLUDE_DIR "${ABSL_INSTALL_PREFIX}/include" CACHE PATH "absl include dir")
-set(absl_INCLUDE_DIRS "${ABSL_INSTALL_PREFIX}/include" CACHE PATH "absl include dirs")
-set(ABSL_LIBRARY_DIR "${ABSL_INSTALL_PREFIX}/lib" CACHE PATH "absl lib dir")
-set(ABSL_LIB_DIR "${ABSL_INSTALL_PREFIX}/lib" CACHE PATH "absl lib dir")
-set(absl_LIBRARY_DIR "${ABSL_INSTALL_PREFIX}/lib" CACHE PATH "absl lib dir")
-
 setup_external_install_structure("${GTEST_INSTALL_PREFIX}")
 
 if(NOT EXISTS "${GTEST_CONFIG_CMAKE_FILE}")

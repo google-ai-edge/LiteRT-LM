@@ -233,8 +233,11 @@ AudioLiteRtCompiledModelExecutor::AudioStaticEncoder::Initialize() {
   } else if (executor_settings_.GetBackend() == Backend::NPU) {
     LITERT_ASSIGN_OR_RETURN(auto& google_tensor_options,
                             options.GetGoogleTensorOptions());
-    google_tensor_options.SetPerformanceMode(
-        google_tensor::GoogleTensorOptions::PerformanceMode::kBurst);
+    // TODO: re-enable once pinned LiteRT in cmake/packages/litert/litert.cmake
+    // includes GoogleTensorOptions::SetPerformanceMode. Disabled to unblock build.
+    // google_tensor_options.SetPerformanceMode(
+    //     google_tensor::GoogleTensorOptions::PerformanceMode::kBurst);
+    (void)google_tensor_options;
     options.SetHardwareAccelerators(litert::HwAccelerators::kCpu);
 #endif  // !defined(LITERT_DISABLE_NPU)
   } else {
@@ -388,8 +391,11 @@ AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::Initialize() {
   } else if (executor_settings_.GetBackend() == Backend::NPU) {
     LITERT_ASSIGN_OR_RETURN(auto& google_tensor_options,
                             options.GetGoogleTensorOptions());
-    google_tensor_options.SetPerformanceMode(
-        google_tensor::GoogleTensorOptions::PerformanceMode::kBurst);
+    // TODO: re-enable once pinned LiteRT in cmake/packages/litert/litert.cmake
+    // includes GoogleTensorOptions::SetPerformanceMode. Disabled to unblock build.
+    // google_tensor_options.SetPerformanceMode(
+    //     google_tensor::GoogleTensorOptions::PerformanceMode::kBurst);
+    (void)google_tensor_options;
     options.SetHardwareAccelerators(litert::HwAccelerators::kCpu);
 #endif  // !defined(LITERT_DISABLE_NPU)
   } else {
@@ -580,8 +586,11 @@ absl::Status AudioLiteRtCompiledModelExecutor::AudioAdapter::Initialize() {
   } else if (executor_settings_.GetBackend() == Backend::NPU) {
     LITERT_ASSIGN_OR_RETURN(auto& google_tensor_options,
                             options.GetGoogleTensorOptions());
-    google_tensor_options.SetPerformanceMode(
-        google_tensor::GoogleTensorOptions::PerformanceMode::kBurst);
+    // TODO: re-enable once pinned LiteRT in cmake/packages/litert/litert.cmake
+    // includes GoogleTensorOptions::SetPerformanceMode. Disabled to unblock build.
+    // google_tensor_options.SetPerformanceMode(
+    //     google_tensor::GoogleTensorOptions::PerformanceMode::kBurst);
+    (void)google_tensor_options;
     options.SetHardwareAccelerators(litert::HwAccelerators::kCpu);
 #endif  // !defined(LITERT_DISABLE_NPU)
   } else {

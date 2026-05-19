@@ -191,6 +191,7 @@ target_link_libraries(runtime_core_session_factory
 # ==============================================================================
 add_litertlm_library(runtime_core_engine_impl STATIC
   engine_impl.cc
+  ../util/litert_util.cc
 )
 add_library(LiteRTLM::Runtime::Core::EngineImpl ALIAS runtime_core_engine_impl)
 
@@ -232,6 +233,7 @@ target_link_libraries(runtime_core_engine_impl
 # ==============================================================================
 add_litertlm_library(runtime_core_engine_impl_cpu_only STATIC
   engine_impl.cc
+  ../util/litert_util.cc
 )
 add_library(LiteRTLM::Runtime::Core::EngineImplCPU ALIAS runtime_core_engine_impl_cpu_only)
 

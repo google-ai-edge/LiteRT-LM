@@ -200,6 +200,9 @@ target_link_libraries(runtime_components_constrained_decoding_llg_constraint_pro
 
 add_litertlm_library(runtime_components_constrained_decoding_llguidance_schema_utils STATIC
   llguidance_schema_utils.cc
+  llg_fc_tool_calls.cc
+  llg_python_tool_calls.cc
+  llg_tool_call_utils.cc
 )
 add_library(LiteRTLM::Runtime::Components::ConstrainedDecoding::LlguidanceSchemaUtils
   ALIAS runtime_components_constrained_decoding_llguidance_schema_utils)

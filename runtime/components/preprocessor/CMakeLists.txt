@@ -125,6 +125,7 @@ target_include_directories(runtime_components_preprocessor_signal_vector_util
 # ==============================================================================
 add_litertlm_library(runtime_components_preprocessor_stb_image_preprocessor STATIC
   stb_image_preprocessor.cc
+  image_preprocessor_utils.cc
 )
 add_library(LiteRTLM::Runtime::Components::Preprocessor::StbImage ALIAS runtime_components_preprocessor_stb_image_preprocessor)
 

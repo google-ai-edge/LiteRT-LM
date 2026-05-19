@@ -40,6 +40,7 @@ target_link_libraries(runtime_engine_engine_interface
 # ==============================================================================
 add_litertlm_library(runtime_engine_engine_settings STATIC
   engine_settings.cc
+  cpu_affinity_utils.cc
 )
 add_library(LiteRTLM::Runtime::Engine::Settings ALIAS runtime_engine_engine_settings)
 

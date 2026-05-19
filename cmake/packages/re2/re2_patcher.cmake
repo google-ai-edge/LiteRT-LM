@@ -15,14 +15,14 @@
 
 message(STATUS "[LiteRTLM] Patching RE2...")
 
-set(ROOT_LIST "${RE2_SRC_DIR}/CMakeLists.txt")
+set(ROOT_LIST "${LITERTLM_RE2_SRC_DIR}/CMakeLists.txt")
 
 if(EXISTS "${ROOT_LIST}")
     file(READ "${ROOT_LIST}" ROOT_CONTENT)
 
     string(REPLACE 
-        "set(RE2_CXX_VERSION cxx_std_17)" 
-        "set(RE2_CXX_VERSION cxx_std_20)" 
+        "set(RE2_CXX_VERSION cxx_std_17)"
+        "set(RE2_CXX_VERSION cxx_std_20)\ninclude(${LITERTLM_RE2_SHIM_PATH})"
         ROOT_CONTENT "${ROOT_CONTENT}"
     )
 
