@@ -17,7 +17,6 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
-#include <filesystem>  //NOLINT
 #include <memory>
 #include <optional>
 #include <string>
@@ -29,6 +28,7 @@
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/memory/memory.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
+// Removed standard absl status_macros include for OSS compatibility.
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
@@ -47,6 +47,7 @@
 #include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
 #include "litert/cc/options/litert_cpu_options.h"  // from @litert
 #include "litert/cc/options/litert_gpu_options.h"  // from @litert
+#include "runtime/components/lora_manager.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/audio_executor_settings.h"
@@ -124,8 +125,9 @@ absl::StatusOr<std::vector<T>> GetDataAsVector(TensorBuffer& tensor_buffer) {
 
 // Returns the first valid token count from the mask tensor.
 absl::StatusOr<int> GetValidCount(const TensorBuffer& mask_buffer) {
-  ASSIGN_OR_RETURN(auto mask, GetDataAsVector<uint8_t>(
-                                  const_cast<TensorBuffer&>(mask_buffer)));
+  LITERT_ASSIGN_OR_RETURN(
+      auto mask,
+      GetDataAsVector<uint8_t>(const_cast<TensorBuffer&>(mask_buffer)));
   for (int i = mask.size() - 1; i >= 0; --i) {
     if (mask[i] != 0) {
       return i + 1;
@@ -145,7 +147,7 @@ absl::Status InitializeBuffer(TensorBuffer& buffer) {
 
 absl::Status InitializeBuffers(std::vector<TensorBuffer>& buffers) {
   for (auto& buffer : buffers) {
-    RETURN_IF_ERROR(InitializeBuffer(buffer));
+    LITERT_RETURN_IF_ERROR(InitializeBuffer(buffer));
   }
   return absl::OkStatus();
 }
@@ -162,6 +164,30 @@ bool IsStreamingEncoder(const std::vector<absl::string_view>& input_names) {
 }
 
 }  // namespace
+
+absl::Status AudioLiteRtCompiledModelExecutor::AudioEncoder::LoadLoRA(
+    uint32_t lora_id, const ModelAssets& model_assets) {
+  if (lora_manager_ == nullptr) {
+    LITERT_ASSIGN_OR_RETURN(
+        lora_manager_,
+        LoraManager::Create(compiled_model_,
+                            /*signature_name=*/"serving_default"));
+  }
+  return lora_manager_->LoadLoRA(lora_id, model_assets);
+}
+
+absl::Status AudioLiteRtCompiledModelExecutor::AudioEncoder::UseLoRA(
+    std::optional<uint32_t> lora_id) {
+  if (lora_id.has_value()) {
+    if (lora_manager_ == nullptr) {
+      return absl::FailedPreconditionError(
+          "LoRA manager is not initialized. Please load LoRA first.");
+    }
+    return lora_manager_->UseLoRA(lora_id.value());
+  }
+  // TODO: b/438210728 - Support disabling LoRA.
+  return absl::OkStatus();
+}
 
 absl::StatusOr<std::unique_ptr<AudioContext>> AudioStreamingContext::Clone()
     const {
@@ -181,7 +207,7 @@ AudioLiteRtCompiledModelExecutor::AudioStaticEncoder::Create(
     const Model* absl_nonnull model) {
   auto handler = std::unique_ptr<AudioStaticEncoder>(
       new AudioStaticEncoder(executor_settings, env, model));
-  RETURN_IF_ERROR(handler->Initialize());
+  LITERT_RETURN_IF_ERROR(handler->Initialize());
   return handler;
 }
 
@@ -194,8 +220,8 @@ AudioLiteRtCompiledModelExecutor::AudioStaticEncoder::Initialize() {
       /*check_and_clean=*/true);
   if (executor_settings_.GetBackend() == Backend::GPU) {
     LITERT_ASSIGN_OR_RETURN(auto& gpu_options, options.GetGpuOptions());
-    ASSIGN_OR_RETURN(auto model_path,
-                     executor_settings_.GetModelAssets().GetPath());
+    LITERT_ASSIGN_OR_RETURN(auto model_path,
+                            executor_settings_.GetModelAssets().GetPath());
     absl::string_view model_basename = Basename(model_path);
     auto program_cache_file = executor_settings_.GetProgramCacheFile(
         absl::StrCat(AudioExecutorSettings::kStaticEncoderName,
@@ -205,10 +231,10 @@ AudioLiteRtCompiledModelExecutor::AudioStaticEncoder::Initialize() {
         absl::StrCat(AudioExecutorSettings::kStaticEncoderName,
                      ExecutorSettingsBase::kMlDriftCacheSuffix),
         /*check_and_clean=*/true);
-    RETURN_IF_ERROR(SetGpuOptions(executor_settings_, gpu_options));
-    ASSIGN_OR_RETURN(std::string metadata_id,
-                     GetFileCacheIdentifier(model_path));
-    RETURN_IF_ERROR(SetGpuCacheOptions(
+    LITERT_RETURN_IF_ERROR(SetGpuOptions(executor_settings_, gpu_options));
+    LITERT_ASSIGN_OR_RETURN(std::string metadata_id,
+                            GetFileCacheIdentifier(model_path));
+    LITERT_RETURN_IF_ERROR(SetGpuCacheOptions(
         weight_cache_file, program_cache_file,
         absl::StrCat(model_basename, AudioExecutorSettings::kStaticEncoderName,
                      "_", metadata_id),
@@ -218,7 +244,7 @@ AudioLiteRtCompiledModelExecutor::AudioStaticEncoder::Initialize() {
   } else if (executor_settings_.GetBackend() == Backend::CPU) {
     LITERT_ASSIGN_OR_RETURN(auto& cpu_options, options.GetCpuOptions());
     cpu_options.SetNumThreads(executor_settings_.GetNumThreads());
-    RETURN_IF_ERROR(SetCpuCacheOptions(
+    LITERT_RETURN_IF_ERROR(SetCpuCacheOptions(
         weight_cache_file, AudioExecutorSettings::kEncoderName, cpu_options));
 
     options.SetHardwareAccelerators(litert::HwAccelerators::kCpu);
@@ -327,7 +353,7 @@ AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::Create(
     const Model* absl_nonnull model) {
   auto handler = std::unique_ptr<AudioStreamingEncoder>(
       new AudioStreamingEncoder(executor_settings, env, model));
-  RETURN_IF_ERROR(handler->Initialize());
+  LITERT_RETURN_IF_ERROR(handler->Initialize());
   return handler;
 }
 
@@ -340,8 +366,8 @@ AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::Initialize() {
       /*check_and_clean=*/true);
   if (executor_settings_.GetBackend() == Backend::GPU) {
     LITERT_ASSIGN_OR_RETURN(auto& gpu_options, options.GetGpuOptions());
-    ASSIGN_OR_RETURN(auto model_path,
-                     executor_settings_.GetModelAssets().GetPath());
+    LITERT_ASSIGN_OR_RETURN(auto model_path,
+                            executor_settings_.GetModelAssets().GetPath());
     absl::string_view model_basename = Basename(model_path);
     auto program_cache_file = executor_settings_.GetProgramCacheFile(
         absl::StrCat(AudioExecutorSettings::kStreamingEncoderName,
@@ -351,10 +377,10 @@ AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::Initialize() {
         absl::StrCat(AudioExecutorSettings::kStreamingEncoderName,
                      ExecutorSettingsBase::kMlDriftCacheSuffix),
         /*check_and_clean=*/true);
-    RETURN_IF_ERROR(SetGpuOptions(executor_settings_, gpu_options));
-    ASSIGN_OR_RETURN(std::string metadata_id,
-                     GetFileCacheIdentifier(model_path));
-    RETURN_IF_ERROR(SetGpuCacheOptions(
+    LITERT_RETURN_IF_ERROR(SetGpuOptions(executor_settings_, gpu_options));
+    LITERT_ASSIGN_OR_RETURN(std::string metadata_id,
+                            GetFileCacheIdentifier(model_path));
+    LITERT_RETURN_IF_ERROR(SetGpuCacheOptions(
         weight_cache_file, program_cache_file,
         absl::StrCat(model_basename,
                      AudioExecutorSettings::kStreamingEncoderName, "_",
@@ -366,7 +392,7 @@ AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::Initialize() {
     LITERT_ASSIGN_OR_RETURN(auto& cpu_options, options.GetCpuOptions());
     cpu_options.SetNumThreads(executor_settings_.GetNumThreads());
 
-    RETURN_IF_ERROR(SetCpuCacheOptions(
+    LITERT_RETURN_IF_ERROR(SetCpuCacheOptions(
         weight_cache_file, AudioExecutorSettings::kEncoderName, cpu_options));
 
     options.SetHardwareAccelerators(litert::HwAccelerators::kCpu);
@@ -535,7 +561,7 @@ AudioLiteRtCompiledModelExecutor::AudioAdapter::Create(
     const Model* absl_nonnull model) {
   auto handler = std::unique_ptr<AudioAdapter>(
       new AudioAdapter(executor_settings, env, model));
-  RETURN_IF_ERROR(handler->Initialize());
+  LITERT_RETURN_IF_ERROR(handler->Initialize());
   return handler;
 }
 
@@ -547,8 +573,8 @@ absl::Status AudioLiteRtCompiledModelExecutor::AudioAdapter::Initialize() {
       /*check_and_clean=*/true);
   if (executor_settings_.GetBackend() == Backend::GPU) {
     LITERT_ASSIGN_OR_RETURN(auto& gpu_options, options.GetGpuOptions());
-    ASSIGN_OR_RETURN(auto model_path,
-                     executor_settings_.GetModelAssets().GetPath());
+    LITERT_ASSIGN_OR_RETURN(auto model_path,
+                            executor_settings_.GetModelAssets().GetPath());
     absl::string_view model_basename = Basename(model_path);
     auto program_cache_file = executor_settings_.GetProgramCacheFile(
         absl::StrCat(AudioExecutorSettings::kAdapterName,
@@ -558,9 +584,9 @@ absl::Status AudioLiteRtCompiledModelExecutor::AudioAdapter::Initialize() {
         absl::StrCat(AudioExecutorSettings::kAdapterName,
                      ExecutorSettingsBase::kMlDriftCacheSuffix),
         /*check_and_clean=*/true);
-    ASSIGN_OR_RETURN(std::string metadata_id,
-                     GetFileCacheIdentifier(model_path));
-    RETURN_IF_ERROR(SetGpuCacheOptions(
+    LITERT_ASSIGN_OR_RETURN(std::string metadata_id,
+                            GetFileCacheIdentifier(model_path));
+    LITERT_RETURN_IF_ERROR(SetGpuCacheOptions(
         weight_cache_file, program_cache_file,
         absl::StrCat(model_basename, AudioExecutorSettings::kAdapterName, "_",
                      metadata_id),
@@ -578,7 +604,7 @@ absl::Status AudioLiteRtCompiledModelExecutor::AudioAdapter::Initialize() {
     LITERT_ASSIGN_OR_RETURN(auto& cpu_options, options.GetCpuOptions());
     cpu_options.SetNumThreads(executor_settings_.GetNumThreads());
 
-    RETURN_IF_ERROR(SetCpuCacheOptions(
+    LITERT_RETURN_IF_ERROR(SetCpuCacheOptions(
         weight_cache_file, AudioExecutorSettings::kAdapterName, cpu_options));
 
     options.SetHardwareAccelerators(litert::HwAccelerators::kCpu);
@@ -761,9 +787,22 @@ absl::StatusOr<int> AudioLiteRtCompiledModelExecutor::EncodeInternal(
   LITERT_RETURN_IF_ERROR(
       audio_encoder_->GetMutableInputMaskBuffer().Write<uint8_t>(
           spectrogram_mask));
+
+  auto& input_buffers_map = audio_encoder_->GetMutableInputBuffersMap();
+  if (audio_encoder_->GetLoraManager() != nullptr) {
+    auto current_lora_id = audio_encoder_->GetLoraManager()->GetCurrentLoRAId();
+    if (current_lora_id.has_value()) {
+      LITERT_ASSIGN_OR_RETURN(
+          auto lora_buffers,
+          audio_encoder_->GetLoraManager()->GetLoRABuffers());
+      for (auto& [name, buffer] : lora_buffers) {
+        input_buffers_map[name] = std::move(buffer);
+      }
+    }
+  }
+
   LITERT_RETURN_IF_ERROR(audio_encoder_->GetMutableCompiledModel().Run(
-      audio_encoder_->GetMutableInputBuffersMap(),
-      audio_encoder_->GetMutableOutputBuffersMap()));
+      input_buffers_map, audio_encoder_->GetMutableOutputBuffersMap()));
 
   ASSIGN_OR_RETURN(int chunk_valid_tokens,
                    GetValidCount(audio_encoder_->GetOutputMaskBuffer()));

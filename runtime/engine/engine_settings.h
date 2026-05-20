@@ -256,6 +256,12 @@ class SessionConfig {
   std::shared_ptr<ScopedFile> GetScopedLoraFile() const;
   void SetScopedLoraFile(std::shared_ptr<ScopedFile> scoped_lora_file);
 
+  // Scoped Audio LoRA file:
+  // Getters for the scoped audio LoRA file.
+  std::shared_ptr<ScopedFile> GetAudioScopedLoraFile() const;
+  void SetAudioScopedLoraFile(
+      std::shared_ptr<ScopedFile> scoped_audio_lora_file);
+
   // The maximum number of tokens to generate in a single request:
   // Getters for the max output tokens.
   int GetMaxOutputTokens() const { return max_output_tokens_; }
@@ -310,6 +316,9 @@ class SessionConfig {
 
   // Scoped file for the LoRA weights.
   std::shared_ptr<ScopedFile> scoped_lora_file_;
+
+  // Scoped file for the Audio LoRA weights.
+  std::shared_ptr<ScopedFile> scoped_audio_lora_file_;
 
   // The maximum number of tokens to generate in a single request. This limits
   // the number of decoding steps for a request, as opposed to

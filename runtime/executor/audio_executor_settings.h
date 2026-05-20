@@ -61,6 +61,14 @@ class AudioExecutorSettings : public ExecutorSettingsBase {
   // Setter for num_threads for CPU backend.
   void SetNumThreads(int num_threads) { num_threads_ = num_threads; }
 
+  uint32_t GetLoraRank() const { return lora_rank_; }
+  void SetLoraRank(uint32_t lora_rank) { lora_rank_ = lora_rank; }
+
+  absl::Status SetSupportedLoraRanks(const std::vector<uint32_t>& lora_ranks) {
+    supported_lora_ranks_ = lora_ranks;
+    return absl::OkStatus();
+  }
+
   // Getter for scoped_encoder_cache_file.
   std::shared_ptr<litert::lm::ScopedFile> GetScopedEncoderCacheFile() const {
     return scoped_encoder_cache_file_;
@@ -133,6 +141,8 @@ class AudioExecutorSettings : public ExecutorSettingsBase {
   int max_sequence_length_;
   bool bundled_with_main_model_;
   int num_threads_ = 4;
+  uint32_t lora_rank_ = 0;
+  std::vector<uint32_t> supported_lora_ranks_ = {};
 
   // The cache file to use for the audio encoder model.
   std::shared_ptr<litert::lm::ScopedFile> scoped_encoder_cache_file_;

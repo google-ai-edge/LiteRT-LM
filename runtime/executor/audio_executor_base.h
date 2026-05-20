@@ -15,11 +15,14 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_AUDIO_EXECUTOR_BASE_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_AUDIO_EXECUTOR_BASE_H_
 
+#include <cstdint>
 #include <memory>
+#include <optional>
 
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/engine/io_types.h"
+#include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/llm_executor_io_types.h"
 
 namespace litert::lm {
@@ -67,6 +70,17 @@ class AudioExecutorBase {
   // Get the audio executor properties.
   virtual absl::StatusOr<AudioExecutorProperties> GetAudioExecutorProperties()
       const {
+    return absl::UnimplementedError("Not implemented.");
+  }
+
+  // Loads the LoRA model into the audio executor.
+  virtual absl::Status LoadLoRA(uint32_t lora_id,
+                                const ModelAssets& model_assets) {
+    return absl::UnimplementedError("Not implemented.");
+  }
+
+  // Sets the current LoRA ID to use.
+  virtual absl::Status UseLoRA(std::optional<uint32_t> lora_id) {
     return absl::UnimplementedError("Not implemented.");
   }
 };
