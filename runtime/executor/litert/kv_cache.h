@@ -42,13 +42,9 @@ class LitertKVCache : public KVCacheInterface {
 
   int GetBatchSize() const override { return batch_size_; };
 
-  absl::StatusOr<std::string> Serialize() const override {
-    return absl::UnimplementedError("Not implemented");
-  }
+  absl::StatusOr<std::string> Serialize() const override;
 
-  absl::Status Load(absl::string_view serialized_kv_cache) override {
-    return absl::UnimplementedError("Not implemented");
-  }
+  absl::Status Load(absl::string_view serialized_kv_cache) override;
 
   absl::Status SelectAndCopyFrom(KVCacheInterface& other,
                                  int batch_index) override;

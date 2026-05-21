@@ -360,6 +360,174 @@ absl::StatusOr<TensorBuffer> CreateFP16OutputBuffer(
 
 }  // namespace
 
+// Get backend type for prefix cache isolation
+BackendType LlmLiteRtCompiledModelExecutorBase::GetBackendType() const {
+  switch (executor_settings_.GetBackend()) {
+    case Backend::CPU:
+      return BackendType::CPU;
+    case Backend::CPU_ARTISAN:
+      return BackendType::CPU_ARTISAN;
+    case Backend::GPU:
+      return BackendType::GPU;
+    case Backend::GPU_ARTISAN:
+      return BackendType::GPU_ARTISAN;
+    case Backend::NPU:
+      return BackendType::NPU;
+    case Backend::GOOGLE_TENSOR_ARTISAN:
+      return BackendType::GOOGLE_TENSOR_ARTISAN;
+    default:
+      return BackendType::CPU;
+  }
+}
+
+// Load KV checkpoint from prefix cache
+absl::Status LlmLiteRtCompiledModelExecutorBase::LoadKVCheckpoint(
+    const KVCheckpoint* checkpoint) {
+  if (!checkpoint) {
+    return absl::OkStatus();
+  }
+
+  // Parse the serialized KV cache data
+  const std::string& serialized = checkpoint->serialized_kv;
+  const char* ptr = serialized.data();
+  const char* end = ptr + serialized.size();
+
+  auto read_data = [&](void* data, size_t size) -> absl::Status {
+    if (ptr + size > end) {
+      return absl::InvalidArgumentError("Serialized data is truncated");
+    }
+    memcpy(data, ptr, size);
+    ptr += size;
+    return absl::OkStatus();
+  };
+
+  auto skip_data = [&](size_t size) -> absl::Status {
+    if (ptr + size > end) {
+      return absl::InvalidArgumentError("Serialized data is truncated");
+    }
+    ptr += size;
+    return absl::OkStatus();
+  };
+
+  // Read header
+  int loaded_num_entries, loaded_batch_size;
+  bool loaded_bank_1_is_input;
+  RETURN_IF_ERROR(read_data(&loaded_num_entries, sizeof(loaded_num_entries)));
+  RETURN_IF_ERROR(read_data(&loaded_batch_size, sizeof(loaded_batch_size)));
+  RETURN_IF_ERROR(read_data(&loaded_bank_1_is_input, sizeof(loaded_bank_1_is_input)));
+
+  // Helper to process one buffer section (key or value)
+  auto process_buffer_section = [&](
+      absl::flat_hash_map<absl::string_view, TensorBuffer>& target_buffers) -> absl::Status {
+    // Process each buffer in target_buffers
+    // Sort names for deterministic order (must match serialization order)
+    std::vector<std::string> sorted_names;
+    for (const auto& [name, _] : target_buffers) {
+      sorted_names.push_back(std::string(name));
+    }
+    std::sort(sorted_names.begin(), sorted_names.end());
+
+    for (const auto& name : sorted_names) {
+      // Read serialized buffer name
+      uint32_t name_len;
+      RETURN_IF_ERROR(read_data(&name_len, sizeof(name_len)));
+      std::string serialized_name(ptr, name_len);
+      ptr += name_len;
+
+      if (serialized_name != name) {
+        return absl::InvalidArgumentError(
+            absl::StrCat("Buffer name mismatch: expected ", name,
+                         " but got ", serialized_name));
+      }
+
+      // Read and skip shape
+      uint32_t dims_count;
+      RETURN_IF_ERROR(read_data(&dims_count, sizeof(dims_count)));
+      RETURN_IF_ERROR(skip_data(dims_count * sizeof(int)));
+
+      // Read data size
+      uint64_t data_size;
+      RETURN_IF_ERROR(read_data(&data_size, sizeof(data_size)));
+
+      // Load data into buffer
+      if (ptr + data_size > end) {
+        return absl::InvalidArgumentError("Serialized data is truncated");
+      }
+
+      auto& buffer = target_buffers.at(name);
+      LITERT_ASSIGN_OR_RETURN(auto lock_and_addr, TensorBufferScopedLock::Create(
+          buffer, TensorBuffer::LockMode::kWrite));
+      memcpy(lock_and_addr.second, ptr, data_size);
+      ptr += data_size;
+    }
+    return absl::OkStatus();
+  };
+
+  // Load Bank 1 Key Cache buffers
+  // We need to identify which buffers are key caches
+  absl::flat_hash_map<absl::string_view, TensorBuffer> key_buffers;
+  absl::flat_hash_map<absl::string_view, TensorBuffer> value_buffers;
+  
+  for (const auto& [name, buffer] : *input_kv_cache_buffers_) {
+    if (absl::StrContains(name, "key") || absl::StrContains(name, "k_cache")) {
+      key_buffers[name] = buffer;
+    } else if (absl::StrContains(name, "value") || absl::StrContains(name, "v_cache")) {
+      value_buffers[name] = buffer;
+    }
+  }
+
+  // Load key buffers
+  if (!key_buffers.empty()) {
+    RETURN_IF_ERROR(process_buffer_section(key_buffers));
+  }
+
+  // Load value buffers
+  if (!value_buffers.empty()) {
+    RETURN_IF_ERROR(process_buffer_section(value_buffers));
+  }
+
+  // Read and skip Bank 2
+  bool has_bank_2;
+  RETURN_IF_ERROR(read_data(&has_bank_2, sizeof(has_bank_2)));
+  if (has_bank_2) {
+    // Skip Bank 2 key buffers - we need to parse to skip correctly
+    uint32_t key_buffer_count = static_cast<uint32_t>(key_buffers.size());
+    for (uint32_t i = 0; i < key_buffer_count; ++i) {
+      uint32_t name_len;
+      RETURN_IF_ERROR(read_data(&name_len, sizeof(name_len)));
+      RETURN_IF_ERROR(skip_data(name_len));
+      uint32_t dims_count;
+      RETURN_IF_ERROR(read_data(&dims_count, sizeof(dims_count)));
+      RETURN_IF_ERROR(skip_data(dims_count * sizeof(int)));
+      uint64_t data_size;
+      RETURN_IF_ERROR(read_data(&data_size, sizeof(data_size)));
+      RETURN_IF_ERROR(skip_data(data_size));
+    }
+
+    // Skip Bank 2 value buffers
+    uint32_t value_buffer_count = static_cast<uint32_t>(value_buffers.size());
+    for (uint32_t i = 0; i < value_buffer_count; ++i) {
+      uint32_t name_len;
+      RETURN_IF_ERROR(read_data(&name_len, sizeof(name_len)));
+      RETURN_IF_ERROR(skip_data(name_len));
+      uint32_t dims_count;
+      RETURN_IF_ERROR(read_data(&dims_count, sizeof(dims_count)));
+      RETURN_IF_ERROR(skip_data(dims_count * sizeof(int)));
+      uint64_t data_size;
+      RETURN_IF_ERROR(read_data(&data_size, sizeof(data_size)));
+      RETURN_IF_ERROR(skip_data(data_size));
+    }
+  }
+
+  // Restore bank_1_is_input_ state
+  bank_1_is_input_ = loaded_bank_1_is_input;
+
+  // Update current step to match the checkpoint
+  llm_context_->runtime_state().current_step = checkpoint->num_tokens;
+
+  return absl::OkStatus();
+}
+
 absl::Status LlmLiteRtCompiledModelExecutorBase::CreatePrefillInputBuffers(
     absl::string_view prefill_signature, int sequence_length,
     int context_length,
@@ -1519,8 +1687,35 @@ absl::Status LlmLiteRtCompiledModelExecutorStatic::Prefill(
   // Reduce the input ids only with one user selected.
   auto input_length = ids.size() / input_batch_size;
   ids = ids.subspan(kTokenIndexToReduce * input_length, input_length);
+  
+  // ========== Prefix KV Cache Lookup ==========
+  int matched_len = 0;
+  if (prefix_cache_) {
+    auto hit = prefix_cache_->Lookup(ids, GetBackendType());
+    if (hit.checkpoint != nullptr) {
+      matched_len = hit.matched_len;
+      ABSL_LOG(INFO) << "Prefix cache hit: matched " << matched_len 
+                     << " tokens out of " << ids.size();
+      
+      // Load checkpoint into KV cache buffers
+      RETURN_IF_ERROR(LoadKVCheckpoint(hit.checkpoint));
+    }
+  }
+  
+  // If all tokens are matched, skip prefill
+  if (matched_len >= ids.size()) {
+    ABSL_LOG(INFO) << "Prefix cache fully matched, skipping prefill";
+    if (embedding_lookup_ != nullptr) {
+      RETURN_IF_ERROR(embedding_lookup_->CleanupMultiModalEmbeddings());
+    }
+    return absl::OkStatus();
+  }
+  
+  // Get remaining tokens for incremental prefill
+  absl::Span<const int> remaining_ids = ids.subspan(matched_len);
+  
   ASSIGN_OR_RETURN(auto work_groups, GetOptimizedPrefillWorkGroups(
-                                         prefill_signature_map_, ids.size()));
+                                         prefill_signature_map_, remaining_ids.size()));
   for (int i = 0; i < work_groups.size(); ++i) {
     const auto& prefill_signature = work_groups[i].first;
     int prefill_length = work_groups[i].second;
@@ -1543,14 +1738,92 @@ absl::Status LlmLiteRtCompiledModelExecutorStatic::Prefill(
                  (i < work_groups.size() - 1 || !params.GetWaitForCompletion());
     RETURN_IF_ERROR(PrefillInternal(
         prefill_signature, prefill_input_buffers_[prefill_signature],
-        ids.subspan(/*pos=*/0, prefill_length), async));
-    ids = ids.subspan(/*pos=*/prefill_length);
+        remaining_ids.subspan(/*pos=*/0, prefill_length), async));
+    remaining_ids = remaining_ids.subspan(/*pos=*/prefill_length);
   }
-  RET_CHECK_EQ(ids.size(), 0).SetCode(absl::StatusCode::kInternal)
+  RET_CHECK_EQ(remaining_ids.size(), 0).SetCode(absl::StatusCode::kInternal)
       << "Work groups not covering the entire prefill input.";
 
   if (embedding_lookup_ != nullptr) {
     RETURN_IF_ERROR(embedding_lookup_->CleanupMultiModalEmbeddings());
+  }
+
+  // ========== Prefix KV Cache Store ==========
+  if (prefix_cache_ && matched_len < ids.size()) {
+    // Serialize KV cache buffers
+    std::string serialized;
+    
+    // Helper to append data
+    auto append_data = [&](const void* data, size_t size) {
+      serialized.append(static_cast<const char*>(data), size);
+    };
+    
+    // Write header
+    // Get num_entries from the first KV cache tensor's shape
+    int num_entries = 0;
+    int batch_size = 1;
+    bool bank_1_is_input = true;
+    
+    if (!input_kv_cache_buffers_->empty()) {
+      const auto& first_buffer = input_kv_cache_buffers_->begin()->second;
+      LITERT_ASSIGN_OR_RETURN(const RankedTensorType& tensor_type, first_buffer.TensorType());
+      auto dimensions = tensor_type.Layout().Dimensions();
+      // Shape is usually [batch, seq_len, ...] or [batch, 1, seq_len, ...]
+      // For dynamic KV cache, seq_len dimension might be at different position
+      if (dimensions.size() >= 2) {
+        batch_size = dimensions[0];
+        // Try to find the sequence dimension (usually the largest or marked as dynamic)
+        num_entries = dimensions[1];
+        for (size_t i = 2; i < dimensions.size(); ++i) {
+          if (dimensions[i] > num_entries) {
+            num_entries = dimensions[i];
+          }
+        }
+      }
+    }
+    
+    append_data(&num_entries, sizeof(num_entries));
+    append_data(&batch_size, sizeof(batch_size));
+    append_data(&bank_1_is_input, sizeof(bank_1_is_input));
+    
+    // Serialize input_kv_cache_buffers_
+    // Sort by name for deterministic order
+    std::vector<std::string> sorted_names;
+    for (const auto& [name, _] : *input_kv_cache_buffers_) {
+      sorted_names.push_back(std::string(name));
+    }
+    std::sort(sorted_names.begin(), sorted_names.end());
+    
+    for (const auto& name : sorted_names) {
+      const auto& buffer = input_kv_cache_buffers_->at(name);
+      
+      // Tensor name
+      uint32_t name_len = static_cast<uint32_t>(name.size());
+      append_data(&name_len, sizeof(name_len));
+      append_data(name.data(), name.size());
+      
+      // Tensor shape
+      LITERT_ASSIGN_OR_RETURN(const RankedTensorType& tensor_type, buffer.TensorType());
+      auto dimensions = tensor_type.Layout().Dimensions();
+      uint32_t dims_count = static_cast<uint32_t>(dimensions.size());
+      append_data(&dims_count, sizeof(dims_count));
+      append_data(dimensions.data(), dims_count * sizeof(int));
+      
+      // Tensor data
+      LITERT_ASSIGN_OR_RETURN(auto lock_and_addr, TensorBufferScopedLock::Create(
+          const_cast<TensorBuffer&>(buffer), TensorBuffer::LockMode::kRead));
+      LITERT_ASSIGN_OR_RETURN(size_t data_size, buffer.PackedSize());
+      append_data(&data_size, sizeof(data_size));
+      append_data(lock_and_addr.second, data_size);
+    }
+    
+    // No Bank 2 for most cases
+    bool has_bank_2 = false;
+    append_data(&has_bank_2, sizeof(has_bank_2));
+    
+    // Store to prefix cache
+    prefix_cache_->Store(ids, std::move(serialized), GetBackendType());
+    ABSL_LOG(INFO) << "Stored " << ids.size() << " tokens to prefix cache";
   }
 
   return absl::OkStatus();
@@ -1803,7 +2076,7 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
     }
   }
 
-  return absl::WrapUnique(new LlmLiteRtCompiledModelExecutorStatic(
+  auto executor = absl::WrapUnique(new LlmLiteRtCompiledModelExecutorStatic(
       std::move(executor_settings), lrt_env, litert_model,
       std::move(compiled_model), std::move(decode_input_buffers),
       std::move(decode_output_buffers), std::move(input_kv_cache_buffers),
@@ -1813,6 +2086,27 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
       signatures, batch_size, std::move(cache_path),
       std::move(embedding_lookup), std::move(per_layer_embedding_lookup),
       use_fp16_precision, activation_data_type, std::move(mtp_drafter)));
+
+  // Initialize prefix KV cache if enabled
+  const auto& advanced_settings = executor_settings.GetAdvancedSettings();
+  if (advanced_settings.has_value() &&
+      advanced_settings->enable_prefix_kv_cache) {
+    // GPU single buffer cache mode is not supported for prefix cache
+    if (!gpu_optimized_single_buffer_cache) {
+      PrefixKVCacheConfig config;
+      config.max_cached_tokens = advanced_settings->max_cached_tokens;
+      config.lru_evict_ratio = advanced_settings->lru_evict_ratio;
+      ASSIGN_OR_RETURN(executor->prefix_cache_,
+                       PrefixKVCacheManager::Create(config));
+      ABSL_LOG(INFO) << "Prefix KV Cache enabled with max_cached_tokens="
+                     << config.max_cached_tokens;
+    } else {
+      ABSL_LOG(WARNING) << "Prefix KV Cache is not supported with GPU single "
+                        << "buffer cache mode";
+    }
+  }
+
+  return executor;
 }
 
 /* ===========================================================================*/

@@ -270,6 +270,11 @@ struct AdvancedSettings {
   // OSS models), we would set this flag to 4 to ensure smooth UI.
   std::optional<int> hint_kernel_batch_size;
 
+  // Prefix KV Cache configuration
+  bool enable_prefix_kv_cache = false;
+  int max_cached_tokens = 8192;     // 0 = unlimited
+  double lru_evict_ratio = 0.3;     // Evict 30% of least recently used nodes
+
   bool operator==(const AdvancedSettings& other) const {
     return prefill_batch_sizes == other.prefill_batch_sizes &&
            num_output_candidates == other.num_output_candidates &&
@@ -298,7 +303,10 @@ struct AdvancedSettings {
            gpu_context_low_priority == other.gpu_context_low_priority &&
            enable_speculative_decoding == other.enable_speculative_decoding &&
            disable_delegate_clustering == other.disable_delegate_clustering &&
-           hint_kernel_batch_size == other.hint_kernel_batch_size;
+           hint_kernel_batch_size == other.hint_kernel_batch_size &&
+           enable_prefix_kv_cache == other.enable_prefix_kv_cache &&
+           max_cached_tokens == other.max_cached_tokens &&
+           lru_evict_ratio == other.lru_evict_ratio;
   }
 };
 std::ostream& operator<<(std::ostream& os, const AdvancedSettings& settings);

@@ -200,6 +200,172 @@ absl::Status BroadcastAndCopyBuffer(TensorBuffer& dst, int dst_batch_size,
 
 }  // namespace
 
+absl::StatusOr<std::string> LitertKVCache::Serialize() const {
+  std::string result;
+  
+  // Helper to append data to result
+  auto append_data = [&](const void* data, size_t size) {
+    result.append(static_cast<const char*>(data), size);
+  };
+  
+  // Serialize header
+  append_data(&num_entries_, sizeof(num_entries_));
+  append_data(&batch_size_, sizeof(batch_size_));
+  append_data(&bank_1_is_input_, sizeof(bank_1_is_input_));
+  
+  // Helper to serialize a buffer map
+  auto serialize_buffer_map = [&](const absl::flat_hash_map<std::string, TensorBuffer>& buffers) {
+    // Sort buffer names for deterministic order
+    std::vector<std::string> sorted_names;
+    sorted_names.reserve(buffers.size());
+    for (const auto& [name, _] : buffers) {
+      sorted_names.push_back(name);
+    }
+    std::sort(sorted_names.begin(), sorted_names.end());
+    
+    for (const auto& name : sorted_names) {
+      const auto& buffer = buffers.at(name);
+      
+      // Tensor name
+      uint32_t name_len = static_cast<uint32_t>(name.size());
+      append_data(&name_len, sizeof(name_len));
+      append_data(name.data(), name.size());
+      
+      // Tensor shape
+      LITERT_ASSIGN_OR_RETURN(const RankedTensorType& tensor_type, buffer.TensorType());
+      auto dimensions = tensor_type.Layout().Dimensions();
+      uint32_t dims_count = static_cast<uint32_t>(dimensions.size());
+      append_data(&dims_count, sizeof(dims_count));
+      append_data(dimensions.data(), dims_count * sizeof(int));
+      
+      // Tensor data
+      LITERT_ASSIGN_OR_RETURN(auto lock_and_addr, TensorBufferScopedLock::Create(
+          const_cast<TensorBuffer&>(buffer), TensorBuffer::LockMode::kRead));
+      LITERT_ASSIGN_OR_RETURN(size_t data_size, buffer.PackedSize());
+      append_data(&data_size, sizeof(data_size));
+      append_data(lock_and_addr.second, data_size);
+    }
+  };
+  
+  // Serialize Bank 1
+  RETURN_IF_ERROR(serialize_buffer_map(bank_1_key_cache_buffers_).status());
+  RETURN_IF_ERROR(serialize_buffer_map(bank_1_value_cache_buffers_).status());
+  
+  // Serialize Bank 2 if exists
+  bool has_bank_2 = bank_2_key_cache_buffers_.has_value();
+  append_data(&has_bank_2, sizeof(has_bank_2));
+  
+  if (has_bank_2) {
+    RETURN_IF_ERROR(serialize_buffer_map(bank_2_key_cache_buffers_.value()).status());
+    RETURN_IF_ERROR(serialize_buffer_map(bank_2_value_cache_buffers_.value()).status());
+  }
+  
+  return result;
+}
+
+absl::Status LitertKVCache::Load(absl::string_view serialized_kv_cache) {
+  const char* ptr = serialized_kv_cache.data();
+  const char* end = ptr + serialized_kv_cache.size();
+  
+  // Helper to read data
+  auto read_data = [&](void* data, size_t size) -> absl::Status {
+    if (ptr + size > end) {
+      return absl::InvalidArgumentError("Serialized data is truncated");
+    }
+    memcpy(data, ptr, size);
+    ptr += size;
+    return absl::OkStatus();
+  };
+  
+  // Read header
+  int loaded_num_entries, loaded_batch_size;
+  bool loaded_bank_1_is_input;
+  RETURN_IF_ERROR(read_data(&loaded_num_entries, sizeof(loaded_num_entries)));
+  RETURN_IF_ERROR(read_data(&loaded_batch_size, sizeof(loaded_batch_size)));
+  RETURN_IF_ERROR(read_data(&loaded_bank_1_is_input, sizeof(loaded_bank_1_is_input)));
+  
+  // Validate header
+  if (loaded_num_entries != num_entries_) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("num_entries mismatch: expected ", num_entries_, 
+                     " but got ", loaded_num_entries));
+  }
+  if (loaded_batch_size != batch_size_) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("batch_size mismatch: expected ", batch_size_,
+                     " but got ", loaded_batch_size));
+  }
+  
+  // Helper to deserialize a buffer map
+  auto deserialize_buffer_map = [&](absl::flat_hash_map<std::string, TensorBuffer>& buffers) -> absl::Status {
+    for (auto& [name, buffer] : buffers) {
+      // Read tensor name
+      uint32_t name_len;
+      RETURN_IF_ERROR(read_data(&name_len, sizeof(name_len)));
+      std::string loaded_name(ptr, name_len);
+      ptr += name_len;
+      
+      if (loaded_name != name) {
+        return absl::InvalidArgumentError(
+            absl::StrCat("Tensor name mismatch: expected ", name,
+                         " but got ", loaded_name));
+      }
+      
+      // Read tensor shape
+      uint32_t dims_count;
+      RETURN_IF_ERROR(read_data(&dims_count, sizeof(dims_count)));
+      std::vector<int> loaded_dims(dims_count);
+      RETURN_IF_ERROR(read_data(loaded_dims.data(), dims_count * sizeof(int)));
+      
+      // Validate shape
+      LITERT_ASSIGN_OR_RETURN(const RankedTensorType& tensor_type, buffer.TensorType());
+      auto current_dims = tensor_type.Layout().Dimensions();
+      if (static_cast<int>(loaded_dims.size()) != current_dims.size()) {
+        return absl::InvalidArgumentError(
+            absl::StrCat("Shape rank mismatch for ", name));
+      }
+      // Note: We allow dynamic dimension to differ
+      
+      // Read tensor data
+      uint64_t data_size;
+      RETURN_IF_ERROR(read_data(&data_size, sizeof(data_size)));
+      
+      if (ptr + data_size > end) {
+        return absl::InvalidArgumentError("Serialized data is truncated");
+      }
+      
+      // Copy data to buffer
+      LITERT_ASSIGN_OR_RETURN(auto lock_and_addr, TensorBufferScopedLock::Create(
+          buffer, TensorBuffer::LockMode::kWrite));
+      memcpy(lock_and_addr.second, ptr, data_size);
+      ptr += data_size;
+    }
+    return absl::OkStatus();
+  };
+  
+  // Deserialize Bank 1
+  RETURN_IF_ERROR(deserialize_buffer_map(bank_1_key_cache_buffers_));
+  RETURN_IF_ERROR(deserialize_buffer_map(bank_1_value_cache_buffers_));
+  
+  // Deserialize Bank 2 if exists
+  bool loaded_has_bank_2;
+  RETURN_IF_ERROR(read_data(&loaded_has_bank_2, sizeof(loaded_has_bank_2)));
+  
+  if (loaded_has_bank_2) {
+    if (!bank_2_key_cache_buffers_.has_value()) {
+      return absl::InvalidArgumentError(
+          "Serialized data has Bank 2 but current cache doesn't");
+    }
+    RETURN_IF_ERROR(deserialize_buffer_map(bank_2_key_cache_buffers_.value()));
+    RETURN_IF_ERROR(deserialize_buffer_map(bank_2_value_cache_buffers_.value()));
+  }
+  
+  // Restore bank_1_is_input_ state
+  bank_1_is_input_ = loaded_bank_1_is_input;
+  
+  return absl::OkStatus();
+}
+
 absl::StatusOr<std::unique_ptr<LitertKVCache>> LitertKVCache::Create(
     Environment& env, const Model& model, absl::string_view signature_name,
     CompiledModel& compiled_model, bool inplace_update) {
