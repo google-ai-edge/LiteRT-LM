@@ -376,7 +376,9 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateEngine)(
     jint max_num_images, jstring cache_dir, jboolean enable_benchmark,
     jobject enable_speculative_decoding, jstring main_npu_native_library_dir,
     jstring vision_npu_native_library_dir, jstring audio_npu_native_library_dir,
-    jint main_backend_num_threads, jint audio_backend_num_threads) {
+    jint main_backend_num_threads, jint audio_backend_num_threads,
+    jboolean enable_prefix_kv_cache, jint max_cached_tokens,
+    jdouble lru_evict_ratio) {
   const char* model_path_chars = env->GetStringUTFChars(model_path, nullptr);
   std::string model_path_str(model_path_chars);
   env->ReleaseStringUTFChars(model_path, model_path_chars);
@@ -532,6 +534,18 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateEngine)(
         settings->GetMainExecutorSettings().GetAdvancedSettings().value_or(
             litert::lm::AdvancedSettings());
     advanced_settings.enable_speculative_decoding = (is_enabled == JNI_TRUE);
+    settings->GetMutableMainExecutorSettings().SetAdvancedSettings(
+        advanced_settings);
+  }
+
+  // Handle prefix KV cache settings
+  if (enable_prefix_kv_cache == JNI_TRUE) {
+    auto advanced_settings =
+        settings->GetMainExecutorSettings().GetAdvancedSettings().value_or(
+            litert::lm::AdvancedSettings());
+    advanced_settings.enable_prefix_kv_cache = true;
+    advanced_settings.max_cached_tokens = max_cached_tokens;
+    advanced_settings.lru_evict_ratio = lru_evict_ratio;
     settings->GetMutableMainExecutorSettings().SetAdvancedSettings(
         advanced_settings);
   }

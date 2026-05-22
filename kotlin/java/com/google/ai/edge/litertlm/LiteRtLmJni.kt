@@ -38,7 +38,6 @@ internal object LiteRtLmJni {
    *   non-positive, use the engine's default.
    * @param maxNumImages The maximum number of images the model can handle. When non-positive, use
    *   the engine's default.
-   * @param enableBenchmark Whether to enable benchmark mode or not.
    * @param cacheDir The directory for cache files.
    * @param enableBenchmark Whether to enable benchmark or not.
    * @param enableSpeculativeDecoding Whether to enable speculative decoding.
@@ -47,6 +46,9 @@ internal object LiteRtLmJni {
    * @param audioNpuNativeLibraryDir The directory for the audio backend NPU libraries.
    * @param mainBackendNumThreads The number of threads for the main backend (CPU).
    * @param audioBackendNumThreads The number of threads for the audio backend (CPU).
+   * @param enablePrefixKvCache Whether to enable prefix KV cache.
+   * @param maxCachedTokens The maximum number of tokens to cache for prefix KV cache.
+   * @param lruEvictRatio The ratio of least recently used nodes to evict when cache is full.
    * @return A pointer to the native engine instance.
    */
   external fun nativeCreateEngine(
@@ -64,6 +66,9 @@ internal object LiteRtLmJni {
     audioNpuNativeLibraryDir: String,
     mainBackendNumThreads: Int,
     audioBackendNumThreads: Int,
+    enablePrefixKvCache: Boolean,
+    maxCachedTokens: Int,
+    lruEvictRatio: Double,
   ): Long
 
   /**
