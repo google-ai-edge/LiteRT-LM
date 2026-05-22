@@ -77,19 +77,33 @@ class RadixTree {
       absl::Span<const int> tokens, BackendType backend) const;
   
   // Insert a new token sequence with its KV checkpoint
-  void Insert(absl::Span<const int> tokens, KVCheckpoint checkpoint);
+  // Returns: the number of NEW tokens added to the cache (0 if just updating existing checkpoint)
+  int Insert(absl::Span<const int> tokens, KVCheckpoint checkpoint);
   
   // Remove subtree rooted at node
   void RemoveSubtree(RadixNode* node);
   
+  // Remove subtree rooted at node and return the number of tokens removed
+  int RemoveSubtreeAndReturnTokens(RadixNode* node);
+  
+  // Clear checkpoint from a node (keeps the node and its children intact)
+  // Returns the number of tokens that were associated with this checkpoint
+  int ClearCheckpoint(RadixNode* node);
+  
   // Get all leaf nodes
   std::vector<RadixNode*> GetAllLeafNodes() const;
+  
+  // Get all nodes with valid checkpoints
+  std::vector<RadixNode*> GetAllCheckpointNodes() const;
   
   // Get total number of nodes
   int GetTotalNodes() const;
   
   // Get total cached tokens
   int GetTotalCachedTokens() const { return total_cached_tokens_; }
+  
+  // Get current cached tokens (same as total_cached_tokens_)
+  int GetCurrentCachedTokens() const { return total_cached_tokens_; }
 
  private:
   RadixNode* root_;

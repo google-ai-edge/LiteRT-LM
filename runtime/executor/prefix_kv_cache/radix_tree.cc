@@ -62,7 +62,7 @@ std::pair<int, const RadixNode*> RadixTree::FindLongestPrefixMatch(
   return {matched, best_node};
 }
 
-void RadixTree::Insert(absl::Span<const int> tokens, KVCheckpoint checkpoint) {
+int RadixTree::Insert(absl::Span<const int> tokens, KVCheckpoint checkpoint) {
   RadixNode* node = root_;
   int token_idx = 0;
   
@@ -80,7 +80,8 @@ void RadixTree::Insert(absl::Span<const int> tokens, KVCheckpoint checkpoint) {
       node->children[first_token] = new_node;
       
       total_cached_tokens_ += static_cast<int>(new_node->token_ids.size());
-      return;
+      // Return the number of new tokens added
+      return static_cast<int>(new_node->token_ids.size());
     }
     
     // Child exists, check if we need to split or continue
@@ -97,9 +98,9 @@ void RadixTree::Insert(absl::Span<const int> tokens, KVCheckpoint checkpoint) {
     if (match_len == child->token_ids.size()) {
       // Full match, continue to next level
       if (token_idx + match_len == tokens.size()) {
-        // Exact match, update checkpoint
+        // Exact match, update checkpoint only (no new tokens)
         child->checkpoint = std::move(checkpoint);
-        return;
+        return 0;  // No new tokens added, just updated existing checkpoint
       }
       
       // Continue down the tree
@@ -141,14 +142,19 @@ void RadixTree::Insert(absl::Span<const int> tokens, KVCheckpoint checkpoint) {
         intermediate_node->children[new_tokens.front()] = new_child;
         
         total_cached_tokens_ += static_cast<int>(new_child->token_ids.size());
+        // Return only the NEW branch tokens, not the shared prefix
+        return static_cast<int>(new_child->token_ids.size());
       } else {
-        // Update intermediate node's checkpoint
+        // Update intermediate node's checkpoint (no new tokens, just updating)
         intermediate_node->checkpoint = std::move(checkpoint);
+        return 0;  // No new tokens added, just updated existing checkpoint
       }
       
-      return;
+      return 0;  // Should not reach here
     }
   }
+  
+  return 0;  // Empty tokens case
 }
 
 void RadixTree::RemoveSubtree(RadixNode* node) {
@@ -184,6 +190,64 @@ void RadixTree::RemoveSubtree(RadixNode* node) {
   delete node;
 }
 
+int RadixTree::RemoveSubtreeAndReturnTokens(RadixNode* node) {
+  if (!node || node == root_) {
+    return 0;
+  }
+  
+  // Calculate tokens to remove
+  int tokens_to_remove = 0;
+  std::function<void(RadixNode*)> count_tokens = [&](RadixNode* n) {
+    if (!n || n == root_) return;
+    tokens_to_remove += static_cast<int>(n->token_ids.size());
+    for (auto& [_, child] : n->children) {
+      count_tokens(child);
+    }
+  };
+  
+  count_tokens(node);
+  total_cached_tokens_ -= tokens_to_remove;
+  
+  // Remove from parent
+  RadixNode* parent = node->parent;
+  if (parent) {
+    for (auto it = parent->children.begin(); it != parent->children.end(); ++it) {
+      if (it->second == node) {
+        parent->children.erase(it);
+        break;
+      }
+    }
+  }
+  
+  // Delete node and its children (destructor handles recursive deletion)
+  delete node;
+  
+  return tokens_to_remove;
+}
+
+int RadixTree::ClearCheckpoint(RadixNode* node) {
+  if (!node || node == root_ || !node->checkpoint.has_value()) {
+    return 0;
+  }
+  
+  // Return the number of tokens this node contributes to the tree structure
+  // This is node->token_ids.size(), NOT checkpoint->num_tokens
+  // Because after splits, a node may only store a subset of the original prefix
+  // Example: Original [1,2,3,4] split into [1,2] + [3] + [4]
+  //   Node [4] has token_ids.size() = 1, but checkpoint->num_tokens = 4
+  //   We should return 1, not 4
+  int tokens_in_node = static_cast<int>(node->token_ids.size());
+  
+  // Clear the checkpoint data
+  // Note: We do NOT modify total_cached_tokens_ here because:
+  // - total_cached_tokens_ tracks tree structure (sum of all node->token_ids.size())
+  // - ClearCheckpoint only removes checkpoint data, not the tree node itself
+  // - The tree structure remains intact, so total_cached_tokens_ is unchanged
+  node->checkpoint.reset();
+  
+  return tokens_in_node;
+}
+
 std::vector<RadixNode*> RadixTree::GetAllLeafNodes() const {
   std::vector<RadixNode*> leaves;
   
@@ -206,6 +270,31 @@ std::vector<RadixNode*> RadixTree::GetAllLeafNodes() const {
   }
   
   return leaves;
+}
+
+std::vector<RadixNode*> RadixTree::GetAllCheckpointNodes() const {
+  std::vector<RadixNode*> checkpoint_nodes;
+  
+  std::function<void(const RadixNode*)> traverse = [&](const RadixNode* node) {
+    if (!node) return;
+    
+    // Collect node if it has a valid checkpoint
+    if (node->checkpoint.has_value()) {
+      checkpoint_nodes.push_back(const_cast<RadixNode*>(node));
+    }
+    
+    // Continue traversing all children
+    for (const auto& [_, child] : node->children) {
+      traverse(child);
+    }
+  };
+  
+  // Start from root's children
+  for (const auto& [_, child] : root_->children) {
+    traverse(child);
+  }
+  
+  return checkpoint_nodes;
 }
 
 int RadixTree::GetTotalNodes() const {

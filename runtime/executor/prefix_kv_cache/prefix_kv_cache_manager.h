@@ -70,7 +70,6 @@ class PrefixKVCacheManager {
   
   RadixTree tree_;
   PrefixKVCacheConfig config_;
-  int current_token_count_ = 0;
   int64_t monotonic_clock_ = 0;
   
   // Mutex to protect concurrent access to the cache

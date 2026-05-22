@@ -72,15 +72,13 @@ void PrefixKVCacheManager::Store(absl::Span<const int> tokens,
   checkpoint.backend = backend;
   checkpoint.last_access_time = ++monotonic_clock_;
   
-  // Insert into tree
+  // Insert into tree (tree_.Insert updates total_cached_tokens_ internally)
   tree_.Insert(tokens, std::move(checkpoint));
-  current_token_count_ += static_cast<int>(tokens.size());
 }
 
 void PrefixKVCacheManager::Clear() {
   std::lock_guard<std::mutex> lock(mutex_);
   tree_ = RadixTree();
-  current_token_count_ = 0;
   monotonic_clock_ = 0;
 }
 
@@ -98,7 +96,7 @@ void PrefixKVCacheManager::MaybeEvict() {
     return;
   }
   
-  if (current_token_count_ <= config_.max_cached_tokens) {
+  if (tree_.GetTotalCachedTokens() <= config_.max_cached_tokens) {
     return;
   }
   
@@ -106,14 +104,17 @@ void PrefixKVCacheManager::MaybeEvict() {
 }
 
 void PrefixKVCacheManager::EvictLRU() {
-  auto leaves = tree_.GetAllLeafNodes();
+  // Collect all nodes with checkpoints (not just leaves)
+  // This prevents evicting leaf nodes that don't have checkpoints while
+  // accidentally deleting intermediate nodes that DO have checkpoints
+  auto checkpoint_nodes = tree_.GetAllCheckpointNodes();
   
-  if (leaves.empty()) {
+  if (checkpoint_nodes.empty()) {
     return;
   }
   
-  // Sort by last_access_time ascending
-  std::sort(leaves.begin(), leaves.end(),
+  // Sort by last_access_time ascending (LRU order)
+  std::sort(checkpoint_nodes.begin(), checkpoint_nodes.end(),
             [](const RadixNode* a, const RadixNode* b) {
               int64_t time_a =
                   a->checkpoint.has_value() ? a->checkpoint->last_access_time : 0;
@@ -123,18 +124,34 @@ void PrefixKVCacheManager::EvictLRU() {
             });
   
   int64_t tokens_to_evict =
-      static_cast<int64_t>(current_token_count_ * config_.lru_evict_ratio);
+      static_cast<int64_t>(tree_.GetCurrentCachedTokens() * config_.lru_evict_ratio);
   int64_t tokens_evicted = 0;
   
-  for (RadixNode* leaf : leaves) {
+  for (RadixNode* node : checkpoint_nodes) {
     if (tokens_evicted >= tokens_to_evict) {
       break;
     }
     
-    int tokens_in_subtree = CalculateSubtreeTokens(leaf);
-    tree_.RemoveSubtree(leaf);
-    current_token_count_ -= tokens_in_subtree;
-    tokens_evicted += tokens_in_subtree;
+    // Distinguish between leaf nodes and internal nodes
+    int tokens_removed = 0;
+    
+    if (node->children.empty()) {
+      // Leaf node: remove the entire subtree (just this node)
+      // RemoveSubtreeAndReturnTokens updates total_cached_tokens_ internally
+      tokens_removed = tree_.RemoveSubtreeAndReturnTokens(node);
+    } else {
+      // Internal node: only clear the checkpoint data, keep the subtree intact
+      // This prevents cascading deletion of child checkpoints
+      // ClearCheckpoint returns node->token_ids.size() (the tokens this node contributes)
+      // but does NOT modify total_cached_tokens_ (tree structure is unchanged)
+      tokens_removed = tree_.ClearCheckpoint(node);
+    }
+    
+    // Note: We don't need to manually update any counter here because:
+    // - RemoveSubtreeAndReturnTokens already updated total_cached_tokens_
+    // - ClearCheckpoint doesn't change total_cached_tokens_ (node still exists)
+    // - tree_.GetCurrentCachedTokens() always returns the current total_cached_tokens_
+    tokens_evicted += tokens_removed;
   }
 }
 
