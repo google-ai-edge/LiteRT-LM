@@ -31,6 +31,7 @@
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "runtime/components/lora_manager.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/audio_executor.h"
@@ -131,6 +132,17 @@ class AudioLiteRtCompiledModelExecutor : public AudioExecutor {
   absl::Status RestoreContext(
       std::unique_ptr<AudioContext> audio_context) override;
 
+  // Loads the LoRA model into the audio executor.
+  absl::Status LoadLoRA(uint32_t lora_id,
+                        const ModelAssets& model_assets) override {
+    return audio_encoder_->LoadLoRA(lora_id, model_assets);
+  }
+
+  // Sets the current LoRA ID to use.
+  absl::Status UseLoRA(std::optional<uint32_t> lora_id) override {
+    return audio_encoder_->UseLoRA(lora_id);
+  }
+
  private:
   // The Audio Encoder LiteRT CompiledModel wrapper manage the input and
   // output buffers of the audio encoder model. It is not expected to be used
@@ -146,6 +158,13 @@ class AudioLiteRtCompiledModelExecutor : public AudioExecutor {
     virtual absl::Status ClearInputBuffers() = 0;
 
     virtual absl::Status Reset() = 0;
+
+    // Loads the LoRA model into the audio encoder.
+    virtual absl::Status LoadLoRA(uint32_t lora_id,
+                                  const ModelAssets& model_assets);
+
+    // Sets the current LoRA ID to use.
+    virtual absl::Status UseLoRA(std::optional<uint32_t> lora_id);
 
     const CompiledModel& GetCompiledModel() const { return compiled_model_; }
 
@@ -199,6 +218,8 @@ class AudioLiteRtCompiledModelExecutor : public AudioExecutor {
       return *output_features_buffer_;
     }
 
+    LoraManager* GetLoraManager() { return lora_manager_.get(); }
+
    protected:
     CompiledModel compiled_model_;
 
@@ -221,6 +242,8 @@ class AudioLiteRtCompiledModelExecutor : public AudioExecutor {
     absl::flat_hash_map<absl::string_view, TensorBuffer> input_buffers_map_;
     // The output buffers map for the audio encoder model.
     absl::flat_hash_map<absl::string_view, TensorBuffer> output_buffers_map_;
+
+    std::unique_ptr<LoraManager> lora_manager_;
   };
 
   // Audio Encoder for static LiteRT model, where the whole audio is provided at

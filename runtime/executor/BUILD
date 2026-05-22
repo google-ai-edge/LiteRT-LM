@@ -148,6 +148,7 @@ cc_library(
         "//runtime/util:model_asset_bundle_resources",
         "//runtime/util:scoped_file",
         "//runtime/util:tensor_buffer_util",
+        "@litert//tflite/delegates/xnnpack:xnnpack_delegate",
         "@litert//tflite/types:half",
     ] + select({
         "@litert//litert:litert_link_capi_so": [
@@ -933,6 +934,8 @@ cc_library(
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/types:span",
         "@litert//litert/cc:litert_tensor_buffer_types",
+        "//runtime/components:lora",
+        "//runtime/components:lora_manager",
         "//runtime/components:model_resources",
         "//runtime/engine:io_types",
         "//runtime/util:convert_tensor_buffer",

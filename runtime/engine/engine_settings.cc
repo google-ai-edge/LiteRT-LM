@@ -706,6 +706,15 @@ void SessionConfig::SetScopedLoraFile(
   scoped_lora_file_ = std::move(scoped_lora_file);
 }
 
+std::shared_ptr<ScopedFile> SessionConfig::GetAudioScopedLoraFile() const {
+  return scoped_audio_lora_file_;
+}
+
+void SessionConfig::SetAudioScopedLoraFile(
+    std::shared_ptr<ScopedFile> scoped_audio_lora_file) {
+  scoped_audio_lora_file_ = std::move(scoped_audio_lora_file);
+}
+
 std::ostream& operator<<(std::ostream& os, const SessionConfig& config) {
   os << "SessionConfig: " << std::endl;
   os << "  AudioModalityEnabled: " << config.AudioModalityEnabled()
@@ -730,6 +739,9 @@ std::ostream& operator<<(std::ostream& os, const SessionConfig& config) {
      << config.GetApplyPromptTemplateInSession() << std::endl;
   os << "  ScopedLoraFile: "
      << (config.GetScopedLoraFile() != nullptr ? "Present" : "Not present")
+     << std::endl;
+  os << "  ScopedAudioLoraFile: "
+     << (config.GetAudioScopedLoraFile() != nullptr ? "Present" : "Not present")
      << std::endl;
   return os;
 }

@@ -69,6 +69,17 @@ class AudioExecutorBase {
       const {
     return absl::UnimplementedError("Not implemented.");
   }
+
+  // Loads the LoRA model into the audio executor.
+  virtual absl::Status LoadLoRA(uint32_t lora_id,
+                                const ModelAssets& model_assets) {
+    return absl::UnimplementedError("Not implemented.");
+  }
+
+  // Sets the current LoRA ID to use.
+  virtual absl::Status UseLoRA(std::optional<uint32_t> lora_id) {
+    return absl::UnimplementedError("Not implemented.");
+  }
 };
 
 }  // namespace litert::lm

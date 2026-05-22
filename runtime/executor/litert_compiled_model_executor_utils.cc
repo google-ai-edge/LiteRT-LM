@@ -56,6 +56,7 @@
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/status_macros.h"  //NOLINT
 #include "runtime/util/tensor_buffer_util.h"
+#include "tflite/delegates/xnnpack/xnnpack_delegate.h"  // from @litert
 #include "tflite/types/half.h"  // from @litert
 
 namespace litert::lm {
@@ -485,6 +486,11 @@ absl::Status SetCpuCacheOptions(
     ABSL_LOG(INFO) << logging_prefix
                    << " use cache path: " << weight_cache_path;
   }
+  auto default_xnn_options = TfLiteXNNPackDelegateOptionsDefault();
+  cpu_options.SetXNNPackFlags(
+      default_xnn_options.flags |
+      TFLITE_XNNPACK_DELEGATE_FLAG_ENABLE_LATEST_OPERATORS |
+      TFLITE_XNNPACK_DELEGATE_FLAG_DYNAMIC_FULLY_CONNECTED);
   return absl::OkStatus();
 }
 

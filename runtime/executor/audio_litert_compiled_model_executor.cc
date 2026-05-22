@@ -168,6 +168,30 @@ bool IsStreamingEncoder(const std::vector<absl::string_view>& input_names) {
 
 }  // namespace
 
+absl::Status AudioLiteRtCompiledModelExecutor::AudioEncoder::LoadLoRA(
+    uint32_t lora_id, const ModelAssets& model_assets) {
+  if (lora_manager_ == nullptr) {
+    LITERT_ASSIGN_OR_RETURN(
+        lora_manager_,
+        LoraManager::Create(compiled_model_,
+                            /*signature_name=*/"serving_default"));
+  }
+  return lora_manager_->LoadLoRA(lora_id, model_assets);
+}
+
+absl::Status AudioLiteRtCompiledModelExecutor::AudioEncoder::UseLoRA(
+    std::optional<uint32_t> lora_id) {
+  if (lora_id.has_value()) {
+    if (lora_manager_ == nullptr) {
+      return absl::FailedPreconditionError(
+          "LoRA manager is not initialized. Please load LoRA first.");
+    }
+    return lora_manager_->UseLoRA(lora_id.value());
+  }
+  // TODO: b/438210728 - Support disabling LoRA.
+  return absl::OkStatus();
+}
+
 absl::StatusOr<std::unique_ptr<AudioContext>> AudioStreamingContext::Clone()
     const {
   absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
@@ -766,9 +790,22 @@ absl::StatusOr<int> AudioLiteRtCompiledModelExecutor::EncodeInternal(
   LITERT_RETURN_IF_ERROR(
       audio_encoder_->GetMutableInputMaskBuffer().Write<uint8_t>(
           spectrogram_mask));
+
+  auto& input_buffers_map = audio_encoder_->GetMutableInputBuffersMap();
+  if (audio_encoder_->GetLoraManager() != nullptr) {
+    auto current_lora_id = audio_encoder_->GetLoraManager()->GetCurrentLoRAId();
+    if (current_lora_id.has_value()) {
+      LITERT_ASSIGN_OR_RETURN(
+          auto lora_buffers,
+          audio_encoder_->GetLoraManager()->GetLoRABuffers());
+      for (auto& [name, buffer] : lora_buffers) {
+        input_buffers_map[name] = std::move(buffer);
+      }
+    }
+  }
+
   LITERT_RETURN_IF_ERROR(audio_encoder_->GetMutableCompiledModel().Run(
-      audio_encoder_->GetMutableInputBuffersMap(),
-      audio_encoder_->GetMutableOutputBuffersMap()));
+      input_buffers_map, audio_encoder_->GetMutableOutputBuffersMap()));
 
   ASSIGN_OR_RETURN(int chunk_valid_tokens,
                    GetValidCount(audio_encoder_->GetOutputMaskBuffer()));

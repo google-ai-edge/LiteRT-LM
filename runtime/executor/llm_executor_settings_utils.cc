@@ -243,7 +243,8 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
       auto default_xnn_options = TfLiteXNNPackDelegateOptionsDefault();
       cpu_compilation_options.SetXNNPackFlags(
           default_xnn_options.flags |
-          TFLITE_XNNPACK_DELEGATE_FLAG_ENABLE_LATEST_OPERATORS);
+          TFLITE_XNNPACK_DELEGATE_FLAG_ENABLE_LATEST_OPERATORS |
+          TFLITE_XNNPACK_DELEGATE_FLAG_DYNAMIC_FULLY_CONNECTED);
       LITERT_ASSIGN_OR_RETURN(auto& runtime_options,
                               compilation_options.GetRuntimeOptions());
       runtime_options.SetCompressQuantizationZeroPoints(true);
