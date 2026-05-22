@@ -129,8 +129,10 @@ py_test(
         "nowindows",
     ],
     deps = [
+        ":common",
         ":main_lib",
         ":model",
+        "//python/litert_lm_cli/commands:run",
         "@absl_py//absl/testing:absltest",
         requirement("click"),
         requirement("prompt_toolkit"),

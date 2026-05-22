@@ -14,6 +14,7 @@
 
 """Shared options and helper functions for LiteRT-LM CLI."""
 
+import textwrap
 import click
 
 
@@ -38,6 +39,28 @@ def parse_speculative_decoding(unused_ctx, unused_param, value):
   elif value_lower == "false":
     return False
   return value
+
+
+def cache_dir_value_from_cache_mode(cache: str) -> str:
+  """Returns the cache directory value for the given cache mode.
+
+  Args:
+    cache: The cache mode. Valid values are "disk", "memory", "no".
+
+  Returns:
+    The cache directory value as a string.
+
+  Raises:
+    ValueError: If the cache mode is invalid.
+  """
+  if cache == "disk":
+    return ""
+  elif cache == "memory":
+    return ":memory"
+  elif cache == "no":
+    return ":nocache"
+  else:
+    raise ValueError(f"Invalid cache mode: {cache}")
 
 
 def huggingface_options(f):
@@ -70,16 +93,29 @@ def common_inference_options(f):
       help="Whether to enable verbose logging.",
   )(f)
   f = click.option(
+      "--cache",
+      type=click.Choice(["disk", "memory", "no"]),
+      default="disk",
+      help=textwrap.dedent("""\
+          \b
+          Caching mode for compiled model artifacts to speed up startup.
+            - disk: Persists compiled artifacts to a file next to the model.
+            - memory: Caches compiled artifacts in RAM (CPU backend only).
+            - no: Disables caching (recompiles on every run).
+          """),
+  )(f)
+  f = click.option(
       "--enable-speculative-decoding",
       type=click.Choice(["auto", "true", "false"], case_sensitive=False),
       default="auto",
       callback=parse_speculative_decoding,
-      help="""\b
-Speculative decoding mode ("auto", "true", "false").
-  - auto: Automatically determine the speculative decoding behavior from the model metadata.
-  - true: Force enable speculative decoding. It will throw an error if the model does not support it.
-  - false: Force disable speculative decoding.
-""",
+      help=textwrap.dedent("""\
+          \b
+          Speculative decoding mode ("auto", "true", "false").
+            - auto: Automatically determine the speculative decoding behavior from the model metadata.
+            - true: Force enable speculative decoding. It will throw an error if the model does not support it.
+            - false: Force disable speculative decoding.
+          """),
   )(f)
   f = click.option(
       "--backend",

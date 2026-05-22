@@ -229,7 +229,7 @@ jobs:
 
 
       - name: Run bazel test on Windows
-        continue-on-error: true 
+        continue-on-error: true
         run: |
           bazel --output_base="$env:BAZEL_OUTPUT_BASE" `
             test --disk_cache=~/.cache/bazel-windows --test_output=errors `
@@ -239,13 +239,12 @@ jobs:
             --test_tag_filters='-requires-mac-inputs:hard,-nowindows' `
             --action_env=TMP="$env:TMP" `
             --action_env=TEMP="$env:TEMP" `
-            --linkopt="/MANIFESTINPUT:C:\TMP\longpath.manifest" `
             -- `
             //... `
             -//kotlin/...
 
       - name: Upload Bazel Test Logs
-        if: always() 
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: bazel-test-logs-windows

@@ -40,6 +40,7 @@ def run_benchmark(
     backend: str = "cpu",
     enable_speculative_decoding: bool | None = None,
     max_num_tokens: int | None = None,
+    cache: str = "disk",
 ):
   """Benchmarks the model."""
   if not model_obj.exists():
@@ -53,12 +54,8 @@ def run_benchmark(
     return
 
   try:
-    backend_val = model.parse_backend(backend, model_obj=model_obj)
-    cache_dir_val = (
-        ":memory"
-        if isinstance(backend_val, litert_lm.Backend.CPU)
-        else ":nocache"
-    )
+    backend_val = model.parse_backend(backend)
+    cache_dir_val = common.cache_dir_value_from_cache_mode(cache)
 
     if is_android:
       if not _HAS_ADB:
@@ -69,6 +66,7 @@ def run_benchmark(
           prefill_tokens=prefill_tokens,
           decode_tokens=decode_tokens,
           max_num_tokens=max_num_tokens,
+          cache_dir=cache_dir_val,
       )
     else:
       benchmark_obj = litert_lm.Benchmark(
@@ -96,6 +94,7 @@ def run_benchmark(
       spec_dec_str = "true"
     elif enable_speculative_decoding is False:
       spec_dec_str = "false"
+    click.echo(f"Cache                      : {cache}")
     click.echo(f"Speculative decoding       : {spec_dec_str}")
     if is_android:
       click.echo("Target                     : Android")
@@ -171,6 +170,7 @@ def benchmark(
     from_huggingface_repo: str | None = None,
     huggingface_token: str | None = None,
     max_num_tokens: int | None = None,
+    cache: str = "disk",
 ):
   """Benchmarks a LiteRT-LM model.
 
@@ -188,6 +188,7 @@ def benchmark(
     from_huggingface_repo: The HuggingFace repository ID.
     huggingface_token: The HuggingFace API token.
     max_num_tokens: Maximum number of tokens for the KV cache.
+    cache: The cache mode to use (no, memory, or disk).
   """
   if verbose:
     litert_lm.set_min_log_severity(litert_lm.LogSeverity.VERBOSE)
@@ -215,6 +216,7 @@ def benchmark(
       backend=backend,
       enable_speculative_decoding=enable_speculative_decoding,
       max_num_tokens=max_num_tokens,
+      cache=cache,
   )
 
 

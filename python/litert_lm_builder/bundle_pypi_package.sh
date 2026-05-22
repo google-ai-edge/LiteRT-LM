@@ -28,28 +28,30 @@ WHEEL_DIR="${BAZEL_BIN}/python/litert_lm_builder"
 rm -rf "${WHEEL_DIR}"
 
 echo "Building wheel using Bazelisk..."
-bazelisk build //python/litert_lm_builder:wheel
+bazelisk build //python/litert_lm_builder:wheel "$@"
 
 # --- Testing / Verification Steps ---
-echo "Setting up temporary virtual environment for verification..."
 TEST_VENV="${WORKSPACE_ROOT}/python/litert_lm_builder/test_venv"
+
+for PY_VER in "3.10" "3.11" "3.12" "3.13" "3.14"; do
+  echo "------------------------------------------------"
+  echo "Setting up temporary virtual environment for Python ${PY_VER}..."
+  echo "------------------------------------------------"
+  rm -rf "${TEST_VENV}"
+  # Force uv to use or download the specific Python version
+  uv venv --python="${PY_VER}" "${TEST_VENV}"
+  # Activate venv and install the wheel
+  source "${TEST_VENV}/bin/activate"
+  echo "Installing the built wheel..."
+  uv pip install --index-url https://pypi.org/simple "${WHEEL_DIR}"/*.whl
+  echo "Verifying CLI tools..."
+  litert-lm-builder --help
+  litert-lm-peek --help
+  echo "Verifying Python import..."
+  python3 -c "import litert_lm_builder; print(litert_lm_builder.LitertLmFileBuilder)"
+  # Clean up for next iteration
+  deactivate
+done
+
 rm -rf "${TEST_VENV}"
-python3 -m venv "${TEST_VENV}"
-
-# Activate venv and install the wheel
-source "${TEST_VENV}/bin/activate"
-
-echo "Installing the built wheel directly from bazel-bin..."
-pip install --index-url https://pypi.org/simple "${WHEEL_DIR}"/*.whl
-
-echo "Verifying CLI tools..."
-litert-lm-builder --help
-litert-lm-peek --help
-
-echo "Verifying Python import..."
-python3 -c "import litert_lm_builder; print(litert_lm_builder.LitertLmFileBuilder)"
-
-# Clean up
-deactivate
-rm -rf "${TEST_VENV}"
-echo "Verification completed successfully! Cleaned up test environment."
+echo "Verification completed successfully for all Python versions!"

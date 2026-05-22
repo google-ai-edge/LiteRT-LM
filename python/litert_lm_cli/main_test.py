@@ -21,6 +21,7 @@ from absl.testing import absltest
 from click.testing import CliRunner
 from prompt_toolkit import key_binding
 
+from litert_lm_cli import common
 from litert_lm_cli import main
 from litert_lm_cli import model
 
@@ -34,6 +35,15 @@ class MainTest(absltest.TestCase):
     self.assertEqual(result_help.exit_code, 0)
     self.assertEqual(result_h.exit_code, 0)
     self.assertEqual(result_help.output, result_h.output)
+
+  def test_cache_dir_value_from_cache_mode(self):
+    self.assertEqual(common.cache_dir_value_from_cache_mode("no"), ":nocache")
+    self.assertEqual(
+        common.cache_dir_value_from_cache_mode("memory"), ":memory"
+    )
+    self.assertEqual(common.cache_dir_value_from_cache_mode("disk"), "")
+    with self.assertRaises(ValueError):
+      common.cache_dir_value_from_cache_mode("invalid")
 
   def test_subcommand_help_shorthand(self):
     runner = CliRunner()

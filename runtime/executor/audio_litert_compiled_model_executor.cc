@@ -69,7 +69,7 @@ namespace {
 // Set the default GPU options for the model.
 absl::Status SetGpuOptions(const AudioExecutorSettings& executor_settings,
                            litert::GpuOptions& gpu_options) {
-  #if defined(LITERT_USE_WEBGPU_ACCELERATOR)
+#if defined(LITERT_USE_WEBGPU_ACCELERATOR)
   gpu_options.SetBackend(GpuOptions::Backend::kWebGpu);
 #endif  // defined(LITERT_USE_WEBGPU_ACCELERATOR)
   gpu_options.EnableConstantTensorSharing(true);
@@ -100,6 +100,11 @@ absl::Status SetGpuOptions(const AudioExecutorSettings& executor_settings,
   gpu_options.SetConvertWeightsOnGpu(true);
   gpu_options.SetHintFullyDelegatedToSingleDelegate(true);
   gpu_options.EnableInfiniteFloatCapping(true);
+  gpu_options.SetNumStepsOfCommandBufferPreparations(2);
+  gpu_options.EnableExternalTensorsMode(false);
+  gpu_options.SetNumThreadsToUpload(2);
+  gpu_options.SetNumThreadsToCompile(1);
+  gpu_options.EnableAllowSrcQuantizedFcConvOps(false);
   return absl::OkStatus();
 }
 

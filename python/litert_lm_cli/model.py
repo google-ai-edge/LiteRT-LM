@@ -245,10 +245,15 @@ def model_id_dir_name(model_id):
   return model_id.replace("/", "--")
 
 
+def get_cli_base_dir() -> str:
+  """Gets the base directory for LiteRT-LM CLI."""
+  return os.path.join(os.path.expanduser("~"), ".litert-lm")
+
+
 # ~/.litert-lm/models
 def get_converted_models_base_dir():
   """Gets the base directory for all converted models."""
-  return os.path.join(os.path.expanduser("~"), ".litert-lm", "models")
+  return os.path.join(get_cli_base_dir(), "models")
 
 
 # ~/.litert-lm/models/<model_id>

@@ -55,17 +55,23 @@ def _stream_download(
   Returns:
     The absolute path to the temporary file where the response body was written.
   """
-  tmp_file = tempfile.NamedTemporaryFile(delete=False)
+  # Use a dedicated download directory within the user's home to avoid potential
+  # space limitations or quota issues that might be present in /tmp.
+  download_dir = os.path.join(model.get_cli_base_dir(), "downloading")
+  os.makedirs(download_dir, exist_ok=True)
+  tmp_file = tempfile.NamedTemporaryFile(dir=download_dir, delete=False)
   tmp_file_path = tmp_file.name
+
   try:
     with tmp_file:
       with click.progressbar(
           length=length,
-          label="Downloading model",
           show_pos=False,
           show_percent=False,
           show_eta=False,
           item_show_func=lambda item: item,
+          bar_template="[%(bar)s]  %(info)s",
+          width=20,
       ) as bar:
         current_pos = 0
         for chunk in iter(lambda: response.read(_DOWNLOAD_CHUNK_SIZE), b""):
@@ -80,6 +86,17 @@ def _stream_download(
     except OSError:
       pass
     raise
+
+
+def _format_size(size_in_bytes: int) -> str:
+  """Formats bytes to a human-readable string (e.g., 18.2GB)."""
+  for unit in ["B", "KB", "MB", "GB", "TB"]:
+    if size_in_bytes < 1024.0:
+      if unit == "B":
+        return f"{int(size_in_bytes)}{unit}"
+      return f"{size_in_bytes:.1f}{unit}"
+    size_in_bytes /= 1024.0
+  return f"{size_in_bytes:.1f}PB"
 
 
 def download_experimental_model(
@@ -102,7 +119,6 @@ def download_experimental_model(
     click.ClickException: If the download fails.
   """
   url = f"https://dl.google.com/litert-lm/experimental/{urllib.parse.quote(model_id)}/model.litertlm"
-  click.echo(f"Downloading experimental model from {url}...")
 
   req = urllib.request.Request(url, headers={"User-Agent": user_agent})
 
@@ -117,25 +133,21 @@ def download_experimental_model(
     content_length = response.getheader("Content-Length")
     if content_length is None:
       total_size = None
+      size_suffix = ""
     else:
       try:
         total_size = int(content_length)
+        size_suffix = f" ({_format_size(total_size)})"
       except ValueError:
         total_size = None
+        size_suffix = ""
+
+    click.echo(f"Downloading {model_id!r}{size_suffix}...")
 
     def format_progress(current_pos_bytes: int) -> str:
       if total_size and total_size > 0:
         pct = int((current_pos_bytes / total_size) * 100)
-        if total_size > 1024 * 1024:
-          return (
-              f"{current_pos_bytes / (1024 * 1024):.1f} MB / "
-              f"{total_size / (1024 * 1024):.1f} MB  {pct}%"
-          )
-        else:
-          return (
-              f"{current_pos_bytes / 1024:.1f} KB / "
-              f"{total_size / 1024:.1f} KB  {pct}%"
-          )
+        return f"{pct}%"
 
       if current_pos_bytes > 1024 * 1024:
         return f"{current_pos_bytes / (1024 * 1024):.1f} MB"
@@ -186,7 +198,6 @@ def _copy_source(
     return None
   except FileNotFoundError as e:
     if source == model_file and user_agent:
-      click.echo(f"Local file '{source}' not found. Attempting download...")
       downloaded_file = download_experimental_model(
           model_id=model_file,
           user_agent=user_agent,
