@@ -38,6 +38,8 @@ PrefixKVCacheManager::PrefixKVCacheManager(PrefixKVCacheConfig config)
 
 PrefixCacheHit PrefixKVCacheManager::Lookup(absl::Span<const int> tokens,
                                             BackendType backend) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  
   auto [matched_len, node] = tree_.FindLongestPrefixMatch(tokens, backend);
   
   if (matched_len == 0 || !node->checkpoint.has_value()) {
@@ -58,6 +60,8 @@ void PrefixKVCacheManager::Store(absl::Span<const int> tokens,
     return;
   }
   
+  std::lock_guard<std::mutex> lock(mutex_);
+  
   // Check if we need to evict
   MaybeEvict();
   
@@ -74,12 +78,14 @@ void PrefixKVCacheManager::Store(absl::Span<const int> tokens,
 }
 
 void PrefixKVCacheManager::Clear() {
+  std::lock_guard<std::mutex> lock(mutex_);
   tree_ = RadixTree();
   current_token_count_ = 0;
   monotonic_clock_ = 0;
 }
 
 PrefixKVCacheManager::Stats PrefixKVCacheManager::GetStats() const {
+  std::lock_guard<std::mutex> lock(mutex_);
   return {
       .total_cached_tokens = tree_.GetTotalCachedTokens(),
       .total_nodes = tree_.GetTotalNodes(),

@@ -48,6 +48,7 @@
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
+#include "runtime/executor/litert/kv_cache.h"
 #include "litert/cc/options/litert_cpu_options.h"  // from @litert
 #include "litert/cc/options/litert_runtime_options.h"  // from @litert
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
@@ -387,140 +388,78 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::LoadKVCheckpoint(
     return absl::OkStatus();
   }
 
-  // Parse the serialized KV cache data
-  const std::string& serialized = checkpoint->serialized_kv;
-  const char* ptr = serialized.data();
-  const char* end = ptr + serialized.size();
-
-  auto read_data = [&](void* data, size_t size) -> absl::Status {
-    if (ptr + size > end) {
-      return absl::InvalidArgumentError("Serialized data is truncated");
-    }
-    memcpy(data, ptr, size);
-    ptr += size;
-    return absl::OkStatus();
-  };
-
-  auto skip_data = [&](size_t size) -> absl::Status {
-    if (ptr + size > end) {
-      return absl::InvalidArgumentError("Serialized data is truncated");
-    }
-    ptr += size;
-    return absl::OkStatus();
-  };
-
-  // Read header
-  int loaded_num_entries, loaded_batch_size;
-  bool loaded_bank_1_is_input;
-  RETURN_IF_ERROR(read_data(&loaded_num_entries, sizeof(loaded_num_entries)));
-  RETURN_IF_ERROR(read_data(&loaded_batch_size, sizeof(loaded_batch_size)));
-  RETURN_IF_ERROR(read_data(&loaded_bank_1_is_input, sizeof(loaded_bank_1_is_input)));
-
-  // Helper to process one buffer section (key or value)
-  auto process_buffer_section = [&](
-      absl::flat_hash_map<absl::string_view, TensorBuffer>& target_buffers) -> absl::Status {
-    // Process each buffer in target_buffers
-    // Sort names for deterministic order (must match serialization order)
-    std::vector<std::string> sorted_names;
-    for (const auto& [name, _] : target_buffers) {
-      sorted_names.push_back(std::string(name));
-    }
-    std::sort(sorted_names.begin(), sorted_names.end());
-
-    for (const auto& name : sorted_names) {
-      // Read serialized buffer name
-      uint32_t name_len;
-      RETURN_IF_ERROR(read_data(&name_len, sizeof(name_len)));
-      std::string serialized_name(ptr, name_len);
-      ptr += name_len;
-
-      if (serialized_name != name) {
-        return absl::InvalidArgumentError(
-            absl::StrCat("Buffer name mismatch: expected ", name,
-                         " but got ", serialized_name));
-      }
-
-      // Read and skip shape
-      uint32_t dims_count;
-      RETURN_IF_ERROR(read_data(&dims_count, sizeof(dims_count)));
-      RETURN_IF_ERROR(skip_data(dims_count * sizeof(int)));
-
-      // Read data size
-      uint64_t data_size;
-      RETURN_IF_ERROR(read_data(&data_size, sizeof(data_size)));
-
-      // Load data into buffer
-      if (ptr + data_size > end) {
-        return absl::InvalidArgumentError("Serialized data is truncated");
-      }
-
-      auto& buffer = target_buffers.at(name);
-      LITERT_ASSIGN_OR_RETURN(auto lock_and_addr, TensorBufferScopedLock::Create(
-          buffer, TensorBuffer::LockMode::kWrite));
-      memcpy(lock_and_addr.second, ptr, data_size);
-      ptr += data_size;
-    }
-    return absl::OkStatus();
-  };
-
-  // Load Bank 1 Key Cache buffers
-  // We need to identify which buffers are key caches
-  absl::flat_hash_map<absl::string_view, TensorBuffer> key_buffers;
-  absl::flat_hash_map<absl::string_view, TensorBuffer> value_buffers;
+  // Derive KV cache root names from the first buffer name
+  // This uses the same approach as GetKVCacheRootNames
+  std::string k_root_name;
+  std::string v_root_name;
   
-  for (const auto& [name, buffer] : *input_kv_cache_buffers_) {
-    if (absl::StrContains(name, "key") || absl::StrContains(name, "k_cache")) {
-      key_buffers[name] = buffer;
-    } else if (absl::StrContains(name, "value") || absl::StrContains(name, "v_cache")) {
-      value_buffers[name] = buffer;
+  if (!input_kv_cache_buffers_->empty()) {
+    const auto& first_name = input_kv_cache_buffers_->begin()->first;
+    // Detect the pattern from the first buffer name
+    if (absl::StartsWith(first_name, "kv_cache_k_")) {
+      k_root_name = "kv_cache_k_";
+      v_root_name = "kv_cache_v_";
+    } else if (absl::StartsWith(first_name, "k_cache_")) {
+      k_root_name = "k_cache_";
+      v_root_name = "v_cache_";
+    } else if (absl::StartsWith(first_name, "kv_cache_c_")) {
+      k_root_name = "kv_cache_c_";
+      v_root_name = "kv_cache_c_";
+    } else {
+      return absl::FailedPreconditionError(
+          absl::StrCat("Cannot derive KV cache root name from: ", first_name));
+    }
+  } else {
+    return absl::FailedPreconditionError("No KV cache buffers available");
+  }
+
+  // Helper to classify KV cache buffers using precise prefix matching
+  auto classify_kv_buffers = 
+      [k_root_name, v_root_name](
+          const absl::flat_hash_map<absl::string_view, TensorBuffer>& all_buffers,
+          absl::flat_hash_map<std::string, TensorBuffer>& key_buffers,
+          absl::flat_hash_map<std::string, TensorBuffer>& value_buffers) {
+    for (const auto& [name, buffer] : all_buffers) {
+      if (absl::StartsWith(name, k_root_name)) {
+        key_buffers[std::string(name)] = buffer;
+      } else if (absl::StartsWith(name, v_root_name)) {
+        value_buffers[std::string(name)] = buffer;
+      }
+    }
+  };
+
+  // Identify key and value buffers for Bank 1
+  absl::flat_hash_map<std::string, TensorBuffer> key_buffers;
+  absl::flat_hash_map<std::string, TensorBuffer> value_buffers;
+  classify_kv_buffers(*input_kv_cache_buffers_, key_buffers, value_buffers);
+
+  // Prepare Bank 2 buffers (may not exist for all configurations)
+  std::optional<absl::flat_hash_map<std::string, TensorBuffer>> bank_2_key_buffers;
+  std::optional<absl::flat_hash_map<std::string, TensorBuffer>> bank_2_value_buffers;
+  
+  if (!kv_cache_buffers_2_.empty()) {
+    absl::flat_hash_map<std::string, TensorBuffer> b2_key;
+    absl::flat_hash_map<std::string, TensorBuffer> b2_value;
+    classify_kv_buffers(kv_cache_buffers_2_, b2_key, b2_value);
+    
+    if (!b2_key.empty() || !b2_value.empty()) {
+      bank_2_key_buffers = std::move(b2_key);
+      bank_2_value_buffers = std::move(b2_value);
     }
   }
 
-  // Load key buffers
-  if (!key_buffers.empty()) {
-    RETURN_IF_ERROR(process_buffer_section(key_buffers));
-  }
-
-  // Load value buffers
-  if (!value_buffers.empty()) {
-    RETURN_IF_ERROR(process_buffer_section(value_buffers));
-  }
-
-  // Read and skip Bank 2
-  bool has_bank_2;
-  RETURN_IF_ERROR(read_data(&has_bank_2, sizeof(has_bank_2)));
-  if (has_bank_2) {
-    // Skip Bank 2 key buffers - we need to parse to skip correctly
-    uint32_t key_buffer_count = static_cast<uint32_t>(key_buffers.size());
-    for (uint32_t i = 0; i < key_buffer_count; ++i) {
-      uint32_t name_len;
-      RETURN_IF_ERROR(read_data(&name_len, sizeof(name_len)));
-      RETURN_IF_ERROR(skip_data(name_len));
-      uint32_t dims_count;
-      RETURN_IF_ERROR(read_data(&dims_count, sizeof(dims_count)));
-      RETURN_IF_ERROR(skip_data(dims_count * sizeof(int)));
-      uint64_t data_size;
-      RETURN_IF_ERROR(read_data(&data_size, sizeof(data_size)));
-      RETURN_IF_ERROR(skip_data(data_size));
-    }
-
-    // Skip Bank 2 value buffers
-    uint32_t value_buffer_count = static_cast<uint32_t>(value_buffers.size());
-    for (uint32_t i = 0; i < value_buffer_count; ++i) {
-      uint32_t name_len;
-      RETURN_IF_ERROR(read_data(&name_len, sizeof(name_len)));
-      RETURN_IF_ERROR(skip_data(name_len));
-      uint32_t dims_count;
-      RETURN_IF_ERROR(read_data(&dims_count, sizeof(dims_count)));
-      RETURN_IF_ERROR(skip_data(dims_count * sizeof(int)));
-      uint64_t data_size;
-      RETURN_IF_ERROR(read_data(&data_size, sizeof(data_size)));
-      RETURN_IF_ERROR(skip_data(data_size));
-    }
-  }
+  // Use the common deserialization function from LitertKVCache
+  LITERT_ASSIGN_OR_RETURN(
+      auto result,
+      LitertKVCache::DeserializeBuffers(
+          checkpoint->serialized_kv,
+          key_buffers,
+          value_buffers,
+          bank_2_key_buffers,
+          bank_2_value_buffers));
 
   // Restore bank_1_is_input_ state
-  bank_1_is_input_ = loaded_bank_1_is_input;
+  bank_1_is_input_ = result.bank_1_is_input;
 
   // Update current step to match the checkpoint
   llm_context_->runtime_state().current_step = checkpoint->num_tokens;

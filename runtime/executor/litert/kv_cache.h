@@ -71,6 +71,22 @@ class LitertKVCache : public KVCacheInterface {
   // the input/output buffers will be swapped.
   absl::StatusOr<KVCacheBuffers> GetKVCacheBuffers();
 
+  // Public static helper to deserialize KV cache data into provided buffers.
+  // This can be used by both LitertKVCache::Load and external code (e.g., prefix cache).
+  struct DeserializationResult {
+    int num_entries;
+    int batch_size;
+    bool bank_1_is_input;
+    bool has_bank_2;
+  };
+  
+  static absl::StatusOr<DeserializationResult> DeserializeBuffers(
+      absl::string_view serialized_kv_cache,
+      absl::flat_hash_map<std::string, TensorBuffer>& key_buffers,
+      absl::flat_hash_map<std::string, TensorBuffer>& value_buffers,
+      std::optional<absl::flat_hash_map<std::string, TensorBuffer>>& bank_2_key_buffers,
+      std::optional<absl::flat_hash_map<std::string, TensorBuffer>>& bank_2_value_buffers);
+
  private:
   LitertKVCache(
       int batch_size, int num_entries, std::optional<int> k_dynamic_dim,

@@ -16,6 +16,7 @@
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_PREFIX_KV_CACHE_PREFIX_KV_CACHE_MANAGER_H_
 
 #include <memory>
+#include <mutex>
 #include <string>
 
 #include "absl/status/status.h"  // from @com_google_absl
@@ -71,6 +72,9 @@ class PrefixKVCacheManager {
   PrefixKVCacheConfig config_;
   int current_token_count_ = 0;
   int64_t monotonic_clock_ = 0;
+  
+  // Mutex to protect concurrent access to the cache
+  mutable std::mutex mutex_;
 };
 
 }  // namespace litert::lm

@@ -263,7 +263,12 @@ absl::StatusOr<std::string> LitertKVCache::Serialize() const {
   return result;
 }
 
-absl::Status LitertKVCache::Load(absl::string_view serialized_kv_cache) {
+absl::StatusOr<LitertKVCache::DeserializationResult> LitertKVCache::DeserializeBuffers(
+    absl::string_view serialized_kv_cache,
+    absl::flat_hash_map<std::string, TensorBuffer>& key_buffers,
+    absl::flat_hash_map<std::string, TensorBuffer>& value_buffers,
+    std::optional<absl::flat_hash_map<std::string, TensorBuffer>>& bank_2_key_buffers,
+    std::optional<absl::flat_hash_map<std::string, TensorBuffer>>& bank_2_value_buffers) {
   const char* ptr = serialized_kv_cache.data();
   const char* end = ptr + serialized_kv_cache.size();
   
@@ -283,18 +288,6 @@ absl::Status LitertKVCache::Load(absl::string_view serialized_kv_cache) {
   RETURN_IF_ERROR(read_data(&loaded_num_entries, sizeof(loaded_num_entries)));
   RETURN_IF_ERROR(read_data(&loaded_batch_size, sizeof(loaded_batch_size)));
   RETURN_IF_ERROR(read_data(&loaded_bank_1_is_input, sizeof(loaded_bank_1_is_input)));
-  
-  // Validate header
-  if (loaded_num_entries != num_entries_) {
-    return absl::InvalidArgumentError(
-        absl::StrCat("num_entries mismatch: expected ", num_entries_, 
-                     " but got ", loaded_num_entries));
-  }
-  if (loaded_batch_size != batch_size_) {
-    return absl::InvalidArgumentError(
-        absl::StrCat("batch_size mismatch: expected ", batch_size_,
-                     " but got ", loaded_batch_size));
-  }
   
   // Helper to deserialize a buffer map
   auto deserialize_buffer_map = [&](absl::flat_hash_map<std::string, TensorBuffer>& buffers) -> absl::Status {
@@ -344,24 +337,55 @@ absl::Status LitertKVCache::Load(absl::string_view serialized_kv_cache) {
   };
   
   // Deserialize Bank 1
-  RETURN_IF_ERROR(deserialize_buffer_map(bank_1_key_cache_buffers_));
-  RETURN_IF_ERROR(deserialize_buffer_map(bank_1_value_cache_buffers_));
+  RETURN_IF_ERROR(deserialize_buffer_map(key_buffers));
+  RETURN_IF_ERROR(deserialize_buffer_map(value_buffers));
   
   // Deserialize Bank 2 if exists
   bool loaded_has_bank_2;
   RETURN_IF_ERROR(read_data(&loaded_has_bank_2, sizeof(loaded_has_bank_2)));
   
   if (loaded_has_bank_2) {
-    if (!bank_2_key_cache_buffers_.has_value()) {
+    if (!bank_2_key_buffers.has_value()) {
       return absl::InvalidArgumentError(
           "Serialized data has Bank 2 but current cache doesn't");
     }
-    RETURN_IF_ERROR(deserialize_buffer_map(bank_2_key_cache_buffers_.value()));
-    RETURN_IF_ERROR(deserialize_buffer_map(bank_2_value_cache_buffers_.value()));
+    RETURN_IF_ERROR(deserialize_buffer_map(bank_2_key_buffers.value()));
+    RETURN_IF_ERROR(deserialize_buffer_map(bank_2_value_buffers.value()));
+  }
+  
+  return DeserializationResult{
+      .num_entries = loaded_num_entries,
+      .batch_size = loaded_batch_size,
+      .bank_1_is_input = loaded_bank_1_is_input,
+      .has_bank_2 = loaded_has_bank_2
+  };
+}
+
+absl::Status LitertKVCache::Load(absl::string_view serialized_kv_cache) {
+  // Use the common deserialization function
+  LITERT_ASSIGN_OR_RETURN(
+      auto result,
+      DeserializeBuffers(
+          serialized_kv_cache,
+          bank_1_key_cache_buffers_,
+          bank_1_value_cache_buffers_,
+          bank_2_key_cache_buffers_,
+          bank_2_value_cache_buffers_));
+  
+  // Validate header
+  if (result.num_entries != num_entries_) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("num_entries mismatch: expected ", num_entries_, 
+                     " but got ", result.num_entries));
+  }
+  if (result.batch_size != batch_size_) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("batch_size mismatch: expected ", batch_size_,
+                     " but got ", result.batch_size));
   }
   
   // Restore bank_1_is_input_ state
-  bank_1_is_input_ = loaded_bank_1_is_input;
+  bank_1_is_input_ = result.bank_1_is_input;
   
   return absl::OkStatus();
 }

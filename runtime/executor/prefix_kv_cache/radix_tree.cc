@@ -38,27 +38,25 @@ std::pair<int, const RadixNode*> RadixTree::FindLongestPrefixMatch(
   int matched = 0;
   const RadixNode* best_node = root_;
   
-  for (int token : tokens) {
-    auto it = node->children.find(token);
+  while (matched < tokens.size()) {
+    int next_token = tokens[matched];
+    auto it = node->children.find(next_token);
     if (it == node->children.end()) {
       break;
     }
     
     const RadixNode* child = it->second;
     
-    // Check if child has a checkpoint and backend matches
-    if (!child->checkpoint.has_value()) {
-      break;
-    }
-    
-    if (child->checkpoint->backend != backend) {
-      break;
-    }
-    
-    // Move to child and update matched count
+    // Count all tokens in this node (even if no checkpoint)
     matched += static_cast<int>(child->token_ids.size());
+    
+    // Only update best_node if child has a valid checkpoint with matching backend
+    if (child->checkpoint.has_value() && child->checkpoint->backend == backend) {
+      best_node = child;
+    }
+    
+    // Continue traversing down the tree
     node = child;
-    best_node = node;
   }
   
   return {matched, best_node};
@@ -113,7 +111,10 @@ void RadixTree::Insert(absl::Span<const int> tokens, KVCheckpoint checkpoint) {
                                        child->token_ids.end());
       int new_child_depth = child->depth;
       
-      // Create new intermediate node
+      // Create new intermediate node with shared prefix
+      // Note: total_cached_tokens_ doesn't change here because:
+      // - Original child had N tokens (already counted)
+      // - After split: intermediate has M tokens + child has (N-M) tokens = N tokens total
       std::vector<int> shared_tokens(child->token_ids.begin(),
                                      child->token_ids.begin() + match_len);
       int shared_depth = node->depth + match_len;
@@ -145,7 +146,6 @@ void RadixTree::Insert(absl::Span<const int> tokens, KVCheckpoint checkpoint) {
         intermediate_node->checkpoint = std::move(checkpoint);
       }
       
-      total_cached_tokens_ += match_len;
       return;
     }
   }
