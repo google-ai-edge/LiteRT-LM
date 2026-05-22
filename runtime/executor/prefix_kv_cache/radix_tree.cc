@@ -15,6 +15,7 @@
 #include "runtime/executor/prefix_kv_cache/radix_tree.h"
 
 #include <algorithm>
+#include <functional>
 #include <utility>
 
 namespace litert::lm {
@@ -157,7 +158,7 @@ void RadixTree::RemoveSubtree(RadixNode* node) {
   
   // Calculate tokens to remove
   int tokens_to_remove = 0;
-  auto count_tokens = [&](RadixNode* n) {
+  std::function<void(RadixNode*)> count_tokens = [&](RadixNode* n) {
     if (!n || n == root_) return;
     tokens_to_remove += static_cast<int>(n->token_ids.size());
     for (auto& [_, child] : n->children) {
