@@ -44,9 +44,7 @@ let package = Package(
         "EngineTests.swift",
         "ConversationTests.swift",
         "ToolTests.swift",
-        "MessageTests.swift",
         "BUILD",
-        "Info.plist",
       ],
       linkerSettings: [
         .unsafeFlags(["-Xlinker", "-all_load"])
@@ -76,12 +74,6 @@ let package = Package(
       dependencies: ["LiteRTLM"],
       path: "swift",
       sources: ["EngineTests.swift"]
-    ),
-    .testTarget(
-      name: "MessageTests",
-      dependencies: ["LiteRTLM"],
-      path: "swift",
-      sources: ["MessageTests.swift"]
     ),
   ]
 )

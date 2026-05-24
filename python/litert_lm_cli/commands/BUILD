@@ -20,7 +20,7 @@ load(
     py_test = "pytype_strict_contrib_test",
 )
 
-package(default_visibility = ["//visibility:public"])
+package(default_visibility = ["//python/litert_lm_cli:__subpackages__"])
 
 pytype_strict_library(
     name = "serve",

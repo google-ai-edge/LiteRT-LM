@@ -225,7 +225,6 @@ jobs:
       - name: Run bazel build for Android.
         run: |
           bazelisk build --disk_cache=~/.cache/bazel-android --config=android_arm64 \
-            --deleted_packages=swift \
             //... \
             //runtime/engine:litert_lm_main \
             @litert//litert/vendors/mediatek/dispatch:dispatch_api_so \

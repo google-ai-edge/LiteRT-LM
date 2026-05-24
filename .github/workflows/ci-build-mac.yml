@@ -112,11 +112,6 @@ jobs:
             "${{ env.MODEL_URL }}"
           ls -lh ${{ env.MODEL_PATH }}
 
-      - name: Install Rust
-        run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-
       - name: Run bazel build on MacOS.
         run: |
           bazel build --disk_cache=~/.cache/bazel-macos \
