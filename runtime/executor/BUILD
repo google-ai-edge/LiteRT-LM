@@ -269,7 +269,7 @@ cc_library(
         ":llm_litert_mtp_drafter",
         ":llm_processed_context",
         ":magic_number_configs_helper",
-        ":prefix_kv_cache:prefix_kv_cache",
+        "//runtime/executor/prefix_kv_cache:prefix_kv_cache",
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/log:absl_log",
