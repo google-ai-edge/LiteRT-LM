@@ -17,7 +17,6 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
-#include <filesystem>  //NOLINT
 #include <memory>
 #include <optional>
 #include <string>
@@ -39,7 +38,6 @@
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_layout.h"  // from @litert
-#include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
 #include "litert/cc/litert_options.h"  // from @litert
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
@@ -47,6 +45,7 @@
 #include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
 #include "litert/cc/options/litert_cpu_options.h"  // from @litert
 #include "litert/cc/options/litert_gpu_options.h"  // from @litert
+#include "runtime/components/lora_manager.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/audio_executor_settings.h"
@@ -54,9 +53,11 @@
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/executor/llm_executor_io_types.h"
-#include "runtime/util/convert_tensor_buffer.h"
+#include "runtime/util/convert_tensor_buffer.h"  // IWYU pragma: keep
 #include "runtime/util/file_util.h"
+#include "runtime/util/status_macros.h"
 #include "runtime/util/tensor_buffer_util.h"
+#include "tflite/delegates/xnnpack/xnnpack_delegate.h"  // from @litert
 #include "tflite/types/half.h"  // from @litert
 
 #if !defined(LITERT_DISABLE_NPU)
@@ -105,6 +106,17 @@ absl::Status SetGpuOptions(const AudioExecutorSettings& executor_settings,
   gpu_options.SetNumThreadsToUpload(2);
   gpu_options.SetNumThreadsToCompile(1);
   gpu_options.EnableAllowSrcQuantizedFcConvOps(false);
+  return absl::OkStatus();
+}
+
+// Set the default CPU options for the model.
+absl::Status SetCpuOptions(const AudioExecutorSettings& executor_settings,
+                           litert::CpuOptions& cpu_options) {
+  cpu_options.SetNumThreads(executor_settings.GetNumThreads());
+  auto default_xnn_options = TfLiteXNNPackDelegateOptionsDefault();
+  cpu_options.SetXNNPackFlags(
+      default_xnn_options.flags |
+      TFLITE_XNNPACK_DELEGATE_FLAG_DYNAMIC_FULLY_CONNECTED);
   return absl::OkStatus();
 }
 
@@ -168,6 +180,31 @@ bool IsStreamingEncoder(const std::vector<absl::string_view>& input_names) {
 
 }  // namespace
 
+absl::Status AudioLiteRtCompiledModelExecutor::AudioEncoder::LoadLoRA(
+    uint32_t lora_id, const ModelAssets& model_assets) {
+  if (lora_manager_ == nullptr) {
+    ASSIGN_OR_RETURN(lora_manager_,
+                     LoraManager::Create(compiled_model_,
+                                         /*signature_name=*/"serving_default"));
+  }
+  return lora_manager_->LoadLoRA(lora_id, model_assets);
+}
+
+absl::Status AudioLiteRtCompiledModelExecutor::AudioEncoder::UseLoRA(
+    std::optional<uint32_t> lora_id) {
+  if (lora_id.has_value()) {
+    if (lora_manager_ == nullptr) {
+      return absl::FailedPreconditionError(
+          "LoRA manager is not initialized. Please load LoRA first.");
+    }
+    return lora_manager_->UseLoRA(lora_id.value());
+  }
+
+  // TODO: b/515389724 - Support unloading/clearing LoRA buffers from
+  // input_buffers_map_ when LoRA is deactivated for subsequent audio calls.
+  return absl::OkStatus();
+}
+
 absl::StatusOr<std::unique_ptr<AudioContext>> AudioStreamingContext::Clone()
     const {
   absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
@@ -222,7 +259,7 @@ AudioLiteRtCompiledModelExecutor::AudioStaticEncoder::Initialize() {
     options.SetHardwareAccelerators(litert::HwAccelerators::kGpu);
   } else if (executor_settings_.GetBackend() == Backend::CPU) {
     LITERT_ASSIGN_OR_RETURN(auto& cpu_options, options.GetCpuOptions());
-    cpu_options.SetNumThreads(executor_settings_.GetNumThreads());
+    RETURN_IF_ERROR(SetCpuOptions(executor_settings_, cpu_options));
     RETURN_IF_ERROR(SetCpuCacheOptions(
         weight_cache_file, AudioExecutorSettings::kEncoderName, cpu_options));
 
@@ -369,7 +406,7 @@ AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::Initialize() {
     options.SetHardwareAccelerators(litert::HwAccelerators::kGpu);
   } else if (executor_settings_.GetBackend() == Backend::CPU) {
     LITERT_ASSIGN_OR_RETURN(auto& cpu_options, options.GetCpuOptions());
-    cpu_options.SetNumThreads(executor_settings_.GetNumThreads());
+    RETURN_IF_ERROR(SetCpuOptions(executor_settings_, cpu_options));
 
     RETURN_IF_ERROR(SetCpuCacheOptions(
         weight_cache_file, AudioExecutorSettings::kEncoderName, cpu_options));
@@ -581,7 +618,7 @@ absl::Status AudioLiteRtCompiledModelExecutor::AudioAdapter::Initialize() {
     options.SetHardwareAccelerators(litert::HwAccelerators::kGpu);
   } else if (executor_settings_.GetBackend() == Backend::CPU) {
     LITERT_ASSIGN_OR_RETURN(auto& cpu_options, options.GetCpuOptions());
-    cpu_options.SetNumThreads(executor_settings_.GetNumThreads());
+    RETURN_IF_ERROR(SetCpuOptions(executor_settings_, cpu_options));
 
     RETURN_IF_ERROR(SetCpuCacheOptions(
         weight_cache_file, AudioExecutorSettings::kAdapterName, cpu_options));
@@ -675,7 +712,7 @@ AudioLiteRtCompiledModelExecutor::Create(
                      AudioStaticEncoder::Create(executor_settings, env,
                                                 audio_encoder_model));
   }
-  LITERT_ASSIGN_OR_RETURN(
+  ASSIGN_OR_RETURN(
       auto audio_adapter,
       AudioAdapter::Create(executor_settings, env, audio_adapter_model));
   const auto& tmp = audio_encoder->GetInputMaskBuffer();
@@ -766,9 +803,23 @@ absl::StatusOr<int> AudioLiteRtCompiledModelExecutor::EncodeInternal(
   LITERT_RETURN_IF_ERROR(
       audio_encoder_->GetMutableInputMaskBuffer().Write<uint8_t>(
           spectrogram_mask));
+
+  auto& input_buffers_map = audio_encoder_->GetMutableInputBuffersMap();
+  if (audio_encoder_->GetMutableLoraManager() != nullptr) {
+    auto current_lora_id =
+        audio_encoder_->GetMutableLoraManager()->GetCurrentLoRAId();
+    if (current_lora_id.has_value()) {
+      ASSIGN_OR_RETURN(
+          auto lora_buffers,
+          audio_encoder_->GetMutableLoraManager()->GetLoRABuffers());
+      for (auto& [name, buffer] : lora_buffers) {
+        input_buffers_map[name] = std::move(buffer);
+      }
+    }
+  }
+
   LITERT_RETURN_IF_ERROR(audio_encoder_->GetMutableCompiledModel().Run(
-      audio_encoder_->GetMutableInputBuffersMap(),
-      audio_encoder_->GetMutableOutputBuffersMap()));
+      input_buffers_map, audio_encoder_->GetMutableOutputBuffersMap()));
 
   ASSIGN_OR_RETURN(int chunk_valid_tokens,
                    GetValidCount(audio_encoder_->GetOutputMaskBuffer()));

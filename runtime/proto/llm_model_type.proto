@@ -167,6 +167,9 @@ message Gemma4 {
   // The end of audio token indicates the end of audio in the prompt.
   TokenUnion end_of_audio_token = 4;
 
+  // Whether to skip the Mel spectrogram extraction.
+  bool skip_mel_spectrogram_extraction = 19;
+
   // Options for tool calling.
   // Signifies the beginning of a tool call.
   string code_fence_start = 5;

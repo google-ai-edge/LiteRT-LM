@@ -15,6 +15,7 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_LLM_LITERT_MTP_DRAFTER_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_LLM_LITERT_MTP_DRAFTER_H_
 
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -50,7 +51,8 @@ class LlmLiteRtMtpDrafter {
       Environment& env, ModelResources& resources,
       const LlmExecutorSettings& executor_settings, CompiledModel& base_model,
       EmbeddingLookupManager& embedding_manager,
-      EmbeddingLookupManager& ple_manager);
+      std::optional<std::reference_wrapper<EmbeddingLookupManager>>
+          ple_manager);
 
   // Draft the next set of tokens using the MTP drafter model.
   // Inputs:
@@ -74,24 +76,23 @@ class LlmLiteRtMtpDrafter {
           output_kv_cache_buffers);
 
  private:
-  LlmLiteRtMtpDrafter(CompiledModel mtp_drafter_model,
-                      SimpleSignature drafter_signature,
-                      CompiledModel& base_model,
-                      SimpleSignature verify_signature,
-                      EmbeddingLookupManager& embedding_manager,
-                      EmbeddingLookupManager& ple_manager,
-                      std::unique_ptr<Sampler> drafter_sampler,
-                      std::unique_ptr<Sampler> verifier_sampler,
-                      std::vector<std::string> kv_cache_input_names,
-                      absl::flat_hash_map<absl::string_view, TensorBuffer>
-                          drafter_input_buffers,
-                      absl::flat_hash_map<absl::string_view, TensorBuffer>
-                          drafter_output_buffers,
-                      absl::flat_hash_map<absl::string_view, TensorBuffer>
-                          verifier_input_buffers,
-                      absl::flat_hash_map<absl::string_view, TensorBuffer>
-                          verifier_output_buffers,
-                      int num_draft_steps)
+  LlmLiteRtMtpDrafter(
+      CompiledModel mtp_drafter_model, SimpleSignature drafter_signature,
+      CompiledModel& base_model, SimpleSignature verify_signature,
+      EmbeddingLookupManager& embedding_manager,
+      std::optional<std::reference_wrapper<EmbeddingLookupManager>> ple_manager,
+      std::unique_ptr<Sampler> drafter_sampler,
+      std::unique_ptr<Sampler> verifier_sampler,
+      std::vector<std::string> kv_cache_input_names,
+      absl::flat_hash_map<absl::string_view, TensorBuffer>
+          drafter_input_buffers,
+      absl::flat_hash_map<absl::string_view, TensorBuffer>
+          drafter_output_buffers,
+      absl::flat_hash_map<absl::string_view, TensorBuffer>
+          verifier_input_buffers,
+      absl::flat_hash_map<absl::string_view, TensorBuffer>
+          verifier_output_buffers,
+      int num_draft_steps)
       : mtp_drafter_model_(std::move(mtp_drafter_model)),
         drafter_signature_(std::move(drafter_signature)),
         base_model_(base_model),
@@ -154,7 +155,7 @@ class LlmLiteRtMtpDrafter {
   SimpleSignature verify_signature_;
 
   EmbeddingLookupManager& embedding_manager_;
-  EmbeddingLookupManager& ple_manager_;
+  std::optional<std::reference_wrapper<EmbeddingLookupManager>> ple_manager_;
 
   // Greedy sampler with batch size 1.
   std::unique_ptr<Sampler> drafter_sampler_;

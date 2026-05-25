@@ -120,6 +120,8 @@ class Conversation(interfaces.AbstractConversation):
       self,
       message: str | Contents | Message | collections.abc.Mapping[str, Any],
   ) -> collections.abc.Mapping[str, Any]:
+    if not self._ptr:
+      raise RuntimeError("Conversation is closed.")
     current_message = normalize_message(message)
 
     while True:
@@ -153,6 +155,8 @@ class Conversation(interfaces.AbstractConversation):
       self,
       message: str | Contents | Message | collections.abc.Mapping[str, Any],
   ) -> collections.abc.Iterator[collections.abc.Mapping[str, Any]]:
+    if not self._ptr:
+      raise RuntimeError("Conversation is closed.")
     current_message = normalize_message(message)
 
     while True:
@@ -234,6 +238,8 @@ class Conversation(interfaces.AbstractConversation):
       self,
       message: str | Contents | Message | collections.abc.Mapping[str, Any],
   ) -> str:
+    if not self._ptr:
+      return ""
     msg_json = normalize_message(message)
     res_str = self._lib.litert_lm_conversation_render_message_to_string(
         self._ptr, json.dumps(msg_json)
@@ -243,3 +249,13 @@ class Conversation(interfaces.AbstractConversation):
   def cancel_process(self) -> None:
     if self._ptr:
       self._lib.litert_lm_conversation_cancel_process(self._ptr)
+
+  @property
+  def token_count(self) -> int:
+    """See base class."""
+    if not self._ptr:
+      raise RuntimeError("Conversation is closed.")
+    res = self._lib.litert_lm_conversation_get_token_count(self._ptr)
+    if res == -1:
+      raise RuntimeError("Failed to get token count.")
+    return res

@@ -1137,6 +1137,18 @@ LiteRtLmBenchmarkInfo* litert_lm_conversation_get_benchmark_info(
   return new LiteRtLmBenchmarkInfo{std::move(*benchmark_info)};
 }
 
+int litert_lm_conversation_get_token_count(LiteRtLmConversation* conversation) {
+  if (!conversation || !conversation->conversation) {
+    return -1;
+  }
+  absl::StatusOr<int> token_count = conversation->conversation->GetTokenCount();
+  if (!token_count.ok()) {
+    ABSL_LOG(ERROR) << "Failed to get token count: " << token_count.status();
+    return -1;
+  }
+  return *token_count;
+}
+
 LiteRtLmTokenizeResult* litert_lm_engine_tokenize(LiteRtLmEngine* engine,
                                                   const char* text) {
   if (!engine || !engine->engine || !text) {

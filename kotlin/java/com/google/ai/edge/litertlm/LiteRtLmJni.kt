@@ -278,6 +278,15 @@ internal object LiteRtLmJni {
   external fun nativeConversationGetBenchmarkInfo(conversationPointer: Long): BenchmarkInfo
 
   /**
+   * Gets the number of tokens in the conversation KV Cache.
+   *
+   * @param conversationPointer A pointer to the native conversation instance.
+   * @return The number of tokens.
+   * @throws LiteRtLmJniException if the underlying native method fails.
+   */
+  external fun nativeConversationGetTokenCount(conversationPointer: Long): Int
+
+  /**
    * Renders the message into a string for testing purposes.
    *
    * @param conversationPointer A pointer to the native conversation instance.

@@ -33,6 +33,7 @@
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_layout.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
+#include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/preprocessor/audio_preprocessor.h"
 #include "runtime/components/preprocessor/mel_filterbank.h"
@@ -183,6 +184,35 @@ bool AudioPreprocessorMiniAudio::GetNextWindowOfSamples(
   }
 }
 
+absl::StatusOr<std::vector<std::vector<float>>>
+AudioPreprocessorMiniAudio::GetFramedSegments(
+    const std::vector<float>& pcm_frames) {
+  std::vector<std::vector<float>> windowed_signals;
+  int input_start = 0;
+  while (GetNextWindowOfSamples(pcm_frames, input_start)) {
+    if (input_queue_.size() != config_.GetFrameLength()) {
+      return absl::InternalError(
+          absl::StrCat("Input queue size is not equal to frame length: ",
+                       input_queue_.size(), " vs ", config_.GetFrameLength()));
+    }
+    windowed_signals.push_back(input_queue_);
+  }
+
+  if (!config_.BufferLastFrame() && !input_queue_.empty() &&
+      input_queue_.size() < config_.GetFrameLength()) {
+    input_queue_.resize(config_.GetFrameLength(), 0.0f);
+    windowed_signals.push_back(input_queue_);
+    input_queue_.clear();
+    if (config_.GetSemicausalPadding()) {
+      samples_to_next_step_ = config_.GetFrameLength() - config_.GetHopLength();
+      input_queue_.resize(config_.GetHopLength(), 0.0f);
+    } else {
+      samples_to_next_step_ = config_.GetFrameLength();
+    }
+  }
+  return windowed_signals;
+}
+
 absl::Status AudioPreprocessorMiniAudio::PcmFramesToSpectrogram(
     absl::Span<const float> pcm_frames, std::vector<float>& spectrograms) {
   const float input_scale = config_.GetInputScale();
@@ -190,26 +220,20 @@ absl::Status AudioPreprocessorMiniAudio::PcmFramesToSpectrogram(
   std::vector<float> scaled_pcm_frames(pcm_frames.size(), 0);
   absl::c_transform(pcm_frames, scaled_pcm_frames.begin(),
                     [&input_scale](float x) { return x * input_scale; });
-  int total_samples = pcm_frames.size();
-  const int num_frames =
-      1 + (total_samples - config_.GetFrameLength()) / config_.GetHopLength();
+
+  ASSIGN_OR_RETURN(auto raw_windowed_signals,
+                   GetFramedSegments(scaled_pcm_frames));
 
   std::vector<std::vector<float>> windowed_signals;
-  windowed_signals.reserve(std::max(0, num_frames));
-  int input_start = 0;
-  while (GetNextWindowOfSamples(scaled_pcm_frames, input_start)) {
-    if (input_queue_.size() != config_.GetFrameLength()) {
-      return absl::InternalError(
-          absl::StrCat("Input queue size is not equal to frame length: ",
-                       input_queue_.size(), " vs ", config_.GetFrameLength()));
-    }
+  windowed_signals.reserve(raw_windowed_signals.size());
+  for (int i = 0; i < raw_windowed_signals.size(); ++i) {
+    const auto& input_frame = raw_windowed_signals[i];
     windowed_signals.push_back(std::vector<float>(config_.GetFrameLength(), 0));
     std::vector<float>& current_frame = windowed_signals.back();
-    current_frame = input_queue_;
-    current_frame[0] = input_queue_[0] * (1 - pre_emphasis_factor);
-    for (int i = 1; i < config_.GetFrameLength(); ++i) {
-      current_frame[i] =
-          input_queue_[i] - pre_emphasis_factor * input_queue_[i - 1];
+    current_frame[0] = input_frame[0] * (1 - pre_emphasis_factor);
+    for (int j = 1; j < config_.GetFrameLength(); ++j) {
+      current_frame[j] =
+          input_frame[j] - pre_emphasis_factor * input_frame[j - 1];
     }
   }
   const std::vector<float> hanning_window =
@@ -320,23 +344,52 @@ absl::StatusOr<InputAudio> AudioPreprocessorMiniAudio::Preprocess(
                                 config_.GetSampleRateHz(), decoded_pcm_frames));
     pcm_frames = decoded_pcm_frames;
   }
-  std::vector<float> spectrograms;
-  RETURN_IF_ERROR(PcmFramesToSpectrogram(pcm_frames, spectrograms));
+  if (!config_.SkipMelSpectrogramExtraction()) {
+    std::vector<float> spectrograms;
+    RETURN_IF_ERROR(PcmFramesToSpectrogram(pcm_frames, spectrograms));
 
-  std::vector<float> log_mel_spectrograms;
-  RETURN_IF_ERROR(ToLogMelSpectrogram(spectrograms, log_mel_spectrograms));
+    std::vector<float> log_mel_spectrograms;
+    RETURN_IF_ERROR(ToLogMelSpectrogram(spectrograms, log_mel_spectrograms));
 
-  const int num_frames = log_mel_spectrograms.size() / config_.GetNumMelBins();
-  RankedTensorType mel_tensor_type(
-      GetElementType<float>(),
-      Layout(Dimensions({1, num_frames, config_.GetNumMelBins()})));
-  LITERT_ASSIGN_OR_RETURN(
-      auto mel_spectrograms_tensor,
-      TensorBuffer::CreateManagedHostMemory(
-          mel_tensor_type, log_mel_spectrograms.size() * sizeof(float)));
-  LITERT_RETURN_IF_ERROR(mel_spectrograms_tensor.Write<float>(
-      absl::MakeSpan(log_mel_spectrograms)));
-  return InputAudio(std::move(mel_spectrograms_tensor));
+    const int num_frames =
+        log_mel_spectrograms.size() / config_.GetNumMelBins();
+    RankedTensorType mel_tensor_type(
+        GetElementType<float>(),
+        Layout(Dimensions({1, num_frames, config_.GetNumMelBins()})));
+    LITERT_ASSIGN_OR_RETURN(
+        auto mel_spectrograms_tensor,
+        TensorBuffer::CreateManagedHostMemory(
+            mel_tensor_type, log_mel_spectrograms.size() * sizeof(float)));
+    LITERT_RETURN_IF_ERROR(mel_spectrograms_tensor.Write<float>(
+        absl::MakeSpan(log_mel_spectrograms)));
+    return InputAudio(std::move(mel_spectrograms_tensor));
+  } else {
+    std::vector<float> pcm_vector(pcm_frames.begin(), pcm_frames.end());
+    ASSIGN_OR_RETURN(auto windowed_signals, GetFramedSegments(pcm_vector));
+
+    const int num_frames = windowed_signals.size();
+    if (num_frames == 0) {
+      return absl::FailedPreconditionError(
+          "Not enough samples to form any frame.");
+    }
+    RankedTensorType mel_tensor_type(
+        GetElementType<float>(),
+        Layout(Dimensions({1, num_frames, config_.GetFrameLength()})));
+    LITERT_ASSIGN_OR_RETURN(
+        auto mel_spectrograms_tensor,
+        TensorBuffer::CreateManagedHostMemory(
+            mel_tensor_type,
+            num_frames * config_.GetFrameLength() * sizeof(float)));
+
+    std::vector<float> flat_frames;
+    flat_frames.reserve(num_frames * config_.GetFrameLength());
+    for (const auto& frame : windowed_signals) {
+      flat_frames.insert(flat_frames.end(), frame.begin(), frame.end());
+    }
+    LITERT_RETURN_IF_ERROR(
+        mel_spectrograms_tensor.Write<float>(absl::MakeSpan(flat_frames)));
+    return InputAudio(std::move(mel_spectrograms_tensor));
+  }
 }
 
 }  // namespace litert::lm

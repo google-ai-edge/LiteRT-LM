@@ -31,6 +31,7 @@
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_common.h"  // from @litert
 #include "litert/cc/litert_compiled_model.h"  // from @litert
+#include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_layout.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
@@ -502,6 +503,185 @@ TEST(AudioPreprocessorMiniAudioTest, UsmPreprocessingCopy) {
   for (int i = 0; i < preprocessed_mel_spectrogram.size(); ++i) {
     EXPECT_NEAR(preprocessed_mel_spectrogram[i], frontend_mel_spectrogram[i],
                 5e-4);
+  }
+}
+
+TEST(AudioPreprocessorMiniAudioTest, SkipMelSpectrogramExtraction) {
+  AudioPreprocessorConfig config =
+      AudioPreprocessorConfig::CreateDefaultUsmConfig();
+  config.SetSkipMelSpectrogramExtraction(true);
+  ASSERT_OK_AND_ASSIGN(auto raw_audio_data, GetRawAudioData());
+  std::vector<float> pcm_frames;
+  ASSERT_OK(AudioPreprocessorMiniAudio::DecodeAudio(
+      raw_audio_data, config.GetNumChannels(), config.GetSampleRateHz(),
+      pcm_frames));
+
+  // Create MiniAudio preprocessor.
+  ASSERT_OK_AND_ASSIGN(auto preprocessor,
+                       AudioPreprocessorMiniAudio::Create(config));
+  ASSERT_OK_AND_ASSIGN(auto preprocessed_audio,
+                       preprocessor->Preprocess(InputAudio(raw_audio_data)));
+  ASSERT_OK_AND_ASSIGN(auto preprocessed_tensor,
+                       preprocessed_audio.GetPreprocessedAudioTensor());
+
+  auto tensor_type_or = preprocessed_tensor->TensorType();
+  ASSERT_TRUE(tensor_type_or.HasValue());
+  auto tensor_type = *tensor_type_or;
+  EXPECT_EQ(tensor_type.ElementType(), GetElementType<float>());
+
+  auto dims = tensor_type.Layout().Dimensions();
+  ASSERT_EQ(dims.size(), 3);
+  EXPECT_EQ(dims[0], 1);
+
+  const int expected_num_frames =
+      1 + (pcm_frames.size() - config.GetFrameLength()) / config.GetHopLength();
+  EXPECT_EQ(dims[1], expected_num_frames);
+  EXPECT_EQ(dims[2], config.GetFrameLength());
+
+  // Verify target content: the written pcm_frames matches the decoded audio.
+  ASSERT_OK_AND_ASSIGN(auto data, GetDataAsVector<float>(*preprocessed_tensor));
+  EXPECT_EQ(data.size(), expected_num_frames * config.GetFrameLength());
+
+  const int frame_length = config.GetFrameLength();
+  const int hop_length = config.GetHopLength();
+  for (int f = 0; f < expected_num_frames; ++f) {
+    for (int offset = 0; offset < frame_length; ++offset) {
+      int pcm_idx = f * hop_length + offset;
+      int data_idx = f * frame_length + offset;
+      if (pcm_idx < pcm_frames.size()) {
+        EXPECT_NEAR(data[data_idx], pcm_frames[pcm_idx], 1e-6);
+      } else {
+        EXPECT_NEAR(data[data_idx], 0.0f, 1e-6);
+      }
+    }
+  }
+}
+
+TEST(AudioPreprocessorMiniAudioTest, SkipMelSpectrogramExtractionStreaming) {
+  AudioPreprocessorConfig config =
+      AudioPreprocessorConfig::CreateDefaultUsmConfig();
+  config.SetSkipMelSpectrogramExtraction(true);
+  config.SetBufferLastFrame(true);
+  config.SetFrameLength(640);
+  config.SetHopLength(640);  // No overlap.
+
+  // Create MiniAudio preprocessor.
+  ASSERT_OK_AND_ASSIGN(auto preprocessor,
+                       AudioPreprocessorMiniAudio::Create(config));
+
+  // Generate toy PCM data: 1000 sequential floats.
+  std::vector<float> pcm_data(1000);
+  for (int i = 0; i < pcm_data.size(); ++i) {
+    pcm_data[i] = static_cast<float>(i);
+  }
+
+  // Chunk 1: First 600 floats.
+  std::vector<float> chunk1(pcm_data.begin(), pcm_data.begin() + 600);
+  auto preprocessed_audio1_or = preprocessor->Preprocess(InputAudio(chunk1));
+  EXPECT_FALSE(preprocessed_audio1_or.ok());
+  EXPECT_EQ(preprocessed_audio1_or.status().code(),
+            absl::StatusCode::kFailedPrecondition);
+
+  // Chunk 2: Next 400 floats (making 1000 total).
+  std::vector<float> chunk2(pcm_data.begin() + 600, pcm_data.end());
+  ASSERT_OK_AND_ASSIGN(auto preprocessed_audio2,
+                       preprocessor->Preprocess(InputAudio(chunk2)));
+  ASSERT_OK_AND_ASSIGN(auto preprocessed_tensor2,
+                       preprocessed_audio2.GetPreprocessedAudioTensor());
+
+  // Verify Chunk 2 yields 1 frame (since 600 + 400 = 1000 >= 640).
+  auto tensor_type_or2 = preprocessed_tensor2->TensorType();
+  ASSERT_TRUE(tensor_type_or2.HasValue());
+  {
+    auto dims = tensor_type_or2->Layout().Dimensions();
+    ASSERT_EQ(dims.size(), 3);
+    EXPECT_EQ(dims[0], 1);
+    EXPECT_EQ(dims[1], 1);
+    EXPECT_EQ(dims[2], 640);
+  }
+
+  // Verify the single frame starts with chunk1, then chunk2.
+  ASSERT_OK_AND_ASSIGN(auto data,
+                       GetDataAsVector<float>(*preprocessed_tensor2));
+  EXPECT_EQ(data.size(), 640);
+  for (int i = 0; i < 640; ++i) {
+    EXPECT_NEAR(data[i], pcm_data[i], 1e-6);
+  }
+}
+
+TEST(AudioPreprocessorMiniAudioTest,
+     SkipMelSpectrogramExtractionWithTrailingZeroPadding) {
+  AudioPreprocessorConfig config =
+      AudioPreprocessorConfig::CreateDefaultUsmConfig();
+  config.SetSkipMelSpectrogramExtraction(true);
+  config.SetBufferLastFrame(false);
+  config.SetFrameLength(640);
+  config.SetHopLength(640);  // No overlap.
+
+  // Create MiniAudio preprocessor.
+  ASSERT_OK_AND_ASSIGN(auto preprocessor,
+                       AudioPreprocessorMiniAudio::Create(config));
+
+  // Generate toy PCM data: 1000 sequential floats.
+  std::vector<float> pcm_data(1000);
+  for (int i = 0; i < pcm_data.size(); ++i) {
+    pcm_data[i] = static_cast<float>(i);
+  }
+
+  // Chunk 1: First 600 floats.
+  std::vector<float> chunk1(pcm_data.begin(), pcm_data.begin() + 600);
+  ASSERT_OK_AND_ASSIGN(auto preprocessed_audio1,
+                       preprocessor->Preprocess(InputAudio(chunk1)));
+  ASSERT_OK_AND_ASSIGN(auto preprocessed_tensor1,
+                       preprocessed_audio1.GetPreprocessedAudioTensor());
+
+  // Verify Chunk 1 yields exactly 1 frame (padded from 600 to 640).
+  auto tensor_type_or1 = preprocessed_tensor1->TensorType();
+  ASSERT_TRUE(tensor_type_or1.HasValue());
+  {
+    auto dims = tensor_type_or1->Layout().Dimensions();
+    ASSERT_EQ(dims.size(), 3);
+    EXPECT_EQ(dims[0], 1);
+    EXPECT_EQ(dims[1], 1);
+    EXPECT_EQ(dims[2], 640);
+  }
+
+  ASSERT_OK_AND_ASSIGN(auto data1,
+                       GetDataAsVector<float>(*preprocessed_tensor1));
+  EXPECT_EQ(data1.size(), 640);
+  for (int i = 0; i < 600; ++i) {
+    EXPECT_NEAR(data1[i], chunk1[i], 1e-6);
+  }
+  for (int i = 600; i < 640; ++i) {
+    EXPECT_NEAR(data1[i], 0.0f, 1e-6);
+  }
+
+  // Chunk 2: Next 400 floats.
+  std::vector<float> chunk2(pcm_data.begin() + 600, pcm_data.end());
+  ASSERT_OK_AND_ASSIGN(auto preprocessed_audio2,
+                       preprocessor->Preprocess(InputAudio(chunk2)));
+  ASSERT_OK_AND_ASSIGN(auto preprocessed_tensor2,
+                       preprocessed_audio2.GetPreprocessedAudioTensor());
+
+  // Verify Chunk 2 yields exactly 1 frame (padded from 400 to 640).
+  auto tensor_type_or2 = preprocessed_tensor2->TensorType();
+  ASSERT_TRUE(tensor_type_or2.HasValue());
+  {
+    auto dims = tensor_type_or2->Layout().Dimensions();
+    ASSERT_EQ(dims.size(), 3);
+    EXPECT_EQ(dims[0], 1);
+    EXPECT_EQ(dims[1], 1);
+    EXPECT_EQ(dims[2], 640);
+  }
+
+  ASSERT_OK_AND_ASSIGN(auto data2,
+                       GetDataAsVector<float>(*preprocessed_tensor2));
+  EXPECT_EQ(data2.size(), 640);
+  for (int i = 0; i < 400; ++i) {
+    EXPECT_NEAR(data2[i], chunk2[i], 1e-6);
+  }
+  for (int i = 400; i < 640; ++i) {
+    EXPECT_NEAR(data2[i], 0.0f, 1e-6);
   }
 }
 

@@ -14,16 +14,28 @@
 
 from __future__ import annotations
 
+import dataclasses
 import http.server
+import io
 
 import click
 
 import litert_lm
+from litert_lm_builder import litertlm_peek
 from litert_lm_cli import model
 
 
 class LiteRTLMServer(http.server.HTTPServer):
-  """Custom HTTP server tracking persistent LiteRT-LM engine lifecycles."""
+  """Custom HTTP server tracking persistent LiteRT-LM engine lifecycles.
+
+  Attributes:
+    litert_lm_engine: The LiteRT-LM engine instance, or None if not initialized.
+    model_id: The identifier of the model currently loaded in the engine, or
+      None.
+    backend: The hardware backend used by the current engine, or None.
+    max_num_tokens: The maximum number of tokens configured for the current
+      engine, or None.
+  """
 
   def __init__(
       self,
@@ -33,10 +45,112 @@ class LiteRTLMServer(http.server.HTTPServer):
     super().__init__(server_address, RequestHandlerClass)
     self.litert_lm_engine: litert_lm.Engine | None = None
     self.model_id: str | None = None
+    self.backend: litert_lm.Backend | None = None
+    self.max_num_tokens: int | None = None
+
+
+def _select_backend(model_path: str) -> litert_lm.Backend:
+  """Inspects the .litertlm file metadata to select the appropriate execution backend.
+
+  Args:
+    model_path: The absolute filesystem path to the .litertlm model bundle.
+
+  Returns:
+    Backend.GPU() if the model metadata specifies 'gpu_artisan' as the backend
+    constraint, otherwise Backend.CPU().
+  """
+  try:
+    dummy_out = io.StringIO()
+    metadata = litertlm_peek.read_litertlm_header(model_path, dummy_out)
+  except Exception as e:  # pylint: disable=broad-exception-caught
+    click.echo(
+        click.style(f"Failed to inspect model metadata: {e!r}", fg="yellow")
+    )
+    return litert_lm.Backend.CPU()
+
+  section_metadata = metadata.SectionMetadata()
+  if not section_metadata:
+    return litert_lm.Backend.CPU()
+  for i in range(section_metadata.ObjectsLength()):
+    section = section_metadata.Objects(i)
+    if not section or section.ItemsLength() == 0:
+      continue
+    for j in range(section.ItemsLength()):
+      item_dict = litertlm_peek.kvp_to_dict(section.Items(j))
+      if item_dict.get("key") != "backend_constraint":
+        continue
+      val = item_dict.get("value")
+      if isinstance(val, str) and val.lower() == "gpu_artisan":
+        return litert_lm.Backend.GPU()
+
+  return litert_lm.Backend.CPU()
+
+
+@dataclasses.dataclass(frozen=True)
+class ModelSpec:
+  """Represents a parsed model specification.
+
+  Attributes:
+    model_id: The identifier for the model.
+    backend: The hardware backend to use, or None for auto-selection.
+    max_num_tokens: The maximum number of tokens, or None for model default.
+  """
+
+  model_id: str
+  backend: litert_lm.Backend | None = None
+  max_num_tokens: int | None = None
+
+
+def parse_model_spec(model_spec: str) -> ModelSpec:
+  """Parses model spec in format 'model_id[,backend][,max_tokens]'."""
+  parts = model_spec.split(",")
+  if not parts or not parts[0]:
+    raise ValueError("Empty model spec")
+
+  # Trailing comma is invalid (e.g., "model,").
+  if len(parts) > 1 and not parts[-1]:
+    raise ValueError(f"Trailing comma in model spec: {model_spec}")
+
+  model_id = parts[0]
+  backend = None
+  max_tokens = None
+
+  if len(parts) > 1 and parts[1]:
+    backend_str = parts[1]
+    backend_lower = backend_str.lower()
+    if backend_lower == "gpu":
+      backend = litert_lm.Backend.GPU()
+    elif backend_lower == "npu":
+      backend = litert_lm.Backend.NPU()
+    elif backend_lower == "cpu":
+      backend = litert_lm.Backend.CPU()
+    else:
+      raise ValueError(
+          f"Unavailable backend {backend_str!r}, available backends are 'cpu'"
+          " and 'gpu'"
+      )
+
+  if len(parts) > 2 and parts[2]:
+    try:
+      max_tokens = int(parts[2])
+    except ValueError as e:
+      raise ValueError(f"Invalid max_tokens: {parts[2]}") from e
+
+  if len(parts) > 3:
+    raise ValueError(f"Too many parameters in model spec: {model_spec}")
+
+  # TODO: b/514897675 - Add a cap on max_tokens to prevent OOM.
+  return ModelSpec(
+      model_id=model_id, backend=backend, max_num_tokens=max_tokens
+  )
 
 
 def get_or_initialize_server_engine(
-    server: LiteRTLMServer, model_id: str
+    server: LiteRTLMServer,
+    *,
+    model_id: str,
+    backend: litert_lm.Backend | None = None,
+    max_num_tokens: int | None = None,
 ) -> litert_lm.Engine:
   """Retrieves the persistent server engine or initializes it on first request.
 
@@ -52,33 +166,56 @@ def get_or_initialize_server_engine(
   Args:
     server: The active custom LiteRTLMServer instance object.
     model_id: The requested model identifier string.
+    backend: The hardware backend to use. If None, it will be auto-selected.
+    max_num_tokens: The maximum number of tokens. If None, uses model default.
 
   Returns:
     The shared LiteRT-LM Engine context object.
 
   Raises:
     FileNotFoundError: If the model package path does not exist.
-    RuntimeError: If a different model ID is requested after initialization.
   """
+  if backend is None:
+    m = model.Model.from_model_id(model_id)
+    backend = _select_backend(m.model_path)
+
   if server.litert_lm_engine is not None:
-    # TODO: b/513076049 - support multiple engines.
-    if server.model_id != model_id:
-      raise RuntimeError(
-          f"Server already initialized with model {server.model_id!r}. "
-          f"Switching to {model_id!r} is not supported."
-      )
-    return server.litert_lm_engine
+    if (
+        server.model_id == model_id
+        and server.backend == backend
+        and server.max_num_tokens == max_num_tokens
+    ):
+      return server.litert_lm_engine
+
+    click.echo(
+        click.style(
+            f"Re-initializing engine (model: {model_id}, backend: {backend},"
+            f" max_num_tokens: {max_num_tokens})",
+            fg="yellow",
+        )
+    )
+    # TODO: b/513076049 - Support multiple concurrent engines instead of
+    # re-initializing (which is disruptive to other clients).
+    server.litert_lm_engine.__exit__(None, None, None)
+    server.litert_lm_engine = None
+    server.model_id = None
+    server.backend = None
+    server.max_num_tokens = None
 
   m = model.Model.from_model_id(model_id)
+
   if not m.exists():
     raise FileNotFoundError(f"Model {model_id} not found")
 
   click.echo(
       click.style(f"Initializing engine for model: {m.model_path}", fg="cyan")
   )
-  backend = model.parse_backend("cpu", model_obj=m)
-  engine = litert_lm.Engine(m.model_path, backend=backend)
+  engine = litert_lm.Engine(
+      m.model_path, backend=backend, max_num_tokens=max_num_tokens
+  )
   engine.__enter__()
   server.litert_lm_engine = engine
   server.model_id = model_id
+  server.backend = backend
+  server.max_num_tokens = max_num_tokens
   return engine

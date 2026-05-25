@@ -225,7 +225,9 @@ Gemma4DataProcessor::Create(Gemma4DataProcessorConfig config,
           /* non_zero_hanning= */ false,
           /* periodic_hanning= */ true,
           /* fft_padding_type= */
-          AudioPreprocessorConfig::FftPaddingType::kCenter)));
+          AudioPreprocessorConfig::FftPaddingType::kCenter,
+          /*skip_mel_spectrogram_extraction=*/
+          config.skip_mel_spectrogram_extraction)));
 #if defined(LITERT_LM_FST_CONSTRAINTS_DISABLED)
   if (enable_constrained_decoding) {
     return absl::FailedPreconditionError(

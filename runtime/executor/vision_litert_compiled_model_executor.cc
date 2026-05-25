@@ -61,6 +61,7 @@
 #include "runtime/executor/vision_executor_settings.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/file_util.h"
+#include "tflite/delegates/xnnpack/xnnpack_delegate.h"  // from @litert
 #include "runtime/util/status_macros.h"  // NOLINT
 
 namespace litert::lm {
@@ -106,6 +107,18 @@ absl::Status SetGpuOptions(const VisionExecutorSettings& executor_settings,
 #endif  // !__APPLE__
   gpu_options.SetMadviseOriginalSharedTensors(true);
   gpu_options.SetConvertWeightsOnGpu(true);
+  return absl::OkStatus();
+}
+
+// Set the default CPU options for the model.
+absl::Status SetCpuOptions(const VisionExecutorSettings& executor_settings,
+                           litert::CpuOptions& cpu_options) {
+  // Set the number of threads to 4 by default.
+  cpu_options.SetNumThreads(4);
+  auto default_xnn_options = TfLiteXNNPackDelegateOptionsDefault();
+  cpu_options.SetXNNPackFlags(
+      default_xnn_options.flags |
+      TFLITE_XNNPACK_DELEGATE_FLAG_DYNAMIC_FULLY_CONNECTED);
   return absl::OkStatus();
 }
 
@@ -213,8 +226,7 @@ absl::Status VisionLiteRtCompiledModelExecutor::VisionEncoder::Initialize() {
     case Backend::CPU: {
       // TODO: b/403132820 - Add accelerator compilation options for XNNPACK.
       LITERT_ASSIGN_OR_RETURN(auto& cpu_options, options.GetCpuOptions());
-      // Set the number of threads to 4 by default.
-      cpu_options.SetNumThreads(4);
+      RETURN_IF_ERROR(SetCpuOptions(vision_executor_settings_, cpu_options));
       RETURN_IF_ERROR(SetCpuCacheOptions(
           weight_cache_file,
           /*logging_prefix=*/VisionExecutorSettings::kEncoderName,
@@ -307,8 +319,7 @@ absl::Status VisionLiteRtCompiledModelExecutor::VisionAdapter::Initialize() {
     case Backend::CPU: {
       // TODO: b/403132820 - Add accelerator compilation options for XNNPACK.
       LITERT_ASSIGN_OR_RETURN(auto& cpu_options, options.GetCpuOptions());
-      // Set the number of threads to 4 by default.
-      cpu_options.SetNumThreads(4);
+      RETURN_IF_ERROR(SetCpuOptions(vision_executor_settings_, cpu_options));
       RETURN_IF_ERROR(SetCpuCacheOptions(weight_cache_file,
                                          VisionExecutorSettings::kAdapterName,
                                          cpu_options));

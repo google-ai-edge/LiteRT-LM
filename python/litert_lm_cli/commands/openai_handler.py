@@ -444,7 +444,7 @@ class OpenAIHandler(http.server.BaseHTTPRequestHandler):
       self.send_error(400, "Invalid JSON")
       return
 
-    model_id = body.get("model")
+    model_spec = body.get("model")
     messages = body.get("messages")
     if isinstance(messages, list) and messages:
       last_msg = messages[-1]
@@ -452,13 +452,25 @@ class OpenAIHandler(http.server.BaseHTTPRequestHandler):
     else:
       prompt = body.get("input")
 
-    if not model_id or not prompt:
+    if not model_spec or not prompt:
       self.send_error(400, "Missing model or input/messages")
       return
 
     try:
+      spec = serve_util.parse_model_spec(model_spec)
+      model_id = spec.model_id
+    except ValueError as e:
+      self.send_error(400, "".join(traceback.format_exception_only(e)))
+      return
+
+    try:
       assert isinstance(self.server, serve_util.LiteRTLMServer)
-      engine = serve_util.get_or_initialize_server_engine(self.server, model_id)
+      engine = serve_util.get_or_initialize_server_engine(
+          self.server,
+          model_id=model_id,
+          backend=spec.backend,
+          max_num_tokens=spec.max_num_tokens,
+      )
     except FileNotFoundError as e:
       self.send_error(404, "".join(traceback.format_exception_only(e)))
       return
@@ -486,7 +498,7 @@ class OpenAIHandler(http.server.BaseHTTPRequestHandler):
           self._handle_chat_completions(
               conv,
               prompt,
-              model_id,
+              model_spec,
               stream,
               now_str=now_str,
               created_ts=created_ts,
@@ -498,7 +510,7 @@ class OpenAIHandler(http.server.BaseHTTPRequestHandler):
               stream,
               now_str=now_str,
               created_ts=created_ts,
-              model_id=model_id,
+              model_id=model_spec,
           )
 
     except Exception as e:  # pylint: disable=broad-exception-caught

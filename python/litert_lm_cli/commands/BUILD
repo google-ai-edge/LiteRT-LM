@@ -32,6 +32,7 @@ pytype_strict_library(
     imports = [".."],
     deps = [
         "//python/litert_lm",
+        "//python/litert_lm_builder:litertlm_peek",
         "//python/litert_lm_cli:help_formatter",
         "//python/litert_lm_cli:model",
         requirement("click"),
@@ -125,39 +126,6 @@ pytype_strict_library(
     ] + select({
         "//conditions:default": [],
     }),
-)
-
-py_test(
-    name = "serve_gemini_integration_test",
-    srcs = ["serve_gemini_integration_test.py"],
-    data = ["//runtime/e2e_tests/data:gemma3-1b-it-int4-litertlm"],
-    tags = [
-        "manual",
-        "nomacos",
-        "nowindows",
-    ],
-    deps = [
-        ":serve",
-        "//python/litert_lm_cli:model",
-        "@absl_py//absl/testing:absltest",
-        "//third_party/py/google/genai",
-    ],
-)
-
-py_test(
-    name = "serve_openai_integration_test",
-    srcs = ["serve_openai_integration_test.py"],
-    data = ["//runtime/e2e_tests/data:gemma3-1b-it-int4-litertlm"],
-    tags = [
-        "manual",
-        "nomacos",
-        "nowindows",
-    ],
-    deps = [
-        ":serve",
-        "//python/litert_lm_cli:model",
-        "@absl_py//absl/testing:absltest",
-    ],
 )
 
 py_test(

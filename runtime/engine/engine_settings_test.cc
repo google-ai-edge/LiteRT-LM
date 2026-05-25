@@ -958,6 +958,25 @@ TEST(SessionConfigTest, SetAndGetScopedLoraFile) {
   EXPECT_EQ(session_config.GetScopedLoraFile(), nullptr);
 }
 
+TEST(SessionConfigTest, SetAndGetAudioScopedLoraFile) {
+  SessionConfig session_config = SessionConfig::CreateDefault();
+  EXPECT_EQ(session_config.GetAudioScopedLoraFile(), nullptr);
+  const std::string lora_path =
+      ::testing::TempDir() + "/set_and_get_audio_scoped_lora_file.bin";
+  {
+    // Create an empty file.
+    std::ofstream ofs(lora_path);
+  }
+  ASSERT_OK_AND_ASSIGN(::litert::ScopedFile scoped_file,
+                       ::litert::ScopedFile::Open(lora_path));
+  auto file_ptr =
+      std::make_shared<::litert::ScopedFile>(std::move(scoped_file));
+  session_config.SetAudioScopedLoraFile(file_ptr);
+  EXPECT_EQ(session_config.GetAudioScopedLoraFile(), file_ptr);
+  session_config.SetAudioScopedLoraFile(nullptr);
+  EXPECT_EQ(session_config.GetAudioScopedLoraFile(), nullptr);
+}
+
 TEST(SessionConfigTest, MaybeUpdateAndValidate) {
   auto model_assets = ModelAssets::Create("test_model_path_1");
   ASSERT_OK(model_assets);

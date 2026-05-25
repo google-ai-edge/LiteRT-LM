@@ -373,6 +373,16 @@ class EngineTest(LiteRtLmTestBase):
       message = conversation.send_message(user_message)
       self.assertEqual(message["role"], "assistant")
 
+  def test_conversation_token_count(self):
+    with (
+        self._create_engine() as engine,
+        engine.create_conversation() as conversation,
+    ):
+      self.assertEqual(conversation.token_count, 0)
+      user_message = {"role": "user", "content": "Hello world!"}
+      conversation.send_message(user_message)
+      self.assertEqual(conversation.token_count, 10)
+
   def test_create_conversation_with_extra_context(self):
     extra_context = {"key": "value"}
     with (

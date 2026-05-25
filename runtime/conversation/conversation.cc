@@ -600,15 +600,23 @@ absl::Status Conversation::SendMessageAsync(
         return;
       }
 
-      if (!session_->SaveCheckpoint(kChannelContentCheckpoint).ok()) {
-        (*internal_callback)(absl::InternalError(
-            "Failed to save checkpoint for channel content."));
+      if (responses->GetTaskState() == TaskState::kCancelled ||
+          responses->GetTaskState() == TaskState::kMaxNumTokensReached) {
+        (*internal_callback)(responses);
         return;
       }
 
-      if (!run_prefill().ok()) {
-        (*internal_callback)(absl::InternalError("Failed to start prefill."));
-        return;
+      if (responses->GetTaskState() == TaskState::kDone) {
+        if (!session_->SaveCheckpoint(kChannelContentCheckpoint).ok()) {
+          (*internal_callback)(absl::InternalError(
+              "Failed to save checkpoint for channel content."));
+          return;
+        }
+
+        if (!run_prefill().ok()) {
+          (*internal_callback)(absl::InternalError("Failed to start prefill."));
+          return;
+        }
       }
     };
     ASSIGN_OR_RETURN(auto refill_task_controller,
@@ -642,6 +650,10 @@ absl::Status Conversation::RunTextScoringAsync(
                                              /*store_token_lengths=*/true));
   AddTaskController(optional_args.task_group_id, std::move(task_controller));
   return absl::OkStatus();
+}
+
+absl::StatusOr<int> Conversation::GetTokenCount() const {
+  return session_->GetCurrentStep();
 }
 
 absl::StatusOr<BenchmarkInfo> Conversation::GetBenchmarkInfo() {

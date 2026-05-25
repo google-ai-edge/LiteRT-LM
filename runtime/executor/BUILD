@@ -148,6 +148,7 @@ cc_library(
         "//runtime/util:model_asset_bundle_resources",
         "//runtime/util:scoped_file",
         "//runtime/util:tensor_buffer_util",
+        "@litert//tflite/delegates/xnnpack:xnnpack_delegate",
         "@litert//tflite/types:half",
     ] + select({
         "@litert//litert:litert_link_capi_so": [
@@ -838,6 +839,7 @@ cc_library(
         "//runtime/util:file_util",
         "//runtime/util:litert_status_util",
         "//runtime/util:scoped_file",
+        "@litert//tflite/delegates/xnnpack:xnnpack_delegate",
     ] + select({
         "@litert//litert:litert_link_capi_so": [
             "@litert//litert/cc:litert_api_with_dynamic_runtime",
@@ -900,6 +902,7 @@ cc_library(
     deps = [
         ":audio_executor_settings",
         ":audio_executor_utils",
+        ":executor_settings_base",
         ":llm_executor_io_types",
         "@com_google_absl//absl/status:statusor",
         "//runtime/engine:io_types",
@@ -934,6 +937,8 @@ cc_library(
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/types:span",
         "@litert//litert/cc:litert_tensor_buffer_types",
+        "//runtime/components:lora",
+        "//runtime/components:lora_manager",
         "//runtime/components:model_resources",
         "//runtime/engine:io_types",
         "//runtime/util:convert_tensor_buffer",
@@ -941,6 +946,7 @@ cc_library(
         "//runtime/util:litert_status_util",
         "//runtime/util:scoped_file",
         "//runtime/util:tensor_buffer_util",
+        "@litert//tflite/delegates/xnnpack:xnnpack_delegate",
         "@litert//tflite/types:half",
     ] + select({
         "@litert//litert:litert_link_capi_so": [

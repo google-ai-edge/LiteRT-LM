@@ -56,6 +56,9 @@ struct Gemma4DataProcessorConfig {
   // The string for end of audio token.
   std::string eoa_token = "<audio|>";
 
+  // Whether to skip the Mel spectrogram extraction.
+  bool skip_mel_spectrogram_extraction = false;
+
   // Signifies the beginning of a tool call.
   std::string code_fence_start = "<|tool_call>";
   // Signifies the end of tool call.

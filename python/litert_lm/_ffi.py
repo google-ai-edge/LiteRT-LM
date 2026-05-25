@@ -296,6 +296,8 @@ def _setup_lib_signatures(lib):
       ctypes.c_void_p,
       c_string_p,
   ]
+  lib.litert_lm_conversation_get_token_count.restype = ctypes.c_int
+  lib.litert_lm_conversation_get_token_count.argtypes = [ctypes.c_void_p]
 
   # interfaces.Responses
   lib.litert_lm_responses_delete.argtypes = [ctypes.c_void_p]

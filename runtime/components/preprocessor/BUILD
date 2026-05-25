@@ -40,6 +40,7 @@ cc_library(
         "//conditions:default": [
             "@litert//litert/cc:litert_layout",
             "@litert//litert/cc:litert_macros",
+            "@litert//litert/cc:litert_ranked_tensor_type",
             "@litert//litert/cc:litert_tensor_buffer",
         ],
     }),
@@ -83,6 +84,7 @@ cc_library(
         "@kissfft//:kissfftr",
         "@litert//litert/cc:litert_element_type",
         "@litert//litert/cc:litert_macros",
+        "@litert//litert/cc:litert_ranked_tensor_type",
         "//runtime/engine:io_types",
         "//runtime/util:litert_status_util",
     ] + select({
@@ -110,6 +112,7 @@ cc_test(
         "@com_google_absl//absl/types:span",
         "@litert//litert/cc:litert_common",
         "@litert//litert/cc:litert_compiled_model",
+        "@litert//litert/cc:litert_element_type",
         "@litert//litert/cc:litert_environment",
         "@litert//litert/cc:litert_layout",
         "@litert//litert/cc:litert_macros",

@@ -18,6 +18,7 @@ Reference: https://ai.google.dev/api/generate-content
 """
 
 import collections.abc
+import dataclasses
 import http.server
 import json
 import re
@@ -122,6 +123,57 @@ def litertlm_to_gemini_response(
   return {"candidates": [candidate]}
 
 
+@dataclasses.dataclass(frozen=True)
+class ParsedRequest:
+  """Represents a parsed Gemini API request from the URL path.
+
+  Attributes:
+    model_id: The identifier for the model.
+    backend: The hardware backend to use, or None for auto-selection.
+    max_num_tokens: The maximum number of tokens, or None for model default.
+    is_stream: Whether the request is for streaming.
+    error_msg: Error message if parsing failed, or None if successful.
+  """
+
+  model_id: str
+  backend: litert_lm.Backend | None = None
+  max_num_tokens: int | None = None
+  is_stream: bool = False
+  error_msg: str | None = None
+
+
+def parse_model_and_backend(path: str) -> ParsedRequest:
+  """Parses model spec, backend, max_tokens and stream flag from URL path.
+
+  Args:
+    path: The URL path.
+
+  Returns:
+    A ParsedRequest object.
+  """
+  path_without_query = path.split("?")[0]
+  gen_match = GEN_CONTENT_RE.match(path_without_query)
+  stream_match = STREAM_GEN_CONTENT_RE.match(path_without_query)
+
+  match = gen_match or stream_match
+  if not match:
+    return ParsedRequest(model_id="", error_msg="Not Found")
+
+  is_stream = bool(stream_match)
+  model_spec = match.group(1)
+  try:
+    spec = serve_util.parse_model_spec(model_spec)
+  except ValueError as e:
+    return ParsedRequest(model_id="", is_stream=is_stream, error_msg=str(e))
+
+  return ParsedRequest(
+      model_id=spec.model_id,
+      backend=spec.backend,
+      max_num_tokens=spec.max_num_tokens,
+      is_stream=is_stream,
+  )
+
+
 class GeminiHandler(http.server.BaseHTTPRequestHandler):
   """Handler for Gemini API requests."""
 
@@ -129,19 +181,18 @@ class GeminiHandler(http.server.BaseHTTPRequestHandler):
   # to handle POST requests.
   def do_POST(self):  # pylint: disable=invalid-name
     """Handles POST requests for generateContent and streamGenerateContent."""
-    path_without_query = self.path.split("?")[0]
-    gen_match = GEN_CONTENT_RE.match(path_without_query)
-    stream_match = STREAM_GEN_CONTENT_RE.match(path_without_query)
-
-    match = gen_match or stream_match
-    if not match:
+    req = parse_model_and_backend(self.path)
+    if req.error_msg == "Not Found":
       self.send_error(404, "Not Found")
       return
+    elif req.error_msg:
+      self.send_error(400, req.error_msg)
+      return
 
-    model_spec = match.group(1)
-    # model_spec can be <model_id>[,<backend>][,<max_tokens>]
-    # Support for backend and max_tokens in model_spec is coming soon.
-    model_id = model_spec.split(",")[0]
+    model_id = req.model_id
+    backend = req.backend
+    max_tokens = req.max_num_tokens
+    is_stream = req.is_stream
 
     content_length = int(self.headers.get("Content-Length", 0))
     try:
@@ -155,7 +206,12 @@ class GeminiHandler(http.server.BaseHTTPRequestHandler):
 
     try:
       assert isinstance(self.server, serve_util.LiteRTLMServer)
-      engine = serve_util.get_or_initialize_server_engine(self.server, model_id)
+      engine = serve_util.get_or_initialize_server_engine(
+          self.server,
+          model_id=model_id,
+          backend=backend,
+          max_num_tokens=max_tokens,
+      )
     except FileNotFoundError as e:
       self.send_error(404, str(e))
       return
@@ -206,7 +262,7 @@ class GeminiHandler(http.server.BaseHTTPRequestHandler):
           tools=tools or None,
           automatic_tool_calling=False,
       ) as conv:
-        if stream_match:
+        if is_stream:
           self.send_response(200)
           self.send_header("Content-Type", "text/event-stream")
           self.send_header("Cache-Control", "no-cache")

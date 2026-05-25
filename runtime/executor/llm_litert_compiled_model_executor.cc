@@ -18,6 +18,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <random>
@@ -35,7 +36,6 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
-#include "litert/cc/litert_common.h"  // from @litert
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
@@ -48,9 +48,9 @@
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
-#include "runtime/executor/litert/kv_cache.h"
 #include "litert/cc/options/litert_cpu_options.h"  // from @litert
 #include "litert/cc/options/litert_runtime_options.h"  // from @litert
+#include "runtime/executor/litert/kv_cache.h"
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/components/sampler_factory.h"
@@ -66,10 +66,8 @@
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/log_tensor_buffer.h"
 #include "runtime/util/lora_util.h"
-#include "runtime/util/scoped_file.h"
 #include "runtime/util/status_macros.h"  // IWYU pragma: keep
 #include "runtime/util/tensor_buffer_util.h"
-#include "tflite/delegates/xnnpack/xnnpack_delegate.h"  // from @litert
 #include "tflite/types/half.h"  // from @litert
 
 namespace litert::lm {
@@ -392,7 +390,7 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::LoadKVCheckpoint(
   // This uses the same approach as GetKVCacheRootNames
   std::string k_root_name;
   std::string v_root_name;
-  
+
   if (!input_kv_cache_buffers_->empty()) {
     const auto& first_name = input_kv_cache_buffers_->begin()->first;
     // Detect the pattern from the first buffer name
@@ -414,7 +412,7 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::LoadKVCheckpoint(
   }
 
   // Helper to classify KV cache buffers using precise prefix matching
-  auto classify_kv_buffers = 
+  auto classify_kv_buffers =
       [k_root_name, v_root_name](
           const absl::flat_hash_map<absl::string_view, TensorBuffer>& all_buffers,
           absl::flat_hash_map<std::string, TensorBuffer>& key_buffers,
@@ -436,12 +434,12 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::LoadKVCheckpoint(
   // Prepare Bank 2 buffers (may not exist for all configurations)
   std::optional<absl::flat_hash_map<std::string, TensorBuffer>> bank_2_key_buffers;
   std::optional<absl::flat_hash_map<std::string, TensorBuffer>> bank_2_value_buffers;
-  
+
   if (!kv_cache_buffers_2_.empty()) {
     absl::flat_hash_map<std::string, TensorBuffer> b2_key;
     absl::flat_hash_map<std::string, TensorBuffer> b2_value;
     classify_kv_buffers(kv_cache_buffers_2_, b2_key, b2_value);
-    
+
     if (!b2_key.empty() || !b2_value.empty()) {
       bank_2_key_buffers = std::move(b2_key);
       bank_2_value_buffers = std::move(b2_value);
@@ -1626,21 +1624,21 @@ absl::Status LlmLiteRtCompiledModelExecutorStatic::Prefill(
   // Reduce the input ids only with one user selected.
   auto input_length = ids.size() / input_batch_size;
   ids = ids.subspan(kTokenIndexToReduce * input_length, input_length);
-  
+
   // ========== Prefix KV Cache Lookup ==========
   int matched_len = 0;
   if (prefix_cache_) {
     auto hit = prefix_cache_->Lookup(ids, GetBackendType());
     if (hit.checkpoint != nullptr) {
       matched_len = hit.matched_len;
-      ABSL_LOG(INFO) << "Prefix cache hit: matched " << matched_len 
+      ABSL_LOG(INFO) << "Prefix cache hit: matched " << matched_len
                      << " tokens out of " << ids.size();
-      
+
       // Load checkpoint into KV cache buffers
       RETURN_IF_ERROR(LoadKVCheckpoint(hit.checkpoint));
     }
   }
-  
+
   // If all tokens are matched, skip prefill
   if (matched_len >= ids.size()) {
     ABSL_LOG(INFO) << "Prefix cache fully matched, skipping prefill";
@@ -1649,10 +1647,10 @@ absl::Status LlmLiteRtCompiledModelExecutorStatic::Prefill(
     }
     return absl::OkStatus();
   }
-  
+
   // Get remaining tokens for incremental prefill
   absl::Span<const int> remaining_ids = ids.subspan(matched_len);
-  
+
   ASSIGN_OR_RETURN(auto work_groups, GetOptimizedPrefillWorkGroups(
                                          prefill_signature_map_, remaining_ids.size()));
   for (int i = 0; i < work_groups.size(); ++i) {
@@ -1691,18 +1689,18 @@ absl::Status LlmLiteRtCompiledModelExecutorStatic::Prefill(
   if (prefix_cache_ && matched_len < ids.size()) {
     // Serialize KV cache buffers
     std::string serialized;
-    
+
     // Helper to append data
     auto append_data = [&](const void* data, size_t size) {
       serialized.append(static_cast<const char*>(data), size);
     };
-    
+
     // Write header
     // Get num_entries from the first KV cache tensor's shape
     int num_entries = 0;
     int batch_size = 1;
     bool bank_1_is_input = true;
-    
+
     if (!input_kv_cache_buffers_->empty()) {
       const auto& first_buffer = input_kv_cache_buffers_->begin()->second;
       LITERT_ASSIGN_OR_RETURN(const RankedTensorType& tensor_type, first_buffer.TensorType());
@@ -1720,11 +1718,11 @@ absl::Status LlmLiteRtCompiledModelExecutorStatic::Prefill(
         }
       }
     }
-    
+
     append_data(&num_entries, sizeof(num_entries));
     append_data(&batch_size, sizeof(batch_size));
     append_data(&bank_1_is_input, sizeof(bank_1_is_input));
-    
+
     // Serialize input_kv_cache_buffers_
     // Sort by name for deterministic order
     std::vector<std::string> sorted_names;
@@ -1732,22 +1730,22 @@ absl::Status LlmLiteRtCompiledModelExecutorStatic::Prefill(
       sorted_names.push_back(std::string(name));
     }
     std::sort(sorted_names.begin(), sorted_names.end());
-    
+
     for (const auto& name : sorted_names) {
       const auto& buffer = input_kv_cache_buffers_->at(name);
-      
+
       // Tensor name
       uint32_t name_len = static_cast<uint32_t>(name.size());
       append_data(&name_len, sizeof(name_len));
       append_data(name.data(), name.size());
-      
+
       // Tensor shape
       LITERT_ASSIGN_OR_RETURN(const RankedTensorType& tensor_type, buffer.TensorType());
       auto dimensions = tensor_type.Layout().Dimensions();
       uint32_t dims_count = static_cast<uint32_t>(dimensions.size());
       append_data(&dims_count, sizeof(dims_count));
       append_data(dimensions.data(), dims_count * sizeof(int));
-      
+
       // Tensor data
       LITERT_ASSIGN_OR_RETURN(auto lock_and_addr, TensorBufferScopedLock::Create(
           const_cast<TensorBuffer&>(buffer), TensorBuffer::LockMode::kRead));
@@ -1755,11 +1753,11 @@ absl::Status LlmLiteRtCompiledModelExecutorStatic::Prefill(
       append_data(&data_size, sizeof(data_size));
       append_data(lock_and_addr.second, data_size);
     }
-    
+
     // No Bank 2 for most cases
     bool has_bank_2 = false;
     append_data(&has_bank_2, sizeof(has_bank_2));
-    
+
     // Store to prefix cache
     prefix_cache_->Store(ids, std::move(serialized), GetBackendType());
     ABSL_LOG(INFO) << "Stored " << ids.size() << " tokens to prefix cache";
@@ -2007,11 +2005,15 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
     if (advanced_settings.has_value() &&
         advanced_settings->enable_speculative_decoding) {
       RET_CHECK_NE(embedding_lookup, nullptr);
-      RET_CHECK_NE(per_layer_embedding_lookup, nullptr);
+      std::optional<std::reference_wrapper<EmbeddingLookupManager>>
+          ple_manager_opt;
+      if (per_layer_embedding_lookup) {
+        ple_manager_opt = std::ref(*per_layer_embedding_lookup);
+      }
       ASSIGN_OR_RETURN(mtp_drafter, LlmLiteRtMtpDrafter::Create(
                                         lrt_env, resources, executor_settings,
                                         *compiled_model, *embedding_lookup,
-                                        *per_layer_embedding_lookup));
+                                        ple_manager_opt));
     }
   }
 
@@ -2240,46 +2242,19 @@ LlmLiteRtCompiledModelExecutorDynamic::Create(
       CreateCompilationOptions(executor_settings, ActivationDataType::FLOAT32,
                                /*signatures=*/std::nullopt));
   std::string weight_cache_path = executor_settings.GetCacheDir();
+
   const Backend backend = executor_settings.GetBackend();
   RET_CHECK_EQ(backend, Backend::CPU)
       << "LlmLiteRtCompiledModelExecutorDynamic only supports CPU backend.";
   uint32_t kv_increament_size = 0;
   int prefill_chunk_size = -1;
   {
-    LITERT_ASSIGN_OR_RETURN(auto& cpu_compilation_options,
-                            compilation_options.GetCpuOptions());
     ASSIGN_OR_RETURN(const auto& cpu_config,
                      executor_settings.GetBackendConfig<CpuConfig>());
     kv_increament_size = cpu_config.kv_increment_size;
     prefill_chunk_size = cpu_config.prefill_chunk_size;
-    cpu_compilation_options.SetNumThreads(cpu_config.number_of_threads);
-    auto weight_cache_file = executor_settings.GetWeightCacheFile(
-        ExecutorSettingsBase::kXnnpackCacheSuffix, /*check_and_clean=*/true);
-    if (weight_cache_file.ok()) {
-      if (std::holds_alternative<std::string>(*weight_cache_file)) {
-        weight_cache_path = std::get<std::string>(*weight_cache_file);
-        ABSL_LOG(INFO) << "Setting XNNPACK weight cache path: "
-                       << weight_cache_path;
-        cpu_compilation_options.SetXNNPackWeightCachePath(
-            weight_cache_path.c_str());
-      } else {
-        auto scoped_cache_file =
-            std::get<std::shared_ptr<ScopedFile>>(*weight_cache_file);
-        ASSIGN_OR_RETURN(auto duplicated, scoped_cache_file->Duplicate());
-        ASSIGN_OR_RETURN(int fd, duplicated.Release());
-        cpu_compilation_options.SetXNNPackWeightCacheFileDescriptor(fd);
-      }
-    }
     RET_CHECK_GT(kv_increament_size, 0)
         << "KV increment size must be greater than 0.";
-    auto default_xnn_options = TfLiteXNNPackDelegateOptionsDefault();
-    cpu_compilation_options.SetXNNPackFlags(
-        default_xnn_options.flags |
-        TFLITE_XNNPACK_DELEGATE_FLAG_ENABLE_LATEST_OPERATORS);
-    LITERT_ASSIGN_OR_RETURN(auto& runtime_options,
-                            compilation_options.GetRuntimeOptions());
-    runtime_options.SetCompressQuantizationZeroPoints(true);
-    compilation_options.SetHardwareAccelerators(HwAccelerators::kCpu);
   }
 
   std::unique_ptr<CompiledModel> compiled_model;

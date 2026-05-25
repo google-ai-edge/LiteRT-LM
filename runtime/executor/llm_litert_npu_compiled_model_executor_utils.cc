@@ -57,37 +57,47 @@ static constexpr int kSliceOuterRank = 2;
 #if defined(__ANDROID__) && defined(__ARM_NEON)
 int FindMaxIndexFloatNeon(const float* data, int size) {
   if (size <= 0) return 0;
+
   float32x4_t max_v4 = vdupq_n_f32(-std::numeric_limits<float>::infinity());
+  uint32x4_t max_i4 = vdupq_n_u32(0);
+  uint32x4_t curr_i4 = {0, 1, 2, 3};
+  uint32x4_t step4 = vdupq_n_u32(4);
+
   int i = 0;
   for (; i <= size - 4; i += 4) {
-    max_v4 = vmaxq_f32(max_v4, vld1q_f32(data + i));
-  }
-  float max_vals_arr[4];
-  vst1q_f32(max_vals_arr, max_v4);
-  float max_v = max_vals_arr[0];
-  for (int j = 1; j < 4; ++j) {
-    if (max_vals_arr[j] > max_v) max_v = max_vals_arr[j];
-  }
-  for (; i < size; ++i) {
-    if (data[i] > max_v) max_v = data[i];
+    float32x4_t v4 = vld1q_f32(data + i);
+    uint32x4_t mask = vcgtq_f32(v4, max_v4);
+    // Update max values and their corresponding indices in one pass.
+    max_v4 = vmaxq_f32(v4, max_v4);
+    max_i4 = vbslq_u32(mask, curr_i4, max_i4);
+    curr_i4 = vaddq_u32(curr_i4, step4);
   }
 
-  // Second pass: find first index with max_v
-  float32x4_t target = vdupq_n_f32(max_v);
-  for (i = 0; i <= size - 4; i += 4) {
-    uint32x4_t cmp = vceqq_f32(vld1q_f32(data + i), target);
-    uint32_t mask[4];
-    vst1q_u32(mask, cmp);
-    if (mask[0] || mask[1] || mask[2] || mask[3]) {
-      for (int j = 0; j < 4; ++j) {
-        if (mask[j]) return i + j;
-      }
+  // Reduce the 4-lane registers to a single max value and index.
+  float max_vals[4];
+  uint32_t max_idxs[4];
+  vst1q_f32(max_vals, max_v4);
+  vst1q_u32(max_idxs, max_i4);
+
+  float max_v = max_vals[0];
+  int max_idx = max_idxs[0];
+  for (int j = 1; j < 4; ++j) {
+    if (max_vals[j] > max_v) {
+      max_v = max_vals[j];
+      max_idx = max_idxs[j];
+    } else if (max_vals[j] == max_v) {
+      max_idx = std::min(max_idx, (int)max_idxs[j]);
     }
   }
+
+  // Handle remaining elements.
   for (; i < size; ++i) {
-    if (data[i] == max_v) return i;
+    if (data[i] > max_v) {
+      max_v = data[i];
+      max_idx = i;
+    }
   }
-  return 0;
+  return max_idx;
 }
 
 int FindMaxIndexInt16Neon(const int16_t* data, int size) {

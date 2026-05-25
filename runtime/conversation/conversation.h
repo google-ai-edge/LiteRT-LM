@@ -494,6 +494,10 @@ class Conversation {
   // Returns the configuration used for creating the Conversation.
   const ConversationConfig& GetConfig() const { return config_; }
 
+  // Returns the number of tokens in the conversation KV Cache (prefill +
+  // decode).
+  absl::StatusOr<int> GetTokenCount() const;
+
   // Returns the benchmark info for the conversation. Under the hood, this
   // method triggers the benchmark info collection from the Session. Returns:
   // - The benchmark info for the conversation.

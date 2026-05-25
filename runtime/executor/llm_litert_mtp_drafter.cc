@@ -17,6 +17,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -172,11 +173,11 @@ LlmLiteRtMtpDrafter::~LlmLiteRtMtpDrafter() {
 }
 
 absl::StatusOr<std::unique_ptr<LlmLiteRtMtpDrafter>>
-LlmLiteRtMtpDrafter::Create(Environment& env, ModelResources& resources,
-                            const LlmExecutorSettings& executor_settings,
-                            CompiledModel& base_model,
-                            EmbeddingLookupManager& embedding_manager,
-                            EmbeddingLookupManager& ple_manager) {
+LlmLiteRtMtpDrafter::Create(
+    Environment& env, ModelResources& resources,
+    const LlmExecutorSettings& executor_settings, CompiledModel& base_model,
+    EmbeddingLookupManager& embedding_manager,
+    std::optional<std::reference_wrapper<EmbeddingLookupManager>> ple_manager) {
   ActivationDataType activation_data_type =
       executor_settings.GetActivationDataType().value_or(
           ActivationDataType::FLOAT16);
@@ -401,10 +402,12 @@ absl::Status LlmLiteRtMtpDrafter::PrepareVerifierInputBuffers(
   RETURN_IF_ERROR(embedding_manager_.LookupPrefill(
       drafted_tokens_with_input_token, &verifier_input_buffers_["embeddings"],
       /*offset=*/0));
-  RETURN_IF_ERROR(ple_manager_.LookupPrefill(
-      drafted_tokens_with_input_token,
-      &verifier_input_buffers_["per_layer_embeddings"],
-      /*offset=*/0));
+  if (ple_manager_.has_value()) {
+    RETURN_IF_ERROR(ple_manager_->get().LookupPrefill(
+        drafted_tokens_with_input_token,
+        &verifier_input_buffers_["per_layer_embeddings"],
+        /*offset=*/0));
+  }
 
   for (const auto& [input_name, input_buffer] : input_kv_cache_buffers) {
     LITERT_ASSIGN_OR_RETURN(auto input_buffer_dup, input_buffer.Duplicate());

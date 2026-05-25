@@ -1805,16 +1805,7 @@ LlmLiteRtNpuCompiledModelExecutor::Decode(
 
   } else {
     // Standard Non-Speculative path.
-    ::litert::TensorBuffer& decoded_logits =
-        llm_inference_context_
-            .decode_output_buffers[LlmSignatures::kDecodeLogitsOutput];
-    auto start_sample = absl::Now();
-    LITERT_ASSIGN_OR_RETURN(
-        const int max_index,
-        ApplyGreedySampling(decoded_logits,
-                            npu_config_.enable_neon_for_npu_greedy_sampling));
-    latency_stats_.decode_sampling_latency_us +=
-        absl::ToInt64Microseconds(absl::Now() - start_sample);
+    const int max_index = mtp_start_token_id;
 
     // Store the sampled id as the pending input token for next Decode.
 
