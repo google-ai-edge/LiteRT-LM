@@ -81,14 +81,22 @@ GetAudioExecutorPropertiesFromModelResources(ModelResources& model_resources) {
         adapter_output_tensor_type.Layout().Dimensions()
             [adapter_output_tensor_type.Layout().Dimensions().size() - 2];
   } else {
-    LITERT_ASSIGN_OR_RETURN(
-        auto encoder_output_tensor_type,
-        properties.is_streaming_model
-            ? audio_encoder_model->GetOutputTensorType(0, kFeaturesName)
-            : audio_encoder_model->GetOutputTensorType(0, 0));
-    output_sequence_length =
-        encoder_output_tensor_type.Layout().Dimensions()
-            [encoder_output_tensor_type.Layout().Dimensions().size() - 2];
+    if (properties.is_streaming_model) {
+      LITERT_ASSIGN_OR_RETURN(
+          auto features_tensor_type,
+          audio_encoder_model->GetInputTensorType(0, kFeaturesName));
+      output_sequence_length =
+          features_tensor_type.Layout()
+              .Dimensions()[features_tensor_type.Layout().Dimensions().size() -
+                            2];
+    } else {
+      LITERT_ASSIGN_OR_RETURN(auto output_tensor_type,
+                              audio_encoder_model->GetOutputTensorType(0, 0));
+      output_sequence_length =
+          output_tensor_type.Layout()
+              .Dimensions()[output_tensor_type.Layout().Dimensions().size() -
+                            2];
+    }
   }
 
   if (properties.is_streaming_model && has_adapter) {
