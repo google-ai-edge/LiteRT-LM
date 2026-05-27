@@ -32,7 +32,10 @@ namespace {
 
 constexpr LazyRE2 kLoRAInputNamePattern = {
     "^(?:(?:query|key|value|post)_w_prime_(?:left|right)|"
-    "lora_atten_(?:q|k|v|o)_(?:a|b)_prime_weight)_\\d+$"};
+    "lora_atten_(?:q|k|v|o)_(?:a|b)_prime_weight|"
+    "lora_audio_attn_(?:q|k|v|o)_(?:a|b)_weight|"
+    "lora_audio_(?:ff1_l1|ff1_l2|ff2_l1|ff2_l2|lconv_start|"
+    "lconv_end|output_proj)_(?:a|b)_weight)_\\d+$"};
 
 uint64_t AlignByN(uint64_t number, uint64_t n) {
   const uint64_t q = number / n;
@@ -74,8 +77,10 @@ MemoryMappedFileWithAutoAlignment::Create(ScopedFile::PlatformFile file,
 
 // Returns true if the given name is a LoRA input name for the model.
 // The LoRA name is in the format of
-// "(query|key|value|post)_w_prime_(left|right)_[0-num_layers)" or
-// "lora_atten_(q|k|v|o)_(a|b)_prime_weight_[0-num_layers)".
+// "(query|key|value|post)_w_prime_(left|right)_[0-num_layers)",
+// "lora_atten_(q|k|v|o)_(a|b)_prime_weight_[0-num_layers)", or
+// "lora_audio_attn_(q|k|v|o)_(a|b)_weight_<n>", or
+// "lora_audio_(module)_(a|b)_weight_<n>".
 bool IsLoRAInputName(absl::string_view name) {
   return RE2::FullMatch(name, *kLoRAInputNamePattern);
 }

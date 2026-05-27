@@ -162,13 +162,28 @@ TEST_F(IsLoRAInputNameTest, MatchesValidPattern2) {
   EXPECT_TRUE(IsLoRAInputName("lora_atten_o_b_prime_weight_123"));
 }
 
+TEST_F(IsLoRAInputNameTest, MatchesAudioTowerPattern) {
+  EXPECT_TRUE(IsLoRAInputName("lora_audio_attn_q_a_weight_0"));
+  EXPECT_TRUE(IsLoRAInputName("lora_audio_attn_o_b_weight_11"));
+  EXPECT_TRUE(IsLoRAInputName("lora_audio_ff1_l1_a_weight_0"));
+  EXPECT_TRUE(IsLoRAInputName("lora_audio_ff1_l2_b_weight_11"));
+  EXPECT_TRUE(IsLoRAInputName("lora_audio_ff2_l1_a_weight_3"));
+  EXPECT_TRUE(IsLoRAInputName("lora_audio_ff2_l2_b_weight_7"));
+  EXPECT_TRUE(IsLoRAInputName("lora_audio_lconv_start_a_weight_1"));
+  EXPECT_TRUE(IsLoRAInputName("lora_audio_lconv_end_b_weight_10"));
+  EXPECT_TRUE(IsLoRAInputName("lora_audio_output_proj_a_weight_0"));
+}
+
 TEST_F(IsLoRAInputNameTest, RejectsIncorrectComponentCount) {
   // Too few parts.
   EXPECT_FALSE(IsLoRAInputName("query_w_prime_left"));
-  EXPECT_FALSE(IsLoRAInputName("lora_atten_q_a_prime_weight"));
+  EXPECT_FALSE(IsLoRAInputName("lora_atten_q_a_weight"));
+  EXPECT_FALSE(IsLoRAInputName("lora_audio_ff1_l1_a_weight"));
+  EXPECT_FALSE(IsLoRAInputName("lora_audio_attn_q_a_weight"));
   // Too many parts.
   EXPECT_FALSE(IsLoRAInputName("query_w_prime_left_0_extra"));
   EXPECT_FALSE(IsLoRAInputName("lora_atten_q_a_prime_weight_0_extra"));
+  EXPECT_FALSE(IsLoRAInputName("lora_audio_ff1_l1_a_weight_0_extra"));
 }
 
 TEST_F(IsLoRAInputNameTest, RejectsInvalidPrefixOrKeywords) {
@@ -179,17 +194,22 @@ TEST_F(IsLoRAInputNameTest, RejectsInvalidPrefixOrKeywords) {
   EXPECT_FALSE(IsLoRAInputName("query_w_prime_badside_0"));
 
   // Pattern 2 with incorrect keywords.
-  EXPECT_FALSE(IsLoRAInputName("bad_atten_q_a_prime_weight_0"));
-  EXPECT_FALSE(IsLoRAInputName("lora_bad_q_a_prime_weight_0"));
+  EXPECT_FALSE(IsLoRAInputName("bad_atten_q_a_weight_0"));
+  EXPECT_FALSE(IsLoRAInputName("lora_bad_q_a_weight_0"));
   EXPECT_FALSE(IsLoRAInputName("lora_atten_x_a_prime_weight_0"));
   EXPECT_FALSE(IsLoRAInputName("lora_atten_q_x_prime_weight_0"));
   EXPECT_FALSE(IsLoRAInputName("lora_atten_q_a_bad_weight_0"));
   EXPECT_FALSE(IsLoRAInputName("lora_atten_q_a_prime_bad_0"));
+  EXPECT_FALSE(IsLoRAInputName("lora_audio_attn_x_a_weight_0"));
+  EXPECT_FALSE(IsLoRAInputName("lora_audio_unknown_a_weight_0"));
+  EXPECT_FALSE(IsLoRAInputName("lora_audio_ff1_l1_x_weight_0"));
+  EXPECT_FALSE(IsLoRAInputName("lora_audio_ff1_l1_a_bad_weight_0"));
 }
 
 TEST_F(IsLoRAInputNameTest, RejectsNonNumericLayerNumber) {
   EXPECT_FALSE(IsLoRAInputName("query_w_prime_left_ten"));
   EXPECT_FALSE(IsLoRAInputName("lora_atten_q_a_prime_weight_one"));
+  EXPECT_FALSE(IsLoRAInputName("lora_audio_ff1_l1_a_weight_one"));
   EXPECT_FALSE(IsLoRAInputName("key_w_prime_right_"));
   EXPECT_FALSE(IsLoRAInputName("key_w_prime_right_1a"));
 }

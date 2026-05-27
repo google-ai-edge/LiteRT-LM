@@ -13,7 +13,7 @@
 # limitations under the License.
 
 load("@org_tensorflow//tensorflow:pytype.default.bzl", "pytype_strict_binary", "pytype_strict_library")
-load("@rules_python//python:defs.bzl", "py_test")
+load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
 load("@flatbuffers//:build_defs.bzl", "flatbuffer_py_library")
 
 load("@rules_python//python:packaging.bzl", "py_package", "py_wheel")
@@ -121,6 +121,35 @@ py_test(
     ],
 )
 
+py_library(
+    name = "audio_lora_converter",
+    srcs = ["audio_lora_converter.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@flatbuffers//:runtime_py",
+    ],
+)
+
+py_binary(
+    name = "audio_lora_converter_cli",
+    srcs = ["audio_lora_converter_cli.py"],
+    imports = [".."],
+    main = "audio_lora_converter_cli.py",
+    tags = [
+        "manual",
+        "notap",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [":audio_lora_converter"],
+)
+
+py_test(
+    name = "audio_lora_converter_test",
+    srcs = ["audio_lora_converter_test.py"],
+    imports = [".."],
+    deps = [":audio_lora_converter"],
+)
+
 pytype_strict_binary(
     name = "litertlm_builder_cli",
     srcs = ["litertlm_builder_cli.py"],
@@ -177,6 +206,8 @@ genrule(
         "litertlm_builder.py",
         "litertlm_builder_cli.py",
         "litertlm_peek_main.py",
+        "audio_lora_converter.py",
+        "audio_lora_converter_cli.py",
         ":litertlm_header_schema_py",
         "//runtime/proto:llm_metadata_py_pb2",
         "//runtime/proto:llm_model_type_py_pb2",
@@ -190,6 +221,8 @@ genrule(
         "shaded/litert_lm_builder/litertlm_builder.py",
         "shaded/litert_lm_builder/litertlm_builder_cli.py",
         "shaded/litert_lm_builder/litertlm_peek_main.py",
+        "shaded/litert_lm_builder/audio_lora_converter.py",
+        "shaded/litert_lm_builder/audio_lora_converter_cli.py",
         "shaded/litert_lm_builder/litertlm_header_schema_py_generated.py",
         "shaded/litert_lm_builder/runtime/proto/llm_metadata_pb2.py",
         "shaded/litert_lm_builder/runtime/proto/llm_model_type_pb2.py",
@@ -244,6 +277,7 @@ py_wheel(
         "console_scripts": [
             "litert-lm-builder = litert_lm_builder.litertlm_builder_cli:run",
             "litert-lm-peek = litert_lm_builder.litertlm_peek_main:run",
+            "litert-lm-audio-lora-converter = litert_lm_builder.audio_lora_converter_cli:main",
         ],
     },
     requires_file = ":gen_requires",

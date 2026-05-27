@@ -48,6 +48,12 @@ std::string GetLoraFilePath() {
   return path.string();
 }
 
+std::string GetAudioConverterLoraFilePath() {
+  auto path = std::filesystem::path(::testing::SrcDir()) /
+              "litert_lm/runtime/testdata/audio_lora_converter_sidecar.tflite";
+  return path.string();
+}
+
 enum class LoraLoadType {
   kFilePath,
   kScopedFile,
@@ -148,6 +154,31 @@ TEST_P(LoraDataTest, GetAllTensorNamesWorksAsExpected) {
         absl::StrCat("transformer.layer_", i, ".attn.q.w_prime_left"));
   }
   EXPECT_THAT(tensor_names, IsSupersetOf(expected_subset));
+}
+
+TEST(LoraDataTest, ReadsAudioConverterSidecar) {
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<LoraData> lora,
+                       LoraData::CreateFromFilePath(
+                           GetAudioConverterLoraFilePath()));
+  EXPECT_THAT(lora->GetLoRARank(), IsOkAndHolds(2));
+  EXPECT_TRUE(lora->HasTensor("lora_audio_attn_q_a_weight_0"));
+  EXPECT_TRUE(lora->HasTensor("lora_audio_attn_q_b_weight_0"));
+
+  ASSERT_OK_AND_ASSIGN(
+      auto tensor_a, lora->ReadTensor("lora_audio_attn_q_a_weight_0"));
+  ASSERT_OK_AND_ASSIGN(
+      auto tensor_b, lora->ReadTensor("lora_audio_attn_q_b_weight_0"));
+  ASSERT_EQ(tensor_a->Size(), 16);
+  ASSERT_EQ(tensor_b->Size(), 16);
+
+  const uint16_t* actual_a =
+      reinterpret_cast<const uint16_t*>(tensor_a->Data());
+  const uint16_t* actual_b =
+      reinterpret_cast<const uint16_t*>(tensor_b->Data());
+  EXPECT_THAT(std::vector<uint16_t>(actual_a, actual_a + 8),
+              ElementsAreArray(std::vector<uint16_t>(8, 0x3C00)));
+  EXPECT_THAT(std::vector<uint16_t>(actual_b, actual_b + 8),
+              ElementsAreArray(std::vector<uint16_t>(8, 0x4000)));
 }
 
 INSTANTIATE_TEST_SUITE_P(
