@@ -272,12 +272,14 @@ rules_rust_dependencies()
 
 rust_register_toolchains(
     edition = "2021",
+    versions = ["1.85.0"], 
     extra_target_triples = [
         # Explicitly add toolchains for mobile. Desktop platforms are supported by default.
         "aarch64-linux-android",
         "aarch64-apple-ios",
         "aarch64-apple-ios-sim",
         "x86_64-linux-android",
+        "x86_64-apple-ios-sim",
     ],
 )
 
