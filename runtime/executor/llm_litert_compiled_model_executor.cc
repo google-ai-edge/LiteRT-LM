@@ -1379,10 +1379,18 @@ LlmLiteRtCompiledModelExecutorBase::CreateNewContext(
       std::make_unique<LlmProcessedContext>(
           lora_id, absl::flat_hash_map<absl::string_view, TensorBuffer>());
 
+  auto runtime_state = std::make_unique<RuntimeState>();
+  if (runtime_config.sampler_params.has_value()) {
+    runtime_state->rand_gen = std::make_shared<std::default_random_engine>(
+        runtime_config.sampler_params->seed());
+  } else {
+    runtime_state->rand_gen = std::make_shared<std::default_random_engine>(0);
+  }
+
   return std::make_unique<LlmContext>(
       std::move(processed_context),
       std::make_unique<RuntimeConfig>(std::move(runtime_config)),
-      std::make_unique<RuntimeState>());
+      std::move(runtime_state));
 }
 
 absl::StatusOr<std::unique_ptr<LlmContext>>
@@ -1449,11 +1457,15 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::InitializeSampler(
       CreateSampler(sampler_backend, output_heads, std::move(sampler_params),
                     env_.Get(), /*sequence_size=*/1, vocab_size, data_type));
 
+  // Disable GPU token copy for models that run embedding on the GPU.
+  const bool runs_embedding_on_gpu = (embedding_lookup_ == nullptr);
+
   // If the sampler can handle input, prepare the input tensors for it.
   sampler_handles_input_ =
       (!executor_settings_.GetAdvancedSettings().has_value() ||
        executor_settings_.GetAdvancedSettings()->sampler_handles_input) &&
-      sampler_->CanHandleInput() && !signatures_.input_tokens.empty();
+      sampler_->CanHandleInput() && !signatures_.input_tokens.empty() &&
+      !runs_embedding_on_gpu;
   if (sampler_handles_input_) {
     ABSL_LOG(INFO) << "Sampler will handle decode input tensors.";
     if (!decode_prev_input_pos_) {

@@ -2834,6 +2834,7 @@ LlmLiteRtNpuCompiledModelExecutor::CloneContext() const {
           processed_tokens_);
 
   RuntimeConfig runtime_config;
+  runtime_config.sampler_params = sampler_params_;
 
   RuntimeState runtime_state;
   runtime_state.current_step = current_step_;
@@ -2881,6 +2882,10 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::RestoreContext(
 
   processed_tokens_ = context_data->processed_context().processed_tokens();
   current_step_ = context_data->runtime_state().current_step;
+
+  if (context_data->runtime_config().sampler_params.has_value()) {
+    sampler_params_ = *context_data->runtime_config().sampler_params;
+  }
 
   return absl::OkStatus();
 }

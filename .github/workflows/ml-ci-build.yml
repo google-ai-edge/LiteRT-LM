@@ -140,8 +140,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: |
-            ~/.cache/bazel-linux
-            ~/.cache/bazel-android
+            ~/.cache/bazel
           key: ${{ steps.cache-keys.outputs.CACHE_KEY }}
           restore-keys: |
             ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_HEAD }}
@@ -169,7 +168,7 @@ jobs:
 
       - name: Run bazel build on Linux.
         run: |
-          bazelisk build --disk_cache=~/.cache/bazel-linux --config=linux_x86_64 \
+          bazelisk build --disk_cache=~/.cache/bazel --config=linux_x86_64 \
             --deleted_packages=swift \
             --java_runtime_version=remotejdk_17 \
             //... \
@@ -188,7 +187,7 @@ jobs:
 
       - name: Run bazel test on Linux.
         run: |
-          bazelisk test --disk_cache=~/.cache/bazel-linux --config=linux_x86_64 \
+          bazelisk test --disk_cache=~/.cache/bazel --config=linux_x86_64 \
             --deleted_packages=swift \
             --test_output=errors \
             //...
@@ -201,7 +200,7 @@ jobs:
 
       - name: Run bazel build on Linux with dynamic linking.
         run: |
-          bazelisk build --config=linux_x86_64 \
+          bazelisk build --disk_cache=~/.cache/bazel --config=linux_x86_64 \
             --define=litert_link_capi_so=true \
             --define=resolve_symbols_in_exec=false \
             //runtime/engine:litert_lm_main
@@ -224,7 +223,7 @@ jobs:
 
       - name: Run bazel build for Android.
         run: |
-          bazelisk build --disk_cache=~/.cache/bazel-android --config=android_arm64 \
+          bazelisk build --disk_cache=~/.cache/bazel --config=android_arm64 \
             --deleted_packages=swift \
             //... \
             //runtime/engine:litert_lm_main \
@@ -250,6 +249,5 @@ jobs:
         if: env.REFRESH_CACHE == 'true' || steps.bazel-cache.outputs.cache-hit != 'true'
         with:
           path: |
-            ~/.cache/bazel-linux
-            ~/.cache/bazel-android
+            ~/.cache/bazel
           key: ${{ steps.cache-keys.outputs.CACHE_KEY }}

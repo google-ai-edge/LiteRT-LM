@@ -696,8 +696,8 @@ AudioLiteRtCompiledModelExecutor::Create(
       BuildLiteRtCompiledModelResources(executor_settings.GetModelAssets()));
   ASSIGN_OR_RETURN(auto audio_encoder_model,
                    resources->GetTFLiteModel(ModelType::kTfLiteAudioEncoderHw));
-  ASSIGN_OR_RETURN(auto audio_adapter_model,
-                   resources->GetTFLiteModel(ModelType::kTfLiteAudioAdapter));
+  auto audio_adapter_model_or =
+      resources->GetTFLiteModel(ModelType::kTfLiteAudioAdapter);
   std::unique_ptr<AudioEncoder> audio_encoder;
   LITERT_ASSIGN_OR_RETURN(auto encoder_signature,
                           audio_encoder_model->GetSignature(0));
@@ -712,9 +712,15 @@ AudioLiteRtCompiledModelExecutor::Create(
                      AudioStaticEncoder::Create(executor_settings, env,
                                                 audio_encoder_model));
   }
-  ASSIGN_OR_RETURN(
-      auto audio_adapter,
-      AudioAdapter::Create(executor_settings, env, audio_adapter_model));
+  std::unique_ptr<AudioAdapter> audio_adapter;
+  if (audio_adapter_model_or.ok() && *audio_adapter_model_or != nullptr) {
+    ASSIGN_OR_RETURN(
+        audio_adapter,
+        AudioAdapter::Create(executor_settings, env, *audio_adapter_model_or));
+  } else {
+    ABSL_LOG(INFO) << "Audio adapter model is not found. Audio encoder output "
+                      "will be used directly.";
+  }
   const auto& tmp = audio_encoder->GetInputMaskBuffer();
   LITERT_ASSIGN_OR_RETURN(auto mask_tensor_type, tmp.TensorType());
   LITERT_ASSIGN_OR_RETURN(int sequence_length,
@@ -724,54 +730,67 @@ AudioLiteRtCompiledModelExecutor::Create(
       audio_encoder->GetInputSpectrogramBuffer().TensorType());
   const int spectrogram_feature_dimensions =
       spectrogram_tensor_type.Layout().Dimensions().back();
-  LITERT_ASSIGN_OR_RETURN(auto adapter_output_tensor_type,
-                          audio_adapter->GetOutputBuffers()[0].TensorType());
-  const auto dims = adapter_output_tensor_type.Layout().Dimensions();
-  const int audio_embedding_dimensions = dims.back();
+  int audio_embedding_dimensions;
+  if (audio_adapter != nullptr) {
+    LITERT_ASSIGN_OR_RETURN(auto adapter_output_tensor_type,
+                            audio_adapter->GetOutputBuffers()[0].TensorType());
+    const auto dims = adapter_output_tensor_type.Layout().Dimensions();
+    audio_embedding_dimensions = dims.back();
+  } else {
+    LITERT_ASSIGN_OR_RETURN(
+        auto encoder_output_tensor_type,
+        audio_encoder->GetOutputFeaturesBuffer().TensorType());
+    const auto dims = encoder_output_tensor_type.Layout().Dimensions();
+    audio_embedding_dimensions = dims.back();
+  }
   LITERT_ASSIGN_OR_RETURN(
       auto executor_properties,
       GetAudioExecutorPropertiesFromModelResources(*resources));
   const int encoder_shrinking_factor = executor_properties.audio_shrink_factor;
   if (!is_streaming_encoder) {
-    if (audio_encoder->GetOutputBuffersMap().size() !=
-        audio_adapter->GetInputBuffers().size()) {
-      return absl::InvalidArgumentError(absl::StrCat(
-          "The number of output buffers of the audio encoder must be equal "
-          "to the number of input buffers of the audio adapter, but got ",
-          audio_encoder->GetOutputBuffersMap().size(), " and ",
-          audio_adapter->GetInputBuffers().size()));
+    if (audio_adapter != nullptr) {
+      if (audio_encoder->GetOutputBuffersMap().size() !=
+          audio_adapter->GetInputBuffers().size()) {
+        return absl::InvalidArgumentError(absl::StrCat(
+            "The number of output buffers of the audio encoder must be equal "
+            "to the number of input buffers of the audio adapter, but got ",
+            audio_encoder->GetOutputBuffersMap().size(), " and ",
+            audio_adapter->GetInputBuffers().size()));
+      }
     }
   }
 
-  // Make the audio adapter take the audio encoder's mask and features as
-  // input.
-  LITERT_ASSIGN_OR_RETURN(auto encoder_mask_tensor,
-                          audio_encoder->GetOutputMaskBuffer().Duplicate());
-  audio_adapter->GetMutableInputBuffers()[0] = std::move(encoder_mask_tensor);
-  LITERT_ASSIGN_OR_RETURN(
-      auto encoder_features_type,
-      audio_encoder->GetOutputFeaturesBuffer().TensorType());
-  LITERT_ASSIGN_OR_RETURN(auto adapter_features_type,
-                          audio_adapter->GetInputBuffers()[1].TensorType());
-
-  if (encoder_features_type.ElementType() == litert::ElementType::Float16 &&
-      adapter_features_type.ElementType() == litert::ElementType::Float32) {
-    // Handled in EncodeInternal by conversion.
-  } else if (encoder_features_type.ElementType() ==
-             adapter_features_type.ElementType()) {
+  if (audio_adapter != nullptr) {
+    // Make the audio adapter take the audio encoder's mask and features as
+    // input.
+    LITERT_ASSIGN_OR_RETURN(auto encoder_mask_tensor,
+                            audio_encoder->GetOutputMaskBuffer().Duplicate());
+    audio_adapter->GetMutableInputBuffers()[0] = std::move(encoder_mask_tensor);
     LITERT_ASSIGN_OR_RETURN(
-        auto encoder_features_tensor,
-        audio_encoder->GetMutableOutputFeaturesBuffer().Duplicate());
-    audio_adapter->GetMutableInputBuffers()[1] =
-        std::move(encoder_features_tensor);
-  } else {
-    ABSL_LOG(ERROR) << "Unsupported type mismatch between audio encoder ("
-                    << static_cast<int>(encoder_features_type.ElementType())
-                    << ") and audio adapter ("
-                    << static_cast<int>(adapter_features_type.ElementType())
-                    << ")";
-    return absl::InvalidArgumentError(
-        "Unsupported type mismatch between audio encoder and adapter");
+        auto encoder_features_type,
+        audio_encoder->GetOutputFeaturesBuffer().TensorType());
+    LITERT_ASSIGN_OR_RETURN(auto adapter_features_type,
+                            audio_adapter->GetInputBuffers()[1].TensorType());
+
+    if (encoder_features_type.ElementType() == litert::ElementType::Float16 &&
+        adapter_features_type.ElementType() == litert::ElementType::Float32) {
+      // Handled in EncodeInternal by conversion.
+    } else if (encoder_features_type.ElementType() ==
+               adapter_features_type.ElementType()) {
+      LITERT_ASSIGN_OR_RETURN(
+          auto encoder_features_tensor,
+          audio_encoder->GetMutableOutputFeaturesBuffer().Duplicate());
+      audio_adapter->GetMutableInputBuffers()[1] =
+          std::move(encoder_features_tensor);
+    } else {
+      ABSL_LOG(ERROR) << "Unsupported type mismatch between audio encoder ("
+                      << static_cast<int>(encoder_features_type.ElementType())
+                      << ") and audio adapter ("
+                      << static_cast<int>(adapter_features_type.ElementType())
+                      << ")";
+      return absl::InvalidArgumentError(
+          "Unsupported type mismatch between audio encoder and adapter");
+    }
   }
   ABSL_LOG(INFO) << "AudioLiteRtCompiledModelExecutor created with "
                     "encoder_shrinking_factor: "
@@ -823,39 +842,64 @@ absl::StatusOr<int> AudioLiteRtCompiledModelExecutor::EncodeInternal(
 
   ASSIGN_OR_RETURN(int chunk_valid_tokens,
                    GetValidCount(audio_encoder_->GetOutputMaskBuffer()));
-  auto& encoder_output = audio_encoder_->GetOutputFeaturesBuffer();
-  auto& adapter_input = audio_adapter_->GetMutableInputBuffers()[1];
+  auto& encoder_output = audio_encoder_->GetMutableOutputFeaturesBuffer();
 
-  LITERT_ASSIGN_OR_RETURN(auto encoder_type, encoder_output.TensorType());
-  LITERT_ASSIGN_OR_RETURN(auto adapter_type, adapter_input.TensorType());
+  if (audio_adapter_ != nullptr) {
+    auto& adapter_input = audio_adapter_->GetMutableInputBuffers()[1];
 
-  if (encoder_type.ElementType() == litert::ElementType::Float16 &&
-      adapter_type.ElementType() == litert::ElementType::Float32) {
-    LITERT_ASSIGN_OR_RETURN(auto encoder_lock_and_addr,
-                            TensorBufferScopedLock::Create<const tflite::half>(
-                                encoder_output, TensorBuffer::LockMode::kRead));
-    const tflite::half* encoder_data = encoder_lock_and_addr.second;
+    LITERT_ASSIGN_OR_RETURN(auto encoder_type, encoder_output.TensorType());
+    LITERT_ASSIGN_OR_RETURN(auto adapter_type, adapter_input.TensorType());
 
-    LITERT_ASSIGN_OR_RETURN(auto adapter_lock_and_addr,
-                            TensorBufferScopedLock::Create<float>(
-                                adapter_input, TensorBuffer::LockMode::kWrite));
-    float* adapter_data = adapter_lock_and_addr.second;
+    if (encoder_type.ElementType() == litert::ElementType::Float16 &&
+        adapter_type.ElementType() == litert::ElementType::Float32) {
+      LITERT_ASSIGN_OR_RETURN(
+          auto encoder_lock_and_addr,
+          TensorBufferScopedLock::Create<const tflite::half>(
+              encoder_output, TensorBuffer::LockMode::kRead));
+      const tflite::half* encoder_data = encoder_lock_and_addr.second;
 
-    LITERT_ASSIGN_OR_RETURN(auto elements, encoder_type.Layout().NumElements());
+      LITERT_ASSIGN_OR_RETURN(
+          auto adapter_lock_and_addr,
+          TensorBufferScopedLock::Create<float>(
+              adapter_input, TensorBuffer::LockMode::kWrite));
+      float* adapter_data = adapter_lock_and_addr.second;
 
-    for (size_t i = 0; i < elements; ++i) {
-      adapter_data[i] = static_cast<float>(encoder_data[i]);
+      LITERT_ASSIGN_OR_RETURN(auto elements,
+                              encoder_type.Layout().NumElements());
+
+      for (size_t i = 0; i < elements; ++i) {
+        adapter_data[i] = static_cast<float>(encoder_data[i]);
+      }
+    }
+
+    LITERT_RETURN_IF_ERROR(audio_adapter_->GetMutableCompiledModel().Run(
+        audio_adapter_->GetMutableInputBuffers(),
+        audio_adapter_->GetMutableOutputBuffers()));
+
+    LITERT_RETURN_IF_ERROR(
+        audio_adapter_->GetMutableOutputBuffers()[0].Read<float>(
+            absl::MakeSpan(audio_embeddings.data(),
+                           chunk_valid_tokens * audio_embedding_dimensions_)));
+  } else {
+    LITERT_ASSIGN_OR_RETURN(auto encoder_type, encoder_output.TensorType());
+    if (encoder_type.ElementType() == litert::ElementType::Float16) {
+      LITERT_ASSIGN_OR_RETURN(
+          auto encoder_lock_and_addr,
+          TensorBufferScopedLock::Create<const tflite::half>(
+              encoder_output, TensorBuffer::LockMode::kRead));
+      const tflite::half* encoder_data = encoder_lock_and_addr.second;
+      const size_t total_elements =
+          chunk_valid_tokens * audio_embedding_dimensions_;
+      for (size_t i = 0; i < total_elements; ++i) {
+        audio_embeddings[i] = static_cast<float>(encoder_data[i]);
+      }
+    } else {
+      LITERT_RETURN_IF_ERROR(encoder_output.Read<float>(
+          absl::MakeSpan(audio_embeddings.data(),
+                         chunk_valid_tokens * audio_embedding_dimensions_)));
     }
   }
 
-  LITERT_RETURN_IF_ERROR(audio_adapter_->GetMutableCompiledModel().Run(
-      audio_adapter_->GetMutableInputBuffers(),
-      audio_adapter_->GetMutableOutputBuffers()));
-
-  LITERT_RETURN_IF_ERROR(
-      audio_adapter_->GetMutableOutputBuffers()[0].Read<float>(
-          absl::MakeSpan(audio_embeddings.data(),
-                         chunk_valid_tokens * audio_embedding_dimensions_)));
   if (executor_properties_.is_streaming_model) {
     RETURN_IF_ERROR(
         reinterpret_cast<AudioStreamingEncoder*>(audio_encoder_.get())

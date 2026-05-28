@@ -22,16 +22,22 @@ https://developers.openai.com/api/reference/resources/chat/subresources/completi
 from __future__ import annotations
 
 import abc
+import base64
 import dataclasses
 import datetime
 import http.server
 import json
+import os
 import traceback
 from typing import Any
+import urllib.request
 
 import click
 
 import litert_lm
+from litert_lm_cli import (
+    model as cli_model,
+)
 from litert_lm_cli.commands import serve_util
 
 
@@ -50,6 +56,28 @@ def _sse_data(data: str, event: str | None = None) -> bytes:
 def _format_sse_final() -> bytes:
   """Formats the final [DONE] event for Server-Sent Events."""
   return b"data: [DONE]\n\n"
+
+
+def _parse_sampler_config(
+    body: dict[str, Any],
+) -> litert_lm.SamplerConfig | None:
+  """Parses and validates sampler parameters from the request body."""
+  temperature = body.get("temperature")
+  top_p = body.get("top_p")
+  # Note: 'top_k' is not officially supported by the OpenAI API spec,
+  # but we support it here as a custom parameter passed in the request body.
+  top_k = body.get("top_k")
+  seed = body.get("seed")
+
+  if all(v is None for v in (temperature, top_p, top_k, seed)):
+    return None
+
+  return litert_lm.SamplerConfig(
+      temperature=temperature,
+      top_p=top_p,
+      top_k=top_k,
+      seed=seed,
+  )
 
 
 class _OpenAIStreamFormatter(abc.ABC):
@@ -216,6 +244,123 @@ class OpenAIResponse:
 
   id: str
   output: list[ResponseOutput]
+
+
+def _translate_openai_message(msg: Any) -> dict[str, Any]:
+  """Translates an OpenAI message to a LiteRT-LM message format.
+
+  This function takes a message dictionary, typically from an OpenAI Chat
+  Completions request, and transforms its content to a format understood
+  by LiteRT-LM's `send_message_async`. Specifically, it handles multimodal
+  inputs like image URLs and audio data.
+
+  The input `msg` is expected to be a dictionary with at least a "role" and
+  potentially a "content" field. The "content" field can be a string or
+  a list of content parts. This function focuses on translating list-based
+  content parts.
+
+  Supported translations for `msg["content"]` items:
+  -   `{"type": "text", "text": ...}`: Passed through as is.
+  -   `{"type": "image_url", "image_url": {"url": "..."}}`:
+      -   If `url` starts with "data:", it's assumed to be a base64 encoded
+          image and translated to `{"type": "image", "blob": <base64_data>}`.
+      -   If `url` starts with "http://" or "https://", the image is fetched,
+          base64 encoded, and translated to
+          `{"type": "image", "blob": <base64_data>}`.
+      -   If `url` starts with "file://", it's translated to
+          `{"type": "image", "path": <local_path>}`.
+      -   Other URLs are treated as local paths.
+  -   `{"type": "input_audio", "input_audio": {"data": "..."}}`:
+      Translated to `{"type": "audio", "blob": <base64_data>}`.
+  -   Other content part types are passed through without modification.
+
+  Args:
+    msg: The message object, expected to be a dictionary.
+
+  Returns:
+    A dictionary representing the message in a LiteRT-LM compatible format,
+    with multimodal content (like images/audio) transformed.
+
+  Raises:
+    ValueError: If `msg` is not a dictionary, or if an unsupported data URL
+      format is provided for an image, or if a data URL is invalid.
+    RuntimeError: If an error occurs while downloading an image from a URL.
+  """
+  if not isinstance(msg, dict):
+    raise ValueError("Message must be an object")
+
+  role = msg.get("role")
+  content = msg.get("content")
+
+  if not isinstance(content, list):
+    return msg
+
+  translated_content = []
+  for part in content:
+    if not isinstance(part, dict):
+      translated_content.append(part)
+      continue
+
+    part_type = part.get("type")
+    if part_type == "text":
+      translated_content.append(part)
+    elif part_type == "image_url":
+      image_url = part.get("image_url", {})
+      url = image_url.get("url", "")
+      if url.startswith("data:"):
+        try:
+          header, data = url.split(",", 1)
+          if "base64" in header:
+            translated_content.append({
+                "type": "image",
+                "blob": data,
+            })
+          else:
+            raise ValueError(
+                "Unsupported data URL format (only base64 is supported)"
+            )
+        except ValueError as e:
+          if "Unsupported data URL format" in str(e):
+            raise
+          raise ValueError("Invalid data URL format") from e
+      elif url.startswith(("http://", "https://")):
+        try:
+          with urllib.request.urlopen(url, timeout=10) as response:
+            data = response.read()
+            base64_data = base64.b64encode(data).decode("utf-8")
+            translated_content.append({
+                "type": "image",
+                "blob": base64_data,
+            })
+        except Exception as e:
+          raise RuntimeError(
+              f"Failed to download image from {url}: {e!r}"
+          ) from e
+      else:
+        path = url
+        if path.startswith("file://"):
+          path = path[7:]
+        translated_content.append({
+            "type": "image",
+            "path": path,
+        })
+    elif part_type == "input_audio":
+      # The OpenAI Chat Completions API protocol only supports audio input
+      # inline via base64-encoded bytes in the 'data' field (no URL-based
+      # audio).
+      input_audio = part.get("input_audio", {})
+      data = input_audio.get("data", "")
+      translated_content.append({
+          "type": "audio",
+          "blob": data,
+      })
+    else:
+      translated_content.append(part)
+
+  return {
+      "role": role,
+      "content": translated_content,
+  }
 
 
 class OpenAIHandler(http.server.BaseHTTPRequestHandler):
@@ -426,103 +571,291 @@ class OpenAIHandler(http.server.BaseHTTPRequestHandler):
     formatter = _OpenAIV1ResponsesFormatter(now_str, created_ts, model_id)
     self._stream_response(conv, prompt, formatter)
 
-  def do_POST(self) -> None:  # pylint: disable=invalid-name
-    """Handles POST requests for OpenAI API compatible endpoints."""
+  def do_GET(self) -> None:  # pylint: disable=invalid-name
+    """Handles GET requests for OpenAI API compatible endpoints."""
     path_without_query, *_ = self.path.split("?", 1)
-    is_chat_completions = path_without_query in (
-        "/v1/chat/completions",
-        "/chat/completions",
-    )
-    if path_without_query != "/v1/responses" and not is_chat_completions:
+    if path_without_query != "/v1/models":
       self.send_error(404, "Not Found")
       return
 
-    content_length = int(self.headers.get("Content-Length", 0))
     try:
-      body = json.loads(self.rfile.read(content_length))
-    except json.JSONDecodeError:
+      models = cli_model.Model.get_all_models()
+      data = []
+      for m in models:
+        try:
+          created_ts = int(os.path.getmtime(m.model_path))
+        except OSError:
+          created_ts = 0
+        data.append({
+            "id": m.model_id,
+            "object": "model",
+            "created": created_ts,
+            "owned_by": "litert-lm",
+        })
+
+      resp_body = {
+          "object": "list",
+          "data": data,
+      }
+
+      self.send_response(200)
+      self.send_header("Content-Type", "application/json")
+      self.end_headers()
+      self.wfile.write(
+          json.dumps(resp_body, ensure_ascii=False).encode("utf-8")
+      )
+    except Exception as e:  # pylint: disable=broad-exception-caught
+      click.echo(
+          click.style(
+              f"Error listing models: {e!r}\n{traceback.format_exc()}",
+              fg="red",
+          )
+      )
+      if not self.wfile.closed:
+        try:
+          self.send_error(500, "".join(traceback.format_exception_only(e)))
+        except BrokenPipeError:
+          pass
+
+  def _get_post_data(self) -> dict[str, Any] | None:
+    """Extracts and parses the JSON payload safely."""
+    try:
+      content_length = int(self.headers.get("Content-Length", 0))
+      raw_data = self.rfile.read(content_length)
+      return json.loads(raw_data.decode("utf-8"))
+    except (ValueError, json.JSONDecodeError):
+      return None
+
+  def _parse_request_body(self) -> dict[str, Any] | None:
+    """Parses the request body as JSON, sending a 400 error if invalid."""
+    body = self._get_post_data()
+    if body is None:
       self.send_error(400, "Invalid JSON")
-      return
+      return None
+    return body
 
-    model_spec = body.get("model")
-    messages = body.get("messages")
-    if isinstance(messages, list) and messages:
-      last_msg = messages[-1]
-      prompt = last_msg if isinstance(last_msg, dict) else body.get("input")
-    else:
-      prompt = body.get("input")
+  def _get_engine_for_spec(
+      self,
+      model_spec: str,
+      translated_messages: list[dict[str, Any]] | None = None,
+      prompt: Any = None,
+  ) -> litert_lm.Engine | None:
+    """Parses the model spec and retrieves or initializes the engine.
 
-    if not model_spec or not prompt:
-      self.send_error(400, "Missing model or input/messages")
-      return
+    Args:
+      model_spec: The model specification string.
+      translated_messages: Optional list of already translated messages.
+      prompt: Optional prompt payload.
 
+    Returns:
+      The LiteRT-LM Engine instance, or None if initialization failed.
+    """
     try:
       spec = serve_util.parse_model_spec(model_spec)
       model_id = spec.model_id
     except ValueError as e:
       self.send_error(400, "".join(traceback.format_exception_only(e)))
-      return
+      return None
+
+    messages_to_scan = []
+    if translated_messages:
+      messages_to_scan.extend(translated_messages)
+    if prompt and isinstance(prompt, dict) and prompt not in messages_to_scan:
+      messages_to_scan.append(prompt)
+
+    need_vision = False
+    need_audio = False
+    for msg in messages_to_scan:
+      if isinstance(msg, dict):
+        content = msg.get("content")
+        if isinstance(content, list):
+          for part in content:
+            if isinstance(part, dict):
+              part_type = part.get("type")
+              if part_type == "image":
+                need_vision = True
+              elif part_type == "audio":
+                need_audio = True
+      if need_vision and need_audio:
+        break
+
+    # TODO: b/515805503 - Make the backend customizable..
+    vision_backend = litert_lm.Backend.CPU() if need_vision else None
+    audio_backend = litert_lm.Backend.CPU() if need_audio else None
 
     try:
       assert isinstance(self.server, serve_util.LiteRTLMServer)
-      engine = serve_util.get_or_initialize_server_engine(
+      return serve_util.get_or_initialize_server_engine(
           self.server,
           model_id=model_id,
           backend=spec.backend,
           max_num_tokens=spec.max_num_tokens,
+          vision_backend=vision_backend,
+          audio_backend=audio_backend,
       )
     except FileNotFoundError as e:
       self.send_error(404, "".join(traceback.format_exception_only(e)))
-      return
+      return None
     except Exception as e:  # pylint: disable=broad-exception-caught
       self.send_error(500, f"Failed to load engine: {e!r}")
+      return None
+
+  def _handle_inference_error(
+      self, e: Exception, model_id: str, prompt: Any
+  ) -> None:
+    """Handles errors occurring during inference by logging and sending 500.
+
+    Args:
+      e: The caught exception.
+      model_id: The model identifier.
+      prompt: The prompt payload.
+    """
+    click.echo(
+        click.style(
+            f"Error during inference for model {model_id!r} with prompt "
+            f"{prompt!r}: {e!r}\n{traceback.format_exc()}",
+            fg="red",
+        )
+    )
+    if not self.wfile.closed and not self._headers_sent:
+      try:
+        self.send_error(500, "".join(traceback.format_exception_only(e)))
+      except BrokenPipeError:
+        pass
+
+  def _handle_chat_completions_endpoint(self) -> None:
+    """Handles POST requests to chat completions endpoints."""
+    body = self._parse_request_body()
+    if body is None:
+      return
+
+    model_spec = body.get("model")
+    if not model_spec:
+      self.send_error(400, "Missing model")
+      return
+
+    messages = body.get("messages")
+    translated_messages = []
+    if isinstance(messages, list) and messages:
+      try:
+        translated_messages = [_translate_openai_message(m) for m in messages]
+      except ValueError as e:
+        self.send_error(400, f"Invalid messages: {e}")
+        return
+
+    if translated_messages:
+      last_msg = translated_messages[-1]
+      prompt = last_msg if isinstance(last_msg, dict) else body.get("input")
+    else:
+      prompt = body.get("input")
+
+    if isinstance(prompt, dict):
+      try:
+        if not translated_messages or prompt is not last_msg:
+          prompt = _translate_openai_message(prompt)
+      except ValueError as e:
+        self.send_error(400, f"Invalid prompt: {e}")
+        return
+
+    if not prompt:
+      self.send_error(400, "Missing input or messages")
+      return
+
+    engine = self._get_engine_for_spec(model_spec, translated_messages, prompt)
+    if engine is None:
       return
 
     stream = body.get("stream", False)
 
     try:
-      context_messages = (
-          messages[:-1]
-          if is_chat_completions and isinstance(messages, list)
-          else []
+      sampler_config = _parse_sampler_config(body)
+    except ValueError as e:
+      self.send_error(
+          400,
+          "Invalid sampler parameters: "
+          + "".join(traceback.format_exception_only(e)),
       )
+      return
+
+    try:
+      context_messages = translated_messages[:-1] if translated_messages else []
       with engine.create_conversation(
           messages=context_messages,
           automatic_tool_calling=False,
+          sampler_config=sampler_config,
       ) as conv:
         now = datetime.datetime.now(datetime.timezone.utc)
         now_str = now.strftime("%Y%m%d%H%M%S%f")
         created_ts = int(now.timestamp())
 
-        if is_chat_completions:
-          self._handle_chat_completions(
-              conv,
-              prompt,
-              model_spec,
-              stream,
-              now_str=now_str,
-              created_ts=created_ts,
-          )
-        else:
-          self._handle_responses(
-              conv,
-              prompt,
-              stream,
-              now_str=now_str,
-              created_ts=created_ts,
-              model_id=model_spec,
-          )
-
+        self._handle_chat_completions(
+            conv,
+            prompt,
+            model_spec,
+            stream,
+            now_str=now_str,
+            created_ts=created_ts,
+        )
     except Exception as e:  # pylint: disable=broad-exception-caught
-      click.echo(
-          click.style(
-              f"Error during inference for model {model_id!r} with prompt "
-              f"{prompt!r}: {e!r}\n{traceback.format_exc()}",
-              fg="red",
-          )
-      )
-      if not self.wfile.closed and not self._headers_sent:
-        try:
-          self.send_error(500, "".join(traceback.format_exception_only(e)))
-        except BrokenPipeError:
-          pass
+      self._handle_inference_error(e, model_spec, prompt)
+
+  def _handle_responses_endpoint(self) -> None:
+    """Handles POST requests to responses endpoint."""
+    body = self._parse_request_body()
+    if body is None:
+      return
+
+    model_spec = body.get("model")
+    prompt = body.get("input")
+
+    if not model_spec or not prompt:
+      self.send_error(400, "Missing model or input")
+      return
+
+    if isinstance(prompt, dict):
+      try:
+        prompt = _translate_openai_message(prompt)
+      except ValueError as e:
+        self.send_error(400, f"Invalid prompt: {e}")
+        return
+
+    engine = self._get_engine_for_spec(model_spec, prompt=prompt)
+    if engine is None:
+      return
+
+    stream = body.get("stream", False)
+
+    try:
+      with engine.create_conversation(
+          messages=[],
+          automatic_tool_calling=False,
+          sampler_config=None,
+      ) as conv:
+        now = datetime.datetime.now(datetime.timezone.utc)
+        now_str = now.strftime("%Y%m%d%H%M%S%f")
+        created_ts = int(now.timestamp())
+
+        self._handle_responses(
+            conv,
+            prompt,
+            stream,
+            now_str=now_str,
+            created_ts=created_ts,
+            model_id=model_spec,
+        )
+    except Exception as e:  # pylint: disable=broad-exception-caught
+      self._handle_inference_error(e, model_spec, prompt)
+
+  def do_POST(self) -> None:  # pylint: disable=invalid-name
+    """Handles POST requests for OpenAI API compatible endpoints."""
+    path_without_query, *_ = self.path.split("?", 1)
+
+    router = {
+        "/v1/chat/completions": self._handle_chat_completions_endpoint,
+        "/v1/responses": self._handle_responses_endpoint,
+    }
+
+    if path_without_query in router:
+      router[path_without_query]()
+    else:
+      self.send_error(404, "Not Found")

@@ -77,6 +77,7 @@ if "litert_lm_cli" in sys.modules:
       "litert_lm_cli"
   ].model = mock_model_mod
 
+from litert_lm_cli.commands import gemini_handler
 from litert_lm_cli.commands import serve
 from litert_lm_cli.commands import serve_util
 
@@ -160,8 +161,10 @@ class ServeTest(parameterized.TestCase):
           },
       ),
   )
-  def test_gemini_to_litertlm_message(self, gemini_content, expected):
-    self.assertEqual(serve.gemini_to_litertlm_message(gemini_content), expected)
+  def test_litertlm_message_from_gemini(self, gemini_content, expected):
+    self.assertEqual(
+        gemini_handler.litertlm_message_from_gemini(gemini_content), expected
+    )
 
   @parameterized.named_parameters(
       dict(
@@ -240,11 +243,13 @@ class ServeTest(parameterized.TestCase):
           },
       ),
   )
-  def test_litertlm_to_gemini_response(
+  def test_gemini_response_from_litertlm(
       self, litertlm_response, finish_reason, expected
   ):
     self.assertEqual(
-        serve.litertlm_to_gemini_response(litertlm_response, finish_reason),
+        gemini_handler.gemini_response_from_litertlm(
+            litertlm_response, finish_reason
+        ),
         expected,
     )
 
@@ -553,7 +558,7 @@ class ServeTest(parameterized.TestCase):
       want_stream,
       want_error,
   ):
-    req = serve.parse_model_and_backend(path)
+    req = gemini_handler.parse_model_and_backend(path)
     if want_error is not None:
       self.assertEqual(req.error_msg, want_error)
     else:
@@ -563,25 +568,43 @@ class ServeTest(parameterized.TestCase):
       self.assertEqual(req.max_num_tokens, want_max_tokens)
       self.assertEqual(req.is_stream, want_stream)
 
-  def test_model_id_regex_parsing(self):
-    self.assertTrue(
-        serve.GEN_CONTENT_RE.fullmatch(
-            "/v1beta/models/gemma-2b:generateContent"
-        )
+  @parameterized.named_parameters(
+      dict(
+          testcase_name="gen_content_standard",
+          regex_type="gen",
+          path="/v1beta/models/gemma-2b:generateContent",
+          expected=True,
+      ),
+      dict(
+          testcase_name="gen_content_with_params",
+          regex_type="gen",
+          path="/v1beta/models/gemma-2b,cpu,1024:generateContent",
+          expected=True,
+      ),
+      dict(
+          testcase_name="stream_gen_content",
+          regex_type="stream",
+          path="/v1beta/models/gemma-2b:streamGenerateContent",
+          expected=True,
+      ),
+      dict(
+          testcase_name="invalid_version",
+          regex_type="gen",
+          path="/v1/models/gemma-2b:generateContent",
+          expected=False,
+      ),
+  )
+  def test_model_id_regex_parsing(self, regex_type, path, expected):
+    regex = (
+        gemini_handler.GEN_CONTENT_RE
+        if regex_type == "gen"
+        else gemini_handler.STREAM_GEN_CONTENT_RE
     )
-    self.assertTrue(
-        serve.GEN_CONTENT_RE.fullmatch(
-            "/v1beta/models/gemma-2b,cpu,1024:generateContent"
-        )
-    )
-    self.assertTrue(
-        serve.STREAM_GEN_CONTENT_RE.fullmatch(
-            "/v1beta/models/gemma-2b:streamGenerateContent"
-        )
-    )
-    self.assertFalse(
-        serve.GEN_CONTENT_RE.fullmatch("/v1/models/gemma-2b:generateContent")
-    )
+    match = regex.fullmatch(path)
+    if expected:
+      self.assertIsNotNone(match)
+    else:
+      self.assertIsNone(match)
 
 
 if __name__ == "__main__":

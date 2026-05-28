@@ -100,7 +100,7 @@ def common_inference_options(f):
           \b
           Caching mode for compiled model artifacts to speed up startup.
             - disk: Persists compiled artifacts to a file next to the model.
-            - memory: Caches compiled artifacts in RAM (CPU backend only).
+            - memory: Caches compiled artifacts in RAM (CPU backend only, not available on Windows).
             - no: Disables caching (recompiles on every run).
           """),
   )(f)

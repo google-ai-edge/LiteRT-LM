@@ -545,7 +545,8 @@ bool EngineSettings::GetSingleThreadedExecution() const {
   return single_threaded_execution_;
 }
 
-void EngineSettings::SetSingleThreadedExecution(bool single_threaded_execution) {
+void EngineSettings::SetSingleThreadedExecution(
+    bool single_threaded_execution) {
   single_threaded_execution_ = single_threaded_execution;
 }
 

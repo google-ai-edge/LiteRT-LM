@@ -662,6 +662,9 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
   std::optional<DrafterContext> drafter_context_;
   std::optional<DrafterAuxContext> drafter_aux_context_;
 
+  // The sampler parameters to use for internal sampling.
+  proto::SamplerParameters sampler_params_;
+
   // The sampled ids to use for external sampling.
   // The layout is batch-major.
   // e.g. for output_batch_size=2, the layout is:

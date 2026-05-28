@@ -54,11 +54,16 @@ absl::StatusOr<std::unique_ptr<MemoryMappedFile>> CreateMemoryMapFromScopedFile(
     return absl::InvalidArgumentError("Invalid ScopedFile provided.");
   }
   litert::lm::ScopedFile::PlatformFile platform_file = scoped_file.file();
-  // For a read-only memory-mapped file:
-  // TODO - b/454926463: Add support for different keys for more optimal loading
-  // on Windows.
+  // Use an empty key so each mapping is unnamed/anonymous. Using a shared
+  // name like "whole" causes OpenFileMappingA() in the Windows implementation
+  // (memory_mapped_file_win.cc) to return a *previously created* mapping
+  // object that is bound to the first file ever mapped with that name. The
+  // result is that loading a second model file in the same process silently
+  // maps the bytes of the first file (the file handle and size are correct,
+  // but the bytes come from the wrong file). Anonymous mappings have no
+  // such cross-file aliasing.
   return litert::lm::MemoryMappedFile::Create(platform_file, offset, size,
-                                              "whole");
+                                              /*key=*/"");
 }
 
 }  // namespace

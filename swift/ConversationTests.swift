@@ -281,4 +281,13 @@ class ConversationTests: XCTestCase {
     let conversation = try await self.engine.createConversation(with: config)
     XCTAssertTrue(conversation.isAlive)
   }
+
+  func testRenderMessageIntoString() async throws {
+    let conversation = try await self.engine.createConversation(with: ConversationConfig())
+    XCTAssertTrue(conversation.isAlive)
+
+    let rendered = try conversation.renderMessageIntoString(Message("Hello world", role: .user))
+    XCTAssertFalse(rendered.isEmpty)
+    XCTAssertTrue(rendered.contains("Hello world"))
+  }
 }

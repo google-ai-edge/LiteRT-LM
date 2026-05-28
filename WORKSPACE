@@ -2,14 +2,14 @@
 
 workspace(name = "litert_lm")
 
-# UPDATED = 2026-05-14
-LITERT_REF = "d865fd82cd7fe6752908b3a0836895461c305679"
+# UPDATED = 2026-05-25
+LITERT_REF = "b39c9d2f84dd615be89bd71064b0a4f72bcdc426"
 
-LITERT_SHA256 = "5c1568c2374aad0e334abd57c41e3974ec0877c0902eb470d694ef0018e01918"
+LITERT_SHA256 = "1d10110618a8d1883e6e241b6db79883e1b7080b067f433f951ad870b51b2066"
 
-TENSORFLOW_REF = "49e7f1937d1509dd7fea41bff9ccc994baa97258"
+TENSORFLOW_REF = "7fe9939f200ff64f460da3571e52b23b57c7b5fa"
 
-TENSORFLOW_SHA256 = "977114079cda0d6aa9d05bc73ae2c2e3d36705fbb041e631a564e4d42e1e1dd9"
+TENSORFLOW_SHA256 = "e8335812604f62be1850a3fec69141967545b582e8c630350f43a862c1eb90a5"
 
 # buildifier: disable=load-on-top
 
@@ -102,9 +102,9 @@ tf_workspace3()
 # Details: https://github.com/google-ml-infra/rules_ml_toolchain
 http_archive(
     name = "rules_ml_toolchain",
-    sha256 = "9dbee8f24cc1b430bf9c2a6661ab70cbca89979322ddc7742305a05ff637ab6b",
-    strip_prefix = "rules_ml_toolchain-545c80f1026d526ea9c7aaa410bf0b52c9a82e74",
-    url = "https://github.com/google-ml-infra/rules_ml_toolchain/archive/545c80f1026d526ea9c7aaa410bf0b52c9a82e74.tar.gz",
+    sha256 = "9285d90601757838d064a12f51f14374d40064ddc2fa198979908b6bd0f89348",
+    strip_prefix = "rules_ml_toolchain-7f40603f574b95746152332ef3ad5fce63f1768d",
+    url = "https://github.com/google-ml-infra/rules_ml_toolchain/archive/7f40603f574b95746152332ef3ad5fce63f1768d.tar.gz",
 )
 
 load(
@@ -536,4 +536,3 @@ filegroup(
     sha256 = "ae13e2effe077e829be759182396b931d8f85cfb9cfe9d49385516ea367ef7b2",
     url = "https://github.com/NixOS/patchelf/releases/download/0.18.0/patchelf-0.18.0-aarch64.tar.gz",
 )
-

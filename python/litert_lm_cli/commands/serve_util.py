@@ -35,6 +35,8 @@ class LiteRTLMServer(http.server.HTTPServer):
     backend: The hardware backend used by the current engine, or None.
     max_num_tokens: The maximum number of tokens configured for the current
       engine, or None.
+    vision_backend: The hardware backend used for vision encoding, or None.
+    audio_backend: The hardware backend used for audio encoding, or None.
   """
 
   def __init__(
@@ -47,6 +49,8 @@ class LiteRTLMServer(http.server.HTTPServer):
     self.model_id: str | None = None
     self.backend: litert_lm.Backend | None = None
     self.max_num_tokens: int | None = None
+    self.vision_backend: litert_lm.Backend | None = None
+    self.audio_backend: litert_lm.Backend | None = None
 
 
 def _select_backend(model_path: str) -> litert_lm.Backend:
@@ -151,6 +155,8 @@ def get_or_initialize_server_engine(
     model_id: str,
     backend: litert_lm.Backend | None = None,
     max_num_tokens: int | None = None,
+    vision_backend: litert_lm.Backend | None = None,
+    audio_backend: litert_lm.Backend | None = None,
 ) -> litert_lm.Engine:
   """Retrieves the persistent server engine or initializes it on first request.
 
@@ -168,6 +174,8 @@ def get_or_initialize_server_engine(
     model_id: The requested model identifier string.
     backend: The hardware backend to use. If None, it will be auto-selected.
     max_num_tokens: The maximum number of tokens. If None, uses model default.
+    vision_backend: The hardware backend to use for vision encoding.
+    audio_backend: The hardware backend to use for audio encoding.
 
   Returns:
     The shared LiteRT-LM Engine context object.
@@ -184,6 +192,8 @@ def get_or_initialize_server_engine(
         server.model_id == model_id
         and server.backend == backend
         and server.max_num_tokens == max_num_tokens
+        and server.vision_backend == vision_backend
+        and server.audio_backend == audio_backend
     ):
       return server.litert_lm_engine
 
@@ -201,6 +211,8 @@ def get_or_initialize_server_engine(
     server.model_id = None
     server.backend = None
     server.max_num_tokens = None
+    server.vision_backend = None
+    server.audio_backend = None
 
   m = model.Model.from_model_id(model_id)
 
@@ -211,11 +223,17 @@ def get_or_initialize_server_engine(
       click.style(f"Initializing engine for model: {m.model_path}", fg="cyan")
   )
   engine = litert_lm.Engine(
-      m.model_path, backend=backend, max_num_tokens=max_num_tokens
+      m.model_path,
+      backend=backend,
+      max_num_tokens=max_num_tokens,
+      vision_backend=vision_backend,
+      audio_backend=audio_backend,
   )
   engine.__enter__()
   server.litert_lm_engine = engine
   server.model_id = model_id
   server.backend = backend
   server.max_num_tokens = max_num_tokens
+  server.vision_backend = vision_backend
+  server.audio_backend = audio_backend
   return engine

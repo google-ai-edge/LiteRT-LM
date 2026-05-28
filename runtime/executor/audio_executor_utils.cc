@@ -35,14 +35,20 @@ constexpr absl::string_view kPrevPrefix = "prev_";
 constexpr absl::string_view kFeatureStatesNamePattern = "feature_state";
 constexpr absl::string_view kSegmentMaskName = "segment_mask";
 constexpr absl::string_view kMaskName = "mask";
+constexpr absl::string_view kFeaturesName = "features";
 
-bool IsStreamingEncoder(const std::vector<absl::string_view>& input_names) {
+bool IsStreamingEncoder(const std::vector<absl::string_view>& input_names,
+                        bool has_adapter) {
   // A huristic to check if the model is a streaming model by checking if the
   // input names contain the prev_mask name.
   return std::any_of(input_names.begin(), input_names.end(),
                      [](absl::string_view input_name) {
                        return absl::StrContains(input_name, kPrevPrefix);
-                     });
+                     }) ||
+         // For audio encoder models without an adapter, we assume the model is
+         // streamable because there is no internal states for such models, and
+         // it can naturally support both streaming and non-streaming modes.
+         !has_adapter;
 }
 
 }  // namespace
@@ -55,24 +61,45 @@ GetAudioExecutorPropertiesFromModelResources(ModelResources& model_resources) {
       model_resources.GetTFLiteModel(ModelType::kTfLiteAudioEncoderHw));
   LITERT_ASSIGN_OR_RETURN(auto input_names,
                           audio_encoder_model->GetSignatureInputNames());
-  properties.is_streaming_model = IsStreamingEncoder(input_names);
+  auto audio_adapter_model_or =
+      model_resources.GetTFLiteModel(ModelType::kTfLiteAudioAdapter);
+  bool has_adapter = audio_adapter_model_or.ok();
+  properties.is_streaming_model = IsStreamingEncoder(input_names, has_adapter);
   LITERT_ASSIGN_OR_RETURN(
       auto mask_tensor_type,
       audio_encoder_model->GetInputTensorType(
-          0, properties.is_streaming_model ? kSegmentMaskName : kMaskName));
+          0, properties.is_streaming_model && has_adapter ? kSegmentMaskName
+                                                          : kMaskName));
   LITERT_ASSIGN_OR_RETURN(int input_sequence_length,
                           mask_tensor_type.Layout().NumElements());
+  int output_sequence_length;
+  if (has_adapter) {
+    LITERT_ASSIGN_OR_RETURN(
+        auto adapter_output_tensor_type,
+        (*audio_adapter_model_or)->GetOutputTensorType(0, 0));
+    output_sequence_length =
+        adapter_output_tensor_type.Layout().Dimensions()
+            [adapter_output_tensor_type.Layout().Dimensions().size() - 2];
+  } else {
+    if (properties.is_streaming_model) {
+      LITERT_ASSIGN_OR_RETURN(
+          auto features_tensor_type,
+          audio_encoder_model->GetOutputTensorType(0, kFeaturesName));
+      output_sequence_length =
+          features_tensor_type.Layout()
+              .Dimensions()[features_tensor_type.Layout().Dimensions().size() -
+                            2];
+    } else {
+      LITERT_ASSIGN_OR_RETURN(auto output_tensor_type,
+                              audio_encoder_model->GetOutputTensorType(0, 0));
+      output_sequence_length =
+          output_tensor_type.Layout()
+              .Dimensions()[output_tensor_type.Layout().Dimensions().size() -
+                            2];
+    }
+  }
 
-  ASSIGN_OR_RETURN(
-      auto audio_adapter_model,
-      model_resources.GetTFLiteModel(ModelType::kTfLiteAudioAdapter));
-  LITERT_ASSIGN_OR_RETURN(auto adapter_output_tensor_type,
-                          audio_adapter_model->GetOutputTensorType(0, 0));
-  int output_sequence_length =
-      adapter_output_tensor_type.Layout().Dimensions()
-          [adapter_output_tensor_type.Layout().Dimensions().size() - 2];
-
-  if (properties.is_streaming_model) {
+  if (properties.is_streaming_model && has_adapter) {
     // Get the feature states tensor type and use it to get the overlap size.
     std::string feature_states_name =
         absl::StrCat(kFeatureStatesNamePattern, "_0");
@@ -105,6 +132,11 @@ GetAudioExecutorPropertiesFromModelResources(ModelResources& model_resources) {
   } else {
     properties.audio_shrink_factor =
         input_sequence_length / output_sequence_length;
+    if (properties.is_streaming_model) {
+      properties.streaming_chunk_size = input_sequence_length;
+    } else {
+      properties.streaming_chunk_size = 0;
+    }
   }
   return properties;
 }

@@ -25,6 +25,7 @@ package(default_visibility = ["//visibility:public"])
 pytype_strict_library(
     name = "serve",
     srcs = [
+        "gemini_handler.py",
         "openai_handler.py",
         "serve.py",
         "serve_util.py",

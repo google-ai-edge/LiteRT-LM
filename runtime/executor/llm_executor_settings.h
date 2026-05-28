@@ -31,6 +31,7 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "runtime/proto/sampler_params.pb.h"
 #include "runtime/executor/executor_settings_base.h"
 
 namespace litert::lm {
@@ -423,6 +424,8 @@ std::ostream& operator<<(std::ostream& os, const LlmExecutorSettings& config);
 // Settings will not be changed by the executor while executing task.
 // TODO: b/404279705 - Set default values in LLM Executor RuntimeConfig
 struct RuntimeConfig {
+  // Sampler parameters.
+  std::optional<proto::SamplerParameters> sampler_params;
 
   // The number of output heads.
   // Multiple output heads might be supported in the future. For now, it is

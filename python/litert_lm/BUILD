@@ -329,12 +329,11 @@ copy_file(
     out = "dxil.dll",
 )
 
-# Uncomment when LiteRtDispatch becomes public
-# copy_file(
-#     name = "copy_openvino_dispatch_dll",
-#     src = "@litert//litert/vendors/intel_openvino/dispatch:LiteRtDispatch",
-#     out = "vendors/intel_openvino/dispatch/LiteRtDispatch.dll",
-# )
+copy_file(
+    name = "copy_openvino_dispatch_dll",
+    src = "@litert//litert/vendors/intel_openvino/dispatch:LiteRtDispatch",
+    out = "vendors/intel_openvino/dispatch/LiteRtDispatch.dll",
+)
 
 filegroup(
     name = "prebuilt_litert_lm_lib",
@@ -346,8 +345,7 @@ filegroup(
             ":copy_prebuilt_litert_lm_dll",
             ":copy_dxcompiler_dll",
             ":copy_dxil_dll",
-            # Uncomment when LiteRtDispatch becomes public
-            # ":copy_openvino_dispatch_dll",
+            ":copy_openvino_dispatch_dll",
         ],
         ":wheel_platform_linux_x86_64": [":copy_prebuilt_litert_lm_so"],
         ":wheel_platform_linux_arm64": [":copy_prebuilt_litert_lm_so"],
@@ -373,8 +371,7 @@ filegroup(
         "@platforms//os:windows": [
             ":copy_dxcompiler_dll",
             ":copy_dxil_dll",
-            # Uncomment when LiteRtDispatch becomes public
-            # ":copy_openvino_dispatch_dll",
+            ":copy_openvino_dispatch_dll",
         ],
         "@platforms//os:linux": [":copy_prebuilt_libs_so"],
         "//conditions:default":  [],

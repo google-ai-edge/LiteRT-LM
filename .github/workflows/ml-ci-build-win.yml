@@ -170,8 +170,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: |
-            ~/.cache/bazel-windows
-            ~/.cache/bazel-windows-dll
+            ~/.cache/bazel
           key: ${{ steps.cache-keys.outputs.CACHE_KEY }}
           restore-keys: |
             ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_HEAD }}
@@ -211,7 +210,7 @@ jobs:
       - name: Run bazel build on Windows
         run: |
           bazel --output_base="$env:BAZEL_OUTPUT_BASE" `
-            build --disk_cache=~/.cache/bazel-windows `
+            build --disk_cache=~/.cache/bazel `
             --deleted_packages=swift `
             --build_tag_filters='-nowindows' `
             --action_env=TMP="$env:TMP" `
@@ -232,7 +231,7 @@ jobs:
         continue-on-error: true
         run: |
           bazel --output_base="$env:BAZEL_OUTPUT_BASE" `
-            test --disk_cache=~/.cache/bazel-windows --test_output=errors `
+            test --disk_cache=~/.cache/bazel --test_output=errors `
             --deleted_packages=swift `
             --test_timeout=300,1500,5400,18000 `
             --test_verbose_timeout_warnings `
@@ -260,7 +259,7 @@ jobs:
       - name: Run bazel build on Windows with dynamic linking
         run: |
           bazel --output_base="$env:BAZEL_OUTPUT_BASE" `
-            build --disk_cache=~/.cache/bazel-windows-dll `
+            build --disk_cache=~/.cache/bazel `
             --define=litert_link_capi_so=true `
             --define=resolve_symbols_in_exec=false `
             //runtime/engine:litert_lm_main
@@ -275,6 +274,5 @@ jobs:
         if: env.REFRESH_CACHE == 'true' || steps.bazel-cache.outputs.cache-hit != 'true'
         with:
           path: |
-            ~/.cache/bazel-windows
-            ~/.cache/bazel-windows-dll
+            ~/.cache/bazel
           key: ${{ steps.cache-keys.outputs.CACHE_KEY }}

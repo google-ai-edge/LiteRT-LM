@@ -263,6 +263,28 @@ public class Conversation {
     litert_lm_conversation_cancel_process(handle)
   }
 
+  /// Renders the message into a string for testing and logging.
+  ///
+  /// This function does not need to be called for actual message sending, as the `sendMessage` and
+  /// `sendMessageStream` functions will handle rendering internally.
+  ///
+  /// - Parameter message: The message to render.
+  /// - Returns: The rendered message string.
+  /// - Throws: A `LiteRTLMError` if the conversation is not alive, serializing fails, or rendering fails.
+  public func renderMessageIntoString(_ message: Message) throws -> String {
+    let handle = try checkIsAlive()
+    let messageData = try JSONSerialization.data(withJSONObject: message.toJson)
+    guard let messageString = String(data: messageData, encoding: .utf8) else {
+      throw LiteRTLMError.conversation(.failedToSerializeMessage)
+    }
+
+    guard let cString = litert_lm_conversation_render_message_to_string(handle, messageString)
+    else {
+      throw LiteRTLMError.conversation(.invalidResponse("Failed to render message into string."))
+    }
+    return String(cString: cString)
+  }
+
   /// Retrieves the benchmark information from the conversation.
   ///
   /// - Returns: The benchmark information
