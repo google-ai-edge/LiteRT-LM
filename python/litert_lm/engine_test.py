@@ -274,6 +274,32 @@ class EngineTest(LiteRtLmTestBase):
       # (like Mac arm64) the generation might complete before the cancellation
       # signal is processed by the background thread.
 
+  def test_conversation_send_message_with_max_output_tokens(self):
+    with (
+        self._create_engine() as engine,
+        engine.create_conversation() as conversation,
+    ):
+      # The normal response length is expected to be longer. We constrain to 1 token.
+      # This will generate a very short response.
+      message = conversation.send_message("Hello world!", max_output_tokens=1)
+      self.assertEqual(message["role"], "assistant")
+      self.assertNotEmpty(message["content"])
+      response_text = message["content"][0]["text"]
+      self.assertEqual(response_text, "Tarefa")
+
+  def test_conversation_send_message_async_with_max_output_tokens(self):
+    with (
+        self._create_engine() as engine,
+        engine.create_conversation() as conversation,
+    ):
+      stream = conversation.send_message_async(
+          "Hello world!", max_output_tokens=1
+      )
+      text_pieces = self._extract_text(stream)
+      self.assertLen(text_pieces, 1)
+      response_text = "".join(text_pieces)
+      self.assertEqual(response_text, "Tarefa")
+
   def test_benchmark_class(self):
     benchmark = litert_lm.Benchmark(
         self.model_path,

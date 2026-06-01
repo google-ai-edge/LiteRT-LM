@@ -340,6 +340,7 @@ class AbstractConversation(abc.ABC):
   def send_message(
       self,
       message: str | Contents | Message | collections.abc.Mapping[str, Any],
+      max_output_tokens: int | None = None,
   ) -> collections.abc.Mapping[str, Any]:
     """Sends a message and returns the response.
 
@@ -350,6 +351,9 @@ class AbstractConversation(abc.ABC):
           a user message), `Message` (full message object, useful when automatic
           tool calling is disabled and a tool response is required), or
           `collections.abc.Mapping` (super flexible raw dictionary format).
+        max_output_tokens: The maximum number of tokens to generate, including
+          visible output tokens and thinking tokens. If None, uses the default
+          from engine/session configuration.
 
     Returns:
         A dictionary containing the model's response. The structure is:
@@ -360,6 +364,7 @@ class AbstractConversation(abc.ABC):
   def send_message_async(
       self,
       message: str | Contents | Message | collections.abc.Mapping[str, Any],
+      max_output_tokens: int | None = None,
   ) -> collections.abc.Iterator[collections.abc.Mapping[str, Any]]:
     """Sends a message and streams the response.
 
@@ -370,6 +375,9 @@ class AbstractConversation(abc.ABC):
           a user message), `Message` (full message object, useful when automatic
           tool calling is disabled and a tool response is required), or
           `collections.abc.Mapping` (super flexible raw dictionary format).
+        max_output_tokens: The maximum number of tokens to generate, including
+          visible output tokens and thinking tokens. If None, uses the default
+          from engine/session configuration.
 
     Returns:
         An iterator yielding dictionaries containing chunks of the model's

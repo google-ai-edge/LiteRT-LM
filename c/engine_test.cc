@@ -29,6 +29,7 @@
 #include "runtime/conversation/conversation.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/engine/engine_settings.h"
+#include "runtime/engine/io_types.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/llm_executor_settings.h"
 
@@ -42,6 +43,15 @@ struct LiteRtLmEngineSettings {
 
 struct LiteRtLmSessionConfig {
   std::unique_ptr<SessionConfig> config;
+};
+
+struct LiteRtLmDecodeConfig {
+  std::unique_ptr<litert::lm::DecodeConfig> config;
+};
+
+struct LiteRtLmConversationOptionalArgs {
+  std::optional<int> visual_token_budget;
+  std::optional<int> max_output_tokens;
 };
 
 struct LiteRtLmConversationConfig {
@@ -1636,4 +1646,133 @@ TEST(EngineCTest, TextScoringVerifyTokenLengths) {
   EXPECT_TRUE(litert_lm_responses_has_token_length_at(responses.get(), 0));
   EXPECT_GT(litert_lm_responses_get_token_length_at(responses.get(), 0), 0);
 }
+
+TEST(EngineCTest, DecodeConfigTest) {
+  using DecodeConfigPtr =
+      std::unique_ptr<LiteRtLmDecodeConfig,
+                      decltype(&litert_lm_decode_config_delete)>;
+  DecodeConfigPtr decode_config(litert_lm_decode_config_create(),
+                                &litert_lm_decode_config_delete);
+  ASSERT_NE(decode_config, nullptr);
+
+  litert_lm_decode_config_set_max_output_tokens(decode_config.get(), 42);
+  EXPECT_EQ(decode_config->config->GetMaxOutputTokens(), 42);
+}
+
+TEST(EngineCTest, ConversationOptionalArgsTest) {
+  OptionalArgsPtr optional_args(litert_lm_conversation_optional_args_create(),
+                                &litert_lm_conversation_optional_args_delete);
+  ASSERT_NE(optional_args, nullptr);
+
+  litert_lm_conversation_optional_args_set_max_output_tokens(
+      optional_args.get(), 24);
+  EXPECT_EQ(optional_args->max_output_tokens, 24);
+}
+
+TEST(EngineCTest, RunPrefillAndDecodeWithConfig) {
+  const std::string task_path = GetTestdataPath(
+      "litert_lm/runtime/testdata/test_lm_new_metadata.task");
+
+  EngineSettingsPtr settings(
+      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
+                                       /* vision_backend_str */ nullptr,
+                                       /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+  litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
+
+  EnginePtr engine(litert_lm_engine_create(settings.get()),
+                   &litert_lm_engine_delete);
+  ASSERT_NE(engine, nullptr);
+
+  SessionPtr session(litert_lm_engine_create_session(
+                         engine.get(), /* session_config */ nullptr),
+                     &litert_lm_session_delete);
+  ASSERT_NE(session, nullptr);
+
+  const char* prompt = "Hello world!";
+  LiteRtLmInputData input_data;
+  input_data.type = kLiteRtLmInputDataTypeText;
+  input_data.data = prompt;
+  input_data.size = strlen(prompt);
+
+  litert_lm_session_run_prefill(session.get(), &input_data, 1);
+
+  using DecodeConfigPtr =
+      std::unique_ptr<LiteRtLmDecodeConfig,
+                      decltype(&litert_lm_decode_config_delete)>;
+  DecodeConfigPtr decode_config(litert_lm_decode_config_create(),
+                                &litert_lm_decode_config_delete);
+  ASSERT_NE(decode_config, nullptr);
+  litert_lm_decode_config_set_max_output_tokens(decode_config.get(), 1);
+
+  ResponsesPtr responses(litert_lm_session_run_decode_with_config(
+                             session.get(), decode_config.get()),
+                         &litert_lm_responses_delete);
+  ASSERT_NE(responses, nullptr);
+
+  EXPECT_EQ(litert_lm_responses_get_num_candidates(responses.get()), 1);
+  const char* response_text =
+      litert_lm_responses_get_response_text_at(responses.get(), 0);
+  ASSERT_NE(response_text, nullptr);
+  EXPECT_GT(strlen(response_text), 0);
+  // Since max_output_tokens is 1, the response should be very short.
+  EXPECT_LT(strlen(response_text), 10);
+}
+
+TEST(EngineCTest, RunPrefillAndDecodeAsyncWithConfig) {
+  const std::string task_path = GetTestdataPath(
+      "litert_lm/runtime/testdata/test_lm_new_metadata.task");
+
+  EngineSettingsPtr settings(
+      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
+                                       /* vision_backend_str */ nullptr,
+                                       /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+  litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
+
+  EnginePtr engine(litert_lm_engine_create(settings.get()),
+                   &litert_lm_engine_delete);
+  ASSERT_NE(engine, nullptr);
+
+  SessionPtr session(litert_lm_engine_create_session(
+                         engine.get(), /* session_config */ nullptr),
+                     &litert_lm_session_delete);
+  ASSERT_NE(session, nullptr);
+
+  const char* prompt = "Hello world!";
+  LiteRtLmInputData input_data;
+  input_data.type = kLiteRtLmInputDataTypeText;
+  input_data.data = prompt;
+  input_data.size = strlen(prompt);
+
+  litert_lm_session_run_prefill(session.get(), &input_data, 1);
+
+  using DecodeConfigPtr =
+      std::unique_ptr<LiteRtLmDecodeConfig,
+                      decltype(&litert_lm_decode_config_delete)>;
+  DecodeConfigPtr decode_config(litert_lm_decode_config_create(),
+                                &litert_lm_decode_config_delete);
+  ASSERT_NE(decode_config, nullptr);
+  litert_lm_decode_config_set_max_output_tokens(decode_config.get(), 1);
+
+  StreamCallbackData callback_data;
+  int result = litert_lm_session_run_decode_async_with_config(
+      session.get(), decode_config.get(), &StreamCallback, &callback_data);
+  ASSERT_EQ(result, 0);
+
+  callback_data.done.WaitForNotification();
+
+  EXPECT_THAT(
+      callback_data.status,
+      testing::AnyOf(absl_testing::IsOk(),
+                     absl_testing::StatusIs(
+                         absl::StatusCode::kInternal,
+                         testing::HasSubstr("Max number of tokens reached."))));
+  EXPECT_GT(callback_data.response.length(), 0);
+  // Since max_output_tokens is 1, the response should be very short.
+  EXPECT_LT(callback_data.response.length(), 10);
+}
+
 }  // namespace

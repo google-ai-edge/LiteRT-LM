@@ -108,7 +108,8 @@ std::optional<litert::lm::DataProcessorArguments> GetDataProcessorArguments(
 
 litert::lm::OptionalArgs CreateOptionalArgs(
     const litert::lm::Conversation* conversation, const char* extra_context,
-    std::optional<int> visual_token_budget) {
+    std::optional<int> visual_token_budget,
+    std::optional<int> max_output_tokens) {
   litert::lm::OptionalArgs litert_lm_optional_args;
   if (extra_context) {
     auto extra_context_json =
@@ -120,6 +121,9 @@ litert::lm::OptionalArgs CreateOptionalArgs(
   if (visual_token_budget.has_value()) {
     litert_lm_optional_args.args =
         GetDataProcessorArguments(conversation, *visual_token_budget);
+  }
+  if (max_output_tokens.has_value()) {
+    litert_lm_optional_args.max_output_tokens = max_output_tokens;
   }
   return litert_lm_optional_args;
 }
@@ -209,6 +213,10 @@ struct LiteRtLmSessionConfig {
   std::unique_ptr<SessionConfig> config;
 };
 
+struct LiteRtLmDecodeConfig {
+  std::unique_ptr<litert::lm::DecodeConfig> config;
+};
+
 struct LiteRtLmConversationConfig {
   std::optional<SessionConfig> session_config;
   std::string system_message_json;
@@ -221,6 +229,7 @@ struct LiteRtLmConversationConfig {
 
 struct LiteRtLmConversationOptionalArgs {
   std::optional<int> visual_token_budget;
+  std::optional<int> max_output_tokens;
 };
 
 struct LiteRtLmDetokenizeResult {
@@ -299,6 +308,24 @@ void litert_lm_session_config_delete(LiteRtLmSessionConfig* config) {
   delete config;
 }
 
+LiteRtLmDecodeConfig* litert_lm_decode_config_create() {
+  auto* c_config = new LiteRtLmDecodeConfig;
+  c_config->config = std::make_unique<litert::lm::DecodeConfig>(
+      litert::lm::DecodeConfig::CreateDefault());
+  return c_config;
+}
+
+void litert_lm_decode_config_set_max_output_tokens(LiteRtLmDecodeConfig* config,
+                                                   int max_output_tokens) {
+  if (config && config->config) {
+    config->config->SetMaxOutputTokens(max_output_tokens);
+  }
+}
+
+void litert_lm_decode_config_delete(LiteRtLmDecodeConfig* config) {
+  delete config;
+}
+
 LiteRtLmConversationConfig* litert_lm_conversation_config_create() {
   return new LiteRtLmConversationConfig;
 }
@@ -368,6 +395,13 @@ void litert_lm_conversation_optional_args_set_visual_token_budget(
     LiteRtLmConversationOptionalArgs* args, int visual_token_budget) {
   if (args) {
     args->visual_token_budget = visual_token_budget;
+  }
+}
+
+void litert_lm_conversation_optional_args_set_max_output_tokens(
+    LiteRtLmConversationOptionalArgs* args, int max_output_tokens) {
+  if (args) {
+    args->max_output_tokens = max_output_tokens;
   }
 }
 
@@ -650,6 +684,20 @@ LiteRtLmResponses* litert_lm_session_run_decode(LiteRtLmSession* session) {
   return new LiteRtLmResponses{std::move(*responses)};
 }
 
+LiteRtLmResponses* litert_lm_session_run_decode_with_config(
+    LiteRtLmSession* session, const LiteRtLmDecodeConfig* config) {
+  if (!session || !session->session || !config || !config->config) {
+    return nullptr;
+  }
+  auto responses = session->session->RunDecode(*config->config);
+  if (!responses.ok()) {
+    ABSL_LOG(ERROR) << "Failed to run decode with config: "
+                    << responses.status();
+    return nullptr;
+  }
+  return new LiteRtLmResponses{std::move(*responses)};
+}
+
 int litert_lm_session_run_decode_async(LiteRtLmSession* session,
                                        LiteRtLmStreamCallback callback,
                                        void* callback_data) {
@@ -660,6 +708,22 @@ int litert_lm_session_run_decode_async(LiteRtLmSession* session,
       session->session->RunDecodeAsync(CreateCallback(callback, callback_data));
   if (!status.ok()) {
     ABSL_LOG(ERROR) << "Failed to start decode stream: " << status.status();
+    return static_cast<int>(status.status().code());
+  }
+  return 0;
+}
+
+int litert_lm_session_run_decode_async_with_config(
+    LiteRtLmSession* session, const LiteRtLmDecodeConfig* config,
+    LiteRtLmStreamCallback callback, void* callback_data) {
+  if (!session || !session->session || !config || !config->config) {
+    return -1;
+  }
+  auto status = session->session->RunDecodeAsync(
+      CreateCallback(callback, callback_data), *config->config);
+  if (!status.ok()) {
+    ABSL_LOG(ERROR) << "Failed to start decode stream with config: "
+                    << status.status();
     return static_cast<int>(status.status().code());
   }
   return 0;
@@ -1035,8 +1099,8 @@ LiteRtLmJsonResponse* litert_lm_conversation_send_message(
 
   OptionalArgs litert_lm_optional_args = CreateOptionalArgs(
       conversation->conversation.get(), extra_context,
-      optional_args ? std::optional<int>(optional_args->visual_token_budget)
-                    : std::nullopt);
+      optional_args ? optional_args->visual_token_budget : std::nullopt,
+      optional_args ? optional_args->max_output_tokens : std::nullopt);
 
   auto response = conversation->conversation->SendMessage(
       json_message, std::move(litert_lm_optional_args));
@@ -1079,8 +1143,8 @@ int litert_lm_conversation_send_message_stream(
 
   litert::lm::OptionalArgs litert_lm_optional_args = CreateOptionalArgs(
       conversation->conversation.get(), extra_context,
-      optional_args ? std::optional<int>(optional_args->visual_token_budget)
-                    : std::nullopt);
+      optional_args ? optional_args->visual_token_budget : std::nullopt,
+      optional_args ? optional_args->max_output_tokens : std::nullopt);
 
   absl::Status status = conversation->conversation->SendMessageAsync(
       json_message, CreateConversationCallback(callback, callback_data),

@@ -91,6 +91,9 @@ typedef struct LiteRtLmTokenUnions LiteRtLmTokenUnions;
 // Opaque pointer for LiteRT LM Session Config.
 typedef struct LiteRtLmSessionConfig LiteRtLmSessionConfig;
 
+// Opaque pointer for LiteRT LM Decode Config.
+typedef struct LiteRtLmDecodeConfig LiteRtLmDecodeConfig;
+
 // Opaque pointer for LiteRT LM Conversation Config.
 typedef struct LiteRtLmConversationConfig LiteRtLmConversationConfig;
 
@@ -147,6 +150,25 @@ void litert_lm_session_config_set_sampler_params(
 // @param config The config to destroy.
 LITERT_LM_C_API_EXPORT
 void litert_lm_session_config_delete(LiteRtLmSessionConfig* config);
+
+// Creates a LiteRT LM Decode Config.
+// The caller is responsible for destroying the config using
+// `litert_lm_decode_config_delete`.
+// @return A pointer to the created config, or NULL on failure.
+LITERT_LM_C_API_EXPORT
+LiteRtLmDecodeConfig* litert_lm_decode_config_create();
+
+// Sets the maximum number of output tokens for this decode config.
+// @param config The config to modify.
+// @param max_output_tokens The maximum number of output tokens.
+LITERT_LM_C_API_EXPORT
+void litert_lm_decode_config_set_max_output_tokens(LiteRtLmDecodeConfig* config,
+                                                   int max_output_tokens);
+
+// Destroys a LiteRT LM Decode Config.
+// @param config The config to destroy.
+LITERT_LM_C_API_EXPORT
+void litert_lm_decode_config_delete(LiteRtLmDecodeConfig* config);
 
 // Creates a LiteRT LM Conversation Config.
 // The caller is responsible for destroying the config using
@@ -232,6 +254,13 @@ void litert_lm_conversation_optional_args_delete(
 LITERT_LM_C_API_EXPORT
 void litert_lm_conversation_optional_args_set_visual_token_budget(
     LiteRtLmConversationOptionalArgs* optional_args, int visual_token_budget);
+
+// Sets the maximum number of output tokens for the conversation optional args.
+// @param optional_args The optional args to modify.
+// @param max_output_tokens The maximum number of output tokens.
+LITERT_LM_C_API_EXPORT
+void litert_lm_conversation_optional_args_set_max_output_tokens(
+    LiteRtLmConversationOptionalArgs* optional_args, int max_output_tokens);
 
 // Sets the minimum log level for the LiteRT LM library.
 // Log levels are: 0=VERBOSE, 1=DEBUG, 2=INFO, 3=WARNING, 4=ERROR, 5=FATAL,
@@ -432,6 +461,17 @@ int litert_lm_session_run_prefill(LiteRtLmSession* session,
 //   responsible for deleting the responses using `litert_lm_responses_delete`.
 LITERT_LM_C_API_EXPORT
 LiteRtLmResponses* litert_lm_session_run_decode(LiteRtLmSession* session);
+
+// Starts the decoding process with a custom decode config.
+// This is a blocking call.
+//
+// @param session The session to use.
+// @param config The decode config to use.
+// @return A pointer to the responses, or NULL on failure. The caller is
+//   responsible for deleting the responses using `litert_lm_responses_delete`.
+LITERT_LM_C_API_EXPORT
+LiteRtLmResponses* litert_lm_session_run_decode_with_config(
+    LiteRtLmSession* session, const LiteRtLmDecodeConfig* config);
 
 // Scores the target text after the prefill process is done.
 //
@@ -665,6 +705,19 @@ LITERT_LM_C_API_EXPORT
 int litert_lm_session_run_decode_async(LiteRtLmSession* session,
                                        LiteRtLmStreamCallback callback,
                                        void* callback_data);
+
+// Starts the decoding process with a custom decode config asynchronously.
+// This is a non-blocking call.
+//
+// @param session The session to use.
+// @param config The decode config to use.
+// @param callback The callback function to receive response chunks.
+// @param callback_data A pointer to user data.
+// @return 0 on success, non-zero on failure.
+LITERT_LM_C_API_EXPORT
+int litert_lm_session_run_decode_async_with_config(
+    LiteRtLmSession* session, const LiteRtLmDecodeConfig* config,
+    LiteRtLmStreamCallback callback, void* callback_data);
 
 // Generates content from the input prompt and streams the response via a
 // callback. This is a non-blocking call that will invoke the callback from a
