@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import collections.abc
+import contextlib
 import json
 import logging
 import queue
@@ -24,6 +25,25 @@ from typing import Any
 from . import interfaces
 from ._ffi import STREAM_CALLBACK_TYPE
 from ._messages import Contents, Message, normalize_message
+
+
+def _is_tool_call(msg_dict: collections.abc.Mapping[str, Any]) -> bool:
+  """Returns True if the message dictionary contains a tool call.
+
+  Args:
+      msg_dict: The message dictionary to check.
+
+  Returns:
+      True if the message contains a tool call, False otherwise.
+  """
+  if "tool_calls" in msg_dict:
+    return True
+  contents = msg_dict.get("content", [])
+  if not isinstance(contents, list):
+    contents = [contents]
+  return any(
+      isinstance(c, dict) and c.get("type") == "tool_call" for c in contents
+  )
 
 
 class Conversation(interfaces.AbstractConversation):
@@ -115,124 +135,167 @@ class Conversation(interfaces.AbstractConversation):
 
     return tool_responses
 
+  @contextlib.contextmanager
+  def _optional_args(
+      self, max_output_tokens: int | None
+  ) -> collections.abc.Iterator[int | None]:
+    """Creates and manages the lifetime of LiteRtLmConversationOptionalArgs.
+
+    Args:
+        max_output_tokens: The maximum number of tokens to generate. If None,
+          yields None.
+
+    Yields:
+        A pointer to the created optional args, or None if max_output_tokens is
+        None.
+
+    Raises:
+        RuntimeError: If the optional args creation fails.
+    """
+    if max_output_tokens is None:
+      yield None
+      return
+    ptr = self._lib.litert_lm_conversation_optional_args_create()
+    if not ptr:
+      raise RuntimeError("Failed to create optional args")
+    try:
+      self._lib.litert_lm_conversation_optional_args_set_max_output_tokens(
+          ptr, max_output_tokens
+      )
+      yield ptr
+    finally:
+      self._lib.litert_lm_conversation_optional_args_delete(ptr)
+
+  @contextlib.contextmanager
+  def _json_response(
+      self, resp_ptr: int | None
+  ) -> collections.abc.Iterator[int | None]:
+    """Manages the lifetime of LiteRtLmJsonResponse.
+
+    Args:
+        resp_ptr: The pointer to the JSON response to manage.
+
+    Yields:
+        The same resp_ptr.
+    """
+    try:
+      yield resp_ptr
+    finally:
+      if resp_ptr:
+        self._lib.litert_lm_json_response_delete(resp_ptr)
+
   # TODO - b/482060476: Change the return type to "Message".
   def send_message(
       self,
       message: str | Contents | Message | collections.abc.Mapping[str, Any],
+      max_output_tokens: int | None = None,
   ) -> collections.abc.Mapping[str, Any]:
     if not self._ptr:
       raise RuntimeError("Conversation is closed.")
     current_message = normalize_message(message)
 
-    while True:
-      msg_json = json.dumps(current_message)
-      ctx_json = json.dumps(getattr(self, "extra_context", {}))
+    with self._optional_args(max_output_tokens) as opt_args_ptr:
+      while True:
+        msg_json = json.dumps(current_message)
+        ctx_json = json.dumps(getattr(self, "extra_context", {}))
 
-      resp_ptr = self._lib.litert_lm_conversation_send_message(
-          self._ptr, msg_json, ctx_json,
-          # TODO(b/508420269): Add visual token budget option.
-          None,
-      )
-      if not resp_ptr:
-        raise RuntimeError("litert_lm_conversation_send_message failed")
+        resp_ptr = self._lib.litert_lm_conversation_send_message(
+            self._ptr, msg_json, ctx_json, opt_args_ptr
+        )
+        if not resp_ptr:
+          raise RuntimeError("litert_lm_conversation_send_message failed")
 
-      try:
-        resp_str = self._lib.litert_lm_json_response_get_string(resp_ptr)
-        response_dict = json.loads(resp_str.decode("utf-8")) if resp_str else {}
-      finally:
-        self._lib.litert_lm_json_response_delete(resp_ptr)
+        with self._json_response(resp_ptr):
+          resp_str = self._lib.litert_lm_json_response_get_string(resp_ptr)
+          response_dict = (
+              json.loads(resp_str.decode("utf-8")) if resp_str else {}
+          )
 
-      if not self.automatic_tool_calling:
-        return response_dict
+        if not self.automatic_tool_calling:
+          return response_dict
 
-      tool_responses = self._handle_tool_calls(response_dict)
-      if not tool_responses:
-        return response_dict
+        tool_responses = self._handle_tool_calls(response_dict)
+        if not tool_responses:
+          return response_dict
 
-      current_message = tool_responses
+        current_message = tool_responses
 
   def send_message_async(
       self,
       message: str | Contents | Message | collections.abc.Mapping[str, Any],
+      max_output_tokens: int | None = None,
   ) -> collections.abc.Iterator[collections.abc.Mapping[str, Any]]:
     if not self._ptr:
       raise RuntimeError("Conversation is closed.")
     current_message = normalize_message(message)
 
-    while True:
-      msg_json = json.dumps(current_message)
-      ctx_json = json.dumps(getattr(self, "extra_context", {}))
-
-      q = queue.Queue()
-
-      def callback(unused_data, chunk, is_final, error_msg):
-        if error_msg:
-          q.put(RuntimeError(error_msg.decode("utf-8")))
-        else:
-          q.put((chunk.decode("utf-8") if chunk else "", is_final))
-
-      c_callback = STREAM_CALLBACK_TYPE(callback)
-      self._current_callback = c_callback
-      res = self._lib.litert_lm_conversation_send_message_stream(
-          self._ptr,
-          msg_json,
-          ctx_json,
-          # TODO(b/508420269): Add visual token budget option.
-          None,
-          c_callback,
-          None,
-      )
-      if res != 0:
-        raise RuntimeError("litert_lm_conversation_send_message_stream failed")
-
-      full_response_for_tools = None
+    with self._optional_args(max_output_tokens) as opt_args_ptr:
       while True:
-        item = q.get()
-        if isinstance(item, Exception):
-          err_msg = str(item)
-          if (
-              "CANCELLED" in err_msg
-              or "Max number of tokens reached" in err_msg
-          ):
-            break
-          raise item
-        chunk_str, is_final = item
-        if chunk_str:
-          try:
-            msg_dict = json.loads(chunk_str)
-            if self.automatic_tool_calling:
-              # If it's a tool call, we don't yield it yet.
-              is_tool_call = "tool_calls" in msg_dict
-              if not is_tool_call:
-                contents = msg_dict.get("content", [])
-                if not isinstance(contents, list):
-                  contents = [contents]
-                is_tool_call = any(
-                    isinstance(c, dict) and c.get("type") == "tool_call"
-                    for c in contents
-                )
+        msg_json = json.dumps(current_message)
+        ctx_json = json.dumps(getattr(self, "extra_context", {}))
 
-              if is_tool_call:
+        q = queue.Queue()
+
+        def callback(
+            unused_data: Any,
+            chunk: bytes,
+            is_final: bool,
+            error_msg: bytes,
+        ) -> None:
+          if error_msg:
+            q.put(RuntimeError(error_msg.decode("utf-8")))
+          else:
+            q.put((chunk.decode("utf-8") if chunk else "", is_final))
+
+        c_callback = STREAM_CALLBACK_TYPE(callback)
+        self._current_callback = c_callback
+        res = self._lib.litert_lm_conversation_send_message_stream(
+            self._ptr,
+            msg_json,
+            ctx_json,
+            opt_args_ptr,
+            c_callback,
+            None,
+        )
+        if res != 0:
+          raise RuntimeError(
+              "litert_lm_conversation_send_message_stream failed"
+          )
+
+        full_response_for_tools = None
+        while True:
+          item = q.get()
+          if isinstance(item, Exception):
+            err_msg = str(item)
+            if (
+                "CANCELLED" in err_msg
+                or "Max number of tokens reached" in err_msg
+            ):
+              break
+            raise item
+          chunk_str, is_final = item
+          if chunk_str:
+            try:
+              msg_dict = json.loads(chunk_str)
+              if self.automatic_tool_calling and _is_tool_call(msg_dict):
                 full_response_for_tools = msg_dict
               else:
                 yield msg_dict
-            else:
-              yield msg_dict
-          except json.JSONDecodeError:
-            yield {
-                "role": "assistant",
-                "content": [{"type": "text", "text": chunk_str}],
-            }
-        if is_final:
+            except json.JSONDecodeError:
+              yield {
+                  "role": "assistant",
+                  "content": [{"type": "text", "text": chunk_str}],
+              }
+          if is_final:
+            break
+
+        if not full_response_for_tools:
           break
 
-      if not full_response_for_tools:
-        break
-
-      tool_responses = self._handle_tool_calls(full_response_for_tools)
-      if not tool_responses:
-        break
-      current_message = tool_responses
+        tool_responses = self._handle_tool_calls(full_response_for_tools)
+        if not tool_responses:
+          break
+        current_message = tool_responses
 
   def render_message_to_string(
       self,

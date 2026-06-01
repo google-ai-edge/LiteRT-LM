@@ -299,6 +299,15 @@ def _setup_lib_signatures(lib):
   lib.litert_lm_conversation_get_token_count.restype = ctypes.c_int
   lib.litert_lm_conversation_get_token_count.argtypes = [ctypes.c_void_p]
 
+  # Conversation Optional Args
+  lib.litert_lm_conversation_optional_args_create.restype = ctypes.c_void_p
+  lib.litert_lm_conversation_optional_args_create.argtypes = []
+  lib.litert_lm_conversation_optional_args_delete.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_conversation_optional_args_set_max_output_tokens.argtypes = [
+      ctypes.c_void_p,
+      ctypes.c_int,
+  ]
+
   # interfaces.Responses
   lib.litert_lm_responses_delete.argtypes = [ctypes.c_void_p]
   lib.litert_lm_responses_get_num_candidates.restype = ctypes.c_int

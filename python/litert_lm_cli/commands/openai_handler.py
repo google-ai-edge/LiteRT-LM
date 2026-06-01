@@ -541,6 +541,7 @@ class OpenAIHandler(http.server.BaseHTTPRequestHandler):
       conv: litert_lm.Conversation,
       prompt: str | dict[str, Any],
       formatter: _OpenAIStreamFormatter,
+      max_completion_tokens: int | None = None,
   ) -> None:
     """Streams server-sent events using the provided formatter.
 
@@ -548,6 +549,7 @@ class OpenAIHandler(http.server.BaseHTTPRequestHandler):
       conv: The active LiteRT-LM conversation session.
       prompt: The input prompt payload (string or dictionary).
       formatter: The protocol-specific stream formatter.
+      max_completion_tokens: The maximum number of tokens to generate.
     """
     self._headers_sent = True
     self.send_response(200)
@@ -560,7 +562,9 @@ class OpenAIHandler(http.server.BaseHTTPRequestHandler):
       self.wfile.flush()
 
       has_tool_calls = False
-      for chunk in conv.send_message_async(prompt):
+      for chunk in conv.send_message_async(
+          prompt, max_output_tokens=max_completion_tokens
+      ):
         text_output = "".join(
             item.get("text", "")
             for item in chunk.get("content", [])
@@ -606,6 +610,7 @@ class OpenAIHandler(http.server.BaseHTTPRequestHandler):
       *,
       now_str: str,
       created_ts: int,
+      max_completion_tokens: int | None = None,
   ) -> None:
     """Generates responses for the OpenAI Chat Completions endpoint.
 
@@ -627,9 +632,12 @@ class OpenAIHandler(http.server.BaseHTTPRequestHandler):
       stream: Whether to stream the response via Server-Sent Events.
       now_str: Timestamp string for unique identifier generation.
       created_ts: Epoch timestamp for creation metadata.
+      max_completion_tokens: The maximum number of tokens to generate.
     """
     if not stream:
-      response = conv.send_message(prompt)
+      response = conv.send_message(
+          prompt, max_output_tokens=max_completion_tokens
+      )
       text_output = "".join(
           item.get("text", "")
           for item in response.get("content", [])
@@ -680,7 +688,9 @@ class OpenAIHandler(http.server.BaseHTTPRequestHandler):
       return
 
     formatter = _OpenAIChatCompletionsFormatter(now_str, created_ts, model_id)
-    self._stream_response(conv, prompt, formatter)
+    self._stream_response(
+        conv, prompt, formatter, max_completion_tokens=max_completion_tokens
+    )
 
   def _handle_responses(
       self,
@@ -958,6 +968,7 @@ class OpenAIHandler(http.server.BaseHTTPRequestHandler):
       return
 
     stream = body.get("stream", False)
+    max_completion_tokens = body.get("max_completion_tokens")
 
     try:
       sampler_config = _parse_sampler_config(body)
@@ -996,6 +1007,7 @@ class OpenAIHandler(http.server.BaseHTTPRequestHandler):
             stream,
             now_str=now_str,
             created_ts=created_ts,
+            max_completion_tokens=max_completion_tokens,
         )
     except Exception as e:  # pylint: disable=broad-exception-caught
       self._handle_inference_error(e, model_spec, prompt)
