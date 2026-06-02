@@ -19,6 +19,7 @@ load(
 # [Google-internal load of `cc_binary`]
 
 load("@rules_python//python:defs.bzl", "py_test")
+load("//python/litert_lm:cc_runfiles.bzl", "cc_runfiles")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -63,6 +64,8 @@ cc_binary(
         "@nlohmann_json//:json",
         "//runtime/conversation",
         "//runtime/conversation:io_types",
+        "//runtime/conversation/model_data_processor:config_registry",
+        "//runtime/conversation/model_data_processor:gemma4_data_processor_config",
         "//runtime/core:engine_impl",
         "//runtime/engine:engine_factory",
         "//runtime/engine:engine_interface",
@@ -81,6 +84,12 @@ cc_binary(
 pytype_strict_library(
     name = "interfaces",
     srcs = ["interfaces.py"],
+    deps = [":_messages"],
+)
+
+pytype_strict_library(
+    name = "_messages",
+    srcs = ["_messages.py"],
 )
 
 pytype_strict_library(
@@ -117,6 +126,7 @@ pytype_strict_library(
     srcs = ["conversation.py"],
     deps = [
         ":_ffi",
+        ":_messages",
         ":interfaces",
     ],
 )
@@ -126,6 +136,7 @@ pytype_strict_library(
     srcs = ["engine.py"],
     deps = [
         ":_ffi",
+        ":_messages",
         ":conversation",
         ":interfaces",
         ":session",
@@ -143,16 +154,23 @@ pytype_strict_library(
     ],
 )
 
+config_setting(
+    name = "use_prebuilt_c_api",
+    define_values = {
+        "use_prebuilt_c_api": "true",
+    },
+)
+
 pytype_strict_library(
     name = "litert_lm",
     srcs = ["__init__.py"],
-    data = ["//python/litert_lm:litert-lm"] + select({
-        "@platforms//os:macos": [":copy_prebuilt_libs_dylib"],
-        "@platforms//os:windows": [], # the cc_binary rule already properly provisions this DLL into the package directory on Windows.
-        "//conditions:default": [":copy_prebuilt_libs_so"],
+    data = select({
+        ":use_prebuilt_c_api": [":prebuilt_litert_lm_lib"],
+        "//conditions:default": [":default_libs"],
     }),
     deps = [
         ":_ffi",
+        ":_messages",
         ":benchmark",
         ":conversation",
         ":engine",
@@ -189,6 +207,18 @@ py_test(
     imports = [".."],
 )
 
+py_test(
+    name = "messages_test",
+    srcs = ["messages_test.py"],
+    tags = ["nowindows"],
+    deps = [
+        ":litert_lm",
+        "@absl_py//absl/testing:absltest",
+        "@absl_py//absl/testing:parameterized",
+    ],
+    imports = [".."],
+)
+
 load("@rules_python//python:packaging.bzl", "py_package", "py_wheel")
 load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
 load("//:version.bzl", "VERSION")
@@ -215,7 +245,7 @@ genrule(
             for i in $${!SRCS_ARRAY[@]}; do
                 cp $${SRCS_ARRAY[$$i]} $${OUTS_ARRAY[$$i]}
                 # Set the rpath to '$$ORIGIN'
-                patchelf --set-rpath '$$ORIGIN' $${OUTS_ARRAY[$$i]}
+                $(location //build_config:patchelf_exe) --set-rpath '$$ORIGIN' $${OUTS_ARRAY[$$i]}
             done
         else
             for out in $${OUTS_ARRAY[@]}; do
@@ -224,6 +254,7 @@ genrule(
         fi
     """,
     tags = ["manual"],
+    tools = ["//build_config:patchelf_exe"],
 )
 
 genrule(
@@ -247,6 +278,125 @@ genrule(
         fi
     """,
     tags = ["manual"],
+)
+
+genrule(
+    name = "copy_prebuilt_litert_lm_so",
+    srcs = select({
+        ":wheel_platform_linux_x86_64": ["//prebuilt/linux_x86_64:liblitert-lm.so"],
+        ":wheel_platform_linux_arm64": ["//prebuilt/linux_arm64:liblitert-lm.so"],
+        "//conditions:default": [],
+    }),
+    outs = ["liblitert-lm.so"],
+    cmd = """
+        SRCS_ARRAY=($(SRCS))
+        OUTS_ARRAY=($(OUTS))
+        if [ $${#SRCS_ARRAY[@]} -gt 0 ]; then
+            cp $${SRCS_ARRAY[0]} $${OUTS_ARRAY[0]}
+            chmod +w $${OUTS_ARRAY[0]}
+            $(location //build_config:patchelf_exe) --set-rpath '$$ORIGIN' $${OUTS_ARRAY[0]}
+        else
+            touch $${OUTS_ARRAY[0]}
+        fi
+    """,
+    tags = ["manual"],
+    tools = ["//build_config:patchelf_exe"],
+)
+
+copy_file(
+    name = "copy_prebuilt_litert_lm_dylib",
+    src = "//prebuilt/macos_arm64:liblitert-lm.dylib",
+    out = "liblitert-lm.dylib",
+    tags = ["manual"],
+)
+
+copy_file(
+    name = "copy_prebuilt_litert_lm_dll",
+    src = "//prebuilt/windows_x86_64:litert-lm.dll",
+    out = "litert-lm.dll",
+    tags = ["manual"],
+)
+
+copy_file(
+    name = "copy_dxcompiler_dll",
+    src = "@directx_shader_compiler//:dxcompiler",
+    out = "dxcompiler.dll",
+)
+
+copy_file(
+    name = "copy_dxil_dll",
+    src = "@directx_shader_compiler//:dxil",
+    out = "dxil.dll",
+)
+
+copy_file(
+    name = "copy_openvino_dispatch_dll",
+    src = "@litert//litert/vendors/intel_openvino/dispatch:LiteRtDispatch",
+    out = "vendors/intel_openvino/dispatch/LiteRtDispatch.dll",
+)
+
+filegroup(
+    name = "prebuilt_litert_lm_lib",
+    srcs = select({
+        # Use "wheel_platform_*" as condition to allow cross-compilation since
+        # no native binaries is built.
+        ":wheel_platform_macos_arm64": [":copy_prebuilt_litert_lm_dylib"],
+        ":wheel_platform_windows_x86_64": [
+            ":copy_prebuilt_litert_lm_dll",
+            ":copy_dxcompiler_dll",
+            ":copy_dxil_dll",
+            ":copy_openvino_dispatch_dll",
+        ],
+        ":wheel_platform_linux_x86_64": [":copy_prebuilt_litert_lm_so"],
+        ":wheel_platform_linux_arm64": [":copy_prebuilt_litert_lm_so"],
+        # default is empty since the prebuilt_litert_lm_lib might not exist.
+        "//conditions:default": [],
+    }),
+)
+
+# On Windows, copy the .dll from runfiles to avoid the Bazel duplicated
+# labels.
+cc_runfiles(
+    name = "litert_lm_windows_runfiles",
+    cc_binary = ":litert-lm",
+)
+
+filegroup(
+    name = "default_libs",
+    srcs = select({
+        "@platforms//os:windows": [":litert_lm_windows_runfiles"],
+        "//conditions:default": ["//python/litert_lm:litert-lm"],
+    }) + select({
+        "@platforms//os:macos": [":copy_prebuilt_libs_dylib"],
+        "@platforms//os:windows": [
+            ":copy_dxcompiler_dll",
+            ":copy_dxil_dll",
+            ":copy_openvino_dispatch_dll",
+        ],
+        "@platforms//os:linux": [":copy_prebuilt_libs_so"],
+        "//conditions:default":  [],
+    }),
+)
+
+# Use "wheel_platform" to allow cross-compliling the wheel package.
+config_setting(
+    name = "wheel_platform_linux_x86_64",
+    define_values = {"wheel_platform": "linux_x86_64"},
+)
+
+config_setting(
+    name = "wheel_platform_linux_arm64",
+    define_values = {"wheel_platform": "linux_arm64"},
+)
+
+config_setting(
+    name = "wheel_platform_windows_x86_64",
+    define_values = {"wheel_platform": "windows_x86_64"},
+)
+
+config_setting(
+    name = "wheel_platform_macos_arm64",
+    define_values = {"wheel_platform": "macos_arm64"},
 )
 
 py_package(
@@ -274,10 +424,10 @@ py_wheel(
         "//conditions:default": "litert-lm-api",
     }),
     platform = select({
-        "//build_config:linux_x86_64": "manylinux_2_35_x86_64",
-        "//build_config:linux_arm64": "manylinux_2_35_aarch64",
-        "@platforms//os:macos": "macosx_12_0_arm64",
-        "@platforms//os:windows": "win_amd64",
+        ":wheel_platform_linux_x86_64": "manylinux_2_27_x86_64",
+        ":wheel_platform_linux_arm64": "manylinux_2_27_aarch64",
+        ":wheel_platform_macos_arm64": "macosx_12_0_arm64",
+        ":wheel_platform_windows_x86_64": "win_amd64",
         "//conditions:default": "any",
     }),
     python_tag = "py3",

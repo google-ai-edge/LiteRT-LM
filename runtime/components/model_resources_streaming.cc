@@ -57,6 +57,12 @@ ModelResourcesStreaming::GetTFLiteModelBackendConstraint(ModelType model_type) {
   return std::nullopt;
 }
 
+std::optional<std::string>
+ModelResourcesStreaming::GetTFLiteModelPreferActivationType(
+    ModelType model_type) {
+  return std::nullopt;
+}
+
 absl::StatusOr<std::unique_ptr<Tokenizer>>
 ModelResourcesStreaming::GetTokenizer() {
   return absl::UnimplementedError("Not implemented.");

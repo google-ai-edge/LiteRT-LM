@@ -200,6 +200,9 @@ max_top_k: 40
 enable_decode_logits: 1
 enable_external_embeddings: 0
 use_submodel: 1
+prefer_texture_weights: 1
+set_enable_host_mapped_pointer: 1
+disallow_8bit_convs: 1
 )";
   EXPECT_EQ(oss.str(), expected_output);
 }
@@ -230,6 +233,9 @@ max_top_k: 40
 enable_decode_logits: 1
 enable_external_embeddings: 0
 use_submodel: 1
+prefer_texture_weights: 1
+set_enable_host_mapped_pointer: 1
+disallow_8bit_convs: 1
 
 max_tokens: 1024
 activation_data_type: FLOAT16
@@ -298,6 +304,9 @@ max_top_k: 40
 enable_decode_logits: 1
 enable_external_embeddings: 0
 use_submodel: 1
+prefer_texture_weights: 1
+set_enable_host_mapped_pointer: 1
+disallow_8bit_convs: 1
 
 max_tokens: 1024
 activation_data_type: FLOAT16

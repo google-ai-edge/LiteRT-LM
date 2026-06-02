@@ -39,7 +39,7 @@ def main(argv: Sequence[str]) -> None:
 
   with (
       litert_lm.Engine(
-          _MODEL_PATH.value, audio_backend=litert_lm.Backend.CPU
+          _MODEL_PATH.value, audio_backend=litert_lm.Backend.CPU()
       ) as engine,
       engine.create_conversation() as conversation,
   ):

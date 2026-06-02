@@ -26,15 +26,16 @@
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/optional.h"  // from @com_google_absl
+#include "litert/cc/internal/scoped_file.h"  // from @litert  // IWYU pragma: keep
 #include "runtime/components/tokenizer.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/proto/engine.pb.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/proto/llm_model_type.pb.h"
 #include "runtime/proto/token.pb.h"
-#include "litert/cc/internal/scoped_file.h"  // from @litert  // IWYU pragma: keep
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
 
 namespace litert::lm {
@@ -497,6 +498,174 @@ TEST(EngineSettingsTest, TextBackendConstraintNoMatch) {
               StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
+TEST(EngineSettingsTest, TextPreferActivationTypeOverride) {
+  auto model_assets = ModelAssets::Create("test_model_path_1");
+  ASSERT_OK(model_assets);
+  ASSERT_OK_AND_ASSIGN(
+      auto settings,
+      EngineSettings::CreateDefault(*model_assets, /*backend=*/Backend::CPU));
+  MockTokenizer tokenizer;
+  EXPECT_CALL(tokenizer, TokenIdsToText).WillRepeatedly(Return("fake_text"));
+  EXPECT_CALL(tokenizer, TokenToId).WillRepeatedly(Return(1));
+  EXPECT_CALL(tokenizer, TextToTokenIds)
+      .WillRepeatedly(Return(std::vector<int>{1}));
+
+  EXPECT_OK(settings.MaybeUpdateAndValidate(
+      &tokenizer, nullptr, "", /*text_backend_constraint=*/{},
+      /*vision_backend_constraint=*/{}, /*audio_backend_constraint=*/{},
+      /*text_prefer_activation_type=*/"fp32"));
+  EXPECT_EQ(settings.GetMainExecutorSettings().GetActivationDataType().value(),
+            ActivationDataType::FLOAT32);
+}
+
+TEST(EngineSettingsTest, TextPreferActivationTypeNoOverride) {
+  auto model_assets = ModelAssets::Create("test_model_path_1");
+  ASSERT_OK(model_assets);
+  ASSERT_OK_AND_ASSIGN(
+      auto settings,
+      EngineSettings::CreateDefault(*model_assets, /*backend=*/Backend::CPU));
+  settings.GetMutableMainExecutorSettings().SetActivationDataType(
+      ActivationDataType::FLOAT32);
+  MockTokenizer tokenizer;
+  EXPECT_CALL(tokenizer, TokenIdsToText).WillRepeatedly(Return("fake_text"));
+  EXPECT_CALL(tokenizer, TokenToId).WillRepeatedly(Return(1));
+  EXPECT_CALL(tokenizer, TextToTokenIds)
+      .WillRepeatedly(Return(std::vector<int>{1}));
+
+  // The activation data type should not be overridden when the activation data
+  // type is already set in the main executor settings.
+  EXPECT_OK(settings.MaybeUpdateAndValidate(
+      &tokenizer, nullptr, "", /*text_backend_constraint=*/{},
+      /*vision_backend_constraint=*/{}, /*audio_backend_constraint=*/{},
+      /*text_prefer_activation_type=*/"fp16"));
+  EXPECT_EQ(settings.GetMainExecutorSettings().GetActivationDataType().value(),
+            ActivationDataType::FLOAT32);
+}
+
+TEST(EngineSettingsTest, VisionPreferActivationTypeOverride) {
+  auto model_assets = ModelAssets::Create("test_model_path_1");
+  ASSERT_OK(model_assets);
+  ASSERT_OK_AND_ASSIGN(
+      auto settings,
+      EngineSettings::CreateDefault(*model_assets, /*backend=*/Backend::CPU,
+                                    /*vision_backend=*/Backend::GPU));
+  MockTokenizer tokenizer;
+  EXPECT_CALL(tokenizer, TokenIdsToText).WillRepeatedly(Return("fake_text"));
+  EXPECT_CALL(tokenizer, TokenToId).WillRepeatedly(Return(1));
+  EXPECT_CALL(tokenizer, TextToTokenIds)
+      .WillRepeatedly(Return(std::vector<int>{1}));
+
+  EXPECT_OK(settings.MaybeUpdateAndValidate(
+      &tokenizer, nullptr, "", /*text_backend_constraint=*/{},
+      /*vision_backend_constraint=*/{}, /*audio_backend_constraint=*/{},
+      /*text_prefer_activation_type=*/{},
+      /*vision_prefer_activation_type=*/"fp16"));
+  EXPECT_EQ(
+      settings.GetVisionExecutorSettings()->GetActivationDataType().value(),
+      ActivationDataType::FLOAT16);
+}
+
+TEST(EngineSettingsTest, VisionPreferActivationTypeNoOverride) {
+  auto model_assets = ModelAssets::Create("test_model_path_1");
+  ASSERT_OK(model_assets);
+  ASSERT_OK_AND_ASSIGN(
+      auto settings,
+      EngineSettings::CreateDefault(*model_assets, /*backend=*/Backend::CPU,
+                                    /*vision_backend=*/Backend::GPU));
+  settings.GetMutableVisionExecutorSettings()->SetActivationDataType(
+      ActivationDataType::FLOAT32);
+  MockTokenizer tokenizer;
+  EXPECT_CALL(tokenizer, TokenIdsToText).WillRepeatedly(Return("fake_text"));
+  EXPECT_CALL(tokenizer, TokenToId).WillRepeatedly(Return(1));
+  EXPECT_CALL(tokenizer, TextToTokenIds)
+      .WillRepeatedly(Return(std::vector<int>{1}));
+
+  EXPECT_OK(settings.MaybeUpdateAndValidate(
+      &tokenizer, nullptr, "", /*text_backend_constraint=*/{},
+      /*vision_backend_constraint=*/{}, /*audio_backend_constraint=*/{},
+      /*text_prefer_activation_type=*/{},
+      /*vision_prefer_activation_type=*/"fp16"));
+
+  // The activation data type should not be overridden when the activation data
+  // type is already set in the vision executor settings.
+  EXPECT_EQ(
+      settings.GetVisionExecutorSettings()->GetActivationDataType().value(),
+      ActivationDataType::FLOAT32);
+}
+
+TEST(EngineSettingsTest, AudioPreferActivationTypeOverride) {
+  auto model_assets = ModelAssets::Create("test_model_path_1");
+  ASSERT_OK(model_assets);
+  ASSERT_OK_AND_ASSIGN(
+      auto settings,
+      EngineSettings::CreateDefault(*model_assets, /*backend=*/Backend::CPU,
+                                    /*vision_backend=*/{},
+                                    /*audio_backend=*/Backend::GPU));
+  MockTokenizer tokenizer;
+  EXPECT_CALL(tokenizer, TokenIdsToText).WillRepeatedly(Return("fake_text"));
+  EXPECT_CALL(tokenizer, TokenToId).WillRepeatedly(Return(1));
+  EXPECT_CALL(tokenizer, TextToTokenIds)
+      .WillRepeatedly(Return(std::vector<int>{1}));
+
+  EXPECT_OK(settings.MaybeUpdateAndValidate(
+      &tokenizer, nullptr, "", /*text_backend_constraint=*/{},
+      /*vision_backend_constraint=*/{}, /*audio_backend_constraint=*/{},
+      /*text_prefer_activation_type=*/{}, /*vision_prefer_activation_type=*/{},
+      /*audio_prefer_activation_type=*/"fp16"));
+  EXPECT_EQ(
+      settings.GetAudioExecutorSettings()->GetActivationDataType().value(),
+      ActivationDataType::FLOAT16);
+}
+
+TEST(EngineSettingsTest, AudioPreferActivationTypeNoOverride) {
+  auto model_assets = ModelAssets::Create("test_model_path_1");
+  ASSERT_OK(model_assets);
+  ASSERT_OK_AND_ASSIGN(
+      auto settings,
+      EngineSettings::CreateDefault(*model_assets, /*backend=*/Backend::CPU,
+                                    /*vision_backend=*/{},
+                                    /*audio_backend=*/Backend::GPU));
+  settings.GetMutableAudioExecutorSettings()->SetActivationDataType(
+      ActivationDataType::FLOAT32);
+  MockTokenizer tokenizer;
+  EXPECT_CALL(tokenizer, TokenIdsToText).WillRepeatedly(Return("fake_text"));
+  EXPECT_CALL(tokenizer, TokenToId).WillRepeatedly(Return(1));
+  EXPECT_CALL(tokenizer, TextToTokenIds)
+      .WillRepeatedly(Return(std::vector<int>{1}));
+
+  // The activation data type should not be overridden when the activation data
+  // type is already set in the audio executor settings.
+  EXPECT_OK(settings.MaybeUpdateAndValidate(
+      &tokenizer, nullptr, "", /*text_backend_constraint=*/{},
+      /*vision_backend_constraint=*/{}, /*audio_backend_constraint=*/{},
+      /*text_prefer_activation_type=*/{}, /*vision_prefer_activation_type=*/{},
+      /*audio_prefer_activation_type=*/"fp16"));
+  EXPECT_EQ(
+      settings.GetAudioExecutorSettings()->GetActivationDataType().value(),
+      ActivationDataType::FLOAT32);
+}
+
+TEST(EngineSettingsTest, MixedPrecisionOverride) {
+  auto model_assets = ModelAssets::Create("test_model_path_1");
+  ASSERT_OK(model_assets);
+  ASSERT_OK_AND_ASSIGN(
+      auto settings,
+      EngineSettings::CreateDefault(*model_assets, /*backend=*/Backend::CPU));
+  MockTokenizer tokenizer;
+  EXPECT_CALL(tokenizer, TokenIdsToText).WillRepeatedly(Return("fake_text"));
+  EXPECT_CALL(tokenizer, TokenToId).WillRepeatedly(Return(1));
+  EXPECT_CALL(tokenizer, TextToTokenIds)
+      .WillRepeatedly(Return(std::vector<int>{1}));
+
+  EXPECT_OK(settings.MaybeUpdateAndValidate(
+      &tokenizer, nullptr, "", /*text_backend_constraint=*/{},
+      /*vision_backend_constraint=*/{}, /*audio_backend_constraint=*/{},
+      /*text_prefer_activation_type=*/"fp32_fp16"));
+  EXPECT_EQ(settings.GetMainExecutorSettings().GetActivationDataType().value(),
+            ActivationDataType::FLOAT32);
+  EXPECT_TRUE(settings.GetMainExecutorSettings().IsMixedPrecisionEnabled());
+}
+
 TEST(EngineSettingsTest, BenchmarkParams) {
   auto model_assets = ModelAssets::Create("test_model_path_1");
   ASSERT_OK(model_assets);
@@ -678,9 +847,8 @@ TEST(EngineSettingsTest, MaybeUpdateAndValidateNPU) {
 TEST(EngineSettingsTest, CreateDefaultWithSamplerBackend) {
   auto model_assets = ModelAssets::Create("test_model_path_1");
   ASSERT_OK(model_assets);
-  auto settings = EngineSettings::CreateDefault(*model_assets, Backend::CPU,
-                                                std::nullopt, std::nullopt,
-                                                Backend::GPU);
+  auto settings = EngineSettings::CreateDefault(
+      *model_assets, Backend::CPU, std::nullopt, std::nullopt, Backend::GPU);
   ASSERT_OK(settings);
   EXPECT_EQ(settings->GetMainExecutorSettings().GetBackend(), Backend::CPU);
   EXPECT_EQ(settings->GetMainExecutorSettings().GetSamplerBackend(),
@@ -788,6 +956,25 @@ TEST(SessionConfigTest, SetAndGetScopedLoraFile) {
   EXPECT_EQ(session_config.GetScopedLoraFile(), file_ptr);
   session_config.SetScopedLoraFile(nullptr);
   EXPECT_EQ(session_config.GetScopedLoraFile(), nullptr);
+}
+
+TEST(SessionConfigTest, SetAndGetAudioScopedLoraFile) {
+  SessionConfig session_config = SessionConfig::CreateDefault();
+  EXPECT_EQ(session_config.GetAudioScopedLoraFile(), nullptr);
+  const std::string lora_path =
+      ::testing::TempDir() + "/set_and_get_audio_scoped_lora_file.bin";
+  {
+    // Create an empty file.
+    std::ofstream ofs(lora_path);
+  }
+  ASSERT_OK_AND_ASSIGN(::litert::ScopedFile scoped_file,
+                       ::litert::ScopedFile::Open(lora_path));
+  auto file_ptr =
+      std::make_shared<::litert::ScopedFile>(std::move(scoped_file));
+  session_config.SetAudioScopedLoraFile(file_ptr);
+  EXPECT_EQ(session_config.GetAudioScopedLoraFile(), file_ptr);
+  session_config.SetAudioScopedLoraFile(nullptr);
+  EXPECT_EQ(session_config.GetAudioScopedLoraFile(), nullptr);
 }
 
 TEST(SessionConfigTest, MaybeUpdateAndValidate) {

@@ -19,16 +19,76 @@ from __future__ import annotations
 import abc
 import collections.abc
 import dataclasses
-import enum
+from importlib import resources
+import os
+import sys
 from typing import Any
 
+from ._messages import Contents
+from ._messages import Message
 
-class Backend(enum.Enum):
-  """Hardware backends for LiteRT-LM."""
 
-  UNSPECIFIED = 0
-  CPU = 3
-  GPU = 4
+class Backend(abc.ABC):
+  """Hardware backends for LiteRT-LM.
+
+  This is the abstract base class for all hardware backends used by LiteRT-LM.
+  Use the subclasses (CPU, GPU, NPU) to specify the backend and its options.
+  """
+
+  def get_name(self) -> str:
+    """Returns the string representation of the backend (e.g., 'cpu', 'gpu', 'npu')."""
+    return type(self).__name__.lower()
+
+  def __eq__(self, other: Any) -> bool:
+    if type(self) is not type(other):
+      return False
+    return True
+
+
+class CPU(Backend):
+  """CPU hardware backend for LiteRT-LM."""
+
+
+class GPU(Backend):
+  """GPU hardware backend for LiteRT-LM."""
+
+
+class NPU(Backend):
+  """NPU hardware backend for LiteRT-LM.
+
+  Attributes:
+    native_library_dir: The directory containing the NPU libraries.
+  """
+
+  def __init__(self):
+    """Initializes the NPU backend."""
+    self.litert_dispatch_lib_dir = ""
+    if sys.platform == "win32":
+      try:
+        import openvino as ov  # pylint: disable=g-import-not-at-top  # pytype: disable=import-error
+
+        if "NPU" in ov.Core().available_devices:
+          self.litert_dispatch_lib_dir = str(
+              resources.files(__package__) / "vendors/intel_openvino/dispatch/"
+          )
+
+          # openvino package place the NPU libs in "libs".
+          # Includes to PATH so Windows can load it.
+          libs_dir = os.path.join(os.path.dirname(ov.__file__), "libs")
+          os.environ["PATH"] = os.environ["PATH"] + ";" + libs_dir
+      except ImportError:
+        pass
+
+    if not self.litert_dispatch_lib_dir:
+      raise RuntimeError(
+          "NPU is supported only for Intel OpenVINO on Windows. It is expected"
+          " to install the 'openvino' package and have an NPU available."
+      )
+
+
+Backend.CPU = CPU
+Backend.GPU = GPU
+Backend.NPU = NPU
 
 
 class ToolEventHandler(abc.ABC):
@@ -151,7 +211,8 @@ class AbstractEngine(abc.ABC):
       self,
       *,
       messages: (
-          collections.abc.Sequence[collections.abc.Mapping[str, Any]] | None
+          collections.abc.Sequence[collections.abc.Mapping[str, Any] | Message]
+          | None
       ) = None,
       tools: (
           collections.abc.Sequence[collections.abc.Callable[..., Any] | Tool]
@@ -235,7 +296,8 @@ class AbstractConversation(abc.ABC):
       self,
       *,
       messages: (
-          collections.abc.Sequence[collections.abc.Mapping[str, Any]] | None
+          collections.abc.Sequence[collections.abc.Mapping[str, Any] | Message]
+          | None
       ) = None,
       tools: (
           collections.abc.Sequence[collections.abc.Callable[..., Any] | Tool]
@@ -276,13 +338,18 @@ class AbstractConversation(abc.ABC):
 
   @abc.abstractmethod
   def send_message(
-      self, message: str | collections.abc.Mapping[str, Any]
+      self,
+      message: str | Contents | Message | collections.abc.Mapping[str, Any],
   ) -> collections.abc.Mapping[str, Any]:
     """Sends a message and returns the response.
 
     Args:
-        message: The input message to send to the model. Example: "Hello" or
-          {"role": "user", "content": "Hello"}.
+        message: The input message to send. Supported types are: `str` (for most
+          simple text input, automatically wrapped as a user message),
+          `Contents` (for multi-modality interleaving, automatically wrapped as
+          a user message), `Message` (full message object, useful when automatic
+          tool calling is disabled and a tool response is required), or
+          `collections.abc.Mapping` (super flexible raw dictionary format).
 
     Returns:
         A dictionary containing the model's response. The structure is:
@@ -291,13 +358,18 @@ class AbstractConversation(abc.ABC):
 
   @abc.abstractmethod
   def send_message_async(
-      self, message: str | collections.abc.Mapping[str, Any]
+      self,
+      message: str | Contents | Message | collections.abc.Mapping[str, Any],
   ) -> collections.abc.Iterator[collections.abc.Mapping[str, Any]]:
     """Sends a message and streams the response.
 
     Args:
-        message: The input message to send to the model. Example: "Hello" or
-          {"role": "user", "content": "Hello"}.
+        message: The input message to send. Supported types are: `str` (for most
+          simple text input, automatically wrapped as a user message),
+          `Contents` (for multi-modality interleaving, automatically wrapped as
+          a user message), `Message` (full message object, useful when automatic
+          tool calling is disabled and a tool response is required), or
+          `collections.abc.Mapping` (super flexible raw dictionary format).
 
     Returns:
         An iterator yielding dictionaries containing chunks of the model's
@@ -306,17 +378,27 @@ class AbstractConversation(abc.ABC):
 
   @abc.abstractmethod
   def render_message_to_string(
-      self, message: str | collections.abc.Mapping[str, Any]
+      self,
+      message: str | Contents | Message | collections.abc.Mapping[str, Any],
   ) -> str:
     """Renders a message into a string according to the template.
 
     Args:
-        message: The input message to render. Example: "Hello" or {"role":
-          "user", "content": "Hello"}.
+        message: The input message to render. Supported types are: `str` (for
+          most simple text input, automatically wrapped as a user message),
+          `Contents` (for multi-modality interleaving, automatically wrapped as
+          a user message), `Message` (full message object, useful when automatic
+          tool calling is disabled and a tool response is required), or
+          `collections.abc.Mapping` (super flexible raw dictionary format).
 
     Returns:
         The rendered string.
     """
+
+  @property
+  @abc.abstractmethod
+  def token_count(self) -> int:
+    """The number of tokens in the KV Cache (prefill + decode)."""
 
   def cancel_process(self) -> None:
     """Cancels the current inference process."""
@@ -355,6 +437,8 @@ class AbstractBenchmark(abc.ABC):
       backend: The hardware backend used for inference.
       prefill_tokens: Number of tokens for the prefill phase.
       decode_tokens: Number of tokens for the decode phase.
+      max_num_tokens: Maximum number of tokens for the KV cache. If None, use
+        the engine/model's default.
       cache_dir: Directory for caching compiled model artifacts.
       enable_speculative_decoding: Whether to enable speculative decoding. If
         None, use the model's default. If True, enable speculative decoding; an
@@ -368,6 +452,7 @@ class AbstractBenchmark(abc.ABC):
   backend: Backend
   prefill_tokens: int = 256
   decode_tokens: int = 256
+  max_num_tokens: int | None = None
   cache_dir: str = ""
   enable_speculative_decoding: bool | None = None
 

@@ -46,7 +46,7 @@
 namespace litert::lm {
 namespace {
 
-using TaskController = Engine::Session::TaskController;
+using TaskController = SessionInterface::TaskController;
 
 }  // namespace
 
@@ -54,7 +54,8 @@ using TaskController = Engine::Session::TaskController;
 absl::StatusOr<std::unique_ptr<SessionAdvanced>> SessionAdvanced::Create(
     std::weak_ptr<ExecutionManager> execution_manager,
     Tokenizer* absl_nonnull tokenizer, const SessionConfig& session_config,
-    std::optional<BenchmarkInfo> benchmark_info) {
+    std::optional<BenchmarkInfo> benchmark_info,
+    std::atomic<int>* living_sessions_count) {
   auto execution_manager_lock = execution_manager.lock();
   if (execution_manager_lock == nullptr) {
     return absl::FailedPreconditionError("Execution manager is not available.");
@@ -66,7 +67,7 @@ absl::StatusOr<std::unique_ptr<SessionAdvanced>> SessionAdvanced::Create(
   return absl::WrapUnique(new SessionAdvanced(
       session_id, execution_manager, tokenizer, session_info_,
       /*session_state=*/SessionState::kFresh,
-      /*last_task_ids=*/{}));
+      /*last_task_ids=*/{}, living_sessions_count));
 }
 
 absl::Status SessionAdvanced::RunPrefill(
@@ -85,6 +86,9 @@ absl::StatusOr<std::unique_ptr<TaskController>>
 SessionAdvanced::RunPrefillAsync(
     const std::vector<InputData>& contents,
     absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback) {
+  if (contents.empty()) {
+    return absl::InvalidArgumentError("Input is empty.");
+  }
   absl::MutexLock lock(mutex_);
   auto cancelled = std::make_shared<std::atomic<bool>>(false);
 
@@ -143,13 +147,13 @@ absl::StatusOr<Responses> SessionAdvanced::RunDecode(
   }
 
   absl::StatusOr<Responses> collected_responses;
+  int num_candidates = session_info_->session_config.GetNumOutputCandidates();
   collected_responses =
-      Responses(TaskState::kCreated, /*texts=*/
-                std::vector<std::string>(
-                    session_info_->session_config.GetNumOutputCandidates()),
-                /*scores=*/
-                std::vector<float>(
-                    session_info_->session_config.GetNumOutputCandidates()));
+      Responses(TaskState::kCreated,
+                /*response_texts=*/std::vector<std::string>(num_candidates),
+                /*scores=*/std::vector<float>(num_candidates),
+                /*token_lengths=*/{},
+                /*token_ids=*/std::vector<std::vector<int>>(num_candidates));
   int num_decode_tokens = 0;
   auto decode_sync_callback = [&collected_responses, &num_decode_tokens](
                                   absl::StatusOr<Responses> responses) {
@@ -184,6 +188,16 @@ absl::StatusOr<Responses> SessionAdvanced::RunDecode(
           absl::StrCat("Decode responses size mismatch: ",
                        collected_responses->GetTexts().size(), " vs ",
                        responses->GetTexts().size()));
+    }
+    // Accumulating the token IDs.
+    if (collected_responses->GetMutableTokenIds().size() ==
+        responses->GetTokenIds().size()) {
+      for (int i = 0; i < responses->GetTokenIds().size(); ++i) {
+        collected_responses->GetMutableTokenIds()[i].insert(
+            collected_responses->GetMutableTokenIds()[i].end(),
+            responses->GetTokenIds()[i].begin(),
+            responses->GetTokenIds()[i].end());
+      }
     }
     // Normalizing the scores by the number of decode tokens if the task is
     // completed.
@@ -287,7 +301,7 @@ absl::StatusOr<Responses> SessionAdvanced::RunTextScoring(
   return collected_responses;
 }
 
-absl::StatusOr<std::unique_ptr<Engine::Session::TaskController>>
+absl::StatusOr<std::unique_ptr<SessionInterface::TaskController>>
 SessionAdvanced::RunTextScoringAsync(
     const std::vector<absl::string_view>& target_text,
     absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback,
@@ -372,9 +386,9 @@ absl::StatusOr<BenchmarkInfo*> SessionAdvanced::GetMutableBenchmarkInfo() {
   return execution_manager_lock->GetMutableBenchmarkInfo(session_id_);
 }
 
-absl::StatusOr<std::unique_ptr<Engine::Session>> SessionAdvanced::Clone() {
+absl::StatusOr<std::unique_ptr<SessionInterface>> SessionAdvanced::Clone() {
   absl::Status status = absl::OkStatus();
-  std::unique_ptr<Engine::Session> session;
+  std::unique_ptr<SessionInterface> session;
   {
     absl::MutexLock lock(mutex_);
     ASSIGN_OR_RETURN(
@@ -388,13 +402,13 @@ absl::StatusOr<std::unique_ptr<Engine::Session>> SessionAdvanced::Clone() {
   return session;
 }
 
-absl::StatusOr<std::unique_ptr<Engine::Session>> SessionAdvanced::CloneAsync(
+absl::StatusOr<std::unique_ptr<SessionInterface>> SessionAdvanced::CloneAsync(
     absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback) {
   absl::MutexLock lock(mutex_);
   return CloneAsyncLocked(std::move(callback));
 }
 
-absl::StatusOr<std::unique_ptr<Engine::Session>>
+absl::StatusOr<std::unique_ptr<SessionInterface>>
 SessionAdvanced::CloneAsyncLocked(
     absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback) {
   auto execution_manager_lock = execution_manager_.lock();
@@ -432,6 +446,9 @@ SessionAdvanced::~SessionAdvanced() {
   auto status = execution_manager_lock->ReleaseSession(session_id_);
   if (!status.ok()) {
     ABSL_LOG(ERROR) << "Error occurred when releasing session: " << status;
+  }
+  if (living_sessions_count_) {
+    (*living_sessions_count_)--;
   }
 };
 

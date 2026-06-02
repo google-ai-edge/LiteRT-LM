@@ -83,6 +83,8 @@ fun benchmark(
         false, // enableConversationConstrainedDecoding
         ExperimentalFlags.filterChannelContentFromKvCache,
         ExperimentalFlags.overwritePromptTemplate,
+        null, // loraPath
+        null, // audioLoraPath
       )
 
     Conversation(conversationHandle).use { conversation ->

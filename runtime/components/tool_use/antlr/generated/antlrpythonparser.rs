@@ -6,6 +6,21 @@
 #![allow(unused_imports)]
 #![allow(unused_mut)]
 #![allow(unused_braces)]
+
+// Copyright 2026 The ODML Authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use super::antlrpythonparserlistener::*;
 use antlr4rust::atn::{ATN, INVALID_ALT};
 use antlr4rust::atn_deserializer::ATNDeserializer;
@@ -122,11 +137,8 @@ pub const _SYMBOLIC_NAMES: [Option<&'static str>; 17] = [
 lazy_static! {
     static ref _shared_context_cache: Arc<PredictionContextCache> =
         Arc::new(PredictionContextCache::new());
-    static ref VOCABULARY: Box<dyn Vocabulary> = Box::new(VocabularyImpl::new(
-        _LITERAL_NAMES.iter(),
-        _SYMBOLIC_NAMES.iter(),
-        None
-    ));
+    static ref VOCABULARY: Box<dyn Vocabulary> =
+        Box::new(VocabularyImpl::new(_LITERAL_NAMES.iter(), _SYMBOLIC_NAMES.iter(), None));
 }
 
 type BaseParserType<'input, I> = BaseParser<
@@ -183,9 +195,7 @@ where
             base: BaseParser::new_base_parser(
                 input,
                 Arc::clone(&interpreter),
-                AntlrPythonParserExt {
-                    _pd: Default::default(),
-                },
+                AntlrPythonParserExt { _pd: Default::default() },
             ),
             interpreter,
             _shared_context_cache: Box::new(PredictionContextCache::new()),
@@ -386,9 +396,7 @@ where
                 recog.expr()?;
 
                 recog.base.set_state(27);
-                recog
-                    .base
-                    .match_token(AntlrPythonParser_EOF, &mut recog.err_handler)?;
+                recog.base.match_token(AntlrPythonParser_EOF, &mut recog.err_handler)?;
             }
             Ok(())
         })();
@@ -535,9 +543,7 @@ where
                     }
                 }
 
-                _ => Err(ANTLRError::NoAltError(NoViableAltError::new(
-                    &mut recog.base,
-                )))?,
+                _ => Err(ANTLRError::NoAltError(NoViableAltError::new(&mut recog.base)))?,
             }
             Ok(())
         })();
@@ -639,9 +645,7 @@ where
             recog.base.enter_outer_alt(None, 1)?;
             {
                 recog.base.set_state(37);
-                recog
-                    .base
-                    .match_token(AntlrPythonParser_STRING, &mut recog.err_handler)?;
+                recog.base.match_token(AntlrPythonParser_STRING, &mut recog.err_handler)?;
             }
             Ok(())
         })();
@@ -797,9 +801,7 @@ where
                     recog.base.enter_outer_alt(None, 1)?;
                     {
                         recog.base.set_state(39);
-                        recog
-                            .base
-                            .match_token(AntlrPythonParser_INT, &mut recog.err_handler)?;
+                        recog.base.match_token(AntlrPythonParser_INT, &mut recog.err_handler)?;
                     }
                 }
 
@@ -808,9 +810,7 @@ where
                     recog.base.enter_outer_alt(None, 2)?;
                     {
                         recog.base.set_state(40);
-                        recog
-                            .base
-                            .match_token(AntlrPythonParser_FLOAT, &mut recog.err_handler)?;
+                        recog.base.match_token(AntlrPythonParser_FLOAT, &mut recog.err_handler)?;
                     }
                 }
 
@@ -819,9 +819,7 @@ where
                     recog.base.enter_outer_alt(None, 3)?;
                     {
                         recog.base.set_state(41);
-                        recog
-                            .base
-                            .match_token(AntlrPythonParser_BOOL, &mut recog.err_handler)?;
+                        recog.base.match_token(AntlrPythonParser_BOOL, &mut recog.err_handler)?;
                     }
                 }
 
@@ -830,9 +828,7 @@ where
                     recog.base.enter_outer_alt(None, 4)?;
                     {
                         recog.base.set_state(42);
-                        recog
-                            .base
-                            .match_token(AntlrPythonParser_STRING, &mut recog.err_handler)?;
+                        recog.base.match_token(AntlrPythonParser_STRING, &mut recog.err_handler)?;
                     }
                 }
 
@@ -841,9 +837,7 @@ where
                     recog.base.enter_outer_alt(None, 5)?;
                     {
                         recog.base.set_state(43);
-                        recog
-                            .base
-                            .match_token(AntlrPythonParser_NONE, &mut recog.err_handler)?;
+                        recog.base.match_token(AntlrPythonParser_NONE, &mut recog.err_handler)?;
                     }
                 }
 
@@ -877,9 +871,7 @@ where
                     }
                 }
 
-                _ => Err(ANTLRError::NoAltError(NoViableAltError::new(
-                    &mut recog.base,
-                )))?,
+                _ => Err(ANTLRError::NoAltError(NoViableAltError::new(&mut recog.base)))?,
             }
             Ok(())
         })();
@@ -1018,9 +1010,7 @@ where
             recog.base.enter_outer_alt(None, 1)?;
             {
                 recog.base.set_state(49);
-                recog
-                    .base
-                    .match_token(AntlrPythonParser_LIST_OPEN, &mut recog.err_handler)?;
+                recog.base.match_token(AntlrPythonParser_LIST_OPEN, &mut recog.err_handler)?;
 
                 recog.base.set_state(61);
                 recog.err_handler.sync(&mut recog.base)?;
@@ -1069,9 +1059,7 @@ where
                 }
 
                 recog.base.set_state(63);
-                recog
-                    .base
-                    .match_token(AntlrPythonParser_LIST_CLOSE, &mut recog.err_handler)?;
+                recog.base.match_token(AntlrPythonParser_LIST_CLOSE, &mut recog.err_handler)?;
             }
             Ok(())
         })();
@@ -1237,9 +1225,7 @@ where
             recog.base.enter_outer_alt(None, 1)?;
             {
                 recog.base.set_state(65);
-                recog
-                    .base
-                    .match_token(AntlrPythonParser_OPEN_BRACE, &mut recog.err_handler)?;
+                recog.base.match_token(AntlrPythonParser_OPEN_BRACE, &mut recog.err_handler)?;
 
                 recog.base.set_state(82);
                 recog.err_handler.sync(&mut recog.base)?;
@@ -1251,9 +1237,7 @@ where
                         recog.key()?;
 
                         recog.base.set_state(67);
-                        recog
-                            .base
-                            .match_token(AntlrPythonParser_COLON, &mut recog.err_handler)?;
+                        recog.base.match_token(AntlrPythonParser_COLON, &mut recog.err_handler)?;
 
                         /*InvokeRule value*/
                         recog.base.set_state(68);
@@ -1307,9 +1291,7 @@ where
                 }
 
                 recog.base.set_state(84);
-                recog
-                    .base
-                    .match_token(AntlrPythonParser_CLOSE_BRACE, &mut recog.err_handler)?;
+                recog.base.match_token(AntlrPythonParser_CLOSE_BRACE, &mut recog.err_handler)?;
             }
             Ok(())
         })();
@@ -1425,14 +1407,10 @@ where
             recog.base.enter_outer_alt(None, 1)?;
             {
                 recog.base.set_state(86);
-                recog
-                    .base
-                    .match_token(AntlrPythonParser_NAME, &mut recog.err_handler)?;
+                recog.base.match_token(AntlrPythonParser_NAME, &mut recog.err_handler)?;
 
                 recog.base.set_state(87);
-                recog
-                    .base
-                    .match_token(AntlrPythonParser_EQ, &mut recog.err_handler)?;
+                recog.base.match_token(AntlrPythonParser_EQ, &mut recog.err_handler)?;
 
                 /*InvokeRule value*/
                 recog.base.set_state(88);
@@ -1552,9 +1530,7 @@ where
         let mut recog = self;
         let _parentctx = recog.ctx.take();
         let mut _localctx = ArgValExprContextExt::new(_parentctx.clone(), recog.base.get_state());
-        recog
-            .base
-            .enter_rule(_localctx.clone(), 14, RULE_argValExpr);
+        recog.base.enter_rule(_localctx.clone(), 14, RULE_argValExpr);
         let mut _localctx: Rc<ArgValExprContextAll> = _localctx;
         let mut _la: i32 = -1;
         let result: Result<(), ANTLRError> = (|| {
@@ -1594,9 +1570,7 @@ where
                 if _la == AntlrPythonParser_SEP {
                     {
                         recog.base.set_state(98);
-                        recog
-                            .base
-                            .match_token(AntlrPythonParser_SEP, &mut recog.err_handler)?;
+                        recog.base.match_token(AntlrPythonParser_SEP, &mut recog.err_handler)?;
                     }
                 }
             }
@@ -1726,9 +1700,7 @@ where
                     recog.base.enter_outer_alt(None, 1)?;
                     {
                         recog.base.set_state(101);
-                        recog
-                            .base
-                            .match_token(AntlrPythonParser_NAME, &mut recog.err_handler)?;
+                        recog.base.match_token(AntlrPythonParser_NAME, &mut recog.err_handler)?;
 
                         recog.base.set_state(102);
                         recog
@@ -1746,9 +1718,7 @@ where
                     recog.base.enter_outer_alt(None, 2)?;
                     {
                         recog.base.set_state(104);
-                        recog
-                            .base
-                            .match_token(AntlrPythonParser_NAME, &mut recog.err_handler)?;
+                        recog.base.match_token(AntlrPythonParser_NAME, &mut recog.err_handler)?;
 
                         recog.base.set_state(105);
                         recog
@@ -1883,28 +1853,20 @@ where
         let _parentctx = recog.ctx.take();
         let mut _localctx =
             EmptyFunctionCallContextExt::new(_parentctx.clone(), recog.base.get_state());
-        recog
-            .base
-            .enter_rule(_localctx.clone(), 18, RULE_emptyFunctionCall);
+        recog.base.enter_rule(_localctx.clone(), 18, RULE_emptyFunctionCall);
         let mut _localctx: Rc<EmptyFunctionCallContextAll> = _localctx;
         let result: Result<(), ANTLRError> = (|| {
             //recog.base.enter_outer_alt(_localctx.clone(), 1)?;
             recog.base.enter_outer_alt(None, 1)?;
             {
                 recog.base.set_state(111);
-                recog
-                    .base
-                    .match_token(AntlrPythonParser_NAME, &mut recog.err_handler)?;
+                recog.base.match_token(AntlrPythonParser_NAME, &mut recog.err_handler)?;
 
                 recog.base.set_state(112);
-                recog
-                    .base
-                    .match_token(AntlrPythonParser_OPEN_PAR, &mut recog.err_handler)?;
+                recog.base.match_token(AntlrPythonParser_OPEN_PAR, &mut recog.err_handler)?;
 
                 recog.base.set_state(113);
-                recog
-                    .base
-                    .match_token(AntlrPythonParser_CLOSE_PAR, &mut recog.err_handler)?;
+                recog.base.match_token(AntlrPythonParser_CLOSE_PAR, &mut recog.err_handler)?;
             }
             Ok(())
         })();
@@ -2027,32 +1989,24 @@ where
         let _parentctx = recog.ctx.take();
         let mut _localctx =
             FullFunctionCallContextExt::new(_parentctx.clone(), recog.base.get_state());
-        recog
-            .base
-            .enter_rule(_localctx.clone(), 20, RULE_fullFunctionCall);
+        recog.base.enter_rule(_localctx.clone(), 20, RULE_fullFunctionCall);
         let mut _localctx: Rc<FullFunctionCallContextAll> = _localctx;
         let result: Result<(), ANTLRError> = (|| {
             //recog.base.enter_outer_alt(_localctx.clone(), 1)?;
             recog.base.enter_outer_alt(None, 1)?;
             {
                 recog.base.set_state(115);
-                recog
-                    .base
-                    .match_token(AntlrPythonParser_NAME, &mut recog.err_handler)?;
+                recog.base.match_token(AntlrPythonParser_NAME, &mut recog.err_handler)?;
 
                 recog.base.set_state(116);
-                recog
-                    .base
-                    .match_token(AntlrPythonParser_OPEN_PAR, &mut recog.err_handler)?;
+                recog.base.match_token(AntlrPythonParser_OPEN_PAR, &mut recog.err_handler)?;
 
                 /*InvokeRule argValExpr*/
                 recog.base.set_state(117);
                 recog.argValExpr()?;
 
                 recog.base.set_state(118);
-                recog
-                    .base
-                    .match_token(AntlrPythonParser_CLOSE_PAR, &mut recog.err_handler)?;
+                recog.base.match_token(AntlrPythonParser_CLOSE_PAR, &mut recog.err_handler)?;
             }
             Ok(())
         })();
@@ -2154,9 +2108,7 @@ where
         let mut recog = self;
         let _parentctx = recog.ctx.take();
         let mut _localctx = FunctionCallContextExt::new(_parentctx.clone(), recog.base.get_state());
-        recog
-            .base
-            .enter_rule(_localctx.clone(), 22, RULE_functionCall);
+        recog.base.enter_rule(_localctx.clone(), 22, RULE_functionCall);
         let mut _localctx: Rc<FunctionCallContextAll> = _localctx;
         let result: Result<(), ANTLRError> = (|| {
             recog.base.set_state(122);
@@ -2317,9 +2269,7 @@ where
         let _parentctx = recog.ctx.take();
         let mut _localctx =
             FunctionCallListContextExt::new(_parentctx.clone(), recog.base.get_state());
-        recog
-            .base
-            .enter_rule(_localctx.clone(), 24, RULE_functionCallList);
+        recog.base.enter_rule(_localctx.clone(), 24, RULE_functionCallList);
         let mut _localctx: Rc<FunctionCallListContextAll> = _localctx;
         let mut _la: i32 = -1;
         let result: Result<(), ANTLRError> = (|| {

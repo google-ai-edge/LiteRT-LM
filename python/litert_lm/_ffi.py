@@ -150,6 +150,10 @@ def _setup_lib_signatures(lib):
       ctypes.c_void_p,
       c_string_p,
   ]
+  lib.litert_lm_engine_settings_set_litert_dispatch_lib_dir.argtypes = [
+      ctypes.c_void_p,
+      c_string_p,
+  ]
   lib.litert_lm_engine_settings_set_enable_speculative_decoding.argtypes = [
       ctypes.c_void_p,
       ctypes.c_bool,
@@ -275,12 +279,14 @@ def _setup_lib_signatures(lib):
       ctypes.c_void_p,
       c_string_p,
       c_string_p,
+      ctypes.c_void_p,
   ]
   lib.litert_lm_conversation_send_message_stream.restype = ctypes.c_int
   lib.litert_lm_conversation_send_message_stream.argtypes = [
       ctypes.c_void_p,
       c_string_p,
       c_string_p,
+      ctypes.c_void_p,
       STREAM_CALLBACK_TYPE,
       ctypes.c_void_p,
   ]
@@ -290,6 +296,8 @@ def _setup_lib_signatures(lib):
       ctypes.c_void_p,
       c_string_p,
   ]
+  lib.litert_lm_conversation_get_token_count.restype = ctypes.c_int
+  lib.litert_lm_conversation_get_token_count.argtypes = [ctypes.c_void_p]
 
   # interfaces.Responses
   lib.litert_lm_responses_delete.argtypes = [ctypes.c_void_p]

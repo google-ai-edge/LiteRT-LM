@@ -98,9 +98,16 @@ internal object LiteRtLmJni {
    *
    * @param enginePointer A pointer to the native engine instance.
    * @param samplerConfig The sampler configuration.
+   * @param loraPath Path to the LoRA weights file.
+   * @param audioLoraPath Path to the Audio LoRA weights file.
    * @return A pointer to the native session instance.
    */
-  external fun nativeCreateSession(enginePointer: Long, samplerConfig: SamplerConfig?): Long
+  external fun nativeCreateSession(
+    enginePointer: Long,
+    samplerConfig: SamplerConfig?,
+    loraPath: String?,
+    audioLoraPath: String?,
+  ): Long
 
   /**
    * Delete the LiteRT-LM session.
@@ -208,6 +215,8 @@ internal object LiteRtLmJni {
     enableConversationConstrainedDecoding: Boolean,
     filterChannelContentFromKvCache: Boolean,
     overwritePromptTemplate: String?,
+    loraPath: String?,
+    audioLoraPath: String?,
   ): Long
 
   /**
@@ -224,13 +233,18 @@ internal object LiteRtLmJni {
    *
    * @param conversationPointer A pointer to the native conversation instance.
    * @param messageJsonString The message to be processed by the native conversation instance.
+   * @param extraContextJsonString The extra context to be used in the template in JSON string
+   *   format.
    * @param callback The callback to receive the streaming responses.
+   * @param visualTokenBudget The visual token budget. Only supported by Gemma4 currently. Null for
+   *   default.
    */
   external fun nativeSendMessageAsync(
     conversationPointer: Long,
     messageJsonString: String,
     extraContextJsonString: String,
     callback: JniMessageCallback,
+    visualTokenBudget: Int?,
   )
 
   /**
@@ -238,12 +252,17 @@ internal object LiteRtLmJni {
    *
    * @param conversationPointer A pointer to the native conversation instance.
    * @param messageJsonString The message to be processed by the native conversation instance.
+   * @param extraContextJsonString The extra context to be used in the template in JSON string
+   *   format.
+   * @param visualTokenBudget The visual token budget. Only supported by Gemma4 currently. Null for
+   *   default.
    * @return The response message in JSON string format.
    */
   external fun nativeSendMessage(
     conversationPointer: Long,
     messageJsonString: String,
     extraContextJsonString: String,
+    visualTokenBudget: Int?,
   ): String
 
   /**
@@ -261,6 +280,15 @@ internal object LiteRtLmJni {
    * @throws LiteRtLmJniException if the underlying native method fails.
    */
   external fun nativeConversationGetBenchmarkInfo(conversationPointer: Long): BenchmarkInfo
+
+  /**
+   * Gets the number of tokens in the conversation KV Cache.
+   *
+   * @param conversationPointer A pointer to the native conversation instance.
+   * @return The number of tokens.
+   * @throws LiteRtLmJniException if the underlying native method fails.
+   */
+  external fun nativeConversationGetTokenCount(conversationPointer: Long): Int
 
   /**
    * Renders the message into a string for testing purposes.

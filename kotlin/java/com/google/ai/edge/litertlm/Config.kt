@@ -123,6 +123,7 @@ constructor(
   val automaticToolCalling: Boolean = true,
   val channels: List<Channel>? = null,
   val extraContext: Map<String, Any> = emptyMap(),
+  val loraConfig: LoraConfig? = null,
 )
 
 /**
@@ -147,9 +148,21 @@ data class SamplerConfig(
 }
 
 /**
+ * Configuration for LoRA (Low-Rank Adaptation) weights.
+ *
+ * @property loraPath Optional file path to the LoRA weights file.
+ * @property audioLoraPath Optional file path to the Audio LoRA weights file.
+ */
+data class LoraConfig(val loraPath: String? = null, val audioLoraPath: String? = null)
+
+/**
  * Configuration for a LiteRT-LM [Session].
  *
  * @property samplerConfig Configuration for the sampling process. If `null`, then uses the engine's
  *   default values.
+ * @property loraConfig Configuration for LoRA weights.
  */
-data class SessionConfig(val samplerConfig: SamplerConfig? = null)
+data class SessionConfig(
+  val samplerConfig: SamplerConfig? = null,
+  val loraConfig: LoraConfig? = null,
+)

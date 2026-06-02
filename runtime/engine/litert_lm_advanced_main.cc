@@ -32,7 +32,6 @@
 
 #include "absl/flags/flag.h"  // from @com_google_absl
 #include "absl/flags/parse.h"  // from @com_google_absl
-#include "absl/log/absl_check.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
@@ -49,6 +48,11 @@
 ABSL_FLAG(std::string, backend, "cpu",
           "Executor backend to use for LLM execution (cpu, gpu, etc.)");
 ABSL_FLAG(std::string, model_path, "", "Model path to use for LLM execution.");
+ABSL_FLAG(
+    std::optional<std::string>, model_name, std::nullopt,
+    "The name of the model being tested. In Chrome performance tests, this "
+    "name is added to performance metrics to distinguish between different "
+    "models.");
 ABSL_FLAG(
     bool, load_model_from_descriptor, false,
     "Whether to load the model from a file descriptor rather than by path.");
@@ -201,6 +205,7 @@ absl::Status MainHelper(int argc, char** argv) {
   settings.audio_backend = absl::GetFlag(FLAGS_audio_backend);
   settings.sampler_backend = absl::GetFlag(FLAGS_sampler_backend);
   settings.model_path = absl::GetFlag(FLAGS_model_path);
+  settings.model_name = absl::GetFlag(FLAGS_model_name);
   settings.load_model_from_descriptor =
       absl::GetFlag(FLAGS_load_model_from_descriptor);
   settings.input_prompt = GetInputPrompt();
@@ -238,6 +243,7 @@ absl::Status MainHelper(int argc, char** argv) {
   settings.gpu_madvise_original_shared_tensors =
       absl::GetFlag(FLAGS_gpu_madvise_original_shared_tensors);
   settings.disable_cache = absl::GetFlag(FLAGS_disable_cache);
+  settings.cache_dir = absl::GetFlag(FLAGS_cache_dir);
   settings.cache_compiled_shaders_only =
       absl::GetFlag(FLAGS_cache_compiled_shaders_only);
   settings.preferred_device_substr =
@@ -302,6 +308,10 @@ absl::Status MainHelper(int argc, char** argv) {
 }  // namespace
 
 int main(int argc, char** argv) {
-  ABSL_CHECK_OK(MainHelper(argc, argv));
+  absl::Status status = MainHelper(argc, argv);
+  if (!status.ok()) {
+    ABSL_LOG(ERROR) << "Failed to run litert_lm: " << status;
+    return static_cast<int>(status.code());
+  }
   return 0;
 }

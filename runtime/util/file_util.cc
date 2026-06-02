@@ -14,17 +14,29 @@
 
 #include "runtime/util/file_util.h"
 
+#include <cerrno>
 #include <chrono>      // NOLINT: Required for file metadata retrieval.
 #include <filesystem>  // NOLINT: Required for file metadata retrieval.
 #include <string>
 #include <system_error>  // NOLINT: Required for file metadata retrieval.
+#include <unordered_map>
 #include <utility>
 
+#include "runtime/util/scoped_file.h"
+
+#if defined(_WIN32)
+#include <Windows.h>
+#else
+#include <sys/stat.h>
+#endif
+
+#include "absl/base/no_destructor.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/synchronization/mutex.h"  // from @com_google_absl
 
 namespace litert::lm {
 
@@ -83,8 +95,20 @@ absl::string_view Dirname(absl::string_view path) {
 }
 
 absl::StatusOr<std::string> GetFileCacheIdentifier(absl::string_view path) {
+  static auto* cached_identifiers =
+      new std::unordered_map<std::string, std::string>();
+  static absl::NoDestructor<absl::Mutex> cached_identifiers_mutex;
+  std::string path_str(path);
+  {
+    absl::MutexLock lock(cached_identifiers_mutex.get());
+    if (auto it = cached_identifiers->find(path_str);
+        it != cached_identifiers->end()) {
+      return it->second;
+    }
+  }
+
   std::error_code ec;
-  std::filesystem::path p{std::string(path)};
+  std::filesystem::path p{path_str};
 
   if (!std::filesystem::exists(p, ec) || ec) {
     return absl::InternalError(absl::StrCat("File does not exist: ", path));
@@ -102,12 +126,61 @@ absl::StatusOr<std::string> GetFileCacheIdentifier(absl::string_view path) {
         absl::StrCat("Failed to get last write time: ", ec.message()));
   }
 
-  auto duration = mtime.time_since_epoch();
+  auto current_file_time = std::filesystem::file_time_type::clock::now();
+  auto current_sys_time = std::chrono::system_clock::now();
+  auto sys_time =
+      std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+          mtime - current_file_time + current_sys_time);
+  auto duration = sys_time.time_since_epoch();
   auto seconds =
       std::chrono::duration_cast<std::chrono::seconds>(duration).count();
 
-  return absl::StrCat(seconds, "_", size);
+  std::string identifier = absl::StrCat(seconds, "_", size);
+  {
+    absl::MutexLock lock(cached_identifiers_mutex.get());
+    (*cached_identifiers)[path_str] = identifier;
+  }
+  return identifier;
 }
+
+#if defined(_WIN32)
+absl::StatusOr<std::string> GetFileCacheIdentifier(
+    const ScopedFile& scoped_file) {
+  if (!scoped_file.IsValid()) {
+    return absl::InvalidArgumentError("ScopedFile is invalid");
+  }
+  HANDLE hFile = scoped_file.file();
+  FILETIME ftWrite;
+  if (!GetFileTime(hFile, NULL, NULL, &ftWrite)) {
+    return absl::InternalError("Failed to get file time by handle on Windows");
+  }
+  ULARGE_INTEGER ull;
+  ull.LowPart = ftWrite.dwLowDateTime;
+  ull.HighPart = ftWrite.dwHighDateTime;
+  int64_t seconds =
+      static_cast<int64_t>(ull.QuadPart / 10000000ULL) - 11644473600LL;
+
+  LARGE_INTEGER size;
+  if (!GetFileSizeEx(hFile, &size)) {
+    return absl::InternalError("Failed to get file size by handle on Windows");
+  }
+
+  return absl::StrCat(seconds, "_", size.QuadPart);
+}
+#else
+absl::StatusOr<std::string> GetFileCacheIdentifier(
+    const ScopedFile& scoped_file) {
+  if (!scoped_file.IsValid()) {
+    return absl::InvalidArgumentError("ScopedFile is invalid");
+  }
+  int fd = scoped_file.file();
+  struct stat info;
+  if (fstat(fd, &info) < 0) {
+    return absl::ErrnoToStatus(errno, "fstat() failed");
+  }
+  return absl::StrCat(info.st_mtime, "_", info.st_size);
+}
+#endif
 
 bool FileExists(absl::string_view path) {
   std::error_code ec;

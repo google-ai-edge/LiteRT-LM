@@ -15,6 +15,7 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_COMPONENTS_PREPROCESSOR_IMAGE_PREPROCESSOR_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_COMPONENTS_PREPROCESSOR_IMAGE_PREPROCESSOR_H_
 
+#include <memory>
 #include <optional>
 #include <utility>
 
@@ -68,6 +69,13 @@ class ImagePreprocessParameter {
 // Main purpose is to process raw image bytes into a resized image TensorBuffer.
 class ImagePreprocessor {
  public:
+  // Creates an ImagePreprocessor.
+  //
+  // If `enable_skia_image_preprocessor` is enabled, then an instance of
+  // SkiaImagePreprocessor is returned. Otherwise, the StbImagePreprocessor is
+  // returned.
+  static std::unique_ptr<ImagePreprocessor> Create();
+
   virtual ~ImagePreprocessor() = default;
 
   // Preprocesses the raw image bytes into a resized image TensorBuffer.

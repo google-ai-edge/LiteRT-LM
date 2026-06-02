@@ -43,6 +43,10 @@ std::ostream& operator<<(std::ostream& os, const GpuArtisanConfig& config) {
   os << "enable_external_embeddings: " << config.enable_external_embeddings
      << "\n";
   os << "use_submodel: " << config.use_submodel << "\n";
+  os << "prefer_texture_weights: " << config.prefer_texture_weights << "\n";
+  os << "set_enable_host_mapped_pointer: "
+     << config.set_enable_host_mapped_pointer << "\n";
+  os << "disallow_8bit_convs: " << config.disallow_8bit_convs << "\n";
   return os;
 }
 

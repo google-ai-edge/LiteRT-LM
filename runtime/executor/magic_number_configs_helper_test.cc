@@ -106,6 +106,8 @@ class ModelResourcesMock : public ModelResources {
               (ModelType model_type), (override));
   MOCK_METHOD(std::optional<std::string>, GetTFLiteModelBackendConstraint,
               (ModelType model_type), (override));
+  MOCK_METHOD(std::optional<std::string>, GetTFLiteModelPreferActivationType,
+              (ModelType model_type), (override));
   MOCK_METHOD(absl::StatusOr<std::reference_wrapper<ScopedFile>>, GetScopedFile,
               (), (override));
   MOCK_METHOD((absl::StatusOr<std::pair<size_t, size_t>>),

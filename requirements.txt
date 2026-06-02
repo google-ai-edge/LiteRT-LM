@@ -74,3 +74,4 @@ word2number==1.1
 xxhash==3.6.0
 yarl==1.23.0
 zstandard==0.25.0
+tomli==2.4.1

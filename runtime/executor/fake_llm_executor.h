@@ -15,8 +15,10 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_MOCK_LLM_EXECUTOR_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_MOCK_LLM_EXECUTOR_H_
 
+#include <cstdint>
 #include <memory>
 #include <optional>
+#include <utility>
 #include <vector>
 
 #include "absl/status/status.h"  // from @com_google_absl
@@ -85,6 +87,23 @@ class FakeLlmExecutor : public LlmExecutor {
   };
   absl::StatusOr<int> GetCurrentStep() const override { return current_step_; }
 
+  absl::StatusOr<std::unique_ptr<LlmContext>> CreateNewContext(
+      std::optional<uint32_t> lora_id,
+      RuntimeConfig runtime_config) const override {
+    return std::make_unique<LlmContext>(
+        nullptr, std::make_unique<RuntimeConfig>(std::move(runtime_config)),
+        std::make_unique<RuntimeState>());
+  };
+
+  absl::Status RestoreContext(
+      std::unique_ptr<LlmContext> llm_context) override {
+    return absl::OkStatus();
+  };
+
+  absl::StatusOr<const ProcessedTokens*> GetProcessedTokens() const override {
+    return &processed_tokens_;
+  }
+
   absl::Status SetCurrentStep(int current_step) override {
     current_step_ = current_step;
     if (current_step >= prefill_tokens_total_) {
@@ -92,6 +111,11 @@ class FakeLlmExecutor : public LlmExecutor {
     } else {
       decode_times_ = 0;
     }
+    return absl::OkStatus();
+  }
+
+  absl::Status UpdateRuntimeConfig(
+      const RuntimeConfig& runtime_config) override {
     return absl::OkStatus();
   }
 

@@ -1,3 +1,17 @@
+# Copyright 2026 The ODML Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 name: "CI-Mac"
 on:
   push:
@@ -28,9 +42,9 @@ jobs:
       actions: write  # For gh cache delete.
       contents: write  # For gh release upload.
     env:
-      MODEL_KEY: gemma-3-1b-it-v1
-      MODEL_PATH: ./models/gemma3-1b-it-int4.litertlm
-      MODEL_URL: https://huggingface.co/litert-community/Gemma3-1B-IT/resolve/main/gemma3-1b-it-int4.litertlm
+      MODEL_KEY: gemma-4-E2B-it-litert-lm
+      MODEL_PATH: ./models/gemma-4-E2B-it-litert-lm.litertlm
+      MODEL_URL: https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm
 
       GH_TOKEN: ${{ github.token }}  # For gh release upload.
       REFRESH_CACHE: ${{ github.event_name == 'schedule' ||
@@ -97,6 +111,11 @@ jobs:
             -o ${{ env.MODEL_PATH }} \
             "${{ env.MODEL_URL }}"
           ls -lh ${{ env.MODEL_PATH }}
+
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
       - name: Run bazel build on MacOS.
         run: |

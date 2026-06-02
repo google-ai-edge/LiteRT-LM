@@ -53,6 +53,7 @@
 #include "runtime/components/tokenizer.h"
 #include "runtime/conversation/conversation.h"
 #include "runtime/conversation/io_types.h"
+#include "runtime/conversation/model_data_processor/gemma4_data_processor_config.h"
 #include "runtime/engine/engine.h"
 #include "runtime/engine/engine_factory.h"
 #include "runtime/engine/engine_settings.h"
@@ -177,8 +178,8 @@ absl::AnyInvocable<void(absl::StatusOr<Message>)> CreatePrintMessageCallback(
   };
 }
 
-void CheckExpectedOutput(const std::string& captured_output,
-                         const LiteRtLmSettings& settings) {
+absl::Status CheckExpectedOutput(const std::string& captured_output,
+                                 const LiteRtLmSettings& settings) {
   // Skip printing the output when using fake prefill tokens.
   bool should_print_output = settings.benchmark_prefill_tokens == 0;
   if (should_print_output) {
@@ -187,10 +188,13 @@ void CheckExpectedOutput(const std::string& captured_output,
   if (settings.expected_output.has_value()) {
     if (!absl::StrContainsIgnoreCase(captured_output,
                                      *settings.expected_output)) {
-      ABSL_LOG(FATAL) << "Expected output: " << *settings.expected_output
+      ABSL_LOG(ERROR) << "Expected output: " << *settings.expected_output
                       << " was not found in response: " << captured_output;
+      return absl::InternalError("Expected output not found in response: " +
+                                 captured_output);
     }
   }
+  return absl::OkStatus();
 }
 
 absl::StatusOr<std::unique_ptr<Constraint>> CreateRegexConstraint(
@@ -213,6 +217,13 @@ absl::StatusOr<Message> RunSingleTurnConversation(
   if (settings.max_output_tokens > 0) {
     optional_args.max_output_tokens = settings.max_output_tokens;
   }
+  if (settings.visual_token_budget > 0 && conversation->GetConfig()
+                                              .GetSessionConfig()
+                                              .GetLlmModelType()
+                                              .has_gemma4()) {
+    optional_args.args = Gemma4DataProcessorArguments{
+        .visual_token_budget = settings.visual_token_budget};
+  }
 
   // Skip printing the output when using fake prefill tokens.
   bool should_print_output = settings.benchmark_prefill_tokens == 0;
@@ -224,7 +235,7 @@ absl::StatusOr<Message> RunSingleTurnConversation(
         json::object({{"role", "user"}, {"content", content_list}}),
         std::move(print_message_callback), std::move(optional_args)));
     RETURN_IF_ERROR(engine->WaitUntilDone(kWaitUntilDoneTimeout));
-    CheckExpectedOutput(captured_output.str(), settings);
+    RETURN_IF_ERROR(CheckExpectedOutput(captured_output.str(), settings));
     return conversation->GetHistory().back();
   } else {
     ASSIGN_OR_RETURN(
@@ -235,7 +246,7 @@ absl::StatusOr<Message> RunSingleTurnConversation(
     if (should_print_output) {
       RETURN_IF_ERROR(PrintMessage(model_message, captured_output));
     }
-    CheckExpectedOutput(captured_output.str(), settings);
+    RETURN_IF_ERROR(CheckExpectedOutput(captured_output.str(), settings));
     return model_message;
   }
 }
@@ -268,6 +279,13 @@ absl::Status RunMultiTurnConversation(const LiteRtLmSettings& settings,
     if (settings.max_output_tokens > 0) {
       optional_args.max_output_tokens = settings.max_output_tokens;
     }
+    if (settings.visual_token_budget > 0 && conversation->GetConfig()
+                                                .GetSessionConfig()
+                                                .GetLlmModelType()
+                                                .has_gemma4()) {
+      optional_args.args = Gemma4DataProcessorArguments{
+          .visual_token_budget = settings.visual_token_budget};
+    }
 
     if (settings.async) {
       RETURN_IF_ERROR(conversation->SendMessageAsync(
@@ -284,7 +302,7 @@ absl::Status RunMultiTurnConversation(const LiteRtLmSettings& settings,
       RETURN_IF_ERROR(PrintMessage(model_message, captured_output));
     }
   } while (true);
-  CheckExpectedOutput(captured_output.str(), settings);
+  RETURN_IF_ERROR(CheckExpectedOutput(captured_output.str(), settings));
   return absl::OkStatus();
 }
 
@@ -321,7 +339,7 @@ absl::Status RunSingleTurnSession(const std::string& input_prompt,
     captured_output << response << std::endl << std::flush;
   }
   ABSL_LOG(INFO) << "output: " << captured_output.str();
-  CheckExpectedOutput(captured_output.str(), settings);
+  RETURN_IF_ERROR(CheckExpectedOutput(captured_output.str(), settings));
   return absl::OkStatus();
 }
 
@@ -379,12 +397,16 @@ void LogBenchmarkInfo(const litert::lm::BenchmarkInfo& benchmark_info,
   if (!settings.log_sink_file.has_value()) {
     ABSL_LOG(INFO) << benchmark_info;
   } else {
+    std::string model_name_flag = "";
+    if (settings.model_name.has_value() && !settings.model_name->empty()) {
+      model_name_flag = absl::StrFormat(",model_name=%s", *settings.model_name);
+    }
     ABSL_LOG(INFO) << absl::StrFormat(
         "Benchmark flags: "
-        "benchmark_prefill_tokens=%d,benchmark_decode_tokens=%d,backend=%s",
+        "benchmark_prefill_tokens=%d,benchmark_decode_tokens=%d,backend=%s%s",
         benchmark_info.GetBenchmarkParams().num_prefill_tokens(),
         benchmark_info.GetBenchmarkParams().num_decode_tokens(),
-        settings.backend);
+        settings.backend, model_name_flag);
     for (const auto& phase : benchmark_info.GetInitPhases()) {
       ABSL_LOG(INFO) << absl::StrFormat(
           "%s: %.2f ms", phase.first, absl::ToDoubleMilliseconds(phase.second));
@@ -615,7 +637,7 @@ absl::StatusOr<std::unique_ptr<litert::lm::Engine>> CreateEngine(
     const LiteRtLmSettings& settings, const EngineSettings& engine_settings) {
   ABSL_LOG(INFO) << "Creating engine";
   ASSIGN_OR_RETURN(auto engine,
-                   litert::lm::EngineFactory::CreateAny(
+                   litert::lm::EngineFactory::CreateDefault(
                        std::move(engine_settings), settings.input_prompt));
   if (settings.vision_backend.has_value()) {
     ASSIGN_OR_RETURN(auto vision_executor_properties,

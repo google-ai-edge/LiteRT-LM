@@ -92,6 +92,11 @@ class ConversationConfig {
     return filter_channel_content_from_kv_cache_;
   }
 
+  // Returns whether to return an error status when a tool call fails to parse.
+  bool return_error_on_parse_failure() const {
+    return return_error_on_parse_failure_;
+  }
+
  public:
   // Builder class for ConversationConfig.
   //
@@ -176,12 +181,19 @@ class ConversationConfig {
       return *this;
     }
 
+    // Sets whether to return an error status when a tool call fails to parse.
+    Builder& SetReturnErrorOnParseFailure(bool return_error_on_parse_failure) {
+      return_error_on_parse_failure_ = return_error_on_parse_failure;
+      return *this;
+    }
+
     absl::StatusOr<ConversationConfig> Build(const Engine& engine) {
       return ConversationConfig::CreateInternal(
           engine, session_config_, preface_, overwrite_prompt_template_,
           overwrite_processor_config_, enable_constrained_decoding_,
           prefill_preface_on_init_, constraint_provider_config_, channels_,
-          filter_channel_content_from_kv_cache_);
+          filter_channel_content_from_kv_cache_,
+          return_error_on_parse_failure_);
     }
 
     // Returns a unique pointer to a ConversationConfig.
@@ -201,6 +213,7 @@ class ConversationConfig {
     std::optional<ConstraintProviderConfig> constraint_provider_config_;
     std::optional<std::vector<Channel>> channels_ = std::nullopt;
     bool filter_channel_content_from_kv_cache_ = false;
+    bool return_error_on_parse_failure_ = true;
   };
 
   // Returns the constrained decoding config.
@@ -246,7 +259,8 @@ class ConversationConfig {
       std::optional<ConstraintProviderConfig> constraint_provider_config =
           std::nullopt,
       std::optional<std::vector<Channel>> channels = std::nullopt,
-      bool filter_channel_content_from_kv_cache = false);
+      bool filter_channel_content_from_kv_cache = false,
+      bool return_error_on_parse_failure = true);
 
   explicit ConversationConfig(SessionConfig session_config, Preface preface,
                               PromptTemplate prompt_template,
@@ -256,7 +270,8 @@ class ConversationConfig {
                               std::optional<ConstraintProviderConfig>
                                   constraint_provider_config = std::nullopt,
                               std::vector<Channel> channels = {},
-                              bool filter_channel_content_from_kv_cache = false)
+                              bool filter_channel_content_from_kv_cache = false,
+                              bool return_error_on_parse_failure = true)
       : session_config_(std::move(session_config)),
         preface_(std::move(preface)),
         prompt_template_(std::move(prompt_template)),
@@ -266,7 +281,8 @@ class ConversationConfig {
         constraint_provider_config_(std::move(constraint_provider_config)),
         channels_(std::move(channels)),
         filter_channel_content_from_kv_cache_(
-            filter_channel_content_from_kv_cache) {}
+            filter_channel_content_from_kv_cache),
+        return_error_on_parse_failure_(return_error_on_parse_failure) {}
 
   SessionConfig session_config_;
   Preface preface_;
@@ -277,6 +293,7 @@ class ConversationConfig {
   std::optional<ConstraintProviderConfig> constraint_provider_config_;
   std::vector<Channel> channels_;
   bool filter_channel_content_from_kv_cache_;
+  bool return_error_on_parse_failure_;
 };
 
 // Optional arguments for sending a message to the LLM.
@@ -494,6 +511,10 @@ class Conversation {
   // Returns the configuration used for creating the Conversation.
   const ConversationConfig& GetConfig() const { return config_; }
 
+  // Returns the number of tokens in the conversation KV Cache (prefill +
+  // decode).
+  absl::StatusOr<int> GetTokenCount() const;
+
   // Returns the benchmark info for the conversation. Under the hood, this
   // method triggers the benchmark info collection from the Session. Returns:
   // - The benchmark info for the conversation.
@@ -545,7 +566,10 @@ class Conversation {
         prompt_template_(std::move(prompt_template)),
         config_(config),
         constraint_provider_(std::move(constraint_provider)),
-        session_(std::move(session)) {}
+        session_(std::move(session)) {
+    model_data_processor_->SetReturnErrorOnParseFailure(
+        config_.return_error_on_parse_failure());
+  }
 
   absl::StatusOr<std::string> GetSingleTurnText(
       const Message& message, const OptionalArgs& optional_args);

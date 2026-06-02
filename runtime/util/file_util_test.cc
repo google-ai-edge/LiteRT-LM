@@ -24,6 +24,7 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/str_split.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "runtime/util/scoped_file.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
 
 namespace litert::lm {
@@ -95,6 +96,24 @@ TEST(FileUtilTest, GetFileCacheIdentifier) {
   EXPECT_EQ(parts[1], "9");
 
   EXPECT_FALSE(GetFileCacheIdentifier("non_existent_file").ok());
+}
+
+TEST(FileUtilTest, GetFileCacheIdentifier_FromScopedFile) {
+  ASSERT_OK_AND_ASSIGN(auto temp_file,
+                       JoinPath(testing::TempDir(), "test_scoped_file.txt"));
+  std::ofstream ofs(temp_file);
+  ofs << "test metadata fd data";
+  ofs.close();
+
+  ASSERT_OK_AND_ASSIGN(auto id_path, GetFileCacheIdentifier(temp_file));
+
+  ASSERT_OK_AND_ASSIGN(auto scoped_file, ScopedFile::Open(temp_file));
+  ASSERT_OK_AND_ASSIGN(auto id_fd, GetFileCacheIdentifier(scoped_file));
+
+  EXPECT_EQ(id_path, id_fd);
+
+  ScopedFile invalid_file;
+  EXPECT_FALSE(GetFileCacheIdentifier(invalid_file).ok());
 }
 
 TEST(FileUtilTest, FileExists) {

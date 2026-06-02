@@ -656,7 +656,7 @@ absl::StatusOr<std::unique_ptr<Sampler>> CreateGpuSampler(
 
 #else  // !__ANDROID__
 #if defined(__APPLE__)
-  if (use_metal || !use_webgpu) {
+  if (use_metal && !use_webgpu) {
     auto metal_sampler =
         TopKMetalCApiSampler::Create(env, batch_size, sequence_size, vocab_size,
                                      activation_data_type, sampler_params);

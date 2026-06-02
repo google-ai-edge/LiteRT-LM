@@ -14,6 +14,7 @@
 
 #include "runtime/conversation/model_data_processor/gemma4_data_processor.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <deque>
 #include <memory>
@@ -30,6 +31,8 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "runtime/components/constrained_decoding/constraint.h"
+#include "runtime/components/prompt_template.h"
+#include "runtime/conversation/model_data_processor/model_data_processor.h"
 #if !defined(LITERT_LM_FST_CONSTRAINTS_DISABLED)
 #include "runtime/components/constrained_decoding/gemma_model_constraint_provider.h"
 #endif
@@ -44,6 +47,7 @@
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/data_utils.h"
 #include "runtime/conversation/model_data_processor/gemma4_data_processor_config.h"
+#include "runtime/conversation/prompt_utils.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/util/memory_mapped_file.h"
 #include "runtime/util/status_macros.h"
@@ -201,13 +205,17 @@ Gemma4DataProcessor::Create(Gemma4DataProcessorConfig config,
                             const Tokenizer* tokenizer,
                             const std::vector<std::vector<int>>& stop_token_ids,
                             bool enable_constrained_decoding) {
+  // For Gemma4 models without mel-spectrogram extraction, it use 640 PCM
+  // samples as one audio token.
+  const int frame_length = config.skip_mel_spectrogram_extraction ? 640 : 320;
+  const int hop_length = config.skip_mel_spectrogram_extraction ? 640 : 160;
   ASSIGN_OR_RETURN(
       auto audio_preprocessor,
       AudioPreprocessorMiniAudio::Create(AudioPreprocessorConfig::Create(
           /* sample_rate_hz= */ 16000,
           /* num_channels= */ 1,
-          /* frame_length= */ 320,
-          /* hop_length= */ 160,
+          /* frame_length= */ frame_length,
+          /* hop_length= */ hop_length,
           /* fft_length = */ 512,
           /* input_scale = */ 1.0,
           /* pre_emphasis_factor = */ 0.0,
@@ -221,7 +229,9 @@ Gemma4DataProcessor::Create(Gemma4DataProcessorConfig config,
           /* non_zero_hanning= */ false,
           /* periodic_hanning= */ true,
           /* fft_padding_type= */
-          AudioPreprocessorConfig::FftPaddingType::kCenter)));
+          AudioPreprocessorConfig::FftPaddingType::kCenter,
+          /*skip_mel_spectrogram_extraction=*/
+          config.skip_mel_spectrogram_extraction)));
 #if defined(LITERT_LM_FST_CONSTRAINTS_DISABLED)
   if (enable_constrained_decoding) {
     return absl::FailedPreconditionError(
@@ -350,6 +360,9 @@ Gemma4DataProcessor::ToInputDataVectorImpl(
         if (item.is_string()) {
           continue;
         }
+        if (!item.contains("type")) {
+          continue;
+        }
         ASSIGN_OR_RETURN(std::unique_ptr<MemoryMappedFile> mmap_file,
                          LoadItemData(item));
         if (item["type"] == "image") {
@@ -366,10 +379,24 @@ Gemma4DataProcessor::ToInputDataVectorImpl(
   const char* start = prompt_view.data();
   std::string part;
   ImagePreprocessParameter image_params;
+
+  int max_num_patches = config_.max_num_patches;
+  if (args.visual_token_budget) {
+    int visual_token_budget = args.visual_token_budget.value();
+    if (visual_token_budget <= 0) {
+      return absl::InvalidArgumentError(
+          "Visual token budget must be positive.");
+    }
+    // There is a 9:1 ratio between the number of patches and the visual token
+    // budget, because of the pooling operation of (3x3=9) patches in the image
+    // encoder.
+    max_num_patches = std::min(max_num_patches, visual_token_budget * 9);
+  }
+
   image_params.SetPatchifyConfig(ImagePreprocessParameter::PatchifyConfig{
       .patch_width = config_.patch_width,
       .patch_height = config_.patch_height,
-      .max_num_patches = config_.max_num_patches,
+      .max_num_patches = max_num_patches,
       .pooling_kernel_size = config_.pooling_kernel_size});
   // Replace the placeholders with the actual data.
   while (RE2::FindAndConsume(&prompt_view, re_delimiter, &part)) {
@@ -439,8 +466,10 @@ absl::StatusOr<Message> Gemma4DataProcessor::ToMessageImpl(
         nlohmann::ordered_json content_and_tool_calls,
         ParseTextAndToolCalls(
             response_text, config_.code_fence_start, config_.code_fence_end,
-            GetSyntaxType(config_.syntax_type), config_.escape_fence_strings,
-            config_.tool_code_regex));
+            GetSyntaxType(config_.syntax_type),
+            {.escape_fence_strings = config_.escape_fence_strings,
+             .tool_code_regex = config_.tool_code_regex,
+             .return_error_on_parse_failure = ReturnErrorOnParseFailure()}));
     if (content_and_tool_calls.contains("content")) {
       message["content"] = content_and_tool_calls["content"];
     }
@@ -453,6 +482,19 @@ absl::StatusOr<Message> Gemma4DataProcessor::ToMessageImpl(
   }
   return message;
 }
+
+absl::StatusOr<ModelDataProcessor::SingleTurnTemplateRenderResult>
+Gemma4DataProcessor::RenderSingleTurnTemplate(
+    std::vector<Message>& history, const Preface& preface,
+    const Message& message, const PromptTemplate& prompt_template,
+    bool current_is_appending_message, bool append_message,
+    std::optional<nlohmann::ordered_json> extra_context) const {
+  return RenderSingleTurnTemplateCommon(
+      *this, history, preface, message, prompt_template,
+      current_is_appending_message, append_message, extra_context,
+      /*push_dummy_user_message_to_preface=*/false);
+}
+
 
 absl::StatusOr<nlohmann::ordered_json> Gemma4DataProcessor::FormatTools(
     const nlohmann::ordered_json& tools) const {

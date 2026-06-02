@@ -30,6 +30,7 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/str_split.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "runtime/components/model_resources.h"
 #include "runtime/components/tokenizer.h"
 #include "runtime/executor/audio_executor_settings.h"
 #include "runtime/executor/executor_settings_base.h"
@@ -40,9 +41,11 @@
 #include "runtime/proto/llm_model_type.pb.h"
 #include "runtime/proto/sampler_params.pb.h"
 #include "runtime/proto/token.pb.h"
+#include "runtime/util/litert_lm_loader.h"
 #include "runtime/util/model_type_utils.h"
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/status_macros.h"  // IWYU pragma: keep
+#include "schema/core/litertlm_header_schema_generated.h"
 
 namespace litert::lm {
 namespace {
@@ -100,6 +103,39 @@ absl::Status ValidateBackendConstraint(
   return absl::OkStatus();
 }
 
+// Maybe override the activation data type for the executor settings.
+// If the activation data type is set or the prefer_activation_type is not
+// set, we use the system default activation data type:
+// - Text executor defaults to F16.
+// - Vision executor defaults to F32.
+// - Audio executor defaults to F32.
+//
+// If the prefer_activation_type is set, we override the activation data type
+// to the prefer_activation_type.
+//
+// If the prefer_activation_type is "fp32_fp16", we set the activation data
+// type to F32 and set the enable_mixed_precision to true.
+absl::Status MaybeOverrideActivationType(
+    ExecutorSettingsBase& executor_settings,
+    const std::optional<std::string>& prefer_activation_type) {
+  if (executor_settings.GetActivationDataType().has_value() ||
+      !prefer_activation_type.has_value()) {
+    return absl::OkStatus();
+  }
+  if (prefer_activation_type.has_value()) {
+    ASSIGN_OR_RETURN(
+        ActivationDataType activation_data_type,
+        GetActivationDataTypeFromString(prefer_activation_type.value()));
+    executor_settings.SetActivationDataType(activation_data_type);
+    if (prefer_activation_type.value() == "fp32_fp16") {
+      // For mixed precision, we need to set the activation data type to F32
+      // and set the enable_mixed_precision to true.
+      executor_settings.SetEnableMixedPrecision(true);
+    }
+  }
+  return absl::OkStatus();
+}
+
 }  // namespace
 
 // static
@@ -107,6 +143,57 @@ absl::StatusOr<EngineSettings> EngineSettings::CreateDefault(
     ModelAssets model_assets, Backend backend,
     std::optional<Backend> vision_backend, std::optional<Backend> audio_backend,
     std::optional<Backend> sampler_backend) {
+  if (backend == Backend::GPU) {
+    bool is_text_artisan = false;
+
+    std::optional<absl::StatusOr<std::unique_ptr<LitertLmLoader>>>
+        loader_status;
+    // Optimize peak memory usage by reusing the existing memory mapping if
+    // available, avoiding duplicating file descriptors and creating new
+    // mappings.
+    if (model_assets.HasMemoryMappedFile()) {
+      auto mapped_file_status = model_assets.GetMemoryMappedFile();
+      if (mapped_file_status.ok()) {
+        loader_status = LitertLmLoader::Create(*mapped_file_status);
+      }
+    } else {
+      auto scoped_file_status = model_assets.GetOrCreateScopedFile();
+      if (scoped_file_status.ok()) {
+        auto duplicated_file_status = (*scoped_file_status)->Duplicate();
+        if (duplicated_file_status.ok()) {
+          loader_status =
+              LitertLmLoader::Create(std::move(*duplicated_file_status));
+        }
+      }
+    }
+
+    if (loader_status.has_value() && (*loader_status).ok()) {
+      // loader_status is
+      // std::optional<absl::StatusOr<std::unique_ptr<LitertLmLoader>>>. We need
+      // to dereference 3 times to get to the LitertLmLoader object:
+      // 1. *loader_status gets the StatusOr.
+      // 2. **loader_status gets the unique_ptr.
+      // 3. ***loader_status gets the LitertLmLoader.
+      const auto& loader = ***loader_status;
+      if (loader
+              .GetSectionLocation(
+                  BufferKey(schema::AnySectionDataType_TFLiteModel,
+                            ModelType::kArtisanTextDecoder))
+              .ok()) {
+        is_text_artisan = true;
+      }
+    }
+
+    if (is_text_artisan) {
+      ABSL_LOG(INFO) << "Artisan model detected. Switching backend from GPU to "
+                        "GPU_ARTISAN.";
+      backend = Backend::GPU_ARTISAN;
+      if (audio_backend.has_value() && audio_backend.value() == Backend::GPU) {
+        audio_backend = Backend::GPU_ARTISAN;
+      }
+    }
+  }
+
   ASSIGN_OR_RETURN(  // NOLINT
       auto executor_settings, LlmExecutorSettings::CreateDefault(
                                   model_assets, backend, sampler_backend));
@@ -141,7 +228,10 @@ absl::Status EngineSettings::MaybeUpdateAndValidate(
     absl::string_view input_prompt_as_hint,
     const std::optional<std::string>& text_backend_constraint,
     const std::optional<std::string>& vision_backend_constraint,
-    const std::optional<std::string>& audio_backend_constraint) {
+    const std::optional<std::string>& audio_backend_constraint,
+    const std::optional<std::string>& text_prefer_activation_type,
+    const std::optional<std::string>& vision_prefer_activation_type,
+    const std::optional<std::string>& audio_prefer_activation_type) {
   proto::LlmMetadata& metadata = GetMutableLlmMetadata();
   // Copy the metadata from the file if it is provided.
   if (metadata_from_file != nullptr) {
@@ -234,10 +324,10 @@ absl::Status EngineSettings::MaybeUpdateAndValidate(
   }
 
   // Set the default values for the sampler params.
+  Backend backend = main_executor_settings_.GetBackend();
   if (!metadata.has_sampler_params()) {
     proto::SamplerParameters& sampler_params =
         *metadata.mutable_sampler_params();
-    Backend backend = main_executor_settings_.GetBackend();
     if (backend == Backend::NPU || backend == Backend::GPU_ARTISAN) {
       sampler_params.set_type(proto::SamplerParameters::TYPE_UNSPECIFIED);
     } else if (backend == Backend::CPU || backend == Backend::GPU
@@ -251,6 +341,13 @@ absl::Status EngineSettings::MaybeUpdateAndValidate(
       return absl::InvalidArgumentError(
           absl::StrCat("Not recognized backend: ", backend));
     }
+  }
+
+  if (metadata.sampler_params().type() ==
+          proto::SamplerParameters::TYPE_UNSPECIFIED &&
+      (backend == Backend::CPU || backend == Backend::GPU)) {
+    metadata.mutable_sampler_params()->set_type(
+        proto::SamplerParameters::TOP_P);
   }
 
   if (!metadata.has_llm_model_type()) {
@@ -319,15 +416,21 @@ absl::Status EngineSettings::MaybeUpdateAndValidate(
   // constraint is compatible with the executor settings.
   RETURN_IF_ERROR(ValidateBackendConstraint(main_executor_settings_,
                                             text_backend_constraint, "Main"));
+  RETURN_IF_ERROR(MaybeOverrideActivationType(main_executor_settings_,
+                                              text_prefer_activation_type));
 
   if (vision_executor_settings_.has_value()) {
     RETURN_IF_ERROR(ValidateBackendConstraint(vision_executor_settings_.value(),
                                               vision_backend_constraint,
                                               "Vision"));
+    RETURN_IF_ERROR(MaybeOverrideActivationType(
+        vision_executor_settings_.value(), vision_prefer_activation_type));
   }
   if (audio_executor_settings_.has_value()) {
     RETURN_IF_ERROR(ValidateBackendConstraint(
         audio_executor_settings_.value(), audio_backend_constraint, "Audio"));
+    RETURN_IF_ERROR(MaybeOverrideActivationType(
+        audio_executor_settings_.value(), audio_prefer_activation_type));
   }
 
   ABSL_VLOG(5) << "The llm metadata: " << metadata.DebugString();
@@ -449,7 +552,8 @@ bool EngineSettings::GetSingleThreadedExecution() const {
   return single_threaded_execution_;
 }
 
-void EngineSettings::SetSingleThreadedExecution(bool single_threaded_execution) {
+void EngineSettings::SetSingleThreadedExecution(
+    bool single_threaded_execution) {
   single_threaded_execution_ = single_threaded_execution;
 }
 
@@ -610,6 +714,15 @@ void SessionConfig::SetScopedLoraFile(
   scoped_lora_file_ = std::move(scoped_lora_file);
 }
 
+std::shared_ptr<ScopedFile> SessionConfig::GetAudioScopedLoraFile() const {
+  return scoped_audio_lora_file_;
+}
+
+void SessionConfig::SetAudioScopedLoraFile(
+    std::shared_ptr<ScopedFile> scoped_audio_lora_file) {
+  scoped_audio_lora_file_ = std::move(scoped_audio_lora_file);
+}
+
 std::ostream& operator<<(std::ostream& os, const SessionConfig& config) {
   os << "SessionConfig: " << std::endl;
   os << "  AudioModalityEnabled: " << config.AudioModalityEnabled()
@@ -634,6 +747,9 @@ std::ostream& operator<<(std::ostream& os, const SessionConfig& config) {
      << config.GetApplyPromptTemplateInSession() << std::endl;
   os << "  ScopedLoraFile: "
      << (config.GetScopedLoraFile() != nullptr ? "Present" : "Not present")
+     << std::endl;
+  os << "  ScopedAudioLoraFile: "
+     << (config.GetAudioScopedLoraFile() != nullptr ? "Present" : "Not present")
      << std::endl;
   return os;
 }

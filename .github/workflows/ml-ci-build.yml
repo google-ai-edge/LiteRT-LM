@@ -1,3 +1,17 @@
+# Copyright 2026 The ODML Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 name: "ML-CI"
 on:
   push:
@@ -29,9 +43,9 @@ jobs:
       actions: write  # For gh cache delete.
       contents: write  # For gh release upload.
     env:
-      MODEL_KEY: gemma-4-E4B-it-litert-lm
-      MODEL_PATH: ./models/gemma-4-E4B-it-litert-lm.litertlm
-      MODEL_URL: https://huggingface.co/litert-community/gemma-4-E4B-it-litert-lm/resolve/main/gemma-4-E4B-it.litertlm
+      MODEL_KEY: gemma-4-E2B-it-litert-lm
+      MODEL_PATH: ./models/gemma-4-E2B-it-litert-lm.litertlm
+      MODEL_URL: https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm
 
       GH_TOKEN: ${{ github.token }}  # For gh release upload.
       REFRESH_CACHE: ${{ github.event_name == 'schedule' ||
@@ -126,8 +140,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: |
-            ~/.cache/bazel-linux
-            ~/.cache/bazel-android
+            ~/.cache/bazel
           key: ${{ steps.cache-keys.outputs.CACHE_KEY }}
           restore-keys: |
             ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_HEAD }}
@@ -155,7 +168,8 @@ jobs:
 
       - name: Run bazel build on Linux.
         run: |
-          bazelisk build --disk_cache=~/.cache/bazel-linux --config=linux_x86_64 \
+          bazelisk build --disk_cache=~/.cache/bazel --config=linux_x86_64 \
+            --deleted_packages=swift \
             --java_runtime_version=remotejdk_17 \
             //... \
             //runtime/engine:litert_lm_main
@@ -173,7 +187,8 @@ jobs:
 
       - name: Run bazel test on Linux.
         run: |
-          bazelisk test --disk_cache=~/.cache/bazel-linux --config=linux_x86_64 \
+          bazelisk test --disk_cache=~/.cache/bazel --config=linux_x86_64 \
+            --deleted_packages=swift \
             --test_output=errors \
             //...
 
@@ -185,7 +200,7 @@ jobs:
 
       - name: Run bazel build on Linux with dynamic linking.
         run: |
-          bazelisk build --config=linux_x86_64 \
+          bazelisk build --disk_cache=~/.cache/bazel --config=linux_x86_64 \
             --define=litert_link_capi_so=true \
             --define=resolve_symbols_in_exec=false \
             //runtime/engine:litert_lm_main
@@ -208,7 +223,8 @@ jobs:
 
       - name: Run bazel build for Android.
         run: |
-          bazelisk build --disk_cache=~/.cache/bazel-android --config=android_arm64 \
+          bazelisk build --disk_cache=~/.cache/bazel --config=android_arm64 \
+            --deleted_packages=swift \
             //... \
             //runtime/engine:litert_lm_main \
             @litert//litert/vendors/mediatek/dispatch:dispatch_api_so \
@@ -233,6 +249,5 @@ jobs:
         if: env.REFRESH_CACHE == 'true' || steps.bazel-cache.outputs.cache-hit != 'true'
         with:
           path: |
-            ~/.cache/bazel-linux
-            ~/.cache/bazel-android
+            ~/.cache/bazel
           key: ${{ steps.cache-keys.outputs.CACHE_KEY }}

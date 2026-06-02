@@ -45,15 +45,19 @@ cc_library(
     name = "engine_factory",
     hdrs = ["engine_factory.h"],
     deps = [
+        ":cpu_affinity_utils",
         ":engine_interface",
         ":engine_settings",
-        "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/functional:any_invocable",
         "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
+        "//runtime/components:model_resources",
+        "//runtime/executor:executor_settings_base",
+        "//runtime/util:litert_lm_loader",
+        "//schema/core:litertlm_header_schema",
     ],
 )
 
@@ -61,8 +65,22 @@ cc_library(
 cc_library(
     name = "engine_impl_selected",
     deps = select({
-        "//conditions:default": ["//runtime/core:engine_impl"],
+        "//conditions:default": ["//runtime/core:engine_advanced_impl"],
     }),
+    alwayslink = 1,
+)
+
+cc_library(
+    name = "cpu_affinity_utils",
+    srcs = ["cpu_affinity_utils.cc"],
+    hdrs = ["cpu_affinity_utils.h"],
+    deps = [
+        "@com_google_absl//absl/log:absl_log",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "//runtime/util:litert_status_util",
+    ],
 )
 
 cc_library(
@@ -151,6 +169,7 @@ cc_library(
         "//runtime/components/constrained_decoding:llg_constraint_config",
         "//runtime/conversation",
         "//runtime/conversation:io_types",
+        "//runtime/conversation/model_data_processor:gemma4_data_processor_config",
         "//runtime/executor:executor_settings_base",
         "//runtime/executor:llm_executor_settings",
         "//runtime/proto:sampler_params_cc_proto",
@@ -290,6 +309,7 @@ cc_library(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
+        "//runtime/components:model_resources",
         "//runtime/components:tokenizer",
         "//runtime/executor:audio_executor_settings",
         "//runtime/executor:executor_settings_base",
@@ -300,9 +320,11 @@ cc_library(
         "//runtime/proto:llm_model_type_cc_proto",
         "//runtime/proto:sampler_params_cc_proto",
         "//runtime/proto:token_cc_proto",
+        "//runtime/util:litert_lm_loader",
         "//runtime/util:litert_status_util",
         "//runtime/util:model_type_utils",
         "//runtime/util:scoped_file",
+        "//schema/core:litertlm_header_schema",
     ],
 )
 
@@ -314,6 +336,7 @@ cc_test(
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/types:optional",
         "@litert//litert/cc/internal:scoped_file",

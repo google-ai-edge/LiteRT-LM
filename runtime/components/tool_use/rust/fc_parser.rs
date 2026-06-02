@@ -37,6 +37,13 @@ fn strip_escape_tokens(text: &str) -> &str {
     if s.ends_with(ESCAPE) {
         s = &s[..(s.len() - ESCAPE.len())];
     }
+    const ESCAPE_DOUBLE_QUOTE: &str = "<|\"|>";
+    if s.starts_with(ESCAPE_DOUBLE_QUOTE) {
+        s = &s[ESCAPE_DOUBLE_QUOTE.len()..];
+    }
+    if s.ends_with(ESCAPE_DOUBLE_QUOTE) {
+        s = &s[..(s.len() - ESCAPE_DOUBLE_QUOTE.len())];
+    }
     s
 }
 

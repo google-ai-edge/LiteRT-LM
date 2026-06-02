@@ -59,7 +59,8 @@ Backend VisionExecutorSettings::GetAdapterBackend() const {
 }
 
 absl::Status VisionExecutorSettings::SetAdapterBackend(Backend backend) {
-  if (backend != Backend::GPU && backend != Backend::CPU) {
+  if (backend != Backend::GPU && backend != Backend::CPU &&
+      backend != Backend::NPU) {
     return absl::InvalidArgumentError(
         absl::StrCat("Unsupported adapter backend: ", backend));
   }

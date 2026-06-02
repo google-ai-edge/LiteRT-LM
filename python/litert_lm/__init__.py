@@ -16,6 +16,11 @@
 
 from ._ffi import LogSeverity
 from ._ffi import set_min_log_severity
+from ._messages import Content
+from ._messages import Contents
+from ._messages import Message
+from ._messages import Role
+from ._messages import ToolCall
 from .benchmark import Benchmark
 from .conversation import Conversation
 from .engine import Engine
@@ -40,13 +45,18 @@ __all__ = (
     "Backend",
     "Benchmark",
     "BenchmarkInfo",
+    "Content",
+    "Contents",
     "Conversation",
     "Engine",
     "LogSeverity",
+    "Message",
     "Responses",
+    "Role",
     "SamplerConfig",
     "Session",
     "Tool",
+    "ToolCall",
     "ToolEventHandler",
     "set_min_log_severity",
     "tool_from_function",

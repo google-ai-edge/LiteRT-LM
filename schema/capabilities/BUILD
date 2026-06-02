@@ -24,6 +24,8 @@ package(
 
 licenses(["notice"])
 
+exports_files(["capabilities_c.h"])
+
 cc_library(
     name = "capabilities",
     hdrs = ["capabilities.h"],
@@ -37,6 +39,7 @@ cc_library(
     deps = [
         ":capabilities",
     ],
+    alwayslink = True,
 )
 
 cc_library(

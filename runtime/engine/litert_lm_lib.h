@@ -72,6 +72,7 @@ struct LiteRtLmSettings {
   std::optional<std::string> audio_backend = std::nullopt;
   std::string sampler_backend = "";
   std::string model_path;
+  std::optional<std::string> model_name = std::nullopt;
   bool load_model_from_descriptor = false;
   std::string input_prompt = "What is the tallest building in the world?";
   std::optional<std::string> expected_output = std::nullopt;
@@ -79,6 +80,7 @@ struct LiteRtLmSettings {
   int max_num_tokens = 0;
   int max_output_tokens = -1;
   int max_num_images = 0;
+  int visual_token_budget = -1;
   absl::LogSeverity min_log_level = absl::LogSeverity::kInfo;
   std::set<int> prefill_batch_sizes;
   int num_output_candidates = 1;

@@ -66,8 +66,10 @@
 #include "runtime/executor/llm_executor_processed_tokens.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/llm_litert_npu_compiled_model_executor_utils.h"
+#include "runtime/executor/llm_processed_context.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/status_macros.h"  // NOLINT
+#include "runtime/util/tensor_buffer_util.h"
 
 namespace litert::lm {
 
@@ -91,9 +93,11 @@ constexpr char cache_v17[] = "kv_cache_v_17";
 
 constexpr absl::string_view kv_cache_k_root_name = "kv_cache_k_";
 constexpr absl::string_view kv_cache_v_root_name = "kv_cache_v_";
+constexpr absl::string_view kv_cache_c_root_name = "kv_cache_c_";
 
 constexpr absl::string_view kv_cache_slice_k_root_name = "kv_slice_k_";
 constexpr absl::string_view kv_cache_slice_v_root_name = "kv_slice_v_";
+constexpr absl::string_view kv_cache_slice_c_root_name = "kv_slice_c_";
 
 namespace {
 
@@ -277,52 +281,6 @@ litert::Expected<bool> HasPerLayerEmbedder(
     }
   }
   return false;
-}
-
-// Dequantize logits to float32.
-// This is required because `DecodeToLogits` must return float logits to the
-// caller, but NPU models may return quantized logits.
-absl::Status DequantizeLogits(const ::litert::TensorBuffer& src,
-                              ::litert::TensorBuffer& dst, float scale,
-                              int32_t zero_point, bool should_dump) {
-  LITERT_ASSIGN_OR_RETURN(auto src_type, src.TensorType());
-  LITERT_ASSIGN_OR_RETURN(auto dst_type, dst.TensorType());
-  RET_CHECK_EQ((int)dst_type.ElementType(),
-               (int)::litert::ElementType::Float32);
-
-  LITERT_ASSIGN_OR_RETURN(size_t num_elements, src_type.Layout().NumElements());
-
-  const auto src_elem_type = src_type.ElementType();
-
-  LITERT_ASSIGN_OR_RETURN(auto src_lock,
-                          ::litert::TensorBufferScopedLock::Create(
-                              const_cast<::litert::TensorBuffer&>(src),
-                              ::litert::TensorBuffer::LockMode::kRead));
-  LITERT_ASSIGN_OR_RETURN(auto dst_lock,
-                          ::litert::TensorBufferScopedLock::Create(
-                              dst, ::litert::TensorBuffer::LockMode::kWrite));
-
-  float* dst_ptr = static_cast<float*>(dst_lock.second);
-  const void* src_raw_ptr = src_lock.second;
-
-  if (src_elem_type == ::litert::ElementType::Int16) {
-    const int16_t* src_ptr = static_cast<const int16_t*>(src_raw_ptr);
-    for (size_t i = 0; i < num_elements; ++i) {
-      dst_ptr[i] = scale * (static_cast<float>(src_ptr[i]) -
-                            static_cast<float>(zero_point));
-    }
-  } else if (src_elem_type == ::litert::ElementType::Int8) {
-    const int8_t* src_ptr = static_cast<const int8_t*>(src_raw_ptr);
-    for (size_t i = 0; i < num_elements; ++i) {
-      dst_ptr[i] = scale * (static_cast<float>(src_ptr[i]) -
-                            static_cast<float>(zero_point));
-    }
-  } else {
-    return absl::InvalidArgumentError(absl::StrCat(
-        "Unsupported source type for dequantization: ", (int)src_elem_type));
-  }
-
-  return absl::OkStatus();
 }
 
 }  // namespace
@@ -845,13 +803,33 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::AllocateTransformerBuffers(
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
         decode_output_kv_cache_slice_buffers,
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-        verify_output_kv_cache_slice_buffers) {
+        verify_output_kv_cache_slice_buffers,
+    absl::flat_hash_map<absl::string_view, HWQuantParams>& kv_quant_params) {
   auto prefill_signature = transformer_model->FindSignature(kPrefillSignature);
+
+  if (prefill_signature.HasValue()) {
+    for (auto output_name : prefill_signature->OutputNames()) {
+      if (absl::StartsWith(output_name, kv_cache_slice_k_root_name) ||
+          absl::StartsWith(output_name, kv_cache_slice_v_root_name)) {
+        auto tensor_expected = prefill_signature->OutputTensor(output_name);
+        if (tensor_expected.HasValue()) {
+          HWQuantParams q_params;
+          if (tensor_expected->HasQuantization()) {
+            auto pq = tensor_expected->PerTensorQuantization();
+            q_params.scale = pq.scale;
+            q_params.zero_point = pq.zero_point;
+          }
+          kv_quant_params[output_name] = q_params;
+        }
+      }
+    }
+  }
 
   // Create input buffers for prefill signature.
   for (auto input_name : prefill_signature->InputNames()) {
     if (absl::StartsWith(input_name, kv_cache_k_root_name) ||
-        absl::StartsWith(input_name, kv_cache_v_root_name)) {
+        absl::StartsWith(input_name, kv_cache_v_root_name) ||
+        absl::StartsWith(input_name, kv_cache_c_root_name)) {
       LITERT_ASSIGN_OR_RETURN(
           input_kv_cache_buffers[input_name],
           llm_compiled_model.CreateInputBuffer(kPrefillSignature, input_name));
@@ -868,7 +846,8 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::AllocateTransformerBuffers(
   auto decode_signature = transformer_model->FindSignature(kDecodeSignature);
   for (auto input_name : decode_signature->InputNames()) {
     if (absl::StartsWith(input_name, kv_cache_k_root_name) ||
-        absl::StartsWith(input_name, kv_cache_v_root_name)) {
+        absl::StartsWith(input_name, kv_cache_v_root_name) ||
+        absl::StartsWith(input_name, kv_cache_c_root_name)) {
       // Create the input kv cache buffer for the decode signature if it is not
       // created in the prefill signature.
       if (!input_kv_cache_buffers.contains(input_name)) {
@@ -888,7 +867,8 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::AllocateTransformerBuffers(
   // Create output buffers for prefill signature.
   for (auto output_name : prefill_signature->OutputNames()) {
     if (absl::StartsWith(output_name, kv_cache_slice_k_root_name) ||
-        absl::StartsWith(output_name, kv_cache_slice_v_root_name)) {
+        absl::StartsWith(output_name, kv_cache_slice_v_root_name) ||
+        absl::StartsWith(output_name, kv_cache_slice_c_root_name)) {
       LITERT_ASSIGN_OR_RETURN(
           prefill_output_kv_cache_slice_buffers[output_name],
           llm_compiled_model.CreateOutputBuffer(kPrefillSignature,
@@ -898,7 +878,8 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::AllocateTransformerBuffers(
   // Create output buffers for decode signature.
   for (auto output_name : decode_signature->OutputNames()) {
     if (absl::StartsWith(output_name, kv_cache_slice_k_root_name) ||
-        absl::StartsWith(output_name, kv_cache_slice_v_root_name)) {
+        absl::StartsWith(output_name, kv_cache_slice_v_root_name) ||
+        absl::StartsWith(output_name, kv_cache_slice_c_root_name)) {
       LITERT_ASSIGN_OR_RETURN(
           decode_output_kv_cache_slice_buffers[output_name],
           llm_compiled_model.CreateOutputBuffer(kDecodeSignature, output_name));
@@ -917,7 +898,8 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::AllocateTransformerBuffers(
     }
     for (auto output_name : verify_signature->OutputNames()) {
       if (absl::StartsWith(output_name, kv_cache_slice_k_root_name) ||
-          absl::StartsWith(output_name, kv_cache_slice_v_root_name)) {
+          absl::StartsWith(output_name, kv_cache_slice_v_root_name) ||
+          absl::StartsWith(output_name, kv_cache_slice_c_root_name)) {
         LITERT_ASSIGN_OR_RETURN(
             verify_output_kv_cache_slice_buffers[output_name],
             llm_compiled_model.CreateOutputBuffer(LlmSignatures::kVerifyLlm,
@@ -1457,6 +1439,7 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::Prefill(
 
 absl::Status LlmLiteRtNpuCompiledModelExecutor::Prefill(
     const ExecutorInputs& inputs, const ExecutorPrefillParams& params) {
+  ran_decode_ = false;
   auto start = absl::Now();
   LITERT_ASSIGN_OR_RETURN(const auto* text_token_ids,
                           inputs.GetTextTokenIdsPtr());
@@ -1494,6 +1477,88 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::Prefill(
   return absl::OkStatus();
 }
 
+absl::StatusOr<::litert::TensorBuffer>
+LlmLiteRtNpuCompiledModelExecutor::DecodeLogits(const ExecutorInputs& inputs) {
+  return DecodeLogits(inputs, ExecutorDecodeParams());
+}
+
+absl::StatusOr<::litert::TensorBuffer>
+LlmLiteRtNpuCompiledModelExecutor::DecodeLogits(
+    const ExecutorInputs& inputs, const ExecutorDecodeParams& decode_params) {
+
+  if (current_step_ >= executor_settings_.GetMaxNumTokens()) {
+    return absl::ResourceExhaustedError("Reached maximum number of tokens.");
+  }
+
+  if (processed_tokens_.TokenCount() != current_step_) {
+    LITERT_RETURN_IF_ERROR(processed_tokens_.RollBackToStep(current_step_));
+  }
+
+  if (inputs.GetTextDataPtr().ok()) {
+    auto token_ids_buffer = inputs.GetTextTokenIdsPtr();
+    if (token_ids_buffer.ok()) {
+      auto input_tensor_size = (*token_ids_buffer)->PackedSize();
+      if (input_tensor_size && *input_tensor_size != 0) {
+        RET_CHECK_EQ(*input_tensor_size, sizeof(int32_t));
+        LITERT_ASSIGN_OR_RETURN(
+            auto ids, ReferTensorBufferAsSpan<int32_t>(**token_ids_buffer));
+        if (ids[0] >= 0) {
+          processed_tokens_.InvalidatePendingInputToken();
+          std::shared_ptr<TokenData> token =
+              std::make_shared<TokenData>(ids[0]);
+          RETURN_IF_ERROR(processed_tokens_.AddPendingInputToken({token}));
+        }
+      }
+    }
+  }
+
+  auto [internal_start_step, pending_input_token] =
+      processed_tokens_.GetNextUnprocessedToken();
+  if (pending_input_token.empty()) {
+    return absl::InvalidArgumentError("No id available to be decoded.");
+  }
+
+  bool last_run_is_decode = ran_decode_;
+
+  std::shared_ptr<TokenData> token = pending_input_token[0];
+  if (UseEmbeddingLookupManager() && token->embedding().empty()) {
+    RETURN_IF_ERROR(embedding_lookup_manager_->LookupDecode(
+        token->id(), token->mutable_embedding()));
+  }
+
+  RETURN_IF_ERROR(DecodeInternal(internal_start_step, token));
+  RETURN_IF_ERROR(processed_tokens_.MarkPendingInputTokenAsProcessed());
+
+  const auto& src_buffer =
+      llm_inference_context_
+          .decode_output_buffers[LlmSignatures::kDecodeLogitsOutput];
+
+  LITERT_ASSIGN_OR_RETURN(auto vocab_size, GetVocabSize());
+  LITERT_ASSIGN_OR_RETURN(auto output_logits,
+                          CreateTensorBuffer<float>({1, 1, vocab_size}));
+
+  RETURN_IF_ERROR(DequantizeLogits(src_buffer, output_logits,
+                                   per_tensor_logits_scale_,
+                                   per_tensor_logits_zero_point_, false));
+
+  if (decode_params.HasConstraintDecoder()) {
+    std::vector<int> current_token_ids = {token->id()};
+    if (last_run_is_decode) {
+      RETURN_IF_ERROR(
+          decode_params.GetConstraintDecoder()->UpdateConstraintState(
+              absl::MakeSpan(current_token_ids)));
+    }
+
+    RETURN_IF_ERROR(
+        decode_params.GetConstraintDecoder()->MaskLogits(output_logits));
+  }
+
+  current_step_++;
+  ran_decode_ = true;
+
+  return output_logits;
+}
+
 absl::StatusOr<std::vector<std::vector<int>>>
 LlmLiteRtNpuCompiledModelExecutor::Decode() {
   return Decode(ExecutorDecodeParams());
@@ -1503,8 +1568,37 @@ absl::StatusOr<std::vector<std::vector<int>>>
 LlmLiteRtNpuCompiledModelExecutor::Decode(
     const ExecutorDecodeParams& decode_params) {
   if (decode_params.HasConstraintDecoder()) {
-    return absl::UnimplementedError(
-        "Constrained decoding is not supported on NPU.");
+    auto start = absl::Now();
+
+    LITERT_ASSIGN_OR_RETURN(auto masked_logits,
+                            DecodeLogits(ExecutorInputs(), decode_params));
+
+    LITERT_ASSIGN_OR_RETURN(
+        const int max_index,
+        ApplyGreedySampling(masked_logits,
+                            npu_config_.enable_neon_for_npu_greedy_sampling));
+
+    std::shared_ptr<TokenData> last_output_token =
+        std::make_shared<TokenData>(max_index);
+
+    if (UseEmbeddingLookupManager()) {
+      auto start_lookup = absl::Now();
+      RETURN_IF_ERROR(embedding_lookup_manager_->LookupDecode(
+          last_output_token->id(), last_output_token->mutable_embedding()));
+      latency_stats_.decode_embedder_inference_latency_us +=
+          absl::ToInt64Microseconds(absl::Now() - start_lookup);
+    }
+
+    auto start_add = absl::Now();
+    RETURN_IF_ERROR(
+        processed_tokens_.AddPendingInputToken({std::move(last_output_token)}));
+    latency_stats_.decode_token_queue_latency_us +=
+        absl::ToInt64Microseconds(absl::Now() - start_add);
+
+    latency_stats_.decode_e2e_latency_us +=
+        absl::ToInt64Microseconds(absl::Now() - start);
+    latency_stats_.decode_num_tokens++;
+    return std::vector<std::vector<int>>{{max_index}};
   }
   auto start = absl::Now();
 
@@ -1711,16 +1805,7 @@ LlmLiteRtNpuCompiledModelExecutor::Decode(
 
   } else {
     // Standard Non-Speculative path.
-    ::litert::TensorBuffer& decoded_logits =
-        llm_inference_context_
-            .decode_output_buffers[LlmSignatures::kDecodeLogitsOutput];
-    auto start_sample = absl::Now();
-    LITERT_ASSIGN_OR_RETURN(
-        const int max_index,
-        ApplyGreedySampling(decoded_logits,
-                            npu_config_.enable_neon_for_npu_greedy_sampling));
-    latency_stats_.decode_sampling_latency_us +=
-        absl::ToInt64Microseconds(absl::Now() - start_sample);
+    const int max_index = mtp_start_token_id;
 
     // Store the sampled id as the pending input token for next Decode.
 
@@ -1986,7 +2071,8 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::PrefillInternal(
     if (prefill_kv_cache_update_method_ == KVCacheUpdateMethod::kWH) {
       RETURN_IF_ERROR(HWKVCacheUpdate(
           cache_update_inference_context_.prefill_input_buffers,
-          cache_update_inference_context_.prefill_output_buffers));
+          cache_update_inference_context_.prefill_output_buffers,
+          kv_quant_params_));
     } else {
       auto res = npu_auxiliary_context_.npu_auxiliary_compiled_model.Run(
           CacheUpdateSignatures::kPrefillCacheUpdate,
@@ -2162,9 +2248,10 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::DecodeInternal(
   {
     auto start = absl::Now();
     if (decode_kv_cache_update_method_ == KVCacheUpdateMethod::kWH) {
-      RETURN_IF_ERROR(HWKVCacheUpdate(
-          cache_update_inference_context_.decode_input_buffers,
-          cache_update_inference_context_.decode_output_buffers));
+      RETURN_IF_ERROR(
+          HWKVCacheUpdate(cache_update_inference_context_.decode_input_buffers,
+                          cache_update_inference_context_.decode_output_buffers,
+                          kv_quant_params_));
     } else {
       auto res = npu_auxiliary_context_.npu_auxiliary_compiled_model.Run(
           CacheUpdateSignatures::kDecodeCacheUpdate,
@@ -2394,6 +2481,12 @@ absl::StatusOr<int> GetLogitsAtBatchIndex(const TensorBuffer& logits_buffer,
                                    vocab_size);
     }
 #endif
+#if defined(__x86_64__) || defined(_M_X64)
+    if (enable_neon_sampling) {
+      return FindMaxIndexSse2Float(reinterpret_cast<const float*>(logits_ptr),
+                                   vocab_size);
+    }
+#endif
     return find_max_index_plain(reinterpret_cast<const float*>(logits_ptr));
   } else if (tensor_type.ElementType() == ::litert::ElementType::Int16) {
 #if defined(__ANDROID__) && defined(__ARM_NEON)
@@ -2402,11 +2495,23 @@ absl::StatusOr<int> GetLogitsAtBatchIndex(const TensorBuffer& logits_buffer,
                                    vocab_size);
     }
 #endif
+#if defined(__x86_64__) || defined(_M_X64)
+    if (enable_neon_sampling) {
+      return FindMaxIndexSse2Int16(reinterpret_cast<const int16_t*>(logits_ptr),
+                                   vocab_size);
+    }
+#endif
     return find_max_index_plain(reinterpret_cast<const int16_t*>(logits_ptr));
   } else if (tensor_type.ElementType() == ::litert::ElementType::Int8) {
 #if defined(__ANDROID__) && defined(__ARM_NEON)
     if (enable_neon_sampling) {
       return FindMaxIndexInt8Neon(reinterpret_cast<const int8_t*>(logits_ptr),
+                                  vocab_size);
+    }
+#endif
+#if defined(__x86_64__) || defined(_M_X64)
+    if (enable_neon_sampling) {
+      return FindMaxIndexSse2Int8(reinterpret_cast<const int8_t*>(logits_ptr),
                                   vocab_size);
     }
 #endif
@@ -2628,7 +2733,8 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::CommitVerifiedKVCache(
   if (prefill_kv_cache_update_method_ == KVCacheUpdateMethod::kWH) {
     RETURN_IF_ERROR(
         HWKVCacheUpdate(cache_update_inference_context_.verify_input_buffers,
-                        cache_update_inference_context_.verify_output_buffers));
+                        cache_update_inference_context_.verify_output_buffers,
+                        kv_quant_params_));
   } else {
     LITERT_RETURN_IF_ERROR(
         npu_auxiliary_context_.npu_auxiliary_compiled_model.Run(
@@ -2639,14 +2745,40 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::CommitVerifiedKVCache(
   return absl::OkStatus();
 }
 
+absl::Status LlmLiteRtNpuCompiledModelExecutor::SetCurrentStep(int new_step) {
+  const int max_step = processed_tokens_.TokenCount();
+  if (new_step != (max_step - 1)) {
+    return absl::InvalidArgumentError(
+        "NPU executor's SetCurrentStep only supports rolling back one token at "
+        "the end of decode.");
+  }
+
+  for (int i = new_step; i < current_step_; ++i) {
+    if (processed_tokens_.GetTokenAtStep(i).empty()) {
+      return absl::InvalidArgumentError(
+          "SetCurrentStep does not currently support rolling back vision or "
+          "audio tokens.");
+    }
+  }
+
+  current_step_ = new_step;
+  return absl::OkStatus();
+};
+
+absl::StatusOr<const ProcessedTokens*>
+LlmLiteRtNpuCompiledModelExecutor::GetProcessedTokens() const {
+  return &processed_tokens_;
+}
+
 absl::StatusOr<int> LlmLiteRtNpuCompiledModelExecutor::GetVocabSize() {
   LITERT_ASSIGN_OR_RETURN(
       auto logits_tensor_type,
       llm_inference_context_
           .decode_output_buffers[LlmSignatures::kDecodeLogitsOutput]
           .TensorType());
-  RET_CHECK_EQ(logits_tensor_type.Layout().Dimensions().size(), 2);
-  return logits_tensor_type.Layout().Dimensions()[1];
+  const auto rank = logits_tensor_type.Layout().Dimensions().size();
+  RET_CHECK(rank == 2 || rank == 3) << "Logits must be a 2D or 3D tensor.";
+  return logits_tensor_type.Layout().Dimensions()[rank - 1];
 }
 
 const LlmLiteRtNpuCompiledModelExecutor::LatencyStats&
@@ -2657,6 +2789,7 @@ LlmLiteRtNpuCompiledModelExecutor::GetLatencyStats() const {
 absl::Status LlmLiteRtNpuCompiledModelExecutor::Reset() {
   ABSL_LOG(INFO) << "Custom NPU execution latency stats:\n" << latency_stats_;
   current_step_ = 0;
+  ran_decode_ = false;
   RETURN_IF_ERROR(processed_tokens_.RollBackToStep(0));
   sampled_ids_.clear();
   latency_stats_ = {};
@@ -2664,6 +2797,96 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::Reset() {
   pending_accepted_tokens_.clear();
 
   RETURN_IF_ERROR(ClearKVCache(llm_inference_context_.prefill_input_buffers));
+  return absl::OkStatus();
+}
+
+absl::StatusOr<std::unique_ptr<LlmContext>>
+LlmLiteRtNpuCompiledModelExecutor::CreateNewContext(
+    std::optional<uint32_t> lora_id, RuntimeConfig runtime_config) const {
+  std::unique_ptr<ProcessedContext> processed_context =
+      std::make_unique<LlmProcessedContext>(
+          lora_id,
+          absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>());
+
+  return std::make_unique<LlmContext>(
+      std::move(processed_context),
+      std::make_unique<RuntimeConfig>(std::move(runtime_config)),
+      std::make_unique<RuntimeState>());
+}
+
+absl::StatusOr<std::unique_ptr<LlmContext>>
+LlmLiteRtNpuCompiledModelExecutor::CloneContext() const {
+  absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
+      kv_cache_buffers;
+  for (const auto& [name, buffer] :
+       llm_inference_context_.prefill_input_buffers) {
+    if (absl::StartsWith(name, kv_cache_k_root_name) ||
+        absl::StartsWith(name, kv_cache_v_root_name) ||
+        absl::StartsWith(name, kv_cache_c_root_name)) {
+      LITERT_ASSIGN_OR_RETURN(auto buffer_copy, CopyTensorBuffer(env_, buffer));
+      kv_cache_buffers[name] = std::move(buffer_copy);
+    }
+  }
+
+  std::unique_ptr<ProcessedContext> processed_context =
+      std::make_unique<LlmProcessedContext>(
+          /*lora_id=*/std::nullopt, std::move(kv_cache_buffers),
+          processed_tokens_);
+
+  RuntimeConfig runtime_config;
+  runtime_config.sampler_params = sampler_params_;
+
+  RuntimeState runtime_state;
+  runtime_state.current_step = current_step_;
+
+  return std::make_unique<LlmContext>(
+      std::move(processed_context),
+      std::make_unique<RuntimeConfig>(std::move(runtime_config)),
+      std::make_unique<RuntimeState>(std::move(runtime_state)));
+}
+
+absl::Status LlmLiteRtNpuCompiledModelExecutor::RestoreContext(
+    std::unique_ptr<LlmContext> context_data) {
+  if (context_data->runtime_state().current_step > 0) {
+    auto& saved_kv_buffers =
+        static_cast<LlmProcessedContext&>(context_data->processed_context())
+            .kv_cache_buffers();
+    for (const auto& [name, saved_buffer] : saved_kv_buffers) {
+      if (llm_inference_context_.prefill_input_buffers.contains(name)) {
+        auto& target_buffer =
+            llm_inference_context_.prefill_input_buffers[name];
+
+        LITERT_ASSIGN_OR_RETURN(
+            auto src_lock_and_addr,
+            ::litert::TensorBufferScopedLock::Create(
+                saved_buffer, ::litert::TensorBuffer::LockMode::kRead));
+
+        LITERT_ASSIGN_OR_RETURN(
+            auto dst_lock_and_addr,
+            ::litert::TensorBufferScopedLock::Create(
+                target_buffer, ::litert::TensorBuffer::LockMode::kWrite));
+
+        LITERT_ASSIGN_OR_RETURN(size_t src_size, saved_buffer.PackedSize());
+        LITERT_ASSIGN_OR_RETURN(size_t dst_size, target_buffer.PackedSize());
+        if (src_size != dst_size) {
+          return absl::InternalError("Buffer size mismatch in RestoreContext");
+        }
+
+        std::memcpy(dst_lock_and_addr.second, src_lock_and_addr.second,
+                    src_size);
+      }
+    }
+  } else {
+    RETURN_IF_ERROR(ClearKVCache(llm_inference_context_.prefill_input_buffers));
+  }
+
+  processed_tokens_ = context_data->processed_context().processed_tokens();
+  current_step_ = context_data->runtime_state().current_step;
+
+  if (context_data->runtime_config().sampler_params.has_value()) {
+    sampler_params_ = *context_data->runtime_config().sampler_params;
+  }
+
   return absl::OkStatus();
 }
 
@@ -2742,12 +2965,13 @@ LlmLiteRtNpuCompiledModelExecutor::CreateForModelHasPerLayerEmbedding(
   absl::flat_hash_map<absl::string_view, TensorBuffer>
       verify_output_kv_cache_slice_buffers;
 
+  absl::flat_hash_map<absl::string_view, HWQuantParams> kv_quant_params;
   RETURN_IF_ERROR(AllocateTransformerBuffers(
       env, transformer_model, llm_compiled_model, gemma_prefill_input_buffers,
       gemma_decode_input_buffers, gemma_verify_input_buffers,
       input_kv_cache_buffers, prefill_output_kv_cache_slice_buffers,
       decode_output_kv_cache_slice_buffers,
-      verify_output_kv_cache_slice_buffers));
+      verify_output_kv_cache_slice_buffers, kv_quant_params));
 
   // Gemma3n specific fix: KV cache buffer 19 of *prefill* is not connected
   // to any OPs in the model, making the LiteRT runtime allocate host memory
@@ -2978,8 +3202,8 @@ LlmLiteRtNpuCompiledModelExecutor::CreateForModelHasPerLayerEmbedding(
       std::move(embedder_per_layer_context), quantization_params,
       std::move(ple_table_ptrs), std::move(ple_quant_params),
       std::move(ple_per_tensor_scales), table_count, output_type, final_scale,
-      final_zero_point, speculative_decoding_type, std::move(drafter_context),
-      std::move(drafter_aux_context)));
+      final_zero_point, std::move(kv_quant_params), speculative_decoding_type,
+      std::move(drafter_context), std::move(drafter_aux_context)));
   return executor;
 }
 
@@ -3013,12 +3237,13 @@ LlmLiteRtNpuCompiledModelExecutor::CreateForModelWithoutPerLayerEmbedding(
   absl::flat_hash_map<absl::string_view, TensorBuffer>
       verify_output_kv_cache_slice_buffers;
 
+  absl::flat_hash_map<absl::string_view, HWQuantParams> kv_quant_params;
   RETURN_IF_ERROR(AllocateTransformerBuffers(
       env, transformer_model, llm_compiled_model, gemma_prefill_input_buffers,
       gemma_decode_input_buffers, gemma_verify_input_buffers,
       input_kv_cache_buffers, prefill_output_kv_cache_slice_buffers,
       decode_output_kv_cache_slice_buffers,
-      verify_output_kv_cache_slice_buffers));
+      verify_output_kv_cache_slice_buffers, kv_quant_params));
   LITERT_ASSIGN_OR_RETURN(
       auto llm_inference_context,
       CreateLlmInferenceContextWithBufferSharing(
@@ -3053,7 +3278,7 @@ LlmLiteRtNpuCompiledModelExecutor::CreateForModelWithoutPerLayerEmbedding(
     LITERT_ASSIGN_OR_RETURN(auto buffer_v, llm_compiled_model.CreateInputBuffer(
                                                kDecodeSignature, cache_v23));
     llm_inference_context.decode_input_buffers[cache_v23] = std::move(buffer_v);
-  } else {
+  } else if (llm_inference_context.prefill_input_buffers.contains(cache_k17)) {
     // Tiny Gemma 270M specific fix:
     LITERT_ASSIGN_OR_RETURN(auto buffer_k, llm_compiled_model.CreateInputBuffer(
                                                kDecodeSignature, cache_k17));
@@ -3182,8 +3407,9 @@ LlmLiteRtNpuCompiledModelExecutor::CreateForModelWithoutPerLayerEmbedding(
       std::move(cache_update_inference_context), std::move(prefill_runner_set),
       std::move(maybe_embedding_lookup_manager),
       /*embedder_per_layer_context=*/std::nullopt, quantization_params, {}, {},
-      {}, 0, litert::ElementType::None, 1.0f, 0, speculative_decoding_type,
-      std::move(drafter_context), std::move(drafter_aux_context)));
+      {}, 0, litert::ElementType::None, 1.0f, 0, std::move(kv_quant_params),
+      speculative_decoding_type, std::move(drafter_context),
+      std::move(drafter_aux_context)));
   return executor;
 }
 
@@ -3191,8 +3417,17 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::ClearKVCache(
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& buffers) {
   for (auto& [buffer_name, buffer] : buffers) {
     if (buffer_name.starts_with(kv_cache_k_root_name) ||
-        buffer_name.starts_with(kv_cache_v_root_name)) {
-      LITERT_RETURN_IF_ERROR(buffer.Clear());
+        buffer_name.starts_with(kv_cache_v_root_name) ||
+        buffer_name.starts_with(kv_cache_c_root_name)) {
+      auto status = buffer.Clear();
+      if (!status) {
+        LITERT_ASSIGN_OR_RETURN(
+            auto lock_and_addr,
+            ::litert::TensorBufferScopedLock::Create(
+                buffer, ::litert::TensorBuffer::LockMode::kWrite));
+        LITERT_ASSIGN_OR_RETURN(size_t size, buffer.Size());
+        std::memset(lock_and_addr.second, 0, size);
+      }
     }
   }
   return absl::OkStatus();

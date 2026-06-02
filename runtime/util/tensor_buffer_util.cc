@@ -15,6 +15,7 @@
 #include "runtime/util/tensor_buffer_util.h"
 
 #include <cstring>
+#include <memory>
 #include <utility>
 #include <vector>
 
@@ -22,6 +23,7 @@
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
 
 namespace litert::lm {
 
@@ -48,9 +50,23 @@ absl::StatusOr<::litert::TensorBuffer> CopyTensorBuffer(
   LITERT_ASSIGN_OR_RETURN(auto buffer_type, tensor_buffer.BufferType());
   LITERT_ASSIGN_OR_RETURN(auto size, tensor_buffer.PackedSize());
 
-  LITERT_ASSIGN_OR_RETURN(auto output_tensor_buffer,
-                          ::litert::TensorBuffer::CreateManaged(
-                              env, buffer_type, tensor_type, size));
+  std::unique_ptr<::litert::TensorBuffer> output_tensor_buffer;
+  if (tensor_buffer.IsMetalMemory()) {
+    // b/505373949#comment13: A temporary fix to create a host memory buffer to
+    // copy from the metal memory buffer to avoid memory leak:
+    LITERT_ASSIGN_OR_RETURN(
+        auto buffer,
+        ::litert::TensorBuffer::CreateManaged(
+            env, ::litert::TensorBufferType::kHostMemory, tensor_type, size));
+    output_tensor_buffer =
+        std::make_unique<::litert::TensorBuffer>(std::move(buffer));
+  } else {
+    LITERT_ASSIGN_OR_RETURN(
+        auto buffer, ::litert::TensorBuffer::CreateManaged(env, buffer_type,
+                                                           tensor_type, size));
+    output_tensor_buffer =
+        std::make_unique<::litert::TensorBuffer>(std::move(buffer));
+  }
 
   LITERT_ASSIGN_OR_RETURN(
       auto src_lock_and_addr,
@@ -59,11 +75,11 @@ absl::StatusOr<::litert::TensorBuffer> CopyTensorBuffer(
   LITERT_ASSIGN_OR_RETURN(
       auto dst_lock_and_addr,
       ::litert::TensorBufferScopedLock::Create(
-          output_tensor_buffer, ::litert::TensorBuffer::LockMode::kWrite));
+          *output_tensor_buffer, ::litert::TensorBuffer::LockMode::kWrite));
 
   std::memcpy(dst_lock_and_addr.second, src_lock_and_addr.second, size);
 
-  return std::move(output_tensor_buffer);
+  return std::move(*output_tensor_buffer);
 }
 
 }  // namespace litert::lm

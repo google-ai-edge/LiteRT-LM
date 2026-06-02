@@ -13,19 +13,36 @@
 # limitations under the License.
 """Engine wrapper for LiteRT-LM."""
 
+from __future__ import annotations
+
 import collections.abc
 import ctypes
 import json
 from typing import Any
+import warnings
 
 from . import interfaces
 from . import tools as litert_tools
 from ._ffi import _get_lib
 from ._ffi import TokenUnionType
+from ._messages import Message
 from .conversation import Conversation
 from .session import Session
 from .utils import _parse_token_union
 from .utils import _sampler_config_to_params
+
+
+# TODO: b/482060476 - Drop support for passing Backend class in 0.13.0.
+def _normalize_backend(backend: Any) -> Any:
+  if isinstance(backend, type) and issubclass(backend, interfaces.Backend):
+    warnings.warn(
+        f"Passing Backend class {backend.__name__} is deprecated. "
+        f"Please use an instance instead: {backend.__name__}()",
+        category=DeprecationWarning,
+        stacklevel=3,
+    )
+    return backend()
+  return backend
 
 
 class Engine(interfaces.AbstractEngine):
@@ -34,27 +51,50 @@ class Engine(interfaces.AbstractEngine):
   def __init__(
       self,
       model_path: str,
-      backend: interfaces.Backend = interfaces.Backend.CPU,
+      backend: (
+          interfaces.Backend | type[interfaces.Backend]
+      ) = interfaces.Backend.CPU(),
       max_num_tokens: int | None = None,
       cache_dir: str = "",
+      vision_backend: (
+          interfaces.Backend | type[interfaces.Backend] | None
+      ) = None,
+      audio_backend: (
+          interfaces.Backend | type[interfaces.Backend] | None
+      ) = None,
       **kwargs,
   ):
+    backend = _normalize_backend(backend)
+    vision_backend = _normalize_backend(vision_backend)
+    audio_backend = _normalize_backend(audio_backend)
+
     super().__init__(
         model_path=model_path,
         backend=backend,
         max_num_tokens=max_num_tokens,
         cache_dir=cache_dir,
+        vision_backend=vision_backend,
+        audio_backend=audio_backend,
         **kwargs,
     )
+
     self._lib = _get_lib()
     self._engine_ptr = None
 
     settings = self._lib.litert_lm_engine_settings_create(
         self.model_path,
-        self.backend.name.lower(),
-        (self.vision_backend.name.lower() if self.vision_backend else None),
-        (self.audio_backend.name.lower() if self.audio_backend else None),
+        self.backend.get_name(),
+        (self.vision_backend.get_name() if self.vision_backend else None),
+        (self.audio_backend.get_name() if self.audio_backend else None),
     )
+
+    if (
+        isinstance(self.backend, interfaces.Backend.NPU)
+        and self.backend.litert_dispatch_lib_dir
+    ):
+      self._lib.litert_lm_engine_settings_set_litert_dispatch_lib_dir(
+          settings, self.backend.litert_dispatch_lib_dir
+      )
 
     if not settings:
       raise RuntimeError(
@@ -101,7 +141,8 @@ class Engine(interfaces.AbstractEngine):
       self,
       *,
       messages: (
-          collections.abc.Sequence[collections.abc.Mapping[str, Any]] | None
+          collections.abc.Sequence[collections.abc.Mapping[str, Any] | Message]
+          | None
       ) = None,
       tools: (
           collections.abc.Sequence[
@@ -139,8 +180,11 @@ class Engine(interfaces.AbstractEngine):
       )
 
     if messages:
+      serialized_messages = [
+          m.to_json() if hasattr(m, "to_json") else m for m in messages
+      ]
       self._lib.litert_lm_conversation_config_set_messages(
-          conv_config, json.dumps(messages)
+          conv_config, json.dumps(serialized_messages)
       )
 
     if extra_context:

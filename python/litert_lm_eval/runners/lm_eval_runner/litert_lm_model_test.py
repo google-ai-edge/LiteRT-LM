@@ -393,7 +393,7 @@ class LitertLmModelTest(parameterized.TestCase):
         vision_backend="GPU",
     )
     self.assertEqual(
-        model.vision_backend, litert_lm_model.litert_lm.Backend.GPU
+        model.vision_backend, litert_lm_model.litert_lm.Backend.GPU()
     )
 
 

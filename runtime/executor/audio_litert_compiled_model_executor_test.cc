@@ -44,6 +44,9 @@ namespace {
 
 constexpr absl::string_view kTestAudioModelPath =
     "litert_lm/runtime/testdata/dummy_audio_only.litertlm";
+constexpr absl::string_view kTestAudioNoMaskModelPath =
+    "litert_lm/runtime/testdata/dummy_audio_no_mask.litertlm";
+constexpr int kNoMaskEmbeddingDimensions = 5;
 constexpr int kSpectrogramFrequencySlots = 8;
 constexpr int kSpectrogramSequenceLength = 10;
 constexpr int kEmbeddingSequenceLength = 5;
@@ -315,6 +318,104 @@ TEST_F(AudioLiteRtCompiledModelExecutorTest,
                           3., 5., 8., 8., 8., 1., 2., 4., 7., 7., 7., 1., 3.,
                           6., 9., 9., 9., 0., 1., 2., 3., 3., 3.));
   EXPECT_EQ(executor_audio_data.GetValidTokens(), 6);
+}
+
+TEST_F(AudioLiteRtCompiledModelExecutorTest,
+       EncodeTest_NoMaskModel_WithoutMask) {
+  ASSERT_OK_AND_ASSIGN(
+      auto audio_executor,
+      CreateAudioExecutor(*env_,
+                          (std::filesystem::path(::testing::SrcDir()) /
+                           std::string(kTestAudioNoMaskModelPath))
+                              .string(),
+                          /*max_sequence_length=*/0, Backend::CPU));
+
+  constexpr std::array<float,
+                       kSpectrogramSequenceLength * kSpectrogramFrequencySlots>
+      mel_spectrogram_data = {
+          0., 0., 0., 0., 0., 0., 1., 0., 1., 1., 1., 1., 0., 0., 0., 0.,
+          0., 1., 0., 0., 1., 1., 1., 1., 0., 1., 0., 0., 0., 0., 0., 0.,
+          0., 1., 0., 1., 0., 0., 1., 1., 1., 1., 1., 0., 0., 1., 1., 0.,
+          1., 0., 0., 1., 0., 1., 0., 1., 1., 0., 0., 1., 0., 1., 0., 0.,
+          0., 1., 0., 1., 1., 0., 1., 0., 0., 0., 1., 0., 1., 1., 1., 1.};
+
+  ASSERT_OK_AND_ASSIGN(
+      auto mel_spectrogram_tensor_buffer,
+      CreateTensorBuffer<const float>(
+          mel_spectrogram_data,
+          RankedTensorType(GetElementType<float>(),
+                           Layout(Dimensions({1, kSpectrogramSequenceLength,
+                                              kSpectrogramFrequencySlots})))));
+  ASSERT_OK_AND_ASSIGN(auto executor_audio_data,
+                       audio_executor->Encode(mel_spectrogram_tensor_buffer));
+  ASSERT_OK_AND_ASSIGN(auto audio_embeddings_ptr,
+                       executor_audio_data.GetMutableEmbeddingsPtr());
+  auto audio_embeddings_type = audio_embeddings_ptr->TensorType();
+  ASSERT_TRUE(audio_embeddings_type.HasValue());
+  auto dims = audio_embeddings_type->Layout().Dimensions();
+  EXPECT_THAT(dims, ElementsAre(1, kEmbeddingSequenceLength,
+                                kNoMaskEmbeddingDimensions));
+
+  ASSERT_OK_AND_ASSIGN(auto audio_embeddings_data,
+                       GetDataAsVector<float>(*audio_embeddings_ptr));
+  EXPECT_EQ(audio_embeddings_data.size(),
+            kEmbeddingSequenceLength * kNoMaskEmbeddingDimensions);
+  EXPECT_EQ(executor_audio_data.GetValidTokens(), kEmbeddingSequenceLength);
+}
+
+TEST_F(AudioLiteRtCompiledModelExecutorTest, EncodeTest_NoMaskModel_WithMask) {
+  ASSERT_OK_AND_ASSIGN(
+      auto audio_executor,
+      CreateAudioExecutor(*env_,
+                          (std::filesystem::path(::testing::SrcDir()) /
+                           std::string(kTestAudioNoMaskModelPath))
+                              .string(),
+                          /*max_sequence_length=*/0, Backend::CPU));
+
+  constexpr std::array<float,
+                       kSpectrogramSequenceLength * kSpectrogramFrequencySlots>
+      mel_spectrogram_data = {
+          1., 0., 1., 0., 0., 0., 0., 1., 1., 0., 1., 0., 1., 0., 1., 1.,
+          1., 1., 1., 0., 1., 1., 0., 1., 1., 1., 1., 0., 0., 0., 1., 1.,
+          1., 1., 0., 1., 0., 1., 0., 1., 1., 1., 0., 0., 1., 1., 0., 0.,
+          1., 0., 1., 1., 1., 0., 0., 0., 1., 1., 1., 1., 0., 1., 1., 0.,
+          1., 1., 1., 0., 1., 1., 1., 0., 0., 0., 0., 0., 1., 0., 0.,
+      };
+  ASSERT_OK_AND_ASSIGN(
+      auto mel_spectrogram_tensor_buffer,
+      CreateTensorBuffer<const float>(
+          mel_spectrogram_data,
+          RankedTensorType(GetElementType<float>(),
+                           Layout(Dimensions({1, kSpectrogramSequenceLength,
+                                              kSpectrogramFrequencySlots})))));
+
+  constexpr std::array<bool, kSpectrogramSequenceLength>
+      mel_spectrogram_mask_data = {true, true,  true,  true,  true,
+                                   true, false, false, false, false};
+
+  ASSERT_OK_AND_ASSIGN(
+      auto mel_spectrogram_mask_tensor_buffer,
+      CreateTensorBuffer<const bool>(
+          mel_spectrogram_mask_data,
+          RankedTensorType(
+              GetElementType<bool>(),
+              Layout(Dimensions({1, kSpectrogramSequenceLength})))));
+
+  ASSERT_OK_AND_ASSIGN(
+      auto executor_audio_data,
+      audio_executor->Encode(mel_spectrogram_tensor_buffer,
+                             mel_spectrogram_mask_tensor_buffer));
+  ASSERT_OK_AND_ASSIGN(auto audio_embeddings_ptr,
+                       executor_audio_data.GetMutableEmbeddingsPtr());
+  auto audio_embeddings_type = audio_embeddings_ptr->TensorType();
+  ASSERT_TRUE(audio_embeddings_type.HasValue());
+  auto dims = audio_embeddings_type->Layout().Dimensions();
+  EXPECT_THAT(dims, ElementsAre(1, 3, kNoMaskEmbeddingDimensions));
+
+  ASSERT_OK_AND_ASSIGN(auto audio_embeddings_data,
+                       GetDataAsVector<float>(*audio_embeddings_ptr));
+  EXPECT_EQ(audio_embeddings_data.size(), 3 * kNoMaskEmbeddingDimensions);
+  EXPECT_EQ(executor_audio_data.GetValidTokens(), 3);
 }
 #endif  // !defined(WIN32) && !defined(_WIN32) && !defined(__WIN32__) && \
         // !defined(__NT__) && !defined(_WIN64)

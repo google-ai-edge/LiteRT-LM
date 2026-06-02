@@ -114,8 +114,25 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
   absl::StatusOr<std::vector<std::vector<int>>> Decode(
       const ExecutorDecodeParams& decode_params) override;
 
+  absl::StatusOr<::litert::TensorBuffer> DecodeLogits(
+      const ExecutorInputs& inputs) override;
+
+  absl::StatusOr<::litert::TensorBuffer> DecodeLogits(
+      const ExecutorInputs& inputs, const ExecutorDecodeParams& decode_params);
+
   absl::string_view ExecutorBackendName() const override {
     return "LiteRT NPU Compiled Model";
+  }
+
+  // Set the current step of the executor.
+  absl::Status SetCurrentStep(int new_step) override;
+
+  absl::StatusOr<const ProcessedTokens*> GetProcessedTokens() const override;
+
+  // Updates the runtime configuration.
+  absl::Status UpdateRuntimeConfig(
+      const RuntimeConfig& runtime_config) override {
+    return absl::OkStatus();
   }
 
   // Gets the current step of the executor.
@@ -137,6 +154,15 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
 
   // Resets all of the internal states.
   absl::Status Reset() override;
+
+  absl::StatusOr<std::unique_ptr<LlmContext>> CreateNewContext(
+      std::optional<uint32_t> lora_id,
+      RuntimeConfig runtime_config) const override;
+
+  absl::StatusOr<std::unique_ptr<LlmContext>> CloneContext() const override;
+
+  absl::Status RestoreContext(
+      std::unique_ptr<LlmContext> context_data) override;
 
  private:
   static litert::Expected<litert::Options> CreateLiteRtNpuOptions(
@@ -310,6 +336,8 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
       std::vector<float> ple_per_tensor_scales = {}, int num_tables = 0,
       litert::ElementType output_type = litert::ElementType::None,
       float final_scale = 1.0f, int32_t final_zero_point = 0,
+      absl::flat_hash_map<absl::string_view, HWQuantParams> kv_quant_params =
+          {},
       SpeculativeDecodingType speculative_decoding_type =
           SpeculativeDecodingType::kNone,
       std::optional<DrafterContext> drafter_context = std::nullopt,
@@ -327,6 +355,7 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
         cache_update_inference_context_(
             std::move(cache_update_inference_context)),
         prefill_signature_map_(std::move(prefill_signature_map)),
+        kv_quant_params_(std::move(kv_quant_params)),
         ple_table_ptrs_(std::move(ple_table_ptrs)),
         ple_quant_params_(std::move(ple_quant_params)),
         ple_per_tensor_scales_(std::move(ple_per_tensor_scales)),
@@ -575,7 +604,8 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
       absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
           decode_output_kv_cache_slice_buffers,
       absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-          verify_output_kv_cache_slice_buffers);
+          verify_output_kv_cache_slice_buffers,
+      absl::flat_hash_map<absl::string_view, HWQuantParams>& kv_quant_params);
 
   // Create the executor for Gemma3n, with multi-modality support.
   static absl::StatusOr<std::unique_ptr<LlmLiteRtNpuCompiledModelExecutor>>
@@ -616,6 +646,7 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
   InferenceContext cache_update_inference_context_;
   SortedPrefillSignatureMap prefill_signature_map_;
 
+  absl::flat_hash_map<absl::string_view, HWQuantParams> kv_quant_params_;
   bool use_hw_ple_for_npu_ = false;
   std::vector<const uint8_t*> ple_table_ptrs_;
   std::vector<HWQuantizationParams> ple_quant_params_;
@@ -630,6 +661,9 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
       SpeculativeDecodingType::kNone;
   std::optional<DrafterContext> drafter_context_;
   std::optional<DrafterAuxContext> drafter_aux_context_;
+
+  // The sampler parameters to use for internal sampling.
+  proto::SamplerParameters sampler_params_;
 
   // The sampled ids to use for external sampling.
   // The layout is batch-major.
@@ -648,6 +682,10 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
   // The processed tokens.  This is also used to store the pending input token
   // for next prefill or decode steps.
   litert::lm::ProcessedTokens processed_tokens_;
+
+  // Tracks whether a decode step was run so we know how to update constrained
+  // decoding state.
+  bool ran_decode_ = false;
 };
 
 std::ostream& operator<<(

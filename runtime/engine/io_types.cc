@@ -33,6 +33,7 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/str_join.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/time/clock.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
@@ -228,6 +229,10 @@ std::ostream& operator<<(std::ostream& os, const Responses& responses) {
     }
 
     os << "    Text: \"" << responses.GetTexts()[i] << "\"" << std::endl;
+    if (responses.GetTokenIds().size() > i) {
+      os << "    Token IDs: ["
+         << absl::StrJoin(responses.GetTokenIds()[i], ", ") << "]" << std::endl;
+    }
   }
   return os;  // Return the ostream to allow chaining
 }

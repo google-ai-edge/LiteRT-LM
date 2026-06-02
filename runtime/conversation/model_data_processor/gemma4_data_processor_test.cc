@@ -49,6 +49,9 @@ using ::testing::status::IsOkAndHolds;
 constexpr char kTestdataDir[] =
     "litert_lm/runtime/components/testdata/";
 
+constexpr char kImageTestdataDir[] =
+    "litert_lm/runtime/components/preprocessor/testdata/";
+
 std::string GetTestdataPath(const std::string& file_name) {
   return (std::filesystem::path(::testing::SrcDir()) / kTestdataDir / file_name)
       .string();
@@ -77,6 +80,40 @@ MATCHER_P(HasInputText, text_input, "") {
   return text_bytes.value() == text_input->GetRawTextString().value();
 }
 
+// Checks that the image tensor map has the expected keys and that the image
+// tensor has at most `max_num_patches` patches.
+MATCHER_P(HasInputImage, max_num_patches, "") {
+  if (!std::holds_alternative<InputImage>(arg)) {
+    return false;
+  }
+  if (!std::get<InputImage>(arg).IsTensorBufferMap()) {
+    return false;
+  }
+  auto tensor_map = std::get<InputImage>(arg).GetPreprocessedImageTensorMap();
+  if (!tensor_map.ok()) {
+    return false;
+  }
+  if (!(*tensor_map)->contains("images")) {
+    return false;
+  }
+  if (!(*tensor_map)->contains("positions_xy")) {
+    return false;
+  }
+  auto image_tensor = (*tensor_map)->at("images").Duplicate();
+  auto image_tensor_type = (*image_tensor).TensorType();
+  if ((*image_tensor_type).Layout().Dimensions()[1] > max_num_patches) {
+    return false;
+  }
+  return true;
+}
+
+MATCHER(HasInputImageEnd, "") {
+  if (!std::holds_alternative<InputImageEnd>(arg)) {
+    return false;
+  }
+  return true;
+}
+
 class Gemma4DataProcessorTest : public ::testing::Test {
  protected:
   void SetUp() override {
@@ -103,6 +140,77 @@ TEST_F(Gemma4DataProcessorTest, ToInputDataVectorTextOnly) {
 
   InputText expected_text("<|turn>user\ntest prompt\n<turn|>");
   EXPECT_THAT(input_data, ElementsAre(HasInputText(&expected_text)));
+}
+
+TEST_F(Gemma4DataProcessorTest, ToInputDataVectorTextAndImage) {
+  ASSERT_OK_AND_ASSIGN(auto processor, Gemma4DataProcessor::Create(
+                                           /*Gemma4DataProcessorConfig=*/
+                                           {.max_num_patches = 2520}));
+  const std::string rendered_template_prompt =
+      "<|turn>user\nHere is an image of apples <|image|><turn|>";
+
+  std::string image_path = (std::filesystem::path(::testing::SrcDir()) /
+                            kImageTestdataDir / "apple.png")
+                               .string();
+  const nlohmann::ordered_json message = {
+      {"role", "user"},
+      {"content",
+       {{{"type", "text"}, {"text", "Here is an image of apples "}},
+        {{"type", "image"}, {"path", image_path}}}}};
+
+  {
+    ASSERT_OK_AND_ASSIGN(
+        const std::vector<InputData> input_data,
+        processor->ToInputDataVector(rendered_template_prompt,
+                                     json::array({message}), {}));
+
+    InputText expected_text1(
+        "<|turn>user\nHere is an image of apples <|image>");
+    InputText expected_text2("\n\n");
+    InputText expected_text3("<turn|>");
+    EXPECT_THAT(input_data,
+                ElementsAre(HasInputText(&expected_text1), HasInputImage(2520),
+                            HasInputImageEnd(), HasInputText(&expected_text2),
+                            HasInputText(&expected_text3)));
+  }
+
+  {
+    // Override the visual token budget to 100 at runtime.
+    ASSERT_OK_AND_ASSIGN(
+        const std::vector<InputData> input_data,
+        processor->ToInputDataVector(
+            rendered_template_prompt, json::array({message}),
+            Gemma4DataProcessorArguments{.visual_token_budget = 100}));
+
+    InputText expected_text1(
+        "<|turn>user\nHere is an image of apples <|image>");
+    InputText expected_text2("\n\n");
+    InputText expected_text3("<turn|>");
+    EXPECT_THAT(input_data,
+                ElementsAre(HasInputText(&expected_text1), HasInputImage(900),
+                            HasInputImageEnd(), HasInputText(&expected_text2),
+                            HasInputText(&expected_text3)));
+  }
+
+  {
+    // Override the visual token budget to 300 at runtime, which is larger than
+    // the max_num_patches / 9 in the config. The visual token budget should be
+    // capped to max_num_patches / 9.
+    ASSERT_OK_AND_ASSIGN(
+        const std::vector<InputData> input_data,
+        processor->ToInputDataVector(
+            rendered_template_prompt, json::array({message}),
+            Gemma4DataProcessorArguments{.visual_token_budget = 300}));
+
+    InputText expected_text1(
+        "<|turn>user\nHere is an image of apples <|image>");
+    InputText expected_text2("\n\n");
+    InputText expected_text3("<turn|>");
+    EXPECT_THAT(input_data,
+                ElementsAre(HasInputText(&expected_text1), HasInputImage(2520),
+                            HasInputImageEnd(), HasInputText(&expected_text2),
+                            HasInputText(&expected_text3)));
+  }
 }
 
 TEST_F(Gemma4DataProcessorTest, ToMessage) {

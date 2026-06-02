@@ -480,6 +480,11 @@ class TfLiteModelResources : public ModelResources {
     return std::nullopt;
   }
 
+  std::optional<std::string> GetTFLiteModelPreferActivationType(
+      ModelType model_type) override {
+    return std::nullopt;
+  }
+
   absl::StatusOr<std::reference_wrapper<ScopedFile>> GetScopedFile() override {
     return absl::UnimplementedError("GetScopedFile not implemented.");
   }

@@ -133,7 +133,7 @@ absl::Status MainHelper(int argc, char** argv) {
       litert::lm::proto::BenchmarkParams();
 
   // Create the engine.
-  ASSIGN_OR_RETURN(auto engine, litert::lm::EngineFactory::CreateAny(
+  ASSIGN_OR_RETURN(auto engine, litert::lm::EngineFactory::CreateDefault(
                                     std::move(engine_settings)));
 
   // Create the conversation.

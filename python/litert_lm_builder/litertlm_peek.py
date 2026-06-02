@@ -20,8 +20,8 @@ from typing import Any, IO, Optional
 from google.protobuf import text_format
 
 from litert_lm_builder import litertlm_core
-from litert_lm.runtime.proto import llm_metadata_pb2
-from litert_lm.schema.core import litertlm_header_schema_py_generated as schema
+from litert_lm_builder import litertlm_header_schema_py_generated as schema
+from runtime.proto import llm_metadata_pb2
 
 # --- ANSI Escape Code Definitions ---
 ANSI_BOLD = "\033[1m"
@@ -120,7 +120,7 @@ def read_litertlm_header(
     return metadata
 
 
-def _get_model_type(section_object: schema.SectionObject) -> Optional[str]:
+def get_model_type(section_object: schema.SectionObject) -> str | None:
   """Extracts model_type from section items."""
   for j in range(section_object.ItemsLength()):
     item = section_object.Items(j)
@@ -149,7 +149,7 @@ def _get_tflite_model_filename(
     section_object: schema.SectionObject, section_index: int
 ) -> str:
   """Constructs a filename for a TFLiteModel section."""
-  model_type = _get_model_type(section_object)
+  model_type = get_model_type(section_object)
   file_name = f"Section{section_index}_TFLiteModel"
   if model_type:
     file_name += f"_{model_type}"
@@ -160,7 +160,7 @@ def _get_tflite_weight_filename(
     section_object: schema.SectionObject, section_index: int
 ) -> str:
   """Constructs a filename for a TFLite weight section."""
-  model_type = _get_model_type(section_object)
+  model_type = get_model_type(section_object)
   file_name = f"Section{section_index}_TFLiteWeights"
   if model_type:
     file_name += f"_{model_type}"
@@ -363,8 +363,16 @@ def _get_kvp_value_and_type(kvp: schema.KeyValuePair) -> tuple[Any, str]:
     return None, "Unknown"
 
 
-def _kvp_to_dict(kvp: schema.KeyValuePair) -> dict[str, Any]:
-  """Converts a KeyValuePair to a dictionary."""
+def kvp_to_dict(kvp: schema.KeyValuePair) -> dict[str, Any]:
+  """Converts a flatbuffer KeyValuePair object into a Python dictionary.
+
+  Args:
+    kvp: The KeyValuePair flatbuffer table object to convert.
+
+  Returns:
+    A dictionary with 'key' (str or None), 'value' (extracted Any value or None),
+    and 'value_type' (str description of the union type).
+  """
   key_bytes = kvp.Key()
   key = key_bytes.decode("utf-8") if key_bytes is not None else None
   val, dtype = _get_kvp_value_and_type(kvp)
@@ -453,7 +461,7 @@ def peek_litertlm_file(
         kvp = system_metadata.Entries(i)
         print_key_value_pair(kvp, output_stream, 1)
         if dump_files_dir:
-          toml_system_metadata.append(_kvp_to_dict(kvp))
+          toml_system_metadata.append(kvp_to_dict(kvp))
     else:
       output_stream.write(" " * INDENT_SPACES + "No system metadata entries.\n")
     output_stream.write("\n")
@@ -506,7 +514,7 @@ def peek_litertlm_file(
           backend_constraint = None
           if section_object.ItemsLength() > 0:
             for j in range(section_object.ItemsLength()):
-              item_dict = _kvp_to_dict(section_object.Items(j))
+              item_dict = kvp_to_dict(section_object.Items(j))
               if item_dict["key"] == "model_type":
                 model_type = item_dict["value"]
               elif item_dict["key"] == "backend_constraint":

@@ -701,6 +701,26 @@ TEST(ResponsesTest, GetMutableTokenScores) {
   EXPECT_THAT(responses.GetTokenScores()->at(1), ElementsAre(0.3f, 0.4f));
 }
 
+TEST(ResponsesTest, GetTokenIds) {
+  Responses responses(TaskState::kProcessing, /*response_texts=*/{},
+                      /*scores=*/{}, /*token_lengths=*/{},
+                      /*token_ids=*/{{1, 2, 3}, {4, 5}});
+
+  EXPECT_THAT(responses.GetTokenIds(),
+              ElementsAre(ElementsAre(1, 2, 3), ElementsAre(4, 5)));
+}
+
+TEST(ResponsesTest, GetMutableTokenIds) {
+  Responses responses = Responses(TaskState::kProcessing);
+
+  EXPECT_TRUE(responses.GetMutableTokenIds().empty());
+
+  responses.GetMutableTokenIds() =
+      std::vector<std::vector<int>>{{1, 2, 3}, {4, 5}};
+  EXPECT_THAT(responses.GetTokenIds(),
+              ElementsAre(ElementsAre(1, 2, 3), ElementsAre(4, 5)));
+}
+
 TEST(ResponsesTest, HandlesMultipleCandidatesWithTextAndScores) {
   litert::lm::Responses responses =
       Responses(TaskState::kProcessing, {"Hello", "World"}, {0.9f, -0.5f});
@@ -736,6 +756,27 @@ TEST(ResponsesTest, HandlesMultipleCandidatesWithTextAndNoScores) {
       "    Text: \"Hello\"\n"
       "  Candidate 1 (score: N/A):\n"
       "    Text: \"World\"\n";
+  EXPECT_EQ(ss.str(), expected_output);
+}
+
+TEST(ResponsesTest, HandlesMultipleCandidatesWithTokenIds) {
+  litert::lm::Responses responses =
+      Responses(TaskState::kProcessing, {"Hello", "World"}, /*scores=*/{},
+                /*token_lengths=*/{3, 2},
+                /*token_ids=*/{{1, 2, 3}, {4, 5}});
+
+  std::stringstream ss;
+  ss << responses;
+
+  const std::string expected_output =
+      "Task State: Processing\n"
+      "Total candidates: 2:\n"
+      "  Candidate 0 (score: N/A):\n"
+      "    Text: \"Hello\"\n"
+      "    Token IDs: [1, 2, 3]\n"
+      "  Candidate 1 (score: N/A):\n"
+      "    Text: \"World\"\n"
+      "    Token IDs: [4, 5]\n";
   EXPECT_EQ(ss.str(), expected_output);
 }
 

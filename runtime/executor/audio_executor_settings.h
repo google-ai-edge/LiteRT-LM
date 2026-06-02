@@ -15,6 +15,7 @@
 #ifndef THIRD_PARTY_ODML_LITE_RT_LLM_EXECUTOR_AUDIO_EXECUTOR_SETTINGS_H_
 #define THIRD_PARTY_ODML_LITE_RT_LLM_EXECUTOR_AUDIO_EXECUTOR_SETTINGS_H_
 
+#include <cstdint>
 #include <memory>
 #include <ostream>
 #include <string>
@@ -60,6 +61,17 @@ class AudioExecutorSettings : public ExecutorSettingsBase {
   int GetNumThreads() const { return num_threads_; }
   // Setter for num_threads for CPU backend.
   void SetNumThreads(int num_threads) { num_threads_ = num_threads; }
+
+  // Getter for LoRA rank.
+  uint32_t GetLoraRank() const { return lora_rank_; }
+  // Setter for LoRA rank.
+  void SetLoraRank(uint32_t lora_rank) { lora_rank_ = lora_rank; }
+
+  // Setter for supported LoRA ranks.
+  absl::Status SetSupportedLoraRanks(const std::vector<uint32_t>& lora_ranks) {
+    supported_lora_ranks_ = lora_ranks;
+    return absl::OkStatus();
+  }
 
   // Getter for scoped_encoder_cache_file.
   std::shared_ptr<litert::lm::ScopedFile> GetScopedEncoderCacheFile() const {
@@ -133,6 +145,8 @@ class AudioExecutorSettings : public ExecutorSettingsBase {
   int max_sequence_length_;
   bool bundled_with_main_model_;
   int num_threads_ = 4;
+  uint32_t lora_rank_ = 0;
+  std::vector<uint32_t> supported_lora_ranks_ = {};
 
   // The cache file to use for the audio encoder model.
   std::shared_ptr<litert::lm::ScopedFile> scoped_encoder_cache_file_;

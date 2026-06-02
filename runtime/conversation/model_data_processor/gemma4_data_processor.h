@@ -76,6 +76,13 @@ class Gemma4DataProcessor
   // Returns the end of tool call blocks.
   absl::string_view CodeFenceEnd() const override;
 
+  absl::StatusOr<SingleTurnTemplateRenderResult> RenderSingleTurnTemplate(
+      std::vector<Message>& history, const Preface& preface,
+      const Message& message, const PromptTemplate& prompt_template,
+      bool current_is_appending_message, bool append_message,
+      std::optional<nlohmann::ordered_json> extra_context) const override;
+
+
  private:
 #if defined(LITERT_LM_FST_CONSTRAINTS_DISABLED)
   explicit Gemma4DataProcessor(

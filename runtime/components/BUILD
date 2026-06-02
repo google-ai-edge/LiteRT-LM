@@ -23,6 +23,10 @@ load(
     "export_lrt_runtime_only_script",
 )
 
+LITERT_MIN_IOS_VERSION = "14.0"
+
+LITERT_MIN_MACOS_VERSION = "10.15"
+
 package(
     default_hdrs_check = "strict",
     default_visibility = [

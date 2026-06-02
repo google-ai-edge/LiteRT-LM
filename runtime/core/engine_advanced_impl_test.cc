@@ -55,7 +55,7 @@ absl::StatusOr<std::unique_ptr<Engine>> CreateEngine(
   ASSIGN_OR_RETURN(std::vector<EngineFactory::EngineType> engine_types,
                    EngineFactory::Instance().ListEngineTypes());
   RET_CHECK_EQ(engine_types.size(), 1);
-  return EngineFactory::CreateAny(std::move(engine_settings));
+  return EngineFactory::CreateDefault(std::move(engine_settings));
 }
 
 TEST(EngineTest, CreateEngine_WithoutCache) {

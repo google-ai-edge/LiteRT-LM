@@ -208,6 +208,14 @@ def _add_tflite_model_parser(subparsers) -> None:
       choices=list(litertlm_builder.Backend),
       help="A list of backend constraints for the tflite model.",
   )
+  tflite_model_parser.add_argument(
+      "--prefer_activation_type",
+      type=str,
+      required=False,
+      default=None,
+      choices=["fp16", "fp32", "fp32_fp16"],
+      help="The preferred activation type for the tflite model.",
+  )
   _add_metadata_arguments(tflite_model_parser)
 
 
@@ -415,6 +423,7 @@ def _build_tflite_model(
           args.model_type
       ),
       backend_constraint=args.backend_constraint,
+      prefer_activation_type=args.prefer_activation_type,
       additional_metadata=metadata,
   )
 

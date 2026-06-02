@@ -15,7 +15,6 @@
 #include "runtime/executor/llm_executor_settings_utils.h"
 
 #include <cstdint>
-#include <filesystem>  // NOLINT
 #include <memory>
 #include <optional>
 #include <string>
@@ -101,23 +100,30 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
       bool has_valid_program_cache_fd =
           program_cache_file.ok() &&
           !std::holds_alternative<std::string>(*program_cache_file);
+      auto weight_cache_file = executor_settings.GetWeightCacheFile(
+          ExecutorSettingsBase::kMlDriftCacheSuffix, /*check_and_clean=*/true);
+      bool has_valid_weight_cache_fd =
+          weight_cache_file.ok() &&
+          !std::holds_alternative<std::string>(*weight_cache_file);
 
       auto model_path_or_status = executor_settings.GetModelAssets().GetPath();
+      std::string cache_key;
       if (model_path_or_status.ok()) {
         // If the model path is available, use the model name as the cache key.
         absl::string_view model_path = *model_path_or_status;
         absl::string_view model_name = Basename(model_path);
         LITERT_ASSIGN_OR_RETURN(std::string metadata_id,
                                 GetFileCacheIdentifier(model_path));
-        std::string cache_key = absl::StrCat(model_name, "_", metadata_id);
-        gpu_compilation_options.SetModelCacheKey(cache_key.c_str());
-      } else if (has_valid_model_fd && has_valid_program_cache_fd) {
+        cache_key = absl::StrCat(model_name, "_", metadata_id);
+      } else if (has_valid_model_fd &&
+                 (has_valid_program_cache_fd || has_valid_weight_cache_fd)) {
         // If the model is loaded from an fd, there is no way to automatically
-        // generate a cache key. But if we are loading a model from an fd, it is
-        // likely that our program cache is also loaded from an fd which does
-        // not require a cache key to prevent collisions. The GPU delegate will
-        // still expect a cache key, so we set it to a constant value.
-        gpu_compilation_options.SetModelCacheKey("fd_token");
+        // generate a unique cache key from the file descriptor.
+        LITERT_ASSIGN_OR_RETURN(
+            std::string metadata_id,
+            GetFileCacheIdentifier(
+                *executor_settings.GetModelAssets().GetScopedFile().value()));
+        cache_key = absl::StrCat("fd_", metadata_id);
       }
 
       AdvancedSettings advanced_settings;
@@ -125,49 +131,10 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
         advanced_settings = *executor_settings.GetAdvancedSettings();
       }
 
-      bool serialization_dir_set = false;
-      if (cache_path != ":nocache") {
-        if (cache_path.empty()) {
-          ASSIGN_OR_RETURN(auto model_path,
-                           executor_settings.GetModelAssets().GetPath());
-          cache_path = std::filesystem::path(std::string(model_path))
-                           .parent_path()
-                           .string();
-          if (cache_path.empty()) {
-            cache_path = std::filesystem::current_path().string();
-          }
-        }
-        ABSL_LOG(INFO) << "Setting serialization dir: " << cache_path;
-        gpu_compilation_options.SetSerializationDir(cache_path.c_str());
-        serialization_dir_set = true;
-        gpu_compilation_options.SetSerializeExternalTensors(true);
-        gpu_compilation_options.CacheCompiledProgramsOnly(
-            advanced_settings.cache_compiled_shaders_only);
-      } else {
-        gpu_compilation_options.SetSerializeExternalTensors(false);
-      }
-
-      if (program_cache_file.ok()) {
-        if (std::holds_alternative<std::string>(*program_cache_file)) {
-          if (!serialization_dir_set) {
-            cache_path = std::filesystem::path(
-                             std::get<std::string>(*program_cache_file))
-                             .parent_path()
-                             .string();
-            ABSL_LOG(INFO) << "Setting program cache dir: " << cache_path;
-            gpu_compilation_options.SetSerializationDir(cache_path.c_str());
-          }
-        } else {
-          auto scoped_cache_file =
-              std::get<std::shared_ptr<lm::ScopedFile>>(*program_cache_file);
-          ASSIGN_OR_RETURN(auto duplicated, scoped_cache_file->Duplicate());
-          ASSIGN_OR_RETURN(int fd, duplicated.Release());
-          gpu_compilation_options.SetProgramCacheFd(fd);
-        }
-        gpu_compilation_options.SetSerializeProgramCache(true);
-      } else {
-        gpu_compilation_options.SetSerializeProgramCache(false);
-      }
+      LITERT_RETURN_IF_ERROR(SetGpuCacheOptions(
+          weight_cache_file, program_cache_file, cache_key,
+          /*logging_prefix=*/"", advanced_settings.cache_compiled_shaders_only,
+          gpu_compilation_options));
 
       // Use NoExternalTensorsMode to get better performance.
       ASSIGN_OR_RETURN(const GpuConfig gpu_config,
@@ -275,7 +242,7 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
       auto default_xnn_options = TfLiteXNNPackDelegateOptionsDefault();
       cpu_compilation_options.SetXNNPackFlags(
           default_xnn_options.flags |
-          TFLITE_XNNPACK_DELEGATE_FLAG_ENABLE_LATEST_OPERATORS);
+          TFLITE_XNNPACK_DELEGATE_FLAG_DYNAMIC_FULLY_CONNECTED);
       LITERT_ASSIGN_OR_RETURN(auto& runtime_options,
                               compilation_options.GetRuntimeOptions());
       runtime_options.SetCompressQuantizationZeroPoints(true);

@@ -48,7 +48,8 @@ class LoRA {
   // @return A unique_ptr to the LoRA instance, or an error status.
   static absl::StatusOr<std::unique_ptr<LoRA>> Create(
       std::unique_ptr<LoraData> lora_data,
-      const litert::CompiledModel& compiled_model);
+      const litert::CompiledModel& compiled_model,
+      absl::string_view signature_name);
 
   virtual ~LoRA() = default;
 
@@ -67,8 +68,11 @@ class LoRA {
 
  private:
   LoRA(std::unique_ptr<LoraData> lora_data,
-       const litert::CompiledModel& compiled_model)
-      : lora_data_(std::move(lora_data)), compiled_model_(compiled_model) {}
+       const litert::CompiledModel& compiled_model,
+       absl::string_view signature_name)
+      : lora_data_(std::move(lora_data)),
+        compiled_model_(compiled_model),
+        signature_name_(signature_name) {}
 
   // Initializes the LoRA object by creating TensorBuffers for all LoRA inputs
   // and copying the data from LoraData.
@@ -76,6 +80,7 @@ class LoRA {
 
   std::unique_ptr<LoraData> lora_data_;
   const litert::CompiledModel& compiled_model_;
+  std::string signature_name_;
   absl::flat_hash_map<std::string, litert::TensorBuffer> lora_buffers_;
 };
 

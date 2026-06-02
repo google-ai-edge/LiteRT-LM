@@ -40,6 +40,7 @@ cc_library(
         "//conditions:default": [
             "@litert//litert/cc:litert_layout",
             "@litert//litert/cc:litert_macros",
+            "@litert//litert/cc:litert_ranked_tensor_type",
             "@litert//litert/cc:litert_tensor_buffer",
         ],
     }),
@@ -83,6 +84,7 @@ cc_library(
         "@kissfft//:kissfftr",
         "@litert//litert/cc:litert_element_type",
         "@litert//litert/cc:litert_macros",
+        "@litert//litert/cc:litert_ranked_tensor_type",
         "//runtime/engine:io_types",
         "//runtime/util:litert_status_util",
     ] + select({
@@ -110,6 +112,7 @@ cc_test(
         "@com_google_absl//absl/types:span",
         "@litert//litert/cc:litert_common",
         "@litert//litert/cc:litert_compiled_model",
+        "@litert//litert/cc:litert_element_type",
         "@litert//litert/cc:litert_environment",
         "@litert//litert/cc:litert_layout",
         "@litert//litert/cc:litert_macros",
@@ -187,6 +190,15 @@ cc_library(
             "@litert//litert/cc:litert_tensor_buffer",
         ],
     }),
+)
+
+alias(
+    name = "image_preprocessor_impl",
+    actual = select({
+        ":enable_skia_image_preprocessor": ":skia_image_preprocessor",
+        "//conditions:default": ":stb_image_preprocessor",
+    }),
+    visibility = ["//visibility:public"],
 )
 
 cc_test(
@@ -334,6 +346,42 @@ cc_test(
         "//runtime/engine:io_types",
         "//runtime/util:test_utils",
     ],
+)
+
+config_setting(
+    name = "enable_skia_image_preprocessor",
+    values = {
+        "define": "enable_skia_image_preprocessor=true",
+    },
+)
+
+cc_library(
+    name = "skia_image_preprocessor",
+    srcs = ["skia_image_preprocessor.cc"],
+    hdrs = ["skia_image_preprocessor.h"],
+    deps = [
+        ":image_preprocessor",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "//runtime/engine:io_types",
+        "//runtime/util:convert_tensor_buffer",
+        "//runtime/util:litert_status_util",
+        "@skia//:bmp_decode_codec",
+        "@skia//:core",
+    ] + select({
+        "@litert//litert:litert_link_capi_so": [
+            "@litert//litert/cc:litert_api_with_dynamic_runtime",
+        ],
+        "//conditions:default": [
+            "@litert//litert/cc:litert_layout",
+            "@litert//litert/cc:litert_macros",
+            "@litert//litert/cc:litert_model",
+            "@litert//litert/cc:litert_ranked_tensor_type",
+            "@litert//litert/cc:litert_tensor_buffer",
+            "@litert//litert/cc:litert_tensor_buffer_types",
+        ],
+    }),
 )
 
 cc_library(

@@ -58,7 +58,8 @@ ABSL_FLAG(bool, benchmark, false, "Benchmark the LLM execution.");
 ABSL_FLAG(int, benchmark_prefill_tokens, 0,
           "If benchmark is true and the value is larger than 0, the benchmark "
           "will use this number to set the number of prefill tokens "
-          "(regardless of the input prompt).");
+          "(regardless of the input prompt). For better performance, a number "
+          "of multiple of 128 is recommended, like 1024.");
 ABSL_FLAG(int, benchmark_decode_tokens, 0,
           "If benchmark is true and the value is larger than 0, the benchmark "
           "will use this number to set the number of decode steps (regardless "
@@ -97,6 +98,9 @@ ABSL_FLAG(bool, gpu_madvise_original_shared_tensors, true,
           "If true, the GPU backend will madvise the original shared tensors "
           "after use.");
 ABSL_FLAG(bool, disable_cache, false, "Disable weight cache.");
+ABSL_FLAG(
+    std::string, cache_dir, "",
+    "Directory for cache. Use ':memory' for in-memory cache. CPU path only");
 ABSL_FLAG(std::string, preferred_device_substr, "",
           "Preferred WebGPU device name substring, case-insensitive. "
           "If not empty, the adapter which the device name contains the "

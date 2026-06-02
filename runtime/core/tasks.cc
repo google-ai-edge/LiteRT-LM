@@ -130,10 +130,14 @@ class DecodeOneStep {
       scores_tensor_ = std::move(*scores_tensor);
     }
     result_text_ = std::vector<std::string>(num_output_candidates_, "");
+    result_token_ids_ = std::vector<std::vector<int>>(num_output_candidates_);
     bpe_partial_token_ids_ =
         std::vector<std::vector<int>>(num_output_candidates_);
     pending_stop_tokens_ =
         std::vector<std::queue<std::string>>(num_output_candidates_);
+    pending_stop_token_ids_ =
+        std::vector<std::queue<std::vector<int>>>(num_output_candidates_);
+    num_buffered_tokens_ = std::vector<int>(num_output_candidates_, 0);
   }
 
   // Runs one step of the decode process and returns if all stops for all
@@ -153,6 +157,7 @@ class DecodeOneStep {
 
     for (int i = 0; i < num_output_candidates_; ++i) {
       result_text_[i].clear();
+      result_token_ids_[i].clear();
     }
 
     for (size_t step = 0; step < sequence_length; ++step) {
@@ -182,19 +187,30 @@ class DecodeOneStep {
           int max_length = stop_token_detector_.MaxPartialStopTokenLength(i);
           if (max_length > 0) {
             pending_stop_tokens_[i].push(decoded_result.value()[i].value());
+            pending_stop_token_ids_[i].push(step_tokens[i]);
+            num_buffered_tokens_[i] += step_tokens[i].size();
           }
           // We only need the latest max_length tokens for partial stop tokens.
           // Add the extra ones to the result text and we could keep only the
           // latest max_length stop tokens in the queue.
-          while (pending_stop_tokens_[i].size() > max_length) {
+          while (num_buffered_tokens_[i] > max_length) {
             result_text_[i] += pending_stop_tokens_[i].front();
             pending_stop_tokens_[i].pop();
+
+            auto& ids = pending_stop_token_ids_[i].front();
+            result_token_ids_[i].insert(result_token_ids_[i].end(), ids.begin(),
+                                        ids.end());
+            num_buffered_tokens_[i] -= ids.size();
+            pending_stop_token_ids_[i].pop();
           }
 
           // No partial stop token is found - add the current token to the
           // result text directly - this is the most common case.
           if (max_length == 0) {
             result_text_[i] += decoded_result.value()[i].value();
+            result_token_ids_[i].insert(result_token_ids_[i].end(),
+                                        step_tokens[i].begin(),
+                                        step_tokens[i].end());
           }
         }
       }
@@ -223,6 +239,10 @@ class DecodeOneStep {
   absl::Span<float> GetScores() { return scores_span_; }
 
   const std::vector<std::string>& GetResultText() const { return result_text_; }
+
+  const std::vector<std::vector<int>>& GetResultTokenIds() const {
+    return result_token_ids_;
+  }
 
   // This function is only supported for external sampling.
   // It computes the log likelihoods for the sampled ids corresponding to the
@@ -380,7 +400,10 @@ class DecodeOneStep {
   // Common state
   std::vector<std::vector<int>> bpe_partial_token_ids_;
   std::vector<std::queue<std::string>> pending_stop_tokens_;
+  std::vector<std::queue<std::vector<int>>> pending_stop_token_ids_;
+  std::vector<int> num_buffered_tokens_;
   std::vector<std::string> result_text_;
+  std::vector<std::vector<int>> result_token_ids_;
 
   bool is_first_step_ = true;
 };
@@ -446,6 +469,8 @@ absl::StatusOr<Responses> Decode(
 
   // The final decoded texts for each candidate.
   std::vector<std::string> final_texts(num_output_candidates);
+  // The final token IDs for each candidate.
+  std::vector<std::vector<int>> final_token_ids(num_output_candidates);
   // The final scores for each candidate.
   std::vector<float> final_scores(num_output_candidates);
   // The accumulated scores for each candidate (for custom sampling).
@@ -496,9 +521,11 @@ absl::StatusOr<Responses> Decode(
       return all_done.status();
     }
     std::vector<std::string> step_texts;
+    std::vector<std::vector<int>> step_token_ids;
     std::vector<float> step_scores;
     if (is_streaming) {
       step_texts.resize(num_output_candidates);
+      step_token_ids.resize(num_output_candidates);
       step_scores.resize(num_output_candidates);
     }
     bool any_updates = false;
@@ -517,11 +544,15 @@ absl::StatusOr<Responses> Decode(
       std::string result_text = absl::StrReplaceAll(output_text, {{"▁", " "}});
       if (is_streaming) {
         step_texts[j] = result_text;
+        step_token_ids[j] = run_one_step.GetResultTokenIds()[j];
         if (is_custom_sampling) {
           step_scores[j] = run_one_step.GetScores()[j];
         }
       } else {
         final_texts[j] += result_text;
+        final_token_ids[j].insert(final_token_ids[j].end(),
+                                  run_one_step.GetResultTokenIds()[j].begin(),
+                                  run_one_step.GetResultTokenIds()[j].end());
         if (is_custom_sampling) {
           accumulated_scores[j] += run_one_step.GetScores()[j];
           num_decoded_tokens[j]++;
@@ -531,7 +562,8 @@ absl::StatusOr<Responses> Decode(
 
     if (is_streaming && any_updates) {
       callback(Responses(TaskState::kProcessing, std::move(step_texts),
-                         std::move(step_scores)));
+                         std::move(step_scores), /*token_lengths=*/{},
+                         std::move(step_token_ids)));
     }
 
     ASSIGN_OR_RETURN(int current_step, executor.GetCurrentStep());
@@ -588,7 +620,8 @@ absl::StatusOr<Responses> Decode(
                              ? TaskState::kMaxNumTokensReached
                              : TaskState::kDone;
   return Responses(std::move(task_state), std::move(final_texts),
-                   std::move(final_scores));
+                   std::move(final_scores), /*token_lengths=*/{},
+                   std::move(final_token_ids));
 }
 
 absl::StatusOr<Responses> Score(
@@ -665,7 +698,8 @@ absl::StatusOr<Responses> Score(
     }
   }
   auto responses = Responses(TaskState::kDone, /*response_texts=*/{},
-                             std::move(scores), std::move(token_lengths));
+                             std::move(scores), std::move(token_lengths),
+                             std::move(ids_for_each_target_in_batch));
   responses.GetMutableTokenScores() = std::move(token_scores);
   return responses;
 }

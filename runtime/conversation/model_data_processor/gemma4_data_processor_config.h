@@ -15,6 +15,7 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_CONVERSATION_MODEL_DATA_PROCESSOR_GEMMA4_DATA_PROCESSOR_CONFIG_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_CONVERSATION_MODEL_DATA_PROCESSOR_GEMMA4_DATA_PROCESSOR_CONFIG_H_
 
+#include <optional>
 #include <string>
 
 namespace litert::lm {
@@ -55,6 +56,9 @@ struct Gemma4DataProcessorConfig {
   // The string for end of audio token.
   std::string eoa_token = "<audio|>";
 
+  // Whether to skip the Mel spectrogram extraction.
+  bool skip_mel_spectrogram_extraction = false;
+
   // Signifies the beginning of a tool call.
   std::string code_fence_start = "<|tool_call>";
   // Signifies the end of tool call.
@@ -76,7 +80,26 @@ struct Gemma4DataProcessorConfig {
 };
 
 // Arguments for Gemma4DataProcessor.
-struct Gemma4DataProcessorArguments {};
+struct Gemma4DataProcessorArguments {
+  // The number of visual tokens that the the model can generate for a single
+  // image. Can choose a budget of 70, 140, 280, 560, or 1120 tokens for Gemma4.
+  // However, the actual available budgets depend on the max_num_patches in the
+  // model config.
+  //
+  // The token budget directly controls how much an image is resized by
+  // dictating the maximum number of initial image patches. The system generates
+  // nine times as many patches as your selected budget. For example, a budget
+  // of 280 tokens yields up to 2,520 patches (280 × 9), and which corresponds
+  // to the max_patch_number in the config.
+  //
+  // See
+  // https://ai.google.dev/gemma/docs/capabilities/vision#variable-resolution
+  // for more details.
+  //
+  // If not set, the system will use the max_num_patches in the config to
+  // determine the visual token budget.
+  std::optional<int> visual_token_budget;
+};
 
 }  // namespace litert::lm
 

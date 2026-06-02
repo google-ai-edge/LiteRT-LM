@@ -148,6 +148,7 @@ cc_library(
         "//runtime/util:model_asset_bundle_resources",
         "//runtime/util:scoped_file",
         "//runtime/util:tensor_buffer_util",
+        "@litert//tflite/delegates/xnnpack:xnnpack_delegate",
         "@litert//tflite/types:half",
     ] + select({
         "@litert//litert:litert_link_capi_so": [
@@ -543,12 +544,15 @@ cc_library(
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
+        "@litert//litert/c:litert_layout",
+        "//runtime/util:litert_status_util",
     ] + select({
         "@litert//litert:litert_link_capi_so": [
             "@litert//litert/cc:litert_api_with_dynamic_runtime",
         ],
         "//conditions:default": [
             "@litert//litert/cc:litert_element_type",
+            "@litert//litert/cc:litert_layout",
             "@litert//litert/cc:litert_macros",
             "@litert//litert/cc:litert_ranked_tensor_type",
             "@litert//litert/cc:litert_tensor_buffer",
@@ -565,6 +569,7 @@ cc_test(
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings:string_view",
+        "//runtime/util:litert_status_util",
     ] + select({
         "@litert//litert:litert_link_capi_so": [
             "@litert//litert/cc:litert_api_with_dynamic_runtime",
@@ -592,6 +597,7 @@ cc_library(
         ":llm_executor_processed_tokens",
         ":llm_executor_settings",
         ":llm_litert_npu_compiled_model_executor_utils",
+        ":llm_processed_context",
         "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/log",
@@ -612,6 +618,7 @@ cc_library(
         "//runtime/components/embedding_lookup:embedding_lookup_manager",
         "//runtime/util:convert_tensor_buffer",
         "//runtime/util:litert_status_util",
+        "//runtime/util:tensor_buffer_util",
         "@litert//tflite/types:half",
     ] + select({
         "@litert//litert:litert_link_capi_so": [
@@ -672,6 +679,7 @@ cc_library(
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
+        "//runtime/proto:sampler_params_cc_proto",
         "//runtime/util:litert_status_util",
         "//runtime/util:logging",
     ],
@@ -831,6 +839,7 @@ cc_library(
         "//runtime/util:file_util",
         "//runtime/util:litert_status_util",
         "//runtime/util:scoped_file",
+        "@litert//tflite/delegates/xnnpack:xnnpack_delegate",
     ] + select({
         "@litert//litert:litert_link_capi_so": [
             "@litert//litert/cc:litert_api_with_dynamic_runtime",
@@ -893,6 +902,7 @@ cc_library(
     deps = [
         ":audio_executor_settings",
         ":audio_executor_utils",
+        ":executor_settings_base",
         ":llm_executor_io_types",
         "@com_google_absl//absl/status:statusor",
         "//runtime/engine:io_types",
@@ -918,6 +928,7 @@ cc_library(
         ":executor_settings_base",
         ":litert_compiled_model_executor_utils",
         ":llm_executor_io_types",
+        "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/log:absl_log",
@@ -927,11 +938,16 @@ cc_library(
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/types:span",
         "@litert//litert/cc:litert_tensor_buffer_types",
+        "//runtime/components:lora",
+        "//runtime/components:lora_manager",
         "//runtime/components:model_resources",
         "//runtime/engine:io_types",
+        "//runtime/util:convert_tensor_buffer",
         "//runtime/util:file_util",
         "//runtime/util:litert_status_util",
         "//runtime/util:scoped_file",
+        "//runtime/util:tensor_buffer_util",
+        "@litert//tflite/delegates/xnnpack:xnnpack_delegate",
         "@litert//tflite/types:half",
     ] + select({
         "@litert//litert:litert_link_capi_so": [
@@ -949,6 +965,7 @@ cc_library(
             "@litert//litert/cc:litert_ranked_tensor_type",
             "@litert//litert/cc:litert_tensor_buffer",
             "@litert//litert/cc/options:litert_cpu_options",
+            "@litert//litert/cc/options:litert_google_tensor_options",
             "@litert//litert/cc/options:litert_gpu_options",
             "@litert//litert/cc/options:litert_runtime_options",
         ],
@@ -993,6 +1010,7 @@ cc_library(
     srcs = ["audio_executor_utils.cc"],
     hdrs = ["audio_executor_utils.h"],
     deps = [
+        "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
@@ -1008,6 +1026,26 @@ cc_library(
             "@litert//litert/cc:litert_model",
         ],
     }),
+)
+
+cc_test(
+    name = "audio_executor_utils_test",
+    srcs = ["audio_executor_utils_test.cc"],
+    data = ["//runtime/testdata"],
+    deps = [
+        ":audio_executor_utils",
+        ":executor_settings_base",
+        ":litert_compiled_model_executor_utils",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+        "@litert//litert/cc:litert_model",
+        "//runtime/components:model_resources",
+        "//runtime/components:tokenizer",
+        "//runtime/util:scoped_file",
+        "//runtime/util:test_utils",
+    ],
 )
 
 cc_library(

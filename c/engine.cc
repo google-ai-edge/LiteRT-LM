@@ -32,6 +32,8 @@
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "runtime/conversation/conversation.h"
 #include "runtime/conversation/io_types.h"
+#include "runtime/conversation/model_data_processor/config_registry.h"
+#include "runtime/conversation/model_data_processor/gemma4_data_processor_config.h"
 #include "runtime/engine/engine.h"
 #include "runtime/engine/engine_factory.h"
 #include "runtime/engine/engine_settings.h"
@@ -61,6 +63,9 @@ absl::AnyInvocable<void(absl::StatusOr<litert::lm::Responses>)> CreateCallback(
                litert::lm::TaskState::kMaxNumTokensReached) {
       callback(callback_data, /*text=*/nullptr, /*is_final=*/true,
                "Max number of tokens reached.");
+    } else if (responses->GetTaskState() == litert::lm::TaskState::kCancelled) {
+      callback(callback_data, /*text=*/nullptr, /*is_final=*/true,
+               "CANCELLED.");
     } else {
       for (const auto& text : responses->GetTexts()) {
         callback(callback_data, text.data(), /*is_final=*/false,
@@ -87,16 +92,36 @@ CreateConversationCallback(LiteRtLmStreamCallback callback, void* user_data) {
   };
 }
 
-litert::lm::OptionalArgs CreateOptionalArgs(const char* extra_context) {
-  litert::lm::OptionalArgs optional_args;
+std::optional<litert::lm::DataProcessorArguments> GetDataProcessorArguments(
+    const litert::lm::Conversation* conversation,
+    const int visual_token_budget) {
+  bool is_gemma4 = conversation->GetConfig()
+                       .GetSessionConfig()
+                       .GetLlmModelType()
+                       .has_gemma4();
+  if (is_gemma4) {
+    return litert::lm::Gemma4DataProcessorArguments{.visual_token_budget =
+                                                        visual_token_budget};
+  }
+  return std::nullopt;
+}
+
+litert::lm::OptionalArgs CreateOptionalArgs(
+    const litert::lm::Conversation* conversation, const char* extra_context,
+    std::optional<int> visual_token_budget) {
+  litert::lm::OptionalArgs litert_lm_optional_args;
   if (extra_context) {
     auto extra_context_json =
         nlohmann::ordered_json::parse(extra_context, nullptr, false);
     if (!extra_context_json.is_null() && !extra_context_json.empty()) {
-      optional_args.extra_context = extra_context_json;
+      litert_lm_optional_args.extra_context = extra_context_json;
     }
   }
-  return optional_args;
+  if (visual_token_budget.has_value()) {
+    litert_lm_optional_args.args =
+        GetDataProcessorArguments(conversation, *visual_token_budget);
+  }
+  return litert_lm_optional_args;
 }
 
 std::vector<litert::lm::InputData> ToEngineInputData(
@@ -136,6 +161,7 @@ using ::litert::lm::Engine;
 using ::litert::lm::EngineFactory;
 using ::litert::lm::EngineSettings;
 using ::litert::lm::InputText;
+using ::litert::lm::OptionalArgs;
 
 using ::litert::lm::Message;
 using ::litert::lm::ModelAssets;
@@ -193,6 +219,10 @@ struct LiteRtLmConversationConfig {
   std::string extra_context_json;
   bool enable_constrained_decoding = false;
   bool filter_channel_content_from_kv_cache = false;
+};
+
+struct LiteRtLmConversationOptionalArgs {
+  std::optional<int> visual_token_budget;
 };
 
 struct LiteRtLmDetokenizeResult {
@@ -331,6 +361,23 @@ void litert_lm_conversation_config_delete(LiteRtLmConversationConfig* config) {
   delete config;
 }
 
+LiteRtLmConversationOptionalArgs*
+litert_lm_conversation_optional_args_create() {
+  return new LiteRtLmConversationOptionalArgs;
+}
+
+void litert_lm_conversation_optional_args_set_visual_token_budget(
+    LiteRtLmConversationOptionalArgs* args, int visual_token_budget) {
+  if (args) {
+    args->visual_token_budget = visual_token_budget;
+  }
+}
+
+void litert_lm_conversation_optional_args_delete(
+    LiteRtLmConversationOptionalArgs* args) {
+  delete args;
+}
+
 LiteRtLmEngineSettings* litert_lm_engine_settings_create(
     const char* model_path, const char* backend_str,
     const char* vision_backend_str, const char* audio_backend_str) {
@@ -374,13 +421,6 @@ LiteRtLmEngineSettings* litert_lm_engine_settings_create(
     return nullptr;
   }
 
-  if (*backend == litert::lm::Backend::GPU) {
-    // Enforce floating point precision for better quality.
-    auto& executor_settings = engine_settings->GetMutableMainExecutorSettings();
-    executor_settings.SetActivationDataType(
-        litert::lm::ActivationDataType::FLOAT32);
-  }
-
   auto* c_settings = new LiteRtLmEngineSettings;
   c_settings->settings =
       std::make_unique<EngineSettings>(*std::move(engine_settings));
@@ -406,10 +446,36 @@ void litert_lm_engine_settings_set_parallel_file_section_loading(
   }
 }
 
+void litert_lm_engine_settings_set_max_num_images(
+    LiteRtLmEngineSettings* settings, int max_num_images) {
+  if (settings && settings->settings) {
+    settings->settings->GetMutableMainExecutorSettings().SetMaxNumImages(
+        max_num_images);
+  }
+}
+
 void litert_lm_engine_settings_set_cache_dir(LiteRtLmEngineSettings* settings,
                                              const char* cache_dir) {
   if (settings && settings->settings) {
     settings->settings->GetMutableMainExecutorSettings().SetCacheDir(cache_dir);
+
+    if (settings->settings->GetVisionExecutorSettings().has_value()) {
+      settings->settings->GetMutableVisionExecutorSettings()->SetCacheDir(
+          cache_dir);
+    }
+
+    if (settings->settings->GetAudioExecutorSettings().has_value()) {
+      settings->settings->GetMutableAudioExecutorSettings()->SetCacheDir(
+          cache_dir);
+    }
+  }
+}
+
+void litert_lm_engine_settings_set_litert_dispatch_lib_dir(
+    LiteRtLmEngineSettings* settings, const char* lib_dir) {
+  if (settings && settings->settings && lib_dir) {
+    settings->settings->GetMutableMainExecutorSettings()
+        .SetLitertDispatchLibDir(lib_dir);
   }
 }
 
@@ -476,8 +542,8 @@ LiteRtLmEngine* litert_lm_engine_create(
     return nullptr;
   }
 
-  absl::StatusOr<std::unique_ptr<Engine>> engine;
-    engine = EngineFactory::CreateDefault(*settings->settings);
+  absl::StatusOr<std::unique_ptr<Engine>> engine =
+      EngineFactory::CreateDefault(*settings->settings);
 
   if (!engine.ok()) {
     ABSL_LOG(ERROR) << "Failed to create engine: " << engine.status();
@@ -505,12 +571,23 @@ LiteRtLmSession* litert_lm_engine_create_session(
   if (!engine || !engine->engine) {
     return nullptr;
   }
-  absl::StatusOr<std::unique_ptr<Engine::Session>> session;
-  if (config && config->config) {
-    session = engine->engine->CreateSession(*config->config);
-  } else {
-    session = engine->engine->CreateSession(SessionConfig::CreateDefault());
+
+  SessionConfig session_config = config && config->config
+                                     ? *config->config
+                                     : SessionConfig::CreateDefault();
+  if (engine->engine->GetEngineSettings()
+          .GetAudioExecutorSettings()
+          .has_value()) {
+    session_config.SetAudioModalityEnabled(true);
   }
+  if (engine->engine->GetEngineSettings()
+          .GetVisionExecutorSettings()
+          .has_value()) {
+    session_config.SetVisionModalityEnabled(true);
+  }
+
+  absl::StatusOr<std::unique_ptr<Engine::Session>> session =
+      engine->engine->CreateSession(session_config);
   if (!session.ok()) {
     ABSL_LOG(ERROR) << "Failed to create session: " << session.status();
     return nullptr;
@@ -884,9 +961,21 @@ LiteRtLmConversation* litert_lm_conversation_create(
     }
 
     auto builder = litert::lm::ConversationConfig::Builder();
-    if (c_config->session_config) {
-      builder.SetSessionConfig(*c_config->session_config);
+    SessionConfig session_config = c_config->session_config
+                                       ? *c_config->session_config
+                                       : SessionConfig::CreateDefault();
+    if (engine->engine->GetEngineSettings()
+            .GetAudioExecutorSettings()
+            .has_value()) {
+      session_config.SetAudioModalityEnabled(true);
     }
+    if (engine->engine->GetEngineSettings()
+            .GetVisionExecutorSettings()
+            .has_value()) {
+      session_config.SetVisionModalityEnabled(true);
+    }
+    builder.SetSessionConfig(session_config);
+
     builder.SetPreface(json_preface);
     builder.SetEnableConstrainedDecoding(c_config->enable_constrained_decoding);
     builder.SetFilterChannelContentFromKvCache(
@@ -925,9 +1014,25 @@ void litert_lm_conversation_delete(LiteRtLmConversation* conversation) {
   delete conversation;
 }
 
+LiteRtLmConversation* litert_lm_conversation_clone(
+    LiteRtLmConversation* conversation) {
+  if (!conversation || !conversation->conversation) {
+    return nullptr;
+  }
+  auto cloned = conversation->conversation->Clone();
+  if (!cloned.ok()) {
+    ABSL_LOG(ERROR) << "Failed to clone conversation: " << cloned.status();
+    return nullptr;
+  }
+  auto c_conversation = std::make_unique<LiteRtLmConversation>();
+  c_conversation->conversation = std::move(*cloned);
+  return c_conversation.release();
+}
+
 LiteRtLmJsonResponse* litert_lm_conversation_send_message(
     LiteRtLmConversation* conversation, const char* message_json,
-    const char* extra_context) {
+    const char* extra_context,
+    const LiteRtLmConversationOptionalArgs* optional_args) {
   if (!conversation || !conversation->conversation) {
     return nullptr;
   }
@@ -939,10 +1044,13 @@ LiteRtLmJsonResponse* litert_lm_conversation_send_message(
     return nullptr;
   }
 
-  litert::lm::OptionalArgs optional_args = CreateOptionalArgs(extra_context);
+  OptionalArgs litert_lm_optional_args = CreateOptionalArgs(
+      conversation->conversation.get(), extra_context,
+      optional_args ? std::optional<int>(optional_args->visual_token_budget)
+                    : std::nullopt);
 
   auto response = conversation->conversation->SendMessage(
-      json_message, std::move(optional_args));
+      json_message, std::move(litert_lm_optional_args));
   if (!response.ok()) {
     ABSL_LOG(ERROR) << "Failed to send message: " << response.status();
     return nullptr;
@@ -966,8 +1074,9 @@ const char* litert_lm_json_response_get_string(
 
 int litert_lm_conversation_send_message_stream(
     LiteRtLmConversation* conversation, const char* message_json,
-    const char* extra_context, LiteRtLmStreamCallback callback,
-    void* callback_data) {
+    const char* extra_context,
+    const LiteRtLmConversationOptionalArgs* optional_args,
+    LiteRtLmStreamCallback callback, void* callback_data) {
   if (!conversation || !conversation->conversation) {
     return -1;
   }
@@ -979,11 +1088,14 @@ int litert_lm_conversation_send_message_stream(
     return -1;
   }
 
-  litert::lm::OptionalArgs optional_args = CreateOptionalArgs(extra_context);
+  litert::lm::OptionalArgs litert_lm_optional_args = CreateOptionalArgs(
+      conversation->conversation.get(), extra_context,
+      optional_args ? std::optional<int>(optional_args->visual_token_budget)
+                    : std::nullopt);
 
   absl::Status status = conversation->conversation->SendMessageAsync(
       json_message, CreateConversationCallback(callback, callback_data),
-      std::move(optional_args));
+      std::move(litert_lm_optional_args));
 
   if (!status.ok()) {
     ABSL_LOG(ERROR) << "Failed to start message stream: " << status;
@@ -1034,6 +1146,18 @@ LiteRtLmBenchmarkInfo* litert_lm_conversation_get_benchmark_info(
     return nullptr;
   }
   return new LiteRtLmBenchmarkInfo{std::move(*benchmark_info)};
+}
+
+int litert_lm_conversation_get_token_count(LiteRtLmConversation* conversation) {
+  if (!conversation || !conversation->conversation) {
+    return -1;
+  }
+  absl::StatusOr<int> token_count = conversation->conversation->GetTokenCount();
+  if (!token_count.ok()) {
+    ABSL_LOG(ERROR) << "Failed to get token count: " << token_count.status();
+    return -1;
+  }
+  return *token_count;
 }
 
 LiteRtLmTokenizeResult* litert_lm_engine_tokenize(LiteRtLmEngine* engine,

@@ -29,10 +29,10 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_model.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
-#include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
-#include "runtime/components/model_resources.h"
 #include "litert/cc/options/litert_cpu_options.h"  // from @litert
 #include "litert/cc/options/litert_gpu_options.h"  // from @litert
+#include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
+#include "runtime/components/model_resources.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/proto/sampler_params.pb.h"
 #include "runtime/util/scoped_file.h"
@@ -164,24 +164,23 @@ absl::Status SetCpuCacheOptions(
 
 // Set the GPU weight cache options for ML Drift.
 // Args:
-//   - weight_cache_path: An optional weight cache file path.
+//   - weight_cache_file: An optional weight cache file path or file descriptor.
 //   - program_cache_file: An optional ScopedFile pointer holding an open file
-//     descriptor to the program cache file.
-//   - executor_settings: The ExecutorSettingsBase reference to query the model
-//     path.
+//     descriptor or file path to the program cache file.
 //   - cache_key: A string that defines the unique cache identifier for the
 //     model weight cache and program cache files.
 //   - logging_prefix: A prefix string for logging information.
+//   - cache_compiled_shaders_only: If true, only compiled shaders are cached.
 //   - gpu_options: The GpuOptions reference to apply the settings to.
 absl::Status SetGpuCacheOptions(
-    const std::string& weight_cache_path,
+    const absl::StatusOr<
+        std::variant<std::string, std::shared_ptr<litert::lm::ScopedFile>>>&
+        weight_cache_file,
     const absl::StatusOr<
         std::variant<std::string, std::shared_ptr<litert::lm::ScopedFile>>>&
         program_cache_file,
-    const ExecutorSettingsBase& executor_settings,
-    absl::string_view cache_key,
-    absl::string_view logging_prefix,
-    litert::GpuOptions& gpu_options);
+    absl::string_view cache_key, absl::string_view logging_prefix,
+    bool cache_compiled_shaders_only, litert::GpuOptions& gpu_options);
 
 }  // namespace litert::lm
 

@@ -47,7 +47,7 @@ def main(argv: Sequence[str]) -> None:
 
   engine = litert_lm.Engine(
       _MODEL_PATH.value,
-      litert_lm.Backend.CPU,
+      litert_lm.Backend.CPU(),
   )
 
   tools = [product]

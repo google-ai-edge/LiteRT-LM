@@ -183,6 +183,7 @@ class ExecutorSettingsBase {
   static constexpr absl::string_view kXnnpackCacheSuffix = ".xnnpack_cache";
   static constexpr absl::string_view kMlDriftCacheSuffix =
       "_mldrift_program_cache.bin";
+  static constexpr absl::string_view kMtpDrafterCacheSuffix = ".mtp_drafter";
 
   // Dynamically generates cache suffix and keys systematically.
   // Args:

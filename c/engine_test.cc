@@ -1,3 +1,17 @@
+// Copyright 2026 The ODML Authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #include "c/engine.h"
 
 #include <algorithm>
@@ -78,6 +92,9 @@ using SessionConfigPtr =
 using ConversationConfigPtr =
     std::unique_ptr<LiteRtLmConversationConfig,
                     decltype(&litert_lm_conversation_config_delete)>;
+using OptionalArgsPtr =
+    std::unique_ptr<LiteRtLmConversationOptionalArgs,
+                    decltype(&litert_lm_conversation_optional_args_delete)>;
 using TokenizeResultPtr =
     std::unique_ptr<LiteRtLmTokenizeResult,
                     decltype(&litert_lm_tokenize_result_delete)>;
@@ -140,6 +157,41 @@ TEST(EngineCTest, SetCacheDir) {
   litert_lm_engine_settings_set_cache_dir(settings.get(), cache_dir.c_str());
   EXPECT_EQ(settings->settings->GetMainExecutorSettings().GetCacheDir(),
             cache_dir);
+}
+
+TEST(EngineCTest, SetCacheDirWithVisionAndAudio) {
+  const std::string task_path = "test_model_path_1";
+  EngineSettingsPtr settings(
+      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
+                                       /* vision_backend_str */ "gpu",
+                                       /* audio_backend_str */ "cpu"),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+  EXPECT_TRUE(settings->settings->GetVisionExecutorSettings().has_value());
+  EXPECT_TRUE(settings->settings->GetAudioExecutorSettings().has_value());
+
+  const std::string cache_dir = "test_cache_dir";
+  litert_lm_engine_settings_set_cache_dir(settings.get(), cache_dir.c_str());
+
+  EXPECT_EQ(settings->settings->GetMainExecutorSettings().GetCacheDir(),
+            cache_dir);
+  EXPECT_EQ(settings->settings->GetVisionExecutorSettings()->GetCacheDir(),
+            cache_dir);
+  EXPECT_EQ(settings->settings->GetAudioExecutorSettings()->GetCacheDir(),
+            cache_dir);
+}
+
+TEST(EngineCTest, SetMaxNumImages) {
+  const std::string task_path = "test_model_path_1";
+  EngineSettingsPtr settings(
+      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
+                                       /* vision_backend_str */ nullptr,
+                                       /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+  litert_lm_engine_settings_set_max_num_images(settings.get(), 10);
+  EXPECT_EQ(settings->settings->GetMainExecutorSettings().GetMaxNumImages(),
+            10);
 }
 
 TEST(EngineCTest, SetPrefillChunkSize) {
@@ -858,7 +910,8 @@ TEST(EngineCTest, ConversationSendMessage) {
       R"({"role": "user", "content": [{"type": "text", "text": "Hello"}]})";
   JsonResponsePtr response(
       litert_lm_conversation_send_message(conversation.get(), message_json,
-                                          /*extra_context=*/nullptr),
+                                          /*extra_context=*/nullptr,
+                                          /*optional_args=*/nullptr),
       &litert_lm_json_response_delete);
   ASSERT_NE(response, nullptr);
 
@@ -921,7 +974,8 @@ TEST(EngineCTest, ConversationSendMessageWithConfig) {
       R"({"role": "user", "content": [{"type": "text", "text": "Hello"}]})";
   JsonResponsePtr response(
       litert_lm_conversation_send_message(conversation.get(), message_json,
-                                          /*extra_context=*/nullptr),
+                                          /*extra_context=*/nullptr,
+                                          /*optional_args=*/nullptr),
       &litert_lm_json_response_delete);
   ASSERT_NE(response, nullptr);
 
@@ -965,13 +1019,105 @@ TEST(EngineCTest, ConversationSendMessageWithExtraContext) {
   const char* extra_context = R"({"key": "value"})";
   JsonResponsePtr response(
       litert_lm_conversation_send_message(conversation.get(), message_json,
-                                          /*extra_context=*/extra_context),
+                                          /*extra_context=*/extra_context,
+                                          /*optional_args=*/nullptr),
       &litert_lm_json_response_delete);
   ASSERT_NE(response, nullptr);
 
   const char* response_str = litert_lm_json_response_get_string(response.get());
   ASSERT_NE(response_str, nullptr);
   EXPECT_GT(strlen(response_str), 0);
+}
+
+TEST(EngineCTest, ConversationSendMessageWithOptionalArgs) {
+  // 1. Create an engine.
+  const std::string task_path = GetTestdataPath(
+      "litert_lm/runtime/testdata/test_lm.litertlm");
+
+  EngineSettingsPtr settings(
+      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
+                                       /* vision_backend_str */ nullptr,
+                                       /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+  litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
+
+  EnginePtr engine(litert_lm_engine_create(settings.get()),
+                   &litert_lm_engine_delete);
+  ASSERT_NE(engine, nullptr);
+
+  // 2. Create a Conversation Config.
+  ConversationConfigPtr conversation_config(
+      litert_lm_conversation_config_create(),
+      &litert_lm_conversation_config_delete);
+  ASSERT_NE(conversation_config, nullptr);
+
+  // 3. Create a Conversation with the Conversation Config.
+  ConversationPtr conversation(
+      litert_lm_conversation_create(engine.get(), conversation_config.get()),
+      &litert_lm_conversation_delete);
+  ASSERT_NE(conversation, nullptr);
+
+  // 4. Create Optional Args.
+  OptionalArgsPtr optional_args(litert_lm_conversation_optional_args_create(),
+                                &litert_lm_conversation_optional_args_delete);
+  ASSERT_NE(optional_args, nullptr);
+  litert_lm_conversation_optional_args_set_visual_token_budget(
+      optional_args.get(), 100);
+
+  // 5. Send a message to the conversation with optional args.
+  const char* message_json =
+      R"({"role": "user", "content": [{"type": "text", "text": "Hello"}]})";
+  JsonResponsePtr response(litert_lm_conversation_send_message(
+                               conversation.get(), message_json,
+                               /*extra_context=*/nullptr, optional_args.get()),
+                           &litert_lm_json_response_delete);
+  ASSERT_NE(response, nullptr);
+
+  const char* response_str = litert_lm_json_response_get_string(response.get());
+  ASSERT_NE(response_str, nullptr);
+  EXPECT_GT(strlen(response_str), 0);
+}
+
+TEST(EngineCTest, ConversationCloneNull) {
+  EXPECT_EQ(litert_lm_conversation_clone(nullptr), nullptr);
+}
+
+TEST(EngineCTest, ConversationCloneSuccess) {
+  // 1. Create an engine.
+  const std::string task_path = GetTestdataPath(
+      "litert_lm/runtime/testdata/test_lm.litertlm");
+
+  EngineSettingsPtr settings(
+      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
+                                       /* vision_backend_str */ nullptr,
+                                       /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+  litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
+
+  EnginePtr engine(litert_lm_engine_create(settings.get()),
+                   &litert_lm_engine_delete);
+  ASSERT_NE(engine, nullptr);
+
+  // 2. Create a Conversation.
+  ConversationPtr conversation(
+      litert_lm_conversation_create(engine.get(),
+                                    /*conversation_config=*/nullptr),
+      &litert_lm_conversation_delete);
+  ASSERT_NE(conversation, nullptr);
+
+  // 3. Clone the conversation.
+  LiteRtLmConversation* cloned_raw =
+      litert_lm_conversation_clone(conversation.get());
+  if (cloned_raw == nullptr) {
+    if (absl::IsUnimplemented(conversation->conversation->Clone().status())) {
+      GTEST_SKIP() << "Clone is not supported by this engine.";
+    }
+  }
+  ConversationPtr cloned_conversation(cloned_raw,
+                                      &litert_lm_conversation_delete);
+  ASSERT_NE(cloned_conversation, nullptr);
 }
 
 struct StreamCallbackData {
@@ -1106,7 +1252,7 @@ TEST(EngineCTest, ConversationSendMessageStream) {
   StreamCallbackData callback_data;
   int result = litert_lm_conversation_send_message_stream(
       conversation.get(), message_json, /*extra_context=*/nullptr,
-      &StreamCallback, &callback_data);
+      /*optional_args=*/nullptr, &StreamCallback, &callback_data);
   ASSERT_EQ(result, 0);
 
   callback_data.done.WaitForNotification();
@@ -1141,7 +1287,48 @@ TEST(EngineCTest, ConversationSendMessageStreamWithExtraContext) {
   StreamCallbackData callback_data;
   int result = litert_lm_conversation_send_message_stream(
       conversation.get(), message_json, /*extra_context=*/extra_context,
-      &StreamCallback, &callback_data);
+      /*optional_args=*/nullptr, &StreamCallback, &callback_data);
+  ASSERT_EQ(result, 0);
+
+  callback_data.done.WaitForNotification();
+  EXPECT_GT(callback_data.response.length(), 0);
+}
+
+TEST(EngineCTest, ConversationSendMessageStreamWithOptionalArgs) {
+  const std::string task_path = GetTestdataPath(
+      "litert_lm/runtime/testdata/test_lm_new_metadata.task");
+
+  EngineSettingsPtr settings(
+      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
+                                       /* vision_backend_str */ nullptr,
+                                       /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+  litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
+
+  EnginePtr engine(litert_lm_engine_create(settings.get()),
+                   &litert_lm_engine_delete);
+  ASSERT_NE(engine, nullptr);
+
+  ConversationPtr conversation(
+      litert_lm_conversation_create(engine.get(),
+                                    /*conversation_config=*/nullptr),
+      &litert_lm_conversation_delete);
+  ASSERT_NE(conversation, nullptr);
+
+  const char* message_json =
+      R"({"role": "user", "content": [{"type": "text", "text": "Hello"}]})";
+
+  OptionalArgsPtr optional_args(litert_lm_conversation_optional_args_create(),
+                                &litert_lm_conversation_optional_args_delete);
+  ASSERT_NE(optional_args, nullptr);
+  litert_lm_conversation_optional_args_set_visual_token_budget(
+      optional_args.get(), 100);
+
+  StreamCallbackData callback_data;
+  int result = litert_lm_conversation_send_message_stream(
+      conversation.get(), message_json, /*extra_context=*/nullptr,
+      optional_args.get(), &StreamCallback, &callback_data);
   ASSERT_EQ(result, 0);
 
   callback_data.done.WaitForNotification();
@@ -1175,7 +1362,7 @@ TEST(EngineCTest, ConversationSendMessageStreamAndCancel) {
   StreamCallbackData callback_data;
   int result = litert_lm_conversation_send_message_stream(
       conversation.get(), message_json, /*extra_context=*/nullptr,
-      &StreamCallback, &callback_data);
+      /*optional_args=*/nullptr, &StreamCallback, &callback_data);
   ASSERT_EQ(result, 0);
 
   litert_lm_conversation_cancel_process(conversation.get());

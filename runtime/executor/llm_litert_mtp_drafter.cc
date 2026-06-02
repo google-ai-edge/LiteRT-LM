@@ -1,8 +1,23 @@
+// Copyright 2026 The ODML Authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #include "runtime/executor/llm_litert_mtp_drafter.h"
 
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -158,20 +173,21 @@ LlmLiteRtMtpDrafter::~LlmLiteRtMtpDrafter() {
 }
 
 absl::StatusOr<std::unique_ptr<LlmLiteRtMtpDrafter>>
-LlmLiteRtMtpDrafter::Create(Environment& env, ModelResources& resources,
-                            const LlmExecutorSettings& executor_settings,
-                            CompiledModel& base_model,
-                            EmbeddingLookupManager& embedding_manager,
-                            EmbeddingLookupManager& ple_manager) {
+LlmLiteRtMtpDrafter::Create(
+    Environment& env, ModelResources& resources,
+    const LlmExecutorSettings& executor_settings, CompiledModel& base_model,
+    EmbeddingLookupManager& embedding_manager,
+    std::optional<std::reference_wrapper<EmbeddingLookupManager>> ple_manager) {
   ActivationDataType activation_data_type =
       executor_settings.GetActivationDataType().value_or(
           ActivationDataType::FLOAT16);
 
+  auto cache_suffix = std::string(ExecutorSettingsBase::kMtpDrafterCacheSuffix);
   ASSIGN_OR_RETURN(
       auto compilation_options,
       CreateCompilationOptions(executor_settings, activation_data_type,
                                /*signatures=*/std::nullopt,
-                               /*cache_suffix=*/".mtp_drafter"));
+                               /*cache_suffix=*/cache_suffix));
   RETURN_IF_ERROR(
       UpdateCompilationOptions(executor_settings, compilation_options));
   ASSIGN_OR_RETURN(auto model,
@@ -386,10 +402,12 @@ absl::Status LlmLiteRtMtpDrafter::PrepareVerifierInputBuffers(
   RETURN_IF_ERROR(embedding_manager_.LookupPrefill(
       drafted_tokens_with_input_token, &verifier_input_buffers_["embeddings"],
       /*offset=*/0));
-  RETURN_IF_ERROR(ple_manager_.LookupPrefill(
-      drafted_tokens_with_input_token,
-      &verifier_input_buffers_["per_layer_embeddings"],
-      /*offset=*/0));
+  if (ple_manager_.has_value()) {
+    RETURN_IF_ERROR(ple_manager_->get().LookupPrefill(
+        drafted_tokens_with_input_token,
+        &verifier_input_buffers_["per_layer_embeddings"],
+        /*offset=*/0));
+  }
 
   for (const auto& [input_name, input_buffer] : input_kv_cache_buffers) {
     LITERT_ASSIGN_OR_RETURN(auto input_buffer_dup, input_buffer.Duplicate());

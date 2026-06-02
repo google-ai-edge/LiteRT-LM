@@ -102,7 +102,8 @@ absl::StatusOr<ConversationConfig> ConversationConfig::CreateInternal(
     bool enable_constrained_decoding, bool prefill_preface_on_init,
     std::optional<ConstraintProviderConfig> constraint_provider_config,
     std::optional<std::vector<Channel>> overwrite_channels,
-    bool filter_channel_content_from_kv_cache) {
+    bool filter_channel_content_from_kv_cache,
+    bool return_error_on_parse_failure) {
   if (preface.has_value() && !std::holds_alternative<JsonPreface>(*preface)) {
     return absl::InvalidArgumentError("Only JsonPreface is supported for now.");
   }
@@ -168,7 +169,7 @@ absl::StatusOr<ConversationConfig> ConversationConfig::CreateInternal(
       session_config_copy, preface.value_or(JsonPreface()), prompt_template,
       processor_config, enable_constrained_decoding, prefill_preface_on_init,
       std::move(constraint_provider_config), std::move(channels),
-      filter_channel_content_from_kv_cache);
+      filter_channel_content_from_kv_cache, return_error_on_parse_failure);
 }
 
 absl::StatusOr<std::string>
@@ -440,8 +441,10 @@ absl::Status Conversation::SendMessageAsync(
   auto open_channel_name =
       GetOpenChannelName(single_turn_text, config_.GetChannels());
 
+  bool was_history_empty = false;
   {
     absl::MutexLock lock(history_mutex_);  // NOLINT
+    was_history_empty = history_.empty();
     if (message.is_array()) {
       for (const auto& message : message) {
         history_.push_back(message);
@@ -472,10 +475,38 @@ absl::Status Conversation::SendMessageAsync(
     checkpoint_message_index_ = history_.size() - 1;
   }
 
+  nlohmann::ordered_json messages_for_conversion;
+  if (was_history_empty && !config_.prefill_preface_on_init()) {
+    if (std::holds_alternative<JsonPreface>(preface_)) {
+      const auto& json_preface = std::get<JsonPreface>(preface_);
+      if (json_preface.messages.is_array()) {
+        messages_for_conversion = json_preface.messages;
+      } else {
+        messages_for_conversion =
+            nlohmann::ordered_json::array({json_preface.messages});
+      }
+    }
+  }
+  if (messages_for_conversion.is_array()) {
+    if (message.is_array()) {
+      for (const auto& msg : message) {
+        messages_for_conversion.push_back(msg);
+      }
+    } else {
+      messages_for_conversion.push_back(message);
+    }
+  } else {
+    if (message.is_array()) {
+      messages_for_conversion = message;
+    } else {
+      messages_for_conversion = nlohmann::ordered_json::array({message});
+    }
+  }
+
   ASSIGN_OR_RETURN(
       auto session_inputs,
       model_data_processor_->ToInputDataVector(
-          single_turn_text, nlohmann::ordered_json::array({message}),
+          single_turn_text, messages_for_conversion,
           optional_args.args.value_or(std::monostate())));
 
   if (is_appending_message_) {
@@ -600,15 +631,23 @@ absl::Status Conversation::SendMessageAsync(
         return;
       }
 
-      if (!session_->SaveCheckpoint(kChannelContentCheckpoint).ok()) {
-        (*internal_callback)(absl::InternalError(
-            "Failed to save checkpoint for channel content."));
+      if (responses->GetTaskState() == TaskState::kCancelled ||
+          responses->GetTaskState() == TaskState::kMaxNumTokensReached) {
+        (*internal_callback)(responses);
         return;
       }
 
-      if (!run_prefill().ok()) {
-        (*internal_callback)(absl::InternalError("Failed to start prefill."));
-        return;
+      if (responses->GetTaskState() == TaskState::kDone) {
+        if (!session_->SaveCheckpoint(kChannelContentCheckpoint).ok()) {
+          (*internal_callback)(absl::InternalError(
+              "Failed to save checkpoint for channel content."));
+          return;
+        }
+
+        if (!run_prefill().ok()) {
+          (*internal_callback)(absl::InternalError("Failed to start prefill."));
+          return;
+        }
       }
     };
     ASSIGN_OR_RETURN(auto refill_task_controller,
@@ -642,6 +681,10 @@ absl::Status Conversation::RunTextScoringAsync(
                                              /*store_token_lengths=*/true));
   AddTaskController(optional_args.task_group_id, std::move(task_controller));
   return absl::OkStatus();
+}
+
+absl::StatusOr<int> Conversation::GetTokenCount() const {
+  return session_->GetCurrentStep();
 }
 
 absl::StatusOr<BenchmarkInfo> Conversation::GetBenchmarkInfo() {

@@ -43,7 +43,8 @@ class LoraManager {
   // information. It is used for creating backend resources for model buffers.
   // It also contains the LoRA input signature information
   static absl::StatusOr<std::unique_ptr<LoraManager>> Create(
-      const litert::CompiledModel& compiled_model);
+      const litert::CompiledModel& compiled_model,
+      absl::string_view signature_name);
 
   // Returns the current LoRA ID.
   std::optional<uint32_t> GetCurrentLoRAId() const { return current_lora_id_; }
@@ -65,9 +66,11 @@ class LoraManager {
   GetLoRABuffers() const;
 
  private:
-  explicit LoraManager(const litert::CompiledModel& compiled_model);
+  LoraManager(const litert::CompiledModel& compiled_model,
+              absl::string_view signature_name);
 
   const litert::CompiledModel& compiled_model_;
+  std::string signature_name_;
 
   absl::flat_hash_map<uint32_t, std::unique_ptr<LoraData>> lora_data_;
   absl::flat_hash_map<uint32_t, std::unique_ptr<LoRA>> loras_;

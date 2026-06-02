@@ -230,7 +230,7 @@ absl::StatusOr<std::unique_ptr<LoraData>> LoraData::CreateFromScopedFile(
   const std::string key{absl::StrCat("FileLoraData_", next_key.fetch_add(1))};
   ASSIGN_OR_RETURN(auto mapped_file, MemoryMappedFileWithAutoAlignment::Create(
                                          file->file(), /*offset=*/0,
-                                         /*size=*/kMetadataMaxSize, key));
+                                         /*size=*/0, key));
   ASSIGN_OR_RETURN(auto model, CreateFlatBufferModelFromBuffer(
                                    mapped_file->data(), mapped_file->length()));
   RET_CHECK(model) << "Error building tflite model.";

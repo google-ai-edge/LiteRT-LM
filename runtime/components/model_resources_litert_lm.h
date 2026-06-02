@@ -49,6 +49,9 @@ class ModelResourcesLitertLm : public ModelResources {
   std::optional<std::string> GetTFLiteModelBackendConstraint(
       ModelType model_type) override;
 
+  std::optional<std::string> GetTFLiteModelPreferActivationType(
+      ModelType model_type) override;
+
   // Returns the tokenizer from the *.litertlm file. If both SentencePiece and
   // HuggingFace tokenizer are present and supported by the current build
   // configuration, the SentencePiece tokenizer will be used.

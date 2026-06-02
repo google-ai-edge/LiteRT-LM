@@ -27,7 +27,7 @@ class Benchmark(interfaces.AbstractBenchmark):
   def run(self) -> interfaces.BenchmarkInfo:
     lib = _get_lib()
     model_path = self.model_path
-    backend_str = self.backend.name.lower()
+    backend_str = self.backend.get_name()
 
     settings = lib.litert_lm_engine_settings_create(
         model_path,
@@ -42,6 +42,10 @@ class Benchmark(interfaces.AbstractBenchmark):
       )
 
     lib.litert_lm_engine_settings_enable_benchmark(settings)
+    if self.max_num_tokens is not None:
+      lib.litert_lm_engine_settings_set_max_num_tokens(
+          settings, self.max_num_tokens
+      )
     lib.litert_lm_engine_settings_set_num_prefill_tokens(
         settings, self.prefill_tokens
     )

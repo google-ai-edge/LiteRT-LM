@@ -181,3 +181,6 @@ flatbuffer_py_library(
     name = "litertlm_header_schema_py",
     srcs = ["litertlm_header_schema.fbs"],
 )
+
+# For litert_lm_builder PyPI packaging.
+exports_files(["litertlm_header_schema.fbs"])

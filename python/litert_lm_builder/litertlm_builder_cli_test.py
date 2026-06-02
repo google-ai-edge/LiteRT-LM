@@ -21,7 +21,7 @@ from absl.testing import absltest
 
 from litert_lm_builder import litertlm_core
 from litert_lm_builder import litertlm_peek
-from litert_lm.runtime.proto import llm_metadata_pb2
+from runtime.proto import llm_metadata_pb2
 
 from python import runfiles
 

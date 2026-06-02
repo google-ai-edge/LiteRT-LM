@@ -1,0 +1,278 @@
+# Copyright 2026 The ODML Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: "ML-CI-Win"
+on:
+  push:
+    tags:
+    - v*.*.*
+  pull_request:
+    branches:
+    - main
+  schedule:
+    - cron: "0 10 * * *"  # Run at 2am PST (10am UTC) every day to refresh the cache.
+  workflow_dispatch:  # Manual trigger
+    inputs:
+      REFRESH_CACHE:
+        description: 'Refresh cache to remove unused files'
+        type: boolean
+        default: true
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  presubmit:
+    name: "Presubmit-Win"
+    runs-on: windows-x86-n2-16
+    defaults:
+      run:
+        shell: powershell
+    permissions:
+      actions: write  # For gh cache delete.
+      contents: write  # For gh release upload.
+    env:
+      MODEL_KEY: gemma-3-1b-it-v1
+      MODEL_PATH: .\models\gemma3-1b-it-int4.litertlm
+      MODEL_URL: https://huggingface.co/litert-community/Gemma3-1B-IT/resolve/main/gemma3-1b-it-int4.litertlm
+
+      # Clear ANDROID_NDK_HOME as Windows_x64 has NDK where jobs don't have permission for
+      # androidndk rules to create symlinks.
+      ANDROID_NDK_HOME:
+      GH_TOKEN: ${{ github.token }}  # For gh release upload.
+      REFRESH_CACHE: ${{ github.event_name == 'schedule' ||
+                         (github.event_name == 'workflow_dispatch' && inputs.REFRESH_CACHE) }}
+    steps:
+
+      - name: Install System Dependencies
+        run: |
+          [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+          Set-ExecutionPolicy Bypass -Scope Process -Force
+          Invoke-Expression ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+
+          # Temporarily add choco to this step's path so the installer below functions
+          $env:Path += ";$env:ALLUSERSPROFILE\chocolatey\bin"
+
+          $env:JAVA_HOME = [System.Environment]::GetEnvironmentVariable("JAVA_HOME", "Machine")
+
+          choco install git make pkgconfiglite openjdk17 ccache bazelisk -y
+
+          python -m pip install --break-system-packages numpy
+
+      - name: Configure System Paths
+        run: |
+          Add-Content -Path $env:GITHUB_PATH -Value "C:\Program Files\Git\cmd"
+          Add-Content -Path $env:GITHUB_PATH -Value "$env:ALLUSERSPROFILE\chocolatey\bin"
+          Add-Content -Path $env:GITHUB_PATH -Value "$env:USERPROFILE\.cargo\bin"
+
+      - name: Setup VCPKG
+        run: |
+          git clone https://github.com/microsoft/vcpkg.git $env:USERPROFILE\vcpkg
+          cd $env:USERPROFILE\vcpkg
+          .\bootstrap-vcpkg.bat -disableMetrics
+          .\vcpkg integrate install
+          .\vcpkg install zlib openssl libpng curl fftw3 --triplet x64-windows
+
+      - name: Install Rust
+        run: |
+          Invoke-WebRequest -Uri "https://win.rustup.rs" -OutFile "rustup-init.exe"
+          .\rustup-init.exe -y --default-host x86_64-pc-windows-msvc
+
+      - name: Patch MSVC Linker for Long Paths
+        run: |
+          $linkPath = (Get-ChildItem -Path "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\*\bin\HostX64\x64\link.exe" -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
+          if (-not $linkPath) { throw "Could not locate MSVC link.exe" }
+
+          $manifestContent = @"
+          <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+          <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+            <application xmlns="urn:schemas-microsoft-com:asm.v3">
+              <windowsSettings>
+                <longPathAware xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">true</longPathAware>
+              </windowsSettings>
+            </application>
+          </assembly>
+          "@
+          $manifestPath = "C:\TMP\longpath.manifest"
+          if (-not (Test-Path "C:\TMP")) { New-Item -ItemType Directory -Path "C:\TMP" -Force }
+          Set-Content -Path $manifestPath -Value $manifestContent -Encoding UTF8
+
+          $mtExe = (Get-ChildItem -Path "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\mt.exe" -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
+          if (-not $mtExe) { throw "Could not locate Windows SDK mt.exe" }
+
+          Write-Host "Injecting LongPath manifest into $linkPath using $mtExe"
+          & $mtExe -nologo -manifest $manifestPath -outputresource:"$linkPath`;1"
+
+          if ($LASTEXITCODE -ne 0) { throw "mt.exe failed to patch the linker." }
+
+      - name: Redirect Temp Directories to 500GB Workspace Drive
+        run: |
+          $newTemp = Join-Path -Path $env:GITHUB_WORKSPACE -ChildPath "_tmp"
+          if (-not (Test-Path $newTemp)) {
+              New-Item -ItemType Directory -Path $newTemp -Force
+          }
+
+          echo "TMP=$newTemp" >> $env:GITHUB_ENV
+          echo "TEMP=$newTemp" >> $env:GITHUB_ENV
+
+          Write-Host "Re-mapped TMP and TEMP to $newTemp"
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+      - name: Set up cache keys and bazel output base
+        id: cache-keys
+        run: |
+          $bigDrivePath = "C:\_w"
+          if (-not (Test-Path $bigDrivePath)) {
+              New-Item -ItemType Directory -Path $bigDrivePath -Force
+          }
+
+          subst B: $bigDrivePath
+
+          $BAZEL_OUTPUT_BASE = "B:\job"
+
+          $CACHE_RESTORE_KEY_2="${{ github.workflow }}"
+          $CACHE_RESTORE_KEY_1="$CACHE_RESTORE_KEY_2-${{ hashFiles('**/WORKSPACE', '**/.bazelrc') }}"
+          $CACHE_RESTORE_KEY_0="$CACHE_RESTORE_KEY_1-${{ hashFiles('**/BUILD*') }}"
+          $CACHE_RESTORE_KEY_HEAD="$CACHE_RESTORE_KEY_0-${{ github.event.pull_request.base.sha }}"
+          $CACHE_KEY="$CACHE_RESTORE_KEY_0-${{ github.sha }}"
+
+          echo "CACHE_RESTORE_KEY_2=$CACHE_RESTORE_KEY_2" >> "$env:GITHUB_OUTPUT"
+          echo "CACHE_RESTORE_KEY_1=$CACHE_RESTORE_KEY_1" >> "$env:GITHUB_OUTPUT"
+          echo "CACHE_RESTORE_KEY_0=$CACHE_RESTORE_KEY_0" >> "$env:GITHUB_OUTPUT"
+          echo "CACHE_RESTORE_KEY_HEAD=$CACHE_RESTORE_KEY_HEAD" >> "$env:GITHUB_OUTPUT"
+          echo "CACHE_KEY=$CACHE_KEY" >> "$env:GITHUB_OUTPUT"
+
+          $SHORT_SHA=$("${{ github.sha }}".SubString(0, 8))
+          echo "BAZEL_OUTPUT_BASE=${BAZEL_OUTPUT_BASE}-$SHORT_SHA" >> "$env:GITHUB_ENV"
+
+      - name: Clean build outputs if cache is being refreshed
+        if: env.REFRESH_CACHE == 'true'
+        run: bazel --output_base="$env:BAZEL_OUTPUT_BASE" clean --expunge
+
+      - name: Restore bazel cache if cache is not being refreshed
+        id: bazel-cache
+        if: env.REFRESH_CACHE != 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/bazel
+          key: ${{ steps.cache-keys.outputs.CACHE_KEY }}
+          restore-keys: |
+            ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_HEAD }}
+            ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_0 }}-
+            ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_1 }}-
+            ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_2 }}-
+
+      - name: Check cache hit
+        run: |
+          echo "Cache Hit: ${{ steps.bazel-cache.outputs.cache-hit }}"
+          echo "Cache Primary Key: ${{ steps.bazel-cache.outputs.cache-primary-key }}"
+          echo "Cache Matched Key: ${{ steps.bazel-cache.outputs.cache-matched-key }}"
+
+      - name: Download Model
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          if (-not (Test-Path "./models")) {
+            New-Item -ItemType Directory -Path "./models" -Force
+          }
+
+          $headers = @{
+              "Authorization" = "Bearer $($env:HF_TOKEN)"
+          }
+
+          Write-Host "Downloading model from Hugging Face: ${{ env.MODEL_URL }}"
+
+          Invoke-WebRequest -Uri "${{ env.MODEL_URL }}" `
+                  -Headers $headers `
+                  -OutFile "${{ env.MODEL_PATH }}"
+
+          $file = Get-Item "${{ env.MODEL_PATH }}"
+          $sizeMB = [math]::Round($file.Length / 1MB, 2)
+          Write-Host "Verification Success: $($file.Name) ($sizeMB MB) is ready."
+          Get-ChildItem "${{ env.MODEL_PATH }}" | Select-Object Name, @{Name="Size(MB)";Expression={$_.Length / 1MB}}
+
+      - name: Run bazel build on Windows
+        run: |
+          bazel --output_base="$env:BAZEL_OUTPUT_BASE" `
+            build --disk_cache=~/.cache/bazel `
+            --deleted_packages=swift `
+            --build_tag_filters='-nowindows' `
+            --action_env=TMP="$env:TMP" `
+            --action_env=TEMP="$env:TEMP" `
+            -- `
+            //... `
+            //runtime/engine:litert_lm_main `
+            -//kotlin/...
+
+      - name: Update litert_lm_main prebuilt for Windows if new version tag is pushed
+        if: github.ref_type == 'tag'
+        run: |
+          cp bazel-bin/runtime/engine/litert_lm_main.exe litert_lm_main.windows_x86_64.exe
+          gh release upload ${{ github.ref_name }} litert_lm_main.windows_x86_64.exe --clobber
+
+
+      - name: Run bazel test on Windows
+        continue-on-error: true
+        run: |
+          bazel --output_base="$env:BAZEL_OUTPUT_BASE" `
+            test --disk_cache=~/.cache/bazel --test_output=errors `
+            --deleted_packages=swift `
+            --test_timeout=300,1500,5400,18000 `
+            --test_verbose_timeout_warnings `
+            --test_tag_filters='-requires-mac-inputs:hard,-nowindows' `
+            --action_env=TMP="$env:TMP" `
+            --action_env=TEMP="$env:TEMP" `
+            -- `
+            //... `
+            -//kotlin/...
+
+      - name: Upload Bazel Test Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bazel-test-logs-windows
+          path: bazel-testlogs/**/test.log
+
+      - name: Install pytest
+        run: python -m pip install --break-system-packages pytest==8.3.4
+
+      - name: Run pytest
+        # Execute pytest via the python module (-m) to bypass missing pytest.exe PATH issues
+        run: python -m pytest tools/test/ --model-path=${{ env.MODEL_PATH }} --build-system=bazel
+
+      - name: Run bazel build on Windows with dynamic linking
+        run: |
+          bazel --output_base="$env:BAZEL_OUTPUT_BASE" `
+            build --disk_cache=~/.cache/bazel `
+            --define=litert_link_capi_so=true `
+            --define=resolve_symbols_in_exec=false `
+            //runtime/engine:litert_lm_main
+
+      - name: Remove cache if cache is being refreshed
+        if: env.REFRESH_CACHE == 'true'
+        continue-on-error: true  # Ignore errors when cache is not found.
+        run: gh cache delete ${{ steps.cache-keys.outputs.CACHE_KEY }}
+
+      - name: Save bazel cache if it's new or being refreshed
+        uses: actions/cache/save@v4
+        if: env.REFRESH_CACHE == 'true' || steps.bazel-cache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            ~/.cache/bazel
+          key: ${{ steps.cache-keys.outputs.CACHE_KEY }}

@@ -36,13 +36,14 @@ package_group(
         "//runtime/e2e_tests/...",
         "//c/...",
         "//python/...",
+        "//kotlin/...",
         # for SpeechProcessor
         # for AI Edge Hub
     ],
 )
 
 ENGINE_IMPL_COMMON_DEPS = [
-    ":session_factory",
+    ":session_advanced",
     "@com_google_absl//absl/base:no_destructor",
     "@com_google_absl//absl/log",
     "@com_google_absl//absl/log:absl_check",
@@ -63,22 +64,28 @@ ENGINE_IMPL_COMMON_DEPS = [
     "//runtime/engine:io_types",
     "//runtime/executor:audio_executor",
     "//runtime/executor:audio_executor_settings",
-    "//runtime/executor:audio_litert_compiled_model_executor",
     "//runtime/executor:audio_executor_utils",
+    "//runtime/executor:audio_litert_compiled_model_executor",
     "//runtime/executor:executor_settings_base",
     "//runtime/executor:litert_compiled_model_executor_utils",
     "//runtime/executor:llm_executor",
     "//runtime/executor:llm_executor_settings",
     "//runtime/executor:llm_litert_compiled_model_executor",
+    "//runtime/executor:llm_litert_compiled_model_executor_factory",
     "//runtime/executor:magic_number_configs_helper",
     "//runtime/executor:vision_executor",
+    "//runtime/executor:vision_executor_settings",
+    "//runtime/executor:vision_executor_utils",
     "//runtime/executor:vision_litert_compiled_model_executor",
     "//runtime/framework:threadpool",
+    "//runtime/framework/resource_management:execution_manager",
+    "//runtime/framework/resource_management:serial_execution_manager",
+    "//runtime/framework/resource_management:threaded_execution_manager",
     "//runtime/proto:llm_metadata_cc_proto",
     "//runtime/proto:sampler_params_cc_proto",
-    "//runtime/executor:llm_litert_compiled_model_executor_factory",
     "//runtime/util:file_format_util",
     "//runtime/util:litert_status_util",
+    "//runtime/util:litert_util",
     "//runtime/util:logging",
 ] + select({
     "@litert//litert:litert_link_capi_so": [
@@ -91,9 +98,11 @@ ENGINE_IMPL_COMMON_DEPS = [
 })
 
 cc_library(
-    name = "engine_impl",
-    srcs = ["engine_impl.cc"],
-    visibility = [":engine_impl_users"],
+    name = "engine_advanced_impl",
+    srcs = ["engine_advanced_impl.cc"],
+    local_defines = select({
+        "//conditions:default": [],
+    }),
     deps = ENGINE_IMPL_COMMON_DEPS + [
         "//runtime/components:default_static_gpu_samplers",
         "//runtime/executor:default_static_gpu_accelerator",
@@ -104,25 +113,25 @@ cc_library(
 )
 
 cc_library(
-    name = "engine_impl_cpu_only",
-    srcs = ["engine_impl.cc"],
-    deps = ENGINE_IMPL_COMMON_DEPS,
+    name = "engine_advanced_impl_cpu_only",
+    srcs = ["engine_advanced_impl.cc"],
+    deps = ENGINE_IMPL_COMMON_DEPS + select({
+        "//conditions:default": [],
+    }),
     alwayslink = 1,
 )
 
 cc_test(
-    name = "engine_impl_test",
-    srcs = ["engine_impl_test.cc"],
-    # The LiteRT GPU path is not ready yet. Only test the CPU path.
-    args = ["--gunit_filter=-EngineTest.CreateEngineGPU*"],
+    name = "engine_advanced_impl_test",
+    srcs = ["engine_advanced_impl_test.cc"],
     data = ["//runtime/testdata"],
-    tags = ["requires-mac-inputs:hard"],  # Required for running on Forge on Mac.
+    defines = ["ENGINE_ADVANCED"],
+    tags = ["requires-mac-inputs:hard"],
     deps = [
-        ":engine_impl",  # buildcleaner: keep
+        ":engine_advanced_impl",  # buildcleaner: keep
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/cleanup",
         "@com_google_absl//absl/log:absl_check",
-        "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
@@ -133,9 +142,23 @@ cc_test(
         "//runtime/executor:executor_settings_base",
         "//runtime/executor:llm_executor_settings",
         "//runtime/proto:sampler_params_cc_proto",
+        "//runtime/util:litert_status_util",
         "//runtime/util:scoped_file",
         "//runtime/util:test_utils",
     ],
+)
+
+# TODO - b/502275587: Remove these aliases once the migration is complete.
+alias(
+    name = "engine_impl",
+    actual = ":engine_advanced_impl",
+    deprecation = "Use engine_advanced_impl instead.",
+)
+
+alias(
+    name = "engine_impl_cpu_only",
+    actual = ":engine_advanced_impl_cpu_only",
+    deprecation = "Use engine_advanced_impl_cpu_only instead.",
 )
 
 cc_library(
@@ -202,17 +225,17 @@ cc_test(
 )
 
 cc_library(
-    name = "session_basic",
-    srcs = ["session_basic.cc"],
-    hdrs = ["session_basic.h"],
+    name = "session_advanced",
+    srcs = ["session_advanced.cc"],
+    hdrs = ["session_advanced.h"],
     deps = [
-        ":pipeline",
         ":session_utils",
         "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/functional:any_invocable",
+        "@com_google_absl//absl/log",
         "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/memory",
         "@com_google_absl//absl/status",
@@ -221,52 +244,27 @@ cc_library(
         "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/time",
-        "@com_google_absl//absl/types:span",
-        "@litert//litert/cc:litert_layout",
-        "@litert//litert/cc:litert_macros",
-        "@litert//litert/cc:litert_tensor_buffer_types",
-        "//runtime/components:sampler",
-        "//runtime/components:sampler_factory",
-        "//runtime/components:stop_token_detector",
         "//runtime/components:tokenizer",
-        "//runtime/components/constrained_decoding:constraint",
         "//runtime/engine:engine_interface",
         "//runtime/engine:engine_settings",
         "//runtime/engine:io_types",
-        "//runtime/executor:audio_executor",
-        "//runtime/executor:executor_settings_base",
-        "//runtime/executor:llm_executor",
         "//runtime/executor:llm_executor_io_types",
-        "//runtime/executor:vision_executor",
-        "//runtime/framework:threadpool",
-        "//runtime/proto:llm_model_type_cc_proto",
+        "//runtime/framework/resource_management:execution_manager",
         "//runtime/proto:sampler_params_cc_proto",
-        "//runtime/util:convert_tensor_buffer",
-        "//runtime/util:executor_data_util",
         "//runtime/util:litert_status_util",
-        "//runtime/util:model_type_utils",
-        "//runtime/util:tensor_buffer_util",
-    ] + select({
-        "@litert//litert:litert_link_capi_so": [
-            "@litert//litert/cc:litert_api_with_dynamic_runtime",
-        ],
-        "//conditions:default": [
-            "@litert//litert/cc:litert_model",
-            "@litert//litert/cc:litert_tensor_buffer",
-        ],
-    }),
+    ],
 )
 
 cc_test(
-    name = "session_basic_test",
-    srcs = ["session_basic_test.cc"],
+    name = "session_advanced_test",
+    srcs = ["session_advanced_test.cc"],
     data = [
         "//runtime/components/testdata",
         "//runtime/testdata",
     ],
     tags = ["requires-mac-inputs:hard"],  # Required for running on Forge on Mac.
     deps = [
-        ":session_basic",
+        ":session_advanced",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/functional:any_invocable",
@@ -275,10 +273,10 @@ cc_test(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
-        "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/time",
         "@litert//litert/cc:litert_tensor_buffer",
         "@litert//litert/test:matchers",
+        "//runtime/components:model_resources",
         "//runtime/components:sentencepiece_tokenizer",
         "//runtime/components:tokenizer",
         "//runtime/components/constrained_decoding:fake_constraint",
@@ -290,6 +288,8 @@ cc_test(
         "//runtime/executor:fake_llm_executor",
         "//runtime/executor:llm_executor_io_types",
         "//runtime/framework:threadpool",
+        "//runtime/framework/resource_management:execution_manager",
+        "//runtime/framework/resource_management:threaded_execution_manager",
         "//runtime/util:convert_tensor_buffer",
         "//runtime/util:litert_status_util",
         "//runtime/util:scoped_file",
@@ -304,44 +304,6 @@ cc_test(
             "@litert//litert/cc:litert_environment_options",
         ],
     }),
-)
-
-cc_library(
-    name = "session_factory",
-    srcs = ["session_factory.cc"],
-    hdrs = ["session_factory.h"],
-    deps = [
-        ":session_basic",
-        "@com_google_absl//absl/base:nullability",
-        "@com_google_absl//absl/status:statusor",
-        "//runtime/components:tokenizer",
-        "//runtime/engine:engine_interface",
-        "//runtime/engine:engine_settings",
-        "//runtime/engine:io_types",
-        "//runtime/executor:audio_executor",
-        "//runtime/executor:llm_executor",
-        "//runtime/executor:vision_executor",
-        "//runtime/framework:threadpool",
-        "//runtime/proto:sampler_params_cc_proto",
-        "//runtime/util:litert_status_util",
-    ],
-)
-
-cc_test(
-    name = "session_factory_test",
-    srcs = ["session_factory_test.cc"],
-    deps = [
-        ":session_factory",
-        "@com_google_googletest//:gtest_main",
-        "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/strings:string_view",
-        "//runtime/components:tokenizer",
-        "//runtime/engine:engine_settings",
-        "//runtime/executor:executor_settings_base",
-        "//runtime/executor:fake_llm_executor",
-        "//runtime/framework:threadpool",
-        "//runtime/util:test_utils",
-    ],
 )
 
 cc_library(

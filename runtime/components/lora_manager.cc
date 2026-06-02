@@ -34,12 +34,14 @@
 namespace litert::lm {
 
 absl::StatusOr<std::unique_ptr<LoraManager>> LoraManager::Create(
-    const litert::CompiledModel& compiled_model) {
-  return absl::WrapUnique(new LoraManager(compiled_model));
+    const litert::CompiledModel& compiled_model,
+    absl::string_view signature_name) {
+  return absl::WrapUnique(new LoraManager(compiled_model, signature_name));
 }
 
-LoraManager::LoraManager(const litert::CompiledModel& compiled_model)
-    : compiled_model_(compiled_model) {}
+LoraManager::LoraManager(const litert::CompiledModel& compiled_model,
+                         absl::string_view signature_name)
+    : compiled_model_(compiled_model), signature_name_(signature_name) {}
 
 absl::Status LoraManager::LoadLoRA(uint32_t lora_id,
                                    const ModelAssets& model_assets) {
@@ -58,7 +60,7 @@ absl::Status LoraManager::UseLoRA(uint32_t lora_id) {
   }
   if (!loras_.contains(lora_id)) {
     ASSIGN_OR_RETURN(auto lora, LoRA::Create(std::move(lora_data_[lora_id]),
-                                             compiled_model_));
+                                             compiled_model_, signature_name_));
     loras_[lora_id] = std::move(lora);
     lora_data_.erase(lora_id);
   }

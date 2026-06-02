@@ -63,6 +63,17 @@ TEST(FcParserUtilsTest, ParseToolCallNoArgumentsNoBraces) {
               }])json")));
 }
 
+TEST(FcParserUtilsTest, ParseToolCallWithStringArgumentDoubleQuoteEscape) {
+  EXPECT_THAT(
+      ParseFcExpression(R"(call:tool_name{text:<|"|>hello world<|"|>})"),
+      IsOkAndHolds(nlohmann::ordered_json::parse(R"json([{
+                "name": "tool_name",
+                "arguments": {
+                  "text": "hello world"
+                }
+              }])json")));
+}
+
 TEST(FcParserUtilsTest, ParseToolCallWithSingleQuotesInStringArgument) {
   EXPECT_THAT(ParseFcExpression(
                   R"(call:tool_name{text:<escape>foo 'bar' baz<escape>})"),

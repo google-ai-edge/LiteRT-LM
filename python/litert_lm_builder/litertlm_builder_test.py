@@ -22,7 +22,7 @@ from google.protobuf import text_format
 from litert_lm_builder import litertlm_builder
 from litert_lm_builder import litertlm_core
 from litert_lm_builder import litertlm_peek
-from litert_lm.runtime.proto import llm_metadata_pb2
+from runtime.proto import llm_metadata_pb2
 
 _TOML_TEMPLATE = """
 # A template for testing the TOML parser.
@@ -307,6 +307,25 @@ class LitertlmBuilderTest(parameterized.TestCase):
           backend_constraint="foo, bar",
       )
 
+  def test_add_tflite_model_with_prefer_activation_type(self):
+    """Tests that a TFLite model with prefer_activation_type added correctly."""
+    tflite_path = self._create_dummy_file(
+        "model.tflite", b"dummy tflite content"
+    )
+
+    builder = litertlm_builder.LitertLmFileBuilder()
+    self._add_system_metadata(builder)
+    builder.add_tflite_model(
+        tflite_path,
+        litertlm_builder.TfLiteModelType.PREFILL_DECODE,
+        prefer_activation_type="fp16",
+    )
+    ss = self._build_and_read_litertlm(builder)
+    self.assertIn("Sections (1)", ss)
+    self.assertIn("Data Type:    TFLiteModel", ss)
+    self.assertIn("Key: model_type, Value (String): tf_lite_prefill_decode", ss)
+    self.assertIn("Key: prefer_activation_type, Value (String): fp16", ss)
+
   def test_add_tflite_model_override_type(self):
     """Tests that overriding the model type in additional metadata raises a ValueError."""
     tflite_path = self._create_dummy_file(
@@ -561,6 +580,26 @@ class LitertlmBuilderTest(parameterized.TestCase):
     self.assertIn("Data Type:    LlmMetadataProto", ss)
     self.assertIn("max_num_tokens: 123", ss)
     self.assertIn("Data Type:    GenericBinaryData", ss)
+
+  def test_from_toml_with_prefer_activation_type(self):
+    """Tests that a LitertLmFileBuilder can be initialized with prefer_activation_type from TOML."""
+    tflite_filename = "model.tflite"
+    tflite_path_abs = self._create_dummy_file(
+        tflite_filename, b"dummy tflite content"
+    )
+    toml_str = f"""
+    [[section]]
+    section_type = "TFLiteModel"
+    model_type = "PREFILL_DECODE"
+    data_path = "{pathlib.Path(tflite_path_abs).as_posix()}"
+    prefer_activation_type = "int8"
+    """
+    toml_path = self._create_dummy_file("test.toml", toml_str.encode("utf-8"))
+    builder = litertlm_builder.LitertLmFileBuilder.from_toml_file(toml_path)
+    ss = self._build_and_read_litertlm(builder)
+    self.assertIn("Sections (1)", ss)
+    self.assertIn("Data Type:    TFLiteModel", ss)
+    self.assertIn("Key: prefer_activation_type, Value (String): int8", ss)
 
 
 if __name__ == "__main__":

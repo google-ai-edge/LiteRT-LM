@@ -15,6 +15,7 @@
 from collections.abc import Sequence
 import os
 import pathlib
+from unittest import mock
 
 from absl.testing import absltest
 from absl.testing import parameterized
@@ -297,6 +298,84 @@ class ToolTest(parameterized.TestCase):
         ValueError, "Tool description must contain \\['function'\\]\\['name'\\]"
     ):
       engine.create_conversation(tools=[MalformedTool()])
+
+
+class ConversationToolHandlingTest(absltest.TestCase):
+
+  def setUp(self):
+    super().setUp()
+    # Instantiate Conversation with None for lib and ptr since we are only
+    # testing _handle_tool_calls which doesn't use them.
+    self.conv = litert_lm.conversation.Conversation(lib=None, conv_ptr=None)
+
+    # Setup a mock tool
+    self.mock_tool = mock.MagicMock()
+    self.mock_tool.execute.return_value = "mock_result"
+    self.conv._tools_map = {"my_tool": self.mock_tool}
+
+  def test_handle_tool_calls_valid(self):
+    response = {
+        "tool_calls": [
+            {"function": {"name": "my_tool", "arguments": {"arg1": "value1"}}}
+        ]
+    }
+
+    tool_responses = self.conv._handle_tool_calls(response)
+
+    # Verify tool execution
+    self.mock_tool.execute.assert_called_once_with({"arg1": "value1"})
+
+    # Verify output format
+    self.assertEqual(
+        tool_responses,
+        [{
+            "role": "tool",
+            "content": [{
+                "type": "tool_response",
+                "name": "my_tool",
+                "response": "mock_result",
+            }],
+        }],
+    )
+
+  def test_handle_tool_calls_missing_function_key(self):
+    response = {
+        "tool_calls": [{"not_function": {"name": "my_tool", "arguments": {}}}]
+    }
+
+    with self.assertRaisesRegex(ValueError, "Missing 'function' in tool_call"):
+      self.conv._handle_tool_calls(response)
+
+    self.mock_tool.execute.assert_not_called()
+
+  def test_handle_tool_calls_old_format_ignored(self):
+    # Test that the old OpenAI-like format without "function" wrapper is ignored
+    response = {
+        "tool_calls": [{
+            "type": "function",
+            "name": "my_tool",
+            "arguments": {"arg1": "value1"},
+        }]
+    }
+
+    with self.assertRaisesRegex(ValueError, "Missing 'function' in tool_call"):
+      self.conv._handle_tool_calls(response)
+
+    self.mock_tool.execute.assert_not_called()
+
+  def test_handle_tool_calls_multimodal_format_ignored(self):
+    # Test that the old multimodal format is ignored
+    response = {
+        "content": [{
+            "type": "tool_call",
+            "tool_call": {"name": "my_tool", "arguments": {}},
+        }]
+    }
+
+    tool_responses = self.conv._handle_tool_calls(response)
+
+    self.mock_tool.execute.assert_not_called()
+    self.assertIsNone(tool_responses)
 
 
 if __name__ == "__main__":

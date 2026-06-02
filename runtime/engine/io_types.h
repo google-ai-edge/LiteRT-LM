@@ -317,10 +317,12 @@ class Responses {
   explicit Responses(TaskState task_state,
                      std::vector<std::string> response_texts = {},
                      std::vector<float> scores = {},
-                     std::vector<int> token_lengths = {})
+                     std::vector<int> token_lengths = {},
+                     std::vector<std::vector<int>> token_ids = {})
       : task_state_(task_state),
         response_texts_(std::move(response_texts)),
-        scores_(std::move(scores)) {
+        scores_(std::move(scores)),
+        token_ids_(std::move(token_ids)) {
     if (!token_lengths.empty()) {
       token_lengths_ = std::move(token_lengths);
     }
@@ -333,6 +335,10 @@ class Responses {
   void SetTaskState(TaskState task_state) { task_state_ = task_state; }
 
   // Returns the const texts vector.
+  // The returned vector contains the response texts for each candidate output
+  // string. In most cases, the candidate number is 1, the vector will contain a
+  // single string. It requires the model to support batch size > 1 to have more
+  // than one candidate.
   const std::vector<std::string>& GetTexts() const { return response_texts_; }
 
   // Returns the const scores vector.
@@ -352,6 +358,20 @@ class Responses {
   // Returns the mutable token lengths vector.
   std::optional<std::vector<int>>& GetMutableTokenLengths() {
     return token_lengths_;
+  };
+
+  // Returns the const token ids vector.
+  // The returned vector contains the token ids for each candidate output ids.
+  // In most cases, the candidate number is 1, the vector will contain a single
+  // vector of token ids. It requires the model to support batch size > 1 to
+  // have more than one candidate.
+  const std::vector<std::vector<int>>& GetTokenIds() const {
+    return token_ids_;
+  }
+
+  // Returns the mutable token ids vector.
+  std::vector<std::vector<int>>& GetMutableTokenIds() {
+    return token_ids_;
   };
 
   // Returns the const token scores vector.
@@ -380,6 +400,9 @@ class Responses {
 
   // The output vector of token scores for each response text. Optional.
   std::optional<std::vector<std::vector<float>>> token_scores_;
+
+  // The output vector of token ids for each response text.
+  std::vector<std::vector<int>> token_ids_;
 };
 std::ostream& operator<<(std::ostream& os, const Responses& responses);
 

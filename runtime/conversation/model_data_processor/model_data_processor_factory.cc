@@ -259,6 +259,11 @@ absl::StatusOr<DataProcessorConfig> CreateGemma4DataProcessorConfig(
   if (gemma4.pooling_kernel_size() != default_gemma4.pooling_kernel_size()) {
     config.pooling_kernel_size = gemma4.pooling_kernel_size();
   }
+  if (gemma4.skip_mel_spectrogram_extraction() !=
+      default_gemma4.skip_mel_spectrogram_extraction()) {
+    config.skip_mel_spectrogram_extraction =
+        gemma4.skip_mel_spectrogram_extraction();
+  }
   return config;
 }
 
@@ -271,14 +276,6 @@ absl::StatusOr<DataProcessorConfig> CreateFastVlmDataProcessorConfig(
   }
   FastVlmDataProcessorConfig config;
   proto::FastVlm fast_vlm = model_type.fast_vlm();
-  if (fast_vlm.has_start_of_image_token()) {
-    ASSIGN_OR_RETURN(config.boi_token,
-                     GetTokenString(fast_vlm.start_of_image_token()));
-  }
-  if (fast_vlm.has_end_of_image_token()) {
-    ASSIGN_OR_RETURN(config.eoi_token,
-                     GetTokenString(fast_vlm.end_of_image_token()));
-  }
   const auto& default_fast_vlm = proto::FastVlm::default_instance();
   if (fast_vlm.image_tensor_height() !=
       default_fast_vlm.image_tensor_height()) {
@@ -400,8 +397,7 @@ absl::StatusOr<std::unique_ptr<ModelDataProcessor>> CreateModelDataProcessor(
   } else if (std::holds_alternative<FastVlmDataProcessorConfig>(config)) {
     ABSL_LOG(INFO) << "Creating FastVlmDataProcessor";
     return FastVlmDataProcessor::Create(
-        std::get<FastVlmDataProcessorConfig>(config), preface, tokenizer,
-        stop_token_ids, enable_constrained_decoding);
+        std::get<FastVlmDataProcessorConfig>(config), capabilities);
   } else {
     return absl::InvalidArgumentError("Unsupported data processor config type");
   }

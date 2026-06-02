@@ -84,11 +84,11 @@ absl::Status LitertLmStreamingLoader::LoadHeader() {
   ordered_section_info_.reserve(objects->size());
   for (size_t i = 0; i < objects->size(); ++i) {
     const schema::SectionObject* section = objects->Get(i);
-    ASSIGN_OR_RETURN(auto key_and_constraint,
-                     ExtractBufferKeyAndBackendConstraint(section));
-    ordered_section_info_.push_back({section, key_and_constraint.first,
-                                     key_and_constraint.second, nullptr,
-                                     header_});
+    ASSIGN_OR_RETURN(auto key_and_section_hint,
+                     ExtractBufferKeyAndTfLiteSectionHint(section));
+    ordered_section_info_.push_back(
+        {section, key_and_section_hint.first,
+         key_and_section_hint.second.backend_constraint, nullptr, header_});
   }
 
   // Sort by section begin offset since this is the order the stream will

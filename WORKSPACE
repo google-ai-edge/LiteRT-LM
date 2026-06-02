@@ -2,14 +2,14 @@
 
 workspace(name = "litert_lm")
 
-# UPDATED = 2026-04-27
-LITERT_REF = "47615eb6eaec25e8dfcd1aba922c560a57cba0a2"
+# UPDATED = 2026-06-01
+LITERT_REF = "a412f505023085780a098e777b8eb816c07347f2"
 
-LITERT_SHA256 = "1d198ae395ba47d64dec282602de56b568ea964963861451933f00c6a39fbf2d"
+LITERT_SHA256 = "ecf5c89b916b1736a2f6f043f68ef7a77886b99121afd7ddd4b3625d921de64b"
 
-TENSORFLOW_REF = "49e7f1937d1509dd7fea41bff9ccc994baa97258"
+TENSORFLOW_REF = "f27f017d53a4e81e86d1a1926b9a16bb4df44c82"
 
-TENSORFLOW_SHA256 = "977114079cda0d6aa9d05bc73ae2c2e3d36705fbb041e631a564e4d42e1e1dd9"
+TENSORFLOW_SHA256 = "9f19b7868f33a1ec5b24f505e4672766540e93d6102e8b3dfbc2a8e160e394cb"
 
 # buildifier: disable=load-on-top
 
@@ -102,9 +102,9 @@ tf_workspace3()
 # Details: https://github.com/google-ml-infra/rules_ml_toolchain
 http_archive(
     name = "rules_ml_toolchain",
-    sha256 = "9dbee8f24cc1b430bf9c2a6661ab70cbca89979322ddc7742305a05ff637ab6b",
-    strip_prefix = "rules_ml_toolchain-545c80f1026d526ea9c7aaa410bf0b52c9a82e74",
-    url = "https://github.com/google-ml-infra/rules_ml_toolchain/archive/545c80f1026d526ea9c7aaa410bf0b52c9a82e74.tar.gz",
+    sha256 = "9285d90601757838d064a12f51f14374d40064ddc2fa198979908b6bd0f89348",
+    strip_prefix = "rules_ml_toolchain-7f40603f574b95746152332ef3ad5fce63f1768d",
+    url = "https://github.com/google-ml-infra/rules_ml_toolchain/archive/7f40603f574b95746152332ef3ad5fce63f1768d.tar.gz",
 )
 
 load(
@@ -278,6 +278,7 @@ rust_register_toolchains(
         "aarch64-apple-ios",
         "aarch64-apple-ios-sim",
         "x86_64-linux-android",
+        "x86_64-apple-darwin",
     ],
 )
 
@@ -436,6 +437,24 @@ http_jar(
     url = "https://jcenter.bintray.com/org/glassfish/javax.json/1.0.4/javax.json-1.0.4.jar",
 )
 
+http_archive(
+    name = "skia",
+    patch_args = ["-p1"],
+    patches = ["@//:PATCH.skia"],
+    sha256 = "2fe28173428f8eebf2aa8a665bad32136086cc065f50c7154678a96250d1cde1",
+    strip_prefix = "skia-226ae9d866748a2e68b6dbf114b37129c380a298",
+    urls = ["https://github.com/google/skia/archive/226ae9d866748a2e68b6dbf114b37129c380a298.zip"],
+)
+
+http_archive(
+    name = "skia_user_config",
+    patch_args = ["-p1"],
+    patches = ["@//:PATCH.skia_user_config"],
+    sha256 = "2fe28173428f8eebf2aa8a665bad32136086cc065f50c7154678a96250d1cde1",
+    strip_prefix = "skia-226ae9d866748a2e68b6dbf114b37129c380a298/include/config",
+    urls = ["https://github.com/google/skia/archive/226ae9d866748a2e68b6dbf114b37129c380a298.zip"],
+)
+
 # Android rules. Need latest rules_android_ndk to use NDK 26+.
 load("@rules_android_ndk//:rules.bzl", "android_ndk_repository")
 
@@ -477,6 +496,11 @@ load("@litert//third_party/google_tensor:workspace.bzl", "google_tensor")
 
 google_tensor()
 
+# INTEL OPENVINO ---------------------------------------------------------------------------------
+load("@litert//third_party/intel_openvino:openvino.bzl", "openvino_configure")
+
+openvino_configure()
+
 http_archive(
     name = "nanobind_json",
     build_file = "@//:BUILD.nanobind_json",
@@ -490,9 +514,44 @@ load("@rules_python//python:pip.bzl", "pip_parse")
 
 pip_parse(
     name = "custom_pip_deps",
+    extra_pip_args = ["--index-url=https://pypi.org/simple"],
     requirements_lock = "//:requirements.txt",
 )
 
 load("@custom_pip_deps//:requirements.bzl", install_custom_deps = "install_deps")
 
 install_custom_deps()
+
+# DirectX Shader Compiler DLLs for Windows
+http_archive(
+    name = "directx_shader_compiler",
+    build_file = "@//:BUILD.directx_shader_compiler",
+    sha256 = "a1e89031421cf3c1fca6627766ab3020ca4f962ac7e2caa7fab2b33a8436151e",
+    url = "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2602/dxc_2026_02_20.zip",
+)
+
+http_archive(
+    name = "patchelf_linux_x86_64",
+    build_file_content = """
+filegroup(
+    name = "patchelf",
+    srcs = ["bin/patchelf"],
+    visibility = ["//visibility:public"],
+)
+""",
+    sha256 = "ce84f2447fb7a8679e58bc54a20dc2b01b37b5802e12c57eece772a6f14bf3f0",
+    url = "https://github.com/NixOS/patchelf/releases/download/0.18.0/patchelf-0.18.0-x86_64.tar.gz",
+)
+
+http_archive(
+    name = "patchelf_linux_arm64",
+    build_file_content = """
+filegroup(
+    name = "patchelf",
+    srcs = ["bin/patchelf"],
+    visibility = ["//visibility:public"],
+)
+""",
+    sha256 = "ae13e2effe077e829be759182396b931d8f85cfb9cfe9d49385516ea367ef7b2",
+    url = "https://github.com/NixOS/patchelf/releases/download/0.18.0/patchelf-0.18.0-aarch64.tar.gz",
+)

@@ -72,10 +72,12 @@ absl::StatusOr<Message> Qwen3DataProcessor::ToMessageImpl(
       !std::get<JsonPreface>(*preface_).tools.empty()) {
     ASSIGN_OR_RETURN(
         nlohmann::ordered_json content_and_tool_calls,
-        ParseTextAndToolCalls(response_text, config_.code_fence_start,
-                              config_.code_fence_end, SyntaxType::kJson,
-                              config_.escape_fence_strings,
-                              config_.tool_code_regex));
+        ParseTextAndToolCalls(
+            response_text, config_.code_fence_start, config_.code_fence_end,
+            SyntaxType::kJson,
+            {.escape_fence_strings = config_.escape_fence_strings,
+             .tool_code_regex = config_.tool_code_regex,
+             .return_error_on_parse_failure = ReturnErrorOnParseFailure()}));
     if (content_and_tool_calls.contains("content")) {
       message["content"] = content_and_tool_calls["content"];
     }

@@ -19,6 +19,7 @@
 
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "runtime/util/scoped_file.h"
 
 namespace litert::lm {
 
@@ -41,6 +42,8 @@ absl::string_view Dirname(absl::string_view path);
 // Returns a unique identifier for the file based on its metadata (timestamp
 // + file size).
 absl::StatusOr<std::string> GetFileCacheIdentifier(absl::string_view path);
+absl::StatusOr<std::string> GetFileCacheIdentifier(
+    const ScopedFile& scoped_file);
 
 // Returns true if the file exists.
 bool FileExists(absl::string_view path);

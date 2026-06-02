@@ -58,13 +58,6 @@ void PopulateDefaultGemma3N(proto::Gemma3N& gemma3n) {
   gemma3n.mutable_end_of_audio_token()->set_token_str("<end_of_audio>");
 }
 
-void PopulateDefaultFastVlm(proto::FastVlm& fast_vlm) {
-  fast_vlm.mutable_start_of_image_token()->set_token_str("<start_of_image>");
-  fast_vlm.mutable_end_of_image_token()->set_token_str("<end_of_image>");
-  fast_vlm.set_image_tensor_height(1024);
-  fast_vlm.set_image_tensor_width(1024);
-}
-
 absl::StatusOr<proto::LlmModelType> CreateModelType(
     const std::string& start_turn_text, Tokenizer* tokenizer) {
   if (tokenizer == nullptr) {
@@ -80,9 +73,6 @@ absl::StatusOr<proto::LlmModelType> CreateModelType(
     return model_type;
   } else if (IsGemma3Model(start_turn_text, audio_token_ids)) {
     model_type.mutable_gemma3();
-    return model_type;
-  } else if (absl::StrContains(start_turn_text, "<|im_start|>")) {
-    PopulateDefaultFastVlm(*model_type.mutable_fast_vlm());
     return model_type;
   } else {
     model_type.mutable_generic_model();
@@ -401,25 +391,25 @@ absl::StatusOr<std::string> GetDefaultJinjaPromptTemplate(
                            prompt_templates.system().suffix()),
           absl::Substitute("{%- if message.role == 'user' %}"
                            "$0"
-                           "{% elif message.role == \'model\' %}"
+                           "{% elif message.role == 'model' %}"
                            "$1"
-                           "{% elif message.role == \'system\' %}"
+                           "{% elif message.role == 'system' %}"
                            "$2"
                            "{% endif -%}"
-                           "{%- for item in message[\'content\'] %}"
-                           "{%- if item[\'type\'] == \'text\' %}"
-                           "{{ item[\'text\'] }}"
-                           "{% elif item[\'type\'] == \'image\' -%}"
+                           "{%- for item in message['content'] %}"
+                           "{%- if item['type'] == 'text' %}"
+                           "{{ item['text'] }}"
+                           "{% elif item['type'] == 'image' -%}"
                            "<image_soft_token>"
-                           "{%- elif item[\'type\'] == \'audio\' -%}"
+                           "{%- elif item['type'] == 'audio' -%}"
                            ""
                            "{%- endif -%}"
                            "{%- endfor -%}"
-                           "{%- if message.role == \'user\' %}"
+                           "{%- if message.role == 'user' %}"
                            "$3"
-                           "{% elif message.role == \'model\' %}"
+                           "{% elif message.role == 'model' %}"
                            "$4"
-                           "{% elif message.role == \'system\' %}"
+                           "{% elif message.role == 'system' %}"
                            "$5"
                            "{% endif -%}"
                            "{%- endif -%}"

@@ -15,6 +15,9 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_LLM_EXECUTOR_BASE_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_LLM_EXECUTOR_BASE_H_
 
+#include <cstdint>
+#include <memory>
+#include <optional>
 #include <vector>
 
 #include "absl/status/status.h"  // from @com_google_absl
@@ -24,6 +27,7 @@
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/executor/llm_executor_io_types.h"
+#include "runtime/executor/llm_executor_processed_tokens.h"
 #include "runtime/executor/llm_executor_settings.h"
 
 namespace litert::lm {
@@ -115,16 +119,53 @@ class LlmExecutorBase {
                      ExecutorBackendName()));
   };
 
-  // Gets the litert environment used by the executor.
-  // This is used by AICore's EmbeddingModelMldrift to convert tokens to
-  // TensorBuffers.
-  virtual ::litert::Environment* GetEnvironment() const { return nullptr; };
-
   // Updates the executor settings.
   virtual absl::Status UpdateExecutorSettings(
       const LlmExecutorSettings& executor_settings) {
     return absl::OkStatus();
   }
+
+  // Gets the runtime configuration.
+  virtual absl::StatusOr<RuntimeConfig> GetRuntimeConfig() const {
+    return absl::UnimplementedError(
+        absl::StrCat("GetRuntimeConfig not implemented for backend: ",
+                     ExecutorBackendName()));
+  };
+
+  // Updates the runtime configuration.
+  virtual absl::Status UpdateRuntimeConfig(
+      const RuntimeConfig& runtime_config) {
+    return absl::UnimplementedError(
+        absl::StrCat("UpdateRuntimeConfig not implemented for backend: ",
+                     ExecutorBackendName()));
+  };
+
+  // Gets the runtime state.
+  virtual absl::StatusOr<RuntimeState> GetRuntimeState() const {
+    return absl::UnimplementedError(
+        absl::StrCat("GetRuntimeState not implemented for backend: ",
+                     ExecutorBackendName()));
+  };
+
+  // Updates the runtime state.
+  virtual absl::Status UpdateRuntimeState(const RuntimeState& runtime_state) {
+    return absl::UnimplementedError(
+        absl::StrCat("UpdateRuntimeState not implemented for backend: ",
+                     ExecutorBackendName()));
+  };
+
+  // Gets the processed tokens of the executor. This is used by resource manager
+  // to check if processed context copying is needed.
+  virtual absl::StatusOr<const ProcessedTokens*> GetProcessedTokens() const {
+    return absl::UnimplementedError(
+        absl::StrCat("processed_tokens not implemented for backend: ",
+                     ExecutorBackendName()));
+  }
+
+  // Gets the litert environment used by the executor.
+  // This is used by AICore's EmbeddingModelMldrift to convert tokens to
+  // TensorBuffers.
+  virtual ::litert::Environment* GetEnvironment() const { return nullptr; };
 
   // ------------Vision APIs------------:
   // This function will populate the GPU tensors with the vision embeddings and
@@ -146,6 +187,30 @@ class LlmExecutorBase {
   virtual absl::Status Reset() {
     return absl::UnimplementedError(absl::StrCat(
         "Reset not implemented for backend: ", ExecutorBackendName()));
+  };
+
+  // ------------State/context management APIs------------:
+  // Creates a new context with the given configs.
+  virtual absl::StatusOr<std::unique_ptr<LlmContext>> CreateNewContext(
+      std::optional<uint32_t> lora_id, RuntimeConfig runtime_config) const {
+    return absl::UnimplementedError(
+        absl::StrCat("CreateNewContext not implemented for backend: ",
+                     ExecutorBackendName()));
+  };
+
+  // Performs necessary operations to clone the current llm context from the
+  // executor and returns it to the caller.
+  virtual absl::StatusOr<std::unique_ptr<LlmContext>> CloneContext() const {
+    return absl::UnimplementedError(absl::StrCat(
+        "GetContext not implemented for backend: ", ExecutorBackendName()));
+  };
+
+  // Sets the llm_context and performs necessary operations to make sure the
+  // model is restored with the provided llm context.
+  virtual absl::Status RestoreContext(
+      std::unique_ptr<LlmContext> context_data) {
+    return absl::UnimplementedError(absl::StrCat(
+        "RestoreContext not implemented for backend: ", ExecutorBackendName()));
   };
 };
 

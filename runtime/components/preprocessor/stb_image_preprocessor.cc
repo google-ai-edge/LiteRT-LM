@@ -46,6 +46,10 @@
 
 namespace litert::lm {
 
+std::unique_ptr<ImagePreprocessor> ImagePreprocessor::Create() {
+  return std::make_unique<StbImagePreprocessor>();
+}
+
 namespace {
 
 // The desired number of channels for the image encoder. If the input image has

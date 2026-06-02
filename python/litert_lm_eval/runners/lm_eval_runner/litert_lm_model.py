@@ -26,8 +26,8 @@ import litert_lm
 
 # Map string backend to litert_lm.Backend enum.
 _BACKEND_MAP = {
-    "CPU": litert_lm.Backend.CPU,
-    "GPU": litert_lm.Backend.GPU,
+    "CPU": litert_lm.Backend.CPU(),
+    "GPU": litert_lm.Backend.GPU(),
 }
 
 # Define the placeholder used by the evaluation harness.
@@ -53,13 +53,13 @@ class LitertLmModelRunner(LM):
     self.max_num_tokens = max_num_tokens
 
     # Default all modalities to the main backend if not specified.
-    self.backend = _BACKEND_MAP.get(backend.upper(), litert_lm.Backend.CPU)
+    self.backend = _BACKEND_MAP.get(backend.upper(), litert_lm.Backend.CPU())
 
     # Extract optional specialized backends if present in kwargs.
     self.vision_backend = None
     if "vision_backend" in kwargs:
       self.vision_backend = _BACKEND_MAP.get(
-          kwargs["vision_backend"].upper(), litert_lm.Backend.CPU
+          kwargs["vision_backend"].upper(), litert_lm.Backend.CPU()
       )
 
     self.engine = litert_lm.Engine(

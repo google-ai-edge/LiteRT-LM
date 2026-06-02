@@ -153,6 +153,8 @@ class Engine(val engineConfig: EngineConfig) : AutoCloseable {
           ExperimentalFlags.enableConversationConstrainedDecoding,
           ExperimentalFlags.filterChannelContentFromKvCache,
           ExperimentalFlags.overwritePromptTemplate,
+          conversationConfig.loraConfig?.loraPath,
+          conversationConfig.loraConfig?.audioLoraPath,
         ),
         toolManager,
         conversationConfig.automaticToolCalling,
@@ -172,7 +174,14 @@ class Engine(val engineConfig: EngineConfig) : AutoCloseable {
       checkInitialized()
 
       // Using !! is okay. Checked initialization already.
-      return Session(LiteRtLmJni.nativeCreateSession(handle!!, sessionConfig.samplerConfig))
+      return Session(
+        LiteRtLmJni.nativeCreateSession(
+          handle!!,
+          sessionConfig.samplerConfig,
+          sessionConfig.loraConfig?.loraPath,
+          sessionConfig.loraConfig?.audioLoraPath,
+        )
+      )
     }
   }
 

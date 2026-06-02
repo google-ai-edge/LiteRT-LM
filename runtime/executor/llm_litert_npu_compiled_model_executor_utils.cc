@@ -20,17 +20,26 @@
 #include <cstdio>
 #include <cstring>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
+#include "absl/base/prefetch.h"  // from @com_google_absl
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
-#include "absl/base/prefetch.h"  // from @com_google_absl
+#include "litert/c/litert_layout.h"  // from @litert
+#include "litert/cc/litert_layout.h"  // from @litert
 
 #if defined(__ANDROID__) && defined(__ARM_NEON)
 #include <arm_neon.h>
 
 #include <limits>  // IWYU pragma: keep
+#endif
+
+#if defined(__x86_64__) || defined(_M_X64)
+#include <emmintrin.h>  // SSE2 NOLINT
+
+#include <limits>  // IWYU pragma: keep NOLINT
 #endif
 
 #include "absl/status/status.h"  // from @com_google_absl
@@ -40,43 +49,55 @@
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "runtime/util/status_macros.h"
 
 namespace litert::lm {
 
+static constexpr int kSliceOuterRank = 2;
 #if defined(__ANDROID__) && defined(__ARM_NEON)
 int FindMaxIndexFloatNeon(const float* data, int size) {
   if (size <= 0) return 0;
+
   float32x4_t max_v4 = vdupq_n_f32(-std::numeric_limits<float>::infinity());
+  uint32x4_t max_i4 = vdupq_n_u32(0);
+  uint32x4_t curr_i4 = {0, 1, 2, 3};
+  uint32x4_t step4 = vdupq_n_u32(4);
+
   int i = 0;
   for (; i <= size - 4; i += 4) {
-    max_v4 = vmaxq_f32(max_v4, vld1q_f32(data + i));
-  }
-  float max_vals_arr[4];
-  vst1q_f32(max_vals_arr, max_v4);
-  float max_v = max_vals_arr[0];
-  for (int j = 1; j < 4; ++j) {
-    if (max_vals_arr[j] > max_v) max_v = max_vals_arr[j];
-  }
-  for (; i < size; ++i) {
-    if (data[i] > max_v) max_v = data[i];
+    float32x4_t v4 = vld1q_f32(data + i);
+    uint32x4_t mask = vcgtq_f32(v4, max_v4);
+    // Update max values and their corresponding indices in one pass.
+    max_v4 = vmaxq_f32(v4, max_v4);
+    max_i4 = vbslq_u32(mask, curr_i4, max_i4);
+    curr_i4 = vaddq_u32(curr_i4, step4);
   }
 
-  // Second pass: find first index with max_v
-  float32x4_t target = vdupq_n_f32(max_v);
-  for (i = 0; i <= size - 4; i += 4) {
-    uint32x4_t cmp = vceqq_f32(vld1q_f32(data + i), target);
-    uint32_t mask[4];
-    vst1q_u32(mask, cmp);
-    if (mask[0] || mask[1] || mask[2] || mask[3]) {
-      for (int j = 0; j < 4; ++j) {
-        if (mask[j]) return i + j;
-      }
+  // Reduce the 4-lane registers to a single max value and index.
+  float max_vals[4];
+  uint32_t max_idxs[4];
+  vst1q_f32(max_vals, max_v4);
+  vst1q_u32(max_idxs, max_i4);
+
+  float max_v = max_vals[0];
+  int max_idx = max_idxs[0];
+  for (int j = 1; j < 4; ++j) {
+    if (max_vals[j] > max_v) {
+      max_v = max_vals[j];
+      max_idx = max_idxs[j];
+    } else if (max_vals[j] == max_v) {
+      max_idx = std::min(max_idx, (int)max_idxs[j]);
     }
   }
+
+  // Handle remaining elements.
   for (; i < size; ++i) {
-    if (data[i] == max_v) return i;
+    if (data[i] > max_v) {
+      max_v = data[i];
+      max_idx = i;
+    }
   }
-  return 0;
+  return max_idx;
 }
 
 int FindMaxIndexInt16Neon(const int16_t* data, int size) {
@@ -156,6 +177,132 @@ int FindMaxIndexInt8Neon(const int8_t* data, int size) {
 }
 #endif
 
+#if defined(__x86_64__) || defined(_M_X64)
+int FindMaxIndexSse2Float(const float* data, int size) {
+  if (size <= 0) return 0;
+  __m128 max_v4 = _mm_set1_ps(-std::numeric_limits<float>::infinity());
+  int i = 0;
+  for (; i <= size - 4; i += 4) {
+    max_v4 = _mm_max_ps(max_v4, _mm_loadu_ps(data + i));
+  }
+  // Horizontal max reduction.
+  __m128 shuf = _mm_shuffle_ps(max_v4, max_v4, _MM_SHUFFLE(2, 3, 0, 1));
+  max_v4 = _mm_max_ps(max_v4, shuf);
+  shuf = _mm_shuffle_ps(max_v4, max_v4, _MM_SHUFFLE(1, 0, 3, 2));
+  max_v4 = _mm_max_ps(max_v4, shuf);
+  float max_v;
+  _mm_store_ss(&max_v, max_v4);
+  for (; i < size; ++i) {
+    if (data[i] > max_v) max_v = data[i];
+  }
+
+  // Second pass: find first index matching max_v.
+  __m128 target = _mm_set1_ps(max_v);
+  for (i = 0; i <= size - 4; i += 4) {
+    int mask = _mm_movemask_ps(_mm_cmpeq_ps(_mm_loadu_ps(data + i), target));
+    if (mask) {
+      for (int j = 0; j < 4; ++j) {
+        if (mask & (1 << j)) return i + j;
+      }
+    }
+  }
+  for (; i < size; ++i) {
+    if (data[i] == max_v) return i;
+  }
+  return 0;
+}
+
+int FindMaxIndexSse2Int16(const int16_t* data, int size) {
+  // NOLINTBEGIN
+  if (size <= 0) return 0;
+  __m128i max_v8 = _mm_set1_epi16(std::numeric_limits<int16_t>::lowest());
+  int i = 0;
+  for (; i <= size - 8; i += 8) {
+    max_v8 = _mm_max_epi16(
+        max_v8, _mm_loadu_si128(reinterpret_cast<const __m128i*>(data + i)));
+  }
+  // Horizontal max reduction.
+  __m128i shuf =
+      _mm_shufflehi_epi16(_mm_shufflelo_epi16(max_v8, _MM_SHUFFLE(1, 0, 3, 2)),
+                          _MM_SHUFFLE(1, 0, 3, 2));
+  max_v8 = _mm_max_epi16(max_v8, shuf);
+  shuf = _mm_shuffle_epi32(max_v8, _MM_SHUFFLE(1, 0, 3, 2));
+  max_v8 = _mm_max_epi16(max_v8, shuf);
+  shuf = _mm_shufflelo_epi16(max_v8, _MM_SHUFFLE(0, 1, 2, 3));
+  max_v8 = _mm_max_epi16(max_v8, shuf);
+  int16_t max_v = static_cast<int16_t>(_mm_extract_epi16(max_v8, 0));
+  for (; i < size; ++i) {
+    if (data[i] > max_v) max_v = data[i];
+  }
+
+  // Second pass: find first index matching max_v.
+  __m128i target = _mm_set1_epi16(max_v);
+  for (i = 0; i <= size - 8; i += 8) {
+    __m128i cmp = _mm_cmpeq_epi16(
+        _mm_loadu_si128(reinterpret_cast<const __m128i*>(data + i)), target);
+    int mask = _mm_movemask_epi8(cmp);
+    if (mask) {
+      // Each int16 produces 2 bits in the mask; check every other bit.
+      for (int j = 0; j < 8; ++j) {
+        if (mask & (1 << (j * 2))) return i + j;
+      }
+    }
+  }
+  for (; i < size; ++i) {
+    if (data[i] == max_v) return i;
+  }
+  return 0;
+}
+
+int FindMaxIndexSse2Int8(const int8_t* data, int size) {
+  if (size <= 0) return 0;
+  // SSE2 only has _mm_max_epu8 (unsigned). XOR with 0x80 to convert signed
+  // comparison to unsigned: signed_max(a,b) == unsigned_max(a^0x80, b^0x80).
+  __m128i bias = _mm_set1_epi8(static_cast<char>(0x80));
+  __m128i max_v16 = _mm_set1_epi8(0);  // lowest unsigned after bias
+  int i = 0;
+  for (; i <= size - 16; i += 16) {
+    __m128i vals = _mm_xor_si128(
+        _mm_loadu_si128(reinterpret_cast<const __m128i*>(data + i)), bias);
+    max_v16 = _mm_max_epu8(max_v16, vals);
+  }
+  // Horizontal max reduction (16 bytes → 8 → 4 → 2 → 1).
+  __m128i shuf = _mm_shuffle_epi32(max_v16, _MM_SHUFFLE(1, 0, 3, 2));
+  max_v16 = _mm_max_epu8(max_v16, shuf);
+  shuf = _mm_shuffle_epi32(max_v16, _MM_SHUFFLE(0, 0, 0, 1));
+  max_v16 = _mm_max_epu8(max_v16, shuf);
+  shuf = _mm_shufflelo_epi16(max_v16, _MM_SHUFFLE(0, 0, 0, 1));
+  max_v16 = _mm_max_epu8(max_v16, shuf);
+  shuf = _mm_srli_epi16(max_v16, 8);
+  max_v16 = _mm_max_epu8(max_v16, shuf);
+  // Extract lowest byte and convert back to signed.
+  uint8_t max_unsigned =
+      static_cast<uint8_t>(_mm_extract_epi16(max_v16, 0) & 0xFF);
+  int8_t max_v = static_cast<int8_t>(max_unsigned ^ 0x80);
+  for (; i < size; ++i) {
+    if (data[i] > max_v) max_v = data[i];
+  }
+
+  // Second pass: find first index matching max_v.
+  __m128i target = _mm_set1_epi8(max_v);
+  for (i = 0; i <= size - 16; i += 16) {
+    __m128i cmp = _mm_cmpeq_epi8(
+        _mm_loadu_si128(reinterpret_cast<const __m128i*>(data + i)), target);
+    int mask = _mm_movemask_epi8(cmp);
+    if (mask) {
+      for (int j = 0; j < 16; ++j) {
+        if (mask & (1 << j)) return i + j;
+      }
+    }
+  }
+  for (; i < size; ++i) {
+    if (data[i] == max_v) return i;
+  }
+  return 0;
+  // NOLINTEND
+}
+#endif
+
 absl::StatusOr<int> ApplyGreedySampling(::litert::TensorBuffer& decoded_logits,
                                         bool use_neon_sampling) {
   LITERT_ASSIGN_OR_RETURN(::litert::RankedTensorType logits_tensor_type,
@@ -175,31 +322,69 @@ absl::StatusOr<int> ApplyGreedySampling(::litert::TensorBuffer& decoded_logits,
 
 absl::Status HWKVCacheUpdate(
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& in_buffers,
-    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-        out_buffers) {
+    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& out_buffers,
+    const absl::flat_hash_map<absl::string_view, HWQuantParams>& quant_params) {
   static constexpr absl::string_view kInputPos = "input_pos";
+  if (!in_buffers.contains(kInputPos)) {
+    return absl::InvalidArgumentError("Missing input_pos buffer");
+  }
   auto& input_pos_buffer = in_buffers.at(kInputPos);
+
+  LITERT_ASSIGN_OR_RETURN(auto pos_type, input_pos_buffer.TensorType());
+  LITERT_ASSIGN_OR_RETURN(size_t pos_num_elements,
+                          pos_type.Layout().NumElements());
+  if (pos_num_elements == 0) {
+    return absl::InvalidArgumentError("input_pos buffer is empty");
+  }
 
   LITERT_ASSIGN_OR_RETURN(
       auto pos_lock,
       ::litert::TensorBufferScopedLock::Create(
           input_pos_buffer, ::litert::TensorBuffer::LockMode::kRead));
+  if (pos_lock.second == nullptr) {
+    return absl::InternalError("Failed to lock input_pos buffer");
+  }
   int start_pos = static_cast<const int32_t*>(pos_lock.second)[0];
+  if (start_pos < 0) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("input_pos must be non-negative: ", start_pos));
+  }
 
-  auto perform_update =
-      [&](::litert::TensorBuffer& cache,
-          const ::litert::TensorBuffer& slice) -> absl::Status {
+  auto perform_update = [&](::litert::TensorBuffer& cache,
+                            const ::litert::RankedTensorType& slice_type,
+                            const void* slice_ptr,
+                            size_t slice_bytes) -> absl::Status {
     LITERT_ASSIGN_OR_RETURN(auto cache_type, cache.TensorType());
-    LITERT_ASSIGN_OR_RETURN(auto slice_type, slice.TensorType());
-    auto cache_dims = cache_type.Layout().Dimensions();
-    auto slice_dims = slice_type.Layout().Dimensions();
+
     int cache_rank = cache_type.Layout().Rank();
     int slice_rank = slice_type.Layout().Rank();
+    if (cache_rank < 2 || slice_rank < 2) {
+      return absl::InvalidArgumentError("Cache and slice must have rank >= 2");
+    }
+
+    auto cache_dims = cache_type.Layout().Dimensions();
+    auto slice_dims = slice_type.Layout().Dimensions();
 
     LITERT_ASSIGN_OR_RETURN(size_t cache_bytes, cache.Size());
-    LITERT_ASSIGN_OR_RETURN(size_t num_elements,
+
+    if (cache_type.ElementType() != slice_type.ElementType()) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("Cache and slice element types do not match: ",
+                       (int)cache_type.ElementType(), " vs ",
+                       (int)slice_type.ElementType()));
+    }
+
+    auto byte_width = ::litert::GetByteWidth(cache_type.ElementType());
+    if (!byte_width.has_value()) {
+      return absl::InvalidArgumentError("Unsupported cache element type");
+    }
+    size_t element_size = byte_width->NumBytes();
+
+    LITERT_ASSIGN_OR_RETURN(size_t cache_num_elements,
                             cache_type.Layout().NumElements());
-    size_t element_size = cache_bytes / num_elements;
+    if (cache_num_elements == 0) {
+      return absl::InvalidArgumentError("Cache layout has 0 elements");
+    }
 
     // Assume hidden_dim is the smaller of the last two dimensions of cache.
     int cache_last_dim = cache_dims[cache_rank - 1];
@@ -235,28 +420,55 @@ absl::Status HWKVCacheUpdate(
       return absl::OutOfRangeError("KV-cache update out of range");
     }
 
+    // static constexpr int kSliceOuterRank = 2;
+    int64_t cache_outer_size = 1;
+    for (int i = 0; i < cache_rank - kSliceOuterRank; ++i) {
+      cache_outer_size *= cache_dims[i];
+    }
+    int64_t slice_outer_size = 1;
+    for (int i = 0; i < slice_rank - kSliceOuterRank; ++i) {
+      slice_outer_size *= slice_dims[i];
+    }
+    if (cache_outer_size != slice_outer_size) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "Cache and slice outer sizes do not match: ", cache_outer_size,
+          " vs ", slice_outer_size));
+    }
+
+    size_t expected_cache_size =
+        cache_outer_size * cache_seq * hidden_dim * element_size;
+    if (cache_bytes < expected_cache_size) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("Cache buffer size is too small: ", cache_bytes,
+                       " vs expected ", expected_cache_size));
+    }
+    size_t expected_slice_size =
+        slice_outer_size * slice_seq * hidden_dim * element_size;
+    if (slice_bytes < expected_slice_size) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("Slice buffer size is too small: ", slice_bytes,
+                       " vs expected ", expected_slice_size));
+    }
+
     LITERT_ASSIGN_OR_RETURN(
         auto cache_lock, ::litert::TensorBufferScopedLock::Create(
                              cache, ::litert::TensorBuffer::LockMode::kWrite));
-    LITERT_ASSIGN_OR_RETURN(
-        auto slice_lock, ::litert::TensorBufferScopedLock::Create(
-                             slice, ::litert::TensorBuffer::LockMode::kRead));
+
+    if (cache_lock.second == nullptr || slice_ptr == nullptr) {
+      return absl::InternalError(
+          "Failed to lock cache or slice pointer is null");
+    }
 
     uint8_t* cache_ptr = static_cast<uint8_t*>(cache_lock.second);
-    const uint8_t* slice_ptr = static_cast<const uint8_t*>(slice_lock.second);
+    const uint8_t* s_ptr_base = static_cast<const uint8_t*>(slice_ptr);
 
     bool cache_is_transposed = (cache_seq_dim == cache_rank - 1);
     bool slice_is_transposed = (slice_seq_dim == slice_rank - 1);
 
-    int64_t outer_size = 1;
-    for (int i = 0; i < cache_rank - 2; ++i) {
-      outer_size *= cache_dims[i];
-    }
-
-    for (int64_t o = 0; o < outer_size; ++o) {
+    for (int64_t o = 0; o < cache_outer_size; ++o) {
       uint8_t* c_ptr = cache_ptr + o * (cache_seq * hidden_dim * element_size);
       const uint8_t* s_ptr =
-          slice_ptr + o * (slice_seq * hidden_dim * element_size);
+          s_ptr_base + o * (slice_seq * hidden_dim * element_size);
 
       if (!cache_is_transposed) {
         if (!slice_is_transposed || slice_seq == 1) {
@@ -349,39 +561,175 @@ absl::Status HWKVCacheUpdate(
     return absl::OkStatus();
   };
 
-  for (int layer_id = 0;; ++layer_id) {
-    char k_cache_name[32];
-    snprintf(k_cache_name, sizeof(k_cache_name), "kv_cache_k_%d", layer_id);
-    if (!in_buffers.contains(k_cache_name)) break;
+  std::vector<float> dequantized_slice_scratch;
+  auto run_single_update =
+      [&](::litert::TensorBuffer& cache, const ::litert::TensorBuffer& slice,
+          const RankedTensorType& cache_type,
+          const RankedTensorType& slice_type, absl::string_view cache_name,
+          absl::string_view slice_name) -> absl::Status {
+    LITERT_ASSIGN_OR_RETURN(auto slice_lock,
+                            ::litert::TensorBufferScopedLock::Create(
+                                const_cast<::litert::TensorBuffer&>(slice),
+                                ::litert::TensorBuffer::LockMode::kRead));
+    if (slice_lock.second == nullptr) {
+      return absl::InternalError(
+          absl::StrCat("Failed to lock slice buffer for ", slice_name));
+    }
 
-    char v_cache_name[32];
-    snprintf(v_cache_name, sizeof(v_cache_name), "kv_cache_v_%d", layer_id);
-    char k_slice_name[32];
-    snprintf(k_slice_name, sizeof(k_slice_name), "kv_slice_k_%d", layer_id);
-    char v_slice_name[32];
-    snprintf(v_slice_name, sizeof(v_slice_name), "kv_slice_v_%d", layer_id);
+    LITERT_ASSIGN_OR_RETURN(size_t slice_bytes, slice.Size());
 
-    auto& in_k_cache = in_buffers.at(k_cache_name);
-    auto& in_v_cache = in_buffers.at(v_cache_name);
-    const auto& k_slice = in_buffers.at(k_slice_name);
-    const auto& v_slice = in_buffers.at(v_slice_name);
+    if (cache_type.ElementType() != slice_type.ElementType()) {
+      if (cache_type.ElementType() == ::litert::ElementType::Float32 &&
+          slice_type.ElementType() == ::litert::ElementType::Int16) {
+        // Dequantize Int16 to Float32
+        LITERT_ASSIGN_OR_RETURN(size_t num_elements,
+                                slice_type.Layout().NumElements());
+        dequantized_slice_scratch.resize(num_elements);
 
-    LITERT_RETURN_IF_ERROR(perform_update(in_k_cache, k_slice));
-    LITERT_RETURN_IF_ERROR(perform_update(in_v_cache, v_slice));
+        float scale = 1.0f;
+        int64_t zero_point = 0;
+        std::string s_name = std::string(slice_name);
+        if (quant_params.contains(s_name)) {
+          scale = quant_params.at(s_name).scale;
+          zero_point = quant_params.at(s_name).zero_point;
+        }
 
-    if (out_buffers.contains(k_cache_name)) {
-      auto& out_k_cache = out_buffers.at(k_cache_name);
-      if (in_k_cache.Get() != out_k_cache.Get()) {
-        LITERT_RETURN_IF_ERROR(perform_update(out_k_cache, k_slice));
+        const int16_t* src = static_cast<const int16_t*>(slice_lock.second);
+        for (size_t i = 0; i < num_elements; ++i) {
+          dequantized_slice_scratch[i] =
+              (static_cast<float>(src[i]) - zero_point) * scale;
+        }
+
+        RankedTensorType dequantized_slice_type(
+            ::litert::ElementType::Float32,
+            ::litert::Layout(
+                static_cast<const LiteRtLayout&>(slice_type.Layout())));
+        size_t dequantized_slice_bytes = num_elements * sizeof(float);
+
+        auto status = perform_update(cache, dequantized_slice_type,
+                                     dequantized_slice_scratch.data(),
+                                     dequantized_slice_bytes);
+        if (!status.ok()) {
+          return absl::Status(
+              status.code(),
+              absl::StrCat("Failed updating ", cache_name, " with ", slice_name,
+                           " (dequantized): ", status.message()));
+        }
+      } else {
+        return absl::InvalidArgumentError(
+            absl::StrCat("Unsupported type mismatch for ", cache_name, " vs ",
+                         slice_name, ": ", (int)cache_type.ElementType(),
+                         " vs ", (int)slice_type.ElementType()));
+      }
+    } else {
+      // Direct update
+      auto status =
+          perform_update(cache, slice_type, slice_lock.second, slice_bytes);
+      if (!status.ok()) {
+        return absl::Status(
+            status.code(),
+            absl::StrCat("Failed updating ", cache_name, " with ", slice_name,
+                         ": ", status.message()));
       }
     }
-    if (out_buffers.contains(v_cache_name)) {
-      auto& out_v_cache = out_buffers.at(v_cache_name);
-      if (in_v_cache.Get() != out_v_cache.Get()) {
-        LITERT_RETURN_IF_ERROR(perform_update(out_v_cache, v_slice));
+    return absl::OkStatus();
+  };
+
+  auto perform_copy = [](::litert::TensorBuffer& dest,
+                         const ::litert::TensorBuffer& src) -> absl::Status {
+    LITERT_ASSIGN_OR_RETURN(size_t dest_bytes, dest.Size());
+    LITERT_ASSIGN_OR_RETURN(size_t src_bytes, src.Size());
+    if (dest_bytes != src_bytes) {
+      return absl::InvalidArgumentError("Buffer size mismatch for copy");
+    }
+    LITERT_ASSIGN_OR_RETURN(
+        auto dest_lock, ::litert::TensorBufferScopedLock::Create(
+                            dest, ::litert::TensorBuffer::LockMode::kWrite));
+    LITERT_ASSIGN_OR_RETURN(auto src_lock,
+                            ::litert::TensorBufferScopedLock::Create(
+                                src, ::litert::TensorBuffer::LockMode::kRead));
+    std::memcpy(dest_lock.second, src_lock.second, dest_bytes);
+    return absl::OkStatus();
+  };
+
+  for (const auto& [name, buffer] : in_buffers) {
+    if (name.starts_with("kv_cache_k_")) {
+      int layer_id = std::stoi(std::string(name).substr(11));
+      char v_cache_name[32];
+      snprintf(v_cache_name, sizeof(v_cache_name), "kv_cache_v_%d", layer_id);
+      char k_slice_name[32];
+      snprintf(k_slice_name, sizeof(k_slice_name), "kv_slice_k_%d", layer_id);
+      char v_slice_name[32];
+      snprintf(v_slice_name, sizeof(v_slice_name), "kv_slice_v_%d", layer_id);
+
+      if (!in_buffers.contains(v_cache_name) ||
+          !in_buffers.contains(k_slice_name) ||
+          !in_buffers.contains(v_slice_name)) {
+        return absl::FailedPreconditionError(absl::StrCat(
+            "Missing matching K/V cache/slice buffers for layer ", layer_id));
+      }
+
+      auto& in_k_cache = in_buffers.at(name);
+      auto& in_v_cache = in_buffers.at(v_cache_name);
+      const auto& k_slice = in_buffers.at(k_slice_name);
+      const auto& v_slice = in_buffers.at(v_slice_name);
+
+      LITERT_ASSIGN_OR_RETURN(auto k_cache_type, in_k_cache.TensorType());
+      LITERT_ASSIGN_OR_RETURN(auto v_cache_type, in_v_cache.TensorType());
+      LITERT_ASSIGN_OR_RETURN(auto k_slice_type, k_slice.TensorType());
+      LITERT_ASSIGN_OR_RETURN(auto v_slice_type, v_slice.TensorType());
+
+      LITERT_RETURN_IF_ERROR(run_single_update(
+          in_k_cache, k_slice, k_cache_type, k_slice_type, name, k_slice_name));
+      LITERT_RETURN_IF_ERROR(run_single_update(in_v_cache, v_slice,
+                                               v_cache_type, v_slice_type,
+                                               v_cache_name, v_slice_name));
+
+      if (out_buffers.contains(name)) {
+        auto& out_k_cache = out_buffers.at(name);
+        if (in_k_cache.Get() != out_k_cache.Get()) {
+          LITERT_RETURN_IF_ERROR(run_single_update(out_k_cache, k_slice,
+                                                   k_cache_type, k_slice_type,
+                                                   name, k_slice_name));
+        }
+      }
+      if (out_buffers.contains(v_cache_name)) {
+        auto& out_v_cache = out_buffers.at(v_cache_name);
+        if (in_v_cache.Get() != out_v_cache.Get()) {
+          LITERT_RETURN_IF_ERROR(run_single_update(out_v_cache, v_slice,
+                                                   v_cache_type, v_slice_type,
+                                                   v_cache_name, v_slice_name));
+        }
       }
     }
   }
+
+  // Update C caches if exists.
+  for (const auto& [name, buffer] : in_buffers) {
+    if (name.starts_with("kv_cache_c_")) {
+      int layer_id = std::stoi(std::string(name).substr(11));
+      char c_slice_name[32];
+      snprintf(c_slice_name, sizeof(c_slice_name), "kv_slice_c_%d", layer_id);
+
+      if (!in_buffers.contains(c_slice_name)) {
+        return absl::FailedPreconditionError(absl::StrCat(
+            "Missing matching C slice buffer for layer ", layer_id));
+      }
+
+      auto& in_c_cache = in_buffers.at(name);
+      const auto& c_slice = in_buffers.at(c_slice_name);
+
+      LITERT_RETURN_IF_ERROR(perform_copy(in_c_cache, c_slice));
+
+      if (out_buffers.contains(name)) {
+        auto& out_c_cache = out_buffers.at(name);
+        if (in_c_cache.Get() != out_c_cache.Get()) {
+          LITERT_RETURN_IF_ERROR(perform_copy(out_c_cache, c_slice));
+        }
+      }
+    }
+  }
+
   return absl::OkStatus();
 }
 
@@ -555,6 +903,25 @@ absl::Status HWMaskUpdate(
                                static_cast<int16_t*>(global_ptr), seq_q, seq_k,
                                time_step, input_tokens,
                                /*valid_val=*/0, /*masked_val=*/-32767);
+  } else if (mask_type.ElementType() == ::litert::ElementType::Float32) {
+    FillMasksInternal<float>(static_cast<float*>(local_ptr),
+                             static_cast<float*>(global_ptr), seq_q, seq_k,
+                             time_step, input_tokens,
+                             /*valid_val=*/0.0f, /*masked_val=*/-1e9f);
+  } else if (mask_type.ElementType() == ::litert::ElementType::Float16) {
+    // Opaque uint16_t representation of IEEE 754 Float16.
+    // valid_val is 0.0f (0x0000) and masked_val is -infinity (0xFC00).
+    FillMasksInternal<uint16_t>(static_cast<uint16_t*>(local_ptr),
+                                static_cast<uint16_t*>(global_ptr), seq_q,
+                                seq_k, time_step, input_tokens,
+                                /*valid_val=*/0x0000, /*masked_val=*/0xFC00);
+  } else if (mask_type.ElementType() == ::litert::ElementType::BFloat16) {
+    // Opaque uint16_t representation of Brain Float16.
+    // valid_val is 0.0f (0x0000) and masked_val is -infinity (0xFF80).
+    FillMasksInternal<uint16_t>(static_cast<uint16_t*>(local_ptr),
+                                static_cast<uint16_t*>(global_ptr), seq_q,
+                                seq_k, time_step, input_tokens,
+                                /*valid_val=*/0x0000, /*masked_val=*/0xFF80);
   } else {
     return absl::InvalidArgumentError("Unsupported mask element type");
   }
@@ -709,6 +1076,55 @@ absl::Status HWPerLayerEmbeddingLookup(
       }
     }
   }
+  return absl::OkStatus();
+}
+
+absl::Status DequantizeLogits(const ::litert::TensorBuffer& src,
+                              ::litert::TensorBuffer& dst, float scale,
+                              int32_t zero_point, bool should_dump) {
+  LITERT_ASSIGN_OR_RETURN(auto src_type, src.TensorType());
+  LITERT_ASSIGN_OR_RETURN(auto dst_type, dst.TensorType());
+  RET_CHECK_EQ((int)dst_type.ElementType(),
+               (int)::litert::ElementType::Float32);
+
+  LITERT_ASSIGN_OR_RETURN(size_t num_elements, src_type.Layout().NumElements());
+
+  const auto src_elem_type = src_type.ElementType();
+
+  LITERT_ASSIGN_OR_RETURN(auto src_lock,
+                          ::litert::TensorBufferScopedLock::Create(
+                              const_cast<::litert::TensorBuffer&>(src),
+                              ::litert::TensorBuffer::LockMode::kRead));
+  LITERT_ASSIGN_OR_RETURN(auto dst_lock,
+                          ::litert::TensorBufferScopedLock::Create(
+                              dst, ::litert::TensorBuffer::LockMode::kWrite));
+
+  float* dst_ptr = static_cast<float*>(dst_lock.second);
+  const void* src_raw_ptr = src_lock.second;
+
+  if (src_elem_type == ::litert::ElementType::Int16) {
+    const int16_t* src_ptr = static_cast<const int16_t*>(src_raw_ptr);
+    for (size_t i = 0; i < num_elements; ++i) {
+      dst_ptr[i] = scale * (static_cast<float>(src_ptr[i]) -
+                            static_cast<float>(zero_point));
+    }
+  } else if (src_elem_type == ::litert::ElementType::Int8) {
+    const int8_t* src_ptr = static_cast<const int8_t*>(src_raw_ptr);
+    for (size_t i = 0; i < num_elements; ++i) {
+      dst_ptr[i] = scale * (static_cast<float>(src_ptr[i]) -
+                            static_cast<float>(zero_point));
+    }
+  } else if (src_elem_type == ::litert::ElementType::Float32) {
+      // This is for dealing with unquantized float 32 logits.
+      const float* src_ptr = static_cast<const float*>(src_raw_ptr);
+      for (size_t i = 0; i < num_elements; ++i) {
+        dst_ptr[i] = src_ptr[i];
+      }
+    } else {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Unsupported source type for dequantization: ", (int)src_elem_type));
+  }
+
   return absl::OkStatus();
 }
 

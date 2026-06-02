@@ -583,6 +583,8 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
   ASSERT_OK(model_resources->GetTFLiteModel(ModelType::kTfLitePrefillDecode));
 }
 
+
+
 TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
      SetCpuCacheOptions_WithScopedFile) {
   LITERT_ASSERT_OK_AND_ASSIGN(auto env, ::litert::Environment::Create({}));
@@ -653,10 +655,12 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest, SetGpuCacheOptions_Nocache) {
         : ExecutorSettingsBase(model_assets) {}
   };
   StubExecutorSettings executor_settings(model_assets);
+  executor_settings.SetCacheDir(":nocache");
 
   ASSERT_OK(SetGpuCacheOptions(
-      ":nocache", absl::NotFoundError("No program cache"), executor_settings,
-      "test_key", "test_prefix", gpu_options));
+      executor_settings.GetWeightCacheFile(),
+      executor_settings.GetProgramCacheFile(), "test_key", "test_prefix",
+      /*cache_compiled_shaders_only=*/false, gpu_options));
 }
 
 }  // namespace

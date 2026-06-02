@@ -80,6 +80,12 @@ ModelResourcesLitertLm::GetTFLiteModelBackendConstraint(ModelType model_type) {
   return litert_lm_loader_->GetTFLiteModelBackendConstraint(model_type);
 }
 
+std::optional<std::string>
+ModelResourcesLitertLm::GetTFLiteModelPreferActivationType(
+    ModelType model_type) {
+  return litert_lm_loader_->GetTFLiteModelPreferActivationType(model_type);
+}
+
 absl::StatusOr<absl::string_view> ModelResourcesLitertLm::GetTFLiteModelBuffer(
     ModelType model_type) {
   litert::BufferRef<uint8_t> buffer_ref =

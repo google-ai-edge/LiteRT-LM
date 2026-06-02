@@ -21,11 +21,6 @@ namespace litert::lm {
 
 // Config for FastVlmDataProcessor.
 struct FastVlmDataProcessorConfig {
-  // The string for beginning of image token.
-  std::string boi_token = " <start_of_image>";
-  // The string for end of image token.
-  std::string eoi_token = "<end_of_image>";
-
   int image_tensor_height = 1024;
   int image_tensor_width = 1024;
 };

@@ -51,6 +51,11 @@ class ModelResourcesTask : public ModelResources {
     // Task model does not support backend constraint.
     return std::nullopt;
   };
+  std::optional<std::string> GetTFLiteModelPreferActivationType(
+      ModelType model_type) override {
+    // Task model does not support prefer activation type.
+    return std::nullopt;
+  };
   absl::StatusOr<std::unique_ptr<Tokenizer>> GetTokenizer() override;
   absl::StatusOr<const proto::LlmMetadata*> GetLlmMetadata() override;
   absl::StatusOr<std::reference_wrapper<ScopedFile>> GetScopedFile() override {

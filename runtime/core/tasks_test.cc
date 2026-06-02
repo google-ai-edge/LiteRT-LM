@@ -194,18 +194,22 @@ TEST_F(TasksTest, DecodeSucceed) {
   EXPECT_OK(stop_token_detector.AddStopTokenSequence({2294}));
   absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback = nullptr;
 
-  auto task_responses = Tasks::Decode(
-      *executor_, *tokenizer_, stop_token_detector, kNumOutputCandidates,
-      benchmark_info, /*sampler=*/std::nullopt,
-      /*constraint=*/nullptr, /*decoded_ids=*/std::nullopt,
-      /*callback=*/callback, /*cancelled=*/nullptr);
+  ASSERT_OK_AND_ASSIGN(
+      auto task_responses,
+      Tasks::Decode(*executor_, *tokenizer_, stop_token_detector,
+                    kNumOutputCandidates, benchmark_info,
+                    /*sampler=*/std::nullopt,
+                    /*constraint=*/nullptr, /*decoded_ids=*/std::nullopt,
+                    /*callback=*/callback, /*cancelled=*/nullptr));
 
-  EXPECT_OK(task_responses);
-  EXPECT_EQ(task_responses->GetTaskState(), TaskState::kDone);
+  EXPECT_EQ(task_responses.GetTaskState(), TaskState::kDone);
   // The response is " How's it going?" since "!" is the stop token which is
   // not included in the response.
-  EXPECT_EQ(task_responses->GetTexts().size(), 1);
-  EXPECT_EQ(task_responses->GetTexts()[0], " How's it going?");
+  EXPECT_EQ(task_responses.GetTexts().size(), 1);
+  EXPECT_EQ(task_responses.GetTexts()[0], " How's it going?");
+  EXPECT_EQ(task_responses.GetTokenIds().size(), 1);
+  EXPECT_THAT(task_responses.GetTokenIds()[0],
+              testing::ElementsAre(224, 24, 8, 66, 246, 18, 2295));
 }
 
 TEST_F(TasksTest, DecodeWithTwoStopTokens) {
@@ -1193,6 +1197,11 @@ TEST_F(TasksCustomSamplingTest, ScoreCustomSamplingMultiBatchWithTokenLengths) {
             7);
   EXPECT_THAT(task_responses_with_token_lengths->GetTokenScores()->at(1),
               testing::Each(0.0f));
+  EXPECT_EQ(task_responses_with_token_lengths->GetTokenIds().size(), 2);
+  EXPECT_THAT(task_responses_with_token_lengths->GetTokenIds()[0],
+              testing::ElementsAre(224, 24, 8, 66, 246, 18, 2295));
+  EXPECT_THAT(task_responses_with_token_lengths->GetTokenIds()[1],
+              testing::ElementsAre(90, 547, 58, 735, 210, 466, 2294));
 }
 
 TEST_F(TasksCustomSamplingTest, DecodeCustomSamplingReachMaxNumTokens) {

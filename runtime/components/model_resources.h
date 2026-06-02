@@ -174,6 +174,12 @@ class ModelResources {
   virtual std::optional<std::string> GetTFLiteModelBackendConstraint(
       ModelType model_type) = 0;
 
+  // Returns the TFLite model prefer activation type. When there is no
+  // prefer activation type for the given model type, it will return an
+  // nullopt.
+  virtual std::optional<std::string> GetTFLiteModelPreferActivationType(
+      ModelType model_type) = 0;
+
   // Builds a tokenizer instance from the model and returns it.
   virtual absl::StatusOr<std::unique_ptr<Tokenizer>> GetTokenizer() = 0;
 

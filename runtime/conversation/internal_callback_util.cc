@@ -66,11 +66,7 @@ void SendMessage(
   }
   auto message = model_data_processor.ToMessage(
       Responses(TaskState::kProcessing, {std::string(text)}), processor_args);
-  if (!message.ok()) {
-    user_callback(message.status());
-    return;
-  }
-  user_callback(std::move(message.value()));
+  user_callback(std::move(message));
 }
 
 // Sends streamed text associated with a specific channel. It wraps the text in

@@ -97,9 +97,12 @@ std::ostream& operator<<(std::ostream& os,
 
 absl::StatusOr<ActivationDataType> GetActivationDataTypeFromString(
     const std::string& activation_data_type) {
-  if (absl::EqualsIgnoreCase(activation_data_type, "float32")) {
+  if (absl::EqualsIgnoreCase(activation_data_type, "float32") ||
+      absl::EqualsIgnoreCase(activation_data_type, "fp32") ||
+      absl::EqualsIgnoreCase(activation_data_type, "fp32_fp16")) {
     return ActivationDataType::FLOAT32;
-  } else if (absl::EqualsIgnoreCase(activation_data_type, "float16")) {
+  } else if (absl::EqualsIgnoreCase(activation_data_type, "float16") ||
+             absl::EqualsIgnoreCase(activation_data_type, "fp16")) {
     return ActivationDataType::FLOAT16;
   } else if (absl::EqualsIgnoreCase(activation_data_type, "int16")) {
     return ActivationDataType::INT16;

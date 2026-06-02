@@ -13,6 +13,8 @@
 # limitations under the License.
 """Conversation wrapper for LiteRT-LM."""
 
+from __future__ import annotations
+
 import collections.abc
 import json
 import logging
@@ -21,6 +23,7 @@ from typing import Any
 
 from . import interfaces
 from ._ffi import STREAM_CALLBACK_TYPE
+from ._messages import Contents, Message, normalize_message
 
 
 class Conversation(interfaces.AbstractConversation):
@@ -73,37 +76,16 @@ class Conversation(interfaces.AbstractConversation):
   def _handle_tool_calls(
       self, response_dict: collections.abc.Mapping[str, Any]
   ) -> list[collections.abc.Mapping[str, Any]] | None:
-    extracted_tool_calls = []
-
-    # Support top-level tool_calls field
-    if "tool_calls" in response_dict:
-      tc_list = response_dict["tool_calls"]
-      if isinstance(tc_list, list):
-        for tc in tc_list:
-          if isinstance(tc, dict):
-            # If it's a direct tool call object (OpenAI-like)
-            if tc.get("type") == "function" and "function" in tc:
-              extracted_tool_calls.append(tc["function"])
-            else:
-              extracted_tool_calls.append(tc)
-
-    # Support tool calls inside content list (multimodal format)
-    contents = response_dict.get("content", [])
-    if not isinstance(contents, list):
-      contents = [contents]
-
-    for content in contents:
-      if isinstance(content, dict) and content.get("type") == "tool_call":
-        extracted_tool_calls.append(content["tool_call"])
-
-    if not extracted_tool_calls:
+    if "tool_calls" not in response_dict:
       return None
 
     tool_responses = []
-    for tool_call in extracted_tool_calls:
-      name = tool_call.get("name")
-      args = tool_call.get("arguments", {})
-      call_id = tool_call.get("id")
+    for tool_call in response_dict.get("tool_calls"):
+      if "function" not in tool_call:
+        raise ValueError("Missing 'function' in tool_call")
+      function = tool_call.get("function")
+      name = function.get("name", "")
+      args = function.get("arguments", {})
 
       if self.tool_event_handler:
         if not self.tool_event_handler.approve_tool_call(tool_call):
@@ -119,38 +101,37 @@ class Conversation(interfaces.AbstractConversation):
           logging.exception("interfaces.Tool execution failed: %s", name)
           result = f"Error: {str(e)}"
 
-      tool_response = {
-          "role": "tool",
-          "content": [{"name": name, "response": result}],
-      }
-      if call_id:
-        tool_response["tool_call_id"] = call_id
-      if name:
-        tool_response["name"] = name
-
       if self.tool_event_handler:
-        tool_response = self.tool_event_handler.process_tool_response(
-            tool_response
-        )
-      tool_responses.append(tool_response)
+        result = self.tool_event_handler.process_tool_response(result)
+
+      tool_responses.append({
+          "role": "tool",
+          "content": [{
+              "type": "tool_response",
+              "name": name,
+              "response": result,
+          }],
+      })
 
     return tool_responses
 
+  # TODO - b/482060476: Change the return type to "Message".
   def send_message(
-      self, message: str | collections.abc.Mapping[str, Any]
+      self,
+      message: str | Contents | Message | collections.abc.Mapping[str, Any],
   ) -> collections.abc.Mapping[str, Any]:
-    current_message = (
-        message
-        if isinstance(message, dict)
-        else {"role": "user", "content": message}
-    )
+    if not self._ptr:
+      raise RuntimeError("Conversation is closed.")
+    current_message = normalize_message(message)
 
     while True:
       msg_json = json.dumps(current_message)
       ctx_json = json.dumps(getattr(self, "extra_context", {}))
 
       resp_ptr = self._lib.litert_lm_conversation_send_message(
-          self._ptr, msg_json, ctx_json
+          self._ptr, msg_json, ctx_json,
+          # TODO(b/508420269): Add visual token budget option.
+          None,
       )
       if not resp_ptr:
         raise RuntimeError("litert_lm_conversation_send_message failed")
@@ -171,13 +152,12 @@ class Conversation(interfaces.AbstractConversation):
       current_message = tool_responses
 
   def send_message_async(
-      self, message: str | collections.abc.Mapping[str, Any]
+      self,
+      message: str | Contents | Message | collections.abc.Mapping[str, Any],
   ) -> collections.abc.Iterator[collections.abc.Mapping[str, Any]]:
-    current_message = (
-        message
-        if isinstance(message, dict)
-        else {"role": "user", "content": message}
-    )
+    if not self._ptr:
+      raise RuntimeError("Conversation is closed.")
+    current_message = normalize_message(message)
 
     while True:
       msg_json = json.dumps(current_message)
@@ -197,6 +177,8 @@ class Conversation(interfaces.AbstractConversation):
           self._ptr,
           msg_json,
           ctx_json,
+          # TODO(b/508420269): Add visual token budget option.
+          None,
           c_callback,
           None,
       )
@@ -253,13 +235,12 @@ class Conversation(interfaces.AbstractConversation):
       current_message = tool_responses
 
   def render_message_to_string(
-      self, message: str | collections.abc.Mapping[str, Any]
+      self,
+      message: str | Contents | Message | collections.abc.Mapping[str, Any],
   ) -> str:
-    msg_json = (
-        message
-        if isinstance(message, dict)
-        else {"role": "user", "content": message}
-    )
+    if not self._ptr:
+      return ""
+    msg_json = normalize_message(message)
     res_str = self._lib.litert_lm_conversation_render_message_to_string(
         self._ptr, json.dumps(msg_json)
     )
@@ -268,3 +249,13 @@ class Conversation(interfaces.AbstractConversation):
   def cancel_process(self) -> None:
     if self._ptr:
       self._lib.litert_lm_conversation_cancel_process(self._ptr)
+
+  @property
+  def token_count(self) -> int:
+    """See base class."""
+    if not self._ptr:
+      raise RuntimeError("Conversation is closed.")
+    res = self._lib.litert_lm_conversation_get_token_count(self._ptr)
+    if res == -1:
+      raise RuntimeError("Failed to get token count.")
+    return res

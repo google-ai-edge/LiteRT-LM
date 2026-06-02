@@ -57,7 +57,9 @@ class AudioPreprocessorConfig {
         /* add_floor_to_mel_before_log= */ false,
         /* semicausal_padding= */ false, /* non_zero_hanning= */ true,
         /* periodic_hanning= */ true,
-        /* fft_padding_type= */ FftPaddingType::kRight);
+        /* fft_padding_type= */ FftPaddingType::kRight,
+        /* skip_mel_spectrogram_extraction= */ false,
+        /* buffer_last_frame= */ false);
   }
 
   static AudioPreprocessorConfig Create(
@@ -66,13 +68,15 @@ class AudioPreprocessorConfig {
       int num_mel_bins, float mel_low_hz, float mel_high_hz, float mel_floor,
       bool normalize_mel, bool add_floor_to_mel_before_log,
       bool semicausal_padding, bool non_zero_hanning, bool periodic_hanning,
-      FftPaddingType fft_padding_type) {
+      FftPaddingType fft_padding_type,
+      bool skip_mel_spectrogram_extraction = false,
+      bool buffer_last_frame = false) {
     return AudioPreprocessorConfig(
         sample_rate_hz, num_channels, frame_length, hop_length, fft_length,
         input_scale, pre_emphasis_factor, num_mel_bins, mel_low_hz, mel_high_hz,
         mel_floor, normalize_mel, add_floor_to_mel_before_log,
         semicausal_padding, non_zero_hanning, periodic_hanning,
-        fft_padding_type);
+        fft_padding_type, skip_mel_spectrogram_extraction, buffer_last_frame);
   }
 
   friend std::ostream& operator<<(std::ostream& os,
@@ -114,6 +118,9 @@ class AudioPreprocessorConfig {
     os << "  non_zero_hanning: " << config.GetNonZeroHanning() << "\n";
     os << "  periodic_hanning: " << config.GetPeriodicHanning() << "\n";
     os << "  fft_padding_type: " << config.GetFftPaddingType() << "\n";
+    os << "  skip_mel_spectrogram_extraction: "
+       << config.SkipMelSpectrogramExtraction() << "\n";
+    os << "  buffer_last_frame: " << config.BufferLastFrame() << "\n";
     os << "}";
     return os;
   }
@@ -167,6 +174,13 @@ class AudioPreprocessorConfig {
   bool GetPeriodicHanning() const { return periodic_hanning_; }
   // The padding type used for FFT.
   FftPaddingType GetFftPaddingType() const { return fft_padding_type_; }
+  // Whether to skip the Mel spectrogram extraction.
+  bool SkipMelSpectrogramExtraction() const {
+    return skip_mel_spectrogram_extraction_;
+  }
+  // Whether to buffer the last pcm frame instead of padding. Should be true for
+  // streaming input, and false for non-streaming audio input.
+  bool BufferLastFrame() const { return buffer_last_frame_; }
 
   // Setter APIs.
   void SetSampleRateHz(int sample_rate_hz) { sample_rate_hz_ = sample_rate_hz; }
@@ -202,6 +216,12 @@ class AudioPreprocessorConfig {
   }
   void SetFftPaddingType(FftPaddingType fft_padding_type) {
     fft_padding_type_ = fft_padding_type;
+  }
+  void SetSkipMelSpectrogramExtraction(bool skip_mel_spectrogram_extraction) {
+    skip_mel_spectrogram_extraction_ = skip_mel_spectrogram_extraction;
+  }
+  void SetBufferLastFrame(bool buffer_last_frame) {
+    buffer_last_frame_ = buffer_last_frame;
   }
 
   // The Mel Spectrogram means used for Universal Speech Model (USM) during
@@ -311,7 +331,8 @@ class AudioPreprocessorConfig {
       int num_mel_bins, float mel_low_hz, float mel_high_hz, float mel_floor,
       bool normalize_mel, bool add_floor_to_mel_before_log,
       bool semicausal_padding, bool non_zero_hanning, bool periodic_hanning,
-      FftPaddingType fft_padding_type)
+      FftPaddingType fft_padding_type, bool skip_mel_spectrogram_extraction,
+      bool buffer_last_frame)
       : sample_rate_hz_(sample_rate_hz),
         num_channels_(num_channels),
         fft_length_(fft_length),
@@ -329,7 +350,9 @@ class AudioPreprocessorConfig {
         semicausal_padding_(semicausal_padding),
         non_zero_hanning_(non_zero_hanning),
         periodic_hanning_(periodic_hanning),
-        fft_padding_type_(fft_padding_type) {}
+        fft_padding_type_(fft_padding_type),
+        skip_mel_spectrogram_extraction_(skip_mel_spectrogram_extraction),
+        buffer_last_frame_(buffer_last_frame) {}
   int sample_rate_hz_;
   int num_channels_;
   int fft_length_;
@@ -348,6 +371,8 @@ class AudioPreprocessorConfig {
   bool non_zero_hanning_;
   bool periodic_hanning_;
   FftPaddingType fft_padding_type_;
+  bool skip_mel_spectrogram_extraction_;
+  bool buffer_last_frame_;
 };
 
 // Interface for audio preprocessing.

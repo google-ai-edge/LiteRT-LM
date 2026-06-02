@@ -16,12 +16,12 @@ uv pip install litert-lm-builder
 
 ## CLI Operations
 
-The easiest way for most users to interact with LiteRT-LM files is through
-the command-line interface. Once installed, you have access to two terminal
+The easiest way for most users to interact with LiteRT-LM files is through the
+command-line interface. Once installed, you have access to two terminal
 commands:
 
-- `litert-lm-builder`
-- `litert-lm-peek`
+-   `litert-lm-builder`
+-   `litert-lm-peek`
 
 ### litert-lm-builder (Chaining Subcommands)
 
@@ -43,6 +43,10 @@ litert-lm-builder toml --path example.toml output --path real_via_toml.litertlm
 
 ### litert-lm-peek (Inspection & Extraction)
 
+This tool is designed to inspect the contents of a `.litertlm` file. It reads
+the file's header, system metadata, and section information, and prints them to
+the console.
+
 You can query metadata or unpack artifacts within an existing archive into an
 output destination on disk natively:
 
@@ -56,8 +60,8 @@ litert-lm-peek --litertlm_file demo.litertlm --dump_files_dir ./extracted_files
 
 ## Python API Demo Walkthrough
 
-For more advanced use cases, you can use the LiteRT-LM builder directly
-through the fully exposed Python programmatic API.
+For more advanced use cases, you can use the LiteRT-LM builder directly through
+the fully exposed Python programmatic API.
 
 Below is a complete, self-contained walkthrough demonstrating how to bundle a
 `.litertlm` file:

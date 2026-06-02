@@ -38,7 +38,6 @@
 #include "runtime/components/preprocessor/audio_preprocessor.h"
 #include "runtime/components/preprocessor/audio_preprocessor_miniaudio.h"
 #include "runtime/components/preprocessor/image_preprocessor.h"
-#include "runtime/components/preprocessor/stb_image_preprocessor.h"
 #include "runtime/components/prompt_template.h"
 #include "runtime/components/sentencepiece_tokenizer.h"
 #include "runtime/components/tokenizer.h"
@@ -131,7 +130,7 @@ Gemma3DataProcessor::Create(Gemma3DataProcessorConfig config,
                    AudioPreprocessorMiniAudio::Create(
                        AudioPreprocessorConfig::CreateDefaultUsmConfig()));
   return absl::WrapUnique(new Gemma3DataProcessor(
-      config, preface, std::make_unique<StbImagePreprocessor>(),
+      config, preface, ImagePreprocessor::Create(),
       std::move(audio_preprocessor)));
 #else
   std::unique_ptr<LiteRtLmGemmaModelConstraintProvider,
@@ -172,7 +171,7 @@ Gemma3DataProcessor::Create(Gemma3DataProcessorConfig config,
                        AudioPreprocessorConfig::CreateDefaultUsmConfig()));
   return absl::WrapUnique(new Gemma3DataProcessor(
       std::move(constraint_provider), config, preface,
-      std::make_unique<StbImagePreprocessor>(), std::move(audio_preprocessor)));
+      ImagePreprocessor::Create(), std::move(audio_preprocessor)));
 #endif
 }
 
@@ -264,6 +263,9 @@ Gemma3DataProcessor::ToInputDataVectorImpl(
         if (item.is_string()) {
           continue;
         }
+        if (!item.contains("type")) {
+          continue;
+        }
         ASSIGN_OR_RETURN(std::unique_ptr<MemoryMappedFile> mmap_file,
                          LoadItemData(item));
         if (item["type"] == "image") {
@@ -348,92 +350,10 @@ Gemma3DataProcessor::RenderSingleTurnTemplate(
     const Message& message, const PromptTemplate& prompt_template,
     bool current_is_appending_message, bool append_message,
     std::optional<nlohmann::ordered_json> extra_context) const {
-  const auto& json_preface = std::get<JsonPreface>(preface);
-  std::string prefill_text = "";
-  bool is_first_part = false;
-  bool is_last_part = false;
-
-  if (!current_is_appending_message) {
-    is_first_part = true;
-  }
-  if (!append_message) {
-    is_last_part = true;
-  }
-
-  bool new_is_appending_message = current_is_appending_message;
-  if (is_first_part) {
-    new_is_appending_message = true;
-  }
-  if (is_last_part) {
-    new_is_appending_message = false;
-  }
-
-  bool is_role_changed = false;
-  if (!history.empty()) {
-    const auto& last_message = history.back();
-    // If the last message is in appending state and the current message is
-    // different role, then we need to add a closing message to the prefill.
-    if (current_is_appending_message &&
-        (last_message["role"] != message["role"] &&
-         last_message["role"] != "system")) {
-      is_role_changed = true;
-      PromptTemplateInput closing_tmpl_input;
-      nlohmann::ordered_json closing_message = {
-          {"role", last_message["role"]},
-          {"content", ""},
-      };
-      ASSIGN_OR_RETURN(nlohmann::ordered_json message_tmpl_input,
-                       MessageToTemplateInput(closing_message));
-      closing_tmpl_input.extra_context["message"] = message_tmpl_input;
-      closing_tmpl_input.extra_context["is_appending_to_prefill"] = true;
-      closing_tmpl_input.extra_context["is_first_part"] = false;
-      closing_tmpl_input.extra_context["is_last_part"] = true;
-      closing_tmpl_input.add_generation_prompt = false;
-      ASSIGN_OR_RETURN(std::string closing_text,
-                       prompt_template.Apply(closing_tmpl_input));
-      prefill_text += closing_text;
-    }
-  } else {
-    PromptTemplateInput preface_tmpl_input;
-    RETURN_IF_ERROR(FillPrefaceForPromptTemplateInput(json_preface, this,
-                                                      preface_tmpl_input));
-    if (!json_preface.messages.empty() || !json_preface.tools.empty() ||
-        !json_preface.extra_context.is_null()) {
-      preface_tmpl_input.messages.push_back(
-          Message{{"role", "user"}, {"content", ""}});
-      preface_tmpl_input.add_generation_prompt = false;
-
-      if (extra_context.has_value()) {
-        for (const auto& [key, value] : extra_context.value().items()) {
-          preface_tmpl_input.extra_context[key] = value;
-        }
-      }
-
-      ASSIGN_OR_RETURN(std::string preface_text,
-                       prompt_template.Apply(preface_tmpl_input));
-      prefill_text += preface_text;
-    }
-  }
-  if (message.is_object()) {
-    PromptTemplateInput tmpl_input;
-    ASSIGN_OR_RETURN(tmpl_input.extra_context["message"],
-                     MessageToTemplateInput(message));
-    tmpl_input.extra_context["is_appending_to_prefill"] = true;
-    tmpl_input.extra_context["is_first_part"] =
-        is_first_part || is_role_changed;
-    tmpl_input.extra_context["is_last_part"] = is_last_part;
-    tmpl_input.add_generation_prompt = !new_is_appending_message;
-
-    if (extra_context.has_value()) {
-      for (const auto& [key, value] : extra_context.value().items()) {
-        tmpl_input.extra_context[key] = value;
-      }
-    }
-
-    ASSIGN_OR_RETURN(std::string new_text, prompt_template.Apply(tmpl_input));
-    prefill_text += new_text;
-  }
-  return SingleTurnTemplateRenderResult{prefill_text, new_is_appending_message};
+  return RenderSingleTurnTemplateCommon(
+      *this, history, preface, message, prompt_template,
+      current_is_appending_message, append_message, extra_context,
+      /*push_dummy_user_message_to_preface=*/true);
 }
 
 absl::StatusOr<Message> Gemma3DataProcessor::ToMessageImpl(
@@ -447,8 +367,10 @@ absl::StatusOr<Message> Gemma3DataProcessor::ToMessageImpl(
         ordered_json content_and_tool_calls,
         ParseTextAndToolCalls(
             response_text, config_.code_fence_start, config_.code_fence_end,
-            GetSyntaxType(config_.syntax_type), config_.escape_fence_strings,
-            config_.tool_code_regex));
+            GetSyntaxType(config_.syntax_type),
+            {.escape_fence_strings = config_.escape_fence_strings,
+             .tool_code_regex = config_.tool_code_regex,
+             .return_error_on_parse_failure = ReturnErrorOnParseFailure()}));
     if (content_and_tool_calls.contains("content")) {
       message["content"] = content_and_tool_calls["content"];
     }

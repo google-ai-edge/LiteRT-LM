@@ -70,9 +70,16 @@ struct BufferKey {
   }
 };
 
+// The hint for the TfLite models, that is used to validate the model settings
+// and choose the appropriate backend and activation type.
+struct TfLiteSectionHint {
+  std::optional<std::string> backend_constraint = std::nullopt;
+  std::optional<std::string> prefer_activation_type = std::nullopt;
+};
+
 // Extracts the BufferKey and backend constraint from the section metadata.
-absl::StatusOr<std::pair<BufferKey, std::optional<std::string>>>
-ExtractBufferKeyAndBackendConstraint(const schema::SectionObject* section);
+absl::StatusOr<std::pair<BufferKey, TfLiteSectionHint>>
+ExtractBufferKeyAndTfLiteSectionHint(const schema::SectionObject* section);
 
 // Hash function for BufferKey
 struct BufferKeyHash {
@@ -137,16 +144,39 @@ class LitertLmLoader {
     return litert::BufferRef<uint8_t>();
   };
 
-  // Returns the TFLite model section buffer.
+  // Returns the TFLite model backend constraint.
+  // If not found, returns std::nullopt.
   std::optional<std::string> GetTFLiteModelBackendConstraint(
       ModelType model_type) {
-    if (section_backend_constraint_.contains(
+    if (section_hints_map_.contains(
             BufferKey(schema::AnySectionDataType_TFLiteModel, model_type))) {
-      return section_backend_constraint_[BufferKey(
-          schema::AnySectionDataType_TFLiteModel, model_type)];
+      return section_hints_map_[BufferKey(
+                                    schema::AnySectionDataType_TFLiteModel,
+                                    model_type)]
+          .backend_constraint;
     }
     ABSL_LOG(WARNING) << "TFLite model type: " << ModelTypeToString(model_type)
                       << " not found for backend constraints. Skipping.";
+    return std::nullopt;
+  };
+
+  // Returns the TFLite model section buffer's prefer activation type.
+  // If not found, returns std::nullopt.
+  std::optional<std::string> GetTFLiteModelPreferActivationType(
+      ModelType model_type) {
+    if (section_hints_map_.contains(
+            BufferKey(schema::AnySectionDataType_TFLiteModel, model_type))) {
+      return section_hints_map_[BufferKey(
+                                    schema::AnySectionDataType_TFLiteModel,
+                                    model_type)]
+          .prefer_activation_type;
+    }
+    ABSL_LOG(WARNING)
+        << "TFLite model type: " << ModelTypeToString(model_type)
+        << " not found for prefer activation type. Use system's "
+           "default backend activation type. System's default activation "
+           "type for Text decoder is fp16. Vision encoder and audio encoder "
+           "default is fp32.";
     return std::nullopt;
   };
 
@@ -162,9 +192,11 @@ class LitertLmLoader {
 
   absl::StatusOr<std::reference_wrapper<ScopedFile>> GetScopedFile();
 
+  absl::StatusOr<std::shared_ptr<ScopedFile>> GetSharedScopedFile();
+
  private:
   explicit LitertLmLoader(ScopedFile model_file)
-      : model_source_(std::move(model_file)) {}
+      : model_source_(std::make_shared<ScopedFile>(std::move(model_file))) {}
 
   explicit LitertLmLoader(
       std::shared_ptr<MemoryMappedFile> memory_mapped_model_file)
@@ -182,7 +214,9 @@ class LitertLmLoader {
 
   // The model file to be loaded, can be either a ScopedFile or a
   // memory-mapped file.
-  std::variant<ScopedFile, std::shared_ptr<MemoryMappedFile>> model_source_;
+  std::variant<std::shared_ptr<ScopedFile>,
+               std::shared_ptr<MemoryMappedFile>>
+      model_source_;
 
   // The header of the model file. Use this to understand what sections are
   // available and their offsets.
@@ -209,10 +243,9 @@ class LitertLmLoader {
   ::std::unordered_map<BufferKey, litert::BufferRef<uint8_t>, BufferKeyHash>
       section_buffers_ ABSL_GUARDED_BY(section_buffers_mutex_);
 
-  // Map of all the sections' metadata, for now, focusing on the backend
-  // constraints
-  ::std::unordered_map<BufferKey, std::string, BufferKeyHash>
-      section_backend_constraint_;
+  // Map of all the sections' section info.
+  ::std::unordered_map<BufferKey, TfLiteSectionHint, BufferKeyHash>
+      section_hints_map_;
 };
 
 }  // namespace litert::lm

@@ -97,10 +97,16 @@ class Conversation(
 
     var currentMessageJson = message.toJson()
     val extraContextJsonString = extraContext.toJsonObject().toString()
+    val visualTokenBudget = @OptIn(ExperimentalApi::class) ExperimentalFlags.visualTokenBudget
 
     for (i in 0..<RECURRING_TOOL_CALL_LIMIT) {
       val responseJsonString =
-        LiteRtLmJni.nativeSendMessage(handle, currentMessageJson.toString(), extraContextJsonString)
+        LiteRtLmJni.nativeSendMessage(
+          handle,
+          currentMessageJson.toString(),
+          extraContextJsonString,
+          visualTokenBudget,
+        )
       val responseJsonObject = JsonParser.parseString(responseJsonString).asJsonObject
 
       if (responseJsonObject.has("tool_calls")) {
@@ -177,6 +183,7 @@ class Conversation(
     checkIsAlive()
 
     val extraContextJsonString = extraContext.toJsonObject().toString()
+    val visualTokenBudget = @OptIn(ExperimentalApi::class) ExperimentalFlags.visualTokenBudget
 
     val jniCallback = JniMessageCallbackImpl(callback)
     LiteRtLmJni.nativeSendMessageAsync(
@@ -184,6 +191,7 @@ class Conversation(
       message.toJson().toString(),
       extraContextJsonString,
       jniCallback,
+      visualTokenBudget,
     )
   }
 
@@ -368,6 +376,7 @@ class Conversation(
           localToolResponse.toString(),
           "{}",
           this@JniMessageCallbackImpl,
+          @OptIn(ExperimentalApi::class) ExperimentalFlags.visualTokenBudget,
         )
         pendingToolResponseJSONMessage = null // Clear after sending
       } else {
@@ -409,6 +418,18 @@ class Conversation(
   fun getBenchmarkInfo(): BenchmarkInfo {
     checkIsAlive()
     return LiteRtLmJni.nativeConversationGetBenchmarkInfo(handle)
+  }
+
+  /**
+   * Gets the number of tokens in the conversation KV Cache (prefill + decode).
+   *
+   * @return The number of tokens.
+   * @throws IllegalStateException if the conversation is not alive.
+   * @throws LiteRtLmJniException if an error occurs during the native call.
+   */
+  fun getTokenCount(): Int {
+    checkIsAlive()
+    return LiteRtLmJni.nativeConversationGetTokenCount(handle)
   }
 
   /**

@@ -82,7 +82,8 @@ class LoraManagerTest : public ::testing::Test {
         std::make_unique<CompiledModel>(std::move(compiled_model));
     ASSERT_TRUE(*compiled_model_);
 
-    ASSERT_OK_AND_ASSIGN(lora_manager_, LoraManager::Create(*compiled_model_));
+    ASSERT_OK_AND_ASSIGN(lora_manager_,
+                         LoraManager::Create(*compiled_model_, "decode"));
   }
 
   std::unique_ptr<Environment> env_;

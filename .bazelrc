@@ -42,6 +42,7 @@
 
 # Shlibs built from the source tree should resolve symbols in the exectuable.
 build --define=resolve_symbols_in_exec=true
+build:windows --define=resolve_symbols_in_exec=false
 
 # Exclude OpenCL from Linux and Windows builds.
 build:linux --copt=-DLITERT_DISABLE_OPENCL_SUPPORT=1

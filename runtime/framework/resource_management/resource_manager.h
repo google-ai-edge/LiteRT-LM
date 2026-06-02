@@ -52,14 +52,7 @@ class ResourceManager {
       std::unique_ptr<AudioExecutorSettings> audio_executor_settings,
       LlmExecutorSettings llm_executor_settings,
       ::litert::Environment* absl_nullable litert_env,
-      std::unique_ptr<AudioExecutor> audio_executor = nullptr)
-      :  // dummy comment to prevent clang-format from moving the next line here
-        llm_executor_(std::move(llm_executor)),
-        vision_executor_settings_(std::move(vision_executor_settings)),
-        audio_executor_(std::move(audio_executor)),
-        audio_executor_settings_(std::move(audio_executor_settings)),
-        litert_env_(litert_env),
-        llm_executor_settings_(std::move(llm_executor_settings)) {}
+      std::unique_ptr<AudioExecutor> audio_executor = nullptr);
 
   // Creates a ResourceManager with the provided llm_executor.
   // Note that the audio_executor is used for testing only (dependency

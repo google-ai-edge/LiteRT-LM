@@ -76,9 +76,6 @@ TEST(AudioExecutorSettingsTest, CreateDefaultWithInvalidBackend) {
   EXPECT_THAT(AudioExecutorSettings::CreateDefault(
                   model_assets, 10, Backend::GOOGLE_TENSOR_ARTISAN),
               StatusIs(absl::StatusCode::kInvalidArgument));
-  EXPECT_THAT(
-      AudioExecutorSettings::CreateDefault(model_assets, 10, Backend::NPU),
-      StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
 TEST(AudioExecutorSettingsTest, GetAndSetBundledWithMainModel) {

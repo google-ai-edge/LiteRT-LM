@@ -16,8 +16,8 @@
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_UTIL_TEST_UTILS_H_
 
 #include <gmock/gmock.h>
-#include "absl/status/status.h"  // from @com_google_absl  // NOLINT
-#include "absl/status/statusor.h"  // from @com_google_absl  // NOLINT
+#include "absl/status/status.h"  // from @com_google_absl                   // NOLINT
+#include "absl/status/statusor.h"  // from @com_google_absl                 // NOLINT
 #include "litert/cc/litert_macros.h"  // from @litert  // NOLINT
 
 #if !defined(EXPECT_OK)
@@ -58,7 +58,8 @@ MATCHER_P(StatusIs, code, "") {
 
 MATCHER_P2(StatusIs, code, msg, "") {
   const auto& status = GetStatus(arg);
-  return status.code() == code && status.message() == msg;
+  return status.code() == code &&
+    testing::ExplainMatchResult(msg, status.message(), result_listener);
 }
 
 MATCHER_P(IsOkAndHolds, value, "") {

@@ -1,0 +1,111 @@
+diff --git a/modules/skcms/BUILD.bazel b/modules/skcms/BUILD.bazel
+index 67d7c7abf1..61072d9682 100644
+--- a/modules/skcms/BUILD.bazel
++++ b/modules/skcms/BUILD.bazel
+@@ -70,6 +70,7 @@ skia_cc_library(
+                ],
+                "//conditions:default": [],
+            }),
++    copts = select({"@platforms//os:windows": [], "//conditions:default": ["-Wno-switch-default"]}) + select({"@platforms//cpu:x86_64": ["-mfma", "-mf16c"], "//conditions:default": []}),
+ )
+ 
+ skia_cc_library(
+@@ -84,6 +85,7 @@ skia_cc_library(
+     textual_hdrs = [
+         "src/Transform_inl.h",
+     ],
++    copts = select({"@platforms//os:windows": [], "//conditions:default": ["-Wno-switch-default"]}) + select({"@platforms//cpu:x86_64": ["-mfma", "-mf16c"], "//conditions:default": []}),
+ )
+ 
+ skia_cc_library(
+@@ -94,7 +96,7 @@ skia_cc_library(
+         "src/skcms_internals.h",
+         "src/skcms_public.h",
+     ],
+-    copts = DEFAULT_COPTS + select({
++    copts = DEFAULT_COPTS + select({"@platforms//os:windows": [], "//conditions:default": ["-Wno-switch-default"]}) + select({
+         "@platforms//cpu:x86_64": ["-march=haswell"],
+         "//conditions:default": [],
+     }),
+@@ -102,6 +104,7 @@ skia_cc_library(
+     textual_hdrs = [
+         "src/Transform_inl.h",
+     ],
++    defines = ["SKCMS_DISABLE_HSW"],
+ )
+ 
+ skia_cc_library(
+@@ -112,7 +115,8 @@ skia_cc_library(
+         "src/skcms_internals.h",
+         "src/skcms_public.h",
+     ],
+-    copts = DEFAULT_COPTS + select({
++    defines = ["SKCMS_DISABLE_SKX"],
++    copts = DEFAULT_COPTS + select({"@platforms//os:windows": [], "//conditions:default": ["-Wno-switch-default"]}) + select({
+         "@platforms//cpu:x86_64": ["-march=skylake-avx512"],
+         "//conditions:default": [],
+     }),
+diff --git a/src/codec/BUILD.bazel b/src/codec/BUILD.bazel
+index adcf203240..9141d8b8c5 100644
+--- a/src/codec/BUILD.bazel
++++ b/src/codec/BUILD.bazel
+@@ -63,6 +63,7 @@ skia_cc_library(
+         "//src/core",
+         "//src/core:core_priv",
+     ],
++    copts = select({"@platforms//os:windows": [], "//conditions:default": ["-Wno-switch-default"]}) + select({"@platforms//cpu:x86_64": ["-mfma", "-mf16c"], "//conditions:default": []}),
+ )
+ 
+ skia_cc_library(
+@@ -152,6 +153,7 @@ skia_cc_library(
+         "//src/core",
+         "//src/core:core_priv",
+     ],
++    copts = select({"@platforms//os:windows": [], "//conditions:default": ["-Wno-switch-default"]}) + select({"@platforms//cpu:x86_64": ["-mfma", "-mf16c"], "//conditions:default": []}),
+ )
+ 
+ skia_cc_library(
+diff --git a/src/core/BUILD.bazel b/src/core/BUILD.bazel
+index 2f09530c03..2761a867db 100644
+--- a/src/core/BUILD.bazel
++++ b/src/core/BUILD.bazel
+@@ -503,6 +503,7 @@ skia_cc_library(
+         ":load_sksl_from_disk_true": ["//src/utils:get_executable_path"],
+         ":load_sksl_from_disk_false": [],
+     }),
++    copts = select({"@platforms//os:windows": [], "//conditions:default": ["-Wno-switch-default"]}) + select({"@platforms//cpu:x86_64": ["-mfma", "-mf16c"], "//conditions:default": []}),
+ )
+ 
+ skia_cc_library(
+diff --git a/src/opts/BUILD.bazel b/src/opts/BUILD.bazel
+index 0390a21518..8222f1e348 100644
+--- a/src/opts/BUILD.bazel
++++ b/src/opts/BUILD.bazel
+@@ -35,7 +35,7 @@ skia_cc_library(
+         "//src/shaders:opts_srcs",
+         "//src/sksl/tracing:opts_srcs",
+     ],
+-    copts = DEFAULT_COPTS + ["-march=haswell"],
++    copts = DEFAULT_COPTS + ["-march=haswell"] + select({"@platforms//os:windows": [], "//conditions:default": ["-Wno-switch-default"]}),
+     textual_hdrs = [
+         "SkRasterPipeline_opts.h",
+         ":textual_hdrs",
+@@ -56,7 +56,7 @@ skia_cc_library(
+         "//src/shaders:opts_srcs",
+         "//src/sksl/tracing:opts_srcs",
+     ],
+-    copts = DEFAULT_COPTS + ["-march=skylake-avx512"],
++    copts = DEFAULT_COPTS + ["-march=skylake-avx512"] + select({"@platforms//os:windows": [], "//conditions:default": ["-Wno-switch-default"]}),
+     textual_hdrs = [
+         "SkRasterPipeline_opts.h",
+         ":textual_hdrs",
+
+diff --git a/include/config/copts.bzl b/include/config/copts.bzl
+--- a/include/config/copts.bzl
++++ b/include/config/copts.bzl
+@@ -64,5 +64,4 @@
+     "-fcolor-diagnostics",
+     "-Wall",
+-    "-Werror",
+     "-Weverything",
+     "-Wextra",

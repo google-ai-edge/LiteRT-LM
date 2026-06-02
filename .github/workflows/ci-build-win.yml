@@ -1,19 +1,18 @@
+# Copyright 2026 The ODML Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 name: "CI-Win"
-on:
-  push:
-    tags:
-    - v*.*.*
-  pull_request:
-    branches:
-    - main
-  schedule:
-    - cron: "0 10 * * *"  # Run at 2am PST (10am UTC) every day to refresh the cache.
-  workflow_dispatch:  # Manual trigger
-    inputs:
-      REFRESH_CACHE:
-        description: 'Refresh cache to remove unused files'
-        type: boolean
-        default: true
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
@@ -121,9 +120,13 @@ jobs:
         run: |
           bazel --output_base="$env:BAZEL_OUTPUT_BASE" `
             build --disk_cache=~/.cache/bazel-windows `
+            --deleted_packages=swift `
             --build_tag_filters='-nowindows' `
             //... `
             //runtime/engine:litert_lm_main
+
+
+
 
       - name: Update litert_lm_main prebuilt for Windows if new version tag is pushed.
         if: github.ref_type == 'tag'
@@ -135,8 +138,12 @@ jobs:
         run: |
           bazel --output_base="$env:BAZEL_OUTPUT_BASE" `
             test --disk_cache=~/.cache/bazel-windows --test_output=errors `
+            --deleted_packages=swift `
             --test_tag_filters='-requires-mac-inputs:hard,-nowindows' `
             '--' //... -//runtime/executor/litert:kv_cache_test
+
+
+
 
       - name: Install pytest
         run: python3 -m pip install --break-system-packages pytest==8.3.4

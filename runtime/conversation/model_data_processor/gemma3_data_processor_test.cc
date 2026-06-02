@@ -37,7 +37,6 @@
 #include "runtime/components/preprocessor/audio_preprocessor.h"
 #include "runtime/components/preprocessor/audio_preprocessor_miniaudio.h"
 #include "runtime/components/preprocessor/image_preprocessor.h"
-#include "runtime/components/preprocessor/stb_image_preprocessor.h"
 #include "runtime/components/prompt_template.h"
 #include "runtime/components/sentencepiece_tokenizer.h"
 #include "runtime/components/tokenizer.h"
@@ -188,7 +187,7 @@ TEST_F(Gemma3DataProcessorTest, ToInputDataVectorTextAndImage) {
       "<start_of_image><end_of_turn>";
 
   std::string image_path = (std::filesystem::path(::testing::SrcDir()) /
-                            kImageTestdataDir / "apple.png")
+                            kImageTestdataDir / "apple.bmp")
                                .string();
   const nlohmann::ordered_json message = {
       {"role", "user"},
@@ -203,11 +202,11 @@ TEST_F(Gemma3DataProcessorTest, ToInputDataVectorTextAndImage) {
   InputText expected_text1(
       "<start_of_turn>user\nHere is an image of apples "
       "\n\n<start_of_image>");
-  StbImagePreprocessor image_preprocessor;
+  auto image_preprocessor = ImagePreprocessor::Create();
   ImagePreprocessParameter image_params;
   image_params.SetTargetDimensions(Dimensions({1, 224, 128, 3}));
   ASSERT_OK_AND_ASSIGN(InputImage expected_image,
-                       image_preprocessor.Preprocess(
+                       image_preprocessor->Preprocess(
                            InputImage(ReadFile(image_path)), image_params));
   InputText expected_text2("\n\n");
   InputText expected_text3("<end_of_turn>");
@@ -455,7 +454,7 @@ TEST_F(Gemma3DataProcessorTest, PromptTemplateToInputDataVectorTextAndImage) {
   PromptTemplate prompt_template(template_content);
 
   std::string image_path = (std::filesystem::path(::testing::SrcDir()) /
-                            kImageTestdataDir / "apple.png")
+                            kImageTestdataDir / "apple.bmp")
                                .string();
   const nlohmann::ordered_json messages = {
       {{"role", "system"}, {"content", "Hello world!"}},
@@ -485,11 +484,11 @@ Hello world!
 How are you?
 
 <start_of_image>)""");
-  StbImagePreprocessor image_preprocessor;
+  auto image_preprocessor = ImagePreprocessor::Create();
   ImagePreprocessParameter image_params;
   image_params.SetTargetDimensions(Dimensions({1, 768, 768, 3}));
   ASSERT_OK_AND_ASSIGN(InputImage expected_image,
-                       image_preprocessor.Preprocess(
+                       image_preprocessor->Preprocess(
                            InputImage(ReadFile(image_path)), image_params));
   InputText expected_text2("\n\n");
   InputText expected_text3(R"""(<end_of_turn>

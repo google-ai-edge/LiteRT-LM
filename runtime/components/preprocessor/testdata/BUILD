@@ -21,3 +21,5 @@ filegroup(
     name = "testdata",
     srcs = glob(["*"]),
 )
+
+exports_files(["apple.png"])

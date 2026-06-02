@@ -117,6 +117,19 @@ class ModelDataProcessor {
 
   // Clones the state of the other model data processor.
   virtual absl::Status CloneState(const ModelDataProcessor& other) = 0;
+
+  // Sets whether to return an error status when a tool call fails to parse.
+  void SetReturnErrorOnParseFailure(bool return_error_on_parse_failure) {
+    return_error_on_parse_failure_ = return_error_on_parse_failure;
+  }
+
+  // Returns whether to return an error status when a tool call fails to parse.
+  bool ReturnErrorOnParseFailure() const {
+    return return_error_on_parse_failure_;
+  }
+
+ private:
+  bool return_error_on_parse_failure_ = true;
 };
 
 // TypeSafeModelDataProcessor is a ModelDataProcessor that expects a specific
@@ -171,6 +184,7 @@ class TypeSafeModelDataProcessor : public ModelDataProcessor {
       return absl::InvalidArgumentError(
           "The other ModelDataProcessor is not of the expected type.");
     }
+    SetReturnErrorOnParseFailure(typed_other->ReturnErrorOnParseFailure());
     return this->CloneStateImpl(*typed_other);
   }
 

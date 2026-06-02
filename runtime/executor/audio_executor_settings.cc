@@ -61,9 +61,10 @@ void AudioExecutorSettings::SetMaxSequenceLength(int max_sequence_length) {
 
 absl::Status AudioExecutorSettings::SetBackend(const Backend& backend) {
   if (backend != Backend::CPU && backend != Backend::GPU &&
-      backend != Backend::GPU_ARTISAN) {
+      backend != Backend::GPU_ARTISAN && backend != Backend::NPU) {
     return absl::InvalidArgumentError(
-        "Currently AudioExecutor only supports CPU, GPU and GPU_ARTISAN.");
+        "Currently AudioExecutor only supports CPU, GPU, GPU_ARTISAN, and"
+        " NPU.");
   }
   backend_ = backend;
   return absl::OkStatus();
@@ -84,7 +85,9 @@ AudioExecutorSettings::GetWeightCacheFile(absl::string_view suffix,
                                           bool check_and_clean) const {
   if (absl::StrContains(suffix, kAdapterName) && GetScopedAdapterCacheFile()) {
     return GetScopedAdapterCacheFile();
-  } else if (absl::StrContains(suffix, kEncoderName) &&
+  } else if ((absl::StrContains(suffix, kEncoderName) ||
+              absl::StrContains(suffix, kStaticEncoderName) ||
+              absl::StrContains(suffix, kStreamingEncoderName)) &&
              GetScopedEncoderCacheFile()) {
     return GetScopedEncoderCacheFile();
   }
@@ -99,7 +102,9 @@ AudioExecutorSettings::GetProgramCacheFile(absl::string_view suffix,
   if (absl::StrContains(suffix, kAdapterName) &&
       GetScopedAdapterProgramCacheFile()) {
     return GetScopedAdapterProgramCacheFile();
-  } else if (absl::StrContains(suffix, kEncoderName) &&
+  } else if ((absl::StrContains(suffix, kEncoderName) ||
+              absl::StrContains(suffix, kStaticEncoderName) ||
+              absl::StrContains(suffix, kStreamingEncoderName)) &&
              GetScopedEncoderProgramCacheFile()) {
     return GetScopedEncoderProgramCacheFile();
   }

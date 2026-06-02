@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <filesystem>  // NOLINT: Required for path manipulation.
 #include <fstream>
+#include <functional>
 #include <ios>
 #include <memory>
 #include <string>
@@ -249,10 +250,89 @@ TEST(LitertLmLoaderTest, GetHuggingFaceTokenizerLargeDecompressionSize) {
   auto model_file = ScopedFile::Open(header_path.string());
   ASSERT_TRUE(model_file.ok());
 
-  ASSERT_OK_AND_ASSIGN(auto loader, LitertLmLoader::Create(std::move(model_file.value())));
+  ASSERT_OK_AND_ASSIGN(auto loader,
+                       LitertLmLoader::Create(std::move(model_file.value())));
 
   auto tokenizer = loader->GetHuggingFaceTokenizer();
   EXPECT_FALSE(tokenizer.has_value());
+}
+
+TEST(LitertLmLoaderTest, GetTfLiteModelSectionHints) {
+  const auto model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm_with_section_hints.litertlm";
+  ASSERT_OK_AND_ASSIGN(auto model_file, ScopedFile::Open(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto loader_ptr,
+                       LitertLmLoader::Create(std::move(model_file)));
+  auto& loader = *loader_ptr;
+
+  EXPECT_EQ(loader.GetTFLiteModelPreferActivationType(
+                ModelType::kTfLitePrefillDecode),
+            "fp16");
+  EXPECT_EQ(
+      loader.GetTFLiteModelBackendConstraint(ModelType::kTfLitePrefillDecode),
+      "cpu");
+}
+
+TEST(LitertLmLoaderTest, GetScopedFileSuccess) {
+  const auto model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm.litertlm";
+  ASSERT_OK_AND_ASSIGN(auto model_file, ScopedFile::Open(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto loader_ptr,
+                       LitertLmLoader::Create(std::move(model_file)));
+  auto& loader = *loader_ptr;
+
+  ASSERT_OK_AND_ASSIGN(std::reference_wrapper<ScopedFile> file_ref,
+                       loader.GetScopedFile());
+  EXPECT_TRUE(file_ref.get().IsValid());
+}
+
+TEST(LitertLmLoaderTest, GetScopedFileFailure) {
+  const auto model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm.litertlm";
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<MemoryMappedFile> mapped_file,
+                       MemoryMappedFile::Create(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto loader_ptr,
+                       LitertLmLoader::Create(std::move(mapped_file)));
+  auto& loader = *loader_ptr;
+
+  EXPECT_THAT(
+      loader.GetScopedFile(),
+      StatusIs(absl::StatusCode::kInvalidArgument,
+               ::testing::HasSubstr("Model source is not a ScopedFile")));
+}
+
+TEST(LitertLmLoaderTest, GetSharedScopedFileSuccess) {
+  const auto model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm.litertlm";
+  ASSERT_OK_AND_ASSIGN(auto model_file, ScopedFile::Open(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto loader_ptr,
+                       LitertLmLoader::Create(std::move(model_file)));
+  auto& loader = *loader_ptr;
+
+  ASSERT_OK_AND_ASSIGN(std::shared_ptr<ScopedFile> shared_file,
+                       loader.GetSharedScopedFile());
+  ASSERT_NE(shared_file, nullptr);
+  EXPECT_TRUE(shared_file->IsValid());
+}
+
+TEST(LitertLmLoaderTest, GetSharedScopedFileFailure) {
+  const auto model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm.litertlm";
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<MemoryMappedFile> mapped_file,
+                       MemoryMappedFile::Create(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto loader_ptr,
+                       LitertLmLoader::Create(std::move(mapped_file)));
+  auto& loader = *loader_ptr;
+
+  EXPECT_THAT(
+      loader.GetSharedScopedFile(),
+      StatusIs(absl::StatusCode::kInvalidArgument,
+               ::testing::HasSubstr("Model source is not a ScopedFile")));
 }
 
 }  // namespace
