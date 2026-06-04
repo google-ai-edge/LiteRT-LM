@@ -55,7 +55,7 @@ absl::StatusOr<Environment&> GetEnvironment(EngineSettings& engine_settings,
       std::unordered_map<Backend, absl::StatusOr<CachedEnvironment>>>
       kEnvironments;
 
-  absl::MutexLock lock(&environments_mu);
+  absl::MutexLock lock(environments_mu);
 
   auto it = kEnvironments->find(backend);
   if (it == kEnvironments->end()) {
