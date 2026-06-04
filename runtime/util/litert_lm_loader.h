@@ -192,11 +192,9 @@ class LitertLmLoader {
 
   absl::StatusOr<std::reference_wrapper<ScopedFile>> GetScopedFile();
 
-  absl::StatusOr<std::shared_ptr<ScopedFile>> GetSharedScopedFile();
-
  private:
   explicit LitertLmLoader(ScopedFile model_file)
-      : model_source_(std::make_shared<ScopedFile>(std::move(model_file))) {}
+      : model_source_(std::move(model_file)) {}
 
   explicit LitertLmLoader(
       std::shared_ptr<MemoryMappedFile> memory_mapped_model_file)
@@ -214,9 +212,7 @@ class LitertLmLoader {
 
   // The model file to be loaded, can be either a ScopedFile or a
   // memory-mapped file.
-  std::variant<std::shared_ptr<ScopedFile>,
-               std::shared_ptr<MemoryMappedFile>>
-      model_source_;
+  std::variant<ScopedFile, std::shared_ptr<MemoryMappedFile>> model_source_;
 
   // The header of the model file. Use this to understand what sections are
   // available and their offsets.

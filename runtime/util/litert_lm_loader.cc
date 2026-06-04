@@ -137,7 +137,7 @@ absl::Status LitertLmLoader::MapSection(BufferKey buffer_key,
     // If the begin offset is not aligned to the required platform alignment, we
     // need to map the section starting a bit earlier so that the data is
     // aligned.
-    auto& model_file = *std::get<std::shared_ptr<ScopedFile>>(model_source_);
+    auto& model_file = std::get<ScopedFile>(model_source_);
     size_t alignment = MemoryMappedFile::GetOffsetAlignment();
     uint64_t alignment_gap = begin_offset % alignment;
     uint64_t aligned_begin_offset = begin_offset - alignment_gap;
@@ -162,17 +162,8 @@ absl::Status LitertLmLoader::MapSection(BufferKey buffer_key,
 
 absl::StatusOr<std::reference_wrapper<ScopedFile>>
 LitertLmLoader::GetScopedFile() {
-  if (std::holds_alternative<std::shared_ptr<ScopedFile>>(model_source_)) {
-    return *std::get<std::shared_ptr<ScopedFile>>(model_source_);
-  }
-  return absl::InvalidArgumentError(
-      "Model source is not a ScopedFile, cannot get ScopedFile.");
-}
-
-absl::StatusOr<std::shared_ptr<ScopedFile>>
-LitertLmLoader::GetSharedScopedFile() {
-  if (std::holds_alternative<std::shared_ptr<ScopedFile>>(model_source_)) {
-    return std::get<std::shared_ptr<ScopedFile>>(model_source_);
+  if (std::holds_alternative<ScopedFile>(model_source_)) {
+    return std::get<ScopedFile>(model_source_);
   }
   return absl::InvalidArgumentError(
       "Model source is not a ScopedFile, cannot get ScopedFile.");
@@ -209,7 +200,7 @@ absl::Status LitertLmLoader::Initialize() {
     header_size = std::min(kLitertLmHeaderMaxSize, model_file_size);
     header_data = memory_mapped_model_file->data();
   } else {
-    auto& model_file = *std::get<std::shared_ptr<ScopedFile>>(model_source_);
+    auto& model_file = std::get<ScopedFile>(model_source_);
     ASSIGN_OR_RETURN(model_file_size, model_file.GetSize());
     header_size = std::min(kLitertLmHeaderMaxSize, model_file_size);
     ASSIGN_OR_RETURN(header_memory_mapped_file,
