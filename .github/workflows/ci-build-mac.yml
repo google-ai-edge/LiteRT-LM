@@ -81,8 +81,6 @@ jobs:
         with:
           path: |
             ~/.cache/bazel-macos
-            ~/.cache/bazel-macos-dylib
-            ~/.cache/bazel-ios
           key: ${{ steps.cache-keys.outputs.CACHE_KEY }}
           restore-keys: |
             ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_HEAD }}
@@ -141,7 +139,7 @@ jobs:
 
       - name: Run bazel build on MacOS with dynamic linking.
         run: |
-          bazel build --disk_cache=~/.cache/bazel-macos-dylib \
+          bazel build --disk_cache=~/.cache/bazel-macos \
             --define=litert_link_capi_so=true \
             --define=resolve_symbols_in_exec=false \
             //runtime/engine:litert_lm_main
@@ -152,7 +150,7 @@ jobs:
           # targets that are not compatible with the iOS simulator, which
           # leads to build failures. These flags filter out those
           # incompatible builds.
-          bazel build --disk_cache=~/.cache/bazel-ios --config=ios_sim_arm64 \
+          bazel build --disk_cache=~/.cache/bazel-macos --config=ios_sim_arm64 \
             --build_tag_filters=-requires-mac-inputs:hard,-no_mac \
             //... \
             //runtime/engine:litert_lm_main \
@@ -179,6 +177,4 @@ jobs:
         with:
           path: |
             ~/.cache/bazel-macos
-            ~/.cache/bazel-macos-dylib
-            ~/.cache/bazel-ios
           key: ${{ steps.cache-keys.outputs.CACHE_KEY }}
