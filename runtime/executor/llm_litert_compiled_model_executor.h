@@ -45,6 +45,7 @@
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/llm_litert_mtp_drafter.h"
 #include "runtime/executor/llm_processed_context.h"
+#include "runtime/executor/prefix_kv_cache/prefix_kv_cache_manager.h"
 
 namespace litert::lm {
 
@@ -242,6 +243,12 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
   absl::Status SampleLogits(const TensorBuffer& logits,
                             TensorBuffer& ids_tensor);
 
+  // Get backend type for prefix cache isolation
+  BackendType GetBackendType() const;
+
+  // Load KV checkpoint from prefix cache
+  absl::Status LoadKVCheckpoint(const KVCheckpoint* checkpoint);
+
   // Prefill internal implementation, for one prefill call to the Interpreter
   // with a certain length synchronously or asynchronously.
   absl::Status PrefillInternal(
@@ -380,6 +387,9 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
 
   // The MTP drafter model.
   std::unique_ptr<LlmLiteRtMtpDrafter> mtp_drafter_;
+
+  // Prefix KV Cache manager
+  std::unique_ptr<PrefixKVCacheManager> prefix_cache_;
 };
 
 // The static executor for the prefill-decode compiled model.

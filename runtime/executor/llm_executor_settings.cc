@@ -125,6 +125,9 @@ std::ostream& operator<<(std::ostream& os, const AdvancedSettings& settings) {
   } else {
     os << "hint_kernel_batch_size: Not set\n";
   }
+  os << "enable_prefix_kv_cache: " << settings.enable_prefix_kv_cache << "\n";
+  os << "max_cached_tokens: " << settings.max_cached_tokens << "\n";
+  os << "lru_evict_ratio: " << settings.lru_evict_ratio << "\n";
   return os;
 }
 

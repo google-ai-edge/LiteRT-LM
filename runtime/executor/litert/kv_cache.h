@@ -42,13 +42,9 @@ class LitertKVCache : public KVCacheInterface {
 
   int GetBatchSize() const override { return batch_size_; };
 
-  absl::StatusOr<std::string> Serialize() const override {
-    return absl::UnimplementedError("Not implemented");
-  }
+  absl::StatusOr<std::string> Serialize() const override;
 
-  absl::Status Load(absl::string_view serialized_kv_cache) override {
-    return absl::UnimplementedError("Not implemented");
-  }
+  absl::Status Load(absl::string_view serialized_kv_cache) override;
 
   absl::Status SelectAndCopyFrom(KVCacheInterface& other,
                                  int batch_index) override;
@@ -74,6 +70,22 @@ class LitertKVCache : public KVCacheInterface {
   // sets of KV cache buffers, one for input and one for output. On each call,
   // the input/output buffers will be swapped.
   absl::StatusOr<KVCacheBuffers> GetKVCacheBuffers();
+
+  // Public static helper to deserialize KV cache data into provided buffers.
+  // This can be used by both LitertKVCache::Load and external code (e.g., prefix cache).
+  struct DeserializationResult {
+    int num_entries;
+    int batch_size;
+    bool bank_1_is_input;
+    bool has_bank_2;
+  };
+  
+  static absl::StatusOr<DeserializationResult> DeserializeBuffers(
+      absl::string_view serialized_kv_cache,
+      absl::flat_hash_map<std::string, TensorBuffer>& key_buffers,
+      absl::flat_hash_map<std::string, TensorBuffer>& value_buffers,
+      std::optional<absl::flat_hash_map<std::string, TensorBuffer>>& bank_2_key_buffers,
+      std::optional<absl::flat_hash_map<std::string, TensorBuffer>>& bank_2_value_buffers);
 
  private:
   LitertKVCache(

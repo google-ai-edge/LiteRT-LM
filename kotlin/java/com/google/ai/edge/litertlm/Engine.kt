@@ -86,6 +86,9 @@ class Engine(val engineConfig: EngineConfig) : AutoCloseable {
           (engineConfig.audioBackend as? Backend.NPU)?.nativeLibraryDir ?: "",
           mainBackendNumThreads,
           audioBackendNumThreads,
+          engineConfig.enablePrefixKvCache,
+          engineConfig.maxCachedTokens,
+          engineConfig.lruEvictRatio,
         )
     }
   }

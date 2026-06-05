@@ -75,6 +75,12 @@ sealed class Backend(val name: String) {
  * @property cacheDir The directory for placing cache files. It should be a directory with write
  *   access. If not set, it uses the directory of the [modelPath]. Set to ":nocache" to disable
  *   caching at all.
+ * @property enablePrefixKvCache If true, enables prefix KV cache for sharing common prefix tokens
+ *   across multiple requests. Default is false.
+ * @property maxCachedTokens The maximum number of tokens to cache for prefix KV cache.
+ *   0 means unlimited. Default is 8192.
+ * @property lruEvictRatio The ratio of least recently used nodes to evict when cache is full.
+ *   Default is 0.3 (30%).
  */
 data class EngineConfig(
   val modelPath: String,
@@ -84,6 +90,9 @@ data class EngineConfig(
   val maxNumTokens: Int? = null,
   val maxNumImages: Int? = null,
   val cacheDir: String? = null,
+  val enablePrefixKvCache: Boolean = false,
+  val maxCachedTokens: Int = 8192,
+  val lruEvictRatio: Double = 0.3,
 ) {
   init {
     require(maxNumTokens == null || maxNumTokens > 0) {
