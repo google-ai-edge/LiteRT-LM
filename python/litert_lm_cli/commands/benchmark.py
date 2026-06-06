@@ -83,38 +83,48 @@ def run_benchmark(
     click.echo(
         f"Benchmarking model: {model_obj.to_str()} ({model_obj.model_path})"
     )
-    resolved_backend_str = backend_val.get_name()
-    click.echo(f"Backend                    : {resolved_backend_str}")
-    click.echo(f"Number of tokens in prefill: {prefill_tokens}")
-    click.echo(f"Number of tokens in decode : {decode_tokens}")
+    click.echo()
+    click.echo("----- Config -----")
+    click.echo(f"{'Backend':<27} : {backend_val.get_name()}")
+    click.echo(f"{'Number of tokens in prefill':<27} : {prefill_tokens}")
+    click.echo(f"{'Number of tokens in decode':<27} : {decode_tokens}")
     if max_num_tokens is not None:
-      click.echo(f"Max number of tokens       : {max_num_tokens}")
+      click.echo(f"{'Max number of tokens':<27} : {max_num_tokens}")
 
     spec_dec_str = "auto"
     if enable_speculative_decoding is True:
       spec_dec_str = "true"
     elif enable_speculative_decoding is False:
       spec_dec_str = "false"
-    click.echo(f"Cache                      : {cache}")
-    click.echo(f"Speculative decoding       : {spec_dec_str}")
+    click.echo(f"{'Cache':<27} : {cache}")
+    click.echo(f"{'Speculative decoding':<27} : {spec_dec_str}")
     if is_android:
-      click.echo("Target                     : Android")
+      click.echo(f"{'Target':<27} : Android")
 
     result = benchmark_obj.run()
-
-    click.echo("----- Results -----")
+    click.echo()
+    click.echo("----- Result -----")
     click.echo(
-        f"Prefill speed:        {result.last_prefill_tokens_per_second:.2f}"
+        f"{'Prefill speed':<27} : {result.last_prefill_tokens_per_second:.2f}"
         " tokens/s"
     )
     click.echo(
-        f"Decode speed:         {result.last_decode_tokens_per_second:.2f}"
+        f"{'Decode speed':<27} : {result.last_decode_tokens_per_second:.2f}"
         " tokens/s"
     )
-    click.echo(f"Init time:            {result.init_time_in_second:.4f} s")
+    click.echo(f"{'Init time':<27} : {result.init_time_in_second:.4f} s")
     click.echo(
-        f"Time to first token:  {result.time_to_first_token_in_second:.4f} s"
+        f"{'Time to first token':<27} :"
+        f" {result.time_to_first_token_in_second:.4f} s"
     )
+    if is_android:
+      click.echo(f"{'Peak memory footprint':<27} : N/A (Android)")
+    else:
+      click.echo(f"{'Peak ram usage':<27} : {result.peak_mem_mb:.2f} MB")
+      if result.peak_private_mb > 0:
+        click.echo(
+            f"{'Peak private footprint':<27} : {result.peak_private_mb:.2f} MB"
+        )
 
   except Exception:  # pylint: disable=broad-exception-caught
     click.echo(click.style("An error occurred during benchmarking", fg="red"))

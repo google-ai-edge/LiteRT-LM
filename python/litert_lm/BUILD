@@ -17,6 +17,8 @@ load(
     "pytype_strict_library",
 )
 # [Google-internal load of `cc_binary`]
+# [Google-internal load of `cc_import`]
+# [Google-internal load of `cc_library`]
 
 load("@rules_python//python:defs.bzl", "py_test")
 load("//python/litert_lm:cc_runfiles.bzl", "cc_runfiles")
@@ -30,6 +32,7 @@ cc_binary(
         "//c:engine.cc",
         "//c:engine.h",
     ],
+    additional_linker_inputs = [":litert_lm.lds"],
     copts = ["-fvisibility=hidden"],
     features = ["-legacy_whole_archive"],
     linkopts = select({
@@ -44,6 +47,10 @@ cc_binary(
             "-Wl,--gc-sections",
             # Ensure symbols are resolved internally first.
             "-Wl,-Bsymbolic",
+            # Exclude symbols in all static libs from auto export.
+            "-Wl,--exclude-libs,ALL",
+            # Restrict exports to C API symbols.
+            "-Wl,--version-script=$(location :litert_lm.lds)",
             # Update the rpath
             "-Wl,-rpath,$$ORIGIN",
         ],
@@ -80,6 +87,44 @@ cc_binary(
         "//runtime/proto:token_cc_proto",
         "//runtime/util:logging",
         "//runtime/util:scoped_file",
+    ],
+)
+
+cc_import(
+    name = "litert-lm-import",
+    shared_library = ":litert-lm",
+)
+
+cc_library(
+    name = "litert-lm-dynamic",
+    hdrs = ["//c:engine.h"],
+    deps = [
+        ":litert-lm-import",
+    ],
+)
+
+cc_binary(
+    name = "benchmark_cc",
+    srcs = ["benchmark.cc"],
+    copts = select({
+        "@platforms//os:windows": [],
+        "//conditions:default": [
+            "-ffunction-sections",
+            "-fdata-sections",
+        ],
+    }),
+    linkopts = select({
+        "@platforms//os:windows": ["-DEFAULTLIB:psapi.lib"],
+        "//conditions:default": [
+            "-ldl",
+            "-Wl,--strip-all",
+            "-Wl,--gc-sections",
+            "-Wl,-rpath,$$ORIGIN",  # allow finding the C API shared library
+        ],
+    }),
+    linkstatic = False,
+    deps = [
+        ":litert-lm-dynamic",
     ],
 )
 
@@ -150,6 +195,7 @@ pytype_strict_library(
 pytype_strict_library(
     name = "benchmark",
     srcs = ["benchmark.py"],
+    data = [":benchmark_cc"],
     deps = [
         ":_ffi",
         ":interfaces",

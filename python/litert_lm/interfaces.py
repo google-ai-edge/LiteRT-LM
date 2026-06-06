@@ -432,6 +432,8 @@ class BenchmarkInfo:
   last_prefill_tokens_per_second: float
   last_decode_token_count: int
   last_decode_tokens_per_second: float
+  peak_mem_mb: float = 0.0
+  peak_private_mb: float = 0.0
 
 
 @dataclasses.dataclass
