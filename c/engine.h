@@ -309,6 +309,18 @@ LITERT_LM_C_API_EXPORT
 void litert_lm_engine_settings_set_max_num_tokens(
     LiteRtLmEngineSettings* settings, int max_num_tokens);
 
+// Sets the maximum number of images the model can handle in a single
+// session. Required for multimodal vision models (e.g. Gemma 3 Nano,
+// Gemma 4) — without this set on the C API path, vision input is
+// silently ignored and the model hallucinates a response from text
+// alone. Mirrors `EngineConfig.maxNumImages` in the Kotlin API.
+//
+// @param settings The engine settings.
+// @param max_num_images The maximum number of images. Must be > 0.
+LITERT_LM_C_API_EXPORT
+void litert_lm_engine_settings_set_max_num_images(
+    LiteRtLmEngineSettings* settings, int max_num_images);
+
 // Sets whether the engine should load different sections of the litertlm file
 // in parallel. Defaults to true.
 //

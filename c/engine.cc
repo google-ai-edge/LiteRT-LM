@@ -488,6 +488,15 @@ void litert_lm_engine_settings_set_max_num_tokens(
         max_num_tokens);
   }
 }
+
+void litert_lm_engine_settings_set_max_num_images(
+    LiteRtLmEngineSettings* settings, int max_num_images) {
+  if (settings && settings->settings && max_num_images > 0) {
+    settings->settings->GetMutableMainExecutorSettings().SetMaxNumImages(
+        max_num_images);
+  }
+}
+
 void litert_lm_engine_settings_set_parallel_file_section_loading(
     LiteRtLmEngineSettings* settings, bool parallel_file_section_loading) {
   if (settings && settings->settings) {
