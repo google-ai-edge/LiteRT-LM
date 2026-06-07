@@ -58,12 +58,14 @@ sys.modules["litert_lm.session"] = (
 
 # 2. Now we can import the real litert_lm safely. It will use our mocked
 # extension.
+# pylint: disable=g-import-not-at-top
 import litert_lm as mock_litert_lm
 from litert_lm import interfaces
+# pylint: enable=g-import-not-at-top
 
-# 3. Explicitly override Engine and other classes with Mocks to ensure they don't
-# point to the mocked extension's classes which might not behave like standard
-# mocks.
+# 3. Explicitly override Engine and other classes with Mocks to ensure they
+# don't point to the mocked extension's classes which might not behave like
+# standard mocks.
 mock_litert_lm.Engine = mock_engine.Engine
 mock_litert_lm.set_min_log_severity = mock_ffi.set_min_log_severity
 
@@ -79,10 +81,63 @@ if "litert_lm_cli" in sys.modules:
       "litert_lm_cli"
   ].model = mock_model_mod
 
+# pylint: disable=g-import-not-at-top
 from litert_lm_cli.commands import gemini_handler
 from litert_lm_cli.commands import openai_handler
-from litert_lm_cli.commands import serve
 from litert_lm_cli.commands import serve_util
+# pylint: enable=g-import-not-at-top
+
+
+def _setup_mock_server_for_eviction() -> tuple[
+    serve_util.LiteRTLMServer, dict[str, mock.MagicMock]
+]:
+  """Sets up a mock LiteRTLMServer and mock engines for eviction tests.
+
+  Returns:
+    A tuple containing the mocked server and a dictionary mapping model
+    paths to their mocked Engine instances.
+  """
+  mock_models_by_id = {
+      "A": mock.Mock(spec_set=["exists", "model_path"]),
+      "B": mock.Mock(spec_set=["exists", "model_path"]),
+      "C": mock.Mock(spec_set=["exists", "model_path"]),
+      "D": mock.Mock(spec_set=["exists", "model_path"]),
+  }
+  for k, m in mock_models_by_id.items():
+    m.exists.return_value = True
+    m.model_path = f"/path/to/model_{k}"
+
+  mock_model_mod.Model.from_model_id.side_effect = (
+      lambda model_id: mock_models_by_id.get(
+          model_id, mock.Mock(exists=mock.Mock(return_value=False))
+      )
+  )
+
+  mock_engines_by_path = {
+      "/path/to/model_A": mock.MagicMock(spec=interfaces.AbstractEngine),
+      "/path/to/model_B": mock.MagicMock(spec=interfaces.AbstractEngine),
+      "/path/to/model_C": mock.MagicMock(spec=interfaces.AbstractEngine),
+      "/path/to/model_D": mock.MagicMock(spec=interfaces.AbstractEngine),
+  }
+  for e in mock_engines_by_path.values():
+    e.__enter__.return_value = e
+
+  mock_litert_lm.Engine.side_effect = (
+      lambda model_path, **kwargs: mock_engines_by_path.get(model_path)
+  )
+
+  server = mock.create_autospec(serve_util.LiteRTLMServer, instance=True)
+  server.engines = {}
+  server.engine_lru = []
+  server.max_pool_size = 3
+  server.litert_lm_engine = None
+  server.model_id = None
+  server.backend = None
+  server.max_num_tokens = None
+  server.vision_backend = None
+  server.audio_backend = None
+  server.enable_speculative_decoding = None
+  return server, mock_engines_by_path
 
 
 class ServeTest(parameterized.TestCase):
@@ -92,6 +147,7 @@ class ServeTest(parameterized.TestCase):
     # Reset mocks.
     mock_litert_lm.set_min_log_severity.reset_mock()  # pytype: disable=attribute-error
     mock_litert_lm.Engine.reset_mock()  # pytype: disable=attribute-error
+    mock_litert_lm.Engine.side_effect = None
     mock_model_mod.Model.from_model_id.reset_mock()
     mock_model_mod.Model.from_model_id.side_effect = None
     mock_model_mod.parse_backend.reset_mock()
@@ -267,9 +323,18 @@ class ServeTest(parameterized.TestCase):
     mock_engine_instance.__exit__.return_value = False
     mock_litert_lm.Engine.return_value = mock_engine_instance
 
-    server = mock.MagicMock(spec=serve_util.LiteRTLMServer)
+    server = mock.create_autospec(serve_util.LiteRTLMServer, instance=True)
+    server.engines = {}
+    server.engine_lru = []
+    server.max_pool_size = 3
     server.litert_lm_engine = None
     server.model_id = None
+    server.backend = None
+    server.max_num_tokens = None
+    server.vision_backend = None
+    server.audio_backend = None
+    server.enable_speculative_decoding = None
+    mock.seal(server)
 
     # First call creates the engine.
     engine1 = serve_util.get_or_initialize_server_engine(
@@ -322,11 +387,18 @@ class ServeTest(parameterized.TestCase):
 
     mock_litert_lm.Engine.side_effect = engine_side_effect
 
-    server = mock.MagicMock(spec=serve_util.LiteRTLMServer)
+    server = mock.create_autospec(serve_util.LiteRTLMServer, instance=True)
+    server.engines = {}
+    server.engine_lru = []
+    server.max_pool_size = 3
     server.litert_lm_engine = None
     server.model_id = None
     server.backend = None
     server.max_num_tokens = None
+    server.vision_backend = None
+    server.audio_backend = None
+    server.enable_speculative_decoding = None
+    mock.seal(server)
 
     # Initialize with model A.
     engine1 = serve_util.get_or_initialize_server_engine(server, model_id="A")
@@ -338,7 +410,7 @@ class ServeTest(parameterized.TestCase):
     engine2 = serve_util.get_or_initialize_server_engine(server, model_id="B")
     self.assertEqual(engine2, mock_engine_b)
     self.assertEqual(server.model_id, "B")
-    mock_engine_a.__exit__.assert_called_once_with(None, None, None)
+    mock_engine_a.__exit__.assert_not_called()
 
   def test_get_engine_backend_switching_reinitializes(self):
     mock_model = mock.Mock(spec_set=["exists", "model_path"])
@@ -350,11 +422,18 @@ class ServeTest(parameterized.TestCase):
     mock_engine_instance.__enter__.return_value = mock_engine_instance
     mock_litert_lm.Engine.return_value = mock_engine_instance
 
-    server = mock.MagicMock(spec=serve_util.LiteRTLMServer)
+    server = mock.create_autospec(serve_util.LiteRTLMServer, instance=True)
+    server.engines = {}
+    server.engine_lru = []
+    server.max_pool_size = 3
     server.litert_lm_engine = None
     server.model_id = None
     server.backend = None
     server.max_num_tokens = None
+    server.vision_backend = None
+    server.audio_backend = None
+    server.enable_speculative_decoding = None
+    mock.seal(server)
 
     # Initialize with the CPU backend.
     serve_util.get_or_initialize_server_engine(
@@ -368,7 +447,97 @@ class ServeTest(parameterized.TestCase):
         server, model_id="model", backend=interfaces.Backend.GPU()
     )
     self.assertEqual(server.backend, interfaces.Backend.GPU())
-    mock_engine_instance.__exit__.assert_called_once_with(None, None, None)
+    mock_engine_instance.__exit__.assert_not_called()
+
+  def test_get_engine_file_not_found(self):
+    mock_model = mock.Mock(spec_set=["exists", "model_path"])
+    mock_model.exists.return_value = False
+    mock_model.model_path = "/path/to/model"
+    mock_model_mod.Model.from_model_id.return_value = mock_model
+
+    mock_litert_lm.Engine.side_effect = RuntimeError("Failed to load model")
+
+    server = mock.create_autospec(serve_util.LiteRTLMServer, instance=True)
+    server.engines = {}
+    server.engine_lru = []
+    server.max_pool_size = 3
+    server.litert_lm_engine = None
+    server.model_id = None
+    server.backend = None
+    server.max_num_tokens = None
+    server.vision_backend = None
+    server.audio_backend = None
+    server.enable_speculative_decoding = None
+    mock.seal(server)
+
+    with self.assertRaises(FileNotFoundError):
+      serve_util.get_or_initialize_server_engine(
+          server, model_id="missing-model"
+      )
+
+  def test_get_engine_lru_eviction_fill(self):
+    server, mock_engines_by_path = _setup_mock_server_for_eviction()
+    mock.seal(server)
+
+    serve_util.get_or_initialize_server_engine(server, model_id="A")
+    serve_util.get_or_initialize_server_engine(server, model_id="B")
+    serve_util.get_or_initialize_server_engine(server, model_id="C")
+
+    self.assertCountEqual(
+        (k.model_id for k in server.engines), ["A", "B", "C"]
+    )
+    mock_engines_by_path["/path/to/model_A"].__exit__.assert_not_called()
+
+  def test_get_engine_lru_eviction_evicts_lru(self):
+    server, mock_engines_by_path = _setup_mock_server_for_eviction()
+
+    cpu_backend_name = interfaces.Backend.CPU().get_name()
+    key_a = serve_util.EngineKey(model_id="A", backend=cpu_backend_name)
+    key_b = serve_util.EngineKey(model_id="B", backend=cpu_backend_name)
+    key_c = serve_util.EngineKey(model_id="C", backend=cpu_backend_name)
+
+    server.engines = {
+        key_a: mock_engines_by_path["/path/to/model_A"],
+        key_b: mock_engines_by_path["/path/to/model_B"],
+        key_c: mock_engines_by_path["/path/to/model_C"],
+    }
+    server.engine_lru = [key_a, key_b, key_c]
+    mock.seal(server)
+
+    serve_util.get_or_initialize_server_engine(server, model_id="D")
+
+    self.assertCountEqual(
+        (k.model_id for k in server.engines), ["B", "C", "D"]
+    )
+    mock_engines_by_path["/path/to/model_A"].__exit__.assert_called_once_with(
+        None, None, None
+    )
+
+  def test_get_engine_lru_eviction_touch_updates_lru(self):
+    server, mock_engines_by_path = _setup_mock_server_for_eviction()
+
+    cpu_backend_name = interfaces.Backend.CPU().get_name()
+    key_b = serve_util.EngineKey(model_id="B", backend=cpu_backend_name)
+    key_c = serve_util.EngineKey(model_id="C", backend=cpu_backend_name)
+    key_d = serve_util.EngineKey(model_id="D", backend=cpu_backend_name)
+
+    server.engines = {
+        key_b: mock_engines_by_path["/path/to/model_B"],
+        key_c: mock_engines_by_path["/path/to/model_C"],
+        key_d: mock_engines_by_path["/path/to/model_D"],
+    }
+    server.engine_lru = [key_b, key_c, key_d]
+    mock.seal(server)
+
+    serve_util.get_or_initialize_server_engine(server, model_id="B")
+    serve_util.get_or_initialize_server_engine(server, model_id="A")
+
+    self.assertCountEqual(
+        (k.model_id for k in server.engines), ["D", "B", "A"]
+    )
+    mock_engines_by_path["/path/to/model_C"].__exit__.assert_called_once_with(
+        None, None, None
+    )
 
   @parameterized.named_parameters(
       dict(

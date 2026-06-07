@@ -35,6 +35,9 @@ def run_server(
     port: int,
     handler_class: type[http.server.BaseHTTPRequestHandler],
     api_name: str,
+    *,
+    max_num_tokens: int | None = None,
+    enable_speculative_decoding: bool | None = None,
 ) -> None:
   """Starts the HTTP server.
 
@@ -43,10 +46,14 @@ def run_server(
     port: Port to listen on.
     handler_class: The HTTP handler class to use.
     api_name: The API protocol name (e.g., "OpenAI", "Gemini").
+    max_num_tokens: Maximum number of tokens for the KV cache.
+    enable_speculative_decoding: Whether to enable speculative decoding (MTP).
   """
   server_address = (host, port)
   try:
     with serve_util.LiteRTLMServer(server_address, handler_class) as server:
+      server.max_num_tokens = max_num_tokens
+      server.enable_speculative_decoding = enable_speculative_decoding
       click.echo(
           click.style(
               f"Starting {api_name}-compatible API server on {host}:{port}...",
@@ -54,11 +61,7 @@ def run_server(
               bold=True,
           )
       )
-      try:
-        server.serve_forever()
-      finally:
-        if server.litert_lm_engine is not None:
-          server.litert_lm_engine.__exit__(None, None, None)
+      server.serve_forever()
   except KeyboardInterrupt:
     click.echo(click.style("\nShutting down server...", fg="cyan"))
 
@@ -85,7 +88,29 @@ def run_server(
     help="The API protocol to use.",
 )
 @click.option("--verbose", is_flag=True, help="Enable verbose logging")
-def serve(host: str, port: int, *, api: str, verbose: bool) -> None:
+@click.option(
+    "--max-num-tokens",
+    default=None,
+    type=int,
+    help=(
+        "Maximum number of tokens for the KV cache to optimize memory"
+        " bandwidth."
+    ),
+)
+@click.option(
+    "--enable-speculative-decoding/--no-enable-speculative-decoding",
+    default=None,
+    help="Enable speculative decoding (MTP) if supported by the model.",
+)
+def serve(
+    host: str,
+    port: int,
+    *,
+    api: str,
+    verbose: bool,
+    max_num_tokens: int | None,
+    enable_speculative_decoding: bool | None,
+) -> None:
   """Starts a local HTTP server speaking the OpenAI or Gemini API protocol.
 
   Args:
@@ -93,6 +118,9 @@ def serve(host: str, port: int, *, api: str, verbose: bool) -> None:
     port: Port to listen on.
     api: The API protocol to use (openai or gemini).
     verbose: Whether to enable verbose logging.
+    max_num_tokens: Maximum number of tokens for the KV cache to optimize
+      memory.
+    enable_speculative_decoding: Whether to enable speculative decoding (MTP).
   """
   if verbose:
     litert_lm.set_min_log_severity(litert_lm.LogSeverity.VERBOSE)
@@ -107,7 +135,14 @@ def serve(host: str, port: int, *, api: str, verbose: bool) -> None:
   else:
     raise click.BadParameter(f"Unsupported API: {api}")
 
-  run_server(host, port, handler_class, api_name)
+  run_server(
+      host,
+      port,
+      handler_class,
+      api_name,
+      max_num_tokens=max_num_tokens,
+      enable_speculative_decoding=enable_speculative_decoding,
+  )
 
 
 def register(cli: click.Group) -> None:
