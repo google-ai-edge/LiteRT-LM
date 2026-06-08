@@ -86,13 +86,18 @@ class Conversation(
    * [RECURRING_TOOL_CALL_LIMIT] times.
    *
    * @param message The message to send to the model.
+   * @param enableThinking Optional parameter to override the conversation's thinking configuration.
    * @param extraContext Optional context used for prompt template rendering.
    * @return The model's response message.
    * @throws IllegalStateException if the conversation is not alive, if the native layer returns an
    *   invalid response, or if the tool call limit is exceeded.
    * @throws LiteRtLmJniException if an error occurs during the native call.
    */
-  fun sendMessage(message: Message, extraContext: Map<String, Any> = emptyMap()): Message {
+  fun sendMessage(
+    message: Message,
+    enableThinking: Boolean? = null,
+    extraContext: Map<String, Any> = emptyMap(),
+  ): Message {
     checkIsAlive()
 
     var currentMessageJson = message.toJson()
@@ -104,6 +109,7 @@ class Conversation(
         LiteRtLmJni.nativeSendMessage(
           handle,
           currentMessageJson.toString(),
+          enableThinking,
           extraContextJsonString,
           visualTokenBudget,
         )
@@ -133,14 +139,19 @@ class Conversation(
    * [RECURRING_TOOL_CALL_LIMIT] times.
    *
    * @param contents The list of contents to send to the model.
+   * @param enableThinking Optional parameter to override the conversation's thinking configuration.
    * @param extraContext Optional context used for prompt template rendering.
    * @return The model's response message.
    * @throws IllegalStateException if the conversation is not alive, if the native layer returns an
    *   invalid response, or if the tool call limit is exceeded.
    * @throws LiteRtLmJniException if an error occurs during the native call.
    */
-  fun sendMessage(contents: Contents, extraContext: Map<String, Any> = emptyMap()): Message {
-    return sendMessage(Message.user(contents), extraContext)
+  fun sendMessage(
+    contents: Contents,
+    enableThinking: Boolean? = null,
+    extraContext: Map<String, Any> = emptyMap(),
+  ): Message {
+    return sendMessage(Message.user(contents), enableThinking, extraContext)
   }
 
   /**
@@ -152,14 +163,18 @@ class Conversation(
    * [RECURRING_TOOL_CALL_LIMIT] times.
    *
    * @param text The text to send to the model.
+   * @param enableThinking Optional parameter to override the conversation's thinking configuration.
    * @param extraContext Optional context used for prompt template rendering.
    * @return The model's response message.
    * @throws IllegalStateException if the conversation is not alive, if the native layer returns an
    *   invalid response, or if the tool call limit is exceeded.
    * @throws LiteRtLmJniException if an error occurs during the native call.
    */
-  fun sendMessage(text: String, extraContext: Map<String, Any> = emptyMap()): Message =
-    sendMessage(Contents.of(text), extraContext)
+  fun sendMessage(
+    text: String,
+    enableThinking: Boolean? = null,
+    extraContext: Map<String, Any> = emptyMap(),
+  ): Message = sendMessage(Contents.of(text), enableThinking, extraContext)
 
   /**
    * Send a message to the model and returns the response async with a callback.
@@ -171,6 +186,7 @@ class Conversation(
    *
    * @param message The message to send to the model.
    * @param callback The callback to receive the streaming responses.
+   * @param enableThinking Optional parameter to override the conversation's thinking configuration.
    * @param extraContext Optional context used for prompt template rendering.
    * @throws IllegalStateException if the conversation has already been closed or the content is
    *   empty.
@@ -178,6 +194,7 @@ class Conversation(
   fun sendMessageAsync(
     message: Message,
     callback: MessageCallback,
+    enableThinking: Boolean? = null,
     extraContext: Map<String, Any> = emptyMap(),
   ) {
     checkIsAlive()
@@ -185,10 +202,11 @@ class Conversation(
     val extraContextJsonString = extraContext.toJsonObject().toString()
     val visualTokenBudget = @OptIn(ExperimentalApi::class) ExperimentalFlags.visualTokenBudget
 
-    val jniCallback = JniMessageCallbackImpl(callback)
+    val jniCallback = JniMessageCallbackImpl(callback, enableThinking)
     LiteRtLmJni.nativeSendMessageAsync(
       handle,
       message.toJson().toString(),
+      enableThinking,
       extraContextJsonString,
       jniCallback,
       visualTokenBudget,
@@ -205,6 +223,7 @@ class Conversation(
    *
    * @param contents The list of contents to send to the model.
    * @param callback The callback to receive the streaming responses.
+   * @param enableThinking Optional parameter to override the conversation's thinking configuration.
    * @param extraContext Optional context used for prompt template rendering.
    * @throws IllegalStateException if the conversation has already been closed or the content is
    *   empty.
@@ -212,8 +231,9 @@ class Conversation(
   fun sendMessageAsync(
     contents: Contents,
     callback: MessageCallback,
+    enableThinking: Boolean? = null,
     extraContext: Map<String, Any> = emptyMap(),
-  ) = sendMessageAsync(Message.user(contents), callback, extraContext)
+  ) = sendMessageAsync(Message.user(contents), callback, enableThinking, extraContext)
 
   /**
    * Send a text to the model and returns the response async with a callback.
@@ -225,6 +245,7 @@ class Conversation(
    *
    * @param text The text to send to the model.
    * @param callback The callback to receive the streaming responses.
+   * @param enableThinking Optional parameter to override the conversation's thinking configuration.
    * @param extraContext Optional context used for prompt template rendering.
    * @throws IllegalStateException if the conversation has already been closed or the content is
    *   empty.
@@ -232,8 +253,9 @@ class Conversation(
   fun sendMessageAsync(
     text: String,
     callback: MessageCallback,
+    enableThinking: Boolean? = null,
     extraContext: Map<String, Any> = emptyMap(),
-  ) = sendMessageAsync(Contents.of(text), callback, extraContext)
+  ) = sendMessageAsync(Contents.of(text), callback, enableThinking, extraContext)
 
   /**
    * Sends a message to the model and returns the response async as a [Flow].
@@ -244,6 +266,7 @@ class Conversation(
    * [RECURRING_TOOL_CALL_LIMIT] times.
    *
    * @param message The message to send to the model.
+   * @param enableThinking Optional parameter to override the conversation's thinking configuration.
    * @param extraContext Optional context used for prompt template rendering.
    * @return A Flow of messages representing the model's response.
    * @throws IllegalStateException if the conversation has already been closed or the content is
@@ -251,6 +274,7 @@ class Conversation(
    */
   fun sendMessageAsync(
     message: Message,
+    enableThinking: Boolean? = null,
     extraContext: Map<String, Any> = emptyMap(),
   ): Flow<Message> = callbackFlow {
     sendMessageAsync(
@@ -268,6 +292,7 @@ class Conversation(
           close(throwable)
         }
       },
+      enableThinking,
       extraContext,
     )
     awaitClose {}
@@ -276,12 +301,13 @@ class Conversation(
   /**
    * Sends a list of contents to the model and returns the response async as a [Flow].
    *
-   * This method handles potential tool calls returned by the model. If a tool call is detected, the
+   * This method handles potential tool calls returned by the model. If a flow call is detected, the
    * corresponding tool is executed, and the result is sent back to the model. This process is
    * repeated until the model returns a final response without tool calls, up to
    * [RECURRING_TOOL_CALL_LIMIT] times.
    *
    * @param contents The list of contents to send to the model.
+   * @param enableThinking Optional parameter to override the conversation's thinking configuration.
    * @param extraContext Optional context used for prompt template rendering.
    * @return A Flow of messages representing the model's response.
    * @throws IllegalStateException if the conversation has already been closed or the content is
@@ -289,25 +315,30 @@ class Conversation(
    */
   fun sendMessageAsync(
     contents: Contents,
+    enableThinking: Boolean? = null,
     extraContext: Map<String, Any> = emptyMap(),
-  ): Flow<Message> = sendMessageAsync(Message.user(contents), extraContext)
+  ): Flow<Message> = sendMessageAsync(Message.user(contents), enableThinking, extraContext)
 
   /**
    * Sends a text to the model and returns the response async as a [Flow].
    *
-   * This method handles potential tool calls returned by the model. If a tool call is detected, the
+   * This method handles potential tool calls returned by the model. If a flow call is detected, the
    * corresponding tool is executed, and the result is sent back to the model. This process is
    * repeated until the model returns a final response without tool calls, up to
    * [RECURRING_TOOL_CALL_LIMIT] times.
    *
    * @param text The text to send to the model.
+   * @param enableThinking Optional parameter to override the conversation's thinking configuration.
    * @param extraContext Optional context used for prompt template rendering.
    * @return A Flow of messages representing the model's response.
    * @throws IllegalStateException if the conversation has already been closed or the content is
    *   empty.
    */
-  fun sendMessageAsync(text: String, extraContext: Map<String, Any> = emptyMap()): Flow<Message> =
-    sendMessageAsync(Contents.of(text), extraContext)
+  fun sendMessageAsync(
+    text: String,
+    enableThinking: Boolean? = null,
+    extraContext: Map<String, Any> = emptyMap(),
+  ): Flow<Message> = sendMessageAsync(Contents.of(text), enableThinking, extraContext)
 
   private fun handleToolCalls(toolCallsJsonObject: JsonObject): JsonObject {
     val toolCallsJSONArray = toolCallsJsonObject.getAsJsonArray("tool_calls")
@@ -337,8 +368,10 @@ class Conversation(
     }
   }
 
-  private inner class JniMessageCallbackImpl(private val callback: MessageCallback) :
-    LiteRtLmJni.JniMessageCallback {
+  private inner class JniMessageCallbackImpl(
+    private val callback: MessageCallback,
+    private val enableThinking: Boolean? = null,
+  ) : LiteRtLmJni.JniMessageCallback {
 
     /** The tool response to be returned back */
     private var pendingToolResponseJSONMessage: JsonObject? = null
@@ -374,6 +407,7 @@ class Conversation(
         LiteRtLmJni.nativeSendMessageAsync(
           handle,
           localToolResponse.toString(),
+          enableThinking,
           "{}",
           this@JniMessageCallbackImpl,
           @OptIn(ExperimentalApi::class) ExperimentalFlags.visualTokenBudget,

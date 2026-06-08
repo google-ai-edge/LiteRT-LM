@@ -336,6 +336,16 @@ std::optional<int> GetOptionalInt(JNIEnv* env, jobject integer_obj) {
   return value;
 }
 
+std::optional<bool> GetOptionalBool(JNIEnv* env, jobject boolean_obj) {
+  if (boolean_obj == nullptr) return std::nullopt;
+  jclass boolean_class = env->FindClass("java/lang/Boolean");
+  jmethodID boolean_value_mid =
+      env->GetMethodID(boolean_class, "booleanValue", "()Z");
+  jboolean value = env->CallBooleanMethod(boolean_obj, boolean_value_mid);
+  env->DeleteLocalRef(boolean_class);
+  return value == JNI_TRUE;
+}
+
 std::optional<litert::lm::DataProcessorArguments> GetDataProcessorArguments(
     JNIEnv* env, Conversation* conversation, jobject visual_token_budget_obj) {
   std::optional<int> budget = GetOptionalInt(env, visual_token_budget_obj);
@@ -880,8 +890,8 @@ LITERTLM_JNIEXPORT jint JNICALL JNI_METHOD(nativeConversationGetTokenCount)(
 LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateConversation)(
     JNIEnv* env, jclass thiz, jlong engine_pointer, jobject sampler_config_obj,
     jstring messages_json_string, jstring tools_description_json_string,
-    jstring channels_json_string, jstring extra_context_json_string,
-    jboolean enable_constrained_decoding,
+    jboolean enable_thinking, jstring channels_json_string,
+    jstring extra_context_json_string, jboolean enable_constrained_decoding,
     jboolean filter_channel_content_from_kv_cache,
     jstring overwrite_prompt_template, jstring lora_path_str,
     jstring audio_lora_path_str) {
@@ -966,7 +976,8 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateConversation)(
           .SetPreface(json_preface)
           .SetEnableConstrainedDecoding(enable_constrained_decoding)
           .SetFilterChannelContentFromKvCache(
-              filter_channel_content_from_kv_cache);
+              filter_channel_content_from_kv_cache)
+          .SetEnableThinking(enable_thinking);
 
   // Set the channels, if provided.
   // If channels is nullptr, the Conversation will use the channels defined in
@@ -1028,7 +1039,8 @@ LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeDeleteConversation)(
 
 LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeSendMessageAsync)(
     JNIEnv* env, jclass thiz, jlong conversation_pointer,
-    jstring messageJSONString, jstring extraContextJsonString, jobject callback,
+    jstring messageJSONString, jobject enable_thinking,
+    jstring extraContextJsonString, jobject callback,
     jobject visual_token_budget) {
   JavaVM* jvm = nullptr;
   if (env->GetJavaVM(&jvm) != JNI_OK) {
@@ -1054,6 +1066,8 @@ LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeSendMessageAsync)(
   if (args.has_value()) {
     optional_args.args = std::move(args);
   }
+
+  optional_args.enable_thinking = GetOptionalBool(env, enable_thinking);
 
   jobject callback_global = env->NewGlobalRef(callback);
   jclass callback_class = env->GetObjectClass(callback_global);
@@ -1137,8 +1151,8 @@ LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeSendMessageAsync)(
 
 LITERTLM_JNIEXPORT jstring JNICALL JNI_METHOD(nativeSendMessage)(
     JNIEnv* env, jclass thiz, jlong conversation_pointer,
-    jstring messageJSONString, jstring extraContextJsonString,
-    jobject visual_token_budget) {
+    jstring messageJSONString, jobject enable_thinking,
+    jstring extraContextJsonString, jobject visual_token_budget) {
   Conversation* conversation =
       reinterpret_cast<Conversation*>(conversation_pointer);
 
@@ -1157,6 +1171,8 @@ LITERTLM_JNIEXPORT jstring JNICALL JNI_METHOD(nativeSendMessage)(
   if (args.has_value()) {
     optional_args.args = std::move(args);
   }
+
+  optional_args.enable_thinking = GetOptionalBool(env, enable_thinking);
 
   auto response =
       conversation->SendMessage(json_message, std::move(optional_args));

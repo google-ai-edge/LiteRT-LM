@@ -210,6 +210,7 @@ internal object LiteRtLmJni {
     samplerConfig: SamplerConfig?,
     messageJsonString: String,
     toolsDescriptionJsonString: String,
+    enableThinking: Boolean = false,
     channelsJsonString: String?,
     extraContextJsonString: String,
     enableConversationConstrainedDecoding: Boolean,
@@ -242,6 +243,7 @@ internal object LiteRtLmJni {
   external fun nativeSendMessageAsync(
     conversationPointer: Long,
     messageJsonString: String,
+    enableThinking: Boolean?,
     extraContextJsonString: String,
     callback: JniMessageCallback,
     visualTokenBudget: Int?,
@@ -261,6 +263,7 @@ internal object LiteRtLmJni {
   external fun nativeSendMessage(
     conversationPointer: Long,
     messageJsonString: String,
+    enableThinking: Boolean?,
     extraContextJsonString: String,
     visualTokenBudget: Int?,
   ): String

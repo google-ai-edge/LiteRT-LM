@@ -106,12 +106,14 @@ data class EngineConfig(
  *   default values.
  * @property automaticToolCalling If true, tools will be called automatically. If false, tool calls
  *   will be returned to the user to execute.
+ * @property enableThinking If true, enables thinking mode for the conversation.
  * @property channels A list of channels for the conversation. Each [Channel] is a part of the
  *   model's output that is separate from the primary response, such as a 'thinking' channel.
  *   Channel content will be written to [Message.channels] with the [Channel.channelName] as the
  *   key. If `null`, uses the default channel configuration from the `LlmMetadata`. If empty,
  *   channels will be disabled.
  * @property extraContext Optional context passed to the prompt template rendering.
+ * @property loraConfig Configuration for LoRA. If `null`, LoRA is disabled.
  */
 data class ConversationConfig
 @JvmOverloads
@@ -121,6 +123,7 @@ constructor(
   val tools: List<ToolProvider> = listOf(),
   val samplerConfig: SamplerConfig? = null,
   val automaticToolCalling: Boolean = true,
+  val enableThinking: Boolean = false,
   val channels: List<Channel>? = null,
   val extraContext: Map<String, Any> = emptyMap(),
   val loraConfig: LoraConfig? = null,

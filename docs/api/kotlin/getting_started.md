@@ -141,6 +141,7 @@ val conversationConfig = ConversationConfig(
         Message.model("Washington, D.C."),
     ),
     samplerConfig = SamplerConfig(topK = 10, topP = 0.95, temperature = 0.8),
+    enableThinking = true, // Enable thinking mode (e.g., for Gemma 4 or Qwen 3 models)
 )
 
 val conversation = engine.createConversation(conversationConfig)
@@ -166,15 +167,17 @@ engine.createConversation(conversationConfig).use { conversation ->
 
 There are three ways to send messages:
 
--   **`sendMessage(contents, extraContext): Message`**: Synchronous call that
-    blocks until the model returns a complete response. This is simpler for
-    basic request/response interactions.
--   **`sendMessageAsync(contents, callback, extraContext)`**: Asynchronous call
-    for streaming responses. This is better for long-running requests or when
-    you want to display the response as it's being generated.
--   **`sendMessageAsync(contents, extraContext): Flow<Message>`**: Asynchronous
-    call that returns a Kotlin Flow for streaming responses. This is the
-    recommended approach for Coroutine users.
+-   **`sendMessage(contents, enableThinking, extraContext): Message`**:
+    Synchronous call that blocks until the model returns a complete response.
+    This is simpler for basic request/response interactions.
+-   **`sendMessageAsync(contents, callback, enableThinking, extraContext)`**:
+    Asynchronous call for streaming responses. This is better for long-running
+    requests or when you want to display the response as it's being generated.
+<!-- disableFinding(LINE_OVER_80) -->
+-   **`sendMessageAsync(contents, enableThinking, extraContext): Flow<Message>`**:
+<!-- enableFinding(LINE_OVER_80) -->
+    Asynchronous call that returns a Kotlin Flow for streaming responses. This
+    is the recommended approach for Coroutine users.
 
 **Synchronous Example:**
 
@@ -461,6 +464,11 @@ bazel run -c opt //kotlin/java/com/google/ai/edge/litertlm/example:tool -- <abs_
 You can pass extra context variables to the prompt template for rendering.
 This allows you to customize the model's behavior based on dynamic values.
 
+Note: Standard variables like `enable_thinking` are promoted to first-class
+fields (e.g., `enableThinking = true` in `ConversationConfig` or overrides on
+`sendMessage`). Other custom variables can be passed via the `extraContext`
+map.
+
 `extraContext` is an optional `Map<String, Any>` that can be passed to
 `sendMessage` and `sendMessageAsync`. These variables are merged with the extra
 context provided in the `Preface` (if any), with keys in the message-level
@@ -469,15 +477,21 @@ context overwriting those in the `Preface`.
 ```kotlin
 val extraContext = mapOf(
     "user_name" to "Alice",
-    "enable_thinking" to true
 )
 
 // Synchronous
-val response = conversation.sendMessage("Hello!", extraContext = extraContext)
+val response = conversation.sendMessage(
+    "Hello!",
+    enableThinking = true,
+    extraContext = extraContext
+)
 
 // Asynchronous with Flow
-conversation.sendMessageAsync("Hello!", extraContext = extraContext)
-    .collect { ... }
+conversation.sendMessageAsync(
+    "Hello!",
+    enableThinking = true,
+    extraContext = extraContext
+).collect { ... }
 ```
 
 These variables are used within the Jinja-style prompt templates, e.g.,
