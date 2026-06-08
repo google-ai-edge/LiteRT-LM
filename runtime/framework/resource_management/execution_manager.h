@@ -170,7 +170,9 @@ class ExecutionManager {
       Constraint* absl_nullable constraint,
       std::shared_ptr<std::atomic<bool>> absl_nonnull cancelled,
       absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback,
-      int max_output_tokens) = 0;
+      int max_output_tokens,
+      std::optional<int> thinking_token_budget = std::nullopt,
+      std::vector<int> thinking_end_token_ids = {}) = 0;
 
   // Adds a decode task to the execution manager with the maximum output tokens
   // set to infinity.

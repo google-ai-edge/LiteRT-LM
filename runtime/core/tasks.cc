@@ -37,6 +37,7 @@
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "runtime/components/constrained_decoding/bitmap.h"
 #include "runtime/components/constrained_decoding/constrained_decoder.h"
 #include "runtime/components/constrained_decoding/constraint.h"
 #include "runtime/components/sampler.h"
@@ -81,6 +82,166 @@ int TryGetMaxNumTokens(const LlmExecutor& executor) {
   }
   return settings->GetMaxNumTokens();
 }
+
+class SingleAllowedTokenBitmap : public Bitmap {
+ public:
+  explicit SingleAllowedTokenBitmap(int allowed_token_id)
+      : allowed_token_id_(allowed_token_id) {}
+  bool Get(int index) const override { return index == allowed_token_id_; }
+
+ private:
+  int allowed_token_id_;
+};
+
+// A constraint that enforces a thinking token budget limit during generation.
+//
+// It wraps an optional user-defined constraint (`user_constraint`) using the
+// decorator pattern, forwarding constraint logic to it. When the budget of
+// thinking tokens is exceeded, it overrides the allowed token list to force the
+// generation of the thinking end-delimiters (`end_token_ids`, such as
+// `<channel|>`), after which it transitions control back to the wrapped
+// constraint for content generation.
+class ThinkingBudgetConstraint : public Constraint {
+ public:
+  // State variables for tracking the thinking progress of a single sequence.
+  struct ThinkingState : public Constraint::State {
+    int thinking_token_count = 0;
+    bool in_thinking = true;
+    // Index of the forced end delimiter token we are currently generating,
+    // or -1 if we are not currently forcing the end of the thinking channel.
+    int forced_end_token_index = -1;
+    // Current match progress of the end delimiters generated naturally by the
+    // model.
+    int natural_match_index = 0;
+    std::unique_ptr<Constraint::State> user_state = nullptr;
+  };
+
+  ThinkingBudgetConstraint(Constraint* absl_nullable user_constraint,
+                           int budget, std::vector<int> end_token_ids,
+                           int vocab_size)
+      : user_constraint_(user_constraint),
+        budget_(budget),
+        end_token_ids_(std::move(end_token_ids)),
+        vocab_size_(vocab_size) {}
+
+  std::unique_ptr<Constraint::State> Start() const override {
+    auto state = std::make_unique<ThinkingState>();
+    state->thinking_token_count = 0;
+    state->in_thinking = true;
+    state->natural_match_index = 0;
+    // If budget is 0, we immediately force end delimiters.
+    if (budget_ == 0) {
+      state->forced_end_token_index = 0;
+      if (end_token_ids_.empty()) {
+        state->in_thinking = false;
+        state->forced_end_token_index = -1;
+      }
+    } else {
+      state->forced_end_token_index = -1;
+    }
+    if (user_constraint_ != nullptr) {
+      state->user_state = user_constraint_->Start();
+    }
+    return state;
+  }
+
+  bool IsEnded(const Constraint::State& state) const override {
+    const auto& s = static_cast<const ThinkingState&>(state);
+    if (user_constraint_ != nullptr) {
+      return user_constraint_->IsEnded(*s.user_state);
+    }
+    return false;
+  }
+
+  int GetVocabularySize() const override { return vocab_size_; }
+
+  absl::StatusOr<std::unique_ptr<Constraint::State>> ComputeNext(
+      const Constraint::State& state, int token) const override {
+    const auto& s = static_cast<const ThinkingState&>(state);
+    auto next_s = std::make_unique<ThinkingState>();
+    next_s->thinking_token_count = s.thinking_token_count;
+    next_s->in_thinking = s.in_thinking;
+    next_s->forced_end_token_index = s.forced_end_token_index;
+
+    if (user_constraint_ != nullptr) {
+      ASSIGN_OR_RETURN(next_s->user_state,
+                       user_constraint_->ComputeNext(*s.user_state, token));
+    }
+
+    int natural_match_index = s.natural_match_index;
+
+    if (next_s->in_thinking) {
+      if (next_s->forced_end_token_index >= 0) {
+        // We are currently forcing end sequence tokens. Verify that the
+        // generated token matches the expected end sequence token.
+        if (token == end_token_ids_[next_s->forced_end_token_index]) {
+          next_s->forced_end_token_index++;
+          if (next_s->forced_end_token_index >= end_token_ids_.size()) {
+            next_s->in_thinking = false;
+            next_s->forced_end_token_index = -1;
+          }
+        } else {
+          next_s->forced_end_token_index = -1;
+        }
+      } else {
+        next_s->thinking_token_count++;
+
+        // Detect if the model naturally generates the end delimiters.
+        if (!end_token_ids_.empty()) {
+          if (token == end_token_ids_[natural_match_index]) {
+            natural_match_index++;
+            if (natural_match_index >= end_token_ids_.size()) {
+              next_s->in_thinking = false;
+              natural_match_index = 0;
+            }
+          } else if (token == end_token_ids_[0]) {
+            natural_match_index = 1;
+          } else {
+            natural_match_index = 0;
+          }
+        }
+
+        // Force transition to content generation if the token budget is
+        // reached.
+        if (next_s->in_thinking && next_s->thinking_token_count >= budget_) {
+          next_s->forced_end_token_index = 0;
+          if (end_token_ids_.empty()) {
+            next_s->in_thinking = false;
+            next_s->forced_end_token_index = -1;
+          }
+        }
+      }
+    }
+
+    next_s->natural_match_index = natural_match_index;
+    return next_s;
+  }
+
+  absl::StatusOr<std::unique_ptr<Bitmap>> ComputeBitmap(
+      const Constraint::State& state) const override {
+    const auto& s = static_cast<const ThinkingState&>(state);
+
+    // If budget limit has been hit, temporarily restrict vocabulary to only
+    // allow the next token of the forced end delimiter sequence.
+    if (s.in_thinking && s.forced_end_token_index >= 0) {
+      return std::make_unique<SingleAllowedTokenBitmap>(
+          end_token_ids_[s.forced_end_token_index]);
+    }
+
+    // Delegate to wrapped user constraint otherwise.
+    if (user_constraint_ != nullptr) {
+      return user_constraint_->ComputeBitmap(*s.user_state);
+    }
+
+    return std::make_unique<AllAllowedBitmap>();
+  }
+
+ private:
+  Constraint* absl_nullable user_constraint_;
+  const int budget_;
+  const std::vector<int> end_token_ids_;
+  const int vocab_size_;
+};
 
 // Check whether the decoding loop should stop.
 bool ShouldStop(bool hit_stop_tokens, int benchmark_decode_token_count,
@@ -450,7 +611,9 @@ absl::StatusOr<Responses> Decode(
     std::optional<Sampler*> sampler, Constraint* constraint,
     std::optional<litert::TensorBuffer> decoded_ids,
     absl::AnyInvocable<void(absl::StatusOr<Responses>)>& callback,
-    std::atomic<bool>* cancelled, int max_output_tokens) {
+    std::atomic<bool>* cancelled, int max_output_tokens,
+    std::optional<int> thinking_token_budget,
+    const std::vector<int>& thinking_end_token_ids) {
   const bool is_streaming = callback != nullptr;
   const bool is_custom_sampling = sampler.has_value();
 
@@ -480,6 +643,15 @@ absl::StatusOr<Responses> Decode(
 
   ASSIGN_OR_RETURN(int executor_step_before_decode, executor.GetCurrentStep());
   const int max_num_tokens = TryGetMaxNumTokens(executor);
+
+  std::unique_ptr<Constraint> thinking_budget_constraint;
+  int vocab_size = tokenizer.GetTokens().size();
+  if (thinking_token_budget.has_value()) {
+    thinking_budget_constraint = std::make_unique<ThinkingBudgetConstraint>(
+        constraint, *thinking_token_budget, thinking_end_token_ids, vocab_size);
+    constraint = thinking_budget_constraint.get();
+  }
+
   DecodeOneStep run_one_step(&executor, &tokenizer, num_output_candidates,
                              stop_token_detector, benchmark_info, sampler,
                              constraint);

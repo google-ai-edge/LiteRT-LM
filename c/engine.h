@@ -224,6 +224,13 @@ void litert_lm_conversation_config_set_filter_channel_content_from_kv_cache(
     LiteRtLmConversationConfig* config,
     bool filter_channel_content_from_kv_cache);
 
+// Sets the thinking token budget for this conversation config.
+// @param config The config to modify.
+// @param thinking_token_budget The thinking token budget.
+LITERT_LM_C_API_EXPORT
+void litert_lm_conversation_config_set_thinking_token_budget(
+    LiteRtLmConversationConfig* config, int thinking_token_budget);
+
 // Destroys a LiteRT LM Conversation Config.
 // @param config The config to destroy.
 LITERT_LM_C_API_EXPORT
@@ -255,6 +262,13 @@ void litert_lm_conversation_optional_args_set_visual_token_budget(
 LITERT_LM_C_API_EXPORT
 void litert_lm_conversation_optional_args_set_max_output_tokens(
     LiteRtLmConversationOptionalArgs* optional_args, int max_output_tokens);
+
+// Sets the thinking token budget for the conversation optional args.
+// @param optional_args The optional args to modify.
+// @param thinking_token_budget The thinking token budget.
+LITERT_LM_C_API_EXPORT
+void litert_lm_conversation_optional_args_set_thinking_token_budget(
+    LiteRtLmConversationOptionalArgs* optional_args, int thinking_token_budget);
 
 // Sets the minimum log level for the LiteRT LM library.
 // Log levels are: 0=VERBOSE, 1=DEBUG, 2=INFO, 3=WARNING, 4=ERROR, 5=FATAL,

@@ -375,6 +375,7 @@ cc_library(
         "//runtime/components:scoring_cpu_util",
         "//runtime/components:stop_token_detector",
         "//runtime/components:tokenizer",
+        "//runtime/components/constrained_decoding:bitmap",
         "//runtime/components/constrained_decoding:constrained_decoder",
         "//runtime/components/constrained_decoding:constraint",
         "//runtime/engine:io_types",

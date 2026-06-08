@@ -745,6 +745,43 @@ TEST(EngineCTest, CreateConversationConfigWithNoSystemMessage) {
   EXPECT_EQ(preface.messages, nullptr);
 }
 
+TEST(EngineCTest, ThinkingTokenBudget) {
+  const std::string task_path = GetTestdataPath(
+      "litert_lm/runtime/testdata/test_lm.litertlm");
+  EngineSettingsPtr settings(litert_lm_engine_settings_create(
+                                 task_path.c_str(), "cpu", nullptr, nullptr),
+                             &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+
+  EnginePtr engine(litert_lm_engine_create(settings.get()),
+                   &litert_lm_engine_delete);
+  ASSERT_NE(engine, nullptr);
+
+  SessionConfigPtr session_config(litert_lm_session_config_create(),
+                                  &litert_lm_session_config_delete);
+  ASSERT_NE(session_config, nullptr);
+
+  ConversationConfigPtr conversation_config(
+      litert_lm_conversation_config_create(),
+      &litert_lm_conversation_config_delete);
+  ASSERT_NE(conversation_config, nullptr);
+  litert_lm_conversation_config_set_session_config(conversation_config.get(),
+                                                   session_config.get());
+
+  // Set thinking_token_budget on config.
+  litert_lm_conversation_config_set_thinking_token_budget(
+      conversation_config.get(), 42);
+
+  ConversationPtr conversation(
+      litert_lm_conversation_create(engine.get(), conversation_config.get()),
+      &litert_lm_conversation_delete);
+  ASSERT_NE(conversation, nullptr);
+
+  // Verify it is propagated to the conversation configuration.
+  EXPECT_EQ(conversation->conversation->GetConfig().thinking_token_budget(),
+            42);
+}
+
 TEST(EngineCTest, TokenizerTest) {
   const std::string task_path = GetTestdataPath(
       "litert_lm/runtime/testdata/test_lm.litertlm");

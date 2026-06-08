@@ -552,11 +552,33 @@ class DecodeConfig {
   // Returns the max output tokens.
   std::optional<int> GetMaxOutputTokens() const { return max_output_tokens_; }
 
+  // Sets the thinking token budget.
+  void SetThinkingTokenBudget(int thinking_token_budget) {
+    thinking_token_budget_ = thinking_token_budget;
+  }
+
+  // Returns the thinking token budget.
+  std::optional<int> GetThinkingTokenBudget() const {
+    return thinking_token_budget_;
+  }
+
+  // Sets the token IDs that signal the end of the thinking process.
+  void SetThinkingEndTokenIds(std::vector<int> thinking_end_token_ids) {
+    thinking_end_token_ids_ = std::move(thinking_end_token_ids);
+  }
+
+  // Returns the token IDs that signal the end of the thinking process.
+  const std::vector<int>& GetThinkingEndTokenIds() const {
+    return thinking_end_token_ids_;
+  }
+
  private:
   DecodeConfig() = default;
 
   Constraint* absl_nullable constraint_ = nullptr;
   std::optional<int> max_output_tokens_ = std::nullopt;
+  std::optional<int> thinking_token_budget_ = std::nullopt;
+  std::vector<int> thinking_end_token_ids_;
 };
 
 // The properties of the audio model. These properties are populated by

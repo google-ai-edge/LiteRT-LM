@@ -154,6 +154,7 @@ class Engine(interfaces.AbstractEngine):
       automatic_tool_calling: bool = True,
       extra_context: collections.abc.Mapping[str, Any] | None = None,
       filter_channel_content_from_kv_cache: bool = False,
+      thinking_token_budget: int | None = None,
       sampler_config: interfaces.SamplerConfig | None = None,
       system_message: str | None = None,
       enable_constrained_decoding: bool = False,
@@ -218,6 +219,11 @@ class Engine(interfaces.AbstractEngine):
     if filter_channel_content_from_kv_cache:
       self._lib.litert_lm_conversation_config_set_filter_channel_content_from_kv_cache(
           conv_config, True
+      )
+
+    if thinking_token_budget is not None:
+      self._lib.litert_lm_conversation_config_set_thinking_token_budget(
+          conv_config, thinking_token_budget
       )
 
     conv_ptr = self._lib.litert_lm_conversation_create(

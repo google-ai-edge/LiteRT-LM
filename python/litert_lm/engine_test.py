@@ -373,6 +373,29 @@ class EngineTest(LiteRtLmTestBase):
       message = conversation.send_message(user_message)
       self.assertEqual(message["role"], "assistant")
 
+  def test_conversation_with_thinking_token_budget(self):
+    with (
+        self._create_engine() as engine,
+        engine.create_conversation(thinking_token_budget=10) as conversation,
+    ):
+      user_message = {"role": "user", "content": "Hello world!"}
+      message = conversation.send_message(
+          user_message, thinking_token_budget=10
+      )
+      self.assertEqual(message["role"], "assistant")
+
+    with (
+        self._create_engine() as engine,
+        engine.create_conversation(thinking_token_budget=10) as conversation,
+    ):
+      user_message = {"role": "user", "content": "Hello world!"}
+      responses = list(
+          conversation.send_message_async(
+              user_message, thinking_token_budget=10
+          )
+      )
+      self.assertNotEmpty(responses)
+
   def test_conversation_token_count(self):
     with (
         self._create_engine() as engine,

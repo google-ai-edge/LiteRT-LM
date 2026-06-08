@@ -222,6 +222,7 @@ class AbstractEngine(abc.ABC):
       automatic_tool_calling: bool = True,
       extra_context: collections.abc.Mapping[str, Any] | None = None,
       filter_channel_content_from_kv_cache: bool = False,
+      thinking_token_budget: int | None = None,
       sampler_config: SamplerConfig | None = None,
   ) -> AbstractConversation:
     """Creates a new conversation for this engine.
@@ -238,6 +239,7 @@ class AbstractEngine(abc.ABC):
           from the KV cache. This is useful when the model responds with
           "channel" content, e.g. thinking/reasoning tokens, that should not be
           persisted in the KV cache.
+        thinking_token_budget: Budget for token-by-token reasoning generation.
         sampler_config: Configuration for the sampling process. If None, then
           uses the engine's default values.
     """
@@ -342,6 +344,7 @@ class AbstractConversation(abc.ABC):
       message: str | Contents | Message | collections.abc.Mapping[str, Any],
       *,
       max_output_tokens: int | None = None,
+      thinking_token_budget: int | None = None,
   ) -> collections.abc.Mapping[str, Any]:
     """Sends a message and returns the response.
 
@@ -353,6 +356,7 @@ class AbstractConversation(abc.ABC):
           tool calling is disabled and a tool response is required), or
           `collections.abc.Mapping` (super flexible raw dictionary format).
         max_output_tokens: The maximum number of output tokens.
+        thinking_token_budget: Budget for token-by-token reasoning generation.
 
     Returns:
         A dictionary containing the model's response. The structure is:
@@ -365,6 +369,7 @@ class AbstractConversation(abc.ABC):
       message: str | Contents | Message | collections.abc.Mapping[str, Any],
       *,
       max_output_tokens: int | None = None,
+      thinking_token_budget: int | None = None,
   ) -> collections.abc.Iterator[collections.abc.Mapping[str, Any]]:
     """Sends a message and streams the response.
 
@@ -376,6 +381,7 @@ class AbstractConversation(abc.ABC):
           tool calling is disabled and a tool response is required), or
           `collections.abc.Mapping` (super flexible raw dictionary format).
         max_output_tokens: The maximum number of output tokens.
+        thinking_token_budget: Budget for token-by-token reasoning generation.
 
     Returns:
         An iterator yielding dictionaries containing chunks of the model's
