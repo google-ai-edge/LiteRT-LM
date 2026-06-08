@@ -29,7 +29,6 @@ on:
         type: boolean
         default: true
 
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
@@ -120,6 +119,7 @@ jobs:
       - name: Run bazel build on MacOS.
         run: |
           bazel build --disk_cache=~/.cache/bazel-macos \
+            --config=rbe_macos \
             //... \
             //runtime/engine:litert_lm_main
 
@@ -131,7 +131,7 @@ jobs:
 
       - name: Run bazel test on MacOS.
         run: |
-          bazel test --disk_cache=~/.cache/bazel-macos --test_output=errors //...
+          bazel test --disk_cache=~/.cache/bazel-macos --config=rbe_macos --test_output=errors //...
 
       - name: Install pytest
         run: python3 -m pip install --break-system-packages pytest==8.3.4
@@ -142,6 +142,7 @@ jobs:
       - name: Run bazel build on MacOS with dynamic linking.
         run: |
           bazel build --disk_cache=~/.cache/bazel-macos-dylib \
+            --config=rbe_macos \
             --define=litert_link_capi_so=true \
             --define=resolve_symbols_in_exec=false \
             //runtime/engine:litert_lm_main
