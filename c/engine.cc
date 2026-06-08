@@ -322,6 +322,7 @@ int litert_lm_session_config_set_lora_path(LiteRtLmSessionConfig* config,
   }
   config->config->SetScopedLoraFile(
       std::make_shared<litert::lm::ScopedFile>(std::move(*lora_file)));
+  config->config->SetLoraPath(std::string(path_view.data(), path_view.size()));
   return 0;
 }
 
@@ -341,6 +342,8 @@ int litert_lm_session_config_set_audio_lora_path(LiteRtLmSessionConfig* config,
   }
   config->config->SetAudioScopedLoraFile(
       std::make_shared<litert::lm::ScopedFile>(std::move(*lora_file)));
+  config->config->SetAudioLoraPath(
+      std::string(path_view.data(), path_view.size()));
   return 0;
 }
 

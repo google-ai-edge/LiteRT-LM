@@ -192,6 +192,7 @@ RESOURCE_MANAGER_DEPS = [
     "@com_google_absl//absl/base:core_headers",
     "@com_google_absl//absl/base:nullability",
     "@com_google_absl//absl/container:flat_hash_map",
+    "@com_google_absl//absl/container:flat_hash_set",
     "@com_google_absl//absl/log:absl_log",
     "@com_google_absl//absl/status",
     "@com_google_absl//absl/status:statusor",
@@ -238,4 +239,42 @@ cc_library(
                    "@litert//litert/cc:litert_tensor_buffer",
                ],
            }),
+)
+
+cc_test(
+    name = "resource_manager_test",
+    srcs = ["resource_manager_test.cc"],
+    data = ["//runtime/testdata"],
+    deps = [
+        ":resource_manager",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/types:span",
+        "@litert//litert/cc:litert_tensor_buffer",
+        "@litert//litert/test:matchers",
+        "//runtime/components:model_resources",
+        "//runtime/components:model_resources_litert_lm",
+        "//runtime/engine:engine_settings",
+        "//runtime/executor:executor_settings_base",
+        "//runtime/executor:llm_executor",
+        "//runtime/executor:llm_executor_io_types",
+        "//runtime/executor:llm_executor_settings",
+        "//runtime/executor:llm_litert_compiled_model_executor_factory",
+        "//runtime/executor:llm_processed_context",
+        "//runtime/util:convert_tensor_buffer",
+        "//runtime/util:litert_lm_loader",
+        "//runtime/util:scoped_file",
+        "//runtime/util:test_utils",
+    ] + select({
+        "@litert//litert:litert_link_capi_so": [
+            "@litert//litert/cc:litert_api_with_dynamic_runtime",
+        ],
+        "//conditions:default": [
+            "@litert//litert/cc:litert_environment",
+        ],
+    }),
 )

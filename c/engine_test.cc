@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <fstream>
 #include <memory>
 #include <optional>
 #include <string>
@@ -328,6 +329,44 @@ TEST(EngineCTest, CreateSessionConfigWithApplyPromptTemplate) {
 
   litert_lm_session_config_set_apply_prompt_template(config.get(), true);
   EXPECT_TRUE(config->config->GetApplyPromptTemplateInSession());
+}
+
+TEST(EngineCTest, SetSessionConfigLoraPathStoresFileAndPath) {
+  SessionConfigPtr config(litert_lm_session_config_create(),
+                          &litert_lm_session_config_delete);
+  ASSERT_NE(config, nullptr);
+  const std::string lora_path =
+      ::testing::TempDir() + "/set_session_config_lora_path.tflite";
+  {
+    std::ofstream ofs(lora_path);
+    ofs << "lora";
+  }
+
+  EXPECT_EQ(
+      litert_lm_session_config_set_lora_path(config.get(), lora_path.c_str()),
+      0);
+  EXPECT_NE(config->config->GetScopedLoraFile(), nullptr);
+  ASSERT_TRUE(config->config->GetLoraPath().has_value());
+  EXPECT_EQ(*config->config->GetLoraPath(), lora_path);
+}
+
+TEST(EngineCTest, SetSessionConfigAudioLoraPathStoresFileAndPath) {
+  SessionConfigPtr config(litert_lm_session_config_create(),
+                          &litert_lm_session_config_delete);
+  ASSERT_NE(config, nullptr);
+  const std::string lora_path =
+      ::testing::TempDir() + "/set_session_config_audio_lora_path.tflite";
+  {
+    std::ofstream ofs(lora_path);
+    ofs << "audio lora";
+  }
+
+  EXPECT_EQ(litert_lm_session_config_set_audio_lora_path(config.get(),
+                                                         lora_path.c_str()),
+            0);
+  EXPECT_NE(config->config->GetAudioScopedLoraFile(), nullptr);
+  ASSERT_TRUE(config->config->GetAudioLoraPath().has_value());
+  EXPECT_EQ(*config->config->GetAudioLoraPath(), lora_path);
 }
 
 TEST(EngineCTest, CreateConversationConfig) {

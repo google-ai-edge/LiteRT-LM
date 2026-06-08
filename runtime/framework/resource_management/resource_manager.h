@@ -24,6 +24,7 @@
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/base/thread_annotations.h"  // from @com_google_absl
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
+#include "absl/container/flat_hash_set.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
@@ -84,7 +85,8 @@ class ResourceManager {
   // assign a unique, custom lora_path. This lora_path serves as the identifier
   // for the LoRA across all sessions referencing that scoped file.
   std::optional<uint32_t> AssignLoraId(std::string lora_path,
-                                       bool has_scoped_lora_file);
+                                       bool has_scoped_lora_file)
+      ABSL_LOCKS_EXCLUDED(lora_mutex_);
 
   // Creates a new context handler from the provided session config struct.
   // If a session specific lora is provided, the lora will be loaded and the
@@ -159,9 +161,21 @@ class ResourceManager {
   std::shared_ptr<ContextHandler> current_handler_
       ABSL_GUARDED_BY(executor_mutex_);
 
+  // Guards LoRA id assignment and loaded-LoRA bookkeeping.
+  absl::Mutex lora_mutex_;
+
   // Map lora id from hash. If lora is provided by lora path, lora path will be
   // treated as the hash key.
-  absl::flat_hash_map<std::string, uint32_t> lora_hash_to_id_;
+  absl::flat_hash_map<std::string, uint32_t> lora_hash_to_id_
+      ABSL_GUARDED_BY(lora_mutex_);
+
+  // Tracks LoRA ids already loaded into the text executor.
+  absl::flat_hash_set<uint32_t> loaded_lora_ids_
+      ABSL_GUARDED_BY(lora_mutex_);
+
+  // Tracks LoRA ids already loaded into the audio executor.
+  absl::flat_hash_set<uint32_t> loaded_audio_lora_ids_
+      ABSL_GUARDED_BY(lora_mutex_);
 
   // The mutex lock for the vision executor.
   absl::Mutex vision_executor_mutex_;

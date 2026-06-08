@@ -32,6 +32,8 @@
 
 namespace litert::lm {
 
+class ModelAssets;
+
 // The LLM Executor serves as a lightweight and portable wrapper around various
 // converted LLM model formats, i.e. LiteRT. It aims to provide a general,
 // minimal-dependency interface for the users, abstracting the complexities of
@@ -188,6 +190,23 @@ class LlmExecutorBase {
     return absl::UnimplementedError(absl::StrCat(
         "Reset not implemented for backend: ", ExecutorBackendName()));
   };
+
+  // Loads the LoRA model into the executor without activating it.
+  virtual absl::Status LoadLoRA(uint32_t lora_id,
+                                const ModelAssets& model_assets) {
+    return absl::UnimplementedError(absl::StrCat(
+        "LoadLoRA not implemented for backend: ", ExecutorBackendName()));
+  }
+
+  // Sets the current LoRA ID to use. Passing std::nullopt clears the active
+  // LoRA selection for executors that support LoRA.
+  virtual absl::Status UseLoRA(std::optional<uint32_t> lora_id) {
+    if (!lora_id.has_value()) {
+      return absl::OkStatus();
+    }
+    return absl::UnimplementedError(absl::StrCat(
+        "UseLoRA not implemented for backend: ", ExecutorBackendName()));
+  }
 
   // ------------State/context management APIs------------:
   // Creates a new context with the given configs.

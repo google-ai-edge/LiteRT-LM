@@ -23,6 +23,7 @@
 
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
+#include "absl/container/flat_hash_set.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
@@ -417,6 +418,15 @@ class LockedLlmExecutor : public LlmExecutor {
 
   absl::Status Reset() override { return llm_executor_->Reset(); }
 
+  absl::Status LoadLoRA(uint32_t lora_id,
+                        const ModelAssets& model_assets) override {
+    return llm_executor_->LoadLoRA(lora_id, model_assets);
+  }
+
+  absl::Status UseLoRA(std::optional<uint32_t> lora_id) override {
+    return llm_executor_->UseLoRA(lora_id);
+  }
+
   absl::StatusOr<int> GetVocabSize() override {
     return llm_executor_->GetVocabSize();
   }
@@ -502,6 +512,7 @@ ResourceManager::ResourceManager(
 
 std::optional<uint32_t> ResourceManager::AssignLoraId(
     std::string lora_path, bool has_scoped_lora_file) {
+  absl::MutexLock lora_lock(&lora_mutex_);
   if (lora_path.empty() && !has_scoped_lora_file) {
     return std::nullopt;
   }
@@ -550,46 +561,68 @@ absl::Status ResourceManager::MaybeCreateLitertEnv() {
 
 absl::StatusOr<std::unique_ptr<ContextHandler>>
 ResourceManager::CreateContextHandler(const SessionConfig& session_config) {
-  // TODO: b/462499294 -
-  //   1. Check if lora is loaded or not.
-  //   2. Get the lora id.
-  //   3. If lora is not loaded, load the lora.
-
-  // Check if the lora is already loaded.
-  // TODO: b/462499294 - Use the real lora path.
-  bool lora_is_loaded =
-      lora_hash_to_id_.find("fake_lora_path") != lora_hash_to_id_.end();
-
   // Find the lora id. If lora_id is not nullopt, it means the lora is used.
+  const std::string lora_path = session_config.GetLoraPath().value_or("");
   std::optional<uint32_t> lora_id = AssignLoraId(
-      /*lora_path=*/"",
+      /*lora_path=*/lora_path,
       /*has_scoped_lora_file=*/session_config.GetScopedLoraFile() != nullptr);
 
   // If lora is used and not loaded, load the lora.
-  if (lora_id.has_value() && !lora_is_loaded) {
-    RET_CHECK(session_config.GetScopedLoraFile() != nullptr);
-    ASSIGN_OR_RETURN(ModelAssets model_assets,
-                     ModelAssets::Create(session_config.GetScopedLoraFile(),
-                                         /*model_path=*/""));
-    return absl::InvalidArgumentError("Lora is not supported.");
+  bool should_load_lora = false;
+  if (lora_id.has_value()) {
+    absl::MutexLock lora_lock(&lora_mutex_);
+    should_load_lora = !loaded_lora_ids_.contains(*lora_id);
+  }
+  if (should_load_lora) {
+    absl::StatusOr<ModelAssets> model_assets =
+        session_config.GetScopedLoraFile() != nullptr
+            ? ModelAssets::Create(session_config.GetScopedLoraFile(), lora_path)
+            : ModelAssets::Create(lora_path);
+    ASSIGN_OR_RETURN(ModelAssets lora_model_assets, std::move(model_assets));
+
+    MovableMutexLock lock(&executor_mutex_);
+    absl::MutexLock lora_lock(&lora_mutex_);
+    if (!loaded_lora_ids_.contains(*lora_id)) {
+      RETURN_IF_ERROR(llm_executor_->LoadLoRA(*lora_id, lora_model_assets));
+      loaded_lora_ids_.insert(*lora_id);
+    }
   }
 
   // Find the audio lora id.
+  const std::string audio_lora_path =
+      session_config.GetAudioLoraPath().value_or("");
   std::optional<uint32_t> audio_lora_id = AssignLoraId(
-      /*lora_path=*/"",
+      /*lora_path=*/audio_lora_path,
       /*has_scoped_lora_file=*/session_config.GetAudioScopedLoraFile() !=
           nullptr);
   if (audio_lora_id.has_value()) {
-    RET_CHECK(session_config.GetAudioScopedLoraFile() != nullptr);
-    ASSIGN_OR_RETURN(
-        ModelAssets lora_model_assets,
-        ModelAssets::Create(session_config.GetAudioScopedLoraFile(),
-                            /*model_path=*/""));
+    bool should_load_audio_lora = false;
+    {
+      absl::MutexLock lora_lock(&lora_mutex_);
+      should_load_audio_lora =
+          !loaded_audio_lora_ids_.contains(*audio_lora_id);
+    }
+    std::optional<ModelAssets> audio_lora_model_assets;
+    if (should_load_audio_lora) {
+      absl::StatusOr<ModelAssets> model_assets =
+          session_config.GetAudioScopedLoraFile() != nullptr
+              ? ModelAssets::Create(session_config.GetAudioScopedLoraFile(),
+                                    audio_lora_path)
+              : ModelAssets::Create(audio_lora_path);
+      ASSIGN_OR_RETURN(audio_lora_model_assets, std::move(model_assets));
+    }
+
     RETURN_IF_ERROR(TryLoadingAudioExecutor());
     ASSIGN_OR_RETURN(auto audio_executor, AcquireAudioExecutor());
-    RETURN_IF_ERROR(
-        audio_executor->LoadLoRA(audio_lora_id.value(), lora_model_assets));
-    RETURN_IF_ERROR(audio_executor->UseLoRA(audio_lora_id.value()));
+    if (audio_lora_model_assets.has_value()) {
+      absl::MutexLock lora_lock(&lora_mutex_);
+      if (!loaded_audio_lora_ids_.contains(*audio_lora_id)) {
+        RETURN_IF_ERROR(
+            audio_executor->LoadLoRA(*audio_lora_id, *audio_lora_model_assets));
+        loaded_audio_lora_ids_.insert(*audio_lora_id);
+      }
+    }
+    RETURN_IF_ERROR(audio_executor->UseLoRA(*audio_lora_id));
   }
 
   auto runtime_config = RuntimeConfig{
