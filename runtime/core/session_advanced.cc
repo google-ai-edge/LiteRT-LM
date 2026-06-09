@@ -267,7 +267,10 @@ absl::StatusOr<std::unique_ptr<TaskController>> SessionAdvanced::RunDecodeAsync(
       session_id_, task_id, last_task_ids_, decode_config.GetConstraint(),
       cancelled, std::move(callback),
       decode_config.GetMaxOutputTokens().value_or(
-          session_info_->session_config.GetMaxOutputTokens())));
+          session_info_->session_config.GetMaxOutputTokens()),
+      decode_config.GetThinkingTokenBudget(),
+      decode_config.GetThinkingStartTokenIds(),
+      decode_config.GetThinkingEndTokenIds()));
 
   last_task_ids_ = {task_id};
 

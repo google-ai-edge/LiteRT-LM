@@ -170,7 +170,10 @@ class ExecutionManager {
       Constraint* absl_nullable constraint,
       std::shared_ptr<std::atomic<bool>> absl_nonnull cancelled,
       absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback,
-      int max_output_tokens) = 0;
+      int max_output_tokens,
+      std::optional<int> thinking_token_budget = std::nullopt,
+      std::vector<int> thinking_start_token_ids = {},
+      std::vector<int> thinking_end_token_ids = {}) = 0;
 
   // Adds a decode task to the execution manager with the maximum output tokens
   // set to infinity.
@@ -182,7 +185,7 @@ class ExecutionManager {
       absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback) {
     return AddDecodeTask(session_id, task_id, std::move(dep_tasks), constraint,
                          std::move(cancelled), std::move(callback),
-                         std::numeric_limits<int>::max());
+                         std::numeric_limits<int>::max(), std::nullopt, {}, {});
   }
 
   // Adds a clone session task to the execution manager.

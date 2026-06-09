@@ -416,3 +416,28 @@ cc_test(
         "//runtime/util:test_utils",
     ],
 )
+
+cc_library(
+    name = "thinking_budget_constraint",
+    srcs = ["thinking_budget_constraint.cc"],
+    hdrs = ["thinking_budget_constraint.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":bitmap",
+        ":constraint",
+        "@com_google_absl//absl/status:statusor",
+        "//runtime/util:litert_status_util",
+    ],
+)
+
+cc_test(
+    name = "thinking_budget_constraint_test",
+    srcs = ["thinking_budget_constraint_test.cc"],
+    deps = [
+        ":bitmap",
+        ":fake_constraint",
+        ":thinking_budget_constraint",
+        "@com_google_googletest//:gtest_main",
+        "//runtime/util:test_utils",
+    ],
+)

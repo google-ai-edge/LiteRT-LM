@@ -39,6 +39,7 @@
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/constrained_decoding/constrained_decoder.h"
 #include "runtime/components/constrained_decoding/constraint.h"
+#include "runtime/components/constrained_decoding/thinking_budget_constraint.h"
 #include "runtime/components/sampler.h"
 #include "runtime/components/scoring_cpu_util.h"
 #include "runtime/components/stop_token_detector.h"
@@ -450,7 +451,10 @@ absl::StatusOr<Responses> Decode(
     std::optional<Sampler*> sampler, Constraint* constraint,
     std::optional<litert::TensorBuffer> decoded_ids,
     absl::AnyInvocable<void(absl::StatusOr<Responses>)>& callback,
-    std::atomic<bool>* cancelled, int max_output_tokens) {
+    std::atomic<bool>* cancelled, int max_output_tokens,
+    std::optional<int> thinking_token_budget,
+    const std::vector<int>& thinking_end_token_ids,
+    const std::vector<int>& thinking_start_token_ids) {
   const bool is_streaming = callback != nullptr;
   const bool is_custom_sampling = sampler.has_value();
 
@@ -480,6 +484,16 @@ absl::StatusOr<Responses> Decode(
 
   ASSIGN_OR_RETURN(int executor_step_before_decode, executor.GetCurrentStep());
   const int max_num_tokens = TryGetMaxNumTokens(executor);
+
+  std::unique_ptr<Constraint> thinking_budget_constraint;
+  int vocab_size = tokenizer.GetTokens().size();
+  if (thinking_token_budget.has_value() && *thinking_token_budget != 0) {
+    thinking_budget_constraint = std::make_unique<ThinkingBudgetConstraint>(
+        constraint, *thinking_token_budget, thinking_start_token_ids,
+        thinking_end_token_ids, vocab_size);
+    constraint = thinking_budget_constraint.get();
+  }
+
   DecodeOneStep run_one_step(&executor, &tokenizer, num_output_candidates,
                              stop_token_detector, benchmark_info, sampler,
                              constraint);
