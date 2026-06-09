@@ -712,6 +712,112 @@ class ServeTest(parameterized.TestCase):
     ):
       openai_handler._translate_openai_message(message, None)
 
+  def test_cors_request_handler_options_enabled(self):
+    import io
+    import http.client
+    mock_server = mock.MagicMock(spec=serve_util.LiteRTLMServer)
+    mock_server.cors_origin = "http://example.com"
+
+    mock_wfile = io.BytesIO()
+    mock_request = mock.Mock()
+
+    class TestHandler(serve_util.CORSRequestHandler):
+
+      def __init__(self, request, client_address, server):
+        self.request = request
+        self.client_address = client_address
+        self.server = server
+        self.wfile = mock_wfile
+        self.rfile = io.BytesIO()
+        self.headers = http.client.HTTPMessage()
+        self.headers.add_header(
+            "Access-Control-Request-Headers", "Content-Type, Authorization"
+        )
+        self.path = "/v1/models"
+        self.command = "OPTIONS"
+        self.request_version = "HTTP/1.1"
+
+      def log_request(self, code='-', size='-'):
+        pass
+
+    handler = TestHandler(mock_request, ("127.0.0.1", 12345), mock_server)
+    handler.do_OPTIONS()
+
+    response = mock_wfile.getvalue().decode("utf-8")
+    self.assertIn("HTTP/1.0 200 OK", response)
+    self.assertIn("Access-Control-Allow-Origin: http://example.com", response)
+    self.assertIn("Access-Control-Allow-Methods: GET, POST, OPTIONS", response)
+    self.assertIn(
+        "Access-Control-Allow-Headers: Content-Type, Authorization", response
+    )
+    self.assertIn("Access-Control-Max-Age: 86400", response)
+    self.assertIn("Content-Length: 0", response)
+
+  def test_cors_request_handler_options_disabled(self):
+    import io
+    import http.client
+    mock_server = mock.MagicMock(spec=serve_util.LiteRTLMServer)
+    mock_server.cors_origin = None
+
+    mock_wfile = io.BytesIO()
+    mock_request = mock.Mock()
+
+    class TestHandler(serve_util.CORSRequestHandler):
+
+      def __init__(self, request, client_address, server):
+        self.request = request
+        self.client_address = client_address
+        self.server = server
+        self.wfile = mock_wfile
+        self.rfile = io.BytesIO()
+        self.headers = http.client.HTTPMessage()
+        self.path = "/v1/models"
+        self.command = "OPTIONS"
+        self.request_version = "HTTP/1.1"
+
+      def send_error(self, code, message=None, explain=None):
+        self.error_code = code
+        self.error_message = message
+
+      def log_request(self, code='-', size='-'):
+        pass
+
+    handler = TestHandler(mock_request, ("127.0.0.1", 12345), mock_server)
+    handler.do_OPTIONS()
+    self.assertEqual(handler.error_code, 501)
+
+  def test_cors_request_handler_get_cors_enabled(self):
+    import io
+    import http.client
+    mock_server = mock.MagicMock(spec=serve_util.LiteRTLMServer)
+    mock_server.cors_origin = "http://example.com"
+
+    mock_wfile = io.BytesIO()
+    mock_request = mock.Mock()
+
+    class TestHandler(serve_util.CORSRequestHandler):
+
+      def __init__(self, request, client_address, server):
+        self.request = request
+        self.client_address = client_address
+        self.server = server
+        self.wfile = mock_wfile
+        self.rfile = io.BytesIO()
+        self.headers = http.client.HTTPMessage()
+        self.path = "/v1/models"
+        self.command = "GET"
+        self.request_version = "HTTP/1.1"
+
+      def log_request(self, code='-', size='-'):
+        pass
+
+    handler = TestHandler(mock_request, ("127.0.0.1", 12345), mock_server)
+    handler.send_response(200)
+    handler.end_headers()
+
+    response = mock_wfile.getvalue().decode("utf-8")
+    self.assertIn("Access-Control-Allow-Origin: http://example.com", response)
+
 
 if __name__ == "__main__":
   absltest.main()

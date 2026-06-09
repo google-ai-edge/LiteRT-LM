@@ -26,6 +26,33 @@ from litert_lm_builder import litertlm_peek
 from litert_lm_cli import model
 
 
+class CORSRequestHandler(http.server.BaseHTTPRequestHandler):
+  """Base HTTP request handler with CORS support."""
+
+  def end_headers(self) -> None:
+    if hasattr(self.server, "cors_origin") and self.server.cors_origin is not None:
+      self.send_header("Access-Control-Allow-Origin", self.server.cors_origin)
+    super().end_headers()
+
+  def do_OPTIONS(self) -> None:
+    if hasattr(self.server, "cors_origin") and self.server.cors_origin is not None:
+      self.send_response(200)
+      self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+      req_headers = self.headers.get("Access-Control-Request-Headers")
+      if req_headers:
+        self.send_header("Access-Control-Allow-Headers", req_headers)
+      else:
+        self.send_header(
+            "Access-Control-Allow-Headers",
+            "Content-Type, Authorization, Accept, Origin, X-Requested-With",
+        )
+      self.send_header("Access-Control-Max-Age", "86400")
+      self.send_header("Content-Length", "0")
+      self.end_headers()
+    else:
+      self.send_error(501, "Unsupported method ('OPTIONS')")
+
+
 class LiteRTLMServer(http.server.HTTPServer):
   """Custom HTTP server tracking persistent LiteRT-LM engine lifecycles.
 
@@ -38,12 +65,14 @@ class LiteRTLMServer(http.server.HTTPServer):
       engine, or None.
     vision_backend: The hardware backend used for vision encoding, or None.
     audio_backend: The hardware backend used for audio encoding, or None.
+    cors_origin: Whitelist domain name(s) allowed in Access-Control-Allow-Origin.
   """
 
   def __init__(
       self,
       server_address: tuple[str, int],
       RequestHandlerClass: type[http.server.BaseHTTPRequestHandler],
+      cors_origin: str | None = None,
   ):
     host, _ = server_address
     if ":" in host:
@@ -55,6 +84,7 @@ class LiteRTLMServer(http.server.HTTPServer):
     self.max_num_tokens: int | None = None
     self.vision_backend: litert_lm.Backend | None = None
     self.audio_backend: litert_lm.Backend | None = None
+    self.cors_origin = cors_origin
 
 
 def _is_gpu_only_model(model_path: str) -> bool:

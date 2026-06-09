@@ -35,6 +35,7 @@ def run_server(
     port: int,
     handler_class: type[http.server.BaseHTTPRequestHandler],
     api_name: str,
+    cors_origin: str | None = None,
 ) -> None:
   """Starts the HTTP server.
 
@@ -43,10 +44,13 @@ def run_server(
     port: Port to listen on.
     handler_class: The HTTP handler class to use.
     api_name: The API protocol name (e.g., "OpenAI", "Gemini").
+    cors_origin: Whitelist domain name(s) allowed in Access-Control-Allow-Origin.
   """
   server_address = (host, port)
   try:
-    with serve_util.LiteRTLMServer(server_address, handler_class) as server:
+    with serve_util.LiteRTLMServer(
+        server_address, handler_class, cors_origin=cors_origin
+    ) as server:
       click.echo(
           click.style(
               f"Starting {api_name}-compatible API server on {host}:{port}...",
@@ -84,14 +88,31 @@ def run_server(
     default="openai",
     help="The API protocol to use.",
 )
+@click.option(
+    "--cors-origin",
+    default=None,
+    type=str,
+    help=(
+        "Whitelist domain name(s) allowed in Access-Control-Allow-Origin"
+        " (e.g. '*' or 'http://localhost:3000')"
+    ),
+)
 @click.option("--verbose", is_flag=True, help="Enable verbose logging")
-def serve(host: str, port: int, *, api: str, verbose: bool) -> None:
+def serve(
+    host: str,
+    port: int,
+    *,
+    api: str,
+    cors_origin: str | None,
+    verbose: bool,
+) -> None:
   """Starts a local HTTP server speaking the OpenAI or Gemini API protocol.
 
   Args:
     host: Host to listen on.
     port: Port to listen on.
     api: The API protocol to use (openai or gemini).
+    cors_origin: Whitelist domain name(s) allowed in Access-Control-Allow-Origin.
     verbose: Whether to enable verbose logging.
   """
   if verbose:
@@ -107,7 +128,7 @@ def serve(host: str, port: int, *, api: str, verbose: bool) -> None:
   else:
     raise click.BadParameter(f"Unsupported API: {api}")
 
-  run_server(host, port, handler_class, api_name)
+  run_server(host, port, handler_class, api_name, cors_origin=cors_origin)
 
 
 def register(cli: click.Group) -> None:

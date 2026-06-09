@@ -515,7 +515,7 @@ class _ProxyTool(litert_lm.Tool):
     raise NotImplementedError("Proxy tools are not executable.")
 
 
-class OpenAIHandler(http.server.BaseHTTPRequestHandler):
+class OpenAIHandler(serve_util.CORSRequestHandler):
   """Handler for OpenAI API requests.
 
   Responses API:

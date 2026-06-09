@@ -190,7 +190,7 @@ def parse_model_and_backend(path: str) -> ParsedRequest:
   )
 
 
-class GeminiHandler(http.server.BaseHTTPRequestHandler):
+class GeminiHandler(serve_util.CORSRequestHandler):
   """Handler for Gemini API requests."""
 
   def __init__(
