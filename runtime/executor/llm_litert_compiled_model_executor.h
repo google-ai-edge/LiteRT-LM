@@ -187,6 +187,7 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
       std::unique_ptr<EmbeddingLookupManager> embedding_lookup,
       std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup,
       bool use_fp16_precision, LogitsDataType logits_data_type,
+      bool clear_state_on_reset,
       std::unique_ptr<LlmLiteRtMtpDrafter> mtp_drafter)
       : executor_settings_(std::move(executor_settings)),
         env_(env),
@@ -206,6 +207,7 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
         per_layer_embedding_lookup_(std::move(per_layer_embedding_lookup)),
         use_fp16_precision_(use_fp16_precision),
         logits_data_type_(logits_data_type),
+        clear_state_on_reset_(clear_state_on_reset),
         mtp_drafter_(std::move(mtp_drafter)) {
     auto processed_context = std::make_unique<LlmProcessedContext>(
         std::nullopt, absl::flat_hash_map<absl::string_view, TensorBuffer>(),
@@ -378,6 +380,10 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
   // GPU optimized single buffer cache
   bool gpu_optimized_single_buffer_cache_ = false;
 
+  // Whether Reset() should clear carried state buffers. This is enabled only
+  // for models that opt into RuntimeStateSchema metadata.
+  bool clear_state_on_reset_ = false;
+
   // The MTP drafter model.
   std::unique_ptr<LlmLiteRtMtpDrafter> mtp_drafter_;
 };
@@ -420,6 +426,7 @@ class LlmLiteRtCompiledModelExecutorStatic
           nullptr,
       bool use_fp16_precision = true,
       LogitsDataType logits_data_type = LogitsDataType::FLOAT32,
+      bool clear_state_on_reset = false,
       std::unique_ptr<LlmLiteRtMtpDrafter> mtp_drafter = nullptr)
       : LlmLiteRtCompiledModelExecutorBase(
             std::move(executor_settings), env, model, std::move(compiled_model),
@@ -430,7 +437,8 @@ class LlmLiteRtCompiledModelExecutorStatic
             std::move(decode_output_kv_cache_buffers), signatures,
             output_batch_size, std::move(weight_cache_path),
             std::move(embedding_lookup), std::move(per_layer_embedding_lookup),
-            use_fp16_precision, logits_data_type, std::move(mtp_drafter)),
+            use_fp16_precision, logits_data_type, clear_state_on_reset,
+            std::move(mtp_drafter)),
         prefill_signature_map_(std::move(prefill_signature_map)) {}
 
   SortedPrefillSignatureMap prefill_signature_map_;
@@ -466,10 +474,11 @@ class LlmLiteRtCompiledModelExecutorDynamic
       absl::flat_hash_map<absl::string_view, TensorBuffer> decode_input_buffers,
       absl::flat_hash_map<absl::string_view, TensorBuffer>
           decode_output_buffers,
-      int prefill_chunk_size, int key_dynamic_dim_index,
-      int value_dynamic_dim_index, int kv_increament_size,
-      std::vector<std::string> key_cache_input_names,
-      std::vector<std::string> value_cache_input_names,
+      int prefill_chunk_size,
+      absl::flat_hash_map<std::string, int> state_dynamic_dim_indices,
+      int kv_increament_size,
+      std::vector<std::string> state_input_names,
+      std::vector<std::string> resizable_state_input_names,
       ModelSignatures signatures, int output_batch_size,
       std::string weight_cache_path,
       std::unique_ptr<EmbeddingLookupManager> embedding_lookup = nullptr,
@@ -477,6 +486,7 @@ class LlmLiteRtCompiledModelExecutorDynamic
           nullptr,
       bool use_fp16_precision = true,
       LogitsDataType logits_data_type = LogitsDataType::FLOAT32,
+      bool clear_state_on_reset = false,
       std::unique_ptr<LlmLiteRtMtpDrafter> mtp_drafter = nullptr)
       : LlmLiteRtCompiledModelExecutorBase(
             std::move(executor_settings), env, model, std::move(compiled_model),
@@ -487,13 +497,14 @@ class LlmLiteRtCompiledModelExecutorDynamic
             /*decode_output_kv_cache_buffers=*/std::nullopt, signatures,
             output_batch_size, std::move(weight_cache_path),
             std::move(embedding_lookup), std::move(per_layer_embedding_lookup),
-            use_fp16_precision, logits_data_type, std::move(mtp_drafter)),
+            use_fp16_precision, logits_data_type, clear_state_on_reset,
+            std::move(mtp_drafter)),
         prefill_chunk_size_(prefill_chunk_size),
-        key_dynamic_dim_index_(key_dynamic_dim_index),
-        value_dynamic_dim_index_(value_dynamic_dim_index),
+        state_dynamic_dim_indices_(std::move(state_dynamic_dim_indices)),
         kv_increament_size_(kv_increament_size),
-        key_cache_input_names_(std::move(key_cache_input_names)),
-        value_cache_input_names_(std::move(value_cache_input_names)) {}
+        state_input_names_(std::move(state_input_names)),
+        resizable_state_input_names_(
+            std::move(resizable_state_input_names)) {}
 
   absl::Status PrefillInternal(absl::Span<int> ids,
                                const ExecutorPrefillParams& params);
@@ -504,11 +515,10 @@ class LlmLiteRtCompiledModelExecutorDynamic
       TensorBuffer& output_logits) override;
 
   int prefill_chunk_size_;
-  int key_dynamic_dim_index_;
-  int value_dynamic_dim_index_;
+  absl::flat_hash_map<std::string, int> state_dynamic_dim_indices_;
   uint32_t kv_increament_size_;
-  std::vector<std::string> key_cache_input_names_;
-  std::vector<std::string> value_cache_input_names_;
+  std::vector<std::string> state_input_names_;
+  std::vector<std::string> resizable_state_input_names_;
 };
 
 }  // namespace litert::lm

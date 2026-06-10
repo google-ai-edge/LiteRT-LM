@@ -18,6 +18,7 @@
 #include <fstream>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <variant>
@@ -39,6 +40,7 @@
 #include "litert/test/matchers.h"  // from @litert
 #include "runtime/components/model_resources.h"
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/proto/runtime_state_schema.pb.h"
 #include "runtime/util/memory_mapped_file.h"
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
@@ -51,6 +53,31 @@ using ::testing::_;  // NOLINT: Required by ASSERT_OK_AND_ASSIGN().
 using ::testing::ElementsAre;
 using ::testing::Pair;
 using ::testing::status::StatusIs;
+
+std::string MakeRuntimeStateSchemaForTest() {
+  proto::RuntimeStateSchema schema;
+  schema.set_version(kRuntimeStateSchemaVersion);
+
+  proto::StateSlot* kv_slot = schema.add_slots();
+  kv_slot->set_name("layer0_k");
+  kv_slot->set_policy(proto::SEQUENCE_APPEND);
+  kv_slot->set_sequence_axis(2);
+  kv_slot->add_tensors()->set_name("kv_cache_k_0");
+
+  proto::StateSlot* sliding_slot = schema.add_slots();
+  sliding_slot->set_name("layer1_v");
+  sliding_slot->set_policy(proto::SEQUENCE_SLIDING_WINDOW);
+  sliding_slot->set_sequence_axis(3);
+  sliding_slot->set_window_size(128);
+  sliding_slot->add_tensors()->set_name("kv_cache_v_1");
+
+  proto::StateSlot* fixed_slot = schema.add_slots();
+  fixed_slot->set_name("layer0_recurrent");
+  fixed_slot->set_policy(proto::FIXED_CARRIED);
+  fixed_slot->add_tensors()->set_name("recurrent_state_0");
+
+  return schema.SerializeAsString();
+}
 
 TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
      GetModelSignaturesFromInputOutputNames_Gemma2JAX) {
@@ -193,6 +220,129 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest, GetKVCacheRootNames_KvCacheC) {
       GetKVCacheRootNames(input_names, output_names, k_root_name, v_root_name));
   EXPECT_EQ(k_root_name, "kv_cache_c_");
   EXPECT_EQ(v_root_name, "kv_cache_c_");
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     ParseRuntimeStateSchema_ValidSchemaBuildsLookup) {
+  ASSERT_OK_AND_ASSIGN(
+      auto lookup, ParseRuntimeStateSchema(MakeRuntimeStateSchemaForTest()));
+
+  EXPECT_TRUE(lookup.has_schema());
+  EXPECT_THAT(lookup.TensorNames(),
+              ElementsAre("kv_cache_k_0", "kv_cache_v_1", "recurrent_state_0"));
+
+  const RuntimeStateTensorInfo* key_info = lookup.Find("kv_cache_k_0");
+  ASSERT_NE(key_info, nullptr);
+  EXPECT_EQ(key_info->policy, proto::SEQUENCE_APPEND);
+  EXPECT_EQ(key_info->sequence_axis, std::make_optional(2));
+  EXPECT_FALSE(key_info->sliding_window_size.has_value());
+
+  const RuntimeStateTensorInfo* value_info = lookup.Find("kv_cache_v_1");
+  ASSERT_NE(value_info, nullptr);
+  EXPECT_EQ(value_info->policy, proto::SEQUENCE_SLIDING_WINDOW);
+  EXPECT_EQ(value_info->sequence_axis, std::make_optional(3));
+  EXPECT_EQ(value_info->sliding_window_size, std::make_optional(128));
+
+  const RuntimeStateTensorInfo* fixed_info = lookup.Find("recurrent_state_0");
+  ASSERT_NE(fixed_info, nullptr);
+  EXPECT_EQ(fixed_info->policy, proto::FIXED_CARRIED);
+  EXPECT_FALSE(fixed_info->IsSequence());
+  EXPECT_FALSE(fixed_info->sequence_axis.has_value());
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     RuntimeStateNameHelpers_UseSchemaWhenPresent) {
+  ASSERT_OK_AND_ASSIGN(
+      auto lookup, ParseRuntimeStateSchema(MakeRuntimeStateSchemaForTest()));
+
+  EXPECT_TRUE(IsRuntimeStateTensorName("kv_cache_k_0", lookup));
+  EXPECT_TRUE(IsSequenceRuntimeStateTensorName("kv_cache_k_0", lookup));
+  EXPECT_TRUE(IsRuntimeStateTensorName("kv_cache_v_1", lookup));
+  EXPECT_TRUE(IsSequenceRuntimeStateTensorName("kv_cache_v_1", lookup));
+  EXPECT_TRUE(IsRuntimeStateTensorName("recurrent_state_0", lookup));
+  EXPECT_FALSE(IsSequenceRuntimeStateTensorName("recurrent_state_0", lookup));
+  EXPECT_FALSE(IsRuntimeStateTensorName("kv_cache_v_0", lookup));
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     RuntimeStateNameHelpers_MissingSchemaFallsBackToGenericKvNames) {
+  RuntimeStateSchemaLookup lookup;
+
+  EXPECT_TRUE(IsRuntimeStateTensorName("kv_cache_k_0", lookup));
+  EXPECT_TRUE(IsSequenceRuntimeStateTensorName("kv_cache_k_0", lookup));
+  EXPECT_TRUE(IsRuntimeStateTensorName("k_cache_0", lookup));
+  EXPECT_TRUE(IsSequenceRuntimeStateTensorName("v_cache_0", lookup));
+  EXPECT_FALSE(IsRuntimeStateTensorName("recurrent_state_0", lookup));
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     ParseRuntimeStateSchema_InvalidVersionFails) {
+  proto::RuntimeStateSchema schema;
+  schema.set_version(kRuntimeStateSchemaVersion + 1);
+  proto::StateSlot* slot = schema.add_slots();
+  slot->set_name("layer0_k");
+  slot->set_policy(proto::SEQUENCE_APPEND);
+  slot->set_sequence_axis(2);
+  slot->add_tensors()->set_name("kv_cache_k_0");
+
+  EXPECT_THAT(ParseRuntimeStateSchema(schema.SerializeAsString()),
+              StatusIs(absl::StatusCode::kFailedPrecondition));
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     ParseRuntimeStateSchema_SequencePolicyWithoutSequenceAxisFails) {
+  proto::RuntimeStateSchema schema;
+  schema.set_version(kRuntimeStateSchemaVersion);
+  proto::StateSlot* slot = schema.add_slots();
+  slot->set_name("layer0_k");
+  slot->set_policy(proto::SEQUENCE_APPEND);
+  slot->add_tensors()->set_name("kv_cache_k_0");
+
+  EXPECT_THAT(ParseRuntimeStateSchema(schema.SerializeAsString()),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     ParseRuntimeStateSchema_SlidingWindowWithoutWindowSizeFails) {
+  proto::RuntimeStateSchema schema;
+  schema.set_version(kRuntimeStateSchemaVersion);
+  proto::StateSlot* slot = schema.add_slots();
+  slot->set_name("layer0_v");
+  slot->set_policy(proto::SEQUENCE_SLIDING_WINDOW);
+  slot->set_sequence_axis(3);
+  slot->add_tensors()->set_name("kv_cache_v_0");
+
+  EXPECT_THAT(ParseRuntimeStateSchema(schema.SerializeAsString()),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     ParseRuntimeStateSchema_DuplicateTensorNameFails) {
+  proto::RuntimeStateSchema schema;
+  schema.set_version(kRuntimeStateSchemaVersion);
+  proto::StateSlot* slot = schema.add_slots();
+  slot->set_name("layer0_k");
+  slot->set_policy(proto::SEQUENCE_APPEND);
+  slot->set_sequence_axis(2);
+  slot->add_tensors()->set_name("kv_cache_k_0");
+  slot->add_tensors()->set_name("kv_cache_k_0");
+
+  EXPECT_THAT(ParseRuntimeStateSchema(schema.SerializeAsString()),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     ParseRuntimeStateSchema_EmptyTensorNameFails) {
+  proto::RuntimeStateSchema schema;
+  schema.set_version(kRuntimeStateSchemaVersion);
+  proto::StateSlot* slot = schema.add_slots();
+  slot->set_name("layer0_k");
+  slot->set_policy(proto::SEQUENCE_APPEND);
+  slot->set_sequence_axis(2);
+  slot->add_tensors();
+
+  EXPECT_THAT(ParseRuntimeStateSchema(schema.SerializeAsString()),
+              StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
 TEST(LlmLiteRTCompiledModelExecutorUtilsTest,

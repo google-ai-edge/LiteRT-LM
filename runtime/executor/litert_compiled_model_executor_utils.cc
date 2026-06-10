@@ -22,6 +22,7 @@
 #include <iterator>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <variant>
@@ -123,7 +124,140 @@ BuildModelResourcesFromLitertLmFormat(const ModelAssets& model_assets) {
   return ModelResourcesLitertLm::Create(std::move(loader));
 }
 
+bool IsLegacyKvCacheTensorName(absl::string_view tensor_name) {
+  return absl::StartsWith(tensor_name, "kv_cache_") ||
+         absl::StartsWith(tensor_name, "k_cache_") ||
+         absl::StartsWith(tensor_name, "v_cache_");
+}
+
 }  // namespace
+
+absl::Status RuntimeStateSchemaLookup::AddTensor(
+    std::string tensor_name, RuntimeStateTensorInfo tensor_info) {
+  RET_CHECK(!tensor_name.empty()).SetCode(absl::StatusCode::kInvalidArgument)
+      << "Runtime state tensor name must not be empty.";
+  auto [_, inserted] = tensors_.emplace(std::move(tensor_name),
+                                        std::move(tensor_info));
+  RET_CHECK(inserted).SetCode(absl::StatusCode::kInvalidArgument)
+      << "Duplicate runtime state tensor name in schema.";
+  return absl::OkStatus();
+}
+
+const RuntimeStateTensorInfo* RuntimeStateSchemaLookup::Find(
+    absl::string_view tensor_name) const {
+  auto it = tensors_.find(tensor_name);
+  if (it == tensors_.end()) {
+    return nullptr;
+  }
+  return &it->second;
+}
+
+bool RuntimeStateSchemaLookup::IsRuntimeStateTensor(
+    absl::string_view tensor_name) const {
+  return Find(tensor_name) != nullptr;
+}
+
+bool RuntimeStateSchemaLookup::IsSequenceTensor(
+    absl::string_view tensor_name) const {
+  const RuntimeStateTensorInfo* info = Find(tensor_name);
+  return info != nullptr && info->IsSequence();
+}
+
+std::vector<std::string> RuntimeStateSchemaLookup::TensorNames() const {
+  std::vector<std::string> names;
+  names.reserve(tensors_.size());
+  for (const auto& [name, _] : tensors_) {
+    names.push_back(name);
+  }
+  std::sort(names.begin(), names.end());
+  return names;
+}
+
+absl::StatusOr<RuntimeStateSchemaLookup> ParseRuntimeStateSchema(
+    absl::string_view serialized_schema) {
+  proto::RuntimeStateSchema schema;
+  RET_CHECK(schema.ParseFromString(serialized_schema))
+          .SetCode(absl::StatusCode::kInvalidArgument)
+      << "Failed to parse RuntimeStateSchema metadata.";
+  RET_CHECK_EQ(schema.version(), kRuntimeStateSchemaVersion)
+          .SetCode(absl::StatusCode::kFailedPrecondition)
+      << "Unsupported RuntimeStateSchema version: " << schema.version();
+  RET_CHECK_GT(schema.slots_size(), 0)
+          .SetCode(absl::StatusCode::kInvalidArgument)
+      << "RuntimeStateSchema must contain at least one slot.";
+
+  RuntimeStateSchemaLookup lookup;
+  lookup.set_has_schema(true);
+  for (const proto::StateSlot& slot : schema.slots()) {
+    RET_CHECK(slot.policy() != proto::STATE_POLICY_UNSPECIFIED)
+            .SetCode(absl::StatusCode::kInvalidArgument)
+        << "Runtime state slot policy must be set.";
+    RET_CHECK_GT(slot.tensors_size(), 0)
+            .SetCode(absl::StatusCode::kInvalidArgument)
+        << "Runtime state slot must contain at least one tensor.";
+    const bool is_sequence_policy =
+        slot.policy() == proto::SEQUENCE_APPEND ||
+        slot.policy() == proto::SEQUENCE_SLIDING_WINDOW;
+    if (slot.policy() == proto::SEQUENCE_SLIDING_WINDOW) {
+      RET_CHECK_GT(slot.window_size(), 0)
+              .SetCode(absl::StatusCode::kInvalidArgument)
+          << "SEQUENCE_SLIDING_WINDOW slot requires window_size.";
+    }
+    for (const proto::StateTensor& tensor : slot.tensors()) {
+      RuntimeStateTensorInfo info;
+      info.policy = slot.policy();
+      if (tensor.has_sequence_axis()) {
+        info.sequence_axis = static_cast<int>(tensor.sequence_axis());
+      } else if (slot.has_sequence_axis()) {
+        info.sequence_axis = static_cast<int>(slot.sequence_axis());
+      }
+      if (is_sequence_policy) {
+        RET_CHECK(info.sequence_axis.has_value())
+                .SetCode(absl::StatusCode::kInvalidArgument)
+            << "Sequence runtime state tensor requires sequence_axis: "
+            << tensor.name();
+        RET_CHECK_GE(*info.sequence_axis, 0)
+                .SetCode(absl::StatusCode::kInvalidArgument)
+            << "Sequence runtime state tensor has negative sequence_axis: "
+            << tensor.name();
+      }
+      if (slot.policy() == proto::SEQUENCE_SLIDING_WINDOW) {
+        info.sliding_window_size = static_cast<int>(slot.window_size());
+      }
+      RETURN_IF_ERROR(lookup.AddTensor(tensor.name(), std::move(info)));
+    }
+  }
+  return lookup;
+}
+
+absl::StatusOr<RuntimeStateSchemaLookup> GetRuntimeStateSchemaLookup(
+    const litert::Model& model) {
+  auto metadata = model.Metadata(
+      std::string(kRuntimeStateSchemaMetadataName.data(),
+                  kRuntimeStateSchemaMetadataName.size()));
+  if (!metadata.HasValue()) {
+    return RuntimeStateSchemaLookup();
+  }
+  const absl::Span<const uint8_t> bytes = *metadata;
+  return ParseRuntimeStateSchema(absl::string_view(
+      reinterpret_cast<const char*>(bytes.data()), bytes.size()));
+}
+
+bool IsRuntimeStateTensorName(absl::string_view tensor_name,
+                              const RuntimeStateSchemaLookup& lookup) {
+  if (lookup.has_schema()) {
+    return lookup.IsRuntimeStateTensor(tensor_name);
+  }
+  return IsLegacyKvCacheTensorName(tensor_name);
+}
+
+bool IsSequenceRuntimeStateTensorName(absl::string_view tensor_name,
+                                      const RuntimeStateSchemaLookup& lookup) {
+  if (lookup.has_schema()) {
+    return lookup.IsSequenceTensor(tensor_name);
+  }
+  return IsLegacyKvCacheTensorName(tensor_name);
+}
 
 absl::StatusOr<ModelSignatures> GetModelSignaturesFromInputOutputNames(
     const std::vector<absl::string_view>& input_names,

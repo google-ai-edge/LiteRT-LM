@@ -15,6 +15,7 @@
 #ifndef THIRD_PARTY_ODML_INFRA_GENAI_INFERENCE_EXECUTOR_LITERT_COMPILED_MODEL_EXECUTOR_UTILS_H_
 #define THIRD_PARTY_ODML_INFRA_GENAI_INFERENCE_EXECUTOR_LITERT_COMPILED_MODEL_EXECUTOR_UTILS_H_
 
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -24,6 +25,7 @@
 #include <vector>
 
 #include "absl/container/btree_map.h"  // from @com_google_absl
+#include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
@@ -34,6 +36,7 @@
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/proto/runtime_state_schema.pb.h"
 #include "runtime/proto/sampler_params.pb.h"
 #include "runtime/util/scoped_file.h"
 
@@ -73,6 +76,65 @@ struct ModelSignatures {
   // Output logits signature name. Necessary for decode.
   std::string output_logits;
 };
+
+inline constexpr absl::string_view kRuntimeStateSchemaMetadataName =
+    "odml.litert_lm.runtime_state_schema";
+inline constexpr uint32_t kRuntimeStateSchemaVersion = 1;
+
+struct RuntimeStateTensorInfo {
+  proto::StatePolicy policy = proto::STATE_POLICY_UNSPECIFIED;
+  std::optional<int> sequence_axis;
+  std::optional<int> sliding_window_size;
+
+  bool IsSequence() const {
+    return policy == proto::SEQUENCE_APPEND ||
+           policy == proto::SEQUENCE_SLIDING_WINDOW;
+  }
+};
+
+class RuntimeStateSchemaLookup {
+ public:
+  bool has_schema() const { return has_schema_; }
+
+  void set_has_schema(bool has_schema) { has_schema_ = has_schema; }
+
+  absl::Status AddTensor(std::string tensor_name,
+                         RuntimeStateTensorInfo tensor_info);
+
+  const RuntimeStateTensorInfo* Find(absl::string_view tensor_name) const;
+
+  bool IsRuntimeStateTensor(absl::string_view tensor_name) const;
+
+  bool IsSequenceTensor(absl::string_view tensor_name) const;
+
+  std::vector<std::string> TensorNames() const;
+
+ private:
+  bool has_schema_ = false;
+  absl::flat_hash_map<std::string, RuntimeStateTensorInfo> tensors_;
+};
+
+// Parses a RuntimeStateSchema binary proto into a tensor-name lookup.
+absl::StatusOr<RuntimeStateSchemaLookup> ParseRuntimeStateSchema(
+    absl::string_view serialized_schema);
+
+// Reads odml.litert_lm.runtime_state_schema from embedded TFLite metadata. If
+// the metadata is absent, returns an empty lookup and callers should use the
+// legacy generic KV-name fallback.
+absl::StatusOr<RuntimeStateSchemaLookup> GetRuntimeStateSchemaLookup(
+    const litert::Model& model);
+
+// Returns whether a tensor participates in runtime state handling. If schema
+// metadata is absent, this falls back to the legacy generic KV cache name
+// prefixes.
+bool IsRuntimeStateTensorName(absl::string_view tensor_name,
+                              const RuntimeStateSchemaLookup& lookup);
+
+// Returns whether a runtime-state tensor participates in sequence-length
+// handling such as dynamic KV resizing. If schema metadata is absent, this
+// falls back to the legacy generic KV cache name prefixes.
+bool IsSequenceRuntimeStateTensorName(absl::string_view tensor_name,
+                                      const RuntimeStateSchemaLookup& lookup);
 
 // Get the corresponding ModelSignatures struct for the given model using
 // the signature runner. Returns an error if the runner's signature does not

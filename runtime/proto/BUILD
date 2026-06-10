@@ -62,6 +62,26 @@ alias(
 )
 
 tf_proto_library(
+    name = "runtime_state_schema",
+    srcs = ["runtime_state_schema.proto"],
+)
+
+alias(
+    name = "runtime_state_schema_proto",
+    actual = ":runtime_state_schema",
+)
+
+alias(
+    name = "runtime_state_schema_cc_proto",
+    actual = ":runtime_state_schema_cc",
+)
+
+alias(
+    name = "runtime_state_schema_py_pb2",
+    actual = ":runtime_state_schema_py_proto",
+)
+
+tf_proto_library(
     name = "llm_metadata",
     srcs = ["llm_metadata.proto"],
     deps = [

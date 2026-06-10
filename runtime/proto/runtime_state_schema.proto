@@ -1,0 +1,56 @@
+// Copyright 2026 The ODML Authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+package litert.lm.proto;
+
+option java_multiple_files = true;
+option java_outer_classname = "RuntimeStateSchemaOuterClass";
+
+enum StatePolicy {
+  STATE_POLICY_UNSPECIFIED = 0;
+  SEQUENCE_APPEND = 1;
+  SEQUENCE_SLIDING_WINDOW = 2;
+  FIXED_CARRIED = 3;
+}
+
+message StateTensor {
+  // Signature tensor name for this runtime state tensor.
+  string name = 1;
+
+  // Optional per-tensor override for the sequence axis. If unset, the slot
+  // sequence_axis is used for sequence state policies.
+  optional int32 sequence_axis = 2;
+}
+
+message StateSlot {
+  string name = 1;
+  StatePolicy policy = 2;
+  repeated StateTensor tensors = 3;
+
+  // Required for sequence state policies unless every tensor in this slot
+  // provides its own sequence_axis.
+  optional int32 sequence_axis = 4;
+
+  // Required for SEQUENCE_SLIDING_WINDOW.
+  int32 window_size = 5;
+}
+
+message RuntimeStateSchema {
+  // Version 1 is the initial schema.
+  int32 version = 1;
+
+  repeated StateSlot slots = 2;
+}
