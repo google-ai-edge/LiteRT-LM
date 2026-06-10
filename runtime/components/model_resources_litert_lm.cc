@@ -14,8 +14,10 @@
 
 #include "runtime/components/model_resources_litert_lm.h"
 
+#include <cstdarg>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -28,6 +30,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "litert/c/litert_model.h"  // from @litert
 #include "litert/cc/litert_buffer_ref.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
@@ -46,7 +49,81 @@
 #include "runtime/components/huggingface_tokenizer.h"
 #endif  // ENABLE_HUGGINGFACE_TOKENIZER
 
+#if !defined(LITERT_DYNAMIC_RUNTIME)
+#if defined(_WIN32)
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
+
+#include "tensorflow/compiler/mlir/lite/allocation.h"  // from @org_tensorflow
+#endif  // !defined(LITERT_DYNAMIC_RUNTIME)
+
 namespace litert::lm {
+
+namespace {
+
+#if !defined(LITERT_DYNAMIC_RUNTIME)
+
+class AllocationErrorReporter : public tflite::ErrorReporter {
+ public:
+  using ErrorReporter::Report;
+
+  int Report(const char* format, va_list args) override {
+    char message[1024];
+    const int written = vsnprintf(message, sizeof(message), format, args);
+    ABSL_LOG(WARNING) << "LiteRT allocation load error: " << message;
+    return written;
+  }
+};
+
+void CloseCFileDescriptor(int fd) {
+#if defined(_WIN32)
+  _close(fd);
+#else
+  close(fd);
+#endif
+}
+
+absl::StatusOr<litert::Model> CreateModelFromFileSection(ScopedFile& model_file,
+                                                         uint64_t begin_offset,
+                                                         uint64_t end_offset) {
+  if (end_offset <= begin_offset) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Invalid LiteRT-LM section range: [", begin_offset, ", ",
+                     end_offset, ")"));
+  }
+
+  ASSIGN_OR_RETURN(auto duplicated_model_file, model_file.Duplicate());
+  ASSIGN_OR_RETURN(int c_fd, duplicated_model_file.Release());
+
+  AllocationErrorReporter error_reporter;
+  auto allocation = std::make_unique<tflite::MMAPAllocation>(
+      c_fd, begin_offset, end_offset - begin_offset, &error_reporter);
+  CloseCFileDescriptor(c_fd);
+
+  if (!allocation->valid()) {
+    return absl::InternalError(
+        absl::StrCat("Failed to create mmap allocation for LiteRT-LM section [",
+                     begin_offset, ", ", end_offset, ")"));
+  }
+
+  LiteRtModel model_handle = nullptr;
+  const LiteRtStatus status =
+      LiteRtCreateModelFromAllocation(std::move(allocation), &model_handle);
+  if (status != kLiteRtStatusOk) {
+    return absl::InternalError(
+        absl::StrCat("Failed to create LiteRT model from file-backed "
+                     "allocation, status=",
+                     static_cast<int>(status)));
+  }
+
+  return litert::Model::CreateFromOwnedHandle(model_handle);
+}
+
+#endif  // !defined(LITERT_DYNAMIC_RUNTIME)
+
+}  // namespace
 
 // static
 absl::StatusOr<std::unique_ptr<ModelResources>> ModelResourcesLitertLm::Create(
@@ -61,6 +138,28 @@ absl::StatusOr<const litert::Model*> ModelResourcesLitertLm::GetTFLiteModel(
   if (it != model_map_.end()) {
     return it->second.get();
   }
+
+#if !defined(LITERT_DYNAMIC_RUNTIME)
+  if (tflite::MMAPAllocation::IsSupported()) {
+    auto scoped_file = litert_lm_loader_->GetScopedFile();
+    auto section_location = litert_lm_loader_->GetSectionLocation(
+        BufferKey(schema::AnySectionDataType_TFLiteModel, model_type));
+    if (scoped_file.ok() && section_location.ok()) {
+      auto model_from_section = CreateModelFromFileSection(
+          scoped_file->get(), section_location->first,
+          section_location->second);
+      if (model_from_section.ok()) {
+        model_map_[model_type] =
+            std::make_unique<litert::Model>(std::move(*model_from_section));
+        return model_map_[model_type].get();
+      }
+      ABSL_LOG(WARNING)
+          << "Falling back to buffer-backed LiteRT model load for "
+          << ModelTypeToString(model_type) << ": "
+          << model_from_section.status();
+    }
+  }
+#endif  // !defined(LITERT_DYNAMIC_RUNTIME)
 
   litert::BufferRef<uint8_t> buffer_ref =
       litert_lm_loader_->GetTFLiteModel(model_type);
