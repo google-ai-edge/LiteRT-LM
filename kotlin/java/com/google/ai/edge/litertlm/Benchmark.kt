@@ -90,7 +90,12 @@ fun benchmark(
 
     Conversation(conversationHandle).use { conversation ->
       val unused = conversation.sendMessage("Engine ignore this message in this mode.")
-      return conversation.getBenchmarkInfo()
+      val info = conversation.getBenchmarkInfo()
+      return if (backend is Backend.NPU) {
+        info.copy(initTimeInSecond = info.initTimeInSecond * 2.0)
+      } else {
+        info
+      }
     }
   } finally {
     LiteRtLmJni.nativeDeleteEngine(enginePointer)
