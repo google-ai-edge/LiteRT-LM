@@ -14,6 +14,7 @@
 
 #include "c/engine.h"
 
+#include <fcntl.h>
 #include <algorithm>
 #include <cstring>
 #include <memory>
@@ -282,6 +283,26 @@ TEST(EngineCTest, SetEnableSpeculativeDecoding) {
                    .GetAdvancedSettings()
                    .value_or(litert::lm::AdvancedSettings())
                    .enable_speculative_decoding);
+}
+
+TEST(EngineCTest, CreateSettingsFromRawFileDescriptor) {
+  const std::string task_path = GetTestdataPath(
+      "litert_lm/runtime/testdata/test_lm_new_metadata.task");
+  int fd = open(task_path.c_str(), O_RDONLY);
+  ASSERT_GE(fd, 0);
+  EngineSettingsPtr settings(
+      litert_lm_engine_settings_create_from_raw_file_descriptor(
+          fd, "cpu", /* vision_backend_str */ nullptr,
+          /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+  EXPECT_TRUE(settings->settings->GetMainExecutorSettings()
+                  .GetModelAssets()
+                  .HasScopedFile());
+  EXPECT_FALSE(settings->settings->GetMainExecutorSettings()
+                   .GetModelAssets()
+                   .GetPath()
+                   .ok());
 }
 
 TEST(EngineCTest, CreateSessionConfigWithSamplerParams) {

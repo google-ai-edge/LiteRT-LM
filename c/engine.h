@@ -295,6 +295,22 @@ LiteRtLmEngineSettings* litert_lm_engine_settings_create(
     const char* model_path, const char* backend_str,
     const char* vision_backend_str, const char* audio_backend_str);
 
+// Creates LiteRT LM Engine Settings from a raw file descriptor. The engine
+// takes ownership of the file descriptor and will close it when done.
+// The caller is responsible for destroying the settings using
+// `litert_lm_engine_settings_delete`.
+//
+// @param fd The file descriptor of the model.
+// @param backend_str The backend to use (e.g., "cpu", "gpu").
+// @param vision_backend_str The vision backend to use, or NULL if not set.
+// @param audio_backend_str The audio backend to use, or NULL if not set.
+// @return A pointer to the created settings, or NULL on failure.
+LITERT_LM_C_API_EXPORT
+LiteRtLmEngineSettings*
+litert_lm_engine_settings_create_from_raw_file_descriptor(
+    int fd, const char* backend_str, const char* vision_backend_str,
+    const char* audio_backend_str);
+
 // Destroys LiteRT LM Engine Settings.
 //
 // @param settings The settings to destroy.
