@@ -104,6 +104,7 @@ Language             | Status          | Best For...             | Documentation
 **JavaScript (web)** | 🚀 Early Preview | Browser environments    | [JavaScript Guide](https://ai.google.dev/edge/litert-lm/js)
 **Flutter**          | 🚀 Community     | Cross-platform mobile   | [Flutter Guide](https://ai.google.dev/edge/litert-lm/flutter)
 **C++**              | ✅ Stable        | High-performance native | [C++ Guide](https://ai.google.dev/edge/litert-lm/cpp)
+**.NET (C#)**        | 🚀 Community     | .NET & MAUI apps        | [LiteRtLmSharp](https://github.com/OrihuelaConde/LiteRtLmSharp)
 
 #### 🏗️ Build From Source
 
