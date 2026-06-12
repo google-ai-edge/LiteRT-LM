@@ -270,6 +270,10 @@ def _setup_lib_signatures(lib):
       ctypes.c_void_p,
       ctypes.c_bool,
   ]
+  lib.litert_lm_conversation_config_set_enable_thinking.argtypes = [
+      ctypes.c_void_p,
+      ctypes.c_bool,
+  ]
   lib.litert_lm_conversation_config_set_filter_channel_content_from_kv_cache.argtypes = [
       ctypes.c_void_p,
       ctypes.c_bool,
@@ -282,6 +286,10 @@ def _setup_lib_signatures(lib):
   lib.litert_lm_conversation_optional_args_set_max_output_tokens.argtypes = [
       ctypes.c_void_p,
       ctypes.c_int,
+  ]
+  lib.litert_lm_conversation_optional_args_set_enable_thinking.argtypes = [
+      ctypes.c_void_p,
+      ctypes.c_bool,
   ]
 
   # Conversation

@@ -115,7 +115,7 @@ std::optional<litert::lm::DataProcessorArguments> GetDataProcessorArguments(
 litert::lm::OptionalArgs CreateOptionalArgs(
     const litert::lm::Conversation* conversation, const char* extra_context,
     std::optional<int> visual_token_budget,
-    std::optional<int> max_output_tokens) {
+    std::optional<int> max_output_tokens, std::optional<bool> enable_thinking) {
   litert::lm::OptionalArgs litert_lm_optional_args;
   if (extra_context) {
     auto extra_context_json =
@@ -130,6 +130,9 @@ litert::lm::OptionalArgs CreateOptionalArgs(
   }
   if (max_output_tokens.has_value()) {
     litert_lm_optional_args.max_output_tokens = max_output_tokens;
+  }
+  if (enable_thinking.has_value()) {
+    litert_lm_optional_args.enable_thinking = enable_thinking;
   }
   return litert_lm_optional_args;
 }
@@ -270,11 +273,13 @@ struct LiteRtLmConversationConfig {
   std::string extra_context_json;
   bool enable_constrained_decoding = false;
   bool filter_channel_content_from_kv_cache = false;
+  bool enable_thinking = false;
 };
 
 struct LiteRtLmConversationOptionalArgs {
   std::optional<int> visual_token_budget;
   std::optional<int> max_output_tokens;
+  std::optional<bool> enable_thinking;
 };
 
 struct LiteRtLmDetokenizeResult {
@@ -438,6 +443,13 @@ void litert_lm_conversation_config_set_enable_constrained_decoding(
   }
 }
 
+void litert_lm_conversation_config_set_enable_thinking(
+    LiteRtLmConversationConfig* config, bool enable_thinking) {
+  if (config) {
+    config->enable_thinking = enable_thinking;
+  }
+}
+
 void litert_lm_conversation_config_set_filter_channel_content_from_kv_cache(
     LiteRtLmConversationConfig* config,
     bool filter_channel_content_from_kv_cache) {
@@ -467,6 +479,13 @@ void litert_lm_conversation_optional_args_set_max_output_tokens(
     LiteRtLmConversationOptionalArgs* args, int max_output_tokens) {
   if (args) {
     args->max_output_tokens = max_output_tokens;
+  }
+}
+
+void litert_lm_conversation_optional_args_set_enable_thinking(
+    LiteRtLmConversationOptionalArgs* args, bool enable_thinking) {
+  if (args) {
+    args->enable_thinking = enable_thinking;
   }
 }
 
@@ -1138,6 +1157,7 @@ LiteRtLmConversation* litert_lm_conversation_create(
 
     builder.SetPreface(json_preface);
     builder.SetEnableConstrainedDecoding(c_config->enable_constrained_decoding);
+    builder.SetEnableThinking(c_config->enable_thinking);
     builder.SetFilterChannelContentFromKvCache(
         c_config->filter_channel_content_from_kv_cache);
     auto config = builder.Build(*engine->engine);
@@ -1207,7 +1227,8 @@ LiteRtLmJsonResponse* litert_lm_conversation_send_message(
   OptionalArgs litert_lm_optional_args = CreateOptionalArgs(
       conversation->conversation.get(), extra_context,
       optional_args ? optional_args->visual_token_budget : std::nullopt,
-      optional_args ? optional_args->max_output_tokens : std::nullopt);
+      optional_args ? optional_args->max_output_tokens : std::nullopt,
+      optional_args ? optional_args->enable_thinking : std::nullopt);
 
   auto response = conversation->conversation->SendMessage(
       json_message, std::move(litert_lm_optional_args));
@@ -1251,7 +1272,8 @@ int litert_lm_conversation_send_message_stream(
   litert::lm::OptionalArgs litert_lm_optional_args = CreateOptionalArgs(
       conversation->conversation.get(), extra_context,
       optional_args ? optional_args->visual_token_budget : std::nullopt,
-      optional_args ? optional_args->max_output_tokens : std::nullopt);
+      optional_args ? optional_args->max_output_tokens : std::nullopt,
+      optional_args ? optional_args->enable_thinking : std::nullopt);
 
   absl::Status status = conversation->conversation->SendMessageAsync(
       json_message, CreateConversationCallback(callback, callback_data),

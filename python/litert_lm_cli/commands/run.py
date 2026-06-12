@@ -114,9 +114,9 @@ def _execute_prompt(
         if state.active_channel != channel_name:
           if state.active_channel is not None:
             click.echo()
-          click.echo(click.style(f"[{channel_name}] ", fg="blue"), nl=False)
+          click.echo(click.style(f"[{channel_name}] ", fg="cyan"), nl=False)
           state.active_channel = channel_name
-        click.echo(click.style(channel_content, fg="yellow"), nl=False)
+        click.echo(click.style(channel_content, fg="cyan", dim=True), nl=False)
     if state.active_channel is not None:
       click.echo()
     else:
@@ -180,6 +180,7 @@ def run_interactive(
     no_template: bool = False,
     max_num_tokens: int | None = None,
     filter_channel_content_from_kv_cache: bool = False,
+    enable_thinking: bool = False,
     vision_backend: str | None = None,
     audio_backend: str | None = None,
     attachments: tuple[str, ...] = (),
@@ -274,6 +275,7 @@ def run_interactive(
             tool_event_handler=handler,
             extra_context=extra_context,
             filter_channel_content_from_kv_cache=filter_channel_content_from_kv_cache,
+            enable_thinking=enable_thinking,
             sampler_config=sampler_config,
         )
 
@@ -397,6 +399,12 @@ def run_interactive(
     help="Whether to filter channel content from the KV cache.",
 )
 @click.option(
+    "--enable-thinking",
+    is_flag=True,
+    default=False,
+    help="Whether to enable thinking/reasoning generation.",
+)
+@click.option(
     "--vision-backend",
     type=click.Choice(["cpu", "gpu"], case_sensitive=False),
     default=None,
@@ -473,6 +481,7 @@ def run(
     huggingface_token: str | None = None,
     max_num_tokens: int | None = None,
     filter_channel_content_from_kv_cache: bool = False,
+    enable_thinking: bool = False,
     vision_backend: str | None = None,
     audio_backend: str | None = None,
     attachment: tuple[str, ...] = (),
@@ -504,6 +513,7 @@ def run(
     max_num_tokens: Maximum number of tokens for the KV cache.
     filter_channel_content_from_kv_cache: Whether to filter channel content from
       the KV cache.
+    enable_thinking: Whether to enable thinking/reasoning generation.
     vision_backend: The backend to use for vision tasks.
     audio_backend: The backend to use for audio tasks.
     attachment: Path to an attachment (e.g., image or audio).
@@ -622,6 +632,7 @@ def run(
       no_template=no_template,
       max_num_tokens=max_num_tokens,
       filter_channel_content_from_kv_cache=filter_channel_content_from_kv_cache,
+      enable_thinking=enable_thinking,
       vision_backend=vision_backend,
       audio_backend=audio_backend,
       attachments=tuple(expanded_attachments),

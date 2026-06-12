@@ -48,6 +48,7 @@ struct LiteRtLmSessionConfig {
 struct LiteRtLmConversationOptionalArgs {
   std::optional<int> visual_token_budget;
   std::optional<int> max_output_tokens;
+  std::optional<bool> enable_thinking;
 };
 
 struct LiteRtLmConversationConfig {
@@ -56,6 +57,7 @@ struct LiteRtLmConversationConfig {
   std::string tools_json;
   std::string messages_json;
   bool enable_constrained_decoding = false;
+  bool enable_thinking = false;
 };
 
 struct LiteRtLmConversation {
@@ -460,6 +462,40 @@ TEST(EngineCTest, CreateConversationConfigWithNoSamplerParams) {
   nlohmann::ordered_json expected_messages =
       nlohmann::ordered_json::array({message});
   EXPECT_EQ(preface.messages, expected_messages);
+}
+
+TEST(EngineCTest, CreateConversationConfigWithEnableThinking) {
+  // 1. Create an engine.
+  const std::string task_path = GetTestdataPath(
+      "litert_lm/runtime/testdata/test_lm_new_metadata.task");
+
+  EngineSettingsPtr settings(
+      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
+                                       /* vision_backend_str */ nullptr,
+                                       /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+  litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
+
+  EnginePtr engine(litert_lm_engine_create(settings.get()),
+                   &litert_lm_engine_delete);
+  ASSERT_NE(engine, nullptr);
+
+  // 2. Create a Conversation Config and enable thinking.
+  ConversationConfigPtr conversation_config(
+      litert_lm_conversation_config_create(),
+      &litert_lm_conversation_config_delete);
+  ASSERT_NE(conversation_config, nullptr);
+  litert_lm_conversation_config_set_enable_thinking(conversation_config.get(),
+                                                    true);
+
+  // 3. Test to see if the Conversation has enable_thinking true in config.
+  ConversationPtr conversation(
+      litert_lm_conversation_create(engine.get(), conversation_config.get()),
+      &litert_lm_conversation_delete);
+  ASSERT_NE(conversation, nullptr);
+
+  EXPECT_TRUE(conversation->conversation->GetConfig().enable_thinking());
 }
 
 TEST(EngineCTest, CreateConversationConfigWithNoSamplerParamsNoSystemMessage) {
@@ -1130,6 +1166,56 @@ TEST(EngineCTest, ConversationSendMessageWithOptionalArgs) {
       optional_args.get(), 100);
 
   // 5. Send a message to the conversation with optional args.
+  const char* message_json =
+      R"({"role": "user", "content": [{"type": "text", "text": "Hello"}]})";
+  JsonResponsePtr response(litert_lm_conversation_send_message(
+                               conversation.get(), message_json,
+                               /*extra_context=*/nullptr, optional_args.get()),
+                           &litert_lm_json_response_delete);
+  ASSERT_NE(response, nullptr);
+
+  const char* response_str = litert_lm_json_response_get_string(response.get());
+  ASSERT_NE(response_str, nullptr);
+  EXPECT_GT(strlen(response_str), 0);
+}
+
+TEST(EngineCTest, ConversationSendMessageWithEnableThinkingOptionalArg) {
+  // 1. Create an engine.
+  const std::string task_path = GetTestdataPath(
+      "litert_lm/runtime/testdata/test_lm_new_metadata.task");
+
+  EngineSettingsPtr settings(
+      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
+                                       /* vision_backend_str */ nullptr,
+                                       /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+  litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
+
+  EnginePtr engine(litert_lm_engine_create(settings.get()),
+                   &litert_lm_engine_delete);
+  ASSERT_NE(engine, nullptr);
+
+  // 2. Create a Conversation Config (enable_thinking default false).
+  ConversationConfigPtr conversation_config(
+      litert_lm_conversation_config_create(),
+      &litert_lm_conversation_config_delete);
+  ASSERT_NE(conversation_config, nullptr);
+
+  // 3. Create a Conversation.
+  ConversationPtr conversation(
+      litert_lm_conversation_create(engine.get(), conversation_config.get()),
+      &litert_lm_conversation_delete);
+  ASSERT_NE(conversation, nullptr);
+
+  // 4. Create Optional Args with enable_thinking true.
+  OptionalArgsPtr optional_args(litert_lm_conversation_optional_args_create(),
+                                &litert_lm_conversation_optional_args_delete);
+  ASSERT_NE(optional_args, nullptr);
+  litert_lm_conversation_optional_args_set_enable_thinking(optional_args.get(),
+                                                           true);
+
+  // 5. Send a message to the conversation.
   const char* message_json =
       R"({"role": "user", "content": [{"type": "text", "text": "Hello"}]})";
   JsonResponsePtr response(litert_lm_conversation_send_message(

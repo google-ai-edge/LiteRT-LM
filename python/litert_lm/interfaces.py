@@ -230,6 +230,7 @@ class AbstractEngine(abc.ABC):
       extra_context: collections.abc.Mapping[str, Any] | None = None,
       filter_channel_content_from_kv_cache: bool = False,
       sampler_config: SamplerConfig | None = None,
+      enable_thinking: bool = False,
   ) -> AbstractConversation:
     """Creates a new conversation for this engine.
 
@@ -247,6 +248,7 @@ class AbstractEngine(abc.ABC):
           persisted in the KV cache.
         sampler_config: Configuration for the sampling process. If None, then
           uses the engine's default values.
+        enable_thinking: Whether to enable thinking/reasoning generation.
     """
 
   @abc.abstractmethod
@@ -349,6 +351,7 @@ class AbstractConversation(abc.ABC):
       message: str | Contents | Message | collections.abc.Mapping[str, Any],
       *,
       max_output_tokens: int | None = None,
+      enable_thinking: bool | None = None,
   ) -> collections.abc.Mapping[str, Any]:
     """Sends a message and returns the response.
 
@@ -360,6 +363,7 @@ class AbstractConversation(abc.ABC):
           tool calling is disabled and a tool response is required), or
           `collections.abc.Mapping` (super flexible raw dictionary format).
         max_output_tokens: The maximum number of output tokens.
+        enable_thinking: Whether to enable thinking/reasoning generation.
 
     Returns:
         A dictionary containing the model's response. The structure is:
@@ -372,6 +376,7 @@ class AbstractConversation(abc.ABC):
       message: str | Contents | Message | collections.abc.Mapping[str, Any],
       *,
       max_output_tokens: int | None = None,
+      enable_thinking: bool | None = None,
   ) -> collections.abc.Iterator[collections.abc.Mapping[str, Any]]:
     """Sends a message and streams the response.
 
@@ -383,6 +388,7 @@ class AbstractConversation(abc.ABC):
           tool calling is disabled and a tool response is required), or
           `collections.abc.Mapping` (super flexible raw dictionary format).
         max_output_tokens: The maximum number of output tokens.
+        enable_thinking: Whether to enable thinking/reasoning generation.
 
     Returns:
         An iterator yielding dictionaries containing chunks of the model's

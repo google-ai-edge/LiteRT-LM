@@ -24,6 +24,7 @@ from prompt_toolkit import key_binding
 from litert_lm_cli import common
 from litert_lm_cli import main
 from litert_lm_cli import model
+from litert_lm_cli.commands import run as run_cmd
 
 
 class MainTest(absltest.TestCase):
@@ -125,8 +126,6 @@ class MainTest(absltest.TestCase):
     mock_run_interactive.assert_not_called()
 
   def test_create_keybindings(self):
-    from litert_lm_cli.commands import run as run_cmd
-
     kb = run_cmd._create_keybindings()
     self.assertIsInstance(kb, key_binding.KeyBindings)
     # Check if expected keys are added.
@@ -217,6 +216,51 @@ class MainTest(absltest.TestCase):
     kwargs = mock_run_interactive.call_args.kwargs
     self.assertEqual(kwargs["vision_backend"], "gpu")
     self.assertEqual(kwargs["audio_backend"], "cpu")
+
+  @unittest.mock.patch.object(
+      model.Model, "from_model_reference", autospec=True
+  )
+  @unittest.mock.patch.object(run_cmd, "run_interactive", autospec=True)
+  def test_run_enable_thinking_flag(
+      self, mock_run_interactive, mock_from_model_ref
+  ):
+    mock_model = unittest.mock.MagicMock()
+    mock_from_model_ref.return_value = mock_model
+    mock_model.exists.return_value = True
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main.cli,
+        [
+            "run",
+            "my-model",
+            "--enable-thinking",
+            "--prompt",
+            "Hi",
+        ],
+    )
+
+    self.assertEqual(result.exit_code, 0)
+    mock_run_interactive.assert_called_once_with(
+        mock_model,
+        prompt="Hi",
+        preset=unittest.mock.ANY,
+        backend=unittest.mock.ANY,
+        is_android=unittest.mock.ANY,
+        enable_speculative_decoding=unittest.mock.ANY,
+        no_template=unittest.mock.ANY,
+        max_num_tokens=unittest.mock.ANY,
+        filter_channel_content_from_kv_cache=unittest.mock.ANY,
+        enable_thinking=True,
+        vision_backend=unittest.mock.ANY,
+        audio_backend=unittest.mock.ANY,
+        attachments=unittest.mock.ANY,
+        top_k=unittest.mock.ANY,
+        top_p=unittest.mock.ANY,
+        temperature=unittest.mock.ANY,
+        seed=unittest.mock.ANY,
+        cache=unittest.mock.ANY,
+    )
 
   @unittest.mock.patch(
       "litert_lm_cli.model.Model.from_model_reference"

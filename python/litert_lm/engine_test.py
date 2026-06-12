@@ -459,6 +459,13 @@ class EngineTest(LiteRtLmTestBase):
     ):
       self.assertEqual(conversation.extra_context, extra_context)
 
+  def test_create_conversation_with_enable_thinking(self):
+    with (
+        self._create_engine() as engine,
+        engine.create_conversation(enable_thinking=True) as conversation,
+    ):
+      self.assertIsNotNone(conversation)
+
   def test_tool_event_handler_storage(self):
 
     class MyHandler(litert_lm.ToolEventHandler):
@@ -590,6 +597,28 @@ class EngineTest(LiteRtLmTestBase):
       text_pieces = self._extract_text(stream)
       self.assertLen(text_pieces, 1)
       self.assertLess(len("".join(text_pieces)), 10)
+
+  def test_conversation_send_message_with_enable_thinking(self):
+    with (
+        self._create_engine() as engine,
+        engine.create_conversation() as conversation,
+    ):
+      message = conversation.send_message("Hello world!", enable_thinking=True)
+      self.assertIn("role", message)
+      self.assertEqual(message["role"], "assistant")
+      text = "".join(c.get("text", "") for c in message.get("content", []))
+      self.assertNotEmpty(text)
+
+  def test_conversation_send_message_async_with_enable_thinking(self):
+    with (
+        self._create_engine() as engine,
+        engine.create_conversation() as conversation,
+    ):
+      stream = conversation.send_message_async(
+          "Hello world!", enable_thinking=True
+      )
+      text_pieces = self._extract_text(stream)
+      self.assertNotEmpty(text_pieces)
 
   @parameterized.parameters(True, False)
   def test_session_api_apply_prompt_template(self, apply_prompt_template):
