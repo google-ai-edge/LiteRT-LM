@@ -734,6 +734,14 @@ void SessionConfig::SetScopedLoraFile(
   scoped_lora_file_ = std::move(scoped_lora_file);
 }
 
+const std::optional<std::string>& SessionConfig::GetLoraPath() const {
+  return lora_path_;
+}
+
+void SessionConfig::SetLoraPath(std::optional<std::string> lora_path) {
+  lora_path_ = std::move(lora_path);
+}
+
 std::shared_ptr<ScopedFile> SessionConfig::GetAudioScopedLoraFile() const {
   return scoped_audio_lora_file_;
 }
@@ -741,6 +749,15 @@ std::shared_ptr<ScopedFile> SessionConfig::GetAudioScopedLoraFile() const {
 void SessionConfig::SetAudioScopedLoraFile(
     std::shared_ptr<ScopedFile> scoped_audio_lora_file) {
   scoped_audio_lora_file_ = std::move(scoped_audio_lora_file);
+}
+
+const std::optional<std::string>& SessionConfig::GetAudioLoraPath() const {
+  return audio_lora_path_;
+}
+
+void SessionConfig::SetAudioLoraPath(
+    std::optional<std::string> audio_lora_path) {
+  audio_lora_path_ = std::move(audio_lora_path);
 }
 
 std::ostream& operator<<(std::ostream& os, const SessionConfig& config) {
@@ -768,8 +785,11 @@ std::ostream& operator<<(std::ostream& os, const SessionConfig& config) {
   os << "  ScopedLoraFile: "
      << (config.GetScopedLoraFile() != nullptr ? "Present" : "Not present")
      << std::endl;
+  os << "  LoraPath: " << config.GetLoraPath().value_or("Not set") << std::endl;
   os << "  ScopedAudioLoraFile: "
      << (config.GetAudioScopedLoraFile() != nullptr ? "Present" : "Not present")
+     << std::endl;
+  os << "  AudioLoraPath: " << config.GetAudioLoraPath().value_or("Not set")
      << std::endl;
   return os;
 }

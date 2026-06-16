@@ -959,6 +959,16 @@ TEST(SessionConfigTest, SetAndGetScopedLoraFile) {
   EXPECT_EQ(session_config.GetScopedLoraFile(), nullptr);
 }
 
+TEST(SessionConfigTest, SetAndGetLoraPath) {
+  SessionConfig session_config = SessionConfig::CreateDefault();
+  EXPECT_FALSE(session_config.GetLoraPath().has_value());
+  session_config.SetLoraPath("lora_model.tflite");
+  ASSERT_TRUE(session_config.GetLoraPath().has_value());
+  EXPECT_EQ(*session_config.GetLoraPath(), "lora_model.tflite");
+  session_config.SetLoraPath(std::nullopt);
+  EXPECT_FALSE(session_config.GetLoraPath().has_value());
+}
+
 TEST(SessionConfigTest, SetAndGetAudioScopedLoraFile) {
   SessionConfig session_config = SessionConfig::CreateDefault();
   EXPECT_EQ(session_config.GetAudioScopedLoraFile(), nullptr);
@@ -976,6 +986,16 @@ TEST(SessionConfigTest, SetAndGetAudioScopedLoraFile) {
   EXPECT_EQ(session_config.GetAudioScopedLoraFile(), file_ptr);
   session_config.SetAudioScopedLoraFile(nullptr);
   EXPECT_EQ(session_config.GetAudioScopedLoraFile(), nullptr);
+}
+
+TEST(SessionConfigTest, SetAndGetAudioLoraPath) {
+  SessionConfig session_config = SessionConfig::CreateDefault();
+  EXPECT_FALSE(session_config.GetAudioLoraPath().has_value());
+  session_config.SetAudioLoraPath("audio_lora_model.tflite");
+  ASSERT_TRUE(session_config.GetAudioLoraPath().has_value());
+  EXPECT_EQ(*session_config.GetAudioLoraPath(), "audio_lora_model.tflite");
+  session_config.SetAudioLoraPath(std::nullopt);
+  EXPECT_FALSE(session_config.GetAudioLoraPath().has_value());
 }
 
 TEST(SessionConfigTest, MaybeUpdateAndValidate) {

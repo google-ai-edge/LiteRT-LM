@@ -48,6 +48,7 @@
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
+#include "runtime/components/lora_manager.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/components/sampler_factory.h"
 #include "runtime/executor/common_utils.h"
@@ -920,6 +921,7 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::BindTensorsAndRunDecode(
     LITERT_ASSIGN_OR_RETURN(auto input_buffer_dup, input_buffer.Duplicate());
     decode_input_buffers[input_name] = std::move(input_buffer_dup);
   }
+  RETURN_IF_ERROR(AppendActiveLoraInputBuffers(decode_input_buffers));
   absl::flat_hash_map<absl::string_view, TensorBuffer> decode_output_buffers;
   for (const auto& [output_name, output_buffer] : decode_output_buffers_) {
     // LITERT_ASSIGN_OR_RETURN() causes a compilation error on windows.
@@ -944,6 +946,22 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::BindTensorsAndRunDecode(
 
   if (!gpu_optimized_single_buffer_cache_) {
     std::swap(input_kv_cache_buffers_, output_kv_cache_buffers_);
+  }
+  return absl::OkStatus();
+}
+
+absl::Status LlmLiteRtCompiledModelExecutorBase::AppendActiveLoraInputBuffers(
+    absl::flat_hash_map<absl::string_view, TensorBuffer>& input_buffers) {
+  if (!active_lora_id_.has_value()) {
+    return absl::OkStatus();
+  }
+  if (lora_manager_ == nullptr) {
+    return absl::FailedPreconditionError(
+        "LoRA manager is not initialized. Please load LoRA first.");
+  }
+  ASSIGN_OR_RETURN(auto lora_buffers, lora_manager_->GetLoRABuffers());
+  for (auto& [name, buffer] : lora_buffers) {
+    input_buffers[name] = std::move(buffer);
   }
   return absl::OkStatus();
 }
@@ -1261,6 +1279,31 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::RestoreKVCacheBuffers(
   return absl::OkStatus();
 }
 
+absl::Status LlmLiteRtCompiledModelExecutorBase::LoadLoRA(
+    uint32_t lora_id, const ModelAssets& model_assets) {
+  if (lora_manager_ == nullptr) {
+    ASSIGN_OR_RETURN(
+        lora_manager_,
+        LoraManager::Create(*compiled_model_, kDecodeSignatureRunner));
+  }
+  return lora_manager_->LoadLoRA(lora_id, model_assets);
+}
+
+absl::Status LlmLiteRtCompiledModelExecutorBase::UseLoRA(
+    std::optional<uint32_t> lora_id) {
+  if (!lora_id.has_value()) {
+    active_lora_id_ = std::nullopt;
+    return absl::OkStatus();
+  }
+  if (lora_manager_ == nullptr) {
+    return absl::FailedPreconditionError(
+        "LoRA manager is not initialized. Please load LoRA first.");
+  }
+  RETURN_IF_ERROR(lora_manager_->UseLoRA(*lora_id));
+  active_lora_id_ = lora_id;
+  return absl::OkStatus();
+}
+
 absl::StatusOr<std::unique_ptr<LlmContext>>
 LlmLiteRtCompiledModelExecutorBase::CreateNewContext(
     std::optional<uint32_t> lora_id, RuntimeConfig runtime_config) const {
@@ -1284,7 +1327,7 @@ LlmLiteRtCompiledModelExecutorBase::CreateNewContext(
 
 absl::StatusOr<std::unique_ptr<LlmContext>>
 LlmLiteRtCompiledModelExecutorBase::CloneContext() const {
-  std::optional<uint32_t> lora_id;
+  std::optional<uint32_t> lora_id = llm_context_->processed_context().lora_id();
   ASSIGN_OR_RETURN(auto kv_cache_buffers, CloneKVCacheBuffers());
   ProcessedTokens new_processed_tokens =
       llm_context_->processed_context().processed_tokens();
@@ -1303,6 +1346,7 @@ LlmLiteRtCompiledModelExecutorBase::CloneContext() const {
 absl::Status LlmLiteRtCompiledModelExecutorBase::RestoreContext(
     std::unique_ptr<LlmContext> context_data) {
   llm_context_ = std::move(context_data);
+  RETURN_IF_ERROR(UseLoRA(llm_context_->processed_context().lora_id()));
 
   // We can keep our kv cache buffers if this is the first step. This lets us
   // restore from LlmContexts at step 0 with an empty kv cache.

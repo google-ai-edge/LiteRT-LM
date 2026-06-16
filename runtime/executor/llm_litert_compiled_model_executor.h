@@ -35,6 +35,7 @@
 #include "litert/cc/litert_options.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
+#include "runtime/components/lora_manager.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/components/sampler.h"
 #include "runtime/executor/executor_settings_base.h"
@@ -150,6 +151,11 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
 
   // Resets all of the internal states.
   absl::Status Reset() override;
+
+  absl::Status LoadLoRA(uint32_t lora_id,
+                        const ModelAssets& model_assets) override;
+
+  absl::Status UseLoRA(std::optional<uint32_t> lora_id) override;
 
   absl::StatusOr<int> GetVocabSize() override;
 
@@ -269,6 +275,8 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
   // Helper function of DecodeInternal to bind input/output tensors for decode
   // and run decode signature.
   absl::Status BindTensorsAndRunDecode(TensorBuffer* output_logits);
+  absl::Status AppendActiveLoraInputBuffers(
+      absl::flat_hash_map<absl::string_view, TensorBuffer>& input_buffers);
   // Static version of BindTensorsAndRunDecode to be used as a callback for
   // sampler.
   static int BindTensorsAndRunDecodeStatic(void* arg);
@@ -321,6 +329,8 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
   Environment& env_;
   const Model& model_;
   std::unique_ptr<CompiledModel> compiled_model_;
+  std::unique_ptr<LoraManager> lora_manager_;
+  std::optional<uint32_t> active_lora_id_;
 
   absl::flat_hash_map<absl::string_view, TensorBuffer> decode_input_buffers_;
   absl::flat_hash_map<absl::string_view, TensorBuffer> decode_output_buffers_;

@@ -283,6 +283,7 @@ cc_library(
         "@com_google_absl//absl/types:span",
         "@litert//litert/cc:litert_model_types",
         "@litert//litert/cc:litert_tensor_buffer_types",
+        "//runtime/components:lora_manager",
         "//runtime/components:model_resources",
         "//runtime/components:model_resources_litert_lm",
         "//runtime/components:model_resources_task",
