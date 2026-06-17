@@ -182,6 +182,8 @@ absl::Status ThreadedExecutionManager::ReleaseSession(SessionId session_id) {
                      resource_manager_->AcquireAudioExecutor());
     audio_executor->Reset().IgnoreError();
   }
+  resource_manager_->ClearCurrentHandlerIfMatches(
+      session_lookup_.at(session_id)->context_handler);
   session_lookup_.erase(session_id);
   return absl::OkStatus();
 }

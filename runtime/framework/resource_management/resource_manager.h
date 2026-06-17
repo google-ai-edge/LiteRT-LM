@@ -61,9 +61,9 @@ class ResourceManager {
       ModelResources* absl_nullable model_resources,
       std::unique_ptr<LlmExecutor> absl_nonnull llm_executor,
       std::unique_ptr<VisionExecutorSettings> absl_nullable
-          vision_executor_settings,
+      vision_executor_settings,
       std::unique_ptr<AudioExecutorSettings> absl_nullable
-          audio_executor_settings,
+      audio_executor_settings,
       ::litert::Environment* absl_nullable litert_env,
       std::unique_ptr<AudioExecutor> absl_nullable audio_executor = nullptr);
 
@@ -144,6 +144,18 @@ class ResourceManager {
   // Returns the vision executor properties.
   absl::StatusOr<VisionExecutorProperties> GetVisionExecutorProperties()
       ABSL_LOCKS_EXCLUDED(vision_executor_mutex_);
+
+  // Clears the current handler if it matches the provided handler, provided it
+  // is not shared by other active sessions.
+  void ClearCurrentHandlerIfMatches(std::shared_ptr<ContextHandler> handler) {
+    absl::MutexLock lock(&executor_mutex_);
+    if (current_handler_ == handler) {
+      size_t count = handler->shared_processed_context()->HandlerCount();
+      if (count <= 1) {
+        current_handler_ = nullptr;
+      }
+    }
+  }
 
  private:
   // Creates the litert environment if it is not created yet.
