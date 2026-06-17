@@ -28,7 +28,6 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
-#include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/logits_processor/constrained_decoding/fake_constraint.h"
@@ -985,56 +984,6 @@ TEST_P(ExecutionManagerTest, SetCurrentStep) {
   // Try to set current step to 5 (greater than current step 1).
   EXPECT_THAT(execution_manager_->SetCurrentStep(*session_info, 5),
               testing::status::StatusIs(absl::StatusCode::kInvalidArgument));
-}
-
-TEST_P(ExecutionManagerTest, DestructorWaitsForActiveTasks) {
-  if (GetParam() == ExecutionManagerType::kSerial) {
-    GTEST_SKIP() << "Skipping for SerialExecutionManager as it is synchronous";
-  }
-  auto fake_llm_executor = CreateDefaultFakeLlmExecutor();
-  fake_llm_executor->SetDecodeDelay(absl::Milliseconds(500));
-  CreateExecutionManager(std::move(fake_llm_executor));
-
-  ASSERT_OK_AND_ASSIGN(auto session_config, CreateDefaultSessionConfig());
-  ASSERT_OK_AND_ASSIGN(const SessionId session_id,
-                       execution_manager_->RegisterNewSession(session_config));
-
-  // Add prefill task and wait.
-  std::vector<InputData> inputs;
-  ASSERT_OK_AND_ASSIGN(auto input_text,
-                       tokenizer_->TokenIdsToTensorBuffer({1, 2, 3}));
-  inputs.push_back(InputText(std::move(input_text)));
-  ASSERT_OK_AND_ASSIGN(const TaskId prefill_task_id,
-                       execution_manager_->GetNewTaskId());
-  ASSERT_OK(execution_manager_->AddPrefillTask(
-      session_id, prefill_task_id, std::move(inputs), {},
-      std::make_shared<std::atomic<bool>>(false), nullptr));
-  ASSERT_OK(
-      execution_manager_->WaitUntilDone(prefill_task_id, absl::Seconds(3)));
-
-  // Now add decode task.
-  ASSERT_OK_AND_ASSIGN(const TaskId task_id,
-                       execution_manager_->GetNewTaskId());
-
-  auto task_states = std::make_shared<std::vector<TaskState>>();
-  auto mutex = std::make_shared<absl::Mutex>();
-
-  ASSERT_OK(execution_manager_->AddDecodeTask(
-      session_id, task_id, {}, nullptr,
-      std::make_shared<std::atomic<bool>>(false),
-      [task_states, mutex](absl::StatusOr<Responses> responses) {
-        absl::MutexLock lock(*mutex);
-        if (responses.ok()) {
-          task_states->push_back(responses->GetTaskState());
-        } else {
-          task_states->push_back(TaskState::kFailed);
-        }
-      }));
-
-  execution_manager_.reset();
-
-  absl::MutexLock lock(*mutex);
-  EXPECT_THAT(*task_states, testing::Contains(TaskState::kDone));
 }
 
 INSTANTIATE_TEST_SUITE_P(

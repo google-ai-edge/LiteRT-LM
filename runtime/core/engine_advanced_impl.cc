@@ -40,6 +40,7 @@
 #include "runtime/executor/llm_executor.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/llm_litert_compiled_model_executor_factory.h"
+#include "runtime/executor/magic_number_configs_helper.h"
 #include "runtime/executor/vision_executor_settings.h"
 #include "runtime/executor/vision_executor_utils.h"
 #include "runtime/framework/resource_management/execution_manager.h"
@@ -67,7 +68,6 @@ class EngineAdvancedImpl : public Engine {
     }
 
     execution_manager_.reset();
-    owned_env_.reset();
     tokenizer_.reset();
     litert_model_resources_.reset();
   }
@@ -77,13 +77,11 @@ class EngineAdvancedImpl : public Engine {
 
   EngineAdvancedImpl(EngineSettings engine_settings,
                      std::unique_ptr<ModelResources> litert_model_resources,
-                     std::unique_ptr<OwnedEnvironment> owned_env,
                      std::unique_ptr<Tokenizer> tokenizer,
                      std::unique_ptr<ExecutionManager> execution_manager,
                      std::optional<BenchmarkInfo> benchmark_info)
       : engine_settings_(std::move(engine_settings)),
         litert_model_resources_(std::move(litert_model_resources)),
-        owned_env_(std::move(owned_env)),
         tokenizer_(std::move(tokenizer)),
         execution_manager_(std::move(execution_manager)),
         benchmark_info_(std::move(benchmark_info)) {}
@@ -152,9 +150,6 @@ class EngineAdvancedImpl : public Engine {
 
   // Model resources, which must outlive `executor_`.
   std::unique_ptr<ModelResources> litert_model_resources_;
-
-  // Owned environment, which must outlive `executor_`.
-  std::unique_ptr<OwnedEnvironment> owned_env_;
 
   // Tokenizer shared by all sessions.
   std::unique_ptr<Tokenizer> tokenizer_;
@@ -285,20 +280,16 @@ absl::StatusOr<std::unique_ptr<Engine>> EngineAdvancedImpl::Create(
         BenchmarkInfo::InitPhase::kExecutor));
   }
 
-  std::unique_ptr<OwnedEnvironment> owned_env;
-  {
-    ASSIGN_OR_RETURN(auto temp_owned_env,
-                     CreateEnvironment(engine_settings, model_resources.get()));
-    owned_env = std::make_unique<OwnedEnvironment>(std::move(temp_owned_env));
-  }
+  ASSIGN_OR_RETURN(auto& litert_env,
+                   GetEnvironment(engine_settings, model_resources.get()));
 
   std::unique_ptr<LlmExecutor> executor;
 
   switch (main_executor_settings.GetBackend()) {
     default: {
-      ASSIGN_OR_RETURN(executor, CreateLlmLiteRtCompiledModelExecutor(
-                                     main_executor_settings, owned_env->env,
-                                     *model_resources));
+      ASSIGN_OR_RETURN(
+          executor, CreateLlmLiteRtCompiledModelExecutor(
+                        main_executor_settings, litert_env, *model_resources));
     }
   };
 
@@ -357,14 +348,14 @@ absl::StatusOr<std::unique_ptr<Engine>> EngineAdvancedImpl::Create(
         ThreadedExecutionManager::Create(
             tokenizer.get(), model_resources.get(), std::move(executor),
             std::move(vision_executor_settings_ptr),
-            std::move(audio_executor_settings_ptr), &owned_env->env));
+            std::move(audio_executor_settings_ptr), &litert_env));
   } else {
     ASSIGN_OR_RETURN(
         execution_manager,
         SerialExecutionManager::Create(
             tokenizer.get(), model_resources.get(), std::move(executor),
             std::move(vision_executor_settings_ptr),
-            std::move(audio_executor_settings_ptr), &owned_env->env));
+            std::move(audio_executor_settings_ptr), &litert_env));
   }
 
   if (benchmark_info.has_value()) {
@@ -374,7 +365,7 @@ absl::StatusOr<std::unique_ptr<Engine>> EngineAdvancedImpl::Create(
 
   auto llm_impl = std::make_unique<EngineAdvancedImpl>(
       std::move(engine_settings), std::move(model_resources),
-      std::move(owned_env), std::move(tokenizer), std::move(execution_manager),
+      std::move(tokenizer), std::move(execution_manager),
       std::move(benchmark_info));
 
   return llm_impl;

@@ -83,7 +83,7 @@ class FakeModelResources : public ModelResources {
   }
 };
 
-TEST(LiteRtUtilTest, CreatetEnvironment_CPUGPUFirst_ExcludesNPUOptions) {
+TEST(LiteRtUtilTest, GetEnvironment_CPUGPUFirst_ExcludesNPUOptions) {
   std::string task_path =
       (std::filesystem::path(::testing::SrcDir()) /
        "google3/runtime/testdata/"
@@ -98,9 +98,9 @@ TEST(LiteRtUtilTest, CreatetEnvironment_CPUGPUFirst_ExcludesNPUOptions) {
   cpu_settings->GetMutableMainExecutorSettings().SetLitertDispatchLibDir("");
 
   FakeModelResources fake_resources;
-  auto env_status = CreateEnvironment(*cpu_settings, &fake_resources);
+  auto env_status = GetEnvironment(*cpu_settings, &fake_resources);
   ASSERT_OK(env_status);
-  auto& env = env_status->env;
+  auto& env = *env_status;
 
   auto options_status = env.GetOptions();
   ASSERT_TRUE(options_status.HasValue());
@@ -118,9 +118,9 @@ TEST(LiteRtUtilTest, CreatetEnvironment_CPUGPUFirst_ExcludesNPUOptions) {
   ASSERT_OK(npu_settings);
   npu_settings->GetMutableMainExecutorSettings().SetLitertDispatchLibDir("");
 
-  auto npu_env_status = CreateEnvironment(*npu_settings, nullptr);
+  auto npu_env_status = GetEnvironment(*npu_settings, nullptr);
   ASSERT_OK(npu_env_status);
-  auto& npu_env = npu_env_status->env;
+  auto& npu_env = *npu_env_status;
 
   auto npu_options_status = npu_env.GetOptions();
   ASSERT_TRUE(npu_options_status.HasValue());
@@ -155,9 +155,9 @@ TEST(LiteRtUtilTest, GetEnvironment_NPUFirst_IncludesNPUOptions) {
   ASSERT_OK(npu_settings);
   npu_settings->GetMutableMainExecutorSettings().SetLitertDispatchLibDir("");
 
-  auto env_status = CreateEnvironment(*npu_settings, nullptr);
+  auto env_status = GetEnvironment(*npu_settings, nullptr);
   ASSERT_OK(env_status);
-  auto& env = env_status->env;
+  auto& env = *env_status;
 
   auto options_status = env.GetOptions();
   ASSERT_TRUE(options_status.HasValue());

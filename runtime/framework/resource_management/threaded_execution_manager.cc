@@ -81,41 +81,6 @@ ThreadedExecutionManager::ThreadedExecutionManager(
 
 ThreadedExecutionManager::~ThreadedExecutionManager() {
   WaitUntilAllDone(Engine::kDefaultTimeout).IgnoreError();
-  {
-    absl::MutexLock lock(session_and_task_lookup_mutex_);
-
-    if (!session_lookup_.empty()) {
-      ABSL_LOG(ERROR) << "Not all sessions are released before the execution "
-                         "manager is destroyed.";
-    }
-
-    absl::erase_if(task_lookup_, [](const auto& kv) {
-      return IsTaskEndState(kv.second.task_state);
-    });
-
-    if (!task_lookup_.empty()) {
-      ABSL_LOG(ERROR)
-          << "Not all tasks are done before the execution manager is "
-             "destroyed.";
-      for (const auto& [task_id, task_info] : task_lookup_) {
-        ABSL_LOG(ERROR) << "Task " << task_id
-                        << " is not done. State: " << task_info.task_state;
-      }
-    }
-  }
-
-  // Workaround to avoid nonnull warning when releasing the resources.
-  std::unique_ptr<ThreadPool> execution_thread_pool =
-      std::move(execution_thread_pool_);
-  execution_thread_pool.reset();
-
-  std::unique_ptr<ThreadPool> callback_thread_pool =
-      std::move(callback_thread_pool_);
-  callback_thread_pool.reset();
-
-  std::unique_ptr<ResourceManager> resource_manager =
-      std::move(resource_manager_);
-  resource_manager.reset();
 }
 
 absl::StatusOr<SessionId> ThreadedExecutionManager::RegisterNewSession(
@@ -737,9 +702,7 @@ absl::Status ThreadedExecutionManager::WaitUntilSessionDone(
 
 absl::Status ThreadedExecutionManager::WaitUntilAllDone(
     absl::Duration timeout) {
-  RETURN_IF_ERROR(execution_thread_pool_->WaitUntilDone(timeout));
-  RETURN_IF_ERROR(callback_thread_pool_->WaitUntilDone(timeout));
-  return absl::OkStatus();
+  return execution_thread_pool_->WaitUntilDone(timeout);
 }
 
 absl::Status ThreadedExecutionManager::AddPrefillTask(

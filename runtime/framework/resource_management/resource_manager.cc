@@ -465,24 +465,6 @@ class LockedLlmExecutor : public LlmExecutor {
   MovableMutexLock lock_;
 };
 
-ResourceManager::~ResourceManager() {
-  {
-    absl::MutexLock lock(vision_executor_mutex_);
-    vision_executor_.reset();
-  }
-  {
-    absl::MutexLock lock(audio_executor_mutex_);
-    audio_executor_.reset();
-  }
-  {
-    absl::MutexLock lock(executor_mutex_);
-    llm_executor_.reset();
-  }
-
-  // Environment is only released after all the executors are destroyed.
-  backup_litert_env_.reset();
-}
-
 ResourceManager::ResourceManager(
     ModelResources* absl_nullable model_resources,
     std::unique_ptr<LlmExecutor> llm_executor,
