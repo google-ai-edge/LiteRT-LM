@@ -16,8 +16,10 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -68,6 +70,62 @@
 
 namespace litert::lm {
 namespace {
+
+void PrintTensorBufferStats(const ::litert::TensorBuffer& tensor,
+                            absl::string_view name) {
+  auto type_or = tensor.TensorType();
+  if (!type_or) {
+    ABSL_LOG(ERROR) << "Failed to get tensor type for " << name;
+    return;
+  }
+  auto type = *type_or;
+  auto layout = type.Layout();
+  auto dims = layout.Dimensions();
+  std::string dims_str = "[";
+  for (int d : dims) {
+    dims_str += std::to_string(d) + ", ";
+  }
+  dims_str += ']';
+
+  auto lock_or = ::litert::TensorBufferScopedLock::Create(
+      tensor, ::litert::TensorBuffer::LockMode::kRead);
+  if (!lock_or) {
+    ABSL_LOG(ERROR) << "Failed to lock tensor " << name;
+    return;
+  }
+  auto lock = std::move(*lock_or);
+  const float* data = static_cast<const float*>(lock.second);
+  int num_elements = 1;
+  for (int d : dims) num_elements *= d;
+
+  float sum = 0;
+  float min_val = std::numeric_limits<float>::max();
+  float max_val = std::numeric_limits<float>::lowest();
+  int nan_count = 0;
+  for (int i = 0; i < num_elements; ++i) {
+    float val = data[i];
+    if (std::isnan(val)) {
+      nan_count++;
+      continue;
+    }
+    sum += val;
+    min_val = std::min(min_val, val);
+    max_val = std::max(max_val, val);
+  }
+  float mean =
+      (num_elements == nan_count) ? 0.0f : sum / (num_elements - nan_count);
+
+  std::string first_few = "[";
+  for (int i = 0; i < std::min(10, num_elements); ++i) {
+    first_few += std::to_string(data[i]) + ", ";
+  }
+  first_few += "]";
+
+  ABSL_LOG(INFO) << "JETS_DEBUG_STATS: " << name << ": dims=" << dims_str
+                 << ", num_elements=" << num_elements << ", mean=" << mean
+                 << ", min=" << min_val << ", max=" << max_val
+                 << ", nans=" << nan_count << ", first_few=" << first_few;
+}
 
 // Set the default GPU options for the model.
 absl::Status SetGpuOptions(const AudioExecutorSettings& executor_settings,
@@ -1008,6 +1066,9 @@ absl::StatusOr<ExecutorAudioData> AudioLiteRtCompiledModelExecutor::Encode(
   LITERT_RETURN_IF_ERROR(audio_embeddings_tensor.Write<float>(
       absl::MakeSpan(audio_embeddings)
           .subspan(0, total_valid_tokens * audio_embedding_dimensions_)));
+
+  PrintTensorBufferStats(audio_embeddings_tensor, "CPU_Embeddings");
+
   ExecutorAudioData audio_data;
   audio_data.SetEmbeddings(std::move(audio_embeddings_tensor));
   audio_data.SetValidTokens(total_valid_tokens);

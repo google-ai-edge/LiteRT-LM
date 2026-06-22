@@ -119,6 +119,11 @@ class AudioExecutorSettings : public ExecutorSettingsBase {
     scoped_adapter_program_cache_file_ = std::move(cache_file);
   }
 
+  // Getter for max_text_sequence_length.
+  int GetMaxTextSequenceLength() const;
+  // Setter for max_text_sequence_length.
+  void SetMaxTextSequenceLength(int max_text_sequence_length);
+
   // Returns the weight cache file path for the audio encoder or adapter
   // model.
   // Note users should not use the ExecutorSettingsBase::GetWeightCacheFile()
@@ -140,9 +145,11 @@ class AudioExecutorSettings : public ExecutorSettingsBase {
                                  int max_sequence_length, int num_threads)
       : ExecutorSettingsBase(model_assets),
         max_sequence_length_(max_sequence_length),
+        max_text_sequence_length_(max_sequence_length),
         num_threads_(num_threads) {}
 
   int max_sequence_length_;
+  int max_text_sequence_length_;
   bool bundled_with_main_model_;
   int num_threads_ = 4;
   uint32_t lora_rank_ = 0;

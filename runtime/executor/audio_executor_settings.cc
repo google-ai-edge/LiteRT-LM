@@ -112,4 +112,13 @@ AudioExecutorSettings::GetProgramCacheFile(absl::string_view suffix,
   return ExecutorSettingsBase::GetProgramCacheFile(suffix, check_and_clean);
 }
 
+int AudioExecutorSettings::GetMaxTextSequenceLength() const {
+  return max_text_sequence_length_;
+}
+
+void AudioExecutorSettings::SetMaxTextSequenceLength(
+    int max_text_sequence_length) {
+  max_text_sequence_length_ = max_text_sequence_length;
+}
+
 }  // namespace litert::lm
