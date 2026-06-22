@@ -97,18 +97,23 @@ SessionAdvanced::RunPrefillAsync(
     return absl::FailedPreconditionError("Execution manager is not available.");
   }
 
+  auto session_info = session_info_.lock();
+  if (session_info == nullptr) {
+    return absl::FailedPreconditionError("Session info is not available.");
+  }
+
   std::vector<InputData> preprocessed_contents;
-  if (session_info_->benchmark_info.has_value() &&
-      session_info_->benchmark_info->GetBenchmarkParams().num_prefill_tokens() >
+  if (session_info->benchmark_info.has_value() &&
+      session_info->benchmark_info->GetBenchmarkParams().num_prefill_tokens() >
           0) {
     ASSIGN_OR_RETURN(
         preprocessed_contents,
-        PreprocessContents(contents, session_info_->session_config, *tokenizer_,
-                           session_info_->benchmark_info));
+        PreprocessContents(contents, session_config_, *tokenizer_,
+                           session_info->benchmark_info));
   } else {
     bool is_first_turn = session_state_ == SessionState::kFresh;
     ContentType content_type;
-    if (session_info_->session_config.GetApplyPromptTemplateInSession()) {
+    if (session_config_.GetApplyPromptTemplateInSession()) {
       content_type = (is_first_turn || session_state_ == SessionState::kDecoded)
                          ? ContentType::kFirst
                          : ContentType::kMiddle;
@@ -117,12 +122,12 @@ SessionAdvanced::RunPrefillAsync(
     }
     ASSIGN_OR_RETURN(std::vector<InputData> templated_contents,
                      ApplyPromptTemplates(contents, content_type,
-                                          session_info_->session_config,
+                                          session_config_,
                                           *tokenizer_, is_first_turn));
     ASSIGN_OR_RETURN(
         preprocessed_contents,
-        PreprocessContents(templated_contents, session_info_->session_config,
-                           *tokenizer_, session_info_->benchmark_info));
+        PreprocessContents(templated_contents, session_config_,
+                           *tokenizer_, session_info->benchmark_info));
   }
   ASSIGN_OR_RETURN(auto task_id, execution_manager_lock->GetNewTaskId());
   RETURN_IF_ERROR(execution_manager_lock->AddPrefillTask(
@@ -169,7 +174,7 @@ absl::StatusOr<Responses> SessionAdvanced::RunDecode(
   }
 
   absl::StatusOr<Responses> collected_responses;
-  int num_candidates = session_info_->session_config.GetNumOutputCandidates();
+  int num_candidates = session_config_.GetNumOutputCandidates();
   collected_responses =
       Responses(TaskState::kCreated,
                 /*response_texts=*/std::vector<std::string>(num_candidates),
@@ -258,21 +263,26 @@ absl::StatusOr<std::unique_ptr<TaskController>> SessionAdvanced::RunDecodeAsync(
     return absl::FailedPreconditionError("Execution manager is not available.");
   }
 
+  auto session_info = session_info_.lock();
+  if (session_info == nullptr) {
+    return absl::FailedPreconditionError("Session info is not available.");
+  }
+
   // We need to do a last prefill before initializing the decode, to make sure
   // the prompt is correctly set up for decode.
-  if (session_info_->session_config.GetApplyPromptTemplateInSession()) {
+  if (session_config_.GetApplyPromptTemplateInSession()) {
     std::vector<InputData> contents;
     contents.emplace_back(InputText(""));
     ASSIGN_OR_RETURN(
         std::vector<InputData> templated_contents,
         ApplyPromptTemplates(contents, ContentType::kLast,
-                             session_info_->session_config, *tokenizer_,
+                             session_config_, *tokenizer_,
                              /*is_first_turn=*/false));
     if (!templated_contents.empty()) {
       ASSIGN_OR_RETURN(
           std::vector<InputData> preprocessed_contents,
-          PreprocessContents(templated_contents, session_info_->session_config,
-                             *tokenizer_, session_info_->benchmark_info));
+          PreprocessContents(templated_contents, session_config_,
+                             *tokenizer_, session_info->benchmark_info));
       auto noop_callback = [](absl::StatusOr<Responses> responses) {};
       ASSIGN_OR_RETURN(auto task_id, execution_manager_lock->GetNewTaskId());
       RETURN_IF_ERROR(execution_manager_lock->AddPrefillTask(
@@ -290,7 +300,7 @@ absl::StatusOr<std::unique_ptr<TaskController>> SessionAdvanced::RunDecodeAsync(
       decode_config.GetRepetitionPenaltyConfig(), decode_config.GetConstraint(),
       cancelled, std::move(callback),
       decode_config.GetMaxOutputTokens().value_or(
-          session_info_->session_config.GetMaxOutputTokens())));
+          session_config_.GetMaxOutputTokens())));
 
   last_task_ids_ = {task_id};
 
@@ -393,8 +403,12 @@ absl::Status SessionAdvanced::GenerateContentStream(
 
 absl::StatusOr<BenchmarkInfo> SessionAdvanced::GetBenchmarkInfo() {
   absl::MutexLock lock(mutex_);
-  if (session_info_->benchmark_info.has_value()) {
-    return session_info_->benchmark_info.value();
+  auto session_info = session_info_.lock();
+  if (session_info == nullptr) {
+    return absl::FailedPreconditionError("Session info is not available.");
+  }
+  if (session_info->benchmark_info.has_value()) {
+    return session_info->benchmark_info.value();
   }
   return absl::InternalError(
       "Benchmark is not enabled. Please make sure the BenchmarkParams is set "
@@ -439,11 +453,16 @@ SessionAdvanced::CloneAsyncLocked(
     return absl::FailedPreconditionError("Execution manager is not available.");
   }
 
+  auto current_session_info = session_info_.lock();
+  if (current_session_info == nullptr) {
+    return absl::FailedPreconditionError("Session info is not available.");
+  }
+
   ASSIGN_OR_RETURN(auto task_id, execution_manager_lock->GetNewTaskId());
 
   ASSIGN_OR_RETURN(auto session_id, execution_manager_lock->RegisterNewSession(
-                                        session_info_->session_config,
-                                        session_info_->benchmark_info));
+                                        session_config_,
+                                        current_session_info->benchmark_info));
 
   RETURN_IF_ERROR(execution_manager_lock->AddCloneSessionTask(
       session_id_, task_id, last_task_ids_, session_id,
@@ -455,8 +474,9 @@ SessionAdvanced::CloneAsyncLocked(
                    execution_manager_lock->GetSessionInfo(session_id));
 
   return absl::WrapUnique(new SessionAdvanced(session_id, execution_manager_,
-                                              tokenizer_, session_info,
-                                              session_state_, last_task_ids_));
+                                               tokenizer_, session_info,
+                                               session_state_, last_task_ids_,
+                                               living_sessions_count_));
 }
 
 SessionAdvanced::~SessionAdvanced() {
@@ -481,8 +501,12 @@ absl::Status SessionAdvanced::SaveCheckpoint(absl::string_view label) {
   if (execution_manager_lock == nullptr) {
     return absl::FailedPreconditionError("Execution manager is not available.");
   }
+  auto session_info = session_info_.lock();
+  if (session_info == nullptr) {
+    return absl::FailedPreconditionError("Session info is not available.");
+  }
   ASSIGN_OR_RETURN(int current_step,
-                   execution_manager_lock->GetCurrentStep(*session_info_));
+                   execution_manager_lock->GetCurrentStep(*session_info));
   checkpoint_map_[label] = {current_step, session_state_};
   return absl::OkStatus();
 }
@@ -508,7 +532,11 @@ absl::Status SessionAdvanced::RewindToCheckpoint(absl::string_view label) {
   if (execution_manager_lock == nullptr) {
     return absl::FailedPreconditionError("Execution manager is not available.");
   }
-  return execution_manager_lock->SetCurrentStep(*session_info_, target_step);
+  auto session_info = session_info_.lock();
+  if (session_info == nullptr) {
+    return absl::FailedPreconditionError("Session info is not available.");
+  }
+  return execution_manager_lock->SetCurrentStep(*session_info, target_step);
 }
 
 absl::Status SessionAdvanced::RewindToStep(int step) {
@@ -516,6 +544,10 @@ absl::Status SessionAdvanced::RewindToStep(int step) {
   auto execution_manager_lock = execution_manager_.lock();
   if (execution_manager_lock == nullptr) {
     return absl::FailedPreconditionError("Execution manager is not available.");
+  }
+  auto session_info = session_info_.lock();
+  if (session_info == nullptr) {
+    return absl::FailedPreconditionError("Session info is not available.");
   }
   if (step > 0) {
     session_state_ = SessionState::kPrefilled;
@@ -527,7 +559,7 @@ absl::Status SessionAdvanced::RewindToStep(int step) {
   absl::erase_if(checkpoint_map_,
                  [step](const auto& pair) { return pair.second.step > step; });
 
-  return execution_manager_lock->SetCurrentStep(*session_info_, step);
+  return execution_manager_lock->SetCurrentStep(*session_info, step);
 }
 
 absl::StatusOr<int> SessionAdvanced::GetCurrentStep() const {
@@ -535,7 +567,11 @@ absl::StatusOr<int> SessionAdvanced::GetCurrentStep() const {
   if (execution_manager_lock == nullptr) {
     return absl::FailedPreconditionError("Execution manager is not available.");
   }
-  return execution_manager_lock->GetCurrentStep(*session_info_);
+  auto session_info = session_info_.lock();
+  if (session_info == nullptr) {
+    return absl::FailedPreconditionError("Session info is not available.");
+  }
+  return execution_manager_lock->GetCurrentStep(*session_info);
 }
 
 }  // namespace litert::lm

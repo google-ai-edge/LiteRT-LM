@@ -183,7 +183,7 @@ class SessionAdvanced : public SessionInterface {
   }
 
   const SessionConfig& GetSessionConfig() const override {
-    return session_info_->session_config;
+    return session_config_;
   }
 
   absl::Status WaitUntilDone() override {
@@ -230,6 +230,7 @@ class SessionAdvanced : public SessionInterface {
         execution_manager_(execution_manager),
         tokenizer_(tokenizer),
         session_info_(session_info),
+        session_config_(session_info->session_config),
         session_state_(session_state),
         last_task_ids_(last_task_ids),
         living_sessions_count_(living_sessions_count) {
@@ -252,8 +253,13 @@ class SessionAdvanced : public SessionInterface {
   // The tokenizer used for the session.
   Tokenizer* absl_nonnull tokenizer_;
 
-  // The session info used for the session.
-  std::shared_ptr<const SessionInfo> session_info_;
+  // The session info used for the session. We keep a waek_ptr to the session
+  // info to avoid lifetime issues. This is due to session_info_ owning the
+  // sampler and the fact that sampler can have Tensors in it.
+  std::weak_ptr<const SessionInfo> session_info_;
+
+  // Copy of session config to avoid lifetime issues.
+  SessionConfig session_config_;
 
   // The state of the session.
   SessionState session_state_ ABSL_GUARDED_BY(mutex_);
