@@ -71,6 +71,9 @@
 #include "tflite/types/half.h"  // from @litert
 
 namespace litert::lm {
+#ifdef __EMSCRIPTEN__
+extern void SetCurrentlyCompilingModel(ModelType model_type);
+#endif
 namespace {
 
 using ::absl::Span;
@@ -83,6 +86,7 @@ constexpr int kDynamicDimValue = -1;
 
 absl::Status InitializeEmbeddingLookups(
     litert::Environment& env, ModelResources& resources,
+    const LlmExecutorSettings& executor_settings,
     std::unique_ptr<EmbeddingLookupManager>& embedding_lookup,
     std::unique_ptr<EmbeddingLookupManager>& per_layer_embedding_lookup) {
   absl::flat_hash_map<int, const Model*> end_of_multi_modal_embedding_models;
@@ -103,13 +107,32 @@ absl::Status InitializeEmbeddingLookups(
     }
   }
 
+  const Backend backend = executor_settings.GetBackend();
+  bool allow_gpu = (backend == Backend::GPU || backend == Backend::GPU_ARTISAN);
+  bool text_allow_gpu = allow_gpu;
+#ifdef __EMSCRIPTEN__
+  // Force CPU for the non-externalized embedding model on Web to avoid OOM
+  // when allocating the huge embedding table on the WASM heap.
+  text_allow_gpu = false;
+#endif
+
   auto text_embedder_model =
       resources.GetTFLiteModel(ModelType::kTfLiteEmbedder);
   if (text_embedder_model.ok()) {
+#ifdef __EMSCRIPTEN__
+    SetCurrentlyCompilingModel(ModelType::kTfLiteEmbedder);
+#endif
     ABSL_ASSIGN_OR_RETURN(
         embedding_lookup,
-        EmbeddingLookupManager::Create(env, *text_embedder_model,
-                                       end_of_multi_modal_embedding_models));
+        EmbeddingLookupManager::Create(
+            env, *text_embedder_model, end_of_multi_modal_embedding_models,
+            /*fully_supports_multi_modal=*/true,
+            /*signature_key=*/std::nullopt,
+            /*external_weight_file=*/std::nullopt,
+            /*external_weight_sections=*/{}, text_allow_gpu));
+#ifdef __EMSCRIPTEN__
+    SetCurrentlyCompilingModel(ModelType::kUnknown);
+#endif
   }
 
   // Create per layer embedding lookups from the resources.
@@ -129,13 +152,20 @@ absl::Status InitializeEmbeddingLookups(
                               scoped_file.get().Duplicate());
       per_layer_external_weight_file = std::move(duplicated_scoped_file);
     }
-    ABSL_ASSIGN_OR_RETURN(per_layer_embedding_lookup,
-                          EmbeddingLookupManager::Create(
-                              env, *per_layer_embedder_model,
-                              /*fully_supports_multi_modal=*/false,
-                              /*signature_key=*/std::nullopt,
-                              std::move(per_layer_external_weight_file),
-                              std::move(per_layer_external_weight_sections)));
+#ifdef __EMSCRIPTEN__
+    SetCurrentlyCompilingModel(ModelType::kTfLitePerLayerEmbedder);
+#endif
+    ABSL_ASSIGN_OR_RETURN(
+        per_layer_embedding_lookup,
+        EmbeddingLookupManager::Create(
+            env, *per_layer_embedder_model,
+            /*fully_supports_multi_modal=*/false,
+            /*signature_key=*/std::nullopt,
+            std::move(per_layer_external_weight_file),
+            std::move(per_layer_external_weight_sections), allow_gpu));
+#ifdef __EMSCRIPTEN__
+    SetCurrentlyCompilingModel(ModelType::kUnknown);
+#endif
   }
   return absl::OkStatus();
 }
@@ -1684,9 +1714,15 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
 
   std::unique_ptr<CompiledModel> compiled_model;
   {
+#ifdef __EMSCRIPTEN__
+    SetCurrentlyCompilingModel(ModelType::kTfLitePrefillDecode);
+#endif
     LITERT_ASSIGN_OR_RETURN(auto compiled_model_tmp,
                             CompiledModel::Create(lrt_env, litert_model->Get(),
                                                   compilation_options));
+#ifdef __EMSCRIPTEN__
+    SetCurrentlyCompilingModel(ModelType::kUnknown);
+#endif
     compiled_model =
         std::make_unique<CompiledModel>(std::move(compiled_model_tmp));
   }
@@ -1840,8 +1876,9 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
 
   std::unique_ptr<EmbeddingLookupManager> embedding_lookup;
   std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup;
-  ABSL_RETURN_IF_ERROR(InitializeEmbeddingLookups(
-      lrt_env, resources, embedding_lookup, per_layer_embedding_lookup));
+  ABSL_RETURN_IF_ERROR(
+      InitializeEmbeddingLookups(lrt_env, resources, executor_settings,
+                                 embedding_lookup, per_layer_embedding_lookup));
   std::unique_ptr<LlmLiteRtMtpDrafter> mtp_drafter;
   {
     const auto& advanced_settings = executor_settings.GetAdvancedSettings();
@@ -2103,9 +2140,15 @@ LlmLiteRtCompiledModelExecutorDynamic::Create(
 
   std::unique_ptr<CompiledModel> compiled_model;
   {
+#ifdef __EMSCRIPTEN__
+    SetCurrentlyCompilingModel(ModelType::kTfLitePrefillDecode);
+#endif
     LITERT_ASSIGN_OR_RETURN(auto compiled_model_tmp,
                             CompiledModel::Create(lrt_env, litert_model->Get(),
                                                   compilation_options));
+#ifdef __EMSCRIPTEN__
+    SetCurrentlyCompilingModel(ModelType::kUnknown);
+#endif
     compiled_model =
         std::make_unique<CompiledModel>(std::move(compiled_model_tmp));
   }
@@ -2179,8 +2222,9 @@ LlmLiteRtCompiledModelExecutorDynamic::Create(
   RET_CHECK_EQ(batch_size, 1) << "Only support batch size 1 for now.";
   std::unique_ptr<EmbeddingLookupManager> embedding_lookup;
   std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup;
-  ABSL_RETURN_IF_ERROR(InitializeEmbeddingLookups(
-      lrt_env, resources, embedding_lookup, per_layer_embedding_lookup));
+  ABSL_RETURN_IF_ERROR(
+      InitializeEmbeddingLookups(lrt_env, resources, executor_settings,
+                                 embedding_lookup, per_layer_embedding_lookup));
   return absl::WrapUnique(new LlmLiteRtCompiledModelExecutorDynamic(
       std::move(executor_settings), lrt_env, litert_model,
       std::move(compiled_model), std::move(decode_input_buffers),

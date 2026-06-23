@@ -1701,4 +1701,31 @@ TEST_F(EmbeddingLookupManagerTest,
   ASSERT_OK(embedding_lookup_manager_->CleanupMultiModalEmbeddings());
 }
 
+TEST_F(EmbeddingLookupManagerTest, CreateWithAllowGpuDisabled) {
+  auto text_embedding_model_path = std::filesystem::path(::testing::SrcDir()) /
+                                   kTestdataDir /
+                                   "dummy_embedding_cpu_model.tflite";
+  auto text_embedding_model =
+      Model::CreateFromFile(text_embedding_model_path.string());
+  ASSERT_TRUE(text_embedding_model.HasValue());
+
+  auto model = std::move(*text_embedding_model);
+  auto status =
+      EmbeddingLookupManager::Create(*env_, &model,
+                                     /*fully_supports_multi_modal=*/true,
+                                     /*signature_key=*/std::nullopt,
+                                     /*external_weight_file=*/std::nullopt,
+                                     /*external_weight_sections=*/{},
+                                     /*allow_gpu=*/false);
+  ASSERT_TRUE(status.ok());
+  auto manager = std::move(status.value());
+  EXPECT_NE(manager, nullptr);
+
+  // Verify it can still lookup
+  std::vector<float> output_vector;
+  int32_t token = 1;
+  ASSERT_OK(manager->LookupDecode(token, output_vector));
+  EXPECT_EQ(output_vector.size(), 4 * 32);
+}
+
 }  // namespace litert::lm

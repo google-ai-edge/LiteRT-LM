@@ -208,6 +208,9 @@ class ExecutorSettingsBase {
 
   // Getter APIs.
   const ModelAssets& GetModelAssets() const { return model_assets_; }
+  void SetModelAssets(ModelAssets model_assets) {
+    model_assets_ = std::move(model_assets);
+  }
 
   // Backend APIs.
   const Backend& GetBackend() const { return backend_; }

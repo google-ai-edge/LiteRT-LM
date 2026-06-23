@@ -60,7 +60,8 @@ class EmbeddingLookupManager {
       bool fully_supports_multi_modal = true,
       std::optional<std::string> signature_key = std::nullopt,
       std::optional<ScopedFile> external_weight_file = std::nullopt,
-      litert::Options::ScopedWeightSectionMap external_weight_sections = {});
+      litert::Options::ScopedWeightSectionMap external_weight_sections = {},
+      bool allow_gpu = true);
 
   static absl::StatusOr<std::unique_ptr<EmbeddingLookupManager>> Create(
       litert::Environment& env,
@@ -68,7 +69,8 @@ class EmbeddingLookupManager {
       bool fully_supports_multi_modal = true,
       std::optional<std::string> signature_key = std::nullopt,
       std::optional<ScopedFile> external_weight_file = std::nullopt,
-      litert::Options::ScopedWeightSectionMap external_weight_sections = {});
+      litert::Options::ScopedWeightSectionMap external_weight_sections = {},
+      bool allow_gpu = true);
 
   // Updates the multimodal embeddings for the given ExecutorInputs.
   // Intended to be called at the beginning of the prefill pass.
@@ -128,7 +130,8 @@ class EmbeddingLookupManager {
           end_of_multi_modal_embedding_models,
       bool fully_supports_multi_modal, std::optional<std::string> signature_key,
       std::optional<ScopedFile> external_weight_file,
-      litert::Options::ScopedWeightSectionMap external_weight_sections);
+      litert::Options::ScopedWeightSectionMap external_weight_sections,
+      bool allow_gpu = true);
 
   std::unique_ptr<EmbeddingLookupText> text_embedding_lookup_;
   std::vector<std::unique_ptr<EmbeddingLookupMultiModal>>

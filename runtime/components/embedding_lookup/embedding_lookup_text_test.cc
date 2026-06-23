@@ -726,4 +726,21 @@ TEST_F(EmbeddingLookupTextTest, LookupDecodeVectorSpecifySignatureKeyNotFound) {
   EXPECT_TRUE(!status.ok());
 }
 
+TEST_F(EmbeddingLookupTextTest, CreateWithAllowGpuDisabled) {
+  ASSERT_TRUE(CreateModelFromFile().ok());
+  auto status =
+      EmbeddingLookupText::Create(*env_, &*model_, std::nullopt,
+                                  /*external_weight_file=*/std::nullopt,
+                                  /*external_weight_sections=*/{},
+                                  /*allow_gpu=*/false);
+  ASSERT_TRUE(status.ok());
+  auto embedding = std::move(status.value());
+  EXPECT_NE(embedding, nullptr);
+
+  // Verify it can still lookup
+  std::vector<float> output_vector(4 * 32);
+  int32_t token = 1;
+  EXPECT_OK(embedding->LookupDecode(token, output_vector));
+}
+
 }  // namespace litert::lm
