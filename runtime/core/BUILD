@@ -44,6 +44,7 @@ package_group(
 
 ENGINE_IMPL_COMMON_DEPS = [
     ":session_advanced",
+    ":cached_session",
     "@com_google_absl//absl/base:no_destructor",
     "@com_google_absl//absl/log",
     "@com_google_absl//absl/log:absl_check",
@@ -428,5 +429,79 @@ cc_test(
         "//runtime/util:convert_tensor_buffer",
         "//runtime/util:litert_status_util",
         "//runtime/util:test_utils",
+    ],
+)
+
+cc_library(
+    name = "prefix_cache",
+    srcs = ["prefix_cache.cc"],
+    hdrs = ["prefix_cache.h"],
+    deps = ["@com_google_absl//absl/types:span"],
+)
+
+cc_test(
+    name = "prefix_cache_test",
+    srcs = ["prefix_cache_test.cc"],
+    deps = [
+        ":prefix_cache",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
+cc_library(
+    name = "cached_session",
+    srcs = ["cached_session.cc"],
+    hdrs = ["cached_session.h"],
+    deps = [
+        ":prefix_cache",
+        ":session_utils",
+        "@com_google_absl//absl/functional:any_invocable",
+        "@com_google_absl//absl/hash",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/time",
+        "@litert//litert/cc:litert_expected",
+        "@litert//litert/cc:litert_tensor_buffer",
+        "//runtime/components:tokenizer",
+        "//runtime/engine:engine_interface",
+        "//runtime/engine:engine_settings",
+        "//runtime/engine:io_types",
+        "//runtime/util:litert_status_util",
+    ],
+)
+
+cc_test(
+    name = "cached_session_test",
+    srcs = ["cached_session_test.cc"],
+    data = [
+        "//runtime/components/testdata",
+    ],
+    deps = [
+        ":cached_session",
+        ":prefix_cache",
+        ":session_advanced",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/functional:any_invocable",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/time",
+        "@litert//litert/c:litert_common",
+        "@litert//litert/cc:litert_element_type",
+        "@litert//litert/cc:litert_environment",
+        "@litert//litert/cc:litert_layout",
+        "@litert//litert/cc:litert_ranked_tensor_type",
+        "@litert//litert/cc:litert_tensor_buffer",
+        "@litert//litert/cc:litert_tensor_buffer_types",
+        "//runtime/components:sentencepiece_tokenizer",
+        "//runtime/components:tokenizer",
+        "//runtime/engine:engine_interface",
+        "//runtime/engine:engine_settings",
+        "//runtime/engine:io_types",
+        "//runtime/executor:executor_settings_base",
+        "//runtime/executor:fake_llm_executor",
+        "//runtime/framework/resource_management:threaded_execution_manager",
     ],
 )
