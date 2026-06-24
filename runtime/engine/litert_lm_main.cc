@@ -64,6 +64,7 @@ using ::litert::lm::ConversationConfig;
 using ::litert::lm::EngineSettings;
 using ::litert::lm::InputData;
 using ::litert::lm::Message;
+using ::litert::lm::TextPart;
 using ::litert::lm::ModelAssets;
 using ::nlohmann::json;
 
@@ -73,12 +74,14 @@ absl::AnyInvocable<void(absl::StatusOr<Message>)> CreateMessageCallback() {
       std::cout << "Error: " << message.status() << std::endl;
       return;
     }
-    if (message->is_null()) {
+    if (message->empty()) {
       std::cout << std::endl << std::flush;
       return;
     }
-    for (const auto& content : (*message)["content"]) {
-      std::cout << content["text"].get<std::string>();
+    for (const auto& part : message->parts) {
+      if (std::holds_alternative<TextPart>(part)) {
+        std::cout << std::get<TextPart>(part).text;
+      }
     }
     std::cout << std::flush;
   };
@@ -147,16 +150,14 @@ absl::Status MainHelper(int argc, char** argv) {
                    Conversation::Create(*engine, conversation_config));
 
   // Prepare the message to send.
-  json content_list = json::array();
   const std::string input_prompt = GetInputPrompt();
   std::cout << "input_prompt: " << input_prompt << std::endl;
-  content_list.push_back({{"type", "text"}, {"text", input_prompt}});
+  Message user_message("user", {TextPart{input_prompt}});
 
   // Send the message and wait for the response, asynchronously log the
   // response.
   RETURN_IF_ERROR(conversation->SendMessageAsync(
-      json::object({{"role", "user"}, {"content", content_list}}),
-      CreateMessageCallback()));
+      user_message, CreateMessageCallback()));
   RETURN_IF_ERROR(engine->WaitUntilDone(absl::Minutes(10)));
 
   // Print the benchmark info.

@@ -95,7 +95,7 @@ void InsertChannelContentIntoMessage(
     const absl::flat_hash_map<std::string, std::string>& channel_content,
     Message& assistant_message) {
   for (const auto& [channel_name, value] : channel_content) {
-    assistant_message[std::string(kChannelsKey)][channel_name] = value;
+    assistant_message.channels[channel_name] = value;
   }
 }
 

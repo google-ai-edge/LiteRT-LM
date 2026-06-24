@@ -71,6 +71,11 @@ class ModelDataProcessor {
       const nlohmann::ordered_json& messages,
       const DataProcessorArguments& args) const = 0;
 
+  virtual absl::StatusOr<std::vector<InputData>> ToInputDataVector(
+      const std::string& rendered_template_prompt,
+      const std::vector<Message>& messages,
+      const DataProcessorArguments& args) const = 0;
+
   // Converts a list of responses from the LLM Session to a Message, which is
   // the output to the user.
   virtual absl::StatusOr<Message> ToMessage(
@@ -87,6 +92,12 @@ class ModelDataProcessor {
   // in a particular tool calling syntax.
   virtual absl::StatusOr<nlohmann::ordered_json> MessageToTemplateInput(
       const nlohmann::ordered_json& message) const = 0;
+
+  virtual absl::StatusOr<nlohmann::ordered_json> MessageToTemplateInput(
+      const Message& message) const {
+    return MessageToTemplateInput(
+        MessageToJson(message, /*include_blobs=*/false));
+  }
 
   // Renders a single turn template for the given message and history. Only the
   // prompt template supporting single turn is valid for this method.
@@ -174,6 +185,21 @@ class TypeSafeModelDataProcessor : public ModelDataProcessor {
         "DataProcessorArguments does not hold the expected type");
   }
 
+  absl::StatusOr<std::vector<InputData>> ToInputDataVector(
+      const std::string& rendered_template_prompt,
+      const std::vector<Message>& messages,
+      const DataProcessorArguments& args) const final {
+    if (std::holds_alternative<ExpectedArgsT>(args)) {
+      return this->ToInputDataVectorImpl(rendered_template_prompt, messages,
+                                         std::get<ExpectedArgsT>(args));
+    } else if (std::holds_alternative<std::monostate>(args)) {
+      return this->ToInputDataVectorImpl(rendered_template_prompt, messages,
+                                         ExpectedArgsT{});
+    }
+    return absl::InvalidArgumentError(
+        "DataProcessorArguments does not hold the expected type");
+  }
+
   // Converts a list of responses from the LLM Session to a Message, with
   // arguments type validated.
   absl::StatusOr<Message> ToMessage(
@@ -208,7 +234,22 @@ class TypeSafeModelDataProcessor : public ModelDataProcessor {
   virtual absl::StatusOr<std::vector<InputData>> ToInputDataVectorImpl(
       const std::string& rendered_template_prompt,
       const nlohmann::ordered_json& messages,
-      const ExpectedArgsT& typed_args) const = 0;
+      const ExpectedArgsT& typed_args) const {
+    return absl::UnimplementedError(
+        "Old ToInputDataVectorImpl is not implemented");
+  }
+
+  virtual absl::StatusOr<std::vector<InputData>> ToInputDataVectorImpl(
+      const std::string& rendered_template_prompt,
+      const std::vector<Message>& messages,
+      const ExpectedArgsT& typed_args) const {
+    nlohmann::ordered_json json_messages = nlohmann::ordered_json::array();
+    for (const auto& msg : messages) {
+      json_messages.push_back(nlohmann::ordered_json(msg));
+    }
+    return ToInputDataVectorImpl(rendered_template_prompt, json_messages,
+                                 typed_args);
+  }
 
   virtual absl::StatusOr<Message> ToMessageImpl(
       const Responses& responses, const ExpectedArgsT& typed_args) const = 0;

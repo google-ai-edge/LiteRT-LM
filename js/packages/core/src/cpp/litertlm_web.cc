@@ -471,7 +471,8 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
                 optional_override([](litert::lm::Conversation& conversation,
                                      std::string message_json) {
                   auto message = nlohmann::ordered_json::parse(message_json);
-                  auto result = conversation.SendMessage(message);
+                  auto result =
+                      conversation.SendMessage(litert::lm::Message(message));
                   return UnwrapStatusOr(result).dump();
                 }),
                 emscripten::async())
@@ -482,7 +483,7 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
                                emscripten::val callback) {
             auto message = nlohmann::ordered_json::parse(message_json);
             auto status = conversation.SendMessageAsync(
-                message,
+                litert::lm::Message(message),
                 // Note: This capture is not thread-safe, but we're only using a
                 // single thread for now.
                 [callback](absl::StatusOr<litert::lm::Message> result) mutable {
@@ -491,7 +492,7 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
                              std::string(result.status().message()));
                     return;
                   }
-                  if (result->is_null()) {
+                  if (result->empty()) {
                     callback(emscripten::val::null(), true,
                              emscripten::val::null());
                   } else {

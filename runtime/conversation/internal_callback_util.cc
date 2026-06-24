@@ -79,9 +79,8 @@ void SendMessageToChannel(
     return;
   }
   Message message;
-  message["role"] = "assistant";
-  message["channels"] = nlohmann::ordered_json::object();
-  message["channels"][std::string(channel_name)] = std::string(text);
+  message.role = "assistant";
+  message.channels[std::string(channel_name)] = std::string(text);
   user_callback(std::move(message));
 }
 

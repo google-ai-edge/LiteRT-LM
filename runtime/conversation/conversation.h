@@ -510,6 +510,9 @@ class Conversation {
   // - The complete message from the LLM.
   absl::StatusOr<Message> SendMessage(
       const Message& message, OptionalArgs optional_args = OptionalArgs());
+  absl::StatusOr<Message> SendMessage(
+      const std::vector<Message>& messages,
+      OptionalArgs optional_args = OptionalArgs());
 
   // Sends a message to the LLM and process the asynchronous message results via
   // the user_callback.
@@ -533,6 +536,10 @@ class Conversation {
   //   otherwise the error status.
   absl::Status SendMessageAsync(
       const Message& message,
+      absl::AnyInvocable<void(absl::StatusOr<Message>)> user_callback,
+      OptionalArgs optional_args = OptionalArgs());
+  absl::Status SendMessageAsync(
+      const std::vector<Message>& messages,
       absl::AnyInvocable<void(absl::StatusOr<Message>)> user_callback,
       OptionalArgs optional_args = OptionalArgs());
 
@@ -660,10 +667,10 @@ class Conversation {
   }
 
   absl::StatusOr<std::string> GetSingleTurnText(
-      const Message& message, const OptionalArgs& optional_args);
+      const std::vector<Message>& messages, const OptionalArgs& optional_args);
 
   absl::StatusOr<std::string> GetSingleTurnTextFromFullHistory(
-      const Message& message, const OptionalArgs& optional_args);
+      const std::vector<Message>& messages, const OptionalArgs& optional_args);
 
   absl::StatusOr<std::string> GetSingleTurnTextFromSingleTurnTemplate(
       const Message& message, const OptionalArgs& optional_args);

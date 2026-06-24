@@ -26,7 +26,11 @@ cc_library(
     name = "io_types",
     srcs = ["io_types.cc"],
     hdrs = ["io_types.h"],
-    deps = ["@nlohmann_json//:json"],
+    deps = [
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/strings",
+        "@nlohmann_json//:json",
+    ],
 )
 
 cc_library(

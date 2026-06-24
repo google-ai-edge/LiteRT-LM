@@ -133,13 +133,15 @@ TEST(ExtractChannelTextTest, EmptyChannelContent) {
 }
 
 TEST(InsertChannelContentIntoMessageTest, MessageInsertion) {
-  Message message = {{"role", "assistant"}, {"content", "Hello!"}};
+  Message message;
+  message.role = "assistant";
+  message.parts.push_back(TextPart{"Hello!"});
   absl::flat_hash_map<std::string, std::string> channel_content = {
       {"thought", "hmm"}};
 
   InsertChannelContentIntoMessage(channel_content, message);
 
-  EXPECT_THAT(message["channels"]["thought"], Eq("hmm"));
+  EXPECT_THAT(message.channels.at("thought"), Eq("hmm"));
 }
 
 TEST(ExtractChannelContentTest, OpenChannelAtStartNoEndTag) {

@@ -123,23 +123,21 @@ absl::Status PrintMessage(const Message& message,
                           std::stringstream& captured_output,
                           bool streaming = false) {
   std::stringstream output;
-  if (message.contains("content")) {
-    if (message["content"].is_array()) {
-      for (const auto& content : message["content"]) {
-        if (content.contains("type") && content["type"] == "text" &&
-            content.contains("text")) {
-          captured_output << content["text"].get<std::string>();
-          output << content["text"].get<std::string>();
-        }
-      }
+  bool has_content = false;
+  bool is_tool_call = false;
 
-    } else if (message["content"].is_object() &&
-               message["content"].contains("text") &&
-               message["content"]["text"].is_string()) {
-      captured_output << message["content"]["text"].get<std::string>();
-      output << message["content"]["text"].get<std::string>();
+  for (const auto& part : message.parts) {
+    if (std::holds_alternative<TextPart>(part)) {
+      const auto& text_part = std::get<TextPart>(part);
+      captured_output << text_part.text;
+      output << text_part.text;
+      has_content = true;
+    } else if (std::holds_alternative<FunctionCallPart>(part)) {
+      is_tool_call = true;
     }
+  }
 
+  if (has_content) {
     if (streaming) {
       std::cout << output.str() << std::flush;
     } else {
@@ -149,8 +147,7 @@ absl::Status PrintMessage(const Message& message,
     return absl::OkStatus();
   }
 
-  if (message.contains("tool_calls") ||
-      (message.contains("type") && message["type"] == "function")) {
+  if (is_tool_call) {
     // Gracefully handle function calls without throwing or failing
     return absl::OkStatus();
   }
@@ -165,7 +162,7 @@ absl::AnyInvocable<void(absl::StatusOr<Message>)> CreatePrintMessageCallback(
       std::cout << message.status().message() << std::endl;
       return;
     }
-    if (message->is_null()) {
+    if (message->empty()) {
       std::cout << std::endl << std::flush;
       return;
     }
@@ -226,12 +223,13 @@ absl::StatusOr<Message> RunSingleTurnConversation(
 
   // Skip printing the output when using fake prefill tokens.
   bool should_print_output = settings.benchmark_prefill_tokens == 0;
+  Message user_msg = json::object({{"role", "user"}, {"content", content_list}});
   if (settings.async) {
     auto print_message_callback =
         should_print_output ? CreatePrintMessageCallback(captured_output)
                             : [](absl::StatusOr<Message> message) {};
     RETURN_IF_ERROR(conversation->SendMessageAsync(
-        json::object({{"role", "user"}, {"content", content_list}}),
+        user_msg,
         std::move(print_message_callback), std::move(optional_args)));
     RETURN_IF_ERROR(engine->WaitUntilDone(kWaitUntilDoneTimeout));
     RETURN_IF_ERROR(CheckExpectedOutput(captured_output.str(), settings));
@@ -240,7 +238,7 @@ absl::StatusOr<Message> RunSingleTurnConversation(
     ASSIGN_OR_RETURN(
         auto model_message,
         conversation->SendMessage(
-            json::object({{"role", "user"}, {"content", content_list}}),
+            user_msg,
             std::move(optional_args)));
     if (should_print_output) {
       RETURN_IF_ERROR(PrintMessage(model_message, captured_output));
@@ -286,9 +284,10 @@ absl::Status RunMultiTurnConversation(const LiteRtLmSettings& settings,
           .visual_token_budget = settings.visual_token_budget};
     }
 
+    Message user_msg = json::object({{"role", "user"}, {"content", content_list}});
     if (settings.async) {
       RETURN_IF_ERROR(conversation->SendMessageAsync(
-          json::object({{"role", "user"}, {"content", content_list}}),
+          user_msg,
           CreatePrintMessageCallback(captured_output),
           std::move(optional_args)));
       RETURN_IF_ERROR(engine->WaitUntilDone(kWaitUntilDoneTimeout));
@@ -296,7 +295,7 @@ absl::Status RunMultiTurnConversation(const LiteRtLmSettings& settings,
       ASSIGN_OR_RETURN(
           auto model_message,
           conversation->SendMessage(
-              json::object({{"role", "user"}, {"content", content_list}}),
+              user_msg,
               std::move(optional_args)));
       RETURN_IF_ERROR(PrintMessage(model_message, captured_output));
     }

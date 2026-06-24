@@ -83,9 +83,8 @@ bool IsEmptyPreface(const Preface& preface) {
           json_preface.extra_context.empty());
 }
 
-bool IsUserMessage(const nlohmann::ordered_json& json_msg) {
-  return json_msg.contains(kRoleKey) && json_msg[kRoleKey].is_string() &&
-         json_msg[kRoleKey].get<absl::string_view>() == kUser;
+bool IsUserMessage(const Message& message) {
+  return message.role == kUser;
 }
 
 }  // namespace
@@ -206,7 +205,7 @@ Conversation::GetSingleTurnTextFromSingleTurnTemplate(
 }
 
 absl::StatusOr<std::string> Conversation::GetSingleTurnTextFromFullHistory(
-    const Message& message, const OptionalArgs& optional_args) {
+    const std::vector<Message>& messages, const OptionalArgs& optional_args) {
   PromptTemplateInput old_tmpl_input;
   RETURN_IF_ERROR(FillPrefaceForPromptTemplateInput(
       preface_, model_data_processor_.get(), old_tmpl_input));
@@ -235,8 +234,6 @@ absl::StatusOr<std::string> Conversation::GetSingleTurnTextFromFullHistory(
         model_data_processor_->MessageToTemplateInput(history_msg));
     old_tmpl_input.messages.push_back(message_tmpl_input);
   }
-  nlohmann::ordered_json messages =
-      message.is_array() ? message : nlohmann::ordered_json::array({message});
   if (history_.empty() && !config_.prefill_preface_on_init()) {
     PromptTemplateInput new_tmpl_input = std::move(old_tmpl_input);
     for (const auto& message : messages) {
@@ -274,7 +271,7 @@ absl::StatusOr<std::string> Conversation::GetSingleTurnTextFromFullHistory(
 }
 
 absl::StatusOr<std::string> Conversation::GetSingleTurnText(
-    const Message& message, const OptionalArgs& optional_args) {
+    const std::vector<Message>& messages, const OptionalArgs& optional_args) {
   if (!prompt_template_.GetCapabilities().supports_single_turn &&
       optional_args.has_pending_message) {
     return absl::InvalidArgumentError(
@@ -284,13 +281,20 @@ absl::StatusOr<std::string> Conversation::GetSingleTurnText(
         "prompt rendering.");
   }
   if (prompt_template_.GetCapabilities().supports_single_turn) {
+    if (messages.size() > 1) {
+      return absl::InvalidArgumentError(
+          "Single turn template does not support multiple messages.");
+    }
+    if (messages.empty()) {
+      return "";
+    }
     auto single_turn_text =
-        GetSingleTurnTextFromSingleTurnTemplate(message, optional_args);
+        GetSingleTurnTextFromSingleTurnTemplate(messages[0], optional_args);
     if (!absl::IsUnimplemented(single_turn_text.status())) {
       return single_turn_text;
     }
   }
-  return GetSingleTurnTextFromFullHistory(message, optional_args);
+  return GetSingleTurnTextFromFullHistory(messages, optional_args);
 }
 
 absl::StatusOr<DecodeConfig> Conversation::CreateDecodeConfig(
@@ -417,12 +421,17 @@ void Conversation::AddTaskController(
 
 absl::StatusOr<Message> Conversation::SendMessage(const Message& message,
                                                   OptionalArgs optional_args) {
+  return SendMessage(std::vector<Message>{message}, std::move(optional_args));
+}
+
+absl::StatusOr<Message> Conversation::SendMessage(
+    const std::vector<Message>& messages, OptionalArgs optional_args) {
   absl::Notification done;
   absl::Status error_status;
   bool appending = is_appending_message_;
 
   absl::Status status = SendMessageAsync(
-      message,
+      messages,
       [&](absl::StatusOr<Message> message) {
         if (!message.ok()) {
           // If the message is an error, set the error status and notify done.
@@ -433,7 +442,7 @@ absl::StatusOr<Message> Conversation::SendMessage(const Message& message,
           return;
         }
 
-        if (message->is_null()) {
+        if (message->empty()) {
           // Message is null when decode is done.
           if (!done.HasBeenNotified()) {
             done.Notify();
@@ -472,8 +481,16 @@ absl::Status Conversation::SendMessageAsync(
     const Message& message,
     absl::AnyInvocable<void(absl::StatusOr<Message>)> user_callback,
     OptionalArgs optional_args) {
+  return SendMessageAsync(std::vector<Message>{message},
+                          std::move(user_callback), std::move(optional_args));
+}
+
+absl::Status Conversation::SendMessageAsync(
+    const std::vector<Message>& messages,
+    absl::AnyInvocable<void(absl::StatusOr<Message>)> user_callback,
+    OptionalArgs optional_args) {
   ASSIGN_OR_RETURN(const std::string& single_turn_text,
-                   GetSingleTurnText(message, optional_args));
+                   GetSingleTurnText(messages, optional_args));
   auto open_channel_name =
       GetOpenChannelName(single_turn_text, config_.GetChannels());
 
@@ -481,12 +498,8 @@ absl::Status Conversation::SendMessageAsync(
   {
     absl::MutexLock lock(history_mutex_);  // NOLINT
     was_history_empty = history_.empty();
-    if (message.is_array()) {
-      for (const auto& message : message) {
-        history_.push_back(message);
-      }
-    } else {
-      history_.push_back(message);
+    for (const auto& msg : messages) {
+      history_.push_back(msg);
     }
   }
 
@@ -495,7 +508,8 @@ absl::Status Conversation::SendMessageAsync(
   // need to be "refilled" into the session.
   std::vector<InputData> refill_session_inputs;
   if (config_.filter_channel_content_from_kv_cache() &&
-      IsUserMessage(message) && !is_appending_message_) {
+      !messages.empty() && IsUserMessage(messages.back()) &&
+      !is_appending_message_) {
     if (channel_content_since_last_user_message_) {
       ASSIGN_OR_RETURN(refill_session_inputs,
                        RewindAndGetInputDataVector(optional_args));
@@ -511,32 +525,23 @@ absl::Status Conversation::SendMessageAsync(
     checkpoint_message_index_ = history_.size() - 1;
   }
 
-  nlohmann::ordered_json messages_for_conversion;
+  std::vector<Message> messages_for_conversion;
   if (was_history_empty && !config_.prefill_preface_on_init()) {
     if (std::holds_alternative<JsonPreface>(preface_)) {
       const auto& json_preface = std::get<JsonPreface>(preface_);
-      if (json_preface.messages.is_array()) {
-        messages_for_conversion = json_preface.messages;
-      } else {
-        messages_for_conversion =
-            nlohmann::ordered_json::array({json_preface.messages});
+      if (!json_preface.messages.is_null()) {
+        if (json_preface.messages.is_array()) {
+          for (const auto& msg_j : json_preface.messages) {
+            messages_for_conversion.push_back(Message(msg_j));
+          }
+        } else {
+          messages_for_conversion.push_back(Message(json_preface.messages));
+        }
       }
     }
   }
-  if (messages_for_conversion.is_array()) {
-    if (message.is_array()) {
-      for (const auto& msg : message) {
-        messages_for_conversion.push_back(msg);
-      }
-    } else {
-      messages_for_conversion.push_back(message);
-    }
-  } else {
-    if (message.is_array()) {
-      messages_for_conversion = message;
-    } else {
-      messages_for_conversion = nlohmann::ordered_json::array({message});
-    }
+  for (const auto& msg : messages) {
+    messages_for_conversion.push_back(msg);
   }
 
   ASSIGN_OR_RETURN(auto session_inputs,
@@ -570,7 +575,7 @@ absl::Status Conversation::SendMessageAsync(
         // variable indicating the session needs to be rewound to the last user
         // message.
         if (config_.filter_channel_content_from_kv_cache() &&
-            complete_message.contains(kChannelsKey)) {
+            !complete_message.channels.empty()) {
           channel_content_since_last_user_message_ = true;
         }
       };
@@ -784,7 +789,7 @@ absl::StatusOr<std::unique_ptr<Conversation>> Conversation::Clone() {
 
 absl::StatusOr<std::string> Conversation::RenderMessageIntoString(
     const Message& message, OptionalArgs optional_args) {
-  return GetSingleTurnText(message, optional_args);
+  return GetSingleTurnText(std::vector<Message>{message}, optional_args);
 }
 
 absl::StatusOr<std::string> Conversation::RenderPrefaceIntoString(

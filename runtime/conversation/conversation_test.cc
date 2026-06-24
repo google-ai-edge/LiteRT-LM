@@ -197,9 +197,11 @@ absl::AnyInvocable<void(absl::StatusOr<Message>)> CreateTestMessageCallback(
       return;
     }
     // If the message is null, the last callback is received.
-    if (message->is_null()) {
-      ASSERT_TRUE(expected_message["content"][0]["text"].is_string());
-      std::string expected_string = expected_message["content"][0]["text"];
+    if (message->empty()) {
+      ASSERT_TRUE(!expected_message.parts.empty() &&
+                  std::holds_alternative<TextPart>(expected_message.parts[0]));
+      std::string expected_string =
+          std::get<TextPart>(expected_message.parts[0]).text;
       // The expected string should be empty after the last callback.
       EXPECT_TRUE(expected_string.empty());
       done.Notify();
@@ -208,13 +210,16 @@ absl::AnyInvocable<void(absl::StatusOr<Message>)> CreateTestMessageCallback(
     // Otherwise, this is a partial response.
     // Compare the message text content by prefix, and update the expected
     // message to the remaining text for the next user_callback.
-    ASSERT_TRUE(expected_message["content"][0]["text"].is_string());
-    ASSERT_TRUE((*message)["content"][0]["text"].is_string());
-    std::string expected_string = expected_message["content"][0]["text"];
-    std::string actual_string = (*message)["content"][0]["text"];
+    ASSERT_TRUE(!expected_message.parts.empty() &&
+                std::holds_alternative<TextPart>(expected_message.parts[0]));
+    ASSERT_TRUE(!message->parts.empty() &&
+                std::holds_alternative<TextPart>(message->parts[0]));
+    std::string expected_string =
+        std::get<TextPart>(expected_message.parts[0]).text;
+    std::string actual_string = std::get<TextPart>(message->parts[0]).text;
     EXPECT_TRUE(absl::StartsWith(expected_string, actual_string))
         << "Expected: " << expected_string << "\nActual: " << actual_string;
-    expected_message["content"][0]["text"] =
+    std::get<TextPart>(expected_message.parts[0]).text =
         expected_string.substr(actual_string.size());
   };
 }
@@ -227,7 +232,7 @@ CreateTestMultiMessageCallback(const std::vector<Message>& expected_messages,
     ASSERT_OK(message);
 
     // If the message is null, the message stream is complete.
-    if (message->is_null()) {
+    if (message->empty()) {
       EXPECT_TRUE(current_index == expected_messages.size())
           << "Expected " << expected_messages.size()
           << " messages but only got " << current_index;
@@ -273,11 +278,10 @@ TEST(ConversationConfigTest, StressCreateDelete) {
     Message user_message = {{"role", "user"}, {"content", "Hello world!"}};
     ASSERT_OK_AND_ASSIGN(const Message message,
                          conversation->SendMessage(user_message));
-    EXPECT_EQ(message["role"], "assistant");
-    ASSERT_TRUE(message["content"].is_array());
-    ASSERT_FALSE(message["content"].empty());
-    EXPECT_EQ(message["content"][0]["type"], "text");
-    EXPECT_FALSE(message["content"][0]["text"].get<std::string>().empty());
+    EXPECT_EQ(message.role, "assistant");
+    ASSERT_FALSE(message.parts.empty());
+    ASSERT_TRUE(std::holds_alternative<TextPart>(message.parts[0]));
+    EXPECT_FALSE(std::get<TextPart>(message.parts[0]).text.empty());
   }
 }
 
@@ -1194,8 +1198,9 @@ TEST_P(ConversationTest, SendMessageWithParserErrorSoftError) {
       .WillOnce(Return(absl::OkStatus()));
   auto response = conversation->SendMessage(user_message);
   ASSERT_OK(response);
-  EXPECT_TRUE(response->contains("content"));
-  EXPECT_TRUE((*response)["content"][0].contains("error"));
+  ASSERT_FALSE(response->parts.empty());
+  ASSERT_TRUE(std::holds_alternative<TextPart>(response->parts[0]));
+  EXPECT_FALSE(std::get<TextPart>(response->parts[0]).error.empty());
 }
 
 TEST_P(ConversationTest, SendMultipleMessages) {
@@ -1217,7 +1222,7 @@ TEST_P(ConversationTest, SendMultipleMessages) {
                        Conversation::Create(*mock_engine, conversation_config));
 
   // We will send two consecutive messages.
-  Message user_messages = nlohmann::ordered_json::parse(R"json(
+  std::vector<Message> user_messages = nlohmann::ordered_json::parse(R"json(
     [
       {
         "role": "user",
@@ -1678,7 +1683,7 @@ TEST_P(ConversationTest, SendMultipleMessagesWithHistory) {
   ASSERT_THAT(conversation->GetHistory().size(), testing::Eq(2));
 
   // We will send two consecutive messages when the history is not empty.
-  Message user_messages = nlohmann::ordered_json::parse(R"json(
+  std::vector<Message> user_messages = nlohmann::ordered_json::parse(R"json(
     [
       {
         "role": "user",
@@ -2085,7 +2090,7 @@ TEST_P(ConversationTest, SendMultipleMessagesAsync) {
                        Conversation::Create(*mock_engine, conversation_config));
 
   // We will send two consecutive messages.
-  Message user_messages = nlohmann::ordered_json::parse(R"json(
+  std::vector<Message> user_messages = nlohmann::ordered_json::parse(R"json(
     [
       {
         "role": "user",
@@ -2209,7 +2214,7 @@ TEST_P(ConversationTest, SendMessageAsyncWithChannelContentFiltering) {
       done_1.Notify();
       return;
     }
-    if (message->is_null()) {
+    if (message->empty()) {
       done_1.Notify();
     }
   };
@@ -2271,7 +2276,7 @@ TEST_P(ConversationTest, SendMessageAsyncWithChannelContentFiltering) {
       done_2.Notify();
       return;
     }
-    if (message->is_null()) {
+    if (message->empty()) {
       done_2.Notify();
     }
   };
@@ -2346,7 +2351,7 @@ TEST_P(ConversationTest, SendMultipleMessagesAsyncWithHistory) {
   ASSERT_THAT(conversation->GetHistory().size(), testing::Eq(2));
 
   // We will send two consecutive messages when the history is not empty.
-  Message user_messages = nlohmann::ordered_json::parse(R"json(
+  std::vector<Message> user_messages = nlohmann::ordered_json::parse(R"json(
     [
       {
         "role": "user",
@@ -2682,7 +2687,7 @@ CreateCancelledMessageCallback(absl::Status& status, absl::Notification& done) {
       done.Notify();
       return;
     }
-    if (message->is_null()) {
+    if (message->empty()) {
       status = absl::OkStatus();
       done.Notify();
       return;
@@ -4019,7 +4024,7 @@ TEST(AppendMessageTest, Gemma4SyncPrefillPrefaceOnInitAndAlternateRoles) {
                       testing::_))
       .Times(1)
       .WillOnce(test_callback);
-  ASSERT_OK(conversation->SendMessage(nlohmann::json::parse(R"json({
+  ASSERT_OK(conversation->SendMessage(Message::parse(R"json({
         "role": "tool",
         "content": [
           {
@@ -4059,7 +4064,7 @@ TEST(AppendMessageTest, Gemma4SyncPrefillPrefaceOnInitAndAlternateRoles) {
             user_callback(Responses(TaskState::kDone));
             return nullptr;
           });
-  ASSERT_OK(conversation->SendMessage(nlohmann::json::parse(R"json({
+  ASSERT_OK(conversation->SendMessage(Message::parse(R"json({
         "role": "tool",
         "content": [
           {

@@ -112,14 +112,13 @@ RenderSingleTurnTemplateCommon(
     // If the last message is in appending state and the current message is
     // different role, then we need to add a closing message to the prefill.
     if (current_is_appending_message &&
-        (last_message["role"] != message["role"] &&
-         last_message["role"] != "system")) {
+        (last_message.role != message.role &&
+         last_message.role != "system")) {
       is_role_changed = true;
       PromptTemplateInput closing_tmpl_input;
-      nlohmann::ordered_json closing_message = {
-          {"role", last_message["role"]},
-          {"content", ""},
-      };
+      Message closing_message;
+      closing_message.role = last_message.role;
+      closing_message.parts.push_back(TextPart{""});
       ASSIGN_OR_RETURN(nlohmann::ordered_json message_tmpl_input,
                        processor.MessageToTemplateInput(closing_message));
       closing_tmpl_input.extra_context["message"] = message_tmpl_input;
@@ -140,7 +139,7 @@ RenderSingleTurnTemplateCommon(
         !json_preface.extra_context.is_null()) {
       if (push_dummy_user_message_to_preface) {
         preface_tmpl_input.messages.push_back(
-            Message{{"role", "user"}, {"content", ""}});
+            nlohmann::ordered_json{{"role", "user"}, {"content", ""}});
       }
       preface_tmpl_input.add_generation_prompt = false;
 
@@ -156,7 +155,7 @@ RenderSingleTurnTemplateCommon(
       prefill_text += preface_text;
     }
   }
-  if (message.is_object()) {
+  if (!message.empty()) {
     PromptTemplateInput tmpl_input;
     ASSIGN_OR_RETURN(tmpl_input.extra_context["message"],
                      processor.MessageToTemplateInput(message));

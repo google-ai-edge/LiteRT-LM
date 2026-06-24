@@ -67,19 +67,21 @@ TEST_F(ModelDataProcessorFactoryTest, CreateGenericModelDataProcessor) {
       auto config, CreateDataProcessorConfigFromLlmModelType(llm_model_type));
   ASSERT_TRUE(std::holds_alternative<GenericDataProcessorConfig>(config));
   ASSERT_OK_AND_ASSIGN(auto processor, CreateModelDataProcessor(config));
-  EXPECT_OK(processor->ToInputDataVector("test prompt", {},
+  EXPECT_OK(processor->ToInputDataVector("test prompt", std::vector<Message>{},
                                          GenericDataProcessorArguments()));
-  EXPECT_THAT(processor->ToInputDataVector("test prompt", {},
-                                           Gemma3DataProcessorArguments()),
-              StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(
+      processor->ToInputDataVector("test prompt", std::vector<Message>{},
+                                   Gemma3DataProcessorArguments()),
+      StatusIs(absl::StatusCode::kInvalidArgument));
 
   EXPECT_OK(
       processor->ToMessage(Responses(TaskState::kProcessing, {"test response"}),
                            GenericDataProcessorArguments()));
 
-  EXPECT_THAT(processor->ToInputDataVector("test prompt", {},
-                                           Gemma3DataProcessorArguments()),
-              StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(
+      processor->ToInputDataVector("test prompt", std::vector<Message>{},
+                                   Gemma3DataProcessorArguments()),
+      StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
 TEST_F(ModelDataProcessorFactoryTest,
@@ -131,25 +133,27 @@ TEST_F(ModelDataProcessorFactoryTest, CreateGemma3DataProcessor) {
           JsonPreface{
               .messages = {{{"role", "system"},
                             {"content", "You are a helpful assistant."}}}}));
-  EXPECT_OK(processor->ToInputDataVector("test prompt", {},
+  EXPECT_OK(processor->ToInputDataVector("test prompt", std::vector<Message>{},
                                          Gemma3DataProcessorArguments()));
-  EXPECT_THAT(processor->ToInputDataVector("test prompt", {},
-                                           GenericDataProcessorArguments()),
-              StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(
+      processor->ToInputDataVector("test prompt", std::vector<Message>{},
+                                   GenericDataProcessorArguments()),
+      StatusIs(absl::StatusCode::kInvalidArgument));
 
   EXPECT_OK(
       processor->ToMessage(Responses(TaskState::kProcessing, {"test response"}),
                            Gemma3DataProcessorArguments()));
-  EXPECT_THAT(processor->ToInputDataVector("test prompt", {},
-                                           GenericDataProcessorArguments()),
-              StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(
+      processor->ToInputDataVector("test prompt", std::vector<Message>{},
+                                   GenericDataProcessorArguments()),
+      StatusIs(absl::StatusCode::kInvalidArgument));
 
   llm_model_type.mutable_gemma3();
   ASSERT_OK_AND_ASSIGN(
       config, CreateDataProcessorConfigFromLlmModelType(llm_model_type));
   ASSERT_TRUE(std::holds_alternative<Gemma3DataProcessorConfig>(config));
   ASSERT_OK_AND_ASSIGN(processor, CreateModelDataProcessor(config));
-  EXPECT_OK(processor->ToInputDataVector("test prompt", {},
+  EXPECT_OK(processor->ToInputDataVector("test prompt", std::vector<Message>{},
                                          Gemma3DataProcessorArguments()));
 }
 
@@ -171,7 +175,7 @@ TEST_F(ModelDataProcessorFactoryTest,
       CreateModelDataProcessor(config, /*preface=*/std::nullopt,
                                (*tokenizer).get(), {},
                                /*enable_constrained_decoding=*/true));
-  EXPECT_OK(processor->ToInputDataVector("test prompt", {},
+  EXPECT_OK(processor->ToInputDataVector("test prompt", std::vector<Message>{},
                                          Gemma3DataProcessorArguments()));
 }
 
@@ -182,19 +186,21 @@ TEST_F(ModelDataProcessorFactoryTest, CreateQwen3ModelDataProcessor) {
       auto config, CreateDataProcessorConfigFromLlmModelType(llm_model_type));
   ASSERT_TRUE(std::holds_alternative<Qwen3DataProcessorConfig>(config));
   ASSERT_OK_AND_ASSIGN(auto processor, CreateModelDataProcessor(config));
-  EXPECT_OK(processor->ToInputDataVector("test prompt", {},
+  EXPECT_OK(processor->ToInputDataVector("test prompt", std::vector<Message>{},
                                          Qwen3DataProcessorArguments()));
-  EXPECT_THAT(processor->ToInputDataVector("test prompt", {},
-                                           Gemma3DataProcessorArguments()),
-              StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(
+      processor->ToInputDataVector("test prompt", std::vector<Message>{},
+                                   Gemma3DataProcessorArguments()),
+      StatusIs(absl::StatusCode::kInvalidArgument));
 
   EXPECT_OK(
       processor->ToMessage(Responses(TaskState::kProcessing, {"test response"}),
                            Qwen3DataProcessorArguments()));
 
-  EXPECT_THAT(processor->ToInputDataVector("test prompt", {},
-                                           Gemma3DataProcessorArguments()),
-              StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(
+      processor->ToInputDataVector("test prompt", std::vector<Message>{},
+                                   Gemma3DataProcessorArguments()),
+      StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
 TEST_F(ModelDataProcessorFactoryTest, CreateFunctionGemmaDataProcessor) {
@@ -214,11 +220,13 @@ TEST_F(ModelDataProcessorFactoryTest, CreateFunctionGemmaDataProcessor) {
       CreateModelDataProcessor(config, /*preface=*/std::nullopt,
                                (*tokenizer).get(), /*stop_token_ids=*/{},
                                /*enable_constrained_decoding=*/true));
-  EXPECT_OK(processor->ToInputDataVector(
-      "test prompt", {}, FunctionGemmaDataProcessorArguments()));
-  EXPECT_THAT(processor->ToInputDataVector("test prompt", {},
-                                           GenericDataProcessorArguments()),
-              StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_OK(
+      processor->ToInputDataVector("test prompt", std::vector<Message>{},
+                                   FunctionGemmaDataProcessorArguments()));
+  EXPECT_THAT(
+      processor->ToInputDataVector("test prompt", std::vector<Message>{},
+                                   GenericDataProcessorArguments()),
+      StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
 TEST_F(ModelDataProcessorFactoryTest, CreateGemma4DataProcessor) {
@@ -238,11 +246,12 @@ TEST_F(ModelDataProcessorFactoryTest, CreateGemma4DataProcessor) {
       CreateModelDataProcessor(config, /*preface=*/std::nullopt,
                                (*tokenizer).get(), {},
                                /*enable_constrained_decoding=*/false));
-  EXPECT_OK(processor->ToInputDataVector("test prompt", {},
+  EXPECT_OK(processor->ToInputDataVector("test prompt", std::vector<Message>{},
                                          Gemma4DataProcessorArguments()));
-  EXPECT_THAT(processor->ToInputDataVector("test prompt", {},
-                                           GenericDataProcessorArguments()),
-              StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(
+      processor->ToInputDataVector("test prompt", std::vector<Message>{},
+                                   GenericDataProcessorArguments()),
+      StatusIs(absl::StatusCode::kInvalidArgument));
 
   // Ensure the config from the proto will override the default values.
   llm_model_type.mutable_gemma4()->set_max_num_patches(1280);
@@ -265,11 +274,12 @@ TEST_F(ModelDataProcessorFactoryTest, CreateFastVlmDataProcessor) {
       auto config, CreateDataProcessorConfigFromLlmModelType(llm_model_type));
   ASSERT_TRUE(std::holds_alternative<FastVlmDataProcessorConfig>(config));
   ASSERT_OK_AND_ASSIGN(auto processor, CreateModelDataProcessor(config));
-  EXPECT_OK(processor->ToInputDataVector("test prompt", {},
+  EXPECT_OK(processor->ToInputDataVector("test prompt", std::vector<Message>{},
                                          FastVlmDataProcessorArguments()));
-  EXPECT_THAT(processor->ToInputDataVector("test prompt", {},
-                                           GenericDataProcessorArguments()),
-              StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(
+      processor->ToInputDataVector("test prompt", std::vector<Message>{},
+                                   GenericDataProcessorArguments()),
+      StatusIs(absl::StatusCode::kInvalidArgument));
 
   EXPECT_OK(
       processor->ToMessage(Responses(TaskState::kProcessing, {"test response"}),

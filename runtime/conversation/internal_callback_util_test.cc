@@ -65,7 +65,7 @@ absl::AnyInvocable<void(absl::StatusOr<Message>)> CreateUserMessageCallback(
       status = message.status();
       return;
     }
-    if (message->is_null()) {
+    if (message->empty()) {
       done = true;
     } else {
       output.push_back(*message);
@@ -783,8 +783,8 @@ TEST_F(InternalCallbackChannelTest,
   callback(Responses(TaskState::kDone));
 
   EXPECT_TRUE(final_done);
-  EXPECT_TRUE(final_message.contains("channels"));
-  EXPECT_EQ(final_message["channels"]["thought"], "I am thinking");
+  EXPECT_TRUE(final_message.channels.contains("thought"));
+  EXPECT_EQ(final_message.channels.at("thought"), "I am thinking");
 }
 
 TEST_F(InternalCallbackChannelTest, OpenChannelAtStartNoEndTag) {
