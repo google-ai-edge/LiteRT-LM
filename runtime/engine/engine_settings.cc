@@ -328,7 +328,7 @@ absl::Status EngineSettings::MaybeUpdateAndValidate(
   if (!metadata.has_sampler_params()) {
     proto::SamplerParameters& sampler_params =
         *metadata.mutable_sampler_params();
-    if (backend == Backend::NPU || backend == Backend::GPU_ARTISAN) {
+    ) {
       sampler_params.set_type(proto::SamplerParameters::TYPE_UNSPECIFIED);
     } else if (backend == Backend::CPU || backend == Backend::GPU
     ) {

@@ -74,8 +74,8 @@ absl::StatusOr<Backend> GetBackendFromString(absl::string_view backend_str) {
   } else {
     return absl::InvalidArgumentError(
         absl::StrCat("Unsupported backend: ", backend_str,
-                     ". Supported backends are: [CPU, GPU, NPU, GPU_ARTISAN, "
-                     "CPU_ARTISAN, GOOGLE_TENSOR_ARTISAN]"));
+                     ". Supported backends are: [CPU, GPU, NPU, GPU_ARTISAN,
+                     " CPU_ARTISAN, GOOGLE_TENSOR_ARTISAN]"));
   }
 }
 
