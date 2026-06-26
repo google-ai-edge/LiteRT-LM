@@ -47,11 +47,12 @@ def test_model_sanity(
       "response".
   """
 
+  backend = test_case["backend"]
   prompt = test_case["prompt"]
   expected_response = test_case["response"]
 
   # Execute
-  output = run_engine(prompt)
+  output = run_engine(backend, prompt)
   clean_output = output.replace("\n", " ")
 
   # Validate

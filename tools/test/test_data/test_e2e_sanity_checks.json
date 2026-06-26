@@ -1,7 +1,14 @@
 {
   "test_model_sanity": [
     {
-      "id": "basic_question",
+      "id": "basic_question_cpu",
+      "backend": "cpu",
+      "prompt": "What's the tallest building in the world?",
+      "response": "Burj Khalifa"
+    },
+    {
+      "id": "basic_question_gpu",
+      "backend": "gpu",
       "prompt": "What's the tallest building in the world?",
       "response": "Burj Khalifa"
     }

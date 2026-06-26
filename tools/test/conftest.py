@@ -29,6 +29,7 @@ import pytest
 
 def pytest_addoption(parser: pytest.Parser) -> None:
   """Adds custom command line arguments to pytest."""
+
   parser.addoption(
       "--model-path",
       action="store",
@@ -108,10 +109,10 @@ def run_engine(
     model_path: Path to the model file.
   """
 
-  def _run(prompt: str, timeout: int = 120) -> str:
+  def _run(backend: str, prompt: str, timeout: int = 120) -> str:
     cmd = [
         engine_binary,
-        "--backend=cpu",
+        f"--backend={backend}",
         f"--model_path={model_path}",
         f"--input_prompt={prompt}",
     ]
