@@ -260,6 +260,7 @@ cc_library(
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
+        "@litert//litert/c:litert_common",
         "@litert//litert/cc:litert_macros",
         "@litert//litert/cc/internal:litert_shared_library",
         "//runtime/executor:executor_settings_base",
@@ -268,12 +269,12 @@ cc_library(
         "//runtime/util:litert_status_util",
     ] + select({
         "@litert//litert:litert_link_capi_so": [
+            "@litert//litert/c:litert_runtime_c_api_shared_lib",
             "@litert//litert/cc:litert_api_with_dynamic_runtime",
         ],
         "//conditions:default": [
-            "@litert//litert/c:litert_common",
-            "@litert//litert/cc:litert_environment",
-            "@litert//litert/cc:litert_environment_options",
+            "@litert//litert/c:litert_environment",
+            "@litert//litert/c:litert_environment_options",
             "@litert//litert/cc:litert_tensor_buffer",
             "@litert//litert/cc/internal:litert_handle",
         ],

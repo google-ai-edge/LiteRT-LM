@@ -29,10 +29,11 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "litert/c/litert_common.h"  // from @litert
+#include "litert/c/litert_environment.h"  // from @litert
+#include "litert/c/litert_environment_options.h"  // from @litert
 #include "litert/cc/internal/litert_handle.h"  // from @litert
 #include "litert/cc/internal/litert_shared_library.h"  // from @litert
-#include "litert/cc/litert_environment.h"  // from @litert
-#include "litert/cc/litert_environment_options.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/sampler.h"
@@ -600,16 +601,22 @@ absl::StatusOr<std::unique_ptr<Sampler>> CreateGpuSampler(
     std::optional<ActivationDataType> activation_data_type) {
   // Check environment options to determine the preferred backend.
   auto cpp_env = litert::Environment::WrapCObject(env, litert::OwnHandle::kNo);
-  auto options_or = cpp_env.GetOptions();
+  LiteRtEnvironmentOptions options;
+  bool has_options_status =
+      (LiteRtGetEnvironmentOptions(env, &options) == kLiteRtStatusOk);
   bool use_metal = false;
   bool use_webgpu = false;
-  if (options_or.HasValue()) {
-    for (const auto& option : options_or->GetOptions()) {
-      if (option.tag == litert::EnvironmentOptions::Tag::kMetalDevice) {
-        use_metal = true;
-      } else if (option.tag == litert::EnvironmentOptions::Tag::kWebGpuDevice) {
-        use_webgpu = true;
-      }
+
+  if (has_options_status) {
+    LiteRtAny env_option_value;
+    if (LiteRtGetEnvironmentOptionsValue(
+            options, kLiteRtEnvOptionTagMetalDevice, &env_option_value) ==
+        kLiteRtStatusOk) {
+      use_metal = true;
+    } else if (LiteRtGetEnvironmentOptionsValue(
+                   options, kLiteRtEnvOptionTagWebGpuDevice,
+                   &env_option_value) == kLiteRtStatusOk) {
+      use_webgpu = true;
     }
   }
 
