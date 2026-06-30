@@ -57,9 +57,9 @@ enum class ModelType {
   kTfLiteVisionAdapter = 7,
   kTfLiteEndOfVision = 12,  // The end of vision token model.
   kTfLiteVisionEncoder = 8,
-  kArtisanTextDecoder = 11,  // The text decoder model for the artisan gpu.
-  kTfLiteMtpDrafter = 13,    // The MTP drafter model.
-  kTfLiteMtpAux = 14,        // The MTP auxiliary model.
+  kArtisanTextDecoder = 11,     // The text decoder model for the artisan gpu.
+  kTfLiteMtpDrafter = 13,       // The MTP drafter model.
+  kTfLiteMtpAux = 14,           // The MTP auxiliary model.
 };
 
 // Utility function to convert a string to ModelType. It's case insensitive.

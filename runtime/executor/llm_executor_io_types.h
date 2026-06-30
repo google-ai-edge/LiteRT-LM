@@ -443,8 +443,17 @@ class ExecutorDecodeParams {
   // supported in the hand-written path.
   ConstrainedDecoder* GetConstraintDecoder() const;
 
+  // Sets an optional cancellation token.
+  void SetCancelledToken(const std::atomic<bool>* cancelled) {
+    cancelled_ = cancelled;
+  }
+
+  // Returns the cancellation token if set, otherwise nullptr.
+  const std::atomic<bool>* GetCancelledToken() const { return cancelled_; }
+
  private:
   std::vector<LogitsProcessor*> logits_processors_;
+  const std::atomic<bool>* cancelled_ = nullptr;
 };
 std::ostream& operator<<(std::ostream& os, const ExecutorDecodeParams& params);
 

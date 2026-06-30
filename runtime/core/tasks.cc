@@ -118,13 +118,15 @@ class DecodeOneStep {
                 std::optional<BenchmarkInfo>& benchmark_info,
                 std::optional<Sampler*> sampler,
                 RepetitionPenaltyConfig repetition_penalty_config,
-                Constraint* constraint)
+                Constraint* constraint,
+                const std::atomic<bool>* cancelled = nullptr)
       : executor_(*executor),
         tokenizer_(*tokenizer),
         num_output_candidates_(num_output_candidates),
         sampler_(sampler),
         benchmark_info_(benchmark_info),
-        stop_token_detector_(stop_token_detector) {
+        stop_token_detector_(stop_token_detector),
+        cancelled_(cancelled) {
     if (repetition_penalty_config.enabled()) {
       repetition_penalty_processor_ =
           std::make_unique<RepetitionPenaltyProcessor>(
@@ -382,9 +384,14 @@ class DecodeOneStep {
             benchmark_info_->TimeMarkDelta("executor_decode_and_sample"));
       }
       std::vector<std::vector<int>> output_tokens;
-      if (!logits_processors_.empty()) {
+      if (!logits_processors_.empty() || cancelled_ != nullptr) {
         auto decode_params = ExecutorDecodeParams();
-        decode_params.SetLogitsProcessorList(logits_processors_);
+        if (!logits_processors_.empty()) {
+          decode_params.SetLogitsProcessorList(logits_processors_);
+        }
+        if (cancelled_ != nullptr) {
+          decode_params.SetCancelledToken(cancelled_);
+        }
         ASSIGN_OR_RETURN(output_tokens, executor_.Decode(decode_params));
       } else {
         ASSIGN_OR_RETURN(output_tokens, executor_.Decode());
@@ -406,6 +413,7 @@ class DecodeOneStep {
   std::vector<LogitsProcessor*> logits_processors_;
   std::optional<BenchmarkInfo> benchmark_info_;
   StopTokenDetector stop_token_detector_;
+  const std::atomic<bool>* cancelled_ = nullptr;
 
   // For external sampling.
   // Holds the scores for the output candidates. Dim: {num_output_candidates}
@@ -498,7 +506,7 @@ absl::StatusOr<Responses> Decode(
   const int max_num_tokens = TryGetMaxNumTokens(executor);
   DecodeOneStep run_one_step(&executor, &tokenizer, num_output_candidates,
                              stop_token_detector, benchmark_info, sampler,
-                             repetition_penalty_config, constraint);
+                             repetition_penalty_config, constraint, cancelled);
   while (true) {
     if (cancelled != nullptr && cancelled->load()) {
       if (benchmark_info.has_value()) {

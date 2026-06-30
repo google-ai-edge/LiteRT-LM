@@ -782,7 +782,7 @@ absl::Status SerialExecutionManager::AddDecodeTask(
     session_info->stop_token_detector->ResetBatch(num_output_candidates);
     std::optional<Sampler*> optional_sampler = std::nullopt;
     std::optional<litert::TensorBuffer> decoded_ids_buffer = std::nullopt;
-    if (session_info->sampler != nullptr) {
+    if (session_info->sampler != nullptr && !is_text_diffusion) {
       optional_sampler = session_info->sampler.get();
       std::vector<int> decoded_ids(num_output_candidates,
                                    session_info->last_prefill_token_id);
