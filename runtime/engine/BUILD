@@ -204,7 +204,7 @@ cc_binary(
         "@platforms//os:windows": [
             "/DEF:$(location @litert//litert/c:windows_exported_symbols.def)",
         ],
-        "@platforms//os:linux": ["-Wl,--dynamic-list=$(location :litert_lm_main.exported_symbols)"],
+        "@platforms//os:linux": [":litert_lm_main.exported_symbols"],
         "//conditions:default": ["-Wl,--export-dynamic-symbol=LiteRt*"],
     }) + select({
         "@platforms//os:android": ["-lEGL", "-lGLESv3"],
@@ -228,6 +228,7 @@ cc_binary(
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/time",
         "@nlohmann_json//:json",
+        "@litert//litert/c:litert_profiler",
         "@litert//litert/cc/internal:scoped_file",
         "//runtime/conversation",
         "//runtime/conversation:io_types",
@@ -254,7 +255,7 @@ cc_binary(
         "@platforms//os:windows": [
             "/DEF:$(location @litert//litert/c:windows_exported_symbols.def)",
         ],
-        "@platforms//os:linux": ["-Wl,--dynamic-list=$(location :litert_lm_main.exported_symbols)"],
+        "@platforms//os:linux": [":litert_lm_main.exported_symbols"],
         "//conditions:default": ["-Wl,--export-dynamic-symbol=LiteRt*"],
     }) + select({
         "@platforms//os:android": ["-lEGL", "-lGLESv3"],
@@ -275,6 +276,7 @@ cc_binary(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
+        "@litert//litert/c:litert_profiler",
         "//runtime/executor:executor_settings_base",
         "//runtime/proto:litert_lm_metrics_cc_proto",
         "//runtime/util:litert_status_util",
