@@ -105,8 +105,6 @@ inline absl::StatusOr<ModelType> StringToModelType(
     return ModelType::kTfLiteMtpDrafter;
   } else if (lower_case_model_type_str == "tf_lite_mtp_aux") {
     return ModelType::kTfLiteMtpAux;
-  } else if (lower_case_model_type_str == "tf_lite_text_encoder") {
-    return ModelType::kTfLiteTextEncoder;
   } else {
     return absl::InvalidArgumentError(
         absl::StrCat("Unknown model type: ", model_type_str));
