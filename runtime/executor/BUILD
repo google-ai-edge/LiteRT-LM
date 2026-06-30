@@ -373,6 +373,7 @@ cc_library(
         "@litert//litert/cc:litert_model",
         "@litert//litert/cc:litert_ranked_tensor_type",
         "//runtime/components:model_resources",
+        "//runtime/proto:llm_model_type_cc_proto",
         "//runtime/util:litert_status_util",
     ] + select({
         "@platforms//os:ios": [],
@@ -391,7 +392,7 @@ cc_test(
         ":llm_executor_settings",
         ":llm_litert_compiled_model_executor_factory",
         "@com_google_googletest//:gtest_main",
-        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@litert//litert/cc:litert_environment",

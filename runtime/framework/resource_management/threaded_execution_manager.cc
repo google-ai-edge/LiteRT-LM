@@ -979,19 +979,20 @@ absl::Status ThreadedExecutionManager::AddDecodeTask(
     session_info->stop_token_detector->ResetBatch(num_output_candidates);
     std::optional<Sampler*> optional_sampler = std::nullopt;
     std::optional<litert::TensorBuffer> decoded_ids_buffer = std::nullopt;
-    if (session_info->sampler != nullptr) {
-      optional_sampler = session_info->sampler.get();
-      std::vector<int> decoded_ids(num_output_candidates,
-                                   session_info->last_prefill_token_id);
-      auto decoded_ids_buffer_or =
-          CopyToTensorBuffer<int>(decoded_ids, {num_output_candidates, 1});
-      if (!decoded_ids_buffer_or.HasValue()) {
-        llm_executor.value().reset();
-        callback(absl::InternalError(decoded_ids_buffer_or.Error().Message()));
-        return;
+      if (session_info->sampler != nullptr) {
+        optional_sampler = session_info->sampler.get();
+        std::vector<int> decoded_ids(num_output_candidates,
+                                     session_info->last_prefill_token_id);
+        auto decoded_ids_buffer_or =
+            CopyToTensorBuffer<int>(decoded_ids, {num_output_candidates, 1});
+        if (!decoded_ids_buffer_or.HasValue()) {
+          llm_executor.value().reset();
+          callback(
+              absl::InternalError(decoded_ids_buffer_or.Error().Message()));
+          return;
+        }
+        decoded_ids_buffer = std::move(decoded_ids_buffer_or.Value());
       }
-      decoded_ids_buffer = std::move(decoded_ids_buffer_or.Value());
-    }
 
     auto responses = Tasks::Decode(
         *llm_executor.value(), *tokenizer_, *session_info->stop_token_detector,
