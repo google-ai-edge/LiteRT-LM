@@ -20,7 +20,6 @@ load("@build_bazel_rules_apple//apple:macos.bzl", "macos_dylib")
 load("@build_bazel_rules_swift//swift:swift.bzl", "swift_interop_hint")
 load("@build_bazel_rules_swift//swift:swift.bzl", "swift_library")
 
-
 package(default_visibility = ["//visibility:public"])
 
 # Swift API for LiteRT LM.
