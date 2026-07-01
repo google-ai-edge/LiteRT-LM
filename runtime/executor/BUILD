@@ -245,8 +245,14 @@ cc_test(
 
 cc_library(
     name = "llm_litert_compiled_model_executor",
-    srcs = ["llm_litert_compiled_model_executor.cc"],
-    hdrs = ["llm_litert_compiled_model_executor.h"],
+    srcs = [
+        "llm_litert_compiled_model_executor.cc",
+        "metal_utils.cc",
+    ],
+    hdrs = [
+        "llm_litert_compiled_model_executor.h",
+        "metal_utils.h",
+    ],
     deps = [
         ":common_utils",
         ":executor_settings_base",
@@ -270,22 +276,8 @@ cc_library(
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/types:span",
-        "@litert//litert/c/internal:litert_external_litert_buffer_context",  # buildcleaner: keep
-        "@litert//litert/cc:litert_common",
-        "@litert//litert/cc:litert_compiled_model",
-        "@litert//litert/cc:litert_element_type",
-        "@litert//litert/cc:litert_environment",
-        "@litert//litert/cc:litert_expected",
-        "@litert//litert/cc:litert_layout",
-        "@litert//litert/cc:litert_macros",
-        "@litert//litert/cc:litert_model",
         "@litert//litert/cc:litert_model_types",
-        "@litert//litert/cc:litert_options",
-        "@litert//litert/cc:litert_ranked_tensor_type",
-        "@litert//litert/cc:litert_tensor_buffer",
         "@litert//litert/cc:litert_tensor_buffer_types",
-        "@litert//litert/cc/options:litert_cpu_options",
-        "@litert//litert/cc/options:litert_runtime_options",
         "//runtime/components:model_resources",
         "//runtime/components:model_resources_litert_lm",
         "//runtime/components:model_resources_task",
@@ -301,7 +293,28 @@ cc_library(
         "//runtime/util:tensor_buffer_util",
         "@litert//tflite/delegates/xnnpack:xnnpack_delegate",
         "@litert//tflite/types:half",
-    ],
+    ] + select({
+        "@litert//litert:litert_link_capi_so": [
+            "@litert//litert/cc:litert_api_with_dynamic_runtime",
+        ],
+        "//conditions:default": [
+            "@litert//litert/c/internal:litert_external_litert_buffer_context",  # buildcleaner: keep
+            "@litert//litert/cc:litert_common",
+            "@litert//litert/cc:litert_compiled_model",
+            "@litert//litert/cc:litert_element_type",
+            "@litert//litert/cc:litert_environment",
+            "@litert//litert/cc:litert_environment_options",
+            "@litert//litert/cc:litert_expected",
+            "@litert//litert/cc:litert_layout",
+            "@litert//litert/cc:litert_macros",
+            "@litert//litert/cc:litert_model",
+            "@litert//litert/cc:litert_options",
+            "@litert//litert/cc:litert_ranked_tensor_type",
+            "@litert//litert/cc:litert_tensor_buffer",
+            "@litert//litert/cc/options:litert_cpu_options",
+            "@litert//litert/cc/options:litert_runtime_options",
+        ],
+    }),
 )
 
 cc_test(

@@ -789,7 +789,8 @@ absl::StatusOr<
 CreateDynamicExecutor(Environment& env, absl::string_view model_path,
                       uint32_t kv_increment_size = 8,
                       int prefill_chunk_size = -1) {
-  auto path = std::filesystem::path(::testing::SrcDir()) / model_path;
+  auto path =
+      std::filesystem::path(::testing::SrcDir()) / std::string(model_path);
   ASSIGN_OR_RETURN(auto model_resources,
                    CreateExecutorModelResourcesLitertLm(path.string()));
   ASSIGN_OR_RETURN(auto model_assets, ModelAssets::Create(path.string()));

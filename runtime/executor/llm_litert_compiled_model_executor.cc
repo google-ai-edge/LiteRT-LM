@@ -14,6 +14,10 @@
 
 #include "runtime/executor/llm_litert_compiled_model_executor.h"
 
+#if defined(__APPLE__)
+#include "runtime/executor/metal_utils.h"
+#endif
+
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
@@ -143,13 +147,26 @@ absl::Status CopyKvCacheBuffers(
     const absl::flat_hash_map<absl::string_view, TensorBuffer>&
         src_kv_cache_buffers,
     const absl::flat_hash_map<absl::string_view, TensorBuffer>&
-        dst_kv_cache_buffers) {
+        dst_kv_cache_buffers,
+    void* command_queue = nullptr) {
   for (const auto& [name, src_buffer] : src_kv_cache_buffers) {
     if (!dst_kv_cache_buffers.contains(name)) {
       return absl::FailedPreconditionError(
           absl::StrCat("KV cache buffer ", name, " not found."));
     }
     const auto& dst_buffer = dst_kv_cache_buffers.at(name);
+
+#if defined(__APPLE__)
+    LITERT_ASSIGN_OR_RETURN(
+        bool metal_copied,
+        TryCopyKvCacheMetal(src_buffer, const_cast<TensorBuffer&>(dst_buffer),
+                            src_index_to_copy_on_prefill, decode_batch_size,
+                            command_queue));
+    if (metal_copied) {
+      continue;
+    }
+#endif
+
     LITERT_ASSIGN_OR_RETURN(auto src_buffer_lock_and_addr,
                             TensorBufferScopedLock::Create(
                                 src_buffer, TensorBuffer::LockMode::kRead));
@@ -542,9 +559,18 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::PrepareFirstPrefillAfterDecode(
     LITERT_RETURN_IF_ERROR(llm_context_->processed_context()
                                .processed_tokens()
                                .ReduceTokenCandidates(token_index_to_reduce));
-    LITERT_RETURN_IF_ERROR(
-        CopyKvCacheBuffers(output_heads, token_index_to_reduce,
-                           *input_kv_cache_buffers_, kv_cache_buffers_1_));
+    void* command_queue = nullptr;
+#if defined(__APPLE__)
+    bool has_metal_memory = std::any_of(
+        input_kv_cache_buffers_->begin(), input_kv_cache_buffers_->end(),
+        [](const auto& pair) { return pair.second.IsMetalMemory(); });
+    if (has_metal_memory) {
+      command_queue = GetMetalCommandQueue(env_);
+    }
+#endif
+    LITERT_RETURN_IF_ERROR(CopyKvCacheBuffers(
+        output_heads, token_index_to_reduce, *input_kv_cache_buffers_,
+        kv_cache_buffers_1_, command_queue));
     input_kv_cache_buffers_ = &kv_cache_buffers_1_;
     output_kv_cache_buffers_ = &kv_cache_buffers_2_;
   }
@@ -1004,9 +1030,18 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::PrepareFirstDecode() {
   LITERT_RETURN_IF_ERROR(decode_kv_cache_buffers_2_.has_value());
   // Broadcast the prefill kv cache buffers to the decode kv cache buffers.
   // This is only needed when decode batch size > 1.
+  void* command_queue = nullptr;
+#if defined(__APPLE__)
+  bool has_metal_memory = std::any_of(
+      input_kv_cache_buffers_->begin(), input_kv_cache_buffers_->end(),
+      [](const auto& pair) { return pair.second.IsMetalMemory(); });
+  if (has_metal_memory) {
+    command_queue = GetMetalCommandQueue(env_);
+  }
+#endif
   LITERT_RETURN_IF_ERROR(CopyKvCacheBuffers(
       output_heads, /*src_index_to_copy_on_prefill=*/-1,
-      *input_kv_cache_buffers_, *decode_kv_cache_buffers_1_));
+      *input_kv_cache_buffers_, *decode_kv_cache_buffers_1_, command_queue));
   input_kv_cache_buffers_ = &decode_kv_cache_buffers_1_.value();
   output_kv_cache_buffers_ = &decode_kv_cache_buffers_2_.value();
 
@@ -1577,15 +1612,7 @@ absl::Status LlmLiteRtCompiledModelExecutorStatic::Prefill(
           prefill_signature, prefill_length, prefill_length,
           prefill_input_buffers_[prefill_signature]));
     }
-    // TODO(b/494284915): Switch to use async prefill for Metal backend.
-    if (!do_prefill_sync_.has_value()) {
-      do_prefill_sync_ = std::any_of(
-          prefill_input_buffers_[prefill_signature].begin(),
-          prefill_input_buffers_[prefill_signature].end(),
-          [](const auto& pair) { return pair.second.IsMetalMemory(); });
-    }
-    bool async = !*do_prefill_sync_ &&
-                 (i < work_groups.size() - 1 || !params.GetWaitForCompletion());
+    bool async = i < work_groups.size() - 1 || !params.GetWaitForCompletion();
     RETURN_IF_ERROR(PrefillInternal(
         prefill_signature, prefill_input_buffers_[prefill_signature],
         ids.subspan(/*pos=*/0, prefill_length), async));
