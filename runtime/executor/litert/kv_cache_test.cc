@@ -43,6 +43,7 @@ namespace {
 
 using ::testing::status::StatusIs;
 
+
 constexpr char kTestStaticModelPath[] =
     "litert_lm/runtime/testdata/test_lm.litertlm";
 
