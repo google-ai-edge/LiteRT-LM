@@ -63,6 +63,8 @@ ABSL_FLAG(
 ABSL_FLAG(std::string, input_prompt, "",
           "Input prompt to use for testing LLM execution.");
 ABSL_FLAG(std::string, input_prompt_file, "", "File path to the input prompt.");
+ABSL_FLAG(std::string, image_file, "", "Path to the image file (.jpg).");
+ABSL_FLAG(std::string, audio_file, "", "Path to the audio file (.wav).");
 ABSL_FLAG(std::string, metric_proto_file_path, "",
           "Path to the file where the benchmark metrics will be saved in "
           "protobuf format. Only collected when --benchmark is true.");
@@ -246,7 +248,21 @@ absl::Status MainHelper(int argc, char** argv) {
   settings.model_name = absl::GetFlag(FLAGS_model_name);
   settings.load_model_from_descriptor =
       absl::GetFlag(FLAGS_load_model_from_descriptor);
-  settings.input_prompt = GetInputPrompt();
+
+  const std::string image_file = absl::GetFlag(FLAGS_image_file);
+  const std::string audio_file = absl::GetFlag(FLAGS_audio_file);
+  const std::string prompt = GetInputPrompt();
+
+  std::string modified_prompt = "";
+  if (!image_file.empty()) {
+    absl::StrAppend(&modified_prompt, "[image:", image_file, "] ");
+  }
+  if (!audio_file.empty()) {
+    absl::StrAppend(&modified_prompt, "[audio:", audio_file, "] ");
+  }
+  absl::StrAppend(&modified_prompt, prompt);
+
+  settings.input_prompt = modified_prompt;
   settings.expected_output = absl::GetFlag(FLAGS_expected_output);
   settings.log_sink_file = absl::GetFlag(FLAGS_log_sink_file);
   settings.max_num_tokens = absl::GetFlag(FLAGS_max_num_tokens);

@@ -22,6 +22,7 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -47,6 +48,7 @@
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/executor/llm_executor_settings.h"
 #include "runtime/util/status_macros.h"
 
 ABSL_FLAG(std::string, backend, "gpu",
@@ -55,6 +57,8 @@ ABSL_FLAG(std::string, model_path, "", "Model path to use for LLM execution.");
 ABSL_FLAG(std::string, input_prompt, "",
           "Input prompt to use for testing LLM execution.");
 ABSL_FLAG(std::string, input_prompt_file, "", "File path to the input prompt.");
+ABSL_FLAG(std::string, image_file, "", "Path to the image file (.jpg).");
+ABSL_FLAG(std::string, audio_file, "", "Path to the audio file (.wav).");
 
 namespace {
 
@@ -125,12 +129,54 @@ absl::Status MainHelper(int argc, char** argv) {
   auto backend_str = absl::GetFlag(FLAGS_backend);
   ASSIGN_OR_RETURN(Backend backend,
                    litert::lm::GetBackendFromString(backend_str));
+
+  std::optional<Backend> vision_backend = std::nullopt;
+  auto vision_backend_str = absl::GetFlag(FLAGS_vision_backend);
+  if (vision_backend_str.has_value() && !vision_backend_str->empty()) {
+    ASSIGN_OR_RETURN(vision_backend,
+                     litert::lm::GetBackendFromString(*vision_backend_str));
+  }
+
+  std::optional<Backend> audio_backend = std::nullopt;
+  auto audio_backend_str = absl::GetFlag(FLAGS_audio_backend);
+  if (audio_backend_str.has_value() && !audio_backend_str->empty()) {
+    ASSIGN_OR_RETURN(audio_backend,
+                     litert::lm::GetBackendFromString(*audio_backend_str));
+  }
+
   ASSIGN_OR_RETURN(
       EngineSettings engine_settings,
-      EngineSettings::CreateDefault(std::move(model_assets), backend));
+      EngineSettings::CreateDefault(std::move(model_assets), backend,
+                                    vision_backend, audio_backend));
   // Enable benchmark by default.
   engine_settings.GetMutableBenchmarkParams() =
       litert::lm::proto::BenchmarkParams();
+
+  auto& executor_settings = engine_settings.GetMutableMainExecutorSettings();
+  auto advanced_settings =
+      executor_settings.GetAdvancedSettings().value_or(
+          litert::lm::AdvancedSettings());
+  advanced_settings.enable_speculative_decoding =
+      absl::GetFlag(FLAGS_enable_speculative_decoding);
+  executor_settings.SetAdvancedSettings(advanced_settings);
+
+  if (backend == litert::lm::Backend::NPU) {
+    auto npu_settings_or =
+        executor_settings.MutableBackendConfig<litert::lm::NpuConfig>();
+    if (npu_settings_or.ok()) {
+      auto npu_settings = *npu_settings_or;
+      npu_settings.enable_neon_for_npu_greedy_sampling =
+          absl::GetFlag(FLAGS_enable_neon_for_npu_greedy_sampling);
+      npu_settings.use_hw_masking_for_npu =
+          absl::GetFlag(FLAGS_use_hw_masking_for_npu);
+      npu_settings.use_hw_cache_update_for_npu =
+          absl::GetFlag(FLAGS_use_hw_cache_update_for_npu);
+      npu_settings.use_hw_ple_for_npu = absl::GetFlag(FLAGS_use_hw_ple_for_npu);
+      npu_settings.enable_npu_debug_logging =
+          absl::GetFlag(FLAGS_enable_npu_debug_logging);
+      executor_settings.SetBackendConfig(npu_settings);
+    }
+  }
 
   // Create the engine.
   ASSIGN_OR_RETURN(auto engine, litert::lm::EngineFactory::CreateDefault(
@@ -148,6 +194,17 @@ absl::Status MainHelper(int argc, char** argv) {
 
   // Prepare the message to send.
   json content_list = json::array();
+
+  const std::string image_file = absl::GetFlag(FLAGS_image_file);
+  if (!image_file.empty()) {
+    content_list.push_back({{"type", "image"}, {"path", image_file}});
+  }
+
+  const std::string audio_file = absl::GetFlag(FLAGS_audio_file);
+  if (!audio_file.empty()) {
+    content_list.push_back({{"type", "audio"}, {"path", audio_file}});
+  }
+
   const std::string input_prompt = GetInputPrompt();
   std::cout << "input_prompt: " << input_prompt << std::endl;
   content_list.push_back({{"type", "text"}, {"text", input_prompt}});
