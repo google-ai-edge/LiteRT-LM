@@ -32,14 +32,16 @@
 
 namespace litert::lm {
 
-absl::Status LitertLmStreamingLoader::LoadHeader() {
-  if (header_loaded_) {
-    return absl::OkStatus();
-  }
-
+absl::StatusOr<std::unique_ptr<schema::LitertlmHeader>>
+ReadHeaderFromDataStream(DataStream* data_stream, bool preserve) {
   HeaderPreamble header_preamble;
-  RETURN_IF_ERROR(data_stream_->ReadAndDiscard(&header_preamble, 0,
-                                               sizeof(HeaderPreamble)));
+  if (preserve) {
+    RETURN_IF_ERROR(data_stream->ReadAndPreserve(
+        reinterpret_cast<char*>(&header_preamble), 0, sizeof(HeaderPreamble)));
+  } else {
+    RETURN_IF_ERROR(data_stream->ReadAndDiscard(&header_preamble, 0,
+                                                sizeof(HeaderPreamble)));
+  }
 
   // Check the magic number.
   std::string magic_str(header_preamble.magic, 8);
@@ -70,14 +72,35 @@ absl::Status LitertLmStreamingLoader::LoadHeader() {
   // Read the rest of the header from the stream.
   size_t remaining_size = header_size - sizeof(HeaderPreamble);
   if (remaining_size > 0) {
-    RETURN_IF_ERROR(
-        data_stream_->ReadAndDiscard(header_data.get() + sizeof(HeaderPreamble),
-                                     sizeof(HeaderPreamble), remaining_size));
+    if (preserve) {
+      RETURN_IF_ERROR(data_stream->ReadAndPreserve(
+          header_data.get() + sizeof(HeaderPreamble), sizeof(HeaderPreamble),
+          remaining_size));
+    } else {
+      RETURN_IF_ERROR(data_stream->ReadAndDiscard(
+          header_data.get() + sizeof(HeaderPreamble), sizeof(HeaderPreamble),
+          remaining_size));
+    }
   }
 
+  auto header = std::make_unique<schema::LitertlmHeader>();
   // Read the LiteRTLM header from the buffer.
   RETURN_IF_ERROR(schema::ReadHeaderFromLiteRTLM(
-      static_cast<void*>(header_data.get()), header_size, header_.get()));
+      static_cast<void*>(header_data.get()), header_size, header.get()));
+
+  return header;
+}
+
+absl::Status LitertLmStreamingLoader::LoadHeader() {
+  if (header_loaded_) {
+    return absl::OkStatus();
+  }
+
+  ASSIGN_OR_RETURN(auto loaded_header,
+                   ReadHeaderFromDataStream(data_stream_.get(), false));
+  // Need to transfer pointer ownership out to shared_ptr because
+  // LitertLmStreamingLoader uses shared_ptr
+  header_ = std::move(loaded_header);
 
   // Record the section metadata.
   auto objects = header_->metadata->section_metadata()->objects();

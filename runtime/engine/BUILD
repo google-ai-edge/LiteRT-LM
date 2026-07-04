@@ -318,10 +318,12 @@ cc_library(
         "//runtime/proto:sampler_params_cc_proto",
         "//runtime/proto:token_cc_proto",
         "//runtime/util:litert_lm_loader",
+        "//runtime/util:litert_lm_streaming_loader",
         "//runtime/util:litert_status_util",
         "//runtime/util:model_type_utils",
         "//runtime/util:scoped_file",
         "//schema/core:litertlm_header_schema",
+        "//schema/core:litertlm_read",
     ],
 )
 

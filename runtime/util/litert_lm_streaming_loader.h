@@ -65,6 +65,12 @@ struct SectionInfo {
   std::weak_ptr<schema::LitertlmHeader> header;
 };
 
+// Reads the Litert LM header from the given data stream.
+// If preserve is true, the read data will remain in the stream.
+// If preserve is false, the data will be discarded from the stream.
+absl::StatusOr<std::unique_ptr<schema::LitertlmHeader>>
+ReadHeaderFromDataStream(DataStream* data_stream, bool preserve);
+
 // A streaming loader that reads a .litertlm file from a data stream and returns
 // the sections of the file one by one.
 // This approach avoids loading the entire model file into memory at once,
@@ -85,6 +91,11 @@ class LitertLmStreamingLoader {
   // Returns the next section from the stream.
   // Returns std::nullopt if there are no more sections to read.
   absl::StatusOr<std::optional<SectionInfo>> GetNextSection();
+
+  // Returns all sections info
+  const std::vector<SectionInfo>& GetOrderedSectionInfo() const {
+    return ordered_section_info_;
+  }
 
  private:
   // The parent data stream from which sections are created.

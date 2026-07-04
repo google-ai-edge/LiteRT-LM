@@ -42,10 +42,11 @@
 #include "runtime/proto/sampler_params.pb.h"
 #include "runtime/proto/token.pb.h"
 #include "runtime/util/litert_lm_loader.h"
+#include "runtime/util/litert_lm_streaming_loader.h"
 #include "runtime/util/model_type_utils.h"
-#include "runtime/util/scoped_file.h"
 #include "runtime/util/status_macros.h"  // IWYU pragma: keep
 #include "schema/core/litertlm_header_schema_generated.h"
+#include "schema/core/litertlm_read.h"
 
 namespace litert::lm {
 namespace {
@@ -155,6 +156,27 @@ absl::StatusOr<EngineSettings> EngineSettings::CreateDefault(
       auto mapped_file_status = model_assets.GetMemoryMappedFile();
       if (mapped_file_status.ok()) {
         loader_status = LitertLmLoader::Create(*mapped_file_status);
+      }
+    } else if (model_assets.HasDataStream()) {
+      auto data_stream_status = model_assets.GetDataStream();
+      if (data_stream_status.ok()) {
+        auto data_stream = *data_stream_status;
+        auto header = ReadHeaderFromDataStream(data_stream.get(), true);
+        if (header.ok() && (*header)->metadata != nullptr &&
+            (*header)->metadata->section_metadata() != nullptr) {
+          auto objects = (*header)->metadata->section_metadata()->objects();
+          for (size_t i = 0; i < objects->size(); ++i) {
+            const schema::SectionObject* section = objects->Get(i);
+            if (section->data_type() ==
+                schema::AnySectionDataType_TFLiteModel) {
+              auto key_hint = ExtractBufferKeyAndTfLiteSectionHint(section);
+              if (key_hint.ok() && key_hint->first.model_type ==
+                                       ModelType::kArtisanTextDecoder) {
+                is_text_artisan = true;
+              }
+            }
+          }
+        }
       }
     } else {
       auto scoped_file_status = model_assets.GetOrCreateScopedFile();
