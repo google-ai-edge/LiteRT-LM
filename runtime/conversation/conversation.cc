@@ -165,10 +165,9 @@ absl::StatusOr<ConversationConfig> ConversationConfig::CreateInternal(
     // Use the overwrite processor config if provided.
     processor_config = *overwrite_processor_config;
   } else {
-    // Build the processor config from the model metadata.
     ASSIGN_OR_RETURN(processor_config,
                      CreateDataProcessorConfigFromLlmModelType(
-                         session_config_copy.GetLlmModelType()));
+                         metadata->llm_model_type()));
   }
 
   return ConversationConfig(
