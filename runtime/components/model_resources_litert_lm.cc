@@ -97,14 +97,22 @@ absl::StatusOr<const litert::Model*> ModelResourcesLitertLm::GetTFLiteModel(
     auto section_location = litert_lm_loader_->GetSectionLocation(
         BufferKey(schema::AnySectionDataType_TFLiteModel, model_type));
     if (scoped_file.ok() && section_location.ok()) {
-      LITERT_ASSIGN_OR_RETURN(auto model_from_section,
-                              CreateModelFromFileSection(
-                                  scoped_file->get(), section_location->first,
-                                  section_location->second));
-      auto& model = model_map_[model_type];
-      model =
-          std::make_unique<litert::Model>(std::move(model_from_section));
-      return model.get();
+      auto model_from_section = CreateModelFromFileSection(
+          scoped_file->get(), section_location->first,
+          section_location->second);
+      if (!model_from_section.ok()) {
+        if (model_from_section.status().code() !=
+            absl::StatusCode::kUnimplemented) {
+          return model_from_section.status();
+        }
+        ABSL_LOG(INFO) << "File-backed LiteRT model loading is unsupported; "
+                          "falling back to buffer-backed loading.";
+      } else {
+        auto& model = model_map_[model_type];
+        model = std::make_unique<litert::Model>(
+            std::move(model_from_section).value());
+        return model.get();
+      }
     }
   }
 

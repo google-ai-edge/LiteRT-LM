@@ -42,10 +42,6 @@ using ::litert::lm::StringToModelType;
 
 #ifdef ENABLE_SENTENCEPIECE_TOKENIZER
 TEST(ModelResourcesTest, InitializeWithFileBackedLiteRtModel) {
-#if defined(_WIN32)
-  GTEST_SKIP() << "File-backed LiteRT model loading is not supported on "
-                  "Windows.";
-#endif
   const auto model_path =
       std::filesystem::path(::testing::SrcDir()) /
       "litert_lm/runtime/testdata/test_lm.litertlm";
