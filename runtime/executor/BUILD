@@ -888,7 +888,10 @@ cc_library(
 cc_test(
     name = "audio_litert_compiled_model_executor_test",
     srcs = ["audio_litert_compiled_model_executor_test.cc"],
-    data = ["//runtime/testdata"],
+    data = [
+        "//runtime/e2e_tests/data:tiny_gemma_audio",
+        "//runtime/testdata",
+    ],
     tags = ["requires-mac-inputs:hard"],  # Required for running on Forge on Mac.
     deps = [
         ":audio_executor_settings",

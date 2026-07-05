@@ -48,6 +48,9 @@ constexpr absl::string_view kTestAudioStreamingModelPath =
     "litert_lm/runtime/testdata/dummy_audio_streaming.litertlm";
 constexpr absl::string_view kTestAudioNoMaskModelPath =
     "litert_lm/runtime/testdata/dummy_audio_no_mask.litertlm";
+constexpr absl::string_view kTestAudioGpuStreamingModelPath =
+    "litert_lm/runtime/e2e_tests/data"
+    "/tiny_gemma_audio_42m_24m_16k_streaming_gpu.litertlm";
 constexpr int kNoMaskEmbeddingDimensions = 5;
 constexpr int kSpectrogramFrequencySlots = 8;
 constexpr int kSpectrogramSequenceLength = 10;
@@ -78,16 +81,18 @@ absl::StatusOr<TensorBuffer> CreateTensorBuffer(
 
 absl::StatusOr<std::unique_ptr<AudioLiteRtCompiledModelExecutor>>
 CreateAudioExecutor(Environment& env, const std::string& model_path,
-                    int max_sequence_length, Backend backend) {
+                    int max_sequence_length, Backend backend,
+                    bool is_streaming_model = false) {
   ASSIGN_OR_RETURN(auto model_file, litert::lm::ScopedFile::Open(model_path));
   auto model_file_ptr =
       std::make_shared<litert::lm::ScopedFile>(std::move(model_file));
   ASSIGN_OR_RETURN(auto model_assets,
-                   litert::lm::ModelAssets::Create(model_file_ptr));
+                   litert::lm::ModelAssets::Create(model_file_ptr, model_path));
   // Create the audio executor settings.
   ASSIGN_OR_RETURN(auto audio_executor_settings,
                    litert::lm::AudioExecutorSettings::CreateDefault(
                        model_assets, max_sequence_length, backend));
+  audio_executor_settings.SetAudioStreamingEnabled(is_streaming_model);
   // Create the audio executor.
   return litert::lm::AudioLiteRtCompiledModelExecutor::Create(
       audio_executor_settings, env);
@@ -110,6 +115,16 @@ TEST_F(AudioLiteRtCompiledModelExecutorTest, CreateExecutorTest) {
                                  std::string(kTestAudioModelPath))
                                     .string(),
                                 /*max_sequence_length=*/0, Backend::CPU));
+}
+
+TEST_F(AudioLiteRtCompiledModelExecutorTest,
+       CreateExecutorTest_GpuStreamingModel_NoCache) {
+  EXPECT_OK(CreateAudioExecutor(*env_,
+                                (std::filesystem::path(::testing::SrcDir()) /
+                                 std::string(kTestAudioGpuStreamingModelPath))
+                                    .string(),
+                                /*max_sequence_length=*/3200, Backend::GPU,
+                                /*is_streaming_model=*/true));
 }
 
 TEST_F(AudioLiteRtCompiledModelExecutorTest,
