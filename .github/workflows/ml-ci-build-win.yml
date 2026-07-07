@@ -49,6 +49,8 @@ jobs:
       MODEL_KEY: gemma-3-1b-it-v1
       MODEL_PATH: .\models\gemma3-1b-it-int4.litertlm
       MODEL_URL: https://huggingface.co/litert-community/Gemma3-1B-IT/resolve/main/gemma3-1b-it-int4.litertlm
+      # Disable it as its "unrecognized arguments" error blocks submissions in "Run pytest" step
+      RUN_PYTEST: 'false'
 
       # Clear ANDROID_NDK_HOME as Windows_x64 has NDK where jobs don't have permission for
       # androidndk rules to create symlinks.
@@ -68,13 +70,15 @@ jobs:
 
           $env:JAVA_HOME = [System.Environment]::GetEnvironmentVariable("JAVA_HOME", "Machine")
 
-          choco install git make pkgconfiglite openjdk17 ccache bazelisk gcloudsdk 7zip -y
+          choco install git git-lfs make pkgconfiglite openjdk17 ccache bazelisk gcloudsdk 7zip --no-progress -y
 
           python -m pip install --break-system-packages numpy
 
       - name: Configure System Paths
         run: |
           Add-Content -Path $env:GITHUB_PATH -Value "C:\Program Files\Git\cmd"
+          Add-Content -Path $env:GITHUB_PATH -Value "C:\Program Files\Git\bin"
+          Add-Content -Path $env:GITHUB_PATH -Value "C:\Program Files\Git\mingw64\bin"
           Add-Content -Path $env:GITHUB_PATH -Value "$env:ALLUSERSPROFILE\chocolatey\bin"
           Add-Content -Path $env:GITHUB_PATH -Value "$env:USERPROFILE\.cargo\bin"
           Add-Content -Path $env:GITHUB_PATH -Value "C:\Program Files\7-Zip"
@@ -88,14 +92,6 @@ jobs:
       - name: Test GCloud Storage
         run: |
           gcloud storage ls gs://litert-lm-cicd/caches/windows/bazel
-
-      - name: Setup VCPKG
-        run: |
-          git clone https://github.com/microsoft/vcpkg.git $env:USERPROFILE\vcpkg
-          cd $env:USERPROFILE\vcpkg
-          .\bootstrap-vcpkg.bat -disableMetrics
-          .\vcpkg integrate install
-          .\vcpkg install zlib openssl libpng curl fftw3 --triplet x64-windows
 
       - name: Install Rust
         run: |
@@ -244,6 +240,7 @@ jobs:
           echo "Cache Matched Key: ${{ steps.bazel-cache.outputs.cache-matched-key }}"
 
       - name: Download Model
+        if: env.RUN_PYTEST == 'true'
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
@@ -251,15 +248,13 @@ jobs:
             New-Item -ItemType Directory -Path "./models" -Force
           }
 
-          $headers = @{
-              "Authorization" = "Bearer $($env:HF_TOKEN)"
-          }
-
           Write-Host "Downloading model from Hugging Face: ${{ env.MODEL_URL }}"
 
-          Invoke-WebRequest -Uri "${{ env.MODEL_URL }}" `
-                  -Headers $headers `
-                  -OutFile "${{ env.MODEL_PATH }}"
+          # Use curl.exe for high-speed download without PowerShell DOM/stream overhead
+          curl.exe -L --retry 5 -f `
+            -H "Authorization: Bearer $env:HF_TOKEN" `
+            -o "${{ env.MODEL_PATH }}" `
+            "${{ env.MODEL_URL }}"
 
           $file = Get-Item "${{ env.MODEL_PATH }}"
           $sizeMB = [math]::Round($file.Length / 1MB, 2)
@@ -270,6 +265,7 @@ jobs:
         run: |
           bazel --output_base="$env:BAZEL_OUTPUT_BASE" `
             build --disk_cache=~/.cache/bazel `
+            --repository_cache=~/.cache/bazel/repo `
             --deleted_packages=swift `
             --build_tag_filters='-nowindows' `
             --action_env=TMP="$env:TMP" `
@@ -290,6 +286,7 @@ jobs:
         run: |
           bazel --output_base="$env:BAZEL_OUTPUT_BASE" `
             test --disk_cache=~/.cache/bazel --test_output=errors `
+            --repository_cache=~/.cache/bazel/repo `
             --deleted_packages=swift `
             --test_timeout=300,1500,5400,18000 `
             --test_tag_filters='-requires-mac-inputs:hard,-nowindows' `
@@ -307,17 +304,19 @@ jobs:
           path: bazel-testlogs/**/test.log
 
       - name: Install pytest
+        if: env.RUN_PYTEST == 'true'
         run: python -m pip install --break-system-packages pytest==8.3.4
 
-      # Disable it as its "unrecognized arguments" error blocks submissions.
-      # - name: Run pytest
-      #  # Execute pytest via the python module (-m) to bypass missing pytest.exe PATH issues
-      #  run: python -m pytest tools/test/ --model-path=${{ env.MODEL_PATH }} --build-system=bazel
+      - name: Run pytest
+        if: env.RUN_PYTEST == 'true'
+        # Execute pytest via the python module (-m) to bypass missing pytest.exe PATH issues
+        run: python -m pytest tools/test/ --model-path=${{ env.MODEL_PATH }} --build-system=bazel
 
       - name: Run bazel build on Windows with dynamic linking
         run: |
           bazel --output_base="$env:BAZEL_OUTPUT_BASE" `
             build --disk_cache=~/.cache/bazel `
+            --repository_cache=~/.cache/bazel/repo `
             --define=litert_link_capi_so=true `
             --define=litert_runtime_link_mode=dynamic `
             --define=resolve_symbols_in_exec=false `
