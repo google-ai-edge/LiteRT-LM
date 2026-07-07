@@ -1369,15 +1369,17 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::InitializeSampler(
       CreateSampler(sampler_backend, output_heads, std::move(sampler_params),
                     env_.Get(), /*sequence_size=*/1, vocab_size, data_type));
 
-  // Disable GPU token copy for models that run embedding on the GPU.
-  const bool runs_embedding_on_gpu = (embedding_lookup_ == nullptr);
-
   // If the sampler can handle input, prepare the input tensors for it.
+  // Models whose decode signature takes token ids (embedding computed inside
+  // the graph) are eligible: the sampler writes the sampled id directly into
+  // the decode input buffers, removing the per-token readback/re-encode sync
+  // on the host. Models with an external embedder keep the host loop (their
+  // decode input is embeddings, not token ids). Hosts can opt out via
+  // AdvancedSettings.sampler_handles_input.
   sampler_handles_input_ =
       (!executor_settings_.GetAdvancedSettings().has_value() ||
        executor_settings_.GetAdvancedSettings()->sampler_handles_input) &&
-      sampler_->CanHandleInput() && !signatures_.input_tokens.empty() &&
-      !runs_embedding_on_gpu;
+      sampler_->CanHandleInput() && !signatures_.input_tokens.empty();
   if (sampler_handles_input_) {
     ABSL_LOG(INFO) << "Sampler will handle decode input tensors.";
     if (!decode_prev_input_pos_) {
