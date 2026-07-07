@@ -507,13 +507,18 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::RollBackProcessedTokens() {
     RETURN_IF_ERROR(processed_tokens.RollBackToStep(current_step - 1));
     if (!token_at_step.empty()) {
       RET_CHECK_EQ(token_at_step.size(), 1);
-      // Multimodal input cannot become a pending input token.
-      if (token_at_step.at(0) > 0) {
-        RETURN_IF_ERROR(processed_tokens.AddPendingInputToken(
-            {std::make_shared<TokenData>(token_at_step.at(0))}));
-      } else {
-        processed_tokens.AddProcessedTokens({token_at_step.at(0)});
+      auto pending_token = std::make_shared<TokenData>(token_at_step.at(0));
+      if (token_at_step.at(0) <= 0 && embedding_lookup_ != nullptr) {
+        RETURN_IF_ERROR(embedding_lookup_->LookupPrefill(
+            pending_token->id(), pending_token->mutable_embedding()));
+        if (per_layer_embedding_lookup_ != nullptr) {
+          RETURN_IF_ERROR(per_layer_embedding_lookup_->LookupPrefill(
+              pending_token->id(),
+              pending_token->mutable_per_layer_embedding()));
+        }
       }
+      RETURN_IF_ERROR(processed_tokens.AddPendingInputToken(
+          {std::move(pending_token)}));
     }
   }
 
