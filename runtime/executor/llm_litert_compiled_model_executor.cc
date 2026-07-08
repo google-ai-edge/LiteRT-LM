@@ -1519,6 +1519,7 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::SetCurrentStep(int new_step) {
 
 absl::Status LlmLiteRtCompiledModelExecutorBase::Reset() {
   llm_context_->runtime_state().current_step = 0;
+  llm_context_->processed_context().processed_tokens() = ProcessedTokens();
   return absl::OkStatus();
 }
 
@@ -1572,31 +1573,105 @@ absl::Status LlmLiteRtCompiledModelExecutorStatic::Prefill(
   // Reduce the input ids only with one user selected.
   auto input_length = ids.size() / input_batch_size;
   ids = ids.subspan(kTokenIndexToReduce * input_length, input_length);
-  ABSL_ASSIGN_OR_RETURN(
-      auto work_groups,
-      GetOptimizedPrefillWorkGroups(prefill_signature_map_, ids.size()));
+  ABSL_LOG(INFO) << "Jetski: Prefill input size: " << ids.size();
+  std::vector<std::pair<std::string, int>> work_groups;
+  {
+    int history_size =
+        llm_context_->processed_context().processed_tokens().TokenCount();
+    int remaining_length = ids.size();
+    LITERT_RETURN_IF_ERROR(!output_kv_cache_buffers_->empty());
+    LITERT_ASSIGN_OR_RETURN(
+        auto kvc_type, output_kv_cache_buffers_->begin()->second.TensorType());
+    const auto& kvc_dims = kvc_type.Layout().Dimensions();
+    int cache_size = 0;
+    for (int i = 0; i < kvc_dims.size(); ++i) {
+      cache_size = std::max(cache_size, kvc_dims[i]);
+    }
+
+    ABSL_LOG(INFO) << "Prefill info: cache_size=" << cache_size
+                   << ", history_size=" << history_size;
+    for (const auto& [len, sig] : prefill_signature_map_) {
+      ABSL_LOG(INFO) << "Prefill map entry: len=" << len << ", sig=" << sig;
+    }
+
+    // Find the largest runner length in the map.
+    int max_runner_len = -1;
+    for (const auto& [len, sig] : prefill_signature_map_) {
+      if (len > max_runner_len) {
+        max_runner_len = len;
+      }
+    }
+    RET_CHECK_GT(max_runner_len, 0);
+
+    while (remaining_length > 0) {
+      int remaining_capacity = cache_size - history_size;
+      if (remaining_capacity <= 0) {
+        return absl::InternalError(absl::StrCat(
+            "History size (", history_size,
+            ") reaches or exceeds maximum cache size (", cache_size, ")"));
+      }
+      int chunk_size = std::min(
+          {remaining_length, remaining_capacity, max_runner_len});
+
+      // Find the smallest runner that can handle target_context_len.
+      std::string selected_signature = "";
+      int selected_runner_len = -1;
+      // prefill_signature_map_ is sorted descending, so iterating backwards
+      // (from rbegin to rend) goes from smallest runner length to largest.
+      for (auto it = prefill_signature_map_.rbegin();
+           it != prefill_signature_map_.rend(); ++it) {
+        int r = it->first;
+        if (r >= chunk_size) {
+          selected_signature = it->second;
+          selected_runner_len = r;
+          break;
+        }
+      }
+      if (selected_signature.empty()) {
+        return absl::InternalError(absl::StrCat(
+            "No valid prefill runner found for history_size: ", history_size,
+            ", chunk_size: ", chunk_size));
+      }
+
+      ABSL_LOG(INFO) << "Jetski: Prefill loop: selected="
+                     << selected_signature << " chunk_size=" << chunk_size
+                     << " remaining=" << remaining_length - chunk_size;
+      work_groups.push_back(std::make_pair(selected_signature, chunk_size));
+      remaining_length -= chunk_size;
+      history_size += chunk_size;
+    }
+  }
   for (int i = 0; i < work_groups.size(); ++i) {
     const auto& prefill_signature = work_groups[i].first;
     int prefill_length = work_groups[i].second;
     // Keep track of the signatures that have already had their buffers
     // created only create them once.
-    if (!prefill_input_buffers_.contains(prefill_signature)) {
-      prefill_input_buffers_[prefill_signature] = {};
+    auto& input_buffers = prefill_input_buffers_[prefill_signature];
+    if (input_buffers.empty()) {
+      int signature_len = -1;
+      for (const auto& [len, sig] : prefill_signature_map_) {
+        if (sig == prefill_signature) {
+          signature_len = len;
+          break;
+        }
+      }
+      RET_CHECK_NE(signature_len, -1);
+      int cache_size = executor_settings_.GetMaxNumTokens();
       ABSL_RETURN_IF_ERROR(CreatePrefillInputBuffers(
-          prefill_signature, prefill_length, prefill_length,
-          prefill_input_buffers_[prefill_signature]));
+          prefill_signature, signature_len, cache_size,
+          input_buffers));
     }
     // TODO: b/494284915 - Switch to use async prefill for Metal backend.
     if (!do_prefill_sync_.has_value()) {
       do_prefill_sync_ = std::any_of(
-          prefill_input_buffers_[prefill_signature].begin(),
-          prefill_input_buffers_[prefill_signature].end(),
+          input_buffers.begin(),
+          input_buffers.end(),
           [](const auto& pair) { return pair.second.IsMetalMemory(); });
     }
     bool async = !*do_prefill_sync_ &&
                  (i < work_groups.size() - 1 || !params.GetWaitForCompletion());
     ABSL_RETURN_IF_ERROR(PrefillInternal(
-        prefill_signature, prefill_input_buffers_[prefill_signature],
+        prefill_signature, input_buffers,
         ids.subspan(/*pos=*/0, prefill_length), async));
     ids = ids.subspan(/*pos=*/prefill_length);
   }

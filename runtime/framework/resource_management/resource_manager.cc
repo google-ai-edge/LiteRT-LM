@@ -703,7 +703,17 @@ ResourceManager::AcquireExecutorWithContextHandler(
 
   // If the new handler is the same as the current handler, return the
   // executor directly.
+  ABSL_LOG(INFO)
+      << "Jetski: AcquireExecutor: new=" << new_context_handler.get()
+      << " current="
+      << (current_handler_ ? current_handler_.get() : nullptr)
+      << " current_has_config="
+      << (current_handler_ ? current_handler_->HasRuntimeConfig() : false)
+      << " new_has_config="
+      << (new_context_handler ? new_context_handler->HasRuntimeConfig()
+                              : false);
   if (new_context_handler == current_handler_) {
+    ABSL_LOG(INFO) << "Jetski: AcquireExecutor: early return (same handler)";
     return std::make_unique<LockedLlmExecutor>(llm_executor_, std::move(lock),
                                                current_handler_);
   }
@@ -714,6 +724,7 @@ ResourceManager::AcquireExecutorWithContextHandler(
   if (current_handler_ != nullptr &&
       new_context_handler->shared_processed_context() ==
           current_handler_->shared_processed_context()) {
+    ABSL_LOG(INFO) << "Jetski: AcquireExecutor: sharing context";
     ABSL_ASSIGN_OR_RETURN(auto current_runtime_config,
                           llm_executor_->GetRuntimeConfig());
     ABSL_ASSIGN_OR_RETURN(auto current_runtime_state,
@@ -723,6 +734,9 @@ ResourceManager::AcquireExecutorWithContextHandler(
     ABSL_RETURN_IF_ERROR(current_handler_->SetRuntimeState(
         std::make_unique<RuntimeState>(current_runtime_state)));
 
+    if (!new_context_handler->HasRuntimeConfig()) {
+      ABSL_LOG(ERROR) << "Jetski: AcquireExecutor: new_context_handler (sharing) has no config!";
+    }
     ABSL_ASSIGN_OR_RETURN(auto new_runtime_config,
                           new_context_handler->RetrieveRuntimeConfig());
     ABSL_ASSIGN_OR_RETURN(auto new_runtime_state,
@@ -734,6 +748,7 @@ ResourceManager::AcquireExecutorWithContextHandler(
     // If the new handler is not sharing the same processed context with the
     // current handler, clone the processed context to the new handler. Then
     // restore the executor with the new LlmContext.
+    ABSL_LOG(INFO) << "Jetski: AcquireExecutor: NOT sharing context";
     if (current_handler_ != nullptr) {
       ABSL_ASSIGN_OR_RETURN(auto current_llm_context,
                             llm_executor_->CloneContext());
@@ -744,6 +759,7 @@ ResourceManager::AcquireExecutorWithContextHandler(
       ABSL_ASSIGN_OR_RETURN(auto current_processed_context,
                             current_llm_context->RetrieveProcessedContext());
 
+      ABSL_LOG(INFO) << "Jetski: AcquireExecutor: saving current_handler=" << current_handler_.get();
       ABSL_RETURN_IF_ERROR(current_handler_->SetRuntimeConfig(
           std::move(current_runtime_config)));
       ABSL_RETURN_IF_ERROR(
@@ -753,6 +769,9 @@ ResourceManager::AcquireExecutorWithContextHandler(
               std::move(current_processed_context)));
     }
 
+    if (!new_context_handler->HasRuntimeConfig()) {
+      ABSL_LOG(ERROR) << "Jetski: AcquireExecutor: new_context_handler (not sharing) has no config!";
+    }
     ABSL_ASSIGN_OR_RETURN(auto new_runtime_config,
                           new_context_handler->RetrieveRuntimeConfig());
     ABSL_ASSIGN_OR_RETURN(auto new_runtime_state,
