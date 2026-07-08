@@ -521,8 +521,8 @@ TEST_F(ExecutorUtilsTest, HWKVCacheUpdateTransposedInt16) {
 TEST_F(ExecutorUtilsTest, HWKVCacheUpdateOutOfRange) {
   int hidden_dim = 4;
   int cache_seq = 5;
-  int slice_seq = 2;
-  int start_pos = 4;  // 4 + 2 > 5, should error
+  int slice_seq = 6;  // slice_seq > cache_seq: invalid configuration
+  int start_pos = 0;
 
   std::vector<float> cache_data(hidden_dim * cache_seq, 0.0f);
   std::vector<float> slice_data(hidden_dim * slice_seq, 1.0f);
@@ -547,6 +547,103 @@ TEST_F(ExecutorUtilsTest, HWKVCacheUpdateOutOfRange) {
   absl::flat_hash_map<absl::string_view, TensorBuffer> out_buffers;
 
   EXPECT_FALSE(HWKVCacheUpdate(in_buffers, out_buffers).ok());
+}
+
+// Ring buffer: position wraps when start_pos >= cache_seq (SWA local layers).
+TEST_F(ExecutorUtilsTest, HWKVCacheUpdateRingBuffer) {
+  int hidden_dim = 4;
+  int cache_seq = 5;
+  int slice_seq = 1;
+  int start_pos = 7;  // 7 % 5 = 2, should write at position 2
+
+  std::vector<float> cache_data(hidden_dim * cache_seq, 0.0f);
+  std::vector<float> slice_data(hidden_dim * slice_seq);
+  for (int i = 0; i < hidden_dim; ++i) slice_data[i] = 42.0f;
+  std::vector<int32_t> pos_data = {start_pos};
+
+  absl::flat_hash_map<absl::string_view, TensorBuffer> in_buffers;
+  in_buffers.emplace("input_pos",
+                     CreateTensorBuffer(pos_data, ElementType::Int32));
+  in_buffers.emplace("kv_cache_k_0", CreateTensorBufferWithDims(
+                                         cache_data, ElementType::Float32,
+                                         {1, cache_seq, hidden_dim}));
+  in_buffers.emplace("kv_cache_v_0", CreateTensorBufferWithDims(
+                                         cache_data, ElementType::Float32,
+                                         {1, cache_seq, hidden_dim}));
+  in_buffers.emplace("kv_slice_k_0", CreateTensorBufferWithDims(
+                                         slice_data, ElementType::Float32,
+                                         {1, slice_seq, hidden_dim}));
+  in_buffers.emplace("kv_slice_v_0", CreateTensorBufferWithDims(
+                                         slice_data, ElementType::Float32,
+                                         {1, slice_seq, hidden_dim}));
+
+  absl::flat_hash_map<absl::string_view, TensorBuffer> out_buffers;
+
+  ASSERT_TRUE(HWKVCacheUpdate(in_buffers, out_buffers).ok());
+
+  // Verify the write landed at position 2 (= 7 % 5).
+  auto& k_cache = in_buffers.at("kv_cache_k_0");
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto lock, ::litert::TensorBufferScopedLock::Create(
+                     k_cache, ::litert::TensorBuffer::LockMode::kRead));
+  const float* data = static_cast<const float*>(lock.second);
+  int expected_pos = 2;  // 7 % 5
+  for (int h = 0; h < hidden_dim; ++h) {
+    EXPECT_EQ(data[expected_pos * hidden_dim + h], 42.0f)
+        << "Position " << expected_pos << " dim " << h;
+  }
+  // Position 0 should remain 0.
+  for (int h = 0; h < hidden_dim; ++h) {
+    EXPECT_EQ(data[0 * hidden_dim + h], 0.0f);
+  }
+}
+
+// Ring buffer with prefill wrap-around (slice spans end and beginning of
+// cache).
+TEST_F(ExecutorUtilsTest, HWKVCacheUpdateRingBufferWrapAround) {
+  int hidden_dim = 4;
+  int cache_seq = 5;
+  int slice_seq = 2;
+  int start_pos = 4;  // 4 % 5 = 4; write at 4 and wraps to 0
+
+  std::vector<float> cache_data(hidden_dim * cache_seq, 0.0f);
+  std::vector<float> slice_data(hidden_dim * slice_seq);
+  for (int i = 0; i < hidden_dim * slice_seq; ++i) slice_data[i] = 99.0f;
+  std::vector<int32_t> pos_data = {start_pos};
+
+  absl::flat_hash_map<absl::string_view, TensorBuffer> in_buffers;
+  in_buffers.emplace("input_pos",
+                     CreateTensorBuffer(pos_data, ElementType::Int32));
+  in_buffers.emplace("kv_cache_k_0", CreateTensorBufferWithDims(
+                                         cache_data, ElementType::Float32,
+                                         {1, cache_seq, hidden_dim}));
+  in_buffers.emplace("kv_cache_v_0", CreateTensorBufferWithDims(
+                                         cache_data, ElementType::Float32,
+                                         {1, cache_seq, hidden_dim}));
+  in_buffers.emplace("kv_slice_k_0", CreateTensorBufferWithDims(
+                                         slice_data, ElementType::Float32,
+                                         {1, slice_seq, hidden_dim}));
+  in_buffers.emplace("kv_slice_v_0", CreateTensorBufferWithDims(
+                                         slice_data, ElementType::Float32,
+                                         {1, slice_seq, hidden_dim}));
+
+  absl::flat_hash_map<absl::string_view, TensorBuffer> out_buffers;
+
+  ASSERT_TRUE(HWKVCacheUpdate(in_buffers, out_buffers).ok());
+
+  // Position 4 and 0 should have 99.0f; positions 1,2,3 remain 0.
+  auto& k_cache = in_buffers.at("kv_cache_k_0");
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto lock, ::litert::TensorBufferScopedLock::Create(
+                     k_cache, ::litert::TensorBuffer::LockMode::kRead));
+  const float* data = static_cast<const float*>(lock.second);
+  for (int h = 0; h < hidden_dim; ++h) {
+    EXPECT_EQ(data[4 * hidden_dim + h], 99.0f) << "Position 4, dim " << h;
+    EXPECT_EQ(data[0 * hidden_dim + h], 99.0f) << "Position 0, dim " << h;
+    EXPECT_EQ(data[1 * hidden_dim + h], 0.0f) << "Position 1, dim " << h;
+    EXPECT_EQ(data[2 * hidden_dim + h], 0.0f) << "Position 2, dim " << h;
+    EXPECT_EQ(data[3 * hidden_dim + h], 0.0f) << "Position 3, dim " << h;
+  }
 }
 
 TEST_F(ExecutorUtilsTest, HWKVCacheUpdateGemma3nPrefill) {
