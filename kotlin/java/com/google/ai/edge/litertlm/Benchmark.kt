@@ -91,7 +91,6 @@ fun benchmark(
         null, // loraPath
         null, // audioLoraPath
         false, // prefillPrefaceOnInit
-        -1, // maxOutputToken
       )
 
     Conversation(conversationHandle).use { conversation ->

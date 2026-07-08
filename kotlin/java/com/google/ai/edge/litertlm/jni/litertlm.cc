@@ -898,15 +898,11 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateConversation)(
     jboolean enable_constrained_decoding,
     jboolean filter_channel_content_from_kv_cache,
     jstring overwrite_prompt_template, jstring lora_path_str,
-    jstring audio_lora_path_str, jboolean prefill_preface_on_init,
-    jint max_output_token) {
+    jstring audio_lora_path_str, jboolean prefill_preface_on_init) {
   Engine* engine = reinterpret_cast<Engine*>(engine_pointer);
 
   // Create a native SessionConfig
   auto session_config = SessionConfig::CreateDefault();
-  if (max_output_token > 0) {
-    session_config.SetMaxOutputTokens(max_output_token);
-  }
   if (sampler_config_obj != nullptr) {
     session_config.GetMutableSamplerParams() =
         CreateSamplerParamsFromJni(env, sampler_config_obj);
@@ -1048,7 +1044,7 @@ LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeDeleteConversation)(
 LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeSendMessageAsync)(
     JNIEnv* env, jclass thiz, jlong conversation_pointer,
     jstring messageJSONString, jstring extraContextJsonString, jobject callback,
-    jobject visual_token_budget, jint max_output_token) {
+    jobject visual_token_budget) {
   JavaVM* jvm = nullptr;
   if (env->GetJavaVM(&jvm) != JNI_OK) {
     ThrowLiteRtLmJniException(env, "Failed to get JavaVM");
@@ -1063,9 +1059,6 @@ LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeSendMessageAsync)(
   env->ReleaseStringUTFChars(messageJSONString, json_chars);
 
   litert::lm::OptionalArgs optional_args;
-  if (max_output_token > 0) {
-    optional_args.max_output_tokens = max_output_token;
-  }
   nlohmann::ordered_json extra_context =
       GetExtraContextJson(env, extraContextJsonString);
   if (!extra_context.is_null() && !extra_context.empty()) {
@@ -1160,7 +1153,7 @@ LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeSendMessageAsync)(
 LITERTLM_JNIEXPORT jstring JNICALL JNI_METHOD(nativeSendMessage)(
     JNIEnv* env, jclass thiz, jlong conversation_pointer,
     jstring messageJSONString, jstring extraContextJsonString,
-    jobject visual_token_budget, jint max_output_token) {
+    jobject visual_token_budget) {
   Conversation* conversation =
       reinterpret_cast<Conversation*>(conversation_pointer);
 
@@ -1169,9 +1162,6 @@ LITERTLM_JNIEXPORT jstring JNICALL JNI_METHOD(nativeSendMessage)(
   env->ReleaseStringUTFChars(messageJSONString, json_chars);
 
   litert::lm::OptionalArgs optional_args;
-  if (max_output_token > 0) {
-    optional_args.max_output_tokens = max_output_token;
-  }
   nlohmann::ordered_json extra_context =
       GetExtraContextJson(env, extraContextJsonString);
   if (!extra_context.is_null() && !extra_context.empty()) {

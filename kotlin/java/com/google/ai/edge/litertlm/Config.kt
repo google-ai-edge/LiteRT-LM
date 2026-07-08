@@ -120,8 +120,6 @@ data class EngineConfig(
  * @property prefillPrefaceOnInit Whether to prefill the preface on initialization. Defaults to
  *   false. Note that this will make createConversation() take longer to finish, so you may want to
  *   call it in a background thread.
- * @property maxOutputToken The maximum number of output tokens per decode step. When `null`, use
- *   the default value from the model or the engine.
  */
 data class ConversationConfig
 @JvmOverloads
@@ -135,14 +133,7 @@ constructor(
   val extraContext: Map<String, Any> = emptyMap(),
   val loraConfig: LoraConfig? = null,
   val prefillPrefaceOnInit: Boolean = false,
-  val maxOutputToken: Int? = null,
-) {
-  init {
-    require(maxOutputToken == null || maxOutputToken > 0) {
-      "maxOutputToken must be positive or null (use the default from model or engine)."
-    }
-  }
-}
+)
 
 /**
  * Configuration for the sampling process.
