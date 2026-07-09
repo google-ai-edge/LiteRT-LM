@@ -101,6 +101,22 @@ typedef struct LiteRtLmSessionConfig LiteRtLmSessionConfig;
 // Opaque pointer for LiteRT LM Conversation Config.
 typedef struct LiteRtLmConversationConfig LiteRtLmConversationConfig;
 
+// Returns the error message from the last failed LiteRT-LM C API call on the
+// current thread. Returns an empty string ("") if no error has occurred or if
+// the last C API call succeeded without errors.
+//
+// Note that calling this error retrieval function itself
+// (`litert_lm_get_last_error_message`) does not clear or modify the error
+// state. Every other C API function (including object creation, operational
+// execution, getters, setters, and deletion functions) clears the last error
+// message upon entry.
+//
+// The returned string is owned by the library and is valid until the next
+// C API call (other than `litert_lm_get_last_error_message`) on the same
+// thread.
+LITERT_LM_C_API_EXPORT
+const char* litert_lm_get_last_error_message(void);
+
 // Represents the type of sampler.
 typedef enum {
   // Probabilistically pick among the top k tokens.

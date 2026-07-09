@@ -73,6 +73,7 @@ cc_library(
     ],
     visibility = ["//visibility:public"],
     deps = ENGINE_COMMON_DEPS + [
+        "@com_google_absl//absl/base:no_destructor",
         "//runtime/core:engine_impl",
     ],
     alwayslink = True,
@@ -88,6 +89,7 @@ cc_library(
     ],
     visibility = ["//visibility:public"],
     deps = ENGINE_COMMON_DEPS + [
+        "@com_google_absl//absl/base:no_destructor",
         "//runtime/core:engine_advanced_impl_cpu_only",
     ],
 )
@@ -149,6 +151,7 @@ cc_binary(
     }),
     linkshared = 1,
     deps = ENGINE_COMMON_DEPS + [
+        "@com_google_absl//absl/base:no_destructor",
         "//runtime/core:engine_impl",
     ] + select({
         "//conditions:default": [],

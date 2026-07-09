@@ -27,6 +27,7 @@
 #include <variant>
 #include <vector>
 
+#include "absl/base/no_destructor.h"  // from @com_google_absl
 #include "absl/functional/any_invocable.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
@@ -71,6 +72,14 @@ struct LiteRtLmStreamChunk {
 };
 
 namespace {
+
+thread_local absl::NoDestructor<std::string> g_last_error_message;
+
+void SetLastErrorMessage(absl::string_view msg) {
+  *g_last_error_message = std::string(msg);
+}
+
+void ClearLastErrorMessage() { g_last_error_message->clear(); }
 
 absl::AnyInvocable<void(absl::StatusOr<litert::lm::Responses>)> CreateCallback(
     LiteRtLmStreamCallback callback, void* callback_data) {
@@ -219,6 +228,7 @@ using ::litert::lm::proto::SamplerParameters;
 
 LiteRtLmInputData* litert_lm_input_data_create(LiteRtLmInputDataType type,
                                                const void* data, size_t size) {
+  ClearLastErrorMessage();
   switch (type) {
     case kLiteRtLmInputDataTypeText:
       return std::make_unique<LiteRtLmInputData>(
@@ -242,11 +252,13 @@ LiteRtLmInputData* litert_lm_input_data_create(LiteRtLmInputDataType type,
       return std::make_unique<LiteRtLmInputData>(litert::lm::InputAudioEnd())
           .release();
     default:
+      SetLastErrorMessage("Unsupported input data type.");
       return nullptr;
   }
 }
 
 void litert_lm_input_data_delete(LiteRtLmInputData* input_data) {
+  ClearLastErrorMessage();
   delete input_data;
 }
 
@@ -260,6 +272,7 @@ static LiteRtLmEngineSettings* CreateEngineSettingsHelper(
   auto backend = litert::lm::GetBackendFromString(backend_str);
   if (!backend.ok()) {
     ABSL_LOG(ERROR) << "Failed to parse backend: " << backend.status();
+    SetLastErrorMessage(backend.status().ToString());
     return nullptr;
   }
 
@@ -268,6 +281,7 @@ static LiteRtLmEngineSettings* CreateEngineSettingsHelper(
     auto backend = litert::lm::GetBackendFromString(vision_backend_str);
     if (!backend.ok()) {
       ABSL_LOG(ERROR) << "Failed to parse vision backend: " << backend.status();
+      SetLastErrorMessage(backend.status().ToString());
       return nullptr;
     }
     vision_backend = *backend;
@@ -278,6 +292,7 @@ static LiteRtLmEngineSettings* CreateEngineSettingsHelper(
     auto backend = litert::lm::GetBackendFromString(audio_backend_str);
     if (!backend.ok()) {
       ABSL_LOG(ERROR) << "Failed to parse audio backend: " << backend.status();
+      SetLastErrorMessage(backend.status().ToString());
       return nullptr;
     }
     audio_backend = *backend;
@@ -288,6 +303,7 @@ static LiteRtLmEngineSettings* CreateEngineSettingsHelper(
   if (!engine_settings.ok()) {
     ABSL_LOG(ERROR) << "Failed to create engine settings: "
                     << engine_settings.status();
+    SetLastErrorMessage(engine_settings.status().ToString());
     return nullptr;
   }
 
@@ -372,7 +388,12 @@ struct LiteRtLmTokenUnions {
 
 extern "C" {
 
+const char* litert_lm_get_last_error_message(void) {
+  return g_last_error_message->c_str();
+}
+
 void litert_lm_set_min_log_level(LiteRtLmLogSeverity level) {
+  ClearLastErrorMessage();
   litert::lm::SetMinLogSeverity(static_cast<litert::lm::LogSeverity>(level));
 }
 
@@ -390,6 +411,7 @@ SamplerParameters::Type ToSamplerParametersType(LiteRtLmSamplerType type) {
 
 LiteRtLmSamplerParams* litert_lm_sampler_params_create(
     LiteRtLmSamplerType type) {
+  ClearLastErrorMessage();
   auto params = std::make_unique<LiteRtLmSamplerParams>();
   params->type = type;
   params->top_k = 0;
@@ -400,38 +422,52 @@ LiteRtLmSamplerParams* litert_lm_sampler_params_create(
 }
 
 void litert_lm_sampler_params_delete(LiteRtLmSamplerParams* params) {
+  ClearLastErrorMessage();
   delete params;
 }
 
 void litert_lm_sampler_params_set_top_k(LiteRtLmSamplerParams* params,
                                         int32_t top_k) {
+  ClearLastErrorMessage();
   if (params) {
     params->top_k = top_k;
+  } else {
+    SetLastErrorMessage("Sampler params is null.");
   }
 }
 
 void litert_lm_sampler_params_set_top_p(LiteRtLmSamplerParams* params,
                                         float top_p) {
+  ClearLastErrorMessage();
   if (params) {
     params->top_p = top_p;
+  } else {
+    SetLastErrorMessage("Sampler params is null.");
   }
 }
 
 void litert_lm_sampler_params_set_temperature(LiteRtLmSamplerParams* params,
                                               float temperature) {
+  ClearLastErrorMessage();
   if (params) {
     params->temperature = temperature;
+  } else {
+    SetLastErrorMessage("Sampler params is null.");
   }
 }
 
 void litert_lm_sampler_params_set_seed(LiteRtLmSamplerParams* params,
                                        int32_t seed) {
+  ClearLastErrorMessage();
   if (params) {
     params->seed = seed;
+  } else {
+    SetLastErrorMessage("Sampler params is null.");
   }
 }
 
 LiteRtLmSessionConfig* litert_lm_session_config_create() {
+  ClearLastErrorMessage();
   auto* c_config = new LiteRtLmSessionConfig;
   c_config->config =
       std::make_unique<SessionConfig>(SessionConfig::CreateDefault());
@@ -440,21 +476,28 @@ LiteRtLmSessionConfig* litert_lm_session_config_create() {
 
 void litert_lm_session_config_set_max_output_tokens(
     LiteRtLmSessionConfig* config, int max_output_tokens) {
+  ClearLastErrorMessage();
   if (config && config->config) {
     config->config->SetMaxOutputTokens(max_output_tokens);
+  } else {
+    SetLastErrorMessage("Session config is null.");
   }
 }
 
 void litert_lm_session_config_set_apply_prompt_template(
     LiteRtLmSessionConfig* config, bool apply_prompt_template) {
+  ClearLastErrorMessage();
   if (config && config->config) {
     config->config->SetApplyPromptTemplateInSession(apply_prompt_template);
+  } else {
+    SetLastErrorMessage("Session config is null.");
   }
 }
 
 void litert_lm_session_config_set_sampler_params(
     LiteRtLmSessionConfig* config,
     const LiteRtLmSamplerParams* sampler_params) {
+  ClearLastErrorMessage();
   if (config && config->config && sampler_params) {
     SamplerParameters& params = config->config->GetMutableSamplerParams();
 
@@ -464,25 +507,32 @@ void litert_lm_session_config_set_sampler_params(
     params.set_p(sampler_params->top_p);
     params.set_temperature(sampler_params->temperature);
     params.set_seed(sampler_params->seed);
+  } else {
+    SetLastErrorMessage("Session config or sampler params is null.");
   }
 }
 
 void litert_lm_session_config_delete(LiteRtLmSessionConfig* config) {
+  ClearLastErrorMessage();
   delete config;
 }
 
 int litert_lm_session_config_set_lora_path(LiteRtLmSessionConfig* config,
                                            const char* lora_path) {
+  ClearLastErrorMessage();
   if (!config || !config->config || !lora_path) {
+    SetLastErrorMessage("Session config or lora_path is null.");
     return -1;
   }
   absl::string_view path_view(lora_path);
   if (path_view.empty()) {
+    SetLastErrorMessage("lora_path is empty.");
     return -1;
   }
   auto lora_file = litert::lm::ScopedFile::Open(path_view);
   if (!lora_file.ok()) {
     ABSL_LOG(ERROR) << "Failed to open LoRA file: " << lora_file.status();
+    SetLastErrorMessage(lora_file.status().ToString());
     return -1;
   }
   config->config->SetScopedLoraFile(
@@ -492,16 +542,20 @@ int litert_lm_session_config_set_lora_path(LiteRtLmSessionConfig* config,
 
 int litert_lm_session_config_set_audio_lora_path(LiteRtLmSessionConfig* config,
                                                  const char* audio_lora_path) {
+  ClearLastErrorMessage();
   if (!config || !config->config || !audio_lora_path) {
+    SetLastErrorMessage("Session config or audio_lora_path is null.");
     return -1;
   }
   absl::string_view path_view(audio_lora_path);
   if (path_view.empty()) {
+    SetLastErrorMessage("audio_lora_path is empty.");
     return -1;
   }
   auto lora_file = litert::lm::ScopedFile::Open(path_view);
   if (!lora_file.ok()) {
     ABSL_LOG(ERROR) << "Failed to open Audio LoRA file: " << lora_file.status();
+    SetLastErrorMessage(lora_file.status().ToString());
     return -1;
   }
   config->config->SetAudioScopedLoraFile(
@@ -510,69 +564,94 @@ int litert_lm_session_config_set_audio_lora_path(LiteRtLmSessionConfig* config,
 }
 
 LiteRtLmConversationConfig* litert_lm_conversation_config_create() {
+  ClearLastErrorMessage();
   return new LiteRtLmConversationConfig;
 }
 
 void litert_lm_conversation_config_set_session_config(
     LiteRtLmConversationConfig* config,
     const LiteRtLmSessionConfig* session_config) {
+  ClearLastErrorMessage();
   if (config && session_config && session_config->config) {
     config->session_config = *session_config->config;
+  } else {
+    SetLastErrorMessage("Conversation config or session config is null.");
   }
 }
 
 void litert_lm_conversation_config_set_system_message(
     LiteRtLmConversationConfig* config, const char* system_message_json) {
+  ClearLastErrorMessage();
   if (config && system_message_json) {
     config->system_message_json = system_message_json;
+  } else {
+    SetLastErrorMessage("Conversation config or system_message_json is null.");
   }
 }
 
 void litert_lm_conversation_config_set_tools(LiteRtLmConversationConfig* config,
                                              const char* tools_json) {
+  ClearLastErrorMessage();
   if (config && tools_json) {
     config->tools_json = tools_json;
+  } else {
+    SetLastErrorMessage("Conversation config or tools_json is null.");
   }
 }
 
 void litert_lm_conversation_config_set_messages(
     LiteRtLmConversationConfig* config, const char* messages_json) {
+  ClearLastErrorMessage();
   if (config && messages_json) {
     config->messages_json = messages_json;
+  } else {
+    SetLastErrorMessage("Conversation config or messages_json is null.");
   }
 }
 
 void litert_lm_conversation_config_set_extra_context(
     LiteRtLmConversationConfig* config, const char* extra_context_json) {
+  ClearLastErrorMessage();
   if (config && extra_context_json) {
     config->extra_context_json = extra_context_json;
+  } else {
+    SetLastErrorMessage("Conversation config or extra_context_json is null.");
   }
 }
 
 void litert_lm_conversation_config_set_enable_constrained_decoding(
     LiteRtLmConversationConfig* config, bool enable_constrained_decoding) {
+  ClearLastErrorMessage();
   if (config) {
     config->enable_constrained_decoding = enable_constrained_decoding;
+  } else {
+    SetLastErrorMessage("Conversation config is null.");
   }
 }
 
 void litert_lm_conversation_config_set_filter_channel_content_from_kv_cache(
     LiteRtLmConversationConfig* config,
     bool filter_channel_content_from_kv_cache) {
+  ClearLastErrorMessage();
   if (config) {
     config->filter_channel_content_from_kv_cache =
         filter_channel_content_from_kv_cache;
+  } else {
+    SetLastErrorMessage("Conversation config is null.");
   }
 }
 
 void litert_lm_conversation_config_set_stream_tool_calls(
     LiteRtLmConversationConfig* config, bool stream_tool_calls,
     const char* channel_name) {
+  ClearLastErrorMessage();
   if (config) {
     config->stream_tool_calls = stream_tool_calls;
     if (channel_name != nullptr) {
       config->stream_tool_calls_channel_name = channel_name;
     }
+  } else {
+    SetLastErrorMessage("Conversation config is null.");
   }
 }
 
@@ -581,88 +660,117 @@ struct LiteRtLmThinkingConfig {
 };
 
 LiteRtLmThinkingConfig* litert_lm_thinking_config_create() {
+  ClearLastErrorMessage();
   return new LiteRtLmThinkingConfig{litert::lm::ThinkingConfig(true, -1)};
 }
 
 void litert_lm_thinking_config_delete(LiteRtLmThinkingConfig* config) {
+  ClearLastErrorMessage();
   delete config;
 }
 
 void litert_lm_thinking_config_set_enable_thinking(
     LiteRtLmThinkingConfig* config, bool enable_thinking) {
+  ClearLastErrorMessage();
   if (config) {
     config->thinking_config = litert::lm::ThinkingConfig(
         enable_thinking, config->thinking_config.thinking_token_budget());
+  } else {
+    SetLastErrorMessage("Thinking config is null.");
   }
 }
 
 void litert_lm_thinking_config_set_thinking_token_budget(
     LiteRtLmThinkingConfig* config, int thinking_token_budget) {
+  ClearLastErrorMessage();
   if (config) {
     config->thinking_config = litert::lm::ThinkingConfig(
         config->thinking_config.enable_thinking(), thinking_token_budget);
+  } else {
+    SetLastErrorMessage("Thinking config is null.");
   }
 }
 
 void litert_lm_conversation_config_set_thinking_config(
     LiteRtLmConversationConfig* config,
     const LiteRtLmThinkingConfig* thinking_config) {
+  ClearLastErrorMessage();
   if (config) {
     if (thinking_config) {
       config->thinking_config = thinking_config->thinking_config;
     } else {
       config->thinking_config = std::nullopt;
     }
+  } else {
+    SetLastErrorMessage("Conversation config is null.");
   }
 }
 
 void litert_lm_conversation_config_delete(LiteRtLmConversationConfig* config) {
+  ClearLastErrorMessage();
   delete config;
 }
 
 LiteRtLmConversationOptionalArgs*
 litert_lm_conversation_optional_args_create() {
+  ClearLastErrorMessage();
   return new LiteRtLmConversationOptionalArgs;
 }
 
 void litert_lm_conversation_optional_args_set_visual_token_budget(
     LiteRtLmConversationOptionalArgs* args, int visual_token_budget) {
+  ClearLastErrorMessage();
   if (args) {
     args->visual_token_budget = visual_token_budget;
+  } else {
+    SetLastErrorMessage("Optional args is null.");
   }
 }
 
 void litert_lm_conversation_optional_args_set_max_output_tokens(
     LiteRtLmConversationOptionalArgs* args, int max_output_tokens) {
+  ClearLastErrorMessage();
   if (args) {
     args->max_output_tokens = max_output_tokens;
+  } else {
+    SetLastErrorMessage("Optional args is null.");
   }
 }
 
 void litert_lm_conversation_optional_args_set_thinking_config(
     LiteRtLmConversationOptionalArgs* args,
     const LiteRtLmThinkingConfig* thinking_config) {
+  ClearLastErrorMessage();
   if (args) {
     if (thinking_config) {
       args->thinking_config = thinking_config->thinking_config;
     } else {
       args->thinking_config = std::nullopt;
     }
+  } else {
+    SetLastErrorMessage("Optional args is null.");
   }
 }
 
 void litert_lm_conversation_optional_args_delete(
     LiteRtLmConversationOptionalArgs* args) {
+  ClearLastErrorMessage();
   delete args;
 }
 
 LiteRtLmEngineSettings* litert_lm_engine_settings_create(
     const char* model_path, const char* backend_str,
     const char* vision_backend_str, const char* audio_backend_str) {
+  ClearLastErrorMessage();
+  if (!model_path) {
+    SetLastErrorMessage("Model path is null.");
+    return nullptr;
+  }
   auto model_assets = ModelAssets::Create(model_path);
   if (!model_assets.ok()) {
     ABSL_LOG(ERROR) << "Failed to create model assets: "
                     << model_assets.status();
+    SetLastErrorMessage(model_assets.status().ToString());
     return nullptr;
   }
   return CreateEngineSettingsHelper(
@@ -675,8 +783,10 @@ LiteRtLmEngineSettings*
 litert_lm_engine_settings_create_from_raw_file_descriptor(
     int fd, const char* backend_str, const char* vision_backend_str,
     const char* audio_backend_str) {
+  ClearLastErrorMessage();
   if (fd < 0) {
     ABSL_LOG(ERROR) << "Invalid file descriptor: " << fd;
+    SetLastErrorMessage("Invalid file descriptor.");
     return nullptr;
   }
   auto model_assets = ModelAssets::Create(
@@ -690,6 +800,7 @@ litert_lm_engine_settings_create_from_raw_file_descriptor(
   if (!model_assets.ok()) {
     ABSL_LOG(ERROR) << "Failed to create model assets from raw FD: "
                     << model_assets.status();
+    SetLastErrorMessage(model_assets.status().ToString());
     return nullptr;
   }
   ABSL_LOG(INFO) << "LiteRT-LM successfully created EngineSettings directly "
@@ -701,6 +812,7 @@ litert_lm_engine_settings_create_from_raw_file_descriptor(
       absl::NullSafeStringView(audio_backend_str));
 }
 void litert_lm_engine_settings_delete(LiteRtLmEngineSettings* settings) {
+  ClearLastErrorMessage();
   delete settings;
 }
 
@@ -757,6 +869,7 @@ void litert_lm_engine_settings_set_max_num_images(
 
 void litert_lm_engine_settings_set_cache_dir(LiteRtLmEngineSettings* settings,
                                              const char* cache_dir) {
+  ClearLastErrorMessage();
   if (settings && settings->settings) {
     settings->settings->GetMutableMainExecutorSettings().SetCacheDir(cache_dir);
 
@@ -769,61 +882,84 @@ void litert_lm_engine_settings_set_cache_dir(LiteRtLmEngineSettings* settings,
       settings->settings->GetMutableAudioExecutorSettings()->SetCacheDir(
           cache_dir);
     }
+  } else {
+    SetLastErrorMessage("Engine settings is null.");
   }
 }
 
 void litert_lm_engine_settings_set_litert_dispatch_lib_dir(
     LiteRtLmEngineSettings* settings, const char* lib_dir) {
+  ClearLastErrorMessage();
   if (settings && settings->settings && lib_dir) {
     settings->settings->GetMutableMainExecutorSettings()
         .SetLitertDispatchLibDir(lib_dir);
+  } else {
+    SetLastErrorMessage("Engine settings or lib_dir is null.");
   }
 }
 
 void litert_lm_engine_settings_enable_benchmark(
     LiteRtLmEngineSettings* settings) {
+  ClearLastErrorMessage();
   if (settings && settings->settings) {
     settings->settings->GetMutableBenchmarkParams();
+  } else {
+    SetLastErrorMessage("Engine settings is null.");
   }
 }
 
 void litert_lm_engine_settings_set_num_prefill_tokens(
     LiteRtLmEngineSettings* settings, int num_prefill_tokens) {
+  ClearLastErrorMessage();
   if (settings && settings->settings) {
     settings->settings->GetMutableBenchmarkParams().set_num_prefill_tokens(
         num_prefill_tokens);
+  } else {
+    SetLastErrorMessage("Engine settings is null.");
   }
 }
 
 void litert_lm_engine_settings_set_num_decode_tokens(
     LiteRtLmEngineSettings* settings, int num_decode_tokens) {
+  ClearLastErrorMessage();
   if (settings && settings->settings) {
     settings->settings->GetMutableBenchmarkParams().set_num_decode_tokens(
         num_decode_tokens);
+  } else {
+    SetLastErrorMessage("Engine settings is null.");
   }
 }
 
 void litert_lm_engine_settings_set_enable_speculative_decoding(
     LiteRtLmEngineSettings* settings, bool enable_speculative_decoding) {
+  ClearLastErrorMessage();
   if (settings && settings->settings) {
     auto& main_settings = settings->settings->GetMutableMainExecutorSettings();
     auto advanced_settings = main_settings.GetAdvancedSettings().value_or(
         litert::lm::AdvancedSettings());
     advanced_settings.enable_speculative_decoding = enable_speculative_decoding;
     main_settings.SetAdvancedSettings(advanced_settings);
+  } else {
+    SetLastErrorMessage("Engine settings is null.");
   }
 }
 
 void litert_lm_engine_settings_set_lora_rank(LiteRtLmEngineSettings* settings,
                                              int lora_rank) {
+  ClearLastErrorMessage();
   if (settings && settings->settings) {
     settings->settings->GetMutableMainExecutorSettings().SetLoraRank(lora_rank);
+  } else {
+    SetLastErrorMessage("Engine settings is null.");
   }
 }
 
 int litert_lm_engine_settings_set_supported_lora_ranks(
     LiteRtLmEngineSettings* settings, const int* lora_ranks, size_t num_ranks) {
+  ClearLastErrorMessage();
   if (!settings || !settings->settings || !lora_ranks || num_ranks == 0) {
+    SetLastErrorMessage(
+        "Engine settings or lora_ranks null, or num_ranks is 0.");
     return -1;
   }
   std::vector<uint32_t> ranks;
@@ -833,24 +969,35 @@ int litert_lm_engine_settings_set_supported_lora_ranks(
   }
   auto status = settings->settings->GetMutableMainExecutorSettings()
                     .SetSupportedLoraRanks(ranks);
-  return status.ok() ? 0 : -1;
+  if (!status.ok()) {
+    SetLastErrorMessage(status.ToString());
+    return -1;
+  }
+  return 0;
 }
 
 void litert_lm_engine_settings_set_audio_lora_rank(
     LiteRtLmEngineSettings* settings, int lora_rank) {
+  ClearLastErrorMessage();
   if (settings && settings->settings &&
       settings->settings->GetAudioExecutorSettings().has_value()) {
     settings->settings->GetMutableAudioExecutorSettings()->SetLoraRank(
         lora_rank);
+  } else {
+    SetLastErrorMessage("Engine settings null or no audio backend configured.");
   }
 }
 
 int litert_lm_engine_settings_set_supported_audio_lora_ranks(
     LiteRtLmEngineSettings* settings, const int* lora_ranks, size_t num_ranks) {
+  ClearLastErrorMessage();
   if (!settings || !settings->settings || !lora_ranks || num_ranks == 0) {
+    SetLastErrorMessage(
+        "Engine settings or lora_ranks null, or num_ranks is 0.");
     return -1;
   }
   if (!settings->settings->GetAudioExecutorSettings().has_value()) {
+    SetLastErrorMessage("No audio backend configured.");
     return -1;
   }
   std::vector<uint32_t> ranks;
@@ -860,36 +1007,49 @@ int litert_lm_engine_settings_set_supported_audio_lora_ranks(
   }
   auto status = settings->settings->GetMutableAudioExecutorSettings()
                     ->SetSupportedLoraRanks(ranks);
-  return status.ok() ? 0 : -1;
+  if (!status.ok()) {
+    SetLastErrorMessage(status.ToString());
+    return -1;
+  }
+  return 0;
 }
 
 void litert_lm_engine_settings_set_activation_data_type(
     LiteRtLmEngineSettings* settings,
     LiteRtLmActivationDataType activation_data_type) {
+  ClearLastErrorMessage();
   if (settings && settings->settings) {
     settings->settings->GetMutableMainExecutorSettings().SetActivationDataType(
         static_cast<litert::lm::ActivationDataType>(activation_data_type));
+  } else {
+    SetLastErrorMessage("Engine settings is null.");
   }
 }
 
 void litert_lm_engine_settings_set_prefill_chunk_size(
     LiteRtLmEngineSettings* settings, int prefill_chunk_size) {
+  ClearLastErrorMessage();
   if (settings && settings->settings) {
     auto& main_settings = settings->settings->GetMutableMainExecutorSettings();
     auto config = main_settings.MutableBackendConfig<litert::lm::CpuConfig>();
     if (!config.ok()) {
       ABSL_LOG(WARNING) << "Failed to get CpuConfig to set prefill chunk size: "
                         << config.status();
+      SetLastErrorMessage(config.status().ToString());
       return;
     }
     config->prefill_chunk_size = prefill_chunk_size;
     main_settings.SetBackendConfig(*config);
+  } else {
+    SetLastErrorMessage("Engine settings is null.");
   }
 }
 
 LiteRtLmEngine* litert_lm_engine_create(
     const LiteRtLmEngineSettings* settings) {
+  ClearLastErrorMessage();
   if (!settings || !settings->settings) {
+    SetLastErrorMessage("Engine settings are null.");
     return nullptr;
   }
 
@@ -898,6 +1058,7 @@ LiteRtLmEngine* litert_lm_engine_create(
 
   if (!engine.ok()) {
     ABSL_LOG(ERROR) << "Failed to create engine: " << engine.status();
+    SetLastErrorMessage(engine.status().ToString());
     return nullptr;
   }
 
@@ -906,11 +1067,16 @@ LiteRtLmEngine* litert_lm_engine_create(
   return c_engine;
 }
 
-void litert_lm_engine_delete(LiteRtLmEngine* engine) { delete engine; }
+void litert_lm_engine_delete(LiteRtLmEngine* engine) {
+  ClearLastErrorMessage();
+  delete engine;
+}
 
 LiteRtLmSession* litert_lm_engine_create_session(
     LiteRtLmEngine* engine, LiteRtLmSessionConfig* config) {
+  ClearLastErrorMessage();
   if (!engine || !engine->engine) {
+    SetLastErrorMessage("Engine is null.");
     return nullptr;
   }
 
@@ -932,6 +1098,7 @@ LiteRtLmSession* litert_lm_engine_create_session(
       engine->engine->CreateSession(session_config);
   if (!session.ok()) {
     ABSL_LOG(ERROR) << "Failed to create session: " << session.status();
+    SetLastErrorMessage(session.status().ToString());
     return nullptr;
   }
 
@@ -940,18 +1107,26 @@ LiteRtLmSession* litert_lm_engine_create_session(
   return c_session;
 }
 
-void litert_lm_session_delete(LiteRtLmSession* session) { delete session; }
+void litert_lm_session_delete(LiteRtLmSession* session) {
+  ClearLastErrorMessage();
+  delete session;
+}
 
 void litert_lm_session_cancel_process(LiteRtLmSession* session) {
+  ClearLastErrorMessage();
   if (session && session->session) {
     session->session->CancelProcess();
+  } else {
+    SetLastErrorMessage("Session is null.");
   }
 }
 
 LiteRtLmResponses* litert_lm_session_run_text_scoring(
     LiteRtLmSession* session, const char** target_text, size_t num_targets,
     bool store_token_lengths) {
+  ClearLastErrorMessage();
   if (!session || !session->session || !target_text || num_targets <= 0) {
+    SetLastErrorMessage("Invalid or null argument to text scoring.");
     return nullptr;
   }
   std::vector<absl::string_view> target_text_views;
@@ -963,6 +1138,7 @@ LiteRtLmResponses* litert_lm_session_run_text_scoring(
       session->session->RunTextScoring(target_text_views, store_token_lengths);
   if (!responses.ok()) {
     ABSL_LOG(ERROR) << "Failed to run text scoring: " << responses.status();
+    SetLastErrorMessage(responses.status().ToString());
     return nullptr;
   }
   auto* c_responses = new LiteRtLmResponses{std::move(*responses)};
@@ -979,29 +1155,36 @@ LiteRtLmResponses* litert_lm_session_run_text_scoring(
 int litert_lm_session_run_prefill(LiteRtLmSession* session,
                                   const LiteRtLmInputData* const* inputs,
                                   size_t num_inputs) {
+  ClearLastErrorMessage();
   if (!session || !session->session || !inputs || num_inputs <= 0) {
+    SetLastErrorMessage("Invalid or null argument to prefill.");
     return -1;
   }
   auto engine_inputs = ToEngineInputData(inputs, num_inputs);
   if (!engine_inputs.ok()) {
     ABSL_LOG(ERROR) << "Failed to copy inputs: " << engine_inputs.status();
+    SetLastErrorMessage(engine_inputs.status().ToString());
     return -1;
   }
   auto status = session->session->RunPrefill(*engine_inputs);
   if (!status.ok()) {
     ABSL_LOG(ERROR) << "Failed to run prefill: " << status;
+    SetLastErrorMessage(status.ToString());
     return -1;
   }
   return 0;
 }
 
 LiteRtLmResponses* litert_lm_session_run_decode(LiteRtLmSession* session) {
+  ClearLastErrorMessage();
   if (!session || !session->session) {
+    SetLastErrorMessage("Session is null.");
     return nullptr;
   }
   auto responses = session->session->RunDecode();
   if (!responses.ok()) {
     ABSL_LOG(ERROR) << "Failed to run decode: " << responses.status();
+    SetLastErrorMessage(responses.status().ToString());
     return nullptr;
   }
   return new LiteRtLmResponses{std::move(*responses)};
@@ -1010,13 +1193,16 @@ LiteRtLmResponses* litert_lm_session_run_decode(LiteRtLmSession* session) {
 int litert_lm_session_run_decode_async(LiteRtLmSession* session,
                                        LiteRtLmStreamCallback callback,
                                        void* callback_data) {
+  ClearLastErrorMessage();
   if (!session || !session->session) {
+    SetLastErrorMessage("Session is null.");
     return -1;
   }
   auto status =
       session->session->RunDecodeAsync(CreateCallback(callback, callback_data));
   if (!status.ok()) {
     ABSL_LOG(ERROR) << "Failed to start decode stream: " << status.status();
+    SetLastErrorMessage(status.status().ToString());
     return static_cast<int>(status.status().code());
   }
   return 0;
@@ -1025,17 +1211,21 @@ int litert_lm_session_run_decode_async(LiteRtLmSession* session,
 LiteRtLmResponses* litert_lm_session_generate_content(
     LiteRtLmSession* session, const LiteRtLmInputData* const* inputs,
     size_t num_inputs) {
+  ClearLastErrorMessage();
   if (!session || !session->session) {
+    SetLastErrorMessage("Session is null.");
     return nullptr;
   }
   auto engine_inputs = ToEngineInputData(inputs, num_inputs);
   if (!engine_inputs.ok()) {
     ABSL_LOG(ERROR) << "Failed to copy inputs: " << engine_inputs.status();
+    SetLastErrorMessage(engine_inputs.status().ToString());
     return nullptr;
   }
   auto responses = session->session->GenerateContent(std::move(*engine_inputs));
   if (!responses.ok()) {
     ABSL_LOG(ERROR) << "Failed to generate content: " << responses.status();
+    SetLastErrorMessage(responses.status().ToString());
     return nullptr;
   }
 
@@ -1046,12 +1236,15 @@ LiteRtLmResponses* litert_lm_session_generate_content(
 int litert_lm_session_generate_content_stream(
     LiteRtLmSession* session, const LiteRtLmInputData* const* inputs,
     size_t num_inputs, LiteRtLmStreamCallback callback, void* callback_data) {
+  ClearLastErrorMessage();
   if (!session || !session->session) {
+    SetLastErrorMessage("Session is null.");
     return -1;
   }
   auto engine_inputs = ToEngineInputData(inputs, num_inputs);
   if (!engine_inputs.ok()) {
     ABSL_LOG(ERROR) << "Failed to copy inputs: " << engine_inputs.status();
+    SetLastErrorMessage(engine_inputs.status().ToString());
     return -1;
   }
 
@@ -1060,6 +1253,7 @@ int litert_lm_session_generate_content_stream(
 
   if (!status.ok()) {
     ABSL_LOG(ERROR) << "Failed to start content stream: " << status;
+    SetLastErrorMessage(status.ToString());
     // No need to delete callbacks, unique_ptr handles it if not moved.
     return static_cast<int>(status.code());
   }
@@ -1067,11 +1261,14 @@ int litert_lm_session_generate_content_stream(
 }
 
 void litert_lm_responses_delete(LiteRtLmResponses* responses) {
+  ClearLastErrorMessage();
   delete responses;
 }
 
 int litert_lm_responses_get_num_candidates(const LiteRtLmResponses* responses) {
+  ClearLastErrorMessage();
   if (!responses) {
+    SetLastErrorMessage("Responses is null.");
     return 0;
   }
   const auto& r = responses->responses;
@@ -1087,8 +1284,10 @@ int litert_lm_responses_get_num_candidates(const LiteRtLmResponses* responses) {
 
 const char* litert_lm_responses_get_response_text_at(
     const LiteRtLmResponses* responses, int index) {
+  ClearLastErrorMessage();
   if (!responses || index < 0 ||
       index >= responses->responses.GetTexts().size()) {
+    SetLastErrorMessage("Responses is null or index out of bounds.");
     return nullptr;
   }
 
@@ -1098,8 +1297,10 @@ const char* litert_lm_responses_get_response_text_at(
 
 bool litert_lm_responses_has_score_at(const LiteRtLmResponses* responses,
                                       int index) {
+  ClearLastErrorMessage();
   if (!responses || index < 0 ||
       index >= responses->responses.GetScores().size()) {
+    SetLastErrorMessage("Responses is null or index out of bounds.");
     return false;
   }
   return true;
@@ -1107,6 +1308,7 @@ bool litert_lm_responses_has_score_at(const LiteRtLmResponses* responses,
 
 float litert_lm_responses_get_score_at(const LiteRtLmResponses* responses,
                                        int index) {
+  ClearLastErrorMessage();
   if (!litert_lm_responses_has_score_at(responses, index)) {
     return 0.0f;
   }
@@ -1115,8 +1317,10 @@ float litert_lm_responses_get_score_at(const LiteRtLmResponses* responses,
 
 bool litert_lm_responses_has_token_length_at(const LiteRtLmResponses* responses,
                                              int index) {
+  ClearLastErrorMessage();
   if (!responses || !responses->responses.GetTokenLengths().has_value() ||
       index < 0 || index >= responses->responses.GetTokenLengths()->size()) {
+    SetLastErrorMessage("Responses/token lengths null or index out of bounds.");
     return false;
   }
   return true;
@@ -1124,6 +1328,7 @@ bool litert_lm_responses_has_token_length_at(const LiteRtLmResponses* responses,
 
 int litert_lm_responses_get_token_length_at(const LiteRtLmResponses* responses,
                                             int index) {
+  ClearLastErrorMessage();
   if (!litert_lm_responses_has_token_length_at(responses, index)) {
     return 0;
   }
@@ -1132,8 +1337,10 @@ int litert_lm_responses_get_token_length_at(const LiteRtLmResponses* responses,
 
 bool litert_lm_responses_has_token_scores_at(const LiteRtLmResponses* responses,
                                              int index) {
+  ClearLastErrorMessage();
   if (!responses || !responses->responses.GetTokenScores().has_value() ||
       index < 0 || index >= responses->responses.GetTokenScores()->size()) {
+    SetLastErrorMessage("Responses/token scores null or index out of bounds.");
     return false;
   }
   return true;
@@ -1141,6 +1348,7 @@ bool litert_lm_responses_has_token_scores_at(const LiteRtLmResponses* responses,
 
 int litert_lm_responses_get_num_token_scores_at(
     const LiteRtLmResponses* responses, int index) {
+  ClearLastErrorMessage();
   if (!litert_lm_responses_has_token_scores_at(responses, index)) {
     return 0;
   }
@@ -1149,6 +1357,7 @@ int litert_lm_responses_get_num_token_scores_at(
 
 const float* litert_lm_responses_get_token_scores_at(
     const LiteRtLmResponses* responses, int index) {
+  ClearLastErrorMessage();
   if (!litert_lm_responses_has_token_scores_at(responses, index)) {
     return nullptr;
   }
@@ -1157,25 +1366,31 @@ const float* litert_lm_responses_get_token_scores_at(
 
 LiteRtLmBenchmarkInfo* litert_lm_session_get_benchmark_info(
     LiteRtLmSession* session) {
+  ClearLastErrorMessage();
   if (!session || !session->session) {
+    SetLastErrorMessage("Session is null.");
     return nullptr;
   }
   auto benchmark_info = session->session->GetBenchmarkInfo();
   if (!benchmark_info.ok()) {
     ABSL_LOG(ERROR) << "Failed to get benchmark info: "
                     << benchmark_info.status();
+    SetLastErrorMessage(benchmark_info.status().ToString());
     return nullptr;
   }
   return new LiteRtLmBenchmarkInfo{std::move(*benchmark_info)};
 }
 
 void litert_lm_benchmark_info_delete(LiteRtLmBenchmarkInfo* benchmark_info) {
+  ClearLastErrorMessage();
   delete benchmark_info;
 }
 
 double litert_lm_benchmark_info_get_time_to_first_token(
     const LiteRtLmBenchmarkInfo* benchmark_info) {
+  ClearLastErrorMessage();
   if (!benchmark_info) {
+    SetLastErrorMessage("Benchmark info is null.");
     return 0.0;
   }
   return benchmark_info->benchmark_info.GetTimeToFirstToken();
@@ -1183,7 +1398,9 @@ double litert_lm_benchmark_info_get_time_to_first_token(
 
 double litert_lm_benchmark_info_get_total_init_time_in_second(
     const LiteRtLmBenchmarkInfo* benchmark_info) {
+  ClearLastErrorMessage();
   if (!benchmark_info) {
+    SetLastErrorMessage("Benchmark info is null.");
     return 0.0;
   }
   double total_init_time_ms = 0.0;
@@ -1195,7 +1412,9 @@ double litert_lm_benchmark_info_get_total_init_time_in_second(
 
 int litert_lm_benchmark_info_get_num_prefill_turns(
     const LiteRtLmBenchmarkInfo* benchmark_info) {
+  ClearLastErrorMessage();
   if (!benchmark_info) {
+    SetLastErrorMessage("Benchmark info is null.");
     return 0;
   }
   return benchmark_info->benchmark_info.GetTotalPrefillTurns();
@@ -1203,7 +1422,9 @@ int litert_lm_benchmark_info_get_num_prefill_turns(
 
 int litert_lm_benchmark_info_get_num_decode_turns(
     const LiteRtLmBenchmarkInfo* benchmark_info) {
+  ClearLastErrorMessage();
   if (!benchmark_info) {
+    SetLastErrorMessage("Benchmark info is null.");
     return 0;
   }
   return benchmark_info->benchmark_info.GetTotalDecodeTurns();
@@ -1211,11 +1432,14 @@ int litert_lm_benchmark_info_get_num_decode_turns(
 
 int litert_lm_benchmark_info_get_prefill_token_count_at(
     const LiteRtLmBenchmarkInfo* benchmark_info, int index) {
+  ClearLastErrorMessage();
   if (!benchmark_info) {
+    SetLastErrorMessage("Benchmark info is null.");
     return 0;
   }
   auto turn = benchmark_info->benchmark_info.GetPrefillTurn(index);
   if (!turn.ok()) {
+    SetLastErrorMessage(turn.status().ToString());
     return 0;
   }
   return static_cast<int>(turn->num_tokens);
@@ -1223,11 +1447,14 @@ int litert_lm_benchmark_info_get_prefill_token_count_at(
 
 int litert_lm_benchmark_info_get_decode_token_count_at(
     const LiteRtLmBenchmarkInfo* benchmark_info, int index) {
+  ClearLastErrorMessage();
   if (!benchmark_info) {
+    SetLastErrorMessage("Benchmark info is null.");
     return 0;
   }
   auto turn = benchmark_info->benchmark_info.GetDecodeTurn(index);
   if (!turn.ok()) {
+    SetLastErrorMessage(turn.status().ToString());
     return 0;
   }
   return static_cast<int>(turn->num_tokens);
@@ -1235,7 +1462,9 @@ int litert_lm_benchmark_info_get_decode_token_count_at(
 
 double litert_lm_benchmark_info_get_prefill_tokens_per_sec_at(
     const LiteRtLmBenchmarkInfo* benchmark_info, int index) {
+  ClearLastErrorMessage();
   if (!benchmark_info) {
+    SetLastErrorMessage("Benchmark info is null.");
     return 0.0;
   }
   return benchmark_info->benchmark_info.GetPrefillTokensPerSec(index);
@@ -1243,7 +1472,9 @@ double litert_lm_benchmark_info_get_prefill_tokens_per_sec_at(
 
 double litert_lm_benchmark_info_get_decode_tokens_per_sec_at(
     const LiteRtLmBenchmarkInfo* benchmark_info, int index) {
+  ClearLastErrorMessage();
   if (!benchmark_info) {
+    SetLastErrorMessage("Benchmark info is null.");
     return 0.0;
   }
   return benchmark_info->benchmark_info.GetDecodeTokensPerSec(index);
@@ -1251,7 +1482,9 @@ double litert_lm_benchmark_info_get_decode_tokens_per_sec_at(
 
 LiteRtLmConversation* litert_lm_conversation_create(
     LiteRtLmEngine* engine, LiteRtLmConversationConfig* c_config) {
+  ClearLastErrorMessage();
   if (!engine || !engine->engine) {
+    SetLastErrorMessage("Engine is null.");
     return nullptr;
   }
 
@@ -1276,8 +1509,10 @@ LiteRtLmConversation* litert_lm_conversation_create(
                                                     nullptr, false);
       if (messages.is_discarded()) {
         ABSL_LOG(ERROR) << "Failed to parse messages JSON.";
+        SetLastErrorMessage("Failed to parse messages JSON.");
       } else if (!messages.is_array()) {
         ABSL_LOG(ERROR) << "Messages JSON is not an array.";
+        SetLastErrorMessage("Messages JSON is not an array.");
       } else {
         if (json_preface.messages.is_array()) {
           json_preface.messages.insert(json_preface.messages.end(),
@@ -1296,6 +1531,7 @@ LiteRtLmConversation* litert_lm_conversation_create(
       } else {
         ABSL_LOG(ERROR) << "Failed to parse tools JSON or not an array: "
                         << c_config->tools_json;
+        SetLastErrorMessage("Failed to parse tools JSON or not an array.");
       }
     }
 
@@ -1309,6 +1545,8 @@ LiteRtLmConversation* litert_lm_conversation_create(
         ABSL_LOG(ERROR)
             << "Failed to parse extra context JSON or not an object: "
             << c_config->extra_context_json;
+        SetLastErrorMessage(
+            "Failed to parse extra context JSON or not an object.");
       }
     }
 
@@ -1342,6 +1580,7 @@ LiteRtLmConversation* litert_lm_conversation_create(
     if (!config.ok()) {
       ABSL_LOG(ERROR) << "Failed to create conversation config: "
                       << config.status();
+      SetLastErrorMessage(config.status().ToString());
       return nullptr;
     }
     conversation = Conversation::Create(*engine->engine, *config);
@@ -1351,6 +1590,7 @@ LiteRtLmConversation* litert_lm_conversation_create(
     if (!default_conversation_config.ok()) {
       ABSL_LOG(ERROR) << "Failed to create default conversation config: "
                       << default_conversation_config.status();
+      SetLastErrorMessage(default_conversation_config.status().ToString());
       return nullptr;
     }
     conversation =
@@ -1360,6 +1600,7 @@ LiteRtLmConversation* litert_lm_conversation_create(
   if (!conversation.ok()) {
     ABSL_LOG(ERROR) << "Failed to create conversation: "
                     << conversation.status();
+    SetLastErrorMessage(conversation.status().ToString());
     return nullptr;
   }
   auto* c_conversation = new LiteRtLmConversation;
@@ -1368,17 +1609,21 @@ LiteRtLmConversation* litert_lm_conversation_create(
 }
 
 void litert_lm_conversation_delete(LiteRtLmConversation* conversation) {
+  ClearLastErrorMessage();
   delete conversation;
 }
 
 LiteRtLmConversation* litert_lm_conversation_clone(
     LiteRtLmConversation* conversation) {
+  ClearLastErrorMessage();
   if (!conversation || !conversation->conversation) {
+    SetLastErrorMessage("Conversation is null.");
     return nullptr;
   }
   auto cloned = conversation->conversation->Clone();
   if (!cloned.ok()) {
     ABSL_LOG(ERROR) << "Failed to clone conversation: " << cloned.status();
+    SetLastErrorMessage(cloned.status().ToString());
     return nullptr;
   }
   auto c_conversation = std::make_unique<LiteRtLmConversation>();
@@ -1390,7 +1635,9 @@ LiteRtLmJsonResponse* litert_lm_conversation_send_message(
     LiteRtLmConversation* conversation, const char* message_json,
     const char* extra_context,
     const LiteRtLmConversationOptionalArgs* optional_args) {
+  ClearLastErrorMessage();
   if (!conversation || !conversation->conversation) {
+    SetLastErrorMessage("Conversation is null.");
     return nullptr;
   }
   nlohmann::json json_message =
@@ -1398,6 +1645,7 @@ LiteRtLmJsonResponse* litert_lm_conversation_send_message(
                             /*allow_exceptions=*/false);
   if (json_message.is_discarded()) {
     ABSL_LOG(ERROR) << "Failed to parse message JSON.";
+    SetLastErrorMessage("Failed to parse message JSON.");
     return nullptr;
   }
 
@@ -1411,6 +1659,7 @@ LiteRtLmJsonResponse* litert_lm_conversation_send_message(
       json_message, std::move(litert_lm_optional_args));
   if (!response.ok()) {
     ABSL_LOG(ERROR) << "Failed to send message: " << response.status();
+    SetLastErrorMessage(response.status().ToString());
     return nullptr;
   }
   auto* c_response = new LiteRtLmJsonResponse;
@@ -1419,12 +1668,15 @@ LiteRtLmJsonResponse* litert_lm_conversation_send_message(
 }
 
 void litert_lm_json_response_delete(LiteRtLmJsonResponse* response) {
+  ClearLastErrorMessage();
   delete response;
 }
 
 const char* litert_lm_json_response_get_string(
     const LiteRtLmJsonResponse* response) {
+  ClearLastErrorMessage();
   if (!response) {
+    SetLastErrorMessage("JSON response is null.");
     return nullptr;
   }
   return response->json_string.c_str();
@@ -1435,7 +1687,9 @@ int litert_lm_conversation_send_message_stream(
     const char* extra_context,
     const LiteRtLmConversationOptionalArgs* optional_args,
     LiteRtLmStreamCallback callback, void* callback_data) {
+  ClearLastErrorMessage();
   if (!conversation || !conversation->conversation) {
+    SetLastErrorMessage("Conversation is null.");
     return -1;
   }
   nlohmann::json json_message =
@@ -1443,6 +1697,7 @@ int litert_lm_conversation_send_message_stream(
                             /*allow_exceptions=*/false);
   if (json_message.is_discarded()) {
     ABSL_LOG(ERROR) << "Failed to parse message JSON.";
+    SetLastErrorMessage("Failed to parse message JSON.");
     return -1;
   }
 
@@ -1458,6 +1713,7 @@ int litert_lm_conversation_send_message_stream(
 
   if (!status.ok()) {
     ABSL_LOG(ERROR) << "Failed to start message stream: " << status;
+    SetLastErrorMessage(status.ToString());
     return static_cast<int>(status.code());
   }
   return 0;
@@ -1465,7 +1721,9 @@ int litert_lm_conversation_send_message_stream(
 
 const char* litert_lm_conversation_render_message_to_string(
     LiteRtLmConversation* conversation, const char* message_json) {
+  ClearLastErrorMessage();
   if (!conversation || !conversation->conversation || !message_json) {
+    SetLastErrorMessage("Conversation or message_json is null.");
     return nullptr;
   }
   nlohmann::json json_message =
@@ -1473,6 +1731,7 @@ const char* litert_lm_conversation_render_message_to_string(
                             /*allow_exceptions=*/false);
   if (json_message.is_discarded()) {
     ABSL_LOG(ERROR) << "Failed to parse message JSON.";
+    SetLastErrorMessage("Failed to parse message JSON.");
     return nullptr;
   }
 
@@ -1480,6 +1739,7 @@ const char* litert_lm_conversation_render_message_to_string(
       json_message, litert::lm::OptionalArgs());
   if (!rendered.ok()) {
     ABSL_LOG(ERROR) << "Failed to render message: " << rendered.status();
+    SetLastErrorMessage(rendered.status().ToString());
     return nullptr;
   }
   conversation->last_rendered_message = std::move(*rendered);
@@ -1488,13 +1748,16 @@ const char* litert_lm_conversation_render_message_to_string(
 
 const char* litert_lm_conversation_render_preface_to_string(
     LiteRtLmConversation* conversation) {
+  ClearLastErrorMessage();
   if (!conversation || !conversation->conversation) {
+    SetLastErrorMessage("Conversation is null.");
     return nullptr;
   }
   auto rendered = conversation->conversation->RenderPrefaceIntoString(
       litert::lm::OptionalArgs());
   if (!rendered.ok()) {
     ABSL_LOG(ERROR) << "Failed to render preface: " << rendered.status();
+    SetLastErrorMessage(rendered.status().ToString());
     return nullptr;
   }
   conversation->last_rendered_preface = std::move(*rendered);
@@ -1502,7 +1765,9 @@ const char* litert_lm_conversation_render_preface_to_string(
 }
 
 void litert_lm_conversation_cancel_process(LiteRtLmConversation* conversation) {
+  ClearLastErrorMessage();
   if (!conversation || !conversation->conversation) {
+    SetLastErrorMessage("Conversation is null.");
     return;
   }
   conversation->conversation->CancelProcess();
@@ -1510,25 +1775,31 @@ void litert_lm_conversation_cancel_process(LiteRtLmConversation* conversation) {
 
 LiteRtLmBenchmarkInfo* litert_lm_conversation_get_benchmark_info(
     LiteRtLmConversation* conversation) {
+  ClearLastErrorMessage();
   if (!conversation || !conversation->conversation) {
+    SetLastErrorMessage("Conversation is null.");
     return nullptr;
   }
   auto benchmark_info = conversation->conversation->GetBenchmarkInfo();
   if (!benchmark_info.ok()) {
     ABSL_LOG(ERROR) << "Failed to get benchmark info: "
                     << benchmark_info.status();
+    SetLastErrorMessage(benchmark_info.status().ToString());
     return nullptr;
   }
   return new LiteRtLmBenchmarkInfo{std::move(*benchmark_info)};
 }
 
 int litert_lm_conversation_get_token_count(LiteRtLmConversation* conversation) {
+  ClearLastErrorMessage();
   if (!conversation || !conversation->conversation) {
+    SetLastErrorMessage("Conversation is null.");
     return -1;
   }
   absl::StatusOr<int> token_count = conversation->conversation->GetTokenCount();
   if (!token_count.ok()) {
     ABSL_LOG(ERROR) << "Failed to get token count: " << token_count.status();
+    SetLastErrorMessage(token_count.status().ToString());
     return -1;
   }
   return *token_count;
@@ -1536,7 +1807,9 @@ int litert_lm_conversation_get_token_count(LiteRtLmConversation* conversation) {
 
 LiteRtLmTokenizeResult* litert_lm_engine_tokenize(LiteRtLmEngine* engine,
                                                   const char* text) {
+  ClearLastErrorMessage();
   if (!engine || !engine->engine || !text) {
+    SetLastErrorMessage("Engine or text is null.");
     return nullptr;
   }
   const auto& tokenizer = engine->engine->GetTokenizer();
@@ -1544,18 +1817,22 @@ LiteRtLmTokenizeResult* litert_lm_engine_tokenize(LiteRtLmEngine* engine,
       const_cast<litert::lm::Tokenizer&>(tokenizer).TextToTokenIds(text);
   if (!token_ids.ok()) {
     ABSL_LOG(ERROR) << "Failed to tokenize: " << token_ids.status();
+    SetLastErrorMessage(token_ids.status().ToString());
     return nullptr;
   }
   return new LiteRtLmTokenizeResult{std::move(*token_ids)};
 }
 
 void litert_lm_tokenize_result_delete(LiteRtLmTokenizeResult* result) {
+  ClearLastErrorMessage();
   delete result;
 }
 
 const int* litert_lm_tokenize_result_get_tokens(
     const LiteRtLmTokenizeResult* result) {
+  ClearLastErrorMessage();
   if (!result) {
+    SetLastErrorMessage("Tokenize result is null.");
     return nullptr;
   }
   return result->tokens.data();
@@ -1563,7 +1840,9 @@ const int* litert_lm_tokenize_result_get_tokens(
 
 size_t litert_lm_tokenize_result_get_num_tokens(
     const LiteRtLmTokenizeResult* result) {
+  ClearLastErrorMessage();
   if (!result) {
+    SetLastErrorMessage("Tokenize result is null.");
     return 0;
   }
   return result->tokens.size();
@@ -1572,7 +1851,9 @@ size_t litert_lm_tokenize_result_get_num_tokens(
 LiteRtLmDetokenizeResult* litert_lm_engine_detokenize(LiteRtLmEngine* engine,
                                                       const int* tokens,
                                                       size_t num_tokens) {
+  ClearLastErrorMessage();
   if (!engine || !engine->engine || !tokens) {
+    SetLastErrorMessage("Engine or tokens is null.");
     return nullptr;
   }
   const auto& tokenizer = engine->engine->GetTokenizer();
@@ -1581,29 +1862,35 @@ LiteRtLmDetokenizeResult* litert_lm_engine_detokenize(LiteRtLmEngine* engine,
       const_cast<litert::lm::Tokenizer&>(tokenizer).TokenIdsToText(token_ids);
   if (!text.ok()) {
     ABSL_LOG(ERROR) << "Failed to detokenize: " << text.status();
+    SetLastErrorMessage(text.status().ToString());
     return nullptr;
   }
   return new LiteRtLmDetokenizeResult{std::move(*text)};
 }
 
 void litert_lm_detokenize_result_delete(LiteRtLmDetokenizeResult* result) {
+  ClearLastErrorMessage();
   delete result;
 }
 
 const char* litert_lm_detokenize_result_get_string(
     const LiteRtLmDetokenizeResult* result) {
+  ClearLastErrorMessage();
   if (!result) {
+    SetLastErrorMessage("Detokenize result is null.");
     return nullptr;
   }
   return result->text.c_str();
 }
 
 void litert_lm_token_union_delete(LiteRtLmTokenUnion* token_union) {
+  ClearLastErrorMessage();
   delete token_union;
 }
 
 LiteRtLmTokenUnionType litert_lm_token_union_get_type(
     const LiteRtLmTokenUnion* token_union) {
+  ClearLastErrorMessage();
   if (token_union && token_union->token_union.has_token_str()) {
     return kLiteRtLmTokenUnionTypeString;
   }
@@ -1612,6 +1899,7 @@ LiteRtLmTokenUnionType litert_lm_token_union_get_type(
 
 const char* litert_lm_token_union_get_string(
     const LiteRtLmTokenUnion* token_union) {
+  ClearLastErrorMessage();
   if (token_union && token_union->token_union.has_token_str()) {
     return token_union->token_union.token_str().c_str();
   }
@@ -1621,8 +1909,10 @@ const char* litert_lm_token_union_get_string(
 int litert_lm_token_union_get_ids(const LiteRtLmTokenUnion* token_union,
                                   const int** out_tokens,
                                   size_t* out_num_tokens) {
+  ClearLastErrorMessage();
   if (!token_union || !token_union->token_union.has_token_ids() ||
       !out_tokens || !out_num_tokens) {
+    SetLastErrorMessage("Invalid argument or token union has no IDs.");
     return -1;
   }
   *out_tokens = token_union->token_union.token_ids().ids().data();
@@ -1631,12 +1921,15 @@ int litert_lm_token_union_get_ids(const LiteRtLmTokenUnion* token_union,
 }
 
 void litert_lm_token_unions_delete(LiteRtLmTokenUnions* tokens) {
+  ClearLastErrorMessage();
   delete tokens;
 }
 
 size_t litert_lm_token_unions_get_num_tokens(
     const LiteRtLmTokenUnions* tokens) {
+  ClearLastErrorMessage();
   if (!tokens) {
+    SetLastErrorMessage("Token unions is null.");
     return 0;
   }
   return tokens->tokens.size();
@@ -1644,7 +1937,9 @@ size_t litert_lm_token_unions_get_num_tokens(
 
 LiteRtLmTokenUnion* litert_lm_token_unions_get_token_at(
     const LiteRtLmTokenUnions* tokens, size_t index) {
+  ClearLastErrorMessage();
   if (!tokens || index >= tokens->tokens.size()) {
+    SetLastErrorMessage("Tokens collection null or index out of bounds.");
     return nullptr;
   }
   auto* result = new LiteRtLmTokenUnion();
@@ -1653,22 +1948,28 @@ LiteRtLmTokenUnion* litert_lm_token_unions_get_token_at(
 }
 
 LiteRtLmTokenUnion* litert_lm_engine_get_start_token(LiteRtLmEngine* engine) {
+  ClearLastErrorMessage();
   if (!engine || !engine->engine) {
+    SetLastErrorMessage("Engine is null.");
     return nullptr;
   }
   const auto& metadata = engine->engine->GetEngineSettings().GetLlmMetadata();
   if (!metadata.has_value() || !metadata->has_start_token()) {
+    SetLastErrorMessage("No start token found in LLM metadata.");
     return nullptr;
   }
   return new LiteRtLmTokenUnion{metadata->start_token()};
 }
 
 LiteRtLmTokenUnions* litert_lm_engine_get_stop_tokens(LiteRtLmEngine* engine) {
+  ClearLastErrorMessage();
   if (!engine || !engine->engine) {
+    SetLastErrorMessage("Engine is null.");
     return nullptr;
   }
   const auto& metadata = engine->engine->GetEngineSettings().GetLlmMetadata();
   if (!metadata.has_value() || metadata->stop_tokens_size() == 0) {
+    SetLastErrorMessage("No stop tokens found in LLM metadata.");
     return nullptr;
   }
   auto* c_tokens = new LiteRtLmTokenUnions;
@@ -1678,14 +1979,17 @@ LiteRtLmTokenUnions* litert_lm_engine_get_stop_tokens(LiteRtLmEngine* engine) {
 }
 
 const char* litert_lm_stream_chunk_get_text(const LiteRtLmStreamChunk* chunk) {
+  ClearLastErrorMessage();
   return chunk ? chunk->text : nullptr;
 }
 
 bool litert_lm_stream_chunk_is_final(const LiteRtLmStreamChunk* chunk) {
+  ClearLastErrorMessage();
   return chunk ? chunk->is_final : false;
 }
 
 const char* litert_lm_stream_chunk_get_error(const LiteRtLmStreamChunk* chunk) {
+  ClearLastErrorMessage();
   return chunk ? chunk->error_msg : nullptr;
 }
 
