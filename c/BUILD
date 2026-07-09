@@ -44,11 +44,15 @@ ENGINE_COMMON_DEPS = [
     "@com_google_absl//absl/time",
     "@nlohmann_json//:json",
     "@litert//support/tokenizer",
+    "//runtime/components:prompt_template",
     "//runtime/conversation",
     "//runtime/conversation:io_types",
+    "//runtime/conversation:prompt_utils",
     "//runtime/conversation:thinking_config",
+    "//runtime/conversation/model_data_processor",
     "//runtime/conversation/model_data_processor:config_registry",
     "//runtime/conversation/model_data_processor:gemma4_data_processor_config",
+    "//runtime/conversation/model_data_processor:model_data_processor_factory",
     "//runtime/engine:engine_factory",
     "//runtime/engine:engine_interface",
     "//runtime/engine:engine_settings",
@@ -60,6 +64,7 @@ ENGINE_COMMON_DEPS = [
     "//runtime/proto:sampler_params_cc_proto",
     "//runtime/proto:token_cc_proto",
     "//runtime/util:logging",
+    "//runtime/util:model_type_utils",
     "//runtime/util:scoped_file",
 ]
 

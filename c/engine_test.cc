@@ -108,6 +108,9 @@ using SessionConfigPtr =
 using SamplerParamsPtr =
     std::unique_ptr<LiteRtLmSamplerParams,
                     decltype(&litert_lm_sampler_params_delete)>;
+using PromptTemplatePtr =
+    std::unique_ptr<LiteRtLmPromptTemplate,
+                    decltype(&litert_lm_prompt_template_delete)>;
 using ConversationConfigPtr =
     std::unique_ptr<LiteRtLmConversationConfig,
                     decltype(&litert_lm_conversation_config_delete)>;
@@ -478,6 +481,34 @@ TEST(EngineCTest, CreateConversationConfigWithNoSamplerParams) {
   nlohmann::ordered_json expected_messages =
       nlohmann::ordered_json::array({message});
   EXPECT_EQ(preface.messages, expected_messages);
+}
+
+TEST(EngineCTest, GetPromptTemplateAndRender) {
+  const std::string task_path = GetTestdataPath(
+      "litert_lm/runtime/testdata/test_lm_new_metadata.task");
+
+  EngineSettingsPtr settings(
+      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
+                                       /* vision_backend_str */ nullptr,
+                                       /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+
+  EnginePtr engine(litert_lm_engine_create(settings.get()),
+                   &litert_lm_engine_delete);
+  ASSERT_NE(engine, nullptr);
+
+  PromptTemplatePtr prompt_template(
+      litert_lm_engine_get_prompt_template(engine.get()),
+      &litert_lm_prompt_template_delete);
+  ASSERT_NE(prompt_template, nullptr);
+
+  const std::string input_json =
+      R"({"messages": [{"role": "user", "content": "Hello world!"}]})";
+  const char* rendered = litert_lm_prompt_template_render(prompt_template.get(),
+                                                          input_json.c_str());
+  ASSERT_NE(rendered, nullptr);
+  EXPECT_NE(std::string(rendered), "");
 }
 
 TEST(EngineCTest, CreateConversationConfigWithNoSamplerParamsNoSystemMessage) {

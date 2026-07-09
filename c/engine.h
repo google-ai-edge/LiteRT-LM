@@ -73,6 +73,9 @@ typedef struct LiteRtLmDetokenizeResult LiteRtLmDetokenizeResult;
 // Use `litert_lm_tokenize_result_delete` to free memory.
 typedef struct LiteRtLmTokenizeResult LiteRtLmTokenizeResult;
 
+// Opaque pointer for the LiteRT LM Prompt Template.
+typedef struct LiteRtLmPromptTemplate LiteRtLmPromptTemplate;
+
 // Represents the type of a TokenUnion.
 typedef enum {
   kLiteRtLmTokenUnionTypeString = 0,
@@ -909,6 +912,33 @@ LITERT_LM_C_API_EXPORT
 int litert_lm_session_generate_content_stream(
     LiteRtLmSession* session, const LiteRtLmInputData* const* inputs,
     size_t num_inputs, LiteRtLmStreamCallback callback, void* callback_data);
+
+// Creates a LiteRT LM Prompt Template from the engine's model metadata.
+// The caller is responsible for destroying the prompt template using
+// `litert_lm_prompt_template_delete`.
+//
+// @param engine The engine to get the prompt template from.
+// @return A pointer to the created prompt template, or NULL on failure.
+LITERT_LM_C_API_EXPORT
+LiteRtLmPromptTemplate* litert_lm_engine_get_prompt_template(
+    LiteRtLmEngine* engine);
+
+// Renders the prompt template given an input JSON string.
+//
+// @param prompt_template The prompt template handle.
+// @param input_json A JSON string containing `messages`, `tools`,
+//   `extra_context`, and/or `add_generation_prompt`.
+// @return A pointer to the rendered string (valid until prompt_template is
+//   deleted or rendered again), or NULL on failure.
+LITERT_LM_C_API_EXPORT
+const char* litert_lm_prompt_template_render(
+    LiteRtLmPromptTemplate* prompt_template, const char* input_json);
+
+// Destroys a LiteRT LM Prompt Template.
+//
+// @param prompt_template The prompt template to destroy.
+LITERT_LM_C_API_EXPORT
+void litert_lm_prompt_template_delete(LiteRtLmPromptTemplate* prompt_template);
 
 // Creates a LiteRT LM Conversation. The caller is responsible for destroying
 // the conversation using `litert_lm_conversation_delete`.

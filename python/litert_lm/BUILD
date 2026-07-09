@@ -76,6 +76,15 @@ pytype_strict_library(
 )
 
 pytype_strict_library(
+    name = "prompt_template",
+    srcs = ["prompt_template.py"],
+    deps = [
+        ":interfaces",
+        requirement("typing_extensions"),
+    ],
+)
+
+pytype_strict_library(
     name = "engine",
     srcs = ["engine.py"],
     deps = [
@@ -83,9 +92,11 @@ pytype_strict_library(
         ":_messages",
         ":conversation",
         ":interfaces",
+        ":prompt_template",
         ":session",
         ":tools",
         ":utils",
+        requirement("typing_extensions"),
     ],
 )
 
@@ -119,6 +130,7 @@ pytype_strict_library(
         ":conversation",
         ":engine",
         ":interfaces",
+        ":prompt_template",
         ":session",
         ":tools",
     ],

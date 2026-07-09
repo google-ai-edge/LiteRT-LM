@@ -34,10 +34,14 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
+#include "runtime/components/prompt_template.h"
 #include "runtime/conversation/conversation.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/config_registry.h"
 #include "runtime/conversation/model_data_processor/gemma4_data_processor_config.h"
+#include "runtime/conversation/model_data_processor/model_data_processor.h"
+#include "runtime/conversation/model_data_processor/model_data_processor_factory.h"
+#include "runtime/conversation/prompt_utils.h"
 #include "runtime/conversation/thinking_config.h"
 #include "runtime/engine/engine.h"
 #include "runtime/engine/engine_factory.h"
@@ -49,11 +53,18 @@
 #include "runtime/proto/sampler_params.pb.h"
 #include "runtime/proto/token.pb.h"
 #include "runtime/util/logging.h"
+#include "runtime/util/model_type_utils.h"
 #include "runtime/util/scoped_file.h"
 
 struct LiteRtLmInputData {
   explicit LiteRtLmInputData(litert::lm::InputData d) : data(std::move(d)) {}
   litert::lm::InputData data;
+};
+
+struct LiteRtLmPromptTemplate {
+  litert::lm::PromptTemplate prompt_template;
+  std::unique_ptr<litert::lm::ModelDataProcessor> model_data_processor;
+  std::string rendered_string;
 };
 
 struct LiteRtLmSamplerParams {
@@ -1247,6 +1258,124 @@ double litert_lm_benchmark_info_get_decode_tokens_per_sec_at(
     return 0.0;
   }
   return benchmark_info->benchmark_info.GetDecodeTokensPerSec(index);
+}
+
+LiteRtLmPromptTemplate* litert_lm_engine_get_prompt_template(
+    LiteRtLmEngine* engine) {
+  if (!engine || !engine->engine) {
+    return nullptr;
+  }
+  auto metadata = engine->engine->GetEngineSettings().GetLlmMetadata();
+  litert::lm::PromptTemplate prompt_template("");
+  if (metadata.has_value()) {
+    if (metadata->has_jinja_prompt_template()) {
+      prompt_template =
+          litert::lm::PromptTemplate(metadata->jinja_prompt_template());
+    } else if (metadata->has_prompt_templates()) {
+      auto jinja_source_or = litert::lm::GetDefaultJinjaPromptTemplate(
+          metadata->prompt_templates(), metadata->llm_model_type());
+      if (jinja_source_or.ok()) {
+        prompt_template = litert::lm::PromptTemplate(*jinja_source_or);
+      }
+    }
+  }
+  if (prompt_template.GetTemplateSource().empty()) {
+    ABSL_LOG(ERROR) << "Failed to select jinja prompt template from engine.";
+    return nullptr;
+  }
+
+  litert::lm::SessionConfig session_config =
+      litert::lm::SessionConfig::CreateDefault();
+  auto status = session_config.MaybeUpdateAndValidate(
+      engine->engine->GetEngineSettings());
+  if (!status.ok()) {
+    ABSL_LOG(ERROR) << "Failed to update and validate session config: "
+                    << status;
+    return nullptr;
+  }
+
+  auto processor_config_or =
+      litert::lm::CreateDataProcessorConfigFromLlmModelType(
+          session_config.GetLlmModelType());
+  if (!processor_config_or.ok()) {
+    ABSL_LOG(ERROR) << "Failed to create processor config: "
+                    << processor_config_or.status();
+    return nullptr;
+  }
+
+  auto processor_or = litert::lm::CreateModelDataProcessor(
+      *processor_config_or, /*preface=*/std::nullopt, /*tokenizer=*/nullptr,
+      /*stop_token_ids=*/{}, /*enable_constrained_decoding=*/false,
+      prompt_template.GetCapabilities());
+  if (!processor_or.ok()) {
+    ABSL_LOG(ERROR) << "Failed to create model data processor: "
+                    << processor_or.status();
+    return nullptr;
+  }
+
+  auto* c_tmpl = new LiteRtLmPromptTemplate{std::move(prompt_template),
+                                            std::move(*processor_or),
+                                            /*rendered_string=*/""};
+  return c_tmpl;
+}
+
+const char* litert_lm_prompt_template_render(
+    LiteRtLmPromptTemplate* prompt_template, const char* input_json) {
+  if (!prompt_template || !input_json) {
+    return nullptr;
+  }
+  nlohmann::json json_data = nlohmann::json::parse(input_json, /*cb=*/nullptr,
+                                                   /*allow_exceptions=*/false);
+  if (json_data.is_discarded() || !json_data.is_object()) {
+    ABSL_LOG(ERROR) << "Failed to parse prompt template input JSON.";
+    return nullptr;
+  }
+
+  litert::lm::PromptTemplateInput tmpl_input;
+  if (json_data.contains("messages") && json_data["messages"].is_array()) {
+    for (const auto& message : json_data["messages"]) {
+      auto message_tmpl_input_or =
+          prompt_template->model_data_processor->MessageToTemplateInput(
+              message);
+      if (!message_tmpl_input_or.ok()) {
+        ABSL_LOG(ERROR) << "Failed to process message for template: "
+                        << message_tmpl_input_or.status();
+        return nullptr;
+      }
+      tmpl_input.messages.push_back(*message_tmpl_input_or);
+    }
+  }
+  if (json_data.contains("tools") && !json_data["tools"].is_null()) {
+    auto tools_or =
+        prompt_template->model_data_processor->FormatTools(json_data["tools"]);
+    if (!tools_or.ok()) {
+      ABSL_LOG(ERROR) << "Failed to process tools for template: "
+                      << tools_or.status();
+      return nullptr;
+    }
+    tmpl_input.tools = *tools_or;
+  }
+  if (json_data.contains("extra_context") &&
+      !json_data["extra_context"].is_null()) {
+    tmpl_input.extra_context = json_data["extra_context"];
+  }
+  tmpl_input.add_generation_prompt =
+      json_data.value("add_generation_prompt", true);
+
+  litert::lm::StripBlobsFromTemplateInput(tmpl_input);
+  auto rendered_or = prompt_template->prompt_template.Apply(tmpl_input);
+  if (!rendered_or.ok()) {
+    ABSL_LOG(ERROR) << "Failed to render prompt template: "
+                    << rendered_or.status();
+    return nullptr;
+  }
+
+  prompt_template->rendered_string = *rendered_or;
+  return prompt_template->rendered_string.c_str();
+}
+
+void litert_lm_prompt_template_delete(LiteRtLmPromptTemplate* prompt_template) {
+  delete prompt_template;
 }
 
 LiteRtLmConversation* litert_lm_conversation_create(

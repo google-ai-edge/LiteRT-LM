@@ -676,6 +676,17 @@ class EngineTest(LiteRtLmTestBase):
       ) as session:
         self.assertIsNotNone(session)
 
+  def test_get_prompt_template_and_render(self):
+    with self._create_engine() as engine:
+      prompt_template = engine.get_prompt_template()
+      self.assertIsNotNone(prompt_template)
+      rendered = prompt_template.render(
+          messages=[{"role": "user", "content": "Hello world!"}]
+      )
+      self.assertIsInstance(rendered, str)
+      self.assertNotEmpty(rendered)
+      self.assertIn("Hello world!", rendered)
+
 
 class FunctionCallingTest(LiteRtLmTestBase):
 
