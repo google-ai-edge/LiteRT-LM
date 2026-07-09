@@ -80,6 +80,11 @@ class FakeModelResources : public ModelResources {
   absl::StatusOr<const proto::LlmMetadata*> GetLlmMetadata() override {
     return absl::UnimplementedError("Unimplemented");
   }
+
+  absl::StatusOr<const proto::ExecutorMetadata*> GetExecutorMetadata()
+      override {
+    return absl::UnimplementedError("Unimplemented");
+  }
 };
 
 TEST(LiteRtUtilTest, CreatetEnvironment_CPUGPUFirst_ExcludesNPUOptions) {

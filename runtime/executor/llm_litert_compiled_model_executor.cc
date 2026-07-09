@@ -1861,6 +1861,12 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
     }
   }
 
+  const proto::ExecutorMetadata* executor_metadata = nullptr;
+  auto executor_metadata_or = resources.GetExecutorMetadata();
+  if (executor_metadata_or.ok()) {
+    executor_metadata = *executor_metadata_or;
+  }
+
   return absl::WrapUnique(new LlmLiteRtCompiledModelExecutorStatic(
       std::move(executor_settings), lrt_env, litert_model,
       std::move(compiled_model), std::move(decode_input_buffers),
@@ -1870,7 +1876,8 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
       std::move(decode_output_kv_cache_buffers), std::move(prefill_runner_set),
       signatures, batch_size, std::move(cache_path),
       std::move(embedding_lookup), std::move(per_layer_embedding_lookup),
-      use_fp16_precision, activation_data_type, std::move(mtp_drafter)));
+      use_fp16_precision, activation_data_type, std::move(mtp_drafter),
+      executor_metadata));
 }
 
 /* ===========================================================================*/
@@ -2181,6 +2188,12 @@ LlmLiteRtCompiledModelExecutorDynamic::Create(
   std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup;
   ABSL_RETURN_IF_ERROR(InitializeEmbeddingLookups(
       lrt_env, resources, embedding_lookup, per_layer_embedding_lookup));
+  const proto::ExecutorMetadata* executor_metadata = nullptr;
+  auto executor_metadata_or = resources.GetExecutorMetadata();
+  if (executor_metadata_or.ok()) {
+    executor_metadata = *executor_metadata_or;
+  }
+
   return absl::WrapUnique(new LlmLiteRtCompiledModelExecutorDynamic(
       std::move(executor_settings), lrt_env, litert_model,
       std::move(compiled_model), std::move(decode_input_buffers),
@@ -2189,7 +2202,8 @@ LlmLiteRtCompiledModelExecutorDynamic::Create(
       std::move(value_cache_input_names), signatures, batch_size,
       std::move(weight_cache_path), std::move(embedding_lookup),
       std::move(per_layer_embedding_lookup), /*use_fp16_precision=*/false,
-      /*logits_data_type=*/LogitsDataType::FLOAT32));
+      /*logits_data_type=*/LogitsDataType::FLOAT32,
+      /*mtp_drafter=*/nullptr, executor_metadata));
 }
 
 }  // namespace litert::lm

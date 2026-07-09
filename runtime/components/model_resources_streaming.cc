@@ -72,4 +72,9 @@ ModelResourcesStreaming::GetLlmMetadata() {
   return absl::UnimplementedError("Not implemented.");
 }
 
+absl::StatusOr<const proto::ExecutorMetadata*>
+ModelResourcesStreaming::GetExecutorMetadata() {
+  return absl::UnimplementedError("Not implemented.");
+}
+
 }  // namespace litert::lm

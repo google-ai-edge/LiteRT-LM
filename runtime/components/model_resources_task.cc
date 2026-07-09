@@ -94,6 +94,12 @@ absl::StatusOr<const proto::LlmMetadata*> ModelResourcesTask::GetLlmMetadata() {
     ABSL_LOG(INFO) << "The llm metadata: " << llm_metadata_->DebugString();
   }
   return llm_metadata_.get();
-};
+}
+
+absl::StatusOr<const proto::ExecutorMetadata*>
+ModelResourcesTask::GetExecutorMetadata() {
+  return absl::UnimplementedError(
+      "GetExecutorMetadata is not implemented for Task model.");
+}
 
 }  // namespace litert::lm

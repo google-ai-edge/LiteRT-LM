@@ -203,7 +203,25 @@ ModelResourcesLitertLm::GetLlmMetadata() {
     llm_metadata_ = std::move(llm_metadata);
   }
   return llm_metadata_.get();
-};
+}
+
+absl::StatusOr<const proto::ExecutorMetadata*>
+ModelResourcesLitertLm::GetExecutorMetadata() {
+  if (executor_metadata_ == nullptr) {
+    auto buffer_ref_or = litert_lm_loader_->GetExecutorMetadata();
+    if (!buffer_ref_or.has_value()) {
+      return absl::NotFoundError(
+          "ExecutorMetadata not found in the model file.");
+    }
+    auto executor_metadata = std::make_unique<proto::ExecutorMetadata>();
+    if (!executor_metadata->ParseFromString(
+            std::string(buffer_ref_or->StrView()))) {  // NOLINT
+      return absl::InternalError("Failed to parse ExecutorMetadata");
+    }
+    executor_metadata_ = std::move(executor_metadata);
+  }
+  return executor_metadata_.get();
+}
 
 absl::StatusOr<std::reference_wrapper<ScopedFile>>
 ModelResourcesLitertLm::GetScopedFile() {

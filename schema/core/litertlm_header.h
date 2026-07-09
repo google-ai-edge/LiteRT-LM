@@ -34,7 +34,7 @@ namespace schema {
 //                compatible manner.
 // PATCH version: increments on backward compatible bug fixes.
 constexpr uint32_t LITERTLM_MAJOR_VERSION = 1;
-constexpr uint32_t LITERTLM_MINOR_VERSION = 5;
+constexpr uint32_t LITERTLM_MINOR_VERSION = 6;
 constexpr uint32_t LITERTLM_PATCH_VERSION = 0;
 
 // Alias for a fully constructed KeyValuePair for LiteRTLM metadata.
