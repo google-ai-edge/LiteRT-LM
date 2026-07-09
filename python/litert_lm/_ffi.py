@@ -374,6 +374,18 @@ def _setup_lib_signatures(lib):
       ctypes.c_void_p,
   ]
 
+  # PromptTemplate
+  lib.litert_lm_engine_get_prompt_template.restype = ctypes.c_void_p
+  lib.litert_lm_engine_get_prompt_template.argtypes = [ctypes.c_void_p]
+
+  lib.litert_lm_prompt_template_render.restype = ctypes.c_char_p
+  lib.litert_lm_prompt_template_render.argtypes = [
+      ctypes.c_void_p,
+      c_string_p,
+  ]
+
+  lib.litert_lm_prompt_template_delete.argtypes = [ctypes.c_void_p]
+
   # Conversation
   lib.litert_lm_conversation_create.restype = ctypes.c_void_p
   lib.litert_lm_conversation_create.argtypes = [

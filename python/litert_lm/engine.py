@@ -21,12 +21,15 @@ import json
 from typing import Any
 import warnings
 
+from typing_extensions import override
+
 from . import interfaces
 from . import tools as litert_tools
 from ._ffi import _get_lib
 from ._ffi import ActivationDataType
 from ._messages import Message
 from .conversation import Conversation
+from .prompt_template import PromptTemplate
 from .session import Session
 from .utils import _parse_token_union
 from .utils import _sampler_config_to_params
@@ -468,3 +471,10 @@ class Engine(interfaces.AbstractEngine):
       return resp_str.decode("utf-8") if resp_str else ""
     finally:
       self._lib.litert_lm_detokenize_result_delete(res_ptr)
+
+  @override
+  def get_prompt_template(self) -> interfaces.AbstractPromptTemplate:
+    res_ptr = self._lib.litert_lm_engine_get_prompt_template(self._engine_ptr)
+    if not res_ptr:
+      raise RuntimeError("Failed to get prompt template from engine.")
+    return PromptTemplate(self._lib, res_ptr)

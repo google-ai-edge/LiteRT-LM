@@ -28,6 +28,7 @@ from .engine import Engine
 from .interfaces import AbstractBenchmark
 from .interfaces import AbstractConversation
 from .interfaces import AbstractEngine
+from .interfaces import AbstractPromptTemplate
 from .interfaces import AbstractSession
 from .interfaces import Backend
 from .interfaces import BenchmarkInfo
@@ -38,6 +39,7 @@ from .interfaces import SamplerConfig
 from .interfaces import ThinkingConfig
 from .interfaces import Tool
 from .interfaces import ToolEventHandler
+from .prompt_template import PromptTemplate
 from .session import Session
 from .tools import tool_from_function
 
@@ -45,6 +47,7 @@ __all__ = (
     "AbstractBenchmark",
     "AbstractConversation",
     "AbstractEngine",
+    "AbstractPromptTemplate",
     "AbstractSession",
     "ActivationDataType",
     "Backend",
@@ -58,6 +61,7 @@ __all__ = (
     "LoraConfig",
     "LoraRankConfig",
     "Message",
+    "PromptTemplate",
     "Responses",
     "Role",
     "SamplerConfig",

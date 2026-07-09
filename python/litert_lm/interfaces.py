@@ -387,6 +387,44 @@ class AbstractEngine(abc.ABC):
   def detokenize(self, token_ids: list[int]) -> str:
     """Decodes token ids using the engine's tokenizer."""
 
+  @abc.abstractmethod
+  def get_prompt_template(self) -> AbstractPromptTemplate:
+    """Returns a PromptTemplate instance for rendering prompts."""
+
+
+class AbstractPromptTemplate(abc.ABC):
+  """Abstract base class for managing LiteRT-LM prompt templates."""
+
+  @abc.abstractmethod
+  def render(
+      self,
+      input_data: (
+          collections.abc.Mapping[str, Any]
+          | collections.abc.Sequence[collections.abc.Mapping[str, Any]]
+          | None
+      ) = None,
+      *,
+      messages: (
+          collections.abc.Sequence[collections.abc.Mapping[str, Any]] | None
+      ) = None,
+      tools: collections.abc.Sequence[Any] | None = None,
+      extra_context: collections.abc.Mapping[str, Any] | None = None,
+      add_generation_prompt: bool = True,
+  ) -> str:
+    """Renders the prompt template given input messages and tools.
+
+    Args:
+      input_data: Optional dictionary containing `messages`, `tools`, etc., or a
+        list of messages.
+      messages: Sequence of message dictionaries (e.g. role and content).
+      tools: Sequence of tool definitions.
+      extra_context: Additional variables for the template context.
+      add_generation_prompt: Whether to append the generation prompt.
+
+    Returns:
+      The rendered prompt string.
+    """
+
 
 class AbstractConversation(abc.ABC):
   """Abstract base class for managing LiteRT-LM conversations.
