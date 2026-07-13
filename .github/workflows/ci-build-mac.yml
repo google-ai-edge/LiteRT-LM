@@ -43,7 +43,7 @@ jobs:
       contents: write  # For gh release upload.
     env:
       MODEL_KEY: gemma-4-E2B-it-litert-lm
-      MODEL_PATH: ./models/gemma-4-E2B-it-litert-lm.litertlm
+      MODEL_PATH: ./models/gemma-4-E2B-it.litertlm
       MODEL_URL: https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm
 
       GH_TOKEN: ${{ github.token }}  # For gh release upload.
@@ -98,13 +98,10 @@ jobs:
           STEPS_BAZEL_CACHE_OUTPUTS_CACHE_MATCHED_KEY: ${{ steps.bazel-cache.outputs.cache-matched-key }}
 
       - name: Download Model
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           mkdir -p ./models
           echo "Downloading model from Hugging Face..."
           curl -L --retry 5 -f \
-            -H "Authorization: Bearer $HF_TOKEN" \
             -o ${{ env.MODEL_PATH }} \
             "${{ env.MODEL_URL }}"
           ls -lh ${{ env.MODEL_PATH }}
