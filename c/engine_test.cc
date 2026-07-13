@@ -1942,4 +1942,22 @@ TEST(EngineCTest, ConversationOptionalArgsTest) {
   EXPECT_EQ(text, "\xE3\x81\xA9");
 }
 
+TEST(EngineCTest, GetLastErrorMessageTest) {
+  // Creating engine with null/invalid settings should return nullptr and set
+  // error message.
+  EnginePtr engine(litert_lm_engine_create(nullptr), &litert_lm_engine_delete);
+  EXPECT_EQ(engine, nullptr);
+  EXPECT_STREQ(litert_lm_get_last_error_message(), "Engine settings are null.");
+
+  // Creating input data with invalid/unsupported enum should return nullptr and
+  // set error message.
+  InputDataPtr invalid_input(
+      litert_lm_input_data_create(static_cast<LiteRtLmInputDataType>(999),
+                                  nullptr, 0),
+      &litert_lm_input_data_delete);
+  EXPECT_EQ(invalid_input, nullptr);
+  EXPECT_STREQ(litert_lm_get_last_error_message(),
+               "Unsupported input data type.");
+}
+
 }  // namespace
