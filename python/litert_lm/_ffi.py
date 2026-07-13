@@ -369,6 +369,19 @@ def _setup_lib_signatures(lib):
       ctypes.c_int,
   ]
 
+  # No Repeat Ngram Config
+  lib.litert_lm_no_repeat_ngram_config_create.restype = ctypes.c_void_p
+  lib.litert_lm_no_repeat_ngram_config_create.argtypes = []
+  lib.litert_lm_no_repeat_ngram_config_delete.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_no_repeat_ngram_config_set_no_repeat_ngram_size.argtypes = [
+      ctypes.c_void_p,
+      ctypes.c_int,
+  ]
+  lib.litert_lm_no_repeat_ngram_config_set_window_size.argtypes = [
+      ctypes.c_void_p,
+      ctypes.c_int,
+  ]
+
   # Thinking Config
   lib.litert_lm_thinking_config_create.restype = ctypes.c_void_p
   lib.litert_lm_thinking_config_create.argtypes = []
@@ -387,6 +400,10 @@ def _setup_lib_signatures(lib):
   lib.litert_lm_conversation_optional_args_create.argtypes = []
   lib.litert_lm_conversation_optional_args_delete.argtypes = [ctypes.c_void_p]
   lib.litert_lm_conversation_optional_args_set_repetition_penalty_config.argtypes = [
+      ctypes.c_void_p,
+      ctypes.c_void_p,
+  ]
+  lib.litert_lm_conversation_optional_args_set_no_repeat_ngram_config.argtypes = [
       ctypes.c_void_p,
       ctypes.c_void_p,
   ]

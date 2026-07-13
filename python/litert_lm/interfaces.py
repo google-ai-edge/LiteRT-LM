@@ -269,6 +269,32 @@ class RepetitionPenaltyConfig:
 
 
 @dataclasses.dataclass
+class NoRepeatNgramConfig:
+  """Configuration for banning repetitive ngrams during generation.
+
+  Attributes:
+      no_repeat_ngram_size: The size of ngrams to ban. If set to an integer
+        greater than 0, all ngrams of that size can only occur once.
+      window_size: The maximum number of recent tokens to consider for banning.
+        A value of 0 means track all infinite history.
+  """
+
+  no_repeat_ngram_size: int | None = None
+  window_size: int | None = None
+
+  def __post_init__(self):
+    if self.no_repeat_ngram_size is not None and self.no_repeat_ngram_size < 0:
+      raise ValueError(
+          "no_repeat_ngram_size should be >= 0, but got"
+          f" {self.no_repeat_ngram_size}."
+      )
+    if self.window_size is not None and self.window_size < 0:
+      raise ValueError(
+          f"window_size should be >= 0, but got {self.window_size}."
+      )
+
+
+@dataclasses.dataclass
 class LoraRankConfig:
   """Configuration for LoRA ranks.
 
@@ -495,6 +521,7 @@ class AbstractConversation(abc.ABC):
       message: str | Contents | Message | collections.abc.Mapping[str, Any],
       *,
       repetition_penalty_config: RepetitionPenaltyConfig | None = None,
+      no_repeat_ngram_config: NoRepeatNgramConfig | None = None,
       max_output_tokens: int | None = None,
       thinking_config: ThinkingConfig | None = None,
   ) -> collections.abc.Mapping[str, Any]:
@@ -509,6 +536,7 @@ class AbstractConversation(abc.ABC):
           `collections.abc.Mapping` (super flexible raw dictionary format).
         repetition_penalty_config: Configuration for penalizing repetitive
           tokens.
+        no_repeat_ngram_config: Configuration for banning repetitive ngrams.
         max_output_tokens: The maximum number of output tokens.
         thinking_config: Configuration for thinking/reasoning generation.
 
@@ -523,6 +551,7 @@ class AbstractConversation(abc.ABC):
       message: str | Contents | Message | collections.abc.Mapping[str, Any],
       *,
       repetition_penalty_config: RepetitionPenaltyConfig | None = None,
+      no_repeat_ngram_config: NoRepeatNgramConfig | None = None,
       max_output_tokens: int | None = None,
       thinking_config: ThinkingConfig | None = None,
   ) -> collections.abc.Iterator[collections.abc.Mapping[str, Any]]:
@@ -537,6 +566,7 @@ class AbstractConversation(abc.ABC):
           `collections.abc.Mapping` (super flexible raw dictionary format).
         repetition_penalty_config: Configuration for penalizing repetitive
           tokens.
+        no_repeat_ngram_config: Configuration for banning repetitive ngrams.
         max_output_tokens: The maximum number of output tokens.
         thinking_config: Configuration for thinking/reasoning generation.
 
