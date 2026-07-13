@@ -128,12 +128,16 @@ class Conversation(interfaces.AbstractConversation):
   def _create_optional_args(
       self,
       repetition_penalty_config: interfaces.RepetitionPenaltyConfig | None,
+      no_repeat_ngram_config: interfaces.NoRepeatNgramConfig | None,
+      suppress_tokens_config: interfaces.SuppressTokensConfig | None,
       max_output_tokens: int | None,
       thinking_config: interfaces.ThinkingConfig | None,
   ) -> ctypes.c_void_p | None:
     """Creates a C pointer for ConversationOptionalArgs if needed."""
     if (
         repetition_penalty_config is None
+        and no_repeat_ngram_config is None
+        and suppress_tokens_config is None
         and max_output_tokens is None
         and thinking_config is None
     ):
@@ -165,6 +169,38 @@ class Conversation(interfaces.AbstractConversation):
         finally:
           if rpp_ptr:
             self._lib.litert_lm_repetition_penalty_config_delete(rpp_ptr)
+      if no_repeat_ngram_config is not None:
+        nrn_ptr = self._lib.litert_lm_no_repeat_ngram_config_create()
+        try:
+          if no_repeat_ngram_config.no_repeat_ngram_size is not None:
+            self._lib.litert_lm_no_repeat_ngram_config_set_no_repeat_ngram_size(
+                nrn_ptr, no_repeat_ngram_config.no_repeat_ngram_size
+            )
+          if no_repeat_ngram_config.window_size is not None:
+            self._lib.litert_lm_no_repeat_ngram_config_set_window_size(
+                nrn_ptr, no_repeat_ngram_config.window_size
+            )
+          self._lib.litert_lm_conversation_optional_args_set_no_repeat_ngram_config(
+              ptr, nrn_ptr
+          )
+        finally:
+          if nrn_ptr:
+            self._lib.litert_lm_no_repeat_ngram_config_delete(nrn_ptr)
+      if suppress_tokens_config is not None:
+        st_ptr = self._lib.litert_lm_suppress_tokens_config_create()
+        try:
+          if suppress_tokens_config.suppress_tokens is not None:
+            tokens_list = list(suppress_tokens_config.suppress_tokens)
+            tokens_array = (ctypes.c_int * len(tokens_list))(*tokens_list)
+            self._lib.litert_lm_suppress_tokens_config_set_suppress_tokens(
+                st_ptr, tokens_array, len(tokens_list)
+            )
+          self._lib.litert_lm_conversation_optional_args_set_suppress_tokens_config(
+              ptr, st_ptr
+          )
+        finally:
+          if st_ptr:
+            self._lib.litert_lm_suppress_tokens_config_delete(st_ptr)
       if max_output_tokens is not None:
         self._lib.litert_lm_conversation_optional_args_set_max_output_tokens(
             ptr, max_output_tokens
@@ -196,6 +232,8 @@ class Conversation(interfaces.AbstractConversation):
       repetition_penalty_config: (
           interfaces.RepetitionPenaltyConfig | None
       ) = None,
+      no_repeat_ngram_config: interfaces.NoRepeatNgramConfig | None = None,
+      suppress_tokens_config: interfaces.SuppressTokensConfig | None = None,
       max_output_tokens: int | None = None,
       thinking_config: interfaces.ThinkingConfig | None = None,
   ) -> collections.abc.Mapping[str, Any]:
@@ -210,6 +248,8 @@ class Conversation(interfaces.AbstractConversation):
 
       optional_args_ptr = self._create_optional_args(
           repetition_penalty_config,
+          no_repeat_ngram_config,
+          suppress_tokens_config,
           max_output_tokens,
           thinking_config,
       )
@@ -249,6 +289,8 @@ class Conversation(interfaces.AbstractConversation):
       repetition_penalty_config: (
           interfaces.RepetitionPenaltyConfig | None
       ) = None,
+      no_repeat_ngram_config: interfaces.NoRepeatNgramConfig | None = None,
+      suppress_tokens_config: interfaces.SuppressTokensConfig | None = None,
       max_output_tokens: int | None = None,
       thinking_config: interfaces.ThinkingConfig | None = None,
   ) -> collections.abc.Iterator[collections.abc.Mapping[str, Any]]:
@@ -277,6 +319,8 @@ class Conversation(interfaces.AbstractConversation):
 
       optional_args_ptr = self._create_optional_args(
           repetition_penalty_config,
+          no_repeat_ngram_config,
+          suppress_tokens_config,
           max_output_tokens,
           thinking_config,
       )

@@ -28,7 +28,9 @@
 #include "absl/status/status_matchers.h"  // from @com_google_absl
 #include "absl/synchronization/notification.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
+#include "runtime/components/logits_processor/no_repeat_ngram_config.h"
 #include "runtime/components/logits_processor/repetition_penalty_config.h"
+#include "runtime/components/logits_processor/suppress_tokens_config.h"
 #include "runtime/conversation/conversation.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/thinking_config.h"
@@ -38,8 +40,10 @@
 
 using ::litert::lm::Conversation;
 using ::litert::lm::EngineSettings;
+using ::litert::lm::NoRepeatNgramConfig;
 using ::litert::lm::RepetitionPenaltyConfig;
 using ::litert::lm::SessionConfig;
+using ::litert::lm::SuppressTokensConfig;
 
 struct LiteRtLmEngineSettings {
   std::unique_ptr<EngineSettings> settings;
@@ -51,6 +55,8 @@ struct LiteRtLmSessionConfig {
 
 struct LiteRtLmConversationOptionalArgs {
   std::optional<RepetitionPenaltyConfig> repetition_penalty_config;
+  std::optional<NoRepeatNgramConfig> no_repeat_ngram_config;
+  std::optional<SuppressTokensConfig> suppress_tokens_config;
   std::optional<int> visual_token_budget;
   std::optional<int> max_output_tokens;
   std::optional<litert::lm::ThinkingConfig> thinking_config;
@@ -117,6 +123,12 @@ using ConversationConfigPtr =
 using RepetitionPenaltyConfigPtr =
     std::unique_ptr<LiteRtLmRepetitionPenaltyConfig,
                     decltype(&litert_lm_repetition_penalty_config_delete)>;
+using NoRepeatNgramConfigPtr =
+    std::unique_ptr<LiteRtLmNoRepeatNgramConfig,
+                    decltype(&litert_lm_no_repeat_ngram_config_delete)>;
+using SuppressTokensConfigPtr =
+    std::unique_ptr<LiteRtLmSuppressTokensConfig,
+                    decltype(&litert_lm_suppress_tokens_config_delete)>;
 using OptionalArgsPtr =
     std::unique_ptr<LiteRtLmConversationOptionalArgs,
                     decltype(&litert_lm_conversation_optional_args_delete)>;
@@ -1288,8 +1300,30 @@ TEST(EngineCTest, ConversationSendMessageWithOptionalArgs) {
   OptionalArgsPtr optional_args(litert_lm_conversation_optional_args_create(),
                                 &litert_lm_conversation_optional_args_delete);
   ASSERT_NE(optional_args, nullptr);
+
+  NoRepeatNgramConfigPtr no_repeat_ngram_config(
+      litert_lm_no_repeat_ngram_config_create(),
+      &litert_lm_no_repeat_ngram_config_delete);
+  ASSERT_NE(no_repeat_ngram_config, nullptr);
+  litert_lm_no_repeat_ngram_config_set_no_repeat_ngram_size(
+      no_repeat_ngram_config.get(), 3);
+  litert_lm_no_repeat_ngram_config_set_window_size(no_repeat_ngram_config.get(),
+                                                   10);
+
+  SuppressTokensConfigPtr suppress_tokens_config(
+      litert_lm_suppress_tokens_config_create(),
+      &litert_lm_suppress_tokens_config_delete);
+  ASSERT_NE(suppress_tokens_config, nullptr);
+  int suppress_tokens[] = {10, 20, 30};
+  litert_lm_suppress_tokens_config_set_suppress_tokens(
+      suppress_tokens_config.get(), suppress_tokens, 3);
+
   litert_lm_conversation_optional_args_set_repetition_penalty_config(
       optional_args.get(), repetition_penalty_config.get());
+  litert_lm_conversation_optional_args_set_no_repeat_ngram_config(
+      optional_args.get(), no_repeat_ngram_config.get());
+  litert_lm_conversation_optional_args_set_suppress_tokens_config(
+      optional_args.get(), suppress_tokens_config.get());
   litert_lm_conversation_optional_args_set_visual_token_budget(
       optional_args.get(), 100);
 
@@ -1568,8 +1602,30 @@ TEST(EngineCTest, ConversationSendMessageStreamWithOptionalArgs) {
   OptionalArgsPtr optional_args(litert_lm_conversation_optional_args_create(),
                                 &litert_lm_conversation_optional_args_delete);
   ASSERT_NE(optional_args, nullptr);
+
+  NoRepeatNgramConfigPtr no_repeat_ngram_config(
+      litert_lm_no_repeat_ngram_config_create(),
+      &litert_lm_no_repeat_ngram_config_delete);
+  ASSERT_NE(no_repeat_ngram_config, nullptr);
+  litert_lm_no_repeat_ngram_config_set_no_repeat_ngram_size(
+      no_repeat_ngram_config.get(), 3);
+  litert_lm_no_repeat_ngram_config_set_window_size(no_repeat_ngram_config.get(),
+                                                   10);
+
+  SuppressTokensConfigPtr suppress_tokens_config(
+      litert_lm_suppress_tokens_config_create(),
+      &litert_lm_suppress_tokens_config_delete);
+  ASSERT_NE(suppress_tokens_config, nullptr);
+  int suppress_tokens[] = {10, 20, 30};
+  litert_lm_suppress_tokens_config_set_suppress_tokens(
+      suppress_tokens_config.get(), suppress_tokens, 3);
+
   litert_lm_conversation_optional_args_set_repetition_penalty_config(
       optional_args.get(), repetition_penalty_config.get());
+  litert_lm_conversation_optional_args_set_no_repeat_ngram_config(
+      optional_args.get(), no_repeat_ngram_config.get());
+  litert_lm_conversation_optional_args_set_suppress_tokens_config(
+      optional_args.get(), suppress_tokens_config.get());
   litert_lm_conversation_optional_args_set_visual_token_budget(
       optional_args.get(), 100);
 

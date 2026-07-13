@@ -27,6 +27,7 @@
 #include <variant>
 #include <vector>
 
+#include "absl/container/flat_hash_set.h"  // from @com_google_absl
 #include "absl/functional/any_invocable.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
@@ -34,7 +35,9 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
+#include "runtime/components/logits_processor/no_repeat_ngram_config.h"
 #include "runtime/components/logits_processor/repetition_penalty_config.h"
+#include "runtime/components/logits_processor/suppress_tokens_config.h"
 #include "runtime/conversation/conversation.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/config_registry.h"
@@ -75,8 +78,18 @@ struct LiteRtLmRepetitionPenaltyConfig {
   litert::lm::RepetitionPenaltyConfig repetition_penalty_config;
 };
 
+struct LiteRtLmNoRepeatNgramConfig {
+  litert::lm::NoRepeatNgramConfig no_repeat_ngram_config;
+};
+
+struct LiteRtLmSuppressTokensConfig {
+  litert::lm::SuppressTokensConfig suppress_tokens_config;
+};
+
 struct LiteRtLmConversationOptionalArgs {
   std::optional<litert::lm::RepetitionPenaltyConfig> repetition_penalty_config;
+  std::optional<litert::lm::NoRepeatNgramConfig> no_repeat_ngram_config;
+  std::optional<litert::lm::SuppressTokensConfig> suppress_tokens_config;
   std::optional<int> visual_token_budget;
   std::optional<int> max_output_tokens;
   std::optional<litert::lm::ThinkingConfig> thinking_config;
@@ -186,6 +199,14 @@ litert::lm::OptionalArgs CreateOptionalArgs(
     if (optional_args->repetition_penalty_config.has_value()) {
       litert_lm_optional_args.repetition_penalty_config =
           optional_args->repetition_penalty_config;
+    }
+    if (optional_args->no_repeat_ngram_config.has_value()) {
+      litert_lm_optional_args.no_repeat_ngram_config =
+          optional_args->no_repeat_ngram_config;
+    }
+    if (optional_args->suppress_tokens_config.has_value()) {
+      litert_lm_optional_args.suppress_tokens_config =
+          optional_args->suppress_tokens_config;
     }
     if (optional_args->visual_token_budget.has_value()) {
       litert_lm_optional_args.args = GetDataProcessorArguments(
@@ -691,6 +712,70 @@ void litert_lm_repetition_penalty_config_set_window_size(
       config->repetition_penalty_config.frequency_penalty(), window_size);
 }
 
+LiteRtLmNoRepeatNgramConfig* litert_lm_no_repeat_ngram_config_create() {
+  return new LiteRtLmNoRepeatNgramConfig{
+      .no_repeat_ngram_config = litert::lm::NoRepeatNgramConfig::Default(),
+  };
+}
+
+void litert_lm_no_repeat_ngram_config_delete(
+    LiteRtLmNoRepeatNgramConfig* config) {
+  delete config;
+}
+
+void litert_lm_no_repeat_ngram_config_set_no_repeat_ngram_size(
+    LiteRtLmNoRepeatNgramConfig* config, int no_repeat_ngram_size) {
+  if (!config) {
+    return;
+  }
+
+  config->no_repeat_ngram_config = litert::lm::NoRepeatNgramConfig(
+      no_repeat_ngram_size, config->no_repeat_ngram_config.window_size());
+}
+
+void litert_lm_no_repeat_ngram_config_set_window_size(
+    LiteRtLmNoRepeatNgramConfig* config, int window_size) {
+  if (!config) {
+    return;
+  }
+
+  config->no_repeat_ngram_config = litert::lm::NoRepeatNgramConfig(
+      config->no_repeat_ngram_config.no_repeat_ngram_size(), window_size);
+}
+
+LiteRtLmSuppressTokensConfig* litert_lm_suppress_tokens_config_create() {
+  return new LiteRtLmSuppressTokensConfig{
+      .suppress_tokens_config = litert::lm::SuppressTokensConfig::Default(),
+  };
+}
+
+void litert_lm_suppress_tokens_config_delete(
+    LiteRtLmSuppressTokensConfig* config) {
+  delete config;
+}
+
+void litert_lm_suppress_tokens_config_set_suppress_tokens(
+    LiteRtLmSuppressTokensConfig* config, const int* suppress_tokens,
+    size_t num_tokens) {
+  if (!config) {
+    return;
+  }
+
+  if (num_tokens == 0) {
+    config->suppress_tokens_config =
+        litert::lm::SuppressTokensConfig::Default();
+    return;
+  }
+
+  if (suppress_tokens == nullptr) {
+    ABSL_LOG(ERROR) << "Suppress tokens are null but num_tokens is not 0.";
+    return;
+  }
+
+  config->suppress_tokens_config = litert::lm::SuppressTokensConfig(
+      absl::flat_hash_set<int>(suppress_tokens, suppress_tokens + num_tokens));
+}
+
 LiteRtLmConversationOptionalArgs*
 litert_lm_conversation_optional_args_create() {
   return new LiteRtLmConversationOptionalArgs;
@@ -711,6 +796,38 @@ void litert_lm_conversation_optional_args_set_repetition_penalty_config(
 
   args->repetition_penalty_config =
       repetition_penalty_config->repetition_penalty_config;
+}
+
+void litert_lm_conversation_optional_args_set_no_repeat_ngram_config(
+    LiteRtLmConversationOptionalArgs* args,
+    const LiteRtLmNoRepeatNgramConfig* no_repeat_ngram_config) {
+  if (!args) {
+    return;
+  }
+
+  if (!no_repeat_ngram_config ||
+      !no_repeat_ngram_config->no_repeat_ngram_config.enabled()) {
+    args->no_repeat_ngram_config = std::nullopt;
+    return;
+  }
+
+  args->no_repeat_ngram_config = no_repeat_ngram_config->no_repeat_ngram_config;
+}
+
+void litert_lm_conversation_optional_args_set_suppress_tokens_config(
+    LiteRtLmConversationOptionalArgs* args,
+    const LiteRtLmSuppressTokensConfig* suppress_tokens_config) {
+  if (!args) {
+    return;
+  }
+
+  if (!suppress_tokens_config ||
+      !suppress_tokens_config->suppress_tokens_config.enabled()) {
+    args->suppress_tokens_config = std::nullopt;
+    return;
+  }
+
+  args->suppress_tokens_config = suppress_tokens_config->suppress_tokens_config;
 }
 
 void litert_lm_conversation_optional_args_set_visual_token_budget(
