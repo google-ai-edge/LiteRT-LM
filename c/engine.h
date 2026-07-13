@@ -62,6 +62,9 @@ typedef struct LiteRtLmConversationOptionalArgs
 // Opaque pointer for the LiteRT LM Repetition Penalty Config.
 typedef struct LiteRtLmRepetitionPenaltyConfig LiteRtLmRepetitionPenaltyConfig;
 
+// Opaque pointer for the LiteRT LM No Repeat Ngram Config.
+typedef struct LiteRtLmNoRepeatNgramConfig LiteRtLmNoRepeatNgramConfig;
+
 // Opaque pointer for the LiteRT LM Thinking Config.
 typedef struct LiteRtLmThinkingConfig LiteRtLmThinkingConfig;
 
@@ -314,8 +317,18 @@ void litert_lm_conversation_config_set_thinking_config(
 LITERT_LM_C_API_EXPORT
 void litert_lm_conversation_config_delete(LiteRtLmConversationConfig* config);
 
-// Creates a LiteRT LM Repetition Penalty Config. The caller is responsible
-// for destroying the config using `litert_lm_repetition_penalty_config_delete`.
+// Creates a LiteRT LM Repetition Penalty Config with default values
+// (`repetition_penalty` = 1.0f, `presence_penalty` = 0.0f,
+// `frequency_penalty` = 0.0f, `window_size` = 0, which means all history with
+// no penalties active).
+//
+// When multiple penalties are configured and active, the order of application
+// to output logits during decoding is:
+// 1. Multiplicative penalty (`repetition_penalty`)
+// 2. Subtractive penalties (`presence_penalty` and `frequency_penalty`)
+//
+// The caller is responsible for destroying the config using
+// `litert_lm_repetition_penalty_config_delete`.
 // @return A pointer to the created config, or NULL on failure.
 LITERT_LM_C_API_EXPORT
 LiteRtLmRepetitionPenaltyConfig* litert_lm_repetition_penalty_config_create();
@@ -326,36 +339,94 @@ LITERT_LM_C_API_EXPORT
 void litert_lm_repetition_penalty_config_delete(
     LiteRtLmRepetitionPenaltyConfig* config);
 
-// Sets the repetition penalty for the repetition penalty config.
+// Sets the multiplicative repetition penalty for the repetition penalty config.
 // @param config The config to modify.
-// @param repetition_penalty A multiplicative penalty for any token already
-// generated.
+// @param repetition_penalty A multiplicative penalty for any token that has
+// already appeared in the generated window history (e.g., 1.0 = no penalty,
+// 1.2 = moderate penalty). Positive logits are divided by this parameter, and
+// negative logits are multiplied (HuggingFace style). The parameter must be
+// >= 1.0f; values less than 1.0f are automatically clamped to 1.0f during
+// execution.
 LITERT_LM_C_API_EXPORT
 void litert_lm_repetition_penalty_config_set_repetition_penalty(
     LiteRtLmRepetitionPenaltyConfig* config, float repetition_penalty);
 
 // Sets the presence penalty for the repetition penalty config.
 // @param config The config to modify.
-// @param presence_penalty A scalar subtracted from a logit if a token has
-// appeared at least once.
+// @param presence_penalty A scalar subtracted globally from a token's logit if
+// that token has appeared at least once inside the generated window history.
+// Positive values discourage repetition, while negative values reward repeating
+// tokens (OpenAI style). Defaults to 0.0f.
 LITERT_LM_C_API_EXPORT
 void litert_lm_repetition_penalty_config_set_presence_penalty(
     LiteRtLmRepetitionPenaltyConfig* config, float presence_penalty);
 
 // Sets the frequency penalty for the repetition penalty config.
 // @param config The config to modify.
-// @param frequency_penalty A scalar subtracted from a token's logit scaled by
-// previous appearances.
+// @param frequency_penalty A scalar subtracted from a token's logit, scaled
+// linearly by the number of times that token has previously appeared inside the
+// generated window history. Positive values discourage repetition, while
+// negative values reward repeating tokens (OpenAI style). Defaults to 0.0f.
 LITERT_LM_C_API_EXPORT
 void litert_lm_repetition_penalty_config_set_frequency_penalty(
     LiteRtLmRepetitionPenaltyConfig* config, float frequency_penalty);
 
 // Sets the window size for the repetition penalty config.
 // @param config The config to modify.
-// @param window_size The maximum number of recent tokens to consider.
+// @param window_size The maximum number of recent tokens in generation history
+// to consider when computing penalization. Tokens generated prior to this
+// window are forgotten. A value of 0 means tracking all infinite generation
+// history. Must be >= 0; negative values are clamped to 0 during execution.
 LITERT_LM_C_API_EXPORT
 void litert_lm_repetition_penalty_config_set_window_size(
     LiteRtLmRepetitionPenaltyConfig* config, int window_size);
+
+// Creates a LiteRT LM No Repeat Ngram Config with default values
+// (`no_repeat_ngram_size` = 0, `window_size` = 0, which means no repeat ngram
+// banning is disabled).
+//
+// When `no_repeat_ngram_size` is set greater than 0, any sequence of tokens (an
+// ngram of that exact length) generated during decoding or present inside the
+// window history can only occur at most once. If generating a candidate token
+// would complete a repeating ngram, that candidate token's logit is set to
+// -inf.
+//
+// The caller is responsible for destroying the config using
+// `litert_lm_no_repeat_ngram_config_delete`.
+// @return A pointer to the created config, or NULL on failure.
+LITERT_LM_C_API_EXPORT
+LiteRtLmNoRepeatNgramConfig* litert_lm_no_repeat_ngram_config_create();
+
+// Destroys a LiteRT LM No Repeat Ngram Config.
+// @param config The config to destroy.
+LITERT_LM_C_API_EXPORT
+void litert_lm_no_repeat_ngram_config_delete(
+    LiteRtLmNoRepeatNgramConfig* config);
+
+// Sets the no repeat ngram size for the no repeat ngram config.
+// @param config The config to modify.
+// @param no_repeat_ngram_size The size of ngrams (consecutive token sequences)
+// that are banned from repeating within the generation history window. If set
+// > 0, when generating the next token would complete an already observed
+// `no_repeat_ngram_size` sequence, the logit of the candidate token is set to
+// -inf. If set <= 0, no repeat ngram banning is disabled. Negative values are
+// automatically clamped to 0 during execution.
+LITERT_LM_C_API_EXPORT
+void litert_lm_no_repeat_ngram_config_set_no_repeat_ngram_size(
+    LiteRtLmNoRepeatNgramConfig* config, int no_repeat_ngram_size);
+
+// Sets the window size for the no repeat ngram config.
+// @param config The config to modify.
+// @param window_size The maximum number of recent tokens in generation history
+// to consider when checking for repeating ngrams. Tokens generated prior to
+// this window are forgotten. A value of 0 means tracking all infinite
+// generation history. Must be >= 0; negative values are clamped to 0. If
+// `window_size` is greater than 0 but less than `no_repeat_ngram_size`, it is
+// automatically clamped to `no_repeat_ngram_size` so that the ngrams can fit
+// and be tracked.
+LITERT_LM_C_API_EXPORT
+void litert_lm_no_repeat_ngram_config_set_window_size(
+    LiteRtLmNoRepeatNgramConfig* config, int window_size);
 
 // Creates a LiteRT LM Conversation Optional Args. The caller is responsible
 // for destroying the optional args using
@@ -370,14 +441,43 @@ LITERT_LM_C_API_EXPORT
 void litert_lm_conversation_optional_args_delete(
     LiteRtLmConversationOptionalArgs* optional_args);
 
-// Sets the repetition penalty configuration for the conversation optional args.
-// @param optional_args The optional args to modify.
-// @param repetition_penalty_config The repetition penalty config to set. If
-// NULL, clears any previously set repetition penalty config.
+// Sets the repetition penalty configuration for the per-turn conversation
+// optional arguments (`OptionalArgs`).
+//
+// The configured penalties (`repetition_penalty`, `presence_penalty`,
+// `frequency_penalty`, `window_size`) apply exclusively to the output sequence
+// generated during the current `send_message` or `send_message_async` call.
+//
+// @param optional_args The optional arguments structure (`OptionalArgs`) to
+// modify.
+// @param repetition_penalty_config The repetition penalty configuration struct
+// (`LiteRtLmRepetitionPenaltyConfig`) created via
+// `litert_lm_repetition_penalty_config_create`. The contents are deep-copied
+// when set. If NULL, clears any previously set repetition penalty config so no
+// penalties apply.
 LITERT_LM_C_API_EXPORT
 void litert_lm_conversation_optional_args_set_repetition_penalty_config(
     LiteRtLmConversationOptionalArgs* optional_args,
     const LiteRtLmRepetitionPenaltyConfig* repetition_penalty_config);
+
+// Sets the no repeat ngram configuration for the per-turn conversation
+// optional arguments (`OptionalArgs`).
+//
+// The configured parameters (`no_repeat_ngram_size`, `window_size`) apply
+// exclusively to the output sequence generated during the current
+// `send_message` or `send_message_async` call.
+//
+// @param optional_args The optional arguments structure (`OptionalArgs`) to
+// modify.
+// @param no_repeat_ngram_config The no repeat ngram configuration struct
+// (`LiteRtLmNoRepeatNgramConfig`) created via
+// `litert_lm_no_repeat_ngram_config_create`. The contents are deep-copied when
+// set. If NULL, clears any previously set no repeat ngram config so no
+// repeat ngram banning applies.
+LITERT_LM_C_API_EXPORT
+void litert_lm_conversation_optional_args_set_no_repeat_ngram_config(
+    LiteRtLmConversationOptionalArgs* optional_args,
+    const LiteRtLmNoRepeatNgramConfig* no_repeat_ngram_config);
 
 // Sets the visual token budget for the conversation optional args.
 // @param optional_args The optional args to modify.
