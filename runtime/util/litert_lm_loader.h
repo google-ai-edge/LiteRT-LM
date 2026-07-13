@@ -187,6 +187,12 @@ class LitertLmLoader {
         .value();
   }
 
+  // Returns the executor metadata section buffer.
+  std::optional<litert::BufferRef<uint8_t>> GetExecutorMetadata() {
+    return GetSectionBuffer(
+        BufferKey(schema::AnySectionDataType_ExecutorMetadataProto));
+  }
+
   absl::StatusOr<std::pair<size_t, size_t>> GetSectionLocation(
       BufferKey buffer_key) const;
 
@@ -214,8 +220,7 @@ class LitertLmLoader {
 
   // The model file to be loaded, can be either a ScopedFile or a
   // memory-mapped file.
-  std::variant<std::shared_ptr<ScopedFile>,
-               std::shared_ptr<MemoryMappedFile>>
+  std::variant<std::shared_ptr<ScopedFile>, std::shared_ptr<MemoryMappedFile>>
       model_source_;
 
   // The header of the model file. Use this to understand what sections are

@@ -128,6 +128,26 @@ alias(
 )
 
 tf_proto_library(
+    name = "executor_metadata",
+    srcs = ["executor_metadata.proto"],
+)
+
+alias(
+    name = "executor_metadata_proto",
+    actual = ":executor_metadata",
+)
+
+alias(
+    name = "executor_metadata_cc_proto",
+    actual = ":executor_metadata_cc",
+)
+
+alias(
+    name = "executor_metadata_py_pb2",
+    actual = ":executor_metadata_py_proto",
+)
+
+tf_proto_library(
     name = "litert_lm_metrics",
     srcs = ["litert_lm_metrics.proto"],
     deps = [":engine_proto"],

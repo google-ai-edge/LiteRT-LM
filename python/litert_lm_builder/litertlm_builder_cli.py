@@ -87,6 +87,7 @@ _SUBCOMMANDS = (
     "toml",
     "system_metadata",
     "llm_metadata",
+    "executor_metadata",
     "tflite_model",
     "tflite_weights",
     "sp_tokenizer",
@@ -176,6 +177,25 @@ def _add_llm_metadata_parser(subparsers) -> None:
       required=True,
       help="The path to the llm metadata file.",
   )
+
+
+def _add_executor_metadata_parser(subparsers) -> None:
+  """Adds a parser for executor metadata to the subparsers."""
+  executor_metadata_parser = subparsers.add_parser(
+      "executor_metadata",
+      description=(
+          "Add executor metadata to the LiteRT-LM file. Can be a text or binary"
+          " proto file."
+      ),
+      help="Add executor metadata.",
+  )
+  executor_metadata_parser.add_argument(
+      "--path",
+      type=str,
+      required=True,
+      help="The path to the executor metadata file.",
+  )
+  _add_metadata_arguments(executor_metadata_parser)
 
 
 def _add_tflite_model_parser(subparsers) -> None:
@@ -328,6 +348,7 @@ def _build_parser() -> argparse.ArgumentParser:
   _add_toml_parser(subparsers)
   _add_system_metadata_parser(subparsers)
   _add_llm_metadata_parser(subparsers)
+  _add_executor_metadata_parser(subparsers)
   _add_tflite_model_parser(subparsers)
   _add_tflite_weights_parser(subparsers)
   _add_sentencepiece_tokenizer_parser(subparsers)
@@ -439,6 +460,15 @@ def _build_llm_metadata(
   builder.add_llm_metadata(args.path, additional_metadata=metadata)
 
 
+def _build_executor_metadata(
+    args: argparse.Namespace,
+    builder: litertlm_builder.LitertLmFileBuilder,
+) -> None:
+  """Builds executor metadata from the parsed arguments."""
+  metadata = _get_metadata_from_args(args)
+  builder.add_executor_metadata(args.path, additional_metadata=metadata)
+
+
 def _build_tflite_model(
     args: argparse.Namespace,
     builder: litertlm_builder.LitertLmFileBuilder,
@@ -535,6 +565,8 @@ def _build_litertlm_file(parsed_args: list[argparse.Namespace]) -> None:
           _build_system_metadata(parsed_arg, builder)
         case "llm_metadata":
           _build_llm_metadata(parsed_arg, builder)
+        case "executor_metadata":
+          _build_executor_metadata(parsed_arg, builder)
         case "tflite_model":
           _build_tflite_model(parsed_arg, builder)
         case "tflite_weights":

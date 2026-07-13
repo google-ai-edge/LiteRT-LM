@@ -21,6 +21,7 @@ from google.protobuf import text_format
 
 from litert_lm_builder import litertlm_core
 from litert_lm_builder import litertlm_header_schema_py_generated as schema
+from runtime.proto import executor_metadata_pb2
 from runtime.proto import llm_metadata_pb2
 
 # --- ANSI Escape Code Definitions ---
@@ -188,6 +189,41 @@ def _dump_llm_metadata_proto(
 
   if dump_files_dir:
     file_name = "LlmMetadataProto.pbtext"
+    file_path = os.path.join(dump_files_dir, file_name)
+    with litertlm_core.open_file(file_path, "w") as f_out:
+      f_out.write(debug_str)
+    output_stream.write(
+        f"{' ' * INDENT_SPACES}{file_name} dumped to: {file_path}\n"
+    )
+    return file_name
+  return None
+
+
+def _dump_executor_metadata_proto(
+    file_stream: IO[bytes],
+    section_object: schema.SectionObject,
+    dump_files_dir: str | None,
+    output_stream: IO[str],
+) -> Optional[str]:
+  """Dumps ExecutorMetadataProto section content."""
+  file_stream.seek(section_object.BeginOffset())
+  proto_data = file_stream.read(
+      section_object.EndOffset() - section_object.BeginOffset()
+  )
+  executor_metadata = executor_metadata_pb2.ExecutorMetadata()
+  executor_metadata.ParseFromString(proto_data)
+  output_stream.write(
+      f"{' ' * INDENT_SPACES}<<<<<<<< start of ExecutorMetadata\n"
+  )
+  debug_str = text_format.MessageToString(executor_metadata)
+  for line in debug_str.splitlines():
+    output_stream.write(f"{' ' * (INDENT_SPACES * 2)}{line}\n")
+  output_stream.write(
+      f"{' ' * INDENT_SPACES}>>>>>>>> end of ExecutorMetadata\n"
+  )
+
+  if dump_files_dir:
+    file_name = "ExecutorMetadataProto.pbtext"
     file_path = os.path.join(dump_files_dir, file_name)
     with litertlm_core.open_file(file_path, "w") as f_out:
       f_out.write(debug_str)
@@ -370,7 +406,8 @@ def kvp_to_dict(kvp: schema.KeyValuePair) -> dict[str, Any]:
     kvp: The KeyValuePair flatbuffer table object to convert.
 
   Returns:
-    A dictionary with 'key' (str or None), 'value' (extracted Any value or None),
+    A dictionary with 'key' (str or None), 'value' (extracted Any value or
+    None),
     and 'value_type' (str description of the union type).
   """
   key_bytes = kvp.Key()
@@ -534,10 +571,14 @@ def peek_litertlm_file(
             section_info["backend_constraint"] = backend_constraint
 
         data_type = section_object.DataType()
-        dumped_file_name = None
         if data_type == schema.AnySectionDataType.LlmMetadataProto:
           section_info["section_type"] = "LlmMetadata"
           dumped_file_name = _dump_llm_metadata_proto(
+              file_stream, section_object, dump_files_dir, output_stream
+          )
+        elif data_type == schema.AnySectionDataType.ExecutorMetadataProto:
+          section_info["section_type"] = "ExecutorMetadata"
+          dumped_file_name = _dump_executor_metadata_proto(
               file_stream, section_object, dump_files_dir, output_stream
           )
         elif data_type == schema.AnySectionDataType.TFLiteModel:

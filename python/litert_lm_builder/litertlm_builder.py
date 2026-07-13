@@ -60,6 +60,7 @@ import tomli as tomllib
 from litert_lm_builder import litertlm_core
 from litert_lm_builder import litertlm_header_schema_py_generated as schema
 from litert_lm_builder import litertlm_peek
+from runtime.proto import executor_metadata_pb2
 from runtime.proto import llm_metadata_pb2
 
 
@@ -293,6 +294,7 @@ class LitertLmFileBuilder:
     self._system_metadata: list[Metadata] = []
     self._sections: list[_SectionObject] = []
     self._has_llm_metadata = False
+    self._has_executor_metadata = False
     self._has_tokenizer = False
 
   @classmethod
@@ -351,6 +353,11 @@ class LitertLmFileBuilder:
 
         if section["section_type"] == "LlmMetadata":
           builder.add_llm_metadata(
+              _resolve_path(section["data_path"], parent_dir),
+              additional_metadata=additional_metadata,
+          )
+        elif section["section_type"] == "ExecutorMetadata":
+          builder.add_executor_metadata(
               _resolve_path(section["data_path"], parent_dir),
               additional_metadata=additional_metadata,
           )
@@ -480,6 +487,56 @@ class LitertLmFileBuilder:
     section_object = _SectionObject(
         metadata=additional_metadata if additional_metadata else [],
         data_type=schema.AnySectionDataType.LlmMetadataProto,
+        data_writer=data_writer,
+    )
+    self._sections.append(section_object)
+    return self
+
+  def add_executor_metadata(
+      self,
+      executor_metadata_path: str,
+      additional_metadata: Optional[list[Metadata]] = None,
+  ) -> LitertLmFileBuilderT:
+    """Adds executor metadata to the litertlm file.
+
+    Args:
+      executor_metadata_path: The path to the executor metadata file. Can be
+        binary or textproto format.
+      additional_metadata: Additional metadata to add to the executor metadata.
+
+    Returns:
+      The current LitertLmFileBuilder object.
+
+    Raises:
+      FileNotFoundError: If the executor metadata file is not found.
+    """
+    assert not self._has_executor_metadata, "Executor metadata already added."
+    self._has_executor_metadata = True
+    if not litertlm_core.path_exists(executor_metadata_path):
+      raise FileNotFoundError(
+          f"Executor metadata file not found: {executor_metadata_path}"
+      )
+
+    if _is_binary_proto(
+        executor_metadata_path, executor_metadata_pb2.ExecutorMetadata
+    ):
+
+      def data_writer(stream: BinaryIO):
+        with litertlm_core.open_file(executor_metadata_path, "rb") as f:
+          _copy_file_to_stream(f, stream)
+
+    else:
+
+      def data_writer(stream: BinaryIO):
+        with litertlm_core.open_file(executor_metadata_path, "r") as f:
+          data = text_format.Parse(
+              f.read(), executor_metadata_pb2.ExecutorMetadata()
+          ).SerializeToString()
+          stream.write(data)
+
+    section_object = _SectionObject(
+        metadata=additional_metadata if additional_metadata else [],
+        data_type=schema.AnySectionDataType.ExecutorMetadataProto,
         data_writer=data_writer,
     )
     self._sections.append(section_object)
@@ -791,9 +848,7 @@ def _round_up_to_block_size(offset: int) -> int:
   )
 
 
-def _copy_file_to_stream(
-    f_src: Any, f_dst: BinaryIO, buffer_size=1024 * 1024
-):
+def _copy_file_to_stream(f_src: Any, f_dst: BinaryIO, buffer_size=1024 * 1024):
   """Copies data from f_src to f_dst efficiently."""
   # Try to use os.sendfile (zero-copy) if available.
   if hasattr(os, "sendfile"):
@@ -836,22 +891,26 @@ def _validate_backend_constraints(backend_constraint: str) -> None:
       )
 
 
-def _is_binary_proto(filepath: str) -> bool:
-  """Checks if a file is a binary protobuf or a textproto version of LlmMetadata.
+def _is_binary_proto(
+    filepath: str,
+    message_type: Any = llm_metadata_pb2.LlmMetadata,
+) -> bool:
+  """Checks if a file is a binary protobuf or a textproto.
 
   Args:
       filepath (str): The path to the file.
+      message_type: The protobuf message class to try parsing with.
 
   Returns:
       bool: True if the file is a binary protobuf, False if it's a textproto.
-      TextProto.
   """
   assert litertlm_core.path_exists(filepath), f"File {filepath} does not exist."
 
+  name = message_type().__class__.__name__
   try:
     with litertlm_core.open_file(filepath, "rb") as f:
       content = f.read()
-      msg = llm_metadata_pb2.LlmMetadata()
+      msg = message_type()
       msg.ParseFromString(content)
       if msg.IsInitialized():
         return True
@@ -863,12 +922,12 @@ def _is_binary_proto(filepath: str) -> bool:
   try:
     with litertlm_core.open_file(filepath, "r") as f:
       content = f.read()
-      msg = text_format.Parse(content, llm_metadata_pb2.LlmMetadata())
+      msg = text_format.Parse(content, message_type())
       if msg.IsInitialized():
         return False
   except (text_format.ParseError, UnicodeDecodeError) as e:
     raise ValueError(
-        f"Failed to parse LlmMetadata from {filepath}. Exception: {e}"
+        f"Failed to parse {name} from {filepath}. Exception: {e}"
     ) from e
 
 

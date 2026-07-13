@@ -479,6 +479,11 @@ class TfLiteModelResources : public ModelResources {
     return absl::UnimplementedError("GetLlmMetadata not implemented.");
   }
 
+  absl::StatusOr<const proto::ExecutorMetadata*> GetExecutorMetadata()
+      override {
+    return absl::UnimplementedError("GetExecutorMetadata not implemented.");
+  }
+
   std::optional<std::string> GetTFLiteModelBackendConstraint(
       ModelType model_type) override {
     return std::nullopt;

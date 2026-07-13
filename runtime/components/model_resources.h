@@ -37,6 +37,7 @@
 #include "support/tokenizer/sentencepiece_tokenizer.h"  // from @litert
 #endif  // ENABLE_SENTENCEPIECE_TOKENIZER
 #include "support/tokenizer/tokenizer.h"  // from @litert
+#include "runtime/proto/executor_metadata.pb.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/scoped_file.h"
 
@@ -199,6 +200,10 @@ class ModelResources {
 
   // Returns the llm metadata.
   virtual absl::StatusOr<const proto::LlmMetadata*> GetLlmMetadata() = 0;
+
+  // Returns the executor metadata.
+  virtual absl::StatusOr<const proto::ExecutorMetadata*>
+  GetExecutorMetadata() = 0;
 };
 
 }  // namespace litert::lm

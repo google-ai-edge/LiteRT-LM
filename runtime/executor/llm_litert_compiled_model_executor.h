@@ -45,6 +45,7 @@
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/llm_litert_mtp_drafter.h"
 #include "runtime/executor/llm_processed_context.h"
+#include "runtime/proto/executor_metadata.pb.h"
 
 namespace litert::lm {
 
@@ -187,7 +188,8 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
       std::unique_ptr<EmbeddingLookupManager> embedding_lookup,
       std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup,
       bool use_fp16_precision, LogitsDataType logits_data_type,
-      std::unique_ptr<LlmLiteRtMtpDrafter> mtp_drafter)
+      std::unique_ptr<LlmLiteRtMtpDrafter> mtp_drafter,
+      const proto::ExecutorMetadata* executor_metadata = nullptr)
       : executor_settings_(std::move(executor_settings)),
         env_(env),
         model_(*model),
@@ -206,7 +208,8 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
         per_layer_embedding_lookup_(std::move(per_layer_embedding_lookup)),
         use_fp16_precision_(use_fp16_precision),
         logits_data_type_(logits_data_type),
-        mtp_drafter_(std::move(mtp_drafter)) {
+        mtp_drafter_(std::move(mtp_drafter)),
+        executor_metadata_(executor_metadata) {
     auto processed_context = std::make_unique<LlmProcessedContext>(
         std::nullopt, absl::flat_hash_map<absl::string_view, TensorBuffer>(),
         ProcessedTokens());
@@ -380,6 +383,9 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
 
   // The MTP drafter model.
   std::unique_ptr<LlmLiteRtMtpDrafter> mtp_drafter_;
+
+  // The executor metadata.
+  const proto::ExecutorMetadata* executor_metadata_ = nullptr;
 };
 
 // The static executor for the prefill-decode compiled model.
@@ -420,7 +426,8 @@ class LlmLiteRtCompiledModelExecutorStatic
           nullptr,
       bool use_fp16_precision = true,
       LogitsDataType logits_data_type = LogitsDataType::FLOAT32,
-      std::unique_ptr<LlmLiteRtMtpDrafter> mtp_drafter = nullptr)
+      std::unique_ptr<LlmLiteRtMtpDrafter> mtp_drafter = nullptr,
+      const proto::ExecutorMetadata* executor_metadata = nullptr)
       : LlmLiteRtCompiledModelExecutorBase(
             std::move(executor_settings), env, model, std::move(compiled_model),
             std::move(decode_input_buffers), std::move(decode_output_buffers),
@@ -430,7 +437,8 @@ class LlmLiteRtCompiledModelExecutorStatic
             std::move(decode_output_kv_cache_buffers), signatures,
             output_batch_size, std::move(weight_cache_path),
             std::move(embedding_lookup), std::move(per_layer_embedding_lookup),
-            use_fp16_precision, logits_data_type, std::move(mtp_drafter)),
+            use_fp16_precision, logits_data_type, std::move(mtp_drafter),
+            executor_metadata),
         prefill_signature_map_(std::move(prefill_signature_map)) {}
 
   SortedPrefillSignatureMap prefill_signature_map_;
@@ -477,7 +485,8 @@ class LlmLiteRtCompiledModelExecutorDynamic
           nullptr,
       bool use_fp16_precision = true,
       LogitsDataType logits_data_type = LogitsDataType::FLOAT32,
-      std::unique_ptr<LlmLiteRtMtpDrafter> mtp_drafter = nullptr)
+      std::unique_ptr<LlmLiteRtMtpDrafter> mtp_drafter = nullptr,
+      const proto::ExecutorMetadata* executor_metadata = nullptr)
       : LlmLiteRtCompiledModelExecutorBase(
             std::move(executor_settings), env, model, std::move(compiled_model),
             std::move(decode_input_buffers), std::move(decode_output_buffers),
@@ -487,7 +496,8 @@ class LlmLiteRtCompiledModelExecutorDynamic
             /*decode_output_kv_cache_buffers=*/std::nullopt, signatures,
             output_batch_size, std::move(weight_cache_path),
             std::move(embedding_lookup), std::move(per_layer_embedding_lookup),
-            use_fp16_precision, logits_data_type, std::move(mtp_drafter)),
+            use_fp16_precision, logits_data_type, std::move(mtp_drafter),
+            executor_metadata),
         prefill_chunk_size_(prefill_chunk_size),
         key_dynamic_dim_index_(key_dynamic_dim_index),
         value_dynamic_dim_index_(value_dynamic_dim_index),

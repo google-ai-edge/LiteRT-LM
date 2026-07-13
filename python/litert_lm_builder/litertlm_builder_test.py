@@ -23,6 +23,7 @@ from litert_lm_builder import litertlm_builder
 from litert_lm_builder import litertlm_core
 from litert_lm_builder import litertlm_header_schema_py_generated as schema
 from litert_lm_builder import litertlm_peek
+from runtime.proto import executor_metadata_pb2
 from runtime.proto import llm_metadata_pb2
 
 _TOML_TEMPLATE = """
@@ -62,6 +63,11 @@ additional_metadata = [
 # Section 4: GenericBinaryData
 section_type = "GenericBinaryData"
 data_path = "{GENERIC_BINARY_PATH}"
+
+[[section]]
+# Section 5: ExecutorMetadata
+section_type = "ExecutorMetadata"
+data_path = "{EXECUTOR_METADATA_PATH}"
 """
 
 
@@ -224,6 +230,55 @@ class LitertlmBuilderTest(parameterized.TestCase):
     builder.add_llm_metadata(metadata_path)
     with self.assertRaises(AssertionError):
       builder.add_llm_metadata(metadata_path)
+
+  def test_add_executor_metadata_binary(self):
+    """Tests that executor metadata can be added from a binary proto file."""
+    executor_metadata = executor_metadata_pb2.ExecutorMetadata(
+        llm_executor_metadata=executor_metadata_pb2.LlmExecutorMetadata(
+            permited_rollback_steps=5
+        )
+    )
+    bin_proto = executor_metadata.SerializeToString()
+    metadata_path = self._create_dummy_file("executor.pb", bin_proto)
+
+    builder = litertlm_builder.LitertLmFileBuilder()
+    self._add_system_metadata(builder)
+    builder.add_executor_metadata(metadata_path)
+    ss = self._build_and_read_litertlm(builder)
+    self.assertIn("permited_rollback_steps: 5", ss)
+    self.assertIn("Sections (1)", ss)
+
+  def test_add_executor_metadata_text(self):
+    """Tests that executor metadata can be added from a text proto file."""
+    executor_metadata = executor_metadata_pb2.ExecutorMetadata(
+        llm_executor_metadata=executor_metadata_pb2.LlmExecutorMetadata(
+            permited_rollback_steps=5
+        )
+    )
+    text_proto = text_format.MessageToString(executor_metadata)
+    metadata_path = self._create_dummy_file(
+        "executor.textproto", text_proto.encode("utf-8")
+    )
+
+    builder = litertlm_builder.LitertLmFileBuilder()
+    self._add_system_metadata(builder)
+    builder.add_executor_metadata(metadata_path)
+    ss = self._build_and_read_litertlm(builder)
+    self.assertIn("permited_rollback_steps: 5", ss)
+    self.assertIn("Sections (1)", ss)
+
+  def test_add_executor_metadata_not_found(self):
+    """Tests that adding a non-existent executor metadata file raises a FileNotFoundError."""
+    builder = litertlm_builder.LitertLmFileBuilder()
+    with self.assertRaises(FileNotFoundError):
+      builder.add_executor_metadata("nonexistent.pb")
+
+  def test_add_executor_metadata_already_added(self):
+    builder = litertlm_builder.LitertLmFileBuilder()
+    metadata_path = self._create_dummy_file("executor.pb", b"")
+    builder.add_executor_metadata(metadata_path)
+    with self.assertRaises(AssertionError):
+      builder.add_executor_metadata(metadata_path)
 
   @parameterized.named_parameters(
       ("prefill_decode", litertlm_builder.TfLiteModelType.PREFILL_DECODE),
@@ -509,6 +564,16 @@ class LitertlmBuilderTest(parameterized.TestCase):
     bin_proto = llm_metadata.SerializeToString()
     metadata_path = self._create_dummy_file("llm.pb", bin_proto)
 
+    executor_metadata = executor_metadata_pb2.ExecutorMetadata(
+        llm_executor_metadata=executor_metadata_pb2.LlmExecutorMetadata(
+            permited_rollback_steps=5
+        )
+    )
+    executor_bin_proto = executor_metadata.SerializeToString()
+    executor_metadata_path = self._create_dummy_file(
+        "executor.pb", executor_bin_proto
+    )
+
     builder = litertlm_builder.LitertLmFileBuilder()
     self._add_system_metadata(builder)
     builder.add_sentencepiece_tokenizer(sp_path)
@@ -519,14 +584,17 @@ class LitertlmBuilderTest(parameterized.TestCase):
         tflite_path, model_type=litertlm_builder.TfLiteModelType.PREFILL_DECODE
     )
     builder.add_llm_metadata(metadata_path)
+    builder.add_executor_metadata(executor_metadata_path)
     ss = self._build_and_read_litertlm(builder)
-    self.assertIn("Sections (4)", ss)
+    self.assertIn("Sections (5)", ss)
     self.assertIn("Data Type:    SP_Tokenizer", ss)
     self.assertIn("Data Type:    TFLiteModel", ss)
     self.assertIn("Key: model_type, Value (String): tf_lite_embedder", ss)
     self.assertIn("Key: model_type, Value (String): tf_lite_prefill_decode", ss)
     self.assertIn("Data Type:    LlmMetadataProto", ss)
     self.assertIn("max_num_tokens: 123", ss)
+    self.assertIn("Data Type:    ExecutorMetadataProto", ss)
+    self.assertIn("permited_rollback_steps: 5", ss)
 
   @parameterized.named_parameters(
       ("relative_path", True),
@@ -537,6 +605,7 @@ class LitertlmBuilderTest(parameterized.TestCase):
     sp_filename = "sp.model"
     tflite_filename = "model.tflite"
     metadata_filename = "llm.pb"
+    executor_filename = "executor.pb"
 
     sp_path_abs = self._create_dummy_file(sp_filename, b"dummy sp content")
     tflite_path_abs = self._create_dummy_file(
@@ -545,6 +614,14 @@ class LitertlmBuilderTest(parameterized.TestCase):
     metadata_path_abs = self._create_dummy_file(
         metadata_filename,
         llm_metadata_pb2.LlmMetadata(max_num_tokens=123).SerializeToString(),
+    )
+    executor_path_abs = self._create_dummy_file(
+        executor_filename,
+        executor_metadata_pb2.ExecutorMetadata(
+            llm_executor_metadata=executor_metadata_pb2.LlmExecutorMetadata(
+                permited_rollback_steps=5
+            )
+        ).SerializeToString(),
     )
     generic_binary_filename = "data.bin"
     generic_binary_path_abs = self._create_dummy_file(
@@ -556,11 +633,13 @@ class LitertlmBuilderTest(parameterized.TestCase):
       tflite_path = tflite_filename
       metadata_path = metadata_filename
       generic_binary_path = generic_binary_filename
+      executor_path = executor_filename
     else:
       sp_path = pathlib.Path(sp_path_abs).as_posix()
       tflite_path = pathlib.Path(tflite_path_abs).as_posix()
       metadata_path = pathlib.Path(metadata_path_abs).as_posix()
       generic_binary_path = pathlib.Path(generic_binary_path_abs).as_posix()
+      executor_path = pathlib.Path(executor_path_abs).as_posix()
 
     toml_path = self._create_dummy_file(
         "test.toml",
@@ -569,11 +648,12 @@ class LitertlmBuilderTest(parameterized.TestCase):
         .replace("{EMBEDDER_PATH}", tflite_path)
         .replace("{PREFILL_DECODE_PATH}", tflite_path)
         .replace("{GENERIC_BINARY_PATH}", generic_binary_path)
+        .replace("{EXECUTOR_METADATA_PATH}", executor_path)
         .encode("utf-8"),
     )
     builder = litertlm_builder.LitertLmFileBuilder.from_toml_file(toml_path)
     ss = self._build_and_read_litertlm(builder)
-    self.assertIn("Sections (5)", ss)
+    self.assertIn("Sections (6)", ss)
     self.assertIn("Data Type:    SP_Tokenizer", ss)
     self.assertIn("Data Type:    TFLiteModel", ss)
     self.assertIn("Key: model_type, Value (String): tf_lite_embedder", ss)
@@ -581,6 +661,8 @@ class LitertlmBuilderTest(parameterized.TestCase):
     self.assertIn("Data Type:    LlmMetadataProto", ss)
     self.assertIn("max_num_tokens: 123", ss)
     self.assertIn("Data Type:    GenericBinaryData", ss)
+    self.assertIn("Data Type:    ExecutorMetadataProto", ss)
+    self.assertIn("permited_rollback_steps: 5", ss)
 
   def test_from_toml_with_prefer_activation_type(self):
     """Tests that a LitertLmFileBuilder can be initialized with prefer_activation_type from TOML."""
