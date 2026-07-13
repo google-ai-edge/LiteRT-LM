@@ -206,6 +206,9 @@ absl::StatusOr<Message> RunSingleTurnConversation(
     optional_args.repetition_penalty_config =
         settings.repetition_penalty_config;
   }
+  if (settings.no_repeat_ngram_config.enabled()) {
+    optional_args.no_repeat_ngram_config = settings.no_repeat_ngram_config;
+  }
   if (settings.suppress_tokens_config.enabled()) {
     optional_args.suppress_tokens_config = settings.suppress_tokens_config;
   }
@@ -275,6 +278,9 @@ absl::Status RunMultiTurnConversation(const LiteRtLmSettings& settings,
     if (settings.repetition_penalty_config.enabled()) {
       optional_args.repetition_penalty_config =
           settings.repetition_penalty_config;
+    }
+    if (settings.no_repeat_ngram_config.enabled()) {
+      optional_args.no_repeat_ngram_config = settings.no_repeat_ngram_config;
     }
     if (settings.suppress_tokens_config.enabled()) {
       optional_args.suppress_tokens_config = settings.suppress_tokens_config;
