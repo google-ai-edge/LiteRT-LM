@@ -19,6 +19,7 @@ import ctypes
 import enum
 from importlib import resources
 import os
+import sys
 
 
 class c_string_p(ctypes.c_char_p):  # pylint: disable=invalid-name
@@ -100,6 +101,13 @@ def _get_lib() -> ctypes.CDLL:
   else:
     extension = "dylib" if sys.platform == "darwin" else "so"
     lib_name = f"liblitert-lm.{extension}"
+
+  if sys.platform == "win32":
+    package_dir = os.path.dirname(os.path.abspath(__file__))
+    try:
+      os.add_dll_directory(package_dir)
+    except Exception:  # pylint: disable=broad-except
+      pass
 
   # 1. Try loading using importlib.resources (handles .par and package files)
   try:
