@@ -220,10 +220,9 @@ jobs:
         run: |
           mkdir -p ./models
           echo "Downloading model from Hugging Face..."
-          curl -L --retry 5 -f \
-            -H "Authorization: Bearer $HF_TOKEN" \
-            -o ${{ env.MODEL_PATH }} \
-            "${{ env.MODEL_URL }}"
+          wget --header="Authorization: Bearer $HF_TOKEN" \
+               -O ${{ env.MODEL_PATH }} \
+               "${{ env.MODEL_URL }}"
           ls -lh ${{ env.MODEL_PATH }}
 
       - name: Run bazel build on Linux.
