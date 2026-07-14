@@ -59,7 +59,8 @@ class EmbeddingLookupText : public EmbeddingLookup {
       litert::Environment& env, const litert::Model* absl_nonnull model,
       std::optional<std::string> signature_key = std::nullopt,
       std::optional<ScopedFile> external_weight_file = std::nullopt,
-      litert::Options::ScopedWeightSectionMap external_weight_sections = {});
+      litert::Options::ScopedWeightSectionMap external_weight_sections = {},
+      bool allow_gpu = true);
 
   // For a given token, looks up the embedding and stores it in the
   // provided vector. The caller is responsible for ensuring that the vector is
@@ -122,12 +123,14 @@ class EmbeddingLookupText : public EmbeddingLookup {
       litert::Environment& env, const litert::Model* absl_nonnull model,
       std::optional<std::string> signature_key,
       std::optional<ScopedFile> external_weight_file,
-      litert::Options::ScopedWeightSectionMap external_weight_sections)
+      litert::Options::ScopedWeightSectionMap external_weight_sections,
+      bool allow_gpu)
       : env_(env),
         model_(*model),
         signature_key_(std::move(signature_key)),
         external_weight_file_(std::move(external_weight_file)),
-        external_weight_sections_(std::move(external_weight_sections)) {}
+        external_weight_sections_(std::move(external_weight_sections)),
+        allow_gpu_(allow_gpu) {}
 
   // Loads the provided model. This must be called before Lookup.
   absl::Status Initialize();
@@ -167,6 +170,9 @@ class EmbeddingLookupText : public EmbeddingLookup {
   // constants have been moved into the LiteRT-LM container.
   std::optional<ScopedFile> external_weight_file_;
   litert::Options::ScopedWeightSectionMap external_weight_sections_;
+
+  // Whether to allow GPU acceleration.
+  bool allow_gpu_;
 };
 
 }  // namespace litert::lm

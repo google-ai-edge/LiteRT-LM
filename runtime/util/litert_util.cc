@@ -31,7 +31,10 @@
 #include "runtime/engine/engine_settings.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/magic_number_configs_helper.h"
+#include "runtime/util/litert_lm_loader.h"
 #include "runtime/util/logging.h"
+#include "runtime/util/scoped_file.h"
+#include "schema/core/litertlm_header_schema_generated.h"
 
 namespace litert::lm {
 
@@ -107,6 +110,67 @@ absl::StatusOr<OwnedEnvironment> CreateEnvironment(
   LITERT_ASSIGN_OR_RETURN(auto env,
                           Environment::Create(EnvironmentOptions(env_options)));
   return OwnedEnvironment{std::move(helper), std::move(env)};
+}
+
+absl::StatusOr<bool> ModelHasExternalWeights(const ModelAssets& model_assets) {
+  if (model_assets.HasDataStream()) {
+    return false;
+  }
+
+  std::unique_ptr<LitertLmLoader> temp_loader;
+  if (model_assets.HasMemoryMappedFile()) {
+    auto memory_mapped_file = model_assets.GetMemoryMappedFile();
+    if (!memory_mapped_file.ok()) {
+      return memory_mapped_file.status();
+    }
+    auto temp_loader_or = LitertLmLoader::Create(*memory_mapped_file);
+    if (!temp_loader_or.ok()) {
+      return temp_loader_or.status();
+    }
+    temp_loader = std::move(*temp_loader_or);
+  } else if (model_assets.GetPath().ok()) {
+    auto path = model_assets.GetPath();
+    auto file_or = ScopedFile::Open(*path);
+    if (!file_or.ok()) {
+      return file_or.status();
+    }
+    auto temp_loader_or = LitertLmLoader::Create(std::move(*file_or));
+    if (!temp_loader_or.ok()) {
+      return temp_loader_or.status();
+    }
+    temp_loader = std::move(*temp_loader_or);
+  } else {
+    auto scoped_file = model_assets.GetOrCreateScopedFile();
+    if (!scoped_file.ok()) {
+      return scoped_file.status();
+    }
+    auto duplicate_file_or = (*scoped_file)->Duplicate();
+    if (!duplicate_file_or.ok()) {
+      return duplicate_file_or.status();
+    }
+    auto temp_loader_or = LitertLmLoader::Create(std::move(*duplicate_file_or));
+    if (!temp_loader_or.ok()) {
+      return temp_loader_or.status();
+    }
+    temp_loader = std::move(*temp_loader_or);
+  }
+
+  if (temp_loader == nullptr) {
+    return false;
+  }
+
+  bool has_external_weights =
+      temp_loader
+          ->GetSectionLocation(BufferKey(schema::AnySectionDataType_TFLiteModel,
+                                         ModelType::kTfLitePrefillDecode))
+          .ok() &&
+      temp_loader
+          ->GetSectionLocation(
+              BufferKey(schema::AnySectionDataType_TFLiteWeights,
+                        ModelType::kTfLitePrefillDecode))
+          .ok();
+
+  return has_external_weights;
 }
 
 }  // namespace litert::lm

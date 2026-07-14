@@ -33,6 +33,7 @@
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
+#include "litert/cc/litert_options.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/embedding_lookup/embedding_lookup_end_of_multi_modal.h"
 #include "runtime/components/embedding_lookup/embedding_lookup_multi_modal.h"
@@ -50,12 +51,14 @@ EmbeddingLookupManager::Create(
         end_of_multi_modal_embedding_models,
     bool fully_supports_multi_modal, std::optional<std::string> signature_key,
     std::optional<ScopedFile> external_weight_file,
-    litert::Options::ScopedWeightSectionMap external_weight_sections) {
+    litert::Options::ScopedWeightSectionMap external_weight_sections,
+    bool allow_gpu) {
   auto embedding_lookup_manager = std::make_unique<EmbeddingLookupManager>();
   ABSL_RETURN_IF_ERROR(embedding_lookup_manager->Initialize(
       env, text_embedding_model, end_of_multi_modal_embedding_models,
       fully_supports_multi_modal, std::move(signature_key),
-      std::move(external_weight_file), std::move(external_weight_sections)));
+      std::move(external_weight_file), std::move(external_weight_sections),
+      allow_gpu));
   return std::move(embedding_lookup_manager);
 }
 
@@ -65,13 +68,14 @@ EmbeddingLookupManager::Create(
     const litert::Model* absl_nonnull text_embedding_model,
     bool fully_supports_multi_modal, std::optional<std::string> signature_key,
     std::optional<ScopedFile> external_weight_file,
-    litert::Options::ScopedWeightSectionMap external_weight_sections) {
+    litert::Options::ScopedWeightSectionMap external_weight_sections,
+    bool allow_gpu) {
   absl::flat_hash_map<int, const litert::Model*>
       end_of_multi_modal_embedding_models;
   return Create(env, text_embedding_model, end_of_multi_modal_embedding_models,
                 fully_supports_multi_modal, std::move(signature_key),
                 std::move(external_weight_file),
-                std::move(external_weight_sections));
+                std::move(external_weight_sections), allow_gpu);
 }
 
 absl::Status EmbeddingLookupManager::UpdateMultiModalEmbeddings(
@@ -255,7 +259,8 @@ absl::Status EmbeddingLookupManager::Initialize(
         end_of_multi_modal_embedding_models,
     bool fully_supports_multi_modal, std::optional<std::string> signature_key,
     std::optional<ScopedFile> external_weight_file,
-    litert::Options::ScopedWeightSectionMap external_weight_sections) {
+    litert::Options::ScopedWeightSectionMap external_weight_sections,
+    bool allow_gpu) {
   if (!fully_supports_multi_modal &&
       !end_of_multi_modal_embedding_models.empty()) {
     return absl::InvalidArgumentError(
@@ -265,10 +270,10 @@ absl::Status EmbeddingLookupManager::Initialize(
   fully_supports_multi_modal_ = fully_supports_multi_modal;
   ABSL_ASSIGN_OR_RETURN(
       text_embedding_lookup_,
-      EmbeddingLookupText::Create(env, std::move(text_embedding_model),
-                                  std::move(signature_key),
-                                  std::move(external_weight_file),
-                                  std::move(external_weight_sections)));
+      EmbeddingLookupText::Create(
+          env, std::move(text_embedding_model), std::move(signature_key),
+          std::move(external_weight_file), std::move(external_weight_sections),
+          allow_gpu));
   for (const auto& [special_token, embedding_model] :
        end_of_multi_modal_embedding_models) {
     ABSL_ASSIGN_OR_RETURN(auto end_of_multi_modal_embedding_lookup,

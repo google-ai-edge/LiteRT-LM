@@ -25,13 +25,9 @@ import {ReadableStreamDataStreamWrapper} from './readable_stream_data_stream_wra
 import {Session} from './session.js';
 import {sessionConfigToWasmSessionConfig} from './session_config.js';
 import {RecursiveRequired} from './types.js';
-import {Backend, ConversationConfig as WasmConversationConfig, Deletable, Engine as WasmEngine, LiteRtLmWasm, ModelAssets, SessionConfig as WasmSessionConfig} from './wasm_binding_types.js';
+import {Backend, ConversationConfig as WasmConversationConfig, Deletable, Engine as WasmEngine, LiteRtLmWasm, SessionConfig as WasmSessionConfig} from './wasm_binding_types.js';
 
-/**
- * Global index to avoid writing to the sane VFS path.
- */
-// TODO: b/477709280 - Remove this when streaming loading works.
-let modelPathIndex = 0;
+
 
 /**
  * LiteRT-LM Engine
@@ -62,9 +58,6 @@ export class Engine implements Deletable {
       Promise<Engine> {
     const litertlm = await getOrLoadGlobalLiteRtLm();
     const wasm = litertlm.liteRtLmWasm;
-    // TODO: b/477709280 - Support other formats like .task.
-    const dstPath = `/model_${modelPathIndex++}.litertlm`;
-
     // Default to GPU_ARTISAN if not specified.
     const backend = engineSettings.backend ?? Backend.GPU_ARTISAN;
     engineSettings = {...engineSettings, backend};
@@ -81,31 +74,13 @@ export class Engine implements Deletable {
     const modelStream = await modelToStream(engineSettings.model);
     let engine: WasmEngine;
     try {
-      let modelAssets: ModelAssets;
-      const isStreaming = backend === Backend.GPU_ARTISAN;
-
-      if (isStreaming) {
-        // GPU Artisan supports streamed loading.
-        const streamWrapper =
-            new ReadableStreamDataStreamWrapper(modelStream, () => wasm.HEAPU8);
-        const dataStream = wasm.ReadableStreamDataStream.create(streamWrapper);
-        cleanup.add(() => {
-          dataStream.delete();
-        });
-        modelAssets = wasm.ModelAssets.createStreaming(dataStream);
-      } else {
-        // Other backends must be fully loaded into Wasm memory first.
-        await loadModelToVfs(wasm, modelStream, dstPath);
-        cleanup.add(() => {
-          try {
-            wasm.FS.unlink(dstPath);
-          } catch (e) {
-            console.error(`Error removing file from VFS:`, e);
-          }
-        });
-
-        modelAssets = wasm.ModelAssets.create(dstPath);
-      }
+      const streamWrapper =
+          new ReadableStreamDataStreamWrapper(modelStream, () => wasm.HEAPU8);
+      const dataStream = wasm.ReadableStreamDataStream.create(streamWrapper);
+      cleanup.add(() => {
+        dataStream.delete();
+      });
+      const modelAssets = wasm.ModelAssets.createStreaming(dataStream);
 
       const cleanupModelAssets = cleanup.add(() => {
         modelAssets.delete();
@@ -125,12 +100,77 @@ export class Engine implements Deletable {
       wasmEngineSettings.setParallelFileSectionLoading(false);
       wasmEngineSettings.setSingleThreadedExecution(true);
 
-      if (isStreaming) {
-        engine = await wasm.Engine.createStreaming(
-            wasmEngineSettings, inputPromptAsHint);
-      } else {
-        engine = await wasm.Engine.createEngine(
-            wasmEngineSettings, inputPromptAsHint);
+      if (backend === Backend.GPU) {
+        const gpuDevice = wasm.preinitializedWebGPUDevice;
+        if (!gpuDevice) {
+          throw new Error('WebGPU device not initialized');
+        }
+
+        wasm.registerStreamWeightsCallback(async (
+            tflIds: Int32Array,
+            wgpuBufferIds: Uint32Array,
+            offsets: Float64Array,
+            lengths: Float64Array,
+        ) => {
+          const requests = [];
+          if (tflIds.length !== wgpuBufferIds.length) {
+            throw new Error(
+                `Stream weights callback received arrays of different lengths: ` +
+                `tflIds=${tflIds.length}, wgpuBufferIds=${wgpuBufferIds.length}`);
+          }
+          for (let i = 0; i < tflIds.length; i++) {
+            requests.push({
+              id: tflIds[i],
+              wgpuBufferId: wgpuBufferIds[i],
+              offset: offsets[i],
+              length: lengths[i],
+            });
+          }
+          requests.sort((a, b) => a.offset - b.offset);
+
+          for (const req of requests) {
+            const tempPtr = wasm._malloc(req.length);
+            try {
+              const modelType = wasm.getCurrentlyCompilingModel();
+              await wasm.readStoredWeights(modelType, req.offset, req.length, tempPtr);
+              let weightData = new Uint8Array(wasm.HEAPU8.buffer, tempPtr, req.length);
+
+              if (weightData.byteLength % 4 !== 0) {
+                const paddedSize = (weightData.byteLength + 3) & ~3;
+                const paddedData = new Uint8Array(paddedSize);
+                paddedData.set(weightData);
+                weightData = paddedData;
+              }
+
+              const gpuBuffer = wasm.WebGPU.getJsObject(req.wgpuBufferId) as GPUBuffer;
+              if (!gpuBuffer) {
+                throw new Error(`Failed to find GPUBuffer for ID: ${req.wgpuBufferId}`);
+              }
+              gpuDevice.queue.writeBuffer(gpuBuffer, 0, weightData as GPUAllowSharedBufferSource);
+            } finally {
+              wasm._free(tempPtr);
+            }
+          }
+        });
+      }
+
+      try {
+        if (backend === Backend.GPU_ARTISAN) {
+          engine = await wasm.Engine.createStreaming(
+              wasmEngineSettings, inputPromptAsHint);
+        } else {
+          engine = await wasm.Engine.createEngine(
+              wasmEngineSettings, inputPromptAsHint);
+        }
+      } finally {
+        if (backend === Backend.GPU) {
+          try {
+            wasm.registerStreamWeightsCallback(undefined);
+            wasm.clearStoredWeightsStreams();
+          } catch (cleanupError) {
+            console.error('Error during cleanup:', cleanupError);
+          }
+        }
       }
       cleanupWasmEngineSettings();
 
@@ -210,38 +250,4 @@ async function modelToStream(model: EngineSettings['model']):
     throw new Error(`Failed to fetch model file from ${modelUrl}`);
   }
   return response.body!;
-}
-
-// TODO: b/477709280 - Remove this when streaming loading works.
-async function loadModelToVfs(
-    module: LiteRtLmWasm,
-    modelStream: ReadableStream<Uint8Array>,
-    dstPath: string,
-) {
-  let fileContent: Uint8Array;
-
-  const reader = modelStream.getReader();
-  const chunks: Uint8Array[] = [];
-  let totalLength = 0;
-  while (true) {
-    const {done, value} = await reader.read();
-    if (done) break;
-    if (value) {
-      chunks.push(value);
-      totalLength += value.length;
-    }
-  }
-  fileContent = new Uint8Array(totalLength);
-  let offset = 0;
-  for (const chunk of chunks) {
-    fileContent.set(chunk, offset);
-    offset += chunk.length;
-  }
-
-  try {
-    module.FS.writeFile(dstPath, fileContent);
-  } catch (e) {
-    console.error(`Error writing file to VFS:`, e);
-    throw e;
-  }
 }
