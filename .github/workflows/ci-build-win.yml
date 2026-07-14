@@ -29,9 +29,9 @@ jobs:
       actions: write  # For gh cache delete.
       contents: write  # For gh release upload.
     env:
-      MODEL_KEY: gemma-3-1b-it-v1
-      MODEL_PATH: .\models\gemma3-1b-it-int4.litertlm
-      MODEL_URL: https://huggingface.co/litert-community/Gemma3-1B-IT/resolve/main/gemma3-1b-it-int4.litertlm
+      MODEL_KEY: gemma-4-E2B-it-litert-lm
+      MODEL_PATH: .\models\gemma-4-E2B-it.litertlm
+      MODEL_URL: https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm
 
       # Clear ANDROID_NDK_HOME as Windows_x64 has NDK where jobs don't have permission for
       # androidndk rulesto create symlinks.
@@ -93,21 +93,14 @@ jobs:
           echo "Cache Matched Key: ${{ steps.bazel-cache.outputs.cache-matched-key }}"
 
       - name: Download Model
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           if (-not (Test-Path "./models")) {
             New-Item -ItemType Directory -Path "./models" -Force
           }
 
-          $headers = @{
-              "Authorization" = "Bearer $($env:HF_TOKEN)"
-          }
-
           Write-Host "Downloading model from Hugging Face: ${{ env.MODEL_URL }}"
 
           Invoke-WebRequest -Uri "${{ env.MODEL_URL }}" `
-                  -Headers $headers `
                   -OutFile "${{ env.MODEL_PATH }}" `
                   -MaximumRetryCount 5
 
