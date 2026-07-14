@@ -27,6 +27,7 @@
 #include "absl/memory/memory.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
+#include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
@@ -46,6 +47,7 @@
 #include "runtime/components/prompt_template.h"
 #include "runtime/conversation/channel_util.h"
 #include "runtime/conversation/internal_callback_util.h"
+#include "runtime/core/session_advanced.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/config_registry.h"
 #include "runtime/conversation/model_data_processor/model_data_processor.h"
@@ -677,6 +679,20 @@ absl::Status Conversation::SendMessageAsync(
   absl::AnyInvocable<void()> cancel_callback = [this]() {
     absl::MutexLock lock(this->history_mutex_);
     this->history_.pop_back();
+    auto status = session_->RewindToCheckpoint(
+        SessionAdvanced::kTurnStartCheckpoint);
+    if (!status.ok()) {
+      if (absl::IsNotFound(status)) {
+        auto fallback_status = session_->RewindToStep(0);
+        if (!fallback_status.ok()) {
+          ABSL_LOG(ERROR) << "Failed to fallback to RewindToStep(0) after cancellation: "
+                          << fallback_status;
+        }
+      } else {
+        ABSL_LOG(ERROR) << "Failed to rewind session advanced after cancellation: "
+                        << status;
+      }
+    }
   };
 
   auto internal_callback =

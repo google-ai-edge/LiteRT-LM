@@ -48,6 +48,7 @@
 #include "runtime/components/prompt_template.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/thinking_config.h"
+#include "runtime/core/session_advanced.h"
 #include "runtime/engine/engine.h"
 #include "runtime/engine/engine_factory.h"
 #include "runtime/engine/engine_settings.h"
@@ -2812,6 +2813,11 @@ TEST_P(ConversationTest, CancelProcessDuringSendMessageAsync) {
       stored_callback(Responses(TaskState::kCancelled));
     }
   });
+
+  // Expect the session state to be rewound to the turn start checkpoint upon cancellation.
+  EXPECT_CALL(*mock_session_ptr,
+              RewindToCheckpoint(SessionAdvanced::kTurnStartCheckpoint))
+      .WillOnce(testing::Return(absl::OkStatus()));
 
   conversation->CancelProcess();
 

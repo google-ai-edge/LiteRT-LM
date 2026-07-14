@@ -163,6 +163,9 @@ class SessionAdvanced : public SessionInterface {
 
   absl::StatusOr<BenchmarkInfo*> GetMutableBenchmarkInfo() override;
 
+  static constexpr absl::string_view kTurnStartCheckpoint =
+      "turn_start_checkpoint";
+
   // Save the current step with the name `label`. You can later rewind to this
   // checkpoint using `RewindToCheckpoint(label)`. If the checkpoint name
   // already exists, the step number will be overwritten. Returns the saved
@@ -252,6 +255,10 @@ class SessionAdvanced : public SessionInterface {
   // The implementation of CloneAsync which assumes mutex_ is locked.
   absl::StatusOr<std::unique_ptr<SessionInterface>> CloneAsyncLocked(
       absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback)
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
+
+  // The implementation of SaveCheckpoint which assumes mutex_ is locked.
+  absl::Status SaveCheckpointLocked(absl::string_view label)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
 
   // The session ID used for the session.

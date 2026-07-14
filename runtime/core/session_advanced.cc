@@ -93,6 +93,7 @@ SessionAdvanced::RunPrefillAsync(
     return absl::InvalidArgumentError("Input is empty.");
   }
   absl::MutexLock lock(mutex_);
+  ABSL_RETURN_IF_ERROR(SaveCheckpointLocked(kTurnStartCheckpoint));
   auto cancelled = std::make_shared<std::atomic<bool>>(false);
 
   auto execution_manager_lock = execution_manager_.lock();
@@ -486,8 +487,7 @@ SessionAdvanced::~SessionAdvanced() {
   }
 };
 
-absl::Status SessionAdvanced::SaveCheckpoint(absl::string_view label) {
-  absl::MutexLock lock(mutex_);
+absl::Status SessionAdvanced::SaveCheckpointLocked(absl::string_view label) {
   auto execution_manager_lock = execution_manager_.lock();
   if (execution_manager_lock == nullptr) {
     return absl::FailedPreconditionError("Execution manager is not available.");
@@ -496,6 +496,11 @@ absl::Status SessionAdvanced::SaveCheckpoint(absl::string_view label) {
                         execution_manager_lock->GetCurrentStep(*session_info_));
   checkpoint_map_[label] = {current_step, session_state_, last_task_ids_};
   return absl::OkStatus();
+}
+
+absl::Status SessionAdvanced::SaveCheckpoint(absl::string_view label) {
+  absl::MutexLock lock(mutex_);
+  return SaveCheckpointLocked(label);
 }
 
 absl::Status SessionAdvanced::RewindToCheckpoint(absl::string_view label) {
