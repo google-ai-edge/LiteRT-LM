@@ -355,11 +355,11 @@ std::ostream& operator<<(
   os << "\n" << "(e2e) Prefill num tokens: " << stats.prefill_num_tokens;
   os << "\n"
      << "(e2e) Prefill tokens per second: "
-     << ((stats.prefill_num_tokens * 1000 * 1000) /
+     << ((stats.prefill_num_tokens * 1000000.0f) /
          (float)stats.prefill_e2e_latency_us);
   os << "\n"
      << "(TransformerStackOnly) Prefill tokens per second: "
-     << ((stats.prefill_num_tokens * 1000 * 1000) /
+     << ((stats.prefill_num_tokens * 1000000.0f) /
          (float)stats.prefill_llm_inference_latency_us);
 
   os << "\n" << "------ Prefill breakdown ------";
@@ -413,7 +413,7 @@ std::ostream& operator<<(
   os << "\n" << "(e2e) Decode num tokens: " << stats.decode_num_tokens;
   os << "\n"
      << "(e2e) Decode tokens per second (avg): "
-     << ((stats.decode_num_tokens * 1000 * 1000) /
+     << ((stats.decode_num_tokens * 1000000.0f) /
          (float)stats.decode_e2e_latency_us);
   if (stats.mtp_num_draft_tokens > 0) {
     os << "\n"
@@ -423,7 +423,7 @@ std::ostream& operator<<(
   }
   os << "\n"
      << "(TransformerStackOnly) Decode tokens per second: "
-     << ((stats.decode_num_tokens * 1000 * 1000) /
+     << ((stats.decode_num_tokens * 1000000.0f) /
          (float)stats.decode_llm_inference_latency_us);
 
   os << "\n" << "------ Decode breakdown ------";
