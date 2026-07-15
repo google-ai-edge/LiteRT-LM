@@ -137,10 +137,11 @@ absl::Status EmbeddingLookupMultiModal::LookupPrefill(
                      ". Output tensor bytes: ", output_tensor->Size()));
   }
 
-  auto output_tensor_lock_and_addr = ::litert::TensorBufferScopedLock::Create(
-      *output_tensor, TensorBuffer::LockMode::kWrite);
+  LITERT_ASSIGN_OR_RETURN(auto output_tensor_lock_and_addr,
+                          ::litert::TensorBufferScopedLock::Create(
+                              *output_tensor, TensorBuffer::LockMode::kWrite));
   auto output_tensor_ptr =
-      reinterpret_cast<uint8_t*>(output_tensor_lock_and_addr->second);
+      reinterpret_cast<uint8_t*>(output_tensor_lock_and_addr.second);
 
   output_tensor_ptr += byte_offset;
   for (int token : tokens) {

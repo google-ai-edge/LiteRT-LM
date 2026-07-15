@@ -120,10 +120,11 @@ absl::Status EmbeddingLookupText::LookupDecode(int token,
     }
   }
 
-  auto decode_output_lock_and_addr = ::litert::TensorBufferScopedLock::Create(
-      *decode_output, TensorBuffer::LockMode::kWrite);
+  LITERT_ASSIGN_OR_RETURN(auto decode_output_lock_and_addr,
+                          ::litert::TensorBufferScopedLock::Create(
+                              *decode_output, TensorBuffer::LockMode::kWrite));
   auto decode_output_ptr =
-      reinterpret_cast<uint8_t*>(decode_output_lock_and_addr->second);
+      reinterpret_cast<uint8_t*>(decode_output_lock_and_addr.second);
 
   LITERT_ASSIGN_OR_RETURN(auto decode_output_size, decode_output->Size());
 
@@ -221,10 +222,11 @@ absl::Status EmbeddingLookupText::LookupPrefill(absl::Span<const int> tokens,
                      ". Output tensor bytes: ", prefill_output->Size()));
   }
 
-  auto prefill_output_lock_and_addr = ::litert::TensorBufferScopedLock::Create(
-      *prefill_output, TensorBuffer::LockMode::kWrite);
+  LITERT_ASSIGN_OR_RETURN(auto prefill_output_lock_and_addr,
+                          ::litert::TensorBufferScopedLock::Create(
+                              *prefill_output, TensorBuffer::LockMode::kWrite));
   auto prefill_output_ptr =
-      reinterpret_cast<uint8_t*>(prefill_output_lock_and_addr->second);
+      reinterpret_cast<uint8_t*>(prefill_output_lock_and_addr.second);
 
   prefill_output_ptr += byte_offset;
   for (int token : tokens) {
