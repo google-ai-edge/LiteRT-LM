@@ -276,7 +276,7 @@ TEST_F(ConstrainedDecoderTest, ProcessLogitsFailsWithWrongBatchSize) {
               StatusIs(absl::StatusCode::kInternal));
 }
 
-TEST_F(ConstrainedDecoderTest, ProcessLogitsFailsWithWrongVolabSize) {
+TEST_F(ConstrainedDecoderTest, ProcessLogitsWithPaddedVocabSize) {
   ASSERT_OK_AND_ASSIGN(
       auto constraint,
       provider_->CreateConstraint(FstConstraintArg{.constraint_string = "ab"}));
@@ -292,19 +292,27 @@ TEST_F(ConstrainedDecoderTest, ProcessLogitsFailsWithWrongVolabSize) {
   // Update state with "a".
   ASSERT_OK(constrained_decoder.UpdateState(tokens_id_tensor_buffer));
 
-  std::vector<float> logits_data(vocab_size_ + 1, 1.0f);
-  RankedTensorType logits_tensor_type(
-      {/*.element_type=*/kLiteRtElementTypeFloat32,
-       BuildLayout({2, 1, vocab_size_})});
+  // Padded model vocabulary dimension (larger than constraint vocabulary size).
+  int padded_vocab_size = vocab_size_ + 16;
+  std::vector<float> logits_data(padded_vocab_size, 2.0f);
   LITERT_ASSERT_OK_AND_ASSIGN(
       auto logits_tensor_buffer,
       CreateTokenIdsTensorBuffer<float>(env, logits_data.data(),
-                                        {1, 1, vocab_size_ + 1}));
+                                        {1, 1, padded_vocab_size}));
 
-  // ProcessLogits should fail because the vocabulary size does not match the
-  // expected vocabulary size.
-  EXPECT_THAT(constrained_decoder.ProcessLogits(logits_tensor_buffer),
-              StatusIs(absl::StatusCode::kInternal));
+  // ProcessLogits should succeed with padded vocabulary size.
+  ASSERT_OK(constrained_decoder.ProcessLogits(logits_tensor_buffer));
+
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto masked_logits_span,
+      ReferTensorBufferAsSpan<float>(logits_tensor_buffer));
+  for (int i = 0; i < padded_vocab_size; ++i) {
+    if (i == spm_processor_.PieceToId("b")) {
+      EXPECT_EQ(masked_logits_span[i], 2.0f);
+    } else {
+      EXPECT_EQ(masked_logits_span[i], std::numeric_limits<float>::lowest());
+    }
+  }
 }
 
 }  // namespace
