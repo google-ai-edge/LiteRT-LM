@@ -49,7 +49,6 @@ class Conversation(interfaces.AbstractConversation):
       sampler_config=None,
       lora_config=None,
       max_output_tokens=None,
-      chat_template=None,
       enable_response_format=False,
   ):
     super().__init__(
@@ -62,7 +61,6 @@ class Conversation(interfaces.AbstractConversation):
         sampler_config=sampler_config,
         lora_config=lora_config,
         max_output_tokens=max_output_tokens,
-        chat_template=chat_template,
     )
     self._lib = lib
     self._ptr = conv_ptr

@@ -266,14 +266,6 @@ LITERT_LM_C_API_EXPORT
 void litert_lm_conversation_config_set_extra_context(
     LiteRtLmConversationConfig* config, const char* extra_context_json);
 
-// Sets the prompt template for this conversation config.
-// @param config The config to modify.
-// @param prompt_template The prompt template string (e.g. Jinja template). If
-// not set, use the default provided by the model or the engine.
-LITERT_LM_C_API_EXPORT
-void litert_lm_conversation_config_set_prompt_template(
-    LiteRtLmConversationConfig* config, const char* prompt_template);
-
 // Sets whether to enable constrained decoding for this conversation config.
 // @param config The config to modify.
 // @param enable_constrained_decoding Whether to enable constrained decoding.

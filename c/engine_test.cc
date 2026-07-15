@@ -498,36 +498,6 @@ TEST(EngineCTest, CreateConversationConfigWithNoSamplerParams) {
   EXPECT_EQ(preface.messages, expected_messages);
 }
 
-TEST(EngineCTest, CreateConversationConfigWithPromptTemplate) {
-  const std::string task_path = GetTestdataPath(
-      "litert_lm/runtime/testdata/test_lm_new_metadata.task");
-
-  EngineSettingsPtr settings(
-      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
-                                       /* vision_backend_str */ nullptr,
-                                       /* audio_backend_str */ nullptr),
-      &litert_lm_engine_settings_delete);
-  ASSERT_NE(settings, nullptr);
-  litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
-
-  EnginePtr engine(litert_lm_engine_create(settings.get()),
-                   &litert_lm_engine_delete);
-  ASSERT_NE(engine, nullptr);
-
-  ConversationConfigPtr conversation_config(
-      litert_lm_conversation_config_create(),
-      &litert_lm_conversation_config_delete);
-  ASSERT_NE(conversation_config, nullptr);
-  const std::string custom_template = "custom template content";
-  litert_lm_conversation_config_set_prompt_template(conversation_config.get(),
-                                                    custom_template.c_str());
-
-  ConversationPtr conversation(
-      litert_lm_conversation_create(engine.get(), conversation_config.get()),
-      &litert_lm_conversation_delete);
-  ASSERT_NE(conversation, nullptr);
-}
-
 TEST(EngineCTest, CreateConversationConfigWithNoSamplerParamsNoSystemMessage) {
   // 1. Create an engine.
   const std::string task_path = GetTestdataPath(

@@ -182,7 +182,6 @@ def run_interactive(
     speculative_decoding: bool | None = None,
     enable_speculative_decoding: bool | None = None,
     no_template: bool = False,
-    chat_template: str | None = None,
     max_num_tokens: int | None = None,
     max_num_images: int | None = None,
     filter_channel_content_from_kv_cache: bool = False,
@@ -327,7 +326,6 @@ def run_interactive(
             filter_channel_content_from_kv_cache=filter_channel_content_from_kv_cache,
             thinking_config=thinking_config,
             sampler_config=sampler_config,
-            chat_template=chat_template,
         )
 
       with runner_cm as runner:
@@ -422,15 +420,6 @@ def run_interactive(
     help=(
         "Path to a Python file containing tool functions and system"
         " instructions."
-    ),
-)
-@click.option(
-    "--chat-template",
-    type=click.Path(exists=True, dir_okay=False),
-    default=None,
-    help=(
-        "Path to a Jinja file to use as the chat template. If not set, use"
-        " the default provided by the model or the engine."
     ),
 )
 @click.option(
@@ -555,7 +544,6 @@ def run(
     enable_speculative_decoding: bool | None = None,
     verbose: bool = False,
     no_template: bool = False,
-    chat_template: str | None = None,
     from_huggingface_repo: str | None = None,
     huggingface_token: str | None = None,
     max_num_tokens: int | None = None,
@@ -591,8 +579,6 @@ def run(
     verbose: Whether to enable verbose logging.
     no_template: Interact with the model directly without applying prompt
       templates or stripping stop tokens.
-    chat_template: Path to a Jinja file to use as the chat template. If not set,
-      use the default provided by the model or the engine.
     from_huggingface_repo: The HuggingFace repository ID.
     huggingface_token: The HuggingFace API token.
     max_num_tokens: Maximum number of tokens for the KV cache.
@@ -623,20 +609,6 @@ def run(
         )
     )
     return
-
-  if chat_template and no_template:
-    click.echo(
-        click.style(
-            "Error: --chat-template is not supported with --no-template.",
-            fg="red",
-        )
-    )
-    return
-
-  chat_template_content = None
-  if chat_template:
-    with open(chat_template, "r", encoding="utf-8") as f:
-      chat_template_content = f.read()
 
   expanded_attachments = []
   num_images = 0
@@ -719,7 +691,6 @@ def run(
       preset=preset,
       enable_speculative_decoding=speculative_decoding,
       no_template=no_template,
-      chat_template=chat_template_content,
       max_num_tokens=max_num_tokens,
       max_num_images=max_num_images,
       filter_channel_content_from_kv_cache=filter_channel_content_from_kv_cache,

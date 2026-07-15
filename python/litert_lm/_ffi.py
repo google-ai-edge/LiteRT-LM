@@ -346,10 +346,6 @@ def _setup_lib_signatures(lib):
       ctypes.c_void_p,
       c_string_p,
   ]
-  lib.litert_lm_conversation_config_set_prompt_template.argtypes = [
-      ctypes.c_void_p,
-      c_string_p,
-  ]
   lib.litert_lm_conversation_config_set_enable_constrained_decoding.argtypes = [
       ctypes.c_void_p,
       ctypes.c_bool,
