@@ -39,7 +39,6 @@
 #include "runtime/components/logits_processor/no_repeat_ngram_config.h"
 #include "runtime/components/logits_processor/repetition_penalty_config.h"
 #include "runtime/components/logits_processor/suppress_tokens_config.h"
-#include "runtime/components/prompt_template.h"
 #include "runtime/conversation/conversation.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/config_registry.h"
@@ -398,7 +397,6 @@ struct LiteRtLmConversationConfig {
   std::string tools_json;
   std::string messages_json;
   std::string extra_context_json;
-  std::string prompt_template;
   bool enable_constrained_decoding = false;
   bool filter_channel_content_from_kv_cache = false;
   bool stream_tool_calls = false;
@@ -599,13 +597,6 @@ void litert_lm_conversation_config_set_extra_context(
     LiteRtLmConversationConfig* config, const char* extra_context_json) {
   if (config && extra_context_json) {
     config->extra_context_json = extra_context_json;
-  }
-}
-
-void litert_lm_conversation_config_set_prompt_template(
-    LiteRtLmConversationConfig* config, const char* prompt_template) {
-  if (config && prompt_template) {
-    config->prompt_template = prompt_template;
   }
 }
 
@@ -1600,10 +1591,6 @@ LiteRtLmConversation* litert_lm_conversation_create(
         c_config->filter_channel_content_from_kv_cache);
     builder.SetStreamToolCalls(c_config->stream_tool_calls,
                                c_config->stream_tool_calls_channel_name);
-    if (!c_config->prompt_template.empty()) {
-      builder.SetOverwritePromptTemplate(
-          litert::lm::PromptTemplate(c_config->prompt_template));
-    }
     if (c_config->thinking_config.has_value()) {
       builder.SetThinkingConfig(*c_config->thinking_config);
     }

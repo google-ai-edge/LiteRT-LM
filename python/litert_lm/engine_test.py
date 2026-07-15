@@ -437,14 +437,6 @@ class EngineTest(LiteRtLmTestBase):
       text = "".join([c.get("text", "") for c in message.get("content", [])])
       self.assertLess(len(text), 10)
 
-  def test_create_conversation_with_chat_template(self):
-    tmpl = "{{ bos_token }}{% for m in messages %}{{ m.content }}{% endfor %}"
-    with (
-        self._create_engine() as engine,
-        engine.create_conversation(chat_template=tmpl) as conversation,
-    ):
-      self.assertEqual(conversation.chat_template, tmpl)
-
   def test_create_conversation_with_max_output_tokens_async(self):
     with (
         self._create_engine() as engine,

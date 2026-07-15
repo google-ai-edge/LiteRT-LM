@@ -405,7 +405,6 @@ class AbstractEngine(abc.ABC):
       sampler_config: SamplerConfig | None = None,
       lora_config: LoraConfig | None = None,
       max_output_tokens: int | None = None,
-      chat_template: str | None = None,
       enable_response_format: bool = False,
   ) -> AbstractConversation:
     """Creates a new conversation for this engine.
@@ -427,8 +426,6 @@ class AbstractEngine(abc.ABC):
           uses the engine's default values.
         lora_config: Configuration for LoRA adapters.
         max_output_tokens: The maximum number of output tokens.
-        chat_template: The Jinja chat template content to use for formatting. If
-          not set, use the default provided by the model or the engine.
         enable_response_format: Whether to enable response format (constrained
           decoding). If True, initializes the constraint provider LLGuidance.
     """
@@ -527,8 +524,6 @@ class AbstractConversation(abc.ABC):
       sampler_config: Configuration for the sampling process.
       lora_config: Configuration for LoRA adapters.
       max_output_tokens: The maximum number of output tokens.
-      chat_template: The Jinja chat template content to use for formatting. If
-        not set, use the default provided by the model or the engine.
   """
 
   def __init__(
@@ -549,7 +544,6 @@ class AbstractConversation(abc.ABC):
       sampler_config: SamplerConfig | None = None,
       lora_config: LoraConfig | None = None,
       max_output_tokens: int | None = None,
-      chat_template: str | None = None,
   ):
     """Initializes the instance.
 
@@ -566,8 +560,6 @@ class AbstractConversation(abc.ABC):
           uses the engine's default values.
         lora_config: Configuration for LoRA adapters.
         max_output_tokens: The maximum number of output tokens.
-        chat_template: The Jinja chat template content to use for formatting. If
-          not set, use the default provided by the model or the engine.
     """
     self.messages = messages or []
     self.tools = tools or []
@@ -576,7 +568,6 @@ class AbstractConversation(abc.ABC):
     self.extra_context = extra_context or {}
     self.thinking_config = thinking_config
     self.sampler_config = sampler_config
-    self.chat_template = chat_template
     self.lora_config = lora_config
     self.max_output_tokens = max_output_tokens
 

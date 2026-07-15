@@ -45,7 +45,6 @@ ENGINE_COMMON_DEPS = [
     "@com_google_absl//absl/time",
     "@nlohmann_json//:json",
     "@litert//support/tokenizer",
-    "//runtime/components:prompt_template",
     "//runtime/components/logits_processor:no_repeat_ngram_config",
     "//runtime/components/logits_processor:repetition_penalty_config",
     "//runtime/components/logits_processor:suppress_tokens_config",
