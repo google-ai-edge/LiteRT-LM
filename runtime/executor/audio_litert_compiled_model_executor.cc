@@ -81,6 +81,7 @@ absl::Status SetGpuOptions(const AudioExecutorSettings& executor_settings,
   // underlying delegate uses fp32 precision to represent mixed precision, so we
   // set it to fp32 here.
   if (executor_settings.IsMixedPrecisionEnabled()) {
+    ABSL_LOG(INFO) << "Mixed precision is enabled.";
     gpu_options.SetPrecision(GpuOptions::Precision::kFp32);
   } else if (executor_settings.GetActivationDataType().has_value()) {
     if (executor_settings.GetActivationDataType().value() ==
