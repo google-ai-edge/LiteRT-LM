@@ -358,6 +358,7 @@ cc_library(
         "@litert//litert/cc:litert_macros",
         "@litert//litert/cc:litert_tensor_buffer",
         "@litert//support/tokenizer",
+        "@litert//support/tokenizer:buffered_streaming_detokenizer",
         "//runtime/components:sampler",
         "//runtime/components:scoring_cpu_util",
         "//runtime/components:stop_token_detector",

@@ -358,7 +358,7 @@ absl::Status RunSingleTurnSession(const std::string& input_prompt,
   for (const auto& response : responses.GetTexts()) {
     captured_output << response << std::endl << std::flush;
   }
-  ABSL_VLOG(1) << "output: " << captured_output.str();
+  std::cout << "output: " << captured_output.str() << std::endl;
   ABSL_RETURN_IF_ERROR(CheckExpectedOutput(captured_output.str(), settings));
   return absl::OkStatus();
 }
