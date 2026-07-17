@@ -224,3 +224,96 @@ public struct ConversationConfig {
     self.automaticToolCalling = automaticToolCalling
   }
 }
+
+/// Configuration for penalizing repetitive tokens during generation.
+public struct RepetitionPenaltyConfig {
+
+  /// A multiplicative penalty applied to a token's logit if that token has appeared at least once
+  /// inside the generated window history (e.g., 1.0 = no penalty, 1.2 = moderate penalty).
+  ///
+  /// Positive logits are divided by this parameter, and negative logits are multiplied
+  /// (HuggingFace style). The parameter must be >= 1.0. Values less than 1.0 are automatically
+  /// clamped to 1.0 during execution.
+  public let repetitionPenalty: Float?
+
+  /// A scalar subtracted from a logit if that token has appeared at least once inside the
+  /// generated window history.
+  ///
+  /// Positive values discourage repetition, while negative values reward repeating tokens
+  /// (OpenAI style). Defaults to 0.0.
+  public let presencePenalty: Float?
+
+  /// A scalar subtracted from a logit, scaled linearly by the number of times that token has
+  /// previously appeared inside the generated window history.
+  ///
+  /// Positive values discourage repetition, while negative values reward repeating tokens
+  /// (OpenAI style). Defaults to 0.0.
+  public let frequencyPenalty: Float?
+
+  /// The maximum number of recent tokens in generation history to consider when computing
+  /// penalization.
+  ///
+  /// Tokens generated prior to this window are forgotten. A value of 0 means tracking all
+  /// infinite generation history. Must be >= 0. Negative values are clamped to 0 during execution.
+  public let windowSize: Int?
+
+  /// - Parameters:
+  ///   - repetitionPenalty: A multiplicative penalty applied to a token's logit if that token has
+  ///     appeared at least once inside the generated window history.
+  ///   - presencePenalty: A scalar subtracted from a logit if that token has appeared at least once
+  ///     inside the generated window history.
+  ///   - frequencyPenalty: A scalar subtracted from a logit, scaled linearly by the number of times
+  ///     that token has previously appeared inside the generated window history.
+  ///   - windowSize: The maximum number of recent tokens in generation history to consider.
+  public init(
+    repetitionPenalty: Float? = nil,
+    presencePenalty: Float? = nil,
+    frequencyPenalty: Float? = nil,
+    windowSize: Int? = nil
+  ) {
+    self.repetitionPenalty = repetitionPenalty
+    self.presencePenalty = presencePenalty
+    self.frequencyPenalty = frequencyPenalty
+    self.windowSize = windowSize
+  }
+}
+
+/// Configuration for banning repetitive ngrams during generation.
+public struct NoRepeatNgramConfig {
+
+  /// The size of the ngram to ban (e.g. 5 means 5-grams). If set to an integer greater than 0,
+  /// all ngrams of that size can only occur once. The logits of the banned tokens will be set to
+  /// -inf. The value is clamped to [0, inf) during execution.
+  public let noRepeatNgramSize: Int?
+
+  /// The maximum number of recent tokens to consider for banning. Tokens older than this are
+  /// forgotten. A value of 0 means track all infinite history. The value is clamped to [0, inf)
+  /// during execution. If set less than the ngram size, the window size will be set to the ngram
+  /// size to ensure that the ngram can be tracked.
+  public let windowSize: Int?
+
+  /// - Parameters:
+  ///   - noRepeatNgramSize: The size of the ngram to ban.
+  ///   - windowSize: The maximum number of recent tokens in generation history to consider.
+  public init(
+    noRepeatNgramSize: Int? = nil,
+    windowSize: Int? = nil
+  ) {
+    self.noRepeatNgramSize = noRepeatNgramSize
+    self.windowSize = windowSize
+  }
+}
+
+/// Configuration for suppressing tokens during generation.
+public struct SuppressTokensConfig {
+
+  /// The list of token IDs to suppress.
+  public let suppressTokens: [Int]
+
+  /// - Parameters:
+  ///   - suppressTokens: The list of token IDs to suppress. Can be any sequence of Ints (e.g.
+  ///     Array or Set).
+  public init<S: Sequence>(suppressTokens: S) where S.Element == Int {
+    self.suppressTokens = Array(suppressTokens)
+  }
+}
