@@ -387,6 +387,17 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
 
   // The MTP drafter model.
   std::unique_ptr<LlmLiteRtMtpDrafter> mtp_drafter_;
+
+ protected:
+  absl::Status InitializeDecodeOptimization();
+
+  bool decode_dirty_ = true;
+  std::optional<size_t> decode_signature_index_;
+  std::optional<size_t> output_logits_index_;
+  std::vector<::litert::TensorBuffer> ordered_decode_inputs_1_;
+  std::vector<::litert::TensorBuffer> ordered_decode_inputs_2_;
+  std::vector<::litert::TensorBuffer> ordered_decode_outputs_1_;
+  std::vector<::litert::TensorBuffer> ordered_decode_outputs_2_;
 };
 
 // The static executor for the prefill-decode compiled model.
