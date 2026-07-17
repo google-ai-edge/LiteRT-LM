@@ -262,6 +262,7 @@ cc_test(
         ":logging_tensor_buffer",
         "@com_google_googletest//:gtest_main",
         "@litert//litert/cc:litert_element_type",
+        "@litert//litert/cc:litert_environment",
         "@litert//litert/cc:litert_layout",
         "@litert//litert/cc:litert_ranked_tensor_type",
         "@litert//litert/cc:litert_tensor_buffer",

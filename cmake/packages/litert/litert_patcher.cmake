@@ -107,7 +107,7 @@ patch_file_content("${LITERT_SRC_DIR}/c/litert_environment.cc"
     TRUE
 )
 
-patch_file_content("${LITERT_SRC_DIR}/cc/internal/litert_runtime_builtin.cc"
+patch_file_content("${LITERT_SRC_DIR}/c/internal/litert_runtime_builtin.cc"
     ".litert_gpu_environment_create = LiteRtGpuEnvironmentCreate,"
     "#if !defined(LITERT_DISABLE_GPU)\n  .litert_gpu_environment_create = LiteRtGpuEnvironmentCreate,\n#else\n  .litert_gpu_environment_create = nullptr,\n#endif"
     FALSE
