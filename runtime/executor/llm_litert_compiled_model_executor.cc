@@ -800,6 +800,7 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::BindTensorsAndRunPrefill(
   if (!gpu_optimized_single_buffer_cache_) {
     std::swap(input_kv_cache_buffers_, output_kv_cache_buffers_);
   }
+  decode_dirty_ = true;
   return absl::OkStatus();
 }
 
@@ -983,39 +984,135 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::DecodeInternal(
   return BindTensorsAndRunDecode(&output_logits);
 }
 
+absl::Status
+LlmLiteRtCompiledModelExecutorBase::InitializeDecodeOptimization() {
+  if (!decode_signature_index_.has_value()) {
+    LITERT_ASSIGN_OR_RETURN(size_t sig_idx, compiled_model_->GetSignatureIndex(
+                                                kDecodeSignatureRunner));
+    decode_signature_index_ = sig_idx;
+  }
+
+  LITERT_ASSIGN_OR_RETURN(
+      auto input_names,
+      compiled_model_->GetSignatureInputNames(*decode_signature_index_));
+  LITERT_ASSIGN_OR_RETURN(
+      auto output_names,
+      compiled_model_->GetSignatureOutputNames(*decode_signature_index_));
+
+  const bool use_decode_kv_cache = decode_kv_cache_buffers_1_.has_value();
+  const auto& kv_buffers_1 =
+      use_decode_kv_cache ? *decode_kv_cache_buffers_1_ : kv_cache_buffers_1_;
+  const auto& kv_buffers_2 =
+      use_decode_kv_cache ? *decode_kv_cache_buffers_2_
+                          : (kv_cache_buffers_2_.empty() ? kv_cache_buffers_1_
+                                                         : kv_cache_buffers_2_);
+
+  output_logits_index_ = std::nullopt;
+  for (size_t i = 0; i < output_names.size(); ++i) {
+    if (output_names[i] == signatures_.output_logits) {
+      output_logits_index_ = i;
+      break;
+    }
+  }
+
+  absl::flat_hash_map<absl::string_view, TensorBuffer> lora_buffers;
+  if (lora_manager_) {
+    auto lora_buffers_or = lora_manager_->GetLoRABuffers();
+    if (lora_buffers_or.ok()) {
+      lora_buffers = std::move(*lora_buffers_or);
+    }
+  }
+
+  ordered_decode_inputs_1_.clear();
+  ordered_decode_inputs_2_.clear();
+  ordered_decode_inputs_1_.reserve(input_names.size());
+  ordered_decode_inputs_2_.reserve(input_names.size());
+
+  for (const auto& name : input_names) {
+    if (decode_input_buffers_.contains(name)) {
+      LITERT_ASSIGN_OR_RETURN(auto dup1,
+                              decode_input_buffers_[name].Duplicate());
+      ordered_decode_inputs_1_.push_back(std::move(dup1));
+      LITERT_ASSIGN_OR_RETURN(auto dup2,
+                              decode_input_buffers_[name].Duplicate());
+      ordered_decode_inputs_2_.push_back(std::move(dup2));
+    } else if (kv_buffers_1.contains(name)) {
+      LITERT_ASSIGN_OR_RETURN(auto dup1, kv_buffers_1.at(name).Duplicate());
+      ordered_decode_inputs_1_.push_back(std::move(dup1));
+      LITERT_ASSIGN_OR_RETURN(auto dup2, kv_buffers_2.at(name).Duplicate());
+      ordered_decode_inputs_2_.push_back(std::move(dup2));
+    } else if (lora_manager_ && lora_buffers.contains(name)) {
+      LITERT_ASSIGN_OR_RETURN(auto dup1, lora_buffers[name].Duplicate());
+      ordered_decode_inputs_1_.push_back(std::move(dup1));
+      LITERT_ASSIGN_OR_RETURN(auto dup2, lora_buffers[name].Duplicate());
+      ordered_decode_inputs_2_.push_back(std::move(dup2));
+    } else {
+      ordered_decode_inputs_1_.push_back(TensorBuffer());
+      ordered_decode_inputs_2_.push_back(TensorBuffer());
+    }
+  }
+
+  ordered_decode_outputs_1_.clear();
+  ordered_decode_outputs_2_.clear();
+  ordered_decode_outputs_1_.reserve(output_names.size());
+  ordered_decode_outputs_2_.reserve(output_names.size());
+
+  for (const auto& name : output_names) {
+    if (decode_output_buffers_.contains(name)) {
+      LITERT_ASSIGN_OR_RETURN(auto dup1,
+                              decode_output_buffers_[name].Duplicate());
+      ordered_decode_outputs_1_.push_back(std::move(dup1));
+      LITERT_ASSIGN_OR_RETURN(auto dup2,
+                              decode_output_buffers_[name].Duplicate());
+      ordered_decode_outputs_2_.push_back(std::move(dup2));
+    } else if (kv_buffers_1.contains(name)) {
+      LITERT_ASSIGN_OR_RETURN(auto dup1, kv_buffers_2.at(name).Duplicate());
+      ordered_decode_outputs_1_.push_back(std::move(dup1));
+      LITERT_ASSIGN_OR_RETURN(auto dup2, kv_buffers_1.at(name).Duplicate());
+      ordered_decode_outputs_2_.push_back(std::move(dup2));
+    } else {
+      ordered_decode_outputs_1_.push_back(TensorBuffer());
+      ordered_decode_outputs_2_.push_back(TensorBuffer());
+    }
+  }
+
+  return absl::OkStatus();
+}
+
 absl::Status LlmLiteRtCompiledModelExecutorBase::BindTensorsAndRunDecode(
     TensorBuffer* output_logits) {
-  absl::flat_hash_map<absl::string_view, TensorBuffer> decode_input_buffers;
-  for (const auto& [input_name, input_buffer] : decode_input_buffers_) {
-    LITERT_ASSIGN_OR_RETURN(auto input_buffer_dup, input_buffer.Duplicate());
-    decode_input_buffers[input_name] = std::move(input_buffer_dup);
+  if (decode_dirty_) {
+    ABSL_RETURN_IF_ERROR(InitializeDecodeOptimization());
+    decode_dirty_ = false;
   }
-  for (const auto& [input_name, input_buffer] : *input_kv_cache_buffers_) {
-    LITERT_ASSIGN_OR_RETURN(auto input_buffer_dup, input_buffer.Duplicate());
-    decode_input_buffers[input_name] = std::move(input_buffer_dup);
+
+  std::vector<TensorBuffer>* inputs = nullptr;
+  std::vector<TensorBuffer>* outputs = nullptr;
+  if (input_kv_cache_buffers_ == &kv_cache_buffers_1_) {
+    inputs = &ordered_decode_inputs_1_;
+    outputs = &ordered_decode_outputs_1_;
+  } else {
+    inputs = &ordered_decode_inputs_2_;
+    outputs = &ordered_decode_outputs_2_;
   }
-  absl::flat_hash_map<absl::string_view, TensorBuffer> decode_output_buffers;
-  for (const auto& [output_name, output_buffer] : decode_output_buffers_) {
-    // LITERT_ASSIGN_OR_RETURN() causes a compilation error on windows.
-    auto output_buffer_dup =
-        output_logits && output_name == signatures_.output_logits
-            ? output_logits->Duplicate()
-            : output_buffer.Duplicate();
-    RET_CHECK(output_buffer_dup) << "Failed to duplicate output buffer.";
-    output_buffer_dup->ClearEvent();
-    decode_output_buffers[output_name] = std::move(*output_buffer_dup);
+
+  if (output_logits && output_logits_index_.has_value()) {
+    auto& cached_logits = (*outputs)[*output_logits_index_];
+    if (cached_logits.Get() != output_logits->Get()) {
+      LITERT_ASSIGN_OR_RETURN(cached_logits, output_logits->Duplicate());
+    }
   }
-  for (const auto& [output_name, output_buffer] : *output_kv_cache_buffers_) {
-    LITERT_ASSIGN_OR_RETURN(auto output_buffer_dup, output_buffer.Duplicate());
-    output_buffer_dup.ClearEvent();
-    decode_output_buffers[output_name] = std::move(output_buffer_dup);
+
+  for (auto& output_buffer : *outputs) {
+    if (output_buffer) {
+      LITERT_RETURN_IF_ERROR(output_buffer.ClearEvent());
+    }
   }
 
   litert::Options run_options = GetRunOptions();
   bool async = true;
-  LITERT_RETURN_IF_ERROR(
-      compiled_model_->RunAsync(kDecodeSignatureRunner, decode_input_buffers,
-                                decode_output_buffers, async, &run_options));
+  LITERT_RETURN_IF_ERROR(compiled_model_->RunAsync(
+      *decode_signature_index_, *inputs, *outputs, async, &run_options));
 
   if (!gpu_optimized_single_buffer_cache_) {
     std::swap(input_kv_cache_buffers_, output_kv_cache_buffers_);
@@ -1410,6 +1507,7 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::RestoreContext(
   }
 
   force_prepare_needed_ = true;
+  decode_dirty_ = true;
 
   return absl::OkStatus();
 }
@@ -2178,6 +2276,7 @@ absl::Status LlmLiteRtCompiledModelExecutorDynamic::DecodeInternal(
         key_buffer_tensor_type.Layout().Dimensions()[key_dynamic_dim_index_];
   }
 
+  bool kv_resized = false;
   if (current_kv_len <= llm_context_->runtime_state().current_step - 1) {
     int entries_to_add = kv_increament_size_;
     int new_kv_len = current_kv_len + entries_to_add;
@@ -2198,15 +2297,21 @@ absl::Status LlmLiteRtCompiledModelExecutorDynamic::DecodeInternal(
                                 value_dynamic_dim_index_, entries_to_add));
     }
     current_kv_len = new_kv_len;
+    kv_resized = true;
+    decode_dirty_ = true;
   }
 
-  ABSL_RETURN_IF_ERROR(ResolveDynamicShape(model_, *compiled_model_, "decode",
-                                           signatures_.input_attn_mask.value(),
-                                           current_kv_len));
-  LITERT_ASSIGN_OR_RETURN(
-      decode_input_buffers_[signatures_.input_attn_mask.value()],
-      compiled_model_->CreateInputBuffer("decode",
-                                         signatures_.input_attn_mask.value()));
+  if (signatures_.input_attn_mask.has_value()) {
+    auto attn_mask_name = signatures_.input_attn_mask.value();
+    if (kv_resized || !decode_input_buffers_.contains(attn_mask_name)) {
+      ABSL_RETURN_IF_ERROR(ResolveDynamicShape(
+          model_, *compiled_model_, "decode", attn_mask_name, current_kv_len));
+      LITERT_ASSIGN_OR_RETURN(
+          decode_input_buffers_[attn_mask_name],
+          compiled_model_->CreateInputBuffer("decode", attn_mask_name));
+      decode_dirty_ = true;
+    }
+  }
 
   return LlmLiteRtCompiledModelExecutorBase::DecodeInternal(token,
                                                             output_logits);
