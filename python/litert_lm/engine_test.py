@@ -844,6 +844,13 @@ class EngineTest(LiteRtLmTestBase):
             )
         )
 
+  def test_session_api_apply_prompt_template(self):
+    with self._create_engine() as engine:
+      with engine.create_session(apply_prompt_template=True) as session:
+        self.assertIsNotNone(session)
+      with engine.create_session(apply_prompt_template=False) as session:
+        self.assertIsNotNone(session)
+
 
 class FunctionCallingTest(LiteRtLmTestBase):
 
