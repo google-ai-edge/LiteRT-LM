@@ -1901,12 +1901,13 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
           auto output_buffer,
           CreateFP16OutputBuffer(lrt_env, *compiled_model, signature_index,
                                  output_name, i));
+      LITERT_RETURN_IF_ERROR(output_buffer.Clear());
       decode_output_buffers[output_name] = std::move(output_buffer);
     } else {
       LITERT_ASSIGN_OR_RETURN(auto output_buffer,
                               compiled_model->CreateOutputBuffer(
                                   kDecodeSignatureRunner, output_name));
-
+      LITERT_RETURN_IF_ERROR(output_buffer.Clear());
       decode_output_buffers[output_name] = std::move(output_buffer);
     }
   }
@@ -2297,6 +2298,7 @@ LlmLiteRtCompiledModelExecutorDynamic::Create(
       LITERT_ASSIGN_OR_RETURN(auto output_buffer,
                               compiled_model->CreateOutputBuffer(
                                   kDecodeSignatureRunner, output_name));
+      LITERT_RETURN_IF_ERROR(output_buffer.Clear());
       decode_output_buffers[output_name] = std::move(output_buffer);
     }
   }
