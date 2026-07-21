@@ -31,6 +31,10 @@ pytype_strict_library(
         "serve_util.py",
     ],
     imports = [".."],
+    visibility = [
+        "//third_party/jetski_prod:__subpackages__",
+        "//python/litert_lm_cli:__subpackages__",
+    ],
     deps = [
         "//python/litert_lm",
         "//python/litert_lm_builder:litertlm_builder",
