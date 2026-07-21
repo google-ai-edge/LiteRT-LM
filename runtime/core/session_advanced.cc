@@ -560,4 +560,13 @@ absl::StatusOr<int> SessionAdvanced::GetCurrentStep() const {
   return execution_manager_lock->GetCurrentStep(*session_info_);
 }
 
+absl::StatusOr<std::vector<ExecutorAudioData>>
+SessionAdvanced::GetLastAudioEmbeddings() {
+  auto execution_manager_lock = execution_manager_.lock();
+  if (execution_manager_lock == nullptr) {
+    return absl::FailedPreconditionError("Execution manager is not available.");
+  }
+  return execution_manager_lock->GetLastAudioEmbeddings(session_id_);
+}
+
 }  // namespace litert::lm

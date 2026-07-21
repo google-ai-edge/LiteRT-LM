@@ -219,6 +219,10 @@ class ThreadedExecutionManager : public ExecutionManager {
       absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback) override
       ABSL_LOCKS_EXCLUDED(session_and_task_lookup_mutex_);
 
+  absl::StatusOr<std::vector<ExecutorAudioData>> GetLastAudioEmbeddings(
+      SessionId session_id) override
+      ABSL_LOCKS_EXCLUDED(session_and_task_lookup_mutex_);
+
   // Returns the current step of the session.
   // - session_info: The session info of the session.
   // Returns:

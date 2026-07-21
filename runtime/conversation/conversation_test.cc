@@ -53,6 +53,7 @@
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/proto/token.pb.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
@@ -167,6 +168,8 @@ class MockSession : public SessionInterface {
               (override));
   MOCK_METHOD(void, CancelProcess, (), (override));
   MOCK_METHOD(absl::Status, WaitUntilDone, (), (override));
+  MOCK_METHOD(absl::StatusOr<std::vector<ExecutorAudioData>>,
+              GetLastAudioEmbeddings, (), (override));
   MOCK_METHOD(absl::Status, SaveCheckpoint, (absl::string_view label),
               (override));
   MOCK_METHOD(absl::Status, RewindToCheckpoint, (absl::string_view label),

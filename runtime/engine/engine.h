@@ -28,6 +28,7 @@
 #include "support/tokenizer/tokenizer.h"  // from @litert
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
+#include "runtime/executor/llm_executor_io_types.h"
 
 namespace litert::lm {
 
@@ -216,6 +217,13 @@ class SessionInterface {
   PrefillPreprocessedContents(
       std::vector<InputData> preprocessed_contents,
       absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback) {
+    return absl::UnimplementedError("Not implemented.");
+  }
+
+  // Returns the last generated audio embeddings from the prefill process.
+  // Returns an empty vector if no audio was processed in the last prefill.
+  virtual absl::StatusOr<std::vector<ExecutorAudioData>>
+  GetLastAudioEmbeddings() {
     return absl::UnimplementedError("Not implemented.");
   }
 

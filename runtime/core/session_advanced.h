@@ -42,6 +42,8 @@
 
 namespace litert::lm {
 
+class ExecutorAudioData;
+
 // SessionAdvanced is an implementation of SessionInterface. The
 // underlying prefill/decode use the LLM Execution Manager's advanced resource
 // management to support efficient multi-sessions and session cloning features.
@@ -144,6 +146,9 @@ class SessionAdvanced : public SessionInterface {
       std::vector<InputData> preprocessed_contents,
       absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback) override
       ABSL_LOCKS_EXCLUDED(mutex_);
+
+  absl::StatusOr<std::vector<ExecutorAudioData>> GetLastAudioEmbeddings()
+      override;
 
   absl::StatusOr<Responses> RunDecode() override;
 

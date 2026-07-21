@@ -112,6 +112,8 @@ class MockSession : public SessionInterface {
   MOCK_METHOD(absl::StatusOr<BenchmarkInfo>, GetBenchmarkInfo, (), (override));
   MOCK_METHOD(absl::StatusOr<BenchmarkInfo*>, GetMutableBenchmarkInfo, (),
               (override));
+  MOCK_METHOD(absl::StatusOr<std::vector<ExecutorAudioData>>,
+              GetLastAudioEmbeddings, (), (override));
   MOCK_METHOD(absl::Status, WaitUntilDone, (), (override));
   MOCK_METHOD(const SessionConfig&, GetSessionConfig, (), (const, override));
   MOCK_METHOD(absl::Status, RewindToStep, (int step), (override));
