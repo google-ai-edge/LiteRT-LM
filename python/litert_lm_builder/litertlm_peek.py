@@ -563,7 +563,7 @@ def peek_litertlm_file(
             section_info["additional_metadata"] = section_metadata_items
 
           if model_type:
-            if model_type.startswith("tf_lite_"):
+            while model_type.startswith("tf_lite_"):
               model_type = model_type[len("tf_lite_") :]
             section_info["model_type"] = model_type
 

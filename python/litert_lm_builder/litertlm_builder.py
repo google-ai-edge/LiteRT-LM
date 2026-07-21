@@ -235,7 +235,9 @@ class TfLiteModelType(enum.Enum):
   @classmethod
   def get_enum_from_tf_free_value(cls, tf_free_value: str) -> "TfLiteModelType":
     """A helper method to get the enum value from the TF-free value."""
-    value = "tf_lite_" + tf_free_value.lower()
+    value = tf_free_value.lower()
+    if not value.startswith("tf_lite_"):
+      value = f"tf_lite_{value}"
     return cls(value)
 
 
