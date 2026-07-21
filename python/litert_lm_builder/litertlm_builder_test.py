@@ -752,6 +752,24 @@ class LitertlmBuilderTest(parameterized.TestCase):
     with open(output_path, "rb") as f:
       self.assertEqual(f.read(), original_content)
 
+  @parameterized.named_parameters(
+      (
+          "tf_free",
+          "prefill_decode",
+          litertlm_builder.TfLiteModelType.PREFILL_DECODE,
+      ),
+      (
+          "tf_prefixed",
+          "tf_lite_prefill_decode",
+          litertlm_builder.TfLiteModelType.PREFILL_DECODE,
+      ),
+  )
+  def test_get_enum_from_tf_free_value(self, input_val, expected_enum):
+    self.assertEqual(
+        litertlm_builder.TfLiteModelType.get_enum_from_tf_free_value(input_val),
+        expected_enum,
+    )
+
 
 if __name__ == "__main__":
   absltest.main()
