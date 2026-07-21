@@ -39,6 +39,7 @@ cc_library(
         "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/time",
         "@litert//support/tokenizer",
+        "//runtime/executor:llm_executor_io_types",
     ],
 )
 

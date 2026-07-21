@@ -259,6 +259,12 @@ class SessionConfig {
     use_external_sampler_ = use_external_sampler;
   }
 
+  // Whether to collect audio embeddings.
+  bool CollectAudioEmbeddings() const { return collect_audio_embeddings_; }
+  void SetCollectAudioEmbeddings(bool collect_audio_embeddings) {
+    collect_audio_embeddings_ = collect_audio_embeddings;
+  }
+
   // Scoped LoRA file:
   // Getters for the scoped LoRA file.
   std::shared_ptr<ScopedFile> GetScopedLoraFile() const;
@@ -287,6 +293,9 @@ class SessionConfig {
 
   // Whether to enable vision modality in the session.
   bool vision_modality_enabled_ = false;
+
+  // Whether to collect audio embeddings.
+  bool collect_audio_embeddings_ = false;
 
   // Parameters used to configure the sampling process.
   proto::SamplerParameters sampler_params_;
