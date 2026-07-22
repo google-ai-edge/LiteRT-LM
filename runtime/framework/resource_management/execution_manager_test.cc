@@ -24,6 +24,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/functional/any_invocable.h"  // from @com_google_absl
+#include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
@@ -31,6 +32,10 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
+#include "litert/cc/litert_element_type.h"  // from @litert
+#include "litert/cc/litert_layout.h"  // from @litert
+#include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "support/tokenizer/tokenizer.h"  // from @litert
 #include "runtime/components/logits_processor/constrained_decoding/fake_constraint.h"
@@ -78,9 +83,21 @@ class MockTokenizer : public Tokenizer {
 
 class FakeAudioExecutor : public AudioExecutor {
  public:
+  std::vector<float> fake_data_ = {1.0f, 2.0f, 3.0f, 4.0f};
   absl::StatusOr<::litert::lm::ExecutorAudioData> Encode(
       const litert::TensorBuffer& spectrogram_tensor) override {
-    return ::litert::lm::ExecutorAudioData();
+    auto buffer = ::litert::TensorBuffer::CreateManagedHostMemory(
+        ::litert::RankedTensorType(::litert::ElementType::Float32,
+                                   ::litert::Layout(::litert::Dimensions({4}))),
+        fake_data_.size() * sizeof(float));
+    if (!buffer.HasValue()) {
+      return absl::InternalError(
+          "Failed to create TensorBuffer in FakeAudioExecutor");
+    }
+    auto write_status = buffer.Value().Write(
+        absl::MakeConstSpan(fake_data_.data(), fake_data_.size()));
+    return ::litert::lm::ExecutorAudioData(std::move(buffer.Value()),
+                                           std::nullopt, 4);
   }
 };
 
@@ -245,17 +262,20 @@ TEST_P(ExecutionManagerTest, AddPrefillTask) {
 }
 
 TEST_P(ExecutionManagerTest, AddPrefillTaskWithAudioModality) {
-  auto fake_llm_executor = CreateDefaultFakeLlmExecutor();
+  auto fake_llm_executor = std::make_unique<FakeLlmExecutor>(
+      kVocabSize, std::vector<std::vector<int>>{{1, 2, 3, -2, -2, -2, -2, -4}},
+      std::vector<std::vector<int>>{{4}, {5}, {6}}, 1,
+      std::vector<float>{1.0f, 2.0f, 3.0f, 4.0f});
 
   ASSERT_OK_AND_ASSIGN(auto* settings,
                        fake_llm_executor->GetMutableExecutorSettings());
-  EXPECT_OK(settings->SetBackend(Backend::GPU_ARTISAN));
+  EXPECT_OK(settings->SetBackend(Backend::CPU));
 
   ASSERT_OK_AND_ASSIGN(auto model_assets,
                        ModelAssets::Create("test_model_path_2"));
-  ASSERT_OK_AND_ASSIGN(auto audio_settings,
-                       AudioExecutorSettings::CreateDefault(
-                           model_assets, 128, Backend::GPU_ARTISAN));
+  ASSERT_OK_AND_ASSIGN(
+      auto audio_settings,
+      AudioExecutorSettings::CreateDefault(model_assets, 128, Backend::CPU));
 
   CreateExecutionManager(
       std::move(fake_llm_executor),
@@ -273,15 +293,104 @@ TEST_P(ExecutionManagerTest, AddPrefillTaskWithAudioModality) {
   ASSERT_OK_AND_ASSIGN(auto input_text,
                        tokenizer_->TokenIdsToTensorBuffer({1, 2, 3}));
   inputs.push_back(InputText(std::move(input_text)));
+  auto audio_tensor_expected = ::litert::TensorBuffer::CreateManagedHostMemory(
+      ::litert::RankedTensorType(::litert::ElementType::Float32,
+                                 ::litert::Layout(::litert::Dimensions({1}))),
+      sizeof(float));
+  if (!audio_tensor_expected.HasValue()) {
+    FAIL() << "Failed to allocate audio tensor expected buffer.";
+  }
+  inputs.push_back(InputAudio(std::move(audio_tensor_expected.Value())));
   inputs.push_back(InputAudioEnd());
+
+  std::vector<TaskState> task_states;
+  absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback =
+      [&task_states](absl::StatusOr<Responses> responses) {
+        if (!responses.ok()) {
+          ABSL_LOG(WARNING)
+              << "Callback received an error: " << responses.status();
+          return;
+        }
+        task_states.push_back(responses.value().GetTaskState());
+      };
 
   ASSERT_OK_AND_ASSIGN(const TaskId task_id,
                        execution_manager_->GetNewTaskId());
   ASSERT_OK(execution_manager_->AddPrefillTask(
       session_id, task_id, std::move(inputs), {},
-      std::make_shared<std::atomic<bool>>(false), nullptr));
+      std::make_shared<std::atomic<bool>>(false), std::move(callback)));
 
   EXPECT_OK(execution_manager_->WaitUntilDone(task_id, absl::Seconds(3)));
+}
+
+TEST_P(ExecutionManagerTest, AddPrefillTaskExtractsAudioSoftTokens) {
+  auto fake_llm_executor = std::make_unique<FakeLlmExecutor>(
+      kVocabSize, std::vector<std::vector<int>>{{1, 2, 3, -2, -2, -2, -2, -4}},
+      std::vector<std::vector<int>>{{4}, {5}, {6}}, 1,
+      std::vector<float>{1.0f, 2.0f, 3.0f, 4.0f});
+
+  ASSERT_OK_AND_ASSIGN(auto* settings,
+                       fake_llm_executor->GetMutableExecutorSettings());
+  EXPECT_OK(settings->SetBackend(Backend::CPU));
+
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create("test_model_path_2"));
+  ASSERT_OK_AND_ASSIGN(
+      auto audio_settings,
+      AudioExecutorSettings::CreateDefault(model_assets, 128, Backend::CPU));
+
+  CreateExecutionManager(
+      std::move(fake_llm_executor),
+      std::make_unique<AudioExecutorSettings>(std::move(audio_settings)),
+      std::make_unique<FakeAudioExecutor>());
+
+  ASSERT_OK_AND_ASSIGN(auto session_config, CreateDefaultSessionConfig());
+  session_config.SetAudioModalityEnabled(true);
+  session_config.SetExtractAudioSoftTokens(true);
+
+  // Trigger RegisterNewSession which previously acquired nested locks
+  ASSERT_OK_AND_ASSIGN(const SessionId session_id,
+                       execution_manager_->RegisterNewSession(session_config));
+
+  std::vector<InputData> inputs;
+  ASSERT_OK_AND_ASSIGN(auto input_text,
+                       tokenizer_->TokenIdsToTensorBuffer({1, 2, 3}));
+  inputs.push_back(InputText(std::move(input_text)));
+  auto audio_tensor_expected = ::litert::TensorBuffer::CreateManagedHostMemory(
+      ::litert::RankedTensorType(::litert::ElementType::Float32,
+                                 ::litert::Layout(::litert::Dimensions({1}))),
+      sizeof(float));
+  if (!audio_tensor_expected.HasValue()) {
+    FAIL() << "Failed to allocate audio tensor expected buffer.";
+  }
+  inputs.push_back(InputAudio(std::move(audio_tensor_expected.Value())));
+  inputs.push_back(InputAudioEnd());
+
+  std::vector<TaskState> task_states;
+  std::vector<float> received_audio_tokens;
+  absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback =
+      [&task_states,
+       &received_audio_tokens](absl::StatusOr<Responses> responses) {
+        if (!responses.ok()) {
+          ABSL_LOG(WARNING)
+              << "Callback received an error: " << responses.status();
+          return;
+        }
+        task_states.push_back(responses.value().GetTaskState());
+        if (responses.value().GetAudioSoftTokens().has_value() &&
+            !responses.value().GetAudioSoftTokens()->empty()) {
+          received_audio_tokens = responses.value().GetAudioSoftTokens()->at(0);
+        }
+      };
+
+  ASSERT_OK_AND_ASSIGN(const TaskId task_id,
+                       execution_manager_->GetNewTaskId());
+  ASSERT_OK(execution_manager_->AddPrefillTask(
+      session_id, task_id, std::move(inputs), {},
+      std::make_shared<std::atomic<bool>>(false), std::move(callback)));
+
+  EXPECT_OK(execution_manager_->WaitUntilDone(task_id, absl::Seconds(3)));
+  EXPECT_THAT(received_audio_tokens, ElementsAre(1.0f, 2.0f, 3.0f, 4.0f));
 }
 
 TEST_P(ExecutionManagerTest, AddPrefillTaskInvalidAudioInput) {

@@ -22,6 +22,7 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_layout.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
@@ -53,8 +54,9 @@ absl::StatusOr<T> CombineExecutorDataImpl(std::vector<T>& executor_data) {
   ABSL_ASSIGN_OR_RETURN(auto first_tensor_dims,
                         TensorBufferDims(*first_tensor));
   int total_token_num = 0;
-  int total_packed_size = 0;
+  size_t total_packed_size = 0;
   std::vector<int> combined_token_num;
+  std::vector<size_t> valid_sizes;
   for (const auto& executor_data : executor_data) {
     ABSL_ASSIGN_OR_RETURN(const auto* embeddings_ptr,
                           executor_data.GetEmbeddingsPtr());
@@ -63,10 +65,24 @@ absl::StatusOr<T> CombineExecutorDataImpl(std::vector<T>& executor_data) {
       return absl::InvalidArgumentError(
           "The embedding tensor type must have 3 or 4 dimensions.");
     }
-    combined_token_num.push_back(dims[dims.size() - 2]);
-    total_token_num += dims[dims.size() - 2];
+
+    int valid_tokens = -1;
+    if constexpr (std::is_same_v<T, ExecutorAudioData>) {
+      valid_tokens = executor_data.GetValidTokens();
+    }
+    int tokens_to_copy =
+        (valid_tokens > 0) ? valid_tokens : dims[dims.size() - 2];
+    combined_token_num.push_back(tokens_to_copy);
+    total_token_num += tokens_to_copy;
+
     LITERT_ASSIGN_OR_RETURN(size_t packed_size, embeddings_ptr->PackedSize());
-    total_packed_size += packed_size;
+    size_t valid_size =
+        (dims[dims.size() - 2] > 0)
+            ? (packed_size / static_cast<size_t>(dims[dims.size() - 2])) *
+                  static_cast<size_t>(tokens_to_copy)
+            : packed_size;
+    valid_sizes.push_back(valid_size);
+    total_packed_size += valid_size;
   }
   Layout combined_layout;
   if constexpr (std::is_same_v<T, ExecutorAudioData>) {
@@ -95,7 +111,7 @@ absl::StatusOr<T> CombineExecutorDataImpl(std::vector<T>& executor_data) {
   for (int i = 0; i < num_executor_data; ++i) {
     ABSL_ASSIGN_OR_RETURN(auto embeddings_ptr,
                           executor_data[i].GetMutableEmbeddingsPtr());
-    LITERT_ASSIGN_OR_RETURN(auto embeddings_size, embeddings_ptr->PackedSize());
+    size_t embeddings_size = valid_sizes[i];
     LITERT_ASSIGN_OR_RETURN(
         auto embeddings_lock_and_addr,
         ::litert::TensorBufferScopedLock::Create(
@@ -108,13 +124,9 @@ absl::StatusOr<T> CombineExecutorDataImpl(std::vector<T>& executor_data) {
     return ExecutorVisionData(std::move(combined_tensor_buffer),
                               /*per_layer_embeddings=*/std::nullopt);
   } else if constexpr (std::is_same_v<T, ExecutorAudioData>) {
-    int num_audio_tokens = 0;
-    for (const auto& executor_data : executor_data) {
-      num_audio_tokens += executor_data.GetValidTokens();
-    }
     return ExecutorAudioData(std::move(combined_tensor_buffer),
                              /*per_layer_embeddings=*/std::nullopt,
-                             num_audio_tokens);
+                             total_token_num);
   } else {
     return absl::InvalidArgumentError("Executor data type is not supported.");
   }
@@ -130,6 +142,51 @@ absl::StatusOr<ExecutorVisionData> CombineExecutorVisionData(
 absl::StatusOr<ExecutorAudioData> CombineExecutorAudioData(
     std::vector<ExecutorAudioData>& executor_data) {
   return CombineExecutorDataImpl(executor_data);
+}
+
+absl::StatusOr<std::vector<std::vector<float>>> ExtractAudioSoftTokens(
+    ExecutorAudioData& audio_data) {
+  auto embeddings = audio_data.GetMutableEmbeddingsPtr();
+  if (!embeddings.ok()) {
+    return embeddings.status();
+  }
+  auto packed_size = (*embeddings)->PackedSize();
+  if (!packed_size.HasValue()) {
+    return absl::InternalError("PackedSize() does not have value");
+  }
+  size_t num_bytes = packed_size.Value();
+  if (num_bytes == 0) {
+    return absl::InternalError("num_bytes is 0");
+  }
+
+  std::vector<float> audio_floats(num_bytes / sizeof(float));
+  auto read_res = (*embeddings)->Read(absl::MakeSpan(audio_floats));
+  if (!read_res.HasValue()) {
+    return absl::InternalError(
+        "Failed to read audio embeddings from TensorBuffer");
+  }
+
+  int valid_tokens = audio_data.GetValidTokens();
+  if (valid_tokens > 0) {
+    auto tensor_type_res = (*embeddings)->TensorType();
+    if (tensor_type_res.HasValue()) {
+      auto dims = tensor_type_res.Value().Layout().Dimensions();
+      if (dims.size() >= 3 && dims[0] > 1) {
+        return absl::InternalError(
+            "Batch size > 1 not supported for extracting audio soft tokens.");
+      }
+      if (dims.size() >= 2) {
+        size_t model_dimension = dims.back();
+        size_t valid_elements = valid_tokens * model_dimension;
+        if (valid_elements < audio_floats.size()) {
+          audio_floats.resize(valid_elements);
+        }
+      }
+    }
+  }
+  std::vector<std::vector<float>> soft_tokens;
+  soft_tokens.push_back(std::move(audio_floats));
+  return soft_tokens;
 }
 
 }  // namespace litert::lm

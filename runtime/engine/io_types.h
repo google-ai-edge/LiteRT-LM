@@ -160,6 +160,17 @@ class Responses {
     return token_scores_;
   };
 
+  // Returns the const audio soft tokens vector. Optional.
+  const std::optional<std::vector<std::vector<float>>>& GetAudioSoftTokens()
+      const {
+    return audio_soft_tokens_;
+  }
+
+  // Returns the mutable audio soft tokens vector. Optional.
+  std::optional<std::vector<std::vector<float>>>& GetMutableAudioSoftTokens() {
+    return audio_soft_tokens_;
+  };
+
  private:
   // The state of the task.
   TaskState task_state_;
@@ -179,6 +190,9 @@ class Responses {
 
   // The output vector of token ids for each response text.
   std::vector<std::vector<int>> token_ids_;
+
+  // The output vector of audio soft tokens generated during prefill. Optional.
+  std::optional<std::vector<std::vector<float>>> audio_soft_tokens_;
 };
 std::ostream& operator<<(std::ostream& os, const Responses& responses);
 

@@ -276,6 +276,11 @@ class SessionConfig {
   void SetMaxOutputTokens(int max_output_tokens) {
     max_output_tokens_ = max_output_tokens;
   }
+  // Whether to extract audio soft tokens during prefill.
+  bool ExtractAudioSoftTokens() const { return extract_audio_soft_tokens_; }
+  void SetExtractAudioSoftTokens(bool extract_audio_soft_tokens) {
+    extract_audio_soft_tokens_ = extract_audio_soft_tokens;
+  }
 
  private:
   // Private constructor for the SessionConfig. The user should use the
@@ -287,6 +292,9 @@ class SessionConfig {
 
   // Whether to enable vision modality in the session.
   bool vision_modality_enabled_ = false;
+
+  // Whether to extract audio soft tokens during audio encoder prefill.
+  bool extract_audio_soft_tokens_ = false;
 
   // Parameters used to configure the sampling process.
   proto::SamplerParameters sampler_params_;

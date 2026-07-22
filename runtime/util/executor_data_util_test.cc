@@ -143,6 +143,98 @@ TEST(ExecutorDataUtilTest, CombineExecutorAudioDataTest) {
   }
 }
 
+// This test ensures that when the allocated capacity of an ExecutorAudioData
+// chunk exceeds its number of valid tokens, the trailing memory (padding) is
+// discarded and not accidentally interpolated into the final combined tensor.
+TEST(ExecutorDataUtilTest, CombineExecutorAudioDataWithPaddingTest) {
+  struct alignas(::litert::kHostMemoryBufferAlignment) {
+    float d[15] = {
+        1.0f, 2.0f,  3.0f,  4.0f,  5.0f,  6.0f,  7.0f, 8.0f,
+        9.0f, 10.0f, 11.0f, 12.0f, 99.0f, 99.0f, 99.0f};  // 1 padding token
+  } data1;
+  auto tensor1 = TensorBuffer::CreateFromHostMemory(
+      ::litert::RankedTensorType(ElementType::Float32,
+                                 Layout(Dimensions({1, 5, 3}))),
+      data1.d, sizeof(data1.d));
+  ASSERT_TRUE(tensor1.HasValue());
+  ExecutorAudioData audio_data1(std::move(*tensor1), std::nullopt, 4);
+
+  struct alignas(::litert::kHostMemoryBufferAlignment) {
+    float d[9] = {13.0f, 14.0f, 15.0f, 16.0f, 17.0f,
+                  18.0f, 88.0f, 88.0f, 88.0f};  // 1 padding token
+  } data2;
+  auto tensor2 = TensorBuffer::CreateFromHostMemory(
+      ::litert::RankedTensorType(ElementType::Float32,
+                                 Layout(Dimensions({1, 3, 3}))),
+      data2.d, sizeof(data2.d));
+  ASSERT_TRUE(tensor2.HasValue());
+  ExecutorAudioData audio_data2(std::move(*tensor2), std::nullopt, 2);
+
+  std::vector<ExecutorAudioData> audio_data_list;
+  audio_data_list.push_back(std::move(audio_data1));
+  audio_data_list.push_back(std::move(audio_data2));
+
+  auto combined_audio_data = CombineExecutorAudioData(audio_data_list);
+  ASSERT_OK(combined_audio_data);
+
+  auto mutable_embeddings_ptr = combined_audio_data->GetMutableEmbeddingsPtr();
+  ASSERT_OK(mutable_embeddings_ptr);
+
+  litert::TensorBuffer* embeddings_ptr = mutable_embeddings_ptr.value();
+  EXPECT_NE(embeddings_ptr, nullptr);
+
+  auto tensor_type = embeddings_ptr->TensorType();
+  ASSERT_TRUE(tensor_type.HasValue());
+  EXPECT_EQ(tensor_type->ElementType(), ElementType::Float32);
+  EXPECT_EQ(tensor_type->Layout(), Layout(Dimensions({1, 6, 3})));
+
+  EXPECT_EQ(combined_audio_data->GetValidTokens(), 6);
+
+  float read_data[18];
+  auto read_success = embeddings_ptr->Read<float>(absl::MakeSpan(read_data));
+  ASSERT_TRUE(read_success);
+  for (int i = 0; i < 18; ++i) {
+    EXPECT_EQ(read_data[i], static_cast<float>(i + 1));
+  }
+}
+
+TEST(ExecutorDataUtilTest, ExtractAudioSoftTokensTest) {
+  struct alignas(::litert::kHostMemoryBufferAlignment) {
+    float d[6] = {1.3f, 2.3f, 3.3f, 4.3f, 5.3f, 6.3f};
+  } data;
+  auto tensor = TensorBuffer::CreateFromHostMemory(
+      ::litert::RankedTensorType(ElementType::Float32,
+                                 Layout(Dimensions({1, 2, 3}))),
+      data.d, sizeof(data.d));
+  ASSERT_TRUE(tensor.HasValue());
+  ExecutorAudioData audio_data(std::move(*tensor), std::nullopt, 2);
+
+  auto soft_tokens_or = ExtractAudioSoftTokens(audio_data);
+  ASSERT_OK(soft_tokens_or);
+  EXPECT_EQ(soft_tokens_or->size(), 1);
+  EXPECT_THAT(soft_tokens_or->at(0),
+              ElementsAre(1.3f, 2.3f, 3.3f, 4.3f, 5.3f, 6.3f));
+}
+
+TEST(ExecutorDataUtilTest, ExtractAudioSoftTokensWithPaddingTest) {
+  struct alignas(::litert::kHostMemoryBufferAlignment) {
+    float d[9] = {1.3f, 2.3f, 3.3f, 4.3f, 5.3f,
+                  6.3f, 9.9f, 9.9f, 9.9f};  // 1 padding token
+  } data;
+  auto tensor = TensorBuffer::CreateFromHostMemory(
+      ::litert::RankedTensorType(ElementType::Float32,
+                                 Layout(Dimensions({1, 3, 3}))),
+      data.d, sizeof(data.d));
+  ASSERT_TRUE(tensor.HasValue());
+  ExecutorAudioData audio_data(std::move(*tensor), std::nullopt, 2);
+
+  auto soft_tokens_or = ExtractAudioSoftTokens(audio_data);
+  ASSERT_OK(soft_tokens_or);
+  EXPECT_EQ(soft_tokens_or->size(), 1);
+  EXPECT_THAT(soft_tokens_or->at(0),
+              ElementsAre(1.3f, 2.3f, 3.3f, 4.3f, 5.3f, 6.3f));
+}
+
 TEST(ExecutorDataUtilTest, CombineExecutorAudioDataEmptyFails) {
   std::vector<ExecutorAudioData> executor_data;
   EXPECT_THAT(

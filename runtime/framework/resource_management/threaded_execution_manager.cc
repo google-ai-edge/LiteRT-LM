@@ -38,6 +38,7 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
@@ -55,6 +56,7 @@
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/audio_executor.h"
 #include "runtime/executor/audio_executor_settings.h"
+#include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/llm_executor.h"
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/vision_executor_settings.h"
@@ -906,6 +908,24 @@ absl::Status ThreadedExecutionManager::AddPrefillTask(
           processed_tokens.value()
               ->GetTokenAtStep(current_step.value() - 1)
               .at(0);
+
+      if (session_info->session_config.ExtractAudioSoftTokens()) {
+        auto audio_data = executor_inputs->GetMutableAudioDataPtr();
+        if (audio_data.ok()) {
+          auto soft_tokens_or = ExtractAudioSoftTokens(**audio_data);
+          if (soft_tokens_or.ok()) {
+            responses.value().GetMutableAudioSoftTokens() =
+                std::move(*soft_tokens_or);
+          } else {
+            ABSL_LOG(WARNING) << "Failed to extract audio soft tokens: "
+                              << soft_tokens_or.status();
+          }
+        } else {
+          ABSL_LOG(WARNING)
+              << "executor_inputs->GetMutableAudioDataPtr() fails: "
+              << audio_data.status();
+        }
+      }
     }
 
     llm_executor.value().reset();
