@@ -137,6 +137,42 @@ def _parse_sampler_config(
   )
 
 
+def _parse_repetition_penalty_config(
+    body: dict[str, Any],
+) -> litert_lm.RepetitionPenaltyConfig | None:
+  """Parses and validates repetition penalty parameters from the request body."""
+  frequency_penalty = body.get("frequency_penalty")
+  presence_penalty = body.get("presence_penalty")
+
+  if frequency_penalty is None and presence_penalty is None:
+    return None
+
+  if frequency_penalty is not None:
+    if isinstance(frequency_penalty, bool) or not isinstance(
+        frequency_penalty, (int, float)
+    ):
+      raise ValueError(
+          "frequency_penalty must be a number, got"
+          f" {type(frequency_penalty).__name__}"
+      )
+    frequency_penalty = float(frequency_penalty)
+
+  if presence_penalty is not None:
+    if isinstance(presence_penalty, bool) or not isinstance(
+        presence_penalty, (int, float)
+    ):
+      raise ValueError(
+          "presence_penalty must be a number, got"
+          f" {type(presence_penalty).__name__}"
+      )
+    presence_penalty = float(presence_penalty)
+
+  return litert_lm.RepetitionPenaltyConfig(
+      frequency_penalty=frequency_penalty,
+      presence_penalty=presence_penalty,
+  )
+
+
 def _parse_thinking_config(
     body: dict[str, Any],
     model_id: str | None = None,
@@ -760,6 +796,9 @@ class OpenAIHandler(serve_util.CORSRequestHandler):
       max_completion_tokens: int | None = None,
       include_usage: bool = False,
       response_format: litert_lm.ResponseFormat | None = None,
+      repetition_penalty_config: (
+          litert_lm.RepetitionPenaltyConfig | None
+      ) = None,
   ) -> None:
     """Streams server-sent events using the provided formatter.
 
@@ -770,6 +809,7 @@ class OpenAIHandler(serve_util.CORSRequestHandler):
       max_completion_tokens: The maximum number of tokens to generate.
       include_usage: Whether to emit a token usage chunk right before [DONE].
       response_format: Optional response format for constrained decoding.
+      repetition_penalty_config: Optional repetition penalty configuration.
     """
     self._headers_sent = True
     self.send_response(200)
@@ -787,6 +827,7 @@ class OpenAIHandler(serve_util.CORSRequestHandler):
           prompt,
           max_output_tokens=max_completion_tokens,
           response_format=response_format,
+          repetition_penalty_config=repetition_penalty_config,
       ):
         if chunk.get("channels"):
           reasoning_tokens += 1
@@ -844,6 +885,9 @@ class OpenAIHandler(serve_util.CORSRequestHandler):
       max_completion_tokens: int | None = None,
       stream_options: dict[str, Any] | None = None,
       response_format: litert_lm.ResponseFormat | None = None,
+      repetition_penalty_config: (
+          litert_lm.RepetitionPenaltyConfig | None
+      ) = None,
   ) -> None:
     """Generates responses for the OpenAI Chat Completions endpoint.
 
@@ -868,6 +912,7 @@ class OpenAIHandler(serve_util.CORSRequestHandler):
       max_completion_tokens: The maximum number of tokens to generate.
       stream_options: Options for streaming, such as include_usage.
       response_format: Optional response format for constrained decoding.
+      repetition_penalty_config: Optional repetition penalty configuration.
     """
     if not stream:
       text_parts = []
@@ -877,6 +922,7 @@ class OpenAIHandler(serve_util.CORSRequestHandler):
           prompt,
           max_output_tokens=max_completion_tokens,
           response_format=response_format,
+          repetition_penalty_config=repetition_penalty_config,
       ):
         if chunk.get("channels"):
           reasoning_tokens += 1
@@ -944,6 +990,7 @@ class OpenAIHandler(serve_util.CORSRequestHandler):
         max_completion_tokens=max_completion_tokens,
         include_usage=include_usage,
         response_format=response_format,
+        repetition_penalty_config=repetition_penalty_config,
     )
 
   def _handle_responses(
@@ -956,6 +1003,9 @@ class OpenAIHandler(serve_util.CORSRequestHandler):
       created_ts: int,
       model_id: str,
       response_format: litert_lm.ResponseFormat | None = None,
+      repetition_penalty_config: (
+          litert_lm.RepetitionPenaltyConfig | None
+      ) = None,
   ) -> None:
     """Generates responses for the v1/responses endpoint.
 
@@ -976,9 +1026,14 @@ class OpenAIHandler(serve_util.CORSRequestHandler):
       created_ts: Epoch timestamp for creation metadata.
       model_id: The target model identifier.
       response_format: Optional response format for constrained decoding.
+      repetition_penalty_config: Optional repetition penalty configuration.
     """
     if not stream:
-      response = conv.send_message(prompt, response_format=response_format)
+      response = conv.send_message(
+          prompt,
+          response_format=response_format,
+          repetition_penalty_config=repetition_penalty_config,
+      )
       text_output = "".join(
           item.get("text", "")
           for item in response.get("content", [])
@@ -1015,7 +1070,11 @@ class OpenAIHandler(serve_util.CORSRequestHandler):
 
     formatter = _OpenAIV1ResponsesFormatter(now_str, created_ts, model_id)
     self._stream_response(
-        conv, prompt, formatter, response_format=response_format
+        conv,
+        prompt,
+        formatter,
+        response_format=response_format,
+        repetition_penalty_config=repetition_penalty_config,
     )
 
   def do_GET(self) -> None:  # pylint: disable=invalid-name
@@ -1238,6 +1297,16 @@ class OpenAIHandler(serve_util.CORSRequestHandler):
       )
       return
 
+    try:
+      repetition_penalty_config = _parse_repetition_penalty_config(body)
+    except ValueError as e:
+      self.send_error(
+          400,
+          "Invalid repetition penalty parameters: "
+          + "".join(traceback.format_exception_only(e)),
+      )
+      return
+
     # Parse tools if this is a chat completions request.
     tools_data = body.get("tools")
     tools = (
@@ -1274,6 +1343,7 @@ class OpenAIHandler(serve_util.CORSRequestHandler):
             max_completion_tokens=max_completion_tokens,
             stream_options=stream_options,
             response_format=response_format,
+            repetition_penalty_config=repetition_penalty_config,
         )
     except Exception as e:  # pylint: disable=broad-exception-caught
       self._handle_inference_error(e, raw_model_str, prompt)
@@ -1333,6 +1403,16 @@ class OpenAIHandler(serve_util.CORSRequestHandler):
       )
       return
 
+    try:
+      repetition_penalty_config = _parse_repetition_penalty_config(body)
+    except ValueError as e:
+      self.send_error(
+          400,
+          "Invalid repetition penalty parameters: "
+          + "".join(traceback.format_exception_only(e)),
+      )
+      return
+
     stream = body.get("stream", False)
 
     try:
@@ -1355,6 +1435,7 @@ class OpenAIHandler(serve_util.CORSRequestHandler):
             created_ts=created_ts,
             model_id=raw_model_str,
             response_format=response_format,
+            repetition_penalty_config=repetition_penalty_config,
         )
     except Exception as e:  # pylint: disable=broad-exception-caught
       self._handle_inference_error(e, raw_model_str, prompt)
