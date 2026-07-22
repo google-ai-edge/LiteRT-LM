@@ -1855,7 +1855,26 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
                                     prefill_signature_key, output_name));
         if (clear_kv_cache_before_prefill &&
             gpu_optimized_single_buffer_cache) {
-          LITERT_RETURN_IF_ERROR(output_buffer.Clear());
+          // For the int8 cache case, optimized GPU single buffer cache
+          // expects UINT8. So to properly clear and initialize the buffer, we
+          // set it to 128. Only necessary for speculative decoding currently,
+          // other cases the mask handles it properly.
+          // TODO(b/504656390): Add a GPU fill shader to do this async.
+          LITERT_ASSIGN_OR_RETURN(auto tensor_type, output_buffer.TensorType());
+          litert::ElementType element_type = tensor_type.ElementType();
+          if (element_type == litert::ElementType::Int8 &&
+              executor_settings.GetAdvancedSettings()
+                  ->enable_speculative_decoding) {
+            LITERT_ASSIGN_OR_RETURN(
+                void* host_mem_addr,
+                output_buffer.Lock(litert::TensorBuffer::LockMode::kWrite));
+            absl::Cleanup unlock = [&output_buffer] { output_buffer.Unlock(); };
+            LITERT_ASSIGN_OR_RETURN(size_t size, output_buffer.PackedSize());
+            std::memset(host_mem_addr, 128, size);
+          } else {
+            // Float cache case.
+            LITERT_RETURN_IF_ERROR(output_buffer.Clear());
+          }
         }
         output_kv_cache_buffers[output_name] = std::move(output_buffer);
       }
