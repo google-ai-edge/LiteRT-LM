@@ -21,6 +21,7 @@ from google.protobuf import text_format
 
 from litert_lm_builder import litertlm_core
 from litert_lm_builder import litertlm_header_schema_py_generated as schema
+from runtime.proto import embedding_metadata_pb2
 from runtime.proto import executor_metadata_pb2
 from runtime.proto import llm_metadata_pb2
 
@@ -239,6 +240,41 @@ def _dump_executor_metadata_proto(
 
   if dump_files_dir:
     file_name = "ExecutorMetadataProto.pbtext"
+    file_path = os.path.join(dump_files_dir, file_name)
+    with litertlm_core.open_file(file_path, "w") as f_out:
+      f_out.write(debug_str)
+    output_stream.write(
+        f"{' ' * INDENT_SPACES}{file_name} dumped to: {file_path}\n"
+    )
+    return file_name
+  return None
+
+
+def _dump_embedding_metadata_proto(
+    file_stream: IO[bytes],
+    section_object: schema.SectionObject,
+    dump_files_dir: str | None,
+    output_stream: IO[str],
+) -> Optional[str]:
+  """Dumps EmbeddingMetadataProto section content."""
+  file_stream.seek(section_object.BeginOffset())
+  proto_data = file_stream.read(
+      section_object.EndOffset() - section_object.BeginOffset()
+  )
+  embedding_metadata = embedding_metadata_pb2.EmbeddingMetadata()
+  embedding_metadata.ParseFromString(proto_data)
+  output_stream.write(
+      f"{' ' * INDENT_SPACES}<<<<<<<< start of EmbeddingMetadata\n"
+  )
+  debug_str = text_format.MessageToString(embedding_metadata)
+  for line in debug_str.splitlines():
+    output_stream.write(f"{' ' * (INDENT_SPACES * 2)}{line}\n")
+  output_stream.write(
+      f"{' ' * INDENT_SPACES}>>>>>>>> end of EmbeddingMetadata\n"
+  )
+
+  if dump_files_dir:
+    file_name = "EmbeddingMetadataProto.pbtext"
     file_path = os.path.join(dump_files_dir, file_name)
     with litertlm_core.open_file(file_path, "w") as f_out:
       f_out.write(debug_str)
@@ -596,15 +632,16 @@ def peek_litertlm_file(
           extracted_jinja = True
           section_info["section_type"] = "LlmMetadata"
           dumped_file_name = _dump_llm_metadata_proto(
-              file_stream,
-              section_object,
-              dump_files_dir,
-              output_stream,
-              jinja_prompt_template_path=jinja_prompt_template_path,
+              file_stream, section_object, dump_files_dir, output_stream
           )
         elif data_type == schema.AnySectionDataType.ExecutorMetadataProto:
           section_info["section_type"] = "ExecutorMetadata"
           dumped_file_name = _dump_executor_metadata_proto(
+              file_stream, section_object, dump_files_dir, output_stream
+          )
+        elif data_type == schema.AnySectionDataType.EmbeddingMetadataProto:
+          section_info["section_type"] = "EmbeddingMetadata"
+          dumped_file_name = _dump_embedding_metadata_proto(
               file_stream, section_object, dump_files_dir, output_stream
           )
         elif data_type == schema.AnySectionDataType.TFLiteModel:
