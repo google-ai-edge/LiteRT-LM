@@ -65,6 +65,7 @@ pytype_strict_library(
     deps = [
         ":litertlm_core",
         ":litertlm_header_schema_py",
+        "//runtime/proto:embedding_metadata_py_pb2",
         "//runtime/proto:executor_metadata_py_pb2",
         "//runtime/proto:llm_metadata_py_pb2",
         "@com_google_protobuf//:protobuf_python",
@@ -108,6 +109,7 @@ pytype_strict_library(
         ":litertlm_peek",
         "@flatbuffers//:runtime_py",
         "//runtime/proto:executor_metadata_py_pb2",
+        "//runtime/proto:embedding_metadata_py_pb2",
         "//runtime/proto:llm_metadata_py_pb2",
         "@com_google_protobuf//:protobuf_python",
         requirement("tomli"),
@@ -123,6 +125,7 @@ py_test(
         ":litertlm_core",
         ":litertlm_header_schema_py",
         ":litertlm_peek",
+        "//runtime/proto:embedding_metadata_py_pb2",
         "//runtime/proto:executor_metadata_py_pb2",
         "//runtime/proto:llm_metadata_py_pb2",
         "@absl_py//absl/testing:absltest",

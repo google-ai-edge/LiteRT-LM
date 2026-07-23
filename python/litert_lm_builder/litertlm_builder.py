@@ -60,6 +60,7 @@ import tomli as tomllib
 from litert_lm_builder import litertlm_core
 from litert_lm_builder import litertlm_header_schema_py_generated as schema
 from litert_lm_builder import litertlm_peek
+from runtime.proto import embedding_metadata_pb2
 from runtime.proto import executor_metadata_pb2
 from runtime.proto import llm_metadata_pb2
 
@@ -296,6 +297,7 @@ class LitertLmFileBuilder:
     self._sections: list[_SectionObject] = []
     self._has_llm_metadata = False
     self._has_executor_metadata = False
+    self._has_embedding_metadata = False
     self._has_tokenizer = False
 
   @classmethod
@@ -365,6 +367,11 @@ class LitertLmFileBuilder:
           )
         elif section["section_type"] == "ExecutorMetadata":
           builder.add_executor_metadata(
+              _resolve_path(section["data_path"], parent_dir),
+              additional_metadata=additional_metadata,
+          )
+        elif section["section_type"] == "EmbeddingMetadata":
+          builder.add_embedding_metadata(
               _resolve_path(section["data_path"], parent_dir),
               additional_metadata=additional_metadata,
           )
@@ -590,6 +597,57 @@ class LitertLmFileBuilder:
     section_object = _SectionObject(
         metadata=additional_metadata if additional_metadata else [],
         data_type=schema.AnySectionDataType.ExecutorMetadataProto,
+        data_writer=data_writer,
+    )
+    self._sections.append(section_object)
+    return self
+
+  def add_embedding_metadata(
+      self,
+      embedding_metadata_path: str,
+      additional_metadata: Optional[list[Metadata]] = None,
+  ) -> LitertLmFileBuilderT:
+    """Adds embedding metadata to the litertlm file.
+
+    Args:
+      embedding_metadata_path: The path to the embedding metadata file. Can be
+        binary or textproto format.
+      additional_metadata: Additional metadata to add to the embedding metadata.
+
+    Returns:
+      The current LitertLmFileBuilder object.
+
+    Raises:
+      FileNotFoundError: If the embedding metadata file is not found.
+    """
+    assert not self._has_embedding_metadata, "Embedding metadata already added."
+    self._has_embedding_metadata = True
+    if not litertlm_core.path_exists(embedding_metadata_path):
+      raise FileNotFoundError(
+          f"Embedding metadata file not found: {embedding_metadata_path}"
+      )
+
+    if _is_binary_proto(
+        embedding_metadata_path,
+        embedding_metadata_pb2.EmbeddingMetadata,
+    ):
+
+      def data_writer(stream: BinaryIO):
+        with litertlm_core.open_file(embedding_metadata_path, "rb") as f:
+          _copy_file_to_stream(f, stream)
+
+    else:
+
+      def data_writer(stream: BinaryIO):
+        with litertlm_core.open_file(embedding_metadata_path, "r") as f:
+          data = text_format.Parse(
+              f.read(), embedding_metadata_pb2.EmbeddingMetadata()
+          ).SerializeToString()
+          stream.write(data)
+
+    section_object = _SectionObject(
+        metadata=additional_metadata if additional_metadata else [],
+        data_type=schema.AnySectionDataType.EmbeddingMetadataProto,
         data_writer=data_writer,
     )
     self._sections.append(section_object)
