@@ -15,6 +15,7 @@
 #include "runtime/core/session_advanced.h"
 
 #include <array>
+#include <cstddef>
 #include <filesystem>  // NOLINT: Required for path manipulation.
 #include <memory>
 #include <optional>
@@ -2487,6 +2488,94 @@ TEST_F(SessionAdvancedTest, ProcessAndCombineContentsTextAudioTextSuccess) {
   inputs.emplace_back(InputAudioEnd());
   inputs.emplace_back(InputText("What does the audio say?"));
   EXPECT_OK(session->RunPrefill(inputs));
+}
+
+TEST_F(SessionAdvancedTest, GetLastAudioEmbeddingsSuccess) {
+  const std::vector<std::vector<int>> stop_token_ids = {{2294}};
+  SessionConfig session_config = SessionConfig::CreateDefault();
+  session_config.SetAudioModalityEnabled(true);
+  session_config.SetCollectAudioEmbeddings(true);
+  session_config.SetStartTokenId(2);
+  session_config.SetSamplerBackend(Backend::CPU);
+  session_config.GetMutableSamplerParams() = sampler_params_;
+  session_config.GetMutableStopTokenIds() = stop_token_ids;
+  session_config.GetMutablePromptTemplates().mutable_user()->set_prefix(
+      "User:");
+  session_config.GetMutablePromptTemplates().mutable_user()->set_suffix(
+      "[END]");
+  session_config.GetMutablePromptTemplates().mutable_model()->set_prefix(
+      "Model:");
+  session_config.GetMutableLlmModelType().mutable_gemma3n();
+
+  ASSERT_OK_AND_ASSIGN(
+      auto audio_executor_settings,
+      CreateAudioExecutorSettings((std::filesystem::path(::testing::SrcDir()) /
+                                   std::string(kTestAudioModelPath))
+                                      .string(),
+                                  /*max_sequence_length=*/0, Backend::CPU));
+  auto executor = CreateFakeLlmExecutor(
+      /*prefill_tokens=*/
+      {{2,   423,  8,      179, 29,   207, 19, 547, 58,  735, 210,
+        466, 2294, 256000, -2,  -2,   -2,  -2, -2,  -4,  583, 378,
+        844, 166,  3,      14,  1252, 54,  58, 626, 2295},
+       {3995, 2172, 1920, 432, 197, 979, 3076, 29}},
+      /*decode_tokens=*/
+      {{224}, {24}, {8}, {66}, {246}, {18}, {2295}, {2294}},
+      /*audio_embedding=*/
+      std::vector<float>(kExpectedAudioEmbedding.begin(),
+                         kExpectedAudioEmbedding.end()));
+
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+
+  ASSERT_OK_AND_ASSIGN(
+      std::shared_ptr<ExecutionManager> execution_manager,
+      ThreadedExecutionManager::Create(
+          tokenizer_.get(), model_resources_.get(), std::move(executor),
+          /*vision_executor_settings=*/nullptr,
+          /*audio_executor_settings=*/std::move(audio_executor_settings),
+          /*litert_env=*/&env));
+
+  ASSERT_OK_AND_ASSIGN(
+      auto session,
+      SessionAdvanced::Create(execution_manager, tokenizer_.get(),
+                              session_config, /*benchmark_info=*/std::nullopt));
+
+  std::vector<InputData> inputs;
+  inputs.emplace_back(InputText("Hello World!<start_of_audio>"));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      TensorBuffer mel_spectrogram_data,
+      CopyToTensorBuffer<float>(
+          mel_spectrogram_data,
+          {1, kSpectrogramSequenceLength, kSpectrogramFrequencySlots}));
+  InputAudio input_audio(std::move(mel_spectrogram_data));
+  inputs.emplace_back(std::move(input_audio));
+  inputs.emplace_back(InputAudioEnd());
+  inputs.emplace_back(InputText("What does the audio say?"));
+  EXPECT_OK(session->RunPrefill(inputs));
+
+  // Verify we can get the audio embeddings
+  ASSERT_OK_AND_ASSIGN(auto audio_embeddings,
+                       session->GetLastAudioEmbeddings());
+  ASSERT_EQ(audio_embeddings.size(), 1);
+
+  EXPECT_EQ(audio_embeddings[0].GetValidTokens(), kEmbeddingSequenceLength);
+
+  ASSERT_OK_AND_ASSIGN(const auto* embeddings_tensor,
+                       audio_embeddings[0].GetEmbeddingsPtr());
+  ASSERT_NE(embeddings_tensor, nullptr);
+
+  auto type_expected = embeddings_tensor->TensorType();
+  ASSERT_TRUE(type_expected.HasValue());
+  auto type = type_expected.Value();
+  EXPECT_THAT(type.Layout().Dimensions(), testing::ElementsAre(1, 5, 6));
+
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto embeddings_span, ReferTensorBufferAsSpan<float>(*embeddings_tensor));
+  ASSERT_EQ(embeddings_span.size(), kExpectedAudioEmbedding.size());
+  for (size_t i = 0; i < embeddings_span.size(); ++i) {
+    EXPECT_FLOAT_EQ(embeddings_span[i], kExpectedAudioEmbedding[i]);
+  }
 }
 #endif  // !defined(WIN32) && !defined(_WIN32) && !defined(__WIN32__) && \
         // !defined(__NT__) && !defined(_WIN64)
