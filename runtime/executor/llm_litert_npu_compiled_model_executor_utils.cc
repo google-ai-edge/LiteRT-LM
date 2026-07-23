@@ -56,6 +56,42 @@
 
 namespace litert::lm {
 
+// Copies KV cache slice to main cache, transposing if necessary.
+// Loop order ensures sequential writes to dst (enables write-coalescing on
+// uncached memory). Optimized only for 1, 2, and 4 byte elements (Int8,
+// FP16/BF16, FP32). 8-byte elements (e.g., FP64) are not used for KV cache.
+template <typename T, bool cache_transposed>
+void TransposeCopy(uint8_t* dst, const uint8_t* src, int64_t real_len,
+                   int64_t real_start, int64_t wp, int64_t cache_seq,
+                   int64_t hidden_dim, int64_t slice_seq) {
+  T* d = reinterpret_cast<T*>(dst);
+  const T* s = reinterpret_cast<const T*>(src);
+
+  if constexpr (cache_transposed) {
+    for (int64_t h = 0; h < hidden_dim; ++h) {
+      for (int64_t s_idx = 0; s_idx < real_len; ++s_idx) {
+        int64_t wrapped_pos = wp + s_idx;
+        if (wrapped_pos >= cache_seq) {
+          wrapped_pos -= cache_seq;
+        }
+        int64_t slice_s = real_start + s_idx;
+        d[h * cache_seq + wrapped_pos] = s[slice_s * hidden_dim + h];
+      }
+    }
+  } else {
+    for (int64_t s_idx = 0; s_idx < real_len; ++s_idx) {
+      int64_t wrapped_pos = wp + s_idx;
+      if (wrapped_pos >= cache_seq) {
+        wrapped_pos -= cache_seq;
+      }
+      int64_t slice_s = real_start + s_idx;
+      for (int64_t h = 0; h < hidden_dim; ++h) {
+        d[wrapped_pos * hidden_dim + h] = s[h * slice_seq + slice_s];
+      }
+    }
+  }
+}
+
 static constexpr int kSliceOuterRank = 2;
 #if defined(__ANDROID__) && defined(__ARM_NEON)
 int FindMaxIndexFloatNeon(const float* data, int size) {
@@ -569,13 +605,27 @@ absl::Status HWKVCacheUpdate(
           }
         } else {
           // Cache is [..., seq, hidden], Slice is [..., hidden, seq]
-          for (int64_t s = 0; s < real_len; ++s) {
-            int64_t wrapped_pos = (wp + s) % cache_seq;
-            int64_t slice_s = real_start + s;
-            for (int64_t h = 0; h < hidden_dim; ++h) {
-              std::memcpy(c_ptr + (wrapped_pos * hidden_dim + h) * element_size,
-                          s_ptr + (h * slice_seq + slice_s) * element_size,
-                          element_size);
+          if (element_size == 1) {
+            TransposeCopy<uint8_t, false>(c_ptr, s_ptr, real_len, real_start,
+                                          wp, cache_seq, hidden_dim, slice_seq);
+          } else if (element_size == 2) {
+            TransposeCopy<uint16_t, false>(c_ptr, s_ptr, real_len, real_start,
+                                           wp, cache_seq, hidden_dim,
+                                           slice_seq);
+          } else if (element_size == 4) {
+            TransposeCopy<uint32_t, false>(c_ptr, s_ptr, real_len, real_start,
+                                           wp, cache_seq, hidden_dim,
+                                           slice_seq);
+          } else {
+            for (int64_t s = 0; s < real_len; ++s) {
+              int64_t wrapped_pos = (wp + s) % cache_seq;
+              int64_t slice_s = real_start + s;
+              for (int64_t h = 0; h < hidden_dim; ++h) {
+                std::memcpy(
+                    c_ptr + (wrapped_pos * hidden_dim + h) * element_size,
+                    s_ptr + (h * slice_seq + slice_s) * element_size,
+                    element_size);
+              }
             }
           }
         }
@@ -654,13 +704,25 @@ absl::Status HWKVCacheUpdate(
           }
         } else {
           // Cache is [..., hidden, seq], Slice is [..., seq, hidden]
-          for (int64_t s = 0; s < real_len; ++s) {
-            int64_t wrapped_pos = (wp + s) % cache_seq;
-            int64_t slice_s = real_start + s;
-            for (int64_t h = 0; h < hidden_dim; ++h) {
-              std::memcpy(c_ptr + (h * cache_seq + wrapped_pos) * element_size,
-                          s_ptr + (slice_s * hidden_dim + h) * element_size,
-                          element_size);
+          if (element_size == 1) {
+            TransposeCopy<uint8_t, true>(c_ptr, s_ptr, real_len, real_start, wp,
+                                         cache_seq, hidden_dim, slice_seq);
+          } else if (element_size == 2) {
+            TransposeCopy<uint16_t, true>(c_ptr, s_ptr, real_len, real_start,
+                                          wp, cache_seq, hidden_dim, slice_seq);
+          } else if (element_size == 4) {
+            TransposeCopy<uint32_t, true>(c_ptr, s_ptr, real_len, real_start,
+                                          wp, cache_seq, hidden_dim, slice_seq);
+          } else {
+            for (int64_t s = 0; s < real_len; ++s) {
+              int64_t wrapped_pos = (wp + s) % cache_seq;
+              int64_t slice_s = real_start + s;
+              for (int64_t h = 0; h < hidden_dim; ++h) {
+                std::memcpy(
+                    c_ptr + (h * cache_seq + wrapped_pos) * element_size,
+                    s_ptr + (slice_s * hidden_dim + h) * element_size,
+                    element_size);
+              }
             }
           }
         }
@@ -1268,6 +1330,7 @@ absl::Status HWMaskUpdate(
         seq_k_local, seq_k_global, time_step, input_tokens, input_tokens_size,
         valid_mask, valid_mask_size);
   }
+
 
   // If we made it here, all layers use the same KV cache size.
   int64_t seq_q = seq_q_global ? seq_q_global : seq_q_local;

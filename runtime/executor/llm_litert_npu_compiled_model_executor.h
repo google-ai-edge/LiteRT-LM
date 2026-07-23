@@ -21,6 +21,7 @@
 #include <memory>
 #include <optional>
 #include <ostream>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -59,15 +60,32 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
   // model was compiled with (e.g. 128 or 256). The length is detected from the
   // compiled model at load time rather than hardcoded, so models compiled with
   // different prefill lengths all work.
-  struct ResolvedPrefillSignatures {
+  struct ResolvedSignatures {
     int size = 0;
+    int context_size = 0;
     std::string prefill;
     std::string embedder;
     std::string embedder_per_layer;
     std::string mask;
     std::string rope;
     std::string cache_update;
+    std::string decode;
+    std::string decode_embedder;
+    std::string decode_embedder_per_layer;
+    std::string decode_mask;
+    std::string decode_rope;
+    std::string decode_cache_update;
+    std::string verify;
+    std::string verify_embedder;
+    std::string verify_embedder_per_layer;
+    std::string verify_mask;
+    std::string verify_rope;
+    std::string verify_cache_update;
   };
+
+  using TensorBufferMap =
+      absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>;
+  using TensorBufferMapBySize = absl::flat_hash_map<int, TensorBufferMap>;
 
   // Holds the latency breakdown stats for the executor.
   // TODO: b/405424188 - Use 'litert::lm::BenchmarkInfo' instead.
@@ -208,6 +226,8 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
         prefill_input_buffers;
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
         prefill_output_buffers;
+    TensorBufferMapBySize prefill_input_buffers_by_size;
+    TensorBufferMapBySize prefill_output_buffers_by_size;
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
         decode_input_buffers;
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
@@ -216,6 +236,12 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
         verify_input_buffers;
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
         verify_output_buffers;
+    InferenceContext() = default;
+    InferenceContext(const InferenceContext&) = delete;
+    InferenceContext& operator=(const InferenceContext&) = delete;
+    InferenceContext(InferenceContext&&) = default;
+    InferenceContext& operator=(InferenceContext&&) = default;
+
     InferenceContext(
         absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
             prefill_input_buffers,
@@ -229,6 +255,58 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
             verify_input_buffers = {},
         absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
             verify_output_buffers = {});
+
+    InferenceContext(TensorBufferMapBySize prefill_input_buffers_by_size,
+                     TensorBufferMapBySize prefill_output_buffers_by_size,
+                     TensorBufferMap decode_input_buffers,
+                     TensorBufferMap decode_output_buffers,
+                     TensorBufferMap verify_input_buffers = {},
+                     TensorBufferMap verify_output_buffers = {});
+    void ActivatePrefillSize(int size) {
+      if (active_size == size) {
+        return;
+      }
+      if (active_size != 0) {
+        prefill_input_buffers_by_size[active_size] =
+            std::move(prefill_input_buffers);
+        prefill_output_buffers_by_size[active_size] =
+            std::move(prefill_output_buffers);
+      }
+      prefill_input_buffers = std::move(prefill_input_buffers_by_size[size]);
+      prefill_output_buffers = std::move(prefill_output_buffers_by_size[size]);
+      active_size = size;
+    }
+    int active_size = 0;
+
+    TensorBufferMap& GetPrefillInputBuffers(int size) {
+      if (active_size == size) {
+        return prefill_input_buffers;
+      }
+      return prefill_input_buffers_by_size.at(size);
+    }
+    const TensorBufferMap& GetPrefillInputBuffers(int size) const {
+      if (active_size == size) {
+        return prefill_input_buffers;
+      }
+      return prefill_input_buffers_by_size.at(size);
+    }
+
+    TensorBufferMap& GetPrefillOutputBuffers(int size) {
+      if (active_size == size) {
+        return prefill_output_buffers;
+      }
+      return prefill_output_buffers_by_size.at(size);
+    }
+    const TensorBufferMap& GetPrefillOutputBuffers(int size) const {
+      if (active_size == size) {
+        return prefill_output_buffers;
+      }
+      return prefill_output_buffers_by_size.at(size);
+    }
+    bool HasPrefillSize(int size) const {
+      return prefill_input_buffers_by_size.contains(size) ||
+             active_size == size;
+    }
   };
 
   // Holds the context for the drafter model.
@@ -238,6 +316,11 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
         mtp_input_buffers;
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
         mtp_output_buffers;
+    DrafterContext() = default;
+    DrafterContext(const DrafterContext&) = delete;
+    DrafterContext& operator=(const DrafterContext&) = delete;
+    DrafterContext(DrafterContext&&) = default;
+    DrafterContext& operator=(DrafterContext&&) = default;
     DrafterContext(
         ::litert::CompiledModel mtp_compiled_model,
         absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
@@ -260,6 +343,11 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
         mask_input_buffers;
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
         mask_output_buffers;
+    DrafterAuxContext() = default;
+    DrafterAuxContext(const DrafterAuxContext&) = delete;
+    DrafterAuxContext& operator=(const DrafterAuxContext&) = delete;
+    DrafterAuxContext(DrafterAuxContext&&) = default;
+    DrafterAuxContext& operator=(DrafterAuxContext&&) = default;
     DrafterAuxContext(
         ::litert::CompiledModel mtp_aux_compiled_model,
         absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
@@ -278,9 +366,13 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
   };
 
   struct EmbedderContext {
-    ::litert::Model embedder_model;
     ::litert::CompiledModel embedder_compiled_model;
     InferenceContext inference_context;
+    EmbedderContext() = default;
+    EmbedderContext(const EmbedderContext&) = delete;
+    EmbedderContext& operator=(const EmbedderContext&) = delete;
+    EmbedderContext(EmbedderContext&&) = default;
+    EmbedderContext& operator=(EmbedderContext&&) = default;
     EmbedderContext(
         ::litert::CompiledModel embedder_compiled_model,
         absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
@@ -295,12 +387,24 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
             verify_input_buffers = {},
         absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
             verify_output_buffers = {});
+    EmbedderContext(::litert::CompiledModel embedder_compiled_model,
+                    TensorBufferMapBySize prefill_input_buffers_by_size,
+                    TensorBufferMapBySize prefill_output_buffers_by_size,
+                    TensorBufferMap decode_input_buffers,
+                    TensorBufferMap decode_output_buffers,
+                    TensorBufferMap verify_input_buffers = {},
+                    TensorBufferMap verify_output_buffers = {});
   };
 
   // Holds the context for the embedder per layer model.
   struct EmbedderPerLayerContext {
     ::litert::CompiledModel embedder_per_layer_compiled_model;
     InferenceContext inference_context;
+    EmbedderPerLayerContext() = default;
+    EmbedderPerLayerContext(const EmbedderPerLayerContext&) = delete;
+    EmbedderPerLayerContext& operator=(const EmbedderPerLayerContext&) = delete;
+    EmbedderPerLayerContext(EmbedderPerLayerContext&&) = default;
+    EmbedderPerLayerContext& operator=(EmbedderPerLayerContext&&) = default;
     EmbedderPerLayerContext(
         ::litert::CompiledModel embedder_per_layer_compiled_model,
         absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
@@ -323,6 +427,22 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
                             std::move(decode_output_buffers),
                             std::move(verify_input_buffers),
                             std::move(verify_output_buffers)) {}
+    EmbedderPerLayerContext(
+        ::litert::CompiledModel embedder_per_layer_compiled_model,
+        TensorBufferMapBySize prefill_input_buffers_by_size,
+        TensorBufferMapBySize prefill_output_buffers_by_size,
+        TensorBufferMap decode_input_buffers,
+        TensorBufferMap decode_output_buffers,
+        TensorBufferMap verify_input_buffers = {},
+        TensorBufferMap verify_output_buffers = {})
+        : embedder_per_layer_compiled_model(
+              std::move(embedder_per_layer_compiled_model)),
+          inference_context(std::move(prefill_input_buffers_by_size),
+                            std::move(prefill_output_buffers_by_size),
+                            std::move(decode_input_buffers),
+                            std::move(decode_output_buffers),
+                            std::move(verify_input_buffers),
+                            std::move(verify_output_buffers)) {}
   };
 
   // Holds the context for the NPU auxiliary model, which contains several
@@ -333,55 +453,61 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
         ::litert::CompiledModel npu_auxiliary_compiled_model);
   };
 
+  struct ContextGroup {
+    ContextGroup() = default;
+    ContextGroup(const ContextGroup&) = delete;
+    ContextGroup& operator=(const ContextGroup&) = delete;
+    ContextGroup(ContextGroup&&) = default;
+    ContextGroup& operator=(ContextGroup&&) = default;
+
+    InferenceContext mask_context;
+    InferenceContext rope_context;
+    InferenceContext llm_inference_context;
+    InferenceContext cache_update_inference_context;
+    EmbedderContext embedder_context;
+    std::optional<EmbedderPerLayerContext> embedder_per_layer_context;
+    std::optional<DrafterContext> drafter_context;
+    std::optional<DrafterAuxContext> drafter_aux_context;
+
+    SortedPrefillSignatureMap prefill_signature_map;
+    absl::flat_hash_map<int, ResolvedSignatures> prefill_signatures;
+    ResolvedSignatures representative_signatures;
+  };
+
  protected:
   LlmLiteRtNpuCompiledModelExecutor(
       LlmExecutorSettings executor_settings, Environment& llm_env,
       EmbedderContext embedder_context,
-      NpuAuxiliaryContext npu_auxiliary_context, InferenceContext mask_context,
-      InferenceContext rope_context, ::litert::CompiledModel llm_compiled_model,
-      InferenceContext llm_inference_context,
-      InferenceContext cache_update_inference_context,
-      SortedPrefillSignatureMap prefill_signature_map,
-      ResolvedPrefillSignatures prefill_signatures,
+      NpuAuxiliaryContext npu_auxiliary_context,
+      ::litert::CompiledModel llm_compiled_model,
       std::unique_ptr<EmbeddingLookupManager> embedding_lookup_manager,
       std::unique_ptr<EmbeddingLookupManager>
           per_layer_embedding_lookup_manager,
-      std::optional<EmbedderPerLayerContext> embedder_per_layer_context,
       LogitsQuantizationParams quantization_params,
-      std::vector<const uint8_t*> ple_table_ptrs = {},
-      std::vector<HWQuantizationParams> ple_quant_params = {},
-      std::vector<float> ple_per_tensor_scales = {}, int num_tables = 0,
-      int ple_embedding_dim = 0,
-      litert::ElementType output_type = litert::ElementType::None,
-      litert::ElementType ple_table_element_type = litert::ElementType::None,
-      float mul_scale = 1.0f, float output_scale = 1.0f,
-      int32_t final_zero_point = 0,
-      absl::flat_hash_map<absl::string_view, HWQuantParams> kv_quant_params =
-          {},
-      int64_t kv_cache_init_value = 0,
-      SpeculativeDecodingType speculative_decoding_type =
-          SpeculativeDecodingType::kNone,
-      std::optional<DrafterContext> drafter_context = std::nullopt,
-      std::optional<DrafterAuxContext> drafter_aux_context = std::nullopt,
-      bool has_sliding_window_attention = false,
-      const litert::Model* embedder_per_layer_model = nullptr)
+      std::vector<const uint8_t*> ple_table_ptrs,
+      std::vector<HWQuantizationParams> ple_quant_params,
+      std::vector<float> ple_per_tensor_scales, int num_tables,
+      int ple_embedding_dim, litert::ElementType output_type,
+      litert::ElementType ple_table_element_type, float mul_scale,
+      float output_scale, int32_t final_zero_point,
+      absl::flat_hash_map<absl::string_view, HWQuantParams> kv_quant_params,
+      int64_t kv_cache_init_value,
+      const litert::Model* embedder_per_layer_model,
+      std::optional<EmbedderPerLayerContext> embedder_per_layer_context,
+      absl::flat_hash_map<int, ContextGroup> context_groups,
+      std::vector<int> sorted_supported_context_sizes,
+      SpeculativeDecodingType speculative_decoding_type,
+      bool has_sliding_window_attention)
       : executor_settings_(std::move(executor_settings)),
         env_(llm_env),
         embedder_context_(std::move(embedder_context)),
         npu_auxiliary_context_(std::move(npu_auxiliary_context)),
-        mask_context_(std::move(mask_context)),
-        rope_context_(std::move(rope_context)),
         llm_compiled_model_(std::move(llm_compiled_model)),
         embedding_lookup_manager_(std::move(embedding_lookup_manager)),
         per_layer_embedding_lookup_manager_(
             std::move(per_layer_embedding_lookup_manager)),
         embedder_per_layer_model_(embedder_per_layer_model),
         embedder_per_layer_context_(std::move(embedder_per_layer_context)),
-        llm_inference_context_(std::move(llm_inference_context)),
-        cache_update_inference_context_(
-            std::move(cache_update_inference_context)),
-        prefill_signature_map_(std::move(prefill_signature_map)),
-        prefill_signatures_(std::move(prefill_signatures)),
         kv_quant_params_(std::move(kv_quant_params)),
         ple_table_ptrs_(std::move(ple_table_ptrs)),
         ple_quant_params_(std::move(ple_quant_params)),
@@ -394,12 +520,13 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
         output_scale_(output_scale),
         final_zero_point_(final_zero_point),
         speculative_decoding_type_(speculative_decoding_type),
-        drafter_context_(std::move(drafter_context)),
-        drafter_aux_context_(std::move(drafter_aux_context)),
         per_tensor_logits_scale_(quantization_params.scale),
         per_tensor_logits_zero_point_(quantization_params.zero_point),
         kv_cache_init_value_(kv_cache_init_value),
-        has_sliding_window_attention_(has_sliding_window_attention) {
+        has_sliding_window_attention_(has_sliding_window_attention),
+        context_groups_(std::move(context_groups)),
+        sorted_supported_context_sizes_(
+            std::move(sorted_supported_context_sizes)) {
     auto npu_config_status = executor_settings_.GetBackendConfig<NpuConfig>();
     if (npu_config_status.ok()) {
       npu_config_ = *npu_config_status;
@@ -417,9 +544,12 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
         use_hw_ple_for_npu_ = true;
       }
     }
-    if (embedder_per_layer_context_.has_value()) {
-      latency_stats_.prefill_embedder_per_layer_inference_latency_us = 0;
-      latency_stats_.decode_embedder_per_layer_inference_latency_us = 0;
+    // Activate the smallest context size by default.
+    auto smallest_context_size = sorted_supported_context_sizes_.front();
+    auto status = SwitchContextSizeIfRequired(smallest_context_size);
+    if (!status.ok()) {
+      ABSL_LOG(ERROR) << "Failed to switch to default context size: "
+                      << status.message();
     }
   }
 
@@ -439,7 +569,8 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
 
   // Runs the common downstream prefill pipeline (RoPE, Masking, LLM execution,
   // and KV Cache updates) using the pre-populated active buffers.
-  absl::Status PrefillCommonPipeline(absl::string_view prefill_signature);
+  absl::Status PrefillCommonPipeline(
+      const ResolvedSignatures& active_signatures);
 
   // Decode internal implementation. Uses the specified 'token' as the input
   // token and uses the specified 'step' as the current time step.  The
@@ -512,13 +643,10 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
   // - settings: The executor settings.
   static absl::StatusOr<EmbedderContext> CreateEmbedderContextWithBufferSharing(
       ::litert::Environment& env, const litert::Model& embedder_model,
-      const ResolvedPrefillSignatures& prefill_signatures,
-      absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-          gemma_prefill_input_buffers,
-      absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-          gemma_decode_input_buffers,
-      absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-          gemma_verify_input_buffers,
+      const std::vector<ResolvedSignatures>& prefill_signatures_list,
+      TensorBufferMapBySize& gemma_prefill_input_buffers_by_size,
+      TensorBufferMap& gemma_decode_input_buffers,
+      TensorBufferMap& gemma_verify_input_buffers,
       const LlmExecutorSettings& settings);
 
   // Creates the context for the embedder per layer model.  Instead of creating
@@ -527,19 +655,16 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
   // 'gemma_decode_input_buffers'.  Similarly, instead of creating the buffers
   // for the input tokens the provided 'prefill_input_tokens' and
   // 'decode_input_tokens' will be duplicated and re-used as the input buffers.
-  static absl::StatusOr<
-      LlmLiteRtNpuCompiledModelExecutor::EmbedderPerLayerContext>
+  static absl::StatusOr<EmbedderPerLayerContext>
   CreateEmbedderPerLayerContextWithBufferSharing(
       ::litert::Environment& env, const litert::Model& embedder_model,
-      const ::litert::TensorBuffer& prefill_input_tokens,
+      const absl::flat_hash_map<int, ::litert::TensorBuffer>&
+          prefill_input_tokens_by_size,
       const ::litert::TensorBuffer& decode_input_tokens,
       const ::litert::TensorBuffer& verify_input_tokens,
-      absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-          gemma_prefill_input_buffers,
-      absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-          gemma_decode_input_buffers,
-      absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-          gemma_verify_input_buffers,
+      TensorBufferMapBySize& gemma_prefill_input_buffers_by_size,
+      TensorBufferMap& gemma_decode_input_buffers,
+      TensorBufferMap& gemma_verify_input_buffers,
       const LlmExecutorSettings& settings);
 
   // Determine the maximum sequence length that the NPU model supports.
@@ -567,65 +692,51 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
   // 'gemma_decode_input_buffers'.
   static absl::StatusOr<InferenceContext> CreateMaskContextWithBufferSharing(
       const NpuAuxiliaryContext& npu_auxiliary_context,
-      const ResolvedPrefillSignatures& prefill_signatures,
-      absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-          gemma_prefill_input_buffers,
-      absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-          gemma_decode_input_buffers,
-      absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-          gemma_verify_input_buffers);
+      const std::vector<ResolvedSignatures>& prefill_signatures_list,
+      TensorBufferMapBySize& gemma_prefill_input_buffers_by_size,
+      TensorBufferMap& gemma_decode_input_buffers,
+      TensorBufferMap& gemma_verify_input_buffers);
 
   static absl::StatusOr<InferenceContext> CreateRopeContextWithBufferSharing(
       const NpuAuxiliaryContext& npu_auxiliary_context,
-      const ResolvedPrefillSignatures& prefill_signatures,
-      absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-          gemma_prefill_input_buffers,
-      absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-          gemma_decode_input_buffers,
-      absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-          gemma_verify_input_buffers);
+      const std::vector<ResolvedSignatures>& prefill_signatures_list,
+      TensorBufferMapBySize& gemma_prefill_input_buffers_by_size,
+      TensorBufferMap& gemma_decode_input_buffers,
+      TensorBufferMap& gemma_verify_input_buffers);
 
   // Creates the context for the LLM model.
   static absl::StatusOr<InferenceContext>
   CreateLlmInferenceContextWithBufferSharing(
       ::litert::Environment& env, ::litert::CompiledModel& llm_compiled_model,
-      const ResolvedPrefillSignatures& prefill_signatures,
-      absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-          input_kv_cache_buffers,
-      absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-          prefill_output_kv_cache_slice_buffers,
-      absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-          decode_output_kv_cache_slice_buffers,
-      absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-          verify_output_kv_cache_slice_buffers,
-      absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-          gemma_prefill_input_buffers,
-      absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-          gemma_decode_input_buffers,
-      absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-          gemma_verify_input_buffers);
+      const std::vector<ResolvedSignatures>& prefill_signatures_list,
+      TensorBufferMap& input_kv_cache_buffers,
+      TensorBufferMapBySize& prefill_output_kv_cache_slice_buffers_by_size,
+      TensorBufferMap& decode_output_kv_cache_slice_buffers,
+      TensorBufferMap& verify_output_kv_cache_slice_buffers,
+      TensorBufferMapBySize& gemma_prefill_input_buffers_by_size,
+      TensorBufferMap& gemma_decode_input_buffers,
+      TensorBufferMap& gemma_verify_input_buffers);
 
   static absl::StatusOr<InferenceContext>
   CreateCacheUpdateInferenceContextWithBufferSharing(
-      absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-          input_kv_cache_buffers,
-      absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-          prefill_output_kv_cache_slice_buffers,
-      absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-          decode_output_kv_cache_slice_buffers,
-      absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-          verify_output_kv_cache_slice_buffers,
-      ::litert::TensorBuffer prefill_input_pos,
+      TensorBufferMap& input_kv_cache_buffers,
+      TensorBufferMapBySize& prefill_output_kv_cache_slice_buffers_by_size,
+      TensorBufferMap& decode_output_kv_cache_slice_buffers,
+      TensorBufferMap& verify_output_kv_cache_slice_buffers,
+      absl::flat_hash_map<int, ::litert::TensorBuffer>&
+          prefill_input_pos_by_size,
       ::litert::TensorBuffer decode_input_pos,
       ::litert::TensorBuffer verify_input_pos,
-      ::litert::TensorBuffer prefill_valid_mask,
+      absl::flat_hash_map<int, ::litert::TensorBuffer>&
+          prefill_valid_mask_by_size,
       ::litert::TensorBuffer decode_valid_mask,
       ::litert::TensorBuffer verify_valid_mask);
+
   static absl::Status WarmupInference(
       ::litert::CompiledModel& compiled_model_llm,
       InferenceContext& llm_inference_context,
       ::litert::CompiledModel& compiled_model_auxiliary,
-      const ResolvedPrefillSignatures& prefill_signatures,
+      const std::vector<ResolvedSignatures>& prefill_signatures_list,
       const InferenceContext& rope_inference_context,
       const InferenceContext& mask_inference_context,
       const InferenceContext& cache_update_inference_context);
@@ -664,17 +775,15 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
   static absl::Status AllocateTransformerBuffers(
       litert::Environment& env, const litert::Model* transformer_model,
       CompiledModel& llm_compiled_model,
-      const ResolvedPrefillSignatures& prefill_signatures,
-      absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-          gemma_prefill_input_buffers,
+      const std::vector<ResolvedSignatures>& prefill_signatures_list,
+      TensorBufferMapBySize& gemma_prefill_input_buffers_by_size,
       absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
           gemma_decode_input_buffers,
       absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
           gemma_verify_input_buffers,
       absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
           input_kv_cache_buffers,
-      absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-          prefill_output_kv_cache_slice_buffers,
+      TensorBufferMapBySize& prefill_output_kv_cache_slice_buffers_by_size,
       absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
           decode_output_kv_cache_slice_buffers,
       absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
@@ -688,7 +797,9 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
       const LlmExecutorSettings& executor_settings, ModelResources& resources,
       litert::Environment& env, const litert::Model* transformer_model,
       LogitsQuantizationParams quantization_params,
-      const ResolvedPrefillSignatures& prefill_signatures);
+      const std::vector<std::vector<ResolvedSignatures>>&
+          signatures_list_of_list,
+      const std::vector<int>& sorted_supported_context_sizes);
 
   // Create the executor for Gemma3.
   static absl::StatusOr<std::unique_ptr<LlmLiteRtNpuCompiledModelExecutor>>
@@ -696,7 +807,9 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
       const LlmExecutorSettings& executor_settings, ModelResources& resources,
       litert::Environment& env, const litert::Model* transformer_model,
       LogitsQuantizationParams quantization_params,
-      const ResolvedPrefillSignatures& prefill_signatures);
+      const std::vector<std::vector<ResolvedSignatures>>&
+          signatures_list_of_list,
+      const std::vector<int>& sorted_supported_context_sizes);
 
   LlmExecutorSettings executor_settings_;
   NpuConfig npu_config_;
@@ -724,9 +837,11 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
   InferenceContext llm_inference_context_;
   InferenceContext cache_update_inference_context_;
   SortedPrefillSignatureMap prefill_signature_map_;
-  // The prefill-family signature names resolved for the prefill length the
-  // model was compiled with.
-  ResolvedPrefillSignatures prefill_signatures_;
+  // The prefill-family signature names resolved for each supported context
+  // size.
+  absl::flat_hash_map<int, ResolvedSignatures> prefill_signatures_by_size_;
+  // The active signatures for the currently selected context size.
+  ResolvedSignatures active_signatures_;
 
   absl::flat_hash_map<absl::string_view, HWQuantParams> kv_quant_params_;
   bool use_hw_ple_for_npu_ = false;
@@ -773,6 +888,22 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
   bool ran_decode_ = false;
   int64_t kv_cache_init_value_ = 0;
   bool has_sliding_window_attention_ = false;
+
+  absl::flat_hash_map<int, ContextGroup> context_groups_;
+  std::vector<int> sorted_supported_context_sizes_;
+  int active_context_size_ = 0;
+
+  // Switches the active context group to one that fits `required_size`.
+  // If `copy_kv_cache` is true, the current KV cache contents are copied to
+  // the new group's buffers (required when switching during decode steps to
+  // preserve history). Can be set to false for new prompts (prefill steps).
+  absl::Status SwitchContextSizeIfRequired(
+      int required_size,
+      std::optional<int> active_seq_len_to_copy = std::nullopt);
+  absl::Status CopyKVCache(int old_size, int new_size, int active_seq_len);
+  absl::Status CopySingleKVCacheBuffer(const ::litert::TensorBuffer& src,
+                                       ::litert::TensorBuffer& dst,
+                                       int active_seq_len);
 };
 
 std::ostream& operator<<(
