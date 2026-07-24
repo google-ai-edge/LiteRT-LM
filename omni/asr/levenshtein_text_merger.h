@@ -18,10 +18,12 @@
 #include <string>
 #include <vector>
 
-#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/base/nullability.h"  // from @com_google_absl
+#include "absl/status/status.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "omni/asr/detokenizer.h"
 #include "omni/asr/text_merger.h"
+#include "omni/base/stage.h"
 
 namespace litert_lm::omni::asr {
 
@@ -29,24 +31,29 @@ namespace litert_lm::omni::asr {
 // using Levenshtein distance sequence alignment.
 class LevenshteinTextMerger : public TextMerger {
  public:
-  LevenshteinTextMerger() = default;
+  explicit LevenshteinTextMerger(
+      Stage<std::vector<Detokenizer::Word>>* absl_nonnull detokenizer)
+      : TextMerger(detokenizer) {}
 
   // Resets internal cached state for a new audio stream.
   void Reset() override;
 
-  // Merges curr_chunk_words into internal state and returns result.
-  absl::StatusOr<MergeResult> Merge(
-      absl::Span<const Detokenizer::Word> curr_chunk_words) override;
-
-  // Flushes remaining unconfirmed text at end of stream.
-  absl::StatusOr<MergeResult> Flush() override;
+  // Flushes remaining unconfirmed text into output queue at end of stream.
+  // Returns error if called when Schedule() is in progress.
+  absl::Status Flush() override;
 
   // Returns cached unconfirmed words.
-  absl::Span<const std::string> unconfirmed_words() const {
+  // It's only used for testing. Not thread-safe.
+  absl::Span<const std::string> unconfirmed_words_for_testing() const {
     return unconfirmed_words_;
   }
 
  private:
+  // SingleThreadedStageWithDeque<MergeResult> implementation:
+  absl::Status ScheduleInternal() override;
+
+  absl::Status Execute();
+
   std::vector<std::string> unconfirmed_words_;
 };
 

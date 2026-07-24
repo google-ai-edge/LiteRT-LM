@@ -17,31 +17,17 @@
 
 #include <vector>
 
-#include "absl/functional/any_invocable.h"  // from @com_google_absl
-#include "absl/status/status.h"  // from @com_google_absl
-#include "absl/status/statusor.h"  // from @com_google_absl
+#include "omni/base/stage.h"
 
 namespace litert_lm::omni::asr {
 
 // Abstract interface for providing raw PCM audio data.
-class AudioSource {
+class AudioSource : public SingleThreadedStageWithDeque<std::vector<float>> {
  public:
-  virtual ~AudioSource() = default;
+  ~AudioSource() override = default;
 
   // Resets internal state for a new audio stream.
   virtual void Reset() = 0;
-
-  // Reads the next chunk of raw PCM float samples.
-  // Returns absl::OutOfRangeError when end of stream is reached.
-  virtual absl::StatusOr<std::vector<float>> GetNextChunk() = 0;
-
-  // Reads the next chunk of raw PCM float samples asynchronously.
-  // Note: Callbacks can be invoked on any thread, and may be called
-  // synchronously before returning on the same thread especially on error.
-  // It is the caller's responsibility to synchronize resources properly.
-  virtual void GetNextChunkAsync(
-      absl::AnyInvocable<void(absl::StatusOr<std::vector<float>>) &&>
-          callback) = 0;
 
   // Returns the audio sampling rate in Hertz (e.g. 16000).
   virtual int GetSampleRateHz() const = 0;
