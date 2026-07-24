@@ -1605,9 +1605,12 @@ absl::Status LlmLiteRtCompiledModelExecutorStatic::Prefill(
   // Reduce the input ids only with one user selected.
   auto input_length = ids.size() / input_batch_size;
   ids = ids.subspan(kTokenIndexToReduce * input_length, input_length);
-  ABSL_ASSIGN_OR_RETURN(
-      auto work_groups,
-      GetOptimizedPrefillWorkGroups(prefill_signature_map_, ids.size()));
+  int remaining_capacity =
+      state_->GetNumEntries() - llm_context_->runtime_state().current_step;
+
+  ABSL_ASSIGN_OR_RETURN(auto work_groups, GetOptimizedPrefillWorkGroups(
+                                              prefill_signature_map_,
+                                              ids.size(), remaining_capacity));
   for (int i = 0; i < work_groups.size(); ++i) {
     const auto& prefill_signature = work_groups[i].first;
     int prefill_length = work_groups[i].second;

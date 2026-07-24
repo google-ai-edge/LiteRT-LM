@@ -355,6 +355,31 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
   EXPECT_THAT(work_groups, ElementsAre(Pair("prefill_600", 599)));
 }
 
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     GetOptimizedPrefillWorkGroups_MaxPrefillSequenceLengthAdapts) {
+  SortedPrefillSignatureMap prefill_runner_set = {
+      {512, "prefill_512"}, {256, "prefill_256"}, {128, "prefill_128"}};
+  // input_length = 200, but max_prefill_sequence_length = 256.
+  // 512 runner is filtered out, adapting to 256 runner.
+  ASSERT_OK_AND_ASSIGN(
+      auto work_groups,
+      GetOptimizedPrefillWorkGroups(prefill_runner_set, 200,
+                                    /*max_prefill_sequence_length=*/256));
+  EXPECT_THAT(work_groups, ElementsAre(Pair("prefill_256", 200)));
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     GetOptimizedPrefillWorkGroups_MaxPrefillSequenceLengthExceededError) {
+  SortedPrefillSignatureMap prefill_runner_set = {
+      {512, "prefill_512"}, {256, "prefill_256"}, {128, "prefill_128"}};
+  // input_length = 300, max_prefill_sequence_length = 256.
+  // 512 runner filtered out. 256 runner covers 256 tokens, remaining 44 tokens
+  // cannot fit in 0 capacity.
+  EXPECT_THAT(GetOptimizedPrefillWorkGroups(
+                  prefill_runner_set, 300, /*max_prefill_sequence_length=*/256),
+              StatusIs(absl::StatusCode::kFailedPrecondition));
+}
+
 TEST(LlmLiteRTCompiledModelExecutorUtilsTest, GetPrefillRunnerSetFromModel) {
   auto model_path =
       std::filesystem::path(::testing::SrcDir()) /
