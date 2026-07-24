@@ -85,6 +85,11 @@
           "type": "integer",
           "minimum": -1,
           "$comment": "Added in version 0.15.0"
+        },
+        "activation_data_type": {
+          "type": "string",
+          "enum": ["fp32", "fp16", "int16", "int8"],
+          "$comment": "Added in version 0.15.0"
         }
       },
       "additionalProperties": true

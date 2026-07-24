@@ -46,7 +46,7 @@ def run_benchmark(
     max_num_tokens: int | None = None,
     cache: str | None = None,
     cpu_thread_count: int | None = None,
-    activation_data_type: litert_lm.ActivationDataType | None = None,
+    activation_data_type: str | litert_lm.ActivationDataType | None = None,
     ringbuffers_local_attention: bool | None = None,
     gpu_decode_steps_per_sync: int | None = None,
     runs: int = 1,
@@ -71,6 +71,15 @@ def run_benchmark(
         speculative_decoding, model_obj, "speculative_decoding"
     )
     cache = model.resolve_config_option(cache, model_obj, "cache")
+    activation_data_type_opt = model.resolve_config_option(
+        activation_data_type, model_obj, "activation_data_type"
+    )
+    if isinstance(activation_data_type_opt, str):
+      activation_data_type_val = litert_lm.ActivationDataType.from_str(
+          activation_data_type_opt
+      )
+    else:
+      activation_data_type_val = activation_data_type_opt
 
     backend_val = model.parse_backend(
         backend,
@@ -101,7 +110,7 @@ def run_benchmark(
           cache_dir=cache_dir_val,
           enable_speculative_decoding=speculative_decoding,
           max_num_tokens=max_num_tokens,
-          activation_data_type=activation_data_type,
+          activation_data_type=activation_data_type_val,
           use_ringbuffers_local_attention=ringbuffers_local_attention,
       )
 
