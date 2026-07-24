@@ -1,4 +1,4 @@
-// Copyright 2025 Google LLC.
+// Copyright 2026 Google LLC.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -1517,6 +1517,61 @@ JNI_METHOD(nativeHasSpeculativeDecodingSupport)(JNIEnv* env, jclass thiz,
                                                 jlong capabilities_pointer) {
   return litert_lm_loaded_file_has_speculative_decoding_support(
       reinterpret_cast<LiteRtLmLoadedFile*>(capabilities_pointer));
+}
+
+LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateEmbeddingEngine)(
+    JNIEnv* env, jclass thiz, jstring model_path, jstring backend,
+    jstring vision_backend, jstring audio_backend, jstring cache_dir,
+    jstring main_npu_dir, jstring vision_npu_dir, jstring audio_npu_dir,
+    jint main_threads, jint audio_threads) {
+  // TODO(b/538694104): Implement C++ JNI logic for embedding engine.
+  return reinterpret_cast<jlong>(new int(42));
+}
+
+LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeDeleteEmbeddingEngine)(
+    JNIEnv* env, jclass thiz, jlong embedding_engine_pointer) {
+  if (embedding_engine_pointer != 0) {
+    delete reinterpret_cast<int*>(embedding_engine_pointer);
+  }
+}
+
+LITERTLM_JNIEXPORT jobject JNICALL JNI_METHOD(nativeComputeEmbedding)(
+    JNIEnv* env, jclass thiz, jlong embedding_engine_pointer,
+    jobjectArray input_data, jint output_dimensionality, jboolean normalize) {
+  jclass response_cls =
+      env->FindClass("com/google/ai/edge/litertlm/EmbeddingResponse");
+  jmethodID ctor = env->GetMethodID(response_cls, "<init>", "([F[F)V");
+
+  int dim = output_dimensionality > 0 ? output_dimensionality : 768;
+  jfloatArray float_arr = env->NewFloatArray(dim);
+
+  jobject response_obj = env->NewObject(response_cls, ctor, float_arr, nullptr);
+  return response_obj;
+}
+
+LITERTLM_JNIEXPORT jobjectArray JNICALL JNI_METHOD(nativeComputeEmbeddingBatch)(
+    JNIEnv* env, jclass thiz, jlong embedding_engine_pointer,
+    jobjectArray input_data_batch, jint output_dimensionality,
+    jboolean normalize) {
+  jsize batch_size = env->GetArrayLength(input_data_batch);
+  jclass response_cls =
+      env->FindClass("com/google/ai/edge/litertlm/EmbeddingResponse");
+  jmethodID ctor = env->GetMethodID(response_cls, "<init>", "([F[F)V");
+
+  jobjectArray result_array =
+      env->NewObjectArray(batch_size, response_cls, nullptr);
+  int dim = output_dimensionality > 0 ? output_dimensionality : 768;
+
+  for (jsize i = 0; i < batch_size; ++i) {
+    jfloatArray float_arr = env->NewFloatArray(dim);
+    jobject response_obj =
+        env->NewObject(response_cls, ctor, float_arr, nullptr);
+    env->SetObjectArrayElement(result_array, i, response_obj);
+    env->DeleteLocalRef(response_obj);
+    env->DeleteLocalRef(float_arr);
+  }
+
+  return result_array;
 }
 
 }  // extern "C"

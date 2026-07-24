@@ -1,5 +1,5 @@
 /*
- * Copyright 2025 Google LLC.
+ * Copyright 2026 Google LLC.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -386,4 +386,37 @@ internal object LiteRtLmJni {
 
   /** Returns true if the loaded LiteRT-LM file supports speculative decoding. */
   external fun nativeHasSpeculativeDecodingSupport(capabilitiesPointer: Long): Boolean
+
+  /** Creates a new LiteRT-LM embedding engine. */
+  external fun nativeCreateEmbeddingEngine(
+    modelPath: String,
+    backend: String,
+    visionBackend: String,
+    audioBackend: String,
+    cacheDir: String,
+    mainNpuNativeLibraryDir: String,
+    visionNpuNativeLibraryDir: String,
+    audioNpuNativeLibraryDir: String,
+    mainBackendNumThreads: Int,
+    audioBackendNumThreads: Int,
+  ): Long
+
+  /** Deletes the LiteRT-LM embedding engine. */
+  external fun nativeDeleteEmbeddingEngine(embeddingEnginePointer: Long)
+
+  /** Computes embedding for the input data. */
+  external fun nativeComputeEmbedding(
+    embeddingEnginePointer: Long,
+    inputData: Array<InputData>,
+    outputDimensionality: Int,
+    normalize: Boolean,
+  ): EmbeddingResponse
+
+  /** Computes embeddings for a batch of input data requests. */
+  external fun nativeComputeEmbeddingBatch(
+    embeddingEnginePointer: Long,
+    inputDataBatch: Array<Array<InputData>>,
+    outputDimensionality: Int,
+    normalize: Boolean,
+  ): Array<EmbeddingResponse>
 }
