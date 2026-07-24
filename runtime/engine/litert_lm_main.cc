@@ -48,7 +48,9 @@
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/executor/llm_executor_settings.h"
 #include "runtime/util/status_macros.h"
+#include "runtime/engine/shared_flags.h"
 
 ABSL_FLAG(std::string, backend, "gpu",
           "Executor backend to use for LLM execution (cpu, gpu, etc.)");
@@ -132,6 +134,19 @@ absl::Status MainHelper(int argc, char** argv) {
   // Enable benchmark by default.
   engine_settings.GetMutableBenchmarkParams() =
       litert::lm::proto::BenchmarkParams();
+
+  if (backend == Backend::CPU) {
+    auto& executor_settings = engine_settings.GetMutableMainExecutorSettings();
+    ABSL_ASSIGN_OR_RETURN(
+        auto cpu_settings,
+        executor_settings.MutableBackendConfig<litert::lm::CpuConfig>());
+    const int num_cpu_threads = absl::GetFlag(FLAGS_num_cpu_threads);
+    if (num_cpu_threads > 0) {
+      cpu_settings.number_of_threads = num_cpu_threads;
+    }
+    cpu_settings.enable_ynnpack = absl::GetFlag(FLAGS_enable_ynnpack);
+    executor_settings.SetBackendConfig(cpu_settings);
+  }
 
   // Create the engine.
   ABSL_ASSIGN_OR_RETURN(auto engine, litert::lm::EngineFactory::CreateDefault(

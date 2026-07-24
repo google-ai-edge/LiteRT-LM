@@ -215,6 +215,7 @@ cc_binary(
         ":engine_interface",
         ":engine_settings",
         ":io_types",
+        ":shared_flags",
         "@com_google_absl//absl/base:log_severity",
         "@com_google_absl//absl/flags:flag",
         "@com_google_absl//absl/flags:parse",
@@ -232,6 +233,7 @@ cc_binary(
         "//runtime/conversation",
         "//runtime/conversation:io_types",
         "//runtime/executor:executor_settings_base",
+        "//runtime/executor:llm_executor_settings",
         "//runtime/util:litert_status_util",
     ],
 )
