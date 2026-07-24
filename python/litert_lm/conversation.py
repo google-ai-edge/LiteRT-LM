@@ -95,7 +95,7 @@ class Conversation(interfaces.AbstractConversation):
       return None
 
     tool_responses = []
-    for tool_call in response_dict.get("tool_calls"):
+    for tool_call in response_dict.get("tool_calls") or []:
       if "function" not in tool_call:
         raise ValueError("Missing 'function' in tool_call")
       function = tool_call.get("function")

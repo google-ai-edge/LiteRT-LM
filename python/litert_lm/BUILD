@@ -24,31 +24,37 @@ package(default_visibility = ["//visibility:public"])
 pytype_strict_library(
     name = "interfaces",
     srcs = ["interfaces.py"],
+    type_checking = "pyrefly",
     deps = [
         ":_ffi",
         ":_messages",
+        requirement("typing_extensions"),
     ],
 )
 
 pytype_strict_library(
     name = "_messages",
     srcs = ["_messages.py"],
+    type_checking = "pyrefly",
 )
 
 pytype_strict_library(
     name = "tools",
     srcs = ["tools.py"],
+    type_checking = "pyrefly",
     deps = [":interfaces"],
 )
 
 pytype_strict_library(
     name = "_ffi",
     srcs = ["_ffi.py"],
+    type_checking = "pyrefly",
 )
 
 pytype_strict_library(
     name = "utils",
     srcs = ["utils.py"],
+    type_checking = "pyrefly",
     deps = [
         ":_ffi",
         ":interfaces",
@@ -58,6 +64,7 @@ pytype_strict_library(
 pytype_strict_library(
     name = "session",
     srcs = ["session.py"],
+    type_checking = "pyrefly",
     deps = [
         ":_ffi",
         ":interfaces",
@@ -67,6 +74,7 @@ pytype_strict_library(
 pytype_strict_library(
     name = "conversation",
     srcs = ["conversation.py"],
+    type_checking = "pyrefly",
     deps = [
         ":_ffi",
         ":_messages",
@@ -78,6 +86,7 @@ pytype_strict_library(
 pytype_strict_library(
     name = "engine",
     srcs = ["engine.py"],
+    type_checking = "pyrefly",
     deps = [
         ":_ffi",
         ":_messages",
@@ -92,6 +101,7 @@ pytype_strict_library(
 pytype_strict_library(
     name = "benchmark",
     srcs = ["benchmark.py"],
+    type_checking = "pyrefly",
     deps = [
         ":_ffi",
         ":interfaces",
@@ -129,6 +139,7 @@ py_test(
     srcs = ["engine_test.py"],
     data = ["//runtime/testdata"],
     tags = ["nowindows"],
+    type_checking = "pyrefly",
     deps = [
         ":litert_lm",
         "@absl_py//absl/flags",
@@ -143,6 +154,7 @@ py_test(
     srcs = ["tool_test.py"],
     data = ["//runtime/testdata"],
     tags = ["nowindows"],
+    type_checking = "pyrefly",
     deps = [
         ":litert_lm",
         "@absl_py//absl/testing:absltest",
@@ -155,6 +167,7 @@ py_test(
     name = "messages_test",
     srcs = ["messages_test.py"],
     tags = ["nowindows"],
+    type_checking = "pyrefly",
     deps = [
         ":litert_lm",
         "@absl_py//absl/testing:absltest",

@@ -63,7 +63,6 @@ class Content(abc.ABC):
   AudioFile: type[AudioFile]
   ToolResponse: type[ToolResponse]
   # pylint: enable=invalid-name
-
   @abc.abstractmethod
   def to_json(self) -> dict[str, Any]:
     raise NotImplementedError
@@ -212,7 +211,7 @@ class Message:
     self.channels = dict(channels) if channels is not None else {}
 
   def to_json(self) -> dict[str, Any]:
-    res = {"role": self.role.value}
+    res: dict[str, Any] = {"role": self.role.value}
     if self.contents.contents:
       res["content"] = self.contents.to_json()
     if self.tool_calls:
