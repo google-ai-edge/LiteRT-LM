@@ -185,6 +185,66 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest, PrefillTest) {
   EXPECT_EQ(current_step, 3);
 }
 
+TEST(LlmLiteRtCompiledModelExecutorStaticTest, ResetTest) {
+  auto model_path =
+      std::filesystem::path(::testing::SrcDir()) / kTestStaticModelPath;
+  ASSERT_OK_AND_ASSIGN(
+      auto model_resources,
+      CreateExecutorModelResourcesLitertLm(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(
+      auto executor_settings,
+      LlmExecutorSettings::CreateDefault(model_assets, Backend::CPU));
+  executor_settings.SetCacheDir(":nocache");
+  executor_settings.SetMaxNumTokens(kMaxNumTokens);
+  ::litert::lm::CpuConfig config;
+  config.number_of_threads = kNumThreads;
+  executor_settings.SetBackendConfig(config);
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  ASSERT_OK_AND_ASSIGN(auto executor,
+                       LlmLiteRtCompiledModelExecutorStatic::Create(
+                           executor_settings, env, *model_resources));
+  ASSERT_NE(executor, nullptr);
+
+  ExecutorInputs inputs;
+  const std::vector<int> input_tokens = {1, 2, 0};
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto input_tokens_buffer,
+      CopyToTensorBuffer<int>(absl::MakeSpan(input_tokens), {1, 3}));
+  inputs.SetTextData(ExecutorTextData(std::move(input_tokens_buffer)));
+
+  EXPECT_OK(executor->Prefill(inputs));
+
+  {
+    ASSERT_OK_AND_ASSIGN(auto current_step, executor->GetCurrentStep());
+    EXPECT_EQ(current_step, 3);
+  }
+
+  EXPECT_OK(executor->Reset());
+
+  {
+    ASSERT_OK_AND_ASSIGN(auto current_step, executor->GetCurrentStep());
+    EXPECT_EQ(current_step, 0);
+  }
+
+  const std::vector<int> second_input_tokens = {3, 4, 5};
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto second_input_tokens_buffer,
+      CopyToTensorBuffer<int>(absl::MakeSpan(second_input_tokens), {1, 3}));
+  ExecutorInputs second_inputs;
+  second_inputs.SetTextData(
+      ExecutorTextData(std::move(second_input_tokens_buffer)));
+
+  EXPECT_OK(executor->Prefill(second_inputs));
+
+  {
+    ASSERT_OK_AND_ASSIGN(auto current_step, executor->GetCurrentStep());
+    EXPECT_EQ(current_step, 3);
+  }
+}
+
 TEST(LlmLiteRtCompiledModelExecutorStaticTest,
      PrefillExceedsStateEntriesErrorTest) {
   auto model_path =
@@ -1236,6 +1296,54 @@ TEST(LlmLiteRtCompiledModelExecutorDynamicTest, PrefillTest) {
     EXPECT_OK(executor->Prefill(inputs));
     ASSERT_OK_AND_ASSIGN(auto current_step, executor->GetCurrentStep());
     EXPECT_EQ(current_step, 3 * (i + 1));
+  }
+}
+
+TEST(LlmLiteRtCompiledModelExecutorDynamicTest, ResetTest) {
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  std::unique_ptr<ModelResources> model_resources;
+  std::unique_ptr<LlmLiteRtCompiledModelExecutorDynamic> executor;
+  {
+    ASSERT_OK_AND_ASSIGN(auto p,
+                         CreateDynamicExecutor(env, kTestDynamicModelPath));
+    std::tie(model_resources, executor) = std::move(p);
+  }
+
+  ExecutorInputs inputs;
+  const std::vector<int> input_tokens = {1, 2, 0};
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto input_tokens_buffer,
+      CopyToTensorBuffer<int>(absl::MakeSpan(input_tokens), {1, 3}));
+  inputs.SetTextData(ExecutorTextData(std::move(input_tokens_buffer)));
+
+  EXPECT_OK(executor->Prefill(inputs));
+
+  {
+    ASSERT_OK_AND_ASSIGN(auto current_step, executor->GetCurrentStep());
+    EXPECT_EQ(current_step, 3);
+  }
+
+  EXPECT_OK(executor->Reset());
+
+  {
+    ASSERT_OK_AND_ASSIGN(auto current_step, executor->GetCurrentStep());
+    EXPECT_EQ(current_step, 0);
+  }
+
+  const std::vector<int> second_input_tokens = {3, 4, 5};
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto second_input_tokens_buffer,
+      CopyToTensorBuffer<int>(absl::MakeSpan(second_input_tokens), {1, 3}));
+  ExecutorInputs second_inputs;
+  second_inputs.SetTextData(
+      ExecutorTextData(std::move(second_input_tokens_buffer)));
+
+  EXPECT_OK(executor->Prefill(second_inputs));
+
+  {
+    ASSERT_OK_AND_ASSIGN(auto current_step, executor->GetCurrentStep());
+    EXPECT_EQ(current_step, 3);
   }
 }
 
