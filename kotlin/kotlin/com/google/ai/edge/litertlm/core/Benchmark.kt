@@ -66,7 +66,7 @@ fun benchmark(
   prompt: String = "How are you",
 ): BenchmarkInfo {
   val enginePointer =
-    LiteRtLmJni.nativeCreateBenchmark(
+    LiteRtLmNative.nativeCreateBenchmark(
       modelPath,
       backend.name,
       prefillTokens,
@@ -78,7 +78,7 @@ fun benchmark(
 
   try {
     val conversationHandle =
-      LiteRtLmJni.nativeCreateConversation(
+      LiteRtLmNative.nativeCreateConversation(
         enginePointer,
         null, // SamplerConfig
         "[]", // messagesJsonString
@@ -101,6 +101,6 @@ fun benchmark(
       return conversation.getBenchmarkInfo()
     }
   } finally {
-    LiteRtLmJni.nativeDeleteEngine(enginePointer)
+    LiteRtLmNative.nativeDeleteEngine(enginePointer)
   }
 }

@@ -15,11 +15,11 @@
  */
 package com.google.ai.edge.litertlm
 
-/** A wrapper for the native JNI methods. */
-internal object LiteRtLmJni {
+/** A wrapper for the native methods. */
+internal object LiteRtLmNative {
 
-  init {
-    NativeLibraryLoader.load()
+  internal fun init(nativeLibraryLoader: NativeLibraryLoader) {
+    nativeLibraryLoader.load()
   }
 
   /**
@@ -123,7 +123,7 @@ internal object LiteRtLmJni {
    *
    * @param sessionPointer A pointer to the native session instance.
    * @param inputData An array of {@link InputData} to be processed by the model.
-   * @throws LiteRtLmJniException if the underlying native method fails.
+   * @throws LiteRtLmNativeException if the underlying native method fails.
    */
   external fun nativeRunPrefill(sessionPointer: Long, inputData: Array<InputData>)
 
@@ -132,7 +132,7 @@ internal object LiteRtLmJni {
    *
    * @param sessionPointer A pointer to the native session instance.
    * @return The generated content.
-   * @throws LiteRtLmJniException if the underlying native method fails.
+   * @throws LiteRtLmNativeException if the underlying native method fails.
    */
   external fun nativeRunDecode(sessionPointer: Long): String
 
@@ -157,15 +157,15 @@ internal object LiteRtLmJni {
   external fun nativeGenerateContentStream(
     sessionPointer: Long,
     inputData: Array<InputData>,
-    callback: JniInferenceCallback,
+    callback: NativeInferenceCallback,
   )
 
   /**
    * Callback for the nativeGenerateContentStream.
    *
-   * <p>Keep the data type simple (string) to avoid constructing complex JVM object in native layer.
+   * <p>Keep the data type simple (string) to avoid constructing a complex JVM object in the native layer.
    */
-  interface JniInferenceCallback {
+  interface NativeInferenceCallback {
     /**
      * Called when a new response is generated.
      *
@@ -258,7 +258,7 @@ internal object LiteRtLmJni {
     conversationPointer: Long,
     messageJsonString: String,
     extraContextJsonString: String,
-    callback: JniMessageCallback,
+    callback: NativeMessageCallback,
     visualTokenBudget: Int?,
     repetitionPenaltyConfig: RepetitionPenaltyConfig?,
     noRepeatNgramConfig: NoRepeatNgramConfig?,
@@ -311,7 +311,7 @@ internal object LiteRtLmJni {
    *
    * @param conversationPointer A pointer to the native conversation instance.
    * @return The benchmark info.
-   * @throws LiteRtLmJniException if the underlying native method fails.
+   * @throws LiteRtLmNativeException if the underlying native method fails.
    */
   external fun nativeConversationGetBenchmarkInfo(conversationPointer: Long): BenchmarkInfo
 
@@ -320,7 +320,7 @@ internal object LiteRtLmJni {
    *
    * @param conversationPointer A pointer to the native conversation instance.
    * @return The number of tokens.
-   * @throws LiteRtLmJniException if the underlying native method fails.
+   * @throws LiteRtLmNativeException if the underlying native method fails.
    */
   external fun nativeConversationGetTokenCount(conversationPointer: Long): Int
 
@@ -349,9 +349,9 @@ internal object LiteRtLmJni {
   /**
    * Callback for the nativeSendMessageAsync.
    *
-   * <p>Keep the data type simple (string) to avoid constructing complex JVM object in native layer.
+   * <p>Keep the data type simple (string) to avoid constructing a complex JVM object in the native layer.
    */
-  interface JniMessageCallback {
+  interface NativeMessageCallback {
     /**
      * Called when a message is received.
      *

@@ -16,33 +16,24 @@
 package com.google.ai.edge.litertlm
 
 import com.google.gson.JsonArray
-import kotlin.jvm.Volatile
+import kotlin.concurrent.Volatile
 
 /**
- * Manages the lifecycle of a LiteRT-LM engine, providing an interface for interacting with the
- * underlying native library.
- *
- * Example usage:
- * ```
- * val config = EngineConfig(modelPath = "...")
- * val engine = Engine(config)
- * engine.initialize()
- * ...
- * engine.close()
- * ```
- *
- * @param engineConfig The configuration for the engine.
+ * Abstract class for managing the lifecycle of a LiteRT-LM engine.
  */
-class Engine(val engineConfig: EngineConfig) : AutoCloseable {
+abstract class Engine(
+  val engineConfig: EngineConfig,
+  protected val nativeLibraryLoader: NativeLibraryLoader
+) : AutoCloseable {
   // A lock to protect access to the engine's state and native handle.
-  private val lock = Any()
+  protected val lock = Any()
 
   /**
    * The native handle to the LiteRT-LM engine. A non-null value indicates an initialized engine.
    *
    * `@Volatile` ensures that changes to the handle are immediately visible across all threads.
    */
-  @Volatile private var handle: Long? = null
+  @Volatile protected var handle: Long? = null
 
   /** Returns `true` if the engine is initialized and ready for use; `false` otherwise. */
   fun isInitialized(): Boolean {
@@ -51,47 +42,8 @@ class Engine(val engineConfig: EngineConfig) : AutoCloseable {
 
   /**
    * Initializes the native LiteRT-LM engine.
-   *
-   * **Note:** This operation can take a significant amount of time (e.g., 10 seconds) depending on
-   * the model size and device hardware. It is strongly recommended to call this method on a
-   * background thread to avoid blocking the main thread.
-   *
-   * @throws IllegalStateException if the engine has already been initialized.
    */
-  fun initialize() {
-    synchronized(lock) {
-      check(!isInitialized()) { "Engine is already initialized." }
-
-      val mainBackendNumThreads =
-        (engineConfig.backend as? Backend.CPU)
-          ?.let { it.threadCount ?: it.numOfThreads }
-          ?.let { if (it > 0) it else -1 } ?: -1
-      val audioBackendNumThreads =
-        (engineConfig.audioBackend as? Backend.CPU)
-          ?.let { it.threadCount ?: it.numOfThreads }
-          ?.let { if (it > 0) it else -1 } ?: -1
-
-      handle =
-        LiteRtLmJni.nativeCreateEngine(
-          engineConfig.modelPath,
-          engineConfig.backend.name,
-          // convert the null value to "" to avoid passing nullable object in JNI.
-          engineConfig.visionBackend?.name ?: "",
-          engineConfig.audioBackend?.name ?: "",
-          // convert the null value to -1 to avoid passing nullable object in JNI.
-          engineConfig.maxNumTokens ?: -1,
-          engineConfig.maxNumImages ?: -1,
-          engineConfig.cacheDir ?: "",
-          @OptIn(ExperimentalApi::class) ExperimentalFlags.enableBenchmark,
-          @OptIn(ExperimentalApi::class) ExperimentalFlags.enableSpeculativeDecoding,
-          (engineConfig.backend as? Backend.NPU)?.nativeLibraryDir ?: "",
-          (engineConfig.visionBackend as? Backend.NPU)?.nativeLibraryDir ?: "",
-          (engineConfig.audioBackend as? Backend.NPU)?.nativeLibraryDir ?: "",
-          mainBackendNumThreads,
-          audioBackendNumThreads,
-        )
-    }
-  }
+  abstract fun initialize()
 
   /**
    * Closes the engine and releases the native LiteRT-LM engine's resources.
@@ -103,7 +55,7 @@ class Engine(val engineConfig: EngineConfig) : AutoCloseable {
       checkInitialized()
 
       // Using !! is okay. Checked initialization already.
-      LiteRtLmJni.nativeDeleteEngine(handle!!)
+      LiteRtLmNative.nativeDeleteEngine(handle!!)
       handle = null // Reset the handle to indicate the engine is released.
     }
   }
@@ -146,7 +98,7 @@ class Engine(val engineConfig: EngineConfig) : AutoCloseable {
 
       @OptIn(ExperimentalApi::class) // opt-in experimental flags
       return Conversation(
-        LiteRtLmJni.nativeCreateConversation(
+        LiteRtLmNative.nativeCreateConversation(
           handle!!, // Using !! is okay. Checked initialization already.
           conversationConfig.samplerConfig,
           messagesJson.toString(),
@@ -183,7 +135,7 @@ class Engine(val engineConfig: EngineConfig) : AutoCloseable {
 
       // Using !! is okay. Checked initialization already.
       return Session(
-        LiteRtLmJni.nativeCreateSession(
+        LiteRtLmNative.nativeCreateSession(
           handle!!,
           sessionConfig.samplerConfig,
           sessionConfig.loraConfig?.loraPath,
@@ -194,7 +146,7 @@ class Engine(val engineConfig: EngineConfig) : AutoCloseable {
   }
 
   /** Throws [IllegalStateException] if the engine is not initialized. */
-  private fun checkInitialized() {
+  protected fun checkInitialized() {
     check(isInitialized()) { "Engine is not initialized." }
   }
 
@@ -204,7 +156,7 @@ class Engine(val engineConfig: EngineConfig) : AutoCloseable {
      * engine instances. If not set, it uses the native libraries' default.
      */
     fun setNativeMinLogSeverity(level: LogSeverity) {
-      LiteRtLmJni.nativeSetMinLogSeverity(level.severity)
+      LiteRtLmNative.nativeSetMinLogSeverity(level.severity)
     }
   }
 }

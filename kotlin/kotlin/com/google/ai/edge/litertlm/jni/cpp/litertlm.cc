@@ -65,7 +65,7 @@
 #endif  // _WIN32
 
 #define JNI_METHOD(METHOD_NAME) \
-  Java_com_google_ai_edge_litertlm_LiteRtLmJni_##METHOD_NAME
+  Java_com_google_ai_edge_litertlm_LiteRtLmNative_##METHOD_NAME
 
 namespace {
 using litert::lm::Backend;
@@ -89,9 +89,9 @@ using litert::lm::Responses;
 using litert::lm::SessionConfig;
 using litert::lm::proto::SamplerParameters;
 
-void ThrowLiteRtLmJniException(JNIEnv* env, const std::string& message) {
+void ThrowLiteRtLmNativeException(JNIEnv* env, const std::string& message) {
   jclass exClass =
-      env->FindClass("com/google/ai/edge/litertlm/LiteRtLmJniException");
+      env->FindClass("com/google/ai/edge/litertlm/core/LiteRtLmNativeException");
   if (exClass != nullptr) {
     env->ThrowNew(exClass, message.c_str());
     // Clean up local reference
@@ -246,7 +246,7 @@ std::vector<InputData> GetNativeInputData(JNIEnv* env,
       env->ReleaseByteArrayElements(bytes_jarr, bytes, JNI_ABORT);
       env->DeleteLocalRef(bytes_jarr);
     } else {
-      ThrowLiteRtLmJniException(env, "Unsupported InputData type");
+      ThrowLiteRtLmNativeException(env, "Unsupported InputData type");
     }
     env->DeleteLocalRef(input_obj);
   }
@@ -514,13 +514,13 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateEngine)(
   env->ReleaseStringUTFChars(model_path, model_path_chars);
 
   if (!FileExists(model_path_str)) {
-    ThrowLiteRtLmJniException(env, "Model file not found: " + model_path_str);
+    ThrowLiteRtLmNativeException(env, "Model file not found: " + model_path_str);
     return 0;
   }
 
   auto model_assets = ModelAssets::Create(model_path_str);
   if (!model_assets.ok()) {
-    ThrowLiteRtLmJniException(env, "Failed to create model assets: " +
+    ThrowLiteRtLmNativeException(env, "Failed to create model assets: " +
                                        model_assets.status().ToString());
     return 0;
   }
@@ -531,7 +531,7 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateEngine)(
 
   auto backend_enum = litert::lm::GetBackendFromString(backend_str);
   if (!backend_enum.ok()) {
-    ThrowLiteRtLmJniException(env, backend_enum.status().ToString());
+    ThrowLiteRtLmNativeException(env, backend_enum.status().ToString());
     return 0;
   }
 
@@ -545,7 +545,7 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateEngine)(
     auto vision_backend_enum =
         litert::lm::GetBackendFromString(vision_backend_str);
     if (!vision_backend_enum.ok()) {
-      ThrowLiteRtLmJniException(env, vision_backend_enum.status().ToString());
+      ThrowLiteRtLmNativeException(env, vision_backend_enum.status().ToString());
       return 0;
     }
 
@@ -562,7 +562,7 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateEngine)(
     auto audio_backend_enum =
         litert::lm::GetBackendFromString(audio_backend_str);
     if (!audio_backend_enum.ok()) {
-      ThrowLiteRtLmJniException(env, audio_backend_enum.status().ToString());
+      ThrowLiteRtLmNativeException(env, audio_backend_enum.status().ToString());
       return 0;
     }
 
@@ -573,7 +573,7 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateEngine)(
                                                 vision_backend_optional,
                                                 audio_backend_optional);
   if (!settings.ok()) {
-    ThrowLiteRtLmJniException(env, "Failed to create engine settings: " +
+    ThrowLiteRtLmNativeException(env, "Failed to create engine settings: " +
                                        settings.status().ToString());
     return 0;
   }
@@ -670,7 +670,7 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateEngine)(
 
   auto engine = EngineFactory::CreateDefault(*settings);
   if (!engine.ok()) {
-    ThrowLiteRtLmJniException(
+    ThrowLiteRtLmNativeException(
         env, "Failed to create engine: " + engine.status().ToString());
     return 0;
   }
@@ -687,13 +687,13 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateBenchmark)(
   env->ReleaseStringUTFChars(model_path, model_path_chars);
 
   if (!FileExists(model_path_str)) {
-    ThrowLiteRtLmJniException(env, "Model file not found: " + model_path_str);
+    ThrowLiteRtLmNativeException(env, "Model file not found: " + model_path_str);
     return 0;
   }
 
   auto model_assets = ModelAssets::Create(model_path_str);
   if (!model_assets.ok()) {
-    ThrowLiteRtLmJniException(env, "Failed to create model assets: " +
+    ThrowLiteRtLmNativeException(env, "Failed to create model assets: " +
                                        model_assets.status().ToString());
     return 0;
   }
@@ -704,13 +704,13 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateBenchmark)(
 
   auto backend_enum = litert::lm::GetBackendFromString(backend_str);
   if (!backend_enum.ok()) {
-    ThrowLiteRtLmJniException(env, backend_enum.status().ToString());
+    ThrowLiteRtLmNativeException(env, backend_enum.status().ToString());
     return 0;
   }
 
   auto settings = EngineSettings::CreateDefault(*model_assets, *backend_enum);
   if (!settings.ok()) {
-    ThrowLiteRtLmJniException(env, "Failed to create engine settings: " +
+    ThrowLiteRtLmNativeException(env, "Failed to create engine settings: " +
                                        settings.status().ToString());
     return 0;
   }
@@ -752,7 +752,7 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateBenchmark)(
 
   auto engine = EngineFactory::CreateDefault(*settings);
   if (!engine.ok()) {
-    ThrowLiteRtLmJniException(
+    ThrowLiteRtLmNativeException(
         env, "Failed to create engine: " + engine.status().ToString());
     return 0;
   }
@@ -780,7 +780,7 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateSession)(
     auto lora_file = ::litert::ScopedFile::Open(lora_path);
     env->ReleaseStringUTFChars(lora_path_str, lora_path);
     if (!lora_file.ok()) {
-      ThrowLiteRtLmJniException(
+      ThrowLiteRtLmNativeException(
           env, "Failed to open LoRA file: " + lora_file.status().ToString());
       return 0;
     }
@@ -794,7 +794,7 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateSession)(
     auto audio_lora_file = ::litert::ScopedFile::Open(audio_lora_path);
     env->ReleaseStringUTFChars(audio_lora_path_str, audio_lora_path);
     if (!audio_lora_file.ok()) {
-      ThrowLiteRtLmJniException(env, "Failed to open Audio LoRA file: " +
+      ThrowLiteRtLmNativeException(env, "Failed to open Audio LoRA file: " +
                                          audio_lora_file.status().ToString());
       return 0;
     }
@@ -812,7 +812,7 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateSession)(
 
   auto session = engine->CreateSession(session_config);
   if (!session.ok()) {
-    ThrowLiteRtLmJniException(
+    ThrowLiteRtLmNativeException(
         env, "Failed to create session: " + session.status().ToString());
     return 0;
   }
@@ -830,7 +830,7 @@ LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeRunPrefill)(
       reinterpret_cast<Engine::Session*>(session_pointer);
 
   std::vector<InputData> contents = GetNativeInputData(env, input_data);
-  // return if there is pending exceptions (e.g., if ThrowLiteRtLmJniException
+  // return if there is pending exceptions (e.g., if ThrowLiteRtLmNativeException
   // called.)
   if (env->ExceptionCheck()) {
     return;
@@ -839,7 +839,7 @@ LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeRunPrefill)(
   auto status = session->RunPrefill(contents);
 
   if (!status.ok()) {
-    ThrowLiteRtLmJniException(env,
+    ThrowLiteRtLmNativeException(env,
                               "Failed to run prefill: " + status.ToString());
   }
 }
@@ -852,13 +852,13 @@ JNI_METHOD(nativeRunDecode)(JNIEnv* env, jclass thiz, jlong session_pointer) {
   auto responses = session->RunDecode();
 
   if (!responses.ok()) {
-    ThrowLiteRtLmJniException(
+    ThrowLiteRtLmNativeException(
         env, "Failed to run decode: " + responses.status().ToString());
     return nullptr;
   }
 
   if (responses->GetTexts().size() != 1) {
-    ThrowLiteRtLmJniException(
+    ThrowLiteRtLmNativeException(
         env, "Number of output candidates should be 1, but got " +
                  std::to_string(responses->GetTexts().size()));
   }
@@ -872,7 +872,7 @@ LITERTLM_JNIEXPORT jstring JNICALL JNI_METHOD(nativeGenerateContent)(
       reinterpret_cast<Engine::Session*>(session_pointer);
 
   std::vector<InputData> contents = GetNativeInputData(env, input_data);
-  // return if there is pending exceptions (e.g., if ThrowLiteRtLmJniException
+  // return if there is pending exceptions (e.g., if ThrowLiteRtLmNativeException
   // called.)
   if (env->ExceptionCheck()) {
     return nullptr;
@@ -881,7 +881,7 @@ LITERTLM_JNIEXPORT jstring JNICALL JNI_METHOD(nativeGenerateContent)(
   auto responses = session->GenerateContent(contents);
 
   if (!responses.ok()) {
-    ThrowLiteRtLmJniException(
+    ThrowLiteRtLmNativeException(
         env, "Failed to generate content: " + responses.status().ToString());
     return nullptr;
   }
@@ -898,7 +898,7 @@ LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeGenerateContentStream)(
     jobject callback) {
   JavaVM* jvm = nullptr;
   if (env->GetJavaVM(&jvm) != JNI_OK) {
-    ThrowLiteRtLmJniException(env, "Failed to get JavaVM");
+    ThrowLiteRtLmNativeException(env, "Failed to get JavaVM");
     return;
   }
 
@@ -983,7 +983,7 @@ LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeGenerateContentStream)(
       session->GenerateContentStream(contents, std::move(callback_fn));
 
   if (!status.ok()) {
-    ThrowLiteRtLmJniException(
+    ThrowLiteRtLmNativeException(
         env, "Failed to start GenerateContentStream: " + status.ToString());
   }
 }
@@ -1003,7 +1003,7 @@ JNI_METHOD(nativeConversationGetBenchmarkInfo)(JNIEnv* env, jclass thiz,
 
   auto benchmark_info = conversation->GetBenchmarkInfo();
   if (!benchmark_info.ok()) {
-    ThrowLiteRtLmJniException(env, "Failed to get benchmark info: " +
+    ThrowLiteRtLmNativeException(env, "Failed to get benchmark info: " +
                                        benchmark_info.status().ToString());
     return nullptr;
   }
@@ -1018,7 +1018,7 @@ LITERTLM_JNIEXPORT jint JNICALL JNI_METHOD(nativeConversationGetTokenCount)(
 
   auto tokens_count = conversation->GetTokenCount();
   if (!tokens_count.ok()) {
-    ThrowLiteRtLmJniException(
+    ThrowLiteRtLmNativeException(
         env, "Failed to get token count: " + tokens_count.status().ToString());
     return 0;
   }
@@ -1053,7 +1053,7 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateConversation)(
     auto lora_file = ::litert::ScopedFile::Open(lora_path);
     env->ReleaseStringUTFChars(lora_path_str, lora_path);
     if (!lora_file.ok()) {
-      ThrowLiteRtLmJniException(
+      ThrowLiteRtLmNativeException(
           env, "Failed to open LoRA file: " + lora_file.status().ToString());
       return 0;
     }
@@ -1067,7 +1067,7 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateConversation)(
     auto audio_lora_file = ::litert::ScopedFile::Open(audio_lora_path);
     env->ReleaseStringUTFChars(audio_lora_path_str, audio_lora_path);
     if (!audio_lora_file.ok()) {
-      ThrowLiteRtLmJniException(env, "Failed to open Audio LoRA file: " +
+      ThrowLiteRtLmNativeException(env, "Failed to open Audio LoRA file: " +
                                          audio_lora_file.status().ToString());
       return 0;
     }
@@ -1102,7 +1102,7 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateConversation)(
         tool_json.get<nlohmann::ordered_json::array_t>();
     json_preface.tools = tool_json_array;
   } else {
-    ThrowLiteRtLmJniException(
+    ThrowLiteRtLmNativeException(
         env, "tools_json should be a json array. Got: " + tool_json.dump());
     return 0;
   }
@@ -1181,13 +1181,13 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateConversation)(
   auto conversation_config = conversation_config_builder.Build(*engine);
 
   if (!conversation_config.ok()) {
-    ThrowLiteRtLmJniException(env, "Failed to create conversation config: " +
+    ThrowLiteRtLmNativeException(env, "Failed to create conversation config: " +
                                        conversation_config.status().ToString());
     return 0;
   }
   auto conversation = Conversation::Create(*engine, *conversation_config);
   if (!conversation.ok()) {
-    ThrowLiteRtLmJniException(env, "Failed to create conversation: " +
+    ThrowLiteRtLmNativeException(env, "Failed to create conversation: " +
                                        conversation.status().ToString());
     return 0;
   }
@@ -1209,7 +1209,7 @@ LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeSendMessageAsync)(
     jstring constraint_string) {
   JavaVM* jvm = nullptr;
   if (env->GetJavaVM(&jvm) != JNI_OK) {
-    ThrowLiteRtLmJniException(env, "Failed to get JavaVM");
+    ThrowLiteRtLmNativeException(env, "Failed to get JavaVM");
     return;
   }
 
@@ -1278,7 +1278,7 @@ LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeSendMessageAsync)(
   jclass callback_class = env->GetObjectClass(callback_global);
   if (callback_class == nullptr) {
     env->DeleteGlobalRef(callback_global);
-    ThrowLiteRtLmJniException(env, "Failed to get callback class");
+    ThrowLiteRtLmNativeException(env, "Failed to get callback class");
     return;
   }
   jmethodID on_message_mid =
@@ -1291,7 +1291,7 @@ LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeSendMessageAsync)(
   if (on_message_mid == nullptr || on_complete_mid == nullptr ||
       on_error_mid == nullptr) {
     env->DeleteGlobalRef(callback_global);
-    ThrowLiteRtLmJniException(env, "Failed to get callback method IDs");
+    ThrowLiteRtLmNativeException(env, "Failed to get callback method IDs");
     return;
   }
 
@@ -1349,7 +1349,7 @@ LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeSendMessageAsync)(
       json_message, std::move(callback_fn), std::move(optional_args));
 
   if (!status.ok()) {
-    ThrowLiteRtLmJniException(
+    ThrowLiteRtLmNativeException(
         env, "Failed to start nativeSendMessageAsync: " + status.ToString());
   }
 }
@@ -1425,7 +1425,7 @@ LITERTLM_JNIEXPORT jstring JNICALL JNI_METHOD(nativeSendMessage)(
   auto response =
       conversation->SendMessage(json_message, std::move(optional_args));
   if (!response.ok()) {
-    ThrowLiteRtLmJniException(env, "Failed to call nativeSendMessage: " +
+    ThrowLiteRtLmNativeException(env, "Failed to call nativeSendMessage: " +
                                        response.status().ToString());
     return nullptr;
   }
@@ -1462,7 +1462,7 @@ LITERTLM_JNIEXPORT jstring JNICALL JNI_METHOD(
   auto response = conversation->RenderMessageIntoString(
       json_message, std::move(optional_args));
   if (!response.ok()) {
-    ThrowLiteRtLmJniException(
+    ThrowLiteRtLmNativeException(
         env, "Failed to call nativeConversationRenderMessageIntoString: " +
                  response.status().ToString());
     return nullptr;
@@ -1480,7 +1480,7 @@ LITERTLM_JNIEXPORT jstring JNICALL JNI_METHOD(
   auto response =
       conversation->RenderPrefaceIntoString(litert::lm::OptionalArgs());
   if (!response.ok()) {
-    ThrowLiteRtLmJniException(
+    ThrowLiteRtLmNativeException(
         env, absl::StrCat(
                  "Failed to call nativeConversationRenderPrefaceIntoString: ",
                  response.status().ToString()));
@@ -1498,7 +1498,7 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateCapabilities)(
 
   auto loaded_file = litert_lm_loaded_file_create(model_path_str.c_str());
   if (loaded_file == nullptr) {
-    ThrowLiteRtLmJniException(
+    ThrowLiteRtLmNativeException(
         env, "Failed to open LiteRT-LM file: " + model_path_str);
     return 0;
   }

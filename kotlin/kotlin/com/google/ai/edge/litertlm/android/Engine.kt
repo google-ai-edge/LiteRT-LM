@@ -1,5 +1,5 @@
 /*
- * Copyright 2025 Google LLC.
+ * Copyright 2025 Google LLC
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,11 +15,23 @@
  */
 package com.google.ai.edge.litertlm
 
+import com.google.gson.JsonArray
+
 /**
- * Exception thrown from the LiteRT LM JNI layer.
+ * Manages the lifecycle of a LiteRT-LM engine, providing an interface for interacting with the
+ * underlying native library.
  *
- * The JVM has no way to statically verify that the native C/C++ code will only throw exceptions
- * declared in the Java method's throws signature. Hence, throwing an exception extending the
- * RuntimeException (an unchecked exception).
+ * Example usage:
+ * ```
+ * val config = EngineConfig(modelPath = "...")
+ * val engine = Engine(config)
+ * engine.initialize()
+ * ...
+ * engine.close()
+ * ```
+ *
+ * @param engineConfig The configuration for the engine.
  */
-class LiteRtLmJniException(message: String) : RuntimeException(message)
+fun Engine(engineConfig: EngineConfig): Engine {
+    return EngineJni(engineConfig, NativeLibraryLoaderJni)
+}

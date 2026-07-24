@@ -225,7 +225,7 @@ jobs:
             @litert//litert/vendors/qualcomm/dispatch:dispatch_api_so \
             -- \
             -//python/... \
-            -//kotlin/java/com/google/ai/edge/litertlm/example/... \
+            -//kotlin/kotlin/com/google/ai/edge/litertlm/example/... \
             -//runtime/components/rust/...
 
       - name: Update litert_lm_main prebuilt for Android if new version tag is pushed.

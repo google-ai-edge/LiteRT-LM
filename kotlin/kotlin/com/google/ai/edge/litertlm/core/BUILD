@@ -12,30 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-load("@rules_kotlin//kotlin:android.bzl", "kt_android_library")
 load("@rules_kotlin//kotlin:jvm.bzl", "kt_jvm_library")
 
 package(default_visibility = ["//visibility:public"])
 
 kt_jvm_library(
-    name = "litertlm-jvm",
+    name = "litertlm-core",
     srcs = glob(["*.kt"]),
-    resources = ["//kotlin/java/com/google/ai/edge/litertlm/jni:litertlm_jni"],
-    resource_strip_prefix = "kotlin/java",
     deps = [
         "@rules_kotlin//kotlin/compiler:kotlin-reflect",
         "@maven//:com_google_code_gson_gson",
         "@maven//:org_jetbrains_kotlinx_kotlinx_coroutines_core_jvm"
-    ],
-)
-
-# Note: To build with dynamic linking, use the following build flags:
-kt_android_library(
-    name = "litertlm-android",
-    srcs = glob(["*.kt"]),
-    deps = [
-        "@rules_kotlin//kotlin/compiler:kotlin-reflect",
-        "@maven//:com_google_code_gson_gson",
-        "@maven//:org_jetbrains_kotlinx_kotlinx_coroutines_android"
     ],
 )

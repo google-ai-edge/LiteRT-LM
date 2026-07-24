@@ -21,13 +21,13 @@ import java.io.FileOutputStream
 import java.io.IOException
 import java.io.InputStream
 
-/** Helper class for loading the LiteRT-LM native library. */
-internal object NativeLibraryLoader {
+/** Helper class for loading the LiteRT-LM native JNI library. */
+internal object NativeLibraryLoaderJni : NativeLibraryLoader() {
   private const val JNI_LIBNAME = "litertlm_jni"
   private val DEBUG =
     System.getProperty("com.google.ai.edge.litertlm.NativeLibraryLoader.DEBUG") != null
 
-  fun load() {
+  override fun load() {
     // 0. Skip loading if loaded already.
     if (isLoaded()) {
       log("Skip loading as the native library is loaded already.")
@@ -45,14 +45,14 @@ internal object NativeLibraryLoader {
     val jniLibName = System.mapLibraryName(JNI_LIBNAME).replace(".dylib", ".so")
 
     // 2. Try extracting from JAR (generic path). (e.g., for bazel)
-    val genericResourcePath = "com/google/ai/edge/litertlm/jni/$jniLibName"
+    val genericResourcePath = "com/google/ai/edge/litertlm/jni/cpp/$jniLibName"
     if (tryExtractAndLoad(genericResourcePath, jniLibName)) {
       log("Loaded $JNI_LIBNAME from JAR: $genericResourcePath")
       return
     }
 
     // 3. Try extracting from JAR (OS-Arch specific path). (e.g., for multi-platform Maven packages)
-    val osArchResourcePath = "com/google/ai/edge/litertlm/jni/${os()}-${architecture()}/$jniLibName"
+    val osArchResourcePath = "com/google/ai/edge/litertlm/jni/cpp/${os()}-${architecture()}/$jniLibName"
     if (tryExtractAndLoad(osArchResourcePath, jniLibName)) {
       log("Loaded $JNI_LIBNAME from JAR: $osArchResourcePath")
       return
@@ -63,7 +63,7 @@ internal object NativeLibraryLoader {
     )
   }
 
-  private fun isLoaded(): Boolean =
+  override fun isLoaded(): Boolean =
     try {
       nativeCheckLoaded()
       true
@@ -71,7 +71,7 @@ internal object NativeLibraryLoader {
       false
     }
 
-  private fun tryLoadLibrary(libName: String): Boolean =
+  override fun tryLoadLibrary(libName: String): Boolean =
     try {
       System.loadLibrary(libName)
       true
@@ -80,7 +80,7 @@ internal object NativeLibraryLoader {
       false
     }
 
-  private fun tryExtractAndLoad(resourcePath: String, libName: String): Boolean {
+  override fun tryExtractAndLoad(resourcePath: String, libName: String): Boolean {
     log("Attempting to extract from: $resourcePath")
     val jniResource = NativeLibraryLoader::class.java.classLoader?.getResourceAsStream(resourcePath)
 
@@ -105,7 +105,7 @@ internal object NativeLibraryLoader {
     }
   }
 
-  private fun extractResource(
+  override fun extractResource(
     resource: InputStream,
     resourceName: String,
     extractToDirectory: String,
@@ -119,7 +119,7 @@ internal object NativeLibraryLoader {
     return dstPath
   }
 
-  private fun os(): String {
+  override fun os(): String {
     val p = System.getProperty("os.name", "")!!.lowercase()
     return when {
       p.contains("linux") -> "linux"
@@ -129,12 +129,12 @@ internal object NativeLibraryLoader {
     }
   }
 
-  private fun architecture(): String {
+  override fun architecture(): String {
     val arch = System.getProperty("os.arch", "")!!.lowercase()
     return if (arch == "amd64") "x86_64" else arch
   }
 
-  private fun copy(src: InputStream, dstFile: File): Long {
+  override fun copy(src: InputStream, dstFile: File): Long {
     FileOutputStream(dstFile).use { dst ->
       val buffer = ByteArray(1 shl 20) // 1MB
       var ret = 0L
@@ -148,7 +148,7 @@ internal object NativeLibraryLoader {
     }
   }
 
-  private fun createTemporaryDirectory(): File {
+  override fun createTemporaryDirectory(): File {
     val baseDirectory = File(System.getProperty("java.io.tmpdir")!!)
     val directoryName = "litertlm_native_libraries-${System.currentTimeMillis()}-"
     for (attempt in 0 until 1000) {
@@ -162,12 +162,12 @@ internal object NativeLibraryLoader {
     )
   }
 
-  private fun log(msg: String) {
+  override fun log(msg: String) {
     if (DEBUG) {
       System.err.println("com.google.ai.edge.litertlm.NativeLibraryLoader: $msg")
     }
   }
 
   /** Native function to check if `JNI_LIBNAME` is loaded. Throws [UnsatisfiedLinkError] if not. */
-  external fun nativeCheckLoaded()
+  override external fun nativeCheckLoaded()
 }

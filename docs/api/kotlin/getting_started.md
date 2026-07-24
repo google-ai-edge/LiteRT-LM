@@ -31,10 +31,10 @@ suspend fun main() {
 ![](demo.gif)
 
 To try out the above sample, clone the repo and run with
-[example/Main.kt](../../../kotlin/java/com/google/ai/edge/litertlm/example/Main.kt):
+[example/Main.kt](../../../kotlin/kotlin/com/google/ai/edge/litertlm/example/Main.kt):
 
 ```bazel
-bazel run -c opt //kotlin/java/com/google/ai/edge/litertlm/example:main -- <abs_model_path>
+bazel run -c opt //kotlin/kotlin/com/google/ai/edge/litertlm/example:main -- <abs_model_path>
 ```
 
 Available `.litertlm` models are on the
@@ -52,18 +52,46 @@ Gradle/Maven users.
 
 ### 1. Add the Gradle dependency
 
+#### Standard
+
 ```
 dependencies {
-    // For Android
+    // For Android source set
     implementation("com.google.ai.edge.litertlm:litertlm-android:latest.release")
 
-    // For JVM (Linux, MacOS, Windows)
+    // OR
+
+    // For JVM (Linux, macOS, Windows) source set
     implementation("com.google.ai.edge.litertlm:litertlm-jvm:latest.release")
 }
 ```
 
+#### Multiplatform
+
+```
+commonMain {
+    dependencies {
+        // For common source set
+        implementation("com.google.ai.edge.litertlm:litertlm-core:latest.release")
+    }
+}
+androidMain {
+    dependencies {
+        // For Android source set
+        implementation("com.google.ai.edge.litertlm:litertlm-android:latest.release")
+    }
+}
+jvmMain {
+    dependencies {
+        // For JVM (Linux, macOS, Windows) source set
+        implementation("com.google.ai.edge.litertlm:litertlm-jvm:latest.release")
+    }
+}
+```
+
 You can find the available versions on Google Maven in
-[litertlm-android](https://maven.google.com/web/index.html#com.google.ai.edge.litertlm:litertlm-android)
+[litertlm-core](https://maven.google.com/web/index.html#com.google.ai.edge.litertlm:litertlm-core),
+[litertlm-android](https://maven.google.com/web/index.html#com.google.ai.edge.litertlm:litertlm-android),
 and
 [litertlm-jvm](https://maven.google.com/web/index.html#com.google.ai.edge.litertlm:litertlm-jvm).
 
@@ -194,8 +222,6 @@ through a callback.
 import com.google.ai.edge.litertlm.Content
 import com.google.ai.edge.litertlm.Message
 import com.google.ai.edge.litertlm.MessageCallback
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 
 val callback = object : MessageCallback {
     override fun onMessage(message: Message) {
@@ -450,10 +476,10 @@ if (responseMessage.toolCalls.isNotEmpty()) {
 #### Example
 
 To try out tool use, clone the repo and run with
-[example/ToolMain.kt](../../../kotlin/java/com/google/ai/edge/litertlm/example/ToolMain.kt):
+[example/ToolMain.kt](../../../kotlin/kotlin/com/google/ai/edge/litertlm/example/ToolMain.kt):
 
 ```bazel
-bazel run -c opt //kotlin/java/com/google/ai/edge/litertlm/example:tool -- <abs_model_path>
+bazel run -c opt //kotlin/kotlin/com/google/ai/edge/litertlm/example:tool -- <abs_model_path>
 ```
 
 ### 7. Extra Template Context Variables
@@ -485,7 +511,7 @@ These variables are used within the Jinja-style prompt templates, e.g.,
 
 ## Error Handling
 
-API methods can throw `LiteRtLmJniException` for errors from the native layer or
+API methods can throw `LiteRtLmNativeException` for errors from the native layer or
 standard Kotlin exceptions like `IllegalStateException` for lifecycle issues.
 Always wrap API calls in try-catch blocks. The `onError` callback in
 `MessageCallback` will also report errors during asynchronous operations.

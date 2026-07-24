@@ -15,8 +15,8 @@
  */
 package com.google.ai.edge.litertlm
 
-import java.util.concurrent.CancellationException
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CancellationException
 
 /**
  * Manages the lifecycle of a LiteRT-LM session, providing an interface for interacting with the
@@ -38,7 +38,7 @@ class Session(private val handle: Long) : AutoCloseable {
    */
   override fun close() {
     if (_isAlive.compareAndSet(true, false)) {
-      LiteRtLmJni.nativeDeleteSession(handle)
+      LiteRtLmNative.nativeDeleteSession(handle)
     } else {
       throw IllegalStateException("Session is closed already.")
     }
@@ -57,7 +57,7 @@ class Session(private val handle: Long) : AutoCloseable {
    */
   fun runPrefill(inputData: List<InputData>) {
     checkIsAlive()
-    return LiteRtLmJni.nativeRunPrefill(handle, inputData.toTypedArray())
+    return LiteRtLmNative.nativeRunPrefill(handle, inputData.toTypedArray())
   }
 
   /**
@@ -71,7 +71,7 @@ class Session(private val handle: Long) : AutoCloseable {
    */
   fun runDecode(): String {
     checkIsAlive()
-    return LiteRtLmJni.nativeRunDecode(handle)
+    return LiteRtLmNative.nativeRunDecode(handle)
   }
 
   /**
@@ -87,7 +87,7 @@ class Session(private val handle: Long) : AutoCloseable {
    */
   fun generateContent(inputData: List<InputData>): String {
     checkIsAlive()
-    return LiteRtLmJni.nativeGenerateContent(handle, inputData.toTypedArray())
+    return LiteRtLmNative.nativeGenerateContent(handle, inputData.toTypedArray())
   }
 
   /**
@@ -101,12 +101,12 @@ class Session(private val handle: Long) : AutoCloseable {
    */
   fun generateContentStream(inputData: List<InputData>, responseCallback: ResponseCallback) {
     checkIsAlive()
-    val jniCallback = JniInferenceCallbackImpl(responseCallback)
-    LiteRtLmJni.nativeGenerateContentStream(handle, inputData.toTypedArray(), jniCallback)
+    val nativeCallback = NativeInferenceCallbackImpl(responseCallback)
+    LiteRtLmNative.nativeGenerateContentStream(handle, inputData.toTypedArray(), nativeCallback)
   }
 
-  private inner class JniInferenceCallbackImpl(private val callback: ResponseCallback) :
-    LiteRtLmJni.JniInferenceCallback {
+  private inner class NativeInferenceCallbackImpl(private val callback: ResponseCallback) :
+    LiteRtLmNative.NativeInferenceCallback {
     override fun onNext(response: String) {
       callback.onNext(response)
     }
@@ -119,7 +119,7 @@ class Session(private val handle: Long) : AutoCloseable {
       if (statusCode == 1) { // StatusCode::kCancelled
         callback.onError(CancellationException(message))
       } else {
-        callback.onError(LiteRtLmJniException("Status Code: $statusCode. Message: $message"))
+        callback.onError(LiteRtLmNativeException("Status Code: $statusCode. Message: $message"))
       }
     }
   }
@@ -133,7 +133,7 @@ class Session(private val handle: Long) : AutoCloseable {
    */
   fun cancelProcess() {
     checkIsAlive()
-    LiteRtLmJni.nativeCancelProcess(handle)
+    LiteRtLmNative.nativeCancelProcess(handle)
   }
 
   /** Throws [IllegalStateException] if the session is not alive. */
@@ -193,8 +193,8 @@ interface ResponseCallback {
    * Called when an error occurs.
    *
    * @param throwable The error that occurred. This will be a
-   *   [java.util.concurrent.CancellationException] if the stream was cancelled normally, and a
-   *   [LiteRtLmJniException] for other errors.
+   *   [kotlinx.coroutines.CancellationException] if the stream was cancelled normally, and a
+   *   [LiteRtLmNativeException] for other errors.
    */
   fun onError(throwable: Throwable) {}
 }

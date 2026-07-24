@@ -18,8 +18,8 @@ package com.google.ai.edge.litertlm
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
-import java.util.concurrent.CancellationException
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
@@ -109,7 +109,7 @@ class Conversation(
    * @return The model's response message.
    * @throws IllegalStateException if the conversation is not alive, if the native layer returns an
    *   invalid response, or if the tool call limit is exceeded.
-   * @throws LiteRtLmJniException if an error occurs during the native call.
+   * @throws LiteRtLmNativeException if an error occurs during the native call.
    */
   @JvmOverloads
   fun sendMessage(
@@ -136,7 +136,7 @@ class Conversation(
     for (i in 0..<RECURRING_TOOL_CALL_LIMIT) {
       val activeResponseFormat = resolveResponseFormat(currentMessageJson, responseFormat)
       val responseJsonString =
-        LiteRtLmJni.nativeSendMessage(
+        LiteRtLmNative.nativeSendMessage(
           handle,
           currentMessageJson.toString(),
           extraContextJsonString,
@@ -185,7 +185,7 @@ class Conversation(
    * @return The model's response message.
    * @throws IllegalStateException if the conversation is not alive, if the native layer returns an
    *   invalid response, or if the tool call limit is exceeded.
-   * @throws LiteRtLmJniException if an error occurs during the native call.
+   * @throws LiteRtLmNativeException if an error occurs during the native call.
    */
   @JvmOverloads
   fun sendMessage(
@@ -229,7 +229,7 @@ class Conversation(
    * @return The model's response message.
    * @throws IllegalStateException if the conversation is not alive, if the native layer returns an
    *   invalid response, or if the tool call limit is exceeded.
-   * @throws LiteRtLmJniException if an error occurs during the native call.
+   * @throws LiteRtLmNativeException if an error occurs during the native call.
    */
   @JvmOverloads
   fun sendMessage(
@@ -297,8 +297,8 @@ class Conversation(
     val currentMessageJson = message.toJson()
     val activeResponseFormat = resolveResponseFormat(currentMessageJson, responseFormat)
 
-    val jniCallback =
-      JniMessageCallbackImpl(
+    val nativeCallback =
+      NativeMessageCallbackImpl(
         callback,
         repetitionPenaltyConfig,
         noRepeatNgramConfig,
@@ -306,11 +306,11 @@ class Conversation(
         maxOutputToken,
         responseFormat,
       )
-    LiteRtLmJni.nativeSendMessageAsync(
+    LiteRtLmNative.nativeSendMessageAsync(
       handle,
       currentMessageJson.toString(),
       extraContextJsonString,
-      jniCallback,
+      nativeCallback,
       visualTokenBudget,
       repetitionPenaltyConfig,
       noRepeatNgramConfig,
@@ -579,14 +579,14 @@ class Conversation(
     }
   }
 
-  private inner class JniMessageCallbackImpl(
+  private inner class NativeMessageCallbackImpl(
     private val callback: MessageCallback,
     private val repetitionPenaltyConfig: RepetitionPenaltyConfig? = null,
     private val noRepeatNgramConfig: NoRepeatNgramConfig? = null,
     private val suppressTokensConfig: SuppressTokensConfig? = null,
     private val maxOutputToken: Int? = null,
     private val responseFormat: ResponseFormat? = null,
-  ) : LiteRtLmJni.JniMessageCallback {
+  ) : LiteRtLmNative.NativeMessageCallback {
 
     /** The tool response to be returned back */
     private var pendingToolResponseJSONMessage: JsonObject? = null
@@ -620,11 +620,11 @@ class Conversation(
       if (localToolResponse != null) {
         val activeResponseFormat = resolveResponseFormat(localToolResponse, responseFormat)
         // If there is pending tool response message, send the message.
-        LiteRtLmJni.nativeSendMessageAsync(
+        LiteRtLmNative.nativeSendMessageAsync(
           handle,
           localToolResponse.toString(),
           "{}",
-          this@JniMessageCallbackImpl,
+          this@NativeMessageCallbackImpl,
           @OptIn(ExperimentalApi::class) ExperimentalFlags.visualTokenBudget,
           repetitionPenaltyConfig,
           noRepeatNgramConfig,
@@ -645,7 +645,7 @@ class Conversation(
       if (statusCode == 1) { // StatusCode::kCancelled
         callback.onError(CancellationException(message))
       } else {
-        callback.onError(LiteRtLmJniException("Status Code: $statusCode. Message: $message"))
+        callback.onError(LiteRtLmNativeException("Status Code: $statusCode. Message: $message"))
       }
     }
   }
@@ -660,7 +660,7 @@ class Conversation(
   // b/450903294 is a pending feature request to roll the internal state back.
   fun cancelProcess() {
     checkIsAlive()
-    LiteRtLmJni.nativeConversationCancelProcess(handle)
+    LiteRtLmNative.nativeConversationCancelProcess(handle)
   }
 
   /**
@@ -668,12 +668,12 @@ class Conversation(
    *
    * @return The benchmark info.
    * @throws IllegalStateException if the conversation is not alive.
-   * @throws LiteRtLmJniException if benchmark is not enabled in the engine config.
+   * @throws LiteRtLmNativeException if benchmark is not enabled in the engine config.
    */
   @ExperimentalApi
   fun getBenchmarkInfo(): BenchmarkInfo {
     checkIsAlive()
-    return LiteRtLmJni.nativeConversationGetBenchmarkInfo(handle)
+    return LiteRtLmNative.nativeConversationGetBenchmarkInfo(handle)
   }
 
   /**
@@ -681,11 +681,11 @@ class Conversation(
    *
    * @return The number of tokens.
    * @throws IllegalStateException if the conversation is not alive.
-   * @throws LiteRtLmJniException if an error occurs during the native call.
+   * @throws LiteRtLmNativeException if an error occurs during the native call.
    */
   fun getTokenCount(): Int {
     checkIsAlive()
-    return LiteRtLmJni.nativeConversationGetTokenCount(handle)
+    return LiteRtLmNative.nativeConversationGetTokenCount(handle)
   }
 
   /**
@@ -698,7 +698,7 @@ class Conversation(
    * @param extraContext Optional context used for prompt template rendering.
    * @return The rendered message string.
    * @throws IllegalStateException if the conversation is not alive.
-   * @throws LiteRtLmJniException if an error occurs during the native call.
+   * @throws LiteRtLmNativeException if an error occurs during the native call.
    */
   @ExperimentalApi
   fun renderMessageIntoString(
@@ -707,7 +707,7 @@ class Conversation(
   ): String {
     checkIsAlive()
     val extraContextJsonString = extraContext.toJsonObject().toString()
-    return LiteRtLmJni.nativeConversationRenderMessageIntoString(
+    return LiteRtLmNative.nativeConversationRenderMessageIntoString(
       handle,
       message.toJson().toString(),
       extraContextJsonString,
@@ -719,12 +719,12 @@ class Conversation(
    *
    * @return The rendered preface string.
    * @throws IllegalStateException if the conversation is not alive.
-   * @throws LiteRtLmJniException if an error occurs during the native call.
+   * @throws LiteRtLmNativeException if an error occurs during the native call.
    */
   @ExperimentalApi
   fun renderPrefaceIntoString(): String {
     checkIsAlive()
-    return LiteRtLmJni.nativeConversationRenderPrefaceIntoString(handle)
+    return LiteRtLmNative.nativeConversationRenderPrefaceIntoString(handle)
   }
 
   /**
@@ -734,7 +734,7 @@ class Conversation(
    */
   override fun close() {
     if (_isAlive.compareAndSet(true, false)) {
-      LiteRtLmJni.nativeDeleteConversation(handle)
+      LiteRtLmNative.nativeDeleteConversation(handle)
     } else {
       throw IllegalStateException("Conversation is closed already.")
     }

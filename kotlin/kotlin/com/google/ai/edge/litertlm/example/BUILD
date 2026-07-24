@@ -18,7 +18,7 @@ load("@rules_java//java:java_binary.bzl", "java_binary")
 kt_jvm_library(
     name = "main_lib",
     srcs = ["Main.kt"],
-    deps = ["//kotlin/java/com/google/ai/edge/litertlm:litertlm-jvm"],
+    deps = ["//kotlin/kotlin/com/google/ai/edge/litertlm/jvm:litertlm-jvm"],
 )
 
 # Interactive chat with a model using the LiteRT-LM Kotlin API on JVM (on Linux, MacOS, etc).
@@ -27,11 +27,11 @@ kt_jvm_library(
 # device.
 #
 # To run it with bazel:
-# bazel run -c opt //kotlin/java/com/google/ai/edge/litertlm/example:main -- <abs_model_path>
+# bazel run -c opt //kotlin/kotlin/com/google/ai/edge/litertlm/example:main -- <abs_model_path>
 #
 # To build a standalone binary:
-# bazel build -c opt //kotlin/java/com/google/ai/edge/litertlm/example:main_deploy.jar
-# ./bazel-bin/kotlin/java/com/google/ai/edge/litertlm/example/main_deploy.jar -- <abs_model_apth>
+# bazel build -c opt //kotlin/kotlin/com/google/ai/edge/litertlm/example:main_deploy.jar
+# ./bazel-bin/kotlin/kotlin/com/google/ai/edge/litertlm/example/main_deploy.jar -- <abs_model_apth>
 java_binary(
     name = "main",
     jvm_flags = ["--enable-native-access=ALL-UNNAMED"],  # it is expect to access native code.
@@ -44,7 +44,7 @@ java_binary(
 kt_jvm_library(
     name = "tool_lib",
     srcs = ["ToolMain.kt"],
-    deps = ["//kotlin/java/com/google/ai/edge/litertlm:litertlm-jvm"],
+    deps = ["//kotlin/kotlin/com/google/ai/edge/litertlm/jvm:litertlm-jvm"],
 )
 
 # Interactive chat with tool calling.
@@ -52,11 +52,11 @@ kt_jvm_library(
 # This example requires a model that can support tool use. e.g., FunctionGemma.
 #
 # To run it with bazel:
-# bazel run -c opt //kotlin/java/com/google/ai/edge/litertlm/example:tool -- <abs_model_path>
+# bazel run -c opt //kotlin/kotlin/com/google/ai/edge/litertlm/example:tool -- <abs_model_path>
 #
 # To build a standalone binary:
-# bazel build -c opt //kotlin/java/com/google/ai/edge/litertlm/example:tool_deploy.jar
-# ./bazel-bin/kotlin/java/com/google/ai/edge/litertlm/example/tool_deploy.jar -- <abs_model_apth>
+# bazel build -c opt //kotlin/kotlin/com/google/ai/edge/litertlm/example:tool_deploy.jar
+# ./bazel-bin/kotlin/kotlin/com/google/ai/edge/litertlm/example/tool_deploy.jar -- <abs_model_apth>
 java_binary(
     name = "tool",
     jvm_flags = ["--enable-native-access=ALL-UNNAMED"],  # it is expect to access native code.
@@ -69,17 +69,17 @@ java_binary(
 kt_jvm_library(
     name = "benchmark_lib",
     srcs = ["BenchmarkMain.kt"],
-    deps = ["//kotlin/java/com/google/ai/edge/litertlm:litertlm-jvm"],
+    deps = ["//kotlin/kotlin/com/google/ai/edge/litertlm/jvm:litertlm-jvm"],
 )
 
 # Example to benchmark a .litertlm model.
 #
 # To run it with bazel:
-# bazel run -c opt //kotlin/java/com/google/ai/edge/litertlm/example:benchmark -- <abs_model_path>
+# bazel run -c opt //kotlin/kotlin/com/google/ai/edge/litertlm/example:benchmark -- <abs_model_path>
 #
 # To build a standalone binary:
-# bazel build -c opt //kotlin/java/com/google/ai/edge/litertlm/example:benchmark_deploy.jar
-# ./bazel-bin/kotlin/java/com/google/ai/edge/litertlm/example/benchmark_deploy.jar -- <abs_model_apth>
+# bazel build -c opt //kotlin/kotlin/com/google/ai/edge/litertlm/example:benchmark_deploy.jar
+# ./bazel-bin/kotlin/kotlin/com/google/ai/edge/litertlm/example/benchmark_deploy.jar -- <abs_model_apth>
 java_binary(
     name = "benchmark",
     jvm_flags = ["--enable-native-access=ALL-UNNAMED"],  # it is expect to access native code.

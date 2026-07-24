@@ -15,7 +15,7 @@
  */
 package com.google.ai.edge.litertlm
 
-import kotlin.jvm.Volatile
+import kotlin.concurrent.Volatile
 
 /**
  * Provides information about capabilities and features supported by a LiteRT-LM file.
@@ -31,9 +31,9 @@ class Capabilities(modelPath: String) : AutoCloseable {
   @Volatile private var handle: Long? = null
 
   init {
-    val ptr = LiteRtLmJni.nativeCreateCapabilities(modelPath)
+    val ptr = LiteRtLmNative.nativeCreateCapabilities(modelPath)
     if (ptr == 0L) {
-      throw LiteRtLmJniException("Failed to load capabilities for model: $modelPath")
+      throw LiteRtLmNativeException("Failed to load capabilities for model: $modelPath")
     }
     handle = ptr
   }
@@ -42,7 +42,7 @@ class Capabilities(modelPath: String) : AutoCloseable {
   fun hasSpeculativeDecodingSupport(): Boolean {
     synchronized(lock) {
       checkInitialized()
-      return LiteRtLmJni.nativeHasSpeculativeDecodingSupport(handle!!)
+      return LiteRtLmNative.nativeHasSpeculativeDecodingSupport(handle!!)
     }
   }
 
@@ -50,7 +50,7 @@ class Capabilities(modelPath: String) : AutoCloseable {
   override fun close() {
     synchronized(lock) {
       checkInitialized()
-      LiteRtLmJni.nativeDeleteCapabilities(handle!!)
+      LiteRtLmNative.nativeDeleteCapabilities(handle!!)
       handle = null
     }
   }

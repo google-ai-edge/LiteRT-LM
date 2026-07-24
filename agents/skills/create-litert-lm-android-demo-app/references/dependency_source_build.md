@@ -28,7 +28,7 @@ integrate them. Agents MUST follow these steps when the user chooses the
     `--config=android_x86` for `x86`, or `--config=android_x86_64` for
     `x86_64`):
     *   **Kotlin Class JAR**: Compile the Kotlin bindings (e.g.,
-        `//kotlin/java/com/google/ai/edge/litertlm:litertlm-android`). Locate
+        `//kotlin/kotlin/com/google/ai/edge/litertlm:litertlm-android`). Locate
         the resulting output `.jar` that contains the compiled `.class` files.
     *   **Native JNI JAR**: Compile the native JNI libraries. Zip all required
         `.so` files into a directory structure `lib/<target_abi>/` inside a
@@ -65,7 +65,7 @@ prebuilt targets.
 **Discovered Dependency Exports**: When configuring the `litertlm_kotlin`
 target, you MUST inspect the original `BUILD` file of the bindings library
 inside your cloned LiteRT-LM source tree (e.g. read the `deps` attribute of the
-`//kotlin/java/com/google/ai/edge/litertlm:litertlm-android` build target).
+`//kotlin/kotlin/com/google/ai/edge/litertlm:litertlm-android` build target).
 Register all third-party external libraries listed there inside the `exports`
 attribute of the prebuilt `java_import`. This transitively propagates compiling
 and runtime classpaths to the sample app, maintaining clean modular

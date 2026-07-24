@@ -20,7 +20,7 @@ package(
 )
 
 cc_binary(
-    name = "litertlm_jni",
+    name = "litertlm_jni_cpp",
     srcs = ["litertlm.cc"],
     linkshared = 1,
     deps = [
