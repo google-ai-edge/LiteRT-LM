@@ -38,6 +38,15 @@ class Backend(abc.ABC):
   Use the subclasses (CPU, GPU, NPU) to specify the backend and its options.
   """
 
+  # pylint: disable=invalid-name
+  # These sub-classes are added here to improve the type checking (pyrefly).
+  # The names are chosen before adding the attributes and also consistent with
+  # other langugage bindings.
+  CPU: type[CPU]
+  GPU: type[GPU]
+  NPU: type[NPU]
+  # pylint: enable=invalid-name
+
   def get_name(self) -> str:
     """Returns the string representation of the backend (e.g., 'cpu', 'gpu', 'npu')."""
     return type(self).__name__.lower()
