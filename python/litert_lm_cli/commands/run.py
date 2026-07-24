@@ -235,6 +235,15 @@ def run_interactive(
     thinking_budget = model.resolve_config_option(
         thinking_budget, model_obj, "thinking_budget"
     )
+    activation_data_type_opt = model.resolve_config_option(
+        activation_data_type, model_obj, "activation_data_type"
+    )
+    if isinstance(activation_data_type_opt, str):
+      activation_data_type_val = litert_lm.ActivationDataType.from_str(
+          activation_data_type_opt
+      )
+    else:
+      activation_data_type_val = activation_data_type_opt
 
     backend_val = model.parse_backend(
         backend,
@@ -296,7 +305,7 @@ def run_interactive(
           vision_backend=vision_backend_val,
           audio_backend=audio_backend_val,
           cache_dir=cache_dir_val,
-          activation_data_type=activation_data_type,
+          activation_data_type=activation_data_type_val,
           use_ringbuffers_local_attention=ringbuffers_local_attention,
       )
 
