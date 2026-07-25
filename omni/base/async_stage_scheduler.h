@@ -112,10 +112,13 @@ class AsyncStageScheduler {
       return absl::OkStatus();
     }
     return thread_pool_.Schedule([this, &stage]() {
-      if (!IsRunning()) {
+      if (!IsRunning() || !stage.NeedSchedule()) {
         return;
       }
-      CallCallbackOnError(stage.Schedule());
+      absl::Status status = stage.Schedule();
+      if (!status.ok() && !absl::IsNotFound(status)) {
+        CallCallbackOnError(status);
+      }
     });
   }
 
