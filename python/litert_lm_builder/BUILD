@@ -197,6 +197,8 @@ genrule(
         "//runtime/proto:llm_model_type_py_pb2",
         "//runtime/proto:sampler_params_py_pb2",
         "//runtime/proto:token_py_pb2",
+        "//runtime/proto:embedding_metadata_py_pb2",
+        "//runtime/proto:embedding_model_type_py_pb2",
     ],
     outs = [
         "shaded/litert_lm_builder/__init__.py",
@@ -211,6 +213,8 @@ genrule(
         "shaded/litert_lm_builder/runtime/proto/llm_model_type_pb2.py",
         "shaded/litert_lm_builder/runtime/proto/sampler_params_pb2.py",
         "shaded/litert_lm_builder/runtime/proto/token_pb2.py",
+        "shaded/litert_lm_builder/runtime/proto/embedding_metadata_pb2.py",
+        "shaded/litert_lm_builder/runtime/proto/embedding_model_type_pb2.py",
     ],
     cmd = """
         for src in $(SRCS); do
