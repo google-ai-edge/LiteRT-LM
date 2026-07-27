@@ -425,8 +425,10 @@ cc_library(
         "@litert//litert/cc:litert_environment",
         "@litert//litert/cc:litert_macros",
         "@litert//litert/cc:litert_model",
+        "@litert//litert/cc:litert_model_types",
         "@litert//litert/cc:litert_ranked_tensor_type",
         "//runtime/components:model_resources",
+        "//runtime/proto:executor_metadata_cc_proto",
         "//runtime/util:litert_status_util",
     ] + select({
         "@platforms//os:ios": [],
