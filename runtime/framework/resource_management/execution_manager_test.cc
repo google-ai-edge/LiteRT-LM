@@ -31,7 +31,13 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
+#include "litert/cc/litert_element_type.h"  // from @litert
+#include "litert/cc/litert_environment.h"  // from @litert
+#include "litert/cc/litert_environment_options.h"  // from @litert
+#include "litert/cc/litert_layout.h"  // from @litert
+#include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
 #include "support/tokenizer/tokenizer.h"  // from @litert
 #include "runtime/components/logits_processor/constrained_decoding/fake_constraint.h"
 #include "runtime/components/logits_processor/no_repeat_ngram_config.h"
@@ -80,7 +86,8 @@ class FakeAudioExecutor : public AudioExecutor {
  public:
   absl::StatusOr<::litert::lm::ExecutorAudioData> Encode(
       const litert::TensorBuffer& spectrogram_tensor) override {
-    return ::litert::lm::ExecutorAudioData();
+    LITERT_ASSIGN_OR_RETURN(auto dup, spectrogram_tensor.Duplicate());
+    return ::litert::lm::ExecutorAudioData(std::move(dup), std::nullopt, 1);
   }
 };
 
@@ -282,6 +289,97 @@ TEST_P(ExecutionManagerTest, AddPrefillTaskWithAudioModality) {
       std::make_shared<std::atomic<bool>>(false), nullptr));
 
   EXPECT_OK(execution_manager_->WaitUntilDone(task_id, absl::Seconds(3)));
+}
+
+TEST_P(ExecutionManagerTest, GetLastAudioEmbeddings) {
+  auto prefill_tokens = std::vector<std::vector<int>>{{1, 2, 3, -2, -4}};
+  auto decode_tokens = std::vector<std::vector<int>>{{4}, {5}, {6}};
+  std::vector<float> expected_audio_embedding(1280, 1.0f);
+  auto fake_llm_executor = std::make_unique<FakeLlmExecutor>(
+      kVocabSize, prefill_tokens, decode_tokens, 1, expected_audio_embedding);
+
+  ASSERT_OK_AND_ASSIGN(auto* settings,
+                       fake_llm_executor->GetMutableExecutorSettings());
+  EXPECT_OK(settings->SetBackend(Backend::GPU_ARTISAN));
+
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create("test_model_path_2"));
+  ASSERT_OK_AND_ASSIGN(auto audio_settings,
+                       AudioExecutorSettings::CreateDefault(
+                           model_assets, 128, Backend::GPU_ARTISAN));
+
+  CreateExecutionManager(
+      std::move(fake_llm_executor),
+      std::make_unique<AudioExecutorSettings>(std::move(audio_settings)),
+      std::make_unique<FakeAudioExecutor>());
+
+  ASSERT_OK_AND_ASSIGN(auto session_config, CreateDefaultSessionConfig());
+  session_config.SetAudioModalityEnabled(true);
+  session_config.SetCollectAudioEmbeddings(true);
+
+  ASSERT_OK_AND_ASSIGN(const SessionId session_id,
+                       execution_manager_->RegisterNewSession(session_config));
+
+  // Create a dummy preprocessed audio tensor buffer
+  // Shape: [1, 10, 128] (batch, time/frames, features)
+  RankedTensorType audio_tensor_type(
+      ::litert::GetElementType<float>(),
+      ::litert::Layout(::litert::Dimensions({1, 10, 128})));
+
+  // 1 * 10 * 128 * sizeof(float) = 5120 bytes
+  std::vector<::litert::EnvironmentOptions::Option> env_options_vec;
+  ::litert::EnvironmentOptions env_options(env_options_vec);
+  auto env_expected = ::litert::Environment::Create(env_options);
+  ASSERT_TRUE(env_expected.HasValue());
+  auto env = std::move(env_expected.Value());
+  auto audio_tensor_expected = ::litert::TensorBuffer::CreateManaged(
+      env, ::litert::TensorBufferType::kHostMemory, audio_tensor_type, 5120);
+  ASSERT_TRUE(audio_tensor_expected.HasValue());
+  auto audio_tensor = std::move(audio_tensor_expected.Value());
+
+  // Fill with dummy data
+  std::vector<float> dummy_data(1280, 1.0f);
+  ASSERT_TRUE(audio_tensor.Write<float>(dummy_data).HasValue());
+
+  std::vector<InputData> inputs;
+  ASSERT_OK_AND_ASSIGN(auto input_text,
+                       tokenizer_->TokenIdsToTensorBuffer({1, 2, 3}));
+  inputs.push_back(InputText(std::move(input_text)));
+  inputs.push_back(InputAudio(std::move(audio_tensor)));
+  inputs.push_back(InputAudioEnd());
+
+  ASSERT_OK_AND_ASSIGN(const TaskId task_id,
+                       execution_manager_->GetNewTaskId());
+  bool task_succeeded = false;
+  auto callback = [&task_succeeded](absl::StatusOr<Responses> responses) {
+    EXPECT_OK(responses.status());
+    if (responses.ok() && responses->GetTaskState() == TaskState::kDone) {
+      task_succeeded = true;
+    }
+  };
+  ASSERT_OK(execution_manager_->AddPrefillTask(
+      session_id, task_id, std::move(inputs), {},
+      std::make_shared<std::atomic<bool>>(false), std::move(callback)));
+
+  EXPECT_OK(execution_manager_->WaitUntilDone(task_id, absl::Seconds(3)));
+  EXPECT_TRUE(task_succeeded);
+
+  // Now verify we can get the audio embeddings back
+  ASSERT_OK_AND_ASSIGN(auto audio_embeddings,
+                       execution_manager_->GetLastAudioEmbeddings(session_id));
+
+  ASSERT_EQ(audio_embeddings.size(), 1);
+  EXPECT_EQ(audio_embeddings[0].GetValidTokens(), 1);
+
+  ASSERT_OK_AND_ASSIGN(const auto* embeddings_tensor,
+                       audio_embeddings[0].GetEmbeddingsPtr());
+  ASSERT_NE(embeddings_tensor, nullptr);
+
+  auto type_expected = embeddings_tensor->TensorType();
+  ASSERT_TRUE(type_expected.HasValue());
+  auto type = type_expected.Value();
+  EXPECT_THAT(type.Layout().Dimensions(), ElementsAre(1, 10, 128));
+  execution_manager_.reset();
 }
 
 TEST_P(ExecutionManagerTest, AddPrefillTaskInvalidAudioInput) {

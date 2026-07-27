@@ -206,6 +206,7 @@ cc_test(
         "//runtime/engine:io_types",
         "//runtime/engine:litert_lm_lib",  # buildcleaner: keep
         "//runtime/executor:executor_settings_base",
+        "//runtime/executor:llm_executor_io_types",
         "//runtime/proto:llm_metadata_cc_proto",
         "//runtime/proto:token_cc_proto",
         "//runtime/util:test_utils",

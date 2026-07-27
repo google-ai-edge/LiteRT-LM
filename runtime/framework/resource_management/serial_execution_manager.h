@@ -200,6 +200,9 @@ class SerialExecutionManager : public ExecutionManager {
       std::shared_ptr<std::atomic<bool>> absl_nonnull cancelled,
       absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback) override;
 
+  absl::StatusOr<std::vector<ExecutorAudioData>> GetLastAudioEmbeddings(
+      SessionId session_id) override;
+
   // Returns the current step of the session.
   // - session_info: The session info of the session.
   // Returns:

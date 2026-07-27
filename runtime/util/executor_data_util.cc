@@ -104,16 +104,79 @@ absl::StatusOr<T> CombineExecutorDataImpl(std::vector<T>& executor_data) {
            embeddings_size);
     combined_tensor_buffer_ptr += embeddings_size;
   }
+
+  // Combine per_layer_embeddings if present
+  auto first_per_layer = executor_data[0].GetPerLayerEmbeddingsPtr();
+  bool has_per_layer = first_per_layer.ok();
+  std::optional<TensorBuffer> combined_per_layer_tensor_buffer = std::nullopt;
+  if (has_per_layer) {
+    ABSL_ASSIGN_OR_RETURN(const auto* first_per_layer_tensor,
+                          executor_data[0].GetPerLayerEmbeddingsPtr());
+    LITERT_ASSIGN_OR_RETURN(auto first_per_layer_tensor_type,
+                            first_per_layer_tensor->TensorType());
+    ABSL_ASSIGN_OR_RETURN(auto first_per_layer_dims,
+                          TensorBufferDims(*first_per_layer_tensor));
+
+    int total_per_layer_packed_size = 0;
+    for (const auto& d : executor_data) {
+      ABSL_ASSIGN_OR_RETURN(const auto* per_layer_ptr,
+                            d.GetPerLayerEmbeddingsPtr());
+      LITERT_ASSIGN_OR_RETURN(size_t packed_size, per_layer_ptr->PackedSize());
+      total_per_layer_packed_size += packed_size;
+    }
+
+    Layout combined_per_layer_layout;
+    if constexpr (std::is_same_v<T, ExecutorAudioData>) {
+      combined_per_layer_layout = Layout(Dimensions(
+          {first_per_layer_dims[0], total_token_num, first_per_layer_dims[2]}));
+    } else {
+      if (first_per_layer_dims.size() == 3) {
+        combined_per_layer_layout =
+            Layout(Dimensions({first_per_layer_dims[0], 1, total_token_num,
+                               first_per_layer_dims[2]}));
+      } else if (first_per_layer_dims.size() == 4) {
+        combined_per_layer_layout =
+            Layout(Dimensions({first_per_layer_dims[0], first_per_layer_dims[1],
+                               total_token_num, first_per_layer_dims[3]}));
+      }
+    }
+    RankedTensorType combined_per_layer_tensor_type(
+        first_per_layer_tensor_type.ElementType(),
+        std::move(combined_per_layer_layout));
+
+    LITERT_ASSIGN_OR_RETURN(
+        auto combined_pl_tb,
+        TensorBuffer::CreateManagedHostMemory(combined_per_layer_tensor_type,
+                                              total_per_layer_packed_size));
+    LITERT_ASSIGN_OR_RETURN(
+        auto combined_pl_lock_and_addr,
+        ::litert::TensorBufferScopedLock::Create(
+            combined_pl_tb, TensorBuffer::LockMode::kWrite));
+    char* combined_pl_ptr =
+        static_cast<char*>(combined_pl_lock_and_addr.second);
+    for (int i = 0; i < num_executor_data; ++i) {
+      ABSL_ASSIGN_OR_RETURN(auto pl_ptr,
+                            executor_data[i].GetMutablePerLayerEmbeddingsPtr());
+      LITERT_ASSIGN_OR_RETURN(size_t pl_size, pl_ptr->PackedSize());
+      LITERT_ASSIGN_OR_RETURN(auto pl_lock_and_addr,
+                              ::litert::TensorBufferScopedLock::Create(
+                                  *pl_ptr, TensorBuffer::LockMode::kRead));
+      memcpy(combined_pl_ptr, pl_lock_and_addr.second, pl_size);
+      combined_pl_ptr += pl_size;
+    }
+    combined_per_layer_tensor_buffer = std::move(combined_pl_tb);
+  }
+
   if constexpr (std::is_same_v<T, ExecutorVisionData>) {
     return ExecutorVisionData(std::move(combined_tensor_buffer),
-                              /*per_layer_embeddings=*/std::nullopt);
+                              std::move(combined_per_layer_tensor_buffer));
   } else if constexpr (std::is_same_v<T, ExecutorAudioData>) {
     int num_audio_tokens = 0;
     for (const auto& executor_data : executor_data) {
       num_audio_tokens += executor_data.GetValidTokens();
     }
     return ExecutorAudioData(std::move(combined_tensor_buffer),
-                             /*per_layer_embeddings=*/std::nullopt,
+                             std::move(combined_per_layer_tensor_buffer),
                              num_audio_tokens);
   } else {
     return absl::InvalidArgumentError("Executor data type is not supported.");

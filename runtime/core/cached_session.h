@@ -27,6 +27,7 @@
 #include "runtime/engine/engine.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
+#include "runtime/executor/llm_executor_io_types.h"
 
 namespace litert::lm {
 
@@ -109,6 +110,11 @@ class CachedSession {
   // Returns the config of the contained Session.
   const SessionConfig& GetSessionConfig() const {
     return session_->GetSessionConfig();
+  }
+
+  // Returns the last generated audio embeddings from the contained Session.
+  absl::StatusOr<std::vector<ExecutorAudioData>> GetLastAudioEmbeddings() {
+    return session_->GetLastAudioEmbeddings();
   }
 
   // Sets whether to insert a BOS token ID at the beginning of the prefill

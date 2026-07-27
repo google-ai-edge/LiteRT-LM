@@ -679,6 +679,11 @@ AudioLiteRtCompiledModelExecutor::Create(
       audio_encoder->GetInputSpectrogramBuffer().TensorType());
   const int spectrogram_feature_dimensions =
       spectrogram_tensor_type.Layout().Dimensions().back();
+  LITERT_ASSIGN_OR_RETURN(
+      auto encoder_output_tensor_type,
+      audio_encoder->GetOutputFeaturesBuffer().TensorType());
+  const int encoder_output_dimensions =
+      encoder_output_tensor_type.Layout().Dimensions().back();
   int audio_embedding_dimensions;
   if (audio_adapter != nullptr) {
     LITERT_ASSIGN_OR_RETURN(auto adapter_output_tensor_type,
@@ -686,11 +691,7 @@ AudioLiteRtCompiledModelExecutor::Create(
     const auto dims = adapter_output_tensor_type.Layout().Dimensions();
     audio_embedding_dimensions = dims.back();
   } else {
-    LITERT_ASSIGN_OR_RETURN(
-        auto encoder_output_tensor_type,
-        audio_encoder->GetOutputFeaturesBuffer().TensorType());
-    const auto dims = encoder_output_tensor_type.Layout().Dimensions();
-    audio_embedding_dimensions = dims.back();
+    audio_embedding_dimensions = encoder_output_dimensions;
   }
   const int encoder_shrinking_factor = executor_properties.audio_shrink_factor;
   if (!executor_properties.is_streaming_model) {
@@ -755,13 +756,15 @@ AudioLiteRtCompiledModelExecutor::Create(
       std::move(executor_settings), std::move(executor_properties), env,
       std::move(resources), std::move(audio_encoder), std::move(audio_adapter),
       sequence_length, spectrogram_feature_dimensions,
-      audio_embedding_dimensions, encoder_shrinking_factor));
+      audio_embedding_dimensions, encoder_output_dimensions,
+      encoder_shrinking_factor));
 }
 
 absl::StatusOr<int> AudioLiteRtCompiledModelExecutor::EncodeInternal(
     absl::Span<const float> spectrogram_tensor,
     absl::Span<const uint8_t> spectrogram_mask,
-    absl::Span<float> audio_embeddings) {
+    absl::Span<float> audio_embeddings,
+    absl::Span<float> intermediate_embeddings) {
   ABSL_RETURN_IF_ERROR(audio_encoder_->ClearInputBuffers());
   auto& input_buffer = audio_encoder_->GetMutableInputSpectrogramBuffer();
   LITERT_ASSIGN_OR_RETURN(auto tensor_type, input_buffer.TensorType());
@@ -838,6 +841,25 @@ absl::StatusOr<int> AudioLiteRtCompiledModelExecutor::EncodeInternal(
         adapter_data[i] = static_cast<float>(encoder_data[i]);
       }
     }
+    if (!intermediate_embeddings.empty()) {
+      LITERT_ASSIGN_OR_RETURN(auto encoder_type, encoder_output.TensorType());
+      if (encoder_type.ElementType() == litert::ElementType::Float16) {
+        LITERT_ASSIGN_OR_RETURN(
+            auto encoder_lock_and_addr,
+            TensorBufferScopedLock::Create<const tflite::half>(
+                encoder_output, TensorBuffer::LockMode::kRead));
+        const tflite::half* encoder_data = encoder_lock_and_addr.second;
+        const size_t total_elements =
+            chunk_valid_tokens * encoder_output_dimensions_;
+        for (size_t i = 0; i < total_elements; ++i) {
+          intermediate_embeddings[i] = static_cast<float>(encoder_data[i]);
+        }
+      } else {
+        LITERT_RETURN_IF_ERROR(encoder_output.Read<float>(
+            absl::MakeSpan(intermediate_embeddings.data(),
+                           chunk_valid_tokens * encoder_output_dimensions_)));
+      }
+    }
 
     LITERT_RETURN_IF_ERROR(audio_adapter_->GetMutableCompiledModel().Run(
         audio_adapter_->GetMutableInputBuffers(),
@@ -864,6 +886,12 @@ absl::StatusOr<int> AudioLiteRtCompiledModelExecutor::EncodeInternal(
       LITERT_RETURN_IF_ERROR(encoder_output.Read<float>(
           absl::MakeSpan(audio_embeddings.data(),
                          chunk_valid_tokens * audio_embedding_dimensions_)));
+    }
+    if (!intermediate_embeddings.empty()) {
+      std::copy(audio_embeddings.begin(),
+                audio_embeddings.begin() +
+                    chunk_valid_tokens * encoder_output_dimensions_,
+                intermediate_embeddings.begin());
     }
   }
 
@@ -1039,6 +1067,8 @@ AudioLiteRtCompiledModelExecutor::EncodeSpecsAndMasks(
   int chunk_max_tokens = CeilIntDiv(window_size, encoder_shrinking_factor_);
   int max_tokens = N * chunk_max_tokens;
   std::vector<float> audio_embeddings(max_tokens * audio_embedding_dimensions_);
+  std::vector<float> intermediate_embeddings(max_tokens *
+                                             encoder_output_dimensions_);
 
   int total_valid_tokens = 0;
   int pos = 0;
@@ -1060,11 +1090,15 @@ AudioLiteRtCompiledModelExecutor::EncodeSpecsAndMasks(
         absl::MakeSpan(audio_embeddings)
             .subspan(total_valid_tokens * audio_embedding_dimensions_,
                      current_chunk_max_tokens * audio_embedding_dimensions_);
+    auto intermediate_embeddings_slice =
+        absl::MakeSpan(intermediate_embeddings)
+            .subspan(total_valid_tokens * encoder_output_dimensions_,
+                     current_chunk_max_tokens * encoder_output_dimensions_);
 
     ABSL_ASSIGN_OR_RETURN(
         int chunk_valid_tokens,
         EncodeInternal(spectrogram_slice, spectrogram_mask_slice,
-                       audio_embeddings_slice));
+                       audio_embeddings_slice, intermediate_embeddings_slice));
     total_valid_tokens += chunk_valid_tokens;
     pos += stride;
   }
@@ -1096,8 +1130,24 @@ AudioLiteRtCompiledModelExecutor::EncodeSpecsAndMasks(
   LITERT_RETURN_IF_ERROR(audio_embeddings_tensor.Write<float>(
       absl::MakeSpan(audio_embeddings)
           .subspan(0, total_valid_tokens * audio_embedding_dimensions_)));
+  // Create the intermediate audio embeddings tensor.
+  RankedTensorType intermediate_embeddings_tensor_type(
+      GetElementType<float>(),
+      Layout(Dimensions({1, buffer_tokens, encoder_output_dimensions_})));
+  LITERT_ASSIGN_OR_RETURN(
+      auto intermediate_embeddings_tensor,
+      TensorBuffer::CreateManaged(
+          env_, TensorBufferType::kHostMemory,
+          intermediate_embeddings_tensor_type,
+          buffer_tokens * encoder_output_dimensions_ * sizeof(float)));
+  LITERT_RETURN_IF_ERROR(InitializeBuffer(intermediate_embeddings_tensor));
+  LITERT_RETURN_IF_ERROR(intermediate_embeddings_tensor.Write<float>(
+      absl::MakeSpan(intermediate_embeddings)
+          .subspan(0, total_valid_tokens * encoder_output_dimensions_)));
+
   ExecutorAudioData audio_data;
   audio_data.SetEmbeddings(std::move(audio_embeddings_tensor));
+  audio_data.SetPerLayerEmbeddings(std::move(intermediate_embeddings_tensor));
   audio_data.SetValidTokens(total_valid_tokens);
   return audio_data;
 }

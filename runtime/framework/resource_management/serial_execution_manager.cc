@@ -266,6 +266,18 @@ SerialExecutionManager::GetSessionInfo(SessionId session_id) {
   return session_lookup_.at(session_id);
 }
 
+absl::StatusOr<std::vector<ExecutorAudioData>>
+SerialExecutionManager::GetLastAudioEmbeddings(SessionId session_id) {
+  if (!session_lookup_.contains(session_id)) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Session ", session_id, " not found in session list."));
+  }
+  auto& src = session_lookup_.at(session_id)->last_audio_data;
+  std::vector<ExecutorAudioData> dest = std::move(src);
+  src.clear();
+  return dest;
+}
+
 absl::StatusOr<BenchmarkInfo*> SerialExecutionManager::GetMutableBenchmarkInfo(
     SessionId session_id) {
   if (!session_lookup_.contains(session_id)) {
@@ -767,6 +779,24 @@ absl::Status SerialExecutionManager::AddPrefillTask(
       FinishTaskAndLogErrors(task_id, executor_inputs.status(),
                              std::move(callback));
       return;
+    }
+
+    // Store audio embeddings if present in inputs
+    if (executor_inputs.ok() &&
+        session_info->session_config.CollectAudioEmbeddings()) {
+      auto audio_data_status = executor_inputs->GetAudioDataPtr();
+      if (audio_data_status.ok() && *audio_data_status != nullptr) {
+        const auto* audio_data = *audio_data_status;
+        auto dup_status = audio_data->Duplicate();
+        if (dup_status.ok()) {
+          session_info->last_audio_data.clear();
+          session_info->last_audio_data.push_back(
+              std::move(dup_status.value()));
+        } else {
+          ABSL_LOG(ERROR) << "Failed to duplicate audio data: "
+                          << dup_status.status();
+        }
+      }
     }
 
     RETURN_IF_CANCELLED(cancelled, task_id, callback);

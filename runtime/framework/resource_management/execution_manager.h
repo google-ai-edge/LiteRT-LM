@@ -37,6 +37,7 @@
 #include "runtime/components/stop_token_detector.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
+#include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/framework/resource_management/context_handler/context_handler.h"
 
 namespace litert::lm {
@@ -60,6 +61,7 @@ struct SessionInfo {
   std::unique_ptr<StopTokenDetector> stop_token_detector;
   std::optional<BenchmarkInfo> benchmark_info = std::nullopt;
   absl::flat_hash_set<TaskId> active_tasks = {};
+  std::vector<ExecutorAudioData> last_audio_data = {};
 };
 
 // All the information about a task.
@@ -236,6 +238,10 @@ class ExecutionManager {
       bool store_token_lengths,
       std::shared_ptr<std::atomic<bool>> absl_nonnull cancelled,
       absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback) = 0;
+
+  // Returns the last generated audio embeddings for the session.
+  virtual absl::StatusOr<std::vector<ExecutorAudioData>> GetLastAudioEmbeddings(
+      SessionId session_id) = 0;
 
   // Returns the current step of the session.
   // - session_info: The session info of the session.
