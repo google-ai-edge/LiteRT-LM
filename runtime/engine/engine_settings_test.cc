@@ -34,6 +34,7 @@
 #include "support/tokenizer/tokenizer.h"  // from @litert
 #include "runtime/components/logits_processor/suppress_tokens_config.h"
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/proto/engine.pb.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/proto/llm_model_type.pb.h"
@@ -995,6 +996,19 @@ TEST(SessionConfigTest, SetAndGetAudioScopedLoraFile) {
   EXPECT_EQ(session_config.GetAudioScopedLoraFile(), file_ptr);
   session_config.SetAudioScopedLoraFile(nullptr);
   EXPECT_EQ(session_config.GetAudioScopedLoraFile(), nullptr);
+}
+
+TEST(SessionConfigTest, SetAndGetAudioEmbeddingsCallback) {
+  SessionConfig session_config = SessionConfig::CreateDefault();
+  EXPECT_EQ(session_config.GetAudioEmbeddingsCallback(), nullptr);
+  bool called = false;
+  session_config.SetAudioEmbeddingsCallback(
+      [&called](const ExecutorAudioData&) { called = true; });
+  EXPECT_NE(session_config.GetAudioEmbeddingsCallback(), nullptr);
+
+  ExecutorAudioData audio_data;
+  (*session_config.GetAudioEmbeddingsCallback())(audio_data);
+  EXPECT_TRUE(called);
 }
 
 TEST(SessionConfigTest, MaybeUpdateAndValidate) {

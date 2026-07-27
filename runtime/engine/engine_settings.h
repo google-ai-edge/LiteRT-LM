@@ -15,14 +15,17 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_ENGINE_ENGINE_SETTINGS_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_ENGINE_ENGINE_SETTINGS_H_
 
+#include <functional>
 #include <limits>
 #include <memory>
 #include <optional>
 #include <ostream>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "absl/base/nullability.h"  // from @com_google_absl
+#include "absl/functional/any_invocable.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
@@ -31,6 +34,7 @@
 #include "runtime/components/logits_processor/suppress_tokens_config.h"
 #include "runtime/executor/audio_executor_settings.h"
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/vision_executor_settings.h"
 #include "runtime/proto/engine.pb.h"
@@ -277,6 +281,16 @@ class SessionConfig {
     max_output_tokens_ = max_output_tokens;
   }
 
+  using AudioEmbeddingsCallback =
+      absl::AnyInvocable<void(const ExecutorAudioData&) const>;
+  const AudioEmbeddingsCallback* GetAudioEmbeddingsCallback() const {
+    return audio_embeddings_callback_.get();
+  }
+  void SetAudioEmbeddingsCallback(AudioEmbeddingsCallback callback) {
+    audio_embeddings_callback_ =
+        std::make_shared<AudioEmbeddingsCallback>(std::move(callback));
+  }
+
  private:
   // Private constructor for the SessionConfig. The user should use the
   // CreateDefault() method to create a SessionConfig.
@@ -339,6 +353,13 @@ class SessionConfig {
   // tokens (input + output) stored in the KV cache over the lifetime of a
   // session.
   int max_output_tokens_ = std::numeric_limits<int>::max();
+
+  // Optional callback to receive audio embeddings. If not set, it will be
+  // nullptr.
+  // We use std::shared_ptr to wrap the move-only absl::AnyInvocable callback.
+  // This allows SessionConfig to remain copy-constructible, which is required
+  // because SessionConfig is copied in various engine and library interfaces.
+  std::shared_ptr<AudioEmbeddingsCallback> audio_embeddings_callback_;
 };
 
 std::ostream& operator<<(std::ostream& os, const SessionConfig& config);

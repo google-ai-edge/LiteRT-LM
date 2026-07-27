@@ -793,6 +793,10 @@ std::ostream& operator<<(std::ostream& os, const SessionConfig& config) {
   os << "  ScopedAudioLoraFile: "
      << (config.GetAudioScopedLoraFile() != nullptr ? "Present" : "Not present")
      << std::endl;
+  os << "  AudioEmbeddingsCallback: "
+     << (config.GetAudioEmbeddingsCallback() != nullptr ? "Present"
+                                                        : "Not present")
+     << std::endl;
   return os;
 }
 

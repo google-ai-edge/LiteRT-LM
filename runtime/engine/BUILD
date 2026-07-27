@@ -302,6 +302,7 @@ cc_library(
     deps = [
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/functional:any_invocable",
         "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
@@ -313,6 +314,7 @@ cc_library(
         "//runtime/components/logits_processor:suppress_tokens_config",
         "//runtime/executor:audio_executor_settings",
         "//runtime/executor:executor_settings_base",
+        "//runtime/executor:llm_executor_io_types",
         "//runtime/executor:llm_executor_settings",
         "//runtime/executor:vision_executor_settings",
         "//runtime/proto:engine_cc_proto",
@@ -344,6 +346,7 @@ cc_test(
         "@litert//support/tokenizer",
         "//runtime/components/logits_processor:suppress_tokens_config",
         "//runtime/executor:executor_settings_base",
+        "//runtime/executor:llm_executor_io_types",
         "//runtime/proto:engine_cc_proto",
         "//runtime/proto:llm_metadata_cc_proto",
         "//runtime/proto:llm_model_type_cc_proto",
