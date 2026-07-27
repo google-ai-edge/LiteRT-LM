@@ -1203,6 +1203,47 @@ TEST_F(ExecutorUtilsTest, HWMaskUpdateSWADecode) {
   EXPECT_EQ(global_ptr[4096], valid_val);
 }
 
+TEST_F(ExecutorUtilsTest, HWMaskUpdateCapacity4096UsesCapacityAsWindow) {
+  int seq_q = 1;
+  int seq_k_local = 4097;   // capacity 4096 + 1 batch
+  int seq_k_global = 4097;  // capacity 4096 + 1 batch
+  int time_step = 1000;
+  float valid_val = 0.0f;
+  float masked_val = -1e9f;
+
+  absl::flat_hash_map<absl::string_view, TensorBuffer> in_buffers;
+  std::vector<int32_t> time_step_data = {time_step};
+  in_buffers.emplace("time_step",
+                     CreateTensorBuffer(time_step_data, ElementType::Int32));
+
+  absl::flat_hash_map<absl::string_view, TensorBuffer> out_buffers;
+  std::vector<float> mask_local_data(seq_q * seq_k_local, 0.0f);
+  std::vector<float> mask_global_data(seq_q * seq_k_global, 0.0f);
+
+  out_buffers.emplace("mask_local", CreateTensorBufferWithDims(
+                                        mask_local_data, ElementType::Float32,
+                                        {1, seq_q, seq_k_local}));
+  out_buffers.emplace("mask_global", CreateTensorBufferWithDims(
+                                         mask_global_data, ElementType::Float32,
+                                         {1, seq_q, seq_k_global}));
+
+  ASSERT_TRUE(HWMaskUpdate(in_buffers, out_buffers).ok());
+
+  auto local_lock_expected = TensorBufferScopedLock::Create<float>(
+      out_buffers.at("mask_local"), TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(local_lock_expected);
+  float* local_ptr = local_lock_expected->second;
+
+  // Check local mask (SWA capacity 4096, time_step 1000)
+  // Uses capacity 4096 as window size.
+  // Valid range in history: [0, 999].
+  EXPECT_EQ(local_ptr[0], valid_val);
+  EXPECT_EQ(local_ptr[488], valid_val);
+  EXPECT_EQ(local_ptr[489], valid_val);
+  EXPECT_EQ(local_ptr[999], valid_val);
+  EXPECT_EQ(local_ptr[1000], masked_val);
+}
+
 TEST_F(ExecutorUtilsTest, HWMaskUpdateSWAPrefill) {
   int seq_q = 128;
   int seq_k_local = 640;    // capacity 512 + 128 batch

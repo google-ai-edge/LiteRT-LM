@@ -1092,9 +1092,7 @@ absl::Status HWMaskUpdate(
         }
       }
     }
-    if (local_capacity != 4096) {
-      local_window_size = local_capacity;
-    }
+    local_window_size = local_capacity;
   }
 
   auto fill_masks = [&](auto dummy) -> absl::Status {
