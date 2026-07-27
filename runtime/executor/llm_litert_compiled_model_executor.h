@@ -231,9 +231,9 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
 
   // Swaps the input tensors before Sampling when the sampler handles input.
   // Current input_pos and mask tensors in decode_input_buffers_ are swapped
-  // with decode_prev_input_pos_ and decode_prev_mask_, i.e. current ones become
-  // previous ones, and new current ones will be calculated from the previous
-  // ones by the sampler.
+  // with decode_prev_input_pos_, decode_prev_mask_, and decode_prev_param_,
+  // i.e. current ones become previous ones, and new current ones will be
+  // calculated from the previous ones by the sampler.
   absl::Status SwapSamplerInputTensors();
   // Sets or resets the input tensors and inference function for the sampler.
   absl::Status SetSamplerInputHandling(bool reset);
@@ -351,6 +351,7 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
   // Extra input tensors to swap for decode when sampler handles input tensors.
   TensorBuffer decode_prev_input_pos_;
   TensorBuffer decode_prev_mask_;
+  TensorBuffer decode_prev_param_;
 
   // The path to the weight cache directory. Executor will take the ownership of
   // this path to maintain the path lifecycle.
