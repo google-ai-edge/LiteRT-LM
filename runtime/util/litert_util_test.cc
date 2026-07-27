@@ -124,17 +124,11 @@ TEST(LiteRtUtilTest, CreatetEnvironment_CPUGPUFirst_ExcludesNPUOptions) {
       << "kDispatchLibraryDir was initialized on the Environment singleton "
          "when CPU was used first.";
 
-#if !defined(LITERT_DISABLE_NPU)
   auto compiler_plugin_lib_status =
       options.GetOption(EnvironmentOptions::Tag::kCompilerPluginLibraryDir);
-  ASSERT_TRUE(compiler_plugin_lib_status.HasValue())
-      << "kCompilerPluginLibraryDir should be initialized even when CPU is "
-         "used.";
-
-  auto compiler_plugin_lib_dir =
-      std::get<const char*>(*compiler_plugin_lib_status);
-  EXPECT_EQ(std::string(compiler_plugin_lib_dir), expected_path);
-#endif
+  ASSERT_FALSE(compiler_plugin_lib_status.HasValue())
+      << "kCompilerPluginLibraryDir was initialized on the Environment "
+         "singleton when CPU was used first.";
 
   // Initialize NPU second in the same process session.
   auto npu_settings =
@@ -152,14 +146,23 @@ TEST(LiteRtUtilTest, CreatetEnvironment_CPUGPUFirst_ExcludesNPUOptions) {
 
   auto npu_dispatch_lib_status =
       npu_options.GetOption(EnvironmentOptions::Tag::kDispatchLibraryDir);
+  auto npu_compiler_plugin_lib_status =
+      npu_options.GetOption(EnvironmentOptions::Tag::kCompilerPluginLibraryDir);
 #if !defined(LITERT_DISABLE_NPU)
   ASSERT_TRUE(npu_dispatch_lib_status.HasValue())
       << "kDispatchLibraryDir was not initialized when NPU was used second.";
+  ASSERT_TRUE(npu_compiler_plugin_lib_status.HasValue())
+      << "kCompilerPluginLibraryDir was not initialized when NPU was used "
+         "second.";
 
   auto npu_dispatch_lib_dir = std::get<const char*>(*npu_dispatch_lib_status);
   EXPECT_EQ(std::string(npu_dispatch_lib_dir), expected_path);
+  auto npu_compiler_plugin_lib_dir =
+      std::get<const char*>(*npu_compiler_plugin_lib_status);
+  EXPECT_EQ(std::string(npu_compiler_plugin_lib_dir), expected_path);
 #else
   ASSERT_FALSE(npu_dispatch_lib_status.HasValue());
+  ASSERT_FALSE(npu_compiler_plugin_lib_status.HasValue());
 #endif
 }
 

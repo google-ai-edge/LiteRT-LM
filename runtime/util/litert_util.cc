@@ -53,6 +53,7 @@ absl::StatusOr<OwnedEnvironment> CreateEnvironment(
     }
   }
 
+#if !defined(LITERT_DISABLE_NPU)
   bool uses_npu = (backend == Backend::NPU ||
                    (engine_settings.GetVisionExecutorSettings().has_value() &&
                     engine_settings.GetVisionExecutorSettings()->GetBackend() ==
@@ -60,33 +61,31 @@ absl::StatusOr<OwnedEnvironment> CreateEnvironment(
                    (engine_settings.GetAudioExecutorSettings().has_value() &&
                     engine_settings.GetAudioExecutorSettings()->GetBackend() ==
                         Backend::NPU));
+  if (uses_npu) {
+    std::string library_dir;
+    bool from_settings = false;
+    if (!main_executor_settings.GetLitertDispatchLibDir().empty()) {
+      library_dir = main_executor_settings.GetLitertDispatchLibDir();
+      from_settings = true;
+    } else {
+      std::string model_path(
+          main_executor_settings.GetModelAssets().GetPath().value_or(""));
+      std::filesystem::path path(model_path);
+      library_dir = path.parent_path().string();
+    }
 
-#if !defined(LITERT_DISABLE_NPU)
-  std::string library_dir;
-  bool from_settings = false;
-  if (!main_executor_settings.GetLitertDispatchLibDir().empty()) {
-    library_dir = main_executor_settings.GetLitertDispatchLibDir();
-    from_settings = true;
-  } else {
-    std::string model_path(
-        main_executor_settings.GetModelAssets().GetPath().value_or(""));
-    std::filesystem::path path(model_path);
-    library_dir = path.parent_path().string();
-  }
-
-  bool should_set_path = false;
-  if (from_settings) {
-    should_set_path = true;
-  } else {
+    bool should_set_path = false;
+    if (from_settings) {
+      should_set_path = true;
+    } else {
 #ifdef __EMSCRIPTEN__
-    should_set_path = !library_dir.empty() && library_dir != "/";
+      should_set_path = !library_dir.empty() && library_dir != "/";
 #else
-    should_set_path = !library_dir.empty();
+      should_set_path = !library_dir.empty();
 #endif
-  }
+    }
 
-  if (should_set_path) {
-    if (uses_npu) {
+    if (should_set_path) {
       env_options.push_back(::litert::EnvironmentOptions::Option{
           ::litert::EnvironmentOptions::Tag::kDispatchLibraryDir,
           absl::string_view(library_dir)});
@@ -97,20 +96,20 @@ absl::StatusOr<OwnedEnvironment> CreateEnvironment(
       } else {
         ABSL_VLOG(1) << "Setting dispatch library path: " << library_dir;
       }
-    }
 
-    env_options.push_back(::litert::EnvironmentOptions::Option{
-        ::litert::EnvironmentOptions::Tag::kCompilerPluginLibraryDir,
-        absl::string_view(library_dir)});
-    if (from_settings) {
-      ABSL_VLOG(1) << "Setting compiler plugin library path from "
-                      "main_executor_settings: "
-                   << library_dir;
+      env_options.push_back(::litert::EnvironmentOptions::Option{
+          ::litert::EnvironmentOptions::Tag::kCompilerPluginLibraryDir,
+          absl::string_view(library_dir)});
+      if (from_settings) {
+        ABSL_VLOG(1) << "Setting compiler plugin library path from "
+                        "main_executor_settings: "
+                     << library_dir;
+      } else {
+        ABSL_VLOG(1) << "Setting compiler plugin library path: " << library_dir;
+      }
     } else {
-      ABSL_VLOG(1) << "Setting compiler plugin library path: " << library_dir;
+      ABSL_VLOG(1) << "No valid library path provided.";
     }
-  } else {
-    ABSL_VLOG(1) << "No valid library path provided.";
   }
 #endif
 
