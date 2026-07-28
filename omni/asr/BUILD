@@ -24,6 +24,46 @@ cc_library(
 )
 
 cc_library(
+    name = "file_audio_source",
+    srcs = ["file_audio_source.cc"],
+    hdrs = ["file_audio_source.h"],
+    deps = [
+        ":audio_source",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/cleanup",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/synchronization",
+        "@com_google_absl//absl/time",
+    ] + select({
+        "@platforms//os:ios": ["@miniaudio//:miniaudio_objc"],
+        "@platforms//os:macos": ["@miniaudio//:miniaudio_objc"],
+        "//conditions:default": ["@miniaudio"],
+    }),
+)
+
+cc_test(
+    name = "file_audio_source_test",
+    srcs = ["file_audio_source_test.cc"],
+    deps = [
+        ":file_audio_source",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/time",
+        "@litert//support/util:test_utils",
+    ] + select({
+        "@platforms//os:ios": ["@miniaudio//:miniaudio_objc"],
+        "@platforms//os:macos": ["@miniaudio//:miniaudio_objc"],
+        "//conditions:default": ["@miniaudio"],
+    }),
+)
+
+cc_library(
     name = "audio_preprocessor",
     hdrs = ["audio_preprocessor.h"],
     deps = [
@@ -156,6 +196,7 @@ cc_test(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/time",
+        "@litert//support/util:test_utils",
         "//omni/base:stage",
         "//runtime/framework:threadpool",
     ],
