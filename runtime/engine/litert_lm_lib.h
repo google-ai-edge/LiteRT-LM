@@ -136,10 +136,10 @@ struct LiteRtLmSettings {
   std::string constraint_regex = "";
   bool use_submodel = false;
   bool enable_speculative_decoding = false;
-  bool enable_neon_for_npu_greedy_sampling = true;
-  bool use_hw_masking_for_npu = true;
-  bool use_hw_cache_update_for_npu = true;
-  bool use_hw_ple_for_npu = true;
+  std::optional<bool> enable_neon_for_npu_greedy_sampling = std::nullopt;
+  std::optional<bool> use_hw_masking_for_npu = std::nullopt;
+  std::optional<bool> use_hw_cache_update_for_npu = std::nullopt;
+  std::optional<bool> use_hw_ple_for_npu = std::nullopt;
   bool enable_npu_debug_logging = false;
   bool disable_input_prompt_as_hint = false;
 };

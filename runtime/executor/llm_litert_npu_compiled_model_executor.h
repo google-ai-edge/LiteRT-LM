@@ -403,17 +403,17 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
     auto npu_config_status = executor_settings_.GetBackendConfig<NpuConfig>();
     if (npu_config_status.ok()) {
       npu_config_ = *npu_config_status;
-      if (npu_config_.use_hw_masking_for_npu) {
+      if (npu_config_.use_hw_masking_for_npu.value_or(false)) {
         prefill_mask_update_method_ = MaskUpdateMethod::kWH;
         decode_mask_update_method_ = MaskUpdateMethod::kWH;
         mtp_mask_update_method_ = MaskUpdateMethod::kWH;
         verify_mask_update_method_ = MaskUpdateMethod::kWH;
       }
-      if (npu_config_.use_hw_cache_update_for_npu) {
+      if (npu_config_.use_hw_cache_update_for_npu.value_or(false)) {
         prefill_kv_cache_update_method_ = KVCacheUpdateMethod::kWH;
         decode_kv_cache_update_method_ = KVCacheUpdateMethod::kWH;
       }
-      if (npu_config_.use_hw_ple_for_npu) {
+      if (npu_config_.use_hw_ple_for_npu.value_or(false)) {
         use_hw_ple_for_npu_ = true;
       }
     }

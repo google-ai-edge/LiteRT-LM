@@ -92,6 +92,21 @@ message LlmExecutorMetadata {
   repeated StateBuffer state_buffers = 2;
 }
 
+message LlmNpuExecutorMetadata {
+  // Whether to use NEON optimizations for greedy sampling on NPU.
+  optional bool enable_neon_for_npu_greedy_sampling = 1;
+
+  // Whether to use manual mask update logic on NPU.
+  optional bool use_hw_masking_for_npu = 2;
+
+  // Whether to use manual KV-cache update logic on NPU.
+  optional bool use_hw_cache_update_for_npu = 3;
+
+  // Whether to use manual per-layer embedding lookup on NPU.
+  optional bool use_hw_ple_for_npu = 4;
+}
+
 message ExecutorMetadata {
   LlmExecutorMetadata llm_executor_metadata = 1;
+  LlmNpuExecutorMetadata llm_npu_executor_metadata = 2;
 }
