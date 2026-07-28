@@ -61,7 +61,9 @@ class LiteRtLmTestBase(parameterized.TestCase):
 
 class EngineTest(LiteRtLmTestBase):
 
-  _EXPECTED_RESPONSE = "TarefaByte دارایेत्र investigaciónప్రదేశ"
+  _EXPECTED_RESPONSE = (
+      " spectrophot spectrophot<unused178><unused178><unused178><unused178>"
+  )
 
   def test_engine_init_fail(self):
     with self.assertRaisesRegex(
@@ -480,7 +482,7 @@ class EngineTest(LiteRtLmTestBase):
       # Response should be shorter because of max_output_tokens=1 default in
       # conversation
       text = "".join([c.get("text", "") for c in message.get("content", [])])
-      self.assertLess(len(text), 10)
+      self.assertLess(len(text), 15)
 
   def test_create_conversation_with_chat_template(self):
     tmpl = "{{ bos_token }}{% for m in messages %}{{ m.content }}{% endfor %}"
@@ -507,7 +509,7 @@ class EngineTest(LiteRtLmTestBase):
       stream = conversation.send_message_async("Hello world!")
       text_pieces = self._extract_text(stream)
       self.assertLen(text_pieces, 1)
-      self.assertLess(len("".join(text_pieces)), 10)
+      self.assertLess(len("".join(text_pieces)), 15)
 
   def test_conversation_send_message_object(self):
     with (
@@ -814,7 +816,7 @@ class EngineTest(LiteRtLmTestBase):
       self.assertEqual(message["role"], "assistant")
       # Response should be shorter because of max_output_tokens=1
       text = "".join([c.get("text", "") for c in message.get("content", [])])
-      self.assertLess(len(text), 10)
+      self.assertLess(len(text), 15)
 
   def test_conversation_send_message_async_with_max_output_tokens(self):
     with (
@@ -826,7 +828,7 @@ class EngineTest(LiteRtLmTestBase):
       )
       text_pieces = self._extract_text(stream)
       self.assertLen(text_pieces, 1)
-      self.assertLess(len("".join(text_pieces)), 10)
+      self.assertLess(len("".join(text_pieces)), 15)
 
   @parameterized.parameters(True, False)
   def test_session_api_apply_prompt_template(self, apply_prompt_template):

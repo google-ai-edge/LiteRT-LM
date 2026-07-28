@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-name: "ML-CI"
+name: "ML-CI-Linux"
 on:
   push:
     tags:
@@ -38,7 +38,7 @@ concurrency:
 
 jobs:
   presubmit:
-    name: "Presubmit"
+    name: "Presubmit-Linux"
     runs-on: "linux-x86-c4-16"
     container:
       image: ubuntu:24.04
@@ -258,7 +258,6 @@ jobs:
       - name: Run bazel build on Linux with dynamic linking.
         run: |
           bazelisk build --disk_cache=~/.cache/bazel --repository_cache=~/.cache/bazel/repo --config=linux_x86_64 \
-            --define=litert_link_capi_so=true \
             --define=litert_runtime_link_mode=dynamic \
             --define=resolve_symbols_in_exec=false \
             //runtime/engine:litert_lm_main

@@ -128,7 +128,6 @@ jobs:
             --repository_cache=~/.cache/bazel/repo \
             --config=macos_arm64 \
             -c opt \
-            --define=litert_link_capi_so=true \
             --define=litert_runtime_link_mode=dynamic \
             --define=resolve_symbols_in_exec=false \
             //runtime/engine:litert_lm_main
@@ -139,7 +138,6 @@ jobs:
             --repository_cache=~/.cache/bazel/repo \
             --config=macos_arm64 \
             -c opt \
-            --define=litert_link_capi_so=true \
             --define=litert_runtime_link_mode=dynamic \
             --define=resolve_symbols_in_exec=false \
             --test_output=errors \

@@ -160,7 +160,6 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
         gpu_compilation_options.AddBufferStorageTensorPattern("kv_cache_c_");
         if (single_kv_cache_buffer) {
           gpu_compilation_options.AddBufferStorageTensorPattern("kv_cache_");
-          gpu_compilation_options.AddExternalTensorPattern("param_tensor");
           gpu_compilation_options.AddBufferStorageTensorPattern("param_tensor");
         }
         ABSL_ASSIGN_OR_RETURN(auto sampler_backend,

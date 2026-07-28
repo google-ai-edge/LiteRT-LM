@@ -21,139 +21,188 @@
 #include <vector>
 
 #include <gtest/gtest.h>
-#include "absl/functional/any_invocable.h"  // from @com_google_absl
+#include "absl/base/nullability.h"  // from @com_google_absl
+#include "absl/cleanup/cleanup.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_matchers.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "absl/types/span.h"  // from @com_google_absl
+#include "absl/synchronization/mutex.h"  // from @com_google_absl
+#include "absl/synchronization/notification.h"  // from @com_google_absl
+#include "absl/time/time.h"  // from @com_google_absl
 #include "omni/asr/audio_preprocessor.h"
 #include "omni/asr/audio_source.h"
 #include "omni/asr/detokenizer.h"
 #include "omni/asr/levenshtein_text_merger.h"
 #include "omni/asr/speech_decoder.h"
 #include "omni/asr/text_merger.h"
+#include "omni/base/stage.h"
+#include "runtime/framework/threadpool.h"
 
 namespace litert_lm::omni::asr {
 namespace {
 
-// Dummy AudioSource returning pre-configured PCM audio chunks.
+// Dummy AudioSource returning pre-configured PCM audio chunks via
+// Schedule/GetOutput.
 class DummyAudioSource : public AudioSource {
  public:
   explicit DummyAudioSource(std::vector<std::vector<float>> chunks)
       : chunks_(std::move(chunks)) {}
 
-  void Reset() override {}
-
-  absl::StatusOr<std::vector<float>> GetNextChunk() override {
-    if (chunk_index_ >= chunks_.size()) {
-      return absl::OutOfRangeError("End of audio stream reached.");
-    }
-    return chunks_[chunk_index_++];
-  }
-
-  void GetNextChunkAsync(
-      absl::AnyInvocable<void(absl::StatusOr<std::vector<float>>) &&> callback)
-      override {
-    auto res = GetNextChunk();
-    std::move(callback)(res);
+  void Reset() override {
+    chunk_index_ = 0;
+    absl::MutexLock lock(mutex_);
+    outputs_.clear();
   }
 
   int GetSampleRateHz() const override { return 16000; }
   int GetNumChannels() const override { return 1; }
+
+ protected:
+  bool NeedScheduleInternal() const override {
+    return chunk_index_ < chunks_.size();
+  }
+
+  absl::Status ScheduleInternal() override {
+    absl::Cleanup cleanup = [this] { SetState(State::kIdle); };
+    if (chunk_index_ >= chunks_.size()) {
+      return absl::OutOfRangeError("End of audio stream reached.");
+    }
+    PushOutput(chunks_[chunk_index_++]);
+    return absl::OkStatus();
+  }
 
  private:
   std::vector<std::vector<float>> chunks_;
   size_t chunk_index_ = 0;
 };
 
-// Dummy AudioPreprocessor passing through dummy mel feature values.
+// Dummy AudioPreprocessor pulling PCM samples from audio source.
 class DummyAudioPreprocessor : public AudioPreprocessor {
  public:
-  void Reset() override {}
+  explicit DummyAudioPreprocessor(
+      Stage<std::vector<float>>* absl_nonnull audio_source)
+      : AudioPreprocessor(audio_source) {}
 
-  absl::StatusOr<std::vector<float>> Preprocess(
-      absl::Span<const float> pcm_samples) override {
-    return std::vector<float>(pcm_samples.begin(), pcm_samples.end());
+  void Reset() override {
+    absl::MutexLock lock(mutex_);
+    outputs_.clear();
   }
 
-  void PreprocessAsync(
-      absl::Span<const float> pcm_samples,
-      absl::AnyInvocable<void(absl::StatusOr<std::vector<float>>) &&> callback)
-      override {
-    auto res = Preprocess(pcm_samples);
-    std::move(callback)(res);
+ protected:
+  absl::Status ScheduleInternal() override {
+    auto pcm_samples = audio_source_.GetOutput();
+    if (absl::IsNotFound(pcm_samples.status())) {
+      return absl::OkStatus();
+    } else if (!pcm_samples.ok()) {
+      return pcm_samples.status();
+    }
+    PushOutput(std::move(*pcm_samples));
+    SetState(State::kIdle);
+    return absl::OkStatus();
   }
 };
 
-// Dummy SpeechDecoder returning dummy DecodedToken IDs.
+// Dummy SpeechDecoder pulling mel features from preprocessor.
 class DummySpeechDecoder : public SpeechDecoder {
  public:
-  void Reset() override {}
+  explicit DummySpeechDecoder(
+      Stage<std::vector<float>>* absl_nonnull audio_preprocessor)
+      : SpeechDecoder(audio_preprocessor) {}
 
-  absl::StatusOr<std::vector<SpeechDecoder::DecodedToken>> Decode(
-      absl::Span<const float> mel_features) override {
-    std::vector<SpeechDecoder::DecodedToken> tokens;
-    tokens.reserve(mel_features.size());
-    for (size_t i = 0; i < mel_features.size(); ++i) {
-      tokens.push_back({static_cast<int>(mel_features[i]), 100});
-    }
-    return tokens;
+  void Reset() override {
+    absl::MutexLock lock(mutex_);
+    outputs_.clear();
   }
 
-  void DecodeAsync(
-      absl::Span<const float> mel_features,
-      absl::AnyInvocable<
-          void(absl::StatusOr<std::vector<SpeechDecoder::DecodedToken>>) &&>
-          callback) override {
-    auto res = Decode(mel_features);
-    std::move(callback)(res);
+ protected:
+  absl::Status ScheduleInternal() override {
+    absl::Cleanup cleanup = [this] { SetState(State::kIdle); };
+
+    auto mel_features = audio_preprocessor_.GetOutput();
+    if (absl::IsNotFound(mel_features.status())) {
+      return absl::OkStatus();
+    } else if (!mel_features.ok()) {
+      return mel_features.status();
+    }
+
+    std::vector<SpeechDecoder::DecodedToken> tokens;
+    tokens.reserve(mel_features->size());
+    for (size_t i = 0; i < mel_features->size(); ++i) {
+      tokens.push_back({static_cast<int>((*mel_features)[i]), 100});
+    }
+    PushOutput(std::move(tokens));
+    return absl::OkStatus();
   }
 };
 
-// Dummy Detokenizer mapping token IDs to string words with std::optional
-// timestamp.
+// Dummy Detokenizer pulling decoded tokens from decoder.
 class DummyDetokenizer : public Detokenizer {
  public:
-  void Reset() override {}
+  explicit DummyDetokenizer(
+      Stage<std::vector<SpeechDecoder::DecodedToken>>* absl_nonnull decoder)
+      : Detokenizer(decoder) {}
 
-  absl::StatusOr<std::vector<Detokenizer::Word>> Detokenize(
-      absl::Span<const SpeechDecoder::DecodedToken> tokens) override {
+  void Reset() override {
+    absl::MutexLock lock(mutex_);
+    outputs_.clear();
+  }
+
+ protected:
+  absl::Status ScheduleInternal() override {
+    absl::Cleanup cleanup = [this] { SetState(State::kIdle); };
+
+    auto tokens = decoder_.GetOutput();
+    if (absl::IsNotFound(tokens.status())) {
+      return absl::OkStatus();
+    } else if (!tokens.ok()) {
+      return tokens.status();
+    }
+
     std::vector<Detokenizer::Word> words;
-    words.reserve(tokens.size());
-    for (const auto& tok : tokens) {
+    words.reserve(tokens->size());
+    for (const auto& tok : *tokens) {
       words.push_back(
           {"word_" + std::to_string(tok.token_id), tok.timestamp_ms});
     }
-    return words;
+    PushOutput(std::move(words));
+    return absl::OkStatus();
   }
 };
 
 TEST(AsrSessionTest, FullSessionEndToEndFlow) {
-  // Setup dummy audio chunks representing token IDs 1, 2, 3
   std::vector<std::vector<float>> chunks = {
       {1.0f, 2.0f},
       {2.0f, 3.0f},
   };
 
+  auto audio_source = std::make_unique<DummyAudioSource>(chunks);
+  auto preprocessor =
+      std::make_unique<DummyAudioPreprocessor>(audio_source.get());
+  auto speech_decoder =
+      std::make_unique<DummySpeechDecoder>(preprocessor.get());
+  auto detokenizer = std::make_unique<DummyDetokenizer>(speech_decoder.get());
+  auto text_merger = std::make_unique<LevenshteinTextMerger>(detokenizer.get());
+
   AsrSession::Components components;
-  components.audio_source = std::make_unique<DummyAudioSource>(chunks);
-  components.preprocessor = std::make_unique<DummyAudioPreprocessor>();
-  components.speech_decoder = std::make_unique<DummySpeechDecoder>();
-  components.detokenizer = std::make_unique<DummyDetokenizer>();
-  components.text_merger = std::make_unique<LevenshteinTextMerger>();
+  components.audio_source = std::move(audio_source);
+  components.preprocessor = std::move(preprocessor);
+  components.speech_decoder = std::move(speech_decoder);
+  components.detokenizer = std::move(detokenizer);
+  components.text_merger = std::move(text_merger);
 
   auto session_status = AsrSession::Create(std::move(components));
-  ASSERT_TRUE(session_status.ok());
+  EXPECT_TRUE(session_status.ok());
   auto session = std::move(*session_status);
 
   // Process Chunk 1: "word_1 word_2"
   auto res1 = session->ProcessNextChunk();
-  ASSERT_TRUE(res1.ok());
+  EXPECT_TRUE(res1.ok());
   EXPECT_EQ(res1->confirmed_text, "");
   EXPECT_EQ(res1->unconfirmed_text, "word_1 word_2");
 
   // Process Chunk 2: "word_2 word_3" (overlaps at word_2)
   auto res2 = session->ProcessNextChunk();
-  ASSERT_TRUE(res2.ok());
+  EXPECT_TRUE(res2.ok());
   EXPECT_EQ(res2->confirmed_text, "word_1");
   EXPECT_EQ(res2->unconfirmed_text, "word_2 word_3");
 
@@ -163,55 +212,203 @@ TEST(AsrSessionTest, FullSessionEndToEndFlow) {
 
   // Flush remaining
   auto res_flush = session->Flush();
-  ASSERT_TRUE(res_flush.ok());
+  EXPECT_TRUE(res_flush.ok());
   EXPECT_EQ(res_flush->confirmed_text, "word_2 word_3");
   EXPECT_EQ(res_flush->unconfirmed_text, "");
 }
 
-TEST(AsrSessionTest, ProcessNextChunkAsyncFlow) {
+TEST(AsrSessionTest, ProcessAsyncFlow) {
   std::vector<std::vector<float>> chunks = {
       {1.0f, 2.0f},
       {2.0f, 3.0f},
   };
 
+  auto audio_source = std::make_unique<DummyAudioSource>(chunks);
+  auto preprocessor =
+      std::make_unique<DummyAudioPreprocessor>(audio_source.get());
+  auto speech_decoder =
+      std::make_unique<DummySpeechDecoder>(preprocessor.get());
+  auto detokenizer = std::make_unique<DummyDetokenizer>(speech_decoder.get());
+  auto text_merger = std::make_unique<LevenshteinTextMerger>(detokenizer.get());
+
   AsrSession::Components components;
-  components.audio_source = std::make_unique<DummyAudioSource>(chunks);
-  components.preprocessor = std::make_unique<DummyAudioPreprocessor>();
-  components.speech_decoder = std::make_unique<DummySpeechDecoder>();
-  components.detokenizer = std::make_unique<DummyDetokenizer>();
-  components.text_merger = std::make_unique<LevenshteinTextMerger>();
+  components.audio_source = std::move(audio_source);
+  components.preprocessor = std::move(preprocessor);
+  components.speech_decoder = std::move(speech_decoder);
+  components.detokenizer = std::move(detokenizer);
+  components.text_merger = std::move(text_merger);
 
   auto session_status = AsrSession::Create(std::move(components));
-  ASSERT_TRUE(session_status.ok());
+  EXPECT_TRUE(session_status.ok());
   auto session = std::move(*session_status);
 
-  // Async Chunk 1
-  bool called1 = false;
-  session->ProcessNextChunkAsync([&called1](auto res) {
-    called1 = true;
-    ASSERT_TRUE(res.ok());
-    EXPECT_EQ(res->confirmed_text, "");
-    EXPECT_EQ(res->unconfirmed_text, "word_1 word_2");
-  });
-  EXPECT_TRUE(called1);
+  ::litert::lm::ThreadPool pool("test_pool", 4);
+  std::vector<TextMerger::MergeResult> results;
+  absl::Notification done;
 
-  // Async Chunk 2
-  bool called2 = false;
-  session->ProcessNextChunkAsync([&called2](auto res) {
-    called2 = true;
-    ASSERT_TRUE(res.ok());
-    EXPECT_EQ(res->confirmed_text, "word_1");
-    EXPECT_EQ(res->unconfirmed_text, "word_2 word_3");
-  });
-  EXPECT_TRUE(called2);
+  ASSERT_TRUE(session
+                  ->ProcessAsync(pool,
+                                 [&results, &done](auto res) -> absl::Status {
+                                   if (!res.ok()) {
+                                     done.Notify();
+                                     return res.status();
+                                   }
+                                   results.push_back(*res);
+                                   return absl::OkStatus();
+                                 })
+                  .ok());
 
-  // Async Chunk 3 (End of stream)
-  bool called3 = false;
-  session->ProcessNextChunkAsync([&called3](auto res) {
-    called3 = true;
-    EXPECT_TRUE(absl::IsOutOfRange(res.status()));
-  });
-  EXPECT_TRUE(called3);
+  done.WaitForNotification();
+
+  ASSERT_EQ(results.size(), 3);
+  EXPECT_EQ(results[0].confirmed_text, "");
+  EXPECT_EQ(results[0].unconfirmed_text, "word_1 word_2");
+  EXPECT_EQ(results[1].confirmed_text, "word_1");
+  EXPECT_EQ(results[1].unconfirmed_text, "word_2 word_3");
+  EXPECT_EQ(results[2].confirmed_text, "word_2 word_3");
+  EXPECT_EQ(results[2].unconfirmed_text, "");
+}
+
+TEST(AsrSessionTest, MultipleProcessAsyncCallsInSequence) {
+  std::vector<std::vector<float>> chunks = {
+      {1.0f, 2.0f},
+  };
+
+  auto audio_source = std::make_unique<DummyAudioSource>(chunks);
+  auto preprocessor =
+      std::make_unique<DummyAudioPreprocessor>(audio_source.get());
+  auto speech_decoder =
+      std::make_unique<DummySpeechDecoder>(preprocessor.get());
+  auto detokenizer = std::make_unique<DummyDetokenizer>(speech_decoder.get());
+  auto text_merger = std::make_unique<LevenshteinTextMerger>(detokenizer.get());
+
+  AsrSession::Components components;
+  components.audio_source = std::move(audio_source);
+  components.preprocessor = std::move(preprocessor);
+  components.speech_decoder = std::move(speech_decoder);
+  components.detokenizer = std::move(detokenizer);
+  components.text_merger = std::move(text_merger);
+
+  auto session_status = AsrSession::Create(std::move(components));
+  EXPECT_TRUE(session_status.ok());
+  auto session = std::move(*session_status);
+
+  ::litert::lm::ThreadPool pool("test_pool", 4);
+
+  // First run
+  absl::Notification done1;
+  ASSERT_TRUE(session
+                  ->ProcessAsync(pool,
+                                 [&done1](auto res) -> absl::Status {
+                                   if (!res.ok()) {
+                                     done1.Notify();
+                                     return res.status();
+                                   }
+                                   return absl::OkStatus();
+                                 })
+                  .ok());
+  done1.WaitForNotification();
+
+  // Reset session and run second time
+  session->Reset();
+  absl::Notification done2;
+  ASSERT_TRUE(session
+                  ->ProcessAsync(pool,
+                                 [&done2](auto res) -> absl::Status {
+                                   if (!res.ok()) {
+                                     done2.Notify();
+                                     return res.status();
+                                   }
+                                   return absl::OkStatus();
+                                 })
+                  .ok());
+  done2.WaitForNotification();
+}
+
+TEST(AsrSessionTest, RejectsConcurrentProcessAsyncCalls) {
+  std::vector<std::vector<float>> chunks = {
+      {1.0f, 2.0f},
+  };
+
+  auto audio_source = std::make_unique<DummyAudioSource>(chunks);
+  auto preprocessor =
+      std::make_unique<DummyAudioPreprocessor>(audio_source.get());
+  auto speech_decoder =
+      std::make_unique<DummySpeechDecoder>(preprocessor.get());
+  auto detokenizer = std::make_unique<DummyDetokenizer>(speech_decoder.get());
+  auto text_merger = std::make_unique<LevenshteinTextMerger>(detokenizer.get());
+
+  AsrSession::Components components;
+  components.audio_source = std::move(audio_source);
+  components.preprocessor = std::move(preprocessor);
+  components.speech_decoder = std::move(speech_decoder);
+  components.detokenizer = std::move(detokenizer);
+  components.text_merger = std::move(text_merger);
+
+  auto session_status = AsrSession::Create(std::move(components));
+  EXPECT_TRUE(session_status.ok());
+  auto session = std::move(*session_status);
+
+  ::litert::lm::ThreadPool pool("test_pool", 4);
+
+  absl::Notification done;
+  ASSERT_TRUE(session
+                  ->ProcessAsync(pool,
+                                 [&done](auto res) -> absl::Status {
+                                   if (!res.ok()) {
+                                     done.Notify();
+                                     return res.status();
+                                   }
+                                   return absl::OkStatus();
+                                 })
+                  .ok());
+
+  // Second call while first is running should fail
+  auto status2 = session->ProcessAsync(
+      pool, [](auto res) -> absl::Status { return absl::OkStatus(); });
+  EXPECT_FALSE(status2.ok());
+
+  done.WaitForNotification();
+}
+
+TEST(AsrSessionTest, DestroySessionSafelyDuringProcessAsync) {
+  std::vector<std::vector<float>> chunks = {
+      {1.0f, 2.0f},
+      {2.0f, 3.0f},
+  };
+
+  auto audio_source = std::make_unique<DummyAudioSource>(chunks);
+  auto preprocessor =
+      std::make_unique<DummyAudioPreprocessor>(audio_source.get());
+  auto speech_decoder =
+      std::make_unique<DummySpeechDecoder>(preprocessor.get());
+  auto detokenizer = std::make_unique<DummyDetokenizer>(speech_decoder.get());
+  auto text_merger = std::make_unique<LevenshteinTextMerger>(detokenizer.get());
+
+  AsrSession::Components components;
+  components.audio_source = std::move(audio_source);
+  components.preprocessor = std::move(preprocessor);
+  components.speech_decoder = std::move(speech_decoder);
+  components.detokenizer = std::move(detokenizer);
+  components.text_merger = std::move(text_merger);
+
+  auto session_status = AsrSession::Create(std::move(components));
+  EXPECT_TRUE(session_status.ok());
+  auto session = std::move(*session_status);
+
+  ::litert::lm::ThreadPool pool("test_pool", 4);
+
+  // Return error on callback to stop, then destroy session immediately.
+  ASSERT_TRUE(session
+                  ->ProcessAsync(pool,
+                                 [](auto res) -> absl::Status {
+                                   return absl::InternalError("Stop requested");
+                                 })
+                  .ok());
+
+  // Destroy session immediately while worker tasks may be in flight
+  session.reset();
+  EXPECT_TRUE(pool.WaitUntilIdle(absl::Seconds(1)).ok());
 }
 
 TEST(AsrSessionTest, FailsWhenMissingComponent) {

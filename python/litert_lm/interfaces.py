@@ -38,6 +38,15 @@ class Backend(abc.ABC):
   Use the subclasses (CPU, GPU, NPU) to specify the backend and its options.
   """
 
+  # pylint: disable=invalid-name
+  # These sub-classes are added here to improve the type checking (pyrefly).
+  # The names are chosen before adding the attributes and also consistent with
+  # other langugage bindings.
+  CPU: type[CPU]
+  GPU: type[GPU]
+  NPU: type[NPU]
+  # pylint: enable=invalid-name
+
   def get_name(self) -> str:
     """Returns the string representation of the backend (e.g., 'cpu', 'gpu', 'npu')."""
     return type(self).__name__.lower()
@@ -361,7 +370,8 @@ class AbstractEngine(abc.ABC):
         the engine/model's default.
       max_num_images: Maximum number of images that can be processed in a single
         inference call.
-      cache_dir: Directory for caching compiled model artifacts.
+      cache_dir: Directory for caching compiled model artifacts. If None, use
+        the engine's default.
       vision_backend: The hardware backend used for vision encoding.
       audio_backend: The hardware backend used for audio encoding.
       enable_speculative_decoding: Whether to enable speculative decoding. If
@@ -382,7 +392,7 @@ class AbstractEngine(abc.ABC):
   backend: Backend
   max_num_tokens: int | None = None
   max_num_images: int | None = None
-  cache_dir: str = ""
+  cache_dir: str | None = None
   vision_backend: Backend | None = None
   audio_backend: Backend | None = None
   enable_speculative_decoding: bool | None = None
@@ -806,7 +816,7 @@ class AbstractBenchmark(abc.ABC):
   prefill_tokens: int = 256
   decode_tokens: int = 256
   max_num_tokens: int | None = None
-  cache_dir: str = ""
+  cache_dir: str | None = None
   enable_speculative_decoding: bool | None = None
   prompt: str = "How are you"
   activation_data_type: ActivationDataType | None = None

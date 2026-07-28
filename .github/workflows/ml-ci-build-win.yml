@@ -304,7 +304,6 @@ jobs:
           bazel --output_base="$env:BAZEL_OUTPUT_BASE" `
             build --disk_cache=~/.cache/bazel `
             --repository_cache=~/.cache/bazel/repo `
-            --define=litert_link_capi_so=true `
             --define=litert_runtime_link_mode=dynamic `
             --define=resolve_symbols_in_exec=false `
             //runtime/engine:litert_lm_main

@@ -1372,13 +1372,23 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::InitializeSampler(
       sampler_handles_input =
           executor_settings_.GetAdvancedSettings()->sampler_handles_input;
     }
+    if (auto gpu_config = executor_settings_.GetBackendConfig<GpuConfig>();
+        gpu_config.ok()) {
+      // In external tensor mode, swapping external input tensors triggers GPU
+      // resource bindings with newly created binding group. WebGPU seems to
+      // have a sync issue between different inference contexts (decode vs
+      // input handling) and decode step N+1 may start before input handling for
+      // step N+1 is complete. So, let's disable input handling in external
+      // tensor mode.
+      // In non-external tensor mode, GPU-GPU conversion for non-external
+      // tensors enforces a sync between input handling and decode in WebGPU.
+      sampler_handles_input_ &= !gpu_config->external_tensor_mode;
+    }
   }
   sampler_handles_input_ =
       sampler_handles_input && sampler_->CanHandleInput() &&
-      !signatures_.input_tokens.empty() && runs_embedding_on_gpu &&
-      // TODO: b/536136846 - Disable sampler handling input as currently sampler
-      // doesn't support param tensor update.
-      !gpu_optimized_single_buffer_cache_;
+      runs_embedding_on_gpu && !signatures_.input_tokens.empty() &&
+      !signatures_.input_attn_mask_local.has_value();
   if (sampler_handles_input_) {
     ABSL_VLOG(1) << "Sampler will handle decode input tensors.";
     if (!decode_prev_input_pos_) {
@@ -1393,6 +1403,12 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::InitializeSampler(
           compiled_model_->CreateInputBuffer(kDecodeSignatureRunner,
                                              *signatures_.input_attn_mask));
     }
+    if (!decode_prev_param_ && signatures_.input_int32_param.has_value()) {
+      LITERT_ASSIGN_OR_RETURN(
+          decode_prev_param_,
+          compiled_model_->CreateInputBuffer(kDecodeSignatureRunner,
+                                             *signatures_.input_int32_param));
+    }
     // Set, then reset the input handling to get the underlying model ready, but
     // not to bind the input tensors.
     ABSL_RETURN_IF_ERROR(SetSamplerInputHandling(/*reset=*/false));
@@ -1403,13 +1419,16 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::InitializeSampler(
 }
 
 absl::Status LlmLiteRtCompiledModelExecutorBase::SwapSamplerInputTensors() {
-  bool has_input_attn_mask = signatures_.input_attn_mask.has_value();
   // Move the input_pos and mask to previous ones.
   std::swap(decode_prev_input_pos_,
             decode_input_buffers_[signatures_.input_positions]);
-  if (has_input_attn_mask) {
+  if (signatures_.input_attn_mask.has_value()) {
     std::swap(decode_prev_mask_,
               decode_input_buffers_[*signatures_.input_attn_mask]);
+  }
+  if (signatures_.input_int32_param.has_value()) {
+    std::swap(decode_prev_param_,
+              decode_input_buffers_[*signatures_.input_int32_param]);
   }
   return SetSamplerInputHandling(/*reset=*/false);
 }
@@ -1417,18 +1436,24 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::SwapSamplerInputTensors() {
 absl::Status LlmLiteRtCompiledModelExecutorBase::SetSamplerInputHandling(
     bool reset) {
   if (reset) {
-    return sampler_->SetInputTensorsAndInferenceFunc(
-        nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
+    return sampler_->SetInferenceFuncAndInputTensors(nullptr, nullptr, nullptr,
+                                                     nullptr, nullptr, nullptr,
+                                                     nullptr, nullptr, nullptr);
   }
 
   bool has_input_attn_mask = signatures_.input_attn_mask.has_value();
-  return sampler_->SetInputTensorsAndInferenceFunc(
+  bool has_input_int32_param = signatures_.input_int32_param.has_value();
+  return sampler_->SetInferenceFuncAndInputTensors(
+      BindTensorsAndRunDecodeStatic, this,
       &decode_input_buffers_[signatures_.input_tokens], &decode_prev_input_pos_,
       &decode_input_buffers_[signatures_.input_positions],
       has_input_attn_mask ? &decode_prev_mask_ : nullptr,
       has_input_attn_mask ? &decode_input_buffers_[*signatures_.input_attn_mask]
                           : nullptr,
-      BindTensorsAndRunDecodeStatic, this);
+      has_input_int32_param ? &decode_prev_param_ : nullptr,
+      has_input_int32_param
+          ? &decode_input_buffers_[*signatures_.input_int32_param]
+          : nullptr);
 }
 
 absl::Status LlmLiteRtCompiledModelExecutorBase::SampleLogits(
@@ -1605,9 +1630,12 @@ absl::Status LlmLiteRtCompiledModelExecutorStatic::Prefill(
   // Reduce the input ids only with one user selected.
   auto input_length = ids.size() / input_batch_size;
   ids = ids.subspan(kTokenIndexToReduce * input_length, input_length);
-  ABSL_ASSIGN_OR_RETURN(
-      auto work_groups,
-      GetOptimizedPrefillWorkGroups(prefill_signature_map_, ids.size()));
+  int remaining_capacity =
+      state_->GetNumEntries() - llm_context_->runtime_state().current_step;
+
+  ABSL_ASSIGN_OR_RETURN(auto work_groups, GetOptimizedPrefillWorkGroups(
+                                              prefill_signature_map_,
+                                              ids.size(), remaining_capacity));
   for (int i = 0; i < work_groups.size(); ++i) {
     const auto& prefill_signature = work_groups[i].first;
     int prefill_length = work_groups[i].second;

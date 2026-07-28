@@ -18,27 +18,18 @@
 #include <utility>
 #include <vector>
 
-#include "absl/functional/any_invocable.h"  // from @com_google_absl
+#include "absl/log/absl_check.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "litert/cc/litert_macros.h"  // from @litert
-#include "omni/asr/detokenizer.h"
-#include "omni/asr/speech_decoder.h"
+#include "absl/synchronization/mutex.h"  // from @com_google_absl
+#include "absl/time/time.h"  // from @com_google_absl
 #include "omni/asr/text_merger.h"
+#include "omni/base/async_stage_scheduler.h"
+#include "omni/base/stage.h"
+#include "runtime/framework/threadpool.h"
 
 namespace litert_lm::omni::asr {
-namespace {
-
-#define CALL_CALLBACK_IF_ERROR(cb, status_expr) \
-  do {                                          \
-    const auto& _status_val = (status_expr);    \
-    if (!_status_val.ok()) {                    \
-      std::move(cb)(_status_val.status());      \
-      return;                                   \
-    }                                           \
-  } while (0)
-
-}  // namespace
 
 absl::StatusOr<std::unique_ptr<AsrSession>> AsrSession::Create(
     Components components) {
@@ -64,7 +55,19 @@ absl::StatusOr<std::unique_ptr<AsrSession>> AsrSession::Create(
 AsrSession::AsrSession(Components components)
     : components_(std::move(components)) {}
 
+AsrSession::~AsrSession() { ResetAsyncScheduler(); }
+
+void AsrSession::ResetAsyncScheduler() {
+  absl::MutexLock lock(mutex_);
+  if (async_scheduler_) {
+    // 3 seconds is a arbitrary timeout to wait for the scheduler to finish, but
+    // not too long. Better to crash than to wait too long.
+    ABSL_CHECK_OK(async_scheduler_->Stop(absl::Seconds(3)));
+  }
+}
+
 void AsrSession::Reset() {
+  ResetAsyncScheduler();
   components_.audio_source->Reset();
   components_.preprocessor->Reset();
   components_.speech_decoder->Reset();
@@ -73,45 +76,62 @@ void AsrSession::Reset() {
 }
 
 absl::StatusOr<TextMerger::MergeResult> AsrSession::ProcessNextChunk() {
-  LITERT_ASSIGN_OR_RETURN(auto pcm_chunk,
-                          components_.audio_source->GetNextChunk());
-  LITERT_ASSIGN_OR_RETURN(auto mel_features,
-                          components_.preprocessor->Preprocess(pcm_chunk));
-  LITERT_ASSIGN_OR_RETURN(auto tokens,
-                          components_.speech_decoder->Decode(mel_features));
-  LITERT_ASSIGN_OR_RETURN(auto words,
-                          components_.detokenizer->Detokenize(tokens));
-  return components_.text_merger->Merge(words);
+  ABSL_RETURN_IF_ERROR(components_.audio_source->Schedule());
+
+  if (components_.preprocessor->NeedSchedule()) {
+    ABSL_RETURN_IF_ERROR(components_.preprocessor->Schedule());
+  }
+
+  if (components_.speech_decoder->NeedSchedule()) {
+    ABSL_RETURN_IF_ERROR(components_.speech_decoder->Schedule());
+  }
+
+  if (components_.detokenizer->NeedSchedule()) {
+    ABSL_RETURN_IF_ERROR(components_.detokenizer->Schedule());
+  }
+
+  if (components_.text_merger->NeedSchedule()) {
+    ABSL_RETURN_IF_ERROR(components_.text_merger->Schedule());
+  }
+
+  return components_.text_merger->GetOutput();
 }
 
-void AsrSession::ProcessNextChunkAsync(
-    absl::AnyInvocable<void(absl::StatusOr<TextMerger::MergeResult>) &&>
-        callback) {
-  components_.audio_source->GetNextChunkAsync(
-      [this, cb = std::move(callback)](
-          absl::StatusOr<std::vector<float>> pcm_chunk) mutable {
-        CALL_CALLBACK_IF_ERROR(cb, pcm_chunk);
-        components_.preprocessor->PreprocessAsync(
-            *pcm_chunk,
-            [this, cb = std::move(cb)](
-                absl::StatusOr<std::vector<float>> mel_features) mutable {
-              CALL_CALLBACK_IF_ERROR(cb, mel_features);
-              components_.speech_decoder->DecodeAsync(
-                  *mel_features,
-                  [this, cb = std::move(cb)](
-                      absl::StatusOr<std::vector<SpeechDecoder::DecodedToken>>
-                          tokens) mutable {
-                    CALL_CALLBACK_IF_ERROR(cb, tokens);
-                    auto words = components_.detokenizer->Detokenize(*tokens);
-                    CALL_CALLBACK_IF_ERROR(cb, words);
-                    std::move(cb)(components_.text_merger->Merge(*words));
-                  });
-            });
-      });
+absl::Status AsrSession::ProcessAsync(::litert::lm::ThreadPool& thread_pool,
+                                      AsyncCallback callback) {
+  absl::MutexLock lock(mutex_);
+  if (async_scheduler_ != nullptr) {
+    if (async_scheduler_->IsRunning()) {
+      return absl::AlreadyExistsError("Async processing is already active.");
+    }
+    ABSL_RETURN_IF_ERROR(async_scheduler_->Stop(absl::Seconds(3)));
+  }
+
+  std::vector<internal::StageBase*> stages = {
+      components_.audio_source.get(),   components_.preprocessor.get(),
+      components_.speech_decoder.get(), components_.detokenizer.get(),
+      components_.text_merger.get(),
+  };
+  auto callback_with_flush_on_eos =
+      [callback = std::move(callback),
+       this](absl::StatusOr<TextMerger::MergeResult> result) mutable
+      -> absl::Status {
+    if (absl::IsOutOfRange(result.status())) {
+      ABSL_RETURN_IF_ERROR(components_.text_merger->Flush());
+      ABSL_RETURN_IF_ERROR(callback(components_.text_merger->GetOutput()));
+    }
+    return callback(std::move(result));
+  };
+  async_scheduler_ =
+      std::make_unique<AsyncStageScheduler<TextMerger::MergeResult>>(
+          std::move(stages), components_.text_merger.get(), &thread_pool,
+          std::move(callback_with_flush_on_eos));
+  return async_scheduler_->Start();
 }
 
 absl::StatusOr<TextMerger::MergeResult> AsrSession::Flush() {
-  return components_.text_merger->Flush();
+  ABSL_RETURN_IF_ERROR(components_.text_merger->Flush());
+  return components_.text_merger->GetOutput();
 }
 
 }  // namespace litert_lm::omni::asr

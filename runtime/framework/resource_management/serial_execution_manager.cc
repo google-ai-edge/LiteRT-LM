@@ -727,6 +727,14 @@ absl::Status SerialExecutionManager::AddPrefillTask(
 
     auto executor_inputs =
         ProcessAndCombineContents(inputs, session_info->benchmark_info);
+    if (executor_inputs.ok() &&
+        session_info->session_config.GetAudioEmbeddingsCallback() != nullptr) {
+      auto audio_data_status = executor_inputs->GetAudioDataPtr();
+      if (audio_data_status.ok() && *audio_data_status != nullptr) {
+        (*session_info->session_config.GetAudioEmbeddingsCallback())(
+            **audio_data_status);
+      }
+    }
     if (!executor_inputs.ok()) {
       llm_executor.value().reset();
       if (executor_inputs.status().message() ==

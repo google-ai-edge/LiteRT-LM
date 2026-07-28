@@ -232,7 +232,7 @@ def main():
 
   if not target_model.exists():
     gcs_url = "gs://litert-lm-api/models/gemma-4-E2B-it.litertlm"
-    print(f"⏬ Downloading verification model from {gcs_url}...")
+    print(f"⏬ Downloading verification model from {gcs_url}...", flush=True)
     gcs_http_url = (
         "https://storage.googleapis.com/litert-lm-api/models/gemma-4-E2B-it.litertlm"
     )
@@ -241,12 +241,13 @@ def main():
         "resolve/main/gemma-4-E2B-it.litertlm"
     )
     cmds = [
-        ("gcs url", ["gcloud", "storage", "cp", gcs_url, str(target_model)]),
         (
             "http url",
             [
                 "curl",
                 "-fL",
+                "--connect-timeout",
+                "15",
                 "--retry",
                 "5",
                 gcs_http_url,
@@ -254,27 +255,43 @@ def main():
                 str(target_model),
             ],
         ),
+        ("gcs url", ["gcloud", "storage", "cp", gcs_url, str(target_model)]),
         (
             "hf url",
-            ["curl", "-fL", "--retry", "5", hf_url, "-o", str(target_model)],
+            [
+                "curl",
+                "-fL",
+                "--connect-timeout",
+                "15",
+                "--retry",
+                "5",
+                hf_url,
+                "-o",
+                str(target_model),
+            ],
         ),
     ]
     for source_name, cmd in cmds:
       executable = shutil.which(cmd[0])
       if not executable:
         continue
-      print(f"Downloading model using {source_name}...")
+      print(f"Downloading model using {source_name}...", flush=True)
       full_cmd = [executable] + cmd[1:]
-      if (
-          subprocess.run(
-              full_cmd,
-              check=False,
-              stdout=subprocess.DEVNULL,
-              stderr=subprocess.DEVNULL,
-          ).returncode
-          == 0
-      ):
-        break
+      try:
+        if (
+            subprocess.run(
+                full_cmd,
+                check=False,
+                timeout=300,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            ).returncode
+            == 0
+        ):
+          break
+      except subprocess.TimeoutExpired:
+        print(f"⚠️ Download attempt using {source_name} timed out after 300s.")
+        continue
     else:
       if target_model.exists():
         target_model.unlink(missing_ok=True)

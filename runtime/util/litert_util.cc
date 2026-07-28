@@ -53,6 +53,7 @@ absl::StatusOr<OwnedEnvironment> CreateEnvironment(
     }
   }
 
+#if !defined(LITERT_DISABLE_NPU)
   bool uses_npu = (backend == Backend::NPU ||
                    (engine_settings.GetVisionExecutorSettings().has_value() &&
                     engine_settings.GetVisionExecutorSettings()->GetBackend() ==
@@ -60,43 +61,57 @@ absl::StatusOr<OwnedEnvironment> CreateEnvironment(
                    (engine_settings.GetAudioExecutorSettings().has_value() &&
                     engine_settings.GetAudioExecutorSettings()->GetBackend() ==
                         Backend::NPU));
-
   if (uses_npu) {
-#if !defined(LITERT_DISABLE_NPU)
+    std::string library_dir;
+    bool from_settings = false;
     if (!main_executor_settings.GetLitertDispatchLibDir().empty()) {
-      // If the dispatch library directory is provided, use it.
-      env_options.push_back(::litert::EnvironmentOptions::Option{
-          ::litert::EnvironmentOptions::Tag::kDispatchLibraryDir,
-          main_executor_settings.GetLitertDispatchLibDir()});
-      ABSL_VLOG(1) << "Setting dispatch library path from "
-                      "main_executor_settings: "
-                   << main_executor_settings.GetLitertDispatchLibDir();
+      library_dir = main_executor_settings.GetLitertDispatchLibDir();
+      from_settings = true;
     } else {
-      // Otherwise, use the directory of the model file.
       std::string model_path(
           main_executor_settings.GetModelAssets().GetPath().value_or(""));
       std::filesystem::path path(model_path);
-      std::string dispatch_library_path = path.parent_path().string();
-      // In WASM, the parent path is often just "/" which is usually not
-      // what we want for dispatch libraries.
-#ifdef __EMSCRIPTEN__
-      bool should_set_path =
-          !dispatch_library_path.empty() && dispatch_library_path != "/";
-#else
-      bool should_set_path = !dispatch_library_path.empty();
-#endif
-      if (should_set_path) {
-        ABSL_VLOG(1) << "Setting dispatch library path: "
-                     << dispatch_library_path;
-        env_options.push_back(::litert::EnvironmentOptions::Option{
-            ::litert::EnvironmentOptions::Tag::kDispatchLibraryDir,
-            absl::string_view(dispatch_library_path)});
-      } else {
-        ABSL_VLOG(1) << "No dispatch library path provided.";
-      }
+      library_dir = path.parent_path().string();
     }
-#endif  // defined(LITERT_DISABLE_NPU)
+
+    bool should_set_path = false;
+    if (from_settings) {
+      should_set_path = true;
+    } else {
+#ifdef __EMSCRIPTEN__
+      should_set_path = !library_dir.empty() && library_dir != "/";
+#else
+      should_set_path = !library_dir.empty();
+#endif
+    }
+
+    if (should_set_path) {
+      env_options.push_back(::litert::EnvironmentOptions::Option{
+          ::litert::EnvironmentOptions::Tag::kDispatchLibraryDir,
+          absl::string_view(library_dir)});
+      if (from_settings) {
+        ABSL_VLOG(1) << "Setting dispatch library path from "
+                        "main_executor_settings: "
+                     << library_dir;
+      } else {
+        ABSL_VLOG(1) << "Setting dispatch library path: " << library_dir;
+      }
+
+      env_options.push_back(::litert::EnvironmentOptions::Option{
+          ::litert::EnvironmentOptions::Tag::kCompilerPluginLibraryDir,
+          absl::string_view(library_dir)});
+      if (from_settings) {
+        ABSL_VLOG(1) << "Setting compiler plugin library path from "
+                        "main_executor_settings: "
+                     << library_dir;
+      } else {
+        ABSL_VLOG(1) << "Setting compiler plugin library path: " << library_dir;
+      }
+    } else {
+      ABSL_VLOG(1) << "No valid library path provided.";
+    }
   }
+#endif
 
   if (auto severity = GetMinLogSeverity()) {
     env_options.push_back(::litert::EnvironmentOptions::Option{

@@ -52,6 +52,18 @@ class ToolCall:
 class Content(abc.ABC):
   """Represents a content in the Message of the conversation."""
 
+  # pylint: disable=invalid-name
+  # These sub-classes are added here to improve the type checking (pyrefly).
+  # The names are chosen before adding the attributes and also consistent with
+  # other langugage bindings.
+  Text: type[Text]
+  ImageBytes: type[ImageBytes]
+  ImageFile: type[ImageFile]
+  AudioBytes: type[AudioBytes]
+  AudioFile: type[AudioFile]
+  ToolResponse: type[ToolResponse]
+  # pylint: enable=invalid-name
+
   @abc.abstractmethod
   def to_json(self) -> dict[str, Any]:
     raise NotImplementedError

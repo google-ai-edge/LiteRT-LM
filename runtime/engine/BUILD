@@ -43,6 +43,31 @@ cc_library(
 )
 
 cc_library(
+    name = "embedding_engine_settings",
+    srcs = ["embedding_engine_settings.cc"],
+    hdrs = ["embedding_engine_settings.h"],
+    deps = [
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "//runtime/executor:audio_executor_settings",
+        "//runtime/executor:embedding_executor_settings",
+        "//runtime/executor:executor_settings_base",
+        "//runtime/executor:vision_executor_settings",
+        "//runtime/proto:embedding_metadata_cc_proto",
+        "//runtime/util:litert_status_util",
+    ],
+)
+
+cc_library(
+    name = "embedding_engine",
+    hdrs = ["embedding_engine.h"],
+    deps = [
+        ":io_types",
+        "@com_google_absl//absl/status:statusor",
+    ],
+)
+
+cc_library(
     name = "engine_factory",
     hdrs = ["engine_factory.h"],
     deps = [
@@ -215,6 +240,7 @@ cc_binary(
         ":engine_interface",
         ":engine_settings",
         ":io_types",
+        ":shared_flags",
         "@com_google_absl//absl/base:log_severity",
         "@com_google_absl//absl/flags:flag",
         "@com_google_absl//absl/flags:parse",
@@ -232,6 +258,7 @@ cc_binary(
         "//runtime/conversation",
         "//runtime/conversation:io_types",
         "//runtime/executor:executor_settings_base",
+        "//runtime/executor:llm_executor_settings",
         "//runtime/util:litert_status_util",
     ],
 )
@@ -293,6 +320,33 @@ cc_binary(
     }),
 )
 
+cc_binary(
+    name = "embedding_litert_lm_main",
+    srcs = ["embedding_litert_lm_main.cc"],
+    deps = [
+        ":embedding_engine",
+        ":embedding_engine_settings",
+        ":io_types",
+        "@com_google_absl//absl/base:log_severity",
+        "@com_google_absl//absl/flags:flag",
+        "@com_google_absl//absl/flags:parse",
+        "@com_google_absl//absl/log:globals",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/strings",
+        "@litert//litert/cc:litert_environment",
+        "@litert//litert/cc/internal:scoped_file",
+        "@litert//support/preprocessor:image_preprocessor",
+        "@litert//support/preprocessor:image_preprocessor_impl",  # buildcleaner: keep
+        "//runtime/components:model_resources",
+        "//runtime/components:model_resources_litert_lm",
+        "//runtime/core:embedding_engine_impl",
+        "//runtime/executor:executor_settings_base",
+        "//runtime/util:litert_lm_loader",
+        "//runtime/util:litert_status_util",
+        "//runtime/util:litert_util",
+    ],
+)
+
 cc_library(
     name = "engine_settings",
     srcs = ["engine_settings.cc"],
@@ -300,6 +354,7 @@ cc_library(
     deps = [
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/functional:any_invocable",
         "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
@@ -311,6 +366,7 @@ cc_library(
         "//runtime/components/logits_processor:suppress_tokens_config",
         "//runtime/executor:audio_executor_settings",
         "//runtime/executor:executor_settings_base",
+        "//runtime/executor:llm_executor_io_types",
         "//runtime/executor:llm_executor_settings",
         "//runtime/executor:vision_executor_settings",
         "//runtime/proto:engine_cc_proto",
@@ -342,11 +398,26 @@ cc_test(
         "@litert//support/tokenizer",
         "//runtime/components/logits_processor:suppress_tokens_config",
         "//runtime/executor:executor_settings_base",
+        "//runtime/executor:llm_executor_io_types",
         "//runtime/proto:engine_cc_proto",
         "//runtime/proto:llm_metadata_cc_proto",
         "//runtime/proto:llm_model_type_cc_proto",
         "//runtime/proto:sampler_params_cc_proto",
         "//runtime/proto:token_cc_proto",
+        "//runtime/util:test_utils",
+    ],
+)
+
+cc_test(
+    name = "embedding_engine_settings_test",
+    srcs = ["embedding_engine_settings_test.cc"],
+    deps = [
+        ":embedding_engine_settings",
+        "@com_google_googletest//:gtest_main",
+        "//runtime/executor:embedding_executor_settings",
+        "//runtime/executor:executor_settings_base",
+        "//runtime/proto:embedding_metadata_cc_proto",
+        "//runtime/proto:embedding_model_type_cc_proto",
         "//runtime/util:test_utils",
     ],
 )

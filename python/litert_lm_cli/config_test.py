@@ -75,7 +75,8 @@ class ConfigTest(parameterized.TestCase):
         ' "cache": "memory", "max_num_tokens": 1024, "temperature": 0.7,'
         ' "top_p": 0.9, "top_k": 40, "seed": 12345,'
         ' "gpu_decode_steps_per_sync": 4, "speculative_decoding": true,'
-        ' "thinking": true, "thinking_budget": 5}}'
+        ' "thinking": true, "thinking_budget": 5, "activation_data_type":'
+        ' "fp16"}}'
     )
     self.assertEqual(
         config.load_config(),
@@ -93,6 +94,7 @@ class ConfigTest(parameterized.TestCase):
                 speculative_decoding=True,
                 thinking=True,
                 thinking_budget=5,
+                activation_data_type="fp16",
             )
         ),
     )
@@ -217,6 +219,14 @@ class ConfigTest(parameterized.TestCase):
           "thinking_budget_invalid",
           '{"default": {"thinking_budget": -2}}',
           "default.thinking_budget: -2 is less than the minimum of -1",
+      ),
+      (
+          "activation_data_type_invalid",
+          '{"default": {"activation_data_type": "invalid"}}',
+          (
+              "default.activation_data_type: 'invalid' is not one of ['fp32',"
+              " 'fp16', 'int16', 'int8']"
+          ),
       ),
   )
   def test_get_config_invalid_schema(self, json_data, expected_error):

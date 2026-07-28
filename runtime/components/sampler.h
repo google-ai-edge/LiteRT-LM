@@ -59,20 +59,20 @@ class Sampler {
   // Whether the sampler handles the input.
   //
   // It must be true when `CanHandleInput()` is true and
-  // `SetInputTensorsAndInferenceFunc()` returned OK for non-null
+  // `SetInferenceFuncAndInputTensors()` returned OK for non-null
   // `run_inference_func`.
   //
   // It must be false
   //  1) when `CanHandleInput()` is false,
-  //  2) when `CanHandleInput()` is true but `SetInputTensorsAndInferenceFunc()`
+  //  2) when `CanHandleInput()` is true but `SetInferenceFuncAndInputTensors()`
   //     has not been called,
-  //  3) when `CanHandleInput()` is true but `SetInputTensorsAndInferenceFunc()`
+  //  3) when `CanHandleInput()` is true but `SetInferenceFuncAndInputTensors()`
   //     was called with null `run_inference_func` last time, or
-  //  4) when `CanHandleInput()` is true but `SetInputTensorsAndInferenceFunc()`
+  //  4) when `CanHandleInput()` is true but `SetInferenceFuncAndInputTensors()`
   //     returned non-OK status last time.
   virtual bool HandlesInput() const { return false; }
 
-  // Sets input tensors to handle inputs and `run_inference_func` with `arg`.
+  // Sets `run_inference_func` with `arg` and input tensors to handle inputs.
   //
   // If `run_inference_func` is not nullptr, it will be called within
   // `SampleToIdAndScoreBuffer()` to run inference with the given input tensors
@@ -83,13 +83,15 @@ class Sampler {
   // `HandlesInput()` will be false after this call.
   //
   // It returns `UnimplementedError` if `CanHandleInput()` is false.
-  virtual absl::Status SetInputTensorsAndInferenceFunc(
+  virtual absl::Status SetInferenceFuncAndInputTensors(
+      int (*run_inference_func)(void* arg), void* arg,
       const TensorBuffer* ids_tensor,
       const TensorBuffer* prev_input_positions_tensor,
       const TensorBuffer* input_positions_tensor,
       const TensorBuffer* prev_mask_tensor, const TensorBuffer* mask_tensor,
-      int (*run_inference_func)(void* arg), void* arg) {
-    return absl::UnimplementedError("SetInputTensors is not implemented.");
+      const TensorBuffer* prev_param_tensor, const TensorBuffer* param_tensor) {
+    return absl::UnimplementedError(
+        "SetInferenceFuncAndInputTensors is not implemented.");
   }
 };
 

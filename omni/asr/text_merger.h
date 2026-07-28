@@ -16,36 +16,46 @@
 #define THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_TEXT_MERGER_H_
 
 #include <string>
+#include <vector>
 
-#include "absl/status/statusor.h"  // from @com_google_absl
-#include "absl/types/span.h"  // from @com_google_absl
+#include "absl/base/nullability.h"  // from @com_google_absl
+#include "absl/status/status.h"  // from @com_google_absl
 #include "omni/asr/detokenizer.h"
+#include "omni/base/stage.h"
 
 namespace litert_lm::omni::asr {
 
-// Abstract interface for aligning and merging overlapping word streams.
-class TextMerger {
- public:
-  // Output result of text merging for a single audio chunk.
-  struct MergeResult {
-    // Finalized text that will not change in subsequent chunks.
-    std::string confirmed_text;
-    // Pending text that is subject to alignment and change in the next chunk.
-    std::string unconfirmed_text;
-  };
+// Represents the merged text result from processing an audio chunk.
+struct MergeResult {
+  // Finalized text that will not change in subsequent chunks.
+  std::string confirmed_text;
+  // Pending text subject to alignment and change in the next chunk.
+  std::string unconfirmed_text;
+};
 
-  virtual ~TextMerger() = default;
+// Abstract interface for aligning and merging overlapping word streams.
+class TextMerger : public SingleThreadedStageWithDeque<MergeResult> {
+ public:
+  using MergeResult = ::litert_lm::omni::asr::MergeResult;
+
+  explicit TextMerger(
+      Stage<std::vector<Detokenizer::Word>>* absl_nonnull detokenizer)
+      : detokenizer_(*detokenizer) {}
+
+  ~TextMerger() override = default;
 
   // Resets internal cached state for a new audio stream.
   virtual void Reset() = 0;
 
-  // Merges curr_chunk_words into internal state and returns confirmed &
-  // unconfirmed text.
-  virtual absl::StatusOr<MergeResult> Merge(
-      absl::Span<const Detokenizer::Word> curr_chunk_words) = 0;
+  // Flushes remaining unconfirmed text into the output queue at end of stream.
+  virtual absl::Status Flush() = 0;
 
-  // Flushes remaining unconfirmed text at end of stream.
-  virtual absl::StatusOr<MergeResult> Flush() = 0;
+ protected:
+  bool NeedScheduleInternal() const override {
+    return detokenizer_.HasOutput();
+  }
+
+  Stage<std::vector<Detokenizer::Word>>& detokenizer_;
 };
 
 }  // namespace litert_lm::omni::asr

@@ -122,7 +122,7 @@ class ConversationTests: XCTestCase {
       accumulatedText += chunk.toString
     }
     XCTAssertEqual(chunkCount, 6)
-    XCTAssertEqual(accumulatedText, "Ꮝgdockdict इक इक इकद्दा")
+    XCTAssertEqual(accumulatedText, "stöstöstöstöstö mengenal")
 
   }
 

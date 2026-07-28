@@ -29,6 +29,7 @@
 #include <vector>
 
 #include "absl/algorithm/container.h"  // from @com_google_absl
+#include "absl/container/btree_map.h"  // from @com_google_absl
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
@@ -269,7 +270,20 @@ absl::StatusOr<SortedPrefillSignatureMap> GetPrefillRunnerSetFromModel(
 
 absl::StatusOr<std::vector<std::pair<std::string, int>>>
 GetOptimizedPrefillWorkGroups(
-    const SortedPrefillSignatureMap& prefill_runner_set, int input_length) {
+    const SortedPrefillSignatureMap& prefill_runner_set, int input_length,
+    std::optional<int> max_prefill_sequence_length) {
+  SortedPrefillSignatureMap available_runner_set = prefill_runner_set;
+  if (max_prefill_sequence_length.has_value()) {
+    absl::erase_if(available_runner_set, [&](const auto& pair) {
+      return pair.first > max_prefill_sequence_length.value();
+    });
+    if (available_runner_set.empty()) {
+      return absl::FailedPreconditionError(absl::StrCat(
+          "Chosen prefill work group size exceeds available state entries (",
+          max_prefill_sequence_length.value(), ")."));
+    }
+  }
+
   // A simple greedy approach can cause performance cliffs for devices that
   // perform much better with longer sequence lengths See
   // go/smarter-prefill-chunking for more details.
@@ -299,22 +313,32 @@ GetOptimizedPrefillWorkGroups(
   //    work_groups = {{"sig_600", 599}}
 
   std::vector<std::pair<std::string, int>> work_groups;
+  int current_remaining_capacity =
+      max_prefill_sequence_length.value_or(std::numeric_limits<int>::max());
 
-  // Starting with the largest sequence length and working our way down, we will
-  // add work groups to cover the input length.
-  for (auto it = prefill_runner_set.begin(); it != prefill_runner_set.end();
+  // Starting with the largest sequence length available and working our way
+  // down, we will add work groups to cover the input length.
+  for (auto it = available_runner_set.begin(); it != available_runner_set.end();
        ++it) {
     if (input_length <= 0) {
       break;
     }
 
     int cur_seq_len = it->first;
+    if (cur_seq_len > current_remaining_capacity) {
+      continue;
+    }
+
     int full_chunks = input_length / cur_seq_len;
-    int remainder = input_length % cur_seq_len;
+    int max_chunks_capacity = current_remaining_capacity / cur_seq_len;
+    full_chunks = std::min(full_chunks, max_chunks_capacity);
+
+    int remainder = input_length - (full_chunks * cur_seq_len);
 
     // 1. Greedily add any full chunks of the current sequence length.
     for (int i = 0; i < full_chunks; ++i) {
       work_groups.push_back(std::make_pair(it->second, cur_seq_len));
+      current_remaining_capacity -= cur_seq_len;
     }
     input_length = remainder;
 
@@ -323,10 +347,14 @@ GetOptimizedPrefillWorkGroups(
     }
 
     // 2. If there's no smaller sequence length available, we must cover the
-    // remainder with this runner.
+    // remainder with this runner if capacity allows.
     auto next_it = std::next(it);
-    if (next_it == prefill_runner_set.end()) {
-      work_groups.push_back(std::make_pair(it->second, input_length));
+    if (next_it == available_runner_set.end()) {
+      if (cur_seq_len <= current_remaining_capacity) {
+        work_groups.push_back(std::make_pair(it->second, input_length));
+        current_remaining_capacity -= cur_seq_len;
+        input_length = 0;
+      }
       break;
     }
 
@@ -342,14 +370,26 @@ GetOptimizedPrefillWorkGroups(
       //   comfortably in the next sequence length, so let the smaller runners
       //   handle it.
       continue;
-    } else if (input_length * 2 >= cur_seq_len) {
+    } else if (input_length * 2 >= cur_seq_len &&
+               cur_seq_len <= current_remaining_capacity) {
       // Check cautious threshold rule: if remainder >= cur_seq_len / 2
       //   Cover with the current sequence length runner.
       work_groups.push_back(std::make_pair(it->second, input_length));
+      current_remaining_capacity -= cur_seq_len;
+      input_length = 0;
       break;
     }
-    // Threshold not met: let smaller runners handle the remainder.
+    // Threshold not met or capacity exceeded: let smaller runners handle
+    // remainder.
   }
+
+  if (input_length > 0) {
+    return absl::FailedPreconditionError(
+        absl::StrCat("Prefill input length exceeds available state entries "
+                     "(remaining capacity: ",
+                     max_prefill_sequence_length.value_or(0), ")."));
+  }
+
   return work_groups;
 }
 

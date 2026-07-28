@@ -37,6 +37,8 @@ class LiteRTLMServer(http.server.HTTPServer):
       engine, or None.
     vision_backend: The hardware backend used for vision encoding, or None.
     audio_backend: The hardware backend used for audio encoding, or None.
+    activation_data_type: The activation data type used for model execution, or
+      None.
     allowed_origins: Allowed CORS origins.
     address_family: Socket address family (e.g. AF_INET or AF_INET6).
   """
@@ -58,6 +60,7 @@ class LiteRTLMServer(http.server.HTTPServer):
     self.max_num_tokens: int | None = None
     self.vision_backend: litert_lm.Backend | None = None
     self.audio_backend: litert_lm.Backend | None = None
+    self.activation_data_type: litert_lm.ActivationDataType | None = None
 
 
 class CORSRequestHandler(http.server.BaseHTTPRequestHandler):
@@ -149,6 +152,14 @@ def get_or_initialize_server_engine(
   speculative_decoding = model.resolve_config_option(
       None, m, "speculative_decoding"
   )
+  activation_data_type_str = model.resolve_config_option(
+      None, m, "activation_data_type"
+  )
+  activation_data_type = (
+      litert_lm.ActivationDataType.from_str(activation_data_type_str)
+      if activation_data_type_str
+      else None
+  )
 
   if server.litert_lm_engine is not None:
     if (
@@ -157,6 +168,7 @@ def get_or_initialize_server_engine(
         and server.max_num_tokens == resolved_max_num_tokens
         and server.vision_backend == vision_backend
         and server.audio_backend == audio_backend
+        and server.activation_data_type == activation_data_type
     ):
       return server.litert_lm_engine
 
@@ -176,6 +188,7 @@ def get_or_initialize_server_engine(
     server.max_num_tokens = None
     server.vision_backend = None
     server.audio_backend = None
+    server.activation_data_type = None
 
   click.echo(
       click.style(f"Initializing engine for model: {m.model_path}", fg="cyan")
@@ -188,6 +201,7 @@ def get_or_initialize_server_engine(
       audio_backend=audio_backend,
       cache_dir=cache_dir_val,
       enable_speculative_decoding=speculative_decoding,
+      activation_data_type=activation_data_type,
       enable_benchmark=True,
       use_ringbuffers_local_attention=True,
   )
@@ -198,4 +212,5 @@ def get_or_initialize_server_engine(
   server.max_num_tokens = resolved_max_num_tokens
   server.vision_backend = vision_backend
   server.audio_backend = audio_backend
+  server.activation_data_type = activation_data_type
   return engine

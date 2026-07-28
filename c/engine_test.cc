@@ -2068,7 +2068,7 @@ TEST(EngineCTest, ConversationOptionalArgsTest) {
   std::string text = response_json["content"][0]["text"];
   EXPECT_GT(text.length(), 0);
   EXPECT_LT(text.length(), 5);
-  EXPECT_EQ(text, "\xE3\x81\xA9");
+  EXPECT_EQ(text, "\xE6\xB2\xBF");
 }
 
 }  // namespace

@@ -16,16 +16,19 @@
 #define THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_ASR_SESSION_H_
 
 #include <memory>
-#include <vector>
 
+#include "absl/base/thread_annotations.h"  // from @com_google_absl
 #include "absl/functional/any_invocable.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "omni/asr/audio_preprocessor.h"
 #include "omni/asr/audio_source.h"
 #include "omni/asr/detokenizer.h"
 #include "omni/asr/speech_decoder.h"
 #include "omni/asr/text_merger.h"
+#include "omni/base/async_stage_scheduler.h"
+#include "runtime/framework/threadpool.h"
 
 namespace litert_lm::omni::asr {
 
@@ -44,6 +47,8 @@ class AsrSession {
   static absl::StatusOr<std::unique_ptr<AsrSession>> Create(
       Components components);
 
+  ~AsrSession();
+
   // Resets session and component state for a new audio stream.
   void Reset();
 
@@ -51,21 +56,30 @@ class AsrSession {
   // Returns absl::OutOfRangeError when audio stream ends.
   absl::StatusOr<TextMerger::MergeResult> ProcessNextChunk();
 
-  // Processes the next audio chunk from AudioSource asynchronously.
-  // Note: Callbacks can be invoked on any thread, and may be called
-  // synchronously before returning on the same thread especially on error.
-  // It is the caller's responsibility to synchronize resources properly.
-  void ProcessNextChunkAsync(
-      absl::AnyInvocable<void(absl::StatusOr<TextMerger::MergeResult>) &&>
-          callback);
+  // Processes the audio stream asynchronously using the provided thread pool.
+  // Returns absl::AlreadyExistsError if async processing is already active.
+  // Schedules asr session stages on the thread pool to execute concurrently and
+  // passes results to `callback` until `callback` returns an error status.
+  using AsyncCallback =
+      absl::AnyInvocable<absl::Status(absl::StatusOr<TextMerger::MergeResult>)>;
+  absl::Status ProcessAsync(::litert::lm::ThreadPool& thread_pool,
+                            AsyncCallback callback);
 
   // Flushes remaining unconfirmed text at stream end.
   absl::StatusOr<TextMerger::MergeResult> Flush();
 
+  const Components& components() const { return components_; }
+
  private:
   explicit AsrSession(Components components);
 
+  void ResetAsyncScheduler();
+
   Components components_;
+
+  mutable absl::Mutex mutex_;
+  std::unique_ptr<AsyncStageScheduler<TextMerger::MergeResult>> async_scheduler_
+      ABSL_GUARDED_BY(mutex_);
 };
 
 }  // namespace litert_lm::omni::asr

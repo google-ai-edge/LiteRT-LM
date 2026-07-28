@@ -58,7 +58,7 @@ class Engine(interfaces.AbstractEngine):
       ) = interfaces.Backend.CPU(),
       max_num_tokens: int | None = None,
       max_num_images: int | None = None,
-      cache_dir: str = "",
+      cache_dir: str | None = None,
       vision_backend: (
           interfaces.Backend | type[interfaces.Backend] | None
       ) = None,
@@ -145,7 +145,7 @@ class Engine(interfaces.AbstractEngine):
       self._lib.litert_lm_engine_settings_set_max_num_images(
           settings, self.max_num_images
       )
-    if self.cache_dir:
+    if self.cache_dir is not None:
       self._lib.litert_lm_engine_settings_set_cache_dir(
           settings, self.cache_dir
       )

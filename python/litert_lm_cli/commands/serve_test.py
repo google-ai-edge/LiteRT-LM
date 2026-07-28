@@ -340,6 +340,7 @@ class ServeTest(parameterized.TestCase):
     server.model_id = None
     server.backend = None
     server.max_num_tokens = None
+    server.activation_data_type = None
 
     # Initialize with model A.
     engine1 = serve_util.get_or_initialize_server_engine(server, model_id="A")
@@ -761,6 +762,7 @@ class ServeTest(parameterized.TestCase):
     server.max_num_tokens = None
     server.vision_backend = None
     server.audio_backend = None
+    server.activation_data_type = None
 
     engine = serve_util.get_or_initialize_server_engine(
         server, model_id="gemma3-1b", backend="gpu", max_num_tokens=32768
@@ -771,6 +773,48 @@ class ServeTest(parameterized.TestCase):
     self.assertEqual(kwargs.get("max_num_tokens"), 32768)
     self.assertTrue(kwargs.get("use_ringbuffers_local_attention"))
     self.assertEqual(server.max_num_tokens, 32768)
+
+  def test_get_engine_activation_data_type_from_config(self):
+    mock_m = mock.Mock(spec_set=["exists", "model_path", "model_id"])
+    mock_m.exists.return_value = True
+    mock_m.model_path = "/path/to/gemma3-1b"
+    mock_m.model_id = "gemma3-1b"
+
+    mock_model_mod.Model.from_model_id.return_value = mock_m
+    mock_model_mod.resolve_config_option.side_effect = (
+        lambda value, model_obj, config_key, label=None: (
+            "fp16" if config_key == "activation_data_type" else value
+        )
+    )
+    mock_litert_lm.ActivationDataType.from_str.side_effect = (
+        lambda s: mock_litert_lm.ActivationDataType.FLOAT16
+        if s == "fp16"
+        else None
+    )
+
+    mock_engine_instance = mock.MagicMock(spec=interfaces.AbstractEngine)
+    mock_engine_instance.__enter__.return_value = mock_engine_instance
+    mock_litert_lm.Engine.return_value = mock_engine_instance
+
+    server = mock.MagicMock(spec=serve_util.LiteRTLMServer)
+    server.litert_lm_engine = None
+    server.model_id = None
+    server.backend = None
+    server.max_num_tokens = None
+    server.vision_backend = None
+    server.audio_backend = None
+    server.activation_data_type = None
+
+    engine = serve_util.get_or_initialize_server_engine(
+        server, model_id="gemma3-1b"
+    )
+    self.assertEqual(engine, mock_engine_instance)
+    mock_litert_lm.Engine.assert_called_once()  # pytype: disable=attribute-error
+    _, kwargs = mock_litert_lm.Engine.call_args  # pytype: disable=attribute-error
+    self.assertEqual(
+        kwargs.get("activation_data_type"),
+        mock_litert_lm.ActivationDataType.FLOAT16,
+    )
 
 
 if __name__ == "__main__":

@@ -17,33 +17,30 @@
 
 #include <vector>
 
-#include "absl/functional/any_invocable.h"  // from @com_google_absl
-#include "absl/status/status.h"  // from @com_google_absl
-#include "absl/status/statusor.h"  // from @com_google_absl
-#include "absl/types/span.h"  // from @com_google_absl
+#include "absl/base/nullability.h"  // from @com_google_absl
+#include "omni/base/stage.h"
 
 namespace litert_lm::omni::asr {
 
 // Abstract interface for preprocessing raw PCM audio into features.
-class AudioPreprocessor {
+class AudioPreprocessor
+    : public SingleThreadedStageWithDeque<std::vector<float>> {
  public:
-  virtual ~AudioPreprocessor() = default;
+  explicit AudioPreprocessor(
+      Stage<std::vector<float>>* absl_nonnull audio_source)
+      : audio_source_(*audio_source) {}
+
+  ~AudioPreprocessor() override = default;
 
   // Resets internal cached state for a new audio stream.
   virtual void Reset() = 0;
 
-  // Preprocesses pcm_samples into log-mel spectrogram features.
-  virtual absl::StatusOr<std::vector<float>> Preprocess(
-      absl::Span<const float> pcm_samples) = 0;
+ protected:
+  bool NeedScheduleInternal() const override {
+    return audio_source_.HasOutput();
+  }
 
-  // Preprocesses pcm_samples into log-mel spectrogram features asynchronously.
-  // Note: Callbacks can be invoked on any thread, and may be called
-  // synchronously before returning on the same thread especially on error.
-  // It is the caller's responsibility to synchronize resources properly.
-  virtual void PreprocessAsync(
-      absl::Span<const float> pcm_samples,
-      absl::AnyInvocable<void(absl::StatusOr<std::vector<float>>) &&>
-          callback) = 0;
+  Stage<std::vector<float>>& audio_source_;
 };
 
 }  // namespace litert_lm::omni::asr

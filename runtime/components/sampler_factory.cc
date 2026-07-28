@@ -96,15 +96,15 @@ extern "C" int (*LiteRtTopKWebGpuSampler_HandlesInput_Static)(
     LiteRtTopKSampler_Sampler* sampler) = nullptr;
 
 extern "C" int (
-    *LiteRtTopKWebGpuSampler_SetInputTensorsAndInferenceFunc_Static)(
-    LiteRtTopKSampler_Sampler* sampler,
-    LiteRtTensorBuffer absl_nullable ids_tensor,
+    *LiteRtTopKWebGpuSampler_SetInferenceFuncAndInputTensors_Static)(
+    LiteRtTopKSampler_Sampler* sampler, int (*run_inference_func)(void* arg),
+    void* arg, LiteRtTensorBuffer absl_nullable ids_tensor,
     LiteRtTensorBuffer absl_nullable prev_input_positions_tensor,
     LiteRtTensorBuffer absl_nullable input_positions_tensor,
     LiteRtTensorBuffer absl_nullable prev_mask_tensor,
     LiteRtTensorBuffer absl_nullable mask_tensor,
-    int (*run_inference_func)(void* arg), void* arg,
-    char** error_msg) = nullptr;
+    LiteRtTensorBuffer absl_nullable prev_param_tensor,
+    LiteRtTensorBuffer absl_nullable param_tensor, char** error_msg) = nullptr;
 
 // Metal Sampler C API function pointers.
 extern "C" int (*LiteRtTopKMetalSampler_Create_Static)(
@@ -132,15 +132,15 @@ extern "C" int (*LiteRtTopKMetalSampler_CanHandleInput_Static)(
 extern "C" int (*LiteRtTopKMetalSampler_HandlesInput_Static)(
     LiteRtTopKSampler_Sampler* sampler) = nullptr;
 
-extern "C" int (*LiteRtTopKMetalSampler_SetInputTensorsAndInferenceFunc_Static)(
-    LiteRtTopKSampler_Sampler* sampler,
-    LiteRtTensorBuffer absl_nullable ids_tensor,
+extern "C" int (*LiteRtTopKMetalSampler_SetInferenceFuncAndInputTensors_Static)(
+    LiteRtTopKSampler_Sampler* sampler, int (*run_inference_func)(void* arg),
+    void* arg, LiteRtTensorBuffer absl_nullable ids_tensor,
     LiteRtTensorBuffer absl_nullable prev_input_positions_tensor,
     LiteRtTensorBuffer absl_nullable input_positions_tensor,
     LiteRtTensorBuffer absl_nullable prev_mask_tensor,
     LiteRtTensorBuffer absl_nullable mask_tensor,
-    int (*run_inference_func)(void* arg), void* arg,
-    char** error_msg) = nullptr;
+    LiteRtTensorBuffer absl_nullable prev_param_tensor,
+    LiteRtTensorBuffer absl_nullable param_tensor, char** error_msg) = nullptr;
 
 absl::Status CreateStatus(int error_code, const char* error_msg) {
   absl::StatusCode code = static_cast<absl::StatusCode>(error_code);
@@ -177,15 +177,16 @@ class TopKCApiSampler : public Sampler {
       int (*)(LiteRtTopKSampler_Sampler* sampler);
   using LiteRtTopKSampler_HandlesInput =
       int (*)(LiteRtTopKSampler_Sampler* sampler);
-  using LiteRtTopKSampler_SetInputTensorsAndInferenceFunc =
-      int (*)(LiteRtTopKSampler_Sampler* sampler,
-              LiteRtTensorBuffer absl_nullable ids_tensor,
-              LiteRtTensorBuffer absl_nullable prev_input_positions_tensor,
-              LiteRtTensorBuffer absl_nullable input_positions_tensor,
-              LiteRtTensorBuffer absl_nullable prev_mask_tensor,
-              LiteRtTensorBuffer absl_nullable mask_tensor,
-              int (*run_inference_func)(void* arg), void* arg,
-              char** absl_nullable error_msg);
+  using LiteRtTopKSampler_SetInferenceFuncAndInputTensors = int (*)(
+      LiteRtTopKSampler_Sampler* sampler, int (*run_inference_func)(void* arg),
+      void* arg, LiteRtTensorBuffer absl_nullable ids_tensor,
+      LiteRtTensorBuffer absl_nullable prev_input_positions_tensor,
+      LiteRtTensorBuffer absl_nullable input_positions_tensor,
+      LiteRtTensorBuffer absl_nullable prev_mask_tensor,
+      LiteRtTensorBuffer absl_nullable mask_tensor,
+      LiteRtTensorBuffer absl_nullable prev_param_tensor,
+      LiteRtTensorBuffer absl_nullable param_tensor,
+      char** absl_nullable error_msg);
 
   struct TopKSamplerCApi {
     std::optional<SharedLibrary> lib;
@@ -195,7 +196,8 @@ class TopKCApiSampler : public Sampler {
     LiteRtTopKSampler_UpdateConfig update_config_func;
     LiteRtTopKSampler_CanHandleInput can_handle_input_func;
     LiteRtTopKSampler_HandlesInput handles_input_func;
-    LiteRtTopKSampler_SetInputTensorsAndInferenceFunc set_input_tensors_func;
+    LiteRtTopKSampler_SetInferenceFuncAndInputTensors
+        set_inference_func_and_input_tensors_func;
 
     TopKSamplerCApi(
         std::optional<SharedLibrary> lib, LiteRtTopKSampler_Create create_func,
@@ -204,8 +206,8 @@ class TopKCApiSampler : public Sampler {
         LiteRtTopKSampler_UpdateConfig update_config_func,
         LiteRtTopKSampler_CanHandleInput can_handle_input_func = nullptr,
         LiteRtTopKSampler_HandlesInput handles_input_func = nullptr,
-        LiteRtTopKSampler_SetInputTensorsAndInferenceFunc
-            set_input_tensors_func = nullptr)
+        LiteRtTopKSampler_SetInferenceFuncAndInputTensors
+            set_inference_func_and_input_tensors_func = nullptr)
         : lib(std::move(lib)),
           create_func(create_func),
           destroy_func(destroy_func),
@@ -213,7 +215,8 @@ class TopKCApiSampler : public Sampler {
           update_config_func(update_config_func),
           can_handle_input_func(can_handle_input_func),
           handles_input_func(handles_input_func),
-          set_input_tensors_func(set_input_tensors_func) {}
+          set_inference_func_and_input_tensors_func(
+              set_inference_func_and_input_tensors_func) {}
   };
 
   ~TopKCApiSampler() override { capi_->destroy_func(sampler_); }
@@ -253,25 +256,30 @@ class TopKCApiSampler : public Sampler {
                : false;
   }
 
-  absl::Status SetInputTensorsAndInferenceFunc(
+  absl::Status SetInferenceFuncAndInputTensors(
+      int (*run_inference_func)(void* arg), void* arg,
       const TensorBuffer* ids_tensor,
       const TensorBuffer* prev_input_positions_tensor,
       const TensorBuffer* input_positions_tensor,
       const TensorBuffer* prev_mask_tensor, const TensorBuffer* mask_tensor,
-      int (*run_inference_func)(void* arg), void* arg) override {
-    if (!capi_->set_input_tensors_func) {
-      return absl::UnimplementedError("SetInputTensors is not implemented.");
+      const TensorBuffer* prev_param_tensor,
+      const TensorBuffer* param_tensor) override {
+    if (!capi_->set_inference_func_and_input_tensors_func) {
+      return absl::UnimplementedError(
+          "SetInferenceFuncAndInputTensors is not implemented.");
     }
 
     char* error_msg = nullptr;
-    int error_code = capi_->set_input_tensors_func(
-        sampler_, ids_tensor ? ids_tensor->Get() : nullptr,
+    int error_code = capi_->set_inference_func_and_input_tensors_func(
+        sampler_, run_inference_func, arg,
+        ids_tensor ? ids_tensor->Get() : nullptr,
         prev_input_positions_tensor ? prev_input_positions_tensor->Get()
                                     : nullptr,
         input_positions_tensor ? input_positions_tensor->Get() : nullptr,
         prev_mask_tensor ? prev_mask_tensor->Get() : nullptr,
-        mask_tensor ? mask_tensor->Get() : nullptr, run_inference_func, arg,
-        &error_msg);
+        mask_tensor ? mask_tensor->Get() : nullptr,
+        prev_param_tensor ? prev_param_tensor->Get() : nullptr,
+        param_tensor ? param_tensor->Get() : nullptr, &error_msg);
     return CreateStatusAndFreeErrorMsg(error_code, error_msg);
   }
 
@@ -286,7 +294,7 @@ class TopKCApiSampler : public Sampler {
       const char* update_config_func_name,
       const char* can_handle_input_func_name = nullptr,
       const char* handles_input_func_name = nullptr,
-      const char* set_input_tensors_func_name = nullptr) {
+      const char* set_inference_func_and_input_tensors_func_name = nullptr) {
     // Load Sampler C API library and get the symbols.
     LITERT_ASSIGN_OR_RETURN(
         auto lib, SharedLibrary::Load(lib_name, RtldFlags::Lazy().Local()));
@@ -327,22 +335,23 @@ class TopKCApiSampler : public Sampler {
       RET_CHECK_NE(sampler_handles_input_func, nullptr)
           << "Failed to load " << handles_input_func_name;
     }
-    LiteRtTopKSampler_SetInputTensorsAndInferenceFunc
-        sampler_set_input_tensors_func = nullptr;
-    if (set_input_tensors_func_name != nullptr) {
+    LiteRtTopKSampler_SetInferenceFuncAndInputTensors
+        sampler_set_inference_func_and_input_tensors_func = nullptr;
+    if (set_inference_func_and_input_tensors_func_name != nullptr) {
       LITERT_ASSIGN_OR_RETURN(
-          sampler_set_input_tensors_func,
-          lib.LookupSymbol<LiteRtTopKSampler_SetInputTensorsAndInferenceFunc>(
-              set_input_tensors_func_name));
-      RET_CHECK_NE(sampler_set_input_tensors_func, nullptr)
-          << "Failed to load " << set_input_tensors_func_name;
+          sampler_set_inference_func_and_input_tensors_func,
+          lib.LookupSymbol<LiteRtTopKSampler_SetInferenceFuncAndInputTensors>(
+              set_inference_func_and_input_tensors_func_name));
+      RET_CHECK_NE(sampler_set_inference_func_and_input_tensors_func, nullptr)
+          << "Failed to load "
+          << set_inference_func_and_input_tensors_func_name;
     }
 
     return std::make_unique<TopKSamplerCApi>(
         std::move(lib), sampler_create_func, sampler_destroy_func,
         sampler_sample_func, sampler_update_config_func,
         sampler_can_handle_input_func, sampler_handles_input_func,
-        sampler_set_input_tensors_func);
+        sampler_set_inference_func_and_input_tensors_func);
   }
 
   std::unique_ptr<TopKSamplerCApi> capi_;
@@ -437,7 +446,7 @@ class TopKWebGpuCApiSampler : public TopKCApiSampler {
         "LiteRtTopKWebGpuSampler_UpdateConfig",
         "LiteRtTopKWebGpuSampler_CanHandleInput",
         "LiteRtTopKWebGpuSampler_HandlesInput",
-        "LiteRtTopKWebGpuSampler_SetInputTensorsAndInferenceFunc");
+        "LiteRtTopKWebGpuSampler_SetInferenceFuncAndInputTensors");
     if (capi_or.ok()) {
       capi = std::move(capi_or.value());
       ABSL_VLOG(1) << "Dynamically loaded LiteRtTopKWebGpuSampler C API.";
@@ -482,7 +491,7 @@ class TopKWebGpuCApiSampler : public TopKCApiSampler {
         LiteRtTopKWebGpuSampler_UpdateConfig_Static == nullptr ||
         LiteRtTopKWebGpuSampler_CanHandleInput_Static == nullptr ||
         LiteRtTopKWebGpuSampler_HandlesInput_Static == nullptr ||
-        LiteRtTopKWebGpuSampler_SetInputTensorsAndInferenceFunc_Static ==
+        LiteRtTopKWebGpuSampler_SetInferenceFuncAndInputTensors_Static ==
             nullptr) {
       return absl::UnavailableError(
           "Static LiteRtTopKWebGpuSampler C API not available.");
@@ -494,7 +503,7 @@ class TopKWebGpuCApiSampler : public TopKCApiSampler {
         LiteRtTopKWebGpuSampler_UpdateConfig_Static,
         LiteRtTopKWebGpuSampler_CanHandleInput_Static,
         LiteRtTopKWebGpuSampler_HandlesInput_Static,
-        LiteRtTopKWebGpuSampler_SetInputTensorsAndInferenceFunc_Static);
+        LiteRtTopKWebGpuSampler_SetInferenceFuncAndInputTensors_Static);
   }
 };
 
@@ -516,7 +525,7 @@ class TopKMetalCApiSampler : public TopKCApiSampler {
         "LiteRtTopKMetalSampler_UpdateConfig",
         "LiteRtTopKMetalSampler_CanHandleInput",
         "LiteRtTopKMetalSampler_HandlesInput",
-        "LiteRtTopKMetalSampler_SetInputTensorsAndInferenceFunc");
+        "LiteRtTopKMetalSampler_SetInferenceFuncAndInputTensors");
     if (capi_or.ok()) {
       capi = std::move(capi_or.value());
       ABSL_VLOG(1) << "Dynamically loaded LiteRtTopKMetalSampler C API.";
@@ -560,7 +569,7 @@ class TopKMetalCApiSampler : public TopKCApiSampler {
         LiteRtTopKMetalSampler_UpdateConfig_Static == nullptr ||
         LiteRtTopKMetalSampler_CanHandleInput_Static == nullptr ||
         LiteRtTopKMetalSampler_HandlesInput_Static == nullptr ||
-        LiteRtTopKMetalSampler_SetInputTensorsAndInferenceFunc_Static ==
+        LiteRtTopKMetalSampler_SetInferenceFuncAndInputTensors_Static ==
             nullptr) {
       return absl::UnavailableError(
           "Static LiteRtTopKMetalSampler C API not available.");
@@ -572,7 +581,7 @@ class TopKMetalCApiSampler : public TopKCApiSampler {
         LiteRtTopKMetalSampler_UpdateConfig_Static,
         LiteRtTopKMetalSampler_CanHandleInput_Static,
         LiteRtTopKMetalSampler_HandlesInput_Static,
-        LiteRtTopKMetalSampler_SetInputTensorsAndInferenceFunc_Static);
+        LiteRtTopKMetalSampler_SetInferenceFuncAndInputTensors_Static);
   }
 };
 

@@ -61,7 +61,6 @@ jobs:
             --@rules_python//python/config_settings:python_version=${PYTHON_VERSION} \
             --define=DEV_BUILD=${{ env.DEV_BUILD }} \
             --define=DEV_VERSION=${DATE} \
-            --define=litert_link_capi_so=true \
             --define=litert_runtime_link_mode=dynamic \
             --define=resolve_symbols_in_exec=false \
             --config=linux_arm64 \

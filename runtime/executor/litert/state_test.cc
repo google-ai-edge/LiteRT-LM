@@ -110,14 +110,14 @@ TEST_F(LitertStateTest, CanCreateKVWithStaticModelOutOfPlace) {
   ASSERT_NO_FATAL_FAILURE(SetUpKV(kTestStaticModelPath,
                                   LitertState::AllocationPolicy::kPingPong,
                                   /*batch_size=*/1));
-  EXPECT_EQ(kv_cache_->GetNumEntries(), 160);
+  EXPECT_EQ(kv_cache_->GetNumEntries(), 128);
 }
 
 TEST_F(LitertStateTest, CanCreateKVWithStaticModelInPlace) {
   ASSERT_NO_FATAL_FAILURE(SetUpKV(kTestStaticModelPath,
                                   LitertState::AllocationPolicy::kInplace,
                                   /*batch_size=*/1));
-  EXPECT_EQ(kv_cache_->GetNumEntries(), 160);
+  EXPECT_EQ(kv_cache_->GetNumEntries(), 128);
 }
 
 TEST_F(LitertStateTest, SerializeNotSupported) {

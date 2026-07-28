@@ -19,29 +19,36 @@
 #include <string>
 #include <vector>
 
-#include "absl/status/statusor.h"  // from @com_google_absl
-#include "absl/types/span.h"  // from @com_google_absl
+#include "absl/base/nullability.h"  // from @com_google_absl
 #include "omni/asr/speech_decoder.h"
+#include "omni/base/stage.h"
 
 namespace litert_lm::omni::asr {
 
-// Abstract interface for converting decoded tokens into words.
-class Detokenizer {
- public:
-  // Represents a decoded word and its optional timestamp.
-  struct Word {
-    std::string text;
-    std::optional<int> timestamp_ms;
-  };
+// Represents a decoded word and its optional timestamp.
+struct Word {
+  std::string text;
+  std::optional<int> timestamp_ms;
+};
 
-  virtual ~Detokenizer() = default;
+// Abstract interface for converting decoded tokens into words.
+class Detokenizer : public SingleThreadedStageWithDeque<std::vector<Word>> {
+ public:
+  using Word = ::litert_lm::omni::asr::Word;
+
+  explicit Detokenizer(
+      Stage<std::vector<SpeechDecoder::DecodedToken>>* absl_nonnull decoder)
+      : decoder_(*decoder) {}
+
+  ~Detokenizer() override = default;
 
   // Resets internal cached state for a new audio stream.
   virtual void Reset() = 0;
 
-  // Converts token IDs into words with timestamps.
-  virtual absl::StatusOr<std::vector<Word>> Detokenize(
-      absl::Span<const SpeechDecoder::DecodedToken> tokens) = 0;
+ protected:
+  bool NeedScheduleInternal() const override { return decoder_.HasOutput(); }
+
+  Stage<std::vector<SpeechDecoder::DecodedToken>>& decoder_;
 };
 
 }  // namespace litert_lm::omni::asr

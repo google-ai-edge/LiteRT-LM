@@ -467,7 +467,10 @@ TEST_P(ConversationTest, SendMessage) {
   Message expected_message = {
       {"role", "assistant"},
       {"content",
-       {{{"type", "text"}, {"text", "TarefaByte دارایेत्र investigaciónప్రదేశ"}}}}};
+       {{{"type", "text"},
+         {"text",
+          " spectrophot "
+          "spectrophot<unused178><unused178><unused178><unused178>"}}}}};
   EXPECT_EQ(message, expected_message);
   EXPECT_THAT(conversation->GetHistory(),
               testing::ElementsAre(user_message, expected_message));
@@ -2035,11 +2038,13 @@ TEST_P(ConversationTest, SendMessageAsync) {
   Message user_message = {{"role", "user"}, {"content", "Hello world!"}};
   // The expected message is just some gibberish text, because the test LLM has
   // random weights.
-  Message expected_message =
-      Message({{"role", "assistant"},
-               {"content",
-                {{{"type", "text"},
-                  {"text", "TarefaByte دارایेत्र investigaciónప్రదేశ"}}}}});
+  Message expected_message = Message(
+      {{"role", "assistant"},
+       {"content",
+        {{{"type", "text"},
+          {"text",
+           " spectrophot "
+           "spectrophot<unused178><unused178><unused178><unused178>"}}}}});
   Message expected_message_for_confirm = expected_message;
 
   absl::Notification done;
@@ -2650,19 +2655,12 @@ TEST_P(ConversationTest, SendMessageWithPreface) {
                            {"role", "user"}, {"content", "Hello world!"}}));
   // The expected message is just some gibberish text, because the test LLM has
   // random weights.
-  Message expected_message;
-  if (prefill_preface_on_init_) {
-    expected_message = {{"role", "assistant"},
-                        {"content",
-                         {{{"type", "text"},
-                           {"text", " rupani rupani rupani echoes echoes"}}}}};
-  } else {
-    expected_message = {
-        {"role", "assistant"},
-        {"content",
-         {{{"type", "text"},
-           {"text", " noses</caption> গ্রাহ<unused5296> omp"}}}}};
-  }
+  Message expected_message = {
+      {"role", "assistant"},
+      {"content",
+       {{{"type", "text"},
+         {"text",
+          "debugElementdebugElementdebugElementdebugElementdebugElement"}}}}};
   EXPECT_EQ(message, expected_message);
 }
 
@@ -2924,11 +2922,13 @@ TEST(ConversationAccessHistoryTest, AccessHistory) {
 
   // Send a message to the LLM.
   Message user_message = {{"role", "user"}, {"content", "Hello world!"}};
-  Message expected_assistant_message =
-      Message({{"role", "assistant"},
-               {"content",
-                {{{"type", "text"},
-                  {"text", "TarefaByte دارایेत्र investigaciónప్రదేశ"}}}}});
+  Message expected_assistant_message = Message(
+      {{"role", "assistant"},
+       {"content",
+        {{{"type", "text"},
+          {"text",
+           " spectrophot "
+           "spectrophot<unused178><unused178><unused178><unused178>"}}}}});
   Message expected_assistant_message_for_confirm = expected_assistant_message;
   absl::Notification done;
   EXPECT_OK(conversation->SendMessageAsync(

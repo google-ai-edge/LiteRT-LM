@@ -28,6 +28,7 @@
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
+#include "litert/cc/litert_model_types.h"  // from @litert
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "runtime/components/model_resources.h"
 #include "runtime/executor/executor_settings_base.h"
@@ -35,6 +36,7 @@
 #include "runtime/executor/llm_executor.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/llm_litert_compiled_model_executor.h"
+#include "runtime/proto/executor_metadata.pb.h"
 #include "runtime/util/status_macros.h"
 
 #if !defined(LITERT_DISABLE_NPU)
@@ -59,12 +61,65 @@ absl::StatusOr<bool> IsDynamicTensor(const SimpleTensor& tensor) {
 }
 
 // Returns true if the model is a dynamic model.
-// Model dynamism is determined based on the prefill signature and whether the
-// KV cache and sequence length are dynamic.
-absl::StatusOr<bool> IsDynamicModel(const Model& model) {
+// Model dynamism is determined based on executor metadata when present,
+// or fallback to inspecting prefill signature for dynamic KV cache and sequence
+// length.
+absl::StatusOr<bool> IsDynamicModel(ModelResources& resources) {
+  LITERT_ASSIGN_OR_RETURN(
+      const litert::Model* model,
+      resources.GetTFLiteModel(ModelType::kTfLitePrefillDecode));
+  auto executor_metadata_or = resources.GetExecutorMetadata();
+  if (executor_metadata_or.ok() && *executor_metadata_or != nullptr) {
+    const proto::ExecutorMetadata* executor_metadata = *executor_metadata_or;
+    const auto& state_buffers =
+        executor_metadata->llm_executor_metadata().state_buffers();
+
+    auto get_tensor =
+        [&](absl::string_view tensor_name) -> absl::StatusOr<SimpleTensor> {
+      for (int i = 0; i < model->GetNumSignatures(); ++i) {
+        LITERT_ASSIGN_OR_RETURN(auto sig, model->GetSignature(i));
+        auto input_tensor_or = sig.InputTensor(tensor_name);
+        if (input_tensor_or.HasValue()) {
+          return *input_tensor_or;
+        }
+      }
+      return absl::NotFoundError(absl::StrCat(
+          "Tensor ", tensor_name, " not found in model signatures"));
+    };
+
+    for (const auto& state_buffer : state_buffers) {
+      if (!state_buffer.has_sequence_axis()) {
+        continue;
+      }
+      std::string tensor_name;
+      if (!state_buffer.prefill_input_name().empty()) {
+        tensor_name = state_buffer.prefill_input_name();
+      } else if (!state_buffer.decode_input_name().empty()) {
+        tensor_name = state_buffer.decode_input_name();
+      }
+
+      if (tensor_name.empty()) {
+        continue;
+      }
+
+      int axis = state_buffer.sequence_axis();
+      LITERT_ASSIGN_OR_RETURN(SimpleTensor tensor, get_tensor(tensor_name));
+      LITERT_ASSIGN_OR_RETURN(RankedTensorType ranked_tensor_type,
+                              tensor.RankedTensorType());
+      auto dimensions = ranked_tensor_type.Layout().Dimensions();
+      RET_CHECK(axis >= 0 && axis < dimensions.size())
+          << "sequence_axis out of bounds: " << axis << " for rank "
+          << dimensions.size();
+      if (dimensions[axis] == kDynamicDimValue) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   absl::string_view prefill_signature_key;
-  for (int i = 0; i < model.GetNumSignatures(); ++i) {
-    LITERT_ASSIGN_OR_RETURN(auto sig, model.GetSignature(i));
+  for (int i = 0; i < model->GetNumSignatures(); ++i) {
+    LITERT_ASSIGN_OR_RETURN(auto sig, model->GetSignature(i));
     absl::string_view key = sig.Key();
     if (absl::StartsWith(key, "prefill")) {
       prefill_signature_key = key;
@@ -72,7 +127,7 @@ absl::StatusOr<bool> IsDynamicModel(const Model& model) {
     }
   }
   LITERT_ASSIGN_OR_RETURN(const SimpleSignature& prefill_signature,
-                          model.FindSignature(prefill_signature_key));
+                          model->FindSignature(prefill_signature_key));
 
   bool is_kv_cache_dynamic = false;
   {
@@ -84,13 +139,11 @@ absl::StatusOr<bool> IsDynamicModel(const Model& model) {
 
     // TODO(b/477657050): Investigate support for dynamic model with optimized
     // gpu cache.
-    if (!absl::c_any_of(prefill_signature.InputNames(),
-                        [&](absl::string_view input_name) {
-                          return absl::StartsWith(input_name,
-                                                  kv_cache_k_root_name) ||
-                                 absl::StartsWith(input_name,
-                                                  kv_cache_v_root_name);
-                        })) {
+    if (!absl::c_any_of(
+            prefill_signature.InputNames(), [&](absl::string_view input_name) {
+              return absl::StartsWith(input_name, kv_cache_k_root_name) ||
+                     absl::StartsWith(input_name, kv_cache_v_root_name);
+            })) {
       return false;
     }
 
@@ -135,11 +188,7 @@ CreateCpuOrGpuLlmLiteRtCompiledModelExecutor(
     ModelResources& resources) {
   std::unique_ptr<LlmExecutor> executor;
 
-  LITERT_ASSIGN_OR_RETURN(
-      const litert::Model* litert_model,
-      resources.GetTFLiteModel(ModelType::kTfLitePrefillDecode));
-
-  LITERT_ASSIGN_OR_RETURN(bool is_dynamic_model, IsDynamicModel(*litert_model));
+  LITERT_ASSIGN_OR_RETURN(bool is_dynamic_model, IsDynamicModel(resources));
   if (is_dynamic_model) {
     LITERT_ASSIGN_OR_RETURN(executor,
                             LlmLiteRtCompiledModelExecutorDynamic::Create(

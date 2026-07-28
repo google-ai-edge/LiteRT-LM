@@ -18,39 +18,38 @@
 #include <optional>
 #include <vector>
 
-#include "absl/functional/any_invocable.h"  // from @com_google_absl
-#include "absl/status/status.h"  // from @com_google_absl
-#include "absl/status/statusor.h"  // from @com_google_absl
-#include "absl/types/span.h"  // from @com_google_absl
+#include "absl/base/nullability.h"  // from @com_google_absl
+#include "omni/base/stage.h"
 
 namespace litert_lm::omni::asr {
 
-// Abstract interface for decoding preprocessed audio features into tokens.
-class SpeechDecoder {
- public:
-  // Represents a decoded token ID and its optional timestamp.
-  struct DecodedToken {
-    int token_id;
-    std::optional<int> timestamp_ms;
-  };
+// Represents a decoded token ID and its optional timestamp.
+struct DecodedToken {
+  int token_id;
+  std::optional<int> timestamp_ms;
+};
 
-  virtual ~SpeechDecoder() = default;
+// Abstract interface for decoding preprocessed audio features into tokens.
+class SpeechDecoder
+    : public SingleThreadedStageWithDeque<std::vector<DecodedToken>> {
+ public:
+  using DecodedToken = ::litert_lm::omni::asr::DecodedToken;
+
+  explicit SpeechDecoder(
+      Stage<std::vector<float>>* absl_nonnull audio_preprocessor)
+      : audio_preprocessor_(*audio_preprocessor) {}
+
+  ~SpeechDecoder() override = default;
 
   // Resets internal model decoder state (e.g. KV cache) for a new audio stream.
   virtual void Reset() = 0;
 
-  // Decodes mel_features into tokens.
-  virtual absl::StatusOr<std::vector<DecodedToken>> Decode(
-      absl::Span<const float> mel_features) = 0;
+ protected:
+  bool NeedScheduleInternal() const override {
+    return audio_preprocessor_.HasOutput();
+  }
 
-  // Decodes mel_features into tokens asynchronously.
-  // Note: Callbacks can be invoked on any thread, and may be called
-  // synchronously before returning on the same thread especially on error.
-  // It is the caller's responsibility to synchronize resources properly.
-  virtual void DecodeAsync(
-      absl::Span<const float> mel_features,
-      absl::AnyInvocable<void(absl::StatusOr<std::vector<DecodedToken>>) &&>
-          callback) = 0;
+  Stage<std::vector<float>>& audio_preprocessor_;
 };
 
 }  // namespace litert_lm::omni::asr
