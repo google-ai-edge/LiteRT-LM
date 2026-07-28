@@ -237,7 +237,8 @@ TEST_F(Gemma4DataProcessorTest, ToMessageWithToolCalls) {
 }
 
 TEST_F(Gemma4DataProcessorTest, PromptTemplateToInputDataVectorTextOnly) {
-  const std::string test_file_path = GetTestdataPath("google-gemma-4.jinja");
+  const std::string test_file_path =
+      GetModelPath("gemma-4/google-gemma-4.jinja");
   ASSERT_OK_AND_ASSIGN(const std::string template_content,
                        GetContents(test_file_path));
   PromptTemplate prompt_template(template_content);
@@ -793,7 +794,7 @@ TEST_P(Gemma4RenderTemplateTest, RenderTemplateUserTurn) {
 
   // Load the prompt template.
   const std::string test_file_path =
-      GetTestdataPath(test_case.jinja_template_file);
+      GetModelPath(test_case.jinja_template_file);
   ASSERT_OK_AND_ASSIGN(const std::string template_content,
                        GetContents(test_file_path));
   PromptTemplate prompt_template(template_content);
@@ -843,7 +844,7 @@ TEST_P(Gemma4RenderTemplateTest, RenderTemplateAssistantTurnTextOnly) {
 
   // Load the prompt template.
   const std::string test_file_path =
-      GetTestdataPath(test_case.jinja_template_file);
+      GetModelPath(test_case.jinja_template_file);
   ASSERT_OK_AND_ASSIGN(const std::string template_content,
                        GetContents(test_file_path));
   PromptTemplate prompt_template(template_content);
@@ -903,7 +904,7 @@ TEST_P(Gemma4RenderTemplateTest, RenderTemplateWithToolDeclarations) {
 
   // Load the prompt template.
   const std::string test_file_path =
-      GetTestdataPath(test_case.jinja_template_file);
+      GetModelPath(test_case.jinja_template_file);
   ASSERT_OK_AND_ASSIGN(const std::string template_content,
                        GetContents(test_file_path));
   PromptTemplate prompt_template(template_content);
@@ -992,7 +993,7 @@ TEST_P(Gemma4RenderTemplateTest, RenderTemplateWithToolCalls) {
 
   // Load the prompt template.
   const std::string test_file_path =
-      GetTestdataPath(test_case.jinja_template_file);
+      GetModelPath(test_case.jinja_template_file);
   ASSERT_OK_AND_ASSIGN(const std::string template_content,
                        GetContents(test_file_path));
   PromptTemplate prompt_template(template_content);
@@ -1072,7 +1073,7 @@ TEST_P(Gemma4RenderTemplateTest, RenderTemplateWithToolResponses) {
 
   // Load the prompt template.
   const std::string test_file_path =
-      GetTestdataPath(test_case.jinja_template_file);
+      GetModelPath(test_case.jinja_template_file);
   ASSERT_OK_AND_ASSIGN(const std::string template_content,
                        GetContents(test_file_path));
   PromptTemplate prompt_template(template_content);
@@ -1181,7 +1182,7 @@ TEST_P(Gemma4RenderTemplateTest, RenderTemplateWithMultipleToolMessages) {
 
   // Load the prompt template.
   const std::string test_file_path =
-      GetTestdataPath(test_case.jinja_template_file);
+      GetModelPath(test_case.jinja_template_file);
   ASSERT_OK_AND_ASSIGN(const std::string template_content,
                        GetContents(test_file_path));
   PromptTemplate prompt_template(template_content);
@@ -1289,7 +1290,7 @@ TEST_P(Gemma4RenderTemplateTest,
 
   // Load the prompt template.
   const std::string test_file_path =
-      GetTestdataPath(test_case.jinja_template_file);
+      GetModelPath(test_case.jinja_template_file);
   ASSERT_OK_AND_ASSIGN(const std::string template_content,
                        GetContents(test_file_path));
   PromptTemplate prompt_template(template_content);
@@ -1407,7 +1408,7 @@ TEST_P(Gemma4RenderTemplateTest, RenderTemplateWithEmptyAssistantMessage) {
 
   // Load the prompt template.
   const std::string test_file_path =
-      GetTestdataPath(test_case.jinja_template_file);
+      GetModelPath(test_case.jinja_template_file);
   ASSERT_OK_AND_ASSIGN(const std::string template_content,
                        GetContents(test_file_path));
   PromptTemplate prompt_template(template_content);
@@ -1501,11 +1502,12 @@ TEST_P(Gemma4RenderTemplateTest, RenderTemplateWithEmptyAssistantMessage) {
             "<|turn>model\n");
 }
 
-INSTANTIATE_TEST_SUITE_P(FcFormatCodeOrTemplate, Gemma4RenderTemplateTest,
-                         testing::ValuesIn<RenderTemplateTestCase>({
-                             {.jinja_template_file = "google-gemma-4.jinja",
-                              .use_template_for_fc_format = true},
-                         }));
+INSTANTIATE_TEST_SUITE_P(
+    FcFormatCodeOrTemplate, Gemma4RenderTemplateTest,
+    testing::ValuesIn<RenderTemplateTestCase>({
+        {.jinja_template_file = "gemma-4/google-gemma-4.jinja",
+         .use_template_for_fc_format = true},
+    }));
 
 }  // namespace
 
