@@ -256,38 +256,77 @@ EmbeddingLookupText::Create(
     litert::Environment& env, const litert::Model* absl_nonnull model,
     std::optional<std::string> signature_key,
     std::optional<ScopedFile> external_weight_file,
-    litert::Options::ScopedWeightSectionMap external_weight_sections) {
+    litert::Options::ScopedWeightSectionMap external_weight_sections,
+    bool allow_gpu) {
   auto handler = std::unique_ptr<EmbeddingLookupText>(new EmbeddingLookupText(
       env, model, std::move(signature_key), std::move(external_weight_file),
-      std::move(external_weight_sections)));
+      std::move(external_weight_sections), allow_gpu));
+  ABSL_RETURN_IF_ERROR(handler->Initialize());
+  return handler;
+}
+
+absl::StatusOr<std::unique_ptr<EmbeddingLookupText>>
+EmbeddingLookupText::Create(litert::Environment& env,
+                            litert::CompiledModel compiled_model,
+                            std::optional<std::string> signature_key) {
+  auto handler = std::unique_ptr<EmbeddingLookupText>(new EmbeddingLookupText(
+      env, std::move(compiled_model), std::move(signature_key)));
   ABSL_RETURN_IF_ERROR(handler->Initialize());
   return handler;
 }
 
 absl::Status EmbeddingLookupText::Initialize() {
-  LITERT_ASSIGN_OR_RETURN(auto options, Options::Create());
+  std::vector<SimpleSignature> signatures;
+  if (!compiled_model_.has_value()) {
+    if (model_ == nullptr) {
+      return absl::FailedPreconditionError(
+          "Model is null but compiled_model_ is not provided.");
+    }
+    LITERT_ASSIGN_OR_RETURN(auto options, Options::Create());
+    if (allow_gpu_) {
 #if defined(__ANDROID__)
-  options.SetHardwareAccelerators(litert::HwAccelerators::kNpu |
-                                  litert::HwAccelerators::kCpu);
+      options.SetHardwareAccelerators(litert::HwAccelerators::kNpu |
+                                      litert::HwAccelerators::kCpu);
+#elif defined(__EMSCRIPTEN__)
+      options.SetHardwareAccelerators(litert::HwAccelerators::kGpu |
+                                      litert::HwAccelerators::kCpu);
+      LITERT_ASSIGN_OR_RETURN(auto& gpu_opts, options.GetGpuOptions());
+      LITERT_RETURN_IF_ERROR(gpu_opts.EnableConstantTensorSharing(true));
+      LITERT_RETURN_IF_ERROR(gpu_opts.SetConvertWeightsOnGpu(true));
 #else
-  options.SetHardwareAccelerators(litert::HwAccelerators::kCpu);
+      options.SetHardwareAccelerators(litert::HwAccelerators::kCpu);
 #endif
-  if (external_weight_file_.has_value() && !external_weight_sections_.empty()) {
-    LITERT_RETURN_IF_ERROR(options.SetExternalWeightScopedFile(
-        *external_weight_file_, std::move(external_weight_sections_)));
-  }
+    } else {
+      options.SetHardwareAccelerators(litert::HwAccelerators::kCpu);
+    }
+    if (external_weight_file_.has_value() &&
+        !external_weight_sections_.empty()) {
+      auto res = options.SetExternalWeightScopedFile(
+          *external_weight_file_, std::move(external_weight_sections_));
+      if (!res.HasValue()) {
+        ABSL_LOG(ERROR) << "  SetExternalWeightScopedFile failed: "
+                        << res.Error().Message();
+        return absl::InternalError(res.Error().Message());
+      }
+    }
 #if defined(__ANDROID__)
-  LITERT_ASSIGN_OR_RETURN(::litert::qualcomm::QualcommOptions & qnn_opts,
-                          options.GetQualcommOptions());
-  qnn_opts.SetLogLevel(::litert::qualcomm::QualcommOptions::LogLevel::kOff);
-  qnn_opts.SetHtpPerformanceMode(
-      ::litert::qualcomm::QualcommOptions::HtpPerformanceMode::
-          kSustainedHighPerformance);
+    LITERT_ASSIGN_OR_RETURN(::litert::qualcomm::QualcommOptions & qnn_opts,
+                            options.GetQualcommOptions());
+    qnn_opts.SetLogLevel(::litert::qualcomm::QualcommOptions::LogLevel::kOff);
+    qnn_opts.SetHtpPerformanceMode(
+        ::litert::qualcomm::QualcommOptions::HtpPerformanceMode::
+            kSustainedHighPerformance);
 #endif
 
-  LITERT_ASSIGN_OR_RETURN(compiled_model_, litert::CompiledModel::Create(
-                                               env_, model_.Get(), options));
-  LITERT_ASSIGN_OR_RETURN(auto signatures, model_.GetSignatures());
+    LITERT_ASSIGN_OR_RETURN(compiled_model_, litert::CompiledModel::Create(
+                                                 env_, model_->Get(), options));
+    LITERT_ASSIGN_OR_RETURN(auto temp_signatures, model_->GetSignatures());
+    signatures = std::move(temp_signatures);
+  } else {
+    LITERT_ASSIGN_OR_RETURN(auto temp_signatures,
+                            compiled_model_->GetSignatures());
+    signatures = std::move(temp_signatures);
+  }
 
   if (signature_key_.has_value()) {
     bool found = false;

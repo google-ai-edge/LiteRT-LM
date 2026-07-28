@@ -72,6 +72,10 @@
 
 namespace litert::lm {
 
+#ifdef __EMSCRIPTEN__
+extern void SetCurrentlyCompilingModel(ModelType model_type);
+#endif
+
 namespace {
 
 // The name of the prefill decode model in the task bundle.
@@ -251,6 +255,33 @@ absl::StatusOr<SortedPrefillSignatureMap> GetPrefillRunnerSetFromModel(
                               signature.InputTensor(input_positions_name));
       LITERT_ASSIGN_OR_RETURN(auto ranked_tensor_type,
                               input_positions_tensor.RankedTensorType());
+      if (ranked_tensor_type.Layout().Rank() == 2) {
+        // [batch_size, max_seq_len]
+        prefill_runner_set[ranked_tensor_type.Layout().Dimensions()[1]] =
+            std::string(signature_key);
+      } else if (ranked_tensor_type.Layout().Rank() == 1) {
+        // [max_seq_len]
+        prefill_runner_set[ranked_tensor_type.Layout().Dimensions()[0]] =
+            std::string(signature_key);
+      } else {
+        return absl::FailedPreconditionError(
+            "Unsupported input tokens tensor dimension.");
+      }
+    }
+  }
+  return prefill_runner_set;
+}
+
+absl::StatusOr<SortedPrefillSignatureMap> GetPrefillRunnerSetFromModel(
+    CompiledModel& model, absl::string_view signature_name_base,
+    absl::string_view input_positions_name) {
+  SortedPrefillSignatureMap prefill_runner_set;
+  LITERT_ASSIGN_OR_RETURN(auto signatures, model.GetSignatures());
+  for (auto& signature : signatures) {
+    if (auto signature_key = signature.Key();
+        absl::StartsWith(signature_key, signature_name_base)) {
+      LITERT_ASSIGN_OR_RETURN(auto ranked_tensor_type,
+                              signature.InputTensorType(input_positions_name));
       if (ranked_tensor_type.Layout().Rank() == 2) {
         // [batch_size, max_seq_len]
         prefill_runner_set[ranked_tensor_type.Layout().Dimensions()[1]] =
@@ -847,10 +878,16 @@ absl::Status InitializeEmbeddingLookups(
   auto text_embedder_model =
       resources.GetTFLiteModel(ModelType::kTfLiteEmbedder);
   if (text_embedder_model.ok()) {
+#ifdef __EMSCRIPTEN__
+    SetCurrentlyCompilingModel(ModelType::kTfLiteEmbedder);
+#endif
     ABSL_ASSIGN_OR_RETURN(
         embedding_lookup,
         EmbeddingLookupManager::Create(env, *text_embedder_model,
                                        end_of_multi_modal_embedding_models));
+#ifdef __EMSCRIPTEN__
+    SetCurrentlyCompilingModel(ModelType::kUnknown);
+#endif
   }
 
   // Create per layer embedding lookups from the resources.
@@ -870,6 +907,9 @@ absl::Status InitializeEmbeddingLookups(
                               scoped_file.get().Duplicate());
       per_layer_external_weight_file = std::move(duplicated_scoped_file);
     }
+#ifdef __EMSCRIPTEN__
+    SetCurrentlyCompilingModel(ModelType::kTfLitePerLayerEmbedder);
+#endif
     ABSL_ASSIGN_OR_RETURN(per_layer_embedding_lookup,
                           EmbeddingLookupManager::Create(
                               env, *per_layer_embedder_model,
@@ -877,6 +917,9 @@ absl::Status InitializeEmbeddingLookups(
                               /*signature_key=*/std::nullopt,
                               std::move(per_layer_external_weight_file),
                               std::move(per_layer_external_weight_sections)));
+#ifdef __EMSCRIPTEN__
+    SetCurrentlyCompilingModel(ModelType::kUnknown);
+#endif
   }
 
   return absl::OkStatus();

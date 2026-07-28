@@ -260,6 +260,23 @@ class _SectionObject:
   data_writer: Callable[[BinaryIO], None]
 
 
+_COMPILATION_ORDER = [
+    TfLiteModelType.PREFILL_DECODE,
+    TfLiteModelType.EMBEDDER,
+    TfLiteModelType.PER_LAYER_EMBEDDER,
+]
+
+
+def _get_model_type(section: _SectionObject) -> TfLiteModelType | None:
+  for m in section.metadata:
+    if m.key == "model_type":
+      try:
+        return TfLiteModelType(m.value)
+      except ValueError:
+        return None
+  return None
+
+
 LitertLmFileBuilderT = TypeVar(
     "LitertLmFileBuilderT", bound="LitertLmFileBuilder"
 )
@@ -892,6 +909,25 @@ class LitertLmFileBuilder:
 
   def build(self, stream: BinaryIO) -> None:
     """Builds the litertlm into the given stream."""
+    # Sort sections so that all non-weights are first, and weights are last.
+    # Weights are ordered by _COMPILATION_ORDER.
+    non_weights_sections = []
+    weights_sections = []
+    for s in self._sections:
+      if s.data_type == schema.AnySectionDataType.TFLiteWeights:
+        weights_sections.append(s)
+      else:
+        non_weights_sections.append(s)
+
+    def weights_sort_key(s: _SectionObject):
+      model_type = _get_model_type(s)
+      if model_type in _COMPILATION_ORDER:
+        return _COMPILATION_ORDER.index(model_type)
+      return len(_COMPILATION_ORDER)
+
+    weights_sections.sort(key=weights_sort_key)
+    self._sections = non_weights_sections + weights_sections
+
     # Add UUID if not already present, but always generate a new timestamp.
     self._system_metadata = populate_system_metadata(self._system_metadata)
 

@@ -275,7 +275,6 @@ export class ModelLoaderService {
 
       this.engine = await this.createEngine({
         model: modelInput,
-        backend: Backend.GPU_ARTISAN,
         mainExecutorSettings: {
           maxNumTokens: settings.contextLength,
           backendConfig: {

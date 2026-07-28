@@ -39,6 +39,10 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
     std::optional<ModelSignatures*> signatures,
     std::optional<std::string> cache_suffix = std::nullopt);
 
+absl::Status UpdateCompilationOptions(
+    const LlmExecutorSettings& executor_settings,
+    litert::Options& compilation_options);
+
 }  // namespace litert::lm
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_LLM_EXECUTOR_SETTINGS_UTILS_H_

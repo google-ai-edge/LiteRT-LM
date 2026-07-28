@@ -52,13 +52,18 @@ constexpr int kDynamicDimValue = -1;
 
 // Given a tensor object, inspects its ranked tensor type and returns true if
 // any of its dimensions are dynamic (i.e., have value kDynamicDimValue).
-absl::StatusOr<bool> IsDynamicTensor(const SimpleTensor& tensor) {
-  LITERT_ASSIGN_OR_RETURN(RankedTensorType ranked_tensor_type,
-                          tensor.RankedTensorType());
+absl::StatusOr<bool> IsDynamicTensor(
+    const RankedTensorType& ranked_tensor_type) {
   auto dimensions = ranked_tensor_type.Layout().Dimensions();
   int n_dynamic_dims =
       std::count(dimensions.begin(), dimensions.end(), kDynamicDimValue);
   return n_dynamic_dims > 0;
+}
+
+absl::StatusOr<bool> IsDynamicTensor(const SimpleTensor& tensor) {
+  LITERT_ASSIGN_OR_RETURN(RankedTensorType ranked_tensor_type,
+                          tensor.RankedTensorType());
+  return IsDynamicTensor(ranked_tensor_type);
 }
 
 // Returns true if the model is a dynamic model.
@@ -183,6 +188,73 @@ absl::StatusOr<bool> IsDynamicModel(ModelResources& resources) {
   return is_kv_cache_dynamic;
 }
 
+absl::StatusOr<bool> IsDynamicModel(CompiledModel& compiled_model) {
+  std::string prefill_signature_key;
+  LITERT_ASSIGN_OR_RETURN(auto signature_keys,
+                          compiled_model.GetSignatureKeys());
+  for (absl::string_view key : signature_keys) {
+    if (absl::StartsWith(key, "prefill")) {
+      prefill_signature_key = std::string(key);
+      break;
+    }
+  }
+  RET_CHECK(!prefill_signature_key.empty());
+
+  LITERT_ASSIGN_OR_RETURN(const SimpleSignature& prefill_signature,
+                          compiled_model.FindSignature(prefill_signature_key));
+
+  bool is_kv_cache_dynamic = false;
+  {
+    std::string kv_cache_k_root_name;
+    std::string kv_cache_v_root_name;
+    ABSL_RETURN_IF_ERROR(GetKVCacheRootNames(
+        prefill_signature.InputNames(), prefill_signature.OutputNames(),
+        kv_cache_k_root_name, kv_cache_v_root_name));
+
+    if (!absl::c_any_of(
+            prefill_signature.InputNames(), [&](absl::string_view input_name) {
+              return absl::StartsWith(input_name, kv_cache_k_root_name) ||
+                     absl::StartsWith(input_name, kv_cache_v_root_name);
+            })) {
+      return false;
+    }
+
+    std::string first_kv_cache_k_input_name = kv_cache_k_root_name + "0";
+    LITERT_ASSIGN_OR_RETURN(
+        auto k_tensor_type,
+        prefill_signature.InputTensorType(first_kv_cache_k_input_name));
+    ABSL_ASSIGN_OR_RETURN(bool is_k_dynamic, IsDynamicTensor(k_tensor_type));
+
+    std::string first_kv_cache_v_input_name = kv_cache_v_root_name + "0";
+    LITERT_ASSIGN_OR_RETURN(
+        auto v_tensor_type,
+        prefill_signature.InputTensorType(first_kv_cache_v_input_name));
+    ABSL_ASSIGN_OR_RETURN(bool is_v_dynamic, IsDynamicTensor(v_tensor_type));
+
+    RET_CHECK(is_k_dynamic == is_v_dynamic)
+        << "KV cache k and v need to be dynamic or static at the same time.";
+    is_kv_cache_dynamic = is_k_dynamic && is_v_dynamic;
+  }
+
+  bool is_seq_len_dynamic = false;
+  {
+    ABSL_ASSIGN_OR_RETURN(
+        ModelSignatures signatures,
+        GetModelSignaturesFromInputOutputNames(prefill_signature.InputNames(),
+                                               prefill_signature.OutputNames(),
+                                               /*strict=*/false));
+    LITERT_ASSIGN_OR_RETURN(
+        auto position_tensor_type,
+        prefill_signature.InputTensorType(signatures.input_positions));
+    ABSL_ASSIGN_OR_RETURN(is_seq_len_dynamic,
+                          IsDynamicTensor(position_tensor_type));
+  }
+  RET_CHECK(is_kv_cache_dynamic == is_seq_len_dynamic)
+      << "KV cache and seq len need to be dynamic or static at the same time.";
+
+  return is_kv_cache_dynamic;
+}
+
 absl::StatusOr<std::unique_ptr<LlmExecutor>>
 CreateCpuOrGpuLlmLiteRtCompiledModelExecutor(
     LlmExecutorSettings executor_settings, Environment& lrt_env,
@@ -198,6 +270,35 @@ CreateCpuOrGpuLlmLiteRtCompiledModelExecutor(
     LITERT_ASSIGN_OR_RETURN(executor,
                             LlmLiteRtCompiledModelExecutorStatic::Create(
                                 executor_settings, lrt_env, resources));
+  }
+
+  return executor;
+}
+
+absl::StatusOr<std::unique_ptr<LlmExecutor>>
+CreateCpuOrGpuLlmLiteRtCompiledModelExecutor(
+    LlmExecutorSettings executor_settings, Environment& lrt_env,
+    std::unique_ptr<CompiledModel> compiled_model, ModelResources* resources,
+    std::unique_ptr<EmbeddingLookupManager> embedding_lookup,
+    std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup,
+    std::unique_ptr<CompiledModel> compiled_mtp_drafter_model,
+    std::unique_ptr<LlmLiteRtMtpDrafter> mtp_drafter) {
+  std::unique_ptr<LlmExecutor> executor;
+  ABSL_ASSIGN_OR_RETURN(bool is_dynamic_model, IsDynamicModel(*compiled_model));
+  if (is_dynamic_model) {
+    ABSL_ASSIGN_OR_RETURN(
+        executor,
+        LlmLiteRtCompiledModelExecutorDynamic::Create(
+            executor_settings, lrt_env, std::move(compiled_model), resources,
+            std::move(embedding_lookup), std::move(per_layer_embedding_lookup),
+            std::move(compiled_mtp_drafter_model), std::move(mtp_drafter)));
+  } else {
+    ABSL_ASSIGN_OR_RETURN(
+        executor,
+        LlmLiteRtCompiledModelExecutorStatic::Create(
+            executor_settings, lrt_env, std::move(compiled_model), resources,
+            std::move(embedding_lookup), std::move(per_layer_embedding_lookup),
+            std::move(compiled_mtp_drafter_model), std::move(mtp_drafter)));
   }
 
   return executor;
@@ -246,6 +347,31 @@ CreateLlmLiteRtCompiledModelExecutor(LlmExecutorSettings executor_settings,
       return absl::InvalidArgumentError(
           absl::StrCat("Unsupported backend: ", backend));
   }
-};
+}
+
+absl::StatusOr<std::unique_ptr<LlmExecutor>>
+CreateLlmLiteRtCompiledModelExecutor(
+    LlmExecutorSettings executor_settings, Environment& lrt_env,
+    std::unique_ptr<CompiledModel> compiled_model, ModelResources* resources,
+    std::unique_ptr<EmbeddingLookupManager> embedding_lookup,
+    std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup,
+    std::unique_ptr<CompiledModel> compiled_mtp_drafter_model,
+    std::unique_ptr<LlmLiteRtMtpDrafter> mtp_drafter) {
+  Backend backend = executor_settings.GetBackend();
+  switch (backend) {
+    case Backend::CPU:
+    case Backend::GPU:
+      return CreateCpuOrGpuLlmLiteRtCompiledModelExecutor(
+          executor_settings, lrt_env, std::move(compiled_model), resources,
+          std::move(embedding_lookup), std::move(per_layer_embedding_lookup),
+          std::move(compiled_mtp_drafter_model), std::move(mtp_drafter));
+    case Backend::NPU:
+      return absl::InvalidArgumentError(
+          "NPU backend is not supported with pre-compiled models yet.");
+    default:
+      return absl::InvalidArgumentError(
+          absl::StrCat("Unsupported backend: ", backend));
+  }
+}
 
 }  // namespace litert::lm

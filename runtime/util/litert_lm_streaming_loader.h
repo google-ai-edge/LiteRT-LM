@@ -60,7 +60,7 @@ struct SectionInfo {
   const schema::SectionObject* section;
   BufferKey buffer_key;
   std::optional<std::string> backend_constraint;
-  std::unique_ptr<DataStream> data_stream;
+  std::shared_ptr<DataStream> data_stream;
 
   std::weak_ptr<schema::LitertlmHeader> header;
 };

@@ -55,6 +55,13 @@ class LlmLiteRtMtpDrafter {
       std::optional<std::reference_wrapper<EmbeddingLookupManager>>
           ple_manager);
 
+  static absl::StatusOr<std::unique_ptr<LlmLiteRtMtpDrafter>> Create(
+      Environment& env, CompiledModel mtp_drafter_model,
+      const LlmExecutorSettings& executor_settings, CompiledModel& base_model,
+      const Model& base_model_desc, EmbeddingLookupManager& embedding_manager,
+      std::optional<std::reference_wrapper<EmbeddingLookupManager>>
+          ple_manager);
+
   // Draft the next set of tokens using the MTP drafter model.
   // Inputs:
   //   position: The current position of the input sequence.

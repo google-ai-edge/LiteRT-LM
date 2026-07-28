@@ -206,8 +206,7 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
  protected:
   LlmLiteRtCompiledModelExecutorBase(
       LlmExecutorSettings executor_settings, Environment& env,
-      const Model* absl_nonnull model,
-      std::unique_ptr<CompiledModel> compiled_model,
+      const Model* model, std::unique_ptr<CompiledModel> compiled_model,
       absl::flat_hash_map<absl::string_view, TensorBuffer> decode_input_buffers,
       absl::flat_hash_map<absl::string_view, TensorBuffer>
           decode_output_buffers,
@@ -223,7 +222,6 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
       GraphRunCallback post_graph_run_callback = nullptr)
       : executor_settings_(std::move(executor_settings)),
         env_(env),
-        model_(*model),
         compiled_model_(std::move(compiled_model)),
         decode_input_buffers_(std::move(decode_input_buffers)),
         decode_output_buffers_(std::move(decode_output_buffers)),
@@ -364,7 +362,6 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
   LlmExecutorSettings executor_settings_
       ABSL_GUARDED_BY(executor_settings_mutex_);
   Environment& env_;
-  const Model& model_;
   std::unique_ptr<CompiledModel> compiled_model_;
 
   absl::flat_hash_map<absl::string_view, TensorBuffer> decode_input_buffers_;
@@ -440,6 +437,16 @@ class LlmLiteRtCompiledModelExecutorStatic
   Create(LlmExecutorSettings executor_settings, Environment& lrt_env,
          ModelResources& resources);
 
+  static absl::StatusOr<std::unique_ptr<LlmLiteRtCompiledModelExecutorStatic>>
+  Create(LlmExecutorSettings executor_settings, Environment& lrt_env,
+         std::unique_ptr<CompiledModel> compiled_model,
+         ModelResources* resources = nullptr,
+         std::unique_ptr<EmbeddingLookupManager> embedding_lookup = nullptr,
+         std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup =
+             nullptr,
+         std::unique_ptr<CompiledModel> compiled_mtp_drafter_model = nullptr,
+         std::unique_ptr<LlmLiteRtMtpDrafter> mtp_drafter = nullptr);
+
   using LlmLiteRtCompiledModelExecutorBase::Prefill;
 
   absl::Status Prefill(const ExecutorInputs& inputs,
@@ -448,8 +455,7 @@ class LlmLiteRtCompiledModelExecutorStatic
  private:
   LlmLiteRtCompiledModelExecutorStatic(
       LlmExecutorSettings executor_settings, Environment& env,
-      const Model* absl_nonnull model,
-      std::unique_ptr<CompiledModel> compiled_model,
+      const Model* model, std::unique_ptr<CompiledModel> compiled_model,
       absl::flat_hash_map<absl::string_view, TensorBuffer> decode_input_buffers,
       absl::flat_hash_map<absl::string_view, TensorBuffer>
           decode_output_buffers,
@@ -501,6 +507,16 @@ class LlmLiteRtCompiledModelExecutorDynamic
   Create(LlmExecutorSettings executor_settings, Environment& lrt_env,
          ModelResources& resources);
 
+  static absl::StatusOr<std::unique_ptr<LlmLiteRtCompiledModelExecutorDynamic>>
+  Create(LlmExecutorSettings executor_settings, Environment& lrt_env,
+         std::unique_ptr<CompiledModel> compiled_model,
+         ModelResources* resources = nullptr,
+         std::unique_ptr<EmbeddingLookupManager> embedding_lookup = nullptr,
+         std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup =
+             nullptr,
+         std::unique_ptr<CompiledModel> compiled_mtp_drafter_model = nullptr,
+         std::unique_ptr<LlmLiteRtMtpDrafter> mtp_drafter = nullptr);
+
   using LlmLiteRtCompiledModelExecutorBase::Prefill;
 
   absl::Status Prefill(const ExecutorInputs& inputs,
@@ -509,8 +525,7 @@ class LlmLiteRtCompiledModelExecutorDynamic
  private:
   LlmLiteRtCompiledModelExecutorDynamic(
       LlmExecutorSettings executor_settings, Environment& env,
-      const Model* absl_nonnull model,
-      std::unique_ptr<CompiledModel> compiled_model,
+      const Model* model, std::unique_ptr<CompiledModel> compiled_model,
       absl::flat_hash_map<absl::string_view, TensorBuffer> decode_input_buffers,
       absl::flat_hash_map<absl::string_view, TensorBuffer>
           decode_output_buffers,

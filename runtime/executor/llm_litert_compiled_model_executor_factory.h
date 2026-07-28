@@ -23,7 +23,14 @@
 #include "runtime/executor/llm_executor.h"
 #include "runtime/executor/llm_executor_settings.h"
 
+namespace litert {
+class CompiledModel;
+}  // namespace litert
+
 namespace litert::lm {
+
+class EmbeddingLookupManager;
+class LlmLiteRtMtpDrafter;
 
 // Create an instance of LlmExecutor for LiteRT compiled models. Supports both
 // statically and dynamically shaped models.
@@ -35,6 +42,17 @@ absl::StatusOr<std::unique_ptr<LlmExecutor>>
 CreateLlmLiteRtCompiledModelExecutor(LlmExecutorSettings executor_settings,
                                      Environment& lrt_env,
                                      ModelResources& resources);
+
+absl::StatusOr<std::unique_ptr<LlmExecutor>>
+CreateLlmLiteRtCompiledModelExecutor(
+    LlmExecutorSettings executor_settings, Environment& lrt_env,
+    std::unique_ptr<CompiledModel> compiled_model,
+    ModelResources* resources = nullptr,
+    std::unique_ptr<EmbeddingLookupManager> embedding_lookup = nullptr,
+    std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup =
+        nullptr,
+    std::unique_ptr<CompiledModel> compiled_mtp_drafter_model = nullptr,
+    std::unique_ptr<LlmLiteRtMtpDrafter> mtp_drafter = nullptr);
 
 }  // namespace litert::lm
 
