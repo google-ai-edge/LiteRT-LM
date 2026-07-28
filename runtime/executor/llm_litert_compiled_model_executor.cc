@@ -1372,18 +1372,6 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::InitializeSampler(
       sampler_handles_input =
           executor_settings_.GetAdvancedSettings()->sampler_handles_input;
     }
-    if (auto gpu_config = executor_settings_.GetBackendConfig<GpuConfig>();
-        gpu_config.ok()) {
-      // In external tensor mode, swapping external input tensors triggers GPU
-      // resource bindings with newly created binding group. WebGPU seems to
-      // have a sync issue between different inference contexts (decode vs
-      // input handling) and decode step N+1 may start before input handling for
-      // step N+1 is complete. So, let's disable input handling in external
-      // tensor mode.
-      // In non-external tensor mode, GPU-GPU conversion for non-external
-      // tensors enforces a sync between input handling and decode in WebGPU.
-      sampler_handles_input &= !gpu_config->external_tensor_mode;
-    }
   }
   sampler_handles_input_ =
       sampler_handles_input && sampler_->CanHandleInput() &&
