@@ -72,8 +72,19 @@ mock_litert_lm.set_min_log_severity = mock_ffi.set_min_log_severity
 mock_model_mod = mock.Mock(
     spec_set=["Model", "parse_backend", "resolve_config_option"]
 )
-mock_model_mod.Model = mock.Mock(spec_set=["from_model_id", "get_all_models"])
+mock_model_mod.Model = mock.Mock(
+    spec_set=[
+        "from_model_id",
+        "from_model_path",
+        "from_model_reference",
+        "get_all_models",
+    ]
+)
 mock_model_mod.Model.from_model_id = mock.Mock()
+mock_model_mod.Model.from_model_path = mock.Mock()
+mock_model_mod.Model.from_model_reference = mock.Mock(
+    side_effect=lambda ref: mock_model_mod.Model.from_model_id(ref)
+)
 mock_model_mod.Model.get_all_models = mock.Mock()
 mock_model_mod.parse_backend = mock.Mock()
 mock_model_mod.resolve_config_option = mock.Mock(
@@ -101,6 +112,10 @@ class ServeTest(parameterized.TestCase):
     mock_litert_lm.Engine.reset_mock()  # pytype: disable=attribute-error
     mock_model_mod.Model.from_model_id.reset_mock()
     mock_model_mod.Model.from_model_id.side_effect = None
+    mock_model_mod.Model.from_model_reference.reset_mock()
+    mock_model_mod.Model.from_model_reference.side_effect = (
+        lambda ref: mock_model_mod.Model.from_model_id(ref)
+    )
     mock_model_mod.Model.get_all_models.reset_mock()
     mock_model_mod.Model.get_all_models.side_effect = None
     mock_model_mod.parse_backend.reset_mock()

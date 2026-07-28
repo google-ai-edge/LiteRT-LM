@@ -15,6 +15,7 @@
 """Standalone structural verification suite for pre-built LiteRT-LM PyPI wheels."""
 
 import argparse
+import os
 import pathlib
 import re
 import shutil
@@ -229,6 +230,16 @@ def main():
   model_dir = pathlib.Path("/tmp/litert_lm_models")
   model_dir.mkdir(parents=True, exist_ok=True)
   target_model = model_dir / "gemma-4-E2B-it.litertlm"
+
+  if not target_model.exists():
+    kokoro_gfile_dir = os.environ.get("KOKORO_GFILE_DIR")
+    if kokoro_gfile_dir:
+      gfile_model = (
+          pathlib.Path(kokoro_gfile_dir) / "gemma-4-E2B-it.litertlm"
+      )
+      if gfile_model.exists():
+        print("✅ Found pre-fetched model in KOKORO_GFILE_DIR", flush=True)
+        shutil.copy(gfile_model, target_model)
 
   if not target_model.exists():
     gcs_url = "gs://litert-lm-api/models/gemma-4-E2B-it.litertlm"
