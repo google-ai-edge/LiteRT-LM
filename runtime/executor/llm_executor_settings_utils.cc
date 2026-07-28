@@ -161,6 +161,14 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
         if (single_kv_cache_buffer) {
           gpu_compilation_options.AddBufferStorageTensorPattern("kv_cache_");
           gpu_compilation_options.AddBufferStorageTensorPattern("param_tensor");
+#if defined(__ANDROID__)
+          // The fastest storage for most non-Android devices (e.g. iOS, macOS,
+          // desktops) is buffer while it's texture or others on Android. So,
+          // need to declare it as external tensor for Android.
+          // TODO: b/539800729 - Remove it once AddBufferStorageTensorPattern()
+          // can be set for non-external tensors.
+          gpu_compilation_options.AddExternalTensorPattern("param_tensor");
+#endif  // defined(__ANDROID__)
         }
         ABSL_ASSIGN_OR_RETURN(auto sampler_backend,
                               GetSamplerBackend(executor_settings));

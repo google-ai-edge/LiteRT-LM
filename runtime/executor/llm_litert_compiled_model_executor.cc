@@ -1382,7 +1382,7 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::InitializeSampler(
       // tensor mode.
       // In non-external tensor mode, GPU-GPU conversion for non-external
       // tensors enforces a sync between input handling and decode in WebGPU.
-      sampler_handles_input_ &= !gpu_config->external_tensor_mode;
+      sampler_handles_input &= !gpu_config->external_tensor_mode;
     }
   }
   sampler_handles_input_ =
