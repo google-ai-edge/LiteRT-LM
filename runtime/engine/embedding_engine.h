@@ -1,0 +1,65 @@
+// Copyright 2026 The ODML Authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_ENGINE_EMBEDDING_ENGINE_H_
+#define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_ENGINE_EMBEDDING_ENGINE_H_
+
+#include <vector>
+
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "runtime/engine/io_types.h"
+
+namespace litert::lm {
+
+// Options for configuring the embedding computation.
+struct EmbeddingOptions {
+  // If true, the output embedding vector will be L2-normalized.
+  bool normalize = false;
+};
+
+// Represents the result of an embedding computation.
+struct EmbeddingResponse {
+  // The computed embedding vector.
+  std::vector<float> embedding;
+};
+
+// Interface for embedding models.
+class EmbeddingEngine {
+ public:
+  virtual ~EmbeddingEngine() = default;
+
+  // Computes embedding response for the given single request.
+  //
+  // - contents: The input data (text, audio, image) to embed.
+  // - options: Configuration options for embedding computation.
+  // - returns: The embedding response, or an error status on failure.
+  virtual absl::StatusOr<EmbeddingResponse> ComputeEmbedding(
+      const std::vector<InputData>& contents,
+      const EmbeddingOptions& options) = 0;
+
+  // Computes a batch of embedding responses for the given batch of requests.
+  //
+  // - contents: A batch of requests, where each request is a vector of
+  //   InputData.
+  // - options: Configuration options applied to all requests in the batch.
+  // - returns: A vector of embedding responses corresponding to each input
+  //   request, or an error status on failure.
+  virtual absl::StatusOr<std::vector<EmbeddingResponse>> ComputeEmbeddingBatch(
+      const std::vector<std::vector<InputData>>& contents,
+      const EmbeddingOptions& options) = 0;
+};
+
+}  // namespace litert::lm
+
+#endif  // THIRD_PARTY_ODML_LITERT_LM_RUNTIME_ENGINE_EMBEDDING_ENGINE_H_
