@@ -15,6 +15,7 @@
 """LiteRT LM is a library for running GenAI models on devices."""
 
 from ._ffi import ActivationDataType
+from ._ffi import LiteRtLmConstraintProviderType
 from ._ffi import LogSeverity
 from ._ffi import set_min_log_severity
 from ._messages import Content
@@ -31,6 +32,7 @@ from .interfaces import AbstractEngine
 from .interfaces import AbstractSession
 from .interfaces import Backend
 from .interfaces import BenchmarkInfo
+from .interfaces import ConstrainedDecodingConfig
 from .interfaces import LoraConfig
 from .interfaces import LoraRankConfig
 from .interfaces import NoRepeatNgramConfig
@@ -54,10 +56,12 @@ __all__ = (
     "Backend",
     "Benchmark",
     "BenchmarkInfo",
+    "ConstrainedDecodingConfig",
     "Content",
     "Contents",
     "Conversation",
     "Engine",
+    "LiteRtLmConstraintProviderType",
     "LogSeverity",
     "LoraConfig",
     "LoraRankConfig",

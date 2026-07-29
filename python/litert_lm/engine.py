@@ -25,7 +25,6 @@ from . import interfaces
 from . import tools as litert_tools
 from ._ffi import _get_lib
 from ._ffi import ActivationDataType
-from ._ffi import LiteRtLmConstraintProviderType
 from ._messages import Message
 from .conversation import Conversation
 from .session import Session
@@ -232,11 +231,12 @@ class Engine(interfaces.AbstractEngine):
       thinking_config: interfaces.ThinkingConfig | None = None,
       sampler_config: interfaces.SamplerConfig | None = None,
       system_message: str | None = None,
-      enable_constrained_decoding: bool = False,
+      constrained_decoding_config: (
+          interfaces.ConstrainedDecodingConfig | None
+      ) = None,
       lora_config: interfaces.LoraConfig | None = None,
       max_output_tokens: int | None = None,
       chat_template: str | None = None,
-      enable_response_format: bool = False,
   ) -> Conversation:
     session_config = self._lib.litert_lm_session_config_create()
     if sampler_config:
@@ -325,10 +325,18 @@ class Engine(interfaces.AbstractEngine):
             conv_config, tools_json
         )
 
-      if enable_constrained_decoding:
-        self._lib.litert_lm_conversation_config_set_enable_constrained_decoding(
-            conv_config, True
-        )
+      if constrained_decoding_config is not None:
+        if constrained_decoding_config.enable:
+          self._lib.litert_lm_conversation_config_set_enable_constrained_decoding(
+              conv_config, True
+          )
+        if constrained_decoding_config.provider is not None:
+          self._lib.litert_lm_conversation_config_set_constraint_provider(
+              conv_config,
+              ctypes.byref(
+                  ctypes.c_int(constrained_decoding_config.provider.value)
+              ),
+          )
 
       if filter_channel_content_from_kv_cache is not None:
         self._lib.litert_lm_conversation_config_set_filter_channel_content_from_kv_cache(
@@ -344,14 +352,6 @@ class Engine(interfaces.AbstractEngine):
         finally:
           if tc_ptr:
             self._lib.litert_lm_thinking_config_delete(tc_ptr)
-
-      if enable_response_format:
-        self._lib.litert_lm_conversation_config_set_constraint_provider(
-            conv_config,
-            ctypes.byref(
-                ctypes.c_int(LiteRtLmConstraintProviderType.LL_GUIDANCE)
-            ),
-        )
 
       conv_ptr = self._lib.litert_lm_conversation_create(
           self._engine_ptr, conv_config
@@ -377,7 +377,7 @@ class Engine(interfaces.AbstractEngine):
         lora_config=lora_config,
         max_output_tokens=max_output_tokens,
         chat_template=chat_template,
-        enable_response_format=enable_response_format,
+        constrained_decoding_config=constrained_decoding_config,
     )
 
   def create_session(

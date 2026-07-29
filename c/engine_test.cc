@@ -1377,6 +1377,8 @@ TEST(EngineCTest, ConversationSendMessageWithLlGuidance) {
       conversation_config.get(), nullptr);
   litert_lm_conversation_config_set_constraint_provider(
       conversation_config.get(), &provider);
+  litert_lm_conversation_config_set_enable_constrained_decoding(
+      conversation_config.get(), true);
 
   // 3. Create a Conversation with the Conversation Config.
   ConversationPtr conversation(
