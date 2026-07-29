@@ -30,7 +30,10 @@ StreamTextSource::StreamTextSource(TextChunkConfig config)
 
 absl::Status StreamTextSource::PushText(absl::string_view text) {
   absl::MutexLock lock(mutex_);
-  if (is_finished_) {
+  if (state_ != State::kIdle) {
+    return absl::FailedPreconditionError(
+        "Cannot push text while stage is not running.");
+  } else if (is_finished_) {
     return absl::FailedPreconditionError(
         "Cannot push text after Finish() has been called.");
   }
@@ -38,21 +41,22 @@ absl::Status StreamTextSource::PushText(absl::string_view text) {
   return absl::OkStatus();
 }
 
-void StreamTextSource::Finish() { is_finished_ = true; }
+void StreamTextSource::Finish() {
+  absl::MutexLock lock(mutex_);
+  is_finished_ = true;
+}
 
-bool StreamTextSource::IsFinished() const { return is_finished_; }
+bool StreamTextSource::IsFinished() const {
+  absl::MutexLock lock(mutex_);
+  return is_finished_;
+}
 
 void StreamTextSource::Reset() {
-  {
-    absl::MutexLock lock(mutex_);
-    mutex_.Await(
-        absl::Condition(+[](State* s) { return *s == State::kIdle; }, &state_));
-    state_ = State::kRunning;
-  }
+  WaitForStateThenSetState(State::kIdle, State::kRunning);
   buffer_.clear();
   buffer_start_index_ = 0;
-  is_finished_ = false;
   absl::MutexLock lock(mutex_);
+  is_finished_ = false;
   outputs_.clear();
   state_ = State::kIdle;
 }

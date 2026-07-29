@@ -20,7 +20,7 @@
 #include <vector>
 
 #include "absl/status/status.h"  // from @com_google_absl
-#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/strings/str_join.h"  // from @com_google_absl
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
@@ -31,9 +31,9 @@
 namespace litert_lm::omni::asr {
 
 void LevenshteinTextMerger::Reset() {
-  absl::MutexLock lock(mutex_);
-  outputs_.clear();
+  WaitForStateThenSetState(State::kIdle, State::kRunning);
   unconfirmed_words_.clear();
+  ClearOutputsThenSetState(State::kIdle);
 }
 
 absl::Status LevenshteinTextMerger::ScheduleInternal() {
@@ -44,16 +44,11 @@ absl::Status LevenshteinTextMerger::ScheduleInternal() {
 }
 
 absl::Status LevenshteinTextMerger::Execute() {
-  auto curr_chunk_words = detokenizer_.GetOutput();
-  if (absl::IsNotFound(curr_chunk_words.status())) {
-    return absl::OkStatus();
-  } else if (!curr_chunk_words.ok()) {
-    return curr_chunk_words.status();
-  }
+  ABSL_ASSIGN_OR_RETURN(auto curr_chunk_words, detokenizer_.GetOutput());
 
   std::vector<std::string> curr_strings;
-  curr_strings.reserve(curr_chunk_words->size());
-  for (const auto& word : *curr_chunk_words) {
+  curr_strings.reserve(curr_chunk_words.size());
+  for (const auto& word : curr_chunk_words) {
     curr_strings.push_back(word.text);
   }
 
@@ -130,10 +125,7 @@ absl::Status LevenshteinTextMerger::Flush() {
     PushOutput(std::move(result));
   }
 
-  {
-    absl::MutexLock lock(mutex_);
-    state_ = State::kIdle;
-  }
+  SetState(State::kIdle);
   return absl::OkStatus();
 }
 

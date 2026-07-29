@@ -27,7 +27,6 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
-#include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "miniaudio.h"  // from @miniaudio
 
@@ -106,12 +105,7 @@ FileAudioSource::FileAudioSource(
 FileAudioSource::~FileAudioSource() = default;
 
 void FileAudioSource::Reset() {
-  {
-    absl::MutexLock lock(mutex_);
-    mutex_.Await(
-        absl::Condition(+[](State* s) { return *s == State::kIdle; }, &state_));
-    state_ = State::kRunning;
-  }
+  WaitForStateThenSetState(State::kIdle, State::kRunning);
 
   if (decoder_ != nullptr) {
     ma_decoder_seek_to_pcm_frame(decoder_.get(), 0);
@@ -121,9 +115,7 @@ void FileAudioSource::Reset() {
   is_closed_ = false;
   std::fill(ring_buffer_.begin(), ring_buffer_.end(), 0.0f);
 
-  absl::MutexLock lock(mutex_);
-  outputs_.clear();
-  state_ = State::kIdle;
+  ClearOutputsThenSetState(State::kIdle);
 }
 
 bool FileAudioSource::NeedScheduleInternal() const {

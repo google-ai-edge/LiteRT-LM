@@ -36,7 +36,6 @@ cc_library(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
-        "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/time",
     ] + select({
         "@platforms//os:ios": ["@miniaudio//:miniaudio_objc"],
@@ -80,13 +79,11 @@ cc_library(
         ":audio_preprocessor",
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/cleanup",
-        "@com_google_absl//absl/log:absl_check",
         "@com_google_absl//absl/memory",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings:string_view",
-        "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/types:span",
         "@litert//litert/cc:litert_macros",
         "@litert//litert/cc:litert_tensor_buffer",
@@ -133,6 +130,41 @@ cc_library(
 )
 
 cc_library(
+    name = "tokenizer_detokenizer",
+    srcs = ["tokenizer_detokenizer.cc"],
+    hdrs = ["tokenizer_detokenizer.h"],
+    deps = [
+        ":detokenizer",
+        ":speech_decoder",
+        "@com_google_absl//absl/base:nullability",
+        "@com_google_absl//absl/cleanup",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@litert//support/tokenizer",
+        "//omni/base:stage",
+    ],
+)
+
+cc_test(
+    name = "tokenizer_detokenizer_test",
+    srcs = ["tokenizer_detokenizer_test.cc"],
+    deps = [
+        ":detokenizer",
+        ":speech_decoder",
+        ":tokenizer_detokenizer",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+        "@litert//support/tokenizer",
+        "//omni/base:stage",
+    ],
+)
+
+cc_library(
     name = "text_merger",
     hdrs = ["text_merger.h"],
     deps = [
@@ -171,6 +203,7 @@ cc_library(
         ":text_merger",
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/synchronization",

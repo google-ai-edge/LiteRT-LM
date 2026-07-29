@@ -145,6 +145,22 @@ class SingleThreadedStageWithDeque : public Stage<T> {
     state_ = state;
   }
 
+  void WaitForStateThenSetState(State expected_state, State new_state) {
+    absl::MutexLock lock(mutex_);
+    auto condition = [this, expected_state] {
+      mutex_.AssertHeld();
+      return state_ == expected_state;
+    };
+    mutex_.Await(absl::Condition(&condition));
+    state_ = new_state;
+  }
+
+  void ClearOutputsThenSetState(State state) {
+    absl::MutexLock lock(mutex_);
+    outputs_.clear();
+    state_ = state;
+  }
+
   void PushOutput(T output) {
     absl::MutexLock lock(mutex_);
     outputs_.push_back(std::move(output));

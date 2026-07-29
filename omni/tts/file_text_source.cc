@@ -25,7 +25,6 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
-#include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "omni/tts/text_chunk_utils.h"
 
 namespace litert_lm::omni::tts {
@@ -53,12 +52,7 @@ FileTextSource::FileTextSource(std::string file_path, TextChunkConfig config)
 }
 
 void FileTextSource::Reset() {
-  {
-    absl::MutexLock lock(mutex_);
-    mutex_.Await(
-        absl::Condition(+[](State* s) { return *s == State::kIdle; }, &state_));
-    state_ = State::kRunning;
-  }
+  WaitForStateThenSetState(State::kIdle, State::kRunning);
   buffer_.clear();
   buffer_start_index_ = 0;
   if (file_stream_.is_open()) {
@@ -71,11 +65,7 @@ void FileTextSource::Reset() {
   if (!is_finished_) {
     ReadFromFileIfNeeded();
   }
-  {
-    absl::MutexLock lock(mutex_);
-    outputs_.clear();
-    state_ = State::kIdle;
-  }
+  ClearOutputsThenSetState(State::kIdle);
 }
 
 void FileTextSource::ReadFromFileIfNeeded() {

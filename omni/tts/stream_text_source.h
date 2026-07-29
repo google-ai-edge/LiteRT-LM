@@ -18,6 +18,7 @@
 #include <cstddef>
 #include <string>
 
+#include "absl/base/thread_annotations.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "omni/tts/text_chunk_utils.h"
@@ -65,14 +66,15 @@ class StreamTextSource : public TextSource {
  protected:
   // Determines if ScheduleInternal should be called based on delimiter match or
   // Finish().
-  bool NeedScheduleInternal() const override;
+  bool NeedScheduleInternal() const
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_) override;
 
   // Extracts text chunks from the stream buffer into the stage output deque.
-  absl::Status ScheduleInternal() override;
+  absl::Status ScheduleInternal() ABSL_NO_THREAD_SAFETY_ANALYSIS override;
 
  private:
   // Text chunk configuration for stream chunking.
-  TextChunkConfig config_;
+  const TextChunkConfig config_;
 
   // Internal buffer accumulating text pushed by callers.
   std::string buffer_;
@@ -81,7 +83,7 @@ class StreamTextSource : public TextSource {
   size_t buffer_start_index_ = 0;
 
   // True if Finish() has been called on this stream source.
-  bool is_finished_ = false;
+  bool is_finished_ ABSL_GUARDED_BY(mutex_) = false;
 };
 
 }  // namespace litert_lm::omni::tts

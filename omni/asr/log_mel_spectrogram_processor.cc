@@ -29,7 +29,6 @@
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
-#include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
@@ -146,11 +145,11 @@ LogMelSpectrogramProcessor::LogMelSpectrogramProcessor(
       preprocessor_(std::move(preprocessor)) {}
 
 void LogMelSpectrogramProcessor::Reset() {
+  WaitForStateThenSetState(State::kIdle, State::kRunning);
   if (preprocessor_) {
     preprocessor_->Reset();
   }
-  absl::MutexLock lock(mutex_);
-  outputs_.clear();
+  ClearOutputsThenSetState(State::kIdle);
 }
 
 absl::Status LogMelSpectrogramProcessor::ScheduleInternal() {
