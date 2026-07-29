@@ -435,6 +435,12 @@ def run_interactive(
     "--prompt", default=None, help="A single prompt to run once and exit."
 )
 @click.option(
+    "--prompt-file",
+    type=click.Path(exists=True, dir_okay=False),
+    default=None,
+    help="Path to a text file containing the prompt to run once and exit.",
+)
+@click.option(
     "--preset",
     type=click.Path(exists=True, dir_okay=False),
     default=None,
@@ -570,6 +576,7 @@ def run_interactive(
 def run(
     model_reference: str | None = None,
     prompt: str | None = None,
+    prompt_file: str | None = None,
     preset: str | None = None,
     backend: str | None = None,
     android: bool = False,
@@ -604,6 +611,7 @@ def run(
       model ID from `litert-lm list`. If from-huggingface-repo is set, this is
       the filename in the repository.
     prompt: A single prompt to run once and exit.
+    prompt_file: Path to a text file containing the prompt to run once and exit.
     preset: Path to a Python file containing tool functions and system
       instructions.
     backend: The backend to use (cpu or gpu).
@@ -652,6 +660,15 @@ def run(
     )
     return
 
+  if prompt and prompt_file:
+    click.echo(
+        click.style(
+            "Error: Cannot specify both --prompt and --prompt-file.",
+            fg="red",
+        )
+    )
+    return
+
   if chat_template and no_template:
     click.echo(
         click.style(
@@ -680,6 +697,10 @@ def run(
         num_images += 1
     except ValueError as e:
       raise click.BadParameter(str(e)) from e
+  if prompt_file:
+    with open(prompt_file, "r", encoding="utf-8") as f:
+      prompt = f.read()
+
   # If the stdin is not connected to the terminal, e.g., piped or redirected
   # input, then handle the input as the one-shot prompt.
   #
