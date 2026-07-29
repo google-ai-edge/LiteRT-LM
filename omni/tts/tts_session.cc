@@ -30,7 +30,7 @@
 #include "omni/tts/vocoder.h"
 #include "runtime/framework/threadpool.h"
 
-namespace litert_lm::omni::tts {
+namespace litert::omni::tts {
 
 absl::StatusOr<std::unique_ptr<TtsSession>> TtsSession::Create(
     Components components) {
@@ -136,4 +136,4 @@ absl::StatusOr<AudioOutput> TtsSession::Flush() {
   return components_.vocoder->GetOutput();
 }
 
-}  // namespace litert_lm::omni::tts
+}  // namespace litert::omni::tts

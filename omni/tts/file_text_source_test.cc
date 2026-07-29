@@ -26,7 +26,7 @@
 #include "support/util/test_utils.h"  // from @litert  // IWYU pragma: keep
 #include "omni/tts/text_chunk_utils.h"
 
-namespace litert_lm::omni::tts {
+namespace litert::omni::tts {
 namespace {
 
 using ::absl_testing::IsOk;
@@ -138,4 +138,4 @@ TEST(FileTextSourceTest, ResetReReadsFile) {
 }
 
 }  // namespace
-}  // namespace litert_lm::omni::tts
+}  // namespace litert::omni::tts

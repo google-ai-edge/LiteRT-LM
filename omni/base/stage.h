@@ -23,7 +23,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
 
-namespace litert_lm::omni {
+namespace litert::omni {
 namespace internal {
 
 // Base class for Stage below with abstract methods not dependent on output
@@ -171,6 +171,6 @@ class SingleThreadedStageWithDeque : public Stage<T> {
   std::deque<T> outputs_ ABSL_GUARDED_BY(mutex_);
 };
 
-}  // namespace litert_lm::omni
+}  // namespace litert::omni
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_BASE_STAGE_H_

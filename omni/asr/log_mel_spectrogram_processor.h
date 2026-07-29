@@ -26,7 +26,7 @@
 #include "omni/asr/audio_preprocessor.h"
 #include "omni/base/stage.h"
 
-namespace litert_lm::omni::asr {
+namespace litert::omni::asr {
 
 // Converts raw PCM audio speech chunks into Log-Mel Spectrogram model input
 // features.
@@ -75,6 +75,6 @@ class LogMelSpectrogramProcessor : public AudioPreprocessor {
   std::unique_ptr<litert::support::AudioPreprocessorMiniAudio> preprocessor_;
 };
 
-}  // namespace litert_lm::omni::asr
+}  // namespace litert::omni::asr
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_LOG_MEL_SPECTROGRAM_PROCESSOR_H_

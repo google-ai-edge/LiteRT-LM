@@ -26,7 +26,7 @@
 #include "omni/asr/audio_source.h"
 #include "miniaudio.h"  // from @miniaudio
 
-namespace litert_lm::omni::asr {
+namespace litert::omni::asr {
 
 // AudioSource implementation that reads PCM frames from an audio file on disk
 // on-demand without loading the entire file into memory, yielding
@@ -78,6 +78,6 @@ class FileAudioSource : public AudioSource {
   bool is_closed_;
 };
 
-}  // namespace litert_lm::omni::asr
+}  // namespace litert::omni::asr
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_FILE_AUDIO_SOURCE_H_

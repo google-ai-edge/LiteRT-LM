@@ -25,7 +25,7 @@
 #include "omni/asr/speech_decoder.h"
 #include "omni/base/stage.h"
 
-namespace litert_lm::omni::asr {
+namespace litert::omni::asr {
 
 // Converts SpeechDecoder tokens into words using litert::support::Tokenizer.
 class TokenizerDetokenizer : public Detokenizer {
@@ -48,6 +48,6 @@ class TokenizerDetokenizer : public Detokenizer {
   ::litert::support::Tokenizer* const tokenizer_;
 };
 
-}  // namespace litert_lm::omni::asr
+}  // namespace litert::omni::asr
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_TOKENIZER_DETOKENIZER_H_

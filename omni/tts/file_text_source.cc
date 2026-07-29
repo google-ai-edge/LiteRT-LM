@@ -27,7 +27,7 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "omni/tts/text_chunk_utils.h"
 
-namespace litert_lm::omni::tts {
+namespace litert::omni::tts {
 
 absl::StatusOr<std::unique_ptr<FileTextSource>> FileTextSource::Create(
     std::string file_path, TextChunkConfig config) {
@@ -116,4 +116,4 @@ absl::Status FileTextSource::ScheduleInternal() {
   return absl::OkStatus();
 }
 
-}  // namespace litert_lm::omni::tts
+}  // namespace litert::omni::tts

@@ -30,7 +30,7 @@
 #include "omni/base/stage.h"
 #include "runtime/framework/threadpool.h"
 
-namespace litert_lm::omni {
+namespace litert::omni {
 
 // Schedules stages asynchronously using a thread pool and calls a callback on
 // error or when the stream ends.
@@ -179,6 +179,6 @@ class AsyncStageScheduler {
   State state_ ABSL_GUARDED_BY(mutex_) = State::kNotStarted;
 };
 
-}  // namespace litert_lm::omni
+}  // namespace litert::omni
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_BASE_ASYNC_STAGE_SCHEDULER_H_

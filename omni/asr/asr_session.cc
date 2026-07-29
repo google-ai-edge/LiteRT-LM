@@ -29,7 +29,7 @@
 #include "omni/base/stage.h"
 #include "runtime/framework/threadpool.h"
 
-namespace litert_lm::omni::asr {
+namespace litert::omni::asr {
 
 absl::StatusOr<std::unique_ptr<AsrSession>> AsrSession::Create(
     Components components) {
@@ -134,4 +134,4 @@ absl::StatusOr<TextMerger::MergeResult> AsrSession::Flush() {
   return components_.text_merger->GetOutput();
 }
 
-}  // namespace litert_lm::omni::asr
+}  // namespace litert::omni::asr

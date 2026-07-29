@@ -39,7 +39,7 @@
 #include "omni/base/stage.h"
 #include "runtime/framework/threadpool.h"
 
-namespace litert_lm::omni::asr {
+namespace litert::omni::asr {
 namespace {
 
 // Dummy AudioSource returning pre-configured PCM audio chunks via
@@ -423,4 +423,4 @@ TEST(AsrSessionTest, FailsWhenMissingComponent) {
 }
 
 }  // namespace
-}  // namespace litert_lm::omni::asr
+}  // namespace litert::omni::asr

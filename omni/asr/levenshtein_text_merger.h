@@ -25,7 +25,7 @@
 #include "omni/asr/text_merger.h"
 #include "omni/base/stage.h"
 
-namespace litert_lm::omni::asr {
+namespace litert::omni::asr {
 
 // Aligns and merges overlapping word streams from consecutive audio chunks
 // using Levenshtein distance sequence alignment.
@@ -57,6 +57,6 @@ class LevenshteinTextMerger : public TextMerger {
   std::vector<std::string> unconfirmed_words_;
 };
 
-}  // namespace litert_lm::omni::asr
+}  // namespace litert::omni::asr
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_LEVENSHTEIN_TEXT_MERGER_H_

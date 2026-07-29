@@ -35,7 +35,7 @@
 #include "omni/asr/speech_decoder.h"
 #include "omni/base/stage.h"
 
-namespace litert_lm::omni::asr {
+namespace litert::omni::asr {
 
 TokenizerDetokenizer::TokenizerDetokenizer(
     Stage<std::vector<SpeechDecoder::DecodedToken>>* absl_nonnull decoder,
@@ -115,4 +115,4 @@ absl::StatusOr<std::vector<Detokenizer::Word>> TokenizerDetokenizer::Detokenize(
   return words;
 }
 
-}  // namespace litert_lm::omni::asr
+}  // namespace litert::omni::asr

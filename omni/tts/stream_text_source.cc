@@ -23,7 +23,7 @@
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "omni/tts/text_chunk_utils.h"
 
-namespace litert_lm::omni::tts {
+namespace litert::omni::tts {
 
 StreamTextSource::StreamTextSource(TextChunkConfig config)
     : config_(std::move(config)) {}
@@ -83,4 +83,4 @@ absl::Status StreamTextSource::ScheduleInternal() {
   return absl::OkStatus();
 }
 
-}  // namespace litert_lm::omni::tts
+}  // namespace litert::omni::tts

@@ -23,7 +23,7 @@
 #include "omni/asr/speech_decoder.h"
 #include "omni/base/stage.h"
 
-namespace litert_lm::omni::asr {
+namespace litert::omni::asr {
 
 // Represents a decoded word and its optional timestamp.
 struct Word {
@@ -34,7 +34,7 @@ struct Word {
 // Abstract interface for converting decoded tokens into words.
 class Detokenizer : public SingleThreadedStageWithDeque<std::vector<Word>> {
  public:
-  using Word = ::litert_lm::omni::asr::Word;
+  using Word = ::litert::omni::asr::Word;
 
   explicit Detokenizer(
       Stage<std::vector<SpeechDecoder::DecodedToken>>* absl_nonnull decoder)
@@ -51,6 +51,6 @@ class Detokenizer : public SingleThreadedStageWithDeque<std::vector<Word>> {
   Stage<std::vector<SpeechDecoder::DecodedToken>>& decoder_;
 };
 
-}  // namespace litert_lm::omni::asr
+}  // namespace litert::omni::asr
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_DETOKENIZER_H_

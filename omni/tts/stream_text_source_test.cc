@@ -21,7 +21,7 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_matchers.h"  // from @com_google_absl
 
-namespace litert_lm::omni::tts {
+namespace litert::omni::tts {
 namespace {
 
 using ::absl_testing::IsOk;
@@ -94,4 +94,4 @@ TEST(StreamTextSourceTest, ResetClearsState) {
 }
 
 }  // namespace
-}  // namespace litert_lm::omni::tts
+}  // namespace litert::omni::tts

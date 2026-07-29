@@ -25,7 +25,7 @@
 #include "omni/tts/text_chunk_utils.h"
 #include "omni/tts/text_source.h"
 
-namespace litert_lm::omni::tts {
+namespace litert::omni::tts {
 
 // TextSource implementation that reads input text from a file on disk.
 //
@@ -96,6 +96,6 @@ class FileTextSource : public TextSource {
   bool is_finished_ = false;
 };
 
-}  // namespace litert_lm::omni::tts
+}  // namespace litert::omni::tts
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_TTS_FILE_TEXT_SOURCE_H_

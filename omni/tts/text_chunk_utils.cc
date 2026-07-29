@@ -20,7 +20,7 @@
 
 #include "absl/strings/string_view.h"  // from @com_google_absl
 
-namespace litert_lm::omni::tts {
+namespace litert::omni::tts {
 
 DelimiterMatch FindFirstDelimiter(absl::string_view text,
                                   const TextChunkConfig& config) {
@@ -117,4 +117,4 @@ std::optional<TextChunk> ExtractNextChunk(absl::string_view text,
   return std::nullopt;
 }
 
-}  // namespace litert_lm::omni::tts
+}  // namespace litert::omni::tts

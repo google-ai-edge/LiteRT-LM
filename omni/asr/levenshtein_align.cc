@@ -21,7 +21,7 @@
 
 #include "absl/types/span.h"  // from @com_google_absl
 
-namespace litert_lm::omni::asr {
+namespace litert::omni::asr {
 
 // Based on original implementation in speech/common/levenshtein.cc.
 std::vector<AlignCode> AlignTokens(absl::Span<const std::string> ref_tokens,
@@ -92,4 +92,4 @@ std::vector<AlignCode> AlignTokens(absl::Span<const std::string> ref_tokens,
   return alignment;
 }
 
-}  // namespace litert_lm::omni::asr
+}  // namespace litert::omni::asr

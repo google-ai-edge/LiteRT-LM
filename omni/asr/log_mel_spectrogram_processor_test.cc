@@ -25,7 +25,7 @@
 #include "absl/status/status_matchers.h"  // from @com_google_absl
 #include "omni/base/stage.h"
 
-namespace litert_lm::omni::asr {
+namespace litert::omni::asr {
 namespace {
 
 using ::testing::FloatNear;
@@ -227,4 +227,4 @@ TEST(LogMelSpectrogramProcessorTest, SchedulePullsFromSourceAndPushesFeatures) {
 }
 
 }  // namespace
-}  // namespace litert_lm::omni::asr
+}  // namespace litert::omni::asr

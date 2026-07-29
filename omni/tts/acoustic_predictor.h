@@ -21,7 +21,7 @@
 #include "omni/base/stage.h"
 #include "omni/tts/text_frontend.h"
 
-namespace litert_lm::omni::tts {
+namespace litert::omni::tts {
 
 // TODO: b/538727793. Refactor the outputs to a more generic structure.
 // Currently these are tailored for qwen3-tts model. Generic frontend output
@@ -36,7 +36,7 @@ struct AcousticOutput {
 // MTP).
 class AcousticPredictor : public SingleThreadedStageWithDeque<AcousticOutput> {
  public:
-  using AcousticOutput = ::litert_lm::omni::tts::AcousticOutput;
+  using AcousticOutput = ::litert::omni::tts::AcousticOutput;
 
   explicit AcousticPredictor(
       Stage<TextFrontend::FrontendOutput>* absl_nonnull text_frontend)
@@ -55,6 +55,6 @@ class AcousticPredictor : public SingleThreadedStageWithDeque<AcousticOutput> {
   Stage<TextFrontend::FrontendOutput>& text_frontend_;
 };
 
-}  // namespace litert_lm::omni::tts
+}  // namespace litert::omni::tts
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_TTS_ACOUSTIC_PREDICTOR_H_

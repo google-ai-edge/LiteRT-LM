@@ -20,7 +20,7 @@
 
 #include "absl/types/span.h"  // from @com_google_absl
 
-namespace litert_lm::omni::asr {
+namespace litert::omni::asr {
 
 // Represents the edit decision code for string sequence alignment.
 enum class AlignCode {
@@ -35,6 +35,6 @@ enum class AlignCode {
 std::vector<AlignCode> AlignTokens(absl::Span<const std::string> ref_tokens,
                                    absl::Span<const std::string> hyp_tokens);
 
-}  // namespace litert_lm::omni::asr
+}  // namespace litert::omni::asr
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_LEVENSHTEIN_ALIGN_H_

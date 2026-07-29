@@ -20,7 +20,7 @@
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "omni/base/stage.h"
 
-namespace litert_lm::omni::asr {
+namespace litert::omni::asr {
 
 // Abstract interface for preprocessing raw PCM audio into features.
 class AudioPreprocessor
@@ -43,6 +43,6 @@ class AudioPreprocessor
   Stage<std::vector<float>>& audio_source_;
 };
 
-}  // namespace litert_lm::omni::asr
+}  // namespace litert::omni::asr
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_AUDIO_PREPROCESSOR_H_

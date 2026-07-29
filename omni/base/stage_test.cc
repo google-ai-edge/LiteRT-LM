@@ -23,7 +23,7 @@
 #include "absl/status/status_matchers.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 
-namespace litert_lm::omni {
+namespace litert::omni {
 namespace {
 
 template <typename T>
@@ -71,4 +71,4 @@ TEST(StageTest, StageWithDequeLifecycle) {
 }
 
 }  // namespace
-}  // namespace litert_lm::omni
+}  // namespace litert::omni

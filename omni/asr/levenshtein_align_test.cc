@@ -20,7 +20,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-namespace litert_lm::omni::asr {
+namespace litert::omni::asr {
 namespace {
 
 using ::testing::ElementsAre;
@@ -48,4 +48,4 @@ TEST(LevenshteinAlignTest, OverlapWithPrefixAndSuffix) {
 }
 
 }  // namespace
-}  // namespace litert_lm::omni::asr
+}  // namespace litert::omni::asr

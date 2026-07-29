@@ -30,7 +30,7 @@
 #include "omni/base/async_stage_scheduler.h"
 #include "runtime/framework/threadpool.h"
 
-namespace litert_lm::omni::asr {
+namespace litert::omni::asr {
 
 // Orchestrates component pipeline execution for ASR speech recognition streams.
 class AsrSession {
@@ -82,6 +82,6 @@ class AsrSession {
       ABSL_GUARDED_BY(mutex_);
 };
 
-}  // namespace litert_lm::omni::asr
+}  // namespace litert::omni::asr
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_ASR_SESSION_H_

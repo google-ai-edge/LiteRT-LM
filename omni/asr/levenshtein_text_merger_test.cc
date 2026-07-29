@@ -27,7 +27,7 @@
 #include "omni/asr/text_merger.h"
 #include "omni/base/stage.h"
 
-namespace litert_lm::omni::asr {
+namespace litert::omni::asr {
 namespace {
 
 class DummyWordStage
@@ -131,4 +131,4 @@ TEST(LevenshteinTextMergerTest, NoOverlapConfirmsPreviousState) {
 }
 
 }  // namespace
-}  // namespace litert_lm::omni::asr
+}  // namespace litert::omni::asr

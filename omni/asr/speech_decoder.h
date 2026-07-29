@@ -21,7 +21,7 @@
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "omni/base/stage.h"
 
-namespace litert_lm::omni::asr {
+namespace litert::omni::asr {
 
 // Represents a decoded token ID and its optional timestamp.
 struct DecodedToken {
@@ -33,7 +33,7 @@ struct DecodedToken {
 class SpeechDecoder
     : public SingleThreadedStageWithDeque<std::vector<DecodedToken>> {
  public:
-  using DecodedToken = ::litert_lm::omni::asr::DecodedToken;
+  using DecodedToken = ::litert::omni::asr::DecodedToken;
 
   explicit SpeechDecoder(
       Stage<std::vector<float>>* absl_nonnull audio_preprocessor)
@@ -52,6 +52,6 @@ class SpeechDecoder
   Stage<std::vector<float>>& audio_preprocessor_;
 };
 
-}  // namespace litert_lm::omni::asr
+}  // namespace litert::omni::asr
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_SPEECH_DECODER_H_

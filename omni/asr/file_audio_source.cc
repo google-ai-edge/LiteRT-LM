@@ -30,7 +30,7 @@
 #include "absl/time/time.h"  // from @com_google_absl
 #include "miniaudio.h"  // from @miniaudio
 
-namespace litert_lm::omni::asr {
+namespace litert::omni::asr {
 
 void FileAudioSource::MaDecoderDeleter::operator()(ma_decoder* decoder) const {
   if (decoder != nullptr) {
@@ -187,4 +187,4 @@ absl::StatusOr<ma_uint64> FileAudioSource::ReadFrames(ma_decoder* decoder,
   return read_len;
 }
 
-}  // namespace litert_lm::omni::asr
+}  // namespace litert::omni::asr

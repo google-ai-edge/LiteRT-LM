@@ -23,7 +23,7 @@
 #include "omni/asr/detokenizer.h"
 #include "omni/base/stage.h"
 
-namespace litert_lm::omni::asr {
+namespace litert::omni::asr {
 
 // Represents the merged text result from processing an audio chunk.
 struct MergeResult {
@@ -36,7 +36,7 @@ struct MergeResult {
 // Abstract interface for aligning and merging overlapping word streams.
 class TextMerger : public SingleThreadedStageWithDeque<MergeResult> {
  public:
-  using MergeResult = ::litert_lm::omni::asr::MergeResult;
+  using MergeResult = ::litert::omni::asr::MergeResult;
 
   explicit TextMerger(
       Stage<std::vector<Detokenizer::Word>>* absl_nonnull detokenizer)
@@ -58,6 +58,6 @@ class TextMerger : public SingleThreadedStageWithDeque<MergeResult> {
   Stage<std::vector<Detokenizer::Word>>& detokenizer_;
 };
 
-}  // namespace litert_lm::omni::asr
+}  // namespace litert::omni::asr
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_TEXT_MERGER_H_

@@ -38,7 +38,7 @@
 #include "omni/tts/vocoder.h"
 #include "runtime/framework/threadpool.h"
 
-namespace litert_lm::omni::tts {
+namespace litert::omni::tts {
 namespace {
 
 class DummyTextSource : public TextSource {
@@ -260,4 +260,4 @@ TEST(TtsSessionTest, ProcessAsyncWithThreadPool) {
 }
 
 }  // namespace
-}  // namespace litert_lm::omni::tts
+}  // namespace litert::omni::tts

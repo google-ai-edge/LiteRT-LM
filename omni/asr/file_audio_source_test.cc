@@ -29,7 +29,7 @@
 #include "support/util/test_utils.h"  // from @litert  // IWYU pragma: keep for ABSL_ASSERT_OK
 #include "miniaudio.h"  // from @miniaudio
 
-namespace litert_lm::omni::asr {
+namespace litert::omni::asr {
 namespace {
 
 using ::absl_testing::StatusIs;
@@ -188,4 +188,4 @@ TEST_F(FileAudioSourceTest, Reset_ClearsStateAndRestarts) {
 }
 
 }  // namespace
-}  // namespace litert_lm::omni::asr
+}  // namespace litert::omni::asr

@@ -20,7 +20,7 @@
 #include <gtest/gtest.h>
 #include "absl/strings/string_view.h"  // from @com_google_absl
 
-namespace litert_lm::omni::tts {
+namespace litert::omni::tts {
 namespace {
 
 TEST(TextChunkUtilsTest, FindFirstDelimiterDefaultConfig) {
@@ -155,4 +155,4 @@ TEST(TextChunkUtilsTest, ExtractNextChunkLeadingDelimiterExcluded) {
 }
 
 }  // namespace
-}  // namespace litert_lm::omni::tts
+}  // namespace litert::omni::tts

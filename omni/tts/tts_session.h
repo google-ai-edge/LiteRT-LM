@@ -31,7 +31,7 @@
 #include "omni/tts/vocoder.h"
 #include "runtime/framework/threadpool.h"
 
-namespace litert_lm::omni::tts {
+namespace litert::omni::tts {
 
 // Orchestrates component pipeline execution for TTS speech synthesis streams.
 class TtsSession {
@@ -83,6 +83,6 @@ class TtsSession {
       ABSL_GUARDED_BY(mutex_);
 };
 
-}  // namespace litert_lm::omni::tts
+}  // namespace litert::omni::tts
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_TTS_TTS_SESSION_H_

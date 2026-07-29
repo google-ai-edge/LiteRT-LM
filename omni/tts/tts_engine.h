@@ -29,7 +29,7 @@
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/framework/threadpool.h"
 
-namespace litert_lm::omni::tts {
+namespace litert::omni::tts {
 
 // Supported TTS model types.
 enum class ModelType {
@@ -102,6 +102,6 @@ class TtsEngine {
   std::unique_ptr<::litert::lm::ThreadPool> thread_pool_;
 };
 
-}  // namespace litert_lm::omni::tts
+}  // namespace litert::omni::tts
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_TTS_TTS_ENGINE_H_

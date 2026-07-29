@@ -28,7 +28,7 @@
 #include "omni/asr/levenshtein_align.h"
 #include "omni/asr/text_merger.h"
 
-namespace litert_lm::omni::asr {
+namespace litert::omni::asr {
 
 void LevenshteinTextMerger::Reset() {
   WaitForStateThenSetState(State::kIdle, State::kRunning);
@@ -129,4 +129,4 @@ absl::Status LevenshteinTextMerger::Flush() {
   return absl::OkStatus();
 }
 
-}  // namespace litert_lm::omni::asr
+}  // namespace litert::omni::asr

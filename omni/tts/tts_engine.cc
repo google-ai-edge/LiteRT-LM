@@ -26,7 +26,7 @@
 #include "omni/tts/tts_session.h"
 #include "runtime/framework/threadpool.h"
 
-namespace litert_lm::omni::tts {
+namespace litert::omni::tts {
 
 absl::StatusOr<std::unique_ptr<TtsEngine>> TtsEngine::CreateWithComponents(
     const TtsEngineSettings& settings, TtsSession::Components components) {
@@ -117,4 +117,4 @@ absl::Status TtsEngine::SynthesizeAsync(absl::string_view text,
   return status;
 }
 
-}  // namespace litert_lm::omni::tts
+}  // namespace litert::omni::tts

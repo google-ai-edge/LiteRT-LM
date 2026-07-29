@@ -30,7 +30,7 @@
 #include "omni/asr/speech_decoder.h"
 #include "omni/base/stage.h"
 
-namespace litert_lm::omni::asr {
+namespace litert::omni::asr {
 namespace {
 
 class FakeTokenizer : public ::litert::support::Tokenizer {
@@ -207,4 +207,4 @@ TEST(TokenizerDetokenizerTest, ResetClearsOutputs) {
 }
 
 }  // namespace
-}  // namespace litert_lm::omni::asr
+}  // namespace litert::omni::asr

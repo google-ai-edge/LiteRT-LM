@@ -38,7 +38,7 @@
 #include "omni/asr/audio_preprocessor.h"
 #include "omni/base/stage.h"
 
-namespace litert_lm::omni::asr {
+namespace litert::omni::asr {
 namespace {
 
 constexpr float kEpsilon = 1e-5f;
@@ -244,4 +244,4 @@ absl::StatusOr<std::vector<float>> LogMelSpectrogramProcessor::Process(
   return result;
 }
 
-}  // namespace litert_lm::omni::asr
+}  // namespace litert::omni::asr

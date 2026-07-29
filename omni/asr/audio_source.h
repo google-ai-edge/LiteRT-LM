@@ -19,7 +19,7 @@
 
 #include "omni/base/stage.h"
 
-namespace litert_lm::omni::asr {
+namespace litert::omni::asr {
 
 // Abstract interface for providing raw PCM audio data.
 class AudioSource : public SingleThreadedStageWithDeque<std::vector<float>> {
@@ -36,6 +36,6 @@ class AudioSource : public SingleThreadedStageWithDeque<std::vector<float>> {
   virtual int GetNumChannels() const = 0;
 };
 
-}  // namespace litert_lm::omni::asr
+}  // namespace litert::omni::asr
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_AUDIO_SOURCE_H_

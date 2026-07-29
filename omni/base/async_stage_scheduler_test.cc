@@ -28,7 +28,7 @@
 #include "omni/base/stage.h"
 #include "runtime/framework/threadpool.h"
 
-namespace litert_lm::omni {
+namespace litert::omni {
 namespace {
 
 // Dummy source stage producing items from a list.
@@ -150,4 +150,4 @@ TEST(AsyncStageSchedulerTest, StopSafely) {
 }
 
 }  // namespace
-}  // namespace litert_lm::omni
+}  // namespace litert::omni

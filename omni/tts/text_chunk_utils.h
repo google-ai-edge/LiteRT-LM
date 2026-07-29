@@ -22,7 +22,7 @@
 
 #include "absl/strings/string_view.h"  // from @com_google_absl
 
-namespace litert_lm::omni::tts {
+namespace litert::omni::tts {
 
 // Represents the result of searching for a delimiter match in text.
 struct DelimiterMatch {
@@ -112,6 +112,6 @@ std::optional<TextChunk> ExtractNextChunk(absl::string_view text,
                                           size_t start_index, bool is_finished,
                                           const TextChunkConfig& config);
 
-}  // namespace litert_lm::omni::tts
+}  // namespace litert::omni::tts
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_TTS_TEXT_CHUNK_UTILS_H_

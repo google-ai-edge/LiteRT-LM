@@ -21,7 +21,7 @@
 #include "omni/base/stage.h"
 #include "omni/tts/latent_decoder.h"
 
-namespace litert_lm::omni::tts {
+namespace litert::omni::tts {
 
 // Abstract interface for Stage 4: Neural vocoder audio waveform synthesis.
 class Vocoder : public SingleThreadedStageWithDeque<AudioOutput> {
@@ -46,6 +46,6 @@ class Vocoder : public SingleThreadedStageWithDeque<AudioOutput> {
   Stage<LatentDecoder::LatentOutput>& latent_decoder_;
 };
 
-}  // namespace litert_lm::omni::tts
+}  // namespace litert::omni::tts
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_TTS_VOCODER_H_

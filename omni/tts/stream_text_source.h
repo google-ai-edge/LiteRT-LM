@@ -24,7 +24,7 @@
 #include "omni/tts/text_chunk_utils.h"
 #include "omni/tts/text_source.h"
 
-namespace litert_lm::omni::tts {
+namespace litert::omni::tts {
 
 // TextSource implementation that accepts streaming text fragments from callers
 // via PushText() and splits them into delimiter-aligned chunks for TTS
@@ -86,6 +86,6 @@ class StreamTextSource : public TextSource {
   bool is_finished_ ABSL_GUARDED_BY(mutex_) = false;
 };
 
-}  // namespace litert_lm::omni::tts
+}  // namespace litert::omni::tts
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_TTS_STREAM_TEXT_SOURCE_H_

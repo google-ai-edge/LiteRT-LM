@@ -36,7 +36,7 @@
 #include "omni/tts/tts_session.h"
 #include "omni/tts/vocoder.h"
 
-namespace litert_lm::omni::tts {
+namespace litert::omni::tts {
 
 struct TtsEngineTestingPeer {
   static absl::StatusOr<std::unique_ptr<TtsEngine>> CreateWithComponents(
@@ -253,4 +253,4 @@ TEST(TtsEngineTest, SequentialSynthesizeCalls) {
 }
 
 }  // namespace
-}  // namespace litert_lm::omni::tts
+}  // namespace litert::omni::tts

@@ -17,7 +17,7 @@
 
 #include <vector>
 
-namespace litert_lm::omni {
+namespace litert::omni {
 
 // Generic audio synthesis output payload for vocoder and audio output.
 struct AudioOutput {
@@ -25,6 +25,6 @@ struct AudioOutput {
   int sample_rate_hz = 24000;
 };
 
-}  // namespace litert_lm::omni
+}  // namespace litert::omni
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_BASE_IO_TYPES_H_
