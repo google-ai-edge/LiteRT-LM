@@ -15,6 +15,7 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_ENGINE_IO_TYPES_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_ENGINE_IO_TYPES_H_
 
+#include <chrono>  // NOLINT: Required for monotonic benchmark timing.
 #include <cstdint>
 #include <map>
 #include <optional>
@@ -292,9 +293,10 @@ class BenchmarkInfo {
  private:
   proto::BenchmarkParams benchmark_params_;
 
-  // Map of phase names to start time.
-  std::map<std::string, absl::Time> start_time_map_;
-  std::map<std::string, absl::Time> mark_time_map_;
+  // Wall-clock adjustments must not affect measured intervals.
+  using MonotonicTime = std::chrono::steady_clock::time_point;
+  std::map<std::string, MonotonicTime> start_time_map_;
+  std::map<std::string, MonotonicTime> mark_time_map_;
   // The current index of the prefill / decode / text_to_token_ids turn.
   int prefill_turn_index_ = 0;
   int decode_turn_index_ = 0;
