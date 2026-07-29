@@ -1901,7 +1901,7 @@ absl::Status LlmLiteRtCompiledModelExecutorDynamic::Prefill(
   RET_CHECK_EQ(tensor_type.Layout().Dimensions()[0], 1);
   RET_CHECK_GT(tensor_type.Layout().Dimensions()[1], 0)
       << "Prefill token ids must be non-empty.";
-  LITERT_ASSIGN_OR_RETURN(absl::Span<int> ids,
+  LITERT_ASSIGN_OR_RETURN(absl::Span<const int> ids,
                           ReferTensorBufferAsSpan<int32_t>(*token_ids_buffer));
 
   if (prefill_chunk_size_ <= 0) {
