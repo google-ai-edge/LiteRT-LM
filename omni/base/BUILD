@@ -18,6 +18,11 @@
 package(default_visibility = ["//visibility:public"])
 
 cc_library(
+    name = "io_types",
+    hdrs = ["io_types.h"],
+)
+
+cc_library(
     name = "stage",
     hdrs = ["stage.h"],
     deps = [

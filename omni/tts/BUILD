@@ -18,9 +18,47 @@
 package(default_visibility = ["//visibility:public"])
 
 cc_library(
+    name = "text_chunk_utils",
+    srcs = ["text_chunk_utils.cc"],
+    hdrs = ["text_chunk_utils.h"],
+    deps = ["@com_google_absl//absl/strings"],
+)
+
+cc_library(
     name = "text_source",
     hdrs = ["text_source.h"],
     deps = ["//omni/base:stage"],
+)
+
+cc_library(
+    name = "file_text_source",
+    srcs = ["file_text_source.cc"],
+    hdrs = ["file_text_source.h"],
+    deps = [
+        ":text_chunk_utils",
+        ":text_source",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/cleanup",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/synchronization",
+    ],
+)
+
+cc_library(
+    name = "stream_text_source",
+    srcs = ["stream_text_source.cc"],
+    hdrs = ["stream_text_source.h"],
+    deps = [
+        ":text_chunk_utils",
+        ":text_source",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/cleanup",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/synchronization",
+    ],
 )
 
 cc_library(
@@ -60,6 +98,7 @@ cc_library(
         ":latent_decoder",
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/status",
+        "//omni/base:io_types",
         "//omni/base:stage",
     ],
 )
@@ -76,7 +115,6 @@ cc_library(
         ":vocoder",
         "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/functional:any_invocable",
-        "@com_google_absl//absl/log:absl_check",
         "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
@@ -84,6 +122,7 @@ cc_library(
         "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/time",
         "//omni/base:async_stage_scheduler",
+        "//omni/base:io_types",
         "//omni/base:stage",
         "//runtime/framework:threadpool",
     ],
@@ -106,7 +145,43 @@ cc_test(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/synchronization",
         "@litert//support/util:test_utils",
+        "//omni/base:io_types",
         "//omni/base:stage",
         "//runtime/framework:threadpool",
+    ],
+)
+
+cc_test(
+    name = "text_chunk_utils_test",
+    srcs = ["text_chunk_utils_test.cc"],
+    deps = [
+        ":text_chunk_utils",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/strings",
+    ],
+)
+
+cc_test(
+    name = "file_text_source_test",
+    srcs = ["file_text_source_test.cc"],
+    deps = [
+        ":file_text_source",
+        ":text_chunk_utils",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status:status_matchers",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@litert//support/util:test_utils",
+    ],
+)
+
+cc_test(
+    name = "stream_text_source_test",
+    srcs = ["stream_text_source_test.cc"],
+    deps = [
+        ":stream_text_source",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
     ],
 )

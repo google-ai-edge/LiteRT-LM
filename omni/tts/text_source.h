@@ -21,13 +21,16 @@
 
 namespace litert_lm::omni::tts {
 
-// Abstract interface for providing raw text strings or chunks for
+// Abstract interface for providing raw text strings or chunks for speech
 // synthesis.
+//
+// Subclasses (such as FileTextSource or StreamTextSource) populate the output
+// deque with text strings when scheduled.
 class TextSource : public SingleThreadedStageWithDeque<std::string> {
  public:
   ~TextSource() override = default;
 
-  // Resets internal state for a new text stream.
+  // Resets internal state for a new text stream session.
   virtual void Reset() = 0;
 };
 
