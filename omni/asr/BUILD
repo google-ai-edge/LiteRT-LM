@@ -73,6 +73,47 @@ cc_library(
 )
 
 cc_library(
+    name = "log_mel_spectrogram_processor",
+    srcs = ["log_mel_spectrogram_processor.cc"],
+    hdrs = ["log_mel_spectrogram_processor.h"],
+    deps = [
+        ":audio_preprocessor",
+        "@com_google_absl//absl/base:nullability",
+        "@com_google_absl//absl/cleanup",
+        "@com_google_absl//absl/log:absl_check",
+        "@com_google_absl//absl/memory",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/synchronization",
+        "@com_google_absl//absl/types:span",
+        "@litert//litert/cc:litert_macros",
+        "@litert//litert/cc:litert_tensor_buffer",
+        "@litert//support/preprocessor:audio_preprocessor",
+        "@litert//support/preprocessor:audio_preprocessor_miniaudio",
+        "@litert//support/util:io_types",
+        "//omni/base:stage",
+    ],
+)
+
+cc_test(
+    name = "log_mel_spectrogram_processor_test",
+    srcs = ["log_mel_spectrogram_processor_test.cc"],
+    deps = [
+        ":log_mel_spectrogram_processor",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/functional:any_invocable",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/types:span",
+        "@litert//support/util:test_utils",
+        "//omni/base:stage",
+    ],
+)
+
+cc_library(
     name = "speech_decoder",
     hdrs = ["speech_decoder.h"],
     deps = [

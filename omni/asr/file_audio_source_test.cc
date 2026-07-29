@@ -26,7 +26,7 @@
 #include "absl/status/status_matchers.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
-#include "support/util/test_utils.h"  // from @litert  // IWYU pragma: keep for ASSERT_OK
+#include "support/util/test_utils.h"  // from @litert  // IWYU pragma: keep for ABSL_ASSERT_OK
 #include "miniaudio.h"  // from @miniaudio
 
 namespace litert_lm::omni::asr {
