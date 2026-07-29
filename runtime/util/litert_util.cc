@@ -43,6 +43,7 @@ absl::StatusOr<OwnedEnvironment> CreateEnvironment(
 
   std::vector<EnvironmentOptions::Option> env_options;
   auto helper = std::make_unique<MagicNumberConfigsHelper>();
+  std::string library_dir;
 
   bool uses_generic_npu_compiler_plugin = false;
   if (model_resources != nullptr && backend == Backend::NPU) {
@@ -71,7 +72,6 @@ absl::StatusOr<OwnedEnvironment> CreateEnvironment(
                     engine_settings.GetAudioExecutorSettings()->GetBackend() ==
                         Backend::NPU));
   if (uses_npu) {
-    std::string library_dir;
     bool from_settings = false;
     if (!main_executor_settings.GetLitertDispatchLibDir().empty()) {
       library_dir = main_executor_settings.GetLitertDispatchLibDir();
@@ -95,9 +95,10 @@ absl::StatusOr<OwnedEnvironment> CreateEnvironment(
     }
 
     if (should_set_path) {
+      // TODO(b/540445921): move the 'library_dir' to its own space.
       env_options.push_back(::litert::EnvironmentOptions::Option{
           ::litert::EnvironmentOptions::Tag::kDispatchLibraryDir,
-          absl::string_view(library_dir)});
+          library_dir.c_str()});
       if (from_settings) {
         ABSL_VLOG(1) << "Setting dispatch library path from "
                         "main_executor_settings: "
@@ -108,7 +109,7 @@ absl::StatusOr<OwnedEnvironment> CreateEnvironment(
 
       env_options.push_back(::litert::EnvironmentOptions::Option{
           ::litert::EnvironmentOptions::Tag::kCompilerPluginLibraryDir,
-          absl::string_view(library_dir)});
+          library_dir.c_str()});
       if (from_settings) {
         ABSL_VLOG(1) << "Setting compiler plugin library path from "
                         "main_executor_settings: "
