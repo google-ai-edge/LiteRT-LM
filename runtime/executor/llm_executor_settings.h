@@ -141,16 +141,16 @@ std::ostream& operator<<(std::ostream& os, const CpuConfig& config);
 
 struct NpuConfig {
   // Whether to use NEON optimizations for greedy sampling on NPU.
-  bool enable_neon_for_npu_greedy_sampling = true;
+  std::optional<bool> enable_neon_for_npu_greedy_sampling = std::nullopt;
 
   // Whether to use manual mask update logic on NPU.
-  bool use_hw_masking_for_npu = true;
+  std::optional<bool> use_hw_masking_for_npu = std::nullopt;
 
   // Whether to use manual KV-cache update logic on NPU.
-  bool use_hw_cache_update_for_npu = true;
+  std::optional<bool> use_hw_cache_update_for_npu = std::nullopt;
 
   // Whether to use manual per-layer embedding lookup on NPU.
-  bool use_hw_ple_for_npu = true;
+  std::optional<bool> use_hw_ple_for_npu = std::nullopt;
 
   // Whether enable debug logging for NPU.
   bool enable_npu_debug_logging = false;
@@ -378,6 +378,10 @@ struct AdvancedSettings {
 };
 std::ostream& operator<<(std::ostream& os, const AdvancedSettings& settings);
 
+namespace proto {
+class LlmNpuExecutorMetadata;
+}  // namespace proto
+
 // Settings for the LLM executor.
 //
 // This class holds the settings for the LLM executor, including the
@@ -427,6 +431,10 @@ class LlmExecutorSettings : public ExecutorSettingsBase {
                                            CpuConfig, NpuConfig>& config) {
     backend_config_ = config;
   }
+
+  // Resolves NPU settings using the metadata.
+  absl::Status ResolveNpuSettings(
+      const proto::LlmNpuExecutorMetadata& metadata);
 
   Backend GetSamplerBackend() const { return sampler_backend_; }
   void SetSamplerBackend(Backend sampler_backend) {

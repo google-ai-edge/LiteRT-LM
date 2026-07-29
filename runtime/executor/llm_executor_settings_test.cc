@@ -26,6 +26,7 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/proto/executor_metadata.pb.h"
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
 
@@ -676,6 +677,62 @@ TEST(LlmExecutorConfigTest, SetSupportedLoraRanks) {
                                           *std::move(model_assets),
                                           Backend::GPU_ARTISAN, Backend::GPU));
   EXPECT_EQ(settings.GetSamplerBackend(), Backend::GPU);
+}
+
+TEST(LlmExecutorConfigTest, ResolveNpuSettings) {
+  ASSERT_OK_AND_ASSIGN(ModelAssets assets, ModelAssets::Create("/dummy/path"));
+
+  ASSERT_OK_AND_ASSIGN(
+      LlmExecutorSettings settings,
+      LlmExecutorSettings::CreateDefault(assets, Backend::NPU));
+
+  auto initial_npu_config_status = settings.GetBackendConfig<NpuConfig>();
+  ASSERT_OK(initial_npu_config_status);
+  EXPECT_FALSE(initial_npu_config_status->enable_neon_for_npu_greedy_sampling
+                   .has_value());
+  EXPECT_FALSE(initial_npu_config_status->use_hw_masking_for_npu.has_value());
+  EXPECT_FALSE(
+      initial_npu_config_status->use_hw_cache_update_for_npu.has_value());
+  EXPECT_FALSE(initial_npu_config_status->use_hw_ple_for_npu.has_value());
+
+  proto::LlmNpuExecutorMetadata metadata;
+  metadata.set_enable_neon_for_npu_greedy_sampling(true);
+  metadata.set_use_hw_masking_for_npu(false);
+  metadata.set_use_hw_cache_update_for_npu(true);
+  metadata.set_use_hw_ple_for_npu(false);
+
+  ASSERT_OK(settings.ResolveNpuSettings(metadata));
+
+  auto resolved_npu_config_status = settings.GetBackendConfig<NpuConfig>();
+  ASSERT_OK(resolved_npu_config_status);
+  EXPECT_TRUE(
+      resolved_npu_config_status->enable_neon_for_npu_greedy_sampling.value_or(
+          false));
+  EXPECT_FALSE(
+      resolved_npu_config_status->use_hw_masking_for_npu.value_or(true));
+  EXPECT_TRUE(
+      resolved_npu_config_status->use_hw_cache_update_for_npu.value_or(false));
+  EXPECT_FALSE(resolved_npu_config_status->use_hw_ple_for_npu.value_or(true));
+
+  ASSERT_OK_AND_ASSIGN(
+      LlmExecutorSettings settings_user,
+      LlmExecutorSettings::CreateDefault(assets, Backend::NPU));
+
+  NpuConfig user_config;
+  user_config.enable_neon_for_npu_greedy_sampling = false;
+  user_config.use_hw_masking_for_npu = true;
+  settings_user.SetBackendConfig(user_config);
+
+  ASSERT_OK(settings_user.ResolveNpuSettings(metadata));
+
+  auto resolved_user_status = settings_user.GetBackendConfig<NpuConfig>();
+  ASSERT_OK(resolved_user_status);
+  EXPECT_FALSE(
+      resolved_user_status->enable_neon_for_npu_greedy_sampling.value_or(true));
+  EXPECT_TRUE(resolved_user_status->use_hw_masking_for_npu.value_or(false));
+  EXPECT_TRUE(
+      resolved_user_status->use_hw_cache_update_for_npu.value_or(false));
+  EXPECT_FALSE(resolved_user_status->use_hw_ple_for_npu.value_or(true));
 }
 
 }  // namespace

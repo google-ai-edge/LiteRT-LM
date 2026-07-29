@@ -1852,8 +1852,9 @@ LlmLiteRtNpuCompiledModelExecutor::Decode(
 
     LITERT_ASSIGN_OR_RETURN(
         const int max_index,
-        ApplyGreedySampling(masked_logits,
-                            npu_config_.enable_neon_for_npu_greedy_sampling));
+        ApplyGreedySampling(
+            masked_logits,
+            npu_config_.enable_neon_for_npu_greedy_sampling.value_or(false)));
 
     std::shared_ptr<TokenData> last_output_token =
         std::make_shared<TokenData>(max_index);
@@ -1957,7 +1958,7 @@ LlmLiteRtNpuCompiledModelExecutor::Decode(
         ApplyGreedySampling(
             llm_inference_context_
                 .decode_output_buffers[LlmSignatures::kDecodeLogitsOutput],
-            npu_config_.enable_neon_for_npu_greedy_sampling));
+            npu_config_.enable_neon_for_npu_greedy_sampling.value_or(false)));
     latency_stats_.decode_sampling_latency_us +=
         absl::ToInt64Microseconds(absl::Now() - start_sample);
 
@@ -3042,9 +3043,10 @@ LlmLiteRtNpuCompiledModelExecutor::RunDrafterLoop(int start_step,
 
     start = absl::Now();
     LITERT_ASSIGN_OR_RETURN(
-        int draft_id, ApplyGreedySampling(
-                          ctx.mtp_output_buffers[MtpSignatures::kOutputLogits],
-                          npu_config_.enable_neon_for_npu_greedy_sampling));
+        int draft_id,
+        ApplyGreedySampling(
+            ctx.mtp_output_buffers[MtpSignatures::kOutputLogits],
+            npu_config_.enable_neon_for_npu_greedy_sampling.value_or(false)));
     end = absl::Now();
     latency_stats_.decode_sampling_latency_us +=
         absl::ToInt64Microseconds(end - start);
@@ -3322,7 +3324,7 @@ LlmLiteRtNpuCompiledModelExecutor::PerformRejectionSampling(
         int sampled_token,
         SampleLogitsSliceFromLockedPtr(
             tensor_type.ElementType(), base_ptr, i, vocab_size, element_size,
-            npu_config_.enable_neon_for_npu_greedy_sampling));
+            npu_config_.enable_neon_for_npu_greedy_sampling.value_or(false)));
     all_verifier_sampled.push_back(sampled_token);
   }
   NPU_EXECUTOR_LOG(INFO) << "    [RS] Verifier Sampled Tokens: ["
@@ -3612,10 +3614,34 @@ absl::StatusOr<std::unique_ptr<LlmLiteRtNpuCompiledModelExecutor>>
 LlmLiteRtNpuCompiledModelExecutor::Create(
     const LlmExecutorSettings& executor_settings, ModelResources& resources,
     Environment& env) {
+  LlmExecutorSettings mutable_settings = executor_settings;
+
+  auto executor_metadata_status = resources.GetExecutorMetadata();
+  if (executor_metadata_status.ok() && *executor_metadata_status != nullptr) {
+    const auto* executor_metadata = *executor_metadata_status;
+    if (executor_metadata->has_llm_npu_executor_metadata()) {
+      ABSL_RETURN_IF_ERROR(mutable_settings.ResolveNpuSettings(
+          executor_metadata->llm_npu_executor_metadata()));
+    }
+  }
+
   bool enable_npu_debug_logging = false;
-  auto npu_config_status = executor_settings.GetBackendConfig<NpuConfig>();
+  auto npu_config_status = mutable_settings.GetBackendConfig<NpuConfig>();
   if (npu_config_status.ok()) {
     enable_npu_debug_logging = npu_config_status->enable_npu_debug_logging;
+    ABSL_LOG_IF(INFO, enable_npu_debug_logging)
+        << "Resolved NPU Settings:\n"
+        << "  enable_neon_for_npu_greedy_sampling: "
+        << npu_config_status->enable_neon_for_npu_greedy_sampling.value_or(
+               false)
+        << "\n"
+        << "  use_hw_masking_for_npu: "
+        << npu_config_status->use_hw_masking_for_npu.value_or(false) << "\n"
+        << "  use_hw_cache_update_for_npu: "
+        << npu_config_status->use_hw_cache_update_for_npu.value_or(false)
+        << "\n"
+        << "  use_hw_ple_for_npu: "
+        << npu_config_status->use_hw_ple_for_npu.value_or(false);
   }
 
   LITERT_ASSIGN_OR_RETURN(
@@ -3624,14 +3650,8 @@ LlmLiteRtNpuCompiledModelExecutor::Create(
 
   LITERT_ASSIGN_OR_RETURN(
       int max_sequence_length,
-      DetermineMaxSequenceLength(executor_settings, resources, *llm_model));
+      DetermineMaxSequenceLength(mutable_settings, resources, *llm_model));
 
-  // `DetermineMaxSequenceLength` resolves the effective limit by taking the
-  // minimum of the user-requested limit (if > 0) and the model-supported limit.
-  // If they differ (e.g. user limit is 0 or larger than what the model
-  // supports), we override the settings. If the user requested a smaller limit,
-  // it is respected and not overridden.
-  LlmExecutorSettings mutable_settings = executor_settings;
   if (mutable_settings.GetMaxNumTokens() != max_sequence_length) {
     ABSL_LOG(WARNING) << "Overriding executor settings max_num_tokens ("
                       << mutable_settings.GetMaxNumTokens()
@@ -3865,7 +3885,7 @@ LlmLiteRtNpuCompiledModelExecutor::CreateForModelHasPerLayerEmbedding(
   bool use_hw_ple_for_npu = false;
   auto npu_config_status = executor_settings.GetBackendConfig<NpuConfig>();
   if (npu_config_status.ok()) {
-    use_hw_ple_for_npu = npu_config_status->use_hw_ple_for_npu;
+    use_hw_ple_for_npu = npu_config_status->use_hw_ple_for_npu.value_or(false);
   }
 
   std::optional<EmbedderPerLayerContext> embedder_per_layer_context =
