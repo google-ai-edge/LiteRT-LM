@@ -44,8 +44,17 @@ absl::StatusOr<OwnedEnvironment> CreateEnvironment(
   std::vector<EnvironmentOptions::Option> env_options;
   auto helper = std::make_unique<MagicNumberConfigsHelper>();
 
+  bool uses_generic_npu_compiler_plugin = false;
+  if (model_resources != nullptr && backend == Backend::NPU) {
+    auto aux_model_buffer =
+        model_resources->GetTFLiteModelBuffer(ModelType::kTfLiteAux);
+    uses_generic_npu_compiler_plugin =
+        !aux_model_buffer.ok() || aux_model_buffer->empty();
+  }
+
   if (model_resources != nullptr &&
-      (backend == Backend::CPU || backend == Backend::GPU)) {
+      (backend == Backend::CPU || backend == Backend::GPU ||
+       uses_generic_npu_compiler_plugin)) {
     if (!main_executor_settings.GetAdvancedSettings() ||
         main_executor_settings.GetAdvancedSettings()->configure_magic_numbers) {
       env_options =

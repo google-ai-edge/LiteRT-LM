@@ -678,5 +678,17 @@ TEST(LlmExecutorConfigTest, SetSupportedLoraRanks) {
   EXPECT_EQ(settings.GetSamplerBackend(), Backend::GPU);
 }
 
+TEST(LlmExecutorConfigTest, NpuConfigDefaults) {
+  NpuConfig config;
+  // The generic LiteRT compiler-plugin path is opt-in and must default to off
+  // so the specialized TF_LITE_AUX NPU executor stays the default behavior.
+  EXPECT_FALSE(config.use_generic_litert_compiler_plugin);
+  EXPECT_TRUE(config.enable_neon_for_npu_greedy_sampling);
+  EXPECT_TRUE(config.use_hw_masking_for_npu);
+  EXPECT_TRUE(config.use_hw_cache_update_for_npu);
+  EXPECT_TRUE(config.use_hw_ple_for_npu);
+  EXPECT_FALSE(config.enable_npu_debug_logging);
+}
+
 }  // namespace
 }  // namespace litert::lm

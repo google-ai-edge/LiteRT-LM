@@ -140,6 +140,10 @@ struct CpuConfig {
 std::ostream& operator<<(std::ostream& os, const CpuConfig& config);
 
 struct NpuConfig {
+  // Whether the NPU backend is using LiteRT's generic compiler-plugin path
+  // instead of the specialized TF_LITE_AUX NPU executor.
+  bool use_generic_litert_compiler_plugin = false;
+
   // Whether to use NEON optimizations for greedy sampling on NPU.
   bool enable_neon_for_npu_greedy_sampling = true;
 
