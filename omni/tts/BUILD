@@ -184,3 +184,51 @@ cc_test(
         "@com_google_absl//absl/status:status_matchers",
     ],
 )
+
+cc_library(
+    name = "tts_engine",
+    srcs = ["tts_engine.cc"],
+    hdrs = ["tts_engine.h"],
+    deps = [
+        ":stream_text_source",
+        ":text_chunk_utils",
+        ":tts_session",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/functional:any_invocable",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/synchronization",
+        "@com_google_absl//absl/time",
+        "@litert//litert/cc:litert_environment",
+        "//omni/base:io_types",
+        "//runtime/executor:executor_settings_base",
+        "//runtime/framework:threadpool",
+    ],
+)
+
+cc_test(
+    name = "tts_engine_test",
+    srcs = ["tts_engine_test.cc"],
+    deps = [
+        ":acoustic_predictor",
+        ":latent_decoder",
+        ":stream_text_source",
+        ":text_frontend",
+        ":text_source",
+        ":tts_engine",
+        ":tts_session",
+        ":vocoder",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/base:nullability",
+        "@com_google_absl//absl/cleanup",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/synchronization",
+        "@com_google_absl//absl/time",
+        "@litert//support/util:test_utils",
+        "//omni/base:io_types",
+        "//omni/base:stage",
+    ],
+)
