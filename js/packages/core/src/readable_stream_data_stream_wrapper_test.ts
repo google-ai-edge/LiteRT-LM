@@ -112,9 +112,9 @@ describe('ReadableStreamDataStreamWrapper', () => {
         const wrapper = createTestWrapper(data, /* bytesPerSlice= */ 20);
 
         // Discard [0, 5], [10, 15], then [0, 20]
-        await wrapper.discard(0, 5);
-        await wrapper.discard(10, 5);
-        await wrapper.discard(0, 20);
+        wrapper.discard(0, 5);
+        wrapper.discard(10, 5);
+        wrapper.discard(0, 20);
 
         // This checks if the slice is fully discarded.
         // If we try to read, it should throw because it's discarded.
@@ -177,12 +177,12 @@ describe('ReadableStreamDataStreamWrapper', () => {
         const wrapper = createTestWrapper(data, 10);
 
         // Discard [0, 2], then [4, 6], then [2, 4]. [0, 6] should be merged.
-        await wrapper.discard(0, 2);
-        await wrapper.discard(4, 2);
-        await wrapper.discard(2, 2);
+        wrapper.discard(0, 2);
+        wrapper.discard(4, 2);
+        wrapper.discard(2, 2);
 
         // Then discard [6, 10]. The whole slice [0, 10] should be discarded.
-        await wrapper.discard(6, 4);
+        wrapper.discard(6, 4);
 
         const status = await wrapper.readAndPreserve(0, 0, 1);
         expect(status.error).toBeDefined();
@@ -208,8 +208,8 @@ describe('ReadableStreamDataStreamWrapper', () => {
       it('can discard an already partially discarded region', async () => {
         const data = new Uint8Array(10).fill(1);
         const wrapper = createTestWrapper(data, 10);
-        await wrapper.discard(2, 5);
-        const status = await wrapper.discard(3, 7);
+        wrapper.discard(2, 5);
+        const status = wrapper.discard(3, 7);
         expect(status.error).toBeUndefined();
         const status2 = await wrapper.readAndPreserve(0, 6, 4);
         expect(status2.error).toBeDefined();

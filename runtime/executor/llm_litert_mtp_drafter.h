@@ -43,10 +43,11 @@ class LlmLiteRtMtpDrafter {
  public:
   ~LlmLiteRtMtpDrafter();
 
-  // Create an instance of LlmLiteRtMtpDrafter.
+  // Creates an LlmLiteRtMtpDrafter from model resources.
+  //
   // The executor_settings is used to create the MTP drafter model and its
   // sampler.
-  // The base_model is used for verification. The model is expected to have
+  // The base_model is used for verification. The model is expected to have a
   // "verify" signature and be invokable when Draft is called (i.e., not busy).
   static absl::StatusOr<std::unique_ptr<LlmLiteRtMtpDrafter>> Create(
       Environment& env, ModelResources& resources,
@@ -54,6 +55,21 @@ class LlmLiteRtMtpDrafter {
       EmbeddingLookupManager& embedding_manager,
       std::optional<std::reference_wrapper<EmbeddingLookupManager>>
           ple_manager);
+
+  // Creates an LlmLiteRtMtpDrafter directly from a pre-compiled
+  // litert::CompiledModel.
+  //
+  // This is primarily intended for use with pre-compiled models, where the
+  // caller compiles the model beforehand and constructs the drafter directly.
+  // In this case, the caller will also need to call UpdateCompilationOptions
+  // to ensure that the compilation options are set correctly before compiling
+  // the model themselves.
+  static absl::StatusOr<std::unique_ptr<LlmLiteRtMtpDrafter>> Create(
+      Environment& env, CompiledModel mtp_drafter_model,
+      const LlmExecutorSettings& executor_settings, CompiledModel& base_model,
+      const Model& base_model_desc, EmbeddingLookupManager& embedding_manager,
+      std::optional<std::reference_wrapper<EmbeddingLookupManager>>
+          ple_manager = std::nullopt);
 
   // Draft the next set of tokens using the MTP drafter model.
   // Inputs:
@@ -212,6 +228,12 @@ class LlmLiteRtMtpDrafter {
   // include the bonus token.
   int num_verified_tokens_ = 0;
 };
+
+// Updates existing LiteRT compilation options for the MTP drafter model with
+// external tensor and buffer storage patterns from the executor settings.
+absl::Status UpdateCompilationOptions(
+    const LlmExecutorSettings& executor_settings,
+    litert::Options& compilation_options);
 
 }  // namespace litert::lm
 

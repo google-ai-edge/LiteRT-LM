@@ -239,6 +239,7 @@ export declare interface ExecutorSettingsBase extends Deletable {
   [ExecutorSettingsBaseBrand]: void;
   getCacheDir(): string;
   setCacheDir(cacheDir: string): void;
+  getBackend(): EmscriptenEnumElement<Backend>;
 }
 
 /**
@@ -517,6 +518,25 @@ export declare interface LiteRtLmWasm extends WasmModule {
   ReadableStreamDataStream: ReadableStreamDataStreamConstructor;
   ConversationConfig: ConversationConfigConstructor;
   Conversation: ConversationConstructor;
+  registerStreamWeightsCallback(
+      callback: ((
+          tflIds: Int32Array,
+          wgpuBufferIds: Uint32Array,
+          offsets: Float64Array,
+          lengths: Float64Array,
+      ) => Promise<void>)|undefined,
+  ): void;
+  readStoredWeights(
+      modelType: number,
+      offset: number,
+      size: number,
+      destAddress: number,
+  ): Promise<void>;
+  clearStoredWeightsStreams(): Promise<void>;
+  getCurrentlyCompilingModel(): number;
+  WebGPU: {
+    getJsObject(id: number): unknown;
+  };
 }
 
 

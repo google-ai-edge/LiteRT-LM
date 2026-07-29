@@ -28,6 +28,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
 #include "litert/cc/litert_options.h"  // from @litert
@@ -111,6 +112,10 @@ absl::Status GetKVCacheRootNames(std::vector<absl::string_view> input_names,
 // for Gemma2 JAX and "tokens" for Gemma2 PyTorch.
 absl::StatusOr<SortedPrefillSignatureMap> GetPrefillRunnerSetFromModel(
     const ::litert::Model& model, absl::string_view signature_name_base,
+    absl::string_view input_positions_name);
+
+absl::StatusOr<SortedPrefillSignatureMap> GetPrefillRunnerSetFromModel(
+    CompiledModel& model, absl::string_view signature_name_base,
     absl::string_view input_positions_name);
 
 // Get a list of prefill work groups, each of which contains the signature

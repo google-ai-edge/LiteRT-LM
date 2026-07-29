@@ -349,8 +349,7 @@ export class ReadableStreamDataStreamWrapper {
     }
   }
 
-  async discard(offset: number|bigint, count: number|bigint):
-      Promise<{error?: Error}> {
+  discard(offset: number|bigint, count: number|bigint): {error?: Error} {
     try {
       this.doDiscard(toNumber(offset), toNumber(count));
       return {};
