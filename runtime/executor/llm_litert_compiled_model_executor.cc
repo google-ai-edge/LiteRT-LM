@@ -1378,7 +1378,7 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::InitializeSampler(
       runs_embedding_on_gpu && !signatures_.input_tokens.empty() &&
       !signatures_.input_attn_mask_local.has_value();
   if (sampler_handles_input_) {
-    ABSL_VLOG(1) << "Sampler will handle decode input tensors.";
+    ABSL_LOG(INFO) << "Sampler will handle decode input tensors.";
     if (!decode_prev_input_pos_) {
       LITERT_ASSIGN_OR_RETURN(
           decode_prev_input_pos_,
