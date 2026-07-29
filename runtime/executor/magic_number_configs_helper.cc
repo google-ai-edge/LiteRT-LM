@@ -25,7 +25,7 @@
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
-#include "litert/cc/litert_environment.h"  // from @litert
+#include "litert/c/litert_common.h"  // from @litert
 #include "litert/cc/litert_environment_options.h"  // from @litert
 #include "litert/cc/litert_expected.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
@@ -58,6 +58,10 @@ Expected<int64_t> GetLastDimensionOfInput(const Signature& signature,
                                           absl::string_view input_name) {
   LITERT_ASSIGN_OR_RETURN(auto tensor, signature.InputTensor(input_name));
   LITERT_ASSIGN_OR_RETURN(auto type, tensor.RankedTensorType());
+  if (type.Layout().Rank() == 0) {
+    return litert::Unexpected(kLiteRtStatusErrorInvalidArgument,
+                              "Tensor rank must be at least 1");
+  }
   return type.Layout().Dimensions()[type.Layout().Rank() - 1];
 }
 
@@ -65,6 +69,10 @@ Expected<int64_t> GetFirstDimensionOfOutput(const Signature& signature,
                                             absl::string_view output_name) {
   LITERT_ASSIGN_OR_RETURN(auto tensor, signature.OutputTensor(output_name));
   LITERT_ASSIGN_OR_RETURN(auto type, tensor.RankedTensorType());
+  if (type.Layout().Rank() == 0) {
+    return litert::Unexpected(kLiteRtStatusErrorInvalidArgument,
+                              "Tensor rank must be at least 1");
+  }
   return type.Layout().Dimensions()[0];
 }
 

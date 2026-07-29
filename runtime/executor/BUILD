@@ -1115,6 +1115,7 @@ cc_library(
         ":llm_executor_settings",
         "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/strings",
+        "@litert//litert/c:litert_common",
         "@litert//litert/cc:litert_environment",
         "@litert//litert/cc:litert_environment_options",
         "@litert//litert/cc:litert_expected",
