@@ -26,7 +26,7 @@
 #include "absl/status/status_matchers.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
-#include "support/util/test_utils.h"  // from @litert  // IWYU pragma: keep for ABSL_ASSERT_OK
+#include "support/util/test_utils.h"  // from @litert  // IWYU pragma: keep for ASSERT_OK
 #include "miniaudio.h"  // from @miniaudio
 
 namespace litert::omni::asr {
@@ -71,20 +71,19 @@ TEST_F(FileAudioSourceTest, Create_CorrectChunks) {
   std::string path = GetTempWavPath("test_correct_chunks.wav");
   WriteWavFile(path, samples, sample_rate);
 
-  auto source =
-      FileAudioSource::Create(path, /*interval=*/absl::Milliseconds(100),
-                              /*overlap=*/absl::ZeroDuration(), sample_rate, 1);
-  ABSL_ASSERT_OK(source);
-  EXPECT_TRUE((*source)->NeedSchedule());
-  ABSL_ASSERT_OK((*source)->Schedule());
-  EXPECT_FALSE((*source)->NeedSchedule());
-  EXPECT_THAT((*source)->Schedule(), StatusIs(absl::StatusCode::kOutOfRange));
+  ASSERT_OK_AND_ASSIGN(auto source,
+                       FileAudioSource::Create(
+                           path, /*interval=*/absl::Milliseconds(100),
+                           /*overlap=*/absl::ZeroDuration(), sample_rate, 1));
+  EXPECT_TRUE(source->NeedSchedule());
+  ASSERT_OK(source->Schedule());
+  EXPECT_FALSE(source->NeedSchedule());
+  EXPECT_THAT(source->Schedule(), StatusIs(absl::StatusCode::kOutOfRange));
 
-  auto chunk = (*source)->GetOutput();
-  ABSL_ASSERT_OK(chunk);
-  EXPECT_THAT(*chunk, SizeIs(1600));
-  EXPECT_NEAR((*chunk)[0], 0.0f / 32768.0f, 1e-4f);
-  EXPECT_NEAR((*chunk)[1599], 15990.0f / 32768.0f, 1e-4f);
+  ASSERT_OK_AND_ASSIGN(auto chunk, source->GetOutput());
+  EXPECT_THAT(chunk, SizeIs(1600));
+  EXPECT_NEAR(chunk[0], 0.0f / 32768.0f, 1e-4f);
+  EXPECT_NEAR(chunk[1599], 15990.0f / 32768.0f, 1e-4f);
 }
 
 TEST_F(FileAudioSourceTest, Create_HandlesOverlap) {
@@ -96,20 +95,19 @@ TEST_F(FileAudioSourceTest, Create_HandlesOverlap) {
   std::string path = GetTempWavPath("test_overlap.wav");
   WriteWavFile(path, samples, sample_rate);
 
-  auto source = FileAudioSource::Create(
-      path, /*interval=*/absl::Milliseconds(100),
-      /*overlap=*/absl::Milliseconds(50), sample_rate, 1);
-  ABSL_ASSERT_OK(source);
+  ASSERT_OK_AND_ASSIGN(auto source,
+                       FileAudioSource::Create(
+                           path, /*interval=*/absl::Milliseconds(100),
+                           /*overlap=*/absl::Milliseconds(50), sample_rate, 1));
   std::vector<std::vector<float>> chunks;
-  while ((*source)->NeedSchedule()) {
-    absl::Status status = (*source)->Schedule();
+  while (source->NeedSchedule()) {
+    absl::Status status = source->Schedule();
     if (absl::IsOutOfRange(status)) {
       break;
     }
-    ABSL_ASSERT_OK(status);
-    auto chunk = (*source)->GetOutput();
-    ABSL_ASSERT_OK(chunk);
-    chunks.push_back(std::move(*chunk));
+    ASSERT_OK(status);
+    ASSERT_OK_AND_ASSIGN(auto chunk, source->GetOutput());
+    chunks.push_back(std::move(chunk));
   }
 
   EXPECT_THAT(chunks, SizeIs(3));
@@ -133,21 +131,20 @@ TEST_F(FileAudioSourceTest, Create_ShortAudio_ReturnsWhatItCan) {
   std::string path = GetTempWavPath("test_short.wav");
   WriteWavFile(path, samples, sample_rate);
 
-  auto source =
-      FileAudioSource::Create(path, /*interval=*/absl::Milliseconds(100),
-                              /*overlap=*/absl::ZeroDuration(), sample_rate, 1);
-  ABSL_ASSERT_OK(source);
-  EXPECT_TRUE((*source)->NeedSchedule());
-  ABSL_ASSERT_OK((*source)->Schedule());
-  EXPECT_FALSE((*source)->NeedSchedule());
+  ASSERT_OK_AND_ASSIGN(auto source,
+                       FileAudioSource::Create(
+                           path, /*interval=*/absl::Milliseconds(100),
+                           /*overlap=*/absl::ZeroDuration(), sample_rate, 1));
+  EXPECT_TRUE(source->NeedSchedule());
+  ASSERT_OK(source->Schedule());
+  EXPECT_FALSE(source->NeedSchedule());
 
-  auto chunk = (*source)->GetOutput();
-  ABSL_ASSERT_OK(chunk);
-  EXPECT_THAT(*chunk, SizeIs(1600));
-  EXPECT_NEAR((*chunk)[0], 1000.0f / 32768.0f, 1e-4f);
-  EXPECT_NEAR((*chunk)[799], 1000.0f / 32768.0f, 1e-4f);
-  EXPECT_THAT((*chunk)[800], Eq(0.0f));
-  EXPECT_THAT((*chunk)[1599], Eq(0.0f));
+  ASSERT_OK_AND_ASSIGN(auto chunk, source->GetOutput());
+  EXPECT_THAT(chunk, SizeIs(1600));
+  EXPECT_NEAR(chunk[0], 1000.0f / 32768.0f, 1e-4f);
+  EXPECT_NEAR(chunk[799], 1000.0f / 32768.0f, 1e-4f);
+  EXPECT_THAT(chunk[800], Eq(0.0f));
+  EXPECT_THAT(chunk[1599], Eq(0.0f));
 }
 
 TEST_F(FileAudioSourceTest, Create_InvalidIntervalOverlap) {
@@ -169,22 +166,21 @@ TEST_F(FileAudioSourceTest, Reset_ClearsStateAndRestarts) {
   std::string path = GetTempWavPath("test_reset.wav");
   WriteWavFile(path, samples, sample_rate);
 
-  auto source =
-      FileAudioSource::Create(path, /*interval=*/absl::Milliseconds(100),
-                              /*overlap=*/absl::ZeroDuration(), sample_rate, 1);
-  ABSL_ASSERT_OK(source);
-  ABSL_ASSERT_OK((*source)->Schedule());
-  EXPECT_FALSE((*source)->NeedSchedule());
+  ASSERT_OK_AND_ASSIGN(auto source,
+                       FileAudioSource::Create(
+                           path, /*interval=*/absl::Milliseconds(100),
+                           /*overlap=*/absl::ZeroDuration(), sample_rate, 1));
+  ASSERT_OK(source->Schedule());
+  EXPECT_FALSE(source->NeedSchedule());
 
-  (*source)->Reset();
-  EXPECT_TRUE((*source)->NeedSchedule());
-  EXPECT_FALSE((*source)->HasOutput());
+  source->Reset();
+  EXPECT_TRUE(source->NeedSchedule());
+  EXPECT_FALSE(source->HasOutput());
 
-  ABSL_ASSERT_OK((*source)->Schedule());
-  auto chunk = (*source)->GetOutput();
-  ABSL_ASSERT_OK(chunk);
-  EXPECT_THAT(*chunk, SizeIs(1600));
-  EXPECT_NEAR((*chunk)[0], 1000.0f / 32768.0f, 1e-4f);
+  ASSERT_OK(source->Schedule());
+  ASSERT_OK_AND_ASSIGN(auto chunk, source->GetOutput());
+  EXPECT_THAT(chunk, SizeIs(1600));
+  EXPECT_NEAR(chunk[0], 1000.0f / 32768.0f, 1e-4f);
 }
 
 }  // namespace

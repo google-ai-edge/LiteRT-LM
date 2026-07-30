@@ -23,6 +23,7 @@
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_matchers.h"  // from @com_google_absl
+#include "support/util/test_utils.h"  // from @litert  // IWYU pragma: keep for ASSERT_OK
 #include "omni/base/stage.h"
 
 namespace litert::omni::asr {
@@ -44,25 +45,26 @@ class DummyAudioSource
 
 TEST(LogMelSpectrogramProcessorTest, ProcessEmptyAudioReturnsEmptyVector) {
   DummyAudioSource dummy_source;
-  auto processor_or = LogMelSpectrogramProcessor::Create(
-      16000, LogMelSpectrogramProcessor::LogMelSpectrogramConfig{.n_fft = 512},
-      &dummy_source);
-  ABSL_ASSERT_OK(processor_or);
-  auto processor = std::move(*processor_or);
+  ASSERT_OK_AND_ASSIGN(
+      auto processor,
+      LogMelSpectrogramProcessor::Create(
+          16000,
+          LogMelSpectrogramProcessor::LogMelSpectrogramConfig{.n_fft = 512},
+          &dummy_source));
   dummy_source.PushChunk(std::vector<float>());
-  ABSL_ASSERT_OK(processor->Schedule());
-  auto result_or = processor->GetOutput();
-  ABSL_ASSERT_OK(result_or);
-  EXPECT_TRUE(result_or->empty());
+  ASSERT_OK(processor->Schedule());
+  ASSERT_OK_AND_ASSIGN(auto result, processor->GetOutput());
+  EXPECT_TRUE(result.empty());
 }
 
 TEST(LogMelSpectrogramProcessorTest, ProcessDummyAudioReturnsCorrectShape) {
   DummyAudioSource dummy_source;
-  auto processor_or = LogMelSpectrogramProcessor::Create(
-      16000, LogMelSpectrogramProcessor::LogMelSpectrogramConfig{.n_fft = 512},
-      &dummy_source);
-  ABSL_ASSERT_OK(processor_or);
-  auto processor = std::move(*processor_or);
+  ASSERT_OK_AND_ASSIGN(
+      auto processor,
+      LogMelSpectrogramProcessor::Create(
+          16000,
+          LogMelSpectrogramProcessor::LogMelSpectrogramConfig{.n_fft = 512},
+          &dummy_source));
 
   // Generate a simple 1 second 440Hz sine wave as a dummy float vector.
   int sample_rate = 16000;
@@ -73,10 +75,8 @@ TEST(LogMelSpectrogramProcessorTest, ProcessDummyAudioReturnsCorrectShape) {
   }
 
   dummy_source.PushChunk(audio);
-  ABSL_ASSERT_OK(processor->Schedule());
-  auto result_or = processor->GetOutput();
-  ABSL_ASSERT_OK(result_or);
-  auto result = std::move(*result_or);
+  ASSERT_OK(processor->Schedule());
+  ASSERT_OK_AND_ASSIGN(auto result, processor->GetOutput());
   EXPECT_FALSE(result.empty());
   int feature_size = 80;
   EXPECT_EQ(result.size() % feature_size, 0);
@@ -94,14 +94,14 @@ TEST(LogMelSpectrogramProcessorTest, ProcessDummyAudioReturnsCorrectShape) {
 TEST(LogMelSpectrogramProcessorTest,
      ProcessWithStandardNormalizationNormalizesCorrectly) {
   DummyAudioSource dummy_source;
-  auto processor_or = LogMelSpectrogramProcessor::Create(
-      16000,
-      LogMelSpectrogramProcessor::LogMelSpectrogramConfig{
-          .n_fft = 512,
-          .norm_type = LogMelSpectrogramProcessor::NormType::kStandard},
-      &dummy_source);
-  ABSL_ASSERT_OK(processor_or);
-  auto processor = std::move(*processor_or);
+  ASSERT_OK_AND_ASSIGN(
+      auto processor,
+      LogMelSpectrogramProcessor::Create(
+          16000,
+          LogMelSpectrogramProcessor::LogMelSpectrogramConfig{
+              .n_fft = 512,
+              .norm_type = LogMelSpectrogramProcessor::NormType::kStandard},
+          &dummy_source));
 
   int sample_rate = 16000;
   std::vector<float> audio(sample_rate);
@@ -110,10 +110,8 @@ TEST(LogMelSpectrogramProcessorTest,
   }
 
   dummy_source.PushChunk(audio);
-  ABSL_ASSERT_OK(processor->Schedule());
-  auto result_or = processor->GetOutput();
-  ABSL_ASSERT_OK(result_or);
-  auto result = std::move(*result_or);
+  ASSERT_OK(processor->Schedule());
+  ASSERT_OK_AND_ASSIGN(auto result, processor->GetOutput());
   EXPECT_FALSE(result.empty());
 
   // In standard normalization, features across valid frames should have roughly
@@ -135,14 +133,14 @@ TEST(LogMelSpectrogramProcessorTest,
 TEST(LogMelSpectrogramProcessorTest,
      ProcessWithWhisperNormalizationClipsAndScalesCorrectly) {
   DummyAudioSource dummy_source;
-  auto processor_or = LogMelSpectrogramProcessor::Create(
-      16000,
-      LogMelSpectrogramProcessor::LogMelSpectrogramConfig{
-          .n_fft = 512,
-          .norm_type = LogMelSpectrogramProcessor::NormType::kWhisper},
-      &dummy_source);
-  ABSL_ASSERT_OK(processor_or);
-  auto processor = std::move(*processor_or);
+  ASSERT_OK_AND_ASSIGN(
+      auto processor,
+      LogMelSpectrogramProcessor::Create(
+          16000,
+          LogMelSpectrogramProcessor::LogMelSpectrogramConfig{
+              .n_fft = 512,
+              .norm_type = LogMelSpectrogramProcessor::NormType::kWhisper},
+          &dummy_source));
 
   int sample_rate = 16000;
   std::vector<float> audio(sample_rate);
@@ -151,21 +149,20 @@ TEST(LogMelSpectrogramProcessorTest,
   }
 
   dummy_source.PushChunk(audio);
-  ABSL_ASSERT_OK(processor->Schedule());
-  auto result_or = processor->GetOutput();
-  ABSL_ASSERT_OK(result_or);
-  auto result = std::move(*result_or);
+  ASSERT_OK(processor->Schedule());
+  ASSERT_OK_AND_ASSIGN(auto result, processor->GetOutput());
   EXPECT_FALSE(result.empty());
 }
 
 TEST(LogMelSpectrogramProcessorTest,
      ProcessWithNonPowerOfTwoNFFTPadsCorrectly) {
   DummyAudioSource dummy_source;
-  auto processor_or = LogMelSpectrogramProcessor::Create(
-      16000, LogMelSpectrogramProcessor::LogMelSpectrogramConfig{.n_fft = 400},
-      &dummy_source);
-  ABSL_ASSERT_OK(processor_or);
-  auto processor = std::move(*processor_or);
+  ASSERT_OK_AND_ASSIGN(
+      auto processor,
+      LogMelSpectrogramProcessor::Create(
+          16000,
+          LogMelSpectrogramProcessor::LogMelSpectrogramConfig{.n_fft = 400},
+          &dummy_source));
 
   int sample_rate = 16000;
   int duration_seconds = 1;
@@ -175,10 +172,9 @@ TEST(LogMelSpectrogramProcessorTest,
   }
 
   dummy_source.PushChunk(audio);
-  ABSL_ASSERT_OK(processor->Schedule());
-  auto result_or = processor->GetOutput();
-  ABSL_ASSERT_OK(result_or);
-  EXPECT_FALSE(result_or->empty());
+  ASSERT_OK(processor->Schedule());
+  ASSERT_OK_AND_ASSIGN(auto result, processor->GetOutput());
+  EXPECT_FALSE(result.empty());
 }
 
 TEST(LogMelSpectrogramProcessorTest, ProcessPadsToExpectedNumberOfFrames) {
@@ -187,19 +183,16 @@ TEST(LogMelSpectrogramProcessorTest, ProcessPadsToExpectedNumberOfFrames) {
   std::vector<float> audio(2 * hop_length, 0.5f);
 
   DummyAudioSource dummy_source;
-  auto processor_or = LogMelSpectrogramProcessor::Create(
-      16000,
-      LogMelSpectrogramProcessor::LogMelSpectrogramConfig{
-          .n_fft = 512, .n_frames = n_frames_in_config},
-      &dummy_source);
-  ABSL_ASSERT_OK(processor_or);
-  auto processor = std::move(*processor_or);
+  ASSERT_OK_AND_ASSIGN(auto processor,
+                       LogMelSpectrogramProcessor::Create(
+                           16000,
+                           LogMelSpectrogramProcessor::LogMelSpectrogramConfig{
+                               .n_fft = 512, .n_frames = n_frames_in_config},
+                           &dummy_source));
 
   dummy_source.PushChunk(audio);
-  ABSL_ASSERT_OK(processor->Schedule());
-  auto result_or = processor->GetOutput();
-  ABSL_ASSERT_OK(result_or);
-  auto result = std::move(*result_or);
+  ASSERT_OK(processor->Schedule());
+  ASSERT_OK_AND_ASSIGN(auto result, processor->GetOutput());
   EXPECT_EQ(result.size(), 800);
   EXPECT_EQ(result[result.size() - 1], 0.0f);
 }
@@ -214,16 +207,16 @@ TEST(LogMelSpectrogramProcessorTest, SchedulePullsFromSourceAndPushesFeatures) {
   }
   dummy_source.PushChunk(audio_chunk);
 
-  auto processor_or = LogMelSpectrogramProcessor::Create(
-      16000, LogMelSpectrogramProcessor::LogMelSpectrogramConfig{.n_fft = 512},
-      &dummy_source);
-  ABSL_ASSERT_OK(processor_or);
-  auto processor = std::move(*processor_or);
-  ABSL_ASSERT_OK(processor->Schedule());
+  ASSERT_OK_AND_ASSIGN(
+      auto processor,
+      LogMelSpectrogramProcessor::Create(
+          16000,
+          LogMelSpectrogramProcessor::LogMelSpectrogramConfig{.n_fft = 512},
+          &dummy_source));
+  ASSERT_OK(processor->Schedule());
   EXPECT_TRUE(processor->HasOutput());
-  auto output = processor->GetOutput();
-  ABSL_ASSERT_OK(output);
-  EXPECT_FALSE(output->empty());
+  ASSERT_OK_AND_ASSIGN(auto output, processor->GetOutput());
+  EXPECT_FALSE(output.empty());
 }
 
 }  // namespace

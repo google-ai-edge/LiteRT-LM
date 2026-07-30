@@ -117,6 +117,40 @@ cc_library(
 )
 
 cc_library(
+    name = "litert_runner",
+    srcs = ["litert_runner.cc"],
+    hdrs = ["litert_runner.h"],
+    deps = [
+        "@com_google_absl//absl/base:nullability",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/types:span",
+        "@litert//litert/cc:litert_compiled_model",
+        "@litert//litert/cc:litert_environment",
+        "@litert//litert/cc:litert_macros",
+        "@litert//litert/cc:litert_tensor_buffer",
+        "@litert//litert/cc/internal:litert_platform_support",
+    ],
+)
+
+cc_library(
+    name = "mock_litert_runner",
+    testonly = True,
+    hdrs = ["mock_litert_runner.h"],
+    deps = [
+        ":litert_runner",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/types:span",
+        "@litert//litert/cc:litert_tensor_buffer",
+    ],
+)
+
+cc_library(
     name = "ctc_decoder",
     srcs = ["ctc_decoder.cc"],
     hdrs = ["ctc_decoder.h"],
@@ -128,6 +162,44 @@ cc_library(
         "@com_google_absl//absl/types:span",
         "@litert//litert/cc:litert_macros",
         "@litert//litert/cc:litert_tensor_buffer",
+    ],
+)
+
+cc_library(
+    name = "stateless_decoder",
+    srcs = ["stateless_decoder.cc"],
+    hdrs = ["stateless_decoder.h"],
+    deps = [
+        ":litert_runner",
+        ":litert_speech_recognizer",
+        ":speech_recognizer",
+        "@com_google_absl//absl/base:nullability",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/types:span",
+        "@litert//litert/cc:litert_macros",
+        "@litert//litert/cc:litert_tensor_buffer",
+    ],
+)
+
+cc_test(
+    name = "stateless_decoder_test",
+    srcs = ["stateless_decoder_test.cc"],
+    deps = [
+        ":mock_litert_runner",
+        ":speech_recognizer",
+        ":stateless_decoder",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@litert//litert/cc:litert_element_type",
+        "@litert//litert/cc:litert_layout",
+        "@litert//litert/cc:litert_ranked_tensor_type",
+        "@litert//litert/cc:litert_tensor_buffer",
+        "@litert//support/util:test_utils",
     ],
 )
 
@@ -148,6 +220,7 @@ cc_library(
     srcs = ["litert_speech_recognizer.cc"],
     hdrs = ["litert_speech_recognizer.h"],
     deps = [
+        ":litert_runner",
         ":speech_recognizer",
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/cleanup",
@@ -156,9 +229,30 @@ cc_library(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/types:span",
-        "@litert//litert/cc:litert_compiled_model",
         "@litert//litert/cc:litert_macros",
         "@litert//litert/cc:litert_tensor_buffer",
+        "//omni/base:stage",
+    ],
+)
+
+cc_test(
+    name = "litert_speech_recognizer_test",
+    srcs = ["litert_speech_recognizer_test.cc"],
+    deps = [
+        ":litert_runner",
+        ":litert_speech_recognizer",
+        ":mock_litert_runner",
+        ":speech_recognizer",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@litert//litert/cc:litert_element_type",
+        "@litert//litert/cc:litert_layout",
+        "@litert//litert/cc:litert_ranked_tensor_type",
+        "@litert//litert/cc:litert_tensor_buffer",
+        "@litert//support/util:test_utils",
         "//omni/base:stage",
     ],
 )

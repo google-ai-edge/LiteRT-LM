@@ -21,14 +21,14 @@
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "omni/asr/litert_runner.h"
 #include "omni/asr/speech_recognizer.h"
 #include "omni/base/stage.h"
 
 namespace litert::omni::asr {
 
-// SpeechRecognizer stage implementation powered by LiteRT CompiledModel
+// SpeechRecognizer stage implementation powered by LiteRtRunner
 // and a LiteRtSpeechRecognizer::Decoder.
 class LiteRtSpeechRecognizer : public SpeechRecognizer {
  public:
@@ -46,7 +46,7 @@ class LiteRtSpeechRecognizer : public SpeechRecognizer {
   };
 
   static absl::StatusOr<std::unique_ptr<LiteRtSpeechRecognizer>> Create(
-      ::litert::CompiledModel* absl_nonnull compiled_model,
+      std::unique_ptr<LiteRtRunner> absl_nonnull runner,
       Stage<std::vector<float>>* absl_nonnull audio_preprocessor,
       std::unique_ptr<Decoder> absl_nonnull decoder);
 
@@ -61,13 +61,13 @@ class LiteRtSpeechRecognizer : public SpeechRecognizer {
   friend class LiteRtSpeechRecognizerTest;
 
   LiteRtSpeechRecognizer(
-      ::litert::CompiledModel* absl_nonnull compiled_model,
+      std::unique_ptr<LiteRtRunner> absl_nonnull runner,
       Stage<std::vector<float>>* absl_nonnull audio_preprocessor,
       std::unique_ptr<Decoder> absl_nonnull decoder,
       std::vector<::litert::TensorBuffer> encode_input_buffers,
       std::vector<::litert::TensorBuffer> encode_output_buffers);
 
-  ::litert::CompiledModel* const compiled_model_;
+  const std::unique_ptr<LiteRtRunner> runner_;
   const std::unique_ptr<Decoder> decoder_;
   std::vector<::litert::TensorBuffer> encode_input_buffers_;
   std::vector<::litert::TensorBuffer> encode_output_buffers_;
