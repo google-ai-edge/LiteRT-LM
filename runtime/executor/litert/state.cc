@@ -18,6 +18,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -632,10 +633,6 @@ absl::StatusOr<std::unique_ptr<LitertState>> LitertState::MetadataBasedCreate(
           << names[0] << " vs " << names[i];
     }
 
-    RET_CHECK(state_buffer.has_sequence_axis())
-        << "Sequence axis must be defined for state buffers in the current "
-           "implementation.";
-
     RET_CHECK(!names.empty()) << "At least one state name must be defined";
     std::string input_name = std::string(names[0]);
 
@@ -658,6 +655,9 @@ absl::StatusOr<std::unique_ptr<LitertState>> LitertState::MetadataBasedCreate(
       case proto::StateBuffer::TYPE_LOCAL_VALUE_CACHE:
         is_value = true;
         break;
+      case proto::StateBuffer::TYPE_LINEAR_ATTENTION:
+        is_key = true;
+        break;
       default:
         return absl::InvalidArgumentError(absl::StrCat(
             "Unsupported state buffer type: ", state_buffer.type()));
@@ -668,20 +668,27 @@ absl::StatusOr<std::unique_ptr<LitertState>> LitertState::MetadataBasedCreate(
         compiled_model.GetInputTensorType(signature_name, input_name));
     auto dimensions = ranked_tensor_type.Layout().Dimensions();
 
-    int axis = state_buffer.sequence_axis();
-    RET_CHECK_GE(axis, 0);
-    RET_CHECK_LT(axis, dimensions.size());
     std::optional<int> dynamic_dim;
-    if (dimensions[axis] == kDynamicDimValue) {
-      dynamic_dim = axis;
-    } else if (is_global) {
-      int seq_size = dimensions[axis];
-      if (max_supported_sequence_size.has_value()) {
-        max_supported_sequence_size =
-            std::min(*max_supported_sequence_size, seq_size);
-      } else {
-        max_supported_sequence_size = seq_size;
+    if (state_buffer.has_sequence_axis()) {
+      int axis = state_buffer.sequence_axis();
+      RET_CHECK_GE(axis, 0);
+      RET_CHECK_LT(axis, dimensions.size());
+      if (dimensions[axis] == kDynamicDimValue) {
+        dynamic_dim = axis;
+      } else if (is_global) {
+        int seq_size = dimensions[axis];
+        if (max_supported_sequence_size.has_value()) {
+          max_supported_sequence_size =
+              std::min(*max_supported_sequence_size, seq_size);
+        } else {
+          max_supported_sequence_size = seq_size;
+        }
       }
+    } else {
+      RET_CHECK(state_buffer.type() ==
+                proto::StateBuffer::TYPE_LINEAR_ATTENTION)
+          << "Sequence axis must be defined for state buffers in the current "
+             "implementation.";
     }
 
     if (is_key) {
@@ -794,9 +801,11 @@ absl::StatusOr<std::unique_ptr<LitertState>> LitertState::MetadataBasedCreate(
   int context_size = 1;
   const bool is_dynamic_kv_cache = k_dynamic_dim.has_value();
   if (!is_dynamic_kv_cache) {
-    RET_CHECK(max_supported_sequence_size.has_value())
-        << "Static model must have sequence size";
-    context_size = *max_supported_sequence_size;
+    if (max_supported_sequence_size.has_value()) {
+      context_size = *max_supported_sequence_size;
+    } else {
+      context_size = std::numeric_limits<int>::max();
+    }
   }
 
   return absl::WrapUnique(new LitertState(
