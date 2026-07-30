@@ -51,7 +51,7 @@ absl::StatusOr<Backend> GetSamplerBackend(
   Backend sampler_backend = executor_settings.GetSamplerBackend();
 
   if (sampler_backend == Backend::UNSPECIFIED) {
-    sampler_backend = backend;
+    sampler_backend = backend == Backend::NPU ? Backend::CPU : backend;
   }
 
   if (sampler_backend != Backend::CPU && sampler_backend != Backend::GPU) {
@@ -230,6 +230,23 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
               ? advanced_settings.num_threads_to_compile
               : kDefaultNumThreadsToCompile);
       compilation_options.SetHardwareAccelerators(HwAccelerators::kGpu);
+      break;
+    }
+    case Backend::NPU: {
+      // Let LiteRT's NPU compiler plugin partition supported subgraphs and keep
+      // the remaining ops on CPU. This is the generic LiteRT-LM fallback path
+      // for NPU backends that are not packaged for the specialized NPU
+      // executor.
+      AdvancedSettings advanced_settings;
+      if (executor_settings.GetAdvancedSettings()) {
+        advanced_settings = *executor_settings.GetAdvancedSettings();
+      }
+      LITERT_ASSIGN_OR_RETURN(auto& runtime_options,
+                              compilation_options.GetRuntimeOptions());
+      runtime_options.SetDisableDelegateClustering(
+          advanced_settings.disable_delegate_clustering);
+      compilation_options.SetHardwareAccelerators(HwAccelerators::kNpu |
+                                                  HwAccelerators::kCpu);
       break;
     }
     case Backend::CPU: {

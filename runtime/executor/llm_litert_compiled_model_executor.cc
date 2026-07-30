@@ -85,34 +85,26 @@ constexpr absl::string_view kPrefillSignatureRunner = "prefill";
 constexpr absl::string_view kDecodeSignatureRunner = "decode";
 constexpr int kDynamicDimValue = -1;
 
-absl::StatusOr<bool> HasDynamicDim(const Model& model,
+absl::StatusOr<bool> HasDynamicDim(const CompiledModel& compiled_model,
                                    absl::string_view signature,
                                    absl::string_view tensor_name) {
-  LITERT_ASSIGN_OR_RETURN(const SimpleSignature& sig,
-                          model.FindSignature(signature));
-  LITERT_ASSIGN_OR_RETURN(const SimpleTensor& tensor,
-                          sig.InputTensor(tensor_name));
-  LITERT_ASSIGN_OR_RETURN(const RankedTensorType ranked_tensor_type,
-                          tensor.RankedTensorType());
-  auto dimensions = ranked_tensor_type.Layout().Dimensions();
-  for (int i = 0; i < dimensions.size(); ++i) {
-    if (dimensions[i] == kDynamicDimValue) {
+  LITERT_ASSIGN_OR_RETURN(
+      const RankedTensorType ranked_tensor_type,
+      compiled_model.GetInputTensorType(signature, tensor_name));
+  for (int dim : ranked_tensor_type.Layout().Dimensions()) {
+    if (dim == kDynamicDimValue) {
       return true;
     }
   }
   return false;
 }
 
-absl::Status ResolveDynamicShape(const Model& model,
-                                 CompiledModel& compiled_model,
+absl::Status ResolveDynamicShape(CompiledModel& compiled_model,
                                  absl::string_view signature,
                                  absl::string_view tensor_name, int new_value) {
-  LITERT_ASSIGN_OR_RETURN(const SimpleSignature& sig,
-                          model.FindSignature(signature));
-  LITERT_ASSIGN_OR_RETURN(const SimpleTensor& tensor,
-                          sig.InputTensor(tensor_name));
-  LITERT_ASSIGN_OR_RETURN(const RankedTensorType ranked_tensor_type,
-                          tensor.RankedTensorType());
+  LITERT_ASSIGN_OR_RETURN(
+      const RankedTensorType ranked_tensor_type,
+      compiled_model.GetInputTensorType(signature, tensor_name));
   auto dimensions = ranked_tensor_type.Layout().Dimensions();
 
   bool has_dynamic_dim = false;
@@ -202,6 +194,32 @@ absl::StatusOr<TensorBuffer> CreateFP16OutputBuffer(
   return buffer;
 }
 
+absl::StatusOr<TensorBuffer> CreateHostOutputBuffer(
+    Environment& env, CompiledModel& compiled_model, size_t signature_index,
+    size_t output_index, RankedTensorType tensor_type) {
+  LITERT_ASSIGN_OR_RETURN(
+      std::vector<Layout> runtime_layouts,
+      compiled_model.GetOutputTensorLayouts(signature_index,
+                                            /*update_allocation=*/true));
+  Layout runtime_layout = runtime_layouts[output_index];
+  LITERT_ASSIGN_OR_RETURN(auto requirements,
+                          compiled_model.GetOutputBufferRequirements(
+                              signature_index, output_index));
+  LITERT_ASSIGN_OR_RETURN(auto strides, requirements.Strides());
+  if (!strides.empty()) {
+    auto dims = runtime_layout.Dimensions();
+    runtime_layout = Layout(litert::Dimensions(dims.begin(), dims.end()),
+                            litert::Strides(strides.begin(), strides.end()));
+  }
+  RankedTensorType host_tensor_type(tensor_type.ElementType(),
+                                    std::move(runtime_layout));
+  LITERT_ASSIGN_OR_RETURN(size_t size, requirements.BufferSize());
+  LITERT_ASSIGN_OR_RETURN(auto buffer, TensorBuffer::CreateManaged(
+                                           env, TensorBufferType::kHostMemory,
+                                           std::move(host_tensor_type), size));
+  return buffer;
+}
+
 }  // namespace
 
 absl::Status LlmLiteRtCompiledModelExecutorBase::CreatePrefillInputBuffers(
@@ -210,8 +228,8 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::CreatePrefillInputBuffers(
     absl::flat_hash_map<absl::string_view, TensorBuffer>&
         prefill_input_buffers) {
   auto dyn_shape_resolver = [&](absl::string_view tensor_name) -> absl::Status {
-    return ResolveDynamicShape(model_, *compiled_model_, prefill_signature,
-                               tensor_name, sequence_length);
+    return ResolveDynamicShape(*compiled_model_, prefill_signature, tensor_name,
+                               sequence_length);
   };
   // Create input_token, positions and attn_mask buffers after determining
   // the prefill length.
@@ -268,7 +286,7 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::CreatePrefillInputBuffers(
 
   if (signatures_.input_attn_mask.has_value()) {
     ABSL_ASSIGN_OR_RETURN(bool is_attn_dyn,
-                          HasDynamicDim(model_, prefill_signature,
+                          HasDynamicDim(*compiled_model_, prefill_signature,
                                         signatures_.input_attn_mask.value()));
     if (is_attn_dyn) {
       std::vector<int> new_shape = {1, 1, sequence_length, context_length};
@@ -1344,7 +1362,8 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::InitializeSampler(
   proto::SamplerParameters sampler_params;
   if (llm_context_->runtime_config().sampler_params.has_value()) {
     sampler_params = llm_context_->runtime_config().sampler_params.value();
-  } else {
+  }
+  if (sampler_params.type() == proto::SamplerParameters::TYPE_UNSPECIFIED) {
     sampler_params.set_type(proto::SamplerParameters::TOP_P);
     sampler_params.set_k(1);
     sampler_params.set_p(0.0f);
@@ -1674,6 +1693,12 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
     activation_data_type = executor_settings.GetActivationDataType().value();
   }
   const Backend backend = executor_settings.GetBackend();
+  bool use_generic_npu_compiler_plugin = false;
+  if (backend == Backend::NPU) {
+    auto npu_config = executor_settings.GetBackendConfig<NpuConfig>();
+    use_generic_npu_compiler_plugin =
+        npu_config.ok() && npu_config->use_generic_litert_compiler_plugin;
+  }
   bool use_fp16_precision =
       activation_data_type == ActivationDataType::FLOAT16 &&
       backend == Backend::GPU;
@@ -1704,6 +1729,13 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
       ModelSignatures signatures,
       GetModelSignaturesFromInputOutputNames(decode_signature.InputNames(),
                                              decode_signature.OutputNames()));
+
+  ABSL_ASSIGN_OR_RETURN(
+      auto prefill_runner_set,
+      GetPrefillRunnerSetFromModel(
+          *litert_model, kPrefillSignatureRunner,
+          /*input_positions_name=*/signatures.input_positions));
+  RET_CHECK(!prefill_runner_set.empty()) << "No prefill runner available.";
 
   LITERT_ASSIGN_OR_RETURN(
       auto compilation_options,
@@ -1764,6 +1796,9 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
         compiled_model->CreateInputBuffer(kDecodeSignatureRunner, input_name));
     decode_input_buffers[input_name] = std::move(input_buffer);
   }
+  LITERT_ASSIGN_OR_RETURN(
+      size_t decode_signature_index,
+      compiled_model->GetSignatureIndex(kDecodeSignatureRunner));
   for (size_t i = 0; i < decode_signature.OutputNames().size(); ++i) {
     auto output_name = decode_signature.OutputNames()[i];
     if (state->Contains(output_name)) {
@@ -1787,10 +1822,28 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
                                  output_name, i));
       decode_output_buffers[output_name] = std::move(output_buffer);
     } else {
-      LITERT_ASSIGN_OR_RETURN(auto output_buffer,
-                              compiled_model->CreateOutputBuffer(
-                                  kDecodeSignatureRunner, output_name));
-
+      auto output_buffer_or = compiled_model->CreateOutputBuffer(
+          kDecodeSignatureRunner, output_name);
+      if (output_buffer_or) {
+        decode_output_buffers[output_name] = std::move(*output_buffer_or);
+        continue;
+      }
+      if (!use_generic_npu_compiler_plugin) {
+        LITERT_ASSIGN_OR_RETURN(auto output_buffer,
+                                std::move(output_buffer_or));
+        decode_output_buffers[output_name] = std::move(output_buffer);
+        continue;
+      }
+      ABSL_LOG(WARNING) << "Falling back to host memory for NPU decode output '"
+                        << output_name
+                        << "' after compiled-model output buffer allocation "
+                        << "failed: " << output_buffer_or.Error().Message();
+      LITERT_ASSIGN_OR_RETURN(auto output_tensor_type,
+                              decode_signature.OutputTensorType(i));
+      ABSL_ASSIGN_OR_RETURN(auto output_buffer,
+                       CreateHostOutputBuffer(lrt_env, *compiled_model,
+                                              decode_signature_index, i,
+                                              std::move(output_tensor_type)));
       decode_output_buffers[output_name] = std::move(output_buffer);
     }
   }
@@ -1823,13 +1876,6 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
       LITERT_RETURN_IF_ERROR(decode_state->Clear());
     }
   }
-
-  ABSL_ASSIGN_OR_RETURN(
-      auto prefill_runner_set,
-      GetPrefillRunnerSetFromModel(
-          *litert_model, kPrefillSignatureRunner,
-          /*input_positions_name=*/signatures.input_positions));
-  RET_CHECK(!prefill_runner_set.empty()) << "No prefill runner available.";
 
   std::unique_ptr<EmbeddingLookupManager> embedding_lookup;
   std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup;
@@ -1991,7 +2037,7 @@ absl::Status LlmLiteRtCompiledModelExecutorDynamic::DecodeInternal(
     current_kv_len = new_kv_len;
   }
 
-  ABSL_RETURN_IF_ERROR(ResolveDynamicShape(model_, *compiled_model_, "decode",
+  ABSL_RETURN_IF_ERROR(ResolveDynamicShape(*compiled_model_, "decode",
                                            signatures_.input_attn_mask.value(),
                                            current_kv_len));
   LITERT_ASSIGN_OR_RETURN(

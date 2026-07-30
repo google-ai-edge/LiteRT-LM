@@ -348,6 +348,14 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest, DecodeTest) {
                            *executor_settings, env, *model_resources));
   ASSERT_NE(executor, nullptr);
 
+  // An explicitly present but unspecified sampler config should use the
+  // default CPU sampler rather than disabling sampling.
+  RuntimeConfig runtime_config;
+  runtime_config.sampler_params = proto::SamplerParameters();
+  ASSERT_OK_AND_ASSIGN(
+      auto context, executor->CreateNewContext(std::nullopt, runtime_config));
+  ASSERT_OK(executor->RestoreContext(std::move(context)));
+
   ExecutorInputs inputs;
   // Create a tensor buffer with 3 elements.
   const std::vector<int> input_tokens = {1, 2, 0};
