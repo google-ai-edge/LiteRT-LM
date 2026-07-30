@@ -506,10 +506,8 @@ void litert_lm_conversation_config_set_constraint_provider(
   if (config) {
     if (provider_type != nullptr) {
       config->constraint_provider_type = *provider_type;
-      config->enable_constrained_decoding = true;
     } else {
       config->constraint_provider_type = std::nullopt;
-      config->enable_constrained_decoding = false;
     }
   }
 }

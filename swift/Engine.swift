@@ -225,6 +225,7 @@ public actor Engine {
     if conversationConfig.enableResponseFormat {
       var providerType = kLiteRtLmConstraintProviderTypeLlGuidance
       litert_lm_conversation_config_set_constraint_provider(cConversationConfig, &providerType)
+      litert_lm_conversation_config_set_enable_constrained_decoding(cConversationConfig, true)
     } else {
       litert_lm_conversation_config_set_enable_constrained_decoding(
         cConversationConfig, ExperimentalFlags.enableConversationConstrainedDecoding)

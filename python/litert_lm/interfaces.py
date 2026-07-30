@@ -27,6 +27,7 @@ import sys
 from typing import Any
 
 from ._ffi import ActivationDataType
+from ._ffi import LiteRtLmConstraintProviderType
 from ._messages import Contents
 from ._messages import Message
 
@@ -359,6 +360,19 @@ class LoraConfig:
   audio_lora_path: str | None = None
 
 
+@dataclasses.dataclass
+class ConstrainedDecodingConfig:
+  """Configuration for constrained decoding.
+
+  Attributes:
+      enable: Whether constraint decoding is enabled.
+      provider: The constraint provider type.
+  """
+
+  enable: bool = True
+  provider: LiteRtLmConstraintProviderType | None = None
+
+
 @dataclasses.dataclass(kw_only=True)
 class AbstractEngine(abc.ABC):
   """Abstract base class for LiteRT-LM engines.
@@ -426,10 +440,10 @@ class AbstractEngine(abc.ABC):
       filter_channel_content_from_kv_cache: bool | None = None,
       thinking_config: ThinkingConfig | None = None,
       sampler_config: SamplerConfig | None = None,
+      constrained_decoding_config: ConstrainedDecodingConfig | None = None,
       lora_config: LoraConfig | None = None,
       max_output_tokens: int | None = None,
       chat_template: str | None = None,
-      enable_response_format: bool = False,
   ) -> AbstractConversation:
     """Creates a new conversation for this engine.
 
@@ -448,6 +462,7 @@ class AbstractEngine(abc.ABC):
         thinking_config: Configuration for thinking/reasoning generation.
         sampler_config: Configuration for the sampling process. If None, then
           uses the engine's default values.
+        constrained_decoding_config: Configuration for constrained decoding.
         lora_config: Configuration for LoRA adapters.
         max_output_tokens: The maximum number of output tokens.
         chat_template: The Jinja chat template content to use for formatting. If

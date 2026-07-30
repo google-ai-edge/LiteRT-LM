@@ -849,7 +849,7 @@ class EngineTest(LiteRtLmTestBase):
     ):
       with self.assertRaisesRegex(
           ValueError,
-          "response_format cannot be used unless enable_response_format=True",
+          "response_format cannot be used unless constrained_decoding_config",
       ):
         conversation.send_message(
             "What is the capital of France?",
@@ -858,7 +858,7 @@ class EngineTest(LiteRtLmTestBase):
 
       with self.assertRaisesRegex(
           ValueError,
-          "response_format cannot be used unless enable_response_format=True",
+          "response_format cannot be used unless constrained_decoding_config",
       ):
         # We must iterate the generator to trigger the exception
         next(
@@ -867,6 +867,51 @@ class EngineTest(LiteRtLmTestBase):
                 response_format=litert_lm.ResponseFormat.regex("[0-9]{3}"),
             )
         )
+
+  def test_create_conversation_enable_constrained_decoding(self):
+    lib = litert_lm._ffi._get_lib()
+    with (
+        mock.patch.object(
+            lib,
+            "litert_lm_conversation_config_set_enable_constrained_decoding",
+            wraps=lib.litert_lm_conversation_config_set_enable_constrained_decoding,
+        ) as mock_set_enable_constrained,
+        mock.patch.object(
+            lib,
+            "litert_lm_conversation_config_set_constraint_provider",
+            wraps=lib.litert_lm_conversation_config_set_constraint_provider,
+        ) as mock_set_constraint_provider,
+    ):
+      with (
+          self._create_engine() as engine,
+          engine.create_conversation(
+              constrained_decoding_config=litert_lm.ConstrainedDecodingConfig(
+                  enable=True
+              )
+          ) as conv,
+      ):
+        self.assertIsNotNone(conv)
+        mock_set_enable_constrained.assert_called_once()
+        args, _ = mock_set_enable_constrained.call_args
+        self.assertTrue(args[1])
+
+      mock_set_enable_constrained.reset_mock()
+      mock_set_constraint_provider.reset_mock()
+
+      with (
+          self._create_engine() as engine,
+          engine.create_conversation(
+              constrained_decoding_config=litert_lm.ConstrainedDecodingConfig(
+                  enable=True,
+                  provider=litert_lm.LiteRtLmConstraintProviderType.LL_GUIDANCE,
+              )
+          ) as conv,
+      ):
+        self.assertIsNotNone(conv)
+        mock_set_constraint_provider.assert_called_once()
+        mock_set_enable_constrained.assert_called_once()
+        args, _ = mock_set_enable_constrained.call_args
+        self.assertTrue(args[1])
 
 
 class FunctionCallingTest(LiteRtLmTestBase):
