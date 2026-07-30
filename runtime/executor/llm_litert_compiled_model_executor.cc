@@ -1309,13 +1309,11 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::RestoreContext(
 
   // We can keep our kv cache buffers if this is the first step. This lets us
   // restore from LlmContexts at step 0 with an empty kv cache.
-  if (!gpu_optimized_single_buffer_cache_) {
-    if (llm_context_->runtime_state().current_step > 0) {
-      auto restored_state = std::move(
-          static_cast<LlmProcessedContext&>(llm_context_->processed_context())
-              .state());
-      ABSL_RETURN_IF_ERROR(RestoreState(std::move(restored_state)));
-    }
+  if (llm_context_->runtime_state().current_step > 0) {
+    auto restored_state = std::move(
+        static_cast<LlmProcessedContext&>(llm_context_->processed_context())
+            .state());
+    ABSL_RETURN_IF_ERROR(RestoreState(std::move(restored_state)));
   }
 
   force_prepare_needed_ = true;
