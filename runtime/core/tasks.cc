@@ -20,7 +20,6 @@
 #include <limits>
 #include <memory>
 #include <optional>
-#include <queue>
 #include <string>
 #include <utility>
 #include <vector>
@@ -32,12 +31,12 @@
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
-#include "absl/strings/str_replace.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "support/tokenizer/buffered_streaming_detokenizer.h"  // from @litert
 #include "runtime/components/logits_processor/constrained_decoding/constrained_decoder.h"
 #include "runtime/components/logits_processor/constrained_decoding/constraint.h"
 #include "runtime/components/logits_processor/constrained_decoding/thinking_budget_constraint.h"
@@ -114,6 +113,86 @@ bool ShouldStop(bool hit_stop_tokens, int benchmark_decode_token_count,
   return false;
 }
 
+// A helper class to filter the token stream based on stop tokens.
+//
+// This filter is needed because detokenization is typically streaming and
+// incremental. Once a token is fed to the detokenizer, it may release
+// corresponding text immediately. If we were to feed a token that is part of a
+// stop sequence (or a partial stop sequence), the detokenizer might release
+// text that should have been suppressed. Since we cannot "un-release" text
+// during streaming, we must buffer tokens that potentially match a stop
+// sequence until they are confirmed to be either a complete stop sequence (in
+// which case they are discarded) or not a stop sequence (in which case they are
+// safe to feed to the detokenizer).
+class StopTokenStreamFilter {
+ public:
+  StopTokenStreamFilter(StopTokenDetector* absl_nonnull detector,
+                        int num_candidates)
+      : detector_(*detector),
+        stop_token_buffer_(num_candidates),
+        candidate_stopped_(num_candidates, false) {}
+
+  absl::StatusOr<std::vector<std::vector<int>>> ProcessStep(
+      const std::vector<std::vector<int>>& step_tokens) {
+    int num_candidates = stop_token_buffer_.size();
+    std::vector<std::vector<int>> tokens_to_feed(num_candidates);
+
+    ABSL_RETURN_IF_ERROR(detector_.ProcessTokens(step_tokens));
+
+    for (int i = 0; i < num_candidates; ++i) {
+      if (candidate_stopped_[i]) {
+        tokens_to_feed[i] = {};
+        continue;
+      }
+
+      // Append new tokens to buffer first.
+      stop_token_buffer_[i].insert(stop_token_buffer_[i].end(),
+                                   step_tokens[i].begin(),
+                                   step_tokens[i].end());
+
+      if (detector_.GetStopTokensFound()[i]) {
+        // JUST matched stop token.
+        int L = detector_.GetStepsBeforeStopTokens()[i];
+        int num_to_feed = stop_token_buffer_[i].size() - L;
+        if (num_to_feed > 0) {
+          tokens_to_feed[i].assign(stop_token_buffer_[i].begin(),
+                                   stop_token_buffer_[i].begin() + num_to_feed);
+        } else {
+          tokens_to_feed[i] = {};
+        }
+        stop_token_buffer_[i].clear();  // Discard stop token.
+        candidate_stopped_[i] = true;
+      } else {
+        int max_length = detector_.MaxPartialStopTokenLength(i);
+        if (max_length > 0) {
+          // Partial match. Keep last `max_length` tokens in buffer.
+          int num_to_feed = stop_token_buffer_[i].size() - max_length;
+          if (num_to_feed > 0) {
+            tokens_to_feed[i].assign(
+                stop_token_buffer_[i].begin(),
+                stop_token_buffer_[i].begin() + num_to_feed);
+            stop_token_buffer_[i].erase(
+                stop_token_buffer_[i].begin(),
+                stop_token_buffer_[i].begin() + num_to_feed);
+          } else {
+            tokens_to_feed[i] = {};
+          }
+        } else {
+          // No match. Feed everything.
+          tokens_to_feed[i] = std::move(stop_token_buffer_[i]);
+          stop_token_buffer_[i].clear();
+        }
+      }
+    }
+    return tokens_to_feed;
+  }
+
+ private:
+  StopTokenDetector& detector_;
+  std::vector<std::vector<int>> stop_token_buffer_;
+  std::vector<bool> candidate_stopped_;
+};
+
 // A wrapper class to run one step of the decode process, handling both internal
 // and external sampling.
 class DecodeOneStep {
@@ -133,10 +212,12 @@ class DecodeOneStep {
                 )
       : executor_(*executor),
         tokenizer_(*tokenizer),
+        detokenizer_(&tokenizer_, num_output_candidates),
         num_output_candidates_(num_output_candidates),
         sampler_(sampler),
         benchmark_info_(benchmark_info),
         stop_token_detector_(stop_token_detector),
+        stop_token_filter_(&stop_token_detector_, num_output_candidates),
         cancelled_(cancelled) {
     if (repetition_penalty_config.enabled()) {
       repetition_penalty_processor_ =
@@ -168,13 +249,6 @@ class DecodeOneStep {
     }
     result_text_ = std::vector<std::string>(num_output_candidates_, "");
     result_token_ids_ = std::vector<std::vector<int>>(num_output_candidates_);
-    bpe_partial_token_ids_ =
-        std::vector<std::vector<int>>(num_output_candidates_);
-    pending_stop_tokens_ =
-        std::vector<std::queue<std::string>>(num_output_candidates_);
-    pending_stop_token_ids_ =
-        std::vector<std::queue<std::vector<int>>>(num_output_candidates_);
-    num_buffered_tokens_ = std::vector<int>(num_output_candidates_, 0);
   }
 
   // Runs one step of the decode process and returns if all stops for all
@@ -205,52 +279,18 @@ class DecodeOneStep {
         step_tokens.push_back({token_ids[batch][step]});
       }
 
-      // Regardless of BPE, we always process the next tokens to detect stop
-      // tokens.
-      ABSL_RETURN_IF_ERROR(stop_token_detector_.ProcessTokens(step_tokens));
+      ABSL_ASSIGN_OR_RETURN(auto tokens_to_feed,
+                            stop_token_filter_.ProcessStep(step_tokens));
 
-      // Merge BPE partial token ids with the next token ids if any.
-      ABSL_ASSIGN_OR_RETURN(
-          step_tokens,
-          tokenizer_.MergeTokenIds(bpe_partial_token_ids_, step_tokens));
+      ABSL_ASSIGN_OR_RETURN(auto released_outputs,
+                            detokenizer_.ProcessStep(tokens_to_feed));
 
-      auto decoded_result =
-          tokenizer_.TokenIdsToTexts(num_output_candidates_, step_tokens);
       for (int i = 0; i < num_output_candidates_; ++i) {
-        if (Tokenizer::IsIncompleteBpeSequence(decoded_result.value()[i])) {
-          bpe_partial_token_ids_[i] = step_tokens[i];
-        } else if (!stop_token_detector_.GetStopTokensFound()[i]) {
-          bpe_partial_token_ids_[i].clear();
-
-          // Handle partial stop tokens.
-          int max_length = stop_token_detector_.MaxPartialStopTokenLength(i);
-          if (max_length > 0) {
-            pending_stop_tokens_[i].push(decoded_result.value()[i].value());
-            pending_stop_token_ids_[i].push(step_tokens[i]);
-            num_buffered_tokens_[i] += step_tokens[i].size();
-          }
-          // We only need the latest max_length tokens for partial stop tokens.
-          // Add the extra ones to the result text and we could keep only the
-          // latest max_length stop tokens in the queue.
-          while (num_buffered_tokens_[i] > max_length) {
-            result_text_[i] += pending_stop_tokens_[i].front();
-            pending_stop_tokens_[i].pop();
-
-            auto& ids = pending_stop_token_ids_[i].front();
-            result_token_ids_[i].insert(result_token_ids_[i].end(), ids.begin(),
-                                        ids.end());
-            num_buffered_tokens_[i] -= ids.size();
-            pending_stop_token_ids_[i].pop();
-          }
-
-          // No partial stop token is found - add the current token to the
-          // result text directly - this is the most common case.
-          if (max_length == 0) {
-            result_text_[i] += decoded_result.value()[i].value();
-            result_token_ids_[i].insert(result_token_ids_[i].end(),
-                                        step_tokens[i].begin(),
-                                        step_tokens[i].end());
-          }
+        if (!released_outputs[i].text.empty()) {
+          result_text_[i] += released_outputs[i].text;
+          result_token_ids_[i].insert(result_token_ids_[i].end(),
+                                      released_outputs[i].token_ids.begin(),
+                                      released_outputs[i].token_ids.end());
         }
       }
 
@@ -275,10 +315,26 @@ class DecodeOneStep {
     return false;
   }
 
+  // Flushes any remaining withheld text and token IDs from the detokenizer.
+  // Overwrites `result_text_` and `result_token_ids_` with only the newly
+  // released outputs (incremental delta) from this flush operation.
+  absl::StatusOr<std::vector<std::string>> Flush() {
+    ABSL_ASSIGN_OR_RETURN(auto released_outputs, detokenizer_.Flush());
+    std::vector<std::string> released_texts(num_output_candidates_);
+    for (int i = 0; i < num_output_candidates_; ++i) {
+      result_text_[i] = released_outputs[i].text;
+      result_token_ids_[i] = released_outputs[i].token_ids;
+      released_texts[i] = released_outputs[i].text;
+    }
+    return released_texts;
+  }
+
   absl::Span<float> GetScores() { return scores_span_; }
 
+  // Returns the released text delta for the most recent step or Flush().
   const std::vector<std::string>& GetResultText() const { return result_text_; }
 
+  // Returns the released token IDs delta for the most recent step or Flush().
   const std::vector<std::vector<int>>& GetResultTokenIds() const {
     return result_token_ids_;
   }
@@ -426,6 +482,7 @@ class DecodeOneStep {
 
   LlmExecutor& executor_;
   Tokenizer& tokenizer_;
+  litert::support::BufferedStreamingDetokenizer detokenizer_;
   const int num_output_candidates_;
   std::optional<Sampler*> sampler_;
   std::unique_ptr<RepetitionPenaltyProcessor> repetition_penalty_processor_;
@@ -435,17 +492,15 @@ class DecodeOneStep {
   std::vector<LogitsProcessor*> logits_processors_;
   std::optional<BenchmarkInfo> benchmark_info_;
   StopTokenDetector stop_token_detector_;
+  StopTokenStreamFilter stop_token_filter_;
 
   // For external sampling.
   // Holds the scores for the output candidates. Dim: {num_output_candidates}
   litert::TensorBuffer scores_tensor_;
   absl::Span<float> scores_span_;
 
-  // Common state
-  std::vector<std::vector<int>> bpe_partial_token_ids_;
-  std::vector<std::queue<std::string>> pending_stop_tokens_;
-  std::vector<std::queue<std::vector<int>>> pending_stop_token_ids_;
-  std::vector<int> num_buffered_tokens_;
+  // Stores the incremental delta (newly released text and token IDs) produced
+  // during the most recent `Run()` step or `Flush()` call.
   std::vector<std::string> result_text_;
   std::vector<std::vector<int>> result_token_ids_;
 
@@ -627,17 +682,14 @@ absl::StatusOr<Responses> Decode(
         continue;
       }
       any_updates = true;
-      // The tokenizer may return a token with a special character "▁" that
-      // should be replaced with a space.
-      std::string result_text = absl::StrReplaceAll(output_text, {{"▁", " "}});
       if (is_streaming) {
-        step_texts[j] = result_text;
+        step_texts[j] = output_text;
         step_token_ids[j] = run_one_step.GetResultTokenIds()[j];
         if (is_custom_sampling) {
           step_scores[j] = run_one_step.GetScores()[j];
         }
       } else {
-        final_texts[j] += result_text;
+        final_texts[j] += output_text;
         final_token_ids[j].insert(final_token_ids[j].end(),
                                   run_one_step.GetResultTokenIds()[j].begin(),
                                   run_one_step.GetResultTokenIds()[j].end());
@@ -659,6 +711,38 @@ absl::StatusOr<Responses> Decode(
     if (ShouldStop(*all_done, benchmark_decode_token_count, num_decode_steps,
                    current_step, max_num_tokens, max_output_tokens)) {
       break;
+    }
+  }
+
+  {
+    ABSL_ASSIGN_OR_RETURN(std::vector<std::string> flushed_texts,
+                          run_one_step.Flush());
+
+    if (is_streaming) {
+      bool any_updates = false;
+      std::vector<std::string> step_texts(num_output_candidates);
+      std::vector<std::vector<int>> step_token_ids(num_output_candidates);
+      for (int j = 0; j < num_output_candidates; ++j) {
+        if (!flushed_texts[j].empty()) {
+          any_updates = true;
+          step_texts[j] = flushed_texts[j];
+          step_token_ids[j] = run_one_step.GetResultTokenIds()[j];
+        }
+      }
+      if (any_updates) {
+        callback(Responses(TaskState::kProcessing, std::move(step_texts),
+                           /*scores=*/{}, /*token_lengths=*/{},
+                           std::move(step_token_ids)));
+      }
+    } else {
+      for (int j = 0; j < num_output_candidates; ++j) {
+        if (!flushed_texts[j].empty()) {
+          final_texts[j] += flushed_texts[j];
+          final_token_ids[j].insert(final_token_ids[j].end(),
+                                    run_one_step.GetResultTokenIds()[j].begin(),
+                                    run_one_step.GetResultTokenIds()[j].end());
+        }
+      }
     }
   }
 

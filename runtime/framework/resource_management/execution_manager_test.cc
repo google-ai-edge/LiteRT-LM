@@ -94,14 +94,14 @@ class ExecutionManagerTest
  protected:
   void SetUp() override {
     tokenizer_ = std::make_unique<MockTokenizer>();
-    EXPECT_CALL(*tokenizer_, TokenIdsToText(ElementsAre(0)))
-        .WillRepeatedly(Return("0"));
-    EXPECT_CALL(*tokenizer_, TokenIdsToText(ElementsAre(4)))
-        .WillRepeatedly(Return("4"));
-    EXPECT_CALL(*tokenizer_, TokenIdsToText(ElementsAre(5)))
-        .WillRepeatedly(Return("5"));
-    EXPECT_CALL(*tokenizer_, TokenIdsToText(ElementsAre(6)))
-        .WillRepeatedly(Return("6"));
+    EXPECT_CALL(*tokenizer_, TokenIdsToText(testing::_))
+        .WillRepeatedly([](const std::vector<int>& ids) {
+          std::string result;
+          for (int id : ids) {
+            result += std::to_string(id);
+          }
+          return result;
+        });
     EXPECT_CALL(*tokenizer_, GetVocabSize()).WillRepeatedly(Return(kVocabSize));
   }
 
