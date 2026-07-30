@@ -369,6 +369,7 @@ absl::StatusOr<std::string> GetDefaultJinjaPromptTemplate(
 {%- if add_generation_prompt -%}
     {{'<start_of_turn>model\n'}}
 {%- endif -%})tmpl";
+    case proto::LlmModelType::kMinicpmv:
     case proto::LlmModelType::kFastVlm:
       // absl::Substitute takes up to 10 arguments, so we have to split the
       // template into two parts.

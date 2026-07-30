@@ -22,6 +22,7 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -58,6 +59,8 @@ ABSL_FLAG(std::string, model_path, "", "Model path to use for LLM execution.");
 ABSL_FLAG(std::string, input_prompt, "",
           "Input prompt to use for testing LLM execution.");
 ABSL_FLAG(std::string, input_prompt_file, "", "File path to the input prompt.");
+ABSL_FLAG(std::string, image_path, "",
+          "Optional path to an image file for multimodal input.");
 
 namespace {
 
@@ -128,9 +131,15 @@ absl::Status MainHelper(int argc, char** argv) {
   auto backend_str = absl::GetFlag(FLAGS_backend);
   ABSL_ASSIGN_OR_RETURN(Backend backend,
                         litert::lm::GetBackendFromString(backend_str));
+  const std::string image_path_for_backend = absl::GetFlag(FLAGS_image_path);
+  std::optional<Backend> vision_backend;
+  if (!image_path_for_backend.empty()) {
+    vision_backend = backend;  // run vision on the same backend (CPU).
+  }
   ABSL_ASSIGN_OR_RETURN(
       EngineSettings engine_settings,
-      EngineSettings::CreateDefault(std::move(model_assets), backend));
+      EngineSettings::CreateDefault(std::move(model_assets), backend,
+                                    vision_backend));
   // Enable benchmark by default.
   engine_settings.GetMutableBenchmarkParams() =
       litert::lm::proto::BenchmarkParams();
@@ -155,6 +164,9 @@ absl::Status MainHelper(int argc, char** argv) {
   // Create the conversation.
   std::unique_ptr<Conversation> conversation;
   auto session_config = litert::lm::SessionConfig::CreateDefault();
+  if (!image_path_for_backend.empty()) {
+    session_config.SetVisionModalityEnabled(true);
+  }
   ABSL_ASSIGN_OR_RETURN(auto conversation_config,
                         ConversationConfig::Builder()
                             .SetSessionConfig(session_config)
@@ -164,6 +176,10 @@ absl::Status MainHelper(int argc, char** argv) {
 
   // Prepare the message to send.
   json content_list = json::array();
+  const std::string image_path = absl::GetFlag(FLAGS_image_path);
+  if (!image_path.empty()) {
+    content_list.push_back({{"type", "image"}, {"path", image_path}});
+  }
   const std::string input_prompt = GetInputPrompt();
   std::cout << "input_prompt: " << input_prompt << std::endl;
   content_list.push_back({{"type", "text"}, {"text", input_prompt}});
