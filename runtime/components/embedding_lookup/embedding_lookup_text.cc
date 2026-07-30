@@ -223,6 +223,14 @@ absl::Status EmbeddingLookupText::LookupPrefill(absl::Span<const int> tokens,
                      ". Output tensor bytes: ", prefill_output->Size()));
   }
 
+  std::vector<uint8_t> all_tokens_emb(bytes_per_token * tokens.size());
+  uint8_t* dst_ptr = all_tokens_emb.data();
+  for (int token : tokens) {
+    absl::Span<uint8_t> output_buffer(dst_ptr, bytes_per_token);
+    ABSL_RETURN_IF_ERROR(LookupInternal(token, output_buffer));
+    dst_ptr += bytes_per_token;
+  }
+
   LITERT_ASSIGN_OR_RETURN(
       auto prefill_output_lock_and_addr,
       ::litert::TensorBufferScopedLock::Create(*prefill_output,
@@ -231,12 +239,8 @@ absl::Status EmbeddingLookupText::LookupPrefill(absl::Span<const int> tokens,
       reinterpret_cast<uint8_t*>(prefill_output_lock_and_addr.second);
 
   prefill_output_ptr += byte_offset;
-  for (int token : tokens) {
-    absl::Span<uint8_t> output_buffer(
-        reinterpret_cast<uint8_t*>(prefill_output_ptr), bytes_per_token);
-    ABSL_RETURN_IF_ERROR(LookupInternal(token, output_buffer));
-    prefill_output_ptr += bytes_per_token;
-  }
+  std::memcpy(prefill_output_ptr, all_tokens_emb.data(), all_tokens_emb.size());
+  prefill_output_ptr += all_tokens_emb.size();
 
   // If there are fewer tokens than the output tensor can hold, we need to treat
   // the remaining tokens as if they were 0.

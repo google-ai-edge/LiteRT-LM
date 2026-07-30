@@ -41,6 +41,7 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/time/clock.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
+#include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/c/litert_model_types.h"  // from @litert
 #include "litert/c/litert_op_code.h"  // from @litert
@@ -3493,6 +3494,7 @@ LlmLiteRtNpuCompiledModelExecutor::CloneContext() const {
 
 absl::Status LlmLiteRtNpuCompiledModelExecutor::RestoreContext(
     std::unique_ptr<LlmContext> context_data) {
+  absl::MutexLock lock(executor_mutex_);
   if (context_data->runtime_state().current_step > 0) {
     auto& processed_ctx =
         static_cast<LlmProcessedContext&>(context_data->processed_context());
@@ -4045,6 +4047,14 @@ LlmLiteRtNpuCompiledModelExecutor::CreateForModelHasPerLayerEmbedding(
 
   const bool has_sliding_window_attention = DetectIsSwa(input_kv_cache_buffers);
 
+  std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup_manager =
+      nullptr;
+  if (embedder_per_layer_model != nullptr) {
+    LITERT_ASSIGN_OR_RETURN(
+        per_layer_embedding_lookup_manager,
+        EmbeddingLookupManager::Create(env, embedder_per_layer_model, false));
+  }
+
   ABSL_RETURN_IF_ERROR(WarmupInference(
       llm_compiled_model, llm_inference_context,
       npu_auxiliary_context.npu_auxiliary_compiled_model, prefill_signatures,
@@ -4057,7 +4067,7 @@ LlmLiteRtNpuCompiledModelExecutor::CreateForModelHasPerLayerEmbedding(
       std::move(llm_inference_context),
       std::move(cache_update_inference_context), std::move(prefill_runner_set),
       prefill_signatures, std::move(embedding_lookup_manager),
-      /*per_layer_embedding_lookup_manager=*/nullptr,
+      std::move(per_layer_embedding_lookup_manager),
       std::move(embedder_per_layer_context), quantization_params,
       std::move(ple_table_ptrs), std::move(ple_quant_params),
       std::move(ple_per_tensor_scales), table_count, ple_embedding_dim_val,
@@ -4312,6 +4322,7 @@ LlmLiteRtNpuCompiledModelExecutor::CreateForModelWithoutPerLayerEmbedding(
 absl::Status LlmLiteRtNpuCompiledModelExecutor::ClearKVCache(
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& buffers)
     const {
+  absl::MutexLock lock(executor_mutex_);
   for (auto& [buffer_name, buffer] : buffers) {
     if (buffer_name.starts_with(kv_cache_k_root_name) ||
         buffer_name.starts_with(kv_cache_v_root_name) ||
