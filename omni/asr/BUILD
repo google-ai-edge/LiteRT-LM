@@ -100,21 +100,65 @@ cc_test(
     deps = [
         ":log_mel_spectrogram_processor",
         "@com_google_googletest//:gtest_main",
-        "@com_google_absl//absl/functional:any_invocable",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_matchers",
-        "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/types:span",
         "@litert//support/util:test_utils",
         "//omni/base:stage",
     ],
 )
 
 cc_library(
-    name = "speech_decoder",
-    hdrs = ["speech_decoder.h"],
+    name = "speech_recognizer",
+    hdrs = ["speech_recognizer.h"],
     deps = [
         "@com_google_absl//absl/base:nullability",
+        "//omni/base:stage",
+    ],
+)
+
+cc_library(
+    name = "ctc_decoder",
+    srcs = ["ctc_decoder.cc"],
+    hdrs = ["ctc_decoder.h"],
+    deps = [
+        ":litert_speech_recognizer",
+        ":speech_recognizer",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/types:span",
+        "@litert//litert/cc:litert_macros",
+        "@litert//litert/cc:litert_tensor_buffer",
+    ],
+)
+
+cc_test(
+    name = "ctc_decoder_test",
+    srcs = ["ctc_decoder_test.cc"],
+    deps = [
+        ":ctc_decoder",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status:status_matchers",
+        "@litert//litert/cc:litert_tensor_buffer",
+        "@litert//support/util:test_utils",
+    ],
+)
+
+cc_library(
+    name = "litert_speech_recognizer",
+    srcs = ["litert_speech_recognizer.cc"],
+    hdrs = ["litert_speech_recognizer.h"],
+    deps = [
+        ":speech_recognizer",
+        "@com_google_absl//absl/base:nullability",
+        "@com_google_absl//absl/cleanup",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/types:span",
+        "@litert//litert/cc:litert_compiled_model",
+        "@litert//litert/cc:litert_macros",
+        "@litert//litert/cc:litert_tensor_buffer",
         "//omni/base:stage",
     ],
 )
@@ -123,7 +167,7 @@ cc_library(
     name = "detokenizer",
     hdrs = ["detokenizer.h"],
     deps = [
-        ":speech_decoder",
+        ":speech_recognizer",
         "@com_google_absl//absl/base:nullability",
         "//omni/base:stage",
     ],
@@ -135,7 +179,7 @@ cc_library(
     hdrs = ["tokenizer_detokenizer.h"],
     deps = [
         ":detokenizer",
-        ":speech_decoder",
+        ":speech_recognizer",
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/cleanup",
         "@com_google_absl//absl/status",
@@ -151,8 +195,7 @@ cc_test(
     name = "tokenizer_detokenizer_test",
     srcs = ["tokenizer_detokenizer_test.cc"],
     deps = [
-        ":detokenizer",
-        ":speech_decoder",
+        ":speech_recognizer",
         ":tokenizer_detokenizer",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
@@ -160,6 +203,7 @@ cc_test(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings:string_view",
         "@litert//support/tokenizer",
+        "@litert//support/util:test_utils",
         "//omni/base:stage",
     ],
 )
@@ -204,7 +248,6 @@ cc_library(
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
-        "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/types:span",
@@ -235,7 +278,7 @@ cc_library(
         ":audio_preprocessor",
         ":audio_source",
         ":detokenizer",
-        ":speech_decoder",
+        ":speech_recognizer",
         ":text_merger",
         "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/functional:any_invocable",
@@ -260,7 +303,7 @@ cc_test(
         ":audio_source",
         ":detokenizer",
         ":levenshtein_text_merger",
-        ":speech_decoder",
+        ":speech_recognizer",
         ":text_merger",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/base:nullability",

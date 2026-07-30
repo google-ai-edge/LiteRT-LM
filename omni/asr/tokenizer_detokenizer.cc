@@ -32,15 +32,16 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "support/tokenizer/tokenizer.h"  // from @litert
 #include "omni/asr/detokenizer.h"
-#include "omni/asr/speech_decoder.h"
+#include "omni/asr/speech_recognizer.h"
 #include "omni/base/stage.h"
 
 namespace litert::omni::asr {
 
 TokenizerDetokenizer::TokenizerDetokenizer(
-    Stage<std::vector<SpeechDecoder::DecodedToken>>* absl_nonnull decoder,
+    Stage<std::vector<SpeechRecognizer::DecodedToken>>* absl_nonnull
+        speech_recognizer,
     ::litert::support::Tokenizer* absl_nonnull tokenizer)
-    : Detokenizer(decoder), tokenizer_(tokenizer) {}
+    : Detokenizer(speech_recognizer), tokenizer_(tokenizer) {}
 
 void TokenizerDetokenizer::Reset() {
   WaitForStateThenSetState(State::kIdle, State::kRunning);
@@ -49,14 +50,14 @@ void TokenizerDetokenizer::Reset() {
 
 absl::Status TokenizerDetokenizer::ScheduleInternal() {
   auto cleanup = absl::MakeCleanup([this]() { SetState(State::kIdle); });
-  ABSL_ASSIGN_OR_RETURN(auto decoded_tokens, decoder_.GetOutput());
+  ABSL_ASSIGN_OR_RETURN(auto decoded_tokens, speech_recognizer_.GetOutput());
   ABSL_ASSIGN_OR_RETURN(auto words, Detokenize(decoded_tokens));
   PushOutput(std::move(words));
   return absl::OkStatus();
 }
 
 absl::StatusOr<std::vector<Detokenizer::Word>> TokenizerDetokenizer::Detokenize(
-    const std::vector<SpeechDecoder::DecodedToken>& tokens) {
+    const std::vector<SpeechRecognizer::DecodedToken>& tokens) {
   if (tokens.empty()) {
     return std::vector<Detokenizer::Word>();
   }

@@ -27,7 +27,8 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "support/tokenizer/tokenizer.h"  // from @litert
-#include "omni/asr/speech_decoder.h"
+#include "support/util/test_utils.h"  // from @litert  // IWYU pragma: keep for ASSERT_OK
+#include "omni/asr/speech_recognizer.h"
 #include "omni/base/stage.h"
 
 namespace litert::omni::asr {
@@ -61,12 +62,12 @@ class FakeTokenizer : public ::litert::support::Tokenizer {
       token_ids_to_text_fn_;
 };
 
-class DummySpeechDecoder : public SingleThreadedStageWithDeque<
-                               std::vector<SpeechDecoder::DecodedToken>> {
+class DummySpeechRecognizer : public SingleThreadedStageWithDeque<
+                                  std::vector<SpeechRecognizer::DecodedToken>> {
  public:
-  DummySpeechDecoder() = default;
+  DummySpeechRecognizer() = default;
 
-  void PushTokens(std::vector<SpeechDecoder::DecodedToken> tokens) {
+  void PushTokens(std::vector<SpeechRecognizer::DecodedToken> tokens) {
     PushOutput(std::move(tokens));
   }
 
@@ -76,7 +77,7 @@ class DummySpeechDecoder : public SingleThreadedStageWithDeque<
 };
 
 TEST(TokenizerDetokenizerTest, ProcessEmptyTokensReturnsEmptyVector) {
-  DummySpeechDecoder dummy_decoder;
+  DummySpeechRecognizer dummy_decoder;
   FakeTokenizer fake_tokenizer;
   fake_tokenizer.token_ids_to_text_fn_ = [](const std::vector<int>& ids) {
     return "";
@@ -85,14 +86,14 @@ TEST(TokenizerDetokenizerTest, ProcessEmptyTokensReturnsEmptyVector) {
   TokenizerDetokenizer detokenizer(&dummy_decoder, &fake_tokenizer);
   dummy_decoder.PushTokens({});
 
-  ABSL_ASSERT_OK(detokenizer.Schedule());
+  ASSERT_OK(detokenizer.Schedule());
   auto words_or = detokenizer.GetOutput();
-  ABSL_ASSERT_OK(words_or);
+  ASSERT_OK(words_or);
   EXPECT_TRUE(words_or->empty());
 }
 
 TEST(TokenizerDetokenizerTest, ProcessTokensDecodesWordsWithTimestamps) {
-  DummySpeechDecoder dummy_decoder;
+  DummySpeechRecognizer dummy_decoder;
   FakeTokenizer fake_tokenizer;
   fake_tokenizer.token_ids_to_text_fn_ = [](const std::vector<int>& ids) {
     if (ids == std::vector<int>{101, 102}) {
@@ -103,13 +104,13 @@ TEST(TokenizerDetokenizerTest, ProcessTokensDecodesWordsWithTimestamps) {
 
   TokenizerDetokenizer detokenizer(&dummy_decoder, &fake_tokenizer);
   dummy_decoder.PushTokens({
-      SpeechDecoder::DecodedToken{.token_id = 101, .timestamp_ms = 100},
-      SpeechDecoder::DecodedToken{.token_id = 102, .timestamp_ms = 200},
+      SpeechRecognizer::DecodedToken{.token_id = 101, .timestamp_ms = 100},
+      SpeechRecognizer::DecodedToken{.token_id = 102, .timestamp_ms = 200},
   });
 
-  ABSL_ASSERT_OK(detokenizer.Schedule());
+  ASSERT_OK(detokenizer.Schedule());
   auto words_or = detokenizer.GetOutput();
-  ABSL_ASSERT_OK(words_or);
+  ASSERT_OK(words_or);
   auto words = std::move(*words_or);
 
   ASSERT_EQ(words.size(), 2);
@@ -121,7 +122,7 @@ TEST(TokenizerDetokenizerTest, ProcessTokensDecodesWordsWithTimestamps) {
 
 TEST(TokenizerDetokenizerTest,
      ProcessTokensInterpolatesTimestampsWhenCountsDiffer) {
-  DummySpeechDecoder dummy_decoder;
+  DummySpeechRecognizer dummy_decoder;
   FakeTokenizer fake_tokenizer;
   fake_tokenizer.token_ids_to_text_fn_ = [](const std::vector<int>& ids) {
     if (ids == std::vector<int>{1, 2, 3, 4, 5}) {
@@ -132,16 +133,16 @@ TEST(TokenizerDetokenizerTest,
 
   TokenizerDetokenizer detokenizer(&dummy_decoder, &fake_tokenizer);
   dummy_decoder.PushTokens({
-      SpeechDecoder::DecodedToken{.token_id = 1, .timestamp_ms = 100},
-      SpeechDecoder::DecodedToken{.token_id = 2, .timestamp_ms = 200},
-      SpeechDecoder::DecodedToken{.token_id = 3, .timestamp_ms = 300},
-      SpeechDecoder::DecodedToken{.token_id = 4, .timestamp_ms = 400},
-      SpeechDecoder::DecodedToken{.token_id = 5, .timestamp_ms = 500},
+      SpeechRecognizer::DecodedToken{.token_id = 1, .timestamp_ms = 100},
+      SpeechRecognizer::DecodedToken{.token_id = 2, .timestamp_ms = 200},
+      SpeechRecognizer::DecodedToken{.token_id = 3, .timestamp_ms = 300},
+      SpeechRecognizer::DecodedToken{.token_id = 4, .timestamp_ms = 400},
+      SpeechRecognizer::DecodedToken{.token_id = 5, .timestamp_ms = 500},
   });
 
-  ABSL_ASSERT_OK(detokenizer.Schedule());
+  ASSERT_OK(detokenizer.Schedule());
   auto words_or = detokenizer.GetOutput();
-  ABSL_ASSERT_OK(words_or);
+  ASSERT_OK(words_or);
   auto words = std::move(*words_or);
 
   ASSERT_EQ(words.size(), 3);
@@ -155,7 +156,7 @@ TEST(TokenizerDetokenizerTest,
 
 TEST(TokenizerDetokenizerTest,
      ProcessTokensPicksClosestTimestampWhenTokenLacksTimestamp) {
-  DummySpeechDecoder dummy_decoder;
+  DummySpeechRecognizer dummy_decoder;
   FakeTokenizer fake_tokenizer;
   fake_tokenizer.token_ids_to_text_fn_ = [](const std::vector<int>& ids) {
     if (ids == std::vector<int>{1, 2, 3}) {
@@ -168,14 +169,16 @@ TEST(TokenizerDetokenizerTest,
   // Token 0 at index 0 has no timestamp, Token 1 at index 1 has 200ms, Token 2
   // at index 2 has no timestamp.
   dummy_decoder.PushTokens({
-      SpeechDecoder::DecodedToken{.token_id = 1, .timestamp_ms = std::nullopt},
-      SpeechDecoder::DecodedToken{.token_id = 2, .timestamp_ms = 200},
-      SpeechDecoder::DecodedToken{.token_id = 3, .timestamp_ms = std::nullopt},
+      SpeechRecognizer::DecodedToken{.token_id = 1,
+                                     .timestamp_ms = std::nullopt},
+      SpeechRecognizer::DecodedToken{.token_id = 2, .timestamp_ms = 200},
+      SpeechRecognizer::DecodedToken{.token_id = 3,
+                                     .timestamp_ms = std::nullopt},
   });
 
-  ABSL_ASSERT_OK(detokenizer.Schedule());
+  ASSERT_OK(detokenizer.Schedule());
   auto words_or = detokenizer.GetOutput();
-  ABSL_ASSERT_OK(words_or);
+  ASSERT_OK(words_or);
   auto words = std::move(*words_or);
 
   ASSERT_EQ(words.size(), 3);
@@ -188,7 +191,7 @@ TEST(TokenizerDetokenizerTest,
 }
 
 TEST(TokenizerDetokenizerTest, ResetClearsOutputs) {
-  DummySpeechDecoder dummy_decoder;
+  DummySpeechRecognizer dummy_decoder;
   FakeTokenizer fake_tokenizer;
   fake_tokenizer.token_ids_to_text_fn_ = [](const std::vector<int>& ids) {
     return "test word";
@@ -196,10 +199,10 @@ TEST(TokenizerDetokenizerTest, ResetClearsOutputs) {
 
   TokenizerDetokenizer detokenizer(&dummy_decoder, &fake_tokenizer);
   dummy_decoder.PushTokens({
-      SpeechDecoder::DecodedToken{.token_id = 1, .timestamp_ms = 50},
+      SpeechRecognizer::DecodedToken{.token_id = 1, .timestamp_ms = 50},
   });
 
-  ABSL_ASSERT_OK(detokenizer.Schedule());
+  ASSERT_OK(detokenizer.Schedule());
   EXPECT_TRUE(detokenizer.HasOutput());
 
   detokenizer.Reset();

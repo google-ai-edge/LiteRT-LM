@@ -22,16 +22,17 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "support/tokenizer/tokenizer.h"  // from @litert
 #include "omni/asr/detokenizer.h"
-#include "omni/asr/speech_decoder.h"
+#include "omni/asr/speech_recognizer.h"
 #include "omni/base/stage.h"
 
 namespace litert::omni::asr {
 
-// Converts SpeechDecoder tokens into words using litert::support::Tokenizer.
+// Converts SpeechRecognizer tokens into words using litert::support::Tokenizer.
 class TokenizerDetokenizer : public Detokenizer {
  public:
   TokenizerDetokenizer(
-      Stage<std::vector<SpeechDecoder::DecodedToken>>* absl_nonnull decoder,
+      Stage<std::vector<SpeechRecognizer::DecodedToken>>* absl_nonnull
+          speech_recognizer,
       ::litert::support::Tokenizer* absl_nonnull tokenizer);
 
   ~TokenizerDetokenizer() override = default;
@@ -43,7 +44,7 @@ class TokenizerDetokenizer : public Detokenizer {
 
  private:
   absl::StatusOr<std::vector<Detokenizer::Word>> Detokenize(
-      const std::vector<SpeechDecoder::DecodedToken>& tokens);
+      const std::vector<SpeechRecognizer::DecodedToken>& tokens);
 
   ::litert::support::Tokenizer* const tokenizer_;
 };

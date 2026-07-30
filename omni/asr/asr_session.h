@@ -25,7 +25,7 @@
 #include "omni/asr/audio_preprocessor.h"
 #include "omni/asr/audio_source.h"
 #include "omni/asr/detokenizer.h"
-#include "omni/asr/speech_decoder.h"
+#include "omni/asr/speech_recognizer.h"
 #include "omni/asr/text_merger.h"
 #include "omni/base/async_stage_scheduler.h"
 #include "runtime/framework/threadpool.h"
@@ -38,7 +38,7 @@ class AsrSession {
   struct Components {
     std::unique_ptr<AudioSource> audio_source;
     std::unique_ptr<AudioPreprocessor> preprocessor;
-    std::unique_ptr<SpeechDecoder> speech_decoder;
+    std::unique_ptr<SpeechRecognizer> speech_recognizer;
     std::unique_ptr<Detokenizer> detokenizer;
     std::unique_ptr<TextMerger> text_merger;
   };

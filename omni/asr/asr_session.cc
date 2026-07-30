@@ -40,8 +40,9 @@ absl::StatusOr<std::unique_ptr<AsrSession>> AsrSession::Create(
     return absl::InvalidArgumentError(
         "AudioPreprocessor component is required.");
   }
-  if (components.speech_decoder == nullptr) {
-    return absl::InvalidArgumentError("SpeechDecoder component is required.");
+  if (components.speech_recognizer == nullptr) {
+    return absl::InvalidArgumentError(
+        "SpeechRecognizer component is required.");
   }
   if (components.detokenizer == nullptr) {
     return absl::InvalidArgumentError("Detokenizer component is required.");
@@ -70,7 +71,7 @@ void AsrSession::Reset() {
   ResetAsyncScheduler();
   components_.audio_source->Reset();
   components_.preprocessor->Reset();
-  components_.speech_decoder->Reset();
+  components_.speech_recognizer->Reset();
   components_.detokenizer->Reset();
   components_.text_merger->Reset();
 }
@@ -82,8 +83,8 @@ absl::StatusOr<TextMerger::MergeResult> AsrSession::ProcessNextChunk() {
     ABSL_RETURN_IF_ERROR(components_.preprocessor->Schedule());
   }
 
-  if (components_.speech_decoder->NeedSchedule()) {
-    ABSL_RETURN_IF_ERROR(components_.speech_decoder->Schedule());
+  if (components_.speech_recognizer->NeedSchedule()) {
+    ABSL_RETURN_IF_ERROR(components_.speech_recognizer->Schedule());
   }
 
   if (components_.detokenizer->NeedSchedule()) {
@@ -108,8 +109,8 @@ absl::Status AsrSession::ProcessAsync(::litert::lm::ThreadPool& thread_pool,
   }
 
   std::vector<internal::StageBase*> stages = {
-      components_.audio_source.get(),   components_.preprocessor.get(),
-      components_.speech_decoder.get(), components_.detokenizer.get(),
+      components_.audio_source.get(),      components_.preprocessor.get(),
+      components_.speech_recognizer.get(), components_.detokenizer.get(),
       components_.text_merger.get(),
   };
   auto callback_with_flush_on_eos =
