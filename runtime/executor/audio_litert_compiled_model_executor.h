@@ -464,10 +464,11 @@ class AudioLiteRtCompiledModelExecutor : public AudioExecutor {
       std::unique_ptr<AudioEncoder> audio_encoder,
       std::unique_ptr<AudioAdapter> audio_adapter, int sequence_length,
       int spectrogram_feature_dimensions, int audio_embedding_dimensions,
-      int encoder_shrinking_factor)
+      int unadapted_embedding_dimensions, int encoder_shrinking_factor)
       : sequence_length_(sequence_length),
         spectrogram_feature_dimensions_(spectrogram_feature_dimensions),
         audio_embedding_dimensions_(audio_embedding_dimensions),
+        unadapted_embedding_dimensions_(unadapted_embedding_dimensions),
         encoder_shrinking_factor_(encoder_shrinking_factor),
         executor_settings_(std::move(executor_settings)),
         executor_properties_(std::move(executor_properties)),
@@ -488,7 +489,8 @@ class AudioLiteRtCompiledModelExecutor : public AudioExecutor {
   //   The number of valid tokens in the audio embeddings.
   absl::StatusOr<int> EncodeInternal(absl::Span<const float> spectrogram_tensor,
                                      absl::Span<const uint8_t> spectrogram_mask,
-                                     absl::Span<float> audio_embeddings);
+                                     absl::Span<float> audio_embeddings,
+                                     absl::Span<float> unadapted_embeddings);
 
   // Encode the spectrogram tensor and mask tensor into audio embeddings.
   // Args:
@@ -504,9 +506,13 @@ class AudioLiteRtCompiledModelExecutor : public AudioExecutor {
       const std::vector<uint8_t>& spectrogram_mask_host_buffer,
       int total_frames, bool is_flush);
 
+  absl::StatusOr<std::pair<::litert::TensorBuffer, float*>>
+  CreateAndLockAudioTensor(int num_tokens, int dimensions);
+
   int sequence_length_;
   int spectrogram_feature_dimensions_;
   int audio_embedding_dimensions_;
+  int unadapted_embedding_dimensions_;
   int encoder_shrinking_factor_;
   AudioExecutorSettings executor_settings_;
   AudioExecutorProperties executor_properties_;
