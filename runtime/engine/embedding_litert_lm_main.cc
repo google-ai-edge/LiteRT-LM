@@ -34,25 +34,27 @@
 #include "absl/flags/flag.h"  // from @com_google_absl
 #include "absl/flags/parse.h"  // from @com_google_absl
 #include "absl/log/globals.h"  // from @com_google_absl
+#include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
-#include "litert/cc/internal/scoped_file.h"  // from @litert
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "support/preprocessor/image_preprocessor.h"  // from @litert
 #include "runtime/components/model_resources.h"
-#include "runtime/components/model_resources_litert_lm.h"
 #include "runtime/core/embedding_engine_impl.h"
 #include "runtime/engine/embedding_engine.h"
 #include "runtime/engine/embedding_engine_settings.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/executor_settings_base.h"
-#include "runtime/util/litert_lm_loader.h"
+#include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/util/litert_util.h"
+#include "runtime/util/memory_mapped_file.h"
+#include "runtime/util/scoped_file.h"
 #include "runtime/util/status_macros.h"
 
 ABSL_FLAG(std::string, backend, "cpu",
           "Executor backend to use for embedding execution (cpu, gpu, etc.)");
-ABSL_FLAG(std::string, model_path, "/tmp/embedding_gemma_v2.litertlm",
+ABSL_FLAG(std::string, model_path, "/tmp/embedding-gemma-v2.litertlm",
           "Path to the embedding .litertlm file.");
 ABSL_FLAG(std::string, input_prompt, "",
           "Input string to compute the embedding for.");
@@ -60,10 +62,13 @@ ABSL_FLAG(std::string, image_path, "",
           "Optional path to an image file to compute the embedding for.");
 ABSL_FLAG(bool, normalize, false,
           "Whether to L2-normalize the output embedding vector.");
+ABSL_FLAG(bool, use_mmap, true,
+          "Whether to use memory-mapped file for model loading.");
 
 namespace {
 
 using ::litert::lm::Backend;
+using ::litert::lm::BuildLiteRtCompiledModelResources;
 using ::litert::lm::EmbeddingEngineImpl;
 using ::litert::lm::EmbeddingEngineSettings;
 using ::litert::lm::EmbeddingResponse;
@@ -71,11 +76,30 @@ using ::litert::lm::InputData;
 using ::litert::lm::InputImage;
 using ::litert::lm::InputImageEnd;
 using ::litert::lm::InputText;
-using ::litert::lm::LitertLmLoader;
+using ::litert::lm::MemoryMappedFile;
 using ::litert::lm::ModelAssets;
-using ::litert::lm::ModelResourcesLitertLm;
 using ::litert::lm::ModelType;
 using ::litert::lm::OwnedEnvironment;
+using ::litert::lm::ScopedFile;
+
+absl::StatusOr<ModelAssets> CreateModelAssets(bool use_mmap,
+                                              absl::string_view model_path) {
+  if (use_mmap) {
+    std::cout << "Using memory-mapped file." << std::endl;
+    LITERT_ASSIGN_OR_RETURN(auto unique_memory_mapped_file,
+                            MemoryMappedFile::Create(model_path));
+    std::shared_ptr<MemoryMappedFile> memory_mapped_file =
+        std::move(unique_memory_mapped_file);
+    return ModelAssets::Create(memory_mapped_file, model_path);
+  } else {
+    std::cout << "Using ScopedFile." << std::endl;
+    LITERT_ASSIGN_OR_RETURN(auto local_scoped_file,
+                            ScopedFile::Open(model_path));
+    std::shared_ptr<ScopedFile> scoped_file =
+        std::make_shared<ScopedFile>(std::move(local_scoped_file));
+    return ModelAssets::Create(scoped_file, model_path);
+  }
+}
 
 absl::Status MainHelper(int argc, char** argv) {
   absl::ParseCommandLine(argc, argv);
@@ -88,12 +112,25 @@ absl::Status MainHelper(int argc, char** argv) {
   }
   std::cout << "Loading model from: " << model_path << std::endl;
 
-  LITERT_ASSIGN_OR_RETURN(auto scoped_file,
-                          ::litert::ScopedFile::Open(model_path));
-  LITERT_ASSIGN_OR_RETURN(auto loader,
-                          LitertLmLoader::Create(std::move(scoped_file)));
+  const std::string backend_str = absl::GetFlag(FLAGS_backend);
+  LITERT_ASSIGN_OR_RETURN(Backend backend,
+                          ::litert::lm::GetBackendFromString(backend_str));
+  const bool enable_file_backed_model_loading = (backend == Backend::NPU);
+
+  bool use_mmap = absl::GetFlag(FLAGS_use_mmap);
+  if (backend == Backend::NPU && use_mmap) {
+    ABSL_LOG(WARNING)
+        << "NPU backend selected. Disabling memory mapping to ensure "
+           "file-backed model loading is used.";
+    use_mmap = false;
+  }
+
+  LITERT_ASSIGN_OR_RETURN(auto model_assets,
+                          CreateModelAssets(use_mmap, model_path));
+
   LITERT_ASSIGN_OR_RETURN(auto resources,
-                          ModelResourcesLitertLm::Create(std::move(loader)));
+                          BuildLiteRtCompiledModelResources(
+                              model_assets, enable_file_backed_model_loading));
 
   LITERT_ASSIGN_OR_RETURN(auto tokenizer, resources->GetTokenizer());
   if (!tokenizer) {
@@ -104,11 +141,6 @@ absl::Status MainHelper(int argc, char** argv) {
   auto owned_env = std::make_unique<OwnedEnvironment>(OwnedEnvironment{
       /*magic_number_configs_helper=*/nullptr, std::move(env)});
 
-  const std::string backend_str = absl::GetFlag(FLAGS_backend);
-  LITERT_ASSIGN_OR_RETURN(Backend backend,
-                          ::litert::lm::GetBackendFromString(backend_str));
-
-  LITERT_ASSIGN_OR_RETURN(auto model_assets, ModelAssets::Create(model_path));
   std::optional<Backend> vision_backend = std::nullopt;
   if (resources->GetTFLiteModel(ModelType::kTfLiteVisionEncoder).ok()) {
     vision_backend = backend;
