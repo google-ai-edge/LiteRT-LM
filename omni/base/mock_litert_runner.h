@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_MOCK_LITERT_RUNNER_H_
-#define THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_MOCK_LITERT_RUNNER_H_
+#ifndef THIRD_PARTY_ODML_LITERT_LM_OMNI_BASE_MOCK_LITERT_RUNNER_H_
+#define THIRD_PARTY_ODML_LITERT_LM_OMNI_BASE_MOCK_LITERT_RUNNER_H_
 
 #include <vector>
 
@@ -23,9 +23,9 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
-#include "omni/asr/litert_runner.h"
+#include "omni/base/litert_runner.h"
 
-namespace litert::omni::asr {
+namespace litert::omni {
 
 class MockLiteRtRunner : public LiteRtRunner {
  public:
@@ -47,6 +47,6 @@ class MockLiteRtRunner : public LiteRtRunner {
               (override));
 };
 
-}  // namespace litert::omni::asr
+}  // namespace litert::omni
 
-#endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_MOCK_LITERT_RUNNER_H_
+#endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_BASE_MOCK_LITERT_RUNNER_H_

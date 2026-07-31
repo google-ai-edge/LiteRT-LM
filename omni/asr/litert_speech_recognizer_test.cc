@@ -31,8 +31,8 @@
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "support/util/test_utils.h"  // from @litert  // IWYU pragma: keep for ASSERT_OK
-#include "omni/asr/mock_litert_runner.h"
 #include "omni/asr/speech_recognizer.h"
+#include "omni/base/mock_litert_runner.h"
 #include "omni/base/stage.h"
 
 namespace litert::omni::asr {
@@ -81,22 +81,19 @@ class DummyDecoder : public LiteRtSpeechRecognizer::Decoder {
     return decoded_tokens_;
   }
 
-  void Reset() override { reset_called_ = true; }
-
   void SetDecodedTokens(std::vector<SpeechRecognizer::DecodedToken> tokens) {
     decoded_tokens_ = std::move(tokens);
   }
 
   void SetShouldFail(bool should_fail) { should_fail_ = should_fail; }
 
-  bool reset_called_ = false;
   bool should_fail_ = false;
   std::vector<SpeechRecognizer::DecodedToken> decoded_tokens_{
       SpeechRecognizer::DecodedToken{.token_id = 42,
                                      .timestamp_ms = std::nullopt}};
 };
 
-TEST(LiteRtSpeechRecognizerTest, ResetResetsDecoder) {
+TEST(LiteRtSpeechRecognizerTest, ResetClearsOutputs) {
   auto mock_runner = std::make_unique<MockLiteRtRunner>();
   EXPECT_CALL(*mock_runner, CreateInputBuffers(_))
       .WillOnce([](absl::string_view) {
@@ -113,15 +110,18 @@ TEST(LiteRtSpeechRecognizerTest, ResetResetsDecoder) {
 
   DummyAudioPreprocessor preprocessor;
   auto dummy_decoder = std::make_unique<DummyDecoder>();
-  auto* dummy_decoder_ptr = dummy_decoder.get();
 
   ASSERT_OK_AND_ASSIGN(
       auto recognizer,
       LiteRtSpeechRecognizer::Create(std::move(mock_runner), &preprocessor,
                                      std::move(dummy_decoder)));
 
+  recognizer->PushOutputForTesting(
+      std::vector<SpeechRecognizer::DecodedToken>{});
+  EXPECT_TRUE(recognizer->HasOutput());
+
   recognizer->Reset();
-  EXPECT_TRUE(dummy_decoder_ptr->reset_called_);
+  EXPECT_FALSE(recognizer->HasOutput());
 }
 
 TEST(LiteRtSpeechRecognizerTest, SchedulePushesDecodedTokens) {

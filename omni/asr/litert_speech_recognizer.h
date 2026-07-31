@@ -22,8 +22,8 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
-#include "omni/asr/litert_runner.h"
 #include "omni/asr/speech_recognizer.h"
+#include "omni/base/litert_runner.h"
 #include "omni/base/stage.h"
 
 namespace litert::omni::asr {
@@ -40,9 +40,6 @@ class LiteRtSpeechRecognizer : public SpeechRecognizer {
     // Decodes encoder output buffers into token IDs and optional timestamps.
     virtual absl::StatusOr<std::vector<DecodedToken>> Decode(
         std::vector<::litert::TensorBuffer>& encoder_outputs) = 0;
-
-    // Resets internal state for a new stream.
-    virtual void Reset() = 0;
   };
 
   static absl::StatusOr<std::unique_ptr<LiteRtSpeechRecognizer>> Create(
@@ -54,12 +51,12 @@ class LiteRtSpeechRecognizer : public SpeechRecognizer {
 
   void Reset() override;
 
+  void PushOutputForTesting(std::vector<DecodedToken> output);
+
  protected:
   absl::Status ScheduleInternal() override;
 
  private:
-  friend class LiteRtSpeechRecognizerTest;
-
   LiteRtSpeechRecognizer(
       std::unique_ptr<LiteRtRunner> absl_nonnull runner,
       Stage<std::vector<float>>* absl_nonnull audio_preprocessor,
@@ -67,8 +64,8 @@ class LiteRtSpeechRecognizer : public SpeechRecognizer {
       std::vector<::litert::TensorBuffer> encode_input_buffers,
       std::vector<::litert::TensorBuffer> encode_output_buffers);
 
-  const std::unique_ptr<LiteRtRunner> runner_;
-  const std::unique_ptr<Decoder> decoder_;
+  const std::unique_ptr<LiteRtRunner> absl_nonnull runner_;
+  const std::unique_ptr<Decoder> absl_nonnull decoder_;
   std::vector<::litert::TensorBuffer> encode_input_buffers_;
   std::vector<::litert::TensorBuffer> encode_output_buffers_;
 };

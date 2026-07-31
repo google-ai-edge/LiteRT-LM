@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "omni/asr/litert_runner.h"
+#include "omni/base/litert_runner.h"
 
 #include <cstddef>
 #include <memory>
@@ -28,7 +28,7 @@
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 
-namespace litert::omni::asr {
+namespace litert::omni {
 
 LiteRtRunnerImpl::LiteRtRunnerImpl(
     ::litert::CompiledModel* absl_nonnull compiled_model)
@@ -64,4 +64,4 @@ absl::Status LiteRtRunnerImpl::Run(
   return absl::OkStatus();
 }
 
-}  // namespace litert::omni::asr
+}  // namespace litert::omni

@@ -78,3 +78,35 @@ cc_test(
         "//runtime/framework:threadpool",
     ],
 )
+
+cc_library(
+    name = "litert_runner",
+    srcs = ["litert_runner.cc"],
+    hdrs = ["litert_runner.h"],
+    deps = [
+        "@com_google_absl//absl/base:nullability",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/types:span",
+        "@litert//litert/cc:litert_compiled_model",
+        "@litert//litert/cc:litert_environment",
+        "@litert//litert/cc:litert_macros",
+        "@litert//litert/cc:litert_tensor_buffer",
+    ],
+)
+
+cc_library(
+    name = "mock_litert_runner",
+    testonly = 1,
+    hdrs = ["mock_litert_runner.h"],
+    deps = [
+        ":litert_runner",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/types:span",
+        "@litert//litert/cc:litert_tensor_buffer",
+    ],
+)

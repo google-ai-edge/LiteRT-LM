@@ -36,8 +36,6 @@ class CtcDecoder : public LiteRtSpeechRecognizer::Decoder {
   absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> Decode(
       std::vector<::litert::TensorBuffer>& encoder_outputs) override;
 
-  void Reset() override {}
-
  private:
   CtcDecoder(int vocab_size, int blank_token_id);
 

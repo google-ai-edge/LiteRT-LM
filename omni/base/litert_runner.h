@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_LITERT_RUNNER_H_
-#define THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_LITERT_RUNNER_H_
+#ifndef THIRD_PARTY_ODML_LITERT_LM_OMNI_BASE_LITERT_RUNNER_H_
+#define THIRD_PARTY_ODML_LITERT_LM_OMNI_BASE_LITERT_RUNNER_H_
 
 #include <memory>
 #include <vector>
@@ -26,7 +26,7 @@
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 
-namespace litert::omni::asr {
+namespace litert::omni {
 
 // Interface for running model signatures.
 class LiteRtRunner {
@@ -68,9 +68,9 @@ class LiteRtRunnerImpl : public LiteRtRunner {
 
  private:
   std::unique_ptr<::litert::CompiledModel> owned_compiled_model_;
-  ::litert::CompiledModel* const compiled_model_;
+  ::litert::CompiledModel* const absl_nonnull compiled_model_;
 };
 
-}  // namespace litert::omni::asr
+}  // namespace litert::omni
 
-#endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_LITERT_RUNNER_H_
+#endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_BASE_LITERT_RUNNER_H_

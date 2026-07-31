@@ -22,9 +22,9 @@
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
-#include "omni/asr/litert_runner.h"
 #include "omni/asr/litert_speech_recognizer.h"
 #include "omni/asr/speech_recognizer.h"
+#include "omni/base/litert_runner.h"
 
 namespace litert::omni::asr {
 
@@ -39,8 +39,6 @@ class StatelessDecoder : public LiteRtSpeechRecognizer::Decoder {
   absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> Decode(
       std::vector<::litert::TensorBuffer>& encoder_outputs) override;
 
-  void Reset() override {}
-
  private:
   StatelessDecoder(LiteRtRunner* absl_nonnull runner,
                    std::vector<::litert::TensorBuffer> decode_input_buffers,
@@ -48,7 +46,7 @@ class StatelessDecoder : public LiteRtSpeechRecognizer::Decoder {
                    size_t num_logits_per_token, size_t num_token_ids,
                    int decode_stop_token_id);
 
-  LiteRtRunner* const runner_;
+  LiteRtRunner* const absl_nonnull runner_;
   std::vector<::litert::TensorBuffer> decode_input_buffers_;
   std::vector<::litert::TensorBuffer> decode_output_buffers_;
   const size_t num_logits_per_token_;

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "omni/asr/stateless_decoder.h"
+#include "omni/asr/tdt_decoder.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -46,75 +46,82 @@ using ::testing::Return;
                                           : ::litert::ElementType::Int32,
       ::litert::Layout(
           ::litert::Dimensions{static_cast<int32_t>(num_elements)}));
-  auto buffer = ::litert::TensorBuffer::CreateFromHostMemory(
+  auto buffer_or = ::litert::TensorBuffer::CreateFromHostMemory(
       tensor_type, memory_pool, total_bytes);
-  return std::move(*buffer);
+  return std::move(*buffer_or);
 }
 
-TEST(StatelessDecoderTest, CreateWhenCreateInputBuffersFailsReturnsError) {
+TEST(TdtDecoderTest, CreateWhenCreateInputBuffersFailsReturnsError) {
   MockLiteRtRunner mock_runner;
   EXPECT_CALL(mock_runner, CreateInputBuffers(_))
       .WillOnce(Return(absl::InternalError("Failed to create input buffers")));
 
-  EXPECT_FALSE(StatelessDecoder::Create(&mock_runner).ok());
+  EXPECT_FALSE(TdtDecoder::Create(&mock_runner).ok());
 }
 
-TEST(StatelessDecoderTest, CreateWithInsufficientInputBuffersFails) {
+TEST(TdtDecoderTest, CreateWithEmptyInputBuffersFails) {
   MockLiteRtRunner mock_runner;
   EXPECT_CALL(mock_runner, CreateInputBuffers(_))
       .WillOnce([](absl::string_view) {
-        std::vector<::litert::TensorBuffer> buffers;
-        buffers.push_back(CreateTestTensorBuffer(16, sizeof(float)));
-        buffers.push_back(CreateTestTensorBuffer(10, sizeof(int32_t)));
-        return buffers;
+        return std::vector<::litert::TensorBuffer>();
       });
 
-  EXPECT_FALSE(StatelessDecoder::Create(&mock_runner).ok());
+  EXPECT_FALSE(TdtDecoder::Create(&mock_runner).ok());
 }
 
-TEST(StatelessDecoderTest, CreateSuccessfully) {
+TEST(TdtDecoderTest, CreateSuccessfully) {
   MockLiteRtRunner mock_runner;
-  EXPECT_CALL(mock_runner, CreateInputBuffers(_))
+  EXPECT_CALL(mock_runner, CreateInputBuffers("decode"))
       .WillOnce([](absl::string_view) {
         std::vector<::litert::TensorBuffer> buffers;
-        buffers.push_back(CreateTestTensorBuffer(16, sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(1024 * 4, sizeof(float)));
         buffers.push_back(CreateTestTensorBuffer(10, sizeof(int32_t)));
-        buffers.push_back(CreateTestTensorBuffer(16, sizeof(float)));
-        return buffers;
-      });
-  EXPECT_CALL(mock_runner, CreateOutputBuffers(_))
-      .WillOnce([](absl::string_view) {
-        std::vector<::litert::TensorBuffer> buffers;
+        buffers.push_back(CreateTestTensorBuffer(100, sizeof(float)));
         buffers.push_back(CreateTestTensorBuffer(100, sizeof(float)));
         return buffers;
       });
+  EXPECT_CALL(mock_runner, CreateOutputBuffers("decode"))
+      .WillOnce([](absl::string_view) {
+        std::vector<::litert::TensorBuffer> buffers;
+        buffers.push_back(CreateTestTensorBuffer(100, sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(100, sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(100, sizeof(float)));
+        return buffers;
+      });
+  EXPECT_CALL(mock_runner, CreateInputBuffers("decode_1"))
+      .WillOnce(Return(absl::NotFoundError("No decode_1 signature")));
 
-  ASSERT_OK_AND_ASSIGN(auto decoder, StatelessDecoder::Create(&mock_runner));
+  ASSERT_OK_AND_ASSIGN(auto decoder, TdtDecoder::Create(&mock_runner));
   EXPECT_NE(decoder, nullptr);
 }
 
-TEST(StatelessDecoderTest, DecodeFailsWhenRunnerRunFails) {
+TEST(TdtDecoderTest, DecodeFailsWhenRunnerRunFails) {
   MockLiteRtRunner mock_runner;
-  EXPECT_CALL(mock_runner, CreateInputBuffers(_))
+  EXPECT_CALL(mock_runner, CreateInputBuffers("decode"))
       .WillOnce([](absl::string_view) {
         std::vector<::litert::TensorBuffer> buffers;
-        buffers.push_back(CreateTestTensorBuffer(16, sizeof(float)));
-        buffers.push_back(CreateTestTensorBuffer(10, sizeof(int32_t)));
-        buffers.push_back(CreateTestTensorBuffer(16, sizeof(float)));
-        return buffers;
-      });
-  EXPECT_CALL(mock_runner, CreateOutputBuffers(_))
-      .WillOnce([](absl::string_view) {
-        std::vector<::litert::TensorBuffer> buffers;
+        buffers.push_back(CreateTestTensorBuffer(1024 * 1, sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(1, sizeof(int32_t)));
+        buffers.push_back(CreateTestTensorBuffer(100, sizeof(float)));
         buffers.push_back(CreateTestTensorBuffer(100, sizeof(float)));
         return buffers;
       });
+  EXPECT_CALL(mock_runner, CreateOutputBuffers("decode"))
+      .WillOnce([](absl::string_view) {
+        std::vector<::litert::TensorBuffer> buffers;
+        buffers.push_back(CreateTestTensorBuffer(100, sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(100, sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(100, sizeof(float)));
+        return buffers;
+      });
+  EXPECT_CALL(mock_runner, CreateInputBuffers("decode_1"))
+      .WillOnce(Return(absl::NotFoundError("No decode_1 signature")));
   EXPECT_CALL(mock_runner, Run("decode", _, _))
       .WillOnce(Return(absl::InternalError("Run failed")));
 
-  ASSERT_OK_AND_ASSIGN(auto decoder, StatelessDecoder::Create(&mock_runner));
+  ASSERT_OK_AND_ASSIGN(auto decoder, TdtDecoder::Create(&mock_runner));
   std::vector<::litert::TensorBuffer> encoder_outputs;
-  encoder_outputs.push_back(CreateTestTensorBuffer(16, sizeof(float)));
+  encoder_outputs.push_back(CreateTestTensorBuffer(1024, sizeof(float)));
   auto tokens_or = decoder->Decode(encoder_outputs);
   EXPECT_FALSE(tokens_or.ok());
 }

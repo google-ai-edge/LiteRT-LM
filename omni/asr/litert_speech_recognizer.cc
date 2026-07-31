@@ -27,8 +27,8 @@
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
-#include "omni/asr/litert_runner.h"
 #include "omni/asr/speech_recognizer.h"
+#include "omni/base/litert_runner.h"
 #include "omni/base/stage.h"
 
 namespace litert::omni::asr {
@@ -65,7 +65,6 @@ LiteRtSpeechRecognizer::LiteRtSpeechRecognizer(
       encode_output_buffers_(std::move(encode_output_buffers)) {}
 
 void LiteRtSpeechRecognizer::Reset() {
-  decoder_->Reset();
   WaitForStateThenSetState(State::kIdle, State::kRunning);
   ClearOutputsThenSetState(State::kIdle);
 }
@@ -81,6 +80,11 @@ absl::Status LiteRtSpeechRecognizer::ScheduleInternal() {
                         decoder_->Decode(encode_output_buffers_));
   PushOutput(std::move(decoded_tokens));
   return absl::OkStatus();
+}
+
+void LiteRtSpeechRecognizer::PushOutputForTesting(
+    std::vector<DecodedToken> output) {
+  PushOutput(std::move(output));
 }
 
 }  // namespace litert::omni::asr

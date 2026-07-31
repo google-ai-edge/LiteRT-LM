@@ -32,8 +32,8 @@
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
-#include "omni/asr/litert_runner.h"
 #include "omni/asr/speech_recognizer.h"
+#include "omni/base/litert_runner.h"
 
 namespace litert::omni::asr {
 namespace {
