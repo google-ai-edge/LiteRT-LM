@@ -16,9 +16,11 @@
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_CORE_EMBEDDING_ENGINE_IMPL_H_
 
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/types/optional.h"  // from @com_google_absl
 #include "support/tokenizer/tokenizer.h"  // from @litert
 #include "runtime/components/model_resources.h"
 #include "runtime/engine/embedding_engine.h"
@@ -43,11 +45,13 @@ class EmbeddingEngineImpl : public EmbeddingEngine {
 
   // Constructs an `EmbeddingEngineImpl` with a LiteRT environment, a tokenizer
   // and executors.
-  EmbeddingEngineImpl(std::unique_ptr<OwnedEnvironment> env,
-                      std::unique_ptr<::litert::support::Tokenizer> tokenizer,
-                      std::unique_ptr<EmbeddingExecutorBase> embedding_executor,
-                      std::unique_ptr<VisionExecutor> vision_executor = nullptr,
-                      std::unique_ptr<AudioExecutor> audio_executor = nullptr);
+  EmbeddingEngineImpl(
+      std::unique_ptr<OwnedEnvironment> env,
+      std::unique_ptr<::litert::support::Tokenizer> tokenizer,
+      std::unique_ptr<EmbeddingExecutorBase> embedding_executor,
+      std::unique_ptr<VisionExecutor> vision_executor = nullptr,
+      std::unique_ptr<AudioExecutor> audio_executor = nullptr,
+      std::optional<BenchmarkInfo> benchmark_info = std::nullopt);
 
   ~EmbeddingEngineImpl() override = default;
 
@@ -61,15 +65,25 @@ class EmbeddingEngineImpl : public EmbeddingEngine {
       const std::vector<std::vector<InputData>>& contents,
       const EmbeddingOptions& options) override;
 
+  // Returns the benchmark info of the engine.
+  absl::optional<BenchmarkInfo> GetBenchmarkInfo() override;
+
+  // Returns the mutable benchmark info of the engine.
+  BenchmarkInfo* GetMutableBenchmarkInfo() override;
+
  private:
   absl::StatusOr<ExecutorInputs> ProcessAndCombineContents(
       const std::vector<InputData>& contents);
+
+  absl::StatusOr<EmbeddingResponse> ComputeEmbeddingInternal(
+      const ExecutorInputs& inputs, const EmbeddingOptions& options);
 
   std::unique_ptr<OwnedEnvironment> env_;
   std::unique_ptr<::litert::support::Tokenizer> tokenizer_;
   std::unique_ptr<EmbeddingExecutorBase> embedding_executor_;
   std::unique_ptr<VisionExecutor> vision_executor_;
   std::unique_ptr<AudioExecutor> audio_executor_;
+  std::optional<BenchmarkInfo> benchmark_info_;
 };
 
 }  // namespace litert::lm

@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/types/optional.h"  // from @com_google_absl
 #include "runtime/engine/io_types.h"
 
 namespace litert::lm {
@@ -58,6 +59,12 @@ class EmbeddingEngine {
   virtual absl::StatusOr<std::vector<EmbeddingResponse>> ComputeEmbeddingBatch(
       const std::vector<std::vector<InputData>>& contents,
       const EmbeddingOptions& options) = 0;
+
+  // Returns the benchmark info of the engine.
+  virtual absl::optional<BenchmarkInfo> GetBenchmarkInfo() = 0;
+
+  // Returns the mutable benchmark info of the engine.
+  virtual BenchmarkInfo* GetMutableBenchmarkInfo() = 0;
 };
 
 }  // namespace litert::lm

@@ -54,6 +54,7 @@ cc_library(
         "//runtime/executor:executor_settings_base",
         "//runtime/executor:vision_executor_settings",
         "//runtime/proto:embedding_metadata_cc_proto",
+        "//runtime/proto:engine_cc_proto",
         "//runtime/util:litert_status_util",
     ],
 )
@@ -64,6 +65,7 @@ cc_library(
     deps = [
         ":io_types",
         "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/types:optional",
     ],
 )
 

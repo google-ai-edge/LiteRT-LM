@@ -59,10 +59,12 @@ absl::StatusOr<EmbeddingEngineSettings> EmbeddingEngineSettings::CreateDefault(
 EmbeddingEngineSettings::EmbeddingEngineSettings(
     EmbeddingExecutorSettings embedding_executor_settings,
     std::optional<VisionExecutorSettings> vision_executor_settings,
-    std::optional<AudioExecutorSettings> audio_executor_settings)
+    std::optional<AudioExecutorSettings> audio_executor_settings,
+    std::optional<proto::BenchmarkParams> benchmark_params)
     : main_executor_settings_(std::move(embedding_executor_settings)),
       vision_executor_settings_(std::move(vision_executor_settings)),
-      audio_executor_settings_(std::move(audio_executor_settings)) {}
+      audio_executor_settings_(std::move(audio_executor_settings)),
+      benchmark_params_(std::move(benchmark_params)) {}
 
 const EmbeddingExecutorSettings&
 EmbeddingEngineSettings::GetMainExecutorSettings() const {
@@ -92,6 +94,22 @@ EmbeddingEngineSettings::GetAudioExecutorSettings() const {
 std::optional<AudioExecutorSettings>&
 EmbeddingEngineSettings::GetMutableAudioExecutorSettings() {
   return audio_executor_settings_;
+}
+
+bool EmbeddingEngineSettings::IsBenchmarkEnabled() const {
+  return benchmark_params_.has_value();
+}
+
+const std::optional<proto::BenchmarkParams>&
+EmbeddingEngineSettings::GetBenchmarkParams() const {
+  return benchmark_params_;
+}
+
+proto::BenchmarkParams& EmbeddingEngineSettings::GetMutableBenchmarkParams() {
+  if (!benchmark_params_.has_value()) {
+    benchmark_params_ = proto::BenchmarkParams();
+  }
+  return *benchmark_params_;
 }
 
 const std::optional<proto::EmbeddingMetadata>&

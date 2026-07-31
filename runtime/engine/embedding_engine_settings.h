@@ -25,6 +25,7 @@
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/vision_executor_settings.h"
 #include "runtime/proto/embedding_metadata.pb.h"
+#include "runtime/proto/engine.pb.h"
 
 namespace litert::lm {
 
@@ -53,6 +54,14 @@ class EmbeddingEngineSettings {
   const std::optional<AudioExecutorSettings>& GetAudioExecutorSettings() const;
   std::optional<AudioExecutorSettings>& GetMutableAudioExecutorSettings();
 
+  // Benchmark parameters:
+  // Returns true if the benchmark is enabled.
+  bool IsBenchmarkEnabled() const;
+  // Returns the benchmark parameters.
+  const std::optional<proto::BenchmarkParams>& GetBenchmarkParams() const;
+  // Returns the mutable benchmark parameters.
+  proto::BenchmarkParams& GetMutableBenchmarkParams();
+
   // Returns the EmbeddingMetadata parameters if loaded.
   const std::optional<proto::EmbeddingMetadata>& GetEmbeddingMetadata() const;
   proto::EmbeddingMetadata& GetMutableEmbeddingMetadata();
@@ -61,12 +70,14 @@ class EmbeddingEngineSettings {
   explicit EmbeddingEngineSettings(
       EmbeddingExecutorSettings embedding_executor_settings,
       std::optional<VisionExecutorSettings> vision_executor_settings,
-      std::optional<AudioExecutorSettings> audio_executor_settings);
+      std::optional<AudioExecutorSettings> audio_executor_settings,
+      std::optional<proto::BenchmarkParams> benchmark_params = std::nullopt);
 
   EmbeddingExecutorSettings main_executor_settings_;
   std::optional<VisionExecutorSettings> vision_executor_settings_;
   std::optional<AudioExecutorSettings> audio_executor_settings_;
   std::optional<proto::EmbeddingMetadata> metadata_;
+  std::optional<proto::BenchmarkParams> benchmark_params_;
 };
 
 std::ostream& operator<<(std::ostream& os,

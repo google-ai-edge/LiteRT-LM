@@ -15,6 +15,7 @@
 #include "runtime/core/embedding_engine_impl.h"
 
 #include <cmath>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <utility>
@@ -22,7 +23,9 @@
 #include <vector>
 
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/types/optional.h"  // from @com_google_absl
 #include "support/tokenizer/tokenizer.h"  // from @litert
 #include "support/util/io_types.h"  // from @litert
 #include "runtime/components/model_resources.h"
@@ -37,6 +40,7 @@
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/vision_executor.h"
 #include "runtime/executor/vision_litert_compiled_model_executor.h"
+#include "runtime/proto/engine.pb.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/executor_data_util.h"
 #include "runtime/util/litert_util.h"
@@ -46,6 +50,7 @@
 namespace litert::lm {
 
 namespace {
+
 std::vector<float> L2Norm(const std::vector<float>& vec) {
   float sum_sq = 0.0f;
   for (float val : vec) {
@@ -65,6 +70,17 @@ std::vector<float> L2Norm(const std::vector<float>& vec) {
   return result;
 };
 
+absl::StatusOr<uint64_t> GetNumTokens(const ExecutorInputs& executor_inputs) {
+  ABSL_ASSIGN_OR_RETURN(auto text_data, executor_inputs.GetTextDataPtr());
+  if (text_data == nullptr) {
+    return 0;
+  }
+
+  const auto& token_ids = text_data->GetTokenIds();
+  LITERT_ASSIGN_OR_RETURN(auto span, ReferTensorBufferAsSpan<int>(token_ids));
+  return span.size();
+}
+
 }  // namespace
 
 // static
@@ -81,6 +97,19 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
   }
   if (tokenizer == nullptr) {
     return absl::InvalidArgumentError("Tokenizer cannot be null.");
+  }
+
+  std::optional<BenchmarkInfo> benchmark_info = std::nullopt;
+  if (settings.IsBenchmarkEnabled() &&
+      settings.GetBenchmarkParams().has_value()) {
+    benchmark_info = BenchmarkInfo(settings.GetBenchmarkParams().value());
+  }
+
+  if (benchmark_info.has_value()) {
+    ABSL_RETURN_IF_ERROR(
+        benchmark_info->TimeInitPhaseStart(BenchmarkInfo::InitPhase::kTotal));
+    ABSL_RETURN_IF_ERROR(benchmark_info->TimeInitPhaseStart(
+        BenchmarkInfo::InitPhase::kExecutor));
   }
 
   // Initialize the vision executor.
@@ -108,9 +137,17 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
           std::move(settings.GetMutableMainExecutorSettings()), env->env,
           std::move(resources)));
 
+  if (benchmark_info.has_value()) {
+    ABSL_RETURN_IF_ERROR(
+        benchmark_info->TimeInitPhaseEnd(BenchmarkInfo::InitPhase::kExecutor));
+    ABSL_RETURN_IF_ERROR(
+        benchmark_info->TimeInitPhaseEnd(BenchmarkInfo::InitPhase::kTotal));
+  }
+
   return std::make_unique<EmbeddingEngineImpl>(
       std::move(env), std::move(tokenizer), std::move(embedding_executor),
-      std::move(vision_executor), std::move(audio_executor));
+      std::move(vision_executor), std::move(audio_executor),
+      std::move(benchmark_info));
 }
 
 EmbeddingEngineImpl::EmbeddingEngineImpl(
@@ -118,12 +155,14 @@ EmbeddingEngineImpl::EmbeddingEngineImpl(
     std::unique_ptr<::litert::support::Tokenizer> tokenizer,
     std::unique_ptr<EmbeddingExecutorBase> embedding_executor,
     std::unique_ptr<VisionExecutor> vision_executor,
-    std::unique_ptr<AudioExecutor> audio_executor)
+    std::unique_ptr<AudioExecutor> audio_executor,
+    std::optional<BenchmarkInfo> benchmark_info)
     : env_(std::move(env)),
       tokenizer_(std::move(tokenizer)),
       embedding_executor_(std::move(embedding_executor)),
       vision_executor_(std::move(vision_executor)),
-      audio_executor_(std::move(audio_executor)) {}
+      audio_executor_(std::move(audio_executor)),
+      benchmark_info_(std::move(benchmark_info)) {}
 
 absl::StatusOr<ExecutorInputs> EmbeddingEngineImpl::ProcessAndCombineContents(
     const std::vector<InputData>& contents) {
@@ -145,11 +184,18 @@ absl::StatusOr<ExecutorInputs> EmbeddingEngineImpl::ProcessAndCombineContents(
                                   ids_buffer_span.begin(),
                                   ids_buffer_span.end());
       } else {
+        if (benchmark_info_.has_value()) {
+          ABSL_RETURN_IF_ERROR(benchmark_info_->TimeTextToTokenIdsStart());
+        }
         LITERT_ASSIGN_OR_RETURN(auto raw_text, input_text->GetRawTextString());
         LITERT_ASSIGN_OR_RETURN(auto token_ids,
                                 tokenizer_->TextToTokenIds(raw_text));
         combined_token_ids.insert(combined_token_ids.end(), token_ids.begin(),
                                   token_ids.end());
+        if (benchmark_info_.has_value()) {
+          ABSL_RETURN_IF_ERROR(
+              benchmark_info_->TimeTextToTokenIdsEnd(token_ids.size()));
+        }
       }
     } else if (const auto* input_image = std::get_if<InputImage>(&content)) {
       if (vision_executor_ == nullptr) {
@@ -233,6 +279,12 @@ absl::StatusOr<ExecutorInputs> EmbeddingEngineImpl::ProcessAndCombineContents(
                             CombineExecutorAudioData(all_audio_data));
   }
 
+  if (benchmark_info_.has_value() &&
+      benchmark_info_->GetBenchmarkParams().num_prefill_tokens() > 0) {
+    combined_token_ids.resize(
+        benchmark_info_->GetBenchmarkParams().num_prefill_tokens());
+  }
+
   LITERT_ASSIGN_OR_RETURN(
       auto token_ids_buffer,
       litert::support::Tokenizer::TokenIdsToTensorBuffer(combined_token_ids));
@@ -242,9 +294,8 @@ absl::StatusOr<ExecutorInputs> EmbeddingEngineImpl::ProcessAndCombineContents(
                         std::move(combined_audio_data));
 }
 
-absl::StatusOr<EmbeddingResponse> EmbeddingEngineImpl::ComputeEmbedding(
-    const std::vector<InputData>& contents, const EmbeddingOptions& options) {
-  LITERT_ASSIGN_OR_RETURN(auto inputs, ProcessAndCombineContents(contents));
+absl::StatusOr<EmbeddingResponse> EmbeddingEngineImpl::ComputeEmbeddingInternal(
+    const ExecutorInputs& inputs, const EmbeddingOptions& options) {
   LITERT_ASSIGN_OR_RETURN(auto embedding,
                           embedding_executor_->ComputeEmbedding(inputs));
 
@@ -258,18 +309,65 @@ absl::StatusOr<EmbeddingResponse> EmbeddingEngineImpl::ComputeEmbedding(
   return response;
 }
 
+absl::StatusOr<EmbeddingResponse> EmbeddingEngineImpl::ComputeEmbedding(
+    const std::vector<InputData>& contents, const EmbeddingOptions& options) {
+  if (benchmark_info_.has_value()) {
+    ABSL_RETURN_IF_ERROR(benchmark_info_->TimePrefillTurnStart());
+  }
+
+  LITERT_ASSIGN_OR_RETURN(auto executor_inputs,
+                          ProcessAndCombineContents(contents));
+  ABSL_ASSIGN_OR_RETURN(auto response,
+                        ComputeEmbeddingInternal(executor_inputs, options));
+
+  if (benchmark_info_.has_value()) {
+    ABSL_ASSIGN_OR_RETURN(uint64_t num_tokens, GetNumTokens(executor_inputs));
+    ABSL_RETURN_IF_ERROR(benchmark_info_->TimePrefillTurnEnd(num_tokens));
+  }
+
+  return response;
+}
+
 absl::StatusOr<std::vector<EmbeddingResponse>>
 EmbeddingEngineImpl::ComputeEmbeddingBatch(
     const std::vector<std::vector<InputData>>& contents,
     const EmbeddingOptions& options) {
+  if (benchmark_info_.has_value()) {
+    ABSL_RETURN_IF_ERROR(benchmark_info_->TimePrefillTurnStart());
+  }
+
   std::vector<EmbeddingResponse> batch_responses;
   batch_responses.reserve(contents.size());
+  uint64_t total_tokens = 0;
+
   for (const auto& single_contents : contents) {
+    LITERT_ASSIGN_OR_RETURN(auto executor_inputs,
+                            ProcessAndCombineContents(single_contents));
+    if (benchmark_info_.has_value()) {
+      ABSL_ASSIGN_OR_RETURN(uint64_t num_tokens, GetNumTokens(executor_inputs));
+      total_tokens += num_tokens;
+    }
     LITERT_ASSIGN_OR_RETURN(auto response,
-                            ComputeEmbedding(single_contents, options));
+                            ComputeEmbeddingInternal(executor_inputs, options));
     batch_responses.push_back(std::move(response));
   }
+
+  if (benchmark_info_.has_value()) {
+    ABSL_RETURN_IF_ERROR(benchmark_info_->TimePrefillTurnEnd(total_tokens));
+  }
+
   return batch_responses;
+}
+
+absl::optional<BenchmarkInfo> EmbeddingEngineImpl::GetBenchmarkInfo() {
+  return benchmark_info_;
+}
+
+BenchmarkInfo* EmbeddingEngineImpl::GetMutableBenchmarkInfo() {
+  if (!benchmark_info_.has_value()) {
+    benchmark_info_ = BenchmarkInfo(proto::BenchmarkParams());
+  }
+  return &(*benchmark_info_);
 }
 
 }  // namespace litert::lm
