@@ -163,6 +163,21 @@ TEST_F(AudioLiteRtCompiledModelExecutorTest,
       ElementsAre(0., 0., 0., 0., 0., 0., 0., 1., 2., 3., 3., 3., 0., 1., 2.,
                   4., 4., 4., 1., 2., 3., 5., 5., 5., 0., 1., 2., 4., 4., 4.));
   EXPECT_EQ(executor_audio_data.GetValidTokens(), kEmbeddingSequenceLength);
+
+  ASSERT_OK_AND_ASSIGN(auto unadapted_embeddings_ptr,
+                       executor_audio_data.GetPerLayerEmbeddingsPtr());
+  auto unadapted_embeddings_type = unadapted_embeddings_ptr->TensorType();
+  ASSERT_TRUE(unadapted_embeddings_type.HasValue());
+  auto unadapted_dims = unadapted_embeddings_type->Layout().Dimensions();
+  EXPECT_THAT(unadapted_dims, ElementsAre(1, kEmbeddingSequenceLength, 4));
+
+  ASSERT_OK_AND_ASSIGN(
+      auto unadapted_embeddings_data,
+      GetDataAsVector<float>(
+          *const_cast<litert::TensorBuffer*>(unadapted_embeddings_ptr)));
+  EXPECT_THAT(unadapted_embeddings_data,
+              ElementsAre(0., 0., 0., 0., 0., 1., 1., 1., 0., 1., 1., 2., 1.,
+                          1., 1., 2., 0., 1., 1., 2.));
 }
 
 TEST_F(AudioLiteRtCompiledModelExecutorTest,
@@ -222,6 +237,21 @@ TEST_F(AudioLiteRtCompiledModelExecutorTest,
               ElementsAre(1., 2., 4., 6., 6., 6., 1., 3., 6., 9., 9., 9., 1.,
                           3., 5., 8., 8., 8.));
   EXPECT_EQ(executor_audio_data.GetValidTokens(), 3);
+
+  ASSERT_OK_AND_ASSIGN(auto unadapted_embeddings_ptr,
+                       executor_audio_data.GetPerLayerEmbeddingsPtr());
+  auto unadapted_embeddings_type = unadapted_embeddings_ptr->TensorType();
+  ASSERT_TRUE(unadapted_embeddings_type.HasValue());
+  auto unadapted_dims = unadapted_embeddings_type->Layout().Dimensions();
+  EXPECT_THAT(unadapted_dims, ElementsAre(1, kEmbeddingSequenceLength, 4));
+
+  ASSERT_OK_AND_ASSIGN(
+      auto unadapted_embeddings_data,
+      GetDataAsVector<float>(
+          *const_cast<litert::TensorBuffer*>(unadapted_embeddings_ptr)));
+  EXPECT_THAT(unadapted_embeddings_data,
+              ElementsAre(1., 1., 2., 2., 1., 2., 3., 3., 1., 2., 2., 3., 0.,
+                          0., 0., 0., 0., 0., 0., 0.));
 }
 
 TEST_F(AudioLiteRtCompiledModelExecutorTest,
