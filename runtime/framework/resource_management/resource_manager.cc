@@ -252,10 +252,26 @@ class LockedLlmExecutor : public LlmExecutor {
     // the matching tokens, and then call llm_executor_->Prefill with the
     // optimized inputs and time step.
 
+    // See if GPU artisan ringbuffers are in use.
+    bool uses_ringbuffers = false;
+    auto llm_executor_settings = llm_executor_->GetExecutorSettings();
+    if (llm_executor_settings.ok()) {
+      if (llm_executor_settings->GetBackend() ==
+          litert::lm::Backend::GPU_ARTISAN) {
+        LITERT_ASSIGN_OR_RETURN(
+            GpuArtisanConfig gpu_artisan_config,
+            llm_executor_settings->GetBackendConfig<GpuArtisanConfig>());
+        uses_ringbuffers = gpu_artisan_config.use_autosized_ringbuffers;
+      }
+    }
     // If the processed tokens size is larger than the current step, update
-    // the input_ids and current_step by removing the matching tokens.
-    ABSL_RETURN_IF_ERROR(RemoveMatchingTokens(
-        processed_tokens->GetCopyOfTokens()[0], &input_ids_vec, &current_step));
+    // the input_ids and current_step by removing the matching tokens. This
+    // must currently be skipped when GPU artisan ringbuffers are enabled.
+    if (!uses_ringbuffers) {
+      ABSL_RETURN_IF_ERROR(
+          RemoveMatchingTokens(processed_tokens->GetCopyOfTokens()[0],
+                               &input_ids_vec, &current_step));
+    }
     // If the updated input_ids is empty, meaning all required prefill
     // tokens have been processed previously, just set the current step and
     // return.

@@ -125,6 +125,10 @@ class ConversationConfig {
     return stream_tool_calls_channel_name_;
   }
 
+  // Returns whether to enable rewinding behavior (moving backwards in context
+  // without fully resetting to the beginning of the conversation).
+  bool enable_rewinding() const { return enable_rewinding_; }
+
  public:
   // Builder class for ConversationConfig.
   //
@@ -236,6 +240,12 @@ class ConversationConfig {
       return *this;
     }
 
+    // Sets whether to enable rewinding.
+    Builder& SetEnableRewinding(bool enable_rewinding) {
+      enable_rewinding_ = enable_rewinding;
+      return *this;
+    }
+
     absl::StatusOr<ConversationConfig> Build(const Engine& engine) {
       return ConversationConfig::CreateInternal(
           engine, session_config_, preface_, overwrite_prompt_template_,
@@ -243,7 +253,8 @@ class ConversationConfig {
           prefill_preface_on_init_, constraint_provider_config_, channels_,
           filter_channel_content_from_kv_cache_, return_error_on_parse_failure_,
           return_error_on_max_tokens_reached_, thinking_config_,
-          stream_tool_calls_, stream_tool_calls_channel_name_);
+          stream_tool_calls_, stream_tool_calls_channel_name_,
+          enable_rewinding_);
     }
 
     // Returns a unique pointer to a ConversationConfig.
@@ -268,6 +279,7 @@ class ConversationConfig {
     std::optional<ThinkingConfig> thinking_config_ = std::nullopt;
     bool stream_tool_calls_ = false;
     std::string stream_tool_calls_channel_name_ = "tool_call";
+    bool enable_rewinding_ = true;
   };
 
   // Returns the constrained decoding config.
@@ -318,7 +330,8 @@ class ConversationConfig {
       bool return_error_on_max_tokens_reached = false,
       std::optional<ThinkingConfig> thinking_config = std::nullopt,
       bool stream_tool_calls = false,
-      const std::string& stream_tool_calls_channel_name = "tool_call");
+      const std::string& stream_tool_calls_channel_name = "tool_call",
+      bool enable_rewinding = true);
 
   explicit ConversationConfig(
       SessionConfig session_config, Preface preface,
@@ -333,7 +346,8 @@ class ConversationConfig {
       bool return_error_on_max_tokens_reached = false,
       std::optional<ThinkingConfig> thinking_config = std::nullopt,
       bool stream_tool_calls = false,
-      const std::string& stream_tool_calls_channel_name = "tool_call")
+      const std::string& stream_tool_calls_channel_name = "tool_call",
+      bool enable_rewinding = true)
       : session_config_(std::move(session_config)),
         preface_(std::move(preface)),
         prompt_template_(std::move(prompt_template)),
@@ -348,7 +362,8 @@ class ConversationConfig {
         return_error_on_max_tokens_reached_(return_error_on_max_tokens_reached),
         thinking_config_(thinking_config),
         stream_tool_calls_(stream_tool_calls),
-        stream_tool_calls_channel_name_(stream_tool_calls_channel_name) {}
+        stream_tool_calls_channel_name_(stream_tool_calls_channel_name),
+        enable_rewinding_(enable_rewinding) {}
 
   SessionConfig session_config_;
   Preface preface_;
@@ -364,6 +379,7 @@ class ConversationConfig {
   std::optional<ThinkingConfig> thinking_config_;
   bool stream_tool_calls_;
   std::string stream_tool_calls_channel_name_;
+  bool enable_rewinding_;
 };
 
 // Optional arguments for sending a message to the LLM.
