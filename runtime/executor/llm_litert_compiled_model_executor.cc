@@ -65,6 +65,7 @@
 #include "runtime/executor/llm_executor_processed_tokens.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/llm_executor_settings_utils.h"
+#include "runtime/executor/llm_litert_compiled_model_cache_utils.h"
 #include "runtime/executor/llm_litert_mtp_drafter.h"
 #include "runtime/executor/state_interface.h"
 #include "runtime/util/convert_tensor_buffer.h"
@@ -319,6 +320,30 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::CreatePrefillInputBuffers(
   return absl::OkStatus();
 }
 
+// Allocates and initializes non-KV-cache output buffers for a given prefill
+// signature. KV-cache buffers are skipped as they are managed independently
+// by LitertState.
+absl::Status LlmLiteRtCompiledModelExecutorBase::CreatePrefillOutputBuffers(
+    absl::string_view prefill_signature, int sequence_length,
+    absl::flat_hash_map<absl::string_view, TensorBuffer>&
+        prefill_output_buffers) {
+  LITERT_ASSIGN_OR_RETURN(auto signature,
+                          compiled_model_->FindSignature(prefill_signature));
+
+  for (auto output_name : signature.OutputNames()) {
+    // Skip KV-cache state tensors; their lifecycle and memory allocation are
+    // owned and maintained entirely by LitertState.
+    if (IsKVCacheTensor(output_name)) {
+      continue;
+    }
+    LITERT_ASSIGN_OR_RETURN(
+        auto output_buffer,
+        compiled_model_->CreateOutputBuffer(prefill_signature, output_name));
+    prefill_output_buffers[output_name] = std::move(output_buffer);
+  }
+  return absl::OkStatus();
+}
+
 absl::Status LlmLiteRtCompiledModelExecutorBase::FillInputBufferWithToken(
     const std::vector<std::shared_ptr<TokenData>>& unprocessed_token,
     TensorBuffer& input_buffer, bool is_per_layer_embedding) {
@@ -426,6 +451,8 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::PrepareFirstPrefillAfterDecode(
 absl::Status LlmLiteRtCompiledModelExecutorBase::PrefillInternal(
     absl::string_view prefill_signature,
     absl::flat_hash_map<absl::string_view, TensorBuffer>& prefill_input_buffers,
+    absl::flat_hash_map<absl::string_view, TensorBuffer>&
+        prefill_output_buffers,
     Span<const int> ids, bool async) {
   ABSL_RETURN_IF_ERROR(RollBackProcessedTokens());
 
@@ -644,12 +671,14 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::PrefillInternal(
     }
   }
   return BindTensorsAndRunPrefill(prefill_signature, prefill_input_buffers,
-                                  async);
+                                  prefill_output_buffers, async);
 }
 
 absl::Status LlmLiteRtCompiledModelExecutorBase::BindTensorsAndRunPrefill(
     absl::string_view prefill_signature,
     absl::flat_hash_map<absl::string_view, TensorBuffer>& prefill_input_buffers,
+    absl::flat_hash_map<absl::string_view, TensorBuffer>&
+        prefill_output_buffers,
     bool async) {
   absl::flat_hash_map<absl::string_view, TensorBuffer> input_buffers;
   for (const auto& [input_name, input_buffer] : prefill_input_buffers) {
@@ -677,6 +706,19 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::BindTensorsAndRunPrefill(
       output_buffers[name] = std::move(buffer);
     }
   }
+  // Bind non-KV-cache output buffers to the final output buffers map.
+  // Duplicate buffer handles and clear completion events so they are ready
+  // for the upcoming graph execution.
+  for (const auto& [output_name, output_buffer] : prefill_output_buffers) {
+    LITERT_ASSIGN_OR_RETURN(auto output_buffer_dup, output_buffer.Duplicate());
+    output_buffer_dup.ClearEvent();
+    output_buffers[output_name] = std::move(output_buffer_dup);
+  }
+
+  if (pre_graph_run_callback_) {
+    ABSL_ASSIGN_OR_RETURN(auto current_step, GetCurrentStep());
+    pre_graph_run_callback_(prefill_signature, current_step, input_buffers);
+  }
 
   litert::Options run_options = GetRunOptions();
   if (async) {
@@ -685,6 +727,11 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::BindTensorsAndRunPrefill(
   } else {
     LITERT_RETURN_IF_ERROR(compiled_model_->Run(
         prefill_signature, input_buffers, output_buffers, &run_options));
+  }
+
+  if (post_graph_run_callback_) {
+    ABSL_ASSIGN_OR_RETURN(auto current_step, GetCurrentStep());
+    post_graph_run_callback_(prefill_signature, current_step, output_buffers);
   }
 
   return absl::OkStatus();
@@ -937,11 +984,23 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::BindTensorsAndRunDecode(
     decode_output_buffers[name] = std::move(buffer);
   }
 
+  if (pre_graph_run_callback_) {
+    ABSL_ASSIGN_OR_RETURN(auto current_step, GetCurrentStep());
+    pre_graph_run_callback_(kDecodeSignatureRunner, current_step,
+                            decode_input_buffers);
+  }
+
   litert::Options run_options = GetRunOptions();
   bool async = true;
   LITERT_RETURN_IF_ERROR(
       compiled_model_->RunAsync(kDecodeSignatureRunner, decode_input_buffers,
                                 decode_output_buffers, async, &run_options));
+
+  if (post_graph_run_callback_) {
+    ABSL_ASSIGN_OR_RETURN(auto current_step, GetCurrentStep());
+    post_graph_run_callback_(kDecodeSignatureRunner, current_step,
+                             decode_output_buffers);
+  }
 
   return absl::OkStatus();
 }
@@ -1652,6 +1711,13 @@ absl::Status LlmLiteRtCompiledModelExecutorStatic::Prefill(
           prefill_signature, prefill_length, prefill_length,
           prefill_input_buffers_[prefill_signature]));
     }
+    if (!prefill_output_buffers_.contains(prefill_signature)) {
+      prefill_output_buffers_[prefill_signature] = {};
+      ABSL_RETURN_IF_ERROR(CreatePrefillOutputBuffers(
+          prefill_signature, prefill_length,
+          prefill_output_buffers_[prefill_signature]));
+    }
+
     // TODO: b/494284915 - Switch to use async prefill for Metal backend.
     if (!do_prefill_sync_.has_value()) {
       do_prefill_sync_ = std::any_of(
@@ -1663,6 +1729,7 @@ absl::Status LlmLiteRtCompiledModelExecutorStatic::Prefill(
                  (i < work_groups.size() - 1 || !params.GetWaitForCompletion());
     ABSL_RETURN_IF_ERROR(PrefillInternal(
         prefill_signature, prefill_input_buffers_[prefill_signature],
+        prefill_output_buffers_[prefill_signature],
         ids.subspan(/*pos=*/0, prefill_length), async));
     ids = ids.subspan(/*pos=*/prefill_length);
   }
@@ -2015,10 +2082,13 @@ absl::Status LlmLiteRtCompiledModelExecutorDynamic::PrefillInternal(
   absl::flat_hash_map<absl::string_view, TensorBuffer> prefill_input_buffers;
   ABSL_RETURN_IF_ERROR(CreatePrefillInputBuffers(
       "prefill", prefill_length, kv_length, prefill_input_buffers));
+  absl::flat_hash_map<absl::string_view, TensorBuffer> prefill_output_buffers;
+  ABSL_RETURN_IF_ERROR(CreatePrefillOutputBuffers("prefill", prefill_length,
+                                                  prefill_output_buffers));
 
   bool async = !params.GetWaitForCompletion();
   return LlmLiteRtCompiledModelExecutorBase::PrefillInternal(
-      "prefill", prefill_input_buffers, ids, async);
+      "prefill", prefill_input_buffers, prefill_output_buffers, ids, async);
 }
 
 absl::Status LlmLiteRtCompiledModelExecutorDynamic::DecodeInternal(

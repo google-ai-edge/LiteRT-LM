@@ -298,12 +298,14 @@ cc_library(
         ":llm_executor_processed_tokens",
         ":llm_executor_settings",
         ":llm_executor_settings_utils",
+        ":llm_litert_compiled_model_cache_utils",
         ":llm_litert_mtp_drafter",
         ":llm_processed_context",
         ":state_interface",
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/cleanup",
         "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/functional:any_invocable",
         "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/memory",
         "@com_google_absl//absl/status",
@@ -348,6 +350,7 @@ cc_library(
 
 cc_test(
     name = "llm_litert_compiled_model_executor_test",
+    size = "large",
     srcs = ["llm_litert_compiled_model_executor_test.cc"],
     data = [
         "//runtime/testdata",
@@ -366,6 +369,7 @@ cc_test(
         ":llm_litert_compiled_model_executor",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/cleanup",
+        "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/memory",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
