@@ -42,6 +42,7 @@ cc_library(
         ":gemma4_data_processor_config",
         ":generic_data_processor_config",
         ":lfm2_data_processor_config",
+        ":minicpm5_data_processor_config",
         ":qwen3_data_processor_config",
     ],
 )
@@ -217,6 +218,8 @@ cc_library(
         ":generic_data_processor_config",
         ":lfm2_data_processor",
         ":lfm2_data_processor_config",
+        ":minicpm5_data_processor",
+        ":minicpm5_data_processor_config",
         ":model_data_processor",
         ":qwen3_data_processor",
         ":qwen3_data_processor_config",
@@ -357,6 +360,54 @@ cc_library(
         "//runtime/conversation:io_types",
         "//runtime/engine:io_types",
         "//runtime/util:litert_status_util",
+    ],
+)
+
+cc_library(
+    name = "minicpm5_data_processor_config",
+    hdrs = ["minicpm5_data_processor_config.h"],
+)
+
+cc_library(
+    name = "minicpm5_data_processor",
+    srcs = ["minicpm5_data_processor.cc"],
+    hdrs = ["minicpm5_data_processor.h"],
+    deps = [
+        ":minicpm5_data_processor_config",
+        ":model_data_processor",
+        "@com_google_absl//absl/log:absl_log",
+        "@com_google_absl//absl/memory",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+        "@nlohmann_json//:json",
+        "//runtime/components/tool_use:parser_utils",
+        "//runtime/conversation:io_types",
+        "//runtime/engine:io_types",
+        "//runtime/util:litert_status_util",
+        "@com_googlesource_code_re2//:re2",
+    ],
+)
+
+cc_test(
+    name = "minicpm5_data_processor_test",
+    srcs = ["minicpm5_data_processor_test.cc"],
+    data = [
+        "//runtime/components/testdata",
+    ],
+    deps = [
+        ":minicpm5_data_processor",
+        ":minicpm5_data_processor_config",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@nlohmann_json//:json",
+        "//runtime/components:prompt_template",
+        "//runtime/conversation:io_types",
+        "//runtime/engine:io_types",
+        "//runtime/util:test_utils",
     ],
 )
 

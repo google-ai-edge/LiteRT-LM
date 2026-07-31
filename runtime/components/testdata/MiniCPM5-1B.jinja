@@ -101,7 +101,6 @@
         {{- '<|im_start|>' ~ message.role ~ '\n' ~ content }}
         {{- '<|im_end|>\n' }}
 
-
     {%- elif message.role == "tool" %}
         {%- if loop.first or (messages[loop.index0 - 1].role != "tool") %}
             {{- '<|im_start|>user' }}
@@ -121,9 +120,10 @@
 
 {%- if add_generation_prompt %}
     {{- '<|im_start|>assistant\n' }}
-    {%- if (enable_thinking is defined and enable_thinking) %}
-        {{- '<think>\n' }}
-    {%- else %}
+    {%- set enable_thinking = enable_thinking | default(false) %}
+    {%- if not enable_thinking %}
         {{- '<think>\n\n</think>\n\n' }}
+    {%- else %}
+        {{- '<think>\n' }}
     {%- endif %}
 {%- endif %}
