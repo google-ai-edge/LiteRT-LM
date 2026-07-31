@@ -129,7 +129,6 @@ jobs:
             --config=macos_arm64 \
             -c opt \
             --define=litert_runtime_link_mode=dynamic \
-            --define=resolve_symbols_in_exec=false \
             //runtime/engine:litert_lm_main
 
       - name: Run bazel test on MacOS.
@@ -139,7 +138,6 @@ jobs:
             --config=macos_arm64 \
             -c opt \
             --define=litert_runtime_link_mode=dynamic \
-            --define=resolve_symbols_in_exec=false \
             --test_output=errors \
             //runtime/... \
             //schema/... \
@@ -173,7 +171,6 @@ jobs:
       #       -c opt \
       #       --define=litert_link_capi_so=true \
       #       --define=litert_runtime_link_mode=dynamic \
-      #       --define=resolve_symbols_in_exec=false \
       #       //runtime/engine:litert_lm_main
 
       # - name: Update litert_lm_main prebuilt for iOS Simulator if new version tag is pushed.
