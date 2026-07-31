@@ -185,8 +185,8 @@ absl::StatusOr<std::unique_ptr<AudioContext>> AudioStreamingContext::Clone()
     LITERT_ASSIGN_OR_RETURN(auto new_buffer, buffer.Duplicate());
     new_state_buffers[name] = std::move(new_buffer);
   }
-  auto context = std::make_unique<AudioStreamingContext>(
-      std::move(new_state_buffers));
+  auto context =
+      std::make_unique<AudioStreamingContext>(std::move(new_state_buffers));
   context->buffered_spectrogram() = buffered_spectrogram_;
   return context;
 }
@@ -679,6 +679,13 @@ AudioLiteRtCompiledModelExecutor::Create(
       audio_encoder->GetInputSpectrogramBuffer().TensorType());
   const int spectrogram_feature_dimensions =
       spectrogram_tensor_type.Layout().Dimensions().back();
+
+  LITERT_ASSIGN_OR_RETURN(
+      auto encoder_output_tensor_type,
+      audio_encoder->GetOutputFeaturesBuffer().TensorType());
+  const auto encoder_dims = encoder_output_tensor_type.Layout().Dimensions();
+  const int unadapted_embedding_dimensions = encoder_dims.back();
+
   int audio_embedding_dimensions;
   if (audio_adapter != nullptr) {
     LITERT_ASSIGN_OR_RETURN(auto adapter_output_tensor_type,
@@ -755,13 +762,15 @@ AudioLiteRtCompiledModelExecutor::Create(
       std::move(executor_settings), std::move(executor_properties), env,
       std::move(resources), std::move(audio_encoder), std::move(audio_adapter),
       sequence_length, spectrogram_feature_dimensions,
-      audio_embedding_dimensions, encoder_shrinking_factor));
+      audio_embedding_dimensions, unadapted_embedding_dimensions,
+      encoder_shrinking_factor));
 }
 
 absl::StatusOr<int> AudioLiteRtCompiledModelExecutor::EncodeInternal(
     absl::Span<const float> spectrogram_tensor,
     absl::Span<const uint8_t> spectrogram_mask,
-    absl::Span<float> audio_embeddings) {
+    absl::Span<float> audio_embeddings,
+    absl::Span<float> unadapted_embeddings) {
   ABSL_RETURN_IF_ERROR(audio_encoder_->ClearInputBuffers());
   auto& input_buffer = audio_encoder_->GetMutableInputSpectrogramBuffer();
   LITERT_ASSIGN_OR_RETURN(auto tensor_type, input_buffer.TensorType());
@@ -837,6 +846,12 @@ absl::StatusOr<int> AudioLiteRtCompiledModelExecutor::EncodeInternal(
       for (size_t i = 0; i < elements; ++i) {
         adapter_data[i] = static_cast<float>(encoder_data[i]);
       }
+    }
+
+    if (!unadapted_embeddings.empty()) {
+      LITERT_RETURN_IF_ERROR(adapter_input.Read<float>(absl::MakeSpan(
+          unadapted_embeddings.data(),
+          chunk_valid_tokens * unadapted_embedding_dimensions_)));
     }
 
     LITERT_RETURN_IF_ERROR(audio_adapter_->GetMutableCompiledModel().Run(
@@ -1038,7 +1053,24 @@ AudioLiteRtCompiledModelExecutor::EncodeSpecsAndMasks(
   }
   int chunk_max_tokens = CeilIntDiv(window_size, encoder_shrinking_factor_);
   int max_tokens = N * chunk_max_tokens;
-  std::vector<float> audio_embeddings(max_tokens * audio_embedding_dimensions_);
+
+  // Create the final audio embeddings tensor upfront.
+  LITERT_ASSIGN_OR_RETURN(
+      auto audio_embeddings_locked,
+      CreateAndLockAudioTensor(max_tokens, audio_embedding_dimensions_));
+
+  // If an adapter is present, the unadapted embeddings (conformer output)
+  // are different from the final adapted embeddings. We allocate a separate
+  // buffer upfront to capture them.
+  // If no adapter is present, they are identical, so we don't allocate now
+  // and will just duplicate the final adapted buffer at the end.
+  std::optional<LockedTensor> unadapted_embeddings_locked;
+  if (audio_adapter_ != nullptr) {
+    LITERT_ASSIGN_OR_RETURN(
+        auto locked,
+        CreateAndLockAudioTensor(max_tokens, unadapted_embedding_dimensions_));
+    unadapted_embeddings_locked = std::move(locked);
+  }
 
   int total_valid_tokens = 0;
   int pos = 0;
@@ -1057,14 +1089,23 @@ AudioLiteRtCompiledModelExecutor::EncodeSpecsAndMasks(
     int current_chunk_max_tokens =
         CeilIntDiv(chunk_len, encoder_shrinking_factor_);
     auto audio_embeddings_slice =
-        absl::MakeSpan(audio_embeddings)
-            .subspan(total_valid_tokens * audio_embedding_dimensions_,
-                     current_chunk_max_tokens * audio_embedding_dimensions_);
+        absl::MakeSpan(audio_embeddings_locked.ptr +
+                           total_valid_tokens * audio_embedding_dimensions_,
+                       current_chunk_max_tokens * audio_embedding_dimensions_);
+
+    // Only construct the slice if unadapted_embeddings_locked is present.
+    absl::Span<float> unadapted_embeddings_slice;
+    if (unadapted_embeddings_locked.has_value()) {
+      unadapted_embeddings_slice = absl::MakeSpan(
+          unadapted_embeddings_locked->ptr +
+              total_valid_tokens * unadapted_embedding_dimensions_,
+          current_chunk_max_tokens * unadapted_embedding_dimensions_);
+    }
 
     ABSL_ASSIGN_OR_RETURN(
         int chunk_valid_tokens,
         EncodeInternal(spectrogram_slice, spectrogram_mask_slice,
-                       audio_embeddings_slice));
+                       audio_embeddings_slice, unadapted_embeddings_slice));
     total_valid_tokens += chunk_valid_tokens;
     pos += stride;
   }
@@ -1082,22 +1123,88 @@ AudioLiteRtCompiledModelExecutor::EncodeSpecsAndMasks(
     audio_encoder_->GetMutableBufferedSpectrogram().clear();
   }
 
-  // Create the final audio embeddings tensor.
+  // Extract tensor buffers and unlock
+  auto audio_embeddings_tensor = std::move(audio_embeddings_locked.tensor);
+  std::optional<TensorBuffer> unadapted_embeddings_tensor;
+  if (unadapted_embeddings_locked.has_value()) {
+    unadapted_embeddings_tensor =
+        std::move(unadapted_embeddings_locked->tensor);
+  }
+
+  audio_embeddings_locked.lock.reset();
+  if (unadapted_embeddings_locked.has_value()) {
+    unadapted_embeddings_locked->lock.reset();
+  }
+
   int buffer_tokens = std::max(1, total_valid_tokens);
-  RankedTensorType audio_embeddings_tensor_type(
+  // Re-allocate and copy audio_embeddings_tensor to shrink its sequence length
+  // from max_tokens to the actual buffer_tokens. Downstream combined sequence
+  // builders (e.g. CombineExecutorAudioData) rely on the tensor dimensions to
+  // determine token sequence limits, so leaving it un-shrunk will cause
+  // trailing garbage to propagate as valid tokens.
+  RankedTensorType tensor_type(
       GetElementType<float>(),
       Layout(Dimensions({1, buffer_tokens, audio_embedding_dimensions_})));
   LITERT_ASSIGN_OR_RETURN(
-      auto audio_embeddings_tensor,
+      auto shrunked_audio_tensor,
       TensorBuffer::CreateManaged(
-          env_, TensorBufferType::kHostMemory, audio_embeddings_tensor_type,
+          env_, TensorBufferType::kHostMemory, tensor_type,
           buffer_tokens * audio_embedding_dimensions_ * sizeof(float)));
-  LITERT_RETURN_IF_ERROR(InitializeBuffer(audio_embeddings_tensor));
-  LITERT_RETURN_IF_ERROR(audio_embeddings_tensor.Write<float>(
-      absl::MakeSpan(audio_embeddings)
-          .subspan(0, total_valid_tokens * audio_embedding_dimensions_)));
+  LITERT_RETURN_IF_ERROR(InitializeBuffer(shrunked_audio_tensor));
+
+  // Perform a direct memory-to-memory copy between the unlocked source tensor
+  // and target tensor. By locking the source for read and utilizing Write()
+  // on the target, we avoid allocating a temporary std::vector on the heap.
+  {
+    LITERT_ASSIGN_OR_RETURN(
+        auto src_lock_and_addr,
+        TensorBufferScopedLock::Create<float>(audio_embeddings_tensor,
+                                              TensorBuffer::LockMode::kRead));
+    LITERT_RETURN_IF_ERROR(shrunked_audio_tensor.Write<float>(
+        absl::MakeConstSpan(src_lock_and_addr.second,
+                            buffer_tokens * audio_embedding_dimensions_)));
+  }
+
+  audio_embeddings_tensor = std::move(shrunked_audio_tensor);
+
+  // Shrink unadapted_embeddings_tensor if present. This is necessary because
+  // when an adapter is present, the unadapted embeddings (conformer output)
+  // are written to a separate buffer, which must similarly be shrunk to
+  // buffer_tokens to match the final audio_embeddings sequence length.
+  if (unadapted_embeddings_tensor.has_value()) {
+    RankedTensorType unadapted_tensor_type(
+        GetElementType<float>(),
+        Layout(
+            Dimensions({1, buffer_tokens, unadapted_embedding_dimensions_})));
+    LITERT_ASSIGN_OR_RETURN(
+        auto shrunked_unadapted_tensor,
+        TensorBuffer::CreateManaged(
+            env_, TensorBufferType::kHostMemory, unadapted_tensor_type,
+            buffer_tokens * unadapted_embedding_dimensions_ * sizeof(float)));
+    LITERT_RETURN_IF_ERROR(InitializeBuffer(shrunked_unadapted_tensor));
+
+    {
+      LITERT_ASSIGN_OR_RETURN(
+          auto src_lock_and_addr,
+          TensorBufferScopedLock::Create<float>(*unadapted_embeddings_tensor,
+                                                TensorBuffer::LockMode::kRead));
+      LITERT_RETURN_IF_ERROR(
+          shrunked_unadapted_tensor.Write<float>(absl::MakeConstSpan(
+              src_lock_and_addr.second,
+              buffer_tokens * unadapted_embedding_dimensions_)));
+    }
+
+    unadapted_embeddings_tensor = std::move(shrunked_unadapted_tensor);
+  } else {
+    // If no adapter is present, the unadapted and adapted embeddings are
+    // identical, so we simply duplicate the shrunk adapted buffer.
+    LITERT_ASSIGN_OR_RETURN(unadapted_embeddings_tensor,
+                            audio_embeddings_tensor.Duplicate());
+  }
+
   ExecutorAudioData audio_data;
   audio_data.SetEmbeddings(std::move(audio_embeddings_tensor));
+  audio_data.SetUnadaptedEmbeddings(std::move(*unadapted_embeddings_tensor));
   audio_data.SetValidTokens(total_valid_tokens);
   return audio_data;
 }
@@ -1253,6 +1360,23 @@ absl::Status AudioLiteRtCompiledModelExecutor::RestoreContext(
   return reinterpret_cast<AudioStreamingEncoder*>(audio_encoder_.get())
       ->RestoreContext(std::unique_ptr<AudioStreamingContext>(
           static_cast<AudioStreamingContext*>(audio_context.release())));
+}
+
+absl::StatusOr<AudioLiteRtCompiledModelExecutor::LockedTensor>
+AudioLiteRtCompiledModelExecutor::CreateAndLockAudioTensor(int num_tokens,
+                                                           int dimensions) {
+  RankedTensorType tensor_type(GetElementType<float>(),
+                               Layout(Dimensions({1, num_tokens, dimensions})));
+  LITERT_ASSIGN_OR_RETURN(auto tensor,
+                          TensorBuffer::CreateManaged(
+                              env_, TensorBufferType::kHostMemory, tensor_type,
+                              num_tokens * dimensions * sizeof(float)));
+  LITERT_RETURN_IF_ERROR(InitializeBuffer(tensor));
+  LITERT_ASSIGN_OR_RETURN(auto lock_and_ptr,
+                          TensorBufferScopedLock::Create<float>(
+                              tensor, TensorBuffer::LockMode::kWrite));
+  return LockedTensor(std::move(tensor), std::move(lock_and_ptr.first),
+                      lock_and_ptr.second);
 }
 
 }  // namespace litert::lm

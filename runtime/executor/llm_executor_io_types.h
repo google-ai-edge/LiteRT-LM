@@ -304,12 +304,17 @@ class ExecutorAudioData {
   absl::StatusOr<const ::litert::TensorBuffer*> GetPerLayerEmbeddingsPtr()
       const;
   absl::StatusOr<::litert::TensorBuffer*> GetMutablePerLayerEmbeddingsPtr();
+  absl::StatusOr<const ::litert::TensorBuffer*> GetUnadaptedEmbeddingsPtr()
+      const;
+  absl::StatusOr<::litert::TensorBuffer*> GetMutableUnadaptedEmbeddingsPtr();
   int GetValidTokens() const;
 
   // Setters:
   void SetEmbeddings(std::optional<::litert::TensorBuffer>&& embeddings);
   void SetPerLayerEmbeddings(
       std::optional<::litert::TensorBuffer>&& per_layer_embeddings);
+  void SetUnadaptedEmbeddings(
+      std::optional<::litert::TensorBuffer>&& unadapted_embeddings);
   void SetValidTokens(int valid_tokens);
 
   // Duplicates the ExecutorAudioData. This method relies on the
@@ -320,6 +325,7 @@ class ExecutorAudioData {
  private:
   std::optional<::litert::TensorBuffer> embeddings_;
   std::optional<::litert::TensorBuffer> per_layer_embeddings_;
+  std::optional<::litert::TensorBuffer> unadapted_embeddings_;
 
   // The number of valid tokens in the audio embeddings. This is used to
   // determine the number of audio tokens to be actually used.

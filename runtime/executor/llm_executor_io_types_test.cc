@@ -138,7 +138,11 @@ TEST(LlmExecutorIoTypesTest, ExecutorAudioDataPrint) {
       "ExecutorAudioData: {\n"
       "  Embeddings: TensorBuffer: [131, 132] shape=(2)\n"
       "  PerLayerEmbeddings: nullopt (ExecutorAudioData::per_layer_embeddings_ "
-      "is not set.)\n  ValidTokens: 1\n"
+      "is not set.)\n"
+      "  UnadaptedEmbeddings: nullopt "
+      "(ExecutorAudioData::unadapted_embeddings_ "
+      "is not set.)\n"
+      "  ValidTokens: 1\n"
       "}";
   EXPECT_EQ(oss.str(), expected_output);
 }
@@ -482,6 +486,32 @@ TEST(LlmExecutorIoTypesTest, ExecutorAudioDataGetSet) {
   EXPECT_EQ(ple_read_data[1], 140.0f);
   EXPECT_EQ(ple_read_data[2], 141.0f);
   EXPECT_EQ(ple_read_data[3], 142.0f);
+
+  // Test SetUnadaptedEmbeddings
+  struct alignas(LITERT_HOST_MEMORY_BUFFER_ALIGNMENT) {
+    float d[4] = {143.0f, 144.0f, 145.0f, 146.0f};
+  } new_unadapted_emb_data;
+  auto new_unadapted_embeddings = TensorBuffer::CreateFromHostMemory(
+      *env,
+      ::litert::RankedTensorType(ElementType::Float32, Layout(Dimensions({4}))),
+      new_unadapted_emb_data.d, sizeof(new_unadapted_emb_data.d));
+  ASSERT_TRUE(new_unadapted_embeddings.HasValue());
+  audio_data.SetUnadaptedEmbeddings(std::move(*new_unadapted_embeddings));
+
+  ASSERT_OK_AND_ASSIGN(TensorBuffer * get_new_unadapted_embeddings_ptr,
+                       audio_data.GetMutableUnadaptedEmbeddingsPtr());
+  auto get_new_unadapted_embeddings_size =
+      get_new_unadapted_embeddings_ptr->Size();
+  ASSERT_TRUE(get_new_unadapted_embeddings_size.HasValue());
+  EXPECT_EQ(get_new_unadapted_embeddings_size.Value(), 16);
+  float unadapted_read_data[4];
+  read_success = get_new_unadapted_embeddings_ptr->Read<float>(
+      absl::MakeSpan(unadapted_read_data));
+  ASSERT_TRUE(read_success);
+  EXPECT_EQ(unadapted_read_data[0], 143.0f);
+  EXPECT_EQ(unadapted_read_data[1], 144.0f);
+  EXPECT_EQ(unadapted_read_data[2], 145.0f);
+  EXPECT_EQ(unadapted_read_data[3], 146.0f);
 
   // Test SetValidTokens
   audio_data.SetValidTokens(2);
@@ -898,7 +928,17 @@ TEST(LlmExecutorIoTypesTest, ExecutorAudioDataDuplicate) {
       emb_data.d, sizeof(emb_data.d));
   ASSERT_TRUE(embeddings.HasValue());
 
+  struct alignas(LITERT_HOST_MEMORY_BUFFER_ALIGNMENT) {
+    float d[4] = {143.0f, 144.0f, 145.0f, 146.0f};
+  } unadapted_emb_data;
+  auto unadapted_embeddings = TensorBuffer::CreateFromHostMemory(
+      *env,
+      ::litert::RankedTensorType(ElementType::Float32, Layout(Dimensions({4}))),
+      unadapted_emb_data.d, sizeof(unadapted_emb_data.d));
+  ASSERT_TRUE(unadapted_embeddings.HasValue());
+
   ExecutorAudioData audio_data(std::move(*embeddings), std::nullopt, 1);
+  audio_data.SetUnadaptedEmbeddings(std::move(*unadapted_embeddings));
   ASSERT_OK_AND_ASSIGN(ExecutorAudioData duplicate, audio_data.Duplicate());
 
   ASSERT_OK_AND_ASSIGN(TensorBuffer * duplicate_emb_ptr,
@@ -910,10 +950,24 @@ TEST(LlmExecutorIoTypesTest, ExecutorAudioDataDuplicate) {
   EXPECT_EQ(read_data[1], 132.0f);
   EXPECT_EQ(duplicate.GetValidTokens(), 1);
 
+  // Verify unadapted embeddings duplicate
+  ASSERT_OK_AND_ASSIGN(TensorBuffer * duplicate_unadapted_ptr,
+                       duplicate.GetMutableUnadaptedEmbeddingsPtr());
+  float unadapted_read_data[4];
+  ASSERT_TRUE(duplicate_unadapted_ptr->Read<float>(
+      absl::MakeSpan(unadapted_read_data)));
+  EXPECT_EQ(unadapted_read_data[0], 143.0f);
+  EXPECT_EQ(unadapted_read_data[1], 144.0f);
+  EXPECT_EQ(unadapted_read_data[2], 145.0f);
+  EXPECT_EQ(unadapted_read_data[3], 146.0f);
+
   // Verify that empty duplicate works fine.
   ExecutorAudioData audio_data_empty(std::nullopt, std::nullopt);
   ASSERT_OK_AND_ASSIGN(ExecutorAudioData duplicate_empty,
                        audio_data_empty.Duplicate());
+  ASSERT_FALSE(duplicate_empty.GetEmbeddingsPtr().ok());
+  ASSERT_FALSE(duplicate_empty.GetPerLayerEmbeddingsPtr().ok());
+  ASSERT_FALSE(duplicate_empty.GetUnadaptedEmbeddingsPtr().ok());
 }
 
 }  // namespace
