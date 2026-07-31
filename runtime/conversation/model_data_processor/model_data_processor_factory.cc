@@ -41,6 +41,8 @@
 #include "runtime/conversation/model_data_processor/generic_data_processor_config.h"
 #include "runtime/conversation/model_data_processor/lfm2_data_processor.h"
 #include "runtime/conversation/model_data_processor/lfm2_data_processor_config.h"
+#include "runtime/conversation/model_data_processor/minicpmv_data_processor.h"
+#include "runtime/conversation/model_data_processor/minicpmv_data_processor_config.h"
 #include "runtime/conversation/model_data_processor/model_data_processor.h"
 #include "runtime/conversation/model_data_processor/qwen3_data_processor.h"
 #include "runtime/conversation/model_data_processor/qwen3_data_processor_config.h"
@@ -269,6 +271,17 @@ absl::StatusOr<DataProcessorConfig> CreateGemma4DataProcessorConfig(
         gemma4.skip_mel_spectrogram_extraction();
   }
   return config;
+}
+
+absl::StatusOr<DataProcessorConfig> CreateMinicpmvDataProcessorConfig(
+    const proto::LlmModelType& model_type) {
+  if (!model_type.has_minicpmv()) {
+    return absl::InvalidArgumentError(
+        "Minicpmv LlmModelType is required to create "
+        "MinicpmvDataProcessorConfig.");
+  }
+  // MiniCPM-V has no runtime-configurable fields; the config is empty.
+  return MinicpmvDataProcessorConfig{};
 }
 
 absl::StatusOr<DataProcessorConfig> CreateFastVlmDataProcessorConfig(
@@ -589,6 +602,8 @@ absl::StatusOr<DataProcessorConfig> CreateDataProcessorConfigFromLlmModelType(
       return CreateGenericDataProcessorConfig(model_type);
     case proto::LlmModelType::kFastVlm:
       return CreateFastVlmDataProcessorConfig(model_type);
+    case proto::LlmModelType::kMinicpmv:
+      return CreateMinicpmvDataProcessorConfig(model_type);
     case proto::LlmModelType::kFunctionGemma:
       return CreateFunctionGemmaDataProcessorConfig(model_type);
     default:
@@ -633,6 +648,10 @@ absl::StatusOr<std::unique_ptr<ModelDataProcessor>> CreateModelDataProcessor(
     ABSL_VLOG(1) << "Creating FastVlmDataProcessor";
     return FastVlmDataProcessor::Create(
         std::get<FastVlmDataProcessorConfig>(config), capabilities);
+  } else if (std::holds_alternative<MinicpmvDataProcessorConfig>(config)) {
+    ABSL_VLOG(1) << "Creating MinicpmvDataProcessor";
+    return MinicpmvDataProcessor::Create(
+        std::get<MinicpmvDataProcessorConfig>(config), capabilities);
   } else {
     return absl::InvalidArgumentError("Unsupported data processor config type");
   }

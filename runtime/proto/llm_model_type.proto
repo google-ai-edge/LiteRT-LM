@@ -32,6 +32,7 @@ message LlmModelType {
     Gemma4 gemma4 = 8;
     FastVlm fast_vlm = 9;
     Lfm2 lfm2 = 11;
+    Minicpmv minicpmv = 12;
   }
 }
 
@@ -342,4 +343,11 @@ message Lfm2 {
   repeated float normalization_mean = 9;
   repeated float normalization_std = 10;
   float normalization_rescale_factor = 11;
+}
+
+// MiniCPM-V-4 multimodal (fused SigLIP + Resampler vision + Llama LLM).
+// Slice geometry and soft-token count are fixed by the bundled vision tflite
+// and compile-time constants in the runtime; no per-bundle proto fields.
+message Minicpmv {
+  reserved 1, 2;
 }
