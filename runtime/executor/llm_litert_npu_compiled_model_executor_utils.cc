@@ -843,15 +843,16 @@ absl::Status HWKVCacheUpdate(
 
 namespace {
 
-// Internal template for filling a single mask.
+// Internal template for filling masks.
+// T: element type (int8_t or int16_t).
+// valid_val: value for "unmasked" (127 for i8, 0 for i16).
+// masked_val: value for "masked" (-128 for i8, -32767 for i16).
 template <typename T>
-void FillMaskInternal(T* mask, int64_t seq_q, int64_t seq_k, int32_t time_step,
-                      const int32_t* input_tokens, int64_t input_tokens_size,
-                      const bool* valid_mask, int64_t valid_mask_size,
-                      T valid_val, T masked_val, bool is_local,
-                      int64_t window_size) {
-  if (!mask) return;
-
+void FillMasksInternal(T* mask_local, T* mask_global, int64_t seq_q,
+                       int64_t seq_k, int32_t time_step,
+                       const int32_t* input_tokens, int64_t input_tokens_size,
+                       const bool* valid_mask, int64_t valid_mask_size,
+                       T valid_val, T masked_val) {
   // Detection logic for capacity and batch_size.
   int64_t kv_cache_capacity = seq_k;
   bool has_batch_suffix = false;
@@ -875,36 +876,34 @@ void FillMaskInternal(T* mask, int64_t seq_q, int64_t seq_k, int32_t time_step,
   }
   const int64_t batch_size = has_batch_suffix ? seq_q : 0;
 
-  // Initialize with masked value.
+  // Initialize with masked value (performance: memset if i8).
   if (sizeof(T) == 1) {
-    std::memset(mask, (int)masked_val, seq_q * seq_k);
+    if (mask_local) std::memset(mask_local, (int)masked_val, seq_q * seq_k);
+    if (mask_global) std::memset(mask_global, (int)masked_val, seq_q * seq_k);
   } else {
     for (int64_t i = 0; i < seq_q * seq_k; ++i) {
-      mask[i] = masked_val;
+      if (mask_local) mask_local[i] = masked_val;
+      if (mask_global) mask_global[i] = masked_val;
     }
   }
 
   // Fill valid regions.
   for (int64_t q = 0; q < seq_q; ++q) {
+    // effective_pos is the position of the query token in the sequence.
     const int64_t effective_pos = time_step + q;
-    T* row = mask + (q * seq_k);
+    T* local_row = mask_local ? mask_local + (q * seq_k) : nullptr;
+    T* global_row = mask_global ? mask_global + (q * seq_k) : nullptr;
 
     // KV Cache Part (indices 0 to capacity-1)
+    // For Regular: valid if k < time_step.
+    // For MTP: valid if k <= time_step.
     const int64_t kv_valid_limit =
         has_batch_suffix ? time_step : (time_step + 1);
     for (int64_t k = 0; k < std::min(kv_valid_limit, kv_cache_capacity); ++k) {
-      if (is_local) {
-        int64_t t_k = k;
-        if (has_batch_suffix && time_step >= kv_cache_capacity) {
-          int64_t age = (time_step - 1 - k + kv_cache_capacity) %
-                        kv_cache_capacity;
-          t_k = time_step - 1 - age;
-        }
-        if (t_k >= effective_pos - (window_size - 1)) {
-          row[k] = valid_val;
-        }
-      } else {
-        row[k] = valid_val;
+      if (global_row) global_row[k] = valid_val;
+      // Sliding window (512 tokens).
+      if (local_row && k >= effective_pos - 511) {
+        local_row[k] = valid_val;
       }
     }
 
@@ -913,6 +912,7 @@ void FillMaskInternal(T* mask, int64_t seq_q, int64_t seq_k, int32_t time_step,
       for (int64_t k_rel = 0; k_rel < batch_size; ++k_rel) {
         int64_t k = kv_cache_capacity + k_rel;
         if (k >= seq_k) break;
+        // Causal + Validity check (for verify_mask).
         bool is_valid = true;
         if (valid_mask != nullptr) {
           if (k_rel < valid_mask_size) {
@@ -930,7 +930,9 @@ void FillMaskInternal(T* mask, int64_t seq_q, int64_t seq_k, int32_t time_step,
           }
         }
         if (k_rel <= q && is_valid) {
-          row[k] = valid_val;
+          if (global_row) global_row[k] = valid_val;
+          if (local_row)
+            local_row[k] = valid_val;  // Current batch is always in window.
         }
       }
     }
@@ -988,49 +990,15 @@ absl::Status HWMaskUpdate(
         "No mask buffer found in in_buffers or out_buffers");
   }
 
-  auto get_shape_info = [](::litert::TensorBuffer* buf, int64_t& seq_q,
-                           int64_t& seq_k,
-                           ::litert::ElementType& type) -> absl::Status {
-    if (!buf) return absl::OkStatus();
-    LITERT_ASSIGN_OR_RETURN(auto t_type, buf->TensorType());
-    type = t_type.ElementType();
-    auto dims = t_type.Layout().Dimensions();
-    int rank = t_type.Layout().Rank();
-    seq_q = dims[rank - 2];
-    seq_k = dims[rank - 1];
-    return absl::OkStatus();
-  };
+  // Assume they have the same type and dimensions if both present.
+  ::litert::TensorBuffer* reference_buf =
+      mask_local_buf ? mask_local_buf : mask_global_buf;
 
-  int64_t seq_q_local = 0;
-  int64_t seq_k_local = 0;
-  ::litert::ElementType type_local = ::litert::ElementType::Int8;
-  if (mask_local_buf) {
-    LITERT_RETURN_IF_ERROR(
-        get_shape_info(mask_local_buf, seq_q_local, seq_k_local, type_local));
-  }
-
-  int64_t seq_q_global = 0;
-  int64_t seq_k_global = 0;
-  ::litert::ElementType type_global = ::litert::ElementType::Int8;
-  if (mask_global_buf) {
-    LITERT_RETURN_IF_ERROR(get_shape_info(mask_global_buf, seq_q_global,
-                                          seq_k_global, type_global));
-  }
-
-  if (mask_local_buf && mask_global_buf) {
-    if (seq_q_local != seq_q_global) {
-      return absl::InvalidArgumentError(
-          "Local and global masks must have same seq_q");
-    }
-    if (type_local != type_global) {
-      return absl::InvalidArgumentError(
-          "Local and global masks must have same element type");
-    }
-  }
-
-  int64_t seq_q = mask_local_buf ? seq_q_local : seq_q_global;
-  ::litert::ElementType mask_type =
-      mask_local_buf ? type_local : type_global;
+  LITERT_ASSIGN_OR_RETURN(auto mask_type, reference_buf->TensorType());
+  auto mask_dims = mask_type.Layout().Dimensions();
+  int rank = mask_type.Layout().Rank();
+  int64_t seq_q = mask_dims[rank - 2];
+  int64_t seq_k = mask_dims[rank - 1];
 
   void* local_ptr = nullptr;
   void* global_ptr = nullptr;
@@ -1076,79 +1044,46 @@ absl::Status HWMaskUpdate(
     valid_mask_lock.emplace(std::move(lock.first));
   }
 
-  // Determine window size for local mask.
-  int64_t local_window_size = 512;
-  if (mask_local_buf) {
-    int64_t local_capacity = seq_k_local;
-    if (seq_k_local > seq_q) {
-      int64_t candidate_cap = seq_k_local - seq_q;
-      if (candidate_cap % 64 == 0 || seq_q > 8) {
-        local_capacity = candidate_cap;
-      } else {
-        int64_t nearest_64 = (seq_k_local / 64) * 64;
-        if (nearest_64 > 0 && nearest_64 < seq_k_local &&
-            (seq_k_local - nearest_64) <= 8) {
-          local_capacity = nearest_64;
-        }
-      }
-    }
-    if (local_capacity != 4096) {
-      local_window_size = local_capacity;
-    }
-  }
-
-  auto fill_masks = [&](auto dummy) -> absl::Status {
-    using T = decltype(dummy);
-    T valid_val;
-    T masked_val;
-    if constexpr (std::is_same_v<T, int8_t>) {
-      valid_val = 127;
-      masked_val = -128;
-    } else if constexpr (std::is_same_v<T, int16_t>) {
-      valid_val = 0;
-      masked_val = -32767;
-    } else if constexpr (std::is_same_v<T, float>) {
-      valid_val = 0.0f;
-      masked_val = -1e9f;
-    } else if constexpr (std::is_same_v<T, uint16_t>) {
-      if (mask_type == ::litert::ElementType::Float16) {
-        valid_val = 0x0000;
-        masked_val = 0xFC00;
-      } else {
-        valid_val = 0x0000;
-        masked_val = 0xFF80;
-      }
-    } else {
-      return absl::InvalidArgumentError("Unsupported mask element type");
-    }
-
-    if (local_ptr) {
-      FillMaskInternal<T>(static_cast<T*>(local_ptr), seq_q, seq_k_local,
-                          time_step, input_tokens, input_tokens_size,
-                          valid_mask, valid_mask_size, valid_val, masked_val,
-                          /*is_local=*/true, local_window_size);
-    }
-    if (global_ptr) {
-      FillMaskInternal<T>(static_cast<T*>(global_ptr), seq_q, seq_k_global,
-                          time_step, input_tokens, input_tokens_size,
-                          valid_mask, valid_mask_size, valid_val, masked_val,
-                          /*is_local=*/false, /*window_size=*/0);
-    }
-    return absl::OkStatus();
-  };
-
-  if (mask_type == ::litert::ElementType::Int8) {
-    return fill_masks(int8_t{});
-  } else if (mask_type == ::litert::ElementType::Int16) {
-    return fill_masks(int16_t{});
-  } else if (mask_type == ::litert::ElementType::Float32) {
-    return fill_masks(float{});
-  } else if (mask_type == ::litert::ElementType::Float16 ||
-             mask_type == ::litert::ElementType::BFloat16) {
-    return fill_masks(uint16_t{});
+  // Dispatch by Dtype
+  if (mask_type.ElementType() == ::litert::ElementType::Int8) {
+    FillMasksInternal<int8_t>(static_cast<int8_t*>(local_ptr),
+                              static_cast<int8_t*>(global_ptr), seq_q, seq_k,
+                              time_step, input_tokens, input_tokens_size,
+                              valid_mask, valid_mask_size,
+                              /*valid_val=*/127, /*masked_val=*/-128);
+  } else if (mask_type.ElementType() == ::litert::ElementType::Int16) {
+    FillMasksInternal<int16_t>(static_cast<int16_t*>(local_ptr),
+                               static_cast<int16_t*>(global_ptr), seq_q, seq_k,
+                               time_step, input_tokens, input_tokens_size,
+                               valid_mask, valid_mask_size,
+                               /*valid_val=*/0, /*masked_val=*/-32767);
+  } else if (mask_type.ElementType() == ::litert::ElementType::Float32) {
+    FillMasksInternal<float>(static_cast<float*>(local_ptr),
+                             static_cast<float*>(global_ptr), seq_q, seq_k,
+                             time_step, input_tokens, input_tokens_size,
+                             valid_mask, valid_mask_size,
+                             /*valid_val=*/0.0f, /*masked_val=*/-1e9f);
+  } else if (mask_type.ElementType() == ::litert::ElementType::Float16) {
+    // Opaque uint16_t representation of IEEE 754 Float16.
+    // valid_val is 0.0f (0x0000) and masked_val is -infinity (0xFC00).
+    FillMasksInternal<uint16_t>(static_cast<uint16_t*>(local_ptr),
+                                static_cast<uint16_t*>(global_ptr), seq_q,
+                                seq_k, time_step, input_tokens,
+                                input_tokens_size, valid_mask, valid_mask_size,
+                                /*valid_val=*/0x0000, /*masked_val=*/0xFC00);
+  } else if (mask_type.ElementType() == ::litert::ElementType::BFloat16) {
+    // Opaque uint16_t representation of Brain Float16.
+    // valid_val is 0.0f (0x0000) and masked_val is -infinity (0xFF80).
+    FillMasksInternal<uint16_t>(static_cast<uint16_t*>(local_ptr),
+                                static_cast<uint16_t*>(global_ptr), seq_q,
+                                seq_k, time_step, input_tokens,
+                                input_tokens_size, valid_mask, valid_mask_size,
+                                /*valid_val=*/0x0000, /*masked_val=*/0xFF80);
   } else {
     return absl::InvalidArgumentError("Unsupported mask element type");
   }
+
+  return absl::OkStatus();
 }
 namespace {
 #if defined(__ANDROID__) && defined(__ARM_NEON) && defined(__aarch64__)
