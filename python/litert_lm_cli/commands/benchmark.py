@@ -90,6 +90,11 @@ def run_benchmark(
     assert backend_val is not None
     cache_dir_val = common.cache_dir_value_from_cache_mode(cache)
 
+    # For CLI benchmarking, we default to enabling ringbuffers when they are
+    # available, for best results.
+    if ringbuffers_local_attention is None:
+      ringbuffers_local_attention = True
+
     if is_android:
       if not _HAS_ADB:
         raise ImportError("litert_lm.adb dependencies are not available.")
