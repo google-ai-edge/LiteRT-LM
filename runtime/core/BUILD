@@ -39,6 +39,7 @@ package_group(
         "//kotlin/...",
         # for SpeechProcessor
         # for AI Edge Hub
+        # for AI Edge Gallery
     ],
 )
 
