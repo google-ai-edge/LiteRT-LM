@@ -34,7 +34,7 @@ namespace litert::omni::asr {
 class TdtDecoder : public LiteRtSpeechRecognizer::Decoder {
  public:
   static absl::StatusOr<std::unique_ptr<TdtDecoder>> Create(
-      LiteRtRunner* absl_nonnull runner, int decode_stop_token_id = -1,
+      LiteRtRunner* absl_nonnull runner, int decode_start_token_id = 8192,
       int decode_statefully_after = 4);
 
   ~TdtDecoder() override = default;
@@ -49,9 +49,8 @@ class TdtDecoder : public LiteRtSpeechRecognizer::Decoder {
       std::vector<TensorBuffer> decode_output_buffers,
       std::optional<std::vector<TensorBuffer>> stateful_decode_input_buffers,
       std::optional<std::vector<TensorBuffer>> stateful_decode_output_buffers,
-      size_t max_time_index, size_t num_token_ids, size_t total_logits_in_bytes,
-      size_t num_logits_per_token, int decode_stop_token_id,
-      int decode_statefully_after);
+      size_t max_time_index, size_t num_token_ids, size_t num_logits_per_token,
+      int decode_start_token_id, int decode_statefully_after);
 
   // Prepares input and output buffers for a single inference call.
   absl::StatusOr<std::vector<TensorBuffer>> GetInputBuffersForInference(
@@ -69,9 +68,8 @@ class TdtDecoder : public LiteRtSpeechRecognizer::Decoder {
   std::vector<TensorBuffer*> output_states_buffers_;
   const size_t max_time_index_;
   const size_t num_token_ids_;
-  const size_t total_logits_in_bytes_;
   const size_t num_logits_per_token_;
-  const int decode_stop_token_id_;
+  const int decode_start_token_id_;
   const int decode_statefully_after_;
 };
 

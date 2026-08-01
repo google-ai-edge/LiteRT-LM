@@ -1,0 +1,62 @@
+{
+  "parakeet-tdt-0.6b-v3": {
+    "modelRemoteUrl": "https://huggingface.co/litert-community/parakeet-tdt-0.6b-v3/resolve/main/parakeet_tdt_0.6b_v3_5s_i8_stateful.tflite",
+    "npuModelRemoteUrlPattern": "https://huggingface.co/litert-community/parakeet-tdt-0.6b-v3/resolve/main/parakeet_tdt_0.6b_v3_5s_f32_stateful_<target>.tflite",
+    "tokenizerUrl": "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3/resolve/main/tokenizer.json",
+    "inputMilliseconds": 5000,
+    "logMelSpectro": {
+      "nFFT": 512,
+      "nMels": 128,
+      "nFrames": 500,
+      "preemphasis": 0.97
+    },
+    "decodeStartTokenId": 8192
+  },
+  "parakeet-ctc-0.6b": {
+    "modelRemoteUrl": "https://huggingface.co/litert-community/parakeet-ctc-0.6b/resolve/main/parakeet_ctc_0.6b_5s_i8.tflite",
+    "npuModelRemoteUrlPattern": "https://huggingface.co/litert-community/parakeet-ctc-0.6b/resolve/main/parakeet_ctc_0.6b_5s_f32_<target>.tflite",
+    "tokenizerUrl": "https://huggingface.co/nvidia/parakeet-ctc-0.6b/resolve/main/tokenizer.json",
+    "inputMilliseconds": 5000,
+    "logMelSpectro": {
+      "nFFT": 512,
+      "transpose": true,
+      "preemphasis": 0.97
+    }
+  },
+  "moonshine-tiny": {
+    "modelRemoteUrl": "https://huggingface.co/litert-community/moonshine-tiny/resolve/main/moonshine_tiny_5s_i8.tflite",
+    "npuModelRemoteUrlPattern": "https://huggingface.co/litert-community/moonshine-tiny/resolve/main/moonshine_tiny_5s_f32_<target>.tflite",
+    "tokenizerUrl": "https://huggingface.co/UsefulSensors/moonshine-tiny/resolve/main/tokenizer.json",
+    "inputMilliseconds": 5000,
+    "decodeStartTokenId": 1,
+    "decodeStopTokenId": 2
+  },
+  "whisper-tiny": {
+    "modelRemoteUrl": "https://huggingface.co/litert-community/whisper-tiny/resolve/main/whisper_tiny_30s_i8.tflite",
+    "npuModelRemoteUrlPattern": "https://huggingface.co/litert-community/whisper-tiny/resolve/main/whisper_tiny_30s_f32_<target>.tflite",
+    "tokenizerUrl": "https://huggingface.co/openai/whisper-tiny/resolve/main/tokenizer.json",
+    "inputMilliseconds": 30000,
+    "logMelSpectro": {
+      "nFFT": 400,
+      "nFrames": 3000,
+      "normType": "whisper"
+    },
+    "decodeStartTokenId": 50258,
+    "decodeStopTokenId": 50257
+  },
+  "qwen3-asr-0.6b": {
+    "modelRemoteUrl": "https://huggingface.co/litert-community/Qwen3-ASR-0.6B/resolve/main/qwen3_asr_0.6b_5s_i8.tflite",
+    "npuModelRemoteUrlPattern": "https://huggingface.co/litert-community/Qwen3-ASR-0.6B/resolve/main/qwen3_asr_0.6b_5s_f32_<target>.tflite",
+    "tokenizerUrl": "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct/resolve/main/tokenizer.json",
+    "inputMilliseconds": 5000,
+    "logMelSpectro": {
+      "nFFT": 400,
+      "nMels": 128,
+      "nFrames": 500,
+      "normType": "whisper"
+    },
+    "decodeStartTokenId": 198,
+    "decodeStopTokenId": 151645,
+    "decodeSkipUntilTokenId": 151704
+  }
+}

@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# [Google-internal load of `cc_binary`]
 # [Google-internal load of `cc_library`]
 # [Google-internal load of `cc_test`]
 
@@ -407,5 +408,58 @@ cc_test(
         "@litert//support/util:test_utils",
         "//omni/base:stage",
         "//runtime/framework:threadpool",
+    ],
+)
+
+cc_library(
+    name = "asr_engine",
+    srcs = ["asr_engine.cc"],
+    hdrs = ["asr_engine.h"],
+    data = ["model_metadata.json"],
+    deps = [
+        ":asr_session",
+        ":audio_source",
+        ":ctc_decoder",
+        ":levenshtein_text_merger",
+        ":litert_speech_recognizer",
+        ":log_mel_spectrogram_processor",
+        ":stateless_decoder",
+        ":tdt_decoder",
+        ":tokenizer_detokenizer",
+        "@com_google_absl//absl/functional:any_invocable",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@litert//litert/cc:litert_common",
+        "@litert//litert/cc:litert_compiled_model",
+        "@litert//litert/cc:litert_environment",
+        "@litert//litert/cc:litert_macros",
+        "@litert//litert/cc:litert_options",
+        "@litert//litert/cc/options:litert_gpu_options",
+        "@litert//litert/cc/options:litert_qualcomm_options",
+        "@litert//support/tokenizer",
+        "@litert//support/tokenizer:huggingface_tokenizer",
+        "//omni/base:litert_runner",
+    ],
+)
+
+cc_binary(
+    name = "asr_runner",
+    srcs = ["asr_runner.cc"],
+    deps = [
+        ":asr_engine",
+        ":file_audio_source",
+        ":log_mel_spectrogram_processor",
+        "@com_google_absl//absl/flags:flag",
+        "@com_google_absl//absl/flags:parse",
+        "@com_google_absl//absl/log:absl_log",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/time",
+        "@nlohmann_json//:json",
     ],
 )

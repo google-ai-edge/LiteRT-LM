@@ -43,10 +43,16 @@ constexpr size_t kNumDurations = 5;
 // Hardcoded because CompileModel doesn't expose shape info.
 constexpr size_t kNumFeatures = 1024;
 
+template <typename T>
+absl::StatusOr<size_t> GetNumOfElements(TensorBuffer& buffer) {
+  LITERT_ASSIGN_OR_RETURN(auto num_bytes, buffer.PackedSize());
+  return num_bytes / sizeof(T);
+}
+
 }  // namespace
 
 absl::StatusOr<std::unique_ptr<TdtDecoder>> TdtDecoder::Create(
-    LiteRtRunner* absl_nonnull runner, int decode_stop_token_id,
+    LiteRtRunner* absl_nonnull runner, int decode_start_token_id,
     int decode_statefully_after) {
   LITERT_ASSIGN_OR_RETURN(auto inputs,
                           runner->CreateInputBuffers(kDecodeSignatureName));
@@ -57,15 +63,14 @@ absl::StatusOr<std::unique_ptr<TdtDecoder>> TdtDecoder::Create(
   // logits, output LSTM state 1, output LSTM state 2.
   LITERT_RETURN_IF_ERROR(outputs.size() >= 3);
 
-  LITERT_ASSIGN_OR_RETURN(auto input0_bytes, inputs[0].PackedSize());
-  size_t max_time_index = (input0_bytes / sizeof(float)) / kNumFeatures;
-
-  LITERT_ASSIGN_OR_RETURN(auto token_bytes, inputs[1].PackedSize());
-  size_t num_token_ids = token_bytes / sizeof(int32_t);
-
-  LITERT_ASSIGN_OR_RETURN(auto output0_bytes, outputs[0].PackedSize());
-  size_t total_logits = output0_bytes / sizeof(float);
-  size_t num_logits_per_token = total_logits / num_token_ids / max_time_index;
+  ABSL_ASSIGN_OR_RETURN(auto num_input0, GetNumOfElements<float>(inputs[0]));
+  size_t max_time_index = num_input0 / kNumFeatures;
+  ABSL_ASSIGN_OR_RETURN(auto num_token_ids,
+                        GetNumOfElements<int32_t>(inputs[1]));
+  ABSL_ASSIGN_OR_RETURN(auto total_num_logits,
+                        GetNumOfElements<float>(outputs[0]));
+  size_t num_logits_per_token =
+      total_num_logits / num_token_ids / max_time_index;
 
   std::optional<std::vector<TensorBuffer>> stateful_decode_input_buffers;
   std::optional<std::vector<TensorBuffer>> stateful_decode_output_buffers;
@@ -81,12 +86,11 @@ absl::StatusOr<std::unique_ptr<TdtDecoder>> TdtDecoder::Create(
     stateful_decode_output_buffers = std::move(stateful_outputs);
   }
 
-  return std::unique_ptr<TdtDecoder>(
-      new TdtDecoder(runner, std::move(inputs), std::move(outputs),
-                     std::move(stateful_decode_input_buffers),
-                     std::move(stateful_decode_output_buffers), max_time_index,
-                     num_token_ids, output0_bytes, num_logits_per_token,
-                     decode_stop_token_id, decode_statefully_after));
+  return std::unique_ptr<TdtDecoder>(new TdtDecoder(
+      runner, std::move(inputs), std::move(outputs),
+      std::move(stateful_decode_input_buffers),
+      std::move(stateful_decode_output_buffers), max_time_index, num_token_ids,
+      num_logits_per_token, decode_start_token_id, decode_statefully_after));
 }
 
 TdtDecoder::TdtDecoder(
@@ -95,9 +99,8 @@ TdtDecoder::TdtDecoder(
     std::vector<TensorBuffer> decode_output_buffers,
     std::optional<std::vector<TensorBuffer>> stateful_decode_input_buffers,
     std::optional<std::vector<TensorBuffer>> stateful_decode_output_buffers,
-    size_t max_time_index, size_t num_token_ids, size_t total_logits_in_bytes,
-    size_t num_logits_per_token, int decode_stop_token_id,
-    int decode_statefully_after)
+    size_t max_time_index, size_t num_token_ids, size_t num_logits_per_token,
+    int decode_start_token_id, int decode_statefully_after)
     : runner_(runner),
       decode_input_buffers_(std::move(decode_input_buffers)),
       decode_output_buffers_(std::move(decode_output_buffers)),
@@ -110,9 +113,8 @@ TdtDecoder::TdtDecoder(
           {&decode_output_buffers_[1], &decode_output_buffers_[2]}),
       max_time_index_(max_time_index),
       num_token_ids_(num_token_ids),
-      total_logits_in_bytes_(total_logits_in_bytes),
       num_logits_per_token_(num_logits_per_token),
-      decode_stop_token_id_(decode_stop_token_id),
+      decode_start_token_id_(decode_start_token_id),
       decode_statefully_after_(decode_statefully_after) {}
 
 absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> TdtDecoder::Decode(
@@ -131,9 +133,11 @@ absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> TdtDecoder::Decode(
   TensorBuffer* current_logits_buffer = &decode_output_buffers_[0];
   int num_inference_token_ids = num_token_ids_;
   std::vector<int32_t> token_ids(num_token_ids_, 0);
-  token_ids[0] = decode_stop_token_id_;
+  token_ids[0] = decode_start_token_id_;
   size_t token_index = 0;
   size_t time_index = 0;
+  ABSL_ASSIGN_OR_RETURN(auto total_num_logits,
+                        GetNumOfElements<float>(*current_logits_buffer));
   while (time_index < max_time_index_) {
     LITERT_RETURN_IF_ERROR(current_token_ids_buffer->Write<int32_t>(
         absl::MakeConstSpan(token_ids)));
@@ -144,7 +148,7 @@ absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> TdtDecoder::Decode(
                           GetOutputBuffersForInference(*current_logits_buffer));
     LITERT_RETURN_IF_ERROR(runner_->Run(current_signature, inputs, outputs));
 
-    std::vector<float> logits(total_logits_in_bytes_);
+    std::vector<float> logits(total_num_logits);
     LITERT_RETURN_IF_ERROR(
         current_logits_buffer->Read<float>(absl::MakeSpan(logits)));
 
@@ -160,7 +164,7 @@ absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> TdtDecoder::Decode(
                          logits.begin() + end_index_of_token_id);
     int token_id = static_cast<int>(
         std::distance(logits.begin() + start_index_of_token_id, max_token_it));
-    if (token_id != decode_stop_token_id_) {
+    if (token_id != decode_start_token_id_) {
       decoded_tokens.push_back(SpeechRecognizer::DecodedToken{
           .token_id = token_id, .timestamp_ms = static_cast<int>(time_index)});
       if (num_inference_token_ids > 1) {
@@ -175,6 +179,8 @@ absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> TdtDecoder::Decode(
           num_inference_token_ids = 1;
           token_ids.resize(1, 0);
           token_index = 0;
+          ABSL_ASSIGN_OR_RETURN(total_num_logits, GetNumOfElements<float>(
+                                                      *current_logits_buffer));
         } else {
           break;
         }
@@ -188,7 +194,7 @@ absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> TdtDecoder::Decode(
     int duration = static_cast<int>(
         std::distance(logits.begin() + end_index_of_token_id, max_duration_it));
     time_index +=
-        (duration == 0 && token_id == decode_stop_token_id_) ? 1 : duration;
+        (duration == 0 && token_id == decode_start_token_id_) ? 1 : duration;
 
     if (num_inference_token_ids == 1) {
       // Stateful RNN decoder: Swap input and output state buffers for the next
