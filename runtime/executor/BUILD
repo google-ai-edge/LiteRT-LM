@@ -705,6 +705,7 @@ cc_library(
         "@litert//litert/cc:litert_macros",
         "@litert//litert/cc:litert_options",
         "@litert//litert/cc/options:litert_gpu_options",
+        "//runtime/executor/litert/custom_ops:scaled_dot_product_attention_transposed_kernel",
         "//runtime/util:file_util",
         "//runtime/util:litert_status_util",
         "//runtime/util:scoped_file",
