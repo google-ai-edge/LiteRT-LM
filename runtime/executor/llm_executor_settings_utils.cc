@@ -32,6 +32,7 @@
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/executor/llm_executor_settings.h"
+#include "litert/experimental/custom_ops/scaled_dot_product_attention_transposed_kernel.h"  // from @litert
 #include "runtime/util/file_util.h"
 #include "runtime/util/status_macros.h"
 
@@ -290,6 +291,9 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
                             compilation_options.GetRuntimeOptions());
     runtime_options.SetEnableProfiling(/*enabled=*/true);
   }
+
+  static auto* const sdpa_transposed_kernel = new ScaledDotProductAttentionTransposedKernel();
+  LITERT_RETURN_IF_ERROR(compilation_options.AddCustomOpKernel(*sdpa_transposed_kernel));
 
   return compilation_options;
 }
