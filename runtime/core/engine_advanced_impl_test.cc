@@ -39,6 +39,9 @@
 #include "runtime/proto/sampler_params.pb.h"
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/status_macros.h"
+#ifdef ENGINE_ADVANCED
+#include "runtime/util/file_data_stream.h"
+#endif
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
 
 namespace litert::lm {
@@ -475,7 +478,43 @@ TEST(EngineTest,
   EXPECT_NE(llm, nullptr);
 }
 
-// TODO (b/397975034): Add more tests for Engine.
+#ifdef ENGINE_ADVANCED
+TEST(EngineTest, CreateEngine_StreamedModelLoading_TinyGemma) {
+  auto model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/e2e_tests/data/tiny_gemma.litertlm";
+
+  std::shared_ptr<FileDataStream> file_stream;
+  ASSERT_OK_AND_ASSIGN(file_stream,
+                       FileDataStream::Create(model_path.string()));
+
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create(std::move(file_stream)));
+
+  auto engine_settings =
+      EngineSettings::CreateDefault(std::move(model_assets), Backend::CPU);
+  ASSERT_OK(engine_settings);
+  engine_settings->GetMutableMainExecutorSettings().SetMaxNumTokens(
+      kMaxNumTokens);
+  engine_settings->GetMutableMainExecutorSettings().SetCacheDir(":nocache");
+
+  absl::StatusOr<std::unique_ptr<Engine>> llm = CreateEngine(*engine_settings);
+  ASSERT_OK(llm);
+
+  absl::StatusOr<std::unique_ptr<Engine::Session>> session =
+      (*llm)->CreateSession(SessionConfig::CreateDefault());
+  ASSERT_OK(session);
+
+  std::vector<InputData> inputs;
+  inputs.emplace_back(InputText("Hello world!"));
+  ASSERT_OK((*session)->RunPrefill(inputs));
+
+  auto responses = (*session)->RunDecode();
+  ASSERT_OK(responses);
+  EXPECT_EQ(responses->GetTexts().size(), 1);
+  EXPECT_FALSE(responses->GetTexts()[0].empty());
+}
+#endif  // ENGINE_ADVANCED
 
 TEST(EngineTest, UpdateGpuEnableMetalResidencySet) {
   auto task_path =
