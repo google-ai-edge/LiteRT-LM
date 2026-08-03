@@ -164,6 +164,7 @@ ExecutorAudioData::ExecutorAudioData(
     int valid_tokens)
     : embeddings_(std::move(embeddings)),
       per_layer_embeddings_(std::move(per_layer_embeddings)),
+      unadapted_embeddings_(std::nullopt),
       valid_tokens_(valid_tokens) {}
 
 absl::StatusOr<const ::litert::TensorBuffer*>
@@ -200,6 +201,24 @@ ExecutorAudioData::GetMutablePerLayerEmbeddingsPtr() {
       "ExecutorAudioData::per_layer_embeddings_ is not set.");
 }
 
+absl::StatusOr<const ::litert::TensorBuffer*>
+ExecutorAudioData::GetUnadaptedEmbeddingsPtr() const {
+  if (unadapted_embeddings_.has_value()) {
+    return &unadapted_embeddings_.value();
+  }
+  return absl::NotFoundError(
+      "ExecutorAudioData::unadapted_embeddings_ is not set.");
+}
+
+absl::StatusOr<::litert::TensorBuffer*>
+ExecutorAudioData::GetMutableUnadaptedEmbeddingsPtr() {
+  if (unadapted_embeddings_.has_value()) {
+    return &unadapted_embeddings_.value();
+  }
+  return absl::NotFoundError(
+      "ExecutorAudioData::unadapted_embeddings_ is not set.");
+}
+
 int ExecutorAudioData::GetValidTokens() const { return valid_tokens_; }
 
 void ExecutorAudioData::SetEmbeddings(
@@ -210,6 +229,11 @@ void ExecutorAudioData::SetEmbeddings(
 void ExecutorAudioData::SetPerLayerEmbeddings(
     std::optional<::litert::TensorBuffer>&& per_layer_embeddings) {
   per_layer_embeddings_ = std::move(per_layer_embeddings);
+}
+
+void ExecutorAudioData::SetUnadaptedEmbeddings(
+    std::optional<::litert::TensorBuffer>&& unadapted_embeddings) {
+  unadapted_embeddings_ = std::move(unadapted_embeddings);
 }
 
 void ExecutorAudioData::SetValidTokens(int valid_tokens) {
@@ -230,6 +254,13 @@ absl::StatusOr<ExecutorAudioData> ExecutorAudioData::Duplicate() const {
     duplicated_audio_data.SetPerLayerEmbeddings(
         std::move(per_layer_embeddings_duplicate));
   }
+  if (unadapted_embeddings_.has_value()) {
+    LITERT_ASSIGN_OR_RETURN(
+        ::litert::TensorBuffer unadapted_embeddings_duplicate,
+        unadapted_embeddings_->Duplicate());
+    duplicated_audio_data.SetUnadaptedEmbeddings(
+        std::move(unadapted_embeddings_duplicate));
+  }
   duplicated_audio_data.SetValidTokens(valid_tokens_);
   return duplicated_audio_data;
 }
@@ -242,6 +273,10 @@ std::ostream& operator<<(std::ostream& os,
   os << "\n";
   PrintOptionalTensorBufferFieldFromStatusOr(
       os, "PerLayerEmbeddings", audio_data.GetPerLayerEmbeddingsPtr(),
+      kFieldIndent);
+  os << "\n";
+  PrintOptionalTensorBufferFieldFromStatusOr(
+      os, "UnadaptedEmbeddings", audio_data.GetUnadaptedEmbeddingsPtr(),
       kFieldIndent);
   os << "\n";
   os << kFieldIndent << "ValidTokens: " << audio_data.GetValidTokens();
