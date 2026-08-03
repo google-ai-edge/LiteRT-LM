@@ -116,6 +116,15 @@ pytype_strict_library(
     ],
 )
 
+pytype_strict_library(
+    name = "__init__",
+    srcs = ["__init__.py"],
+    deps = [
+        ":litertlm_builder",
+        ":litertlm_peek",
+    ],
+)
+
 py_test(
     name = "litertlm_builder_test",
     srcs = ["litertlm_builder_test.py"],
@@ -280,4 +289,17 @@ genrule(
         echo 'absl-py' >> $@
         echo 'tomli' >> $@
     """,
+)
+
+pytype_strict_binary(
+    name = "externalize_pipeline",
+    srcs = ["externalize_pipeline.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":litertlm_builder",
+        ":litertlm_core",
+        ":litertlm_peek",
+        "@litert//litert/tools:externalize_tflite_flatbuffer_lib",
+        "//third_party/py/tomli",
+    ],
 )

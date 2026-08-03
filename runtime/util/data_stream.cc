@@ -28,10 +28,8 @@
 namespace litert::lm {
 
 SubStream::~SubStream() {
-  if (parent_) {
-    // Note: We ignore errors here as we are in a destructor.
-    (void)parent_->Discard(offset_, size_);
-  }
+  // Destructors in Emscripten/WASM execute synchronously and cannot perform
+  // async operations like parent_->Discard().
 }
 
 absl::Status SubStream::ReadAndDiscard(void* buffer, uint64_t offset,
@@ -70,7 +68,7 @@ absl::Status SubStream::CheckBounds(uint64_t offset, uint64_t size) const {
   return absl::OkStatus();
 }
 
-absl::StatusOr<std::unique_ptr<DataStream>> SubStream::OpenSubStream(
+absl::StatusOr<std::shared_ptr<DataStream>> SubStream::OpenSubStream(
     uint64_t offset, uint64_t size) {
   // Check if the requested substream fits within this SubStream's bounds.
   // Note that the parent DataStream::OpenSubStream method doesn't do this for
@@ -81,7 +79,7 @@ absl::StatusOr<std::unique_ptr<DataStream>> SubStream::OpenSubStream(
   return DataStream::OpenSubStream(offset, size);
 }
 
-absl::StatusOr<std::unique_ptr<DataStream>> DataStream::OpenSubStream(
+absl::StatusOr<std::shared_ptr<DataStream>> DataStream::OpenSubStream(
     uint64_t offset, uint64_t size) {
   for (const auto& region : locked_regions_) {
     // Check for overlap: Is [offset, offset + size) overlapping with
@@ -95,7 +93,7 @@ absl::StatusOr<std::unique_ptr<DataStream>> DataStream::OpenSubStream(
     }
   }
   locked_regions_.emplace_back(offset, size);
-  return std::make_unique<SubStream>(this, offset, size);
+  return std::make_shared<SubStream>(shared_from_this(), offset, size);
 }
 
 }  // namespace litert::lm

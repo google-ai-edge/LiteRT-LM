@@ -294,4 +294,28 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
   return compilation_options;
 }
 
+absl::Status UpdateCompilationOptions(
+    const LlmExecutorSettings& executor_settings,
+    litert::Options& compilation_options) {
+  switch (executor_settings.GetBackend()) {
+    case Backend::GPU: {
+      LITERT_ASSIGN_OR_RETURN(auto& gpu_compilation_options,
+                              compilation_options.GetGpuOptions());
+      gpu_compilation_options.AddExternalTensorPattern("kv_cache_");
+      gpu_compilation_options.AddBufferStorageTensorPattern("kv_cache_");
+      gpu_compilation_options.AddExternalTensorPattern("param_tensor");
+      gpu_compilation_options.AddBufferStorageTensorPattern("param_tensor");
+      break;
+    }
+    case Backend::CPU: {
+      break;
+    }
+    default:
+      return absl::InvalidArgumentError(absl::StrCat(
+          "Unsupported backend: ", executor_settings.GetBackend()));
+  }
+
+  return absl::OkStatus();
+}
+
 }  // namespace litert::lm

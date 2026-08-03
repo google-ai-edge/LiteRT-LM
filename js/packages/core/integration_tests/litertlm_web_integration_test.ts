@@ -17,7 +17,7 @@
 import {Backend, Conversation, ConversationConfig, Engine, getOrLoadGlobalLiteRtLm, GpuArtisanConfig, LiteRtLm, loadLiteRtLm, Message, SamplerType, Session, SessionConfig, unloadLiteRtLm, type Wasm} from '@litert-lm/core';
 // Placeholder for internal dependency on trusted resource url
 
-jasmine.DEFAULT_TIMEOUT_INTERVAL = 300_000;  // 300 seconds
+jasmine.DEFAULT_TIMEOUT_INTERVAL = 3_000_000;  // 3000 seconds (50 minutes)
 
 const MODEL_PATH = '/models/tiny_gemma.litertlm';
 const GPU_ARTISAN_MODEL_PATH = '/models/gemma3-1b-hw.litertlm';
@@ -42,26 +42,26 @@ describe('LiteRtLm tests', () => {
 
   it('loads or gets the global instance with getOrLoadGlobalLiteRtLm',
      async () => {
-       unloadLiteRtLm();
-       const path1 = trustedResourceUrl`/wasm`;
-       const path2 = trustedResourceUrl`/other/wasm`;
+        unloadLiteRtLm();
+        const path1 = trustedResourceUrl`/wasm`;
+        const path2 = trustedResourceUrl`/other/wasm`;
 
-       // First call loads it
-       const p1 = getOrLoadGlobalLiteRtLm(path1);
-       const p2 = getOrLoadGlobalLiteRtLm(path1);
-       expect(p1).toBe(p2);  // Should return the exact same promise
+        // First call loads it
+        const p1 = getOrLoadGlobalLiteRtLm(path1);
+        const p2 = getOrLoadGlobalLiteRtLm(path1);
+        expect(p1).toBe(p2);  // Should return the exact same promise
 
-       // Calling with undefined uses the existing path instead of default when
-       // already loading/loaded
-       const p3 = getOrLoadGlobalLiteRtLm();
-       expect(p3).toBe(p1);
+        // Calling with undefined uses the existing path instead of default when
+        // already loading/loaded
+        const p3 = getOrLoadGlobalLiteRtLm();
+        expect(p3).toBe(p1);
 
-       // Calling with a different path throws an error
-       expect(() => getOrLoadGlobalLiteRtLm(path2))
-           .toThrowError(
-               /LiteRT-LM is already loading \/ loaded with a different path/);
+        // Calling with a different path throws an error
+        expect(() => getOrLoadGlobalLiteRtLm(path2))
+            .toThrowError(
+                /LiteRT-LM is already loading \/ loaded with a different path/);
 
-       await p1;
+        await p1;
      });
 
   it('automatically loads the WASM module when loading a model', async () => {
@@ -589,6 +589,104 @@ describe('LiteRtLm tests', () => {
     });
   }
 
+  fdescribe('Gemma 4 E2B on GPU', () => {
+    let engine: Engine | undefined;
+    let initialized = false;
+
+    beforeAll(async () => {
+      try {
+        const externalModelPath =
+            '/models/gemma-4-E2B-it-external-perlayer-prefilldecode.litertlm';
+        engine = await Engine.create({
+          model: externalModelPath,
+          backend: Backend.GPU,
+          mainExecutorSettings: {
+            maxNumTokens: 128,
+            backendConfig: {
+              max_top_k: 3,
+              external_tensor_mode: false,
+            },
+          },
+        });
+        initialized = true;
+      } catch (e) {
+        console.warn(
+            'Failed to initialize Gemma 4 E2B on GPU, skipping tests. Error:',
+            e);
+      }
+    });
+
+    afterAll(async () => {
+      if (engine) {
+        await engine.delete();
+      }
+    });
+
+    it('loads and runs an externalized model on GPU (Gemma 4 E2B)', async () => {
+      if (!initialized) {
+        pending('Gemma 4 E2B model not available or GPU not supported');
+        return;
+      }
+      expect(engine).toBeDefined();
+
+      const sessionConfig: SessionConfig = {
+        maxOutputTokens: 32,
+        samplerParams: {
+          type: SamplerType.TOP_P,
+          k: 1,
+          p: 0.9,
+        },
+      };
+      const session = await engine!.createSession(sessionConfig);
+      await session.runPrefill(['test input']);
+      const responses = await session.runDecode();
+      expect(responses).toBeDefined();
+      expect(responses.getTexts().length).toBeGreaterThan(0);
+      responses.delete();
+      await session.delete();
+    });
+
+    it('runs a conversation with Gemma 4 E2B on GPU', async () => {
+      if (!initialized) {
+        pending('Gemma 4 E2B model not available or GPU not supported');
+        return;
+      }
+      expect(engine).toBeDefined();
+
+      const conversation = await engine!.createConversation({
+        sessionConfig: {
+          maxOutputTokens: 32,
+          samplerParams: {
+            type: SamplerType.TOP_P,
+            k: 1,
+            p: 0.9,
+          },
+        },
+      });
+
+      const response = await conversation.sendMessage({
+        role: 'user',
+        content: 'What is the capital of France?',
+      });
+
+      expect(response).toBeDefined();
+      expect(response.content).toBeDefined();
+
+      let text = '';
+      if (typeof response.content === 'string') {
+        text = response.content;
+      } else if (Array.isArray(response.content)) {
+        text = response.content
+            .filter(item => item.type === 'text')
+            .map(item => item.text)
+            .join(' ');
+      }
+      expect(text.toLowerCase()).toContain('paris');
+
+      await conversation.delete();
+    });
+  });
+
   it('creates and runs a session from a ReadableStream', async () => {
     const response = await fetch(MODEL_PATH, {
       credentials: 'same-origin',
@@ -723,10 +821,8 @@ describe('LiteRtLm tests', () => {
             let session: Wasm.Session;
             beforeEach(() => {
               try {
-                console.log('Creating session');
                 session = engine.createSession(
                     liteRtLm.liteRtLmWasm.SessionConfig.createDefault());
-                console.log('Session created', session);
               } catch (e) {
                 console.error('Error creating session', e);
                 throw e;

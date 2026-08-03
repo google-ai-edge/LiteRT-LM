@@ -408,7 +408,9 @@ cc_library(
     srcs = ["litert_util.cc"],
     hdrs = ["litert_util.h"],
     deps = [
+        ":litert_lm_loader",
         ":logging",
+        ":scoped_file",
         "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings:string_view",
@@ -419,6 +421,7 @@ cc_library(
         "//runtime/engine:engine_settings",
         "//runtime/executor:executor_settings_base",
         "//runtime/executor:magic_number_configs_helper",
+        "//schema/core:litertlm_header_schema",
     ],
 )
 

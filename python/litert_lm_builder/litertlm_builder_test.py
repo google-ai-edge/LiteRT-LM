@@ -585,6 +585,68 @@ class LitertlmBuilderTest(parameterized.TestCase):
           self._create_dummy_file("tokenizer.json", b"")
       )
 
+  def test_section_sorting(self):
+    """Tests that sections are sorted correctly (non-weights first, weights last in compilation order)."""
+    sp_path = self._create_dummy_file("sp.model", b"dummy sp content")
+    tflite_path = self._create_dummy_file(
+        "model.tflite", b"dummy tflite content"
+    )
+    weights_path = self._create_dummy_file(
+        "model.weights", b"dummy weights content"
+    )
+
+    builder = litertlm_builder.LitertLmFileBuilder()
+    self._add_system_metadata(builder)
+
+    builder.add_tflite_weights(
+        weights_path, litertlm_builder.TfLiteModelType.PER_LAYER_EMBEDDER
+    )
+    builder.add_tflite_model(
+        tflite_path, litertlm_builder.TfLiteModelType.PREFILL_DECODE
+    )
+    builder.add_tflite_weights(
+        weights_path, litertlm_builder.TfLiteModelType.PREFILL_DECODE
+    )
+    builder.add_sentencepiece_tokenizer(sp_path)
+    builder.add_tflite_weights(
+        weights_path, litertlm_builder.TfLiteModelType.EMBEDDER
+    )
+
+    path = os.path.join(self.temp_dir, "sorted.litertlm")
+    with litertlm_core.open_file(path, "wb") as f:
+      builder.build(f)
+
+    self.assertEqual(
+        builder._sections[0].data_type, schema.AnySectionDataType.TFLiteModel
+    )
+    self.assertEqual(
+        builder._sections[1].data_type, schema.AnySectionDataType.SP_Tokenizer
+    )
+
+    self.assertEqual(
+        builder._sections[2].data_type, schema.AnySectionDataType.TFLiteWeights
+    )
+    self.assertEqual(
+        litertlm_builder._get_model_type(builder._sections[2]),
+        litertlm_builder.TfLiteModelType.PREFILL_DECODE,
+    )
+
+    self.assertEqual(
+        builder._sections[3].data_type, schema.AnySectionDataType.TFLiteWeights
+    )
+    self.assertEqual(
+        litertlm_builder._get_model_type(builder._sections[3]),
+        litertlm_builder.TfLiteModelType.EMBEDDER,
+    )
+
+    self.assertEqual(
+        builder._sections[4].data_type, schema.AnySectionDataType.TFLiteWeights
+    )
+    self.assertEqual(
+        litertlm_builder._get_model_type(builder._sections[4]),
+        litertlm_builder.TfLiteModelType.PER_LAYER_EMBEDDER,
+    )
+
   def test_end_to_end(self):
     """Tests a more complex end-to-end scenario with multiple sections."""
     sp_path = self._create_dummy_file("sp.model", b"dummy sp content")

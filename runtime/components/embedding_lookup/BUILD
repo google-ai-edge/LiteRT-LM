@@ -138,6 +138,7 @@ cc_library(
         "@litert//litert/cc:litert_environment",
         "@litert//litert/cc:litert_macros",
         "@litert//litert/cc:litert_model",
+        "@litert//litert/cc:litert_options",
         "@litert//litert/cc:litert_tensor_buffer",
         "//runtime/executor:llm_executor_io_types",
         "//runtime/util:litert_status_util",
