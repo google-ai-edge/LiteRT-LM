@@ -27,6 +27,8 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_matchers.h"  // from @com_google_absl
 #include "absl/synchronization/notification.h"  // from @com_google_absl
+#include "c/conversation.h"
+#include "c/conversation_internal.h"
 #include "c/engine_internal.h"
 #include "runtime/conversation/conversation.h"
 #include "runtime/conversation/io_types.h"

@@ -25,8 +25,7 @@
 #include "c/engine.h"
 #include "runtime/components/logits_processor/no_repeat_ngram_config.h"
 #include "runtime/components/logits_processor/repetition_penalty_config.h"
-#include "runtime/conversation/conversation.h"
-#include "runtime/conversation/thinking_config.h"
+#include "runtime/components/logits_processor/suppress_tokens_config.h"
 #include "runtime/engine/engine.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
@@ -63,17 +62,6 @@ struct LiteRtLmSuppressTokensConfig {
   litert::lm::SuppressTokensConfig suppress_tokens_config;
 };
 
-struct LiteRtLmConversationOptionalArgs {
-  std::optional<litert::lm::RepetitionPenaltyConfig> repetition_penalty_config;
-  std::optional<litert::lm::NoRepeatNgramConfig> no_repeat_ngram_config;
-  std::optional<litert::lm::SuppressTokensConfig> suppress_tokens_config;
-  std::optional<int> visual_token_budget;
-  std::optional<int> max_output_tokens;
-  std::optional<litert::lm::ThinkingConfig> thinking_config;
-  LiteRtLmConstraintType constraint_type = kLiteRtLmConstraintTypeNone;
-  std::string constraint_string;
-};
-
 struct LiteRtLmEngineSettings {
   std::unique_ptr<litert::lm::EngineSettings> settings;
 };
@@ -94,42 +82,10 @@ struct LiteRtLmBenchmarkInfo {
   litert::lm::BenchmarkInfo benchmark_info;
 };
 
-struct LiteRtLmConversation {
-  std::unique_ptr<litert::lm::Conversation> conversation;
-  // This field stores the result of the last call to
-  // `litert_lm_conversation_render_message_to_string`. This ties the lifetime
-  // of the returned `const char*` to the `LiteRtLmConversation` object,
-  // ensuring memory safety for the C API caller without requiring explicit
-  // per-call deallocation.
-  std::string last_rendered_message;
-  // This field stores the result of the last call to
-  // `litert_lm_conversation_render_preface_to_string`.
-  std::string last_rendered_preface;
-};
-
-struct LiteRtLmJsonResponse {
-  std::string json_string;
-};
-
 // TODO: b/483172229 - Migrate to use SessionConfig instead of unique_ptr to
 // SessionConfig for consistency and efficiency.
 struct LiteRtLmSessionConfig {
   std::unique_ptr<litert::lm::SessionConfig> config;
-};
-
-struct LiteRtLmConversationConfig {
-  std::optional<litert::lm::SessionConfig> session_config;
-  std::string system_message_json;
-  std::string tools_json;
-  std::string messages_json;
-  std::string extra_context_json;
-  std::string prompt_template;
-  bool enable_constrained_decoding = false;
-  std::optional<bool> filter_channel_content_from_kv_cache;
-  bool stream_tool_calls = false;
-  std::string stream_tool_calls_channel_name = "tool_call";
-  std::optional<litert::lm::ThinkingConfig> thinking_config;
-  std::optional<LiteRtLmConstraintProviderType> constraint_provider_type;
 };
 
 struct LiteRtLmDetokenizeResult {

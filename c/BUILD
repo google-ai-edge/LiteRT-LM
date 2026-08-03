@@ -26,11 +26,13 @@ package(
 licenses(["notice"])
 
 exports_files([
+    "conversation.cc",
+    "conversation.h",
     "engine.cc",
     "engine.h",
 ])
 
-ENGINE_COMMON_DEPS = [
+ENGINE_LITE_COMMON_DEPS = [
     ":engine_internal",
     "@com_google_absl//absl/base:core_headers",
     "@com_google_absl//absl/base:log_severity",
@@ -44,18 +46,10 @@ ENGINE_COMMON_DEPS = [
     "@com_google_absl//absl/strings:str_format",
     "@com_google_absl//absl/strings:string_view",
     "@com_google_absl//absl/time",
-    "@nlohmann_json//:json",
     "@litert//support/tokenizer",
-    "//runtime/components:prompt_template",
     "//runtime/components/logits_processor:no_repeat_ngram_config",
     "//runtime/components/logits_processor:repetition_penalty_config",
     "//runtime/components/logits_processor:suppress_tokens_config",
-    "//runtime/components/logits_processor/constrained_decoding:llg_constraint_config",
-    "//runtime/conversation",
-    "//runtime/conversation:io_types",
-    "//runtime/conversation:thinking_config",
-    "//runtime/conversation/model_data_processor:config_registry",
-    "//runtime/conversation/model_data_processor:gemma4_data_processor_config",
     "//runtime/engine:engine_factory",
     "//runtime/engine:engine_interface",
     "//runtime/engine:engine_settings",
@@ -70,10 +64,33 @@ ENGINE_COMMON_DEPS = [
     "//runtime/util:scoped_file",
 ]
 
+CONVERSATION_DEPS = [
+    ":conversation_internal",
+    "@nlohmann_json//:json",
+    "//runtime/components:prompt_template",
+    "//runtime/components/logits_processor/constrained_decoding:llg_constraint_config",
+    "//runtime/conversation",
+    "//runtime/conversation:io_types",
+    "//runtime/conversation:thinking_config",
+    "//runtime/conversation/model_data_processor:config_registry",
+    "//runtime/conversation/model_data_processor:gemma4_data_processor_config",
+]
+
+ENGINE_COMMON_DEPS = ENGINE_LITE_COMMON_DEPS + CONVERSATION_DEPS
+
+# Header library for engine + session C API.
 cc_library(
     name = "engine_headers",
     hdrs = ["engine.h"],
     visibility = ["//visibility:public"],
+)
+
+# Header library for engine + session + conversation C API.
+cc_library(
+    name = "conversation_headers",
+    hdrs = ["conversation.h"],
+    visibility = ["//visibility:public"],
+    deps = [":engine_headers"],
 )
 
 cc_library(
@@ -84,8 +101,7 @@ cc_library(
         ":engine_headers",
         "//runtime/components/logits_processor:no_repeat_ngram_config",
         "//runtime/components/logits_processor:repetition_penalty_config",
-        "//runtime/conversation",
-        "//runtime/conversation:thinking_config",
+        "//runtime/components/logits_processor:suppress_tokens_config",
         "//runtime/engine:engine_interface",
         "//runtime/engine:engine_settings",
         "//runtime/engine:io_types",
@@ -94,9 +110,83 @@ cc_library(
 )
 
 cc_library(
-    name = "engine",
+    name = "conversation_internal",
+    hdrs = ["conversation_internal.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":conversation_headers",
+        ":engine_internal",
+        "//runtime/components/logits_processor:no_repeat_ngram_config",
+        "//runtime/components/logits_processor:repetition_penalty_config",
+        "//runtime/components/logits_processor:suppress_tokens_config",
+        "//runtime/conversation",
+        "//runtime/conversation:thinking_config",
+        "//runtime/engine:engine_settings",
+    ],
+)
+
+# LiteRT LM C API target for Engine + Session only.
+# Use this target when only low-level engine and session APIs (prefill, decode, scoring)
+# are required, avoiding expensive conversation dependencies (prompt templates, JSON handling, etc.).
+cc_library(
+    name = "engine_lite",
     srcs = ["engine.cc"],
     hdrs = ["engine.h"],
+    visibility = ["//visibility:public"],
+    deps = ENGINE_LITE_COMMON_DEPS + [
+        "//runtime/core:engine_impl",
+    ],
+    alwayslink = True,
+)
+
+# CPU-only variant of :engine_lite for Engine + Session functionality.
+cc_library(
+    name = "engine_lite_cpu",
+    srcs = ["engine.cc"],
+    hdrs = ["engine.h"],
+    visibility = ["//visibility:public"],
+    deps = ENGINE_LITE_COMMON_DEPS + [
+        "//runtime/core:engine_advanced_impl_cpu_only",
+    ],
+)
+
+cc_test(
+    name = "engine_lite_test",
+    srcs = ["engine_lite_test.cc"],
+    data = [
+        "//runtime/testdata",
+    ],
+    tags = ["requires-mac-inputs:hard"],
+    target_compatible_with = select({
+        "@platforms//os:ios": [],
+        "@platforms//os:linux": [],
+        "@platforms//os:osx": [],
+        "@platforms//os:windows": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":engine_internal",
+        ":engine_lite",
+        "@com_google_googletest//:gtest_main",
+        "//runtime/engine:engine_settings",
+        "//runtime/executor:executor_settings_base",
+        "//runtime/executor:llm_executor_settings",
+    ],
+)
+
+# LiteRT LM C API target for Engine + Session + Conversation.
+# Use this target when full conversation capabilities (message management, system prompts,
+# tool calls, constrained decoding, thinking config) are required.
+cc_library(
+    name = "engine",
+    srcs = [
+        "conversation.cc",
+        "engine.cc",
+    ],
+    hdrs = [
+        "conversation.h",
+        "engine.h",
+    ],
     visibility = ["//visibility:public"],
     deps = ENGINE_COMMON_DEPS + [
         "//runtime/core:engine_impl",
@@ -104,10 +194,17 @@ cc_library(
     alwayslink = True,
 )
 
+# CPU-only variant of :engine for Engine + Session + Conversation functionality.
 cc_library(
     name = "engine_cpu",
-    srcs = ["engine.cc"],
-    hdrs = ["engine.h"],
+    srcs = [
+        "conversation.cc",
+        "engine.cc",
+    ],
+    hdrs = [
+        "conversation.h",
+        "engine.h",
+    ],
     visibility = ["//visibility:public"],
     deps = ENGINE_COMMON_DEPS + [
         "//runtime/core:engine_advanced_impl_cpu_only",
@@ -129,7 +226,10 @@ cc_test(
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     deps = [
+        ":conversation_headers",
+        ":conversation_internal",
         ":engine",
+        ":engine_headers",
         ":engine_internal",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
@@ -147,6 +247,7 @@ cc_test(
 cc_binary(
     name = "litert-lm",
     srcs = [
+        "conversation.cc",
         "engine.cc",
     ],
     copts = ["-fvisibility=hidden"],
@@ -170,6 +271,7 @@ cc_binary(
     }),
     linkshared = 1,
     deps = ENGINE_COMMON_DEPS + [
+        ":conversation_headers",
         ":engine_headers",
         "//runtime/core:engine_impl",
     ] + select({
