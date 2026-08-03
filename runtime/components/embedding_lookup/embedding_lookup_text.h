@@ -61,6 +61,10 @@ class EmbeddingLookupText : public EmbeddingLookup {
       std::optional<ScopedFile> external_weight_file = std::nullopt,
       litert::Options::ScopedWeightSectionMap external_weight_sections = {});
 
+  static absl::StatusOr<std::unique_ptr<EmbeddingLookupText>> Create(
+      litert::Environment& env, litert::CompiledModel compiled_model,
+      std::optional<std::string> signature_key = std::nullopt);
+
   // For a given token, looks up the embedding and stores it in the
   // provided vector. The caller is responsible for ensuring that the vector is
   // the correct size for the embedding.
@@ -119,15 +123,25 @@ class EmbeddingLookupText : public EmbeddingLookup {
 
  protected:
   EmbeddingLookupText(
-      litert::Environment& env, const litert::Model* absl_nonnull model,
+      litert::Environment& env, const litert::Model* model,
       std::optional<std::string> signature_key,
       std::optional<ScopedFile> external_weight_file,
       litert::Options::ScopedWeightSectionMap external_weight_sections)
       : env_(env),
-        model_(*model),
+        model_(model),
         signature_key_(std::move(signature_key)),
         external_weight_file_(std::move(external_weight_file)),
         external_weight_sections_(std::move(external_weight_sections)) {}
+
+  // Creates a EmbeddingLookupText instance with an already compiled LiteRT
+  // model. Used in the streaming model loading path.
+  EmbeddingLookupText(litert::Environment& env,
+                      litert::CompiledModel compiled_model,
+                      std::optional<std::string> signature_key)
+      : env_(env),
+        model_(nullptr),
+        compiled_model_(std::move(compiled_model)),
+        signature_key_(std::move(signature_key)) {}
 
   // Loads the provided model. This must be called before Lookup.
   absl::Status Initialize();
@@ -139,8 +153,8 @@ class EmbeddingLookupText : public EmbeddingLookup {
   // The environment for the embedding lookup.
   litert::Environment& env_;
   // The model for the embedding lookup. The actual model instance is owned by
-  // the model resources.
-  const litert::Model& model_;
+  // the model resources. Can be null if created with pre-compiled model.
+  const litert::Model* model_;
   // The compiled model for the embedding model.
   std::optional<litert::CompiledModel> compiled_model_;
 
