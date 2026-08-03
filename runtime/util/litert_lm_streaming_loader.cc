@@ -22,6 +22,7 @@
 #include <string>
 #include <utility>
 
+#include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
@@ -41,6 +42,12 @@ absl::Status LitertLmStreamingLoader::LoadHeader() {
   HeaderPreamble header_preamble;
   ABSL_RETURN_IF_ERROR(data_stream_->ReadAndDiscard(&header_preamble, 0,
                                                     sizeof(HeaderPreamble)));
+  ABSL_VLOG(1) << "[StreamingLoader]: Loaded preamble. Magic: "
+               << std::string(header_preamble.magic, 8)
+               << ", version: " << header_preamble.major_version << "."
+               << header_preamble.minor_version << "."
+               << header_preamble.patch_version
+               << ", header_end_offset: " << header_preamble.header_end_offset;
 
   // Check the magic number.
   std::string magic_str(header_preamble.magic, 8);
@@ -85,6 +92,10 @@ absl::Status LitertLmStreamingLoader::LoadHeader() {
   ordered_section_info_.reserve(objects->size());
   for (size_t i = 0; i < objects->size(); ++i) {
     const schema::SectionObject* section = objects->Get(i);
+    ABSL_VLOG(1) << "[StreamingLoader]: Section " << i
+                 << ", type: " << static_cast<int>(section->data_type())
+                 << ", begin: " << section->begin_offset()
+                 << ", end: " << section->end_offset();
     ABSL_ASSIGN_OR_RETURN(auto key_and_section_hint,
                           ExtractBufferKeyAndTfLiteSectionHint(section));
     ordered_section_info_.push_back(
