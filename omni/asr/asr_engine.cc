@@ -91,6 +91,10 @@ absl::StatusOr<std::unique_ptr<AsrEngine>> AsrEngine::Create(
   LITERT_ASSIGN_OR_RETURN(auto environment, ::litert::Environment::Create({}));
   LITERT_ASSIGN_OR_RETURN(auto options, ::litert::Options::Create());
   uint32_t accelerators = static_cast<uint32_t>(::litert::HwAccelerators::kCpu);
+  if (config.num_threads > 0) {
+    LITERT_ASSIGN_OR_RETURN(auto& cpu_options, options.GetCpuOptions());
+    cpu_options.SetNumThreads(config.num_threads);
+  }
   if (config.backend == AsrEngineConfig::Backend::kGpu) {
     accelerators |= static_cast<uint32_t>(::litert::HwAccelerators::kGpu);
     LITERT_ASSIGN_OR_RETURN(auto& gpu_options, options.GetGpuOptions());

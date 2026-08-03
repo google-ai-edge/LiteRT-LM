@@ -46,6 +46,7 @@ ABSL_FLAG(std::string, cache_dir, "/tmp/asr_models",
           "Cache directory to download and store models and tokenizers.");
 ABSL_FLAG(std::string, backend, "cpu",
           "Hardware backend accelerator: cpu, gpu, or npu.");
+ABSL_FLAG(int, num_threads, 4, "Number of CPU threads for LiteRT inference.");
 
 namespace {
 
@@ -67,7 +68,8 @@ absl::Status DownloadFileWithCurl(absl::string_view url,
 
 absl::StatusOr<litert::omni::asr::AsrEngineConfig> LoadConfigFromJsonFile(
     absl::string_view json_path, absl::string_view model_name,
-    absl::string_view cache_dir, absl::string_view backend_flag) {
+    absl::string_view cache_dir, absl::string_view backend_flag,
+    int num_threads) {
   std::ifstream f(std::string(json_path).c_str());
   if (!f.is_open()) {
     return absl::NotFoundError(
@@ -88,6 +90,7 @@ absl::StatusOr<litert::omni::asr::AsrEngineConfig> LoadConfigFromJsonFile(
   litert::omni::asr::AsrEngineConfig config;
   config.model_name = std::string(model_name);
   config.cache_dir = std::string(cache_dir);
+  config.num_threads = num_threads;
 
   if (m.contains("modelRemoteUrl")) {
     config.model_url = m["modelRemoteUrl"].get<std::string>();
@@ -158,14 +161,14 @@ absl::Status RunAsrRunner(absl::string_view model_name,
                           absl::string_view metadata_path,
                           absl::string_view audio_path,
                           absl::string_view cache_dir,
-                          absl::string_view backend_flag) {
+                          absl::string_view backend_flag, int num_threads) {
   if (audio_path.empty()) {
     return absl::InvalidArgumentError("--audio_path flag is required.");
   }
 
   ABSL_ASSIGN_OR_RETURN(
       auto config, LoadConfigFromJsonFile(metadata_path, model_name, cache_dir,
-                                          backend_flag));
+                                          backend_flag, num_threads));
   ABSL_ASSIGN_OR_RETURN(
       auto engine, litert::omni::asr::AsrEngine::Create(std::move(config),
                                                         DownloadFileWithCurl));
@@ -201,7 +204,7 @@ int main(int argc, char* argv[]) {
   absl::Status status = RunAsrRunner(
       absl::GetFlag(FLAGS_model_name), absl::GetFlag(FLAGS_metadata_path),
       absl::GetFlag(FLAGS_audio_path), absl::GetFlag(FLAGS_cache_dir),
-      absl::GetFlag(FLAGS_backend));
+      absl::GetFlag(FLAGS_backend), absl::GetFlag(FLAGS_num_threads));
   if (!status.ok()) {
     ABSL_LOG(ERROR) << "ASR Runner failed: " << status;
     return 1;
