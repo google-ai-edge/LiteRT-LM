@@ -22,6 +22,7 @@
 #include "runtime/components/model_resources.h"
 #include "runtime/engine/embedding_engine_settings.h"
 #include "runtime/engine/engine_settings.h"
+#include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/magic_number_configs_helper.h"
 
 namespace litert::lm {
@@ -38,6 +39,11 @@ absl::StatusOr<OwnedEnvironment> CreateEnvironment(
 
 absl::StatusOr<OwnedEnvironment> CreateEnvironment(
     EmbeddingEngineSettings& settings, ModelResources* model_resources);
+
+// Returns true if the model's main prefill/decode TFLite model stores its
+// weights in a separate TFLiteWeights section. Always returns false for
+// data-stream-backed assets.
+absl::StatusOr<bool> ModelHasExternalWeights(const ModelAssets& model_assets);
 
 }  // namespace litert::lm
 

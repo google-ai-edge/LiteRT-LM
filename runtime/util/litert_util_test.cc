@@ -499,5 +499,42 @@ TEST(LiteRtUtilTest,
 #endif
 }
 
+std::string E2eTestModelPath(absl::string_view file_name) {
+  return (std::filesystem::path(::testing::SrcDir()) /
+          "litert_lm/runtime/e2e_tests/data" /
+          std::string(file_name))
+      .string();
+}
+
+TEST(LiteRtUtilTest, ModelHasExternalWeights_ExternalWeightsModel) {
+  ASSERT_OK_AND_ASSIGN(
+      ModelAssets model_assets,
+      ModelAssets::Create(E2eTestModelPath("tiny_gemma_external.litertlm")));
+  ASSERT_OK_AND_ASSIGN(bool has_external_weights,
+                       ModelHasExternalWeights(model_assets));
+  EXPECT_TRUE(has_external_weights);
+}
+
+TEST(LiteRtUtilTest, ModelHasExternalWeights_ExternalWeightsModelScopedFile) {
+  ASSERT_OK_AND_ASSIGN(
+      ScopedFile file,
+      ScopedFile::Open(E2eTestModelPath("tiny_gemma_external.litertlm")));
+  ASSERT_OK_AND_ASSIGN(
+      ModelAssets model_assets,
+      ModelAssets::Create(std::make_shared<ScopedFile>(std::move(file))));
+  ASSERT_OK_AND_ASSIGN(bool has_external_weights,
+                       ModelHasExternalWeights(model_assets));
+  EXPECT_TRUE(has_external_weights);
+}
+
+TEST(LiteRtUtilTest, ModelHasExternalWeights_EmbeddedWeightsModel) {
+  ASSERT_OK_AND_ASSIGN(
+      ModelAssets model_assets,
+      ModelAssets::Create(E2eTestModelPath("tiny_gemma.litertlm")));
+  ASSERT_OK_AND_ASSIGN(bool has_external_weights,
+                       ModelHasExternalWeights(model_assets));
+  EXPECT_FALSE(has_external_weights);
+}
+
 }  // namespace
 }  // namespace litert::lm

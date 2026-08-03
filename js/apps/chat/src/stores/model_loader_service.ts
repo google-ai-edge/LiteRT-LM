@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import {Backend, Engine, getOrLoadGlobalLiteRtLm, GpuArtisanConfig} from '@litert-lm/core';
+import {Engine, getOrLoadGlobalLiteRtLm, GpuArtisanConfig} from '@litert-lm/core';
 
 import {teeStream} from '../tee_stream.js';
 
@@ -275,7 +275,6 @@ export class ModelLoaderService {
 
       this.engine = await this.createEngine({
         model: modelInput,
-        backend: Backend.GPU_ARTISAN,
         mainExecutorSettings: {
           maxNumTokens: settings.contextLength,
           backendConfig: {

@@ -38,6 +38,8 @@
 #include "runtime/proto/llm_model_type.pb.h"
 #include "runtime/proto/sampler_params.pb.h"
 #include "runtime/proto/token.pb.h"
+#include "runtime/util/file_data_stream.h"
+#include "runtime/util/litert_lm_streaming_loader.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
 #include "support/tokenizer/tokenizer.h"
 

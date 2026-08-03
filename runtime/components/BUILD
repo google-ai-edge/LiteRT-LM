@@ -513,6 +513,7 @@ cc_test(
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
         "//runtime/proto:embedding_metadata_cc_proto",
+        "//runtime/proto:executor_metadata_cc_proto",
         "//runtime/proto:llm_metadata_cc_proto",
         "//runtime/proto:token_cc_proto",
         "//runtime/util:data_stream",

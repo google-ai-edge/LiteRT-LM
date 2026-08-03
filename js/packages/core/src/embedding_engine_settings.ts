@@ -74,7 +74,6 @@ const DEFAULT_MAX_INPUT_LENGTH = 1024;
 export function fillWasmEmbeddingEngineSettingsFromEmbeddingEngineSettings(
     wasmSettings: WasmEmbeddingEngineSettings,
     settings: EmbeddingEngineSettings,
-    backend: Backend,
 ): void {
   const wasmExecutorSettings = wasmSettings.getMutableMainExecutorSettings();
   wasmExecutorSettings.setCacheDir(':nocache');
