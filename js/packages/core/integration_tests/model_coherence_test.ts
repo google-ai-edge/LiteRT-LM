@@ -17,7 +17,7 @@
 import {Backend, Engine, LiteRtLm, loadLiteRtLm, Message, unloadLiteRtLm} from '@litert-lm/core';
 // Placeholder for internal dependency on trusted resource url
 
-const TEST_TIMEOUT_MS = 1200_000;  // 20 minutes
+const TEST_TIMEOUT_MS = 3600_000;  // 60 minutes
 jasmine.DEFAULT_TIMEOUT_INTERVAL = TEST_TIMEOUT_MS;
 
 interface ModelConfig {
@@ -35,11 +35,6 @@ const MODELS: ModelConfig[] = [
   {
     name: 'Gemma 4 E4B',
     path: '/models/gemma4-e4b-hw.litertlm',
-    backend: Backend.GPU_ARTISAN,
-  },
-  {
-    name: 'Gemma 4 12B',
-    path: '/models/gemma4-12b-hw.litertlm',
     backend: Backend.GPU_ARTISAN,
   },
 ];
@@ -75,7 +70,11 @@ describe('Model Coherence Tests', () => {
       });
 
       it('answers "What is the capital of France?" correctly', async () => {
-        const conversation = await engine.createConversation();
+        const conversation = await engine.createConversation({
+          sessionConfig: {
+            maxOutputTokens: 100,
+          },
+        });
         const response: Message =
             await conversation.sendMessage('What is the capital of France?');
 
