@@ -54,6 +54,7 @@ cc_library(
         "//runtime/executor:executor_settings_base",
         "//runtime/executor:vision_executor_settings",
         "//runtime/proto:embedding_metadata_cc_proto",
+        "//runtime/proto:engine_cc_proto",
         "//runtime/util:litert_status_util",
     ],
 )
@@ -64,6 +65,7 @@ cc_library(
     deps = [
         ":io_types",
         "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/types:optional",
     ],
 )
 
@@ -330,20 +332,21 @@ cc_binary(
         "@com_google_absl//absl/base:log_severity",
         "@com_google_absl//absl/flags:flag",
         "@com_google_absl//absl/flags:parse",
+        "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/log:globals",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings",
         "@litert//litert/cc:litert_environment",
-        "@litert//litert/cc/internal:scoped_file",
         "@litert//support/preprocessor:image_preprocessor",
         "@litert//support/preprocessor:image_preprocessor_impl",  # buildcleaner: keep
         "//runtime/components:model_resources",
-        "//runtime/components:model_resources_litert_lm",
         "//runtime/core:embedding_engine_impl",
         "//runtime/executor:executor_settings_base",
-        "//runtime/util:litert_lm_loader",
+        "//runtime/executor:litert_compiled_model_executor_utils",
         "//runtime/util:litert_status_util",
         "//runtime/util:litert_util",
+        "//runtime/util:memory_mapped_file",
+        "//runtime/util:scoped_file",
     ],
 )
 

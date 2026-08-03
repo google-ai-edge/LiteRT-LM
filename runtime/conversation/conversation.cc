@@ -70,6 +70,8 @@ constexpr absl::string_view kUser = "user";
 constexpr absl::string_view kChannelsKey = "channels";
 constexpr absl::string_view kChannelContentCheckpoint =
     "channel_content_checkpoint";
+constexpr absl::string_view kStartContentCheckpoint =
+    "start_content_checkpoint";
 
 bool IsEmptyInputError(const absl::Status& status) {
   return absl::IsInvalidArgument(status) &&
@@ -152,7 +154,7 @@ absl::StatusOr<ConversationConfig> ConversationConfig::CreateInternal(
     bool filter_channel_content_from_kv_cache,
     bool return_error_on_parse_failure, bool return_error_on_max_tokens_reached,
     std::optional<ThinkingConfig> thinking_config, bool stream_tool_calls,
-    const std::string& stream_tool_calls_channel_name) {
+    const std::string& stream_tool_calls_channel_name, bool enable_rewinding) {
   if (preface.has_value() && !std::holds_alternative<JsonPreface>(*preface)) {
     return absl::InvalidArgumentError("Only JsonPreface is supported for now.");
   }
@@ -220,7 +222,7 @@ absl::StatusOr<ConversationConfig> ConversationConfig::CreateInternal(
       std::move(constraint_provider_config), std::move(channels),
       filter_channel_content_from_kv_cache, return_error_on_parse_failure,
       return_error_on_max_tokens_reached, thinking_config, stream_tool_calls,
-      stream_tool_calls_channel_name);
+      stream_tool_calls_channel_name, enable_rewinding);
 }
 
 absl::StatusOr<std::string>
@@ -582,6 +584,10 @@ absl::Status Conversation::SendMessageAsync(
     } else {
       history_.push_back(message);
     }
+  }
+
+  if (!config_.enable_rewinding() && was_history_empty) {
+    ABSL_RETURN_IF_ERROR(session_->SaveCheckpoint(kStartContentCheckpoint));
   }
 
   // If channel content (e.g. reasoning) needs to be filtered from the KV cache,
@@ -1040,8 +1046,15 @@ Conversation::RewindAndGetInputDataVector(const OptionalArgs& optional_args) {
     return std::vector<InputData>();
   }
 
-  // Rewind the session to the saved checkpoint.
-  ABSL_RETURN_IF_ERROR(session_->RewindToCheckpoint(kChannelContentCheckpoint));
+  // If rewinding enabled, rewind the session to the saved checkpoint.
+  if (config_.enable_rewinding()) {
+    ABSL_RETURN_IF_ERROR(
+        session_->RewindToCheckpoint(kChannelContentCheckpoint));
+  } else {
+    // Otherwise rewind to the beginning.
+    ABSL_RETURN_IF_ERROR(session_->RewindToCheckpoint(kStartContentCheckpoint));
+    checkpoint_message_index_ = 0;
+  }
 
   // Get the InputData vector for the messages from the checkpoint onward.
   ABSL_ASSIGN_OR_RETURN(

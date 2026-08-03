@@ -15,6 +15,7 @@
 #include "runtime/executor/litert/state.h"
 
 #include <filesystem>  // NOLINT
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>

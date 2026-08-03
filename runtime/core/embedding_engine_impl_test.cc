@@ -29,6 +29,7 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/time/time.h"  // from @com_google_absl
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
@@ -51,7 +52,9 @@ namespace {
 using ::litert::Environment;
 using ::litert::support::Tokenizer;
 using ::litert::support::TokenizerType;
+using ::testing::Contains;
 using ::testing::HasSubstr;
+using ::testing::Key;
 using ::testing::Return;
 using ::testing::status::StatusIs;
 
@@ -224,6 +227,50 @@ TEST(EmbeddingEngineImplTest, CreateSuccess) {
   EXPECT_OK(engine.status());
 }
 
+TEST(EmbeddingEngineImplTest, CreateWithBenchmarkEnabledSuccess) {
+  const std::string& model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                   std::string(kTestEmbeddingModelPath))
+                                      .string();
+  ASSERT_OK_AND_ASSIGN(auto model_assets, ModelAssets::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(auto resources, CreateTestModelResources(model_path));
+  ASSERT_OK_AND_ASSIGN(auto env, CreateTestEnvironment());
+  auto tokenizer = std::make_unique<MockTokenizer>();
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+
+  settings.GetMutableBenchmarkParams();
+
+  ASSERT_OK_AND_ASSIGN(
+      auto engine,
+      EmbeddingEngineImpl::Create(std::move(resources), std::move(env),
+                                  std::move(tokenizer), std::move(settings)));
+
+  auto benchmark_info = engine->GetBenchmarkInfo();
+
+  const auto& init_phases = benchmark_info->GetInitPhases();
+  EXPECT_THAT(init_phases, Contains(Key("Init Total")));
+  EXPECT_THAT(init_phases, Contains(Key("Init Executor")));
+}
+
+TEST(EmbeddingEngineImplTest, BenchmarkDisabledReturnsNulllopt) {
+  const std::string& model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                   std::string(kTestEmbeddingModelPath))
+                                      .string();
+  ASSERT_OK_AND_ASSIGN(auto model_assets, ModelAssets::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(auto resources, CreateTestModelResources(model_path));
+  ASSERT_OK_AND_ASSIGN(auto env, CreateTestEnvironment());
+  auto tokenizer = std::make_unique<MockTokenizer>();
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+
+  ASSERT_OK_AND_ASSIGN(
+      auto engine,
+      EmbeddingEngineImpl::Create(std::move(resources), std::move(env),
+                                  std::move(tokenizer), std::move(settings)));
+
+  EXPECT_THAT(engine->GetBenchmarkInfo(), testing::Eq(std::nullopt));
+}
+
 TEST(EmbeddingEngineImplTest, ComputeEmbeddingSuccess) {
   const std::string& model_path = (std::filesystem::path(::testing::SrcDir()) /
                                    std::string(kTestEmbeddingModelPath))
@@ -338,6 +385,134 @@ TEST(EmbeddingEngineImplTest, ComputeEmbeddingBatchSuccess) {
   EXPECT_EQ(responses.size(), 2);
   EXPECT_FALSE(responses[0].embedding.empty());
   EXPECT_FALSE(responses[1].embedding.empty());
+}
+
+TEST(EmbeddingEngineImplTest, ComputeEmbeddingWithBenchmarkEnabled) {
+  const std::string& model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                   std::string(kTestEmbeddingModelPath))
+                                      .string();
+  ASSERT_OK_AND_ASSIGN(auto model_assets, ModelAssets::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(auto resources, CreateTestModelResources(model_path));
+  ASSERT_OK_AND_ASSIGN(auto env, CreateTestEnvironment());
+  auto tokenizer = std::make_unique<MockTokenizer>();
+  MockTokenizer* mock_tokenizer = tokenizer.get();
+
+  EXPECT_CALL(*mock_tokenizer, TextToTokenIds("hello"))
+      .WillOnce(Return(std::vector<int>{1, 2, 3}));
+
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+
+  settings.GetMutableBenchmarkParams();
+
+  ASSERT_OK_AND_ASSIGN(
+      auto engine,
+      EmbeddingEngineImpl::Create(std::move(resources), std::move(env),
+                                  std::move(tokenizer), std::move(settings)));
+
+  std::vector<InputData> contents;
+  contents.push_back(InputText(
+      std::variant<std::string, ::litert::TensorBuffer>(std::string("hello"))));
+
+  EmbeddingOptions options;
+  options.normalize = false;
+
+  ASSERT_OK(engine->ComputeEmbedding(contents, options).status());
+
+  auto benchmark_info = engine->GetBenchmarkInfo();
+  ASSERT_TRUE(benchmark_info.has_value());
+  EXPECT_EQ(benchmark_info->GetTotalPrefillTurns(), 1);
+  ASSERT_OK_AND_ASSIGN(auto turn, benchmark_info->GetPrefillTurn(0));
+  EXPECT_EQ(turn.num_tokens, 3);
+  EXPECT_GT(turn.duration, absl::ZeroDuration());
+}
+
+TEST(EmbeddingEngineImplTest, ComputeEmbeddingWithNumPrefillTokens) {
+  const std::string& model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                   std::string(kTestEmbeddingModelPath))
+                                      .string();
+  ASSERT_OK_AND_ASSIGN(auto model_assets, ModelAssets::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(auto resources, CreateTestModelResources(model_path));
+  ASSERT_OK_AND_ASSIGN(auto env, CreateTestEnvironment());
+  auto tokenizer = std::make_unique<MockTokenizer>();
+  MockTokenizer* mock_tokenizer = tokenizer.get();
+
+  EXPECT_CALL(*mock_tokenizer, TextToTokenIds("hello"))
+      .WillOnce(Return(std::vector<int>{1, 2, 3}));
+
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+
+  settings.GetMutableBenchmarkParams().set_num_prefill_tokens(5);
+
+  ASSERT_OK_AND_ASSIGN(
+      auto engine,
+      EmbeddingEngineImpl::Create(std::move(resources), std::move(env),
+                                  std::move(tokenizer), std::move(settings)));
+
+  std::vector<InputData> contents;
+  contents.push_back(InputText(
+      std::variant<std::string, ::litert::TensorBuffer>(std::string("hello"))));
+
+  EmbeddingOptions options;
+  options.normalize = false;
+
+  ASSERT_OK(engine->ComputeEmbedding(contents, options).status());
+
+  auto benchmark_info = engine->GetBenchmarkInfo();
+  ASSERT_TRUE(benchmark_info.has_value());
+  EXPECT_EQ(benchmark_info->GetTotalPrefillTurns(), 1);
+  ASSERT_OK_AND_ASSIGN(auto turn, benchmark_info->GetPrefillTurn(0));
+  EXPECT_EQ(turn.num_tokens, 5);
+}
+
+TEST(EmbeddingEngineImplTest, ComputeEmbeddingBatchWithBenchmarkEnabled) {
+  const std::string& model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                   std::string(kTestEmbeddingModelPath))
+                                      .string();
+  ASSERT_OK_AND_ASSIGN(auto model_assets, ModelAssets::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(auto resources, CreateTestModelResources(model_path));
+  ASSERT_OK_AND_ASSIGN(auto env, CreateTestEnvironment());
+  auto tokenizer = std::make_unique<MockTokenizer>();
+  MockTokenizer* mock_tokenizer = tokenizer.get();
+
+  EXPECT_CALL(*mock_tokenizer, TextToTokenIds("hello"))
+      .WillOnce(Return(std::vector<int>{1, 2, 3}));
+  EXPECT_CALL(*mock_tokenizer, TextToTokenIds("world"))
+      .WillOnce(Return(std::vector<int>{4, 5}));
+
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+
+  settings.GetMutableBenchmarkParams();
+
+  ASSERT_OK_AND_ASSIGN(
+      auto engine,
+      EmbeddingEngineImpl::Create(std::move(resources), std::move(env),
+                                  std::move(tokenizer), std::move(settings)));
+
+  std::vector<std::vector<InputData>> batch_contents;
+  std::vector<InputData> contents1;
+  contents1.push_back(InputText(
+      std::variant<std::string, ::litert::TensorBuffer>(std::string("hello"))));
+  batch_contents.push_back(std::move(contents1));
+
+  std::vector<InputData> contents2;
+  contents2.push_back(InputText(
+      std::variant<std::string, ::litert::TensorBuffer>(std::string("world"))));
+  batch_contents.push_back(std::move(contents2));
+
+  EmbeddingOptions options;
+  options.normalize = false;
+
+  ASSERT_OK(engine->ComputeEmbeddingBatch(batch_contents, options).status());
+
+  auto benchmark_info = engine->GetBenchmarkInfo();
+  ASSERT_TRUE(benchmark_info.has_value());
+  EXPECT_EQ(benchmark_info->GetTotalPrefillTurns(), 1);
+  ASSERT_OK_AND_ASSIGN(auto turn, benchmark_info->GetPrefillTurn(0));
+  EXPECT_EQ(turn.num_tokens, 5);
+  EXPECT_GT(turn.duration, absl::ZeroDuration());
 }
 
 TEST(EmbeddingEngineImplTest,

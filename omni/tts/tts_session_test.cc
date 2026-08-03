@@ -29,6 +29,7 @@
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "absl/synchronization/notification.h"  // from @com_google_absl
 #include "support/util/test_utils.h"  // from @litert  // IWYU pragma: keep
+#include "omni/base/io_types.h"
 #include "omni/base/stage.h"
 #include "omni/tts/acoustic_predictor.h"
 #include "omni/tts/latent_decoder.h"
@@ -37,7 +38,7 @@
 #include "omni/tts/vocoder.h"
 #include "runtime/framework/threadpool.h"
 
-namespace litert_lm::omni::tts {
+namespace litert::omni::tts {
 namespace {
 
 class DummyTextSource : public TextSource {
@@ -240,8 +241,7 @@ TEST(TtsSessionTest, ProcessAsyncWithThreadPool) {
   absl::Status final_status;
 
   absl::Status status = session->ProcessAsync(
-      thread_pool,
-      [&](absl::StatusOr<Vocoder::AudioOutput> result) -> absl::Status {
+      thread_pool, [&](absl::StatusOr<AudioOutput> result) -> absl::Status {
         if (!result.ok()) {
           final_status = result.status();
           done.Notify();
@@ -260,4 +260,4 @@ TEST(TtsSessionTest, ProcessAsyncWithThreadPool) {
 }
 
 }  // namespace
-}  // namespace litert_lm::omni::tts
+}  // namespace litert::omni::tts

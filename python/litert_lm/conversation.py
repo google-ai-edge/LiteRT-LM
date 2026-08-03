@@ -23,6 +23,7 @@ import queue
 from typing import Any
 
 from . import interfaces
+from ._ffi import LiteRtLmConstraintProviderType
 from ._ffi import LiteRtLmConstraintType
 from ._ffi import STREAM_CALLBACK_TYPE
 from ._messages import Contents
@@ -50,7 +51,7 @@ class Conversation(interfaces.AbstractConversation):
       lora_config=None,
       max_output_tokens=None,
       chat_template=None,
-      enable_response_format=False,
+      constrained_decoding_config=None,
   ):
     super().__init__(
         messages=messages,
@@ -68,7 +69,7 @@ class Conversation(interfaces.AbstractConversation):
     self._ptr = conv_ptr
     self._engine = engine  # Keep engine alive
     self._tools_map = tools_map or {}
-    self.enable_response_format = enable_response_format
+    self.constrained_decoding_config = constrained_decoding_config
     # Keep the active ctypes callback alive to prevent SIGSEGV if the C++ thread
     # calls it after the local variable is garbage collected during
     # cancellation.
@@ -282,11 +283,17 @@ class Conversation(interfaces.AbstractConversation):
       response_format: interfaces.ResponseFormat | None = None,
   ) -> collections.abc.Mapping[str, Any]:
     """See base class."""
-    if response_format and not self.enable_response_format:
-      raise ValueError(
-          "response_format cannot be used unless enable_response_format=True "
-          "was passed to create_conversation."
-      )
+    if response_format:
+      if (
+          not self.constrained_decoding_config
+          or not self.constrained_decoding_config.enable
+          or self.constrained_decoding_config.provider
+          != LiteRtLmConstraintProviderType.LL_GUIDANCE
+      ):
+        raise ValueError(
+            "response_format cannot be used unless constrained_decoding_config"
+            " with LL_GUIDANCE provider is set in create_conversation."
+        )
     if not self._ptr:
       raise RuntimeError("Conversation is closed.")
     current_message = normalize_message(message)
@@ -351,11 +358,17 @@ class Conversation(interfaces.AbstractConversation):
       response_format: interfaces.ResponseFormat | None = None,
   ) -> collections.abc.Iterator[collections.abc.Mapping[str, Any]]:
     """See base class."""
-    if response_format and not self.enable_response_format:
-      raise ValueError(
-          "response_format cannot be used unless enable_response_format=True "
-          "was passed to create_conversation."
-      )
+    if response_format:
+      if (
+          not self.constrained_decoding_config
+          or not self.constrained_decoding_config.enable
+          or self.constrained_decoding_config.provider
+          != LiteRtLmConstraintProviderType.LL_GUIDANCE
+      ):
+        raise ValueError(
+            "response_format cannot be used unless constrained_decoding_config"
+            " with LL_GUIDANCE provider is set in create_conversation."
+        )
     if not self._ptr:
       raise RuntimeError("Conversation is closed.")
     current_message = normalize_message(message)

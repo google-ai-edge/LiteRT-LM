@@ -14,6 +14,7 @@
 
 #include "runtime/executor/llm_litert_compiled_model_executor.h"
 
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>  // NOLINT: Required for path manipulation.
@@ -32,6 +33,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/cleanup/cleanup.h"  // from @com_google_absl
+#include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/memory/memory.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
@@ -347,6 +349,14 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest, DecodeTest) {
                        LlmLiteRtCompiledModelExecutorStatic::Create(
                            *executor_settings, env, *model_resources));
   ASSERT_NE(executor, nullptr);
+
+  // An explicitly present but unspecified sampler config should use the
+  // default CPU sampler rather than disabling sampling.
+  RuntimeConfig runtime_config;
+  runtime_config.sampler_params = proto::SamplerParameters();
+  ASSERT_OK_AND_ASSIGN(
+      auto context, executor->CreateNewContext(std::nullopt, runtime_config));
+  ASSERT_OK(executor->RestoreContext(std::move(context)));
 
   ExecutorInputs inputs;
   // Create a tensor buffer with 3 elements.

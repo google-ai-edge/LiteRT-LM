@@ -415,7 +415,12 @@ absl::StatusOr<std::vector<litert::lm::ScorerOutput>> RunScoreText(
 void LogBenchmarkInfo(const litert::lm::BenchmarkInfo& benchmark_info,
                       const LiteRtLmSettings& settings) {
   if (!settings.log_sink_file.has_value()) {
-    ABSL_LOG(INFO) << benchmark_info;
+    std::stringstream ss;
+    ss << benchmark_info;
+    std::string line;
+    while (std::getline(ss, line)) {
+      ABSL_LOG(INFO).NoPrefix() << line;
+    }
   } else {
     std::string extra_flags = "";
     if (settings.model_name.has_value() && !settings.model_name->empty()) {

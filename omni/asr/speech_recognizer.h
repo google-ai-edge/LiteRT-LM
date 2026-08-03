@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_SPEECH_DECODER_H_
-#define THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_SPEECH_DECODER_H_
+#ifndef THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_SPEECH_RECOGNIZER_H_
+#define THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_SPEECH_RECOGNIZER_H_
 
 #include <optional>
 #include <vector>
@@ -21,7 +21,7 @@
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "omni/base/stage.h"
 
-namespace litert_lm::omni::asr {
+namespace litert::omni::asr {
 
 // Represents a decoded token ID and its optional timestamp.
 struct DecodedToken {
@@ -29,19 +29,19 @@ struct DecodedToken {
   std::optional<int> timestamp_ms;
 };
 
-// Abstract interface for decoding preprocessed audio features into tokens.
-class SpeechDecoder
+// Abstract interface for recognizing preprocessed audio features into tokens.
+class SpeechRecognizer
     : public SingleThreadedStageWithDeque<std::vector<DecodedToken>> {
  public:
-  using DecodedToken = ::litert_lm::omni::asr::DecodedToken;
+  using DecodedToken = ::litert::omni::asr::DecodedToken;
 
-  explicit SpeechDecoder(
+  explicit SpeechRecognizer(
       Stage<std::vector<float>>* absl_nonnull audio_preprocessor)
       : audio_preprocessor_(*audio_preprocessor) {}
 
-  ~SpeechDecoder() override = default;
+  ~SpeechRecognizer() override = default;
 
-  // Resets internal model decoder state (e.g. KV cache) for a new audio stream.
+  // Resets internal model decoder state for a new audio stream.
   virtual void Reset() = 0;
 
  protected:
@@ -52,6 +52,6 @@ class SpeechDecoder
   Stage<std::vector<float>>& audio_preprocessor_;
 };
 
-}  // namespace litert_lm::omni::asr
+}  // namespace litert::omni::asr
 
-#endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_SPEECH_DECODER_H_
+#endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_SPEECH_RECOGNIZER_H_

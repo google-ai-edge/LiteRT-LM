@@ -19,18 +19,21 @@
 
 #include "omni/base/stage.h"
 
-namespace litert_lm::omni::tts {
+namespace litert::omni::tts {
 
-// Abstract interface for providing raw text strings or chunks for
+// Abstract interface for providing raw text strings or chunks for speech
 // synthesis.
+//
+// Subclasses (such as FileTextSource or StreamTextSource) populate the output
+// deque with text strings when scheduled.
 class TextSource : public SingleThreadedStageWithDeque<std::string> {
  public:
   ~TextSource() override = default;
 
-  // Resets internal state for a new text stream.
+  // Resets internal state for a new text stream session.
   virtual void Reset() = 0;
 };
 
-}  // namespace litert_lm::omni::tts
+}  // namespace litert::omni::tts
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_TTS_TEXT_SOURCE_H_

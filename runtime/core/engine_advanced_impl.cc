@@ -182,8 +182,12 @@ absl::StatusOr<std::unique_ptr<Engine>> EngineAdvancedImpl::Create(
                 engine_settings.GetBenchmarkParams().value())
           : std::nullopt;
 
+  const auto& advanced_settings =
+      engine_settings.GetMainExecutorSettings().GetAdvancedSettings();
+  // Magic-number replacement mutates the model flatbuffer in place.
   const bool enable_file_backed_model_loading =
-      engine_settings.GetMainExecutorSettings().GetBackend() == Backend::NPU;
+      engine_settings.GetMainExecutorSettings().GetBackend() == Backend::NPU &&
+      advanced_settings && !advanced_settings->configure_magic_numbers;
 
   if (benchmark_info.has_value()) {
     ABSL_RETURN_IF_ERROR(

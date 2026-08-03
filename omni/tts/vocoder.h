@@ -15,26 +15,17 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_OMNI_TTS_VOCODER_H_
 #define THIRD_PARTY_ODML_LITERT_LM_OMNI_TTS_VOCODER_H_
 
-#include <vector>
-
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
+#include "omni/base/io_types.h"
 #include "omni/base/stage.h"
 #include "omni/tts/latent_decoder.h"
 
-namespace litert_lm::omni::tts {
-
-// Generic audio synthesis output payload for vocoder and audio output.
-struct AudioOutput {
-  std::vector<float> pcm_samples;
-  int sample_rate_hz = 24000;
-};
+namespace litert::omni::tts {
 
 // Abstract interface for Stage 4: Neural vocoder audio waveform synthesis.
 class Vocoder : public SingleThreadedStageWithDeque<AudioOutput> {
  public:
-  using AudioOutput = ::litert_lm::omni::tts::AudioOutput;
-
   explicit Vocoder(
       Stage<LatentDecoder::LatentOutput>* absl_nonnull latent_decoder)
       : latent_decoder_(*latent_decoder) {}
@@ -55,6 +46,6 @@ class Vocoder : public SingleThreadedStageWithDeque<AudioOutput> {
   Stage<LatentDecoder::LatentOutput>& latent_decoder_;
 };
 
-}  // namespace litert_lm::omni::tts
+}  // namespace litert::omni::tts
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_TTS_VOCODER_H_

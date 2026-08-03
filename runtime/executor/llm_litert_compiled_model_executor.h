@@ -25,6 +25,7 @@
 
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
+#include "absl/functional/any_invocable.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
@@ -176,6 +177,32 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
     return llm_context_->processed_context().processed_tokens();
   }
 
+  // Callback signature for inspecting or modifying tensor buffers before or
+  // after an individual computation graph (signature runner like "prefill_128"
+  // or "decode") is executed.
+  //
+  // Parameters:
+  // - signature_name: The name of the signature/subgraph being executed.
+  // - current_step: The current step index in the inference execution.
+  // - tensor_buffers: Map of input or output tensor buffers for the graph run
+  // (mutable).
+  using GraphRunCallback = absl::AnyInvocable<void(
+      absl::string_view signature_name, int current_step,
+      absl::flat_hash_map<absl::string_view, TensorBuffer>& tensor_buffers)>;
+
+  void UpdatePreGraphRunCallback(GraphRunCallback callback) {
+    pre_graph_run_callback_ = std::move(callback);
+  }
+
+  void UpdatePostGraphRunCallback(GraphRunCallback callback) {
+    post_graph_run_callback_ = std::move(callback);
+  }
+
+  bool HasGraphRunCallbacks() const {
+    return pre_graph_run_callback_ != nullptr ||
+           post_graph_run_callback_ != nullptr;
+  }
+
  protected:
   LlmLiteRtCompiledModelExecutorBase(
       LlmExecutorSettings executor_settings, Environment& env,
@@ -191,7 +218,9 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
       std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup,
       bool use_fp16_precision, LogitsDataType logits_data_type,
       std::unique_ptr<LlmLiteRtMtpDrafter> mtp_drafter,
-      const proto::ExecutorMetadata* executor_metadata = nullptr)
+      const proto::ExecutorMetadata* executor_metadata = nullptr,
+      GraphRunCallback pre_graph_run_callback = nullptr,
+      GraphRunCallback post_graph_run_callback = nullptr)
       : executor_settings_(std::move(executor_settings)),
         env_(env),
         model_(*model),
@@ -207,7 +236,9 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
         use_fp16_precision_(use_fp16_precision),
         logits_data_type_(logits_data_type),
         mtp_drafter_(std::move(mtp_drafter)),
-        executor_metadata_(executor_metadata) {
+        executor_metadata_(executor_metadata),
+        pre_graph_run_callback_(std::move(pre_graph_run_callback)),
+        post_graph_run_callback_(std::move(post_graph_run_callback)) {
     auto processed_context = std::make_unique<LlmProcessedContext>(
         std::nullopt, nullptr, ProcessedTokens());
     auto runtime_config = std::make_unique<RuntimeConfig>();
@@ -248,6 +279,8 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
       absl::string_view prefill_signature,
       absl::flat_hash_map<absl::string_view /*input_name*/, TensorBuffer>&
           prefill_input_buffers,
+      absl::flat_hash_map<absl::string_view /*output_name*/, TensorBuffer>&
+          prefill_output_buffers,
       absl::Span<const int> ids, bool async);
 
   // Helper function of PrefillInternal to bind input/output tensors for prefill
@@ -256,6 +289,8 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
       absl::string_view prefill_signature,
       absl::flat_hash_map<absl::string_view /*input_name*/, TensorBuffer>&
           prefill_input_buffers,
+      absl::flat_hash_map<absl::string_view /*output_name*/, TensorBuffer>&
+          prefill_output_buffers,
       bool async);
 
   // Decode internal implementation. Uses the specified 'token' as the input
@@ -279,6 +314,12 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
       int context_length,
       absl::flat_hash_map<absl::string_view, TensorBuffer>&
           prefill_input_buffers);
+
+  // Creates Prefill output buffers for a given signature.
+  absl::Status CreatePrefillOutputBuffers(
+      absl::string_view prefill_signature, int sequence_length,
+      absl::flat_hash_map<absl::string_view, TensorBuffer>&
+          prefill_output_buffers);
 
   // Fills the input buffer from the unprocessed token.
   absl::Status FillInputBufferWithToken(
@@ -378,6 +419,16 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
 
   // The executor metadata.
   const proto::ExecutorMetadata* executor_metadata_ = nullptr;
+
+  // Callback invoked immediately before executing an individual computation
+  // graph/subgraph (signature runner like "prefill_128" or "decode"). Allows
+  // inspecting or modifying input buffers.
+  GraphRunCallback pre_graph_run_callback_;
+
+  // Callback invoked immediately after executing an individual computation
+  // graph/subgraph (signature runner like "prefill_128" or "decode"). Allows
+  // inspecting or dumping output buffers.
+  GraphRunCallback post_graph_run_callback_;
 };
 
 // The static executor for the prefill-decode compiled model.
@@ -431,6 +482,12 @@ class LlmLiteRtCompiledModelExecutorStatic
       std::string /*prefill_signature_name*/,
       absl::flat_hash_map<absl::string_view /*input_name*/, TensorBuffer>>
       prefill_input_buffers_;
+  // Map of non-KV-cache prefill output buffers, keyed by prefill signature
+  // name.
+  absl::flat_hash_map<
+      std::string /*prefill_signature_name*/,
+      absl::flat_hash_map<absl::string_view /*output_name*/, TensorBuffer>>
+      prefill_output_buffers_;
   std::optional<bool> do_prefill_sync_;
 };
 

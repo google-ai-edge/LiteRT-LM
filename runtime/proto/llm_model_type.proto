@@ -33,8 +33,10 @@ message LlmModelType {
     FastVlm fast_vlm = 9;
     Minicpmv minicpmv = 10;
     Lfm2 lfm2 = 11;
+    MiniCPM5 minicpm5 = 12;
   }
 }
+
 
 // The default model type for the generic model.
 message GenericModel {
@@ -351,3 +353,18 @@ message Lfm2 {
   repeated float normalization_std = 10;
   float normalization_rescale_factor = 11;
 }
+
+// Model configuration for MiniCPM5.
+message MiniCPM5 {
+  // Options for tool calling.
+  // Signifies the beginning of a tool call.
+  optional string code_fence_start = 1;
+  // Signifies the end of tool call.
+  optional string code_fence_end = 2;
+  // Whether to escape the fence strings for regex matching.
+  optional bool escape_fence_strings = 3;
+  // An optional regex to match each line of the tool code block.
+  optional string tool_code_regex = 4;
+}
+
+

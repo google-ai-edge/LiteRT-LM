@@ -51,7 +51,7 @@ absl::StatusOr<Backend> GetSamplerBackend(
   Backend sampler_backend = executor_settings.GetSamplerBackend();
 
   if (sampler_backend == Backend::UNSPECIFIED) {
-    sampler_backend = backend;
+    sampler_backend = backend == Backend::NPU ? Backend::CPU : backend;
   }
 
   if (sampler_backend != Backend::CPU && sampler_backend != Backend::GPU) {
@@ -160,6 +160,7 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
         gpu_compilation_options.AddBufferStorageTensorPattern("kv_cache_c_");
         if (single_kv_cache_buffer) {
           gpu_compilation_options.AddBufferStorageTensorPattern("kv_cache_");
+          gpu_compilation_options.AddExternalTensorPattern("param_tensor");
           gpu_compilation_options.AddBufferStorageTensorPattern("param_tensor");
         }
         ABSL_ASSIGN_OR_RETURN(auto sampler_backend,
@@ -214,13 +215,12 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
       gpu_compilation_options.SetBackend(GpuOptions::Backend::kWebGpu);
 #endif  // defined(LITERT_USE_WEBGPU_ACCELERATOR)
       // Prepare WebGPU or Vulkan command buffers ahead to reduce the overhead
-      // of command buffer preparation.
-      // If single KV cache buffer is used, one step ahead is needed as all the
-      // inputs for each decode step is identical.
-      // Otherwise, 2 steps ahead are needed because KV cache is swapped and the
-      // GPU resource bindings are the same as the previous previous step.
-      gpu_compilation_options.SetNumStepsOfCommandBufferPreparations(
-          single_kv_cache_buffer ? 1 : 2);
+      // of command buffer preparation. 2 steps ahead are needed because
+      //   1) KV caches when single_kv_cache_buffer is false
+      //   2) other input tensors when they are prepared on GPU
+      // are swapped and the GPU resource bindings are the same as the previous
+      // step.
+      gpu_compilation_options.SetNumStepsOfCommandBufferPreparations(2);
       gpu_compilation_options.SetNumThreadsToUpload(
           advanced_settings.num_threads_to_upload >= 0
               ? advanced_settings.num_threads_to_upload
@@ -230,6 +230,23 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
               ? advanced_settings.num_threads_to_compile
               : kDefaultNumThreadsToCompile);
       compilation_options.SetHardwareAccelerators(HwAccelerators::kGpu);
+      break;
+    }
+    case Backend::NPU: {
+      // Let LiteRT's NPU compiler plugin partition supported subgraphs and keep
+      // the remaining ops on CPU. This is the generic LiteRT-LM fallback path
+      // for NPU backends that are not packaged for the specialized NPU
+      // executor.
+      AdvancedSettings advanced_settings;
+      if (executor_settings.GetAdvancedSettings()) {
+        advanced_settings = *executor_settings.GetAdvancedSettings();
+      }
+      LITERT_ASSIGN_OR_RETURN(auto& runtime_options,
+                              compilation_options.GetRuntimeOptions());
+      runtime_options.SetDisableDelegateClustering(
+          advanced_settings.disable_delegate_clustering);
+      compilation_options.SetHardwareAccelerators(HwAccelerators::kNpu |
+                                                  HwAccelerators::kCpu);
       break;
     }
     case Backend::CPU: {

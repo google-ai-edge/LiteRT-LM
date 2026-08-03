@@ -436,10 +436,12 @@ cc_test(
         "@com_google_absl//absl/strings",
         "@litert//litert/cc:litert_environment",
         "@litert//litert/cc:litert_environment_options",
+        "@litert//litert/cc:litert_macros",
         "@litert//litert/cc:litert_model",
         "//runtime/components:model_resources",
         "//runtime/engine:engine_settings",
         "//runtime/executor:executor_settings_base",
+        "//runtime/executor:llm_executor_settings",
     ],
 )
 

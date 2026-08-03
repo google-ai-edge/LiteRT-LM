@@ -23,7 +23,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
 
-namespace litert_lm::omni {
+namespace litert::omni {
 namespace internal {
 
 // Base class for Stage below with abstract methods not dependent on output
@@ -145,6 +145,22 @@ class SingleThreadedStageWithDeque : public Stage<T> {
     state_ = state;
   }
 
+  void WaitForStateThenSetState(State expected_state, State new_state) {
+    absl::MutexLock lock(mutex_);
+    auto condition = [this, expected_state] {
+      mutex_.AssertHeld();
+      return state_ == expected_state;
+    };
+    mutex_.Await(absl::Condition(&condition));
+    state_ = new_state;
+  }
+
+  void ClearOutputsThenSetState(State state) {
+    absl::MutexLock lock(mutex_);
+    outputs_.clear();
+    state_ = state;
+  }
+
   void PushOutput(T output) {
     absl::MutexLock lock(mutex_);
     outputs_.push_back(std::move(output));
@@ -155,6 +171,6 @@ class SingleThreadedStageWithDeque : public Stage<T> {
   std::deque<T> outputs_ ABSL_GUARDED_BY(mutex_);
 };
 
-}  // namespace litert_lm::omni
+}  // namespace litert::omni
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_BASE_STAGE_H_

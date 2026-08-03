@@ -23,6 +23,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "omni/base/async_stage_scheduler.h"
+#include "omni/base/io_types.h"
 #include "omni/tts/acoustic_predictor.h"
 #include "omni/tts/latent_decoder.h"
 #include "omni/tts/text_frontend.h"
@@ -30,7 +31,7 @@
 #include "omni/tts/vocoder.h"
 #include "runtime/framework/threadpool.h"
 
-namespace litert_lm::omni::tts {
+namespace litert::omni::tts {
 
 // Orchestrates component pipeline execution for TTS speech synthesis streams.
 class TtsSession {
@@ -54,19 +55,19 @@ class TtsSession {
 
   // Processes the next audio chunk from Vocoder synchronously.
   // Returns absl::OutOfRangeError when audio stream ends.
-  absl::StatusOr<Vocoder::AudioOutput> ProcessNextChunk();
+  absl::StatusOr<AudioOutput> ProcessNextChunk();
 
   // Processes the TTS stream asynchronously using the provided thread pool.
   // Returns absl::AlreadyExistsError if async processing is already active.
   // Schedules TTS session stages on the thread pool to execute concurrently and
   // passes results to `callback` until `callback` returns an error status.
   using AsyncCallback =
-      absl::AnyInvocable<absl::Status(absl::StatusOr<Vocoder::AudioOutput>)>;
+      absl::AnyInvocable<absl::Status(absl::StatusOr<AudioOutput>)>;
   absl::Status ProcessAsync(::litert::lm::ThreadPool& thread_pool,
                             AsyncCallback callback);
 
   // Flushes remaining synthesized audio at stream end.
-  absl::StatusOr<Vocoder::AudioOutput> Flush();
+  absl::StatusOr<AudioOutput> Flush();
 
   const Components& components() const { return components_; }
 
@@ -78,10 +79,10 @@ class TtsSession {
   Components components_;
 
   mutable absl::Mutex mutex_;
-  std::unique_ptr<AsyncStageScheduler<Vocoder::AudioOutput>> async_scheduler_
+  std::unique_ptr<AsyncStageScheduler<AudioOutput>> async_scheduler_
       ABSL_GUARDED_BY(mutex_);
 };
 
-}  // namespace litert_lm::omni::tts
+}  // namespace litert::omni::tts
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_TTS_TTS_SESSION_H_

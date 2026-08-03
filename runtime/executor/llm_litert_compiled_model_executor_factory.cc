@@ -19,6 +19,7 @@
 #include <string>
 
 #include "absl/algorithm/container.h"  // from @com_google_absl
+#include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
@@ -209,6 +210,18 @@ CreateNpuLlmLiteRtCompiledModelExecutor(LlmExecutorSettings executor_settings,
 #if defined(LITERT_DISABLE_NPU)
   return absl::InvalidArgumentError("Only CPU and GPU backends are supported.");
 #else
+  auto aux_model_buffer = resources.GetTFLiteModelBuffer(ModelType::kTfLiteAux);
+  if (!aux_model_buffer.ok() || aux_model_buffer->empty()) {
+    ABSL_LOG(WARNING)
+        << "NPU backend requested, but TF_LITE_AUX is not packaged in the "
+           "model. Using the generic LiteRT compiler-plugin path.";
+    ABSL_ASSIGN_OR_RETURN(auto npu_settings,
+                     executor_settings.MutableBackendConfig<NpuConfig>());
+    npu_settings.use_generic_litert_compiler_plugin = true;
+    executor_settings.SetBackendConfig(npu_settings);
+    return CreateCpuOrGpuLlmLiteRtCompiledModelExecutor(executor_settings,
+                                                        lrt_env, resources);
+  }
   return LlmLiteRtNpuCompiledModelExecutor::Create(executor_settings, resources,
                                                    lrt_env);
 #endif  // defined(LITERT_DISABLE_NPU)

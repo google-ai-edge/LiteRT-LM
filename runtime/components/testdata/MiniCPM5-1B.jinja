@@ -1,0 +1,129 @@
+{{- bos_token }}{%- if tools %}
+    {%- set tool_definitions %}
+        {{- "# Tools\n\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>" }}
+        {%- for tool in tools %}
+            {{- "\n" }}
+            {{- tool | tojson }}
+        {%- endfor %}
+        {{- '\n</tools>\n\nTool usage guidelines:\n- You may call zero or more functions. If no function calls are needed, just answer normally and do not include any <function ... </function>.\n- When calling a function, return an XML object within <function ... </function> using:\n<function name=\"function-name\"><param name=\"param-name\">param-value</param></function>\n- param-value may be multi-line. If it contains <, & or newline characters, wrap it in a CDATA block: <param name=\"param-name\"><![CDATA[...multi-line value...]]></param>' }}
+    {%- endset %}
+
+    {{- '<|im_start|>system\n' }}
+    {%- if messages[0].role == 'system' %}
+        {%- if '<tool_def_sep>' in messages[0].content %}
+            {{- messages[0].content | replace('<tool_def_sep>', tool_definitions) }}
+        {%- else %}
+            {{- messages[0].content ~ '\n\n' ~ tool_definitions }}
+        {%- endif %}
+    {%- else %}
+        {{- tool_definitions | trim }}
+    {%- endif %}
+    {{- '<|im_end|>\n' }}
+{%- else %}
+    {%- if messages[0].role == 'system' %}
+        {{- '<|im_start|>system\n' ~ messages[0].content ~ '<|im_end|>\n' }}
+    {%- endif %}
+{%- endif %}
+
+{#- Forward loop to find the last query index -#}
+{%- set ns_query = namespace(last_query_index=-1) %}
+{%- for message in messages %}
+    {%- set content = message.content if message.content else '' %}
+    {%- if message.role == "user" and not ('<tool_response>' in content) %}
+        {%- set ns_query.last_query_index = loop.index0 %}
+    {%- endif %}
+{%- endfor %}
+
+{%- for message in messages %}
+    {%- set content = message.content if message.content else '' %}
+
+    {%- if (message.role == "user") or (message.role == "system" and not loop.first) %}
+        {{- '<|im_start|>' ~ message.role ~ '\n' ~ content ~ '<|im_end|>\n' }}
+
+    {%- elif message.role == "assistant" %}
+        {#- Minja Safe: Using | trim filter instead of .strip() methods -#}
+        {%- set content = content | trim %}
+
+        {%- if message.tool_calls %}
+            {%- set ns_tools = namespace(processed='', tool_idx=0) %}
+
+            {%- for part in content.split('<tool_sep>') | list %}
+                {%- set ns_tools.processed = ns_tools.processed ~ part %}
+                {%- if not loop.last %}
+                    {%- set ns_match = namespace(xml='') %}
+                    {%- for tc in message.tool_calls %}
+                        {%- if loop.index0 == ns_tools.tool_idx %}
+                            {%- set func = tc.function if tc.function else tc %}
+                            {%- set xml = '<function name="' ~ func.name ~ '">' %}
+                            {%- if func.arguments %}
+                                {%- for pname, pval in func.arguments.items() %}
+                                    {%- set pval_str = pval | string %}
+                                    {%- set xml = xml ~ '<param name="' ~ pname ~ '">' %}
+                                    {%- if '<' in pval_str or '&' in pval_str or '\n' in pval_str %}
+                                        {%- set xml = xml ~ '<![CDATA[' ~ pval_str ~ ']]>' %}
+                                    {%- else %}
+                                        {%- set xml = xml ~ pval_str %}
+                                    {%- endif %}
+                                    {%- set xml = xml ~ '</param>' %}
+                                {%- endfor %}
+                            {%- endif %}
+                            {%- set ns_match.xml = xml ~ '</function>' %}
+                        {%- endif %}
+                    {%- endfor %}
+                    {%- set ns_tools.processed = ns_tools.processed ~ ns_match.xml %}
+                    {%- set ns_tools.tool_idx = ns_tools.tool_idx + 1 %}
+                {%- endif %}
+            {%- endfor %}
+
+            {%- for tc in message.tool_calls %}
+                {%- if loop.index0 >= ns_tools.tool_idx %}
+                    {%- set func = tc.function if tc.function else tc %}
+                    {%- set xml = '\n<function name="' ~ func.name ~ '">' %}
+                    {%- if func.arguments %}
+                        {%- for pname, pval in func.arguments.items() %}
+                            {%- set pval_str = pval | string %}
+                            {%- set xml = xml ~ '<param name="' ~ pname ~ '">' %}
+                            {%- if '<' in pval_str or '&' in pval_str or '\n' in pval_str %}
+                                {%- set xml = xml ~ '<![CDATA[' ~ pval_str ~ ']]>' %}
+                            {%- else %}
+                                {%- set xml = xml ~ pval_str %}
+                            {%- endif %}
+                            {%- set xml = xml ~ '</param>' %}
+                        {%- endfor %}
+                    {%- endif %}
+                    {%- set ns_tools.processed = ns_tools.processed ~ xml ~ '</function>' %}
+                {%- endif %}
+            {%- endfor %}
+
+            {%- set content = ns_tools.processed %}
+        {%- endif %}
+
+        {{- '<|im_start|>' ~ message.role ~ '\n' ~ content }}
+        {{- '<|im_end|>\n' }}
+
+    {%- elif message.role == "tool" %}
+        {%- if loop.first or (messages[loop.index0 - 1].role != "tool") %}
+            {{- '<|im_start|>user' }}
+        {%- endif %}
+        {{- '\n<tool_response>\n' }}
+        {%- if message.content is string %}
+            {{- content }}
+        {%- else %}
+            {{- message.content | tojson }}
+        {%- endif %}
+        {{- '\n</tool_response>' }}
+        {%- if loop.last or (messages[loop.index0 + 1].role != "tool") %}
+            {{- '<|im_end|>\n' }}
+        {%- endif %}
+    {%- endif %}
+{%- endfor %}
+
+{%- if add_generation_prompt %}
+    {{- '<|im_start|>assistant\n' }}
+    {%- set enable_thinking = enable_thinking | default(false) %}
+    {%- if not enable_thinking %}
+        {{- '<think>\n\n</think>\n\n' }}
+    {%- else %}
+        {{- '<think>\n' }}
+    {%- endif %}
+{%- endif %}

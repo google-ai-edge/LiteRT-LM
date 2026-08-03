@@ -21,7 +21,7 @@
 #include "omni/base/stage.h"
 #include "omni/tts/acoustic_predictor.h"
 
-namespace litert_lm::omni::tts {
+namespace litert::omni::tts {
 
 // TODO: b/538727793. Refactor the outputs to a more generic structure.
 // Currently these are tailored for qwen3-tts model. Generic frontend output
@@ -35,7 +35,7 @@ struct LatentOutput {
 // Abstract interface for continuous latent feature decoder or flow solver.
 class LatentDecoder : public SingleThreadedStageWithDeque<LatentOutput> {
  public:
-  using LatentOutput = ::litert_lm::omni::tts::LatentOutput;
+  using LatentOutput = ::litert::omni::tts::LatentOutput;
 
   explicit LatentDecoder(
       Stage<AcousticPredictor::AcousticOutput>* absl_nonnull acoustic_predictor)
@@ -54,6 +54,6 @@ class LatentDecoder : public SingleThreadedStageWithDeque<LatentOutput> {
   Stage<AcousticPredictor::AcousticOutput>& acoustic_predictor_;
 };
 
-}  // namespace litert_lm::omni::tts
+}  // namespace litert::omni::tts
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_TTS_LATENT_DECODER_H_

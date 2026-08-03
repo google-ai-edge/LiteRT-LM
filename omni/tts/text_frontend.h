@@ -21,7 +21,7 @@
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "omni/base/stage.h"
 
-namespace litert_lm::omni::tts {
+namespace litert::omni::tts {
 
 // Generic frontend output payload for text frontend.
 // TODO: b/538727793. Refactor the outputs to a more generic structure.
@@ -39,7 +39,7 @@ struct FrontendOutput {
 // embedding generation.
 class TextFrontend : public SingleThreadedStageWithDeque<FrontendOutput> {
  public:
-  using FrontendOutput = ::litert_lm::omni::tts::FrontendOutput;
+  using FrontendOutput = ::litert::omni::tts::FrontendOutput;
 
   explicit TextFrontend(Stage<std::string>* absl_nonnull text_source)
       : text_source_(*text_source) {}
@@ -57,6 +57,6 @@ class TextFrontend : public SingleThreadedStageWithDeque<FrontendOutput> {
   Stage<std::string>& text_source_;
 };
 
-}  // namespace litert_lm::omni::tts
+}  // namespace litert::omni::tts
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_TTS_TEXT_FRONTEND_H_

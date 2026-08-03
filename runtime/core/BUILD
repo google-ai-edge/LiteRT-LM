@@ -39,6 +39,7 @@ package_group(
         "//kotlin/...",
         # for SpeechProcessor
         # for AI Edge Hub
+        # for AI Edge Gallery
     ],
 )
 
@@ -498,7 +499,9 @@ cc_library(
     visibility = [":engine_impl_users"],
     deps = [
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/types:optional",
         "@litert//support/tokenizer",
         "@litert//support/util:io_types",
         "//runtime/components:model_resources",
@@ -513,6 +516,7 @@ cc_library(
         "//runtime/executor:llm_executor_io_types",
         "//runtime/executor:vision_executor",
         "//runtime/executor:vision_litert_compiled_model_executor",
+        "//runtime/proto:engine_cc_proto",
         "//runtime/util:convert_tensor_buffer",
         "//runtime/util:executor_data_util",
         "//runtime/util:litert_status_util",
@@ -534,6 +538,8 @@ cc_test(
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/time",
+        "@com_google_absl//absl/types:optional",
         "@litert//litert/cc:litert_environment",
         "@litert//litert/cc:litert_macros",
         "@litert//litert/cc:litert_model",

@@ -44,9 +44,11 @@ struct GpuArtisanConfig {
   bool wait_for_weight_uploads = false;
 
   // Number of decode steps per sync. Used by GPU only.
-  // Note: dynamic constraints with constrained decoding currently need this to
-  // be set to 1, but otherwise 3 is a more performant default.
-  uint32_t num_decode_steps_per_sync = 3;
+  //
+  // Increasing the value might give better performance but can break logit
+  // processing features like repeated token penalties, and constrained
+  // decoding. Only increase if you are not using those.
+  uint32_t num_decode_steps_per_sync = 1;
 
   // Sequence batch size for encoding. Used by GPU only. Number of input
   // tokens to process at a time for batch processing. Setting this value to 1
@@ -140,6 +142,10 @@ struct CpuConfig {
 std::ostream& operator<<(std::ostream& os, const CpuConfig& config);
 
 struct NpuConfig {
+  // Whether the NPU backend is using LiteRT's generic compiler-plugin path
+  // instead of the specialized TF_LITE_AUX NPU executor.
+  bool use_generic_litert_compiler_plugin = false;
+
   // Whether to use NEON optimizations for greedy sampling on NPU.
   bool enable_neon_for_npu_greedy_sampling = true;
 

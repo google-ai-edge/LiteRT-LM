@@ -24,6 +24,7 @@
 #include "runtime/conversation/model_data_processor/generic_data_processor_config.h"
 #include "runtime/conversation/model_data_processor/lfm2_data_processor_config.h"
 #include "runtime/conversation/model_data_processor/minicpmv_data_processor_config.h"
+#include "runtime/conversation/model_data_processor/minicpm5_data_processor_config.h"
 #include "runtime/conversation/model_data_processor/qwen3_data_processor_config.h"
 
 namespace litert::lm {
@@ -36,6 +37,9 @@ using DataProcessorConfig =
                  Qwen3DataProcessorConfig, FunctionGemmaDataProcessorConfig,
                  Gemma4DataProcessorConfig, FastVlmDataProcessorConfig,
                  Lfm2DataProcessorConfig, MinicpmvDataProcessorConfig>;
+                 Lfm2DataProcessorConfig,
+                 MiniCpm5DataProcessorConfig
+                 >;
 
 // DataProcessorArguments is a registry of all the model-specific data processor
 // arguments. The DataProcessorArguments is used to pass arguments of single
@@ -46,7 +50,9 @@ using DataProcessorArguments =
                  FunctionGemmaDataProcessorArguments,
                  Gemma4DataProcessorArguments, FastVlmDataProcessorArguments,
                  Lfm2DataProcessorArguments, MinicpmvDataProcessorArguments>;
-
+                 Lfm2DataProcessorArguments,
+                 MiniCpm5DataProcessorArguments
+                 >;
 }  // namespace litert::lm
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_RUNTIME_CONVERSATION_MODEL_DATA_PROCESSOR_DATA_PROCESSOR_CONFIG_REGISTRY_H_

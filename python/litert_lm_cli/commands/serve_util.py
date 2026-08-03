@@ -122,7 +122,7 @@ def get_or_initialize_server_engine(
   Raises:
     FileNotFoundError: If the model package path does not exist.
   """
-  m = model.Model.from_model_id(model_id)
+  m = model.Model.from_model_reference(model_id)
 
   if not m.exists():
     raise FileNotFoundError(f"Model {model_id} not found")

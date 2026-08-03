@@ -506,10 +506,8 @@ void litert_lm_conversation_config_set_constraint_provider(
   if (config) {
     if (provider_type != nullptr) {
       config->constraint_provider_type = *provider_type;
-      config->enable_constrained_decoding = true;
     } else {
       config->constraint_provider_type = std::nullopt;
-      config->enable_constrained_decoding = false;
     }
   }
 }
@@ -1547,6 +1545,17 @@ LiteRtLmConversation* litert_lm_conversation_create(
     }
     if (c_config->thinking_config.has_value()) {
       builder.SetThinkingConfig(*c_config->thinking_config);
+    }
+    // For disabling rewinding, we don't use a config, but instead force the
+    // option if and only if GPU artisan ringbuffers are being used in the
+    // engine.
+    auto& main_settings =
+        engine->engine->GetEngineSettings().GetMainExecutorSettings();
+    auto gpu_artisan_config =
+        main_settings.GetBackendConfig<litert::lm::GpuArtisanConfig>();
+    if (gpu_artisan_config.ok() &&
+        gpu_artisan_config->use_autosized_ringbuffers) {
+      builder.SetEnableRewinding(false);
     }
     auto config = builder.Build(*engine->engine);
 

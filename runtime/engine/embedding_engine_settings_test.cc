@@ -58,6 +58,21 @@ TEST(EmbeddingEngineSettingsTest, CreateDefaultMultimodal) {
   EXPECT_TRUE(settings.GetAudioExecutorSettings().has_value());
 }
 
+TEST(EmbeddingEngineSettingsTest, BenchmarkSettings) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create("test_embedding_model.tflite"));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+
+  EXPECT_FALSE(settings.IsBenchmarkEnabled());
+  EXPECT_FALSE(settings.GetBenchmarkParams().has_value());
+
+  settings.GetMutableBenchmarkParams();
+
+  EXPECT_TRUE(settings.IsBenchmarkEnabled());
+  EXPECT_TRUE(settings.GetBenchmarkParams().has_value());
+}
+
 TEST(EmbeddingEngineSettingsTest, StreamOutputFormatting) {
   ASSERT_OK_AND_ASSIGN(auto model_assets,
                        ModelAssets::Create("test_embedding_model.tflite"));

@@ -232,7 +232,6 @@ def common_inference_options(f):
       flag_value="true",
       type=click.Choice(["true", "false"], case_sensitive=False),
       default=None,
-      hidden=True,
       callback=parse_bool_opt,
       help=(
           "Whether to use ringbuffers for local attention KV cache to minimize"

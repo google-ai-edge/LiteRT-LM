@@ -20,10 +20,10 @@
 #include <vector>
 
 #include "absl/base/nullability.h"  // from @com_google_absl
-#include "omni/asr/speech_decoder.h"
+#include "omni/asr/speech_recognizer.h"
 #include "omni/base/stage.h"
 
-namespace litert_lm::omni::asr {
+namespace litert::omni::asr {
 
 // Represents a decoded word and its optional timestamp.
 struct Word {
@@ -34,11 +34,12 @@ struct Word {
 // Abstract interface for converting decoded tokens into words.
 class Detokenizer : public SingleThreadedStageWithDeque<std::vector<Word>> {
  public:
-  using Word = ::litert_lm::omni::asr::Word;
+  using Word = ::litert::omni::asr::Word;
 
   explicit Detokenizer(
-      Stage<std::vector<SpeechDecoder::DecodedToken>>* absl_nonnull decoder)
-      : decoder_(*decoder) {}
+      Stage<std::vector<SpeechRecognizer::DecodedToken>>* absl_nonnull
+          speech_recognizer)
+      : speech_recognizer_(*speech_recognizer) {}
 
   ~Detokenizer() override = default;
 
@@ -46,11 +47,13 @@ class Detokenizer : public SingleThreadedStageWithDeque<std::vector<Word>> {
   virtual void Reset() = 0;
 
  protected:
-  bool NeedScheduleInternal() const override { return decoder_.HasOutput(); }
+  bool NeedScheduleInternal() const override {
+    return speech_recognizer_.HasOutput();
+  }
 
-  Stage<std::vector<SpeechDecoder::DecodedToken>>& decoder_;
+  Stage<std::vector<SpeechRecognizer::DecodedToken>>& speech_recognizer_;
 };
 
-}  // namespace litert_lm::omni::asr
+}  // namespace litert::omni::asr
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_DETOKENIZER_H_

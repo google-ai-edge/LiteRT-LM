@@ -1248,13 +1248,22 @@ class OpenAIHandler(serve_util.CORSRequestHandler):
 
     try:
       context_messages = translated_messages[:-1] if translated_messages else []
+      provider = (
+          litert_lm.LiteRtLmConstraintProviderType.LL_GUIDANCE
+          if response_format is not None
+          else None
+      )
+      constrained_decoding_config = litert_lm.ConstrainedDecodingConfig(
+          enable=True,
+          provider=provider,
+      )
       with engine.create_conversation(
           messages=context_messages,
           tools=tools or None,
           automatic_tool_calling=False,
           sampler_config=sampler_config,
           thinking_config=thinking_config,
-          enable_response_format=response_format is not None,
+          constrained_decoding_config=constrained_decoding_config,
       ) as conv:
         now = datetime.datetime.now(datetime.timezone.utc)
         now_str = now.strftime("%Y%m%d%H%M%S%f")
@@ -1336,12 +1345,21 @@ class OpenAIHandler(serve_util.CORSRequestHandler):
     stream = body.get("stream", False)
 
     try:
+      provider = (
+          litert_lm.LiteRtLmConstraintProviderType.LL_GUIDANCE
+          if response_format is not None
+          else None
+      )
+      constrained_decoding_config = litert_lm.ConstrainedDecodingConfig(
+          enable=True,
+          provider=provider,
+      )
       with engine.create_conversation(
           messages=[],
           automatic_tool_calling=False,
           sampler_config=None,
           thinking_config=thinking_config,
-          enable_response_format=response_format is not None,
+          constrained_decoding_config=constrained_decoding_config,
       ) as conv:
         now = datetime.datetime.now(datetime.timezone.utc)
         now_str = now.strftime("%Y%m%d%H%M%S%f")

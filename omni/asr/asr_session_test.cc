@@ -29,16 +29,17 @@
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "absl/synchronization/notification.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
+#include "support/util/test_utils.h"  // from @litert  // IWYU pragma: keep for ASSERT_OK
 #include "omni/asr/audio_preprocessor.h"
 #include "omni/asr/audio_source.h"
 #include "omni/asr/detokenizer.h"
 #include "omni/asr/levenshtein_text_merger.h"
-#include "omni/asr/speech_decoder.h"
+#include "omni/asr/speech_recognizer.h"
 #include "omni/asr/text_merger.h"
 #include "omni/base/stage.h"
 #include "runtime/framework/threadpool.h"
 
-namespace litert_lm::omni::asr {
+namespace litert::omni::asr {
 namespace {
 
 // Dummy AudioSource returning pre-configured PCM audio chunks via
@@ -102,12 +103,12 @@ class DummyAudioPreprocessor : public AudioPreprocessor {
   }
 };
 
-// Dummy SpeechDecoder pulling mel features from preprocessor.
-class DummySpeechDecoder : public SpeechDecoder {
+// Dummy SpeechRecognizer pulling mel features from preprocessor.
+class DummySpeechRecognizer : public SpeechRecognizer {
  public:
-  explicit DummySpeechDecoder(
+  explicit DummySpeechRecognizer(
       Stage<std::vector<float>>* absl_nonnull audio_preprocessor)
-      : SpeechDecoder(audio_preprocessor) {}
+      : SpeechRecognizer(audio_preprocessor) {}
 
   void Reset() override {
     absl::MutexLock lock(mutex_);
@@ -125,7 +126,7 @@ class DummySpeechDecoder : public SpeechDecoder {
       return mel_features.status();
     }
 
-    std::vector<SpeechDecoder::DecodedToken> tokens;
+    std::vector<SpeechRecognizer::DecodedToken> tokens;
     tokens.reserve(mel_features->size());
     for (size_t i = 0; i < mel_features->size(); ++i) {
       tokens.push_back({static_cast<int>((*mel_features)[i]), 100});
@@ -135,12 +136,13 @@ class DummySpeechDecoder : public SpeechDecoder {
   }
 };
 
-// Dummy Detokenizer pulling decoded tokens from decoder.
+// Dummy Detokenizer pulling decoded tokens from recognizer.
 class DummyDetokenizer : public Detokenizer {
  public:
   explicit DummyDetokenizer(
-      Stage<std::vector<SpeechDecoder::DecodedToken>>* absl_nonnull decoder)
-      : Detokenizer(decoder) {}
+      Stage<std::vector<SpeechRecognizer::DecodedToken>>* absl_nonnull
+          recognizer)
+      : Detokenizer(recognizer) {}
 
   void Reset() override {
     absl::MutexLock lock(mutex_);
@@ -151,7 +153,7 @@ class DummyDetokenizer : public Detokenizer {
   absl::Status ScheduleInternal() override {
     absl::Cleanup cleanup = [this] { SetState(State::kIdle); };
 
-    auto tokens = decoder_.GetOutput();
+    auto tokens = speech_recognizer_.GetOutput();
     if (absl::IsNotFound(tokens.status())) {
       return absl::OkStatus();
     } else if (!tokens.ok()) {
@@ -178,31 +180,32 @@ TEST(AsrSessionTest, FullSessionEndToEndFlow) {
   auto audio_source = std::make_unique<DummyAudioSource>(chunks);
   auto preprocessor =
       std::make_unique<DummyAudioPreprocessor>(audio_source.get());
-  auto speech_decoder =
-      std::make_unique<DummySpeechDecoder>(preprocessor.get());
-  auto detokenizer = std::make_unique<DummyDetokenizer>(speech_decoder.get());
+  auto speech_recognizer =
+      std::make_unique<DummySpeechRecognizer>(preprocessor.get());
+  auto detokenizer =
+      std::make_unique<DummyDetokenizer>(speech_recognizer.get());
   auto text_merger = std::make_unique<LevenshteinTextMerger>(detokenizer.get());
 
   AsrSession::Components components;
   components.audio_source = std::move(audio_source);
   components.preprocessor = std::move(preprocessor);
-  components.speech_decoder = std::move(speech_decoder);
+  components.speech_recognizer = std::move(speech_recognizer);
   components.detokenizer = std::move(detokenizer);
   components.text_merger = std::move(text_merger);
 
   auto session_status = AsrSession::Create(std::move(components));
-  EXPECT_TRUE(session_status.ok());
+  ASSERT_OK(session_status);
   auto session = std::move(*session_status);
 
   // Process Chunk 1: "word_1 word_2"
   auto res1 = session->ProcessNextChunk();
-  EXPECT_TRUE(res1.ok());
+  ASSERT_OK(res1);
   EXPECT_EQ(res1->confirmed_text, "");
   EXPECT_EQ(res1->unconfirmed_text, "word_1 word_2");
 
   // Process Chunk 2: "word_2 word_3" (overlaps at word_2)
   auto res2 = session->ProcessNextChunk();
-  EXPECT_TRUE(res2.ok());
+  ASSERT_OK(res2);
   EXPECT_EQ(res2->confirmed_text, "word_1");
   EXPECT_EQ(res2->unconfirmed_text, "word_2 word_3");
 
@@ -212,7 +215,7 @@ TEST(AsrSessionTest, FullSessionEndToEndFlow) {
 
   // Flush remaining
   auto res_flush = session->Flush();
-  EXPECT_TRUE(res_flush.ok());
+  ASSERT_OK(res_flush);
   EXPECT_EQ(res_flush->confirmed_text, "word_2 word_3");
   EXPECT_EQ(res_flush->unconfirmed_text, "");
 }
@@ -226,20 +229,21 @@ TEST(AsrSessionTest, ProcessAsyncFlow) {
   auto audio_source = std::make_unique<DummyAudioSource>(chunks);
   auto preprocessor =
       std::make_unique<DummyAudioPreprocessor>(audio_source.get());
-  auto speech_decoder =
-      std::make_unique<DummySpeechDecoder>(preprocessor.get());
-  auto detokenizer = std::make_unique<DummyDetokenizer>(speech_decoder.get());
+  auto speech_recognizer =
+      std::make_unique<DummySpeechRecognizer>(preprocessor.get());
+  auto detokenizer =
+      std::make_unique<DummyDetokenizer>(speech_recognizer.get());
   auto text_merger = std::make_unique<LevenshteinTextMerger>(detokenizer.get());
 
   AsrSession::Components components;
   components.audio_source = std::move(audio_source);
   components.preprocessor = std::move(preprocessor);
-  components.speech_decoder = std::move(speech_decoder);
+  components.speech_recognizer = std::move(speech_recognizer);
   components.detokenizer = std::move(detokenizer);
   components.text_merger = std::move(text_merger);
 
   auto session_status = AsrSession::Create(std::move(components));
-  EXPECT_TRUE(session_status.ok());
+  ASSERT_OK(session_status);
   auto session = std::move(*session_status);
 
   ::litert::lm::ThreadPool pool("test_pool", 4);
@@ -277,20 +281,21 @@ TEST(AsrSessionTest, MultipleProcessAsyncCallsInSequence) {
   auto audio_source = std::make_unique<DummyAudioSource>(chunks);
   auto preprocessor =
       std::make_unique<DummyAudioPreprocessor>(audio_source.get());
-  auto speech_decoder =
-      std::make_unique<DummySpeechDecoder>(preprocessor.get());
-  auto detokenizer = std::make_unique<DummyDetokenizer>(speech_decoder.get());
+  auto speech_recognizer =
+      std::make_unique<DummySpeechRecognizer>(preprocessor.get());
+  auto detokenizer =
+      std::make_unique<DummyDetokenizer>(speech_recognizer.get());
   auto text_merger = std::make_unique<LevenshteinTextMerger>(detokenizer.get());
 
   AsrSession::Components components;
   components.audio_source = std::move(audio_source);
   components.preprocessor = std::move(preprocessor);
-  components.speech_decoder = std::move(speech_decoder);
+  components.speech_recognizer = std::move(speech_recognizer);
   components.detokenizer = std::move(detokenizer);
   components.text_merger = std::move(text_merger);
 
   auto session_status = AsrSession::Create(std::move(components));
-  EXPECT_TRUE(session_status.ok());
+  ASSERT_OK(session_status);
   auto session = std::move(*session_status);
 
   ::litert::lm::ThreadPool pool("test_pool", 4);
@@ -333,20 +338,21 @@ TEST(AsrSessionTest, RejectsConcurrentProcessAsyncCalls) {
   auto audio_source = std::make_unique<DummyAudioSource>(chunks);
   auto preprocessor =
       std::make_unique<DummyAudioPreprocessor>(audio_source.get());
-  auto speech_decoder =
-      std::make_unique<DummySpeechDecoder>(preprocessor.get());
-  auto detokenizer = std::make_unique<DummyDetokenizer>(speech_decoder.get());
+  auto speech_recognizer =
+      std::make_unique<DummySpeechRecognizer>(preprocessor.get());
+  auto detokenizer =
+      std::make_unique<DummyDetokenizer>(speech_recognizer.get());
   auto text_merger = std::make_unique<LevenshteinTextMerger>(detokenizer.get());
 
   AsrSession::Components components;
   components.audio_source = std::move(audio_source);
   components.preprocessor = std::move(preprocessor);
-  components.speech_decoder = std::move(speech_decoder);
+  components.speech_recognizer = std::move(speech_recognizer);
   components.detokenizer = std::move(detokenizer);
   components.text_merger = std::move(text_merger);
 
   auto session_status = AsrSession::Create(std::move(components));
-  EXPECT_TRUE(session_status.ok());
+  ASSERT_OK(session_status);
   auto session = std::move(*session_status);
 
   ::litert::lm::ThreadPool pool("test_pool", 4);
@@ -380,20 +386,21 @@ TEST(AsrSessionTest, DestroySessionSafelyDuringProcessAsync) {
   auto audio_source = std::make_unique<DummyAudioSource>(chunks);
   auto preprocessor =
       std::make_unique<DummyAudioPreprocessor>(audio_source.get());
-  auto speech_decoder =
-      std::make_unique<DummySpeechDecoder>(preprocessor.get());
-  auto detokenizer = std::make_unique<DummyDetokenizer>(speech_decoder.get());
+  auto speech_recognizer =
+      std::make_unique<DummySpeechRecognizer>(preprocessor.get());
+  auto detokenizer =
+      std::make_unique<DummyDetokenizer>(speech_recognizer.get());
   auto text_merger = std::make_unique<LevenshteinTextMerger>(detokenizer.get());
 
   AsrSession::Components components;
   components.audio_source = std::move(audio_source);
   components.preprocessor = std::move(preprocessor);
-  components.speech_decoder = std::move(speech_decoder);
+  components.speech_recognizer = std::move(speech_recognizer);
   components.detokenizer = std::move(detokenizer);
   components.text_merger = std::move(text_merger);
 
   auto session_status = AsrSession::Create(std::move(components));
-  EXPECT_TRUE(session_status.ok());
+  ASSERT_OK(session_status);
   auto session = std::move(*session_status);
 
   ::litert::lm::ThreadPool pool("test_pool", 4);
@@ -422,4 +429,4 @@ TEST(AsrSessionTest, FailsWhenMissingComponent) {
 }
 
 }  // namespace
-}  // namespace litert_lm::omni::asr
+}  // namespace litert::omni::asr

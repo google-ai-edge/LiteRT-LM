@@ -25,11 +25,12 @@
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "omni/base/async_stage_scheduler.h"
+#include "omni/base/io_types.h"
 #include "omni/base/stage.h"
 #include "omni/tts/vocoder.h"
 #include "runtime/framework/threadpool.h"
 
-namespace litert_lm::omni::tts {
+namespace litert::omni::tts {
 
 absl::StatusOr<std::unique_ptr<TtsSession>> TtsSession::Create(
     Components components) {
@@ -76,7 +77,7 @@ void TtsSession::Reset() {
   components_.vocoder->Reset();
 }
 
-absl::StatusOr<Vocoder::AudioOutput> TtsSession::ProcessNextChunk() {
+absl::StatusOr<AudioOutput> TtsSession::ProcessNextChunk() {
   ABSL_RETURN_IF_ERROR(components_.text_source->Schedule());
 
   if (components_.text_frontend->NeedSchedule()) {
@@ -116,24 +117,23 @@ absl::Status TtsSession::ProcessAsync(::litert::lm::ThreadPool& thread_pool,
       components_.vocoder.get(),
   };
   auto callback_with_flush_on_eos =
-      [callback = std::move(callback), this](
-          absl::StatusOr<Vocoder::AudioOutput> result) mutable -> absl::Status {
+      [callback = std::move(callback),
+       this](absl::StatusOr<AudioOutput> result) mutable -> absl::Status {
     if (absl::IsOutOfRange(result.status())) {
       ABSL_RETURN_IF_ERROR(components_.vocoder->Flush());
       ABSL_RETURN_IF_ERROR(callback(components_.vocoder->GetOutput()));
     }
     return callback(std::move(result));
   };
-  async_scheduler_ =
-      std::make_unique<AsyncStageScheduler<Vocoder::AudioOutput>>(
-          std::move(stages), components_.vocoder.get(), &thread_pool,
-          std::move(callback_with_flush_on_eos));
+  async_scheduler_ = std::make_unique<AsyncStageScheduler<AudioOutput>>(
+      std::move(stages), components_.vocoder.get(), &thread_pool,
+      std::move(callback_with_flush_on_eos));
   return async_scheduler_->Start();
 }
 
-absl::StatusOr<Vocoder::AudioOutput> TtsSession::Flush() {
+absl::StatusOr<AudioOutput> TtsSession::Flush() {
   ABSL_RETURN_IF_ERROR(components_.vocoder->Flush());
   return components_.vocoder->GetOutput();
 }
 
-}  // namespace litert_lm::omni::tts
+}  // namespace litert::omni::tts
