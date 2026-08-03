@@ -835,6 +835,390 @@ TEST_F(ExecutorUtilsTest, HWMaskUpdateWithValidMask) {
   }
 }
 
+TEST_F(ExecutorUtilsTest, HWMaskUpdateSWADecode_TimestepSmallerLocalWindow) {
+  int seq_q = 1;
+  int seq_k_local = 513;    // capacity 512 + 1 batch
+  int seq_k_global = 4097;  // capacity 4096 + 1 batch
+  int time_step = 300;
+  float valid_val = 0.0f;
+  float masked_val = -1e9f;
+
+  absl::flat_hash_map<absl::string_view, TensorBuffer> in_buffers;
+  std::vector<int32_t> time_step_data = {time_step};
+  in_buffers.emplace("time_step",
+                     CreateTensorBuffer(time_step_data, ElementType::Int32));
+
+  absl::flat_hash_map<absl::string_view, TensorBuffer> out_buffers;
+  std::vector<float> mask_local_data(seq_q * seq_k_local, 0.0f);
+  std::vector<float> mask_global_data(seq_q * seq_k_global, 0.0f);
+
+  out_buffers.emplace("mask_local", CreateTensorBufferWithDims(
+                                        mask_local_data, ElementType::Float32,
+                                        {1, seq_q, seq_k_local}));
+  out_buffers.emplace("mask_global", CreateTensorBufferWithDims(
+                                         mask_global_data, ElementType::Float32,
+                                         {1, seq_q, seq_k_global}));
+
+  ASSERT_TRUE(HWMaskUpdate(in_buffers, out_buffers).ok());
+
+  auto local_lock_expected = TensorBufferScopedLock::Create<float>(
+      out_buffers.at("mask_local"), TensorBuffer::LockMode::kRead);
+  auto global_lock_expected = TensorBufferScopedLock::Create<float>(
+      out_buffers.at("mask_global"), TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(local_lock_expected);
+  ASSERT_TRUE(global_lock_expected);
+  float* local_ptr = local_lock_expected->second;
+  float* global_ptr = global_lock_expected->second;
+
+  // Check local mask (SWA capacity 512, time_step 300)
+  // No wrapping. Valid range in history: [0, 299].
+  EXPECT_EQ(local_ptr[0], valid_val);
+  EXPECT_EQ(local_ptr[299], valid_val);
+  EXPECT_EQ(local_ptr[300], masked_val);
+  EXPECT_EQ(local_ptr[511], masked_val);
+  // Batch part (index 512)
+  EXPECT_EQ(local_ptr[512], valid_val);
+
+  // Check global mask (capacity 4096, time_step 300)
+  // No wrapping. Valid range in history: [0, 299].
+  EXPECT_EQ(global_ptr[0], valid_val);
+  EXPECT_EQ(global_ptr[299], valid_val);
+  EXPECT_EQ(global_ptr[300], masked_val);
+  EXPECT_EQ(global_ptr[4095], masked_val);
+  // Batch part (index 4096)
+  EXPECT_EQ(global_ptr[4096], valid_val);
+}
+
+TEST_F(ExecutorUtilsTest, HWMaskUpdateSWADecode_TimestepLargerLocalWindow) {
+  int seq_q = 1;
+  int seq_k_local = 513;    // capacity 512 + 1 batch
+  int seq_k_global = 4097;  // capacity 4096 + 1 batch
+  int time_step = 1000;
+  float valid_val = 0.0f;
+  float masked_val = -1e9f;
+
+  absl::flat_hash_map<absl::string_view, TensorBuffer> in_buffers;
+  std::vector<int32_t> time_step_data = {time_step};
+  in_buffers.emplace("time_step",
+                     CreateTensorBuffer(time_step_data, ElementType::Int32));
+
+  absl::flat_hash_map<absl::string_view, TensorBuffer> out_buffers;
+  std::vector<float> mask_local_data(seq_q * seq_k_local, 0.0f);
+  std::vector<float> mask_global_data(seq_q * seq_k_global, 0.0f);
+
+  out_buffers.emplace(
+      "mask_local",
+      CreateTensorBufferWithDims(mask_local_data, ElementType::Float32,
+                                 {1, seq_q, seq_k_local}));
+  out_buffers.emplace(
+      "mask_global",
+      CreateTensorBufferWithDims(mask_global_data, ElementType::Float32,
+                                 {1, seq_q, seq_k_global}));
+
+  ASSERT_TRUE(HWMaskUpdate(in_buffers, out_buffers).ok());
+
+  auto local_lock_expected = TensorBufferScopedLock::Create<float>(
+      out_buffers.at("mask_local"), TensorBuffer::LockMode::kRead);
+  auto global_lock_expected = TensorBufferScopedLock::Create<float>(
+      out_buffers.at("mask_global"), TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(local_lock_expected);
+  ASSERT_TRUE(global_lock_expected);
+  float* local_ptr = local_lock_expected->second;
+  float* global_ptr = global_lock_expected->second;
+
+  // Check local mask (SWA capacity 512, time_step 1000)
+  // Wrapped. Valid range in history: [489, 999] (relative to time_step).
+  // t_k = 999 - ((999 - k) % 512)
+  // Index 488: t_k = 488 (invalid)
+  // Index 489: t_k = 489 (valid)
+  // Index 0: t_k = 512 (valid)
+  // Index 487: t_k = 999 (valid)
+  EXPECT_EQ(local_ptr[488], masked_val);
+  EXPECT_EQ(local_ptr[489], valid_val);
+  EXPECT_EQ(local_ptr[0], valid_val);
+  EXPECT_EQ(local_ptr[487], valid_val);
+  // Batch part (index 512)
+  EXPECT_EQ(local_ptr[512], valid_val);
+
+  // Check global mask (capacity 4096, time_step 1000)
+  // Not wrapped. Valid range: 0..999.
+  EXPECT_EQ(global_ptr[0], valid_val);
+  EXPECT_EQ(global_ptr[999], valid_val);
+  EXPECT_EQ(global_ptr[1000], masked_val);
+  EXPECT_EQ(global_ptr[4095], masked_val);
+  // Batch part (index 4096)
+  EXPECT_EQ(global_ptr[4096], valid_val);
+}
+
+TEST_F(ExecutorUtilsTest, HWMaskUpdateCapacity4096Uses512AsWindow) {
+  int seq_q = 1;
+  int seq_k_local = 4097;   // capacity 4096 + 1 batch
+  int seq_k_global = 4097;  // capacity 4096 + 1 batch
+  int time_step = 1000;
+  float valid_val = 0.0f;
+  float masked_val = -1e9f;
+
+  absl::flat_hash_map<absl::string_view, TensorBuffer> in_buffers;
+  std::vector<int32_t> time_step_data = {time_step};
+  in_buffers.emplace("time_step",
+                     CreateTensorBuffer(time_step_data, ElementType::Int32));
+
+  absl::flat_hash_map<absl::string_view, TensorBuffer> out_buffers;
+  std::vector<float> mask_local_data(seq_q * seq_k_local, 0.0f);
+  std::vector<float> mask_global_data(seq_q * seq_k_global, 0.0f);
+
+  out_buffers.emplace("mask_local", CreateTensorBufferWithDims(
+                                        mask_local_data, ElementType::Float32,
+                                        {1, seq_q, seq_k_local}));
+  out_buffers.emplace("mask_global", CreateTensorBufferWithDims(
+                                         mask_global_data, ElementType::Float32,
+                                         {1, seq_q, seq_k_global}));
+
+  ASSERT_TRUE(HWMaskUpdate(in_buffers, out_buffers).ok());
+
+  auto local_lock_expected = TensorBufferScopedLock::Create<float>(
+      out_buffers.at("mask_local"), TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(local_lock_expected);
+  float* local_ptr = local_lock_expected->second;
+
+  // Check local mask (SWA capacity 4096, time_step 1000)
+  // Uses 512 as window size.
+  // Valid range in history: [489, 999].
+  EXPECT_EQ(local_ptr[0], masked_val);
+  EXPECT_EQ(local_ptr[488], masked_val);
+  EXPECT_EQ(local_ptr[489], valid_val);
+  EXPECT_EQ(local_ptr[999], valid_val);
+  EXPECT_EQ(local_ptr[1000], masked_val);
+}
+
+TEST_F(ExecutorUtilsTest, HWMaskUpdateSWAPrefill) {
+  int seq_q = 128;
+  int seq_k_local = 640;    // capacity 512 + 128 batch
+  int seq_k_global = 4224;  // capacity 4096 + 128 batch
+  int time_step = 0;
+  float valid_val = 0.0f;
+  float masked_val = -1e9f;
+
+  absl::flat_hash_map<absl::string_view, TensorBuffer> in_buffers;
+  std::vector<int32_t> time_step_data = {time_step};
+  in_buffers.emplace("time_step",
+                     CreateTensorBuffer(time_step_data, ElementType::Int32));
+
+  absl::flat_hash_map<absl::string_view, TensorBuffer> out_buffers;
+  std::vector<float> mask_local_data(seq_q * seq_k_local, 0.0f);
+  std::vector<float> mask_global_data(seq_q * seq_k_global, 0.0f);
+
+  out_buffers.emplace(
+      "mask_local",
+      CreateTensorBufferWithDims(mask_local_data, ElementType::Float32,
+                                 {1, seq_q, seq_k_local}));
+  out_buffers.emplace(
+      "mask_global",
+      CreateTensorBufferWithDims(mask_global_data, ElementType::Float32,
+                                 {1, seq_q, seq_k_global}));
+
+  ASSERT_TRUE(HWMaskUpdate(in_buffers, out_buffers).ok());
+
+  auto local_lock_expected = TensorBufferScopedLock::Create<float>(
+      out_buffers.at("mask_local"), TensorBuffer::LockMode::kRead);
+  auto global_lock_expected = TensorBufferScopedLock::Create<float>(
+      out_buffers.at("mask_global"), TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(local_lock_expected);
+  ASSERT_TRUE(global_lock_expected);
+  float* local_ptr = local_lock_expected->second;
+  float* global_ptr = global_lock_expected->second;
+
+  // For row q = 10:
+  // History is all masked.
+  // Batch part: k_rel in 0..127.
+  // Valid if k_rel <= q (0..10).
+  int q = 10;
+  int64_t row_offset_local = q * seq_k_local;
+  int64_t row_offset_global = q * seq_k_global;
+
+  // Local history (0..511)
+  EXPECT_EQ(local_ptr[row_offset_local + 0], masked_val);
+  EXPECT_EQ(local_ptr[row_offset_local + 511], masked_val);
+  // Local batch (512..639)
+  // k_rel = 0 <= 10
+  EXPECT_EQ(local_ptr[row_offset_local + 512 + 0], valid_val);
+  // k_rel = 10 <= 10
+  EXPECT_EQ(local_ptr[row_offset_local + 512 + 10], valid_val);
+  // k_rel = 11 > 10
+  EXPECT_EQ(local_ptr[row_offset_local + 512 + 11], masked_val);
+
+  // Global history (0..4095)
+  EXPECT_EQ(global_ptr[row_offset_global + 0], masked_val);
+  EXPECT_EQ(global_ptr[row_offset_global + 4095], masked_val);
+  // Global batch (4096..4223)
+  // k_rel = 0 <= 10
+  EXPECT_EQ(global_ptr[row_offset_global + 4096 + 0], valid_val);
+  // k_rel = 10 <= 10
+  EXPECT_EQ(global_ptr[row_offset_global + 4096 + 10], valid_val);
+  // k_rel = 11 > 10
+  EXPECT_EQ(global_ptr[row_offset_global + 4096 + 11], masked_val);
+}
+
+TEST_F(ExecutorUtilsTest, HWMaskUpdateSWAPrefill_TimestepSmallerLocalWindow) {
+  int seq_q = 128;
+  int seq_k_local = 640;    // capacity 512 + 128 batch
+  int seq_k_global = 4224;  // capacity 4096 + 128 batch
+  int time_step = 300;
+  float valid_val = 0.0f;
+  float masked_val = -1e9f;
+
+  absl::flat_hash_map<absl::string_view, TensorBuffer> in_buffers;
+  std::vector<int32_t> time_step_data = {time_step};
+  in_buffers.emplace("time_step",
+                     CreateTensorBuffer(time_step_data, ElementType::Int32));
+
+  absl::flat_hash_map<absl::string_view, TensorBuffer> out_buffers;
+  std::vector<float> mask_local_data(seq_q * seq_k_local, 0.0f);
+  std::vector<float> mask_global_data(seq_q * seq_k_global, 0.0f);
+
+  out_buffers.emplace("mask_local", CreateTensorBufferWithDims(
+                                        mask_local_data, ElementType::Float32,
+                                        {1, seq_q, seq_k_local}));
+  out_buffers.emplace("mask_global", CreateTensorBufferWithDims(
+                                         mask_global_data, ElementType::Float32,
+                                         {1, seq_q, seq_k_global}));
+
+  ASSERT_TRUE(HWMaskUpdate(in_buffers, out_buffers).ok());
+
+  auto local_lock_expected = TensorBufferScopedLock::Create<float>(
+      out_buffers.at("mask_local"), TensorBuffer::LockMode::kRead);
+  auto global_lock_expected = TensorBufferScopedLock::Create<float>(
+      out_buffers.at("mask_global"), TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(local_lock_expected);
+  ASSERT_TRUE(global_lock_expected);
+  float* local_ptr = local_lock_expected->second;
+  float* global_ptr = global_lock_expected->second;
+
+  // For row q = 10:
+  // History valid range: [0, 299].
+  // Batch part: k_rel in 0..127. Valid if k_rel <= q (0..10).
+  int q = 10;
+  int64_t row_offset_local = q * seq_k_local;
+  int64_t row_offset_global = q * seq_k_global;
+
+  // Local history (0..511)
+  // First 300 tokens are valid historical tokens.
+  EXPECT_EQ(local_ptr[row_offset_local + 0], valid_val);
+  EXPECT_EQ(local_ptr[row_offset_local + 299], valid_val);
+  // Remaining slots in the history capacity (300 to 511) are empty/masked.
+  EXPECT_EQ(local_ptr[row_offset_local + 300], masked_val);
+  EXPECT_EQ(local_ptr[row_offset_local + 511], masked_val);
+  // Local batch (512..639)
+  // 512 is the offset where the current prefill batch starts in the KV cache.
+  // We check causality for query q = 10 (which is global token 310).
+  // Batch token 0 (global 300) is before query, so it's valid.
+  EXPECT_EQ(local_ptr[row_offset_local + 512 + 0], valid_val);
+  // Batch token 10 (global 310, itself) is valid.
+  EXPECT_EQ(local_ptr[row_offset_local + 512 + 10], valid_val);
+  // Batch token 11 (global 311) is in the future relative to q=10, so it's
+  // masked.
+  EXPECT_EQ(local_ptr[row_offset_local + 512 + 11], masked_val);
+
+  // Global history (0..4095)
+  // First 300 tokens are valid historical tokens.
+  EXPECT_EQ(global_ptr[row_offset_global + 0], valid_val);
+  EXPECT_EQ(global_ptr[row_offset_global + 299], valid_val);
+  // Remaining slots in global capacity (300 to 4095) are empty/masked.
+  EXPECT_EQ(global_ptr[row_offset_global + 300], masked_val);
+  EXPECT_EQ(global_ptr[row_offset_global + 4095], masked_val);
+  // Global batch (4096..4223)
+  // 4096 is the offset where the current prefill batch starts in the global
+  // KV cache.
+  EXPECT_EQ(global_ptr[row_offset_global + 4096 + 0], valid_val);
+  EXPECT_EQ(global_ptr[row_offset_global + 4096 + 10], valid_val);
+  EXPECT_EQ(global_ptr[row_offset_global + 4096 + 11], masked_val);
+}
+
+TEST_F(ExecutorUtilsTest, HWMaskUpdateSWAPrefill_TimestepLargerLocalWindow) {
+  int seq_q = 128;
+  int seq_k_local = 640;    // capacity 512 + 128 batch
+  int seq_k_global = 4224;  // capacity 4096 + 128 batch
+  int time_step = 1000;
+  float valid_val = 0.0f;
+  float masked_val = -1e9f;
+
+  absl::flat_hash_map<absl::string_view, TensorBuffer> in_buffers;
+  std::vector<int32_t> time_step_data = {time_step};
+  in_buffers.emplace("time_step",
+                     CreateTensorBuffer(time_step_data, ElementType::Int32));
+
+  absl::flat_hash_map<absl::string_view, TensorBuffer> out_buffers;
+  std::vector<float> mask_local_data(seq_q * seq_k_local, 0.0f);
+  std::vector<float> mask_global_data(seq_q * seq_k_global, 0.0f);
+
+  out_buffers.emplace("mask_local", CreateTensorBufferWithDims(
+                                        mask_local_data, ElementType::Float32,
+                                        {1, seq_q, seq_k_local}));
+  out_buffers.emplace("mask_global", CreateTensorBufferWithDims(
+                                         mask_global_data, ElementType::Float32,
+                                         {1, seq_q, seq_k_global}));
+
+  ASSERT_TRUE(HWMaskUpdate(in_buffers, out_buffers).ok());
+
+  auto local_lock_expected = TensorBufferScopedLock::Create<float>(
+      out_buffers.at("mask_local"), TensorBuffer::LockMode::kRead);
+  auto global_lock_expected = TensorBufferScopedLock::Create<float>(
+      out_buffers.at("mask_global"), TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(local_lock_expected);
+  ASSERT_TRUE(global_lock_expected);
+  float* local_ptr = local_lock_expected->second;
+  float* global_ptr = global_lock_expected->second;
+
+  // For row q = 10:
+  // Valid range in history: [499, 999] (logical).
+  // Corresponding physical indices: [0, 487] and [499, 511].
+  // Masked physical indices: [488, 498].
+  int q = 10;
+  int64_t row_offset_local = q * seq_k_local;
+  int64_t row_offset_global = q * seq_k_global;
+
+  // Local history (0..511)
+  // SWA window is 512. For q = 10 (global 1010), valid history is [499, 999].
+  // SWA circular buffer wrapped. Token 999 is at slot 487. Token 499 is at
+  // slot 499.
+  // Token 488 (slot 488) is out of window, so it's masked.
+  EXPECT_EQ(local_ptr[row_offset_local + 488], masked_val);
+  // Token 498 (slot 498) is out of window, so it's masked.
+  EXPECT_EQ(local_ptr[row_offset_local + 498], masked_val);
+  // Token 499 (slot 499) is the oldest valid token in window.
+  EXPECT_EQ(local_ptr[row_offset_local + 499], valid_val);
+  // Token 999 (slot 487) is the newest historical token, valid.
+  EXPECT_EQ(local_ptr[row_offset_local + 487], valid_val);
+  // Token 512 (slot 0) is valid.
+  EXPECT_EQ(local_ptr[row_offset_local + 0], valid_val);
+  // Local batch (512..639)
+  // 512 is the offset where the current prefill batch starts in the KV cache.
+  // We check causality for query q = 10 (which is global token 1010).
+  // Batch token 0 (global 1000) is before query, so it's valid.
+  EXPECT_EQ(local_ptr[row_offset_local + 512 + 0], valid_val);
+  // Batch token 10 (global 1010, itself) is valid.
+  EXPECT_EQ(local_ptr[row_offset_local + 512 + 10], valid_val);
+  // Batch token 11 (global 1011) is in the future relative to q=10, so it's
+  // masked.
+  EXPECT_EQ(local_ptr[row_offset_local + 512 + 11], masked_val);
+
+  // Check global mask (capacity 4096, time_step 1000)
+  // Not wrapped. Valid range: 0..999.
+  EXPECT_EQ(global_ptr[row_offset_global + 0], valid_val);
+  EXPECT_EQ(global_ptr[row_offset_global + 999], valid_val);
+  EXPECT_EQ(global_ptr[row_offset_global + 1000], masked_val);
+  EXPECT_EQ(global_ptr[row_offset_global + 4095], masked_val);
+  // Global batch (4096..4223)
+  // 4096 is the offset where the current prefill batch starts in the global
+  // KV cache.
+  EXPECT_EQ(global_ptr[row_offset_global + 4096 + 0], valid_val);
+  // Batch token 10 (global 1010, itself) is valid.
+  EXPECT_EQ(global_ptr[row_offset_global + 4096 + 10], valid_val);
+  // Batch token 11 (global 1011) is in the future relative to q=10, so it's
+  // masked.
+  EXPECT_EQ(global_ptr[row_offset_global + 4096 + 11], masked_val);
+}
+
 TEST_F(ExecutorUtilsTest, HWPerLayerEmbeddingLookupFloat32) {
   constexpr int kNumTables = 2;
   constexpr int kColSize = 4;
