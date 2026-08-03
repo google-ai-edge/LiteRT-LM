@@ -392,7 +392,6 @@ TEST(LiteRtLmLibTest, CreateEngineSettings_CpuConfig) {
   settings.model_path = model_path.string();
   settings.backend = "cpu";
   settings.num_cpu_threads = 8;
-  settings.enable_ynnpack = true;
   settings.prefill_chunk_size = 512;
 
   auto engine_settings_or = CreateEngineSettings(settings);
@@ -401,7 +400,6 @@ TEST(LiteRtLmLibTest, CreateEngineSettings_CpuConfig) {
                            .GetBackendConfig<CpuConfig>();
   ASSERT_OK(cpu_config_or.status());
   EXPECT_EQ(cpu_config_or->number_of_threads, 8);
-  EXPECT_TRUE(cpu_config_or->enable_ynnpack);
   EXPECT_EQ(cpu_config_or->prefill_chunk_size, 512);
 }
 
@@ -431,7 +429,6 @@ TEST(LiteRtLmLibTest, CreateEngineSettings_AdvancedSettings) {
   settings.num_output_candidates = 4;
   settings.conv_type = ConvType::kInt8;
   settings.prefill_batch_sizes = {1, 4, 16};
-  settings.enable_profiling = true;
 
   auto engine_settings_or = CreateEngineSettings(settings);
   ASSERT_OK(engine_settings_or.status());
@@ -441,7 +438,6 @@ TEST(LiteRtLmLibTest, CreateEngineSettings_AdvancedSettings) {
   EXPECT_EQ(advanced->num_output_candidates, 4);
   EXPECT_THAT(advanced->prefill_batch_sizes, ::testing::ElementsAre(1, 4, 16));
   EXPECT_TRUE(advanced->allow_src_quantized_fc_conv_ops.value_or(false));
-  EXPECT_TRUE(advanced->enable_profiling);
 }
 
 TEST(LiteRtLmLibTest, CreateEngineSettings_BenchmarkParams) {

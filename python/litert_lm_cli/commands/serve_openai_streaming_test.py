@@ -15,16 +15,14 @@
 import collections.abc
 import http.client
 import json
+import os
 import pathlib
 import threading
 from unittest import mock
-import urllib.error
 import urllib.request
 
 from absl.testing import absltest
 
-import litert_lm
-from litert_lm_cli import config as cli_config
 from litert_lm_cli import model
 from litert_lm_cli.commands import openai_handler
 from litert_lm_cli.commands import serve_util
@@ -67,15 +65,6 @@ class ServeOpenAIStreamingTest(absltest.TestCase):
     )
 
   def tearDown(self):
-    if (
-        hasattr(self.server, "litert_lm_engine")
-        and self.server.litert_lm_engine is not None
-    ):
-      try:
-        self.server.litert_lm_engine.__exit__(None, None, None)
-      except Exception:  # pylint: disable=broad-exception-caught
-        pass
-      self.server.litert_lm_engine = None
     self.server.shutdown()
     self.server.server_close()
     self.server_thread.join()
@@ -185,7 +174,7 @@ class ServeOpenAIStreamingTest(absltest.TestCase):
       )
       try:
         response2 = conn.getresponse()
-      except Exception as e:  # pylint: disable=broad-exception-caught
+      except Exception as e:
         self.fail(f"Second request failed (timed out as expected?): {e!r}")
 
       self.assertEqual(response2.status, 200)
@@ -226,266 +215,6 @@ class ServeOpenAIStreamingTest(absltest.TestCase):
         self.assertEqual(m["object"], "model")
         self.assertEqual(m["created"], 123456789)
         self.assertEqual(m["owned_by"], "litert-lm")
-
-  def test_parse_thinking_config(self):
-    config_none = openai_handler._parse_thinking_config(
-        {"reasoning_effort": "none"}
-    )
-    self.assertIsNotNone(config_none)
-    self.assertFalse(config_none.enable_thinking)
-    self.assertEqual(config_none.thinking_token_budget, 0)
-
-    for effort in ("minimal", "low", "medium", "high", "xhigh"):
-      config = openai_handler._parse_thinking_config(
-          {"reasoning_effort": effort}
-      )
-      self.assertIsNotNone(config)
-      self.assertTrue(config.enable_thinking)
-      self.assertEqual(config.thinking_token_budget, -1)
-
-    with self.assertRaises(ValueError):
-      openai_handler._parse_thinking_config(
-          {"reasoning_effort": "invalid_effort"}
-      )
-
-    with self.assertRaises(ValueError):
-      openai_handler._parse_thinking_config({"reasoning_effort": 10})
-
-    with self.assertRaises(ValueError):
-      openai_handler._parse_thinking_config({"reasoning_effort": True})
-
-    # Test fallback to config.json when reasoning_effort is not provided
-    with mock.patch.object(cli_config, "get_model_config") as mock_get_cfg:
-      mock_get_cfg.return_value = cli_config.ModelConfig(thinking=True)
-      cfg = openai_handler._parse_thinking_config({}, model_id="gemma3")
-      self.assertIsNotNone(cfg)
-      self.assertTrue(cfg.enable_thinking)
-      self.assertEqual(cfg.thinking_token_budget, -1)
-
-      mock_get_cfg.return_value = cli_config.ModelConfig(thinking_budget=10)
-      cfg = openai_handler._parse_thinking_config({}, model_id="gemma3")
-      self.assertIsNotNone(cfg)
-      self.assertTrue(cfg.enable_thinking)
-      self.assertEqual(cfg.thinking_token_budget, 10)
-
-      mock_get_cfg.return_value = cli_config.ModelConfig(thinking_budget=0)
-      cfg = openai_handler._parse_thinking_config({}, model_id="gemma3")
-      self.assertIsNotNone(cfg)
-      self.assertFalse(cfg.enable_thinking)
-      self.assertEqual(cfg.thinking_token_budget, 0)
-
-      mock_get_cfg.return_value = cli_config.ModelConfig(thinking=False)
-      cfg = openai_handler._parse_thinking_config({"model": "gemma3"})
-      self.assertIsNotNone(cfg)
-      self.assertFalse(cfg.enable_thinking)
-      self.assertEqual(cfg.thinking_token_budget, 0)
-
-      # When reasoning_effort is explicitly given, it overrides config.json
-      mock_get_cfg.return_value = cli_config.ModelConfig(thinking=False)
-      cfg = openai_handler._parse_thinking_config(
-          {"reasoning_effort": "low", "model": "gemma3"}
-      )
-      self.assertIsNotNone(cfg)
-      self.assertTrue(cfg.enable_thinking)
-      self.assertEqual(cfg.thinking_token_budget, -1)
-
-  def test_openai_responses_invalid_reasoning_effort(self):
-    mock_from_id = self.enter_context(
-        mock.patch.object(model.Model, "from_model_id", autospec=True)
-    )
-    mock_from_id.return_value = model.Model(
-        model_id="gemma3", model_path=str(self.model_path)
-    )
-
-    data = json.dumps(
-        {"model": "gemma3", "input": "Say hi", "reasoning_effort": "invalid"}
-    ).encode("utf-8")
-
-    req = urllib.request.Request(
-        f"http://localhost:{self.port}/v1/responses",
-        data=data,
-        headers={"Content-Type": "application/json"},
-    )
-
-    with self.assertRaises(urllib.error.HTTPError) as cm:
-      urllib.request.urlopen(req)
-    self.assertEqual(cm.exception.code, 400)
-
-  def test_openai_responses_with_reasoning_effort(self):
-    mock_from_id = self.enter_context(
-        mock.patch.object(model.Model, "from_model_id", autospec=True)
-    )
-    mock_from_id.return_value = model.Model(
-        model_id="gemma3", model_path=str(self.model_path)
-    )
-
-    data = json.dumps(
-        {"model": "gemma3", "input": "Say hi", "reasoning_effort": "low"}
-    ).encode("utf-8")
-
-    req = urllib.request.Request(
-        f"http://localhost:{self.port}/v1/responses",
-        data=data,
-        headers={"Content-Type": "application/json"},
-    )
-
-    with urllib.request.urlopen(req) as response:
-      self.assertEqual(response.getcode(), 200)
-
-  def test_openai_chat_completions_usage(self):
-    mock_from_id = self.enter_context(
-        mock.patch.object(model.Model, "from_model_id", autospec=True)
-    )
-    mock_from_id.return_value = model.Model(
-        model_id="gemma3", model_path=str(self.model_path)
-    )
-
-    data = json.dumps({
-        "model": "gemma3",
-        "messages": [{"role": "user", "content": "Say hi"}],
-    }).encode("utf-8")
-
-    req = urllib.request.Request(
-        f"http://localhost:{self.port}/v1/chat/completions",
-        data=data,
-        headers={"Content-Type": "application/json"},
-    )
-
-    with urllib.request.urlopen(req) as response:
-      self.assertEqual(response.getcode(), 200)
-      res_body = json.loads(response.read().decode("utf-8"))
-      self.assertIn("usage", res_body)
-      usage = res_body["usage"]
-      self.assertIn("prompt_tokens", usage)
-      self.assertIn("completion_tokens", usage)
-      self.assertIn("total_tokens", usage)
-      self.assertEqual(
-          usage["total_tokens"],
-          usage["prompt_tokens"] + usage["completion_tokens"],
-      )
-      self.assertIn("completion_tokens_details", usage)
-      self.assertEqual(
-          usage["completion_tokens_details"], {"reasoning_tokens": 0}
-      )
-      self.assertNotIn("prompt_tokens_details", usage)
-
-  def test_openai_chat_completions_streaming_usage(self):
-    mock_from_id = self.enter_context(
-        mock.patch.object(model.Model, "from_model_id", autospec=True)
-    )
-    mock_from_id.return_value = model.Model(
-        model_id="gemma3", model_path=str(self.model_path)
-    )
-
-    data = json.dumps({
-        "model": "gemma3",
-        "messages": [{"role": "user", "content": "Say hi"}],
-        "stream": True,
-        "stream_options": {"include_usage": True},
-    }).encode("utf-8")
-
-    req = urllib.request.Request(
-        f"http://localhost:{self.port}/v1/chat/completions",
-        data=data,
-        headers={"Content-Type": "application/json"},
-    )
-
-    with urllib.request.urlopen(req) as response:
-      self.assertEqual(response.getcode(), 200)
-      lines = response.read().decode("utf-8").split("\n")
-      chunks = []
-      for line in lines:
-        if line.startswith("data: ") and line != "data: [DONE]":
-          chunks.append(json.loads(line[len("data: ") :]))
-
-      self.assertNotEmpty(chunks)
-      usage_chunk = chunks[-1]
-      self.assertEqual(usage_chunk["choices"], [])
-      self.assertIn("usage", usage_chunk)
-      self.assertIsNotNone(usage_chunk["usage"])
-      usage = usage_chunk["usage"]
-      self.assertIn("prompt_tokens", usage)
-      self.assertIn("completion_tokens", usage)
-      self.assertIn("total_tokens", usage)
-      self.assertIn("completion_tokens_details", usage)
-      self.assertEqual(
-          usage["completion_tokens_details"], {"reasoning_tokens": 0}
-      )
-
-  def test_compute_token_usage_benchmark_info(self):
-    mock_conv = mock.MagicMock()
-    mock_conv.get_benchmark_info.return_value = litert_lm.BenchmarkInfo(
-        init_time_in_second=0.1,
-        time_to_first_token_in_second=0.05,
-        last_prefill_token_count=15,
-        last_prefill_tokens_per_second=300.0,
-        last_decode_token_count=10,
-        last_decode_tokens_per_second=200.0,
-    )
-
-    usage = openai_handler._compute_token_usage(mock_conv)
-    self.assertEqual(usage["prompt_tokens"], 15)
-    self.assertEqual(usage["completion_tokens"], 10)
-    self.assertEqual(usage["total_tokens"], 25)
-    self.assertEqual(
-        usage["completion_tokens_details"], {"reasoning_tokens": 0}
-    )
-
-    usage_with_reasoning = openai_handler._compute_token_usage(
-        mock_conv, reasoning_tokens=4
-    )
-    self.assertEqual(
-        usage_with_reasoning["completion_tokens_details"],
-        {"reasoning_tokens": 4},
-    )
-
-  def test_openai_chat_completions_thinking_tokens_usage(self):
-    mock_engine = mock.MagicMock()
-    mock_conv = mock.MagicMock()
-    mock_engine.create_conversation.return_value.__enter__.return_value = (
-        mock_conv
-    )
-    mock_get_engine = self.enter_context(
-        mock.patch.object(
-            openai_handler.OpenAIHandler, "_get_engine", autospec=True
-        )
-    )
-    mock_get_engine.return_value = mock_engine
-
-    mock_conv.send_message_async.return_value = [
-        {"role": "assistant", "channels": {"thought": "Thinking..."}},
-        {"role": "assistant", "channels": {"thought": "more"}},
-        {"role": "assistant", "content": [{"type": "text", "text": "Hi"}]},
-    ]
-    mock_conv.get_benchmark_info.return_value = litert_lm.BenchmarkInfo(
-        init_time_in_second=0.1,
-        time_to_first_token_in_second=0.05,
-        last_prefill_token_count=5,
-        last_prefill_tokens_per_second=100.0,
-        last_decode_token_count=3,
-        last_decode_tokens_per_second=100.0,
-    )
-
-    data = json.dumps({
-        "model": "gemma3",
-        "messages": [{"role": "user", "content": "Say hi"}],
-    }).encode("utf-8")
-
-    req = urllib.request.Request(
-        f"http://localhost:{self.port}/v1/chat/completions",
-        data=data,
-        headers={"Content-Type": "application/json"},
-    )
-
-    with urllib.request.urlopen(req) as response:
-      self.assertEqual(response.getcode(), 200)
-      res_body = json.loads(response.read().decode("utf-8"))
-      self.assertIn("usage", res_body)
-      usage = res_body["usage"]
-      self.assertEqual(
-          usage["completion_tokens_details"], {"reasoning_tokens": 2}
-      )
-      self.assertEqual(res_body["choices"][0]["message"]["content"], "Hi")
 
 
 if __name__ == "__main__":

@@ -164,9 +164,7 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
              &litert::lm::GpuArtisanConfig::enable_decode_logits)
       .field("enable_external_embeddings",
              &litert::lm::GpuArtisanConfig::enable_external_embeddings)
-      .field("use_submodel", &litert::lm::GpuArtisanConfig::use_submodel)
-      .field("use_autosized_ringbuffers",
-             &litert::lm::GpuArtisanConfig::use_autosized_ringbuffers);
+      .field("use_submodel", &litert::lm::GpuArtisanConfig::use_submodel);
 
   emscripten::value_object<litert::lm::AdvancedSettings>("AdvancedSettings")
       .field("prefill_batch_sizes", &getPrefills, &setPrefills)
@@ -401,12 +399,7 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
                   return UnwrapStatusOr(session.RunDecode());
                 }),
                 emscripten::async())
-      .function("cancelProcess", &litert::lm::Engine::Session::CancelProcess)
-      .function("clone",
-                optional_override([](litert::lm::Engine::Session& session) {
-                  return UnwrapStatusOr(session.Clone());
-                }),
-                emscripten::return_value_policy::take_ownership());
+      .function("cancelProcess", &litert::lm::Engine::Session::CancelProcess);
 
   emscripten::register_vector<std::string>("VectorString");
 
@@ -552,12 +545,7 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
                   js_info.timeToFirstTokenInSecond = info.GetTimeToFirstToken();
                   return js_info;
                 }))
-      .function("cancelProcess", &litert::lm::Conversation::CancelProcess)
-      .function("clone",
-                optional_override([](litert::lm::Conversation& conversation) {
-                  return UnwrapStatusOr(conversation.Clone());
-                }),
-                emscripten::return_value_policy::take_ownership());
+      .function("cancelProcess", &litert::lm::Conversation::CancelProcess);
 
   emscripten::class_<litert::lm::DataStream>("DataStream");
   emscripten::class_<litert::lm::ReadableStreamDataStream,

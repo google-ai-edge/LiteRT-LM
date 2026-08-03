@@ -17,6 +17,7 @@ import ctypes
 
 from . import interfaces
 from ._ffi import _get_lib
+from ._ffi import ActivationDataType
 from ._ffi import InputDataType
 
 
@@ -67,26 +68,6 @@ class Benchmark(interfaces.AbstractBenchmark):
     )
     if self.cache_dir:
       lib.litert_lm_engine_settings_set_cache_dir(settings, self.cache_dir)
-    if self.enable_speculative_decoding is not None:
-      lib.litert_lm_engine_settings_set_enable_speculative_decoding(
-          settings, self.enable_speculative_decoding
-      )
-    if isinstance(self.backend, interfaces.GPU):
-      if self.backend.gpu_decode_steps_per_sync is not None:
-        lib.litert_lm_engine_settings_set_gpu_decode_steps_per_sync(
-            settings, self.backend.gpu_decode_steps_per_sync
-        )
-      # When benchmarking, we should wait the initialization to complete to make
-      # sure the timing of prefill is correct.
-      # TODO(litertlm@): This should be set to True whenever benchmarking with
-      # GPU backend.
-      lib.litert_lm_engine_settings_set_gpu_wait_for_weight_uploads(
-          settings, True
-      )
-    if self.use_ringbuffers_local_attention is not None:
-      lib.litert_lm_engine_settings_set_use_ringbuffers_local_attention(
-          settings, self.use_ringbuffers_local_attention
-      )
 
     engine_ptr = lib.litert_lm_engine_create(settings)
     lib.litert_lm_engine_settings_delete(settings)
@@ -128,7 +109,27 @@ class Benchmark(interfaces.AbstractBenchmark):
       lib.litert_lm_engine_delete(engine_ptr)
       raise RuntimeError("Failed to get benchmark info")
 
-    info = interfaces.create_benchmark_info(lib, info_ptr)
+    info = interfaces.BenchmarkInfo(
+        init_time_in_second=lib.litert_lm_benchmark_info_get_total_init_time_in_second(
+            info_ptr
+        ),
+        time_to_first_token_in_second=lib.litert_lm_benchmark_info_get_time_to_first_token(
+            info_ptr
+        ),
+        last_prefill_token_count=lib.litert_lm_benchmark_info_get_prefill_token_count_at(
+            info_ptr, 0
+        ),
+        last_prefill_tokens_per_second=lib.litert_lm_benchmark_info_get_prefill_tokens_per_sec_at(
+            info_ptr, 0
+        ),
+        last_decode_token_count=lib.litert_lm_benchmark_info_get_decode_token_count_at(
+            info_ptr, 0
+        ),
+        last_decode_tokens_per_second=lib.litert_lm_benchmark_info_get_decode_tokens_per_sec_at(
+            info_ptr, 0
+        ),
+    )
+
     lib.litert_lm_benchmark_info_delete(info_ptr)
     lib.litert_lm_session_delete(session_ptr)
     lib.litert_lm_engine_delete(engine_ptr)

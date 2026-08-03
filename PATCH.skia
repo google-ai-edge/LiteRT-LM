@@ -65,18 +65,6 @@ index adcf203240..9141d8b8c5 100644
  )
  
  skia_cc_library(
-@@ -296,4 +298,4 @@ skia_cc_library(
-         "//src/core",
-         "//src/core:core_priv",
--        "@libjpeg_turbo",
-+        "@libjpeg_turbo//:jpeg",
-     ],
-@@ -404,4 +406,4 @@ skia_cc_library(
-         "//src/core",
-         "//src/core:core_priv",
--        "@libpng",
-+        "@libpng//:png",
-     ],
 diff --git a/src/core/BUILD.bazel b/src/core/BUILD.bazel
 index 2f09530c03..2761a867db 100644
 --- a/src/core/BUILD.bazel

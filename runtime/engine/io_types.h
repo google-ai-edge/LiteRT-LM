@@ -15,7 +15,6 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_ENGINE_IO_TYPES_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_ENGINE_IO_TYPES_H_
 
-#include <chrono>  // NOLINT: Required for monotonic benchmark timing.
 #include <cstdint>
 #include <map>
 #include <optional>
@@ -25,17 +24,12 @@
 #include <vector>
 
 #include "absl/base/nullability.h"  // from @com_google_absl
-#include "absl/status/status.h"  // from @com_google_absl
-#include "absl/status/status_macros.h"  // from @com_google_absl
-#include "absl/status/statusor.h"  // from @com_google_absl
-#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "support/util/io_types.h"  // from @litert
 #include "runtime/components/logits_processor/constrained_decoding/constraint.h"
-#include "runtime/components/logits_processor/no_repeat_ngram_config.h"
 #include "runtime/components/logits_processor/repetition_penalty_config.h"
-#include "runtime/components/logits_processor/suppress_tokens_config.h"
 #include "runtime/proto/engine.pb.h"
+#include "runtime/util/status_macros.h"
 
 namespace litert::lm {
 
@@ -253,9 +247,9 @@ class BenchmarkInfo {
   absl::Status TimeTextToTokenIdsEnd(uint64_t num_tokens);
   // Time the duration between two consecutive marks. Useful for profiling the
   // pipeline at a specific point. For example:
-  //   ABSL_RETURN_IF_ERROR(benchmark_info.TimeMarkDelta("sampling"));
+  //   RETURN_IF_ERROR(benchmark_info.TimeMarkDelta("sampling"));
   //   ... actual sampling logics ...
-  //   ABSL_RETURN_IF_ERROR(benchmark_info.TimeMarkDelta("sampling"));
+  //   RETURN_IF_ERROR(benchmark_info.TimeMarkDelta("sampling"));
   //
   // The method will return the duration as the time delta between the two
   // TimeMarkDelta("sampling") calls. The duration will be stored / recorded for
@@ -286,17 +280,12 @@ class BenchmarkInfo {
   // the time spent for decoding the first token.
   double GetTimeToFirstToken() const;
 
-  // --- Profile summary for per-op profiling ---
-  const std::string& GetProfileSummary() const;
-  void SetProfileSummary(absl::string_view profile_summary);
-
  private:
   proto::BenchmarkParams benchmark_params_;
 
-  // Wall-clock adjustments must not affect measured intervals.
-  using MonotonicTime = std::chrono::steady_clock::time_point;
-  std::map<std::string, MonotonicTime> start_time_map_;
-  std::map<std::string, MonotonicTime> mark_time_map_;
+  // Map of phase names to start time.
+  std::map<std::string, absl::Time> start_time_map_;
+  std::map<std::string, absl::Time> mark_time_map_;
   // The current index of the prefill / decode / text_to_token_ids turn.
   int prefill_turn_index_ = 0;
   int decode_turn_index_ = 0;
@@ -307,7 +296,6 @@ class BenchmarkInfo {
   std::vector<BenchmarkTurnData> prefill_turns_;
   std::vector<BenchmarkTurnData> decode_turns_;
   std::vector<BenchmarkTurnData> text_to_token_ids_turns_;
-  std::string profile_summary_;
 };
 std::ostream& operator<<(std::ostream& os, const BenchmarkInfo& info);
 
@@ -325,31 +313,8 @@ class DecodeConfig {
   }
 
   // Returns the repetition penalty config.
-  const RepetitionPenaltyConfig& GetRepetitionPenaltyConfig() const {
+  RepetitionPenaltyConfig GetRepetitionPenaltyConfig() const {
     return repetition_penalty_config_;
-  }
-
-  // Sets the no repeat ngram config to ban repetitive ngrams during decoding.
-  void SetNoRepeatNgramConfig(
-      const NoRepeatNgramConfig& no_repeat_ngram_config) {
-    no_repeat_ngram_config_ = no_repeat_ngram_config;
-  }
-
-  // Returns the no repeat ngram config.
-  NoRepeatNgramConfig GetNoRepeatNgramConfig() const {
-    return no_repeat_ngram_config_;
-  }
-
-  // Sets the suppress tokens config to suppress specific tokens during
-  // decoding.
-  void SetSuppressTokensConfig(
-      const SuppressTokensConfig& suppress_tokens_config) {
-    suppress_tokens_config_ = suppress_tokens_config;
-  }
-
-  // Returns the suppress tokens config.
-  const std::optional<SuppressTokensConfig>& GetSuppressTokensConfig() const {
-    return suppress_tokens_config_;
   }
 
   // Sets the optional constraint used to guide the generation.
@@ -370,51 +335,13 @@ class DecodeConfig {
   // Returns the max output tokens.
   std::optional<int> GetMaxOutputTokens() const { return max_output_tokens_; }
 
-  // Sets the thinking token budget.
-  void SetThinkingTokenBudget(int thinking_token_budget) {
-    thinking_token_budget_ = thinking_token_budget;
-  }
-
-  // Returns the thinking token budget.
-  std::optional<int> GetThinkingTokenBudget() const {
-    return thinking_token_budget_;
-  }
-
-  // Sets the token IDs that signal the start of the thinking process.
-  void SetThinkingStartTokenIds(std::vector<int> thinking_start_token_ids) {
-    thinking_start_token_ids_ = std::move(thinking_start_token_ids);
-  }
-
-  // Returns the token IDs that signal the start of the thinking process.
-  const std::vector<int>& GetThinkingStartTokenIds() const {
-    return thinking_start_token_ids_;
-  }
-
-  // Sets the token IDs that signal the end of the thinking process.
-  void SetThinkingEndTokenIds(std::vector<int> thinking_end_token_ids) {
-    thinking_end_token_ids_ = std::move(thinking_end_token_ids);
-  }
-
-  // Returns the token IDs that signal the end of the thinking process.
-  const std::vector<int>& GetThinkingEndTokenIds() const {
-    return thinking_end_token_ids_;
-  }
-
  private:
   DecodeConfig() = default;
 
   RepetitionPenaltyConfig repetition_penalty_config_ =
       RepetitionPenaltyConfig::Default();
-  NoRepeatNgramConfig no_repeat_ngram_config_ = NoRepeatNgramConfig::Default();
-  // If set, the suppress tokens config will be used to suppress specific tokens
-  // during decoding. If not set, the suppress tokens config will be loaded from
-  // the model assets.
-  std::optional<SuppressTokensConfig> suppress_tokens_config_ = std::nullopt;
   Constraint* absl_nullable constraint_ = nullptr;
   std::optional<int> max_output_tokens_ = std::nullopt;
-  std::optional<int> thinking_token_budget_ = std::nullopt;
-  std::vector<int> thinking_start_token_ids_;
-  std::vector<int> thinking_end_token_ids_;
 };
 
 }  // namespace litert::lm

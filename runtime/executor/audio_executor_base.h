@@ -45,15 +45,6 @@ class AudioExecutorBase {
     return absl::UnimplementedError("Not implemented.");
   }
 
-  // Flush any buffered spectrogram frames from intermediate streaming Encode()
-  // calls. This should be called when the audio stream ends (e.g., when
-  // InputAudioEnd is encountered) to process remaining buffered frames with
-  // zero-padding and produce the final audio embeddings. Returns an empty
-  // ExecutorAudioData with 0 valid tokens if no frames are buffered.
-  virtual absl::StatusOr<::litert::lm::ExecutorAudioData> Flush() {
-    return absl::UnimplementedError("Not implemented.");
-  }
-
   // Create a new audio context for the audio executor.
   virtual absl::StatusOr<std::unique_ptr<AudioContext>> CreateNewContext() {
     return absl::UnimplementedError("Not implemented.");

@@ -20,7 +20,6 @@
 #include <memory>
 
 #include "absl/status/status.h"  // from @com_google_absl
-#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
@@ -72,19 +71,17 @@ absl::StatusOr<FileFormat> GetFileFormat(
   // Otherwise, inspect the file contents to determine the file format.
   if (scoped_file) {
     // Map the first few bytes of the file.
-    ABSL_ASSIGN_OR_RETURN(size_t file_size,  // NOLINT
-                          ScopedFile::GetSize(scoped_file->file()));
+    ASSIGN_OR_RETURN(size_t file_size,  // NOLINT
+                     ScopedFile::GetSize(scoped_file->file()));
     const uint64_t bytes_to_map = std::min(file_size, kMaxMagicSignatureLength);
-    ABSL_ASSIGN_OR_RETURN(
-        auto mapped_file,  // NOLINT
-        MemoryMappedFile::Create(scoped_file->file(), /*offset=*/0,
-                                 /*size=*/bytes_to_map));
+    ASSIGN_OR_RETURN(auto mapped_file,  // NOLINT
+                     MemoryMappedFile::Create(scoped_file->file(), /*offset=*/0,
+                                              /*size=*/bytes_to_map));
 
     absl::string_view header(reinterpret_cast<const char*>(mapped_file->data()),
                              mapped_file->length());
 
-    ABSL_ASSIGN_OR_RETURN(auto file_format,
-                          GetFileFormatFromFileContents(header));
+    ASSIGN_OR_RETURN(auto file_format, GetFileFormatFromFileContents(header));
     return file_format;
   }
 

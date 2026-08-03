@@ -57,13 +57,11 @@ class AudioStreamingContext : public AudioContext {
   state_buffers() {
     return state_buffers_;
   }
-  std::vector<float>& buffered_spectrogram() { return buffered_spectrogram_; }
 
  private:
   // The state buffers of the audio encoder model. It includes the kv caches and
   // the convolution features and masks of the last timestamp.
   absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer> state_buffers_;
-  std::vector<float> buffered_spectrogram_;
 };
 
 // The Audio Executor that uses the LiteRT CompiledModel to run the audio
@@ -115,12 +113,6 @@ class AudioLiteRtCompiledModelExecutor : public AudioExecutor {
   // Reset the audio encoder, which will be a stateful object when streaming
   // model is used.
   absl::Status Reset() override { return audio_encoder_->Reset(); }
-
-  // Flush any buffered spectrogram frames from intermediate streaming Encode()
-  // calls. Processes remaining frames with zero-padding to produce final
-  // audio embeddings. Returns empty ExecutorAudioData (0 tokens) if nothing
-  // is buffered.
-  absl::StatusOr<ExecutorAudioData> Flush() override;
 
   // Get the audio executor properties.
   absl::StatusOr<AudioExecutorProperties> GetAudioExecutorProperties()
@@ -232,14 +224,6 @@ class AudioLiteRtCompiledModelExecutor : public AudioExecutor {
 
     LoraManager* GetMutableLoraManager() { return lora_manager_.get(); }
 
-    const std::vector<float>& GetBufferedSpectrogram() const {
-      return buffered_spectrogram_;
-    }
-
-    std::vector<float>& GetMutableBufferedSpectrogram() {
-      return buffered_spectrogram_;
-    }
-
    protected:
     CompiledModel compiled_model_;
 
@@ -264,8 +248,6 @@ class AudioLiteRtCompiledModelExecutor : public AudioExecutor {
     absl::flat_hash_map<absl::string_view, TensorBuffer> output_buffers_map_;
 
     std::unique_ptr<LoraManager> lora_manager_;
-
-    std::vector<float> buffered_spectrogram_;
   };
 
   // Audio Encoder for static LiteRT model, where the whole audio is provided at
@@ -383,7 +365,7 @@ class AudioLiteRtCompiledModelExecutor : public AudioExecutor {
                           Environment& env, const Model* absl_nonnull model)
         : executor_settings_(executor_settings), env_(env), model_(*model) {}
 
-    AudioExecutorSettings executor_settings_;
+    const AudioExecutorSettings& executor_settings_;
     Environment& env_;
     const Model& model_;
     int overlap_size_;
@@ -443,7 +425,7 @@ class AudioLiteRtCompiledModelExecutor : public AudioExecutor {
                  Environment& env, const Model* absl_nonnull model)
         : executor_settings_(executor_settings), env_(env), model_(*model) {}
 
-    AudioExecutorSettings executor_settings_;
+    const AudioExecutorSettings& executor_settings_;
     Environment& env_;
     const Model& model_;
     CompiledModel compiled_model_;
@@ -486,24 +468,9 @@ class AudioLiteRtCompiledModelExecutor : public AudioExecutor {
   //   into.
   // Returns:
   //   The number of valid tokens in the audio embeddings.
-  absl::StatusOr<int> EncodeInternal(absl::Span<const float> spectrogram_tensor,
-                                     absl::Span<const uint8_t> spectrogram_mask,
+  absl::StatusOr<int> EncodeInternal(absl::Span<float> spectrogram_tensor,
+                                     absl::Span<uint8_t> spectrogram_mask,
                                      absl::Span<float> audio_embeddings);
-
-  // Encode the spectrogram tensor and mask tensor into audio embeddings.
-  // Args:
-  //   - spectrogram_host_buffer: The spectrogram host buffer to encode.
-  //   - spectrogram_mask_host_buffer: The spectrogram mask host buffer to
-  //   indicate the valid timestamps.
-  //   - total_frames: The total number of frames in the spectrogram tensor.
-  //   - is_flush: Whether the encode is a flush operation.
-  // Returns:
-  //   The ExecutorAudioData if successful, or an error status if failed.
-  absl::StatusOr<ExecutorAudioData> EncodeSpecsAndMasks(
-      const std::vector<float>& spectrogram_host_buffer,
-      const std::vector<uint8_t>& spectrogram_mask_host_buffer,
-      int total_frames, bool is_flush);
-
   int sequence_length_;
   int spectrogram_feature_dimensions_;
   int audio_embedding_dimensions_;

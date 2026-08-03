@@ -119,17 +119,6 @@ class AudioExecutorSettings : public ExecutorSettingsBase {
     scoped_adapter_program_cache_file_ = std::move(cache_file);
   }
 
-  // Getter for audio_buffering_enabled.
-  // Only affect streaming audio encoder. If enabled, the audio encoder will
-  // buffer the audio input if the input sequence length is less than the audio
-  // encoder model input tensor. If disabled, the audio input will be zero
-  // padded to the audio encoder model input tensor.
-  bool GetAudioBufferingEnabled() const { return audio_buffering_enabled_; }
-  // Setter for audio_buffering_enabled.
-  void SetAudioBufferingEnabled(bool buffer_audio_input) {
-    audio_buffering_enabled_ = buffer_audio_input;
-  }
-
   using ExecutorSettingsBase::GetWeightCacheFile;
   absl::StatusOr<
       std::variant<std::string, std::shared_ptr<litert::lm::ScopedFile>>>
@@ -152,7 +141,6 @@ class AudioExecutorSettings : public ExecutorSettingsBase {
   int max_sequence_length_;
   bool bundled_with_main_model_;
   int num_threads_ = 4;
-  bool audio_buffering_enabled_ = false;
   uint32_t lora_rank_ = 0;
   std::vector<uint32_t> supported_lora_ranks_ = {};
 

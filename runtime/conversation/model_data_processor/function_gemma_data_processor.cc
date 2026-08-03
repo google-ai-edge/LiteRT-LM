@@ -24,7 +24,6 @@
 
 #include "absl/memory/memory.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
-#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
@@ -113,7 +112,7 @@ absl::StatusOr<std::string> FormatToolResponse(
   }
 
   if (!response.is_null()) {
-    ABSL_ASSIGN_OR_RETURN(std::string value, FormatValueAsFc(response));
+    ASSIGN_OR_RETURN(std::string value, FormatValueAsFc(response));
     return absl::StrCat(*tool_name, value);
   }
 
@@ -122,7 +121,7 @@ absl::StatusOr<std::string> FormatToolResponse(
   nlohmann::ordered_json fields = tool_response;
   fields.erase("tool_name");
   fields.erase("name");
-  ABSL_ASSIGN_OR_RETURN(std::string value, FormatValueAsFc(fields));
+  ASSIGN_OR_RETURN(std::string value, FormatValueAsFc(fields));
   return absl::StrCat(*tool_name, value);
 }
 
@@ -154,8 +153,8 @@ absl::StatusOr<nlohmann::ordered_json> FormatToolResponses(
       }
 
       // Format each tool response in FC format and add it as a text item.
-      ABSL_ASSIGN_OR_RETURN(std::string formatted_tool_response,
-                            FormatToolResponse(tool_response));
+      ASSIGN_OR_RETURN(std::string formatted_tool_response,
+                       FormatToolResponse(tool_response));
       tool_content.push_back(
           {{"type", "text"}, {"text", formatted_tool_response}});
     }
@@ -248,8 +247,8 @@ FunctionGemmaDataProcessor::MessageToTemplateInput(
   if (message.contains("content")) {
     if (IsToolMessage(template_input, message)) {
       // Convert tool responses to FC format.
-      ABSL_ASSIGN_OR_RETURN(template_input["content"],
-                            FormatToolResponses(message["content"]));
+      ASSIGN_OR_RETURN(template_input["content"],
+                       FormatToolResponses(message["content"]));
     } else {
       // If the role is not "tool" or "content" is a string, pass through the
       // content unchanged.
@@ -274,8 +273,8 @@ FunctionGemmaDataProcessor::MessageToTemplateInput(
         if (function["arguments"].is_object()) {
           // If `arguments` is an object, format the values in FC format.
           for (const auto& [key, value] : function["arguments"].items()) {
-            ABSL_ASSIGN_OR_RETURN(std::string formatted_value,
-                                  FormatValueAsFc(value));
+            ASSIGN_OR_RETURN(std::string formatted_value,
+                             FormatValueAsFc(value));
             tool_call_input["function"]["arguments"][key] = formatted_value;
           }
         } else {
@@ -308,7 +307,7 @@ absl::StatusOr<Message> FunctionGemmaDataProcessor::ToMessageImpl(
   nlohmann::ordered_json message = {{"role", "assistant"}};
   if (preface_.has_value() && std::holds_alternative<JsonPreface>(*preface_) &&
       !std::get<JsonPreface>(*preface_).tools.empty()) {
-    ABSL_ASSIGN_OR_RETURN(
+    ASSIGN_OR_RETURN(
         nlohmann::ordered_json content_and_tool_calls,
         ParseTextAndToolCalls(
             response_text, config_.code_fence_start, config_.code_fence_end,
@@ -340,7 +339,7 @@ absl::StatusOr<nlohmann::ordered_json> FunctionGemmaDataProcessor::FormatTools(
   }
   nlohmann::ordered_json formatted_tools = nlohmann::ordered_json::array();
   for (const auto& tool : tools) {
-    ABSL_ASSIGN_OR_RETURN(std::string formatted_tool, FormatToolAsFc(tool));
+    ASSIGN_OR_RETURN(std::string formatted_tool, FormatToolAsFc(tool));
     formatted_tools.push_back(formatted_tool);
   }
   return formatted_tools;

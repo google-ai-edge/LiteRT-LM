@@ -20,7 +20,6 @@
 #include <vector>
 
 #include "absl/status/status.h"  // from @com_google_absl
-#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "litert/cc/litert_layout.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
@@ -47,18 +46,17 @@ absl::StatusOr<T> CombineExecutorDataImpl(std::vector<T>& executor_data) {
   // TensorBuffer, then create a single ExecutorVisionData from the
   // TensorBuffer.
   int num_executor_data = executor_data.size();
-  ABSL_ASSIGN_OR_RETURN(const auto* first_tensor,
-                        executor_data[0].GetEmbeddingsPtr());
+  ASSIGN_OR_RETURN(const auto* first_tensor,
+                   executor_data[0].GetEmbeddingsPtr());
   LITERT_ASSIGN_OR_RETURN(auto first_tensor_type, first_tensor->TensorType());
-  ABSL_ASSIGN_OR_RETURN(auto first_tensor_dims,
-                        TensorBufferDims(*first_tensor));
+  ASSIGN_OR_RETURN(auto first_tensor_dims, TensorBufferDims(*first_tensor));
   int total_token_num = 0;
   int total_packed_size = 0;
   std::vector<int> combined_token_num;
   for (const auto& executor_data : executor_data) {
-    ABSL_ASSIGN_OR_RETURN(const auto* embeddings_ptr,
-                          executor_data.GetEmbeddingsPtr());
-    ABSL_ASSIGN_OR_RETURN(auto dims, TensorBufferDims(*embeddings_ptr));
+    ASSIGN_OR_RETURN(const auto* embeddings_ptr,
+                     executor_data.GetEmbeddingsPtr());
+    ASSIGN_OR_RETURN(auto dims, TensorBufferDims(*embeddings_ptr));
     if (dims.size() != 3 && dims.size() != 4) {
       return absl::InvalidArgumentError(
           "The embedding tensor type must have 3 or 4 dimensions.");
@@ -93,8 +91,8 @@ absl::StatusOr<T> CombineExecutorDataImpl(std::vector<T>& executor_data) {
   char* combined_tensor_buffer_ptr =
       static_cast<char*>(combined_embeddings_lock_and_addr.second);
   for (int i = 0; i < num_executor_data; ++i) {
-    ABSL_ASSIGN_OR_RETURN(auto embeddings_ptr,
-                          executor_data[i].GetMutableEmbeddingsPtr());
+    ASSIGN_OR_RETURN(auto embeddings_ptr,
+                     executor_data[i].GetMutableEmbeddingsPtr());
     LITERT_ASSIGN_OR_RETURN(auto embeddings_size, embeddings_ptr->PackedSize());
     LITERT_ASSIGN_OR_RETURN(
         auto embeddings_lock_and_addr,

@@ -22,29 +22,23 @@
 #include <iterator>
 #include <limits>
 #include <memory>
-#include <optional>
 #include <string>
 #include <utility>
 #include <variant>
 #include <vector>
 
 #include "absl/algorithm/container.h"  // from @com_google_absl
-#include "absl/container/btree_map.h"  // from @com_google_absl
-#include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
-#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_element_type.h"  // from @litert
-#include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_expected.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
-#include "litert/cc/litert_options.h"  // from @litert
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/cc/options/litert_cpu_options.h"  // from @litert
@@ -52,13 +46,9 @@
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
 #include "runtime/components/embedding_lookup/embedding_lookup_text.h"
 #include "runtime/components/model_resources.h"
-#include "runtime/executor/llm_executor_io_types.h"
-#include "runtime/executor/llm_executor_settings.h"
-#include "runtime/util/status_macros.h"  // IWYU pragma: keep NOLINT
 #include "runtime/components/model_resources_litert_lm.h"  // IWYU pragma: keep
 #include "runtime/components/model_resources_task.h"
 #include "runtime/executor/executor_settings_base.h"
-#include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/file_format_util.h"
 #include "runtime/util/file_util.h"
@@ -67,7 +57,6 @@
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/status_macros.h"  //NOLINT
 #include "runtime/util/tensor_buffer_util.h"
-#include "tflite/delegates/xnnpack/xnnpack_delegate.h"  // from @litert
 #include "tflite/types/half.h"  // from @litert
 
 namespace litert::lm {
@@ -85,9 +74,6 @@ constexpr std::array<absl::string_view, 2> kInputPositionsNames = {"positions",
 // Possible input attention mask names:
 constexpr std::array<absl::string_view, 2> kInputAttnMaskNames = {"attn_mask",
                                                                   "mask"};
-// Possible local input attention mask names:
-constexpr std::array<absl::string_view, 3> kInputLocalAttnMaskNames = {
-    "local_mask", "attn_mask_local", "local_attn_mask"};
 // Possible embedding names:
 constexpr std::array<absl::string_view, 1> kEmbeddingNames = {"embeddings"};
 // Possible per layer embedding names:
@@ -103,15 +89,14 @@ absl::StatusOr<std::unique_ptr<ModelResources>>
 BuildModelResourcesFromTaskFormat(const ModelAssets& model_assets) {
   std::unique_ptr<ModelAssetBundleResources> resources;
   if (model_assets.HasMemoryMappedFile()) {
-    ABSL_ASSIGN_OR_RETURN(auto memory_mapped_file,
-                          model_assets.GetMemoryMappedFile());
-    ABSL_ASSIGN_OR_RETURN(resources, ModelAssetBundleResources::Create(
-                                         /*tag=*/"", memory_mapped_file));
+    ASSIGN_OR_RETURN(auto memory_mapped_file,
+                     model_assets.GetMemoryMappedFile());
+    ASSIGN_OR_RETURN(resources, ModelAssetBundleResources::Create(
+                                    /*tag=*/"", memory_mapped_file));
   } else {
-    ABSL_ASSIGN_OR_RETURN(auto scoped_file,
-                          model_assets.GetOrCreateScopedFile());
-    ABSL_ASSIGN_OR_RETURN(resources, ModelAssetBundleResources::Create(
-                                         /*tag=*/"", scoped_file));
+    ASSIGN_OR_RETURN(auto scoped_file, model_assets.GetOrCreateScopedFile());
+    ASSIGN_OR_RETURN(resources, ModelAssetBundleResources::Create(
+                                    /*tag=*/"", scoped_file));
   }
   auto files_list = resources->ListFiles();
   RET_CHECK(std::find(files_list.begin(), files_list.end(),
@@ -126,18 +111,16 @@ BuildModelResourcesFromLitertLmFormat(const ModelAssets& model_assets,
                                       bool enable_file_backed_model_loading) {
   std::unique_ptr<LitertLmLoader> loader;
   if (model_assets.HasMemoryMappedFile()) {
-    ABSL_ASSIGN_OR_RETURN(auto memory_mapped_file,
-                          model_assets.GetMemoryMappedFile());
-    ABSL_ASSIGN_OR_RETURN(loader, LitertLmLoader::Create(memory_mapped_file));
+    ASSIGN_OR_RETURN(auto memory_mapped_file,
+                     model_assets.GetMemoryMappedFile());
+    ASSIGN_OR_RETURN(loader, LitertLmLoader::Create(memory_mapped_file));
   } else {
     // `BuildModelResourcesFromLitertLmFormat` expects a ScopedFile that it
     // takes ownership of, so we need to duplicate the ScopedFile to keep
     // the original alive.
-    ABSL_ASSIGN_OR_RETURN(auto scoped_file,
-                          model_assets.GetOrCreateScopedFile());
-    ABSL_ASSIGN_OR_RETURN(auto duplicate_file, scoped_file->Duplicate());
-    ABSL_ASSIGN_OR_RETURN(loader,
-                          LitertLmLoader::Create(std::move(duplicate_file)));
+    ASSIGN_OR_RETURN(auto scoped_file, model_assets.GetOrCreateScopedFile());
+    ASSIGN_OR_RETURN(auto duplicate_file, scoped_file->Duplicate());
+    ASSIGN_OR_RETURN(loader, LitertLmLoader::Create(std::move(duplicate_file)));
   }
   return ModelResourcesLitertLm::Create(
       std::move(loader), enable_file_backed_model_loading);
@@ -160,10 +143,6 @@ absl::StatusOr<ModelSignatures> GetModelSignaturesFromInputOutputNames(
     }
     if (absl::c_linear_search(kInputAttnMaskNames, input_name)) {
       model_signatures.input_attn_mask = std::string(input_name);
-      continue;
-    }
-    if (absl::c_linear_search(kInputLocalAttnMaskNames, input_name)) {
-      model_signatures.input_attn_mask_local = std::string(input_name);
       continue;
     }
     if (absl::c_linear_search(kEmbeddingNames, input_name)) {
@@ -270,126 +249,33 @@ absl::StatusOr<SortedPrefillSignatureMap> GetPrefillRunnerSetFromModel(
 
 absl::StatusOr<std::vector<std::pair<std::string, int>>>
 GetOptimizedPrefillWorkGroups(
-    const SortedPrefillSignatureMap& prefill_runner_set, int input_length,
-    std::optional<int> max_prefill_sequence_length) {
-  SortedPrefillSignatureMap available_runner_set = prefill_runner_set;
-  if (max_prefill_sequence_length.has_value()) {
-    absl::erase_if(available_runner_set, [&](const auto& pair) {
-      return pair.first > max_prefill_sequence_length.value();
-    });
-    if (available_runner_set.empty()) {
-      return absl::FailedPreconditionError(absl::StrCat(
-          "Chosen prefill work group size exceeds available state entries (",
-          max_prefill_sequence_length.value(), ")."));
-    }
-  }
-
-  // A simple greedy approach can cause performance cliffs for devices that
-  // perform much better with longer sequence lengths See
-  // go/smarter-prefill-chunking for more details.
-  //
-  // Instead, we use a "cautious greedy" approach. We greedily fill with the
-  // largest sequence length possible. For the remainder, we evaluate whether to
-  // pack it into smaller chunks or "cautiously" upgrade it. If the remainder is
-  // at least half of the current sequence length, it is upgraded to use an
-  // extra full-sized chunk to prevent excessive fragmentation.
-  //
-  // An exception is made for models that have sequence lengths that are within
-  // a factor of 2 of each other (e.g. 128 and 256). In these cases, we will
-  // default back to standard greedy stacking, provided the remainder
-  // comfortably fits into the smaller sequence length. Otherwise the smaller
-  // sequence length will not be used.
-  //
-  // Examples:
-  // 1. input_length = 640, prefill_runner_set = {512, 128, 32}
-  //    work_groups = {{"sig_512", 512}, {"sig_128", 128}}
-  // 2. input_length = 768, prefill_runner_set = {512, 128, 32}
-  //    work_groups = {{"sig_512", 512}, {"sig_512", 256}}
-  // 3. input_length = 592, prefill_runner_set = {512, 128, 32}
-  //    work_groups = {{"sig_512", 512}, {"sig_128", 80}}
-  // 4. input_length = 130, prefill_runner_set = {512, 128}
-  //    work_groups = {{"sig_128", 128}, {"sig_128", 2}}
-  // 5. input_length = 599, prefill_runner_set = {600, 500}
-  //    work_groups = {{"sig_600", 599}}
-
+    const SortedPrefillSignatureMap& prefill_runner_set, int input_length) {
   std::vector<std::pair<std::string, int>> work_groups;
-  int current_remaining_capacity =
-      max_prefill_sequence_length.value_or(std::numeric_limits<int>::max());
-
-  // Starting with the largest sequence length available and working our way
-  // down, we will add work groups to cover the input length.
-  for (auto it = available_runner_set.begin(); it != available_runner_set.end();
-       ++it) {
-    if (input_length <= 0) {
-      break;
-    }
-
-    int cur_seq_len = it->first;
-    if (cur_seq_len > current_remaining_capacity) {
-      continue;
-    }
-
-    int full_chunks = input_length / cur_seq_len;
-    int max_chunks_capacity = current_remaining_capacity / cur_seq_len;
-    full_chunks = std::min(full_chunks, max_chunks_capacity);
-
-    int remainder = input_length - (full_chunks * cur_seq_len);
-
-    // 1. Greedily add any full chunks of the current sequence length.
-    for (int i = 0; i < full_chunks; ++i) {
-      work_groups.push_back(std::make_pair(it->second, cur_seq_len));
-      current_remaining_capacity -= cur_seq_len;
-    }
-    input_length = remainder;
-
-    if (input_length == 0) {
-      break;
-    }
-
-    // 2. If there's no smaller sequence length available, we must cover the
-    // remainder with this runner if capacity allows.
-    auto next_it = std::next(it);
-    if (next_it == available_runner_set.end()) {
-      if (cur_seq_len <= current_remaining_capacity) {
-        work_groups.push_back(std::make_pair(it->second, input_length));
-        current_remaining_capacity -= cur_seq_len;
-        input_length = 0;
-      }
-      break;
-    }
-
-    int next_seq_len = next_it->first;
-
-    // 3. We need to decide whether to use the current sequence length
-    // runner to cover the remainder, or let the smaller runners take care of
-    // the remainder.
-    if (next_seq_len * 2 >= cur_seq_len && input_length <= next_seq_len) {
-      // Check fallback: if next_seq_len >= cur_seq_len / 2 AND remainder <=
-      // next_seq_len
-      //   Our sequence lengths are too close, AND the remainder fits
-      //   comfortably in the next sequence length, so let the smaller runners
-      //   handle it.
-      continue;
-    } else if (input_length * 2 >= cur_seq_len &&
-               cur_seq_len <= current_remaining_capacity) {
-      // Check cautious threshold rule: if remainder >= cur_seq_len / 2
-      //   Cover with the current sequence length runner.
-      work_groups.push_back(std::make_pair(it->second, input_length));
-      current_remaining_capacity -= cur_seq_len;
-      input_length = 0;
-      break;
-    }
-    // Threshold not met or capacity exceeded: let smaller runners handle
-    // remainder.
+  // Current strategy:
+  // 1. Use the prefill runner with the largest sequence length, until the
+  // remaining length is less than its sequence length.
+  // 2. Finish the remaining length with one prefill call, using the runner with
+  // the sequence length as small as possible.
+  // TODO: b/378772479 - Improve this strategy once we have benchmarked costs.
+  int max_seq_len = prefill_runner_set.begin()->first;
+  while (input_length >= max_seq_len) {
+    work_groups.push_back(
+        std::make_pair(prefill_runner_set.begin()->second, max_seq_len));
+    input_length -= max_seq_len;
   }
-
   if (input_length > 0) {
-    return absl::FailedPreconditionError(
-        absl::StrCat("Prefill input length exceeds available state entries "
-                     "(remaining capacity: ",
-                     max_prefill_sequence_length.value_or(0), ")."));
+    for (auto it = prefill_runner_set.begin(); it != prefill_runner_set.end();
+         ++it) {
+      // If the next smaller runner can handle the remaining length, skip the
+      // current runner.
+      if (std::next(it) != prefill_runner_set.end() &&
+          std::next(it)->first >= input_length) {
+        continue;
+      }
+      work_groups.push_back(std::make_pair(it->second, input_length));
+      break;
+    }
   }
-
   return work_groups;
 }
 
@@ -453,39 +339,14 @@ absl::Status FillSingleBufferCacheParamTensor(
   return absl::OkStatus();
 }
 
-// Helper function to fill a range of values in a tensor buffer with the given
-// type.
-static void FillRange(litert::ElementType type, void* addr, int start,
-                      int end) {
-  if (type == litert::ElementType::Bool) {
-    bool* ptr = static_cast<bool*>(addr);
-    std::fill(ptr + start, ptr + end, true);
-  } else if (type == litert::ElementType::Float16) {
-    tflite::half* ptr = static_cast<tflite::half*>(addr);
-    std::fill(ptr + start, ptr + end, tflite::half(0.0f));
-  } else {
-    float* ptr = static_cast<float*>(addr);
-    std::fill(ptr + start, ptr + end, 0.0f);
-  }
-}
-
 absl::Status FillAttentionMask(litert::TensorBuffer& mask, int start_timestep,
-                               int steps,
-                               const AttentionMaskPolicy& attention_mask_policy,
-                               std::optional<absl::Span<const int>> token_ids,
-                               std::optional<int> sliding_window_size) {
+                               int steps) {
   LITERT_ASSIGN_OR_RETURN(auto mask_tensor_type, mask.TensorType());
   RET_CHECK_EQ(mask_tensor_type.Layout().Rank(), 4)
           .SetCode(absl::StatusCode::kInvalidArgument)
       << "Attention mask must be 4D.";
   int batch_size = mask_tensor_type.Layout().Dimensions()[0];
-  int context_size = mask_tensor_type.Layout().Dimensions()[3];
-  if (attention_mask_policy == AttentionMaskPolicy::kVisionBidirectional &&
-      !token_ids.has_value()) {
-    return absl::InvalidArgumentError(
-        "Empty token ids with vision bidirectional attention mask policy is "
-        "not allowed.");
-  }
+  int channel_size = mask_tensor_type.Layout().Dimensions()[3];
   LITERT_ASSIGN_OR_RETURN(auto mask_size, mask.PackedSize());
   LITERT_ASSIGN_OR_RETURN(auto mask_lock_and_addr,
                           litert::TensorBufferScopedLock::Create(
@@ -504,52 +365,26 @@ absl::Status FillAttentionMask(litert::TensorBuffer& mask, int start_timestep,
 
   for (int b = 0; b < batch_size; ++b) {
     for (int i = 0; i < steps; ++i) {
-      int q = start_timestep + i;
-      int offset = b * batch_offset + i * context_size;
-      if (attention_mask_policy == AttentionMaskPolicy::kVisionBidirectional &&
-          q < token_ids->size() &&
-          (*token_ids)[q] == ExecutorVisionData::kSpecialToken) {
-        int start_k = 0;
-        if (sliding_window_size.has_value()) {
-          start_k = std::max(0, q - sliding_window_size.value() + 1);
-        }
-        int end_k = token_ids->size();
-        if (sliding_window_size.has_value()) {
-          end_k = std::min<int>(end_k, q + sliding_window_size.value() + 1);
-        }
-        int first_past_non_vision_token = q;
-        for (int j = q - 1; j >= start_k; --j) {
-          if ((*token_ids)[j] != ExecutorVisionData::kSpecialToken) {
-            first_past_non_vision_token = j;
-            break;
-          }
-        }
-        // Image tokens can attend to all past tokens, but cannot attend to
-        // future non-vision tokens.
-        const int first_future_non_vision_token =
-            std::find_if(token_ids->begin() + q, token_ids->begin() + end_k,
-                         [](int token_id) {
-                           return token_id != ExecutorVisionData::kSpecialToken;
-                         }) -
-            token_ids->begin();
-        FillRange(mask_tensor_type.ElementType(), mask_lock_and_addr.second,
-                  offset + start_k, offset + first_future_non_vision_token);
-      } else {
-        // Fast path for text queries or other policies.
-        int causal_start = 0;
-        if (sliding_window_size.has_value()) {
-          causal_start = std::max(0, q - sliding_window_size.value() + 1);
-        }
-        int causal_end = q + 1;
-        if (attention_mask_policy == AttentionMaskPolicy::kBidirectional) {
-          causal_end = std::min<int>(context_size, start_timestep + steps);
-          if (sliding_window_size.has_value()) {
-            causal_end =
-                std::min<int>(causal_end, q + sliding_window_size.value());
-          }
-        }
-        FillRange(mask_tensor_type.ElementType(), mask_lock_and_addr.second,
-                  offset + causal_start, offset + causal_end);
+      int current_step = start_timestep + i;
+      int offset = b * batch_offset + i * channel_size;
+      // For current step = n, we fill (n+1) positions for the mask sequence.
+      if (mask_tensor_type.ElementType() == litert::ElementType::Bool) {
+        // Boolean mask: Fill value = true.
+        bool* bool_ptr = static_cast<bool*>(mask_lock_and_addr.second);
+        std::fill(bool_ptr + offset, bool_ptr + offset + current_step + 1,
+                  true);
+      } else if (mask_tensor_type.ElementType() ==
+                 litert::ElementType::Float16) {
+        // Float16 mask: Fill value = 0.0f.
+        tflite::half* half_ptr =
+            static_cast<tflite::half*>(mask_lock_and_addr.second);
+        std::fill(half_ptr + offset, half_ptr + offset + current_step + 1,
+                  tflite::half(0.0f));
+      } else {  // litert::ElementType::Float32, checked above.
+        // Float mask: Fill value = 0.0f.
+        float* float_ptr = static_cast<float*>(mask_lock_and_addr.second);
+        std::fill(float_ptr + offset, float_ptr + offset + current_step + 1,
+                  0.0f);
       }
     }
   }
@@ -559,7 +394,7 @@ absl::Status FillAttentionMask(litert::TensorBuffer& mask, int start_timestep,
 absl::StatusOr<std::unique_ptr<ModelResources>>
 BuildLiteRtCompiledModelResources(const ModelAssets& model_assets,
                                   bool enable_file_backed_model_loading) {
-  ABSL_ASSIGN_OR_RETURN(auto format, GetFileFormat(model_assets));
+  ASSIGN_OR_RETURN(auto format, GetFileFormat(model_assets));
   switch (format) {
     case FileFormat::TASK:
       return BuildModelResourcesFromTaskFormat(model_assets);
@@ -598,11 +433,8 @@ absl::Status GenericComputeTokenEmbeddings(
       auto wrapped_embeddings,
       WrapOrCreateTensorBufferFromHostMemory(tensor_type, output_embeddings));
 
-  ABSL_RETURN_IF_ERROR(embedding_lookup_manager->LookupPrefill(
+  RETURN_IF_ERROR(embedding_lookup_manager->LookupPrefill(
       input_tokens_span, &wrapped_embeddings.buffer, 0 /*token_offset=*/));
-  if (!wrapped_embeddings.wrapped) {
-    LITERT_RETURN_IF_ERROR(wrapped_embeddings.buffer.Read(output_embeddings));
-  }
 
   if (per_layer_embedding_lookup_manager != nullptr &&
       !output_ple_embeddings.empty()) {
@@ -623,58 +455,10 @@ absl::Status GenericComputeTokenEmbeddings(
     LITERT_ASSIGN_OR_RETURN(auto wrapped_ple_embeddings,
                             WrapOrCreateTensorBufferFromHostMemory(
                                 ple_tensor_type, output_ple_embeddings));
-    ABSL_RETURN_IF_ERROR(per_layer_embedding_lookup_manager->LookupPrefill(
+    RETURN_IF_ERROR(per_layer_embedding_lookup_manager->LookupPrefill(
         input_tokens_span, &wrapped_ple_embeddings.buffer,
         0 /*token_offset=*/));
-    if (!wrapped_ple_embeddings.wrapped) {
-      LITERT_RETURN_IF_ERROR(
-          wrapped_ple_embeddings.buffer.Read(output_ple_embeddings));
-    }
   }
-  return absl::OkStatus();
-}
-
-absl::Status SetCpuOptions(litert::CpuOptions& cpu_options, int num_threads) {
-  cpu_options.SetNumThreads(num_threads);
-  auto default_xnn_options = TfLiteXNNPackDelegateOptionsDefault();
-  cpu_options.SetXNNPackFlags(
-      default_xnn_options.flags |
-      TFLITE_XNNPACK_DELEGATE_FLAG_DYNAMIC_FULLY_CONNECTED |
-      TFLITE_XNNPACK_DELEGATE_FLAG_ENABLE_LATEST_OPERATORS);
-  return absl::OkStatus();
-}
-
-absl::Status SetCommonGpuOptions(
-    const ExecutorSettingsBase& executor_settings,
-    litert::GpuOptions& gpu_options,
-    std::optional<ActivationDataType> fallback_activation_data_type) {
-#if defined(LITERT_USE_WEBGPU_ACCELERATOR)
-  gpu_options.SetBackend(GpuOptions::Backend::kWebGpu);
-#endif  // defined(LITERT_USE_WEBGPU_ACCELERATOR)
-  gpu_options.EnableConstantTensorSharing(true);
-  ActivationDataType activation_type =
-      executor_settings.GetActivationDataType().has_value()
-          ? executor_settings.GetActivationDataType().value()
-          : fallback_activation_data_type.value_or(ActivationDataType::FLOAT32);
-  // Mixed precision setting overrides the activation data type setting. The
-  // underlying delegate uses fp32 precision to represent mixed precision, so we
-  // set it to fp32 here.
-  if (executor_settings.IsMixedPrecisionEnabled() ||
-      activation_type == ActivationDataType::FLOAT32) {
-    gpu_options.SetPrecision(GpuOptions::Precision::kFp32);
-  } else {
-    // For FLOAT16, INT16, and INT8 activation data types, calculation
-    // precision of the GPU delegate is set to fp16.
-    gpu_options.SetPrecision(GpuOptions::Precision::kFp16);
-  }
-#if defined(__APPLE__)
-  gpu_options.SetPreferTextureWeights(false);
-  gpu_options.SetUseMetalArgumentBuffers(true);
-#else   // !__APPLE__
-  gpu_options.SetPreferTextureWeights(true);
-#endif  // !__APPLE__
-  gpu_options.SetMadviseOriginalSharedTensors(true);
-  gpu_options.SetConvertWeightsOnGpu(true);
   return absl::OkStatus();
 }
 
@@ -684,7 +468,7 @@ absl::Status SetCpuCacheOptions(
         weight_cache_file,
     absl::string_view logging_prefix, litert::CpuOptions& cpu_options) {
   if (!weight_cache_file.ok()) {
-    ABSL_VLOG(1) << logging_prefix << " does not use cache.";
+    ABSL_LOG(INFO) << logging_prefix << " does not use cache.";
     return absl::OkStatus();
   }
 
@@ -693,17 +477,18 @@ absl::Status SetCpuCacheOptions(
     auto scoped_cache_file =
         std::get<std::shared_ptr<litert::lm::ScopedFile>>(*weight_cache_file);
     if (scoped_cache_file != nullptr) {
-      ABSL_ASSIGN_OR_RETURN(auto duplicated, scoped_cache_file->Duplicate());
-      ABSL_ASSIGN_OR_RETURN(int fd, duplicated.Release());
+      ASSIGN_OR_RETURN(auto duplicated, scoped_cache_file->Duplicate());
+      ASSIGN_OR_RETURN(int fd, duplicated.Release());
       cpu_options.SetXNNPackWeightCacheFileDescriptor(fd);
-      ABSL_VLOG(1) << logging_prefix
-                   << " use provided cache file descriptor: " << fd;
+      ABSL_LOG(INFO) << logging_prefix
+                     << " use provided cache file descriptor: " << fd;
     }
   } else if (std::holds_alternative<std::string>(*weight_cache_file)) {
     const std::string& weight_cache_path =
         std::get<std::string>(*weight_cache_file);
     cpu_options.SetXNNPackWeightCachePath(weight_cache_path.c_str());
-    ABSL_VLOG(1) << logging_prefix << " use cache path: " << weight_cache_path;
+    ABSL_LOG(INFO) << logging_prefix
+                   << " use cache path: " << weight_cache_path;
   }
   return absl::OkStatus();
 }
@@ -728,17 +513,17 @@ absl::Status SetGpuCacheOptions(
           std::filesystem::path(std::get<std::string>(*weight_cache_file))
               .parent_path()
               .string();
-      ABSL_VLOG(1) << (logging_prefix.empty()
-                           ? ""
-                           : absl::StrCat(logging_prefix, ": "))
-                   << "Setting serialization dir: " << cache_path;
+      ABSL_LOG(INFO) << (logging_prefix.empty()
+                             ? ""
+                             : absl::StrCat(logging_prefix, ": "))
+                     << "Setting serialization dir: " << cache_path;
       gpu_options.SetSerializationDir(cache_path.c_str());
       serialization_dir_set = true;
     } else {
       auto scoped_cache_file =
           std::get<std::shared_ptr<lm::ScopedFile>>(*weight_cache_file);
-      ABSL_ASSIGN_OR_RETURN(auto duplicated, scoped_cache_file->Duplicate());
-      ABSL_ASSIGN_OR_RETURN(int fd, duplicated.Release());
+      ASSIGN_OR_RETURN(auto duplicated, scoped_cache_file->Duplicate());
+      ASSIGN_OR_RETURN(int fd, duplicated.Release());
       gpu_options.SetWeightCacheFd(fd);
     }
     gpu_options.SetSerializeExternalTensors(true);
@@ -753,17 +538,17 @@ absl::Status SetGpuCacheOptions(
             std::filesystem::path(std::get<std::string>(*program_cache_file))
                 .parent_path()
                 .string();
-        ABSL_VLOG(1) << (logging_prefix.empty()
-                             ? ""
-                             : absl::StrCat(logging_prefix, ": "))
-                     << "Setting program cache dir: " << cache_path;
+        ABSL_LOG(INFO) << (logging_prefix.empty()
+                               ? ""
+                               : absl::StrCat(logging_prefix, ": "))
+                       << "Setting program cache dir: " << cache_path;
         gpu_options.SetSerializationDir(cache_path.c_str());
       }
     } else {
       auto scoped_cache_file =
           std::get<std::shared_ptr<lm::ScopedFile>>(*program_cache_file);
-      ABSL_ASSIGN_OR_RETURN(auto duplicated, scoped_cache_file->Duplicate());
-      ABSL_ASSIGN_OR_RETURN(int fd, duplicated.Release());
+      ASSIGN_OR_RETURN(auto duplicated, scoped_cache_file->Duplicate());
+      ASSIGN_OR_RETURN(int fd, duplicated.Release());
       gpu_options.SetProgramCacheFd(fd);
     }
     gpu_options.CacheCompiledProgramsOnly(cache_compiled_shaders_only);
@@ -790,8 +575,8 @@ absl::StatusOr<GpuModelCacheData> GetGpuModelCacheData(
                      ExecutorSettingsBase::kMlDriftWeightCacheSuffix),
         /*check_and_clean=*/true);
     if (!model_path.empty()) {
-      ABSL_ASSIGN_OR_RETURN(std::string metadata_id,
-                            GetFileCacheIdentifier(model_path));
+      ASSIGN_OR_RETURN(std::string metadata_id,
+                       GetFileCacheIdentifier(model_path));
       if (cache_data.program_cache_file.ok() ||
           cache_data.weight_cache_file.ok()) {
         cache_data.cache_key =
@@ -820,66 +605,6 @@ absl::StatusOr<GpuModelCacheData> GetGpuModelCacheData(
     }
   }
   return cache_data;
-}
-
-absl::Status InitializeEmbeddingLookups(
-    ::litert::Environment& env, ModelResources& resources,
-    std::unique_ptr<EmbeddingLookupManager>& embedding_lookup,
-    std::unique_ptr<EmbeddingLookupManager>& per_layer_embedding_lookup) {
-  absl::flat_hash_map<int, const Model*> end_of_multi_modal_embedding_models;
-  {
-    auto end_of_audio_model =
-        resources.GetTFLiteModel(ModelType::kTfLiteEndOfAudio);
-    if (end_of_audio_model.ok()) {
-      end_of_multi_modal_embedding_models.insert(
-          {ExecutorAudioData::kEndToken, end_of_audio_model.value()});
-    }
-  }
-  {
-    auto end_of_vision_model =
-        resources.GetTFLiteModel(ModelType::kTfLiteEndOfVision);
-    if (end_of_vision_model.ok()) {
-      end_of_multi_modal_embedding_models.insert(
-          {ExecutorVisionData::kEndToken, end_of_vision_model.value()});
-    }
-  }
-
-  auto text_embedder_model =
-      resources.GetTFLiteModel(ModelType::kTfLiteEmbedder);
-  if (text_embedder_model.ok()) {
-    ABSL_ASSIGN_OR_RETURN(
-        embedding_lookup,
-        EmbeddingLookupManager::Create(env, *text_embedder_model,
-                                       end_of_multi_modal_embedding_models));
-  }
-
-  // Create per layer embedding lookups from the resources.
-  auto per_layer_embedder_model =
-      resources.GetTFLiteModel(ModelType::kTfLitePerLayerEmbedder);
-  if (per_layer_embedder_model.ok()) {
-    std::optional<ScopedFile> per_layer_external_weight_file;
-    Options::ScopedWeightSectionMap per_layer_external_weight_sections;
-    auto section_offset =
-        resources.GetWeightsSectionOffset(ModelType::kTfLitePerLayerEmbedder);
-    if (section_offset.ok()) {
-      per_layer_external_weight_sections["tflite_weights"] = {
-          section_offset.value().first,
-          section_offset.value().second - section_offset.value().first};
-      LITERT_ASSIGN_OR_RETURN(auto scoped_file, resources.GetScopedFile());
-      LITERT_ASSIGN_OR_RETURN(auto duplicated_scoped_file,
-                              scoped_file.get().Duplicate());
-      per_layer_external_weight_file = std::move(duplicated_scoped_file);
-    }
-    ABSL_ASSIGN_OR_RETURN(per_layer_embedding_lookup,
-                          EmbeddingLookupManager::Create(
-                              env, *per_layer_embedder_model,
-                              /*fully_supports_multi_modal=*/false,
-                              /*signature_key=*/std::nullopt,
-                              std::move(per_layer_external_weight_file),
-                              std::move(per_layer_external_weight_sections)));
-  }
-
-  return absl::OkStatus();
 }
 
 }  // namespace litert::lm

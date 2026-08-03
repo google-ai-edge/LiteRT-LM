@@ -24,7 +24,6 @@
 
 #include "absl/memory/memory.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
-#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
@@ -119,8 +118,7 @@ absl::StatusOr<std::string> FormatToolResponse(
   }
 
   if (!response.is_null()) {
-    ABSL_ASSIGN_OR_RETURN(std::string value,
-                          FormatValueAsFc(response, escape_tag));
+    ASSIGN_OR_RETURN(std::string value, FormatValueAsFc(response, escape_tag));
     return absl::StrCat(*tool_name, value);
   }
 
@@ -129,7 +127,7 @@ absl::StatusOr<std::string> FormatToolResponse(
   nlohmann::ordered_json fields = tool_response;
   fields.erase("tool_name");
   fields.erase("name");
-  ABSL_ASSIGN_OR_RETURN(std::string value, FormatValueAsFc(fields, escape_tag));
+  ASSIGN_OR_RETURN(std::string value, FormatValueAsFc(fields, escape_tag));
   return absl::StrCat(*tool_name, value);
 }
 
@@ -161,8 +159,8 @@ absl::StatusOr<nlohmann::ordered_json> FormatToolResponses(
       }
 
       // Format each tool response in FC format and add it as a text item.
-      ABSL_ASSIGN_OR_RETURN(std::string formatted_tool_response,
-                            FormatToolResponse(tool_response, escape_tag));
+      ASSIGN_OR_RETURN(std::string formatted_tool_response,
+                       FormatToolResponse(tool_response, escape_tag));
       tool_content.push_back(
           {{"type", "text"}, {"text", formatted_tool_response}});
     }
@@ -192,7 +190,7 @@ Gemma4DataProcessor::Create(Gemma4DataProcessorConfig config,
   // samples as one audio token.
   const int frame_length = config.skip_mel_spectrogram_extraction ? 640 : 320;
   const int hop_length = config.skip_mel_spectrogram_extraction ? 640 : 160;
-  ABSL_ASSIGN_OR_RETURN(
+  ASSIGN_OR_RETURN(
       auto audio_preprocessor,
       AudioPreprocessorMiniAudio::Create(AudioPreprocessorConfig::Create(
           /* sample_rate_hz= */ 16000,
@@ -284,7 +282,7 @@ Gemma4DataProcessor::MessageToTemplateInput(
   if (message.contains("content")) {
     if (IsToolMessage(template_input, message)) {
       // Convert tool responses to FC format.
-      ABSL_ASSIGN_OR_RETURN(
+      ASSIGN_OR_RETURN(
           template_input["content"],
           FormatToolResponses(message["content"], config_.open_quote));
     } else {
@@ -311,8 +309,8 @@ Gemma4DataProcessor::MessageToTemplateInput(
         if (function["arguments"].is_object()) {
           // If `arguments` is an object, format the values in FC format.
           for (const auto& [key, value] : function["arguments"].items()) {
-            ABSL_ASSIGN_OR_RETURN(std::string formatted_value,
-                                  FormatValueAsFc(value, config_.open_quote));
+            ASSIGN_OR_RETURN(std::string formatted_value,
+                             FormatValueAsFc(value, config_.open_quote));
             tool_call_input["function"]["arguments"][key] = formatted_value;
           }
         } else {
@@ -370,7 +368,7 @@ absl::StatusOr<Message> Gemma4DataProcessor::ToMessageImpl(
   nlohmann::ordered_json message = {{"role", "assistant"}};
   if (preface_.has_value() && std::holds_alternative<JsonPreface>(*preface_) &&
       !std::get<JsonPreface>(*preface_).tools.empty()) {
-    ABSL_ASSIGN_OR_RETURN(
+    ASSIGN_OR_RETURN(
         nlohmann::ordered_json content_and_tool_calls,
         ParseTextAndToolCalls(
             response_text, config_.code_fence_start, config_.code_fence_end,
@@ -403,6 +401,7 @@ Gemma4DataProcessor::RenderSingleTurnTemplate(
       /*push_dummy_user_message_to_preface=*/false);
 }
 
+
 absl::StatusOr<nlohmann::ordered_json> Gemma4DataProcessor::FormatTools(
     const nlohmann::ordered_json& tools) const {
   if (config_.use_template_for_fc_format) {
@@ -414,8 +413,8 @@ absl::StatusOr<nlohmann::ordered_json> Gemma4DataProcessor::FormatTools(
   }
   nlohmann::ordered_json formatted_tools = nlohmann::ordered_json::array();
   for (const auto& tool : tools) {
-    ABSL_ASSIGN_OR_RETURN(std::string formatted_tool,
-                          FormatToolAsFc(tool, config_.open_quote));
+    ASSIGN_OR_RETURN(std::string formatted_tool,
+                     FormatToolAsFc(tool, config_.open_quote));
     formatted_tools.push_back(formatted_tool);
   }
   return formatted_tools;

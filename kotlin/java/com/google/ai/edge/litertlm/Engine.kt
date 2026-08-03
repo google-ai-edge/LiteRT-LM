@@ -158,14 +158,9 @@ class Engine(val engineConfig: EngineConfig) : AutoCloseable {
           ExperimentalFlags.overwritePromptTemplate,
           conversationConfig.loraConfig?.loraPath,
           conversationConfig.loraConfig?.audioLoraPath,
-          conversationConfig.prefillPrefaceOnInit,
-          conversationConfig.maxOutputToken ?: -1,
-          conversationConfig.thinkingConfig,
-          conversationConfig.enableResponseFormat,
         ),
         toolManager,
         conversationConfig.automaticToolCalling,
-        conversationConfig.enableResponseFormat,
       )
     }
   }

@@ -16,17 +16,6 @@
 
 import {z} from 'zod';
 
-/** Schema for custom model stored in the file system. */
-export const CustomModelSchema = z.object({
-  name: z.string(),
-  filename: z.string(),
-  path: z.string(),
-  size: z.string(),
-});
-
-/** Type for custom model stored in the file system. */
-export type CustomModel = z.infer<typeof CustomModelSchema>;
-
 /** Schema for inference configuration settings. */
 export const SettingsSchema = z.object({
   selectedModelPath: z.string(),
@@ -37,8 +26,6 @@ export const SettingsSchema = z.object({
   topP: z.number().min(0).max(1),
   topK: z.number().int().nonnegative(),
   enableThinking: z.boolean(),
-  customModels: z.array(CustomModelSchema).default([]),
-  localDirModels: z.array(CustomModelSchema).default([]),
 });
 
 /** Schema for partial settings, used for parsing saved settings. */
@@ -46,12 +33,6 @@ export const PartialSettingsSchema = SettingsSchema.partial();
 
 /** Type for inference configuration settings. */
 export type Settings = z.infer<typeof SettingsSchema>;
-
-/** Model-specific settings subset. */
-export type ModelSettings = Pick<
-    Settings,
-    'selectedModelPath' | 'contextLength' | 'maxOutputTokens' | 'samplerType' |
-    'temperature' | 'topP' | 'topK' | 'enableThinking'>;
 
 /** List of supported default models available for selection. */
 export const MODELS = [
@@ -68,27 +49,6 @@ export const MODELS = [
     path:
         'https://huggingface.co/litert-community/gemma-4-E4B-it-litert-lm/resolve/main/gemma-4-E4B-it-web.litertlm',
     size: '2.8 GB'
-  },
-  {
-    name: 'Gemma 4 12B',
-    filename: 'gemma-4-12B-it-web.litertlm',
-    path:
-        'https://huggingface.co/litert-community/gemma-4-12B-it-litert-lm/resolve/main/gemma-4-12B-it-web.litertlm',
-    size: '5.6 GB'
-  },
-  {
-    name: 'Gemma 4 26B A4B',
-    filename: 'gemma-4-26B-A4B-it-web.litertlm',
-    path:
-        'https://huggingface.co/litert-community/gemma-4-26B-A4B-it-litert-lm/resolve/main/gemma-4-26B-A4B-it-web.litertlm',
-    size: '14.7 GB'
-  },
-  {
-    name: 'Gemma 4 31B',
-    filename: 'gemma-4-31B-it-web.litertlm',
-    path:
-        'https://huggingface.co/litert-community/gemma-4-31B-it-litert-lm/resolve/main/gemma-4-31B-it-web.litertlm',
-    size: '17.9 GB'
   }
 ];
 
@@ -104,21 +64,6 @@ export class SettingsStore implements Settings {
   topP = 0.95;
   topK = 64;
   enableThinking = true;
-  customModels: CustomModel[] = [];
-  localDirModels: CustomModel[] = [];
-
-  get modelSettings(): ModelSettings {
-    return {
-      selectedModelPath: this.selectedModelPath,
-      contextLength: this.contextLength,
-      maxOutputTokens: this.maxOutputTokens,
-      samplerType: this.samplerType,
-      temperature: this.temperature,
-      topP: this.topP,
-      topK: this.topK,
-      enableThinking: this.enableThinking,
-    };
-  }
 
   private readonly SETTINGS_KEY = 'litertlm-chat-settings';
 
@@ -144,8 +89,6 @@ export class SettingsStore implements Settings {
           this.topP = validated.topP ?? this.topP;
           this.topK = validated.topK ?? this.topK;
           this.enableThinking = validated.enableThinking ?? this.enableThinking;
-          this.customModels = validated.customModels ?? [];
-          this.localDirModels = validated.localDirModels ?? [];
         } else {
           console.warn(
               '[LiteRT-LM] Invalid settings in LocalStorage, using defaults:',
@@ -168,8 +111,6 @@ export class SettingsStore implements Settings {
         topP: this.topP,
         topK: this.topK,
         enableThinking: this.enableThinking,
-        customModels: this.customModels,
-        localDirModels: this.localDirModels,
       };
       window.localStorage.setItem(this.SETTINGS_KEY, JSON.stringify(payload));
       this.updateCallback();

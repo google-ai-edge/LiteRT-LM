@@ -17,7 +17,6 @@
 import {ReactiveController, ReactiveControllerHost} from 'lit';
 
 import {ChatSessionStore, ConversationMeta, StoredMessage} from './stores/chat_session_store.js';
-import {LocalDirectoryService} from './stores/local_directory_service.js';
 import {ModelLoaderService} from './stores/model_loader_service.js';
 import {SettingsStore} from './stores/settings_store.js';
 
@@ -31,7 +30,6 @@ export class LlmChatStateController implements ReactiveController {
   private hosts: ReactiveControllerHost[] = [];
 
   readonly settings: SettingsStore;
-  readonly localDirService: LocalDirectoryService;
   readonly modelLoader: ModelLoaderService;
   readonly chatSession: ChatSessionStore;
 
@@ -40,22 +38,11 @@ export class LlmChatStateController implements ReactiveController {
 
   constructor(host: ReactiveControllerHost) {
     this.settings = new SettingsStore(() => this.requestUpdate());
-    this.localDirService = new LocalDirectoryService(
-        this.settings,
-        () => this.requestUpdate(),
-        (msg: string) => {
-          this.statusText = msg;
-          this.requestUpdate();
-        }
-    );
     this.modelLoader = new ModelLoaderService(
-        () => this.requestUpdate(),
-        (msg: string) => {
+        () => this.requestUpdate(), this.settings, (msg: string) => {
           this.statusText = msg;
           this.requestUpdate();
-        },
-        this.localDirService
-    );
+        });
     this.chatSession = new ChatSessionStore(
         () => this.requestUpdate(), this.settings, this.modelLoader,
         (msg: string) => {

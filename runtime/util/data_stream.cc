@@ -20,7 +20,6 @@
 #include <vector>
 
 #include "absl/status/status.h"  // from @com_google_absl
-#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "runtime/util/status_macros.h"
@@ -36,7 +35,7 @@ SubStream::~SubStream() {
 
 absl::Status SubStream::ReadAndDiscard(void* buffer, uint64_t offset,
                                        uint64_t size) {
-  ABSL_RETURN_IF_ERROR(CheckBounds(offset, size));
+  RETURN_IF_ERROR(CheckBounds(offset, size));
   if (parent_) {
     return parent_->ReadAndDiscard(buffer, offset_ + offset, size);
   }
@@ -45,7 +44,7 @@ absl::Status SubStream::ReadAndDiscard(void* buffer, uint64_t offset,
 
 absl::Status SubStream::ReadAndPreserve(void* buffer, uint64_t offset,
                                         uint64_t size) {
-  ABSL_RETURN_IF_ERROR(CheckBounds(offset, size));
+  RETURN_IF_ERROR(CheckBounds(offset, size));
   if (parent_) {
     return parent_->ReadAndPreserve(buffer, offset_ + offset, size);
   }
@@ -53,7 +52,7 @@ absl::Status SubStream::ReadAndPreserve(void* buffer, uint64_t offset,
 }
 
 absl::Status SubStream::Discard(uint64_t offset, uint64_t size) {
-  ABSL_RETURN_IF_ERROR(CheckBounds(offset, size));
+  RETURN_IF_ERROR(CheckBounds(offset, size));
   if (parent_) {
     return parent_->Discard(offset_ + offset, size);
   }
@@ -75,7 +74,7 @@ absl::StatusOr<std::unique_ptr<DataStream>> SubStream::OpenSubStream(
   // Check if the requested substream fits within this SubStream's bounds.
   // Note that the parent DataStream::OpenSubStream method doesn't do this for
   // us since DataStream doesn't know its own size.
-  ABSL_RETURN_IF_ERROR(CheckBounds(offset, size));
+  RETURN_IF_ERROR(CheckBounds(offset, size));
   // Call the base class implementation to check this SubStream's
   // locked_regions_ and create a new SubStream child of this one.
   return DataStream::OpenSubStream(offset, size);

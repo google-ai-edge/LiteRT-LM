@@ -21,7 +21,6 @@ import click
 
 import litert_lm
 from litert_lm_builder import litertlm_builder
-from litert_lm_cli import common
 from litert_lm_cli import model
 
 
@@ -37,10 +36,7 @@ class LiteRTLMServer(http.server.HTTPServer):
       engine, or None.
     vision_backend: The hardware backend used for vision encoding, or None.
     audio_backend: The hardware backend used for audio encoding, or None.
-    activation_data_type: The activation data type used for model execution, or
-      None.
     allowed_origins: Allowed CORS origins.
-    address_family: Socket address family (e.g. AF_INET or AF_INET6).
   """
 
   def __init__(
@@ -60,7 +56,6 @@ class LiteRTLMServer(http.server.HTTPServer):
     self.max_num_tokens: int | None = None
     self.vision_backend: litert_lm.Backend | None = None
     self.audio_backend: litert_lm.Backend | None = None
-    self.activation_data_type: litert_lm.ActivationDataType | None = None
 
 
 class CORSRequestHandler(http.server.BaseHTTPRequestHandler):
@@ -96,8 +91,6 @@ def get_or_initialize_server_engine(
     server: LiteRTLMServer,
     *,
     model_id: str,
-    backend: str | None = None,
-    max_num_tokens: int | None = None,
 ) -> litert_lm.Engine:
   """Retrieves the persistent server engine or initializes it on first request.
 
@@ -113,8 +106,6 @@ def get_or_initialize_server_engine(
   Args:
     server: The active custom LiteRTLMServer instance object.
     model_id: The requested model identifier string.
-    backend: Optional requested backend override (e.g. 'cpu', 'gpu', 'npu').
-    max_num_tokens: Optional requested max_num_tokens override.
 
   Returns:
     The shared LiteRT-LM Engine context object.
@@ -122,12 +113,12 @@ def get_or_initialize_server_engine(
   Raises:
     FileNotFoundError: If the model package path does not exist.
   """
-  m = model.Model.from_model_reference(model_id)
+  m = model.Model.from_model_id(model_id)
 
   if not m.exists():
     raise FileNotFoundError(f"Model {model_id} not found")
 
-  resolved_backend = model.parse_backend(backend, model_obj=m)
+  backend = model.parse_backend(None, model_obj=m)
   vision_backend = model.parse_backend(
       None,
       model_obj=m,
@@ -144,38 +135,22 @@ def get_or_initialize_server_engine(
       },
       label="audio",
   )
-  resolved_max_num_tokens = model.resolve_config_option(
-      max_num_tokens, m, "max_num_tokens"
-  )
-  cache = model.resolve_config_option(None, m, "cache")
-  cache_dir_val = common.cache_dir_value_from_cache_mode(cache)
-  speculative_decoding = model.resolve_config_option(
-      None, m, "speculative_decoding"
-  )
-  activation_data_type_str = model.resolve_config_option(
-      None, m, "activation_data_type"
-  )
-  activation_data_type = (
-      litert_lm.ActivationDataType.from_str(activation_data_type_str)
-      if activation_data_type_str
-      else None
-  )
+  max_num_tokens = None
 
   if server.litert_lm_engine is not None:
     if (
         server.model_id == model_id
-        and server.backend == resolved_backend
-        and server.max_num_tokens == resolved_max_num_tokens
+        and server.backend == backend
+        and server.max_num_tokens == max_num_tokens
         and server.vision_backend == vision_backend
         and server.audio_backend == audio_backend
-        and server.activation_data_type == activation_data_type
     ):
       return server.litert_lm_engine
 
     click.echo(
         click.style(
-            f"Re-initializing engine (model: {model_id}, backend:"
-            f" {resolved_backend}, max_num_tokens: {resolved_max_num_tokens})",
+            f"Re-initializing engine (model: {model_id}, backend: {backend},"
+            f" max_num_tokens: {max_num_tokens})",
             fg="yellow",
         )
     )
@@ -188,29 +163,22 @@ def get_or_initialize_server_engine(
     server.max_num_tokens = None
     server.vision_backend = None
     server.audio_backend = None
-    server.activation_data_type = None
 
   click.echo(
       click.style(f"Initializing engine for model: {m.model_path}", fg="cyan")
   )
   engine = litert_lm.Engine(
       m.model_path,
-      backend=resolved_backend,
-      max_num_tokens=resolved_max_num_tokens,
+      backend=backend,
+      max_num_tokens=max_num_tokens,
       vision_backend=vision_backend,
       audio_backend=audio_backend,
-      cache_dir=cache_dir_val,
-      enable_speculative_decoding=speculative_decoding,
-      activation_data_type=activation_data_type,
-      enable_benchmark=True,
-      use_ringbuffers_local_attention=True,
   )
   engine.__enter__()
   server.litert_lm_engine = engine
   server.model_id = model_id
-  server.backend = resolved_backend
-  server.max_num_tokens = resolved_max_num_tokens
+  server.backend = backend
+  server.max_num_tokens = max_num_tokens
   server.vision_backend = vision_backend
   server.audio_backend = audio_backend
-  server.activation_data_type = activation_data_type
   return engine

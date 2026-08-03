@@ -87,14 +87,11 @@ _SUBCOMMANDS = (
     "toml",
     "system_metadata",
     "llm_metadata",
-    "executor_metadata",
-    "embedding_metadata",
     "tflite_model",
     "tflite_weights",
     "sp_tokenizer",
     "hf_tokenizer",
     "output",
-    "unpack",
 )
 
 
@@ -177,43 +174,6 @@ def _add_llm_metadata_parser(subparsers) -> None:
       type=str,
       required=True,
       help="The path to the llm metadata file.",
-  )
-
-
-def _add_executor_metadata_parser(subparsers) -> None:
-  """Adds a parser for executor metadata to the subparsers."""
-  executor_metadata_parser = subparsers.add_parser(
-      "executor_metadata",
-      description=(
-          "Add executor metadata to the LiteRT-LM file. Can be a text or binary"
-          " proto file."
-      ),
-      help="Add executor metadata.",
-  )
-  executor_metadata_parser.add_argument(
-      "--path",
-      type=str,
-      required=True,
-      help="The path to the executor metadata file.",
-  )
-  _add_metadata_arguments(executor_metadata_parser)
-
-
-def _add_embedding_metadata_parser(subparsers) -> None:
-  """Adds a parser for embedding metadata to the subparsers."""
-  embedding_metadata_parser = subparsers.add_parser(
-      "embedding_metadata",
-      description=(
-          "Add embedding metadata to the LiteRT-LM file. Can be a text or"
-          " binary proto file."
-      ),
-      help="Add embedding metadata.",
-  )
-  embedding_metadata_parser.add_argument(
-      "--path",
-      type=str,
-      required=True,
-      help="The path to the embedding metadata file.",
   )
 
 
@@ -332,32 +292,6 @@ def _add_output_path_parser(subparsers) -> None:
   )
 
 
-def _add_unpack_parser(subparsers) -> None:
-  """Adds a parser for unpacking a LiteRT-LM file to the subparsers."""
-  unpack_parser = subparsers.add_parser(
-      "unpack",
-      description="Unpack a LiteRT-LM file into an output directory.",
-      help="Unpack a LiteRT-LM file.",
-  )
-  unpack_parser.add_argument(
-      "--input",
-      "--path",
-      "--litertlm_file",
-      dest="input_path",
-      type=str,
-      required=True,
-      help="The path to the input LiteRT-LM file to unpack.",
-  )
-  unpack_parser.add_argument(
-      "--output",
-      "--output_dir",
-      dest="output_dir",
-      type=str,
-      required=True,
-      help="The directory where unpacked files and model.toml will be saved.",
-  )
-
-
 def _build_parser() -> argparse.ArgumentParser:
   """Builds an argument parser for the litertlm_builder tool."""
   parser = argparse.ArgumentParser(
@@ -367,14 +301,11 @@ def _build_parser() -> argparse.ArgumentParser:
   _add_toml_parser(subparsers)
   _add_system_metadata_parser(subparsers)
   _add_llm_metadata_parser(subparsers)
-  _add_executor_metadata_parser(subparsers)
-  _add_embedding_metadata_parser(subparsers)
   _add_tflite_model_parser(subparsers)
   _add_tflite_weights_parser(subparsers)
   _add_sentencepiece_tokenizer_parser(subparsers)
   _add_hf_tokenizer_parser(subparsers)
   _add_output_path_parser(subparsers)
-  _add_unpack_parser(subparsers)
 
   return parser
 
@@ -480,24 +411,6 @@ def _build_llm_metadata(
   builder.add_llm_metadata(args.path, additional_metadata=metadata)
 
 
-def _build_executor_metadata(
-    args: argparse.Namespace,
-    builder: litertlm_builder.LitertLmFileBuilder,
-) -> None:
-  """Builds executor metadata from the parsed arguments."""
-  metadata = _get_metadata_from_args(args)
-  builder.add_executor_metadata(args.path, additional_metadata=metadata)
-
-
-def _build_embedding_metadata(
-    args: argparse.Namespace,
-    builder: litertlm_builder.LitertLmFileBuilder,
-) -> None:
-  """Builds embedding metadata from the parsed arguments."""
-  metadata = _get_metadata_from_args(args)
-  builder.add_embedding_metadata(args.path, additional_metadata=metadata)
-
-
 def _build_tflite_model(
     args: argparse.Namespace,
     builder: litertlm_builder.LitertLmFileBuilder,
@@ -549,21 +462,7 @@ def _build_hf_tokenizer(
 
 
 def _build_litertlm_file(parsed_args: list[argparse.Namespace]) -> None:
-  """Builds or unpacks a LiteRT-LM file from the parsed arguments."""
-  if "unpack" in [pa.command for pa in parsed_args]:
-    if len(parsed_args) != 1:
-      raise ValueError(
-          "The 'unpack' subcommand cannot be combined with other subcommands."
-      )
-    unpack_arg = parsed_args[0]
-    toml_path = litertlm_builder.unpack(
-        unpack_arg.input_path, unpack_arg.output_dir
-    )
-    print(
-        f"LiteRT-LM file successfully unpacked into {unpack_arg.output_dir}"
-        f" (TOML configuration saved at {toml_path})"
-    )
-    return
+  """Builds a LiteRT-LM file from the parsed arguments."""
   if "toml" in [pa.command for pa in parsed_args]:
     toml_path = None
     output_path = None
@@ -594,10 +493,6 @@ def _build_litertlm_file(parsed_args: list[argparse.Namespace]) -> None:
           _build_system_metadata(parsed_arg, builder)
         case "llm_metadata":
           _build_llm_metadata(parsed_arg, builder)
-        case "executor_metadata":
-          _build_executor_metadata(parsed_arg, builder)
-        case "embedding_metadata":
-          _build_embedding_metadata(parsed_arg, builder)
         case "tflite_model":
           _build_tflite_model(parsed_arg, builder)
         case "tflite_weights":

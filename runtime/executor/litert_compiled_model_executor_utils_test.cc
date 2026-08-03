@@ -14,12 +14,10 @@
 
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 
-#include <cstdlib>
 #include <filesystem>  // NOLINT: Required for path manipulation.
 #include <fstream>
 #include <limits>
 #include <memory>
-#include <optional>
 #include <string>
 #include <utility>
 #include <variant>
@@ -30,8 +28,6 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
-#include "litert/c/litert_common.h"  // from @litert
-#include "litert/c/options/litert_gpu_options.h"  // from @litert
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_layout.h"  // from @litert
@@ -43,7 +39,6 @@
 #include "litert/test/matchers.h"  // from @litert
 #include "runtime/components/model_resources.h"
 #include "runtime/executor/executor_settings_base.h"
-#include "runtime/executor/llm_executor_settings.h"
 #include "runtime/util/file_util.h"
 #include "runtime/util/memory_mapped_file.h"
 #include "runtime/util/scoped_file.h"
@@ -283,103 +278,6 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
   EXPECT_THAT(work_groups, ElementsAre(Pair("prefill_128", 100)));
 }
 
-TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
-     GetOptimizedPrefillWorkGroups_CautiousUpgradeTopLevel) {
-  SortedPrefillSignatureMap prefill_runner_set = {
-      {512, "prefill_512"}, {128, "prefill_128"}, {32, "prefill_32"}};
-  // Remainder 256 >= 512/2 -> Upgrade to 512
-  ASSERT_OK_AND_ASSIGN(auto work_groups,
-                       GetOptimizedPrefillWorkGroups(prefill_runner_set, 768));
-  EXPECT_THAT(work_groups,
-              ElementsAre(Pair("prefill_512", 512), Pair("prefill_512", 256)));
-}
-
-TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
-     GetOptimizedPrefillWorkGroups_DeepCascadeUpgrade) {
-  SortedPrefillSignatureMap prefill_runner_set = {
-      {512, "prefill_512"}, {128, "prefill_128"}, {32, "prefill_32"}};
-  // Remainder 80 < 512/2, but 80 >= 128/2 -> Cascade and upgrade to 128
-  ASSERT_OK_AND_ASSIGN(auto work_groups,
-                       GetOptimizedPrefillWorkGroups(prefill_runner_set, 592));
-  EXPECT_THAT(work_groups,
-              ElementsAre(Pair("prefill_512", 512), Pair("prefill_128", 80)));
-}
-
-TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
-     GetOptimizedPrefillWorkGroups_FallbackOverride) {
-  SortedPrefillSignatureMap prefill_runner_set = {
-      {512, "prefill_512"}, {384, "prefill_384"}, {128, "prefill_128"}};
-  // Remainder 256 >= 512/2, BUT next chunk 384 > 512/2. So fallback to 384!
-  // At 384, Remainder 256 >= 384/2. Upgrades to 384.
-  ASSERT_OK_AND_ASSIGN(auto work_groups,
-                       GetOptimizedPrefillWorkGroups(prefill_runner_set, 768));
-  EXPECT_THAT(work_groups,
-              ElementsAre(Pair("prefill_512", 512), Pair("prefill_384", 256)));
-}
-
-TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
-     GetOptimizedPrefillWorkGroups_NoUpgradeAfterFallback) {
-  SortedPrefillSignatureMap prefill_runner_set = {
-      {512, "prefill_512"}, {384, "prefill_384"}, {128, "prefill_128"}};
-  // Remainder 128. Fallback triggered at 512 because 384 > 256.
-  // At 384, 128 < 384/2, so no upgrade.
-  // Ends up using perfectly fitting 128.
-  ASSERT_OK_AND_ASSIGN(auto work_groups,
-                       GetOptimizedPrefillWorkGroups(prefill_runner_set, 640));
-  EXPECT_THAT(work_groups,
-              ElementsAre(Pair("prefill_512", 512), Pair("prefill_128", 128)));
-}
-
-TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
-     GetOptimizedPrefillWorkGroups_MultipleFullChunksThenUpgrade) {
-  SortedPrefillSignatureMap prefill_runner_set = {
-      {100, "prefill_100"}, {30, "prefill_30"}, {10, "prefill_10"}};
-  // 2 full 100 chunks. Remainder 80 >= 100/2. Upgrade to a third 100 chunk!
-  ASSERT_OK_AND_ASSIGN(auto work_groups,
-                       GetOptimizedPrefillWorkGroups(prefill_runner_set, 280));
-  EXPECT_THAT(work_groups,
-              ElementsAre(Pair("prefill_100", 100), Pair("prefill_100", 100),
-                          Pair("prefill_100", 80)));
-}
-
-TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
-     GetOptimizedPrefillWorkGroups_DenseTierCascadeTrap) {
-  SortedPrefillSignatureMap prefill_runner_set = {{600, "prefill_600"},
-                                                  {500, "prefill_500"}};
-  // Input 599. Remainder 599. Next size 500.
-  // 500 * 2 >= 600, but 599 > 500!
-  // Fallback is skipped! Upgrades to 600 instead of outputting {{500, 500},
-  // {500, 99}}.
-  ASSERT_OK_AND_ASSIGN(auto work_groups,
-                       GetOptimizedPrefillWorkGroups(prefill_runner_set, 599));
-  EXPECT_THAT(work_groups, ElementsAre(Pair("prefill_600", 599)));
-}
-
-TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
-     GetOptimizedPrefillWorkGroups_MaxPrefillSequenceLengthAdapts) {
-  SortedPrefillSignatureMap prefill_runner_set = {
-      {512, "prefill_512"}, {256, "prefill_256"}, {128, "prefill_128"}};
-  // input_length = 200, but max_prefill_sequence_length = 256.
-  // 512 runner is filtered out, adapting to 256 runner.
-  ASSERT_OK_AND_ASSIGN(
-      auto work_groups,
-      GetOptimizedPrefillWorkGroups(prefill_runner_set, 200,
-                                    /*max_prefill_sequence_length=*/256));
-  EXPECT_THAT(work_groups, ElementsAre(Pair("prefill_256", 200)));
-}
-
-TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
-     GetOptimizedPrefillWorkGroups_MaxPrefillSequenceLengthExceededError) {
-  SortedPrefillSignatureMap prefill_runner_set = {
-      {512, "prefill_512"}, {256, "prefill_256"}, {128, "prefill_128"}};
-  // input_length = 300, max_prefill_sequence_length = 256.
-  // 512 runner filtered out. 256 runner covers 256 tokens, remaining 44 tokens
-  // cannot fit in 0 capacity.
-  EXPECT_THAT(GetOptimizedPrefillWorkGroups(
-                  prefill_runner_set, 300, /*max_prefill_sequence_length=*/256),
-              StatusIs(absl::StatusCode::kFailedPrecondition));
-}
-
 TEST(LlmLiteRTCompiledModelExecutorUtilsTest, GetPrefillRunnerSetFromModel) {
   auto model_path =
       std::filesystem::path(::testing::SrcDir()) /
@@ -496,8 +394,7 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest, FillAttentionMask_Float32) {
   // channel_size = 10
   // i = 0: current_step = 5. Fills indices [0, 5] with 0.0f.
   // i = 1: current_step = 6. Fills indices [10, 16] with 0.0f.
-  ASSERT_OK(FillAttentionMask(*mask_buffer, /*start_timestep=*/5, /*steps=*/2,
-                              AttentionMaskPolicy::kCausal));
+  ASSERT_OK(FillAttentionMask(*mask_buffer, /*start_timestep=*/5, /*steps=*/2));
 
   auto lock = litert::TensorBufferScopedLock::Create(
       *mask_buffer, litert::TensorBuffer::LockMode::kRead);
@@ -532,8 +429,7 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
   // channel_size = 10
   // i = 0: current_step = 5. Fills indices [0, 5] with 0.0f.
   // i = 1: current_step = 6. Fills indices [10, 16] with 0.0f.
-  ASSERT_OK(FillAttentionMask(*mask_buffer, /*start_timestep=*/5, /*steps=*/2,
-                              AttentionMaskPolicy::kCausal));
+  ASSERT_OK(FillAttentionMask(*mask_buffer, /*start_timestep=*/5, /*steps=*/2));
 
   auto lock = litert::TensorBufferScopedLock::Create(
       *mask_buffer, litert::TensorBuffer::LockMode::kRead);
@@ -570,8 +466,7 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest, FillAttentionMask_Bool) {
   // i = 0: current_step = 2. Fills indices [0, 2] with true.
   // i = 1: current_step = 3. Fills indices [8, 11] with true.
   // i = 2: current_step = 4. Fills indices [16, 20] with true.
-  ASSERT_OK(FillAttentionMask(*mask_buffer, /*start_timestep=*/2, /*steps=*/3,
-                              AttentionMaskPolicy::kCausal));
+  ASSERT_OK(FillAttentionMask(*mask_buffer, /*start_timestep=*/2, /*steps=*/3));
 
   auto lock = litert::TensorBufferScopedLock::Create(
       *mask_buffer, litert::TensorBuffer::LockMode::kRead);
@@ -606,8 +501,7 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
   // i = 0: current_step = 2. Fills indices [0, 2] with true.
   // i = 1: current_step = 3. Fills indices [8, 11] with true.
   // i = 2: current_step = 4. Fills indices [16, 20] with true.
-  ASSERT_OK(FillAttentionMask(*mask_buffer, /*start_timestep=*/2, /*steps=*/3,
-                              AttentionMaskPolicy::kCausal));
+  ASSERT_OK(FillAttentionMask(*mask_buffer, /*start_timestep=*/2, /*steps=*/3));
 
   auto lock = litert::TensorBufferScopedLock::Create(
       *mask_buffer, litert::TensorBuffer::LockMode::kRead);
@@ -623,330 +517,6 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
       }
     }
   }
-}
-
-TEST(LlmLiteRTCompiledModelExecutorUtilsTest, FillAttentionMask_Bidirectional) {
-  LITERT_ASSERT_OK_AND_ASSIGN(auto env, ::litert::Environment::Create({}));
-
-  auto layout = ::litert::Layout(::litert::Dimensions({1, 7, 1, 10}));
-  RankedTensorType ranked_tensor_type(ElementType::Float32, std::move(layout));
-  auto mask_buffer =
-      TensorBuffer::CreateManaged(env, ::litert::TensorBufferType::kHostMemory,
-                                  ranked_tensor_type, sizeof(float) * 70);
-  ASSERT_TRUE(mask_buffer);
-
-  ASSERT_OK(InitializeAttentionMask(*mask_buffer, /*is_f16=*/false));
-
-  std::vector<int> token_ids = {1, 2, 3, 4, 5, 6, 7};
-  ASSERT_OK(FillAttentionMask(*mask_buffer, /*start_timestep=*/0, /*steps=*/7,
-                              AttentionMaskPolicy::kBidirectional, token_ids));
-
-  auto lock = litert::TensorBufferScopedLock::Create(
-      *mask_buffer, litert::TensorBuffer::LockMode::kRead);
-  ASSERT_TRUE(lock);
-  float* mask_ptr = static_cast<float*>(lock->second);
-
-  // All queries (q=0 to 6) should attend to [0, 6]
-  for (int q = 0; q < 7; ++q) {
-    int offset = q * 10;
-    for (int i = 0; i < 10; ++i) {
-      if (i <= 6) {
-        EXPECT_EQ(mask_ptr[offset + i], 0.0f) << "q=" << q << ", k=" << i;
-      } else {
-        EXPECT_LT(mask_ptr[offset + i], -1000.0f) << "q=" << q << ", k=" << i;
-      }
-    }
-  }
-}
-
-TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
-     FillAttentionMask_Bidirectional_SlidingWindow) {
-  LITERT_ASSERT_OK_AND_ASSIGN(auto env, ::litert::Environment::Create({}));
-
-  auto layout = ::litert::Layout(::litert::Dimensions({1, 7, 1, 10}));
-  RankedTensorType ranked_tensor_type(ElementType::Float32, std::move(layout));
-  auto mask_buffer =
-      TensorBuffer::CreateManaged(env, ::litert::TensorBufferType::kHostMemory,
-                                  ranked_tensor_type, sizeof(float) * 70);
-  ASSERT_TRUE(mask_buffer);
-
-  ASSERT_OK(InitializeAttentionMask(*mask_buffer, /*is_f16=*/false));
-
-  std::vector<int> token_ids = {1, 2, 3, 4, 5, 6, 7};
-  ASSERT_OK(FillAttentionMask(*mask_buffer, /*start_timestep=*/0, /*steps=*/7,
-                              AttentionMaskPolicy::kBidirectional, token_ids,
-                              /*sliding_window_size=*/2));
-
-  auto lock = litert::TensorBufferScopedLock::Create(
-      *mask_buffer, litert::TensorBuffer::LockMode::kRead);
-  ASSERT_TRUE(lock);
-  float* mask_ptr = static_cast<float*>(lock->second);
-
-  // For q=0 to 6, expected unmasked keys satisfy std::abs(q - k) < 2 and k <= 6
-  for (int q = 0; q < 7; ++q) {
-    int offset = q * 10;
-    for (int k = 0; k < 10; ++k) {
-      bool expected_unmasked = (std::abs(q - k) < 2) && (k <= 6);
-      if (expected_unmasked) {
-        EXPECT_EQ(mask_ptr[offset + k], 0.0f) << "q=" << q << ", k=" << k;
-      } else {
-        EXPECT_LT(mask_ptr[offset + k], -1000.0f) << "q=" << q << ", k=" << k;
-      }
-    }
-  }
-}
-
-TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
-     FillAttentionMask_VisionBidirectional) {
-  LITERT_ASSERT_OK_AND_ASSIGN(auto env, ::litert::Environment::Create({}));
-
-  auto layout = ::litert::Layout(::litert::Dimensions({1, 8, 1, 10}));
-  RankedTensorType ranked_tensor_type(ElementType::Float32, std::move(layout));
-  auto mask_buffer =
-      TensorBuffer::CreateManaged(env, ::litert::TensorBufferType::kHostMemory,
-                                  ranked_tensor_type, sizeof(float) * 80);
-  ASSERT_TRUE(mask_buffer);
-
-  ASSERT_OK(InitializeAttentionMask(*mask_buffer, /*is_f16=*/false));
-
-  std::vector<int> token_ids = {10, -1, -1, -3, -1, -1, 12, 13};
-  ASSERT_OK(FillAttentionMask(*mask_buffer, /*start_timestep=*/0, /*steps=*/8,
-                              AttentionMaskPolicy::kVisionBidirectional,
-                              token_ids));
-
-  auto lock = litert::TensorBufferScopedLock::Create(
-      *mask_buffer, litert::TensorBuffer::LockMode::kRead);
-  ASSERT_TRUE(lock);
-  float* mask_ptr = static_cast<float*>(lock->second);
-
-  // q = 0: Expected unmasked: 0
-  int offset = 0;
-  for (int k = 0; k < 10; ++k) {
-    bool expected_unmasked = (k == 0);
-    EXPECT_EQ(mask_ptr[offset + k] == 0.0f, expected_unmasked)
-        << "q=0, k=" << k;
-  }
-
-  // q = 1: Expected unmasked: 0, 1, 2
-  offset += 10;
-  for (int k = 0; k < 10; ++k) {
-    bool expected_unmasked = (k <= 2);
-    EXPECT_EQ(mask_ptr[offset + k] == 0.0f, expected_unmasked)
-        << "q=1, k=" << k;
-  }
-
-  // q = 2: Expected unmasked: 0, 1, 2
-  offset += 10;
-  for (int k = 0; k < 10; ++k) {
-    bool expected_unmasked = (k <= 2);
-    EXPECT_EQ(mask_ptr[offset + k] == 0.0f, expected_unmasked)
-        << "q=2, k=" << k;
-  }
-
-  // q = 3: Expected unmasked: 0, 1, 2, 3
-  offset += 10;
-  for (int k = 0; k < 10; ++k) {
-    bool expected_unmasked = (k <= 3);
-    EXPECT_EQ(mask_ptr[offset + k] == 0.0f, expected_unmasked)
-        << "q=3, k=" << k;
-  }
-
-  // q = 4: Expected unmasked: 0, 1, 2, 3, 4, 5
-  offset += 10;
-  for (int k = 0; k < 10; ++k) {
-    bool expected_unmasked = (k <= 5);
-    EXPECT_EQ(mask_ptr[offset + k] == 0.0f, expected_unmasked)
-        << "q=4, k=" << k;
-  }
-
-  // q = 5: Expected unmasked: 0, 1, 2, 3, 4, 5
-  offset += 10;
-  for (int k = 0; k < 10; ++k) {
-    bool expected_unmasked = (k <= 5);
-    EXPECT_EQ(mask_ptr[offset + k] == 0.0f, expected_unmasked)
-        << "q=5, k=" << k;
-  }
-
-  // q = 6: Expected unmasked: 0 to 6
-  offset += 10;
-  for (int k = 0; k < 10; ++k) {
-    bool expected_unmasked = (k <= 6);
-    EXPECT_EQ(mask_ptr[offset + k] == 0.0f, expected_unmasked)
-        << "q=6, k=" << k;
-  }
-
-  // q = 7: Expected unmasked: 0 to 7
-  offset += 10;
-  for (int k = 0; k < 10; ++k) {
-    bool expected_unmasked = (k <= 7);
-    EXPECT_EQ(mask_ptr[offset + k] == 0.0f, expected_unmasked)
-        << "q=7, k=" << k;
-  }
-}
-
-TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
-     FillAttentionMask_Causal_SlidingWindow) {
-  LITERT_ASSERT_OK_AND_ASSIGN(auto env, ::litert::Environment::Create({}));
-
-  auto layout = ::litert::Layout(::litert::Dimensions({1, 3, 1, 10}));
-  RankedTensorType ranked_tensor_type(ElementType::Float32, std::move(layout));
-  auto mask_buffer =
-      TensorBuffer::CreateManaged(env, ::litert::TensorBufferType::kHostMemory,
-                                  ranked_tensor_type, sizeof(float) * 30);
-  ASSERT_TRUE(mask_buffer);
-
-  ASSERT_OK(InitializeAttentionMask(*mask_buffer, /*is_f16=*/false));
-
-  // start_timestep = 2, steps = 3. (q = 2, 3, 4).
-  // sliding_window_size = 2.
-  ASSERT_OK(FillAttentionMask(*mask_buffer, /*start_timestep=*/2, /*steps=*/3,
-                              AttentionMaskPolicy::kCausal,
-                              /*token_ids=*/std::nullopt,
-                              /*sliding_window_size=*/2));
-
-  auto lock = litert::TensorBufferScopedLock::Create(
-      *mask_buffer, litert::TensorBuffer::LockMode::kRead);
-  ASSERT_TRUE(lock);
-  float* mask_ptr = static_cast<float*>(lock->second);
-
-  // q = 2: Expected unmasked: [1, 2].
-  int offset = 0;
-  for (int k = 0; k < 10; ++k) {
-    bool expected_unmasked = (k >= 1 && k <= 2);
-    if (expected_unmasked) {
-      EXPECT_EQ(mask_ptr[offset + k], 0.0f) << "q=2, k=" << k;
-    } else {
-      EXPECT_LT(mask_ptr[offset + k], -1000.0f) << "q=2, k=" << k;
-    }
-  }
-
-  // q = 3: Expected unmasked: [2, 3].
-  offset += 10;
-  for (int k = 0; k < 10; ++k) {
-    bool expected_unmasked = (k >= 2 && k <= 3);
-    if (expected_unmasked) {
-      EXPECT_EQ(mask_ptr[offset + k], 0.0f) << "q=3, k=" << k;
-    } else {
-      EXPECT_LT(mask_ptr[offset + k], -1000.0f) << "q=3, k=" << k;
-    }
-  }
-
-  // q = 4: Expected unmasked: [3, 4].
-  offset += 10;
-  for (int k = 0; k < 10; ++k) {
-    bool expected_unmasked = (k >= 3 && k <= 4);
-    if (expected_unmasked) {
-      EXPECT_EQ(mask_ptr[offset + k], 0.0f) << "q=4, k=" << k;
-    } else {
-      EXPECT_LT(mask_ptr[offset + k], -1000.0f) << "q=4, k=" << k;
-    }
-  }
-}
-
-TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
-     FillAttentionMask_VisionBidirectional_SlidingWindow) {
-  LITERT_ASSERT_OK_AND_ASSIGN(auto env, ::litert::Environment::Create({}));
-
-  auto layout = ::litert::Layout(::litert::Dimensions({1, 8, 1, 10}));
-  RankedTensorType ranked_tensor_type(ElementType::Float32, std::move(layout));
-  auto mask_buffer =
-      TensorBuffer::CreateManaged(env, ::litert::TensorBufferType::kHostMemory,
-                                  ranked_tensor_type, sizeof(float) * 80);
-  ASSERT_TRUE(mask_buffer);
-
-  ASSERT_OK(InitializeAttentionMask(*mask_buffer, /*is_f16=*/false));
-
-  std::vector<int> token_ids = {10, -1, -1, -3, -1, -1, 12, 13};
-  ASSERT_OK(FillAttentionMask(*mask_buffer, /*start_timestep=*/0, /*steps=*/8,
-                              AttentionMaskPolicy::kVisionBidirectional,
-                              token_ids,
-                              /*sliding_window_size=*/2));
-
-  auto lock = litert::TensorBufferScopedLock::Create(
-      *mask_buffer, litert::TensorBuffer::LockMode::kRead);
-  ASSERT_TRUE(lock);
-  float* mask_ptr = static_cast<float*>(lock->second);
-
-  // q = 0: Expected unmasked: 0
-  int offset = 0;
-  for (int k = 0; k < 10; ++k) {
-    bool expected_unmasked = (k == 0);
-    EXPECT_EQ(mask_ptr[offset + k] == 0.0f, expected_unmasked)
-        << "q=0, k=" << k;
-  }
-
-  // q = 1: Expected unmasked: 0, 1, 2
-  offset += 10;
-  for (int k = 0; k < 10; ++k) {
-    bool expected_unmasked = (k <= 2);
-    EXPECT_EQ(mask_ptr[offset + k] == 0.0f, expected_unmasked)
-        << "q=1, k=" << k;
-  }
-
-  // q = 2: Expected unmasked: 1, 2
-  offset += 10;
-  for (int k = 0; k < 10; ++k) {
-    bool expected_unmasked = (k >= 1 && k <= 2);
-    EXPECT_EQ(mask_ptr[offset + k] == 0.0f, expected_unmasked)
-        << "q=2, k=" << k;
-  }
-
-  // q = 3: Expected unmasked: 2, 3
-  offset += 10;
-  for (int k = 0; k < 10; ++k) {
-    bool expected_unmasked = (k >= 2 && k <= 3);
-    EXPECT_EQ(mask_ptr[offset + k] == 0.0f, expected_unmasked)
-        << "q=3, k=" << k;
-  }
-
-  // q = 4: Expected unmasked: 3, 4, 5
-  offset += 10;
-  for (int k = 0; k < 10; ++k) {
-    bool expected_unmasked = (k == 3 || k == 4 || k == 5);
-    EXPECT_EQ(mask_ptr[offset + k] == 0.0f, expected_unmasked)
-        << "q=4, k=" << k;
-  }
-
-  // q = 5: Expected unmasked: 4, 5
-  offset += 10;
-  for (int k = 0; k < 10; ++k) {
-    bool expected_unmasked = (k == 4 || k == 5);
-    EXPECT_EQ(mask_ptr[offset + k] == 0.0f, expected_unmasked)
-        << "q=5, k=" << k;
-  }
-
-  // q = 6: Expected unmasked: 5, 6
-  offset += 10;
-  for (int k = 0; k < 10; ++k) {
-    bool expected_unmasked = (k >= 5 && k <= 6);
-    EXPECT_EQ(mask_ptr[offset + k] == 0.0f, expected_unmasked)
-        << "q=6, k=" << k;
-  }
-
-  // q = 7: Expected unmasked: 6, 7
-  offset += 10;
-  for (int k = 0; k < 10; ++k) {
-    bool expected_unmasked = (k >= 6 && k <= 7);
-    EXPECT_EQ(mask_ptr[offset + k] == 0.0f, expected_unmasked)
-        << "q=7, k=" << k;
-  }
-}
-
-TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
-     FillAttentionMask_VisionBidirectional_EmptyTokensFails) {
-  LITERT_ASSERT_OK_AND_ASSIGN(auto env, ::litert::Environment::Create({}));
-
-  auto layout = ::litert::Layout(::litert::Dimensions({1, 2, 1, 10}));
-  RankedTensorType ranked_tensor_type(ElementType::Float32, std::move(layout));
-  auto mask_buffer =
-      TensorBuffer::CreateManaged(env, ::litert::TensorBufferType::kHostMemory,
-                                  ranked_tensor_type, sizeof(float) * 20);
-  ASSERT_TRUE(mask_buffer);
-
-  EXPECT_THAT(FillAttentionMask(*mask_buffer, /*start_timestep=*/5, /*steps=*/2,
-                                AttentionMaskPolicy::kVisionBidirectional,
-                                /*token_ids=*/std::nullopt),
-              StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
 TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
@@ -1232,155 +802,6 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest, GetGpuModelCacheData_WithFd) {
 
   std::string expected_cache_key = absl::StrCat("fd_", expected_metadata_id);
   EXPECT_EQ(cache_data.cache_key, expected_cache_key);
-}
-
-class DummyExecutorSettings : public ExecutorSettingsBase {
- public:
-  DummyExecutorSettings()
-      : ExecutorSettingsBase(*ModelAssets::Create("dummy_path")) {}
-};
-
-LiteRtDelegatePrecision GetGpuPrecision(const litert::GpuOptions& gpu_options) {
-  LiteRtDelegatePrecision precision;
-  EXPECT_EQ(LrtGetGpuAcceleratorCompilationOptionsPrecision(&precision,
-                                                            gpu_options.Get()),
-            kLiteRtStatusOk);
-  return precision;
-}
-
-TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
-     SetCpuOptions_ConfigureSuccessfully) {
-  LITERT_ASSERT_OK_AND_ASSIGN(auto cpu_options, litert::CpuOptions::Create());
-  EXPECT_OK(SetCpuOptions(cpu_options, 8));
-}
-
-TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
-     SetCommonGpuOptions_SetsAllCommonOptions) {
-  DummyExecutorSettings executor_settings;
-  LITERT_ASSERT_OK_AND_ASSIGN(auto gpu_options, litert::GpuOptions::Create());
-
-  EXPECT_OK(SetCommonGpuOptions(executor_settings, gpu_options));
-
-  bool constant_sharing = false;
-  EXPECT_EQ(LrtGetGpuOptionsConstantTensorsSharing(&constant_sharing,
-                                                   gpu_options.Get()),
-            kLiteRtStatusOk);
-  EXPECT_TRUE(constant_sharing);
-
-  bool madvise = false;
-  EXPECT_EQ(LrtGetGpuAcceleratorCompilationOptionsMadviseOriginalSharedTensors(
-                &madvise, gpu_options.Get()),
-            kLiteRtStatusOk);
-  EXPECT_TRUE(madvise);
-
-  bool convert_weights = false;
-  EXPECT_EQ(LrtGetGpuAcceleratorRuntimeOptionsConvertWeightsOnGpu(
-                &convert_weights, gpu_options.Get()),
-            kLiteRtStatusOk);
-  EXPECT_TRUE(convert_weights);
-
-  bool prefer_texture = false;
-  EXPECT_EQ(LrtGetGpuAcceleratorCompilationOptionsPreferTextureWeights(
-                &prefer_texture, gpu_options.Get()),
-            kLiteRtStatusOk);
-#if defined(__APPLE__)
-  EXPECT_FALSE(prefer_texture);
-#else
-  EXPECT_TRUE(prefer_texture);
-#endif
-}
-
-TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
-     SetCommonGpuOptions_DefaultAndFallbackPrecisions) {
-  DummyExecutorSettings executor_settings;
-
-  // Without fallback_activation_data_type specified, defaults to FLOAT32.
-  {
-    LITERT_ASSERT_OK_AND_ASSIGN(auto gpu_options, litert::GpuOptions::Create());
-    EXPECT_OK(SetCommonGpuOptions(executor_settings, gpu_options));
-    EXPECT_EQ(GetGpuPrecision(gpu_options), kLiteRtDelegatePrecisionFp32);
-  }
-
-  // With FLOAT32 fallback specified, configures kFp32.
-  {
-    LITERT_ASSERT_OK_AND_ASSIGN(auto gpu_options, litert::GpuOptions::Create());
-    EXPECT_OK(SetCommonGpuOptions(executor_settings, gpu_options,
-                                  ActivationDataType::FLOAT32));
-    EXPECT_EQ(GetGpuPrecision(gpu_options), kLiteRtDelegatePrecisionFp32);
-  }
-
-  // With FLOAT16, INT16, and INT8 fallback specified, configures kFp16.
-  {
-    LITERT_ASSERT_OK_AND_ASSIGN(auto gpu_options, litert::GpuOptions::Create());
-    EXPECT_OK(SetCommonGpuOptions(executor_settings, gpu_options,
-                                  ActivationDataType::FLOAT16));
-    EXPECT_EQ(GetGpuPrecision(gpu_options), kLiteRtDelegatePrecisionFp16);
-  }
-  {
-    LITERT_ASSERT_OK_AND_ASSIGN(auto gpu_options, litert::GpuOptions::Create());
-    EXPECT_OK(SetCommonGpuOptions(executor_settings, gpu_options,
-                                  ActivationDataType::INT16));
-    EXPECT_EQ(GetGpuPrecision(gpu_options), kLiteRtDelegatePrecisionFp16);
-  }
-  {
-    LITERT_ASSERT_OK_AND_ASSIGN(auto gpu_options, litert::GpuOptions::Create());
-    EXPECT_OK(SetCommonGpuOptions(executor_settings, gpu_options,
-                                  ActivationDataType::INT8));
-    EXPECT_EQ(GetGpuPrecision(gpu_options), kLiteRtDelegatePrecisionFp16);
-  }
-}
-
-TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
-     SetCommonGpuOptions_ExplicitActivationPrecisionOverride) {
-  DummyExecutorSettings executor_settings;
-
-  // Explicit FLOAT32 overrides fallback of FLOAT16/INT8.
-  {
-    LITERT_ASSERT_OK_AND_ASSIGN(auto gpu_options, litert::GpuOptions::Create());
-    executor_settings.SetActivationDataType(ActivationDataType::FLOAT32);
-    EXPECT_OK(SetCommonGpuOptions(executor_settings, gpu_options,
-                                  ActivationDataType::FLOAT16));
-    EXPECT_EQ(GetGpuPrecision(gpu_options), kLiteRtDelegatePrecisionFp32);
-  }
-
-  // Explicit INT8 or FLOAT16 overrides fallback of FLOAT32.
-  {
-    LITERT_ASSERT_OK_AND_ASSIGN(auto gpu_options, litert::GpuOptions::Create());
-    executor_settings.SetActivationDataType(ActivationDataType::INT8);
-    EXPECT_OK(SetCommonGpuOptions(executor_settings, gpu_options,
-                                  ActivationDataType::FLOAT32));
-    EXPECT_EQ(GetGpuPrecision(gpu_options), kLiteRtDelegatePrecisionFp16);
-  }
-  {
-    LITERT_ASSERT_OK_AND_ASSIGN(auto gpu_options, litert::GpuOptions::Create());
-    executor_settings.SetActivationDataType(ActivationDataType::FLOAT16);
-    EXPECT_OK(SetCommonGpuOptions(executor_settings, gpu_options,
-                                  ActivationDataType::FLOAT32));
-    EXPECT_EQ(GetGpuPrecision(gpu_options), kLiteRtDelegatePrecisionFp16);
-  }
-}
-
-TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
-     SetCommonGpuOptions_MixedPrecisionOverride) {
-  DummyExecutorSettings executor_settings;
-  executor_settings.SetEnableMixedPrecision(true);
-
-  // Mixed precision overrides FLOAT16 fallback to FP32.
-  {
-    LITERT_ASSERT_OK_AND_ASSIGN(auto gpu_options, litert::GpuOptions::Create());
-    EXPECT_OK(SetCommonGpuOptions(executor_settings, gpu_options,
-                                  ActivationDataType::FLOAT16));
-    EXPECT_EQ(GetGpuPrecision(gpu_options), kLiteRtDelegatePrecisionFp32);
-  }
-
-  // Mixed precision overrides explicit FLOAT16 activation type to FP32.
-  {
-    LITERT_ASSERT_OK_AND_ASSIGN(auto gpu_options, litert::GpuOptions::Create());
-    executor_settings.SetActivationDataType(ActivationDataType::FLOAT16);
-    EXPECT_OK(SetCommonGpuOptions(executor_settings, gpu_options,
-                                  ActivationDataType::FLOAT16));
-    EXPECT_EQ(GetGpuPrecision(gpu_options), kLiteRtDelegatePrecisionFp32);
-  }
 }
 
 }  // namespace

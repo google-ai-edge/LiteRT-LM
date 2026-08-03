@@ -23,8 +23,6 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include "absl/status/status.h"  // from @com_google_absl
-#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
@@ -33,7 +31,6 @@
 #include "litert/cc/litert_layout.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
-#include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
 #include "runtime/executor/audio_executor_settings.h"
@@ -81,19 +78,16 @@ absl::StatusOr<TensorBuffer> CreateTensorBuffer(
 
 absl::StatusOr<std::unique_ptr<AudioLiteRtCompiledModelExecutor>>
 CreateAudioExecutor(Environment& env, const std::string& model_path,
-                    int max_sequence_length, Backend backend,
-                    bool audio_buffering_enabled = false) {
-  ABSL_ASSIGN_OR_RETURN(auto model_file,
-                        litert::lm::ScopedFile::Open(model_path));
+                    int max_sequence_length, Backend backend) {
+  ASSIGN_OR_RETURN(auto model_file, litert::lm::ScopedFile::Open(model_path));
   auto model_file_ptr =
       std::make_shared<litert::lm::ScopedFile>(std::move(model_file));
-  ABSL_ASSIGN_OR_RETURN(auto model_assets,
-                        litert::lm::ModelAssets::Create(model_file_ptr));
+  ASSIGN_OR_RETURN(auto model_assets,
+                   litert::lm::ModelAssets::Create(model_file_ptr));
   // Create the audio executor settings.
-  ABSL_ASSIGN_OR_RETURN(auto audio_executor_settings,
-                        litert::lm::AudioExecutorSettings::CreateDefault(
-                            model_assets, max_sequence_length, backend));
-  audio_executor_settings.SetAudioBufferingEnabled(audio_buffering_enabled);
+  ASSIGN_OR_RETURN(auto audio_executor_settings,
+                   litert::lm::AudioExecutorSettings::CreateDefault(
+                       model_assets, max_sequence_length, backend));
   // Create the audio executor.
   return litert::lm::AudioLiteRtCompiledModelExecutor::Create(
       audio_executor_settings, env);
@@ -453,8 +447,9 @@ TEST_F(AudioLiteRtCompiledModelExecutorTest, EncodeTest_Streaming_LargeInput) {
                            Layout(Dimensions({1, kInputSequenceLength,
                                               kSpectrogramFrequencySlots})))));
 
-  ASSERT_OK_AND_ASSIGN(auto executor_audio_data,
-                       audio_executor->Encode(mel_spectrogram_tensor_buffer));
+  ASSERT_OK_AND_ASSIGN(
+      auto executor_audio_data,
+      audio_executor->Encode(mel_spectrogram_tensor_buffer));
 
   ASSERT_OK_AND_ASSIGN(auto audio_embeddings_ptr,
                        executor_audio_data.GetMutableEmbeddingsPtr());
@@ -482,212 +477,6 @@ TEST_F(AudioLiteRtCompiledModelExecutorTest, EncodeTest_Streaming_LargeInput) {
 
   EXPECT_EQ(audio_embeddings_data, expected_embeddings_data);
   EXPECT_EQ(executor_audio_data.GetValidTokens(), kExpectedOutputTokens);
-}
-
-TEST_F(AudioLiteRtCompiledModelExecutorTest, FlushTest_NoBuffering) {
-  ASSERT_OK_AND_ASSIGN(
-      auto audio_executor,
-      CreateAudioExecutor(*env_,
-                          (std::filesystem::path(::testing::SrcDir()) /
-                           std::string(kTestAudioModelPath))
-                              .string(),
-                          /*max_sequence_length=*/0, Backend::CPU));
-
-  ASSERT_OK_AND_ASSIGN(auto executor_audio_data, audio_executor->Flush());
-  EXPECT_EQ(executor_audio_data.GetValidTokens(), 0);
-}
-
-TEST_F(AudioLiteRtCompiledModelExecutorTest,
-       FlushTest_WithBuffering_PartialWindow) {
-  ASSERT_OK_AND_ASSIGN(
-      auto audio_executor,
-      CreateAudioExecutor(*env_,
-                          (std::filesystem::path(::testing::SrcDir()) /
-                           std::string(kTestAudioStreamingModelPath))
-                              .string(),
-                          /*max_sequence_length=*/0, Backend::CPU,
-                          /*audio_buffering_enabled=*/true));
-
-  std::vector<float> mel_spectrogram_data(5 * kSpectrogramFrequencySlots, 1.0f);
-
-  ASSERT_OK_AND_ASSIGN(
-      auto mel_spectrogram_tensor_buffer,
-      CreateTensorBuffer<const float>(
-          mel_spectrogram_data,
-          RankedTensorType(
-              GetElementType<float>(),
-              Layout(Dimensions({1, 5, kSpectrogramFrequencySlots})))));
-
-  ASSERT_OK_AND_ASSIGN(auto executor_audio_data_encode,
-                       audio_executor->Encode(mel_spectrogram_tensor_buffer));
-  EXPECT_EQ(executor_audio_data_encode.GetValidTokens(), 0);
-
-  ASSERT_OK_AND_ASSIGN(auto executor_audio_data_flush, audio_executor->Flush());
-  EXPECT_EQ(executor_audio_data_flush.GetValidTokens(), 3);
-}
-
-TEST_F(AudioLiteRtCompiledModelExecutorTest,
-       FlushTest_WithBuffering_MultiChunk) {
-  ASSERT_OK_AND_ASSIGN(
-      auto audio_executor,
-      CreateAudioExecutor(*env_,
-                          (std::filesystem::path(::testing::SrcDir()) /
-                           std::string(kTestAudioStreamingModelPath))
-                              .string(),
-                          /*max_sequence_length=*/0, Backend::CPU,
-                          /*audio_buffering_enabled=*/true));
-
-  std::vector<float> mel_spectrogram_data1(5 * kSpectrogramFrequencySlots,
-                                           1.0f);
-  ASSERT_OK_AND_ASSIGN(
-      auto mel_spectrogram_tensor_buffer1,
-      CreateTensorBuffer<const float>(
-          mel_spectrogram_data1,
-          RankedTensorType(
-              GetElementType<float>(),
-              Layout(Dimensions({1, 5, kSpectrogramFrequencySlots})))));
-  ASSERT_OK_AND_ASSIGN(auto audio_data1,
-                       audio_executor->Encode(mel_spectrogram_tensor_buffer1));
-  EXPECT_EQ(audio_data1.GetValidTokens(), 0);
-
-  std::vector<float> mel_spectrogram_data2(8 * kSpectrogramFrequencySlots,
-                                           1.0f);
-  ASSERT_OK_AND_ASSIGN(
-      auto mel_spectrogram_tensor_buffer2,
-      CreateTensorBuffer<const float>(
-          mel_spectrogram_data2,
-          RankedTensorType(
-              GetElementType<float>(),
-              Layout(Dimensions({1, 8, kSpectrogramFrequencySlots})))));
-  ASSERT_OK_AND_ASSIGN(auto audio_data2,
-                       audio_executor->Encode(mel_spectrogram_tensor_buffer2));
-  EXPECT_EQ(audio_data2.GetValidTokens(), 5);
-
-  ASSERT_OK_AND_ASSIGN(auto audio_data_flush, audio_executor->Flush());
-  EXPECT_EQ(audio_data_flush.GetValidTokens(), 3);
-}
-
-TEST_F(AudioLiteRtCompiledModelExecutorTest,
-       ContextManagement_StaticEncoder_NotSupported) {
-  ASSERT_OK_AND_ASSIGN(
-      auto audio_executor,
-      CreateAudioExecutor(*env_,
-                          (std::filesystem::path(::testing::SrcDir()) /
-                           std::string(kTestAudioModelPath))
-                              .string(),
-                          /*max_sequence_length=*/0, Backend::CPU));
-
-  EXPECT_EQ(audio_executor->CreateNewContext().status().code(),
-            absl::StatusCode::kUnimplemented);
-  EXPECT_EQ(audio_executor->CloneContext().status().code(),
-            absl::StatusCode::kUnimplemented);
-}
-
-TEST_F(AudioLiteRtCompiledModelExecutorTest,
-       ContextManagement_StreamingEncoder_CreateCloneRestore) {
-  ASSERT_OK_AND_ASSIGN(
-      auto audio_executor,
-      CreateAudioExecutor(*env_,
-                          (std::filesystem::path(::testing::SrcDir()) /
-                           std::string(kTestAudioStreamingModelPath))
-                              .string(),
-                          /*max_sequence_length=*/0, Backend::CPU));
-
-  ASSERT_OK_AND_ASSIGN(auto new_context, audio_executor->CreateNewContext());
-  EXPECT_NE(new_context, nullptr);
-
-  std::vector<float> chunk1_data(10 * kSpectrogramFrequencySlots, 1.0f);
-  ASSERT_OK_AND_ASSIGN(
-      auto chunk1_buffer,
-      CreateTensorBuffer<const float>(
-          chunk1_data,
-          RankedTensorType(
-              GetElementType<float>(),
-              Layout(Dimensions({1, 10, kSpectrogramFrequencySlots})))));
-  ASSERT_OK(audio_executor->Encode(chunk1_buffer).status());
-
-  ASSERT_OK_AND_ASSIGN(auto cloned_context, audio_executor->CloneContext());
-  EXPECT_NE(cloned_context, nullptr);
-
-  std::vector<float> chunk2_data(10 * kSpectrogramFrequencySlots, 2.0f);
-  ASSERT_OK_AND_ASSIGN(
-      auto chunk2_buffer,
-      CreateTensorBuffer<const float>(
-          chunk2_data,
-          RankedTensorType(
-              GetElementType<float>(),
-              Layout(Dimensions({1, 10, kSpectrogramFrequencySlots})))));
-  ASSERT_OK_AND_ASSIGN(auto audio_data_result1,
-                       audio_executor->Encode(chunk2_buffer));
-  ASSERT_OK_AND_ASSIGN(auto embeddings1_ptr,
-                       audio_data_result1.GetMutableEmbeddingsPtr());
-  ASSERT_OK_AND_ASSIGN(auto embeddings1,
-                       GetDataAsVector<float>(*embeddings1_ptr));
-
-  ASSERT_OK(audio_executor->RestoreContext(std::move(cloned_context)));
-
-  ASSERT_OK_AND_ASSIGN(auto audio_data_result2,
-                       audio_executor->Encode(chunk2_buffer));
-  ASSERT_OK_AND_ASSIGN(auto embeddings2_ptr,
-                       audio_data_result2.GetMutableEmbeddingsPtr());
-  ASSERT_OK_AND_ASSIGN(auto embeddings2,
-                       GetDataAsVector<float>(*embeddings2_ptr));
-
-  EXPECT_EQ(audio_data_result1.GetValidTokens(),
-            audio_data_result2.GetValidTokens());
-  EXPECT_EQ(embeddings1, embeddings2);
-}
-
-TEST_F(AudioLiteRtCompiledModelExecutorTest,
-       ContextManagement_StreamingEncoder_BufferedSpectrogram) {
-  ASSERT_OK_AND_ASSIGN(
-      auto audio_executor,
-      CreateAudioExecutor(*env_,
-                          (std::filesystem::path(::testing::SrcDir()) /
-                           std::string(kTestAudioStreamingModelPath))
-                              .string(),
-                          /*max_sequence_length=*/0, Backend::CPU,
-                          /*audio_buffering_enabled=*/true));
-
-  // Encode partial chunk (5 frames < window size 10) -> buffered, 0 tokens
-  // returned.
-  std::vector<float> chunk_data(5 * kSpectrogramFrequencySlots, 1.0f);
-  ASSERT_OK_AND_ASSIGN(
-      auto chunk_buffer,
-      CreateTensorBuffer<const float>(
-          chunk_data,
-          RankedTensorType(
-              GetElementType<float>(),
-              Layout(Dimensions({1, 5, kSpectrogramFrequencySlots})))));
-  ASSERT_OK_AND_ASSIGN(auto encode_data, audio_executor->Encode(chunk_buffer));
-  EXPECT_EQ(encode_data.GetValidTokens(), 0);
-
-  // Clone context after buffering 5 frames.
-  ASSERT_OK_AND_ASSIGN(auto cloned_context, audio_executor->CloneContext());
-  ASSERT_NE(cloned_context, nullptr);
-
-  auto* streaming_context =
-      static_cast<AudioStreamingContext*>(cloned_context.get());
-  EXPECT_EQ(streaming_context->buffered_spectrogram().size(),
-            5 * kSpectrogramFrequencySlots);
-
-  // Test AudioStreamingContext::Clone() copy constructor logic.
-  ASSERT_OK_AND_ASSIGN(auto cloned_cloned_context, cloned_context->Clone());
-  auto* streaming_context2 =
-      static_cast<AudioStreamingContext*>(cloned_cloned_context.get());
-  EXPECT_EQ(streaming_context2->buffered_spectrogram(),
-            streaming_context->buffered_spectrogram());
-
-  // Flush the executor once -> processes 5 buffered frames.
-  ASSERT_OK_AND_ASSIGN(auto flush_data1, audio_executor->Flush());
-  EXPECT_EQ(flush_data1.GetValidTokens(), 3);
-
-  // Restore context -> restores the 5 buffered frames back into executor.
-  ASSERT_OK(audio_executor->RestoreContext(std::move(cloned_context)));
-
-  // Flush again after restore -> processes restored 5 buffered frames.
-  ASSERT_OK_AND_ASSIGN(auto flush_data2, audio_executor->Flush());
-  EXPECT_EQ(flush_data1.GetValidTokens(), flush_data2.GetValidTokens());
 }
 #endif  // !defined(WIN32) && !defined(_WIN32) && !defined(__WIN32__) && \
         // !defined(__NT__) && !defined(_WIN64)

@@ -14,15 +14,14 @@
  * limitations under the License.
  */
 
+import './custom_dropdown';
+
 import {css, html, LitElement} from 'lit';
-import {customElement, property, query} from 'lit/decorators.js';
+import {customElement, property} from 'lit/decorators.js';
 
 import {LlmChatStateController} from '../state_controller.js';
 import {MODELS, PartialSettingsSchema, Settings} from '../stores/settings_store.js';
 import {sharedStyles} from '../styles/shared_styles.js';
-
-import './custom_dropdown';
-import type {CustomDropdown} from './custom_dropdown.js';
 
 /* tslint:disable:no-new-decorators */
 
@@ -31,9 +30,6 @@ import type {CustomDropdown} from './custom_dropdown.js';
 export class LitertSidebar extends LitElement {
   @property({ type: Object })
   state!: LlmChatStateController;
-
-  @query('custom-dropdown')
-  private readonly dropdown!: CustomDropdown;
 
   static override styles = [
     sharedStyles, css`
@@ -246,8 +242,6 @@ export class LitertSidebar extends LitElement {
           color: #ffffff;
         }
       }
-
-
     `
   ];
 
@@ -272,109 +266,22 @@ export class LitertSidebar extends LitElement {
     return `${sizeInGB.toFixed(2)} GB`;
   }
 
-  private isLargeModel(path: string): boolean {
-    return path.includes('gemma-4-26B') || path.includes('gemma-4-31B');
-  }
-
-  private readonly LARGE_MODEL_WARNING_KEY = 'litertlm-large-model-warning-dismissed';
-
-  private hasDismissedWarning(): boolean {
-    return window.localStorage.getItem(this.LARGE_MODEL_WARNING_KEY) === 'true';
-  }
-
-  private dismissWarning() {
-    window.localStorage.setItem(this.LARGE_MODEL_WARNING_KEY, 'true');
-  }
-
   private handleModelChange(e: CustomEvent<string>) {
     const path = e.detail;
-    if (path === 'upload') {
-      this.triggerFileUpload();
-      return;
-    }
-    if (path === 'select-dir') {
-      void this.state.localDirService.mountDirectory();
-      return;
-    }
-
-    if (this.isLargeModel(path) && !this.hasDismissedWarning()) {
-      const proceed = confirm(
-          'Warning: The selected model requires a significant amount of video memory (VRAM).\n' +
-          'Running it may cause your browser tab to crash or your system to become unresponsive ' +
-          'if you do not have enough VRAM.\n\n' +
-          'Do you want to proceed?');
-      if (!proceed) {
-        if (this.dropdown) {
-          this.dropdown.value = this.state.settings.selectedModelPath;
-        }
-        return;
-      }
-      this.dismissWarning();
-    }
-
     if (this.state.settings.selectedModelPath !== path) {
       this.state.settings.selectedModelPath = path;
       this.state.settings.saveSettings();
 
       // Auto-trigger model loading compilation in background on settings change
-      this.state.modelLoader.loadModelWeights(
-          this.state.settings.modelSettings, async () => {
-            await this.state.chatSession.createConversationSession();
-          });
+      this.state.modelLoader.loadModelWeights(async () => {
+        await this.state.chatSession.createConversationSession();
+      });
     }
   }
 
-  private triggerFileUpload() {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.litertlm';
-    input.onchange = async () => {
-      const file = input.files?.[0];
-      if (file) {
-        try {
-          const customModel =
-              await this.state.modelLoader.importCustomModel(file);
-          const exists = this.state.settings.customModels.some(
-              m => m.path === customModel.path);
-          if (!exists) {
-            this.state.settings.customModels = [
-              ...this.state.settings.customModels, customModel
-            ];
-          }
-          this.state.settings.selectedModelPath = customModel.path;
-          this.state.settings.saveSettings();
-
-          await this.state.modelLoader.loadModelWeights(
-              this.state.settings.modelSettings, async () => {
-                await this.state.chatSession.createConversationSession();
-              });
-        } catch (e) {
-          console.error('[LiteRT-LM] Failed to import/load custom model:', e);
-        }
-      }
-    };
-    input.click();
-  }
-
-  private async handleRemoveCached(e: Event, modelPath: string) {
+  private handleRemoveCached(e: Event, modelPath: string) {
     e.stopPropagation();  // Stop click propagation to prevent selecting model
-    const deleted =
-        await this.state.modelLoader.deleteModelFromCache(modelPath);
-    if (deleted) {
-      let settingsChanged = false;
-      if (modelPath.startsWith('https://local-model/')) {
-        this.state.settings.customModels =
-            this.state.settings.customModels.filter(m => m.path !== modelPath);
-        settingsChanged = true;
-      }
-      if (this.state.settings.selectedModelPath === modelPath) {
-        this.state.settings.selectedModelPath = MODELS[0]!.path;
-        settingsChanged = true;
-      }
-      if (settingsChanged) {
-        this.state.settings.saveSettings();
-      }
-    }
+    this.state.modelLoader.deleteModelFromCache(modelPath);
   }
 
   private handleSliderInput(e: Event, prop: keyof Settings) {
@@ -410,11 +317,6 @@ export class LitertSidebar extends LitElement {
   override render() {
     const activeModelFilename =
         this.state.settings.selectedModelPath.split('/').pop() || '';
-    const allModels = [
-      ...MODELS,
-      ...this.state.settings.customModels,
-      ...this.state.settings.localDirModels
-    ];
 
     return html`
       <!-- Model Selection Group -->
@@ -425,66 +327,43 @@ export class LitertSidebar extends LitElement {
         this.dismissSidebar}>Done</button>
         </div>
 
-        <div style="display: flex; gap: 8px; align-items: center; width: 100%;">
-          <custom-dropdown
-            .value=${this.state.settings.selectedModelPath}
-            @change=${this.handleModelChange}
-            style="flex: 1; min-width: 0;"
-          >
-            ${allModels.map(model => {
+        <custom-dropdown
+          .value=${this.state.settings.selectedModelPath}
+          @change=${this.handleModelChange}
+        >
+          ${MODELS.map(model => {
       const cachedSizeBytes =
           this.state.modelLoader.cachedModels.get(model.filename);
       const downloadProgress =
           this.state.modelLoader.downloadProgresses.get(model.filename);
-      const isLocalDir = model.path.startsWith('local-dir://');
 
       return html`
-                <div class="dropdown-item" data-value="${model.path}">
-                  <span class="model-name">${model.name}</span>
+              <div class="dropdown-item" data-value="${model.path}">
+                <span class="model-name">${model.name}</span>
 
-                  ${
-          isLocalDir ? html`
-                    <span class="local-badge" style="font-size: 0.6rem; color: var(--teal); opacity: 0.8;">Local Dir</span>
-                  ` :
+                ${
           cachedSizeBytes ? html`
-                    <span class="cached-info" style="display: flex; align-items: center; gap: 6px;">
-                      <span class="size-badge" style="font-size: 0.62rem; background-color: var(--border); padding: 2px 6px; border-radius: 4px; color: var(--text-muted);">${
-                                  (cachedSizeBytes / 1e9).toFixed(1)} GB</span>
-                      <button class="delete-cache-btn" title="Remove from cache" style="background: none; border: none; color: #ef4444; cursor: pointer; font-size: 0.78rem; padding: 2px 4px;" @click=${
-                                  (e: Event) => this.handleRemoveCached(
-                                      e, model.path)}>✕</button>
-                    </span>
-                  ` :
+                  <span class="cached-info" style="display: flex; align-items: center; gap: 6px;">
+                    <span class="size-badge" style="font-size: 0.62rem; background-color: var(--border); padding: 2px 6px; border-radius: 4px; color: var(--text-muted);">${
+                                (cachedSizeBytes / 1e9).toFixed(1)} GB</span>
+                    <button class="delete-cache-btn" title="Remove from cache" style="background: none; border: none; color: #ef4444; cursor: pointer; font-size: 0.78rem; padding: 2px 4px;" @click=${
+                                (e: Event) => this.handleRemoveCached(
+                                    e, model.path)}>✕</button>
+                  </span>
+                ` :
               downloadProgress !== undefined ? html`
-                    <span class="downloading-info" style="font-size: 0.62rem; color: var(--teal); font-weight: bold;">
-                      ${downloadProgress}%
-                    </span>
-                  ` :
-                                                 html`
-                    <span class="download-badge" style="font-size: 0.6rem; color: var(--text-muted); opacity: 0.65;">${model.path.startsWith('https://local-model/') ? 'Local' : `Download (${model.size})`}</span>
-                  `}
-                </div>
-              `;
+                  <span class="downloading-info" style="font-size: 0.62rem; color: var(--teal); font-weight: bold;">
+                    ${downloadProgress}%
+                  </span>
+                ` :
+                                               html`
+                  <span class="download-badge" style="font-size: 0.6rem; color: var(--text-muted); opacity: 0.65;">Download (${
+                                                   model.size})</span>
+                `}
+              </div>
+            `;
     })}
-            ${
-        this.state.localDirService.isSupported ?
-            html`
-              <div class="dropdown-item" data-value="select-dir" style="border-top: 1px dashed var(--border); margin-top: 4px; color: var(--teal);">
-                <span class="model-name">${
-                this.state.localDirService.isAuthorized ?
-                    'Rescan / Change local directory...' :
-                    'Select local directory...'}</span>
-                <span style="font-size: 0.8rem;">📁</span>
-              </div>
-            ` :
-            html`
-              <div class="dropdown-item" data-value="upload" style="border-top: 1px dashed var(--border); margin-top: 4px; color: var(--teal);">
-                <span class="model-name">Upload custom model (.litertlm)...</span>
-                <span style="font-size: 0.8rem;">⬆</span>
-              </div>
-            `}
-          </custom-dropdown>
-        </div>
+        </custom-dropdown>
 
         <!-- Compact inline Caching size display & Clear All link -->
         <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 8px; font-size: 0.65rem; color: var(--text-muted);">

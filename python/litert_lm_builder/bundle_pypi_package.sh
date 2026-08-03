@@ -46,10 +46,9 @@ for PY_VER in "3.10" "3.11" "3.12" "3.13" "3.14"; do
   uv pip install --index-url https://pypi.org/simple "${WHEEL_DIR}"/*.whl
   echo "Verifying CLI tools..."
   litert-lm-builder --help
-  litert-lm-builder unpack --help
   litert-lm-peek --help
   echo "Verifying Python import..."
-  python3 -c "import litert_lm_builder; print(litert_lm_builder.LitertLmFileBuilder); print(litert_lm_builder.unpack)"
+  python3 -c "import litert_lm_builder; print(litert_lm_builder.LitertLmFileBuilder)"
   # Clean up for next iteration
   deactivate
 done

@@ -26,7 +26,6 @@
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
-#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
@@ -52,7 +51,7 @@ EmbeddingLookupManager::Create(
     std::optional<ScopedFile> external_weight_file,
     litert::Options::ScopedWeightSectionMap external_weight_sections) {
   auto embedding_lookup_manager = std::make_unique<EmbeddingLookupManager>();
-  ABSL_RETURN_IF_ERROR(embedding_lookup_manager->Initialize(
+  RETURN_IF_ERROR(embedding_lookup_manager->Initialize(
       env, text_embedding_model, end_of_multi_modal_embedding_models,
       fully_supports_multi_modal, std::move(signature_key),
       std::move(external_weight_file), std::move(external_weight_sections)));
@@ -166,12 +165,10 @@ absl::Status EmbeddingLookupManager::LookupPrefill(
     return text_embedding_lookup_->LookupPrefill(token, output_vector);
   } else if (fully_supports_multi_modal_) {
     for (const auto& embedding_lookup : multi_modal_embedding_lookups_) {
-      ABSL_RETURN_IF_ERROR(
-          embedding_lookup->LookupPrefill(token, output_vector));
+      RETURN_IF_ERROR(embedding_lookup->LookupPrefill(token, output_vector));
     }
     for (const auto& embedding_lookup : end_of_multi_modal_embedding_lookups_) {
-      ABSL_RETURN_IF_ERROR(
-          embedding_lookup->LookupPrefill(token, output_vector));
+      RETURN_IF_ERROR(embedding_lookup->LookupPrefill(token, output_vector));
     }
   } else {
     // If fully_supports_multi_modal_ is false, then we need to fill in the
@@ -194,16 +191,16 @@ absl::Status EmbeddingLookupManager::LookupPrefill(
   const size_t floats_per_token = text_embedding_lookup_->GetFloatsPerToken();
   const size_t byte_offset = token_offset * sizeof(float) * floats_per_token;
 
-  ABSL_RETURN_IF_ERROR(text_embedding_lookup_->LookupPrefill(
-      tokens, output_tensor, byte_offset));
+  RETURN_IF_ERROR(text_embedding_lookup_->LookupPrefill(tokens, output_tensor,
+                                                        byte_offset));
 
   if (fully_supports_multi_modal_) {
     for (const auto& embedding_lookup : multi_modal_embedding_lookups_) {
-      ABSL_RETURN_IF_ERROR(
+      RETURN_IF_ERROR(
           embedding_lookup->LookupPrefill(tokens, output_tensor, byte_offset));
     }
     for (const auto& embedding_lookup : end_of_multi_modal_embedding_lookups_) {
-      ABSL_RETURN_IF_ERROR(
+      RETURN_IF_ERROR(
           embedding_lookup->LookupPrefill(tokens, output_tensor, byte_offset));
     }
   } else {
@@ -263,7 +260,7 @@ absl::Status EmbeddingLookupManager::Initialize(
         "end_of_multi_modal_embedding_models must be empty.");
   }
   fully_supports_multi_modal_ = fully_supports_multi_modal;
-  ABSL_ASSIGN_OR_RETURN(
+  ASSIGN_OR_RETURN(
       text_embedding_lookup_,
       EmbeddingLookupText::Create(env, std::move(text_embedding_model),
                                   std::move(signature_key),
@@ -271,9 +268,9 @@ absl::Status EmbeddingLookupManager::Initialize(
                                   std::move(external_weight_sections)));
   for (const auto& [special_token, embedding_model] :
        end_of_multi_modal_embedding_models) {
-    ABSL_ASSIGN_OR_RETURN(auto end_of_multi_modal_embedding_lookup,
-                          EndOfMultiModalEmbedding::Create(
-                              env, std::move(embedding_model), special_token));
+    ASSIGN_OR_RETURN(auto end_of_multi_modal_embedding_lookup,
+                     EndOfMultiModalEmbedding::Create(
+                         env, std::move(embedding_model), special_token));
     end_of_multi_modal_embedding_lookups_.push_back(
         std::move(end_of_multi_modal_embedding_lookup));
   }

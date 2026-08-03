@@ -90,10 +90,6 @@ fun benchmark(
         ExperimentalFlags.overwritePromptTemplate,
         null, // loraPath
         null, // audioLoraPath
-        false, // prefillPrefaceOnInit
-        -1, // maxOutputToken
-        null, // thinkingConfig
-        false, // enableResponseFormat
       )
 
     Conversation(conversationHandle).use { conversation ->

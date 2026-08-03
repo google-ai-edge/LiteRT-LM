@@ -27,8 +27,6 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
-#include "absl/types/span.h"  // from @com_google_absl
-#include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/cc/options/litert_cpu_options.h"  // from @litert
@@ -36,7 +34,6 @@
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/executor/executor_settings_base.h"
-#include "runtime/executor/llm_executor_settings.h"
 #include "runtime/proto/sampler_params.pb.h"
 #include "runtime/util/scoped_file.h"
 
@@ -63,9 +60,6 @@ struct ModelSignatures {
   // Input attention mask signature name. For both prefill and decode.
   // Not all models require this input.
   std::optional<std::string> input_attn_mask;
-  // Input attention mask signature name for local attention. For both prefill
-  // and decode. Not all models require this input.
-  std::optional<std::string> input_attn_mask_local;
   // Input embeddings signature name. For both prefill and decode. When this
   // is provided, the embedding model will be used to look up the embeddings and
   // the input_tokens value must not be set.
@@ -115,34 +109,12 @@ absl::StatusOr<SortedPrefillSignatureMap> GetPrefillRunnerSetFromModel(
 // Get a list of prefill work groups, each of which contains the signature
 // runner and prefill length for a single prefill call.
 // The work groups are calculated to maximize prefill performance.
-//
-// Arguments:
-// - prefill_runner_set: Map of sequence length to prefill signature runner
-//   name.
-// - input_length: Total number of input tokens to prefill.
-// - max_prefill_sequence_length: Optional remaining capacity of KV cache /
-//   state
-//   entries. If specified, prefill runners with sequence length >
-//   max_prefill_sequence_length are filtered out, and work groups are
-//   constrained so that the allocated prefill runners do not exceed remaining
-//   capacity.
-//
-// Caveats:
-// - If max_prefill_sequence_length filters out all available runners or if the
-//   input length cannot be accommodated within the remaining state capacity, an
-//   absl::InvalidArgumentError status is returned.
-// - When max_prefill_sequence_length is provided, prefill runner selection
-//   adapts to use smaller runners that fit in the remaining capacity instead of
-//   larger ones.
-//
-// Output: A vector of std::pair<std::string, int>
-//   std::string - the prefill runner signature to be used for the current
-//   prefill call.
-//   int - the prefill input length for the current prefill call.
+// Output: A vector of std::pair<SignatureRunner*, int>
+// SignatureRunner* - the prefill runner to be used for current prefill call.
+// int - the prefill length for current prefill call.
 absl::StatusOr<std::vector<std::pair<std::string, int>>>
 GetOptimizedPrefillWorkGroups(
-    const SortedPrefillSignatureMap& prefill_runner_set, int input_length,
-    std::optional<int> max_prefill_sequence_length = std::nullopt);
+    const SortedPrefillSignatureMap& prefill_runner_set, int input_length);
 
 // Initializes the attention mask tensor for prefill/decode.
 // The mask is a 4D tensor with shape [batch=1, seq_len, 1, max_kv_len].
@@ -154,15 +126,8 @@ absl::Status InitializeAttentionMask(::litert::TensorBuffer& mask, bool is_f16);
 // mask - The attention mask tensor to be filled.
 // start_timestep - The starting timestep to be filled at seq = 1.
 // steps - The number of steps to fill (the number of sequences to be filled).
-// attention_mask_policy - The attention mask policy.
-// token_ids - The token ids of the full context. Required for
-//             kVisionBidirectional attention mask policy.
-// sliding_window_size - The sliding window size.
-absl::Status FillAttentionMask(
-    ::litert::TensorBuffer& mask, int start_timestep, int steps,
-    const AttentionMaskPolicy& attention_mask_policy,
-    std::optional<absl::Span<const int>> token_ids = std::nullopt,
-    std::optional<int> sliding_window_size = std::nullopt);
+absl::Status FillAttentionMask(::litert::TensorBuffer& mask, int start_timestep,
+                               int steps);
 
 // Fills the parameters used by single buffer cache update from
 // start_index to start_index + update_length.
@@ -185,17 +150,6 @@ absl::Status GenericComputeTokenEmbeddings(
     EmbeddingLookupManager* embedding_lookup_manager,
     EmbeddingLookupManager* per_layer_embedding_lookup_manager);
 
-// Set centralized CPU options (e.g. threads and default XNNPack flags).
-absl::Status SetCpuOptions(litert::CpuOptions& cpu_options,
-                           int num_threads = 4);
-
-// Set centralized standard GPU options common across executors.
-absl::Status SetCommonGpuOptions(
-    const ExecutorSettingsBase& executor_settings,
-    litert::GpuOptions& gpu_options,
-    std::optional<ActivationDataType> fallback_activation_data_type =
-        std::nullopt);
-
 // Set the CPU weight cache options for XNNPACK.
 // Args:
 //   - weight_cache_file: An optional weight cache file path.
@@ -207,7 +161,8 @@ absl::Status SetCpuCacheOptions(
     const absl::StatusOr<
         std::variant<std::string, std::shared_ptr<litert::lm::ScopedFile>>>&
         weight_cache_file,
-    absl::string_view logging_prefix, litert::CpuOptions& cpu_options);
+    absl::string_view logging_prefix,
+    litert::CpuOptions& cpu_options);
 
 // Set the GPU weight cache options for ML Drift.
 // Args:
@@ -245,13 +200,6 @@ struct GpuModelCacheData {
 absl::StatusOr<GpuModelCacheData> GetGpuModelCacheData(
     const ExecutorSettingsBase& executor_settings,
     absl::string_view cache_name);
-
-// Initializes the embedding lookup and per-layer embedding lookup managers from
-// the given model resources and environment.
-absl::Status InitializeEmbeddingLookups(
-    ::litert::Environment& env, ModelResources& resources,
-    std::unique_ptr<EmbeddingLookupManager>& embedding_lookup,
-    std::unique_ptr<EmbeddingLookupManager>& per_layer_embedding_lookup);
 
 }  // namespace litert::lm
 

@@ -17,7 +17,6 @@
 #include <optional>
 
 #include "absl/status/status.h"  // from @com_google_absl
-#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
@@ -45,7 +44,7 @@ GetVisionExecutorPropertiesFromModelResources(ModelResources& model_resources) {
     return vision_adapter_model_or.status();
   }
 
-  ABSL_ASSIGN_OR_RETURN(
+  ASSIGN_OR_RETURN(
       auto vision_encoder_model,
       model_resources.GetTFLiteModel(ModelType::kTfLiteVisionEncoder));
 
@@ -84,14 +83,10 @@ GetVisionExecutorPropertiesFromModelResources(ModelResources& model_resources) {
 
   LITERT_ASSIGN_OR_RETURN(auto encoder_input_names,
                           vision_encoder_model->GetSignatureInputNames(0));
-  // Deduce the patch shrink factor from the encoder's image input tensor.
-  // Transformer (ViT) encoders expose two inputs (image patches +
-  // positions_xy), while single input encoders (e.g. LFM2 VL) expose only the
-  // image patches tensor. In both cases the image patches tensor is the first
-  // input, so this works as long as the encoder has at least one input.
-  if (!encoder_input_names.empty()) {
-    // The image patches tensor has shape [batch_size, num_patches, patch_dim],
-    // so the second-to-last dimension is the number of input patches.
+  if (encoder_input_names.size() == 2) {
+    // If the encoder has two input tensors, we asuume it is Vision Transformer
+    // (ViT) with input shape [batch_size, num_patches, patch_dim] for image
+    // tensor, and [batch_size, num_patches, 2] for the positions tensor.
     LITERT_ASSIGN_OR_RETURN(auto encoder_input_tensor_type,
                             vision_encoder_model->GetInputTensorType(0, 0));
     properties.patch_num_shrink_factor =

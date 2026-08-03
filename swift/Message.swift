@@ -42,11 +42,9 @@ public enum Content {
   case audioData(Data)
   /// Audio provided by an absolute file path.
   case audioFile(String)
-  /// Tool response.
-  case toolResponse(name: String, response: Any, id: String = "")
 
   /// Convert to JSON format. Used internally.
-  var toJson: [String: Any] {
+  var toJson: [String: String] {
     switch self {
     case .text(let text):
       return ["type": "text", "text": text]
@@ -58,16 +56,6 @@ public enum Content {
       return ["type": "audio", "blob": bytes.base64EncodedString()]
     case .audioFile(let absPath):
       return ["type": "audio", "path": absPath]
-    case .toolResponse(let name, let response, let id):
-      var dict: [String: Any] = [
-        "type": "tool_response",
-        "name": name,
-        "response": response,
-      ]
-      if !id.isEmpty {
-        dict["id"] = id
-      }
-      return dict
     }
   }
 }
@@ -98,15 +86,11 @@ public struct Message {
   /// The channels of the message.
   public let channels: [String: String]
 
-  /// The tool calls in the message.
-  public let toolCalls: [ToolCall]
-
   // TODO: (b/459796564): Update constructor to `Message.role("messageTextHere")`
   /// Creates a `Message` from a text string.
   /// - Parameter text: The text content of the message.
   public init(_ text: String, role: Role = .user, channels: [String: String] = [:]) {
-    self.init(
-      contents: Contents(contents: [.text(text)]), role: role, channels: channels, toolCalls: [])
+    self.init(contents: Contents(contents: [.text(text)]), role: role, channels: channels)
   }
 
   /// Creates a `Message` from one or more `Content`s.
@@ -116,37 +100,26 @@ public struct Message {
     self.contents = Contents(contents: contents)
     self.role = role
     self.channels = [:]
-    self.toolCalls = []
   }
 
   /// Creates a `Message` from a list of `Content`s.
   /// - Parameter contents: The list of contents for this message.
-  public init(
-    contents: [Content], role: Role = .user, channels: [String: String] = [:],
-    toolCalls: [ToolCall] = []
-  ) {
+  public init(contents: [Content], role: Role = .user, channels: [String: String] = [:]) {
     precondition(
-      !contents.isEmpty || !channels.isEmpty || !toolCalls.isEmpty,
-      "Contents, channels and toolCalls should not all be empty.")
+      !contents.isEmpty || !channels.isEmpty, "Contents and channels should not both be empty.")
     self.contents = Contents(contents: contents)
     self.role = role
     self.channels = channels
-    self.toolCalls = toolCalls
   }
 
   /// Creates a `Message` from a `Contents` object.
   /// - Parameter contents: The contents object for this message.
-  public init(
-    contents: Contents, role: Role = .user, channels: [String: String] = [:],
-    toolCalls: [ToolCall] = []
-  ) {
+  public init(contents: Contents, role: Role = .user, channels: [String: String] = [:]) {
     precondition(
-      !contents.isEmpty || !channels.isEmpty || !toolCalls.isEmpty,
-      "Contents, channels and toolCalls should not all be empty.")
+      !contents.isEmpty || !channels.isEmpty, "Contents and channels should not both be empty.")
     self.contents = contents
     self.role = role
     self.channels = channels
-    self.toolCalls = toolCalls
   }
 
   /// Convert to JSON format. Used internally.
@@ -157,19 +130,6 @@ public struct Message {
     }
     if !channels.isEmpty {
       dict["channels"] = channels
-    }
-    if !toolCalls.isEmpty {
-      dict["tool_calls"] = toolCalls.map { toolCall in
-        let tcDict: [String: Any] = [
-          "id": toolCall.id,
-          "type": "function",
-          "function": [
-            "name": toolCall.name,
-            "arguments": toolCall.arguments,
-          ],
-        ]
-        return tcDict
-      }
     }
     return dict
   }
@@ -240,7 +200,7 @@ public struct Contents: RandomAccessCollection {
   }
 
   /// Convert to JSON format. Used internally.
-  var toJson: [[String: Any]] {
+  var toJson: [[String: String]] {
     return contents.map { $0.toJson }
   }
 
@@ -261,18 +221,5 @@ public struct Contents: RandomAccessCollection {
     contents.compactMap { content in
       if case .text(let str) = content { return str } else { return nil }
     }.joined(separator: " ")
-  }
-}
-
-/// Represents a tool call from the model.
-public struct ToolCall {
-  public let name: String
-  public let id: String
-  public let arguments: [String: Any]
-
-  public init(name: String, id: String, arguments: [String: Any]) {
-    self.name = name
-    self.id = id
-    self.arguments = arguments
   }
 }

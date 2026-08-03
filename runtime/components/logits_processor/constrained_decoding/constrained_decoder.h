@@ -42,9 +42,9 @@ namespace litert::lm {
 //   ConstrainedDecoder decoder(constraint, batch_size);
 //   while (!done) {
 //     TensorBuffer logits = Decode(...);
-//     ABSL_RETURN_IF_ERROR(decoder.ProcessLogits(logits));
+//     RETURN_IF_ERROR(decoder.ProcessLogits(logits));
 //     TensorBuffer next_tokens = sampler.Sample(logits);
-//     ABSL_RETURN_IF_ERROR(decoder.UpdateState(next_tokens));
+//     RETURN_IF_ERROR(decoder.UpdateState(next_tokens));
 //   }
 class ConstrainedDecoder : public LogitsProcessor {
  public:

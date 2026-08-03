@@ -194,23 +194,6 @@ class FakeLlmExecutor : public LlmExecutor {
   LastOp last_op_ = LastOp::kNone;
 };
 
-class DiffusionLlmFakeLlmExecutor : public FakeLlmExecutor {
- public:
-  using FakeLlmExecutor::FakeLlmExecutor;
-
-  absl::StatusOr<std::vector<std::vector<int>>> Decode(
-      const ExecutorDecodeParams& decode_params) override;
-
-  void SetMockDecodeDelay(absl::Duration delay) { mock_decode_delay_ = delay; }
-
-  bool HasDecodeStarted() const { return decode_started_.load(); }
-  void ResetDecodeStarted() { decode_started_.store(false); }
-
- private:
-  absl::Duration mock_decode_delay_ = absl::ZeroDuration();
-  std::atomic<bool> decode_started_ = false;
-};
-
 }  // namespace litert::lm
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_MOCK_LLM_EXECUTOR_H_

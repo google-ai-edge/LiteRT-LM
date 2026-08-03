@@ -79,6 +79,11 @@ TEST_F(Gemma3DataProcessorTest, ToInputDataVectorTextOnly) {
 
 TEST_P(Gemma3DataProcessorImageTest, ToInputDataVectorTextAndImage) {
   std::string image_name = GetParam();
+#ifdef LITERT_USE_SKIA
+  if (image_name == "apple.png") {
+    GTEST_SKIP() << "Skipping PNG test for SKIA";
+  }
+#endif
   ASSERT_OK_AND_ASSIGN(auto processor, Gemma3DataProcessor::Create(
                                            /*Gemma3DataProcessorConfig=*/
                                            {.image_tensor_height = 224,
@@ -348,6 +353,11 @@ What is the capital of France?<end_of_turn>
 TEST_P(Gemma3DataProcessorImageTest,
        PromptTemplateToInputDataVectorTextAndImage) {
   std::string image_name = GetParam();
+#ifdef LITERT_USE_SKIA
+  if (image_name == "apple.png") {
+    GTEST_SKIP() << "Skipping PNG test for SKIA";
+  }
+#endif
   const std::string test_file_path =
       GetTestdataPath("google-gemma-3-1b-it.jinja");
   ASSERT_OK_AND_ASSIGN(const std::string template_content,

@@ -22,7 +22,6 @@
 #include <variant>
 
 #include "absl/status/status.h"  // from @com_google_absl
-#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/str_join.h"  // from @com_google_absl
@@ -60,7 +59,6 @@ std::ostream& operator<<(std::ostream& os, const CpuConfig& config) {
   os << "kv_increment_size: " << config.kv_increment_size << "\n";
   os << "prefill_chunk_size: " << config.prefill_chunk_size << "\n";
   os << "number_of_threads: " << config.number_of_threads << "\n";
-  os << "enable_ynnpack: " << config.enable_ynnpack << "\n";
   return os;
 }
 
@@ -74,45 +72,6 @@ std::ostream& operator<<(std::ostream& os, const NpuConfig& config) {
   return os;
 }
 
-bool operator==(const AttentionMaskSettings& lhs,
-                const AttentionMaskSettings& rhs) {
-  return lhs.attention_mask_policy == rhs.attention_mask_policy &&
-         lhs.local_attention_mask_policy == rhs.local_attention_mask_policy &&
-         lhs.sliding_window_size == rhs.sliding_window_size;
-}
-
-std::ostream& operator<<(std::ostream& os, const AttentionMaskPolicy& policy) {
-  switch (policy) {
-    case AttentionMaskPolicy::kCausal:
-      os << "Causal";
-      break;
-    case AttentionMaskPolicy::kBidirectional:
-      os << "Bidirectional";
-      break;
-    case AttentionMaskPolicy::kVisionBidirectional:
-      os << "VisionBidirectional";
-      break;
-  }
-  return os;
-}
-
-std::ostream& operator<<(std::ostream& os,
-                         const AttentionMaskSettings& settings) {
-  os << "attention_mask_policy: "
-     << settings.attention_mask_policy << "\n";
-  if (settings.local_attention_mask_policy.has_value()) {
-    os << "local_attention_mask_policy: "
-       << settings.local_attention_mask_policy.value() << "\n";
-  } else {
-    os << "local_attention_mask_policy: Not set\n";
-  }
-  if (settings.sliding_window_size.has_value()) {
-    os << "sliding_window_size: " << settings.sliding_window_size.value();
-  } else {
-    os << "sliding_window_size: Not set";
-  }
-  return os;
-}
 
 std::ostream& operator<<(std::ostream& os, const AdvancedSettings& settings) {
   os << "prefill_batch_sizes: ["
@@ -126,10 +85,7 @@ std::ostream& operator<<(std::ostream& os, const AdvancedSettings& settings) {
      << settings.num_logits_to_print_after_decode << "\n";
   os << "gpu_madvise_original_shared_tensors: "
      << settings.gpu_madvise_original_shared_tensors << "\n";
-  os << "gpu_enable_metal_residency_set: "
-     << settings.gpu_enable_metal_residency_set << "\n";
   os << "is_benchmark: " << settings.is_benchmark << "\n";
-  os << "enable_profiling: " << settings.enable_profiling << "\n";
   os << "preferred_device_substr: " << settings.preferred_device_substr << "\n";
   os << "num_threads_to_upload: " << settings.num_threads_to_upload << "\n";
   os << "num_threads_to_compile: " << settings.num_threads_to_compile << "\n";
@@ -170,8 +126,6 @@ std::ostream& operator<<(std::ostream& os, const AdvancedSettings& settings) {
   } else {
     os << "hint_kernel_batch_size: Not set\n";
   }
-  os << "error_on_invalid_sampled_token_id: "
-     << settings.error_on_invalid_sampled_token_id << "\n";
   return os;
 }
 
@@ -199,8 +153,6 @@ std::ostream& operator<<(std::ostream& os, const LlmExecutorSettings& config) {
        << "\n";
   }
   os << "model_assets: " << config.GetModelAssets() << "\n";
-  os << "attention_mask_settings:\n"
-     << config.GetAttentionMaskSettings() << "\n";
   if (config.GetAdvancedSettings().has_value()) {
     os << "advanced_settings: " << *config.GetAdvancedSettings() << "\n";
   } else {
@@ -222,8 +174,8 @@ absl::StatusOr<LlmExecutorSettings> LlmExecutorSettings::CreateDefault(
     settings.SetBackendConfig(config);
   } else if (backend == Backend::GPU) {
     GpuConfig config;
-    // Default max top k to 64 for GPU.
-    config.max_top_k = 64;
+    // Default max top k to 1 for GPU.
+    config.max_top_k = 1;
     settings.SetBackendConfig(config);
   } else if (backend == Backend::NPU) {
     settings.SetBackendConfig(NpuConfig());
@@ -233,7 +185,7 @@ absl::StatusOr<LlmExecutorSettings> LlmExecutorSettings::CreateDefault(
     return absl::InvalidArgumentError(
         absl::StrCat("Unsupported backend: ", backend));
   }
-  ABSL_RETURN_IF_ERROR(settings.SetBackend(backend));
+  RETURN_IF_ERROR(settings.SetBackend(backend));
   // Explicitly set the field value to avoid undefined behavior. Setting to 0
   // means that the maximum number of tokens is not set can could be inferred
   // from the model assets (but note that for the model or backend which does

@@ -34,18 +34,20 @@ from typing import Any
 import urllib.request
 
 import click
+
 # Migrate to built-in "typing" when min python version is 3.12.
 from typing_extensions import override
 
 import litert_lm
-from litert_lm_cli import config as cli_config
-from litert_lm_cli import model as cli_model
+from litert_lm_cli import (
+    model as cli_model,
+)
 from litert_lm_cli.commands import serve_util
 
 
-def _dump_json(data: Any, *, indent: int | None = None) -> str:
+def _dump_json(data: Any) -> str:
   """Dumps data to a JSON string, ensuring non-ASCII characters are handled."""
-  return json.dumps(data, ensure_ascii=False, indent=indent)
+  return json.dumps(data, ensure_ascii=False)
 
 
 def _sse_data(data: str, event: str | None = None) -> bytes:
@@ -58,61 +60,6 @@ def _sse_data(data: str, event: str | None = None) -> bytes:
 def _format_sse_final() -> bytes:
   """Formats the final [DONE] event for Server-Sent Events."""
   return b"data: [DONE]\n\n"
-
-
-def _parse_model_parameter(
-    model_param: str,
-) -> tuple[str, str | None, int | None]:
-  """Parses a model parameter string into (model_id, backend, max_num_tokens).
-
-  Format: "<model-id>[,<backend>[,<max-token>]]"
-
-  Note:
-    This syntax is supported mainly for backward compatibility. We will not
-    add extra config values to it and might remove this support in the future.
-
-  Args:
-    model_param: The model string from the request.
-
-  Returns:
-    A tuple of (model_id, backend, max_num_tokens).
-
-  Raises:
-    ValueError: If model_param is not a string, max_num_tokens is not a positive
-      integer, or format is invalid.
-  """
-  if not isinstance(model_param, str):
-    raise ValueError(
-        f"model parameter must be a string, got {type(model_param).__name__}"
-    )
-
-  parts = [p.strip() for p in model_param.split(",")]
-  if len(parts) > 3:
-    raise ValueError(
-        "Too many comma-separated components in model parameter:"
-        f" {model_param!r}"
-    )
-
-  model_id = parts[0]
-  if not model_id:
-    raise ValueError("model_id cannot be empty")
-
-  backend = parts[1] if len(parts) > 1 and parts[1] else None
-
-  max_num_tokens = None
-  if len(parts) > 2 and parts[2]:
-    try:
-      max_num_tokens = int(parts[2])
-    except ValueError:
-      raise ValueError(
-          f"Invalid max_num_tokens in model parameter: {parts[2]!r}"
-      ) from None
-    if max_num_tokens <= 0:
-      raise ValueError(
-          f"max_num_tokens must be a positive integer, got {max_num_tokens}"
-      )
-
-  return model_id, backend, max_num_tokens
 
 
 def _parse_sampler_config(
@@ -135,155 +82,6 @@ def _parse_sampler_config(
       top_k=top_k,
       seed=seed,
   )
-
-
-def _parse_thinking_config(
-    body: dict[str, Any],
-    model_id: str | None = None,
-) -> litert_lm.ThinkingConfig | None:
-  """Parses and validates thinking/reasoning parameters from the request body or config.json."""
-  reasoning_effort = body.get("reasoning_effort")
-  if reasoning_effort is not None:
-    if not isinstance(reasoning_effort, str):
-      raise ValueError(
-          "reasoning_effort must be a string, got"
-          f" {type(reasoning_effort).__name__}"
-      )
-
-    effort_lower = reasoning_effort.lower()
-    if effort_lower == "none":
-      return litert_lm.ThinkingConfig(
-          enable_thinking=False,
-          thinking_token_budget=0,
-      )
-
-    supported_efforts = ("minimal", "low", "medium", "high", "xhigh")
-    if effort_lower in supported_efforts:
-      # TODO: b/514760339 - Support fine-grained reasoning effort token budget
-      # mappings.
-      return litert_lm.ThinkingConfig(
-          enable_thinking=True,
-          thinking_token_budget=-1,
-      )
-
-    raise ValueError(
-        f"Invalid reasoning_effort value: {reasoning_effort!r}. "
-        "Supported strings: none, minimal, low, medium, high, xhigh."
-    )
-
-  if model_id is None and isinstance(body.get("model"), str):
-    try:
-      model_id = _parse_model_parameter(body["model"])[0]
-    except ValueError:
-      model_id = body["model"]
-
-  model_cfg = (
-      cli_config.get_model_config(model_id)
-      if model_id
-      else cli_config.load_config().default
-  )
-
-  thinking = model_cfg.thinking
-  thinking_budget = model_cfg.thinking_budget
-
-  if thinking is None and thinking_budget is None:
-    return None
-
-  if thinking is None:
-    thinking = thinking_budget != 0
-  if thinking_budget is None:
-    thinking_budget = -1 if thinking else 0
-
-  return litert_lm.ThinkingConfig(
-      enable_thinking=thinking,
-      thinking_token_budget=thinking_budget,
-  )
-
-
-def _parse_response_format(
-    body: dict[str, Any],
-) -> litert_lm.ResponseFormat | None:
-  """Parses and validates response_format parameters from the request body."""
-  response_format = body.get("response_format")
-  if response_format is None:
-    return None
-
-  if not isinstance(response_format, dict):
-    raise ValueError(
-        f"response_format must be a dict, got {type(response_format).__name__}"
-    )
-
-  response_format_type = response_format.get("type")
-  if not response_format_type or response_format_type == "text":
-    return None
-
-  if response_format_type == "json_object":
-    schema = (
-        response_format.get("schema")
-        or response_format.get("json_schema")
-        or {}
-    )
-    if isinstance(schema, dict) and "schema" in schema:
-      schema = schema["schema"]
-    if not isinstance(schema, (dict, str)):
-      raise ValueError("json_object schema must be a dict or str")
-    return litert_lm.ResponseFormat.json(schema)
-
-  if response_format_type == "json_schema":
-    json_schema_obj = response_format.get("json_schema")
-    schema = None
-    if isinstance(json_schema_obj, dict):
-      schema = json_schema_obj.get("schema", json_schema_obj)
-    elif "schema" in response_format:
-      schema = response_format.get("schema")
-
-    if schema is None or not isinstance(schema, (dict, str)):
-      raise ValueError(
-          "json_schema response_format requires a dict or str schema"
-      )
-    return litert_lm.ResponseFormat.json(schema)
-
-  if response_format_type == "regex":
-    pattern = (
-        response_format.get("regex")
-        or response_format.get("pattern")
-        or response_format.get("schema_or_pattern")
-    )
-    if not pattern or not isinstance(pattern, str):
-      raise ValueError("regex response_format requires a string pattern/regex")
-    return litert_lm.ResponseFormat.regex(pattern)
-
-  raise ValueError(
-      f"Unsupported response_format type: {response_format_type!r}"
-  )
-
-
-def _compute_token_usage(
-    conv: litert_lm.Conversation,
-    *,
-    reasoning_tokens: int = 0,
-) -> dict[str, Any]:
-  """Computes token usage statistics for the completed conversation turn."""
-  prompt_tokens = 0
-  completion_tokens = 0
-
-  try:
-    info = conv.get_benchmark_info()
-    prompt_tokens = info.last_prefill_token_count
-    completion_tokens = info.last_decode_token_count
-  except Exception:  # pylint: disable=broad-exception-caught
-    pass
-
-  total_tokens = prompt_tokens + completion_tokens
-
-  return {
-      "prompt_tokens": prompt_tokens,
-      "completion_tokens": completion_tokens,
-      "total_tokens": total_tokens,
-      "completion_tokens_details": {
-          "reasoning_tokens": reasoning_tokens,
-      },
-  }
 
 
 class _OpenAIStreamFormatter(abc.ABC):
@@ -323,59 +121,40 @@ class _OpenAIStreamFormatter(abc.ABC):
 class _OpenAIChatCompletionsFormatter(_OpenAIStreamFormatter):
   """A formatter for Server-Sent Events in the OpenAI Chat Completions API."""
 
-  def __init__(
-      self,
-      now_str: str,
-      created_ts: int,
-      model_id: str,
-      *,
-      include_usage: bool = False,
-  ):
+  def __init__(self, now_str: str, created_ts: int, model_id: str):
     super().__init__(now_str, created_ts, model_id)
     self._chunk_id = f"chatcmpl_{now_str}"
-    self._include_usage = include_usage
-
-  def _make_payload(
-      self,
-      choices: Sequence[Mapping[str, Any]],
-      usage: Mapping[str, Any] | None = None,
-  ) -> dict[str, Any]:
-    """Creates a standardized payload for chat completion chunks."""
-    payload: dict[str, Any] = {
-        "id": self._chunk_id,
-        "object": "chat.completion.chunk",
-        "created": self._created_ts,
-        "model": self._model_id,
-        "choices": list(choices),
-    }
-    if usage is not None:
-      payload["usage"] = dict(usage)
-    elif self._include_usage:
-      payload["usage"] = None
-    return payload
 
   def format_initial(self) -> bytes:
     """Formats the initial chunk."""
     return _sse_data(
-        _dump_json(
-            self._make_payload([{
+        _dump_json({
+            "id": self._chunk_id,
+            "object": "chat.completion.chunk",
+            "created": self._created_ts,
+            "model": self._model_id,
+            "choices": [{
                 "index": 0,
                 "delta": {"role": "assistant"},
                 "finish_reason": None,
-            }])
-        )
+            }],
+        })
     )
 
   def format_delta(self, text_output: str) -> bytes:
     """Formats a delta chunk with text content."""
     return _sse_data(
-        _dump_json(
-            self._make_payload([{
+        _dump_json({
+            "id": self._chunk_id,
+            "object": "chat.completion.chunk",
+            "created": self._created_ts,
+            "model": self._model_id,
+            "choices": [{
                 "index": 0,
                 "delta": {"content": text_output},
                 "finish_reason": None,
-            }])
-        )
+            }],
+        })
     )
 
   def format_tool_call_delta(
@@ -406,31 +185,35 @@ class _OpenAIChatCompletionsFormatter(_OpenAIStreamFormatter):
     ]
 
     return _sse_data(
-        _dump_json(
-            self._make_payload([{
+        _dump_json({
+            "id": self._chunk_id,
+            "object": "chat.completion.chunk",
+            "created": self._created_ts,
+            "model": self._model_id,
+            "choices": [{
                 "index": 0,
                 "delta": {"tool_calls": openai_tool_calls},
                 "finish_reason": None,
-            }])
-        )
+            }],
+        })
     )
 
   @override
   def format_complete(self, finish_reason: str = "stop") -> bytes:
     """Formats the final chunk indicating completion."""
     return _sse_data(
-        _dump_json(
-            self._make_payload([{
+        _dump_json({
+            "id": self._chunk_id,
+            "object": "chat.completion.chunk",
+            "created": self._created_ts,
+            "model": self._model_id,
+            "choices": [{
                 "index": 0,
                 "delta": {},
                 "finish_reason": finish_reason,
-            }])
-        )
+            }],
+        })
     )
-
-  def format_usage(self, usage: Mapping[str, Any]) -> bytes:
-    """Formats a chunk containing only token usage statistics."""
-    return _sse_data(_dump_json(self._make_payload([], usage=usage)))
 
 
 class _OpenAIV1ResponsesFormatter(_OpenAIStreamFormatter):
@@ -756,10 +539,7 @@ class OpenAIHandler(serve_util.CORSRequestHandler):
       conv: litert_lm.Conversation,
       prompt: str | dict[str, Any],
       formatter: _OpenAIStreamFormatter,
-      *,
       max_completion_tokens: int | None = None,
-      include_usage: bool = False,
-      response_format: litert_lm.ResponseFormat | None = None,
   ) -> None:
     """Streams server-sent events using the provided formatter.
 
@@ -768,8 +548,6 @@ class OpenAIHandler(serve_util.CORSRequestHandler):
       prompt: The input prompt payload (string or dictionary).
       formatter: The protocol-specific stream formatter.
       max_completion_tokens: The maximum number of tokens to generate.
-      include_usage: Whether to emit a token usage chunk right before [DONE].
-      response_format: Optional response format for constrained decoding.
     """
     self._headers_sent = True
     self.send_response(200)
@@ -782,14 +560,9 @@ class OpenAIHandler(serve_util.CORSRequestHandler):
       self.wfile.flush()
 
       has_tool_calls = False
-      reasoning_tokens = 0
       for chunk in conv.send_message_async(
-          prompt,
-          max_output_tokens=max_completion_tokens,
-          response_format=response_format,
+          prompt, max_output_tokens=max_completion_tokens
       ):
-        if chunk.get("channels"):
-          reasoning_tokens += 1
         text_output = "".join(
             item.get("text", "")
             for item in chunk.get("content", [])
@@ -809,12 +582,6 @@ class OpenAIHandler(serve_util.CORSRequestHandler):
       finish_reason = "tool_calls" if has_tool_calls else "stop"
       self.wfile.write(formatter.format_complete(finish_reason=finish_reason))
       self.wfile.flush()
-      if include_usage and hasattr(formatter, "format_usage"):
-        usage_dict = _compute_token_usage(
-            conv, reasoning_tokens=reasoning_tokens
-        )
-        self.wfile.write(formatter.format_usage(usage_dict))
-        self.wfile.flush()
       self.wfile.write(formatter.format_final())
       self.wfile.flush()
     except Exception as e:  # pylint: disable=broad-exception-caught
@@ -842,8 +609,6 @@ class OpenAIHandler(serve_util.CORSRequestHandler):
       now_str: str,
       created_ts: int,
       max_completion_tokens: int | None = None,
-      stream_options: dict[str, Any] | None = None,
-      response_format: litert_lm.ResponseFormat | None = None,
   ) -> None:
     """Generates responses for the OpenAI Chat Completions endpoint.
 
@@ -866,28 +631,18 @@ class OpenAIHandler(serve_util.CORSRequestHandler):
       now_str: Timestamp string for unique identifier generation.
       created_ts: Epoch timestamp for creation metadata.
       max_completion_tokens: The maximum number of tokens to generate.
-      stream_options: Options for streaming, such as include_usage.
-      response_format: Optional response format for constrained decoding.
     """
     if not stream:
-      text_parts = []
-      tool_calls = []
-      reasoning_tokens = 0
-      for chunk in conv.send_message_async(
-          prompt,
-          max_output_tokens=max_completion_tokens,
-          response_format=response_format,
-      ):
-        if chunk.get("channels"):
-          reasoning_tokens += 1
-        for item in chunk.get("content", []):
-          if item.get("type") == "text":
-            text_parts.append(item.get("text", ""))
-        if chunk.get("tool_calls"):
-          tool_calls.extend(chunk.get("tool_calls", []))
+      response = conv.send_message(
+          prompt, max_output_tokens=max_completion_tokens
+      )
+      text_output = "".join(
+          item.get("text", "")
+          for item in response.get("content", [])
+          if item.get("type") == "text"
+      )
 
-      text_output = "".join(text_parts)
-
+      tool_calls = response.get("tool_calls", [])
       openai_tool_calls = [
           {
               "id": f"call_{now_str}_{i}",
@@ -920,30 +675,19 @@ class OpenAIHandler(serve_util.CORSRequestHandler):
               },
               "finish_reason": "tool_calls" if openai_tool_calls else "stop",
           }],
-          "usage": _compute_token_usage(
-              conv, reasoning_tokens=reasoning_tokens
-          ),
       }
       setattr(self, "_headers_sent", True)
       self.send_response(200)
       self.send_header("Content-Type", "application/json")
       self.end_headers()
-      self.wfile.write((_dump_json(resp_body, indent=2) + "\n").encode("utf-8"))
+      self.wfile.write(
+          json.dumps(resp_body, ensure_ascii=False).encode("utf-8")
+      )
       return
 
-    include_usage = bool(
-        stream_options and stream_options.get("include_usage", False)
-    )
-    formatter = _OpenAIChatCompletionsFormatter(
-        now_str, created_ts, model_id, include_usage=include_usage
-    )
+    formatter = _OpenAIChatCompletionsFormatter(now_str, created_ts, model_id)
     self._stream_response(
-        conv,
-        prompt,
-        formatter,
-        max_completion_tokens=max_completion_tokens,
-        include_usage=include_usage,
-        response_format=response_format,
+        conv, prompt, formatter, max_completion_tokens=max_completion_tokens
     )
 
   def _handle_responses(
@@ -955,7 +699,6 @@ class OpenAIHandler(serve_util.CORSRequestHandler):
       now_str: str,
       created_ts: int,
       model_id: str,
-      response_format: litert_lm.ResponseFormat | None = None,
   ) -> None:
     """Generates responses for the v1/responses endpoint.
 
@@ -975,10 +718,9 @@ class OpenAIHandler(serve_util.CORSRequestHandler):
       now_str: Timestamp string for unique identifier generation.
       created_ts: Epoch timestamp for creation metadata.
       model_id: The target model identifier.
-      response_format: Optional response format for constrained decoding.
     """
     if not stream:
-      response = conv.send_message(prompt, response_format=response_format)
+      response = conv.send_message(prompt)
       text_output = "".join(
           item.get("text", "")
           for item in response.get("content", [])
@@ -1007,16 +749,14 @@ class OpenAIHandler(serve_util.CORSRequestHandler):
       self.send_header("Content-Type", "application/json")
       self.end_headers()
       self.wfile.write(
-          (_dump_json(dataclasses.asdict(resp_body), indent=2) + "\n").encode(
+          json.dumps(dataclasses.asdict(resp_body), ensure_ascii=False).encode(
               "utf-8"
           )
       )
       return
 
     formatter = _OpenAIV1ResponsesFormatter(now_str, created_ts, model_id)
-    self._stream_response(
-        conv, prompt, formatter, response_format=response_format
-    )
+    self._stream_response(conv, prompt, formatter)
 
   def do_GET(self) -> None:  # pylint: disable=invalid-name
     """Handles GET requests for OpenAI API compatible endpoints."""
@@ -1048,7 +788,9 @@ class OpenAIHandler(serve_util.CORSRequestHandler):
       self.send_response(200)
       self.send_header("Content-Type", "application/json")
       self.end_headers()
-      self.wfile.write((_dump_json(resp_body, indent=2) + "\n").encode("utf-8"))
+      self.wfile.write(
+          json.dumps(resp_body, ensure_ascii=False).encode("utf-8")
+      )
     except Exception as e:  # pylint: disable=broad-exception-caught
       click.echo(
           click.style(
@@ -1084,8 +826,6 @@ class OpenAIHandler(serve_util.CORSRequestHandler):
       model_id: str,
       translated_messages: list[dict[str, Any]] | None = None,
       prompt: Any = None,
-      backend: str | None = None,
-      max_num_tokens: int | None = None,
   ) -> litert_lm.Engine | None:
     """Retrieves or initializes the engine for the given model ID.
 
@@ -1093,8 +833,6 @@ class OpenAIHandler(serve_util.CORSRequestHandler):
       model_id: The model identifier string.
       translated_messages: Optional list of already translated messages.
       prompt: Optional prompt payload.
-      backend: Optional requested backend override.
-      max_num_tokens: Optional requested max_num_tokens override.
 
     Returns:
       The LiteRT-LM Engine instance, or None if initialization failed.
@@ -1104,8 +842,6 @@ class OpenAIHandler(serve_util.CORSRequestHandler):
       return serve_util.get_or_initialize_server_engine(
           self.server,
           model_id=model_id,
-          backend=backend,
-          max_num_tokens=max_num_tokens,
       )
     except FileNotFoundError as e:
       self.send_error(404, "".join(traceback.format_exception_only(e)))
@@ -1143,15 +879,9 @@ class OpenAIHandler(serve_util.CORSRequestHandler):
     if body is None:
       return
 
-    raw_model_str = body.get("model")
-    if not raw_model_str:
+    model_id = body.get("model")
+    if not model_id:
       self.send_error(400, "Missing model")
-      return
-
-    try:
-      model_id, backend, max_num_tokens = _parse_model_parameter(raw_model_str)
-    except ValueError as e:
-      self.send_error(400, f"Invalid model parameter: {e}")
       return
 
     messages = body.get("messages")
@@ -1187,13 +917,7 @@ class OpenAIHandler(serve_util.CORSRequestHandler):
       self.send_error(400, "Missing input or messages")
       return
 
-    engine = self._get_engine(
-        model_id,
-        translated_messages,
-        prompt,
-        backend=backend,
-        max_num_tokens=max_num_tokens,
-    )
+    engine = self._get_engine(model_id, translated_messages, prompt)
     if engine is None:
       return
 
@@ -1218,26 +942,6 @@ class OpenAIHandler(serve_util.CORSRequestHandler):
       )
       return
 
-    try:
-      thinking_config = _parse_thinking_config(body, model_id=model_id)
-    except ValueError as e:
-      self.send_error(
-          400,
-          "Invalid thinking parameters: "
-          + "".join(traceback.format_exception_only(e)),
-      )
-      return
-
-    try:
-      response_format = _parse_response_format(body)
-    except ValueError as e:
-      self.send_error(
-          400,
-          "Invalid response_format parameters: "
-          + "".join(traceback.format_exception_only(e)),
-      )
-      return
-
     # Parse tools if this is a chat completions request.
     tools_data = body.get("tools")
     tools = (
@@ -1248,44 +952,27 @@ class OpenAIHandler(serve_util.CORSRequestHandler):
 
     try:
       context_messages = translated_messages[:-1] if translated_messages else []
-      provider = (
-          litert_lm.LiteRtLmConstraintProviderType.LL_GUIDANCE
-          if response_format is not None
-          else None
-      )
-      constrained_decoding_config = litert_lm.ConstrainedDecodingConfig(
-          enable=True,
-          provider=provider,
-      )
       with engine.create_conversation(
           messages=context_messages,
           tools=tools or None,
           automatic_tool_calling=False,
           sampler_config=sampler_config,
-          thinking_config=thinking_config,
-          constrained_decoding_config=constrained_decoding_config,
       ) as conv:
         now = datetime.datetime.now(datetime.timezone.utc)
         now_str = now.strftime("%Y%m%d%H%M%S%f")
         created_ts = int(now.timestamp())
 
-        stream_options = body.get("stream_options")
-        if not isinstance(stream_options, dict):
-          stream_options = {}
-
         self._handle_chat_completions(
             conv,
             prompt,
-            raw_model_str,
+            model_id,
             stream,
             now_str=now_str,
             created_ts=created_ts,
             max_completion_tokens=max_completion_tokens,
-            stream_options=stream_options,
-            response_format=response_format,
         )
     except Exception as e:  # pylint: disable=broad-exception-caught
-      self._handle_inference_error(e, raw_model_str, prompt)
+      self._handle_inference_error(e, model_id, prompt)
 
   def _handle_responses_endpoint(self) -> None:
     """Handles POST requests to responses endpoint."""
@@ -1293,17 +980,11 @@ class OpenAIHandler(serve_util.CORSRequestHandler):
     if body is None:
       return
 
-    raw_model_str = body.get("model")
+    model_id = body.get("model")
     prompt = body.get("input")
 
-    if not raw_model_str or not prompt:
+    if not model_id or not prompt:
       self.send_error(400, "Missing model or input")
-      return
-
-    try:
-      model_id, backend, max_num_tokens = _parse_model_parameter(raw_model_str)
-    except ValueError as e:
-      self.send_error(400, f"Invalid model parameter: {e}")
       return
 
     if isinstance(prompt, dict):
@@ -1313,53 +994,17 @@ class OpenAIHandler(serve_util.CORSRequestHandler):
         self.send_error(400, f"Invalid prompt: {e}")
         return
 
-    engine = self._get_engine(
-        model_id,
-        prompt=prompt,
-        backend=backend,
-        max_num_tokens=max_num_tokens,
-    )
+    engine = self._get_engine(model_id, prompt=prompt)
     if engine is None:
-      return
-
-    try:
-      thinking_config = _parse_thinking_config(body, model_id=model_id)
-    except ValueError as e:
-      self.send_error(
-          400,
-          "Invalid thinking parameters: "
-          + "".join(traceback.format_exception_only(e)),
-      )
-      return
-
-    try:
-      response_format = _parse_response_format(body)
-    except ValueError as e:
-      self.send_error(
-          400,
-          "Invalid response_format parameters: "
-          + "".join(traceback.format_exception_only(e)),
-      )
       return
 
     stream = body.get("stream", False)
 
     try:
-      provider = (
-          litert_lm.LiteRtLmConstraintProviderType.LL_GUIDANCE
-          if response_format is not None
-          else None
-      )
-      constrained_decoding_config = litert_lm.ConstrainedDecodingConfig(
-          enable=True,
-          provider=provider,
-      )
       with engine.create_conversation(
           messages=[],
           automatic_tool_calling=False,
           sampler_config=None,
-          thinking_config=thinking_config,
-          constrained_decoding_config=constrained_decoding_config,
       ) as conv:
         now = datetime.datetime.now(datetime.timezone.utc)
         now_str = now.strftime("%Y%m%d%H%M%S%f")
@@ -1371,11 +1016,10 @@ class OpenAIHandler(serve_util.CORSRequestHandler):
             stream,
             now_str=now_str,
             created_ts=created_ts,
-            model_id=raw_model_str,
-            response_format=response_format,
+            model_id=model_id,
         )
     except Exception as e:  # pylint: disable=broad-exception-caught
-      self._handle_inference_error(e, raw_model_str, prompt)
+      self._handle_inference_error(e, model_id, prompt)
 
   def do_POST(self) -> None:  # pylint: disable=invalid-name
     """Handles POST requests for OpenAI API compatible endpoints."""

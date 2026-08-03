@@ -3,7 +3,7 @@
 LiteRT-LM is Google's **production-ready** orchestration layer to run LLMs with
 LiteRT, engineered for **high-performance**, **cross-platform** execution.
 
-🔗 [Product Website](https://ai.google.dev/edge/litert-lm) | 🌐✨ [Web Demo](https://google-ai-edge.github.io/LiteRT-LM/web_demos/chat/index.html)
+🔗 [Product Website](https://ai.google.dev/edge/litert-lm)
 
 ## 🔥 What's New: `v0.13`
 

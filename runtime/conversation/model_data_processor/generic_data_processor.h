@@ -16,7 +16,6 @@
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_CONVERSATION_MODEL_DATA_PROCESSOR_GENERIC_DATA_PROCESSOR_H_
 
 #include <memory>
-#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -58,14 +57,6 @@ class GenericDataProcessor
   // Return the same message as the template input for generic models.
   absl::StatusOr<nlohmann::ordered_json> MessageToTemplateInput(
       const nlohmann::ordered_json& message) const override;
-
-  // Renders a single turn template for the given message and history. Only the
-  // prompt template supporting single turn is valid for this method.
-  absl::StatusOr<SingleTurnTemplateRenderResult> RenderSingleTurnTemplate(
-      std::vector<Message>& history, const Preface& preface,
-      const Message& message, const PromptTemplate& prompt_template,
-      bool current_is_appending_message, bool append_message,
-      std::optional<nlohmann::ordered_json> extra_context) const override;
 
   // No-op for generic models.
   absl::string_view CodeFenceStart() const override { return ""; }

@@ -443,20 +443,8 @@ class ExecutorDecodeParams {
   // supported in the hand-written path.
   ConstrainedDecoder* GetConstraintDecoder() const;
 
-  // Sets an optional cancellation flag for the decode process. (eg. for
-  // diffusion-llm).
-  void SetCancelled(const std::atomic<bool>* cancelled) {
-    cancelled_ = cancelled;
-  }
-
-  // Returns the cancellation flag if set, otherwise nullptr.
-  const std::atomic<bool>* GetCancelled() const { return cancelled_; }
-
  private:
-  // List of active logits processors (e.g. repetition penalty, no-repeat
-  // ngram, token suppression, constrained decoding).
   std::vector<LogitsProcessor*> logits_processors_;
-  const std::atomic<bool>* cancelled_ = nullptr;
 };
 std::ostream& operator<<(std::ostream& os, const ExecutorDecodeParams& params);
 

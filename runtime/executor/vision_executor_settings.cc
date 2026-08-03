@@ -14,17 +14,16 @@
 
 #include "runtime/executor/vision_executor_settings.h"
 
-#include <memory>
 #include <ostream>
 #include <string>
 #include <variant>
+#include <memory>
 
 #include "absl/status/status.h"  // from @com_google_absl
-#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/strings/match.h"  // from @com_google_absl
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/status_macros.h"
@@ -35,8 +34,8 @@ absl::StatusOr<VisionExecutorSettings> VisionExecutorSettings::CreateDefault(
     const ModelAssets& model_assets, Backend encoder_backend,
     Backend adapter_backend) {
   VisionExecutorSettings settings(model_assets);
-  ABSL_RETURN_IF_ERROR(settings.SetEncoderBackend(encoder_backend));
-  ABSL_RETURN_IF_ERROR(settings.SetAdapterBackend(adapter_backend));
+  RETURN_IF_ERROR(settings.SetEncoderBackend(encoder_backend));
+  RETURN_IF_ERROR(settings.SetAdapterBackend(adapter_backend));
   return settings;
 }
 
@@ -51,7 +50,7 @@ absl::Status VisionExecutorSettings::SetEncoderBackend(Backend backend) {
         absl::StrCat("Unsupported encoder backend: ", backend));
   }
   encoder_backend_ = backend;
-  ABSL_RETURN_IF_ERROR(SetBackend(encoder_backend_));
+  RETURN_IF_ERROR(SetBackend(encoder_backend_));
   return absl::OkStatus();
 }
 

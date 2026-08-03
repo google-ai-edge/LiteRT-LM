@@ -24,7 +24,6 @@ limitations under the License.
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
-#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "minizip/ioapi.h"  // from @minizip
@@ -58,7 +57,7 @@ struct ZipFileInfo {
 absl::StatusOr<ZipFileInfo> GetCurrentZipFileInfo(const unzFile& zf) {
   // Open file in raw mode, as data is expected to be uncompressed.
   int method;
-  ABSL_RETURN_IF_ERROR(UnzipErrorToStatus(
+  RETURN_IF_ERROR(UnzipErrorToStatus(
       unzOpenCurrentFile2(zf, &method, /*level=*/nullptr, /*raw=*/1)));
   absl::Cleanup unzipper_closer = [zf]() {
     auto status = UnzipErrorToStatus(unzCloseCurrentFile(zf));
@@ -72,7 +71,7 @@ absl::StatusOr<ZipFileInfo> GetCurrentZipFileInfo(const unzFile& zf) {
 
   // Get file info a first time to get filename size.
   unz_file_info64 file_info;
-  ABSL_RETURN_IF_ERROR(UnzipErrorToStatus(unzGetCurrentFileInfo64(
+  RETURN_IF_ERROR(UnzipErrorToStatus(unzGetCurrentFileInfo64(
       zf, &file_info, /*szFileName=*/nullptr, /*szFileNameBufferSize=*/0,
       /*extraField=*/nullptr, /*extraFieldBufferSize=*/0,
       /*szComment=*/nullptr, /*szCommentBufferSize=*/0)));
@@ -80,7 +79,7 @@ absl::StatusOr<ZipFileInfo> GetCurrentZipFileInfo(const unzFile& zf) {
   // Second call to get file name.
   auto file_name_size = file_info.size_filename;
   char* c_file_name = (char*)malloc(file_name_size);
-  ABSL_RETURN_IF_ERROR(UnzipErrorToStatus(unzGetCurrentFileInfo64(
+  RETURN_IF_ERROR(UnzipErrorToStatus(unzGetCurrentFileInfo64(
       zf, &file_info, c_file_name, file_name_size,
       /*extraField=*/nullptr, /*extraFieldBufferSize=*/0,
       /*szComment=*/nullptr, /*szCommentBufferSize=*/0)));
@@ -96,7 +95,7 @@ absl::StatusOr<ZipFileInfo> GetCurrentZipFileInfo(const unzFile& zf) {
   // Perform the cleanup manually for error propagation.
   std::move(unzipper_closer).Cancel();
   // Close file and return.
-  ABSL_RETURN_IF_ERROR(UnzipErrorToStatus(unzCloseCurrentFile(zf)));
+  RETURN_IF_ERROR(UnzipErrorToStatus(unzCloseCurrentFile(zf)));
 
   return ZipFileInfo{
       .name = std::move(file_name),
@@ -131,7 +130,7 @@ ExtractFilesfromZipFile(absl::string_view data) {
   if (global_info.number_entry > 0) {
     int error = unzGoToFirstFile(zf);
     while (error == UNZ_OK) {
-      ABSL_ASSIGN_OR_RETURN(auto zip_file_info, GetCurrentZipFileInfo(zf));
+      ASSIGN_OR_RETURN(auto zip_file_info, GetCurrentZipFileInfo(zf));
       // Store result in map.
       files[zip_file_info.name] = OffsetAndSize{
           .offset = static_cast<size_t>(zip_file_info.position),

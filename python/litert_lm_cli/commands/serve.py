@@ -24,7 +24,6 @@ import http.server
 import click
 
 import litert_lm
-from litert_lm_cli import common
 from litert_lm_cli import help_formatter
 from litert_lm_cli.commands import gemini_handler
 from litert_lm_cli.commands import openai_handler
@@ -71,7 +70,7 @@ def run_server(
 @click.command(
     cls=help_formatter.ColorCommand,
     help=(
-        "Start an OpenAI-compatible API server.\n\n"
+        "Start a server with an OpenAI-compatible API.\n\n"
         "Supported OpenAI endpoints:\n"
         "  - /v1/models\n"
         "  - /v1/chat/completions\n\n"
@@ -80,7 +79,6 @@ def run_server(
         '  - Use "litert-lm list" to view already imported models.\n\n'
     ),
 )
-@common.config_option
 @click.option("--host", default="0.0.0.0", type=str, help="Host to listen on")
 @click.option("--port", default=9379, type=int, help="Port to listen on")
 @click.option(

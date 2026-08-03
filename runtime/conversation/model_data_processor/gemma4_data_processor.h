@@ -123,7 +123,7 @@ class Gemma4DataProcessor
       const TypeSafeModelDataProcessor<Gemma4DataProcessorConfig,
                                        Gemma4DataProcessorArguments>& other)
       override {
-    ABSL_VLOG(1) << "Gemma4DataProcessor::CloneStateImpl is a no-op.";
+    ABSL_LOG(INFO) << "Gemma4DataProcessor::CloneStateImpl is a no-op.";
     return absl::OkStatus();
   }
 

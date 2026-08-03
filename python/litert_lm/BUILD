@@ -71,7 +71,6 @@ pytype_strict_library(
         ":_ffi",
         ":_messages",
         ":interfaces",
-        ":utils",
     ],
 )
 

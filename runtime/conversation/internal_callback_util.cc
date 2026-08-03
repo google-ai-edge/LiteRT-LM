@@ -25,7 +25,6 @@
 #include "absl/functional/any_invocable.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "nlohmann/json_fwd.hpp"  // from @nlohmann_json
 #include "runtime/conversation/channel_util.h"
@@ -293,20 +292,11 @@ absl::AnyInvocable<void(absl::StatusOr<Responses>)> CreateInternalCallback(
       return;
     }
 
-    if (responses->GetTaskState() == TaskState::kCancelled ||
-        responses->GetTaskState() == TaskState::kDependentTaskCancelled) {
+    if (responses->GetTaskState() == TaskState::kCancelled) {
       if (cancel_callback) {
         cancel_callback();
       }
       user_callback(absl::CancelledError("Task cancelled"));
-      return;
-    }
-
-    if (responses->GetTaskState() == TaskState::kFailed ||
-        responses->GetTaskState() == TaskState::kDependentTaskFailed) {
-      user_callback(absl::InternalError(
-          absl::StrCat("Task failed with state: ",
-                       static_cast<int>(responses->GetTaskState()))));
       return;
     }
 

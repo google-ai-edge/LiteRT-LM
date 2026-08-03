@@ -188,9 +188,9 @@ export class RingBuffer {
  * be overwritten.
  */
 export function teeStream(
-    sourceStream: ReadableStream<Uint8Array>,
-    cacheSize = 20 * 1024 * 1024  // 20MB capacity per queue by default
-    ): [ReadableStream<Uint8Array>, ReadableStream<Uint8Array>] {
+  sourceStream: ReadableStream<Uint8Array>,
+  cacheSize = 2 * 1024 * 1024 // 2MB capacity per queue by default
+): [ReadableStream<Uint8Array>, ReadableStream<Uint8Array>] {
   const buf1 = new RingBuffer(cacheSize);
   const buf2 = new RingBuffer(cacheSize);
 

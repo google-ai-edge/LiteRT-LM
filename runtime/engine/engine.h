@@ -257,11 +257,8 @@ class SessionInterface {
   virtual absl::StatusOr<BenchmarkInfo*> GetMutableBenchmarkInfo() = 0;
 
   // Cancels the ongoing inference process. Note that if this function is
-  // called, the inference process will return with a kCancelled error.
-  //
-  // NOTE: Reusing the session after calling CancelProcess() is neither
-  // recommended nor supported. Calling CancelProcess() leaves the session
-  // state poisoned, and subsequent operations may fail or behave incorrectly.
+  // called, the inference process will return with a kCancelled error. The
+  // session could still be used after afterwards.
   virtual void CancelProcess() {
     ABSL_LOG(FATAL) << "CancelProcess is not implemented.";
   }

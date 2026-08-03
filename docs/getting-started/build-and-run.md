@@ -363,7 +363,6 @@ Below are a few example commands (please update accordingly when using `adb`):
     --backend=cpu \
     --model_path=$MODEL_PATH \
     --benchmark \
-    --enable_profiling \
     --benchmark_prefill_tokens=1024 \
     --benchmark_decode_tokens=256 \
     --async=false
@@ -398,8 +397,6 @@ More detailed description about each of the flags are in the following table:
 :                                : execution.           : the world?"`        :
 | `benchmark`                    | Benchmark the LLM    | `false`             |
 :                                : execution.           :                     :
-| `enable_profiling`             | Enable per-op        | `false`             |
-:                                : profiling.           :                     :
 | `benchmark_prefill_tokens`     | If benchmark is true | `0`                 |
 :                                : and this value is >  :                     :
 :                                : 0, the benchmark     :                     :

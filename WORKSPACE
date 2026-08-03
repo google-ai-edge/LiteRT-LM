@@ -2,14 +2,14 @@
 
 workspace(name = "litert_lm")
 
-# UPDATED = 2026-07-28
-LITERT_REF = "3cb830ad9c94f9922f0a88dd431b005413628919"
+# UPDATED = 2026-06-29
+LITERT_REF = "622f1f3c1352f4bc2925061b8cb72e9ce52874fe"
 
-LITERT_SHA256 = "242d2850d0c4d731e38e8bdab3badf9c0b8da60eeaeaf4b9c291bcd4e4937c89"
+LITERT_SHA256 = "f3fd51d1e1eb33472ba425462bf53b05ad02bddca9cd58c61209d4a8be7829d0"
 
-TENSORFLOW_REF = "9e1afa4e5cfd8818518183211b77f2976c7dc450"
+TENSORFLOW_REF = "f197d45528bb1dcf6e2d5409907c1352c30c0e5e"
 
-TENSORFLOW_SHA256 = "c67c2e8c62b55936a3d7705989af57a0eb28a8b97ab7ed95fe294917c6fb0c14"
+TENSORFLOW_SHA256 = "0a877fd2a217030441a316a6a3404ba9d3e56d420fe80d9a9a5724f7781d1cc0"
 
 # buildifier: disable=load-on-top
 
@@ -455,14 +455,7 @@ http_jar(
 http_archive(
     name = "skia",
     patch_args = ["-p1"],
-    patch_cmds = [
-        # Replace <jpeglib.h> with "jpeglib.h".
-        "sed -i -e 's|#include <jpeglib.h>|#include \"jpeglib.h\"|g' */*.cpp */*.h */*/*.cpp */*/*.h",
-    ],
     patches = ["@//:PATCH.skia"],
-    repo_mapping = {
-        "@libpng": "@png",
-    },
     sha256 = "2fe28173428f8eebf2aa8a665bad32136086cc065f50c7154678a96250d1cde1",
     strip_prefix = "skia-226ae9d866748a2e68b6dbf114b37129c380a298",
     urls = ["https://github.com/google/skia/archive/226ae9d866748a2e68b6dbf114b37129c380a298.zip"],
@@ -522,12 +515,6 @@ google_tensor()
 load("@litert//third_party/intel_openvino:openvino.bzl", "openvino_configure")
 
 openvino_configure()
-
-# SAMSUNG EXYNOS_AI_LITECORE----------------------------------------------------------------------
-load("@litert//third_party/exynos_ai_litecore:workspace.bzl", "exynos_ai_litecore")
-
-exynos_ai_litecore()
-
 
 http_archive(
     name = "nanobind_json",

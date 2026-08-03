@@ -14,7 +14,6 @@
 
 #include "runtime/conversation/model_data_processor/generic_data_processor.h"
 
-#include <optional>
 #include <string>
 #include <utility>
 #include <variant>
@@ -266,52 +265,6 @@ TEST(GenericDataProcessorTest, CloneStateMultimodal) {
 
   // Verify that CloneState succeeds.
   EXPECT_OK(processor2->CloneState(*processor1));
-}
-
-TEST(GenericDataProcessorTest, RenderSingleTurnTemplateAppendUser) {
-  const std::string test_file_path =
-      GetTestdataPath("generic-model-multi-prefill.jinja");
-  ASSERT_OK_AND_ASSIGN(const std::string template_content,
-                       GetContents(test_file_path));
-  PromptTemplate prompt_template(template_content);
-
-  ASSERT_OK_AND_ASSIGN(auto processor, GenericDataProcessor::Create());
-
-  std::vector<Message> history;
-  Preface preface =
-      JsonPreface{.messages = {{{"role", "system"},
-                                {"content", "You are a helpful assistant."}}}};
-
-  // 1. Append user message (first part)
-  Message message1 = {{"role", "user"}, {"content", "Hello"}};
-  {
-    ASSERT_OK_AND_ASSIGN(auto result,
-                         processor->RenderSingleTurnTemplate(
-                             history, preface, message1, prompt_template,
-                             /*current_is_appending_message=*/false,
-                             /*append_message=*/true,
-                             /*extra_context=*/std::nullopt));
-    EXPECT_EQ(
-        result.text,
-        "<start_of_turn>system\nYou are a helpful assistant.<end_of_turn>\n"
-        "<start_of_turn>user\nHello");
-    EXPECT_TRUE(result.is_appending_message);
-  }
-  history.push_back(message1);
-
-  // 2. Append user message (last part)
-  Message message2 = {{"role", "user"}, {"content", " world!"}};
-  {
-    ASSERT_OK_AND_ASSIGN(auto result,
-                         processor->RenderSingleTurnTemplate(
-                             history, preface, message2, prompt_template,
-                             /*current_is_appending_message=*/true,
-                             /*append_message=*/false,
-                             /*extra_context=*/std::nullopt));
-    EXPECT_EQ(result.text, " world!<end_of_turn>\n<start_of_turn>model\n");
-    EXPECT_FALSE(result.is_appending_message);
-  }
-  history.push_back(message2);
 }
 
 }  // namespace

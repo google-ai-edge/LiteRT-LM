@@ -102,6 +102,11 @@ TEST_F(Gemma4DataProcessorTest, ToInputDataVectorTextOnly) {
 
 TEST_P(Gemma4DataProcessorImageTest, ToInputDataVectorTextAndImage) {
   std::string image_name = GetParam();
+#ifdef LITERT_USE_SKIA
+  if (image_name == "apple.png") {
+    GTEST_SKIP() << "Skipping PNG test for SKIA";
+  }
+#endif
   ASSERT_OK_AND_ASSIGN(auto processor, Gemma4DataProcessor::Create(
                                            /*Gemma4DataProcessorConfig=*/
                                            {.max_num_patches = 2520}));

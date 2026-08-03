@@ -102,12 +102,6 @@ export class ConversationFake implements ChatInterface {
       timeToFirstTokenInSecond: 0,
     };
   }
-
-  clone(): Conversation {
-    const cloned = new ConversationFake([...this.history]);
-    cloned.nextResponses = [...this.nextResponses];
-    return cloned as unknown as Conversation;
-  }
 }
 
 /** Fake implementation of Session for testing. */
@@ -124,12 +118,6 @@ export class SessionFake {
   }
 
   cancel() {}
-
-  clone(): Session {
-    const cloned = new SessionFake();
-    cloned.inputsPrefilled = [...this.inputsPrefilled];
-    return cloned as unknown as Session;
-  }
 
   async delete(): Promise<void> {}
 }

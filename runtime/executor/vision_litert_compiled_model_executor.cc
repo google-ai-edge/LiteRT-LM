@@ -29,7 +29,6 @@
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/memory/memory.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
-#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/numbers.h"  // from @com_google_absl
@@ -61,7 +60,9 @@
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/vision_executor_settings.h"
 #include "runtime/util/convert_tensor_buffer.h"
+#include "runtime/util/file_util.h"
 #include "runtime/util/status_macros.h"  // NOLINT
+#include "tflite/delegates/xnnpack/xnnpack_delegate.h"  // from @litert
 
 namespace litert::lm {
 
@@ -82,13 +83,43 @@ constexpr absl::string_view kMask = "mask";
 // Set the default GPU options for the model.
 absl::Status SetGpuOptions(const VisionExecutorSettings& executor_settings,
                            litert::GpuOptions& gpu_options) {
-  return ::litert::lm::SetCommonGpuOptions(executor_settings, gpu_options);
+#if defined(LITERT_USE_WEBGPU_ACCELERATOR)
+  gpu_options.SetBackend(GpuOptions::Backend::kWebGpu);
+#endif  // defined(LITERT_USE_WEBGPU_ACCELERATOR)
+  gpu_options.EnableConstantTensorSharing(true);
+  if (executor_settings.GetActivationDataType().has_value()) {
+    if (executor_settings.GetActivationDataType().value() ==
+        ActivationDataType::FLOAT32) {
+      gpu_options.SetPrecision(GpuOptions::Precision::kFp32);
+    } else {
+      gpu_options.SetPrecision(GpuOptions::Precision::kFp16);
+    }
+  } else {
+    // Default to fp32 if no activation data type is specified, for backward
+    // compatibility with previous launched models.
+    gpu_options.SetPrecision(GpuOptions::Precision::kFp32);
+  }
+#if defined(__APPLE__)
+  gpu_options.SetPreferTextureWeights(false);
+  gpu_options.SetUseMetalArgumentBuffers(true);
+#else   // !__APPLE__
+  gpu_options.SetPreferTextureWeights(true);
+#endif  // !__APPLE__
+  gpu_options.SetMadviseOriginalSharedTensors(true);
+  gpu_options.SetConvertWeightsOnGpu(true);
+  return absl::OkStatus();
 }
 
 // Set the default CPU options for the model.
 absl::Status SetCpuOptions(const VisionExecutorSettings& executor_settings,
                            litert::CpuOptions& cpu_options) {
-  return ::litert::lm::SetCpuOptions(cpu_options, 4);
+  // Set the number of threads to 4 by default.
+  cpu_options.SetNumThreads(4);
+  auto default_xnn_options = TfLiteXNNPackDelegateOptionsDefault();
+  cpu_options.SetXNNPackFlags(
+      default_xnn_options.flags |
+      TFLITE_XNNPACK_DELEGATE_FLAG_DYNAMIC_FULLY_CONNECTED);
+  return absl::OkStatus();
 }
 
 // Returns the index of the signature that should be used for the given number
@@ -174,7 +205,7 @@ VisionLiteRtCompiledModelExecutor::VisionEncoder::Create(
     const VisionExecutorProperties& vision_executor_properties) {
   auto handler = std::unique_ptr<VisionEncoder>(new VisionEncoder(
       env, model, vision_executor_settings, vision_executor_properties));
-  ABSL_RETURN_IF_ERROR(handler->Initialize());
+  RETURN_IF_ERROR(handler->Initialize());
   return handler;
 }
 
@@ -195,9 +226,8 @@ absl::Status VisionLiteRtCompiledModelExecutor::VisionEncoder::Initialize() {
     case Backend::CPU: {
       // TODO: b/403132820 - Add accelerator compilation options for XNNPACK.
       LITERT_ASSIGN_OR_RETURN(auto& cpu_options, options.GetCpuOptions());
-      ABSL_RETURN_IF_ERROR(
-          SetCpuOptions(vision_executor_settings_, cpu_options));
-      ABSL_RETURN_IF_ERROR(SetCpuCacheOptions(
+      RETURN_IF_ERROR(SetCpuOptions(vision_executor_settings_, cpu_options));
+      RETURN_IF_ERROR(SetCpuCacheOptions(
           weight_cache_file,
           /*logging_prefix=*/VisionExecutorSettings::kEncoderName,
           cpu_options));
@@ -207,13 +237,12 @@ absl::Status VisionLiteRtCompiledModelExecutor::VisionEncoder::Initialize() {
     case Backend::GPU: {
       // TODO: b/403132820 - Add accelerator compilation options for ML_DRIFT.
       LITERT_ASSIGN_OR_RETURN(auto& gpu_options, options.GetGpuOptions());
-      ABSL_ASSIGN_OR_RETURN(
+      ASSIGN_OR_RETURN(
           const auto cache_files,
           GetGpuModelCacheData(vision_executor_settings_,
                                VisionExecutorSettings::kEncoderName));
-      ABSL_RETURN_IF_ERROR(
-          SetGpuOptions(vision_executor_settings_, gpu_options));
-      ABSL_RETURN_IF_ERROR(SetGpuCacheOptions(
+      RETURN_IF_ERROR(SetGpuOptions(vision_executor_settings_, gpu_options));
+      RETURN_IF_ERROR(SetGpuCacheOptions(
           cache_files.weight_cache_file, cache_files.program_cache_file,
           cache_files.cache_key,
           /*logging_prefix=*/VisionExecutorSettings::kEncoderName,
@@ -232,8 +261,8 @@ absl::Status VisionLiteRtCompiledModelExecutor::VisionEncoder::Initialize() {
                               options.GetGoogleTensorOptions());
       google_tensor_options.SetPerformanceMode(
           google_tensor::GoogleTensorOptions::PerformanceMode::kBurst);
-      options.SetHardwareAccelerators(litert::HwAccelerators::kNpu |
-                                      litert::HwAccelerators::kCpu);
+      // TODO: yunandrew - Add support for other NPU backends.
+      options.SetHardwareAccelerators(litert::HwAccelerators::kCpu);
       break;
     }
 #endif  // !defined(LITERT_DISABLE_NPU)
@@ -244,12 +273,8 @@ absl::Status VisionLiteRtCompiledModelExecutor::VisionEncoder::Initialize() {
 
   LITERT_ASSIGN_OR_RETURN(compiled_model_,
                           CompiledModel::Create(env_, model_.Get(), options));
-  if (model_.GetNumSignatures() == 1) {
-    // A single signature encoder(non-ViT model + single input LFM2-VL)
-    // uses a single buffer encode path, so buffers must be created in advance,
-    // but multi-signature(ViT) encoders create buffers for each signature
-    // in map-based encode at that time, so signature 0 buffers should not
-    // be created in advance.
+  if (!vision_executor_properties_.patch_num_shrink_factor.has_value()) {
+    // Only create input buffer at initialization for non-VIT models.
     LITERT_ASSIGN_OR_RETURN(input_buffers_,
                             compiled_model_.CreateInputBuffers(0));
     LITERT_ASSIGN_OR_RETURN(output_buffers_,
@@ -266,7 +291,7 @@ VisionLiteRtCompiledModelExecutor::VisionAdapter::Create(
     const VisionExecutorProperties& vision_executor_properties) {
   auto handler = std::unique_ptr<VisionAdapter>(new VisionAdapter(
       env, model, vision_executor_settings, vision_executor_properties));
-  ABSL_RETURN_IF_ERROR(handler->Initialize());
+  RETURN_IF_ERROR(handler->Initialize());
   return handler;
 }
 
@@ -282,21 +307,20 @@ absl::Status VisionLiteRtCompiledModelExecutor::VisionAdapter::Initialize() {
     case Backend::CPU: {
       // TODO: b/403132820 - Add accelerator compilation options for XNNPACK.
       LITERT_ASSIGN_OR_RETURN(auto& cpu_options, options.GetCpuOptions());
-      ABSL_RETURN_IF_ERROR(
-          SetCpuOptions(vision_executor_settings_, cpu_options));
-      ABSL_RETURN_IF_ERROR(SetCpuCacheOptions(
-          weight_cache_file, VisionExecutorSettings::kAdapterName,
-          cpu_options));
+      RETURN_IF_ERROR(SetCpuOptions(vision_executor_settings_, cpu_options));
+      RETURN_IF_ERROR(SetCpuCacheOptions(weight_cache_file,
+                                         VisionExecutorSettings::kAdapterName,
+                                         cpu_options));
       options.SetHardwareAccelerators(litert::HwAccelerators::kCpu);
       break;
     }
     case Backend::GPU: {
       LITERT_ASSIGN_OR_RETURN(auto& gpu_options, options.GetGpuOptions());
-      ABSL_ASSIGN_OR_RETURN(
+      ASSIGN_OR_RETURN(
           const auto cache_files,
           GetGpuModelCacheData(vision_executor_settings_,
                                VisionExecutorSettings::kAdapterName));
-      ABSL_RETURN_IF_ERROR(SetGpuCacheOptions(
+      RETURN_IF_ERROR(SetGpuCacheOptions(
           cache_files.weight_cache_file, cache_files.program_cache_file,
           cache_files.cache_key,
           /*logging_prefix=*/VisionExecutorSettings::kAdapterName,
@@ -316,8 +340,7 @@ absl::Status VisionLiteRtCompiledModelExecutor::VisionAdapter::Initialize() {
       google_tensor_options.SetPerformanceMode(
           google_tensor::GoogleTensorOptions::PerformanceMode::kBurst);
 
-      options.SetHardwareAccelerators(litert::HwAccelerators::kNpu |
-                                      litert::HwAccelerators::kCpu);
+      options.SetHardwareAccelerators(litert::HwAccelerators::kCpu);
       break;
     }
 #endif  // !defined(LITERT_DISABLE_NPU)
@@ -357,9 +380,8 @@ litert::lm::VisionLiteRtCompiledModelExecutor::Create(
                           BuildLiteRtCompiledModelResources(
                               vision_executor_settings.GetModelAssets()));
 
-  ABSL_ASSIGN_OR_RETURN(
-      auto vision_encoder_model,
-      resources->GetTFLiteModel(ModelType::kTfLiteVisionEncoder));
+  ASSIGN_OR_RETURN(auto vision_encoder_model,
+                   resources->GetTFLiteModel(ModelType::kTfLiteVisionEncoder));
   if (!vision_encoder_model) {
     return absl::InternalError("Failed to build LiteRt encoder model.");
   }
@@ -370,21 +392,21 @@ litert::lm::VisionLiteRtCompiledModelExecutor::Create(
       vision_adapter_model.status().code() != absl::StatusCode::kNotFound) {
     return vision_adapter_model.status();
   }
-  ABSL_ASSIGN_OR_RETURN(
+  ASSIGN_OR_RETURN(
       auto vision_executor_properties,
       GetVisionExecutorPropertiesFromModelResources(*resources.get()));
 
-  ABSL_ASSIGN_OR_RETURN(
+  ASSIGN_OR_RETURN(
       auto vision_encoder,
       VisionEncoder::Create(env, vision_encoder_model, vision_executor_settings,
                             vision_executor_properties));
 
   std::unique_ptr<VisionAdapter> vision_adapter;
   if (vision_adapter_model.ok()) {
-    ABSL_ASSIGN_OR_RETURN(vision_adapter,
-                          VisionAdapter::Create(env, *vision_adapter_model,
-                                                vision_executor_settings,
-                                                vision_executor_properties));
+    ASSIGN_OR_RETURN(vision_adapter,
+                     VisionAdapter::Create(env, *vision_adapter_model,
+                                           vision_executor_settings,
+                                           vision_executor_properties));
   }
 
   LITERT_ASSIGN_OR_RETURN(auto tensor_type,
@@ -470,10 +492,10 @@ VisionLiteRtCompiledModelExecutor::GetExpectedInputDimension() const {
 absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(
     const absl::flat_hash_map<std::string, litert::TensorBuffer>& input_maps) {
 
-  // Note: `positions_xy` is only required by transformer (ViT) encoders. Single
-  // input encoders (e.g. LFM2 VL) do not provide it, so we only validate the
-  // mandatory `images` tensor here and feed whatever inputs the caller provides
-  // to the matching encoder signature below.
+  if (!input_maps.contains(kPositionsXy)) {
+    return absl::InvalidArgumentError(
+        absl::StrCat(kPositionsXy, " is not found in the input maps."));
+  }
   if (!input_maps.contains(kImages)) {
     return absl::InvalidArgumentError(
         absl::StrCat(kImages, " is not found in the input maps."));
@@ -485,16 +507,16 @@ absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(
                           input_maps.at(kImages).TensorType());
   const auto& images_dimensions = images_tensor_type.Layout().Dimensions();
   const int num_patches_from_input = images_dimensions[1];
-  ABSL_ASSIGN_OR_RETURN(auto encoder_signature_index,
-                        GetVitSignatureIndex(vision_encoder_->GetModel(),
-                                             vision_executor_properties_,
-                                             num_patches_from_input));
+  ASSIGN_OR_RETURN(auto encoder_signature_index,
+                   GetVitSignatureIndex(vision_encoder_->GetModel(),
+                                        vision_executor_properties_,
+                                        num_patches_from_input));
   std::optional<int> adapter_signature_index;
   if (vision_adapter_ != nullptr) {
-    ABSL_ASSIGN_OR_RETURN(adapter_signature_index,
-                          GetVitSignatureIndex(vision_adapter_->GetModel(),
-                                               vision_executor_properties_,
-                                               num_patches_from_input));
+    ASSIGN_OR_RETURN(adapter_signature_index,
+                     GetVitSignatureIndex(vision_adapter_->GetModel(),
+                                          vision_executor_properties_,
+                                          num_patches_from_input));
   }
   LITERT_ASSIGN_OR_RETURN(
       auto encoder_input_buffers,
@@ -504,14 +526,14 @@ absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(
   LITERT_ASSIGN_OR_RETURN(
       auto encoder_signature,
       vision_encoder_->GetModel().GetSignature(encoder_signature_index));
-  ABSL_VLOG(1) << "encoder_signature_index: " << encoder_signature_index
-               << " name: " << encoder_signature.Key();
+  ABSL_LOG(INFO) << "encoder_signature_index: " << encoder_signature_index
+                 << " name: " << encoder_signature.Key();
   if (vision_adapter_ != nullptr) {
     LITERT_ASSIGN_OR_RETURN(
         auto adapter_signature,
         vision_adapter_->GetModel().GetSignature(*adapter_signature_index));
-    ABSL_VLOG(1) << "adapter_signature_index: " << *adapter_signature_index
-                 << " name: " << adapter_signature.Key();
+    ABSL_LOG(INFO) << "adapter_signature_index: " << *adapter_signature_index
+                   << " name: " << adapter_signature.Key();
   }
 
   std::vector<TensorBuffer> adapter_output_tensor_buffers;
@@ -592,13 +614,11 @@ absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(
           "patch_num_shrink_factor is not set in the vision executor "
           "properties.");
     }
-    // Derive the number of input patches from the image tensor. The positions
-    // tensor is not available for single input encoders (e.g. LFM2 VL).
-    LITERT_ASSIGN_OR_RETURN(auto image_tensor_type,
-                            input_maps.at(kImages).TensorType());
-    const int num_patches_from_input =
-        image_tensor_type.Layout().Dimensions()[1];
-    const int patch_num_shrink_factor =
+    LITERT_ASSIGN_OR_RETURN(auto positions_tensor_type,
+                            input_maps.at(kPositionsXy).TensorType());
+    const int& num_patches_from_input =
+        positions_tensor_type.Layout().Dimensions()[1];
+    const int& patch_num_shrink_factor =
         vision_executor_properties_.patch_num_shrink_factor.value();
     // Round up the number of patches so we have at least one patch.
     num_patches = (num_patches_from_input + patch_num_shrink_factor - 1) /
@@ -647,18 +667,11 @@ absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(
 
     LITERT_ASSIGN_OR_RETURN(auto adapter_output_tensor_type,
                             adapter_output_tensor_buffers[0].TensorType());
-
-    // The embedding size is the last dimension of the adapter output,
-    // regardless of whether the adapter produces a 2-D ([num_tokens,
-    // embedding_size]) or 3-D ([batch_size, num_tokens, embedding_size])
-    // tensor.
-    const auto& adapter_output_dimensions =
-        adapter_output_tensor_type.Layout().Dimensions();
-    const int adapter_output_embedding_size =
-        adapter_output_dimensions[adapter_output_dimensions.size() - 1];
     RankedTensorType output_tensor_type(
         GetElementType<float>(),
-        Layout(Dimensions({1, num_patches, adapter_output_embedding_size})));
+        Layout(
+            Dimensions({1, num_patches,
+                        adapter_output_tensor_type.Layout().Dimensions()[2]})));
     LITERT_ASSIGN_OR_RETURN(
         auto output_tensor,
         TensorBuffer::CreateManaged(

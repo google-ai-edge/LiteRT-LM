@@ -41,15 +41,6 @@ You can optionally drive tool dynamically by reading standard TOML configuration
 litert-lm-builder toml --path example.toml output --path real_via_toml.litertlm
 ```
 
-### Unpacking with litert-lm-builder
-
-You can unpack an existing `.litertlm` file into a directory containing its
-extracted sections and a reconstructed `model.toml`:
-
-```bash
-litert-lm-builder unpack --input demo.litertlm --output ./unpacked_dir
-```
-
 ### litert-lm-peek (Inspection & Extraction)
 
 This tool is designed to inspect the contents of a `.litertlm` file. It reads
@@ -122,10 +113,6 @@ def build_demo_model():
     # You can also use the peek programmatic API identically
     print(f"\n--- Peeking at {output_path} ---")
     peek_litertlm_file(output_path, None, sys.stdout)
-
-    # You can unpack the archive programmatically
-    unpacked_builder = LitertLmFileBuilder.unpack(output_path, "./unpacked_output")
-    print(f"Unpacked {output_path} into ./unpacked_output")
 
 if __name__ == "__main__":
     build_demo_model()

@@ -20,7 +20,6 @@
 #include <string>
 #include <tuple>
 #include <utility>
-#include <variant>
 #include <vector>
 
 #include "absl/base/attributes.h"  // from @com_google_absl
@@ -32,7 +31,6 @@
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/memory/memory.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
-#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
@@ -42,9 +40,7 @@
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/logits_processor/constrained_decoding/constraint.h"
-#include "runtime/components/logits_processor/no_repeat_ngram_config.h"
 #include "runtime/components/logits_processor/repetition_penalty_config.h"
-#include "runtime/components/logits_processor/suppress_tokens_config.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/components/sampler.h"
 #include "runtime/components/sampler_factory.h"
@@ -124,20 +120,19 @@ ThreadedExecutionManager::~ThreadedExecutionManager() {
 
 absl::StatusOr<SessionId> ThreadedExecutionManager::RegisterNewSession(
     SessionConfig session_config, std::optional<BenchmarkInfo> benchmark_info) {
-  ABSL_ASSIGN_OR_RETURN(
-      auto context_handler,
-      resource_manager_->CreateContextHandler(session_config));
+  ASSIGN_OR_RETURN(auto context_handler,
+                   resource_manager_->CreateContextHandler(session_config));
   std::unique_ptr<Sampler> sampler;
   if (session_config.UseExternalSampler()) {
     if (session_config.GetSamplerBackend() != Backend::CPU) {
       return absl::InvalidArgumentError(
           "External sampler currently only supports CPU backend.");
     }
-    ABSL_ASSIGN_OR_RETURN(
-        sampler, CreateSampler(session_config.GetSamplerBackend(),
-                               session_config.GetNumOutputCandidates(),
-                               session_config.GetSamplerParams(),
-                               litert_env_ ? litert_env_->Get() : nullptr));
+    ASSIGN_OR_RETURN(sampler,
+                     CreateSampler(session_config.GetSamplerBackend(),
+                                   session_config.GetNumOutputCandidates(),
+                                   session_config.GetSamplerParams(),
+                                   litert_env_ ? litert_env_->Get() : nullptr));
   }
   auto stop_token_detector = std::make_unique<StopTokenDetector>(1);
   for (const auto& stop_token_sequence : session_config.GetStopTokenIds()) {
@@ -162,10 +157,10 @@ absl::StatusOr<SessionId> ThreadedExecutionManager::RegisterNewSession(
           "Session ", session_id, " already exists in session list."));
     }
     if (session_info->session_config.AudioModalityEnabled()) {
-      ABSL_RETURN_IF_ERROR(resource_manager_->TryLoadingAudioExecutor());
+      RETURN_IF_ERROR(resource_manager_->TryLoadingAudioExecutor());
     }
     if (session_info->session_config.VisionModalityEnabled()) {
-      ABSL_RETURN_IF_ERROR(resource_manager_->TryLoadingVisionExecutor());
+      RETURN_IF_ERROR(resource_manager_->TryLoadingVisionExecutor());
     }
     session_lookup_.insert({session_id, std::move(session_info)});
   }
@@ -183,17 +178,14 @@ absl::Status ThreadedExecutionManager::ReleaseSession(SessionId session_id) {
   // have a clean state for the next usage.
   if (session_lookup_.at(session_id)->session_config.AudioModalityEnabled() &&
       session_lookup_.size() == 1) {
-    ABSL_ASSIGN_OR_RETURN(auto audio_executor,
-                          resource_manager_->AcquireAudioExecutor());
+    ASSIGN_OR_RETURN(auto audio_executor,
+                     resource_manager_->AcquireAudioExecutor());
     audio_executor->Reset().IgnoreError();
   }
   absl::erase_if(task_lookup_, [session_id](const auto& kv) {
     return kv.second.session_id == session_id;
   });
   session_lookup_.erase(session_id);
-  if (session_lookup_.empty()) {
-    resource_manager_->ResetCurrentHandler();
-  }
   return absl::OkStatus();
 }
 
@@ -263,8 +255,8 @@ absl::Status ThreadedExecutionManager::CreateTask(
     auto task_it = task_lookup_.find(dep_task_id);
     if (task_it == task_lookup_.end()) {
       if (dep_task_id >= next_task_id_.load()) {
-        return absl::InvalidArgumentError(
-            absl::StrCat("Dependency task ", dep_task_id, " is invalid."));
+        return absl::InvalidArgumentError(absl::StrCat(
+            "Dependency task ", dep_task_id, " is invalid."));
       }
       erase_dependency = true;
     } else {
@@ -332,7 +324,7 @@ absl::Status ThreadedExecutionManager::CreateTask(
   // Otherwise, the task will be queued when all dependency tasks are done.
   if (task_state == TaskState::kCreated &&
       task_lookup_.at(task_id).dependent_tasks.empty()) {
-    ABSL_RETURN_IF_ERROR(QueueTask(task_id));
+    RETURN_IF_ERROR(QueueTask(task_id));
   }
   return absl::OkStatus();
 }
@@ -358,14 +350,14 @@ absl::Status ThreadedExecutionManager::QueueTask(TaskId task_id) {
   auto task = std::move(task_lookup_.at(task_id).task);
 
   if (execution_thread_pool_ != nullptr) {
-    ABSL_RETURN_IF_ERROR(execution_thread_pool_->Schedule(std::move(task)));
+    RETURN_IF_ERROR(execution_thread_pool_->Schedule(std::move(task)));
   } else {
     ABSL_LOG(ERROR) << "Execution thread pool is null, skipping task: "
                     << task_id;
   }
 
   task_lookup_.at(task_id).callback(Responses(TaskState::kQueued));
-  ABSL_RETURN_IF_ERROR(UpdateTaskState(task_id, TaskState::kQueued));
+  RETURN_IF_ERROR(UpdateTaskState(task_id, TaskState::kQueued));
 
   return absl::OkStatus();
 }
@@ -394,7 +386,7 @@ ThreadedExecutionManager::StartTask(TaskId task_id) {
     return error_status;
   }
   task_lookup_.at(task_id).callback(Responses(TaskState::kProcessing));
-  ABSL_RETURN_IF_ERROR(UpdateTaskState(task_id, TaskState::kProcessing));
+  RETURN_IF_ERROR(UpdateTaskState(task_id, TaskState::kProcessing));
 
   if (!session_lookup_.contains(task_lookup_.at(task_id).session_id)) {
     return absl::InvalidArgumentError(
@@ -414,7 +406,7 @@ absl::Status ThreadedExecutionManager::FinishTask(
       [&](absl::Status status) ABSL_EXCLUSIVE_LOCKS_REQUIRED(
           session_and_task_lookup_mutex_) -> absl::Status {
     callback(status);
-    ABSL_RETURN_IF_ERROR(UpdateTaskState(task_id, TaskState::kFailed));
+    RETURN_IF_ERROR(UpdateTaskState(task_id, TaskState::kFailed));
     return status;
   };
   {
@@ -470,7 +462,7 @@ absl::Status ThreadedExecutionManager::FinishTask(
         }
         task_lookup_.at(following_task_id).dependent_tasks.erase(task_id);
         if (task_lookup_.at(following_task_id).dependent_tasks.empty()) {
-          ABSL_RETURN_IF_ERROR(QueueTask(following_task_id));
+          RETURN_IF_ERROR(QueueTask(following_task_id));
         }
       }
     } else if (!IsTaskEndState(responses->GetTaskState())) {
@@ -482,7 +474,7 @@ absl::Status ThreadedExecutionManager::FinishTask(
     TaskState next_task_state =
         responses.ok() ? responses->GetTaskState() : TaskState::kFailed;
     if (callback_thread_pool_ != nullptr) {
-      ABSL_RETURN_IF_ERROR(callback_thread_pool_->Schedule(
+      RETURN_IF_ERROR(callback_thread_pool_->Schedule(
           [callback = std::move(callback), responses = std::move(responses),
            task_id = task_id, next_task_state = std::move(next_task_state),
            this]() mutable {
@@ -494,8 +486,7 @@ absl::Status ThreadedExecutionManager::FinishTask(
                               << " with task id: " << task_id;
             }
           }));
-      ABSL_RETURN_IF_ERROR(
-          UpdateTaskState(task_id, TaskState::kLastCallbackQueued));
+      RETURN_IF_ERROR(UpdateTaskState(task_id, TaskState::kLastCallbackQueued));
     } else {
       callback(
           absl::InternalError("Callback thread pool is null, skipping "
@@ -506,8 +497,7 @@ absl::Status ThreadedExecutionManager::FinishTask(
   if (callback_thread_pool_ != nullptr) {
     // TODO b/476205457 - Consider to use a asynchronous approach to handle the
     // callback, and remove this WaitUntilDone.
-    ABSL_RETURN_IF_ERROR(
-        callback_thread_pool_->WaitUntilDone(absl::Seconds(10)));
+    RETURN_IF_ERROR(callback_thread_pool_->WaitUntilDone(absl::Seconds(10)));
   }
 
   return absl::OkStatus();
@@ -538,8 +528,8 @@ ThreadedExecutionManager::FollowingWaitingTasks(TaskId task_id) {
     }
     if (!IsTaskEndState(task_lookup_.at(following_task_id).task_state)) {
       following_waiting_tasks.insert(following_task_id);
-      ABSL_ASSIGN_OR_RETURN(auto next_following_waiting_tasks,
-                            FollowingWaitingTasks(following_task_id));
+      ASSIGN_OR_RETURN(auto next_following_waiting_tasks,
+                       FollowingWaitingTasks(following_task_id));
       following_waiting_tasks.insert(next_following_waiting_tasks.begin(),
                                      next_following_waiting_tasks.end());
     }
@@ -580,7 +570,7 @@ absl::Status ThreadedExecutionManager::UpdateAllTasksToState(
     if (task_lookup_.at(task_id).callback) {
       task_lookup_.at(task_id).callback(Responses(task_state));
     }
-    ABSL_RETURN_IF_ERROR(UpdateTaskState(task_id, task_state));
+    RETURN_IF_ERROR(UpdateTaskState(task_id, task_state));
   }
   return absl::OkStatus();
 }
@@ -595,8 +585,8 @@ ThreadedExecutionManager::ProcessAndCombineContents(
   for (const auto& preprocessed_content : preprocessed_contents) {
     if (const auto* input_text =
             std::get_if<InputText>(&preprocessed_content)) {
-      ABSL_ASSIGN_OR_RETURN(const auto* token_ids,
-                            input_text->GetPreprocessedTextTensor());
+      ASSIGN_OR_RETURN(const auto* token_ids,
+                       input_text->GetPreprocessedTextTensor());
       if (token_ids == nullptr) {
         return absl::InvalidArgumentError(
             "Token IDs is null in preprocessed_contents.");
@@ -608,34 +598,34 @@ ThreadedExecutionManager::ProcessAndCombineContents(
     } else if (const auto* input_image =
                    std::get_if<InputImage>(&preprocessed_content)) {
       if (benchmark_info.has_value()) {
-        ABSL_RETURN_IF_ERROR(benchmark_info->TimeMarkDelta("vision_executor"));
+        RETURN_IF_ERROR(benchmark_info->TimeMarkDelta("vision_executor"));
       }
       ExecutorVisionData single_image_data;
       if (input_image->IsTensorBuffer()) {
-        ABSL_ASSIGN_OR_RETURN(auto tensor_buffer,
-                              input_image->GetPreprocessedImageTensor());
-        ABSL_ASSIGN_OR_RETURN(auto vision_executor,
-                              resource_manager_->AcquireVisionExecutor());
-        ABSL_ASSIGN_OR_RETURN(single_image_data,
-                              vision_executor->Encode(*tensor_buffer));
+        ASSIGN_OR_RETURN(auto tensor_buffer,
+                         input_image->GetPreprocessedImageTensor());
+        ASSIGN_OR_RETURN(auto vision_executor,
+                         resource_manager_->AcquireVisionExecutor());
+        ASSIGN_OR_RETURN(single_image_data,
+                         vision_executor->Encode(*tensor_buffer));
       } else if (input_image->IsTensorBufferMap()) {
-        ABSL_ASSIGN_OR_RETURN(auto tensor_buffer_map,
-                              input_image->GetPreprocessedImageTensorMap());
-        ABSL_ASSIGN_OR_RETURN(auto vision_executor,
-                              resource_manager_->AcquireVisionExecutor());
-        ABSL_ASSIGN_OR_RETURN(single_image_data,
-                              vision_executor->Encode(*tensor_buffer_map));
+        ASSIGN_OR_RETURN(auto tensor_buffer_map,
+                         input_image->GetPreprocessedImageTensorMap());
+        ASSIGN_OR_RETURN(auto vision_executor,
+                         resource_manager_->AcquireVisionExecutor());
+        ASSIGN_OR_RETURN(single_image_data,
+                         vision_executor->Encode(*tensor_buffer_map));
       } else {
         return absl::FailedPreconditionError(
             "Image tensor or tensor map is null in preprocessed_contents.");
       }
       if (benchmark_info.has_value()) {
-        ABSL_RETURN_IF_ERROR(benchmark_info->TimeMarkDelta("vision_executor"));
+        RETURN_IF_ERROR(benchmark_info->TimeMarkDelta("vision_executor"));
       }
-      ABSL_ASSIGN_OR_RETURN(auto embeddings_ptr,
-                            single_image_data.GetEmbeddingsPtr());
-      ABSL_ASSIGN_OR_RETURN(const auto& dimensions,
-                            TensorBufferDims(*embeddings_ptr));
+      ASSIGN_OR_RETURN(auto embeddings_ptr,
+                       single_image_data.GetEmbeddingsPtr());
+      ASSIGN_OR_RETURN(const auto& dimensions,
+                       TensorBufferDims(*embeddings_ptr));
       // The last two dimensions are [..., image_token_num, model_dimension].
       const int image_token_num = dimensions.at(dimensions.size() - 2);
       combined_token_ids.insert(combined_token_ids.end(), image_token_num,
@@ -646,44 +636,24 @@ ThreadedExecutionManager::ProcessAndCombineContents(
       combined_token_ids.push_back(ExecutorVisionData::kEndToken);
     } else if (const auto* input_audio =
                    std::get_if<InputAudio>(&preprocessed_content)) {
-      ABSL_ASSIGN_OR_RETURN(const auto* spectrogram_tensor,
-                            input_audio->GetPreprocessedAudioTensor());
+      ASSIGN_OR_RETURN(const auto* spectrogram_tensor,
+                       input_audio->GetPreprocessedAudioTensor());
       if (benchmark_info.has_value()) {
-        ABSL_RETURN_IF_ERROR(benchmark_info->TimeMarkDelta("audio_executor"));
+        RETURN_IF_ERROR(benchmark_info->TimeMarkDelta("audio_executor"));
       }
-      ABSL_ASSIGN_OR_RETURN(auto audio_executor,
-                            resource_manager_->AcquireAudioExecutor());
-      ABSL_ASSIGN_OR_RETURN(auto single_audio_data,
-                            audio_executor->Encode(*spectrogram_tensor));
+      ASSIGN_OR_RETURN(auto audio_executor,
+                       resource_manager_->AcquireAudioExecutor());
+      ASSIGN_OR_RETURN(auto single_audio_data,
+                       audio_executor->Encode(*spectrogram_tensor));
       if (benchmark_info.has_value()) {
-        ABSL_RETURN_IF_ERROR(benchmark_info->TimeMarkDelta("audio_executor"));
+        RETURN_IF_ERROR(benchmark_info->TimeMarkDelta("audio_executor"));
       }
       const int num_audio_tokens = single_audio_data.GetValidTokens();
-      if (num_audio_tokens > 0) {
-        all_audio_data.push_back(std::move(single_audio_data));
-        combined_token_ids.insert(combined_token_ids.end(), num_audio_tokens,
-                                  ExecutorAudioData::kSpecialToken);
-      }
+      all_audio_data.push_back(std::move(single_audio_data));
+      combined_token_ids.insert(combined_token_ids.end(), num_audio_tokens,
+                                ExecutorAudioData::kSpecialToken);
     } else if (const auto* input_audio_end =
                    std::get_if<InputAudioEnd>(&preprocessed_content)) {
-      // We allow audio end token even if the audio executor is not
-      // available.
-      auto audio_executor = resource_manager_->AcquireAudioExecutor();
-      if (audio_executor.ok()) {
-        // Flush any remaining buffered spectrogram frames from streaming
-        // Encode() calls.
-        auto flushed_audio_data = (*audio_executor)->Flush();
-        if (flushed_audio_data.ok()) {
-          const int flushed_tokens = flushed_audio_data->GetValidTokens();
-          if (flushed_tokens > 0) {
-            all_audio_data.push_back(std::move(*flushed_audio_data));
-            combined_token_ids.insert(combined_token_ids.end(), flushed_tokens,
-                                      ExecutorAudioData::kSpecialToken);
-          }
-        } else if (!absl::IsUnimplemented(flushed_audio_data.status())) {
-          return flushed_audio_data.status();
-        }
-      }
       combined_token_ids.push_back(ExecutorAudioData::kEndToken);
     } else {
       return absl::InvalidArgumentError(
@@ -698,19 +668,19 @@ ThreadedExecutionManager::ProcessAndCombineContents(
 
   std::optional<ExecutorVisionData> combined_image_data = std::nullopt;
   if (!all_image_data.empty()) {
-    ABSL_ASSIGN_OR_RETURN(combined_image_data,
-                          CombineExecutorVisionData(all_image_data));
+    ASSIGN_OR_RETURN(combined_image_data,
+                     CombineExecutorVisionData(all_image_data));
   }
   std::optional<ExecutorAudioData> combined_audio_data = std::nullopt;
   if (!all_audio_data.empty()) {
-    ABSL_ASSIGN_OR_RETURN(combined_audio_data,
-                          CombineExecutorAudioData(all_audio_data));
+    ASSIGN_OR_RETURN(combined_audio_data,
+                     CombineExecutorAudioData(all_audio_data));
   }
 
   last_prefill_token_id_ = combined_token_ids.back();
 
-  ABSL_ASSIGN_OR_RETURN(auto token_ids_buffer,
-                        tokenizer_->TokenIdsToTensorBuffer(combined_token_ids));
+  ASSIGN_OR_RETURN(auto token_ids_buffer,
+                   tokenizer_->TokenIdsToTensorBuffer(combined_token_ids));
 
   ExecutorInputs inputs(ExecutorTextData(std::move(token_ids_buffer)),
                         std::move(combined_image_data),
@@ -729,7 +699,7 @@ ThreadedExecutionManager::Create(
     audio_executor_settings,
     ::litert::Environment* absl_nullable litert_env,
     std::unique_ptr<AudioExecutor> absl_nullable audio_executor) {
-  ABSL_ASSIGN_OR_RETURN(
+  ASSIGN_OR_RETURN(
       auto resource_manager,
       ResourceManager::Create(model_resources, std::move(llm_executor),
                               std::move(vision_executor_settings),
@@ -774,8 +744,8 @@ absl::Status ThreadedExecutionManager::WaitUntilSessionDone(
 
 absl::Status ThreadedExecutionManager::WaitUntilAllDone(
     absl::Duration timeout) {
-  ABSL_RETURN_IF_ERROR(execution_thread_pool_->WaitUntilDone(timeout));
-  ABSL_RETURN_IF_ERROR(callback_thread_pool_->WaitUntilDone(timeout));
+  RETURN_IF_ERROR(execution_thread_pool_->WaitUntilDone(timeout));
+  RETURN_IF_ERROR(callback_thread_pool_->WaitUntilDone(timeout));
   return absl::OkStatus();
 }
 
@@ -827,51 +797,8 @@ absl::Status ThreadedExecutionManager::AddPrefillTask(
 
     auto executor_inputs =
         ProcessAndCombineContents(inputs, session_info->benchmark_info);
-    if (executor_inputs.ok() &&
-        session_info->session_config.GetAudioEmbeddingsCallback() != nullptr) {
-      auto audio_data_status = executor_inputs->GetAudioDataPtr();
-      if (audio_data_status.ok() && *audio_data_status != nullptr) {
-        (*session_info->session_config.GetAudioEmbeddingsCallback())(
-            **audio_data_status);
-      }
-    }
     if (!executor_inputs.ok()) {
       llm_executor.value().reset();
-      if (executor_inputs.status().message() ==
-              "No token IDs found in preprocessed_contents." &&
-          session_info->session_config.AudioModalityEnabled()) {
-        {
-          auto audio_executor = resource_manager_->AcquireAudioExecutor();
-          if (!audio_executor.ok()) {
-            FinishTaskAndLogErrors(task_id, audio_executor.status(),
-                                   std::move(callback));
-            return;
-          }
-          auto audio_executor_properties =
-              (*audio_executor)->GetAudioExecutorProperties();
-          if (!audio_executor_properties.ok()) {
-            audio_executor.value().reset();
-            FinishTaskAndLogErrors(task_id, audio_executor_properties.status(),
-                                   std::move(callback));
-            return;
-          }
-          if (!audio_executor_properties->is_streaming_model) {
-            audio_executor.value().reset();
-            FinishTaskAndLogErrors(task_id, executor_inputs.status(),
-                                   std::move(callback));
-            return;
-          }
-        }
-        ABSL_VLOG(1)
-            << "Input audio chunk is smaller than the audio encoder input "
-               "size. The input audio chunk is buffered and will be processed "
-               "together with the next input audio chunk. Skipping prefill.";
-        // We allow empty input for streaming audio use case, so we mark the
-        // task as done.
-        FinishTaskAndLogErrors(task_id, Responses(TaskState::kDone),
-                               std::move(callback));
-        return;
-      }
       FinishTaskAndLogErrors(task_id, executor_inputs.status(),
                              std::move(callback));
       return;
@@ -928,26 +855,16 @@ absl::Status ThreadedExecutionManager::AddPrefillTask(
 absl::Status ThreadedExecutionManager::AddDecodeTask(
     SessionId session_id, TaskId task_id, absl::flat_hash_set<TaskId> dep_tasks,
     RepetitionPenaltyConfig repetition_penalty_config,
-    NoRepeatNgramConfig no_repeat_ngram_config,
-    SuppressTokensConfig suppress_tokens_config,
     Constraint* absl_nullable constraint,
     std::shared_ptr<std::atomic<bool>> absl_nonnull cancelled,
     absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback,
-    int max_output_tokens, std::optional<int> thinking_token_budget,
-    std::vector<int> thinking_start_token_ids,
-    std::vector<int> thinking_end_token_ids) {
+    int max_output_tokens) {
   if (callback == nullptr) {
     callback = [](absl::StatusOr<Responses> responses) {};
   }
 
-  auto task = [this, task_id,
-               repetition_penalty_config = std::move(repetition_penalty_config),
-               no_repeat_ngram_config = std::move(no_repeat_ngram_config),
-               suppress_tokens_config = std::move(suppress_tokens_config),
-               constraint, cancelled, max_output_tokens, thinking_token_budget,
-               thinking_start_token_ids = std::move(thinking_start_token_ids),
-               thinking_end_token_ids =
-                   std::move(thinking_end_token_ids)]() mutable -> void {
+  auto task = [this, task_id, repetition_penalty_config, constraint, cancelled,
+               max_output_tokens]() mutable -> void {
     auto task_info = StartTask(task_id);
     if (!task_info.ok()) {
       FinishTaskAndLogErrors(task_id, task_info.status(),
@@ -987,29 +904,25 @@ absl::Status ThreadedExecutionManager::AddDecodeTask(
     session_info->stop_token_detector->ResetBatch(num_output_candidates);
     std::optional<Sampler*> optional_sampler = std::nullopt;
     std::optional<litert::TensorBuffer> decoded_ids_buffer = std::nullopt;
-      if (session_info->sampler != nullptr) {
-        optional_sampler = session_info->sampler.get();
-        std::vector<int> decoded_ids(num_output_candidates,
-                                     session_info->last_prefill_token_id);
-        auto decoded_ids_buffer_or =
-            CopyToTensorBuffer<int>(decoded_ids, {num_output_candidates, 1});
-        if (!decoded_ids_buffer_or.HasValue()) {
-          llm_executor.value().reset();
-          callback(
-              absl::InternalError(decoded_ids_buffer_or.Error().Message()));
-          return;
-        }
-        decoded_ids_buffer = std::move(decoded_ids_buffer_or.Value());
+    if (session_info->sampler != nullptr) {
+      optional_sampler = session_info->sampler.get();
+      std::vector<int> decoded_ids(num_output_candidates,
+                                   session_info->last_prefill_token_id);
+      auto decoded_ids_buffer_or =
+          CopyToTensorBuffer<int>(decoded_ids, {num_output_candidates, 1});
+      if (!decoded_ids_buffer_or.HasValue()) {
+        llm_executor.value().reset();
+        callback(absl::InternalError(decoded_ids_buffer_or.Error().Message()));
+        return;
       }
+      decoded_ids_buffer = std::move(decoded_ids_buffer_or.Value());
+    }
 
     auto responses = Tasks::Decode(
         *llm_executor.value(), *tokenizer_, *session_info->stop_token_detector,
         num_output_candidates, session_info->benchmark_info, optional_sampler,
-        std::move(repetition_penalty_config), std::move(no_repeat_ngram_config),
-        std::move(suppress_tokens_config), constraint,
-        std::move(decoded_ids_buffer), callback, cancelled.get(),
-        max_output_tokens, thinking_token_budget, thinking_end_token_ids,
-        thinking_start_token_ids);
+        repetition_penalty_config, constraint, std::move(decoded_ids_buffer),
+        callback, cancelled.get(), max_output_tokens);
     if (!responses.ok() && absl::IsCancelled(responses.status())) {
       responses = Responses(TaskState::kCancelled);
     }
@@ -1217,18 +1130,18 @@ absl::Status ThreadedExecutionManager::AddTextScoringTask(
 
 absl::StatusOr<int> ThreadedExecutionManager::GetCurrentStep(
     const SessionInfo& session_info) {
-  ABSL_ASSIGN_OR_RETURN(auto llm_executor,
-                        resource_manager_->AcquireExecutorWithContextHandler(
-                            session_info.context_handler));
+  ASSIGN_OR_RETURN(auto llm_executor,
+                   resource_manager_->AcquireExecutorWithContextHandler(
+                       session_info.context_handler));
   return llm_executor->GetCurrentStep();
 }
 
 absl::Status ThreadedExecutionManager::SetCurrentStep(
     const SessionInfo& session_info, int target_step) {
-  ABSL_ASSIGN_OR_RETURN(auto llm_executor,
-                        resource_manager_->AcquireExecutorWithContextHandler(
-                            session_info.context_handler));
-  ABSL_ASSIGN_OR_RETURN(int current_step, llm_executor->GetCurrentStep());
+  ASSIGN_OR_RETURN(auto llm_executor,
+                   resource_manager_->AcquireExecutorWithContextHandler(
+                       session_info.context_handler));
+  ASSIGN_OR_RETURN(int current_step, llm_executor->GetCurrentStep());
   if (target_step > current_step) {
     return absl::InvalidArgumentError(absl::StrCat(
         "Target step is greater than the current step: ", current_step));

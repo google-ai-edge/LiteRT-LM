@@ -205,10 +205,6 @@ internal object LiteRtLmJni {
    * @param enableConversationConstrainedDecoding Whether to enable conversation constrained
    *   decoding.
    * @param filterChannelContentFromKvCache Whether to filter channel content from the KV cache.
-   * @param prefillPrefaceOnInit Whether to prefill the preface when initializing the conversation.
-   * @param repetitionPenaltyConfig Configuration for repetition penalty.
-   * @param maxOutputToken The maximum number of output tokens. When non-positive, use the default.
-   * @param thinkingConfig Configuration for thinking/reasoning generation.
    * @return A pointer to the native conversation instance.
    */
   external fun nativeCreateConversation(
@@ -219,14 +215,10 @@ internal object LiteRtLmJni {
     channelsJsonString: String?,
     extraContextJsonString: String,
     enableConversationConstrainedDecoding: Boolean,
-    filterChannelContentFromKvCache: Boolean?,
+    filterChannelContentFromKvCache: Boolean,
     overwritePromptTemplate: String?,
     loraPath: String?,
     audioLoraPath: String?,
-    prefillPrefaceOnInit: Boolean,
-    maxOutputToken: Int,
-    thinkingConfig: ThinkingConfig?,
-    enableResponseFormat: Boolean,
   ): Long
 
   /**
@@ -248,11 +240,6 @@ internal object LiteRtLmJni {
    * @param callback The callback to receive the streaming responses.
    * @param visualTokenBudget The visual token budget. Only supported by Gemma4 currently. Null for
    *   default.
-   * @param repetitionPenaltyConfig Configuration for repetition penalty.
-   * @param noRepeatNgramConfig Configuration for no repeat ngram.
-   * @param suppressTokensConfig Configuration for suppressing specific tokens.
-   * @param maxOutputToken The maximum number of output tokens. When non-positive, use the default.
-   * @param thinkingConfig Configuration for thinking/reasoning generation.
    */
   external fun nativeSendMessageAsync(
     conversationPointer: Long,
@@ -260,13 +247,6 @@ internal object LiteRtLmJni {
     extraContextJsonString: String,
     callback: JniMessageCallback,
     visualTokenBudget: Int?,
-    repetitionPenaltyConfig: RepetitionPenaltyConfig?,
-    noRepeatNgramConfig: NoRepeatNgramConfig?,
-    suppressTokensConfig: SuppressTokensConfig?,
-    maxOutputToken: Int,
-    thinkingConfig: ThinkingConfig?,
-    constraintType: Int,
-    constraintString: String?,
   )
 
   /**
@@ -278,11 +258,6 @@ internal object LiteRtLmJni {
    *   format.
    * @param visualTokenBudget The visual token budget. Only supported by Gemma4 currently. Null for
    *   default.
-   * @param repetitionPenaltyConfig Configuration for repetition penalty.
-   * @param noRepeatNgramConfig Configuration for no repeat ngram.
-   * @param suppressTokensConfig Configuration for suppressing specific tokens.
-   * @param maxOutputToken The maximum number of output tokens. When non-positive, use the default.
-   * @param thinkingConfig Configuration for thinking/reasoning generation.
    * @return The response message in JSON string format.
    */
   external fun nativeSendMessage(
@@ -290,13 +265,6 @@ internal object LiteRtLmJni {
     messageJsonString: String,
     extraContextJsonString: String,
     visualTokenBudget: Int?,
-    repetitionPenaltyConfig: RepetitionPenaltyConfig?,
-    noRepeatNgramConfig: NoRepeatNgramConfig?,
-    suppressTokensConfig: SuppressTokensConfig?,
-    maxOutputToken: Int,
-    thinkingConfig: ThinkingConfig?,
-    constraintType: Int,
-    constraintString: String?,
   ): String
 
   /**

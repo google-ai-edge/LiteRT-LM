@@ -31,10 +31,8 @@ exports_files([
 ])
 
 ENGINE_COMMON_DEPS = [
-    ":engine_internal",
     "@com_google_absl//absl/base:core_headers",
     "@com_google_absl//absl/base:log_severity",
-    "@com_google_absl//absl/container:flat_hash_set",
     "@com_google_absl//absl/functional:any_invocable",
     "@com_google_absl//absl/log:absl_log",
     "@com_google_absl//absl/log:initialize",
@@ -46,14 +44,8 @@ ENGINE_COMMON_DEPS = [
     "@com_google_absl//absl/time",
     "@nlohmann_json//:json",
     "@litert//support/tokenizer",
-    "//runtime/components:prompt_template",
-    "//runtime/components/logits_processor:no_repeat_ngram_config",
-    "//runtime/components/logits_processor:repetition_penalty_config",
-    "//runtime/components/logits_processor:suppress_tokens_config",
-    "//runtime/components/logits_processor/constrained_decoding:llg_constraint_config",
     "//runtime/conversation",
     "//runtime/conversation:io_types",
-    "//runtime/conversation:thinking_config",
     "//runtime/conversation/model_data_processor:config_registry",
     "//runtime/conversation/model_data_processor:gemma4_data_processor_config",
     "//runtime/engine:engine_factory",
@@ -71,32 +63,13 @@ ENGINE_COMMON_DEPS = [
 ]
 
 cc_library(
-    name = "engine_headers",
-    hdrs = ["engine.h"],
-    visibility = ["//visibility:public"],
-)
-
-cc_library(
-    name = "engine_internal",
-    hdrs = ["engine_internal.h"],
-    visibility = ["//visibility:public"],
-    deps = [
-        ":engine_headers",
-        "//runtime/components/logits_processor:no_repeat_ngram_config",
-        "//runtime/components/logits_processor:repetition_penalty_config",
-        "//runtime/conversation",
-        "//runtime/conversation:thinking_config",
-        "//runtime/engine:engine_interface",
-        "//runtime/engine:engine_settings",
-        "//runtime/engine:io_types",
-        "//runtime/proto:token_cc_proto",
-    ],
-)
-
-cc_library(
     name = "engine",
-    srcs = ["engine.cc"],
-    hdrs = ["engine.h"],
+    srcs = [
+        "engine.cc",
+    ],
+    hdrs = [
+        "engine.h",
+    ],
     visibility = ["//visibility:public"],
     deps = ENGINE_COMMON_DEPS + [
         "//runtime/core:engine_impl",
@@ -106,8 +79,12 @@ cc_library(
 
 cc_library(
     name = "engine_cpu",
-    srcs = ["engine.cc"],
-    hdrs = ["engine.h"],
+    srcs = [
+        "engine.cc",
+    ],
+    hdrs = [
+        "engine.h",
+    ],
     visibility = ["//visibility:public"],
     deps = ENGINE_COMMON_DEPS + [
         "//runtime/core:engine_advanced_impl_cpu_only",
@@ -130,14 +107,13 @@ cc_test(
     }),
     deps = [
         ":engine",
-        ":engine_internal",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_matchers",
         "@com_google_absl//absl/synchronization",
+        "@nlohmann_json//:json",
         "//runtime/conversation",
         "//runtime/conversation:io_types",
-        "//runtime/conversation:thinking_config",
         "//runtime/engine:engine_settings",
         "//runtime/executor:executor_settings_base",
         "//runtime/executor:llm_executor_settings",
@@ -148,6 +124,7 @@ cc_binary(
     name = "litert-lm",
     srcs = [
         "engine.cc",
+        "engine.h",
     ],
     copts = ["-fvisibility=hidden"],
     features = ["-legacy_whole_archive"],
@@ -170,7 +147,6 @@ cc_binary(
     }),
     linkshared = 1,
     deps = ENGINE_COMMON_DEPS + [
-        ":engine_headers",
         "//runtime/core:engine_impl",
     ] + select({
         "//conditions:default": [],

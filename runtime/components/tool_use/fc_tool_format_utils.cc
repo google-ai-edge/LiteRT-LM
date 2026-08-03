@@ -18,7 +18,6 @@
 #include <string>
 
 #include "absl/status/status.h"  // from @com_google_absl
-#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/ascii.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
@@ -39,8 +38,7 @@ absl::StatusOr<std::string> FormatObjectAsFc(
   ss << "{";
   int count = 0;
   for (const auto& [key, value] : object.items()) {
-    ABSL_ASSIGN_OR_RETURN(std::string value_str,
-                          FormatValueAsFc(value, escape_tag));
+    ASSIGN_OR_RETURN(std::string value_str, FormatValueAsFc(value, escape_tag));
     ss << key << ":" << value_str;
     count += 1;
     if (count < object.size()) {
@@ -61,8 +59,8 @@ absl::StatusOr<std::string> FormatArrayAsFc(const nlohmann::ordered_json& array,
   ss << "[";
   int count = 0;
   for (const auto& element : array) {
-    ABSL_ASSIGN_OR_RETURN(std::string element_str,
-                          FormatValueAsFc(element, escape_tag));
+    ASSIGN_OR_RETURN(std::string element_str,
+                     FormatValueAsFc(element, escape_tag));
     ss << element_str;
     count += 1;
     if (count < array.size()) {
@@ -116,12 +114,11 @@ absl::StatusOr<std::string> FormatValueAsFc(const nlohmann::ordered_json& value,
   } else if (value.is_boolean()) {
     ss << value.dump();
   } else if (value.is_object()) {
-    ABSL_ASSIGN_OR_RETURN(std::string object_str,
-                          FormatObjectAsFc(value, escape_tag));
+    ASSIGN_OR_RETURN(std::string object_str,
+                     FormatObjectAsFc(value, escape_tag));
     ss << object_str;
   } else if (value.is_array()) {
-    ABSL_ASSIGN_OR_RETURN(std::string array_str,
-                          FormatArrayAsFc(value, escape_tag));
+    ASSIGN_OR_RETURN(std::string array_str, FormatArrayAsFc(value, escape_tag));
     ss << array_str;
   } else {
     return absl::InvalidArgumentError(
@@ -151,8 +148,8 @@ absl::StatusOr<std::string> FormatToolAsFc(const nlohmann::ordered_json& tool,
   nlohmann::ordered_json fields = UppercaseTypes(function);
   fields.erase("name");
   std::stringstream ss;
-  ABSL_ASSIGN_OR_RETURN(std::string fields_str,
-                        FormatObjectAsFc(fields, escape_tag));
+  ASSIGN_OR_RETURN(std::string fields_str,
+                   FormatObjectAsFc(fields, escape_tag));
   ss << "declaration:" << function["name"].get<std::string>() << fields_str;
   return ss.str();
 }

@@ -29,7 +29,11 @@ cc_library(
     name = "litertlm_utils",
     srcs = ["litertlm_utils.cc"],
     hdrs = ["litertlm_utils.h"],
-    deps = [":litertlm_header_schema"],
+    deps = [
+        ":litertlm_header",
+        ":litertlm_header_schema",
+        "@flatbuffers",
+    ],
 )
 
 cc_library(
@@ -42,7 +46,6 @@ cc_library(
         ":litertlm_utils",
         "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:str_format",
@@ -85,6 +88,10 @@ cc_library(
     hdrs = ["litertlm_header.h"],
     deps = [
         ":litertlm_header_schema",
+        "@com_google_absl//absl/log:absl_log",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
         "@flatbuffers",
     ],
 )
@@ -93,10 +100,11 @@ cc_library(
     name = "litertlm_section",
     hdrs = ["litertlm_section.h"],
     deps = [
+        ":litertlm_header_schema",
         "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/strings",
+        "@flatbuffers",
         "//runtime/util:litert_status_util",
         "@zlib//:zlib",
     ],
@@ -112,6 +120,7 @@ cc_test(
         ":litertlm_section",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/strings",
         "//runtime/proto:llm_metadata_cc_proto",
         "//runtime/proto:token_cc_proto",
     ],
@@ -134,6 +143,7 @@ cc_test(
         ":litertlm_header_schema",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/log:absl_log",
+        "@com_google_absl//absl/status",
         "@flatbuffers",
     ],
 )
@@ -161,16 +171,9 @@ cc_test(
         ":litertlm_print",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
-    ],
-)
-
-cc_test(
-    name = "litertlm_utils_test",
-    srcs = ["litertlm_utils_test.cc"],
-    deps = [
-        ":litertlm_header_schema",
-        ":litertlm_utils",
-        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/strings",
+        "@flatbuffers",
+        "//runtime/proto:llm_metadata_cc_proto",
     ],
 )
 

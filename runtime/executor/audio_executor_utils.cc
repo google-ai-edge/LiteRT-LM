@@ -19,7 +19,6 @@
 #include <vector>
 
 #include "absl/status/status.h"  // from @com_google_absl
-#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
@@ -58,7 +57,7 @@ bool IsStreamingEncoder(const std::vector<absl::string_view>& input_names,
 absl::StatusOr<AudioExecutorProperties>
 GetAudioExecutorPropertiesFromModelResources(ModelResources& model_resources) {
   AudioExecutorProperties properties;
-  ABSL_ASSIGN_OR_RETURN(
+  ASSIGN_OR_RETURN(
       auto audio_encoder_model,
       model_resources.GetTFLiteModel(ModelType::kTfLiteAudioEncoderHw));
   LITERT_ASSIGN_OR_RETURN(auto input_names,

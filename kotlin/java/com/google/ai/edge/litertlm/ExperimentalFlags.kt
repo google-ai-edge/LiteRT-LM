@@ -81,7 +81,7 @@ object ExperimentalFlags {
    * Note: This flag is read only when a new [Conversation] is created. Changing this value will not
    * affect any existing [Conversation] instances.
    */
-  var filterChannelContentFromKvCache: Boolean? = null
+  var filterChannelContentFromKvCache: Boolean = false
 
   /**
    * A prompt template to overwrite the default one.

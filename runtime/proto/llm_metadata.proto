@@ -87,13 +87,4 @@ message LlmMetadata {
 
   // The channels defined for this model.
   repeated Channel channels = 8;
-
-  // The suppress tokens for the model.
-  TokenIds suppress_tokens = 9;
-
-  // The value to initialize the KV cache with, to respect underlying backend
-  // optimizations. Defaults to 0.
-  // Note: This field is curently only used by NPU backends for certain models,
-  // proceed with caution.
-  optional int64 kv_cache_init_value = 10;
 }

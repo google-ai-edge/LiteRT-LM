@@ -69,27 +69,11 @@ from litert_lm import interfaces
 mock_litert_lm.Engine = mock_engine.Engine
 mock_litert_lm.set_min_log_severity = mock_ffi.set_min_log_severity
 
-mock_model_mod = mock.Mock(
-    spec_set=["Model", "parse_backend", "resolve_config_option"]
-)
-mock_model_mod.Model = mock.Mock(
-    spec_set=[
-        "from_model_id",
-        "from_model_path",
-        "from_model_reference",
-        "get_all_models",
-    ]
-)
+mock_model_mod = mock.Mock(spec_set=["Model", "parse_backend"])
+mock_model_mod.Model = mock.Mock(spec_set=["from_model_id", "get_all_models"])
 mock_model_mod.Model.from_model_id = mock.Mock()
-mock_model_mod.Model.from_model_path = mock.Mock()
-mock_model_mod.Model.from_model_reference = mock.Mock(
-    side_effect=lambda ref: mock_model_mod.Model.from_model_id(ref)
-)
 mock_model_mod.Model.get_all_models = mock.Mock()
 mock_model_mod.parse_backend = mock.Mock()
-mock_model_mod.resolve_config_option = mock.Mock(
-    side_effect=lambda value, model_obj, config_key, label=None: value
-)
 sys.modules["litert_lm_cli.model"] = (
     mock_model_mod
 )
@@ -100,6 +84,7 @@ if "litert_lm_cli" in sys.modules:
 
 from litert_lm_cli.commands import gemini_handler
 from litert_lm_cli.commands import openai_handler
+from litert_lm_cli.commands import serve
 from litert_lm_cli.commands import serve_util
 
 
@@ -112,18 +97,10 @@ class ServeTest(parameterized.TestCase):
     mock_litert_lm.Engine.reset_mock()  # pytype: disable=attribute-error
     mock_model_mod.Model.from_model_id.reset_mock()
     mock_model_mod.Model.from_model_id.side_effect = None
-    mock_model_mod.Model.from_model_reference.reset_mock()
-    mock_model_mod.Model.from_model_reference.side_effect = (
-        lambda ref: mock_model_mod.Model.from_model_id(ref)
-    )
     mock_model_mod.Model.get_all_models.reset_mock()
     mock_model_mod.Model.get_all_models.side_effect = None
     mock_model_mod.parse_backend.reset_mock()
     mock_model_mod.parse_backend.return_value = interfaces.Backend.CPU()
-    mock_model_mod.resolve_config_option.reset_mock()
-    mock_model_mod.resolve_config_option.side_effect = (
-        lambda value, model_obj, config_key, label=None: value
-    )
 
   @parameterized.named_parameters(
       dict(
@@ -355,7 +332,6 @@ class ServeTest(parameterized.TestCase):
     server.model_id = None
     server.backend = None
     server.max_num_tokens = None
-    server.activation_data_type = None
 
     # Initialize with model A.
     engine1 = serve_util.get_or_initialize_server_engine(server, model_id="A")
@@ -368,6 +344,8 @@ class ServeTest(parameterized.TestCase):
     self.assertEqual(engine2, mock_engine_b)
     self.assertEqual(server.model_id, "B")
     mock_engine_a.__exit__.assert_called_once_with(None, None, None)
+
+
 
   @parameterized.named_parameters(
       dict(
@@ -623,213 +601,6 @@ class ServeTest(parameterized.TestCase):
     finally:
       server.shutdown()
       thread.join()
-
-  def test_parse_response_format_valid(self):
-    self.assertIsNone(openai_handler._parse_response_format({}))
-    self.assertIsNone(
-        openai_handler._parse_response_format({"response_format": None})
-    )
-    self.assertIsNone(
-        openai_handler._parse_response_format(
-            {"response_format": {"type": "text"}}
-        )
-    )
-
-    rf_json = openai_handler._parse_response_format(
-        {"response_format": {"type": "json_object"}}
-    )
-    self.assertIsNotNone(rf_json)
-    self.assertEqual(rf_json.type, interfaces.ResponseFormat.Type.JSON_OBJECT)
-    self.assertEqual(rf_json.schema_or_pattern, "{}")
-
-    schema_dict = {"type": "object", "properties": {"a": {"type": "string"}}}
-    rf_json_schema = openai_handler._parse_response_format({
-        "response_format": {
-            "type": "json_schema",
-            "json_schema": {"schema": schema_dict},
-        }
-    })
-    self.assertIsNotNone(rf_json_schema)
-    self.assertEqual(
-        rf_json_schema.type, interfaces.ResponseFormat.Type.JSON_OBJECT
-    )
-
-    rf_regex = openai_handler._parse_response_format(
-        {"response_format": {"type": "regex", "pattern": "[0-9]{3}"}}
-    )
-    self.assertIsNotNone(rf_regex)
-    self.assertEqual(rf_regex.type, interfaces.ResponseFormat.Type.REGEX)
-    self.assertEqual(rf_regex.schema_or_pattern, "[0-9]{3}")
-
-  @parameterized.named_parameters(
-      dict(
-          testcase_name="not_a_dict",
-          body={"response_format": "invalid"},
-          err_msg="response_format must be a dict",
-      ),
-      dict(
-          testcase_name="unsupported_type",
-          body={"response_format": {"type": "unsupported"}},
-          err_msg="Unsupported response_format type",
-      ),
-      dict(
-          testcase_name="missing_json_schema",
-          body={"response_format": {"type": "json_schema"}},
-          err_msg="json_schema response_format requires a dict or str schema",
-      ),
-      dict(
-          testcase_name="missing_regex_pattern",
-          body={"response_format": {"type": "regex"}},
-          err_msg="regex response_format requires a string pattern/regex",
-      ),
-  )
-  def test_parse_response_format_invalid(self, body, err_msg):
-    with self.assertRaisesRegex(ValueError, err_msg):
-      openai_handler._parse_response_format(body)
-
-  @parameterized.named_parameters(
-      dict(
-          testcase_name="model_only",
-          input_str="gemma3-1b",
-          expected=("gemma3-1b", None, None),
-      ),
-      dict(
-          testcase_name="model_and_backend",
-          input_str="gemma3-1b,gpu",
-          expected=("gemma3-1b", "gpu", None),
-      ),
-      dict(
-          testcase_name="model_backend_and_tokens",
-          input_str="gemma3-1b,gpu,32768",
-          expected=("gemma3-1b", "gpu", 32768),
-      ),
-      dict(
-          testcase_name="model_and_tokens_default_backend",
-          input_str="gemma3-1b,,32768",
-          expected=("gemma3-1b", None, 32768),
-      ),
-      dict(
-          testcase_name="trailing_comma",
-          input_str="gemma3-1b,gpu,",
-          expected=("gemma3-1b", "gpu", None),
-      ),
-      dict(
-          testcase_name="whitespace_stripping",
-          input_str="gemma-2-2b-it, CPU , 2048 ",
-          expected=("gemma-2-2b-it", "CPU", 2048),
-      ),
-  )
-  def test_parse_model_parameter_valid(self, input_str, expected):
-    self.assertEqual(openai_handler._parse_model_parameter(input_str), expected)
-
-  @parameterized.named_parameters(
-      dict(
-          testcase_name="empty_model_id",
-          input_str="",
-          err_msg="model_id cannot be empty",
-      ),
-      dict(
-          testcase_name="not_a_string",
-          input_str=123,
-          err_msg="model parameter must be a string",
-      ),
-      dict(
-          testcase_name="invalid_max_tokens",
-          input_str="gemma3-1b,gpu,notanint",
-          err_msg="Invalid max_num_tokens",
-      ),
-      dict(
-          testcase_name="non_positive_max_tokens",
-          input_str="gemma3-1b,gpu,0",
-          err_msg="max_num_tokens must be a positive integer",
-      ),
-      dict(
-          testcase_name="negative_max_tokens",
-          input_str="gemma3-1b,gpu,-100",
-          err_msg="max_num_tokens must be a positive integer",
-      ),
-      dict(
-          testcase_name="too_many_parts",
-          input_str="gemma3-1b,gpu,32768,extra",
-          err_msg="Too many comma-separated components",
-      ),
-  )
-  def test_parse_model_parameter_invalid(self, input_str, err_msg):
-    with self.assertRaisesRegex(ValueError, err_msg):
-      openai_handler._parse_model_parameter(input_str)
-
-  def test_get_engine_backend_and_max_tokens_override(self):
-    mock_m = mock.Mock(spec_set=["exists", "model_path", "model_id"])
-    mock_m.exists.return_value = True
-    mock_m.model_path = "/path/to/gemma3-1b"
-    mock_m.model_id = "gemma3-1b"
-
-    mock_model_mod.Model.from_model_id.return_value = mock_m
-
-    mock_engine_instance = mock.MagicMock(spec=interfaces.AbstractEngine)
-    mock_engine_instance.__enter__.return_value = mock_engine_instance
-    mock_litert_lm.Engine.return_value = mock_engine_instance
-
-    server = mock.MagicMock(spec=serve_util.LiteRTLMServer)
-    server.litert_lm_engine = None
-    server.model_id = None
-    server.backend = None
-    server.max_num_tokens = None
-    server.vision_backend = None
-    server.audio_backend = None
-    server.activation_data_type = None
-
-    engine = serve_util.get_or_initialize_server_engine(
-        server, model_id="gemma3-1b", backend="gpu", max_num_tokens=32768
-    )
-    self.assertEqual(engine, mock_engine_instance)
-    mock_litert_lm.Engine.assert_called_once()  # pytype: disable=attribute-error
-    _, kwargs = mock_litert_lm.Engine.call_args  # pytype: disable=attribute-error
-    self.assertEqual(kwargs.get("max_num_tokens"), 32768)
-    self.assertTrue(kwargs.get("use_ringbuffers_local_attention"))
-    self.assertEqual(server.max_num_tokens, 32768)
-
-  def test_get_engine_activation_data_type_from_config(self):
-    mock_m = mock.Mock(spec_set=["exists", "model_path", "model_id"])
-    mock_m.exists.return_value = True
-    mock_m.model_path = "/path/to/gemma3-1b"
-    mock_m.model_id = "gemma3-1b"
-
-    mock_model_mod.Model.from_model_id.return_value = mock_m
-    mock_model_mod.resolve_config_option.side_effect = (
-        lambda value, model_obj, config_key, label=None: (
-            "fp16" if config_key == "activation_data_type" else value
-        )
-    )
-    mock_litert_lm.ActivationDataType.from_str.side_effect = (
-        lambda s: mock_litert_lm.ActivationDataType.FLOAT16
-        if s == "fp16"
-        else None
-    )
-
-    mock_engine_instance = mock.MagicMock(spec=interfaces.AbstractEngine)
-    mock_engine_instance.__enter__.return_value = mock_engine_instance
-    mock_litert_lm.Engine.return_value = mock_engine_instance
-
-    server = mock.MagicMock(spec=serve_util.LiteRTLMServer)
-    server.litert_lm_engine = None
-    server.model_id = None
-    server.backend = None
-    server.max_num_tokens = None
-    server.vision_backend = None
-    server.audio_backend = None
-    server.activation_data_type = None
-
-    engine = serve_util.get_or_initialize_server_engine(
-        server, model_id="gemma3-1b"
-    )
-    self.assertEqual(engine, mock_engine_instance)
-    mock_litert_lm.Engine.assert_called_once()  # pytype: disable=attribute-error
-    _, kwargs = mock_litert_lm.Engine.call_args  # pytype: disable=attribute-error
-    self.assertEqual(
-        kwargs.get("activation_data_type"),
-        mock_litert_lm.ActivationDataType.FLOAT16,
-    )
 
 
 if __name__ == "__main__":

@@ -34,8 +34,7 @@ pytype_strict_library(
     deps = [
         "//python/litert_lm",
         "//python/litert_lm_builder:litertlm_builder",
-        "//python/litert_lm_cli:common",
-        "//python/litert_lm_cli:config",
+        "//python/litert_lm_builder:litertlm_peek",
         "//python/litert_lm_cli:help_formatter",
         "//python/litert_lm_cli:model",
         requirement("click"),
@@ -103,29 +102,6 @@ pytype_strict_library(
 )
 
 pytype_strict_library(
-    name = "pack",
-    srcs = ["pack.py"],
-    imports = [".."],
-    deps = [
-        "//python/litert_lm_builder:litertlm_builder",
-        "//python/litert_lm_cli:help_formatter",
-        requirement("click"),
-    ],
-)
-
-pytype_strict_library(
-    name = "unpack",
-    srcs = ["unpack.py"],
-    imports = [".."],
-    deps = [
-        "//python/litert_lm_builder:litertlm_builder",
-        "//python/litert_lm_cli:help_formatter",
-        "//python/litert_lm_cli:model",
-        requirement("click"),
-    ],
-)
-
-pytype_strict_library(
     name = "benchmark",
     srcs = ["benchmark.py"],
     imports = [".."],
@@ -173,8 +149,6 @@ py_test(
     ],
     deps = [
         ":serve",
-        "//python/litert_lm",
-        "//python/litert_lm_cli:config",
         "//python/litert_lm_cli:model",
         "@absl_py//absl/testing:absltest",
     ],

@@ -23,7 +23,6 @@
 #include <vector>
 
 #include "absl/status/status.h"  // from @com_google_absl
-#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
@@ -59,8 +58,8 @@ absl::StatusOr<std::vector<InputData>> ProcessMultimodalPrompt(
         if (!item.contains("type")) {
           continue;
         }
-        ABSL_ASSIGN_OR_RETURN(std::unique_ptr<MemoryMappedFile> mmap_file,
-                              LoadItemData(item));
+        ASSIGN_OR_RETURN(std::unique_ptr<MemoryMappedFile> mmap_file,
+                         LoadItemData(item));
         if (item["type"] == "image") {
           image_files.push_back(std::move(mmap_file));
         } else if (item["type"] == "audio") {
@@ -134,12 +133,12 @@ absl::StatusOr<std::vector<InputData>> ProcessMultimodalPrompt(
       auto image_file = std::move(image_files.front());
       image_files.pop_front();
 
-      ABSL_ASSIGN_OR_RETURN(auto preprocessed_image,
-                            image_preprocessor->Preprocess(
-                                InputImage(std::string(static_cast<const char*>(
-                                                           image_file->data()),
-                                                       image_file->length())),
-                                img_params));
+      ASSIGN_OR_RETURN(auto preprocessed_image,
+                       image_preprocessor->Preprocess(
+                           InputImage(std::string(
+                               static_cast<const char*>(image_file->data()),
+                               image_file->length())),
+                           img_params));
       input_data.emplace_back(InputImage(std::move(preprocessed_image)));
 
       if (config.add_image_end) {
@@ -167,11 +166,10 @@ absl::StatusOr<std::vector<InputData>> ProcessMultimodalPrompt(
       auto audio_file = std::move(audio_files.front());
       audio_files.pop_front();
 
-      ABSL_ASSIGN_OR_RETURN(
-          auto preprocessed_audio,
-          audio_preprocessor->Preprocess(InputAudio(
-              std::string(static_cast<const char*>(audio_file->data()),
-                          audio_file->length()))));
+      ASSIGN_OR_RETURN(auto preprocessed_audio,
+                       audio_preprocessor->Preprocess(InputAudio(std::string(
+                           static_cast<const char*>(audio_file->data()),
+                           audio_file->length()))));
       audio_preprocessor->Reset();
 
       input_data.emplace_back(InputAudio(std::move(preprocessed_audio)));

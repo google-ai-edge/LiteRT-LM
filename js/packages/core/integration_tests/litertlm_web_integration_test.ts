@@ -88,7 +88,6 @@ describe('LiteRtLm tests', () => {
       enable_decode_logits: true,
       enable_external_embeddings: false,
       use_submodel: true,
-      use_autosized_ringbuffers: false,
     };
 
     const engine = await Engine.create({
@@ -145,7 +144,6 @@ describe('LiteRtLm tests', () => {
             enable_decode_logits: true,
             enable_external_embeddings: false,
             use_submodel: true,
-            use_autosized_ringbuffers: false,
           };
           engine = await Engine.create({
             model: modelPath,
@@ -268,75 +266,6 @@ describe('LiteRtLm tests', () => {
           await expectAsync(session.runPrefill(['test input 2']))
               .toBeRejectedWithError(/Session is busy/);
           await expectAsync(p1).toBeResolved();
-        });
-
-        it('clones session and allows continuing both independently', async () => {
-          await session.runPrefill(['test input']);
-          const clonedSession = await session.clone();
-          try {
-            expect(clonedSession).toBeDefined();
-
-            // Continue with original
-            const responses1 = await session.runDecode();
-            expect(responses1.getTexts()[0]).toBeDefined();
-            responses1.delete();
-
-            // Continue with clone from the point of cloning
-            const responses2 = await clonedSession.runDecode();
-            expect(responses2.getTexts()[0]).toBeDefined();
-            responses2.delete();
-          } finally {
-            await clonedSession.delete();
-          }
-        });
-
-        it('clones session after decode and continues prefill independently', async () => {
-          await session.runPrefill(['test input']);
-          const responses = await session.runDecode();
-          responses.delete();
-
-          const clonedSession = await session.clone();
-          try {
-            expect(clonedSession).toBeDefined();
-
-            // Continue with clone
-            await clonedSession.runPrefill(['follow up on clone']);
-            const clonedResponses = await clonedSession.runDecode();
-            expect(clonedResponses.getTexts()[0]).toBeDefined();
-            clonedResponses.delete();
-
-            // Continue with original
-            await session.runPrefill(['follow up on original']);
-            const origResponses = await session.runDecode();
-            expect(origResponses.getTexts()[0]).toBeDefined();
-            origResponses.delete();
-          } finally {
-            await clonedSession.delete();
-          }
-        });
-
-        it('clones session and outputs identical responses for the same prompt under greedy sampling', async () => {
-          await session.runPrefill(['test input']);
-          const clonedSession = await session.clone();
-          try {
-            expect(clonedSession).toBeDefined();
-
-            await session.runPrefill(['Tell me a joke.']);
-            const origResponses = await session.runDecode();
-            const origText = origResponses.getTexts()[0];
-            origResponses.delete();
-
-            await clonedSession.runPrefill(['Tell me a joke.']);
-            const cloneResponses = await clonedSession.runDecode();
-            const cloneText = cloneResponses.getTexts()[0];
-            cloneResponses.delete();
-
-            expect(origText).toBeDefined();
-            expect(cloneText).toBeDefined();
-            expect(cloneText).toEqual(origText);
-          } finally {
-            await clonedSession.delete();
-          }
         });
       });
 
@@ -502,57 +431,6 @@ describe('LiteRtLm tests', () => {
           await expectAsync(conversation.sendMessage(message2))
               .toBeRejectedWithError(/Conversation is busy/);
           await expectAsync(p1).toBeResolved();
-        });
-
-        it('clones conversation and allows continuing both independently', async () => {
-          await conversation.sendMessage('Hello');
-          const clonedConversation = await conversation.clone();
-          try {
-            expect(clonedConversation).toBeDefined();
-
-            const origHistoryBefore = await conversation.getHistory();
-            const cloneHistoryBefore = await clonedConversation.getHistory();
-            expect(cloneHistoryBefore.length).toBe(origHistoryBefore.length);
-
-            // Continue with original
-            const resp1 = await conversation.sendMessage('How are you?');
-            expect(resp1).toBeDefined();
-            const origHistoryAfter = await conversation.getHistory();
-
-            // Continue with clone from the same point at which it was cloned
-            const resp2 = await clonedConversation.sendMessage('What is 2+2?');
-            expect(resp2).toBeDefined();
-            const cloneHistoryAfter = await clonedConversation.getHistory();
-
-            expect(cloneHistoryAfter.length).toBe(origHistoryAfter.length);
-            expect(cloneHistoryAfter[cloneHistoryAfter.length - 2].content).toBe('What is 2+2?');
-            expect(origHistoryAfter[origHistoryAfter.length - 2].content).toBe('How are you?');
-          } finally {
-            await clonedConversation.delete();
-          }
-        });
-
-        it('clones conversation and outputs identical responses for the same prompt under greedy sampling', async () => {
-          await conversation.sendMessage('Hello');
-          const clonedConversation = await conversation.clone();
-          try {
-            expect(clonedConversation).toBeDefined();
-
-            const prompt = 'What is the capital of France?';
-            const origResp = await conversation.sendMessage(prompt);
-            const cloneResp = await clonedConversation.sendMessage(prompt);
-
-            expect(origResp).toBeDefined();
-            expect(cloneResp).toBeDefined();
-            expect(cloneResp).toEqual(origResp);
-
-            const origHistory = await conversation.getHistory();
-            const cloneHistory = await clonedConversation.getHistory();
-            expect(cloneHistory.length).toBe(origHistory.length);
-            expect(cloneHistory).toEqual(origHistory);
-          } finally {
-            await clonedConversation.delete();
-          }
         });
       });
 
@@ -755,19 +633,6 @@ describe('LiteRtLm tests', () => {
             it('outputs a reasonable response', async () => {
               pending(
                   'We need a larger, more predictable model if we want to test output values.');
-            });
-
-            it('clones session', async () => {
-              await session.runPrefill(['Hello World']);
-              const clonedSession = await session.clone();
-              try {
-                expect(clonedSession).toBeDefined();
-                const responses = await clonedSession.runDecode();
-                expect(responses.getTexts().size()).toBe(1);
-                responses.delete();
-              } finally {
-                clonedSession.delete();
-              }
             });
           });
         });

@@ -43,19 +43,9 @@ absl::StatusOr<OwnedEnvironment> CreateEnvironment(
 
   std::vector<EnvironmentOptions::Option> env_options;
   auto helper = std::make_unique<MagicNumberConfigsHelper>();
-  std::string library_dir;
-
-  bool uses_generic_npu_compiler_plugin = false;
-  if (model_resources != nullptr && backend == Backend::NPU) {
-    auto aux_model_buffer =
-        model_resources->GetTFLiteModelBuffer(ModelType::kTfLiteAux);
-    uses_generic_npu_compiler_plugin =
-        !aux_model_buffer.ok() || aux_model_buffer->empty();
-  }
 
   if (model_resources != nullptr &&
-      (backend == Backend::CPU || backend == Backend::GPU ||
-       uses_generic_npu_compiler_plugin)) {
+      (backend == Backend::CPU || backend == Backend::GPU)) {
     if (!main_executor_settings.GetAdvancedSettings() ||
         main_executor_settings.GetAdvancedSettings()->configure_magic_numbers) {
       env_options =
@@ -63,7 +53,6 @@ absl::StatusOr<OwnedEnvironment> CreateEnvironment(
     }
   }
 
-#if !defined(LITERT_DISABLE_NPU)
   bool uses_npu = (backend == Backend::NPU ||
                    (engine_settings.GetVisionExecutorSettings().has_value() &&
                     engine_settings.GetVisionExecutorSettings()->GetBackend() ==
@@ -71,57 +60,43 @@ absl::StatusOr<OwnedEnvironment> CreateEnvironment(
                    (engine_settings.GetAudioExecutorSettings().has_value() &&
                     engine_settings.GetAudioExecutorSettings()->GetBackend() ==
                         Backend::NPU));
+
   if (uses_npu) {
-    bool from_settings = false;
+#if !defined(LITERT_DISABLE_NPU)
     if (!main_executor_settings.GetLitertDispatchLibDir().empty()) {
-      library_dir = main_executor_settings.GetLitertDispatchLibDir();
-      from_settings = true;
+      // If the dispatch library directory is provided, use it.
+      env_options.push_back(::litert::EnvironmentOptions::Option{
+          ::litert::EnvironmentOptions::Tag::kDispatchLibraryDir,
+          main_executor_settings.GetLitertDispatchLibDir()});
+      ABSL_LOG(INFO) << "Setting dispatch library path from "
+                        "main_executor_settings: "
+                     << main_executor_settings.GetLitertDispatchLibDir();
     } else {
+      // Otherwise, use the directory of the model file.
       std::string model_path(
           main_executor_settings.GetModelAssets().GetPath().value_or(""));
       std::filesystem::path path(model_path);
-      library_dir = path.parent_path().string();
-    }
-
-    bool should_set_path = false;
-    if (from_settings) {
-      should_set_path = true;
-    } else {
+      std::string dispatch_library_path = path.parent_path().string();
+      // In WASM, the parent path is often just "/" which is usually not
+      // what we want for dispatch libraries.
 #ifdef __EMSCRIPTEN__
-      should_set_path = !library_dir.empty() && library_dir != "/";
+      bool should_set_path =
+          !dispatch_library_path.empty() && dispatch_library_path != "/";
 #else
-      should_set_path = !library_dir.empty();
+      bool should_set_path = !dispatch_library_path.empty();
 #endif
-    }
-
-    if (should_set_path) {
-      // TODO(b/540445921): move the 'library_dir' to its own space.
-      env_options.push_back(::litert::EnvironmentOptions::Option{
-          ::litert::EnvironmentOptions::Tag::kDispatchLibraryDir,
-          library_dir.c_str()});
-      if (from_settings) {
-        ABSL_VLOG(1) << "Setting dispatch library path from "
-                        "main_executor_settings: "
-                     << library_dir;
+      if (should_set_path) {
+        ABSL_LOG(INFO) << "Setting dispatch library path: "
+                       << dispatch_library_path;
+        env_options.push_back(::litert::EnvironmentOptions::Option{
+            ::litert::EnvironmentOptions::Tag::kDispatchLibraryDir,
+            absl::string_view(dispatch_library_path)});
       } else {
-        ABSL_VLOG(1) << "Setting dispatch library path: " << library_dir;
+        ABSL_LOG(INFO) << "No dispatch library path provided.";
       }
-
-      env_options.push_back(::litert::EnvironmentOptions::Option{
-          ::litert::EnvironmentOptions::Tag::kCompilerPluginLibraryDir,
-          library_dir.c_str()});
-      if (from_settings) {
-        ABSL_VLOG(1) << "Setting compiler plugin library path from "
-                        "main_executor_settings: "
-                     << library_dir;
-      } else {
-        ABSL_VLOG(1) << "Setting compiler plugin library path: " << library_dir;
-      }
-    } else {
-      ABSL_VLOG(1) << "No valid library path provided.";
     }
+#endif  // defined(LITERT_DISABLE_NPU)
   }
-#endif
 
   if (auto severity = GetMinLogSeverity()) {
     env_options.push_back(::litert::EnvironmentOptions::Option{

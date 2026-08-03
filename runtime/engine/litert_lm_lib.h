@@ -21,7 +21,6 @@
 #include <memory>
 #include <optional>
 #include <set>
-#include <sstream>
 #include <string>
 #include <vector>
 
@@ -30,11 +29,9 @@
 #include "absl/log/log_sink.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
-#include "runtime/components/logits_processor/no_repeat_ngram_config.h"
-#include "runtime/components/logits_processor/repetition_penalty_config.h"
-#include "runtime/components/logits_processor/suppress_tokens_config.h"
 #include "runtime/engine/engine.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
@@ -88,7 +85,6 @@ struct LiteRtLmSettings {
   std::set<int> prefill_batch_sizes;
   int num_output_candidates = 1;
   bool benchmark = false;
-  bool enable_profiling = false;
   int benchmark_prefill_tokens = 0;
   int benchmark_decode_tokens = 0;
   bool async = true;
@@ -96,8 +92,6 @@ struct LiteRtLmSettings {
   bool force_f32 = false;
   bool multi_turns = false;
   int num_cpu_threads = 0;
-  // Delegate supported CPU operations to YNNPACK before XNNPACK.
-  bool enable_ynnpack = false;
   // Set external tensor mode false by default since it runs slightly faster
   // during decode as the layout changes optimized for GPU inference is done by
   // GPU, not by CPU.
@@ -108,7 +102,6 @@ struct LiteRtLmSettings {
   int num_logits_to_print_after_decode = 0;
   std::optional<std::string> score_target_text = std::nullopt;
   bool gpu_madvise_original_shared_tensors = true;
-  bool gpu_enable_metal_residency_set = false;
   bool disable_cache = false;
   bool disable_weight_cache = false;
   bool disable_gpu_program_cache = false;
@@ -129,10 +122,6 @@ struct LiteRtLmSettings {
   bool sampler_handles_input = true;
   ConvType conv_type = ConvType::kAuto;
   bool cache_compiled_shaders_only = false;
-  RepetitionPenaltyConfig repetition_penalty_config =
-      RepetitionPenaltyConfig::Default();
-  NoRepeatNgramConfig no_repeat_ngram_config = NoRepeatNgramConfig::Default();
-  SuppressTokensConfig suppress_tokens_config = SuppressTokensConfig::Default();
   std::string constraint_regex = "";
   bool use_submodel = false;
   bool enable_speculative_decoding = false;
@@ -141,7 +130,6 @@ struct LiteRtLmSettings {
   bool use_hw_cache_update_for_npu = true;
   bool use_hw_ple_for_npu = true;
   bool enable_npu_debug_logging = false;
-  bool disable_input_prompt_as_hint = false;
 };
 
 struct LitertLmMetrics {

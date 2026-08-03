@@ -85,7 +85,6 @@ cc_library(
     deps = [
         ":constraint",
         "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/types:span",
         "@litert//litert/cc:litert_element_type",
         "@litert//litert/cc:litert_layout",
@@ -263,7 +262,6 @@ cc_test(
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
@@ -296,7 +294,6 @@ cc_test(
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
@@ -319,7 +316,6 @@ cc_test(
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
@@ -409,31 +405,6 @@ cc_test(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings:string_view",
         "@litert//support/tokenizer",
-        "//runtime/util:test_utils",
-    ],
-)
-
-cc_library(
-    name = "thinking_budget_constraint",
-    srcs = ["thinking_budget_constraint.cc"],
-    hdrs = ["thinking_budget_constraint.h"],
-    visibility = ["//visibility:public"],
-    deps = [
-        ":bitmap",
-        ":constraint",
-        "@com_google_absl//absl/status:statusor",
-        "//runtime/util:litert_status_util",
-    ],
-)
-
-cc_test(
-    name = "thinking_budget_constraint_test",
-    srcs = ["thinking_budget_constraint_test.cc"],
-    deps = [
-        ":bitmap",
-        ":fake_constraint",
-        ":thinking_budget_constraint",
-        "@com_google_googletest//:gtest_main",
         "//runtime/util:test_utils",
     ],
 )

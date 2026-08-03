@@ -24,7 +24,6 @@
 #include <gtest/gtest.h>
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
-#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/escaping.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
@@ -183,18 +182,18 @@ class LlgPythonToolCallsTest : public testing::Test {
 
   absl::StatusOr<bool> AcceptsInternal(Constraint& constraint,
                                        absl::string_view text) {
-    ABSL_ASSIGN_OR_RETURN(TokenIds ids, tokenizer_.TextToTokenIds(text));
+    ASSIGN_OR_RETURN(TokenIds ids, tokenizer_.TextToTokenIds(text));
     auto state = constraint.Start();
     for (int i = 0; i < ids.size(); ++i) {
       int id = ids[i];
-      ABSL_ASSIGN_OR_RETURN(auto bitmap, constraint.ComputeBitmap(*state));
+      ASSIGN_OR_RETURN(auto bitmap, constraint.ComputeBitmap(*state));
 
       if (!bitmap->Get(id)) {
         return false;
       }
-      ABSL_ASSIGN_OR_RETURN(state, constraint.ComputeNext(*state, id));
+      ASSIGN_OR_RETURN(state, constraint.ComputeNext(*state, id));
     }
-    ABSL_ASSIGN_OR_RETURN(auto final_bitmap, constraint.ComputeBitmap(*state));
+    ASSIGN_OR_RETURN(auto final_bitmap, constraint.ComputeBitmap(*state));
     return final_bitmap->Get(*config_.eos_id);
   }
 

@@ -108,7 +108,7 @@ class FunctionGemmaDataProcessor
       const TypeSafeModelDataProcessor<FunctionGemmaDataProcessorConfig,
                                        FunctionGemmaDataProcessorArguments>&
           other) override {
-    ABSL_VLOG(1) << "FunctionGemmaDataProcessor::CloneStateImpl is a no-op.";
+    ABSL_LOG(INFO) << "FunctionGemmaDataProcessor::CloneStateImpl is a no-op.";
     return absl::OkStatus();
   }
 

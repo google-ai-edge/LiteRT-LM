@@ -21,7 +21,6 @@
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/memory/memory.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
-#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_compiled_model.h"  // from @litert
@@ -49,9 +48,8 @@ absl::Status LoraManager::LoadLoRA(uint32_t lora_id,
   if (lora_data_.contains(lora_id)) {
     return absl::AlreadyExistsError("LoRA ID already exists");
   }
-  ABSL_ASSIGN_OR_RETURN(auto scoped_file, model_assets.GetOrCreateScopedFile());
-  ABSL_ASSIGN_OR_RETURN(auto lora_data,
-                        LoraData::CreateFromScopedFile(scoped_file));
+  ASSIGN_OR_RETURN(auto scoped_file, model_assets.GetOrCreateScopedFile());
+  ASSIGN_OR_RETURN(auto lora_data, LoraData::CreateFromScopedFile(scoped_file));
   lora_data_[lora_id] = std::move(lora_data);
   return absl::OkStatus();
 }
@@ -61,9 +59,8 @@ absl::Status LoraManager::UseLoRA(uint32_t lora_id) {
     return absl::NotFoundError("LoRA ID not found");
   }
   if (!loras_.contains(lora_id)) {
-    ABSL_ASSIGN_OR_RETURN(
-        auto lora, LoRA::Create(std::move(lora_data_[lora_id]), compiled_model_,
-                                signature_name_));
+    ASSIGN_OR_RETURN(auto lora, LoRA::Create(std::move(lora_data_[lora_id]),
+                                             compiled_model_, signature_name_));
     loras_[lora_id] = std::move(lora);
     lora_data_.erase(lora_id);
   }
