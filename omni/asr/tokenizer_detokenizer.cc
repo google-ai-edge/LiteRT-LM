@@ -68,7 +68,9 @@ absl::StatusOr<std::vector<Detokenizer::Word>> TokenizerDetokenizer::Detokenize(
     token_ids.push_back(tok.token_id);
   }
 
-  ABSL_ASSIGN_OR_RETURN(auto text, tokenizer_->TokenIdsToText(token_ids));
+  ABSL_ASSIGN_OR_RETURN(
+      auto text, tokenizer_->TokenIdsToText(token_ids,
+                                            /*skip_special_tokens=*/true));
   std::vector<absl::string_view> raw_words =
       absl::StrSplit(text, ' ', absl::SkipEmpty());
 
