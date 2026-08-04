@@ -228,14 +228,16 @@ absl::Status LitertState::SelectAndCopyFrom(StateInterface& other,
   for (auto& [input_name, key_cache_buffer] : bank_1_key_cache_buffers_) {
     RET_CHECK(other_litert->bank_1_key_cache_buffers_.contains(input_name));
     ABSL_RETURN_IF_ERROR(SelectAndCopyBuffer(
-        key_cache_buffer, other_litert->bank_1_key_cache_buffers_[input_name],
+        key_cache_buffer.buffer,
+        other_litert->bank_1_key_cache_buffers_[input_name].buffer,
         batch_index));
   }
   for (auto& [input_name, value_cache_buffer] : bank_1_value_cache_buffers_) {
     RET_CHECK(other_litert->bank_1_value_cache_buffers_.contains(input_name));
     ABSL_RETURN_IF_ERROR(SelectAndCopyBuffer(
-        value_cache_buffer,
-        other_litert->bank_1_value_cache_buffers_[input_name], batch_index));
+        value_cache_buffer.buffer,
+        other_litert->bank_1_value_cache_buffers_[input_name].buffer,
+        batch_index));
   }
   return absl::OkStatus();
 }
@@ -256,48 +258,66 @@ absl::Status LitertState::BroadcastAndCopyFrom(StateInterface& other) {
   for (auto& [input_name, key_cache_buffer] : bank_1_key_cache_buffers_) {
     RET_CHECK(other_litert->bank_1_key_cache_buffers_.contains(input_name));
     ABSL_RETURN_IF_ERROR(BroadcastAndCopyBuffer(
-        key_cache_buffer, batch_size_,
-        other_litert->bank_1_key_cache_buffers_[input_name]));
+        key_cache_buffer.buffer, batch_size_,
+        other_litert->bank_1_key_cache_buffers_[input_name].buffer));
   }
   for (auto& [input_name, value_cache_buffer] : bank_1_value_cache_buffers_) {
     RET_CHECK(other_litert->bank_1_value_cache_buffers_.contains(input_name));
     ABSL_RETURN_IF_ERROR(BroadcastAndCopyBuffer(
-        value_cache_buffer, batch_size_,
-        other_litert->bank_1_value_cache_buffers_[input_name]));
+        value_cache_buffer.buffer, batch_size_,
+        other_litert->bank_1_value_cache_buffers_[input_name].buffer));
   }
 
   return absl::OkStatus();
 }
 
 absl::StatusOr<std::unique_ptr<StateInterface>> LitertState::DeepCopy() const {
-  absl::flat_hash_map<std::string, TensorBuffer> bank_1_key_cache_buffers;
-  for (const auto& [name, buffer] : bank_1_key_cache_buffers_) {
-    LITERT_ASSIGN_OR_RETURN(bank_1_key_cache_buffers[name],
-                            CopyTensorBuffer(env_, buffer));
+  absl::flat_hash_map<std::string, StateBuffer> bank_1_key_cache_buffers;
+  for (const auto& [name, state_buffer] : bank_1_key_cache_buffers_) {
+    LITERT_ASSIGN_OR_RETURN(auto buf_copy,
+                            CopyTensorBuffer(env_, state_buffer.buffer));
+    bank_1_key_cache_buffers[name] = StateBuffer{
+        .buffer = std::move(buf_copy),
+        .type = state_buffer.type,
+    };
   }
-  absl::flat_hash_map<std::string, TensorBuffer> bank_1_value_cache_buffers;
-  for (const auto& [name, buffer] : bank_1_value_cache_buffers_) {
-    LITERT_ASSIGN_OR_RETURN(bank_1_value_cache_buffers[name],
-                            CopyTensorBuffer(env_, buffer));
+  absl::flat_hash_map<std::string, StateBuffer> bank_1_value_cache_buffers;
+  for (const auto& [name, state_buffer] : bank_1_value_cache_buffers_) {
+    LITERT_ASSIGN_OR_RETURN(auto buf_copy,
+                            CopyTensorBuffer(env_, state_buffer.buffer));
+    bank_1_value_cache_buffers[name] = StateBuffer{
+        .buffer = std::move(buf_copy),
+        .type = state_buffer.type,
+    };
   }
 
-  std::optional<absl::flat_hash_map<std::string, TensorBuffer>>
+  std::optional<absl::flat_hash_map<std::string, StateBuffer>>
       bank_2_key_cache_buffers;
   if (bank_2_key_cache_buffers_.has_value()) {
     bank_2_key_cache_buffers.emplace();
     auto& map = *bank_2_key_cache_buffers;
-    for (const auto& [name, buffer] : *bank_2_key_cache_buffers_) {
-      LITERT_ASSIGN_OR_RETURN(map[name], CopyTensorBuffer(env_, buffer));
+    for (const auto& [name, state_buffer] : *bank_2_key_cache_buffers_) {
+      LITERT_ASSIGN_OR_RETURN(auto buf_copy,
+                              CopyTensorBuffer(env_, state_buffer.buffer));
+      map[name] = StateBuffer{
+          .buffer = std::move(buf_copy),
+          .type = state_buffer.type,
+      };
     }
   }
 
-  std::optional<absl::flat_hash_map<std::string, TensorBuffer>>
+  std::optional<absl::flat_hash_map<std::string, StateBuffer>>
       bank_2_value_cache_buffers;
   if (bank_2_value_cache_buffers_.has_value()) {
     bank_2_value_cache_buffers.emplace();
     auto& map = *bank_2_value_cache_buffers;
-    for (const auto& [name, buffer] : *bank_2_value_cache_buffers_) {
-      LITERT_ASSIGN_OR_RETURN(map[name], CopyTensorBuffer(env_, buffer));
+    for (const auto& [name, state_buffer] : *bank_2_value_cache_buffers_) {
+      LITERT_ASSIGN_OR_RETURN(auto buf_copy,
+                              CopyTensorBuffer(env_, state_buffer.buffer));
+      map[name] = StateBuffer{
+          .buffer = std::move(buf_copy),
+          .type = state_buffer.type,
+      };
     }
   }
 
@@ -318,20 +338,20 @@ bool LitertState::Contains(absl::string_view tensor_name) const {
 }
 
 absl::Status LitertState::Clear() {
-  for (auto& [_, buffer] : bank_1_key_cache_buffers_) {
-    LITERT_RETURN_IF_ERROR(buffer.Clear());
+  for (auto& [_, state_buffer] : bank_1_key_cache_buffers_) {
+    LITERT_RETURN_IF_ERROR(state_buffer.buffer.Clear());
   }
-  for (auto& [_, buffer] : bank_1_value_cache_buffers_) {
-    LITERT_RETURN_IF_ERROR(buffer.Clear());
+  for (auto& [_, state_buffer] : bank_1_value_cache_buffers_) {
+    LITERT_RETURN_IF_ERROR(state_buffer.buffer.Clear());
   }
   if (bank_2_key_cache_buffers_.has_value()) {
-    for (auto& [_, buffer] : *bank_2_key_cache_buffers_) {
-      LITERT_RETURN_IF_ERROR(buffer.Clear());
+    for (auto& [_, state_buffer] : *bank_2_key_cache_buffers_) {
+      LITERT_RETURN_IF_ERROR(state_buffer.buffer.Clear());
     }
   }
   if (bank_2_value_cache_buffers_.has_value()) {
-    for (auto& [_, buffer] : *bank_2_value_cache_buffers_) {
-      LITERT_RETURN_IF_ERROR(buffer.Clear());
+    for (auto& [_, state_buffer] : *bank_2_value_cache_buffers_) {
+      LITERT_RETURN_IF_ERROR(state_buffer.buffer.Clear());
     }
   }
   return absl::OkStatus();
@@ -364,15 +384,15 @@ absl::Status LitertState::Resize(CompiledModel& compiled_model,
 
   for (auto& [input_name, key_cache_buffer] : bank_1_key_cache_buffers_) {
     LITERT_ASSIGN_OR_RETURN(
-        key_cache_buffer,
-        ResizeTensorBuffer(env_, key_cache_buffer, k_dynamic_dim_.value(),
-                           entries_to_add));
+        key_cache_buffer.buffer,
+        ResizeTensorBuffer(env_, key_cache_buffer.buffer,
+                           k_dynamic_dim_.value(), entries_to_add));
   }
   for (auto& [input_name, value_cache_buffer] : bank_1_value_cache_buffers_) {
     LITERT_ASSIGN_OR_RETURN(
-        value_cache_buffer,
-        ResizeTensorBuffer(env_, value_cache_buffer, v_dynamic_dim_.value(),
-                           entries_to_add));
+        value_cache_buffer.buffer,
+        ResizeTensorBuffer(env_, value_cache_buffer.buffer,
+                           v_dynamic_dim_.value(), entries_to_add));
   }
   num_entries_ = num_entries;
   return absl::OkStatus();
@@ -402,21 +422,25 @@ absl::StatusOr<LitertState::StateBuffers> LitertState::GetStateBuffers(
       allocation_policy_ == AllocationPolicy::kGpuOptimizedInplace;
   if (!skip_inputs) {
     for (const auto& [input_name, key_cache_buffer] : *input_bank_key) {
-      LITERT_ASSIGN_OR_RETURN(auto duplicated, key_cache_buffer.Duplicate());
+      LITERT_ASSIGN_OR_RETURN(auto duplicated,
+                              key_cache_buffer.buffer.Duplicate());
       buffers.input_buffers[input_name] = std::move(duplicated);
     }
     for (const auto& [input_name, value_cache_buffer] : *input_bank_value) {
-      LITERT_ASSIGN_OR_RETURN(auto duplicated, value_cache_buffer.Duplicate());
+      LITERT_ASSIGN_OR_RETURN(auto duplicated,
+                              value_cache_buffer.buffer.Duplicate());
       buffers.input_buffers[input_name] = std::move(duplicated);
     }
   }
 
   for (const auto& [input_name, key_cache_buffer] : *output_bank_key) {
-    LITERT_ASSIGN_OR_RETURN(auto duplicated, key_cache_buffer.Duplicate());
+    LITERT_ASSIGN_OR_RETURN(auto duplicated,
+                            key_cache_buffer.buffer.Duplicate());
     buffers.output_buffers[input_name] = std::move(duplicated);
   }
   for (const auto& [input_name, value_cache_buffer] : *output_bank_value) {
-    LITERT_ASSIGN_OR_RETURN(auto duplicated, value_cache_buffer.Duplicate());
+    LITERT_ASSIGN_OR_RETURN(auto duplicated,
+                            value_cache_buffer.buffer.Duplicate());
     buffers.output_buffers[input_name] = std::move(duplicated);
   }
   return buffers;
@@ -487,8 +511,8 @@ absl::StatusOr<std::unique_ptr<LitertState>> LitertState::HeuristicBasedCreate(
   auto create_and_init_buffers =
       [&](const std::vector<std::string>& input_names,
           const std::optional<int>& dynamic_dim, bool clear_buffer)
-      -> absl::StatusOr<absl::flat_hash_map<std::string, TensorBuffer>> {
-    absl::flat_hash_map<std::string, TensorBuffer> buffers;
+      -> absl::StatusOr<absl::flat_hash_map<std::string, StateBuffer>> {
+    absl::flat_hash_map<std::string, StateBuffer> buffers;
     for (const auto& input_name : input_names) {
       if (dynamic_dim.has_value()) {
         ABSL_RETURN_IF_ERROR(ResolveDynamicShape(compiled_model, signature_name,
@@ -500,7 +524,10 @@ absl::StatusOr<std::unique_ptr<LitertState>> LitertState::HeuristicBasedCreate(
       if (clear_buffer) {
         LITERT_RETURN_IF_ERROR(buffer.Clear());
       }
-      buffers[input_name] = std::move(buffer);
+      buffers[input_name] = StateBuffer{
+          .buffer = std::move(buffer),
+          .type = proto::StateBuffer::TYPE_UNSPECIFIED,
+      };
     }
     return buffers;
   };
@@ -508,8 +535,8 @@ absl::StatusOr<std::unique_ptr<LitertState>> LitertState::HeuristicBasedCreate(
   auto create_and_init_output_buffers =
       [&](const std::vector<std::string>& input_names,
           const std::optional<int>& dynamic_dim, bool clear_buffer)
-      -> absl::StatusOr<absl::flat_hash_map<std::string, TensorBuffer>> {
-    absl::flat_hash_map<std::string, TensorBuffer> buffers;
+      -> absl::StatusOr<absl::flat_hash_map<std::string, StateBuffer>> {
+    absl::flat_hash_map<std::string, StateBuffer> buffers;
     for (const auto& input_name : input_names) {
       if (dynamic_dim.has_value()) {
         ABSL_RETURN_IF_ERROR(ResolveDynamicShape(compiled_model, signature_name,
@@ -521,13 +548,16 @@ absl::StatusOr<std::unique_ptr<LitertState>> LitertState::HeuristicBasedCreate(
       if (clear_buffer) {
         LITERT_RETURN_IF_ERROR(buffer.Clear());
       }
-      buffers[input_name] = std::move(buffer);
+      buffers[input_name] = StateBuffer{
+          .buffer = std::move(buffer),
+          .type = proto::StateBuffer::TYPE_UNSPECIFIED,
+      };
     }
     return buffers;
   };
 
-  absl::flat_hash_map<std::string, TensorBuffer> bank_1_key_cache_buffers;
-  absl::flat_hash_map<std::string, TensorBuffer> bank_1_value_cache_buffers;
+  absl::flat_hash_map<std::string, StateBuffer> bank_1_key_cache_buffers;
+  absl::flat_hash_map<std::string, StateBuffer> bank_1_value_cache_buffers;
   if (allocation_policy == AllocationPolicy::kGpuOptimizedInplace) {
     ABSL_ASSIGN_OR_RETURN(
         bank_1_key_cache_buffers,
@@ -548,21 +578,23 @@ absl::StatusOr<std::unique_ptr<LitertState>> LitertState::HeuristicBasedCreate(
                                 /*clear_buffer=*/true));
   }
 
-  std::optional<absl::flat_hash_map<std::string, TensorBuffer>>
+  std::optional<absl::flat_hash_map<std::string, StateBuffer>>
       bank_2_key_cache_buffers;
-  std::optional<absl::flat_hash_map<std::string, TensorBuffer>>
+  std::optional<absl::flat_hash_map<std::string, StateBuffer>>
       bank_2_value_cache_buffers;
   if (allocation_policy == AllocationPolicy::kPingPong) {
     // Bank 2 buffers are created after Bank 1 shapes are resolved, so no need
     // to pass dynamic_dim.
-    ABSL_ASSIGN_OR_RETURN(bank_2_key_cache_buffers.emplace(),
-                          create_and_init_buffers(key_cache_input_names,
-                                                  /*dynamic_dim=*/std::nullopt,
-                                                  /*clear_buffer=*/true));
-    ABSL_ASSIGN_OR_RETURN(bank_2_value_cache_buffers.emplace(),
-                          create_and_init_buffers(value_cache_input_names,
-                                                  /*dynamic_dim=*/std::nullopt,
-                                                  /*clear_buffer=*/false));
+    ABSL_ASSIGN_OR_RETURN(
+        bank_2_key_cache_buffers.emplace(),
+        create_and_init_output_buffers(key_cache_input_names,
+                                       /*dynamic_dim=*/std::nullopt,
+                                       /*clear_buffer=*/false));
+    ABSL_ASSIGN_OR_RETURN(
+        bank_2_value_cache_buffers.emplace(),
+        create_and_init_output_buffers(value_cache_input_names,
+                                       /*dynamic_dim=*/std::nullopt,
+                                       /*clear_buffer=*/false));
   }
 
   int context_size = 1;
@@ -606,6 +638,7 @@ absl::StatusOr<std::unique_ptr<LitertState>> LitertState::MetadataBasedCreate(
     AllocationPolicy allocation_policy, int batch_size) {
   std::vector<std::string> key_cache_input_names;
   std::vector<std::string> value_cache_input_names;
+  absl::flat_hash_map<std::string, proto::StateBuffer::Type> state_buffer_types;
 
   std::optional<int> k_dynamic_dim;
   std::optional<int> v_dynamic_dim;
@@ -635,6 +668,7 @@ absl::StatusOr<std::unique_ptr<LitertState>> LitertState::MetadataBasedCreate(
 
     RET_CHECK(!names.empty()) << "At least one state name must be defined";
     std::string input_name = std::string(names[0]);
+    state_buffer_types[input_name] = state_buffer.type();
 
     bool is_key = false;
     bool is_value = false;
@@ -722,8 +756,8 @@ absl::StatusOr<std::unique_ptr<LitertState>> LitertState::MetadataBasedCreate(
   auto create_and_init_buffers =
       [&](const std::vector<std::string>& input_names,
           const std::optional<int>& dynamic_dim, bool clear_buffer)
-      -> absl::StatusOr<absl::flat_hash_map<std::string, TensorBuffer>> {
-    absl::flat_hash_map<std::string, TensorBuffer> buffers;
+      -> absl::StatusOr<absl::flat_hash_map<std::string, StateBuffer>> {
+    absl::flat_hash_map<std::string, StateBuffer> buffers;
     for (const auto& input_name : input_names) {
       if (dynamic_dim.has_value()) {
         ABSL_RETURN_IF_ERROR(ResolveDynamicShape(compiled_model, signature_name,
@@ -735,7 +769,10 @@ absl::StatusOr<std::unique_ptr<LitertState>> LitertState::MetadataBasedCreate(
       if (clear_buffer) {
         LITERT_RETURN_IF_ERROR(buffer.Clear());
       }
-      buffers[input_name] = std::move(buffer);
+      buffers[input_name] = StateBuffer{
+          .buffer = std::move(buffer),
+          .type = state_buffer_types[input_name],
+      };
     }
     return buffers;
   };
@@ -743,8 +780,8 @@ absl::StatusOr<std::unique_ptr<LitertState>> LitertState::MetadataBasedCreate(
   auto create_and_init_output_buffers =
       [&](const std::vector<std::string>& input_names,
           const std::optional<int>& dynamic_dim, bool clear_buffer)
-      -> absl::StatusOr<absl::flat_hash_map<std::string, TensorBuffer>> {
-    absl::flat_hash_map<std::string, TensorBuffer> buffers;
+      -> absl::StatusOr<absl::flat_hash_map<std::string, StateBuffer>> {
+    absl::flat_hash_map<std::string, StateBuffer> buffers;
     for (const auto& input_name : input_names) {
       if (dynamic_dim.has_value()) {
         ABSL_RETURN_IF_ERROR(ResolveDynamicShape(compiled_model, signature_name,
@@ -756,13 +793,16 @@ absl::StatusOr<std::unique_ptr<LitertState>> LitertState::MetadataBasedCreate(
       if (clear_buffer) {
         LITERT_RETURN_IF_ERROR(buffer.Clear());
       }
-      buffers[input_name] = std::move(buffer);
+      buffers[input_name] = StateBuffer{
+          .buffer = std::move(buffer),
+          .type = state_buffer_types[input_name],
+      };
     }
     return buffers;
   };
 
-  absl::flat_hash_map<std::string, TensorBuffer> bank_1_key_cache_buffers;
-  absl::flat_hash_map<std::string, TensorBuffer> bank_1_value_cache_buffers;
+  absl::flat_hash_map<std::string, StateBuffer> bank_1_key_cache_buffers;
+  absl::flat_hash_map<std::string, StateBuffer> bank_1_value_cache_buffers;
   if (allocation_policy == AllocationPolicy::kGpuOptimizedInplace) {
     ABSL_ASSIGN_OR_RETURN(
         bank_1_key_cache_buffers,
@@ -783,19 +823,21 @@ absl::StatusOr<std::unique_ptr<LitertState>> LitertState::MetadataBasedCreate(
                                 /*clear_buffer=*/true));
   }
 
-  std::optional<absl::flat_hash_map<std::string, TensorBuffer>>
+  std::optional<absl::flat_hash_map<std::string, StateBuffer>>
       bank_2_key_cache_buffers;
-  std::optional<absl::flat_hash_map<std::string, TensorBuffer>>
+  std::optional<absl::flat_hash_map<std::string, StateBuffer>>
       bank_2_value_cache_buffers;
   if (allocation_policy == AllocationPolicy::kPingPong) {
-    ABSL_ASSIGN_OR_RETURN(bank_2_key_cache_buffers.emplace(),
-                          create_and_init_buffers(key_cache_input_names,
-                                                  /*dynamic_dim=*/std::nullopt,
-                                                  /*clear_buffer=*/true));
-    ABSL_ASSIGN_OR_RETURN(bank_2_value_cache_buffers.emplace(),
-                          create_and_init_buffers(value_cache_input_names,
-                                                  /*dynamic_dim=*/std::nullopt,
-                                                  /*clear_buffer=*/false));
+    ABSL_ASSIGN_OR_RETURN(
+        bank_2_key_cache_buffers.emplace(),
+        create_and_init_output_buffers(key_cache_input_names,
+                                       /*dynamic_dim=*/std::nullopt,
+                                       /*clear_buffer=*/false));
+    ABSL_ASSIGN_OR_RETURN(
+        bank_2_value_cache_buffers.emplace(),
+        create_and_init_output_buffers(value_cache_input_names,
+                                       /*dynamic_dim=*/std::nullopt,
+                                       /*clear_buffer=*/false));
   }
 
   int context_size = 1;

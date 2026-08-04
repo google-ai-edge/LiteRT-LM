@@ -99,6 +99,11 @@ class LitertState : public StateInterface {
       CompiledModel& compiled_model, absl::string_view signature_name);
 
  private:
+  struct StateBuffer {
+    TensorBuffer buffer;
+    proto::StateBuffer::Type type = proto::StateBuffer::TYPE_UNSPECIFIED;
+  };
+
   absl::Status SyncShapes(CompiledModel& compiled_model,
                           absl::string_view signature_name);
 
@@ -116,11 +121,11 @@ class LitertState : public StateInterface {
   LitertState(
       int batch_size, int num_entries, std::optional<int> k_dynamic_dim,
       std::optional<int> v_dynamic_dim, Environment& env,
-      absl::flat_hash_map<std::string, TensorBuffer> bank_1_key_cache_buffers,
-      absl::flat_hash_map<std::string, TensorBuffer> bank_1_value_cache_buffers,
-      std::optional<absl::flat_hash_map<std::string, TensorBuffer>>
+      absl::flat_hash_map<std::string, StateBuffer> bank_1_key_cache_buffers,
+      absl::flat_hash_map<std::string, StateBuffer> bank_1_value_cache_buffers,
+      std::optional<absl::flat_hash_map<std::string, StateBuffer>>
           bank_2_key_cache_buffers,
-      std::optional<absl::flat_hash_map<std::string, TensorBuffer>>
+      std::optional<absl::flat_hash_map<std::string, StateBuffer>>
           bank_2_value_cache_buffers,
       AllocationPolicy allocation_policy)
       : batch_size_(batch_size),
@@ -144,13 +149,13 @@ class LitertState : public StateInterface {
   // Environment to create new TensorBuffers (required for resizing).
   Environment& env_;
   // Primary KV cache buffers.
-  absl::flat_hash_map<std::string, TensorBuffer> bank_1_key_cache_buffers_;
-  absl::flat_hash_map<std::string, TensorBuffer> bank_1_value_cache_buffers_;
+  absl::flat_hash_map<std::string, StateBuffer> bank_1_key_cache_buffers_;
+  absl::flat_hash_map<std::string, StateBuffer> bank_1_value_cache_buffers_;
   // Secondary KV cache buffers - only used when inplace update is not
   // supported.
-  std::optional<absl::flat_hash_map<std::string, TensorBuffer>>
+  std::optional<absl::flat_hash_map<std::string, StateBuffer>>
       bank_2_key_cache_buffers_;
-  std::optional<absl::flat_hash_map<std::string, TensorBuffer>>
+  std::optional<absl::flat_hash_map<std::string, StateBuffer>>
       bank_2_value_cache_buffers_;
 
   bool bank_1_is_input_ = true;
