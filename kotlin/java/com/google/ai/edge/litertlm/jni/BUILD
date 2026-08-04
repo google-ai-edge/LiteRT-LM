@@ -57,6 +57,7 @@ cc_binary(
         "//runtime/proto:sampler_params_cc_proto",
         "//runtime/util:file_util",
         "//runtime/util:litert_lm_loader",
+        "//runtime/util:litert_util",
         "//runtime/util:logging",
         "//runtime/util:scoped_file",
         "//schema/capabilities:capabilities_c",
@@ -68,6 +69,13 @@ cc_binary(
             "@rules_java//toolchains:jni"
         ],
     }) + [
+        "@litert//litert/cc:litert_environment",
+        "//runtime/components:model_resources_litert_lm",
+        "//runtime/core:embedding_engine_impl",  # buildcleaner: keep
         "//runtime/core:engine_impl",  # buildcleaner: keep
+        "//runtime/engine:embedding_engine",
+        "//runtime/engine:embedding_engine_settings",
+        "//support/preprocessor:image_preprocessor",
+        "//support/preprocessor:image_preprocessor_impl",  # buildcleaner: keep
     ],
 )
