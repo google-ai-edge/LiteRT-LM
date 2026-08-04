@@ -162,7 +162,9 @@ absl::StatusOr<std::unique_ptr<AsrSession>> AsrEngine::CreateSession(
     case AsrEngineConfig::DecoderType::kStateless: {
       ABSL_ASSIGN_OR_RETURN(
           decoder,
-          StatelessDecoder::Create(runner.get(), config_.decode_stop_token_id));
+          StatelessDecoder::Create(runner.get(), config_.decode_start_token_id,
+                                   config_.decode_stop_token_id,
+                                   config_.decode_skip_until_token_id));
       break;
     }
   }

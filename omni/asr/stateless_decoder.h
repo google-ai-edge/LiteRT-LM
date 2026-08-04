@@ -32,7 +32,8 @@ namespace litert::omni::asr {
 class StatelessDecoder : public LiteRtSpeechRecognizer::Decoder {
  public:
   static absl::StatusOr<std::unique_ptr<StatelessDecoder>> Create(
-      LiteRtRunner* absl_nonnull runner, int decode_stop_token_id = -1);
+      LiteRtRunner* absl_nonnull runner, int decode_start_token_id = -1,
+      int decode_stop_token_id = -1, int decode_skip_until_token_id = -1);
 
   ~StatelessDecoder() override = default;
 
@@ -44,14 +45,17 @@ class StatelessDecoder : public LiteRtSpeechRecognizer::Decoder {
                    std::vector<::litert::TensorBuffer> decode_input_buffers,
                    std::vector<::litert::TensorBuffer> decode_output_buffers,
                    size_t num_logits_per_token, size_t num_token_ids,
-                   int decode_stop_token_id);
+                   int decode_start_token_id, int decode_stop_token_id,
+                   int decode_skip_until_token_id);
 
   LiteRtRunner* const absl_nonnull runner_;
   std::vector<::litert::TensorBuffer> decode_input_buffers_;
   std::vector<::litert::TensorBuffer> decode_output_buffers_;
   const size_t num_logits_per_token_;
   const size_t num_token_ids_;
+  const int decode_start_token_id_;
   const int decode_stop_token_id_;
+  const int decode_skip_until_token_id_;
 };
 
 }  // namespace litert::omni::asr

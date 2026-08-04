@@ -47,7 +47,8 @@ constexpr float kMaskedOutFloatValue =
 }  // namespace
 
 absl::StatusOr<std::unique_ptr<StatelessDecoder>> StatelessDecoder::Create(
-    LiteRtRunner* absl_nonnull runner, int decode_stop_token_id) {
+    LiteRtRunner* absl_nonnull runner, int decode_start_token_id,
+    int decode_stop_token_id, int decode_skip_until_token_id) {
   LITERT_ASSIGN_OR_RETURN(auto inputs,
                           runner->CreateInputBuffers(kDecodeSignatureName));
   LITERT_RETURN_IF_ERROR(inputs.size() > 2);
@@ -73,8 +74,10 @@ absl::StatusOr<std::unique_ptr<StatelessDecoder>> StatelessDecoder::Create(
   size_t total_logits = num_output_bytes / sizeof(float);
 
   size_t num_token_ids = 1;
-  if (inputs.size() > 1) {
-    LITERT_ASSIGN_OR_RETURN(auto token_bytes, inputs[1].PackedSize());
+  const size_t token_id_input_index = inputs.size() + kTokenIdInputIndex;
+  if (token_id_input_index < inputs.size()) {
+    LITERT_ASSIGN_OR_RETURN(auto token_bytes,
+                            inputs[token_id_input_index].PackedSize());
     num_token_ids = token_bytes / sizeof(int32_t);
   }
   LITERT_RETURN_IF_ERROR(num_token_ids > 0);
@@ -83,20 +86,25 @@ absl::StatusOr<std::unique_ptr<StatelessDecoder>> StatelessDecoder::Create(
 
   return std::unique_ptr<StatelessDecoder>(new StatelessDecoder(
       runner, std::move(inputs), std::move(outputs), num_logits_per_token,
-      num_token_ids, decode_stop_token_id));
+      num_token_ids, decode_start_token_id, decode_stop_token_id,
+      decode_skip_until_token_id));
 }
 
 StatelessDecoder::StatelessDecoder(
     LiteRtRunner* absl_nonnull runner,
     std::vector<::litert::TensorBuffer> decode_input_buffers,
     std::vector<::litert::TensorBuffer> decode_output_buffers,
-    size_t num_logits_per_token, size_t num_token_ids, int decode_stop_token_id)
+    size_t num_logits_per_token, size_t num_token_ids,
+    int decode_start_token_id, int decode_stop_token_id,
+    int decode_skip_until_token_id)
     : runner_(runner),
       decode_input_buffers_(std::move(decode_input_buffers)),
       decode_output_buffers_(std::move(decode_output_buffers)),
       num_logits_per_token_(num_logits_per_token),
       num_token_ids_(num_token_ids),
-      decode_stop_token_id_(decode_stop_token_id) {}
+      decode_start_token_id_(decode_start_token_id),
+      decode_stop_token_id_(decode_stop_token_id),
+      decode_skip_until_token_id_(decode_skip_until_token_id) {}
 
 absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>>
 StatelessDecoder::Decode(std::vector<::litert::TensorBuffer>& encoder_outputs) {
@@ -119,11 +127,15 @@ StatelessDecoder::Decode(std::vector<::litert::TensorBuffer>& encoder_outputs) {
 
   std::vector<SpeechRecognizer::DecodedToken> decoded_tokens;
   std::vector<int32_t> token_ids(num_token_ids_, 0);
+  if (decode_start_token_id_ >= 0) {
+    token_ids[0] = decode_start_token_id_;
+  }
+  bool seen_skip_until_token_id = decode_skip_until_token_id_ < 0;
+
   std::vector<float> logits(num_logits_per_token_ * num_token_ids_);
   for (size_t i = 0; i < num_token_ids_ - 1; ++i) {
-    LITERT_RETURN_IF_ERROR(
-        decode_input_buffers_[token_id_input_index].Write<int32_t>(
-            absl::MakeConstSpan(token_ids)));
+    LITERT_RETURN_IF_ERROR(inputs[token_id_input_index].Write<int32_t>(
+        absl::MakeConstSpan(token_ids)));
     LITERT_RETURN_IF_ERROR(
         runner_->Run(kDecodeSignatureName, inputs, decode_output_buffers_));
     LITERT_RETURN_IF_ERROR(
@@ -143,8 +155,13 @@ StatelessDecoder::Decode(std::vector<::litert::TensorBuffer>& encoder_outputs) {
       break;
     }
 
-    decoded_tokens.push_back(SpeechRecognizer::DecodedToken{
-        .token_id = token_id, .timestamp_ms = std::nullopt});
+    if (seen_skip_until_token_id) {
+      decoded_tokens.push_back(SpeechRecognizer::DecodedToken{
+          .token_id = token_id, .timestamp_ms = std::nullopt});
+    } else if (token_id == decode_skip_until_token_id_) {
+      seen_skip_until_token_id = true;
+    }
+
     token_ids[i + 1] = token_id;
   }
 
