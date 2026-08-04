@@ -96,7 +96,7 @@ class ExtendedTokenizer : public Tokenizer {
   }
 
   absl::StatusOr<std::string> TokenIdsToText(
-      const std::vector<int>& token_ids) override {
+      const std::vector<int>& token_ids, bool skip_special_tokens) override {
     std::vector<std::string> token_strs;
     for (int token_id : token_ids) {
       if (id_to_extended_tokens_.contains(token_id)) {

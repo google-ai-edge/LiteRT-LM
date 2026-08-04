@@ -2,10 +2,10 @@
 
 workspace(name = "litert_lm")
 
-# UPDATED = 2026-07-28
-LITERT_REF = "3cb830ad9c94f9922f0a88dd431b005413628919"
+# UPDATED = 2026-08-03
+LITERT_REF = "0ff28117f1cb5556d0e015bf80b773f74e2bee51"
 
-LITERT_SHA256 = "242d2850d0c4d731e38e8bdab3badf9c0b8da60eeaeaf4b9c291bcd4e4937c89"
+LITERT_SHA256 = "07961b2128fe4fd330072c60d5ab1bb1b632d49a6d0bbdc8ff7885cd47fd4c1d"
 
 TENSORFLOW_REF = "9e1afa4e5cfd8818518183211b77f2976c7dc450"
 
@@ -527,7 +527,6 @@ openvino_configure()
 load("@litert//third_party/exynos_ai_litecore:workspace.bzl", "exynos_ai_litecore")
 
 exynos_ai_litecore()
-
 
 http_archive(
     name = "nanobind_json",

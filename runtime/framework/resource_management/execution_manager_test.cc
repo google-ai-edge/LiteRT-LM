@@ -70,7 +70,8 @@ class MockTokenizer : public Tokenizer {
   MOCK_METHOD(absl::StatusOr<int>, TokenToId, (absl::string_view token),
               (override));
   MOCK_METHOD(absl::StatusOr<std::string>, TokenIdsToText,
-              (const std::vector<int>& token_ids), (override));
+              (const std::vector<int>& token_ids, bool skip_special_tokens),
+              (override));
   MOCK_METHOD(TokenizerType, GetTokenizerType, (), (const, override));
   MOCK_METHOD(std::vector<std::string>, GetTokens, (), (const, override));
   MOCK_METHOD(int, GetVocabSize, (), (const, override));
@@ -94,13 +95,13 @@ class ExecutionManagerTest
  protected:
   void SetUp() override {
     tokenizer_ = std::make_unique<MockTokenizer>();
-    EXPECT_CALL(*tokenizer_, TokenIdsToText(ElementsAre(0)))
+    EXPECT_CALL(*tokenizer_, TokenIdsToText(ElementsAre(0), false))
         .WillRepeatedly(Return("0"));
-    EXPECT_CALL(*tokenizer_, TokenIdsToText(ElementsAre(4)))
+    EXPECT_CALL(*tokenizer_, TokenIdsToText(ElementsAre(4), false))
         .WillRepeatedly(Return("4"));
-    EXPECT_CALL(*tokenizer_, TokenIdsToText(ElementsAre(5)))
+    EXPECT_CALL(*tokenizer_, TokenIdsToText(ElementsAre(5), false))
         .WillRepeatedly(Return("5"));
-    EXPECT_CALL(*tokenizer_, TokenIdsToText(ElementsAre(6)))
+    EXPECT_CALL(*tokenizer_, TokenIdsToText(ElementsAre(6), false))
         .WillRepeatedly(Return("6"));
     EXPECT_CALL(*tokenizer_, GetVocabSize()).WillRepeatedly(Return(kVocabSize));
   }

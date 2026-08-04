@@ -64,7 +64,8 @@ class BytePairEncodingTokenizer : public Tokenizer {
   MOCK_METHOD(absl::StatusOr<std::vector<int>>, TextToTokenIds,
               (absl::string_view text), (override));
   MOCK_METHOD(absl::StatusOr<std::string>, TokenIdsToText,
-              (const std::vector<int>& token_ids), (override));
+              (const std::vector<int>& token_ids, bool skip_special_tokens),
+              (override));
   MOCK_METHOD(absl::StatusOr<int>, TokenToId, (absl::string_view token),
               (override));
   MOCK_METHOD(TokenizerType, GetTokenizerType, (), (const, override));
@@ -812,27 +813,27 @@ TEST_F(TasksTest, DecodeStreamingWithConstrainedDecoding) {
 TEST_F(TasksTest, DecodeBytePairEncodingTokens) {
   auto tokenizer = std::make_unique<BytePairEncodingTokenizer>();
   // Pretend the first and second tokens are incomplete.
-  EXPECT_CALL(*tokenizer, TokenIdsToText(std::vector<int>{224}))
+  EXPECT_CALL(*tokenizer, TokenIdsToText(std::vector<int>{224}, false))
       .WillOnce(
           testing::Return(absl::DataLossError("Incomplete BPE sequence")));
-  EXPECT_CALL(*tokenizer, TokenIdsToText(std::vector<int>{224, 24}))
+  EXPECT_CALL(*tokenizer, TokenIdsToText(std::vector<int>{224, 24}, false))
       .WillOnce(
           testing::Return(absl::DataLossError("Incomplete BPE sequence")));
 
   // Now  return a valid token from two tokens.
-  EXPECT_CALL(*tokenizer, TokenIdsToText(std::vector<int>{224, 24, 8}))
+  EXPECT_CALL(*tokenizer, TokenIdsToText(std::vector<int>{224, 24, 8}, false))
       .WillOnce(testing::Return(" How's"));
 
   // Rest proceeds as normal.
-  EXPECT_CALL(*tokenizer, TokenIdsToText(std::vector<int>{66}))
+  EXPECT_CALL(*tokenizer, TokenIdsToText(std::vector<int>{66}, false))
       .WillOnce(testing::Return(" "));
-  EXPECT_CALL(*tokenizer, TokenIdsToText(std::vector<int>{246}))
+  EXPECT_CALL(*tokenizer, TokenIdsToText(std::vector<int>{246}, false))
       .WillOnce(testing::Return("it"));
-  EXPECT_CALL(*tokenizer, TokenIdsToText(std::vector<int>{18}))
+  EXPECT_CALL(*tokenizer, TokenIdsToText(std::vector<int>{18}, false))
       .WillOnce(testing::Return(" "));
-  EXPECT_CALL(*tokenizer, TokenIdsToText(std::vector<int>{2295}))
+  EXPECT_CALL(*tokenizer, TokenIdsToText(std::vector<int>{2295}, false))
       .WillOnce(testing::Return("going?"));
-  EXPECT_CALL(*tokenizer, TokenIdsToText(std::vector<int>{2294}))
+  EXPECT_CALL(*tokenizer, TokenIdsToText(std::vector<int>{2294}, false))
       .WillOnce(testing::Return("!"));
 
   std::optional<BenchmarkInfo> benchmark_info;
@@ -871,10 +872,10 @@ TEST_F(TasksTest, DecodeBytePairEncodingTokens) {
 TEST_F(TasksTest, DecodeStopTokenIsPartialBytePairEncodingTokens) {
   auto tokenizer = std::make_unique<BytePairEncodingTokenizer>();
   // Pretend the first and second tokens are incomplete.
-  EXPECT_CALL(*tokenizer, TokenIdsToText(std::vector<int>{224}))
+  EXPECT_CALL(*tokenizer, TokenIdsToText(std::vector<int>{224}, false))
       .WillOnce(
           testing::Return(absl::DataLossError("Incomplete BPE sequence")));
-  EXPECT_CALL(*tokenizer, TokenIdsToText(std::vector<int>{224, 24}))
+  EXPECT_CALL(*tokenizer, TokenIdsToText(std::vector<int>{224, 24}, false))
       .WillOnce(
           testing::Return(absl::DataLossError("Incomplete BPE sequence")));
 
@@ -1950,27 +1951,27 @@ TEST_F(TasksCustomSamplingTest, DecodeStopTokenAndBPEDetector) {
 
   auto tokenizer = std::make_unique<BytePairEncodingTokenizer>();
   // batch 1: 224, 24, 8, 66
-  EXPECT_CALL(*tokenizer, TokenIdsToText(std::vector<int>{224}))
+  EXPECT_CALL(*tokenizer, TokenIdsToText(std::vector<int>{224}, false))
       .WillOnce(
           testing::Return(absl::DataLossError("Incomplete BPE sequence")));
-  EXPECT_CALL(*tokenizer, TokenIdsToText(std::vector<int>{224, 24}))
+  EXPECT_CALL(*tokenizer, TokenIdsToText(std::vector<int>{224, 24}, false))
       .WillOnce(
           testing::Return(absl::DataLossError("Incomplete BPE sequence")));
-  EXPECT_CALL(*tokenizer, TokenIdsToText(std::vector<int>{224, 24, 8}))
+  EXPECT_CALL(*tokenizer, TokenIdsToText(std::vector<int>{224, 24, 8}, false))
       .WillOnce(testing::Return("BPE"));
   // Stop token: for first batch
-  EXPECT_CALL(*tokenizer, TokenIdsToText(std::vector<int>{66}))
+  EXPECT_CALL(*tokenizer, TokenIdsToText(std::vector<int>{66}, false))
       .WillOnce(testing::Return("!"));
 
   // batch 2: 90, 547, 58, 735
-  EXPECT_CALL(*tokenizer, TokenIdsToText(std::vector<int>{90}))
+  EXPECT_CALL(*tokenizer, TokenIdsToText(std::vector<int>{90}, false))
       .WillOnce(testing::Return("a"));
-  EXPECT_CALL(*tokenizer, TokenIdsToText(std::vector<int>{547}))
+  EXPECT_CALL(*tokenizer, TokenIdsToText(std::vector<int>{547}, false))
       .WillOnce(testing::Return("b"));
-  EXPECT_CALL(*tokenizer, TokenIdsToText(std::vector<int>{58}))
+  EXPECT_CALL(*tokenizer, TokenIdsToText(std::vector<int>{58}, false))
       .WillOnce(testing::Return("c"));
   // Already stopped, but increase the length of the matched stop sequence.
-  EXPECT_CALL(*tokenizer, TokenIdsToText(std::vector<int>{735}))
+  EXPECT_CALL(*tokenizer, TokenIdsToText(std::vector<int>{735}, false))
       .WillOnce(testing::Return("d"));
 
   std::optional<BenchmarkInfo> benchmark_info;

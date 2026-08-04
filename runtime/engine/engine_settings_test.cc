@@ -60,7 +60,8 @@ using ::testing::status::StatusIs;
 class MockTokenizer : public Tokenizer {
  public:
   MOCK_METHOD(absl::StatusOr<std::string>, TokenIdsToText,
-              (const std::vector<int>& token_ids), (override));
+              (const std::vector<int>& token_ids, bool skip_special_tokens),
+              (override));
   MOCK_METHOD(absl::StatusOr<std::vector<int>>, TextToTokenIds,
               (absl::string_view text), (override));
   MOCK_METHOD(absl::StatusOr<int>, TokenToId, (absl::string_view token),
@@ -1270,7 +1271,7 @@ TEST(SessionConfigTest, MaybeUpdateAndValidateLlmGemma3N) {
       .WillRepeatedly(Return(std::vector<int>({1})));
   EXPECT_CALL(tokenizer, TextToTokenIds("<end_of_turn>"))
       .WillRepeatedly(Return(std::vector<int>({1})));
-  EXPECT_CALL(tokenizer, TokenIdsToText(std::vector<int>({105})))
+  EXPECT_CALL(tokenizer, TokenIdsToText(std::vector<int>({105}), false))
       .WillRepeatedly(Return("<start_of_turn>"));
   EXPECT_CALL(tokenizer, TextToTokenIds("<start_of_audio>"))
       .WillRepeatedly(Return(std::vector<int>({256000})));
@@ -1302,7 +1303,7 @@ TEST(SessionConfigTest, MaybeUpdateAndValidateLlmGemma3) {
       .WillRepeatedly(Return(std::vector<int>({1})));
   EXPECT_CALL(tokenizer, TextToTokenIds("<end_of_turn>"))
       .WillRepeatedly(Return(std::vector<int>({1})));
-  EXPECT_CALL(tokenizer, TokenIdsToText(std::vector<int>({105})))
+  EXPECT_CALL(tokenizer, TokenIdsToText(std::vector<int>({105}), false))
       .WillRepeatedly(Return("<start_of_turn>"));
   EXPECT_CALL(tokenizer, TextToTokenIds("<start_of_audio>"))
       .WillRepeatedly(Return(

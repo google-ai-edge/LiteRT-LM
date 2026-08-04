@@ -131,7 +131,8 @@ class SimpleTokenizer : public Tokenizer {
     return absl::NotFoundError(absl::StrCat("Token not found: ", token));
   }
 
-  absl::StatusOr<std::string> TokenIdsToText(const TokenIds& ids) override {
+  absl::StatusOr<std::string> TokenIdsToText(
+      const TokenIds& ids, bool skip_special_tokens) override {
     std::string text;
     for (int id : ids) {
       auto it = id_to_piece_.find(id);

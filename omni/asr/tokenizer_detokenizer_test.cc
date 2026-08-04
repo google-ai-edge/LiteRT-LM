@@ -48,7 +48,7 @@ class FakeTokenizer : public ::litert::support::Tokenizer {
   absl::StatusOr<int> TokenToId(absl::string_view token) override { return 0; }
 
   absl::StatusOr<std::string> TokenIdsToText(
-      const std::vector<int>& token_ids) override {
+      const std::vector<int>& token_ids, bool skip_special_tokens) override {
     if (token_ids_to_text_fn_) {
       return token_ids_to_text_fn_(token_ids);
     }
