@@ -3,16 +3,21 @@
 LiteRT-LM is Google's **production-ready** orchestration layer to run LLMs with
 LiteRT, engineered for **high-performance**, **cross-platform** execution.
 
-🔗 [Product Website](https://ai.google.dev/edge/litert-lm) | 🌐✨ [Web Demo](https://google-ai-edge.github.io/LiteRT-LM/web_demos/chat/index.html)
+🔗 [Product Website](https://ai.google.dev/edge/litert-lm) | 🌐✨
+[Web Demo](https://google-ai-edge.github.io/LiteRT-LM/web_demos/chat/index.html)
 
-## 🔥 What's New: `v0.13`
+## 🔥 What's New: `v0.15.0`
 
--   **Gemma4 12B Support**: LiteRT-LM now supports Gemma4 12B ([blog](https://developers.googleblog.com/bringing-gemma-4-12b-to-your-laptop-unlocking-local-agentic-workflows-with-google-ai-edge/)).
--   **LiteRT LM CLI update**: Support OpenAI API Compatible server ([doc](https://ai.google.dev/edge/litert-lm/cli/openai_server))
--   **Swift package for MacOS**: Swift package supports both macOS and iOS now.
--   **🚀 Agent skill support**: Support creating a standalone LiteRT-LM Android
-    demo app with backend selection and multi-modality support. See
-    [README.md](./agents/skills/README.md) for the example prompt.
+-   **🍎 Apple Foundation Framework**: New native adapter integrating Apple's
+    backend for fast text and multimodal execution, thanks to
+    [john-rocky](https://github.com/john-rocky)!
+-   **🛠️ CLI Configuration**: Centralized `config.json` for managing model
+    parameters without verbose flags
+    ([doc](https://developers.google.com/edge/litert-lm/cli/configuration)).
+-   **🌐 JavaScript API Updates**: Gemma 4 web support (up to 31B),
+    `AutoToolChat` capability, and autosized ringbuffer optimizations.
+-   **⚡ Concurrency & Stability**: Resolved critical re-entrancy issues on
+    concurrent engine initializations.
 
 👉 Try Gemma4-E4B with MTP on Linux, macOS, Windows or Raspberry Pi with the
 [LiteRT-LM CLI](https://ai.google.dev/edge/litert-lm/cli):
@@ -54,15 +59,15 @@ models immediately on your device.
 
 ### 📰 Blogs & Announcements
 
-Link                                                                                                                                                                                                            | Description
-:-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :----------
+Link                                                                                                                                                                                                                        | Description
+:-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :----------
 [Bringing Gemma 4 12B to your Laptop: Unlocking Local, Agentic Workflows with Google AI Edge](https://developers.googleblog.com/bringing-gemma-4-12b-to-your-laptop-unlocking-local-agentic-workflows-with-google-ai-edge/) | Bring agentic, multimodal AI capabilities to everyday laptops, enabling local data processing and visual insight generation.
-[Blazing-fast on-device GenAI with LiteRT-LM](https://developers.googleblog.com/blazing-fast-on-device-genai-with-litert-lm/)                                                                                   | Unlock Gemma 4's full potential with blazing speed and incredible efficiency using newly added Swift, JavaScript, and Flutter APIs.
-[Accelerating Gemma 4: faster inference with multi-token prediction drafters](https://blog.google/innovation-and-ai/technology/developers-tools/multi-token-prediction-gemma-4/)                                | An overview of how Multi-Token Prediction (MTP) drafters are making Gemma 4 models up to 3x faster at inference.
-[Bring state-of-the-art agentic skills to the edge with Gemma 4](https://developers.googleblog.com/bring-state-of-the-art-agentic-skills-to-the-edge-with-gemma-4/)                                             | Deploy Gemma 4 in-app and across a broader range of devices with stellar performance and broad reach using LiteRT-LM.
-[On-device GenAI in Chrome, Chromebook Plus and Pixel Watch](https://developers.googleblog.com/on-device-genai-in-chrome-chromebook-plus-and-pixel-watch-with-litert-lm/)                                       | Deploy language models on wearables and browser-based platforms using LiteRT-LM at scale.
-[On-device Function Calling in Google AI Edge Gallery](https://developers.googleblog.com/on-device-function-calling-in-google-ai-edge-gallery/)                                                                 | Explore how to fine-tune FunctionGemma and enable function calling capabilities powered by LiteRT-LM Tool Use APIs.
-[Google AI Edge small language models, multimodality, and function calling](https://developers.googleblog.com/google-ai-edge-small-language-models-multimodality-rag-function-calling/)                         | Latest insights on RAG, multimodality, and function calling for edge language models.
+[Blazing-fast on-device GenAI with LiteRT-LM](https://developers.googleblog.com/blazing-fast-on-device-genai-with-litert-lm/)                                                                                               | Unlock Gemma 4's full potential with blazing speed and incredible efficiency using newly added Swift, JavaScript, and Flutter APIs.
+[Accelerating Gemma 4: faster inference with multi-token prediction drafters](https://blog.google/innovation-and-ai/technology/developers-tools/multi-token-prediction-gemma-4/)                                            | An overview of how Multi-Token Prediction (MTP) drafters are making Gemma 4 models up to 3x faster at inference.
+[Bring state-of-the-art agentic skills to the edge with Gemma 4](https://developers.googleblog.com/bring-state-of-the-art-agentic-skills-to-the-edge-with-gemma-4/)                                                         | Deploy Gemma 4 in-app and across a broader range of devices with stellar performance and broad reach using LiteRT-LM.
+[On-device GenAI in Chrome, Chromebook Plus and Pixel Watch](https://developers.googleblog.com/on-device-genai-in-chrome-chromebook-plus-and-pixel-watch-with-litert-lm/)                                                   | Deploy language models on wearables and browser-based platforms using LiteRT-LM at scale.
+[On-device Function Calling in Google AI Edge Gallery](https://developers.googleblog.com/on-device-function-calling-in-google-ai-edge-gallery/)                                                                             | Explore how to fine-tune FunctionGemma and enable function calling capabilities powered by LiteRT-LM Tool Use APIs.
+[Google AI Edge small language models, multimodality, and function calling](https://developers.googleblog.com/google-ai-edge-small-language-models-multimodality-rag-function-calling/)                                     | Latest insights on RAG, multimodality, and function calling for edge language models.
 
 --------------------------------------------------------------------------------
 
@@ -117,15 +122,20 @@ tag.
 
 ## 📦 Releases
 
+-   **v0.15**: Added Apple Foundation framework adapter, centralized
+    `config.json` CLI configuration, and JavaScript API enhancements including
+    AutoToolChat.
+-   **v0.14**: Android support for Python and CLI, enabled real-time streaming
+    Tool Calling & Agentic Capabilities across C, Swift, and JS APIs, and
+    expanded Multi-Modality with auto-backend selection.
 -   **v0.13**: Support Gemma4 12B. Added Agent skill support for Android demo
     app, OpenAI API compatible server in CLI, and MacOS support in Swift
     package.
 -   **v0.12**: Added early preview of Swift and Web JavaScript APIs, and
     community Flutter support. Updated LiteRT-LM CLI to have full CPU and GPU
     backend support across Linux, macOS, and Windows.
--   **v0.11**: Support Single Position Multi-token Prediction (MTP) for
-    Gemma 4. Expand LiteRT-LM CLI to run natively on Windows with CPU and GPU
-    backends.
+-   **v0.11**: Support Single Position Multi-token Prediction (MTP) for Gemma 4.
+    Expand LiteRT-LM CLI to run natively on Windows with CPU and GPU backends.
 -   **v0.10**: Deploy
     [Gemma 4](https://blog.google/innovation-and-ai/technology/developers-tools/gemma-4/)
     with stellar performance
