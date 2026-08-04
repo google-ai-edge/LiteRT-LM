@@ -1797,13 +1797,6 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
       GetModelSignaturesFromInputOutputNames(decode_signature.InputNames(),
                                              decode_signature.OutputNames()));
 
-  ABSL_ASSIGN_OR_RETURN(
-      auto prefill_runner_set,
-      GetPrefillRunnerSetFromModel(
-          *litert_model, kPrefillSignatureRunner,
-          /*input_positions_name=*/signatures.input_positions));
-  RET_CHECK(!prefill_runner_set.empty()) << "No prefill runner available.";
-
   LITERT_ASSIGN_OR_RETURN(
       auto compilation_options,
       CreateCompilationOptions(executor_settings, activation_data_type,
@@ -1833,6 +1826,14 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
     compiled_model =
         std::make_unique<CompiledModel>(std::move(compiled_model_tmp));
   }
+
+  ABSL_ASSIGN_OR_RETURN(
+      auto prefill_runner_set,
+      GetPrefillRunnerSetFromModel(
+          *litert_model, kPrefillSignatureRunner,
+          /*input_positions_name=*/signatures.input_positions));
+  RET_CHECK(!prefill_runner_set.empty()) << "No prefill runner available.";
+
   LitertState::AllocationPolicy allocation_policy =
       LitertState::AllocationPolicy::kInplace;
   if (backend == Backend::GPU) {
