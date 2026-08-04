@@ -21,13 +21,13 @@
 #include <memory>
 #include <optional>
 #include <ostream>
-#include <set>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "absl/algorithm/container.h"  // from @com_google_absl
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
+#include "absl/container/flat_hash_set.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/log/log.h"  // from @com_google_absl
 #include "absl/memory/memory.h"  // from @com_google_absl
@@ -38,10 +38,12 @@
 #include "absl/strings/numbers.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/str_join.h"  // from @com_google_absl
+#include "absl/strings/str_split.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/time/clock.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "litert/c/litert_common.h"  // from @litert
 #include "litert/c/litert_model_types.h"  // from @litert
 #include "litert/c/litert_op_code.h"  // from @litert
 #include "litert/cc/internal/litert_extended_model.h"  // from @litert
@@ -57,6 +59,7 @@
 #include "litert/cc/litert_options.h"  // from @litert
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
 #include "support/util/status_macros.h"  // from @litert
 #include "tflite/types/half.h"  // from @litert
 #if defined(__ANDROID__)
@@ -104,6 +107,14 @@ absl::Status FillKVCacheBuffer(TensorBuffer& buffer, int64_t init_value) {
     auto* ptr = static_cast<uint16_t*>(lock.second);
     std::fill(ptr, ptr + size / sizeof(uint16_t),
               static_cast<uint16_t>(init_value));
+  } else if (element_type == ::litert::ElementType::Int8) {
+    auto* ptr = static_cast<int8_t*>(lock.second);
+    std::fill(ptr, ptr + size / sizeof(int8_t),
+              static_cast<int8_t>(init_value));
+  } else if (element_type == ::litert::ElementType::UInt8) {
+    auto* ptr = static_cast<uint8_t*>(lock.second);
+    std::fill(ptr, ptr + size / sizeof(uint8_t),
+              static_cast<uint8_t>(init_value));
   } else {
     std::memset(lock.second, 0, size);
   }
@@ -118,6 +129,18 @@ constexpr absl::string_view kPrefillMaskBase = "prefill_mask";
 constexpr absl::string_view kPrefillRopeBase = "prefill_rope";
 constexpr absl::string_view kPrefillCacheUpdateBase = "prefill_cache_update";
 constexpr char kDecodeSignature[] = "decode";
+constexpr char kDecodeEmbedder[] = "decode_embedder";
+constexpr char kDecodeEmbedderPerLayer[] = "decode_per_layer_embedder";
+constexpr char kDecodeMask[] = "decode_mask";
+constexpr char kDecodeRope[] = "decode_rope";
+constexpr char kDecodeCacheUpdate[] = "decode_cache_update";
+
+constexpr char kVerifySignature[] = "verify";
+constexpr char kVerifyEmbedder[] = "verify_embedder";
+constexpr char kVerifyEmbedderPerLayer[] = "verify_per_layer_embedder";
+constexpr char kVerifyMask[] = "verify_mask";
+constexpr char kVerifyRope[] = "verify_rope";
+constexpr char kVerifyCacheUpdate[] = "verify_cache_update";
 constexpr char cache_k31[] = "kv_cache_k_31";
 constexpr char cache_k25[] = "kv_cache_k_25";
 constexpr char cache_v25[] = "kv_cache_v_25";
@@ -144,7 +167,7 @@ constexpr absl::string_view kv_cache_slice_c_root_name = "kv_slice_c_";
 // information embedded and the engine passes it down.
 bool DetectIsSwa(const absl::flat_hash_map<absl::string_view, TensorBuffer>&
                      input_kv_cache_buffers) {
-  std::set<int64_t> cache_seqs;
+  absl::flat_hash_set<int64_t> cache_seqs;
   for (const auto& [name, buffer] : input_kv_cache_buffers) {
     if (name.starts_with(kv_cache_k_root_name) ||
         name.starts_with(kv_cache_v_root_name) ||
@@ -170,6 +193,11 @@ namespace {
 
 using LogitsQuantizationParams =
     LlmLiteRtNpuCompiledModelExecutor::LogitsQuantizationParams;
+using TensorBufferMap = LlmLiteRtNpuCompiledModelExecutor::TensorBufferMap;
+using TensorBufferMapBySize =
+    LlmLiteRtNpuCompiledModelExecutor::TensorBufferMapBySize;
+using ResolvedSignatures =
+    LlmLiteRtNpuCompiledModelExecutor::ResolvedSignatures;
 
 // Builds a prefill signature name from its base and the prefill length, e.g.
 // PrefillSig("prefill_mask", 256) -> "prefill_mask_256".
@@ -177,55 +205,234 @@ std::string PrefillSig(absl::string_view base, int prefill_size) {
   return absl::StrCat(base, "_", prefill_size);
 }
 
-// Detects the prefill length the transformer model was compiled with by
-// scanning its signatures for the bare LLM prefill signature named
-// "prefill_<N>" (excluding the prefill_mask/rope/embedder/cache_update family),
-// and returns <N>. Falls back to probing a list of common sizes if the model
-// does not expose enumerable signatures.
-absl::StatusOr<int> DetectPrefillSize(const litert::Model& transformer_model) {
+bool DetectHasSuffix(const litert::Model& llm_model) {
+  auto signatures = llm_model.GetSignatures();
+  if (signatures) {
+    for (const auto& signature : *signatures) {
+      absl::string_view key = signature.Key();
+      if (absl::StartsWith(key, "decode_cache_")) {
+        absl::string_view suffix = key.substr(sizeof("decode_cache_") - 1);
+        int size = 0;
+        if (absl::SimpleAtoi(suffix, &size) && size > 0) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+bool DetectHasRopeSuffix(ModelResources& resources) {
+  auto aux_model_or = resources.GetTFLiteModel(ModelType::kTfLiteAux);
+  if (aux_model_or.ok()) {
+    auto aux_signatures = (*aux_model_or)->GetSignatures();
+    if (aux_signatures) {
+      for (const auto& signature : *aux_signatures) {
+        absl::string_view key = signature.Key();
+        if (absl::StartsWith(key, "prefill_rope_") &&
+            absl::StrContains(key, "_cache_")) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+// Detects all prefill lengths supported by the transformer model by
+// scanning its signatures for prefill signatures named "prefill_<N>..."
+// and returns a sorted list of unique sizes. Falls back to probing a list
+// of common sizes if the model does not expose enumerable signatures.
+absl::StatusOr<std::vector<int>> DetectPrefillSizes(
+    const litert::Model& transformer_model) {
   const std::string prefix = absl::StrCat(kPrefillSignatureBase, "_");
   auto signatures = transformer_model.GetSignatures();
+  absl::flat_hash_set<int> unique_sizes;
   if (signatures) {
     for (const auto& signature : *signatures) {
       absl::string_view key = signature.Key();
       if (!absl::StartsWith(key, prefix)) {
         continue;
       }
-      // Only the bare LLM prefill signature has a purely numeric suffix; the
-      // auxiliary signatures (prefill_mask_..., prefill_rope_..., etc.) carry a
-      // non-numeric segment after the "prefill_" prefix.
       absl::string_view suffix = key.substr(prefix.size());
+      std::vector<absl::string_view> parts = absl::StrSplit(suffix, '_');
+      if (parts.empty()) {
+        continue;
+      }
+      // Only the bare LLM prefill signature has a numeric first segment after
+      // the "prefill_" prefix (e.g., "prefill_128_cache_640"). Auxiliary
+      // signatures (prefill_mask_128_..., etc.) start with a non-numeric
+      // segment.
       int prefill_size = 0;
-      if (absl::SimpleAtoi(suffix, &prefill_size) && prefill_size > 0) {
-        return prefill_size;
+      if (absl::SimpleAtoi(parts[0], &prefill_size) && prefill_size > 0) {
+        unique_sizes.insert(prefill_size);
       }
     }
   }
   // Fallback: probe a list of common prefill sizes.
-  for (int candidate : {256, 128, 512, 1024, 64}) {
-    if (transformer_model
-            .FindSignature(PrefillSig(kPrefillSignatureBase, candidate))
-            .HasValue()) {
-      return candidate;
+  if (unique_sizes.empty()) {
+    for (int candidate : {256, 128, 512, 1024, 64}) {
+      if (transformer_model
+              .FindSignature(PrefillSig(kPrefillSignatureBase, candidate))
+              .HasValue()) {
+        unique_sizes.insert(candidate);
+      }
     }
   }
-  return absl::NotFoundError(
-      "Could not detect a prefill signature (e.g. \"prefill_128\") in the "
-      "transformer model.");
+  if (unique_sizes.empty()) {
+    return absl::NotFoundError(
+        "Could not detect a prefill signature (e.g. \"prefill_128\") in the "
+        "transformer model.");
+  }
+  std::vector<int> sorted_sizes(unique_sizes.begin(), unique_sizes.end());
+  absl::c_sort(sorted_sizes);
+  return sorted_sizes;
 }
 
-// Builds the prefill family of signature names for a given prefill length.
-LlmLiteRtNpuCompiledModelExecutor::ResolvedPrefillSignatures
-BuildResolvedPrefillSignatures(int prefill_size) {
-  return LlmLiteRtNpuCompiledModelExecutor::ResolvedPrefillSignatures{
+void DumpModelSignatures(absl::string_view tag, const litert::Model& model) {
+  auto signatures_opt = model.GetSignatures();
+  if (signatures_opt) {
+    ABSL_LOG(INFO) << "--- DUMPING SIGNATURES FOR: " << tag << " ---";
+    for (const auto& signature : *signatures_opt) {
+      ABSL_LOG(INFO) << "  Signature Key: " << signature.Key();
+    }
+    ABSL_LOG(INFO) << "-----------------------------------------";
+  } else {
+    ABSL_LOG(WARNING) << "Model " << tag << " has no signatures!";
+  }
+}
+
+bool IsKVCacheTensor(absl::string_view name) {
+  return absl::StartsWith(name, kv_cache_k_root_name) ||
+         absl::StartsWith(name, kv_cache_v_root_name) ||
+         absl::StartsWith(name, kv_cache_c_root_name);
+}
+
+absl::StatusOr<std::vector<int>> DetectSupportedContextSizes(
+    const litert::Model& model, int prefill_size, int max_sequence_length) {
+  std::vector<int> sizes;
+  auto signatures = model.GetSignatures();
+  if (signatures) {
+    for (const auto& signature : *signatures) {
+      absl::string_view key = signature.Key();
+      if (absl::StartsWith(key, "decode_cache_")) {
+        absl::string_view suffix = key.substr(sizeof("decode_cache_") - 1);
+        int size = 0;
+        if (absl::SimpleAtoi(suffix, &size) && size > 0) {
+          sizes.push_back(size);
+        }
+      }
+    }
+  }
+  if (sizes.empty()) {
+    sizes.push_back(max_sequence_length);
+  } else {
+    absl::c_sort(sizes);
+  }
+  std::vector<int> filtered_sizes;
+  auto it = absl::c_lower_bound(sizes, max_sequence_length);
+  if (it != sizes.end()) {
+    filtered_sizes.assign(sizes.begin(), it + 1);
+  } else {
+    filtered_sizes = std::move(sizes);
+  }
+  return filtered_sizes;
+}
+
+LlmLiteRtNpuCompiledModelExecutor::ResolvedSignatures BuildResolvedSignatures(
+    int prefill_size, int context_size, bool has_suffix, bool has_rope_suffix) {
+  // Helper for main/mask/cache_update signatures which get context size suffix
+  auto context_suffixed_prefill_name = [](absl::string_view base, int p, int c,
+                                          bool suffix) {
+    if (suffix) {
+      return absl::StrCat(base, "_", p, "_cache_", c);
+    } else {
+      return absl::StrCat(base, "_", p);
+    }
+  };
+
+  auto context_suffixed_decode_name = [](absl::string_view base, int c,
+                                         bool suffix) {
+    if (suffix) {
+      return absl::StrCat(base, "_cache_", c);
+    } else {
+      return std::string(base);
+    }
+  };
+
+  // Helper for embedder signatures which do NOT get context size suffix
+  auto static_prefill_name = [](absl::string_view base, int p) {
+    return absl::StrCat(base, "_", p);
+  };
+
+  auto static_decode_name = [](absl::string_view base) {
+    return std::string(base);
+  };
+
+  return LlmLiteRtNpuCompiledModelExecutor::ResolvedSignatures{
       .size = prefill_size,
-      .prefill = PrefillSig(kPrefillSignatureBase, prefill_size),
-      .embedder = PrefillSig(kPrefillEmbedderBase, prefill_size),
+      .context_size = context_size,
+      .prefill = context_suffixed_prefill_name(
+          kPrefillSignatureBase, prefill_size, context_size, has_suffix),
+      .embedder = static_prefill_name(kPrefillEmbedderBase, prefill_size),
       .embedder_per_layer =
-          PrefillSig(kPrefillEmbedderPerLayerBase, prefill_size),
-      .mask = PrefillSig(kPrefillMaskBase, prefill_size),
-      .rope = PrefillSig(kPrefillRopeBase, prefill_size),
-      .cache_update = PrefillSig(kPrefillCacheUpdateBase, prefill_size)};
+          static_prefill_name(kPrefillEmbedderPerLayerBase, prefill_size),
+      .mask = context_suffixed_prefill_name(kPrefillMaskBase, prefill_size,
+                                            context_size, has_suffix),
+      .rope = context_suffixed_prefill_name(kPrefillRopeBase, prefill_size,
+                                            context_size, has_rope_suffix),
+      .cache_update = context_suffixed_prefill_name(
+          kPrefillCacheUpdateBase, prefill_size, context_size, has_suffix),
+      .decode = context_suffixed_decode_name(kDecodeSignature, context_size,
+                                             has_suffix),
+      .decode_embedder = static_decode_name(kDecodeEmbedder),
+      .decode_embedder_per_layer = static_decode_name(kDecodeEmbedderPerLayer),
+      .decode_mask =
+          context_suffixed_decode_name(kDecodeMask, context_size, has_suffix),
+      .decode_rope = context_suffixed_decode_name(kDecodeRope, context_size,
+                                                  has_rope_suffix),
+      .decode_cache_update = context_suffixed_decode_name(
+          kDecodeCacheUpdate, context_size, has_suffix),
+      .verify = context_suffixed_decode_name(kVerifySignature, context_size,
+                                             has_suffix),
+      .verify_embedder = static_decode_name(kVerifyEmbedder),
+      .verify_embedder_per_layer = static_decode_name(kVerifyEmbedderPerLayer),
+      .verify_mask =
+          context_suffixed_decode_name(kVerifyMask, context_size, has_suffix),
+      .verify_rope = context_suffixed_decode_name(kVerifyRope, context_size,
+                                                  has_rope_suffix),
+      .verify_cache_update = context_suffixed_decode_name(
+          kVerifyCacheUpdate, context_size, has_suffix)};
+}
+
+absl::StatusOr<::litert::TensorBuffer> CreateAliasBuffer(
+    const ::litert::Environment& env,
+    const ::litert::TensorBuffer& large_buffer,
+    const ::litert::RankedTensorType& target_type) {
+  LITERT_ASSIGN_OR_RETURN(auto buffer_type, large_buffer.BufferType());
+  if (buffer_type == ::litert::TensorBufferType::kAhwb) {
+    auto ahwb_res = large_buffer.GetAhwb();
+    if (ahwb_res.HasValue()) {
+      LITERT_ASSIGN_OR_RETURN(auto buf,
+                              ::litert::TensorBuffer::CreateFromAhwb(
+                                  env, target_type, ahwb_res.Value(), 0));
+      return std::move(buf);
+    }
+  } else if (buffer_type == ::litert::TensorBufferType::kHostMemory) {
+    auto env_holder = env.GetHolder();
+    void* host_mem_addr;
+    if (env_holder.runtime->GetTensorBufferHostMemory(
+            large_buffer.Get(), &host_mem_addr) == kLiteRtStatusOk) {
+      LITERT_ASSIGN_OR_RETURN(auto target_bytes, target_type.Bytes());
+      LITERT_ASSIGN_OR_RETURN(
+          auto buf, ::litert::TensorBuffer::CreateFromHostMemory(
+                        env, target_type, host_mem_addr, target_bytes));
+      return std::move(buf);
+    }
+  }
+  return absl::InternalError(
+      absl::StrCat("Unsupported buffer type for context size aliasing: ",
+                   static_cast<int>(buffer_type)));
 }
 
 }  // namespace
@@ -652,23 +859,37 @@ LlmLiteRtNpuCompiledModelExecutor::~LlmLiteRtNpuCompiledModelExecutor() {
 absl::StatusOr<LlmLiteRtNpuCompiledModelExecutor::EmbedderContext>
 LlmLiteRtNpuCompiledModelExecutor::CreateEmbedderContextWithBufferSharing(
     ::litert::Environment& env, const litert::Model& embedder_model,
-    const ResolvedPrefillSignatures& prefill_signatures,
-    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-        gemma_prefill_input_buffers,
-    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-        gemma_decode_input_buffers,
-    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-        gemma_verify_input_buffers,
+    const std::vector<ResolvedSignatures>& prefill_signatures_list,
+    TensorBufferMapBySize& gemma_prefill_input_buffers_by_size,
+    TensorBufferMap& gemma_decode_input_buffers,
+    TensorBufferMap& gemma_verify_input_buffers,
     const LlmExecutorSettings& settings) {
   LITERT_ASSIGN_OR_RETURN(auto options, CreateLiteRtCpuOptions(settings));
   LITERT_ASSIGN_OR_RETURN(
       CompiledModel embedder_compiled_model,
       CompiledModel::Create(env, embedder_model.Get(), options));
 
-  absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
-      prefill_input_buffers;
-  absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
-      prefill_output_buffers;
+  TensorBufferMapBySize prefill_input_buffers_by_size;
+  TensorBufferMapBySize prefill_output_buffers_by_size;
+
+  for (const auto& sigs : prefill_signatures_list) {
+    int prefill_size = sigs.size;
+    auto& prefill_input_buffers = prefill_input_buffers_by_size[prefill_size];
+    auto& prefill_output_buffers = prefill_output_buffers_by_size[prefill_size];
+
+    LITERT_ASSIGN_OR_RETURN(
+        prefill_input_buffers[EmbedderSignatures::kEmbedderInput],
+        embedder_compiled_model.CreateInputBuffer(
+            sigs.embedder, EmbedderSignatures::kEmbedderInput));
+    prefill_input_buffers[EmbedderSignatures::kEmbedderInput].Clear();
+
+    LITERT_ASSIGN_OR_RETURN(
+        prefill_output_buffers[EmbedderSignatures::kEmbedderOutput],
+        gemma_prefill_input_buffers_by_size.at(prefill_size)
+            .at(LlmSignatures::kInputEmbeddings)
+            .Duplicate());
+  }
+
   absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
       decode_input_buffers;
   absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
@@ -677,16 +898,6 @@ LlmLiteRtNpuCompiledModelExecutor::CreateEmbedderContextWithBufferSharing(
       verify_input_buffers;
   absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
       verify_output_buffers;
-
-  LITERT_ASSIGN_OR_RETURN(
-      prefill_input_buffers[EmbedderSignatures::kEmbedderInput],
-      embedder_compiled_model.CreateInputBuffer(
-          prefill_signatures.embedder, EmbedderSignatures::kEmbedderInput));
-  prefill_input_buffers[EmbedderSignatures::kEmbedderInput].Clear();
-
-  LITERT_ASSIGN_OR_RETURN(
-      prefill_output_buffers[EmbedderSignatures::kEmbedderOutput],
-      gemma_prefill_input_buffers[LlmSignatures::kInputEmbeddings].Duplicate());
 
   LITERT_ASSIGN_OR_RETURN(
       decode_input_buffers[EmbedderSignatures::kEmbedderInput],
@@ -715,35 +926,49 @@ LlmLiteRtNpuCompiledModelExecutor::CreateEmbedderContextWithBufferSharing(
   }
 
   return EmbedderContext(
-      std::move(embedder_compiled_model), std::move(prefill_input_buffers),
-      std::move(prefill_output_buffers), std::move(decode_input_buffers),
-      std::move(decode_output_buffers), std::move(verify_input_buffers),
-      std::move(verify_output_buffers));
+      std::move(embedder_compiled_model),
+      std::move(prefill_input_buffers_by_size),
+      std::move(prefill_output_buffers_by_size),
+      std::move(decode_input_buffers), std::move(decode_output_buffers),
+      std::move(verify_input_buffers), std::move(verify_output_buffers));
 }
 
 absl::StatusOr<LlmLiteRtNpuCompiledModelExecutor::EmbedderPerLayerContext>
 LlmLiteRtNpuCompiledModelExecutor::
     CreateEmbedderPerLayerContextWithBufferSharing(
         ::litert::Environment& env, const litert::Model& embedder_model,
-        const ::litert::TensorBuffer& prefill_input_tokens,
+        const absl::flat_hash_map<int, ::litert::TensorBuffer>&
+            prefill_input_tokens_by_size,
         const ::litert::TensorBuffer& decode_input_tokens,
         const ::litert::TensorBuffer& verify_input_tokens,
-        absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-            gemma_prefill_input_buffers,
-        absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-            gemma_decode_input_buffers,
-        absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-            gemma_verify_input_buffers,
+        TensorBufferMapBySize& gemma_prefill_input_buffers_by_size,
+        TensorBufferMap& gemma_decode_input_buffers,
+        TensorBufferMap& gemma_verify_input_buffers,
         const LlmExecutorSettings& settings) {
   LITERT_ASSIGN_OR_RETURN(auto options, CreateLiteRtCpuOptions(settings));
   LITERT_ASSIGN_OR_RETURN(
       CompiledModel embedder_compiled_model,
       CompiledModel::Create(env, embedder_model.Get(), options));
 
-  absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
-      prefill_input_buffers;
-  absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
-      prefill_output_buffers;
+  TensorBufferMapBySize prefill_input_buffers_by_size;
+  TensorBufferMapBySize prefill_output_buffers_by_size;
+
+  for (const auto& [size, prefill_input_tokens] :
+       prefill_input_tokens_by_size) {
+    auto& prefill_input_buffers = prefill_input_buffers_by_size[size];
+    auto& prefill_output_buffers = prefill_output_buffers_by_size[size];
+
+    LITERT_ASSIGN_OR_RETURN(
+        prefill_input_buffers[EmbedderPerLayerSignatures::kEmbedderInput],
+        prefill_input_tokens.Duplicate());
+
+    LITERT_ASSIGN_OR_RETURN(
+        prefill_output_buffers[EmbedderPerLayerSignatures::kEmbedderOutput],
+        gemma_prefill_input_buffers_by_size.at(size)
+            .at(kPerLayerEmbedderTensor)
+            .Duplicate());
+  }
+
   absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
       decode_input_buffers;
   absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
@@ -752,14 +977,6 @@ LlmLiteRtNpuCompiledModelExecutor::
       verify_input_buffers;
   absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
       verify_output_buffers;
-
-  LITERT_ASSIGN_OR_RETURN(
-      prefill_input_buffers[EmbedderPerLayerSignatures::kEmbedderInput],
-      prefill_input_tokens.Duplicate());
-
-  LITERT_ASSIGN_OR_RETURN(
-      prefill_output_buffers[EmbedderPerLayerSignatures::kEmbedderOutput],
-      gemma_prefill_input_buffers[kPerLayerEmbedderTensor].Duplicate());
 
   LITERT_ASSIGN_OR_RETURN(
       decode_input_buffers[EmbedderPerLayerSignatures::kEmbedderInput],
@@ -781,10 +998,11 @@ LlmLiteRtNpuCompiledModelExecutor::
   }
 
   return EmbedderPerLayerContext(
-      std::move(embedder_compiled_model), std::move(prefill_input_buffers),
-      std::move(prefill_output_buffers), std::move(decode_input_buffers),
-      std::move(decode_output_buffers), std::move(verify_input_buffers),
-      std::move(verify_output_buffers));
+      std::move(embedder_compiled_model),
+      std::move(prefill_input_buffers_by_size),
+      std::move(prefill_output_buffers_by_size),
+      std::move(decode_input_buffers), std::move(decode_output_buffers),
+      std::move(verify_input_buffers), std::move(verify_output_buffers));
 }
 
 absl::StatusOr<LlmLiteRtNpuCompiledModelExecutor::NpuAuxiliaryContext>
@@ -803,17 +1021,68 @@ LlmLiteRtNpuCompiledModelExecutor::CreateNpuAuxiliaryContext(
 absl::StatusOr<LlmLiteRtNpuCompiledModelExecutor::InferenceContext>
 LlmLiteRtNpuCompiledModelExecutor::CreateMaskContextWithBufferSharing(
     const NpuAuxiliaryContext& npu_auxiliary_context,
-    const ResolvedPrefillSignatures& prefill_signatures,
-    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-        gemma_prefill_input_buffers,
-    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-        gemma_decode_input_buffers,
-    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-        gemma_verify_input_buffers) {
-  absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
-      prefill_input_buffers;
-  absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
-      prefill_output_buffers;
+    const std::vector<ResolvedSignatures>& prefill_signatures_list,
+    TensorBufferMapBySize& gemma_prefill_input_buffers_by_size,
+    TensorBufferMap& gemma_decode_input_buffers,
+    TensorBufferMap& gemma_verify_input_buffers) {
+  TensorBufferMapBySize prefill_input_buffers_by_size;
+  TensorBufferMapBySize prefill_output_buffers_by_size;
+
+  for (const auto& sigs : prefill_signatures_list) {
+    int size = sigs.size;
+    auto& prefill_input_buffers = prefill_input_buffers_by_size[size];
+    auto& prefill_output_buffers = prefill_output_buffers_by_size[size];
+    auto gemma_buffers_it = gemma_prefill_input_buffers_by_size.find(size);
+
+    LITERT_ASSIGN_OR_RETURN(
+        prefill_input_buffers[MaskSignatures::kMaskInputTimeStep],
+        npu_auxiliary_context.npu_auxiliary_compiled_model.CreateInputBuffer(
+            sigs.mask, MaskSignatures::kMaskInputTimeStep));
+    prefill_input_buffers[MaskSignatures::kMaskInputTimeStep].Clear();
+    LITERT_ASSIGN_OR_RETURN(
+        prefill_input_buffers[MaskSignatures::kMaskInputTokens],
+        npu_auxiliary_context.npu_auxiliary_compiled_model.CreateInputBuffer(
+            sigs.mask, MaskSignatures::kMaskInputTokens));
+    prefill_input_buffers[MaskSignatures::kMaskInputTokens].Clear();
+
+    LITERT_ASSIGN_OR_RETURN(auto prefill_mask_input_names,
+                            npu_auxiliary_context.npu_auxiliary_compiled_model
+                                .GetSignatureInputNames(sigs.mask));
+    if (absl::c_find(prefill_mask_input_names,
+                     MaskSignatures::kMaskInputValidMask) !=
+        prefill_mask_input_names.end()) {
+      LITERT_ASSIGN_OR_RETURN(
+          prefill_input_buffers[MaskSignatures::kMaskInputValidMask],
+          npu_auxiliary_context.npu_auxiliary_compiled_model.CreateInputBuffer(
+              sigs.mask, MaskSignatures::kMaskInputValidMask));
+      prefill_input_buffers[MaskSignatures::kMaskInputValidMask].Clear();
+    }
+
+    LITERT_ASSIGN_OR_RETURN(auto prefill_mask_output_names,
+                            npu_auxiliary_context.npu_auxiliary_compiled_model
+                                .GetSignatureOutputNames(sigs.mask));
+    for (const auto& mask_output_name : prefill_mask_output_names) {
+      bool found = false;
+      if (gemma_buffers_it != gemma_prefill_input_buffers_by_size.end()) {
+        const auto& gemma_buffers = gemma_buffers_it->second;
+        if (auto it = gemma_buffers.find(mask_output_name);
+            it != gemma_buffers.end()) {
+          LITERT_ASSIGN_OR_RETURN(prefill_output_buffers[mask_output_name],
+                                  it->second.Duplicate());
+          found = true;
+        }
+      }
+      if (!found) {
+        LITERT_ASSIGN_OR_RETURN(
+            prefill_output_buffers[mask_output_name],
+            npu_auxiliary_context.npu_auxiliary_compiled_model
+                .CreateOutputBuffer(sigs.mask, mask_output_name));
+      }
+    }
+  }
+
+  const auto& representative_signatures = prefill_signatures_list.back();
+
   absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
       decode_input_buffers;
   absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
@@ -824,76 +1093,37 @@ LlmLiteRtNpuCompiledModelExecutor::CreateMaskContextWithBufferSharing(
       verify_output_buffers;
 
   LITERT_ASSIGN_OR_RETURN(
-      prefill_input_buffers[MaskSignatures::kMaskInputTimeStep],
-      npu_auxiliary_context.npu_auxiliary_compiled_model.CreateInputBuffer(
-          prefill_signatures.mask, MaskSignatures::kMaskInputTimeStep));
-  prefill_input_buffers[MaskSignatures::kMaskInputTimeStep].Clear();
-  LITERT_ASSIGN_OR_RETURN(
-      prefill_input_buffers[MaskSignatures::kMaskInputTokens],
-      npu_auxiliary_context.npu_auxiliary_compiled_model.CreateInputBuffer(
-          prefill_signatures.mask, MaskSignatures::kMaskInputTokens));
-  prefill_input_buffers[MaskSignatures::kMaskInputTokens].Clear();
-
-  LITERT_ASSIGN_OR_RETURN(
-      auto prefill_mask_input_names,
-      npu_auxiliary_context.npu_auxiliary_compiled_model.GetSignatureInputNames(
-          prefill_signatures.mask));
-  if (absl::c_find(prefill_mask_input_names,
-                   MaskSignatures::kMaskInputValidMask) !=
-      prefill_mask_input_names.end()) {
-    LITERT_ASSIGN_OR_RETURN(
-        prefill_input_buffers[MaskSignatures::kMaskInputValidMask],
-        npu_auxiliary_context.npu_auxiliary_compiled_model.CreateInputBuffer(
-            prefill_signatures.mask, MaskSignatures::kMaskInputValidMask));
-    prefill_input_buffers[MaskSignatures::kMaskInputValidMask].Clear();
-  }
-
-  LITERT_ASSIGN_OR_RETURN(
-      auto prefill_mask_output_names,
-      npu_auxiliary_context.npu_auxiliary_compiled_model
-          .GetSignatureOutputNames(prefill_signatures.mask));
-  for (const auto& mask_output_name : prefill_mask_output_names) {
-    if (gemma_prefill_input_buffers.contains(mask_output_name)) {
-      LITERT_ASSIGN_OR_RETURN(
-          prefill_output_buffers[mask_output_name],
-          gemma_prefill_input_buffers[mask_output_name].Duplicate());
-    } else {
-      LITERT_ASSIGN_OR_RETURN(
-          prefill_output_buffers[mask_output_name],
-          npu_auxiliary_context.npu_auxiliary_compiled_model.CreateOutputBuffer(
-              prefill_signatures.mask, mask_output_name));
-    }
-  }
-
-  LITERT_ASSIGN_OR_RETURN(
       decode_input_buffers[MaskSignatures::kMaskInputTimeStep],
       npu_auxiliary_context.npu_auxiliary_compiled_model.CreateInputBuffer(
-          MaskSignatures::kDecodeMask, MaskSignatures::kMaskInputTimeStep));
+          representative_signatures.decode_mask,
+          MaskSignatures::kMaskInputTimeStep));
   decode_input_buffers[MaskSignatures::kMaskInputTimeStep].Clear();
   LITERT_ASSIGN_OR_RETURN(
       decode_input_buffers[MaskSignatures::kMaskInputTokens],
       npu_auxiliary_context.npu_auxiliary_compiled_model.CreateInputBuffer(
-          MaskSignatures::kDecodeMask, MaskSignatures::kMaskInputTokens));
+          representative_signatures.decode_mask,
+          MaskSignatures::kMaskInputTokens));
   decode_input_buffers[MaskSignatures::kMaskInputTokens].Clear();
 
   LITERT_ASSIGN_OR_RETURN(
       auto decode_mask_input_names,
       npu_auxiliary_context.npu_auxiliary_compiled_model.GetSignatureInputNames(
-          MaskSignatures::kDecodeMask));
+          representative_signatures.decode_mask));
   if (absl::c_find(decode_mask_input_names,
                    MaskSignatures::kMaskInputValidMask) !=
       decode_mask_input_names.end()) {
     LITERT_ASSIGN_OR_RETURN(
         decode_input_buffers[MaskSignatures::kMaskInputValidMask],
         npu_auxiliary_context.npu_auxiliary_compiled_model.CreateInputBuffer(
-            MaskSignatures::kDecodeMask, MaskSignatures::kMaskInputValidMask));
+            representative_signatures.decode_mask,
+            MaskSignatures::kMaskInputValidMask));
     decode_input_buffers[MaskSignatures::kMaskInputValidMask].Clear();
   }
 
   LITERT_ASSIGN_OR_RETURN(
       auto decode_mask_output_names,
       npu_auxiliary_context.npu_auxiliary_compiled_model
-          .GetSignatureOutputNames(MaskSignatures::kDecodeMask));
+          .GetSignatureOutputNames(representative_signatures.decode_mask));
   for (const auto& mask_output_name : decode_mask_output_names) {
     if (gemma_decode_input_buffers.contains(mask_output_name)) {
       LITERT_ASSIGN_OR_RETURN(
@@ -903,34 +1133,36 @@ LlmLiteRtNpuCompiledModelExecutor::CreateMaskContextWithBufferSharing(
       LITERT_ASSIGN_OR_RETURN(
           decode_output_buffers[mask_output_name],
           npu_auxiliary_context.npu_auxiliary_compiled_model.CreateOutputBuffer(
-              MaskSignatures::kDecodeMask, mask_output_name));
+              representative_signatures.decode_mask, mask_output_name));
     }
   }
 
   if (npu_auxiliary_context.npu_auxiliary_compiled_model.FindSignature(
-          MaskSignatures::kVerifyMask)) {
+          representative_signatures.verify_mask)) {
     LITERT_ASSIGN_OR_RETURN(
         verify_input_buffers[MaskSignatures::kMaskInputTimeStep],
         npu_auxiliary_context.npu_auxiliary_compiled_model.CreateInputBuffer(
-            MaskSignatures::kVerifyMask, MaskSignatures::kMaskInputTimeStep));
+            representative_signatures.verify_mask,
+            MaskSignatures::kMaskInputTimeStep));
     verify_input_buffers[MaskSignatures::kMaskInputTimeStep].Clear();
     LITERT_ASSIGN_OR_RETURN(
         verify_input_buffers[MaskSignatures::kMaskInputTokens],
         npu_auxiliary_context.npu_auxiliary_compiled_model.CreateInputBuffer(
-            MaskSignatures::kVerifyMask, MaskSignatures::kMaskInputTokens));
+            representative_signatures.verify_mask,
+            MaskSignatures::kMaskInputTokens));
     verify_input_buffers[MaskSignatures::kMaskInputTokens].Clear();
 
     LITERT_ASSIGN_OR_RETURN(
         auto verify_mask_input_names,
         npu_auxiliary_context.npu_auxiliary_compiled_model
-            .GetSignatureInputNames(MaskSignatures::kVerifyMask));
+            .GetSignatureInputNames(representative_signatures.verify_mask));
     if (absl::c_find(verify_mask_input_names,
                      MaskSignatures::kMaskInputValidMask) !=
         verify_mask_input_names.end()) {
       LITERT_ASSIGN_OR_RETURN(
           verify_input_buffers[MaskSignatures::kMaskInputValidMask],
           npu_auxiliary_context.npu_auxiliary_compiled_model.CreateInputBuffer(
-              MaskSignatures::kVerifyMask,
+              representative_signatures.verify_mask,
               MaskSignatures::kMaskInputValidMask));
       verify_input_buffers[MaskSignatures::kMaskInputValidMask].Clear();
     }
@@ -938,7 +1170,7 @@ LlmLiteRtNpuCompiledModelExecutor::CreateMaskContextWithBufferSharing(
     LITERT_ASSIGN_OR_RETURN(
         auto verify_mask_output_names,
         npu_auxiliary_context.npu_auxiliary_compiled_model
-            .GetSignatureOutputNames(MaskSignatures::kVerifyMask));
+            .GetSignatureOutputNames(representative_signatures.verify_mask));
     for (const auto& mask_output_name : verify_mask_output_names) {
       if (gemma_verify_input_buffers.contains(mask_output_name)) {
         LITERT_ASSIGN_OR_RETURN(
@@ -948,13 +1180,14 @@ LlmLiteRtNpuCompiledModelExecutor::CreateMaskContextWithBufferSharing(
         LITERT_ASSIGN_OR_RETURN(
             verify_output_buffers[mask_output_name],
             npu_auxiliary_context.npu_auxiliary_compiled_model
-                .CreateOutputBuffer(MaskSignatures::kVerifyMask,
+                .CreateOutputBuffer(representative_signatures.verify_mask,
                                     mask_output_name));
       }
     }
   }
   return InferenceContext(
-      std::move(prefill_input_buffers), std::move(prefill_output_buffers),
+      std::move(prefill_input_buffers_by_size),
+      std::move(prefill_output_buffers_by_size),
       std::move(decode_input_buffers), std::move(decode_output_buffers),
       std::move(verify_input_buffers), std::move(verify_output_buffers));
 }
@@ -962,17 +1195,45 @@ LlmLiteRtNpuCompiledModelExecutor::CreateMaskContextWithBufferSharing(
 absl::StatusOr<LlmLiteRtNpuCompiledModelExecutor::InferenceContext>
 LlmLiteRtNpuCompiledModelExecutor::CreateRopeContextWithBufferSharing(
     const NpuAuxiliaryContext& npu_auxiliary_context,
-    const ResolvedPrefillSignatures& prefill_signatures,
-    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-        gemma_prefill_input_buffers,
-    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-        gemma_decode_input_buffers,
-    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-        gemma_verify_input_buffers) {
-  absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
-      prefill_input_buffers;
-  absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
-      prefill_output_buffers;
+    const std::vector<ResolvedSignatures>& prefill_signatures_list,
+    TensorBufferMapBySize& gemma_prefill_input_buffers_by_size,
+    TensorBufferMap& gemma_decode_input_buffers,
+    TensorBufferMap& gemma_verify_input_buffers) {
+  TensorBufferMapBySize prefill_input_buffers_by_size;
+  TensorBufferMapBySize prefill_output_buffers_by_size;
+
+  constexpr absl::string_view rope_output_names[] = {
+      RopeSignatures::kOutputPosEmbeddingLocalLow,
+      RopeSignatures::kOutputPosEmbeddingHigh,
+      RopeSignatures::kOutputPosEmbeddingLocalHigh,
+      RopeSignatures::kOutputPosEmbeddingLow};
+
+  for (const auto& sigs : prefill_signatures_list) {
+    int size = sigs.size;
+    auto& prefill_input_buffers = prefill_input_buffers_by_size[size];
+    auto& prefill_output_buffers = prefill_output_buffers_by_size[size];
+    auto gemma_buffers_it = gemma_prefill_input_buffers_by_size.find(size);
+
+    LITERT_ASSIGN_OR_RETURN(
+        prefill_input_buffers[RopeSignatures::kInputPos],
+        npu_auxiliary_context.npu_auxiliary_compiled_model.CreateInputBuffer(
+            sigs.rope, RopeSignatures::kInputPos));
+    prefill_input_buffers[RopeSignatures::kInputPos].Clear();
+
+    for (const auto& rope_output_name : rope_output_names) {
+      if (gemma_buffers_it != gemma_prefill_input_buffers_by_size.end()) {
+        const auto& gemma_buffers = gemma_buffers_it->second;
+        if (auto it = gemma_buffers.find(rope_output_name);
+            it != gemma_buffers.end()) {
+          LITERT_ASSIGN_OR_RETURN(prefill_output_buffers[rope_output_name],
+                                  it->second.Duplicate());
+        }
+      }
+    }
+  }
+
+  const auto& representative_signatures = prefill_signatures_list.back();
+
   absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
       decode_input_buffers;
   absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
@@ -983,28 +1244,9 @@ LlmLiteRtNpuCompiledModelExecutor::CreateRopeContextWithBufferSharing(
       verify_output_buffers;
 
   LITERT_ASSIGN_OR_RETURN(
-      prefill_input_buffers[RopeSignatures::kInputPos],
-      npu_auxiliary_context.npu_auxiliary_compiled_model.CreateInputBuffer(
-          prefill_signatures.rope, RopeSignatures::kInputPos));
-  prefill_input_buffers[RopeSignatures::kInputPos].Clear();
-
-  const std::set<absl::string_view> rope_output_names = {
-      RopeSignatures::kOutputPosEmbeddingLocalLow,
-      RopeSignatures::kOutputPosEmbeddingHigh,
-      RopeSignatures::kOutputPosEmbeddingLocalHigh,
-      RopeSignatures::kOutputPosEmbeddingLow};
-  for (const auto& rope_output_name : rope_output_names) {
-    if (gemma_prefill_input_buffers.contains(rope_output_name)) {
-      LITERT_ASSIGN_OR_RETURN(
-          prefill_output_buffers[rope_output_name],
-          gemma_prefill_input_buffers[rope_output_name].Duplicate());
-    }
-  }
-
-  LITERT_ASSIGN_OR_RETURN(
       decode_input_buffers[RopeSignatures::kInputPos],
       npu_auxiliary_context.npu_auxiliary_compiled_model.CreateInputBuffer(
-          RopeSignatures::kDecodeRope, RopeSignatures::kInputPos));
+          representative_signatures.decode_rope, RopeSignatures::kInputPos));
   decode_input_buffers[RopeSignatures::kInputPos].Clear();
 
   for (const auto& rope_output_name : rope_output_names) {
@@ -1016,11 +1258,11 @@ LlmLiteRtNpuCompiledModelExecutor::CreateRopeContextWithBufferSharing(
   }
 
   if (npu_auxiliary_context.npu_auxiliary_compiled_model.FindSignature(
-          RopeSignatures::kVerifyRope)) {
+          representative_signatures.verify_rope)) {
     LITERT_ASSIGN_OR_RETURN(
         verify_input_buffers[RopeSignatures::kInputPos],
         npu_auxiliary_context.npu_auxiliary_compiled_model.CreateInputBuffer(
-            RopeSignatures::kVerifyRope, RopeSignatures::kInputPos));
+            representative_signatures.verify_rope, RopeSignatures::kInputPos));
     verify_input_buffers[RopeSignatures::kInputPos].Clear();
 
     for (const auto& rope_output_name : rope_output_names) {
@@ -1033,7 +1275,8 @@ LlmLiteRtNpuCompiledModelExecutor::CreateRopeContextWithBufferSharing(
   }
 
   return InferenceContext(
-      std::move(prefill_input_buffers), std::move(prefill_output_buffers),
+      std::move(prefill_input_buffers_by_size),
+      std::move(prefill_output_buffers_by_size),
       std::move(decode_input_buffers), std::move(decode_output_buffers),
       std::move(verify_input_buffers), std::move(verify_output_buffers));
 }
@@ -1041,25 +1284,25 @@ LlmLiteRtNpuCompiledModelExecutor::CreateRopeContextWithBufferSharing(
 absl::Status LlmLiteRtNpuCompiledModelExecutor::AllocateTransformerBuffers(
     litert::Environment& env, const litert::Model* transformer_model,
     CompiledModel& llm_compiled_model,
-    const ResolvedPrefillSignatures& prefill_signatures,
-    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-        gemma_prefill_input_buffers,
+    const std::vector<ResolvedSignatures>& prefill_signatures_list,
+    TensorBufferMapBySize& gemma_prefill_input_buffers_by_size,
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
         gemma_decode_input_buffers,
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
         gemma_verify_input_buffers,
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
         input_kv_cache_buffers,
-    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-        prefill_output_kv_cache_slice_buffers,
+    TensorBufferMapBySize& prefill_output_kv_cache_slice_buffers_by_size,
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
         decode_output_kv_cache_slice_buffers,
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
         verify_output_kv_cache_slice_buffers,
     absl::flat_hash_map<absl::string_view, HWQuantParams>& kv_quant_params,
     int64_t kv_cache_init_value) {
+  const auto& representative_signatures = prefill_signatures_list.back();
+
   auto prefill_signature =
-      transformer_model->FindSignature(prefill_signatures.prefill);
+      transformer_model->FindSignature(representative_signatures.prefill);
 
   if (prefill_signature.HasValue()) {
     for (auto output_name : prefill_signature->OutputNames()) {
@@ -1079,26 +1322,61 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::AllocateTransformerBuffers(
     }
   }
 
-  // Create input buffers for prefill signature.
+  // Create input buffers for prefill signatures (KV cache only, once).
   for (auto input_name : prefill_signature->InputNames()) {
     if (absl::StartsWith(input_name, kv_cache_k_root_name) ||
         absl::StartsWith(input_name, kv_cache_v_root_name) ||
         absl::StartsWith(input_name, kv_cache_c_root_name)) {
-      LITERT_ASSIGN_OR_RETURN(input_kv_cache_buffers[input_name],
-                              llm_compiled_model.CreateInputBuffer(
-                                  prefill_signatures.prefill, input_name));
-      LITERT_RETURN_IF_ERROR(FillKVCacheBuffer(
-          input_kv_cache_buffers[input_name], kv_cache_init_value));
-    } else {
-      LITERT_ASSIGN_OR_RETURN(gemma_prefill_input_buffers[input_name],
-                              llm_compiled_model.CreateInputBuffer(
-                                  prefill_signatures.prefill, input_name));
-      gemma_prefill_input_buffers[input_name].Clear();
+      auto [it, inserted] = input_kv_cache_buffers.try_emplace(input_name);
+      if (inserted) {
+        LITERT_ASSIGN_OR_RETURN(
+            it->second, llm_compiled_model.CreateInputBuffer(
+                            representative_signatures.prefill, input_name));
+        LITERT_RETURN_IF_ERROR(
+            FillKVCacheBuffer(it->second, kv_cache_init_value));
+      }
     }
   }
+
+  // Allocate prefill-specific buffers for each prefill size.
+  for (const auto& sigs : prefill_signatures_list) {
+    int size = sigs.size;
+    auto& gemma_prefill_input_buffers =
+        gemma_prefill_input_buffers_by_size[size];
+    auto& prefill_output_kv_cache_slice_buffers =
+        prefill_output_kv_cache_slice_buffers_by_size[size];
+
+    LITERT_ASSIGN_OR_RETURN(auto sig,
+                            transformer_model->FindSignature(sigs.prefill));
+    for (auto input_name : sig.InputNames()) {
+      if (absl::StartsWith(input_name, kv_cache_k_root_name) ||
+          absl::StartsWith(input_name, kv_cache_v_root_name) ||
+          absl::StartsWith(input_name, kv_cache_c_root_name)) {
+        // Skip KV cache buffers.
+      } else {
+        LITERT_ASSIGN_OR_RETURN(
+            gemma_prefill_input_buffers[input_name],
+            llm_compiled_model.CreateInputBuffer(sigs.prefill, input_name));
+        gemma_prefill_input_buffers[input_name].Clear();
+      }
+    }
+
+    // Create output buffers for prefill signatures.
+    for (auto output_name : sig.OutputNames()) {
+      if (absl::StartsWith(output_name, kv_cache_slice_k_root_name) ||
+          absl::StartsWith(output_name, kv_cache_slice_v_root_name) ||
+          absl::StartsWith(output_name, kv_cache_slice_c_root_name)) {
+        LITERT_ASSIGN_OR_RETURN(
+            prefill_output_kv_cache_slice_buffers[output_name],
+            llm_compiled_model.CreateOutputBuffer(sigs.prefill, output_name));
+      }
+    }
+  }
+
   // Create input buffers for decode signature. Skip kv cache input buffers as
   // they are already created in the prefill signature.
-  auto decode_signature = transformer_model->FindSignature(kDecodeSignature);
+  auto decode_signature =
+      transformer_model->FindSignature(representative_signatures.decode);
   for (auto input_name : decode_signature->InputNames()) {
     if (absl::StartsWith(input_name, kv_cache_k_root_name) ||
         absl::StartsWith(input_name, kv_cache_v_root_name) ||
@@ -1108,29 +1386,19 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::AllocateTransformerBuffers(
       if (!input_kv_cache_buffers.contains(input_name)) {
         LITERT_ASSIGN_OR_RETURN(
             input_kv_cache_buffers[input_name],
-            llm_compiled_model.CreateInputBuffer(kDecodeSignature, input_name));
+            llm_compiled_model.CreateInputBuffer(
+                representative_signatures.decode, input_name));
         LITERT_RETURN_IF_ERROR(FillKVCacheBuffer(
             input_kv_cache_buffers[input_name], kv_cache_init_value));
       }
       continue;
     }
-    LITERT_ASSIGN_OR_RETURN(
-        gemma_decode_input_buffers[input_name],
-        llm_compiled_model.CreateInputBuffer(kDecodeSignature, input_name));
+    LITERT_ASSIGN_OR_RETURN(gemma_decode_input_buffers[input_name],
+                            llm_compiled_model.CreateInputBuffer(
+                                representative_signatures.decode, input_name));
     gemma_decode_input_buffers[input_name].Clear();
   }
 
-  // Create output buffers for prefill signature.
-  for (auto output_name : prefill_signature->OutputNames()) {
-    if (absl::StartsWith(output_name, kv_cache_slice_k_root_name) ||
-        absl::StartsWith(output_name, kv_cache_slice_v_root_name) ||
-        absl::StartsWith(output_name, kv_cache_slice_c_root_name)) {
-      LITERT_ASSIGN_OR_RETURN(
-          prefill_output_kv_cache_slice_buffers[output_name],
-          llm_compiled_model.CreateOutputBuffer(prefill_signatures.prefill,
-                                                output_name));
-    }
-  }
   // Create output buffers for decode signature.
   for (auto output_name : decode_signature->OutputNames()) {
     if (absl::StartsWith(output_name, kv_cache_slice_k_root_name) ||
@@ -1138,18 +1406,20 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::AllocateTransformerBuffers(
         absl::StartsWith(output_name, kv_cache_slice_c_root_name)) {
       LITERT_ASSIGN_OR_RETURN(
           decode_output_kv_cache_slice_buffers[output_name],
-          llm_compiled_model.CreateOutputBuffer(kDecodeSignature, output_name));
+          llm_compiled_model.CreateOutputBuffer(
+              representative_signatures.decode, output_name));
     }
   }
 
   // Create input/output buffers for verify signature if it exists.
   auto verify_signature =
-      transformer_model->FindSignature(LlmSignatures::kVerifyLlm);
+      transformer_model->FindSignature(representative_signatures.verify);
   if (verify_signature) {
     for (auto input_name : verify_signature->InputNames()) {
-      LITERT_ASSIGN_OR_RETURN(gemma_verify_input_buffers[input_name],
-                              llm_compiled_model.CreateInputBuffer(
-                                  LlmSignatures::kVerifyLlm, input_name));
+      LITERT_ASSIGN_OR_RETURN(
+          gemma_verify_input_buffers[input_name],
+          llm_compiled_model.CreateInputBuffer(representative_signatures.verify,
+                                               input_name));
       gemma_verify_input_buffers[input_name].Clear();
     }
     for (auto output_name : verify_signature->OutputNames()) {
@@ -1158,8 +1428,8 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::AllocateTransformerBuffers(
           absl::StartsWith(output_name, kv_cache_slice_c_root_name)) {
         LITERT_ASSIGN_OR_RETURN(
             verify_output_kv_cache_slice_buffers[output_name],
-            llm_compiled_model.CreateOutputBuffer(LlmSignatures::kVerifyLlm,
-                                                  output_name));
+            llm_compiled_model.CreateOutputBuffer(
+                representative_signatures.verify, output_name));
       }
     }
   }
@@ -1170,31 +1440,34 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::AllocateTransformerBuffers(
 absl::StatusOr<LlmLiteRtNpuCompiledModelExecutor::InferenceContext>
 LlmLiteRtNpuCompiledModelExecutor::CreateLlmInferenceContextWithBufferSharing(
     ::litert::Environment& env, ::litert::CompiledModel& llm_compiled_model,
-    const ResolvedPrefillSignatures& prefill_signatures,
-    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-        input_kv_cache_buffers,
-    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-        prefill_output_kv_cache_slice_buffers,
-    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-        decode_output_kv_cache_slice_buffers,
-    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-        verify_output_kv_cache_slice_buffers,
-    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-        gemma_prefill_input_buffers,
-    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-        gemma_decode_input_buffers,
-    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-        gemma_verify_input_buffers) {
-  absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
-      prefill_input_buffers;
-  {
+    const std::vector<ResolvedSignatures>& prefill_signatures_list,
+    TensorBufferMap& input_kv_cache_buffers,
+    TensorBufferMapBySize& prefill_output_kv_cache_slice_buffers_by_size,
+    TensorBufferMap& decode_output_kv_cache_slice_buffers,
+    TensorBufferMap& verify_output_kv_cache_slice_buffers,
+    TensorBufferMapBySize& gemma_prefill_input_buffers_by_size,
+    TensorBufferMap& gemma_decode_input_buffers,
+    TensorBufferMap& gemma_verify_input_buffers) {
+  TensorBufferMapBySize prefill_input_buffers_by_size;
+  TensorBufferMapBySize prefill_output_buffers_by_size;
+
+  for (const auto& sigs : prefill_signatures_list) {
+    int size = sigs.size;
+    auto& prefill_input_buffers = prefill_input_buffers_by_size[size];
+    auto& prefill_output_buffers = prefill_output_buffers_by_size[size];
+    const auto& gemma_prefill_input_buffers =
+        gemma_prefill_input_buffers_by_size.at(size);
+    const auto& prefill_output_kv_cache_slice_buffers =
+        prefill_output_kv_cache_slice_buffers_by_size.at(size);
+
     for (const auto& [key, value] : gemma_prefill_input_buffers) {
       LITERT_ASSIGN_OR_RETURN(prefill_input_buffers[key], value.Duplicate());
     }
+
     // Duplicate all kv cache buffers to prefill inputs.
     LITERT_ASSIGN_OR_RETURN(
         auto prefill_input_names,
-        llm_compiled_model.GetSignatureInputNames(prefill_signatures.prefill));
+        llm_compiled_model.GetSignatureInputNames(sigs.prefill));
     for (const auto& [key, value] : input_kv_cache_buffers) {
       // Check if the kv cache buffer is used in the prefill signature.
       if (absl::c_find(prefill_input_names, std::string(key)) ==
@@ -1206,16 +1479,16 @@ LlmLiteRtNpuCompiledModelExecutor::CreateLlmInferenceContextWithBufferSharing(
       // although it's not used in the model, CompiledModel will complain about
       // the mismatched buffer size. So we need to correct the buffer size here,
       // by creating a new buffer with the correct size.
-      LITERT_ASSIGN_OR_RETURN(auto input_tensor_type,
-                              llm_compiled_model.GetInputTensorType(
-                                  prefill_signatures.prefill, key));
+      LITERT_ASSIGN_OR_RETURN(
+          auto input_tensor_type,
+          llm_compiled_model.GetInputTensorType(sigs.prefill, key));
       LITERT_ASSIGN_OR_RETURN(auto input_tensor_size,
                               input_tensor_type.Bytes());
       LITERT_ASSIGN_OR_RETURN(auto input_buffer_size, value.Size());
-      if (input_tensor_size != input_buffer_size) {
-        LITERT_ASSIGN_OR_RETURN(auto corrected_input_buffer,
-                                llm_compiled_model.CreateInputBuffer(
-                                    prefill_signatures.prefill, key));
+      if (input_tensor_size > input_buffer_size) {
+        LITERT_ASSIGN_OR_RETURN(
+            auto corrected_input_buffer,
+            llm_compiled_model.CreateInputBuffer(sigs.prefill, key));
         corrected_input_buffer.Clear();
         LITERT_ASSIGN_OR_RETURN(prefill_input_buffers[key],
                                 corrected_input_buffer.Duplicate());
@@ -1223,57 +1496,56 @@ LlmLiteRtNpuCompiledModelExecutor::CreateLlmInferenceContextWithBufferSharing(
         LITERT_ASSIGN_OR_RETURN(prefill_input_buffers[key], value.Duplicate());
       }
     }
-  }
-  absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
-      prefill_output_buffers;
-  {
-    // Duplicate all output kv cache slice buffers to prefill output
-    // buffers.
+
+    // Duplicate all output kv cache slice buffers to prefill output buffers.
     for (const auto& [key, value] : prefill_output_kv_cache_slice_buffers) {
       LITERT_ASSIGN_OR_RETURN(prefill_output_buffers[key], value.Duplicate());
     }
   }
+
+  const auto& representative_signatures = prefill_signatures_list.back();
+
   absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
       decode_input_buffers;
-  {
-    for (const auto& [key, value] : gemma_decode_input_buffers) {
-      LITERT_ASSIGN_OR_RETURN(decode_input_buffers[key], value.Duplicate());
-    }
-    // Duplicate all kv cache buffers to decode inputs.
-    for (const auto& [key, value] : input_kv_cache_buffers) {
-      LITERT_ASSIGN_OR_RETURN(decode_input_buffers[key], value.Duplicate());
-    }
+  for (const auto& [key, value] : gemma_decode_input_buffers) {
+    LITERT_ASSIGN_OR_RETURN(decode_input_buffers[key], value.Duplicate());
   }
+  // Duplicate all kv cache buffers to decode inputs.
+  for (const auto& [key, value] : input_kv_cache_buffers) {
+    LITERT_ASSIGN_OR_RETURN(decode_input_buffers[key], value.Duplicate());
+  }
+
   absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
       decode_output_buffers;
-  {
-    // Duplicate all output kv cache slice buffers to decode output
-    // buffers.
-    for (const auto& [key, value] : decode_output_kv_cache_slice_buffers) {
-      LITERT_ASSIGN_OR_RETURN(decode_output_buffers[key], value.Duplicate());
-    }
 
-    LITERT_ASSIGN_OR_RETURN(
-        auto decode_output_names,
-        llm_compiled_model.GetSignatureOutputNames(kDecodeSignature));
+  // Duplicate all output kv cache slice buffers to decode output
+  // buffers.
+  for (const auto& [key, value] : decode_output_kv_cache_slice_buffers) {
+    LITERT_ASSIGN_OR_RETURN(decode_output_buffers[key], value.Duplicate());
+  }
 
-    for (const auto& name : decode_output_names) {
-      if (name == LlmSignatures::kDecodeLogitsOutput) {
-        LITERT_ASSIGN_OR_RETURN(
-            decode_output_buffers[LlmSignatures::kDecodeLogitsOutput],
-            llm_compiled_model.CreateOutputBuffer(
-                kDecodeSignature, LlmSignatures::kDecodeLogitsOutput));
-      } else if (name == LlmSignatures::kLastLayerActivationsOutput) {
-        LITERT_ASSIGN_OR_RETURN(
-            decode_output_buffers[LlmSignatures::kLastLayerActivationsOutput],
-            llm_compiled_model.CreateOutputBuffer(
-                kDecodeSignature, LlmSignatures::kLastLayerActivationsOutput));
-      }
+  LITERT_ASSIGN_OR_RETURN(auto decode_output_names,
+                          llm_compiled_model.GetSignatureOutputNames(
+                              representative_signatures.decode));
+
+  for (const auto& name : decode_output_names) {
+    if (name == LlmSignatures::kDecodeLogitsOutput) {
+      LITERT_ASSIGN_OR_RETURN(
+          decode_output_buffers[LlmSignatures::kDecodeLogitsOutput],
+          llm_compiled_model.CreateOutputBuffer(
+              representative_signatures.decode,
+              LlmSignatures::kDecodeLogitsOutput));
+    } else if (name == LlmSignatures::kLastLayerActivationsOutput) {
+      LITERT_ASSIGN_OR_RETURN(
+          decode_output_buffers[LlmSignatures::kLastLayerActivationsOutput],
+          llm_compiled_model.CreateOutputBuffer(
+              representative_signatures.decode,
+              LlmSignatures::kLastLayerActivationsOutput));
     }
   }
 
   auto verify_signature =
-      llm_compiled_model.FindSignature(LlmSignatures::kVerifyLlm);
+      llm_compiled_model.FindSignature(representative_signatures.verify);
   absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
       verify_input_buffers;
   absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
@@ -1283,9 +1555,9 @@ LlmLiteRtNpuCompiledModelExecutor::CreateLlmInferenceContextWithBufferSharing(
       LITERT_ASSIGN_OR_RETURN(verify_input_buffers[key], value.Duplicate());
     }
     // Duplicate all kv cache buffers to verify inputs.
-    LITERT_ASSIGN_OR_RETURN(
-        auto verify_input_names,
-        llm_compiled_model.GetSignatureInputNames(LlmSignatures::kVerifyLlm));
+    LITERT_ASSIGN_OR_RETURN(auto verify_input_names,
+                            llm_compiled_model.GetSignatureInputNames(
+                                representative_signatures.verify));
     for (const auto& [key, value] : input_kv_cache_buffers) {
       if (absl::c_find(verify_input_names, std::string(key)) !=
           verify_input_names.end()) {
@@ -1297,28 +1569,30 @@ LlmLiteRtNpuCompiledModelExecutor::CreateLlmInferenceContextWithBufferSharing(
       LITERT_ASSIGN_OR_RETURN(verify_output_buffers[key], value.Duplicate());
     }
 
-    LITERT_ASSIGN_OR_RETURN(
-        auto verify_output_names,
-        llm_compiled_model.GetSignatureOutputNames(LlmSignatures::kVerifyLlm));
+    LITERT_ASSIGN_OR_RETURN(auto verify_output_names,
+                            llm_compiled_model.GetSignatureOutputNames(
+                                representative_signatures.verify));
 
     for (const auto& name : verify_output_names) {
       if (name == LlmSignatures::kDecodeLogitsOutput) {
         LITERT_ASSIGN_OR_RETURN(
             verify_output_buffers[LlmSignatures::kDecodeLogitsOutput],
             llm_compiled_model.CreateOutputBuffer(
-                LlmSignatures::kVerifyLlm, LlmSignatures::kDecodeLogitsOutput));
+                representative_signatures.verify,
+                LlmSignatures::kDecodeLogitsOutput));
       } else if (name == LlmSignatures::kLastLayerActivationsOutput) {
         LITERT_ASSIGN_OR_RETURN(
             verify_output_buffers[LlmSignatures::kLastLayerActivationsOutput],
             llm_compiled_model.CreateOutputBuffer(
-                LlmSignatures::kVerifyLlm,
+                representative_signatures.verify,
                 LlmSignatures::kLastLayerActivationsOutput));
       }
     }
   }
 
   return InferenceContext(
-      std::move(prefill_input_buffers), std::move(prefill_output_buffers),
+      std::move(prefill_input_buffers_by_size),
+      std::move(prefill_output_buffers_by_size),
       std::move(decode_input_buffers), std::move(decode_output_buffers),
       std::move(verify_input_buffers), std::move(verify_output_buffers));
 }
@@ -1326,41 +1600,47 @@ LlmLiteRtNpuCompiledModelExecutor::CreateLlmInferenceContextWithBufferSharing(
 absl::StatusOr<LlmLiteRtNpuCompiledModelExecutor::InferenceContext>
 LlmLiteRtNpuCompiledModelExecutor::
     CreateCacheUpdateInferenceContextWithBufferSharing(
-        absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-            input_kv_cache_buffers,
-        absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-            prefill_output_kv_cache_slice_buffers,
-        absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-            decode_output_kv_cache_slice_buffers,
-        absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-            verify_output_kv_cache_slice_buffers,
-        ::litert::TensorBuffer prefill_input_pos,
+        TensorBufferMap& input_kv_cache_buffers,
+        TensorBufferMapBySize& prefill_output_kv_cache_slice_buffers_by_size,
+        TensorBufferMap& decode_output_kv_cache_slice_buffers,
+        TensorBufferMap& verify_output_kv_cache_slice_buffers,
+        absl::flat_hash_map<int, ::litert::TensorBuffer>&
+            prefill_input_pos_by_size,
         ::litert::TensorBuffer decode_input_pos,
         ::litert::TensorBuffer verify_input_pos,
-        ::litert::TensorBuffer prefill_valid_mask,
+        absl::flat_hash_map<int, ::litert::TensorBuffer>&
+            prefill_valid_mask_by_size,
         ::litert::TensorBuffer decode_valid_mask,
-        ::litert::TensorBuffer verify_valid_mask)
+        ::litert::TensorBuffer verify_valid_mask) {
+  absl::flat_hash_map<
+      int, absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>>
+      prefill_input_buffers_by_size;
+  absl::flat_hash_map<
+      int, absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>>
+      prefill_output_buffers_by_size;
 
-{
-  absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
-      prefill_input_buffers;
-  {
+  for (const auto& [size, prefill_output_kv_cache_slice_buffers] :
+       prefill_output_kv_cache_slice_buffers_by_size) {
+    auto& prefill_input_buffers = prefill_input_buffers_by_size[size];
+    auto& prefill_output_buffers = prefill_output_buffers_by_size[size];
+
     for (const auto& [key, value] : input_kv_cache_buffers) {
       LITERT_ASSIGN_OR_RETURN(prefill_input_buffers[key], value.Duplicate());
     }
     for (const auto& [key, value] : prefill_output_kv_cache_slice_buffers) {
       LITERT_ASSIGN_OR_RETURN(prefill_input_buffers[key], value.Duplicate());
     }
-    prefill_input_buffers[CacheUpdateSignatures::kInputPos] =
-        std::move(prefill_input_pos);
-    if (prefill_valid_mask) {
-      prefill_input_buffers[CacheUpdateSignatures::kInputValidMask] =
-          std::move(prefill_valid_mask);
+    LITERT_ASSIGN_OR_RETURN(
+        prefill_input_buffers[CacheUpdateSignatures::kInputPos],
+        prefill_input_pos_by_size.at(size).Duplicate());
+
+    if (auto it = prefill_valid_mask_by_size.find(size);
+        it != prefill_valid_mask_by_size.end() && it->second) {
+      LITERT_ASSIGN_OR_RETURN(
+          prefill_input_buffers[CacheUpdateSignatures::kInputValidMask],
+          it->second.Duplicate());
     }
-  }
-  absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
-      prefill_output_buffers;
-  {
+
     for (const auto& [key, value] : input_kv_cache_buffers) {
       LITERT_ASSIGN_OR_RETURN(prefill_output_buffers[key], value.Duplicate());
     }
@@ -1415,7 +1695,8 @@ LlmLiteRtNpuCompiledModelExecutor::
   }
 
   return InferenceContext(
-      std::move(prefill_input_buffers), std::move(prefill_output_buffers),
+      std::move(prefill_input_buffers_by_size),
+      std::move(prefill_output_buffers_by_size),
       std::move(decode_input_buffers), std::move(decode_output_buffers),
       std::move(verify_input_buffers), std::move(verify_output_buffers));
 }
@@ -1526,7 +1807,7 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::WarmupInference(
     ::litert::CompiledModel& compiled_model_llm,
     InferenceContext& llm_inference_context,
     ::litert::CompiledModel& compiled_model_auxiliary,
-    const ResolvedPrefillSignatures& prefill_signatures,
+    const std::vector<ResolvedSignatures>& prefill_signatures_list,
     const InferenceContext& rope_inference_context,
     const InferenceContext& mask_inference_context,
     const InferenceContext& cache_update_inference_context) {
@@ -1537,6 +1818,42 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::WarmupInference(
   // third_party/tensorflow/lite/kernels/div.cc:242 data[i] != 0 was not true.
   // ERROR: Node number 21 (DIV) failed to invoke.
 
+  auto run_prefill_warmup = [](CompiledModel& model,
+                               absl::string_view signature,
+                               const InferenceContext& context, int size,
+                               absl::string_view name) -> absl::Status {
+    auto result = model.Run(signature, context.GetPrefillInputBuffers(size),
+                            context.GetPrefillOutputBuffers(size));
+    RET_CHECK(result) << "Inference warmup run for " << name
+                      << " (prefill) failed for size " << size << ": "
+                      << result.Error().Message();
+    return absl::OkStatus();
+  };
+
+  for (const auto& sigs : prefill_signatures_list) {
+    int size = sigs.size;
+    if (llm_inference_context.HasPrefillSize(size) &&
+        llm_inference_context.GetPrefillInputBuffers(size).contains(
+            LlmSignatures::kInputEmbeddings)) {
+      ABSL_RETURN_IF_ERROR(Fill(llm_inference_context.GetPrefillInputBuffers(
+                                    size)[LlmSignatures::kInputEmbeddings],
+                                1));
+    }
+    ABSL_RETURN_IF_ERROR(run_prefill_warmup(
+        compiled_model_llm, sigs.prefill, llm_inference_context, size, "LLM"));
+    ABSL_RETURN_IF_ERROR(run_prefill_warmup(compiled_model_auxiliary, sigs.rope,
+                                            rope_inference_context, size,
+                                            "RoPE"));
+    ABSL_RETURN_IF_ERROR(run_prefill_warmup(compiled_model_auxiliary, sigs.mask,
+                                            mask_inference_context, size,
+                                            "mask"));
+    ABSL_RETURN_IF_ERROR(run_prefill_warmup(
+        compiled_model_auxiliary, sigs.cache_update,
+        cache_update_inference_context, size, "cache update"));
+  }
+
+  const auto& representative_signatures = prefill_signatures_list.back();
+
   if (llm_inference_context.decode_input_buffers.contains(
           LlmSignatures::kInputEmbeddings)) {
     ABSL_RETURN_IF_ERROR(
@@ -1544,108 +1861,61 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::WarmupInference(
                  .decode_input_buffers[LlmSignatures::kInputEmbeddings],
              1));
   }
-  if (llm_inference_context.prefill_input_buffers.contains(
-          LlmSignatures::kInputEmbeddings)) {
-    ABSL_RETURN_IF_ERROR(
-        Fill(llm_inference_context
-                 .prefill_input_buffers[LlmSignatures::kInputEmbeddings],
-             1));
-  }
-  auto result = compiled_model_llm.Run(
-      prefill_signatures.prefill, llm_inference_context.prefill_input_buffers,
-      llm_inference_context.prefill_output_buffers);
-  RET_CHECK(result) << "Inference warmup run for LLM (prefill) failed."
-                    << result.Error().Message();
-  result = compiled_model_llm.Run(LlmSignatures::kDecodeLlm,
-                                  llm_inference_context.decode_input_buffers,
-                                  llm_inference_context.decode_output_buffers);
-  RET_CHECK(result) << "Inference warmup run for LLM (decode) failed."
-                    << result.Error().Message();
 
-  result = compiled_model_auxiliary.Run(
-      prefill_signatures.rope, rope_inference_context.prefill_input_buffers,
-      rope_inference_context.prefill_output_buffers);
-  RET_CHECK(result)
-      << "Inference warmup run for RoPE signature (prefill) failed."
-      << result.Error().Message();
-  result = compiled_model_auxiliary.Run(
-      RopeSignatures::kDecodeRope, rope_inference_context.decode_input_buffers,
-      rope_inference_context.decode_output_buffers);
-  RET_CHECK(result)
-      << "Inference warmup run for RoPE signature (decode) failed."
-      << result.Error().Message();
+  auto run_decode_warmup = [](CompiledModel& model, absl::string_view signature,
+                              const InferenceContext& context,
+                              absl::string_view name) -> absl::Status {
+    auto result = model.Run(signature, context.decode_input_buffers,
+                            context.decode_output_buffers);
+    RET_CHECK(result) << "Inference warmup run for " << name
+                      << " (decode) failed: " << result.Error().Message();
+    return absl::OkStatus();
+  };
 
-  result = compiled_model_auxiliary.Run(
-      prefill_signatures.mask, mask_inference_context.prefill_input_buffers,
-      mask_inference_context.prefill_output_buffers);
-  RET_CHECK(result)
-      << "Inference warmup run for mask signature (prefill) failed."
-      << result.Error().Message();
-  result = compiled_model_auxiliary.Run(
-      MaskSignatures::kDecodeMask, mask_inference_context.decode_input_buffers,
-      mask_inference_context.decode_output_buffers);
-  RET_CHECK(result)
-      << "Inference warmup run for mask signature (decode) failed."
-      << result.Error().Message();
+  ABSL_RETURN_IF_ERROR(run_decode_warmup(compiled_model_llm,
+                                         representative_signatures.decode,
+                                         llm_inference_context, "LLM"));
+  ABSL_RETURN_IF_ERROR(run_decode_warmup(compiled_model_auxiliary,
+                                         representative_signatures.decode_rope,
+                                         rope_inference_context, "RoPE"));
+  ABSL_RETURN_IF_ERROR(run_decode_warmup(compiled_model_auxiliary,
+                                         representative_signatures.decode_mask,
+                                         mask_inference_context, "mask"));
+  ABSL_RETURN_IF_ERROR(run_decode_warmup(
+      compiled_model_auxiliary, representative_signatures.decode_cache_update,
+      cache_update_inference_context, "cache update"));
 
-  result = compiled_model_auxiliary.Run(
-      prefill_signatures.cache_update,
-      cache_update_inference_context.prefill_input_buffers,
-      cache_update_inference_context.prefill_output_buffers);
-  RET_CHECK(result)
-      << "Inference warmup run for cache update signature (prefill) failed."
-      << result.Error().Message();
-  result = compiled_model_auxiliary.Run(
-      CacheUpdateSignatures::kDecodeCacheUpdate,
-      cache_update_inference_context.decode_input_buffers,
-      cache_update_inference_context.decode_output_buffers);
-  RET_CHECK(result)
-      << "Inference warmup run for cache update signature (decode) failed."
-      << result.Error().Message();
+  auto run_verify_warmup = [](CompiledModel& model, absl::string_view signature,
+                              const InferenceContext& context,
+                              absl::string_view name) -> absl::Status {
+    if (model.FindSignature(signature)) {
+      auto result = model.Run(signature, context.verify_input_buffers,
+                              context.verify_output_buffers);
+      RET_CHECK(result) << "Inference warmup run for " << name
+                        << " (verify) failed: " << result.Error().Message();
+    }
+    return absl::OkStatus();
+  };
 
   // Warmup verify signatures if they exist.
-  if (compiled_model_llm.FindSignature(LlmSignatures::kVerifyLlm)) {
-    result = compiled_model_llm.Run(
-        LlmSignatures::kVerifyLlm, llm_inference_context.verify_input_buffers,
-        llm_inference_context.verify_output_buffers);
-    RET_CHECK(result) << "Inference warmup run for MTP verify failed."
-                      << result.Error().Message();
-  }
-
-  if (compiled_model_auxiliary.FindSignature(RopeSignatures::kVerifyRope)) {
-    result = compiled_model_auxiliary.Run(
-        RopeSignatures::kVerifyRope,
-        rope_inference_context.verify_input_buffers,
-        rope_inference_context.verify_output_buffers);
-    RET_CHECK(result)
-        << "Inference warmup run for RoPE signature (verify) failed."
-        << result.Error().Message();
-  }
-
-  if (compiled_model_auxiliary.FindSignature(MaskSignatures::kVerifyMask)) {
-    result = compiled_model_auxiliary.Run(
-        MaskSignatures::kVerifyMask,
-        mask_inference_context.verify_input_buffers,
-        mask_inference_context.verify_output_buffers);
-    RET_CHECK(result)
-        << "Inference warmup run for mask signature (verify) failed."
-        << result.Error().Message();
-  }
-
-  if (compiled_model_auxiliary.FindSignature(
-          CacheUpdateSignatures::kVerifyCacheUpdate)) {
-    result = compiled_model_auxiliary.Run(
-        CacheUpdateSignatures::kVerifyCacheUpdate,
-        cache_update_inference_context.verify_input_buffers,
-        cache_update_inference_context.verify_output_buffers);
-    RET_CHECK(result)
-        << "Inference warmup run for cache update signature (verify) failed."
-        << result.Error().Message();
-  }
+  ABSL_RETURN_IF_ERROR(run_verify_warmup(compiled_model_llm,
+                                         representative_signatures.verify,
+                                         llm_inference_context, "MTP verify"));
+  ABSL_RETURN_IF_ERROR(run_verify_warmup(compiled_model_auxiliary,
+                                         representative_signatures.verify_rope,
+                                         rope_inference_context, "RoPE"));
+  ABSL_RETURN_IF_ERROR(run_verify_warmup(compiled_model_auxiliary,
+                                         representative_signatures.verify_mask,
+                                         mask_inference_context, "mask"));
+  ABSL_RETURN_IF_ERROR(run_verify_warmup(
+      compiled_model_auxiliary, representative_signatures.verify_cache_update,
+      cache_update_inference_context, "cache update"));
 
   // Clear the KV cache buffers after warmup.
-  ABSL_RETURN_IF_ERROR(
-      ClearKVCacheToZero(llm_inference_context.prefill_input_buffers));
+  for (auto& [size, prefill_input_buffers] :
+       llm_inference_context.prefill_input_buffers_by_size) {
+    ABSL_RETURN_IF_ERROR(ClearKVCacheToZero(prefill_input_buffers));
+  }
   return absl::OkStatus();
 }
 
@@ -1673,12 +1943,10 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::WarmupDrafterInference(
 }
 
 LlmLiteRtNpuCompiledModelExecutor::InferenceContext::InferenceContext(
-    absl::flat_hash_map<absl::string_view, TensorBuffer> prefill_input_buffers,
-    absl::flat_hash_map<absl::string_view, TensorBuffer> prefill_output_buffers,
-    absl::flat_hash_map<absl::string_view, TensorBuffer> decode_input_buffers,
-    absl::flat_hash_map<absl::string_view, TensorBuffer> decode_output_buffers,
-    absl::flat_hash_map<absl::string_view, TensorBuffer> verify_input_buffers,
-    absl::flat_hash_map<absl::string_view, TensorBuffer> verify_output_buffers)
+    TensorBufferMap prefill_input_buffers,
+    TensorBufferMap prefill_output_buffers,
+    TensorBufferMap decode_input_buffers, TensorBufferMap decode_output_buffers,
+    TensorBufferMap verify_input_buffers, TensorBufferMap verify_output_buffers)
     : prefill_input_buffers(std::move(prefill_input_buffers)),
       prefill_output_buffers(std::move(prefill_output_buffers)),
       decode_input_buffers(std::move(decode_input_buffers)),
@@ -1686,17 +1954,40 @@ LlmLiteRtNpuCompiledModelExecutor::InferenceContext::InferenceContext(
       verify_input_buffers(std::move(verify_input_buffers)),
       verify_output_buffers(std::move(verify_output_buffers)) {}
 
+LlmLiteRtNpuCompiledModelExecutor::InferenceContext::InferenceContext(
+    TensorBufferMapBySize prefill_input_buffers_by_size,
+    TensorBufferMapBySize prefill_output_buffers_by_size,
+    TensorBufferMap decode_input_buffers, TensorBufferMap decode_output_buffers,
+    TensorBufferMap verify_input_buffers, TensorBufferMap verify_output_buffers)
+    : prefill_input_buffers_by_size(std::move(prefill_input_buffers_by_size)),
+      prefill_output_buffers_by_size(std::move(prefill_output_buffers_by_size)),
+      decode_input_buffers(std::move(decode_input_buffers)),
+      decode_output_buffers(std::move(decode_output_buffers)),
+      verify_input_buffers(std::move(verify_input_buffers)),
+      verify_output_buffers(std::move(verify_output_buffers)) {}
+
 LlmLiteRtNpuCompiledModelExecutor::EmbedderContext::EmbedderContext(
     CompiledModel embedder_compiled_model,
-    absl::flat_hash_map<absl::string_view, TensorBuffer> prefill_input_buffers,
-    absl::flat_hash_map<absl::string_view, TensorBuffer> prefill_output_buffers,
-    absl::flat_hash_map<absl::string_view, TensorBuffer> decode_input_buffers,
-    absl::flat_hash_map<absl::string_view, TensorBuffer> decode_output_buffers,
-    absl::flat_hash_map<absl::string_view, TensorBuffer> verify_input_buffers,
-    absl::flat_hash_map<absl::string_view, TensorBuffer> verify_output_buffers)
+    TensorBufferMap prefill_input_buffers,
+    TensorBufferMap prefill_output_buffers,
+    TensorBufferMap decode_input_buffers, TensorBufferMap decode_output_buffers,
+    TensorBufferMap verify_input_buffers, TensorBufferMap verify_output_buffers)
     : embedder_compiled_model(std::move(embedder_compiled_model)),
       inference_context(
           std::move(prefill_input_buffers), std::move(prefill_output_buffers),
+          std::move(decode_input_buffers), std::move(decode_output_buffers),
+          std::move(verify_input_buffers), std::move(verify_output_buffers)) {}
+
+LlmLiteRtNpuCompiledModelExecutor::EmbedderContext::EmbedderContext(
+    CompiledModel embedder_compiled_model,
+    TensorBufferMapBySize prefill_input_buffers_by_size,
+    TensorBufferMapBySize prefill_output_buffers_by_size,
+    TensorBufferMap decode_input_buffers, TensorBufferMap decode_output_buffers,
+    TensorBufferMap verify_input_buffers, TensorBufferMap verify_output_buffers)
+    : embedder_compiled_model(std::move(embedder_compiled_model)),
+      inference_context(
+          std::move(prefill_input_buffers_by_size),
+          std::move(prefill_output_buffers_by_size),
           std::move(decode_input_buffers), std::move(decode_output_buffers),
           std::move(verify_input_buffers), std::move(verify_output_buffers)) {}
 
@@ -1727,13 +2018,43 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::Prefill(
   LITERT_ASSIGN_OR_RETURN(auto ids,
                           ReferTensorBufferAsSpan<int32_t>(*text_token_ids));
 
+  const int largest_context_size = sorted_supported_context_sizes_.back();
+  const SortedPrefillSignatureMap largest_map =
+      (active_context_size_ == largest_context_size)
+          ? prefill_signature_map_
+          : context_groups_.at(largest_context_size).prefill_signature_map;
   LITERT_ASSIGN_OR_RETURN(
-      auto work_groups,
-      GetOptimizedPrefillWorkGroups(prefill_signature_map_, ids.size()));
-  for (const auto& [prefill_signature, prefill_length] : work_groups) {
+      auto work_groups, GetOptimizedPrefillWorkGroups(largest_map, ids.size()));
+
+  int current_processed_tokens = 0;
+  for (const auto& [dummy_signature, prefill_length] : work_groups) {
+    std::optional<int> copy_len =
+        current_processed_tokens > 0
+            ? std::make_optional(current_processed_tokens)
+            : std::nullopt;
+    ABSL_RETURN_IF_ERROR(SwitchContextSizeIfRequired(
+        current_processed_tokens + prefill_length, copy_len));
+
+    int runner_size = 0;
+    for (const auto& [size, sig] : largest_map) {
+      if (sig == dummy_signature) {
+        runner_size = size;
+        break;
+      }
+    }
+    RET_CHECK_GT(runner_size, 0)
+        << "Could not find runner size for signature " << dummy_signature;
+
+    auto sig_it = prefill_signature_map_.find(runner_size);
+    RET_CHECK(sig_it != prefill_signature_map_.end())
+        << "Prefill runner size " << runner_size
+        << " not supported in current context size " << active_context_size_;
+    const std::string& resolved_signature = sig_it->second;
+
     ABSL_RETURN_IF_ERROR(PrefillInternal(
-        prefill_signature, ids.subspan(/*pos=*/0, prefill_length)));
+        resolved_signature, ids.subspan(/*pos=*/0, prefill_length)));
     ids = ids.subspan(/*pos=*/prefill_length);
+    current_processed_tokens += prefill_length;
     latency_stats_.prefill_num_tokens += prefill_length;
   }
   RET_CHECK_EQ(ids.size(), 0).SetCode(absl::StatusCode::kInternal)
@@ -2120,32 +2441,64 @@ LlmLiteRtNpuCompiledModelExecutor::Decode(
 // with a certain length.
 absl::Status LlmLiteRtNpuCompiledModelExecutor::PrefillInternal(
     absl::string_view prefill_signature, absl::Span<const int> ids) {
-  // We use `kPrefillSize` instead of `ids.size()` because the NPU prefill
-  // execution always processes a fixed block of `kPrefillSize` (128) tokens.
-  // Even if the actual input `ids` is smaller, the hardware cache update
-  // will attempt to write `kPrefillSize` tokens, which can cause out-of-bounds
-  // writes if we are close to the end of the cache.
-  const int prefill_size = prefill_signatures_.size;
-  if (current_step_ + prefill_size > executor_settings_.GetMaxNumTokens()) {
-    ABSL_LOG(ERROR) << "Prefill length exceeds capacity. current_step_="
-                    << current_step_ << ", kPrefillSize=" << prefill_size
+  int runner_size = 0;
+  for (const auto& [size, sig] : prefill_signature_map_) {
+    if (sig == prefill_signature) {
+      runner_size = size;
+      break;
+    }
+  }
+  if (runner_size == 0) {
+    return absl::InternalError(absl::StrCat(
+        "Could not find runner size for signature ", prefill_signature));
+  }
+
+  llm_inference_context_.ActivatePrefillSize(runner_size);
+  rope_context_.ActivatePrefillSize(runner_size);
+  mask_context_.ActivatePrefillSize(runner_size);
+  cache_update_inference_context_.ActivatePrefillSize(runner_size);
+  embedder_context_.inference_context.ActivatePrefillSize(runner_size);
+  if (embedder_per_layer_context_.has_value()) {
+    embedder_per_layer_context_->inference_context.ActivatePrefillSize(
+        runner_size);
+  }
+
+  const auto& active_signatures = prefill_signatures_by_size_.at(runner_size);
+  const int prefill_size = active_signatures.size;
+  if (current_step_ + ids.size() > executor_settings_.GetMaxNumTokens()) {
+    ABSL_LOG(ERROR) << "Prefill length exceeds user capacity. current_step_="
+                    << current_step_ << ", ids.size()=" << ids.size()
                     << ", max_sequence_length_="
                     << executor_settings_.GetMaxNumTokens();
     return absl::InvalidArgumentError(
-        absl::StrCat("Prefill length (", prefill_size, ") plus current step (",
+        absl::StrCat("Prefill length (", ids.size(), ") plus current step (",
                      current_step_, ") exceeds max sequence length (",
                      executor_settings_.GetMaxNumTokens(), ")."));
+  }
+  // We use `prefill_size` (the size of the prefill chunk signature) instead of
+  // `ids.size()` because the NPU prefill execution always processes a fixed
+  // block of `prefill_size` tokens (padding with zeros if necessary). The NPU
+  // hardware cache update will attempt to write `prefill_size` tokens, which
+  // can cause out-of-bounds writes if we are close to the end of the context
+  // size.
+  if (current_step_ + prefill_size > active_signatures.context_size) {
+    ABSL_LOG(ERROR) << "Prefill length exceeds NPU hardware context size. "
+                    << "current_step_=" << current_step_
+                    << ", kPrefillSize=" << prefill_size
+                    << ", context_size_=" << active_signatures.context_size;
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Padded prefill length (", prefill_size, ") plus current step (",
+        current_step_, ") exceeds NPU context size (",
+        active_signatures.context_size, ")."));
   }
   auto start_prepare_inputs = absl::Now();
   std::vector<int> tokens_to_embed;
   tokens_to_embed.reserve(ids.size());
   {
     // Prefill input tokens.
-    LITERT_ASSIGN_OR_RETURN(
-        auto prefill_input_size,
-        embedder_context_.inference_context
-            .prefill_input_buffers[EmbedderSignatures::kEmbedderInput]
-            .Size());
+    auto& tb = embedder_context_.inference_context
+                   .prefill_input_buffers[EmbedderSignatures::kEmbedderInput];
+    LITERT_ASSIGN_OR_RETURN(auto prefill_input_size, tb.Size());
     LITERT_ASSIGN_OR_RETURN(
         auto prefill_input_lock_and_addr,
         ::litert::TensorBufferScopedLock::Create(
@@ -2342,7 +2695,7 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::PrefillInternal(
     // embedding lookup manager to do it for us.
     auto start = absl::Now();
     auto res = embedder_context_.embedder_compiled_model.Run(
-        prefill_signatures_.embedder,
+        active_signatures.embedder,
         embedder_context_.inference_context.prefill_input_buffers,
         embedder_context_.inference_context.prefill_output_buffers);
     RET_CHECK(res) << "Failed to run embedder model." << res.Error().Message();
@@ -2351,7 +2704,8 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::PrefillInternal(
         absl::ToInt64Microseconds(end - start);
   }
 
-  // Invoke embedder per layer signature if it exists.
+  // Use tokens_to_embed for PLE lookup since we need the lookup for the
+  // pending token (if available) and ids[0, last_token-1].
   if (use_hw_ple_for_npu_ && !ple_table_ptrs_.empty()) {
     auto start = absl::Now();
     auto& ple_output_buffer =
@@ -2362,8 +2716,6 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::PrefillInternal(
             ple_output_buffer, ::litert::TensorBuffer::LockMode::kWrite));
     void* output_ptr = lock.second;
 
-    // Use tokens_to_embed for PLE lookup since we need the lookup for the
-    // pending token (if available) and ids[0, last_token-1].
     ABSL_RETURN_IF_ERROR(HWPerLayerEmbeddingLookup(
         tokens_to_embed.data(), tokens_to_embed.size(), ple_table_ptrs_.data(),
         ple_quant_params_.data(), num_tables_, ple_embedding_dim_, output_ptr,
@@ -2373,10 +2725,11 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::PrefillInternal(
     latency_stats_.prefill_embedder_per_layer_inference_latency_us +=
         absl::ToInt64Microseconds(absl::Now() - start);
   } else if (embedder_per_layer_context_.has_value()) {
+    // Invoke embedder per layer signature if it exists.
     auto start = absl::Now();
     auto res =
         embedder_per_layer_context_->embedder_per_layer_compiled_model.Run(
-            prefill_signatures_.embedder_per_layer,
+            active_signatures.embedder_per_layer,
             embedder_per_layer_context_->inference_context
                 .prefill_input_buffers,
             embedder_per_layer_context_->inference_context
@@ -2387,7 +2740,7 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::PrefillInternal(
         absl::ToInt64Microseconds(absl::Now() - start);
   }
 
-  return PrefillCommonPipeline(prefill_signature);
+  return PrefillCommonPipeline(active_signatures);
 }
 
 absl::Status LlmLiteRtNpuCompiledModelExecutor::PrefillInternalFromEmbeddings(
@@ -2395,6 +2748,29 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::PrefillInternalFromEmbeddings(
     absl::Span<const int32_t> sliced_tokens, absl::Span<const float> embeddings,
     absl::Span<const float> ple_embeddings,
     absl::Span<const int32_t> seq_positions) {
+  int runner_size = 0;
+  for (const auto& [size, sig] : prefill_signature_map_) {
+    if (sig == prefill_signature) {
+      runner_size = size;
+      break;
+    }
+  }
+  if (runner_size == 0) {
+    return absl::InternalError(absl::StrCat(
+        "Could not find runner size for signature ", prefill_signature));
+  }
+
+  llm_inference_context_.ActivatePrefillSize(runner_size);
+  rope_context_.ActivatePrefillSize(runner_size);
+  mask_context_.ActivatePrefillSize(runner_size);
+  cache_update_inference_context_.ActivatePrefillSize(runner_size);
+  embedder_context_.inference_context.ActivatePrefillSize(runner_size);
+  if (embedder_per_layer_context_.has_value()) {
+    embedder_per_layer_context_->inference_context.ActivatePrefillSize(
+        runner_size);
+  }
+
+  const auto& active_signatures = prefill_signatures_by_size_.at(runner_size);
   NPU_EXECUTOR_LOG(INFO) << "PrefillInternalFromEmbeddings called";
   NPU_EXECUTOR_LOG(INFO) << "PLE config: type="
                          << static_cast<int>(output_type_)
@@ -2587,16 +2963,16 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::PrefillInternalFromEmbeddings(
     }
   }
 
-  return PrefillCommonPipeline(prefill_signature);
+  return PrefillCommonPipeline(active_signatures);
 }
 
 absl::Status LlmLiteRtNpuCompiledModelExecutor::PrefillCommonPipeline(
-    absl::string_view prefill_signature) {
+    const ResolvedSignatures& active_signatures) {
   // Invoke RoPE signature.
   {
     auto start = absl::Now();
     auto res = npu_auxiliary_context_.npu_auxiliary_compiled_model.Run(
-        prefill_signatures_.rope, rope_context_.prefill_input_buffers,
+        active_signatures.rope, rope_context_.prefill_input_buffers,
         rope_context_.prefill_output_buffers);
     RET_CHECK(res) << "Failed to run RoPE model." << res.Error().Message();
     auto end = absl::Now();
@@ -2612,7 +2988,7 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::PrefillCommonPipeline(
                                         mask_context_.prefill_output_buffers));
     } else {
       auto res = npu_auxiliary_context_.npu_auxiliary_compiled_model.Run(
-          prefill_signatures_.mask, mask_context_.prefill_input_buffers,
+          active_signatures.mask, mask_context_.prefill_input_buffers,
           mask_context_.prefill_output_buffers);
       RET_CHECK(res) << "Failed to run compiled model."
                      << res.Error().Message();
@@ -2625,10 +3001,9 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::PrefillCommonPipeline(
   // Invoke LLM signature.
   {
     auto start = absl::Now();
-    auto res =
-        llm_compiled_model_.Run(prefill_signatures_.prefill,
-                                llm_inference_context_.prefill_input_buffers,
-                                llm_inference_context_.prefill_output_buffers);
+    auto res = llm_compiled_model_.Run(
+        active_signatures.prefill, llm_inference_context_.prefill_input_buffers,
+        llm_inference_context_.prefill_output_buffers);
     RET_CHECK(res) << "Failed to run LLM model." << res.Error().Message();
     auto end = absl::Now();
     latency_stats_.prefill_llm_inference_latency_us +=
@@ -2645,7 +3020,7 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::PrefillCommonPipeline(
           kv_quant_params_, has_sliding_window_attention_));
     } else {
       auto res = npu_auxiliary_context_.npu_auxiliary_compiled_model.Run(
-          prefill_signatures_.cache_update,
+          active_signatures.cache_update,
           cache_update_inference_context_.prefill_input_buffers,
           cache_update_inference_context_.prefill_output_buffers);
       RET_CHECK(res) << "Failed to run cache update model."
@@ -2661,6 +3036,8 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::PrefillCommonPipeline(
 
 absl::Status LlmLiteRtNpuCompiledModelExecutor::DecodeInternal(
     int step, std::shared_ptr<TokenData> token) {
+  ABSL_RETURN_IF_ERROR(SwitchContextSizeIfRequired(step + 1, step));
+
   if (step >= executor_settings_.GetMaxNumTokens()) {
     return absl::ResourceExhaustedError("Reached maximum number of tokens.");
   }
@@ -2727,7 +3104,7 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::DecodeInternal(
     {
       auto start = absl::Now();
       auto res = embedder_context_.embedder_compiled_model.Run(
-          EmbedderSignatures::kDecodeEmbedder,
+          active_signatures_.decode_embedder,
           embedder_context_.inference_context.decode_input_buffers,
           embedder_context_.inference_context.decode_output_buffers);
       RET_CHECK(res) << "Failed to run embedder model."
@@ -2791,7 +3168,7 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::DecodeInternal(
       auto start = absl::Now();
       auto res =
           embedder_per_layer_context_->embedder_per_layer_compiled_model.Run(
-              EmbedderPerLayerSignatures::kDecodeEmbedderPerLayer,
+              active_signatures_.decode_embedder_per_layer,
               embedder_per_layer_context_->inference_context
                   .decode_input_buffers,
               embedder_per_layer_context_->inference_context
@@ -2824,7 +3201,7 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::DecodeInternal(
   {
     auto start = absl::Now();
     auto res = npu_auxiliary_context_.npu_auxiliary_compiled_model.Run(
-        RopeSignatures::kDecodeRope, rope_context_.decode_input_buffers,
+        active_signatures_.decode_rope, rope_context_.decode_input_buffers,
         rope_context_.decode_output_buffers);
     RET_CHECK(res) << "Failed to run RoPE model." << res.Error().Message();
     auto end = absl::Now();
@@ -2840,7 +3217,7 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::DecodeInternal(
                                         mask_context_.decode_output_buffers));
     } else {
       auto res = npu_auxiliary_context_.npu_auxiliary_compiled_model.Run(
-          MaskSignatures::kDecodeMask, mask_context_.decode_input_buffers,
+          active_signatures_.decode_mask, mask_context_.decode_input_buffers,
           mask_context_.decode_output_buffers);
       RET_CHECK(res) << "Failed to run compiled model."
                      << res.Error().Message();
@@ -2854,7 +3231,7 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::DecodeInternal(
   {
     auto start = absl::Now();
     auto res = llm_compiled_model_.Run(
-        LlmSignatures::kDecodeLlm, llm_inference_context_.decode_input_buffers,
+        active_signatures_.decode, llm_inference_context_.decode_input_buffers,
         llm_inference_context_.decode_output_buffers);
     auto end = absl::Now();
     latency_stats_.decode_llm_inference_latency_us +=
@@ -2872,7 +3249,7 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::DecodeInternal(
                           kv_quant_params_, has_sliding_window_attention_));
     } else {
       auto res = npu_auxiliary_context_.npu_auxiliary_compiled_model.Run(
-          CacheUpdateSignatures::kDecodeCacheUpdate,
+          active_signatures_.decode_cache_update,
           cache_update_inference_context_.decode_input_buffers,
           cache_update_inference_context_.decode_output_buffers);
       RET_CHECK(res) << "Failed to run cache update model."
@@ -3563,23 +3940,39 @@ LlmLiteRtNpuCompiledModelExecutor::DetermineMaxSequenceLength(
     // and instead we need to find the true global KV cache.
     // Once the "Executor metadata" design is implemented the information can
     // instead be taken from there.
-    LITERT_ASSIGN_OR_RETURN(const int prefill_size,
-                            DetectPrefillSize(llm_model));
-    LITERT_ASSIGN_OR_RETURN(SimpleSignature prefill_signature,
-                            llm_model.FindSignature(PrefillSig(
-                                kPrefillSignatureBase, prefill_size)));
-    for (auto input_name : prefill_signature.InputNames()) {
-      if (absl::StartsWith(input_name, kv_cache_k_root_name) ||
-          absl::StartsWith(input_name, kv_cache_v_root_name) ||
-          absl::StartsWith(input_name, kv_cache_c_root_name)) {
-        LITERT_ASSIGN_OR_RETURN(const litert::SimpleTensor& tensor,
-                                prefill_signature.InputTensor(input_name));
-        LITERT_ASSIGN_OR_RETURN(::litert::RankedTensorType type,
-                                tensor.RankedTensorType());
-        for (auto dim : type.Layout().Dimensions()) {
-          ans = std::max(ans, dim);
+    LITERT_ASSIGN_OR_RETURN(const std::vector<int> prefill_sizes,
+                            DetectPrefillSizes(llm_model));
+    if (prefill_sizes.empty()) {
+      return absl::InternalError("No prefill sizes detected.");
+    }
+    const int prefill_size = prefill_sizes.front();
+    bool found_any = false;
+    auto signatures = llm_model.GetSignatures();
+    if (signatures) {
+      for (const auto& signature : *signatures) {
+        absl::string_view key = signature.Key();
+        std::string target_prefix =
+            absl::StrCat(kPrefillSignatureBase, "_", prefill_size);
+        if (key == target_prefix ||
+            absl::StartsWith(key, absl::StrCat(target_prefix, "_"))) {
+          found_any = true;
+          for (auto input_name : signature.InputNames()) {
+            if (IsKVCacheTensor(input_name)) {
+              LITERT_ASSIGN_OR_RETURN(const litert::SimpleTensor& tensor,
+                                      signature.InputTensor(input_name));
+              LITERT_ASSIGN_OR_RETURN(::litert::RankedTensorType type,
+                                      tensor.RankedTensorType());
+              for (auto dim : type.Layout().Dimensions()) {
+                ans = std::max(ans, dim);
+              }
+            }
+          }
         }
       }
+    }
+    if (!found_any) {
+      return absl::NotFoundError(absl::StrCat(
+          "Could not find any prefill signature for size ", prefill_size));
     }
   }
 
@@ -3622,6 +4015,8 @@ LlmLiteRtNpuCompiledModelExecutor::Create(
       const litert::Model* llm_model,
       resources.GetTFLiteModel(ModelType::kTfLitePrefillDecode));
 
+  DumpModelSignatures("PrefillDecode", *llm_model);
+
   LITERT_ASSIGN_OR_RETURN(
       int max_sequence_length,
       DetermineMaxSequenceLength(executor_settings, resources, *llm_model));
@@ -3640,11 +4035,44 @@ LlmLiteRtNpuCompiledModelExecutor::Create(
     mutable_settings.SetMaxNumTokens(max_sequence_length);
   }
 
+  // Detect the prefill lengths the model was compiled with (e.g. 128 or 256)
+  // and resolve all prefill-family signature names from it.
+  LITERT_ASSIGN_OR_RETURN(std::vector<int> sorted_supported_prefill_sizes,
+                          DetectPrefillSizes(*llm_model));
+  LITERT_ASSIGN_OR_RETURN(
+      std::vector<int> sorted_supported_context_sizes,
+      DetectSupportedContextSizes(*llm_model, sorted_supported_prefill_sizes[0],
+                                  max_sequence_length));
+
+  const bool has_suffix = DetectHasSuffix(*llm_model);
+  const bool has_rope_suffix = DetectHasRopeSuffix(resources);
+
+  std::vector<std::vector<ResolvedSignatures>> signatures_list_of_list;
+  signatures_list_of_list.reserve(sorted_supported_context_sizes.size());
+  for (int context_size : sorted_supported_context_sizes) {
+    std::vector<ResolvedSignatures> context_signatures;
+    context_signatures.reserve(sorted_supported_prefill_sizes.size());
+    for (int prefill_size : sorted_supported_prefill_sizes) {
+      context_signatures.push_back(BuildResolvedSignatures(
+          prefill_size, context_size, has_suffix, has_rope_suffix));
+    }
+    signatures_list_of_list.push_back(std::move(context_signatures));
+  }
+
+  const auto& largest_signatures = signatures_list_of_list.back().back();
+  ABSL_LOG(INFO) << "Detected NPU prefill sizes: "
+                 << absl::StrJoin(sorted_supported_prefill_sizes, ", ")
+                 << " (largest signature \"" << largest_signatures.prefill
+                 << "\").";
+
   // Initialize logits quantization parameters using the 'decode' signature.
   LogitsQuantizationParams quantization_params = {.scale = 1.0f,
                                                   .zero_point = 0};
-  LITERT_ASSIGN_OR_RETURN(auto decode_signature,
-                          llm_model->FindSignature(kDecodeSignature));
+  const auto& representative_signatures =
+      signatures_list_of_list.front().front();
+  LITERT_ASSIGN_OR_RETURN(
+      auto decode_signature,
+      llm_model->FindSignature(representative_signatures.decode));
   LITERT_ASSIGN_OR_RETURN(
       auto logits_tensor,
       decode_signature.OutputTensor(LlmSignatures::kDecodeLogitsOutput));
@@ -3653,37 +4081,30 @@ LlmLiteRtNpuCompiledModelExecutor::Create(
     quantization_params.scale = q_params.scale;
     quantization_params.zero_point = static_cast<int32_t>(q_params.zero_point);
     ABSL_LOG_IF(INFO, enable_npu_debug_logging)
-        << "Logits quantization params from '" << kDecodeSignature
+        << "Logits quantization params from '"
+        << representative_signatures.decode
         << "' signature: scale=" << quantization_params.scale
         << " zero_point=" << quantization_params.zero_point;
   } else {
     ABSL_LOG_IF(WARNING, enable_npu_debug_logging)
-        << "No quantization for logits in '" << kDecodeSignature
+        << "No quantization for logits in '" << representative_signatures.decode
         << "' signature (using default scale= " << quantization_params.scale
         << ", zero_point= " << quantization_params.zero_point << ").";
   }
-  // Detect the prefill length the model was compiled with (e.g. 128 or 256) and
-  // resolve all prefill-family signature names from it.
-  LITERT_ASSIGN_OR_RETURN(const int prefill_size,
-                          DetectPrefillSize(*llm_model));
-  const ResolvedPrefillSignatures prefill_signatures =
-      BuildResolvedPrefillSignatures(prefill_size);
-  ABSL_LOG(INFO) << "Detected NPU prefill size: " << prefill_size
-                 << " (signature \"" << prefill_signatures.prefill << "\").";
 
   // For the lack of a better way to identify the model variants, we use the
   // presence of per-layer embeddings as the signal for Gemma3n.
   LITERT_ASSIGN_OR_RETURN(
       const bool has_per_layer_embeddings,
-      HasPerLayerEmbedder(*llm_model, prefill_signatures.prefill));
+      HasPerLayerEmbedder(*llm_model, largest_signatures.prefill));
   if (has_per_layer_embeddings) {
-    return CreateForModelHasPerLayerEmbedding(mutable_settings, resources, env,
-                                              llm_model, quantization_params,
-                                              prefill_signatures);
+    return CreateForModelHasPerLayerEmbedding(
+        mutable_settings, resources, env, llm_model, quantization_params,
+        signatures_list_of_list, sorted_supported_context_sizes);
   } else {
     return CreateForModelWithoutPerLayerEmbedding(
         mutable_settings, resources, env, llm_model, quantization_params,
-        prefill_signatures);
+        signatures_list_of_list, sorted_supported_context_sizes);
   }
 };
 
@@ -3692,7 +4113,10 @@ LlmLiteRtNpuCompiledModelExecutor::CreateForModelHasPerLayerEmbedding(
     const LlmExecutorSettings& executor_settings, ModelResources& resources,
     litert::Environment& env, const litert::Model* transformer_model,
     LogitsQuantizationParams quantization_params,
-    const ResolvedPrefillSignatures& prefill_signatures) {
+    const std::vector<std::vector<ResolvedSignatures>>& signatures_list_of_list,
+    const std::vector<int>& sorted_supported_context_sizes) {
+  const auto& prefill_signatures_list = signatures_list_of_list.back();
+  const int largest_context_size = sorted_supported_context_sizes.back();
   int64_t kv_cache_init_value = GetKvCacheInitValue(resources);
   // If the model is fully AOT compiled for NPU, NPU accelerator is used
   // automatically.
@@ -3702,143 +4126,314 @@ LlmLiteRtNpuCompiledModelExecutor::CreateForModelHasPerLayerEmbedding(
       CompiledModel llm_compiled_model,
       CompiledModel::Create(env, transformer_model->Get(), options));
 
-  // Allocate all input and output buffers of the LLM model that are meant to be
-  // used by the NPU chip first, so that we can later duplicate the buffers into
-  // the output buffer maps of the embedder, mask, and rope signatures.
-
-  absl::flat_hash_map<absl::string_view, TensorBuffer>
-      gemma_prefill_input_buffers;
-  absl::flat_hash_map<absl::string_view, TensorBuffer>
-      gemma_decode_input_buffers;
-  absl::flat_hash_map<absl::string_view, TensorBuffer>
-      gemma_verify_input_buffers;
-  absl::flat_hash_map<absl::string_view, TensorBuffer> input_kv_cache_buffers;
-  absl::flat_hash_map<absl::string_view, TensorBuffer>
-      prefill_output_kv_cache_slice_buffers;
-  absl::flat_hash_map<absl::string_view, TensorBuffer>
-      decode_output_kv_cache_slice_buffers;
-  absl::flat_hash_map<absl::string_view, TensorBuffer>
-      verify_output_kv_cache_slice_buffers;
-
-  absl::flat_hash_map<absl::string_view, HWQuantParams> kv_quant_params;
-  LITERT_RETURN_IF_ERROR(AllocateTransformerBuffers(
-      env, transformer_model, llm_compiled_model, prefill_signatures,
-      gemma_prefill_input_buffers, gemma_decode_input_buffers,
-      gemma_verify_input_buffers, input_kv_cache_buffers,
-      prefill_output_kv_cache_slice_buffers,
-      decode_output_kv_cache_slice_buffers,
-      verify_output_kv_cache_slice_buffers, kv_quant_params,
-      kv_cache_init_value));
-
-  // Gemma3n specific fix: KV cache buffer 19 of *prefill* is not connected
-  // to any OPs in the model, making the LiteRT runtime allocate host memory
-  // for it. This is incompatible when running the transformer model on the NPU.
-  if (input_kv_cache_buffers.contains(cache_k19)) {
-    LITERT_ASSIGN_OR_RETURN(auto buffer_k, llm_compiled_model.CreateInputBuffer(
-                                               kDecodeSignature, cache_k19));
-    LITERT_RETURN_IF_ERROR(FillKVCacheBuffer(buffer_k, kv_cache_init_value));
-    input_kv_cache_buffers[cache_k19] = std::move(buffer_k);
-
-    LITERT_ASSIGN_OR_RETURN(auto buffer_v, llm_compiled_model.CreateInputBuffer(
-                                               kDecodeSignature, cache_v19));
-    LITERT_RETURN_IF_ERROR(FillKVCacheBuffer(buffer_v, kv_cache_init_value));
-    input_kv_cache_buffers[cache_v19] = std::move(buffer_v);
-  }
-  LITERT_ASSIGN_OR_RETURN(
-      auto llm_inference_context,
-      CreateLlmInferenceContextWithBufferSharing(
-          env, llm_compiled_model, prefill_signatures, input_kv_cache_buffers,
-          prefill_output_kv_cache_slice_buffers,
-          decode_output_kv_cache_slice_buffers,
-          verify_output_kv_cache_slice_buffers, gemma_prefill_input_buffers,
-          gemma_decode_input_buffers, gemma_verify_input_buffers));
-
   LITERT_ASSIGN_OR_RETURN(auto npu_auxiliary_lrt_model,
                           resources.GetTFLiteModel(ModelType::kTfLiteAux));
-
   LITERT_ASSIGN_OR_RETURN(
       auto npu_auxiliary_context,
       CreateNpuAuxiliaryContext(env, *npu_auxiliary_lrt_model,
                                 executor_settings));
 
-  LITERT_ASSIGN_OR_RETURN(
-      auto mask_context,
-      CreateMaskContextWithBufferSharing(
-          npu_auxiliary_context, prefill_signatures,
-          gemma_prefill_input_buffers, gemma_decode_input_buffers,
-          gemma_verify_input_buffers));
-
   LITERT_ASSIGN_OR_RETURN(auto embedder_lrt_model,
                           resources.GetTFLiteModel(ModelType::kTfLiteEmbedder));
   LITERT_ASSIGN_OR_RETURN(
-      auto embedder_context,
-      CreateEmbedderContextWithBufferSharing(
-          env, *embedder_lrt_model, prefill_signatures,
-          gemma_prefill_input_buffers, gemma_decode_input_buffers,
-          gemma_verify_input_buffers, executor_settings));
+      const litert::Model* embedder_per_layer_model,
+      resources.GetTFLiteModel(ModelType::kTfLitePerLayerEmbedder));
 
-  LITERT_ASSIGN_OR_RETURN(
-      auto rope_context,
-      CreateRopeContextWithBufferSharing(
-          npu_auxiliary_context, prefill_signatures,
-          gemma_prefill_input_buffers, gemma_decode_input_buffers,
-          gemma_verify_input_buffers));
+  DumpModelSignatures("Aux", *npu_auxiliary_lrt_model);
+  if (embedder_lrt_model) {
+    DumpModelSignatures("Embedder", *embedder_lrt_model);
+  }
+  if (embedder_per_layer_model) {
+    DumpModelSignatures("EmbedderPerLayer", *embedder_per_layer_model);
+  }
 
-  // Duplicate the rope's buffers that are used to store the prefill and
-  // decode input position, because they will need to be passed to the
-  // cache update inference context as well.
-  LITERT_ASSIGN_OR_RETURN(
-      ::litert::TensorBuffer prefill_input_pos,
-      rope_context.prefill_input_buffers[RopeSignatures::kInputPos]
-          .Duplicate());
-  LITERT_ASSIGN_OR_RETURN(
-      ::litert::TensorBuffer decode_input_pos,
-      rope_context.decode_input_buffers[RopeSignatures::kInputPos].Duplicate());
-  ::litert::TensorBuffer verify_input_pos;
-  if (rope_context.verify_input_buffers.contains(RopeSignatures::kInputPos)) {
+  bool use_hw_ple_for_npu = false;
+  auto npu_config_status = executor_settings.GetBackendConfig<NpuConfig>();
+  if (npu_config_status.ok()) {
+    use_hw_ple_for_npu = npu_config_status->use_hw_ple_for_npu;
+  }
+
+  absl::flat_hash_map<absl::string_view, HWQuantParams> kv_quant_params;
+
+  auto create_context_group =
+      [&](const std::vector<ResolvedSignatures>& signatures_list,
+          const ContextGroup* largest_group) -> absl::StatusOr<ContextGroup> {
+    ContextGroup group;
+    group.representative_signatures = signatures_list.back();
+    for (const auto& sigs : signatures_list) {
+      group.prefill_signatures[sigs.size] = sigs;
+    }
+
+    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
+        input_kv_cache_buffers;
+
+    if (largest_group != nullptr) {
+      // Share KV cache buffers from the largest group's decode input buffers.
+      // Decode buffers contain all KV cache tensors.
+      for (const auto& [name, buffer] :
+           largest_group->llm_inference_context.decode_input_buffers) {
+        if (name.starts_with(kv_cache_k_root_name) ||
+            name.starts_with(kv_cache_v_root_name) ||
+            name.starts_with(kv_cache_c_root_name)) {
+          // Verify that the tensor exists in the compiled model before trying
+          // to alias it.
+          auto sig_expected = transformer_model->FindSignature(
+              group.representative_signatures.decode);
+          if (!sig_expected.HasValue()) {
+            return absl::NotFoundError(
+                absl::StrCat("Signature not found: ",
+                             group.representative_signatures.decode));
+          }
+          auto tensor_expected = sig_expected->InputTensor(name);
+          if (!tensor_expected.HasValue()) {
+            return absl::NotFoundError(
+                absl::StrCat("Input tensor not found: ", name));
+          }
+          const auto& tensor = tensor_expected.Value();
+          LITERT_ASSIGN_OR_RETURN(auto target_type, tensor.RankedTensorType());
+
+          LITERT_ASSIGN_OR_RETURN(auto alias_buf,
+                                  CreateAliasBuffer(env, buffer, target_type));
+          input_kv_cache_buffers[name] = std::move(alias_buf);
+        }
+      }
+    }
+
+    absl::flat_hash_map<
+        int, absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>>
+        gemma_prefill_input_buffers_by_size;
+    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
+        gemma_decode_input_buffers;
+    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
+        gemma_verify_input_buffers;
+    absl::flat_hash_map<
+        int, absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>>
+        prefill_output_kv_cache_slice_buffers_by_size;
+    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
+        decode_output_kv_cache_slice_buffers;
+    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
+        verify_output_kv_cache_slice_buffers;
+
+    // Allocate all input and output buffers of the LLM model that are meant to
+    // be used by the NPU chip first, so that we can later duplicate the buffers
+    // into the output buffer maps of the embedder, mask, and rope signatures.
+    LITERT_RETURN_IF_ERROR(AllocateTransformerBuffers(
+        env, transformer_model, llm_compiled_model, signatures_list,
+        gemma_prefill_input_buffers_by_size, gemma_decode_input_buffers,
+        gemma_verify_input_buffers, input_kv_cache_buffers,
+        prefill_output_kv_cache_slice_buffers_by_size,
+        decode_output_kv_cache_slice_buffers,
+        verify_output_kv_cache_slice_buffers, kv_quant_params,
+        kv_cache_init_value));
+
+    // Workaround for NPU model issues where some KV cache tensors (e.g. layer
+    // 19 in Gemma3n) are not connected to any OPs in the prefill subgraph,
+    // causing the runtime to allocate them as HostMemory. We dynamically detect
+    // these and re-allocate them using the decode signature to ensure they are
+    // on NPU.
+    for (auto& [name, buf] : input_kv_cache_buffers) {
+      if (IsKVCacheTensor(name)) {
+        auto buffer_type = buf.BufferType();
+        if (buffer_type.HasValue() &&
+            buffer_type.Value() == ::litert::TensorBufferType::kHostMemory) {
+          ABSL_LOG(WARNING) << "KV cache tensor '" << name
+                            << "' was allocated as HostMemory in prefill. "
+                               "Re-allocating using decode signature.";
+          LITERT_ASSIGN_OR_RETURN(
+              auto new_buf, llm_compiled_model.CreateInputBuffer(
+                                group.representative_signatures.decode, name));
+          LITERT_RETURN_IF_ERROR(
+              FillKVCacheBuffer(new_buf, kv_cache_init_value));
+          buf = std::move(new_buf);
+        }
+      }
+    }
+
     LITERT_ASSIGN_OR_RETURN(
-        verify_input_pos,
-        rope_context.verify_input_buffers[RopeSignatures::kInputPos]
+        group.llm_inference_context,
+        CreateLlmInferenceContextWithBufferSharing(
+            env, llm_compiled_model, signatures_list, input_kv_cache_buffers,
+            prefill_output_kv_cache_slice_buffers_by_size,
+            decode_output_kv_cache_slice_buffers,
+            verify_output_kv_cache_slice_buffers,
+            gemma_prefill_input_buffers_by_size, gemma_decode_input_buffers,
+            gemma_verify_input_buffers));
+
+    // Gemma3n / VLM / Tiny Gemma specific fixes:
+    const auto& first_prefill_input_buffers =
+        group.llm_inference_context.prefill_input_buffers_by_size.begin()
+            ->second;
+    if (first_prefill_input_buffers.contains(cache_k31)) {
+      // For models with 32 layers. Do nothing.
+    } else if (first_prefill_input_buffers.contains(cache_k25)) {
+      // Gemma3 specific fix:
+      LITERT_ASSIGN_OR_RETURN(
+          auto buffer_k,
+          llm_compiled_model.CreateInputBuffer(
+              group.representative_signatures.decode, cache_k25));
+      group.llm_inference_context.decode_input_buffers[cache_k25] =
+          std::move(buffer_k);
+      LITERT_ASSIGN_OR_RETURN(
+          auto buffer_v,
+          llm_compiled_model.CreateInputBuffer(
+              group.representative_signatures.decode, cache_v25));
+      group.llm_inference_context.decode_input_buffers[cache_v25] =
+          std::move(buffer_v);
+    } else if (first_prefill_input_buffers.contains(cache_k23)) {
+      // Fast VLM model specific fix:
+      LITERT_ASSIGN_OR_RETURN(
+          auto buffer_k,
+          llm_compiled_model.CreateInputBuffer(
+              group.representative_signatures.decode, cache_k23));
+      group.llm_inference_context.decode_input_buffers[cache_k23] =
+          std::move(buffer_k);
+      LITERT_ASSIGN_OR_RETURN(
+          auto buffer_v,
+          llm_compiled_model.CreateInputBuffer(
+              group.representative_signatures.decode, cache_v23));
+      group.llm_inference_context.decode_input_buffers[cache_v23] =
+          std::move(buffer_v);
+    } else if (first_prefill_input_buffers.contains(cache_k17)) {
+      // Tiny Gemma 270M specific fix:
+      LITERT_ASSIGN_OR_RETURN(
+          auto buffer_k,
+          llm_compiled_model.CreateInputBuffer(
+              group.representative_signatures.decode, cache_k17));
+      group.llm_inference_context.decode_input_buffers[cache_k17] =
+          std::move(buffer_k);
+      LITERT_ASSIGN_OR_RETURN(
+          auto buffer_v,
+          llm_compiled_model.CreateInputBuffer(
+              group.representative_signatures.decode, cache_v17));
+      group.llm_inference_context.decode_input_buffers[cache_v17] =
+          std::move(buffer_v);
+    }
+
+    LITERT_ASSIGN_OR_RETURN(
+        group.mask_context,
+        CreateMaskContextWithBufferSharing(
+            npu_auxiliary_context, signatures_list,
+            gemma_prefill_input_buffers_by_size, gemma_decode_input_buffers,
+            gemma_verify_input_buffers));
+
+    LITERT_ASSIGN_OR_RETURN(
+        group.rope_context,
+        CreateRopeContextWithBufferSharing(
+            npu_auxiliary_context, signatures_list,
+            gemma_prefill_input_buffers_by_size, gemma_decode_input_buffers,
+            gemma_verify_input_buffers));
+
+    // Duplicate the rope's buffers that are used to store the prefill and
+    // decode input position, because they will need to be passed to the
+    // cache update inference context as well.
+    absl::flat_hash_map<int, ::litert::TensorBuffer> prefill_input_pos_by_size;
+    absl::flat_hash_map<int, ::litert::TensorBuffer> prefill_valid_mask_by_size;
+
+    for (const auto& sigs : signatures_list) {
+      int size = sigs.size;
+      LITERT_ASSIGN_OR_RETURN(prefill_input_pos_by_size[size],
+                              group.rope_context.GetPrefillInputBuffers(size)
+                                  .at(RopeSignatures::kInputPos)
+                                  .Duplicate());
+
+      const auto& mask_prefill_buffers =
+          group.mask_context.GetPrefillInputBuffers(size);
+      auto prefill_valid_mask_it =
+          mask_prefill_buffers.find(MaskSignatures::kMaskInputValidMask);
+      if (prefill_valid_mask_it != mask_prefill_buffers.end()) {
+        LITERT_ASSIGN_OR_RETURN(prefill_valid_mask_by_size[size],
+                                prefill_valid_mask_it->second.Duplicate());
+      }
+    }
+
+    auto verify_input_pos_it =
+        group.rope_context.verify_input_buffers.find(RopeSignatures::kInputPos);
+    ::litert::TensorBuffer verify_input_pos;
+    if (verify_input_pos_it != group.rope_context.verify_input_buffers.end()) {
+      LITERT_ASSIGN_OR_RETURN(verify_input_pos,
+                              verify_input_pos_it->second.Duplicate());
+    }
+
+    LITERT_ASSIGN_OR_RETURN(
+        ::litert::TensorBuffer decode_input_pos,
+        group.rope_context.decode_input_buffers[RopeSignatures::kInputPos]
             .Duplicate());
-  }
 
-  ::litert::TensorBuffer prefill_valid_mask;
-  auto prefill_valid_mask_it = mask_context.prefill_input_buffers.find(
-      MaskSignatures::kMaskInputValidMask);
-  if (prefill_valid_mask_it != mask_context.prefill_input_buffers.end()) {
-    LITERT_ASSIGN_OR_RETURN(prefill_valid_mask,
-                            prefill_valid_mask_it->second.Duplicate());
-  }
+    ::litert::TensorBuffer decode_valid_mask;
+    auto decode_valid_mask_it = group.mask_context.decode_input_buffers.find(
+        MaskSignatures::kMaskInputValidMask);
+    if (decode_valid_mask_it != group.mask_context.decode_input_buffers.end()) {
+      LITERT_ASSIGN_OR_RETURN(decode_valid_mask,
+                              decode_valid_mask_it->second.Duplicate());
+    }
 
-  ::litert::TensorBuffer decode_valid_mask;
-  auto decode_valid_mask_it = mask_context.decode_input_buffers.find(
-      MaskSignatures::kMaskInputValidMask);
-  if (decode_valid_mask_it != mask_context.decode_input_buffers.end()) {
-    LITERT_ASSIGN_OR_RETURN(decode_valid_mask,
-                            decode_valid_mask_it->second.Duplicate());
-  }
+    ::litert::TensorBuffer verify_valid_mask;
+    auto verify_valid_mask_it = group.mask_context.verify_input_buffers.find(
+        MaskSignatures::kMaskInputValidMask);
+    if (verify_valid_mask_it != group.mask_context.verify_input_buffers.end()) {
+      LITERT_ASSIGN_OR_RETURN(verify_valid_mask,
+                              verify_valid_mask_it->second.Duplicate());
+    }
 
-  ::litert::TensorBuffer verify_valid_mask;
-  auto verify_valid_mask_it = mask_context.verify_input_buffers.find(
-      MaskSignatures::kMaskInputValidMask);
-  if (verify_valid_mask_it != mask_context.verify_input_buffers.end()) {
-    LITERT_ASSIGN_OR_RETURN(verify_valid_mask,
-                            verify_valid_mask_it->second.Duplicate());
-  }
+    LITERT_ASSIGN_OR_RETURN(
+        group.cache_update_inference_context,
+        CreateCacheUpdateInferenceContextWithBufferSharing(
+            input_kv_cache_buffers,
+            prefill_output_kv_cache_slice_buffers_by_size,
+            decode_output_kv_cache_slice_buffers,
+            verify_output_kv_cache_slice_buffers, prefill_input_pos_by_size,
+            std::move(decode_input_pos), std::move(verify_input_pos),
+            prefill_valid_mask_by_size, std::move(decode_valid_mask),
+            std::move(verify_valid_mask)));
+
+    if (embedder_lrt_model) {
+      LITERT_ASSIGN_OR_RETURN(
+          group.embedder_context,
+          CreateEmbedderContextWithBufferSharing(
+              env, *embedder_lrt_model, signatures_list,
+              gemma_prefill_input_buffers_by_size, gemma_decode_input_buffers,
+              gemma_verify_input_buffers, executor_settings));
+    }
+
+    if (embedder_per_layer_model && !use_hw_ple_for_npu &&
+        (largest_group == nullptr ||
+         largest_group->embedder_per_layer_context.has_value())) {
+      absl::flat_hash_map<int, ::litert::TensorBuffer>
+          mask_prefill_input_tokens_by_size;
+      for (const auto& sigs : signatures_list) {
+        int size = sigs.size;
+        LITERT_ASSIGN_OR_RETURN(mask_prefill_input_tokens_by_size[size],
+                                group.mask_context.GetPrefillInputBuffers(size)
+                                    .at(MaskSignatures::kMaskInputTokens)
+                                    .Duplicate());
+      }
+      LITERT_ASSIGN_OR_RETURN(
+          auto ple_ctx,
+          CreateEmbedderPerLayerContextWithBufferSharing(
+              env, *embedder_per_layer_model, mask_prefill_input_tokens_by_size,
+              group.mask_context
+                  .decode_input_buffers[MaskSignatures::kMaskInputTokens],
+              group.mask_context
+                  .verify_input_buffers[MaskSignatures::kMaskInputTokens],
+              gemma_prefill_input_buffers_by_size, gemma_decode_input_buffers,
+              gemma_verify_input_buffers, executor_settings));
+      group.embedder_per_layer_context = std::move(ple_ctx);
+    }
+
+    for (const auto& sigs : signatures_list) {
+      int size = sigs.size;
+      ABSL_LOG(INFO)
+          << "CreateContextGroup: inserting into prefill_signature_map: "
+          << size << " -> " << sigs.prefill;
+      group.prefill_signature_map[size] = sigs.prefill;
+    }
+
+    return std::move(group);
+  };
 
   LITERT_ASSIGN_OR_RETURN(
-      auto cache_update_inference_context,
-      CreateCacheUpdateInferenceContextWithBufferSharing(
-          input_kv_cache_buffers, prefill_output_kv_cache_slice_buffers,
-          decode_output_kv_cache_slice_buffers,
-          verify_output_kv_cache_slice_buffers, std::move(prefill_input_pos),
-          std::move(decode_input_pos), std::move(verify_input_pos),
-          std::move(prefill_valid_mask), std::move(decode_valid_mask),
-          std::move(verify_valid_mask)));
-
-  // For now we only support one prefill length in the model.
-  SortedPrefillSignatureMap prefill_runner_set;
-  prefill_runner_set[prefill_signatures.size] = prefill_signatures.prefill;
+      auto largest_group_created,
+      create_context_group(prefill_signatures_list, /*largest_group=*/nullptr));
 
   absl::flat_hash_map<int, const Model*> end_of_multi_modal_embedding_models;
   auto add_multi_modal_end_model = [&](ModelType type, int token) {
@@ -3861,19 +4456,6 @@ LlmLiteRtNpuCompiledModelExecutor::CreateForModelHasPerLayerEmbedding(
       EmbeddingLookupManager::Create(env, embedder_lrt_model,
                                      end_of_multi_modal_embedding_models, true,
                                      "decode_embedder"));
-
-  bool use_hw_ple_for_npu = false;
-  auto npu_config_status = executor_settings.GetBackendConfig<NpuConfig>();
-  if (npu_config_status.ok()) {
-    use_hw_ple_for_npu = npu_config_status->use_hw_ple_for_npu;
-  }
-
-  std::optional<EmbedderPerLayerContext> embedder_per_layer_context =
-      std::nullopt;
-
-  LITERT_ASSIGN_OR_RETURN(
-      const litert::Model* embedder_per_layer_model,
-      resources.GetTFLiteModel(ModelType::kTfLitePerLayerEmbedder));
 
   std::vector<const uint8_t*> ple_table_ptrs;
   std::vector<HWQuantizationParams> ple_quant_params;
@@ -4001,17 +4583,6 @@ LlmLiteRtNpuCompiledModelExecutor::CreateForModelHasPerLayerEmbedding(
       output_scale = q_params.scale;
       final_zero_point = q_params.zero_point;
     }
-  } else {
-    LITERT_ASSIGN_OR_RETURN(
-        embedder_per_layer_context,
-        CreateEmbedderPerLayerContextWithBufferSharing(
-            env, *embedder_per_layer_model,
-            mask_context
-                .prefill_input_buffers[MaskSignatures::kMaskInputTokens],
-            mask_context.decode_input_buffers[MaskSignatures::kMaskInputTokens],
-            mask_context.verify_input_buffers[MaskSignatures::kMaskInputTokens],
-            gemma_prefill_input_buffers, gemma_decode_input_buffers,
-            gemma_verify_input_buffers, executor_settings));
   }
 
   SpeculativeDecodingType speculative_decoding_type =
@@ -4029,8 +4600,9 @@ LlmLiteRtNpuCompiledModelExecutor::CreateForModelHasPerLayerEmbedding(
       LITERT_ASSIGN_OR_RETURN(
           drafter_context,
           CreateDrafterInferenceContextWithBufferSharing(
-              env, **mtp_drafter_model, input_kv_cache_buffers,
-              llm_inference_context.decode_output_buffers
+              env, **mtp_drafter_model,
+              largest_group_created.llm_inference_context.prefill_input_buffers,
+              largest_group_created.llm_inference_context.decode_output_buffers
                   [LlmSignatures::kLastLayerActivationsOutput]));
       LITERT_ASSIGN_OR_RETURN(
           drafter_aux_context,
@@ -4043,29 +4615,59 @@ LlmLiteRtNpuCompiledModelExecutor::CreateForModelHasPerLayerEmbedding(
     }
   }
 
-  const bool has_sliding_window_attention = DetectIsSwa(input_kv_cache_buffers);
+  const bool has_sliding_window_attention = DetectIsSwa(
+      largest_group_created.llm_inference_context.prefill_input_buffers_by_size
+          .begin()
+          ->second);
 
   ABSL_RETURN_IF_ERROR(WarmupInference(
-      llm_compiled_model, llm_inference_context,
-      npu_auxiliary_context.npu_auxiliary_compiled_model, prefill_signatures,
-      rope_context, mask_context, cache_update_inference_context));
+      llm_compiled_model, largest_group_created.llm_inference_context,
+      npu_auxiliary_context.npu_auxiliary_compiled_model,
+      prefill_signatures_list, largest_group_created.rope_context,
+      largest_group_created.mask_context,
+      largest_group_created.cache_update_inference_context));
+
+  if (drafter_context.has_value()) {
+    largest_group_created.drafter_context = std::move(*drafter_context);
+  }
+  if (drafter_aux_context.has_value()) {
+    largest_group_created.drafter_aux_context = std::move(*drafter_aux_context);
+  }
+
+  absl::flat_hash_map<int, ContextGroup> context_groups;
+
+  for (int idx = 0; idx < sorted_supported_context_sizes.size() - 1; ++idx) {
+    int c = sorted_supported_context_sizes[idx];
+    LITERT_ASSIGN_OR_RETURN(auto group,
+                            create_context_group(signatures_list_of_list[idx],
+                                                 &largest_group_created));
+
+    ABSL_RETURN_IF_ERROR(WarmupInference(
+        llm_compiled_model, group.llm_inference_context,
+        npu_auxiliary_context.npu_auxiliary_compiled_model,
+        signatures_list_of_list[idx], group.rope_context, group.mask_context,
+        group.cache_update_inference_context));
+
+    context_groups.emplace(c, std::move(group));
+  }
+
+  context_groups.emplace(largest_context_size,
+                         std::move(largest_group_created));
 
   auto executor = absl::WrapUnique(new LlmLiteRtNpuCompiledModelExecutor(
-      executor_settings, env, std::move(embedder_context),
-      std::move(npu_auxiliary_context), std::move(mask_context),
-      std::move(rope_context), std::move(llm_compiled_model),
-      std::move(llm_inference_context),
-      std::move(cache_update_inference_context), std::move(prefill_runner_set),
-      prefill_signatures, std::move(embedding_lookup_manager),
-      /*per_layer_embedding_lookup_manager=*/nullptr,
-      std::move(embedder_per_layer_context), quantization_params,
+      executor_settings, env, EmbedderContext(),
+      std::move(npu_auxiliary_context), std::move(llm_compiled_model),
+      std::move(embedding_lookup_manager),
+      /*per_layer_embedding_lookup_manager=*/nullptr, quantization_params,
       std::move(ple_table_ptrs), std::move(ple_quant_params),
       std::move(ple_per_tensor_scales), table_count, ple_embedding_dim_val,
       output_type, ple_table_element_type, mul_scale, output_scale,
       final_zero_point, std::move(kv_quant_params), kv_cache_init_value,
-      speculative_decoding_type, std::move(drafter_context),
-      std::move(drafter_aux_context), has_sliding_window_attention,
-      embedder_per_layer_model));
+      embedder_per_layer_model, std::nullopt, std::move(context_groups),
+      sorted_supported_context_sizes, speculative_decoding_type,
+      has_sliding_window_attention));
+  ABSL_RETURN_IF_ERROR(executor->SwitchContextSizeIfRequired(
+      sorted_supported_context_sizes.front()));
   return executor;
 }
 
@@ -4074,7 +4676,10 @@ LlmLiteRtNpuCompiledModelExecutor::CreateForModelWithoutPerLayerEmbedding(
     const LlmExecutorSettings& executor_settings, ModelResources& resources,
     litert::Environment& env, const litert::Model* transformer_model,
     LogitsQuantizationParams quantization_params,
-    const ResolvedPrefillSignatures& prefill_signatures) {
+    const std::vector<std::vector<ResolvedSignatures>>& signatures_list_of_list,
+    const std::vector<int>& sorted_supported_context_sizes) {
+  const auto& prefill_signatures_list = signatures_list_of_list.back();
+  const int largest_context_size = sorted_supported_context_sizes.back();
   int64_t kv_cache_init_value = GetKvCacheInitValue(resources);
   // Set up LiteRt options.
   LITERT_ASSIGN_OR_RETURN(auto options,
@@ -4083,166 +4688,280 @@ LlmLiteRtNpuCompiledModelExecutor::CreateForModelWithoutPerLayerEmbedding(
       CompiledModel llm_compiled_model,
       CompiledModel::Create(env, transformer_model->Get(), options));
 
-  // Allocate all input and output buffers of the LLM model that are meant to be
-  // used by the NPU chip first, so that we can later duplicate the buffers into
-  // the output buffer maps of the embedder, mask, and rope signatures.
-
-  absl::flat_hash_map<absl::string_view, TensorBuffer>
-      gemma_prefill_input_buffers;
-  absl::flat_hash_map<absl::string_view, TensorBuffer>
-      gemma_decode_input_buffers;
-  absl::flat_hash_map<absl::string_view, TensorBuffer>
-      gemma_verify_input_buffers;
-  absl::flat_hash_map<absl::string_view, TensorBuffer> input_kv_cache_buffers;
-  absl::flat_hash_map<absl::string_view, TensorBuffer>
-      prefill_output_kv_cache_slice_buffers;
-  absl::flat_hash_map<absl::string_view, TensorBuffer>
-      decode_output_kv_cache_slice_buffers;
-  absl::flat_hash_map<absl::string_view, TensorBuffer>
-      verify_output_kv_cache_slice_buffers;
-
-  absl::flat_hash_map<absl::string_view, HWQuantParams> kv_quant_params;
-  ABSL_RETURN_IF_ERROR(AllocateTransformerBuffers(
-      env, transformer_model, llm_compiled_model, prefill_signatures,
-      gemma_prefill_input_buffers, gemma_decode_input_buffers,
-      gemma_verify_input_buffers, input_kv_cache_buffers,
-      prefill_output_kv_cache_slice_buffers,
-      decode_output_kv_cache_slice_buffers,
-      verify_output_kv_cache_slice_buffers, kv_quant_params,
-      kv_cache_init_value));
-  LITERT_ASSIGN_OR_RETURN(
-      auto llm_inference_context,
-      CreateLlmInferenceContextWithBufferSharing(
-          env, llm_compiled_model, prefill_signatures, input_kv_cache_buffers,
-          prefill_output_kv_cache_slice_buffers,
-          decode_output_kv_cache_slice_buffers,
-          verify_output_kv_cache_slice_buffers, gemma_prefill_input_buffers,
-          gemma_decode_input_buffers, gemma_verify_input_buffers));
-
-  // Gemma3 specific fix:
-  //
-  // TODO(b/416702118): Buffers kv_cache_{k,v}_25 have float element type for
-  // the prefill signature but int16_t for the decode signature. Therefore,
-  // unlike for the other KV cache tensors, we can not re-use the same tensor
-  // during prefill and decode (because trying to register a tensor of element
-  // type float for the decode signature that expects it in int16_t will
-  // fail). Luckily these buffers are not used, so we can simply create new
-  // ones to satisfy the compiled model run API.  We can remove this
-  // workaround once we have a model that removes these buffers.
-  if (llm_inference_context.prefill_input_buffers.contains(cache_k31)) {
-    // For models with 32 layers. Do nothing.
-  } else if (llm_inference_context.prefill_input_buffers.contains(cache_k25)) {
-    LITERT_ASSIGN_OR_RETURN(auto buffer_k, llm_compiled_model.CreateInputBuffer(
-                                               kDecodeSignature, cache_k25));
-    llm_inference_context.decode_input_buffers[cache_k25] = std::move(buffer_k);
-    LITERT_ASSIGN_OR_RETURN(auto buffer_v, llm_compiled_model.CreateInputBuffer(
-                                               kDecodeSignature, cache_v25));
-    llm_inference_context.decode_input_buffers[cache_v25] = std::move(buffer_v);
-  } else if (llm_inference_context.prefill_input_buffers.contains(cache_k23)) {
-    // Fast VLM model specific fix:
-    LITERT_ASSIGN_OR_RETURN(auto buffer_k, llm_compiled_model.CreateInputBuffer(
-                                               kDecodeSignature, cache_k23));
-    llm_inference_context.decode_input_buffers[cache_k23] = std::move(buffer_k);
-    LITERT_ASSIGN_OR_RETURN(auto buffer_v, llm_compiled_model.CreateInputBuffer(
-                                               kDecodeSignature, cache_v23));
-    llm_inference_context.decode_input_buffers[cache_v23] = std::move(buffer_v);
-  } else if (llm_inference_context.prefill_input_buffers.contains(cache_k17)) {
-    // Tiny Gemma 270M specific fix:
-    LITERT_ASSIGN_OR_RETURN(auto buffer_k, llm_compiled_model.CreateInputBuffer(
-                                               kDecodeSignature, cache_k17));
-    llm_inference_context.decode_input_buffers[cache_k17] = std::move(buffer_k);
-    LITERT_ASSIGN_OR_RETURN(auto buffer_v, llm_compiled_model.CreateInputBuffer(
-                                               kDecodeSignature, cache_v17));
-    llm_inference_context.decode_input_buffers[cache_v17] = std::move(buffer_v);
-  }
-
   LITERT_ASSIGN_OR_RETURN(auto npu_auxiliary_lrt_model,
                           resources.GetTFLiteModel(ModelType::kTfLiteAux));
-
   LITERT_ASSIGN_OR_RETURN(
       auto npu_auxiliary_context,
       CreateNpuAuxiliaryContext(env, *npu_auxiliary_lrt_model,
                                 executor_settings));
 
-  LITERT_ASSIGN_OR_RETURN(
-      auto mask_context,
-      CreateMaskContextWithBufferSharing(
-          npu_auxiliary_context, prefill_signatures,
-          gemma_prefill_input_buffers, gemma_decode_input_buffers,
-          gemma_verify_input_buffers));
-
   LITERT_ASSIGN_OR_RETURN(auto embedder_lrt_model,
                           resources.GetTFLiteModel(ModelType::kTfLiteEmbedder));
-  LITERT_ASSIGN_OR_RETURN(
-      auto embedder_context,
-      CreateEmbedderContextWithBufferSharing(
-          env, *embedder_lrt_model, prefill_signatures,
-          gemma_prefill_input_buffers, gemma_decode_input_buffers,
-          gemma_verify_input_buffers, executor_settings));
 
-  LITERT_ASSIGN_OR_RETURN(
-      auto rope_context,
-      CreateRopeContextWithBufferSharing(
-          npu_auxiliary_context, prefill_signatures,
-          gemma_prefill_input_buffers, gemma_decode_input_buffers,
-          gemma_verify_input_buffers));
-
-  // Duplicate the rope's buffers that are used to store the prefill and
-  // decode input position, because they will need to be passed to the
-  // cache update inference context as well.
-  LITERT_ASSIGN_OR_RETURN(
-      ::litert::TensorBuffer prefill_input_pos,
-      rope_context.prefill_input_buffers[RopeSignatures::kInputPos]
-          .Duplicate());
-  LITERT_ASSIGN_OR_RETURN(
-      ::litert::TensorBuffer decode_input_pos,
-      rope_context.decode_input_buffers[RopeSignatures::kInputPos].Duplicate());
-  ::litert::TensorBuffer verify_input_pos;
-  ::litert::TensorBuffer prefill_valid_mask;
-  auto prefill_valid_mask_it = mask_context.prefill_input_buffers.find(
-      MaskSignatures::kMaskInputValidMask);
-  if (prefill_valid_mask_it != mask_context.prefill_input_buffers.end()) {
-    LITERT_ASSIGN_OR_RETURN(prefill_valid_mask,
-                            prefill_valid_mask_it->second.Duplicate());
+  DumpModelSignatures("Aux", *npu_auxiliary_lrt_model);
+  if (embedder_lrt_model) {
+    DumpModelSignatures("Embedder", *embedder_lrt_model);
   }
 
-  ::litert::TensorBuffer decode_valid_mask;
-  auto decode_valid_mask_it = mask_context.decode_input_buffers.find(
-      MaskSignatures::kMaskInputValidMask);
-  if (decode_valid_mask_it != mask_context.decode_input_buffers.end()) {
-    LITERT_ASSIGN_OR_RETURN(decode_valid_mask,
-                            decode_valid_mask_it->second.Duplicate());
-  }
+  absl::flat_hash_map<absl::string_view, HWQuantParams> kv_quant_params;
 
-  ::litert::TensorBuffer verify_valid_mask;
-  auto verify_valid_mask_it = mask_context.verify_input_buffers.find(
-      MaskSignatures::kMaskInputValidMask);
-  if (verify_valid_mask_it != mask_context.verify_input_buffers.end()) {
-    LITERT_ASSIGN_OR_RETURN(verify_valid_mask,
-                            verify_valid_mask_it->second.Duplicate());
-  }
+  auto create_context_group =
+      [&](const std::vector<ResolvedSignatures>& signatures_list,
+          const ContextGroup* largest_group) -> absl::StatusOr<ContextGroup> {
+    ContextGroup group;
+    group.representative_signatures = signatures_list.back();
+    for (const auto& sigs : signatures_list) {
+      group.prefill_signatures[sigs.size] = sigs;
+    }
+
+    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
+        input_kv_cache_buffers;
+
+    if (largest_group != nullptr) {
+      // Share KV cache buffers from the largest group's decode input buffers.
+      // Decode buffers contain all KV cache tensors.
+      for (const auto& [name, buffer] :
+           largest_group->llm_inference_context.decode_input_buffers) {
+        if (name.starts_with(kv_cache_k_root_name) ||
+            name.starts_with(kv_cache_v_root_name) ||
+            name.starts_with(kv_cache_c_root_name)) {
+          // Verify that the tensor exists in the compiled model before trying
+          // to alias it.
+          auto sig_expected = transformer_model->FindSignature(
+              group.representative_signatures.decode);
+          if (!sig_expected.HasValue()) {
+            return absl::NotFoundError(
+                absl::StrCat("Signature not found: ",
+                             group.representative_signatures.decode));
+          }
+          auto tensor_expected = sig_expected->InputTensor(name);
+          if (!tensor_expected.HasValue()) {
+            return absl::NotFoundError(
+                absl::StrCat("Input tensor not found: ", name));
+          }
+          const auto& tensor = tensor_expected.Value();
+          LITERT_ASSIGN_OR_RETURN(auto target_type, tensor.RankedTensorType());
+
+          LITERT_ASSIGN_OR_RETURN(auto alias_buf,
+                                  CreateAliasBuffer(env, buffer, target_type));
+          input_kv_cache_buffers[name] = std::move(alias_buf);
+        }
+      }
+    }
+
+    absl::flat_hash_map<
+        int, absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>>
+        gemma_prefill_input_buffers_by_size;
+    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
+        gemma_decode_input_buffers;
+    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
+        gemma_verify_input_buffers;
+    absl::flat_hash_map<
+        int, absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>>
+        prefill_output_kv_cache_slice_buffers_by_size;
+    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
+        decode_output_kv_cache_slice_buffers;
+    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
+        verify_output_kv_cache_slice_buffers;
+
+    // Allocate all input and output buffers of the LLM model that are meant to
+    // be used by the NPU chip first, so that we can later duplicate the buffers
+    // into the output buffer maps of the embedder, mask, and rope signatures.
+    LITERT_RETURN_IF_ERROR(AllocateTransformerBuffers(
+        env, transformer_model, llm_compiled_model, signatures_list,
+        gemma_prefill_input_buffers_by_size, gemma_decode_input_buffers,
+        gemma_verify_input_buffers, input_kv_cache_buffers,
+        prefill_output_kv_cache_slice_buffers_by_size,
+        decode_output_kv_cache_slice_buffers,
+        verify_output_kv_cache_slice_buffers, kv_quant_params,
+        kv_cache_init_value));
+
+    // Workaround for NPU model issues where some KV cache tensors (e.g. layer
+    // 19 in Gemma3n) are not connected to any OPs in the prefill subgraph,
+    // causing the runtime to allocate them as HostMemory. We dynamically detect
+    // these and re-allocate them using the decode signature to ensure they are
+    // on NPU.
+    for (auto& [name, buf] : input_kv_cache_buffers) {
+      if (IsKVCacheTensor(name)) {
+        auto buffer_type = buf.BufferType();
+        if (buffer_type.HasValue() &&
+            buffer_type.Value() == ::litert::TensorBufferType::kHostMemory) {
+          ABSL_LOG(WARNING) << "KV cache tensor '" << name
+                            << "' was allocated as HostMemory in prefill. "
+                               "Re-allocating using decode signature.";
+          LITERT_ASSIGN_OR_RETURN(
+              auto new_buf, llm_compiled_model.CreateInputBuffer(
+                                group.representative_signatures.decode, name));
+          LITERT_RETURN_IF_ERROR(
+              FillKVCacheBuffer(new_buf, kv_cache_init_value));
+          buf = std::move(new_buf);
+        }
+      }
+    }
+
+    LITERT_ASSIGN_OR_RETURN(
+        group.llm_inference_context,
+        CreateLlmInferenceContextWithBufferSharing(
+            env, llm_compiled_model, signatures_list, input_kv_cache_buffers,
+            prefill_output_kv_cache_slice_buffers_by_size,
+            decode_output_kv_cache_slice_buffers,
+            verify_output_kv_cache_slice_buffers,
+            gemma_prefill_input_buffers_by_size, gemma_decode_input_buffers,
+            gemma_verify_input_buffers));
+
+    // Gemma3 / VLM / Tiny Gemma specific fixes:
+    const auto& first_prefill_input_buffers =
+        group.llm_inference_context.prefill_input_buffers_by_size.begin()
+            ->second;
+    if (first_prefill_input_buffers.contains(cache_k31)) {
+      // For models with 32 layers. Do nothing.
+    } else if (first_prefill_input_buffers.contains(cache_k25)) {
+      // Gemma3 specific fix:
+      LITERT_ASSIGN_OR_RETURN(
+          auto buffer_k,
+          llm_compiled_model.CreateInputBuffer(
+              group.representative_signatures.decode, cache_k25));
+      group.llm_inference_context.decode_input_buffers[cache_k25] =
+          std::move(buffer_k);
+      LITERT_ASSIGN_OR_RETURN(
+          auto buffer_v,
+          llm_compiled_model.CreateInputBuffer(
+              group.representative_signatures.decode, cache_v25));
+      group.llm_inference_context.decode_input_buffers[cache_v25] =
+          std::move(buffer_v);
+    } else if (first_prefill_input_buffers.contains(cache_k23)) {
+      // Fast VLM model specific fix:
+      LITERT_ASSIGN_OR_RETURN(
+          auto buffer_k,
+          llm_compiled_model.CreateInputBuffer(
+              group.representative_signatures.decode, cache_k23));
+      group.llm_inference_context.decode_input_buffers[cache_k23] =
+          std::move(buffer_k);
+      LITERT_ASSIGN_OR_RETURN(
+          auto buffer_v,
+          llm_compiled_model.CreateInputBuffer(
+              group.representative_signatures.decode, cache_v23));
+      group.llm_inference_context.decode_input_buffers[cache_v23] =
+          std::move(buffer_v);
+    } else if (first_prefill_input_buffers.contains(cache_k17)) {
+      // Tiny Gemma 270M specific fix:
+      LITERT_ASSIGN_OR_RETURN(
+          auto buffer_k,
+          llm_compiled_model.CreateInputBuffer(
+              group.representative_signatures.decode, cache_k17));
+      group.llm_inference_context.decode_input_buffers[cache_k17] =
+          std::move(buffer_k);
+      LITERT_ASSIGN_OR_RETURN(
+          auto buffer_v,
+          llm_compiled_model.CreateInputBuffer(
+              group.representative_signatures.decode, cache_v17));
+      group.llm_inference_context.decode_input_buffers[cache_v17] =
+          std::move(buffer_v);
+    }
+
+    LITERT_ASSIGN_OR_RETURN(
+        group.mask_context,
+        CreateMaskContextWithBufferSharing(
+            npu_auxiliary_context, signatures_list,
+            gemma_prefill_input_buffers_by_size, gemma_decode_input_buffers,
+            gemma_verify_input_buffers));
+
+    LITERT_ASSIGN_OR_RETURN(
+        group.rope_context,
+        CreateRopeContextWithBufferSharing(
+            npu_auxiliary_context, signatures_list,
+            gemma_prefill_input_buffers_by_size, gemma_decode_input_buffers,
+            gemma_verify_input_buffers));
+
+    // Duplicate the rope's buffers that are used to store the prefill and
+    // decode input position, because they will need to be passed to the
+    // cache update inference context as well.
+    absl::flat_hash_map<int, ::litert::TensorBuffer> prefill_input_pos_by_size;
+    absl::flat_hash_map<int, ::litert::TensorBuffer> prefill_valid_mask_by_size;
+
+    for (const auto& sigs : signatures_list) {
+      int size = sigs.size;
+      LITERT_ASSIGN_OR_RETURN(prefill_input_pos_by_size[size],
+                              group.rope_context.GetPrefillInputBuffers(size)
+                                  .at(RopeSignatures::kInputPos)
+                                  .Duplicate());
+
+      const auto& mask_prefill_buffers =
+          group.mask_context.GetPrefillInputBuffers(size);
+      auto prefill_valid_mask_it =
+          mask_prefill_buffers.find(MaskSignatures::kMaskInputValidMask);
+      if (prefill_valid_mask_it != mask_prefill_buffers.end()) {
+        LITERT_ASSIGN_OR_RETURN(prefill_valid_mask_by_size[size],
+                                prefill_valid_mask_it->second.Duplicate());
+      }
+    }
+
+    auto verify_input_pos_it =
+        group.rope_context.verify_input_buffers.find(RopeSignatures::kInputPos);
+    ::litert::TensorBuffer verify_input_pos;
+    if (verify_input_pos_it != group.rope_context.verify_input_buffers.end()) {
+      LITERT_ASSIGN_OR_RETURN(verify_input_pos,
+                              verify_input_pos_it->second.Duplicate());
+    }
+
+    LITERT_ASSIGN_OR_RETURN(
+        ::litert::TensorBuffer decode_input_pos,
+        group.rope_context.decode_input_buffers[RopeSignatures::kInputPos]
+            .Duplicate());
+
+    ::litert::TensorBuffer decode_valid_mask;
+    auto decode_valid_mask_it = group.mask_context.decode_input_buffers.find(
+        MaskSignatures::kMaskInputValidMask);
+    if (decode_valid_mask_it != group.mask_context.decode_input_buffers.end()) {
+      LITERT_ASSIGN_OR_RETURN(decode_valid_mask,
+                              decode_valid_mask_it->second.Duplicate());
+    }
+
+    ::litert::TensorBuffer verify_valid_mask;
+    auto verify_valid_mask_it = group.mask_context.verify_input_buffers.find(
+        MaskSignatures::kMaskInputValidMask);
+    if (verify_valid_mask_it != group.mask_context.verify_input_buffers.end()) {
+      LITERT_ASSIGN_OR_RETURN(verify_valid_mask,
+                              verify_valid_mask_it->second.Duplicate());
+    }
+
+    LITERT_ASSIGN_OR_RETURN(
+        group.cache_update_inference_context,
+        CreateCacheUpdateInferenceContextWithBufferSharing(
+            input_kv_cache_buffers,
+            prefill_output_kv_cache_slice_buffers_by_size,
+            decode_output_kv_cache_slice_buffers,
+            verify_output_kv_cache_slice_buffers, prefill_input_pos_by_size,
+            std::move(decode_input_pos), std::move(verify_input_pos),
+            prefill_valid_mask_by_size, std::move(decode_valid_mask),
+            std::move(verify_valid_mask)));
+
+    if (embedder_lrt_model) {
+      LITERT_ASSIGN_OR_RETURN(
+          group.embedder_context,
+          CreateEmbedderContextWithBufferSharing(
+              env, *embedder_lrt_model, signatures_list,
+              gemma_prefill_input_buffers_by_size, gemma_decode_input_buffers,
+              gemma_verify_input_buffers, executor_settings));
+    }
+
+    for (const auto& sigs : signatures_list) {
+      int size = sigs.size;
+      ABSL_LOG(INFO)
+          << "CreateContextGroup: inserting into prefill_signature_map: "
+          << size << " -> " << sigs.prefill;
+      group.prefill_signature_map[size] = sigs.prefill;
+    }
+
+    return std::move(group);
+  };
 
   LITERT_ASSIGN_OR_RETURN(
-      auto cache_update_inference_context,
-      CreateCacheUpdateInferenceContextWithBufferSharing(
-          input_kv_cache_buffers, prefill_output_kv_cache_slice_buffers,
-          decode_output_kv_cache_slice_buffers,
-          verify_output_kv_cache_slice_buffers, std::move(prefill_input_pos),
-          std::move(decode_input_pos), std::move(verify_input_pos),
-          std::move(prefill_valid_mask), std::move(decode_valid_mask),
-          std::move(verify_valid_mask)));
-
-  // For now we only support one prefill length in the model.
-  SortedPrefillSignatureMap prefill_runner_set;
-  prefill_runner_set[prefill_signatures.size] = prefill_signatures.prefill;
-
-  std::optional<EmbedderPerLayerContext> embedder_per_layer_context =
-      std::nullopt;
+      auto largest_group_created,
+      create_context_group(prefill_signatures_list, /*largest_group=*/nullptr));
 
   std::unique_ptr<EmbeddingLookupManager> maybe_embedding_lookup_manager =
       nullptr;
-  // If the model has vision or audio encoder, we need to create the embedding
-  // lookup manager.
   if (resources.GetTFLiteModel(ModelType::kTfLiteVisionEncoder).ok() ||
       resources.GetTFLiteModel(ModelType::kTfLiteAudioEncoderHw).ok()) {
     absl::flat_hash_map<int, const Model*> end_of_multi_modal_embedding_models;
@@ -4286,26 +5005,49 @@ LlmLiteRtNpuCompiledModelExecutor::CreateForModelWithoutPerLayerEmbedding(
     }
   }
 
-  const bool has_sliding_window_attention = DetectIsSwa(input_kv_cache_buffers);
+  const bool has_sliding_window_attention = DetectIsSwa(
+      largest_group_created.llm_inference_context.prefill_input_buffers_by_size
+          .begin()
+          ->second);
 
   ABSL_RETURN_IF_ERROR(WarmupInference(
-      llm_compiled_model, llm_inference_context,
-      npu_auxiliary_context.npu_auxiliary_compiled_model, prefill_signatures,
-      rope_context, mask_context, cache_update_inference_context));
+      llm_compiled_model, largest_group_created.llm_inference_context,
+      npu_auxiliary_context.npu_auxiliary_compiled_model,
+      prefill_signatures_list, largest_group_created.rope_context,
+      largest_group_created.mask_context,
+      largest_group_created.cache_update_inference_context));
+
+  absl::flat_hash_map<int, ContextGroup> context_groups;
+
+  for (int idx = 0; idx < sorted_supported_context_sizes.size() - 1; ++idx) {
+    int c = sorted_supported_context_sizes[idx];
+    LITERT_ASSIGN_OR_RETURN(auto group,
+                            create_context_group(signatures_list_of_list[idx],
+                                                 &largest_group_created));
+
+    ABSL_RETURN_IF_ERROR(WarmupInference(
+        llm_compiled_model, group.llm_inference_context,
+        npu_auxiliary_context.npu_auxiliary_compiled_model,
+        signatures_list_of_list[idx], group.rope_context, group.mask_context,
+        group.cache_update_inference_context));
+
+    context_groups.emplace(c, std::move(group));
+  }
+
+  context_groups.emplace(largest_context_size,
+                         std::move(largest_group_created));
 
   auto executor = absl::WrapUnique(new LlmLiteRtNpuCompiledModelExecutor(
-      executor_settings, env, std::move(embedder_context),
-      std::move(npu_auxiliary_context), std::move(mask_context),
-      std::move(rope_context), std::move(llm_compiled_model),
-      std::move(llm_inference_context),
-      std::move(cache_update_inference_context), std::move(prefill_runner_set),
-      prefill_signatures, std::move(maybe_embedding_lookup_manager),
-      /*per_layer_embedding_lookup_manager=*/nullptr,
-      /*embedder_per_layer_context=*/std::nullopt, quantization_params, {}, {},
-      {}, 0, 0, litert::ElementType::None, litert::ElementType::None, 1.0f,
-      1.0f, 0, std::move(kv_quant_params), kv_cache_init_value,
-      speculative_decoding_type, std::move(drafter_context),
-      std::move(drafter_aux_context), has_sliding_window_attention));
+      executor_settings, env, EmbedderContext(),
+      std::move(npu_auxiliary_context), std::move(llm_compiled_model),
+      std::move(maybe_embedding_lookup_manager),
+      /*per_layer_embedding_lookup_manager=*/nullptr, quantization_params, {},
+      {}, {}, 0, 0, litert::ElementType::None, litert::ElementType::None, 1.0f,
+      1.0f, 0, std::move(kv_quant_params), kv_cache_init_value, nullptr,
+      std::nullopt, std::move(context_groups), sorted_supported_context_sizes,
+      speculative_decoding_type, has_sliding_window_attention));
+  ABSL_RETURN_IF_ERROR(executor->SwitchContextSizeIfRequired(
+      sorted_supported_context_sizes.front()));
   return executor;
 }
 
