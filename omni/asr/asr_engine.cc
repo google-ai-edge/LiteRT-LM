@@ -30,13 +30,16 @@
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_options.h"  // from @litert
+#include "litert/cc/options/litert_cpu_options.h"  // from @litert
 #include "litert/cc/options/litert_gpu_options.h"  // from @litert
 #include "litert/cc/options/litert_qualcomm_options.h"  // from @litert
 #include "support/tokenizer/huggingface_tokenizer.h"  // from @litert
 #include "support/tokenizer/tokenizer.h"  // from @litert
 #include "omni/asr/asr_session.h"
+#include "omni/asr/audio_preprocessor.h"
 #include "omni/asr/audio_source.h"
 #include "omni/asr/ctc_decoder.h"
+#include "omni/asr/dummy_preprocessor.h"
 #include "omni/asr/levenshtein_text_merger.h"
 #include "omni/asr/litert_speech_recognizer.h"
 #include "omni/asr/log_mel_spectrogram_processor.h"
@@ -133,10 +136,15 @@ absl::StatusOr<std::unique_ptr<AsrSession>> AsrEngine::CreateSession(
   auto runner = std::make_unique<LiteRtRunnerImpl>(compiled_model_.get());
 
   AudioSource* raw_audio_source = audio_source.get();
-  ABSL_ASSIGN_OR_RETURN(
-      auto preprocessor,
-      LogMelSpectrogramProcessor::Create(
-          config_.sample_rate_hz, config_.log_mel_config, raw_audio_source));
+  std::unique_ptr<AudioPreprocessor> preprocessor;
+  if (config_.has_log_mel_config) {
+    ABSL_ASSIGN_OR_RETURN(
+        preprocessor,
+        LogMelSpectrogramProcessor::Create(
+            config_.sample_rate_hz, config_.log_mel_config, raw_audio_source));
+  } else {
+    preprocessor = std::make_unique<DummyPreprocessor>(raw_audio_source);
+  }
 
   std::unique_ptr<LiteRtSpeechRecognizer::Decoder> decoder;
   switch (config_.decoder_type) {
@@ -148,9 +156,7 @@ absl::StatusOr<std::unique_ptr<AsrSession>> AsrEngine::CreateSession(
       break;
     }
     case AsrEngineConfig::DecoderType::kCtc: {
-      ABSL_ASSIGN_OR_RETURN(
-          decoder,
-          CtcDecoder::Create(config_.vocab_size, config_.blank_token_id));
+      ABSL_ASSIGN_OR_RETURN(decoder, CtcDecoder::Create(config_.vocab_size));
       break;
     }
     case AsrEngineConfig::DecoderType::kStateless: {
@@ -161,7 +167,7 @@ absl::StatusOr<std::unique_ptr<AsrSession>> AsrEngine::CreateSession(
     }
   }
 
-  LogMelSpectrogramProcessor* raw_preprocessor = preprocessor.get();
+  AudioPreprocessor* raw_preprocessor = preprocessor.get();
   ABSL_ASSIGN_OR_RETURN(
       auto speech_recognizer,
       LiteRtSpeechRecognizer::Create(std::move(runner), raw_preprocessor,

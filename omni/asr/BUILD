@@ -95,6 +95,19 @@ cc_library(
     ],
 )
 
+cc_library(
+    name = "dummy_preprocessor",
+    hdrs = ["dummy_preprocessor.h"],
+    deps = [
+        ":audio_preprocessor",
+        "@com_google_absl//absl/base:nullability",
+        "@com_google_absl//absl/cleanup",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "//omni/base:stage",
+    ],
+)
+
 cc_test(
     name = "log_mel_spectrogram_processor_test",
     srcs = ["log_mel_spectrogram_processor_test.cc"],
@@ -418,8 +431,10 @@ cc_library(
     data = ["model_metadata.json"],
     deps = [
         ":asr_session",
+        ":audio_preprocessor",
         ":audio_source",
         ":ctc_decoder",
+        ":dummy_preprocessor",
         ":levenshtein_text_merger",
         ":litert_speech_recognizer",
         ":log_mel_spectrogram_processor",
@@ -436,6 +451,7 @@ cc_library(
         "@litert//litert/cc:litert_environment",
         "@litert//litert/cc:litert_macros",
         "@litert//litert/cc:litert_options",
+        "@litert//litert/cc/options:litert_cpu_options",
         "@litert//litert/cc/options:litert_gpu_options",
         "@litert//litert/cc/options:litert_qualcomm_options",
         "@litert//support/tokenizer",

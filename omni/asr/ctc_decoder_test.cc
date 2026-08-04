@@ -31,13 +31,13 @@ TEST(CtcDecoderTest, CreateInvalidVocabSizeFails) {
 }
 
 TEST(CtcDecoderTest, CreateValidVocabSizeSucceeds) {
-  auto decoder_or = CtcDecoder::Create(/*vocab_size=*/4, /*blank_token_id=*/0);
+  auto decoder_or = CtcDecoder::Create(/*vocab_size=*/4);
   ASSERT_OK(decoder_or.status());
   EXPECT_NE(*decoder_or, nullptr);
 }
 
 TEST(CtcDecoderTest, DecodeEmptyEncoderOutputsReturnsEmpty) {
-  auto decoder_or = CtcDecoder::Create(/*vocab_size=*/4, /*blank_token_id=*/0);
+  auto decoder_or = CtcDecoder::Create(/*vocab_size=*/4);
   ASSERT_OK(decoder_or.status());
   std::vector<::litert::TensorBuffer> empty_outputs;
   auto tokens_or = (*decoder_or)->Decode(empty_outputs);

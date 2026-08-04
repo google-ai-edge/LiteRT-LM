@@ -29,17 +29,14 @@
 
 namespace litert::omni::asr {
 
-absl::StatusOr<std::unique_ptr<CtcDecoder>> CtcDecoder::Create(
-    int vocab_size, int blank_token_id) {
+absl::StatusOr<std::unique_ptr<CtcDecoder>> CtcDecoder::Create(int vocab_size) {
   if (vocab_size <= 0) {
     return absl::InvalidArgumentError("vocab_size must be positive");
   }
-  return std::unique_ptr<CtcDecoder>(
-      new CtcDecoder(vocab_size, blank_token_id));
+  return std::unique_ptr<CtcDecoder>(new CtcDecoder(vocab_size));
 }
 
-CtcDecoder::CtcDecoder(int vocab_size, int blank_token_id)
-    : vocab_size_(vocab_size), blank_token_id_(blank_token_id) {}
+CtcDecoder::CtcDecoder(int vocab_size) : vocab_size_(vocab_size) {}
 
 absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> CtcDecoder::Decode(
     std::vector<::litert::TensorBuffer>& encoder_outputs) {
@@ -69,15 +66,14 @@ absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> CtcDecoder::Decode(
         std::max_element(logits.begin() + start, logits.begin() + end);
     int token_id =
         static_cast<int>(std::distance(logits.begin() + start, max_it));
-    if (token_id != previous_token_id) {
-      if (token_id != blank_token_id_) {
-        // Timestamp is the index of the token in the original list of logits
-        // as the input of CTC has logits for every sample in the input audio.
-        decoded_tokens.push_back(SpeechRecognizer::DecodedToken{
-            .token_id = token_id, .timestamp_ms = t});
-      }
-      previous_token_id = token_id;
+    if (token_id == previous_token_id) {
+      continue;
     }
+    // Timestamp is the index of the token in the original list of logits
+    // as the input of CTC has logits for every sample in the input audio.
+    decoded_tokens.push_back(SpeechRecognizer::DecodedToken{
+        .token_id = token_id, .timestamp_ms = t});
+    previous_token_id = token_id;
   }
 
   return decoded_tokens;

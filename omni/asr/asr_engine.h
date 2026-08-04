@@ -57,6 +57,7 @@ struct AsrEngineConfig {
   Backend backend = Backend::kCpu;
   int num_threads = 4;
 
+  bool has_log_mel_config = false;
   LogMelSpectrogramProcessor::LogMelSpectrogramConfig log_mel_config;
 
   int decode_start_token_id = -1;

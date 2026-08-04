@@ -28,8 +28,7 @@ namespace litert::omni::asr {
 // Connectionist Temporal Classification (CTC) decoder implementation.
 class CtcDecoder : public LiteRtSpeechRecognizer::Decoder {
  public:
-  static absl::StatusOr<std::unique_ptr<CtcDecoder>> Create(
-      int vocab_size, int blank_token_id = 0);
+  static absl::StatusOr<std::unique_ptr<CtcDecoder>> Create(int vocab_size);
 
   ~CtcDecoder() override = default;
 
@@ -37,10 +36,9 @@ class CtcDecoder : public LiteRtSpeechRecognizer::Decoder {
       std::vector<::litert::TensorBuffer>& encoder_outputs) override;
 
  private:
-  CtcDecoder(int vocab_size, int blank_token_id);
+  explicit CtcDecoder(int vocab_size);
 
   const int vocab_size_;
-  const int blank_token_id_;
 };
 
 }  // namespace litert::omni::asr

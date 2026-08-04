@@ -129,6 +129,7 @@ absl::StatusOr<litert::omni::asr::AsrEngineConfig> LoadConfigFromJsonFile(
   }
 
   if (m.contains("logMelSpectro")) {
+    config.has_log_mel_config = true;
     const auto& l = m["logMelSpectro"];
     if (l.contains("nFFT")) config.log_mel_config.n_fft = l["nFFT"].get<int>();
     if (l.contains("nMels"))
@@ -146,6 +147,8 @@ absl::StatusOr<litert::omni::asr::AsrEngineConfig> LoadConfigFromJsonFile(
             litert::omni::asr::LogMelSpectrogramProcessor::NormType::kWhisper;
       }
     }
+  } else {
+    config.has_log_mel_config = false;
   }
 
   std::string model_filename = absl::StrCat(model_name, ".tflite");
