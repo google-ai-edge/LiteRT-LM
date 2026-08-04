@@ -20,6 +20,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "runtime/components/model_resources.h"
+#include "runtime/engine/embedding_engine_settings.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/executor/magic_number_configs_helper.h"
 
@@ -34,6 +35,9 @@ struct OwnedEnvironment {
 // The caller takes ownership of the environment and its helper.
 absl::StatusOr<OwnedEnvironment> CreateEnvironment(
     EngineSettings& engine_settings, ModelResources* model_resources);
+
+absl::StatusOr<OwnedEnvironment> CreateEnvironment(
+    EmbeddingEngineSettings& settings, ModelResources* model_resources);
 
 }  // namespace litert::lm
 

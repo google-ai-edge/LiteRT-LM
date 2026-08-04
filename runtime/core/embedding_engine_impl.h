@@ -36,11 +36,17 @@ namespace litert::lm {
 
 class EmbeddingEngineImpl : public EmbeddingEngine {
  public:
-  // Creates an EmbeddingEngineImpl instance from model resources and settings.
+  // Creates an EmbeddingEngineImpl instance from ModelResources,
+  // OwnedEnvironment, Tokenizer, and EmbeddingEngineSettings.
   static absl::StatusOr<std::unique_ptr<EmbeddingEngine>> Create(
       std::unique_ptr<ModelResources> resources,
       std::unique_ptr<OwnedEnvironment> env,
       std::unique_ptr<::litert::support::Tokenizer> tokenizer,
+      EmbeddingEngineSettings settings,
+      std::optional<BenchmarkInfo> benchmark_info = std::nullopt);
+
+  // Creates an EmbeddingEngineImpl instance from EmbeddingEngineSettings.
+  static absl::StatusOr<std::unique_ptr<EmbeddingEngine>> Create(
       EmbeddingEngineSettings settings);
 
   // Constructs an `EmbeddingEngineImpl` with a LiteRT environment, a tokenizer

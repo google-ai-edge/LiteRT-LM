@@ -416,9 +416,12 @@ cc_library(
         "@litert//litert/cc:litert_environment_options",
         "@litert//litert/cc:litert_macros",
         "//runtime/components:model_resources",
+        "//runtime/engine:embedding_engine_settings",
         "//runtime/engine:engine_settings",
+        "//runtime/executor:audio_executor_settings",
         "//runtime/executor:executor_settings_base",
         "//runtime/executor:magic_number_configs_helper",
+        "//runtime/executor:vision_executor_settings",
     ],
 )
 
@@ -439,6 +442,7 @@ cc_test(
         "@litert//litert/cc:litert_macros",
         "@litert//litert/cc:litert_model",
         "//runtime/components:model_resources",
+        "//runtime/engine:embedding_engine_settings",
         "//runtime/engine:engine_settings",
         "//runtime/executor:executor_settings_base",
         "//runtime/executor:llm_executor_settings",

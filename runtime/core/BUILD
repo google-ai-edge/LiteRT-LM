@@ -513,6 +513,8 @@ cc_library(
         "//runtime/executor:embedding_executor_base",
         "//runtime/executor:embedding_executor_settings",
         "//runtime/executor:embedding_litert_compiled_model_executor",
+        "//runtime/executor:executor_settings_base",
+        "//runtime/executor:litert_compiled_model_executor_utils",
         "//runtime/executor:llm_executor_io_types",
         "//runtime/executor:vision_executor",
         "//runtime/executor:vision_litert_compiled_model_executor",

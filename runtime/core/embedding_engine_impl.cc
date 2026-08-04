@@ -37,6 +37,8 @@
 #include "runtime/executor/embedding_executor_base.h"
 #include "runtime/executor/embedding_executor_settings.h"
 #include "runtime/executor/embedding_litert_compiled_model_executor.h"
+#include "runtime/executor/executor_settings_base.h"
+#include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/vision_executor.h"
 #include "runtime/executor/vision_litert_compiled_model_executor.h"
@@ -88,7 +90,8 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
     std::unique_ptr<ModelResources> resources,
     std::unique_ptr<OwnedEnvironment> env,
     std::unique_ptr<::litert::support::Tokenizer> tokenizer,
-    EmbeddingEngineSettings settings) {
+    EmbeddingEngineSettings settings,
+    std::optional<BenchmarkInfo> benchmark_info) {
   if (resources == nullptr) {
     return absl::InvalidArgumentError("ModelResources cannot be null.");
   }
@@ -99,15 +102,15 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
     return absl::InvalidArgumentError("Tokenizer cannot be null.");
   }
 
-  std::optional<BenchmarkInfo> benchmark_info = std::nullopt;
-  if (settings.IsBenchmarkEnabled() &&
-      settings.GetBenchmarkParams().has_value()) {
-    benchmark_info = BenchmarkInfo(settings.GetBenchmarkParams().value());
+  // Initialize BenchmarkInfo if benchmarking is enabled and it wasn't passed
+  // in as an argument.
+  if (settings.IsBenchmarkEnabled() && !benchmark_info.has_value()) {
+    benchmark_info = BenchmarkInfo(*settings.GetBenchmarkParams());
+    ABSL_RETURN_IF_ERROR(
+        benchmark_info->TimeInitPhaseStart(BenchmarkInfo::InitPhase::kTotal));
   }
 
   if (benchmark_info.has_value()) {
-    ABSL_RETURN_IF_ERROR(
-        benchmark_info->TimeInitPhaseStart(BenchmarkInfo::InitPhase::kTotal));
     ABSL_RETURN_IF_ERROR(benchmark_info->TimeInitPhaseStart(
         BenchmarkInfo::InitPhase::kExecutor));
   }
@@ -148,6 +151,61 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
       std::move(env), std::move(tokenizer), std::move(embedding_executor),
       std::move(vision_executor), std::move(audio_executor),
       std::move(benchmark_info));
+}
+
+// static
+absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
+    EmbeddingEngineSettings settings) {
+  const auto& model_assets =
+      settings.GetMainExecutorSettings().GetModelAssets();
+  const bool enable_file_backed_model_loading =
+      settings.GetMainExecutorSettings().GetBackend() == Backend::NPU;
+
+  // Build model resources.
+  LITERT_ASSIGN_OR_RETURN(auto resources,
+                          BuildLiteRtCompiledModelResources(
+                              model_assets, enable_file_backed_model_loading));
+
+  if (resources == nullptr) {
+    return absl::InvalidArgumentError("ModelResources cannot be null.");
+  }
+
+  // Initialize BenchmarkInfo if benchmarking is enabled.
+  std::optional<BenchmarkInfo> benchmark_info = std::nullopt;
+  if (settings.IsBenchmarkEnabled()) {
+    benchmark_info = BenchmarkInfo(*settings.GetBenchmarkParams());
+    ABSL_RETURN_IF_ERROR(
+        benchmark_info->TimeInitPhaseStart(BenchmarkInfo::InitPhase::kTotal));
+  }
+
+  // Load tokenizer.
+  if (benchmark_info.has_value()) {
+    ABSL_RETURN_IF_ERROR(benchmark_info->TimeInitPhaseStart(
+        BenchmarkInfo::InitPhase::kTokenizer));
+  }
+
+  LITERT_ASSIGN_OR_RETURN(auto tokenizer, resources->GetTokenizer());
+
+  if (benchmark_info.has_value()) {
+    ABSL_RETURN_IF_ERROR(
+        benchmark_info->TimeInitPhaseEnd(BenchmarkInfo::InitPhase::kTokenizer));
+  }
+
+  if (tokenizer == nullptr) {
+    return absl::InvalidArgumentError("Tokenizer cannot be null.");
+  }
+
+  // Create LiteRT environment.
+  std::unique_ptr<OwnedEnvironment> owned_env;
+  {
+    LITERT_ASSIGN_OR_RETURN(auto env,
+                            CreateEnvironment(settings, resources.get()));
+    owned_env = std::make_unique<OwnedEnvironment>(std::move(env));
+  }
+
+  return Create(std::move(resources), std::move(owned_env),
+                std::move(tokenizer), std::move(settings),
+                std::move(benchmark_info));
 }
 
 EmbeddingEngineImpl::EmbeddingEngineImpl(

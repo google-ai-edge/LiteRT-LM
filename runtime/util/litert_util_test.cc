@@ -32,6 +32,7 @@
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
 #include "runtime/components/model_resources.h"
+#include "runtime/engine/embedding_engine_settings.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/llm_executor_settings.h"
@@ -392,6 +393,110 @@ TEST(
   EXPECT_FALSE(magic_number_status.HasValue())
       << "configure_magic_numbers=false must disable magic-number configs even "
          "on the generic compiler-plugin path.";
+}
+
+TEST(LiteRtUtilTest,
+     CreateEnvironment_EmbeddingEngineSettings_Npu_IncludesNPUOptions) {
+  std::string task_path = TestTaskPath();
+  auto model_assets = ModelAssets::Create(task_path);
+  ASSERT_OK(model_assets);
+
+  auto npu_settings =
+      EmbeddingEngineSettings::CreateDefault(*model_assets, Backend::NPU);
+  ASSERT_OK(npu_settings);
+  npu_settings->GetMutableMainExecutorSettings().SetLitertDispatchLibDir("");
+
+  auto owned_env = CreateEnvironment(*npu_settings, nullptr);
+  ASSERT_OK(owned_env);
+  auto& env = owned_env->env;
+
+  auto expected_options = env.GetOptions();
+  ASSERT_TRUE(expected_options.HasValue());
+  const auto& options = *expected_options;
+
+  auto dispatch_lib =
+      options.GetOption(EnvironmentOptions::Tag::kDispatchLibraryDir);
+#if !defined(LITERT_DISABLE_NPU)
+  ASSERT_TRUE(dispatch_lib.HasValue());
+
+  auto dispatch_lib_dir = std::get<const char*>(*dispatch_lib);
+  std::string expected_path =
+      std::filesystem::path(task_path).parent_path().string();
+  EXPECT_EQ(std::string(dispatch_lib_dir), expected_path);
+
+  auto compiler_plugin_lib =
+      options.GetOption(EnvironmentOptions::Tag::kCompilerPluginLibraryDir);
+  ASSERT_TRUE(compiler_plugin_lib.HasValue());
+
+  auto compiler_plugin_lib_dir = std::get<const char*>(*compiler_plugin_lib);
+  EXPECT_EQ(std::string(compiler_plugin_lib_dir), expected_path);
+#else
+  ASSERT_FALSE(dispatch_lib.HasValue());
+#endif
+}
+
+TEST(LiteRtUtilTest,
+     CreateEnvironment_EmbeddingEngineSettings_CPUGPUFirst_ExcludesNPUOptions) {
+  std::string task_path = TestTaskPath();
+  std::string expected_path =
+      std::filesystem::path(task_path).parent_path().string();
+
+  auto model_assets = ModelAssets::Create(task_path);
+  ASSERT_OK(model_assets);
+
+  auto cpu_settings =
+      EmbeddingEngineSettings::CreateDefault(*model_assets, Backend::CPU);
+  ASSERT_OK(cpu_settings);
+  cpu_settings->GetMutableMainExecutorSettings().SetLitertDispatchLibDir("");
+
+  FakeModelResources fake_resources;
+  auto owned_env = CreateEnvironment(*cpu_settings, &fake_resources);
+  ASSERT_OK(owned_env);
+  auto& env = owned_env->env;
+
+  auto expected_options = env.GetOptions();
+  ASSERT_TRUE(expected_options.HasValue());
+  const auto& options = *expected_options;
+
+  auto dispatch_lib =
+      options.GetOption(EnvironmentOptions::Tag::kDispatchLibraryDir);
+  ASSERT_FALSE(dispatch_lib.HasValue());
+
+  auto compiler_plugin_lib =
+      options.GetOption(EnvironmentOptions::Tag::kCompilerPluginLibraryDir);
+  ASSERT_FALSE(compiler_plugin_lib.HasValue());
+
+  // Initialize NPU second in the same process session.
+  auto npu_settings =
+      EmbeddingEngineSettings::CreateDefault(*model_assets, Backend::NPU);
+  ASSERT_OK(npu_settings);
+  npu_settings->GetMutableMainExecutorSettings().SetLitertDispatchLibDir("");
+
+  auto npu_owned_env = CreateEnvironment(*npu_settings, nullptr);
+  ASSERT_OK(npu_owned_env);
+  auto& npu_env = npu_owned_env->env;
+
+  auto npu_expected_options = npu_env.GetOptions();
+  ASSERT_TRUE(npu_expected_options.HasValue());
+  const auto& npu_options = *npu_expected_options;
+
+  auto npu_dispatch_lib =
+      npu_options.GetOption(EnvironmentOptions::Tag::kDispatchLibraryDir);
+  auto npu_compiler_plugin_lib =
+      npu_options.GetOption(EnvironmentOptions::Tag::kCompilerPluginLibraryDir);
+#if !defined(LITERT_DISABLE_NPU)
+  ASSERT_TRUE(npu_dispatch_lib.HasValue());
+  ASSERT_TRUE(npu_compiler_plugin_lib.HasValue());
+
+  auto npu_dispatch_lib_dir = std::get<const char*>(*npu_dispatch_lib);
+  EXPECT_EQ(std::string(npu_dispatch_lib_dir), expected_path);
+  auto npu_compiler_plugin_lib_dir =
+      std::get<const char*>(*npu_compiler_plugin_lib);
+  EXPECT_EQ(std::string(npu_compiler_plugin_lib_dir), expected_path);
+#else
+  ASSERT_FALSE(npu_dispatch_lib.HasValue());
+  ASSERT_FALSE(npu_compiler_plugin_lib.HasValue());
+#endif
 }
 
 }  // namespace

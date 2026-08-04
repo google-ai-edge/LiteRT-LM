@@ -271,6 +271,18 @@ TEST(EmbeddingEngineImplTest, BenchmarkDisabledReturnsNulllopt) {
   EXPECT_THAT(engine->GetBenchmarkInfo(), testing::Eq(std::nullopt));
 }
 
+TEST(EmbeddingEngineImplTest, CreateWithSettingsSuccess) {
+  const std::string& model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                   std::string(kTestEmbeddingModelPath))
+                                      .string();
+  ASSERT_OK_AND_ASSIGN(auto model_assets, ModelAssets::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+
+  auto engine = EmbeddingEngineImpl::Create(std::move(settings));
+  EXPECT_OK(engine.status());
+}
+
 TEST(EmbeddingEngineImplTest, ComputeEmbeddingSuccess) {
   const std::string& model_path = (std::filesystem::path(::testing::SrcDir()) /
                                    std::string(kTestEmbeddingModelPath))
