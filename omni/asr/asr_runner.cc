@@ -188,12 +188,17 @@ absl::Status RunAsrRunner(absl::string_view model_name,
     auto result = session->ProcessNextChunk();
     if (!result.ok()) {
       if (absl::IsOutOfRange(result.status())) {
+        auto flush_result = session->Flush();
+        if (flush_result.ok() && !flush_result->confirmed_text.empty()) {
+          std::cout << flush_result->confirmed_text;
+        }
+        std::cout << std::endl;
         break;
       }
       return result.status();
     }
     if (!result->confirmed_text.empty()) {
-      std::cout << result->confirmed_text << std::flush;
+      std::cout << result->confirmed_text << " " << std::flush;
     }
   }
   ABSL_LOG(INFO) << "Finished speech recognition.";
