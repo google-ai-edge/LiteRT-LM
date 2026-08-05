@@ -195,9 +195,9 @@ absl::StatusOr<
     std::unique_ptr<AudioLiteRtCompiledModelExecutor::AudioStaticEncoder>>
 AudioLiteRtCompiledModelExecutor::AudioStaticEncoder::Create(
     const AudioExecutorSettings& executor_settings, Environment& env,
-    const Model* absl_nonnull model) {
+    const Model* absl_nonnull model, ModelResources& resources) {
   auto handler = std::unique_ptr<AudioStaticEncoder>(
-      new AudioStaticEncoder(executor_settings, env, model));
+      new AudioStaticEncoder(executor_settings, env, model, resources));
   ABSL_RETURN_IF_ERROR(handler->Initialize());
   return handler;
 }
@@ -242,6 +242,8 @@ AudioLiteRtCompiledModelExecutor::AudioStaticEncoder::Initialize() {
         absl::StrCat("Unsupported backend for AudioStaticEncoder: ",
                      executor_settings_.GetBackend()));
   }
+  ABSL_RETURN_IF_ERROR(SetExternalWeightOptions(
+      resources_, ModelType::kTfLiteAudioEncoderHw, options));
 
   LITERT_ASSIGN_OR_RETURN(compiled_model_,
                           CompiledModel::Create(env_, model_.Get(), options));
@@ -327,9 +329,9 @@ absl::StatusOr<
     std::unique_ptr<AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder>>
 AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::Create(
     const AudioExecutorSettings& executor_settings, Environment& env,
-    const Model* absl_nonnull model) {
+    const Model* absl_nonnull model, ModelResources& resources) {
   auto handler = std::unique_ptr<AudioStreamingEncoder>(
-      new AudioStreamingEncoder(executor_settings, env, model));
+      new AudioStreamingEncoder(executor_settings, env, model, resources));
   ABSL_RETURN_IF_ERROR(handler->Initialize());
   return handler;
 }
@@ -373,6 +375,8 @@ AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::Initialize() {
         absl::StrCat("Unsupported backend for AudioEncoder: ",
                      executor_settings_.GetBackend()));
   }
+  ABSL_RETURN_IF_ERROR(SetExternalWeightOptions(
+      resources_, ModelType::kTfLiteAudioEncoderHw, options));
 
   LITERT_ASSIGN_OR_RETURN(compiled_model_,
                           CompiledModel::Create(env_, model_.Get(), options));
@@ -522,9 +526,9 @@ absl::Status AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::Reset() {
 absl::StatusOr<std::unique_ptr<AudioLiteRtCompiledModelExecutor::AudioAdapter>>
 AudioLiteRtCompiledModelExecutor::AudioAdapter::Create(
     const AudioExecutorSettings& executor_settings, Environment& env,
-    const Model* absl_nonnull model) {
+    const Model* absl_nonnull model, ModelResources& resources) {
   auto handler = std::unique_ptr<AudioAdapter>(
-      new AudioAdapter(executor_settings, env, model));
+      new AudioAdapter(executor_settings, env, model, resources));
   ABSL_RETURN_IF_ERROR(handler->Initialize());
   return handler;
 }
@@ -575,6 +579,8 @@ absl::Status AudioLiteRtCompiledModelExecutor::AudioAdapter::Initialize() {
         absl::StrCat("Unsupported backend for AudioAdapter: ",
                      executor_settings_.GetBackend()));
   }
+  ABSL_RETURN_IF_ERROR(SetExternalWeightOptions(
+      resources_, ModelType::kTfLiteAudioAdapter, options));
 
   LITERT_ASSIGN_OR_RETURN(compiled_model_,
                           CompiledModel::Create(env_, model_.Get(), options));
@@ -640,19 +646,20 @@ AudioLiteRtCompiledModelExecutor::Create(
       auto executor_properties,
       GetAudioExecutorPropertiesFromModelResources(*resources));
   if (executor_properties.is_streaming_model) {
-    ABSL_ASSIGN_OR_RETURN(audio_encoder,
-                          AudioStreamingEncoder::Create(executor_settings, env,
-                                                        audio_encoder_model));
+    ABSL_ASSIGN_OR_RETURN(audio_encoder, AudioStreamingEncoder::Create(
+                                             executor_settings, env,
+                                             audio_encoder_model, *resources));
   } else {
-    ABSL_ASSIGN_OR_RETURN(audio_encoder,
-                          AudioStaticEncoder::Create(executor_settings, env,
-                                                     audio_encoder_model));
+    ABSL_ASSIGN_OR_RETURN(audio_encoder, AudioStaticEncoder::Create(
+                                             executor_settings, env,
+                                             audio_encoder_model, *resources));
   }
   std::unique_ptr<AudioAdapter> audio_adapter;
   if (audio_adapter_model_or.ok() && *audio_adapter_model_or != nullptr) {
     ABSL_ASSIGN_OR_RETURN(
         audio_adapter,
-        AudioAdapter::Create(executor_settings, env, *audio_adapter_model_or));
+        AudioAdapter::Create(executor_settings, env, *audio_adapter_model_or,
+                             *resources));
   } else {
     ABSL_VLOG(1) << "Audio adapter model is not found. Audio encoder output "
                     "will be used directly.";
