@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_LEVENSHTEIN_TEXT_MERGER_H_
-#define THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_LEVENSHTEIN_TEXT_MERGER_H_
+#ifndef THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_TIMESTAMP_TEXT_MERGER_H_
+#define THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_TIMESTAMP_TEXT_MERGER_H_
 
 #include <string>
 #include <vector>
@@ -28,12 +28,14 @@
 namespace litert::omni::asr {
 
 // Aligns and merges overlapping word streams from consecutive audio chunks
-// using Levenshtein distance sequence alignment.
-class LevenshteinTextMerger : public TextMerger {
+// based on word timestamps and windowed Levenshtein distance.
+// It works better for live audio streaming than LevenshteinTextMerger.
+class TimestampTextMerger : public TextMerger {
  public:
-  explicit LevenshteinTextMerger(
-      Stage<std::vector<Detokenizer::Word>>* absl_nonnull detokenizer)
-      : TextMerger(detokenizer) {}
+  explicit TimestampTextMerger(
+      Stage<std::vector<Detokenizer::Word>>* absl_nonnull detokenizer,
+      float overlap_ratio = 0.5f, int search_window = 2,
+      int max_levenshtein_distance = 5, float pivot_factor = 0.6f);
 
   // Resets internal cached state for a new audio stream.
   void Reset() override;
@@ -45,18 +47,26 @@ class LevenshteinTextMerger : public TextMerger {
   // Returns cached unconfirmed words.
   // It's only used for testing. Not thread-safe.
   absl::Span<const std::string> unconfirmed_words_for_testing() const {
-    return unconfirmed_words_;
+    return prev_words_;
   }
 
  private:
-  // SingleThreadedStageWithDeque<MergeResult> implementation:
   absl::Status ScheduleInternal() override;
 
   absl::Status Execute();
 
-  std::vector<std::string> unconfirmed_words_;
+  const float overlap_ratio_;
+  const int search_window_;
+  const int max_levenshtein_distance_;
+  const float pivot_factor_;
+
+  std::vector<std::string> prev_words_;
+  std::vector<int> prev_timestamps_;
+  std::vector<std::string> last_confirmed_words_;
+  int prev_word_index_of_unconfirmed_ = -1;
+  int prev_word_index_of_pivot_ = -1;
 };
 
 }  // namespace litert::omni::asr
 
-#endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_LEVENSHTEIN_TEXT_MERGER_H_
+#endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_TIMESTAMP_TEXT_MERGER_H_

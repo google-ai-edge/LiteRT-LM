@@ -44,6 +44,11 @@ struct AsrEngineConfig {
     kNpu = 2,
   };
 
+  enum class TextMergerType {
+    kLevenshtein = 0,
+    kTimestamp = 1,
+  };
+
   std::string model_name;
   std::string model_path;
   std::string tokenizer_path;
@@ -55,6 +60,7 @@ struct AsrEngineConfig {
 
   DecoderType decoder_type = DecoderType::kTdt;
   Backend backend = Backend::kCpu;
+  TextMergerType text_merger_type = TextMergerType::kTimestamp;
   int num_threads = 4;
   float overlap_ratio = 0.0f;
 

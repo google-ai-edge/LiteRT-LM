@@ -50,6 +50,8 @@ ABSL_FLAG(int, num_threads, 4, "Number of CPU threads for LiteRT inference.");
 ABSL_FLAG(float, overlap_ratio, 0.4f,
           "Overlap ratio between consecutive audio chunks from audio source "
           "between 0.0 and 1.0.");
+ABSL_FLAG(std::string, text_merger_type, "timestamp",
+          "Text merger implementation to use: timestamp or levenshtein.");
 
 namespace {
 
@@ -72,7 +74,7 @@ absl::Status DownloadFileWithCurl(absl::string_view url,
 absl::StatusOr<litert::omni::asr::AsrEngineConfig> LoadConfigFromJsonFile(
     absl::string_view json_path, absl::string_view model_name,
     absl::string_view cache_dir, absl::string_view backend_flag,
-    int num_threads, float overlap_ratio) {
+    int num_threads, float overlap_ratio, absl::string_view text_merger_flag) {
   std::ifstream f(std::string(json_path).c_str());
   if (!f.is_open()) {
     return absl::NotFoundError(
@@ -113,6 +115,21 @@ absl::StatusOr<litert::omni::asr::AsrEngineConfig> LoadConfigFromJsonFile(
   }
   if (m.contains("decodeSkipUntilTokenId")) {
     config.decode_skip_until_token_id = m["decodeSkipUntilTokenId"].get<int>();
+  }
+
+  std::string merger_str;
+  if (m.contains("textMergerType")) {
+    merger_str = m["textMergerType"].get<std::string>();
+  }
+  if (!text_merger_flag.empty()) {
+    merger_str = std::string(text_merger_flag);
+  }
+  if (absl::EqualsIgnoreCase(merger_str, "levenshtein")) {
+    config.text_merger_type =
+        litert::omni::asr::AsrEngineConfig::TextMergerType::kLevenshtein;
+  } else {
+    config.text_merger_type =
+        litert::omni::asr::AsrEngineConfig::TextMergerType::kTimestamp;
   }
 
   if (absl::StrContains(config.model_name, "tdt")) {
@@ -169,7 +186,8 @@ absl::Status RunAsrRunner(absl::string_view model_name,
                           absl::string_view audio_path,
                           absl::string_view cache_dir,
                           absl::string_view backend_flag, int num_threads,
-                          float overlap_ratio) {
+                          float overlap_ratio,
+                          absl::string_view text_merger_flag) {
   if (audio_path.empty()) {
     return absl::InvalidArgumentError("--audio_path flag is required.");
   }
@@ -177,7 +195,7 @@ absl::Status RunAsrRunner(absl::string_view model_name,
   ABSL_ASSIGN_OR_RETURN(
       auto config,
       LoadConfigFromJsonFile(metadata_path, model_name, cache_dir, backend_flag,
-                             num_threads, overlap_ratio));
+                             num_threads, overlap_ratio, text_merger_flag));
   absl::Duration interval = absl::Milliseconds(config.input_milliseconds);
   absl::Duration overlap = interval * overlap_ratio;
   ABSL_ASSIGN_OR_RETURN(
@@ -220,7 +238,8 @@ int main(int argc, char* argv[]) {
       absl::GetFlag(FLAGS_model_name), absl::GetFlag(FLAGS_metadata_path),
       absl::GetFlag(FLAGS_audio_path), absl::GetFlag(FLAGS_cache_dir),
       absl::GetFlag(FLAGS_backend), absl::GetFlag(FLAGS_num_threads),
-      absl::GetFlag(FLAGS_overlap_ratio));
+      absl::GetFlag(FLAGS_overlap_ratio),
+      absl::GetFlag(FLAGS_text_merger_type));
   if (!status.ok()) {
     ABSL_LOG(ERROR) << "ASR Runner failed: " << status;
     return 1;

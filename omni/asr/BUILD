@@ -377,6 +377,42 @@ cc_test(
 )
 
 cc_library(
+    name = "timestamp_text_merger",
+    srcs = ["timestamp_text_merger.cc"],
+    hdrs = ["timestamp_text_merger.h"],
+    deps = [
+        ":detokenizer",
+        ":text_merger",
+        "@com_google_absl//absl/base:nullability",
+        "@com_google_absl//absl/log:absl_check",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/synchronization",
+        "@com_google_absl//absl/types:span",
+        "@litert//litert/cc:litert_macros",
+        "//omni/base:stage",
+    ],
+)
+
+cc_test(
+    name = "timestamp_text_merger_test",
+    srcs = ["timestamp_text_merger_test.cc"],
+    deps = [
+        ":detokenizer",
+        ":text_merger",
+        ":timestamp_text_merger",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
+        "@com_google_absl//absl/status:statusor",
+        "@litert//litert/cc:litert_macros",
+        "@litert//support/util:test_utils",
+        "//omni/base:stage",
+    ],
+)
+
+cc_library(
     name = "asr_session",
     srcs = ["asr_session.cc"],
     hdrs = ["asr_session.h"],
@@ -441,6 +477,8 @@ cc_library(
         ":log_mel_spectrogram_processor",
         ":stateless_decoder",
         ":tdt_decoder",
+        ":text_merger",
+        ":timestamp_text_merger",
         ":tokenizer_detokenizer",
         "@com_google_absl//absl/functional:any_invocable",
         "@com_google_absl//absl/status",

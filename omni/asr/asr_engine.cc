@@ -45,6 +45,8 @@
 #include "omni/asr/log_mel_spectrogram_processor.h"
 #include "omni/asr/stateless_decoder.h"
 #include "omni/asr/tdt_decoder.h"
+#include "omni/asr/text_merger.h"
+#include "omni/asr/timestamp_text_merger.h"
 #include "omni/asr/tokenizer_detokenizer.h"
 #include "omni/base/litert_runner.h"
 
@@ -180,8 +182,16 @@ absl::StatusOr<std::unique_ptr<AsrSession>> AsrEngine::CreateSession(
       raw_speech_recognizer, tokenizer_.get());
 
   TokenizerDetokenizer* raw_detokenizer = detokenizer.get();
-  auto text_merger = std::make_unique<LevenshteinTextMerger>(
-      raw_detokenizer, config_.overlap_ratio);
+  std::unique_ptr<TextMerger> text_merger;
+  switch (config_.text_merger_type) {
+    case AsrEngineConfig::TextMergerType::kLevenshtein:
+      text_merger = std::make_unique<LevenshteinTextMerger>(raw_detokenizer);
+      break;
+    case AsrEngineConfig::TextMergerType::kTimestamp:
+      text_merger = std::make_unique<TimestampTextMerger>(
+          raw_detokenizer, config_.overlap_ratio);
+      break;
+  }
 
   AsrSession::Components components;
   components.audio_source = std::move(audio_source);
