@@ -308,8 +308,9 @@ absl::Status EmbeddingLookupText::Initialize() {
       }
     }
 #if defined(__ANDROID__)
-    LITERT_ASSIGN_OR_RETURN(::litert::qualcomm::QualcommOptions & qnn_opts,
-                            options.GetQualcommOptions());
+    LITERT_ASSIGN_OR_RETURN(
+        ::litert::qualcomm::QualcommOptions & qnn_opts,
+        options.GetOptions<::litert::qualcomm::QualcommOptions>());
     qnn_opts.SetLogLevel(::litert::qualcomm::QualcommOptions::LogLevel::kOff);
     qnn_opts.SetHtpPerformanceMode(
         ::litert::qualcomm::QualcommOptions::HtpPerformanceMode::

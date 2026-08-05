@@ -190,12 +190,13 @@ EmbeddingLiteRtCompiledModelExecutor::Create(
 #if !defined(LITERT_DISABLE_NPU)
     case Backend::NPU: {
       LITERT_ASSIGN_OR_RETURN(auto& qualcomm_options,
-                              options.GetQualcommOptions());
+                              options.GetOptions<qualcomm::QualcommOptions>());
       qualcomm_options.SetLogLevel(qualcomm::QualcommOptions::LogLevel::kOff);
       qualcomm_options.SetHtpPerformanceMode(
           qualcomm::QualcommOptions::HtpPerformanceMode::kBurst);
-      LITERT_ASSIGN_OR_RETURN(auto& google_tensor_options,
-                              options.GetGoogleTensorOptions());
+      LITERT_ASSIGN_OR_RETURN(
+          auto& google_tensor_options,
+          options.GetOptions<google_tensor::GoogleTensorOptions>());
       google_tensor_options.SetPerformanceMode(
           google_tensor::GoogleTensorOptions::PerformanceMode::kBurst);
       options.SetHardwareAccelerators(litert::HwAccelerators::kNpu |
