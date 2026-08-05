@@ -822,6 +822,45 @@ absl::StatusOr<GpuModelCacheData> GetGpuModelCacheData(
   return cache_data;
 }
 
+absl::StatusOr<ExternalWeightResources> GetExternalWeightResources(
+    ModelResources& resources, ModelType model_type) {
+  ExternalWeightResources external_weights;
+  auto section_offset = resources.GetWeightsSectionOffset(model_type);
+  if (!section_offset.ok()) {
+    if (!absl::IsNotFound(section_offset.status()) &&
+        !absl::IsUnimplemented(section_offset.status())) {
+      return section_offset.status();
+    }
+    return external_weights;
+  }
+
+  external_weights.sections["tflite_weights"] = {
+      section_offset->first, section_offset->second - section_offset->first};
+  LITERT_ASSIGN_OR_RETURN(auto scoped_file, resources.GetScopedFile());
+  LITERT_ASSIGN_OR_RETURN(auto duplicated_scoped_file,
+                          scoped_file.get().Duplicate());
+  external_weights.scoped_file = std::move(duplicated_scoped_file);
+  return external_weights;
+}
+
+absl::Status SetExternalWeightOptions(ModelResources& resources,
+                                      ModelType model_type,
+                                      litert::Options& compilation_options) {
+  ABSL_ASSIGN_OR_RETURN(auto external_weights,
+                        GetExternalWeightResources(resources, model_type));
+  if (!external_weights.scoped_file.has_value()) {
+    return absl::OkStatus();
+  }
+  ABSL_VLOG(1) << "External weights for model type "
+               << static_cast<int>(model_type) << ": offset "
+               << external_weights.sections["tflite_weights"].offset
+               << ", length "
+               << external_weights.sections["tflite_weights"].length;
+  compilation_options.SetExternalWeightScopedFile(*external_weights.scoped_file,
+                                                  external_weights.sections);
+  return absl::OkStatus();
+}
+
 absl::Status InitializeEmbeddingLookups(
     ::litert::Environment& env, ModelResources& resources,
     std::unique_ptr<EmbeddingLookupManager>& embedding_lookup,
@@ -848,35 +887,32 @@ absl::Status InitializeEmbeddingLookups(
       resources.GetTFLiteModel(ModelType::kTfLiteEmbedder);
   if (text_embedder_model.ok()) {
     ABSL_ASSIGN_OR_RETURN(
+        auto external_weights,
+        GetExternalWeightResources(resources, ModelType::kTfLiteEmbedder));
+    ABSL_ASSIGN_OR_RETURN(
         embedding_lookup,
         EmbeddingLookupManager::Create(env, *text_embedder_model,
-                                       end_of_multi_modal_embedding_models));
+                                       end_of_multi_modal_embedding_models,
+                                       /*fully_supports_multi_modal=*/true,
+                                       /*signature_key=*/std::nullopt,
+                                       std::move(external_weights.scoped_file),
+                                       std::move(external_weights.sections)));
   }
 
   // Create per layer embedding lookups from the resources.
   auto per_layer_embedder_model =
       resources.GetTFLiteModel(ModelType::kTfLitePerLayerEmbedder);
   if (per_layer_embedder_model.ok()) {
-    std::optional<ScopedFile> per_layer_external_weight_file;
-    Options::ScopedWeightSectionMap per_layer_external_weight_sections;
-    auto section_offset =
-        resources.GetWeightsSectionOffset(ModelType::kTfLitePerLayerEmbedder);
-    if (section_offset.ok()) {
-      per_layer_external_weight_sections["tflite_weights"] = {
-          section_offset.value().first,
-          section_offset.value().second - section_offset.value().first};
-      LITERT_ASSIGN_OR_RETURN(auto scoped_file, resources.GetScopedFile());
-      LITERT_ASSIGN_OR_RETURN(auto duplicated_scoped_file,
-                              scoped_file.get().Duplicate());
-      per_layer_external_weight_file = std::move(duplicated_scoped_file);
-    }
-    ABSL_ASSIGN_OR_RETURN(per_layer_embedding_lookup,
-                          EmbeddingLookupManager::Create(
-                              env, *per_layer_embedder_model,
-                              /*fully_supports_multi_modal=*/false,
-                              /*signature_key=*/std::nullopt,
-                              std::move(per_layer_external_weight_file),
-                              std::move(per_layer_external_weight_sections)));
+    ABSL_ASSIGN_OR_RETURN(auto external_weights,
+                          GetExternalWeightResources(
+                              resources, ModelType::kTfLitePerLayerEmbedder));
+    ABSL_ASSIGN_OR_RETURN(
+        per_layer_embedding_lookup,
+        EmbeddingLookupManager::Create(env, *per_layer_embedder_model,
+                                       /*fully_supports_multi_modal=*/false,
+                                       /*signature_key=*/std::nullopt,
+                                       std::move(external_weights.scoped_file),
+                                       std::move(external_weights.sections)));
   }
 
   return absl::OkStatus();
