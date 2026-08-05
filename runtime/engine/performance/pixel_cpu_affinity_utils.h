@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_ENGINE_CPU_AFFINITY_UTILS_H_
-#define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_ENGINE_CPU_AFFINITY_UTILS_H_
+#ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_ENGINE_PERFORMANCE_PIXEL_CPU_AFFINITY_UTILS_H_
+#define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_ENGINE_PERFORMANCE_PIXEL_CPU_AFFINITY_UTILS_H_
 
 #include <vector>
 
@@ -32,8 +32,8 @@ std::vector<int> GetPixelPerformanceCores();
 // threads it creates. This informs the scheduler which cores the thread
 // should be run on. The scheduler will then attempt to run the thread on
 // these cores most of the time.
-absl::Status SetCpuAffinity(const std::vector<int>& cpu_affinity_cores);
+absl::Status SetPixelCpuAffinity(const std::vector<int>& cpu_affinity_cores);
 
 }  // namespace litert::lm
 
-#endif  // THIRD_PARTY_ODML_LITERT_LM_RUNTIME_ENGINE_CPU_AFFINITY_UTILS_H_
+#endif  // THIRD_PARTY_ODML_LITERT_LM_RUNTIME_ENGINE_PERFORMANCE_PIXEL_CPU_AFFINITY_UTILS_H_
