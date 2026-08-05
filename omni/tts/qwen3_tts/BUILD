@@ -114,3 +114,49 @@ cc_library(
         "//runtime/executor:litert_compiled_model_executor_utils",
     ],
 )
+
+cc_library(
+    name = "qwen3_latent_decoder_stage",
+    srcs = ["qwen3_latent_decoder_stage.cc"],
+    hdrs = ["qwen3_latent_decoder_stage.h"],
+    deps = [
+        "@com_google_absl//absl/base:nullability",
+        "@com_google_absl//absl/cleanup",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/synchronization",
+        "//omni/base:io_types",
+        "//omni/base:stage",
+        "//omni/tts:acoustic_predictor",
+        "//omni/tts:latent_decoder",
+    ],
+)
+
+cc_library(
+    name = "qwen3_vocoder_stage",
+    srcs = ["qwen3_vocoder_stage.cc"],
+    hdrs = ["qwen3_vocoder_stage.h"],
+    deps = [
+        ":common",
+        ":qwen3_stage_options",
+        "@com_google_absl//absl/base:nullability",
+        "@com_google_absl//absl/cleanup",
+        "@com_google_absl//absl/log:absl_log",
+        "@com_google_absl//absl/memory",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/synchronization",
+        "@com_google_absl//absl/types:span",
+        "@litert//litert/cc:litert_compiled_model",
+        "@litert//litert/cc:litert_environment",
+        "@litert//litert/cc:litert_macros",
+        "@litert//litert/cc:litert_tensor_buffer",
+        "@litert//support/util:convert_tensor_buffer",
+        "//omni/base:io_types",
+        "//omni/base:stage",
+        "//omni/tts:latent_decoder",
+        "//omni/tts:vocoder",
+    ],
+)
