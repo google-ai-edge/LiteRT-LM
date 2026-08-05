@@ -47,5 +47,41 @@ TEST(LevenshteinAlignTest, OverlapWithPrefixAndSuffix) {
                           AlignCode::kInsertion, AlignCode::kInsertion));
 }
 
+TEST(LevenshteinAlignTest, ComputeLevenshteinDistance) {
+  EXPECT_EQ(ComputeLevenshteinDistance("kitten", "sitting"), 3);
+  EXPECT_EQ(ComputeLevenshteinDistance("hello", "hello"), 0);
+  EXPECT_EQ(ComputeLevenshteinDistance("", "abc"), 3);
+  EXPECT_EQ(ComputeLevenshteinDistance("abc", ""), 3);
+}
+
+TEST(LevenshteinAlignTest, CanonicalizeWords) {
+  std::vector<std::string> words = {"Hello,", "WORLD!"};
+  EXPECT_EQ(Canonicalize(words), "hello world");
+}
+
+TEST(LevenshteinAlignTest, CloseEnoughStringsTest) {
+  EXPECT_TRUE(CloseEnoughStrings("cat", "cat"));
+  EXPECT_FALSE(CloseEnoughStrings(
+      "cat", "car"));  // min_len <= 3 requiring exact prefix match
+  EXPECT_TRUE(
+      CloseEnoughStrings("hello", "hella"));  // min_len > 3 with dist <= 1
+  EXPECT_FALSE(CloseEnoughStrings("hello", "heyyy"));
+}
+
+TEST(LevenshteinAlignTest, CloseEnoughSpansTest) {
+  std::vector<std::string> l1 = {"hello", "world"};
+  std::vector<std::string> l2 = {"hella", "world"};
+  EXPECT_TRUE(CloseEnough(l1, l2));
+
+  std::vector<std::string> l3 = {"hello"};
+  EXPECT_FALSE(CloseEnough(l1, l3));
+}
+
+TEST(LevenshteinAlignTest, DedupWordsTest) {
+  std::vector<std::string> prev = {"the", "stale", "smell", "of"};
+  std::vector<std::string> curr = {"smell", "of", "old", "beer"};
+  EXPECT_THAT(DedupWords(prev, curr), ElementsAre("old", "beer"));
+}
+
 }  // namespace
 }  // namespace litert::omni::asr

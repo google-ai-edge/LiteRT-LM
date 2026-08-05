@@ -31,79 +31,12 @@
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "omni/asr/detokenizer.h"
+#include "omni/asr/levenshtein_align.h"
 #include "omni/asr/text_merger.h"
 #include "omni/base/stage.h"
 
 namespace litert::omni::asr {
 namespace {
-
-int ComputeLevenshteinDistance(absl::string_view s1, absl::string_view s2) {
-  const size_t len1 = s1.size();
-  const size_t len2 = s2.size();
-  std::vector<std::vector<int>> dp(len1 + 1, std::vector<int>(len2 + 1, 0));
-
-  for (size_t i = 0; i <= len1; ++i) dp[i][0] = static_cast<int>(i);
-  for (size_t j = 0; j <= len2; ++j) dp[0][j] = static_cast<int>(j);
-
-  for (size_t i = 1; i <= len1; ++i) {
-    for (size_t j = 1; j <= len2; ++j) {
-      int deletion_cost = dp[i - 1][j] + 1;
-      int insertion_cost = dp[i][j - 1] + 1;
-      int match_or_sub_cost =
-          dp[i - 1][j - 1] + ((s1[i - 1] == s2[j - 1]) ? 0 : 1);
-      dp[i][j] = std::min({deletion_cost, insertion_cost, match_or_sub_cost});
-    }
-  }
-  return dp[len1][len2];
-}
-
-std::string Canonicalize(absl::Span<const std::string> words) {
-  std::string joined = absl::AsciiStrToLower(absl::StrJoin(words, " "));
-  std::string result;
-  result.reserve(joined.size());
-  for (char c : joined) {
-    if (!std::ispunct(static_cast<unsigned char>(c))) {
-      result.push_back(c);
-    }
-  }
-  return result;
-}
-
-bool CloseEnoughStrings(absl::string_view s1, absl::string_view s2) {
-  const size_t min_len = std::min(s1.size(), s2.size());
-  const absl::string_view prefix1 = s1.substr(0, min_len);
-  const absl::string_view prefix2 = s2.substr(0, min_len);
-  if (min_len <= 3) {
-    return prefix1 == prefix2;
-  }
-  return ComputeLevenshteinDistance(prefix1, prefix2) <= 1;
-}
-
-bool CloseEnough(absl::Span<const std::string> l1,
-                 absl::Span<const std::string> l2) {
-  if (l1.size() != l2.size()) return false;
-  for (size_t i = 0; i < l1.size(); ++i) {
-    if (!CloseEnoughStrings(l1[i], l2[i])) {
-      return false;
-    }
-  }
-  return true;
-}
-
-std::vector<std::string> DedupWords(absl::Span<const std::string> prev_words,
-                                    absl::Span<const std::string> curr_words,
-                                    int search_window = 2) {
-  const int max_search = std::min<int>(
-      search_window, std::min(prev_words.size(), curr_words.size()));
-  for (int i = max_search; i >= 1; --i) {
-    auto prev_tail = prev_words.subspan(prev_words.size() - i, i);
-    auto curr_head = curr_words.subspan(0, i);
-    if (CloseEnough(prev_tail, curr_head)) {
-      return std::vector<std::string>(curr_words.begin() + i, curr_words.end());
-    }
-  }
-  return std::vector<std::string>(curr_words.begin(), curr_words.end());
-}
 
 std::vector<std::string> MergeIntoUnconfirmedText(
     absl::Span<const std::string> prev_words,

@@ -330,6 +330,7 @@ cc_library(
     srcs = ["levenshtein_align.cc"],
     hdrs = ["levenshtein_align.h"],
     deps = [
+        "@com_google_absl//absl/strings",
         "@com_google_absl//absl/types:span",
     ],
 )
@@ -382,6 +383,7 @@ cc_library(
     hdrs = ["timestamp_text_merger.h"],
     deps = [
         ":detokenizer",
+        ":levenshtein_align",
         ":text_merger",
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/log:absl_check",
