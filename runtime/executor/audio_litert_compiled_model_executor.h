@@ -241,6 +241,9 @@ class AudioLiteRtCompiledModelExecutor : public AudioExecutor {
     }
 
    protected:
+    explicit AudioEncoder(ModelResources& resources) : resources_(resources) {}
+
+    ModelResources& resources_;
     CompiledModel compiled_model_;
 
     // The input buffer for the spectrogram mask.
@@ -282,7 +285,7 @@ class AudioLiteRtCompiledModelExecutor : public AudioExecutor {
     //   status if failed.
     static absl::StatusOr<std::unique_ptr<AudioStaticEncoder>> Create(
         const AudioExecutorSettings& executor_settings, Environment& env,
-        const Model* absl_nonnull model);
+        const Model* absl_nonnull model, ModelResources& resources);
 
     // Initialize the AudioStaticEncoder, which will create the input and output
     // buffers for the audio encoder model.
@@ -296,8 +299,12 @@ class AudioLiteRtCompiledModelExecutor : public AudioExecutor {
 
    private:
     AudioStaticEncoder(const AudioExecutorSettings& executor_settings,
-                       Environment& env, const Model* absl_nonnull model)
-        : executor_settings_(executor_settings), env_(env), model_(*model) {}
+                       Environment& env, const Model* absl_nonnull model,
+                       ModelResources& resources)
+        : AudioEncoder(resources),
+          executor_settings_(executor_settings),
+          env_(env),
+          model_(*model) {}
 
     const AudioExecutorSettings& executor_settings_;
     Environment& env_;
@@ -353,7 +360,7 @@ class AudioLiteRtCompiledModelExecutor : public AudioExecutor {
     //   error status if failed.
     static absl::StatusOr<std::unique_ptr<AudioStreamingEncoder>> Create(
         const AudioExecutorSettings& executor_settings, Environment& env,
-        const Model* absl_nonnull model);
+        const Model* absl_nonnull model, ModelResources& resources);
 
     // Initialize the AudioStreamingEncoder, which will create the input and
     // output buffers for the audio encoder model.
@@ -380,8 +387,12 @@ class AudioLiteRtCompiledModelExecutor : public AudioExecutor {
 
    private:
     AudioStreamingEncoder(const AudioExecutorSettings& executor_settings,
-                          Environment& env, const Model* absl_nonnull model)
-        : executor_settings_(executor_settings), env_(env), model_(*model) {}
+                          Environment& env, const Model* absl_nonnull model,
+                          ModelResources& resources)
+        : AudioEncoder(resources),
+          executor_settings_(executor_settings),
+          env_(env),
+          model_(*model) {}
 
     AudioExecutorSettings executor_settings_;
     Environment& env_;
@@ -405,7 +416,7 @@ class AudioLiteRtCompiledModelExecutor : public AudioExecutor {
     //   if failed.
     static absl::StatusOr<std::unique_ptr<AudioAdapter>> Create(
         const AudioExecutorSettings& executor_settings, Environment& env,
-        const Model* absl_nonnull model);
+        const Model* absl_nonnull model, ModelResources& resources);
 
     // Initialize the AudioAdapter, which will create the input and output
     // buffers for the audio adapter model.
@@ -440,12 +451,17 @@ class AudioLiteRtCompiledModelExecutor : public AudioExecutor {
 
    private:
     AudioAdapter(const AudioExecutorSettings& executor_settings,
-                 Environment& env, const Model* absl_nonnull model)
-        : executor_settings_(executor_settings), env_(env), model_(*model) {}
+                 Environment& env, const Model* absl_nonnull model,
+                 ModelResources& resources)
+        : executor_settings_(executor_settings),
+          env_(env),
+          model_(*model),
+          resources_(resources) {}
 
     AudioExecutorSettings executor_settings_;
     Environment& env_;
     const Model& model_;
+    ModelResources& resources_;
     CompiledModel compiled_model_;
     // The input buffers for the audio adapter model.
     std::vector<TensorBuffer> input_buffers_;

@@ -171,14 +171,16 @@ absl::StatusOr<
 VisionLiteRtCompiledModelExecutor::VisionEncoder::Create(
     Environment& env, const Model* absl_nonnull model,
     const VisionExecutorSettings& vision_executor_settings,
-    const VisionExecutorProperties& vision_executor_properties) {
+    const VisionExecutorProperties& vision_executor_properties,
+    ModelResources& resources) {
   auto handler = std::unique_ptr<VisionEncoder>(new VisionEncoder(
       env, model, vision_executor_settings, vision_executor_properties));
-  ABSL_RETURN_IF_ERROR(handler->Initialize());
+  ABSL_RETURN_IF_ERROR(handler->Initialize(resources));
   return handler;
 }
 
-absl::Status VisionLiteRtCompiledModelExecutor::VisionEncoder::Initialize() {
+absl::Status VisionLiteRtCompiledModelExecutor::VisionEncoder::Initialize(
+    ModelResources& resources) {
   // TODO(b/405424188): - Add support for NPU backends.
   LITERT_ASSIGN_OR_RETURN(auto options, Options::Create());
   auto weight_cache_file = vision_executor_settings_.GetWeightCacheFile(
@@ -241,6 +243,8 @@ absl::Status VisionLiteRtCompiledModelExecutor::VisionEncoder::Initialize() {
       return absl::InvalidArgumentError(
           absl::StrCat("Unsupported encoder backend: ", backend_));
   }
+  ABSL_RETURN_IF_ERROR(SetExternalWeightOptions(
+      resources, ModelType::kTfLiteVisionEncoder, options));
 
   LITERT_ASSIGN_OR_RETURN(compiled_model_,
                           CompiledModel::Create(env_, model_.Get(), options));
@@ -263,14 +267,16 @@ absl::StatusOr<
 VisionLiteRtCompiledModelExecutor::VisionAdapter::Create(
     Environment& env, const Model* absl_nonnull model,
     const VisionExecutorSettings& vision_executor_settings,
-    const VisionExecutorProperties& vision_executor_properties) {
+    const VisionExecutorProperties& vision_executor_properties,
+    ModelResources& resources) {
   auto handler = std::unique_ptr<VisionAdapter>(new VisionAdapter(
       env, model, vision_executor_settings, vision_executor_properties));
-  ABSL_RETURN_IF_ERROR(handler->Initialize());
+  ABSL_RETURN_IF_ERROR(handler->Initialize(resources));
   return handler;
 }
 
-absl::Status VisionLiteRtCompiledModelExecutor::VisionAdapter::Initialize() {
+absl::Status VisionLiteRtCompiledModelExecutor::VisionAdapter::Initialize(
+    ModelResources& resources) {
   // TODO(b/405424188): - Add support for NPU backends.
   LITERT_ASSIGN_OR_RETURN(auto options, Options::Create());
   auto weight_cache_file = vision_executor_settings_.GetWeightCacheFile(
@@ -325,6 +331,8 @@ absl::Status VisionLiteRtCompiledModelExecutor::VisionAdapter::Initialize() {
       return absl::InvalidArgumentError(
           absl::StrCat("Unsupported adapter backend: ", backend_));
   }
+  ABSL_RETURN_IF_ERROR(SetExternalWeightOptions(
+      resources, ModelType::kTfLiteVisionAdapter, options));
 
   LITERT_ASSIGN_OR_RETURN(compiled_model_,
                           CompiledModel::Create(env_, model_.Get(), options));
@@ -377,14 +385,15 @@ litert::lm::VisionLiteRtCompiledModelExecutor::Create(
   ABSL_ASSIGN_OR_RETURN(
       auto vision_encoder,
       VisionEncoder::Create(env, vision_encoder_model, vision_executor_settings,
-                            vision_executor_properties));
+                            vision_executor_properties, *resources));
 
   std::unique_ptr<VisionAdapter> vision_adapter;
   if (vision_adapter_model.ok()) {
-    ABSL_ASSIGN_OR_RETURN(vision_adapter,
-                          VisionAdapter::Create(env, *vision_adapter_model,
-                                                vision_executor_settings,
-                                                vision_executor_properties));
+    ABSL_ASSIGN_OR_RETURN(
+        vision_adapter,
+        VisionAdapter::Create(env, *vision_adapter_model,
+                              vision_executor_settings,
+                              vision_executor_properties, *resources));
   }
 
   LITERT_ASSIGN_OR_RETURN(auto tensor_type,
