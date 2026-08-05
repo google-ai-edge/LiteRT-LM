@@ -16,11 +16,12 @@
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_EMBEDDING_LITERT_COMPILED_MODEL_EXECUTOR_H_
 
 #include <cstddef>
+#include <map>
 #include <memory>
-#include <optional>
 #include <string>
 #include <vector>
 
+#include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_compiled_model.h"  // from @litert
@@ -86,12 +87,8 @@ class EmbeddingLiteRtCompiledModelExecutor : public EmbeddingExecutorBase {
       std::unique_ptr<EmbeddingLookupManager> embedding_lookup,
       std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup,
       std::unique_ptr<litert::CompiledModel> compiled_model,
-      std::vector<litert::TensorBuffer> input_buffers,
-      std::vector<litert::TensorBuffer> output_buffers,
       std::vector<int> expected_input_dimension, int embedding_dimension,
-      size_t encoder_signature_index, size_t embeddings_buffer_index,
-      std::optional<size_t> input_mask_buffer_index,
-      std::optional<size_t> per_layer_embeddings_buffer_index);
+      std::map<int, size_t> encoder_signatures);
 
   EmbeddingExecutorSettings executor_settings_;
   litert::Environment& env_;
@@ -99,15 +96,20 @@ class EmbeddingLiteRtCompiledModelExecutor : public EmbeddingExecutorBase {
   std::unique_ptr<EmbeddingLookupManager> embedding_lookup_;
   std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup_;
   std::unique_ptr<litert::CompiledModel> compiled_model_;
-  std::vector<litert::TensorBuffer> input_buffers_;
-  std::vector<litert::TensorBuffer> output_buffers_;
   std::vector<int> expected_input_dimension_;
   int embedding_dimension_;
-  size_t encoder_signature_index_;
-  size_t embeddings_buffer_index_ = 0;
-  std::optional<size_t> input_mask_buffer_index_;
-  std::optional<size_t> per_layer_embeddings_buffer_index_;
   std::string backend_name_;
+
+  // Text encoder signatures: Sequence Length -> Signature Index
+  std::map<int, size_t> encoder_signatures_;
+
+  // Input buffer map: Signature Index -> Input Buffer
+  absl::flat_hash_map<size_t, std::vector<litert::TensorBuffer>>
+      input_buffers_cache_;
+
+  // Output buffer map: Signature Index -> Output Buffers
+  absl::flat_hash_map<size_t, std::vector<litert::TensorBuffer>>
+      output_buffers_cache_;
 };
 
 }  // namespace litert::lm

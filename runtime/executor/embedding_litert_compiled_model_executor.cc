@@ -17,11 +17,13 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <optional>
 #include <utility>
 #include <vector>
 
+#include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/memory/memory.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
@@ -37,6 +39,7 @@
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
 #include "litert/cc/litert_options.h"  // from @litert
+#include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #if !defined(LITERT_DISABLE_NPU)
 #include "litert/cc/options/litert_google_tensor_options.h"  // from @litert
@@ -69,6 +72,60 @@ class CompiledModelWrapper : public litert::CompiledModel {
                                          compilation_options);
   }
 };
+
+absl::StatusOr<std::map<int, size_t>> GetTextEncoderSignatureMap(
+    const litert::Model& model) {
+  std::map<int, size_t> encoder_signatures;
+
+  for (int i = 0; i < model.GetNumSignatures(); ++i) {
+    LITERT_ASSIGN_OR_RETURN(auto signature, model.GetSignature(i));
+    absl::string_view key = signature.Key();
+    if (absl::StartsWith(key, kEncoderSignatureRunner)) {
+      if (signature.InputNames().empty()) {
+        return absl::FailedPreconditionError(
+            absl::StrCat("Text encoder signature has no input tensors: ", key));
+      }
+
+      // Find the embeddings input tensor type to get sequence length.
+      std::optional<RankedTensorType> embeddings_tensor_type;
+      for (auto name : signature.InputNames()) {
+        if (absl::StrContains(name, kEmbeddingsName)) {
+          LITERT_ASSIGN_OR_RETURN(embeddings_tensor_type,
+                                  signature.InputTensorType(name));
+          break;
+        }
+      }
+
+      // Fallback to the first input tensor if kEmbeddingsName was not found.
+      if (!embeddings_tensor_type.has_value()) {
+        LITERT_ASSIGN_OR_RETURN(embeddings_tensor_type,
+                                signature.InputTensorType(0));
+      }
+
+      int sequence_length = 0;
+      if (embeddings_tensor_type->Layout().Rank() == 3) {
+        // [batch_size, seq_len, embed_dim]
+        sequence_length = embeddings_tensor_type->Layout().Dimensions()[1];
+      } else if (embeddings_tensor_type->Layout().Rank() == 2) {
+        // [seq_len, embed_dim]
+        sequence_length = embeddings_tensor_type->Layout().Dimensions()[0];
+      } else {
+        return absl::FailedPreconditionError(
+            absl::StrCat("Embedding input tensor has unsupported dimension: ",
+                         embeddings_tensor_type->Layout().Rank()));
+      }
+
+      encoder_signatures[sequence_length] = i;
+    }
+  }
+
+  if (encoder_signatures.empty()) {
+    return absl::FailedPreconditionError(absl::StrCat(
+        "No signature found with prefix ", kEncoderSignatureRunner));
+  }
+
+  return encoder_signatures;
+}
 
 }  // namespace
 
@@ -131,65 +188,29 @@ EmbeddingLiteRtCompiledModelExecutor::Create(
   auto compiled_model_ptr =
       std::make_unique<litert::CompiledModel>(std::move(compiled_model));
 
-  size_t encoder_signature_index = 0;
-  for (size_t i = 0; i < text_encoder_model->GetNumSignatures(); ++i) {
-    LITERT_ASSIGN_OR_RETURN(auto sig, text_encoder_model->GetSignature(i));
-    absl::string_view key = sig.Key();
-    if (absl::StartsWith(key, kEncoderSignatureRunner)) {
-      encoder_signature_index = i;
-      break;
-    }
-  }
-
-  LITERT_ASSIGN_OR_RETURN(
-      auto input_buffers,
-      compiled_model_ptr->CreateInputBuffers(encoder_signature_index));
-  LITERT_ASSIGN_OR_RETURN(
-      auto output_buffers,
-      compiled_model_ptr->CreateOutputBuffers(encoder_signature_index));
-  RET_CHECK(!input_buffers.empty()) << "TEXT_ENCODER has no input buffers.";
-  RET_CHECK(!output_buffers.empty()) << "TEXT_ENCODER has no output buffers.";
+  ABSL_ASSIGN_OR_RETURN(auto encoder_signatures,
+                        GetTextEncoderSignatureMap(*text_encoder_model));
+  size_t default_signature_index = encoder_signatures.begin()->second;
 
   LITERT_ASSIGN_OR_RETURN(
       auto input_tensor_type,
-      text_encoder_model->GetInputTensorType(encoder_signature_index, 0));
+      text_encoder_model->GetInputTensorType(default_signature_index, 0));
   const auto& input_dims = input_tensor_type.Layout().Dimensions();
   std::vector<int> expected_input_dimension(input_dims.begin(),
                                             input_dims.end());
 
   LITERT_ASSIGN_OR_RETURN(
       auto output_tensor_type,
-      text_encoder_model->GetOutputTensorType(encoder_signature_index, 0));
+      text_encoder_model->GetOutputTensorType(default_signature_index, 0));
   const auto& output_dims = output_tensor_type.Layout().Dimensions();
   RET_CHECK(!output_dims.empty()) << "Output dimensions cannot be empty.";
   int embedding_dimension = output_dims.back();
 
-  LITERT_ASSIGN_OR_RETURN(
-      auto sig, text_encoder_model->GetSignature(encoder_signature_index));
-  auto input_names = sig.InputNames();
-
-  size_t embeddings_buffer_index = 0;
-  std::optional<size_t> input_mask_buffer_index;
-  std::optional<size_t> per_layer_embeddings_buffer_index;
-
-  for (size_t i = 0; i < input_names.size(); ++i) {
-    absl::string_view name = input_names[i];
-    if (absl::StrContains(name, kPerLayerEmbeddingsName)) {
-      per_layer_embeddings_buffer_index = i;
-    } else if (absl::StrContains(name, kInputMaskName)) {
-      input_mask_buffer_index = i;
-    } else if (absl::StrContains(name, kEmbeddingsName)) {
-      embeddings_buffer_index = i;
-    }
-  }
-
   return absl::WrapUnique(new EmbeddingLiteRtCompiledModelExecutor(
       std::move(executor_settings), env, std::move(resources),
       std::move(embedding_lookup), std::move(per_layer_embedding_lookup),
-      std::move(compiled_model_ptr), std::move(input_buffers),
-      std::move(output_buffers), std::move(expected_input_dimension),
-      embedding_dimension, encoder_signature_index, embeddings_buffer_index,
-      input_mask_buffer_index, per_layer_embeddings_buffer_index));
+      std::move(compiled_model_ptr), std::move(expected_input_dimension),
+      embedding_dimension, std::move(encoder_signatures)));
 }
 
 // static
@@ -217,15 +238,66 @@ EmbeddingLiteRtCompiledModelExecutor::ComputeEmbedding(
       auto token_ids_vec,
       CopyFromTensorBuffer<int32_t>(text_data_ptr->GetTokenIds()));
 
+  ABSL_ASSIGN_OR_RETURN(
+      auto text_encoder_model,
+      resources_->GetTFLiteModel(ModelType::kTfLiteTextEncoder));
+
+  // Find the smallest signature larger than the input size.
+  auto it = encoder_signatures_.lower_bound(token_ids_vec.size());
+  if (it == encoder_signatures_.end()) {
+    int max_available_length = encoder_signatures_.rbegin()->first;
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Max input length of the text encoder is ", max_available_length,
+        ". Input length was ", token_ids_vec.size()));
+  }
+  size_t signature_index = it->second;
+
+  // Lazily create input buffers.
+  if (!input_buffers_cache_.contains(signature_index)) {
+    LITERT_ASSIGN_OR_RETURN(
+        auto input_buffers,
+        compiled_model_->CreateInputBuffers(signature_index));
+    input_buffers_cache_[signature_index] = std::move(input_buffers);
+  }
+  auto& input_buffers = input_buffers_cache_[signature_index];
+
+  // Lazily create output buffers.
+  if (!output_buffers_cache_.contains(signature_index)) {
+    LITERT_ASSIGN_OR_RETURN(
+        auto output_buffers,
+        compiled_model_->CreateOutputBuffers(signature_index));
+    output_buffers_cache_[signature_index] = std::move(output_buffers);
+  }
+  auto& output_buffers = output_buffers_cache_[signature_index];
+  LITERT_ASSIGN_OR_RETURN(auto sig,
+                          text_encoder_model->GetSignature(signature_index));
+
+  auto input_names = sig.InputNames();
+
+  size_t embeddings_buffer_index = 0;
+  std::optional<size_t> input_mask_buffer_index;
+  std::optional<size_t> per_layer_embeddings_buffer_index;
+
+  for (size_t i = 0; i < input_names.size(); ++i) {
+    absl::string_view name = input_names[i];
+    if (absl::StrContains(name, kPerLayerEmbeddingsName)) {
+      per_layer_embeddings_buffer_index = i;
+    } else if (absl::StrContains(name, kInputMaskName)) {
+      input_mask_buffer_index = i;
+    } else if (absl::StrContains(name, kEmbeddingsName)) {
+      embeddings_buffer_index = i;
+    }
+  }
+
   ABSL_RETURN_IF_ERROR(embedding_lookup_->LookupPrefill(
       absl::MakeSpan(token_ids_vec.data(), token_ids_vec.size()),
-      &input_buffers_[embeddings_buffer_index_], /*token_offset=*/0));
+      &input_buffers[embeddings_buffer_index], /*token_offset=*/0));
 
   // Compute mask for text encoder. The mask masks out tokens outside of the
   // input sequence length, which can be smaller than the static size of the
   // TFLite graph.
-  if (input_mask_buffer_index_.has_value()) {
-    auto& mask_buffer = input_buffers_[*input_mask_buffer_index_];
+  if (input_mask_buffer_index.has_value()) {
+    auto& mask_buffer = input_buffers[*input_mask_buffer_index];
     LITERT_ASSIGN_OR_RETURN(
         auto mask_lock_and_addr,
         litert::TensorBufferScopedLock::Create(
@@ -244,21 +316,21 @@ EmbeddingLiteRtCompiledModelExecutor::ComputeEmbedding(
 
   ABSL_RETURN_IF_ERROR(embedding_lookup_->CleanupMultiModalEmbeddings());
 
-  if (per_layer_embeddings_buffer_index_.has_value() &&
+  if (per_layer_embeddings_buffer_index.has_value() &&
       per_layer_embedding_lookup_ != nullptr) {
     ABSL_RETURN_IF_ERROR(per_layer_embedding_lookup_->LookupPrefill(
         absl::MakeSpan(token_ids_vec.data(), token_ids_vec.size()),
-        &input_buffers_[*per_layer_embeddings_buffer_index_],
+        &input_buffers[*per_layer_embeddings_buffer_index],
         /*token_offset=*/0));
     ABSL_RETURN_IF_ERROR(
         per_layer_embedding_lookup_->CleanupMultiModalEmbeddings());
   }
 
-  LITERT_RETURN_IF_ERROR(compiled_model_->Run(encoder_signature_index_,
-                                              input_buffers_, output_buffers_));
+  LITERT_RETURN_IF_ERROR(
+      compiled_model_->Run(signature_index, input_buffers, output_buffers));
 
   LITERT_ASSIGN_OR_RETURN(auto output_vector,
-                          CopyFromTensorBuffer<float>(output_buffers_[0]));
+                          CopyFromTensorBuffer<float>(output_buffers[0]));
   return output_vector;
 }
 
@@ -301,26 +373,17 @@ EmbeddingLiteRtCompiledModelExecutor::EmbeddingLiteRtCompiledModelExecutor(
     std::unique_ptr<EmbeddingLookupManager> embedding_lookup,
     std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup,
     std::unique_ptr<litert::CompiledModel> compiled_model,
-    std::vector<litert::TensorBuffer> input_buffers,
-    std::vector<litert::TensorBuffer> output_buffers,
     std::vector<int> expected_input_dimension, int embedding_dimension,
-    size_t encoder_signature_index, size_t embeddings_buffer_index,
-    std::optional<size_t> input_mask_buffer_index,
-    std::optional<size_t> per_layer_embeddings_buffer_index)
+    std::map<int, size_t> encoder_signatures)
     : executor_settings_(std::move(executor_settings)),
       env_(env),
       resources_(std::move(resources)),
       embedding_lookup_(std::move(embedding_lookup)),
       per_layer_embedding_lookup_(std::move(per_layer_embedding_lookup)),
       compiled_model_(std::move(compiled_model)),
-      input_buffers_(std::move(input_buffers)),
-      output_buffers_(std::move(output_buffers)),
       expected_input_dimension_(std::move(expected_input_dimension)),
       embedding_dimension_(embedding_dimension),
-      encoder_signature_index_(encoder_signature_index),
-      embeddings_buffer_index_(embeddings_buffer_index),
-      input_mask_buffer_index_(input_mask_buffer_index),
-      per_layer_embeddings_buffer_index_(per_layer_embeddings_buffer_index),
-      backend_name_(GetBackendString(executor_settings_.GetBackend())) {}
+      backend_name_(GetBackendString(executor_settings_.GetBackend())),
+      encoder_signatures_(std::move(encoder_signatures)) {}
 
 }  // namespace litert::lm

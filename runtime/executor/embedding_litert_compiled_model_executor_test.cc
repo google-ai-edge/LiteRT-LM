@@ -14,6 +14,7 @@
 
 #include "runtime/executor/embedding_litert_compiled_model_executor.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -26,7 +27,9 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "flatbuffers/buffer.h"  // from @flatbuffers
 #include "flatbuffers/flatbuffer_builder.h"  // from @flatbuffers
 #include "litert/c/litert_tensor_buffer_types.h"  // from @litert
 #include "litert/cc/litert_buffer_ref.h"  // from @litert
@@ -178,6 +181,83 @@ std::vector<uint8_t> BuildDummyEncoderModelBuffer(
   auto model = tflite::CreateModel(
       builder, /*version=*/3, opcodes_vec, subgraphs_vec,
       builder.CreateString("dummy_encoder_model"), buffers_vec,
+      /*metadata_buffer=*/0, /*metadata=*/0, sig_defs_vec);
+  tflite::FinishModelBuffer(builder, model);
+
+  return std::vector<uint8_t>(builder.GetBufferPointer(),
+                              builder.GetBufferPointer() + builder.GetSize());
+}
+
+std::vector<uint8_t> BuildDummyMultiSignatureEncoderModelBuffer(
+    const std::vector<std::string>& signature_keys,
+    const std::vector<int32_t>& seq_lengths, int embedding_dim) {
+  flatbuffers::FlatBufferBuilder builder;
+
+  auto opcode =
+      tflite::CreateOperatorCode(builder, tflite::BuiltinOperator_ADD);
+  auto opcodes_vec = builder.CreateVector({opcode});
+
+  std::vector<flatbuffers::Offset<tflite::SubGraph>> subgraphs;
+  std::vector<flatbuffers::Offset<tflite::SignatureDef>> sig_defs;
+
+  for (size_t i = 0; i < signature_keys.size(); ++i) {
+    int32_t seq_len = seq_lengths[i];
+    std::vector<int32_t> embeddings_dims = {1, seq_len, embedding_dim};
+    std::vector<int32_t> mask_dims = {1, seq_len, 1};
+    std::vector<int32_t> output_dims = {1, seq_len, embedding_dim};
+
+    auto embeddings_tensor = tflite::CreateTensor(
+        builder, builder.CreateVector(embeddings_dims),
+        tflite::TensorType_FLOAT32, /*buffer=*/0,
+        builder.CreateString(absl::StrCat("embeddings_", i)));
+    auto mask_tensor = tflite::CreateTensor(
+        builder, builder.CreateVector(mask_dims), tflite::TensorType_FLOAT32,
+        /*buffer=*/0, builder.CreateString(absl::StrCat("input_mask_", i)));
+    auto output_tensor = tflite::CreateTensor(
+        builder, builder.CreateVector(output_dims), tflite::TensorType_FLOAT32,
+        /*buffer=*/0, builder.CreateString(absl::StrCat("output_tensor_", i)));
+    auto tensors_vec =
+        builder.CreateVector({embeddings_tensor, mask_tensor, output_tensor});
+
+    std::vector<int32_t> op_inputs = {0, 1};
+    std::vector<int32_t> op_outputs = {2};
+    auto op = tflite::CreateOperator(builder, /*opcode_index=*/0,
+                                     builder.CreateVector(op_inputs),
+                                     builder.CreateVector(op_outputs));
+    auto ops_vec = builder.CreateVector({op});
+
+    std::vector<int32_t> sg_inputs = {0, 1};
+    std::vector<int32_t> sg_outputs = {2};
+    auto subgraph = tflite::CreateSubGraph(
+        builder, tensors_vec, builder.CreateVector(sg_inputs),
+        builder.CreateVector(sg_outputs), ops_vec,
+        builder.CreateString(absl::StrCat("subgraph_", i)));
+    subgraphs.push_back(subgraph);
+
+    auto embeddings_map =
+        tflite::CreateTensorMap(builder, builder.CreateString("embeddings"), 0);
+    auto mask_map =
+        tflite::CreateTensorMap(builder, builder.CreateString("input_mask"), 1);
+    auto output_map =
+        tflite::CreateTensorMap(builder, builder.CreateString("output"), 2);
+    auto inputs_map_vec = builder.CreateVector({embeddings_map, mask_map});
+    auto outputs_map_vec = builder.CreateVector({output_map});
+
+    auto sig_def = tflite::CreateSignatureDef(
+        builder, inputs_map_vec, outputs_map_vec,
+        builder.CreateString(signature_keys[i]), /*subgraph_index=*/i);
+    sig_defs.push_back(sig_def);
+  }
+
+  auto subgraphs_vec = builder.CreateVector(subgraphs);
+  auto sig_defs_vec = builder.CreateVector(sig_defs);
+
+  auto buffer = tflite::CreateBuffer(builder);
+  auto buffers_vec = builder.CreateVector({buffer});
+
+  auto model = tflite::CreateModel(
+      builder, /*version=*/3, opcodes_vec, subgraphs_vec,
+      builder.CreateString("dummy_multi_sig_encoder_model"), buffers_vec,
       /*metadata_buffer=*/0, /*metadata=*/0, sig_defs_vec);
   tflite::FinishModelBuffer(builder, model);
 
@@ -574,5 +654,97 @@ TEST(EmbeddingLiteRtCompiledModelExecutorTest,
                        embedding_executor->ComputeEmbedding(inputs));
   EXPECT_EQ(embedding.size(), 8);
 }
+
+TEST(EmbeddingLiteRtCompiledModelExecutorTest,
+     ComputeEmbedding_MultipleSignatures_Success) {
+  auto embedder_buf =
+      BuildDummyTfLiteModelBuffer("embedder", {1}, tflite::TensorType_FLOAT32,
+                                  {1, 1, 8}, tflite::TensorType_FLOAT32);
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto embedder_model, Model::CreateFromBuffer(litert::BufferRef<uint8_t>(
+                               embedder_buf.data(), embedder_buf.size())));
+
+  // Model with two signatures: encoder_12 and encoder_24.
+  auto encoder_buf = BuildDummyMultiSignatureEncoderModelBuffer(
+      {"encoder_12", "encoder_24"}, {12, 24}, 8);
+
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto encoder_model, Model::CreateFromBuffer(litert::BufferRef<uint8_t>(
+                              encoder_buf.data(), encoder_buf.size())));
+
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create("dummy_model_path"));
+  ASSERT_OK_AND_ASSIGN(EmbeddingExecutorSettings settings,
+                       EmbeddingExecutorSettings::CreateDefault(
+                           model_assets, /*backend=*/Backend::CPU));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+
+  auto fake_resources = std::make_unique<FakeEmbeddingModelResources>(
+      &embedder_model, &encoder_model);
+  ASSERT_OK_AND_ASSIGN(auto embedding_executor,
+                       EmbeddingLiteRtCompiledModelExecutor::Create(
+                           settings, env, std::move(fake_resources)));
+
+  // Case 1: Input size 8 -> should choose encoder_12.
+  {
+    alignas(LITERT_HOST_MEMORY_BUFFER_ALIGNMENT) int32_t token_data[8];
+    std::fill_n(token_data, 8, 42);
+    LITERT_ASSERT_OK_AND_ASSIGN(
+        auto token_ids_buffer,
+        TensorBuffer::CreateFromHostMemory(
+            env, RankedTensorType(ElementType::Int32, Layout(Dimensions({8}))),
+            token_data, sizeof(token_data)));
+
+    ExecutorInputs inputs(ExecutorTextData(std::move(token_ids_buffer)),
+                          std::nullopt, std::nullopt);
+
+    ASSERT_OK_AND_ASSIGN(auto embedding,
+                         embedding_executor->ComputeEmbedding(inputs));
+    EXPECT_EQ(embedding.size(), 12 * 8);
+  }
+
+  // Case 2: Input size 16 -> should choose encoder_24.
+  {
+    alignas(LITERT_HOST_MEMORY_BUFFER_ALIGNMENT) int32_t token_data[16];
+    std::fill_n(token_data, 16, 42);
+    LITERT_ASSERT_OK_AND_ASSIGN(
+        auto token_ids_buffer,
+        TensorBuffer::CreateFromHostMemory(
+            env, RankedTensorType(ElementType::Int32, Layout(Dimensions({16}))),
+            token_data, sizeof(token_data)));
+
+    ExecutorInputs inputs(ExecutorTextData(std::move(token_ids_buffer)),
+                          std::nullopt, std::nullopt);
+
+    ASSERT_OK_AND_ASSIGN(auto embedding,
+                         embedding_executor->ComputeEmbedding(inputs));
+    EXPECT_EQ(embedding.size(), 24 * 8);
+  }
+
+  // Case 3: Input size 32 -> should fail because it exceeds max signature
+  // length (24).
+  {
+    alignas(LITERT_HOST_MEMORY_BUFFER_ALIGNMENT) int32_t token_data[32];
+    std::fill_n(token_data, 32, 42);
+    LITERT_ASSERT_OK_AND_ASSIGN(
+        auto token_ids_buffer,
+        TensorBuffer::CreateFromHostMemory(
+            env, RankedTensorType(ElementType::Int32, Layout(Dimensions({32}))),
+            token_data, sizeof(token_data)));
+
+    ExecutorInputs inputs(ExecutorTextData(std::move(token_ids_buffer)),
+                          std::nullopt, std::nullopt);
+
+    auto embedding = embedding_executor->ComputeEmbedding(inputs);
+    EXPECT_FALSE(embedding.ok());
+    EXPECT_THAT(
+        embedding.status(),
+        StatusIs(absl::StatusCode::kInvalidArgument,
+                 HasSubstr("Max input length of the text encoder is 24. "
+                           "Input length was 32")));
+  }
+}
+
 }  // namespace
 }  // namespace litert::lm
