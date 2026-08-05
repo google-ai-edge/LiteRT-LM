@@ -180,7 +180,8 @@ absl::StatusOr<std::unique_ptr<AsrSession>> AsrEngine::CreateSession(
       raw_speech_recognizer, tokenizer_.get());
 
   TokenizerDetokenizer* raw_detokenizer = detokenizer.get();
-  auto text_merger = std::make_unique<LevenshteinTextMerger>(raw_detokenizer);
+  auto text_merger = std::make_unique<LevenshteinTextMerger>(
+      raw_detokenizer, config_.overlap_ratio);
 
   AsrSession::Components components;
   components.audio_source = std::move(audio_source);

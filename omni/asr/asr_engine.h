@@ -56,6 +56,7 @@ struct AsrEngineConfig {
   DecoderType decoder_type = DecoderType::kTdt;
   Backend backend = Backend::kCpu;
   int num_threads = 4;
+  float overlap_ratio = 0.0f;
 
   bool has_log_mel_config = false;
   LogMelSpectrogramProcessor::LogMelSpectrogramConfig log_mel_config;

@@ -32,7 +32,8 @@ namespace litert::omni::asr {
 class LevenshteinTextMerger : public TextMerger {
  public:
   explicit LevenshteinTextMerger(
-      Stage<std::vector<Detokenizer::Word>>* absl_nonnull detokenizer)
+      Stage<std::vector<Detokenizer::Word>>* absl_nonnull detokenizer,
+      float overlap_ratio = 0.5f)
       : TextMerger(detokenizer) {}
 
   // Resets internal cached state for a new audio stream.
