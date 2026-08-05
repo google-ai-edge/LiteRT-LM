@@ -73,7 +73,6 @@ cc_library(
     name = "engine_factory",
     hdrs = ["engine_factory.h"],
     deps = [
-        ":cpu_affinity_utils",
         ":engine_interface",
         ":engine_settings",
         "@com_google_absl//absl/functional:any_invocable",
@@ -82,6 +81,8 @@ cc_library(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
+        "//runtime/engine/performance:cpu_performance_utils",
+        "//runtime/engine/performance:pixel_cpu_affinity_utils",
         "//runtime/executor:executor_settings_base",
     ],
 )
@@ -93,19 +94,6 @@ cc_library(
         "//conditions:default": ["//runtime/core:engine_advanced_impl"],
     }),
     alwayslink = 1,
-)
-
-cc_library(
-    name = "cpu_affinity_utils",
-    srcs = ["cpu_affinity_utils.cc"],
-    hdrs = ["cpu_affinity_utils.h"],
-    deps = [
-        "@com_google_absl//absl/log:absl_log",
-        "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/strings",
-        "//runtime/util:litert_status_util",
-    ],
 )
 
 cc_library(
