@@ -38,7 +38,6 @@ class LogMelSpectrogramProcessor : public AudioPreprocessor {
   };
 
   // Represents the configuration for Log-Mel Spectrogram preprocessing.
-  // Mirrors LogMelSpectroConfig from litert/samples/asr/AndroidApp.
   struct LogMelSpectrogramConfig {
     int n_fft = 512;
     int n_mels = 80;

@@ -19,6 +19,7 @@
     "inputMilliseconds": 5000,
     "logMelSpectro": {
       "nFFT": 512,
+      "nFrames": 500,
       "transpose": true,
       "preemphasis": 0.97
     }

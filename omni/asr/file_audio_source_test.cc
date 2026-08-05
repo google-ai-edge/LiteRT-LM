@@ -125,6 +125,51 @@ TEST_F(FileAudioSourceTest, Create_HandlesOverlap) {
   EXPECT_NEAR(chunks[2][1599], 3199.0f / 32768.0f, 1e-4f);
 }
 
+TEST_F(FileAudioSourceTest, Create_HandlesNonDivisibleOverlap) {
+  int sample_rate = 16000;
+  // 4000 samples total (samples 0..3999)
+  std::vector<int16_t> samples(4000);
+  for (int i = 0; i < 4000; ++i) {
+    samples[i] = static_cast<int16_t>(i);
+  }
+  std::string path = GetTempWavPath("test_non_divisible_overlap.wav");
+  WriteWavFile(path, samples, sample_rate);
+
+  // interval = 100ms (1600 samples), overlap = 40ms (640 samples), step = 960
+  // samples
+  ASSERT_OK_AND_ASSIGN(auto source,
+                       FileAudioSource::Create(
+                           path, /*interval=*/absl::Milliseconds(100),
+                           /*overlap=*/absl::Milliseconds(40), sample_rate, 1));
+  std::vector<std::vector<float>> chunks;
+  while (source->NeedSchedule()) {
+    absl::Status status = source->Schedule();
+    if (absl::IsOutOfRange(status)) {
+      break;
+    }
+    ASSERT_OK(status);
+    ASSERT_OK_AND_ASSIGN(auto chunk, source->GetOutput());
+    chunks.push_back(std::move(chunk));
+  }
+
+  // Chunk 0: samples 0..1599
+  // Chunk 1: samples 960..2559
+  // Chunk 2: samples 1920..3519
+  ASSERT_GE(chunks.size(), 3);
+
+  EXPECT_THAT(chunks[0], SizeIs(1600));
+  EXPECT_NEAR(chunks[0][0], 0.0f / 32768.0f, 1e-4f);
+  EXPECT_NEAR(chunks[0][1599], 1599.0f / 32768.0f, 1e-4f);
+
+  EXPECT_THAT(chunks[1], SizeIs(1600));
+  EXPECT_NEAR(chunks[1][0], 960.0f / 32768.0f, 1e-4f);
+  EXPECT_NEAR(chunks[1][1599], 2559.0f / 32768.0f, 1e-4f);
+
+  EXPECT_THAT(chunks[2], SizeIs(1600));
+  EXPECT_NEAR(chunks[2][0], 1920.0f / 32768.0f, 1e-4f);
+  EXPECT_NEAR(chunks[2][1599], 3519.0f / 32768.0f, 1e-4f);
+}
+
 TEST_F(FileAudioSourceTest, Create_ShortAudio_ReturnsWhatItCan) {
   int sample_rate = 16000;
   std::vector<int16_t> samples(800, 1000);
