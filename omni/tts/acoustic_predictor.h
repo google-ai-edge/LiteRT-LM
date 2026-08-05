@@ -29,7 +29,11 @@ namespace litert::omni::tts {
 // or flow solver.
 // Generic acoustic prediction output payload for acoustic predictor.
 struct AcousticOutput {
+  // RVQ(residual vector quantization) frames of each codebook. Shape
+  // [num_frames, num_codebooks]
   std::vector<std::vector<int>> rvq_frames;
+  // Shape [num_frames, hidden_dim]
+  std::vector<float> codec_features;
 };
 
 // Abstract interface for acoustic feature prediction (e.g. Talker LM /
