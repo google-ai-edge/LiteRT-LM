@@ -67,7 +67,8 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
     const LlmExecutorSettings& executor_settings,
     const ActivationDataType& activation_data_type,
     std::optional<ModelSignatures*> signatures,
-    std::optional<std::string> cache_suffix) {
+    std::optional<std::string> cache_suffix,
+    std::optional<proto::LlmModelType> model_type) {
   LITERT_ASSIGN_OR_RETURN(auto compilation_options, Options::Create());
   std::string cache_path = executor_settings.GetCacheDir();
 
@@ -258,6 +259,11 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
       ABSL_RETURN_IF_ERROR(
           SetCpuOptions(cpu_compilation_options, num_threads));
       cpu_compilation_options.SetEnableYNNPack(cpu_config.enable_ynnpack);
+      if (cpu_config.enable_ynnpack && model_type.has_value() &&
+          model_type->has_tiny_gemma()) {
+        LITERT_RETURN_IF_ERROR(cpu_compilation_options.SetYNNPackAllowedOps(
+            "odml.scaled_dot_product_attention,odml.sdpa_transposed"));
+      }
       auto weight_cache_file = executor_settings.GetWeightCacheFile(
           absl::StrCat(cache_suffix.value_or(""),
                        ExecutorSettingsBase::kXnnpackCacheSuffix),

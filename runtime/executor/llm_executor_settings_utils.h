@@ -23,6 +23,7 @@
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/executor/llm_executor_settings.h"
+#include "runtime/proto/llm_model_type.pb.h"
 
 namespace litert::lm {
 
@@ -37,7 +38,8 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
     const LlmExecutorSettings& executor_settings,
     const ActivationDataType& activation_data_type,
     std::optional<ModelSignatures*> signatures,
-    std::optional<std::string> cache_suffix = std::nullopt);
+    std::optional<std::string> cache_suffix = std::nullopt,
+    std::optional<proto::LlmModelType> model_type = std::nullopt);
 
 }  // namespace litert::lm
 

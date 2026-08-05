@@ -1780,6 +1780,12 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
     executor_metadata = *executor_metadata_or;
   }
 
+  std::optional<proto::LlmModelType> model_type = std::nullopt;
+  auto llm_metadata_or = resources.GetLlmMetadata();
+  if (llm_metadata_or.ok() && *llm_metadata_or != nullptr) {
+    model_type = (*llm_metadata_or)->llm_model_type();
+  }
+
   absl::string_view prefill_signature_key = "";
   for (int i = 0; i < litert_model->GetNumSignatures(); ++i) {
     LITERT_ASSIGN_OR_RETURN(auto sig, litert_model->GetSignature(i));
@@ -1800,7 +1806,7 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
   LITERT_ASSIGN_OR_RETURN(
       auto compilation_options,
       CreateCompilationOptions(executor_settings, activation_data_type,
-                               &signatures));
+                               &signatures, std::nullopt, model_type));
 
   auto section_offset =
       resources.GetWeightsSectionOffset(ModelType::kTfLitePrefillDecode);
@@ -2135,10 +2141,18 @@ LlmLiteRtCompiledModelExecutorDynamic::Create(
   if (executor_metadata_or.ok()) {
     executor_metadata = *executor_metadata_or;
   }
+
+  std::optional<proto::LlmModelType> model_type = std::nullopt;
+  auto llm_metadata_or = resources.GetLlmMetadata();
+  if (llm_metadata_or.ok() && *llm_metadata_or != nullptr) {
+    model_type = (*llm_metadata_or)->llm_model_type();
+  }
+
   ABSL_ASSIGN_OR_RETURN(
       auto compilation_options,
       CreateCompilationOptions(executor_settings, ActivationDataType::FLOAT32,
-                               /*signatures=*/std::nullopt));
+                               /*signatures=*/std::nullopt, std::nullopt,
+                               model_type));
   std::string weight_cache_path = executor_settings.GetCacheDir();
 
   const Backend backend = executor_settings.GetBackend();
