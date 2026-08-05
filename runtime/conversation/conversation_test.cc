@@ -1013,7 +1013,8 @@ TEST_P(ConversationTest,
     ],
     "channels": {
       "thought": ""
-    }
+    },
+    "reasoning_content": ""
   })");
   EXPECT_EQ(response, assistant_message);
 }
@@ -1559,7 +1560,8 @@ TEST_P(ConversationTest, SendSingleMessageWithChannel) {
     ],
     "channels": {
       "thought": "hmm"
-    }
+    },
+    "reasoning_content": "hmm"
   })");
   EXPECT_THAT(response, testing::Eq(assistant_message));
   EXPECT_THAT(conversation->GetHistory(),
@@ -1728,7 +1730,8 @@ TEST_P(ConversationTest, SendSingleMessageWithChannelQwenThink) {
     ],
     "channels": {
       "thought": "hmm"
-    }
+    },
+    "reasoning_content": "hmm"
   })");
   EXPECT_THAT(response, testing::Eq(assistant_message));
   EXPECT_THAT(conversation->GetHistory(),
@@ -2170,7 +2173,9 @@ TEST_P(ConversationTest, SendMessageAsyncWithChannelContent) {
   std::vector<Message> expected_messages = {
       Message{{"role", "assistant"},
               {"content", {{{"type", "text"}, {"text", "Hello "}}}}},
-      Message{{"role", "assistant"}, {"channels", {{"thought", "hmm"}}}},
+      Message{{"role", "assistant"},
+              {"channels", {{"thought", "hmm"}}},
+              {"reasoning_content", "hmm"}},
       Message{{"role", "assistant"},
               {"content", {{{"type", "text"}, {"text", " World!"}}}}},
   };
@@ -2191,7 +2196,8 @@ TEST_P(ConversationTest, SendMessageAsyncWithChannelContent) {
     ],
     "channels": {
       "thought": "hmm"
-    }
+    },
+    "reasoning_content": "hmm"
   })");
 
   EXPECT_THAT(conversation->GetHistory(),

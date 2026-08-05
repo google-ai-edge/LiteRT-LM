@@ -75,7 +75,8 @@ void SendMessage(
 // and bypasses `model_data_processor.ToMessage` formatting.
 void SendMessageToChannel(
     absl::AnyInvocable<void(absl::StatusOr<Message>)>& user_callback,
-    absl::string_view text, absl::string_view channel_name) {
+    absl::string_view text, absl::string_view channel_name,
+    const std::vector<Channel>& channels) {
   if (text.empty()) {
     return;
   }
@@ -83,6 +84,9 @@ void SendMessageToChannel(
   message["role"] = "assistant";
   message["channels"] = nlohmann::ordered_json::object();
   message["channels"][std::string(channel_name)] = std::string(text);
+  if (IsReasoningChannel(channel_name, channels)) {
+    message[std::string(kReasoningContentKey)] = std::string(text);
+  }
   user_callback(std::move(message));
 }
 
@@ -103,7 +107,7 @@ void SendCompleteMessage(
     if (!active_channel_name.empty()) {
       SendMessageToChannel(user_callback,
                            accumulated_response_text.substr(cursor),
-                           active_channel_name);
+                           active_channel_name, channels);
     } else {
       SendMessage(user_callback, accumulated_response_text.substr(cursor),
                   model_data_processor, processor_args);
@@ -136,7 +140,8 @@ void SendCompleteMessage(
     user_callback(complete_message.status());
     return;
   }
-  InsertChannelContentIntoMessage(*extracted_channels, *complete_message);
+  InsertChannelContentIntoMessage(*extracted_channels, *complete_message,
+                                  custom_channels);
   if (complete_message_callback) {
     complete_message_callback(*complete_message);
   }
@@ -157,7 +162,7 @@ std::vector<Channel> GetChannels(const ModelDataProcessor& model_data_processor,
   // Add the custom channels.
   for (const auto& channel : custom_channels) {
     if (!channel.start.empty()) {
-      channels.push_back({channel.channel_name, channel.start, channel.end});
+      channels.push_back(channel);
     }
   }
   return channels;
@@ -210,7 +215,8 @@ void StreamActiveChannel(
     absl::AnyInvocable<void(absl::StatusOr<Message>)>& user_callback,
     absl::string_view accumulated_response_text, size_t search_start,
     size_t& cursor, absl::string_view active_channel_end,
-    const std::string& active_channel_name) {
+    const std::string& active_channel_name,
+    const std::vector<Channel>& channels) {
   // Stream channel content except for potential partial matches of
   // the end delimiter.
   size_t overlap = SuffixPrefixOverlap(
@@ -220,7 +226,7 @@ void StreamActiveChannel(
     SendMessageToChannel(
         user_callback,
         accumulated_response_text.substr(cursor, safe_end - cursor),
-        active_channel_name);
+        active_channel_name, channels);
     cursor = safe_end;
   }
 }
@@ -437,14 +443,14 @@ absl::AnyInvocable<void(absl::StatusOr<Responses>)> CreateInternalCallback(
               SendMessageToChannel(user_callback,
                                    absl::string_view(accumulated_response_text)
                                        .substr(cursor, end_pos - cursor),
-                                   active_channel_name);
+                                   active_channel_name, channels);
             } else {
               if (stream_tool_calls && end_pos > tool_call_stream_cursor) {
                 SendMessageToChannel(user_callback,
                                      accumulated_response_text.substr(
                                          tool_call_stream_cursor,
                                          end_pos - tool_call_stream_cursor),
-                                     tool_call_channel_name);
+                                     tool_call_channel_name, channels);
               }
               // Treat as tool call: include everything up to and including the
               // end delimiter.
@@ -466,7 +472,7 @@ absl::AnyInvocable<void(absl::StatusOr<Responses>)> CreateInternalCallback(
               // any potential partial match of the channel's end delimiter.
               StreamActiveChannel(user_callback, accumulated_response_text,
                                   search_start, cursor, active_channel_end,
-                                  active_channel_name);
+                                  active_channel_name, channels);
             } else if (stream_tool_calls) {
               size_t overlap = SuffixPrefixOverlap(
                   accumulated_response_text.substr(search_start),
@@ -477,7 +483,7 @@ absl::AnyInvocable<void(absl::StatusOr<Responses>)> CreateInternalCallback(
                                      accumulated_response_text.substr(
                                          tool_call_stream_cursor,
                                          safe_end - tool_call_stream_cursor),
-                                     tool_call_channel_name);
+                                     tool_call_channel_name, channels);
                 tool_call_stream_cursor = safe_end;
               }
             }

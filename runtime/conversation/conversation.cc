@@ -191,10 +191,11 @@ absl::StatusOr<ConversationConfig> ConversationConfig::CreateInternal(
     channels = *std::move(overwrite_channels);
   } else if (metadata.has_value()) {
     for (const auto& channel : metadata->channels()) {
-      channels.push_back(
-          litert::lm::Channel{.channel_name = channel.channel_name(),
-                              .start = channel.start(),
-                              .end = channel.end()});
+      channels.push_back(litert::lm::Channel{
+          .channel_name = channel.channel_name(),
+          .start = channel.start(),
+          .end = channel.end(),
+          .is_reasoning_channel = channel.is_reasoning_channel()});
     }
   }
 
