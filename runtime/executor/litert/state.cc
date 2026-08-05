@@ -418,19 +418,32 @@ absl::StatusOr<LitertState::StateBuffers> LitertState::GetStateBuffers(
   }
 
   StateBuffers buffers;
-  const bool skip_inputs =
+  const bool should_skip_inputs =
       allocation_policy_ == AllocationPolicy::kGpuOptimizedInplace;
-  if (!skip_inputs) {
-    for (const auto& [input_name, key_cache_buffer] : *input_bank_key) {
-      LITERT_ASSIGN_OR_RETURN(auto duplicated,
-                              key_cache_buffer.buffer.Duplicate());
-      buffers.input_buffers[input_name] = std::move(duplicated);
+  const bool is_prefill = absl::StartsWith(signature_name, "prefill");
+  for (const auto& [input_name, key_cache_buffer] : *input_bank_key) {
+    const bool is_local_key_cache =
+        key_cache_buffer.type == proto::StateBuffer::TYPE_LOCAL_KEY_CACHE;
+    if (should_skip_inputs && (!is_prefill || !is_local_key_cache)) {
+      // For GPU optimized in place updates, we are required to pass the local
+      // KV cache buffers as inputs too in the prefill stage.
+      continue;
     }
-    for (const auto& [input_name, value_cache_buffer] : *input_bank_value) {
-      LITERT_ASSIGN_OR_RETURN(auto duplicated,
-                              value_cache_buffer.buffer.Duplicate());
-      buffers.input_buffers[input_name] = std::move(duplicated);
+    LITERT_ASSIGN_OR_RETURN(auto duplicated,
+                            key_cache_buffer.buffer.Duplicate());
+    buffers.input_buffers[input_name] = std::move(duplicated);
+  }
+  for (const auto& [input_name, value_cache_buffer] : *input_bank_value) {
+    const bool is_local_value_cache =
+        value_cache_buffer.type == proto::StateBuffer::TYPE_LOCAL_VALUE_CACHE;
+    if (should_skip_inputs && (!is_prefill || !is_local_value_cache)) {
+      // For GPU optimized in place updates, we are required to pass the local
+      // KV cache buffers as inputs too in the prefill stage.
+      continue;
     }
+    LITERT_ASSIGN_OR_RETURN(auto duplicated,
+                            value_cache_buffer.buffer.Duplicate());
+    buffers.input_buffers[input_name] = std::move(duplicated);
   }
 
   for (const auto& [input_name, key_cache_buffer] : *output_bank_key) {
