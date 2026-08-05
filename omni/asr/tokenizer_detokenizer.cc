@@ -25,9 +25,12 @@
 
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/cleanup/cleanup.h"  // from @com_google_absl
+#include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/str_join.h"  // from @com_google_absl
 #include "absl/strings/str_split.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "support/tokenizer/tokenizer.h"  // from @litert
@@ -36,6 +39,20 @@
 #include "omni/base/stage.h"
 
 namespace litert::omni::asr {
+namespace {
+
+// Formatters for absl::StrJoin.
+void StrAppendToken(std::string* out,
+                    const SpeechRecognizer::DecodedToken& token) {
+  absl::StrAppend(out, token.token_id, "(", token.timestamp_ms.value_or(-1),
+                  ")");
+}
+
+void StrAppendWord(std::string* out, const Detokenizer::Word& word) {
+  absl::StrAppend(out, word.text, "(", word.timestamp_ms.value_or(-1), ")");
+}
+
+}  // namespace
 
 TokenizerDetokenizer::TokenizerDetokenizer(
     Stage<std::vector<SpeechRecognizer::DecodedToken>>* absl_nonnull
@@ -62,6 +79,9 @@ absl::StatusOr<std::vector<Detokenizer::Word>> TokenizerDetokenizer::Detokenize(
     return std::vector<Detokenizer::Word>();
   }
 
+  ABSL_VLOG(2) << "Tokens(size=" << tokens.size()
+               << "): " << absl::StrJoin(tokens, ", ", StrAppendToken);
+
   std::vector<int> token_ids;
   token_ids.reserve(tokens.size());
   for (const auto& tok : tokens) {
@@ -71,6 +91,7 @@ absl::StatusOr<std::vector<Detokenizer::Word>> TokenizerDetokenizer::Detokenize(
   ABSL_ASSIGN_OR_RETURN(
       auto text, tokenizer_->TokenIdsToText(token_ids,
                                             /*skip_special_tokens=*/true));
+  ABSL_VLOG(1) << "Detokenized text: " << text;
   std::vector<absl::string_view> raw_words =
       absl::StrSplit(text, ' ', absl::SkipEmpty());
 
@@ -114,6 +135,9 @@ absl::StatusOr<std::vector<Detokenizer::Word>> TokenizerDetokenizer::Detokenize(
     words.push_back(Detokenizer::Word{.text = std::string(raw_words[i]),
                                       .timestamp_ms = timestamp_ms});
   }
+
+  ABSL_VLOG(2) << "Words(size=" << words.size()
+               << "): " << absl::StrJoin(words, ", ", StrAppendWord);
 
   return words;
 }

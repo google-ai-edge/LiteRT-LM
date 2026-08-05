@@ -118,7 +118,7 @@ LogMelSpectrogramProcessor::Create(
   int padded_n_fft = GetSmallestPowerOfTwoGreaterOrEqualTo(config.n_fft);
   litert::support::AudioPreprocessorConfig preprocessor_config =
       litert::support::AudioPreprocessorConfig::Create(
-          sample_rate_hz, /*num_channels=*/1, /*frame_length=*/padded_n_fft,
+          sample_rate_hz, /*num_channels=*/1, /*frame_length=*/config.n_fft,
           /*hop_length=*/config.hop_length, /*fft_length=*/padded_n_fft,
           /*input_scale=*/1.0f,
           /*pre_emphasis_factor=*/0.0f, /*num_mel_bins=*/config.n_mels,

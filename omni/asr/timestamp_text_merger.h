@@ -54,6 +54,7 @@ class TimestampTextMerger : public TextMerger {
   absl::Status ScheduleInternal() override;
 
   absl::Status Execute();
+  void LogAndPushOutput(MergeResult output);
 
   const float overlap_ratio_;
   const int search_window_;

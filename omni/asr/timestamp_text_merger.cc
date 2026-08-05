@@ -15,7 +15,6 @@
 #include "omni/asr/timestamp_text_merger.h"
 
 #include <algorithm>
-#include <cctype>
 #include <cmath>
 #include <cstddef>
 #include <string>
@@ -23,8 +22,8 @@
 #include <vector>
 
 #include "absl/base/nullability.h"  // from @com_google_absl
+#include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
-#include "absl/strings/ascii.h"  // from @com_google_absl
 #include "absl/strings/str_join.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
@@ -125,7 +124,7 @@ absl::Status TimestampTextMerger::ScheduleInternal() {
 absl::Status TimestampTextMerger::Execute() {
   LITERT_ASSIGN_OR_RETURN(auto curr_chunk_words, detokenizer_.GetOutput());
   if (curr_chunk_words.empty()) {
-    PushOutput(
+    LogAndPushOutput(
         {"", prev_words_.empty() ? "" : absl::StrJoin(prev_words_, " ")});
     return absl::OkStatus();
   }
@@ -141,14 +140,14 @@ absl::Status TimestampTextMerger::Execute() {
   }
 
   if (overlap_ratio_ == 0.0f) {
-    PushOutput({absl::StrJoin(curr_words, " "), ""});
+    LogAndPushOutput({absl::StrJoin(curr_words, " "), ""});
     return absl::OkStatus();
   }
 
   if (prev_words_.empty()) {
     prev_words_ = curr_words;
     prev_timestamps_ = curr_timestamps;
-    PushOutput({"", absl::StrJoin(prev_words_, " ")});
+    LogAndPushOutput({"", absl::StrJoin(prev_words_, " ")});
     return absl::OkStatus();
   }
 
@@ -225,8 +224,8 @@ absl::Status TimestampTextMerger::Execute() {
     }
   }
 
-  PushOutput({absl::StrJoin(last_confirmed_words_, " "),
-              absl::StrJoin(prev_words_, " ")});
+  LogAndPushOutput({absl::StrJoin(last_confirmed_words_, " "),
+                    absl::StrJoin(prev_words_, " ")});
   return absl::OkStatus();
 }
 
@@ -247,11 +246,17 @@ absl::Status TimestampTextMerger::Flush() {
     last_confirmed_words_.clear();
     prev_word_index_of_unconfirmed_ = -1;
     prev_word_index_of_pivot_ = -1;
-    PushOutput(std::move(result));
+    LogAndPushOutput(std::move(result));
   }
 
   SetState(State::kIdle);
   return absl::OkStatus();
+}
+
+void TimestampTextMerger::LogAndPushOutput(MergeResult output) {
+  ABSL_VLOG(1) << "Merged text: confirmed=" << output.confirmed_text;
+  ABSL_VLOG(1) << "Merged text: unconfirmed=" << output.unconfirmed_text;
+  PushOutput(std::move(output));
 }
 
 }  // namespace litert::omni::asr
