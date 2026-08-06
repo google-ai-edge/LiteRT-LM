@@ -14,6 +14,7 @@
 
 # [Google-internal load of `cc_binary`]
 # [Google-internal load of `cc_library`]
+# [Google-internal load of `cc_test`]
 
 package(
     default_visibility = ["//kotlin:__subpackages__"],
@@ -57,6 +58,7 @@ cc_binary(
         "//runtime/proto:sampler_params_cc_proto",
         "//runtime/util:file_util",
         "//runtime/util:litert_lm_loader",
+        "//runtime/util:litert_util",
         "//runtime/util:logging",
         "//runtime/util:scoped_file",
         "//schema/capabilities:capabilities_c",
@@ -68,6 +70,76 @@ cc_binary(
             "@rules_java//toolchains:jni"
         ],
     }) + [
+        "@litert//litert/cc:litert_environment",
+        "//runtime/components:model_resources_litert_lm",
+        "//runtime/core:embedding_engine_impl",  # buildcleaner: keep
         "//runtime/core:engine_impl",  # buildcleaner: keep
+        "//runtime/engine:embedding_engine",
+        "//runtime/engine:embedding_engine_settings",
     ],
+)
+
+cc_test(
+    name = "litertlm_test",
+    srcs = [
+        "litertlm.cc",
+        "litertlm_test.cc",
+    ],
+    copts = select({
+        "@platforms//cpu:x86_64": ["-mavx2"],
+        "//conditions:default": [],
+    }),
+    deps = [
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/base:log_severity",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/functional:any_invocable",
+        "@com_google_absl//absl/log:absl_log",
+        "@com_google_absl//absl/log:globals",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/time",
+        "@nlohmann_json//:json",
+        "@litert//litert/c/internal:litert_logging",
+        "@litert//litert/cc:litert_environment",
+        "@litert//litert/cc/internal:scoped_file",
+        "//runtime/components:model_resources",
+        "//runtime/components:model_resources_litert_lm",
+        "//runtime/components:prompt_template",
+        "//runtime/components/logits_processor:no_repeat_ngram_config",
+        "//runtime/components/logits_processor:repetition_penalty_config",
+        "//runtime/components/logits_processor:suppress_tokens_config",
+        "//runtime/components/logits_processor/constrained_decoding:llg_constraint_config",
+        "//runtime/conversation",
+        "//runtime/conversation:io_types",
+        "//runtime/conversation:thinking_config",
+        "//runtime/conversation/model_data_processor:config_registry",
+        "//runtime/conversation/model_data_processor:gemma4_data_processor_config",
+        "//runtime/core:embedding_engine_impl",
+        "//runtime/core:engine_impl",
+        "//runtime/engine:embedding_engine",
+        "//runtime/engine:embedding_engine_settings",
+        "//runtime/engine:engine_factory",
+        "//runtime/engine:engine_interface",
+        "//runtime/engine:engine_settings",
+        "//runtime/engine:io_types",
+        "//runtime/executor:executor_settings_base",
+        "//runtime/executor:llm_executor_settings",
+        "//runtime/proto:sampler_params_cc_proto",
+        "//runtime/util:file_util",
+        "//runtime/util:litert_lm_loader",
+        "//runtime/util:litert_util",
+        "//runtime/util:logging",
+        "//runtime/util:scoped_file",
+        "//schema/capabilities:capabilities_c",
+        "//schema/core:litertlm_header_schema",
+        "@litert//tflite:minimal_logging",
+    ] + select({
+        "@platforms//os:android": [],
+        "//conditions:default": [
+            "//third_party/java/jdk:jni",
+        ],
+    }),
 )
