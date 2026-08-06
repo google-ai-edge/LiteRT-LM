@@ -810,6 +810,45 @@ void litert_lm_session_cancel_process(LiteRtLmSession* session) {
   }
 }
 
+int litert_lm_session_save_checkpoint(LiteRtLmSession* session,
+                                      const char* label) {
+  if (!session || !session->session || !label) {
+    return -1;
+  }
+  auto status = session->session->SaveCheckpoint(label);
+  if (!status.ok()) {
+    ABSL_LOG(ERROR) << "Failed to save checkpoint " << label << ": " << status;
+    return -1;
+  }
+  return 0;
+}
+
+int litert_lm_session_rewind_to_checkpoint(LiteRtLmSession* session,
+                                           const char* label) {
+  if (!session || !session->session || !label) {
+    return -1;
+  }
+  auto status = session->session->RewindToCheckpoint(label);
+  if (!status.ok()) {
+    ABSL_LOG(ERROR) << "Failed to rewind to checkpoint " << label << ": "
+                    << status;
+    return -1;
+  }
+  return 0;
+}
+
+int litert_lm_session_rewind_to_step(LiteRtLmSession* session, int step) {
+  if (!session || !session->session) {
+    return -1;
+  }
+  auto status = session->session->RewindToStep(step);
+  if (!status.ok()) {
+    ABSL_LOG(ERROR) << "Failed to rewind to step " << step << ": " << status;
+    return -1;
+  }
+  return 0;
+}
+
 LiteRtLmResponses* litert_lm_session_run_text_scoring(
     LiteRtLmSession* session, const char** target_text, size_t num_targets,
     bool store_token_lengths) {

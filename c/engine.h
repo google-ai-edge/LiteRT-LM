@@ -796,6 +796,32 @@ void litert_lm_session_delete(LiteRtLmSession* session);
 LITERT_LM_C_API_EXPORT
 void litert_lm_session_cancel_process(LiteRtLmSession* session);
 
+// Saves the current state of the session to a checkpoint with the given label.
+//
+// @param session The session to save checkpoint for.
+// @param label Label for the checkpoint.
+// @return 0 on success, non-zero on failure.
+LITERT_LM_C_API_EXPORT
+int litert_lm_session_save_checkpoint(LiteRtLmSession* session,
+                                      const char* label);
+
+// Rewinds the session to the given checkpoint label.
+//
+// @param session The session to rewind.
+// @param label Label of the checkpoint to rewind to.
+// @return 0 on success, non-zero on failure.
+LITERT_LM_C_API_EXPORT
+int litert_lm_session_rewind_to_checkpoint(LiteRtLmSession* session,
+                                           const char* label);
+
+// Rewinds the session to a specific step number.
+//
+// @param session The session to rewind.
+// @param step The step number to rewind to.
+// @return 0 on success, non-zero on failure.
+LITERT_LM_C_API_EXPORT
+int litert_lm_session_rewind_to_step(LiteRtLmSession* session, int step);
+
 // Adds the input prompt/query to the model for starting the prefilling
 // process. This is a blocking call and the function will return when the
 // prefill process is done.
