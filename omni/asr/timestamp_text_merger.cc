@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -131,8 +132,15 @@ absl::Status TimestampTextMerger::Execute() {
 
   std::vector<std::string> curr_words;
   std::vector<int> curr_timestamps;
+  std::optional<int> max_chunk_timestamp_ms;
   curr_words.reserve(curr_chunk_words.size());
   for (const auto& word : curr_chunk_words) {
+    if (word.IsEndOfChunk()) {
+      if (word.timestamp_ms.has_value()) {
+        max_chunk_timestamp_ms = word.timestamp_ms.value();
+      }
+      continue;
+    }
     curr_words.push_back(word.text);
     if (word.timestamp_ms.has_value()) {
       curr_timestamps.push_back(word.timestamp_ms.value());
@@ -215,7 +223,9 @@ absl::Status TimestampTextMerger::Execute() {
   prev_words_ = unconfirmed_merged;
   prev_timestamps_ = curr_timestamps;
   if (!prev_timestamps_.empty() && overlap_ratio_ > 0.0f) {
-    int max_ts = prev_timestamps_.back();
+    int max_ts = max_chunk_timestamp_ms.has_value()
+                     ? max_chunk_timestamp_ms.value()
+                     : prev_timestamps_.back();
     int timestamp_step = static_cast<int>(max_ts * (1.0f - overlap_ratio_));
     if (timestamp_step > 0) {
       for (int& ts : prev_timestamps_) {

@@ -209,5 +209,44 @@ TEST(TokenizerDetokenizerTest, ResetClearsOutputs) {
   EXPECT_FALSE(detokenizer.HasOutput());
 }
 
+TEST(TokenizerDetokenizerTest,
+     ProcessTokensWithEndOfChunkTokenAppendsEmptyWordWithTimestamp) {
+  DummySpeechRecognizer dummy_decoder;
+  FakeTokenizer fake_tokenizer;
+  fake_tokenizer.token_ids_to_text_fn_ = [](const std::vector<int>& ids) {
+    if (ids == std::vector<int>{101, 102}) {
+      return "hello world";
+    }
+    return "";
+  };
+
+  TokenizerDetokenizer detokenizer(&dummy_decoder, &fake_tokenizer);
+  dummy_decoder.PushTokens({
+      SpeechRecognizer::DecodedToken{.token_id = 101, .timestamp_ms = 100},
+      SpeechRecognizer::DecodedToken{.token_id = 102, .timestamp_ms = 200},
+      SpeechRecognizer::DecodedToken{
+          .token_id = SpeechRecognizer::DecodedToken::kEndOfChunkTokenId,
+          .timestamp_ms = 5000},
+  });
+
+  ASSERT_OK(detokenizer.Schedule());
+  auto words_or = detokenizer.GetOutput();
+  ASSERT_OK(words_or);
+  auto words = std::move(*words_or);
+
+  ASSERT_EQ(words.size(), 3);
+  EXPECT_EQ(words[0].text, "hello");
+  EXPECT_EQ(words[0].timestamp_ms, 100);
+  EXPECT_FALSE(words[0].IsEndOfChunk());
+
+  EXPECT_EQ(words[1].text, "world");
+  EXPECT_EQ(words[1].timestamp_ms, 200);
+  EXPECT_FALSE(words[1].IsEndOfChunk());
+
+  EXPECT_EQ(words[2].text, "");
+  EXPECT_EQ(words[2].timestamp_ms, 5000);
+  EXPECT_TRUE(words[2].IsEndOfChunk());
+}
+
 }  // namespace
 }  // namespace litert::omni::asr

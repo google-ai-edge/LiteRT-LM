@@ -76,6 +76,10 @@ absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> CtcDecoder::Decode(
     previous_token_id = token_id;
   }
 
+  decoded_tokens.push_back(SpeechRecognizer::DecodedToken{
+      .token_id = SpeechRecognizer::DecodedToken::kEndOfChunkTokenId,
+      .timestamp_ms = num_frames});
+
   return decoded_tokens;
 }
 

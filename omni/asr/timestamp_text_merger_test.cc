@@ -54,6 +54,18 @@ class DummyWordStage
     PushOutput(std::move(words));
   }
 
+  void PushWordsWithEndOfChunkTimestamp(
+      const std::vector<std::pair<std::string, int>>& word_ts_pairs,
+      int end_ts_ms) {
+    std::vector<Detokenizer::Word> words;
+    words.reserve(word_ts_pairs.size() + 1);
+    for (const auto& pair : word_ts_pairs) {
+      words.push_back({pair.first, pair.second});
+    }
+    words.push_back({"", end_ts_ms});
+    PushOutput(std::move(words));
+  }
+
  protected:
   bool NeedScheduleInternal() const override { return false; }
   absl::Status ScheduleInternal() override { return absl::OkStatus(); }
@@ -137,6 +149,39 @@ TEST(TimestampTextMergerTest, ResetClearsState) {
   ASSERT_OK(result);
   EXPECT_EQ(result->confirmed_text, "");
   EXPECT_EQ(result->unconfirmed_text, "new stream");
+}
+
+TEST(TimestampTextMergerTest,
+     SequentialMergeFlowUsesEndOfChunkTimestampForStep) {
+  DummyWordStage word_stage;
+  TimestampTextMerger merger(&word_stage, /*overlap_ratio=*/0.5f);
+
+  // Chunk 1 has 5000 ms total duration (end of chunk ts = 5000)
+  word_stage.PushWordsWithEndOfChunkTimestamp({{"the", 500},
+                                               {"stale", 1000},
+                                               {"smell", 1500},
+                                               {"of", 2000},
+                                               {"old", 2500},
+                                               {"beer", 3000},
+                                               {"lingers", 3500}},
+                                              /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  auto res1 = merger.GetOutput();
+  ASSERT_OK(res1);
+
+  // Chunk 2 starts at 2500 ms relative to start of Chunk 2
+  word_stage.PushWordsWithEndOfChunkTimestamp({{"old", 0},
+                                               {"beer", 500},
+                                               {"lingers", 1000},
+                                               {"it", 1500},
+                                               {"takes", 2000},
+                                               {"heat", 2500}},
+                                              /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  auto res2 = merger.GetOutput();
+  ASSERT_OK(res2);
+  EXPECT_FALSE(res2->confirmed_text.empty());
+  EXPECT_FALSE(res2->unconfirmed_text.empty());
 }
 
 }  // namespace

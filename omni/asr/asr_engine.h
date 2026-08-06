@@ -62,7 +62,7 @@ struct AsrEngineConfig {
   Backend backend = Backend::kCpu;
   TextMergerType text_merger_type = TextMergerType::kTimestamp;
   int num_threads = 4;
-  float overlap_ratio = 0.0f;
+  float overlap_ratio = 0.4f;
 
   bool has_log_mel_config = false;
   LogMelSpectrogramProcessor::LogMelSpectrogramConfig log_mel_config;

@@ -29,6 +29,9 @@ namespace litert::omni::asr {
 struct Word {
   std::string text;
   std::optional<int> timestamp_ms;
+
+  // An empty text indicates an end-of-chunk word.
+  bool IsEndOfChunk() const { return text.empty(); }
 };
 
 // Abstract interface for converting decoded tokens into words.

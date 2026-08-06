@@ -27,6 +27,10 @@ namespace litert::omni::asr {
 struct DecodedToken {
   int token_id;
   std::optional<int> timestamp_ms;
+
+  static constexpr int kEndOfChunkTokenId = -1;
+
+  bool IsEndOfChunk() const { return token_id == kEndOfChunkTokenId; }
 };
 
 // Abstract interface for recognizing preprocessed audio features into tokens.

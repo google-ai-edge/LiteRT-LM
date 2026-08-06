@@ -49,6 +49,9 @@ absl::Status LevenshteinTextMerger::Execute() {
   std::vector<std::string> curr_strings;
   curr_strings.reserve(curr_chunk_words.size());
   for (const auto& word : curr_chunk_words) {
+    if (word.IsEndOfChunk()) {
+      break;
+    }
     curr_strings.push_back(word.text);
   }
 

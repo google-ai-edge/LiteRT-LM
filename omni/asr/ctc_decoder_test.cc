@@ -14,11 +14,15 @@
 
 #include "omni/asr/ctc_decoder.h"
 
+#include <utility>
 #include <vector>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/status/status_matchers.h"  // from @com_google_absl
+#include "litert/cc/litert_element_type.h"  // from @litert
+#include "litert/cc/litert_layout.h"  // from @litert
+#include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "support/util/test_utils.h"  // IWYU pragma: keep for ASSERT_OK
 
@@ -43,6 +47,24 @@ TEST(CtcDecoderTest, DecodeEmptyEncoderOutputsReturnsEmpty) {
   auto tokens_or = (*decoder_or)->Decode(empty_outputs);
   ASSERT_OK(tokens_or.status());
   EXPECT_TRUE(tokens_or->empty());
+}
+
+TEST(CtcDecoderTest, DecodeIncludesEndOfChunkToken) {
+  ASSERT_OK_AND_ASSIGN(auto decoder, CtcDecoder::Create(/*vocab_size=*/2));
+  alignas(64) float logits[] = {1.0f, 0.0f, 0.0f, 1.0f};
+  ::litert::RankedTensorType tensor_type(
+      ::litert::ElementType::Float32,
+      ::litert::Layout(::litert::Dimensions{2, 2}));
+  auto buffer_or = ::litert::TensorBuffer::CreateFromHostMemory(
+      tensor_type, logits, sizeof(logits));
+  ASSERT_TRUE(buffer_or.HasValue());
+  std::vector<::litert::TensorBuffer> outputs;
+  outputs.push_back(std::move(*buffer_or));
+
+  ASSERT_OK_AND_ASSIGN(auto tokens, decoder->Decode(outputs));
+  ASSERT_GE(tokens.size(), 1);
+  EXPECT_TRUE(tokens.back().IsEndOfChunk());
+  EXPECT_EQ(tokens.back().timestamp_ms, 2);
 }
 
 }  // namespace

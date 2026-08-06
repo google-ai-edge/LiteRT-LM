@@ -203,6 +203,10 @@ absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> TdtDecoder::Decode(
     }
   }
 
+  decoded_tokens.push_back(SpeechRecognizer::DecodedToken{
+      .token_id = SpeechRecognizer::DecodedToken::kEndOfChunkTokenId,
+      .timestamp_ms = static_cast<int>(max_time_index_)});
+
   return decoded_tokens;
 }
 

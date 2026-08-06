@@ -16,6 +16,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -24,6 +26,7 @@
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_layout.h"  // from @litert
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
@@ -39,15 +42,14 @@ using ::testing::Return;
 
 ::litert::TensorBuffer CreateTestTensorBuffer(size_t num_elements,
                                               size_t element_size_bytes) {
-  alignas(64) static uint8_t memory_pool[8192] = {0};
-  const size_t total_bytes = num_elements * element_size_bytes;
   ::litert::RankedTensorType tensor_type(
       element_size_bytes == sizeof(float) ? ::litert::ElementType::Float32
                                           : ::litert::ElementType::Int32,
       ::litert::Layout(
           ::litert::Dimensions{static_cast<int32_t>(num_elements)}));
-  auto buffer_or = ::litert::TensorBuffer::CreateFromHostMemory(
-      tensor_type, memory_pool, total_bytes);
+  auto buffer_or = ::litert::TensorBuffer::CreateManagedHostMemory(
+      tensor_type, num_elements * element_size_bytes);
+  EXPECT_TRUE(buffer_or.HasValue());
   return std::move(*buffer_or);
 }
 
@@ -124,6 +126,44 @@ TEST(TdtDecoderTest, DecodeFailsWhenRunnerRunFails) {
   encoder_outputs.push_back(CreateTestTensorBuffer(1024, sizeof(float)));
   auto tokens_or = decoder->Decode(encoder_outputs);
   EXPECT_FALSE(tokens_or.ok());
+}
+
+TEST(TdtDecoderTest, DecodeIncludesEndOfChunkToken) {
+  MockLiteRtRunner mock_runner;
+  EXPECT_CALL(mock_runner, CreateInputBuffers("decode"))
+      .WillOnce([](absl::string_view) {
+        std::vector<::litert::TensorBuffer> buffers;
+        buffers.push_back(CreateTestTensorBuffer(1024 * 1, sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(1, sizeof(int32_t)));
+        buffers.push_back(CreateTestTensorBuffer(100, sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(100, sizeof(float)));
+        return buffers;
+      });
+  EXPECT_CALL(mock_runner, CreateOutputBuffers("decode"))
+      .WillOnce([](absl::string_view) {
+        std::vector<::litert::TensorBuffer> buffers;
+        auto buf0 = CreateTestTensorBuffer(100, sizeof(float));
+        std::vector<float> logits(100, 0.0f);
+        logits[99] =
+            1.0f;  // Set duration > 0 (duration index 4 relative to start)
+        EXPECT_TRUE(buf0.Write<float>(absl::MakeConstSpan(logits)).HasValue());
+        buffers.push_back(std::move(buf0));
+        buffers.push_back(CreateTestTensorBuffer(100, sizeof(float)));
+        buffers.push_back(CreateTestTensorBuffer(100, sizeof(float)));
+        return buffers;
+      });
+  EXPECT_CALL(mock_runner, CreateInputBuffers("decode_1"))
+      .WillOnce(Return(absl::NotFoundError("No decode_1 signature")));
+  EXPECT_CALL(mock_runner, Run("decode", _, _))
+      .WillOnce(Return(absl::OkStatus()));
+
+  ASSERT_OK_AND_ASSIGN(auto decoder, TdtDecoder::Create(&mock_runner));
+  std::vector<::litert::TensorBuffer> encoder_outputs;
+  encoder_outputs.push_back(CreateTestTensorBuffer(1024, sizeof(float)));
+  ASSERT_OK_AND_ASSIGN(auto tokens, decoder->Decode(encoder_outputs));
+  ASSERT_GE(tokens.size(), 1);
+  EXPECT_TRUE(tokens.back().IsEndOfChunk());
+  EXPECT_EQ(tokens.back().timestamp_ms, 1);
 }
 
 }  // namespace
