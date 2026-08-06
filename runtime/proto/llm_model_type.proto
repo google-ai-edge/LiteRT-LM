@@ -33,9 +33,9 @@ message LlmModelType {
     FastVlm fast_vlm = 9;
     Lfm2 lfm2 = 11;
     MiniCPM5 minicpm5 = 12;
+    Gemma3270m gemma3270m = 13;
   }
 }
-
 
 // The default model type for the generic model.
 message GenericModel {
@@ -248,6 +248,9 @@ message Qwen2p5 {
   optional string tool_code_regex = 4;
 }
 
+// Gemma3 270m model.
+message Gemma3270m {}
+
 // Google's Gemma4 model.
 message Gemma4 {
   // Vision modality.
@@ -358,5 +361,3 @@ message MiniCPM5 {
   // An optional regex to match each line of the tool code block.
   optional string tool_code_regex = 4;
 }
-
-
