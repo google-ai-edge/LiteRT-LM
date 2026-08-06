@@ -869,6 +869,70 @@ TEST_F(TasksTest, DecodeBytePairEncodingTokens) {
   EXPECT_EQ(task_responses->GetTexts()[0], " How's it going?");
 }
 
+TEST_F(TasksTest, DecodeBytePairEncodingTokensHuggingFace) {
+  auto tokenizer = std::make_unique<BytePairEncodingTokenizer>();
+  EXPECT_CALL(*tokenizer, GetTokenizerType())
+      .WillRepeatedly(testing::Return(TokenizerType::kHuggingFace));
+
+  // Pretend the first and second tokens are incomplete.
+  EXPECT_CALL(*tokenizer, TokenIdsToText(std::vector<int>{224}))
+      .WillOnce(
+          testing::Return(absl::DataLossError("Incomplete BPE sequence")));
+  EXPECT_CALL(*tokenizer, TokenIdsToText(std::vector<int>{224, 24}))
+      .WillOnce(
+          testing::Return(absl::DataLossError("Incomplete BPE sequence")));
+
+  // Now return a valid token from two tokens.
+  EXPECT_CALL(*tokenizer, TokenIdsToText(std::vector<int>{224, 24, 8}))
+      .WillOnce(testing::Return(" How's"));
+
+  // Rest proceeds as normal, with accumulated sequences.
+  EXPECT_CALL(*tokenizer, TokenIdsToText(std::vector<int>{224, 24, 8, 66}))
+      .WillOnce(testing::Return(" How's "));
+  EXPECT_CALL(*tokenizer,
+              TokenIdsToText(std::vector<int>{224, 24, 8, 66, 246}))
+      .WillOnce(testing::Return(" How's it"));
+  EXPECT_CALL(*tokenizer,
+              TokenIdsToText(std::vector<int>{224, 24, 8, 66, 246, 18}))
+      .WillOnce(testing::Return(" How's it "));
+  EXPECT_CALL(*tokenizer, TokenIdsToText(
+                              std::vector<int>{224, 24, 8, 66, 246, 18, 2295}))
+      .WillOnce(testing::Return(" How's it going?"));
+  EXPECT_CALL(*tokenizer,
+              TokenIdsToText(
+                  std::vector<int>{224, 24, 8, 66, 246, 18, 2295, 2294}))
+      .WillOnce(testing::Return(" How's it going?!"));
+
+  std::optional<BenchmarkInfo> benchmark_info;
+
+  // Run prefill first.
+  std::vector<int> prefill_token_ids = {2, 90, 547, 58, 735, 210, 466, 2294};
+  ASSERT_OK_AND_ASSIGN(auto token_ids_buffer,
+                       tokenizer_->TokenIdsToTensorBuffer(prefill_token_ids));
+  ExecutorTextData text_data(std::move(token_ids_buffer));
+  ExecutorInputs inputs(std::move(text_data), std::nullopt, std::nullopt);
+  auto prefill_responses = Tasks::Prefill(
+      *executor_, inputs, /*wait_for_completion=*/true, benchmark_info);
+  EXPECT_OK(prefill_responses);
+
+  constexpr int kNumOutputCandidates = 1;
+  StopTokenDetector stop_token_detector(kNumOutputCandidates);
+  EXPECT_OK(stop_token_detector.AddStopTokenSequence({2294}));
+  absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback = nullptr;
+
+  auto task_responses = Tasks::Decode(
+      *executor_, *tokenizer, stop_token_detector, kNumOutputCandidates,
+      benchmark_info, /*sampler=*/std::nullopt,
+      /*constraint=*/nullptr, /*decoded_ids=*/std::nullopt,
+      /*callback=*/callback, /*cancelled=*/nullptr);
+
+  EXPECT_OK(task_responses);
+  EXPECT_EQ(task_responses->GetTaskState(), TaskState::kDone);
+  EXPECT_EQ(task_responses->GetTexts().size(), 1);
+  EXPECT_EQ(task_responses->GetTexts()[0], " How's it going?");
+}
+
+
 TEST_F(TasksTest, DecodeStopTokenIsPartialBytePairEncodingTokens) {
   auto tokenizer = std::make_unique<BytePairEncodingTokenizer>();
   // Pretend the first and second tokens are incomplete.

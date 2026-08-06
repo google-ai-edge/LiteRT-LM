@@ -168,6 +168,8 @@ class DecodeOneStep {
     }
     result_text_ = std::vector<std::string>(num_output_candidates_, "");
     result_token_ids_ = std::vector<std::vector<int>>(num_output_candidates_);
+    history_token_ids_ = std::vector<std::vector<int>>(num_output_candidates_);
+    last_decoded_text_length_ = std::vector<size_t>(num_output_candidates_, 0);
     bpe_partial_token_ids_ =
         std::vector<std::vector<int>>(num_output_candidates_);
     pending_stop_tokens_ =
@@ -214,18 +216,77 @@ class DecodeOneStep {
           step_tokens,
           tokenizer_.MergeTokenIds(bpe_partial_token_ids_, step_tokens));
 
-      auto decoded_result =
-          tokenizer_.TokenIdsToTexts(num_output_candidates_, step_tokens);
+      // Some tokenizers (such as HuggingFace BPE tokenizers) are
+      // context-sensitive and decode leading spaces or word boundaries
+      // differently if tokens are decoded in isolation. For these tokenizers,
+      // we decode the entire sequence of accumulated token history to ensure
+      // spacing and boundaries are rendered correctly, and then slice out the
+      // new text.
+      bool use_accumulated_decoding =
+          tokenizer_.GetTokenizerType() == TokenizerType::kHuggingFace;
+
+      std::vector<absl::StatusOr<std::string>> decoded_strings(
+          num_output_candidates_);
+      if (use_accumulated_decoding) {
+        std::vector<std::vector<int>> accumulated_tokens(
+            num_output_candidates_);
+        for (int i = 0; i < num_output_candidates_; ++i) {
+          // Start with the historical token sequence that has already been
+          // committed to output.
+          accumulated_tokens[i] = history_token_ids_[i];
+
+          // Append tokens that are buffered because they might match partial
+          // stop token sequences.
+          auto temp_queue = pending_stop_token_ids_[i];
+          while (!temp_queue.empty()) {
+            const auto& ids = temp_queue.front();
+            accumulated_tokens[i].insert(accumulated_tokens[i].end(),
+                                         ids.begin(), ids.end());
+            temp_queue.pop();
+          }
+
+          // Append the newly generated step tokens.
+          accumulated_tokens[i].insert(accumulated_tokens[i].end(),
+                                       step_tokens[i].begin(),
+                                       step_tokens[i].end());
+        }
+        ASSIGN_OR_RETURN(
+            auto decoded_result,
+            tokenizer_.TokenIdsToTexts(num_output_candidates_,
+                                       accumulated_tokens));
+        decoded_strings = std::move(decoded_result);
+      } else {
+        // For other tokenizers, decode only the current step's tokens to avoid
+        // sequence growth overhead.
+        ASSIGN_OR_RETURN(
+            auto decoded_result,
+            tokenizer_.TokenIdsToTexts(num_output_candidates_, step_tokens));
+        decoded_strings = std::move(decoded_result);
+      }
+
       for (int i = 0; i < num_output_candidates_; ++i) {
-        if (Tokenizer::IsIncompleteBpeSequence(decoded_result.value()[i])) {
+        if (Tokenizer::IsIncompleteBpeSequence(decoded_strings[i])) {
           bpe_partial_token_ids_[i] = step_tokens[i];
         } else if (!stop_token_detector_.GetStopTokensFound()[i]) {
           bpe_partial_token_ids_[i].clear();
 
+          std::string new_text;
+          if (use_accumulated_decoding) {
+            // Slice the newly generated text starting from the previous decoded
+            // length.
+            std::string decoded_str = decoded_strings[i].value();
+            if (decoded_str.length() > last_decoded_text_length_[i]) {
+              new_text = decoded_str.substr(last_decoded_text_length_[i]);
+            }
+            last_decoded_text_length_[i] = decoded_str.length();
+          } else {
+            new_text = decoded_strings[i].value();
+          }
+
           // Handle partial stop tokens.
           int max_length = stop_token_detector_.MaxPartialStopTokenLength(i);
           if (max_length > 0) {
-            pending_stop_tokens_[i].push(decoded_result.value()[i].value());
+            pending_stop_tokens_[i].push(new_text);
             pending_stop_token_ids_[i].push(step_tokens[i]);
             num_buffered_tokens_[i] += step_tokens[i].size();
           }
@@ -239,6 +300,12 @@ class DecodeOneStep {
             auto& ids = pending_stop_token_ids_[i].front();
             result_token_ids_[i].insert(result_token_ids_[i].end(), ids.begin(),
                                         ids.end());
+            if (use_accumulated_decoding) {
+              // Commit these tokens to history so they are prepended to the
+              // sequence in subsequent steps.
+              history_token_ids_[i].insert(history_token_ids_[i].end(),
+                                           ids.begin(), ids.end());
+            }
             num_buffered_tokens_[i] -= ids.size();
             pending_stop_token_ids_[i].pop();
           }
@@ -246,10 +313,15 @@ class DecodeOneStep {
           // No partial stop token is found - add the current token to the
           // result text directly - this is the most common case.
           if (max_length == 0) {
-            result_text_[i] += decoded_result.value()[i].value();
+            result_text_[i] += new_text;
             result_token_ids_[i].insert(result_token_ids_[i].end(),
                                         step_tokens[i].begin(),
                                         step_tokens[i].end());
+            if (use_accumulated_decoding) {
+              history_token_ids_[i].insert(history_token_ids_[i].end(),
+                                           step_tokens[i].begin(),
+                                           step_tokens[i].end());
+            }
           }
         }
       }
@@ -448,6 +520,8 @@ class DecodeOneStep {
   std::vector<int> num_buffered_tokens_;
   std::vector<std::string> result_text_;
   std::vector<std::vector<int>> result_token_ids_;
+  std::vector<std::vector<int>> history_token_ids_;
+  std::vector<size_t> last_decoded_text_length_;
 
   bool is_first_step_ = true;
   const std::atomic<bool>* cancelled_ = nullptr;
