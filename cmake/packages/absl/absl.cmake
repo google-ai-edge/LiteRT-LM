@@ -23,6 +23,20 @@ set(ABSL_SRC_DIR ${ABSL_EXT_PREFIX}/src/absl_external CACHE INTERNAL "")
 set(ABSL_BUILD_DIR ${ABSL_EXT_PREFIX}/src/absl_external-build CACHE INTERNAL "")
 set(ABSL_CONFIG_CMAKE_FILE "${ABSL_INSTALL_PREFIX}/lib/cmake/absl/abslConfig.cmake")
 
+set(absl_DIR "${ABSL_INSTALL_PREFIX}/lib/cmake/absl" CACHE PATH "Path to absl config")
+set(ABSL_DIR "${ABSL_INSTALL_PREFIX}/lib/cmake/absl" CACHE PATH "Path to absl config")
+set(absl_ROOT "${ABSL_INSTALL_PREFIX}" CACHE PATH "absl root dir")
+set(ABSL_ROOT "${ABSL_INSTALL_PREFIX}" CACHE PATH "absl root dir")
+
+set(ABSL_INCLUDE_DIR "${ABSL_INSTALL_PREFIX}/include" CACHE PATH "absl include dir")
+set(ABSL_INCLUDE_DIRS "${ABSL_INSTALL_PREFIX}/include" CACHE PATH "absl include dirs")
+set(absl_INCLUDE_DIR "${ABSL_INSTALL_PREFIX}/include" CACHE PATH "absl include dir")
+set(absl_INCLUDE_DIRS "${ABSL_INSTALL_PREFIX}/include" CACHE PATH "absl include dirs")
+set(ABSL_LIBRARY_DIR "${ABSL_INSTALL_PREFIX}/lib" CACHE PATH "absl lib dir")
+set(ABSL_LIB_DIR "${ABSL_INSTALL_PREFIX}/lib" CACHE PATH "absl lib dir")
+set(absl_LIBRARY_DIR "${ABSL_INSTALL_PREFIX}/lib" CACHE PATH "absl lib dir")
+
+
 setup_external_install_structure("${ABSL_INSTALL_PREFIX}")
 
 if(NOT EXISTS "${ABSL_CONFIG_CMAKE_FILE}")

@@ -60,6 +60,19 @@ target_include_directories(runtime_conversation_model_data_processor_gemma3_data
 )
 
 
+# ==============================================================================
+# Gemma4 Data Processor Config
+# ==============================================================================
+add_litertlm_library(runtime_conversation_model_data_processor_gemma4_data_processor_config INTERFACE)
+add_library(LiteRTLM::Runtime::Conversation::Processor::Gemma4Config ALIAS runtime_conversation_model_data_processor_gemma4_data_processor_config)
+
+target_include_directories(runtime_conversation_model_data_processor_gemma4_data_processor_config
+  INTERFACE
+    ${GENERATED_SRC_DIR}
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+
 add_litertlm_library(runtime_conversation_model_data_processor_function_gemma_data_processor_config INTERFACE)
 add_library(LiteRTLM::Runtime::Conversation::FuncProcessor::GemmaConfig ALIAS runtime_conversation_model_data_processor_function_gemma_data_processor_config)
 
@@ -264,6 +277,43 @@ target_link_libraries(runtime_conversation_model_data_processor_factory
     runtime_util_litert_status_util
     LITERTLM_DEPS
 )
+
+# ==============================================================================
+# Gemma3 Data Processor
+# ==============================================================================
+add_litertlm_library(runtime_conversation_model_data_processor_gemma4_data_processor STATIC
+  gemma4_data_processor.cc
+)
+add_library(LiteRTLM::Runtime::Conversation::Processor::Gemma4 ALIAS runtime_conversation_model_data_processor_gemma4_data_processor)
+
+target_include_directories(runtime_conversation_model_data_processor_gemma4_data_processor
+  PUBLIC
+    ${GENERATED_SRC_DIR}
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+target_link_libraries(runtime_conversation_model_data_processor_gemma4_data_processor
+  PUBLIC
+    runtime_conversation_io_types
+    runtime_engine_io_types
+    LiteRTLM::Runtime::Conversation::Processor::Gemma4Config
+    LiteRTLM::Runtime::Components::Tokenizer::Interface
+    LiteRTLM::Runtime::Components::ConstrainedDecoding::Constraint
+    LiteRTLM::Runtime::Components::ConstrainedDecoding::ConstraintProvider
+    LiteRTLM::Runtime::Components::Preprocessor::Audio
+    LiteRTLM::Runtime::Components::Preprocessor::AudioMiniAudio
+    LiteRTLM::Runtime::Components::Preprocessor::Image
+    LiteRTLM::Runtime::Components::Preprocessor::StbImage
+    LiteRTLM::Runtime::Components::ToolUse::ParserUtils
+    LiteRTLM::Runtime::Components::ToolUse::PythonFormatUtils
+    runtime_util_litert_status_util
+    runtime_util_memory_mapped_file
+    LiteRTLM::Runtime::Conversation::Processor::DataUtils
+    LiteRTLM::Runtime::Conversation::Processor::Interface
+    LITERTLM_DEPS
+)
+
+
 
 # ==============================================================================
 # Folder Facade

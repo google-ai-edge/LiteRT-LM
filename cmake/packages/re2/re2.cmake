@@ -20,24 +20,8 @@ set(RE2_EXT_PREFIX ${EXTERNAL_PROJECT_BINARY_DIR}/re2 CACHE INTERNAL "")
 set(RE2_INSTALL_PREFIX ${RE2_EXT_PREFIX}/install CACHE INTERNAL "")
 set(RE2_LIB_DIR ${RE2_INSTALL_PREFIX}/lib CACHE INTERNAL "")
 set(RE2_INCLUDE_DIR ${RE2_INSTALL_PREFIX}/include CACHE INTERNAL "")
+set(RE2_SRC_DIR ${RE2_EXT_PREFIX}/src/re2_external)
 set(RE2_CONFIG_CMAKE_FILE "${RE2_LIB_DIR}/cmake/re2/re2Config.cmake" CACHE INTERNAL "")
-
-
-set(absl_DIR "${ABSL_INSTALL_PREFIX}/lib/cmake/absl" CACHE PATH "Path to absl config")
-set(ABSL_DIR "${ABSL_INSTALL_PREFIX}/lib/cmake/absl" CACHE PATH "Path to absl config")
-set(absl_ROOT "${ABSL_INSTALL_PREFIX}" CACHE PATH "absl root dir")
-set(ABSL_ROOT "${ABSL_INSTALL_PREFIX}" CACHE PATH "absl root dir")
-
-list(APPEND CMAKE_PREFIX_PATH "${ABSL_INSTALL_PREFIX}")
-list(APPEND CMAKE_SYSTEM_PREFIX_PATH "${ABSL_INSTALL_PREFIX}")
-
-set(ABSL_INCLUDE_DIR "${ABSL_INSTALL_PREFIX}/include" CACHE PATH "absl include dir")
-set(ABSL_INCLUDE_DIRS "${ABSL_INSTALL_PREFIX}/include" CACHE PATH "absl include dirs")
-set(absl_INCLUDE_DIR "${ABSL_INSTALL_PREFIX}/include" CACHE PATH "absl include dir")
-set(absl_INCLUDE_DIRS "${ABSL_INSTALL_PREFIX}/include" CACHE PATH "absl include dirs")
-set(ABSL_LIBRARY_DIR "${ABSL_INSTALL_PREFIX}/lib" CACHE PATH "absl lib dir")
-set(ABSL_LIB_DIR "${ABSL_INSTALL_PREFIX}/lib" CACHE PATH "absl lib dir")
-set(absl_LIBRARY_DIR "${ABSL_INSTALL_PREFIX}/lib" CACHE PATH "absl lib dir")
 
 
 setup_external_install_structure("${RE2_INSTALL_PREFIX}")
@@ -54,6 +38,15 @@ if(NOT EXISTS "${RE2_CONFIG_CMAKE_FILE}")
       main
     PREFIX
       ${RE2_EXT_PREFIX}
+    PATCH_COMMAND
+      git checkout -- . && git clean -df
+      COMMAND ${CMAKE_COMMAND}
+        -DABSL_CONFIG_CMAKE_FILE=${ABSL_CONFIG_CMAKE_FILE}
+        -DLITERTLM_MODULES_DIR=${LITERTLM_MODULES_DIR}
+        -DLITERTLM_RE2_SRC_DIR=${RE2_SRC_DIR} 
+        -DLITERTLM_RE2_SHIM_PATH="${RE2_PACKAGE_DIR}/re2_shim.cmake"
+        -P "${RE2_PACKAGE_DIR}/re2_patcher.cmake"
+
     CMAKE_ARGS
       ${LITERTLM_TOOLCHAIN_FILE}
       ${LITERTLM_TOOLCHAIN_ARGS}
@@ -71,6 +64,9 @@ if(NOT EXISTS "${RE2_CONFIG_CMAKE_FILE}")
       -DABSL_LIBRARY_DIR=${ABSL_LIBRARY_DIR}
       -DABSL_LIB_DIR=${ABSL_LIB_DIR}
       -Dabsl_LIBRARY_DIR=${absl_LIBRARY_DIR}
+      -DABSL_PACKAGE_DIR=${ABSL_PACKAGE_DIR}
+      -DLITERTLM_MODULES_DIR=${LITERTLM_MODULES_DIR}
+      -DLITERTLM_RE2_SHIM_PATH="${RE2_PACKAGE_DIR}"
   )
 
 else()

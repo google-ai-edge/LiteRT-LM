@@ -84,7 +84,7 @@ set(TFLITE_TARGET_MAP
     "tflite_profiling=${TFLITE_LIB_DIR}/libtflite_profiling.a"
 )
 
-if(LITERTLM_TOOLCHAIN_ARGS)
+if(LITERTLM_ENABLE_KLEIDIAI)
     message(STATUS "[LiteRTLM] Cross-compilation detected: Appending ARM64 targets.")
     list(APPEND TFLITE_TARGET_MAP "kleidiai=${TFLITE_LIB_DIR}/libkleidiai.a")
 endif()

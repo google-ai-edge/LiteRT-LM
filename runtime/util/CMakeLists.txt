@@ -43,7 +43,7 @@ set(PKG_ROOT ${CMAKE_CURRENT_SOURCE_DIR})
 # target_link_libraries(runtime_util_external_file_cc_proto PUBLIC LITERTLM_DEPS)
 
 # ==============================================================================
-# 1. Convert Tensor Buffer
+# Convert Tensor Buffer
 # ==============================================================================
 add_litertlm_library(runtime_util_convert_tensor_buffer INTERFACE)
 add_library(LiteRTLM::Runtime::Util::ConvertTensorBuffer ALIAS runtime_util_convert_tensor_buffer)
@@ -60,7 +60,7 @@ target_link_libraries(runtime_util_convert_tensor_buffer
 )
 
 # ==============================================================================
-# 2. Tensor Buffer Util
+# Tensor Buffer Util
 # ==============================================================================
 add_litertlm_library(runtime_util_tensor_buffer_util STATIC
   tensor_buffer_util.cc
@@ -80,7 +80,7 @@ target_link_libraries(runtime_util_tensor_buffer_util
 )
 
 # ==============================================================================
-# 3. LiteRT Status Util
+# LiteRT Status Util
 # ==============================================================================
 add_litertlm_library(runtime_util_litert_status_util INTERFACE)
 add_library(LiteRTLM::Runtime::Util::LiteRtStatusUtil ALIAS runtime_util_litert_status_util)
@@ -97,7 +97,7 @@ target_link_libraries(runtime_util_litert_status_util
 )
 
 # ==============================================================================
-# 4. Scoped File (Platform Specific)
+# Scoped File (Platform Specific)
 # ==============================================================================
 set(LITERT_CC_INTERNAL_DIR "${LITERT_SRC_DIR}/cc/internal/" CACHE PATH "")
 set(SCOPED_FILE_SRCS "${LITERT_CC_INTERNAL_DIR}/scoped_file.cc")
@@ -125,7 +125,7 @@ target_link_libraries(runtime_util_scoped_file
 )
 
 # ==============================================================================
-# 5. Memory Mapped File (Platform Specific)
+# Memory Mapped File (Platform Specific)
 # ==============================================================================
 if(WIN32)
   set(MMAP_SRC memory_mapped_file_win.cc)
@@ -156,7 +156,7 @@ target_link_libraries(runtime_util_memory_mapped_file
 )
 
 # ==============================================================================
-# 6. File Util
+# File Util
 # ==============================================================================
 add_litertlm_library(runtime_util_file_util STATIC
   file_util.cc
@@ -175,7 +175,7 @@ target_link_libraries(runtime_util_file_util
 )
 
 # ==============================================================================
-# 7. File Format Util
+# File Format Util
 # ==============================================================================
 add_litertlm_library(runtime_util_file_format_util STATIC
   file_format_util.cc
@@ -199,7 +199,7 @@ target_link_libraries(runtime_util_file_format_util
 )
 
 # ==============================================================================
-# 8. Executor Data Util
+# Executor Data Util
 # ==============================================================================
 add_litertlm_library(runtime_util_executor_data_util STATIC
   executor_data_util.cc
@@ -222,7 +222,7 @@ target_link_libraries(runtime_util_executor_data_util
 )
 
 # ==============================================================================
-# 9. LiteRT LM Loader
+# LiteRT LM Loader
 # ==============================================================================
 add_litertlm_library(runtime_util_litert_lm_loader STATIC
   litert_lm_loader.cc
@@ -246,7 +246,7 @@ target_link_libraries(runtime_util_litert_lm_loader
 )
 
 # ==============================================================================
-# 10. Logging
+# Logging
 # ==============================================================================
 add_litertlm_library(runtime_util_logging INTERFACE)
 add_library(LiteRTLM::Runtime::Util::Logging ALIAS runtime_util_logging)
@@ -263,7 +263,7 @@ target_link_libraries(runtime_util_logging
 )
 
 # ==============================================================================
-# 11. Logging Tensor Buffer
+# Logging Tensor Buffer
 # ==============================================================================
 add_litertlm_library(runtime_util_logging_tensor_buffer STATIC
   logging_tensor_buffer.cc
@@ -282,7 +282,27 @@ target_link_libraries(runtime_util_logging_tensor_buffer
 )
 
 # ==============================================================================
-# 12. LoRA Util
+# Log Tensor Buffer
+# ==============================================================================
+add_litertlm_library(runtime_util_log_tensor_buffer STATIC
+  log_tensor_buffer.cc
+)
+add_library(LiteRTLM::Runtime::Util::LogTensorBuffer ALIAS runtime_util_log_tensor_buffer)
+
+target_include_directories(runtime_util_log_tensor_buffer
+  PRIVATE
+    ${GENERATED_SRC_DIR}
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+target_link_libraries(runtime_util_log_tensor_buffer
+  PUBLIC
+    LiteRTLM::Runtime::Util::ConvertTensorBuffer
+    LITERTLM_DEPS
+)
+
+# ==============================================================================
+# LoRA Util
 # ==============================================================================
 add_litertlm_library(runtime_util_lora_util STATIC
   lora_util.cc
@@ -305,7 +325,7 @@ target_link_libraries(runtime_util_lora_util
 )
 
 # ==============================================================================
-# 13. LoRA Data
+# LoRA Data
 # ==============================================================================
 add_litertlm_library(runtime_util_lora_data STATIC
   lora_data.cc
@@ -327,7 +347,7 @@ target_link_libraries(runtime_util_lora_data
 )
 
 # ==============================================================================
-# 14. Metadata Util
+# Metadata Util
 # ==============================================================================
 add_litertlm_library(runtime_util_metadata_util STATIC
   metadata_util.cc
@@ -346,7 +366,7 @@ target_link_libraries(runtime_util_metadata_util
 )
 
 # ==============================================================================
-# 15. Zip Readonly Mem File
+# Zip Readonly Mem File
 # ==============================================================================
 add_litertlm_library(runtime_util_zip_readonly_mem_file STATIC
   zip_readonly_mem_file.cc
@@ -367,7 +387,7 @@ target_link_libraries(runtime_util_zip_readonly_mem_file
 )
 
 # ==============================================================================
-# 16. Zip Utils
+# Zip Utils
 # ==============================================================================
 add_litertlm_library(runtime_util_zip_utils STATIC
   zip_utils.cc
@@ -390,7 +410,7 @@ target_link_libraries(runtime_util_zip_utils
 )
 
 # ==============================================================================
-# 17. Model Asset Bundle Resources
+# Model Asset Bundle Resources
 # ==============================================================================
 add_litertlm_library(runtime_util_model_asset_bundle_resources STATIC
   model_asset_bundle_resources.cc
@@ -413,7 +433,7 @@ target_link_libraries(runtime_util_model_asset_bundle_resources
 )
 
 # ==============================================================================
-# 18. Model Type Utils
+# Model Type Utils
 # ==============================================================================
 add_litertlm_library(runtime_util_model_type_utils STATIC
   model_type_utils.cc
@@ -434,7 +454,7 @@ target_link_libraries(runtime_util_model_type_utils
 )
 
 # ==============================================================================
-# 19. Folder Facade
+# Folder Facade
 # ==============================================================================
 add_library(runtime_util_libs INTERFACE)
 add_library(LiteRTLM::Runtime::Util ALIAS runtime_util_libs)
@@ -446,6 +466,7 @@ target_link_libraries(runtime_util_libs INTERFACE
   LiteRTLM::Runtime::Util::FileUtil
   LiteRTLM::Runtime::Util::LMLoader
   LiteRTLM::Runtime::Util::LoggingTensorBuffer
+  LiteRTLM::Runtime::Util::LogTensorBuffer
   LiteRTLM::Runtime::Util::LoRAData
   LiteRTLM::Runtime::Util::LoRAUtil
   LiteRTLM::Runtime::Util::MemoryMappedFile

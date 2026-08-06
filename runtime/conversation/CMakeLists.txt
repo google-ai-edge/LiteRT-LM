@@ -95,6 +95,27 @@ target_link_libraries(runtime_conversation_prompt_utils
 )
 
 
+add_litertlm_library(runtime_conversation_channel_util STATIC
+  channel_util.cc
+)
+add_library(LiteRTLM::Runtime::Conversation::ChannelUtil ALIAS runtime_conversation_channel_util)
+
+target_include_directories(runtime_conversation_channel_util
+  PUBLIC
+    ${GENERATED_SRC_DIR}
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+target_link_libraries(runtime_conversation_channel_util
+  PUBLIC
+    LITERTLM_DEPS
+    LiteRTLM::Runtime::Conversation::IoTypes
+    LiteRTLM::Runtime::Engine::IoTypes
+)
+
+
+
+
 add_library(runtime_conversation_libs INTERFACE)
 add_library(LiteRTLM::Runtime::Conversation ALIAS runtime_conversation_libs)
 
