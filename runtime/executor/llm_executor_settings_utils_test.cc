@@ -22,17 +22,20 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_common.h"  // from @litert
 #include "litert/cc/litert_options.h"  // from @litert
+#include "litert/cc/options/litert_cpu_options.h"  // from @litert
 #include "litert/test/matchers.h"  // from @litert
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/llm_executor_settings.h"
+#include "runtime/proto/llm_model_type.pb.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
 
 namespace litert::lm {
 namespace {
 
-using ::testing::status::IsOkAndHolds;
+using ::testing::litert::IsOkAndHolds;
 using ::testing::status::StatusIs;
 
 }  // namespace

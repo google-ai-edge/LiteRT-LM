@@ -698,7 +698,6 @@ cc_library(
         ":executor_settings_base",
         ":litert_compiled_model_executor_utils",
         ":llm_executor_settings",
-        "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
@@ -707,10 +706,9 @@ cc_library(
         "@litert//litert/cc:litert_macros",
         "@litert//litert/cc:litert_options",
         "@litert//litert/cc/options:litert_gpu_options",
+        "//runtime/proto:llm_model_type_cc_proto",
         "//runtime/util:file_util",
         "//runtime/util:litert_status_util",
-        "//runtime/util:scoped_file",
-        "@litert//tflite/delegates/xnnpack:xnnpack_delegate",
     ],
 )
 
@@ -723,13 +721,10 @@ cc_test(
         ":llm_executor_settings",
         ":llm_executor_settings_utils",
         "@com_google_googletest//:gtest_main",
-        "@com_google_absl//absl/status",
-        "@litert//litert/c/options:litert_gpu_options",
-        "@litert//litert/cc:litert_common",
-        "@litert//litert/cc:litert_options",
-        "@litert//litert/cc/options:litert_runtime_options",
+        "@com_google_absl//absl/strings:string_view",
+        "@litert//litert/cc/options:litert_cpu_options",
         "@litert//litert/test:matchers",
-        "//runtime/util:test_utils",
+        "//runtime/proto:llm_model_type_cc_proto",
     ],
 )
 
