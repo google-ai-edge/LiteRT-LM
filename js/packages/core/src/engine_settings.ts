@@ -82,9 +82,18 @@ export function fillWasmEngineSettingsFromEngineSettings(
     if (mainExecutorSettings.backendConfig !== undefined) {
       const backendConfig = mainExecutorSettings.backendConfig;
       if (backend === Backend.CPU) {
-        wasmExecutorSettings.setBackendConfigCpu(backendConfig as CpuConfig);
+        const cpuConfig: CpuConfig = {
+          kv_increment_size: (backendConfig as any).kv_increment_size ?? 0,
+          prefill_chunk_size: (backendConfig as any).prefill_chunk_size ?? 0,
+          number_of_threads: (backendConfig as any).number_of_threads ?? 0,
+        };
+        wasmExecutorSettings.setBackendConfigCpu(cpuConfig);
       } else if (backend === Backend.GPU) {
-        wasmExecutorSettings.setBackendConfigGpu(backendConfig as GpuConfig);
+        const gpuConfig: GpuConfig = {
+          max_top_k: (backendConfig as any).max_top_k ?? 1,
+          external_tensor_mode: (backendConfig as any).external_tensor_mode ?? false,
+        };
+        wasmExecutorSettings.setBackendConfigGpu(gpuConfig);
       } else if (backend === Backend.GPU_ARTISAN) {
         const gpuArtisanConfig = backendConfig as GpuArtisanConfig;
         const loraRanksVec = new wasm.VectorUint32();

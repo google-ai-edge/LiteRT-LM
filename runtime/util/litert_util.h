@@ -39,6 +39,11 @@ absl::StatusOr<OwnedEnvironment> CreateEnvironment(
 absl::StatusOr<OwnedEnvironment> CreateEnvironment(
     EmbeddingEngineSettings& settings, ModelResources* model_resources);
 
+class ModelAssets;
+
+// Returns true if the model has external weights.
+absl::StatusOr<bool> ModelHasExternalWeights(const ModelAssets& model_assets);
+
 }  // namespace litert::lm
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_RUNTIME_UTIL_LITERT_UTIL_H_
