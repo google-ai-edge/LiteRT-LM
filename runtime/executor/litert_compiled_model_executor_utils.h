@@ -30,6 +30,7 @@
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
+#include "litert/cc/litert_options.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/cc/options/litert_cpu_options.h"  // from @litert
 #include "litert/cc/options/litert_gpu_options.h"  // from @litert
@@ -245,6 +246,33 @@ struct GpuModelCacheData {
 absl::StatusOr<GpuModelCacheData> GetGpuModelCacheData(
     const ExecutorSettingsBase& executor_settings,
     absl::string_view cache_name);
+
+// Holds a model's external weights so they can be registered with a
+// litert::Options instance before compilation. External weights live in a
+// dedicated file section rather than being embedded in (and mmapped with) the
+// model, so they are represented as a file handle plus the sections sliced from
+// it.
+struct ExternalWeightResources {
+  // File that backs the external weight sections. Empty when the model has no
+  // external weights, e.g. it uses embedded weights or its resource format does
+  // not support external weight sections.
+  std::optional<ScopedFile> scoped_file;
+  // Maps each external buffer group name to its region (offset and length)
+  // within scoped_file. Empty when scoped_file is empty.
+  litert::Options::ScopedWeightSectionMap sections;
+};
+
+// Returns the external weights for model_type when present. An empty result
+// means the model has embedded weights or its resource format does not support
+// external weight sections.
+absl::StatusOr<ExternalWeightResources> GetExternalWeightResources(
+    ModelResources& resources, ModelType model_type);
+
+// Adds model_type's external weight section to compilation_options when one is
+// present.
+absl::Status SetExternalWeightOptions(ModelResources& resources,
+                                      ModelType model_type,
+                                      litert::Options& compilation_options);
 
 // Initializes the embedding lookup and per-layer embedding lookup managers from
 // the given model resources and environment.

@@ -14,9 +14,11 @@
 
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 
+#include <cstddef>
 #include <cstdlib>
 #include <filesystem>  // NOLINT: Required for path manipulation.
 #include <fstream>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -35,6 +37,8 @@
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_layout.h"  // from @litert
+#include "litert/cc/litert_model.h"  // from @litert
+#include "litert/cc/litert_options.h"  // from @litert
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
@@ -1382,6 +1386,159 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
     EXPECT_EQ(GetGpuPrecision(gpu_options), kLiteRtDelegatePrecisionFp32);
   }
 }
+
+// A fake ModelResources whose weight-section lookup and backing file can be
+// configured per test. Only the members exercised by GetExternalWeightResources
+// are meaningful; all other lookups return errors.
+class FakeExternalWeightModelResources : public ModelResources {
+ public:
+  FakeExternalWeightModelResources(
+      absl::StatusOr<std::pair<size_t, size_t>> section_offset,
+      std::optional<ScopedFile> scoped_file)
+      : section_offset_(std::move(section_offset)),
+        scoped_file_(std::move(scoped_file)) {}
+  ~FakeExternalWeightModelResources() override = default;
+
+  absl::StatusOr<std::pair<size_t, size_t>> GetWeightsSectionOffset(
+      ModelType model_type) override {
+    return section_offset_;
+  }
+
+  absl::StatusOr<std::reference_wrapper<ScopedFile>> GetScopedFile() override {
+    if (!scoped_file_.has_value()) {
+      return absl::UnimplementedError("No scoped file.");
+    }
+    return std::ref(*scoped_file_);
+  }
+
+  absl::StatusOr<const litert::Model*> GetTFLiteModel(
+      ModelType model_type) override {
+    return absl::UnimplementedError("Unimplemented");
+  }
+
+  absl::StatusOr<absl::string_view> GetTFLiteModelBuffer(
+      ModelType model_type) override {
+    return absl::UnimplementedError("Unimplemented");
+  }
+
+  absl::StatusOr<FileRegion> GetTFLiteModelSectionFileRegion(
+      ModelType model_type) override {
+    return absl::UnimplementedError("Unimplemented");
+  }
+
+  std::optional<std::string> GetTFLiteModelBackendConstraint(
+      ModelType model_type) override {
+    return std::nullopt;
+  }
+
+  std::optional<std::string> GetTFLiteModelPreferActivationType(
+      ModelType model_type) override {
+    return std::nullopt;
+  }
+
+  absl::StatusOr<std::unique_ptr<Tokenizer>> GetTokenizer() override {
+    return absl::UnimplementedError("Unimplemented");
+  }
+
+  absl::StatusOr<const proto::LlmMetadata*> GetLlmMetadata() override {
+    return absl::UnimplementedError("Unimplemented");
+  }
+
+  absl::StatusOr<const proto::ExecutorMetadata*> GetExecutorMetadata()
+      override {
+    return absl::UnimplementedError("Unimplemented");
+  }
+
+ private:
+  absl::StatusOr<std::pair<size_t, size_t>> section_offset_;
+  std::optional<ScopedFile> scoped_file_;
+};
+
+// Returns the path to the shared test .task model.
+std::string TestModelPath() {
+  return (std::filesystem::path(::testing::SrcDir()) /
+          "litert_lm/runtime/testdata/test_lm.task")
+      .string();
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     GetExternalWeightResources_SectionNotFound) {
+  // A missing section means the model simply has no external weights, so an
+  // empty result (not an error) is expected.
+  FakeExternalWeightModelResources resources(
+      absl::NotFoundError("No weights section."), /*scoped_file=*/std::nullopt);
+
+  ASSERT_OK_AND_ASSIGN(
+      auto external_weights,
+      GetExternalWeightResources(resources, ModelType::kTfLitePrefillDecode));
+  EXPECT_FALSE(external_weights.scoped_file.has_value());
+  EXPECT_TRUE(external_weights.sections.empty());
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     GetExternalWeightResources_SectionUnimplemented) {
+  // Resource formats that do not support external weight sections report
+  // kUnimplemented, which is also treated as "no external weights".
+  FakeExternalWeightModelResources resources(
+      absl::UnimplementedError("Not supported."), /*scoped_file=*/std::nullopt);
+
+  ASSERT_OK_AND_ASSIGN(
+      auto external_weights,
+      GetExternalWeightResources(resources, ModelType::kTfLitePrefillDecode));
+  EXPECT_FALSE(external_weights.scoped_file.has_value());
+  EXPECT_TRUE(external_weights.sections.empty());
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     GetExternalWeightResources_SectionErrorPropagated) {
+  // Any other lookup error is a real failure and must be surfaced.
+  FakeExternalWeightModelResources resources(
+      absl::InvalidArgumentError("Bad section."), /*scoped_file=*/std::nullopt);
+
+  EXPECT_THAT(
+      GetExternalWeightResources(resources, ModelType::kTfLitePrefillDecode),
+      StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     GetExternalWeightResources_SectionPresent) {
+  ASSERT_OK_AND_ASSIGN(auto scoped_file, ScopedFile::Open(TestModelPath()));
+
+  // The section spans the byte range [100, 250), i.e. offset 100, length 150.
+  FakeExternalWeightModelResources resources(
+      std::pair<size_t, size_t>(100, 250), std::move(scoped_file));
+
+  ASSERT_OK_AND_ASSIGN(
+      auto external_weights,
+      GetExternalWeightResources(resources, ModelType::kTfLitePrefillDecode));
+  ASSERT_TRUE(external_weights.scoped_file.has_value());
+  EXPECT_TRUE(external_weights.scoped_file->IsValid());
+  ASSERT_TRUE(external_weights.sections.contains("tflite_weights"));
+  const auto& section = external_weights.sections.at("tflite_weights");
+  EXPECT_EQ(section.offset, 100);
+  EXPECT_EQ(section.length, 150);
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     SetExternalWeightOptions_NoExternalWeights) {
+  LITERT_ASSERT_OK_AND_ASSIGN(auto compilation_options,
+                              litert::Options::Create());
+  FakeExternalWeightModelResources resources(
+      absl::NotFoundError("No weights section."), /*scoped_file=*/std::nullopt);
+
+  // With no external weights, the call is a no-op that still succeeds.
+  EXPECT_OK(SetExternalWeightOptions(resources, ModelType::kTfLitePrefillDecode,
+                                     compilation_options));
+}
+
+// NOTE: The "external weights present" branch of SetExternalWeightOptions is
+// not unit-tested here. It forwards to
+// litert::Options::SetExternalWeightScopedFile, which takes ownership of the
+// weight source but only reclaims it when the Options object is built into a
+// compiled model, something a unit test does not do. Exercising it therefore
+// leaks the source and trips the heap checker. The substantive logic of that
+// branch (locating the section and duplicating the backing file) is covered by
+// GetExternalWeightResources_SectionPresent.
 
 }  // namespace
 }  // namespace litert::lm
