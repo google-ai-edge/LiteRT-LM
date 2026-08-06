@@ -70,6 +70,20 @@ TEST(LitertLmStreamingLoaderTest, LoadTestModel) {
   EXPECT_GE(num_sections, 3);
 }
 
+TEST(LitertLmStreamingLoaderTest, LoadHfTokenizerModel) {
+  const auto model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_hf_tokenizer.litertlm";
+  ASSERT_OK_AND_ASSIGN(auto stream,
+                       FileDataStream::Create(model_path.string()));
+
+  LitertLmStreamingLoader loader(std::move(stream));
+  ASSERT_OK_AND_ASSIGN(auto section_opt, loader.GetNextSection());
+  ASSERT_TRUE(section_opt.has_value());
+  EXPECT_EQ(section_opt->section->data_type(),
+            schema::AnySectionDataType_HF_Tokenizer_Zlib);
+}
+
 class MockDataStream : public DataStream {
  public:
   MOCK_METHOD(absl::Status, ReadAndDiscard,
