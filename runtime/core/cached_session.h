@@ -22,11 +22,11 @@
 #include "absl/functional/any_invocable.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "support/tokenizer/tokenizer.h"  // from @litert
 #include "runtime/core/prefix_cache.h"
 #include "runtime/engine/engine.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
+#include "support/tokenizer/tokenizer.h"
 
 namespace litert::lm {
 

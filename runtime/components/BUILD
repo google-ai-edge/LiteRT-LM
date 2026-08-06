@@ -314,17 +314,17 @@ cc_library(
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
         "@litert//litert/cc:litert_model",
-        "@litert//support/tokenizer",
         "//runtime/proto:embedding_metadata_cc_proto",
         "//runtime/proto:executor_metadata_cc_proto",
         "//runtime/proto:llm_metadata_cc_proto",
         "//runtime/util:scoped_file",
+        "//support/tokenizer",
     ] + select({
         ":disable_huggingface_tokenizer": [],
-        "//conditions:default": ["@litert//support/tokenizer:huggingface_tokenizer"],
+        "//conditions:default": ["//support/tokenizer:huggingface_tokenizer"],
     }) + select({
         ":disable_sentencepiece_tokenizer": [],
-        "//conditions:default": ["@litert//support/tokenizer:sentencepiece_tokenizer"],
+        "//conditions:default": ["//support/tokenizer:sentencepiece_tokenizer"],
     }),
 )
 
@@ -345,13 +345,13 @@ cc_library(
         "@litert//litert/cc:litert_buffer_ref",
         "@litert//litert/cc:litert_macros",
         "@litert//litert/cc:litert_model",
-        "@litert//support/tokenizer:sentencepiece_tokenizer",
         "//runtime/proto:executor_metadata_cc_proto",
         "//runtime/proto:llm_metadata_cc_proto",
         "//runtime/util:litert_status_util",
         "//runtime/util:metadata_util",
         "//runtime/util:model_asset_bundle_resources",
         "//runtime/util:scoped_file",
+        "//support/tokenizer:sentencepiece_tokenizer",
     ],
 )
 
@@ -468,10 +468,10 @@ cc_library(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings:string_view",
         "@litert//litert/cc:litert_model",
-        "@litert//support/tokenizer",
         "//runtime/proto:executor_metadata_cc_proto",
         "//runtime/proto:llm_metadata_cc_proto",
         "//runtime/util:scoped_file",
+        "//support/tokenizer",
     ],
 )
 
@@ -508,15 +508,15 @@ cc_test(
 
 alias(
     name = "tokenizer",
-    actual = "@litert//support/tokenizer",
+    actual = "//support/tokenizer",
 )
 
 alias(
     name = "sentencepiece_tokenizer",
-    actual = "@litert//support/tokenizer:sentencepiece_tokenizer",
+    actual = "//support/tokenizer:sentencepiece_tokenizer",
 )
 
 alias(
     name = "huggingface_tokenizer",
-    actual = "@litert//support/tokenizer:huggingface_tokenizer",
+    actual = "//support/tokenizer:huggingface_tokenizer",
 )

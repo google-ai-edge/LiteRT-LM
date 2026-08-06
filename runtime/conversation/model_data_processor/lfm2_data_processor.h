@@ -25,13 +25,13 @@
 #include "absl/status/statusor.h"  // from @com_google_absl      // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json           // from @nlohmann_json
-#include "support/preprocessor/image_preprocessor.h"  // from @litert
 #include "runtime/components/logits_processor/constrained_decoding/constraint.h"
 #include "runtime/components/prompt_template.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/lfm2_data_processor_config.h"
 #include "runtime/conversation/model_data_processor/model_data_processor.h"
 #include "runtime/engine/io_types.h"
+#include "support/preprocessor/image_preprocessor.h"
 
 namespace litert::support {
 class Tokenizer;

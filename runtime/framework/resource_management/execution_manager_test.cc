@@ -32,7 +32,6 @@
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
-#include "support/tokenizer/tokenizer.h"  // from @litert
 #include "runtime/components/logits_processor/constrained_decoding/fake_constraint.h"
 #include "runtime/components/logits_processor/no_repeat_ngram_config.h"
 #include "runtime/components/logits_processor/repetition_penalty_config.h"
@@ -50,6 +49,7 @@
 #include "runtime/proto/token.pb.h"
 #include "runtime/util/status_macros.h"  // IWYU pragma: keep
 #include "runtime/util/test_utils.h"  // NOLINT
+#include "support/tokenizer/tokenizer.h"
 
 namespace litert::lm {
 

@@ -28,7 +28,7 @@ cc_library(
     name = "convert_tensor_buffer",
     hdrs = ["convert_tensor_buffer.h"],
     deps = [
-        "@litert//support/util:convert_tensor_buffer",
+        "//support/util:convert_tensor_buffer",
     ],
 )
 
@@ -222,7 +222,7 @@ cc_library(
     name = "litert_status_util",
     hdrs = ["status_macros.h"],
     deps = [
-        "@litert//support/util:litert_status_util",
+        "//support/util:litert_status_util",
     ],
 )
 
@@ -306,7 +306,7 @@ cc_library(
     name = "memory_mapped_file",
     hdrs = ["memory_mapped_file.h"],
     deps = [
-        "@litert//support/util:memory_mapped_file",
+        "//support/util:memory_mapped_file",
     ],
 )
 
@@ -314,7 +314,7 @@ cc_library(
     name = "scoped_file",
     hdrs = ["scoped_file.h"],
     deps = [
-        "@litert//support/util:scoped_file",
+        "//support/util:scoped_file",
     ],
 )
 
@@ -399,7 +399,7 @@ cc_library(
     testonly = 1,
     hdrs = ["test_utils.h"],
     deps = [
-        "@litert//support/util:test_utils",
+        "//support/util:test_utils",
     ],
 )
 
@@ -615,10 +615,10 @@ cc_library(
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
-        "@litert//support/tokenizer",
         "//runtime/proto:llm_metadata_cc_proto",
         "//runtime/proto:llm_model_type_cc_proto",
         "//runtime/proto:token_cc_proto",
+        "//support/tokenizer",
     ],
 )
 
@@ -631,10 +631,10 @@ cc_test(
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings:string_view",
-        "@litert//support/tokenizer",
         "//runtime/components:prompt_template",
         "//runtime/proto:llm_metadata_cc_proto",
         "//runtime/proto:llm_model_type_cc_proto",
+        "//support/tokenizer",
     ],
 )
 

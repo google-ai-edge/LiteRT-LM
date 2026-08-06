@@ -32,8 +32,6 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/time/clock.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
-#include "support/tokenizer/sentencepiece_tokenizer.h"  // from @litert
-#include "support/tokenizer/tokenizer.h"  // from @litert
 #include "runtime/components/logits_processor/constrained_decoding/fake_constraint.h"
 #include "runtime/components/logits_processor/no_repeat_ngram_config.h"
 #include "runtime/components/logits_processor/repetition_penalty_config.h"
@@ -47,6 +45,8 @@
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/status_macros.h"
 #include "runtime/util/test_utils.h"  // NOLINT
+#include "support/tokenizer/sentencepiece_tokenizer.h"
+#include "support/tokenizer/tokenizer.h"
 
 namespace litert::lm {
 namespace {

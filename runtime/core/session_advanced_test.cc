@@ -40,8 +40,6 @@
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/test/matchers.h"  // from @litert
-#include "support/tokenizer/sentencepiece_tokenizer.h"  // from @litert
-#include "support/tokenizer/tokenizer.h"  // from @litert
 #include "runtime/components/logits_processor/constrained_decoding/fake_constraint.h"
 #include "runtime/components/logits_processor/no_repeat_ngram_config.h"
 #include "runtime/components/logits_processor/repetition_penalty_config.h"
@@ -59,6 +57,8 @@
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/status_macros.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
+#include "support/tokenizer/sentencepiece_tokenizer.h"
+#include "support/tokenizer/tokenizer.h"
 
 namespace litert::lm {
 

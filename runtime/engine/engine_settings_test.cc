@@ -31,7 +31,6 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/optional.h"  // from @com_google_absl
 #include "litert/cc/internal/scoped_file.h"  // from @litert  // IWYU pragma: keep
-#include "support/tokenizer/tokenizer.h"  // from @litert
 #include "runtime/components/logits_processor/suppress_tokens_config.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/llm_executor_io_types.h"
@@ -41,6 +40,7 @@
 #include "runtime/proto/sampler_params.pb.h"
 #include "runtime/proto/token.pb.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
+#include "support/tokenizer/tokenizer.h"
 
 namespace litert::lm {
 

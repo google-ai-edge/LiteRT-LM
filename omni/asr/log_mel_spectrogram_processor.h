@@ -22,9 +22,9 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
-#include "support/preprocessor/audio_preprocessor_miniaudio.h"  // from @litert
 #include "omni/asr/audio_preprocessor.h"
 #include "omni/base/stage.h"
+#include "support/preprocessor/audio_preprocessor_miniaudio.h"
 
 namespace litert::omni::asr {
 

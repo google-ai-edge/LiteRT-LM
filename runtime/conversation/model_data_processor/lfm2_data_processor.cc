@@ -28,8 +28,6 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl   // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json            // from @nlohmann_json
 #include "litert/cc/litert_layout.h"  // from @litert
-#include "support/preprocessor/image_preprocessor.h"  // from @litert
-#include "support/preprocessor/stb_image_preprocessor.h"  // from @litert  // IWYU pragma: keep
 #include "runtime/components/logits_processor/constrained_decoding/constraint.h"
 #include "runtime/components/prompt_template.h"
 #include "runtime/conversation/io_types.h"
@@ -39,6 +37,8 @@
 #include "runtime/engine/io_types.h"
 #include "runtime/util/memory_mapped_file.h"
 #include "runtime/util/status_macros.h"
+#include "support/preprocessor/image_preprocessor.h"
+#include "support/preprocessor/stb_image_preprocessor.h"  // IWYU pragma: keep
 #include "re2/re2.h"  // from @com_googlesource_code_re2  // from @com_googlesource_code_re2
 namespace litert::lm {
 

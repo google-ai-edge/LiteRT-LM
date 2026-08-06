@@ -21,7 +21,6 @@
 
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/types/optional.h"  // from @com_google_absl
-#include "support/tokenizer/tokenizer.h"  // from @litert
 #include "runtime/components/model_resources.h"
 #include "runtime/engine/embedding_engine.h"
 #include "runtime/engine/embedding_engine_settings.h"
@@ -31,6 +30,7 @@
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/vision_executor.h"
 #include "runtime/util/litert_util.h"
+#include "support/tokenizer/tokenizer.h"
 
 namespace litert::lm {
 

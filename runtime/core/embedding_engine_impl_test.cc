@@ -34,7 +34,6 @@
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
-#include "support/tokenizer/tokenizer.h"  // from @litert
 #include "runtime/components/model_resources.h"
 #include "runtime/components/model_resources_litert_lm.h"
 #include "runtime/engine/embedding_engine.h"
@@ -45,6 +44,7 @@
 #include "runtime/util/litert_util.h"
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
+#include "support/tokenizer/tokenizer.h"
 
 namespace litert::lm {
 namespace {

@@ -36,8 +36,6 @@
 #if !defined(LITERT_LM_FST_CONSTRAINTS_DISABLED)
 #include "runtime/components/logits_processor/constrained_decoding/gemma_model_constraint_provider.h"
 #endif
-#include "support/preprocessor/audio_preprocessor.h"  // from @litert
-#include "support/preprocessor/image_preprocessor.h"  // from @litert
 #include "runtime/components/tool_use/fc_tool_format_utils.h"
 #include "runtime/components/tool_use/parser_utils.h"
 #include "runtime/conversation/io_types.h"
@@ -45,6 +43,8 @@
 #include "runtime/conversation/prompt_utils.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/util/status_macros.h"
+#include "support/preprocessor/audio_preprocessor.h"
+#include "support/preprocessor/image_preprocessor.h"
 #include "sentencepiece_model.pb.h"  // from @sentencepiece
 
 namespace litert::lm {

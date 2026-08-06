@@ -23,8 +23,8 @@
 #include "absl/status/status_matchers.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
-#include "support/util/test_utils.h"  // from @litert  // IWYU pragma: keep
 #include "omni/tts/text_chunk_utils.h"
+#include "support/util/test_utils.h"  // IWYU pragma: keep
 
 namespace litert::omni::tts {
 namespace {

@@ -33,12 +33,12 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
-#include "support/tokenizer/tokenizer.h"  // from @litert
 #include "runtime/engine/engine.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/framework/resource_management/execution_manager.h"
 #include "runtime/proto/sampler_params.pb.h"
+#include "support/tokenizer/tokenizer.h"
 
 namespace litert::lm {
 

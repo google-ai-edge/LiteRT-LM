@@ -20,10 +20,10 @@
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "support/tokenizer/tokenizer.h"  // from @litert
 #include "omni/asr/detokenizer.h"
 #include "omni/asr/speech_recognizer.h"
 #include "omni/base/stage.h"
+#include "support/tokenizer/tokenizer.h"
 
 namespace litert::omni::asr {
 

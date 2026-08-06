@@ -32,12 +32,12 @@
 #include "absl/time/time.h"  // from @com_google_absl
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
-#include "support/tokenizer/tokenizer.h"  // from @litert
 #include "runtime/core/prefix_cache.h"
 #include "runtime/core/session_utils.h"
 #include "runtime/engine/engine.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/llm_executor_io_types.h"
+#include "support/tokenizer/tokenizer.h"
 
 namespace litert::lm {
 using ::litert::support::Tokenizer;

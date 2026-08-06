@@ -35,7 +35,6 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
-#include "support/tokenizer/tokenizer.h"  // from @litert
 #include "runtime/core/session_utils.h"
 #include "runtime/engine/engine.h"
 #include "runtime/engine/engine_settings.h"
@@ -43,6 +42,7 @@
 #include "runtime/framework/resource_management/execution_manager.h"
 #include "runtime/proto/sampler_params.pb.h"
 #include "runtime/util/status_macros.h"  // IWYU pragma: keep
+#include "support/tokenizer/tokenizer.h"
 
 namespace litert::lm {
 namespace {

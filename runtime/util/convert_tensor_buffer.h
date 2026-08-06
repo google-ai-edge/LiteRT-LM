@@ -15,7 +15,7 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_UTIL_CONVERT_TENSOR_BUFFER_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_UTIL_CONVERT_TENSOR_BUFFER_H_
 
-#include "support/util/convert_tensor_buffer.h"  // from @litert
+#include "support/util/convert_tensor_buffer.h"
 
 namespace litert::lm {
 using ::litert::support::ConvertAndCopyToTensorBuffer;

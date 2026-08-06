@@ -26,8 +26,6 @@
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/types/optional.h"  // from @com_google_absl
-#include "support/tokenizer/tokenizer.h"  // from @litert
-#include "support/util/io_types.h"  // from @litert
 #include "runtime/components/model_resources.h"
 #include "runtime/engine/embedding_engine.h"
 #include "runtime/engine/embedding_engine_settings.h"
@@ -48,6 +46,8 @@
 #include "runtime/util/litert_util.h"
 #include "runtime/util/status_macros.h"
 #include "runtime/util/tensor_buffer_util.h"
+#include "support/tokenizer/tokenizer.h"
+#include "support/util/io_types.h"
 
 namespace litert::lm {
 

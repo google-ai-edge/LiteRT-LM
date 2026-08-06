@@ -158,7 +158,6 @@ cc_test(
         "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/time",
         "@litert//litert/cc:litert_tensor_buffer",
-        "@litert//support/tokenizer",
         "//runtime/components:model_resources",
         "//runtime/components/logits_processor:no_repeat_ngram_config",
         "//runtime/components/logits_processor:repetition_penalty_config",
@@ -174,6 +173,7 @@ cc_test(
         "//runtime/proto:token_cc",
         "//runtime/util:litert_status_util",
         "//runtime/util:test_utils",
+        "//support/tokenizer",
     ],
 )
 

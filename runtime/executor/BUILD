@@ -620,7 +620,6 @@ cc_library(
         "@litert//litert/cc/options:litert_google_tensor_options",
         "@litert//litert/cc/options:litert_mediatek_options",
         "@litert//litert/cc/options:litert_qualcomm_options",
-        "@litert//support/util:litert_status_util",
         "//runtime/components:model_resources",
         "//runtime/components/embedding_lookup:embedding_lookup_manager",
         "//runtime/components/logits_processor",
@@ -628,6 +627,7 @@ cc_library(
         "//runtime/util:convert_tensor_buffer",
         "//runtime/util:litert_status_util",
         "//runtime/util:tensor_buffer_util",
+        "//support/util:litert_status_util",
         "@litert//tflite/types:half",
     ],
 )

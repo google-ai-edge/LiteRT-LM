@@ -26,13 +26,13 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "nlohmann/json_fwd.hpp"  // from @nlohmann_json
-#include "support/preprocessor/audio_preprocessor.h"  // from @litert
-#include "support/preprocessor/image_preprocessor.h"  // from @litert
-#include "support/util/io_types.h"  // from @litert
 #include "runtime/components/prompt_template.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/generic_data_processor_config.h"
 #include "runtime/conversation/model_data_processor/model_data_processor.h"
+#include "support/preprocessor/audio_preprocessor.h"
+#include "support/preprocessor/image_preprocessor.h"
+#include "support/util/io_types.h"
 
 namespace litert::lm {
 

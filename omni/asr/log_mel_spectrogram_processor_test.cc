@@ -23,8 +23,8 @@
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_matchers.h"  // from @com_google_absl
-#include "support/util/test_utils.h"  // from @litert  // IWYU pragma: keep for ASSERT_OK
 #include "omni/base/stage.h"
+#include "support/util/test_utils.h"  // IWYU pragma: keep for ASSERT_OK
 
 namespace litert::omni::asr {
 namespace {

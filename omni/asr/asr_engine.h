@@ -24,10 +24,10 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
-#include "support/tokenizer/tokenizer.h"  // from @litert
 #include "omni/asr/asr_session.h"
 #include "omni/asr/audio_source.h"
 #include "omni/asr/log_mel_spectrogram_processor.h"
+#include "support/tokenizer/tokenizer.h"
 
 namespace litert::omni::asr {
 

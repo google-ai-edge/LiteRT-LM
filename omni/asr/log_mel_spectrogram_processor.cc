@@ -32,11 +32,11 @@
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
-#include "support/preprocessor/audio_preprocessor.h"  // from @litert
-#include "support/preprocessor/audio_preprocessor_miniaudio.h"  // from @litert
-#include "support/util/io_types.h"  // from @litert
 #include "omni/asr/audio_preprocessor.h"
 #include "omni/base/stage.h"
+#include "support/preprocessor/audio_preprocessor.h"
+#include "support/preprocessor/audio_preprocessor_miniaudio.h"
+#include "support/util/io_types.h"
 
 namespace litert::omni::asr {
 namespace {

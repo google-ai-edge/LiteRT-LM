@@ -46,7 +46,7 @@ ENGINE_LITE_COMMON_DEPS = [
     "@com_google_absl//absl/strings:str_format",
     "@com_google_absl//absl/strings:string_view",
     "@com_google_absl//absl/time",
-    "@litert//support/tokenizer",
+    "//support/tokenizer",
     "//runtime/components/logits_processor:no_repeat_ngram_config",
     "//runtime/components/logits_processor:repetition_penalty_config",
     "//runtime/components/logits_processor:suppress_tokens_config",

@@ -31,16 +31,16 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_model.h"  // from @litert
 #ifdef ENABLE_HUGGINGFACE_TOKENIZER
-#include "support/tokenizer/huggingface_tokenizer.h"  // from @litert
+#include "support/tokenizer/huggingface_tokenizer.h"
 #endif  // ENABLE_HUGGINGFACE_TOKENIZER
 #ifdef ENABLE_SENTENCEPIECE_TOKENIZER
-#include "support/tokenizer/sentencepiece_tokenizer.h"  // from @litert
+#include "support/tokenizer/sentencepiece_tokenizer.h"
 #endif  // ENABLE_SENTENCEPIECE_TOKENIZER
-#include "support/tokenizer/tokenizer.h"  // from @litert
 #include "runtime/proto/embedding_metadata.pb.h"
 #include "runtime/proto/executor_metadata.pb.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/scoped_file.h"
+#include "support/tokenizer/tokenizer.h"
 
 namespace litert::lm {
 

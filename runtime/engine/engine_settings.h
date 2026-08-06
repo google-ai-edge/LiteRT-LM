@@ -30,7 +30,6 @@
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
-#include "support/tokenizer/tokenizer.h"  // from @litert
 #include "runtime/components/logits_processor/suppress_tokens_config.h"
 #include "runtime/executor/audio_executor_settings.h"
 #include "runtime/executor/executor_settings_base.h"
@@ -42,6 +41,7 @@
 #include "runtime/proto/llm_model_type.pb.h"
 #include "runtime/proto/sampler_params.pb.h"
 #include "runtime/util/scoped_file.h"
+#include "support/tokenizer/tokenizer.h"
 
 namespace litert::lm {
 

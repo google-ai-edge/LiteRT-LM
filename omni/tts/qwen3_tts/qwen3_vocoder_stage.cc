@@ -35,12 +35,12 @@
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
-#include "support/util/convert_tensor_buffer.h"  // from @litert
 #include "omni/base/io_types.h"
 #include "omni/base/stage.h"
 #include "omni/tts/latent_decoder.h"
 #include "omni/tts/qwen3_tts/common.h"
 #include "omni/tts/qwen3_tts/qwen3_stage_options.h"
+#include "support/util/convert_tensor_buffer.h"
 
 namespace litert::omni::tts {
 

@@ -26,10 +26,10 @@
 #include "absl/status/status_matchers.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
-#include "support/tokenizer/tokenizer.h"  // from @litert
-#include "support/util/test_utils.h"  // from @litert  // IWYU pragma: keep for ASSERT_OK
 #include "omni/asr/speech_recognizer.h"
 #include "omni/base/stage.h"
+#include "support/tokenizer/tokenizer.h"
+#include "support/util/test_utils.h"  // IWYU pragma: keep for ASSERT_OK
 
 namespace litert::omni::asr {
 namespace {

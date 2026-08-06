@@ -29,7 +29,6 @@
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "absl/synchronization/notification.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
-#include "support/util/test_utils.h"  // from @litert  // IWYU pragma: keep for ASSERT_OK
 #include "omni/asr/audio_preprocessor.h"
 #include "omni/asr/audio_source.h"
 #include "omni/asr/detokenizer.h"
@@ -38,6 +37,7 @@
 #include "omni/asr/text_merger.h"
 #include "omni/base/stage.h"
 #include "runtime/framework/threadpool.h"
+#include "support/util/test_utils.h"  // IWYU pragma: keep for ASSERT_OK
 
 namespace litert::omni::asr {
 namespace {

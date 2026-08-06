@@ -143,10 +143,10 @@ cc_test(
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/synchronization",
-        "@litert//support/util:test_utils",
         "//omni/base:io_types",
         "//omni/base:stage",
         "//runtime/framework:threadpool",
+        "//support/util:test_utils",
     ],
 )
 
@@ -170,7 +170,7 @@ cc_test(
         "@com_google_absl//absl/status:status_matchers",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
-        "@litert//support/util:test_utils",
+        "//support/util:test_utils",
     ],
 )
 
@@ -227,8 +227,8 @@ cc_test(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/time",
-        "@litert//support/util:test_utils",
         "//omni/base:io_types",
         "//omni/base:stage",
+        "//support/util:test_utils",
     ],
 )

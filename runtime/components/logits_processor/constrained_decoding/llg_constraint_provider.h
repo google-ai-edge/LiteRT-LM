@@ -21,11 +21,11 @@
 #include <vector>
 
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "support/tokenizer/tokenizer.h"  // from @litert
 #include "runtime/components/logits_processor/constrained_decoding/constraint.h"
 #include "runtime/components/logits_processor/constrained_decoding/constraint_provider.h"
 #include "runtime/components/logits_processor/constrained_decoding/constraint_provider_config.h"
 #include "runtime/components/logits_processor/constrained_decoding/llg_constraint_config.h"
+#include "support/tokenizer/tokenizer.h"
 #include "llguidance.h"
 
 namespace litert::lm {

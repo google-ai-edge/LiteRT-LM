@@ -33,8 +33,6 @@
 #include "litert/cc/options/litert_cpu_options.h"  // from @litert
 #include "litert/cc/options/litert_gpu_options.h"  // from @litert
 #include "litert/cc/options/litert_qualcomm_options.h"  // from @litert
-#include "support/tokenizer/huggingface_tokenizer.h"  // from @litert
-#include "support/tokenizer/tokenizer.h"  // from @litert
 #include "omni/asr/asr_session.h"
 #include "omni/asr/audio_preprocessor.h"
 #include "omni/asr/audio_source.h"
@@ -49,6 +47,8 @@
 #include "omni/asr/timestamp_text_merger.h"
 #include "omni/asr/tokenizer_detokenizer.h"
 #include "omni/base/litert_runner.h"
+#include "support/tokenizer/huggingface_tokenizer.h"
+#include "support/tokenizer/tokenizer.h"
 
 namespace litert::omni::asr {
 namespace {

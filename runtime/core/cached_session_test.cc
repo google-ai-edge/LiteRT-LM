@@ -38,8 +38,6 @@
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
 #include "litert/test/matchers.h"  // from @litert
-#include "support/tokenizer/sentencepiece_tokenizer.h"  // from @litert
-#include "support/tokenizer/tokenizer.h"  // from @litert
 #include "runtime/core/prefix_cache.h"
 #include "runtime/core/session_advanced.h"
 #include "runtime/engine/engine.h"
@@ -49,6 +47,8 @@
 #include "runtime/executor/fake_llm_executor.h"
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/framework/resource_management/threaded_execution_manager.h"
+#include "support/tokenizer/sentencepiece_tokenizer.h"
+#include "support/tokenizer/tokenizer.h"
 
 namespace litert::lm {
 using ::litert::support::SentencePieceTokenizer;

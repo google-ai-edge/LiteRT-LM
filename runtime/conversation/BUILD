@@ -174,9 +174,9 @@ cc_test(
     size = "medium",
     srcs = ["conversation_test.cc"],
     data = [
-        "@litert//support/preprocessor/testdata",
         "//runtime/components/testdata",
         "//runtime/testdata",
+        "//support/preprocessor/testdata",
     ],
     shard_count = 4,
     tags = ["requires-mac-inputs:hard"],  # Required for running on Forge on Mac.

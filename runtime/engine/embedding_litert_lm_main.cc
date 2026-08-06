@@ -33,13 +33,12 @@
 #include "absl/base/log_severity.h"  // from @com_google_absl
 #include "absl/flags/flag.h"  // from @com_google_absl
 #include "absl/flags/parse.h"  // from @com_google_absl
-#include "absl/log/globals.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
+#include "absl/log/globals.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_environment.h"  // from @litert
-#include "support/preprocessor/image_preprocessor.h"  // from @litert
 #include "runtime/components/model_resources.h"
 #include "runtime/core/embedding_engine_impl.h"
 #include "runtime/engine/embedding_engine.h"
@@ -51,6 +50,7 @@
 #include "runtime/util/memory_mapped_file.h"
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/status_macros.h"
+#include "support/preprocessor/image_preprocessor.h"
 
 ABSL_FLAG(std::string, backend, "cpu",
           "Executor backend to use for embedding execution (cpu, gpu, etc.)");

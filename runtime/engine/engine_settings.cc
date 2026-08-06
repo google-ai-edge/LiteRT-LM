@@ -32,7 +32,6 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/str_split.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
-#include "support/tokenizer/tokenizer.h"  // from @litert
 #include "runtime/components/logits_processor/suppress_tokens_config.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/executor/audio_executor_settings.h"
@@ -49,6 +48,7 @@
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/status_macros.h"  // IWYU pragma: keep
 #include "schema/core/litertlm_header_schema_generated.h"
+#include "support/tokenizer/tokenizer.h"
 
 namespace litert::lm {
 namespace {

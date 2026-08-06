@@ -57,7 +57,7 @@
 #include "litert/cc/litert_options.h"  // from @litert
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
-#include "support/util/status_macros.h"  // from @litert
+#include "support/util/status_macros.h"
 #include "tflite/types/half.h"  // from @litert
 #if defined(__ANDROID__)
 #include "litert/cc/options/litert_google_tensor_options.h"  // from @litert

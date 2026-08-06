@@ -33,10 +33,10 @@
 #include "absl/strings/str_join.h"  // from @com_google_absl
 #include "absl/strings/str_split.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
-#include "support/tokenizer/tokenizer.h"  // from @litert
 #include "omni/asr/detokenizer.h"
 #include "omni/asr/speech_recognizer.h"
 #include "omni/base/stage.h"
+#include "support/tokenizer/tokenizer.h"
 
 namespace litert::omni::asr {
 namespace {

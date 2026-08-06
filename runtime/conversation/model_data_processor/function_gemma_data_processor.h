@@ -30,11 +30,11 @@
 #if !defined(LITERT_LM_FST_CONSTRAINTS_DISABLED)
 #include "runtime/components/logits_processor/constrained_decoding/gemma_model_constraint_provider.h"
 #endif
-#include "support/tokenizer/tokenizer.h"  // from @litert
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/function_gemma_data_processor_config.h"
 #include "runtime/conversation/model_data_processor/model_data_processor.h"
 #include "runtime/engine/io_types.h"
+#include "support/tokenizer/tokenizer.h"
 
 namespace litert::lm {
 

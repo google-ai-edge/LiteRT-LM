@@ -76,9 +76,9 @@ cc_library(
         "@litert//litert/cc:litert_environment",
         "@litert//litert/cc:litert_macros",
         "@litert//litert/cc:litert_tensor_buffer",
-        "@litert//support/tokenizer:huggingface_tokenizer",
         "//omni/base:stage",
         "//omni/tts:text_frontend",
+        "//support/tokenizer:huggingface_tokenizer",
     ],
 )
 
@@ -107,11 +107,11 @@ cc_library(
         "@litert//litert/cc:litert_environment",
         "@litert//litert/cc:litert_macros",
         "@litert//litert/cc:litert_tensor_buffer",
-        "@litert//support/util:convert_tensor_buffer",
         "//omni/base:stage",
         "//omni/tts:acoustic_predictor",
         "//omni/tts:text_frontend",
         "//runtime/executor:litert_compiled_model_executor_utils",
+        "//support/util:convert_tensor_buffer",
     ],
 )
 
@@ -153,10 +153,10 @@ cc_library(
         "@litert//litert/cc:litert_environment",
         "@litert//litert/cc:litert_macros",
         "@litert//litert/cc:litert_tensor_buffer",
-        "@litert//support/util:convert_tensor_buffer",
         "//omni/base:io_types",
         "//omni/base:stage",
         "//omni/tts:latent_decoder",
         "//omni/tts:vocoder",
+        "//support/util:convert_tensor_buffer",
     ],
 )

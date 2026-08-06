@@ -34,7 +34,6 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
-#include "support/tokenizer/tokenizer.h"  // from @litert
 #include "c/engine_internal.h"
 #include "runtime/components/logits_processor/no_repeat_ngram_config.h"
 #include "runtime/components/logits_processor/repetition_penalty_config.h"
@@ -50,6 +49,7 @@
 #include "runtime/proto/token.pb.h"
 #include "runtime/util/logging.h"
 #include "runtime/util/scoped_file.h"
+#include "support/tokenizer/tokenizer.h"
 
 namespace {
 

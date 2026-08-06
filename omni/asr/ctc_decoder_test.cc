@@ -20,7 +20,7 @@
 #include <gtest/gtest.h>
 #include "absl/status/status_matchers.h"  // from @com_google_absl
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
-#include "support/util/test_utils.h"  // from @litert  // IWYU pragma: keep for ASSERT_OK
+#include "support/util/test_utils.h"  // IWYU pragma: keep for ASSERT_OK
 
 namespace litert::omni::asr {
 namespace {

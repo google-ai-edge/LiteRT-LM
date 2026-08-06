@@ -30,13 +30,13 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
-#include "support/tokenizer/tokenizer.h"  // from @litert
 #include "runtime/components/logits_processor/constrained_decoding/bitmap.h"
 #include "runtime/components/logits_processor/constrained_decoding/constraint.h"
 #include "runtime/components/logits_processor/constrained_decoding/llg_constraint_config.h"
 #include "runtime/components/logits_processor/constrained_decoding/llg_constraint_provider.h"
 #include "runtime/util/status_macros.h"  // IWYU pragma: keep
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
+#include "support/tokenizer/tokenizer.h"
 
 namespace litert::lm {
 

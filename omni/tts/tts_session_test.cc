@@ -28,7 +28,6 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "absl/synchronization/notification.h"  // from @com_google_absl
-#include "support/util/test_utils.h"  // from @litert  // IWYU pragma: keep
 #include "omni/base/io_types.h"
 #include "omni/base/stage.h"
 #include "omni/tts/acoustic_predictor.h"
@@ -37,6 +36,7 @@
 #include "omni/tts/text_source.h"
 #include "omni/tts/vocoder.h"
 #include "runtime/framework/threadpool.h"
+#include "support/util/test_utils.h"  // IWYU pragma: keep
 
 namespace litert::omni::tts {
 namespace {

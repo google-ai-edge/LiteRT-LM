@@ -18,9 +18,9 @@
 #include <optional>
 #include <string>
 
-#include "support/preprocessor/audio_preprocessor.h"  // from @litert
-#include "support/preprocessor/image_preprocessor.h"  // from @litert
 #include "runtime/conversation/model_data_processor/multimodal_processor_helper.h"
+#include "support/preprocessor/audio_preprocessor.h"
+#include "support/preprocessor/image_preprocessor.h"
 
 namespace litert::lm {
 

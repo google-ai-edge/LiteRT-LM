@@ -38,7 +38,7 @@ cc_library(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/time",
-        "@litert//support/tokenizer",
+        "//support/tokenizer",
     ],
 )
 
@@ -124,12 +124,12 @@ cc_library(
         "@com_google_absl//absl/time",
         "@com_google_absl//absl/types:span",
         "@litert//litert/cc:litert_macros",
-        "@litert//support/util:io_types",
         "//runtime/components/logits_processor:no_repeat_ngram_config",
         "//runtime/components/logits_processor:repetition_penalty_config",
         "//runtime/components/logits_processor:suppress_tokens_config",
         "//runtime/components/logits_processor/constrained_decoding:constraint",
         "//runtime/proto:engine_cc_proto",
+        "//support/util:io_types",
     ],
 )
 
@@ -176,7 +176,6 @@ cc_library(
         "@com_google_absl//absl/time",
         "@nlohmann_json//:json",
         "@litert//litert/cc/internal:scoped_file",
-        "@litert//support/tokenizer",
         "//runtime/components/logits_processor:no_repeat_ngram_config",
         "//runtime/components/logits_processor:repetition_penalty_config",
         "//runtime/components/logits_processor:suppress_tokens_config",
@@ -191,6 +190,7 @@ cc_library(
         "//runtime/proto:sampler_params_cc_proto",
         "//runtime/util:litert_status_util",
         "//runtime/util:scoped_file",
+        "//support/tokenizer",
         "@com_googlesource_code_re2//:re2",
         "@stb//:stb_image",
         "@litert//tflite/profiling:memory_info",
@@ -337,8 +337,6 @@ cc_binary(
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings",
         "@litert//litert/cc:litert_environment",
-        "@litert//support/preprocessor:image_preprocessor",
-        "@litert//support/preprocessor:image_preprocessor_impl",  # buildcleaner: keep
         "//runtime/components:model_resources",
         "//runtime/core:embedding_engine_impl",
         "//runtime/executor:executor_settings_base",
@@ -347,6 +345,8 @@ cc_binary(
         "//runtime/util:litert_util",
         "//runtime/util:memory_mapped_file",
         "//runtime/util:scoped_file",
+        "//support/preprocessor:image_preprocessor",
+        "//support/preprocessor:image_preprocessor_impl",  # buildcleaner: keep
     ],
 )
 
@@ -364,7 +364,6 @@ cc_library(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
-        "@litert//support/tokenizer",
         "//runtime/components:model_resources",
         "//runtime/components/logits_processor:suppress_tokens_config",
         "//runtime/executor:audio_executor_settings",
@@ -382,6 +381,7 @@ cc_library(
         "//runtime/util:model_type_utils",
         "//runtime/util:scoped_file",
         "//schema/core:litertlm_header_schema",
+        "//support/tokenizer",
     ],
 )
 
@@ -398,7 +398,6 @@ cc_test(
         "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/types:optional",
         "@litert//litert/cc/internal:scoped_file",
-        "@litert//support/tokenizer",
         "//runtime/components/logits_processor:suppress_tokens_config",
         "//runtime/executor:executor_settings_base",
         "//runtime/executor:llm_executor_io_types",
@@ -408,6 +407,7 @@ cc_test(
         "//runtime/proto:sampler_params_cc_proto",
         "//runtime/proto:token_cc_proto",
         "//runtime/util:test_utils",
+        "//support/tokenizer",
     ],
 )
 

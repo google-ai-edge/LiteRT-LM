@@ -85,7 +85,7 @@ constexpr char kGemma4TemplatePath[] =
     "litert_lm/runtime/components/testdata/google-gemma-4-multi-prefill.jinja";
 
 constexpr char kTestImageFilePath[] =
-    "litert/support/preprocessor/testdata/apple.png";
+    "litert_lm/support/preprocessor/testdata/apple.png";
 
 constexpr absl::string_view kTestJinjaPromptTemplate = R"jinja(
 {%- for message in messages -%}

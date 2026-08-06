@@ -55,7 +55,7 @@ cc_test(
         "@com_google_absl//absl/status:status_matchers",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/time",
-        "@litert//support/util:test_utils",
+        "//support/util:test_utils",
     ] + select({
         "@platforms//os:ios": ["@miniaudio//:miniaudio_objc"],
         "@platforms//os:macos": ["@miniaudio//:miniaudio_objc"],
@@ -88,10 +88,10 @@ cc_library(
         "@com_google_absl//absl/types:span",
         "@litert//litert/cc:litert_macros",
         "@litert//litert/cc:litert_tensor_buffer",
-        "@litert//support/preprocessor:audio_preprocessor",
-        "@litert//support/preprocessor:audio_preprocessor_miniaudio",
-        "@litert//support/util:io_types",
         "//omni/base:stage",
+        "//support/preprocessor:audio_preprocessor",
+        "//support/preprocessor:audio_preprocessor_miniaudio",
+        "//support/util:io_types",
     ],
 )
 
@@ -116,8 +116,8 @@ cc_test(
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_matchers",
-        "@litert//support/util:test_utils",
         "//omni/base:stage",
+        "//support/util:test_utils",
     ],
 )
 
@@ -153,7 +153,7 @@ cc_test(
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status:status_matchers",
         "@litert//litert/cc:litert_tensor_buffer",
-        "@litert//support/util:test_utils",
+        "//support/util:test_utils",
     ],
 )
 
@@ -188,8 +188,8 @@ cc_test(
         "@litert//litert/cc:litert_layout",
         "@litert//litert/cc:litert_ranked_tensor_type",
         "@litert//litert/cc:litert_tensor_buffer",
-        "@litert//support/util:test_utils",
         "//omni/base:mock_litert_runner",
+        "//support/util:test_utils",
     ],
 )
 
@@ -224,8 +224,8 @@ cc_test(
         "@litert//litert/cc:litert_layout",
         "@litert//litert/cc:litert_ranked_tensor_type",
         "@litert//litert/cc:litert_tensor_buffer",
-        "@litert//support/util:test_utils",
         "//omni/base:mock_litert_runner",
+        "//support/util:test_utils",
     ],
 )
 
@@ -263,9 +263,9 @@ cc_test(
         "@litert//litert/cc:litert_layout",
         "@litert//litert/cc:litert_ranked_tensor_type",
         "@litert//litert/cc:litert_tensor_buffer",
-        "@litert//support/util:test_utils",
         "//omni/base:mock_litert_runner",
         "//omni/base:stage",
+        "//support/util:test_utils",
     ],
 )
 
@@ -293,8 +293,8 @@ cc_library(
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
-        "@litert//support/tokenizer",
         "//omni/base:stage",
+        "//support/tokenizer",
     ],
 )
 
@@ -309,9 +309,9 @@ cc_test(
         "@com_google_absl//absl/status:status_matchers",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings:string_view",
-        "@litert//support/tokenizer",
-        "@litert//support/util:test_utils",
         "//omni/base:stage",
+        "//support/tokenizer",
+        "//support/util:test_utils",
     ],
 )
 
@@ -410,8 +410,8 @@ cc_test(
         "@com_google_absl//absl/status:status_matchers",
         "@com_google_absl//absl/status:statusor",
         "@litert//litert/cc:litert_macros",
-        "@litert//support/util:test_utils",
         "//omni/base:stage",
+        "//support/util:test_utils",
     ],
 )
 
@@ -458,9 +458,9 @@ cc_test(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/time",
-        "@litert//support/util:test_utils",
         "//omni/base:stage",
         "//runtime/framework:threadpool",
+        "//support/util:test_utils",
     ],
 )
 
@@ -496,9 +496,9 @@ cc_library(
         "@litert//litert/cc/options:litert_cpu_options",
         "@litert//litert/cc/options:litert_gpu_options",
         "@litert//litert/cc/options:litert_qualcomm_options",
-        "@litert//support/tokenizer",
-        "@litert//support/tokenizer:huggingface_tokenizer",
         "//omni/base:litert_runner",
+        "//support/tokenizer",
+        "//support/tokenizer:huggingface_tokenizer",
     ],
 )
 

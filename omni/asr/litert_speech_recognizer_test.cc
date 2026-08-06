@@ -30,10 +30,10 @@
 #include "litert/cc/litert_layout.h"  // from @litert
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
-#include "support/util/test_utils.h"  // from @litert  // IWYU pragma: keep for ASSERT_OK
 #include "omni/asr/speech_recognizer.h"
 #include "omni/base/mock_litert_runner.h"
 #include "omni/base/stage.h"
+#include "support/util/test_utils.h"  // IWYU pragma: keep for ASSERT_OK
 
 namespace litert::omni::asr {
 namespace {
