@@ -16,7 +16,7 @@
 import PackageDescription
 
 let package = Package(
-  name: "LiteRTLM",
+  name: "LiteRT-LM",
   platforms: [
     .iOS(.v15),
     .macOS(.v12),
