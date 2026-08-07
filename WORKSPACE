@@ -2,14 +2,14 @@
 
 workspace(name = "litert_lm")
 
-# UPDATED = 2026-08-03
-LITERT_REF = "0ff28117f1cb5556d0e015bf80b773f74e2bee51"
+# UPDATED = 2026-08-07
+LITERT_REF = "b0f6c12088df229f6342f1af164caa66ffa7b010"
 
-LITERT_SHA256 = "07961b2128fe4fd330072c60d5ab1bb1b632d49a6d0bbdc8ff7885cd47fd4c1d"
+LITERT_SHA256 = "8439f4f3ff7c06912ccc1b6e358f36e737f071d75b786c4562edceab04881096"
 
-TENSORFLOW_REF = "9e1afa4e5cfd8818518183211b77f2976c7dc450"
+TENSORFLOW_REF = "9445166b2bae51d8ade232232b3bcf73489d3a99"
 
-TENSORFLOW_SHA256 = "c67c2e8c62b55936a3d7705989af57a0eb28a8b97ab7ed95fe294917c6fb0c14"
+TENSORFLOW_SHA256 = "2c541cc6c7969f7750a0bc00bf7bd559cb724db88fe6e066a1e764db5ff9a85f"
 
 # buildifier: disable=load-on-top
 
@@ -92,6 +92,16 @@ http_archive(
     url = "https://github.com/abseil/abseil-cpp/archive/20260526.0.tar.gz",
 )
 
+# Toolchains for ML projects
+# Older version than one tensorflow uses as current tensorflow breaks workspace build.
+# Details: https://github.com/google-ml-infra/rules_ml_toolchain
+http_archive(
+    name = "rules_ml_toolchain",
+    sha256 = "3b05687842427041c65d1bc2f4aeda3a3079557120f5be8c34690087a88c5de5",
+    strip_prefix = "rules_ml_toolchain-2eddbc595cc0bbe650c2640204f66b14f015f1a8",
+    url = "https://github.com/google-ml-infra/rules_ml_toolchain/archive/2eddbc595cc0bbe650c2640204f66b14f015f1a8.tar.gz",
+)
+
 # TensorFlow
 http_archive(
     name = "org_tensorflow",
@@ -110,15 +120,6 @@ http_archive(
 load("@org_tensorflow//tensorflow:workspace3.bzl", "tf_workspace3")
 
 tf_workspace3()
-
-# Toolchains for ML projects
-# Details: https://github.com/google-ml-infra/rules_ml_toolchain
-http_archive(
-    name = "rules_ml_toolchain",
-    sha256 = "9285d90601757838d064a12f51f14374d40064ddc2fa198979908b6bd0f89348",
-    strip_prefix = "rules_ml_toolchain-7f40603f574b95746152332ef3ad5fce63f1768d",
-    url = "https://github.com/google-ml-infra/rules_ml_toolchain/archive/7f40603f574b95746152332ef3ad5fce63f1768d.tar.gz",
-)
 
 load(
     "@rules_ml_toolchain//cc/deps:cc_toolchain_deps.bzl",
