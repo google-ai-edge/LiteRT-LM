@@ -21,7 +21,6 @@
 #include <vector>
 
 #include "absl/strings/ascii.h"  // from @com_google_absl
-#include "absl/strings/str_join.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 
@@ -55,7 +54,8 @@ std::vector<AlignCode> AlignTokens(absl::Span<const std::string> ref_tokens,
     for (size_t j = 1; j <= h_len; ++j) {
       const int del_cost = dp[i - 1][j] + 1;
       const int ins_cost = dp[i][j - 1] + 1;
-      const bool is_match = (ref_tokens[i - 1] == hyp_tokens[j - 1]);
+      const bool is_match =
+          CloseEnoughStr(ref_tokens[i - 1], hyp_tokens[j - 1]);
       const int sub_cost = dp[i - 1][j - 1] + (is_match ? 0 : 2);
 
       int min_cost = sub_cost;
@@ -96,7 +96,7 @@ std::vector<AlignCode> AlignTokens(absl::Span<const std::string> ref_tokens,
   return alignment;
 }
 
-int ComputeLevenshteinDistance(absl::string_view s1, absl::string_view s2) {
+int ComputeLevenshteinDistanceStr(absl::string_view s1, absl::string_view s2) {
   const size_t len1 = s1.size();
   const size_t len2 = s2.size();
   std::vector<std::vector<int>> dp(len1 + 1, std::vector<int>(len2 + 1, 0));
@@ -116,11 +116,33 @@ int ComputeLevenshteinDistance(absl::string_view s1, absl::string_view s2) {
   return dp[len1][len2];
 }
 
-std::string Canonicalize(absl::Span<const std::string> words) {
-  std::string joined = absl::AsciiStrToLower(absl::StrJoin(words, " "));
+int ComputeLevenshteinDistanceWords(absl::Span<const std::string> words1,
+                                    absl::Span<const std::string> words2) {
+  const size_t len1 = words1.size();
+  const size_t len2 = words2.size();
+  std::vector<std::vector<int>> dp(len1 + 1, std::vector<int>(len2 + 1, 0));
+
+  for (size_t i = 0; i <= len1; ++i) dp[i][0] = static_cast<int>(i);
+  for (size_t j = 0; j <= len2; ++j) dp[0][j] = static_cast<int>(j);
+
+  for (size_t i = 1; i <= len1; ++i) {
+    for (size_t j = 1; j <= len2; ++j) {
+      int deletion_cost = dp[i - 1][j] + 1;
+      int insertion_cost = dp[i][j - 1] + 1;
+      int match_or_sub_cost =
+          dp[i - 1][j - 1] +
+          (CloseEnoughStr(words1[i - 1], words2[j - 1]) ? 0 : 1);
+      dp[i][j] = std::min({deletion_cost, insertion_cost, match_or_sub_cost});
+    }
+  }
+  return dp[len1][len2];
+}
+
+std::string CanonicalizeStr(absl::string_view word) {
+  std::string lower = absl::AsciiStrToLower(word);
   std::string result;
-  result.reserve(joined.size());
-  for (char c : joined) {
+  result.reserve(lower.size());
+  for (char c : lower) {
     if (!std::ispunct(static_cast<unsigned char>(c))) {
       result.push_back(c);
     }
@@ -128,21 +150,31 @@ std::string Canonicalize(absl::Span<const std::string> words) {
   return result;
 }
 
-bool CloseEnoughStrings(absl::string_view s1, absl::string_view s2) {
-  const size_t min_len = std::min(s1.size(), s2.size());
-  const absl::string_view prefix1 = s1.substr(0, min_len);
-  const absl::string_view prefix2 = s2.substr(0, min_len);
-  if (min_len <= 3) {
-    return prefix1 == prefix2;
+std::vector<std::string> CanonicalizeWords(
+    absl::Span<const std::string> words) {
+  std::vector<std::string> result;
+  result.reserve(words.size());
+  for (const auto& word : words) {
+    result.push_back(CanonicalizeStr(word));
   }
-  return ComputeLevenshteinDistance(prefix1, prefix2) <= 1;
+  return result;
 }
 
-bool CloseEnough(absl::Span<const std::string> l1,
-                 absl::Span<const std::string> l2) {
+bool CloseEnoughStr(absl::string_view s1, absl::string_view s2) {
+  std::string c1 = CanonicalizeStr(s1);
+  std::string c2 = CanonicalizeStr(s2);
+  const size_t min_len = std::min(c1.size(), c2.size());
+  if (min_len <= 3) {
+    return c1 == c2;
+  }
+  return ComputeLevenshteinDistanceStr(c1, c2) <= 1;
+}
+
+bool CloseEnoughWords(absl::Span<const std::string> l1,
+                      absl::Span<const std::string> l2) {
   if (l1.size() != l2.size()) return false;
   for (size_t i = 0; i < l1.size(); ++i) {
-    if (!CloseEnoughStrings(l1[i], l2[i])) {
+    if (!CloseEnoughStr(l1[i], l2[i])) {
       return false;
     }
   }
@@ -157,7 +189,7 @@ std::vector<std::string> DedupWords(absl::Span<const std::string> prev_words,
   for (int i = max_search; i >= 1; --i) {
     auto prev_tail = prev_words.subspan(prev_words.size() - i, i);
     auto curr_head = curr_words.subspan(0, i);
-    if (CloseEnough(prev_tail, curr_head)) {
+    if (CloseEnoughWords(prev_tail, curr_head)) {
       return std::vector<std::string>(curr_words.begin() + i, curr_words.end());
     }
   }

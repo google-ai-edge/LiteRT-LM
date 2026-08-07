@@ -37,22 +37,29 @@ std::vector<AlignCode> AlignTokens(absl::Span<const std::string> ref_tokens,
                                    absl::Span<const std::string> hyp_tokens);
 
 // Computes the Levenshtein edit distance between two string views.
-int ComputeLevenshteinDistance(absl::string_view s1, absl::string_view s2);
+int ComputeLevenshteinDistanceStr(absl::string_view s1, absl::string_view s2);
 
-// Lowercases words, joins them with space, and strips punctuation.
-std::string Canonicalize(absl::Span<const std::string> words);
+// Computes the word-level Levenshtein edit distance between two word sequences.
+int ComputeLevenshteinDistanceWords(absl::Span<const std::string> words1,
+                                    absl::Span<const std::string> words2);
+
+// Lowercases a word and strips punctuation.
+std::string CanonicalizeStr(absl::string_view word);
+
+// Lowercases each word in the span and strips punctuation.
+std::vector<std::string> CanonicalizeWords(absl::Span<const std::string> words);
 
 // Returns true if two string views match on prefix or have edit distance <= 1.
-bool CloseEnoughStrings(absl::string_view s1, absl::string_view s2);
+bool CloseEnoughStr(absl::string_view s1, absl::string_view s2);
 
 // Returns true if two word spans have equal size and corresponding words are
 // close enough.
-bool CloseEnough(absl::Span<const std::string> l1,
-                 absl::Span<const std::string> l2);
+bool CloseEnoughWords(absl::Span<const std::string> l1,
+                      absl::Span<const std::string> l2);
 
 // Finds max overlapping suffix of prev_words and prefix of curr_words within
-// search_window using CloseEnough, and returns curr_words with the overlapping
-// prefix removed.
+// search_window using CloseEnoughWords, and returns curr_words with the
+// overlapping prefix removed.
 std::vector<std::string> DedupWords(absl::Span<const std::string> prev_words,
                                     absl::Span<const std::string> curr_words,
                                     int search_window = 2);

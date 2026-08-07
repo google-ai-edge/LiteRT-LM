@@ -48,33 +48,37 @@ TEST(LevenshteinAlignTest, OverlapWithPrefixAndSuffix) {
 }
 
 TEST(LevenshteinAlignTest, ComputeLevenshteinDistance) {
-  EXPECT_EQ(ComputeLevenshteinDistance("kitten", "sitting"), 3);
-  EXPECT_EQ(ComputeLevenshteinDistance("hello", "hello"), 0);
-  EXPECT_EQ(ComputeLevenshteinDistance("", "abc"), 3);
-  EXPECT_EQ(ComputeLevenshteinDistance("abc", ""), 3);
+  EXPECT_EQ(ComputeLevenshteinDistanceStr("kitten", "sitting"), 3);
+  EXPECT_EQ(ComputeLevenshteinDistanceStr("hello", "hello"), 0);
+  EXPECT_EQ(ComputeLevenshteinDistanceStr("", "abc"), 3);
+  EXPECT_EQ(ComputeLevenshteinDistanceStr("abc", ""), 3);
+
+  std::vector<std::string> v1 = {"hello", "world"};
+  std::vector<std::string> v2 = {"hella", "world"};
+  EXPECT_EQ(ComputeLevenshteinDistanceWords(v1, v2), 0);
 }
 
-TEST(LevenshteinAlignTest, CanonicalizeWords) {
+TEST(LevenshteinAlignTest, Canonicalize) {
+  EXPECT_EQ(CanonicalizeStr("Hello,"), "hello");
   std::vector<std::string> words = {"Hello,", "WORLD!"};
-  EXPECT_EQ(Canonicalize(words), "hello world");
+  EXPECT_THAT(CanonicalizeWords(words), ElementsAre("hello", "world"));
 }
 
-TEST(LevenshteinAlignTest, CloseEnoughStringsTest) {
-  EXPECT_TRUE(CloseEnoughStrings("cat", "cat"));
-  EXPECT_FALSE(CloseEnoughStrings(
+TEST(LevenshteinAlignTest, CloseEnoughTest) {
+  EXPECT_TRUE(CloseEnoughStr("cat", "cat"));
+  EXPECT_FALSE(CloseEnoughStr(
       "cat", "car"));  // min_len <= 3 requiring exact prefix match
-  EXPECT_TRUE(
-      CloseEnoughStrings("hello", "hella"));  // min_len > 3 with dist <= 1
-  EXPECT_FALSE(CloseEnoughStrings("hello", "heyyy"));
+  EXPECT_TRUE(CloseEnoughStr("hello", "hella"));  // min_len > 3 with dist <= 1
+  EXPECT_FALSE(CloseEnoughStr("hello", "heyyy"));
 }
 
 TEST(LevenshteinAlignTest, CloseEnoughSpansTest) {
   std::vector<std::string> l1 = {"hello", "world"};
   std::vector<std::string> l2 = {"hella", "world"};
-  EXPECT_TRUE(CloseEnough(l1, l2));
+  EXPECT_TRUE(CloseEnoughWords(l1, l2));
 
   std::vector<std::string> l3 = {"hello"};
-  EXPECT_FALSE(CloseEnough(l1, l3));
+  EXPECT_FALSE(CloseEnoughWords(l1, l3));
 }
 
 TEST(LevenshteinAlignTest, DedupWordsTest) {

@@ -184,5 +184,102 @@ TEST(TimestampTextMergerTest,
   EXPECT_FALSE(res2->unconfirmed_text.empty());
 }
 
+TEST(TimestampTextMergerTest, ReplacesEndOfChunkHallucinationWithGroundTruth) {
+  DummyWordStage word_stage;
+  TimestampTextMerger merger(&word_stage, /*overlap_ratio=*/0.4f);
+
+  // Chunk 1 has hallucinated "huge" at the end of chunk
+  word_stage.PushWordsWithEndOfChunkTimestamp({{"the", 1000},
+                                               {"stale", 1600},
+                                               {"smell", 2100},
+                                               {"of", 2600},
+                                               {"old", 3000},
+                                               {"beer", 3400},
+                                               {"lingers", 4100},
+                                               {"it", 4600},
+                                               {"takes", 5000},
+                                               {"huge", 5400}},
+                                              /*end_ts_ms=*/5500);
+  ASSERT_OK(merger.Schedule());
+  auto res1 = merger.GetOutput();
+  ASSERT_OK(res1);
+  EXPECT_EQ(res1->confirmed_text, "");
+
+  // Chunk 2 decodes ground truth "heat" at 1800 ms
+  word_stage.PushWordsWithEndOfChunkTimestamp({{"lingers", 300},
+                                               {"it", 800},
+                                               {"takes", 1300},
+                                               {"heat", 1800},
+                                               {"to", 2300},
+                                               {"bring", 2700},
+                                               {"out", 2800}},
+                                              /*end_ts_ms=*/5500);
+  ASSERT_OK(merger.Schedule());
+  auto res2 = merger.GetOutput();
+  ASSERT_OK(res2);
+  EXPECT_EQ(res2->confirmed_text, "the stale smell of old beer");
+  EXPECT_EQ(res2->unconfirmed_text, "lingers it takes heat to bring out");
+
+  ASSERT_OK(merger.Flush());
+  auto res_flush = merger.GetOutput();
+  ASSERT_OK(res_flush);
+  EXPECT_EQ(res_flush->confirmed_text, "lingers it takes heat to bring out");
+  EXPECT_EQ(res_flush->unconfirmed_text, "");
+}
+
+TEST(TimestampTextMergerTest, SilencePausePreventsMisalignment) {
+  DummyWordStage word_stage;
+  TimestampTextMerger merger(&word_stage, /*overlap_ratio=*/0.5f);
+
+  // Chunk 1 ends early with last word at 1000ms
+  word_stage.PushWordsWithEndOfChunkTimestamp({{"hello", 500}, {"world", 1000}},
+                                              /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  auto res1 = merger.GetOutput();
+  ASSERT_OK(res1);
+
+  // Chunk 2 starts after long silence (first word at 4500ms)
+  word_stage.PushWordsWithEndOfChunkTimestamp(
+      {{"hello", 4500}, {"again", 4800}},
+      /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  auto res2 = merger.GetOutput();
+  ASSERT_OK(res2);
+  EXPECT_EQ(res2->confirmed_text, "");
+  EXPECT_EQ(res2->unconfirmed_text, "hello world hello again");
+
+  ASSERT_OK(merger.Flush());
+  auto res_flush = merger.GetOutput();
+  ASSERT_OK(res_flush);
+  EXPECT_EQ(res_flush->confirmed_text, "hello world hello again");
+  EXPECT_EQ(res_flush->unconfirmed_text, "");
+}
+
+TEST(TimestampTextMergerTest, RepeatedWordsHandlingWithTimestamps) {
+  DummyWordStage word_stage;
+  TimestampTextMerger merger(&word_stage, /*overlap_ratio=*/0.5f);
+
+  // Repeated words "the the the" with distinct timestamps
+  word_stage.PushWordsWithEndOfChunkTimestamp(
+      {{"the", 500}, {"the", 1500}, {"the", 2500}, {"end", 3000}},
+      /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  auto res1 = merger.GetOutput();
+  ASSERT_OK(res1);
+
+  word_stage.PushWordsWithEndOfChunkTimestamp(
+      {{"the", 0}, {"end", 500}, {"next", 1000}},
+      /*end_ts_ms=*/5000);
+  ASSERT_OK(merger.Schedule());
+  auto res2 = merger.GetOutput();
+  ASSERT_OK(res2);
+
+  ASSERT_OK(merger.Flush());
+  auto res_flush = merger.GetOutput();
+  ASSERT_OK(res_flush);
+  EXPECT_EQ(res_flush->confirmed_text, "the end next");
+  EXPECT_EQ(res_flush->unconfirmed_text, "");
+}
+
 }  // namespace
 }  // namespace litert::omni::asr

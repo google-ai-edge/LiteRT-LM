@@ -163,8 +163,7 @@ class DummyDetokenizer : public Detokenizer {
     std::vector<Detokenizer::Word> words;
     words.reserve(tokens->size());
     for (const auto& tok : *tokens) {
-      words.push_back(
-          {"word_" + std::to_string(tok.token_id), tok.timestamp_ms});
+      words.push_back({"w_" + std::to_string(tok.token_id), tok.timestamp_ms});
     }
     PushOutput(std::move(words));
     return absl::OkStatus();
@@ -197,17 +196,17 @@ TEST(AsrSessionTest, FullSessionEndToEndFlow) {
   ASSERT_OK(session_status);
   auto session = std::move(*session_status);
 
-  // Process Chunk 1: "word_1 word_2"
+  // Process Chunk 1: "w_1 w_2"
   auto res1 = session->ProcessNextChunk();
   ASSERT_OK(res1);
   EXPECT_EQ(res1->confirmed_text, "");
-  EXPECT_EQ(res1->unconfirmed_text, "word_1 word_2");
+  EXPECT_EQ(res1->unconfirmed_text, "w_1 w_2");
 
-  // Process Chunk 2: "word_2 word_3" (overlaps at word_2)
+  // Process Chunk 2: "w_2 w_3" (overlaps at w_2)
   auto res2 = session->ProcessNextChunk();
   ASSERT_OK(res2);
-  EXPECT_EQ(res2->confirmed_text, "word_1");
-  EXPECT_EQ(res2->unconfirmed_text, "word_2 word_3");
+  EXPECT_EQ(res2->confirmed_text, "w_1");
+  EXPECT_EQ(res2->unconfirmed_text, "w_2 w_3");
 
   // Stream End returns OutOfRange error
   auto res3 = session->ProcessNextChunk();
@@ -216,7 +215,7 @@ TEST(AsrSessionTest, FullSessionEndToEndFlow) {
   // Flush remaining
   auto res_flush = session->Flush();
   ASSERT_OK(res_flush);
-  EXPECT_EQ(res_flush->confirmed_text, "word_2 word_3");
+  EXPECT_EQ(res_flush->confirmed_text, "w_2 w_3");
   EXPECT_EQ(res_flush->unconfirmed_text, "");
 }
 
@@ -266,10 +265,10 @@ TEST(AsrSessionTest, ProcessAsyncFlow) {
 
   ASSERT_EQ(results.size(), 3);
   EXPECT_EQ(results[0].confirmed_text, "");
-  EXPECT_EQ(results[0].unconfirmed_text, "word_1 word_2");
-  EXPECT_EQ(results[1].confirmed_text, "word_1");
-  EXPECT_EQ(results[1].unconfirmed_text, "word_2 word_3");
-  EXPECT_EQ(results[2].confirmed_text, "word_2 word_3");
+  EXPECT_EQ(results[0].unconfirmed_text, "w_1 w_2");
+  EXPECT_EQ(results[1].confirmed_text, "w_1");
+  EXPECT_EQ(results[1].unconfirmed_text, "w_2 w_3");
+  EXPECT_EQ(results[2].confirmed_text, "w_2 w_3");
   EXPECT_EQ(results[2].unconfirmed_text, "");
 }
 

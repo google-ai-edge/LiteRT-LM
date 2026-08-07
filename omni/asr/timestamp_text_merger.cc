@@ -38,6 +38,47 @@
 namespace litert::omni::asr {
 namespace {
 
+std::vector<int> MergeTimestamps(absl::Span<const int> prev_timestamps,
+                                 absl::Span<const int> curr_timestamps,
+                                 int prev_word_index_of_unconfirmed,
+                                 int prev_word_index_of_pivot,
+                                 size_t num_merged_words) {
+  if (num_merged_words == 0) {
+    return {};
+  }
+
+  if (prev_timestamps.empty() || prev_word_index_of_unconfirmed == -1 ||
+      prev_word_index_of_unconfirmed >=
+          static_cast<int>(prev_timestamps.size()) ||
+      prev_word_index_of_unconfirmed == prev_word_index_of_pivot) {
+    return std::vector<int>(curr_timestamps.begin(), curr_timestamps.end());
+  }
+
+  size_t num_words_from_prev =
+      prev_word_index_of_pivot - prev_word_index_of_unconfirmed;
+  if (num_words_from_prev >
+      prev_timestamps.size() - prev_word_index_of_unconfirmed) {
+    num_words_from_prev =
+        prev_timestamps.size() - prev_word_index_of_unconfirmed;
+  }
+
+  std::vector<int> result(
+      prev_timestamps.begin() + prev_word_index_of_unconfirmed,
+      prev_timestamps.begin() + prev_word_index_of_unconfirmed +
+          num_words_from_prev);
+  if (num_merged_words > num_words_from_prev) {
+    size_t num_words_from_curr = num_merged_words - num_words_from_prev;
+    if (num_words_from_curr <= curr_timestamps.size()) {
+      result.insert(result.end(), curr_timestamps.end() - num_words_from_curr,
+                    curr_timestamps.end());
+    } else {
+      result.insert(result.end(), curr_timestamps.begin(),
+                    curr_timestamps.end());
+    }
+  }
+  return result;
+}
+
 std::vector<std::string> MergeIntoUnconfirmedText(
     absl::Span<const std::string> prev_words,
     absl::Span<const int> prev_timestamps,
@@ -45,7 +86,8 @@ std::vector<std::string> MergeIntoUnconfirmedText(
     absl::Span<const int> curr_timestamps, float overlap_ratio,
     float pivot_factor, int prev_word_index_of_unconfirmed,
     int prev_word_index_of_pivot) {
-  if (prev_word_index_of_unconfirmed == -1) {
+  if (prev_word_index_of_unconfirmed == -1 ||
+      prev_word_index_of_unconfirmed >= static_cast<int>(prev_words.size())) {
     return std::vector<std::string>(curr_words.begin(), curr_words.end());
   }
 
@@ -71,6 +113,11 @@ std::vector<std::string> MergeIntoUnconfirmedText(
         static_cast<size_t>(num_words_overlap_in_current * pivot_factor),
         curr_words.size());
   }
+
+  size_t num_words_in_prev_unconfirmed = std::max<int>(
+      0, prev_word_index_of_pivot - prev_word_index_of_unconfirmed);
+  num_words_before_pivot_in_current = std::min<size_t>(
+      num_words_before_pivot_in_current, num_words_in_prev_unconfirmed);
 
   size_t num_words_after_pivot_in_current =
       curr_words.size() - num_words_before_pivot_in_current;
@@ -112,6 +159,7 @@ void TimestampTextMerger::Reset() {
   last_confirmed_words_.clear();
   prev_word_index_of_unconfirmed_ = -1;
   prev_word_index_of_pivot_ = -1;
+  stream_timestamp_offset_ms_ = 0;
   ClearOutputsThenSetState(State::kIdle);
 }
 
@@ -143,7 +191,8 @@ absl::Status TimestampTextMerger::Execute() {
     }
     curr_words.push_back(word.text);
     if (word.timestamp_ms.has_value()) {
-      curr_timestamps.push_back(word.timestamp_ms.value());
+      curr_timestamps.push_back(word.timestamp_ms.value() +
+                                stream_timestamp_offset_ms_);
     }
   }
 
@@ -155,6 +204,7 @@ absl::Status TimestampTextMerger::Execute() {
   if (prev_words_.empty()) {
     prev_words_ = curr_words;
     prev_timestamps_ = curr_timestamps;
+    UpdateStreamTimestampOffset(max_chunk_timestamp_ms, curr_timestamps);
     LogAndPushOutput({"", absl::StrJoin(prev_words_, " ")});
     return absl::OkStatus();
   }
@@ -197,8 +247,8 @@ absl::Status TimestampTextMerger::Execute() {
                         .subspan(0, std::min<size_t>(end_index - start_index,
                                                      curr_words.size()));
 
-    int dist = ComputeLevenshteinDistance(Canonicalize(prev_sub),
-                                          Canonicalize(curr_sub));
+    int dist = ComputeLevenshteinDistanceWords(CanonicalizeWords(prev_sub),
+                                               CanonicalizeWords(curr_sub));
     if (dist < min_distance) {
       min_distance = dist;
       prev_word_index_of_unconfirmed_ = start_index;
@@ -220,19 +270,11 @@ absl::Status TimestampTextMerger::Execute() {
       overlap_ratio_, pivot_factor_, prev_word_index_of_unconfirmed_,
       prev_word_index_of_pivot_);
 
+  prev_timestamps_ = MergeTimestamps(
+      prev_timestamps_, curr_timestamps, prev_word_index_of_unconfirmed_,
+      prev_word_index_of_pivot_, unconfirmed_merged.size());
   prev_words_ = unconfirmed_merged;
-  prev_timestamps_ = curr_timestamps;
-  if (!prev_timestamps_.empty() && overlap_ratio_ > 0.0f) {
-    int max_ts = max_chunk_timestamp_ms.has_value()
-                     ? max_chunk_timestamp_ms.value()
-                     : prev_timestamps_.back();
-    int timestamp_step = static_cast<int>(max_ts * (1.0f - overlap_ratio_));
-    if (timestamp_step > 0) {
-      for (int& ts : prev_timestamps_) {
-        ts -= timestamp_step;
-      }
-    }
-  }
+  UpdateStreamTimestampOffset(max_chunk_timestamp_ms, curr_timestamps);
 
   LogAndPushOutput({absl::StrJoin(last_confirmed_words_, " "),
                     absl::StrJoin(prev_words_, " ")});
@@ -261,6 +303,23 @@ absl::Status TimestampTextMerger::Flush() {
 
   SetState(State::kIdle);
   return absl::OkStatus();
+}
+
+void TimestampTextMerger::UpdateStreamTimestampOffset(
+    std::optional<int> max_chunk_timestamp_ms,
+    absl::Span<const int> curr_timestamps) {
+  if (overlap_ratio_ <= 0.0f) return;
+
+  int max_ts =
+      max_chunk_timestamp_ms.has_value()
+          ? max_chunk_timestamp_ms.value()
+          : (curr_timestamps.empty()
+                 ? 0
+                 : curr_timestamps.back() - stream_timestamp_offset_ms_);
+  int timestamp_step = static_cast<int>(max_ts * (1.0f - overlap_ratio_));
+  if (timestamp_step > 0) {
+    stream_timestamp_offset_ms_ += timestamp_step;
+  }
 }
 
 void TimestampTextMerger::LogAndPushOutput(MergeResult output) {

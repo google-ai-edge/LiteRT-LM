@@ -34,8 +34,8 @@ class TimestampTextMerger : public TextMerger {
  public:
   explicit TimestampTextMerger(
       Stage<std::vector<Detokenizer::Word>>* absl_nonnull detokenizer,
-      float overlap_ratio = 0.5f, int search_window = 2,
-      int max_levenshtein_distance = 5, float pivot_factor = 0.6f);
+      float overlap_ratio = 0.5f, int search_window = 4,
+      int max_levenshtein_distance = 3, float pivot_factor = 0.6f);
 
   // Resets internal cached state for a new audio stream.
   void Reset() override;
@@ -55,6 +55,8 @@ class TimestampTextMerger : public TextMerger {
 
   absl::Status Execute();
   void LogAndPushOutput(MergeResult output);
+  void UpdateStreamTimestampOffset(std::optional<int> max_chunk_timestamp_ms,
+                                   absl::Span<const int> curr_timestamps);
 
   const float overlap_ratio_;
   const int search_window_;
@@ -66,6 +68,7 @@ class TimestampTextMerger : public TextMerger {
   std::vector<std::string> last_confirmed_words_;
   int prev_word_index_of_unconfirmed_ = -1;
   int prev_word_index_of_pivot_ = -1;
+  int stream_timestamp_offset_ms_ = 0;
 };
 
 }  // namespace litert::omni::asr
