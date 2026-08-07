@@ -143,6 +143,28 @@ class EngineTest(LiteRtLmTestBase):
 
     mock_set_ringbuffers.assert_called_once_with(mock.ANY, True)
 
+  def test_engine_init_with_enable_ynnpack(self):
+    lib = litert_lm._ffi._get_lib()
+    orig_fn = lib.litert_lm_engine_settings_set_enable_ynnpack
+
+    mock_set_enable_ynnpack = self.enter_context(
+        mock.patch.object(
+            lib,
+            "litert_lm_engine_settings_set_enable_ynnpack",
+            autospec=True,
+            side_effect=orig_fn,
+        )
+    )
+
+    litert_lm.Engine(
+        self.model_path,
+        backend=litert_lm.Backend.CPU(),
+        enable_ynnpack=True,
+        cache_dir=":nocache",
+    )
+
+    mock_set_enable_ynnpack.assert_called_once_with(mock.ANY, True)
+
   @mock.patch("sys.platform", "win32")
   def test_engine_init_with_npu_backend(self):
     lib = litert_lm._ffi._get_lib()

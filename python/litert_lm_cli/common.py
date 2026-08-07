@@ -240,6 +240,13 @@ def common_inference_options(f):
           " at higher memory cost."
       ),
   )(f)
+  f = click.option(
+      "--enable-ynnpack",
+      is_flag=True,
+      default=False,
+      hidden=True,
+      help="Delegate supported CPU operations to YNNPACK before XNNPACK.",
+  )(f)
   return f
 
 

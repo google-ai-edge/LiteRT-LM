@@ -749,6 +749,21 @@ void litert_lm_engine_settings_set_prefill_chunk_size(
   }
 }
 
+void litert_lm_engine_settings_set_enable_ynnpack(
+    LiteRtLmEngineSettings* settings, bool enable_ynnpack) {
+  if (settings && settings->settings) {
+    auto& main_settings = settings->settings->GetMutableMainExecutorSettings();
+    auto config = main_settings.MutableBackendConfig<litert::lm::CpuConfig>();
+    if (!config.ok()) {
+      ABSL_LOG(WARNING) << "Failed to get CpuConfig to set enable ynnpack: "
+                        << config.status();
+      return;
+    }
+    config->enable_ynnpack = enable_ynnpack;
+    main_settings.SetBackendConfig(*config);
+  }
+}
+
 LiteRtLmEngine* litert_lm_engine_create(
     const LiteRtLmEngineSettings* settings) {
   if (!settings || !settings->settings) {

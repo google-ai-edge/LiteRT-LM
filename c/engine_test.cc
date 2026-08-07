@@ -201,6 +201,31 @@ TEST(EngineCTest, SetPrefillChunkSize) {
   ASSERT_TRUE(config.ok());
   EXPECT_EQ(config->prefill_chunk_size, prefill_chunk_size);
 }
+
+TEST(EngineCTest, SetEnableYNNPack) {
+  // Test with nullptr settings (should not crash).
+  litert_lm_engine_settings_set_enable_ynnpack(nullptr, true);
+
+  const std::string task_path = "test_model_path_1";
+  EngineSettingsPtr settings(
+      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
+                                       /* vision_backend_str */ nullptr,
+                                       /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+  litert_lm_engine_settings_set_enable_ynnpack(settings.get(), true);
+  auto config1 = settings->settings->GetMainExecutorSettings()
+                     .GetBackendConfig<litert::lm::CpuConfig>();
+  ASSERT_TRUE(config1.ok());
+  EXPECT_TRUE(config1->enable_ynnpack);  // NOLINT: config is checked above.
+
+  litert_lm_engine_settings_set_enable_ynnpack(settings.get(), false);
+  auto config2 = settings->settings->GetMainExecutorSettings()
+                     .GetBackendConfig<litert::lm::CpuConfig>();
+  ASSERT_TRUE(config2.ok());
+  EXPECT_FALSE(config2->enable_ynnpack);  // NOLINT: config is checked above.
+}
+
 TEST(EngineCTest, SetParallelFileSectionLoading) {
   const std::string task_path = "test_model_path_1";
   EngineSettingsPtr settings(

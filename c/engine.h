@@ -623,6 +623,16 @@ LITERT_LM_C_API_EXPORT
 void litert_lm_engine_settings_set_prefill_chunk_size(
     LiteRtLmEngineSettings* settings, int prefill_chunk_size);
 
+// Sets whether YNNPACK should delegate supported operations before XNNPACK.
+//
+// @param settings The engine settings.
+// @param enable_ynnpack Whether to enable YNNPACK.
+//
+// Added in version 0.1.0.
+LITERT_LM_C_API_EXPORT
+void litert_lm_engine_settings_set_enable_ynnpack(
+    LiteRtLmEngineSettings* settings, bool enable_ynnpack);
+
 // Enables benchmarking for the engine.
 //
 // @param settings The engine settings.

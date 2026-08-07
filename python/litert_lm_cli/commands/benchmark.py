@@ -49,6 +49,7 @@ def run_benchmark(
     activation_data_type: litert_lm.ActivationDataType | None = None,
     ringbuffers_local_attention: bool | None = None,
     gpu_decode_steps_per_sync: int | None = None,
+    enable_ynnpack: bool = False,
     runs: int = 1,
     skip_warmup: bool = False,
 ) -> None:
@@ -80,6 +81,10 @@ def run_benchmark(
       )
     else:
       activation_data_type_val = activation_data_type_opt
+    enable_ynnpack = (
+        model.resolve_config_option(enable_ynnpack, model_obj, "enable_ynnpack")
+        or False
+    )
 
     backend_val = model.parse_backend(
         backend,
@@ -117,6 +122,7 @@ def run_benchmark(
           max_num_tokens=max_num_tokens,
           activation_data_type=activation_data_type_val,
           use_ringbuffers_local_attention=ringbuffers_local_attention,
+          enable_ynnpack=enable_ynnpack,
       )
 
     click.echo(
@@ -252,6 +258,7 @@ def benchmark(
     activation_data_type: str | None = None,
     ringbuffers_local_attention: bool | None = None,
     gpu_decode_steps_per_sync: int | None = None,
+    enable_ynnpack: bool = False,
     runs: int = 1,
     skip_warmup: bool = False,
 ) -> None:
@@ -280,6 +287,8 @@ def benchmark(
       KV cache to minimize memory usage.
     gpu_decode_steps_per_sync: The number of decode steps per sync for GPU
       backend. Only applied to supported GPU models. Otherwise, ignored.
+    enable_ynnpack: Whether to delegate supported CPU operations to YNNPACK
+      before XNNPACK.
     runs: The number of benchmarking iterations to run and average.
     skip_warmup: Skip the warmup run before benchmarking.
   """
@@ -329,6 +338,7 @@ def benchmark(
       ),
       ringbuffers_local_attention=ringbuffers_local_attention,
       gpu_decode_steps_per_sync=gpu_decode_steps_per_sync,
+      enable_ynnpack=enable_ynnpack,
       runs=runs,
       skip_warmup=skip_warmup,
   )

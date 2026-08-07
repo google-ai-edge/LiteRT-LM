@@ -200,6 +200,7 @@ def run_interactive(
     activation_data_type: litert_lm.ActivationDataType | None = None,
     ringbuffers_local_attention: bool | None = None,
     gpu_decode_steps_per_sync: int | None = None,
+    enable_ynnpack: bool = False,
 ) -> None:
   """Runs the model interactively or with a single prompt."""
   if speculative_decoding is None:
@@ -244,6 +245,10 @@ def run_interactive(
       )
     else:
       activation_data_type_val = activation_data_type_opt
+    enable_ynnpack = (
+        model.resolve_config_option(enable_ynnpack, model_obj, "enable_ynnpack")
+        or False
+    )
 
     backend_val = model.parse_backend(
         backend,
@@ -307,6 +312,7 @@ def run_interactive(
           cache_dir=cache_dir_val,
           activation_data_type=activation_data_type_val,
           use_ringbuffers_local_attention=ringbuffers_local_attention,
+          enable_ynnpack=enable_ynnpack,
       )
 
     with engine_cm as engine:
@@ -596,6 +602,7 @@ def run(
     activation_data_type: str | None = None,
     ringbuffers_local_attention: bool | None = None,
     gpu_decode_steps_per_sync: int | None = None,
+    enable_ynnpack: bool = False,
 ) -> None:
   r"""Runs a LiteRT-LM model interactively or with a single prompt.
 
@@ -639,6 +646,8 @@ def run(
       KV cache to minimize memory usage.
     gpu_decode_steps_per_sync: The number of decode steps per sync for GPU
       backend. Only applied to supported GPU models. Otherwise, ignored.
+    enable_ynnpack: Whether to delegate supported CPU operations to YNNPACK
+      before XNNPACK.
   """
   if speculative_decoding is None:
     speculative_decoding = enable_speculative_decoding
@@ -769,6 +778,7 @@ def run(
       ),
       ringbuffers_local_attention=ringbuffers_local_attention,
       gpu_decode_steps_per_sync=gpu_decode_steps_per_sync,
+      enable_ynnpack=enable_ynnpack,
   )
 
 

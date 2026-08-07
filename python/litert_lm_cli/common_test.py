@@ -226,6 +226,29 @@ class CommonInferenceOptionsTest(parameterized.TestCase):
         result.output,
     )
 
+  def test_enable_ynnpack_options(self):
+    @click.command()
+    @common.common_inference_options
+    def dummy_cmd(**kwargs):
+      click.echo(f"enable_ynnpack: {kwargs.get('enable_ynnpack')}")
+
+    runner = CliRunner()
+
+    # Flag mode (no value)
+    result = runner.invoke(dummy_cmd, ['--enable-ynnpack'])
+    self.assertEqual(result.exit_code, 0)
+    self.assertIn('enable_ynnpack: True', result.output)
+
+    # Not set mode (default is False)
+    result = runner.invoke(dummy_cmd, [])
+    self.assertEqual(result.exit_code, 0)
+    self.assertIn('enable_ynnpack: False', result.output)
+
+    # Test hidden from --help
+    result = runner.invoke(dummy_cmd, ['--help'])
+    self.assertEqual(result.exit_code, 0)
+    self.assertNotIn('--enable-ynnpack', result.output)
+
 
 if __name__ == '__main__':
   absltest.main()

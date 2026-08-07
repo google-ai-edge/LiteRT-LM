@@ -68,6 +68,7 @@ class Engine(interfaces.AbstractEngine):
       activation_data_type: ActivationDataType | None = None,
       enable_benchmark: bool = False,
       use_ringbuffers_local_attention: bool | None = None,
+      enable_ynnpack: bool = False,
       **kwargs,
   ):
     backend = _normalize_backend(backend)
@@ -85,6 +86,7 @@ class Engine(interfaces.AbstractEngine):
         lora_rank_config=lora_rank_config,
         activation_data_type=activation_data_type,
         use_ringbuffers_local_attention=use_ringbuffers_local_attention,
+        enable_ynnpack=enable_ynnpack,
         **kwargs,
     )
 
@@ -156,6 +158,11 @@ class Engine(interfaces.AbstractEngine):
       self._lib.litert_lm_engine_settings_set_activation_data_type(
           settings, self.activation_data_type.value
       )
+    if self.enable_ynnpack:
+      self._lib.litert_lm_engine_settings_set_enable_ynnpack(
+          settings, self.enable_ynnpack
+      )
+
     lora_rank = (
         self.lora_rank_config.lora_rank if self.lora_rank_config else None
     )

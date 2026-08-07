@@ -400,6 +400,8 @@ class AbstractEngine(abc.ABC):
         attention KV cache on supported models to minimize memory usage. When
         disabled, memory is allocated for the full context length, enabling
         instant rewinding at higher memory cost.
+      enable_ynnpack: Whether YNNPACK should delegate supported operations
+        before XNNPACK.
   """
 
   model_path: str
@@ -413,6 +415,7 @@ class AbstractEngine(abc.ABC):
   lora_rank_config: LoraRankConfig | None = None
   activation_data_type: ActivationDataType | None = None
   use_ringbuffers_local_attention: bool | None = None
+  enable_ynnpack: bool = False
 
   def __enter__(self) -> AbstractEngine:
     """Initializes the engine resources."""
@@ -824,6 +827,8 @@ class AbstractBenchmark(abc.ABC):
         attention KV cache on supported models to minimize memory usage. When
         disabled, memory is allocated for the full context length, enabling
         instant rewinding at higher memory cost.
+      enable_ynnpack: Whether YNNPACK should delegate supported operations
+        before XNNPACK.
   """
 
   model_path: str
@@ -836,6 +841,7 @@ class AbstractBenchmark(abc.ABC):
   prompt: str = "How are you"
   activation_data_type: ActivationDataType | None = None
   use_ringbuffers_local_attention: bool | None = None
+  enable_ynnpack: bool = False
 
   @abc.abstractmethod
   def run(self) -> BenchmarkInfo:
