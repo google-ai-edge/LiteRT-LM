@@ -14,6 +14,7 @@
 
 #include "runtime/conversation/conversation.h"
 
+#include <cstddef>
 #include <memory>
 #include <optional>
 #include <string>
@@ -21,9 +22,10 @@
 #include <variant>
 #include <vector>
 
+#include "absl/cleanup/cleanup.h"  // from @com_google_absl
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
-#include "absl/container/flat_hash_set.h"  // from @com_google_absl
 #include "absl/functional/any_invocable.h"  // from @com_google_absl
+#include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/memory/memory.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
@@ -52,6 +54,7 @@
 #include "runtime/conversation/model_data_processor/model_data_processor_factory.h"
 #include "runtime/conversation/prompt_utils.h"
 #include "runtime/conversation/thinking_config.h"
+#include "runtime/core/cached_session.h"
 #include "runtime/engine/engine.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
@@ -60,18 +63,11 @@
 #include "runtime/proto/token.pb.h"
 #include "runtime/util/model_type_utils.h"
 #include "runtime/util/status_macros.h"
+#include "support/tokenizer/tokenizer.h"
 
 namespace litert::lm {
 
 namespace {
-
-constexpr absl::string_view kRoleKey = "role";
-constexpr absl::string_view kUser = "user";
-constexpr absl::string_view kChannelsKey = "channels";
-constexpr absl::string_view kChannelContentCheckpoint =
-    "channel_content_checkpoint";
-constexpr absl::string_view kStartContentCheckpoint =
-    "start_content_checkpoint";
 
 bool IsEmptyInputError(const absl::Status& status) {
   return absl::IsInvalidArgument(status) &&
@@ -92,9 +88,82 @@ bool IsEmptyPreface(const Preface& preface) {
           json_preface.extra_context.empty());
 }
 
-bool IsUserMessage(const nlohmann::ordered_json& json_msg) {
-  return json_msg.contains(kRoleKey) && json_msg[kRoleKey].is_string() &&
-         json_msg[kRoleKey].get<absl::string_view>() == kUser;
+// Merges two messages, appending content and tool calls.
+//
+// This function merges `second` into `first`. Note the following behavior:
+//
+// 1. **Content Merging**:
+//    - If both messages contain `content`, they are merged into a single array
+//      of content blocks.
+//    - Single string content is normalized to `[{"type": "text", "text":
+//    "..."}]`.
+//    - Single object content is normalized to `[...]`.
+//    - The content blocks from `second` are appended to those of `first`.
+//
+// 2. **Tool Calls Merging**:
+//    - If both messages contain `tool_calls` arrays, they are concatenated.
+//
+// 3. **Conflict Resolution for Other Fields**:
+//    - For any other fields (e.g., `role`, custom metadata), fields from the
+//      `first` message take precedence. If a field that isn't content or tool
+//      calls exists in both, the value from `second` is **dropped**.
+//
+// This function is only used when
+// `OptionalArgs::has_pending_message` is set to true when calling
+// `SendMessage/Async`.
+nlohmann::ordered_json MergeMessages(const nlohmann::ordered_json& first,
+                                     const nlohmann::ordered_json& second) {
+  // Initialize the merged message as a copy of the first message.
+  nlohmann::ordered_json merged = first;
+
+  // Merge "content".
+  if (merged.contains("content") && second.contains("content")) {
+    // Convert string or object content into an array.
+    if (merged["content"].is_string()) {
+      merged["content"] = nlohmann::ordered_json::array(
+          {{{"type", "text"}, {"text", merged["content"]}}});
+    } else if (merged["content"].is_object()) {
+      merged["content"] = nlohmann::ordered_json::array({merged["content"]});
+    }
+    nlohmann::ordered_json second_content = second["content"];
+    if (second_content.is_string()) {
+      second_content = nlohmann::ordered_json::array(
+          {{{"type", "text"}, {"text", second_content}}});
+    } else if (second_content.is_object()) {
+      second_content = nlohmann::ordered_json::array({second_content});
+    }
+
+    // Insert content from the second message into the result.
+    if (merged["content"].is_array() && second_content.is_array()) {
+      merged["content"].insert(merged["content"].end(), second_content.begin(),
+                               second_content.end());
+
+    } else {
+      ABSL_LOG(ERROR) << "`content` field must be a string or an array.";
+    }
+  }
+
+  // Merge "tool_calls".
+  if (merged.contains("tool_calls") && second.contains("tool_calls") &&
+      merged["tool_calls"].is_array() && second["tool_calls"].is_array()) {
+    merged["tool_calls"].insert(merged["tool_calls"].end(),
+                                second["tool_calls"].begin(),
+                                second["tool_calls"].end());
+  }
+
+  // Copy over the remaining fields from the second message if they don't
+  // already exist in the first. Since we don't know how to merge these
+  // miscellaneous fields, we choose to let the first message's fields take
+  // precedence if there's a conflict.
+  if (second.is_object()) {
+    for (const auto& [key, value] : second.items()) {
+      if (!merged.contains(key)) {
+        merged[key] = value;
+      }
+    }
+  }
+
+  return merged;
 }
 
 std::optional<ThinkingConfig> ResolveThinkingConfig(
@@ -135,6 +204,33 @@ absl::string_view TaskStateToString(TaskState task_state) {
   }
   return "Unknown";
 }
+
+class ClonedSessionTaskController : public SessionInterface::TaskController {
+ public:
+  ClonedSessionTaskController(
+      std::unique_ptr<SessionInterface::TaskController> task_controller,
+      std::shared_ptr<CachedSession> session)
+      : task_controller_(std::move(task_controller)),
+        session_(std::move(session)) {}
+
+  absl::Status WaitUntilDone(absl::Duration timeout) override {
+    if (task_controller_ != nullptr) {
+      return task_controller_->WaitUntilDone(timeout);
+    }
+    return absl::OkStatus();
+  }
+
+  absl::Status Cancel() override {
+    if (task_controller_ != nullptr) {
+      return task_controller_->Cancel();
+    }
+    return absl::OkStatus();
+  }
+
+ private:
+  std::unique_ptr<SessionInterface::TaskController> task_controller_;
+  std::shared_ptr<CachedSession> session_;
+};
 
 }  // namespace
 
@@ -224,123 +320,6 @@ absl::StatusOr<ConversationConfig> ConversationConfig::CreateInternal(
       filter_channel_content_from_kv_cache, return_error_on_parse_failure,
       return_error_on_max_tokens_reached, thinking_config, stream_tool_calls,
       stream_tool_calls_channel_name, enable_rewinding);
-}
-
-absl::StatusOr<std::string>
-Conversation::GetSingleTurnTextFromSingleTurnTemplate(
-    const Message& message, const OptionalArgs& optional_args) {
-  absl::MutexLock lock(history_mutex_);  // NOLINT
-  std::optional<nlohmann::ordered_json> extra_context =
-      optional_args.extra_context;
-  if (!extra_context.has_value()) {
-    extra_context = nlohmann::ordered_json::object();
-  }
-  std::optional<ThinkingConfig> thinking_config =
-      ResolveThinkingConfig(config_, optional_args);
-
-  if (thinking_config.has_value() &&
-      !extra_context->contains("enable_thinking")) {
-    (*extra_context)["enable_thinking"] = thinking_config->enable_thinking();
-  }
-  ABSL_ASSIGN_OR_RETURN(
-      auto result,
-      model_data_processor_->RenderSingleTurnTemplate(
-          history_,
-          config_.prefill_preface_on_init() ? JsonPreface() : preface_, message,
-          prompt_template_,
-          /*current_is_appending_message=*/is_appending_message_,
-          /*append_message=*/optional_args.has_pending_message, extra_context));
-  is_appending_message_ = result.is_appending_message;
-  return result.text;
-}
-
-absl::StatusOr<std::string> Conversation::GetSingleTurnTextFromFullHistory(
-    const Message& message, const OptionalArgs& optional_args) {
-  PromptTemplateInput old_tmpl_input;
-  ABSL_RETURN_IF_ERROR(FillPrefaceForPromptTemplateInput(
-      preface_, model_data_processor_.get(), old_tmpl_input));
-
-  std::optional<ThinkingConfig> thinking_config =
-      ResolveThinkingConfig(config_, optional_args);
-
-  if (thinking_config.has_value()) {
-    old_tmpl_input.extra_context["enable_thinking"] =
-        thinking_config->enable_thinking();
-  }
-
-  // Merge extra context for the message into the extra context provided in the
-  // preface. Existing keys will be overwritten.
-  if (optional_args.extra_context.has_value()) {
-    for (const auto& [key, value] : optional_args.extra_context->items()) {
-      old_tmpl_input.extra_context[key] = value;
-    }
-  }
-
-  absl::MutexLock lock(history_mutex_);  // NOLINT
-  for (const auto& history_msg : history_) {
-    ABSL_ASSIGN_OR_RETURN(
-        nlohmann::ordered_json message_tmpl_input,
-        model_data_processor_->MessageToTemplateInput(history_msg));
-    old_tmpl_input.messages.push_back(message_tmpl_input);
-  }
-  nlohmann::ordered_json messages =
-      message.is_array() ? message : nlohmann::ordered_json::array({message});
-  if (history_.empty() && !config_.prefill_preface_on_init()) {
-    PromptTemplateInput new_tmpl_input = std::move(old_tmpl_input);
-    for (const auto& message : messages) {
-      ABSL_ASSIGN_OR_RETURN(
-          nlohmann::ordered_json message_tmpl_input,
-          model_data_processor_->MessageToTemplateInput(message));
-      new_tmpl_input.messages.push_back(message_tmpl_input);
-    }
-    new_tmpl_input.add_generation_prompt = true;
-    return ApplyTemplate(new_tmpl_input);
-  }
-
-  std::string old_string;
-  if (!IsEmptyPreface(preface_) || !history_.empty()) {
-    old_tmpl_input.add_generation_prompt = false;
-    ABSL_ASSIGN_OR_RETURN(old_string, ApplyTemplate(old_tmpl_input));
-  }
-
-  PromptTemplateInput new_tmpl_input = std::move(old_tmpl_input);
-  for (const auto& message : messages) {
-    ABSL_ASSIGN_OR_RETURN(
-        nlohmann::ordered_json message_tmpl_input,
-        model_data_processor_->MessageToTemplateInput(message));
-    new_tmpl_input.messages.push_back(message_tmpl_input);
-  }
-  new_tmpl_input.add_generation_prompt = true;
-  ABSL_ASSIGN_OR_RETURN(const std::string& new_string,
-                        ApplyTemplate(new_tmpl_input));
-  if (new_string.substr(0, old_string.size()) != old_string) {
-    return absl::InternalError(absl::StrCat(
-        "The new rendered template string does not start with the previous "
-        "rendered template string. \nold_string: ",
-        old_string, "\nnew_string: ", new_string));
-  }
-  return {new_string.substr(old_string.size(),
-                            new_string.size() - old_string.size())};
-}
-
-absl::StatusOr<std::string> Conversation::GetSingleTurnText(
-    const Message& message, const OptionalArgs& optional_args) {
-  if (!prompt_template_.GetCapabilities().supports_single_turn &&
-      optional_args.has_pending_message) {
-    return absl::InvalidArgumentError(
-        "The prompt template does not support single turn template, but "
-        "has_pending_message is true. `has_pending_message` is only valid for "
-        "model templates and ModelDataProcessor that supports single turn "
-        "prompt rendering.");
-  }
-  if (prompt_template_.GetCapabilities().supports_single_turn) {
-    auto single_turn_text =
-        GetSingleTurnTextFromSingleTurnTemplate(message, optional_args);
-    if (!absl::IsUnimplemented(single_turn_text.status())) {
-      return single_turn_text;
-    }
-  }
-  return GetSingleTurnTextFromFullHistory(message, optional_args);
 }
 
 absl::StatusOr<DecodeConfig> Conversation::CreateDecodeConfig(
@@ -443,45 +422,38 @@ absl::StatusOr<std::unique_ptr<Conversation>> Conversation::Create(
             config.constraint_provider_config().value(), engine.GetTokenizer(),
             session->GetSessionConfig().GetStopTokenIds()));
   }
+  CachedSessionOptions cached_session_options;
+  if (auto vision_props = engine.GetVisionExecutorProperties();
+      vision_props.ok()) {
+    cached_session_options.vision_properties = *vision_props;
+  }
+  if (auto audio_props = engine.GetAudioExecutorProperties();
+      audio_props.ok()) {
+    cached_session_options.audio_properties = *audio_props;
+  }
+  cached_session_options.insert_bos_token_id =
+      session->GetSessionConfig().GetStartTokenId() >= 0;
+  auto cached_session = std::make_unique<CachedSession>(
+      std::move(session),
+      const_cast<litert::support::Tokenizer*>(&engine.GetTokenizer()),
+      cached_session_options);
   auto conversation = absl::WrapUnique(new Conversation(
-      engine, std::move(session), std::move(model_data_processor),
+      engine, std::move(cached_session), std::move(model_data_processor),
       config.GetPreface(), config.GetPromptTemplate(), config,
       std::move(constraint_provider)));
   if (config.prefill_preface_on_init() &&
       !IsEmptyPreface(config.GetPreface())) {
-    std::string single_turn_text;
-    std::vector<Message> tmp_history;
-    bool fallback =
-        !conversation->prompt_template_.GetCapabilities().supports_single_turn;
-    std::optional<nlohmann::ordered_json> extra_context = std::nullopt;
+    PromptTemplateInput tmpl_input;
+    ABSL_RETURN_IF_ERROR(FillPrefaceForPromptTemplateInput(
+        config.GetPreface(), conversation->model_data_processor_.get(),
+        tmpl_input));
     if (config.thinking_config().has_value()) {
-      extra_context = nlohmann::ordered_json::object(
-          {{"enable_thinking", config.thinking_config()->enable_thinking()}});
+      tmpl_input.extra_context["enable_thinking"] =
+          config.thinking_config()->enable_thinking();
     }
-    const auto render_result =
-        conversation->model_data_processor_->RenderSingleTurnTemplate(
-            tmp_history, config.GetPreface(), Message(),
-            config.GetPromptTemplate(),
-            /*current_is_appending_message=*/false,
-            /*append_message=*/false, extra_context);
-    if (fallback || absl::IsUnimplemented(render_result.status())) {
-      // Fallback to the old way of prefilling the preface.
-      PromptTemplateInput tmpl_input;
-      ABSL_RETURN_IF_ERROR(FillPrefaceForPromptTemplateInput(
-          config.GetPreface(), conversation->model_data_processor_.get(),
-          tmpl_input));
-      if (config.thinking_config().has_value()) {
-        tmpl_input.extra_context["enable_thinking"] =
-            config.thinking_config()->enable_thinking();
-      }
-      tmpl_input.add_generation_prompt = false;
-      ABSL_ASSIGN_OR_RETURN(single_turn_text,
-                            conversation->ApplyTemplate(tmpl_input));
-    } else if (render_result.ok()) {
-      single_turn_text = render_result->text;
-    } else {
-      return render_result.status();
-    }
+    tmpl_input.add_generation_prompt = false;
+    ABSL_ASSIGN_OR_RETURN(std::string single_turn_text,
+                          conversation->ApplyTemplate(tmpl_input));
     ABSL_ASSIGN_OR_RETURN(
         const auto session_inputs,
         conversation->model_data_processor_->ToInputDataVector(
@@ -516,7 +488,7 @@ absl::StatusOr<Message> Conversation::SendMessage(const Message& message,
                                                   OptionalArgs optional_args) {
   absl::Notification done;
   absl::Status error_status;
-  bool appending = is_appending_message_;
+  const bool appending = optional_args.has_pending_message;
 
   absl::Status status = SendMessageAsync(
       message,
@@ -569,106 +541,108 @@ absl::Status Conversation::SendMessageAsync(
     const Message& message,
     absl::AnyInvocable<void(absl::StatusOr<Message>)> user_callback,
     OptionalArgs optional_args) {
-  ABSL_ASSIGN_OR_RETURN(std::string single_turn_text,
-                        GetSingleTurnText(message, optional_args));
-  auto open_channel_name =
-      GetOpenChannelName(single_turn_text, config_.GetChannels());
+  const bool is_appending_message = optional_args.has_pending_message;
 
-  bool was_history_empty = false;
+  std::vector<InputData> session_inputs;
+  std::optional<std::string> open_channel_name;
+  Message previous_last_message;
+  size_t num_messages_added = 0;
+  bool should_merge = false;
+  bool was_appending_message = false;
+
   {
     absl::MutexLock lock(history_mutex_);  // NOLINT
-    was_history_empty = history_.empty();
-    if (message.is_array()) {
-      for (const auto& message : message) {
-        history_.push_back(message);
+    was_appending_message = is_appending_message_;
+    is_appending_message_ = is_appending_message;
+
+    should_merge = was_appending_message && !history_.empty() &&
+                   history_.back().contains("role") &&
+                   message.contains("role") &&
+                   history_.back()["role"] == message["role"];
+    if (should_merge) {
+      previous_last_message = history_.back();
+      history_.back() = MergeMessages(history_.back(), message);
+    } else if (message.is_array()) {
+      num_messages_added = message.size();
+      for (size_t i = 0; i < message.size(); ++i) {
+        history_.push_back(message[i]);
       }
     } else {
+      num_messages_added = 1;
       history_.push_back(message);
     }
-  }
 
-  if (!config_.enable_rewinding() && was_history_empty) {
-    ABSL_RETURN_IF_ERROR(session_->SaveCheckpoint(kStartContentCheckpoint));
-  }
-
-  // If channel content (e.g. reasoning) needs to be filtered from the KV cache,
-  // we rewind the session to the last user message and compute the inputs that
-  // need to be "refilled" into the session.
-  std::vector<InputData> refill_session_inputs;
-  if (config_.filter_channel_content_from_kv_cache() &&
-      IsUserMessage(message) && !is_appending_message_) {
-    if (channel_content_since_last_user_message_) {
-      ABSL_ASSIGN_OR_RETURN(refill_session_inputs,
-                            RewindAndGetInputDataVector(optional_args));
-      channel_content_since_last_user_message_ = false;
-    }
-
-    if (refill_session_inputs.empty()) {
-      // If there are no refill session inputs, save a session checkpoint here.
-      ABSL_RETURN_IF_ERROR(session_->SaveCheckpoint(kChannelContentCheckpoint));
-    }
-
-    absl::MutexLock lock(history_mutex_);
-    checkpoint_message_index_ = history_.size() - 1;
-  }
-
-  nlohmann::ordered_json messages_for_conversion;
-  if (was_history_empty && !config_.prefill_preface_on_init()) {
-    if (std::holds_alternative<JsonPreface>(preface_)) {
-      const auto& json_preface = std::get<JsonPreface>(preface_);
-      if (json_preface.messages.is_array()) {
-        messages_for_conversion = json_preface.messages;
+    auto prefill_data = GetInputDataVectorForMessages(
+        /*old_messages=*/{}, history_, optional_args,
+        /*include_preface=*/true,
+        /*add_generation_prompt=*/!is_appending_message);
+    if (!prefill_data.ok()) {
+      if (should_merge) {
+        if (!history_.empty()) {
+          history_.back() = std::move(previous_last_message);
+        }
       } else {
-        messages_for_conversion =
-            nlohmann::ordered_json::array({json_preface.messages});
+        for (size_t i = 0; i < num_messages_added && !history_.empty(); ++i) {
+          history_.pop_back();
+        }
       }
+      is_appending_message_ = was_appending_message;
+      return prefill_data.status();
     }
+    open_channel_name =
+        GetOpenChannelName(prefill_data->prefill_text, config_.GetChannels());
+    session_inputs = std::move(prefill_data->session_inputs);
   }
-  if (messages_for_conversion.is_array()) {
-    if (message.is_array()) {
-      for (const auto& msg : message) {
-        messages_for_conversion.push_back(msg);
+
+  absl::Cleanup rollback = [&]() {
+    absl::MutexLock lock(history_mutex_);
+    if (should_merge) {
+      if (!history_.empty()) {
+        history_.back() = std::move(previous_last_message);
       }
     } else {
-      messages_for_conversion.push_back(message);
+      for (size_t i = 0; i < num_messages_added && !history_.empty(); ++i) {
+        history_.pop_back();
+      }
     }
-  } else {
-    if (message.is_array()) {
-      messages_for_conversion = message;
-    } else {
-      messages_for_conversion = nlohmann::ordered_json::array({message});
+    is_appending_message_ = was_appending_message;
+  };
+
+  if (!config_.enable_rewinding()) {
+    auto reset_res = session_->Reset();
+    if (!reset_res.ok()) {
+      return reset_res;
     }
   }
 
-  ABSL_ASSIGN_OR_RETURN(auto session_inputs,
-                        model_data_processor_->ToInputDataVector(
-                            single_turn_text, messages_for_conversion,
-                            optional_args.args.value_or(std::monostate())));
-
-  if (is_appending_message_) {
-    ABSL_ASSIGN_OR_RETURN(
-        auto task_controller,
-        session_->RunPrefillAsync(
-            session_inputs, [callback = std::move(user_callback)](
-                                absl::StatusOr<Responses> responses) mutable {
-              if (!responses.ok()) {
-                auto status = IgnoreEmptyInputError(responses.status());
-                if (!status.ok()) {
-                  callback(status);
-                } else {
-                  callback(Message());
-                }
-                return;
-              }
-              if (responses->GetTaskState() == TaskState::kDone) {
-                callback(Message());
-              } else if (IsTaskEndState(responses->GetTaskState())) {
-                callback(absl::InternalError(absl::StrCat(
-                    "Prefill failed with task state: ",
-                    TaskStateToString(responses->GetTaskState()))));
-              }
-            }));
-    AddTaskController(optional_args.task_group_id, std::move(task_controller));
+  if (is_appending_message) {
+    auto task_controller = session_->RunPrefillAsync(
+        session_inputs,
+        [callback = std::move(user_callback)](
+            absl::StatusOr<Responses> responses) mutable {
+          if (!responses.ok()) {
+            auto status = IgnoreEmptyInputError(responses.status());
+            if (!status.ok()) {
+              callback(status);
+            } else {
+              callback(Message());
+            }
+            return;
+          }
+          if (responses->GetTaskState() == TaskState::kDone) {
+            callback(Message());
+          } else if (IsTaskEndState(responses->GetTaskState())) {
+            callback(absl::InternalError(absl::StrCat(
+                "Prefill failed with task state: ",
+                TaskStateToString(responses->GetTaskState()))));
+          }
+        });
+    if (!task_controller.ok()) {
+      return task_controller.status();
+    }
+    std::move(rollback).Cancel();
+    AddTaskController(optional_args.task_group_id,
+                      std::move(*task_controller));
     return absl::OkStatus();
   }
 
@@ -676,20 +650,24 @@ absl::Status Conversation::SendMessageAsync(
       [this](const Message& complete_message) {
         absl::MutexLock lock(this->history_mutex_);
         this->history_.push_back(complete_message);
-
-        // If the model's output message contains channel content, set a
-        // variable indicating the session needs to be rewound to the last user
-        // message.
-        if (config_.filter_channel_content_from_kv_cache() &&
-            complete_message.contains(kChannelsKey)) {
-          channel_content_since_last_user_message_ = true;
-        }
       };
 
-  absl::AnyInvocable<void()> cancel_callback = [this]() {
-    absl::MutexLock lock(this->history_mutex_);
-    this->history_.pop_back();
-  };
+  absl::AnyInvocable<void()> cancel_callback =
+      [this, should_merge,
+       previous_last_message = std::move(previous_last_message),
+       num_messages_added]() mutable {
+        absl::MutexLock lock(this->history_mutex_);
+        if (should_merge) {
+          if (!this->history_.empty()) {
+            this->history_.back() = std::move(previous_last_message);
+          }
+        } else {
+          for (size_t i = 0; i < num_messages_added && !this->history_.empty();
+               ++i) {
+            this->history_.pop_back();
+          }
+        }
+      };
 
   auto internal_callback =
       std::make_shared<absl::AnyInvocable<void(absl::StatusOr<Responses>)>>(
@@ -702,15 +680,16 @@ absl::Status Conversation::SendMessageAsync(
               config_.stream_tool_calls(),
               config_.stream_tool_calls_channel_name()));
 
-  ABSL_ASSIGN_OR_RETURN(
-      auto decode_config,
-      CreateDecodeConfig(std::move(optional_args.repetition_penalty_config),
-                         std::move(optional_args.no_repeat_ngram_config),
-                         std::move(optional_args.suppress_tokens_config),
-                         std::move(optional_args.decoding_constraint),
-                         optional_args.max_output_tokens,
-                         ResolveThinkingConfig(config_, optional_args),
-                         open_channel_name));
+  auto decode_config = CreateDecodeConfig(
+      std::move(optional_args.repetition_penalty_config),
+      std::move(optional_args.no_repeat_ngram_config),
+      std::move(optional_args.suppress_tokens_config),
+      std::move(optional_args.decoding_constraint),
+      optional_args.max_output_tokens,
+      ResolveThinkingConfig(config_, optional_args), open_channel_name);
+  if (!decode_config.ok()) {
+    return decode_config.status();
+  }
 
   std::optional<std::string> task_group_id = optional_args.task_group_id;
 
@@ -718,7 +697,8 @@ absl::Status Conversation::SendMessageAsync(
   // immediately if refill_session_inputs is empty. If refill_session_inputs is
   // not empty, this lambda is called after refill_session_inputs is prefilled.
   auto run_prefill = [this, session_inputs = std::move(session_inputs),
-                      internal_callback, decode_config,
+                      internal_callback,
+                      decode_config = *std::move(decode_config),
                       optional_args =
                           std::move(optional_args)]() -> absl::Status {
     ABSL_ASSIGN_OR_RETURN(
@@ -774,53 +754,19 @@ absl::Status Conversation::SendMessageAsync(
     return absl::OkStatus();
   };
 
-  // If there are refill session inputs, run prefill for the refill session
-  // inputs first, then save a checkpoint, and then run prefill for the
-  // input message.
-  if (!refill_session_inputs.empty()) {
-    auto refill_callback = [this, run_prefill = std::move(run_prefill),
-                            internal_callback](
-                               absl::StatusOr<Responses> responses) mutable {
-      if (!responses.ok()) {
-        (*internal_callback)(responses.status());
-        return;
-      }
-
-      if (IsTaskEndState(responses->GetTaskState()) &&
-          responses->GetTaskState() != TaskState::kDone) {
-        (*internal_callback)(responses);
-        return;
-      }
-
-      if (responses->GetTaskState() == TaskState::kDone) {
-        if (!session_->SaveCheckpoint(kChannelContentCheckpoint).ok()) {
-          (*internal_callback)(absl::InternalError(
-              "Failed to save checkpoint for channel content."));
-          return;
-        }
-
-        if (!run_prefill().ok()) {
-          (*internal_callback)(absl::InternalError("Failed to start prefill."));
-          return;
-        }
-      }
-    };
-    ABSL_ASSIGN_OR_RETURN(
-        auto refill_task_controller,
-        session_->RunPrefillAsync(refill_session_inputs,
-                                  std::move(refill_callback)));
-    AddTaskController(task_group_id, std::move(refill_task_controller));
-    return absl::OkStatus();
-  }
-
   // Run prefill for the input message.
-  return run_prefill();
+  auto prefill_result = run_prefill();
+  if (!prefill_result.ok()) {
+    return prefill_result;
+  }
+  std::move(rollback).Cancel();
+  return absl::OkStatus();
 };
 
 absl::StatusOr<Responses> Conversation::RunTextScoring(
     const std::vector<absl::string_view>& target_text,
     OptionalArgs optional_args) {
-  ABSL_ASSIGN_OR_RETURN(std::unique_ptr<Engine::Session> cloned_session,
+  ABSL_ASSIGN_OR_RETURN(std::unique_ptr<CachedSession> cloned_session,
                         session_->Clone());
   return cloned_session->RunTextScoring(target_text,
                                         /*store_token_lengths=*/true);
@@ -830,13 +776,25 @@ absl::Status Conversation::RunTextScoringAsync(
     const std::vector<absl::string_view>& target_text,
     absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback,
     OptionalArgs optional_args) {
-  ABSL_ASSIGN_OR_RETURN(std::unique_ptr<Engine::Session> cloned_session,
+  ABSL_ASSIGN_OR_RETURN(std::unique_ptr<CachedSession> cloned_session,
                         session_->CloneAsync(nullptr));
+  auto shared_cloned_session =
+      std::shared_ptr<CachedSession>(std::move(cloned_session));
+  auto wrapped_callback =
+      [shared_cloned_session, callback = std::move(callback)](
+          absl::StatusOr<Responses> responses) mutable {
+        callback(std::move(responses));
+      };
   ABSL_ASSIGN_OR_RETURN(
       auto task_controller,
-      cloned_session->RunTextScoringAsync(target_text, std::move(callback),
-                                          /*store_token_lengths=*/true));
-  AddTaskController(optional_args.task_group_id, std::move(task_controller));
+      shared_cloned_session->RunTextScoringAsync(target_text,
+                                                 std::move(wrapped_callback),
+                                                 /*store_token_lengths=*/true));
+  auto cloned_task_controller =
+      std::make_unique<ClonedSessionTaskController>(
+          std::move(task_controller), shared_cloned_session);
+  AddTaskController(optional_args.task_group_id,
+                    std::move(cloned_task_controller));
   return absl::OkStatus();
 }
 
@@ -872,10 +830,10 @@ absl::StatusOr<std::unique_ptr<Conversation>> Conversation::Clone() {
   ABSL_ASSIGN_OR_RETURN(
       std::unique_ptr<ModelDataProcessor> model_data_processor,
       CreateModelDataProcessor(config_.GetProcessorConfig(),
-                               config_.GetPreface(), &engine_.GetTokenizer(),
-                               session->GetSessionConfig().GetStopTokenIds(),
-                               config_.constrained_decoding_enabled(),
-                               config_.GetPromptTemplate().GetCapabilities()));
+                                config_.GetPreface(), &engine_.GetTokenizer(),
+                                session->GetSessionConfig().GetStopTokenIds(),
+                                config_.constrained_decoding_enabled(),
+                                config_.GetPromptTemplate().GetCapabilities()));
   auto status = model_data_processor->CloneState(*model_data_processor_);
   if (!status.ok() && !absl::IsUnimplemented(status)) {
     return status;
@@ -892,9 +850,9 @@ absl::StatusOr<std::unique_ptr<Conversation>> Conversation::Clone() {
       engine_, std::move(session), std::move(model_data_processor),
       config_.GetPreface(), config_.GetPromptTemplate(), config_,
       std::move(constraint_provider)));
-  new_conversation->is_appending_message_ = is_appending_message_;
   {
     absl::MutexLock lock(history_mutex_);  // NOLINT
+    new_conversation->is_appending_message_ = is_appending_message_;
     new_conversation->history_ = history_;
   }
   return new_conversation;
@@ -902,7 +860,20 @@ absl::StatusOr<std::unique_ptr<Conversation>> Conversation::Clone() {
 
 absl::StatusOr<std::string> Conversation::RenderMessageIntoString(
     const Message& message, OptionalArgs optional_args) {
-  return GetSingleTurnText(message, optional_args);
+  absl::MutexLock lock(history_mutex_);
+  std::vector<Message> message_vec;
+  if (message.is_array()) {
+    for (const auto& msg : message) {
+      message_vec.push_back(msg);
+    }
+  } else {
+    message_vec.push_back(message);
+  }
+  return GetPrefillTextForMessages(
+      history_, message_vec, optional_args,
+      /*include_preface=*/history_.empty() &&
+          !config_.prefill_preface_on_init(),
+      /*add_generation_prompt=*/!optional_args.has_pending_message);
 }
 
 absl::StatusOr<std::string> Conversation::RenderPrefaceIntoString(
@@ -936,7 +907,7 @@ absl::StatusOr<std::string> Conversation::RenderPrefaceIntoString(
 absl::StatusOr<std::string> Conversation::GetPrefillTextForMessages(
     absl::Span<const Message> old_messages,
     absl::Span<const Message> new_messages, const OptionalArgs& optional_args,
-    bool include_preface) {
+    bool include_preface, bool add_generation_prompt) {
   // Create the template context for the `old` string.
   PromptTemplateInput old_context;
   old_context.add_generation_prompt = false;
@@ -988,15 +959,14 @@ absl::StatusOr<std::string> Conversation::GetPrefillTextForMessages(
 
   // Copy the `old` template context to the `new` template context.
   PromptTemplateInput new_context = old_context;
+  new_context.add_generation_prompt = add_generation_prompt;
 
   // Add new messages to the `new` template context.
-  nlohmann::ordered_json prefill_messages = nlohmann::ordered_json::array();
   for (const auto& message : new_messages) {
-    prefill_messages.push_back(message);
     ABSL_ASSIGN_OR_RETURN(
         nlohmann::ordered_json message_tmpl_input,
         model_data_processor_->MessageToTemplateInput(message));
-    new_context.messages.push_back(message_tmpl_input);
+    new_context.messages.push_back(std::move(message_tmpl_input));
   }
 
   // Render the `new` string.
@@ -1019,59 +989,43 @@ absl::StatusOr<std::string> Conversation::GetPrefillTextForMessages(
   return new_string.substr(old_string.length());
 }
 
-absl::StatusOr<std::vector<InputData>>
+absl::StatusOr<Conversation::PrefillData>
 Conversation::GetInputDataVectorForMessages(
     absl::Span<const Message> old_messages,
     absl::Span<const Message> new_messages, const OptionalArgs& optional_args,
-    bool include_preface) {
+    bool include_preface, bool add_generation_prompt) {
   ABSL_ASSIGN_OR_RETURN(
       std::string prefill_text,
       GetPrefillTextForMessages(old_messages, new_messages, optional_args,
-                                include_preface));
+                                include_preface, add_generation_prompt));
 
   nlohmann::ordered_json prefill_messages = nlohmann::ordered_json::array();
+  if (include_preface) {
+    if (auto* json_preface = std::get_if<JsonPreface>(&preface_)) {
+      if (json_preface->messages.is_array()) {
+        for (const auto& msg : json_preface->messages) {
+          prefill_messages.push_back(msg);
+        }
+      }
+    }
+  }
+  for (const auto& message : old_messages) {
+    prefill_messages.push_back(message);
+  }
   for (const auto& message : new_messages) {
     prefill_messages.push_back(message);
   }
 
-  return model_data_processor_->ToInputDataVector(
-      prefill_text, prefill_messages,
-      optional_args.args.value_or(std::monostate()));
-}
-
-absl::StatusOr<std::vector<InputData>>
-Conversation::RewindAndGetInputDataVector(const OptionalArgs& optional_args) {
-  absl::MutexLock lock(history_mutex_);
-  if (!checkpoint_message_index_.has_value()) {
-    // If no rewind is needed, return early with empty InputData vector.
-    return std::vector<InputData>();
-  }
-
-  // If rewinding enabled, rewind the session to the saved checkpoint.
-  if (config_.enable_rewinding()) {
-    ABSL_RETURN_IF_ERROR(
-        session_->RewindToCheckpoint(kChannelContentCheckpoint));
-  } else {
-    // Otherwise rewind to the beginning.
-    ABSL_RETURN_IF_ERROR(session_->RewindToCheckpoint(kStartContentCheckpoint));
-    checkpoint_message_index_ = 0;
-  }
-
-  // Get the InputData vector for the messages from the checkpoint onward.
   ABSL_ASSIGN_OR_RETURN(
-      std::vector<InputData> input_data_vector,
-      GetInputDataVectorForMessages(
-          absl::MakeSpan(history_).subspan(0, *checkpoint_message_index_),
-          absl::MakeSpan(history_).subspan(
-              *checkpoint_message_index_,
-              history_.size() - *checkpoint_message_index_ - 1),
-          optional_args,
-          /*include_preface=*/!config_.prefill_preface_on_init()));
+      std::vector<InputData> session_inputs,
+      model_data_processor_->ToInputDataVector(
+          prefill_text, prefill_messages,
+          optional_args.args.value_or(std::monostate())));
 
-  // Clear the checkpoint message index.
-  checkpoint_message_index_ = std::nullopt;
-
-  return input_data_vector;
+  return PrefillData{
+      .session_inputs = std::move(session_inputs),
+      .prefill_text = std::move(prefill_text),
+  };
 }
 
 absl::StatusOr<std::string> Conversation::ApplyTemplate(
