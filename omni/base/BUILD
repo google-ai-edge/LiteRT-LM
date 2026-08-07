@@ -23,6 +23,68 @@ cc_library(
 )
 
 cc_library(
+    name = "model_resources",
+    srcs = ["model_resources.cc"],
+    hdrs = ["model_resources.h"],
+    deps = [
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@litert//litert/cc:litert_compiled_model",
+        "@litert//litert/cc:litert_environment",
+    ],
+)
+
+cc_test(
+    name = "model_resources_test",
+    srcs = ["model_resources_test.cc"],
+    deps = [
+        ":model_resources",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
+        "@litert//litert/cc:litert_environment",
+        "//support/util:test_utils",
+    ],
+)
+
+cc_library(
+    name = "model_utils",
+    srcs = ["model_utils.cc"],
+    hdrs = ["model_utils.h"],
+    deps = [
+        "@com_google_absl//absl/log:absl_log",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@litert//litert/cc:litert_common",
+        "@litert//litert/cc:litert_compiled_model",
+        "@litert//litert/cc:litert_environment",
+        "@litert//litert/cc:litert_macros",
+        "@litert//litert/cc:litert_options",
+        "@litert//litert/cc/options:litert_gpu_options",
+        "//runtime/executor:executor_settings_base",
+        "//runtime/executor:litert_compiled_model_executor_utils",
+        "//runtime/util:scoped_file",
+    ],
+)
+
+cc_test(
+    name = "model_utils_test",
+    srcs = ["model_utils_test.cc"],
+    deps = [
+        ":model_utils",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
+        "@litert//litert/cc:litert_environment",
+        "//support/util:test_utils",
+    ],
+)
+
+cc_library(
     name = "stage",
     hdrs = ["stage.h"],
     deps = [
