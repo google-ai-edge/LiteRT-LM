@@ -12,19 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
-# ==============================================================================
-# LiteRT-LM Flatbuffers Target-to-Path Mapping
-# ==============================================================================
-
-set(FLATBUFFERS_TARGET_MAP
-  "flatbuffers::flatbuffers=${FLATBUFFERS_LIB_DIR}/libflatbuffers.a"
-  "flatbuffers=${FLATBUFFERS_LIB_DIR}/libflatbuffers.a"
-  "flatbuffers::libflatbuffers=${FLATBUFFERS_LIB_DIR}/libflatbuffers.a"
-  "libflatbuffers=${FLATBUFFERS_LIB_DIR}/libflatbuffers.a"
+set(LITERTLM_FLATBUFFERS_TARGET_MAP
+  "flatbuffers::flatbuffers=${LITERTLM_FLATBUFFERS_LIB_DIR}/libflatbuffers.a"
+  "flatbuffers=${LITERTLM_FLATBUFFERS_LIB_DIR}/libflatbuffers.a"
+  "flatbuffers::libflatbuffers=${LITERTLM_FLATBUFFERS_LIB_DIR}/libflatbuffers.a"
+  "libflatbuffers=${LITERTLM_FLATBUFFERS_LIB_DIR}/libflatbuffers.a"
+  CACHE INTERNAL "Mapping of Flatbuffers targets to their corresponding library paths"
 )
 
-set(FLATC_TARGET_MAP
-  "flatbuffers::flatc=${FLATBUFFERS_BIN_DIR}/flatc"
-  "flatc=${FLATBUFFERS_BIN_DIR}/flatc"
+set(LITERTLM_FLATC_TARGET_MAP
+  "flatbuffers::flatc=${LITERTLM_FLATBUFFERS_BIN_DIR}/flatc"
+  "flatc=${LITERTLM_FLATBUFFERS_BIN_DIR}/flatc"
+  CACHE INTERNAL "Mapping of Flatbuffers targets to their corresponding binary paths"
 )

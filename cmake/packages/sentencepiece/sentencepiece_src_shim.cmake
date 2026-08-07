@@ -12,5 +12,5 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-include_directories(${ABSL_INCLUDE_DIR} ${PROTO_INCLUDE_DIR})
+include_directories(${LITERTLM_ABSL_INCLUDE_DIR} ${LITERTLM_PROTOBUF_INCLUDE_DIR})
 link_libraries(LiteRTLM::absl::shim LiteRTLM::protobuf::shim)

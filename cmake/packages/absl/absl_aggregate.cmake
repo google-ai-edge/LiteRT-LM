@@ -12,17 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
-include_guard(GLOBAL)
-include(${LITERTLM_MODULES_DIR}/utils.cmake)
-include(${ABSL_PACKAGE_DIR}/absl_target_map.cmake)
+include("${LITERTLM_ABSL_TARGET_MAP_PATH}")
 
 macro(generate_absl_aggregate)
     if(NOT TARGET LiteRTLM::absl::absl)
         message(STATUS "[LiteRTLM] Generating the Abseil aggregate...")
         set(_absl_lib_names "")
         set(_absl_lib_paths "")
-        kvp_parse_map("${ABSL_TARGET_MAP}" _absl_lib_names _absl_lib_paths)
+        kvp_parse_map("${LITERTLM_ABSL_TARGET_MAP}" _absl_lib_names _absl_lib_paths)
 
         add_library(LiteRTLM::absl::absl INTERFACE IMPORTED GLOBAL)
         set_target_properties(LiteRTLM::absl::absl PROPERTIES
@@ -33,13 +30,13 @@ macro(generate_absl_aggregate)
             INTERFACE_LINK_LIBRARIES
                 "${_absl_lib_paths}"
             INTERFACE_INCLUDE_DIRECTORIES
-                "${ABSL_INCLUDE_DIR}"
+                "${LITERTLM_ABSL_INCLUDE_DIR}"
         )
 
         add_library(LiteRTLM::absl::shim INTERFACE IMPORTED GLOBAL)
         set_target_properties(LiteRTLM::absl::shim PROPERTIES
             INTERFACE_INCLUDE_DIRECTORIES
-                "${ABSL_INCLUDE_DIR}"
+                "${LITERTLM_ABSL_INCLUDE_DIR}"
             )
 
         foreach(_comp_target IN LISTS ${_absl_lib_names})

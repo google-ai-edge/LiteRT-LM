@@ -23,43 +23,66 @@ else()
   list(APPEND LITERT_MEMORY_MAPPED_FILE_SRC "${CMAKE_CURRENT_SOURCE_DIR}/memory_mapped_file_posix.cc")
 endif()
 
-add_library(support_util_memory_mapped_file STATIC
+add_litertlm_library(support_util_memory_mapped_file STATIC
   ${LITERT_MEMORY_MAPPED_FILE_SRC}
 )
-add_library(LiteRT::Support::Util::MemoryMappedFile ALIAS support_util_memory_mapped_file)
+add_library(LiteRTLM::Support::Util::MemoryMappedFile ALIAS support_util_memory_mapped_file)
 
 target_include_directories(support_util_memory_mapped_file
   PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/..
+    ${LITERTLM_INCLUDE_PATHS}
 )
 
 target_link_libraries(support_util_memory_mapped_file
   PUBLIC
-    absl::log
-    litert_cc_api
-    tensorflow-lite
+    LITERTLM_DEPS
 )
 
 # ==============================================================================
 # IO Types
 # ==============================================================================
-add_library(support_util_io_types STATIC
+add_litertlm_library(support_util_io_types STATIC
   io_types.cc
 )
-add_library(LiteRT::Support::Util::IoTypes ALIAS support_util_io_types)
+add_library(LiteRTLM::Support::Util::IoTypes ALIAS support_util_io_types)
 
 target_include_directories(support_util_io_types
   PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/..
+    ${LITERTLM_INCLUDE_PATHS}
 )
 
 target_link_libraries(support_util_io_types
   PUBLIC
-    absl::base
-    absl::log
-    absl::status
-    absl::strings
-    litert_cc_api
+    LITERTLM_DEPS
+)
+
+# ==============================================================================
+# Alloc Defs
+# ==============================================================================
+add_litertlm_library(support_util_alloc_defs STATIC
+  alloc_defs.cc
+)
+add_library(LiteRTLM::Support::Util::AllocDefs ALIAS support_util_alloc_defs)
+
+target_include_directories(support_util_alloc_defs
+  PUBLIC
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+target_link_libraries(support_util_alloc_defs
+  PUBLIC
+    LITERTLM_DEPS
+)
+
+# ==============================================================================
+# Folder Facade
+# ==============================================================================
+add_litertlm_library(support_util_libs INTERFACE)
+add_library(LiteRTLM::Support::Util
+  ALIAS support_util_libs)
+
+target_link_libraries(support_util_libs INTERFACE
+  LiteRTLM::Support::Util::MemoryMappedFile
+  LiteRTLM::Support::Util::IoTypes
+  LiteRTLM::Support::Util::AllocDefs
 )

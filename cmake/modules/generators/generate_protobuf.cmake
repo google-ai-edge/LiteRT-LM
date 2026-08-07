@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
 # --- Protobuf ---
 function(generate_protobuf TARGET_NAME _root_path)
     set(GENERATED_SRCS)
@@ -50,6 +49,6 @@ function(generate_protobuf TARGET_NAME _root_path)
         list(APPEND GENERATED_SRCS "${SRC_FILE}")
         list(APPEND GENERATED_HDRS "${HDR_FILE}")
     endforeach()
-
+    set_source_files_properties(${GENERATED_SRCS} ${GENERATED_HDRS} PROPERTIES GENERATED TRUE)
     target_sources(${TARGET_NAME} PRIVATE ${GENERATED_SRCS} ${GENERATED_HDRS})
 endfunction()

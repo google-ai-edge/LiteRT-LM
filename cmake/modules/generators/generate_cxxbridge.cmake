@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
 # --- RUST ---
 set(LITERTLM_RUST_FILES
     "${LITERTLM_PROJECT_ROOT}/runtime/components/rust/minijinja_template.rs"
@@ -54,7 +53,6 @@ foreach(RS_FILE IN LISTS LITERTLM_RUST_FILES)
     file(RELATIVE_PATH REL_PATH "${LITERTLM_PROJECT_ROOT}" "${RS_DIR}")
 
     set(CORROSION_HEADER "${CORROSION_INC_DIR}/${REL_PATH}/${RS_NAME}.h")
-
     set(RS_HEADER "${CORROSION_INC_DIR}/${REL_PATH}/${RS_NAME}.rs.h")
 
     add_custom_command(
@@ -69,7 +67,6 @@ endforeach()
 
 add_custom_target(litertlm_cxx_bridge_aliases ALL DEPENDS ${LITERTLM_BRIDGE_ALIASES})
 add_dependencies(litertlm_cxx_bridge_aliases litertlm_cxx_bridge)
-
 add_custom_command(
     TARGET litertlm_cxx_bridge POST_BUILD
     COMMAND ${CMAKE_COMMAND}

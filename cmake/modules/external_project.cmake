@@ -12,12 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
 # --- Dependency Orchestration ---
 # Warning: Order matters to satisfy inter-dependency requirements
-message(DEBUG "[DEBUG] LITERTLM_PACKAGES_DIR: ${LITERTLM_PACKAGES_DIR}")
-include("${LITERTLM_PACKAGES_DIR}/packages.cmake")
-
 set(LITERTLM_DEPENDENCY_ORDER
     opencl
     absl

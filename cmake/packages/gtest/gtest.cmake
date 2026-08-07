@@ -12,34 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+include("${LITERTLM_MODULES_DIR}/utils.cmake")
+set(LITERTLM_GTEST_CONFIG_PATH "${LITERTLM_GTEST_PACKAGE_DIR}/gtest_config.cmake" CACHE INTERNAL "")
+include("${LITERTLM_GTEST_PACKAGE_DIR}/gtest_config.cmake")
 
-# [TODO] Update to follow the same pattern as the other packages.
+set(LITERTLM_GTEST_EXTERNAL_DONE ${LITERTLM_GTEST_STAMP_DIR}/gtest_external-done CACHE INTERNAL "")
+
+setup_external_install_structure("${LITERTLM_GTEST_INSTALL_PREFIX}")
+
 include(ExternalProject)
-
-set(GTEST_EXT_PREFIX ${EXTERNAL_PROJECT_BINARY_DIR}/googletest)
-set(GTEST_INSTALL_PREFIX ${GTEST_EXT_PREFIX}/install)
-set(GTEST_INCLUDE_DIR ${GTEST_INSTALL_PREFIX}/include)
-set(GTEST_CONFIG_CMAKE_FILE "${GTEST_INSTALL_PREFIX}/lib/cmake/GTest/GTestConfig.cmake")
-
-set(absl_DIR "${ABSL_INSTALL_PREFIX}/lib/cmake/absl" CACHE PATH "Path to absl config")
-set(ABSL_DIR "${ABSL_INSTALL_PREFIX}/lib/cmake/absl" CACHE PATH "Path to absl config")
-set(absl_ROOT "${ABSL_INSTALL_PREFIX}" CACHE PATH "absl root dir")
-set(ABSL_ROOT "${ABSL_INSTALL_PREFIX}" CACHE PATH "absl root dir")
-
-list(APPEND CMAKE_PREFIX_PATH "${ABSL_INSTALL_PREFIX}")
-list(APPEND CMAKE_SYSTEM_PREFIX_PATH "${ABSL_INSTALL_PREFIX}")
-
-set(ABSL_INCLUDE_DIR "${ABSL_INSTALL_PREFIX}/include" CACHE PATH "absl include dir")
-set(ABSL_INCLUDE_DIRS "${ABSL_INSTALL_PREFIX}/include" CACHE PATH "absl include dirs")
-set(absl_INCLUDE_DIR "${ABSL_INSTALL_PREFIX}/include" CACHE PATH "absl include dir")
-set(absl_INCLUDE_DIRS "${ABSL_INSTALL_PREFIX}/include" CACHE PATH "absl include dirs")
-set(ABSL_LIBRARY_DIR "${ABSL_INSTALL_PREFIX}/lib" CACHE PATH "absl lib dir")
-set(ABSL_LIB_DIR "${ABSL_INSTALL_PREFIX}/lib" CACHE PATH "absl lib dir")
-set(absl_LIBRARY_DIR "${ABSL_INSTALL_PREFIX}/lib" CACHE PATH "absl lib dir")
-
-setup_external_install_structure("${GTEST_INSTALL_PREFIX}")
-
-if(NOT EXISTS "${GTEST_CONFIG_CMAKE_FILE}")
+if(NOT EXISTS "${LITERTLM_GTEST_EXTERNAL_DONE}")
   message(STATUS "GoogleTest not found. Configuring external build...")
 
   ExternalProject_Add(
@@ -51,14 +33,15 @@ if(NOT EXISTS "${GTEST_CONFIG_CMAKE_FILE}")
     GIT_TAG
       v1.17.0
     PREFIX
-      ${GTEST_EXT_PREFIX}
+      ${LITERTLM_GTEST_EXT_PREFIX}
     PATCH_COMMAND
       git checkout -- . && git clean -df
     CMAKE_ARGS
       ${LITERTLM_TOOLCHAIN_FILE}
       ${LITERTLM_TOOLCHAIN_ARGS}
+      -DLITERTLM_ORCHESTRATION_PHASE=${LITERTLM_ORCHESTRATION_PHASE}
       -DCMAKE_PREFIX_PATH=${ABSL_INSTALL_PREFIX}
-      -DCMAKE_INSTALL_PREFIX=${GTEST_INSTALL_PREFIX}
+      -DCMAKE_INSTALL_PREFIX=${LITERTLM_GTEST_INSTALL_PREFIX}
       -DCMAKE_INSTALL_LIBDIR=lib
       -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
       -DCMAKE_POLICY_DEFAULT_CMP0169=OLD
@@ -66,6 +49,7 @@ if(NOT EXISTS "${GTEST_CONFIG_CMAKE_FILE}")
       -DCMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS}
       -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
       -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+      -DLITERTLM_ABSL_CONFIG_PATH=${ABSL_CONFIG_PATH}
       -Dabsl_DIR=${absl_DIR}
       -DABSL_DIR=${ABSL_DIR}
       -Dabsl_ROOT=${absl_ROOT}
@@ -80,16 +64,16 @@ if(NOT EXISTS "${GTEST_CONFIG_CMAKE_FILE}")
   )
 
 else()
-    message(STATUS "GoogleTest already installed at: ${GTEST_INSTALL_PREFIX}")
+    message(STATUS "GoogleTest already installed at: ${LITERTLM_GTEST_INSTALL_PREFIX}")
     if(NOT TARGET gtest_external)
         add_custom_target(gtest_external)
     endif()
 endif()
 
-import_static_lib(imp_gmock                      "${GTEST_LIB_DIR}/libgmock.a")
-import_static_lib(imp_gmock_main                 "${GTEST_LIB_DIR}/libgmock_main.a")
-import_static_lib(imp_gtest                      "${GTEST_LIB_DIR}/libgtest.a")
-import_static_lib(imp_gtest_main                 "${GTEST_LIB_DIR}/libgtest_main.a")
+import_static_lib(imp_gmock "${LITERTLM_GTEST_LIB_DIR}/libgmock.a")
+import_static_lib(imp_gmock_main "${LITERTLM_GTEST_LIB_DIR}/libgmock_main.a")
+import_static_lib(imp_gtest "${LITERTLM_GTEST_LIB_DIR}/libgtest.a")
+import_static_lib(imp_gtest_main "${LITERTLM_GTEST_LIB_DIR}/libgtest_main.a")
 
 add_library(gtest_libs INTERFACE)
 target_link_libraries(gtest_libs INTERFACE

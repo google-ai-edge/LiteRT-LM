@@ -12,38 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-include(FetchContent)
-
-set(LITERT_STBLIB_SRC_DIR "${CMAKE_BINARY_DIR}/_deps/stblib_src" CACHE PATH "Path to stblib source directory")
-FetchContent_Declare(
-  stblib_lib
-  GIT_REPOSITORY https://github.com/nothings/stb
-  GIT_TAG        master
-  SOURCE_DIR ${LITERT_STBLIB_SRC_DIR}
-)
-FetchContent_MakeAvailable(stblib_lib)
-
-set(LITERT_KISSFFT_SRC_DIR "${CMAKE_BINARY_DIR}/_deps/kissfft_src" CACHE PATH "Path to kissfft source directory")
-FetchContent_Declare(
-  kissfft_lib
-  GIT_REPOSITORY https://github.com/mborgerding/kissfft
-  GIT_TAG        master
-  SOURCE_DIR ${LITERT_KISSFFT_SRC_DIR}
-
-)
-FetchContent_MakeAvailable(kissfft_lib)
-
-set(LITERT_MINIAUDIO_SRC_DIR "${CMAKE_BINARY_DIR}/_deps/miniaudio_src" CACHE PATH "Path to miniaudio source directory")
-FetchContent_Declare(
-  miniaudio_lib
-  GIT_REPOSITORY https://github.com/mackron/miniaudio
-  GIT_TAG        master
-  SOURCE_DIR ${LITERT_MINIAUDIO_SRC_DIR}
-)
-FetchContent_MakeAvailable(miniaudio_lib)
-
-
 add_subdirectory(preprocessor)
-# TODO(b/538569495): Re-enable once CMake support is added.
-# add_subdirectory(tokenizer)
 add_subdirectory(util)
+add_subdirectory(tokenizer)
+
+# ==============================================================================
+# Folder Facade
+# ==============================================================================
+add_litertlm_library(support_libs INTERFACE)
+add_library(LiteRTLM::Support
+  ALIAS support_libs)
+
+target_link_libraries(support_libs INTERFACE
+  LiteRTLM::Support::Preprocessor
+  LiteRTLM::Support::Tokenizer
+  LiteRTLM::Support::Util
+)

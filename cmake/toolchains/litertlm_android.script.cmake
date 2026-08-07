@@ -14,7 +14,6 @@
 
 # ==============================================================================
 # LiteRT-LM Android Orchestrator Script
-# Executes ONCE in the root to prepare Phase 2 variables
 # ==============================================================================
 
 if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux")
@@ -38,6 +37,7 @@ else()
 endif()
 
 set(RUST_LINKER_PATH "${ANDROID_NDK_ROOT}/toolchains/llvm/prebuilt/${NDK_HOST_TAG}/bin/${RUST_TARGET}${API_LEVEL}-clang")
-
-list(APPEND LITERTLM_TOOLCHAIN_ARGS "-DLITERTLM_RUST_LINKER_OVERRIDE=${RUST_LINKER_PATH}")
-list(APPEND LITERTLM_TOOLCHAIN_ARGS "-DLITERTLM_RUST_CARGO_ENV_VAR=${CARGO_ENV}")
+set(LITERTLM_RUST_LINKER_OVERRIDE "${RUST_LINKER_PATH}"
+    CACHE STRING "Override the Rust linker for Android cross-compilation")
+set(LITERTLM_RUST_CARGO_ENV_VAR "${CARGO_ENV}"
+    CACHE STRING "Environment variable for Rust Cargo linker override")

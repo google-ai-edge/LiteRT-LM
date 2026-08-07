@@ -15,121 +15,112 @@
 # ==============================================================================
 # Audio Preprocessor MiniAudio
 # ==============================================================================
-add_library(support_preprocessor_audio_preprocessor_miniaudio STATIC
+add_litertlm_library(support_preprocessor_audio_preprocessor_miniaudio STATIC
   audio_preprocessor_miniaudio.cc
 )
-add_library(LiteRT::Support::Preprocessor::AudioMiniAudio ALIAS support_preprocessor_audio_preprocessor_miniaudio)
+add_library(LiteRTLM::Support::Preprocessor::AudioMiniAudio ALIAS support_preprocessor_audio_preprocessor_miniaudio)
 
 target_include_directories(support_preprocessor_audio_preprocessor_miniaudio
-  PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/..
   PUBLIC
-    ${LITERT_KISSFFT_SRC_DIR}
+    ${LITERTLM_INCLUDE_PATHS}
 )
 
 target_link_libraries(support_preprocessor_audio_preprocessor_miniaudio
   PUBLIC
-    absl::memory
-    absl::status
-    absl::strings
-    litert_cc_api
-    LiteRT::Support::Preprocessor::MelFilterBank
-    LiteRT::Support::Util::IoTypes
-    kissfft
+    LiteRTLM::Support::Preprocessor::MelFilterBank
+    LiteRTLM::Support::Preprocessor::AudioUtils
+    LiteRTLM::Support::Util::IoTypes
+    LITERTLM_DEPS
+)
+
+# ==============================================================================
+# Audio Preprocessor Utils
+# ==============================================================================
+add_litertlm_library(support_preprocessor_audio_preprocessor_utils STATIC
+  audio_preprocessor_utils.cc
+)
+add_library(LiteRTLM::Support::Preprocessor::AudioUtils ALIAS support_preprocessor_audio_preprocessor_utils)
+
+target_include_directories(support_preprocessor_audio_preprocessor_utils
+  PUBLIC
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+target_link_libraries(support_preprocessor_audio_preprocessor_utils
+  PUBLIC
+  LiteRTLM::Support::Preprocessor::MelFilterBank
+  LiteRTLM::Support::Util::IoTypes
+  LITERTLM_DEPS
 )
 
 # ==============================================================================
 # Image Preprocessor Util
 # ==============================================================================
-add_library(support_preprocessor_image_preprocessor_utils STATIC
+add_litertlm_library(support_preprocessor_image_preprocessor_utils STATIC
   image_preprocessor_utils.cc
 )
-add_library(LiteRT::Support::Preprocessor::ImagePreprocessorUtils ALIAS support_preprocessor_image_preprocessor_utils)
+add_library(LiteRTLM::Support::Preprocessor::ImagePreprocessorUtils ALIAS support_preprocessor_image_preprocessor_utils)
 
 target_include_directories(support_preprocessor_image_preprocessor_utils
-  PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/..
+  PUBLIC
+    ${LITERTLM_INCLUDE_PATHS} 
 )
 
 target_link_libraries(support_preprocessor_image_preprocessor_utils
   PUBLIC
-    LiteRT::Support::Util::IoTypes   
-    litert_cc_api
-    absl::log
-    absl::status
-    absl::strings
+    LiteRTLM::Support::Util::IoTypes   
+    LITERTLM_DEPS
 )
-
 
 # ==============================================================================
 # Mel Filterbank
 # ==============================================================================
-add_library(support_preprocessor_mel_filterbank STATIC
+add_litertlm_library(support_preprocessor_mel_filterbank STATIC
   mel_filterbank.cc
 )
-add_library(LiteRT::Support::Preprocessor::MelFilterBank ALIAS support_preprocessor_mel_filterbank)
+add_library(LiteRTLM::Support::Preprocessor::MelFilterBank ALIAS support_preprocessor_mel_filterbank)
 
 target_include_directories(support_preprocessor_mel_filterbank
-  PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/..
+  PUBLIC
+    ${LITERTLM_INCLUDE_PATHS}
 )
 
 target_link_libraries(support_preprocessor_mel_filterbank
   PUBLIC
-  absl::log
-  absl::status
-  absl::strings
+    LiteRTLM::Support::Preprocessor::AudioUtils
+    LITERTLM_DEPS
 )
 
 # ==============================================================================
 # STB Image Preprocessor
 # ==============================================================================
-add_library(support_preprocessor_stb_image_preprocessor STATIC
+add_litertlm_library(support_preprocessor_stb_image_preprocessor STATIC
   stb_image_preprocessor.cc
 )
-add_library(LiteRT::Support::Preprocessor::StbImage ALIAS support_preprocessor_stb_image_preprocessor)
+add_library(LiteRTLM::Support::Preprocessor::StbImage ALIAS support_preprocessor_stb_image_preprocessor)
 
 target_include_directories(support_preprocessor_stb_image_preprocessor
-  PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/..
   PUBLIC
-    ${LITERT_STBLIB_SRC_DIR}
+    ${LITERTLM_INCLUDE_PATHS}
 )
 
 target_link_libraries(support_preprocessor_stb_image_preprocessor
   PUBLIC
-    LiteRT::Support::Util::IoTypes
-    litert_cc_api
-    absl::algorithm
-    absl::log
-    absl::status
-    absl::strings
-    stblib
+    LiteRTLM::Support::Util::IoTypes
+    LITERTLM_DEPS
 )
 
 # ==============================================================================
-# Stub Image Preprocessor
+# Folder Facade
 # ==============================================================================
-add_library(support_preprocessor_stub_image_preprocessor STATIC
-  stub_image_preprocessor.cc
-)
-add_library(LiteRT::Support::Preprocessor::StubImage ALIAS support_preprocessor_stub_image_preprocessor)
+add_litertlm_library(support_processor_libs INTERFACE)
+add_library(LiteRTLM::Support::Preprocessor
+  ALIAS support_processor_libs)
 
-target_include_directories(support_preprocessor_stub_image_preprocessor
-  PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/..
+target_link_libraries(support_processor_libs INTERFACE
+  LiteRTLM::Support::Preprocessor::AudioMiniAudio
+  LiteRTLM::Support::Preprocessor::AudioUtils
+  LiteRTLM::Support::Preprocessor::ImagePreprocessorUtils
+  LiteRTLM::Support::Preprocessor::MelFilterBank
+  LiteRTLM::Support::Preprocessor::StbImage  
 )
-
-target_link_libraries(support_preprocessor_stub_image_preprocessor
-  PUBLIC
-    LiteRT::Support::Util::IoTypes
-    litert_cc_api
-    absl::status
-    absl::strings
-)
-

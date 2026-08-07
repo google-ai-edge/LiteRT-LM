@@ -12,9 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
-include_guard(GLOBAL)
-
 macro(import_static_lib target_name lib_full_path)
     if("${lib_full_path}" STREQUAL "")
         message(FATAL_ERROR "Critical Error: Empty path for '${target_name}'")
@@ -40,11 +37,10 @@ endmacro()
 macro(import_proto_lib target_name lib_path)
     if(NOT TARGET ${target_name})
         add_library(${target_name} INTERFACE IMPORTED GLOBAL)
-        set_target_properties(imp_protobuf PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${PROTO_INCLUDE_DIR}")
+        set_target_properties(imp_protobuf PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${LITERTLM_PROTOBUF_INCLUDE_DIR}")
         add_dependencies(${target_name} protobuf_external)
     endif()
 endmacro()
-
 
 macro(load_package name)
     string(TOUPPER "${name}" upper_name)
@@ -79,7 +75,7 @@ macro(load_package name)
 
     if(SHOULD_PROVISION)
         message(STATUS "[LiteRTLM] Resolution: Using INTERNAL build for ${name}")
-        include("${LITERTLM_PACKAGES_DIR}/${name}/${name}.cmake")
+        include("${LITERTLM_CMAKE_PACKAGES_DIR}/${name}/${name}.cmake")
     endif()
     cmake_checkpoint_target("${name}_external" TYPE CUSTOM QUIET)
 endmacro()
@@ -139,7 +135,7 @@ macro(add_litertlm_library target_name lib_type)
 
     foreach(_src ${ARGN})
         if(NOT IS_ABSOLUTE "${_src}")
-            list(APPEND _redirected_sources "${GENERATED_SRC_DIR}/${_rel_path}/${_src}")
+            list(APPEND _redirected_sources "${LITERTLM_GENERATED_SRC_DIR}/${_rel_path}/${_src}")
         else()
             list(APPEND _redirected_sources "${_src}")
         endif()
@@ -159,36 +155,25 @@ macro(add_litertlm_library target_name lib_type)
 
     if("${lib_type}" STREQUAL "STATIC")
         set_target_properties(${target_name} PROPERTIES
-            ARCHIVE_OUTPUT_DIRECTORY "${LITERTLM_LOCAL_STAGING_DIR}"
+            ARCHIVE_OUTPUT_DIRECTORY "${LITERTLM_STAGING_DIR}"
         )
-        set(_phys_path "${LITERTLM_LOCAL_STAGING_DIR}/${CMAKE_STATIC_LIBRARY_PREFIX}${target_name}${CMAKE_STATIC_LIBRARY_SUFFIX}")
+        set(_phys_path "${LITERTLM_STAGING_DIR}/${CMAKE_STATIC_LIBRARY_PREFIX}${target_name}${CMAKE_STATIC_LIBRARY_SUFFIX}")
 
-        set_property(GLOBAL APPEND PROPERTY LITERTLM_LOCAL_ARCHIVE_REGISTRY "${_phys_path}")
-        set_property(GLOBAL APPEND PROPERTY LITERTLM_LOCAL_TARGET_REGISTRY "${target_name}")
+        set_property(GLOBAL APPEND PROPERTY LITERTLM_ARCHIVE_REGISTRY "${_phys_path}")
+        set_property(GLOBAL APPEND PROPERTY LITERTLM_TARGET_REGISTRY "${target_name}")
     endif()
 endmacro()
 
-# TODO(totero): Refactor to remove aggregate logic from macro, and create a
-# linker groups for core dependencies.
+macro(try_generate_aggregate target)
+    message(STATUS "[LiteRTLM] Attempting to generate_${target}_aggregate()" )
 
-# Note: The main issue with this macro, besides the aggregate creation, is that it
-# does not incorporate the FetchContent dependencies nor does it define required
-# linker groups. It's worth considering whether using a macro to define an
-# executable is the best approach, given the complexity involved in defining dependencies.
-macro(add_litertlm_executable target_name)
-    # add_executable(${target_name} ${ARGN})
-    # include("${LITERTLM_MODULES_DIR}/local_aggregate.cmake")
-    # generate_local_aggregate()
-
-    # target_link_libraries(${target_name} PRIVATE
-    #     LiteRTLM::Local::Aggregate          # Your local code
-    #     LiteRTLM::litert::litert
-    #     LiteRTLM::tflite::tflite
-    #     LiteRTLM::sentencepiece::sentencepiece
-    #     LiteRTLM::flatbuffers::flatbuffers
-    #     LiteRTLM::re2::re2
-    #     LiteRTLM::protobuf::libprotobuf
-    #     LiteRTLM::absl::absl
-    #     "-lz -lrt -lpthread -ldl"
-    # )
+    set(_config_path "${LITERTLM_CMAKE_PACKAGES_DIR}/${target}/${target}_config.cmake")
+    set(_aggregate_path "${LITERTLM_CMAKE_PACKAGES_DIR}/${target}/${target}_aggregate.cmake")
+    if(EXISTS ${_aggregate_path})
+        include("${_config_path}" OPTIONAL)
+        include("${_aggregate_path}" OPTIONAL)        
+        cmake_language(EVAL CODE "generate_${target}_aggregate()")
+    else()
+        message(STATUS "[LiteRTLM] Aggregate filepath not found: ${_aggregate_path}")       
+    endif()
 endmacro()

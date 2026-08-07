@@ -12,21 +12,45 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+include("${LITERTLM_MODULES_DIR}/utils.cmake")
+include("${LITERTLM_SENTENCEPIECE_CONFIG_PATH}")
+include("${LITERTLM_ABSL_CONFIG_PATH}")
+include("${LITERTLM_PROTOBUF_CONFIG_PATH}")
 
-# TODO(totero): Remove duplicate logic in sentencepiece_aggregate.cmake
+message(STATUS "[LiteRTLM] Patching SentencePiece source at: ${LITERTLM_SENTENCEPIECE_SRC_DIR}")
 
-message(STATUS "[LiteRTLM] Patching SentencePiece source at: ${SENTENCE_SRC_DIR}")
+set(ROOT_LIST "${LITERTLM_SENTENCEPIECE_SRC_DIR}/CMakeLists.txt")
+set(MATCH_STR "if \\(SPM_ABSL_PROVIDER STREQUAL \"module\"\\)[^@]*if\\(SPM_ENABLE_BENCHMARK\\)")
 
-file(REMOVE_RECURSE "${SENTENCE_SRC_DIR}/third_party/abseil-cpp")
-file(REMOVE_RECURSE "${SENTENCE_SRC_DIR}/third_party/absl")
-file(REMOVE_RECURSE "${SENTENCE_SRC_DIR}/third_party/protobuf")
-file(REMOVE_RECURSE "${SENTENCE_SRC_DIR}/third_party/protobuf-lite")
+patch_file_content("${ROOT_LIST}"
+    ${MATCH_STR}
+    "if\(SPM_ENABLE_BENCHMARK\)"
+    TRUE)
 
-message(STATUS "[LiteRTLM] Performing header canonicalization in ${SENTENCE_SRC_DIR}...")
+file(GLOB_RECURSE ALL_CMAKELISTS 
+    "${LITERTLM_SENTENCEPIECE_SRC_DIR}/../*.cmake" 
+    "${LITERTLM_SENTENCEPIECE_SRC_DIR}/../**/CMakeLists.txt")
+
+foreach(C_FILE ${ALL_CMAKELISTS})
+    if("${C_FILE}" STREQUAL "${ROOT_LIST}")
+        continue()
+    endif()
+    patch_file_content("${C_FILE}"
+        "absl::[a-zA-Z0-9_]+" 
+        "LiteRTLM::absl::shim" 
+        TRUE)
+endforeach()
+
+file(REMOVE_RECURSE "${LITERTLM_SENTENCEPIECE_SRC_DIR}/third_party/abseil-cpp")
+file(REMOVE_RECURSE "${LITERTLM_SENTENCEPIECE_SRC_DIR}/third_party/absl")
+file(REMOVE_RECURSE "${LITERTLM_SENTENCEPIECE_SRC_DIR}/third_party/protobuf")
+file(REMOVE_RECURSE "${LITERTLM_SENTENCEPIECE_SRC_DIR}/third_party/protobuf-lite")
+
+message(STATUS "[LiteRTLM] Performing header canonicalization in ${LITERTLM_SENTENCEPIECE_SRC_DIR}...")
 
 file(GLOB_RECURSE SP_SOURCES
-    "${SENTENCE_SRC_DIR}/src/*.cc"
-    "${SENTENCE_SRC_DIR}/src/*.h"
+    "${LITERTLM_SENTENCEPIECE_SRC_DIR}/src/*.cc"
+    "${LITERTLM_SENTENCEPIECE_SRC_DIR}/src/*.h"
 )
 
 foreach(FILE_PATH ${SP_SOURCES})
@@ -45,9 +69,9 @@ foreach(FILE_PATH ${SP_SOURCES})
 endforeach()
 
 file(GLOB_RECURSE ALL_FILES
-    "${SENTENCE_SRC_DIR}/*.h"
-    "${SENTENCE_SRC_DIR}/*.cc"
-    "${SENTENCE_SRC_DIR}/*.cpp"
+    "${LITERTLM_SENTENCEPIECE_SRC_DIR}/*.h"
+    "${LITERTLM_SENTENCEPIECE_SRC_DIR}/*.cc"
+    "${LITERTLM_SENTENCEPIECE_SRC_DIR}/*.cpp"
 )
 
 foreach(FILE_PATH ${ALL_FILES})
@@ -69,10 +93,10 @@ foreach(FILE_PATH ${ALL_FILES})
     endif()
 endforeach()
 
-file(READ "${SENTENCE_SRC_DIR}/CMakeLists.txt" ROOT_CONTENT)
+file(READ ${ROOT_LIST} ROOT_CONTENT)
 
 string(REPLACE "project(sentencepiece VERSION \${SPM_VERSION} LANGUAGES C CXX)"
-    "project(sentencepiece VERSION \${SPM_VERSION} LANGUAGES C CXX)\ninclude(${SENTENCE_ROOT_SHIM_PATH})"
+    "project(sentencepiece VERSION \${SPM_VERSION} LANGUAGES C CXX)\ninclude(${LITERTLM_SENTENCEPIECE_ROOT_SHIM_PATH})"
     ROOT_CONTENT "${ROOT_CONTENT}")
 
 string(REPLACE
@@ -81,32 +105,25 @@ string(REPLACE
     ROOT_CONTENT "${ROOT_CONTENT}")
 
 string(REPLACE "set(CMAKE_CXX_STANDARD 17)" "set(CMAKE_CXX_STANDARD 20)" ROOT_CONTENT "${ROOT_CONTENT}")
+file(WRITE "${LITERTLM_SENTENCEPIECE_SRC_DIR}/CMakeLists.txt" ${ROOT_CONTENT})
 
-file(WRITE "${SENTENCE_SRC_DIR}/CMakeLists.txt" ${ROOT_CONTENT})
-
-
-file(READ "${SENTENCE_SRC_DIR}/src/CMakeLists.txt" SRC_CONTENT)
-
+file(READ "${LITERTLM_SENTENCEPIECE_SRC_DIR}/src/CMakeLists.txt" SRC_CONTENT)
 message(STATUS "[LiteRTLM] Redirecting SentencePiece internal Protobuf paths...")
 string(REPLACE "\${CMAKE_CURRENT_SOURCE_DIR}/../third_party/protobuf-lite"
                "\${PROTO_SRC_DIR}"
                SRC_CONTENT "${SRC_CONTENT}")
-
 string(REPLACE "\${CMAKE_CURRENT_SOURCE_DIR}/../third_party/absl/flags/flag.cc"
                "\${ABSL_SRC_DIR}/flags/internal/flag.cc"
                SRC_CONTENT "${SRC_CONTENT}")
-
 string(REPLACE
     "include_directories(\${CMAKE_CURRENT_SOURCE_DIR}/../third_party)"
-    "include_directories(\${CMAKE_CURRENT_SOURCE_DIR}/../third_party)\ninclude_directories(${ABSL_INLUDE_DIR})\ninclude_directories(${PROTO_INCLUDE_DIR})"
+    "include_directories(\${CMAKE_CURRENT_SOURCE_DIR}/../third_party)\ninclude_directories(${LITERTLM_ABSL_INLUDE_DIR})\ninclude_directories(${LITERTLM_PROTO_INCLUDE_DIR})"
     SRC_CONTENT "${SRC_CONTENT}")
-
 string(REPLACE "if (SPM_USE_BUILTIN_PROTOBUF)" "if (FALSE) # Forced by LiteRTLM" SRC_CONTENT "${SRC_CONTENT}")
 string(REPLACE "if (SPM_USE_EXTERNAL_ABSL)" "if (TRUE) # Forced by LiteRTLM" SRC_CONTENT "${SRC_CONTENT}")
-
 string(REPLACE "\${ABSL_STRINGS_SRCS}" "" SRC_CONTENT "${SRC_CONTENT}")
 string(REPLACE "\${ABSL_FLAGS_SRCS}" "" SRC_CONTENT "${SRC_CONTENT}")
 
 set(SRC_CONTENT ${SRC_CONTENT})
-set(SRC_SHIM_INCLUDE "include(${SENTENCE_SRC_SHIM_PATH})")
-file(WRITE "${SENTENCE_SRC_DIR}/src/CMakeLists.txt" ${SRC_SHIM_INCLUDE}${SRC_CONTENT})
+set(SRC_SHIM_INCLUDE "include(${LITERTLM_SENTENCEPIECE_SRC_SHIM_PATH})")
+file(WRITE "${LITERTLM_SENTENCEPIECE_SRC_DIR}/src/CMakeLists.txt" ${SRC_SHIM_INCLUDE}${SRC_CONTENT})

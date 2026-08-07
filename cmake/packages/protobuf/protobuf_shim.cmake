@@ -12,13 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
-include_guard(GLOBAL)
-
 include("${LITERTLM_MODULES_DIR}/utils.cmake")
-include("${ABSL_PACKAGE_DIR}/absl_aggregate.cmake")
+include("${LITERTLM_PROTOBUF_CONFIG_PATH}")
+include("${LITERTLM_ABSL_CONFIG_PATH}")
+include("${LITERTLM_ABSL_AGGREGATE_PATH}")
 
 add_definitions(-D_GLIBCXX_USE_CXX11_ABI=1)
+add_definitions(-DABSL_LTS_GROUP_EXPORT)
 
 generate_absl_aggregate()
 
@@ -26,7 +26,7 @@ set(protobuf_ABSL_PROVIDER "package" CACHE INTERNAL "" FORCE)
 set(protobuf_ABSL_USED_TARGETS "LiteRTLM::absl::absl" CACHE INTERNAL "" FORCE)
 set(protobuf_ABSL_USED_TEST_TARGETS "LiteRTLM::absl::absl" CACHE INTERNAL "" FORCE)
 
-include_directories(${ABSL_INCLUDE_DIR})
+include_directories(SYSTEM ${LITERTLM_ABSL_INCLUDE_DIR})
 link_libraries(LiteRTLM::absl::shim)
 
 # [TODO] Refactor into macro for DRY principle.
@@ -35,6 +35,12 @@ set(_LITERTLM_LINK_MULTIDEF "")
 set(_LITERTLM_LINK_GROUP_START "")
 set(_LITERTLM_LINK_GROUP_END "")
 set(_LITERTLM_SYSLIBS "")
+
+if(LITERTLM_TOOLCHAIN_ARGS)
+    set(CMAKE_CXX_FLAGS_RELEASE "${LITERTLM_PROTOBUF_CXX_FLAGS_RELEASE}" CACHE STRING "Override NDK O3" FORCE)
+    set(CMAKE_C_FLAGS_RELEASE "${LITERTLM_PROTOBUF_CXX_FLAGS_RELEASE}" CACHE STRING "Override NDK O3" FORCE)
+    set(CMAKE_CXX_STANDARD "17" CACHE STRING "C++ standard" FORCE)
+endif()
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     if(APPLE)
@@ -61,8 +67,12 @@ elseif(MSVC)
 endif()
 
 set(CMAKE_CXX_STANDARD_LIBRARIES
-    "${CMAKE_CXX_STANDARD_LIBRARIES} ${_LITERTLM_LINK_MULTIDEF} ${_LITERTLM_LINK_GROUP_START} ${_ABSL_PAYLOAD} ${_LITERTLM_SYSLIBS} ${_LITERTLM_LINK_GROUP_END}"
-    CACHE STRING "Forced Abseil aggregate for Protobuf internal linking" FORCE
+    ${CMAKE_CXX_STANDARD_LIBRARIES} 
+    ${_LITERTLM_LINK_MULTIDEF}
+    ${_LITERTLM_LINK_GROUP_START}
+    ${_ABSL_LINK_FLAGS}
+    ${_LITERTLM_SYSLIBS}
+    ${_LITERTLM_LINK_GROUP_END}
+    CACHE STRING "" FORCE
 )
-
-add_definitions(-DABSL_LTS_GROUP_EXPORT)
+string(REPLACE ";" " " CMAKE_CXX_STANDARD_LIBRARIES "${CMAKE_CXX_STANDARD_LIBRARIES}")
