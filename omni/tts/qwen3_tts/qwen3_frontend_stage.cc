@@ -32,9 +32,9 @@
 #include "absl/strings/str_format.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
-#include "litert/cc/litert_compiled_model.h"  // from @litert
-#include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
+#include "omni/base/model_resources.h"
+#include "omni/base/model_utils.h"
 #include "omni/base/stage.h"
 #include "omni/tts/qwen3_tts/common.h"
 #include "omni/tts/qwen3_tts/qwen3_stage_options.h"
@@ -45,43 +45,26 @@ namespace litert::omni::tts {
 
 absl::StatusOr<std::unique_ptr<Qwen3FrontendStage>> Qwen3FrontendStage::Create(
     Stage<std::string>* absl_nonnull text_source, Qwen3StageOptions options,
-    std::shared_ptr<Environment> absl_nonnull env) {
-  auto stage = absl::WrapUnique(
-      new Qwen3FrontendStage(text_source, std::move(options), std::move(env)));
+    std::shared_ptr<ModelResources> absl_nonnull resources) {
+  auto stage = absl::WrapUnique(new Qwen3FrontendStage(
+      text_source, std::move(options), std::move(resources)));
 
   ABSL_ASSIGN_OR_RETURN(
       std::string tok_json,
-      LoadFileOrAsset(stage->options_, stage->options_.tokenizer_file));
+      LoadFile(stage->options_.model_dir, stage->options_.tokenizer_file));
   ABSL_ASSIGN_OR_RETURN(
       stage->tokenizer_,
       support::HuggingFaceTokenizer::CreateFromJson(std::move(tok_json)));
 
-  // Load text embedding compiled model
   LITERT_ASSIGN_OR_RETURN(
-      auto text_emb_model,
-      CreateCompiledModel(*stage->env_, stage->options_,
-                          stage->options_.text_embedding_file,
-                          stage->options_.num_threads));
-  stage->text_embedding_model_ =
-      std::make_unique<CompiledModel>(std::move(text_emb_model));
-
-  // Load text projection compiled model
+      stage->text_embedding_model_,
+      stage->resources_->GetCompiledModel("text_embedding"));
   LITERT_ASSIGN_OR_RETURN(
-      auto text_proj_model,
-      CreateCompiledModel(*stage->env_, stage->options_,
-                          stage->options_.text_projection_file,
-                          stage->options_.num_threads));
-  stage->text_projection_model_ =
-      std::make_unique<CompiledModel>(std::move(text_proj_model));
-
-  // Load codec embedding compiled model
+      stage->text_projection_model_,
+      stage->resources_->GetCompiledModel("text_projection"));
   LITERT_ASSIGN_OR_RETURN(
-      auto codec_emb_model,
-      CreateCompiledModel(*stage->env_, stage->options_,
-                          stage->options_.codec_embedding_file,
-                          stage->options_.num_threads));
-  stage->codec_embedding_model_ =
-      std::make_unique<CompiledModel>(std::move(codec_emb_model));
+      stage->codec_embedding_model_,
+      stage->resources_->GetCompiledModel("codec_embedding"));
 
   // Pre-allocate input and output TensorBuffers for each model
   LITERT_ASSIGN_OR_RETURN(stage->text_emb_input_buffers_,
@@ -111,10 +94,10 @@ absl::StatusOr<std::unique_ptr<Qwen3FrontendStage>> Qwen3FrontendStage::Create(
   stage->tts_pad_.assign(sys_embeds.begin() + 2 * qwen3_tts::kHiddenDim,
                          sys_embeds.end());
 
-  // Load speaker embedding from binary file array or asset bundle.
+  // Load speaker embedding from binary file.
   ABSL_ASSIGN_OR_RETURN(
       std::string spk_buf,
-      LoadFileOrAsset(stage->options_, stage->options_.speaker_file));
+      LoadFile(stage->options_.model_dir, stage->options_.speaker_file));
   if (spk_buf.size() != qwen3_tts::kHiddenDim * sizeof(float)) {
     return absl::InvalidArgumentError(
         absl::StrCat("Speaker embedding size is not correct. Expected ",
@@ -266,14 +249,14 @@ absl::Status Qwen3FrontendStage::ScheduleInternal() {
   absl::Cleanup cleanup = [this] { SetState(State::kIdle); };
   ABSL_VLOG(2) << "[TRACE] Starting Qwen3FrontendStage::ScheduleInternal";
 
-  auto text_or = text_source_.GetOutput();
-  if (absl::IsNotFound(text_or.status())) {
+  auto text = text_source_.GetOutput();
+  if (absl::IsNotFound(text.status())) {
     return absl::OkStatus();
-  } else if (!text_or.ok()) {
-    return text_or.status();
+  } else if (!text.ok()) {
+    return text.status();
   }
   ABSL_VLOG(2) << "[TRACE] Running BuildPrompt";
-  ABSL_ASSIGN_OR_RETURN(auto prompt, BuildPrompt(*text_or));
+  ABSL_ASSIGN_OR_RETURN(auto prompt, BuildPrompt(*text));
   ABSL_VLOG(2) << "[TRACE] Finished BuildPrompt";
   PushOutput(std::move(prompt));
   return absl::OkStatus();

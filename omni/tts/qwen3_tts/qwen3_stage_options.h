@@ -16,17 +16,13 @@
 #define THIRD_PARTY_ODML_LITERT_LM_OMNI_TTS_QWEN3_TTS_QWEN3_STAGE_OPTIONS_H_
 
 #include <cstdint>
-#include <memory>
 #include <optional>
 #include <string>
-
-#include "runtime/util/model_asset_bundle_resources.h"
 
 namespace litert::omni::tts {
 
 struct Qwen3StageOptions {
   std::string model_dir;
-  std::shared_ptr<lm::ModelAssetBundleResources> model_resources = nullptr;
   std::string cache_dir;
   // TODO b/538727793 the following fields are fixed for now, will introduce
   // model type specific settings later.

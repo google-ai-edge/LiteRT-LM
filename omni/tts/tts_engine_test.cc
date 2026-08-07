@@ -34,17 +34,10 @@
 #include "omni/tts/text_frontend.h"
 #include "omni/tts/tts_session.h"
 #include "omni/tts/vocoder.h"
+#include "runtime/framework/threadpool.h"
 #include "support/util/test_utils.h"  // IWYU pragma: keep
 
 namespace litert::omni::tts {
-
-struct TtsEngineTestingPeer {
-  static absl::StatusOr<std::unique_ptr<TtsEngine>> CreateWithComponents(
-      const TtsEngineSettings& settings, TtsSession::Components components) {
-    return TtsEngine::CreateWithComponents(settings, std::move(components));
-  }
-};
-
 namespace {
 
 class DummyTextFrontend : public TextFrontend {
@@ -191,34 +184,27 @@ TEST(TtsEngineTest, CreateFailsWithUnsupportedModelType) {
   EXPECT_EQ(engine.status().code(), absl::StatusCode::kInvalidArgument);
 }
 
-TEST(TtsEngineTest, SynthesizeSyncForceFlush) {
-  TtsEngineSettings settings;
-  settings.model_type = ModelType::KOKORO;
-  settings.text_chunk_config.delimiters = {" "};
+TEST(TtsEngineTest, SynthesizeSyncForceFlushOnSession) {
+  lm::ThreadPool thread_pool("test_pool", 2);
+  ASSERT_OK_AND_ASSIGN(
+      auto session, TtsSession::Create(CreateDummyComponents(), &thread_pool));
 
-  ASSERT_OK_AND_ASSIGN(auto engine, TtsEngineTestingPeer::CreateWithComponents(
-                                        settings, CreateDummyComponents()));
-
-  ASSERT_OK_AND_ASSIGN(auto audio, engine->Synthesize("Hello world "));
+  ASSERT_OK_AND_ASSIGN(auto audio, session->Synthesize("Hello world "));
   EXPECT_EQ(audio.sample_rate_hz, 24000);
   EXPECT_GE(audio.pcm_samples.size(), 3);
 }
 
-TEST(TtsEngineTest, SynthesizeAsyncStreaming) {
-  TtsEngineSettings settings;
-  settings.model_type = ModelType::KOKORO;
-  settings.text_chunk_config.delimiters = {" "};
-  settings.num_threads = 4;
-
-  ASSERT_OK_AND_ASSIGN(auto engine, TtsEngineTestingPeer::CreateWithComponents(
-                                        settings, CreateDummyComponents()));
+TEST(TtsEngineTest, SynthesizeAsyncStreamingOnSession) {
+  lm::ThreadPool thread_pool("test_pool", 4);
+  ASSERT_OK_AND_ASSIGN(
+      auto session, TtsSession::Create(CreateDummyComponents(), &thread_pool));
 
   absl::Notification done;
   int chunk_count = 0;
   absl::Status final_status;
 
-  absl::Status status = engine->SynthesizeAsync(
-      "Hello world ", [&](absl::StatusOr<AudioOutput> result) -> absl::Status {
+  absl::Status status = session->SynthesizeAsync(
+      "Hello world.", [&](absl::StatusOr<AudioOutput> result) -> absl::Status {
         if (!result.ok()) {
           final_status = result.status();
           done.Notify();
@@ -229,26 +215,21 @@ TEST(TtsEngineTest, SynthesizeAsyncStreaming) {
       });
   ASSERT_OK(status);
 
-  auto flush_res = engine->Flush();
-
   done.WaitForNotification();
   EXPECT_TRUE(absl::IsOutOfRange(final_status))
       << "final_status was: " << final_status;
   EXPECT_GT(chunk_count, 0);
 }
 
-TEST(TtsEngineTest, SequentialSynthesizeCalls) {
-  TtsEngineSettings settings;
-  settings.model_type = ModelType::UNSPECIFIED;
-  settings.text_chunk_config.delimiters = {" "};
+TEST(TtsEngineTest, SequentialSynthesizeCallsOnSession) {
+  lm::ThreadPool thread_pool("test_pool", 2);
+  ASSERT_OK_AND_ASSIGN(
+      auto session, TtsSession::Create(CreateDummyComponents(), &thread_pool));
 
-  ASSERT_OK_AND_ASSIGN(auto engine, TtsEngineTestingPeer::CreateWithComponents(
-                                        settings, CreateDummyComponents()));
-
-  ASSERT_OK_AND_ASSIGN(auto audio1, engine->Synthesize("First chunk "));
+  ASSERT_OK_AND_ASSIGN(auto audio1, session->Synthesize("First chunk "));
   EXPECT_GE(audio1.pcm_samples.size(), 3);
 
-  ASSERT_OK_AND_ASSIGN(auto audio2, engine->Synthesize("Second chunk "));
+  ASSERT_OK_AND_ASSIGN(auto audio2, session->Synthesize("Second chunk "));
   EXPECT_GE(audio2.pcm_samples.size(), 3);
 }
 

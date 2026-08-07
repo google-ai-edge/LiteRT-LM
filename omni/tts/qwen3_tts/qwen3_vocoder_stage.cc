@@ -36,6 +36,7 @@
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "omni/base/io_types.h"
+#include "omni/base/model_resources.h"
 #include "omni/base/stage.h"
 #include "omni/tts/latent_decoder.h"
 #include "omni/tts/qwen3_tts/common.h"
@@ -46,15 +47,12 @@ namespace litert::omni::tts {
 
 absl::StatusOr<std::unique_ptr<Qwen3VocoderStage>> Qwen3VocoderStage::Create(
     Stage<LatentOutput>* absl_nonnull latent_decoder, Qwen3StageOptions options,
-    std::shared_ptr<Environment> absl_nonnull env) {
+    std::shared_ptr<ModelResources> absl_nonnull resources) {
   auto stage = absl::WrapUnique(new Qwen3VocoderStage(
-      latent_decoder, std::move(options), std::move(env)));
+      latent_decoder, std::move(options), std::move(resources)));
 
-  ABSL_ASSIGN_OR_RETURN(auto codec,
-                        CreateCompiledModel(*stage->env_, stage->options_,
-                                            stage->options_.codec_file,
-                                            stage->options_.num_threads));
-  stage->codec_model_ = std::move(codec);
+  LITERT_ASSIGN_OR_RETURN(stage->codec_model_,
+                          stage->resources_->GetCompiledModel("codec"));
 
   LITERT_ASSIGN_OR_RETURN(stage->input_buffers_,
                           stage->codec_model_->CreateInputBuffers(0));
@@ -134,15 +132,15 @@ absl::StatusOr<std::vector<float>> Qwen3VocoderStage::DecodeCodes(
 absl::Status Qwen3VocoderStage::ScheduleInternal() {
   absl::Cleanup cleanup = [this] { SetState(State::kIdle); };
 
-  auto latent = latent_decoder_.GetOutput();
-  if (absl::IsNotFound(latent.status())) {
+  auto latent_out = latent_decoder_.GetOutput();
+  if (absl::IsNotFound(latent_out.status())) {
     return absl::OkStatus();
-  } else if (!latent.ok()) {
-    return latent.status();
+  } else if (!latent_out.ok()) {
+    return latent_out.status();
   }
 
-  pending_frames_.insert(pending_frames_.end(), latent->rvq_frames.begin(),
-                         latent->rvq_frames.end());
+  pending_frames_.insert(pending_frames_.end(), latent_out->rvq_frames.begin(),
+                         latent_out->rvq_frames.end());
 
   if (static_cast<int>(pending_frames_.size()) >= codec_chunk_) {
     ABSL_ASSIGN_OR_RETURN(auto pcm, DecodeCodes(pending_frames_));
@@ -165,10 +163,29 @@ absl::Status Qwen3VocoderStage::Flush() {
     state_ = State::kRunning;
   }
   while (true) {
-    auto latent_or = latent_decoder_.GetOutput();
-    if (!latent_or.ok()) break;
-    pending_frames_.insert(pending_frames_.end(), latent_or->rvq_frames.begin(),
-                           latent_or->rvq_frames.end());
+    auto latent_out = latent_decoder_.GetOutput();
+    if (!latent_out.ok()) break;
+    pending_frames_.insert(pending_frames_.end(),
+                           latent_out->rvq_frames.begin(),
+                           latent_out->rvq_frames.end());
+  }
+
+  int chunk = codec_chunk_;
+  int ctx = 25;
+  int step_size = chunk - ctx;
+
+  while (static_cast<int>(pending_frames_.size()) >= chunk) {
+    std::vector<std::vector<int>> window_frames(
+        pending_frames_.begin(), pending_frames_.begin() + chunk);
+    ABSL_ASSIGN_OR_RETURN(auto pcm, DecodeCodes(window_frames));
+
+    pending_frames_.erase(pending_frames_.begin(),
+                          pending_frames_.begin() + step_size);
+
+    AudioOutput out;
+    out.pcm_samples = std::move(pcm);
+    out.sample_rate_hz = 24000;
+    PushOutput(std::move(out));
   }
 
   if (!pending_frames_.empty()) {

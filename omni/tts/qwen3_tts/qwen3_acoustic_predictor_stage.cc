@@ -39,10 +39,9 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
-#include "litert/cc/litert_compiled_model.h"  // from @litert
-#include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "omni/base/model_resources.h"
 #include "omni/base/stage.h"
 #include "omni/tts/acoustic_predictor.h"
 #include "omni/tts/qwen3_tts/common.h"
@@ -84,41 +83,20 @@ absl::Status InitializeBuffers(
 absl::StatusOr<std::unique_ptr<Qwen3AcousticPredictorStage>>
 Qwen3AcousticPredictorStage::Create(
     Stage<FrontendOutput>* absl_nonnull text_frontend,
-    Qwen3StageOptions options, std::shared_ptr<Environment> absl_nonnull env) {
+    Qwen3StageOptions options,
+    std::shared_ptr<ModelResources> absl_nonnull resources) {
   auto stage = absl::WrapUnique(new Qwen3AcousticPredictorStage(
-      text_frontend, std::move(options), std::move(env)));
+      text_frontend, std::move(options), std::move(resources)));
 
-  // Load Talker model
-  LITERT_ASSIGN_OR_RETURN(auto talker,
-                          CreateCompiledModel(*stage->env_, stage->options_,
-                                              stage->options_.talker_file,
-                                              stage->options_.num_threads,
-                                              /*use_gpu=*/false));
-  stage->talker_model_ = std::make_unique<CompiledModel>(std::move(talker));
-
-  // Load MTP model
+  LITERT_ASSIGN_OR_RETURN(stage->talker_model_,
+                          stage->resources_->GetCompiledModel("talker"));
+  LITERT_ASSIGN_OR_RETURN(stage->mtp_model_,
+                          stage->resources_->GetCompiledModel("mtp"));
   LITERT_ASSIGN_OR_RETURN(
-      auto mtp,
-      CreateCompiledModel(*stage->env_, stage->options_,
-                          stage->options_.mtp_file, stage->options_.num_threads,
-                          /*use_gpu=*/false));
-  stage->mtp_model_ = std::make_unique<CompiledModel>(std::move(mtp));
-
-  // Load Codec embedding model
-  LITERT_ASSIGN_OR_RETURN(
-      auto codec_emb, CreateCompiledModel(*stage->env_, stage->options_,
-                                          stage->options_.codec_embedding_file,
-                                          stage->options_.num_threads));
-  stage->codec_embedding_model_ =
-      std::make_unique<CompiledModel>(std::move(codec_emb));
-
-  // Load MTP embedding model
-  LITERT_ASSIGN_OR_RETURN(
-      auto mtp_emb, CreateCompiledModel(*stage->env_, stage->options_,
-                                        stage->options_.mtp_embedding_file,
-                                        stage->options_.num_threads));
-  stage->mtp_embedding_model_ =
-      std::make_unique<CompiledModel>(std::move(mtp_emb));
+      stage->codec_embedding_model_,
+      stage->resources_->GetCompiledModel("codec_embedding"));
+  LITERT_ASSIGN_OR_RETURN(stage->mtp_embedding_model_,
+                          stage->resources_->GetCompiledModel("mtp_embedding"));
 
   // Pre-allocate embedding model TensorBuffers
   LITERT_ASSIGN_OR_RETURN(stage->codec_emb_input_buffers_,
@@ -439,7 +417,6 @@ absl::Status Qwen3AcousticPredictorStage::RunPrefill(
                 p * qwen3_tts::kHiddenDim * sizeof(float));
   }
 
-
   absl::flat_hash_map<absl::string_view, TensorBuffer> input_map;
   LITERT_ASSIGN_OR_RETURN(auto emb_dup, prefill_bufs.emb_buf.Duplicate());
   LITERT_ASSIGN_OR_RETURN(auto pos_dup, prefill_bufs.pos_buf.Duplicate());
@@ -656,13 +633,13 @@ absl::Status Qwen3AcousticPredictorStage::ScheduleInternal() {
   ABSL_VLOG(2)
       << "[TRACE] Starting Qwen3AcousticPredictorStage::ScheduleInternal";
 
-  auto frontend_or = text_frontend_.GetOutput();
-  if (absl::IsNotFound(frontend_or.status())) {
+  auto frontend_out = text_frontend_.GetOutput();
+  if (absl::IsNotFound(frontend_out.status())) {
     return absl::OkStatus();
-  } else if (!frontend_or.ok()) {
-    return frontend_or.status();
+  } else if (!frontend_out.ok()) {
+    return frontend_out.status();
   }
-  const auto& frontend = *frontend_or;
+  const auto& frontend = *frontend_out;
 
   LITERT_RETURN_IF_ERROR(InitializeBuffers(talker_kv_cache_bufs_0_));
   LITERT_RETURN_IF_ERROR(InitializeBuffers(talker_kv_cache_bufs_1_));

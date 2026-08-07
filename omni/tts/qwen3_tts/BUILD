@@ -21,9 +21,6 @@ licenses(["notice"])
 cc_library(
     name = "qwen3_stage_options",
     hdrs = ["qwen3_stage_options.h"],
-    deps = [
-        "//runtime/util:model_asset_bundle_resources",
-    ],
 )
 
 cc_library(
@@ -35,21 +32,10 @@ cc_library(
         "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/base:no_destructor",
         "@com_google_absl//absl/container:flat_hash_map",
-        "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
-        "@com_google_absl//absl/strings:string_view",
-        "@litert//litert/cc:litert_buffer_ref",
-        "@litert//litert/cc:litert_common",
-        "@litert//litert/cc:litert_compiled_model",
-        "@litert//litert/cc:litert_environment",
-        "@litert//litert/cc:litert_macros",
-        "@litert//litert/cc:litert_options",
-        "@litert//litert/cc/options:litert_gpu_options",
-        "//runtime/executor:litert_compiled_model_executor_utils",
-        "//runtime/util:scoped_file",
+        "//omni/base:model_utils",
     ],
 )
 
@@ -76,6 +62,8 @@ cc_library(
         "@litert//litert/cc:litert_environment",
         "@litert//litert/cc:litert_macros",
         "@litert//litert/cc:litert_tensor_buffer",
+        "//omni/base:model_resources",
+        "//omni/base:model_utils",
         "//omni/base:stage",
         "//omni/tts:text_frontend",
         "//support/tokenizer:huggingface_tokenizer",
@@ -107,6 +95,7 @@ cc_library(
         "@litert//litert/cc:litert_environment",
         "@litert//litert/cc:litert_macros",
         "@litert//litert/cc:litert_tensor_buffer",
+        "//omni/base:model_resources",
         "//omni/base:stage",
         "//omni/tts:acoustic_predictor",
         "//omni/tts:text_frontend",
@@ -154,6 +143,7 @@ cc_library(
         "@litert//litert/cc:litert_macros",
         "@litert//litert/cc:litert_tensor_buffer",
         "//omni/base:io_types",
+        "//omni/base:model_resources",
         "//omni/base:stage",
         "//omni/tts:latent_decoder",
         "//omni/tts:vocoder",

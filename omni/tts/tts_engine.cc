@@ -20,101 +20,136 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "absl/strings/string_view.h"  // from @com_google_absl
-#include "omni/base/io_types.h"
+#include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "litert/cc/litert_compiled_model.h"  // from @litert
+#include "litert/cc/litert_environment.h"  // from @litert
+#include "litert/cc/litert_macros.h"  // from @litert
+#include "omni/base/model_resources.h"
+#include "omni/base/model_utils.h"
+#include "omni/tts/qwen3_tts/qwen3_acoustic_predictor_stage.h"
+#include "omni/tts/qwen3_tts/qwen3_frontend_stage.h"
+#include "omni/tts/qwen3_tts/qwen3_latent_decoder_stage.h"
+#include "omni/tts/qwen3_tts/qwen3_stage_options.h"
+#include "omni/tts/qwen3_tts/qwen3_vocoder_stage.h"
 #include "omni/tts/stream_text_source.h"
 #include "omni/tts/tts_session.h"
 #include "runtime/framework/threadpool.h"
 
 namespace litert::omni::tts {
 
-absl::StatusOr<std::unique_ptr<TtsEngine>> TtsEngine::CreateWithComponents(
-    const TtsEngineSettings& settings, TtsSession::Components components) {
-  if (components.text_source == nullptr) {
-    components.text_source =
-        std::make_unique<StreamTextSource>(settings.text_chunk_config);
-  }
-  StreamTextSource* stream_text_source =
-      dynamic_cast<StreamTextSource*>(components.text_source.get());
-  if (stream_text_source == nullptr) {
-    return absl::InvalidArgumentError(
-        "TtsEngine requires components.text_source to be a StreamTextSource.");
-  }
-  ABSL_ASSIGN_OR_RETURN(auto session,
-                        TtsSession::Create(std::move(components)));
-  auto thread_pool = std::make_unique<::litert::lm::ThreadPool>(
-      "tts_engine_pool", settings.num_threads);
-  return std::unique_ptr<TtsEngine>(new TtsEngine(settings, std::move(session),
-                                                  stream_text_source,
-                                                  std::move(thread_pool)));
-}
-
 absl::StatusOr<std::unique_ptr<TtsEngine>> TtsEngine::Create(
     const TtsEngineSettings& settings) {
+  LITERT_ASSIGN_OR_RETURN(auto env, Environment::Create({}));
+  auto shared_env = std::make_shared<Environment>(std::move(env));
+  auto resources = std::make_shared<ModelResources>(shared_env);
+
+  if (settings.model_type == ModelType::QWEN3_TTS) {
+    Qwen3StageOptions options;
+    options.model_dir = settings.model_folder;
+    options.cache_dir = settings.cache_dir;
+    options.num_threads = settings.num_threads;
+    options.max_frames = settings.max_frames;
+
+    ModelOptions model_options;
+    model_options.model_dir = settings.model_folder;
+    model_options.cache_dir = settings.cache_dir;
+    model_options.backend = settings.backend;
+    model_options.num_threads = settings.num_threads;
+
+    // Compile and cache heavy models into ModelResources
+    LITERT_ASSIGN_OR_RETURN(auto text_emb,
+                            CreateCompiledModel(*shared_env, model_options,
+                                                options.text_embedding_file));
+    ABSL_RETURN_IF_ERROR(resources->AddCompiledModel(
+        "text_embedding",
+        std::make_shared<CompiledModel>(std::move(text_emb))));
+
+    LITERT_ASSIGN_OR_RETURN(auto text_proj,
+                            CreateCompiledModel(*shared_env, model_options,
+                                                options.text_projection_file));
+    ABSL_RETURN_IF_ERROR(resources->AddCompiledModel(
+        "text_projection",
+        std::make_shared<CompiledModel>(std::move(text_proj))));
+
+    LITERT_ASSIGN_OR_RETURN(
+        auto talker,
+        CreateCompiledModel(*shared_env, model_options, options.talker_file));
+    ABSL_RETURN_IF_ERROR(resources->AddCompiledModel(
+        "talker", std::make_shared<CompiledModel>(std::move(talker))));
+
+    LITERT_ASSIGN_OR_RETURN(
+        auto mtp,
+        CreateCompiledModel(*shared_env, model_options, options.mtp_file));
+    ABSL_RETURN_IF_ERROR(resources->AddCompiledModel(
+        "mtp", std::make_shared<CompiledModel>(std::move(mtp))));
+
+    LITERT_ASSIGN_OR_RETURN(auto codec_emb,
+                            CreateCompiledModel(*shared_env, model_options,
+                                                options.codec_embedding_file));
+    ABSL_RETURN_IF_ERROR(resources->AddCompiledModel(
+        "codec_embedding",
+        std::make_shared<CompiledModel>(std::move(codec_emb))));
+
+    LITERT_ASSIGN_OR_RETURN(auto mtp_emb,
+                            CreateCompiledModel(*shared_env, model_options,
+                                                options.mtp_embedding_file));
+    ABSL_RETURN_IF_ERROR(resources->AddCompiledModel(
+        "mtp_embedding", std::make_shared<CompiledModel>(std::move(mtp_emb))));
+
+    LITERT_ASSIGN_OR_RETURN(
+        auto codec,
+        CreateCompiledModel(*shared_env, model_options, options.codec_file));
+    ABSL_RETURN_IF_ERROR(resources->AddCompiledModel(
+        "codec", std::make_shared<CompiledModel>(std::move(codec))));
+
+  } else {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Unsupported model_type in TtsEngineSettings: ",
+                     static_cast<int>(settings.model_type)));
+  }
+
+  auto thread_pool =
+      std::make_unique<lm::ThreadPool>("tts_engine_pool", settings.num_threads);
+
+  return std::unique_ptr<TtsEngine>(
+      new TtsEngine(settings, resources, std::move(thread_pool)));
+}
+
+absl::StatusOr<std::unique_ptr<TtsSession>> TtsEngine::CreateSession() {
   TtsSession::Components components;
-  return CreateWithComponents(settings, std::move(components));
-}
+  components.text_source =
+      std::make_unique<StreamTextSource>(settings_.text_chunk_config);
 
-TtsEngine::TtsEngine(const TtsEngineSettings& settings,
-                     std::unique_ptr<TtsSession> session,
-                     StreamTextSource* stream_text_source,
-                     std::unique_ptr<::litert::lm::ThreadPool> thread_pool)
-    : settings_(settings),
-      session_(std::move(session)),
-      stream_text_source_(stream_text_source),
-      thread_pool_(std::move(thread_pool)) {}
+  if (settings_.model_type == ModelType::QWEN3_TTS) {
+    Qwen3StageOptions options;
+    options.model_dir = settings_.model_folder;
+    options.cache_dir = settings_.cache_dir;
+    options.num_threads = settings_.num_threads;
+    options.max_frames = settings_.max_frames;
 
-void TtsEngine::Reset() { session_->Reset(); }
+    ABSL_ASSIGN_OR_RETURN(
+        auto frontend, Qwen3FrontendStage::Create(components.text_source.get(),
+                                                  options, model_resources_));
+    ABSL_ASSIGN_OR_RETURN(auto acoustic,
+                          Qwen3AcousticPredictorStage::Create(
+                              frontend.get(), options, model_resources_));
+    ABSL_ASSIGN_OR_RETURN(auto latent,
+                          Qwen3LatentDecoderStage::Create(acoustic.get()));
+    ABSL_ASSIGN_OR_RETURN(
+        auto vocoder,
+        Qwen3VocoderStage::Create(latent.get(), options, model_resources_));
 
-absl::StatusOr<AudioOutput> TtsEngine::Flush() {
-  stream_text_source_->Finish();
-  auto result = session_->Flush();
-  if (absl::IsNotFound(result.status())) {
-    return AudioOutput();
-  }
-  return result;
-}
-
-absl::StatusOr<AudioOutput> TtsEngine::Synthesize(absl::string_view text) {
-  Reset();
-  ABSL_RETURN_IF_ERROR(stream_text_source_->PushText(text));
-  stream_text_source_->Finish();
-
-  AudioOutput result;
-  while (true) {
-    auto chunk = session_->ProcessNextChunk();
-    if (absl::IsOutOfRange(chunk.status()) ||
-        absl::IsNotFound(chunk.status())) {
-      break;
-    }
-    if (!chunk.ok()) {
-      return chunk.status();
-    }
-    result.sample_rate_hz = chunk->sample_rate_hz;
-    result.pcm_samples.insert(result.pcm_samples.end(),
-                              chunk->pcm_samples.begin(),
-                              chunk->pcm_samples.end());
+    components.text_frontend = std::move(frontend);
+    components.acoustic_predictor = std::move(acoustic);
+    components.latent_decoder = std::move(latent);
+    components.vocoder = std::move(vocoder);
+  } else {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Unsupported model_type in TtsEngineSettings: ",
+                     static_cast<int>(settings_.model_type)));
   }
 
-  auto flush_chunk = session_->Flush();
-  if (flush_chunk.ok()) {
-    result.sample_rate_hz = flush_chunk->sample_rate_hz;
-    result.pcm_samples.insert(result.pcm_samples.end(),
-                              flush_chunk->pcm_samples.begin(),
-                              flush_chunk->pcm_samples.end());
-  }
-  return result;
-}
-
-absl::Status TtsEngine::SynthesizeAsync(absl::string_view text,
-                                        AsyncCallback callback) {
-  ABSL_RETURN_IF_ERROR(stream_text_source_->PushText(text));
-  absl::Status status =
-      session_->ProcessAsync(*thread_pool_, std::move(callback));
-  if (absl::IsAlreadyExists(status)) {
-    return absl::OkStatus();
-  }
-  return status;
+  return TtsSession::Create(std::move(components), thread_pool_.get());
 }
 
 }  // namespace litert::omni::tts

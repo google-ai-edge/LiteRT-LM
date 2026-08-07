@@ -27,6 +27,7 @@
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "omni/base/model_resources.h"
 #include "omni/base/stage.h"
 #include "omni/tts/qwen3_tts/qwen3_stage_options.h"
 #include "omni/tts/text_frontend.h"
@@ -42,14 +43,14 @@ class Qwen3FrontendStage : public TextFrontend {
   // args
   // - text_source: Stage that provides the input text.
   // - options: Options for configuring the Qwen3FrontendStage.
-  // - env: Environment to use for compiled models.
+  // - resources: Shared ModelResources container with compiled models.
   //
   // returns
   // - Unique pointer to the created Qwen3FrontendStage on success, or an error
   //   status on failure.
   static absl::StatusOr<std::unique_ptr<Qwen3FrontendStage>> Create(
       Stage<std::string>* absl_nonnull text_source, Qwen3StageOptions options,
-      std::shared_ptr<Environment> absl_nonnull env);
+      std::shared_ptr<ModelResources> absl_nonnull resources);
 
   ~Qwen3FrontendStage() override = default;
 
@@ -66,10 +67,10 @@ class Qwen3FrontendStage : public TextFrontend {
  private:
   Qwen3FrontendStage(Stage<std::string>* absl_nonnull text_source,
                      Qwen3StageOptions options,
-                     std::shared_ptr<Environment> absl_nonnull env)
+                     std::shared_ptr<ModelResources> absl_nonnull resources)
       : TextFrontend(text_source),
         options_(std::move(options)),
-        env_(std::move(env)) {}
+        resources_(std::move(resources)) {}
 
   // Embeds a single audio codec token ID using the codec embedding model.
   //
@@ -137,13 +138,13 @@ class Qwen3FrontendStage : public TextFrontend {
                               std::vector<float>& out);
 
   Qwen3StageOptions options_;
-  std::shared_ptr<Environment> env_;
+  std::shared_ptr<ModelResources> resources_;
   std::unique_ptr<support::HuggingFaceTokenizer> tokenizer_;
 
   // Required compiled models for text frontend stage
-  std::unique_ptr<CompiledModel> text_embedding_model_;
-  std::unique_ptr<CompiledModel> text_projection_model_;
-  std::unique_ptr<CompiledModel> codec_embedding_model_;
+  std::shared_ptr<CompiledModel> text_embedding_model_;
+  std::shared_ptr<CompiledModel> text_projection_model_;
+  std::shared_ptr<CompiledModel> codec_embedding_model_;
 
   // Pre-allocated TensorBuffers initialized once to avoid runtime allocation
   std::vector<TensorBuffer> text_emb_input_buffers_;

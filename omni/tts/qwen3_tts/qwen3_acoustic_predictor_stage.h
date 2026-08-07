@@ -30,6 +30,7 @@
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "omni/base/model_resources.h"
 #include "omni/base/stage.h"
 #include "omni/tts/acoustic_predictor.h"
 #include "omni/tts/qwen3_tts/qwen3_stage_options.h"
@@ -47,7 +48,7 @@ class Qwen3AcousticPredictorStage : public AcousticPredictor {
   // args
   // - text_frontend: Stage providing input FrontendOutput prompts.
   // - options: Options for configuring the Qwen3AcousticPredictorStage.
-  // - env: Environment to use for compiled models.
+  // - resources: Shared ModelResources container with compiled models.
   //
   // returns
   // - Unique pointer to created Qwen3AcousticPredictorStage on success, or
@@ -55,7 +56,8 @@ class Qwen3AcousticPredictorStage : public AcousticPredictor {
   //   status on failure.
   static absl::StatusOr<std::unique_ptr<Qwen3AcousticPredictorStage>> Create(
       Stage<FrontendOutput>* absl_nonnull text_frontend,
-      Qwen3StageOptions options, std::shared_ptr<Environment> absl_nonnull env);
+      Qwen3StageOptions options,
+      std::shared_ptr<ModelResources> absl_nonnull resources);
 
   ~Qwen3AcousticPredictorStage() override = default;
 
@@ -75,12 +77,13 @@ class Qwen3AcousticPredictorStage : public AcousticPredictor {
     std::vector<float> hidden;      // Shape [1024]
   };
 
-  Qwen3AcousticPredictorStage(Stage<FrontendOutput>* absl_nonnull text_frontend,
-                              Qwen3StageOptions options,
-                              std::shared_ptr<Environment> absl_nonnull env)
+  Qwen3AcousticPredictorStage(
+      Stage<FrontendOutput>* absl_nonnull text_frontend,
+      Qwen3StageOptions options,
+      std::shared_ptr<ModelResources> absl_nonnull resources)
       : AcousticPredictor(text_frontend),
         options_(std::move(options)),
-        env_(std::move(env)) {
+        resources_(std::move(resources)) {
     if (options_.seed.has_value()) {
       rng_.seed(*options_.seed);
     } else {
@@ -155,13 +158,13 @@ class Qwen3AcousticPredictorStage : public AcousticPredictor {
       const std::vector<int>& mtp_codes);
 
   Qwen3StageOptions options_;
-  std::shared_ptr<Environment> env_;
+  std::shared_ptr<ModelResources> resources_;
 
   // Required compiled models
-  std::unique_ptr<CompiledModel> talker_model_;
-  std::unique_ptr<CompiledModel> mtp_model_;
-  std::unique_ptr<CompiledModel> codec_embedding_model_;
-  std::unique_ptr<CompiledModel> mtp_embedding_model_;
+  std::shared_ptr<CompiledModel> talker_model_;
+  std::shared_ptr<CompiledModel> mtp_model_;
+  std::shared_ptr<CompiledModel> codec_embedding_model_;
+  std::shared_ptr<CompiledModel> mtp_embedding_model_;
 
   // Pre-allocated TensorBuffers for embedding models
   std::vector<TensorBuffer> codec_emb_input_buffers_;

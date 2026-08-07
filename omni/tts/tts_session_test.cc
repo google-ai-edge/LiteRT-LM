@@ -14,7 +14,6 @@
 
 #include "omni/tts/tts_session.h"
 
-#include <cstddef>
 #include <memory>
 #include <string>
 #include <utility>
@@ -32,44 +31,14 @@
 #include "omni/base/stage.h"
 #include "omni/tts/acoustic_predictor.h"
 #include "omni/tts/latent_decoder.h"
+#include "omni/tts/stream_text_source.h"
 #include "omni/tts/text_frontend.h"
-#include "omni/tts/text_source.h"
 #include "omni/tts/vocoder.h"
 #include "runtime/framework/threadpool.h"
 #include "support/util/test_utils.h"  // IWYU pragma: keep
 
 namespace litert::omni::tts {
 namespace {
-
-class DummyTextSource : public TextSource {
- public:
-  explicit DummyTextSource(std::vector<std::string> chunks)
-      : chunks_(std::move(chunks)) {}
-
-  void Reset() override {
-    chunk_index_ = 0;
-    absl::MutexLock lock(mutex_);
-    outputs_.clear();
-  }
-
- protected:
-  bool NeedScheduleInternal() const override {
-    return chunk_index_ < chunks_.size();
-  }
-
-  absl::Status ScheduleInternal() override {
-    absl::Cleanup cleanup = [this] { SetState(State::kIdle); };
-    if (chunk_index_ >= chunks_.size()) {
-      return absl::OutOfRangeError("End of text stream reached.");
-    }
-    PushOutput(chunks_[chunk_index_++]);
-    return absl::OkStatus();
-  }
-
- private:
-  std::vector<std::string> chunks_;
-  size_t chunk_index_ = 0;
-};
 
 class DummyTextFrontend : public TextFrontend {
  public:
@@ -194,54 +163,40 @@ class DummyVocoder : public Vocoder {
   bool has_pending_audio_ = false;
 };
 
-TEST(TtsSessionTest, ProcessNextChunkSync) {
-  std::vector<std::string> chunks = {"Hello ", "world!"};
-  auto source = std::make_unique<DummyTextSource>(std::move(chunks));
+TtsSession::Components CreateStreamComponents() {
+  auto source = std::make_unique<StreamTextSource>();
   auto frontend = std::make_unique<DummyTextFrontend>(source.get());
   auto acoustic = std::make_unique<DummyAcousticPredictor>(frontend.get());
   auto latent = std::make_unique<DummyLatentDecoder>(acoustic.get());
   auto vocoder = std::make_unique<DummyVocoder>(latent.get());
 
-  TtsSession::Components components{
+  return TtsSession::Components{
       std::move(source), std::move(frontend), std::move(acoustic),
       std::move(latent), std::move(vocoder),
   };
-  ASSERT_OK_AND_ASSIGN(auto session, TtsSession::Create(std::move(components)));
-
-  // Process chunk 1
-  ASSERT_OK_AND_ASSIGN(auto chunk1, session->ProcessNextChunk());
-  EXPECT_EQ(chunk1.pcm_samples.size(), 3);
-
-  // Process chunk 2
-  ASSERT_OK_AND_ASSIGN(auto chunk2, session->ProcessNextChunk());
-  EXPECT_EQ(chunk2.pcm_samples.size(), 3);
-
-  // End of stream
-  auto chunk3 = session->ProcessNextChunk();
-  EXPECT_TRUE(absl::IsOutOfRange(chunk3.status()));
 }
 
-TEST(TtsSessionTest, ProcessAsyncWithThreadPool) {
-  std::vector<std::string> chunks = {"Hello ", "world!"};
-  auto source = std::make_unique<DummyTextSource>(std::move(chunks));
-  auto frontend = std::make_unique<DummyTextFrontend>(source.get());
-  auto acoustic = std::make_unique<DummyAcousticPredictor>(frontend.get());
-  auto latent = std::make_unique<DummyLatentDecoder>(acoustic.get());
-  auto vocoder = std::make_unique<DummyVocoder>(latent.get());
-
-  TtsSession::Components components{
-      std::move(source), std::move(frontend), std::move(acoustic),
-      std::move(latent), std::move(vocoder),
-  };
-  ASSERT_OK_AND_ASSIGN(auto session, TtsSession::Create(std::move(components)));
-
+TEST(TtsSessionTest, Synthesize) {
   ::litert::lm::ThreadPool thread_pool("tts_test_pool", 4);
+  ASSERT_OK_AND_ASSIGN(
+      auto session, TtsSession::Create(CreateStreamComponents(), &thread_pool));
+
+  ASSERT_OK_AND_ASSIGN(auto audio, session->Synthesize("Hello world."));
+  EXPECT_EQ(audio.sample_rate_hz, 24000);
+  EXPECT_FALSE(audio.pcm_samples.empty());
+}
+
+TEST(TtsSessionTest, SynthesizeAsync) {
+  ::litert::lm::ThreadPool thread_pool("tts_test_pool", 4);
+  ASSERT_OK_AND_ASSIGN(
+      auto session, TtsSession::Create(CreateStreamComponents(), &thread_pool));
+
   absl::Notification done;
   int chunk_count = 0;
   absl::Status final_status;
 
-  absl::Status status = session->ProcessAsync(
-      thread_pool, [&](absl::StatusOr<AudioOutput> result) -> absl::Status {
+  absl::Status status = session->SynthesizeAsync(
+      "Hello world.", [&](absl::StatusOr<AudioOutput> result) -> absl::Status {
         if (!result.ok()) {
           final_status = result.status();
           done.Notify();
@@ -255,8 +210,29 @@ TEST(TtsSessionTest, ProcessAsyncWithThreadPool) {
   done.WaitForNotification();
   EXPECT_TRUE(absl::IsOutOfRange(final_status))
       << "final_status was: " << final_status;
-  // 2 normal chunks + 1 flush chunk from Flush() on EOS = 3 chunks
-  EXPECT_EQ(chunk_count, 3);
+  EXPECT_GT(chunk_count, 0);
+}
+
+TEST(TtsSessionTest, SequentialSynthesizeCalls) {
+  ::litert::lm::ThreadPool thread_pool("tts_test_pool", 4);
+  ASSERT_OK_AND_ASSIGN(
+      auto session, TtsSession::Create(CreateStreamComponents(), &thread_pool));
+
+  ASSERT_OK_AND_ASSIGN(auto audio1, session->Synthesize("First chunk."));
+  EXPECT_FALSE(audio1.pcm_samples.empty());
+
+  ASSERT_OK_AND_ASSIGN(auto audio2, session->Synthesize("Second chunk."));
+  EXPECT_FALSE(audio2.pcm_samples.empty());
+}
+
+TEST(TtsSessionTest, ResetAndFlush) {
+  ::litert::lm::ThreadPool thread_pool("tts_test_pool", 4);
+  ASSERT_OK_AND_ASSIGN(
+      auto session, TtsSession::Create(CreateStreamComponents(), &thread_pool));
+
+  session->Reset();
+  ASSERT_OK_AND_ASSIGN(auto audio, session->Flush());
+  EXPECT_TRUE(audio.pcm_samples.empty());
 }
 
 }  // namespace

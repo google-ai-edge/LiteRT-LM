@@ -17,13 +17,13 @@
 
 #include <memory>
 #include <string>
+#include <utility>
 
 #include "absl/functional/any_invocable.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "omni/base/io_types.h"
-#include "omni/tts/stream_text_source.h"
+#include "omni/base/model_resources.h"
 #include "omni/tts/text_chunk_utils.h"
 #include "omni/tts/tts_session.h"
 #include "runtime/executor/executor_settings_base.h"
@@ -45,15 +45,23 @@ struct TtsEngineSettings {
   ModelType model_type = ModelType::UNSPECIFIED;
   // Folder containing the TTS model files.
   std::string model_folder;
-  ::litert::lm::Backend backend = ::litert::lm::Backend::CPU;
+  // Optional cache directory for model acceleration (e.g., XNNPack weight
+  // cache).
+  std::string cache_dir;
+  // Backend to use for model execution.
+  lm::Backend backend = lm::Backend::CPU;
+  // Text chunk configuration.
   TextChunkConfig text_chunk_config;
+  // Number of threads to use for model execution (CPU only).
   int num_threads = 4;
+  // Maximum number of frames to synthesize.
+  int max_frames = 500;
   // TODO b/538727793 introduce more settings for TtsEngine, and need to add
   // model type specific settings.
 };
 
-// High-level TTS Engine wrapping TtsSession and managing streaming text
-// synthesis.
+// High-level TTS Engine owning heavy model resources and creating lightweight
+// TtsSession instances for streaming text synthesis.
 class TtsEngine {
  public:
   using AsyncCallback =
@@ -65,41 +73,28 @@ class TtsEngine {
 
   ~TtsEngine() = default;
 
-  // Resets session and text source state for a new synthesis stream.
-  void Reset();
-
-  // Marks input stream finished and flushes remaining synthesized audio.
-  absl::StatusOr<AudioOutput> Flush();
-
-  // Synchronously synthesizes input text as a whole chunk and forcefully
-  // flushes all AudioOutput.
-  absl::StatusOr<AudioOutput> Synthesize(absl::string_view text);
-
-  // Asynchronously synthesizes input text using internal thread pool,
-  // relying on text_chunk_config for chunk scheduling.
-  absl::Status SynthesizeAsync(absl::string_view text, AsyncCallback callback);
-
-  // TODO b/538727793: add WaitUntilDone to wait for async synthesis to finish,
-  // so users don't handle the notification themselves.
+  // Creates a lightweight TtsSession for a synthesis stream.
+  absl::StatusOr<std::unique_ptr<TtsSession>> CreateSession();
 
   const TtsEngineSettings& settings() const { return settings_; }
+  std::shared_ptr<ModelResources> model_resources() const {
+    return model_resources_;
+  }
 
  private:
   // Friend class for testing.
   friend struct TtsEngineTestingPeer;
 
-  static absl::StatusOr<std::unique_ptr<TtsEngine>> CreateWithComponents(
-      const TtsEngineSettings& settings, TtsSession::Components components);
-
   TtsEngine(const TtsEngineSettings& settings,
-            std::unique_ptr<TtsSession> session,
-            StreamTextSource* stream_text_source,
-            std::unique_ptr<::litert::lm::ThreadPool> thread_pool);
+            std::shared_ptr<ModelResources> resources,
+            std::unique_ptr<lm::ThreadPool> thread_pool)
+      : settings_(settings),
+        model_resources_(std::move(resources)),
+        thread_pool_(std::move(thread_pool)) {}
 
   TtsEngineSettings settings_;
-  std::unique_ptr<TtsSession> session_;
-  StreamTextSource* stream_text_source_;  // Non-owning pointer into session_
-  std::unique_ptr<::litert::lm::ThreadPool> thread_pool_;
+  std::shared_ptr<ModelResources> model_resources_;
+  std::unique_ptr<lm::ThreadPool> thread_pool_;
 };
 
 }  // namespace litert::omni::tts

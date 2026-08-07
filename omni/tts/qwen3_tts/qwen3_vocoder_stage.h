@@ -26,6 +26,7 @@
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "omni/base/model_resources.h"
 #include "omni/base/stage.h"
 #include "omni/tts/latent_decoder.h"
 #include "omni/tts/qwen3_tts/qwen3_stage_options.h"
@@ -41,14 +42,15 @@ class Qwen3VocoderStage : public Vocoder {
   // args
   // - latent_decoder: Stage providing input LatentOutput data.
   // - options: Options for configuring the Qwen3VocoderStage.
-  // - env: Environment to use for compiled models.
+  // - resources: Shared ModelResources container with compiled models.
   //
   // returns
   // - Unique pointer to created Qwen3VocoderStage on success, or error status
   //   on failure.
   static absl::StatusOr<std::unique_ptr<Qwen3VocoderStage>> Create(
       Stage<LatentOutput>* absl_nonnull latent_decoder,
-      Qwen3StageOptions options, std::shared_ptr<Environment> absl_nonnull env);
+      Qwen3StageOptions options,
+      std::shared_ptr<ModelResources> absl_nonnull resources);
 
   ~Qwen3VocoderStage() override = default;
 
@@ -71,10 +73,10 @@ class Qwen3VocoderStage : public Vocoder {
  private:
   Qwen3VocoderStage(Stage<LatentOutput>* absl_nonnull latent_decoder,
                     Qwen3StageOptions options,
-                    std::shared_ptr<Environment> absl_nonnull env)
+                    std::shared_ptr<ModelResources> absl_nonnull resources)
       : Vocoder(latent_decoder),
         options_(std::move(options)),
-        env_(std::move(env)) {}
+        resources_(std::move(resources)) {}
 
   // Decodes discrete RVQ codebook frames into raw audio PCM waveform samples.
   //
@@ -87,8 +89,8 @@ class Qwen3VocoderStage : public Vocoder {
       const std::vector<std::vector<int>>& frames);
 
   Qwen3StageOptions options_;
-  std::shared_ptr<Environment> env_;
-  std::optional<CompiledModel> codec_model_;
+  std::shared_ptr<ModelResources> resources_;
+  std::shared_ptr<CompiledModel> codec_model_;
   std::vector<TensorBuffer> input_buffers_;
   std::vector<TensorBuffer> output_buffers_;
   int codec_chunk_ = 100;

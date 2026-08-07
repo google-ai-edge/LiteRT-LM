@@ -21,13 +21,14 @@
 #include "absl/functional/any_invocable.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "omni/base/async_stage_scheduler.h"
 #include "omni/base/io_types.h"
 #include "omni/tts/acoustic_predictor.h"
 #include "omni/tts/latent_decoder.h"
+#include "omni/tts/stream_text_source.h"
 #include "omni/tts/text_frontend.h"
-#include "omni/tts/text_source.h"
 #include "omni/tts/vocoder.h"
 #include "runtime/framework/threadpool.h"
 
@@ -37,46 +38,47 @@ namespace litert::omni::tts {
 class TtsSession {
  public:
   struct Components {
-    std::unique_ptr<TextSource> text_source;
+    std::unique_ptr<StreamTextSource> text_source;
     std::unique_ptr<TextFrontend> text_frontend;
     std::unique_ptr<AcousticPredictor> acoustic_predictor;
     std::unique_ptr<LatentDecoder> latent_decoder;
     std::unique_ptr<Vocoder> vocoder;
   };
 
-  // Creates a TtsSession instance taking ownership of configured components.
+  using AsyncCallback =
+      absl::AnyInvocable<absl::Status(absl::StatusOr<AudioOutput>)>;
+
+  // Creates a TtsSession instance taking ownership of configured components
+  // and reference to the ThreadPool (owned by TtsEngine).
   static absl::StatusOr<std::unique_ptr<TtsSession>> Create(
-      Components components);
+      Components components, ::litert::lm::ThreadPool* thread_pool);
 
   ~TtsSession();
 
   // Resets session and component state for a new synthesis stream.
   void Reset();
 
-  // Processes the next audio chunk from Vocoder synchronously.
-  // Returns absl::OutOfRangeError when audio stream ends.
-  absl::StatusOr<AudioOutput> ProcessNextChunk();
-
-  // Processes the TTS stream asynchronously using the provided thread pool.
-  // Returns absl::AlreadyExistsError if async processing is already active.
-  // Schedules TTS session stages on the thread pool to execute concurrently and
-  // passes results to `callback` until `callback` returns an error status.
-  using AsyncCallback =
-      absl::AnyInvocable<absl::Status(absl::StatusOr<AudioOutput>)>;
-  absl::Status ProcessAsync(::litert::lm::ThreadPool& thread_pool,
-                            AsyncCallback callback);
-
   // Flushes remaining synthesized audio at stream end.
   absl::StatusOr<AudioOutput> Flush();
 
-  const Components& components() const { return components_; }
+  // Synchronously synthesizes input text as a whole chunk.
+  absl::StatusOr<AudioOutput> Synthesize(absl::string_view text);
+
+  // Asynchronously synthesizes input text using session's thread pool.
+  absl::Status SynthesizeAsync(absl::string_view text, AsyncCallback callback);
 
  private:
-  explicit TtsSession(Components components);
+  explicit TtsSession(Components components,
+                      ::litert::lm::ThreadPool* thread_pool);
+
+  // Processes the TTS stream asynchronously using the session's thread pool.
+  // Returns absl::AlreadyExistsError if async processing is already active.
+  absl::Status ProcessAsync(AsyncCallback callback);
 
   void ResetAsyncScheduler();
 
   Components components_;
+  ::litert::lm::ThreadPool* thread_pool_ = nullptr;
 
   mutable absl::Mutex mutex_;
   std::unique_ptr<AsyncStageScheduler<AudioOutput>> async_scheduler_
