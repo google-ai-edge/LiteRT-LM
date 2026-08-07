@@ -33,6 +33,26 @@
 namespace litert::lm {
 namespace {
 
+absl::StatusOr<const ::litert::TensorBuffer*> GetEmbeddingsPtr(
+    const ExecutorVisionData& data) {
+  return data.GetEmbeddingsPtr();
+}
+
+absl::StatusOr<const ::litert::TensorBuffer*> GetEmbeddingsPtr(
+    const ExecutorAudioData& data) {
+  return data.GetProjectedAudioEmbeddingsPtr();
+}
+
+absl::StatusOr<::litert::TensorBuffer*> GetMutableEmbeddingsPtr(
+    ExecutorVisionData& data) {
+  return data.GetMutableEmbeddingsPtr();
+}
+
+absl::StatusOr<::litert::TensorBuffer*> GetMutableEmbeddingsPtr(
+    ExecutorAudioData& data) {
+  return data.GetMutableProjectedAudioEmbeddingsPtr();
+}
+
 template <typename T>
 absl::StatusOr<T> CombineExecutorDataImpl(std::vector<T>& executor_data) {
   if (executor_data.empty()) {
@@ -48,7 +68,7 @@ absl::StatusOr<T> CombineExecutorDataImpl(std::vector<T>& executor_data) {
   // TensorBuffer.
   int num_executor_data = executor_data.size();
   ABSL_ASSIGN_OR_RETURN(const auto* first_tensor,
-                        executor_data[0].GetEmbeddingsPtr());
+                        GetEmbeddingsPtr(executor_data[0]));
   LITERT_ASSIGN_OR_RETURN(auto first_tensor_type, first_tensor->TensorType());
   ABSL_ASSIGN_OR_RETURN(auto first_tensor_dims,
                         TensorBufferDims(*first_tensor));
@@ -57,7 +77,7 @@ absl::StatusOr<T> CombineExecutorDataImpl(std::vector<T>& executor_data) {
   std::vector<int> combined_token_num;
   for (const auto& executor_data : executor_data) {
     ABSL_ASSIGN_OR_RETURN(const auto* embeddings_ptr,
-                          executor_data.GetEmbeddingsPtr());
+                          GetEmbeddingsPtr(executor_data));
     ABSL_ASSIGN_OR_RETURN(auto dims, TensorBufferDims(*embeddings_ptr));
     if (dims.size() != 3 && dims.size() != 4) {
       return absl::InvalidArgumentError(
@@ -94,7 +114,7 @@ absl::StatusOr<T> CombineExecutorDataImpl(std::vector<T>& executor_data) {
       static_cast<char*>(combined_embeddings_lock_and_addr.second);
   for (int i = 0; i < num_executor_data; ++i) {
     ABSL_ASSIGN_OR_RETURN(auto embeddings_ptr,
-                          executor_data[i].GetMutableEmbeddingsPtr());
+                          GetMutableEmbeddingsPtr(executor_data[i]));
     LITERT_ASSIGN_OR_RETURN(auto embeddings_size, embeddings_ptr->PackedSize());
     LITERT_ASSIGN_OR_RETURN(
         auto embeddings_lock_and_addr,

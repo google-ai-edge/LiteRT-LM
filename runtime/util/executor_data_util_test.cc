@@ -122,13 +122,15 @@ TEST(ExecutorDataUtilTest, CombineExecutorAudioDataTest) {
   auto combined_audio_data = CombineExecutorAudioData(audio_data_list);
   ASSERT_OK(combined_audio_data);
 
-  auto mutable_embeddings_ptr = combined_audio_data->GetMutableEmbeddingsPtr();
-  ASSERT_OK(mutable_embeddings_ptr);
+  auto mutable_projected_embeddings_ptr =
+      combined_audio_data->GetMutableProjectedAudioEmbeddingsPtr();
+  ASSERT_OK(mutable_projected_embeddings_ptr);
 
-  litert::TensorBuffer* embeddings_ptr = mutable_embeddings_ptr.value();
-  EXPECT_NE(embeddings_ptr, nullptr);
+  litert::TensorBuffer* projected_embeddings_ptr =
+      mutable_projected_embeddings_ptr.value();
+  EXPECT_NE(projected_embeddings_ptr, nullptr);
 
-  auto tensor_type = embeddings_ptr->TensorType();
+  auto tensor_type = projected_embeddings_ptr->TensorType();
   ASSERT_TRUE(tensor_type.HasValue());
   EXPECT_EQ(tensor_type->ElementType(), ElementType::Float32);
   EXPECT_EQ(tensor_type->Layout(), Layout(Dimensions({1, 6, 3})));
@@ -136,7 +138,8 @@ TEST(ExecutorDataUtilTest, CombineExecutorAudioDataTest) {
   EXPECT_EQ(combined_audio_data->GetValidTokens(), 6);
 
   float read_data[18];
-  auto read_success = embeddings_ptr->Read<float>(absl::MakeSpan(read_data));
+  auto read_success =
+      projected_embeddings_ptr->Read<float>(absl::MakeSpan(read_data));
   ASSERT_TRUE(read_success);
   for (int i = 0; i < 18; ++i) {
     EXPECT_EQ(read_data[i], static_cast<float>(i + 1));
@@ -154,19 +157,20 @@ TEST(ExecutorDataUtilTest, CombineExecutorAudioDataSingleSuccess) {
   std::vector<ExecutorAudioData> executor_data;
   ExecutorAudioData executor_audio_data;
   LITERT_ASSERT_OK_AND_ASSIGN(
-      auto audio_buffer,
+      auto projected_audio_buffer,
       CopyToTensorBuffer<float>({4.0, 3.0, 2.0, 1.0}, {1, 2, 2}));
-  executor_audio_data.SetEmbeddings(std::move(audio_buffer));
+  executor_audio_data.SetProjectedAudioEmbeddings(
+      std::move(projected_audio_buffer));
   executor_data.push_back(std::move(executor_audio_data));
   ASSERT_OK_AND_ASSIGN(auto combined_executor_data,
                        CombineExecutorAudioData(executor_data));
-  ASSERT_OK_AND_ASSIGN(auto combined_embeddings_ptr,
-                       combined_executor_data.GetEmbeddingsPtr());
+  ASSERT_OK_AND_ASSIGN(auto combined_projected_embeddings_ptr,
+                       combined_executor_data.GetProjectedAudioEmbeddingsPtr());
   LITERT_ASSERT_OK_AND_ASSIGN(
-      auto combined_embeddings_span,
-      ReferTensorBufferAsSpan<float>(*combined_embeddings_ptr));
-  EXPECT_THAT(std::vector<float>(combined_embeddings_span.begin(),
-                                 combined_embeddings_span.end()),
+      auto combined_projected_embeddings_span,
+      ReferTensorBufferAsSpan<float>(*combined_projected_embeddings_ptr));
+  EXPECT_THAT(std::vector<float>(combined_projected_embeddings_span.begin(),
+                                 combined_projected_embeddings_span.end()),
               ElementsAre(4.0, 3.0, 2.0, 1.0));
 }
 
@@ -175,39 +179,43 @@ TEST(ExecutorDataUtilTest, CombineExecutorAudioDataMultiSuccess) {
 
   ExecutorAudioData executor_audio_data_1;
   LITERT_ASSERT_OK_AND_ASSIGN(
-      auto audio_buffer_1,
+      auto projected_audio_buffer_1,
       CopyToTensorBuffer<float>({6.0, 5.0, 4.0, 3.0, 2.0, 1.0}, {1, 3, 2}));
-  executor_audio_data_1.SetEmbeddings(std::move(audio_buffer_1));
+  executor_audio_data_1.SetProjectedAudioEmbeddings(
+      std::move(projected_audio_buffer_1));
   executor_audio_data_1.SetValidTokens(3);
   executor_data.push_back(std::move(executor_audio_data_1));
 
   ExecutorAudioData executor_audio_data_2;
   LITERT_ASSERT_OK_AND_ASSIGN(
-      auto audio_buffer_2,
+      auto projected_audio_buffer_2,
       CopyToTensorBuffer<float>({5.0, 6.0, 7.0, 8.0}, {1, 2, 2}));
-  executor_audio_data_2.SetEmbeddings(std::move(audio_buffer_2));
+  executor_audio_data_2.SetProjectedAudioEmbeddings(
+      std::move(projected_audio_buffer_2));
   executor_audio_data_2.SetValidTokens(2);
   executor_data.push_back(std::move(executor_audio_data_2));
 
   ExecutorAudioData executor_audio_data_3;
   LITERT_ASSERT_OK_AND_ASSIGN(
-      auto audio_buffer_3, CopyToTensorBuffer<float>({11.0, 12.0}, {1, 1, 2}));
-  executor_audio_data_3.SetEmbeddings(std::move(audio_buffer_3));
+      auto projected_audio_buffer_3,
+      CopyToTensorBuffer<float>({11.0, 12.0}, {1, 1, 2}));
+  executor_audio_data_3.SetProjectedAudioEmbeddings(
+      std::move(projected_audio_buffer_3));
   executor_audio_data_3.SetValidTokens(1);
   executor_data.push_back(std::move(executor_audio_data_3));
 
   ASSERT_OK_AND_ASSIGN(auto combined_executor_data,
                        CombineExecutorAudioData(executor_data));
-  ASSERT_OK_AND_ASSIGN(auto combined_embeddings_ptr,
-                       combined_executor_data.GetEmbeddingsPtr());
+  ASSERT_OK_AND_ASSIGN(auto combined_projected_embeddings_ptr,
+                       combined_executor_data.GetProjectedAudioEmbeddingsPtr());
   LITERT_ASSERT_OK_AND_ASSIGN(
-      auto combined_embeddings_span,
-      ReferTensorBufferAsSpan<float>(*combined_embeddings_ptr));
+      auto combined_projected_embeddings_span,
+      ReferTensorBufferAsSpan<float>(*combined_projected_embeddings_ptr));
   ASSERT_OK_AND_ASSIGN(const auto& dimensions,
-                       TensorBufferDims(*combined_embeddings_ptr));
+                       TensorBufferDims(*combined_projected_embeddings_ptr));
   EXPECT_THAT(dimensions, ElementsAre(1, 6, 2));
-  EXPECT_THAT(std::vector<float>(combined_embeddings_span.begin(),
-                                 combined_embeddings_span.end()),
+  EXPECT_THAT(std::vector<float>(combined_projected_embeddings_span.begin(),
+                                 combined_projected_embeddings_span.end()),
               ElementsAre(6.0, 5.0, 4.0, 3.0, 2.0, 1.0, 5.0, 6.0, 7.0, 8.0,
                           11.0, 12.0));
 }

@@ -120,15 +120,16 @@ TEST(LlmExecutorIoTypesTest, ExecutorAudioDataPrint) {
   } emb_data;
 
   auto env = Environment::Create({});
-  // Create a TensorBuffer for embeddings
-  auto embeddings = TensorBuffer::CreateFromHostMemory(
+  // Create a TensorBuffer for projected_audio_embeddings
+  auto projected_audio_embeddings = TensorBuffer::CreateFromHostMemory(
       *env,
       ::litert::RankedTensorType(ElementType::Float32, Layout(Dimensions({2}))),
       emb_data.d, sizeof(emb_data.d));
-  ASSERT_TRUE(embeddings.HasValue());
-  // Construct ExecutorAudioData with embeddings and nullopt for
+  ASSERT_TRUE(projected_audio_embeddings.HasValue());
+  // Construct ExecutorAudioData with projected_audio_embeddings and nullopt for
   // per_layer_embeddings
-  ExecutorAudioData audio_data(std::move(*embeddings), std::nullopt, 1);
+  ExecutorAudioData audio_data(std::move(*projected_audio_embeddings),
+                               std::nullopt, 1);
   std::stringstream oss;
   oss << audio_data;  // Invoke operator<< for ExecutorAudioData
 
@@ -136,11 +137,11 @@ TEST(LlmExecutorIoTypesTest, ExecutorAudioDataPrint) {
   // Note the updated message for the nullopt per_layer_embeddings.
   const std::string expected_output =
       "ExecutorAudioData: {\n"
-      "  Embeddings: TensorBuffer: [131, 132] shape=(2)\n"
+      "  ProjectedAudioEmbeddings: TensorBuffer: [131, 132] shape=(2)\n"
       "  PerLayerEmbeddings: nullopt (ExecutorAudioData::per_layer_embeddings_ "
       "is not set.)\n"
-      "  UnadaptedEmbeddings: nullopt "
-      "(ExecutorAudioData::unadapted_embeddings_ "
+      "  AudioEmbeddings: nullopt "
+      "(ExecutorAudioData::audio_embeddings_ "
       "is not set.)\n"
       "  ValidTokens: 1\n"
       "}";
@@ -362,12 +363,12 @@ TEST(LlmExecutorIoTypesTest, ExecutorAudioDataGetSet) {
   } emb_data;
 
   auto env = Environment::Create({});
-  // Create a TensorBuffer for embeddings
-  auto embeddings = TensorBuffer::CreateFromHostMemory(
+  // Create a TensorBuffer for projected_audio_embeddings
+  auto projected_audio_embeddings = TensorBuffer::CreateFromHostMemory(
       *env,
       ::litert::RankedTensorType(ElementType::Float32, Layout(Dimensions({2}))),
       emb_data.d, sizeof(emb_data.d));
-  ASSERT_TRUE(embeddings.HasValue());
+  ASSERT_TRUE(projected_audio_embeddings.HasValue());
 
   struct alignas(LITERT_HOST_MEMORY_BUFFER_ALIGNMENT) {
     float d[4] = {133.0f, 134.0f, 135.0f, 136.0f};
@@ -379,31 +380,30 @@ TEST(LlmExecutorIoTypesTest, ExecutorAudioDataGetSet) {
       ple_emb_data.d, sizeof(ple_emb_data.d));
   ASSERT_TRUE(per_layer_embeddings.HasValue());
 
-  ExecutorAudioData audio_data(std::move(*embeddings),
+  ExecutorAudioData audio_data(std::move(*projected_audio_embeddings),
                                std::move(*per_layer_embeddings), 1);
 
-  // Test GetEmbeddingsPtr
-  auto get_embeddings_ptr_status = audio_data.GetMutableEmbeddingsPtr();
-  ASSERT_TRUE(get_embeddings_ptr_status.ok());
-  TensorBuffer* get_embeddings_ptr = get_embeddings_ptr_status.value();
-  auto get_embeddings_size = get_embeddings_ptr->Size();
-  ASSERT_TRUE(get_embeddings_size.HasValue());
-  EXPECT_EQ(get_embeddings_size.Value(), 8);
+  // Test GetProjectedAudioEmbeddingsPtr
+  ASSERT_OK_AND_ASSIGN(const TensorBuffer* get_projected_audio_embeddings_ptr,
+                       audio_data.GetProjectedAudioEmbeddingsPtr());
+  auto get_projected_audio_embeddings_size =
+      get_projected_audio_embeddings_ptr->Size();
+  ASSERT_TRUE(get_projected_audio_embeddings_size.HasValue());
+  EXPECT_EQ(get_projected_audio_embeddings_size.Value(), 8);
+  // Test GetMutableProjectedAudioEmbeddingsPtr
+  ASSERT_OK_AND_ASSIGN(
+      TensorBuffer * get_mutable_projected_audio_embeddings_ptr,
+      audio_data.GetMutableProjectedAudioEmbeddingsPtr());
+  auto get_mutable_projected_audio_embeddings_size =
+      get_mutable_projected_audio_embeddings_ptr->Size();
+  ASSERT_TRUE(get_mutable_projected_audio_embeddings_size.HasValue());
+  EXPECT_EQ(get_mutable_projected_audio_embeddings_size.Value(), 8);
   float read_data[2];
-  auto read_success =
-      get_embeddings_ptr->Read<float>(absl::MakeSpan(read_data));
+  auto read_success = get_mutable_projected_audio_embeddings_ptr->Read<float>(
+      absl::MakeSpan(read_data));
   ASSERT_TRUE(read_success);
   EXPECT_EQ(read_data[0], 131.0f);
   EXPECT_EQ(read_data[1], 132.0f);
-
-  // Test GetMutableEmbeddingsPtr
-  auto get_mutable_embeddings_ptr_status = audio_data.GetMutableEmbeddingsPtr();
-  ASSERT_TRUE(get_mutable_embeddings_ptr_status.ok());
-  TensorBuffer* get_mutable_embeddings_ptr =
-      get_mutable_embeddings_ptr_status.value();
-  auto get_mutable_embeddings_size = get_mutable_embeddings_ptr->Size();
-  ASSERT_TRUE(get_mutable_embeddings_size.HasValue());
-  EXPECT_EQ(get_mutable_embeddings_size.Value(), 8);
 
   // Test GetPerLayerEmbeddingsPtr
   auto get_per_layer_embeddings_ptr_status =
@@ -440,21 +440,23 @@ TEST(LlmExecutorIoTypesTest, ExecutorAudioDataGetSet) {
   struct alignas(LITERT_HOST_MEMORY_BUFFER_ALIGNMENT) {
     float d[2] = {137.0f, 138.0f};
   } new_emb_data;
-  // Create a new TensorBuffer for embeddings
-  auto new_embeddings = TensorBuffer::CreateFromHostMemory(
+  // Create a new TensorBuffer for projected_audio_embeddings
+  auto new_projected_audio_embeddings = TensorBuffer::CreateFromHostMemory(
       *env,
       ::litert::RankedTensorType(ElementType::Float32, Layout(Dimensions({2}))),
       new_emb_data.d, sizeof(new_emb_data.d));
-  ASSERT_TRUE(new_embeddings.HasValue());
-  // Test SetEmbeddings
-  audio_data.SetEmbeddings(std::move(*new_embeddings));
-  auto get_new_embeddings_ptr_status = audio_data.GetMutableEmbeddingsPtr();
-  ASSERT_TRUE(get_new_embeddings_ptr_status.ok());
-  TensorBuffer* get_new_embeddings_ptr = get_new_embeddings_ptr_status.value();
-  auto get_new_embeddings_size = get_new_embeddings_ptr->Size();
-  ASSERT_TRUE(get_new_embeddings_size.HasValue());
-  EXPECT_EQ(get_new_embeddings_size.Value(), 8);
-  read_success = get_new_embeddings_ptr->Read<float>(absl::MakeSpan(read_data));
+  ASSERT_TRUE(new_projected_audio_embeddings.HasValue());
+  // Test SetProjectedAudioEmbeddings
+  audio_data.SetProjectedAudioEmbeddings(
+      std::move(*new_projected_audio_embeddings));
+  ASSERT_OK_AND_ASSIGN(TensorBuffer * get_new_projected_audio_embeddings_ptr,
+                       audio_data.GetMutableProjectedAudioEmbeddingsPtr());
+  auto get_new_projected_audio_embeddings_size =
+      get_new_projected_audio_embeddings_ptr->Size();
+  ASSERT_TRUE(get_new_projected_audio_embeddings_size.HasValue());
+  EXPECT_EQ(get_new_projected_audio_embeddings_size.Value(), 8);
+  read_success = get_new_projected_audio_embeddings_ptr->Read<float>(
+      absl::MakeSpan(read_data));
   ASSERT_TRUE(read_success);
   EXPECT_EQ(read_data[0], 137.0f);
   EXPECT_EQ(read_data[1], 138.0f);
@@ -487,31 +489,30 @@ TEST(LlmExecutorIoTypesTest, ExecutorAudioDataGetSet) {
   EXPECT_EQ(ple_read_data[2], 141.0f);
   EXPECT_EQ(ple_read_data[3], 142.0f);
 
-  // Test SetUnadaptedEmbeddings
+  // Test SetAudioEmbeddings
   struct alignas(LITERT_HOST_MEMORY_BUFFER_ALIGNMENT) {
     float d[4] = {143.0f, 144.0f, 145.0f, 146.0f};
-  } new_unadapted_emb_data;
-  auto new_unadapted_embeddings = TensorBuffer::CreateFromHostMemory(
+  } new_audio_emb_data;
+  auto new_audio_embeddings = TensorBuffer::CreateFromHostMemory(
       *env,
       ::litert::RankedTensorType(ElementType::Float32, Layout(Dimensions({4}))),
-      new_unadapted_emb_data.d, sizeof(new_unadapted_emb_data.d));
-  ASSERT_TRUE(new_unadapted_embeddings.HasValue());
-  audio_data.SetUnadaptedEmbeddings(std::move(*new_unadapted_embeddings));
+      new_audio_emb_data.d, sizeof(new_audio_emb_data.d));
+  ASSERT_TRUE(new_audio_embeddings.HasValue());
+  audio_data.SetAudioEmbeddings(std::move(*new_audio_embeddings));
 
-  ASSERT_OK_AND_ASSIGN(TensorBuffer * get_new_unadapted_embeddings_ptr,
-                       audio_data.GetMutableUnadaptedEmbeddingsPtr());
-  auto get_new_unadapted_embeddings_size =
-      get_new_unadapted_embeddings_ptr->Size();
-  ASSERT_TRUE(get_new_unadapted_embeddings_size.HasValue());
-  EXPECT_EQ(get_new_unadapted_embeddings_size.Value(), 16);
-  float unadapted_read_data[4];
-  read_success = get_new_unadapted_embeddings_ptr->Read<float>(
-      absl::MakeSpan(unadapted_read_data));
+  ASSERT_OK_AND_ASSIGN(TensorBuffer * get_new_audio_embeddings_ptr,
+                       audio_data.GetMutableAudioEmbeddingsPtr());
+  auto get_new_audio_embeddings_size = get_new_audio_embeddings_ptr->Size();
+  ASSERT_TRUE(get_new_audio_embeddings_size.HasValue());
+  EXPECT_EQ(get_new_audio_embeddings_size.Value(), 16);
+  float audio_read_data[4];
+  read_success = get_new_audio_embeddings_ptr->Read<float>(
+      absl::MakeSpan(audio_read_data));
   ASSERT_TRUE(read_success);
-  EXPECT_EQ(unadapted_read_data[0], 143.0f);
-  EXPECT_EQ(unadapted_read_data[1], 144.0f);
-  EXPECT_EQ(unadapted_read_data[2], 145.0f);
-  EXPECT_EQ(unadapted_read_data[3], 146.0f);
+  EXPECT_EQ(audio_read_data[0], 143.0f);
+  EXPECT_EQ(audio_read_data[1], 144.0f);
+  EXPECT_EQ(audio_read_data[2], 145.0f);
+  EXPECT_EQ(audio_read_data[3], 146.0f);
 
   // Test SetValidTokens
   audio_data.SetValidTokens(2);
@@ -607,27 +608,29 @@ TEST(LlmExecutorIoTypesTest, ExecutorInputsGetSet) {
   EXPECT_EQ(get_mutable_vision_embeddings_size.Value(), 8);
 
   // Test GetAudioDataPtr
-  auto get_audio_data_ptr_status = inputs.GetMutableAudioDataPtr();
-  ASSERT_TRUE(get_audio_data_ptr_status.ok());
-  ExecutorAudioData* get_audio_data_ptr = get_audio_data_ptr_status.value();
-  auto get_audio_embeddings_size =
-      get_audio_data_ptr->GetEmbeddingsPtr().value()->Size();
+  ASSERT_OK_AND_ASSIGN(ExecutorAudioData * get_audio_data_ptr,
+                       inputs.GetMutableAudioDataPtr());
+  ASSERT_OK_AND_ASSIGN(const TensorBuffer* projected_audio_embeddings_ptr,
+                       get_audio_data_ptr->GetProjectedAudioEmbeddingsPtr());
+  auto get_audio_embeddings_size = projected_audio_embeddings_ptr->Size();
   ASSERT_TRUE(get_audio_embeddings_size.HasValue());
   EXPECT_EQ(get_audio_embeddings_size.Value(), 8);
-  read_success_float =
-      get_audio_data_ptr->GetMutableEmbeddingsPtr().value()->Read<float>(
-          absl::MakeSpan(float_read_data));
+  ASSERT_OK_AND_ASSIGN(
+      TensorBuffer * mutable_projected_audio_embeddings_ptr,
+      get_audio_data_ptr->GetMutableProjectedAudioEmbeddingsPtr());
+  read_success_float = mutable_projected_audio_embeddings_ptr->Read<float>(
+      absl::MakeSpan(float_read_data));
   ASSERT_TRUE(read_success_float);
   EXPECT_EQ(float_read_data[0], 131.0f);
   EXPECT_EQ(float_read_data[1], 132.0f);
 
   // Test GetMutableAudioDataPtr
-  auto get_mutable_audio_data_ptr_status = inputs.GetMutableAudioDataPtr();
-  ASSERT_TRUE(get_mutable_audio_data_ptr_status.ok());
-  ExecutorAudioData* get_mutable_audio_data_ptr =
-      get_mutable_audio_data_ptr_status.value();
-  auto get_mutable_audio_embeddings_size =
-      get_mutable_audio_data_ptr->GetEmbeddingsPtr().value()->Size();
+  ASSERT_OK_AND_ASSIGN(ExecutorAudioData * get_mutable_audio_data_ptr,
+                       inputs.GetMutableAudioDataPtr());
+  ASSERT_OK_AND_ASSIGN(
+      const TensorBuffer* mutable_audio_embeddings_ptr,
+      get_mutable_audio_data_ptr->GetProjectedAudioEmbeddingsPtr());
+  auto get_mutable_audio_embeddings_size = mutable_audio_embeddings_ptr->Size();
   ASSERT_TRUE(get_mutable_audio_embeddings_size.HasValue());
   EXPECT_EQ(get_mutable_audio_embeddings_size.Value(), 8);
 
@@ -676,24 +679,27 @@ TEST(LlmExecutorIoTypesTest, ExecutorInputsGetSet) {
   // Test GetMutableVisionPerLayerEmbeddingsPtr
   EXPECT_FALSE(inputs.GetMutableVisionPerLayerEmbeddingsPtr().ok());
 
-  // Test GetAudioEmbeddingsPtr
-  auto get_audio_embeddings_ptr_status = inputs.GetAudioEmbeddingsPtr();
-  ASSERT_TRUE(get_audio_embeddings_ptr_status.ok());
-  const TensorBuffer* get_audio_embeddings_ptr =
-      get_audio_embeddings_ptr_status.value();
-  get_audio_embeddings_size = get_audio_embeddings_ptr->Size();
+  // Test GetProjectedAudioEmbeddingsPtr
+  ASSERT_OK_AND_ASSIGN(const TensorBuffer* get_projected_audio_embeddings_ptr,
+                       inputs.GetProjectedAudioEmbeddingsPtr());
+  get_audio_embeddings_size = get_projected_audio_embeddings_ptr->Size();
   ASSERT_TRUE(get_audio_embeddings_size.HasValue());
   EXPECT_EQ(get_audio_embeddings_size.Value(), 8);
 
-  // Test GetMutableAudioEmbeddingsPtr
-  auto get_mutable_audio_embeddings_ptr_status =
-      inputs.GetMutableAudioEmbeddingsPtr();
-  ASSERT_TRUE(get_mutable_audio_embeddings_ptr_status.ok());
-  TensorBuffer* get_mutable_audio_embeddings_ptr =
-      get_mutable_audio_embeddings_ptr_status.value();
-  get_mutable_audio_embeddings_size = get_mutable_audio_embeddings_ptr->Size();
+  // Test GetMutableProjectedAudioEmbeddingsPtr
+  ASSERT_OK_AND_ASSIGN(
+      TensorBuffer * get_mutable_projected_audio_embeddings_ptr,
+      inputs.GetMutableProjectedAudioEmbeddingsPtr());
+  get_mutable_audio_embeddings_size =
+      get_mutable_projected_audio_embeddings_ptr->Size();
   ASSERT_TRUE(get_mutable_audio_embeddings_size.HasValue());
   EXPECT_EQ(get_mutable_audio_embeddings_size.Value(), 8);
+
+  // Test GetAudioEmbeddingsPtr (should fail as it is not set)
+  EXPECT_FALSE(inputs.GetAudioEmbeddingsPtr().ok());
+
+  // Test GetMutableAudioEmbeddingsPtr (should fail as it is not set)
+  EXPECT_FALSE(inputs.GetMutableAudioEmbeddingsPtr().ok());
 
   // Test GetAudioPerLayerEmbeddingsPtr
   EXPECT_FALSE(inputs.GetAudioPerLayerEmbeddingsPtr().ok());
@@ -755,27 +761,30 @@ TEST(LlmExecutorIoTypesTest, ExecutorInputsGetSet) {
   struct alignas(LITERT_HOST_MEMORY_BUFFER_ALIGNMENT) {
     float d[2] = {137.0f, 138.0f};
   } new_audio_emb_data;
-  // Create a new TensorBuffer for embeddings
-  auto new_audio_embeddings = TensorBuffer::CreateFromHostMemory(
+  // Create a new TensorBuffer for projected_audio_embeddings
+  auto new_projected_audio_embeddings = TensorBuffer::CreateFromHostMemory(
       *env,
       ::litert::RankedTensorType(ElementType::Float32, Layout(Dimensions({2}))),
       new_audio_emb_data.d, sizeof(new_audio_emb_data.d));
-  ASSERT_TRUE(new_audio_embeddings.HasValue());
-  ExecutorAudioData new_audio_data(std::move(*new_audio_embeddings),
+  ASSERT_TRUE(new_projected_audio_embeddings.HasValue());
+  ExecutorAudioData new_audio_data(std::move(*new_projected_audio_embeddings),
                                    std::nullopt, 2);
   // Test SetAudioData
   inputs.SetAudioData(std::move(new_audio_data));
-  auto get_new_audio_data_ptr_status = inputs.GetMutableAudioDataPtr();
-  ASSERT_TRUE(get_new_audio_data_ptr_status.ok());
-  ExecutorAudioData* get_new_audio_data_ptr =
-      get_new_audio_data_ptr_status.value();
+  ASSERT_OK_AND_ASSIGN(ExecutorAudioData * get_new_audio_data_ptr,
+                       inputs.GetMutableAudioDataPtr());
+  ASSERT_OK_AND_ASSIGN(
+      const TensorBuffer* new_projected_audio_embeddings_ptr,
+      get_new_audio_data_ptr->GetProjectedAudioEmbeddingsPtr());
   auto get_new_audio_embeddings_size =
-      get_new_audio_data_ptr->GetEmbeddingsPtr().value()->Size();
+      new_projected_audio_embeddings_ptr->Size();
   ASSERT_TRUE(get_new_audio_embeddings_size.HasValue());
   EXPECT_EQ(get_new_audio_embeddings_size.Value(), 8);
-  read_success_float =
-      get_new_audio_data_ptr->GetMutableEmbeddingsPtr().value()->Read<float>(
-          absl::MakeSpan(float_read_data));
+  ASSERT_OK_AND_ASSIGN(
+      TensorBuffer * new_mutable_projected_audio_embeddings_ptr,
+      get_new_audio_data_ptr->GetMutableProjectedAudioEmbeddingsPtr());
+  read_success_float = new_mutable_projected_audio_embeddings_ptr->Read<float>(
+      absl::MakeSpan(float_read_data));
   ASSERT_TRUE(read_success_float);
   EXPECT_EQ(float_read_data[0], 137.0f);
   EXPECT_EQ(float_read_data[1], 138.0f);
@@ -922,27 +931,28 @@ TEST(LlmExecutorIoTypesTest, ExecutorAudioDataDuplicate) {
   } emb_data;
 
   auto env = Environment::Create({});
-  auto embeddings = TensorBuffer::CreateFromHostMemory(
+  auto projected_audio_embeddings = TensorBuffer::CreateFromHostMemory(
       *env,
       ::litert::RankedTensorType(ElementType::Float32, Layout(Dimensions({2}))),
       emb_data.d, sizeof(emb_data.d));
-  ASSERT_TRUE(embeddings.HasValue());
+  ASSERT_TRUE(projected_audio_embeddings.HasValue());
 
   struct alignas(LITERT_HOST_MEMORY_BUFFER_ALIGNMENT) {
     float d[4] = {143.0f, 144.0f, 145.0f, 146.0f};
-  } unadapted_emb_data;
-  auto unadapted_embeddings = TensorBuffer::CreateFromHostMemory(
+  } audio_emb_data;
+  auto audio_embeddings = TensorBuffer::CreateFromHostMemory(
       *env,
       ::litert::RankedTensorType(ElementType::Float32, Layout(Dimensions({4}))),
-      unadapted_emb_data.d, sizeof(unadapted_emb_data.d));
-  ASSERT_TRUE(unadapted_embeddings.HasValue());
+      audio_emb_data.d, sizeof(audio_emb_data.d));
+  ASSERT_TRUE(audio_embeddings.HasValue());
 
-  ExecutorAudioData audio_data(std::move(*embeddings), std::nullopt, 1);
-  audio_data.SetUnadaptedEmbeddings(std::move(*unadapted_embeddings));
+  ExecutorAudioData audio_data(std::move(*projected_audio_embeddings),
+                               std::nullopt, 1);
+  audio_data.SetAudioEmbeddings(std::move(*audio_embeddings));
   ASSERT_OK_AND_ASSIGN(ExecutorAudioData duplicate, audio_data.Duplicate());
 
   ASSERT_OK_AND_ASSIGN(TensorBuffer * duplicate_emb_ptr,
-                       duplicate.GetMutableEmbeddingsPtr());
+                       duplicate.GetMutableProjectedAudioEmbeddingsPtr());
 
   float read_data[2];
   ASSERT_TRUE(duplicate_emb_ptr->Read<float>(absl::MakeSpan(read_data)));
@@ -950,24 +960,24 @@ TEST(LlmExecutorIoTypesTest, ExecutorAudioDataDuplicate) {
   EXPECT_EQ(read_data[1], 132.0f);
   EXPECT_EQ(duplicate.GetValidTokens(), 1);
 
-  // Verify unadapted embeddings duplicate
-  ASSERT_OK_AND_ASSIGN(TensorBuffer * duplicate_unadapted_ptr,
-                       duplicate.GetMutableUnadaptedEmbeddingsPtr());
-  float unadapted_read_data[4];
-  ASSERT_TRUE(duplicate_unadapted_ptr->Read<float>(
-      absl::MakeSpan(unadapted_read_data)));
-  EXPECT_EQ(unadapted_read_data[0], 143.0f);
-  EXPECT_EQ(unadapted_read_data[1], 144.0f);
-  EXPECT_EQ(unadapted_read_data[2], 145.0f);
-  EXPECT_EQ(unadapted_read_data[3], 146.0f);
+  // Verify audio embeddings duplicate
+  ASSERT_OK_AND_ASSIGN(TensorBuffer * duplicate_audio_ptr,
+                       duplicate.GetMutableAudioEmbeddingsPtr());
+  float audio_read_data[4];
+  ASSERT_TRUE(
+      duplicate_audio_ptr->Read<float>(absl::MakeSpan(audio_read_data)));
+  EXPECT_EQ(audio_read_data[0], 143.0f);
+  EXPECT_EQ(audio_read_data[1], 144.0f);
+  EXPECT_EQ(audio_read_data[2], 145.0f);
+  EXPECT_EQ(audio_read_data[3], 146.0f);
 
   // Verify that empty duplicate works fine.
   ExecutorAudioData audio_data_empty(std::nullopt, std::nullopt);
   ASSERT_OK_AND_ASSIGN(ExecutorAudioData duplicate_empty,
                        audio_data_empty.Duplicate());
-  ASSERT_FALSE(duplicate_empty.GetEmbeddingsPtr().ok());
+  ASSERT_FALSE(duplicate_empty.GetProjectedAudioEmbeddingsPtr().ok());
+  ASSERT_FALSE(duplicate_empty.GetAudioEmbeddingsPtr().ok());
   ASSERT_FALSE(duplicate_empty.GetPerLayerEmbeddingsPtr().ok());
-  ASSERT_FALSE(duplicate_empty.GetUnadaptedEmbeddingsPtr().ok());
 }
 
 }  // namespace

@@ -113,11 +113,11 @@ absl::Status CheckEquivalent(absl::Span<T> expected, absl::Span<T> actual) {
 FakeLlmExecutor::FakeLlmExecutor(
     int vocab_size, const std::vector<std::vector<int>>& prefill_tokens_set,
     const std::vector<std::vector<int>>& decode_tokens_set, int batch_size,
-    std::optional<std::vector<float>> audio_embedding)
+    std::optional<std::vector<float>> projected_audio_embedding)
     : vocab_size_(vocab_size),
       prefill_tokens_set_(prefill_tokens_set),
       decode_tokens_set_(decode_tokens_set),
-      audio_embedding_set_(std::move(audio_embedding)),
+      projected_audio_embedding_set_(std::move(projected_audio_embedding)),
       batch_size_(batch_size),
       prefill_times_(0),
       decode_times_(0),
@@ -140,16 +140,18 @@ absl::Status FakeLlmExecutor::Prefill(const ExecutorInputs& inputs) {
         prefill_times_));
   }
   if (inputs.GetAudioDataPtr().ok()) {
-    if (!audio_embedding_set_.has_value()) {
+    if (!projected_audio_embedding_set_.has_value()) {
       return absl::InvalidArgumentError(
-          "Audio embedding is not set in the fake LLM executor.");
+          "Projected audio embedding is not set in the fake LLM executor.");
     }
-    ABSL_ASSIGN_OR_RETURN(auto audio_embeddings,
-                          inputs.GetAudioEmbeddingsPtr());
-    LITERT_ASSIGN_OR_RETURN(auto audio_embeddings_span,
-                            ReferTensorBufferAsSpan<float>(*audio_embeddings));
-    ABSL_RETURN_IF_ERROR(CheckEquivalent(absl::MakeSpan(*audio_embedding_set_),
-                                         audio_embeddings_span));
+    ABSL_ASSIGN_OR_RETURN(auto projected_audio_embeddings,
+                          inputs.GetProjectedAudioEmbeddingsPtr());
+    LITERT_ASSIGN_OR_RETURN(
+        auto projected_audio_embeddings_span,
+        ReferTensorBufferAsSpan<float>(*projected_audio_embeddings));
+    ABSL_RETURN_IF_ERROR(
+        CheckEquivalent(absl::MakeSpan(*projected_audio_embedding_set_),
+                        projected_audio_embeddings_span));
   }
   ABSL_ASSIGN_OR_RETURN(auto text_data, inputs.GetTextDataPtr());
   auto text_token_ids_span =

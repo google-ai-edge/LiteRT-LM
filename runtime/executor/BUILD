@@ -505,6 +505,7 @@ cc_test(
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/time",
         "@com_google_absl//absl/types:span",
+        "@litert//litert/cc:litert_tensor_buffer",
         "@litert//litert/test:matchers",
         "//runtime/components/logits_processor",
         "//runtime/components/logits_processor/constrained_decoding:constrained_decoder",

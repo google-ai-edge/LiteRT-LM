@@ -146,36 +146,38 @@ TEST_F(AudioLiteRtCompiledModelExecutorTest,
                                               kSpectrogramFrequencySlots})))));
   ASSERT_OK_AND_ASSIGN(auto executor_audio_data,
                        audio_executor->Encode(mel_spectrogram_tensor_buffer));
-  ASSERT_OK_AND_ASSIGN(auto audio_embeddings_ptr,
-                       executor_audio_data.GetMutableEmbeddingsPtr());
-  auto audio_embeddings_type = audio_embeddings_ptr->TensorType();
-  ASSERT_TRUE(audio_embeddings_type.HasValue());
-  auto dims = audio_embeddings_type->Layout().Dimensions();
+  ASSERT_OK_AND_ASSIGN(
+      auto projected_audio_embeddings_ptr,
+      executor_audio_data.GetMutableProjectedAudioEmbeddingsPtr());
+  auto projected_audio_embeddings_type =
+      projected_audio_embeddings_ptr->TensorType();
+  ASSERT_TRUE(projected_audio_embeddings_type.HasValue());
+  auto dims = projected_audio_embeddings_type->Layout().Dimensions();
   EXPECT_THAT(dims,
               ElementsAre(1, kEmbeddingSequenceLength, kEmbeddingDimensions));
 
-  ASSERT_OK_AND_ASSIGN(auto audio_embeddings_data,
-                       GetDataAsVector<float>(*audio_embeddings_ptr));
-  EXPECT_EQ(audio_embeddings_data.size(),
+  ASSERT_OK_AND_ASSIGN(auto projected_audio_embeddings_data,
+                       GetDataAsVector<float>(*projected_audio_embeddings_ptr));
+  EXPECT_EQ(projected_audio_embeddings_data.size(),
             kEmbeddingSequenceLength * kEmbeddingDimensions);
   EXPECT_THAT(
-      audio_embeddings_data,
+      projected_audio_embeddings_data,
       ElementsAre(0., 0., 0., 0., 0., 0., 0., 1., 2., 3., 3., 3., 0., 1., 2.,
                   4., 4., 4., 1., 2., 3., 5., 5., 5., 0., 1., 2., 4., 4., 4.));
   EXPECT_EQ(executor_audio_data.GetValidTokens(), kEmbeddingSequenceLength);
 
-  ASSERT_OK_AND_ASSIGN(auto unadapted_embeddings_ptr,
-                       executor_audio_data.GetUnadaptedEmbeddingsPtr());
-  auto unadapted_embeddings_type = unadapted_embeddings_ptr->TensorType();
-  ASSERT_TRUE(unadapted_embeddings_type.HasValue());
-  auto unadapted_dims = unadapted_embeddings_type->Layout().Dimensions();
-  EXPECT_THAT(unadapted_dims, ElementsAre(1, kEmbeddingSequenceLength, 4));
+  ASSERT_OK_AND_ASSIGN(auto audio_embeddings_ptr,
+                       executor_audio_data.GetAudioEmbeddingsPtr());
+  auto audio_embeddings_type = audio_embeddings_ptr->TensorType();
+  ASSERT_TRUE(audio_embeddings_type.HasValue());
+  auto audio_dims = audio_embeddings_type->Layout().Dimensions();
+  EXPECT_THAT(audio_dims, ElementsAre(1, kEmbeddingSequenceLength, 4));
 
   ASSERT_OK_AND_ASSIGN(
-      auto unadapted_embeddings_data,
+      auto audio_embeddings_data,
       GetDataAsVector<float>(
-          *const_cast<litert::TensorBuffer*>(unadapted_embeddings_ptr)));
-  EXPECT_THAT(unadapted_embeddings_data,
+          *const_cast<litert::TensorBuffer*>(audio_embeddings_ptr)));
+  EXPECT_THAT(audio_embeddings_data,
               ElementsAre(0., 0., 0., 0., 0., 1., 1., 1., 0., 1., 1., 2., 1.,
                           1., 1., 2., 0., 1., 1., 2.));
 }
@@ -223,33 +225,35 @@ TEST_F(AudioLiteRtCompiledModelExecutorTest,
       auto executor_audio_data,
       audio_executor->Encode(mel_spectrogram_tensor_buffer,
                              mel_spectrogram_mask_tensor_buffer));
-  ASSERT_OK_AND_ASSIGN(auto audio_embeddings_ptr,
-                       executor_audio_data.GetMutableEmbeddingsPtr());
-  auto audio_embeddings_type = audio_embeddings_ptr->TensorType();
-  ASSERT_TRUE(audio_embeddings_type.HasValue());
-  auto dims = audio_embeddings_type->Layout().Dimensions();
+  ASSERT_OK_AND_ASSIGN(
+      auto projected_audio_embeddings_ptr,
+      executor_audio_data.GetMutableProjectedAudioEmbeddingsPtr());
+  auto projected_audio_embeddings_type =
+      projected_audio_embeddings_ptr->TensorType();
+  ASSERT_TRUE(projected_audio_embeddings_type.HasValue());
+  auto dims = projected_audio_embeddings_type->Layout().Dimensions();
   EXPECT_THAT(dims, ElementsAre(1, 3, kEmbeddingDimensions));
 
-  ASSERT_OK_AND_ASSIGN(auto audio_embeddings_data,
-                       GetDataAsVector<float>(*audio_embeddings_ptr));
-  EXPECT_EQ(audio_embeddings_data.size(), 3 * kEmbeddingDimensions);
-  EXPECT_THAT(audio_embeddings_data,
+  ASSERT_OK_AND_ASSIGN(auto projected_audio_embeddings_data,
+                       GetDataAsVector<float>(*projected_audio_embeddings_ptr));
+  EXPECT_EQ(projected_audio_embeddings_data.size(), 3 * kEmbeddingDimensions);
+  EXPECT_THAT(projected_audio_embeddings_data,
               ElementsAre(1., 2., 4., 6., 6., 6., 1., 3., 6., 9., 9., 9., 1.,
                           3., 5., 8., 8., 8.));
   EXPECT_EQ(executor_audio_data.GetValidTokens(), 3);
 
-  ASSERT_OK_AND_ASSIGN(auto unadapted_embeddings_ptr,
-                       executor_audio_data.GetUnadaptedEmbeddingsPtr());
-  auto unadapted_embeddings_type = unadapted_embeddings_ptr->TensorType();
-  ASSERT_TRUE(unadapted_embeddings_type.HasValue());
-  auto unadapted_dims = unadapted_embeddings_type->Layout().Dimensions();
-  EXPECT_THAT(unadapted_dims, ElementsAre(1, 3, 4));
+  ASSERT_OK_AND_ASSIGN(auto audio_embeddings_ptr,
+                       executor_audio_data.GetAudioEmbeddingsPtr());
+  auto audio_embeddings_type = audio_embeddings_ptr->TensorType();
+  ASSERT_TRUE(audio_embeddings_type.HasValue());
+  auto audio_dims = audio_embeddings_type->Layout().Dimensions();
+  EXPECT_THAT(audio_dims, ElementsAre(1, 3, 4));
 
   ASSERT_OK_AND_ASSIGN(
-      auto unadapted_embeddings_data,
+      auto audio_embeddings_data,
       GetDataAsVector<float>(
-          *const_cast<litert::TensorBuffer*>(unadapted_embeddings_ptr)));
-  EXPECT_THAT(unadapted_embeddings_data,
+          *const_cast<litert::TensorBuffer*>(audio_embeddings_ptr)));
+  EXPECT_THAT(audio_embeddings_data,
               ElementsAre(1., 1., 2., 2., 1., 2., 3., 3., 1., 2., 2., 3.));
 }
 
@@ -282,18 +286,20 @@ TEST_F(AudioLiteRtCompiledModelExecutorTest,
 
   ASSERT_OK_AND_ASSIGN(auto executor_audio_data,
                        audio_executor->Encode(mel_spectrogram_tensor_buffer));
-  ASSERT_OK_AND_ASSIGN(auto audio_embeddings_ptr,
-                       executor_audio_data.GetMutableEmbeddingsPtr());
-  auto audio_embeddings_type = audio_embeddings_ptr->TensorType();
-  ASSERT_TRUE(audio_embeddings_type.HasValue());
-  auto dims = audio_embeddings_type->Layout().Dimensions();
+  ASSERT_OK_AND_ASSIGN(
+      auto projected_audio_embeddings_ptr,
+      executor_audio_data.GetMutableProjectedAudioEmbeddingsPtr());
+  auto projected_audio_embeddings_type =
+      projected_audio_embeddings_ptr->TensorType();
+  ASSERT_TRUE(projected_audio_embeddings_type.HasValue());
+  auto dims = projected_audio_embeddings_type->Layout().Dimensions();
   EXPECT_THAT(dims, ElementsAre(1, 7, kEmbeddingDimensions));
 
-  ASSERT_OK_AND_ASSIGN(auto audio_embeddings_data,
-                       GetDataAsVector<float>(*audio_embeddings_ptr));
-  EXPECT_EQ(audio_embeddings_data.size(), 7 * kEmbeddingDimensions);
+  ASSERT_OK_AND_ASSIGN(auto projected_audio_embeddings_data,
+                       GetDataAsVector<float>(*projected_audio_embeddings_ptr));
+  EXPECT_EQ(projected_audio_embeddings_data.size(), 7 * kEmbeddingDimensions);
   EXPECT_THAT(
-      audio_embeddings_data,
+      projected_audio_embeddings_data,
       ElementsAre(1., 2., 4., 6., 6., 6., 1., 3., 6., 9., 9., 9., 1., 3., 5.,
                   8., 8., 8., 1., 2., 4., 7., 7., 7., 1., 3., 6., 9., 9., 9.,
                   0., 1., 2., 3., 3., 3., 0., 1., 2., 3., 3., 3.));
@@ -340,17 +346,19 @@ TEST_F(AudioLiteRtCompiledModelExecutorTest,
       auto executor_audio_data,
       audio_executor->Encode(mel_spectrogram_tensor_buffer,
                              mel_spectrogram_mask_tensor_buffer));
-  ASSERT_OK_AND_ASSIGN(auto audio_embeddings_ptr,
-                       executor_audio_data.GetMutableEmbeddingsPtr());
-  auto audio_embeddings_type = audio_embeddings_ptr->TensorType();
-  ASSERT_TRUE(audio_embeddings_type.HasValue());
-  auto dims = audio_embeddings_type->Layout().Dimensions();
+  ASSERT_OK_AND_ASSIGN(
+      auto projected_audio_embeddings_ptr,
+      executor_audio_data.GetMutableProjectedAudioEmbeddingsPtr());
+  auto projected_audio_embeddings_type =
+      projected_audio_embeddings_ptr->TensorType();
+  ASSERT_TRUE(projected_audio_embeddings_type.HasValue());
+  auto dims = projected_audio_embeddings_type->Layout().Dimensions();
   EXPECT_THAT(dims, ElementsAre(1, 6, kEmbeddingDimensions));
 
-  ASSERT_OK_AND_ASSIGN(auto audio_embeddings_data,
-                       GetDataAsVector<float>(*audio_embeddings_ptr));
-  EXPECT_EQ(audio_embeddings_data.size(), 6 * kEmbeddingDimensions);
-  EXPECT_THAT(audio_embeddings_data,
+  ASSERT_OK_AND_ASSIGN(auto projected_audio_embeddings_data,
+                       GetDataAsVector<float>(*projected_audio_embeddings_ptr));
+  EXPECT_EQ(projected_audio_embeddings_data.size(), 6 * kEmbeddingDimensions);
+  EXPECT_THAT(projected_audio_embeddings_data,
               ElementsAre(1., 2., 4., 6., 6., 6., 1., 3., 6., 9., 9., 9., 1.,
                           3., 5., 8., 8., 8., 1., 2., 4., 7., 7., 7., 1., 3.,
                           6., 9., 9., 9., 0., 1., 2., 3., 3., 3.));
@@ -385,17 +393,19 @@ TEST_F(AudioLiteRtCompiledModelExecutorTest,
                                               kSpectrogramFrequencySlots})))));
   ASSERT_OK_AND_ASSIGN(auto executor_audio_data,
                        audio_executor->Encode(mel_spectrogram_tensor_buffer));
-  ASSERT_OK_AND_ASSIGN(auto audio_embeddings_ptr,
-                       executor_audio_data.GetMutableEmbeddingsPtr());
-  auto audio_embeddings_type = audio_embeddings_ptr->TensorType();
-  ASSERT_TRUE(audio_embeddings_type.HasValue());
-  auto dims = audio_embeddings_type->Layout().Dimensions();
+  ASSERT_OK_AND_ASSIGN(
+      auto projected_audio_embeddings_ptr,
+      executor_audio_data.GetMutableProjectedAudioEmbeddingsPtr());
+  auto projected_audio_embeddings_type =
+      projected_audio_embeddings_ptr->TensorType();
+  ASSERT_TRUE(projected_audio_embeddings_type.HasValue());
+  auto dims = projected_audio_embeddings_type->Layout().Dimensions();
   EXPECT_THAT(dims, ElementsAre(1, kEmbeddingSequenceLength,
                                 kNoMaskEmbeddingDimensions));
 
-  ASSERT_OK_AND_ASSIGN(auto audio_embeddings_data,
-                       GetDataAsVector<float>(*audio_embeddings_ptr));
-  EXPECT_EQ(audio_embeddings_data.size(),
+  ASSERT_OK_AND_ASSIGN(auto projected_audio_embeddings_data,
+                       GetDataAsVector<float>(*projected_audio_embeddings_ptr));
+  EXPECT_EQ(projected_audio_embeddings_data.size(),
             kEmbeddingSequenceLength * kNoMaskEmbeddingDimensions);
   EXPECT_EQ(executor_audio_data.GetValidTokens(), kEmbeddingSequenceLength);
 }
@@ -442,16 +452,19 @@ TEST_F(AudioLiteRtCompiledModelExecutorTest, EncodeTest_NoMaskModel_WithMask) {
       auto executor_audio_data,
       audio_executor->Encode(mel_spectrogram_tensor_buffer,
                              mel_spectrogram_mask_tensor_buffer));
-  ASSERT_OK_AND_ASSIGN(auto audio_embeddings_ptr,
-                       executor_audio_data.GetMutableEmbeddingsPtr());
-  auto audio_embeddings_type = audio_embeddings_ptr->TensorType();
-  ASSERT_TRUE(audio_embeddings_type.HasValue());
-  auto dims = audio_embeddings_type->Layout().Dimensions();
+  ASSERT_OK_AND_ASSIGN(
+      auto projected_audio_embeddings_ptr,
+      executor_audio_data.GetMutableProjectedAudioEmbeddingsPtr());
+  auto projected_audio_embeddings_type =
+      projected_audio_embeddings_ptr->TensorType();
+  ASSERT_TRUE(projected_audio_embeddings_type.HasValue());
+  auto dims = projected_audio_embeddings_type->Layout().Dimensions();
   EXPECT_THAT(dims, ElementsAre(1, 3, kNoMaskEmbeddingDimensions));
 
-  ASSERT_OK_AND_ASSIGN(auto audio_embeddings_data,
-                       GetDataAsVector<float>(*audio_embeddings_ptr));
-  EXPECT_EQ(audio_embeddings_data.size(), 3 * kNoMaskEmbeddingDimensions);
+  ASSERT_OK_AND_ASSIGN(auto projected_audio_embeddings_data,
+                       GetDataAsVector<float>(*projected_audio_embeddings_ptr));
+  EXPECT_EQ(projected_audio_embeddings_data.size(),
+            3 * kNoMaskEmbeddingDimensions);
   EXPECT_EQ(executor_audio_data.GetValidTokens(), 3);
 }
 
@@ -485,17 +498,19 @@ TEST_F(AudioLiteRtCompiledModelExecutorTest, EncodeTest_Streaming_LargeInput) {
   ASSERT_OK_AND_ASSIGN(auto executor_audio_data,
                        audio_executor->Encode(mel_spectrogram_tensor_buffer));
 
-  ASSERT_OK_AND_ASSIGN(auto audio_embeddings_ptr,
-                       executor_audio_data.GetMutableEmbeddingsPtr());
-  auto audio_embeddings_type = audio_embeddings_ptr->TensorType();
-  ASSERT_TRUE(audio_embeddings_type.HasValue());
-  auto dims = audio_embeddings_type->Layout().Dimensions();
+  ASSERT_OK_AND_ASSIGN(
+      auto projected_audio_embeddings_ptr,
+      executor_audio_data.GetMutableProjectedAudioEmbeddingsPtr());
+  auto projected_audio_embeddings_type =
+      projected_audio_embeddings_ptr->TensorType();
+  ASSERT_TRUE(projected_audio_embeddings_type.HasValue());
+  auto dims = projected_audio_embeddings_type->Layout().Dimensions();
   EXPECT_THAT(dims,
               ElementsAre(1, kExpectedOutputTokens, kEmbeddingDimensions));
 
-  ASSERT_OK_AND_ASSIGN(auto audio_embeddings_data,
-                       GetDataAsVector<float>(*audio_embeddings_ptr));
-  EXPECT_EQ(audio_embeddings_data.size(),
+  ASSERT_OK_AND_ASSIGN(auto projected_audio_embeddings_data,
+                       GetDataAsVector<float>(*projected_audio_embeddings_ptr));
+  EXPECT_EQ(projected_audio_embeddings_data.size(),
             kExpectedOutputTokens * kEmbeddingDimensions);
 
   // Each output frame should be [1, 3, 6, 10, 15, 15] as derived.
@@ -509,7 +524,7 @@ TEST_F(AudioLiteRtCompiledModelExecutorTest, EncodeTest_Streaming_LargeInput) {
                                     expected_frame.end());
   }
 
-  EXPECT_EQ(audio_embeddings_data, expected_embeddings_data);
+  EXPECT_EQ(projected_audio_embeddings_data, expected_embeddings_data);
   EXPECT_EQ(executor_audio_data.GetValidTokens(), kExpectedOutputTokens);
 }
 
@@ -648,23 +663,25 @@ TEST_F(AudioLiteRtCompiledModelExecutorTest,
               Layout(Dimensions({1, 10, kSpectrogramFrequencySlots})))));
   ASSERT_OK_AND_ASSIGN(auto audio_data_result1,
                        audio_executor->Encode(chunk2_buffer));
-  ASSERT_OK_AND_ASSIGN(auto embeddings1_ptr,
-                       audio_data_result1.GetMutableEmbeddingsPtr());
-  ASSERT_OK_AND_ASSIGN(auto embeddings1,
-                       GetDataAsVector<float>(*embeddings1_ptr));
+  ASSERT_OK_AND_ASSIGN(
+      auto projected_embeddings1_ptr,
+      audio_data_result1.GetMutableProjectedAudioEmbeddingsPtr());
+  ASSERT_OK_AND_ASSIGN(auto projected_embeddings1,
+                       GetDataAsVector<float>(*projected_embeddings1_ptr));
 
   ASSERT_OK(audio_executor->RestoreContext(std::move(cloned_context)));
 
   ASSERT_OK_AND_ASSIGN(auto audio_data_result2,
                        audio_executor->Encode(chunk2_buffer));
-  ASSERT_OK_AND_ASSIGN(auto embeddings2_ptr,
-                       audio_data_result2.GetMutableEmbeddingsPtr());
-  ASSERT_OK_AND_ASSIGN(auto embeddings2,
-                       GetDataAsVector<float>(*embeddings2_ptr));
+  ASSERT_OK_AND_ASSIGN(
+      auto projected_embeddings2_ptr,
+      audio_data_result2.GetMutableProjectedAudioEmbeddingsPtr());
+  ASSERT_OK_AND_ASSIGN(auto projected_embeddings2,
+                       GetDataAsVector<float>(*projected_embeddings2_ptr));
 
   EXPECT_EQ(audio_data_result1.GetValidTokens(),
             audio_data_result2.GetValidTokens());
-  EXPECT_EQ(embeddings1, embeddings2);
+  EXPECT_EQ(projected_embeddings1, projected_embeddings2);
 }
 
 TEST_F(AudioLiteRtCompiledModelExecutorTest,

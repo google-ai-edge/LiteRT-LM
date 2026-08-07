@@ -93,8 +93,9 @@ absl::Status EmbeddingLookupManager::UpdateMultiModalEmbeddings(
         std::move(*vision_embedding_lookup));
   }
 
-  auto audio_embeddings = inputs.GetAudioEmbeddingsPtr();
-  if (audio_embeddings.ok() && *audio_embeddings != nullptr) {
+  auto projected_audio_embeddings = inputs.GetProjectedAudioEmbeddingsPtr();
+  if (projected_audio_embeddings.ok() &&
+      *projected_audio_embeddings != nullptr) {
     if (!fully_supports_multi_modal_) {
       return absl::InvalidArgumentError(
           "When fully_supports_multi_modal_ is false, multimodal embeddings "
@@ -102,7 +103,8 @@ absl::Status EmbeddingLookupManager::UpdateMultiModalEmbeddings(
           "embedding value of the text embedding table.");
     }
     auto audio_embedding_lookup = EmbeddingLookupMultiModal::Create(
-        *audio_embeddings, ::litert::lm::ExecutorAudioData::kSpecialToken);
+        *projected_audio_embeddings,
+        ::litert::lm::ExecutorAudioData::kSpecialToken);
     if (!audio_embedding_lookup.ok()) {
       return audio_embedding_lookup.status();
     }

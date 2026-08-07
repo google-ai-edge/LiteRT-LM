@@ -159,28 +159,30 @@ std::ostream& operator<<(std::ostream& os,
 }
 
 ExecutorAudioData::ExecutorAudioData(
-    std::optional<::litert::TensorBuffer>&& embeddings,
+    std::optional<::litert::TensorBuffer>&& projected_audio_embeddings,
     std::optional<::litert::TensorBuffer>&& per_layer_embeddings,
     int valid_tokens)
-    : embeddings_(std::move(embeddings)),
+    : projected_audio_embeddings_(std::move(projected_audio_embeddings)),
       per_layer_embeddings_(std::move(per_layer_embeddings)),
-      unadapted_embeddings_(std::nullopt),
+      audio_embeddings_(std::nullopt),
       valid_tokens_(valid_tokens) {}
 
 absl::StatusOr<const ::litert::TensorBuffer*>
-ExecutorAudioData::GetEmbeddingsPtr() const {
-  if (embeddings_.has_value()) {
-    return &embeddings_.value();
+ExecutorAudioData::GetProjectedAudioEmbeddingsPtr() const {
+  if (projected_audio_embeddings_.has_value()) {
+    return &projected_audio_embeddings_.value();
   }
-  return absl::NotFoundError("ExecutorAudioData::embeddings_ is not set.");
+  return absl::NotFoundError(
+      "ExecutorAudioData::projected_audio_embeddings_ is not set.");
 }
 
 absl::StatusOr<::litert::TensorBuffer*>
-ExecutorAudioData::GetMutableEmbeddingsPtr() {
-  if (embeddings_.has_value()) {
-    return &embeddings_.value();
+ExecutorAudioData::GetMutableProjectedAudioEmbeddingsPtr() {
+  if (projected_audio_embeddings_.has_value()) {
+    return &projected_audio_embeddings_.value();
   }
-  return absl::NotFoundError("ExecutorAudioData::embeddings_ is not set.");
+  return absl::NotFoundError(
+      "ExecutorAudioData::projected_audio_embeddings_ is not set.");
 }
 
 absl::StatusOr<const ::litert::TensorBuffer*>
@@ -202,28 +204,28 @@ ExecutorAudioData::GetMutablePerLayerEmbeddingsPtr() {
 }
 
 absl::StatusOr<const ::litert::TensorBuffer*>
-ExecutorAudioData::GetUnadaptedEmbeddingsPtr() const {
-  if (unadapted_embeddings_.has_value()) {
-    return &unadapted_embeddings_.value();
+ExecutorAudioData::GetAudioEmbeddingsPtr() const {
+  if (audio_embeddings_.has_value()) {
+    return &audio_embeddings_.value();
   }
   return absl::NotFoundError(
-      "ExecutorAudioData::unadapted_embeddings_ is not set.");
+      "ExecutorAudioData::audio_embeddings_ is not set.");
 }
 
 absl::StatusOr<::litert::TensorBuffer*>
-ExecutorAudioData::GetMutableUnadaptedEmbeddingsPtr() {
-  if (unadapted_embeddings_.has_value()) {
-    return &unadapted_embeddings_.value();
+ExecutorAudioData::GetMutableAudioEmbeddingsPtr() {
+  if (audio_embeddings_.has_value()) {
+    return &audio_embeddings_.value();
   }
   return absl::NotFoundError(
-      "ExecutorAudioData::unadapted_embeddings_ is not set.");
+      "ExecutorAudioData::audio_embeddings_ is not set.");
 }
 
 int ExecutorAudioData::GetValidTokens() const { return valid_tokens_; }
 
-void ExecutorAudioData::SetEmbeddings(
-    std::optional<::litert::TensorBuffer>&& embeddings) {
-  embeddings_ = std::move(embeddings);
+void ExecutorAudioData::SetProjectedAudioEmbeddings(
+    std::optional<::litert::TensorBuffer>&& projected_audio_embeddings) {
+  projected_audio_embeddings_ = std::move(projected_audio_embeddings);
 }
 
 void ExecutorAudioData::SetPerLayerEmbeddings(
@@ -231,9 +233,9 @@ void ExecutorAudioData::SetPerLayerEmbeddings(
   per_layer_embeddings_ = std::move(per_layer_embeddings);
 }
 
-void ExecutorAudioData::SetUnadaptedEmbeddings(
-    std::optional<::litert::TensorBuffer>&& unadapted_embeddings) {
-  unadapted_embeddings_ = std::move(unadapted_embeddings);
+void ExecutorAudioData::SetAudioEmbeddings(
+    std::optional<::litert::TensorBuffer>&& audio_embeddings) {
+  audio_embeddings_ = std::move(audio_embeddings);
 }
 
 void ExecutorAudioData::SetValidTokens(int valid_tokens) {
@@ -242,10 +244,12 @@ void ExecutorAudioData::SetValidTokens(int valid_tokens) {
 
 absl::StatusOr<ExecutorAudioData> ExecutorAudioData::Duplicate() const {
   ExecutorAudioData duplicated_audio_data;
-  if (embeddings_.has_value()) {
-    LITERT_ASSIGN_OR_RETURN(::litert::TensorBuffer embeddings_duplicate,
-                            embeddings_->Duplicate());
-    duplicated_audio_data.SetEmbeddings(std::move(embeddings_duplicate));
+  if (projected_audio_embeddings_.has_value()) {
+    LITERT_ASSIGN_OR_RETURN(
+        ::litert::TensorBuffer projected_audio_embeddings_duplicate,
+        projected_audio_embeddings_->Duplicate());
+    duplicated_audio_data.SetProjectedAudioEmbeddings(
+        std::move(projected_audio_embeddings_duplicate));
   }
   if (per_layer_embeddings_.has_value()) {
     LITERT_ASSIGN_OR_RETURN(
@@ -254,12 +258,11 @@ absl::StatusOr<ExecutorAudioData> ExecutorAudioData::Duplicate() const {
     duplicated_audio_data.SetPerLayerEmbeddings(
         std::move(per_layer_embeddings_duplicate));
   }
-  if (unadapted_embeddings_.has_value()) {
-    LITERT_ASSIGN_OR_RETURN(
-        ::litert::TensorBuffer unadapted_embeddings_duplicate,
-        unadapted_embeddings_->Duplicate());
-    duplicated_audio_data.SetUnadaptedEmbeddings(
-        std::move(unadapted_embeddings_duplicate));
+  if (audio_embeddings_.has_value()) {
+    LITERT_ASSIGN_OR_RETURN(::litert::TensorBuffer audio_embeddings_duplicate,
+                            audio_embeddings_->Duplicate());
+    duplicated_audio_data.SetAudioEmbeddings(
+        std::move(audio_embeddings_duplicate));
   }
   duplicated_audio_data.SetValidTokens(valid_tokens_);
   return duplicated_audio_data;
@@ -269,15 +272,15 @@ std::ostream& operator<<(std::ostream& os,
                          const ExecutorAudioData& audio_data) {
   os << "ExecutorAudioData: {\n";
   PrintOptionalTensorBufferFieldFromStatusOr(
-      os, "Embeddings", audio_data.GetEmbeddingsPtr(), kFieldIndent);
+      os, "ProjectedAudioEmbeddings",
+      audio_data.GetProjectedAudioEmbeddingsPtr(), kFieldIndent);
   os << "\n";
   PrintOptionalTensorBufferFieldFromStatusOr(
       os, "PerLayerEmbeddings", audio_data.GetPerLayerEmbeddingsPtr(),
       kFieldIndent);
   os << "\n";
   PrintOptionalTensorBufferFieldFromStatusOr(
-      os, "UnadaptedEmbeddings", audio_data.GetUnadaptedEmbeddingsPtr(),
-      kFieldIndent);
+      os, "AudioEmbeddings", audio_data.GetAudioEmbeddingsPtr(), kFieldIndent);
   os << "\n";
   os << kFieldIndent << "ValidTokens: " << audio_data.GetValidTokens();
   os << "\n"
@@ -424,6 +427,40 @@ ExecutorInputs::GetMutableVisionPerLayerEmbeddingsPtr() {
 }
 
 absl::StatusOr<const ::litert::TensorBuffer*>
+ExecutorInputs::GetProjectedAudioEmbeddingsPtr() const {
+  if (!audio_data_.has_value()) {
+    return absl::NotFoundError(
+        "ExecutorInputs::audio_data_ is not set (required for Projected Audio "
+        "Embeddings).");
+  }
+  absl::StatusOr<const ::litert::TensorBuffer*> embeddings_ptr_status =
+      audio_data_->GetProjectedAudioEmbeddingsPtr();
+  if (!embeddings_ptr_status.ok()) {
+    return absl::Status(embeddings_ptr_status.status().code(),
+                        absl::StrCat("Within ExecutorInputs::audio_data_: ",
+                                     embeddings_ptr_status.status().message()));
+  }
+  return embeddings_ptr_status.value();
+}
+
+absl::StatusOr<::litert::TensorBuffer*>
+ExecutorInputs::GetMutableProjectedAudioEmbeddingsPtr() {
+  if (!audio_data_.has_value()) {
+    return absl::NotFoundError(
+        "ExecutorInputs::audio_data_ is not set (required for "
+        "Projected Audio Embeddings).");
+  }
+  absl::StatusOr<::litert::TensorBuffer*> embeddings_ptr_status =
+      audio_data_->GetMutableProjectedAudioEmbeddingsPtr();
+  if (!embeddings_ptr_status.ok()) {
+    return absl::Status(embeddings_ptr_status.status().code(),
+                        absl::StrCat("Within ExecutorInputs::audio_data_: ",
+                                     embeddings_ptr_status.status().message()));
+  }
+  return embeddings_ptr_status.value();
+}
+
+absl::StatusOr<const ::litert::TensorBuffer*>
 ExecutorInputs::GetAudioEmbeddingsPtr() const {
   if (!audio_data_.has_value()) {
     return absl::NotFoundError(
@@ -431,7 +468,7 @@ ExecutorInputs::GetAudioEmbeddingsPtr() const {
         "Embeddings).");
   }
   absl::StatusOr<const ::litert::TensorBuffer*> embeddings_ptr_status =
-      audio_data_->GetEmbeddingsPtr();
+      audio_data_->GetAudioEmbeddingsPtr();
   if (!embeddings_ptr_status.ok()) {
     return absl::Status(embeddings_ptr_status.status().code(),
                         absl::StrCat("Within ExecutorInputs::audio_data_: ",
@@ -448,7 +485,7 @@ ExecutorInputs::GetMutableAudioEmbeddingsPtr() {
         "Audio Embeddings).");
   }
   absl::StatusOr<::litert::TensorBuffer*> embeddings_ptr_status =
-      audio_data_->GetMutableEmbeddingsPtr();
+      audio_data_->GetMutableAudioEmbeddingsPtr();
   if (!embeddings_ptr_status.ok()) {
     return absl::Status(embeddings_ptr_status.status().code(),
                         absl::StrCat("Within ExecutorInputs::audio_data_: ",

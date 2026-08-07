@@ -479,12 +479,14 @@ class AudioLiteRtCompiledModelExecutor : public AudioExecutor {
       std::unique_ptr<ModelResources> resources,
       std::unique_ptr<AudioEncoder> audio_encoder,
       std::unique_ptr<AudioAdapter> audio_adapter, int sequence_length,
-      int spectrogram_feature_dimensions, int audio_embedding_dimensions,
-      int unadapted_embedding_dimensions, int encoder_shrinking_factor)
+      int spectrogram_feature_dimensions,
+      int projected_audio_embedding_dimensions, int audio_embedding_dimensions,
+      int encoder_shrinking_factor)
       : sequence_length_(sequence_length),
         spectrogram_feature_dimensions_(spectrogram_feature_dimensions),
+        projected_audio_embedding_dimensions_(
+            projected_audio_embedding_dimensions),
         audio_embedding_dimensions_(audio_embedding_dimensions),
-        unadapted_embedding_dimensions_(unadapted_embedding_dimensions),
         encoder_shrinking_factor_(encoder_shrinking_factor),
         executor_settings_(std::move(executor_settings)),
         executor_properties_(std::move(executor_properties)),
@@ -499,16 +501,17 @@ class AudioLiteRtCompiledModelExecutor : public AudioExecutor {
   //   - spectrogram_tensor: The spectrogram tensor buffer to encode.
   //   - spectrogram_mask: The spectrogram mask buffer to indicate the valid
   //   timestamps.
-  //   - audio_embeddings: The output buffer for the audio embeddings to write
-  //   into.
-  //   - unadapted_embeddings: The output buffer for the unadapted audio
+  //   - projected_audio_embeddings: The output buffer for the projected audio
+  //   embeddings to write into.
+  //   - audio_embeddings: The output buffer for the audio
   //   embeddings (conformer output before adapter) to write into.
   // Returns:
   //   The number of valid tokens in the audio embeddings.
-  absl::StatusOr<int> EncodeInternal(absl::Span<const float> spectrogram_tensor,
-                                     absl::Span<const uint8_t> spectrogram_mask,
-                                     absl::Span<float> audio_embeddings,
-                                     absl::Span<float> unadapted_embeddings);
+  absl::StatusOr<int> EncodeInternal(
+      absl::Span<const float> spectrogram_tensor,
+      absl::Span<const uint8_t> spectrogram_mask,
+      absl::Span<float> projected_audio_embeddings,
+      absl::Span<float> audio_embeddings);
 
   // Encode the spectrogram tensor and mask tensor into audio embeddings.
   // Args:
@@ -539,8 +542,8 @@ class AudioLiteRtCompiledModelExecutor : public AudioExecutor {
 
   int sequence_length_;
   int spectrogram_feature_dimensions_;
+  int projected_audio_embedding_dimensions_;
   int audio_embedding_dimensions_;
-  int unadapted_embedding_dimensions_;
   int encoder_shrinking_factor_;
   AudioExecutorSettings executor_settings_;
   AudioExecutorProperties executor_properties_;
