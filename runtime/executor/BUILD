@@ -135,6 +135,7 @@ cc_library(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/types:span",
+        "@litert//litert/cc:litert_compiled_model",
         "@litert//litert/cc:litert_element_type",
         "@litert//litert/cc:litert_environment",
         "@litert//litert/cc:litert_expected",
@@ -699,7 +700,6 @@ cc_library(
         ":executor_settings_base",
         ":litert_compiled_model_executor_utils",
         ":llm_executor_settings",
-        "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
@@ -710,8 +710,6 @@ cc_library(
         "@litert//litert/cc/options:litert_gpu_options",
         "//runtime/util:file_util",
         "//runtime/util:litert_status_util",
-        "//runtime/util:scoped_file",
-        "@litert//tflite/delegates/xnnpack:xnnpack_delegate",
     ],
 )
 
@@ -728,7 +726,6 @@ cc_test(
         "@litert//litert/c/options:litert_gpu_options",
         "@litert//litert/cc:litert_common",
         "@litert//litert/cc:litert_options",
-        "@litert//litert/cc/options:litert_runtime_options",
         "@litert//litert/test:matchers",
         "//runtime/util:test_utils",
     ],
@@ -1194,6 +1191,34 @@ cc_library(
         "//runtime/executor/litert:state",
         "//runtime/util:convert_tensor_buffer",
         "//runtime/util:litert_status_util",
+    ],
+)
+
+cc_test(
+    name = "llm_litert_mtp_drafter_test",
+    srcs = ["llm_litert_mtp_drafter_test.cc"],
+    data = [
+        "//runtime/testdata",
+    ],
+    deps = [
+        ":executor_settings_base",
+        ":llm_executor_settings",
+        ":llm_litert_mtp_drafter",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/memory",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+        "@litert//litert/cc:litert_common",
+        "@litert//litert/cc:litert_compiled_model",
+        "@litert//litert/cc:litert_environment",
+        "@litert//litert/cc:litert_macros",
+        "@litert//litert/cc:litert_model",
+        "@litert//litert/cc:litert_options",
+        "@litert//litert/test:matchers",
+        "//runtime/components:model_resources",
+        "//runtime/components/embedding_lookup:embedding_lookup_manager",
+        "//runtime/util:scoped_file",
     ],
 )
 
