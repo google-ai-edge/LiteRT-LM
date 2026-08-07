@@ -299,6 +299,38 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
 }
 
 TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     GetOptimizedPrefillWorkGroups_CpuGreedyChunking) {
+  SortedPrefillSignatureMap prefill_runner_set = {{1024, "prefill_1024"},
+                                                  {128, "prefill_128"}};
+  // For 512 tokens with greedy chunking enabled (CPU), cascades to 4x 128
+  // instead of 1x 1024.
+  ASSERT_OK_AND_ASSIGN(auto work_groups,
+                       GetOptimizedPrefillWorkGroups(
+                           prefill_runner_set, 512,
+                           /*max_prefill_sequence_length=*/std::nullopt,
+                           /*use_greedy_chunking=*/true));
+  EXPECT_THAT(work_groups,
+              ElementsAre(Pair("prefill_128", 128), Pair("prefill_128", 128),
+                          Pair("prefill_128", 128), Pair("prefill_128", 128)));
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     GetOptimizedPrefillWorkGroups_CpuGreedyCascadesRemainder) {
+  SortedPrefillSignatureMap prefill_runner_set = {
+      {512, "prefill_512"}, {128, "prefill_128"}, {32, "prefill_32"}};
+  // For 768 tokens (512 + 256): 1 full chunk of 512, remainder 256 cascades to
+  // 2x 128 instead of upgrading to a second 512 chunk.
+  ASSERT_OK_AND_ASSIGN(auto work_groups,
+                       GetOptimizedPrefillWorkGroups(
+                           prefill_runner_set, 768,
+                           /*max_prefill_sequence_length=*/std::nullopt,
+                           /*use_greedy_chunking=*/true));
+  EXPECT_THAT(work_groups,
+              ElementsAre(Pair("prefill_512", 512), Pair("prefill_128", 128),
+                          Pair("prefill_128", 128)));
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
      GetOptimizedPrefillWorkGroups_DeepCascadeUpgrade) {
   SortedPrefillSignatureMap prefill_runner_set = {
       {512, "prefill_512"}, {128, "prefill_128"}, {32, "prefill_32"}};

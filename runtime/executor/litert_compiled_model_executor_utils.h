@@ -136,6 +136,11 @@ absl::StatusOr<SortedPrefillSignatureMap> GetPrefillRunnerSetFromModel(
 //   adapts to use smaller runners that fit in the remaining capacity instead of
 //   larger ones.
 //
+// - use_greedy_chunking: If true, uses strictly greedy chunking by cascading
+//   remainders to smaller buckets without upgrading to a larger bucket. On CPU,
+//   this should be set to true because linear compute scaling favors cascading
+//   to smaller runners to avoid padding waste.
+//
 // Output: A vector of std::pair<std::string, int>
 //   std::string - the prefill runner signature to be used for the current
 //   prefill call.
@@ -143,7 +148,8 @@ absl::StatusOr<SortedPrefillSignatureMap> GetPrefillRunnerSetFromModel(
 absl::StatusOr<std::vector<std::pair<std::string, int>>>
 GetOptimizedPrefillWorkGroups(
     const SortedPrefillSignatureMap& prefill_runner_set, int input_length,
-    std::optional<int> max_prefill_sequence_length = std::nullopt);
+    std::optional<int> max_prefill_sequence_length = std::nullopt,
+    bool use_greedy_chunking = false);
 
 // Initializes the attention mask tensor for prefill/decode.
 // The mask is a 4D tensor with shape [batch=1, seq_len, 1, max_kv_len].

@@ -271,7 +271,7 @@ absl::StatusOr<SortedPrefillSignatureMap> GetPrefillRunnerSetFromModel(
 absl::StatusOr<std::vector<std::pair<std::string, int>>>
 GetOptimizedPrefillWorkGroups(
     const SortedPrefillSignatureMap& prefill_runner_set, int input_length,
-    std::optional<int> max_prefill_sequence_length) {
+    std::optional<int> max_prefill_sequence_length, bool use_greedy_chunking) {
   SortedPrefillSignatureMap available_runner_set = prefill_runner_set;
   if (max_prefill_sequence_length.has_value()) {
     absl::erase_if(available_runner_set, [&](const auto& pair) {
@@ -356,6 +356,13 @@ GetOptimizedPrefillWorkGroups(
         input_length = 0;
       }
       break;
+    }
+
+    // When greedy chunking is enabled (e.g., on CPU where compute scales
+    // linearly and kernel launch overhead is negligible), allow remainder to
+    // cascade to smaller runners to avoid padding waste.
+    if (use_greedy_chunking) {
+      continue;
     }
 
     int next_seq_len = next_it->first;

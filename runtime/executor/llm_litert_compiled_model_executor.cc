@@ -1697,9 +1697,14 @@ absl::Status LlmLiteRtCompiledModelExecutorStatic::Prefill(
   int remaining_capacity =
       state_->GetNumEntries() - llm_context_->runtime_state().current_step;
 
+  const bool is_cpu = [this]() {
+    absl::MutexLock lock(executor_settings_mutex_);
+    return executor_settings_.GetBackend() == Backend::CPU;
+  }();
   ABSL_ASSIGN_OR_RETURN(auto work_groups, GetOptimizedPrefillWorkGroups(
                                               prefill_signature_map_,
-                                              ids.size(), remaining_capacity));
+                                              ids.size(), remaining_capacity,
+                                              /*use_greedy_chunking=*/is_cpu));
   for (int i = 0; i < work_groups.size(); ++i) {
     const auto& prefill_signature = work_groups[i].first;
     int prefill_length = work_groups[i].second;
