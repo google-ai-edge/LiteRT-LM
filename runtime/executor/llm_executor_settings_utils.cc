@@ -120,11 +120,18 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
         // If the model path is available, use the model name as the cache key.
         absl::string_view model_path = *model_path_or_status;
         absl::string_view model_name = Basename(model_path);
-        LITERT_ASSIGN_OR_RETURN(std::string metadata_id,
-                                GetFileCacheIdentifier(model_path));
-        cache_key = absl::StrCat(model_name, "_", metadata_id);
-      } else if (has_valid_model_fd &&
-                 (has_valid_program_cache_fd || has_valid_weight_cache_fd)) {
+        auto metadata_id_or = GetFileCacheIdentifier(model_path);
+        if (!metadata_id_or.ok() && has_valid_model_fd) {
+          metadata_id_or = GetFileCacheIdentifier(
+              *executor_settings.GetModelAssets().GetScopedFile().value());
+        }
+        if (metadata_id_or.ok()) {
+          cache_key = absl::StrCat(model_name, "_", *metadata_id_or);
+        }
+      }
+
+      if (cache_key.empty() && has_valid_model_fd &&
+          (has_valid_program_cache_fd || has_valid_weight_cache_fd)) {
         // If the model is loaded from an fd, there is no way to automatically
         // generate a unique cache key from the file descriptor.
         LITERT_ASSIGN_OR_RETURN(
