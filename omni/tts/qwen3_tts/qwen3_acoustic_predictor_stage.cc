@@ -658,17 +658,19 @@ absl::Status Qwen3AcousticPredictorStage::ScheduleInternal() {
   }
   suppress[qwen3_tts::kCodecEos] = 0.0f;
 
-  std::vector<std::vector<int>> frames;
-  std::vector<float> codec_features;
+  std::vector<std::vector<int>> chunk_frames;
+  std::vector<float> chunk_codec_features;
   absl::flat_hash_set<int> history;
 
-  while (static_cast<int>(frames.size()) < options_.max_frames) {
+  int total_generated_frames = 0;
+
+  while (total_generated_frames < options_.max_frames) {
     std::vector<float> scores(qwen3_tts::kCodecVocab);
     for (int i = 0; i < qwen3_tts::kCodecVocab; ++i) {
       scores[i] = decode_out.cb0_logits[i] + suppress[i];
     }
 
-    if (frames.size() < 2) {
+    if (total_generated_frames < 2) {
       scores[qwen3_tts::kCodecEos] = qwen3_tts::kNegInf;
     }
 
@@ -682,7 +684,7 @@ absl::Status Qwen3AcousticPredictorStage::ScheduleInternal() {
 
     int cb0 = PickToken(scores, options_.do_sample);
     history.insert(cb0);
-    ABSL_VLOG(2) << "[TRACE] Generated frame " << frames.size()
+    ABSL_VLOG(2) << "[TRACE] Generated frame " << total_generated_frames
                  << " with cb0=" << cb0;
     if (cb0 == qwen3_tts::kCodecEos) break;
 
@@ -691,7 +693,7 @@ absl::Status Qwen3AcousticPredictorStage::ScheduleInternal() {
     frame.reserve(qwen3_tts::kNumCodeGroups);
     frame.push_back(cb0);
     frame.insert(frame.end(), mtp_codes.begin(), mtp_codes.end());
-    frames.push_back(std::move(frame));
+    chunk_frames.push_back(std::move(frame));
 
     ABSL_ASSIGN_OR_RETURN(auto codec_vec, EmbedCodecToken(cb0));
     ABSL_ASSIGN_OR_RETURN(auto mtp_vec, EmbedMtpTokens(mtp_codes));
@@ -700,10 +702,12 @@ absl::Status Qwen3AcousticPredictorStage::ScheduleInternal() {
     for (int i = 0; i < qwen3_tts::kHiddenDim; ++i) {
       float val = codec_vec[i] + mtp_vec[i];
       embed[i] = val;
-      codec_features.push_back(val);
+      chunk_codec_features.push_back(val);
     }
 
-    int step = frames.size() - 1;
+    int step = total_generated_frames;
+    total_generated_frames++;
+
     if (step < frontend.trailing_len) {
       const float* tr_ptr =
           frontend.trailing_embeddings.data() + step * qwen3_tts::kHiddenDim;
@@ -711,6 +715,15 @@ absl::Status Qwen3AcousticPredictorStage::ScheduleInternal() {
     } else {
       for (int i = 0; i < qwen3_tts::kHiddenDim; ++i)
         embed[i] += frontend.tts_pad_embedding[i];
+    }
+
+    if (static_cast<int>(chunk_frames.size()) >= qwen3_tts::kFrameChunkSize) {
+      AcousticOutput out;
+      out.rvq_frames = std::move(chunk_frames);
+      out.codec_features = std::move(chunk_codec_features);
+      PushOutput(std::move(out));
+      chunk_frames.clear();
+      chunk_codec_features.clear();
     }
 
     pos += 1;
@@ -722,10 +735,12 @@ absl::Status Qwen3AcousticPredictorStage::ScheduleInternal() {
     ABSL_ASSIGN_OR_RETURN(decode_out, RunDecode(embed.data(), pos));
   }
 
-  AcousticOutput out;
-  out.rvq_frames = std::move(frames);
-  out.codec_features = std::move(codec_features);
-  PushOutput(std::move(out));
+  if (!chunk_frames.empty()) {
+    AcousticOutput out;
+    out.rvq_frames = std::move(chunk_frames);
+    out.codec_features = std::move(chunk_codec_features);
+    PushOutput(std::move(out));
+  }
   return absl::OkStatus();
 }
 

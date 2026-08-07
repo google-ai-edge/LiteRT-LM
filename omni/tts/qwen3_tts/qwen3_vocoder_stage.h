@@ -78,15 +78,24 @@ class Qwen3VocoderStage : public Vocoder {
         options_(std::move(options)),
         resources_(std::move(resources)) {}
 
-  // Decodes discrete RVQ codebook frames into raw audio PCM waveform samples.
+  // Decodes a fixed chunk of discrete RVQ codebook frames into raw audio PCM
+  // waveform samples.
   //
   // args
-  // - frames: Matrix of RVQ codebook frame token IDs.
+  // - window_frames: Matrix of RVQ codebook frame token IDs for the window.
+  // - c: Overlap context offset (in frames).
+  // - valid_frames_count: Number of valid frames in the window to output audio
+  //   for.
   //
   // returns
   // - Audio PCM waveform float vector on success, or error status on failure.
-  absl::StatusOr<std::vector<float>> DecodeCodes(
-      const std::vector<std::vector<int>>& frames);
+  absl::StatusOr<std::vector<float>> DecodeChunk(
+      const std::vector<std::vector<int>>& window_frames, int c,
+      int valid_frames_count);
+
+  // Processes buffered pending frames into decoded audio chunks.
+  // If flush_remaining is true, also decodes any remaining sub-chunk frames.
+  absl::Status ProcessPendingChunks(bool flush_remaining);
 
   Qwen3StageOptions options_;
   std::shared_ptr<ModelResources> resources_;
@@ -96,6 +105,7 @@ class Qwen3VocoderStage : public Vocoder {
   int codec_chunk_ = 100;
   int upsample_ = 1920;
   std::vector<std::vector<int>> pending_frames_;
+  bool is_first_chunk_ = true;
 };
 
 }  // namespace litert::omni::tts

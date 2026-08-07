@@ -36,6 +36,9 @@ constexpr int kCodecThinkEos = 2157;
 
 constexpr int kHiddenDim = 1024;
 constexpr int kNumCodeGroups = 16;
+constexpr int kFrameChunkSize = 75;
+constexpr int kVocoderOverlapContext = 25;
+constexpr int kAudioSampleRateHz = 24000;
 constexpr float kNegInf = -1e9f;
 constexpr absl::string_view kPromptTemplate =
     "<|im_start|>assistant\n%s<|im_end|>\n<|im_start|>assistant\n";

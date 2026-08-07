@@ -43,7 +43,9 @@ struct TextChunkConfig {
   // List of delimiter strings used to split text into synthesis chunks.
   // Default delimiters: sentence terminals (".", "?", "!"), clause break (";"),
   // and newline ("\n").
-  std::vector<std::string> delimiters = {".", "?", "!", ";", "\n"};
+  std::vector<std::string> delimiters = {
+      ".", "?", "!", ";", "\n", "，", "。", "！", "？",
+  };
 
   // Whether to include the matching delimiter in the extracted output chunk.
   // If true, splitting "Hello. World" at "." yields "Hello.".
