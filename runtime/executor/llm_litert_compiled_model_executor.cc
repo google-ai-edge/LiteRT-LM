@@ -1848,11 +1848,16 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
       allocation_policy = LitertState::AllocationPolicy::kPingPong;
     }
   }
+
+  bool clear_kv_cache_before_prefill =
+      !executor_settings.GetAdvancedSettings() ||
+      executor_settings.GetAdvancedSettings()->clear_kv_cache_before_prefill;
+
   LITERT_ASSIGN_OR_RETURN(
       auto state,
       LitertState::Create(lrt_env, *compiled_model, prefill_signature_key,
                           executor_metadata, allocation_policy,
-                          /*batch_size=*/1));
+                          /*batch_size=*/1, clear_kv_cache_before_prefill));
 
   absl::flat_hash_map<absl::string_view, TensorBuffer> decode_input_buffers;
   absl::flat_hash_map<absl::string_view, TensorBuffer> decode_output_buffers;
@@ -1913,10 +1918,11 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
                         << "failed: " << output_buffer_or.Error().Message();
       LITERT_ASSIGN_OR_RETURN(auto output_tensor_type,
                               decode_signature.OutputTensorType(i));
-      ABSL_ASSIGN_OR_RETURN(auto output_buffer,
-                       CreateHostOutputBuffer(lrt_env, *compiled_model,
-                                              decode_signature_index, i,
-                                              std::move(output_tensor_type)));
+      ABSL_ASSIGN_OR_RETURN(
+          auto output_buffer,
+          CreateHostOutputBuffer(lrt_env, *compiled_model,
+                                 decode_signature_index, i,
+                                 std::move(output_tensor_type)));
       decode_output_buffers[output_name] = std::move(output_buffer);
     }
   }
@@ -1937,17 +1943,8 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
     LITERT_ASSIGN_OR_RETURN(
         decode_state,
         LitertState::Create(lrt_env, *compiled_model, kDecodeSignatureRunner,
-                            executor_metadata, allocation_policy, batch_size));
-  }
-
-  bool clear_kv_cache_before_prefill =
-      !executor_settings.GetAdvancedSettings() ||
-      executor_settings.GetAdvancedSettings()->clear_kv_cache_before_prefill;
-  if (clear_kv_cache_before_prefill) {
-    LITERT_RETURN_IF_ERROR(state->Clear());
-    if (decode_state != nullptr) {
-      LITERT_RETURN_IF_ERROR(decode_state->Clear());
-    }
+                            executor_metadata, allocation_policy, batch_size,
+                            clear_kv_cache_before_prefill));
   }
 
   std::unique_ptr<EmbeddingLookupManager> embedding_lookup;
@@ -2186,17 +2183,15 @@ LlmLiteRtCompiledModelExecutorDynamic::Create(
   int batch_size = output_logits_tensor_type.Layout().Dimensions()[0];
   RET_CHECK_EQ(batch_size, 1) << "Only support batch size 1 for now.";
 
-  LITERT_ASSIGN_OR_RETURN(
-      auto state, LitertState::Create(
-                      lrt_env, *compiled_model, "prefill", executor_metadata,
-                      LitertState::AllocationPolicy::kInplace, batch_size));
-
   bool clear_kv_cache_before_prefill =
       !executor_settings.GetAdvancedSettings() ||
       executor_settings.GetAdvancedSettings()->clear_kv_cache_before_prefill;
-  if (clear_kv_cache_before_prefill) {
-    LITERT_RETURN_IF_ERROR(state->Clear());
-  }
+
+  LITERT_ASSIGN_OR_RETURN(
+      auto state, LitertState::Create(
+                      lrt_env, *compiled_model, "prefill", executor_metadata,
+                      LitertState::AllocationPolicy::kInplace, batch_size,
+                      clear_kv_cache_before_prefill));
 
   absl::flat_hash_map<absl::string_view, TensorBuffer> decode_input_buffers;
   absl::flat_hash_map<absl::string_view, TensorBuffer> decode_output_buffers;

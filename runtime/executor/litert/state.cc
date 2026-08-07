@@ -201,14 +201,17 @@ absl::StatusOr<std::unique_ptr<LitertState>> LitertState::Create(
     Environment& env, CompiledModel& compiled_model,
     absl::string_view signature_name,
     const proto::ExecutorMetadata* executor_metadata,
-    AllocationPolicy allocation_policy, int batch_size) {
+    AllocationPolicy allocation_policy, int batch_size,
+    bool clear_kv_cache_before_prefill) {
   if (executor_metadata == nullptr) {
     return HeuristicBasedCreate(env, compiled_model, signature_name,
-                                allocation_policy, batch_size);
+                                allocation_policy, batch_size,
+                                clear_kv_cache_before_prefill);
   }
 
   return MetadataBasedCreate(env, compiled_model, signature_name,
-                             *executor_metadata, allocation_policy, batch_size);
+                             *executor_metadata, allocation_policy, batch_size,
+                             clear_kv_cache_before_prefill);
 }
 
 absl::Status LitertState::SelectAndCopyFrom(StateInterface& other,
@@ -479,7 +482,7 @@ absl::Status LitertState::SyncShapes(CompiledModel& compiled_model,
 absl::StatusOr<std::unique_ptr<LitertState>> LitertState::HeuristicBasedCreate(
     Environment& env, CompiledModel& compiled_model,
     absl::string_view signature_name, AllocationPolicy allocation_policy,
-    int batch_size) {
+    int batch_size, bool clear_kv_cache_before_prefill) {
   std::string kv_cache_k_root_name;
   std::string kv_cache_v_root_name;
   LITERT_ASSIGN_OR_RETURN(
@@ -572,23 +575,23 @@ absl::StatusOr<std::unique_ptr<LitertState>> LitertState::HeuristicBasedCreate(
   absl::flat_hash_map<std::string, StateBuffer> bank_1_key_cache_buffers;
   absl::flat_hash_map<std::string, StateBuffer> bank_1_value_cache_buffers;
   if (allocation_policy == AllocationPolicy::kGpuOptimizedInplace) {
-    ABSL_ASSIGN_OR_RETURN(
-        bank_1_key_cache_buffers,
-        create_and_init_output_buffers(key_cache_input_names, k_dynamic_dim,
-                                       /*clear_buffer=*/true));
-    ABSL_ASSIGN_OR_RETURN(
-        bank_1_value_cache_buffers,
-        create_and_init_output_buffers(value_cache_input_names, v_dynamic_dim,
-                                       /*clear_buffer=*/true));
+    ABSL_ASSIGN_OR_RETURN(bank_1_key_cache_buffers,
+                          create_and_init_output_buffers(
+                              key_cache_input_names, k_dynamic_dim,
+                              /*clear_buffer=*/clear_kv_cache_before_prefill));
+    ABSL_ASSIGN_OR_RETURN(bank_1_value_cache_buffers,
+                          create_and_init_output_buffers(
+                              value_cache_input_names, v_dynamic_dim,
+                              /*clear_buffer=*/clear_kv_cache_before_prefill));
   } else {
-    ABSL_ASSIGN_OR_RETURN(
-        bank_1_key_cache_buffers,
-        create_and_init_buffers(key_cache_input_names, k_dynamic_dim,
-                                /*clear_buffer=*/true));
-    ABSL_ASSIGN_OR_RETURN(
-        bank_1_value_cache_buffers,
-        create_and_init_buffers(value_cache_input_names, v_dynamic_dim,
-                                /*clear_buffer=*/true));
+    ABSL_ASSIGN_OR_RETURN(bank_1_key_cache_buffers,
+                          create_and_init_buffers(
+                              key_cache_input_names, k_dynamic_dim,
+                              /*clear_buffer=*/clear_kv_cache_before_prefill));
+    ABSL_ASSIGN_OR_RETURN(bank_1_value_cache_buffers,
+                          create_and_init_buffers(
+                              value_cache_input_names, v_dynamic_dim,
+                              /*clear_buffer=*/clear_kv_cache_before_prefill));
   }
 
   std::optional<absl::flat_hash_map<std::string, StateBuffer>>
@@ -598,6 +601,8 @@ absl::StatusOr<std::unique_ptr<LitertState>> LitertState::HeuristicBasedCreate(
   if (allocation_policy == AllocationPolicy::kPingPong) {
     // Bank 2 buffers are created after Bank 1 shapes are resolved, so no need
     // to pass dynamic_dim.
+    // Since we start with writing to Bank 2, we don't want to clear the
+    // buffers.
     ABSL_ASSIGN_OR_RETURN(
         bank_2_key_cache_buffers.emplace(),
         create_and_init_output_buffers(key_cache_input_names,
@@ -648,7 +653,8 @@ absl::StatusOr<std::unique_ptr<LitertState>> LitertState::MetadataBasedCreate(
     Environment& env, CompiledModel& compiled_model,
     absl::string_view signature_name,
     const proto::ExecutorMetadata& executor_metadata,
-    AllocationPolicy allocation_policy, int batch_size) {
+    AllocationPolicy allocation_policy, int batch_size,
+    bool clear_kv_cache_before_prefill) {
   std::vector<std::string> key_cache_input_names;
   std::vector<std::string> value_cache_input_names;
   absl::flat_hash_map<std::string, proto::StateBuffer::Type> state_buffer_types;
@@ -817,23 +823,23 @@ absl::StatusOr<std::unique_ptr<LitertState>> LitertState::MetadataBasedCreate(
   absl::flat_hash_map<std::string, StateBuffer> bank_1_key_cache_buffers;
   absl::flat_hash_map<std::string, StateBuffer> bank_1_value_cache_buffers;
   if (allocation_policy == AllocationPolicy::kGpuOptimizedInplace) {
-    ABSL_ASSIGN_OR_RETURN(
-        bank_1_key_cache_buffers,
-        create_and_init_output_buffers(key_cache_input_names, k_dynamic_dim,
-                                       /*clear_buffer=*/true));
-    ABSL_ASSIGN_OR_RETURN(
-        bank_1_value_cache_buffers,
-        create_and_init_output_buffers(value_cache_input_names, v_dynamic_dim,
-                                       /*clear_buffer=*/true));
+    ABSL_ASSIGN_OR_RETURN(bank_1_key_cache_buffers,
+                          create_and_init_output_buffers(
+                              key_cache_input_names, k_dynamic_dim,
+                              /*clear_buffer=*/clear_kv_cache_before_prefill));
+    ABSL_ASSIGN_OR_RETURN(bank_1_value_cache_buffers,
+                          create_and_init_output_buffers(
+                              value_cache_input_names, v_dynamic_dim,
+                              /*clear_buffer=*/clear_kv_cache_before_prefill));
   } else {
-    ABSL_ASSIGN_OR_RETURN(
-        bank_1_key_cache_buffers,
-        create_and_init_buffers(key_cache_input_names, k_dynamic_dim,
-                                /*clear_buffer=*/true));
-    ABSL_ASSIGN_OR_RETURN(
-        bank_1_value_cache_buffers,
-        create_and_init_buffers(value_cache_input_names, v_dynamic_dim,
-                                /*clear_buffer=*/true));
+    ABSL_ASSIGN_OR_RETURN(bank_1_key_cache_buffers,
+                          create_and_init_buffers(
+                              key_cache_input_names, k_dynamic_dim,
+                              /*clear_buffer=*/clear_kv_cache_before_prefill));
+    ABSL_ASSIGN_OR_RETURN(bank_1_value_cache_buffers,
+                          create_and_init_buffers(
+                              value_cache_input_names, v_dynamic_dim,
+                              /*clear_buffer=*/clear_kv_cache_before_prefill));
   }
 
   std::optional<absl::flat_hash_map<std::string, StateBuffer>>
@@ -841,6 +847,8 @@ absl::StatusOr<std::unique_ptr<LitertState>> LitertState::MetadataBasedCreate(
   std::optional<absl::flat_hash_map<std::string, StateBuffer>>
       bank_2_value_cache_buffers;
   if (allocation_policy == AllocationPolicy::kPingPong) {
+    // Since we start with writing to Bank 2, we don't want to clear the
+    // buffers.
     ABSL_ASSIGN_OR_RETURN(
         bank_2_key_cache_buffers.emplace(),
         create_and_init_output_buffers(key_cache_input_names,

@@ -65,7 +65,8 @@ class LitertStateTest : public ::testing::Test {
  protected:
   void SetUpKV(const std::string& model_path,
                LitertState::AllocationPolicy allocation_policy, int batch_size,
-               const proto::ExecutorMetadata* executor_metadata = nullptr) {
+               const proto::ExecutorMetadata* executor_metadata = nullptr,
+               bool clear_kv_cache_before_prefill = true) {
     auto path = std::filesystem::path(::testing::SrcDir()) /
                 std::filesystem::path(model_path);
     ASSERT_OK_AND_ASSIGN(auto scoped_file, ScopedFile::Open(path.string()));
@@ -88,7 +89,8 @@ class LitertStateTest : public ::testing::Test {
     ASSERT_OK_AND_ASSIGN(
         kv_cache_,
         LitertState::Create(*env_, *compiled_model_, kDecodeSignatureRunner,
-                            executor_metadata, allocation_policy, batch_size));
+                            executor_metadata, allocation_policy, batch_size,
+                            clear_kv_cache_before_prefill));
   }
 
   std::unique_ptr<ModelResources> resources_;
@@ -118,6 +120,15 @@ TEST_F(LitertStateTest, CanCreateKVWithStaticModelInPlace) {
   ASSERT_NO_FATAL_FAILURE(SetUpKV(kTestStaticModelPath,
                                   LitertState::AllocationPolicy::kInplace,
                                   /*batch_size=*/1));
+  EXPECT_EQ(kv_cache_->GetNumEntries(), 128);
+}
+
+TEST_F(LitertStateTest, CanCreateKVWithClearFlagFalse) {
+  ASSERT_NO_FATAL_FAILURE(SetUpKV(kTestStaticModelPath,
+                                  LitertState::AllocationPolicy::kInplace,
+                                  /*batch_size=*/1,
+                                  /*executor_metadata=*/nullptr,
+                                  /*clear_kv_cache_before_prefill=*/false));
   EXPECT_EQ(kv_cache_->GetNumEntries(), 128);
 }
 

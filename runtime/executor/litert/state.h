@@ -53,7 +53,8 @@ class LitertState : public StateInterface {
       Environment& env, CompiledModel& compiled_model,
       absl::string_view signature_name,
       const proto::ExecutorMetadata* executor_metadata,
-      AllocationPolicy allocation_policy, int batch_size);
+      AllocationPolicy allocation_policy, int batch_size,
+      bool clear_kv_cache_before_prefill = true);
 
   int GetNumEntries() const override { return num_entries_; };
 
@@ -110,13 +111,14 @@ class LitertState : public StateInterface {
   static absl::StatusOr<std::unique_ptr<LitertState>> HeuristicBasedCreate(
       Environment& env, CompiledModel& compiled_model,
       absl::string_view signature_name, AllocationPolicy allocation_policy,
-      int batch_size);
+      int batch_size, bool clear_kv_cache_before_prefill);
 
   static absl::StatusOr<std::unique_ptr<LitertState>> MetadataBasedCreate(
       Environment& env, CompiledModel& compiled_model,
       absl::string_view signature_name,
       const proto::ExecutorMetadata& executor_metadata,
-      AllocationPolicy allocation_policy, int batch_size);
+      AllocationPolicy allocation_policy, int batch_size,
+      bool clear_kv_cache_before_prefill);
 
   LitertState(
       int batch_size, int num_entries, std::optional<int> k_dynamic_dim,
