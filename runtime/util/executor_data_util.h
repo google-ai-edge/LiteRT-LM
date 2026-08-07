@@ -63,6 +63,13 @@ absl::StatusOr<ExecutorVisionData> CombineExecutorVisionData(
 absl::StatusOr<ExecutorAudioData> CombineExecutorAudioData(
     std::vector<ExecutorAudioData>& executor_data);
 
+// Util function for extracting the floating-point audio embedding soft tokens
+// from an ExecutorAudioData. If the internal tensor buffer includes valid
+// tokens counts smaller than its capacity, the padded garbage memory is
+// identified and removed. Otherwise, the whole buffer length is returned.
+absl::StatusOr<std::vector<std::vector<float>>> ExtractAudioSoftTokens(
+    ExecutorAudioData& audio_data);
+
 }  // namespace litert::lm
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_RUNTIME_UTIL_EXECUTOR_DATA_UTIL_H_

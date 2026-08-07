@@ -24,7 +24,6 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/time/clock.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
-#include "litert/test/matchers.h"  // from @litert
 #include "runtime/components/logits_processor/constrained_decoding/fake_constraint.h"
 #include "runtime/proto/engine.pb.h"
 #include "runtime/util/test_utils.h"  // NOLINT
@@ -244,6 +243,21 @@ TEST(ResponsesTest, GetMutableTokenIds) {
       std::vector<std::vector<int>>{{1, 2, 3}, {4, 5}};
   EXPECT_THAT(responses.GetTokenIds(),
               ElementsAre(ElementsAre(1, 2, 3), ElementsAre(4, 5)));
+}
+
+TEST(ResponsesTest, GetAudioSoftTokens) {
+  Responses responses(TaskState::kProcessing);
+  EXPECT_FALSE(responses.GetAudioSoftTokens().has_value());
+}
+
+TEST(ResponsesTest, GetMutableAudioSoftTokens) {
+  Responses responses = Responses(TaskState::kProcessing);
+  responses.GetMutableAudioSoftTokens() =
+      std::vector<std::vector<float>>{{0.1f, 0.2f}, {0.3f, 0.4f}};
+  ASSERT_TRUE(responses.GetAudioSoftTokens().has_value());
+  EXPECT_EQ(responses.GetAudioSoftTokens()->size(), 2);
+  EXPECT_THAT(responses.GetAudioSoftTokens()->at(0), ElementsAre(0.1f, 0.2f));
+  EXPECT_THAT(responses.GetAudioSoftTokens()->at(1), ElementsAre(0.3f, 0.4f));
 }
 
 proto::BenchmarkParams GetBenchmarkParams() {

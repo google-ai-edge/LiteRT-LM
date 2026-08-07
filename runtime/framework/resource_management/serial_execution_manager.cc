@@ -38,6 +38,7 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/time/clock.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
@@ -807,6 +808,20 @@ absl::Status SerialExecutionManager::AddPrefillTask(
           processed_tokens.value()
               ->GetTokenAtStep(current_step.value() - 1)
               .at(0);
+
+      if (session_info->session_config.ExtractAudioSoftTokens()) {
+        auto audio_data = executor_inputs->GetMutableAudioDataPtr();
+        if (audio_data.ok()) {
+          auto soft_tokens_or = ExtractAudioSoftTokens(**audio_data);
+          if (soft_tokens_or.ok()) {
+            responses.value().GetMutableAudioSoftTokens() =
+                std::move(*soft_tokens_or);
+          } else {
+            ABSL_LOG(WARNING) << "Failed to extract audio soft tokens: "
+                              << soft_tokens_or.status();
+          }
+        }
+      }
     }
 
     FinishTaskAndLogErrors(task_id, std::move(responses), std::move(callback));
