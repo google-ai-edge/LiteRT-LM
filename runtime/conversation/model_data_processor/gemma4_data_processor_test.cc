@@ -973,7 +973,7 @@ TEST_P(Gemma4RenderTemplateTest, RenderTemplateWithToolDeclarations) {
   // Compare to the expected prompt.
   EXPECT_THAT(
       rendered_prompt,
-      Eq("<|turn>system\n\n\n"
+      Eq("<|turn>system\n"
          "<|tool>declaration:get_weather{description:<|\"|>Gets weather "
          "information.<|\"|>,parameters:{properties:{location:{description:<|"
          "\"|>Weather "
@@ -1063,8 +1063,7 @@ TEST_P(Gemma4RenderTemplateTest, RenderTemplateWithToolCalls) {
       "How is the weather in Paris and London?<turn|>\n"
       "<|turn>model\n"
       "<|tool_call>call:get_weather{location:<|\"|>Paris<|\"|>}<tool_call|>"
-      "<|tool_call>call:get_weather{location:<|\"|>London<|\"|>}<tool_call|><"
-      "turn|>\n");
+      "<|tool_call>call:get_weather{location:<|\"|>London<|\"|>}<tool_call|>");
 }
 
 TEST_P(Gemma4RenderTemplateTest, RenderTemplateWithToolResponses) {
@@ -1166,8 +1165,7 @@ TEST_P(Gemma4RenderTemplateTest, RenderTemplateWithToolResponses) {
       "How is the weather in Paris and London?<turn|>\n"
       "<|turn>model\n"
       "<|tool_call>call:get_weather{location:<|\"|>Paris<|\"|>}<tool_call|>"
-      "<|tool_call>call:get_weather{location:<|\"|>London<|\"|>}<tool_call|><"
-      "turn|>\n"
+      "<|tool_call>call:get_weather{location:<|\"|>London<|\"|>}<tool_call|>"
       "<|tool_response>response:get_weather{location:<|\"|>Paris<|\"|>,"
       "temperature:20,unit:<|\"|>C<|\"|>,weather:<|\"|>Sunny<|\"|>}<tool_"
       "response|>"
@@ -1279,7 +1277,6 @@ TEST_P(Gemma4RenderTemplateTest, RenderTemplateWithMultipleToolMessages) {
       "<|tool_call>call:get_weather{location:<|\"|>London<|\"|>}<tool_call|><"
       "turn|>\n"
       "<turn|>\n"
-      "<turn|>\n"
       "<|turn>model\n");
 }
 
@@ -1389,15 +1386,13 @@ TEST_P(Gemma4RenderTemplateTest,
       "How is the weather in Paris and London?<turn|>\n"
       "<|turn>model\n"
       "<|tool_call>call:get_weather{location:<|\"|>Paris<|\"|>}<tool_call|>"
-      "<|tool_call>call:get_weather{location:<|\"|>London<|\"|>}<tool_call|><"
-      "turn|>\n"
+      "<|tool_call>call:get_weather{location:<|\"|>London<|\"|>}<tool_call|>"
       "<|tool_response>response:get_weather{location:<|\"|>Paris<|\"|>,"
       "temperature:20,unit:<|\"|>C<|\"|>,weather:<|\"|>Sunny<|\"|>}<tool_"
       "response|>"
       "<|tool_response>response:get_weather{location:<|\"|>London<|\"|>,"
       "temperature:15,unit:<|\"|>C<|\"|>,weather:<|\"|>Cloudy<|\"|>}<tool_"
       "response|>"
-      "<|turn>model\n"
       "The weather in Paris is sunny and the weather in London is "
       "cloudy.<turn|>\n");
 }
@@ -1486,19 +1481,18 @@ TEST_P(Gemma4RenderTemplateTest, RenderTemplateWithEmptyAssistantMessage) {
                        prompt_template.Apply(template_input));
 
   // Compare to the expected prompt.
-  EXPECT_EQ(rendered_prompt,
-            "<|turn>user\n"
-            "How is the weather in Paris?<turn|>\n"
-            "<|turn>model\n"
-            "<|tool_call>call:get_weather{location:<|\"|>Paris<|\"|>}<tool_"
-            "call|><turn|>\n"
-            "<|tool_response>response:get_weather{location:<|\"|>Paris<|\"|>,"
-            "temperature:20,unit:<|\"|>C<|\"|>,weather:<|\"|>Sunny<|\"|>}<tool_"
-            "response|><|turn>model\n"
-            "<turn|>\n"
-            "<|turn>user\n"
-            "How is the weather in New York?<turn|>\n"
-            "<|turn>model\n");
+  EXPECT_EQ(
+      rendered_prompt,
+      "<|turn>user\n"
+      "How is the weather in Paris?<turn|>\n"
+      "<|turn>model\n"
+      "<|tool_call>call:get_weather{location:<|\"|>Paris<|\"|>}<tool_"
+      "call|><|tool_response>response:get_weather{location:<|\"|>Paris<|\"|>,"
+      "temperature:20,unit:<|\"|>C<|\"|>,weather:<|\"|>Sunny<|\"|>}<tool_"
+      "response|><turn|>\n"
+      "<|turn>user\n"
+      "How is the weather in New York?<turn|>\n"
+      "<|turn>model\n");
 }
 
 INSTANTIATE_TEST_SUITE_P(FcFormatCodeOrTemplate, Gemma4RenderTemplateTest,
