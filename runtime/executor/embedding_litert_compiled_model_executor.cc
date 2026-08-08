@@ -181,6 +181,8 @@ EmbeddingLiteRtCompiledModelExecutor::Create(
           absl::StrCat("Unsupported backend: ",
                        GetBackendString(executor_settings.GetBackend())));
   }
+  ABSL_RETURN_IF_ERROR(SetExternalWeightOptions(
+      *resources, ModelType::kTfLiteTextEncoder, options));
 
   LITERT_ASSIGN_OR_RETURN(
       auto compiled_model,

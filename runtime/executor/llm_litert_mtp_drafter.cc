@@ -193,6 +193,8 @@ LlmLiteRtMtpDrafter::Create(
                                /*cache_suffix=*/cache_suffix));
   ABSL_RETURN_IF_ERROR(
       UpdateCompilationOptions(executor_settings, compilation_options));
+  ABSL_RETURN_IF_ERROR(SetExternalWeightOptions(
+      resources, ModelType::kTfLiteMtpDrafter, compilation_options));
   ABSL_ASSIGN_OR_RETURN(auto model,
                         resources.GetTFLiteModel(ModelType::kTfLiteMtpDrafter));
   LITERT_ASSIGN_OR_RETURN(

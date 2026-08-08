@@ -1807,21 +1807,8 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
       CreateCompilationOptions(executor_settings, activation_data_type,
                                &signatures));
 
-  auto section_offset =
-      resources.GetWeightsSectionOffset(ModelType::kTfLitePrefillDecode);
-  if (section_offset.ok()) {
-    Options::ScopedWeightSectionMap section_map;
-    section_map["tflite_weights"] = {
-        section_offset.value().first,
-        section_offset.value().second - section_offset.value().first};
-    ABSL_VLOG(1) << "section_map: " << section_map["tflite_weights"].offset
-                 << " " << section_map["tflite_weights"].length;
-    LITERT_ASSIGN_OR_RETURN(auto scoped_file, resources.GetScopedFile());
-    LITERT_ASSIGN_OR_RETURN(auto duplicated_scoped_file,
-                            scoped_file.get().Duplicate());
-    compilation_options.SetExternalWeightScopedFile(duplicated_scoped_file,
-                                                    section_map);
-  };
+  ABSL_RETURN_IF_ERROR(SetExternalWeightOptions(
+      resources, ModelType::kTfLitePrefillDecode, compilation_options));
 
   std::unique_ptr<CompiledModel> compiled_model;
   {
