@@ -25,7 +25,7 @@ LiteRT, engineered for **high-performance**, **cross-platform** execution.
 ```bash
 litert-lm run  \
    --from-huggingface-repo=litert-community/gemma-4-E2B-it-litert-lm \
-   gemma-4-E4B-it.litertlm \
+   gemma-4-E2B-it.litertlm \
    --backend=gpu \
    --enable-speculative-decoding=true \
    --prompt="What is the capital of France?"
