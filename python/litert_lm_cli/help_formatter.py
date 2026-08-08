@@ -81,8 +81,52 @@ class ColorCommand(click.Command):
     self._format_params(ctx, formatter, "Options")
 
 
+COMMAND_SECTIONS: dict[str, list[str]] = {
+    "Inference Commands": ["run", "benchmark", "serve"],
+    "Model Management Commands": ["list", "import", "rename", "delete"],
+    "LiteRT-LM File Commands": ["pack", "unpack", "convert"],
+}
+
+
 class ColorGroup(click.Group, ColorCommand):
   """Custom group that uses ColorContext and defaults to ColorCommand."""
+
+  def format_commands(
+      self, ctx: click.Context, formatter: click.HelpFormatter
+  ) -> None:
+    subcommands = self.list_commands(ctx)
+    cmd_map = {}
+    for subcommand in subcommands:
+      cmd = self.get_command(ctx, subcommand)
+      if cmd is None or cmd.hidden:
+        continue
+      help_str = cmd.get_short_help_str(limit=formatter.width)
+      cmd_map[subcommand] = help_str
+
+    if not cmd_map:
+      return
+
+    max_len = max(len(cmd) for cmd in cmd_map.keys())
+
+    seen = set()
+    for section_name, cmd_list in COMMAND_SECTIONS.items():
+      rows = []
+      for cmd_name in cmd_list:
+        if cmd_name in cmd_map:
+          rows.append((cmd_name.ljust(max_len), cmd_map[cmd_name]))
+          seen.add(cmd_name)
+      if rows:
+        with formatter.section(section_name):
+          formatter.write_dl(rows)
+
+    other_rows = [
+        (cmd_name.ljust(max_len), help_str)
+        for cmd_name, help_str in cmd_map.items()
+        if cmd_name not in seen
+    ]
+    if other_rows:
+      with formatter.section("Other Commands"):
+        formatter.write_dl(other_rows)
 
   def format_options(
       self, ctx: click.Context, formatter: click.HelpFormatter

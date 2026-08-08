@@ -113,24 +113,24 @@ The `Preface` is passed to `ConversationConfig::Builder` when you create the
 ```c++
 // Set model file path and backend.
 std::string model_path = absl::GetFlag(FLAGS_model_path);
-ASSIGN_OR_RETURN(ModelAssets model_assets, ModelAssets::Create(model_path));
-ASSIGN_OR_RETURN(
+ABSL_ASSIGN_OR_RETURN(ModelAssets model_assets, ModelAssets::Create(model_path));
+ABSL_ASSIGN_OR_RETURN(
   EngineSettings engine_settings,
   EngineSettings::CreateDefault(std::move(model_assets), Backend::CPU));
 
 // Create `Engine`.
-ASSIGN_OR_RETURN(
+ABSL_ASSIGN_OR_RETURN(
     std::unique_ptr<litert::lm::Engine> engine,
     litert::lm::Engine::CreateEngine(std::move(engine_settings)));
 
 // Create `Conversation`.
 auto session_config = litert::lm::SessionConfig::CreateDefault();
-ASSIGN_OR_RETURN(auto conversation_config,
+ABSL_ASSIGN_OR_RETURN(auto conversation_config,
                    ConversationConfig::Builder()
                        .SetSessionConfig(session_config)
                        .SetPreface(preface)
                        .Build(*engine));
-ASSIGN_OR_RETURN(std::unique_ptr<Conversation> conversation,
+ABSL_ASSIGN_OR_RETURN(std::unique_ptr<Conversation> conversation,
                    Conversation::Create(*engine, conversation_config));
 ```
 
@@ -152,7 +152,7 @@ Message user_message = Message::parse(R"({
 })")
 
 // Send the user message to the model.
-ASSIGN_OR_RETURN(Message model_message, conversation->SendMessage(user_message));
+ABSL_ASSIGN_OR_RETURN(Message model_message, conversation->SendMessage(user_message));
 ```
 
 After the code above runs, `model_message` will contain the following JSON
@@ -237,7 +237,7 @@ know the result. Pass the tool result as a message with the `role` set to
 Message tool_message = {{"role", "tool"}, {"content", weather_report}};
 
 // Send the tool message to the model.
-ASSIGN_OR_RETURN(model_message, conversation->SendMessage(tool_message));
+ABSL_ASSIGN_OR_RETURN(model_message, conversation->SendMessage(tool_message));
 ```
 
 After the code above runs, `model_message` will contain the following JSON
@@ -369,7 +369,7 @@ while (true) {
   // Tool calling loop between application and model.
   while (true) {
     // Send the user message to the model.
-    ASSIGN_OR_RETURN(Message message,
+    ABSL_ASSIGN_OR_RETURN(Message message,
                       conversation->SendMessage(input_message));
 
     // Check for tool calls.
@@ -471,7 +471,7 @@ while (true) {
   };
 
   // Send message to the model asynchronously.
-  RETURN_IF_ERROR(conversation->SendMessageAsync(
+  ABSL_RETURN_IF_ERROR(conversation->SendMessageAsync(
       input_message, std::move(user_callback)));
 
   // Wait for model to finish generating.

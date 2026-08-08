@@ -19,6 +19,7 @@
 #include <utility>
 
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "runtime/executor/llm_executor.h"
@@ -42,7 +43,7 @@ ContextHandler::SharedProcessedContext::LongestHandlerTimeStep(
     // If the runtime_config_ is nullptr, it means the executor is currently
     // using the handler.
     if (handler->runtime_config_ == nullptr) {
-      ASSIGN_OR_RETURN(current_step, llm_executor.GetCurrentStep());
+      ABSL_ASSIGN_OR_RETURN(current_step, llm_executor.GetCurrentStep());
     } else {
       current_step = handler->runtime_state_->current_step;
     }
@@ -56,12 +57,14 @@ absl::StatusOr<std::unique_ptr<ContextHandler>> ContextHandler::Create(
     std::unique_ptr<LlmContext> llm_context,
     std::unique_ptr<AudioContext> audio_context) {
   RET_CHECK_NE(llm_context, nullptr) << "The llm_context is null.";
-  ASSIGN_OR_RETURN(auto processed_context,
-                   llm_context->RetrieveProcessedContext());
+  ABSL_ASSIGN_OR_RETURN(auto processed_context,
+                        llm_context->RetrieveProcessedContext());
   auto shared_processed_context =
       std::make_shared<SharedProcessedContext>(std::move(processed_context));
-  ASSIGN_OR_RETURN(auto runtime_config, llm_context->RetrieveRuntimeConfig());
-  ASSIGN_OR_RETURN(auto runtime_state, llm_context->RetrieveRuntimeState());
+  ABSL_ASSIGN_OR_RETURN(auto runtime_config,
+                        llm_context->RetrieveRuntimeConfig());
+  ABSL_ASSIGN_OR_RETURN(auto runtime_state,
+                        llm_context->RetrieveRuntimeState());
   return Bundle(shared_processed_context, std::move(runtime_config),
                 std::move(runtime_state), std::move(audio_context));
 }

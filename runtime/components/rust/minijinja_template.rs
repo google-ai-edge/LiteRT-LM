@@ -236,7 +236,10 @@ fn rstrip(s: std::borrow::Cow<'_, str>, chars: Option<std::borrow::Cow<'_, str>>
 
 fn create_env() -> Environment<'static> {
     let mut env = Environment::new();
-    env.set_keep_trailing_newline(false);
+    // Keep trailing newlines in the rendered prompt text (e.g., `<think>\n`
+    // when prefilling thinking channels) so that prompt specifications and
+    // model training formatting are preserved exactly without being stripped.
+    env.set_keep_trailing_newline(true);
     env.set_trim_blocks(true);
     env.set_lstrip_blocks(true);
     env.add_function("strftime_now", strftime_now);

@@ -12,17 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
-include_guard(GLOBAL)
-
-include("${FLATBUFFERS_PACKAGE_DIR}/flatbuffers_target_map.cmake")
+include("${LITERTLM_FLATBUFFERS_PACKAGE_DIR}/flatbuffers_target_map.cmake")
 
 macro(generate_flatbuffers_aggregate)
     if(NOT TARGET LiteRTLM::flatbuffers::flatbuffers)
         message(STATUS "[LiteRTLM] Generating the Flatbuffers aggregate...")
         set(_flatbuffers_lib_names "")
         set(_flatbuffers_lib_paths "")
-        kvp_parse_map("${FLATBUFFERS_TARGET_MAP}" _flatbuffers_lib_names _flatbuffers_lib_paths)
+        kvp_parse_map("${LITERTLM_FLATBUFFERS_TARGET_MAP}" _flatbuffers_lib_names _flatbuffers_lib_paths)
 
         add_library(LiteRTLM::flatbuffers::flatbuffers INTERFACE IMPORTED GLOBAL)
         set_target_properties(LiteRTLM::flatbuffers::flatbuffers PROPERTIES
@@ -33,12 +30,12 @@ macro(generate_flatbuffers_aggregate)
             INTERFACE_LINK_LIBRARIES
                 "${_flatbuffers_lib_paths}"
             INTERFACE_INCLUDE_DIRECTORIES
-                "${FLATBUFFERS_INCLUDE_DIR}"
+                "${LITERTLM_FLATBUFFERS_INCLUDE_DIR}"
         )
 
         add_library(LiteRTLM::flatbuffers::shim INTERFACE IMPORTED GLOBAL)
         set_target_properties(LiteRTLM::flatbuffers::shim PROPERTIES
-            INTERFACE_INCLUDE_DIRECTORIES "${FLATBUFFERS_INCLUDE_DIR}"
+            INTERFACE_INCLUDE_DIRECTORIES "${LITERTLM_FLATBUFFERS_INCLUDE_DIR}"
         )
 
         foreach(_comp_target IN LISTS ${_flatbuffers_lib_names})
@@ -65,17 +62,17 @@ macro(generate_flatc_aggregate)
         add_executable(LiteRTLM::flatbuffers::flatc IMPORTED GLOBAL)
         set_target_properties(LiteRTLM::flatbuffers::flatc PROPERTIES
             IMPORTED_LOCATION
-                "${FLATC_EXECUTABLE}"
+                "${LITERTLM_FLATC_EXECUTABLE}"
         )
 
         add_library(LiteRTLM::flatc::shim INTERFACE IMPORTED GLOBAL)
         set_target_properties(LiteRTLM::flatc::shim PROPERTIES
-            INTERFACE_INCLUDE_DIRECTORIES "${FLATC_INCLUDE_DIR}"
+            INTERFACE_INCLUDE_DIRECTORIES "${LITERTLM_FLATC_INCLUDE_DIR}"
         )
 
         set(_flatc_lib_names "")
         set(_flatc_lib_paths "")
-        kvp_parse_map("${FLATC_TARGET_MAP}" _flatc_lib_names _flatc_lib_paths)
+        kvp_parse_map("${LITERTLM_FLATC_TARGET_MAP}" _flatc_lib_names _flatc_lib_paths)
 
         foreach(_comp_target IN LISTS ${_flatc_lib_names})
             if(NOT TARGET ${_comp_target})

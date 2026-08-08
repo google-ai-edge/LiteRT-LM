@@ -64,6 +64,14 @@ constexpr absl::string_view kModel1TfliteCustomSuffix =
     "/path/to/model1.tflite.custom_suffix";
 #endif
 
+#ifdef __APPLE__
+constexpr absl::string_view kExpectedPreferTextureWeightsString =
+    "prefer_texture_weights: 0";
+#else
+constexpr absl::string_view kExpectedPreferTextureWeightsString =
+    "prefer_texture_weights: 1";
+#endif  // __APPLE__
+
 using absl::StatusCode::kInvalidArgument;
 using ::testing::VariantWith;
 using ::testing::status::StatusIs;
@@ -191,7 +199,8 @@ TEST(LlmExecutorConfigTest, GpuArtisanConfig) {
   GpuArtisanConfig config = CreateGpuArtisanConfig();
   std::stringstream oss;
   oss << config;
-  const std::string expected_output = R"(num_output_candidates: 1
+  const std::string expected_output =
+      absl::StrCat(R"(num_output_candidates: 1
 wait_for_weight_uploads: 1
 num_decode_steps_per_sync: 3
 sequence_batch_size: 16
@@ -200,10 +209,11 @@ max_top_k: 40
 enable_decode_logits: 1
 enable_external_embeddings: 0
 use_submodel: 1
-prefer_texture_weights: 1
+)",
+                   kExpectedPreferTextureWeightsString, R"(
 set_enable_host_mapped_pointer: 1
 disallow_8bit_convs: 1
-)";
+)");
   EXPECT_EQ(oss.str(), expected_output);
 }
 
@@ -233,7 +243,8 @@ max_top_k: 40
 enable_decode_logits: 1
 enable_external_embeddings: 0
 use_submodel: 1
-prefer_texture_weights: 1
+)",
+      kExpectedPreferTextureWeightsString, R"(
 set_enable_host_mapped_pointer: 1
 disallow_8bit_convs: 1
 
@@ -249,8 +260,12 @@ model_assets: model_path: )",
       kPathToModel1, R"(
 fake_weights_mode: FAKE_WEIGHTS_NONE
 
+attention_mask_settings:
+attention_mask_policy: Causal
+local_attention_mask_policy: Not set
+sliding_window_size: Not set
 advanced_settings: Not set
-)");  // Original output string.
+)");  // Original output
   EXPECT_EQ(oss.str(), expected_output);
 }
 
@@ -273,7 +288,9 @@ TEST(LlmExecutorConfigTest, LlmExecutorSettingsWithAdvancedSettings) {
       .clear_kv_cache_before_prefill = false,
       .num_logits_to_print_after_decode = 10,
       .gpu_madvise_original_shared_tensors = true,
+      .gpu_enable_metal_residency_set = false,
       .is_benchmark = true,
+      .enable_profiling = true,
       .preferred_device_substr = "nvidia",
       .num_threads_to_upload = 4,
       .num_threads_to_compile = 2,
@@ -304,7 +321,8 @@ max_top_k: 40
 enable_decode_logits: 1
 enable_external_embeddings: 0
 use_submodel: 1
-prefer_texture_weights: 1
+)",
+      kExpectedPreferTextureWeightsString, R"(
 set_enable_host_mapped_pointer: 1
 disallow_8bit_convs: 1
 
@@ -320,6 +338,10 @@ model_assets: model_path: )",
       kPathToModel1, R"(
 fake_weights_mode: FAKE_WEIGHTS_NONE
 
+attention_mask_settings:
+attention_mask_policy: Causal
+local_attention_mask_policy: Not set
+sliding_window_size: Not set
 advanced_settings: prefill_batch_sizes: [128, 256]
 num_output_candidates: 3
 configure_magic_numbers: 1
@@ -327,7 +349,9 @@ verify_magic_numbers: 1
 clear_kv_cache_before_prefill: 0
 num_logits_to_print_after_decode: 10
 gpu_madvise_original_shared_tensors: 1
+gpu_enable_metal_residency_set: 0
 is_benchmark: 1
+enable_profiling: 1
 preferred_device_substr: nvidia
 num_threads_to_upload: 4
 num_threads_to_compile: 2
@@ -343,9 +367,59 @@ gpu_context_low_priority: Not set
 enable_speculative_decoding: 0
 disable_delegate_clustering: 0
 hint_kernel_batch_size: 10
+error_on_invalid_sampled_token_id: 0
 
 )");  // Original output string.
   EXPECT_EQ(oss.str(), expected_output);
+}
+
+TEST(LlmExecutorConfigTest, SetAttentionMaskSettings) {
+  auto model_assets = ModelAssets::Create(kPathToModel1);
+  ASSERT_OK(model_assets);
+  ASSERT_OK_AND_ASSIGN(auto settings, LlmExecutorSettings::CreateDefault(
+                                          *std::move(model_assets)));
+  AttentionMaskSettings mask_settings{
+      .attention_mask_policy = AttentionMaskPolicy::kBidirectional,
+      .local_attention_mask_policy = AttentionMaskPolicy::kCausal,
+      .sliding_window_size = 512,
+  };
+  settings.SetAttentionMaskSettings(mask_settings);
+
+  EXPECT_EQ(settings.GetAttentionMaskSettings().attention_mask_policy,
+            AttentionMaskPolicy::kBidirectional);
+  EXPECT_EQ(settings.GetAttentionMaskSettings().local_attention_mask_policy,
+            AttentionMaskPolicy::kCausal);
+  EXPECT_EQ(settings.GetAttentionMaskSettings().sliding_window_size, 512);
+}
+
+TEST(LlmExecutorConfigTest, AdvancedSettingsWithErrorOnInvalidSampledTokenId) {
+  auto model_assets = ModelAssets::Create(kPathToModel1);
+  ASSERT_OK(model_assets);
+  ASSERT_OK_AND_ASSIGN(auto settings,
+                       LlmExecutorSettings::CreateDefault(
+                           *std::move(model_assets), Backend::GPU_ARTISAN));
+  settings.SetAdvancedSettings(AdvancedSettings{
+      .error_on_invalid_sampled_token_id = true,
+  });
+
+  std::stringstream oss;
+  oss << settings;
+  EXPECT_THAT(oss.str(),
+              ::testing::HasSubstr("error_on_invalid_sampled_token_id: 1"));
+
+  settings.SetAdvancedSettings(AdvancedSettings{
+      .error_on_invalid_sampled_token_id = false,
+  });
+  oss.str("");
+  oss << settings;
+  EXPECT_THAT(oss.str(),
+              ::testing::HasSubstr("error_on_invalid_sampled_token_id: 0"));
+
+  AdvancedSettings adv1{.error_on_invalid_sampled_token_id = true};
+  AdvancedSettings adv2{.error_on_invalid_sampled_token_id = false};
+  EXPECT_NE(adv1, adv2);
+  adv2.error_on_invalid_sampled_token_id = true;
+  EXPECT_EQ(adv1, adv2);
 }
 
 TEST(LlmExecutorConfigTest, AdvancedSettingsWithGpuContextLowPriority) {
@@ -390,6 +464,28 @@ TEST(LlmExecutorConfigTest, AdvancedSettingsWithHintKernelBatchSize) {
   oss.str("");
   oss << settings;
   EXPECT_THAT(oss.str(), ::testing::HasSubstr("hint_kernel_batch_size: -1"));
+}
+
+TEST(LlmExecutorConfigTest, AdvancedSettingsWithEnableProfiling) {
+  auto model_assets = ModelAssets::Create(kPathToModel1);
+  ASSERT_OK(model_assets);
+  ASSERT_OK_AND_ASSIGN(auto settings,
+                       LlmExecutorSettings::CreateDefault(
+                           *std::move(model_assets), Backend::GPU_ARTISAN));
+  settings.SetAdvancedSettings(AdvancedSettings{
+      .enable_profiling = true,
+  });
+
+  std::stringstream oss;
+  oss << settings;
+  EXPECT_THAT(oss.str(), ::testing::HasSubstr("enable_profiling: 1"));
+
+  settings.SetAdvancedSettings(AdvancedSettings{
+      .enable_profiling = false,
+  });
+  oss.str("");
+  oss << settings;
+  EXPECT_THAT(oss.str(), ::testing::HasSubstr("enable_profiling: 0"));
 }
 
 TEST(GetWeightCacheFileTest, CacheDirAndModelPath) {
@@ -580,6 +676,18 @@ TEST(LlmExecutorConfigTest, SetSupportedLoraRanks) {
                                           *std::move(model_assets),
                                           Backend::GPU_ARTISAN, Backend::GPU));
   EXPECT_EQ(settings.GetSamplerBackend(), Backend::GPU);
+}
+
+TEST(LlmExecutorConfigTest, NpuConfigDefaults) {
+  NpuConfig config;
+  // The generic LiteRT compiler-plugin path is opt-in and must default to off
+  // so the specialized TF_LITE_AUX NPU executor stays the default behavior.
+  EXPECT_FALSE(config.use_generic_litert_compiler_plugin);
+  EXPECT_TRUE(config.enable_neon_for_npu_greedy_sampling);
+  EXPECT_TRUE(config.use_hw_masking_for_npu);
+  EXPECT_TRUE(config.use_hw_cache_update_for_npu);
+  EXPECT_TRUE(config.use_hw_ple_for_npu);
+  EXPECT_FALSE(config.enable_npu_debug_logging);
 }
 
 }  // namespace

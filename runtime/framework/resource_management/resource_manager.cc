@@ -25,6 +25,7 @@
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
@@ -79,16 +80,16 @@ absl::Status SaveProcessedContextAndSeparateLoadedHandler(
          "ProcessedContext within it, as they should all be owned by the "
          "llm_executor when calling "
          "SaveProcessedContextAndSeparateLoadedHandler.";
-  ASSIGN_OR_RETURN(auto llm_context, llm_executor->CloneContext());
-  ASSIGN_OR_RETURN(auto current_processed_context,
-                   llm_context->RetrieveProcessedContext());
-  RETURN_IF_ERROR(
+  ABSL_ASSIGN_OR_RETURN(auto llm_context, llm_executor->CloneContext());
+  ABSL_ASSIGN_OR_RETURN(auto current_processed_context,
+                        llm_context->RetrieveProcessedContext());
+  ABSL_RETURN_IF_ERROR(
       context_handler->shared_processed_context()->SetProcessedContext(
           std::move(current_processed_context)));
 
   auto new_shared_processed_context =
       std::make_shared<ContextHandler::SharedProcessedContext>(nullptr);
-  RETURN_IF_ERROR(context_handler->UpdateSharedProcessedContext(
+  ABSL_RETURN_IF_ERROR(context_handler->UpdateSharedProcessedContext(
       new_shared_processed_context));
   return absl::OkStatus();
 }
@@ -139,6 +140,10 @@ class LockedAudioExecutor : public AudioExecutor {
   }
 
   absl::Status Reset() override { return audio_executor_->Reset(); }
+
+  absl::StatusOr<ExecutorAudioData> Flush() override {
+    return audio_executor_->Flush();
+  }
 
   absl::StatusOr<AudioExecutorProperties> GetAudioExecutorProperties()
       const override {
@@ -218,19 +223,19 @@ class LockedLlmExecutor : public LlmExecutor {
     }
     // Check if the input token is 1 batch. Currently only support 1 batch per
     // prefill.
-    ASSIGN_OR_RETURN(auto token_ids, inputs.GetTextTokenIdsPtr());
+    ABSL_ASSIGN_OR_RETURN(auto token_ids, inputs.GetTextTokenIdsPtr());
     LITERT_ASSIGN_OR_RETURN(auto token_ids_tensor_type,
                             token_ids->TensorType());
     RET_CHECK_EQ(token_ids_tensor_type.Layout().Dimensions()[0], 1);
     if (token_ids_tensor_type.Layout().Dimensions()[1] == 0) {
       return absl::OkStatus();
     }
-    ASSIGN_OR_RETURN(int current_step, llm_executor_->GetCurrentStep());
+    ABSL_ASSIGN_OR_RETURN(int current_step, llm_executor_->GetCurrentStep());
     if (prefill_params.GetCurrentStep() != -1) {
       current_step = prefill_params.GetCurrentStep();
     }
-    ASSIGN_OR_RETURN(const ProcessedTokens* processed_tokens,
-                     llm_executor_->GetProcessedTokens());
+    ABSL_ASSIGN_OR_RETURN(const ProcessedTokens* processed_tokens,
+                          llm_executor_->GetProcessedTokens());
     // If the current_step is pointing at the step right after the last
     // processed token, call executor directly, no optimization for the
     // input can be done.
@@ -247,15 +252,31 @@ class LockedLlmExecutor : public LlmExecutor {
     // the matching tokens, and then call llm_executor_->Prefill with the
     // optimized inputs and time step.
 
+    // See if GPU artisan ringbuffers are in use.
+    bool uses_ringbuffers = false;
+    auto llm_executor_settings = llm_executor_->GetExecutorSettings();
+    if (llm_executor_settings.ok()) {
+      if (llm_executor_settings->GetBackend() ==
+          litert::lm::Backend::GPU_ARTISAN) {
+        LITERT_ASSIGN_OR_RETURN(
+            GpuArtisanConfig gpu_artisan_config,
+            llm_executor_settings->GetBackendConfig<GpuArtisanConfig>());
+        uses_ringbuffers = gpu_artisan_config.use_autosized_ringbuffers;
+      }
+    }
     // If the processed tokens size is larger than the current step, update
-    // the input_ids and current_step by removing the matching tokens.
-    RETURN_IF_ERROR(RemoveMatchingTokens(processed_tokens->GetCopyOfTokens()[0],
-                                         &input_ids_vec, &current_step));
+    // the input_ids and current_step by removing the matching tokens. This
+    // must currently be skipped when GPU artisan ringbuffers are enabled.
+    if (!uses_ringbuffers) {
+      ABSL_RETURN_IF_ERROR(
+          RemoveMatchingTokens(processed_tokens->GetCopyOfTokens()[0],
+                               &input_ids_vec, &current_step));
+    }
     // If the updated input_ids is empty, meaning all required prefill
     // tokens have been processed previously, just set the current step and
     // return.
     if (input_ids_vec.empty()) {
-      RETURN_IF_ERROR(llm_executor_->SetCurrentStep(current_step));
+      ABSL_RETURN_IF_ERROR(llm_executor_->SetCurrentStep(current_step));
       return absl::OkStatus();
     }
 
@@ -268,38 +289,12 @@ class LockedLlmExecutor : public LlmExecutor {
     std::optional<ExecutorVisionData> new_vision_data = std::nullopt;
     std::optional<ExecutorAudioData> new_audio_data = std::nullopt;
     if (inputs.GetVisionDataPtr().ok()) {
-      new_vision_data = ExecutorVisionData();
-      LITERT_ASSIGN_OR_RETURN(
-          auto new_vision_embeddings,
-          inputs.GetVisionEmbeddingsPtr().value()->Duplicate());
-      new_vision_data->SetEmbeddings(std::move(new_vision_embeddings));
-      if (inputs.GetVisionDataPtr().value()->GetPerLayerEmbeddingsPtr().ok()) {
-        LITERT_ASSIGN_OR_RETURN(auto new_per_layer_embeddings,
-                                inputs.GetVisionDataPtr()
-                                    .value()
-                                    ->GetPerLayerEmbeddingsPtr()
-                                    .value()
-                                    ->Duplicate());
-        new_vision_data->SetPerLayerEmbeddings(
-            std::move(new_per_layer_embeddings));
-      }
+      LITERT_ASSIGN_OR_RETURN(new_vision_data,
+                              (*inputs.GetVisionDataPtr())->Duplicate());
     }
-    if (inputs.GetAudioEmbeddingsPtr().ok()) {
-      new_audio_data = ExecutorAudioData();
-      LITERT_ASSIGN_OR_RETURN(
-          auto new_audio_embeddings,
-          inputs.GetAudioEmbeddingsPtr().value()->Duplicate());
-      new_audio_data->SetEmbeddings(std::move(new_audio_embeddings));
-      if (inputs.GetAudioDataPtr().value()->GetPerLayerEmbeddingsPtr().ok()) {
-        LITERT_ASSIGN_OR_RETURN(auto new_per_layer_embeddings,
-                                inputs.GetAudioDataPtr()
-                                    .value()
-                                    ->GetPerLayerEmbeddingsPtr()
-                                    .value()
-                                    ->Duplicate());
-        new_audio_data->SetPerLayerEmbeddings(
-            std::move(new_per_layer_embeddings));
-      }
+    if (inputs.GetAudioDataPtr().ok()) {
+      LITERT_ASSIGN_OR_RETURN(new_audio_data,
+                              (*inputs.GetAudioDataPtr())->Duplicate());
     }
     auto new_inputs =
         ExecutorInputs(ExecutorTextData(std::move(new_inputs_token_ids)),
@@ -319,7 +314,7 @@ class LockedLlmExecutor : public LlmExecutor {
     // Confirm if the current handler is the longest handler. If not,
     // cloning processed context is required to avoid modifying the
     // processed context of other handlers.
-    ASSIGN_OR_RETURN(
+    ABSL_ASSIGN_OR_RETURN(
         int largest_time_step,
         current_handler_->shared_processed_context()->LongestHandlerTimeStep(
             *llm_executor_));
@@ -327,7 +322,7 @@ class LockedLlmExecutor : public LlmExecutor {
       // If the current handler is not the longest handler, retrieve the
       // processed_context for the previous handler, and update the current
       // handler's shared_processed_context.
-      RETURN_IF_ERROR(SaveProcessedContextAndSeparateLoadedHandler(
+      ABSL_RETURN_IF_ERROR(SaveProcessedContextAndSeparateLoadedHandler(
           current_handler_, llm_executor_));
     }
     // Update the current step since the new processed context (set above)
@@ -335,7 +330,7 @@ class LockedLlmExecutor : public LlmExecutor {
     // context may need to be truncated.
     // TODO: b/418002952 - Consider setting the current step within Prefill
     // rather than relying on the caller.
-    RETURN_IF_ERROR(llm_executor_->SetCurrentStep(current_step));
+    ABSL_RETURN_IF_ERROR(llm_executor_->SetCurrentStep(current_step));
     return llm_executor_->Prefill(new_inputs, new_prefill_query_params);
   }
 
@@ -345,31 +340,31 @@ class LockedLlmExecutor : public LlmExecutor {
 
   absl::StatusOr<std::vector<std::vector<int>>> Decode(
       const ExecutorDecodeParams& decode_params) override {
-    RETURN_IF_ERROR(MaybeTruncateProcessedTokens());
+    ABSL_RETURN_IF_ERROR(MaybeTruncateProcessedTokens());
     return llm_executor_->Decode(decode_params);
   }
 
   absl::Status Decode(const ExecutorInputs& inputs,
                       TensorBuffer& output_logits) override {
-    RETURN_IF_ERROR(MaybeTruncateProcessedTokens());
-    ASSIGN_OR_RETURN(output_logits, llm_executor_->DecodeLogits(inputs));
+    ABSL_RETURN_IF_ERROR(MaybeTruncateProcessedTokens());
+    ABSL_ASSIGN_OR_RETURN(output_logits, llm_executor_->DecodeLogits(inputs));
     return absl::OkStatus();
   }
 
   absl::StatusOr<TensorBuffer> DecodeLogits(
       const ExecutorInputs& inputs) override {
-    ASSIGN_OR_RETURN(int current_step, llm_executor_->GetCurrentStep());
-    ASSIGN_OR_RETURN(const ProcessedTokens* processed_tokens,
-                     llm_executor_->GetProcessedTokens());
+    ABSL_ASSIGN_OR_RETURN(int current_step, llm_executor_->GetCurrentStep());
+    ABSL_ASSIGN_OR_RETURN(const ProcessedTokens* processed_tokens,
+                          llm_executor_->GetProcessedTokens());
     // If the current step is pointing at right after the pending token, set
     // the current step to the previous step. This ensures that the current
     // step points to the token to be processed, as expected by
     // llm_executor_->DecodeLogits().
     if (current_step == processed_tokens->TokenCount() &&
         !processed_tokens->GetNextUnprocessedToken().token.empty()) {
-      RETURN_IF_ERROR(llm_executor_->SetCurrentStep(current_step - 1));
+      ABSL_RETURN_IF_ERROR(llm_executor_->SetCurrentStep(current_step - 1));
     }
-    RETURN_IF_ERROR(MaybeTruncateProcessedTokens());
+    ABSL_RETURN_IF_ERROR(MaybeTruncateProcessedTokens());
     return llm_executor_->DecodeLogits(inputs);
   }
 
@@ -415,6 +410,10 @@ class LockedLlmExecutor : public LlmExecutor {
     return llm_executor_->GetProcessedTokens();
   }
 
+  absl::StatusOr<std::string> GetProfileSummary() override {
+    return llm_executor_->GetProfileSummary();
+  }
+
   absl::Status Reset() override { return llm_executor_->Reset(); }
 
   absl::StatusOr<int> GetVocabSize() override {
@@ -426,9 +425,9 @@ class LockedLlmExecutor : public LlmExecutor {
     if (current_handler_ == nullptr) {
       return absl::OkStatus();
     }
-    ASSIGN_OR_RETURN(int current_step, llm_executor_->GetCurrentStep());
-    ASSIGN_OR_RETURN(const ProcessedTokens* processed_tokens,
-                     llm_executor_->GetProcessedTokens());
+    ABSL_ASSIGN_OR_RETURN(int current_step, llm_executor_->GetCurrentStep());
+    ABSL_ASSIGN_OR_RETURN(const ProcessedTokens* processed_tokens,
+                          llm_executor_->GetProcessedTokens());
     if (processed_tokens->TokenCount() == current_step) {
       return absl::OkStatus();
     }
@@ -436,7 +435,7 @@ class LockedLlmExecutor : public LlmExecutor {
     // Confirm if the current handler is the longest handler. If not,
     // cloning processed context is required to avoid modifying the
     // processed context of other handlers.
-    ASSIGN_OR_RETURN(
+    ABSL_ASSIGN_OR_RETURN(
         int largest_time_step,
         current_handler_->shared_processed_context()->LongestHandlerTimeStep(
             *llm_executor_));
@@ -444,7 +443,7 @@ class LockedLlmExecutor : public LlmExecutor {
       // If the current handler is not the longest handler, retrieve the
       // processed_context for the previous handler, and update the current
       // handler's shared_processed_context.
-      RETURN_IF_ERROR(SaveProcessedContextAndSeparateLoadedHandler(
+      ABSL_RETURN_IF_ERROR(SaveProcessedContextAndSeparateLoadedHandler(
           current_handler_, llm_executor_));
     }
     // Update the current step since the new processed context (set above)
@@ -568,9 +567,10 @@ ResourceManager::CreateContextHandler(const SessionConfig& session_config) {
   // If lora is used and not loaded, load the lora.
   if (lora_id.has_value() && !lora_is_loaded) {
     RET_CHECK(session_config.GetScopedLoraFile() != nullptr);
-    ASSIGN_OR_RETURN(ModelAssets model_assets,
-                     ModelAssets::Create(session_config.GetScopedLoraFile(),
-                                         /*model_path=*/""));
+    ABSL_ASSIGN_OR_RETURN(
+        ModelAssets model_assets,
+        ModelAssets::Create(session_config.GetScopedLoraFile(),
+                            /*model_path=*/""));
     return absl::InvalidArgumentError("Lora is not supported.");
   }
 
@@ -581,15 +581,15 @@ ResourceManager::CreateContextHandler(const SessionConfig& session_config) {
           nullptr);
   if (audio_lora_id.has_value()) {
     RET_CHECK(session_config.GetAudioScopedLoraFile() != nullptr);
-    ASSIGN_OR_RETURN(
+    ABSL_ASSIGN_OR_RETURN(
         ModelAssets lora_model_assets,
         ModelAssets::Create(session_config.GetAudioScopedLoraFile(),
                             /*model_path=*/""));
-    RETURN_IF_ERROR(TryLoadingAudioExecutor());
-    ASSIGN_OR_RETURN(auto audio_executor, AcquireAudioExecutor());
-    RETURN_IF_ERROR(
+    ABSL_RETURN_IF_ERROR(TryLoadingAudioExecutor());
+    ABSL_ASSIGN_OR_RETURN(auto audio_executor, AcquireAudioExecutor());
+    ABSL_RETURN_IF_ERROR(
         audio_executor->LoadLoRA(audio_lora_id.value(), lora_model_assets));
-    RETURN_IF_ERROR(audio_executor->UseLoRA(audio_lora_id.value()));
+    ABSL_RETURN_IF_ERROR(audio_executor->UseLoRA(audio_lora_id.value()));
   }
 
   auto runtime_config = RuntimeConfig{
@@ -602,19 +602,20 @@ ResourceManager::CreateContextHandler(const SessionConfig& session_config) {
   std::unique_ptr<litert::lm::LlmContext> llm_context;
   {
     MovableMutexLock lock(&executor_mutex_);
-    ASSIGN_OR_RETURN(llm_context,
-                     llm_executor_->CreateNewContext(
-                         std::move(lora_id), std::move(runtime_config)));
+    ABSL_ASSIGN_OR_RETURN(llm_context,
+                          llm_executor_->CreateNewContext(
+                              std::move(lora_id), std::move(runtime_config)));
   }
   std::unique_ptr<AudioContext> audio_context;
   if (session_config.AudioModalityEnabled()) {
-    RETURN_IF_ERROR(TryLoadingAudioExecutor());
-    ASSIGN_OR_RETURN(auto audio_executor, AcquireAudioExecutor());
+    ABSL_RETURN_IF_ERROR(TryLoadingAudioExecutor());
+    ABSL_ASSIGN_OR_RETURN(auto audio_executor, AcquireAudioExecutor());
     auto audio_executor_properties =
         audio_executor->GetAudioExecutorProperties();
     if (audio_executor_properties.ok()) {
       if (audio_executor_properties->is_streaming_model) {
-        ASSIGN_OR_RETURN(audio_context, audio_executor->CreateNewContext());
+        ABSL_ASSIGN_OR_RETURN(audio_context,
+                              audio_executor->CreateNewContext());
       }
     } else if (!absl::IsUnimplemented(audio_executor_properties.status())) {
       return audio_executor_properties.status();
@@ -637,8 +638,10 @@ ResourceManager::CloneContextHandler(
   // them directly.
   if (llm_context_handler->HasRuntimeConfig() &&
       llm_context_handler->HasRuntimeState()) {
-    ASSIGN_OR_RETURN(runtime_config, llm_context_handler->GetRuntimeConfig());
-    ASSIGN_OR_RETURN(runtime_state, llm_context_handler->GetRuntimeState());
+    ABSL_ASSIGN_OR_RETURN(runtime_config,
+                          llm_context_handler->GetRuntimeConfig());
+    ABSL_ASSIGN_OR_RETURN(runtime_state,
+                          llm_context_handler->GetRuntimeState());
   } else {
     // Otherwise, assume the context handler is loaded by the manager to the
     // executor, and get the runtime config and runtime state from the
@@ -649,15 +652,15 @@ ResourceManager::CloneContextHandler(
            "and "
            "runtime state, assuming it is loaded by the manager, but the "
            "manager does not have the same handler.";
-    ASSIGN_OR_RETURN(runtime_config, llm_executor_->GetRuntimeConfig());
-    ASSIGN_OR_RETURN(runtime_state, llm_executor_->GetRuntimeState());
+    ABSL_ASSIGN_OR_RETURN(runtime_config, llm_executor_->GetRuntimeConfig());
+    ABSL_ASSIGN_OR_RETURN(runtime_state, llm_executor_->GetRuntimeState());
   }
   auto processed_context = llm_context_handler->shared_processed_context();
 
   std::unique_ptr<AudioContext> audio_context;
   if (llm_context_handler->HasAudioContext()) {
-    ASSIGN_OR_RETURN(auto audio_executor, AcquireAudioExecutor());
-    ASSIGN_OR_RETURN(
+    ABSL_ASSIGN_OR_RETURN(auto audio_executor, AcquireAudioExecutor());
+    ABSL_ASSIGN_OR_RETURN(
         audio_context,
         audio_executor->CloneContext(llm_context_handler->GetAudioContext()));
   }
@@ -705,54 +708,56 @@ ResourceManager::AcquireExecutorWithContextHandler(
   if (current_handler_ != nullptr &&
       new_context_handler->shared_processed_context() ==
           current_handler_->shared_processed_context()) {
-    ASSIGN_OR_RETURN(auto current_runtime_config,
-                     llm_executor_->GetRuntimeConfig());
-    ASSIGN_OR_RETURN(auto current_runtime_state,
-                     llm_executor_->GetRuntimeState());
-    RETURN_IF_ERROR(current_handler_->SetRuntimeConfig(
+    ABSL_ASSIGN_OR_RETURN(auto current_runtime_config,
+                          llm_executor_->GetRuntimeConfig());
+    ABSL_ASSIGN_OR_RETURN(auto current_runtime_state,
+                          llm_executor_->GetRuntimeState());
+    ABSL_RETURN_IF_ERROR(current_handler_->SetRuntimeConfig(
         std::make_unique<RuntimeConfig>(current_runtime_config)));
-    RETURN_IF_ERROR(current_handler_->SetRuntimeState(
+    ABSL_RETURN_IF_ERROR(current_handler_->SetRuntimeState(
         std::make_unique<RuntimeState>(current_runtime_state)));
 
-    ASSIGN_OR_RETURN(auto new_runtime_config,
-                     new_context_handler->RetrieveRuntimeConfig());
-    ASSIGN_OR_RETURN(auto new_runtime_state,
-                     new_context_handler->RetrieveRuntimeState());
-    RETURN_IF_ERROR(llm_executor_->UpdateRuntimeConfig(*new_runtime_config));
-    RETURN_IF_ERROR(llm_executor_->UpdateRuntimeState(*new_runtime_state));
+    ABSL_ASSIGN_OR_RETURN(auto new_runtime_config,
+                          new_context_handler->RetrieveRuntimeConfig());
+    ABSL_ASSIGN_OR_RETURN(auto new_runtime_state,
+                          new_context_handler->RetrieveRuntimeState());
+    ABSL_RETURN_IF_ERROR(
+        llm_executor_->UpdateRuntimeConfig(*new_runtime_config));
+    ABSL_RETURN_IF_ERROR(llm_executor_->UpdateRuntimeState(*new_runtime_state));
   } else {
     // If the new handler is not sharing the same processed context with the
     // current handler, clone the processed context to the new handler. Then
     // restore the executor with the new LlmContext.
     if (current_handler_ != nullptr) {
-      ASSIGN_OR_RETURN(auto current_llm_context, llm_executor_->CloneContext());
-      ASSIGN_OR_RETURN(auto current_runtime_config,
-                       current_llm_context->RetrieveRuntimeConfig());
-      ASSIGN_OR_RETURN(auto current_runtime_state,
-                       current_llm_context->RetrieveRuntimeState());
-      ASSIGN_OR_RETURN(auto current_processed_context,
-                       current_llm_context->RetrieveProcessedContext());
+      ABSL_ASSIGN_OR_RETURN(auto current_llm_context,
+                            llm_executor_->CloneContext());
+      ABSL_ASSIGN_OR_RETURN(auto current_runtime_config,
+                            current_llm_context->RetrieveRuntimeConfig());
+      ABSL_ASSIGN_OR_RETURN(auto current_runtime_state,
+                            current_llm_context->RetrieveRuntimeState());
+      ABSL_ASSIGN_OR_RETURN(auto current_processed_context,
+                            current_llm_context->RetrieveProcessedContext());
 
-      RETURN_IF_ERROR(current_handler_->SetRuntimeConfig(
+      ABSL_RETURN_IF_ERROR(current_handler_->SetRuntimeConfig(
           std::move(current_runtime_config)));
-      RETURN_IF_ERROR(
+      ABSL_RETURN_IF_ERROR(
           current_handler_->SetRuntimeState(std::move(current_runtime_state)));
-      RETURN_IF_ERROR(
+      ABSL_RETURN_IF_ERROR(
           current_handler_->shared_processed_context()->SetProcessedContext(
               std::move(current_processed_context)));
     }
 
-    ASSIGN_OR_RETURN(auto new_runtime_config,
-                     new_context_handler->RetrieveRuntimeConfig());
-    ASSIGN_OR_RETURN(auto new_runtime_state,
-                     new_context_handler->RetrieveRuntimeState());
-    ASSIGN_OR_RETURN(auto new_processed_context,
-                     new_context_handler->shared_processed_context()
-                         ->RetrieveProcessedContext());
+    ABSL_ASSIGN_OR_RETURN(auto new_runtime_config,
+                          new_context_handler->RetrieveRuntimeConfig());
+    ABSL_ASSIGN_OR_RETURN(auto new_runtime_state,
+                          new_context_handler->RetrieveRuntimeState());
+    ABSL_ASSIGN_OR_RETURN(auto new_processed_context,
+                          new_context_handler->shared_processed_context()
+                              ->RetrieveProcessedContext());
     auto llm_context = std::make_unique<LlmContext>(
         std::move(new_processed_context), std::move(new_runtime_config),
         std::move(new_runtime_state));
-    RETURN_IF_ERROR(llm_executor_->RestoreContext(std::move(llm_context)));
+    ABSL_RETURN_IF_ERROR(llm_executor_->RestoreContext(std::move(llm_context)));
   }
 
   // If the current handler has an audio context, update and save the audio
@@ -761,20 +766,20 @@ ResourceManager::AcquireExecutorWithContextHandler(
     // If the current handler has an audio context, update it from audio
     // executor and save it back to the current handler.
     if (current_handler_->HasAudioContext()) {
-      ASSIGN_OR_RETURN(auto audio_executor, AcquireAudioExecutor());
-      ASSIGN_OR_RETURN(auto current_audio_context,
-                       audio_executor->CloneContext());
-      RETURN_IF_ERROR(
+      ABSL_ASSIGN_OR_RETURN(auto audio_executor, AcquireAudioExecutor());
+      ABSL_ASSIGN_OR_RETURN(auto current_audio_context,
+                            audio_executor->CloneContext());
+      ABSL_RETURN_IF_ERROR(
           current_handler_->SetAudioContext(std::move(current_audio_context)));
     }
     // If the new handler has an audio context, audio executor will restore
     // the audio context from the new handler.
     if (new_context_handler->HasAudioContext()) {
-      ASSIGN_OR_RETURN(auto audio_executor, AcquireAudioExecutor());
-      ASSIGN_OR_RETURN(
+      ABSL_ASSIGN_OR_RETURN(auto audio_executor, AcquireAudioExecutor());
+      ABSL_ASSIGN_OR_RETURN(
           auto audio_context_cloned,
           audio_executor->CloneContext(new_context_handler->GetAudioContext()));
-      RETURN_IF_ERROR(
+      ABSL_RETURN_IF_ERROR(
           audio_executor->RestoreContext(std::move(audio_context_cloned)));
     }
   }
@@ -794,10 +799,10 @@ absl::Status ResourceManager::TryLoadingVisionExecutor() {
     return absl::InvalidArgumentError("Vision options should not be null.");
   }
 
-  RETURN_IF_ERROR(MaybeCreateLitertEnv());
-  ASSIGN_OR_RETURN(vision_executor_,
-                   VisionLiteRtCompiledModelExecutor::Create(
-                       *vision_executor_settings_, *litert_env_));
+  ABSL_RETURN_IF_ERROR(MaybeCreateLitertEnv());
+  ABSL_ASSIGN_OR_RETURN(vision_executor_,
+                        VisionLiteRtCompiledModelExecutor::Create(
+                            *vision_executor_settings_, *litert_env_));
   return absl::OkStatus();
 }
 
@@ -830,11 +835,11 @@ absl::Status ResourceManager::TryLoadingAudioExecutor() {
     return absl::InvalidArgumentError("Audio options should not be null.");
   }
   {
-    RETURN_IF_ERROR(MaybeCreateLitertEnv());
+    ABSL_RETURN_IF_ERROR(MaybeCreateLitertEnv());
     RET_CHECK_NE(litert_env_, nullptr);
-    ASSIGN_OR_RETURN(audio_executor_,
-                     litert::lm::AudioLiteRtCompiledModelExecutor::Create(
-                         *audio_executor_settings_, *litert_env_));
+    ABSL_ASSIGN_OR_RETURN(audio_executor_,
+                          litert::lm::AudioLiteRtCompiledModelExecutor::Create(
+                              *audio_executor_settings_, *litert_env_));
   }
   return absl::OkStatus();
 }
@@ -863,8 +868,8 @@ absl::StatusOr<std::unique_ptr<ResourceManager>> ResourceManager::Create(
   if (llm_executor == nullptr) {
     return absl::InvalidArgumentError("Llm executor is null.");
   }
-  ASSIGN_OR_RETURN(LlmExecutorSettings llm_executor_settings,
-                   llm_executor->GetExecutorSettings());
+  ABSL_ASSIGN_OR_RETURN(LlmExecutorSettings llm_executor_settings,
+                        llm_executor->GetExecutorSettings());
   auto llm_resource_manager = std::make_unique<ResourceManager>(
       model_resources, std::move(llm_executor),
       std::move(vision_executor_settings), std::move(audio_executor_settings),
@@ -874,16 +879,24 @@ absl::StatusOr<std::unique_ptr<ResourceManager>> ResourceManager::Create(
 
 absl::StatusOr<AudioExecutorProperties>
 ResourceManager::GetAudioExecutorProperties() {
-  RETURN_IF_ERROR(TryLoadingAudioExecutor());
+  ABSL_RETURN_IF_ERROR(TryLoadingAudioExecutor());
   MovableMutexLock lock(&audio_executor_mutex_);
   return audio_executor_->GetAudioExecutorProperties();
 }
 
 absl::StatusOr<VisionExecutorProperties>
 ResourceManager::GetVisionExecutorProperties() {
-  RETURN_IF_ERROR(TryLoadingVisionExecutor());
+  ABSL_RETURN_IF_ERROR(TryLoadingVisionExecutor());
   absl::MutexLock lock(vision_executor_mutex_);
   return vision_executor_->GetVisionExecutorProperties();
+}
+
+void ResourceManager::ResetCurrentHandler() {
+  absl::MutexLock lock(executor_mutex_);
+  if (llm_executor_ != nullptr) {
+    llm_executor_->Reset().IgnoreError();
+  }
+  current_handler_ = nullptr;
 }
 
 }  // namespace litert::lm

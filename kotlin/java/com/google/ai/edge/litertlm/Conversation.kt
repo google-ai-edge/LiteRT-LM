@@ -70,12 +70,25 @@ class Conversation(
   private val handle: Long,
   val toolManager: ToolManager = ToolManager(),
   val automaticToolCalling: Boolean = true,
+  val enableResponseFormat: Boolean = false,
 ) : AutoCloseable {
   private val _isAlive = AtomicBoolean(true)
 
   /** Whether the conversation is alive and ready to be used, */
   val isAlive: Boolean
     get() = _isAlive.get()
+
+  private fun resolveResponseFormat(
+    currentMessageJson: JsonObject,
+    responseFormat: ResponseFormat?,
+  ): ResponseFormat? {
+    if (responseFormat == null) return null
+    val isToolResponse = currentMessageJson.get("role")?.asString == "tool"
+    if (automaticToolCalling && toolManager.getToolsDescription().size() > 0 && !isToolResponse) {
+      return null
+    }
+    return responseFormat
+  }
 
   /**
    * Sends a message to the model and returns the response. This is a synchronous call.
@@ -87,12 +100,33 @@ class Conversation(
    *
    * @param message The message to send to the model.
    * @param extraContext Optional context used for prompt template rendering.
+   * @param repetitionPenaltyConfig Optional configuration for repetition penalty.
+   * @param noRepeatNgramConfig Optional configuration for no repeat ngram.
+   * @param suppressTokensConfig Optional configuration for suppressing specific tokens.
+   * @param maxOutputToken Optional override for the maximum number of output tokens per decode
+   *   step.
+   * @param thinkingConfig Optional configuration for thinking/reasoning generation.
    * @return The model's response message.
    * @throws IllegalStateException if the conversation is not alive, if the native layer returns an
    *   invalid response, or if the tool call limit is exceeded.
    * @throws LiteRtLmJniException if an error occurs during the native call.
    */
-  fun sendMessage(message: Message, extraContext: Map<String, Any> = emptyMap()): Message {
+  @JvmOverloads
+  fun sendMessage(
+    message: Message,
+    extraContext: Map<String, Any> = emptyMap(),
+    repetitionPenaltyConfig: RepetitionPenaltyConfig? = null,
+    noRepeatNgramConfig: NoRepeatNgramConfig? = null,
+    suppressTokensConfig: SuppressTokensConfig? = null,
+    maxOutputToken: Int? = null,
+    thinkingConfig: ThinkingConfig? = null,
+    responseFormat: ResponseFormat? = null,
+  ): Message {
+    if (responseFormat != null && !enableResponseFormat) {
+      throw IllegalArgumentException(
+        "response_format cannot be used unless enableResponseFormat=True was passed to ConversationConfig."
+      )
+    }
     checkIsAlive()
 
     var currentMessageJson = message.toJson()
@@ -100,12 +134,20 @@ class Conversation(
     val visualTokenBudget = @OptIn(ExperimentalApi::class) ExperimentalFlags.visualTokenBudget
 
     for (i in 0..<RECURRING_TOOL_CALL_LIMIT) {
+      val activeResponseFormat = resolveResponseFormat(currentMessageJson, responseFormat)
       val responseJsonString =
         LiteRtLmJni.nativeSendMessage(
           handle,
           currentMessageJson.toString(),
           extraContextJsonString,
           visualTokenBudget,
+          repetitionPenaltyConfig,
+          noRepeatNgramConfig,
+          suppressTokensConfig,
+          maxOutputToken ?: -1,
+          if (i == 0) thinkingConfig else null,
+          activeResponseFormat?.type?.value ?: 0,
+          activeResponseFormat?.schemaOrPattern,
         )
       val responseJsonObject = JsonParser.parseString(responseJsonString).asJsonObject
 
@@ -125,7 +167,7 @@ class Conversation(
   }
 
   /**
-   * Sends a list of content to the model and returns the response. This is a synchronous call.
+   * Sends a list of contents to the model and returns the response. This is a synchronous call.
    *
    * This method handles potential tool calls returned by the model. If a tool call is detected, the
    * corresponding tool is executed, and the result is sent back to the model. This process is
@@ -134,13 +176,38 @@ class Conversation(
    *
    * @param contents The list of contents to send to the model.
    * @param extraContext Optional context used for prompt template rendering.
+   * @param repetitionPenaltyConfig Optional configuration for repetition penalty.
+   * @param noRepeatNgramConfig Optional configuration for no repeat ngram.
+   * @param suppressTokensConfig Optional configuration for suppressing specific tokens.
+   * @param maxOutputToken Optional override for the maximum number of output tokens per decode
+   *   step.
+   * @param thinkingConfig Optional configuration for thinking/reasoning generation.
    * @return The model's response message.
    * @throws IllegalStateException if the conversation is not alive, if the native layer returns an
    *   invalid response, or if the tool call limit is exceeded.
    * @throws LiteRtLmJniException if an error occurs during the native call.
    */
-  fun sendMessage(contents: Contents, extraContext: Map<String, Any> = emptyMap()): Message {
-    return sendMessage(Message.user(contents), extraContext)
+  @JvmOverloads
+  fun sendMessage(
+    contents: Contents,
+    extraContext: Map<String, Any> = emptyMap(),
+    repetitionPenaltyConfig: RepetitionPenaltyConfig? = null,
+    noRepeatNgramConfig: NoRepeatNgramConfig? = null,
+    suppressTokensConfig: SuppressTokensConfig? = null,
+    maxOutputToken: Int? = null,
+    thinkingConfig: ThinkingConfig? = null,
+    responseFormat: ResponseFormat? = null,
+  ): Message {
+    return sendMessage(
+      Message.user(contents),
+      extraContext,
+      repetitionPenaltyConfig,
+      noRepeatNgramConfig,
+      suppressTokensConfig,
+      maxOutputToken,
+      thinkingConfig,
+      responseFormat,
+    )
   }
 
   /**
@@ -153,13 +220,38 @@ class Conversation(
    *
    * @param text The text to send to the model.
    * @param extraContext Optional context used for prompt template rendering.
+   * @param repetitionPenaltyConfig Optional configuration for repetition penalty.
+   * @param noRepeatNgramConfig Optional configuration for no repeat ngram.
+   * @param suppressTokensConfig Optional configuration for suppressing specific tokens.
+   * @param maxOutputToken Optional override for the maximum number of output tokens per decode
+   *   step.
+   * @param thinkingConfig Optional configuration for thinking/reasoning generation.
    * @return The model's response message.
    * @throws IllegalStateException if the conversation is not alive, if the native layer returns an
    *   invalid response, or if the tool call limit is exceeded.
    * @throws LiteRtLmJniException if an error occurs during the native call.
    */
-  fun sendMessage(text: String, extraContext: Map<String, Any> = emptyMap()): Message =
-    sendMessage(Contents.of(text), extraContext)
+  @JvmOverloads
+  fun sendMessage(
+    text: String,
+    extraContext: Map<String, Any> = emptyMap(),
+    repetitionPenaltyConfig: RepetitionPenaltyConfig? = null,
+    noRepeatNgramConfig: NoRepeatNgramConfig? = null,
+    suppressTokensConfig: SuppressTokensConfig? = null,
+    maxOutputToken: Int? = null,
+    thinkingConfig: ThinkingConfig? = null,
+    responseFormat: ResponseFormat? = null,
+  ): Message =
+    sendMessage(
+      Contents.of(text),
+      extraContext,
+      repetitionPenaltyConfig,
+      noRepeatNgramConfig,
+      suppressTokensConfig,
+      maxOutputToken,
+      thinkingConfig,
+      responseFormat,
+    )
 
   /**
    * Send a message to the model and returns the response async with a callback.
@@ -172,26 +264,61 @@ class Conversation(
    * @param message The message to send to the model.
    * @param callback The callback to receive the streaming responses.
    * @param extraContext Optional context used for prompt template rendering.
+   * @param repetitionPenaltyConfig Optional configuration for repetition penalty.
+   * @param noRepeatNgramConfig Optional configuration for no repeat ngram.
+   * @param suppressTokensConfig Optional configuration for suppressing specific tokens.
+   * @param maxOutputToken Optional override for the maximum number of output tokens per decode
+   *   step.
+   * @param thinkingConfig Optional configuration for thinking/reasoning generation.
    * @throws IllegalStateException if the conversation has already been closed or the content is
    *   empty.
    */
+  @JvmOverloads
   fun sendMessageAsync(
     message: Message,
     callback: MessageCallback,
     extraContext: Map<String, Any> = emptyMap(),
+    repetitionPenaltyConfig: RepetitionPenaltyConfig? = null,
+    noRepeatNgramConfig: NoRepeatNgramConfig? = null,
+    suppressTokensConfig: SuppressTokensConfig? = null,
+    maxOutputToken: Int? = null,
+    thinkingConfig: ThinkingConfig? = null,
+    responseFormat: ResponseFormat? = null,
   ) {
+    if (responseFormat != null && !enableResponseFormat) {
+      throw IllegalArgumentException(
+        "response_format cannot be used unless enableResponseFormat=True was passed to ConversationConfig."
+      )
+    }
     checkIsAlive()
 
     val extraContextJsonString = extraContext.toJsonObject().toString()
     val visualTokenBudget = @OptIn(ExperimentalApi::class) ExperimentalFlags.visualTokenBudget
+    val currentMessageJson = message.toJson()
+    val activeResponseFormat = resolveResponseFormat(currentMessageJson, responseFormat)
 
-    val jniCallback = JniMessageCallbackImpl(callback)
+    val jniCallback =
+      JniMessageCallbackImpl(
+        callback,
+        repetitionPenaltyConfig,
+        noRepeatNgramConfig,
+        suppressTokensConfig,
+        maxOutputToken,
+        responseFormat,
+      )
     LiteRtLmJni.nativeSendMessageAsync(
       handle,
-      message.toJson().toString(),
+      currentMessageJson.toString(),
       extraContextJsonString,
       jniCallback,
       visualTokenBudget,
+      repetitionPenaltyConfig,
+      noRepeatNgramConfig,
+      suppressTokensConfig,
+      maxOutputToken ?: -1,
+      thinkingConfig,
+      activeResponseFormat?.type?.value ?: 0,
+      activeResponseFormat?.schemaOrPattern,
     )
   }
 
@@ -206,14 +333,38 @@ class Conversation(
    * @param contents The list of contents to send to the model.
    * @param callback The callback to receive the streaming responses.
    * @param extraContext Optional context used for prompt template rendering.
+   * @param repetitionPenaltyConfig Optional configuration for repetition penalty.
+   * @param noRepeatNgramConfig Optional configuration for no repeat ngram.
+   * @param suppressTokensConfig Optional configuration for suppressing specific tokens.
+   * @param maxOutputToken Optional override for the maximum number of output tokens per decode
+   *   step.
+   * @param thinkingConfig Optional configuration for thinking/reasoning generation.
    * @throws IllegalStateException if the conversation has already been closed or the content is
    *   empty.
    */
+  @JvmOverloads
   fun sendMessageAsync(
     contents: Contents,
     callback: MessageCallback,
     extraContext: Map<String, Any> = emptyMap(),
-  ) = sendMessageAsync(Message.user(contents), callback, extraContext)
+    repetitionPenaltyConfig: RepetitionPenaltyConfig? = null,
+    noRepeatNgramConfig: NoRepeatNgramConfig? = null,
+    suppressTokensConfig: SuppressTokensConfig? = null,
+    maxOutputToken: Int? = null,
+    thinkingConfig: ThinkingConfig? = null,
+    responseFormat: ResponseFormat? = null,
+  ) =
+    sendMessageAsync(
+      Message.user(contents),
+      callback,
+      extraContext,
+      repetitionPenaltyConfig,
+      noRepeatNgramConfig,
+      suppressTokensConfig,
+      maxOutputToken,
+      thinkingConfig,
+      responseFormat,
+    )
 
   /**
    * Send a text to the model and returns the response async with a callback.
@@ -226,14 +377,38 @@ class Conversation(
    * @param text The text to send to the model.
    * @param callback The callback to receive the streaming responses.
    * @param extraContext Optional context used for prompt template rendering.
+   * @param repetitionPenaltyConfig Optional configuration for repetition penalty.
+   * @param noRepeatNgramConfig Optional configuration for no repeat ngram.
+   * @param suppressTokensConfig Optional configuration for suppressing specific tokens.
+   * @param maxOutputToken Optional override for the maximum number of output tokens per decode
+   *   step.
+   * @param thinkingConfig Optional configuration for thinking/reasoning generation.
    * @throws IllegalStateException if the conversation has already been closed or the content is
    *   empty.
    */
+  @JvmOverloads
   fun sendMessageAsync(
     text: String,
     callback: MessageCallback,
     extraContext: Map<String, Any> = emptyMap(),
-  ) = sendMessageAsync(Contents.of(text), callback, extraContext)
+    repetitionPenaltyConfig: RepetitionPenaltyConfig? = null,
+    noRepeatNgramConfig: NoRepeatNgramConfig? = null,
+    suppressTokensConfig: SuppressTokensConfig? = null,
+    maxOutputToken: Int? = null,
+    thinkingConfig: ThinkingConfig? = null,
+    responseFormat: ResponseFormat? = null,
+  ) =
+    sendMessageAsync(
+      Contents.of(text),
+      callback,
+      extraContext,
+      repetitionPenaltyConfig,
+      noRepeatNgramConfig,
+      suppressTokensConfig,
+      maxOutputToken,
+      thinkingConfig,
+      responseFormat,
+    )
 
   /**
    * Sends a message to the model and returns the response async as a [Flow].
@@ -245,13 +420,26 @@ class Conversation(
    *
    * @param message The message to send to the model.
    * @param extraContext Optional context used for prompt template rendering.
+   * @param repetitionPenaltyConfig Optional configuration for repetition penalty.
+   * @param noRepeatNgramConfig Optional configuration for no repeat ngram.
+   * @param suppressTokensConfig Optional configuration for suppressing specific tokens.
+   * @param maxOutputToken Optional override for the maximum number of output tokens per decode
+   *   step.
+   * @param thinkingConfig Optional configuration for thinking/reasoning generation.
    * @return A Flow of messages representing the model's response.
    * @throws IllegalStateException if the conversation has already been closed or the content is
    *   empty.
    */
+  @JvmOverloads
   fun sendMessageAsync(
     message: Message,
     extraContext: Map<String, Any> = emptyMap(),
+    repetitionPenaltyConfig: RepetitionPenaltyConfig? = null,
+    noRepeatNgramConfig: NoRepeatNgramConfig? = null,
+    suppressTokensConfig: SuppressTokensConfig? = null,
+    maxOutputToken: Int? = null,
+    thinkingConfig: ThinkingConfig? = null,
+    responseFormat: ResponseFormat? = null,
   ): Flow<Message> = callbackFlow {
     sendMessageAsync(
       message,
@@ -269,6 +457,12 @@ class Conversation(
         }
       },
       extraContext,
+      repetitionPenaltyConfig,
+      noRepeatNgramConfig,
+      suppressTokensConfig,
+      maxOutputToken,
+      thinkingConfig,
+      responseFormat,
     )
     awaitClose {}
   }
@@ -283,14 +477,37 @@ class Conversation(
    *
    * @param contents The list of contents to send to the model.
    * @param extraContext Optional context used for prompt template rendering.
+   * @param repetitionPenaltyConfig Optional configuration for repetition penalty.
+   * @param noRepeatNgramConfig Optional configuration for no repeat ngram.
+   * @param suppressTokensConfig Optional configuration for suppressing specific tokens.
+   * @param maxOutputToken Optional override for the maximum number of output tokens per decode
+   *   step.
+   * @param thinkingConfig Optional configuration for thinking/reasoning generation.
    * @return A Flow of messages representing the model's response.
    * @throws IllegalStateException if the conversation has already been closed or the content is
    *   empty.
    */
+  @JvmOverloads
   fun sendMessageAsync(
     contents: Contents,
     extraContext: Map<String, Any> = emptyMap(),
-  ): Flow<Message> = sendMessageAsync(Message.user(contents), extraContext)
+    repetitionPenaltyConfig: RepetitionPenaltyConfig? = null,
+    noRepeatNgramConfig: NoRepeatNgramConfig? = null,
+    suppressTokensConfig: SuppressTokensConfig? = null,
+    maxOutputToken: Int? = null,
+    thinkingConfig: ThinkingConfig? = null,
+    responseFormat: ResponseFormat? = null,
+  ): Flow<Message> =
+    sendMessageAsync(
+      Message.user(contents),
+      extraContext,
+      repetitionPenaltyConfig,
+      noRepeatNgramConfig,
+      suppressTokensConfig,
+      maxOutputToken,
+      thinkingConfig,
+      responseFormat,
+    )
 
   /**
    * Sends a text to the model and returns the response async as a [Flow].
@@ -302,12 +519,37 @@ class Conversation(
    *
    * @param text The text to send to the model.
    * @param extraContext Optional context used for prompt template rendering.
+   * @param repetitionPenaltyConfig Optional configuration for repetition penalty.
+   * @param noRepeatNgramConfig Optional configuration for no repeat ngram.
+   * @param suppressTokensConfig Optional configuration for suppressing specific tokens.
+   * @param maxOutputToken Optional override for the maximum number of output tokens per decode
+   *   step.
+   * @param thinkingConfig Optional configuration for thinking/reasoning generation.
    * @return A Flow of messages representing the model's response.
    * @throws IllegalStateException if the conversation has already been closed or the content is
    *   empty.
    */
-  fun sendMessageAsync(text: String, extraContext: Map<String, Any> = emptyMap()): Flow<Message> =
-    sendMessageAsync(Contents.of(text), extraContext)
+  @JvmOverloads
+  fun sendMessageAsync(
+    text: String,
+    extraContext: Map<String, Any> = emptyMap(),
+    repetitionPenaltyConfig: RepetitionPenaltyConfig? = null,
+    noRepeatNgramConfig: NoRepeatNgramConfig? = null,
+    suppressTokensConfig: SuppressTokensConfig? = null,
+    maxOutputToken: Int? = null,
+    thinkingConfig: ThinkingConfig? = null,
+    responseFormat: ResponseFormat? = null,
+  ): Flow<Message> =
+    sendMessageAsync(
+      Contents.of(text),
+      extraContext,
+      repetitionPenaltyConfig,
+      noRepeatNgramConfig,
+      suppressTokensConfig,
+      maxOutputToken,
+      thinkingConfig,
+      responseFormat,
+    )
 
   private fun handleToolCalls(toolCallsJsonObject: JsonObject): JsonObject {
     val toolCallsJSONArray = toolCallsJsonObject.getAsJsonArray("tool_calls")
@@ -337,8 +579,14 @@ class Conversation(
     }
   }
 
-  private inner class JniMessageCallbackImpl(private val callback: MessageCallback) :
-    LiteRtLmJni.JniMessageCallback {
+  private inner class JniMessageCallbackImpl(
+    private val callback: MessageCallback,
+    private val repetitionPenaltyConfig: RepetitionPenaltyConfig? = null,
+    private val noRepeatNgramConfig: NoRepeatNgramConfig? = null,
+    private val suppressTokensConfig: SuppressTokensConfig? = null,
+    private val maxOutputToken: Int? = null,
+    private val responseFormat: ResponseFormat? = null,
+  ) : LiteRtLmJni.JniMessageCallback {
 
     /** The tool response to be returned back */
     private var pendingToolResponseJSONMessage: JsonObject? = null
@@ -370,6 +618,7 @@ class Conversation(
     override fun onDone() {
       val localToolResponse = pendingToolResponseJSONMessage
       if (localToolResponse != null) {
+        val activeResponseFormat = resolveResponseFormat(localToolResponse, responseFormat)
         // If there is pending tool response message, send the message.
         LiteRtLmJni.nativeSendMessageAsync(
           handle,
@@ -377,6 +626,13 @@ class Conversation(
           "{}",
           this@JniMessageCallbackImpl,
           @OptIn(ExperimentalApi::class) ExperimentalFlags.visualTokenBudget,
+          repetitionPenaltyConfig,
+          noRepeatNgramConfig,
+          suppressTokensConfig,
+          maxOutputToken ?: -1,
+          null,
+          activeResponseFormat?.type?.value ?: 0,
+          activeResponseFormat?.schemaOrPattern,
         )
         pendingToolResponseJSONMessage = null // Clear after sending
       } else {

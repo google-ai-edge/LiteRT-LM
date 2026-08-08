@@ -12,6 +12,7 @@
   "dependencies": {
     "@litert-lm/core": "0.12.1",
     "highlight.js": "^11.11.1",
+    "katex": "^0.16.28",
     "lit": "^3.3.3",
     "marked": "^18.0.4",
     "marked-highlight": "^2.2.1",

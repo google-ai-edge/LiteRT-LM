@@ -27,6 +27,7 @@
 #include "absl/cleanup/cleanup.h"  // from @com_google_absl
 #include "absl/log/absl_check.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "runtime/engine/engine.h"
@@ -52,8 +53,8 @@ constexpr int kMaxNumTokens = 16;
 
 absl::StatusOr<std::unique_ptr<Engine>> CreateEngine(
     EngineSettings engine_settings) {
-  ASSIGN_OR_RETURN(std::vector<EngineFactory::EngineType> engine_types,
-                   EngineFactory::Instance().ListEngineTypes());
+  ABSL_ASSIGN_OR_RETURN(std::vector<EngineFactory::EngineType> engine_types,
+                        EngineFactory::Instance().ListEngineTypes());
   RET_CHECK_EQ(engine_types.size(), 1);
   return EngineFactory::CreateDefault(std::move(engine_settings));
 }

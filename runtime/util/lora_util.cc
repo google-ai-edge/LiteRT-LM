@@ -20,6 +20,7 @@
 #include <utility>
 
 #include "absl/memory/memory.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "runtime/util/memory_mapped_file.h"
@@ -32,7 +33,9 @@ namespace {
 
 constexpr LazyRE2 kLoRAInputNamePattern = {
     "^(?:(?:query|key|value|post)_w_prime_(?:left|right)|"
-    "lora_atten_(?:q|k|v|o)_(?:a|b)_prime_weight)_\\d+$"};
+    "lora_atten_(?:q|k|v|o)_(?:a|b)_prime_weight)_\\d+$|"
+    "^transformer\\.layer_\\d+\\.attn\\."
+    "(?:q|k|v|attn_vec_einsum)\\.w_prime_(?:left|right)$"};
 
 uint64_t AlignByN(uint64_t number, uint64_t n) {
   const uint64_t q = number / n;
@@ -57,8 +60,8 @@ MemoryMappedFileWithAutoAlignment::Create(ScopedFile::PlatformFile file,
     map_size = AlignByN(offset - aligned_offset + size, kAlignment);
   }
 
-  ASSIGN_OR_RETURN(auto region, MemoryMappedFile::Create(file, aligned_offset,
-                                                         map_size, key));
+  ABSL_ASSIGN_OR_RETURN(auto region, MemoryMappedFile::Create(
+                                         file, aligned_offset, map_size, key));
 
   uint64_t internal_offset = offset - aligned_offset;
   uint64_t final_size;

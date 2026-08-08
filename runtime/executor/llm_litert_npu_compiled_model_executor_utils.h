@@ -139,7 +139,8 @@ absl::Status HWKVCacheUpdate(
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& in_buffers,
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& out_buffers,
     const absl::flat_hash_map<absl::string_view, HWQuantParams>& quant_params =
-        {});
+        {},
+    bool enable_swa = false);
 
 // Performs manual attention mask update.
 absl::Status HWMaskUpdate(

@@ -24,12 +24,12 @@
 #include <gtest/gtest.h>
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/escaping.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
-#include "support/tokenizer/tokenizer.h"  // from @litert
 #include "runtime/components/logits_processor/constrained_decoding/bitmap.h"
 #include "runtime/components/logits_processor/constrained_decoding/constraint.h"
 #include "runtime/components/logits_processor/constrained_decoding/llg_constraint_config.h"
@@ -37,6 +37,7 @@
 #include "runtime/components/logits_processor/constrained_decoding/llguidance_schema_utils.h"
 #include "runtime/util/status_macros.h"
 #include "runtime/util/test_utils.h"  // NOLINT
+#include "support/tokenizer/tokenizer.h"
 
 namespace litert::lm {
 
@@ -130,7 +131,8 @@ class SimpleTokenizer : public Tokenizer {
     return absl::NotFoundError(absl::StrCat("Token not found: ", token));
   }
 
-  absl::StatusOr<std::string> TokenIdsToText(const TokenIds& ids) override {
+  absl::StatusOr<std::string> TokenIdsToText(
+      const TokenIds& ids, bool skip_special_tokens) override {
     std::string text;
     for (int id : ids) {
       auto it = id_to_piece_.find(id);
@@ -190,18 +192,18 @@ class LlgFcToolCallsTest : public testing::Test {
 
   absl::StatusOr<bool> AcceptsInternal(Constraint& constraint,
                                        absl::string_view text) {
-    ASSIGN_OR_RETURN(TokenIds ids, tokenizer_.TextToTokenIds(text));
+    ABSL_ASSIGN_OR_RETURN(TokenIds ids, tokenizer_.TextToTokenIds(text));
     auto state = constraint.Start();
     for (int i = 0; i < ids.size(); ++i) {
       int id = ids[i];
-      ASSIGN_OR_RETURN(auto bitmap, constraint.ComputeBitmap(*state));
+      ABSL_ASSIGN_OR_RETURN(auto bitmap, constraint.ComputeBitmap(*state));
 
       if (!bitmap->Get(id)) {
         return false;
       }
-      ASSIGN_OR_RETURN(state, constraint.ComputeNext(*state, id));
+      ABSL_ASSIGN_OR_RETURN(state, constraint.ComputeNext(*state, id));
     }
-    ASSIGN_OR_RETURN(auto final_bitmap, constraint.ComputeBitmap(*state));
+    ABSL_ASSIGN_OR_RETURN(auto final_bitmap, constraint.ComputeBitmap(*state));
     return final_bitmap->Get(*config_.eos_id);
   }
 

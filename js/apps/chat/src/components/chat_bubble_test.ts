@@ -259,4 +259,43 @@ describe('litert-chat-bubble', () => {
     
     expect(decodeURIComponent(escape(atob(eventDetail!.base64Code))).trim()).toBe('<h1>Hello</h1>');
   });
+
+  it('renders inline and display LaTeX math', async () => {
+    element.message = {
+      role: 'assistant',
+      text: 'Inline math $e^{i\\pi} + 1 = 0$ and display math:\n$$f(x) = \\int_{-\\infty}^{\\infty} e^{-x^2} dx$$',
+      senderName: 'Assistant',
+    };
+    element.index = 8;
+    await element.updateComplete;
+
+    const content = element.shadowRoot!.querySelector('.message-content');
+    expect(content).toBeTruthy();
+
+    // Check KaTeX element exists
+    const katexElements = content!.querySelectorAll('.katex');
+    expect(katexElements.length).toBe(2);
+
+    // One of them should be in display mode (wrapped in .katex-display)
+    const displayKatex = content!.querySelector('.katex-display');
+    expect(displayKatex).toBeTruthy();
+    expect(displayKatex!.querySelector('.katex')).toBeTruthy();
+  });
+
+  it('does not render LaTeX math inside code blocks', async () => {
+    element.message = {
+      role: 'assistant',
+      text: 'Here is code with dollar: `const x = $5;` and a block:\n```\n$y = 6$\n```',
+      senderName: 'Assistant',
+    };
+    element.index = 9;
+    await element.updateComplete;
+
+    const content = element.shadowRoot!.querySelector('.message-content');
+    expect(content).toBeTruthy();
+
+    // There should be no KaTeX elements because they are in code blocks
+    const katexElements = content!.querySelectorAll('.katex');
+    expect(katexElements.length).toBe(0);
+  });
 });

@@ -48,6 +48,7 @@ cc_library(
     hdrs = ["speculative_decoding.h"],
     deps = [
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings:str_format",
         "//runtime/util:litert_status_util",

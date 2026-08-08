@@ -23,6 +23,7 @@
 
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
@@ -133,10 +134,12 @@ absl::Status EndOfMultiModalEmbedding::LookupPrefill(
                      ". Output tensor bytes: ", prefill_output_size));
   }
 
-  auto prefill_output_lock_and_addr = ::litert::TensorBufferScopedLock::Create(
-      *prefill_output, TensorBuffer::LockMode::kWrite);
+  LITERT_ASSIGN_OR_RETURN(
+      auto prefill_output_lock_and_addr,
+      ::litert::TensorBufferScopedLock::Create(*prefill_output,
+                                               TensorBuffer::LockMode::kWrite));
   auto prefill_output_ptr =
-      reinterpret_cast<uint8_t*>(prefill_output_lock_and_addr->second);
+      reinterpret_cast<uint8_t*>(prefill_output_lock_and_addr.second);
   prefill_output_ptr += byte_offset;
   for (int token : tokens) {
     if (token == special_token_) {
@@ -155,8 +158,7 @@ EndOfMultiModalEmbedding::Create(litert::Environment& env,
                                  int special_token) {
   auto handler = std::unique_ptr<EndOfMultiModalEmbedding>(
       new EndOfMultiModalEmbedding(env, model, special_token));
-  RETURN_IF_ERROR(  // IWYU pragma: keep as is included by status_macros.h
-      handler->Initialize());
+  ABSL_RETURN_IF_ERROR(handler->Initialize());
   return handler;
 }
 

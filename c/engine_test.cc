@@ -15,6 +15,7 @@
 #include "c/engine.h"
 
 #include <fcntl.h>
+
 #include <algorithm>
 #include <cstring>
 #include <memory>
@@ -26,45 +27,15 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_matchers.h"  // from @com_google_absl
 #include "absl/synchronization/notification.h"  // from @com_google_absl
-#include "nlohmann/json.hpp"  // from @nlohmann_json
+#include "c/conversation.h"
+#include "c/conversation_internal.h"
+#include "c/engine_internal.h"
 #include "runtime/conversation/conversation.h"
 #include "runtime/conversation/io_types.h"
+#include "runtime/conversation/thinking_config.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/llm_executor_settings.h"
-
-using ::litert::lm::Conversation;
-using ::litert::lm::EngineSettings;
-using ::litert::lm::SessionConfig;
-
-struct LiteRtLmEngineSettings {
-  std::unique_ptr<EngineSettings> settings;
-};
-
-struct LiteRtLmSessionConfig {
-  std::unique_ptr<SessionConfig> config;
-};
-
-struct LiteRtLmConversationOptionalArgs {
-  std::optional<int> visual_token_budget;
-  std::optional<int> max_output_tokens;
-};
-
-struct LiteRtLmConversationConfig {
-  std::optional<SessionConfig> session_config;
-  std::string system_message_json;
-  std::string tools_json;
-  std::string messages_json;
-  bool enable_constrained_decoding = false;
-};
-
-struct LiteRtLmConversation {
-  std::unique_ptr<Conversation> conversation;
-};
-
-struct LiteRtLmJsonResponse {
-  std::string json_string;
-};
 
 namespace {
 
@@ -103,6 +74,15 @@ using SamplerParamsPtr =
 using ConversationConfigPtr =
     std::unique_ptr<LiteRtLmConversationConfig,
                     decltype(&litert_lm_conversation_config_delete)>;
+using RepetitionPenaltyConfigPtr =
+    std::unique_ptr<LiteRtLmRepetitionPenaltyConfig,
+                    decltype(&litert_lm_repetition_penalty_config_delete)>;
+using NoRepeatNgramConfigPtr =
+    std::unique_ptr<LiteRtLmNoRepeatNgramConfig,
+                    decltype(&litert_lm_no_repeat_ngram_config_delete)>;
+using SuppressTokensConfigPtr =
+    std::unique_ptr<LiteRtLmSuppressTokensConfig,
+                    decltype(&litert_lm_suppress_tokens_config_delete)>;
 using OptionalArgsPtr =
     std::unique_ptr<LiteRtLmConversationOptionalArgs,
                     decltype(&litert_lm_conversation_optional_args_delete)>;
@@ -221,6 +201,31 @@ TEST(EngineCTest, SetPrefillChunkSize) {
   ASSERT_TRUE(config.ok());
   EXPECT_EQ(config->prefill_chunk_size, prefill_chunk_size);
 }
+
+TEST(EngineCTest, SetEnableYNNPack) {
+  // Test with nullptr settings (should not crash).
+  litert_lm_engine_settings_set_enable_ynnpack(nullptr, true);
+
+  const std::string task_path = "test_model_path_1";
+  EngineSettingsPtr settings(
+      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
+                                       /* vision_backend_str */ nullptr,
+                                       /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+  litert_lm_engine_settings_set_enable_ynnpack(settings.get(), true);
+  auto config1 = settings->settings->GetMainExecutorSettings()
+                     .GetBackendConfig<litert::lm::CpuConfig>();
+  ASSERT_TRUE(config1.ok());
+  EXPECT_TRUE(config1->enable_ynnpack);  // NOLINT: config is checked above.
+
+  litert_lm_engine_settings_set_enable_ynnpack(settings.get(), false);
+  auto config2 = settings->settings->GetMainExecutorSettings()
+                     .GetBackendConfig<litert::lm::CpuConfig>();
+  ASSERT_TRUE(config2.ok());
+  EXPECT_FALSE(config2->enable_ynnpack);  // NOLINT: config is checked above.
+}
+
 TEST(EngineCTest, SetParallelFileSectionLoading) {
   const std::string task_path = "test_model_path_1";
   EngineSettingsPtr settings(
@@ -288,6 +293,30 @@ TEST(EngineCTest, SetEnableSpeculativeDecoding) {
                    .GetAdvancedSettings()
                    .value_or(litert::lm::AdvancedSettings())
                    .enable_speculative_decoding);
+}
+
+TEST(EngineCTest, SetUseRingbuffersLocalAttention) {
+  const std::string task_path = "test_model_path_1";
+  EngineSettingsPtr settings(
+      litert_lm_engine_settings_create(task_path.c_str(), "gpu_artisan",
+                                       /* vision_backend_str */ nullptr,
+                                       /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+
+  litert_lm_engine_settings_set_use_ringbuffers_local_attention(settings.get(),
+                                                                true);
+  auto config1 = settings->settings->GetMainExecutorSettings()
+                     .GetBackendConfig<litert::lm::GpuArtisanConfig>();
+  ASSERT_TRUE(config1.ok());
+  EXPECT_TRUE(config1->use_autosized_ringbuffers);
+
+  litert_lm_engine_settings_set_use_ringbuffers_local_attention(settings.get(),
+                                                                false);
+  auto config2 = settings->settings->GetMainExecutorSettings()
+                     .GetBackendConfig<litert::lm::GpuArtisanConfig>();
+  ASSERT_TRUE(config2.ok());
+  EXPECT_FALSE(config2->use_autosized_ringbuffers);
 }
 
 TEST(EngineCTest, CreateSettingsFromRawFileDescriptor) {
@@ -472,6 +501,36 @@ TEST(EngineCTest, CreateConversationConfigWithNoSamplerParams) {
   EXPECT_EQ(preface.messages, expected_messages);
 }
 
+TEST(EngineCTest, CreateConversationConfigWithPromptTemplate) {
+  const std::string task_path = GetTestdataPath(
+      "litert_lm/runtime/testdata/test_lm_new_metadata.task");
+
+  EngineSettingsPtr settings(
+      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
+                                       /* vision_backend_str */ nullptr,
+                                       /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+  litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
+
+  EnginePtr engine(litert_lm_engine_create(settings.get()),
+                   &litert_lm_engine_delete);
+  ASSERT_NE(engine, nullptr);
+
+  ConversationConfigPtr conversation_config(
+      litert_lm_conversation_config_create(),
+      &litert_lm_conversation_config_delete);
+  ASSERT_NE(conversation_config, nullptr);
+  const std::string custom_template = "custom template content";
+  litert_lm_conversation_config_set_prompt_template(conversation_config.get(),
+                                                    custom_template.c_str());
+
+  ConversationPtr conversation(
+      litert_lm_conversation_create(engine.get(), conversation_config.get()),
+      &litert_lm_conversation_delete);
+  ASSERT_NE(conversation, nullptr);
+}
+
 TEST(EngineCTest, CreateConversationConfigWithNoSamplerParamsNoSystemMessage) {
   // 1. Create an engine.
   const std::string task_path = GetTestdataPath(
@@ -544,8 +603,8 @@ TEST(EngineCTest, CreateConversationConfigWithSamplerBackend) {
       &litert_lm_conversation_delete);
   ASSERT_NE(conversation, nullptr);
 
-  const auto& final_session_config = conversation->conversation->GetConfig()
-                                   .GetSessionConfig();
+  const auto& final_session_config =
+      conversation->conversation->GetConfig().GetSessionConfig();
   EXPECT_EQ(final_session_config.GetSamplerBackend(), litert::lm::Backend::GPU);
 }
 
@@ -776,6 +835,84 @@ TEST(EngineCTest, CreateConversationConfigWithNoSystemMessage) {
   const auto& preface = std::get<litert::lm::JsonPreface>(
       conversation->conversation->GetConfig().GetPreface());
   EXPECT_EQ(preface.messages, nullptr);
+}
+
+TEST(EngineCTest, ThinkingConfig) {
+  const std::string task_path = GetTestdataPath(
+      "litert_lm/runtime/testdata/test_lm.litertlm");
+  EngineSettingsPtr settings(litert_lm_engine_settings_create(
+                                 task_path.c_str(), "cpu", nullptr, nullptr),
+                             &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+
+  EnginePtr engine(litert_lm_engine_create(settings.get()),
+                   &litert_lm_engine_delete);
+  ASSERT_NE(engine, nullptr);
+
+  SessionConfigPtr session_config(litert_lm_session_config_create(),
+                                  &litert_lm_session_config_delete);
+  ASSERT_NE(session_config, nullptr);
+
+  ConversationConfigPtr conversation_config(
+      litert_lm_conversation_config_create(),
+      &litert_lm_conversation_config_delete);
+  ASSERT_NE(conversation_config, nullptr);
+  litert_lm_conversation_config_set_session_config(conversation_config.get(),
+                                                   session_config.get());
+
+  // Set thinking_config on conversation config.
+  LiteRtLmThinkingConfig* thinking_config = litert_lm_thinking_config_create();
+  ASSERT_NE(thinking_config, nullptr);
+  litert_lm_thinking_config_set_enable_thinking(thinking_config, true);
+  litert_lm_thinking_config_set_thinking_token_budget(thinking_config, 42);
+  litert_lm_conversation_config_set_thinking_config(conversation_config.get(),
+                                                    thinking_config);
+  litert_lm_thinking_config_delete(thinking_config);
+
+  ConversationPtr conversation(
+      litert_lm_conversation_create(engine.get(), conversation_config.get()),
+      &litert_lm_conversation_delete);
+  ASSERT_NE(conversation, nullptr);
+
+  ASSERT_TRUE(
+      conversation->conversation->GetConfig().thinking_config().has_value());
+  EXPECT_TRUE(conversation->conversation->GetConfig()
+                  .thinking_config()
+                  ->enable_thinking());
+  EXPECT_EQ(conversation->conversation->GetConfig()
+                .thinking_config()
+                ->thinking_token_budget(),
+            42);
+
+  // Test resetting thinking_config to nullptr on conversation_config.
+  litert_lm_conversation_config_set_thinking_config(conversation_config.get(),
+                                                    nullptr);
+  EXPECT_FALSE(conversation_config->thinking_config.has_value());
+}
+
+TEST(EngineCTest, OptionalArgsThinkingConfig) {
+  LiteRtLmConversationOptionalArgs* optional_args =
+      litert_lm_conversation_optional_args_create();
+  ASSERT_NE(optional_args, nullptr);
+
+  LiteRtLmThinkingConfig* thinking_config = litert_lm_thinking_config_create();
+  ASSERT_NE(thinking_config, nullptr);
+  litert_lm_thinking_config_set_enable_thinking(thinking_config, false);
+  litert_lm_thinking_config_set_thinking_token_budget(thinking_config, 0);
+  litert_lm_conversation_optional_args_set_thinking_config(optional_args,
+                                                           thinking_config);
+  litert_lm_thinking_config_delete(thinking_config);
+
+  ASSERT_TRUE(optional_args->thinking_config.has_value());
+  EXPECT_FALSE(optional_args->thinking_config->enable_thinking());
+  EXPECT_EQ(optional_args->thinking_config->thinking_token_budget(), 0);
+
+  // Test resetting thinking_config to nullptr on optional_args.
+  litert_lm_conversation_optional_args_set_thinking_config(optional_args,
+                                                           nullptr);
+  EXPECT_FALSE(optional_args->thinking_config.has_value());
+
+  litert_lm_conversation_optional_args_delete(optional_args);
 }
 
 TEST(EngineCTest, TokenizerTest) {
@@ -1180,9 +1317,46 @@ TEST(EngineCTest, ConversationSendMessageWithOptionalArgs) {
   ASSERT_NE(conversation, nullptr);
 
   // 4. Create Optional Args.
+  RepetitionPenaltyConfigPtr repetition_penalty_config(
+      litert_lm_repetition_penalty_config_create(),
+      &litert_lm_repetition_penalty_config_delete);
+  ASSERT_NE(repetition_penalty_config, nullptr);
+  litert_lm_repetition_penalty_config_set_repetition_penalty(
+      repetition_penalty_config.get(), 1.2f);
+  litert_lm_repetition_penalty_config_set_presence_penalty(
+      repetition_penalty_config.get(), 0.1f);
+  litert_lm_repetition_penalty_config_set_frequency_penalty(
+      repetition_penalty_config.get(), 0.2f);
+  litert_lm_repetition_penalty_config_set_window_size(
+      repetition_penalty_config.get(), 10);
+
   OptionalArgsPtr optional_args(litert_lm_conversation_optional_args_create(),
                                 &litert_lm_conversation_optional_args_delete);
   ASSERT_NE(optional_args, nullptr);
+
+  NoRepeatNgramConfigPtr no_repeat_ngram_config(
+      litert_lm_no_repeat_ngram_config_create(),
+      &litert_lm_no_repeat_ngram_config_delete);
+  ASSERT_NE(no_repeat_ngram_config, nullptr);
+  litert_lm_no_repeat_ngram_config_set_no_repeat_ngram_size(
+      no_repeat_ngram_config.get(), 3);
+  litert_lm_no_repeat_ngram_config_set_window_size(no_repeat_ngram_config.get(),
+                                                   10);
+
+  SuppressTokensConfigPtr suppress_tokens_config(
+      litert_lm_suppress_tokens_config_create(),
+      &litert_lm_suppress_tokens_config_delete);
+  ASSERT_NE(suppress_tokens_config, nullptr);
+  int suppress_tokens[] = {10, 20, 30};
+  litert_lm_suppress_tokens_config_set_suppress_tokens(
+      suppress_tokens_config.get(), suppress_tokens, 3);
+
+  litert_lm_conversation_optional_args_set_repetition_penalty_config(
+      optional_args.get(), repetition_penalty_config.get());
+  litert_lm_conversation_optional_args_set_no_repeat_ngram_config(
+      optional_args.get(), no_repeat_ngram_config.get());
+  litert_lm_conversation_optional_args_set_suppress_tokens_config(
+      optional_args.get(), suppress_tokens_config.get());
   litert_lm_conversation_optional_args_set_visual_token_budget(
       optional_args.get(), 100);
 
@@ -1198,6 +1372,75 @@ TEST(EngineCTest, ConversationSendMessageWithOptionalArgs) {
   const char* response_str = litert_lm_json_response_get_string(response.get());
   ASSERT_NE(response_str, nullptr);
   EXPECT_GT(strlen(response_str), 0);
+}
+
+TEST(EngineCTest, ConversationSendMessageWithLlGuidance) {
+  // 1. Create an engine.
+  const std::string task_path = GetTestdataPath(
+      "litert_lm/runtime/testdata/test_lm.litertlm");
+
+  EngineSettingsPtr settings(
+      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
+                                       /* vision_backend_str */ nullptr,
+                                       /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+  litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
+
+  EnginePtr engine(litert_lm_engine_create(settings.get()),
+                   &litert_lm_engine_delete);
+  ASSERT_NE(engine, nullptr);
+
+  // 2. Create a Conversation Config with constrained decoding enabled.
+  ConversationConfigPtr conversation_config(
+      litert_lm_conversation_config_create(),
+      &litert_lm_conversation_config_delete);
+  ASSERT_NE(conversation_config, nullptr);
+  LiteRtLmConstraintProviderType provider =
+      kLiteRtLmConstraintProviderTypeLlGuidance;
+  litert_lm_conversation_config_set_constraint_provider(
+      conversation_config.get(), &provider);
+  litert_lm_conversation_config_set_constraint_provider(
+      conversation_config.get(), nullptr);
+  litert_lm_conversation_config_set_constraint_provider(
+      conversation_config.get(), &provider);
+  litert_lm_conversation_config_set_enable_constrained_decoding(
+      conversation_config.get(), true);
+
+  // 3. Create a Conversation with the Conversation Config.
+  ConversationPtr conversation(
+      litert_lm_conversation_create(engine.get(), conversation_config.get()),
+      &litert_lm_conversation_delete);
+  ASSERT_NE(conversation, nullptr);
+
+  // 4. Create Optional Args with constraint.
+  OptionalArgsPtr optional_args(litert_lm_conversation_optional_args_create(),
+                                &litert_lm_conversation_optional_args_delete);
+  ASSERT_NE(optional_args, nullptr);
+
+  litert_lm_conversation_optional_args_set_constraint(
+      optional_args.get(), kLiteRtLmConstraintTypeRegex, "aiedge");
+
+  // 5. Send a message to the conversation with optional args.
+  const char* message_json =
+      R"({"role": "user", "content": [{"type": "text", "text": "Hello"}]})";
+
+  JsonResponsePtr response(
+      litert_lm_conversation_send_message(conversation.get(), message_json,
+                                          /* extra_context */ nullptr,
+                                          optional_args.get()),
+      &litert_lm_json_response_delete);
+  ASSERT_NE(response, nullptr);
+
+  const char* response_str = litert_lm_json_response_get_string(response.get());
+  ASSERT_NE(response_str, nullptr);
+
+  auto response_json = nlohmann::ordered_json::parse(response_str);
+  ASSERT_TRUE(response_json.contains("content"));
+  ASSERT_TRUE(response_json["content"].is_array());
+  ASSERT_GE(response_json["content"].size(), 1);
+  std::string text = response_json["content"][0]["text"];
+  EXPECT_EQ(text, "aiedge");
 }
 
 TEST(EngineCTest, ConversationCloneNull) {
@@ -1445,9 +1688,46 @@ TEST(EngineCTest, ConversationSendMessageStreamWithOptionalArgs) {
   const char* message_json =
       R"({"role": "user", "content": [{"type": "text", "text": "Hello"}]})";
 
+  RepetitionPenaltyConfigPtr repetition_penalty_config(
+      litert_lm_repetition_penalty_config_create(),
+      &litert_lm_repetition_penalty_config_delete);
+  ASSERT_NE(repetition_penalty_config, nullptr);
+  litert_lm_repetition_penalty_config_set_repetition_penalty(
+      repetition_penalty_config.get(), 1.2f);
+  litert_lm_repetition_penalty_config_set_presence_penalty(
+      repetition_penalty_config.get(), 0.1f);
+  litert_lm_repetition_penalty_config_set_frequency_penalty(
+      repetition_penalty_config.get(), 0.2f);
+  litert_lm_repetition_penalty_config_set_window_size(
+      repetition_penalty_config.get(), 10);
+
   OptionalArgsPtr optional_args(litert_lm_conversation_optional_args_create(),
                                 &litert_lm_conversation_optional_args_delete);
   ASSERT_NE(optional_args, nullptr);
+
+  NoRepeatNgramConfigPtr no_repeat_ngram_config(
+      litert_lm_no_repeat_ngram_config_create(),
+      &litert_lm_no_repeat_ngram_config_delete);
+  ASSERT_NE(no_repeat_ngram_config, nullptr);
+  litert_lm_no_repeat_ngram_config_set_no_repeat_ngram_size(
+      no_repeat_ngram_config.get(), 3);
+  litert_lm_no_repeat_ngram_config_set_window_size(no_repeat_ngram_config.get(),
+                                                   10);
+
+  SuppressTokensConfigPtr suppress_tokens_config(
+      litert_lm_suppress_tokens_config_create(),
+      &litert_lm_suppress_tokens_config_delete);
+  ASSERT_NE(suppress_tokens_config, nullptr);
+  int suppress_tokens[] = {10, 20, 30};
+  litert_lm_suppress_tokens_config_set_suppress_tokens(
+      suppress_tokens_config.get(), suppress_tokens, 3);
+
+  litert_lm_conversation_optional_args_set_repetition_penalty_config(
+      optional_args.get(), repetition_penalty_config.get());
+  litert_lm_conversation_optional_args_set_no_repeat_ngram_config(
+      optional_args.get(), no_repeat_ngram_config.get());
+  litert_lm_conversation_optional_args_set_suppress_tokens_config(
+      optional_args.get(), suppress_tokens_config.get());
   litert_lm_conversation_optional_args_set_visual_token_budget(
       optional_args.get(), 100);
 
@@ -1504,12 +1784,11 @@ using BenchmarkInfoPtr =
                     decltype(&litert_lm_benchmark_info_delete)>;
 
 TEST(EngineCTest, Benchmark) {
-  auto task_path =
-      std::filesystem::path(::testing::SrcDir()) /
-      "litert_lm/runtime/testdata/test_lm_new_metadata.task";
+  const std::string task_path = GetTestdataPath(
+      "litert_lm/runtime/testdata/test_lm_new_metadata.task");
 
   EngineSettingsPtr settings(
-      litert_lm_engine_settings_create(task_path.string().c_str(), "cpu",
+      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
                                        /* vision_backend_str */ nullptr,
                                        /* audio_backend_str */ nullptr),
       &litert_lm_engine_settings_delete);
@@ -1818,7 +2097,7 @@ TEST(EngineCTest, ConversationOptionalArgsTest) {
   std::string text = response_json["content"][0]["text"];
   EXPECT_GT(text.length(), 0);
   EXPECT_LT(text.length(), 5);
-  EXPECT_EQ(text, "\xE3\x81\xA9");
+  EXPECT_EQ(text, "\xE6\xB2\xBF");
 }
 
 }  // namespace

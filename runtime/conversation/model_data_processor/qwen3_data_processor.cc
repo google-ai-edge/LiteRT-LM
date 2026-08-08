@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "absl/memory/memory.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "nlohmann/json_fwd.hpp"  // from @nlohmann_json
@@ -70,7 +71,7 @@ absl::StatusOr<Message> Qwen3DataProcessor::ToMessageImpl(
   nlohmann::ordered_json message = {{"role", "assistant"}};
   if (preface_.has_value() && std::holds_alternative<JsonPreface>(*preface_) &&
       !std::get<JsonPreface>(*preface_).tools.empty()) {
-    ASSIGN_OR_RETURN(
+    ABSL_ASSIGN_OR_RETURN(
         nlohmann::ordered_json content_and_tool_calls,
         ParseTextAndToolCalls(
             response_text, config_.code_fence_start, config_.code_fence_end,

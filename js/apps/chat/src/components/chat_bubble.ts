@@ -24,7 +24,14 @@ import {LlmChatStateController, type StoredMessage} from '../state_controller.js
 import {sharedStyles} from '../styles/shared_styles.js';
 
 import {getLanguage, highlight, highlightAuto, hljsStyles} from './hljs_util.js';
-import {renderHtml} from './util.js';
+import {katexStyles, renderHtml} from './util.js';
+import * as katex from 'katex';
+
+const MATH_START = 'LitertLmMathStart';
+const MATH_END = 'LitertLmMathEnd';
+const MATH_RESTORE_RE = /LitertLmMathStart(\d+)LitertLmMathEnd/g;
+
+
 
 marked.use({
   renderer: {
@@ -83,7 +90,7 @@ export class LitertChatBubble extends LitElement {
   state!: LlmChatStateController;
 
   static override styles = [
-    sharedStyles, hljsStyles, css`
+    sharedStyles, hljsStyles, katexStyles, css`
       :host {
         display: flex;
         flex-direction: column;
@@ -261,6 +268,19 @@ export class LitertChatBubble extends LitElement {
     `
   ];
 
+  private renderMath(latex: string, displayMode: boolean): string {
+    try {
+      return katex.renderToString(latex, {
+        displayMode,
+        throwOnError: false,
+        output: 'html',
+      });
+    } catch (e) {
+      console.error('[LiteRT-LM] Failed to render math:', e);
+      return `<code>${latex}</code>`;
+    }
+  }
+
   private renderMarkdown(text: string): string {
     // Note: This is called in the render function for each token we receive
     // from the model.
@@ -268,8 +288,46 @@ export class LitertChatBubble extends LitElement {
     // each token, but it's fast enough for now.
     // A better solution would incrementally render new chunks of the markdown.
     if (!text) return '';
+
+    const mathStore: string[] = [];
+
+    // Split by code blocks and inline code to avoid processing math inside them
+    const codePattern = /(```[\s\S]*?```|`[^`]*`)/g;
+    const parts = text.split(codePattern);
+
+    const processedParts = parts.map((part, i) => {
+      // Odd indices are code blocks/inline code - leave them alone
+      if (i % 2 === 1) return part;
+
+      // Even indices are regular text - process math
+      // 1. Extract and render display math: $$...$$
+      let processed = part.replace(/\$\$([\s\S]+?)\$\$/g, (_, tex: string) => {
+        const idx = mathStore.length;
+        mathStore.push(this.renderMath(tex.trim(), true));
+        return `${MATH_START}${idx}${MATH_END}`;
+      });
+
+      // 2. Extract and render inline math: $...$
+      processed = processed.replace(/\$([^\s$](?:[^$]*[^\s$])?)\$/g, (_, tex: string) => {
+        const idx = mathStore.length;
+        mathStore.push(this.renderMath(tex.trim(), false));
+        return `${MATH_START}${idx}${MATH_END}`;
+      });
+
+      return processed;
+    });
+
+    const processedText = processedParts.join('');
+
     try {
-      return marked.parse(text, {async: false});
+      let htmlResult = marked.parse(processedText, {async: false}) as string;
+
+      // 3. Restore rendered math blocks
+      htmlResult = htmlResult.replace(MATH_RESTORE_RE, (_, idx: string) => {
+        return mathStore[Number(idx)] || '';
+      });
+
+      return htmlResult;
     } catch (e) {
       console.error('[LiteRT-LM] Failed to parse markdown:', e);
       return text

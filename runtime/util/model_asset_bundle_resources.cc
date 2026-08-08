@@ -23,6 +23,7 @@ limitations under the License.
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/memory/memory.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/str_join.h"  // from @com_google_absl
@@ -45,14 +46,15 @@ ModelAssetBundleResources::Create(
         "The model asset bundle file is not valid.");
   }
 
-  ASSIGN_OR_RETURN(auto mapped_model_asset_bundle_file,
-                   MemoryMappedFile::Create(model_asset_bundle_file->file()));
+  ABSL_ASSIGN_OR_RETURN(
+      auto mapped_model_asset_bundle_file,
+      MemoryMappedFile::Create(model_asset_bundle_file->file()));
 
   absl::string_view data(
       reinterpret_cast<const char*>(mapped_model_asset_bundle_file->data()),
       mapped_model_asset_bundle_file->length());
 
-  ASSIGN_OR_RETURN(auto files, ExtractFilesfromZipFile(data));
+  ABSL_ASSIGN_OR_RETURN(auto files, ExtractFilesfromZipFile(data));
 
   return absl::WrapUnique(new ModelAssetBundleResources(
       tag, std::move(mapped_model_asset_bundle_file), std::move(files)));
@@ -72,7 +74,7 @@ ModelAssetBundleResources::Create(
       reinterpret_cast<const char*>(model_asset_bundle_file->data()),
       model_asset_bundle_file->length());
 
-  ASSIGN_OR_RETURN(auto files, ExtractFilesfromZipFile(data));
+  ABSL_ASSIGN_OR_RETURN(auto files, ExtractFilesfromZipFile(data));
 
   return absl::WrapUnique(new ModelAssetBundleResources(
       tag, std::move(model_asset_bundle_file), std::move(files)));

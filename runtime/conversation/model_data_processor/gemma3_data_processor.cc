@@ -24,6 +24,7 @@
 
 #include "absl/memory/memory.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
@@ -109,12 +110,12 @@ Gemma3DataProcessor::Create(Gemma3DataProcessorConfig config,
     return absl::FailedPreconditionError(
         "Constrained decoding was disabled at build time.");
   }
-  ASSIGN_OR_RETURN(auto audio_preprocessor,
-                   AudioPreprocessorMiniAudio::Create(
-                       AudioPreprocessorConfig::CreateDefaultUsmConfig()));
-  return absl::WrapUnique(new Gemma3DataProcessor(
-      config, preface, ImagePreprocessor::Create(),
-      std::move(audio_preprocessor)));
+  ABSL_ASSIGN_OR_RETURN(auto audio_preprocessor,
+                        AudioPreprocessorMiniAudio::Create(
+                            AudioPreprocessorConfig::CreateDefaultUsmConfig()));
+  return absl::WrapUnique(
+      new Gemma3DataProcessor(config, preface, ImagePreprocessor::Create(),
+                              std::move(audio_preprocessor)));
 #else
   std::unique_ptr<LiteRtLmGemmaModelConstraintProvider,
                   decltype(&LiteRtLmGemmaModelConstraintProvider_Destroy)>
@@ -149,9 +150,9 @@ Gemma3DataProcessor::Create(Gemma3DataProcessorConfig config,
     }
     constraint_provider.reset(provider);
   }
-  ASSIGN_OR_RETURN(auto audio_preprocessor,
-                   AudioPreprocessorMiniAudio::Create(
-                       AudioPreprocessorConfig::CreateDefaultUsmConfig()));
+  ABSL_ASSIGN_OR_RETURN(auto audio_preprocessor,
+                        AudioPreprocessorMiniAudio::Create(
+                            AudioPreprocessorConfig::CreateDefaultUsmConfig()));
   return absl::WrapUnique(new Gemma3DataProcessor(
       std::move(constraint_provider), config, preface,
       ImagePreprocessor::Create(), std::move(audio_preprocessor)));
@@ -179,15 +180,15 @@ absl::StatusOr<ordered_json> Gemma3DataProcessor::MessageToTemplateInput(
         // If the content is an array, treat each item as a tool response.
         template_input["content"] = ordered_json::array();
         for (const auto& item : message["content"]) {
-          ASSIGN_OR_RETURN(std::string formatted_tool_response,
-                           FormatToolResponse(item));
+          ABSL_ASSIGN_OR_RETURN(std::string formatted_tool_response,
+                                FormatToolResponse(item));
           template_input["content"].push_back(
               {{"type", "text"}, {"text", formatted_tool_response}});
         }
       } else if (message["content"].is_object()) {
         // If the content is an object, treat it as a single tool response.
-        ASSIGN_OR_RETURN(std::string formatted_tool_response,
-                         FormatToolResponse(message["content"]));
+        ABSL_ASSIGN_OR_RETURN(std::string formatted_tool_response,
+                              FormatToolResponse(message["content"]));
         template_input["content"] = formatted_tool_response;
       } else {
         // If the content is neither an array nor an object, pass it through
@@ -216,8 +217,8 @@ absl::StatusOr<ordered_json> Gemma3DataProcessor::MessageToTemplateInput(
       if (function.contains("arguments")) {
         if (function["arguments"].is_object()) {
           for (const auto& [key, value] : function["arguments"].items()) {
-            ASSIGN_OR_RETURN(std::string formatted_value,
-                             FormatValueAsPython(value));
+            ABSL_ASSIGN_OR_RETURN(std::string formatted_value,
+                                  FormatValueAsPython(value));
             tool_call_input["function"]["arguments"][key] = formatted_value;
           }
         } else {
@@ -280,7 +281,7 @@ absl::StatusOr<Message> Gemma3DataProcessor::ToMessageImpl(
   ordered_json message = {{"role", "assistant"}};
   if (preface_.has_value() && std::holds_alternative<JsonPreface>(*preface_) &&
       !std::get<JsonPreface>(*preface_).tools.empty()) {
-    ASSIGN_OR_RETURN(
+    ABSL_ASSIGN_OR_RETURN(
         ordered_json content_and_tool_calls,
         ParseTextAndToolCalls(
             response_text, config_.code_fence_start, config_.code_fence_end,
@@ -308,7 +309,7 @@ absl::StatusOr<ordered_json> Gemma3DataProcessor::FormatTools(
   }
   ordered_json formatted_tools = ordered_json::array();
   for (const auto& tool : tools) {
-    ASSIGN_OR_RETURN(std::string formatted_tool, FormatToolAsPython(tool));
+    ABSL_ASSIGN_OR_RETURN(std::string formatted_tool, FormatToolAsPython(tool));
     formatted_tools.push_back(formatted_tool);
   }
   return formatted_tools;
@@ -369,9 +370,10 @@ absl::Status Gemma3DataProcessor::CloneStateImpl(
       static_cast<const Gemma3DataProcessor&>(other);
   if (other_gemma3_data_processor.audio_preprocessor_ != nullptr) {
     if (audio_preprocessor_ == nullptr) {
-      ASSIGN_OR_RETURN(audio_preprocessor_,
-                       AudioPreprocessorMiniAudio::Create(
-                           AudioPreprocessorConfig::CreateDefaultUsmConfig()));
+      ABSL_ASSIGN_OR_RETURN(
+          audio_preprocessor_,
+          AudioPreprocessorMiniAudio::Create(
+              AudioPreprocessorConfig::CreateDefaultUsmConfig()));
     }
     *static_cast<AudioPreprocessorMiniAudio*>(audio_preprocessor_.get()) =
         *static_cast<AudioPreprocessorMiniAudio*>(

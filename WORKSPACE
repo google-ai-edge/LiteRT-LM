@@ -2,14 +2,14 @@
 
 workspace(name = "litert_lm")
 
-# UPDATED = 2026-06-29
-LITERT_REF = "622f1f3c1352f4bc2925061b8cb72e9ce52874fe"
+# UPDATED = 2026-08-07
+LITERT_REF = "b0f6c12088df229f6342f1af164caa66ffa7b010"
 
-LITERT_SHA256 = "f3fd51d1e1eb33472ba425462bf53b05ad02bddca9cd58c61209d4a8be7829d0"
+LITERT_SHA256 = "8439f4f3ff7c06912ccc1b6e358f36e737f071d75b786c4562edceab04881096"
 
-TENSORFLOW_REF = "f197d45528bb1dcf6e2d5409907c1352c30c0e5e"
+TENSORFLOW_REF = "9445166b2bae51d8ade232232b3bcf73489d3a99"
 
-TENSORFLOW_SHA256 = "0a877fd2a217030441a316a6a3404ba9d3e56d420fe80d9a9a5724f7781d1cc0"
+TENSORFLOW_SHA256 = "2c541cc6c7969f7750a0bc00bf7bd559cb724db88fe6e066a1e764db5ff9a85f"
 
 # buildifier: disable=load-on-top
 
@@ -92,6 +92,16 @@ http_archive(
     url = "https://github.com/abseil/abseil-cpp/archive/20260526.0.tar.gz",
 )
 
+# Toolchains for ML projects
+# Older version than one tensorflow uses as current tensorflow breaks workspace build.
+# Details: https://github.com/google-ml-infra/rules_ml_toolchain
+http_archive(
+    name = "rules_ml_toolchain",
+    sha256 = "3b05687842427041c65d1bc2f4aeda3a3079557120f5be8c34690087a88c5de5",
+    strip_prefix = "rules_ml_toolchain-2eddbc595cc0bbe650c2640204f66b14f015f1a8",
+    url = "https://github.com/google-ml-infra/rules_ml_toolchain/archive/2eddbc595cc0bbe650c2640204f66b14f015f1a8.tar.gz",
+)
+
 # TensorFlow
 http_archive(
     name = "org_tensorflow",
@@ -110,15 +120,6 @@ http_archive(
 load("@org_tensorflow//tensorflow:workspace3.bzl", "tf_workspace3")
 
 tf_workspace3()
-
-# Toolchains for ML projects
-# Details: https://github.com/google-ml-infra/rules_ml_toolchain
-http_archive(
-    name = "rules_ml_toolchain",
-    sha256 = "9285d90601757838d064a12f51f14374d40064ddc2fa198979908b6bd0f89348",
-    strip_prefix = "rules_ml_toolchain-7f40603f574b95746152332ef3ad5fce63f1768d",
-    url = "https://github.com/google-ml-infra/rules_ml_toolchain/archive/7f40603f574b95746152332ef3ad5fce63f1768d.tar.gz",
-)
 
 load(
     "@rules_ml_toolchain//cc/deps:cc_toolchain_deps.bzl",
@@ -455,6 +456,10 @@ http_jar(
 http_archive(
     name = "skia",
     patch_args = ["-p1"],
+    patch_cmds = [
+        # Replace <jpeglib.h> with "jpeglib.h".
+        "sed -i -e 's|#include <jpeglib.h>|#include \"jpeglib.h\"|g' */*.cpp */*.h */*/*.cpp */*/*.h",
+    ],
     patches = ["@//:PATCH.skia"],
     repo_mapping = {
         "@libpng": "@png",
@@ -518,6 +523,11 @@ google_tensor()
 load("@litert//third_party/intel_openvino:openvino.bzl", "openvino_configure")
 
 openvino_configure()
+
+# SAMSUNG EXYNOS_AI_LITECORE----------------------------------------------------------------------
+load("@litert//third_party/exynos_ai_litecore:workspace.bzl", "exynos_ai_litecore")
+
+exynos_ai_litecore()
 
 http_archive(
     name = "nanobind_json",

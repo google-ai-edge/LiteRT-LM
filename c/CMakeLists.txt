@@ -12,14 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-set(PKG_ROOT ${CMAKE_CURRENT_SOURCE_DIR})
-
 # ==============================================================================
-# 1. Engine Library
-#    Bazel: cc_library(name = "engine", ...)
+# Engine Library
 # ==============================================================================
 add_litertlm_library(c_engine STATIC
   engine.cc
+  engine_internal.h
 )
 add_library(LiteRTLM::C::Engine ALIAS c_engine)
 
@@ -33,10 +31,9 @@ target_include_directories(c_engine
 target_link_libraries(c_engine
   PUBLIC
     LITERTLM_DEPS
-
     LiteRTLM::Runtime::Conversation
     LiteRTLM::Runtime::Conversation::IoTypes
-    LiteRTLM::Runtime::Core::EngineImpl
+    LiteRTLM::Runtime::Core::EngineAdvancedImpl
     LiteRTLM::Runtime::Engine::Interface
     LiteRTLM::Runtime::Engine::Settings
     LiteRTLM::Runtime::Engine::IoTypes
@@ -44,7 +41,7 @@ target_link_libraries(c_engine
 )
 
 # ==============================================================================
-# 2. Folder Facade
+# Folder Facade
 # ==============================================================================
 add_library(c_libs INTERFACE)
 add_library(LiteRTLM::C ALIAS c_libs)

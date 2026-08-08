@@ -19,6 +19,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <system_error>  // NOLINT
 #include <utility>
 #include <variant>
 
@@ -370,6 +371,126 @@ TEST(LlmExecutorConfigTest, GetProgramCacheFileWithIdentifier) {
 
   EXPECT_THAT(path, testing::HasSubstr("test_model.tflite_"));
   EXPECT_THAT(path, testing::EndsWith("_9.program_cache"));
+}
+
+TEST(LlmExecutorConfigTest,
+     GetProgramCacheFileCheckAndClean_DeletesStaleCaches) {
+  ASSERT_OK_AND_ASSIGN(
+      std::string model_file,
+      JoinPath(testing::TempDir(), "stale_test_model_prog.tflite"));
+  std::ofstream ofs(model_file);
+  ofs << "test data";
+  ofs.close();
+
+  ASSERT_OK_AND_ASSIGN(std::string cache_dir,
+                       JoinPath(testing::TempDir(), "cache_dir_prog"));
+  std::error_code ec;
+  std::filesystem::create_directory(cache_dir, ec);
+
+  ASSERT_OK_AND_ASSIGN(
+      std::string stale_cache,
+      JoinPath(cache_dir, "stale_test_model_prog.tflite_oldid.program_cache"));
+  std::ofstream ofs_stale(stale_cache);
+  ofs_stale << "stale test data";
+  ofs_stale.close();
+
+  EXPECT_TRUE(std::filesystem::exists(stale_cache));
+
+  auto model_assets = ModelAssets::Create(model_file);
+  ASSERT_OK(model_assets);
+  TestExecutorSettings settings(*model_assets);
+  settings.SetCacheDir(cache_dir);
+
+  // check_and_clean = true
+  auto result = settings.GetProgramCacheFile(".program_cache", true);
+  ASSERT_OK(result);
+
+  // Stale cache should be deleted.
+  EXPECT_FALSE(std::filesystem::exists(stale_cache));
+}
+
+TEST(LlmExecutorConfigTest, GetWeightCacheFile) {
+  auto model_assets = ModelAssets::Create("/path/to/model.tflite");
+  ASSERT_OK(model_assets);
+  TestExecutorSettings settings(*model_assets);
+  settings.SetCacheDir("/cache/dir");
+
+  auto result = settings.GetWeightCacheFile();
+  ASSERT_OK(result);
+  EXPECT_TRUE(std::holds_alternative<std::string>(*result));
+  EXPECT_THAT(std::get<std::string>(*result),
+              testing::HasSubstr("model.tflite.cache"));
+}
+
+TEST(LlmExecutorConfigTest, GetWeightCacheFileWithSuffix) {
+  auto model_assets = ModelAssets::Create("/path/to/model.tflite");
+  ASSERT_OK(model_assets);
+  TestExecutorSettings settings(*model_assets);
+  settings.SetCacheDir("/cache/dir");
+
+  auto result = settings.GetWeightCacheFile(".mysuffix");
+  ASSERT_OK(result);
+  EXPECT_TRUE(std::holds_alternative<std::string>(*result));
+  EXPECT_THAT(std::get<std::string>(*result),
+              testing::HasSubstr("model.tflite.mysuffix"));
+}
+
+TEST(LlmExecutorConfigTest, GetWeightCacheFileWithIdentifier) {
+  ASSERT_OK_AND_ASSIGN(
+      std::string temp_file,
+      JoinPath(testing::TempDir(), "test_model_weight.tflite"));
+  std::ofstream ofs(temp_file);
+  ofs << "test data";
+  ofs.close();
+
+  auto model_assets = ModelAssets::Create(temp_file);
+  ASSERT_OK(model_assets);
+  TestExecutorSettings settings(*model_assets);
+  settings.SetCacheDir("/cache/dir");
+
+  auto result = settings.GetWeightCacheFile();
+  ASSERT_OK(result);
+  EXPECT_TRUE(std::holds_alternative<std::string>(*result));
+  std::string path = std::get<std::string>(*result);
+
+  EXPECT_THAT(path, testing::HasSubstr("test_model_weight.tflite_"));
+  EXPECT_THAT(path, testing::EndsWith("_9.cache"));
+}
+
+TEST(LlmExecutorConfigTest,
+     GetWeightCacheFileCheckAndClean_DeletesStaleCaches) {
+  ASSERT_OK_AND_ASSIGN(
+      std::string model_file,
+      JoinPath(testing::TempDir(), "stale_test_model_weight.tflite"));
+  std::ofstream ofs(model_file);
+  ofs << "test data";
+  ofs.close();
+
+  ASSERT_OK_AND_ASSIGN(std::string cache_dir,
+                       JoinPath(testing::TempDir(), "cache_dir_weight"));
+  std::error_code ec;
+  std::filesystem::create_directory(cache_dir, ec);
+
+  ASSERT_OK_AND_ASSIGN(
+      std::string stale_cache,
+      JoinPath(cache_dir, "stale_test_model_weight.tflite_oldid.cache"));
+  std::ofstream ofs_stale(stale_cache);
+  ofs_stale << "stale test data";
+  ofs_stale.close();
+
+  EXPECT_TRUE(std::filesystem::exists(stale_cache));
+
+  auto model_assets = ModelAssets::Create(model_file);
+  ASSERT_OK(model_assets);
+  TestExecutorSettings settings(*model_assets);
+  settings.SetCacheDir(cache_dir);
+
+  // check_and_clean = true
+  auto result = settings.GetWeightCacheFile(".cache", true);
+  ASSERT_OK(result);
+
+  // Stale cache should be deleted.
+  EXPECT_FALSE(std::filesystem::exists(stale_cache));
 }
 
 }  // namespace

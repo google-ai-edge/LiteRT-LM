@@ -44,6 +44,10 @@ struct GpuArtisanConfig {
   bool wait_for_weight_uploads = false;
 
   // Number of decode steps per sync. Used by GPU only.
+  //
+  // Increasing the value might give better performance but can break logit
+  // processing features like repeated token penalties, and constrained
+  // decoding. Only increase if you are not using those.
   uint32_t num_decode_steps_per_sync = 1;
 
   // Sequence batch size for encoding. Used by GPU only. Number of input
@@ -60,9 +64,9 @@ struct GpuArtisanConfig {
   // Maximum top k, which is the max Top-K value supported for all
   // sessions created with the engine, used by GPU only. If a session with
   // Top-K value larger than this is being asked to be created, it will be
-  // rejected(throw error). The max top k will be 1, which means only greedy
-  // decoding is supported for any sessions created with this engine.
-  uint32_t max_top_k = 1;
+  // rejected(throw error). The max top k will be 64, which means limited
+  // sampling is supported by default.
+  uint32_t max_top_k = 64;
 
   // Enables decode logits.
   // AiCore uses decode logits, so this is enabled for AiCore.
@@ -78,13 +82,26 @@ struct GpuArtisanConfig {
   bool use_submodel = false;
 
   // Whether to prefer texture weights over buffers.
+  // We default to buffer weights on Apple platforms, and textures otherwise.
+  // MLDrift often overrides this internally, so this default is more for code
+  // consistency, since it should match LiteRT-LM's settings in other locations,
+  // like litert_lm/runtime/executor/litert_compiled_model_executor_utils.cc.
+#ifdef __APPLE__
+  bool prefer_texture_weights = false;
+#else
   bool prefer_texture_weights = true;
+#endif  // __APPLE__
 
   // Whether the backend should directly map host memory to the GPU if possible.
   bool set_enable_host_mapped_pointer = true;
 
   // Performs f32 convolutions instead of any 8 bit convolutions.
   bool disallow_8bit_convs = true;
+
+  // For low GPU memory with long contexts, use minimally sized ringbuffers for
+  // local attention. Prevents instantaneous rewinding, but saves a lot of
+  // memory, especially for large models.
+  bool use_autosized_ringbuffers = false;
 };
 
 std::ostream& operator<<(std::ostream& os, const GpuArtisanConfig& config);
@@ -93,10 +110,10 @@ struct GpuConfig {
   // Maximum top k, which is the max Top-K value supported for all
   // sessions created with the engine, used by GPU only. If a session with
   // Top-K value larger than this is being asked to be created, it will be
-  // rejected(throw error). The default max top k will be 1, which
-  // means only greedy decoding is supported for any sessions created with
+  // rejected(throw error). The default max top k will be 64, which
+  // means limited sampling is supported for any sessions created with
   // this engine.
-  uint32_t max_top_k = 1;
+  uint32_t max_top_k = 64;
 
   // Whether to use external tensor mode.
   bool external_tensor_mode = false;
@@ -118,10 +135,17 @@ struct CpuConfig {
 
   // Number of threads. The default value is 4.
   uint32_t number_of_threads = 4;
+
+  // Whether YNNPACK should delegate supported operations before XNNPACK.
+  bool enable_ynnpack = false;
 };
 std::ostream& operator<<(std::ostream& os, const CpuConfig& config);
 
 struct NpuConfig {
+  // Whether the NPU backend is using LiteRT's generic compiler-plugin path
+  // instead of the specialized TF_LITE_AUX NPU executor.
+  bool use_generic_litert_compiler_plugin = false;
+
   // Whether to use NEON optimizations for greedy sampling on NPU.
   bool enable_neon_for_npu_greedy_sampling = true;
 
@@ -138,6 +162,42 @@ struct NpuConfig {
   bool enable_npu_debug_logging = false;
 };
 std::ostream& operator<<(std::ostream& os, const NpuConfig& config);
+
+// The policy of the attention mask.
+enum class AttentionMaskPolicy {
+  // All tokens are causal.
+  kCausal = 0,
+  // All tokens are bidirectional.
+  kBidirectional = 1,
+  // Only vision tokens are bidirectional, other tokens are causal.
+  kVisionBidirectional = 2,
+};
+
+// Settings for the attention mask.
+struct AttentionMaskSettings {
+  // TODO(b/527108132): Read attention mask policies from the ExecutorMetadata.
+  // The policy of the attention mask.
+  // Note: If the text decoder tflite model only expects one attention mask as
+  // input, this policy will be used, and such model might apply local attention
+  // mask inside tflite graph. If the text decoder tflite model expects two
+  // attention mask inputs, global_mask and local_mask, this policy will be used
+  // as the global attention mask, and the local attention mask will be
+  // determined by the local_attention_mask_policy. If
+  // local_attention_mask_policy is not set, it will be the same as the global
+  // attention mask policy.
+  AttentionMaskPolicy attention_mask_policy = AttentionMaskPolicy::kCausal;
+  // The policy of the local attention mask. Not all models have local attention
+  // mask. If not set, attention mask will be used as the local attentio mask.
+  std::optional<AttentionMaskPolicy> local_attention_mask_policy = std::nullopt;
+  // The sliding window size of the local attention mask. If not set, local
+  // attention mask will be full attention.
+  std::optional<int> sliding_window_size = std::nullopt;
+};
+bool operator==(const AttentionMaskSettings& lhs,
+                const AttentionMaskSettings& rhs);
+std::ostream& operator<<(std::ostream& os, const AttentionMaskPolicy& policy);
+std::ostream& operator<<(std::ostream& os,
+                         const AttentionMaskSettings& settings);
 
 // Optional advanced settings for the LLM executor.
 struct AdvancedSettings {
@@ -185,8 +245,15 @@ struct AdvancedSettings {
   // use.
   bool gpu_madvise_original_shared_tensors = true;
 
+  // If true, the GPU backend will use MTLResidencySet to prevent memory
+  // swapping on macOS.
+  bool gpu_enable_metal_residency_set = false;
+
   // If true, the executor is running a benchmark.
   bool is_benchmark = false;
+
+  // If true, the executor enables per-op profiling.
+  bool enable_profiling = false;
 
   // Preferred WebGPU device name substring, case-insensitive.
   // If not empty, the adapter which the device name contains the substring will
@@ -271,6 +338,14 @@ struct AdvancedSettings {
   // OSS models), we would set this flag to 4 to ensure smooth UI.
   std::optional<int> hint_kernel_batch_size;
 
+  // If true, the executor will return an error if an invalid token id is
+  // sampled during decoding. If false, the llm executor will continue decoding
+  // with the invalid token id, which helps batch decoding to continue even if
+  // some of the candidates have EOS token.
+  // This feature is by default false. Applications can enable it by setting it
+  // to true if they want to ensure the quality of the decoded output.
+  bool error_on_invalid_sampled_token_id = false;
+
   bool operator==(const AdvancedSettings& other) const {
     return prefill_batch_sizes == other.prefill_batch_sizes &&
            num_output_candidates == other.num_output_candidates &&
@@ -282,7 +357,10 @@ struct AdvancedSettings {
                other.num_logits_to_print_after_decode &&
            gpu_madvise_original_shared_tensors ==
                other.gpu_madvise_original_shared_tensors &&
+           gpu_enable_metal_residency_set ==
+               other.gpu_enable_metal_residency_set &&
            is_benchmark == other.is_benchmark &&
+           enable_profiling == other.enable_profiling &&
            preferred_device_substr == other.preferred_device_substr &&
            num_threads_to_upload == other.num_threads_to_upload &&
            num_threads_to_compile == other.num_threads_to_compile &&
@@ -299,7 +377,9 @@ struct AdvancedSettings {
            gpu_context_low_priority == other.gpu_context_low_priority &&
            enable_speculative_decoding == other.enable_speculative_decoding &&
            disable_delegate_clustering == other.disable_delegate_clustering &&
-           hint_kernel_batch_size == other.hint_kernel_batch_size;
+           hint_kernel_batch_size == other.hint_kernel_batch_size &&
+           error_on_invalid_sampled_token_id ==
+               other.error_on_invalid_sampled_token_id;
   }
 };
 std::ostream& operator<<(std::ostream& os, const AdvancedSettings& settings);
@@ -366,6 +446,14 @@ class LlmExecutorSettings : public ExecutorSettingsBase {
     advanced_settings_ = advanced_settings;
   }
 
+  const AttentionMaskSettings& GetAttentionMaskSettings() const {
+    return attention_mask_settings_;
+  }
+  void SetAttentionMaskSettings(
+      const AttentionMaskSettings& attention_mask_settings) {
+    attention_mask_settings_ = attention_mask_settings;
+  }
+
   absl::Status SetSupportedLoraRanks(const std::vector<uint32_t>& lora_ranks) {
     if (std::holds_alternative<GpuArtisanConfig>(backend_config_)) {
       std::get<GpuArtisanConfig>(backend_config_).supported_lora_ranks =
@@ -374,9 +462,9 @@ class LlmExecutorSettings : public ExecutorSettingsBase {
     } else if (!lora_ranks.empty()) {
       // If lora_ranks is not empty, but the backend is not GpuArtisanConfig,
       // we log a warning and ignore the lora ranks.
-      LOG(ERROR) << "supported_lora_ranks is only supported for "
-                    "GpuArtisanConfig. The provided lora ranks will be "
-                    "ignored.";
+      ABSL_LOG(ERROR) << "supported_lora_ranks is only supported for "
+                         "GpuArtisanConfig. The provided lora ranks will be "
+                         "ignored.";
     }
     return absl::OkStatus();
   }
@@ -404,6 +492,9 @@ class LlmExecutorSettings : public ExecutorSettingsBase {
 
   // Optional advanced settings.
   std::optional<AdvancedSettings> advanced_settings_;
+
+  // Settings for the attention mask.
+  AttentionMaskSettings attention_mask_settings_ = AttentionMaskSettings();
 
   // Declare the output stream operator as a friend such that it can be used
   // to print the LlmExecutorSettings private member.

@@ -30,6 +30,7 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "runtime/components/logits_processor/constrained_decoding/constraint.h"
+#include "runtime/components/logits_processor/no_repeat_ngram_config.h"
 #include "runtime/components/logits_processor/repetition_penalty_config.h"
 #include "runtime/components/logits_processor/suppress_tokens_config.h"
 #include "runtime/components/sampler.h"
@@ -166,6 +167,7 @@ class ExecutionManager {
   //   task starts.
   // - repetition_penalty_config: The repetition penalty config for the decode
   //   task.
+  // - no_repeat_ngram_config: The no repeat ngram config for the decode task.
   // - suppress_tokens_config: The suppress tokens config for the decode task.
   // - constraint: The constraint for the decode task.
   // - cancelled: The cancelled flag for the decode task.
@@ -174,11 +176,15 @@ class ExecutionManager {
       SessionId session_id, TaskId task_id,
       absl::flat_hash_set<TaskId> dep_tasks,
       RepetitionPenaltyConfig repetition_penalty_config,
+      NoRepeatNgramConfig no_repeat_ngram_config,
       SuppressTokensConfig suppress_tokens_config,
       Constraint* absl_nullable constraint,
       std::shared_ptr<std::atomic<bool>> absl_nonnull cancelled,
       absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback,
-      int max_output_tokens) = 0;
+      int max_output_tokens,
+      std::optional<int> thinking_token_budget = std::nullopt,
+      std::vector<int> thinking_start_token_ids = {},
+      std::vector<int> thinking_end_token_ids = {}) = 0;
 
   // Adds a decode task to the execution manager with the maximum output tokens
   // set to infinity.
@@ -186,15 +192,17 @@ class ExecutionManager {
       SessionId session_id, TaskId task_id,
       absl::flat_hash_set<TaskId> dep_tasks,
       RepetitionPenaltyConfig repetition_penalty_config,
+      NoRepeatNgramConfig no_repeat_ngram_config,
       SuppressTokensConfig suppress_tokens_config,
       Constraint* absl_nullable constraint,
       std::shared_ptr<std::atomic<bool>> absl_nonnull cancelled,
       absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback) {
     return AddDecodeTask(session_id, task_id, std::move(dep_tasks),
                          std::move(repetition_penalty_config),
+                         std::move(no_repeat_ngram_config),
                          std::move(suppress_tokens_config), constraint,
                          std::move(cancelled), std::move(callback),
-                         std::numeric_limits<int>::max());
+                         std::numeric_limits<int>::max(), std::nullopt, {}, {});
   }
 
   // Adds a clone session task to the execution manager.

@@ -25,6 +25,7 @@
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/time/civil_time.h"  // from @com_google_absl
@@ -194,6 +195,42 @@ TEST(PromptTemplateCustomTest, StripReplacementTest) {
     auto res = prompt_template.Apply(input);
     ASSERT_OK(res);
     EXPECT_EQ(*res, "ohell");
+  }
+}
+
+TEST(PromptTemplateCustomTest, Qwen3MultiTurnTemplateRenderingTest) {
+  const std::string test_file_path = GetTestdataPath("Qwen-Qwen3-0.6B.jinja");
+  ASSERT_OK_AND_ASSIGN(const std::string template_content,
+                       GetContents(test_file_path));
+  PromptTemplate prompt_template(template_content);
+
+  for (bool enable_thinking : {true, false}) {
+    json extra_context = json::object({{"enable_thinking", enable_thinking}});
+
+    PromptTemplateInput old_input{
+        .messages = json::array({GetMessageSystem(), GetMessageUserTextTurn1(),
+                                 GetMessageAssistantText()}),
+        .tools = json::array({GetTools()}),
+        .add_generation_prompt = false,
+        .extra_context = extra_context,
+    };
+    ASSERT_OK_AND_ASSIGN(const std::string old_string,
+                         prompt_template.Apply(old_input));
+
+    PromptTemplateInput new_input{
+        .messages =
+            json::array({GetMessageSystem(), GetMessageUserTextTurn1(),
+                         GetMessageAssistantText(), GetMessageUserTextTurn2()}),
+        .tools = json::array({GetTools()}),
+        .add_generation_prompt = true,
+        .extra_context = extra_context,
+    };
+    ASSERT_OK_AND_ASSIGN(const std::string new_string,
+                         prompt_template.Apply(new_input));
+
+    EXPECT_TRUE(absl::StartsWith(new_string, old_string))
+        << "enable_thinking: " << enable_thinking
+        << "\nold_string: " << old_string << "\nnew_string: " << new_string;
   }
 }
 

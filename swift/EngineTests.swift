@@ -169,4 +169,24 @@ class EngineTests: XCTestCase {
     try await scopeToTriggerDeinit()
     // If we reached this point, deinit completed without crashing.
   }
+
+  func testEngineTeardownAndHandleNilDoesNotCrash() async throws {
+    func scopeToTriggerEngineTeardown() async throws {
+      let modelResource =
+        "runtime/testdata/test_lm_new_metadata.task"
+      let modelPath = testDataPath(forResource: modelResource)
+      let engineConfig = try EngineConfig(
+        modelPath: modelPath, maxNumTokens: 16, cacheDir: NSTemporaryDirectory())
+      var engine: Engine? = Engine(engineConfig: engineConfig)
+
+      try await engine?.initialize()
+      let isInitialized = await engine?.isInitialized() == true
+      XCTAssertTrue(isInitialized)
+
+      // Releasing engine runs Engine.deinit where self.handle = nil right before calling litert_lm_engine_delete.
+      engine = nil
+    }
+
+    try await scopeToTriggerEngineTeardown()
+  }
 }

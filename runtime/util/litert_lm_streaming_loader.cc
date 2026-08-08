@@ -22,7 +22,9 @@
 #include <string>
 #include <utility>
 
+#include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "runtime/util/litert_lm_loader.h"
@@ -38,8 +40,14 @@ absl::Status LitertLmStreamingLoader::LoadHeader() {
   }
 
   HeaderPreamble header_preamble;
-  RETURN_IF_ERROR(data_stream_->ReadAndDiscard(&header_preamble, 0,
-                                               sizeof(HeaderPreamble)));
+  ABSL_RETURN_IF_ERROR(data_stream_->ReadAndDiscard(&header_preamble, 0,
+                                                    sizeof(HeaderPreamble)));
+  ABSL_VLOG(1) << "[StreamingLoader]: Loaded preamble. Magic: "
+               << std::string(header_preamble.magic, 8)
+               << ", version: " << header_preamble.major_version << "."
+               << header_preamble.minor_version << "."
+               << header_preamble.patch_version
+               << ", header_end_offset: " << header_preamble.header_end_offset;
 
   // Check the magic number.
   std::string magic_str(header_preamble.magic, 8);
@@ -70,13 +78,13 @@ absl::Status LitertLmStreamingLoader::LoadHeader() {
   // Read the rest of the header from the stream.
   size_t remaining_size = header_size - sizeof(HeaderPreamble);
   if (remaining_size > 0) {
-    RETURN_IF_ERROR(
+    ABSL_RETURN_IF_ERROR(
         data_stream_->ReadAndDiscard(header_data.get() + sizeof(HeaderPreamble),
                                      sizeof(HeaderPreamble), remaining_size));
   }
 
   // Read the LiteRTLM header from the buffer.
-  RETURN_IF_ERROR(schema::ReadHeaderFromLiteRTLM(
+  ABSL_RETURN_IF_ERROR(schema::ReadHeaderFromLiteRTLM(
       static_cast<void*>(header_data.get()), header_size, header_.get()));
 
   // Record the section metadata.
@@ -84,8 +92,12 @@ absl::Status LitertLmStreamingLoader::LoadHeader() {
   ordered_section_info_.reserve(objects->size());
   for (size_t i = 0; i < objects->size(); ++i) {
     const schema::SectionObject* section = objects->Get(i);
-    ASSIGN_OR_RETURN(auto key_and_section_hint,
-                     ExtractBufferKeyAndTfLiteSectionHint(section));
+    ABSL_VLOG(1) << "[StreamingLoader]: Section " << i
+                 << ", type: " << static_cast<int>(section->data_type())
+                 << ", begin: " << section->begin_offset()
+                 << ", end: " << section->end_offset();
+    ABSL_ASSIGN_OR_RETURN(auto key_and_section_hint,
+                          ExtractBufferKeyAndTfLiteSectionHint(section));
     ordered_section_info_.push_back(
         {section, key_and_section_hint.first,
          key_and_section_hint.second.backend_constraint, nullptr, header_});
@@ -105,7 +117,7 @@ absl::Status LitertLmStreamingLoader::LoadHeader() {
 absl::StatusOr<std::optional<SectionInfo>>
 LitertLmStreamingLoader::GetNextSection() {
   if (!header_loaded_) {
-    RETURN_IF_ERROR(LoadHeader());
+    ABSL_RETURN_IF_ERROR(LoadHeader());
   }
 
   if (next_section_index_ >= ordered_section_info_.size()) {
@@ -122,7 +134,7 @@ LitertLmStreamingLoader::GetNextSection() {
   }
 
   // Open the substream.
-  ASSIGN_OR_RETURN(
+  ABSL_ASSIGN_OR_RETURN(
       auto sub_stream,
       data_stream_->OpenSubStream(section_info.section->begin_offset(),
                                   section_info.section->end_offset() -

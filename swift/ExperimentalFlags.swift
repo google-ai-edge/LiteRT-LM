@@ -168,6 +168,20 @@ public struct ExperimentalFlags {
     }
   }
 
+  private static var _filterChannelContentFromKvCache: Bool? = nil
+
+  /// Whether to filter channel content from the KV cache.
+  public static var filterChannelContentFromKvCache: Bool? {
+    get { return _filterChannelContentFromKvCache }
+    set {
+      guard optedIn else {
+        logger.error("LiteRTLM: Must opt into experimental APIs before setting this flag.")
+        return
+      }
+      _filterChannelContentFromKvCache = newValue
+    }
+  }
+
   // Prevent initializing the struct
   private init() {}
 }

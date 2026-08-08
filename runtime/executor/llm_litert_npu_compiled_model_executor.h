@@ -55,6 +55,20 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
     int32_t zero_point = 0;
   };
 
+  // The prefill family of signature names resolved for the prefill length the
+  // model was compiled with (e.g. 128 or 256). The length is detected from the
+  // compiled model at load time rather than hardcoded, so models compiled with
+  // different prefill lengths all work.
+  struct ResolvedPrefillSignatures {
+    int size = 0;
+    std::string prefill;
+    std::string embedder;
+    std::string embedder_per_layer;
+    std::string mask;
+    std::string rope;
+    std::string cache_update;
+  };
+
   // Holds the latency breakdown stats for the executor.
   // TODO: b/405424188 - Use 'litert::lm::BenchmarkInfo' instead.
   struct LatencyStats {
@@ -328,6 +342,7 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
       InferenceContext llm_inference_context,
       InferenceContext cache_update_inference_context,
       SortedPrefillSignatureMap prefill_signature_map,
+      ResolvedPrefillSignatures prefill_signatures,
       std::unique_ptr<EmbeddingLookupManager> embedding_lookup_manager,
       std::unique_ptr<EmbeddingLookupManager>
           per_layer_embedding_lookup_manager,
@@ -343,10 +358,13 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
       int32_t final_zero_point = 0,
       absl::flat_hash_map<absl::string_view, HWQuantParams> kv_quant_params =
           {},
+      int64_t kv_cache_init_value = 0,
       SpeculativeDecodingType speculative_decoding_type =
           SpeculativeDecodingType::kNone,
       std::optional<DrafterContext> drafter_context = std::nullopt,
-      std::optional<DrafterAuxContext> drafter_aux_context = std::nullopt)
+      std::optional<DrafterAuxContext> drafter_aux_context = std::nullopt,
+      bool has_sliding_window_attention = false,
+      const litert::Model* embedder_per_layer_model = nullptr)
       : executor_settings_(std::move(executor_settings)),
         env_(llm_env),
         embedder_context_(std::move(embedder_context)),
@@ -357,11 +375,13 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
         embedding_lookup_manager_(std::move(embedding_lookup_manager)),
         per_layer_embedding_lookup_manager_(
             std::move(per_layer_embedding_lookup_manager)),
+        embedder_per_layer_model_(embedder_per_layer_model),
         embedder_per_layer_context_(std::move(embedder_per_layer_context)),
         llm_inference_context_(std::move(llm_inference_context)),
         cache_update_inference_context_(
             std::move(cache_update_inference_context)),
         prefill_signature_map_(std::move(prefill_signature_map)),
+        prefill_signatures_(std::move(prefill_signatures)),
         kv_quant_params_(std::move(kv_quant_params)),
         ple_table_ptrs_(std::move(ple_table_ptrs)),
         ple_quant_params_(std::move(ple_quant_params)),
@@ -377,7 +397,9 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
         drafter_context_(std::move(drafter_context)),
         drafter_aux_context_(std::move(drafter_aux_context)),
         per_tensor_logits_scale_(quantization_params.scale),
-        per_tensor_logits_zero_point_(quantization_params.zero_point) {
+        per_tensor_logits_zero_point_(quantization_params.zero_point),
+        kv_cache_init_value_(kv_cache_init_value),
+        has_sliding_window_attention_(has_sliding_window_attention) {
     auto npu_config_status = executor_settings_.GetBackendConfig<NpuConfig>();
     if (npu_config_status.ok()) {
       npu_config_ = *npu_config_status;
@@ -490,6 +512,7 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
   // - settings: The executor settings.
   static absl::StatusOr<EmbedderContext> CreateEmbedderContextWithBufferSharing(
       ::litert::Environment& env, const litert::Model& embedder_model,
+      const ResolvedPrefillSignatures& prefill_signatures,
       absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
           gemma_prefill_input_buffers,
       absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
@@ -519,6 +542,20 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
           gemma_verify_input_buffers,
       const LlmExecutorSettings& settings);
 
+  // Determine the maximum sequence length that the NPU model supports.
+  //
+  // 1. Query the 'LlmMetadata' in the provided 'resources' and check if a max
+  //    sequence length (referred to as 'max_num_tokens') has been set.
+  // 2. Otherwise determine the maximum sequence length supported by checking
+  //    the KV cache tensor buffers.
+  //
+  // Note: If `executor_settings.GetMaxNumTokens()` is set, the minimum of it
+  // and the model's supported limit will be returned. A warning is logged if
+  // the user requested limit is greater than the model's supported limit.
+  static absl::StatusOr<int> DetermineMaxSequenceLength(
+      const LlmExecutorSettings& executor_settings, ModelResources& resources,
+      const litert::Model& llm_model);
+
   // Creates the context for the NPU auxiliary model.
   static absl::StatusOr<NpuAuxiliaryContext> CreateNpuAuxiliaryContext(
       ::litert::Environment& env, const litert::Model& npu_auxiliary_model,
@@ -530,6 +567,7 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
   // 'gemma_decode_input_buffers'.
   static absl::StatusOr<InferenceContext> CreateMaskContextWithBufferSharing(
       const NpuAuxiliaryContext& npu_auxiliary_context,
+      const ResolvedPrefillSignatures& prefill_signatures,
       absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
           gemma_prefill_input_buffers,
       absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
@@ -539,6 +577,7 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
 
   static absl::StatusOr<InferenceContext> CreateRopeContextWithBufferSharing(
       const NpuAuxiliaryContext& npu_auxiliary_context,
+      const ResolvedPrefillSignatures& prefill_signatures,
       absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
           gemma_prefill_input_buffers,
       absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
@@ -550,6 +589,7 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
   static absl::StatusOr<InferenceContext>
   CreateLlmInferenceContextWithBufferSharing(
       ::litert::Environment& env, ::litert::CompiledModel& llm_compiled_model,
+      const ResolvedPrefillSignatures& prefill_signatures,
       absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
           input_kv_cache_buffers,
       absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
@@ -577,13 +617,15 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
           verify_output_kv_cache_slice_buffers,
       ::litert::TensorBuffer prefill_input_pos,
       ::litert::TensorBuffer decode_input_pos,
-      ::litert::TensorBuffer verify_input_pos);
-  // Run a 'warmup' inference on every model (prefill and decode).  This is
-  // intended to be called before the first actual inference.
+      ::litert::TensorBuffer verify_input_pos,
+      ::litert::TensorBuffer prefill_valid_mask,
+      ::litert::TensorBuffer decode_valid_mask,
+      ::litert::TensorBuffer verify_valid_mask);
   static absl::Status WarmupInference(
       ::litert::CompiledModel& compiled_model_llm,
       InferenceContext& llm_inference_context,
       ::litert::CompiledModel& compiled_model_auxiliary,
+      const ResolvedPrefillSignatures& prefill_signatures,
       const InferenceContext& rope_inference_context,
       const InferenceContext& mask_inference_context,
       const InferenceContext& cache_update_inference_context);
@@ -596,8 +638,9 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
 
   // Clears all buffers in the provided 'buffers' map that belong to the KV
   // cache.
-  static absl::Status ClearKVCache(
-      absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& buffers);
+  absl::Status ClearKVCache(
+      absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& buffers)
+      const;
 
   bool UseEmbeddingLookupManager() const {
     return embedding_lookup_manager_ != nullptr;
@@ -621,6 +664,7 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
   static absl::Status AllocateTransformerBuffers(
       litert::Environment& env, const litert::Model* transformer_model,
       CompiledModel& llm_compiled_model,
+      const ResolvedPrefillSignatures& prefill_signatures,
       absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
           gemma_prefill_input_buffers,
       absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
@@ -635,21 +679,24 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
           decode_output_kv_cache_slice_buffers,
       absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
           verify_output_kv_cache_slice_buffers,
-      absl::flat_hash_map<absl::string_view, HWQuantParams>& kv_quant_params);
+      absl::flat_hash_map<absl::string_view, HWQuantParams>& kv_quant_params,
+      int64_t kv_cache_init_value);
 
   // Create the executor for Gemma3n, with multi-modality support.
   static absl::StatusOr<std::unique_ptr<LlmLiteRtNpuCompiledModelExecutor>>
   CreateForModelHasPerLayerEmbedding(
       const LlmExecutorSettings& executor_settings, ModelResources& resources,
       litert::Environment& env, const litert::Model* transformer_model,
-      LogitsQuantizationParams quantization_params);
+      LogitsQuantizationParams quantization_params,
+      const ResolvedPrefillSignatures& prefill_signatures);
 
   // Create the executor for Gemma3.
   static absl::StatusOr<std::unique_ptr<LlmLiteRtNpuCompiledModelExecutor>>
   CreateForModelWithoutPerLayerEmbedding(
       const LlmExecutorSettings& executor_settings, ModelResources& resources,
       litert::Environment& env, const litert::Model* transformer_model,
-      LogitsQuantizationParams quantization_params);
+      LogitsQuantizationParams quantization_params,
+      const ResolvedPrefillSignatures& prefill_signatures);
 
   LlmExecutorSettings executor_settings_;
   NpuConfig npu_config_;
@@ -672,10 +719,14 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
   ::litert::CompiledModel llm_compiled_model_;
   std::unique_ptr<EmbeddingLookupManager> embedding_lookup_manager_;
   std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup_manager_;
+  const litert::Model* embedder_per_layer_model_ = nullptr;
   std::optional<EmbedderPerLayerContext> embedder_per_layer_context_;
   InferenceContext llm_inference_context_;
   InferenceContext cache_update_inference_context_;
   SortedPrefillSignatureMap prefill_signature_map_;
+  // The prefill-family signature names resolved for the prefill length the
+  // model was compiled with.
+  ResolvedPrefillSignatures prefill_signatures_;
 
   absl::flat_hash_map<absl::string_view, HWQuantParams> kv_quant_params_;
   bool use_hw_ple_for_npu_ = false;
@@ -720,6 +771,8 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
   // Tracks whether a decode step was run so we know how to update the logits
   // processor state.
   bool ran_decode_ = false;
+  int64_t kv_cache_init_value_ = 0;
+  bool has_sliding_window_attention_ = false;
 };
 
 std::ostream& operator<<(

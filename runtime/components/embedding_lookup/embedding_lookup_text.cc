@@ -39,6 +39,7 @@
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
+#include "litert/cc/litert_model_types.h"  // from @litert
 #include "litert/cc/litert_options.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/util/status_macros.h"  // NOLINT
@@ -53,7 +54,7 @@ using ::litert::TensorBuffer;
 absl::Status EmbeddingLookupText::LookupInternal(int token,
                                                  absl::Span<uint8_t> buffer) {
   if (!compiled_model_.has_value() || input_buffers_.size() != 1 ||
-      output_buffers_.size() != 1) {
+      output_buffers_.empty()) {
     return absl::InvalidArgumentError(
         "The Embedding model must be initialized before being used.");
   }
@@ -120,10 +121,12 @@ absl::Status EmbeddingLookupText::LookupDecode(int token,
     }
   }
 
-  auto decode_output_lock_and_addr = ::litert::TensorBufferScopedLock::Create(
-      *decode_output, TensorBuffer::LockMode::kWrite);
+  LITERT_ASSIGN_OR_RETURN(
+      auto decode_output_lock_and_addr,
+      ::litert::TensorBufferScopedLock::Create(*decode_output,
+                                               TensorBuffer::LockMode::kWrite));
   auto decode_output_ptr =
-      reinterpret_cast<uint8_t*>(decode_output_lock_and_addr->second);
+      reinterpret_cast<uint8_t*>(decode_output_lock_and_addr.second);
 
   LITERT_ASSIGN_OR_RETURN(auto decode_output_size, decode_output->Size());
 
@@ -221,16 +224,18 @@ absl::Status EmbeddingLookupText::LookupPrefill(absl::Span<const int> tokens,
                      ". Output tensor bytes: ", prefill_output->Size()));
   }
 
-  auto prefill_output_lock_and_addr = ::litert::TensorBufferScopedLock::Create(
-      *prefill_output, TensorBuffer::LockMode::kWrite);
+  LITERT_ASSIGN_OR_RETURN(
+      auto prefill_output_lock_and_addr,
+      ::litert::TensorBufferScopedLock::Create(*prefill_output,
+                                               TensorBuffer::LockMode::kWrite));
   auto prefill_output_ptr =
-      reinterpret_cast<uint8_t*>(prefill_output_lock_and_addr->second);
+      reinterpret_cast<uint8_t*>(prefill_output_lock_and_addr.second);
 
   prefill_output_ptr += byte_offset;
   for (int token : tokens) {
     absl::Span<uint8_t> output_buffer(
         reinterpret_cast<uint8_t*>(prefill_output_ptr), bytes_per_token);
-    RETURN_IF_ERROR(LookupInternal(token, output_buffer));
+    ABSL_RETURN_IF_ERROR(LookupInternal(token, output_buffer));
     prefill_output_ptr += bytes_per_token;
   }
 
@@ -238,7 +243,7 @@ absl::Status EmbeddingLookupText::LookupPrefill(absl::Span<const int> tokens,
   // the remaining tokens as if they were 0.
   size_t starting_token = byte_offset / bytes_per_token + tokens.size();
   size_t num_tokens_to_fill = prefill_output_layout.Dimensions()[1];
-  for (int i = starting_token; i < num_tokens_to_fill; ++i) {
+  for (size_t i = starting_token; i < num_tokens_to_fill; ++i) {
     memcpy(prefill_output_ptr, default_embedding_vector_.data(),
            bytes_per_token);
     prefill_output_ptr += bytes_per_token;
@@ -256,34 +261,68 @@ EmbeddingLookupText::Create(
   auto handler = std::unique_ptr<EmbeddingLookupText>(new EmbeddingLookupText(
       env, model, std::move(signature_key), std::move(external_weight_file),
       std::move(external_weight_sections)));
-  RETURN_IF_ERROR(handler->Initialize());
+  ABSL_RETURN_IF_ERROR(handler->Initialize());
+  return handler;
+}
+
+absl::StatusOr<std::unique_ptr<EmbeddingLookupText>>
+EmbeddingLookupText::Create(litert::Environment& env,
+                            litert::CompiledModel compiled_model,
+                            std::optional<std::string> signature_key) {
+  auto handler = std::unique_ptr<EmbeddingLookupText>(new EmbeddingLookupText(
+      env, std::move(compiled_model), std::move(signature_key)));
+  ABSL_RETURN_IF_ERROR(handler->Initialize());
   return handler;
 }
 
 absl::Status EmbeddingLookupText::Initialize() {
-  LITERT_ASSIGN_OR_RETURN(auto options, Options::Create());
+  std::vector<SimpleSignature> signatures;
+  if (!compiled_model_.has_value()) {
+    if (model_ == nullptr) {
+      return absl::FailedPreconditionError(
+          "Model is null but compiled_model_ is not provided.");
+    }
+    LITERT_ASSIGN_OR_RETURN(auto options, Options::Create());
 #if defined(__ANDROID__)
-  options.SetHardwareAccelerators(litert::HwAccelerators::kNpu |
-                                  litert::HwAccelerators::kCpu);
+    options.SetHardwareAccelerators(litert::HwAccelerators::kNpu |
+                                    litert::HwAccelerators::kCpu);
+#elif defined(__EMSCRIPTEN__)
+    options.SetHardwareAccelerators(litert::HwAccelerators::kGpu |
+                                    litert::HwAccelerators::kCpu);
+    LITERT_ASSIGN_OR_RETURN(auto& gpu_opts, options.GetGpuOptions());
+    LITERT_RETURN_IF_ERROR(gpu_opts.EnableConstantTensorSharing(true));
+    LITERT_RETURN_IF_ERROR(gpu_opts.SetConvertWeightsOnGpu(true));
 #else
-  options.SetHardwareAccelerators(litert::HwAccelerators::kCpu);
+    options.SetHardwareAccelerators(litert::HwAccelerators::kCpu);
 #endif
-  if (external_weight_file_.has_value() && !external_weight_sections_.empty()) {
-    LITERT_RETURN_IF_ERROR(options.SetExternalWeightScopedFile(
-        *external_weight_file_, std::move(external_weight_sections_)));
-  }
+    if (external_weight_file_.has_value() &&
+        !external_weight_sections_.empty()) {
+      auto res = options.SetExternalWeightScopedFile(
+          *external_weight_file_, std::move(external_weight_sections_));
+      if (!res.HasValue()) {
+        ABSL_LOG(ERROR) << "  SetExternalWeightScopedFile failed: "
+                        << res.Error().Message();
+        return absl::InternalError(res.Error().Message());
+      }
+    }
 #if defined(__ANDROID__)
-  LITERT_ASSIGN_OR_RETURN(::litert::qualcomm::QualcommOptions & qnn_opts,
-                          options.GetQualcommOptions());
-  qnn_opts.SetLogLevel(::litert::qualcomm::QualcommOptions::LogLevel::kOff);
-  qnn_opts.SetHtpPerformanceMode(
-      ::litert::qualcomm::QualcommOptions::HtpPerformanceMode::
-          kSustainedHighPerformance);
+    LITERT_ASSIGN_OR_RETURN(::litert::qualcomm::QualcommOptions & qnn_opts,
+                            options.GetQualcommOptions());
+    qnn_opts.SetLogLevel(::litert::qualcomm::QualcommOptions::LogLevel::kOff);
+    qnn_opts.SetHtpPerformanceMode(
+        ::litert::qualcomm::QualcommOptions::HtpPerformanceMode::
+            kSustainedHighPerformance);
 #endif
 
-  LITERT_ASSIGN_OR_RETURN(compiled_model_, litert::CompiledModel::Create(
-                                               env_, model_.Get(), options));
-  LITERT_ASSIGN_OR_RETURN(auto signatures, model_.GetSignatures());
+    LITERT_ASSIGN_OR_RETURN(compiled_model_, litert::CompiledModel::Create(
+                                                 env_, model_->Get(), options));
+    LITERT_ASSIGN_OR_RETURN(auto temp_signatures, model_->GetSignatures());
+    signatures = std::move(temp_signatures);
+  } else {
+    LITERT_ASSIGN_OR_RETURN(auto temp_signatures,
+                            compiled_model_->GetSignatures());
+    signatures = std::move(temp_signatures);
+  }
 
   if (signature_key_.has_value()) {
     bool found = false;
@@ -311,7 +350,7 @@ absl::Status EmbeddingLookupText::Initialize() {
     signature_key_ = signatures.front().Key();
   }
 
-  ABSL_LOG(INFO) << "EmbeddingLookupText::Initialize Creating input buffers";
+  ABSL_VLOG(1) << "EmbeddingLookupText::Initialize Creating input buffers";
   LITERT_ASSIGN_OR_RETURN(input_buffers_, compiled_model_->CreateInputBuffers(
                                               signature_key_.value()));
 
@@ -333,7 +372,7 @@ absl::Status EmbeddingLookupText::Initialize() {
   LITERT_ASSIGN_OR_RETURN(output_buffer_type_, output_buffers_[0].TensorType());
   const auto& output_buffer_layout = output_buffer_type_.value().Layout();
 
-  if (output_buffers_.size() != 1) {
+  if (output_buffers_.empty()) {
     return absl::InvalidArgumentError(absl::StrCat(
         "The Embedding model must have exactly one output tensor but got ",
         output_buffers_.size()));
@@ -350,14 +389,14 @@ absl::Status EmbeddingLookupText::Initialize() {
     floats_per_token_output_ *= output_buffer_layout.Dimensions()[i];
   }
 
-  ABSL_LOG(INFO) << "EmbeddingLookupText initialized: "
-                 << "signature=" << signature_key_.value_or("default")
-                 << ", rank=" << output_buffer_layout.Rank()
-                 << ", floats_per_token=" << floats_per_token_output_;
+  ABSL_VLOG(1) << "EmbeddingLookupText initialized: "
+               << "signature=" << signature_key_.value_or("default")
+               << ", rank=" << output_buffer_layout.Rank()
+               << ", floats_per_token=" << floats_per_token_output_;
 
   // Initialize the default embedding vector to be the embedding of token 0.
   default_embedding_vector_.resize(floats_per_token_output_);
-  RETURN_IF_ERROR(LookupInternal(
+  ABSL_RETURN_IF_ERROR(LookupInternal(
       0, absl::MakeSpan(
              reinterpret_cast<uint8_t*>(default_embedding_vector_.data()),
              floats_per_token_output_ * sizeof(float))));

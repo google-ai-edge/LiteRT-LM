@@ -18,6 +18,7 @@ import './chat_app';
 
 import {LlmChatStateController} from '../state_controller.js';
 import {ChatSessionStore} from '../stores/chat_session_store.js';
+import {LocalDirectoryService} from '../stores/local_directory_service.js';
 import {ModelLoaderService} from '../stores/model_loader_service.js';
 import {SettingsStore} from '../stores/settings_store.js';
 import {LitertLmChatApp} from './chat_app.js';
@@ -32,6 +33,7 @@ describe('litert-lm-chat-app', () => {
   let mockChatSession: jasmine.SpyObj<ChatSessionStore>;
   let mockSettings: jasmine.SpyObj<SettingsStore>;
   let mockModelLoader: jasmine.SpyObj<ModelLoaderService>;
+  let mockLocalDirService: jasmine.SpyObj<LocalDirectoryService>;
 
   let mockClipboardWriteText: jasmine.Spy;
 
@@ -67,6 +69,16 @@ describe('litert-lm-chat-app', () => {
     mockSettings.topK = 40;
     mockSettings.samplerType = 'greedy';
     mockSettings.enableThinking = false;
+    mockSettings.customModels = [];
+    mockSettings.localDirModels = [];
+
+    mockLocalDirService = jasmine.createSpyObj('LocalDirectoryService', [
+      'mountDirectory',
+      'scanDirectory',
+      'getFile',
+    ]);
+    mockLocalDirService.isAuthorized = false;
+    (mockLocalDirService as any).isSupported = false;
 
     mockModelLoader = jasmine.createSpyObj('ModelLoaderService', [
       'loadModelWeights',
@@ -82,6 +94,7 @@ describe('litert-lm-chat-app', () => {
       chatSession: mockChatSession,
       settings: mockSettings,
       modelLoader: mockModelLoader,
+      localDirService: mockLocalDirService,
       statusText: 'Ready',
       addHost: jasmine.createSpy('addHost'),
       removeHost: jasmine.createSpy('removeHost'),

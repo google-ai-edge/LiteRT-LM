@@ -36,6 +36,21 @@ def cli():
   """CLI tool for testing."""
 
 
+@cli.command(help="Run command.")
+def run():
+  pass
+
+
+@cli.command(name="list", help="List command.")
+def list_cmd():
+  pass
+
+
+@cli.command(help="Pack command.")
+def pack():
+  pass
+
+
 @cli.command(help="A dummy command to test help formatter.")
 @click.option("--dummy-option", is_flag=True, help="A dummy option.")
 def dummy():
@@ -66,10 +81,16 @@ class HelpFormatterTest(absltest.TestCase):
     )
 
     # Check for bold green headings
-    self.assertIn(f"{BOLD_GREEN}Commands{RESET}:", output)
+    self.assertIn(f"{BOLD_GREEN}Inference Commands{RESET}:", output)
+    self.assertIn(f"{BOLD_GREEN}Model Management Commands{RESET}:", output)
+    self.assertIn(f"{BOLD_GREEN}LiteRT-LM File Commands{RESET}:", output)
+    self.assertIn(f"{BOLD_GREEN}Other Commands{RESET}:", output)
     self.assertIn(f"{BOLD_GREEN}Global options{RESET}:", output)
 
     # Check for bold bright cyan terms
+    self.assertIn(f"{BOLD_BRIGHT_CYAN}run", output)
+    self.assertIn(f"{BOLD_BRIGHT_CYAN}list", output)
+    self.assertIn(f"{BOLD_BRIGHT_CYAN}pack", output)
     self.assertIn(f"{BOLD_BRIGHT_CYAN}dummy{RESET}", output)
     self.assertIn(f"{BOLD_BRIGHT_CYAN}--help{RESET}", output)
 

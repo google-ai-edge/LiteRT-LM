@@ -12,13 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
-include_guard(GLOBAL)
-
-include(${LITERTLM_MODULES_DIR}/utils.cmake)
-include("${LITERTLM_PACKAGES_DIR}/packages.cmake")
-include(${TFLITE_PACKAGE_DIR}/tflite_target_map.cmake)
-
+include("${LITERTLM_MODULES_DIR}/utils.cmake")
+include("${LITERTLM_TFLITE_PACKAGE_DIR}/tflite_target_map.cmake")
 
 macro(generate_tflite_aggregate)
     if(NOT TARGET LiteRTLM::tflite::tflite)
@@ -26,7 +21,7 @@ macro(generate_tflite_aggregate)
 
         set(_tflite_lib_names "")
         set(_tflite_lib_paths "")
-        kvp_parse_map("${TFLITE_TARGET_MAP}" _tflite_lib_names _tflite_lib_paths)
+        kvp_parse_map("${LITERTLM_TFLITE_TARGET_MAP}" _tflite_lib_names _tflite_lib_paths)
 
         add_library(LiteRTLM::tflite::tflite INTERFACE IMPORTED GLOBAL)
         set_target_properties(LiteRTLM::tflite::tflite PROPERTIES
@@ -37,13 +32,13 @@ macro(generate_tflite_aggregate)
             INTERFACE_LINK_LIBRARIES
                 "${_tflite_lib_paths}"
             INTERFACE_INCLUDE_DIRECTORIES
-                "${TFLITE_INCLUDE_DIR}"
+                "${LITERTLM_TFLITE_INCLUDE_DIR}"
         )
 
         add_library(LiteRTLM::tflite::shim INTERFACE IMPORTED GLOBAL)
         set_target_properties(LiteRTLM::tflite::shim PROPERTIES
             INTERFACE_INCLUDE_DIRECTORIES
-                "${TFLITE_INCLUDE_DIR};${TFLITE_BUILD_DIR}"
+                "${LITERTLM_TFLITE_INCLUDE_DIR};${LITERTLM_TFLITE_BUILD_DIR}"
         )
 
         foreach(_comp_target IN LISTS ${_tflite_lib_names})
@@ -67,4 +62,3 @@ macro(generate_tflite_aggregate)
         message(STATUS "[LiteRTLM] TFLite aggregate has been generated.")
     endif()
 endmacro()
-

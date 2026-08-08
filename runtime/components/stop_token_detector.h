@@ -29,12 +29,12 @@ namespace litert::lm {
 // batch item. Stop sequences can be added dynamically. Example usage:
 //
 //   StopTokenDetector detector(batch_size);
-//   RETURN_IF_ERROR(detector.AddStopTokenSequence({1}));
-//   RETURN_IF_ERROR(detector.AddStopTokenSequence({4,5,3,2}));
+//   ABSL_RETURN_IF_ERROR(detector.AddStopTokenSequence({1}));
+//   ABSL_RETURN_IF_ERROR(detector.AddStopTokenSequence({4,5,3,2}));
 //   // ... add more stop sequences as needed ...
 //   // ... process tokens ...
-//   RETURN_IF_ERROR(detector.ProcessTokens(token_stream_1));
-//   RETURN_IF_ERROR(detector.ProcessTokens(token_stream_2));
+//   ABSL_RETURN_IF_ERROR(detector.ProcessTokens(token_stream_1));
+//   ABSL_RETURN_IF_ERROR(detector.ProcessTokens(token_stream_2));
 //   // ... process more tokens ...
 //   // Check if stop token was found...
 //   ASIGN_OR_RETURN(bool done, detector.AllDone());

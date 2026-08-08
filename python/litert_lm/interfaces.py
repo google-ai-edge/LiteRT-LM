@@ -20,12 +20,14 @@ import abc
 import collections.abc
 import dataclasses
 from importlib import resources
+import json
 import logging
 import os
 import sys
 from typing import Any
 
 from ._ffi import ActivationDataType
+from ._ffi import LiteRtLmConstraintProviderType
 from ._messages import Contents
 from ._messages import Message
 
@@ -36,6 +38,15 @@ class Backend(abc.ABC):
   This is the abstract base class for all hardware backends used by LiteRT-LM.
   Use the subclasses (CPU, GPU, NPU) to specify the backend and its options.
   """
+
+  # pylint: disable=invalid-name
+  # These sub-classes are added here to improve the type checking (pyrefly).
+  # The names are chosen before adding the attributes and also consistent with
+  # other langugage bindings.
+  CPU: type[CPU]
+  GPU: type[GPU]
+  NPU: type[NPU]
+  # pylint: enable=invalid-name
 
   def get_name(self) -> str:
     """Returns the string representation of the backend (e.g., 'cpu', 'gpu', 'npu')."""
@@ -58,8 +69,16 @@ class CPU(Backend):
   thread_count: int | None = None
 
 
+@dataclasses.dataclass(frozen=True, kw_only=True)
 class GPU(Backend):
-  """GPU hardware backend for LiteRT-LM."""
+  """GPU hardware backend for LiteRT-LM.
+
+  Attributes:
+    gpu_decode_steps_per_sync: The number of decode steps per sync for GPU
+      backend.
+  """
+
+  gpu_decode_steps_per_sync: int | None = None
 
 
 @dataclasses.dataclass(frozen=True, kw_only=True)
@@ -76,7 +95,9 @@ class NPU(Backend):
     """Initializes the NPU backend.
 
     Raises:
-      RuntimeError: If the NPU backend is not supported on the current platform.
+      RuntimeError: If the NPU backend is not supported on the current platform,
+        if the 'openvino' package fails to import, or if no NPU device is
+        detected.
     """
     if self.litert_dispatch_lib_dir == "":  # pylint: disable=g-explicit-bool-comparison
       logging.warning(
@@ -87,33 +108,46 @@ class NPU(Backend):
       object.__setattr__(self, "litert_dispatch_lib_dir", "")
       return
     elif self.litert_dispatch_lib_dir is None:
-      object.__setattr__(self, "litert_dispatch_lib_dir", "")
+      if sys.platform != "win32":
+        raise RuntimeError(
+            "NPU is supported only for Intel OpenVINO on Windows. Current"
+            f" platform is '{sys.platform}'."
+        )
 
-      if sys.platform == "win32":
-        try:
-          import openvino as ov  # pylint: disable=g-import-not-at-top  # pytype: disable=import-error
+      try:
+        import openvino as ov  # pylint: disable=g-import-not-at-top  # pytype: disable=import-error
+      except ImportError as e:
+        raise RuntimeError(
+            "NPU is supported only for Intel OpenVINO on Windows. Failed to"
+            " import the 'openvino' package. Please ensure 'openvino' is"
+            " installed."
+        ) from e
 
-          if "NPU" in ov.Core().available_devices:
-            litert_dispatch_lib_dir = str(
-                resources.files(__package__)
-                / "vendors/intel_openvino/dispatch/"
-            )
-            object.__setattr__(
-                self, "litert_dispatch_lib_dir", litert_dispatch_lib_dir
-            )
+      available_devices = ov.Core().available_devices
+      if "NPU" not in available_devices:
+        raise RuntimeError(
+            "NPU is supported only for Intel OpenVINO on Windows. No NPU"
+            " device detected by OpenVINO (available devices:"
+            f" {available_devices})."
+        )
 
-            # openvino package place the NPU libs in "libs".
-            # Includes to PATH so Windows can load it.
-            libs_dir = os.path.join(os.path.dirname(ov.__file__), "libs")
-            os.environ["PATH"] = os.environ["PATH"] + ";" + libs_dir
-        except ImportError:
-          pass
+      litert_dispatch_lib_dir = str(
+          resources.files(__package__) / "vendors/intel_openvino/dispatch/"
+      )
+      object.__setattr__(
+          self, "litert_dispatch_lib_dir", litert_dispatch_lib_dir
+      )
+
+      # openvino package place the NPU libs in "libs".
+      # Includes to PATH so Windows can load it.
+      libs_dir = os.path.join(os.path.dirname(ov.__file__), "libs")
+      os.environ["PATH"] = os.environ["PATH"] + ";" + libs_dir
 
     if not self.litert_dispatch_lib_dir:
       raise RuntimeError(
-          "NPU is supported only for Intel OpenVINO on Windows. It is"
-          " expected to install the 'openvino' package and have an NPU"
-          " available."
+          "NPU backend could not be initialized because an invalid or"
+          f" empty litert_dispatch_lib_dir ({self.litert_dispatch_lib_dir!r})"
+          " was provided."
       )
 
   def __eq__(self, other: Any) -> bool:
@@ -178,6 +212,20 @@ class Tool(abc.ABC):
 
 
 @dataclasses.dataclass
+class ThinkingConfig:
+  """Configuration for thinking/reasoning generation.
+
+  Attributes:
+      enable_thinking: Whether thinking is enabled.
+      thinking_token_budget: Budget for token-by-token reasoning generation.
+        Defaults to -1 (infinite budget).
+  """
+
+  enable_thinking: bool = True
+  thinking_token_budget: int = -1
+
+
+@dataclasses.dataclass
 class SamplerConfig:
   """Configuration for the sampling process.
 
@@ -204,6 +252,84 @@ class SamplerConfig:
       raise ValueError(
           f"temperature should be non-negative, but got {self.temperature}."
       )
+
+
+@dataclasses.dataclass
+class RepetitionPenaltyConfig:
+  """Configuration for penalizing repetitive tokens during generation.
+
+  Attributes:
+      repetition_penalty: A multiplicative penalty for any token already
+        generated (e.g., 1.0 = no penalty, 1.2 = moderate penalty). Positive
+        logits are divided by this penalty, and negative logits are multiplied.
+      presence_penalty: A scalar subtracted from a logit if a token has appeared
+        at least once.
+      frequency_penalty: A scalar subtracted from a logit, scaled linearly by
+        the number of times that token has previously appeared.
+      window_size: The maximum number of recent tokens to consider. A value of 0
+        means track all infinite history.
+  """
+
+  repetition_penalty: float | None = None
+  presence_penalty: float | None = None
+  frequency_penalty: float | None = None
+  window_size: int | None = None
+
+  def __post_init__(self):
+    if self.repetition_penalty is not None and self.repetition_penalty < 1.0:
+      raise ValueError(
+          "repetition_penalty should be >= 1.0, but got"
+          f" {self.repetition_penalty}."
+      )
+    if self.window_size is not None and self.window_size < 0:
+      raise ValueError(
+          f"window_size should be >= 0, but got {self.window_size}."
+      )
+
+
+@dataclasses.dataclass
+class NoRepeatNgramConfig:
+  """Configuration for banning repetitive ngrams during generation.
+
+  Attributes:
+      no_repeat_ngram_size: The size of ngrams to ban. If set to an integer
+        greater than 0, all ngrams of that size can only occur once.
+      window_size: The maximum number of recent tokens to consider for banning.
+        A value of 0 means track all infinite history.
+  """
+
+  no_repeat_ngram_size: int | None = None
+  window_size: int | None = None
+
+  def __post_init__(self):
+    if self.no_repeat_ngram_size is not None and self.no_repeat_ngram_size < 0:
+      raise ValueError(
+          "no_repeat_ngram_size should be >= 0, but got"
+          f" {self.no_repeat_ngram_size}."
+      )
+    if self.window_size is not None and self.window_size < 0:
+      raise ValueError(
+          f"window_size should be >= 0, but got {self.window_size}."
+      )
+
+
+@dataclasses.dataclass
+class SuppressTokensConfig:
+  """Configuration for suppressing specific tokens during generation.
+
+  Attributes:
+      suppress_tokens: A collection of token IDs to suppress during generation.
+  """
+
+  suppress_tokens: collections.abc.Collection[int] | None = None
+
+  def __post_init__(self):
+    if self.suppress_tokens is not None:
+      for token_id in self.suppress_tokens:
+        if token_id < 0:
+          raise ValueError(
+              f"Token ID in suppress_tokens should be >= 0, but got {token_id}."
+          )
 
 
 @dataclasses.dataclass
@@ -234,6 +360,19 @@ class LoraConfig:
   audio_lora_path: str | None = None
 
 
+@dataclasses.dataclass
+class ConstrainedDecodingConfig:
+  """Configuration for constrained decoding.
+
+  Attributes:
+      enable: Whether constraint decoding is enabled.
+      provider: The constraint provider type.
+  """
+
+  enable: bool = True
+  provider: LiteRtLmConstraintProviderType | None = None
+
+
 @dataclasses.dataclass(kw_only=True)
 class AbstractEngine(abc.ABC):
   """Abstract base class for LiteRT-LM engines.
@@ -245,7 +384,8 @@ class AbstractEngine(abc.ABC):
         the engine/model's default.
       max_num_images: Maximum number of images that can be processed in a single
         inference call.
-      cache_dir: Directory for caching compiled model artifacts.
+      cache_dir: Directory for caching compiled model artifacts. If None, use
+        the engine's default.
       vision_backend: The hardware backend used for vision encoding.
       audio_backend: The hardware backend used for audio encoding.
       enable_speculative_decoding: Whether to enable speculative decoding. If
@@ -255,18 +395,27 @@ class AbstractEngine(abc.ABC):
       lora_rank_config: Configuration for LoRA ranks.
       bos_token_id: The BOS token id for the model if one is configured.
       eos_token_ids: Stop token sequences configured for the model.
+      activation_data_type: The activation data type used for model execution.
+      use_ringbuffers_local_attention: Whether to use ringbuffers for local
+        attention KV cache on supported models to minimize memory usage. When
+        disabled, memory is allocated for the full context length, enabling
+        instant rewinding at higher memory cost.
+      enable_ynnpack: Whether YNNPACK should delegate supported operations
+        before XNNPACK.
   """
 
   model_path: str
   backend: Backend
   max_num_tokens: int | None = None
   max_num_images: int | None = None
-  cache_dir: str = ""
+  cache_dir: str | None = None
   vision_backend: Backend | None = None
   audio_backend: Backend | None = None
   enable_speculative_decoding: bool | None = None
   lora_rank_config: LoraRankConfig | None = None
   activation_data_type: ActivationDataType | None = None
+  use_ringbuffers_local_attention: bool | None = None
+  enable_ynnpack: bool = False
 
   def __enter__(self) -> AbstractEngine:
     """Initializes the engine resources."""
@@ -291,10 +440,13 @@ class AbstractEngine(abc.ABC):
       tool_event_handler: ToolEventHandler | None = None,
       automatic_tool_calling: bool = True,
       extra_context: collections.abc.Mapping[str, Any] | None = None,
-      filter_channel_content_from_kv_cache: bool = False,
+      filter_channel_content_from_kv_cache: bool | None = None,
+      thinking_config: ThinkingConfig | None = None,
       sampler_config: SamplerConfig | None = None,
+      constrained_decoding_config: ConstrainedDecodingConfig | None = None,
       lora_config: LoraConfig | None = None,
       max_output_tokens: int | None = None,
+      chat_template: str | None = None,
   ) -> AbstractConversation:
     """Creates a new conversation for this engine.
 
@@ -310,10 +462,16 @@ class AbstractEngine(abc.ABC):
           from the KV cache. This is useful when the model responds with
           "channel" content, e.g. thinking/reasoning tokens, that should not be
           persisted in the KV cache.
+        thinking_config: Configuration for thinking/reasoning generation.
         sampler_config: Configuration for the sampling process. If None, then
           uses the engine's default values.
+        constrained_decoding_config: Configuration for constrained decoding.
         lora_config: Configuration for LoRA adapters.
         max_output_tokens: The maximum number of output tokens.
+        chat_template: The Jinja chat template content to use for formatting. If
+          not set, use the default provided by the model or the engine.
+        enable_response_format: Whether to enable response format (constrained
+          decoding). If True, initializes the constraint provider LLGuidance.
     """
 
   @abc.abstractmethod
@@ -356,6 +514,47 @@ class AbstractEngine(abc.ABC):
     """Decodes token ids using the engine's tokenizer."""
 
 
+@dataclasses.dataclass
+class ResponseFormat:
+  """Response format for constrained decoding.
+
+  Currently supports JSON Schema and Regex.
+  """
+
+  class Type:
+    NONE = 0
+    REGEX = 1
+    JSON_OBJECT = 2
+
+  type: int
+  schema_or_pattern: str
+
+  @classmethod
+  def json(cls, schema: dict[str, Any] | str) -> ResponseFormat:
+    """Creates a JSON Schema response format.
+
+    Args:
+      schema: The JSON schema as a dictionary or a JSON string.
+    """
+    if isinstance(schema, dict):
+      schema = json.dumps(schema)
+    elif isinstance(schema, str):
+      try:
+        json.loads(schema)
+      except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid JSON schema string: {e}") from e
+    return cls(type=cls.Type.JSON_OBJECT, schema_or_pattern=schema)
+
+  @classmethod
+  def regex(cls, pattern: str) -> ResponseFormat:
+    """Creates a Regex response format.
+
+    Args:
+      pattern: The regex pattern string.
+    """
+    return cls(type=cls.Type.REGEX, schema_or_pattern=pattern)
+
+
 class AbstractConversation(abc.ABC):
   """Abstract base class for managing LiteRT-LM conversations.
 
@@ -365,9 +564,12 @@ class AbstractConversation(abc.ABC):
       tool_event_handler: A handler for tool call and tool response events.
       automatic_tool_calling: Whether to automatically call tools.
       extra_context: Extra context for the chat template.
+      thinking_config: Configuration for thinking/reasoning generation.
       sampler_config: Configuration for the sampling process.
       lora_config: Configuration for LoRA adapters.
       max_output_tokens: The maximum number of output tokens.
+      chat_template: The Jinja chat template content to use for formatting. If
+        not set, use the default provided by the model or the engine.
   """
 
   def __init__(
@@ -384,9 +586,11 @@ class AbstractConversation(abc.ABC):
       tool_event_handler: ToolEventHandler | None = None,
       automatic_tool_calling: bool = True,
       extra_context: collections.abc.Mapping[str, Any] | None = None,
+      thinking_config: ThinkingConfig | None = None,
       sampler_config: SamplerConfig | None = None,
       lora_config: LoraConfig | None = None,
       max_output_tokens: int | None = None,
+      chat_template: str | None = None,
   ):
     """Initializes the instance.
 
@@ -398,17 +602,22 @@ class AbstractConversation(abc.ABC):
         automatic_tool_calling: Whether to automatically call tools. If False,
           tool calls will be returned to the user to execute.
         extra_context: Extra context for the chat template.
+        thinking_config: Configuration for thinking/reasoning generation.
         sampler_config: Configuration for the sampling process. If None, then
           uses the engine's default values.
         lora_config: Configuration for LoRA adapters.
         max_output_tokens: The maximum number of output tokens.
+        chat_template: The Jinja chat template content to use for formatting. If
+          not set, use the default provided by the model or the engine.
     """
     self.messages = messages or []
     self.tools = tools or []
     self.tool_event_handler = tool_event_handler
     self.automatic_tool_calling = automatic_tool_calling
     self.extra_context = extra_context or {}
+    self.thinking_config = thinking_config
     self.sampler_config = sampler_config
+    self.chat_template = chat_template
     self.lora_config = lora_config
     self.max_output_tokens = max_output_tokens
 
@@ -425,7 +634,12 @@ class AbstractConversation(abc.ABC):
       self,
       message: str | Contents | Message | collections.abc.Mapping[str, Any],
       *,
+      repetition_penalty_config: RepetitionPenaltyConfig | None = None,
+      no_repeat_ngram_config: NoRepeatNgramConfig | None = None,
+      suppress_tokens_config: SuppressTokensConfig | None = None,
       max_output_tokens: int | None = None,
+      thinking_config: ThinkingConfig | None = None,
+      response_format: ResponseFormat | None = None,
   ) -> collections.abc.Mapping[str, Any]:
     """Sends a message and returns the response.
 
@@ -436,7 +650,14 @@ class AbstractConversation(abc.ABC):
           a user message), `Message` (full message object, useful when automatic
           tool calling is disabled and a tool response is required), or
           `collections.abc.Mapping` (super flexible raw dictionary format).
+        repetition_penalty_config: Configuration for penalizing repetitive
+          tokens.
+        no_repeat_ngram_config: Configuration for banning repetitive ngrams.
+        suppress_tokens_config: Configuration for suppressing specific tokens.
         max_output_tokens: The maximum number of output tokens.
+        thinking_config: Configuration for thinking/reasoning generation.
+        response_format: The expected format of the response. If provided, the
+          response will be constrained to this format.
 
     Returns:
         A dictionary containing the model's response. The structure is:
@@ -448,7 +669,12 @@ class AbstractConversation(abc.ABC):
       self,
       message: str | Contents | Message | collections.abc.Mapping[str, Any],
       *,
+      repetition_penalty_config: RepetitionPenaltyConfig | None = None,
+      no_repeat_ngram_config: NoRepeatNgramConfig | None = None,
+      suppress_tokens_config: SuppressTokensConfig | None = None,
       max_output_tokens: int | None = None,
+      thinking_config: ThinkingConfig | None = None,
+      response_format: ResponseFormat | None = None,
   ) -> collections.abc.Iterator[collections.abc.Mapping[str, Any]]:
     """Sends a message and streams the response.
 
@@ -459,7 +685,14 @@ class AbstractConversation(abc.ABC):
           a user message), `Message` (full message object, useful when automatic
           tool calling is disabled and a tool response is required), or
           `collections.abc.Mapping` (super flexible raw dictionary format).
+        repetition_penalty_config: Configuration for penalizing repetitive
+          tokens.
+        no_repeat_ngram_config: Configuration for banning repetitive ngrams.
+        suppress_tokens_config: Configuration for suppressing specific tokens.
         max_output_tokens: The maximum number of output tokens.
+        thinking_config: Configuration for thinking/reasoning generation.
+        response_format: The expected format of the response. If provided, the
+          response will be constrained to this format.
 
     Returns:
         An iterator yielding dictionaries containing chunks of the model's
@@ -490,6 +723,10 @@ class AbstractConversation(abc.ABC):
   def token_count(self) -> int:
     """The number of tokens in the KV Cache (prefill + decode)."""
 
+  @abc.abstractmethod
+  def get_benchmark_info(self) -> BenchmarkInfo:
+    """Returns the benchmark info of the conversation."""
+
   def cancel_process(self) -> None:
     """Cancels the current inference process."""
 
@@ -518,6 +755,52 @@ class BenchmarkInfo:
   last_decode_tokens_per_second: float
 
 
+def create_benchmark_info(lib: Any, info_ptr: Any) -> BenchmarkInfo:
+  """Creates a BenchmarkInfo object from a C API pointer."""
+  num_prefill_turns = lib.litert_lm_benchmark_info_get_num_prefill_turns(
+      info_ptr
+  )
+  if num_prefill_turns > 0:
+    last_prefill_count = (
+        lib.litert_lm_benchmark_info_get_prefill_token_count_at(
+            info_ptr, num_prefill_turns - 1
+        )
+    )
+    last_prefill_tps = (
+        lib.litert_lm_benchmark_info_get_prefill_tokens_per_sec_at(
+            info_ptr, num_prefill_turns - 1
+        )
+    )
+  else:
+    last_prefill_count = 0
+    last_prefill_tps = 0.0
+
+  num_decode_turns = lib.litert_lm_benchmark_info_get_num_decode_turns(info_ptr)
+  if num_decode_turns > 0:
+    last_decode_count = lib.litert_lm_benchmark_info_get_decode_token_count_at(
+        info_ptr, num_decode_turns - 1
+    )
+    last_decode_tps = lib.litert_lm_benchmark_info_get_decode_tokens_per_sec_at(
+        info_ptr, num_decode_turns - 1
+    )
+  else:
+    last_decode_count = 0
+    last_decode_tps = 0.0
+
+  return BenchmarkInfo(
+      init_time_in_second=lib.litert_lm_benchmark_info_get_total_init_time_in_second(
+          info_ptr
+      ),
+      time_to_first_token_in_second=lib.litert_lm_benchmark_info_get_time_to_first_token(
+          info_ptr
+      ),
+      last_prefill_token_count=last_prefill_count,
+      last_prefill_tokens_per_second=last_prefill_tps,
+      last_decode_token_count=last_decode_count,
+      last_decode_tokens_per_second=last_decode_tps,
+  )
+
+
 @dataclasses.dataclass
 class AbstractBenchmark(abc.ABC):
   """Abstract base class for LiteRT-LM benchmarks.
@@ -537,9 +820,15 @@ class AbstractBenchmark(abc.ABC):
       bos_token_id: The BOS token id for the model if one is configured.
       eos_token_ids: Stop token sequences configured for the model.
       prompt: The custom prompt string to tokenize and run. If the tokenized
-        prompt is shorter than `prefill_tokens`, the remaining tokens are
-        padded with zero. If it is longer, the prompt is truncated to
-        `prefill_tokens`.
+        prompt is shorter than `prefill_tokens`, the remaining tokens are padded
+        with zero. If it is longer, the prompt is truncated to `prefill_tokens`.
+      activation_data_type: The activation data type used for model execution.
+      use_ringbuffers_local_attention: Whether to use ringbuffers for local
+        attention KV cache on supported models to minimize memory usage. When
+        disabled, memory is allocated for the full context length, enabling
+        instant rewinding at higher memory cost.
+      enable_ynnpack: Whether YNNPACK should delegate supported operations
+        before XNNPACK.
   """
 
   model_path: str
@@ -547,10 +836,12 @@ class AbstractBenchmark(abc.ABC):
   prefill_tokens: int = 256
   decode_tokens: int = 256
   max_num_tokens: int | None = None
-  cache_dir: str = ""
+  cache_dir: str | None = None
   enable_speculative_decoding: bool | None = None
   prompt: str = "How are you"
   activation_data_type: ActivationDataType | None = None
+  use_ringbuffers_local_attention: bool | None = None
+  enable_ynnpack: bool = False
 
   @abc.abstractmethod
   def run(self) -> BenchmarkInfo:
@@ -649,6 +940,10 @@ class AbstractSession(abc.ABC):
         Responses: The log likelihood scores of the target text given the
         existing session state.
     """
+
+  @abc.abstractmethod
+  def get_benchmark_info(self) -> BenchmarkInfo:
+    """Returns the benchmark info of the session."""
 
   @abc.abstractmethod
   def cancel_process(self) -> None:

@@ -29,6 +29,7 @@
 
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_format.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
@@ -177,7 +178,8 @@ absl::Status ReadValueTFromSection(
   LitertlmHeader header;
 
   // Read the header information.
-  RETURN_IF_ERROR(ReadHeaderFromLiteRTLM(litertlm_path, &header));  // NOLINT
+  ABSL_RETURN_IF_ERROR(
+      ReadHeaderFromLiteRTLM(litertlm_path, &header));  // NOLINT
 
   auto sections = header.metadata->section_metadata()->objects();
   // Check if the section_idx is valid.
@@ -378,13 +380,14 @@ absl::Status ReadSectionIntoHfTokenizerJsonData(
     const std::string& litertlm_path, uint64_t begin_offset,
     uint64_t end_offset, std::string* output) {
   std::vector<uint8_t> compressed_data;
-  RETURN_IF_ERROR(ReadSectionIntoBinaryData(litertlm_path,  // NOLINT
-                                            begin_offset, end_offset,
-                                            &compressed_data));
+  ABSL_RETURN_IF_ERROR(ReadSectionIntoBinaryData(litertlm_path,  // NOLINT
+                                                 begin_offset, end_offset,
+                                                 &compressed_data));
 
   std::vector<uint8_t> uncompressed_data;
-  RETURN_IF_ERROR(DecompressData(compressed_data.data(),  // NOLINT
-                                 compressed_data.size(), &uncompressed_data));
+  ABSL_RETURN_IF_ERROR(DecompressData(compressed_data.data(),  // NOLINT
+                                      compressed_data.size(),
+                                      &uncompressed_data));
   output->assign(reinterpret_cast<char*>(uncompressed_data.data()),
                  uncompressed_data.size());
 
@@ -476,7 +479,8 @@ absl::Status ReadAnyT(const std::string& litertlm_path, T* data,
   LitertlmHeader header;
 
   // Read the header information.
-  RETURN_IF_ERROR(ReadHeaderFromLiteRTLM(litertlm_path, &header));  // NOLINT
+  ABSL_RETURN_IF_ERROR(
+      ReadHeaderFromLiteRTLM(litertlm_path, &header));  // NOLINT
 
   // Search for the first section with the specified type.
   auto sections = header.metadata->section_metadata()->objects();

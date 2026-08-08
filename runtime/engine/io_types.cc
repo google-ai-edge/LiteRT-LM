@@ -14,6 +14,7 @@
 
 #include "runtime/engine/io_types.h"
 
+#include <chrono>  // NOLINT: Required for monotonic benchmark timing.
 #include <cstddef>
 #include <cstdint>
 #include <iomanip>
@@ -35,12 +36,19 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/str_join.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
-#include "absl/time/clock.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_macros.h"  // from @litert
 
 namespace litert::lm {
+namespace {
+
+absl::Duration ToAbslDuration(std::chrono::steady_clock::duration duration) {
+  return absl::Nanoseconds(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(duration).count());
+}
+
+}  // namespace
 
 std::ostream& operator<<(std::ostream& os, const TaskState& task_state) {
   switch (task_state) {
@@ -132,7 +140,7 @@ absl::Status BenchmarkInfo::TimeInitPhaseStart(InitPhase phase) {
     return absl::InternalError(
         absl::StrCat("Phase ", phase_name, " already started."));
   }
-  start_time_map_[phase_name] = absl::Now();
+  start_time_map_[phase_name] = std::chrono::steady_clock::now();
   return absl::OkStatus();
 }
 
@@ -142,7 +150,8 @@ absl::Status BenchmarkInfo::TimeInitPhaseEnd(InitPhase phase) {
     return absl::InternalError(
         absl::StrCat("Phase ", phase_name, " not started."));
   }
-  init_phases_[phase_name] = absl::Now() - start_time_map_[phase_name];
+  init_phases_[phase_name] = ToAbslDuration(std::chrono::steady_clock::now() -
+                                            start_time_map_[phase_name]);
   return absl::OkStatus();
 }
 
@@ -159,10 +168,12 @@ absl::Status BenchmarkInfo::InitPhaseRecord(InitPhase phase,
 }
 
 absl::Status BenchmarkInfo::TimeMarkDelta(const std::string& mark_name) {
+  const auto now = std::chrono::steady_clock::now();
   if (mark_time_map_.contains(mark_name)) {
-    mark_durations_[mark_name] = absl::Now() - mark_time_map_[mark_name];
+    mark_durations_[mark_name] =
+        ToAbslDuration(now - mark_time_map_[mark_name]);
   }
-  mark_time_map_[mark_name] = absl::Now();
+  mark_time_map_[mark_name] = now;
   return absl::OkStatus();
 }
 
@@ -177,7 +188,7 @@ absl::Status BenchmarkInfo::TimePrefillTurnStart() {
     return absl::InternalError(
         absl::StrCat("Prefill turn ", phase_name, " already started."));
   }
-  start_time_map_[phase_name] = absl::Now();
+  start_time_map_[phase_name] = std::chrono::steady_clock::now();
   return absl::OkStatus();
 }
 
@@ -188,7 +199,8 @@ absl::Status BenchmarkInfo::TimePrefillTurnEnd(uint64_t num_prefill_tokens) {
         absl::StrCat("Prefill turn ", phase_name, " not started."));
   }
   prefill_turns_.emplace_back(num_prefill_tokens,
-                              absl::Now() - start_time_map_[phase_name]);
+                              ToAbslDuration(std::chrono::steady_clock::now() -
+                                             start_time_map_[phase_name]));
   prefill_turn_index_++;
   return absl::OkStatus();
 }
@@ -210,7 +222,7 @@ absl::Status BenchmarkInfo::TimeDecodeTurnStart() {
     return absl::InternalError(
         absl::StrCat("Decode turn ", phase_name, " already started."));
   }
-  start_time_map_[phase_name] = absl::Now();
+  start_time_map_[phase_name] = std::chrono::steady_clock::now();
   return absl::OkStatus();
 }
 
@@ -221,7 +233,8 @@ absl::Status BenchmarkInfo::TimeDecodeTurnEnd(uint64_t num_decode_tokens) {
         absl::StrCat("Decode turn ", phase_name, " not started."));
   }
   decode_turns_.emplace_back(num_decode_tokens,
-                             absl::Now() - start_time_map_[phase_name]);
+                             ToAbslDuration(std::chrono::steady_clock::now() -
+                                            start_time_map_[phase_name]));
   decode_turn_index_++;
   return absl::OkStatus();
 }
@@ -233,7 +246,7 @@ absl::Status BenchmarkInfo::TimeTextToTokenIdsStart() {
     return absl::InternalError(
         absl::StrCat("TextToTokenIds turn ", phase_name, " already started."));
   }
-  start_time_map_[phase_name] = absl::Now();
+  start_time_map_[phase_name] = std::chrono::steady_clock::now();
   return absl::OkStatus();
 }
 
@@ -245,7 +258,8 @@ absl::Status BenchmarkInfo::TimeTextToTokenIdsEnd(uint64_t num_tokens) {
         absl::StrCat("TextToTokenIds turn ", phase_name, " not started."));
   }
   text_to_token_ids_turns_.emplace_back(
-      num_tokens, absl::Now() - start_time_map_[phase_name]);
+      num_tokens, ToAbslDuration(std::chrono::steady_clock::now() -
+                                 start_time_map_[phase_name]));
   text_to_token_ids_turn_index_++;
   return absl::OkStatus();
 }
@@ -342,6 +356,13 @@ double BenchmarkInfo::GetTimeToFirstToken() const {
   return first_decode_token_seconds + first_prefill_token_seconds;
 }
 
+const std::string& BenchmarkInfo::GetProfileSummary() const {
+  return profile_summary_;
+}
+void BenchmarkInfo::SetProfileSummary(absl::string_view profile_summary) {
+  profile_summary_ = profile_summary;
+}
+
 std::ostream& operator<<(std::ostream& os, const BenchmarkTurnData& data) {
   os << "Processed " << data.num_tokens << " tokens in " << data.duration
      << " duration." << std::endl;
@@ -435,6 +456,11 @@ std::ostream& operator<<(std::ostream& os, const BenchmarkInfo& info) {
     for (const auto& [mark_name, duration] : info.GetMarkDurations()) {
       os << "    - " << mark_name << ": " << duration << std::endl;
     }
+  }
+  if (!info.GetProfileSummary().empty()) {
+    os << "--------------------------------------------------" << std::endl;
+    os << "  Profile Summary:" << std::endl;
+    os << info.GetProfileSummary() << std::endl;
   }
   os << "--------------------------------------------------" << std::endl;
   return os;

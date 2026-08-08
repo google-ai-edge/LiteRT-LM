@@ -161,6 +161,18 @@ class Session(interfaces.AbstractSession):
     finally:
       self._lib.litert_lm_responses_delete(resp_ptr)
 
+  def get_benchmark_info(self) -> interfaces.BenchmarkInfo:
+    """See base class."""
+    if not self._ptr:
+      raise RuntimeError("Session is closed.")
+    info_ptr = self._lib.litert_lm_session_get_benchmark_info(self._ptr)
+    if not info_ptr:
+      raise RuntimeError("Failed to get benchmark info.")
+    try:
+      return interfaces.create_benchmark_info(self._lib, info_ptr)
+    finally:
+      self._lib.litert_lm_benchmark_info_delete(info_ptr)
+
   def cancel_process(self) -> None:
     if self._ptr:
       self._lib.litert_lm_session_cancel_process(self._ptr)

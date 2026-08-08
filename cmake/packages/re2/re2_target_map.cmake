@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
-set(RE2_TARGET_MAP
-    "re2::re2=${RE2_LIB_DIR}/libre2.a"
+set(LITERTLM_RE2_TARGET_MAP
+    "re2::re2=${LITERTLM_RE2_LIB_DIR}/libre2.a"
 )

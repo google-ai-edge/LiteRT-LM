@@ -31,7 +31,7 @@ class ConversationTests: XCTestCase {
   override func setUp() async throws {
     try await super.setUp()
     let modelResource =
-      "runtime/testdata/test_lm.litertlm"
+      + "runtime/testdata/test_lm.litertlm"
     let modelPath = testDataPath(forResource: modelResource)
     ExperimentalFlags.optIntoExperimentalAPIs()
     ExperimentalFlags.enableBenchmark = true
@@ -122,7 +122,7 @@ class ConversationTests: XCTestCase {
       accumulatedText += chunk.toString
     }
     XCTAssertEqual(chunkCount, 6)
-    XCTAssertEqual(accumulatedText, "Ꮝgdockdict इक इक इकद्दा")
+    XCTAssertEqual(accumulatedText, "stöstöstöstöstö mengenal")
 
   }
 
@@ -310,5 +310,221 @@ class ConversationTests: XCTestCase {
     let rendered = try conversation.renderPrefaceIntoString()
     XCTAssertFalse(rendered.isEmpty)
     XCTAssertTrue(rendered.contains("You are a helpful assistant"))
+  }
+
+  func testSendMessageWithRepetitionPenalty() async throws {
+    let conversation = try await self.engine.createConversation(with: ConversationConfig())
+    XCTAssertTrue(conversation.isAlive)
+
+    let response = try await conversation.sendMessage(
+      Message("Hello"),
+      repetitionPenaltyConfig: RepetitionPenaltyConfig(
+        repetitionPenalty: 2.0, presencePenalty: 0.6, frequencyPenalty: 0.6, windowSize: 10)
+    )
+    XCTAssertFalse(response.contents.isEmpty)
+  }
+
+  func testSendStreamMessageWithRepetitionPenalty() async throws {
+    let conversation = try await self.engine.createConversation(with: ConversationConfig())
+    XCTAssertTrue(conversation.isAlive)
+
+    let message = Message("Hello")
+    var chunkCount = 0
+
+    for try await _ in conversation.sendMessageStream(
+      message,
+      repetitionPenaltyConfig: RepetitionPenaltyConfig(
+        repetitionPenalty: 2.0, presencePenalty: 0.6, frequencyPenalty: 0.6, windowSize: 10)
+    ) {
+      chunkCount += 1
+    }
+    XCTAssertGreaterThan(chunkCount, 0)
+  }
+
+  func testSendMessageWithNoRepeatNgram() async throws {
+    let conversation = try await self.engine.createConversation(with: ConversationConfig())
+    XCTAssertTrue(conversation.isAlive)
+
+    let response = try await conversation.sendMessage(
+      Message("Hello"),
+      noRepeatNgramConfig: NoRepeatNgramConfig(noRepeatNgramSize: 5, windowSize: 10)
+    )
+    XCTAssertFalse(response.contents.isEmpty)
+  }
+
+  func testSendStreamMessageWithNoRepeatNgram() async throws {
+    let conversation = try await self.engine.createConversation(with: ConversationConfig())
+    XCTAssertTrue(conversation.isAlive)
+
+    let message = Message("Hello")
+    var chunkCount = 0
+
+    for try await _ in conversation.sendMessageStream(
+      message,
+      noRepeatNgramConfig: NoRepeatNgramConfig(noRepeatNgramSize: 5, windowSize: 10)
+    ) {
+      chunkCount += 1
+    }
+    XCTAssertGreaterThan(chunkCount, 0)
+  }
+
+  func testSendMessageWithSuppressTokens() async throws {
+    let conversation = try await self.engine.createConversation(with: ConversationConfig())
+    XCTAssertTrue(conversation.isAlive)
+
+    let response = try await conversation.sendMessage(
+      Message("Hello"),
+      suppressTokensConfig: SuppressTokensConfig(suppressTokens: [1, 2, 3])
+    )
+    XCTAssertFalse(response.contents.isEmpty)
+  }
+
+  func testSendStreamMessageWithSuppressTokens() async throws {
+    let conversation = try await self.engine.createConversation(with: ConversationConfig())
+    XCTAssertTrue(conversation.isAlive)
+
+    let message = Message("Hello")
+    var chunkCount = 0
+
+    for try await _ in conversation.sendMessageStream(
+      message,
+      suppressTokensConfig: SuppressTokensConfig(suppressTokens: [1, 2, 3])
+    ) {
+      chunkCount += 1
+    }
+    XCTAssertGreaterThan(chunkCount, 0)
+  }
+
+  func testCreateConversationWithThinkingConfig() async throws {
+    let config = ConversationConfig(
+      thinkingConfig: ThinkingConfig(enableThinking: true, thinkingTokenBudget: 32)
+    )
+    let conversation = try await self.engine.createConversation(with: config)
+    XCTAssertTrue(conversation.isAlive)
+  }
+
+  func testSendMessageWithThinkingConfig() async throws {
+    let conversation = try await self.engine.createConversation(with: ConversationConfig())
+    XCTAssertTrue(conversation.isAlive)
+
+    let response = try await conversation.sendMessage(
+      Message("Hello"),
+      thinkingConfig: ThinkingConfig(enableThinking: true, thinkingTokenBudget: 32)
+    )
+    XCTAssertFalse(response.contents.isEmpty)
+  }
+
+  func testSendMessageStreamWithThinkingConfig() async throws {
+    let conversation = try await self.engine.createConversation(with: ConversationConfig())
+    XCTAssertTrue(conversation.isAlive)
+
+    let message = Message("Hello")
+    var chunkCount = 0
+
+    for try await _ in conversation.sendMessageStream(
+      message,
+      thinkingConfig: ThinkingConfig(enableThinking: true, thinkingTokenBudget: 32)
+    ) {
+      chunkCount += 1
+    }
+    XCTAssertGreaterThan(chunkCount, 0)
+  }
+
+  func testResponseFormatCreation() throws {
+    let schemaStr = "{\"type\": \"object\"}"
+    let formatFromString = try ResponseFormat.json(schema: schemaStr)
+    XCTAssertEqual(formatFromString.type, .jsonObject)
+    XCTAssertEqual(formatFromString.schemaOrPattern, schemaStr)
+
+    let schemaMap: [String: Any] = ["type": "object"]
+    let formatFromMap = try ResponseFormat.json(schema: schemaMap)
+    XCTAssertEqual(formatFromMap.type, .jsonObject)
+    XCTAssertTrue(formatFromMap.schemaOrPattern.contains("type"))
+
+    let regexPattern = "[0-9]{3}"
+    let formatRegex = ResponseFormat.regex(pattern: regexPattern)
+    XCTAssertEqual(formatRegex.type, .regex)
+    XCTAssertEqual(formatRegex.schemaOrPattern, regexPattern)
+  }
+
+  func testResponseFormatInvalidJsonSchemaThrows() throws {
+    let invalidSchema = "{invalid_json: true"
+    do {
+      _ = try ResponseFormat.json(schema: invalidSchema)
+      XCTFail("Expected invalidJsonSchema error to be thrown")
+    } catch let error as LiteRTLMError {
+      XCTAssertEqual(error, LiteRTLMError.config(.invalidJsonSchema(invalidSchema)))
+    }
+  }
+
+  func testSendMessageWithoutEnableResponseFormatThrows() async throws {
+    let conversation = try await self.engine.createConversation(with: ConversationConfig())
+    XCTAssertTrue(conversation.isAlive)
+
+    do {
+      _ = try await conversation.sendMessage(
+        Message("Hello"),
+        responseFormat: ResponseFormat.regex(pattern: "[0-9]{3}")
+      )
+      XCTFail("Expected responseFormatNotEnabled error to be thrown")
+    } catch let error as LiteRTLMError {
+      XCTAssertEqual(error, LiteRTLMError.conversation(.responseFormatNotEnabled))
+    }
+  }
+
+  func testSendMessageStreamWithoutEnableResponseFormatThrows() async throws {
+    let conversation = try await self.engine.createConversation(with: ConversationConfig())
+    XCTAssertTrue(conversation.isAlive)
+
+    let message = Message("Hello")
+    let stream = conversation.sendMessageStream(
+      message,
+      responseFormat: ResponseFormat.regex(pattern: "[0-9]{3}")
+    )
+
+    do {
+      for try await _ in stream {
+        XCTFail("Expected responseFormatNotEnabled error, but got a chunk")
+      }
+      XCTFail("Expected responseFormatNotEnabled error to be thrown")
+    } catch let error as LiteRTLMError {
+      XCTAssertEqual(error, LiteRTLMError.conversation(.responseFormatNotEnabled))
+    }
+  }
+
+  func testSendMessageWithResponseFormatRegex() async throws {
+    let config = ConversationConfig(enableResponseFormat: true)
+    let conversation = try await self.engine.createConversation(with: config)
+    XCTAssertTrue(conversation.isAlive)
+
+    let response = try await conversation.sendMessage(
+      Message("What is 1+1?"),
+      responseFormat: ResponseFormat.regex(pattern: "aiedge")
+    )
+    XCTAssertFalse(response.contents.isEmpty)
+  }
+
+  func testConversationTeardownAndEngineRetentionDoesNotCrash() async throws {
+    let modelResource =
+      + "runtime/testdata/test_lm.litertlm"
+    var localEngine: Engine? = Engine(
+      engineConfig: try EngineConfig(
+        modelPath: testDataPath(forResource: modelResource),
+        maxNumTokens: 10,
+        cacheDir: NSTemporaryDirectory()
+      )
+    )
+    try await localEngine?.initialize()
+    var localConversation: Conversation? = try await localEngine?.createConversation()
+    XCTAssertTrue(localConversation?.isAlive == true)
+
+    // Release local reference to localEngine.
+    // Because localConversation holds a strong reference to localEngine, localEngine will remain alive.
+    localEngine = nil
+    XCTAssertTrue(localConversation?.isAlive == true)
+
+    // Releasing localConversation triggers Conversation.deinit, which sets handle = nil before litert_lm_conversation_delete,
+    // and then releases localEngine, triggering Engine.deinit, setting handle = nil before litert_lm_engine_delete without crashing.
+    localConversation = nil
   }
 }

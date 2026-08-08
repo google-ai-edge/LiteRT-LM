@@ -70,7 +70,7 @@ namespace litert::lm {
 //
 // const std::string template_content = ReadTemplateFromFile(template_file);
 // PromptTemplate template(template_content);
-// ASSIGN_OR_RETURN(std::string rendered_prompt, template.Apply(input));
+// ABSL_ASSIGN_OR_RETURN(std::string rendered_prompt, template.Apply(input));
 struct PromptTemplateInput {
   // The messages in the conversation.
   nlohmann::ordered_json messages;

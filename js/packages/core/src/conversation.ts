@@ -142,6 +142,26 @@ export class Conversation implements ChatInterface {
     });
   }
 
+  /**
+   * Clones the conversation. The cloned conversation will be independent of the
+   * original conversation, including the history, state, etc.
+   */
+  async clone(): Promise<Conversation> {
+    if (this.isBusy) {
+      throw new Error(BUSY_MESSAGE);
+    }
+    this.isBusy = true;
+    try {
+      return await this.mutexes.executor.acquireAndRun(() => {
+        const wasmClonedConversation = this.conversation.clone();
+        return new Conversation(
+            wasmClonedConversation, this.engine, this.mutexes);
+      });
+    } finally {
+      this.isBusy = false;
+    }
+  }
+
   async delete(): Promise<void> {
     await this.mutexes.executor.acquireAndRun(() => {
       this.conversation.delete();

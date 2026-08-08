@@ -35,7 +35,7 @@ constexpr char kTestdataDir[] =
     "litert_lm/runtime/components/testdata/";
 
 constexpr char kImageTestdataDir[] =
-    "litert/support/preprocessor/testdata/";
+    "litert_lm/support/preprocessor/testdata/";
 
 }  // namespace
 

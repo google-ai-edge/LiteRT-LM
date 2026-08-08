@@ -342,13 +342,24 @@ TEST(SamplingCpuUtilTest, BenchmarkTopKTokenIds) {
 
   absl::Time start = absl::Now();
   for (int i = 0; i < kIterations; ++i) {
-    auto res = TopKTokenIds(absl::MakeConstSpan(logits), /*k=*/256,
+    auto res = TopKTokenIds(absl::MakeConstSpan(logits), /*k=*/1,
                             /*batch_size=*/1, /*sequence_size=*/1);
     ASSERT_TRUE(res.ok());
   }
   absl::Time end = absl::Now();
   absl::Duration duration = end - start;
-  std::printf("\n[BENCHMARK] TopK=256 (min-heap) execution took: %.3f ms\n",
+  std::printf("\n[BENCHMARK] TopK=1 (greedy) execution took: %.3f ms\n",
+              absl::ToDoubleMilliseconds(duration) / kIterations);
+
+  start = absl::Now();
+  for (int i = 0; i < kIterations; ++i) {
+    auto res = TopKTokenIds(absl::MakeConstSpan(logits), /*k=*/256,
+                            /*batch_size=*/1, /*sequence_size=*/1);
+    ASSERT_TRUE(res.ok());
+  }
+  end = absl::Now();
+  duration = end - start;
+  std::printf("[BENCHMARK] TopK=256 (min-heap) execution took: %.3f ms\n",
               absl::ToDoubleMilliseconds(duration) / kIterations);
 
   start = absl::Now();

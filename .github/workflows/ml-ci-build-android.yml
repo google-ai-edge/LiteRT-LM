@@ -217,7 +217,7 @@ jobs:
 
       - name: Run bazel build for Android.
         run: |
-          bazelisk build --disk_cache=~/.cache/bazel --config=android_x86_64 \
+          bazelisk build --disk_cache=~/.cache/bazel --repository_cache=~/.cache/bazel/repo --config=android_x86_64 \
             --deleted_packages=swift \
             //... \
             //runtime/engine:litert_lm_main \

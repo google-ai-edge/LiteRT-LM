@@ -71,7 +71,7 @@ TEST(MemoryMappedFileWithAutoAlignment, SucceedsMappingLengthAndOffset) {
   file_contents += "END";
   WriteFile(path.string(), file_contents);
 
-  auto scoped_file = *ScopedFile::Open(path.string());
+  ASSERT_OK_AND_ASSIGN(auto scoped_file, ScopedFile::Open(path.string()));
 
   // Case 1: offset = 0, size = 0 (whole file)
   {
@@ -160,6 +160,13 @@ TEST_F(IsLoRAInputNameTest, MatchesValidPattern2) {
   EXPECT_TRUE(IsLoRAInputName("lora_atten_k_b_prime_weight_34"));
   EXPECT_TRUE(IsLoRAInputName("lora_atten_v_a_prime_weight_9"));
   EXPECT_TRUE(IsLoRAInputName("lora_atten_o_b_prime_weight_123"));
+}
+
+TEST_F(IsLoRAInputNameTest, MatchesGpuPattern) {
+  EXPECT_TRUE(IsLoRAInputName("transformer.layer_0.attn.q.w_prime_left"));
+  EXPECT_TRUE(IsLoRAInputName("transformer.layer_10.attn.k.w_prime_right"));
+  EXPECT_TRUE(IsLoRAInputName(
+      "transformer.layer_34.attn.attn_vec_einsum.w_prime_left"));
 }
 
 TEST_F(IsLoRAInputNameTest, RejectsIncorrectComponentCount) {

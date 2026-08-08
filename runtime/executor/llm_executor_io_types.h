@@ -288,28 +288,35 @@ class ExecutorAudioData {
   ExecutorAudioData() = default;
 
   // Constructor that moves optional TensorBuffers
-  // embeddings: Flattened audio embedding matrix with shape
+  // projected_audio_embeddings: Flattened audio embedding matrix with shape
   //   [audio_tokens_num, model_dimension].
   // per_layer_embeddings: Flattened audio per layer embeddings tensor with
   //   shape [stack_size, audio_tokens_num, per_layer_embedding_dimension].
   // valid_tokens: The number of valid tokens in the audio embeddings.
   ExecutorAudioData(
-      std::optional<::litert::TensorBuffer>&& embeddings,
+      std::optional<::litert::TensorBuffer>&& projected_audio_embeddings,
       std::optional<::litert::TensorBuffer>&& per_layer_embeddings,
       int valid_tokens = -1);
 
   // Getters:
-  absl::StatusOr<const ::litert::TensorBuffer*> GetEmbeddingsPtr() const;
-  absl::StatusOr<::litert::TensorBuffer*> GetMutableEmbeddingsPtr();
+  absl::StatusOr<const ::litert::TensorBuffer*> GetProjectedAudioEmbeddingsPtr()
+      const;
+  absl::StatusOr<::litert::TensorBuffer*>
+  GetMutableProjectedAudioEmbeddingsPtr();
   absl::StatusOr<const ::litert::TensorBuffer*> GetPerLayerEmbeddingsPtr()
       const;
   absl::StatusOr<::litert::TensorBuffer*> GetMutablePerLayerEmbeddingsPtr();
+  absl::StatusOr<const ::litert::TensorBuffer*> GetAudioEmbeddingsPtr() const;
+  absl::StatusOr<::litert::TensorBuffer*> GetMutableAudioEmbeddingsPtr();
   int GetValidTokens() const;
 
   // Setters:
-  void SetEmbeddings(std::optional<::litert::TensorBuffer>&& embeddings);
+  void SetProjectedAudioEmbeddings(
+      std::optional<::litert::TensorBuffer>&& projected_audio_embeddings);
   void SetPerLayerEmbeddings(
       std::optional<::litert::TensorBuffer>&& per_layer_embeddings);
+  void SetAudioEmbeddings(
+      std::optional<::litert::TensorBuffer>&& audio_embeddings);
   void SetValidTokens(int valid_tokens);
 
   // Duplicates the ExecutorAudioData. This method relies on the
@@ -318,8 +325,9 @@ class ExecutorAudioData {
   absl::StatusOr<ExecutorAudioData> Duplicate() const;
 
  private:
-  std::optional<::litert::TensorBuffer> embeddings_;
+  std::optional<::litert::TensorBuffer> projected_audio_embeddings_;
   std::optional<::litert::TensorBuffer> per_layer_embeddings_;
+  std::optional<::litert::TensorBuffer> audio_embeddings_;
 
   // The number of valid tokens in the audio embeddings. This is used to
   // determine the number of audio tokens to be actually used.
@@ -355,6 +363,10 @@ class ExecutorInputs {
       const;
   absl::StatusOr<::litert::TensorBuffer*>
   GetMutableVisionPerLayerEmbeddingsPtr();
+  absl::StatusOr<const ::litert::TensorBuffer*> GetProjectedAudioEmbeddingsPtr()
+      const;
+  absl::StatusOr<::litert::TensorBuffer*>
+  GetMutableProjectedAudioEmbeddingsPtr();
   absl::StatusOr<const ::litert::TensorBuffer*> GetAudioEmbeddingsPtr() const;
   absl::StatusOr<::litert::TensorBuffer*> GetMutableAudioEmbeddingsPtr();
   absl::StatusOr<const ::litert::TensorBuffer*> GetAudioPerLayerEmbeddingsPtr()
@@ -443,8 +455,20 @@ class ExecutorDecodeParams {
   // supported in the hand-written path.
   ConstrainedDecoder* GetConstraintDecoder() const;
 
+  // Sets an optional cancellation flag for the decode process. (eg. for
+  // diffusion-llm).
+  void SetCancelled(const std::atomic<bool>* cancelled) {
+    cancelled_ = cancelled;
+  }
+
+  // Returns the cancellation flag if set, otherwise nullptr.
+  const std::atomic<bool>* GetCancelled() const { return cancelled_; }
+
  private:
+  // List of active logits processors (e.g. repetition penalty, no-repeat
+  // ngram, token suppression, constrained decoding).
   std::vector<LogitsProcessor*> logits_processors_;
+  const std::atomic<bool>* cancelled_ = nullptr;
 };
 std::ostream& operator<<(std::ostream& os, const ExecutorDecodeParams& params);
 

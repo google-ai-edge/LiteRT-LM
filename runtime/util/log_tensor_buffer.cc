@@ -52,25 +52,24 @@ void LogValues(const Container& values, size_t num_values_to_log,
 
   constexpr size_t kNumExtraValuesToLog = 10;
   if (num_values_to_log * 3 + kNumExtraValuesToLog >= values.size()) {
-    ABSL_LOG(INFO) << prefix << "(size=" << values.size()
-                   << "): " << absl::StrJoin(values, ", ", formatter);
+    ABSL_VLOG(1) << prefix << "(size=" << values.size()
+                 << "): " << absl::StrJoin(values, ", ", formatter);
     return;
   }
 
   size_t end_offset = values.size() - num_values_to_log;
   size_t mid_offset = end_offset / 2;
-  ABSL_LOG(INFO) << prefix << "(size=" << values.size() << "): "
-                 << absl::StrJoin(values.begin(),
-                                  values.begin() + num_values_to_log, ", ",
-                                  formatter)
-                 << " ... "
-                 << absl::StrJoin(
-                        values.begin() + mid_offset,
-                        values.begin() + mid_offset + num_values_to_log, ", ",
-                        formatter)
-                 << " ... "
-                 << absl::StrJoin(values.begin() + end_offset, values.end(),
-                                  ", ", formatter);
+  ABSL_VLOG(1) << prefix << "(size=" << values.size() << "): "
+               << absl::StrJoin(values.begin(),
+                                values.begin() + num_values_to_log, ", ",
+                                formatter)
+               << " ... "
+               << absl::StrJoin(values.begin() + mid_offset,
+                                values.begin() + mid_offset + num_values_to_log,
+                                ", ", formatter)
+               << " ... "
+               << absl::StrJoin(values.begin() + end_offset, values.end(), ", ",
+                                formatter);
 }
 
 template <typename T>

@@ -14,15 +14,16 @@
 
 #include "runtime/executor/audio_executor_settings.h"
 
+#include <memory>
 #include <ostream>
 #include <string>
 #include <variant>
-#include <memory>
 
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/strings/match.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/status_macros.h"
@@ -46,7 +47,7 @@ absl::StatusOr<AudioExecutorSettings> AudioExecutorSettings::CreateDefault(
     bool bundled_with_main_model) {
   AudioExecutorSettings settings(model_assets, max_sequence_length,
                                  /*num_threads=*/4);
-  RETURN_IF_ERROR(settings.SetBackend(backend));
+  ABSL_RETURN_IF_ERROR(settings.SetBackend(backend));
   settings.SetBundledWithMainModel(bundled_with_main_model);
   return settings;
 }

@@ -24,10 +24,9 @@
 
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_model.h"  // from @litert
-#include "support/tokenizer/tokenizer.h"  // from @litert
 #include "runtime/components/model_resources.h"
+#include "runtime/proto/embedding_metadata.pb.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/litert_lm_loader.h"
 #include "runtime/util/scoped_file.h"
@@ -60,9 +59,18 @@ class ModelResourcesLitertLm : public ModelResources {
 
   absl::StatusOr<const proto::LlmMetadata*> GetLlmMetadata() override;
 
+  absl::StatusOr<const proto::ExecutorMetadata*> GetExecutorMetadata() override;
+
+  absl::StatusOr<const proto::EmbeddingMetadata*> GetEmbeddingMetadata()
+      override;
+
   absl::StatusOr<std::reference_wrapper<ScopedFile>> GetScopedFile() override;
 
   absl::StatusOr<std::pair<size_t, size_t>> GetWeightsSectionOffset(
+      ModelType model_type) override;
+
+  // Returns the TFLite model section files region.
+  absl::StatusOr<FileRegion> GetTFLiteModelSectionFileRegion(
       ModelType model_type) override;
 
  protected:
@@ -80,6 +88,8 @@ class ModelResourcesLitertLm : public ModelResources {
  private:
   absl::flat_hash_map<ModelType, std::unique_ptr<litert::Model>> model_map_;
   std::unique_ptr<proto::LlmMetadata> llm_metadata_;
+  std::unique_ptr<proto::EmbeddingMetadata> embedding_metadata_;
+  std::unique_ptr<proto::ExecutorMetadata> executor_metadata_;
 };
 
 }  // namespace litert::lm

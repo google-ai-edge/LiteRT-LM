@@ -19,10 +19,20 @@ from absl.testing import parameterized
 
 import litert_lm
 from litert_lm_builder import litertlm_builder
+from litert_lm_cli import config
 from litert_lm_cli import model
 
 
 class ModelTest(parameterized.TestCase):
+
+  def setUp(self):
+    super().setUp()
+    # Ensure local config doesn't interfere with standard tests
+    patcher_model = mock.patch.object(
+        config, "get_model_config", return_value=config.ModelConfig()
+    )
+    patcher_model.start()
+    self.addCleanup(patcher_model.stop)
 
   @parameterized.named_parameters(
       ("default_backend", None, None, "cpu", None),
@@ -44,6 +54,7 @@ class ModelTest(parameterized.TestCase):
     mock_default_backend.return_value = "cpu"
     mock_model = mock.Mock(spec=model.Model)
     mock_model.model_path = "dummy_path"
+    mock_model.model_id = "dummy_model_id"
 
     # Mock NPU to avoid RuntimeError on Linux
     with mock.patch.object(
@@ -71,6 +82,7 @@ class ModelTest(parameterized.TestCase):
     mock_default_backend.return_value = "gpu"
     mock_model = mock.Mock(spec=model.Model)
     mock_model.model_path = "dummy_path"
+    mock_model.model_id = "dummy_model_id"
 
     # Explicit 'cpu' should be used, even if model defaults to 'gpu'
     result = model.parse_backend(backend="cpu", model_obj=mock_model)
@@ -81,6 +93,7 @@ class ModelTest(parameterized.TestCase):
     mock_default_backend.return_value = "gpu"
     mock_model = mock.Mock(spec=model.Model)
     mock_model.model_path = "dummy_path"
+    mock_model.model_id = "dummy_model_id"
 
     # Default (None) should use model default backend (gpu)
     result = model.parse_backend(backend=None, model_obj=mock_model)
@@ -213,6 +226,239 @@ class ModelTest(parameterized.TestCase):
           "dummy_path", target_model_types=target_model_types
       )
     self.assertEqual(result, expected_backend)
+
+
+class ParseBackendWithConfigTest(parameterized.TestCase):
+
+  def setUp(self):
+    super().setUp()
+    config._clear_cache()
+
+  @mock.patch.object(config, "get_model_config")
+  @mock.patch.object(model, "model_default_backend")
+  def test_parse_backend_with_config(
+      self, mock_model_default, mock_get_model_config
+  ):
+    mock_model_default.return_value = "cpu"
+    mock_model = mock.Mock(spec=model.Model)
+    mock_model.model_path = "dummy_path"
+    mock_model.model_id = "dummy_model_id"
+
+    # Default mocks
+    mock_get_model_config.return_value = config.ModelConfig()
+
+    # 1. Should use backend from get_model_config
+    mock_get_model_config.return_value = config.ModelConfig(backend="gpu")
+    result = model.parse_backend(backend=None, model_obj=mock_model)
+    self.assertIsInstance(result, litert_lm.Backend.GPU)
+    mock_get_model_config.assert_called_once_with("dummy_model_id")
+
+    # Reset mocks
+    mock_get_model_config.reset_mock()
+
+    # 2. Explicit backend overrides config
+    mock_get_model_config.return_value = config.ModelConfig(backend="cpu")
+    result = model.parse_backend(backend="gpu", model_obj=mock_model)
+    self.assertIsInstance(result, litert_lm.Backend.GPU)
+
+    # Reset mocks
+    mock_get_model_config.reset_mock()
+
+    # 3. Config-defined threads should be used if CLI threads is None
+    mock_get_model_config.return_value = config.ModelConfig(
+        backend="cpu", cpu_thread_count=4
+    )
+    result = model.parse_backend(backend=None, model_obj=mock_model)
+    self.assertIsInstance(result, litert_lm.Backend.CPU)
+    self.assertEqual(result.thread_count, 4)
+
+    # Reset mocks
+    mock_get_model_config.reset_mock()
+
+    # 4. Explicit CLI threads overrides config threads
+    mock_get_model_config.return_value = config.ModelConfig(
+        backend="cpu", cpu_thread_count=4
+    )
+    result = model.parse_backend(
+        backend=None, cpu_thread_count=8, model_obj=mock_model
+    )
+    self.assertIsInstance(result, litert_lm.Backend.CPU)
+    self.assertEqual(result.thread_count, 8)
+
+    # Reset mocks
+    mock_get_model_config.reset_mock()
+
+    # 5. Config-defined gpu_decode_steps_per_sync should be used if CLI is None
+    mock_get_model_config.return_value = config.ModelConfig(
+        backend="gpu", gpu_decode_steps_per_sync=4
+    )
+    result = model.parse_backend(backend=None, model_obj=mock_model)
+    self.assertIsInstance(result, litert_lm.Backend.GPU)
+    self.assertEqual(result.gpu_decode_steps_per_sync, 4)
+
+    # Reset mocks
+    mock_get_model_config.reset_mock()
+
+    # 6. Explicit CLI gpu_decode_steps_per_sync overrides config
+    mock_get_model_config.return_value = config.ModelConfig(
+        backend="gpu", gpu_decode_steps_per_sync=4
+    )
+    result = model.parse_backend(
+        backend=None, gpu_decode_steps_per_sync=8, model_obj=mock_model
+    )
+    self.assertIsInstance(result, litert_lm.Backend.GPU)
+    self.assertEqual(result.gpu_decode_steps_per_sync, 8)
+
+    # Reset mocks
+    mock_get_model_config.reset_mock()
+
+    # 5. Config threads should be used with default backend
+    mock_model_default.return_value = "cpu"
+    mock_get_model_config.return_value = config.ModelConfig(cpu_thread_count=4)
+    result = model.parse_backend(backend=None, model_obj=mock_model)
+    self.assertIsInstance(result, litert_lm.Backend.CPU)
+    self.assertEqual(result.thread_count, 4)
+
+  @mock.patch.object(config, "get_model_config")
+  @mock.patch.object(model, "model_default_backend")
+  def test_parse_backend_auxiliary_ignores_config(
+      self, mock_model_default, mock_get_model_config
+  ):
+    mock_model = mock.Mock(spec=model.Model)
+    mock_model.model_path = "dummy_path"
+    mock_model.model_id = "dummy_model_id"
+
+    # Config has backend="gpu" and cpu_thread_count=4
+    mock_get_model_config.return_value = config.ModelConfig(
+        backend="gpu", cpu_thread_count=4
+    )
+
+    # When resolving vision backend (auxiliary):
+    # It should IGNORE the config backend ("gpu") and threads (4),
+    # and fall back to the model's default backend (which we mock as "cpu").
+    mock_model_default.return_value = "cpu"
+    result = model.parse_backend(
+        backend=None,
+        model_obj=mock_model,
+        target_model_types={"vision_encoder"},  # Auxiliary type
+        label="vision",
+    )
+    self.assertIsInstance(result, litert_lm.Backend.CPU)
+    # Thread count should be None (default), NOT 4 from config!
+    self.assertIsNone(result.thread_count)
+
+    # When resolving audio backend (auxiliary):
+    # It should also IGNORE the config.
+    mock_model_default.return_value = "cpu"
+    result = model.parse_backend(
+        backend=None,
+        model_obj=mock_model,
+        target_model_types={"audio_encoder_hw"},  # Auxiliary type
+        label="audio",
+    )
+    self.assertIsInstance(result, litert_lm.Backend.CPU)
+    self.assertIsNone(result.thread_count)
+
+  @mock.patch.object(config, "get_model_config")
+  @mock.patch.object(model, "model_default_backend")
+  def test_parse_backend_auxiliary_uses_specific_config(
+      self, mock_model_default, mock_get_model_config
+  ):
+    mock_model = mock.Mock(spec=model.Model)
+    mock_model.model_path = "dummy_path"
+    mock_model.model_id = "dummy_model_id"
+
+    mock_get_model_config.return_value = config.ModelConfig(
+        vision_backend="gpu", audio_backend="cpu"
+    )
+
+    mock_model_default.return_value = "cpu"
+    vision_result = model.parse_backend(
+        backend=None,
+        model_obj=mock_model,
+        target_model_types={"vision_encoder"},
+        label="vision",
+    )
+    self.assertIsInstance(vision_result, litert_lm.Backend.GPU)
+
+    audio_result = model.parse_backend(
+        backend=None,
+        model_obj=mock_model,
+        target_model_types={"audio_encoder_hw"},
+        label="audio",
+    )
+    self.assertIsInstance(audio_result, litert_lm.Backend.CPU)
+
+  def test_from_model_path(self):
+    path = "/home/user/.litert-lm/models/gemma4--2b/model.litertlm"
+    m1 = model.Model.from_model_path(path)
+    self.assertEqual(m1.model_id, "gemma4/2b")
+    self.assertEqual(m1.model_path, path)
+
+  @mock.patch.object(config, "get_model_config")
+  def test_resolve_config_option(self, mock_get_model_config):
+    mock_model = mock.Mock(spec=model.Model)
+    mock_model.model_id = "dummy_model_id"
+
+    mock_get_model_config.return_value = config.ModelConfig(
+        cache="memory",
+        max_num_tokens=1024,
+        temperature=0.7,
+        top_p=0.9,
+        top_k=40,
+        seed=42,
+        gpu_decode_steps_per_sync=4,
+        speculative_decoding=True,
+        thinking=True,
+        thinking_budget=50,
+    )
+
+    # Explicit value provided by user
+    self.assertEqual(
+        model.resolve_config_option("disk", mock_model, "cache"), "disk"
+    )
+
+    # Fallback to config
+    self.assertEqual(
+        model.resolve_config_option(None, mock_model, "cache"), "memory"
+    )
+    self.assertEqual(
+        model.resolve_config_option(None, mock_model, "max_num_tokens"), 1024
+    )
+    self.assertEqual(
+        model.resolve_config_option(None, mock_model, "temperature"), 0.7
+    )
+    self.assertEqual(
+        model.resolve_config_option(None, mock_model, "top_p"), 0.9
+    )
+    self.assertEqual(model.resolve_config_option(None, mock_model, "top_k"), 40)
+    self.assertEqual(model.resolve_config_option(None, mock_model, "seed"), 42)
+    self.assertEqual(
+        model.resolve_config_option(
+            None, mock_model, "gpu_decode_steps_per_sync"
+        ),
+        4,
+    )
+    self.assertTrue(
+        model.resolve_config_option(None, mock_model, "speculative_decoding")
+    )
+    self.assertTrue(model.resolve_config_option(None, mock_model, "thinking"))
+    self.assertEqual(
+        model.resolve_config_option(None, mock_model, "thinking_budget"), 50
+    )
+
+    # Unset field returns None
+    mock_get_model_config.return_value = config.ModelConfig()
+    self.assertIsNone(model.resolve_config_option(None, mock_model, "cache"))
+
+    path3 = "/home/user/.litert-lm/models/google--gemma3-1b-it/model.litertlm"
+    m3 = model.Model.from_model_path(path3)
+    self.assertEqual(m3.model_id, "google/gemma3-1b-it")
+    self.assertEqual(m3.model_path, path3)
+
+    m2 = model.Model.from_model_path("/custom/path/custom_model.litertlm")
+    self.assertEqual(m2.model_id, "custom_model.litertlm")
+    self.assertEqual(m2.model_path, "/custom/path/custom_model.litertlm")
 
 
 if __name__ == "__main__":

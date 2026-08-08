@@ -22,11 +22,11 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
-#include "support/tokenizer/tokenizer.h"  // from @litert
 #include "runtime/components/logits_processor/constrained_decoding/constraint_provider_config.h"
 #include "runtime/components/logits_processor/constrained_decoding/external_constraint_config.h"
 #include "runtime/components/logits_processor/constrained_decoding/llg_constraint_config.h"
 #include "runtime/util/test_utils.h"  // NOLINT
+#include "support/tokenizer/tokenizer.h"
 
 namespace litert::lm {
 
@@ -44,8 +44,8 @@ class MockTokenizer : public Tokenizer {
   MOCK_METHOD(absl::StatusOr<TokenIds>, TextToTokenIds, (absl::string_view),
               (override));
   MOCK_METHOD(absl::StatusOr<int>, TokenToId, (absl::string_view), (override));
-  MOCK_METHOD(absl::StatusOr<std::string>, TokenIdsToText, (const TokenIds&),
-              (override));
+  MOCK_METHOD(absl::StatusOr<std::string>, TokenIdsToText,
+              (const TokenIds&, bool), (override));
   MOCK_METHOD(std::vector<std::string>, GetTokens, (), (const, override));
   MOCK_METHOD(int, GetVocabSize, (), (const, override));
 };

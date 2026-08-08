@@ -82,7 +82,7 @@ class Qwen3DataProcessor
       const TypeSafeModelDataProcessor<Qwen3DataProcessorConfig,
                                        Qwen3DataProcessorArguments>& other)
       override {
-    ABSL_LOG(INFO) << "Qwen3DataProcessor::CloneStateImpl is a no-op.";
+    ABSL_VLOG(1) << "Qwen3DataProcessor::CloneStateImpl is a no-op.";
     return absl::OkStatus();
   }
 

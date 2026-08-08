@@ -85,6 +85,17 @@ class ActivationDataType(enum.IntEnum):
     return mapping.get(val.lower())
 
 
+class LiteRtLmConstraintType(enum.IntEnum):
+  NONE = 0
+  REGEX = 1
+  JSON_SCHEMA = 2
+
+
+class LiteRtLmConstraintProviderType(enum.IntEnum):
+  NONE = 0
+  LL_GUIDANCE = 1
+
+
 _LIB: ctypes.CDLL | None = None
 
 
@@ -178,10 +189,27 @@ def _setup_lib_signatures(lib):
       ctypes.c_void_p,
       ctypes.c_bool,
   ]
+  lib.litert_lm_engine_settings_set_gpu_decode_steps_per_sync.argtypes = [
+      ctypes.c_void_p,
+      ctypes.c_int,
+  ]
+  lib.litert_lm_engine_settings_set_gpu_wait_for_weight_uploads.argtypes = [
+      ctypes.c_void_p,
+      ctypes.c_bool,
+  ]
+  lib.litert_lm_engine_settings_set_use_ringbuffers_local_attention.argtypes = [
+      ctypes.c_void_p,
+      ctypes.c_bool,
+  ]
   lib.litert_lm_engine_settings_set_activation_data_type.argtypes = [
       ctypes.c_void_p,
       ctypes.c_int,
   ]
+  lib.litert_lm_engine_settings_set_enable_ynnpack.argtypes = [
+      ctypes.c_void_p,
+      ctypes.c_bool,
+  ]
+
   lib.litert_lm_engine_settings_set_lora_rank.argtypes = [
       ctypes.c_void_p,
       ctypes.c_int,
@@ -335,22 +363,107 @@ def _setup_lib_signatures(lib):
       ctypes.c_void_p,
       c_string_p,
   ]
+  lib.litert_lm_conversation_config_set_prompt_template.argtypes = [
+      ctypes.c_void_p,
+      c_string_p,
+  ]
   lib.litert_lm_conversation_config_set_enable_constrained_decoding.argtypes = [
       ctypes.c_void_p,
       ctypes.c_bool,
   ]
+  lib.litert_lm_conversation_config_set_constraint_provider.argtypes = [
+      ctypes.c_void_p,
+      ctypes.POINTER(ctypes.c_int),
+  ]
   lib.litert_lm_conversation_config_set_filter_channel_content_from_kv_cache.argtypes = [
       ctypes.c_void_p,
       ctypes.c_bool,
+  ]
+  lib.litert_lm_conversation_config_set_thinking_config.argtypes = [
+      ctypes.c_void_p,
+      ctypes.c_void_p,
+  ]
+
+  # Repetition Penalty Config
+  lib.litert_lm_repetition_penalty_config_create.restype = ctypes.c_void_p
+  lib.litert_lm_repetition_penalty_config_create.argtypes = []
+  lib.litert_lm_repetition_penalty_config_delete.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_repetition_penalty_config_set_repetition_penalty.argtypes = [
+      ctypes.c_void_p,
+      ctypes.c_float,
+  ]
+  lib.litert_lm_repetition_penalty_config_set_presence_penalty.argtypes = [
+      ctypes.c_void_p,
+      ctypes.c_float,
+  ]
+  lib.litert_lm_repetition_penalty_config_set_frequency_penalty.argtypes = [
+      ctypes.c_void_p,
+      ctypes.c_float,
+  ]
+  lib.litert_lm_repetition_penalty_config_set_window_size.argtypes = [
+      ctypes.c_void_p,
+      ctypes.c_int,
+  ]
+
+  # No Repeat Ngram Config
+  lib.litert_lm_no_repeat_ngram_config_create.restype = ctypes.c_void_p
+  lib.litert_lm_no_repeat_ngram_config_create.argtypes = []
+  lib.litert_lm_no_repeat_ngram_config_delete.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_no_repeat_ngram_config_set_no_repeat_ngram_size.argtypes = [
+      ctypes.c_void_p,
+      ctypes.c_int,
+  ]
+  lib.litert_lm_no_repeat_ngram_config_set_window_size.argtypes = [
+      ctypes.c_void_p,
+      ctypes.c_int,
+  ]
+
+  # Suppress Tokens Config
+  lib.litert_lm_suppress_tokens_config_create.restype = ctypes.c_void_p
+  lib.litert_lm_suppress_tokens_config_create.argtypes = []
+  lib.litert_lm_suppress_tokens_config_delete.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_suppress_tokens_config_set_suppress_tokens.argtypes = [
+      ctypes.c_void_p,
+      ctypes.POINTER(ctypes.c_int),
+      ctypes.c_size_t,
+  ]
+
+  # Thinking Config
+  lib.litert_lm_thinking_config_create.restype = ctypes.c_void_p
+  lib.litert_lm_thinking_config_create.argtypes = []
+  lib.litert_lm_thinking_config_delete.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_thinking_config_set_enable_thinking.argtypes = [
+      ctypes.c_void_p,
+      ctypes.c_bool,
+  ]
+  lib.litert_lm_thinking_config_set_thinking_token_budget.argtypes = [
+      ctypes.c_void_p,
+      ctypes.c_int,
   ]
 
   # Conversation Optional Args
   lib.litert_lm_conversation_optional_args_create.restype = ctypes.c_void_p
   lib.litert_lm_conversation_optional_args_create.argtypes = []
   lib.litert_lm_conversation_optional_args_delete.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_conversation_optional_args_set_repetition_penalty_config.argtypes = [
+      ctypes.c_void_p,
+      ctypes.c_void_p,
+  ]
+  lib.litert_lm_conversation_optional_args_set_no_repeat_ngram_config.argtypes = [
+      ctypes.c_void_p,
+      ctypes.c_void_p,
+  ]
+  lib.litert_lm_conversation_optional_args_set_suppress_tokens_config.argtypes = [
+      ctypes.c_void_p,
+      ctypes.c_void_p,
+  ]
   lib.litert_lm_conversation_optional_args_set_max_output_tokens.argtypes = [
       ctypes.c_void_p,
       ctypes.c_int,
+  ]
+  lib.litert_lm_conversation_optional_args_set_thinking_config.argtypes = [
+      ctypes.c_void_p,
+      ctypes.c_void_p,
   ]
 
   # Conversation
@@ -384,6 +497,16 @@ def _setup_lib_signatures(lib):
   ]
   lib.litert_lm_conversation_get_token_count.restype = ctypes.c_int
   lib.litert_lm_conversation_get_token_count.argtypes = [ctypes.c_void_p]
+
+  # Conversation Optional Args
+  lib.litert_lm_conversation_optional_args_create.restype = ctypes.c_void_p
+  lib.litert_lm_conversation_optional_args_create.argtypes = []
+  lib.litert_lm_conversation_optional_args_delete.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_conversation_optional_args_set_constraint.argtypes = [
+      ctypes.c_void_p,
+      ctypes.c_int,
+      c_string_p,
+  ]
 
   # interfaces.Responses
   lib.litert_lm_responses_delete.argtypes = [ctypes.c_void_p]

@@ -29,6 +29,7 @@
 #include "absl/functional/any_invocable.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/str_replace.h"  // from @com_google_absl
@@ -39,7 +40,10 @@
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/logits_processor/constrained_decoding/constrained_decoder.h"
 #include "runtime/components/logits_processor/constrained_decoding/constraint.h"
+#include "runtime/components/logits_processor/constrained_decoding/thinking_budget_constraint.h"
 #include "runtime/components/logits_processor/logits_processor.h"
+#include "runtime/components/logits_processor/no_repeat_ngram_config.h"
+#include "runtime/components/logits_processor/no_repeat_ngram_processor.h"
 #include "runtime/components/logits_processor/repetition_penalty_config.h"
 #include "runtime/components/logits_processor/repetition_penalty_processor.h"
 #include "runtime/components/logits_processor/suppress_tokens_config.h"
@@ -120,20 +124,32 @@ class DecodeOneStep {
                 std::optional<BenchmarkInfo>& benchmark_info,
                 std::optional<Sampler*> sampler,
                 RepetitionPenaltyConfig repetition_penalty_config,
+                NoRepeatNgramConfig no_repeat_ngram_config,
                 SuppressTokensConfig suppress_tokens_config,
-                Constraint* constraint)
+                Constraint* constraint,
+                const std::atomic<bool>* cancelled =
+                    nullptr  // Add cancelled signal for one decode step (eg.
+                             // for diffusion-llm)
+                )
       : executor_(*executor),
         tokenizer_(*tokenizer),
         num_output_candidates_(num_output_candidates),
         sampler_(sampler),
         benchmark_info_(benchmark_info),
-        stop_token_detector_(stop_token_detector) {
+        stop_token_detector_(stop_token_detector),
+        cancelled_(cancelled) {
     if (repetition_penalty_config.enabled()) {
       repetition_penalty_processor_ =
           std::make_unique<RepetitionPenaltyProcessor>(
               num_output_candidates_, tokenizer_.GetVocabSize(),
               std::move(repetition_penalty_config));
       logits_processors_.push_back(repetition_penalty_processor_.get());
+    }
+    if (no_repeat_ngram_config.enabled()) {
+      no_repeat_ngram_processor_ = std::make_unique<NoRepeatNgramProcessor>(
+          num_output_candidates_, tokenizer_.GetVocabSize(),
+          std::move(no_repeat_ngram_config));
+      logits_processors_.push_back(no_repeat_ngram_processor_.get());
     }
     if (suppress_tokens_config.enabled()) {
       suppress_tokens_processor_ = std::make_unique<SuppressTokensProcessor>(
@@ -167,7 +183,8 @@ class DecodeOneStep {
   // For internal sampling, `decoded_ids` is ignored.
   absl::StatusOr<bool> Run(
       std::optional<litert::TensorBuffer> decoded_ids = std::nullopt) {
-    ASSIGN_OR_RETURN(auto token_ids, DecodeAndSample(std::move(decoded_ids)));
+    ABSL_ASSIGN_OR_RETURN(auto token_ids,
+                          DecodeAndSample(std::move(decoded_ids)));
 
     size_t sequence_length = token_ids[0].size();
     for (size_t i = 1; i < token_ids.size(); ++i) {
@@ -190,11 +207,12 @@ class DecodeOneStep {
 
       // Regardless of BPE, we always process the next tokens to detect stop
       // tokens.
-      RETURN_IF_ERROR(stop_token_detector_.ProcessTokens(step_tokens));
+      ABSL_RETURN_IF_ERROR(stop_token_detector_.ProcessTokens(step_tokens));
 
       // Merge BPE partial token ids with the next token ids if any.
-      ASSIGN_OR_RETURN(step_tokens, tokenizer_.MergeTokenIds(
-                                        bpe_partial_token_ids_, step_tokens));
+      ABSL_ASSIGN_OR_RETURN(
+          step_tokens,
+          tokenizer_.MergeTokenIds(bpe_partial_token_ids_, step_tokens));
 
       auto decoded_result =
           tokenizer_.TokenIdsToTexts(num_output_candidates_, step_tokens);
@@ -242,14 +260,14 @@ class DecodeOneStep {
       }
 
       is_first_step_ = false;
-      ASSIGN_OR_RETURN(bool all_done, stop_token_detector_.AllDone());
+      ABSL_ASSIGN_OR_RETURN(bool all_done, stop_token_detector_.AllDone());
       if (all_done) {
         if (step != sequence_length - 1) {
           // we are done before all the tokens are processed, so we need to
           // rollback the processed tokens in executor.
           int diff = sequence_length - step;
-          ASSIGN_OR_RETURN(int current_step, executor_.GetCurrentStep());
-          RETURN_IF_ERROR(executor_.SetCurrentStep(current_step - diff));
+          ABSL_ASSIGN_OR_RETURN(int current_step, executor_.GetCurrentStep());
+          ABSL_RETURN_IF_ERROR(executor_.SetCurrentStep(current_step - diff));
         }
         return true;
       }
@@ -284,11 +302,11 @@ class DecodeOneStep {
         /*audio_data=*/std::nullopt);
     // Decoding section.
     if (benchmark_info_.has_value()) {
-      RETURN_IF_ERROR(benchmark_info_->TimeMarkDelta("executor_decode"));
+      ABSL_RETURN_IF_ERROR(benchmark_info_->TimeMarkDelta("executor_decode"));
     }
-    ASSIGN_OR_RETURN(auto output_logits, executor_.DecodeLogits(inputs));
+    ABSL_ASSIGN_OR_RETURN(auto output_logits, executor_.DecodeLogits(inputs));
     if (benchmark_info_.has_value()) {
-      RETURN_IF_ERROR(benchmark_info_->TimeMarkDelta("executor_decode"));
+      ABSL_RETURN_IF_ERROR(benchmark_info_->TimeMarkDelta("executor_decode"));
     }
     decoded_ids.Write<int>(step_input_ids);
     LITERT_ASSIGN_OR_RETURN(auto logits_tensor_type,
@@ -354,52 +372,52 @@ class DecodeOneStep {
       if (!is_first_step_ && !logits_processors_.empty()) {
         LITERT_ASSIGN_OR_RETURN(auto last_token_ids, decoded_ids->Duplicate());
         for (LogitsProcessor* logits_processor : logits_processors_) {
-          RETURN_IF_ERROR(logits_processor->UpdateState(last_token_ids));
+          ABSL_RETURN_IF_ERROR(logits_processor->UpdateState(last_token_ids));
         }
       }
       // Decoding section.
       if (benchmark_info_.has_value()) {
-        RETURN_IF_ERROR(benchmark_info_->TimeMarkDelta("executor_decode"));
+        ABSL_RETURN_IF_ERROR(benchmark_info_->TimeMarkDelta("executor_decode"));
       }
-      ASSIGN_OR_RETURN(auto output_logits, executor_.DecodeLogits(inputs));
+      ABSL_ASSIGN_OR_RETURN(auto output_logits, executor_.DecodeLogits(inputs));
       if (benchmark_info_.has_value()) {
-        RETURN_IF_ERROR(benchmark_info_->TimeMarkDelta("executor_decode"));
+        ABSL_RETURN_IF_ERROR(benchmark_info_->TimeMarkDelta("executor_decode"));
       }
       // If the logits processor list is not empty, process the logits based on
       // the internal state.
       for (LogitsProcessor* logits_processor : logits_processors_) {
-        RETURN_IF_ERROR(logits_processor->ProcessLogits(output_logits));
+        ABSL_RETURN_IF_ERROR(logits_processor->ProcessLogits(output_logits));
       }
 
       // Samping section.
       if (benchmark_info_.has_value()) {
-        RETURN_IF_ERROR(benchmark_info_->TimeMarkDelta("sampling"));
+        ABSL_RETURN_IF_ERROR(benchmark_info_->TimeMarkDelta("sampling"));
       }
-      RETURN_IF_ERROR(sampler_.value()->SampleToIdAndScoreBuffer(
+      ABSL_RETURN_IF_ERROR(sampler_.value()->SampleToIdAndScoreBuffer(
           output_logits, decoded_ids.value(), &scores_tensor_));
       if (benchmark_info_.has_value()) {
-        RETURN_IF_ERROR(benchmark_info_->TimeMarkDelta("sampling"));
+        ABSL_RETURN_IF_ERROR(benchmark_info_->TimeMarkDelta("sampling"));
       }
 
-      ASSIGN_OR_RETURN(auto token_ids,
-                       tokenizer_.TensorBufferToTokenIds(decoded_ids.value()));
+      ABSL_ASSIGN_OR_RETURN(auto token_ids, tokenizer_.TensorBufferToTokenIds(
+                                                decoded_ids.value()));
       return token_ids;
     } else {  // Internal sampling path
       // Benchmark executor_decode_and_sample section.
       if (benchmark_info_.has_value()) {
-        RETURN_IF_ERROR(
+        ABSL_RETURN_IF_ERROR(
             benchmark_info_->TimeMarkDelta("executor_decode_and_sample"));
       }
       std::vector<std::vector<int>> output_tokens;
+      auto decode_params = ExecutorDecodeParams();
+      // Convey the cancellation token for the decode process.
+      decode_params.SetCancelled(cancelled_);
       if (!logits_processors_.empty()) {
-        auto decode_params = ExecutorDecodeParams();
         decode_params.SetLogitsProcessorList(logits_processors_);
-        ASSIGN_OR_RETURN(output_tokens, executor_.Decode(decode_params));
-      } else {
-        ASSIGN_OR_RETURN(output_tokens, executor_.Decode());
       }
+      ABSL_ASSIGN_OR_RETURN(output_tokens, executor_.Decode(decode_params));
       if (benchmark_info_.has_value()) {
-        RETURN_IF_ERROR(
+        ABSL_RETURN_IF_ERROR(
             benchmark_info_->TimeMarkDelta("executor_decode_and_sample"));
       }
       return output_tokens;
@@ -411,6 +429,7 @@ class DecodeOneStep {
   const int num_output_candidates_;
   std::optional<Sampler*> sampler_;
   std::unique_ptr<RepetitionPenaltyProcessor> repetition_penalty_processor_;
+  std::unique_ptr<NoRepeatNgramProcessor> no_repeat_ngram_processor_;
   std::unique_ptr<SuppressTokensProcessor> suppress_tokens_processor_;
   std::unique_ptr<ConstrainedDecoder> constrained_decoder_;
   std::vector<LogitsProcessor*> logits_processors_;
@@ -431,6 +450,7 @@ class DecodeOneStep {
   std::vector<std::vector<int>> result_token_ids_;
 
   bool is_first_step_ = true;
+  const std::atomic<bool>* cancelled_ = nullptr;
 };
 
 }  // namespace
@@ -439,7 +459,7 @@ absl::StatusOr<Responses> Prefill(
     LlmExecutor& executor, ExecutorInputs& inputs, bool wait_for_completion,
     std::optional<BenchmarkInfo>& benchmark_info) {
   const int max_num_tokens = TryGetMaxNumTokens(executor);
-  ASSIGN_OR_RETURN(auto text_data, inputs.GetTextDataPtr());
+  ABSL_ASSIGN_OR_RETURN(auto text_data, inputs.GetTextDataPtr());
   RET_CHECK(text_data != nullptr) << "text_data must not be null.";
   LITERT_ASSIGN_OR_RETURN(auto token_id_tensor_type,
                           text_data->GetTokenIds().TensorType());
@@ -459,11 +479,21 @@ absl::StatusOr<Responses> Prefill(
   // Wait for prefill to complete if benchmark mode is enabled.
   params.SetWaitForCompletion(wait_for_completion | benchmark_info.has_value());
   if (benchmark_info.has_value()) {
-    RETURN_IF_ERROR(benchmark_info->TimePrefillTurnStart());
+    ABSL_RETURN_IF_ERROR(benchmark_info->TimePrefillTurnStart());
   }
-  RETURN_IF_ERROR(executor.Prefill(inputs, params));
+  ABSL_RETURN_IF_ERROR(executor.Prefill(inputs, params));
   if (benchmark_info.has_value()) {
-    RETURN_IF_ERROR(benchmark_info->TimePrefillTurnEnd(ids_buffer_span.size()));
+    ABSL_RETURN_IF_ERROR(
+        benchmark_info->TimePrefillTurnEnd(ids_buffer_span.size()));
+    absl::StatusOr<std::string> profile_summary = executor.GetProfileSummary();
+    if (!profile_summary.ok()) {
+      ABSL_LOG(WARNING) << "Failed to get prefill profile summary: "
+                        << profile_summary.status();
+    } else if (profile_summary->empty()) {
+      ABSL_LOG(WARNING) << "Prefill profile summary is empty!";
+    } else {
+      benchmark_info->SetProfileSummary(*profile_summary);
+    }
   }
   return Responses(TaskState::kDone);
 }
@@ -474,10 +504,14 @@ absl::StatusOr<Responses> Decode(
     std::optional<BenchmarkInfo>& benchmark_info,
     std::optional<Sampler*> sampler,
     RepetitionPenaltyConfig repetition_penalty_config,
+    NoRepeatNgramConfig no_repeat_ngram_config,
     SuppressTokensConfig suppress_tokens_config, Constraint* constraint,
     std::optional<litert::TensorBuffer> decoded_ids,
     absl::AnyInvocable<void(absl::StatusOr<Responses>)>& callback,
-    std::atomic<bool>* cancelled, int max_output_tokens) {
+    std::atomic<bool>* cancelled, int max_output_tokens,
+    std::optional<int> thinking_token_budget,
+    const std::vector<int>& thinking_end_token_ids,
+    const std::vector<int>& thinking_start_token_ids) {
   const bool is_streaming = callback != nullptr;
   const bool is_custom_sampling = sampler.has_value();
 
@@ -491,7 +525,7 @@ absl::StatusOr<Responses> Decode(
     }
     benchmark_decode_token_count =
         benchmark_info->GetBenchmarkParams().num_decode_tokens();
-    RETURN_IF_ERROR(benchmark_info->TimeDecodeTurnStart());
+    ABSL_RETURN_IF_ERROR(benchmark_info->TimeDecodeTurnStart());
   }
 
   // The final decoded texts for each candidate.
@@ -505,20 +539,46 @@ absl::StatusOr<Responses> Decode(
   // The number of decoded tokens for each candidate (for custom sampling).
   std::vector<int> num_decoded_tokens(num_output_candidates);
 
-  ASSIGN_OR_RETURN(int executor_step_before_decode, executor.GetCurrentStep());
+  ABSL_ASSIGN_OR_RETURN(int executor_step_before_decode,
+                        executor.GetCurrentStep());
   const int max_num_tokens = TryGetMaxNumTokens(executor);
-  DecodeOneStep run_one_step(&executor, &tokenizer, num_output_candidates,
-                             stop_token_detector, benchmark_info, sampler,
-                             std::move(repetition_penalty_config),
-                             std::move(suppress_tokens_config), constraint);
+
+  std::unique_ptr<Constraint> thinking_budget_constraint;
+  int vocab_size = tokenizer.GetTokens().size();
+
+  // Apply the thinking budget constraint whenever thinking is enabled (budget
+  // != 0). Even if the budget is -1 (unlimited), the constraint is required to
+  // suspend any active user_constraint until the thinking phase ends.
+  if (thinking_token_budget.has_value() && *thinking_token_budget != 0) {
+    if (thinking_end_token_ids.empty()) {
+      ABSL_LOG(WARNING)
+          << "Thinking budget is set but thinking_end_token_ids is empty. "
+             "Ignoring thinking budget constraint.";
+    } else {
+      thinking_budget_constraint = std::make_unique<ThinkingBudgetConstraint>(
+          constraint, *thinking_token_budget, thinking_start_token_ids,
+          thinking_end_token_ids, vocab_size);
+      constraint = thinking_budget_constraint.get();
+    }
+  }
+
+  DecodeOneStep run_one_step(
+      &executor, &tokenizer, num_output_candidates, stop_token_detector,
+      benchmark_info, sampler, std::move(repetition_penalty_config),
+      std::move(no_repeat_ngram_config), std::move(suppress_tokens_config),
+      constraint, cancelled);
   while (true) {
     if (cancelled != nullptr && cancelled->load()) {
       if (benchmark_info.has_value()) {
-        ASSIGN_OR_RETURN(int current_step, executor.GetCurrentStep());
+        ABSL_ASSIGN_OR_RETURN(int current_step, executor.GetCurrentStep());
         int num_decode_steps = current_step - executor_step_before_decode;
         // If the process is cancelled, we need to end this benchmark phase.
-        RETURN_IF_ERROR(benchmark_info->TimeDecodeTurnEnd(
+        ABSL_RETURN_IF_ERROR(benchmark_info->TimeDecodeTurnEnd(
             num_decode_steps * num_output_candidates));
+        auto profile_summary = executor.GetProfileSummary();
+        if (profile_summary.ok() && !profile_summary->empty()) {
+          benchmark_info->SetProfileSummary(*profile_summary);
+        }
       }
       if (is_custom_sampling) {
         // For external sampling, the sampled tokens are provided by the
@@ -529,8 +589,8 @@ absl::StatusOr<Responses> Decode(
         ExecutorInputs inputs;
         inputs.SetTextData(ExecutorTextData(std::move(duplicated_decoded_ids)));
         std::optional<BenchmarkInfo> unused_benchmark_info;
-        ASSIGN_OR_RETURN(auto current_step, executor.GetCurrentStep());
-        RETURN_IF_ERROR(executor.SetCurrentStep(current_step - 1));
+        ABSL_ASSIGN_OR_RETURN(auto current_step, executor.GetCurrentStep());
+        ABSL_RETURN_IF_ERROR(executor.SetCurrentStep(current_step - 1));
         auto status = Prefill(executor, inputs, /*wait_for_completion=*/true,
                               unused_benchmark_info);
         if (!status.ok()) {
@@ -594,7 +654,7 @@ absl::StatusOr<Responses> Decode(
                          std::move(step_token_ids)));
     }
 
-    ASSIGN_OR_RETURN(int current_step, executor.GetCurrentStep());
+    ABSL_ASSIGN_OR_RETURN(int current_step, executor.GetCurrentStep());
     int num_decode_steps = current_step - executor_step_before_decode;
     if (ShouldStop(*all_done, benchmark_decode_token_count, num_decode_steps,
                    current_step, max_num_tokens, max_output_tokens)) {
@@ -605,8 +665,17 @@ absl::StatusOr<Responses> Decode(
   int num_decode_steps =
       executor.GetCurrentStep().value() - executor_step_before_decode;
   if (benchmark_info.has_value()) {
-    RETURN_IF_ERROR(benchmark_info->TimeDecodeTurnEnd(num_decode_steps *
-                                                      num_output_candidates));
+    ABSL_RETURN_IF_ERROR(benchmark_info->TimeDecodeTurnEnd(
+        num_decode_steps * num_output_candidates));
+    absl::StatusOr<std::string> profile_summary = executor.GetProfileSummary();
+    if (!profile_summary.ok()) {
+      ABSL_LOG(WARNING) << "Failed to get decode profile summary: "
+                        << profile_summary.status();
+    } else if (profile_summary->empty()) {
+      ABSL_LOG(WARNING) << "Decode profile summary is empty!";
+    } else {
+      benchmark_info->SetProfileSummary(*profile_summary);
+    }
   }
 
   if (is_custom_sampling) {
@@ -618,8 +687,8 @@ absl::StatusOr<Responses> Decode(
     ExecutorInputs inputs;
     inputs.SetTextData(ExecutorTextData(std::move(duplicated_decoded_ids)));
     std::optional<BenchmarkInfo> unused_benchmark_info;
-    ASSIGN_OR_RETURN(auto current_step, executor.GetCurrentStep());
-    RETURN_IF_ERROR(executor.SetCurrentStep(current_step - 1));
+    ABSL_ASSIGN_OR_RETURN(auto current_step, executor.GetCurrentStep());
+    ABSL_RETURN_IF_ERROR(executor.SetCurrentStep(current_step - 1));
     auto status = Prefill(executor, inputs, /*wait_for_completion=*/true,
                           unused_benchmark_info);
     if (!status.ok()) {
@@ -661,18 +730,19 @@ absl::StatusOr<Responses> Score(
   std::optional<BenchmarkInfo> benchmark_info;
   // Create a dummy StopTokenDetector as it's not used in ScoreCustomSampling.
   StopTokenDetector dummy_stop_token_detector(num_output_candidates);
-  DecodeOneStep run_one_step(&executor, &tokenizer,
-                             /*num_output_candidates=*/num_output_candidates,
-                             dummy_stop_token_detector, benchmark_info,
-                             /*sampler=*/std::nullopt,
-                             RepetitionPenaltyConfig::Default(),
-                             SuppressTokensConfig::Default(),
-                             /*constraint=*/nullptr);
+  DecodeOneStep run_one_step(
+      &executor, &tokenizer,
+      /*num_output_candidates=*/num_output_candidates,
+      dummy_stop_token_detector, benchmark_info,
+      /*sampler=*/std::nullopt, RepetitionPenaltyConfig::Default(),
+      NoRepeatNgramConfig::Default(), SuppressTokensConfig::Default(),
+      /*constraint=*/nullptr);
   std::vector<std::vector<int>> ids_for_each_target_in_batch;
   ids_for_each_target_in_batch.reserve(target_texts.size());
   int max_num_tokens_of_target_texts = 0;
   for (const auto& target : target_texts) {
-    ASSIGN_OR_RETURN(std::vector<int> ids, tokenizer.TextToTokenIds(target));
+    ABSL_ASSIGN_OR_RETURN(std::vector<int> ids,
+                          tokenizer.TextToTokenIds(target));
     max_num_tokens_of_target_texts =
         std::max(max_num_tokens_of_target_texts, static_cast<int>(ids.size()));
     ids_for_each_target_in_batch.push_back(std::move(ids));
@@ -705,10 +775,10 @@ absl::StatusOr<Responses> Score(
       }
     }
     LITERT_ASSIGN_OR_RETURN(auto decoded_ids_copy, decoded_ids.Duplicate());
-    ASSIGN_OR_RETURN(std::vector<float> step_log_likelihoods,
-                     run_one_step.RunScoreStep(
-                         temperature, decoded_ids_for_each_target_in_batch,
-                         std::move(decoded_ids_copy)));
+    ABSL_ASSIGN_OR_RETURN(std::vector<float> step_log_likelihoods,
+                          run_one_step.RunScoreStep(
+                              temperature, decoded_ids_for_each_target_in_batch,
+                              std::move(decoded_ids_copy)));
     for (int j = 0; j < num_output_candidates; ++j) {
       const int size_of_jth_target = ids_for_each_target_in_batch[j].size();
       // Only add the log likelihood of the non-padded tokens to the score.

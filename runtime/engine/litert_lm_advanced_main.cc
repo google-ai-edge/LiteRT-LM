@@ -28,6 +28,7 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "absl/container/flat_hash_set.h"  // from @com_google_absl
@@ -35,11 +36,13 @@
 #include "absl/flags/parse.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/numbers.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/str_split.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "runtime/components/logits_processor/no_repeat_ngram_config.h"
 #include "runtime/components/logits_processor/repetition_penalty_config.h"
 #include "runtime/components/logits_processor/suppress_tokens_config.h"
 #include "runtime/engine/litert_lm_lib.h"
@@ -135,19 +138,25 @@ litert::lm::RepetitionPenaltyConfig GetRepetitionPenaltyConfig() {
       absl::GetFlag(FLAGS_repetition_window_size));
 }
 
+litert::lm::NoRepeatNgramConfig GetNoRepeatNgramConfig() {
+  return litert::lm::NoRepeatNgramConfig(
+      /*no_repeat_ngram_size=*/absl::GetFlag(FLAGS_no_repeat_ngram_size),
+      /*window_size=*/absl::GetFlag(FLAGS_no_repeat_ngram_window_size));
+}
+
 ::litert::lm::SuppressTokensConfig GetSuppressTokensConfig(
     absl::string_view input) {
-  absl::flat_hash_set<int> result;
+  absl::flat_hash_set<int> suppress_tokens;
 
   for (absl::string_view s :
        absl::StrSplit(input, ',', absl::SkipWhitespace())) {
     int val;
     if (absl::SimpleAtoi(s, &val)) {
-      result.insert(val);
+      suppress_tokens.insert(val);
     }
   }
 
-  return ::litert::lm::SuppressTokensConfig(result);
+  return ::litert::lm::SuppressTokensConfig(std::move(suppress_tokens));
 }
 
 // Writes the metrics to the given file path in protobuf format. Only used in
@@ -159,7 +168,7 @@ absl::Status WriteMetricsToFile(
     return absl::InvalidArgumentError("No metrics to write.");
   }
 
-  ASSIGN_OR_RETURN(auto proto_list, litert::lm::ToProtoList(metrics));
+  ABSL_ASSIGN_OR_RETURN(auto proto_list, litert::lm::ToProtoList(metrics));
 
   std::ofstream out(file_path, std::ios::out | std::ios::binary);
   if (!out) {
@@ -190,43 +199,47 @@ absl::Status MainHelper(int argc, char** argv) {
            "[--expected_output=<expected_output>] [--backend=<cpu|gpu|npu>] "
            "[--log_sink_file=<log_sink_file>] "
            "[--max_num_tokens=<max_num_tokens>] "
-           "[--prefill_batch_sizes=<size1>[,<size2>,...]]"
+           "[--prefill_batch_sizes=<size1>[,<size2>,...]] "
            "[--prefill_chunk_size=<prefill_chunk_size>] "
-           "[--vision_backend=<cpu|gpu>] [--audio_backend=<cpu|gpu>] "
+           "[--vision_backend=<cpu|gpu|npu>] [--audio_backend=<cpu|gpu>] "
            "[--sampler_backend=<cpu|gpu>] [--benchmark] "
            "[--benchmark_prefill_tokens=<num_prefill_tokens>] "
            "[--benchmark_decode_tokens=<num_decode_tokens>] "
            "[--async=<true|false>] [--force_f32=<true|false] "
            "[--report_peak_memory_footprint] [--multi_turns=<true|false>] "
            "[--num_cpu_threads=<num_cpu_threads>] "
+           "[--enable_ynnpack=<true|false>] "
            "[--gpu_external_tensor_mode=<true|false>] "
            "[--configure_magic_numbers=<true|false>] "
            "[--verify_magic_numbers=<true|false>] "
            "[--clear_kv_cache_before_prefill=<true|false>] "
-           "[--num_logits_to_print_after_decode=<num_logits_to_print>]"
-           "[--score_target_text=<target_text>]"
-           "[--gpu_madvise_original_shared_tensors=<true|false>]"
-           "[--preferred_device_substr=<device_substr>]"
-           "[--num_threads_to_upload=<num_threads_to_upload>]"
-           "[--num_threads_to_compile=<num_threads_to_compile>]"
-           "[--convert_weights_on_gpu=<true|false>]"
-           "[--wait_for_weights_conversion_complete_in_benchmark=<true|false>]"
-           "[--optimize_shader_compilation=<true|false>]"
-           "[--share_constant_tensors=<true|false>]"
-           "[--num_iterations=<num_iterations>]"
-           "[--litert_dispatch_lib_dir=<litert_dispatch_lib_dir>]"
-           "[--sampler_handles_input=<true|false>]"
-           "[--disable_cache=<true|false>]"
-           "[--disable_weight_cache=<true|false>]"
-           "[--disable_gpu_program_cache=<true|false>]"
-           "[--cache_compiled_shader_only=<true|false>]"
-           "[--conv_type=<auto|float|int8>]"
-           "[--repetition_penalty=<repetition_penalty>]"
-           "[--presence_penalty=<presence_penalty>]"
-           "[--frequency_penalty=<frequency_penalty>]"
-           "[--repetition_window_size=<repetition_window_size>]"
-           "[--suppress_tokens=<token1,token2,...>]"
-           "[--constraint_regex=<constraint_regex>]"
+           "[--num_logits_to_print_after_decode=<num_logits_to_print>] "
+           "[--score_target_text=<target_text>] "
+           "[--gpu_madvise_original_shared_tensors=<true|false>] "
+           "[--gpu_enable_metal_residency_set=<true|false>] "
+           "[--preferred_device_substr=<device_substr>] "
+           "[--num_threads_to_upload=<num_threads_to_upload>] "
+           "[--num_threads_to_compile=<num_threads_to_compile>] "
+           "[--convert_weights_on_gpu=<true|false>] "
+           "[--wait_for_weights_conversion_complete_in_benchmark=<true|false>] "
+           "[--optimize_shader_compilation=<true|false>] "
+           "[--share_constant_tensors=<true|false>] "
+           "[--num_iterations=<num_iterations>] "
+           "[--litert_dispatch_lib_dir=<litert_dispatch_lib_dir>] "
+           "[--sampler_handles_input=<true|false>] "
+           "[--disable_cache=<true|false>] "
+           "[--disable_weight_cache=<true|false>] "
+           "[--disable_gpu_program_cache=<true|false>] "
+           "[--cache_compiled_shader_only=<true|false>] "
+           "[--conv_type=<auto|float|int8>] "
+           "[--repetition_penalty=<repetition_penalty>] "
+           "[--presence_penalty=<presence_penalty>] "
+           "[--frequency_penalty=<frequency_penalty>] "
+           "[--repetition_window_size=<repetition_window_size>] "
+           "[--no_repeat_ngram_size=<no_repeat_ngram_size>] "
+           "[--no_repeat_ngram_window_size=<no_repeat_ngram_window_size>] "
+           "[--suppress_tokens=<token1,token2,...>] "
+           "[--constraint_regex=<constraint_regex>] "
            "[--enable_speculative_decoding=<true|false>]";
     ABSL_LOG(INFO)
         << "To provide data for multimodality, use [image:/path/to/image.jpg] "
@@ -252,12 +265,13 @@ absl::Status MainHelper(int argc, char** argv) {
   settings.max_num_tokens = absl::GetFlag(FLAGS_max_num_tokens);
   settings.max_output_tokens = absl::GetFlag(FLAGS_max_output_tokens);
   settings.max_num_images = absl::GetFlag(FLAGS_max_num_images);
-  ASSIGN_OR_RETURN(
+  ABSL_ASSIGN_OR_RETURN(
       settings.prefill_batch_sizes,
       ParsePrefillBatchSizes(absl::GetFlag(FLAGS_prefill_batch_sizes)));
   settings.prefill_chunk_size = absl::GetFlag(FLAGS_prefill_chunk_size);
   settings.num_output_candidates = absl::GetFlag(FLAGS_num_output_candidates);
   settings.benchmark = absl::GetFlag(FLAGS_benchmark);
+  settings.enable_profiling = absl::GetFlag(FLAGS_enable_profiling);
   settings.benchmark_prefill_tokens =
       absl::GetFlag(FLAGS_benchmark_prefill_tokens);
   settings.benchmark_decode_tokens =
@@ -268,6 +282,7 @@ absl::Status MainHelper(int argc, char** argv) {
   settings.force_f32 = absl::GetFlag(FLAGS_force_f32);
   settings.multi_turns = absl::GetFlag(FLAGS_multi_turns);
   settings.num_cpu_threads = absl::GetFlag(FLAGS_num_cpu_threads);
+  settings.enable_ynnpack = absl::GetFlag(FLAGS_enable_ynnpack);
   settings.gpu_external_tensor_mode =
       absl::GetFlag(FLAGS_gpu_external_tensor_mode);
   settings.configure_magic_numbers =
@@ -280,6 +295,8 @@ absl::Status MainHelper(int argc, char** argv) {
   settings.score_target_text = absl::GetFlag(FLAGS_score_target_text);
   settings.gpu_madvise_original_shared_tensors =
       absl::GetFlag(FLAGS_gpu_madvise_original_shared_tensors);
+  settings.gpu_enable_metal_residency_set =
+      absl::GetFlag(FLAGS_gpu_enable_metal_residency_set);
   settings.disable_cache = absl::GetFlag(FLAGS_disable_cache);
   settings.disable_weight_cache = absl::GetFlag(FLAGS_disable_weight_cache);
   settings.disable_gpu_program_cache =
@@ -307,6 +324,7 @@ absl::Status MainHelper(int argc, char** argv) {
       : absl::GetFlag(FLAGS_conv_type) == "int8" ? litert::lm::ConvType::kInt8
                                                  : litert::lm::ConvType::kAuto;
   settings.repetition_penalty_config = GetRepetitionPenaltyConfig();
+  settings.no_repeat_ngram_config = GetNoRepeatNgramConfig();
   settings.suppress_tokens_config =
       GetSuppressTokensConfig(absl::GetFlag(FLAGS_suppress_tokens));
   settings.constraint_regex = absl::GetFlag(FLAGS_constraint_regex);
@@ -321,6 +339,8 @@ absl::Status MainHelper(int argc, char** argv) {
   settings.use_hw_ple_for_npu = absl::GetFlag(FLAGS_use_hw_ple_for_npu);
   settings.enable_npu_debug_logging =
       absl::GetFlag(FLAGS_enable_npu_debug_logging);
+  settings.disable_input_prompt_as_hint =
+      absl::GetFlag(FLAGS_disable_input_prompt_as_hint);
 
   // Adjust max_num_tokens and prefill_batch_size if not set on benchmark mode.
   if (settings.benchmark && settings.benchmark_prefill_tokens > 0) {
@@ -339,11 +359,11 @@ absl::Status MainHelper(int argc, char** argv) {
   const bool collect_metrics =
       (settings.benchmark && !metric_proto_file_path.empty());
 
-  RETURN_IF_ERROR(
+  ABSL_RETURN_IF_ERROR(
       litert::lm::RunLiteRtLm(settings, collect_metrics ? &metrics : nullptr));
 
   if (collect_metrics) {
-    RETURN_IF_ERROR(WriteMetricsToFile(metrics, metric_proto_file_path));
+    ABSL_RETURN_IF_ERROR(WriteMetricsToFile(metrics, metric_proto_file_path));
   }
 
   return absl::OkStatus();

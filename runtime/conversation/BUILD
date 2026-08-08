@@ -30,12 +30,18 @@ cc_library(
 )
 
 cc_library(
+    name = "thinking_config",
+    hdrs = ["thinking_config.h"],
+)
+
+cc_library(
     name = "prompt_utils",
     srcs = ["prompt_utils.cc"],
     hdrs = ["prompt_utils.h"],
     deps = [
         ":io_types",
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@nlohmann_json//:json",
         "//runtime/components:prompt_template",
@@ -51,8 +57,10 @@ cc_library(
     deps = [
         ":io_types",
         "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
         "//runtime/engine:io_types",
         "@com_googlesource_code_re2//:re2",
@@ -109,11 +117,14 @@ cc_library(
         ":internal_callback_util",
         ":io_types",
         ":prompt_utils",
+        ":thinking_config",
         "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/functional:any_invocable",
         "@com_google_absl//absl/memory",
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
@@ -122,6 +133,7 @@ cc_library(
         "@com_google_absl//absl/types:span",
         "@nlohmann_json//:json",
         "//runtime/components:prompt_template",
+        "//runtime/components/logits_processor:no_repeat_ngram_config",
         "//runtime/components/logits_processor:repetition_penalty_config",
         "//runtime/components/logits_processor:suppress_tokens_config",
         "//runtime/components/logits_processor/constrained_decoding:constraint",
@@ -134,7 +146,9 @@ cc_library(
         "//runtime/engine:engine_interface",
         "//runtime/engine:engine_settings",
         "//runtime/engine:io_types",
+        "//runtime/proto:llm_metadata_cc_proto",
         "//runtime/proto:llm_model_type_cc_proto",
+        "//runtime/proto:token_cc_proto",
         "//runtime/util:litert_status_util",
         "//runtime/util:model_type_utils",
     ],
@@ -160,17 +174,19 @@ cc_test(
     size = "medium",
     srcs = ["conversation_test.cc"],
     data = [
-        "@litert//support/preprocessor/testdata",
         "//runtime/components/testdata",
         "//runtime/testdata",
+        "//support/preprocessor/testdata",
     ],
     shard_count = 4,
     tags = ["requires-mac-inputs:hard"],  # Required for running on Forge on Mac.
     deps = [
         ":conversation",
         ":io_types",
+        ":thinking_config",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/functional:any_invocable",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
@@ -179,9 +195,8 @@ cc_test(
         "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/time",
         "@nlohmann_json//:json",
-        "@litert//support/tokenizer",
-        "@litert//support/tokenizer:sentencepiece_tokenizer",
         "//runtime/components:prompt_template",
+        "//runtime/components/logits_processor:no_repeat_ngram_config",
         "//runtime/components/logits_processor:repetition_penalty_config",
         "//runtime/components/logits_processor:suppress_tokens_config",
         "//runtime/components/logits_processor/constrained_decoding:bitmap",
@@ -193,6 +208,8 @@ cc_test(
         "//runtime/engine:io_types",
         "//runtime/engine:litert_lm_lib",  # buildcleaner: keep
         "//runtime/executor:executor_settings_base",
+        "//runtime/proto:llm_metadata_cc_proto",
+        "//runtime/proto:token_cc_proto",
         "//runtime/util:test_utils",
     ],
 )

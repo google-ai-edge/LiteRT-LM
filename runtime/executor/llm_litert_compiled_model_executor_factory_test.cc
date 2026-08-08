@@ -21,6 +21,8 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_environment.h"  // from @litert
@@ -42,8 +44,9 @@ constexpr char kTestStaticModelPath[] =
 
 absl::StatusOr<std::unique_ptr<ModelResources>> CreateExecutorModelResources(
     absl::string_view model_path) {
-  ASSIGN_OR_RETURN(auto scoped_file, ScopedFile::Open(model_path));
-  ASSIGN_OR_RETURN(auto loader, LitertLmLoader::Create(std::move(scoped_file)));
+  ABSL_ASSIGN_OR_RETURN(auto scoped_file, ScopedFile::Open(model_path));
+  ABSL_ASSIGN_OR_RETURN(auto loader,
+                        LitertLmLoader::Create(std::move(scoped_file)));
   return ModelResourcesLitertLm::Create(std::move(loader));
 }
 

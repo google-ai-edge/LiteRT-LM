@@ -45,10 +45,11 @@ describe('ChatSessionStore', () => {
     const fakeLoadWasm = async () => {};
 
     modelLoader = new ModelLoaderService(
-        () => {}, settingsStore, () => {}, fakeEngineCreate,
+        () => {}, () => {}, undefined, fakeEngineCreate,
         fakeLoadWasm as unknown as typeof getOrLoadGlobalLiteRtLm);
 
     modelLoader.engine = fakeEngine as unknown as Engine;
+    modelLoader.loadedSettings = structuredClone(settingsStore.modelSettings);
 
     chatSessionStore = new ChatSessionStore(
         () => {
@@ -271,5 +272,20 @@ describe('ChatSessionStore', () => {
     chatSessionStore.isGenerating = true;
     await chatSessionStore.sendMessage('valid message');
     expect(chatSessionStore.messages.length).toBe(0);
+  });
+
+  it('sendMessage reloads model if loadedSettings does not match current settings', async () => {
+    // Force reload by setting loadedSettings to null
+    modelLoader.loadedSettings = null;
+
+    spyOn(modelLoader, 'loadModelWeights').and.callFake(async (settings, onModelLoaded) => {
+      await onModelLoaded();
+    });
+    spyOn(chatSessionStore, 'createConversationSession').and.resolveTo();
+
+    await chatSessionStore.sendMessage('Hello');
+
+    expect(modelLoader.loadModelWeights).toHaveBeenCalled();
+    expect(chatSessionStore.createConversationSession).toHaveBeenCalled();
   });
 });

@@ -32,6 +32,18 @@ class AllAllowedBitmap : public Bitmap {
   bool Get(int index) const override { return true; }
 };
 
+// A bitmap implementation that allows only the one specified token.
+class SingleAllowedTokenBitmap : public Bitmap {
+ public:
+  explicit SingleAllowedTokenBitmap(int allowed_token_id)
+      : allowed_token_id_(allowed_token_id) {}
+
+  bool Get(int index) const override { return index == allowed_token_id_; }
+
+ private:
+  const int allowed_token_id_;
+};
+
 }  // namespace litert::lm
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_RUNTIME_COMPONENTS_LOGITS_PROCESSOR_CONSTRAINED_DECODING_BITMAP_H_

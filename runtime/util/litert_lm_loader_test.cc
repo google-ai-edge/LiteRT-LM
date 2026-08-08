@@ -142,6 +142,29 @@ TEST(LitertLmLoaderTest, GetSectionLocationNotFound) {
               StatusIs(absl::StatusCode::kNotFound));
 }
 
+TEST(LitertLmLoaderTest, GetEmbeddingMetadataSuccess) {
+  auto test_file_path = std::filesystem::path(::testing::TempDir()) /
+                        "test_embedding_metadata.litertlm";
+  flatbuffers::FlatBufferBuilder builder(1024);
+  auto section_object = schema::CreateSectionObject(
+      builder, 0, 32, 64, schema::AnySectionDataType_EmbeddingMetadataProto);
+  std::vector<flatbuffers::Offset<schema::SectionObject>> sections;
+  sections.push_back(section_object);
+  auto sections_vector = builder.CreateVector(sections);
+  auto section_metadata =
+      schema::CreateSectionMetadata(builder, sections_vector);
+  auto metadata = schema::CreateLiteRTLMMetaData(builder, 0, section_metadata);
+
+  WriteDummyModelFile(test_file_path.string(), metadata, builder);
+
+  ASSERT_OK_AND_ASSIGN(auto model_file,
+                       ScopedFile::Open(test_file_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto loader,
+                       LitertLmLoader::Create(std::move(model_file)));
+  EXPECT_TRUE(loader->GetEmbeddingMetadata().has_value());
+  EXPECT_EQ(loader->GetEmbeddingMetadata()->Size(), 32);
+}
+
 TEST(LitertLmLoaderTest, InitializeWithSentencePieceFile) {
   const auto model_path =
       std::filesystem::path(::testing::SrcDir()) /

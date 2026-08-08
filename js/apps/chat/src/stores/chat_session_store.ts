@@ -20,7 +20,7 @@ import {z} from 'zod';
 import {CodeSandbox} from '../components/code_sandbox.js';
 
 import {ModelLoaderService} from './model_loader_service.js';
-import {SettingsStore} from './settings_store.js';
+import {ModelSettings, SettingsStore} from './settings_store.js';
 
 const ConversationMetaSchema = z.object({
   id: z.string(),
@@ -55,6 +55,7 @@ export class ChatSessionStore {
   isCancelled = false;
 
   activeSavedConvId: string|null = null;
+  activeModelSettings: ModelSettings|null = null;
   conversationsList: ConversationMeta[] = [];
   messages: StoredMessage[] = [];
   activeConversation: ChatInterface|null = null;
@@ -267,17 +268,31 @@ export class ChatSessionStore {
       }
     });
 
+    this.activeModelSettings = structuredClone(this.settings.modelSettings);
     this.updateStatus('Model loaded and ready.');
+  }
+
+  private needsNewSession(settings: ModelSettings): boolean {
+    if (!this.activeConversation || !this.activeModelSettings) return true;
+    return this.activeModelSettings.selectedModelPath !== settings.selectedModelPath ||
+           this.activeModelSettings.contextLength !== settings.contextLength ||
+           this.activeModelSettings.maxOutputTokens !== settings.maxOutputTokens ||
+           this.activeModelSettings.samplerType !== settings.samplerType ||
+           this.activeModelSettings.temperature !== settings.temperature ||
+           this.activeModelSettings.topP !== settings.topP ||
+           this.activeModelSettings.topK !== settings.topK ||
+           this.activeModelSettings.enableThinking !== settings.enableThinking;
   }
 
   async sendMessage(promptText: string) {
     if (this.isGenerating || !promptText.trim()) return;
 
-    if (!this.modelLoader.engine) {
-      await this.modelLoader.loadModelWeights(async () => {
+    const settings = this.settings.modelSettings;
+    if (this.modelLoader.needsModelReload(settings)) {
+      await this.modelLoader.loadModelWeights(settings, async () => {
         await this.createConversationSession();
       });
-    } else if (!this.activeConversation) {
+    } else if (this.needsNewSession(settings)) {
       await this.createConversationSession();
     }
 

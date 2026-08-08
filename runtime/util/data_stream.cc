@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "runtime/util/status_macros.h"
@@ -35,7 +36,7 @@ SubStream::~SubStream() {
 
 absl::Status SubStream::ReadAndDiscard(void* buffer, uint64_t offset,
                                        uint64_t size) {
-  RETURN_IF_ERROR(CheckBounds(offset, size));
+  ABSL_RETURN_IF_ERROR(CheckBounds(offset, size));
   if (parent_) {
     return parent_->ReadAndDiscard(buffer, offset_ + offset, size);
   }
@@ -44,7 +45,7 @@ absl::Status SubStream::ReadAndDiscard(void* buffer, uint64_t offset,
 
 absl::Status SubStream::ReadAndPreserve(void* buffer, uint64_t offset,
                                         uint64_t size) {
-  RETURN_IF_ERROR(CheckBounds(offset, size));
+  ABSL_RETURN_IF_ERROR(CheckBounds(offset, size));
   if (parent_) {
     return parent_->ReadAndPreserve(buffer, offset_ + offset, size);
   }
@@ -52,7 +53,7 @@ absl::Status SubStream::ReadAndPreserve(void* buffer, uint64_t offset,
 }
 
 absl::Status SubStream::Discard(uint64_t offset, uint64_t size) {
-  RETURN_IF_ERROR(CheckBounds(offset, size));
+  ABSL_RETURN_IF_ERROR(CheckBounds(offset, size));
   if (parent_) {
     return parent_->Discard(offset_ + offset, size);
   }
@@ -69,18 +70,18 @@ absl::Status SubStream::CheckBounds(uint64_t offset, uint64_t size) const {
   return absl::OkStatus();
 }
 
-absl::StatusOr<std::unique_ptr<DataStream>> SubStream::OpenSubStream(
+absl::StatusOr<std::shared_ptr<DataStream>> SubStream::OpenSubStream(
     uint64_t offset, uint64_t size) {
   // Check if the requested substream fits within this SubStream's bounds.
   // Note that the parent DataStream::OpenSubStream method doesn't do this for
   // us since DataStream doesn't know its own size.
-  RETURN_IF_ERROR(CheckBounds(offset, size));
+  ABSL_RETURN_IF_ERROR(CheckBounds(offset, size));
   // Call the base class implementation to check this SubStream's
   // locked_regions_ and create a new SubStream child of this one.
   return DataStream::OpenSubStream(offset, size);
 }
 
-absl::StatusOr<std::unique_ptr<DataStream>> DataStream::OpenSubStream(
+absl::StatusOr<std::shared_ptr<DataStream>> DataStream::OpenSubStream(
     uint64_t offset, uint64_t size) {
   for (const auto& region : locked_regions_) {
     // Check for overlap: Is [offset, offset + size) overlapping with
@@ -94,7 +95,7 @@ absl::StatusOr<std::unique_ptr<DataStream>> DataStream::OpenSubStream(
     }
   }
   locked_regions_.emplace_back(offset, size);
-  return std::make_unique<SubStream>(this, offset, size);
+  return std::make_shared<SubStream>(shared_from_this(), offset, size);
 }
 
 }  // namespace litert::lm

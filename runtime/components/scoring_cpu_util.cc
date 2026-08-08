@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
@@ -40,7 +41,7 @@ absl::StatusOr<std::vector<float>> ComputeLogLikelihood(
     }
   }
   // Get all indices and their probabilities for calculating perplexity.
-  ASSIGN_OR_RETURN(
+  ABSL_ASSIGN_OR_RETURN(
       auto all_token_ids,
       TopKTokenIds(logits, vocab_size, batch_size, /*sequence_size=*/1));
   std::vector<int> flat_all_token_ids(batch_size * vocab_size);
@@ -49,9 +50,10 @@ absl::StatusOr<std::vector<float>> ComputeLogLikelihood(
               flat_all_token_ids.begin() + b * vocab_size);
   }
   std::vector<std::vector<float>> all_logit_values;
-  ASSIGN_OR_RETURN(auto all_probabilities,
-                   Softmax(logits, flat_all_token_ids, temperature, batch_size,
-                           /*sequence_size=*/1, all_logit_values));
+  ABSL_ASSIGN_OR_RETURN(
+      auto all_probabilities,
+      Softmax(logits, flat_all_token_ids, temperature, batch_size,
+              /*sequence_size=*/1, all_logit_values));
   std::vector<float> batch_confidence(batch_size);
   for (int b = 0; b < batch_size; ++b) {
     if (sampled_ids[b] >= 0 && sampled_ids[b] < vocab_size) {

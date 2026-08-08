@@ -85,6 +85,7 @@ cc_library(
     deps = [
         ":constraint",
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/types:span",
         "@litert//litert/cc:litert_element_type",
         "@litert//litert/cc:litert_layout",
@@ -215,7 +216,7 @@ cc_library(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
-        "@litert//support/tokenizer",
+        "//support/tokenizer",
         "@crate_index__llguidance-1.3.0//:llguidance_cc"
     ] + select({
         "@platforms//os:windows": [
@@ -262,13 +263,14 @@ cc_test(
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
         "@nlohmann_json//:json",
-        "@litert//support/tokenizer",
         "//runtime/util:litert_status_util",
         "//runtime/util:test_utils",
+        "//support/tokenizer",
     ],
 )
 
@@ -294,13 +296,14 @@ cc_test(
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
         "@nlohmann_json//:json",
-        "@litert//support/tokenizer",
         "//runtime/util:litert_status_util",
         "//runtime/util:test_utils",
+        "//support/tokenizer",
     ],
 )
 
@@ -316,12 +319,13 @@ cc_test(
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
         "@nlohmann_json//:json",
-        "@litert//support/tokenizer",
         "//runtime/util:litert_status_util",
+        "//support/tokenizer",
     ],
 )
 
@@ -335,7 +339,7 @@ cc_test(
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings:string_view",
-        "@litert//support/tokenizer",
+        "//support/tokenizer",
         "//runtime/util:test_utils",
         "@crate_index__llguidance-1.3.0//:llguidance_cc"
     ],
@@ -353,8 +357,8 @@ cc_test(
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
-        "@litert//support/tokenizer",
         "//runtime/util:test_utils",
+        "//support/tokenizer",
     ],
 )
 
@@ -388,7 +392,7 @@ cc_library(
         ":llg_constraint_provider",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
-        "@litert//support/tokenizer",
+        "//support/tokenizer",
     ],
 )
 
@@ -404,7 +408,32 @@ cc_test(
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings:string_view",
-        "@litert//support/tokenizer",
+        "//runtime/util:test_utils",
+        "//support/tokenizer",
+    ],
+)
+
+cc_library(
+    name = "thinking_budget_constraint",
+    srcs = ["thinking_budget_constraint.cc"],
+    hdrs = ["thinking_budget_constraint.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":bitmap",
+        ":constraint",
+        "@com_google_absl//absl/status:statusor",
+        "//runtime/util:litert_status_util",
+    ],
+)
+
+cc_test(
+    name = "thinking_budget_constraint_test",
+    srcs = ["thinking_budget_constraint_test.cc"],
+    deps = [
+        ":bitmap",
+        ":fake_constraint",
+        ":thinking_budget_constraint",
+        "@com_google_googletest//:gtest_main",
         "//runtime/util:test_utils",
     ],
 )

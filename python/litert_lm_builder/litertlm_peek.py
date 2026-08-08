@@ -21,6 +21,8 @@ from google.protobuf import text_format
 
 from litert_lm_builder import litertlm_core
 from litert_lm_builder import litertlm_header_schema_py_generated as schema
+from runtime.proto import embedding_metadata_pb2
+from runtime.proto import executor_metadata_pb2
 from runtime.proto import llm_metadata_pb2
 
 # --- ANSI Escape Code Definitions ---
@@ -172,6 +174,7 @@ def _dump_llm_metadata_proto(
     section_object: schema.SectionObject,
     dump_files_dir: str | None,
     output_stream: IO[str],
+    jinja_prompt_template_path: Optional[str] = None,
 ) -> Optional[str]:
   """Dumps LlmMetadataProto section content."""
   file_stream.seek(section_object.BeginOffset())
@@ -186,8 +189,92 @@ def _dump_llm_metadata_proto(
     output_stream.write(f"{' ' * (INDENT_SPACES * 2)}{line}\n")
   output_stream.write(f"{' ' * INDENT_SPACES}>>>>>>>> end of LlmMetadata\n")
 
+  if jinja_prompt_template_path:
+    if (
+        not llm_metadata.HasField("jinja_prompt_template")
+        or not llm_metadata.jinja_prompt_template
+    ):
+      raise ValueError(
+          "Model LlmMetadata does not contain a jinja_prompt_template."
+      )
+    parent_dir = os.path.dirname(os.path.abspath(jinja_prompt_template_path))
+    if parent_dir:
+      os.makedirs(parent_dir, exist_ok=True)
+    with litertlm_core.open_file(jinja_prompt_template_path, "w") as f_jinja:
+      f_jinja.write(llm_metadata.jinja_prompt_template)
+
   if dump_files_dir:
     file_name = "LlmMetadataProto.pbtext"
+    file_path = os.path.join(dump_files_dir, file_name)
+    with litertlm_core.open_file(file_path, "w") as f_out:
+      f_out.write(debug_str)
+    output_stream.write(
+        f"{' ' * INDENT_SPACES}{file_name} dumped to: {file_path}\n"
+    )
+    return file_name
+  return None
+
+
+def _dump_executor_metadata_proto(
+    file_stream: IO[bytes],
+    section_object: schema.SectionObject,
+    dump_files_dir: str | None,
+    output_stream: IO[str],
+) -> Optional[str]:
+  """Dumps ExecutorMetadataProto section content."""
+  file_stream.seek(section_object.BeginOffset())
+  proto_data = file_stream.read(
+      section_object.EndOffset() - section_object.BeginOffset()
+  )
+  executor_metadata = executor_metadata_pb2.ExecutorMetadata()
+  executor_metadata.ParseFromString(proto_data)
+  output_stream.write(
+      f"{' ' * INDENT_SPACES}<<<<<<<< start of ExecutorMetadata\n"
+  )
+  debug_str = text_format.MessageToString(executor_metadata)
+  for line in debug_str.splitlines():
+    output_stream.write(f"{' ' * (INDENT_SPACES * 2)}{line}\n")
+  output_stream.write(
+      f"{' ' * INDENT_SPACES}>>>>>>>> end of ExecutorMetadata\n"
+  )
+
+  if dump_files_dir:
+    file_name = "ExecutorMetadataProto.pbtext"
+    file_path = os.path.join(dump_files_dir, file_name)
+    with litertlm_core.open_file(file_path, "w") as f_out:
+      f_out.write(debug_str)
+    output_stream.write(
+        f"{' ' * INDENT_SPACES}{file_name} dumped to: {file_path}\n"
+    )
+    return file_name
+  return None
+
+
+def _dump_embedding_metadata_proto(
+    file_stream: IO[bytes],
+    section_object: schema.SectionObject,
+    dump_files_dir: str | None,
+    output_stream: IO[str],
+) -> Optional[str]:
+  """Dumps EmbeddingMetadataProto section content."""
+  file_stream.seek(section_object.BeginOffset())
+  proto_data = file_stream.read(
+      section_object.EndOffset() - section_object.BeginOffset()
+  )
+  embedding_metadata = embedding_metadata_pb2.EmbeddingMetadata()
+  embedding_metadata.ParseFromString(proto_data)
+  output_stream.write(
+      f"{' ' * INDENT_SPACES}<<<<<<<< start of EmbeddingMetadata\n"
+  )
+  debug_str = text_format.MessageToString(embedding_metadata)
+  for line in debug_str.splitlines():
+    output_stream.write(f"{' ' * (INDENT_SPACES * 2)}{line}\n")
+  output_stream.write(
+      f"{' ' * INDENT_SPACES}>>>>>>>> end of EmbeddingMetadata\n"
+  )
+
+  if dump_files_dir:
+    file_name = "EmbeddingMetadataProto.pbtext"
     file_path = os.path.join(dump_files_dir, file_name)
     with litertlm_core.open_file(file_path, "w") as f_out:
       f_out.write(debug_str)
@@ -370,7 +457,8 @@ def kvp_to_dict(kvp: schema.KeyValuePair) -> dict[str, Any]:
     kvp: The KeyValuePair flatbuffer table object to convert.
 
   Returns:
-    A dictionary with 'key' (str or None), 'value' (extracted Any value or None),
+    A dictionary with 'key' (str or None), 'value' (extracted Any value or
+    None),
     and 'value_type' (str description of the union type).
   """
   key_bytes = kvp.Key()
@@ -438,7 +526,10 @@ def _write_model_toml(
 
 
 def peek_litertlm_file(
-    litertlm_path: str, dump_files_dir: Optional[str], output_stream: IO[str]
+    litertlm_path: str,
+    dump_files_dir: Optional[str],
+    output_stream: IO[str],
+    jinja_prompt_template_path: Optional[str] = None,
 ) -> None:
   """Reads and prints information from a LiteRT-LM file.
 
@@ -446,6 +537,8 @@ def peek_litertlm_file(
     litertlm_path: The path to the LiteRT-LM file.
     dump_files_dir: Optional directory to dump section contents.
     output_stream: The stream to write the output to.
+    jinja_prompt_template_path: Optional path where jinja_prompt_template will
+      be unpacked.
   """
   metadata = read_litertlm_header(litertlm_path, output_stream)
   with litertlm_core.open_file(litertlm_path, "rb") as file_stream:
@@ -474,6 +567,7 @@ def peek_litertlm_file(
     if dump_files_dir:
       os.makedirs(dump_files_dir, exist_ok=True)
 
+    extracted_jinja = False
     if num_sections == 0 or section_metadata is None:
       output_stream.write(" " * INDENT_SPACES + "<None>\n")
     else:
@@ -534,10 +628,24 @@ def peek_litertlm_file(
             section_info["backend_constraint"] = backend_constraint
 
         data_type = section_object.DataType()
-        dumped_file_name = None
         if data_type == schema.AnySectionDataType.LlmMetadataProto:
+          extracted_jinja = True
           section_info["section_type"] = "LlmMetadata"
           dumped_file_name = _dump_llm_metadata_proto(
+              file_stream,
+              section_object,
+              dump_files_dir,
+              output_stream,
+              jinja_prompt_template_path,
+          )
+        elif data_type == schema.AnySectionDataType.ExecutorMetadataProto:
+          section_info["section_type"] = "ExecutorMetadata"
+          dumped_file_name = _dump_executor_metadata_proto(
+              file_stream, section_object, dump_files_dir, output_stream
+          )
+        elif data_type == schema.AnySectionDataType.EmbeddingMetadataProto:
+          section_info["section_type"] = "EmbeddingMetadata"
+          dumped_file_name = _dump_embedding_metadata_proto(
               file_stream, section_object, dump_files_dir, output_stream
           )
         elif data_type == schema.AnySectionDataType.TFLiteModel:
@@ -580,6 +688,12 @@ def peek_litertlm_file(
           toml_sections.append(section_info)
 
         output_stream.write("\n")
+
+    if jinja_prompt_template_path and not extracted_jinja:
+      raise ValueError(
+          "Model does not contain an LlmMetadata section to extract"
+          " jinja_prompt_template."
+      )
 
     if dump_files_dir:
       _write_model_toml(dump_files_dir, toml_system_metadata, toml_sections)

@@ -28,10 +28,25 @@ WHEEL_DIR="${BAZEL_BIN}/python/litert_lm"
 rm -rf "${WHEEL_DIR}"
 
 echo "Building wheel using Bazelisk..."
-bazelisk build //python/litert_lm:wheel "$@"
+for i in 1 2 3; do
+  bazelisk build //python/litert_lm:wheel "$@" && break
+  if [[ $i -eq 3 ]]; then
+    echo "❌ Bazelisk build failed after 3 attempts."
+    exit 1
+  fi
+  echo "⚠️ Bazelisk build failed. Retrying in 30 seconds (attempt $i/3)..."
+  sleep 30
+done
 
 TEST_VENV="${WORKSPACE_ROOT}/python/litert_lm/test_venv"
 
+# Skip verification if cross-compiling for Android since we cannot run it on the Linux host
+for arg in "$@"; do
+  if [[ "${arg}" == "--config=android" ]]; then
+    echo "Skipping verification suite because wheel was built for Android."
+    exit 0
+  fi
+done
 # Run this Verification Suite isolated inside every target Python version
 for PY_VER in "3.10" "3.11" "3.12" "3.13" "3.14"; do
   echo "------------------------------------------------"
@@ -59,8 +74,15 @@ for PY_VER in "3.10" "3.11" "3.12" "3.13" "3.14"; do
   # uncompiled ./python/litert_lm Source Code instead of the actual built wheel we just installed.
   cd "${TEST_VENV}"
 
+  # Automatically enable GPU tests if running on an Apple Silicon Mac VM
+  TEST_ARGS=""
+  if [[ "$(uname)" == "Darwin" ]]; then
+    echo "🍎 macOS detected! Enabling Apple Silicon CPU and GPU tests."
+    TEST_ARGS="--test-gpu"
+  fi
+
   # Execute our standalone checked-in verification script directly
-  ${PY_EXE} "${WORKSPACE_ROOT}/python/litert_lm/verify_api.py"
+  ${PY_EXE} "${WORKSPACE_ROOT}/python/litert_lm/api_test.py" ${TEST_ARGS}
 
   # Return to workspace root for next step
   cd "${WORKSPACE_ROOT}"

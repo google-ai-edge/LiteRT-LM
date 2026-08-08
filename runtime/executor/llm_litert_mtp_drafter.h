@@ -35,6 +35,7 @@
 #include "runtime/components/model_resources.h"
 #include "runtime/components/sampler.h"
 #include "runtime/executor/llm_executor_settings.h"
+#include "runtime/executor/state_interface.h"
 
 namespace litert::lm {
 
@@ -70,16 +71,13 @@ class LlmLiteRtMtpDrafter {
   //   [batch_size, num_tokens].
   absl::StatusOr<std::vector<std::vector<int>>> Draft(
       int position, int token_id, std::optional<TensorBuffer> activations,
-      absl::flat_hash_map<absl::string_view, TensorBuffer>&
-          input_kv_cache_buffers,
-      absl::flat_hash_map<absl::string_view, TensorBuffer>&
-          output_kv_cache_buffers);
+      StateInterface& state);
 
  private:
   LlmLiteRtMtpDrafter(
       CompiledModel mtp_drafter_model, SimpleSignature drafter_signature,
       CompiledModel& base_model, SimpleSignature verify_signature,
-      EmbeddingLookupManager& embedding_manager,
+      const Model& base_model_desc, EmbeddingLookupManager& embedding_manager,
       std::optional<std::reference_wrapper<EmbeddingLookupManager>> ple_manager,
       std::unique_ptr<Sampler> drafter_sampler,
       std::unique_ptr<Sampler> verifier_sampler,
@@ -96,6 +94,7 @@ class LlmLiteRtMtpDrafter {
       : mtp_drafter_model_(std::move(mtp_drafter_model)),
         drafter_signature_(std::move(drafter_signature)),
         base_model_(base_model),
+        base_model_desc_(base_model_desc),
         verify_signature_(std::move(verify_signature)),
         embedding_manager_(embedding_manager),
         ple_manager_(ple_manager),
@@ -152,6 +151,7 @@ class LlmLiteRtMtpDrafter {
   // The base model, used for verification. The model is owned by the base
   // LiteRtCompiledModelExecutor.
   CompiledModel& base_model_;
+  const Model& base_model_desc_;
   SimpleSignature verify_signature_;
 
   EmbeddingLookupManager& embedding_manager_;

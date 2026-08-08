@@ -12,18 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
-set(PKG_ROOT ${CMAKE_CURRENT_SOURCE_DIR})
-
 # ==============================================================================
-# 1. Header Schema (Consuming the pre-generated FlatBuffer)
+# Header Schema (Consuming the pre-generated FlatBuffer)
 # ==============================================================================
 add_litertlm_library(schema_core_litertlm_header_schema INTERFACE)
 add_library(LiteRTLM::Schema::Core::HeaderSchema ALIAS schema_core_litertlm_header_schema)
 
 target_include_directories(schema_core_litertlm_header_schema
   INTERFACE
-    ${GENERATED_SRC_DIR}
+    ${LITERTLM_GENERATED_SRC_DIR}
     ${LITERTLM_INCLUDE_PATHS}
 )
 
@@ -33,14 +30,14 @@ target_link_libraries(schema_core_litertlm_header_schema
 )
 
 # ==============================================================================
-# 2. Header
+# Header
 # ==============================================================================
 add_litertlm_library(schema_core_litertlm_header INTERFACE)
 add_library(LiteRTLM::Schema::Core::Header ALIAS schema_core_litertlm_header)
 
 target_include_directories(schema_core_litertlm_header
   INTERFACE
-    ${GENERATED_SRC_DIR}
+    ${LITERTLM_GENERATED_SRC_DIR}
     ${LITERTLM_INCLUDE_PATHS}
 )
 
@@ -51,7 +48,7 @@ target_link_libraries(schema_core_litertlm_header
 )
 
 # ==============================================================================
-# 3. Utils
+# Utils
 # ==============================================================================
 add_litertlm_library(schema_core_litertlm_utils STATIC
   litertlm_utils.cc
@@ -60,7 +57,7 @@ add_library(LiteRTLM::Schema::Core::Utils ALIAS schema_core_litertlm_utils)
 
 target_include_directories(schema_core_litertlm_utils
   PRIVATE
-    ${GENERATED_SRC_DIR}
+    ${LITERTLM_GENERATED_SRC_DIR}
     ${LITERTLM_INCLUDE_PATHS}
 )
 
@@ -72,7 +69,7 @@ target_link_libraries(schema_core_litertlm_utils
 )
 
 # ==============================================================================
-# 4. Read
+# Read
 # ==============================================================================
 add_litertlm_library(schema_core_litertlm_read STATIC
   litertlm_read.cc
@@ -81,44 +78,43 @@ add_library(LiteRTLM::Schema::Core::Read ALIAS schema_core_litertlm_read)
 
 target_include_directories(schema_core_litertlm_read
   PRIVATE
-    ${GENERATED_SRC_DIR}
+    ${LITERTLM_GENERATED_SRC_DIR}
     ${TENSORFLOW_SOURCE_DIR}
     ${LITERTLM_INCLUDE_PATHS}
+    ${PKG_ROOT}
 )
 
 target_link_libraries(schema_core_litertlm_read
   PUBLIC
-    LiteRTLM::Runtime::Util::LiteRtStatusUtil
-    LiteRTLM::Runtime::Util::MemoryMappedFile
     LiteRTLM::Runtime::Util::ScopedFile
     LiteRTLM::Schema::Core::Header
     LiteRTLM::Schema::Core::HeaderSchema
     LiteRTLM::Schema::Core::Utils
+    LiteRTLM::Runtime
     LITERTLM_DEPS
 )
 
 # ==============================================================================
-# 5. Section
+# Section
 # ==============================================================================
 add_litertlm_library(schema_core_litertlm_section INTERFACE)
 add_library(LiteRTLM::Schema::Core::Section ALIAS schema_core_litertlm_section)
 
 target_include_directories(schema_core_litertlm_section
   INTERFACE
-    ${GENERATED_SRC_DIR}
+    ${LITERTLM_GENERATED_SRC_DIR}
     ${LITERTLM_INCLUDE_PATHS}
 )
 
 target_link_libraries(schema_core_litertlm_section
   INTERFACE
     LiteRTLM::Schema::Core::HeaderSchema
-    LiteRTLM::Runtime::Util::LiteRtStatusUtil
     zlib_lib
     LITERTLM_DEPS
 )
 
 # ==============================================================================
-# 6. Print
+# Print
 # ==============================================================================
 add_litertlm_library(schema_core_litertlm_print STATIC
   litertlm_print.cc
@@ -127,7 +123,7 @@ add_library(LiteRTLM::Schema::Core::Print ALIAS schema_core_litertlm_print)
 
 target_include_directories(schema_core_litertlm_print
   PRIVATE
-    ${GENERATED_SRC_DIR}
+    ${LITERTLM_GENERATED_SRC_DIR}
     ${LITERTLM_INCLUDE_PATHS}
 )
 
@@ -140,7 +136,7 @@ target_link_libraries(schema_core_litertlm_print
 )
 
 # ==============================================================================
-# 7. Folder Facade
+# Folder Facade
 # ==============================================================================
 add_library(schema_core_libs INTERFACE)
 add_library(LiteRTLM::Schema::Core ALIAS schema_core_libs)

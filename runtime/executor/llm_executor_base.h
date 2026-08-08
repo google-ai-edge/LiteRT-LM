@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <string>
 #include <vector>
 
 #include "absl/status/status.h"  // from @com_google_absl
@@ -212,6 +213,27 @@ class LlmExecutorBase {
     return absl::UnimplementedError(absl::StrCat(
         "RestoreContext not implemented for backend: ", ExecutorBackendName()));
   };
+
+  // ------------Profiling APIs------------:
+  // Starts profiling if supported by the underlying executor/backend.
+  virtual absl::Status StartProfiling() {
+    return absl::UnimplementedError(absl::StrCat(
+        "StartProfiling not implemented for backend: ", ExecutorBackendName()));
+  }
+
+  // Stops profiling if supported by the underlying executor/backend.
+  virtual absl::Status StopProfiling() {
+    return absl::UnimplementedError(absl::StrCat(
+        "StopProfiling not implemented for backend: ", ExecutorBackendName()));
+  }
+
+  // Gets the profile summary string if supported by the underlying
+  // executor/backend.
+  virtual absl::StatusOr<std::string> GetProfileSummary() {
+    return absl::UnimplementedError(
+        absl::StrCat("GetProfileSummary not implemented for backend: ",
+                     ExecutorBackendName()));
+  }
 };
 
 }  // namespace litert::lm

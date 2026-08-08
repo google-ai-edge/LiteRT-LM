@@ -12,4 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+add_subdirectory(capabilities)
 add_subdirectory(core)
+
+# ==============================================================================
+# Folder Facade
+# ==============================================================================
+add_library(schema_libs INTERFACE)
+add_library(LiteRTLM::Schema ALIAS schema_libs)
+
+target_link_libraries(schema_core_libs INTERFACE
+  LiteRTLM::Schema::Core
+  LiteRTLM::Schema::Capabilities
+)

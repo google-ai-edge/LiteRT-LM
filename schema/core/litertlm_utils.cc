@@ -38,6 +38,12 @@ std::string AnySectionDataTypeToString(AnySectionDataType value) {
       return "AnySectionDataType_GenericBinaryData";
     case AnySectionDataType_HF_Tokenizer_Zlib:
       return "AnySectionDataType_HF_Tokenizer_Zlib";
+    case AnySectionDataType_TFLiteWeights:
+      return "AnySectionDataType_TFLiteWeights";
+    case AnySectionDataType_EmbeddingMetadataProto:
+      return "AnySectionDataType_EmbeddingMetadataProto";
+    case AnySectionDataType_ExecutorMetadataProto:
+      return "AnySectionDataType_ExecutorMetadataProto";
     default:
       // Handle cases for MIN/MAX or potentially invalid values.
       return "Unknown AnySectionDataType value";

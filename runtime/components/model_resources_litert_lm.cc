@@ -38,6 +38,7 @@
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
 #include "runtime/components/model_resources.h"
+#include "runtime/proto/embedding_metadata.pb.h"
 #include "runtime/util/litert_lm_loader.h"
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/status_macros.h"  // NOLINT
@@ -105,8 +106,8 @@ absl::StatusOr<const litert::Model*> ModelResourcesLitertLm::GetTFLiteModel(
             absl::StatusCode::kUnimplemented) {
           return model_from_section.status();
         }
-        ABSL_LOG(INFO) << "File-backed LiteRT model loading is unsupported; "
-                          "falling back to buffer-backed loading.";
+        ABSL_VLOG(1) << "File-backed LiteRT model loading is unsupported; "
+                        "falling back to buffer-backed loading.";
       } else {
         auto& model = model_map_[model_type];
         model = std::make_unique<litert::Model>(
@@ -118,8 +119,8 @@ absl::StatusOr<const litert::Model*> ModelResourcesLitertLm::GetTFLiteModel(
 
   litert::BufferRef<uint8_t> buffer_ref =
       litert_lm_loader_->GetTFLiteModel(model_type);
-  ABSL_LOG(INFO) << "model_type: " << ModelTypeToString(model_type);
-  ABSL_LOG(INFO) << "litert model size: " << buffer_ref.Size();
+  ABSL_VLOG(1) << "model_type: " << ModelTypeToString(model_type);
+  ABSL_VLOG(1) << "litert model size: " << buffer_ref.Size();
   if (buffer_ref.Size() == 0) {
     return absl::NotFoundError(absl::StrCat(ModelTypeToString(model_type),
                                             " not found in the model."));
@@ -145,8 +146,8 @@ absl::StatusOr<absl::string_view> ModelResourcesLitertLm::GetTFLiteModelBuffer(
   litert::BufferRef<uint8_t> buffer_ref =
       litert_lm_loader_->GetTFLiteModel(model_type);
 
-  ABSL_LOG(INFO) << "model_type: " << ModelTypeToString(model_type);
-  ABSL_LOG(INFO) << "litert model size: " << buffer_ref.Size();
+  ABSL_VLOG(1) << "model_type: " << ModelTypeToString(model_type);
+  ABSL_VLOG(1) << "litert model size: " << buffer_ref.Size();
   if (buffer_ref.Size() == 0) {
     return absl::NotFoundError(absl::StrCat(ModelTypeToString(model_type),
                                             " not found in the model."));
@@ -203,6 +204,41 @@ ModelResourcesLitertLm::GetLlmMetadata() {
     llm_metadata_ = std::move(llm_metadata);
   }
   return llm_metadata_.get();
+}
+
+absl::StatusOr<const proto::ExecutorMetadata*>
+ModelResourcesLitertLm::GetExecutorMetadata() {
+  if (executor_metadata_ == nullptr) {
+    auto buffer_ref_or = litert_lm_loader_->GetExecutorMetadata();
+    if (!buffer_ref_or.has_value()) {
+      return absl::NotFoundError(
+          "ExecutorMetadata not found in the model file.");
+    }
+    auto executor_metadata = std::make_unique<proto::ExecutorMetadata>();
+    if (!executor_metadata->ParseFromString(
+            std::string(buffer_ref_or->StrView()))) {  // NOLINT
+      return absl::InternalError("Failed to parse ExecutorMetadata");
+    }
+    executor_metadata_ = std::move(executor_metadata);
+  }
+  return executor_metadata_.get();
+}
+
+absl::StatusOr<const proto::EmbeddingMetadata*>
+ModelResourcesLitertLm::GetEmbeddingMetadata() {
+  if (embedding_metadata_ == nullptr) {
+    auto buffer_ref = litert_lm_loader_->GetEmbeddingMetadata();
+    if (!buffer_ref.has_value()) {
+      return absl::NotFoundError("No EmbeddingMetadata found in the model.");
+    }
+    auto embedding_metadata = std::make_unique<proto::EmbeddingMetadata>();
+    if (!embedding_metadata->ParseFromString(
+            std::string(buffer_ref->StrView()))) {  // NOLINT
+      return absl::InternalError("Failed to parse EmbeddingMetadata");
+    }
+    embedding_metadata_ = std::move(embedding_metadata);
+  }
+  return embedding_metadata_.get();
 };
 
 absl::StatusOr<std::reference_wrapper<ScopedFile>>
@@ -214,6 +250,19 @@ absl::StatusOr<std::pair<size_t, size_t>>
 ModelResourcesLitertLm::GetWeightsSectionOffset(ModelType model_type) {
   return litert_lm_loader_->GetSectionLocation(
       BufferKey(schema::AnySectionDataType_TFLiteWeights, model_type));
+}
+
+absl::StatusOr<FileRegion>
+ModelResourcesLitertLm::GetTFLiteModelSectionFileRegion(
+    ModelType model_type) {
+  LITERT_ASSIGN_OR_RETURN(
+      auto location,
+      litert_lm_loader_->GetSectionLocation(
+          BufferKey(schema::AnySectionDataType_TFLiteModel, model_type)));
+  return FileRegion{
+      .offset = location.first,
+      .size = location.second - location.first,
+  };
 }
 
 }  // namespace litert::lm

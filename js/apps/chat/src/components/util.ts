@@ -14,6 +14,12 @@
  * limitations under the License.
  */
 import {unsafeHTML} from 'lit/directives/unsafe-html.js';
+import {unsafeCSS} from 'lit';
+import katexStylesText from 'katex/dist/katex.min.css?inline';
+
+/** KaTeX styles to be used in Lit components. */
+export const katexStyles = unsafeCSS(katexStylesText);
+
 
 /** Sets the HTML content of an iframe using standard srcdoc. */
 export function setIframeHtml(iframe: HTMLIFrameElement, html: string) {

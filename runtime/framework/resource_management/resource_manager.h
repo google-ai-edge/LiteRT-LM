@@ -145,6 +145,9 @@ class ResourceManager {
   absl::StatusOr<VisionExecutorProperties> GetVisionExecutorProperties()
       ABSL_LOCKS_EXCLUDED(vision_executor_mutex_);
 
+  // Resets the LLM executor and clears the current context handler.
+  void ResetCurrentHandler() ABSL_LOCKS_EXCLUDED(executor_mutex_);
+
  private:
   // Creates the litert environment if it is not created yet.
   absl::Status MaybeCreateLitertEnv();

@@ -17,6 +17,7 @@
 #include <optional>
 #include <vector>
 
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "runtime/engine/io_types.h"
@@ -74,19 +75,19 @@ absl::StatusOr<proto::LitertLmMetrics> ToProto(const LitertLmMetrics& metrics) {
     }
 
     for (int i = 0; i < info.GetTotalPrefillTurns(); ++i) {
-      ASSIGN_OR_RETURN(auto turn, info.GetPrefillTurn(i));
+      ABSL_ASSIGN_OR_RETURN(auto turn, info.GetPrefillTurn(i));
       *proto_metrics.add_prefill_turns() =
           TurnDataToProto(turn, info.GetPrefillTokensPerSec(i));
     }
 
     for (int i = 0; i < info.GetTotalDecodeTurns(); ++i) {
-      ASSIGN_OR_RETURN(auto turn, info.GetDecodeTurn(i));
+      ABSL_ASSIGN_OR_RETURN(auto turn, info.GetDecodeTurn(i));
       *proto_metrics.add_decode_turns() =
           TurnDataToProto(turn, info.GetDecodeTokensPerSec(i));
     }
 
     for (int i = 0; i < info.GetTotalTextToTokenIdsTurns(); ++i) {
-      ASSIGN_OR_RETURN(auto turn, info.GetTextToTokenIdsTurn(i));
+      ABSL_ASSIGN_OR_RETURN(auto turn, info.GetTextToTokenIdsTurn(i));
       *proto_metrics.add_text_to_token_ids_turns() = TurnDataToProto(turn);
     }
 
@@ -100,7 +101,7 @@ absl::StatusOr<proto::LitertLmMetricsList> ToProtoList(
     const std::vector<LitertLmMetrics>& metrics_list) {
   proto::LitertLmMetricsList proto_list;
   for (const auto& metrics : metrics_list) {
-    ASSIGN_OR_RETURN(*proto_list.add_metrics(), ToProto(metrics));
+    ABSL_ASSIGN_OR_RETURN(*proto_list.add_metrics(), ToProto(metrics));
   }
   return proto_list;
 }

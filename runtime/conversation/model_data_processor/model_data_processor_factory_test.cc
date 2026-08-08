@@ -32,6 +32,7 @@
 #include "runtime/conversation/model_data_processor/gemma3_data_processor_config.h"
 #include "runtime/conversation/model_data_processor/gemma4_data_processor_config.h"
 #include "runtime/conversation/model_data_processor/generic_data_processor_config.h"
+#include "runtime/conversation/model_data_processor/lfm2_data_processor_config.h"
 #include "runtime/conversation/model_data_processor/model_data_processor.h"
 #include "runtime/conversation/model_data_processor/qwen3_data_processor_config.h"
 #include "runtime/engine/io_types.h"
@@ -278,6 +279,28 @@ TEST_F(ModelDataProcessorFactoryTest, CreateFastVlmDataProcessor) {
   auto fastvlm_config = std::get<FastVlmDataProcessorConfig>(config);
   EXPECT_EQ(fastvlm_config.image_tensor_height, 1024);
   EXPECT_EQ(fastvlm_config.image_tensor_width, 1024);
+}
+
+TEST_F(ModelDataProcessorFactoryTest, CreateLfm2DataProcessor) {
+  proto::LlmModelType llm_model_type;
+  llm_model_type.mutable_lfm2();
+  ASSERT_OK_AND_ASSIGN(
+      auto config, CreateDataProcessorConfigFromLlmModelType(llm_model_type));
+  ASSERT_TRUE(std::holds_alternative<Lfm2DataProcessorConfig>(config));
+  ASSERT_OK_AND_ASSIGN(auto processor, CreateModelDataProcessor(config));
+  EXPECT_OK(processor->ToInputDataVector("test prompt", {},
+                                         Lfm2DataProcessorArguments()));
+  EXPECT_THAT(processor->ToInputDataVector("test prompt", {},
+                                           GenericDataProcessorArguments()),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  EXPECT_OK(
+      processor->ToMessage(Responses(TaskState::kProcessing, {"test response"}),
+                           Lfm2DataProcessorArguments()));
+
+  auto lfm2_config = std::get<Lfm2DataProcessorConfig>(config);
+  EXPECT_EQ(lfm2_config.patch_width, 16);
+  EXPECT_EQ(lfm2_config.patch_height, 16);
 }
 
 }  // namespace

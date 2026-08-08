@@ -23,6 +23,8 @@ from litert_lm_builder import litertlm_builder
 from litert_lm_builder import litertlm_core
 from litert_lm_builder import litertlm_header_schema_py_generated as schema
 from litert_lm_builder import litertlm_peek
+from runtime.proto import embedding_metadata_pb2
+from runtime.proto import executor_metadata_pb2
 from runtime.proto import llm_metadata_pb2
 
 _TOML_TEMPLATE = """
@@ -62,6 +64,11 @@ additional_metadata = [
 # Section 4: GenericBinaryData
 section_type = "GenericBinaryData"
 data_path = "{GENERIC_BINARY_PATH}"
+
+[[section]]
+# Section 5: ExecutorMetadata
+section_type = "ExecutorMetadata"
+data_path = "{EXECUTOR_METADATA_PATH}"
 """
 
 
@@ -224,6 +231,85 @@ class LitertlmBuilderTest(parameterized.TestCase):
     builder.add_llm_metadata(metadata_path)
     with self.assertRaises(AssertionError):
       builder.add_llm_metadata(metadata_path)
+
+  def test_add_executor_metadata_binary(self):
+    """Tests that executor metadata can be added from a binary proto file."""
+    executor_metadata = executor_metadata_pb2.ExecutorMetadata(
+        llm_executor_metadata=executor_metadata_pb2.LlmExecutorMetadata(
+            max_history_size=5
+        )
+    )
+    bin_proto = executor_metadata.SerializeToString()
+    metadata_path = self._create_dummy_file("executor.pb", bin_proto)
+
+    builder = litertlm_builder.LitertLmFileBuilder()
+    self._add_system_metadata(builder)
+    builder.add_executor_metadata(metadata_path)
+    ss = self._build_and_read_litertlm(builder)
+    self.assertIn("max_history_size: 5", ss)
+    self.assertIn("Sections (1)", ss)
+
+  def test_add_executor_metadata_text(self):
+    """Tests that executor metadata can be added from a text proto file."""
+    executor_metadata = executor_metadata_pb2.ExecutorMetadata(
+        llm_executor_metadata=executor_metadata_pb2.LlmExecutorMetadata(
+            max_history_size=5
+        )
+    )
+    text_proto = text_format.MessageToString(executor_metadata)
+    metadata_path = self._create_dummy_file(
+        "executor.textproto", text_proto.encode("utf-8")
+    )
+
+    builder = litertlm_builder.LitertLmFileBuilder()
+    self._add_system_metadata(builder)
+    builder.add_executor_metadata(metadata_path)
+    ss = self._build_and_read_litertlm(builder)
+    self.assertIn("max_history_size: 5", ss)
+    self.assertIn("Sections (1)", ss)
+
+  def test_add_executor_metadata_not_found(self):
+    """Tests that adding a non-existent executor metadata file raises a FileNotFoundError."""
+    builder = litertlm_builder.LitertLmFileBuilder()
+    with self.assertRaises(FileNotFoundError):
+      builder.add_executor_metadata("nonexistent.pb")
+
+  def test_add_executor_metadata_already_added(self):
+    builder = litertlm_builder.LitertLmFileBuilder()
+    metadata_path = self._create_dummy_file("executor.pb", b"")
+    builder.add_executor_metadata(metadata_path)
+    with self.assertRaises(AssertionError):
+      builder.add_executor_metadata(metadata_path)
+
+  def test_add_embedding_metadata_binary(self):
+    """Tests that Embedding metadata can be added from a binary proto file."""
+    embedding_metadata = embedding_metadata_pb2.EmbeddingMetadata()
+    embedding_metadata.embedding_model_type.embedding_gemma_v2.patch_width = 16
+    bin_proto = embedding_metadata.SerializeToString()
+    metadata_path = self._create_dummy_file("embedding.pb", bin_proto)
+
+    builder = litertlm_builder.LitertLmFileBuilder()
+    self._add_system_metadata(builder)
+    builder.add_embedding_metadata(metadata_path)
+    ss = self._build_and_read_litertlm(builder)
+    self.assertIn("patch_width: 16", ss)
+    self.assertIn("Sections (1)", ss)
+
+  def test_add_embedding_metadata_text(self):
+    """Tests that Embedding metadata can be added from a text proto file."""
+    embedding_metadata = embedding_metadata_pb2.EmbeddingMetadata()
+    embedding_metadata.embedding_model_type.embedding_gemma_v2.patch_width = 16
+    text_proto = text_format.MessageToString(embedding_metadata)
+    metadata_path = self._create_dummy_file(
+        "embedding.textproto", text_proto.encode("utf-8")
+    )
+
+    builder = litertlm_builder.LitertLmFileBuilder()
+    self._add_system_metadata(builder)
+    builder.add_embedding_metadata(metadata_path)
+    ss = self._build_and_read_litertlm(builder)
+    self.assertIn("patch_width: 16", ss)
+    self.assertIn("Sections (1)", ss)
 
   @parameterized.named_parameters(
       ("prefill_decode", litertlm_builder.TfLiteModelType.PREFILL_DECODE),
@@ -509,6 +595,16 @@ class LitertlmBuilderTest(parameterized.TestCase):
     bin_proto = llm_metadata.SerializeToString()
     metadata_path = self._create_dummy_file("llm.pb", bin_proto)
 
+    executor_metadata = executor_metadata_pb2.ExecutorMetadata(
+        llm_executor_metadata=executor_metadata_pb2.LlmExecutorMetadata(
+            max_history_size=5
+        )
+    )
+    executor_bin_proto = executor_metadata.SerializeToString()
+    executor_metadata_path = self._create_dummy_file(
+        "executor.pb", executor_bin_proto
+    )
+
     builder = litertlm_builder.LitertLmFileBuilder()
     self._add_system_metadata(builder)
     builder.add_sentencepiece_tokenizer(sp_path)
@@ -519,14 +615,17 @@ class LitertlmBuilderTest(parameterized.TestCase):
         tflite_path, model_type=litertlm_builder.TfLiteModelType.PREFILL_DECODE
     )
     builder.add_llm_metadata(metadata_path)
+    builder.add_executor_metadata(executor_metadata_path)
     ss = self._build_and_read_litertlm(builder)
-    self.assertIn("Sections (4)", ss)
+    self.assertIn("Sections (5)", ss)
     self.assertIn("Data Type:    SP_Tokenizer", ss)
     self.assertIn("Data Type:    TFLiteModel", ss)
     self.assertIn("Key: model_type, Value (String): tf_lite_embedder", ss)
     self.assertIn("Key: model_type, Value (String): tf_lite_prefill_decode", ss)
     self.assertIn("Data Type:    LlmMetadataProto", ss)
     self.assertIn("max_num_tokens: 123", ss)
+    self.assertIn("Data Type:    ExecutorMetadataProto", ss)
+    self.assertIn("max_history_size: 5", ss)
 
   @parameterized.named_parameters(
       ("relative_path", True),
@@ -537,6 +636,7 @@ class LitertlmBuilderTest(parameterized.TestCase):
     sp_filename = "sp.model"
     tflite_filename = "model.tflite"
     metadata_filename = "llm.pb"
+    executor_filename = "executor.pb"
 
     sp_path_abs = self._create_dummy_file(sp_filename, b"dummy sp content")
     tflite_path_abs = self._create_dummy_file(
@@ -545,6 +645,14 @@ class LitertlmBuilderTest(parameterized.TestCase):
     metadata_path_abs = self._create_dummy_file(
         metadata_filename,
         llm_metadata_pb2.LlmMetadata(max_num_tokens=123).SerializeToString(),
+    )
+    executor_path_abs = self._create_dummy_file(
+        executor_filename,
+        executor_metadata_pb2.ExecutorMetadata(
+            llm_executor_metadata=executor_metadata_pb2.LlmExecutorMetadata(
+                max_history_size=5
+            )
+        ).SerializeToString(),
     )
     generic_binary_filename = "data.bin"
     generic_binary_path_abs = self._create_dummy_file(
@@ -556,11 +664,13 @@ class LitertlmBuilderTest(parameterized.TestCase):
       tflite_path = tflite_filename
       metadata_path = metadata_filename
       generic_binary_path = generic_binary_filename
+      executor_path = executor_filename
     else:
       sp_path = pathlib.Path(sp_path_abs).as_posix()
       tflite_path = pathlib.Path(tflite_path_abs).as_posix()
       metadata_path = pathlib.Path(metadata_path_abs).as_posix()
       generic_binary_path = pathlib.Path(generic_binary_path_abs).as_posix()
+      executor_path = pathlib.Path(executor_path_abs).as_posix()
 
     toml_path = self._create_dummy_file(
         "test.toml",
@@ -569,11 +679,12 @@ class LitertlmBuilderTest(parameterized.TestCase):
         .replace("{EMBEDDER_PATH}", tflite_path)
         .replace("{PREFILL_DECODE_PATH}", tflite_path)
         .replace("{GENERIC_BINARY_PATH}", generic_binary_path)
+        .replace("{EXECUTOR_METADATA_PATH}", executor_path)
         .encode("utf-8"),
     )
     builder = litertlm_builder.LitertLmFileBuilder.from_toml_file(toml_path)
     ss = self._build_and_read_litertlm(builder)
-    self.assertIn("Sections (5)", ss)
+    self.assertIn("Sections (6)", ss)
     self.assertIn("Data Type:    SP_Tokenizer", ss)
     self.assertIn("Data Type:    TFLiteModel", ss)
     self.assertIn("Key: model_type, Value (String): tf_lite_embedder", ss)
@@ -581,6 +692,8 @@ class LitertlmBuilderTest(parameterized.TestCase):
     self.assertIn("Data Type:    LlmMetadataProto", ss)
     self.assertIn("max_num_tokens: 123", ss)
     self.assertIn("Data Type:    GenericBinaryData", ss)
+    self.assertIn("Data Type:    ExecutorMetadataProto", ss)
+    self.assertIn("max_history_size: 5", ss)
 
   def test_from_toml_with_prefer_activation_type(self):
     """Tests that a LitertLmFileBuilder can be initialized with prefer_activation_type from TOML."""
@@ -632,6 +745,130 @@ class LitertlmBuilderTest(parameterized.TestCase):
     with litertlm_core.open_file(rebuild_path, "wb") as f:
       rebuilt_builder.build(f)
     self.assertTrue(os.path.exists(rebuild_path))
+
+  def test_pack(self):
+    """Tests packing a litertlm file from a TOML configuration using pack."""
+    builder = litertlm_builder.LitertLmFileBuilder()
+    self._add_system_metadata(builder)
+    tflite_path = self._create_dummy_file("model.tflite", b"dummy content")
+    builder.add_tflite_model(
+        tflite_path, litertlm_builder.TfLiteModelType.PREFILL_DECODE
+    )
+    litertlm_path = os.path.join(self.temp_dir, "test_orig.litertlm")
+    with litertlm_core.open_file(litertlm_path, "wb") as f:
+      builder.build(f)
+
+    unpack_dir = os.path.join(self.temp_dir, "unpacked_for_pack")
+    toml_path = litertlm_builder.unpack(litertlm_path, unpack_dir)
+
+    packed_litertlm_path = os.path.join(self.temp_dir, "packed.litertlm")
+    res_path = litertlm_builder.pack(toml_path, packed_litertlm_path)
+    self.assertEqual(res_path, packed_litertlm_path)
+    self.assertTrue(os.path.exists(packed_litertlm_path))
+
+  def test_pack_and_unpack_with_jinja_path(self):
+    """Tests packing with jinja_prompt_template_path overwrites jinja_prompt_template and unpacking with jinja_prompt_template_path extracts it."""
+    llm_metadata_content = 'jinja_prompt_template: "original template"\n'
+    meta_path = self._create_dummy_file(
+        "metadata.pbtext", llm_metadata_content.encode()
+    )
+    jinja_input_path = self._create_dummy_file(
+        "input.jinja", b"overwritten jinja template"
+    )
+
+    builder = litertlm_builder.LitertLmFileBuilder()
+    self._add_system_metadata(builder)
+    tflite_path = self._create_dummy_file("model.tflite", b"dummy content")
+    builder.add_tflite_model(
+        tflite_path, litertlm_builder.TfLiteModelType.PREFILL_DECODE
+    )
+    builder.add_llm_metadata(meta_path)
+    orig_litertlm_path = os.path.join(self.temp_dir, "orig.litertlm")
+    with litertlm_core.open_file(orig_litertlm_path, "wb") as f:
+      builder.build(f)
+
+    unpack_dir = os.path.join(self.temp_dir, "unpacked_for_jinja")
+    toml_path = litertlm_builder.unpack(orig_litertlm_path, unpack_dir)
+
+    packed_path = os.path.join(self.temp_dir, "packed_custom_jinja.litertlm")
+    litertlm_builder.pack(
+        toml_path, packed_path, jinja_prompt_template_path=jinja_input_path
+    )
+
+    extracted_jinja_path = os.path.join(self.temp_dir, "extracted.jinja")
+    unpack_dir_2 = os.path.join(self.temp_dir, "unpacked_custom_jinja")
+    litertlm_builder.unpack(
+        packed_path,
+        unpack_dir_2,
+        jinja_prompt_template_path=extracted_jinja_path,
+    )
+    self.assertTrue(os.path.exists(extracted_jinja_path))
+    with open(extracted_jinja_path, "r") as f:
+      content = f.read()
+    self.assertEqual(content, "overwritten jinja template")
+
+  def test_unpack_raises_error_when_jinja_template_missing(self):
+    """Tests unpacking with jinja_prompt_template_path raises error when missing."""
+    llm_metadata_content = "max_num_tokens: 100\n"
+    meta_path = self._create_dummy_file(
+        "metadata_no_jinja.pbtext", llm_metadata_content.encode()
+    )
+    builder = litertlm_builder.LitertLmFileBuilder()
+    self._add_system_metadata(builder)
+    tflite_path = self._create_dummy_file(
+        "model_no_jinja.tflite", b"dummy content"
+    )
+    builder.add_tflite_model(
+        tflite_path, litertlm_builder.TfLiteModelType.PREFILL_DECODE
+    )
+    builder.add_llm_metadata(meta_path)
+    model_path = os.path.join(self.temp_dir, "no_jinja.litertlm")
+    with litertlm_core.open_file(model_path, "wb") as f:
+      builder.build(f)
+
+    unpack_dir = os.path.join(self.temp_dir, "unpacked_no_jinja")
+    target_jinja = os.path.join(self.temp_dir, "should_fail.jinja")
+    with self.assertRaises(ValueError):
+      litertlm_builder.unpack(
+          model_path, unpack_dir, jinja_prompt_template_path=target_jinja
+      )
+
+  def test_pack_invalid_toml_does_not_truncate_output_file(self):
+    """Tests that packing with an invalid TOML does not truncate existing output file."""
+    output_path = os.path.join(self.temp_dir, "existing_model.litertlm")
+    original_content = b"original model bytes 12345"
+    with open(output_path, "wb") as f:
+      f.write(original_content)
+
+    invalid_toml_path = os.path.join(self.temp_dir, "broken.toml")
+    with open(invalid_toml_path, "w") as f:
+      f.write("[invalid toml syntax <<<")
+
+    with self.assertRaises(Exception):
+      litertlm_builder.pack(invalid_toml_path, output_path)
+
+    with open(output_path, "rb") as f:
+      self.assertEqual(f.read(), original_content)
+
+  def test_pack_raises_error_when_llm_metadata_missing_for_jinja(self):
+    """Tests packing with jinja_prompt_template_path raises error when TOML lacks LlmMetadata."""
+    tflite_path = self._create_dummy_file("model_for_error.tflite", b"dummy")
+    tflite_name = os.path.basename(tflite_path)
+    toml_content = f"""
+[[section]]
+section_type = "TFLiteModel"
+model_type = "prefill_decode"
+data_path = "{tflite_name}"
+"""
+    toml_path = self._create_dummy_file(
+        "no_llm_meta.toml", toml_content.encode()
+    )
+    jinja_path = self._create_dummy_file("temp.jinja", b"template")
+    output_path = os.path.join(self.temp_dir, "out.litertlm")
+    with self.assertRaises(ValueError):
+      litertlm_builder.pack(
+          toml_path, output_path, jinja_prompt_template_path=jinja_path
+      )
 
 
 if __name__ == "__main__":

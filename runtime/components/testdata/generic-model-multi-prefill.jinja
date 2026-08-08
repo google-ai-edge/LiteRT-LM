@@ -1,0 +1,72 @@
+{%- if not is_appending_to_prefill -%}
+    {%- for message in messages -%}
+        {%- if message.content is string -%}
+            {%- if message.role == 'user' -%}
+                {{- '<start_of_turn>user\n' + message.content + '<end_of_turn>\n' -}}
+            {%- elif message.role == 'model' -%}
+                {{- '<start_of_turn>model\n' + message.content + '<end_of_turn>\n' -}}
+            {%- elif message.role == 'system' -%}
+                {{- '<start_of_turn>system\n' + message.content + '<end_of_turn>\n' -}}
+            {%- endif -%}
+        {%- else -%}
+            {%- if message.role == 'user' -%}
+                {{- '<start_of_turn>user\n' -}}
+            {%- elif message.role == 'model' -%}
+                {{- '<start_of_turn>model\n' -}}
+            {%- elif message.role == 'system' -%}
+                {{- '<start_of_turn>system\n' -}}
+            {%- endif -%}
+            {%- for item in message.content -%}
+                {%- if item.type == 'text' -%}
+                    {{- item.text -}}
+                {%- elif item.type == 'image' -%}
+                    {{- '<img>' -}}
+                {%- elif item.type == 'audio' -%}
+                    {{- '<start_of_audio>' -}}
+                {%- endif -%}
+            {%- endfor -%}
+            {%- if message.role == 'user' -%}
+                {{- '<end_of_turn>\n' -}}
+            {%- elif message.role == 'model' -%}
+                {{- '<end_of_turn>\n' -}}
+            {%- elif message.role == 'system' -%}
+                {{- '<end_of_turn>\n' -}}
+            {%- endif -%}
+        {%- endif -%}
+    {%- endfor -%}
+{%- else -%}
+    {%- if is_first_part -%}
+        {%- if message.role == 'user' -%}
+            {{- '<start_of_turn>user\n' -}}
+        {%- elif message.role == 'model' -%}
+            {{- '<start_of_turn>model\n' -}}
+        {%- elif message.role == 'system' -%}
+            {{- '<start_of_turn>system\n' -}}
+        {%- endif -%}
+    {%- endif -%}
+    {%- if message.content is string -%}
+        {{- message.content -}}
+    {%- else -%}
+        {%- for item in message.content -%}
+            {%- if item.type == 'text' -%}
+                {{- item.text -}}
+            {%- elif item.type == 'image' -%}
+                {{- '<img>' -}}
+            {%- elif item.type == 'audio' -%}
+                {{- '<start_of_audio>' -}}
+            {%- endif -%}
+        {%- endfor -%}
+    {%- endif -%}
+    {%- if is_last_part -%}
+        {%- if message.role == 'user' -%}
+            {{- '<end_of_turn>\n' -}}
+        {%- elif message.role == 'model' -%}
+            {{- '<end_of_turn>\n' -}}
+        {%- elif message.role == 'system' -%}
+            {{- '<end_of_turn>\n' -}}
+        {%- endif -%}
+    {%- endif -%}
+{%- endif -%}
+{%- if add_generation_prompt -%}
+    {{- '<start_of_turn>model\n' -}}
+{%- endif -%}

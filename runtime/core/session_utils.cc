@@ -21,15 +21,16 @@
 #include <vector>
 
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/internal/litert_detail.h"  // from @litert
-#include "support/tokenizer/tokenizer.h"  // from @litert
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/util/status_macros.h"  // IWYU pragma: keep
+#include "support/tokenizer/tokenizer.h"
 
 namespace litert::lm {
 
@@ -38,7 +39,7 @@ absl::StatusOr<std::string> MaybeGetBosString(
   auto bos_token_id = session_config.GetStartTokenId();
   std::string bos_string = "";
   if (bos_token_id >= 0) {
-    ASSIGN_OR_RETURN(bos_string, tokenizer.TokenIdsToText({bos_token_id}));
+    ABSL_ASSIGN_OR_RETURN(bos_string, tokenizer.TokenIdsToText({bos_token_id}));
   }
   return bos_string;
 }
@@ -50,7 +51,7 @@ absl::StatusOr<InputText> StringToProcessedInputText(
   auto bos_token_id = session_config.GetStartTokenId();
   std::string bos_string = "";
   if (bos_token_id >= 0) {
-    ASSIGN_OR_RETURN(bos_string, tokenizer.TokenIdsToText({bos_token_id}));
+    ABSL_ASSIGN_OR_RETURN(bos_string, tokenizer.TokenIdsToText({bos_token_id}));
   }
   bool bos_token_found = false;
   if (!bos_string.empty() && absl::StartsWith(text, bos_string)) {
@@ -62,11 +63,11 @@ absl::StatusOr<InputText> StringToProcessedInputText(
   if (benchmark_info.has_value()) {
     benchmark_prefill_token_count =
         benchmark_info->GetBenchmarkParams().num_prefill_tokens();
-    RETURN_IF_ERROR(
+    ABSL_RETURN_IF_ERROR(
         const_cast<BenchmarkInfo&>(*benchmark_info).TimeTextToTokenIdsStart());
   }
 
-  ASSIGN_OR_RETURN(std::vector<int> ids, tokenizer.TextToTokenIds(text));
+  ABSL_ASSIGN_OR_RETURN(std::vector<int> ids, tokenizer.TextToTokenIds(text));
   if (benchmark_prefill_token_count > 0) {
     // If benchmark is enabled, we will use the benchmark prefill token
     // count to set the prefill token count.
@@ -75,10 +76,10 @@ absl::StatusOr<InputText> StringToProcessedInputText(
     ids.insert(ids.begin(), session_config.GetStartTokenId());
   }
   if (benchmark_info.has_value()) {
-    RETURN_IF_ERROR(const_cast<BenchmarkInfo&>(*benchmark_info)
-                        .TimeTextToTokenIdsEnd(ids.size()));
+    ABSL_RETURN_IF_ERROR(const_cast<BenchmarkInfo&>(*benchmark_info)
+                             .TimeTextToTokenIdsEnd(ids.size()));
   }
-  ASSIGN_OR_RETURN(auto ids_buffer, tokenizer.TokenIdsToTensorBuffer(ids));
+  ABSL_ASSIGN_OR_RETURN(auto ids_buffer, tokenizer.TokenIdsToTensorBuffer(ids));
   return InputText(std::move(ids_buffer));
 }
 
@@ -86,8 +87,8 @@ absl::StatusOr<std::vector<InputData>> ApplyPromptTemplates(
     const std::vector<InputData>& contents, ContentType content_type,
     const SessionConfig& session_config, support::Tokenizer& tokenizer,
     bool is_first_turn) {
-  ASSIGN_OR_RETURN(std::string bos_string,
-                   MaybeGetBosString(session_config, tokenizer));
+  ABSL_ASSIGN_OR_RETURN(std::string bos_string,
+                        MaybeGetBosString(session_config, tokenizer));
 
   std::vector<InputData> templated_contents;
   if (!session_config.GetApplyPromptTemplateInSession()) {
@@ -97,7 +98,7 @@ absl::StatusOr<std::vector<InputData>> ApplyPromptTemplates(
     }
     for (int i = 0; i < contents.size(); ++i) {
       const auto& content = contents[i];
-      ASSIGN_OR_RETURN(auto content_copy, CreateInputDataCopy(content));
+      ABSL_ASSIGN_OR_RETURN(auto content_copy, CreateInputDataCopy(content));
       templated_contents.emplace_back(std::move(content_copy));
     }
     return templated_contents;
@@ -123,8 +124,8 @@ absl::StatusOr<std::vector<InputData>> ApplyPromptTemplates(
     const bool is_text_chunk = std::holds_alternative<InputText>(content);
 
     if (is_text_chunk) {
-      ASSIGN_OR_RETURN(absl::string_view raw_text,
-                       std::get<InputText>(content).GetRawTextString());
+      ABSL_ASSIGN_OR_RETURN(absl::string_view raw_text,
+                            std::get<InputText>(content).GetRawTextString());
 
       // Check if the input starts with the BOS string. If it does, return an
       // error. This is to prevent the user from including the BOS string in the
@@ -155,7 +156,7 @@ absl::StatusOr<std::vector<InputData>> ApplyPromptTemplates(
           !turn_prefix.empty()) {
         templated_contents.push_back(InputText(turn_prefix));
       }
-      ASSIGN_OR_RETURN(auto content_copy, CreateInputDataCopy(content));
+      ABSL_ASSIGN_OR_RETURN(auto content_copy, CreateInputDataCopy(content));
       templated_contents.emplace_back(std::move(content_copy));
       if ((content_type == ContentType::kLast) && !turn_suffix.empty()) {
         templated_contents.push_back(InputText(turn_suffix));
@@ -175,16 +176,17 @@ absl::StatusOr<std::vector<InputData>> PreprocessContents(
     const auto& content = contents[i];
     if (const auto* input_text = std::get_if<InputText>(&content)) {
       if (input_text->IsTensorBuffer()) {
-        ASSIGN_OR_RETURN(auto input_text_copy, input_text->CreateCopy());
+        ABSL_ASSIGN_OR_RETURN(auto input_text_copy, input_text->CreateCopy());
         preprocessed_contents.emplace_back(std::move(input_text_copy));
       } else {
-        ASSIGN_OR_RETURN(auto templated_text, input_text->GetRawTextString());
+        ABSL_ASSIGN_OR_RETURN(auto templated_text,
+                              input_text->GetRawTextString());
         if (templated_text.empty()) {
           // We skip empty input text contents in the final preprocessed
           // version.
           continue;
         }
-        ASSIGN_OR_RETURN(
+        ABSL_ASSIGN_OR_RETURN(
             auto processed_input_text,
             StringToProcessedInputText(templated_text, session_config,
                                        tokenizer, benchmark_info));
@@ -192,7 +194,7 @@ absl::StatusOr<std::vector<InputData>> PreprocessContents(
       }
     } else if (const auto* input_image = std::get_if<InputImage>(&content)) {
       if (input_image->IsTensorBuffer() || input_image->IsTensorBufferMap()) {
-        ASSIGN_OR_RETURN(auto input_image_copy, input_image->CreateCopy());
+        ABSL_ASSIGN_OR_RETURN(auto input_image_copy, input_image->CreateCopy());
         preprocessed_contents.emplace_back(std::move(input_image_copy));
       } else {
         return absl::InternalError(
@@ -203,7 +205,7 @@ absl::StatusOr<std::vector<InputData>> PreprocessContents(
       preprocessed_contents.emplace_back(InputImageEnd());
     } else if (const auto* input_audio = std::get_if<InputAudio>(&content)) {
       if (input_audio->IsTensorBuffer()) {
-        ASSIGN_OR_RETURN(auto input_audio_copy, input_audio->CreateCopy());
+        ABSL_ASSIGN_OR_RETURN(auto input_audio_copy, input_audio->CreateCopy());
         preprocessed_contents.emplace_back(std::move(input_audio_copy));
       } else {
         return absl::InternalError(

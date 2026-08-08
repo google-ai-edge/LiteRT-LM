@@ -19,6 +19,7 @@
 
 #include "absl/container/flat_hash_set.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
@@ -58,7 +59,8 @@ absl::StatusOr<std::string> FormatObjectAsPythonInstance(
   int count = 0;
   for (const auto& [key, value] : object.items()) {
     ss << key << "=";
-    ASSIGN_OR_RETURN(std::string formatted_value, FormatValueAsPython(value));
+    ABSL_ASSIGN_OR_RETURN(std::string formatted_value,
+                          FormatValueAsPython(value));
     ss << formatted_value;
     count += 1;
     if (count < object.size()) {

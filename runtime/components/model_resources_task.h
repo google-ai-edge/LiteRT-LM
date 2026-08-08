@@ -27,9 +27,8 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_model.h"  // from @litert
-#include "support/tokenizer/sentencepiece_tokenizer.h"  // from @litert
-#include "support/tokenizer/tokenizer.h"  // from @litert
 #include "runtime/components/model_resources.h"
+#include "runtime/proto/executor_metadata.pb.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/model_asset_bundle_resources.h"
 #include "runtime/util/scoped_file.h"
@@ -58,6 +57,7 @@ class ModelResourcesTask : public ModelResources {
   };
   absl::StatusOr<std::unique_ptr<Tokenizer>> GetTokenizer() override;
   absl::StatusOr<const proto::LlmMetadata*> GetLlmMetadata() override;
+  absl::StatusOr<const proto::ExecutorMetadata*> GetExecutorMetadata() override;
   absl::StatusOr<std::reference_wrapper<ScopedFile>> GetScopedFile() override {
     return absl::UnimplementedError(
         "GetScopedFile is not implemented for Task model.");
@@ -67,6 +67,13 @@ class ModelResourcesTask : public ModelResources {
     return absl::UnimplementedError(
         "GetWeightsSectionOffset is not implemented for Task model.");
   }
+  absl::StatusOr<FileRegion> GetTFLiteModelSectionFileRegion(
+      ModelType model_type) override {
+    return absl::UnimplementedError(
+        "GetTFLiteModelSectionFileRegion is not implemented for Task "
+        "model.");
+  }
+
 
  private:
   explicit ModelResourcesTask(
@@ -76,6 +83,7 @@ class ModelResourcesTask : public ModelResources {
 
   absl::flat_hash_map<ModelType, std::shared_ptr<litert::Model>> model_map_;
   std::unique_ptr<proto::LlmMetadata> llm_metadata_;
+  std::unique_ptr<proto::ExecutorMetadata> executor_metadata_;
 
   // The model asset bundle resources produced by reading task bundle. Not null
   // only when the model is provided through .task format. If the model is

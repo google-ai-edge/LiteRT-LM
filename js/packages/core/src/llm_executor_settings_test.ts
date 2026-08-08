@@ -58,7 +58,7 @@ describe('LlmExecutorSettings', () => {
 
   it('sets and gets backend config GPU', () => {
     const gpuConfig = {
-      max_top_k: 1,
+      max_top_k: 42,
       external_tensor_mode: true,
     };
     llmExecutorSettings.setBackendConfigGpu(gpuConfig);
@@ -67,7 +67,7 @@ describe('LlmExecutorSettings', () => {
 
   it('throws error if getting CPU config when GPU config is set', () => {
     const gpuConfig = {
-      max_top_k: 1,
+      max_top_k: 42,
       external_tensor_mode: true,
     };
     llmExecutorSettings.setBackendConfigGpu(gpuConfig);

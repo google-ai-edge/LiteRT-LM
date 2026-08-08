@@ -25,9 +25,9 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
-#include "support/tokenizer/tokenizer.h"  // from @litert
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
+#include "support/tokenizer/tokenizer.h"
 
 namespace litert::lm {
 
@@ -257,8 +257,11 @@ class SessionInterface {
   virtual absl::StatusOr<BenchmarkInfo*> GetMutableBenchmarkInfo() = 0;
 
   // Cancels the ongoing inference process. Note that if this function is
-  // called, the inference process will return with a kCancelled error. The
-  // session could still be used after afterwards.
+  // called, the inference process will return with a kCancelled error.
+  //
+  // NOTE: Reusing the session after calling CancelProcess() is neither
+  // recommended nor supported. Calling CancelProcess() leaves the session
+  // state poisoned, and subsequent operations may fail or behave incorrectly.
   virtual void CancelProcess() {
     ABSL_LOG(FATAL) << "CancelProcess is not implemented.";
   }

@@ -19,9 +19,9 @@
 #include <variant>
 #include <vector>
 
-#include "absl/status/statusor.h"  // from @com_google_absl
-
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "runtime/components/prompt_template.h"
 #include "runtime/conversation/io_types.h"
@@ -59,8 +59,9 @@ absl::Status FillPrefaceForPromptTemplateInput(
 
     if (json_preface.messages.is_array()) {
       for (auto& message : json_preface.messages) {
-        ASSIGN_OR_RETURN(nlohmann::ordered_json message_tmpl_input,
-                         model_data_processor->MessageToTemplateInput(message));
+        ABSL_ASSIGN_OR_RETURN(
+            nlohmann::ordered_json message_tmpl_input,
+            model_data_processor->MessageToTemplateInput(message));
         tmpl_input.messages.push_back(message_tmpl_input);
       }
     }
@@ -68,8 +69,8 @@ absl::Status FillPrefaceForPromptTemplateInput(
     if (json_preface.tools.is_null()) {
       tmpl_input.tools = nullptr;
     } else {
-      ASSIGN_OR_RETURN(tmpl_input.tools,
-                       model_data_processor->FormatTools(json_preface.tools));
+      ABSL_ASSIGN_OR_RETURN(tmpl_input.tools, model_data_processor->FormatTools(
+                                                  json_preface.tools));
     }
     tmpl_input.extra_context = json_preface.extra_context;
   } else {
@@ -80,11 +81,10 @@ absl::Status FillPrefaceForPromptTemplateInput(
 
 absl::StatusOr<ModelDataProcessor::SingleTurnTemplateRenderResult>
 RenderSingleTurnTemplateCommon(
-    const ModelDataProcessor& processor,
-    std::vector<Message>& history, const Preface& preface,
-    const Message& message, const PromptTemplate& prompt_template,
-    bool current_is_appending_message, bool append_message,
-    std::optional<nlohmann::ordered_json> extra_context,
+    const ModelDataProcessor& processor, std::vector<Message>& history,
+    const Preface& preface, const Message& message,
+    const PromptTemplate& prompt_template, bool current_is_appending_message,
+    bool append_message, std::optional<nlohmann::ordered_json> extra_context,
     bool push_dummy_user_message_to_preface) {
   const auto& json_preface = std::get<JsonPreface>(preface);
   std::string prefill_text = "";
@@ -120,22 +120,22 @@ RenderSingleTurnTemplateCommon(
           {"role", last_message["role"]},
           {"content", ""},
       };
-      ASSIGN_OR_RETURN(nlohmann::ordered_json message_tmpl_input,
-                       processor.MessageToTemplateInput(closing_message));
+      ABSL_ASSIGN_OR_RETURN(nlohmann::ordered_json message_tmpl_input,
+                            processor.MessageToTemplateInput(closing_message));
       closing_tmpl_input.extra_context["message"] = message_tmpl_input;
       closing_tmpl_input.extra_context["is_appending_to_prefill"] = true;
       closing_tmpl_input.extra_context["is_first_part"] = false;
       closing_tmpl_input.extra_context["is_last_part"] = true;
       closing_tmpl_input.add_generation_prompt = false;
       StripBlobsFromTemplateInput(closing_tmpl_input);
-      ASSIGN_OR_RETURN(std::string closing_text,
-                       prompt_template.Apply(closing_tmpl_input));
+      ABSL_ASSIGN_OR_RETURN(std::string closing_text,
+                            prompt_template.Apply(closing_tmpl_input));
       prefill_text += closing_text;
     }
   } else {
     PromptTemplateInput preface_tmpl_input;
-    RETURN_IF_ERROR(FillPrefaceForPromptTemplateInput(json_preface, &processor,
-                                                       preface_tmpl_input));
+    ABSL_RETURN_IF_ERROR(FillPrefaceForPromptTemplateInput(
+        json_preface, &processor, preface_tmpl_input));
     if (!json_preface.messages.empty() || !json_preface.tools.empty() ||
         !json_preface.extra_context.is_null()) {
       if (push_dummy_user_message_to_preface) {
@@ -151,15 +151,15 @@ RenderSingleTurnTemplateCommon(
       }
 
       StripBlobsFromTemplateInput(preface_tmpl_input);
-      ASSIGN_OR_RETURN(std::string preface_text,
-                       prompt_template.Apply(preface_tmpl_input));
+      ABSL_ASSIGN_OR_RETURN(std::string preface_text,
+                            prompt_template.Apply(preface_tmpl_input));
       prefill_text += preface_text;
     }
   }
   if (message.is_object()) {
     PromptTemplateInput tmpl_input;
-    ASSIGN_OR_RETURN(tmpl_input.extra_context["message"],
-                     processor.MessageToTemplateInput(message));
+    ABSL_ASSIGN_OR_RETURN(tmpl_input.extra_context["message"],
+                          processor.MessageToTemplateInput(message));
     tmpl_input.extra_context["is_appending_to_prefill"] = true;
     tmpl_input.extra_context["is_first_part"] =
         is_first_part || is_role_changed;
@@ -173,7 +173,8 @@ RenderSingleTurnTemplateCommon(
     }
 
     StripBlobsFromTemplateInput(tmpl_input);
-    ASSIGN_OR_RETURN(std::string new_text, prompt_template.Apply(tmpl_input));
+    ABSL_ASSIGN_OR_RETURN(std::string new_text,
+                          prompt_template.Apply(tmpl_input));
     prefill_text += new_text;
   }
   return ModelDataProcessor::SingleTurnTemplateRenderResult{

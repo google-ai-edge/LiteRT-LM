@@ -1,0 +1,98 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "AppConfig",
+  "type": "object",
+  "properties": {
+    "default": {
+      "$ref": "#/definitions/ModelConfig"
+    },
+    "models": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/ModelConfig"
+      }
+    }
+  },
+  "additionalProperties": true,
+  "definitions": {
+    "ModelConfig": {
+      "type": "object",
+      "properties": {
+        "backend": {
+          "type": "string",
+          "enum": ["cpu", "gpu", "npu"],
+          "$comment": "Added in version 0.15.0"
+        },
+        "cpu_thread_count": {
+          "type": "integer",
+          "minimum": 1,
+          "$comment": "Added in version 0.15.0"
+        },
+        "audio_backend": {
+          "type": "string",
+          "enum": ["cpu", "gpu", "npu"],
+          "$comment": "Added in version 0.15.0"
+        },
+        "vision_backend": {
+          "type": "string",
+          "enum": ["cpu", "gpu", "npu"],
+          "$comment": "Added in version 0.15.0"
+        },
+        "cache": {
+          "type": "string",
+          "enum": ["disk", "memory", "no"],
+          "$comment": "Added in version 0.15.0"
+        },
+        "max_num_tokens": {
+          "type": "integer",
+          "minimum": 1,
+          "$comment": "Added in version 0.15.0"
+        },
+        "temperature": {
+          "type": "number",
+          "minimum": 0.0,
+          "$comment": "Added in version 0.15.0"
+        },
+        "top_p": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "$comment": "Added in version 0.15.0"
+        },
+        "top_k": {
+          "type": "integer",
+          "minimum": 1,
+          "$comment": "Added in version 0.15.0"
+        },
+        "seed": {
+          "type": "integer",
+          "$comment": "Added in version 0.15.0"
+        },
+        "gpu_decode_steps_per_sync": {
+          "type": "integer",
+          "minimum": 1,
+          "$comment": "Added in version 0.15.0"
+        },
+        "speculative_decoding": {
+          "type": "boolean",
+          "$comment": "Added in version 0.15.0"
+        },
+        "thinking": {
+          "type": "boolean",
+          "$comment": "Added in version 0.15.0"
+        },
+        "thinking_budget": {
+          "type": "integer",
+          "minimum": -1,
+          "$comment": "Added in version 0.15.0"
+        },
+        "activation_data_type": {
+          "type": "string",
+          "enum": ["fp32", "fp16", "int16", "int8"],
+          "$comment": "Added in version 0.15.0"
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}

@@ -30,11 +30,11 @@
 #include "absl/log/log.h"  // from @com_google_absl
 #include "absl/memory/memory.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
-#include "support/tokenizer/tokenizer.h"  // from @litert
 #include "runtime/core/session_utils.h"
 #include "runtime/engine/engine.h"
 #include "runtime/engine/engine_settings.h"
@@ -42,6 +42,7 @@
 #include "runtime/framework/resource_management/execution_manager.h"
 #include "runtime/proto/sampler_params.pb.h"
 #include "runtime/util/status_macros.h"  // IWYU pragma: keep
+#include "support/tokenizer/tokenizer.h"
 
 namespace litert::lm {
 namespace {
@@ -61,10 +62,11 @@ absl::StatusOr<std::unique_ptr<SessionAdvanced>> SessionAdvanced::Create(
   if (execution_manager_lock == nullptr) {
     return absl::FailedPreconditionError("Execution manager is not available.");
   }
-  ASSIGN_OR_RETURN(auto session_id, execution_manager_lock->RegisterNewSession(
-                                        session_config, benchmark_info));
-  ASSIGN_OR_RETURN(auto session_info_,
-                   execution_manager_lock->GetSessionInfo(session_id));
+  ABSL_ASSIGN_OR_RETURN(auto session_id,
+                        execution_manager_lock->RegisterNewSession(
+                            session_config, benchmark_info));
+  ABSL_ASSIGN_OR_RETURN(auto session_info_,
+                        execution_manager_lock->GetSessionInfo(session_id));
   return absl::WrapUnique(new SessionAdvanced(
       session_id, execution_manager, tokenizer, session_info_,
       /*session_state=*/SessionState::kFresh,
@@ -74,12 +76,12 @@ absl::StatusOr<std::unique_ptr<SessionAdvanced>> SessionAdvanced::Create(
 absl::Status SessionAdvanced::RunPrefill(
     const std::vector<InputData>& contents) {
   absl::Status status = absl::OkStatus();
-  ASSIGN_OR_RETURN(
+  ABSL_ASSIGN_OR_RETURN(
       auto task_controller,
       RunPrefillAsync(contents, [&status](absl::StatusOr<Responses> responses) {
         status = responses.status();
       }));
-  RETURN_IF_ERROR(task_controller->WaitUntilDone(Engine::kDefaultTimeout));
+  ABSL_RETURN_IF_ERROR(task_controller->WaitUntilDone(Engine::kDefaultTimeout));
   return status;
 }
 
@@ -102,7 +104,7 @@ SessionAdvanced::RunPrefillAsync(
   if (session_info_->benchmark_info.has_value() &&
       session_info_->benchmark_info->GetBenchmarkParams().num_prefill_tokens() >
           0) {
-    ASSIGN_OR_RETURN(
+    ABSL_ASSIGN_OR_RETURN(
         preprocessed_contents,
         PreprocessContents(contents, session_info_->session_config, *tokenizer_,
                            session_info_->benchmark_info));
@@ -116,17 +118,17 @@ SessionAdvanced::RunPrefillAsync(
     } else {
       content_type = ContentType::kNA;
     }
-    ASSIGN_OR_RETURN(std::vector<InputData> templated_contents,
-                     ApplyPromptTemplates(contents, content_type,
-                                          session_info_->session_config,
-                                          *tokenizer_, is_first_turn));
-    ASSIGN_OR_RETURN(
+    ABSL_ASSIGN_OR_RETURN(std::vector<InputData> templated_contents,
+                          ApplyPromptTemplates(contents, content_type,
+                                               session_info_->session_config,
+                                               *tokenizer_, is_first_turn));
+    ABSL_ASSIGN_OR_RETURN(
         preprocessed_contents,
         PreprocessContents(templated_contents, session_info_->session_config,
                            *tokenizer_, session_info_->benchmark_info));
   }
-  ASSIGN_OR_RETURN(auto task_id, execution_manager_lock->GetNewTaskId());
-  RETURN_IF_ERROR(execution_manager_lock->AddPrefillTask(
+  ABSL_ASSIGN_OR_RETURN(auto task_id, execution_manager_lock->GetNewTaskId());
+  ABSL_RETURN_IF_ERROR(execution_manager_lock->AddPrefillTask(
       session_id_, task_id, std::move(preprocessed_contents), last_task_ids_,
       cancelled, std::move(callback)));
   session_state_ = SessionState::kPrefilled;
@@ -147,8 +149,8 @@ SessionAdvanced::PrefillPreprocessedContents(
     return absl::FailedPreconditionError("Execution manager is not available.");
   }
 
-  ASSIGN_OR_RETURN(auto task_id, execution_manager_lock->GetNewTaskId());
-  RETURN_IF_ERROR(execution_manager_lock->AddPrefillTask(
+  ABSL_ASSIGN_OR_RETURN(auto task_id, execution_manager_lock->GetNewTaskId());
+  ABSL_RETURN_IF_ERROR(execution_manager_lock->AddPrefillTask(
       session_id_, task_id, std::move(preprocessed_contents), last_task_ids_,
       cancelled, std::move(callback)));
   session_state_ = SessionState::kPrefilled;
@@ -232,10 +234,10 @@ absl::StatusOr<Responses> SessionAdvanced::RunDecode(
     }
   };
 
-  ASSIGN_OR_RETURN(
+  ABSL_ASSIGN_OR_RETURN(
       auto task_controller,
       RunDecodeAsync(std::move(decode_sync_callback), decode_config));
-  RETURN_IF_ERROR(task_controller->WaitUntilDone(Engine::kDefaultTimeout));
+  ABSL_RETURN_IF_ERROR(task_controller->WaitUntilDone(Engine::kDefaultTimeout));
   return collected_responses;
 }
 
@@ -264,19 +266,20 @@ absl::StatusOr<std::unique_ptr<TaskController>> SessionAdvanced::RunDecodeAsync(
   if (session_info_->session_config.GetApplyPromptTemplateInSession()) {
     std::vector<InputData> contents;
     contents.emplace_back(InputText(""));
-    ASSIGN_OR_RETURN(
+    ABSL_ASSIGN_OR_RETURN(
         std::vector<InputData> templated_contents,
         ApplyPromptTemplates(contents, ContentType::kLast,
                              session_info_->session_config, *tokenizer_,
                              /*is_first_turn=*/false));
     if (!templated_contents.empty()) {
-      ASSIGN_OR_RETURN(
+      ABSL_ASSIGN_OR_RETURN(
           std::vector<InputData> preprocessed_contents,
           PreprocessContents(templated_contents, session_info_->session_config,
                              *tokenizer_, session_info_->benchmark_info));
       auto noop_callback = [](absl::StatusOr<Responses> responses) {};
-      ASSIGN_OR_RETURN(auto task_id, execution_manager_lock->GetNewTaskId());
-      RETURN_IF_ERROR(execution_manager_lock->AddPrefillTask(
+      ABSL_ASSIGN_OR_RETURN(auto task_id,
+                            execution_manager_lock->GetNewTaskId());
+      ABSL_RETURN_IF_ERROR(execution_manager_lock->AddPrefillTask(
           session_id_, task_id, std::move(preprocessed_contents),
           last_task_ids_, cancelled, std::move(noop_callback)));
       last_task_ids_ = {task_id};
@@ -284,15 +287,20 @@ absl::StatusOr<std::unique_ptr<TaskController>> SessionAdvanced::RunDecodeAsync(
   }
   session_state_ = SessionState::kDecoded;
 
-  ASSIGN_OR_RETURN(auto task_id, execution_manager_lock->GetNewTaskId());
+  ABSL_ASSIGN_OR_RETURN(auto task_id, execution_manager_lock->GetNewTaskId());
 
-  RETURN_IF_ERROR(execution_manager_lock->AddDecodeTask(
+  ABSL_RETURN_IF_ERROR(execution_manager_lock->AddDecodeTask(
       session_id_, task_id, last_task_ids_,
       decode_config.GetRepetitionPenaltyConfig(),
-      decode_config.GetSuppressTokensConfig(), decode_config.GetConstraint(),
-      cancelled, std::move(callback),
+      decode_config.GetNoRepeatNgramConfig(),
+      decode_config.GetSuppressTokensConfig().value_or(
+          session_info_->session_config.GetSuppressTokensConfig()),
+      decode_config.GetConstraint(), cancelled, std::move(callback),
       decode_config.GetMaxOutputTokens().value_or(
-          session_info_->session_config.GetMaxOutputTokens())));
+          session_info_->session_config.GetMaxOutputTokens()),
+      decode_config.GetThinkingTokenBudget(),
+      decode_config.GetThinkingStartTokenIds(),
+      decode_config.GetThinkingEndTokenIds()));
 
   last_task_ids_ = {task_id};
 
@@ -318,11 +326,11 @@ absl::StatusOr<Responses> SessionAdvanced::RunTextScoring(
         collected_responses = std::move(responses);
       };
 
-  ASSIGN_OR_RETURN(
+  ABSL_ASSIGN_OR_RETURN(
       auto task_controller,
       RunTextScoringAsync(target_text, std::move(scoring_sync_callback),
                           store_token_lengths));
-  RETURN_IF_ERROR(task_controller->WaitUntilDone(Engine::kDefaultTimeout));
+  ABSL_RETURN_IF_ERROR(task_controller->WaitUntilDone(Engine::kDefaultTimeout));
   return collected_responses;
 }
 
@@ -341,8 +349,8 @@ SessionAdvanced::RunTextScoringAsync(
   }
 
   auto cancelled = std::make_shared<std::atomic<bool>>(false);
-  ASSIGN_OR_RETURN(auto task_id, execution_manager_lock->GetNewTaskId());
-  RETURN_IF_ERROR(execution_manager_lock->AddTextScoringTask(
+  ABSL_ASSIGN_OR_RETURN(auto task_id, execution_manager_lock->GetNewTaskId());
+  ABSL_RETURN_IF_ERROR(execution_manager_lock->AddTextScoringTask(
       session_id_, task_id, last_task_ids_, target_text, store_token_lengths,
       cancelled, std::move(callback)));
 
@@ -352,7 +360,7 @@ SessionAdvanced::RunTextScoringAsync(
 
 absl::StatusOr<Responses> SessionAdvanced::GenerateContent(
     const std::vector<InputData>& contents) {
-  RETURN_IF_ERROR(RunPrefill(contents));
+  ABSL_RETURN_IF_ERROR(RunPrefill(contents));
   return RunDecode();
 }
 
@@ -387,8 +395,8 @@ absl::Status SessionAdvanced::GenerateContentStream(
         }
       };
 
-  ASSIGN_OR_RETURN(auto task_controller,
-                   RunPrefillAsync(contents, std::move(prefill_callback)));
+  ABSL_ASSIGN_OR_RETURN(auto task_controller,
+                        RunPrefillAsync(contents, std::move(prefill_callback)));
 
   return absl::OkStatus();
 }
@@ -416,14 +424,14 @@ absl::StatusOr<std::unique_ptr<SessionInterface>> SessionAdvanced::Clone() {
   std::unique_ptr<SessionInterface> session;
   {
     absl::MutexLock lock(mutex_);
-    ASSIGN_OR_RETURN(
+    ABSL_ASSIGN_OR_RETURN(
         session,
         CloneAsyncLocked([&status](absl::StatusOr<Responses> responses) {
           status = responses.status();
         }));
   }
-  RETURN_IF_ERROR(session->WaitUntilDone());
-  RETURN_IF_ERROR(status);
+  ABSL_RETURN_IF_ERROR(session->WaitUntilDone());
+  ABSL_RETURN_IF_ERROR(status);
   return session;
 }
 
@@ -441,20 +449,21 @@ SessionAdvanced::CloneAsyncLocked(
     return absl::FailedPreconditionError("Execution manager is not available.");
   }
 
-  ASSIGN_OR_RETURN(auto task_id, execution_manager_lock->GetNewTaskId());
+  ABSL_ASSIGN_OR_RETURN(auto task_id, execution_manager_lock->GetNewTaskId());
 
-  ASSIGN_OR_RETURN(auto session_id, execution_manager_lock->RegisterNewSession(
-                                        session_info_->session_config,
-                                        session_info_->benchmark_info));
+  ABSL_ASSIGN_OR_RETURN(
+      auto session_id,
+      execution_manager_lock->RegisterNewSession(
+          session_info_->session_config, session_info_->benchmark_info));
 
-  RETURN_IF_ERROR(execution_manager_lock->AddCloneSessionTask(
+  ABSL_RETURN_IF_ERROR(execution_manager_lock->AddCloneSessionTask(
       session_id_, task_id, last_task_ids_, session_id,
       std::make_shared<std::atomic<bool>>(false), std::move(callback)));
 
   last_task_ids_ = {task_id};
 
-  ASSIGN_OR_RETURN(auto session_info,
-                   execution_manager_lock->GetSessionInfo(session_id));
+  ABSL_ASSIGN_OR_RETURN(auto session_info,
+                        execution_manager_lock->GetSessionInfo(session_id));
 
   return absl::WrapUnique(new SessionAdvanced(session_id, execution_manager_,
                                               tokenizer_, session_info,
@@ -483,8 +492,8 @@ absl::Status SessionAdvanced::SaveCheckpoint(absl::string_view label) {
   if (execution_manager_lock == nullptr) {
     return absl::FailedPreconditionError("Execution manager is not available.");
   }
-  ASSIGN_OR_RETURN(int current_step,
-                   execution_manager_lock->GetCurrentStep(*session_info_));
+  ABSL_ASSIGN_OR_RETURN(int current_step,
+                        execution_manager_lock->GetCurrentStep(*session_info_));
   checkpoint_map_[label] = {current_step, session_state_, last_task_ids_};
   return absl::OkStatus();
 }

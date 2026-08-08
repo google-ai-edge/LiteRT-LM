@@ -31,8 +31,11 @@ message LlmModelType {
     Qwen2p5 qwen2p5 = 7;
     Gemma4 gemma4 = 8;
     FastVlm fast_vlm = 9;
+    Lfm2 lfm2 = 11;
+    MiniCPM5 minicpm5 = 12;
   }
 }
+
 
 // The default model type for the generic model.
 message GenericModel {
@@ -311,3 +314,49 @@ message FastVlm {
 
   reserved 1, 2;
 }
+
+// LFM Model
+message Lfm2 {
+  TokenUnion start_of_image_token = 1;
+  // The end of image token indicates the end of image
+  TokenUnion end_of_image_token = 2;
+
+  // The patch width that the image preprocessor should patchify the image to.
+  int32 patch_width = 3;
+  // The patch height that the image preprocessor should patchify the image to.
+  int32 patch_height = 4;
+
+  // The maximum number of patches that the image preprocessor should patchify
+  // the image to.
+  int32 max_num_patches = 5;
+
+  // The pooling kernel size that the image preprocessor should use for
+  // patchifying the image.
+  int32 pooling_kernel_size = 6;
+
+  // The height of the image tensor that the image preprocessor should resize
+  // to.
+  int32 image_tensor_height = 7;
+  // The width of the image tensor that the image preprocessor should resize to.
+  int32 image_tensor_width = 8;
+
+  // Image normalization parameters.
+  repeated float normalization_mean = 9;
+  repeated float normalization_std = 10;
+  float normalization_rescale_factor = 11;
+}
+
+// Model configuration for MiniCPM5.
+message MiniCPM5 {
+  // Options for tool calling.
+  // Signifies the beginning of a tool call.
+  optional string code_fence_start = 1;
+  // Signifies the end of tool call.
+  optional string code_fence_end = 2;
+  // Whether to escape the fence strings for regex matching.
+  optional bool escape_fence_strings = 3;
+  // An optional regex to match each line of the tool code block.
+  optional string tool_code_regex = 4;
+}
+
+

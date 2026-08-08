@@ -23,15 +23,16 @@
 #include <vector>
 
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
-#include "support/preprocessor/image_preprocessor.h"  // from @litert
 #include "runtime/conversation/model_data_processor/data_utils.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/util/memory_mapped_file.h"
 #include "runtime/util/status_macros.h"
+#include "support/preprocessor/image_preprocessor.h"
 #include "re2/re2.h"  // from @com_googlesource_code_re2
 
 namespace litert::lm {
@@ -58,8 +59,8 @@ absl::StatusOr<std::vector<InputData>> ProcessMultimodalPrompt(
         if (!item.contains("type")) {
           continue;
         }
-        ASSIGN_OR_RETURN(std::unique_ptr<MemoryMappedFile> mmap_file,
-                         LoadItemData(item));
+        ABSL_ASSIGN_OR_RETURN(std::unique_ptr<MemoryMappedFile> mmap_file,
+                              LoadItemData(item));
         if (item["type"] == "image") {
           image_files.push_back(std::move(mmap_file));
         } else if (item["type"] == "audio") {
@@ -133,12 +134,12 @@ absl::StatusOr<std::vector<InputData>> ProcessMultimodalPrompt(
       auto image_file = std::move(image_files.front());
       image_files.pop_front();
 
-      ASSIGN_OR_RETURN(auto preprocessed_image,
-                       image_preprocessor->Preprocess(
-                           InputImage(std::string(
-                               static_cast<const char*>(image_file->data()),
-                               image_file->length())),
-                           img_params));
+      ABSL_ASSIGN_OR_RETURN(auto preprocessed_image,
+                            image_preprocessor->Preprocess(
+                                InputImage(std::string(static_cast<const char*>(
+                                                           image_file->data()),
+                                                       image_file->length())),
+                                img_params));
       input_data.emplace_back(InputImage(std::move(preprocessed_image)));
 
       if (config.add_image_end) {
@@ -166,10 +167,11 @@ absl::StatusOr<std::vector<InputData>> ProcessMultimodalPrompt(
       auto audio_file = std::move(audio_files.front());
       audio_files.pop_front();
 
-      ASSIGN_OR_RETURN(auto preprocessed_audio,
-                       audio_preprocessor->Preprocess(InputAudio(std::string(
-                           static_cast<const char*>(audio_file->data()),
-                           audio_file->length()))));
+      ABSL_ASSIGN_OR_RETURN(
+          auto preprocessed_audio,
+          audio_preprocessor->Preprocess(InputAudio(
+              std::string(static_cast<const char*>(audio_file->data()),
+                          audio_file->length()))));
       audio_preprocessor->Reset();
 
       input_data.emplace_back(InputAudio(std::move(preprocessed_audio)));

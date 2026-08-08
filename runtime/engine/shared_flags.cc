@@ -21,8 +21,9 @@
 #include "absl/flags/flag.h"  // from @com_google_absl
 
 ABSL_FLAG(std::optional<std::string>, vision_backend, std::nullopt,
-          "Backend to use for the vision model (cpu or gpu). If not specified, "
-          "the vision backend will be chosen based on the main backend.");
+          "Backend to use for the vision model (cpu, gpu, or npu). If not "
+          "specified, the vision backend will be chosen based on the main "
+          "backend.");
 ABSL_FLAG(std::optional<std::string>, audio_backend, std::nullopt,
           "Backend to use for the audio model (cpu or gpu). If not specified, "
           "the audio backend will be chosen based on the main backend.");
@@ -55,6 +56,7 @@ ABSL_FLAG(int, num_output_candidates, 1,
           "The number of candidates generated for the given prompt, or the "
           "batch size of the decode signature.");
 ABSL_FLAG(bool, benchmark, false, "Benchmark the LLM execution.");
+ABSL_FLAG(bool, enable_profiling, false, "Enable per-op profiling.");
 ABSL_FLAG(int, benchmark_prefill_tokens, 0,
           "If benchmark is true and the value is larger than 0, the benchmark "
           "will use this number to set the number of prefill tokens "
@@ -74,6 +76,8 @@ ABSL_FLAG(bool, multi_turns, false,
 ABSL_FLAG(int, num_cpu_threads, 0,
           "If greater than 0, the number of CPU threads to use for the LLM "
           "execution with CPU backend.");
+ABSL_FLAG(bool, enable_ynnpack, false,
+          "Delegate supported CPU operations to YNNPACK before XNNPACK.");
 ABSL_FLAG(bool, gpu_external_tensor_mode, false,
           "If false (by default), the GPU backend will use no external tensor "
           "mode which runs slightly faster during decode. It should be set "
@@ -164,6 +168,13 @@ ABSL_FLAG(
 ABSL_FLAG(int, repetition_window_size, 0,
           "The maximum number of recent tokens to consider for penalization. "
           "Tokens older than this are forgotten. 0 means track all history.");
+ABSL_FLAG(int, no_repeat_ngram_size, 0,
+          "If greater than 0, all ngrams of this size can only occur once in "
+          "the generated sequence. The logits of the banned tokens will be set "
+          "to -inf.");
+ABSL_FLAG(int, no_repeat_ngram_window_size, 0,
+          "The maximum number of recent tokens to consider for banning. "
+          "Tokens older than this are forgotten. 0 means track all history.");
 ABSL_FLAG(std::string, suppress_tokens, "",
           "A comma-separated list of tokens to suppress.");
 ABSL_FLAG(std::string, constraint_regex, "",
@@ -181,3 +192,13 @@ ABSL_FLAG(bool, use_hw_cache_update_for_npu, true,
 ABSL_FLAG(bool, use_hw_ple_for_npu, true, "If true, use HW PLE for NPU.");
 ABSL_FLAG(bool, enable_npu_debug_logging, false,
           "If true, enable debug logging for NPU.");
+ABSL_FLAG(
+    bool, disable_input_prompt_as_hint, false,
+    "If true, disable the input prompt as a hint when creating the engine. "
+    "This is useful to align the behavior of other languages with C++, where "
+    "the input prompt is not used as a hint.");
+ABSL_FLAG(bool, gpu_enable_metal_residency_set, false,
+          "If true, enable metal residency set for GPU backend which prevents "
+          "model weigths from being swapped out from memory. Note that it will "
+          "increase the memory pressure for other applications and may cause "
+          "others' crash with out-of-memory failures.");

@@ -25,13 +25,14 @@ import io
 import mimetypes
 import os
 import pathlib
-import traceback
+from typing import Any
 
 import click
 
 import litert_lm
 from litert_lm_builder import litertlm_builder
 from litert_lm_builder import litertlm_peek
+from litert_lm_cli import config
 
 # The default model types representing the main text model components.
 _DEFAULT_TARGET_MODEL_TYPES = frozenset({
@@ -175,13 +176,17 @@ def model_default_backend(
 
 
 def _create_backend_obj(
-    backend_name: str | None, cpu_thread_count: int | None = None
+    backend_name: str | None,
+    cpu_thread_count: int | None = None,
+    gpu_decode_steps_per_sync: int | None = None,
 ) -> litert_lm.Backend | None:
   """Creates a litert_lm.Backend object from name, or returns None."""
   if backend_name is None:
     return None
   elif backend_name == "gpu":
-    return litert_lm.Backend.GPU()
+    return litert_lm.Backend.GPU(
+        gpu_decode_steps_per_sync=gpu_decode_steps_per_sync
+    )
   elif backend_name == "npu":
     return litert_lm.Backend.NPU()
   else:
@@ -191,47 +196,153 @@ def _create_backend_obj(
 def parse_backend(
     backend: str | None = None,
     *,
-    model_obj: Model | None = None,
+    model_obj: Model,
     cpu_thread_count: int | None = None,
     target_model_types: collections.abc.Container[
         str
     ] = _DEFAULT_TARGET_MODEL_TYPES,
     label: str | None = None,
+    gpu_decode_steps_per_sync: int | None = None,
 ) -> litert_lm.Backend | None:
   """Parses the backend string and resolves it against model constraints.
 
   Args:
     backend: The backend requested by the user (e.g., "cpu", "gpu", "npu").
-    model_obj: Optional Model instance to check for constraints.
+    model_obj: Model instance to check for constraints.
     cpu_thread_count: Optional thread count for CPU backend.
     target_model_types: Container of model types to look for when resolving
       default backend. Defaults to main model types.
     label: Optional label for the backend (e.g., "audio", "vision") used in log
       messages.
+    gpu_decode_steps_per_sync: Optional decode steps per sync for GPU backend.
 
   Returns:
     The resolved litert_lm.Backend to use, or None if not supported.
   """
-  if backend is not None:
-    return _create_backend_obj(backend.lower(), cpu_thread_count)
+  model_cfg = config.get_model_config(model_obj.model_id)
+  is_main_model = target_model_types == _DEFAULT_TARGET_MODEL_TYPES
 
-  if model_obj is not None:
-    default_backend = model_default_backend(
-        model_obj.model_path, target_model_types
-    )
-    if default_backend is None:
-      return None
-
-    if default_backend != "cpu":
-      label_str = f" for {label}" if label else ""
-      click.echo(
-          click.style(
-              f"Using model's default backend{label_str}: {default_backend}",
-              fg="bright_black",
-          )
+  # 1. Resolve Backend
+  resolved_backend = backend
+  backend_from_config = False
+  if resolved_backend is None:
+    if is_main_model and model_cfg.backend is not None:
+      resolved_backend = model_cfg.backend
+      backend_from_config = True
+    elif label == "vision" and model_cfg.vision_backend is not None:
+      resolved_backend = model_cfg.vision_backend
+      backend_from_config = True
+    elif label == "audio" and model_cfg.audio_backend is not None:
+      resolved_backend = model_cfg.audio_backend
+      backend_from_config = True
+    else:
+      resolved_backend = model_default_backend(
+          model_obj.model_path, target_model_types
       )
+      # Print info message for model's default backend if it is not CPU
+      if resolved_backend and resolved_backend != "cpu":
+        label_str = f" for {label}" if label else ""
+        click.echo(
+            click.style(
+                f"Using model's default backend{label_str}: {resolved_backend}",
+                fg="bright_black",
+            )
+        )
 
-    return _create_backend_obj(default_backend, cpu_thread_count)
+  if resolved_backend is None:
+    return None
+
+  # Print info message if backend came from config
+  if backend_from_config:
+    label_str = f" for {label}" if label else ""
+    click.echo(
+        click.style(
+            f"Using backend{label_str} from config for model"
+            f" '{model_obj.model_id}': {resolved_backend}",
+            fg="bright_black",
+        )
+    )
+
+  # 2. Resolve CPU Thread Count
+  resolved_threads = cpu_thread_count
+  threads_from_config = False
+  if resolved_threads is None:
+    if is_main_model and model_cfg.cpu_thread_count is not None:
+      resolved_threads = model_cfg.cpu_thread_count
+      threads_from_config = True
+
+  # Print info message if threads came from config
+  if threads_from_config:
+    click.echo(
+        click.style(
+            "Using cpu_thread_count from config for model"
+            f" '{model_obj.model_id}': {resolved_threads}",
+            fg="bright_black",
+        )
+    )
+
+  # 3. Resolve GPU Decode Steps Per Sync
+  resolved_gpu_decode_steps_per_sync = gpu_decode_steps_per_sync
+  gpu_decode_steps_from_config = False
+  if resolved_gpu_decode_steps_per_sync is None:
+    if is_main_model and model_cfg.gpu_decode_steps_per_sync is not None:
+      resolved_gpu_decode_steps_per_sync = model_cfg.gpu_decode_steps_per_sync
+      gpu_decode_steps_from_config = True
+
+  # Print info message if gpu_decode_steps_per_sync came from config
+  if gpu_decode_steps_from_config:
+    click.echo(
+        click.style(
+            "Using gpu_decode_steps_per_sync from config for model"
+            f" '{model_obj.model_id}': {resolved_gpu_decode_steps_per_sync}",
+            fg="bright_black",
+        )
+    )
+
+  return _create_backend_obj(
+      resolved_backend.lower(),
+      resolved_threads,
+      resolved_gpu_decode_steps_per_sync,
+  )
+
+
+def resolve_config_option(
+    value: Any,
+    model_obj: Model | None,
+    config_key: str,
+    label: str | None = None,
+) -> Any:
+  """Resolves an option value, falling back to config if value is None.
+
+  Args:
+    value: Explicit value passed by CLI/user (if any).
+    model_obj: Model instance (if available).
+    config_key: Attribute name on ModelConfig (e.g. "cache", "max_num_tokens").
+    label: Display label for logging (defaults to config_key).
+
+  Returns:
+    The explicit value if set, otherwise value from ModelConfig if set,
+    otherwise None.
+  """
+  if value is not None or model_obj is None:
+    return value
+
+  model_id = getattr(model_obj, "model_id", None)
+  if not model_id:
+    return value
+
+  model_cfg = config.get_model_config(model_id)
+  config_val = getattr(model_cfg, config_key, None)
+  if config_val is not None:
+    display_label = label or config_key
+    click.echo(
+        click.style(
+            f"Using {display_label} from config for model"
+            f" '{model_id}': {config_val}",
+            fg="bright_black",
+        )
+    )
+    return config_val
 
   return None
 
@@ -282,9 +393,15 @@ class Model:
   @classmethod
   def from_model_path(cls, model_path):
     """Creates a Model instance from a model path."""
+    abs_path = os.path.abspath(model_path)
+    if os.path.basename(abs_path) == "model.litertlm":
+      parent_name = pathlib.Path(abs_path).parent.name
+      model_id = parent_name.replace("--", "/")
+    else:
+      model_id = os.path.basename(abs_path)
     return cls(
-        model_id=os.path.basename(model_path),
-        model_path=os.path.abspath(model_path),
+        model_id=model_id,
+        model_path=abs_path,
     )
 
   @classmethod
@@ -306,12 +423,7 @@ def model_id_dir_name(model_id):
   return model_id.replace("/", "--")
 
 
-def get_cli_base_dir() -> str:
-  """Gets the base directory for LiteRT-LM CLI."""
-  env_override = os.environ.get("LITERT_LM_DIR")
-  if env_override:
-    return os.path.abspath(env_override)
-  return os.path.join(os.path.expanduser("~"), ".litert-lm")
+get_cli_base_dir = config.get_cli_base_dir
 
 
 # ~/.litert-lm/models

@@ -22,6 +22,7 @@ from absl.testing import absltest
 
 from litert_lm_builder import litertlm_builder
 from litert_lm_builder import litertlm_peek
+from runtime.proto import executor_metadata_pb2
 
 
 class LitertlmPeekPyTest(absltest.TestCase):
@@ -144,7 +145,8 @@ class LitertlmPeekPyTest(absltest.TestCase):
 
     with open(os.path.join(dump_dir, "model.toml"), "r") as f:
       toml_content = f.read()
-      self.assertEqual(textwrap.dedent("""\
+      self.assertEqual(
+          textwrap.dedent("""\
           [system_metadata]
           entries = [
             { key = "arch", value_type = "String", value = "all" },
@@ -178,7 +180,9 @@ class LitertlmPeekPyTest(absltest.TestCase):
           [[section]]
           section_type = "GenericBinaryData"
           data_path = "Section3_GenericBinaryData.bin"
-          """), toml_content)
+          """),
+          toml_content,
+      )
 
   def test_dumped_litertlm_file_can_be_rebuilt(self):
     """Tests the process_litertlm_file function with dump_files_dir."""
@@ -278,6 +282,31 @@ class LitertlmPeekUtilTest(absltest.TestCase):
               "value_type": "String",
           },
       )
+
+  def test_peek_executor_metadata(self):
+    executor_metadata = executor_metadata_pb2.ExecutorMetadata(
+        llm_executor_metadata=executor_metadata_pb2.LlmExecutorMetadata(
+            max_history_size=8
+        )
+    )
+    bin_proto = executor_metadata.SerializeToString()
+    temp_dir = self.create_tempdir().full_path
+    metadata_path = os.path.join(temp_dir, "executor.pb")
+    with open(metadata_path, "wb") as f:
+      f.write(bin_proto)
+
+    builder = litertlm_builder.LitertLmFileBuilder()
+    builder.add_executor_metadata(metadata_path)
+    output_path = os.path.join(temp_dir, "test.litertlm")
+    with open(output_path, "wb") as f:
+      builder.build(f)
+
+    output_stream = io.StringIO()
+    litertlm_peek.peek_litertlm_file(output_path, temp_dir, output_stream)
+    stdout = output_stream.getvalue()
+    self.assertIn("<<<<<<<< start of ExecutorMetadata", stdout)
+    self.assertIn("max_history_size: 8", stdout)
+    self.assertIn(">>>>>>>> end of ExecutorMetadata", stdout)
 
 
 if __name__ == "__main__":

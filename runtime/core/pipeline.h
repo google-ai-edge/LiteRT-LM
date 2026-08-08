@@ -27,8 +27,8 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
-#include "support/tokenizer/tokenizer.h"  // from @litert
 #include "runtime/components/logits_processor/constrained_decoding/constraint.h"
+#include "runtime/components/logits_processor/no_repeat_ngram_config.h"
 #include "runtime/components/logits_processor/repetition_penalty_config.h"
 #include "runtime/components/logits_processor/suppress_tokens_config.h"
 #include "runtime/components/sampler.h"
@@ -37,6 +37,7 @@
 #include "runtime/executor/llm_executor.h"
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/proto/sampler_params.pb.h"
+#include "support/tokenizer/tokenizer.h"
 
 namespace litert::lm {
 
@@ -62,6 +63,8 @@ absl::StatusOr<int> Prefill(LlmExecutor& executor, ExecutorInputs& inputs,
 // - num_output_candidates: The number of output candidates to generate.
 // - repetition_penalty_config: The repetition penalty config to penalize
 //   repetitive tokens during decoding.
+// - no_repeat_ngram_config: The no repeat ngram config to ban repetitive
+//   ngrams.
 // - suppress_tokens_config: The suppress tokens config to suppress specific
 //   tokens during decoding.
 // - constraint: The constraint to constrain the decoding process.
@@ -72,6 +75,7 @@ absl::StatusOr<Responses> Decode(
     LlmExecutor& executor, Tokenizer& tokenizer,
     const StopTokenDetector& stop_token_detector, int num_output_candidates,
     RepetitionPenaltyConfig repetition_penalty_config,
+    NoRepeatNgramConfig no_repeat_ngram_config,
     SuppressTokensConfig suppress_tokens_config, Constraint* constraint,
     std::optional<BenchmarkInfo>& benchmark_info,
     std::atomic<bool>* cancelled = nullptr,
@@ -87,6 +91,7 @@ absl::Status DecodeStreaming(
     LlmExecutor& executor, Tokenizer& tokenizer,
     const StopTokenDetector& stop_token_detector, int num_output_candidates,
     RepetitionPenaltyConfig repetition_penalty_config,
+    NoRepeatNgramConfig no_repeat_ngram_config,
     SuppressTokensConfig suppress_tokens_config, Constraint* constraint,
     std::optional<BenchmarkInfo>& benchmark_info,
     absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback,
@@ -101,6 +106,8 @@ absl::Status DecodeStreaming(
 // - sampler: The sampler to sample the token ids from the logits.
 // - repetition_penalty_config: The repetition penalty config to penalize
 //   repetitive tokens during decoding.
+// - no_repeat_ngram_config: The no repeat ngram config to ban repetitive
+//   ngrams.
 // - suppress_tokens_config: The suppress tokens config to suppress specific
 //   tokens during decoding.
 // - constraint: The constraint to constrain the decoding process.
@@ -114,6 +121,7 @@ absl::StatusOr<Responses> DecodeCustomSampling(
     const StopTokenDetector& stop_token_detector, int num_output_candidates,
     Sampler& sampler, litert::TensorBuffer decoded_ids,
     RepetitionPenaltyConfig repetition_penalty_config,
+    NoRepeatNgramConfig no_repeat_ngram_config,
     SuppressTokensConfig suppress_tokens_config, Constraint* constraint,
     std::optional<BenchmarkInfo>& benchmark_info,
     std::atomic<bool>* cancelled = nullptr,
@@ -130,6 +138,7 @@ absl::Status DecodeCustomSamplingStreaming(
     const StopTokenDetector& stop_token_detector, int num_output_candidates,
     Sampler& sampler, litert::TensorBuffer decoded_ids,
     RepetitionPenaltyConfig repetition_penalty_config,
+    NoRepeatNgramConfig no_repeat_ngram_config,
     SuppressTokensConfig suppress_tokens_config, Constraint* constraint,
     std::optional<BenchmarkInfo>& benchmark_info,
     absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback,

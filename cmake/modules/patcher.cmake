@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
 function(patch_generated_file GENERATED_FILE ORIGINAL_STRING PATCH_STRING)
     if(NOT EXISTS "${GENERATED_FILE}")
         message(AUTHOR_WARNING "[LiteRTLM] ⚠️ Patch skipped (File missing): ${GENERATED_FILE}")
@@ -49,8 +48,8 @@ function(apply_patches_from_json JSON_CONFIG_FILE)
         string(JSON FIND_STRING         GET "${JSON_CONTENT}" "patches" ${IDX} "find_string")
         string(JSON PATCH_FILE_REL_PATH GET "${JSON_CONTENT}" "patches" ${IDX} "patch_file")
 
-        set(FULL_TARGET_PATH "${GENERATED_SRC_DIR}/${TARGET_REL_PATH}")
-        set(FULL_PATCH_FILE_PATH "${LITERTLM_ROOT_DIR}/cmake/patches/${PATCH_FILE_REL_PATH}")
+        set(FULL_TARGET_PATH "${LITERTLM_GENERATED_SRC_DIR}/${TARGET_REL_PATH}")
+        set(FULL_PATCH_FILE_PATH "${LITERTLM_PROJECT_ROOT}/cmake/patches/${PATCH_FILE_REL_PATH}")
 
         if(NOT EXISTS "${FULL_PATCH_FILE_PATH}")
             message(FATAL_ERROR "[LiteRTLM] ❌ Shim file missing: ${FULL_PATCH_FILE_PATH}")

@@ -24,6 +24,7 @@
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/memory/memory.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_format.h"  // from @com_google_absl
@@ -57,7 +58,7 @@ absl::StatusOr<std::unique_ptr<LoRA>> LoRA::Create(
     absl::string_view signature_name) {
   auto lora = absl::WrapUnique(
       new LoRA(std::move(lora_data), compiled_model, signature_name));
-  RETURN_IF_ERROR(lora->Init());
+  ABSL_RETURN_IF_ERROR(lora->Init());
   return lora;
 }
 
@@ -76,15 +77,15 @@ absl::Status LoRA::Init() {
         litert::TensorBuffer tensor_buffer,
         compiled_model_.CreateInputBuffer(signature_name_, input_name));
 
-    LITERT_ASSIGN_OR_RETURN(
-        auto lock_and_addr, litert::TensorBufferScopedLock::Create(
+    LITERT_ASSIGN_OR_RETURN(auto lock_and_addr,
+                            litert::TensorBufferScopedLock::Create(
                                 tensor_buffer, TensorBuffer::LockMode::kWrite));
     LITERT_ASSIGN_OR_RETURN(auto tensor_buffer_size,
-                                 tensor_buffer.PackedSize());
+                            tensor_buffer.PackedSize());
 
     if (lora_data_->HasTensor(input_name)) {
       // Read the tensor data from LoraData.
-      ASSIGN_OR_RETURN(auto lora_tensor_data,
+      ABSL_ASSIGN_OR_RETURN(auto lora_tensor_data,
                        lora_data_->ReadTensor(input_name));
 
       // Copy the data from LoraData to the TensorBuffer.

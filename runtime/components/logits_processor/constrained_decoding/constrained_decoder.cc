@@ -17,6 +17,7 @@
 #include <limits>
 
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_layout.h"  // from @litert
@@ -54,22 +55,20 @@ absl::Status ConstrainedDecoder::ProcessLogits(
   int sequence_length = logits_dims[1];
   int vocab_size = logits_dims[2];
   RET_CHECK_EQ(sequence_length, 1) << "Only support sequence length 1.";
-  // It is possible that the constraint vocabulary size is larger than the model
-  // vocabulary size. The remaining tokens in the constraint vocabulary are
-  // treated as unused tokens.
-  RET_CHECK_LE(vocab_size, constraint_->GetVocabularySize())
-      << "Vocabulary size [" << vocab_size
-      << "] does not match the expected vocabulary size ["
-      << constraint_->GetVocabularySize() << "].";
+  // It is possible that the model logits vocabulary size is larger than the
+  // constraint vocabulary size (e.g., due to padded vocabulary sizes in the
+  // model), or vice versa. Out-of-bounds token indices in padded logits are
+  // masked out as invalid tokens.
+  const int constraint_vocab_size = constraint_->GetVocabularySize();
   RET_CHECK_EQ(batch_size, batch_size_)
       << "Batch size [" << batch_size
       << "] does not match the expected batch size [" << batch_size_ << "].";
   for (int b = 0; b < batch_size; ++b) {
     auto& constraint_state = constraint_states_[b];
-    ASSIGN_OR_RETURN(auto bitmap,
-                     constraint_->ComputeBitmap(*constraint_state));
+    ABSL_ASSIGN_OR_RETURN(auto bitmap,
+                          constraint_->ComputeBitmap(*constraint_state));
     for (int i = 0; i < vocab_size; ++i) {
-      if (!bitmap->Get(i)) {
+      if (i >= constraint_vocab_size || !bitmap->Get(i)) {
         logits.data()[b * vocab_size + i] =
             std::numeric_limits<float>::lowest();
       }
@@ -87,22 +86,16 @@ absl::Status ConstrainedDecoder::ProcessLogits(
   int sequence_length = logits_dims[1];
   int vocab_size = logits_dims[2];
   RET_CHECK_EQ(sequence_length, 1) << "Only support sequence length 1.";
-  // It is possible that the constraint vocabulary size is larger than the model
-  // vocabulary size. The remaining tokens in the constraint vocabulary are
-  // treated as unused tokens.
-  RET_CHECK_LE(vocab_size, constraint_->GetVocabularySize())
-      << "Vocabulary size [" << vocab_size
-      << "] does not match the expected vocabulary size ["
-      << constraint_->GetVocabularySize() << "].";
+  const int constraint_vocab_size = constraint_->GetVocabularySize();
   RET_CHECK_EQ(batch_size, batch_size_)
       << "Batch size [" << batch_size
       << "] does not match the expected batch size [" << batch_size_ << "].";
   for (int b = 0; b < batch_size; ++b) {
     auto& constraint_state = constraint_states_[b];
-    ASSIGN_OR_RETURN(auto bitmap,
-                     constraint_->ComputeBitmap(*constraint_state));
+    ABSL_ASSIGN_OR_RETURN(auto bitmap,
+                          constraint_->ComputeBitmap(*constraint_state));
     for (int i = 0; i < vocab_size; ++i) {
-      if (!bitmap->Get(i)) {
+      if (i >= constraint_vocab_size || !bitmap->Get(i)) {
         logits.data()[b * vocab_size + i] = tflite::half::min();
       }
     }
@@ -123,7 +116,7 @@ absl::Status ConstrainedDecoder::UpdateState(absl::Span<int> next_token_ids) {
       << "] does not match the expected batch size [" << batch_size_ << "].";
   for (int i = 0; i < batch_size_; ++i) {
     auto& constraint_state = constraint_states_[i];
-    ASSIGN_OR_RETURN(
+    ABSL_ASSIGN_OR_RETURN(
         constraint_state,
         constraint_->ComputeNext(*constraint_state, next_token_ids[i]));
     if (constraint_->IsEnded(*constraint_state)) {

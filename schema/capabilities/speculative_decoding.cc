@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_format.h"  // from @com_google_absl
 #include "runtime/util/status_macros.h"
@@ -35,7 +36,7 @@ absl::StatusOr<bool> HasSpeculativeDecodingSupport(
     std::istream& litertlm_stream) {
   litertlm_stream.seekg(0);
   LitertlmHeader header;
-  RETURN_IF_ERROR(ReadHeaderFromLiteRTLM(litertlm_stream, &header));
+  ABSL_RETURN_IF_ERROR(ReadHeaderFromLiteRTLM(litertlm_stream, &header));
 
   const std::vector<std::string> speculative_decoding_model_types = {
       "tf_lite_mtp_drafter"};

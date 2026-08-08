@@ -25,7 +25,7 @@ from litert_lm_cli import model
 
 @click.command(cls=help_formatter.ColorCommand, name="list")
 def list_models():
-  """Lists all imported LiteRT-LM models."""
+  """Lists all imported models."""
   base_dir = model.get_converted_models_base_dir()
   click.echo(f"Listing models in: {base_dir}")
 

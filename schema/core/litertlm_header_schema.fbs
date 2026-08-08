@@ -103,16 +103,36 @@ table SystemMetadata {
 // additions constitute a minor version bump). Sections cannot be re-ordered and
 // or removed unless the major version is bumped.
 enum AnySectionDataType:ubyte {
-  NONE,  // Default value if no type is set.
-  GenericBinaryData,  // For any user-specified/previously unknown data.
-  Deprecated,  // For edited files with outdated sections.
-  TFLiteModel,  // Corresponds to a tflite.Model.
-  SP_Tokenizer,  // A SentencePiece Tokenizer.
-  LlmMetadataProto,  // A litert.lm.proto.LlmMetadata Protobuf.
-  HF_Tokenizer_Zlib,  // A HuggingFace Tokenizer's JSON config (zlib compressed).
-  TFLiteWeights,  // A external weight file for a tflite.Model. This is used
-// together with TFLiteModel section to form a complete
-// tflite.Model with weights.
+  // Default value if no type is set.
+  NONE,
+
+  // For any user-specified/previously unknown data.
+  GenericBinaryData,
+
+  // For edited files with outdated sections.
+  Deprecated,
+
+  // Corresponds to a tflite.Model.
+  TFLiteModel,
+
+  // A SentencePiece Tokenizer.
+  SP_Tokenizer,
+
+  // A litert.lm.proto.LlmMetadata Protobuf.
+  LlmMetadataProto,
+
+  // A HuggingFace Tokenizer's JSON config (zlib compressed).
+  HF_Tokenizer_Zlib,
+
+  // An external weight file for a tflite.Model. This is used
+  // together with TFLiteModel section to form a complete
+  // tflite.Model with weights.
+  TFLiteWeights,
+
+  EmbeddingMetadataProto,  // A litert.lm.proto.EmbeddingMetadata Protobuf.
+
+  // A litert.lm.proto.ExecutorMetadata Protobuf.
+  ExecutorMetadataProto,
 }
 
 // Section offsets and datatype

@@ -12,12 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
-include_guard(GLOBAL)
-include("${LITERTLM_MODULES_DIR}/utils.cmake")
-include("${LITERTLM_PACKAGES_DIR}/packages.cmake")
-include("${LITERT_PACKAGE_DIR}/litert_target_map.cmake")
-
+include("${LITERTLM_LITERT_PACKAGE_DIR}/litert_target_map.cmake")
 
 macro(generate_litert_aggregate)
     if(NOT TARGET LiteRTLM::litert::litert)
@@ -25,7 +20,7 @@ macro(generate_litert_aggregate)
 
         set(_litert_lib_names "")
         set(_litert_lib_paths "")
-        kvp_parse_map("${LITERT_TARGET_MAP}" _litert_lib_names _litert_lib_paths)
+        kvp_parse_map("${LITERTLM_LITERT_TARGET_MAP}" _litert_lib_names _litert_lib_paths)
 
         add_library(LiteRTLM::litert::litert INTERFACE IMPORTED GLOBAL)
 
@@ -37,13 +32,13 @@ macro(generate_litert_aggregate)
             INTERFACE_LINK_LIBRARIES
                 "${_litert_lib_paths}"
             INTERFACE_INCLUDE_DIRECTORIES
-                "${LITERT_INCLUDE_DIR}"
+                "${LITERTLM_LITERT_INCLUDE_PATHS}"
         )
 
         add_library(LiteRTLM::litert::shim INTERFACE IMPORTED GLOBAL)
         set_target_properties(LiteRTLM::litert::shim PROPERTIES
             INTERFACE_INCLUDE_DIRECTORIES
-                "${LITERT_INCLUDE_DIR};${LITERT_BUILD_DIR}"
+                "${LITERTLM_LITERT_INCLUDE_PATHS};${LITERTLM_LITERT_BUILD_DIR}"
         )
 
         foreach(_comp_target IN LISTS ${_litert_lib_names})

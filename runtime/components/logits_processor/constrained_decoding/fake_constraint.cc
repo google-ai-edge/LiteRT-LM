@@ -23,22 +23,6 @@
 
 namespace litert::lm {
 
-namespace {
-
-// A bitmap implementation that allows only the one specified token.
-class SingleAllowedTokenBitmap : public Bitmap {
- public:
-  explicit SingleAllowedTokenBitmap(int allowed_token_id)
-      : allowed_token_id_(allowed_token_id) {}
-
-  bool Get(int index) const override { return index == allowed_token_id_; }
-
- private:
-  const int allowed_token_id_;
-};
-
-}  // namespace
-
 std::unique_ptr<Constraint::State> FakeConstraint::Start() const {
   return std::make_unique<FakeState>(0);
 }

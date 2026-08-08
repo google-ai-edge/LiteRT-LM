@@ -77,7 +77,6 @@ cc_library(
     deps = [
         ":logits_processor",
         ":repetition_penalty_config",
-        "@com_google_absl//absl/cleanup",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/types:span",
@@ -121,6 +120,8 @@ cc_test(
     ],
 )
 
+# If a shared library of LiteRT runtime `libLiteRt.so` is required,
+# use extra flag to build this target: --define=litert_runtime_link_mode=dynamic.
 cc_library(
     name = "no_repeat_ngram_processor",
     srcs = ["no_repeat_ngram_processor.cc"],
@@ -134,19 +135,13 @@ cc_library(
         "@com_google_absl//absl/hash",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/types:span",
+        "@litert//litert/cc:litert_element_type",
+        "@litert//litert/cc:litert_layout",
+        "@litert//litert/cc:litert_macros",
+        "@litert//litert/cc:litert_tensor_buffer",
         "//runtime/util:convert_tensor_buffer",
         "@litert//tflite/types:half",
-    ] + select({
-        "@litert//litert:litert_link_capi_so": [
-            "@litert//litert/cc:litert_api_with_dynamic_runtime",
-        ],
-        "//conditions:default": [
-            "@litert//litert/cc:litert_element_type",
-            "@litert//litert/cc:litert_layout",
-            "@litert//litert/cc:litert_macros",
-            "@litert//litert/cc:litert_tensor_buffer",
-        ],
-    }),
+    ],
 )
 
 cc_test(
@@ -174,6 +169,8 @@ cc_library(
     ],
 )
 
+# If a shared library of LiteRT runtime `libLiteRt.so` is required,
+# use extra flag to build this target: --define=litert_runtime_link_mode=dynamic.
 cc_library(
     name = "suppress_tokens_processor",
     srcs = ["suppress_tokens_processor.cc"],
@@ -183,20 +180,15 @@ cc_library(
         ":logits_processor",
         ":suppress_tokens_config",
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/strings",
         "@com_google_absl//absl/types:span",
+        "@litert//litert/cc:litert_element_type",
+        "@litert//litert/cc:litert_layout",
+        "@litert//litert/cc:litert_macros",
+        "@litert//litert/cc:litert_tensor_buffer",
         "//runtime/util:convert_tensor_buffer",
         "@litert//tflite/types:half",
-    ] + select({
-        "@litert//litert:litert_link_capi_so": [
-            "@litert//litert/cc:litert_api_with_dynamic_runtime",
-        ],
-        "//conditions:default": [
-            "@litert//litert/cc:litert_element_type",
-            "@litert//litert/cc:litert_layout",
-            "@litert//litert/cc:litert_macros",
-            "@litert//litert/cc:litert_tensor_buffer",
-        ],
-    }),
+    ],
 )
 
 cc_test(

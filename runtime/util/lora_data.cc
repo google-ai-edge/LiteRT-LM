@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
@@ -170,10 +171,10 @@ class FileLoraData : public FlatBufferLoraData {
 
   absl::StatusOr<std::unique_ptr<BufferRef<uint8_t>>> ReadData(
       uint64_t offset, uint64_t size) override {
-    ASSIGN_OR_RETURN(auto mapped_region,
-                     MemoryMappedFileWithAutoAlignment::Create(
-                         file_->file(), /*offset=*/offset,
-                         /*size=*/size, key_));
+    ABSL_ASSIGN_OR_RETURN(auto mapped_region,
+                          MemoryMappedFileWithAutoAlignment::Create(
+                              file_->file(), /*offset=*/offset,
+                              /*size=*/size, key_));
     return std::make_unique<MmapBufferRef<uint8_t>>(std::move(mapped_region));
   }
 
@@ -219,7 +220,7 @@ class BufferLoraData : public FlatBufferLoraData {
 // static
 absl::StatusOr<std::unique_ptr<LoraData>> LoraData::CreateFromFilePath(
     absl::string_view file_path) {
-  ASSIGN_OR_RETURN(auto file, ScopedFile::Open(file_path));
+  ABSL_ASSIGN_OR_RETURN(auto file, ScopedFile::Open(file_path));
   return CreateFromScopedFile(std::make_shared<ScopedFile>(std::move(file)));
 }
 
@@ -228,11 +229,13 @@ absl::StatusOr<std::unique_ptr<LoraData>> LoraData::CreateFromScopedFile(
     std::shared_ptr<const ScopedFile> file) {
   static std::atomic<uint32_t> next_key{0};
   const std::string key{absl::StrCat("FileLoraData_", next_key.fetch_add(1))};
-  ASSIGN_OR_RETURN(auto mapped_file, MemoryMappedFileWithAutoAlignment::Create(
-                                         file->file(), /*offset=*/0,
-                                         /*size=*/0, key));
-  ASSIGN_OR_RETURN(auto model, CreateFlatBufferModelFromBuffer(
-                                   mapped_file->data(), mapped_file->length()));
+  ABSL_ASSIGN_OR_RETURN(
+      auto mapped_file,
+      MemoryMappedFileWithAutoAlignment::Create(file->file(), /*offset=*/0,
+                                                /*size=*/0, key));
+  ABSL_ASSIGN_OR_RETURN(auto model,
+                        CreateFlatBufferModelFromBuffer(mapped_file->data(),
+                                                        mapped_file->length()));
   RET_CHECK(model) << "Error building tflite model.";
   return std::make_unique<FileLoraData>(std::move(file), std::move(mapped_file),
                                         std::move(model), key);
@@ -241,8 +244,8 @@ absl::StatusOr<std::unique_ptr<LoraData>> LoraData::CreateFromScopedFile(
 // static
 absl::StatusOr<std::unique_ptr<LoraData>> LoraData::CreateFromBuffer(
     BufferRef<uint8_t> buffer) {
-  ASSIGN_OR_RETURN(auto model, CreateFlatBufferModelFromBuffer(buffer.Data(),
-                                                               buffer.Size()));
+  ABSL_ASSIGN_OR_RETURN(auto model, CreateFlatBufferModelFromBuffer(
+                                        buffer.Data(), buffer.Size()));
   RET_CHECK(model) << "Error building tflite model.";
   return std::make_unique<BufferLoraData>(std::move(buffer), std::move(model));
 }

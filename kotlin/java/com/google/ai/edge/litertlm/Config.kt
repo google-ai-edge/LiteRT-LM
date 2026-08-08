@@ -35,6 +35,103 @@ data class Channel(val channelName: String, val start: String, val end: String) 
 }
 
 /**
+ * Configuration for repetition penalty.
+ *
+ * When multiple penalties are configured and active, the order of application to output logits
+ * during decoding is:
+ * 1. Multiplicative penalty ([repetitionPenalty])
+ * 2. Subtractive penalties ([presencePenalty] and [frequencyPenalty])
+ *
+ * @property repetitionPenalty A multiplicative penalty applied to a token's logit if that token has
+ *   appeared at least once inside the generated window history (e.g., 1.0 = no penalty, 1.2 =
+ *   moderate penalty). Positive logits are divided by this parameter, and negative logits are
+ *   multiplied (HuggingFace style). Must be >= 1.0f; values less than 1.0f are automatically
+ *   clamped to 1.0f during execution. Defaults to 1.0f when `null`.
+ * @property presencePenalty A scalar subtracted from a token's logit if that token has appeared at
+ *   least once inside the generated window history. Positive values discourage repetition, while
+ *   negative values reward repeating tokens (OpenAI style). Defaults to 0.0f when `null`.
+ * @property frequencyPenalty A scalar subtracted from a token's logit, scaled linearly by the
+ *   number of times that token has previously appeared inside the generated window history.
+ *   Positive values discourage repetition, while negative values reward repeating tokens (OpenAI
+ *   style). Defaults to 0.0f when `null`.
+ * @property windowSize The maximum number of recent tokens in generation history to consider when
+ *   computing penalization. Tokens generated prior to this window are forgotten. A value of 0 means
+ *   tracking all infinite generation history. Must be >= 0; negative values are clamped to 0 during
+ *   execution. Defaults to 0 when `null`.
+ */
+data class RepetitionPenaltyConfig
+@JvmOverloads
+constructor(
+  val repetitionPenalty: Float? = null,
+  val presencePenalty: Float? = null,
+  val frequencyPenalty: Float? = null,
+  val windowSize: Int? = null,
+) {
+  init {
+    require(repetitionPenalty == null || repetitionPenalty >= 1.0f) {
+      "repetitionPenalty should be >= 1.0, but got $repetitionPenalty."
+    }
+    require(windowSize == null || windowSize >= 0) {
+      "windowSize should be >= 0, but got $windowSize."
+    }
+  }
+}
+
+/**
+ * Configuration for no repeat ngram banning.
+ *
+ * When [noRepeatNgramSize] is set greater than 0, any sequence of tokens (an ngram of that exact
+ * length) generated during decoding or present inside the window history can only occur at most
+ * once. If generating a candidate token would complete a repeating ngram, that candidate token's
+ * logit is set to -inf.
+ *
+ * @property noRepeatNgramSize The size of ngrams (consecutive token sequences) that are banned from
+ *   repeating within the generation history window. If set > 0, when generating the next token
+ *   would complete an already observed [noRepeatNgramSize] sequence, the logit of the candidate
+ *   token is set to -inf. If set <= 0, no repeat ngram banning is disabled. Negative values are
+ *   clamped to 0. Defaults to 0 when `null`.
+ * @property windowSize The maximum number of recent tokens in generation history to consider when
+ *   checking for repeating ngrams. Tokens generated prior to this window are forgotten. A value of
+ *   0 means tracking all infinite generation history. Must be >= 0; negative values are clamped
+ *   to 0. If [windowSize] is greater than 0 but less than [noRepeatNgramSize], it is automatically
+ *   clamped to [noRepeatNgramSize] during execution so that the ngrams can fit and be tracked.
+ *   Defaults to 0 when `null`.
+ */
+data class NoRepeatNgramConfig
+@JvmOverloads
+constructor(val noRepeatNgramSize: Int? = null, val windowSize: Int? = null) {
+  init {
+    require(noRepeatNgramSize == null || noRepeatNgramSize >= 0) {
+      "noRepeatNgramSize should be >= 0, but got $noRepeatNgramSize."
+    }
+    require(windowSize == null || windowSize >= 0) {
+      "windowSize should be >= 0, but got $windowSize."
+    }
+  }
+}
+
+/**
+ * Configuration for suppressing specific tokens during decoding.
+ *
+ * @property suppressTokens A list of token IDs to suppress. Banned tokens will have their logit set
+ *   to -inf.
+ */
+data class SuppressTokensConfig(val suppressTokens: Collection<Int>) {
+  internal fun getSuppressTokensArray(): IntArray = suppressTokens.toIntArray()
+}
+
+/**
+ * Configuration for thinking/reasoning generation.
+ *
+ * @property enableThinking Whether thinking/reasoning generation is enabled.
+ * @property thinkingTokenBudget The token budget for thinking/reasoning generation. Defaults to -1
+ *   (infinite budget).
+ */
+data class ThinkingConfig
+@JvmOverloads
+constructor(val enableThinking: Boolean = true, val thinkingTokenBudget: Int = -1)
+
+/**
  * Backend for the LiteRT-LM engine.
  *
  * This is the Kotlin version of the C++'s `litert::lm::Backend`.
@@ -61,6 +158,8 @@ sealed class Backend(val name: String) {
    *   containing the libraries.
    */
   data class NPU(val nativeLibraryDir: String = "") : Backend("NPU")
+
+  class GOOGLE_TENSOR : Backend("GOOGLE_TENSOR_ARTISAN")
 }
 
 /**
@@ -116,6 +215,15 @@ data class EngineConfig(
  *   key. If `null`, uses the default channel configuration from the `LlmMetadata`. If empty,
  *   channels will be disabled.
  * @property extraContext Optional context passed to the prompt template rendering.
+ * @property loraConfig Configuration for LoRA weights.
+ * @property prefillPrefaceOnInit Whether to prefill the preface on initialization. Defaults to
+ *   false. Note that this will make createConversation() take longer to finish, so you may want to
+ *   call it in a background thread.
+ * @property maxOutputToken The maximum number of output tokens per decode step. When `null`, use
+ *   the default value from the model or the engine.
+ * @property thinkingConfig Configuration for thinking/reasoning generation.
+ * @property enableResponseFormat Whether to enable response format (constrained decoding). If true,
+ *   initializes the constraint provider LLGuidance.
  */
 data class ConversationConfig
 @JvmOverloads
@@ -128,7 +236,17 @@ constructor(
   val channels: List<Channel>? = null,
   val extraContext: Map<String, Any> = emptyMap(),
   val loraConfig: LoraConfig? = null,
-)
+  val prefillPrefaceOnInit: Boolean = false,
+  val maxOutputToken: Int? = null,
+  val thinkingConfig: ThinkingConfig? = null,
+  val enableResponseFormat: Boolean = false,
+) {
+  init {
+    require(maxOutputToken == null || maxOutputToken > 0) {
+      "maxOutputToken must be positive or null (use the default from model or engine)."
+    }
+  }
+}
 
 /**
  * Configuration for the sampling process.

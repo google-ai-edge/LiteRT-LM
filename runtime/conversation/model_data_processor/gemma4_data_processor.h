@@ -30,13 +30,13 @@
 #if !defined(LITERT_LM_FST_CONSTRAINTS_DISABLED)
 #include "runtime/components/logits_processor/constrained_decoding/gemma_model_constraint_provider.h"
 #endif
-#include "support/preprocessor/audio_preprocessor.h"  // from @litert
-#include "support/preprocessor/image_preprocessor.h"  // from @litert
-#include "support/tokenizer/tokenizer.h"  // from @litert
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/gemma4_data_processor_config.h"
 #include "runtime/conversation/model_data_processor/model_data_processor.h"
 #include "runtime/engine/io_types.h"
+#include "support/preprocessor/audio_preprocessor.h"
+#include "support/preprocessor/image_preprocessor.h"
+#include "support/tokenizer/tokenizer.h"
 
 namespace litert::lm {
 
@@ -123,7 +123,7 @@ class Gemma4DataProcessor
       const TypeSafeModelDataProcessor<Gemma4DataProcessorConfig,
                                        Gemma4DataProcessorArguments>& other)
       override {
-    ABSL_LOG(INFO) << "Gemma4DataProcessor::CloneStateImpl is a no-op.";
+    ABSL_VLOG(1) << "Gemma4DataProcessor::CloneStateImpl is a no-op.";
     return absl::OkStatus();
   }
 

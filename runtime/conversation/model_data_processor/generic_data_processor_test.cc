@@ -14,6 +14,7 @@
 
 #include "runtime/conversation/model_data_processor/generic_data_processor.h"
 
+#include <optional>
 #include <string>
 #include <utility>
 #include <variant>
@@ -24,9 +25,6 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "litert/cc/litert_layout.h"  // from @litert
-#include "support/preprocessor/audio_preprocessor.h"  // from @litert
-#include "support/preprocessor/audio_preprocessor_miniaudio.h"  // from @litert
-#include "support/preprocessor/image_preprocessor.h"  // from @litert
 #include "runtime/components/prompt_template.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/generic_data_processor_config.h"
@@ -34,6 +32,9 @@
 #include "runtime/conversation/model_data_processor/test_utils.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/util/test_utils.h"  // NOLINT
+#include "support/preprocessor/audio_preprocessor.h"
+#include "support/preprocessor/audio_preprocessor_miniaudio.h"
+#include "support/preprocessor/image_preprocessor.h"
 
 namespace litert::lm {
 namespace {
@@ -265,6 +266,52 @@ TEST(GenericDataProcessorTest, CloneStateMultimodal) {
 
   // Verify that CloneState succeeds.
   EXPECT_OK(processor2->CloneState(*processor1));
+}
+
+TEST(GenericDataProcessorTest, RenderSingleTurnTemplateAppendUser) {
+  const std::string test_file_path =
+      GetTestdataPath("generic-model-multi-prefill.jinja");
+  ASSERT_OK_AND_ASSIGN(const std::string template_content,
+                       GetContents(test_file_path));
+  PromptTemplate prompt_template(template_content);
+
+  ASSERT_OK_AND_ASSIGN(auto processor, GenericDataProcessor::Create());
+
+  std::vector<Message> history;
+  Preface preface =
+      JsonPreface{.messages = {{{"role", "system"},
+                                {"content", "You are a helpful assistant."}}}};
+
+  // 1. Append user message (first part)
+  Message message1 = {{"role", "user"}, {"content", "Hello"}};
+  {
+    ASSERT_OK_AND_ASSIGN(auto result,
+                         processor->RenderSingleTurnTemplate(
+                             history, preface, message1, prompt_template,
+                             /*current_is_appending_message=*/false,
+                             /*append_message=*/true,
+                             /*extra_context=*/std::nullopt));
+    EXPECT_EQ(
+        result.text,
+        "<start_of_turn>system\nYou are a helpful assistant.<end_of_turn>\n"
+        "<start_of_turn>user\nHello");
+    EXPECT_TRUE(result.is_appending_message);
+  }
+  history.push_back(message1);
+
+  // 2. Append user message (last part)
+  Message message2 = {{"role", "user"}, {"content", " world!"}};
+  {
+    ASSERT_OK_AND_ASSIGN(auto result,
+                         processor->RenderSingleTurnTemplate(
+                             history, preface, message2, prompt_template,
+                             /*current_is_appending_message=*/true,
+                             /*append_message=*/false,
+                             /*extra_context=*/std::nullopt));
+    EXPECT_EQ(result.text, " world!<end_of_turn>\n<start_of_turn>model\n");
+    EXPECT_FALSE(result.is_appending_message);
+  }
+  history.push_back(message2);
 }
 
 }  // namespace

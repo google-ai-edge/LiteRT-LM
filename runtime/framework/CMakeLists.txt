@@ -12,23 +12,41 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
-set(PKG_ROOT ${CMAKE_CURRENT_SOURCE_DIR})
+add_subdirectory(resource_management)
 
 # ==============================================================================
-# 1. Thread Options
+# Thread Options Interface
 # ==============================================================================
 add_litertlm_library(runtime_framework_thread_options INTERFACE)
-add_library(LiteRTLM::Framework::ThreadOptions ALIAS runtime_framework_thread_options)
+add_library(LiteRTLM::Runtime::Framework::ThreadOptions ALIAS runtime_framework_thread_options)
 
 target_include_directories(runtime_framework_thread_options
   INTERFACE
-    ${PKG_ROOT}
     ${LITERTLM_INCLUDE_PATHS}
 )
 
 # ==============================================================================
-# 2. Thread Pool
+# Execution Queue
+# ==============================================================================
+add_litertlm_library(runtime_framework_execution_queue STATIC
+  execution_queue.cc
+)
+add_library(LiteRTLM::Runtime::Framework::ExecutionQueue ALIAS runtime_framework_execution_queue)
+
+target_include_directories(runtime_framework_execution_queue
+  PUBLIC
+    ${LITERTLM_GENERATED_SRC_DIR}
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+target_link_libraries(runtime_framework_execution_queue
+  PUBLIC
+    LiteRTLM::Runtime::Framework::ThreadOptions
+    LITERTLM_DEPS
+)
+
+# ==============================================================================
+# Threadpool
 # ==============================================================================
 
 set(THREADPOOL_SRCS
@@ -45,27 +63,29 @@ endif()
 add_litertlm_library(runtime_framework_threadpool STATIC
   ${THREADPOOL_SRCS}
 )
-add_library(LiteRTLM::Framework::ThreadPool ALIAS runtime_framework_threadpool)
+add_library(LiteRTLM::Runtime::Framework::Threadpool ALIAS runtime_framework_threadpool)
 
 target_include_directories(runtime_framework_threadpool
   PUBLIC
-    ${PKG_ROOT}
+    ${LITERTLM_GENERATED_SRC_DIR}
     ${LITERTLM_INCLUDE_PATHS}
 )
 
 target_link_libraries(runtime_framework_threadpool
   PUBLIC
-    LiteRTLM::Framework::ThreadOptions
+    LiteRTLM::Runtime::Framework::ThreadOptions
     LITERTLM_DEPS
 )
 
 # ==============================================================================
-# 3. Folder Facade
+# Folder Facade
 # ==============================================================================
 add_library(runtime_framework_libs INTERFACE)
-add_library(LiteRTLM::Framework ALIAS runtime_framework_libs)
+add_library(LiteRTLM::Runtime::Framework ALIAS runtime_framework_libs)
 
 target_link_libraries(runtime_framework_libs INTERFACE
-  LiteRTLM::Framework::ThreadOptions
-  LiteRTLM::Framework::ThreadPool
+  LiteRTLM::Runtime::Framework::ThreadOptions
+  LiteRTLM::Runtime::Framework::ExecutionQueue
+  LiteRTLM::Runtime::Framework::Threadpool
+  LiteRTLM::Runtime::Framework::ResourceManager
 )

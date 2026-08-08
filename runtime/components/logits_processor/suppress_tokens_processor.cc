@@ -18,6 +18,8 @@
 #include <utility>
 
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/str_join.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_layout.h"  // from @litert
@@ -84,8 +86,10 @@ absl::Status SuppressTokensProcessor::ProcessLogitsImpl(
     absl::Span<T> logits, absl::Span<const ::litert::Layout::Dim> logits_dims) {
   if (logits_dims.size() != 3 || logits_dims[0] != batch_size_ ||
       logits_dims[1] != 1 || logits_dims[2] != vocab_size_) {
-    return absl::InvalidArgumentError(
-        "Logits dimensions must be [batch_size, 1, vocab_size].");
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Logits dimensions must be [batch_size, 1, vocab_size], which is ",
+        batch_size_, ", 1, ", vocab_size_, ". The input dimensions are: [",
+        absl::StrJoin(logits_dims, ", "), "]"));
   }
 
   if (logits.size() != vocab_size_ * batch_size_) {

@@ -21,6 +21,7 @@ from absl.testing import absltest
 
 from litert_lm_builder import litertlm_core
 from litert_lm_builder import litertlm_peek
+from runtime.proto import executor_metadata_pb2
 from runtime.proto import llm_metadata_pb2
 
 from python import runfiles
@@ -133,6 +134,30 @@ class LiteRTLMBuilderCLITest(absltest.TestCase):
     self.assertTrue(os.path.exists(output_path))
     ss = self._peek_litertlm_file(output_path)
     self.assertIn("max_num_tokens: 123", ss)
+    self.assertIn("Sections (1)", ss)
+
+  def test_executor_metadata(self):
+    """Tests that executor metadata can be added via the CLI."""
+    executor_metadata = executor_metadata_pb2.ExecutorMetadata(
+        llm_executor_metadata=executor_metadata_pb2.LlmExecutorMetadata(
+            max_history_size=5
+        )
+    )
+    bin_proto = executor_metadata.SerializeToString()
+    metadata_path = self._create_placeholder_file("executor.pb", bin_proto)
+    args = [
+        "system_metadata",
+        "--int",
+        "my_key",
+        "23",
+        "executor_metadata",
+        "--path",
+        metadata_path,
+    ]
+    output_path = self._run_command(*args)
+    self.assertTrue(os.path.exists(output_path))
+    ss = self._peek_litertlm_file(output_path)
+    self.assertIn("max_history_size: 5", ss)
     self.assertIn("Sections (1)", ss)
 
   def test_tflite_model(self):
@@ -385,6 +410,9 @@ class LiteRTLMBuilderCLITest(absltest.TestCase):
     subprocess.run(command, check=True, capture_output=True)
     toml_path = os.path.join(unpack_dir, "model.toml")
     self.assertTrue(os.path.exists(toml_path))
+
+  def test_cns_output_paths_rejected(self):
+    """Tests that outputting or unpacking directly to /cns/ is rejected."""
 
 
 if __name__ == "__main__":

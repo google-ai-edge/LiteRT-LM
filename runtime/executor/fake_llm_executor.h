@@ -60,11 +60,12 @@ class FakeLlmExecutor : public LlmExecutor {
   //   at each time the Prefill function is called. The Prefill function will
   //   only return OkStatus if the input audio embedding matches the expected
   //   audio embedding.
-  FakeLlmExecutor(
-      int vocab_size, const std::vector<std::vector<int>>& prefill_tokens_set,
-      const std::vector<std::vector<int>>& decode_tokens_set,
-      int batch_size = 1,
-      std::optional<std::vector<float>> audio_embedding = std::nullopt);
+  FakeLlmExecutor(int vocab_size,
+                  const std::vector<std::vector<int>>& prefill_tokens_set,
+                  const std::vector<std::vector<int>>& decode_tokens_set,
+                  int batch_size = 1,
+                  std::optional<std::vector<float>> projected_audio_embedding =
+                      std::nullopt);
 
   absl::Status Prefill(const ExecutorInputs& inputs) override;
   absl::Status Prefill(const ExecutorInputs& inputs,
@@ -154,7 +155,7 @@ class FakeLlmExecutor : public LlmExecutor {
   int vocab_size_;
   std::vector<std::vector<int>> prefill_tokens_set_;
   std::vector<std::vector<int>> decode_tokens_set_;
-  std::optional<std::vector<float>> audio_embedding_set_;
+  std::optional<std::vector<float>> projected_audio_embedding_set_;
   int batch_size_;
 
   // The number of times the Prefill function has been called.
@@ -192,6 +193,23 @@ class FakeLlmExecutor : public LlmExecutor {
     kDecode,
   };
   LastOp last_op_ = LastOp::kNone;
+};
+
+class DiffusionLlmFakeLlmExecutor : public FakeLlmExecutor {
+ public:
+  using FakeLlmExecutor::FakeLlmExecutor;
+
+  absl::StatusOr<std::vector<std::vector<int>>> Decode(
+      const ExecutorDecodeParams& decode_params) override;
+
+  void SetMockDecodeDelay(absl::Duration delay) { mock_decode_delay_ = delay; }
+
+  bool HasDecodeStarted() const { return decode_started_.load(); }
+  void ResetDecodeStarted() { decode_started_.store(false); }
+
+ private:
+  absl::Duration mock_decode_delay_ = absl::ZeroDuration();
+  std::atomic<bool> decode_started_ = false;
 };
 
 }  // namespace litert::lm

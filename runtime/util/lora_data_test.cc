@@ -24,13 +24,13 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "litert/cc/litert_buffer_ref.h"  // from @litert
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/util/memory_mapped_file.h"
 #include "runtime/util/scoped_file.h"
-#include "runtime/util/status_macros.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
 
 namespace litert::lm {
@@ -63,18 +63,22 @@ class LoraDataTest : public ::testing::TestWithParam<LoraLoadType> {
         return LoraData::CreateFromFilePath(GetLoraFilePath());
       }
       case LoraLoadType::kScopedFile: {
-        ASSIGN_OR_RETURN(auto model_assets,
-                         ::litert::lm::ModelAssets::Create(GetLoraFilePath()));
-        ASSIGN_OR_RETURN(auto scoped_file,
-                         model_assets.GetOrCreateScopedFile());
+        ABSL_ASSIGN_OR_RETURN(
+            auto model_assets,
+            ::litert::lm::ModelAssets::Create(GetLoraFilePath()));
+        ABSL_ASSIGN_OR_RETURN(auto scoped_file,
+                              model_assets.GetOrCreateScopedFile());
         return LoraData::CreateFromScopedFile(std::move(scoped_file));
       }
       case LoraLoadType::kBuffer: {
-        ASSIGN_OR_RETURN(auto model_assets,
-                         ::litert::lm::ModelAssets::Create(GetLoraFilePath()));
-        ASSIGN_OR_RETURN(scoped_file_, model_assets.GetOrCreateScopedFile());
-        ASSIGN_OR_RETURN(mapped_file_, ::litert::lm::MemoryMappedFile::Create(
-                                           scoped_file_->file()));
+        ABSL_ASSIGN_OR_RETURN(
+            auto model_assets,
+            ::litert::lm::ModelAssets::Create(GetLoraFilePath()));
+        ABSL_ASSIGN_OR_RETURN(scoped_file_,
+                              model_assets.GetOrCreateScopedFile());
+        ABSL_ASSIGN_OR_RETURN(
+            mapped_file_,
+            ::litert::lm::MemoryMappedFile::Create(scoped_file_->file()));
         return LoraData::CreateFromBuffer(
             BufferRef<uint8_t>(mapped_file_->data(), mapped_file_->length()));
       }

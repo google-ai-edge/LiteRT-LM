@@ -15,20 +15,25 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_ENGINE_ENGINE_SETTINGS_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_ENGINE_ENGINE_SETTINGS_H_
 
+#include <functional>
 #include <limits>
 #include <memory>
 #include <optional>
 #include <ostream>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "absl/base/nullability.h"  // from @com_google_absl
+#include "absl/functional/any_invocable.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
-#include "support/tokenizer/tokenizer.h"  // from @litert
+#include "runtime/components/logits_processor/suppress_tokens_config.h"
 #include "runtime/executor/audio_executor_settings.h"
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/vision_executor_settings.h"
 #include "runtime/proto/engine.pb.h"
@@ -36,6 +41,7 @@
 #include "runtime/proto/llm_model_type.pb.h"
 #include "runtime/proto/sampler_params.pb.h"
 #include "runtime/util/scoped_file.h"
+#include "support/tokenizer/tokenizer.h"
 
 namespace litert::lm {
 
@@ -63,12 +69,12 @@ namespace litert::lm {
 //
 // Example:
 //
-//   ASSIGN_OR_RETURN(ModelAssets model_assets,
+//   ABSL_ASSIGN_OR_RETURN(ModelAssets model_assets,
 //                    ModelAssets::Create(model_path));
-//   ASSIGN_OR_RETURN(EngineSettings engine_settings,
+//   ABSL_ASSIGN_OR_RETURN(EngineSettings engine_settings,
 //                    EngineSettings::CreateDefault(model_assets));
 //    ...initialize the Engine...
-//   ASSIGN_OR_RETURN(std::unique_ptr<Engine> engine,
+//   ABSL_ASSIGN_OR_RETURN(std::unique_ptr<Engine> engine,
 //                    Engine::CreateEngine(engine_settings));
 // TODO(b/397975034) Add overloading << operator for debugging.
 class EngineSettings {
@@ -237,6 +243,12 @@ class SessionConfig {
   const proto::LlmModelType& GetLlmModelType() const;
   proto::LlmModelType& GetMutableLlmModelType();
 
+  // Suppress tokens config:
+  // Getters for the suppress tokens config.
+  const SuppressTokensConfig& GetSuppressTokensConfig() const;
+  void SetSuppressTokensConfig(
+      const SuppressTokensConfig& suppress_tokens_config);
+
   // Whether to apply the basic prompt templates in the session.
   bool GetApplyPromptTemplateInSession() const {
     return apply_prompt_template_in_session_;
@@ -267,6 +279,16 @@ class SessionConfig {
   int GetMaxOutputTokens() const { return max_output_tokens_; }
   void SetMaxOutputTokens(int max_output_tokens) {
     max_output_tokens_ = max_output_tokens;
+  }
+
+  using AudioEmbeddingsCallback =
+      absl::AnyInvocable<void(const ExecutorAudioData&) const>;
+  const AudioEmbeddingsCallback* GetAudioEmbeddingsCallback() const {
+    return audio_embeddings_callback_.get();
+  }
+  void SetAudioEmbeddingsCallback(AudioEmbeddingsCallback callback) {
+    audio_embeddings_callback_ =
+        std::make_shared<AudioEmbeddingsCallback>(std::move(callback));
   }
 
  private:
@@ -300,6 +322,11 @@ class SessionConfig {
   // present).
   proto::LlmModelType llm_model_type_;
 
+  // Suppress tokens config for the session. This is loaded from the model
+  // assets (if present).
+  SuppressTokensConfig suppress_tokens_config_ =
+      SuppressTokensConfig::Default();
+
   // The number of output candidates to generate. Default value is 1 and setting
   // it to a value greater than 1 will require the model to support batching.
   int num_output_candidates_ = 1;
@@ -326,6 +353,13 @@ class SessionConfig {
   // tokens (input + output) stored in the KV cache over the lifetime of a
   // session.
   int max_output_tokens_ = std::numeric_limits<int>::max();
+
+  // Optional callback to receive audio embeddings. If not set, it will be
+  // nullptr.
+  // We use std::shared_ptr to wrap the move-only absl::AnyInvocable callback.
+  // This allows SessionConfig to remain copy-constructible, which is required
+  // because SessionConfig is copied in various engine and library interfaces.
+  std::shared_ptr<AudioEmbeddingsCallback> audio_embeddings_callback_;
 };
 
 std::ostream& operator<<(std::ostream& os, const SessionConfig& config);

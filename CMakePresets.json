@@ -7,16 +7,20 @@
   },
   "configurePresets": [
     {
-      "name": "make",
+      "name": "default",
       "hidden": true,
       "generator": "Unix Makefiles",
-      "binaryDir": "${sourceDir}/cmake/build/${presetName}"
+      "binaryDir": "${sourceDir}/cmake/build/${presetName}",
+      "environment": {
+        "CC": "clang",
+        "CXX": "clang++"
+      }
     },
     {
       "name": "android-arm64",
       "displayName": "Android arm64-v8a (API 28)",
       "description": "Cross-compiles LiteRT-LM for Android arm64. Auto-builds host tools first.",
-      "inherits": "make",
+      "inherits": "default",
       "environment": {
         "ANDROID_NDK_ROOT": "$env{HOME}/android-ndk/android-ndk-r26d"
       },

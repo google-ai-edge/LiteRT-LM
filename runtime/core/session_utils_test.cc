@@ -27,19 +27,20 @@
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/memory/memory.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_join.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/test/matchers.h"  // from @litert
-#include "support/tokenizer/sentencepiece_tokenizer.h"  // from @litert
-#include "support/tokenizer/tokenizer.h"  // from @litert
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/proto/sampler_params.pb.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/status_macros.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
+#include "support/tokenizer/sentencepiece_tokenizer.h"
+#include "support/tokenizer/tokenizer.h"
 
 namespace litert::lm {
 
@@ -56,8 +57,8 @@ class ExtendedTokenizer : public Tokenizer {
  public:
   static absl::StatusOr<std::unique_ptr<ExtendedTokenizer>> CreateFromFile(
       absl::string_view model_path) {
-    ASSIGN_OR_RETURN(auto tokenizer,
-                     SentencePieceTokenizer::CreateFromFile(model_path));
+    ABSL_ASSIGN_OR_RETURN(auto tokenizer,
+                          SentencePieceTokenizer::CreateFromFile(model_path));
     return absl::WrapUnique(new ExtendedTokenizer(std::move(tokenizer)));
   }
 
@@ -77,7 +78,7 @@ class ExtendedTokenizer : public Tokenizer {
         auto extended_token_pos = text.find(extended_token_str);
         if (extended_token_pos != std::string::npos) {
           // The text before the extended token.
-          ASSIGN_OR_RETURN(
+          ABSL_ASSIGN_OR_RETURN(
               auto text_ids,
               tokenizer_->TextToTokenIds(text.substr(0, extended_token_pos)));
           token_ids.insert(token_ids.end(), text_ids.begin(), text_ids.end());
@@ -88,14 +89,14 @@ class ExtendedTokenizer : public Tokenizer {
       }
     } while (is_extended_token_found);
     if (!text.empty()) {
-      ASSIGN_OR_RETURN(auto text_ids, tokenizer_->TextToTokenIds(text));
+      ABSL_ASSIGN_OR_RETURN(auto text_ids, tokenizer_->TextToTokenIds(text));
       token_ids.insert(token_ids.end(), text_ids.begin(), text_ids.end());
     }
     return token_ids;
   }
 
   absl::StatusOr<std::string> TokenIdsToText(
-      const std::vector<int>& token_ids) override {
+      const std::vector<int>& token_ids, bool skip_special_tokens) override {
     std::vector<std::string> token_strs;
     for (int token_id : token_ids) {
       if (id_to_extended_tokens_.contains(token_id)) {

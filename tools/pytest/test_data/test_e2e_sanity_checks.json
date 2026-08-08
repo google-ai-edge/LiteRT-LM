@@ -1,0 +1,9 @@
+{
+  "test_model_sanity": [
+    {
+      "id": "basic_question",
+      "prompt": "What's the tallest building in the world?",
+      "response": "Burj Khalifa"
+    }
+  ]
+}

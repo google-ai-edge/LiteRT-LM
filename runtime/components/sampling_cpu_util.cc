@@ -33,6 +33,65 @@
 
 namespace litert::lm {
 
+namespace {
+
+// Equivalent to *std::max_element(x, x + kSize), but written in a way to coax
+// the compiler into autovectorizing it.
+template <int kSize>
+inline float Max(const float* x) {
+  constexpr int kTileSize = 8;
+  static_assert(kSize % kTileSize == 0);
+  float max[kTileSize];
+  std::copy_n(x, kTileSize, max);
+  for (int i = kTileSize; i < kSize; i += kTileSize) {
+    for (int j = 0; j < kTileSize; ++j) {
+      max[j] = std::max(max[j], x[i + j]);
+    }
+  }
+  return *std::max_element(max, max + kTileSize);
+}
+
+// Similar to std::max_element, but more optimized.
+inline int MaxElement(const float* logits, int size) {
+  if (size <= 0) return 0;
+
+  constexpr int kTileSize = 128;
+  float max = logits[0];
+  int max_idx = 0;
+
+  int i = 0;
+  for (; i + kTileSize <= size; i += kTileSize) {
+    const float* tile_logits = logits + i;
+
+    // Find the max in this tile.
+    float tile_max = Max<kTileSize>(tile_logits);
+
+    if (tile_max > max) {
+      // Find first index of this max in the tile. We only do this if we have a
+      // new max, which avoids the index search for most tiles.
+      for (int j = 0; j < kTileSize; ++j) {
+        if (tile_logits[j] == tile_max) {
+          max = tile_max;
+          max_idx = i + j;
+          break;
+        }
+      }
+    }
+  }
+
+  // Handle remaining elements
+  for (; i < size; ++i) {
+    if (logits[i] > max) {
+      max = logits[i];
+      max_idx = i;
+    }
+  }
+
+  return max_idx;
+}
+
+}  // namespace
+
 absl::StatusOr<std::vector<std::vector<int>>> TopKTokenIds(
     absl::Span<const float> logits, int k, int batch_size, int sequence_size) {
   if (logits.size() % (batch_size * sequence_size) != 0) {
@@ -45,17 +104,12 @@ absl::StatusOr<std::vector<std::vector<int>>> TopKTokenIds(
   const int vocab_size = logits.size() / (batch_size * sequence_size);
   std::vector<std::vector<int>> output_indices(
       batch_size, std::vector<int>(sequence_size * k));
-  if (k == 1) {  // Greedy sampling. Use std::max_element to be more efficient.
+  if (k == 1) {  // Greedy sampling. Use MaxElement to be more efficient.
     for (int b = 0; b < batch_size; ++b) {
       for (int s = 0; s < sequence_size; ++s) {
-        auto max_iterator = std::max_element(
-            logits.begin() + (b * sequence_size + s) * vocab_size,
-            logits.begin() + (b * sequence_size + s + 1) * vocab_size);
-        // Gets the index of the max element in the logits of each batch.
-        const int max_logit_idx =
-            std::distance(logits.begin() + (b * sequence_size + s) * vocab_size,
-                          max_iterator);
-        output_indices[b][s] = max_logit_idx;
+        const float* sub_logits =
+            logits.data() + (b * sequence_size + s) * vocab_size;
+        output_indices[b][s] = MaxElement(sub_logits, vocab_size);
       }
     }
   } else if (k <= 1024) {

@@ -1,0 +1,97 @@
+// Copyright 2026 The ODML Authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+package litert.lm.proto;
+
+option java_multiple_files = true;
+option java_package = "com.google.litert.lm.proto";
+option java_outer_classname = "ExecutorMetadataOuterClass";
+
+message StateBuffer {
+  // The name of the state buffer in prefill signature's input tensors.
+  string prefill_input_name = 1;
+  // The name of the state buffer in prefill signature's output tensors.
+  string prefill_output_name = 2;
+  // The name of the state buffer in decode signature's input tensors.
+  string decode_input_name = 3;
+  // The name of the state buffer in decode signature's output tensors.
+  string decode_output_name = 4;
+
+  // The update policy for managing the state buffer.
+  enum Policy {
+    // The state buffer is managed by the model internally. For example,
+    // in-place KV cache update is managed by the model internally.
+    POLICY_DEFAULT = 0;
+  }
+  Policy policy = 5;
+
+  // The type of the state buffer.
+  enum Type {
+    // The type of the state buffer is unspecified.
+    TYPE_UNSPECIFIED = 0;
+
+    // The state buffer is a global cache buffer.
+    TYPE_GLOBAL_KEY_CACHE = 1;
+
+    // The state buffer is a global value cache buffer.
+    TYPE_GLOBAL_VALUE_CACHE = 2;
+
+    // The state buffer is a local KV cache buffer.
+    TYPE_LOCAL_KEY_CACHE = 3;
+
+    // The state buffer is a local value cache buffer.
+    TYPE_LOCAL_VALUE_CACHE = 4;
+
+    // The state buffer is a linear attention state buffer.
+    TYPE_LINEAR_ATTENTION = 5;
+  }
+  Type type = 6;
+
+  // The axis of the state buffer that corresponds to the sequence length. For
+  // example, for a key buffer with shape [batch_size, num_heads,
+  // sequence_length, key_dim], the sequence axis is 2.
+  // Not all state buffers have a sequence axis. For example, linear attention
+  // uses a fixed size state.
+  optional int32 sequence_axis = 7;
+
+  // The minimum sequence length that the state buffer can support. Certain
+  // stateful buffers may require a minimum sequence length.
+  // For example, a local KV cache buffer requires a minimum sequence length
+  // equal to the attention window size.
+  optional int32 minimum_sequence_length = 8;
+
+  // The maximum sequence length that the state buffer can support.
+  // For example, a KV cache buffer resized using magic numbers has an upper
+  // limit of  upto the magic value.
+  optional int32 maximum_sequence_length = 9;
+}
+
+message LlmExecutorMetadata {
+  // The maximum history size (in steps) that can be preserved in the model
+  // history. If not provided, we assume the model maintains history up to the
+  // number of steps elapsed since the start of the inference session. A value
+  // of -1 indicates that the maximum history size is an initialization time
+  // parameter and should be set by the client.
+  optional int32 max_history_size = 1;
+
+  // Stateful buffers of the model that need to be managed by the executor.
+  // For example, KV cache buffers are considered stateful buffers.
+  repeated StateBuffer state_buffers = 2;
+}
+
+message ExecutorMetadata {
+  LlmExecutorMetadata llm_executor_metadata = 1;
+}

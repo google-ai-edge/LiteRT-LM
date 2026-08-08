@@ -30,6 +30,7 @@
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/memory/memory.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/ascii.h"  // from @com_google_absl
 #include "absl/strings/str_format.h"  // from @com_google_absl
@@ -102,9 +103,9 @@ ExtractBufferKeyAndTfLiteSectionHint(const schema::SectionObject* section) {
       }
     }
     if (found_model_type) {
-      ABSL_LOG(INFO) << "model_type: " << model_type;
-      ASSIGN_OR_RETURN(ModelType model_type_enum,
-                       StringToModelType(model_type));
+      ABSL_VLOG(1) << "model_type: " << model_type;
+      ABSL_ASSIGN_OR_RETURN(ModelType model_type_enum,
+                            StringToModelType(model_type));
       buffer_key = BufferKey(section->data_type(), model_type_enum);
     } else {
       ABSL_LOG(WARNING) << "model_type not found, use kTfLitePrefillDecode";
@@ -143,7 +144,7 @@ absl::Status LitertLmLoader::MapSection(BufferKey buffer_key,
     uint64_t aligned_begin_offset = begin_offset - alignment_gap;
 
     uint64_t aligned_section_size = end_offset - aligned_begin_offset;
-    ASSIGN_OR_RETURN(
+    ABSL_ASSIGN_OR_RETURN(
         section_memory_mapped_files_[buffer_key],
         CreateMemoryMapFromScopedFile(model_file, aligned_begin_offset,
                                       aligned_section_size));
@@ -181,7 +182,7 @@ LitertLmLoader::GetSharedScopedFile() {
 absl::StatusOr<std::unique_ptr<LitertLmLoader>> LitertLmLoader::Create(
     ScopedFile model_file) {
   auto loader = absl::WrapUnique(new LitertLmLoader(std::move(model_file)));
-  RETURN_IF_ERROR(loader->Initialize());
+  ABSL_RETURN_IF_ERROR(loader->Initialize());
   return std::move(loader);
 }
 
@@ -189,12 +190,12 @@ absl::StatusOr<std::unique_ptr<LitertLmLoader>> LitertLmLoader::Create(
     std::shared_ptr<MemoryMappedFile> memory_mapped_model_file) {
   auto loader =
       absl::WrapUnique(new LitertLmLoader(std::move(memory_mapped_model_file)));
-  RETURN_IF_ERROR(loader->Initialize());
+  ABSL_RETURN_IF_ERROR(loader->Initialize());
   return std::move(loader);
 }
 
 absl::Status LitertLmLoader::Initialize() {
-  ABSL_LOG(INFO) << "LitertLmLoader::Initialize";
+  ABSL_VLOG(1) << "LitertLmLoader::Initialize";
 
   // Map the header of the model file.
   uint64_t model_file_size;
@@ -210,22 +211,23 @@ absl::Status LitertLmLoader::Initialize() {
     header_data = memory_mapped_model_file->data();
   } else {
     auto& model_file = *std::get<std::shared_ptr<ScopedFile>>(model_source_);
-    ASSIGN_OR_RETURN(model_file_size, model_file.GetSize());
+    ABSL_ASSIGN_OR_RETURN(model_file_size, model_file.GetSize());
     header_size = std::min(kLitertLmHeaderMaxSize, model_file_size);
-    ASSIGN_OR_RETURN(header_memory_mapped_file,
-                     CreateMemoryMapFromScopedFile(model_file, /*offset=*/0,
-                                                   /*size=*/header_size));
+    ABSL_ASSIGN_OR_RETURN(
+        header_memory_mapped_file,
+        CreateMemoryMapFromScopedFile(model_file, /*offset=*/0,
+                                      /*size=*/header_size));
     header_data = header_memory_mapped_file->data();
   }
-  ABSL_LOG(INFO) << "mmap_status is ok";
+  ABSL_VLOG(1) << "mmap_status is ok";
 
   // Read the header information.
   absl::Status status =
       ReadHeaderFromLiteRTLM(header_data, header_size, &header_);
-  ABSL_LOG(INFO) << "status: " << status;
-  ABSL_LOG(INFO) << "major_version: " << header_.major_version;
-  ABSL_LOG(INFO) << "minor_version: " << header_.minor_version;
-  ABSL_LOG(INFO) << "patch_version: " << header_.patch_version;
+  ABSL_VLOG(1) << "status: " << status;
+  ABSL_VLOG(1) << "major_version: " << header_.major_version;
+  ABSL_VLOG(1) << "minor_version: " << header_.minor_version;
+  ABSL_VLOG(1) << "patch_version: " << header_.patch_version;
   if (!status.ok()) {
     return status;
   }
@@ -234,19 +236,19 @@ absl::Status LitertLmLoader::Initialize() {
   auto sections = header_.metadata->section_metadata()->objects();
   for (size_t i = 0; i < sections->size(); ++i) {
     const schema::SectionObject* section = sections->Get(i);
-    ASSIGN_OR_RETURN(auto key_and_section_hint,
-                     ExtractBufferKeyAndTfLiteSectionHint(section));
+    ABSL_ASSIGN_OR_RETURN(auto key_and_section_hint,
+                          ExtractBufferKeyAndTfLiteSectionHint(section));
     BufferKey buffer_key = key_and_section_hint.first;
     const auto& section_hint = key_and_section_hint.second;
     section_hints_map_[buffer_key] = section_hint;
 
     if (section_hint.backend_constraint.has_value()) {
-      ABSL_LOG(INFO) << "section_backend_constraint: "
-                     << *section_hint.backend_constraint;
+      ABSL_VLOG(1) << "section_backend_constraint: "
+                   << *section_hint.backend_constraint;
     }
     if (section_hint.prefer_activation_type.has_value()) {
-      ABSL_LOG(INFO) << "section_prefer_activation_type: "
-                     << *section_hint.prefer_activation_type;
+      ABSL_VLOG(1) << "section_prefer_activation_type: "
+                   << *section_hint.prefer_activation_type;
     }
 
     if (section->begin_offset() > section->end_offset()) {
@@ -258,11 +260,11 @@ absl::Status LitertLmLoader::Initialize() {
     section_locations_[buffer_key] =
         std::make_pair(section->begin_offset(), section->end_offset());
 
-    ABSL_LOG(INFO) << "section_index: " << i;
-    ABSL_LOG(INFO) << "section_data_type: "
-                   << EnumNameAnySectionDataType(section->data_type());
-    ABSL_LOG(INFO) << "section_begin_offset: " << section->begin_offset();
-    ABSL_LOG(INFO) << "section_end_offset: " << section->end_offset();
+    ABSL_VLOG(1) << "section_index: " << i;
+    ABSL_VLOG(1) << "section_data_type: "
+                 << EnumNameAnySectionDataType(section->data_type());
+    ABSL_VLOG(1) << "section_begin_offset: " << section->begin_offset();
+    ABSL_VLOG(1) << "section_end_offset: " << section->end_offset();
   }
   return absl::OkStatus();
 }

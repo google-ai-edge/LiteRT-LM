@@ -113,4 +113,23 @@ describe('SettingsStore', () => {
     expect(store.contextLength).toBe(4096);
     expect(mockCallbackCount).toBe(1);  // the reset triggers a save callback
   });
+
+  it('loads custom models from localStorage', () => {
+    const customPayload = {
+      customModels: [
+        {
+          name: 'Custom Model',
+          filename: 'custom.litertlm',
+          path: 'https://local-model/custom.litertlm',
+          size: '1.0 GB',
+        }
+      ]
+    };
+    window.localStorage.setItem(
+        'litertlm-chat-settings', JSON.stringify(customPayload));
+
+    const store = new SettingsStore(mockUpdateCallback);
+    expect(store.customModels.length).toBe(1);
+    expect(store.customModels[0]!.name).toBe('Custom Model');
+  });
 });

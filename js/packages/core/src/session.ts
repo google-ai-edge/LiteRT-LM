@@ -73,6 +73,25 @@ export class Session {
     this.session.cancelProcess();
   }
 
+  /**
+   * Clones the session. The cloned session will have all the settings and
+   * context of the original session up to the point that clone is called.
+   */
+  async clone(): Promise<Session> {
+    if (this.isBusy) {
+      throw new Error(BUSY_MESSAGE);
+    }
+    this.isBusy = true;
+    try {
+      return await this.mutexes.executor.acquireAndRun(() => {
+        const wasmClonedSession = this.session.clone();
+        return new Session(wasmClonedSession, this.mutexes);
+      });
+    } finally {
+      this.isBusy = false;
+    }
+  }
+
   async delete(): Promise<void> {
     await this.mutexes.executor.acquireAndRun(() => {
       this.session.delete();

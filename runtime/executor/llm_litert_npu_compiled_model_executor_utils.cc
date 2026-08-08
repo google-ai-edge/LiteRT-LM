@@ -21,6 +21,7 @@
 #include <cstring>
 #include <optional>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -325,7 +326,8 @@ absl::StatusOr<int> ApplyGreedySampling(::litert::TensorBuffer& decoded_logits,
 absl::Status HWKVCacheUpdate(
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& in_buffers,
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& out_buffers,
-    const absl::flat_hash_map<absl::string_view, HWQuantParams>& quant_params) {
+    const absl::flat_hash_map<absl::string_view, HWQuantParams>& quant_params,
+    bool enable_swa) {
   static constexpr absl::string_view kInputPos = "input_pos";
   if (!in_buffers.contains(kInputPos)) {
     return absl::InvalidArgumentError("Missing input_pos buffer");
@@ -346,16 +348,36 @@ absl::Status HWKVCacheUpdate(
   if (pos_lock.second == nullptr) {
     return absl::InternalError("Failed to lock input_pos buffer");
   }
-  int start_pos = static_cast<const int32_t*>(pos_lock.second)[0];
-  if (start_pos < 0) {
-    return absl::InvalidArgumentError(
-        absl::StrCat("input_pos must be non-negative: ", start_pos));
+
+  const int32_t* input_pos_ptr = static_cast<const int32_t*>(pos_lock.second);
+
+  // Extract the valid mask if present, which is used to filter out padding
+  // tokens and to only update the cache with valid tokens.
+  static constexpr absl::string_view kValidMask = "valid_mask";
+  const bool* valid_mask = nullptr;
+  int64_t valid_mask_size = 0;
+  std::optional<::litert::TensorBufferScopedLock> valid_mask_lock;
+  if (in_buffers.contains(kValidMask)) {
+    auto& buf = in_buffers.at(kValidMask);
+    LITERT_ASSIGN_OR_RETURN(auto valid_mask_type, buf.TensorType());
+    LITERT_ASSIGN_OR_RETURN(auto num_elements,
+                            valid_mask_type.Layout().NumElements());
+    valid_mask_size = num_elements;
+    if (valid_mask_type.ElementType() != ::litert::ElementType::Bool) {
+      return absl::InvalidArgumentError("valid_mask must be Bool type");
+    }
+    LITERT_ASSIGN_OR_RETURN(auto lock,
+                            ::litert::TensorBufferScopedLock::Create(
+                                buf, ::litert::TensorBuffer::LockMode::kRead));
+    valid_mask = static_cast<const bool*>(lock.second);
+    valid_mask_lock.emplace(std::move(lock.first));
   }
 
   auto perform_update = [&](::litert::TensorBuffer& cache,
                             const ::litert::RankedTensorType& slice_type,
-                            const void* slice_ptr,
-                            size_t slice_bytes) -> absl::Status {
+                            const void* slice_ptr, size_t slice_bytes,
+                            absl::string_view cache_name,
+                            absl::string_view slice_name) -> absl::Status {
     LITERT_ASSIGN_OR_RETURN(auto cache_type, cache.TensorType());
 
     int cache_rank = cache_type.Layout().Rank();
@@ -418,8 +440,67 @@ absl::Status HWKVCacheUpdate(
           "Failed to identify hidden dimension in slice");
     }
 
-    if (start_pos + slice_seq > cache_seq) {
-      return absl::OutOfRangeError("KV-cache update out of range");
+    if (slice_seq > cache_seq) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("Slice sequence length (", slice_seq,
+                       ") exceeds cache capacity (", cache_seq, ")"));
+    }
+
+    int64_t real_start = 0;
+    int64_t real_len = slice_seq;
+    int64_t start_pos = input_pos_ptr[0];
+
+    if (valid_mask != nullptr) {
+      int64_t mask_offset = pos_num_elements - slice_seq;
+      if (mask_offset < 0) {
+        return absl::InternalError(
+            "slice_seq cannot be larger than pos_num_elements");
+      }
+      const bool* sub_mask = valid_mask + mask_offset;
+      int64_t first_true = -1;
+      int64_t true_count = 0;
+      for (int64_t i = 0; i < slice_seq; ++i) {
+        if (sub_mask[i]) {
+          if (first_true == -1) {
+            first_true = i;
+          }
+          ++true_count;
+        }
+      }
+      if (first_true != -1) {
+        real_start = first_true;
+        real_len = true_count;
+        // NOTE: The current implementation assumes that valid tokens in
+        // `valid_mask` form a contiguous range from `first_true` to
+        // `first_true + true_count - 1`. If `valid_mask` contains
+        // non-contiguous valid entries (e.g., [T, F, T]), the memcpy operations
+        // below will incorrectly copy a contiguous block. This is acceptable
+        // for typical prefill inputs where valid tokens are always contiguous.
+        start_pos = input_pos_ptr[mask_offset + real_start];
+      } else {
+        real_len = 0;
+      }
+    } else {
+      if (slice_seq < pos_num_elements) {
+        start_pos = input_pos_ptr[pos_num_elements - slice_seq];
+      }
+    }
+
+    if (real_len == 0) {
+      return absl::OkStatus();
+    }
+
+    if (start_pos < 0) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("input_pos must be non-negative: ", start_pos));
+    }
+
+    int64_t wp = enable_swa ? (start_pos % cache_seq) : start_pos;
+
+    if (wp + real_len > cache_seq) {
+      if (!enable_swa) {
+        return absl::OutOfRangeError("KV-cache update out of range");
+      }
     }
 
     // static constexpr int kSliceOuterRank = 2;
@@ -475,87 +556,111 @@ absl::Status HWKVCacheUpdate(
       if (!cache_is_transposed) {
         if (!slice_is_transposed || slice_seq == 1) {
           // Cache is [..., seq, hidden], Slice is [..., seq, hidden] (or seq=1)
-          std::memcpy(c_ptr + (start_pos * hidden_dim * element_size), s_ptr,
-                      slice_seq * hidden_dim * element_size);
+          int64_t chunk1_seq = std::min(real_len, cache_seq - wp);
+          int64_t chunk2_seq = real_len - chunk1_seq;
+          const uint8_t* s_ptr_offset =
+              s_ptr + (real_start * hidden_dim * element_size);
+          std::memcpy(c_ptr + (wp * hidden_dim * element_size), s_ptr_offset,
+                      chunk1_seq * hidden_dim * element_size);
+          if (chunk2_seq > 0) {
+            std::memcpy(c_ptr,
+                        s_ptr_offset + (chunk1_seq * hidden_dim * element_size),
+                        chunk2_seq * hidden_dim * element_size);
+          }
         } else {
           // Cache is [..., seq, hidden], Slice is [..., hidden, seq]
-          for (int64_t s = 0; s < slice_seq; ++s) {
+          for (int64_t s = 0; s < real_len; ++s) {
+            int64_t wrapped_pos = (wp + s) % cache_seq;
+            int64_t slice_s = real_start + s;
             for (int64_t h = 0; h < hidden_dim; ++h) {
-              std::memcpy(
-                  c_ptr + ((start_pos + s) * hidden_dim + h) * element_size,
-                  s_ptr + (h * slice_seq + s) * element_size, element_size);
+              std::memcpy(c_ptr + (wrapped_pos * hidden_dim + h) * element_size,
+                          s_ptr + (h * slice_seq + slice_s) * element_size,
+                          element_size);
             }
           }
         }
       } else {
         // Cache is [..., hidden, seq]
-        if (slice_seq == 1) {
+        if ((!slice_is_transposed && real_len == 1) || slice_seq == 1) {
+          const uint8_t* s_ptr_offset =
+              s_ptr + (real_start * hidden_dim * element_size);
 #if defined(__ANDROID__) && defined(__ARM_NEON) && defined(__aarch64__)
           if (element_size == 1) {
             int64_t h = 0;
             for (; h <= hidden_dim - 16; h += 16) {
-              uint8x16_t v = vld1q_u8(s_ptr + h);
-              c_ptr[(h + 0) * cache_seq + start_pos] = vgetq_lane_u8(v, 0);
-              c_ptr[(h + 1) * cache_seq + start_pos] = vgetq_lane_u8(v, 1);
-              c_ptr[(h + 2) * cache_seq + start_pos] = vgetq_lane_u8(v, 2);
-              c_ptr[(h + 3) * cache_seq + start_pos] = vgetq_lane_u8(v, 3);
-              c_ptr[(h + 4) * cache_seq + start_pos] = vgetq_lane_u8(v, 4);
-              c_ptr[(h + 5) * cache_seq + start_pos] = vgetq_lane_u8(v, 5);
-              c_ptr[(h + 6) * cache_seq + start_pos] = vgetq_lane_u8(v, 6);
-              c_ptr[(h + 7) * cache_seq + start_pos] = vgetq_lane_u8(v, 7);
-              c_ptr[(h + 8) * cache_seq + start_pos] = vgetq_lane_u8(v, 8);
-              c_ptr[(h + 9) * cache_seq + start_pos] = vgetq_lane_u8(v, 9);
-              c_ptr[(h + 10) * cache_seq + start_pos] = vgetq_lane_u8(v, 10);
-              c_ptr[(h + 11) * cache_seq + start_pos] = vgetq_lane_u8(v, 11);
-              c_ptr[(h + 12) * cache_seq + start_pos] = vgetq_lane_u8(v, 12);
-              c_ptr[(h + 13) * cache_seq + start_pos] = vgetq_lane_u8(v, 13);
-              c_ptr[(h + 14) * cache_seq + start_pos] = vgetq_lane_u8(v, 14);
-              c_ptr[(h + 15) * cache_seq + start_pos] = vgetq_lane_u8(v, 15);
+              uint8x16_t v = vld1q_u8(s_ptr_offset + h);
+              c_ptr[(h + 0) * cache_seq + wp] = vgetq_lane_u8(v, 0);
+              c_ptr[(h + 1) * cache_seq + wp] = vgetq_lane_u8(v, 1);
+              c_ptr[(h + 2) * cache_seq + wp] = vgetq_lane_u8(v, 2);
+              c_ptr[(h + 3) * cache_seq + wp] = vgetq_lane_u8(v, 3);
+              c_ptr[(h + 4) * cache_seq + wp] = vgetq_lane_u8(v, 4);
+              c_ptr[(h + 5) * cache_seq + wp] = vgetq_lane_u8(v, 5);
+              c_ptr[(h + 6) * cache_seq + wp] = vgetq_lane_u8(v, 6);
+              c_ptr[(h + 7) * cache_seq + wp] = vgetq_lane_u8(v, 7);
+              c_ptr[(h + 8) * cache_seq + wp] = vgetq_lane_u8(v, 8);
+              c_ptr[(h + 9) * cache_seq + wp] = vgetq_lane_u8(v, 9);
+              c_ptr[(h + 10) * cache_seq + wp] = vgetq_lane_u8(v, 10);
+              c_ptr[(h + 11) * cache_seq + wp] = vgetq_lane_u8(v, 11);
+              c_ptr[(h + 12) * cache_seq + wp] = vgetq_lane_u8(v, 12);
+              c_ptr[(h + 13) * cache_seq + wp] = vgetq_lane_u8(v, 13);
+              c_ptr[(h + 14) * cache_seq + wp] = vgetq_lane_u8(v, 14);
+              c_ptr[(h + 15) * cache_seq + wp] = vgetq_lane_u8(v, 15);
             }
             for (; h < hidden_dim; ++h) {
-              c_ptr[h * cache_seq + start_pos] = s_ptr[h];
+              c_ptr[h * cache_seq + wp] = s_ptr_offset[h];
             }
           } else if (element_size == 2) {
             int64_t h = 0;
-            const uint16_t* s_ptr16 = reinterpret_cast<const uint16_t*>(s_ptr);
+            const uint16_t* s_ptr16 =
+                reinterpret_cast<const uint16_t*>(s_ptr_offset);
             uint16_t* c_ptr16 = reinterpret_cast<uint16_t*>(c_ptr);
             for (; h <= hidden_dim - 8; h += 8) {
               uint16x8_t v = vld1q_u16(s_ptr16 + h);
-              c_ptr16[(h + 0) * cache_seq + start_pos] = vgetq_lane_u16(v, 0);
-              c_ptr16[(h + 1) * cache_seq + start_pos] = vgetq_lane_u16(v, 1);
-              c_ptr16[(h + 2) * cache_seq + start_pos] = vgetq_lane_u16(v, 2);
-              c_ptr16[(h + 3) * cache_seq + start_pos] = vgetq_lane_u16(v, 3);
-              c_ptr16[(h + 4) * cache_seq + start_pos] = vgetq_lane_u16(v, 4);
-              c_ptr16[(h + 5) * cache_seq + start_pos] = vgetq_lane_u16(v, 5);
-              c_ptr16[(h + 6) * cache_seq + start_pos] = vgetq_lane_u16(v, 6);
-              c_ptr16[(h + 7) * cache_seq + start_pos] = vgetq_lane_u16(v, 7);
+              c_ptr16[(h + 0) * cache_seq + wp] = vgetq_lane_u16(v, 0);
+              c_ptr16[(h + 1) * cache_seq + wp] = vgetq_lane_u16(v, 1);
+              c_ptr16[(h + 2) * cache_seq + wp] = vgetq_lane_u16(v, 2);
+              c_ptr16[(h + 3) * cache_seq + wp] = vgetq_lane_u16(v, 3);
+              c_ptr16[(h + 4) * cache_seq + wp] = vgetq_lane_u16(v, 4);
+              c_ptr16[(h + 5) * cache_seq + wp] = vgetq_lane_u16(v, 5);
+              c_ptr16[(h + 6) * cache_seq + wp] = vgetq_lane_u16(v, 6);
+              c_ptr16[(h + 7) * cache_seq + wp] = vgetq_lane_u16(v, 7);
             }
             for (; h < hidden_dim; ++h) {
-              c_ptr16[h * cache_seq + start_pos] = s_ptr16[h];
+              c_ptr16[h * cache_seq + wp] = s_ptr16[h];
             }
           } else {
 #endif
             for (int64_t h = 0; h < hidden_dim; ++h) {
-              std::memcpy(c_ptr + (h * cache_seq + start_pos) * element_size,
-                          s_ptr + h * element_size, element_size);
+              std::memcpy(c_ptr + (h * cache_seq + wp) * element_size,
+                          s_ptr_offset + h * element_size, element_size);
             }
 #if defined(__ANDROID__) && defined(__ARM_NEON) && defined(__aarch64__)
           }
 #endif
         } else if (slice_is_transposed) {
           // Cache is [..., hidden, seq], Slice is [..., hidden, seq]
+          int64_t chunk1_seq = std::min(real_len, cache_seq - wp);
+          int64_t chunk2_seq = real_len - chunk1_seq;
           for (int64_t h = 0; h < hidden_dim; ++h) {
-            std::memcpy(c_ptr + (h * cache_seq + start_pos) * element_size,
-                        s_ptr + (h * slice_seq) * element_size,
-                        slice_seq * element_size);
+            std::memcpy(c_ptr + (h * cache_seq + wp) * element_size,
+                        s_ptr + (h * slice_seq + real_start) * element_size,
+                        chunk1_seq * element_size);
+            if (chunk2_seq > 0) {
+              std::memcpy(c_ptr + (h * cache_seq) * element_size,
+                          s_ptr + (h * slice_seq + real_start + chunk1_seq) *
+                                      element_size,
+                          chunk2_seq * element_size);
+            }
           }
         } else {
           // Cache is [..., hidden, seq], Slice is [..., seq, hidden]
-          for (int64_t s = 0; s < slice_seq; ++s) {
+          for (int64_t s = 0; s < real_len; ++s) {
+            int64_t wrapped_pos = (wp + s) % cache_seq;
+            int64_t slice_s = real_start + s;
             for (int64_t h = 0; h < hidden_dim; ++h) {
-              std::memcpy(
-                  c_ptr + (h * cache_seq + start_pos + s) * element_size,
-                  s_ptr + (s * hidden_dim + h) * element_size, element_size);
+              std::memcpy(c_ptr + (h * cache_seq + wrapped_pos) * element_size,
+                          s_ptr + (slice_s * hidden_dim + h) * element_size,
+                          element_size);
             }
           }
         }
@@ -609,9 +714,9 @@ absl::Status HWKVCacheUpdate(
                 static_cast<const LiteRtLayout&>(slice_type.Layout())));
         size_t dequantized_slice_bytes = num_elements * sizeof(float);
 
-        auto status = perform_update(cache, dequantized_slice_type,
-                                     dequantized_slice_scratch.data(),
-                                     dequantized_slice_bytes);
+        auto status = perform_update(
+            cache, dequantized_slice_type, dequantized_slice_scratch.data(),
+            dequantized_slice_bytes, cache_name, slice_name);
         if (!status.ok()) {
           return absl::Status(
               status.code(),
@@ -626,8 +731,8 @@ absl::Status HWKVCacheUpdate(
       }
     } else {
       // Direct update
-      auto status =
-          perform_update(cache, slice_type, slice_lock.second, slice_bytes);
+      auto status = perform_update(cache, slice_type, slice_lock.second,
+                                   slice_bytes, cache_name, slice_name);
       if (!status.ok()) {
         return absl::Status(
             status.code(),
@@ -834,6 +939,200 @@ void FillMasksInternal(T* mask_local, T* mask_global, int64_t seq_q,
   }
 }
 
+// Fills a single attention mask (either local or global) for a given
+// time step.
+//
+// Args:
+//   mask: Pointer to the mask buffer to be filled (size seq_q * seq_k).
+//   seq_q: Query sequence length (number of queries/current batch size).
+//   seq_k: Total key sequence length (capacity + batch_size).
+//   time_step: Current logical time step in the generation.
+//   input_tokens: Optional token IDs of the current batch (used to check
+//     validity).
+//   input_tokens_size: Size of the input_tokens array.
+//   valid_mask: Optional boolean mask indicating valid tokens in the batch.
+//   valid_mask_size: Size of the valid_mask array.
+//   valid_val: The value representing "allow attention" (e.g., 0 or 127).
+//   masked_val: The value representing "mask out attention" (e.g., -1e9 or
+//     -128).
+//   capacity: The physical capacity of the historical KV cache (excluding the
+//     current batch).
+//   uses_ringbuffer: If true, applies sliding window attention with ring buffer
+//     logic.
+//   window_size: The attention window size (only used if uses_ringbuffer is
+//     true).
+template <typename T>
+void FillMaskSingle(T* mask, int64_t seq_q, int64_t seq_k, int32_t time_step,
+                    const int32_t* input_tokens, int64_t input_tokens_size,
+                    const bool* valid_mask, int64_t valid_mask_size,
+                    T valid_val, T masked_val, int64_t capacity,
+                    bool uses_ringbuffer, int64_t window_size) {
+  // Number of tokens processed in this step (e.g., 1 for decode, chunk size for
+  // prefill, or draft length for speculative verification).
+  const int64_t batch_size = seq_q;
+
+  // Start out by attending to no tokens.
+  if (sizeof(T) == 1) {
+    std::memset(mask, (int)masked_val, seq_q * seq_k);
+  } else {
+    for (int64_t i = 0; i < seq_q * seq_k; ++i) {
+      mask[i] = masked_val;
+    }
+  }
+
+  for (int64_t q = 0; q < seq_q; ++q) {
+    const int64_t logical_pos = time_step + q;
+    T* row = mask + (q * seq_k);
+
+    // Fill in the mask for historical tokens stored in the KV cache.
+    if (uses_ringbuffer) {
+      for (int64_t k = 0; k < capacity; ++k) {
+        // t_k is the logical token index (the token's absolute position in the
+        // sequence, e.g., token 1050), whereas k is the physical slot in the
+        // circular cache buffer (bounded by capacity, e.g., 0-511). We need
+        // the logical index to check if the token falls within the attention
+        // window.
+        //
+        // Before the cache is full, tokens are written sequentially, so
+        // physical index k maps directly to logical token k.
+        int64_t t_k = k;
+        if (time_step >= capacity) {
+          // 'age' is how many steps ago the token in slot k was written.
+          // age = 0 means it was written at time_step - 1 (the most recent
+          // token).
+          // age = capacity - 1 means it is the oldest token still in the cache.
+          int64_t age = (time_step - 1 - k + capacity) % capacity;
+          t_k = time_step - 1 - age;
+        }
+        // Ensure the token is a valid past token (causality) and falls
+        // within the sliding window constraint.
+        if (t_k >= 0 && t_k < time_step &&
+            t_k >= logical_pos - window_size + 1) {
+          row[k] = valid_val;
+        }
+      }
+    } else {
+      for (int64_t k = 0; k < std::min<int64_t>(time_step, capacity); ++k) {
+        row[k] = valid_val;
+      }
+    }
+
+    // Fill in the mask for the tokens in the current batch.
+    for (int64_t k_rel = 0; k_rel < batch_size; ++k_rel) {
+      // The current batch's tokens are appended after the history cache slots
+      // [0, capacity-1] in the KV cache layout, so we offset by capacity.
+      int64_t k = capacity + k_rel;
+      if (k >= seq_k) break;
+
+      bool is_valid = true;
+      if (valid_mask != nullptr) {
+        if (k_rel < valid_mask_size) {
+          is_valid = valid_mask[k_rel];
+        }
+      } else if (input_tokens != nullptr) {
+        if (seq_q > 1) {
+          if (k_rel < input_tokens_size) {
+            is_valid = (input_tokens[k_rel] != -1);
+          }
+        }
+      }
+
+      if (k_rel <= q && is_valid) {
+        row[k] = valid_val;
+      }
+    }
+  }
+}
+
+absl::Status UpdateInterleavedSWAMasks(
+    void* local_ptr, void* global_ptr, ::litert::ElementType element_type,
+    int64_t seq_q, int64_t seq_k_local, int64_t seq_k_global, int32_t time_step,
+    const int32_t* input_tokens, int64_t input_tokens_size,
+    const bool* valid_mask, int64_t valid_mask_size) {
+  // The physical capacity of the local KV cache buffer (excluding current
+  // batch/draft).
+  int64_t local_capacity = seq_k_local - seq_q;
+  // The physical capacity of the global KV cache buffer (excluding current
+  // batch/draft).
+  int64_t global_capacity = seq_k_global - seq_q;
+  // The attention window size (how far back a token can attend).
+  // In practice, this is optimized to match the local cache capacity to save
+  // memory, but we keep them conceptually separate for flexibility and
+  // clarity in FillMaskSingle.
+  int64_t local_window_size = local_capacity;
+
+  if (element_type == ::litert::ElementType::Int8) {
+    if (local_ptr) {
+      FillMaskSingle<int8_t>(
+          static_cast<int8_t*>(local_ptr), seq_q, seq_k_local, time_step,
+          input_tokens, input_tokens_size, valid_mask, valid_mask_size, 127,
+          -128, local_capacity, /*uses_ringbuffer=*/true, local_window_size);
+    }
+    if (global_ptr) {
+      FillMaskSingle<int8_t>(
+          static_cast<int8_t*>(global_ptr), seq_q, seq_k_global, time_step,
+          input_tokens, input_tokens_size, valid_mask, valid_mask_size, 127,
+          -128, global_capacity, /*uses_ringbuffer=*/false, 0);
+    }
+  } else if (element_type == ::litert::ElementType::Int16) {
+    if (local_ptr) {
+      FillMaskSingle<int16_t>(
+          static_cast<int16_t*>(local_ptr), seq_q, seq_k_local, time_step,
+          input_tokens, input_tokens_size, valid_mask, valid_mask_size, 0,
+          -32767, local_capacity, /*uses_ringbuffer=*/true, local_window_size);
+    }
+    if (global_ptr) {
+      FillMaskSingle<int16_t>(
+          static_cast<int16_t*>(global_ptr), seq_q, seq_k_global, time_step,
+          input_tokens, input_tokens_size, valid_mask, valid_mask_size, 0,
+          -32767, global_capacity, /*uses_ringbuffer=*/false, 0);
+    }
+  } else if (element_type == ::litert::ElementType::Float32) {
+    if (local_ptr) {
+      FillMaskSingle<float>(
+          static_cast<float*>(local_ptr), seq_q, seq_k_local, time_step,
+          input_tokens, input_tokens_size, valid_mask, valid_mask_size, 0.0f,
+          -1e9f, local_capacity, /*uses_ringbuffer=*/true, local_window_size);
+    }
+    if (global_ptr) {
+      FillMaskSingle<float>(
+          static_cast<float*>(global_ptr), seq_q, seq_k_global, time_step,
+          input_tokens, input_tokens_size, valid_mask, valid_mask_size, 0.0f,
+          -1e9f, global_capacity, /*uses_ringbuffer=*/false, 0);
+    }
+  } else if (element_type == ::litert::ElementType::Float16) {
+    if (local_ptr) {
+      FillMaskSingle<uint16_t>(
+          static_cast<uint16_t*>(local_ptr), seq_q, seq_k_local, time_step,
+          input_tokens, input_tokens_size, valid_mask, valid_mask_size, 0x0000,
+          0xFC00, local_capacity, /*uses_ringbuffer=*/true, local_window_size);
+    }
+    if (global_ptr) {
+      FillMaskSingle<uint16_t>(
+          static_cast<uint16_t*>(global_ptr), seq_q, seq_k_global, time_step,
+          input_tokens, input_tokens_size, valid_mask, valid_mask_size, 0x0000,
+          0xFC00, global_capacity, /*uses_ringbuffer=*/false, 0);
+    }
+  } else if (element_type == ::litert::ElementType::BFloat16) {
+    if (local_ptr) {
+      FillMaskSingle<uint16_t>(
+          static_cast<uint16_t*>(local_ptr), seq_q, seq_k_local, time_step,
+          input_tokens, input_tokens_size, valid_mask, valid_mask_size, 0x0000,
+          0xFF80, local_capacity, /*uses_ringbuffer=*/true, local_window_size);
+    }
+    if (global_ptr) {
+      FillMaskSingle<uint16_t>(
+          static_cast<uint16_t*>(global_ptr), seq_q, seq_k_global, time_step,
+          input_tokens, input_tokens_size, valid_mask, valid_mask_size, 0x0000,
+          0xFF80, global_capacity, /*uses_ringbuffer=*/false, 0);
+    }
+  } else {
+    return absl::InvalidArgumentError("Unsupported mask element type");
+  }
+
+  return absl::OkStatus();
+}
+
 }  // namespace
 
 absl::Status HWMaskUpdate(
@@ -885,15 +1184,39 @@ absl::Status HWMaskUpdate(
         "No mask buffer found in in_buffers or out_buffers");
   }
 
-  // Assume they have the same type and dimensions if both present.
+  int64_t seq_q_local = 0;  // query sequence length, local mask
+  int64_t seq_k_local = 0;  // key sequence length, local mask
+  if (mask_local_buf) {
+    LITERT_ASSIGN_OR_RETURN(auto type, mask_local_buf->TensorType());
+    auto dims = type.Layout().Dimensions();
+    int rank = type.Layout().Rank();
+    seq_q_local = dims[rank - 2];
+    seq_k_local = dims[rank - 1];
+  }
+
+  int64_t seq_q_global = 0;  // query sequence length, global mask
+  int64_t seq_k_global = 0;  // key sequence length, global mask
+  if (mask_global_buf) {
+    LITERT_ASSIGN_OR_RETURN(auto type, mask_global_buf->TensorType());
+    auto dims = type.Layout().Dimensions();
+    int rank = type.Layout().Rank();
+    seq_q_global = dims[rank - 2];
+    seq_k_global = dims[rank - 1];
+  }
+
+  // Detect if local and global masks use different KV cache sizes. If so,
+  // we assume the local mask uses a ring buffer (wrap-around logic). Once
+  // the 'Executor Metadata' design is implemented, we can remove this
+  // heuristic because the metadata will inform the execution behavior on
+  // regular vs ring buffer attention mask.
+  bool is_interleaved_swa = false;
+  if (mask_local_buf && mask_global_buf && seq_k_local != seq_k_global) {
+    is_interleaved_swa = true;
+  }
+
   ::litert::TensorBuffer* reference_buf =
       mask_local_buf ? mask_local_buf : mask_global_buf;
-
   LITERT_ASSIGN_OR_RETURN(auto mask_type, reference_buf->TensorType());
-  auto mask_dims = mask_type.Layout().Dimensions();
-  int rank = mask_type.Layout().Rank();
-  int64_t seq_q = mask_dims[rank - 2];
-  int64_t seq_k = mask_dims[rank - 1];
 
   void* local_ptr = nullptr;
   void* global_ptr = nullptr;
@@ -922,8 +1245,9 @@ absl::Status HWMaskUpdate(
   int64_t valid_mask_size = 0;
   std::optional<::litert::TensorBufferScopedLock> valid_mask_lock;
   const bool* valid_mask = nullptr;
-  if (in_buffers.contains(kValidMask)) {
-    auto& buf = in_buffers.at(kValidMask);
+  auto it = in_buffers.find(kValidMask);
+  if (it != in_buffers.end()) {
+    auto& buf = it->second;
     LITERT_ASSIGN_OR_RETURN(auto valid_mask_type, buf.TensorType());
     LITERT_ASSIGN_OR_RETURN(auto num_elements,
                             valid_mask_type.Layout().NumElements());
@@ -937,6 +1261,17 @@ absl::Status HWMaskUpdate(
     valid_mask = static_cast<const bool*>(lock.second);
     valid_mask_lock.emplace(std::move(lock.first));
   }
+
+  if (is_interleaved_swa) {
+    return UpdateInterleavedSWAMasks(
+        local_ptr, global_ptr, mask_type.ElementType(), seq_q_local,
+        seq_k_local, seq_k_global, time_step, input_tokens, input_tokens_size,
+        valid_mask, valid_mask_size);
+  }
+
+  // If we made it here, all layers use the same KV cache size.
+  int64_t seq_q = seq_q_global ? seq_q_global : seq_q_local;
+  int64_t seq_k = seq_k_global ? seq_k_global : seq_k_local;
 
   // Dispatch by Dtype
   if (mask_type.ElementType() == ::litert::ElementType::Int8) {

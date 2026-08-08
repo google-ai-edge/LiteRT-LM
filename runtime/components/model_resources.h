@@ -30,16 +30,26 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_model.h"  // from @litert
-#include "support/tokenizer/huggingface_tokenizer.h"  // from @litert
-#include "support/tokenizer/sentencepiece_tokenizer.h"  // from @litert
-#include "support/tokenizer/tokenizer.h"  // from @litert
+#ifdef ENABLE_HUGGINGFACE_TOKENIZER
+#include "support/tokenizer/huggingface_tokenizer.h"
+#endif  // ENABLE_HUGGINGFACE_TOKENIZER
+#ifdef ENABLE_SENTENCEPIECE_TOKENIZER
+#include "support/tokenizer/sentencepiece_tokenizer.h"
+#endif  // ENABLE_SENTENCEPIECE_TOKENIZER
+#include "runtime/proto/embedding_metadata.pb.h"
+#include "runtime/proto/executor_metadata.pb.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/scoped_file.h"
+#include "support/tokenizer/tokenizer.h"
 
 namespace litert::lm {
 
+#ifdef ENABLE_HUGGINGFACE_TOKENIZER
 using ::litert::support::HuggingFaceTokenizer;
+#endif  // ENABLE_HUGGINGFACE_TOKENIZER
+#ifdef ENABLE_SENTENCEPIECE_TOKENIZER
 using ::litert::support::SentencePieceTokenizer;
+#endif  // ENABLE_SENTENCEPIECE_TOKENIZER
 using ::litert::support::Tokenizer;
 
 enum class ModelType {
@@ -60,6 +70,7 @@ enum class ModelType {
   kArtisanTextDecoder = 11,  // The text decoder model for the artisan gpu.
   kTfLiteMtpDrafter = 13,    // The MTP drafter model.
   kTfLiteMtpAux = 14,        // The MTP auxiliary model.
+  kTfLiteTextEncoder = 15,   // The text encoder for an embedding model.
 };
 
 // Utility function to convert a string to ModelType. It's case insensitive.
@@ -95,6 +106,8 @@ inline absl::StatusOr<ModelType> StringToModelType(
     return ModelType::kTfLiteMtpDrafter;
   } else if (lower_case_model_type_str == "tf_lite_mtp_aux") {
     return ModelType::kTfLiteMtpAux;
+  } else if (lower_case_model_type_str == "tf_lite_text_encoder") {
+    return ModelType::kTfLiteTextEncoder;
   } else {
     return absl::InvalidArgumentError(
         absl::StrCat("Unknown model type: ", model_type_str));
@@ -132,12 +145,20 @@ inline std::string ModelTypeToString(ModelType model_type) {
       return "TF_LITE_MTP_DRAFTER";
     case ModelType::kTfLiteMtpAux:
       return "TF_LITE_MTP_AUX";
+    case ModelType::kTfLiteTextEncoder:
+      return "TF_LITE_TEXT_ENCODER";
     case ModelType::kUnknown:
       return "UNKNOWN";
     default:
       return "INVALID";
   }
 }
+
+// Describes the location of a contiguous region of bytes in a file.
+struct FileRegion {
+  size_t offset;
+  size_t size;
+};
 
 // ModelResources is an interface that manages all the loaded model resources
 // that need to be hold to avoid the model being destroyed. It provides a way
@@ -175,6 +196,10 @@ class ModelResources {
   virtual absl::StatusOr<std::pair<size_t, size_t>> GetWeightsSectionOffset(
       ModelType model_type) = 0;
 
+  // Returns the region of the requested ModelType in the ModelResources.
+  virtual absl::StatusOr<FileRegion> GetTFLiteModelSectionFileRegion(
+      ModelType model_type) = 0;
+
   // Returns the TFLite model backend constraint. When there is no constraint
   // for the given model type, it will return an nullopt.
   virtual std::optional<std::string> GetTFLiteModelBackendConstraint(
@@ -191,6 +216,16 @@ class ModelResources {
 
   // Returns the llm metadata.
   virtual absl::StatusOr<const proto::LlmMetadata*> GetLlmMetadata() = 0;
+
+  // Returns the executor metadata.
+  virtual absl::StatusOr<const proto::ExecutorMetadata*>
+  GetExecutorMetadata() = 0;
+
+  // Returns the embedding metadata.
+  virtual absl::StatusOr<const proto::EmbeddingMetadata*>
+  GetEmbeddingMetadata() {
+    return absl::UnimplementedError("GetEmbeddingMetadata is not implemented.");
+  }
 };
 
 }  // namespace litert::lm
