@@ -49,6 +49,7 @@
 #include "runtime/framework/resource_management/threaded_execution_manager.h"
 #include "support/tokenizer/sentencepiece_tokenizer.h"
 #include "support/tokenizer/tokenizer.h"
+#include "runtime/proto/engine.pb.h"
 
 namespace litert::lm {
 using ::litert::support::SentencePieceTokenizer;
@@ -88,6 +89,12 @@ class MockSession : public SessionInterface {
               (const std::vector<absl::string_view>& target_text,
                bool store_token_lengths),
               (override));
+  MOCK_METHOD(absl::StatusOr<std::unique_ptr<TaskController>>,
+              RunTextScoringAsync,
+              (const std::vector<absl::string_view>& target_text,
+               absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback,
+               bool store_token_lengths),
+              (override));
   MOCK_METHOD(absl::Status, RunPrefill,
               (const std::vector<InputData>& contents), (override));
   MOCK_METHOD(absl::StatusOr<std::unique_ptr<TaskController>>, RunPrefillAsync,
@@ -115,6 +122,9 @@ class MockSession : public SessionInterface {
   MOCK_METHOD(absl::Status, WaitUntilDone, (), (override));
   MOCK_METHOD(const SessionConfig&, GetSessionConfig, (), (const, override));
   MOCK_METHOD(absl::Status, RewindToStep, (int step), (override));
+  MOCK_METHOD(absl::StatusOr<std::unique_ptr<SessionInterface>>, CloneAsync,
+              (absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback),
+              (override));
 
  private:
   SessionConfig config_ = SessionConfig::CreateDefault();
@@ -165,8 +175,6 @@ TEST_F(CachedSessionTest, BasicPrefillCacheHit) {
   CachedSession cached_session(std::move(mock_session), tokenizer_.get());
 
   // First run: prefill "hello" (33, 547, 58).
-  EXPECT_CALL(*mock_session_ptr, RewindToStep(0))
-      .WillOnce(testing::Return(absl::OkStatus()));
 
   EXPECT_CALL(*mock_session_ptr,
               PrefillPreprocessedContents(testing::_, testing::_))
@@ -200,8 +208,6 @@ TEST_F(CachedSessionTest, BasicPrefillCacheHit) {
 
   // Second run: prefill "hello world" -> incoming [33, 547, 58, 359].
   // Cache has [33, 547, 58]. Longest match is 3.
-  EXPECT_CALL(*mock_session_ptr, RewindToStep(3))
-      .WillOnce(testing::Return(absl::OkStatus()));
 
   EXPECT_CALL(*mock_session_ptr,
               PrefillPreprocessedContents(testing::_, testing::_))
@@ -229,8 +235,6 @@ TEST_F(CachedSessionTest, PrefillCacheHitWithText) {
   CachedSession cached_session(std::move(mock_session), tokenizer_.get());
 
   // Prime the cache first with "hello" (33, 547, 58).
-  EXPECT_CALL(*mock_session_ptr, RewindToStep(0))
-      .WillOnce(testing::Return(absl::OkStatus()));
   EXPECT_CALL(*mock_session_ptr,
               PrefillPreprocessedContents(testing::_, testing::_))
       .WillOnce(
@@ -247,8 +251,6 @@ TEST_F(CachedSessionTest, PrefillCacheHitWithText) {
             std::vector<CacheElement>({33, 547, 58}));
 
   // Second run: "hello" + preprocessed "world" (359).
-  EXPECT_CALL(*mock_session_ptr, RewindToStep(3))
-      .WillOnce(testing::Return(absl::OkStatus()));
 
   // auto world_tensor =
   // Tokenizer::TokenIdsToTensorBuffer(std::vector<int>{359});
@@ -297,8 +299,6 @@ TEST_F(CachedSessionTest, PartialTextCacheHit) {
   CachedSession cached_session(std::move(mock_session), tokenizer_.get());
 
   // First run: prefill "hello" (33, 547, 58) to prime the cache.
-  EXPECT_CALL(*mock_session_ptr, RewindToStep(0))
-      .WillOnce(testing::Return(absl::OkStatus()));
 
   EXPECT_CALL(*mock_session_ptr,
               PrefillPreprocessedContents(testing::_, testing::_))
@@ -326,8 +326,6 @@ TEST_F(CachedSessionTest, PartialTextCacheHit) {
   //    preprocessed TensorBuffer.
   // 3. Call RunPrefillAsync with a single preprocessed InputText.
 
-  EXPECT_CALL(*mock_session_ptr, RewindToStep(3))
-      .WillOnce(testing::Return(absl::OkStatus()));
 
   EXPECT_CALL(*mock_session_ptr,
               PrefillPreprocessedContents(testing::_, testing::_))
@@ -390,8 +388,6 @@ TEST_F(CachedSessionTest, MultimodalCacheMiss) {
   // It should:
   // 1. Call RewindToStep(0).
   // 2. Call RunPrefillAsync with original contents.
-  EXPECT_CALL(*mock_session_ptr, RewindToStep(0))
-      .WillOnce(testing::Return(absl::OkStatus()));
 
   EXPECT_CALL(*mock_session_ptr,
               PrefillPreprocessedContents(testing::_, testing::_))
@@ -486,8 +482,6 @@ TEST_F(CachedSessionTest, MultimodalCacheHit) {
 
   // Prime the cache first.
   // We can do this by running a prefill which we mock.
-  EXPECT_CALL(*mock_session_ptr, RewindToStep(0))
-      .WillOnce(testing::Return(absl::OkStatus()));
   EXPECT_CALL(*mock_session_ptr,
               PrefillPreprocessedContents(testing::_, testing::_))
       .WillOnce(
@@ -530,8 +524,6 @@ TEST_F(CachedSessionTest, MultimodalCacheHit) {
   // 1. Call RewindToStep(103).
   // 2. Call RunPrefillAsync with sliced "world" (359).
 
-  EXPECT_CALL(*mock_session_ptr, RewindToStep(103))
-      .WillOnce(testing::Return(absl::OkStatus()));
 
   EXPECT_CALL(*mock_session_ptr,
               PrefillPreprocessedContents(testing::_, testing::_))
@@ -573,8 +565,6 @@ TEST_F(CachedSessionTest, MultimodalCacheHitWithRemainingMedia) {
                                options);
 
   // Prime cache with "hello" (33, 547, 58)
-  EXPECT_CALL(*mock_session_ptr, RewindToStep(0))
-      .WillOnce(testing::Return(absl::OkStatus()));
 
   EXPECT_CALL(*mock_session_ptr,
               PrefillPreprocessedContents(testing::_, testing::_))
@@ -602,8 +592,6 @@ TEST_F(CachedSessionTest, MultimodalCacheHitWithRemainingMedia) {
   // 3. Update cache to contain all elements:
   //    [33, 547, 58, MediaHash, 359] (size = 5).
 
-  EXPECT_CALL(*mock_session_ptr, RewindToStep(3))
-      .WillOnce(testing::Return(absl::OkStatus()));
 
   auto image_buffer = CreateDummyTensorBuffer(100);
   std::vector<InputData> contents;
@@ -648,8 +636,6 @@ TEST_F(CachedSessionTest, CacheTruncationOnMismatch) {
   CachedSession cached_session(std::move(mock_session), tokenizer_.get());
 
   // Prime cache with "hello world" (33, 547, 58, 359).
-  EXPECT_CALL(*mock_session_ptr, RewindToStep(0))
-      .WillOnce(testing::Return(absl::OkStatus()));
   EXPECT_CALL(*mock_session_ptr,
               PrefillPreprocessedContents(testing::_, testing::_))
       .WillOnce(
@@ -722,8 +708,6 @@ TEST_F(CachedSessionTest, CompleteCacheHitZeroPrefill) {
   CachedSession cached_session(std::move(mock_session), tokenizer_.get());
 
   // Prime the cache with "hello" (33, 547, 58).
-  EXPECT_CALL(*mock_session_ptr, RewindToStep(0))
-      .WillOnce(testing::Return(absl::OkStatus()));
   EXPECT_CALL(*mock_session_ptr,
               PrefillPreprocessedContents(testing::_, testing::_))
       .WillOnce(
@@ -770,8 +754,6 @@ TEST_F(CachedSessionTest, MultimodalPartialMatchWithMultipleMedia) {
   contents1.push_back(InputImage(std::move(image_buffer1)));
   contents1.push_back(InputText("hello"));
 
-  EXPECT_CALL(*mock_session_ptr, RewindToStep(0))
-      .WillOnce(testing::Return(absl::OkStatus()));
   EXPECT_CALL(*mock_session_ptr,
               PrefillPreprocessedContents(testing::_, testing::_))
       .WillOnce(
@@ -797,8 +779,6 @@ TEST_F(CachedSessionTest, MultimodalPartialMatchWithMultipleMedia) {
   // Second run: Image1 + "hello" + Audio1 + "world".
   // Cache: [MediaHash(image), 33, 547, 58] (103 tokens)
   // Incoming: [MediaHash(image), 33, 547, 58, MediaHash(audio), 359]
-  EXPECT_CALL(*mock_session_ptr, RewindToStep(103))
-      .WillOnce(testing::Return(absl::OkStatus()));
 
   RankedTensorType audio_tensor_type(GetElementType<float>(),
                                      Layout(Dimensions({1, 12, 1})));
@@ -994,8 +974,6 @@ TEST_F(CachedSessionTest, InsertBosTokenIdFromConstructor) {
   // Prefill "hello" (33, 547, 58).
   // With insert_bos_token_id = true, it should prefill [2, 33, 547, 58] (4
   // tokens).
-  EXPECT_CALL(*mock_session_ptr, RewindToStep(0))
-      .WillOnce(testing::Return(absl::OkStatus()));
 
   EXPECT_CALL(*mock_session_ptr,
               PrefillPreprocessedContents(testing::_, testing::_))
@@ -1056,8 +1034,6 @@ TEST_F(CachedSessionTest, MultimodalCacheMissWithEndToken) {
   contents.push_back(InputImageEnd());
   contents.push_back(InputText("hello"));
 
-  EXPECT_CALL(*mock_session_ptr, RewindToStep(0))
-      .WillOnce(testing::Return(absl::OkStatus()));
 
   EXPECT_CALL(*mock_session_ptr,
               PrefillPreprocessedContents(testing::_, testing::_))
@@ -1082,6 +1058,252 @@ TEST_F(CachedSessionTest, MultimodalCacheMissWithEndToken) {
   EXPECT_EQ(elements[3], CacheElement(547));
   EXPECT_EQ(elements[4], CacheElement(58));
   EXPECT_EQ(cached_session.GetPrefixCache().TokenLength(), 104);
+}
+
+TEST_F(CachedSessionTest, RunTextScoring) {
+  auto mock_session = std::make_unique<MockSession>();
+  MockSession* mock_session_ptr = mock_session.get();
+  CachedSession cached_session(std::move(mock_session), tokenizer_.get());
+
+  std::vector<absl::string_view> targets = {"hello"};
+  EXPECT_CALL(*mock_session_ptr,
+              RunTextScoringAsync(targets, testing::_, true))
+      .WillOnce(
+          [](const std::vector<absl::string_view>& target_text,
+             absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback,
+             bool store_token_lengths) {
+            callback(Responses(TaskState::kDone));
+            return std::make_unique<NoOpTaskController>();
+          });
+
+  auto responses = cached_session.RunTextScoring(targets, true);
+  LITERT_EXPECT_OK(responses);
+  EXPECT_GT(cached_session.GetPrefixCache().TokenLength(), 0);
+}
+
+TEST_F(CachedSessionTest, RunTextScoringAsync) {
+  auto mock_session = std::make_unique<MockSession>();
+  MockSession* mock_session_ptr = mock_session.get();
+  CachedSession cached_session(std::move(mock_session), tokenizer_.get());
+
+  std::vector<absl::string_view> targets = {"hello"};
+  EXPECT_CALL(*mock_session_ptr,
+              RunTextScoringAsync(targets, testing::_, false))
+      .WillOnce(
+          [](const std::vector<absl::string_view>& target_text,
+             absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback,
+             bool store_token_lengths) {
+            callback(Responses(TaskState::kDone));
+            return std::make_unique<NoOpTaskController>();
+          });
+
+  auto task_controller = cached_session.RunTextScoringAsync(
+      targets, [](absl::StatusOr<Responses>) {}, false);
+  LITERT_EXPECT_OK(task_controller);
+  EXPECT_GT(cached_session.GetPrefixCache().TokenLength(), 0);
+}
+
+TEST_F(CachedSessionTest, CloneAsync) {
+  auto mock_session = std::make_unique<MockSession>();
+  MockSession* mock_session_ptr = mock_session.get();
+  CachedSession cached_session(std::move(mock_session), tokenizer_.get());
+
+  EXPECT_CALL(*mock_session_ptr, CloneAsync(testing::_))
+      .WillOnce(testing::Return(std::make_unique<MockSession>()));
+
+  LITERT_ASSERT_OK_AND_ASSIGN(auto cloned_session,
+                              cached_session.CloneAsync(nullptr));
+  EXPECT_NE(cloned_session, nullptr);
+}
+
+TEST_F(CachedSessionTest, PrefillWithBenchmarkInfo) {
+  auto mock_session = std::make_unique<MockSession>();
+  auto* mock_session_ptr = mock_session.get();
+
+  CachedSession cached_session(std::move(mock_session), tokenizer_.get());
+
+  proto::BenchmarkParams benchmark_params;
+  benchmark_params.set_num_prefill_tokens(2);  // Limit prefill to 2 tokens.
+  BenchmarkInfo benchmark_info(benchmark_params);
+
+  EXPECT_CALL(*mock_session_ptr, GetMutableBenchmarkInfo())
+      .WillRepeatedly(testing::Return(&benchmark_info));
+
+
+  EXPECT_CALL(*mock_session_ptr,
+              PrefillPreprocessedContents(testing::_, testing::_))
+      .WillOnce(
+          [](std::vector<InputData> contents,
+             absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback) {
+            EXPECT_EQ(contents.size(), 1);
+            const auto& input_text = std::get<InputText>(contents[0]);
+            EXPECT_TRUE(input_text.IsTensorBuffer());
+
+            auto tensor = input_text.GetPreprocessedTextTensor();
+            EXPECT_TRUE(tensor.ok());
+            if (tensor.ok()) {
+              auto ids = Tokenizer::TensorBufferToTokenIds(**tensor);
+              EXPECT_TRUE(ids.ok());
+              if (ids.ok()) {
+                EXPECT_EQ(ids->size(), 1);
+                // "hello" tokenizes to (33, 547, 58).
+                // But num_prefill_tokens is set to 2.
+                // So it should be truncated to (33, 547).
+                EXPECT_THAT((*ids)[0], testing::ElementsAre(33, 547));
+              }
+            }
+
+            callback(Responses(TaskState::kDone));
+            return std::make_unique<NoOpTaskController>();
+          });
+
+  std::vector<InputData> inputs;
+  inputs.push_back(InputText("hello"));
+  LITERT_EXPECT_OK(cached_session.RunPrefill(inputs));
+
+  // Cache should contain the truncated tokens.
+  EXPECT_EQ(cached_session.GetPrefixCache().GetElements(),
+            std::vector<CacheElement>({33, 547}));
+}
+
+TEST_F(CachedSessionTest, ResetEmptyCache) {
+  auto mock_session = std::make_unique<MockSession>();
+  auto* mock_session_ptr = mock_session.get();
+  CachedSession cached_session(std::move(mock_session), tokenizer_.get());
+
+  // Resetting an empty cache should NOT call RewindToStep.
+  EXPECT_CALL(*mock_session_ptr, RewindToStep(testing::_)).Times(0);
+
+  LITERT_EXPECT_OK(cached_session.Reset());
+  EXPECT_EQ(cached_session.GetPrefixCache().Size(), 0);
+}
+
+TEST_F(CachedSessionTest, ResetWithCachedTokens) {
+  auto mock_session = std::make_unique<MockSession>();
+  auto* mock_session_ptr = mock_session.get();
+  CachedSession cached_session(std::move(mock_session), tokenizer_.get());
+
+  // 1. Prime cache.
+  EXPECT_CALL(*mock_session_ptr,
+              PrefillPreprocessedContents(testing::_, testing::_))
+      .WillOnce(
+          [](std::vector<InputData> contents,
+             absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback) {
+            callback(Responses(TaskState::kDone));
+            return std::make_unique<NoOpTaskController>();
+          });
+  std::vector<InputData> inputs;
+  inputs.push_back(InputText("hello"));
+  LITERT_EXPECT_OK(cached_session.RunPrefill(inputs));
+  ASSERT_GT(cached_session.GetPrefixCache().TokenLength(), 0);
+
+  // 2. Reset should call RewindToStep(0) and clear the cache.
+  EXPECT_CALL(*mock_session_ptr, RewindToStep(0))
+      .WillOnce(testing::Return(absl::OkStatus()));
+
+  LITERT_EXPECT_OK(cached_session.Reset());
+  EXPECT_EQ(cached_session.GetPrefixCache().Size(), 0);
+  EXPECT_EQ(cached_session.GetPrefixCache().TokenLength(), 0);
+}
+
+TEST_F(CachedSessionTest, ResetFailure) {
+  auto mock_session = std::make_unique<MockSession>();
+  auto* mock_session_ptr = mock_session.get();
+  CachedSession cached_session(std::move(mock_session), tokenizer_.get());
+
+  // 1. Prime cache.
+  EXPECT_CALL(*mock_session_ptr,
+              PrefillPreprocessedContents(testing::_, testing::_))
+      .WillOnce(
+          [](std::vector<InputData> contents,
+             absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback) {
+            callback(Responses(TaskState::kDone));
+            return std::make_unique<NoOpTaskController>();
+          });
+  std::vector<InputData> inputs;
+  inputs.push_back(InputText("hello"));
+  LITERT_EXPECT_OK(cached_session.RunPrefill(inputs));
+  size_t original_size = cached_session.GetPrefixCache().Size();
+  ASSERT_GT(original_size, 0);
+
+  // 2. Reset fails if RewindToStep(0) fails.
+  EXPECT_CALL(*mock_session_ptr, RewindToStep(0))
+      .WillOnce(testing::Return(absl::InternalError("Rewind failed")));
+
+  auto status = cached_session.Reset();
+  EXPECT_FALSE(status.ok());
+  EXPECT_EQ(status.code(), absl::StatusCode::kInternal);
+  EXPECT_THAT(status.message(), testing::HasSubstr("Rewind failed"));
+
+  // Cache should NOT be cleared if rewind fails.
+  EXPECT_EQ(cached_session.GetPrefixCache().Size(), original_size);
+}
+
+TEST_F(CachedSessionTest, RunDecodeSuccess) {
+  auto mock_session = std::make_unique<MockSession>();
+  auto* mock_session_ptr = mock_session.get();
+  CachedSession cached_session(std::move(mock_session), tokenizer_.get());
+
+  Responses expected_response(TaskState::kDone);
+  expected_response.GetMutableTokenIds() = {{10, 20}};
+  EXPECT_CALL(*mock_session_ptr, RunDecode(testing::_))
+      .WillOnce(testing::Return(expected_response));
+
+  auto responses = cached_session.RunDecode();
+  LITERT_EXPECT_OK(responses);
+  EXPECT_EQ(cached_session.GetPrefixCache().GetElements(),
+            std::vector<CacheElement>({10, 20}));
+}
+
+TEST_F(CachedSessionTest, RunDecodeFailedNoCacheAppend) {
+  auto mock_session = std::make_unique<MockSession>();
+  auto* mock_session_ptr = mock_session.get();
+  CachedSession cached_session(std::move(mock_session), tokenizer_.get());
+
+  Responses failed_response(TaskState::kFailed);
+  failed_response.GetMutableTokenIds() = {{10, 20}};
+  EXPECT_CALL(*mock_session_ptr, RunDecode(testing::_))
+      .WillOnce(testing::Return(failed_response));
+
+  auto responses = cached_session.RunDecode();
+  LITERT_EXPECT_OK(responses);
+  EXPECT_EQ(cached_session.GetPrefixCache().Size(), 0);
+}
+
+TEST_F(CachedSessionTest, RunDecodeAsyncStreamingSuccess) {
+  auto mock_session = std::make_unique<MockSession>();
+  auto* mock_session_ptr = mock_session.get();
+  CachedSession cached_session(std::move(mock_session), tokenizer_.get());
+
+  EXPECT_CALL(*mock_session_ptr, RunDecodeAsync(testing::_, testing::_))
+      .WillOnce(
+          [](absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback,
+             const DecodeConfig& config) {
+            Responses r1(TaskState::kProcessing);
+            r1.GetMutableTokenIds() = {{10}};
+            callback(std::move(r1));
+
+            Responses r2(TaskState::kProcessing);
+            r2.GetMutableTokenIds() = {{20}};
+            callback(std::move(r2));
+
+            Responses r3(TaskState::kDone);
+            r3.GetMutableTokenIds() = {{30}};
+            callback(std::move(r3));
+            return std::make_unique<NoOpTaskController>();
+          });
+
+  int callback_count = 0;
+  auto controller = cached_session.RunDecodeAsync(
+      [&callback_count](absl::StatusOr<Responses> responses) {
+        if (responses.ok()) {
+          callback_count++;
+        }
+      });
+  LITERT_EXPECT_OK(controller);
+  EXPECT_EQ(callback_count, 3);
+  EXPECT_EQ(cached_session.GetPrefixCache().GetElements(),
+            std::vector<CacheElement>({10, 20, 30}));
 }
 
 }  // namespace

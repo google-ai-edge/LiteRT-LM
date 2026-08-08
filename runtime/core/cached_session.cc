@@ -353,12 +353,22 @@ absl::StatusOr<std::unique_ptr<SessionInterface::TaskController>>
 CachedSession::RunPrefillAsync(
     const std::vector<InputData>& contents,
     absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback) {
+  std::optional<BenchmarkInfo> benchmark_info = std::nullopt;
+  auto benchmark_info_ptr = session_->GetMutableBenchmarkInfo();
+  if (benchmark_info_ptr.ok() && *benchmark_info_ptr != nullptr) {
+    benchmark_info = **benchmark_info_ptr;
+  }
+
   // Preprocess the input contents, converting text inputs to TensorBuffers of
   // token IDs.
-  ABSL_ASSIGN_OR_RETURN(
-      auto preprocessed_contents,
-      PreprocessContents(contents, GetSessionConfig(), *tokenizer_,
-                         /*benchmark_info=*/std::nullopt));
+  ABSL_ASSIGN_OR_RETURN(auto preprocessed_contents,
+                        PreprocessContents(contents, GetSessionConfig(),
+                                           *tokenizer_, benchmark_info));
+
+  if (benchmark_info_ptr.ok() && *benchmark_info_ptr != nullptr &&
+      benchmark_info.has_value()) {
+    **benchmark_info_ptr = *benchmark_info;
+  }
 
   if (insert_bos_token_id_) {
     int bos_token_id = session_->GetSessionConfig().GetStartTokenId();
@@ -387,8 +397,11 @@ CachedSession::RunPrefillAsync(
     return std::make_unique<NoOpTaskController>();
   }
 
-  // Rewind the session to the matched token offset.
-  ABSL_RETURN_IF_ERROR(session_->RewindToStep(match_result.matched_tokens));
+  // Rewind the session to the matched token offset if it differs from the
+  // current step.
+  if (match_result.matched_tokens != prefix_cache_.TokenLength()) {
+    ABSL_RETURN_IF_ERROR(session_->RewindToStep(match_result.matched_tokens));
+  }
 
   // Truncate local cache to discard mismatched trailing entries.
   prefix_cache_.Truncate(match_result.matched_elements);
@@ -434,6 +447,15 @@ absl::Status CachedSession::RunPrefill(const std::vector<InputData>& contents) {
   return status;
 }
 
+absl::Status CachedSession::Reset() {
+  if (prefix_cache_.TokenLength() == 0) {
+    return absl::OkStatus();
+  }
+  ABSL_RETURN_IF_ERROR(session_->RewindToStep(0));
+  prefix_cache_.Clear();
+  return absl::OkStatus();
+}
+
 absl::StatusOr<std::unique_ptr<SessionInterface::TaskController>>
 CachedSession::RunDecodeAsync(
     absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback,
@@ -473,15 +495,96 @@ absl::StatusOr<Responses> CachedSession::RunDecode(
     const DecodeConfig& decode_config) {
   ABSL_ASSIGN_OR_RETURN(Responses responses,
                         session_->RunDecode(decode_config));
-  const auto& token_ids = responses.GetTokenIds();
-  if (!token_ids.empty() && !token_ids[0].empty()) {
-    prefix_cache_.AppendTokens(token_ids[0]);
+  if (responses.GetTaskState() == TaskState::kDone ||
+      responses.GetTaskState() == TaskState::kMaxNumTokensReached) {
+    const auto& token_ids = responses.GetTokenIds();
+    if (!token_ids.empty() && !token_ids[0].empty()) {
+      prefix_cache_.AppendTokens(token_ids[0]);
+    }
   }
   return responses;
 }
 
 absl::StatusOr<Responses> CachedSession::RunDecode() {
   return RunDecode(DecodeConfig::CreateDefault());
+}
+
+absl::StatusOr<Responses> CachedSession::RunTextScoring(
+    const std::vector<absl::string_view>& target_text,
+    bool store_token_lengths) {
+  absl::Status status = absl::OkStatus();
+  Responses collected_responses(TaskState::kUnknown);
+  ABSL_ASSIGN_OR_RETURN(
+      auto task_controller,
+      RunTextScoringAsync(
+          target_text,
+          [&status, &collected_responses](absl::StatusOr<Responses> responses) {
+            status = responses.status();
+            if (responses.ok()) {
+              collected_responses = std::move(responses.value());
+            }
+          },
+          store_token_lengths));
+  ABSL_RETURN_IF_ERROR(task_controller->WaitUntilDone(Engine::kDefaultTimeout));
+  ABSL_RETURN_IF_ERROR(status);
+  return collected_responses;
+}
+
+absl::StatusOr<std::unique_ptr<SessionInterface::TaskController>>
+CachedSession::RunTextScoringAsync(
+    const std::vector<absl::string_view>& target_text,
+    absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback,
+    bool store_token_lengths) {
+  std::vector<std::string> target_text_copies;
+  target_text_copies.reserve(target_text.size());
+  for (absl::string_view text : target_text) {
+    target_text_copies.emplace_back(text);
+  }
+  auto wrapped_callback = [this,
+                           target_text_copies = std::move(target_text_copies),
+                           callback = std::move(callback)](
+                              absl::StatusOr<Responses> responses) mutable {
+    if (responses.ok() && responses->GetTaskState() == TaskState::kDone) {
+      if (!responses->GetTokenIds().empty() &&
+          !responses->GetTokenIds()[0].empty()) {
+        prefix_cache_.AppendTokens(responses->GetTokenIds()[0]);
+      } else if (!target_text_copies.empty() && tokenizer_ != nullptr) {
+        auto token_ids = tokenizer_->TextToTokenIds(target_text_copies[0]);
+        if (token_ids.ok() && !token_ids->empty()) {
+          prefix_cache_.AppendTokens(*token_ids);
+        }
+      }
+    }
+    callback(std::move(responses));
+  };
+  return session_->RunTextScoringAsync(target_text, std::move(wrapped_callback),
+                                       store_token_lengths);
+}
+
+absl::StatusOr<std::unique_ptr<CachedSession>> CachedSession::Clone() const {
+  ABSL_ASSIGN_OR_RETURN(auto cloned_session, session_->Clone());
+  CachedSessionOptions options;
+  options.vision_properties = vision_properties_;
+  options.audio_properties = audio_properties_;
+  options.insert_bos_token_id = insert_bos_token_id_;
+  auto new_cached_session = std::make_unique<CachedSession>(
+      std::move(cloned_session), tokenizer_, options);
+  new_cached_session->prefix_cache_ = prefix_cache_;
+  return new_cached_session;
+}
+
+absl::StatusOr<std::unique_ptr<CachedSession>> CachedSession::CloneAsync(
+    absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback) const {
+  ABSL_ASSIGN_OR_RETURN(auto cloned_session,
+                        session_->CloneAsync(std::move(callback)));
+  CachedSessionOptions options;
+  options.vision_properties = vision_properties_;
+  options.audio_properties = audio_properties_;
+  options.insert_bos_token_id = insert_bos_token_id_;
+  auto new_cached_session = std::make_unique<CachedSession>(
+      std::move(cloned_session), tokenizer_, options);
+  new_cached_session->prefix_cache_ = prefix_cache_;
+  return new_cached_session;
 }
 
 }  // namespace litert::lm

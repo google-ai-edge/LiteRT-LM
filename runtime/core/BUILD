@@ -487,6 +487,7 @@ cc_test(
         "//runtime/executor:fake_llm_executor",
         "//runtime/executor:llm_executor_io_types",
         "//runtime/framework/resource_management:threaded_execution_manager",
+        "//runtime/proto:engine_cc_proto",
         "//support/tokenizer",
         "//support/tokenizer:sentencepiece_tokenizer",
     ],
