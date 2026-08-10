@@ -1,0 +1,57 @@
+/*
+ * Copyright 2026 Google LLC
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package com.google.ai.edge.litertlm
+
+/**
+ * Configuration for the LiteRT-LM [EmbeddingEngine].
+ *
+ * @property modelPath The file path to the `.litertlm` embedding model bundle.
+ * @property backend The execution backend for the main text encoder (CPU, GPU, NPU).
+ * @property visionBackend The execution backend for the vision encoder (if model is multimodal).
+ * @property audioBackend The execution backend for the audio encoder (if model is multimodal).
+ * @property cacheDir Directory for compiled model artifacts and caching.
+ */
+data class EmbeddingEngineConfig(
+  val modelPath: String,
+  val backend: Backend = Backend.CPU(),
+  val visionBackend: Backend? = null,
+  val audioBackend: Backend? = null,
+  val cacheDir: String? = null,
+)
+
+/**
+ * Configuration options for a single or batch embedding calculation.
+ *
+ * @property normalize Whether to L2-normalize the resulting output vectors. Defaults to `true`.
+ */
+data class EmbeddingOptions @JvmOverloads constructor(val normalize: Boolean = true)
+
+/**
+ * Represents the embedding result for an input item.
+ *
+ * @property embedding Dense float vector output representation.
+ */
+data class EmbeddingResponse(val embedding: FloatArray) {
+  override fun equals(other: Any?): Boolean {
+    if (this === other) return true
+    if (other !is EmbeddingResponse) return false
+    return embedding.contentEquals(other.embedding)
+  }
+
+  override fun hashCode(): Int {
+    return embedding.contentHashCode()
+  }
+}
