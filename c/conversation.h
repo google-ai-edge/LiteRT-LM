@@ -19,7 +19,11 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#if defined(__APPLE__)
+#include "engine.h"  // NOLINT
+#else
 #include "c/engine.h"
+#endif
 
 #ifdef __cplusplus
 extern "C" {

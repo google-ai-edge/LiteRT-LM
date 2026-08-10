@@ -107,6 +107,7 @@ swift_interop_hint(
 cc_library(
     name = "CLiteRTLM_objc",
     hdrs = [
+        "//c:conversation.h",
         "//c:engine.h",
         "//schema/capabilities:capabilities_c.h",
     ],
@@ -135,6 +136,7 @@ apple_xcframework(
     },
     public_hdrs = [
         "//c:engine.h",
+        "//c:conversation.h",
         "//schema/capabilities:capabilities_c.h",
     ],
     deps = [
@@ -170,6 +172,7 @@ genrule(
     srcs = [
         ":CLiteRTLM_universal",
         "//c:engine.h",
+        "//c:conversation.h",
         "//schema/capabilities:capabilities_c.h",
     ],
     outs = ["CLiteRTLM_mac.zip"],
@@ -179,11 +182,13 @@ genrule(
        cp $(location :CLiteRTLM_universal) CLiteRTLM_mac/libCLiteRTLM_mac.dylib
        # Copy the headers
        cp $(location //c:engine.h) CLiteRTLM_mac/Headers/
+       cp $(location //c:conversation.h) CLiteRTLM_mac/Headers/
        cp $(location //schema/capabilities:capabilities_c.h) CLiteRTLM_mac/Headers/
        # Create module map
        cat << 'EOF' > CLiteRTLM_mac/Headers/module.modulemap
 module CLiteRTLM {
    header "engine.h"
+   header "conversation.h"
    header "capabilities_c.h"
    export *
 }
