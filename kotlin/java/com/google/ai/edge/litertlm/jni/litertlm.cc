@@ -60,6 +60,8 @@
 #include "runtime/util/litert_util.h"
 #include "runtime/util/logging.h"
 #include "schema/capabilities/capabilities_c.h"
+#include "support/preprocessor/image_preprocessor.h"
+#include "support/util/io_types.h"
 
 // For Windows, __declspec( dllexport ) is required to export function in .dll.
 // https://learn.microsoft.com/en-us/cpp/cpp/using-dllimport-and-dllexport-in-cpp-classes?view=msvc-170
@@ -250,10 +252,32 @@ std::vector<InputData> GetNativeInputData(JNIEnv* env,
           (jbyteArray)env->CallObjectMethod(input_obj, image_get_bytes_mid);
       jsize len = env->GetArrayLength(bytes_jarr);
       jbyte* bytes = env->GetByteArrayElements(bytes_jarr, nullptr);
-      contents.emplace_back(
-          InputImage(std::string(reinterpret_cast<char*>(bytes), len)));
+      litert::support::InputImage raw_image(
+          std::string(reinterpret_cast<char*>(bytes), len));
       env->ReleaseByteArrayElements(bytes_jarr, bytes, JNI_ABORT);
       env->DeleteLocalRef(bytes_jarr);
+
+      auto preprocessor = ::litert::support::ImagePreprocessor::Create();
+      if (preprocessor != nullptr) {
+        ::litert::support::ImagePreprocessParameter preprocess_param;
+        preprocess_param.SetPatchifyConfig(
+            ::litert::support::ImagePreprocessParameter::PatchifyConfig{
+                .patch_width = 16,
+                .patch_height = 16,
+                .max_num_patches = 630,
+                .pooling_kernel_size = 3,
+            });
+        auto processed_image =
+            preprocessor->Preprocess(raw_image, preprocess_param);
+        if (processed_image.ok()) {
+          contents.emplace_back(std::move(*processed_image));
+        } else {
+          contents.emplace_back(std::move(raw_image));
+        }
+      } else {
+        contents.emplace_back(std::move(raw_image));
+      }
+      contents.emplace_back(litert::lm::InputImageEnd());
     } else {
       ThrowLiteRtLmJniException(env, "Unsupported InputData type");
     }
