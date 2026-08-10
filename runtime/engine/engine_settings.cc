@@ -290,6 +290,7 @@ absl::Status EngineSettings::MaybeUpdateAndValidate(
     }
   }
 
+  auto backend = main_executor_settings_.GetBackend();
   // Load the max num tokens from the model file.
   // If not set, we set the default value to one based on the number of tokens
   // in the prompt.
@@ -300,6 +301,12 @@ absl::Status EngineSettings::MaybeUpdateAndValidate(
     int max_num_tokens = ((num_prompt_tokens + 1023) / 4096 + 1) * 4096;
     if (metadata.max_num_tokens() > 0) {
       max_num_tokens = metadata.max_num_tokens();
+#if !defined(__APPLE__)
+      // Metal does not constraint the max allocated GPU buffer size.
+      if (backend == Backend::GPU && max_num_tokens > 4096) {
+        max_num_tokens = ((num_prompt_tokens + 1023) / 4096 + 1) * 4096;
+      }
+#endif  // !__APPLE__
     }
     main_executor_settings_.SetMaxNumTokens(max_num_tokens);
   }
@@ -327,7 +334,6 @@ absl::Status EngineSettings::MaybeUpdateAndValidate(
   }
 
   // Set the default values for the sampler params.
-  Backend backend = main_executor_settings_.GetBackend();
   if (!metadata.has_sampler_params()) {
     proto::SamplerParameters& sampler_params =
         *metadata.mutable_sampler_params();

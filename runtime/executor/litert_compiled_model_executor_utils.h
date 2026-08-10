@@ -38,6 +38,7 @@
 #include "runtime/components/model_resources.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/llm_executor_settings.h"
+#include "runtime/proto/executor_metadata.pb.h"
 #include "runtime/proto/sampler_params.pb.h"
 #include "runtime/util/scoped_file.h"
 
@@ -156,6 +157,21 @@ GetOptimizedPrefillWorkGroups(
 // is_f16 only applies to FLOAT mask data type.
 absl::Status InitializeAttentionMask(::litert::TensorBuffer& mask, bool is_f16);
 
+// Parameters extracted from ExecutorMetadata for attention mask generation.
+struct AttentionMaskParams {
+  proto::AttentionMaskPolicy global_policy =
+      proto::ATTENTION_MASK_POLICY_CAUSAL;
+  proto::AttentionMaskPolicy local_policy =
+      proto::ATTENTION_MASK_POLICY_CAUSAL;
+  std::optional<int> sliding_window_size = std::nullopt;
+};
+
+// Extracts attention mask parameters (global policy, local policy, sliding
+// window size) from the optional ExecutorMetadata protobuf.
+// If metadata is null or does not specify policies, defaults to causal policy.
+AttentionMaskParams GetAttentionMaskParams(
+    const proto::ExecutorMetadata* executor_metadata);
+
 // Fills attention mask for a given range of timesteps.
 // The mask is a 4D tensor with shape [batch=1, seq_len, 1, max_kv_len].
 // mask - The attention mask tensor to be filled.
@@ -167,7 +183,7 @@ absl::Status InitializeAttentionMask(::litert::TensorBuffer& mask, bool is_f16);
 // sliding_window_size - The sliding window size.
 absl::Status FillAttentionMask(
     ::litert::TensorBuffer& mask, int start_timestep, int steps,
-    const AttentionMaskPolicy& attention_mask_policy,
+    proto::AttentionMaskPolicy attention_mask_policy,
     std::optional<absl::Span<const int>> token_ids = std::nullopt,
     std::optional<int> sliding_window_size = std::nullopt);
 

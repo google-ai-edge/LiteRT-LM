@@ -79,6 +79,34 @@ message StateBuffer {
   optional int32 maximum_sequence_length = 9;
 }
 
+// The policy of the attention mask.
+enum AttentionMaskPolicy {
+  // The policy of the attention mask is unspecified.
+  ATTENTION_MASK_POLICY_UNSPECIFIED = 0;
+
+  // All tokens are causal.
+  ATTENTION_MASK_POLICY_CAUSAL = 1;
+
+  // All tokens are bidirectional.
+  ATTENTION_MASK_POLICY_BIDIRECTIONAL = 2;
+
+  // Only vision tokens are bidirectional, other tokens are causal.
+  ATTENTION_MASK_POLICY_VISION_BIDIRECTIONAL = 3;
+}
+
+// Settings for the attention mask.
+message AttentionMaskSettings {
+  // The policy of the attention mask.
+  optional AttentionMaskPolicy attention_mask_policy = 1;
+  // The policy of the local attention mask. Not all models have local attention
+  // mask. If not set, attention mask will be used as the local attentio mask.
+  optional AttentionMaskPolicy local_attention_mask_policy = 2;
+  // The sliding window size of the local attention mask. If not set, local
+  // attention mask will be full attention. This should match the minimum
+  // sequence length of the local KV cache buffer.
+  optional int32 sliding_window_size = 3;
+}
+
 message LlmExecutorMetadata {
   // The maximum history size (in steps) that can be preserved in the model
   // history. If not provided, we assume the model maintains history up to the
@@ -90,6 +118,9 @@ message LlmExecutorMetadata {
   // Stateful buffers of the model that need to be managed by the executor.
   // For example, KV cache buffers are considered stateful buffers.
   repeated StateBuffer state_buffers = 2;
+
+  // Settings for the attention mask.
+  AttentionMaskSettings attention_mask_settings = 3;
 }
 
 message ExecutorMetadata {

@@ -74,46 +74,6 @@ std::ostream& operator<<(std::ostream& os, const NpuConfig& config) {
   return os;
 }
 
-bool operator==(const AttentionMaskSettings& lhs,
-                const AttentionMaskSettings& rhs) {
-  return lhs.attention_mask_policy == rhs.attention_mask_policy &&
-         lhs.local_attention_mask_policy == rhs.local_attention_mask_policy &&
-         lhs.sliding_window_size == rhs.sliding_window_size;
-}
-
-std::ostream& operator<<(std::ostream& os, const AttentionMaskPolicy& policy) {
-  switch (policy) {
-    case AttentionMaskPolicy::kCausal:
-      os << "Causal";
-      break;
-    case AttentionMaskPolicy::kBidirectional:
-      os << "Bidirectional";
-      break;
-    case AttentionMaskPolicy::kVisionBidirectional:
-      os << "VisionBidirectional";
-      break;
-  }
-  return os;
-}
-
-std::ostream& operator<<(std::ostream& os,
-                         const AttentionMaskSettings& settings) {
-  os << "attention_mask_policy: "
-     << settings.attention_mask_policy << "\n";
-  if (settings.local_attention_mask_policy.has_value()) {
-    os << "local_attention_mask_policy: "
-       << settings.local_attention_mask_policy.value() << "\n";
-  } else {
-    os << "local_attention_mask_policy: Not set\n";
-  }
-  if (settings.sliding_window_size.has_value()) {
-    os << "sliding_window_size: " << settings.sliding_window_size.value();
-  } else {
-    os << "sliding_window_size: Not set";
-  }
-  return os;
-}
-
 std::ostream& operator<<(std::ostream& os, const AdvancedSettings& settings) {
   os << "prefill_batch_sizes: ["
      << absl::StrJoin(settings.prefill_batch_sizes, ", ") << "]\n";
@@ -199,8 +159,6 @@ std::ostream& operator<<(std::ostream& os, const LlmExecutorSettings& config) {
        << "\n";
   }
   os << "model_assets: " << config.GetModelAssets() << "\n";
-  os << "attention_mask_settings:\n"
-     << config.GetAttentionMaskSettings() << "\n";
   if (config.GetAdvancedSettings().has_value()) {
     os << "advanced_settings: " << *config.GetAdvancedSettings() << "\n";
   } else {

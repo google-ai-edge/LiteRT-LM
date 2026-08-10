@@ -260,10 +260,6 @@ model_assets: model_path: )",
       kPathToModel1, R"(
 fake_weights_mode: FAKE_WEIGHTS_NONE
 
-attention_mask_settings:
-attention_mask_policy: Causal
-local_attention_mask_policy: Not set
-sliding_window_size: Not set
 advanced_settings: Not set
 )");  // Original output
   EXPECT_EQ(oss.str(), expected_output);
@@ -338,10 +334,6 @@ model_assets: model_path: )",
       kPathToModel1, R"(
 fake_weights_mode: FAKE_WEIGHTS_NONE
 
-attention_mask_settings:
-attention_mask_policy: Causal
-local_attention_mask_policy: Not set
-sliding_window_size: Not set
 advanced_settings: prefill_batch_sizes: [128, 256]
 num_output_candidates: 3
 configure_magic_numbers: 1
@@ -371,25 +363,6 @@ error_on_invalid_sampled_token_id: 0
 
 )");  // Original output string.
   EXPECT_EQ(oss.str(), expected_output);
-}
-
-TEST(LlmExecutorConfigTest, SetAttentionMaskSettings) {
-  auto model_assets = ModelAssets::Create(kPathToModel1);
-  ASSERT_OK(model_assets);
-  ASSERT_OK_AND_ASSIGN(auto settings, LlmExecutorSettings::CreateDefault(
-                                          *std::move(model_assets)));
-  AttentionMaskSettings mask_settings{
-      .attention_mask_policy = AttentionMaskPolicy::kBidirectional,
-      .local_attention_mask_policy = AttentionMaskPolicy::kCausal,
-      .sliding_window_size = 512,
-  };
-  settings.SetAttentionMaskSettings(mask_settings);
-
-  EXPECT_EQ(settings.GetAttentionMaskSettings().attention_mask_policy,
-            AttentionMaskPolicy::kBidirectional);
-  EXPECT_EQ(settings.GetAttentionMaskSettings().local_attention_mask_policy,
-            AttentionMaskPolicy::kCausal);
-  EXPECT_EQ(settings.GetAttentionMaskSettings().sliding_window_size, 512);
 }
 
 TEST(LlmExecutorConfigTest, AdvancedSettingsWithErrorOnInvalidSampledTokenId) {
