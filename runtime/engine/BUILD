@@ -341,12 +341,16 @@ cc_binary(
         "//runtime/core:embedding_engine_impl",
         "//runtime/executor:executor_settings_base",
         "//runtime/executor:litert_compiled_model_executor_utils",
+        "//runtime/proto:embedding_metadata_cc_proto",
+        "//runtime/proto:embedding_model_type_cc_proto",
+        "//runtime/proto:token_cc_proto",
         "//runtime/util:litert_status_util",
         "//runtime/util:litert_util",
         "//runtime/util:memory_mapped_file",
         "//runtime/util:scoped_file",
         "//support/preprocessor:image_preprocessor",
         "//support/preprocessor:image_preprocessor_impl",  # buildcleaner: keep
+        "//support/tokenizer",
     ],
 )
 

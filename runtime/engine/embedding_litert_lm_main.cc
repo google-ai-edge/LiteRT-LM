@@ -46,11 +46,15 @@
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
+#include "runtime/proto/embedding_metadata.pb.h"
+#include "runtime/proto/embedding_model_type.pb.h"
+#include "runtime/proto/token.pb.h"
 #include "runtime/util/litert_util.h"
 #include "runtime/util/memory_mapped_file.h"
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/status_macros.h"
 #include "support/preprocessor/image_preprocessor.h"
+#include "support/tokenizer/tokenizer.h"
 
 ABSL_FLAG(std::string, backend, "cpu",
           "Executor backend to use for embedding execution (cpu, gpu, etc.)");
@@ -78,9 +82,25 @@ using ::litert::lm::InputImageEnd;
 using ::litert::lm::InputText;
 using ::litert::lm::MemoryMappedFile;
 using ::litert::lm::ModelAssets;
+using ::litert::lm::ModelResources;
 using ::litert::lm::ModelType;
 using ::litert::lm::OwnedEnvironment;
 using ::litert::lm::ScopedFile;
+using ::litert::support::Tokenizer;
+
+absl::StatusOr<std::optional<InputText>> GetStartOfImageToken(
+    ModelResources& resources) {
+  auto metadata = resources.GetEmbeddingMetadata();
+  if (!metadata.ok() || *metadata == nullptr) {
+    return std::nullopt;
+  }
+  const auto* embedding_metadata = *metadata;
+  if (!embedding_metadata->has_embedding_model_type()) {
+    return std::nullopt;
+  }
+  const auto& model_type = embedding_metadata->embedding_model_type();
+  return std::nullopt;
+}
 
 absl::StatusOr<ModelAssets> CreateModelAssets(bool use_mmap,
                                               absl::string_view model_path) {
@@ -155,6 +175,9 @@ absl::Status MainHelper(int argc, char** argv) {
       auto settings, EmbeddingEngineSettings::CreateDefault(
                          model_assets, backend, vision_backend, audio_backend));
 
+  LITERT_ASSIGN_OR_RETURN(std::optional<InputText> start_of_image_token,
+                          GetStartOfImageToken(*resources));
+
   std::cout << "Initializing EmbeddingEngine..." << std::endl;
   LITERT_ASSIGN_OR_RETURN(
       auto engine,
@@ -169,6 +192,12 @@ absl::Status MainHelper(int argc, char** argv) {
   }
 
   std::vector<InputData> contents;
+  if (!prompt.empty()) {
+    std::cout << "Computing embedding for input prompt: \"" << prompt << "\""
+              << std::endl;
+    contents.emplace_back(InputText(prompt));
+  }
+
   if (!image_path.empty()) {
     std::cout << "Loading image from: " << image_path << std::endl;
     std::ifstream file(image_path, std::ios::binary);
@@ -198,14 +227,11 @@ absl::Status MainHelper(int argc, char** argv) {
         InputImage processed_image,
         preprocessor->Preprocess(raw_image, preprocess_param));
 
+    if (start_of_image_token.has_value()) {
+      contents.emplace_back(std::move(*start_of_image_token));
+    }
     contents.emplace_back(std::move(processed_image));
     contents.emplace_back(InputImageEnd());
-  }
-
-  if (!prompt.empty()) {
-    std::cout << "Computing embedding for input prompt: \"" << prompt << "\""
-              << std::endl;
-    contents.emplace_back(InputText(prompt));
   }
 
   auto response_result = engine->ComputeEmbedding(
