@@ -14,7 +14,9 @@
 
 #include "runtime/executor/llm_executor_settings_utils.h"
 
+#include <cstddef>
 #include <filesystem>  // NOLINT: Required for path manipulation.
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -26,8 +28,11 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "litert/c/options/litert_gpu_options.h"  // from @litert
 #include "litert/cc/litert_common.h"  // from @litert
+#include "litert/cc/litert_model.h"  // from @litert
 #include "litert/cc/litert_options.h"  // from @litert
+#include "litert/cc/options/litert_cpu_options.h"  // from @litert
 #include "litert/test/matchers.h"  // from @litert
+#include "runtime/components/model_resources.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/util/file_util.h"

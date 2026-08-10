@@ -1799,7 +1799,8 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
   LITERT_ASSIGN_OR_RETURN(
       auto compilation_options,
       CreateCompilationOptions(executor_settings, activation_data_type,
-                               &signatures));
+                               &signatures, /*cache_suffix=*/std::nullopt,
+                               &resources));
 
   ABSL_RETURN_IF_ERROR(SetExternalWeightOptions(
       resources, ModelType::kTfLitePrefillDecode, compilation_options));
@@ -2121,7 +2122,8 @@ LlmLiteRtCompiledModelExecutorDynamic::Create(
   ABSL_ASSIGN_OR_RETURN(
       auto compilation_options,
       CreateCompilationOptions(executor_settings, ActivationDataType::FLOAT32,
-                               /*signatures=*/std::nullopt));
+                               /*signatures=*/std::nullopt,
+                               /*cache_suffix=*/std::nullopt, &resources));
   std::string weight_cache_path = executor_settings.GetCacheDir();
 
   const Backend backend = executor_settings.GetBackend();

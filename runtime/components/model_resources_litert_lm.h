@@ -73,6 +73,12 @@ class ModelResourcesLitertLm : public ModelResources {
   absl::StatusOr<FileRegion> GetTFLiteModelSectionFileRegion(
       ModelType model_type) override;
 
+  std::optional<bool> GetSystemMetadataBool(
+      absl::string_view key) const override;
+
+  std::optional<std::string> GetSystemMetadataString(
+      absl::string_view key) const override;
+
  protected:
   explicit ModelResourcesLitertLm(
       std::unique_ptr<LitertLmLoader> litert_lm_loader,
