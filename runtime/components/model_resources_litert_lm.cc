@@ -265,4 +265,14 @@ ModelResourcesLitertLm::GetTFLiteModelSectionFileRegion(
   };
 }
 
+std::optional<bool> ModelResourcesLitertLm::GetSystemMetadataBool(
+    absl::string_view key) const {
+  return litert_lm_loader_->GetSystemMetadataBool(key);
+}
+
+std::optional<std::string> ModelResourcesLitertLm::GetSystemMetadataString(
+    absl::string_view key) const {
+  return litert_lm_loader_->GetSystemMetadataString(key);
+}
+
 }  // namespace litert::lm

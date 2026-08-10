@@ -335,4 +335,46 @@ LitertLmLoader::GetHuggingFaceTokenizer() {
       hf_tokenizer_data.size()};
 }
 
+std::optional<bool> LitertLmLoader::GetSystemMetadataBool(
+    absl::string_view key) const {
+  if (header_.metadata == nullptr ||
+      header_.metadata->system_metadata() == nullptr) {
+    return std::nullopt;
+  }
+  auto entries = header_.metadata->system_metadata()->entries();
+  if (entries == nullptr) {
+    return std::nullopt;
+  }
+  for (size_t i = 0; i < entries->size(); ++i) {
+    auto entry = entries->Get(i);
+    if (entry->key()->str() == key) {
+      if (entry->value_type() == schema::VData_Bool) {
+        return entry->value_as_Bool()->value();
+      }
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string> LitertLmLoader::GetSystemMetadataString(
+    absl::string_view key) const {
+  if (header_.metadata == nullptr ||
+      header_.metadata->system_metadata() == nullptr) {
+    return std::nullopt;
+  }
+  auto entries = header_.metadata->system_metadata()->entries();
+  if (entries == nullptr) {
+    return std::nullopt;
+  }
+  for (size_t i = 0; i < entries->size(); ++i) {
+    auto entry = entries->Get(i);
+    if (entry->key()->str() == key) {
+      if (entry->value_type() == schema::VData_StringValue) {
+        return entry->value_as_StringValue()->value()->str();
+      }
+    }
+  }
+  return std::nullopt;
+}
+
 }  // namespace litert::lm
