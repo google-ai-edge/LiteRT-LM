@@ -149,21 +149,22 @@ absl::Status FakeLlmExecutor::Prefill(const ExecutorInputs& inputs) {
     LITERT_ASSIGN_OR_RETURN(
         auto projected_audio_embeddings_span,
         ReferTensorBufferAsSpan<float>(*projected_audio_embeddings));
-    ABSL_RETURN_IF_ERROR(
-        CheckEquivalent(absl::MakeSpan(*projected_audio_embedding_set_),
-                        projected_audio_embeddings_span));
+    ABSL_RETURN_IF_ERROR(CheckEquivalent<const float>(
+        absl::MakeSpan(*projected_audio_embedding_set_),
+        static_cast<absl::Span<const float>>(projected_audio_embeddings_span)));
   }
   ABSL_ASSIGN_OR_RETURN(auto text_data, inputs.GetTextDataPtr());
-  auto text_token_ids_span =
-      ReferTensorBufferAsSpan<int>(text_data->GetTokenIds());
-  ABSL_RETURN_IF_ERROR(
-      CheckEquivalent(absl::MakeSpan(prefill_tokens_set_[prefill_times_]),
-                      *text_token_ids_span));
+  LITERT_ASSIGN_OR_RETURN(
+      auto text_token_ids_span,
+      ReferTensorBufferAsSpan<int>(text_data->GetTokenIds()));
+  ABSL_RETURN_IF_ERROR(CheckEquivalent<const int>(
+      absl::MakeSpan(prefill_tokens_set_[prefill_times_]),
+      text_token_ids_span));
   last_op_ = LastOp::kPrefill;
   processed_tokens_.AddProcessedTokens(prefill_tokens_set_[prefill_times_]);
   prefill_times_++;
-  current_step_ += text_token_ids_span->size();
-  prefill_tokens_total_ += text_token_ids_span->size();
+  current_step_ += text_token_ids_span.size();
+  prefill_tokens_total_ += text_token_ids_span.size();
   return absl::OkStatus();
 }
 
@@ -205,15 +206,17 @@ absl::StatusOr<std::vector<std::vector<int>>> FakeLlmExecutor::Decode(
     // Get the last token ids from the last prefill or decode call.
     LITERT_ASSIGN_OR_RETURN(auto last_token_ids,
                             CreateTensorBuffer<int>({batch_size_, 1}));
-    auto last_token_ids_span = ReferTensorBufferAsSpan<int>(last_token_ids);
-
     if (last_op_ == LastOp::kDecode) {
       if (decode_times_ == 0) {
         return absl::InternalError("LastOp is Decode but decode_times_ is 0");
       }
       const auto& last_decode_tokens = decode_tokens_set_[decode_times_ - 1];
-      for (int i = 0; i < batch_size_; ++i) {
-        (*last_token_ids_span)[i] = last_decode_tokens[i];
+      {
+        LITERT_ASSIGN_OR_RETURN(auto last_token_ids_span,
+                                ReferTensorBufferAsSpan<int>(last_token_ids));
+        for (int i = 0; i < batch_size_; ++i) {
+          last_token_ids_span[i] = last_decode_tokens[i];
+        }
       }
       // Update the logits processor state with the last token ids.
       for (LogitsProcessor* logits_processor :
@@ -262,10 +265,14 @@ absl::Status FakeLlmExecutor::Decode(const ExecutorInputs& inputs,
   }
   if (decode_times_ > 0) {
     // Check that the input tokens match the decode tokens from the last call.
-    auto input_span =
-        ReferTensorBufferAsSpan<int>(*(*inputs.GetTextTokenIdsPtr()));
-    ABSL_RETURN_IF_ERROR(CheckEquivalent(
-        absl::MakeSpan(decode_tokens_set_[decode_times_ - 1]), *input_span));
+    ABSL_ASSIGN_OR_RETURN(const ::litert::TensorBuffer* text_token_ids,
+                          inputs.GetTextTokenIdsPtr());
+    {
+      LITERT_ASSIGN_OR_RETURN(auto input_span,
+                              ReferTensorBufferAsSpan<int>(*text_token_ids));
+      ABSL_RETURN_IF_ERROR(CheckEquivalent<const int>(
+          absl::MakeSpan(decode_tokens_set_[decode_times_ - 1]), input_span));
+    }
   }
   DecodeIdsToLogits(decode_tokens_set_[decode_times_], vocab_size_,
                     output_logits, decode_logits_options_);

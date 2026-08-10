@@ -470,10 +470,15 @@ absl::StatusOr<Responses> Prefill(
         "allowed: ",
         num_tokens, " >= ", max_num_tokens));
   }
-  LITERT_ASSIGN_OR_RETURN(auto ids_buffer_span, ReferTensorBufferAsSpan<int>(
-                                                    text_data->GetTokenIds()));
-  if (ids_buffer_span.empty()) {
-    return absl::InternalError("Input token ids are empty.");
+  size_t num_token_ids;
+  {
+    LITERT_ASSIGN_OR_RETURN(
+        auto ids_buffer_span,
+        ReferTensorBufferAsSpan<int>(text_data->GetTokenIds()));
+    if (ids_buffer_span.empty()) {
+      return absl::InternalError("Input token ids are empty.");
+    }
+    num_token_ids = ids_buffer_span.size();
   }
   ExecutorPrefillParams params;
   // Wait for prefill to complete if benchmark mode is enabled.
@@ -483,8 +488,7 @@ absl::StatusOr<Responses> Prefill(
   }
   ABSL_RETURN_IF_ERROR(executor.Prefill(inputs, params));
   if (benchmark_info.has_value()) {
-    ABSL_RETURN_IF_ERROR(
-        benchmark_info->TimePrefillTurnEnd(ids_buffer_span.size()));
+    ABSL_RETURN_IF_ERROR(benchmark_info->TimePrefillTurnEnd(num_token_ids));
     absl::StatusOr<std::string> profile_summary = executor.GetProfileSummary();
     if (!profile_summary.ok()) {
       ABSL_LOG(WARNING) << "Failed to get prefill profile summary: "

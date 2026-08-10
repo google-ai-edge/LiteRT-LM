@@ -76,7 +76,7 @@ template <typename T>
 absl::Status TryLogTensor(TensorBuffer& tensor, size_t num_values_to_log,
                           absl::string_view prefix) {
   // Try to get the reference if tensor is in CPU memory.
-  Expected<absl::Span<T>> values_span = ReferTensorBufferAsSpan<T>(tensor);
+  auto values_span = ReferTensorBufferAsSpan<T>(tensor);
   if (values_span) {
     LogValues<T>(*values_span, num_values_to_log, prefix);
     return absl::OkStatus();
@@ -107,8 +107,7 @@ absl::Status TryDumpTensorToCsv(TensorBuffer& tensor,
     out << "\n";
   };
 
-  litert::Expected<absl::Span<T>> values_span =
-      ReferTensorBufferAsSpan<T>(tensor);
+  auto values_span = ReferTensorBufferAsSpan<T>(tensor);
   if (values_span) {
     write_csv(*values_span);
     return absl::OkStatus();

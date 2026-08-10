@@ -83,9 +83,12 @@ TEST(FakeLlmExecutorTest, Prefill) {
               StatusIs(absl::StatusCode::kInvalidArgument));
 
   // Succeed because the input tokens match the expected prefill tokens.
-  auto ids_span = ReferTensorBufferAsSpan<int>(*(*inputs.GetTextTokenIdsPtr()));
-
-  (*ids_span)[2] = 3;
+  {
+    ASSERT_OK_AND_ASSIGN(auto token_ids, inputs.GetTextTokenIdsPtr());
+    LITERT_ASSERT_OK_AND_ASSIGN(auto ids_span,
+                                ReferTensorBufferAsSpan<int>(*token_ids));
+    ids_span[2] = 3;
+  }
   EXPECT_OK(fake_llm_executor.Prefill(inputs));
   EXPECT_EQ(fake_llm_executor.GetCurrentStep().value(), 3);
 }
@@ -123,11 +126,13 @@ TEST(FakeLlmExecutorTest, PrefillWithAudio) {
 
   // Succeed because the input audio embedding matches the expected audio
   // embedding set.
-  ASSERT_OK_AND_ASSIGN(const TensorBuffer* projected_audio_embeddings_ptr,
-                       inputs.GetProjectedAudioEmbeddingsPtr());
-  auto projected_audio_embedding_span =
-      ReferTensorBufferAsSpan<float>(*projected_audio_embeddings_ptr);
-  (*projected_audio_embedding_span)[3] = 4.0f;
+  {
+    ASSERT_OK_AND_ASSIGN(const TensorBuffer* projected_audio_embeddings_ptr,
+                         inputs.GetProjectedAudioEmbeddingsPtr());
+    auto projected_audio_embedding_span =
+        ReferTensorBufferAsSpan<float>(*projected_audio_embeddings_ptr);
+    (*projected_audio_embedding_span)[3] = 4.0f;
+  }
 
   EXPECT_OK(fake_llm_executor.Prefill(inputs));
   EXPECT_EQ(fake_llm_executor.GetCurrentStep().value(), 3);
@@ -202,20 +207,25 @@ TEST(FakeLlmExecutorTest, DecodeToLogits) {
   // [-inf, -inf, -inf, inf].
   EXPECT_OK(fake_llm_executor.Decode(inputs, *output_logits));
   EXPECT_EQ(fake_llm_executor.GetCurrentStep().value(), 4);
-  auto output_logits_span = ReferTensorBufferAsSpan<float>(*output_logits);
-  EXPECT_LE((*output_logits_span)[0], 0.0f);
-  EXPECT_LE((*output_logits_span)[1], 0.0f);
-  EXPECT_LE((*output_logits_span)[2], 0.0f);
-  EXPECT_GE((*output_logits_span)[3], 0.0f);
+  {
+    auto output_logits_span = ReferTensorBufferAsSpan<float>(*output_logits);
+    EXPECT_LE((*output_logits_span)[0], 0.0f);
+    EXPECT_LE((*output_logits_span)[1], 0.0f);
+    EXPECT_LE((*output_logits_span)[2], 0.0f);
+    EXPECT_GE((*output_logits_span)[3], 0.0f);
+  }
 
   // Call Decode for the 2nd time. The output logits should have values:
   // [inf, -inf, -inf, -inf].
   EXPECT_OK(fake_llm_executor.Decode(inputs, *output_logits));
   EXPECT_EQ(fake_llm_executor.GetCurrentStep().value(), 5);
-  EXPECT_GE((*output_logits_span)[0], 0.0f);
-  EXPECT_LE((*output_logits_span)[1], 0.0f);
-  EXPECT_LE((*output_logits_span)[2], 0.0f);
-  EXPECT_LE((*output_logits_span)[3], 0.0f);
+  {
+    auto output_logits_span = ReferTensorBufferAsSpan<float>(*output_logits);
+    EXPECT_GE((*output_logits_span)[0], 0.0f);
+    EXPECT_LE((*output_logits_span)[1], 0.0f);
+    EXPECT_LE((*output_logits_span)[2], 0.0f);
+    EXPECT_LE((*output_logits_span)[3], 0.0f);
+  }
 
   // Call Decode for the 3nd time. Should fail.
   EXPECT_THAT(fake_llm_executor.Decode(inputs, *output_logits),
@@ -248,24 +258,28 @@ TEST(FakeLlmExecutorTest, DecodeLogits) {
   auto output_logits = fake_llm_executor.DecodeLogits(inputs);
   // Call Decode for the 1st time. The output logits should have values:
   // [-inf, -inf, -inf, inf].
-  EXPECT_TRUE(output_logits.ok());
+  ASSERT_OK(output_logits);
   EXPECT_EQ(fake_llm_executor.GetCurrentStep().value(), 4);
-  auto output_logits_span = ReferTensorBufferAsSpan<float>(*output_logits);
-  EXPECT_LE((*output_logits_span)[0], 0.0f);
-  EXPECT_LE((*output_logits_span)[1], 0.0f);
-  EXPECT_LE((*output_logits_span)[2], 0.0f);
-  EXPECT_GE((*output_logits_span)[3], 0.0f);
+  {
+    auto output_logits_span = ReferTensorBufferAsSpan<float>(*output_logits);
+    EXPECT_LE((*output_logits_span)[0], 0.0f);
+    EXPECT_LE((*output_logits_span)[1], 0.0f);
+    EXPECT_LE((*output_logits_span)[2], 0.0f);
+    EXPECT_GE((*output_logits_span)[3], 0.0f);
+  }
 
   output_logits = fake_llm_executor.DecodeLogits(inputs);
   // Call Decode for the 2nd time. The output logits should have values:
   // [inf, -inf, -inf, -inf].
-  EXPECT_TRUE(output_logits.ok());
+  ASSERT_OK(output_logits);
   EXPECT_EQ(fake_llm_executor.GetCurrentStep().value(), 5);
-  output_logits_span = ReferTensorBufferAsSpan<float>(*output_logits);
-  EXPECT_GE((*output_logits_span)[0], 0.0f);
-  EXPECT_LE((*output_logits_span)[1], 0.0f);
-  EXPECT_LE((*output_logits_span)[2], 0.0f);
-  EXPECT_LE((*output_logits_span)[3], 0.0f);
+  {
+    auto output_logits_span = ReferTensorBufferAsSpan<float>(*output_logits);
+    EXPECT_GE((*output_logits_span)[0], 0.0f);
+    EXPECT_LE((*output_logits_span)[1], 0.0f);
+    EXPECT_LE((*output_logits_span)[2], 0.0f);
+    EXPECT_LE((*output_logits_span)[3], 0.0f);
+  }
 
   // Call Decode for the 3nd time. Should fail.
   EXPECT_THAT(fake_llm_executor.Decode(inputs, *output_logits),

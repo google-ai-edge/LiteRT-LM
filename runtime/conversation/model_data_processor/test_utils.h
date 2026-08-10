@@ -67,7 +67,9 @@ MATCHER_P(HasInputImage, image_input, "") {
     if (!expected_buffer_span.HasValue()) {
       return false;
     }
-    return *buffer_span == *expected_buffer_span;
+    absl::Span<const float> buffer_span_val = *buffer_span;
+    absl::Span<const float> expected_buffer_span_val = *expected_buffer_span;
+    return buffer_span_val == expected_buffer_span_val;
   }
   return true;
 }
@@ -91,7 +93,9 @@ MATCHER_P(HasInputAudio, audio_input, "") {
     if (!expected_buffer_span.HasValue()) {
       return false;
     }
-    return *buffer_span == *expected_buffer_span;
+    absl::Span<const float> buffer_span_val = *buffer_span;
+    absl::Span<const float> expected_buffer_span_val = *expected_buffer_span;
+    return buffer_span_val == expected_buffer_span_val;
   }
   return true;
 }
