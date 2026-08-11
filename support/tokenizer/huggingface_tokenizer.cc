@@ -26,7 +26,6 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
-#include "support/tokenizer/tokenizer.h"
 #include "support/util/memory_mapped_file.h"
 #include "support/util/status_macros.h"  // NOLINT
 #include "include/tokenizers_c.h"  // from @tokenizers_cpp
@@ -89,13 +88,7 @@ absl::StatusOr<std::string> HuggingFaceTokenizer::TokenIdsToText(
   const char* data = nullptr;
   size_t len = 0;
   tokenizers_get_decode_str(handle_, &data, &len);
-  std::string decoded(data, len);
-  if (Tokenizer::HasBpeSuffix(decoded)) {
-    return absl::DataLossError(
-        "The set of token IDs passed to the tokenizer is part of a BPE "
-        "sequence and needs more tokens to be decoded.");
-  }
-  return decoded;
+  return std::string(data, len);
 }
 
 std::vector<std::string> HuggingFaceTokenizer::GetTokens() const {

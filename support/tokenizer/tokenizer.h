@@ -20,7 +20,6 @@
 
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_macros.h"  // from @litert
@@ -134,19 +133,6 @@ class Tokenizer {
       decoded_strings[i] = this->TokenIdsToText(token_ids[i]);
     }
     return decoded_strings;
-  }
-
-  template <typename T>
-  static bool IsIncompleteBpeSequence(const absl::StatusOr<T>& result) {
-    return result.status().code() == absl::StatusCode::kDataLoss;
-  }
-
-  // Checks if the decoded string ends with the replacement character (U+FFFD),
-  // which indicates that the set of token IDs passed to the tokenizer is part
-  // of a BPE sequence and needs more tokens to be decoded.
-  static bool HasBpeSuffix(absl::string_view decoded) {
-    static const char kReplacementCharacter[] = "\xef\xbf\xbd";
-    return absl::EndsWith(decoded, kReplacementCharacter);
   }
 };
 

@@ -141,13 +141,6 @@ TEST(TokenizerTest, MergeTokenIds) {
   EXPECT_EQ((*merged)[1], std::vector<int>({224, 24, 8, 66, 246, 18, 2295}));
 }
 
-TEST(TokenizerTest, HasBpeSuffix) {
-  EXPECT_TRUE(Tokenizer::HasBpeSuffix("test\xef\xbf\xbd"));
-  EXPECT_FALSE(Tokenizer::HasBpeSuffix("test"));
-  EXPECT_FALSE(Tokenizer::HasBpeSuffix(""));
-  EXPECT_FALSE(Tokenizer::HasBpeSuffix("\xef\xbf\xbdtest"));
-}
-
 TEST(TokenizerTest, GetTokens) {
   auto tokenizer = std::make_unique<MockTokenizer>();
   EXPECT_CALL(*tokenizer, GetTokens())

@@ -381,6 +381,7 @@ cc_library(
         "//runtime/util:convert_tensor_buffer",
         "//runtime/util:litert_status_util",
         "//support/tokenizer",
+        "//support/tokenizer:buffered_streaming_detokenizer",
         "@litert//tflite/types:half",
     ],
 )
