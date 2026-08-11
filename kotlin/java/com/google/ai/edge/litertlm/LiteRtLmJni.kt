@@ -131,10 +131,15 @@ internal object LiteRtLmJni {
    * Runs the decode step.
    *
    * @param sessionPointer A pointer to the native session instance.
+   * @param disableSpeculativeDecoding Whether to disable speculative decoding. Effective only when
+   *   the engine is built with `enable_speculative_decoding=True`.
    * @return The generated content.
    * @throws LiteRtLmJniException if the underlying native method fails.
    */
-  external fun nativeRunDecode(sessionPointer: Long): String
+  external fun nativeRunDecode(
+    sessionPointer: Long,
+    disableSpeculativeDecoding: Boolean = false,
+  ): String
 
   /**
    * Generates content from the given input data.
@@ -257,6 +262,10 @@ internal object LiteRtLmJni {
    *   (reasoning) tokens and the final response tokens count towards this limit. When non-positive,
    *   use the default.
    * @param thinkingConfig Configuration for thinking/reasoning generation.
+   * @param constraintType The type of constraint to use.
+   * @param constraintString The constraint string.
+   * @param disableSpeculativeDecoding Whether to disable speculative decoding. Effective only when
+   *   the engine is built with `enable_speculative_decoding=True`.
    */
   external fun nativeSendMessageAsync(
     conversationPointer: Long,
@@ -271,6 +280,7 @@ internal object LiteRtLmJni {
     thinkingConfig: ThinkingConfig?,
     constraintType: Int,
     constraintString: String?,
+    disableSpeculativeDecoding: Boolean = false,
   )
 
   /**
@@ -289,6 +299,10 @@ internal object LiteRtLmJni {
    *   (reasoning) tokens and the final response tokens count towards this limit. When non-positive,
    *   use the default.
    * @param thinkingConfig Configuration for thinking/reasoning generation.
+   * @param constraintType The type of constraint to use.
+   * @param constraintString The constraint string.
+   * @param disableSpeculativeDecoding Whether to disable speculative decoding. Effective only when
+   *   the engine is built with `enable_speculative_decoding=True`.
    * @return The response message in JSON string format.
    */
   external fun nativeSendMessage(
@@ -303,6 +317,7 @@ internal object LiteRtLmJni {
     thinkingConfig: ThinkingConfig?,
     constraintType: Int,
     constraintString: String?,
+    disableSpeculativeDecoding: Boolean = false,
   ): String
 
   /**

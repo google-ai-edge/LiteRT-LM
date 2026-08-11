@@ -107,6 +107,8 @@ class Conversation(
    *   step. For thinking models, both thinking (reasoning) tokens and the final response tokens
    *   count towards this limit.
    * @param thinkingConfig Optional configuration for thinking/reasoning generation.
+   * @param disableSpeculativeDecoding Whether to disable speculative decoding for this message.
+   *   Effective only when the engine is built with `enable_speculative_decoding=True`.
    * @return The model's response message.
    * @throws IllegalStateException if the conversation is not alive, if the native layer returns an
    *   invalid response, or if the tool call limit is exceeded.
@@ -122,6 +124,7 @@ class Conversation(
     maxOutputToken: Int? = null,
     thinkingConfig: ThinkingConfig? = null,
     responseFormat: ResponseFormat? = null,
+    disableSpeculativeDecoding: Boolean = false,
   ): Message {
     if (responseFormat != null && !enableResponseFormat) {
       throw IllegalArgumentException(
@@ -149,6 +152,7 @@ class Conversation(
           if (i == 0) thinkingConfig else null,
           activeResponseFormat?.type?.value ?: 0,
           activeResponseFormat?.schemaOrPattern,
+          disableSpeculativeDecoding,
         )
       val responseJsonObject = JsonParser.parseString(responseJsonString).asJsonObject
 
@@ -184,6 +188,8 @@ class Conversation(
    *   step. For thinking models, both thinking (reasoning) tokens and the final response tokens
    *   count towards this limit.
    * @param thinkingConfig Optional configuration for thinking/reasoning generation.
+   * @param disableSpeculativeDecoding Whether to disable speculative decoding for this message.
+   *   Effective only when the engine is built with `enable_speculative_decoding=True`.
    * @return The model's response message.
    * @throws IllegalStateException if the conversation is not alive, if the native layer returns an
    *   invalid response, or if the tool call limit is exceeded.
@@ -199,6 +205,7 @@ class Conversation(
     maxOutputToken: Int? = null,
     thinkingConfig: ThinkingConfig? = null,
     responseFormat: ResponseFormat? = null,
+    disableSpeculativeDecoding: Boolean = false,
   ): Message {
     return sendMessage(
       Message.user(contents),
@@ -209,6 +216,7 @@ class Conversation(
       maxOutputToken,
       thinkingConfig,
       responseFormat,
+      disableSpeculativeDecoding,
     )
   }
 
@@ -229,6 +237,8 @@ class Conversation(
    *   step. For thinking models, both thinking (reasoning) tokens and the final response tokens
    *   count towards this limit.
    * @param thinkingConfig Optional configuration for thinking/reasoning generation.
+   * @param disableSpeculativeDecoding Whether to disable speculative decoding for this message.
+   *   Effective only when the engine is built with `enable_speculative_decoding=True`.
    * @return The model's response message.
    * @throws IllegalStateException if the conversation is not alive, if the native layer returns an
    *   invalid response, or if the tool call limit is exceeded.
@@ -244,6 +254,7 @@ class Conversation(
     maxOutputToken: Int? = null,
     thinkingConfig: ThinkingConfig? = null,
     responseFormat: ResponseFormat? = null,
+    disableSpeculativeDecoding: Boolean = false,
   ): Message =
     sendMessage(
       Contents.of(text),
@@ -254,6 +265,7 @@ class Conversation(
       maxOutputToken,
       thinkingConfig,
       responseFormat,
+      disableSpeculativeDecoding,
     )
 
   /**
@@ -274,6 +286,9 @@ class Conversation(
    *   step. For thinking models, both thinking (reasoning) tokens and the final response tokens
    *   count towards this limit.
    * @param thinkingConfig Optional configuration for thinking/reasoning generation.
+   * @param responseFormat Optional configuration for response format.
+   * @param disableSpeculativeDecoding Whether to disable speculative decoding for this message.
+   *   Effective only when the engine is built with `enable_speculative_decoding=True`.
    * @throws IllegalStateException if the conversation has already been closed or the content is
    *   empty.
    */
@@ -288,6 +303,7 @@ class Conversation(
     maxOutputToken: Int? = null,
     thinkingConfig: ThinkingConfig? = null,
     responseFormat: ResponseFormat? = null,
+    disableSpeculativeDecoding: Boolean = false,
   ) {
     if (responseFormat != null && !enableResponseFormat) {
       throw IllegalArgumentException(
@@ -309,6 +325,7 @@ class Conversation(
         suppressTokensConfig,
         maxOutputToken,
         responseFormat,
+        disableSpeculativeDecoding,
       )
     LiteRtLmJni.nativeSendMessageAsync(
       handle,
@@ -323,6 +340,7 @@ class Conversation(
       thinkingConfig,
       activeResponseFormat?.type?.value ?: 0,
       activeResponseFormat?.schemaOrPattern,
+      disableSpeculativeDecoding,
     )
   }
 
@@ -344,6 +362,9 @@ class Conversation(
    *   step. For thinking models, both thinking (reasoning) tokens and the final response tokens
    *   count towards this limit.
    * @param thinkingConfig Optional configuration for thinking/reasoning generation.
+   * @param responseFormat Optional configuration for response format.
+   * @param disableSpeculativeDecoding Whether to disable speculative decoding for this message.
+   *   Effective only when the engine is built with `enable_speculative_decoding=True`.
    * @throws IllegalStateException if the conversation has already been closed or the content is
    *   empty.
    */
@@ -358,6 +379,7 @@ class Conversation(
     maxOutputToken: Int? = null,
     thinkingConfig: ThinkingConfig? = null,
     responseFormat: ResponseFormat? = null,
+    disableSpeculativeDecoding: Boolean = false,
   ) =
     sendMessageAsync(
       Message.user(contents),
@@ -369,6 +391,7 @@ class Conversation(
       maxOutputToken,
       thinkingConfig,
       responseFormat,
+      disableSpeculativeDecoding,
     )
 
   /**
@@ -389,6 +412,9 @@ class Conversation(
    *   step. For thinking models, both thinking (reasoning) tokens and the final response tokens
    *   count towards this limit.
    * @param thinkingConfig Optional configuration for thinking/reasoning generation.
+   * @param responseFormat Optional configuration for response format.
+   * @param disableSpeculativeDecoding Whether to disable speculative decoding for this message.
+   *   Effective only when the engine is built with `enable_speculative_decoding=True`.
    * @throws IllegalStateException if the conversation has already been closed or the content is
    *   empty.
    */
@@ -403,6 +429,7 @@ class Conversation(
     maxOutputToken: Int? = null,
     thinkingConfig: ThinkingConfig? = null,
     responseFormat: ResponseFormat? = null,
+    disableSpeculativeDecoding: Boolean = false,
   ) =
     sendMessageAsync(
       Contents.of(text),
@@ -414,6 +441,7 @@ class Conversation(
       maxOutputToken,
       thinkingConfig,
       responseFormat,
+      disableSpeculativeDecoding,
     )
 
   /**
@@ -432,6 +460,9 @@ class Conversation(
    * @param maxOutputToken Optional override for the maximum number of output tokens per decode
    *   step.
    * @param thinkingConfig Optional configuration for thinking/reasoning generation.
+   * @param responseFormat Optional configuration for response format.
+   * @param disableSpeculativeDecoding Whether to disable speculative decoding for this message.
+   *   Effective only when the engine is built with `enable_speculative_decoding=True`.
    * @return A Flow of messages representing the model's response.
    * @throws IllegalStateException if the conversation has already been closed or the content is
    *   empty.
@@ -446,6 +477,7 @@ class Conversation(
     maxOutputToken: Int? = null,
     thinkingConfig: ThinkingConfig? = null,
     responseFormat: ResponseFormat? = null,
+    disableSpeculativeDecoding: Boolean = false,
   ): Flow<Message> = callbackFlow {
     sendMessageAsync(
       message,
@@ -469,6 +501,7 @@ class Conversation(
       maxOutputToken,
       thinkingConfig,
       responseFormat,
+      disableSpeculativeDecoding,
     )
     awaitClose {}
   }
@@ -489,6 +522,9 @@ class Conversation(
    * @param maxOutputToken Optional override for the maximum number of output tokens per decode
    *   step.
    * @param thinkingConfig Optional configuration for thinking/reasoning generation.
+   * @param responseFormat Optional configuration for response format.
+   * @param disableSpeculativeDecoding Whether to disable speculative decoding for this message.
+   *   Effective only when the engine is built with `enable_speculative_decoding=True`.
    * @return A Flow of messages representing the model's response.
    * @throws IllegalStateException if the conversation has already been closed or the content is
    *   empty.
@@ -503,6 +539,7 @@ class Conversation(
     maxOutputToken: Int? = null,
     thinkingConfig: ThinkingConfig? = null,
     responseFormat: ResponseFormat? = null,
+    disableSpeculativeDecoding: Boolean = false,
   ): Flow<Message> =
     sendMessageAsync(
       Message.user(contents),
@@ -513,6 +550,7 @@ class Conversation(
       maxOutputToken,
       thinkingConfig,
       responseFormat,
+      disableSpeculativeDecoding,
     )
 
   /**
@@ -531,6 +569,9 @@ class Conversation(
    * @param maxOutputToken Optional override for the maximum number of output tokens per decode
    *   step.
    * @param thinkingConfig Optional configuration for thinking/reasoning generation.
+   * @param responseFormat Optional configuration for response format.
+   * @param disableSpeculativeDecoding Whether to disable speculative decoding for this message.
+   *   Effective only when the engine is built with `enable_speculative_decoding=True`.
    * @return A Flow of messages representing the model's response.
    * @throws IllegalStateException if the conversation has already been closed or the content is
    *   empty.
@@ -545,6 +586,7 @@ class Conversation(
     maxOutputToken: Int? = null,
     thinkingConfig: ThinkingConfig? = null,
     responseFormat: ResponseFormat? = null,
+    disableSpeculativeDecoding: Boolean = false,
   ): Flow<Message> =
     sendMessageAsync(
       Contents.of(text),
@@ -555,6 +597,7 @@ class Conversation(
       maxOutputToken,
       thinkingConfig,
       responseFormat,
+      disableSpeculativeDecoding,
     )
 
   private fun handleToolCalls(toolCallsJsonObject: JsonObject): JsonObject {
@@ -592,6 +635,7 @@ class Conversation(
     private val suppressTokensConfig: SuppressTokensConfig? = null,
     private val maxOutputToken: Int? = null,
     private val responseFormat: ResponseFormat? = null,
+    private val disableSpeculativeDecoding: Boolean = false,
   ) : LiteRtLmJni.JniMessageCallback {
 
     /** The tool response to be returned back */
@@ -639,6 +683,7 @@ class Conversation(
           null,
           activeResponseFormat?.type?.value ?: 0,
           activeResponseFormat?.schemaOrPattern,
+          disableSpeculativeDecoding,
         )
         pendingToolResponseJSONMessage = null // Clear after sending
       } else {

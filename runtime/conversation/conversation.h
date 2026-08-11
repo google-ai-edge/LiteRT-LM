@@ -464,6 +464,10 @@ struct OptionalArgs {
   // The thinking configuration. If provided, this value overrides the default
   // value in `ConversationConfig`.
   std::optional<ThinkingConfig> thinking_config = std::nullopt;
+
+  // Whether to disable speculative decoding for this message / turn. Only valid
+  // when the engine is built with `enable_speculative_decoding=True`.
+  std::optional<bool> disable_speculative_decoding = std::nullopt;
 };
 
 // A multi-turn centric stateful Conversation API for high-level user
@@ -710,7 +714,8 @@ class Conversation {
       std::optional<ConstraintArg> decoding_constraint = std::nullopt,
       std::optional<int> max_output_tokens = std::nullopt,
       std::optional<ThinkingConfig> thinking_config = std::nullopt,
-      std::optional<absl::string_view> open_channel_name = std::nullopt);
+      std::optional<absl::string_view> open_channel_name = std::nullopt,
+      std::optional<bool> disable_speculative_decoding = std::nullopt);
 
   // Adds a task controller to the task_controllers_ map if task_group_id is
   // provided.

@@ -66,12 +66,15 @@ class Session(private val handle: Long) : AutoCloseable {
    *
    * This is a blocking call and the function will return when the decoding process is done.
    *
+   * @param disableSpeculativeDecoding Whether to disable speculative decoding for this decode call.
+   *   Effective only when the engine is built with `enable_speculative_decoding=True`.
    * @return The generated content as a [String].
    * @throws IllegalStateException if the session is not alive.
    */
-  fun runDecode(): String {
+  @JvmOverloads
+  fun runDecode(disableSpeculativeDecoding: Boolean = false): String {
     checkIsAlive()
-    return LiteRtLmJni.nativeRunDecode(handle)
+    return LiteRtLmJni.nativeRunDecode(handle, disableSpeculativeDecoding)
   }
 
   /**

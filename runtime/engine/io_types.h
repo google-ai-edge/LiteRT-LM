@@ -402,6 +402,18 @@ class DecodeConfig {
     return thinking_end_token_ids_;
   }
 
+  // Sets whether to disable speculative decoding for this decode request.
+  // Only effective when the engine has been built with speculative decoding
+  // enabled.
+  void SetDisableSpeculativeDecoding(bool disable_speculative_decoding) {
+    disable_speculative_decoding_ = disable_speculative_decoding;
+  }
+
+  // Returns whether speculative decoding is disabled for this decode request.
+  bool GetDisableSpeculativeDecoding() const {
+    return disable_speculative_decoding_;
+  }
+
  private:
   DecodeConfig() = default;
 
@@ -417,6 +429,7 @@ class DecodeConfig {
   std::optional<int> thinking_token_budget_ = std::nullopt;
   std::vector<int> thinking_start_token_ids_;
   std::vector<int> thinking_end_token_ids_;
+  bool disable_speculative_decoding_ = false;
 };
 
 }  // namespace litert::lm

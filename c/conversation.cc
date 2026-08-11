@@ -131,6 +131,10 @@ litert::lm::OptionalArgs CreateOptionalArgs(
     if (optional_args->thinking_config.has_value()) {
       litert_lm_optional_args.thinking_config = *optional_args->thinking_config;
     }
+    if (optional_args->disable_speculative_decoding.has_value()) {
+      litert_lm_optional_args.disable_speculative_decoding =
+          optional_args->disable_speculative_decoding;
+    }
   }
   return litert_lm_optional_args;
 }
@@ -360,6 +364,13 @@ void litert_lm_conversation_optional_args_set_constraint(
     } else {
       optional_args->constraint_string.clear();
     }
+  }
+}
+
+void litert_lm_conversation_optional_args_set_disable_speculative_decoding(
+    LiteRtLmConversationOptionalArgs* args, bool disable_speculative_decoding) {
+  if (args) {
+    args->disable_speculative_decoding = disable_speculative_decoding;
   }
 }
 

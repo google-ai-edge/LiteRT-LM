@@ -465,6 +465,10 @@ def _setup_lib_signatures(lib):
       ctypes.c_void_p,
       ctypes.c_void_p,
   ]
+  lib.litert_lm_conversation_optional_args_set_disable_speculative_decoding.argtypes = [
+      ctypes.c_void_p,
+      ctypes.c_bool,
+  ]
 
   # Conversation
   lib.litert_lm_conversation_create.restype = ctypes.c_void_p

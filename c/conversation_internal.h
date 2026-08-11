@@ -40,6 +40,7 @@ struct LiteRtLmConversationOptionalArgs {
   std::optional<litert::lm::ThinkingConfig> thinking_config;
   LiteRtLmConstraintType constraint_type = kLiteRtLmConstraintTypeNone;
   std::string constraint_string;
+  std::optional<bool> disable_speculative_decoding;
 };
 
 struct LiteRtLmConversation {

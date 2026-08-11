@@ -935,7 +935,8 @@ absl::Status ThreadedExecutionManager::AddDecodeTask(
     absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback,
     int max_output_tokens, std::optional<int> thinking_token_budget,
     std::vector<int> thinking_start_token_ids,
-    std::vector<int> thinking_end_token_ids) {
+    std::vector<int> thinking_end_token_ids,
+    bool disable_speculative_decoding) {
   if (callback == nullptr) {
     callback = [](absl::StatusOr<Responses> responses) {};
   }
@@ -946,8 +947,8 @@ absl::Status ThreadedExecutionManager::AddDecodeTask(
                suppress_tokens_config = std::move(suppress_tokens_config),
                constraint, cancelled, max_output_tokens, thinking_token_budget,
                thinking_start_token_ids = std::move(thinking_start_token_ids),
-               thinking_end_token_ids =
-                   std::move(thinking_end_token_ids)]() mutable -> void {
+               thinking_end_token_ids = std::move(thinking_end_token_ids),
+               disable_speculative_decoding]() mutable -> void {
     auto task_info = StartTask(task_id);
     if (!task_info.ok()) {
       FinishTaskAndLogErrors(task_id, task_info.status(),
@@ -1009,7 +1010,7 @@ absl::Status ThreadedExecutionManager::AddDecodeTask(
         std::move(suppress_tokens_config), constraint,
         std::move(decoded_ids_buffer), callback, cancelled.get(),
         max_output_tokens, thinking_token_budget, thinking_end_token_ids,
-        thinking_start_token_ids);
+        thinking_start_token_ids, disable_speculative_decoding);
     if (!responses.ok() && absl::IsCancelled(responses.status())) {
       responses = Responses(TaskState::kCancelled);
     }

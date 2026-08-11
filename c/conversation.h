@@ -354,6 +354,17 @@ void litert_lm_conversation_optional_args_set_constraint(
     LiteRtLmConversationOptionalArgs* optional_args,
     LiteRtLmConstraintType constraint_type, const char* constraint_string);
 
+// Sets whether to disable speculative decoding for the conversation optional
+// args.
+// @param optional_args The optional args to modify.
+// @param disable_speculative_decoding Whether to disable speculative decoding.
+//
+// Added in version 0.1.0.
+LITERT_LM_C_API_EXPORT
+void litert_lm_conversation_optional_args_set_disable_speculative_decoding(
+    LiteRtLmConversationOptionalArgs* optional_args,
+    bool disable_speculative_decoding);
+
 // Creates a LiteRT LM Conversation. The caller is responsible for destroying
 // the conversation using `litert_lm_conversation_delete`.
 //

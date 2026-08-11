@@ -646,6 +646,7 @@ class AbstractConversation(abc.ABC):
       max_output_tokens: int | None = None,
       thinking_config: ThinkingConfig | None = None,
       response_format: ResponseFormat | None = None,
+      disable_speculative_decoding: bool = False,
   ) -> collections.abc.Mapping[str, Any]:
     """Sends a message and returns the response.
 
@@ -666,6 +667,9 @@ class AbstractConversation(abc.ABC):
         thinking_config: Configuration for thinking/reasoning generation.
         response_format: The expected format of the response. If provided, the
           response will be constrained to this format.
+        disable_speculative_decoding: Whether to disable speculative decoding
+          for this message. Effective only when the engine is built with
+          `enable_speculative_decoding=True`.
 
     Returns:
         A dictionary containing the model's response. The structure is:
@@ -683,6 +687,7 @@ class AbstractConversation(abc.ABC):
       max_output_tokens: int | None = None,
       thinking_config: ThinkingConfig | None = None,
       response_format: ResponseFormat | None = None,
+      disable_speculative_decoding: bool = False,
   ) -> collections.abc.Iterator[collections.abc.Mapping[str, Any]]:
     """Sends a message and streams the response.
 
@@ -703,6 +708,9 @@ class AbstractConversation(abc.ABC):
         thinking_config: Configuration for thinking/reasoning generation.
         response_format: The expected format of the response. If provided, the
           response will be constrained to this format.
+        disable_speculative_decoding: Whether to disable speculative decoding
+          for this message. Effective only when the engine is built with
+          `enable_speculative_decoding=True`.
 
     Returns:
         An iterator yielding dictionaries containing chunks of the model's

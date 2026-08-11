@@ -210,9 +210,9 @@ class DecodeOneStep {
                 SuppressTokensConfig suppress_tokens_config,
                 Constraint* constraint,
                 const std::atomic<bool>* cancelled =
-                    nullptr  // Add cancelled signal for one decode step (eg.
-                             // for diffusion-llm)
-                )
+                    nullptr,  // Add cancelled signal for one decode step (eg.
+                              // for diffusion-llm)
+                bool disable_speculative_decoding = false)
       : executor_(*executor),
         tokenizer_(*tokenizer),
         detokenizer_(&tokenizer_, num_output_candidates),
@@ -221,7 +221,8 @@ class DecodeOneStep {
         benchmark_info_(benchmark_info),
         stop_token_detector_(stop_token_detector),
         stop_token_filter_(&stop_token_detector_, num_output_candidates),
-        cancelled_(cancelled) {
+        cancelled_(cancelled),
+        disable_speculative_decoding_(disable_speculative_decoding) {
     if (repetition_penalty_config.enabled()) {
       repetition_penalty_processor_ =
           std::make_unique<RepetitionPenaltyProcessor>(
@@ -471,6 +472,8 @@ class DecodeOneStep {
       auto decode_params = ExecutorDecodeParams();
       // Convey the cancellation token for the decode process.
       decode_params.SetCancelled(cancelled_);
+      decode_params.SetDisableSpeculativeDecoding(
+          disable_speculative_decoding_);
       if (!logits_processors_.empty()) {
         decode_params.SetLogitsProcessorList(logits_processors_);
       }
@@ -509,6 +512,7 @@ class DecodeOneStep {
 
   bool is_first_step_ = true;
   const std::atomic<bool>* cancelled_ = nullptr;
+  bool disable_speculative_decoding_ = false;
 };
 
 }  // namespace
@@ -573,7 +577,8 @@ absl::StatusOr<Responses> Decode(
     std::atomic<bool>* cancelled, int max_output_tokens,
     std::optional<int> thinking_token_budget,
     const std::vector<int>& thinking_end_token_ids,
-    const std::vector<int>& thinking_start_token_ids) {
+    const std::vector<int>& thinking_start_token_ids,
+    bool disable_speculative_decoding) {
   const bool is_streaming = callback != nullptr;
   const bool is_custom_sampling = sampler.has_value();
 
@@ -600,6 +605,8 @@ absl::StatusOr<Responses> Decode(
   std::vector<float> accumulated_scores(num_output_candidates);
   // The number of decoded tokens for each candidate (for custom sampling).
   std::vector<int> num_decoded_tokens(num_output_candidates);
+  // The token lengths for each candidate.
+  std::vector<int> final_token_lengths(num_output_candidates, 0);
 
   ABSL_ASSIGN_OR_RETURN(int executor_step_before_decode,
                         executor.GetCurrentStep());
@@ -628,7 +635,7 @@ absl::StatusOr<Responses> Decode(
       &executor, &tokenizer, num_output_candidates, stop_token_detector,
       benchmark_info, sampler, std::move(repetition_penalty_config),
       std::move(no_repeat_ngram_config), std::move(suppress_tokens_config),
-      constraint, cancelled);
+      constraint, cancelled, disable_speculative_decoding);
   while (true) {
     if (cancelled != nullptr && cancelled->load()) {
       if (benchmark_info.has_value()) {

@@ -464,11 +464,24 @@ class ExecutorDecodeParams {
   // Returns the cancellation flag if set, otherwise nullptr.
   const std::atomic<bool>* GetCancelled() const { return cancelled_; }
 
+  // Sets whether to disable speculative decoding for this decode call.
+  // Only effective when the engine has been built with speculative decoding
+  // enabled.
+  void SetDisableSpeculativeDecoding(bool disable_speculative_decoding) {
+    disable_speculative_decoding_ = disable_speculative_decoding;
+  }
+
+  // Returns whether speculative decoding is disabled for this decode call.
+  bool GetDisableSpeculativeDecoding() const {
+    return disable_speculative_decoding_;
+  }
+
  private:
   // List of active logits processors (e.g. repetition penalty, no-repeat
   // ngram, token suppression, constrained decoding).
   std::vector<LogitsProcessor*> logits_processors_;
   const std::atomic<bool>* cancelled_ = nullptr;
+  bool disable_speculative_decoding_ = false;
 };
 std::ostream& operator<<(std::ostream& os, const ExecutorDecodeParams& params);
 

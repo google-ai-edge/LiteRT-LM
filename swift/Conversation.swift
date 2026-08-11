@@ -112,6 +112,8 @@ public class Conversation {
   /// - Parameter maxOutputTokens: Optional maximum number of tokens to generate per response. For thinking models, both thinking (reasoning) tokens and the final response tokens count towards this limit.
   /// - Parameter thinkingConfig: Optional configuration for thinking/reasoning generation.
   /// - Parameter responseFormat: Optional response format for constrained decoding.
+  /// - Parameter disableSpeculativeDecoding: Optional flag to disable speculative decoding for this
+  ///   turn. Only effective when the engine has been built with speculative decoding enabled.
   /// - Returns: The model's response message.
   /// - Throws: A `LiteRTLMError` if sending the message fails or the model
   ///   returns an invalid response.
@@ -123,7 +125,8 @@ public class Conversation {
     suppressTokensConfig: SuppressTokensConfig? = nil,
     maxOutputTokens: Int? = nil,
     thinkingConfig: ThinkingConfig? = nil,
-    responseFormat: ResponseFormat? = nil
+    responseFormat: ResponseFormat? = nil,
+    disableSpeculativeDecoding: Bool? = nil
   ) async throws -> Message {
     let handle = try checkIsAlive()
 
@@ -143,7 +146,8 @@ public class Conversation {
         suppressTokensConfig: suppressTokensConfig,
         maxOutputTokens: maxOutputTokens,
         thinkingConfig: i == 0 ? thinkingConfig : nil,
-        responseFormat: responseFormat
+        responseFormat: responseFormat,
+        disableSpeculativeDecoding: disableSpeculativeDecoding
       )
 
       guard let toolCalls = responseJson["tool_calls"] as? [[String: Any]] else {
@@ -171,7 +175,8 @@ public class Conversation {
     suppressTokensConfig: SuppressTokensConfig? = nil,
     maxOutputTokens: Int? = nil,
     thinkingConfig: ThinkingConfig? = nil,
-    responseFormat: ResponseFormat? = nil
+    responseFormat: ResponseFormat? = nil,
+    disableSpeculativeDecoding: Bool? = nil
   ) throws
     -> (responseJson: [String: Any], responseString: String)
   {
@@ -275,6 +280,11 @@ public class Conversation {
         optionalArgs, responseFormat.type.cConstraintType, responseFormat.schemaOrPattern)
     }
 
+    if let disableSpeculativeDecoding = disableSpeculativeDecoding {
+      litert_lm_conversation_optional_args_set_disable_speculative_decoding(
+        optionalArgs, disableSpeculativeDecoding)
+    }
+
     guard
       let responsePtr = litert_lm_conversation_send_message(
         handle, messageString, extraContextString, optionalArgs)
@@ -344,7 +354,9 @@ public class Conversation {
   /// - Parameter repetitionPenaltyConfig: Optional configuration for repetition penalty.
   /// - Parameter maxOutputTokens: Optional maximum number of tokens to generate per response. For thinking models, both thinking (reasoning) tokens and the final response tokens count towards this limit.
   /// - Parameter thinkingConfig: Optional configuration for thinking/reasoning generation.
-  /// - Parameter responseFormat: Optional response format for constrained decoding.
+  /// - Parameter disableSpeculativeDecoding: Optional flag to disable speculative decoding for
+  ///     this turn. Only effective when the engine has been built with speculative decoding
+  ///     enabled.
   /// - Returns: An async throwing stream of `Message` chunks.
   public func sendMessageStream(
     _ message: Message,
@@ -354,7 +366,8 @@ public class Conversation {
     suppressTokensConfig: SuppressTokensConfig? = nil,
     maxOutputTokens: Int? = nil,
     thinkingConfig: ThinkingConfig? = nil,
-    responseFormat: ResponseFormat? = nil
+    responseFormat: ResponseFormat? = nil,
+    disableSpeculativeDecoding: Bool? = nil
   ) -> AsyncThrowingStream<Message, Error> {
     return AsyncThrowingStream { continuation in
       do {
@@ -370,7 +383,8 @@ public class Conversation {
           noRepeatNgramConfig: noRepeatNgramConfig,
           suppressTokensConfig: suppressTokensConfig,
           maxOutputTokens: maxOutputTokens,
-          responseFormat: responseFormat
+          responseFormat: responseFormat,
+          disableSpeculativeDecoding: disableSpeculativeDecoding
         )
 
         try self.sendToStream(
@@ -383,6 +397,7 @@ public class Conversation {
           maxOutputTokens: maxOutputTokens,
           thinkingConfig: thinkingConfig,
           responseFormat: responseFormat,
+          disableSpeculativeDecoding: disableSpeculativeDecoding,
           context: context
         )
       } catch {
@@ -403,6 +418,8 @@ public class Conversation {
   ///   - repetitionPenaltyConfig: Optional configuration for repetition penalty.
   ///   - thinkingConfig: Optional configuration for thinking/reasoning generation.
   ///   - maxOutputTokens: Optional maximum number of output tokens.
+  ///   - disableSpeculativeDecoding: Optional flag to disable speculative decoding. Only effective
+  ///     when the engine has been built with speculative decoding enabled.
   ///   - context: The `StreamContext` containing the `AsyncThrowingStream.Continuation`
   ///     and other state for the streaming process.
   /// - Throws: A `LiteRTLMError` if the message fails to send or the response is invalid.
@@ -417,6 +434,7 @@ public class Conversation {
     maxOutputTokens: Int? = nil,
     thinkingConfig: ThinkingConfig? = nil,
     responseFormat: ResponseFormat? = nil,
+    disableSpeculativeDecoding: Bool? = nil,
     context: StreamContext
   ) throws {
     let messageData = try JSONSerialization.data(withJSONObject: messageJson)
@@ -518,6 +536,11 @@ public class Conversation {
     {
       litert_lm_conversation_optional_args_set_constraint(
         optionalArgs, responseFormat.type.cConstraintType, responseFormat.schemaOrPattern)
+    }
+
+    if let disableSpeculativeDecoding = disableSpeculativeDecoding {
+      litert_lm_conversation_optional_args_set_disable_speculative_decoding(
+        optionalArgs, disableSpeculativeDecoding)
     }
 
     let contextPtr = Unmanaged.passRetained(context).toOpaque()
@@ -736,6 +759,7 @@ public class Conversation {
     let suppressTokensConfig: SuppressTokensConfig?
     let maxOutputTokens: Int?
     let responseFormat: ResponseFormat?
+    let disableSpeculativeDecoding: Bool?
 
     init(
       continuation: AsyncThrowingStream<Message, Error>.Continuation,
@@ -744,7 +768,8 @@ public class Conversation {
       noRepeatNgramConfig: NoRepeatNgramConfig? = nil,
       suppressTokensConfig: SuppressTokensConfig? = nil,
       maxOutputTokens: Int? = nil,
-      responseFormat: ResponseFormat? = nil
+      responseFormat: ResponseFormat? = nil,
+      disableSpeculativeDecoding: Bool? = nil
     ) {
       self.continuation = continuation
       self.conversation = conversation
@@ -753,6 +778,7 @@ public class Conversation {
       self.suppressTokensConfig = suppressTokensConfig
       self.maxOutputTokens = maxOutputTokens
       self.responseFormat = responseFormat
+      self.disableSpeculativeDecoding = disableSpeculativeDecoding
     }
   }
 }
@@ -828,6 +854,7 @@ private func streamCallback(
             suppressTokensConfig: context.suppressTokensConfig,
             maxOutputTokens: context.maxOutputTokens,
             responseFormat: context.responseFormat,
+            disableSpeculativeDecoding: context.disableSpeculativeDecoding,
             context: context
           )
         } catch {

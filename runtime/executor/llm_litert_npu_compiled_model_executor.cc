@@ -1939,7 +1939,12 @@ LlmLiteRtNpuCompiledModelExecutor::Decode(
   int mtp_start_step = internal_start_step;
   int mtp_start_token_id = pending_input_token[0]->id();
 
-  if (!has_valid_verify_activations_) {
+  const bool use_speculative_decoding =
+      speculative_decoding_type_ == SpeculativeDecodingType::kMTP &&
+      !decode_params.GetDisableSpeculativeDecoding();
+
+  if (!has_valid_verify_activations_ || !use_speculative_decoding) {
+    has_valid_verify_activations_ = false;
     NPU_EXECUTOR_LOG(INFO) << "Step " << internal_start_step
                            << ": Running Main Decode Signature";
     ABSL_RETURN_IF_ERROR(
@@ -1968,7 +1973,7 @@ LlmLiteRtNpuCompiledModelExecutor::Decode(
     NPU_EXECUTOR_LOG(INFO)
         << "Step " << internal_start_step
         << ": Skipping Main Decode (Using verify activations)";
-    if (speculative_decoding_type_ == SpeculativeDecodingType::kMTP) {
+    if (use_speculative_decoding) {
       auto& ctx = drafter_context_.value();
       LITERT_ASSIGN_OR_RETURN(
           auto drafter_activations_lock_and_addr,
@@ -1981,7 +1986,7 @@ LlmLiteRtNpuCompiledModelExecutor::Decode(
     ABSL_RETURN_IF_ERROR(processed_tokens_.MarkPendingInputTokenAsProcessed());
   }
 
-  if (speculative_decoding_type_ == SpeculativeDecodingType::kMTP) {
+  if (use_speculative_decoding) {
     NPU_EXECUTOR_LOG(INFO) << "Step " << mtp_start_step
                            << ": Starting MTP Speculative Cycle";
     NPU_EXECUTOR_LOG(INFO) << "    [Verify] Step -1 at pos "

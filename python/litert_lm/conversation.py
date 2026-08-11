@@ -163,6 +163,7 @@ class Conversation(interfaces.AbstractConversation):
           | list[collections.abc.Mapping[str, Any]]
       ) | None = None,
       response_format: interfaces.ResponseFormat | None = None,
+      disable_speculative_decoding: bool = False,
   ) -> ctypes.c_void_p | None:
     """Creates a C pointer for ConversationOptionalArgs if needed."""
     if (
@@ -172,6 +173,7 @@ class Conversation(interfaces.AbstractConversation):
         and max_output_tokens is None
         and thinking_config is None
         and not response_format
+        and not disable_speculative_decoding
     ):
       return None
     optional_args_ptr = self._lib.litert_lm_conversation_optional_args_create()
@@ -179,6 +181,10 @@ class Conversation(interfaces.AbstractConversation):
       raise RuntimeError("Failed to create optional args")
 
     try:
+      if disable_speculative_decoding:
+        self._lib.litert_lm_conversation_optional_args_set_disable_speculative_decoding(
+            optional_args_ptr, disable_speculative_decoding
+        )
       if repetition_penalty_config is not None:
         rpp_ptr = self._lib.litert_lm_repetition_penalty_config_create()
         try:
@@ -281,6 +287,7 @@ class Conversation(interfaces.AbstractConversation):
       max_output_tokens: int | None = None,
       thinking_config: interfaces.ThinkingConfig | None = None,
       response_format: interfaces.ResponseFormat | None = None,
+      disable_speculative_decoding: bool = False,
   ) -> collections.abc.Mapping[str, Any]:
     """See base class."""
     if response_format:
@@ -314,6 +321,7 @@ class Conversation(interfaces.AbstractConversation):
           thinking_config=thinking_config,
           current_message=current_message,
           response_format=active_response_format,
+          disable_speculative_decoding=disable_speculative_decoding,
       )
       try:
         resp_ptr = self._lib.litert_lm_conversation_send_message(
@@ -356,6 +364,7 @@ class Conversation(interfaces.AbstractConversation):
       max_output_tokens: int | None = None,
       thinking_config: interfaces.ThinkingConfig | None = None,
       response_format: interfaces.ResponseFormat | None = None,
+      disable_speculative_decoding: bool = False,
   ) -> collections.abc.Iterator[collections.abc.Mapping[str, Any]]:
     """See base class."""
     if response_format:
@@ -403,6 +412,7 @@ class Conversation(interfaces.AbstractConversation):
           thinking_config=thinking_config,
           current_message=current_message,
           response_format=active_response_format,
+          disable_speculative_decoding=disable_speculative_decoding,
       )
       try:
         res = self._lib.litert_lm_conversation_send_message_stream(
