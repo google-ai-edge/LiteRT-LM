@@ -320,7 +320,7 @@ absl::Status LlmLiteRtMtpDrafter::PrepareDrafterInputBuffers(
   ABSL_RETURN_IF_ERROR(FillAttentionMask(active_drafter_input_buffers_["mask"],
                                          /*start_step=*/position,
                                          /*steps=*/1,
-                                         AttentionMaskPolicy::kCausal,
+                                         proto::ATTENTION_MASK_POLICY_CAUSAL,
                                          /*token_ids=*/std::nullopt,
                                          /*sliding_window_size=*/std::nullopt));
   if (active_drafter_input_buffers_.contains("param_tensor")) {
@@ -406,7 +406,7 @@ absl::Status LlmLiteRtMtpDrafter::PrepareVerifierInputBuffers(
   ABSL_RETURN_IF_ERROR(FillAttentionMask(verifier_input_buffers_["mask"],
                                          /*start_step=*/position,
                                          /*steps=*/num_draft_steps_ + 1,
-                                         AttentionMaskPolicy::kCausal,
+                                         proto::ATTENTION_MASK_POLICY_CAUSAL,
                                          /*token_ids=*/std::nullopt,
                                          /*sliding_window_size=*/std::nullopt));
 
