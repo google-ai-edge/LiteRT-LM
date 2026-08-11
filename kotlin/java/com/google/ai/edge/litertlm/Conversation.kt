@@ -104,7 +104,8 @@ class Conversation(
    * @param noRepeatNgramConfig Optional configuration for no repeat ngram.
    * @param suppressTokensConfig Optional configuration for suppressing specific tokens.
    * @param maxOutputToken Optional override for the maximum number of output tokens per decode
-   *   step.
+   *   step. For thinking models, both thinking (reasoning) tokens and the final response tokens
+   *   count towards this limit.
    * @param thinkingConfig Optional configuration for thinking/reasoning generation.
    * @return The model's response message.
    * @throws IllegalStateException if the conversation is not alive, if the native layer returns an
@@ -180,7 +181,8 @@ class Conversation(
    * @param noRepeatNgramConfig Optional configuration for no repeat ngram.
    * @param suppressTokensConfig Optional configuration for suppressing specific tokens.
    * @param maxOutputToken Optional override for the maximum number of output tokens per decode
-   *   step.
+   *   step. For thinking models, both thinking (reasoning) tokens and the final response tokens
+   *   count towards this limit.
    * @param thinkingConfig Optional configuration for thinking/reasoning generation.
    * @return The model's response message.
    * @throws IllegalStateException if the conversation is not alive, if the native layer returns an
@@ -224,7 +226,8 @@ class Conversation(
    * @param noRepeatNgramConfig Optional configuration for no repeat ngram.
    * @param suppressTokensConfig Optional configuration for suppressing specific tokens.
    * @param maxOutputToken Optional override for the maximum number of output tokens per decode
-   *   step.
+   *   step. For thinking models, both thinking (reasoning) tokens and the final response tokens
+   *   count towards this limit.
    * @param thinkingConfig Optional configuration for thinking/reasoning generation.
    * @return The model's response message.
    * @throws IllegalStateException if the conversation is not alive, if the native layer returns an
@@ -268,7 +271,8 @@ class Conversation(
    * @param noRepeatNgramConfig Optional configuration for no repeat ngram.
    * @param suppressTokensConfig Optional configuration for suppressing specific tokens.
    * @param maxOutputToken Optional override for the maximum number of output tokens per decode
-   *   step.
+   *   step. For thinking models, both thinking (reasoning) tokens and the final response tokens
+   *   count towards this limit.
    * @param thinkingConfig Optional configuration for thinking/reasoning generation.
    * @throws IllegalStateException if the conversation has already been closed or the content is
    *   empty.
@@ -337,7 +341,8 @@ class Conversation(
    * @param noRepeatNgramConfig Optional configuration for no repeat ngram.
    * @param suppressTokensConfig Optional configuration for suppressing specific tokens.
    * @param maxOutputToken Optional override for the maximum number of output tokens per decode
-   *   step.
+   *   step. For thinking models, both thinking (reasoning) tokens and the final response tokens
+   *   count towards this limit.
    * @param thinkingConfig Optional configuration for thinking/reasoning generation.
    * @throws IllegalStateException if the conversation has already been closed or the content is
    *   empty.
@@ -381,7 +386,8 @@ class Conversation(
    * @param noRepeatNgramConfig Optional configuration for no repeat ngram.
    * @param suppressTokensConfig Optional configuration for suppressing specific tokens.
    * @param maxOutputToken Optional override for the maximum number of output tokens per decode
-   *   step.
+   *   step. For thinking models, both thinking (reasoning) tokens and the final response tokens
+   *   count towards this limit.
    * @param thinkingConfig Optional configuration for thinking/reasoning generation.
    * @throws IllegalStateException if the conversation has already been closed or the content is
    *   empty.

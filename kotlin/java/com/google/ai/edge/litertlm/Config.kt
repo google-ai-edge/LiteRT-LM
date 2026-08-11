@@ -219,8 +219,9 @@ data class EngineConfig(
  * @property prefillPrefaceOnInit Whether to prefill the preface on initialization. Defaults to
  *   false. Note that this will make createConversation() take longer to finish, so you may want to
  *   call it in a background thread.
- * @property maxOutputToken The maximum number of output tokens per decode step. When `null`, use
- *   the default value from the model or the engine.
+ * @property maxOutputToken The maximum number of output tokens per decode step. For thinking
+ *   models, both thinking (reasoning) tokens and the final response tokens count towards this
+ *   limit. When `null`, use the default value from the model or the engine.
  * @property thinkingConfig Configuration for thinking/reasoning generation.
  * @property enableResponseFormat Whether to enable response format (constrained decoding). If true,
  *   initializes the constraint provider LLGuidance.

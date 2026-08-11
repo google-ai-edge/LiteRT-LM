@@ -467,7 +467,9 @@ class AbstractEngine(abc.ABC):
           uses the engine's default values.
         constrained_decoding_config: Configuration for constrained decoding.
         lora_config: Configuration for LoRA adapters.
-        max_output_tokens: The maximum number of output tokens.
+        max_output_tokens: The maximum number of tokens to generate per
+          response. For thinking models, both thinking (reasoning) tokens and
+          the final response tokens count towards this limit.
         chat_template: The Jinja chat template content to use for formatting. If
           not set, use the default provided by the model or the engine.
         enable_response_format: Whether to enable response format (constrained
@@ -567,7 +569,9 @@ class AbstractConversation(abc.ABC):
       thinking_config: Configuration for thinking/reasoning generation.
       sampler_config: Configuration for the sampling process.
       lora_config: Configuration for LoRA adapters.
-      max_output_tokens: The maximum number of output tokens.
+      max_output_tokens: The maximum number of tokens to generate per response.
+        For thinking models, both thinking (reasoning) tokens and the final
+        response tokens count towards this limit.
       chat_template: The Jinja chat template content to use for formatting. If
         not set, use the default provided by the model or the engine.
   """
@@ -606,7 +610,9 @@ class AbstractConversation(abc.ABC):
         sampler_config: Configuration for the sampling process. If None, then
           uses the engine's default values.
         lora_config: Configuration for LoRA adapters.
-        max_output_tokens: The maximum number of output tokens.
+        max_output_tokens: The maximum number of tokens to generate per
+          response. For thinking models, both thinking (reasoning) tokens and
+          the final response tokens count towards this limit.
         chat_template: The Jinja chat template content to use for formatting. If
           not set, use the default provided by the model or the engine.
     """
@@ -654,7 +660,9 @@ class AbstractConversation(abc.ABC):
           tokens.
         no_repeat_ngram_config: Configuration for banning repetitive ngrams.
         suppress_tokens_config: Configuration for suppressing specific tokens.
-        max_output_tokens: The maximum number of output tokens.
+        max_output_tokens: The maximum number of tokens to generate per
+          response. For thinking models, both thinking (reasoning) tokens and
+          the final response tokens count towards this limit.
         thinking_config: Configuration for thinking/reasoning generation.
         response_format: The expected format of the response. If provided, the
           response will be constrained to this format.
@@ -689,7 +697,9 @@ class AbstractConversation(abc.ABC):
           tokens.
         no_repeat_ngram_config: Configuration for banning repetitive ngrams.
         suppress_tokens_config: Configuration for suppressing specific tokens.
-        max_output_tokens: The maximum number of output tokens.
+        max_output_tokens: The maximum number of tokens to generate per
+          response. For thinking models, both thinking (reasoning) tokens and
+          the final response tokens count towards this limit.
         thinking_config: Configuration for thinking/reasoning generation.
         response_format: The expected format of the response. If provided, the
           response will be constrained to this format.

@@ -201,8 +201,11 @@ LITERT_LM_C_API_EXPORT
 LiteRtLmSessionConfig* litert_lm_session_config_create();
 
 // Sets the maximum number of output tokens per decode step for this session.
+// For thinking models, both thinking (reasoning) tokens and the final response
+// tokens count towards this limit.
 // @param config The config to modify.
-// @param max_output_tokens The maximum number of output tokens.
+// @param max_output_tokens The maximum number of tokens to generate (including
+// thinking tokens).
 //
 // Added in version 0.1.0.
 LITERT_LM_C_API_EXPORT

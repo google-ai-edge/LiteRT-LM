@@ -207,7 +207,9 @@ internal object LiteRtLmJni {
    * @param filterChannelContentFromKvCache Whether to filter channel content from the KV cache.
    * @param prefillPrefaceOnInit Whether to prefill the preface when initializing the conversation.
    * @param repetitionPenaltyConfig Configuration for repetition penalty.
-   * @param maxOutputToken The maximum number of output tokens. When non-positive, use the default.
+   * @param maxOutputToken The maximum number of output tokens. For thinking models, both thinking
+   *   (reasoning) tokens and the final response tokens count towards this limit. When non-positive,
+   *   use the default.
    * @param thinkingConfig Configuration for thinking/reasoning generation.
    * @return A pointer to the native conversation instance.
    */
@@ -251,7 +253,9 @@ internal object LiteRtLmJni {
    * @param repetitionPenaltyConfig Configuration for repetition penalty.
    * @param noRepeatNgramConfig Configuration for no repeat ngram.
    * @param suppressTokensConfig Configuration for suppressing specific tokens.
-   * @param maxOutputToken The maximum number of output tokens. When non-positive, use the default.
+   * @param maxOutputToken The maximum number of output tokens. For thinking models, both thinking
+   *   (reasoning) tokens and the final response tokens count towards this limit. When non-positive,
+   *   use the default.
    * @param thinkingConfig Configuration for thinking/reasoning generation.
    */
   external fun nativeSendMessageAsync(
@@ -281,7 +285,9 @@ internal object LiteRtLmJni {
    * @param repetitionPenaltyConfig Configuration for repetition penalty.
    * @param noRepeatNgramConfig Configuration for no repeat ngram.
    * @param suppressTokensConfig Configuration for suppressing specific tokens.
-   * @param maxOutputToken The maximum number of output tokens. When non-positive, use the default.
+   * @param maxOutputToken The maximum number of output tokens. For thinking models, both thinking
+   *   (reasoning) tokens and the final response tokens count towards this limit. When non-positive,
+   *   use the default.
    * @param thinkingConfig Configuration for thinking/reasoning generation.
    * @return The response message in JSON string format.
    */

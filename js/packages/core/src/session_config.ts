@@ -46,6 +46,11 @@ export interface SessionConfig {
   samplerBackend?: Backend;
   applyPromptTemplateInSession?: boolean;
   useExternalSampler?: boolean;
+  /**
+   * The maximum number of tokens to generate per response. For thinking
+   * models, both thinking (reasoning) tokens and the final response tokens
+   * count towards this limit.
+   */
   maxOutputTokens?: number;
 }
 

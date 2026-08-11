@@ -109,7 +109,7 @@ public class Conversation {
   /// - Parameter extraContext: The extra context to send to the model.
   /// - Parameter repetitionPenaltyConfig: Optional configuration for repetition penalty.
   /// - Parameter noRepeatNgramConfig: Optional configuration for no repeat ngram penalty.
-  /// - Parameter maxOutputTokens: Optional maximum number of output tokens.
+  /// - Parameter maxOutputTokens: Optional maximum number of tokens to generate per response. For thinking models, both thinking (reasoning) tokens and the final response tokens count towards this limit.
   /// - Parameter thinkingConfig: Optional configuration for thinking/reasoning generation.
   /// - Parameter responseFormat: Optional response format for constrained decoding.
   /// - Returns: The model's response message.
@@ -342,7 +342,7 @@ public class Conversation {
   /// - Parameter message: The message to send.
   /// - Parameter extraContext: The extra context to send to the model.
   /// - Parameter repetitionPenaltyConfig: Optional configuration for repetition penalty.
-  /// - Parameter maxOutputTokens: Optional maximum number of output tokens.
+  /// - Parameter maxOutputTokens: Optional maximum number of tokens to generate per response. For thinking models, both thinking (reasoning) tokens and the final response tokens count towards this limit.
   /// - Parameter thinkingConfig: Optional configuration for thinking/reasoning generation.
   /// - Parameter responseFormat: Optional response format for constrained decoding.
   /// - Returns: An async throwing stream of `Message` chunks.

@@ -446,7 +446,9 @@ struct OptionalArgs {
   // don't need to provide this argument.
   std::optional<DataProcessorArguments> args = std::nullopt;
 
-  // The maximum number of tokens to generate during decode.
+  // The maximum number of tokens to generate during decode. For thinking
+  // models, both thinking (reasoning) tokens and the final response tokens
+  // count towards this limit.
   std::optional<int> max_output_tokens = std::nullopt;
 
   // The task group id for asynchronous tasks. If provided, the task

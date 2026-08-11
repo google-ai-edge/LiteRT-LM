@@ -81,6 +81,9 @@ struct LiteRtLmSettings {
   std::optional<std::string> expected_output = std::nullopt;
   std::optional<std::string> log_sink_file = std::nullopt;
   int max_num_tokens = 0;
+  // The maximum number of tokens to generate. For thinking models, both
+  // thinking (reasoning) tokens and the final response tokens count towards
+  // this limit.
   int max_output_tokens = -1;
   int max_num_images = 0;
   int visual_token_budget = -1;

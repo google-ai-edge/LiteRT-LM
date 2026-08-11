@@ -362,12 +362,14 @@ class DecodeConfig {
   // Returns a pointer to the constraint, or nullptr if no constraint is set.
   Constraint* absl_nullable GetConstraint() const { return constraint_; }
 
-  // Sets the max output tokens.
+  // Sets the max output tokens. For thinking models, both thinking (reasoning)
+  // tokens and the final response tokens count towards this limit.
   void SetMaxOutputTokens(int max_output_tokens) {
     max_output_tokens_ = max_output_tokens;
   }
 
-  // Returns the max output tokens.
+  // Returns the max output tokens. For thinking models, both thinking
+  // (reasoning) tokens and the final response tokens count towards this limit.
   std::optional<int> GetMaxOutputTokens() const { return max_output_tokens_; }
 
   // Sets the thinking token budget.

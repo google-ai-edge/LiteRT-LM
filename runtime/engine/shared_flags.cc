@@ -44,7 +44,9 @@ ABSL_FLAG(int, max_num_tokens, 0,
           "will be set to one equal to or greater than "
           "benchmark_prefill_tokens + benchmark_decode_tokens.");
 ABSL_FLAG(int, max_output_tokens, -1,
-          "Maximum number of output tokens for generation.");
+          "Maximum number of output tokens for generation. For thinking "
+          "models, both thinking (reasoning) tokens and the final response "
+          "tokens count towards this limit.");
 ABSL_FLAG(int, max_num_images, 1,
           "Maximum number of images to use for LLM execution.");
 ABSL_FLAG(std::vector<std::string>, prefill_batch_sizes, {},

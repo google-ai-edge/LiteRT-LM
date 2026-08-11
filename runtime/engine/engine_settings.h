@@ -274,8 +274,9 @@ class SessionConfig {
   void SetAudioScopedLoraFile(
       std::shared_ptr<ScopedFile> scoped_audio_lora_file);
 
-  // The maximum number of tokens to generate in a single request:
-  // Getters for the max output tokens.
+  // The maximum number of tokens to generate in a single request. For thinking
+  // models, both thinking (reasoning) tokens and the final response tokens
+  // count towards this limit:
   int GetMaxOutputTokens() const { return max_output_tokens_; }
   void SetMaxOutputTokens(int max_output_tokens) {
     max_output_tokens_ = max_output_tokens;
