@@ -356,6 +356,7 @@ Gemma4DataProcessor::ToInputDataVectorImpl(
           .patch_height = config_.patch_height,
           .max_num_patches = config_.max_num_patches,
           .pooling_kernel_size = config_.pooling_kernel_size,
+          .merge_patches = config_.merge_patches,
       });
   return ProcessMultimodalPrompt(
       rendered_template_prompt, messages, image_preprocessor_.get(),

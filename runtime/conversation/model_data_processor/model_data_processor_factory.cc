@@ -265,6 +265,9 @@ absl::StatusOr<DataProcessorConfig> CreateGemma4DataProcessorConfig(
   if (gemma4.pooling_kernel_size() != default_gemma4.pooling_kernel_size()) {
     config.pooling_kernel_size = gemma4.pooling_kernel_size();
   }
+  if (gemma4.merge_patches() != default_gemma4.merge_patches()) {
+    config.merge_patches = gemma4.merge_patches();
+  }
   if (gemma4.skip_mel_spectrogram_extraction() !=
       default_gemma4.skip_mel_spectrogram_extraction()) {
     config.skip_mel_spectrogram_extraction =

@@ -332,5 +332,250 @@ TEST(ImagePreprocessorUtilsTest, PatchifyImageZeroWidthOrHeight) {
                        "Image data size does not match target dimensions."));
 }
 
+TEST(ImagePreprocessorUtilsTest, PatchifyImageMergePatchesSuccess) {
+  // Input image: 1 batch, height = 4, width = 8, channels = 3.
+  // Total size = 1 * 4 * 8 * 3 = 96 elements.
+  // With patch_width = 2, patch_height = 2, pooling_kernel_size = 2, and
+  // merge_patches = true: effective_kernel_size = 2
+  //
+  // model_patch_height = 2 * 2 = 4, model_patch_width = 2 * 2 = 4
+  // num_model_patches_h = 4 / 4 = 1, num_model_patches_w = 8 / 4 = 2 ->
+  // num_model_patches = 2 model_patch_dim = 2 * 2 * 3 * 2 * 2 = 48
+  // num_sub_patches = (4 / 2) * (8 / 2) = 8 <= max_num_patches (8)
+  std::vector<float> image_data(96);
+  for (int i = 0; i < 96; ++i) {
+    image_data[i] = static_cast<float>(i);
+  }
+
+  ImagePreprocessParameter parameter;
+  parameter.SetTargetDimensions({1, 4, 8, 3});
+  parameter.SetPatchifyConfig({.patch_width = 2,
+                               .patch_height = 2,
+                               .max_num_patches = 8,
+                               .pooling_kernel_size = 2,
+                               .emit_positions = true,
+                               .merge_patches = true});
+
+  ASSERT_OK_AND_ASSIGN(auto preprocessed_image,
+                       PatchifyImage(image_data, parameter));
+
+  ASSERT_TRUE(preprocessed_image.IsTensorBufferMap());
+  ASSERT_OK_AND_ASSIGN(auto tensor_map,
+                       preprocessed_image.GetPreprocessedImageTensorMap());
+  ASSERT_NE(tensor_map, nullptr);
+  EXPECT_TRUE(tensor_map->contains("images"));
+  EXPECT_TRUE(tensor_map->contains("positions_xy"));
+
+  const auto& images_tensor = tensor_map->at("images");
+  auto images_tensor_type = images_tensor.TensorType();
+  ASSERT_TRUE(images_tensor_type.HasValue());
+  EXPECT_THAT(images_tensor_type.Value().Layout().Dimensions(),
+              ElementsAre(1, 2, 48));
+
+  const auto& positions_tensor = tensor_map->at("positions_xy");
+  auto positions_tensor_type = positions_tensor.TensorType();
+  ASSERT_TRUE(positions_tensor_type.HasValue());
+  EXPECT_THAT(positions_tensor_type.Value().Layout().Dimensions(),
+              ElementsAre(1, 2, 2));
+
+  // Verify positions [X, Y]: patch 0 is (0, 0), patch 1 is (1, 0).
+  auto positions_lock = ::litert::TensorBufferScopedLock::Create(
+      positions_tensor, ::litert::TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(positions_lock.HasValue());
+  const int32_t* positions_ptr =
+      reinterpret_cast<const int32_t*>(positions_lock->second);
+  EXPECT_EQ(positions_ptr[0], 0);
+  EXPECT_EQ(positions_ptr[1], 0);
+  EXPECT_EQ(positions_ptr[2], 1);
+  EXPECT_EQ(positions_ptr[3], 0);
+
+  // Verify image values.
+  auto images_lock = ::litert::TensorBufferScopedLock::Create(
+      images_tensor, ::litert::TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(images_lock.HasValue());
+  const float* data = reinterpret_cast<const float*>(images_lock->second);
+
+  constexpr int kWidth = 8;
+  constexpr int kChannels = 3;
+  constexpr int kModelPatchHeight = 4;
+  constexpr int kModelPatchWidth = 4;
+  constexpr int kModelPatchDim = 48;
+  constexpr int kNumModelPatchesW = 2;
+
+  for (int mw = 0; mw < kNumModelPatchesW; ++mw) {
+    int patch_idx = mw;
+    for (int ph = 0; ph < kModelPatchHeight; ++ph) {
+      for (int pw = 0; pw < kModelPatchWidth; ++pw) {
+        for (int c = 0; c < kChannels; ++c) {
+          int src_h = ph;
+          int src_w = mw * kModelPatchWidth + pw;
+          int src_idx = (src_h * kWidth + src_w) * kChannels + c;
+          int dest_idx = patch_idx * kModelPatchDim +
+                         (ph * kModelPatchWidth + pw) * kChannels + c;
+          EXPECT_EQ(data[dest_idx], image_data[src_idx]);
+        }
+      }
+    }
+  }
+}
+
+TEST(ImagePreprocessorUtilsTest, PatchifyImageMergePatches2x2Grid) {
+  // Input image: 1 batch, height = 8, width = 8, channels = 1.
+  // Total size = 1 * 8 * 8 * 1 = 64 elements.
+  // With patch_width = 2, patch_height = 2, pooling_kernel_size = 2,
+  // merge_patches = true: effective_kernel_size = 2 model_patch_height = 4,
+  // model_patch_width = 4 num_model_patches_h = 2, num_model_patches_w = 2 ->
+  // num_model_patches = 4 model_patch_dim = 2 * 2 * 1 * 2 * 2 = 16
+  // num_sub_patches = (8 / 2) * (8 / 2) = 16 <= max_num_patches (16)
+  std::vector<float> image_data(64);
+  for (int i = 0; i < 64; ++i) {
+    image_data[i] = static_cast<float>(i);
+  }
+
+  ImagePreprocessParameter parameter;
+  parameter.SetTargetDimensions({1, 8, 8, 1});
+  parameter.SetPatchifyConfig({.patch_width = 2,
+                               .patch_height = 2,
+                               .max_num_patches = 16,
+                               .pooling_kernel_size = 2,
+                               .emit_positions = true,
+                               .merge_patches = true});
+
+  ASSERT_OK_AND_ASSIGN(auto preprocessed_image,
+                       PatchifyImage(image_data, parameter));
+
+  ASSERT_TRUE(preprocessed_image.IsTensorBufferMap());
+  ASSERT_OK_AND_ASSIGN(auto tensor_map,
+                       preprocessed_image.GetPreprocessedImageTensorMap());
+  ASSERT_NE(tensor_map, nullptr);
+
+  const auto& images_tensor = tensor_map->at("images");
+  auto images_tensor_type = images_tensor.TensorType();
+  ASSERT_TRUE(images_tensor_type.HasValue());
+  EXPECT_THAT(images_tensor_type.Value().Layout().Dimensions(),
+              ElementsAre(1, 4, 16));
+
+  const auto& positions_tensor = tensor_map->at("positions_xy");
+  auto positions_tensor_type = positions_tensor.TensorType();
+  ASSERT_TRUE(positions_tensor_type.HasValue());
+  EXPECT_THAT(positions_tensor_type.Value().Layout().Dimensions(),
+              ElementsAre(1, 4, 2));
+
+  // Verify positions [X, Y]:
+  // Patch 0 (mh=0, mw=0) -> (0, 0)
+  // Patch 1 (mh=0, mw=1) -> (1, 0)
+  // Patch 2 (mh=1, mw=0) -> (0, 1)
+  // Patch 3 (mh=1, mw=1) -> (1, 1)
+  auto positions_lock = ::litert::TensorBufferScopedLock::Create(
+      positions_tensor, ::litert::TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(positions_lock.HasValue());
+  const int32_t* positions_ptr =
+      reinterpret_cast<const int32_t*>(positions_lock->second);
+  EXPECT_EQ(positions_ptr[0], 0);
+  EXPECT_EQ(positions_ptr[1], 0);
+  EXPECT_EQ(positions_ptr[2], 1);
+  EXPECT_EQ(positions_ptr[3], 0);
+  EXPECT_EQ(positions_ptr[4], 0);
+  EXPECT_EQ(positions_ptr[5], 1);
+  EXPECT_EQ(positions_ptr[6], 1);
+  EXPECT_EQ(positions_ptr[7], 1);
+
+  // Verify image values.
+  auto images_lock = ::litert::TensorBufferScopedLock::Create(
+      images_tensor, ::litert::TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(images_lock.HasValue());
+  const float* data = reinterpret_cast<const float*>(images_lock->second);
+
+  constexpr int kWidth = 8;
+  constexpr int kChannels = 1;
+  constexpr int kModelPatchHeight = 4;
+  constexpr int kModelPatchWidth = 4;
+  constexpr int kModelPatchDim = 16;
+  constexpr int kNumModelPatchesH = 2;
+  constexpr int kNumModelPatchesW = 2;
+
+  for (int mh = 0; mh < kNumModelPatchesH; ++mh) {
+    for (int mw = 0; mw < kNumModelPatchesW; ++mw) {
+      int patch_idx = mh * kNumModelPatchesW + mw;
+      for (int ph = 0; ph < kModelPatchHeight; ++ph) {
+        for (int pw = 0; pw < kModelPatchWidth; ++pw) {
+          for (int c = 0; c < kChannels; ++c) {
+            int src_h = mh * kModelPatchHeight + ph;
+            int src_w = mw * kModelPatchWidth + pw;
+            int src_idx = (src_h * kWidth + src_w) * kChannels + c;
+            int dest_idx = patch_idx * kModelPatchDim +
+                           (ph * kModelPatchWidth + pw) * kChannels + c;
+            EXPECT_EQ(data[dest_idx], image_data[src_idx]);
+          }
+        }
+      }
+    }
+  }
+}
+
+TEST(ImagePreprocessorUtilsTest, PatchifyImageMergePatchesNotDivisible) {
+  // Image height = 6, width = 6 is divisible by patch_size = 2, but NOT
+  // divisible by model_patch_size = patch_size * pooling_kernel_size = 2 * 2 =
+  // 4 when merge_patches = true.
+  std::vector<float> image_data(36 * 3);
+  ImagePreprocessParameter parameter;
+  parameter.SetTargetDimensions({1, 6, 6, 3});
+  parameter.SetPatchifyConfig({.patch_width = 2,
+                               .patch_height = 2,
+                               .max_num_patches = 16,
+                               .pooling_kernel_size = 2,
+                               .merge_patches = true});
+
+  EXPECT_THAT(PatchifyImage(image_data, parameter),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       "Image dimensions must be divisible by patch size."));
+}
+
+TEST(ImagePreprocessorUtilsTest,
+     PatchifyImageMergePatchesExceedsMaxSubPatches) {
+  // Image height = 4, width = 8 -> num_model_patches = 2, but num_sub_patches
+  // = 8. If max_num_patches = 6 (< 8 sub-patches), it should fail.
+  std::vector<float> image_data(96);
+  ImagePreprocessParameter parameter;
+  parameter.SetTargetDimensions({1, 4, 8, 3});
+  parameter.SetPatchifyConfig({.patch_width = 2,
+                               .patch_height = 2,
+                               .max_num_patches = 6,
+                               .pooling_kernel_size = 2,
+                               .merge_patches = true});
+
+  EXPECT_THAT(PatchifyImage(image_data, parameter),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       HasSubstr("exceeds max_num_patches")));
+}
+
+TEST(ImagePreprocessorUtilsTest, PatchifyImageMergePatchesEmitPositionsFalse) {
+  std::vector<float> image_data(96);
+  ImagePreprocessParameter parameter;
+  parameter.SetTargetDimensions({1, 4, 8, 3});
+  parameter.SetPatchifyConfig({.patch_width = 2,
+                               .patch_height = 2,
+                               .max_num_patches = 8,
+                               .pooling_kernel_size = 2,
+                               .emit_positions = false,
+                               .merge_patches = true});
+
+  ASSERT_OK_AND_ASSIGN(auto preprocessed_image,
+                       PatchifyImage(image_data, parameter));
+
+  ASSERT_TRUE(preprocessed_image.IsTensorBufferMap());
+  ASSERT_OK_AND_ASSIGN(auto tensor_map,
+                       preprocessed_image.GetPreprocessedImageTensorMap());
+  ASSERT_NE(tensor_map, nullptr);
+  EXPECT_TRUE(tensor_map->contains("images"));
+  EXPECT_FALSE(tensor_map->contains("positions_xy"));
+
+  const auto& images_tensor = tensor_map->at("images");
+  auto images_tensor_type = images_tensor.TensorType();
+  ASSERT_TRUE(images_tensor_type.HasValue());
+  EXPECT_THAT(images_tensor_type.Value().Layout().Dimensions(),
+              ElementsAre(1, 2, 48));
+}
+
 }  // namespace
 }  // namespace litert::support

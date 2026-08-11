@@ -51,6 +51,10 @@ struct Gemma4DataProcessorConfig {
   // patchifying the image.
   int pooling_kernel_size = 3;
 
+  // Whether to perform 2-stage sub-patch merging in the image preprocessor.
+  // Only Gemma4 12B model uses this feature.
+  bool merge_patches = false;
+
   // The string for beginning of audio token.
   std::string boa_token = "<|audio>";
   // The string for end of audio token.

@@ -121,23 +121,34 @@ absl::StatusOr<InputImage> PatchifyImage(
         "Image data size does not match target dimensions.");
   }
 
-  if (height % patch_height != 0 || width % patch_width != 0) {
+  const bool merge_patches = patchify_config->merge_patches &&
+                             patchify_config->pooling_kernel_size > 1;
+  const int effective_kernel_size =
+      merge_patches ? patchify_config->pooling_kernel_size : 1;
+
+  const int model_patch_height = patch_height * effective_kernel_size;
+  const int model_patch_width = patch_width * effective_kernel_size;
+  if (height % model_patch_height != 0 || width % model_patch_width != 0) {
     return absl::InvalidArgumentError(
         "Image dimensions must be divisible by patch size.");
   }
 
-  const int num_patches_h = height / patch_height;
-  const int num_patches_w = width / patch_width;
-  const int num_patches = num_patches_h * num_patches_w;
+  const int num_model_patches_h = height / model_patch_height;
+  const int num_model_patches_w = width / model_patch_width;
+  const int num_model_patches = num_model_patches_h * num_model_patches_w;
+  const int num_sub_patches = (height / patch_height) * (width / patch_width);
 
   if (patchify_config->max_num_patches > 0 &&
-      num_patches > patchify_config->max_num_patches) {
+      num_sub_patches > patchify_config->max_num_patches) {
     return absl::InvalidArgumentError(absl::StrCat(
-        "Number of patches (", num_patches, ") exceeds max_num_patches (",
+        "Number of patches (", num_sub_patches, ") exceeds max_num_patches (",
         patchify_config->max_num_patches, ")."));
   }
 
-  const int patch_dim = patch_width * patch_height * channels;
+  const int teacher_patch_dim = patch_width * patch_height * channels;
+  const int model_patch_dim =
+      teacher_patch_dim * effective_kernel_size * effective_kernel_size;
+
   // Transformer (ViT) encoders consume a per-patch "positions_xy" tensor, while
   // single input encoders (e.g. LFM2 VL) only consume the "images" tensor.
   const bool emit_positions = patchify_config->emit_positions;
@@ -145,8 +156,9 @@ absl::StatusOr<InputImage> PatchifyImage(
   LITERT_ASSIGN_OR_RETURN(
       auto patches_buffer,
       ::litert::TensorBuffer::CreateManagedHostMemory(
-          MakeRankedTensorType<float>({batch_size, num_patches, patch_dim}),
-          batch_size * num_patches * patch_dim * sizeof(float)));
+          MakeRankedTensorType<float>(
+              {batch_size, num_model_patches, model_patch_dim}),
+          batch_size * num_model_patches * model_patch_dim * sizeof(float)));
 
   LITERT_ASSIGN_OR_RETURN(
       auto patches_lock,
@@ -161,8 +173,8 @@ absl::StatusOr<InputImage> PatchifyImage(
     LITERT_ASSIGN_OR_RETURN(
         positions_buffer,
         ::litert::TensorBuffer::CreateManagedHostMemory(
-            MakeRankedTensorType<int32_t>({batch_size, num_patches, 2}),
-            batch_size * num_patches * 2 * sizeof(int32_t)));
+            MakeRankedTensorType<int32_t>({batch_size, num_model_patches, 2}),
+            batch_size * num_model_patches * 2 * sizeof(int32_t)));
     LITERT_ASSIGN_OR_RETURN(
         auto positions_lock_and_addr,
         ::litert::TensorBufferScopedLock::Create(
@@ -172,25 +184,25 @@ absl::StatusOr<InputImage> PatchifyImage(
   }
 
   for (int b = 0; b < batch_size; ++b) {
-    for (int h = 0; h < num_patches_h; ++h) {
-      for (int w = 0; w < num_patches_w; ++w) {
-        int patch_idx = h * num_patches_w + w;
-        int global_patch_idx = b * num_patches + patch_idx;
+    for (int mh = 0; mh < num_model_patches_h; ++mh) {
+      for (int mw = 0; mw < num_model_patches_w; ++mw) {
+        int model_patch_idx = mh * num_model_patches_w + mw;
+        int global_patch_idx = b * num_model_patches + model_patch_idx;
 
         if (positions_ptr != nullptr) {
-          positions_ptr[global_patch_idx * 2] = w;
-          positions_ptr[global_patch_idx * 2 + 1] = h;
+          positions_ptr[global_patch_idx * 2 + 0] = mw;
+          positions_ptr[global_patch_idx * 2 + 1] = mh;
         }
 
-        for (int ph = 0; ph < patch_height; ++ph) {
-          for (int pw = 0; pw < patch_width; ++pw) {
+        for (int ph = 0; ph < model_patch_height; ++ph) {
+          for (int pw = 0; pw < model_patch_width; ++pw) {
             for (int c = 0; c < channels; ++c) {
-              int src_h = h * patch_height + ph;
-              int src_w = w * patch_width + pw;
+              int src_h = mh * model_patch_height + ph;
+              int src_w = mw * model_patch_width + pw;
               int src_idx =
                   ((b * height + src_h) * width + src_w) * channels + c;
-              int dest_idx = global_patch_idx * patch_dim +
-                             ((ph * patch_width + pw) * channels + c);
+              int dest_idx = global_patch_idx * model_patch_dim +
+                             (ph * model_patch_width + pw) * channels + c;
               patches_ptr[dest_idx] = image_data[src_idx];
             }
           }

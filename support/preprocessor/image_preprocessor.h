@@ -43,6 +43,8 @@ class ImagePreprocessParameter {
     int pooling_kernel_size;
     // use position tensor.
     bool emit_positions = true;
+    // Whether to perform 2-stage sub-patch merging in the image preprocessor.
+    bool merge_patches = false;
   };
 
   // The config for normalization

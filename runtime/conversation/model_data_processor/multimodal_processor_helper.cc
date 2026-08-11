@@ -106,7 +106,9 @@ absl::StatusOr<std::vector<InputData>> ProcessMultimodalPrompt(
           .patch_height = image_params->GetPatchifyConfig()->patch_height,
           .max_num_patches = max_num_patches,
           .pooling_kernel_size =
-              image_params->GetPatchifyConfig()->pooling_kernel_size});
+              image_params->GetPatchifyConfig()->pooling_kernel_size,
+          .emit_positions = image_params->GetPatchifyConfig()->emit_positions,
+          .merge_patches = image_params->GetPatchifyConfig()->merge_patches});
     }
   }
 

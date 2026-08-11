@@ -36,7 +36,6 @@ message LlmModelType {
   }
 }
 
-
 // The default model type for the generic model.
 message GenericModel {
   // The model role to use for the model.
@@ -272,6 +271,10 @@ message Gemma4 {
   // patchifying the image.
   int32 pooling_kernel_size = 18;
 
+  // Whether to perform 2-stage sub-patch merging in the image preprocessor.
+  // Only used for Gemma4 12B model.
+  bool merge_patches = 20;
+
   // Audio modality.
   // The start of audio token indicates the start of audio in the prompt.
   TokenUnion start_of_audio_token = 3;
@@ -358,5 +361,3 @@ message MiniCPM5 {
   // An optional regex to match each line of the tool code block.
   optional string tool_code_regex = 4;
 }
-
-
