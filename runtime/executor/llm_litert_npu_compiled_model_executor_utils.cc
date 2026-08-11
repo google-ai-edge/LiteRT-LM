@@ -425,7 +425,21 @@ absl::Status HWKVCacheUpdate(
     int64_t slice_seq = -1;
 
     // Find dimensions in slice
-    if (slice_dims[slice_rank - 1] == hidden_dim) {
+    if (slice_dims[slice_rank - 1] == hidden_dim &&
+        slice_dims[slice_rank - 2] == hidden_dim) {
+      // Tie-breaker: If slice seq and hidden dim are equal,
+      // mirror the cache layout.
+      if (cache_seq_dim == cache_rank - 1) {
+        // Cache is [..., hidden, seq]
+        slice_hidden_dim = slice_rank - 2;
+        slice_seq_dim = slice_rank - 1;
+      } else {
+        // Cache is [..., seq, hidden]
+        slice_hidden_dim = slice_rank - 1;
+        slice_seq_dim = slice_rank - 2;
+      }
+      slice_seq = slice_dims[slice_seq_dim];
+    } else if (slice_dims[slice_rank - 1] == hidden_dim) {
       slice_hidden_dim = slice_rank - 1;
       slice_seq_dim = slice_rank - 2;
       slice_seq = slice_dims[slice_seq_dim];
