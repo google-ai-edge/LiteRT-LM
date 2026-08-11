@@ -221,17 +221,43 @@ config_setting(
 )
 
 config_setting(
+    name = "gpu_accelerator_webgpu_define",
+    define_values = {"LITERT_GPU_ACCELERATOR": "webgpu"},
+)
+
+selects.config_setting_group(
+    name = "gpu_accelerator_webgpu_requested",
+    match_any = [
+        ":gpu_accelerator_webgpu_setting",
+        ":gpu_accelerator_webgpu_define",
+    ],
+)
+
+config_setting(
     name = "gpu_accelerator_metal_setting",
     flag_values = {
         ":gpu_accelerator": "metal",
     },
 )
 
+config_setting(
+    name = "gpu_accelerator_metal_define",
+    define_values = {"LITERT_GPU_ACCELERATOR": "metal"},
+)
+
+selects.config_setting_group(
+    name = "gpu_accelerator_metal_requested",
+    match_any = [
+        ":gpu_accelerator_metal_setting",
+        ":gpu_accelerator_metal_define",
+    ],
+)
+
 selects.config_setting_group(
     name = "ios_webgpu",
     match_all = [
         "@platforms//os:ios",
-        ":gpu_accelerator_webgpu_setting",
+        ":gpu_accelerator_webgpu_requested",
     ],
 )
 
@@ -239,7 +265,7 @@ selects.config_setting_group(
     name = "macos_metal",
     match_all = [
         "@platforms//os:macos",
-        ":gpu_accelerator_metal_setting",
+        ":gpu_accelerator_metal_requested",
     ],
 )
 
