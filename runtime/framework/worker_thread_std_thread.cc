@@ -15,7 +15,13 @@
 #include <atomic>
 #include <memory>
 #include <string>
+
+#if defined(_WIN32)
+#include <windows.h>
+#include <process.h>
+#else
 #include <thread>  // NOLINT(build/c++11)
+#endif
 
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
@@ -26,6 +32,38 @@
 namespace litert::lm {
 namespace {
 
+#if defined(_WIN32)
+class WorkerThreadStdThread : public WorkerThread {
+ public:
+  WorkerThreadStdThread(ThreadPool* absl_nonnull pool,
+                        const std::string& name_prefix)
+      : WorkerThread(pool, name_prefix) {
+    unsigned thread_id;
+    // Request an 8MB stack on Windows to prevent STATUS_STACK_BUFFER_OVERRUN
+    // during TFLite/XNNPACK prefill graph execution.
+    thread_handle_ = (HANDLE)_beginthreadex(
+        nullptr, 8 * 1024 * 1024, ThreadBody, this, 0x00010000 /* STACK_SIZE_PARAM_IS_A_RESERVATION */, &thread_id);
+  }
+
+ private:
+  absl::Status JoinImpl() override {
+    if (thread_handle_ != nullptr) {
+      WaitForSingleObject(thread_handle_, INFINITE);
+      CloseHandle(thread_handle_);
+      thread_handle_ = nullptr;
+    }
+    return absl::OkStatus();
+  }
+
+  static unsigned __stdcall ThreadBody(void* arg) {
+    auto thread = reinterpret_cast<WorkerThreadStdThread*>(arg);
+    thread->RunWorker();
+    return 0;
+  }
+
+  HANDLE thread_handle_ = nullptr;
+};
+#else
 class WorkerThreadStdThread : public WorkerThread {
  public:
   WorkerThreadStdThread(ThreadPool* absl_nonnull pool,
@@ -57,6 +95,7 @@ void* WorkerThreadStdThread::ThreadBody(void* arg) {
   thread->RunWorker();
   return nullptr;
 }
+#endif
 
 }  // namespace
 

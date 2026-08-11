@@ -423,3 +423,39 @@ cc_test(
         "//runtime/util:test_utils",
     ],
 )
+
+cc_test(
+    name = "windows_run_test",
+    srcs = ["windows_run_test.cc"],
+)
+
+cc_binary(
+    name = "abort_test",
+    srcs = ["abort_test.cc"],
+)
+
+cc_test(
+    name = "windows_run_test2",
+    srcs = ["windows_run_test.cc"],
+    data = [
+        "tiny_gemma.litertlm",
+    ],
+    deps = [
+        "@com_google_absl//absl/status:statusor",
+        "//runtime/engine:litert_lm_lib",
+    ],
+)
+
+cc_test(
+    name = "windows_run_test3",
+    srcs = ["windows_run_test3.cc"],
+    deps = [
+        "//runtime/engine",
+        "//runtime/engine:engine_settings",
+    ],
+)
+
+cc_test(
+    name = "windows_run_test4",
+    srcs = ["windows_run_test4.cc"],
+)
