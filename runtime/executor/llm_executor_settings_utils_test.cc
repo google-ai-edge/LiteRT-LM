@@ -15,6 +15,7 @@
 #include "runtime/executor/llm_executor_settings_utils.h"
 
 #include <filesystem>  // NOLINT: Required for path manipulation.
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
@@ -22,16 +23,21 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "litert/c/options/litert_gpu_options.h"  // from @litert
 #include "litert/cc/litert_common.h"  // from @litert
 #include "litert/cc/litert_options.h"  // from @litert
 #include "litert/test/matchers.h"  // from @litert
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/llm_executor_settings.h"
+#include "runtime/util/file_util.h"
+#include "runtime/util/scoped_file.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
 
 namespace litert::lm {
 namespace {
 
+using ::testing::StrEq;
 using ::testing::status::IsOkAndHolds;
 using ::testing::status::StatusIs;
 

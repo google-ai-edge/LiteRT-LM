@@ -95,9 +95,11 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
       gpu_compilation_options.SetPreferTextureWeights(true);
 #endif  // !__APPLE__
 
-      bool has_valid_model_fd =
-          executor_settings.GetModelAssets().GetScopedFile().ok() &&
-          executor_settings.GetModelAssets().GetScopedFile().value()->IsValid();
+      auto model_scoped_file =
+          executor_settings.GetModelAssets().GetScopedFile();
+      bool has_valid_model_fd = model_scoped_file.ok() &&
+                                *model_scoped_file != nullptr &&
+                                (*model_scoped_file)->IsValid();
 
       auto program_cache_file = executor_settings.GetProgramCacheFile(
           absl::StrCat(cache_suffix.value_or(""),
@@ -120,17 +122,26 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
         // If the model path is available, use the model name as the cache key.
         absl::string_view model_path = *model_path_or_status;
         absl::string_view model_name = Basename(model_path);
-        LITERT_ASSIGN_OR_RETURN(std::string metadata_id,
-                                GetFileCacheIdentifier(model_path));
-        cache_key = absl::StrCat(model_name, "_", metadata_id);
+        auto metadata_id_or = GetFileCacheIdentifier(model_path);
+        if (metadata_id_or.ok()) {
+          cache_key = absl::StrCat(model_name, "_", *metadata_id_or);
+        } else if (has_valid_model_fd) {
+          // The path cannot be resolved via stat() (e.g. a virtual/relative
+          // MDD path in a sandboxed process). Fall back to the file
+          // descriptor, which yields an equivalent (mtime, size) identifier
+          // via fstat().
+          LITERT_ASSIGN_OR_RETURN(std::string metadata_id,
+                                  GetFileCacheIdentifier(**model_scoped_file));
+          cache_key = absl::StrCat(model_name, "_", metadata_id);
+        } else {
+          return metadata_id_or.status();
+        }
       } else if (has_valid_model_fd &&
                  (has_valid_program_cache_fd || has_valid_weight_cache_fd)) {
         // If the model is loaded from an fd, there is no way to automatically
         // generate a unique cache key from the file descriptor.
-        LITERT_ASSIGN_OR_RETURN(
-            std::string metadata_id,
-            GetFileCacheIdentifier(
-                *executor_settings.GetModelAssets().GetScopedFile().value()));
+        LITERT_ASSIGN_OR_RETURN(std::string metadata_id,
+                                GetFileCacheIdentifier(**model_scoped_file));
         cache_key = absl::StrCat("fd_", metadata_id);
       }
       if (cache_suffix.has_value() && !cache_suffix->empty() &&

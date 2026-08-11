@@ -797,8 +797,21 @@ absl::StatusOr<GpuModelCacheData> GetGpuModelCacheData(
                      ExecutorSettingsBase::kMlDriftWeightCacheSuffix),
         /*check_and_clean=*/true);
     if (!model_path.empty()) {
-      ABSL_ASSIGN_OR_RETURN(std::string metadata_id,
-                            GetFileCacheIdentifier(model_path));
+      absl::StatusOr<std::string> metadata_id_or =
+          GetFileCacheIdentifier(model_path);
+      if (!metadata_id_or.ok()) {
+        // The path cannot be resolved via stat() (e.g. a virtual/relative MDD
+        // path in a sandboxed process). Fall back to the model file
+        // descriptor, which yields an equivalent (mtime, size) identifier via
+        // fstat().
+        auto model_scoped_file =
+            executor_settings.GetModelAssets().GetScopedFile();
+        if (model_scoped_file.ok() && *model_scoped_file != nullptr &&
+            (*model_scoped_file)->IsValid()) {
+          metadata_id_or = GetFileCacheIdentifier(**model_scoped_file);
+        }
+      }
+      ABSL_ASSIGN_OR_RETURN(std::string metadata_id, std::move(metadata_id_or));
       if (cache_data.program_cache_file.ok() ||
           cache_data.weight_cache_file.ok()) {
         cache_data.cache_key =

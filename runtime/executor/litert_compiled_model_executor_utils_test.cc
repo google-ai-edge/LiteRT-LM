@@ -1270,6 +1270,136 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest, GetGpuModelCacheData_WithFd) {
   EXPECT_EQ(cache_data.cache_key, expected_cache_key);
 }
 
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     GetGpuModelCacheData_UnresolvablePathFallsBackToFd) {
+  // Back the model with a real file (for a valid fd), but reference it by a
+  // path that cannot be resolved via stat() -- this mimics the sandboxed
+  // AiCoreIsolatedService, where the model is a virtual/relative MDD path.
+  auto model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm.task";
+  ASSERT_OK_AND_ASSIGN(auto model_file, ScopedFile::Open(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(std::string expected_metadata_id,
+                       GetFileCacheIdentifier(model_file));
+
+  constexpr absl::string_view kUnresolvablePath =
+      "/nonexistent/dir/virtual_model.task";
+  ASSERT_OK_AND_ASSIGN(
+      auto model_assets,
+      ModelAssets::Create(std::make_shared<ScopedFile>(std::move(model_file)),
+                          kUnresolvablePath));
+
+  class StubExecutorSettings : public ExecutorSettingsBase {
+   public:
+    explicit StubExecutorSettings(const ModelAssets& model_assets)
+        : ExecutorSettingsBase(model_assets) {}
+  };
+  StubExecutorSettings executor_settings(model_assets);
+  executor_settings.SetCacheDir("/dummy/cache/dir");
+
+  // Provide valid cache fds so a cache key is generated.
+  std::string temp_program_cache =
+      (std::filesystem::path(::testing::TempDir()) / "fb_program_cache.bin")
+          .string();
+  std::string temp_weight_cache =
+      (std::filesystem::path(::testing::TempDir()) / "fb_weight_cache.bin")
+          .string();
+  {
+    std::ofstream touch1(temp_program_cache);
+    std::ofstream touch2(temp_weight_cache);
+  }
+  ASSERT_OK_AND_ASSIGN(auto program_cache_file,
+                       ScopedFile::OpenWritable(temp_program_cache));
+  ASSERT_OK_AND_ASSIGN(auto weight_cache_file,
+                       ScopedFile::OpenWritable(temp_weight_cache));
+  executor_settings.SetScopedProgramCacheFile(
+      std::make_shared<ScopedFile>(std::move(program_cache_file)));
+  executor_settings.SetScopedCacheFile(
+      std::make_shared<ScopedFile>(std::move(weight_cache_file)));
+
+  ASSERT_OK_AND_ASSIGN(auto cache_data,
+                       GetGpuModelCacheData(executor_settings, "test_cache"));
+
+  // The key falls back to the fd-based identifier while keeping the
+  // (unresolvable) path's basename.
+  std::string expected_cache_key = absl::StrCat(
+      "virtual_model.task", "test_cache", "_", expected_metadata_id);
+  EXPECT_EQ(cache_data.cache_key, expected_cache_key);
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     GetGpuModelCacheData_UnresolvablePathNoFdReturnsError) {
+  constexpr absl::string_view kUnresolvablePath =
+      "/nonexistent/dir/virtual_model.task";
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(kUnresolvablePath));
+
+  class StubExecutorSettings : public ExecutorSettingsBase {
+   public:
+    explicit StubExecutorSettings(const ModelAssets& model_assets)
+        : ExecutorSettingsBase(model_assets) {}
+  };
+  StubExecutorSettings executor_settings(model_assets);
+  executor_settings.SetCacheDir("/dummy/cache/dir");
+
+  // No model fd is available, so the original unresolvable-path error is
+  // propagated instead of being masked.
+  auto cache_data = GetGpuModelCacheData(executor_settings, "test_cache");
+  EXPECT_FALSE(cache_data.ok());
+  EXPECT_EQ(cache_data.status().code(), absl::StatusCode::kInternal);
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     GetGpuModelCacheData_ResolvablePathPrefersPathOverFd) {
+  // Provide BOTH a resolvable path and a valid fd. The cache key must be
+  // derived from the path identifier -- a regression guard ensuring the path
+  // remains preferred (no fd-first reordering that would change existing keys).
+  auto model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm.task";
+  ASSERT_OK_AND_ASSIGN(auto model_file, ScopedFile::Open(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(
+      auto model_assets,
+      ModelAssets::Create(std::make_shared<ScopedFile>(std::move(model_file)),
+                          model_path.string()));
+
+  class StubExecutorSettings : public ExecutorSettingsBase {
+   public:
+    explicit StubExecutorSettings(const ModelAssets& model_assets)
+        : ExecutorSettingsBase(model_assets) {}
+  };
+  StubExecutorSettings executor_settings(model_assets);
+  executor_settings.SetCacheDir("/dummy/cache/dir");
+
+  std::string temp_program_cache =
+      (std::filesystem::path(::testing::TempDir()) / "rp_program_cache.bin")
+          .string();
+  std::string temp_weight_cache =
+      (std::filesystem::path(::testing::TempDir()) / "rp_weight_cache.bin")
+          .string();
+  {
+    std::ofstream touch1(temp_program_cache);
+    std::ofstream touch2(temp_weight_cache);
+  }
+  ASSERT_OK_AND_ASSIGN(auto program_cache_file,
+                       ScopedFile::OpenWritable(temp_program_cache));
+  ASSERT_OK_AND_ASSIGN(auto weight_cache_file,
+                       ScopedFile::OpenWritable(temp_weight_cache));
+  executor_settings.SetScopedProgramCacheFile(
+      std::make_shared<ScopedFile>(std::move(program_cache_file)));
+  executor_settings.SetScopedCacheFile(
+      std::make_shared<ScopedFile>(std::move(weight_cache_file)));
+
+  ASSERT_OK_AND_ASSIGN(auto cache_data,
+                       GetGpuModelCacheData(executor_settings, "test_cache"));
+
+  ASSERT_OK_AND_ASSIGN(std::string expected_metadata_id,
+                       GetFileCacheIdentifier(model_path.string()));
+  std::string expected_cache_key =
+      absl::StrCat("test_lm.task", "test_cache", "_", expected_metadata_id);
+  EXPECT_EQ(cache_data.cache_key, expected_cache_key);
+}
+
 class DummyExecutorSettings : public ExecutorSettingsBase {
  public:
   DummyExecutorSettings()
