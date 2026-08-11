@@ -26,6 +26,8 @@
 
 namespace litert::lm {
 
+class ModelResources;
+
 // Convert LLM Engine sampler backend to LiteRT backend. If conversion fails,
 // return the error.
 absl::StatusOr<Backend> GetSamplerBackend(
@@ -37,7 +39,8 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
     const LlmExecutorSettings& executor_settings,
     const ActivationDataType& activation_data_type,
     std::optional<ModelSignatures*> signatures,
-    std::optional<std::string> cache_suffix = std::nullopt);
+    std::optional<std::string> cache_suffix = std::nullopt,
+    const ModelResources* resources = nullptr);
 
 }  // namespace litert::lm
 

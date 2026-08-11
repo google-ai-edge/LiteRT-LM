@@ -200,6 +200,15 @@ class LitertLmLoader {
         BufferKey(schema::AnySectionDataType_EmbeddingMetadataProto));
   }
 
+  // Returns the system metadata bool value for the given key.
+  // If not found or not a bool, returns std::nullopt.
+  std::optional<bool> GetSystemMetadataBool(absl::string_view key) const;
+
+  // Returns the system metadata string value for the given key.
+  // If not found or not a string, returns std::nullopt.
+  std::optional<std::string> GetSystemMetadataString(
+      absl::string_view key) const;
+
   absl::StatusOr<std::pair<size_t, size_t>> GetSectionLocation(
       BufferKey buffer_key) const;
 
