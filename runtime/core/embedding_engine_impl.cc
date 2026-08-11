@@ -40,7 +40,10 @@
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/vision_executor.h"
 #include "runtime/executor/vision_litert_compiled_model_executor.h"
+#include "runtime/proto/embedding_metadata.pb.h"
+#include "runtime/proto/embedding_model_type.pb.h"
 #include "runtime/proto/engine.pb.h"
+#include "runtime/proto/token.pb.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/executor_data_util.h"
 #include "runtime/util/litert_util.h"
@@ -52,6 +55,30 @@
 namespace litert::lm {
 
 namespace {
+
+absl::StatusOr<std::vector<int>> TokenUnionToTokenIds(
+    const proto::TokenUnion& token_union,
+    ::litert::support::Tokenizer& tokenizer) {
+  if (token_union.has_token_ids()) {
+    return std::vector<int>(token_union.token_ids().ids().begin(),
+                            token_union.token_ids().ids().end());
+  } else if (token_union.has_token_str()) {
+    return tokenizer.TextToTokenIds(token_union.token_str());
+  }
+  return absl::InvalidArgumentError(
+      "Neither token_str nor token_ids is set in TokenUnion.");
+}
+
+absl::StatusOr<SpecialTokens> ExtractSpecialTokens(
+    const proto::EmbeddingMetadata& metadata,
+    ::litert::support::Tokenizer& tokenizer) {
+  SpecialTokens special_tokens;
+  if (!metadata.has_embedding_model_type()) {
+    return special_tokens;
+  }
+  const auto& model_type = metadata.embedding_model_type();
+  return special_tokens;
+}
 
 std::vector<float> L2Norm(const std::vector<float>& vec) {
   float sum_sq = 0.0f;
@@ -102,6 +129,23 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
     return absl::InvalidArgumentError("Tokenizer cannot be null.");
   }
 
+  // Extract EmbeddingMetadata if available from settings or resources.
+  const proto::EmbeddingMetadata* embedding_metadata = nullptr;
+  if (settings.GetEmbeddingMetadata().has_value()) {
+    embedding_metadata = &*settings.GetEmbeddingMetadata();
+  } else {
+    auto resources_metadata = resources->GetEmbeddingMetadata();
+    if (resources_metadata.ok() && *resources_metadata != nullptr) {
+      embedding_metadata = *resources_metadata;
+    }
+  }
+
+  SpecialTokens special_tokens;
+  if (embedding_metadata != nullptr) {
+    LITERT_ASSIGN_OR_RETURN(
+        special_tokens, ExtractSpecialTokens(*embedding_metadata, *tokenizer));
+  }
+
   // Initialize BenchmarkInfo if benchmarking is enabled and it wasn't passed
   // in as an argument.
   if (settings.IsBenchmarkEnabled() && !benchmark_info.has_value()) {
@@ -133,6 +177,11 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
                             *settings.GetAudioExecutorSettings(), env->env));
   }
 
+  special_tokens.has_end_of_vision_model =
+      resources->GetTFLiteModel(ModelType::kTfLiteEndOfVision).ok();
+  special_tokens.has_end_of_audio_model =
+      resources->GetTFLiteModel(ModelType::kTfLiteEndOfAudio).ok();
+
   // Initialize the embedding model executor.
   LITERT_ASSIGN_OR_RETURN(
       auto embedding_executor,
@@ -150,7 +199,7 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
   return std::make_unique<EmbeddingEngineImpl>(
       std::move(env), std::move(tokenizer), std::move(embedding_executor),
       std::move(vision_executor), std::move(audio_executor),
-      std::move(benchmark_info));
+      std::move(benchmark_info), std::move(special_tokens));
 }
 
 // static
@@ -214,13 +263,62 @@ EmbeddingEngineImpl::EmbeddingEngineImpl(
     std::unique_ptr<EmbeddingExecutorBase> embedding_executor,
     std::unique_ptr<VisionExecutor> vision_executor,
     std::unique_ptr<AudioExecutor> audio_executor,
-    std::optional<BenchmarkInfo> benchmark_info)
+    std::optional<BenchmarkInfo> benchmark_info, SpecialTokens special_tokens)
     : env_(std::move(env)),
       tokenizer_(std::move(tokenizer)),
       embedding_executor_(std::move(embedding_executor)),
       vision_executor_(std::move(vision_executor)),
       audio_executor_(std::move(audio_executor)),
-      benchmark_info_(std::move(benchmark_info)) {}
+      benchmark_info_(std::move(benchmark_info)),
+      special_tokens_(std::move(special_tokens)) {}
+
+absl::StatusOr<std::vector<InputData>> EmbeddingEngineImpl::InsertSpecialTokens(
+    const std::vector<InputData>& contents) const {
+  std::vector<InputData> new_contents;
+  for (const auto& item : contents) {
+    if (const auto* input_image = std::get_if<InputImage>(&item)) {
+      if (!special_tokens_.start_of_image_token_ids.empty()) {
+        LITERT_ASSIGN_OR_RETURN(
+            auto start_tensor,
+            litert::support::Tokenizer::TokenIdsToTensorBuffer(
+                special_tokens_.start_of_image_token_ids));
+        new_contents.push_back(InputText(std::move(start_tensor)));
+      }
+      LITERT_ASSIGN_OR_RETURN(auto image_copy, input_image->CreateCopy());
+      new_contents.push_back(std::move(image_copy));
+      if (special_tokens_.has_end_of_vision_model) {
+        new_contents.push_back(InputImageEnd());
+      } else if (!special_tokens_.end_of_image_token_ids.empty()) {
+        LITERT_ASSIGN_OR_RETURN(
+            auto end_tensor, litert::support::Tokenizer::TokenIdsToTensorBuffer(
+                                 special_tokens_.end_of_image_token_ids));
+        new_contents.push_back(InputText(std::move(end_tensor)));
+      }
+    } else if (const auto* input_audio = std::get_if<InputAudio>(&item)) {
+      if (!special_tokens_.start_of_audio_token_ids.empty()) {
+        LITERT_ASSIGN_OR_RETURN(
+            auto start_tensor,
+            litert::support::Tokenizer::TokenIdsToTensorBuffer(
+                special_tokens_.start_of_audio_token_ids));
+        new_contents.push_back(InputText(std::move(start_tensor)));
+      }
+      LITERT_ASSIGN_OR_RETURN(auto audio_copy, input_audio->CreateCopy());
+      new_contents.push_back(std::move(audio_copy));
+      if (special_tokens_.has_end_of_audio_model) {
+        new_contents.push_back(InputAudioEnd());
+      } else if (!special_tokens_.end_of_audio_token_ids.empty()) {
+        LITERT_ASSIGN_OR_RETURN(
+            auto end_tensor, litert::support::Tokenizer::TokenIdsToTensorBuffer(
+                                 special_tokens_.end_of_audio_token_ids));
+        new_contents.push_back(InputText(std::move(end_tensor)));
+      }
+    } else {
+      LITERT_ASSIGN_OR_RETURN(auto item_copy, CreateInputDataCopy(item));
+      new_contents.push_back(std::move(item_copy));
+    }
+  }
+  return new_contents;
+}
 
 absl::StatusOr<ExecutorInputs> EmbeddingEngineImpl::ProcessAndCombineContents(
     const std::vector<InputData>& contents) {
@@ -373,8 +471,15 @@ absl::StatusOr<EmbeddingResponse> EmbeddingEngineImpl::ComputeEmbedding(
     ABSL_RETURN_IF_ERROR(benchmark_info_->TimePrefillTurnStart());
   }
 
+  const std::vector<InputData>* contents_to_process = &contents;
+  std::vector<InputData> expanded_contents;
+  if (options.insert_special_tokens) {
+    LITERT_ASSIGN_OR_RETURN(expanded_contents, InsertSpecialTokens(contents));
+    contents_to_process = &expanded_contents;
+  }
+
   LITERT_ASSIGN_OR_RETURN(auto executor_inputs,
-                          ProcessAndCombineContents(contents));
+                          ProcessAndCombineContents(*contents_to_process));
   ABSL_ASSIGN_OR_RETURN(auto response,
                         ComputeEmbeddingInternal(executor_inputs, options));
 
@@ -399,14 +504,21 @@ EmbeddingEngineImpl::ComputeEmbeddingBatch(
   uint64_t total_tokens = 0;
 
   for (const auto& single_contents : contents) {
+    const std::vector<InputData>* contents_to_process = &single_contents;
+    std::vector<InputData> expanded_contents;
+    if (options.insert_special_tokens) {
+      LITERT_ASSIGN_OR_RETURN(expanded_contents,
+                              InsertSpecialTokens(single_contents));
+      contents_to_process = &expanded_contents;
+    }
     LITERT_ASSIGN_OR_RETURN(auto executor_inputs,
-                            ProcessAndCombineContents(single_contents));
+                            ProcessAndCombineContents(*contents_to_process));
     if (benchmark_info_.has_value()) {
       ABSL_ASSIGN_OR_RETURN(uint64_t num_tokens, GetNumTokens(executor_inputs));
       total_tokens += num_tokens;
     }
-    LITERT_ASSIGN_OR_RETURN(auto response,
-                            ComputeEmbeddingInternal(executor_inputs, options));
+    ABSL_ASSIGN_OR_RETURN(auto response,
+                          ComputeEmbeddingInternal(executor_inputs, options));
     batch_responses.push_back(std::move(response));
   }
 

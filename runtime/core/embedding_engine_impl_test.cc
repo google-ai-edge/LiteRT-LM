@@ -26,20 +26,32 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
+#include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
+#include "litert/cc/litert_layout.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
 #include "runtime/components/model_resources.h"
 #include "runtime/components/model_resources_litert_lm.h"
 #include "runtime/engine/embedding_engine.h"
 #include "runtime/engine/embedding_engine_settings.h"
 #include "runtime/engine/io_types.h"
+#include "runtime/executor/audio_executor.h"
+#include "runtime/executor/embedding_executor_base.h"
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/executor/llm_executor_io_types.h"
+#include "runtime/executor/vision_executor.h"
+#include "runtime/proto/embedding_metadata.pb.h"
+#include "runtime/proto/embedding_model_type.pb.h"
+#include "runtime/proto/token.pb.h"
+#include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/litert_lm_loader.h"
 #include "runtime/util/litert_util.h"
 #include "runtime/util/scoped_file.h"
@@ -53,6 +65,7 @@ using ::litert::Environment;
 using ::litert::support::Tokenizer;
 using ::litert::support::TokenizerType;
 using ::testing::Contains;
+using ::testing::ElementsAre;
 using ::testing::HasSubstr;
 using ::testing::Key;
 using ::testing::Return;
@@ -132,6 +145,11 @@ class FakeModelResources : public ModelResources {
   absl::StatusOr<const proto::ExecutorMetadata*> GetExecutorMetadata()
       override {
     return delegate_->GetExecutorMetadata();
+  }
+
+  absl::StatusOr<const proto::EmbeddingMetadata*> GetEmbeddingMetadata()
+      override {
+    return delegate_->GetEmbeddingMetadata();
   }
 
   absl::StatusOr<FileRegion> GetTFLiteModelSectionFileRegion(
@@ -590,6 +608,331 @@ TEST(EmbeddingEngineImplTest,
   EXPECT_THAT(engine->ComputeEmbedding(contents, options),
               StatusIs(absl::StatusCode::kInternal,
                        HasSubstr("Audio executor is not available")));
+}
+
+class FakeEmbeddingExecutor : public EmbeddingExecutorBase {
+ public:
+  absl::StatusOr<std::vector<float>> ComputeEmbedding(
+      const ExecutorInputs& inputs) override {
+    auto text_token_ids = inputs.GetTextTokenIdsPtr();
+    if (text_token_ids.ok() && *text_token_ids != nullptr) {
+      auto span = ReferTensorBufferAsSpan<int>(**text_token_ids);
+      if (span.HasValue()) {
+        last_token_ids_.assign(span->begin(), span->end());
+      }
+    }
+    return std::vector<float>{1.0f, 2.0f, 3.0f};
+  }
+
+  absl::StatusOr<std::vector<std::vector<float>>> ComputeEmbeddingBatch(
+      const std::vector<ExecutorInputs>& batch_inputs) override {
+    std::vector<std::vector<float>> results;
+    for (const auto& inputs : batch_inputs) {
+      LITERT_ASSIGN_OR_RETURN(auto result, ComputeEmbedding(inputs));
+      results.push_back(std::move(result));
+    }
+    return results;
+  }
+
+  absl::string_view ExecutorBackendName() const override { return "Fake"; }
+
+  absl::StatusOr<std::vector<int>> GetExpectedInputDimension() const override {
+    return std::vector<int>{1, 512};
+  }
+
+  absl::StatusOr<int> GetEmbeddingDimension() const override { return 3; }
+
+  ::litert::Environment* GetEnvironment() const override { return nullptr; }
+
+  const std::vector<int>& GetLastTokenIds() const { return last_token_ids_; }
+
+ private:
+  std::vector<int> last_token_ids_;
+};
+
+class FakeVisionExecutor : public VisionExecutor {
+ public:
+  absl::StatusOr<ExecutorVisionData> Encode(
+      const ::litert::TensorBuffer& input_image_tensor) override {
+    struct alignas(::litert::kHostMemoryBufferAlignment) {
+      float d[12] = {1.0f, 2.0f, 3.0f, 4.0f,  5.0f,  6.0f,
+                     7.0f, 8.0f, 9.0f, 10.0f, 11.0f, 12.0f};
+    } data;
+    auto tensor = ::litert::TensorBuffer::CreateFromHostMemory(
+        ::litert::RankedTensorType(
+            ::litert::ElementType::Float32,
+            ::litert::Layout(::litert::Dimensions({1, 4, 3}))),
+        data.d, sizeof(data.d));
+    if (!tensor.HasValue()) {
+      return absl::InternalError("Failed to create tensor buffer");
+    }
+    return ExecutorVisionData(std::move(*tensor), std::nullopt);
+  }
+
+  absl::StatusOr<ExecutorVisionData> Encode(
+      const absl::flat_hash_map<std::string, ::litert::TensorBuffer>&
+          input_tensors) override {
+    return absl::UnimplementedError("Not implemented.");
+  }
+
+  absl::StatusOr<std::vector<int>> GetExpectedInputDimension() const override {
+    return std::vector<int>{1, 224, 224, 3};
+  }
+};
+
+class FakeAudioExecutor : public AudioExecutor {
+ public:
+  absl::StatusOr<ExecutorAudioData> Encode(
+      const ::litert::TensorBuffer& spectrogram_tensor) override {
+    struct alignas(::litert::kHostMemoryBufferAlignment) {
+      float d[9] = {1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f, 9.0f};
+    } data;
+    auto tensor = ::litert::TensorBuffer::CreateFromHostMemory(
+        ::litert::RankedTensorType(
+            ::litert::ElementType::Float32,
+            ::litert::Layout(::litert::Dimensions({1, 1, 3, 3}))),
+        data.d, sizeof(data.d));
+    if (!tensor.HasValue()) {
+      return absl::InternalError("Failed to create tensor buffer");
+    }
+    return ExecutorAudioData(std::move(*tensor), std::nullopt,
+                             /*valid_tokens=*/3);
+  }
+};
+
+absl::StatusOr<::litert::TensorBuffer> CreateDummyTensorBuffer(
+    const ::litert::Environment& env, const std::vector<int>& dimensions) {
+  size_t num_elements = 1;
+  for (int dim : dimensions) {
+    num_elements *= dim;
+  }
+  ::litert::RankedTensorType tensor_type(
+      ::litert::ElementType::Float32,
+      ::litert::Layout(
+          ::litert::Dimensions(dimensions.begin(), dimensions.end())));
+  auto tensor = ::litert::TensorBuffer::CreateManaged(
+      env, ::litert::TensorBufferType::kHostMemory, tensor_type,
+      num_elements * sizeof(float));
+  if (!tensor.HasValue()) {
+    return absl::InternalError("Failed to create tensor buffer");
+  }
+  return std::move(*tensor);
+}
+
+TEST(EmbeddingEngineImplTest,
+     ComputeEmbeddingWithInsertSpecialTokensImageTrue) {
+  ASSERT_OK_AND_ASSIGN(auto env, CreateTestEnvironment());
+  ASSERT_OK_AND_ASSIGN(auto image_tensor,
+                       CreateDummyTensorBuffer(env->env, {1, 224, 224, 3}));
+  auto tokenizer = std::make_unique<MockTokenizer>();
+  auto fake_embedding_executor = std::make_unique<FakeEmbeddingExecutor>();
+  auto* raw_executor = fake_embedding_executor.get();
+
+  SpecialTokens special_tokens;
+  special_tokens.start_of_image_token_ids = {101};
+  special_tokens.end_of_image_token_ids = {102};
+
+  EmbeddingEngineImpl engine(std::move(env), std::move(tokenizer),
+                             std::move(fake_embedding_executor),
+                             std::make_unique<FakeVisionExecutor>(),
+                             /*audio_executor=*/nullptr,
+                             /*benchmark_info=*/std::nullopt, special_tokens);
+
+  std::vector<InputData> contents;
+  contents.push_back(InputImage(std::move(image_tensor)));
+
+  EmbeddingOptions options;
+  options.insert_special_tokens = true;
+
+  ASSERT_OK(engine.ComputeEmbedding(contents, options).status());
+  EXPECT_THAT(raw_executor->GetLastTokenIds(),
+              ElementsAre(101, -1, -1, -1, -1, 102));
+}
+
+TEST(EmbeddingEngineImplTest,
+     ComputeEmbeddingWithInsertSpecialTokensImageFalse) {
+  ASSERT_OK_AND_ASSIGN(auto env, CreateTestEnvironment());
+  ASSERT_OK_AND_ASSIGN(auto image_tensor,
+                       CreateDummyTensorBuffer(env->env, {1, 224, 224, 3}));
+  auto tokenizer = std::make_unique<MockTokenizer>();
+  auto fake_embedding_executor = std::make_unique<FakeEmbeddingExecutor>();
+  auto* raw_executor = fake_embedding_executor.get();
+
+  SpecialTokens special_tokens;
+  special_tokens.start_of_image_token_ids = {101};
+  special_tokens.end_of_image_token_ids = {102};
+
+  EmbeddingEngineImpl engine(std::move(env), std::move(tokenizer),
+                             std::move(fake_embedding_executor),
+                             std::make_unique<FakeVisionExecutor>(),
+                             /*audio_executor=*/nullptr,
+                             /*benchmark_info=*/std::nullopt, special_tokens);
+
+  std::vector<InputData> contents;
+  contents.push_back(InputImage(std::move(image_tensor)));
+
+  EmbeddingOptions options;
+  options.insert_special_tokens = false;
+
+  ASSERT_OK(engine.ComputeEmbedding(contents, options).status());
+  EXPECT_THAT(raw_executor->GetLastTokenIds(), ElementsAre(-1, -1, -1, -1));
+}
+
+TEST(EmbeddingEngineImplTest,
+     ComputeEmbeddingWithInsertSpecialTokensAudioTrue) {
+  ASSERT_OK_AND_ASSIGN(auto env, CreateTestEnvironment());
+  ASSERT_OK_AND_ASSIGN(auto audio_tensor,
+                       CreateDummyTensorBuffer(env->env, {1, 1, 100, 80}));
+  auto tokenizer = std::make_unique<MockTokenizer>();
+  auto fake_embedding_executor = std::make_unique<FakeEmbeddingExecutor>();
+  auto* raw_executor = fake_embedding_executor.get();
+
+  SpecialTokens special_tokens;
+  special_tokens.start_of_audio_token_ids = {201};
+  special_tokens.end_of_audio_token_ids = {202};
+
+  EmbeddingEngineImpl engine(
+      std::move(env), std::move(tokenizer), std::move(fake_embedding_executor),
+      /*vision_executor=*/nullptr, std::make_unique<FakeAudioExecutor>(),
+      /*benchmark_info=*/std::nullopt, special_tokens);
+
+  std::vector<InputData> contents;
+  contents.push_back(InputAudio(std::move(audio_tensor)));
+
+  EmbeddingOptions options;
+  options.insert_special_tokens = true;
+
+  ASSERT_OK(engine.ComputeEmbedding(contents, options).status());
+  EXPECT_THAT(raw_executor->GetLastTokenIds(),
+              ElementsAre(201, -2, -2, -2, 202));
+}
+
+TEST(EmbeddingEngineImplTest,
+     ComputeEmbeddingWithInsertSpecialTokensAudioFalse) {
+  ASSERT_OK_AND_ASSIGN(auto env, CreateTestEnvironment());
+  ASSERT_OK_AND_ASSIGN(auto audio_tensor,
+                       CreateDummyTensorBuffer(env->env, {1, 1, 100, 80}));
+  auto tokenizer = std::make_unique<MockTokenizer>();
+  auto fake_embedding_executor = std::make_unique<FakeEmbeddingExecutor>();
+  auto* raw_executor = fake_embedding_executor.get();
+
+  SpecialTokens special_tokens;
+  special_tokens.start_of_audio_token_ids = {201};
+  special_tokens.end_of_audio_token_ids = {202};
+
+  EmbeddingEngineImpl engine(
+      std::move(env), std::move(tokenizer), std::move(fake_embedding_executor),
+      /*vision_executor=*/nullptr, std::make_unique<FakeAudioExecutor>(),
+      /*benchmark_info=*/std::nullopt, special_tokens);
+
+  std::vector<InputData> contents;
+  contents.push_back(InputAudio(std::move(audio_tensor)));
+
+  EmbeddingOptions options;
+  options.insert_special_tokens = false;
+
+  ASSERT_OK(engine.ComputeEmbedding(contents, options).status());
+  EXPECT_THAT(raw_executor->GetLastTokenIds(), ElementsAre(-2, -2, -2));
+}
+
+TEST(EmbeddingEngineImplTest,
+     ComputeEmbeddingWithInsertSpecialTokensMultimodal) {
+  ASSERT_OK_AND_ASSIGN(auto env, CreateTestEnvironment());
+  ASSERT_OK_AND_ASSIGN(auto image_tensor,
+                       CreateDummyTensorBuffer(env->env, {1, 224, 224, 3}));
+  ASSERT_OK_AND_ASSIGN(auto audio_tensor,
+                       CreateDummyTensorBuffer(env->env, {1, 1, 100, 80}));
+  auto tokenizer = std::make_unique<MockTokenizer>();
+  EXPECT_CALL(*tokenizer, TextToTokenIds("hello"))
+      .WillRepeatedly(Return(std::vector<int>{1, 2}));
+  auto fake_embedding_executor = std::make_unique<FakeEmbeddingExecutor>();
+  auto* raw_executor = fake_embedding_executor.get();
+
+  SpecialTokens special_tokens;
+  special_tokens.start_of_image_token_ids = {101};
+  special_tokens.end_of_image_token_ids = {102};
+  special_tokens.start_of_audio_token_ids = {201};
+  special_tokens.end_of_audio_token_ids = {202};
+
+  EmbeddingEngineImpl engine(std::move(env), std::move(tokenizer),
+                             std::move(fake_embedding_executor),
+                             std::make_unique<FakeVisionExecutor>(),
+                             std::make_unique<FakeAudioExecutor>(),
+                             /*benchmark_info=*/std::nullopt, special_tokens);
+
+  std::vector<InputData> contents;
+  contents.push_back(InputText(std::string("hello")));
+  contents.push_back(InputImage(std::move(image_tensor)));
+  contents.push_back(InputAudio(std::move(audio_tensor)));
+
+  EmbeddingOptions options;
+  options.insert_special_tokens = true;
+
+  ASSERT_OK(engine.ComputeEmbedding(contents, options).status());
+  EXPECT_THAT(
+      raw_executor->GetLastTokenIds(),
+      ElementsAre(1, 2, 101, -1, -1, -1, -1, 102, 201, -2, -2, -2, 202));
+}
+
+TEST(EmbeddingEngineImplTest,
+     ComputeEmbeddingWithInsertSpecialTokensImageEndOfVisionSubmodel) {
+  ASSERT_OK_AND_ASSIGN(auto env, CreateTestEnvironment());
+  ASSERT_OK_AND_ASSIGN(auto image_tensor,
+                       CreateDummyTensorBuffer(env->env, {1, 224, 224, 3}));
+  auto tokenizer = std::make_unique<MockTokenizer>();
+  auto fake_embedding_executor = std::make_unique<FakeEmbeddingExecutor>();
+  auto* raw_executor = fake_embedding_executor.get();
+
+  SpecialTokens special_tokens;
+  special_tokens.start_of_image_token_ids = {101};
+  special_tokens.end_of_image_token_ids = {102};
+  special_tokens.has_end_of_vision_model = true;
+
+  EmbeddingEngineImpl engine(std::move(env), std::move(tokenizer),
+                             std::move(fake_embedding_executor),
+                             std::make_unique<FakeVisionExecutor>(),
+                             /*audio_executor=*/nullptr,
+                             /*benchmark_info=*/std::nullopt, special_tokens);
+
+  std::vector<InputData> contents;
+  contents.push_back(InputImage(std::move(image_tensor)));
+
+  EmbeddingOptions options;
+  options.insert_special_tokens = true;
+
+  ASSERT_OK(engine.ComputeEmbedding(contents, options).status());
+  EXPECT_THAT(raw_executor->GetLastTokenIds(),
+              ElementsAre(101, -1, -1, -1, -1, -3));
+}
+
+TEST(EmbeddingEngineImplTest,
+     ComputeEmbeddingWithInsertSpecialTokensAudioEndOfAudioSubmodel) {
+  ASSERT_OK_AND_ASSIGN(auto env, CreateTestEnvironment());
+  ASSERT_OK_AND_ASSIGN(auto audio_tensor,
+                       CreateDummyTensorBuffer(env->env, {1, 1, 100, 80}));
+  auto tokenizer = std::make_unique<MockTokenizer>();
+  auto fake_embedding_executor = std::make_unique<FakeEmbeddingExecutor>();
+  auto* raw_executor = fake_embedding_executor.get();
+
+  SpecialTokens special_tokens;
+  special_tokens.start_of_audio_token_ids = {201};
+  special_tokens.end_of_audio_token_ids = {202};
+  special_tokens.has_end_of_audio_model = true;
+
+  EmbeddingEngineImpl engine(
+      std::move(env), std::move(tokenizer), std::move(fake_embedding_executor),
+      /*vision_executor=*/nullptr, std::make_unique<FakeAudioExecutor>(),
+      /*benchmark_info=*/std::nullopt, special_tokens);
+
+  std::vector<InputData> contents;
+  contents.push_back(InputAudio(std::move(audio_tensor)));
+
+  EmbeddingOptions options;
+  options.insert_special_tokens = true;
+
+  ASSERT_OK(engine.ComputeEmbedding(contents, options).status());
+  EXPECT_THAT(raw_executor->GetLastTokenIds(),
+              ElementsAre(201, -2, -2, -2, -4));
 }
 
 }  // namespace

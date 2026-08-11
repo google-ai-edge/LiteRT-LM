@@ -34,6 +34,15 @@
 
 namespace litert::lm {
 
+struct SpecialTokens {
+  std::vector<int> start_of_image_token_ids;
+  std::vector<int> end_of_image_token_ids;
+  std::vector<int> start_of_audio_token_ids;
+  std::vector<int> end_of_audio_token_ids;
+  bool has_end_of_vision_model = false;
+  bool has_end_of_audio_model = false;
+};
+
 class EmbeddingEngineImpl : public EmbeddingEngine {
  public:
   // Creates an EmbeddingEngineImpl instance from ModelResources,
@@ -57,7 +66,8 @@ class EmbeddingEngineImpl : public EmbeddingEngine {
       std::unique_ptr<EmbeddingExecutorBase> embedding_executor,
       std::unique_ptr<VisionExecutor> vision_executor = nullptr,
       std::unique_ptr<AudioExecutor> audio_executor = nullptr,
-      std::optional<BenchmarkInfo> benchmark_info = std::nullopt);
+      std::optional<BenchmarkInfo> benchmark_info = std::nullopt,
+      SpecialTokens special_tokens = {});
 
   ~EmbeddingEngineImpl() override = default;
 
@@ -77,7 +87,13 @@ class EmbeddingEngineImpl : public EmbeddingEngine {
   // Returns the mutable benchmark info of the engine.
   BenchmarkInfo* GetMutableBenchmarkInfo() override;
 
+  // Returns the special tokens configured for the engine.
+  const SpecialTokens& GetSpecialTokens() const { return special_tokens_; }
+
  private:
+  absl::StatusOr<std::vector<InputData>> InsertSpecialTokens(
+      const std::vector<InputData>& contents) const;
+
   absl::StatusOr<ExecutorInputs> ProcessAndCombineContents(
       const std::vector<InputData>& contents);
 
@@ -90,6 +106,7 @@ class EmbeddingEngineImpl : public EmbeddingEngine {
   std::unique_ptr<VisionExecutor> vision_executor_;
   std::unique_ptr<AudioExecutor> audio_executor_;
   std::optional<BenchmarkInfo> benchmark_info_;
+  SpecialTokens special_tokens_;
 };
 
 }  // namespace litert::lm
