@@ -23,8 +23,6 @@
 
 namespace litert::lm {
 
-class ConstrainedDecoder;
-
 // `LogitsProcessor` is an abstract interface for components that dynamically
 // modify the model's output logits prior to token sampling.
 //
@@ -81,21 +79,7 @@ class LogitsProcessor {
   //
   // @return Ok if the state was updated successfully, or an error if any token
   // is invalid for its corresponding state.
-  virtual absl::Status UpdateState(absl::Span<int> next_token_ids) = 0;
-
-  // Returns the constraint decoder if it exists. Otherwise, returns nullptr.
-  //
-  // TODO(b/517779380): Remove this method once the logits processor is fully
-  // supported in the hand-written path.
-  virtual ConstrainedDecoder* GetConstraintDecoder() { return nullptr; }
-
-  // Save as above, but returns a const pointer.
-  //
-  // TODO(b/517779380): Remove this method once the logits processor is fully
-  // supported in the hand-written path.
-  virtual const ConstrainedDecoder* GetConstraintDecoder() const {
-    return nullptr;
-  }
+  virtual absl::Status UpdateState(absl::Span<const int> next_token_ids) = 0;
 };
 
 }  // namespace litert::lm

@@ -50,6 +50,7 @@
 #include "litert/test/matchers.h"  // from @litert
 #include "runtime/components/logits_processor/constrained_decoding/constrained_decoder.h"
 #include "runtime/components/logits_processor/constrained_decoding/fake_constraint.h"
+#include "runtime/components/logits_processor/logits_processor_pipeline.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/components/model_resources_litert_lm.h"
 #include "runtime/components/sampler.h"
@@ -707,11 +708,11 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest, ConstrainedDecodeTest) {
   ExecutorDecodeParams params;
 
   auto constraint = FakeConstraint({2, 3}, /*vocabulary_size=*/262144);
-  ConstrainedDecoder constraint_decoder =
-      ConstrainedDecoder(&constraint, /*batch_size=*/1);
-  params.SetLogitsProcessorList({
-      &constraint_decoder,
-  });
+  auto constraint_decoder =
+      std::make_unique<ConstrainedDecoder>(&constraint, /*batch_size=*/1);
+  LogitsProcessorPipeline pipeline;
+  pipeline.AddProcessor(std::move(constraint_decoder));
+  params.SetLogitsProcessorPipeline(&pipeline);
 
   {
     ASSERT_OK_AND_ASSIGN(auto output_tokens, executor->Decode(params));

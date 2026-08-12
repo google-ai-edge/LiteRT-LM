@@ -110,7 +110,8 @@ absl::Status ConstrainedDecoder::UpdateState(
   return UpdateState(next_token_ids_span);
 }
 
-absl::Status ConstrainedDecoder::UpdateState(absl::Span<int> next_token_ids) {
+absl::Status ConstrainedDecoder::UpdateState(
+    absl::Span<const int> next_token_ids) {
   RET_CHECK_EQ(next_token_ids.size(), batch_size_)
       << "Batch size [" << next_token_ids.size()
       << "] does not match the expected batch size [" << batch_size_ << "].";

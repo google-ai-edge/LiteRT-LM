@@ -32,6 +32,7 @@
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/logits_processor/logits_processor.h"
+#include "runtime/components/logits_processor/logits_processor_pipeline.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/llm_executor_settings.h"
@@ -199,9 +200,10 @@ absl::StatusOr<std::vector<std::vector<int>>> FakeLlmExecutor::Decode(
         decode_times_));
   }
   std::vector<std::vector<int>> output_tokens;
-  if (!decode_params.GetLogitsProcessorList().empty()) {
-    // If the logits processor list is not empty, we will decode logits and
-    // apply the logits processor to the output logits.
+  auto* logits_pipeline = decode_params.GetLogitsProcessorPipeline();
+  if (logits_pipeline != nullptr && !logits_pipeline->empty()) {
+    // If the logits processor pipeline is not empty, we will decode logits and
+    // apply the logits processor pipeline to the output logits.
 
     // Get the last token ids from the last prefill or decode call.
     LITERT_ASSIGN_OR_RETURN(auto last_token_ids,
@@ -219,10 +221,7 @@ absl::StatusOr<std::vector<std::vector<int>>> FakeLlmExecutor::Decode(
         }
       }
       // Update the logits processor state with the last token ids.
-      for (LogitsProcessor* logits_processor :
-           decode_params.GetLogitsProcessorList()) {
-        ABSL_RETURN_IF_ERROR(logits_processor->UpdateState(last_token_ids));
-      }
+      ABSL_RETURN_IF_ERROR(logits_pipeline->UpdateState(last_token_ids));
     }
 
     LITERT_ASSIGN_OR_RETURN(
@@ -230,11 +229,8 @@ absl::StatusOr<std::vector<std::vector<int>>> FakeLlmExecutor::Decode(
         CreateTensorBuffer<float>({batch_size_, 1, vocab_size_}));
     DecodeIdsToLogits(decode_tokens_set_[decode_times_], vocab_size_,
                       output_logits, decode_logits_options_);
-    // Apply the logits processor to the output logits.
-    for (LogitsProcessor* logits_processor :
-         decode_params.GetLogitsProcessorList()) {
-      ABSL_RETURN_IF_ERROR(logits_processor->ProcessLogits(output_logits));
-    }
+    // Apply the logits processor pipeline to the output logits.
+    ABSL_RETURN_IF_ERROR(logits_pipeline->ProcessLogits(output_logits));
     output_tokens = DecodeLogitsToIds(batch_size_, vocab_size_, output_logits,
                                       decode_tokens_set_);
   } else {

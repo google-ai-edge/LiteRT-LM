@@ -97,7 +97,7 @@ class NoRepeatNgramProcessor : public LogitsProcessor {
   absl::Status UpdateState(
       const ::litert::TensorBuffer& next_token_ids) override;
 
-  absl::Status UpdateState(absl::Span<int> next_token_ids) override;
+  absl::Status UpdateState(absl::Span<const int> next_token_ids) override;
 
   // For testing only.
   int GetTokenHistorySizeForTesting(int batch_idx) const;
