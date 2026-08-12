@@ -598,10 +598,8 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::PrefillInternal(
         }
       }
       if (signatures_.input_attn_mask.has_value()) {
-        AttentionMaskSettings attn_settings = [this]() {
-          absl::MutexLock lock(executor_settings_mutex_);
-          return executor_settings_.GetAttentionMaskSettings();
-        }();
+        const AttentionMaskParams attn_params =
+            GetAttentionMaskParams(executor_metadata_);
         auto tokens_copy = llm_context_->processed_context()
                                .processed_tokens()
                                .GetCopyOfTokens();
@@ -613,7 +611,7 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::PrefillInternal(
             prefill_input_buffers[signatures_.input_attn_mask.value()],
             start_step,
             /*steps=*/prefill_length + input_idx,
-            attn_settings.attention_mask_policy, token_ids_span,
+            attn_params.global_type, token_ids_span,
             /*sliding_window_size=*/std::nullopt));
         if (signatures_.input_attn_mask_local.has_value()) {
           ABSL_LOG(INFO) << "filling local attention mask";
@@ -621,9 +619,8 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::PrefillInternal(
               prefill_input_buffers[signatures_.input_attn_mask_local.value()],
               start_step,
               /*steps=*/prefill_length + input_idx,
-              attn_settings.local_attention_mask_policy.value_or(
-                  attn_settings.attention_mask_policy),
-              token_ids_span, attn_settings.sliding_window_size));
+              attn_params.local_type,
+              token_ids_span, attn_params.sliding_window_size));
         }
       }
       if (gpu_optimized_single_buffer_cache_) {
@@ -909,10 +906,8 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::DecodeInternal(
           decode_input_buffers_[signatures_.input_attn_mask_local.value()],
           use_fp16_precision_));
     }
-    AttentionMaskSettings attn_settings = [this]() {
-      absl::MutexLock lock(executor_settings_mutex_);
-      return executor_settings_.GetAttentionMaskSettings();
-    }();
+    const AttentionMaskParams attn_params =
+        GetAttentionMaskParams(executor_metadata_);
     auto tokens_copy =
         llm_context_->processed_context().processed_tokens().GetCopyOfTokens();
     absl::Span<const int> token_ids_span =
@@ -921,16 +916,15 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::DecodeInternal(
 
     ABSL_RETURN_IF_ERROR(FillAttentionMask(
         decode_input_buffers_[signatures_.input_attn_mask.value()], step,
-        /*steps=*/1, attn_settings.attention_mask_policy, token_ids_span,
+        /*steps=*/1, attn_params.global_type, token_ids_span,
         /*sliding_window_size=*/std::nullopt));
     if (signatures_.input_attn_mask_local.has_value()) {
       ABSL_RETURN_IF_ERROR(FillAttentionMask(
           decode_input_buffers_[signatures_.input_attn_mask_local.value()],
           step,
           /*steps=*/1,
-          attn_settings.local_attention_mask_policy.value_or(
-              attn_settings.attention_mask_policy),
-          token_ids_span, attn_settings.sliding_window_size));
+          attn_params.local_type,
+          token_ids_span, attn_params.sliding_window_size));
     }
   }
   if (gpu_optimized_single_buffer_cache_) {

@@ -38,6 +38,7 @@
 #include "runtime/components/model_resources.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/llm_executor_settings.h"
+#include "runtime/proto/executor_metadata.pb.h"
 #include "runtime/proto/sampler_params.pb.h"
 #include "runtime/util/scoped_file.h"
 
@@ -156,18 +157,31 @@ GetOptimizedPrefillWorkGroups(
 // is_f16 only applies to FLOAT mask data type.
 absl::Status InitializeAttentionMask(::litert::TensorBuffer& mask, bool is_f16);
 
+// Parameters extracted from ExecutorMetadata for attention mask generation.
+struct AttentionMaskParams {
+  proto::AttentionMaskType global_type = proto::ATTENTION_MASK_TYPE_CAUSAL;
+  proto::AttentionMaskType local_type = proto::ATTENTION_MASK_TYPE_CAUSAL;
+  std::optional<int> sliding_window_size = std::nullopt;
+};
+
+// Extracts attention mask parameters (global type, local type, sliding
+// window size) from the optional ExecutorMetadata protobuf.
+// If metadata is null or does not specify types, defaults to causal type.
+AttentionMaskParams GetAttentionMaskParams(
+    const proto::ExecutorMetadata* executor_metadata);
+
 // Fills attention mask for a given range of timesteps.
 // The mask is a 4D tensor with shape [batch=1, seq_len, 1, max_kv_len].
 // mask - The attention mask tensor to be filled.
 // start_timestep - The starting timestep to be filled at seq = 1.
 // steps - The number of steps to fill (the number of sequences to be filled).
-// attention_mask_policy - The attention mask policy.
+// attention_mask_type - The attention mask type.
 // token_ids - The token ids of the full context. Required for
-//             kVisionBidirectional attention mask policy.
+//             kVisionBidirectional attention mask type.
 // sliding_window_size - The sliding window size.
 absl::Status FillAttentionMask(
     ::litert::TensorBuffer& mask, int start_timestep, int steps,
-    const AttentionMaskPolicy& attention_mask_policy,
+    proto::AttentionMaskType attention_mask_type,
     std::optional<absl::Span<const int>> token_ids = std::nullopt,
     std::optional<int> sliding_window_size = std::nullopt);
 

@@ -53,19 +53,16 @@
 #include "runtime/components/embedding_lookup/embedding_lookup_text.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/executor/llm_executor_io_types.h"
-#include "runtime/executor/llm_executor_settings.h"
 #include "runtime/util/status_macros.h"  // IWYU pragma: keep NOLINT
 #include "runtime/components/model_resources_litert_lm.h"  // IWYU pragma: keep
 #include "runtime/components/model_resources_task.h"
 #include "runtime/executor/executor_settings_base.h"
-#include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/file_format_util.h"
 #include "runtime/util/file_util.h"
 #include "runtime/util/litert_lm_loader.h"
 #include "runtime/util/model_asset_bundle_resources.h"
 #include "runtime/util/scoped_file.h"
-#include "runtime/util/status_macros.h"  //NOLINT
 #include "runtime/util/tensor_buffer_util.h"
 #include "tflite/delegates/xnnpack/xnnpack_delegate.h"  // from @litert
 #include "tflite/types/half.h"  // from @litert
@@ -141,6 +138,160 @@ BuildModelResourcesFromLitertLmFormat(const ModelAssets& model_assets,
   }
   return ModelResourcesLitertLm::Create(
       std::move(loader), enable_file_backed_model_loading);
+}
+
+// Helper function to fill a contiguous range [start, end) of elements in the
+// mask buffer with the unmasked value (true for bool, 0.0f for float).
+void FillRange(litert::ElementType type, void* addr, int start, int end) {
+  if (type == litert::ElementType::Bool) {
+    bool* ptr = static_cast<bool*>(addr);
+    std::fill(ptr + start, ptr + end, true);
+  } else if (type == litert::ElementType::Float16) {
+    tflite::half* ptr = static_cast<tflite::half*>(addr);
+    std::fill(ptr + start, ptr + end, tflite::half(0.0f));
+  } else {
+    float* ptr = static_cast<float*>(addr);
+    std::fill(ptr + start, ptr + end, 0.0f);
+  }
+}
+
+// Helper function to fill ring buffer prefill attention mask with shape
+// [batch_size, 1, chunk_len, ring_buffer_size + chunk_len].
+//
+// The prefill mask consists of two horizontal segments:
+// 1. Left mask (columns [0, ring_buffer_size - 1]): past KV cache keys in the
+//    ring buffer. A key at cache column `col` is unmasked if it falls within
+//    the sliding window [query_step - window_size + 1, query_step] and has
+//    already been written to the cache (col_step < start_timestep).
+// 2. Right mask (columns [ring_buffer_size, ring_buffer_size + steps - 1]):
+//    keys in the current prefill chunk. Vision tokens attend bidirectionally to
+//    contiguous vision tokens within the sliding window, bidirectional tokens
+//    attend to all keys in the chunk, and causal tokens attend causally.
+//
+// Arguments:
+//   elem_type: Element type of the mask tensor (Bool, Float16, or Float32).
+//   mask_ptr: Pointer to the raw mask buffer memory.
+//   batch_size: Number of batches.
+//   batch_offset: Element stride between consecutive batches.
+//   context_size: Total columns in the mask (ring_buffer_size + steps).
+//   start_timestep: Starting sequence position of this prefill chunk.
+//   steps: Number of tokens in the current prefill chunk.
+//   ring_buffer_size: Size of the ring buffer KV cache (excluding current
+//   chunk). sliding_window_size: Effective sliding window size.
+//   attention_mask_type: Attention mask type (causal, bidirectional, or
+//                        vision bidirectional).
+//   token_ids: Token IDs of the context (required for vision bidirectional
+//              type).
+void FillRingBufferPrefillAttentionMask(
+    litert::ElementType elem_type, void* mask_ptr, int batch_size,
+    int batch_offset, int context_size, int start_timestep, int steps,
+    int ring_buffer_size, int sliding_window_size,
+    proto::AttentionMaskType attention_mask_type,
+    std::optional<absl::Span<const int>> token_ids) {
+  const int window_size = sliding_window_size;
+
+  for (int batch_idx = 0; batch_idx < batch_size; ++batch_idx) {
+    for (int step_idx = 0; step_idx < steps; ++step_idx) {
+      int query_step = start_timestep + step_idx;
+      int offset = batch_idx * batch_offset + step_idx * context_size;
+
+      // Left mask: cache columns [0, ring_buffer_size - 1].
+      if (start_timestep > 0) {
+        int last_cached_step = start_timestep - 1;
+        int current_cache_col =
+            ((last_cached_step % ring_buffer_size) + ring_buffer_size) %
+            ring_buffer_size;
+        for (int col = 0; col < ring_buffer_size; ++col) {
+          int raw_diff = current_cache_col - col;
+          int wrapped_diff =
+              (raw_diff >= 0) ? raw_diff : (raw_diff + ring_buffer_size);
+          int col_step = last_cached_step - wrapped_diff;
+          bool is_valid_cached_col =
+              (col_step >= 0) && (col_step < start_timestep);
+          bool is_causal = (col_step <= query_step);
+          bool is_within_window = (col_step >= query_step - window_size + 1);
+          if (is_valid_cached_col && is_causal && is_within_window) {
+            FillRange(elem_type, mask_ptr, offset + col, offset + col + 1);
+          }
+        }
+      }
+
+      // Right mask: current prefill chunk columns [ring_buffer_size,
+      // ring_buffer_size + steps - 1].
+      if (attention_mask_type ==
+              proto::ATTENTION_MASK_TYPE_VISION_BIDIRECTIONAL &&
+          token_ids.has_value() && query_step < token_ids->size() &&
+          (*token_ids)[query_step] == ExecutorVisionData::kSpecialToken) {
+        int start_chunk_idx = std::max(0, step_idx - window_size + 1);
+        int end_token_idx =
+            std::min<int>(token_ids->size(), query_step + window_size);
+        const int first_future_non_vision_token =
+            std::find_if(token_ids->begin() + query_step,
+                         token_ids->begin() + end_token_idx,
+                         [](int token_id) {
+                           return token_id != ExecutorVisionData::kSpecialToken;
+                         }) -
+            token_ids->begin();
+        int end_chunk_idx =
+            std::min(steps, first_future_non_vision_token - start_timestep);
+        if (end_chunk_idx > start_chunk_idx) {
+          FillRange(elem_type, mask_ptr,
+                    offset + ring_buffer_size + start_chunk_idx,
+                    offset + ring_buffer_size + end_chunk_idx);
+        }
+      } else {
+        for (int chunk_key_idx = 0; chunk_key_idx < steps; ++chunk_key_idx) {
+          bool is_causal = (chunk_key_idx <= step_idx);
+          if (attention_mask_type == proto::ATTENTION_MASK_TYPE_BIDIRECTIONAL) {
+            is_causal = true;
+          }
+          bool is_within_window =
+              (chunk_key_idx >= step_idx - window_size + 1) &&
+              (chunk_key_idx <= step_idx + window_size - 1);
+          if (is_causal && is_within_window) {
+            FillRange(elem_type, mask_ptr,
+                      offset + ring_buffer_size + chunk_key_idx,
+                      offset + ring_buffer_size + chunk_key_idx + 1);
+          }
+        }
+      }
+    }
+  }
+}
+
+// Helper function to fill ring buffer decode attention mask with shape
+// [batch_size, 1, 1, ring_buffer_size].
+//
+// In decode mode, a single query token at start_timestep attends to keys in the
+// circular KV cache ring buffer that are within the sliding window distance
+// (<= window_size - 1) and have already been populated (<= start_timestep).
+//
+// Arguments:
+//   elem_type: Element type of the mask tensor (Bool, Float16, or Float32).
+//   mask_ptr: Pointer to the raw mask buffer memory.
+//   batch_size: Number of batches.
+//   batch_offset: Element stride between consecutive batches.
+//   ring_buffer_size: Size of the ring buffer KV cache.
+//   start_timestep: Current decode timestep.
+//   sliding_window_size: Effective sliding window size.
+void FillRingBufferDecodeAttentionMask(litert::ElementType elem_type,
+                                       void* mask_ptr, int batch_size,
+                                       int batch_offset, int ring_buffer_size,
+                                       int start_timestep,
+                                       int sliding_window_size) {
+  const int window_size = sliding_window_size;
+
+  for (int batch_idx = 0; batch_idx < batch_size; ++batch_idx) {
+    int offset = batch_idx * batch_offset;
+    for (int col = 0; col < ring_buffer_size; ++col) {
+      int diff = start_timestep - col;
+      int distance =
+          ((diff % ring_buffer_size) + ring_buffer_size) % ring_buffer_size;
+      if (distance <= window_size - 1 && distance <= start_timestep) {
+        FillRange(elem_type, mask_ptr, offset + col, offset + col + 1);
+      }
+    }
+  }
 }
 
 }  // namespace
@@ -460,25 +611,37 @@ absl::Status FillSingleBufferCacheParamTensor(
   return absl::OkStatus();
 }
 
-// Helper function to fill a range of values in a tensor buffer with the given
-// type.
-static void FillRange(litert::ElementType type, void* addr, int start,
-                      int end) {
-  if (type == litert::ElementType::Bool) {
-    bool* ptr = static_cast<bool*>(addr);
-    std::fill(ptr + start, ptr + end, true);
-  } else if (type == litert::ElementType::Float16) {
-    tflite::half* ptr = static_cast<tflite::half*>(addr);
-    std::fill(ptr + start, ptr + end, tflite::half(0.0f));
-  } else {
-    float* ptr = static_cast<float*>(addr);
-    std::fill(ptr + start, ptr + end, 0.0f);
+AttentionMaskParams GetAttentionMaskParams(
+    const proto::ExecutorMetadata* executor_metadata) {
+  AttentionMaskParams params;
+  if (executor_metadata != nullptr &&
+      executor_metadata->has_llm_executor_metadata() &&
+      executor_metadata->llm_executor_metadata()
+          .has_attention_mask_settings()) {
+    const auto& mask_settings =
+        executor_metadata->llm_executor_metadata().attention_mask_settings();
+    if (mask_settings.has_attention_mask_type() &&
+        mask_settings.attention_mask_type() !=
+            proto::ATTENTION_MASK_TYPE_UNSPECIFIED) {
+      params.global_type = mask_settings.attention_mask_type();
+    }
+    if (mask_settings.has_local_attention_mask_type() &&
+        mask_settings.local_attention_mask_type() !=
+            proto::ATTENTION_MASK_TYPE_UNSPECIFIED) {
+      params.local_type = mask_settings.local_attention_mask_type();
+    } else {
+      params.local_type = params.global_type;
+    }
+    if (mask_settings.has_sliding_window_size()) {
+      params.sliding_window_size = mask_settings.sliding_window_size();
+    }
   }
+  return params;
 }
 
 absl::Status FillAttentionMask(litert::TensorBuffer& mask, int start_timestep,
                                int steps,
-                               const AttentionMaskPolicy& attention_mask_policy,
+                               proto::AttentionMaskType attention_mask_type,
                                std::optional<absl::Span<const int>> token_ids,
                                std::optional<int> sliding_window_size) {
   LITERT_ASSIGN_OR_RETURN(auto mask_tensor_type, mask.TensorType());
@@ -487,10 +650,10 @@ absl::Status FillAttentionMask(litert::TensorBuffer& mask, int start_timestep,
       << "Attention mask must be 4D.";
   int batch_size = mask_tensor_type.Layout().Dimensions()[0];
   int context_size = mask_tensor_type.Layout().Dimensions()[3];
-  if (attention_mask_policy == AttentionMaskPolicy::kVisionBidirectional &&
+  if (attention_mask_type == proto::ATTENTION_MASK_TYPE_VISION_BIDIRECTIONAL &&
       !token_ids.has_value()) {
     return absl::InvalidArgumentError(
-        "Empty token ids with vision bidirectional attention mask policy is "
+        "Empty token ids with vision bidirectional attention mask type is "
         "not allowed.");
   }
   LITERT_ASSIGN_OR_RETURN(auto mask_size, mask.PackedSize());
@@ -501,6 +664,7 @@ absl::Status FillAttentionMask(litert::TensorBuffer& mask, int start_timestep,
   int batch_offset = mask_size / batch_size;
   if (mask_tensor_type.ElementType() == litert::ElementType::Bool) {
     batch_offset /= sizeof(bool);
+    std::memset(mask_lock_and_addr.second, 0, mask_size);
   } else if (mask_tensor_type.ElementType() == litert::ElementType::Float32) {
     batch_offset /= sizeof(float);
   } else if (mask_tensor_type.ElementType() == litert::ElementType::Float16) {
@@ -509,23 +673,62 @@ absl::Status FillAttentionMask(litert::TensorBuffer& mask, int start_timestep,
     return absl::InvalidArgumentError("Unsupported attention mask data type.");
   }
 
-  for (int b = 0; b < batch_size; ++b) {
-    for (int i = 0; i < steps; ++i) {
-      int q = start_timestep + i;
-      int offset = b * batch_offset + i * context_size;
-      if (attention_mask_policy == AttentionMaskPolicy::kVisionBidirectional &&
-          q < token_ids->size() &&
-          (*token_ids)[q] == ExecutorVisionData::kSpecialToken) {
+  // Detection for ring buffer local attention mask:
+  // In prefill: [1, 1, chunk_len, S + chunk_len] where S is ring buffer size
+  // (e.g. 1024), and chunk_len is the prefill chunk size of this tensor buffer
+  // (e.g. 128 or 1024).
+  // In decode:  [1, 1, 1, S] where S is ring buffer size
+  // (e.g. 1024). Note: For global attention mask, sliding_window_size is
+  // nullopt.
+  const auto& dims = mask_tensor_type.Layout().Dimensions();
+  int chunk_len = dims[2];
+  int ring_buffer_size = context_size - chunk_len;
+
+  bool is_ring_buffer_prefill = dims[1] == 1 && dims[2] > 1 &&
+                                ring_buffer_size > 0 &&
+                                sliding_window_size.has_value() &&
+                                ring_buffer_size == sliding_window_size.value();
+
+  bool is_ring_buffer_decode = steps == 1 && dims[1] == 1 && dims[2] == 1 &&
+                               sliding_window_size.has_value() &&
+                               context_size == sliding_window_size.value();
+
+  if (is_ring_buffer_prefill) {
+    FillRingBufferPrefillAttentionMask(
+        mask_tensor_type.ElementType(), mask_lock_and_addr.second, batch_size,
+        batch_offset, context_size, start_timestep, steps, ring_buffer_size,
+        sliding_window_size.value_or(ring_buffer_size), attention_mask_type,
+        token_ids);
+    return absl::OkStatus();
+  }
+
+  if (is_ring_buffer_decode) {
+    FillRingBufferDecodeAttentionMask(
+        mask_tensor_type.ElementType(), mask_lock_and_addr.second, batch_size,
+        batch_offset, context_size, start_timestep,
+        sliding_window_size.value_or(context_size));
+    return absl::OkStatus();
+  }
+
+  for (int batch_idx = 0; batch_idx < batch_size; ++batch_idx) {
+    for (int step_idx = 0; step_idx < steps; ++step_idx) {
+      int query_step = start_timestep + step_idx;
+      int offset = batch_idx * batch_offset + step_idx * context_size;
+      if (attention_mask_type ==
+              proto::ATTENTION_MASK_TYPE_VISION_BIDIRECTIONAL &&
+          query_step < token_ids->size() &&
+          (*token_ids)[query_step] == ExecutorVisionData::kSpecialToken) {
         int start_k = 0;
         if (sliding_window_size.has_value()) {
-          start_k = std::max(0, q - sliding_window_size.value() + 1);
+          start_k = std::max(0, query_step - sliding_window_size.value() + 1);
         }
         int end_k = token_ids->size();
         if (sliding_window_size.has_value()) {
-          end_k = std::min<int>(end_k, q + sliding_window_size.value() + 1);
+          end_k = std::min<int>(end_k,
+                                query_step + sliding_window_size.value() + 1);
         }
-        int first_past_non_vision_token = q;
-        for (int j = q - 1; j >= start_k; --j) {
+        int first_past_non_vision_token = query_step;
+        for (int j = query_step - 1; j >= start_k; --j) {
           if ((*token_ids)[j] != ExecutorVisionData::kSpecialToken) {
             first_past_non_vision_token = j;
             break;
@@ -534,7 +737,8 @@ absl::Status FillAttentionMask(litert::TensorBuffer& mask, int start_timestep,
         // Image tokens can attend to all past tokens, but cannot attend to
         // future non-vision tokens.
         const int first_future_non_vision_token =
-            std::find_if(token_ids->begin() + q, token_ids->begin() + end_k,
+            std::find_if(token_ids->begin() + query_step,
+                         token_ids->begin() + end_k,
                          [](int token_id) {
                            return token_id != ExecutorVisionData::kSpecialToken;
                          }) -
@@ -545,14 +749,15 @@ absl::Status FillAttentionMask(litert::TensorBuffer& mask, int start_timestep,
         // Fast path for text queries or other policies.
         int causal_start = 0;
         if (sliding_window_size.has_value()) {
-          causal_start = std::max(0, q - sliding_window_size.value() + 1);
+          causal_start =
+              std::max(0, query_step - sliding_window_size.value() + 1);
         }
-        int causal_end = q + 1;
-        if (attention_mask_policy == AttentionMaskPolicy::kBidirectional) {
+        int causal_end = query_step + 1;
+        if (attention_mask_type == proto::ATTENTION_MASK_TYPE_BIDIRECTIONAL) {
           causal_end = std::min<int>(context_size, start_timestep + steps);
           if (sliding_window_size.has_value()) {
-            causal_end =
-                std::min<int>(causal_end, q + sliding_window_size.value());
+            causal_end = std::min<int>(
+                causal_end, query_step + sliding_window_size.value());
           }
         }
         FillRange(mask_tensor_type.ElementType(), mask_lock_and_addr.second,
