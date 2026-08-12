@@ -40,6 +40,7 @@
 #include "runtime/components/logits_processor/constrained_decoding/constraint.h"
 #include "runtime/components/logits_processor/constrained_decoding/thinking_budget_constraint.h"
 #include "runtime/components/logits_processor/logits_processor.h"
+#include "runtime/components/logits_processor/logits_processor_pipeline.h"
 #include "runtime/components/logits_processor/no_repeat_ngram_config.h"
 #include "runtime/components/logits_processor/no_repeat_ngram_processor.h"
 #include "runtime/components/logits_processor/repetition_penalty_config.h"
@@ -218,34 +219,19 @@ class DecodeOneStep {
         detokenizer_(&tokenizer_, num_output_candidates),
         num_output_candidates_(num_output_candidates),
         sampler_(sampler),
+        logits_pipeline_(
+            num_output_candidates_, tokenizer_.GetVocabSize(),
+            LogitsProcessorPipelineConfig{
+                .repetition_penalty_config =
+                    std::move(repetition_penalty_config),
+                .no_repeat_ngram_config = std::move(no_repeat_ngram_config),
+                .suppress_tokens_config = std::move(suppress_tokens_config),
+                .constraint = constraint,
+            }),
         benchmark_info_(benchmark_info),
         stop_token_detector_(stop_token_detector),
         stop_token_filter_(&stop_token_detector_, num_output_candidates),
         cancelled_(cancelled) {
-    if (repetition_penalty_config.enabled()) {
-      repetition_penalty_processor_ =
-          std::make_unique<RepetitionPenaltyProcessor>(
-              num_output_candidates_, tokenizer_.GetVocabSize(),
-              std::move(repetition_penalty_config));
-      logits_processors_.push_back(repetition_penalty_processor_.get());
-    }
-    if (no_repeat_ngram_config.enabled()) {
-      no_repeat_ngram_processor_ = std::make_unique<NoRepeatNgramProcessor>(
-          num_output_candidates_, tokenizer_.GetVocabSize(),
-          std::move(no_repeat_ngram_config));
-      logits_processors_.push_back(no_repeat_ngram_processor_.get());
-    }
-    if (suppress_tokens_config.enabled()) {
-      suppress_tokens_processor_ = std::make_unique<SuppressTokensProcessor>(
-          num_output_candidates_, tokenizer_.GetVocabSize(),
-          std::move(suppress_tokens_config));
-      logits_processors_.push_back(suppress_tokens_processor_.get());
-    }
-    if (constraint != nullptr) {
-      constrained_decoder_ = std::make_unique<ConstrainedDecoder>(
-          constraint, num_output_candidates_);
-      logits_processors_.push_back(constrained_decoder_.get());
-    }
     if (sampler_.has_value()) {  // External sampling setup
       auto scores_tensor = CreateTensorBuffer<float>({num_output_candidates_});
       scores_tensor_ = std::move(*scores_tensor);
@@ -428,11 +414,9 @@ class DecodeOneStep {
       // Update the logits processor state only with decode ids.
       // If this is the first step, last_token_ids comes from prefill, therefore
       // should be ignored.
-      if (!is_first_step_ && !logits_processors_.empty()) {
+      if (!is_first_step_ && !logits_pipeline_.empty()) {
         LITERT_ASSIGN_OR_RETURN(auto last_token_ids, decoded_ids->Duplicate());
-        for (LogitsProcessor* logits_processor : logits_processors_) {
-          ABSL_RETURN_IF_ERROR(logits_processor->UpdateState(last_token_ids));
-        }
+        ABSL_RETURN_IF_ERROR(logits_pipeline_.UpdateState(last_token_ids));
       }
       // Decoding section.
       if (benchmark_info_.has_value()) {
@@ -442,11 +426,9 @@ class DecodeOneStep {
       if (benchmark_info_.has_value()) {
         ABSL_RETURN_IF_ERROR(benchmark_info_->TimeMarkDelta("executor_decode"));
       }
-      // If the logits processor list is not empty, process the logits based on
-      // the internal state.
-      for (LogitsProcessor* logits_processor : logits_processors_) {
-        ABSL_RETURN_IF_ERROR(logits_processor->ProcessLogits(output_logits));
-      }
+      // If the logits processor pipeline is not empty, process the logits based
+      // on the internal state.
+      ABSL_RETURN_IF_ERROR(logits_pipeline_.ProcessLogits(output_logits));
 
       // Samping section.
       if (benchmark_info_.has_value()) {
@@ -471,8 +453,8 @@ class DecodeOneStep {
       auto decode_params = ExecutorDecodeParams();
       // Convey the cancellation token for the decode process.
       decode_params.SetCancelled(cancelled_);
-      if (!logits_processors_.empty()) {
-        decode_params.SetLogitsProcessorList(logits_processors_);
+      if (!logits_pipeline_.empty()) {
+        decode_params.SetLogitsProcessorPipeline(&logits_pipeline_);
       }
       ABSL_ASSIGN_OR_RETURN(output_tokens, executor_.Decode(decode_params));
       if (benchmark_info_.has_value()) {
@@ -488,11 +470,7 @@ class DecodeOneStep {
   litert::support::BufferedStreamingDetokenizer detokenizer_;
   const int num_output_candidates_;
   std::optional<Sampler*> sampler_;
-  std::unique_ptr<RepetitionPenaltyProcessor> repetition_penalty_processor_;
-  std::unique_ptr<NoRepeatNgramProcessor> no_repeat_ngram_processor_;
-  std::unique_ptr<SuppressTokensProcessor> suppress_tokens_processor_;
-  std::unique_ptr<ConstrainedDecoder> constrained_decoder_;
-  std::vector<LogitsProcessor*> logits_processors_;
+  LogitsProcessorPipeline logits_pipeline_;
   std::optional<BenchmarkInfo> benchmark_info_;
   StopTokenDetector stop_token_detector_;
   StopTokenStreamFilter stop_token_filter_;

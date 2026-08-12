@@ -98,7 +98,7 @@ absl::Status NoRepeatNgramProcessor::UpdateState(
 }
 
 absl::Status NoRepeatNgramProcessor::UpdateState(
-    absl::Span<int> next_token_ids) {
+    absl::Span<const int> next_token_ids) {
   if (next_token_ids.size() != batch_states_.size()) {
     return absl::InvalidArgumentError(
         "next_token_ids size must match batch_size");

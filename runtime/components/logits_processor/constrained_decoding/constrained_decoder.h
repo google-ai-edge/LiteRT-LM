@@ -95,15 +95,10 @@ class ConstrainedDecoder : public LogitsProcessor {
       const ::litert::TensorBuffer& next_token_ids) override;
 
   // Same as above, but takes a span of token ids instead of a tensor buffer.
-  absl::Status UpdateState(absl::Span<int> next_token_ids) override;
+  absl::Status UpdateState(absl::Span<const int> next_token_ids) override;
 
   // Returns a pointer to the constraint.
   Constraint* GetConstraint() const { return constraint_; }
-
-  ConstrainedDecoder* GetConstraintDecoder() override { return this; }
-  const ConstrainedDecoder* GetConstraintDecoder() const override {
-    return this;
-  }
 
  private:
   // The constraint to be applied.

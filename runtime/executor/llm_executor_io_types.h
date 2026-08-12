@@ -29,6 +29,7 @@
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/logits_processor/constrained_decoding/constrained_decoder.h"
 #include "runtime/components/logits_processor/logits_processor.h"
+#include "runtime/components/logits_processor/logits_processor_pipeline.h"
 #include "runtime/executor/llm_executor_processed_tokens.h"
 #include "runtime/executor/llm_executor_settings.h"
 
@@ -441,19 +442,12 @@ class ExecutorDecodeParams {
  public:
   ExecutorDecodeParams() = default;
 
-  // Sets the logits processor list. The caller retains ownership of the
-  // processors and must ensure it outlives the ExecutorDecodeParams.
-  void SetLogitsProcessorList(std::vector<LogitsProcessor*> logits_processors);
+  // Sets the logits processor pipeline. The caller retains ownership of the
+  // pipeline and must ensure it outlives the ExecutorDecodeParams.
+  void SetLogitsProcessorPipeline(LogitsProcessorPipeline* pipeline);
 
-  // Returns the logits processor list if it exists. Otherwise, returns an
-  // empty span.
-  absl::Span<LogitsProcessor* const> GetLogitsProcessorList() const;
-
-  // Returns the constraint decoder if it exists. Otherwise, returns nullptr.
-  //
-  // TODO(b/517779380): Remove this method once the logits processor is fully
-  // supported in the hand-written path.
-  ConstrainedDecoder* GetConstraintDecoder() const;
+  // Returns the logits processor pipeline if set, otherwise nullptr.
+  LogitsProcessorPipeline* GetLogitsProcessorPipeline() const;
 
   // Sets an optional cancellation flag for the decode process. (eg. for
   // diffusion-llm).
@@ -465,9 +459,7 @@ class ExecutorDecodeParams {
   const std::atomic<bool>* GetCancelled() const { return cancelled_; }
 
  private:
-  // List of active logits processors (e.g. repetition penalty, no-repeat
-  // ngram, token suppression, constrained decoding).
-  std::vector<LogitsProcessor*> logits_processors_;
+  LogitsProcessorPipeline* logits_pipeline_ = nullptr;
   const std::atomic<bool>* cancelled_ = nullptr;
 };
 std::ostream& operator<<(std::ostream& os, const ExecutorDecodeParams& params);

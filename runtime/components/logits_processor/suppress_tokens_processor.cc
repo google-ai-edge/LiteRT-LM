@@ -77,7 +77,7 @@ absl::Status SuppressTokensProcessor::UpdateState(
 }
 
 absl::Status SuppressTokensProcessor::UpdateState(
-    absl::Span<int> next_token_ids) {
+    absl::Span<const int> next_token_ids) {
   return absl::OkStatus();
 }
 

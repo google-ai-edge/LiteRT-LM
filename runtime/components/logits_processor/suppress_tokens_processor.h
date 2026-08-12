@@ -53,7 +53,7 @@ class SuppressTokensProcessor : public LogitsProcessor {
   absl::Status UpdateState(
       const ::litert::TensorBuffer& next_token_ids) override;
 
-  absl::Status UpdateState(absl::Span<int> next_token_ids) override;
+  absl::Status UpdateState(absl::Span<const int> next_token_ids) override;
 
  private:
   // Template implementation of ProcessLogits to support different numeric types

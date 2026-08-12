@@ -103,6 +103,7 @@ class LitertState : public StateInterface {
   struct StateBuffer {
     TensorBuffer buffer;
     proto::StateBuffer::Type type = proto::StateBuffer::TYPE_UNSPECIFIED;
+    std::optional<int> dynamic_dim;
   };
 
   absl::Status SyncShapes(CompiledModel& compiled_model,
@@ -121,44 +122,30 @@ class LitertState : public StateInterface {
       bool clear_kv_cache_before_prefill);
 
   LitertState(
-      int batch_size, int num_entries, std::optional<int> k_dynamic_dim,
-      std::optional<int> v_dynamic_dim, Environment& env,
-      absl::flat_hash_map<std::string, StateBuffer> bank_1_key_cache_buffers,
-      absl::flat_hash_map<std::string, StateBuffer> bank_1_value_cache_buffers,
+      int batch_size, int num_entries, Environment& env,
+      absl::flat_hash_map<std::string, StateBuffer> bank_1_state_buffers,
       std::optional<absl::flat_hash_map<std::string, StateBuffer>>
-          bank_2_key_cache_buffers,
-      std::optional<absl::flat_hash_map<std::string, StateBuffer>>
-          bank_2_value_cache_buffers,
+          bank_2_state_buffers,
       AllocationPolicy allocation_policy)
       : batch_size_(batch_size),
         num_entries_(num_entries),
-        k_dynamic_dim_(std::move(k_dynamic_dim)),
-        v_dynamic_dim_(std::move(v_dynamic_dim)),
         env_(env),
-        bank_1_key_cache_buffers_(std::move(bank_1_key_cache_buffers)),
-        bank_1_value_cache_buffers_(std::move(bank_1_value_cache_buffers)),
-        bank_2_key_cache_buffers_(std::move(bank_2_key_cache_buffers)),
-        bank_2_value_cache_buffers_(std::move(bank_2_value_cache_buffers)),
+        bank_1_state_buffers_(std::move(bank_1_state_buffers)),
+        bank_2_state_buffers_(std::move(bank_2_state_buffers)),
         allocation_policy_(allocation_policy) {}
 
   // Batch size of the KV cache buffers.
   int batch_size_;
   // Number of entries in the KV cache.
   int num_entries_;
-  // Dynamic dimension index of the KV cache buffers (i.e., sequence dimension).
-  std::optional<int> k_dynamic_dim_;
-  std::optional<int> v_dynamic_dim_;
   // Environment to create new TensorBuffers (required for resizing).
   Environment& env_;
-  // Primary KV cache buffers.
-  absl::flat_hash_map<std::string, StateBuffer> bank_1_key_cache_buffers_;
-  absl::flat_hash_map<std::string, StateBuffer> bank_1_value_cache_buffers_;
-  // Secondary KV cache buffers - only used when inplace update is not
+  // Primary state buffers.
+  absl::flat_hash_map<std::string, StateBuffer> bank_1_state_buffers_;
+  // Secondary state buffers - only used when inplace update is not
   // supported.
   std::optional<absl::flat_hash_map<std::string, StateBuffer>>
-      bank_2_key_cache_buffers_;
-  std::optional<absl::flat_hash_map<std::string, StateBuffer>>
-      bank_2_value_cache_buffers_;
+      bank_2_state_buffers_;
 
   bool bank_1_is_input_ = true;
 

@@ -824,52 +824,32 @@ TEST(LlmExecutorIoTypesTest, ExecutorPrefillParamsGetSet) {
   EXPECT_EQ(max_prefill_sequence_length_or.value(), 100);
 }
 
-TEST(LlmExecutorIoTypesTest, ExecutorDecodeParamsGetSetLogitsProcessorList) {
+TEST(LlmExecutorIoTypesTest,
+     ExecutorDecodeParamsGetSetLogitsProcessorPipeline) {
   ExecutorDecodeParams params;
-  EXPECT_EQ(params.GetLogitsProcessorList().size(), 0);
-  EXPECT_EQ(params.GetConstraintDecoder(), nullptr);
+  EXPECT_EQ(params.GetLogitsProcessorPipeline(), nullptr);
 
-  // Test setting logits processor list to a single logits processor.
-  auto mock_logits_processor1 = std::make_unique<MockLogitsProcessor>();
-  params.SetLogitsProcessorList({mock_logits_processor1.get()});
-  EXPECT_EQ(params.GetLogitsProcessorList().size(), 1);
-  EXPECT_EQ(params.GetLogitsProcessorList()[0], mock_logits_processor1.get());
-  EXPECT_EQ(params.GetConstraintDecoder(), nullptr);
+  auto mock_logits_processor = std::make_unique<MockLogitsProcessor>();
+  LogitsProcessorPipeline pipeline;
+  pipeline.AddProcessor(std::move(mock_logits_processor));
+  params.SetLogitsProcessorPipeline(&pipeline);
 
-  // Test setting logits processor list to multiple logits processors.
-  auto mock_logits_processor2 = std::make_unique<MockLogitsProcessor>();
-  std::vector<LogitsProcessor*> logits_processors = {
-      mock_logits_processor1.get(),
-      mock_logits_processor2.get(),
-  };
-  params.SetLogitsProcessorList(logits_processors);
-  EXPECT_EQ(params.GetLogitsProcessorList(), logits_processors);
-  EXPECT_EQ(params.GetConstraintDecoder(), nullptr);
-
-  // Test setting logits processor list to an empty list.
-  params.SetLogitsProcessorList({});
-  EXPECT_TRUE(params.GetLogitsProcessorList().empty());
-  EXPECT_EQ(params.GetConstraintDecoder(), nullptr);
+  EXPECT_EQ(params.GetLogitsProcessorPipeline(), &pipeline);
+  EXPECT_EQ(params.GetLogitsProcessorPipeline()->size(), 1);
+  EXPECT_EQ(params.GetLogitsProcessorPipeline()->GetConstraintDecoder(),
+            nullptr);
 }
 
-TEST(LlmExecutorIoTypesTest, ExecutorDecodeParamsGetSetConstraintDecoder) {
-  ExecutorDecodeParams params;
-  EXPECT_EQ(params.GetLogitsProcessorList().size(), 0);
-  EXPECT_EQ(params.GetConstraintDecoder(), nullptr);
-
-  // Test setting logits processor list to a constraint decoder & a mock logits
-  // processor.
+TEST(LlmExecutorIoTypesTest, LogitsProcessorPipelineGetConstraintDecoder) {
   FakeConstraint constraint({1, 2, 3}, /*vocabulary_size=*/10);
   auto constraint_decoder =
       std::make_unique<ConstrainedDecoder>(&constraint, /*batch_size=*/1);
+  ConstrainedDecoder* constraint_decoder_ptr = constraint_decoder.get();
   auto mock_logits_processor = std::make_unique<MockLogitsProcessor>();
-  std::vector<LogitsProcessor*> logits_processors = {
-      mock_logits_processor.get(),
-      constraint_decoder.get(),
-  };
-  params.SetLogitsProcessorList(logits_processors);
-  EXPECT_EQ(params.GetLogitsProcessorList(), logits_processors);
-  EXPECT_EQ(params.GetConstraintDecoder(), constraint_decoder.get());
+  LogitsProcessorPipeline pipeline;
+  pipeline.AddProcessor(std::move(mock_logits_processor));
+  pipeline.AddProcessor(std::move(constraint_decoder));
+  EXPECT_EQ(pipeline.GetConstraintDecoder(), constraint_decoder_ptr);
 }
 
 TEST(LlmExecutorIoTypesTest, ExecutorVisionDataDuplicate) {

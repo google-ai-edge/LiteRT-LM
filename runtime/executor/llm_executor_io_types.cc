@@ -650,33 +650,22 @@ std::ostream& operator<<(std::ostream& os,
 }
 
 // --- ExecutorDecodeParams Implementation ---
-void ExecutorDecodeParams::SetLogitsProcessorList(
-    std::vector<LogitsProcessor*> logits_processors) {
-  logits_processors_ = std::move(logits_processors);
+void ExecutorDecodeParams::SetLogitsProcessorPipeline(
+    LogitsProcessorPipeline* pipeline) {
+  logits_pipeline_ = pipeline;
 }
 
-absl::Span<LogitsProcessor* const>
-ExecutorDecodeParams::GetLogitsProcessorList() const {
-  return logits_processors_;
-}
-
-ConstrainedDecoder* ExecutorDecodeParams::GetConstraintDecoder() const {
-  for (LogitsProcessor* processor : logits_processors_) {
-    if (ConstrainedDecoder* constraint_decoder =
-            processor->GetConstraintDecoder();
-        constraint_decoder != nullptr) {
-      return constraint_decoder;
-    }
-  }
-  return nullptr;
+LogitsProcessorPipeline* ExecutorDecodeParams::GetLogitsProcessorPipeline()
+    const {
+  return logits_pipeline_;
 }
 
 std::ostream& operator<<(std::ostream& os, const ExecutorDecodeParams& params) {
   os << "ExecutorDecodeParams: {\n";
-  os << kFieldIndent << "LogitsProcessor: ";
-  if (size_t num_processors = params.GetLogitsProcessorList().size();
-      num_processors > 0) {
-    os << num_processors << " processors";
+  os << kFieldIndent << "LogitsProcessorPipeline: ";
+  if (const auto* pipeline = params.GetLogitsProcessorPipeline();
+      pipeline != nullptr && !pipeline->empty()) {
+    os << pipeline->size() << " processors";
   } else {
     os << "not set";
   }

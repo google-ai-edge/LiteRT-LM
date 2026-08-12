@@ -38,6 +38,35 @@ cc_library(
 )
 
 cc_library(
+    name = "logits_processor_pipeline",
+    srcs = ["logits_processor_pipeline.cc"],
+    hdrs = ["logits_processor_pipeline.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":logits_processor",
+        ":no_repeat_ngram_config",
+        ":no_repeat_ngram_processor",
+        ":repetition_penalty_config",
+        ":repetition_penalty_processor",
+        ":suppress_tokens_config",
+        ":suppress_tokens_processor",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/types:span",
+        "@litert//litert/cc:litert_element_type",
+        "@litert//litert/cc:litert_layout",
+        "@litert//litert/cc:litert_macros",
+        "@litert//litert/cc:litert_ranked_tensor_type",
+        "@litert//litert/cc:litert_tensor_buffer",
+        "@litert//litert/cc:litert_tensor_buffer_types",
+        "//runtime/components/logits_processor/constrained_decoding:constrained_decoder",
+        "//runtime/components/logits_processor/constrained_decoding:constraint",
+        "//runtime/util:convert_tensor_buffer",
+        "//runtime/util:litert_status_util",
+        "@litert//tflite/types:half",
+    ],
+)
+
+cc_library(
     name = "mock_logits_processor",
     testonly = True,
     hdrs = ["mock_logits_processor.h"],
@@ -213,5 +242,24 @@ cc_test(
         "//runtime/util:convert_tensor_buffer",
         "//runtime/util:test_utils",
         "@litert//tflite/types:half",
+    ],
+)
+
+cc_test(
+    name = "logits_processor_pipeline_test",
+    srcs = ["logits_processor_pipeline_test.cc"],
+    deps = [
+        ":logits_processor",
+        ":logits_processor_pipeline",
+        ":mock_logits_processor",
+        ":repetition_penalty_config",
+        ":suppress_tokens_config",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
+        "@com_google_absl//absl/types:span",
+        "@litert//litert/cc:litert_tensor_buffer",
+        "@litert//litert/test:matchers",
+        "//runtime/util:convert_tensor_buffer",
     ],
 )

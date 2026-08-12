@@ -57,7 +57,7 @@ class RepetitionPenaltyProcessor : public LogitsProcessor {
   absl::Status UpdateState(
       const ::litert::TensorBuffer& next_token_ids) override;
 
-  absl::Status UpdateState(absl::Span<int> next_token_ids) override;
+  absl::Status UpdateState(absl::Span<const int> next_token_ids) override;
 
  public:
   // Stateful information tracked for an individual sequence in the batch.

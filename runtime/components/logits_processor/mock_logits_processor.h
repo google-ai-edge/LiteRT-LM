@@ -6,8 +6,8 @@
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_layout.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
-#include "runtime/components/logits_processor/logits_processor.h"
 #include "runtime/components/logits_processor/constrained_decoding/constrained_decoder.h"
+#include "runtime/components/logits_processor/logits_processor.h"
 #include "tflite/types/half.h"  // from @litert
 
 namespace litert::lm {
@@ -25,10 +25,7 @@ class MockLogitsProcessor : public LogitsProcessor {
               (override));
   MOCK_METHOD(absl::Status, UpdateState, (const ::litert::TensorBuffer&),
               (override));
-  MOCK_METHOD(absl::Status, UpdateState, (absl::Span<int>), (override));
-  MOCK_METHOD(ConstrainedDecoder*, GetConstraintDecoder, (), (override));
-  MOCK_METHOD(const ConstrainedDecoder*, GetConstraintDecoder, (),
-              (const, override));
+  MOCK_METHOD(absl::Status, UpdateState, (absl::Span<const int>), (override));
 };
 
 }  // namespace litert::lm

@@ -363,6 +363,7 @@ cc_library(
         "//runtime/components:scoring_cpu_util",
         "//runtime/components:stop_token_detector",
         "//runtime/components/logits_processor",
+        "//runtime/components/logits_processor:logits_processor_pipeline",
         "//runtime/components/logits_processor:no_repeat_ngram_config",
         "//runtime/components/logits_processor:no_repeat_ngram_processor",
         "//runtime/components/logits_processor:repetition_penalty_config",
