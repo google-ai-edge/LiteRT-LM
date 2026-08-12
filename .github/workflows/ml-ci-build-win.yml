@@ -48,7 +48,8 @@ jobs:
     env:
       MODEL_KEY: gemma-4-E2B-it.litertlm
       MODEL_PATH: ./models/gemma4
-      MODEL_URL: gs://litert-lm-cicd/models/gemma4/gemma-4-E2B-it.litertlm
+      GCS_MODEL_URL: gs://litert-lm-cicd/models/gemma4/gemma-4-E2B-it.litertlm
+      HF_MODEL_URL: https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm
 
       # Clear ANDROID_NDK_HOME as Windows_x64 has NDK where jobs don't have permission for
       # androidndk rules to create symlinks.
@@ -83,7 +84,7 @@ jobs:
           Add-Content -Path $env:GITHUB_PATH -Value "C:\Program Files (x86)\Google\Cloud SDK\google-cloud-sdk\bin"
 
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
         with:
           lfs: true
 
@@ -138,6 +139,12 @@ jobs:
 
       - name: Set up cache keys and bazel output base
         id: cache-keys
+        env:
+          GH_WORKFLOW: ${{ github.workflow }}
+          HASH_WORKSPACE: ${{ hashFiles('**/WORKSPACE', '**/.bazelrc') }}
+          HASH_BUILD: ${{ hashFiles('**/BUILD*') }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.sha }}
         run: |
           # Create a dedicated directory on the big drive for the B: mount
           $bigDrivePath = "C:\_w\_b"
@@ -149,11 +156,11 @@ jobs:
 
           $BAZEL_OUTPUT_BASE = "B:\job"
 
-          $CACHE_RESTORE_KEY_2="${{ github.workflow }}"
-          $CACHE_RESTORE_KEY_1="$CACHE_RESTORE_KEY_2-${{ hashFiles('**/WORKSPACE', '**/.bazelrc') }}"
-          $CACHE_RESTORE_KEY_0="$CACHE_RESTORE_KEY_1-${{ hashFiles('**/BUILD*') }}"
-          $CACHE_RESTORE_KEY_HEAD="$CACHE_RESTORE_KEY_0-${{ github.event.pull_request.base.sha }}"
-          $CACHE_KEY="$CACHE_RESTORE_KEY_0-${{ github.sha }}"
+          $CACHE_RESTORE_KEY_2="$env:GH_WORKFLOW"
+          $CACHE_RESTORE_KEY_1="$CACHE_RESTORE_KEY_2-$env:HASH_WORKSPACE"
+          $CACHE_RESTORE_KEY_0="$CACHE_RESTORE_KEY_1-$env:HASH_BUILD"
+          $CACHE_RESTORE_KEY_HEAD="$CACHE_RESTORE_KEY_0-$env:BASE_SHA"
+          $CACHE_KEY="$CACHE_RESTORE_KEY_0-$env:HEAD_SHA"
 
           echo "CACHE_RESTORE_KEY_2=$CACHE_RESTORE_KEY_2" >> $env:GITHUB_OUTPUT
           echo "CACHE_RESTORE_KEY_1=$CACHE_RESTORE_KEY_1" >> $env:GITHUB_OUTPUT
@@ -161,29 +168,34 @@ jobs:
           echo "CACHE_RESTORE_KEY_HEAD=$CACHE_RESTORE_KEY_HEAD" >> $env:GITHUB_OUTPUT
           echo "CACHE_KEY=$CACHE_KEY" >> $env:GITHUB_OUTPUT
 
-          $SHORT_SHA=$("${{ github.sha }}".SubString(0, 8))
+          $SHORT_SHA=$env:HEAD_SHA.SubString(0, 8)
           echo "BAZEL_OUTPUT_BASE=${BAZEL_OUTPUT_BASE}-$SHORT_SHA" >> $env:GITHUB_ENV
 
       - name: Clean build outputs if cache is being refreshed
         if: env.REFRESH_CACHE == 'true'
         run: bazel --output_base="$env:BAZEL_OUTPUT_BASE" clean --expunge
 
-
       - name: Restore bazel cache if cache is not being refreshed.
         id: bazel-cache
         if: env.REFRESH_CACHE != 'true'
+        env:
+          KEY: ${{ steps.cache-keys.outputs.CACHE_KEY }}
+          KEY_HEAD: ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_HEAD }}
+          KEY_0: ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_0 }}
+          KEY_1: ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_1 }}
+          KEY_2: ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_2 }}
         run: |
           $TARGET_DIR = "$HOME/.cache/bazel"
           $BUCKET_URL = "gs://litert-lm-cicd/caches/windows/bazel"
 
-          Add-Content -Path $env:GITHUB_OUTPUT -Value "cache-primary-key=${{ steps.cache-keys.outputs.CACHE_KEY }}"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "cache-primary-key=$env:KEY"
 
           $CACHE_KEYS = @(
-              "${{ steps.cache-keys.outputs.CACHE_KEY }}",
-              "${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_HEAD }}",
-              "${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_0 }}",
-              "${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_1 }}",
-              "${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_2 }}"
+              $env:KEY,
+              $env:KEY_HEAD,
+              $env:KEY_0,
+              $env:KEY_1,
+              $env:KEY_2
           )
 
           $FOUND_BLOB = ""
@@ -232,22 +244,53 @@ jobs:
           }
 
       - name: Check cache hit
+        env:
+          CACHE_HIT: ${{ steps.bazel-cache.outputs.cache-hit }}
+          CACHE_PRIMARY: ${{ steps.bazel-cache.outputs.cache-primary-key }}
+          CACHE_MATCHED: ${{ steps.bazel-cache.outputs.cache-matched-key }}
         run: |
-          echo "Cache Hit: ${{ steps.bazel-cache.outputs.cache-hit }}"
-          echo "Cache Primary Key: ${{ steps.bazel-cache.outputs.cache-primary-key }}"
-          echo "Cache Matched Key: ${{ steps.bazel-cache.outputs.cache-matched-key }}"
+          echo "Cache Hit: $env:CACHE_HIT"
+          echo "Cache Primary Key: $env:CACHE_PRIMARY"
+          echo "Cache Matched Key: $env:CACHE_MATCHED"
 
       - name: Download Model
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          $TARGET_DIR = "${{ env.MODEL_PATH }}"
-          $BUCKET_URL = "${{ env.MODEL_URL }}"
-          $MODEL_KEY = "${{ env.MODEL_KEY }}"
-
-          if (-not (Test-Path $TARGET_DIR)) { 
-            New-Item -ItemType Directory -Path $TARGET_DIR -Force | Out-Null 
+          if (-not (Test-Path $env:MODEL_PATH)) { 
+            New-Item -ItemType Directory -Path $env:MODEL_PATH -Force | Out-Null 
           }
 
-          gcloud storage cp "$BUCKET_URL" "$TARGET_DIR/$MODEL_KEY"
+          Write-Host "Attempting to download from GCS..."
+          gcloud storage cp "$env:GCS_MODEL_URL" "$env:MODEL_PATH/$env:MODEL_KEY"
+
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "Model not found in GCS. Falling back to Hugging Face..."
+
+            if (-not $env:HF_TOKEN) {
+              Write-Host "Error: HF_TOKEN is missing or empty. Failing workflow."
+              exit 1
+            }
+
+            Write-Host "Downloading model from Hugging Face..."
+            curl.exe --http1.1 -L -C - --retry 5 --retry-delay 3 --retry-all-errors -f `
+              --oauth2-bearer "$env:HF_TOKEN" `
+              -o "$env:MODEL_PATH/$env:MODEL_KEY" `
+              "$env:HF_MODEL_URL"
+
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "Error: Failed to download model from Hugging Face."
+              exit 1
+            }
+
+            Write-Host "Uploading the downloaded model to GCS for future runs..."
+            gcloud storage cp "$env:MODEL_PATH/$env:MODEL_KEY" "$env:GCS_MODEL_URL"
+
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "Error: Failed to upload model to GCS."
+              exit 1
+            }
+          }
 
       - name: Run bazel build on Windows
         run: |
@@ -266,8 +309,7 @@ jobs:
         if: github.ref_type == 'tag'
         run: |
           cp bazel-bin/runtime/engine/litert_lm_main.exe litert_lm_main.windows_x86_64.exe
-          gh release upload ${{ github.ref_name }} litert_lm_main.windows_x86_64.exe --clobber
-
+          gh release upload $env:GITHUB_REF_NAME litert_lm_main.windows_x86_64.exe --clobber
 
       - name: Run bazel test on Windows
         continue-on-error: true
@@ -287,11 +329,11 @@ jobs:
 
       - name: Run pytest
         # Execute pytest via the python module (-m) to bypass missing pytest.exe PATH issues
-        run: python -m pytest tools/pytest/ --backend=cpu --model-path=${{ env.MODEL_PATH }}/${{ env.MODEL_KEY }} --build-system=bazel
+        run: python -m pytest tools/pytest/ --backend=cpu --model-path="$env:MODEL_PATH/$env:MODEL_KEY" --build-system=bazel
 
       - name: Upload bazel test logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874 # v4.4.0
         with:
           name: bazel-test-logs-windows
           path: bazel-testlogs/**/test.log
@@ -312,13 +354,15 @@ jobs:
         # Execute pytest via the python module (-m) to bypass missing pytest.exe PATH issues
         run: python -m pytest tools/pytest/ -v `
           --backend=cpu --dynamic --prebuilt `
-          --model-path=${{ env.MODEL_PATH }}/${{ env.MODEL_KEY }} --build-system=bazel
+          --model-path="$env:MODEL_PATH/$env:MODEL_KEY" --build-system=bazel
 
       - name: Remove cache if cache is being refreshed
         if: env.REFRESH_CACHE == 'true'
         continue-on-error: true  # Keeps the build moving if the file wasn't there to begin with
+        env:
+          CACHE_KEY: ${{ steps.cache-keys.outputs.CACHE_KEY }}
         run: |
-          $CacheKey = "${{ steps.cache-keys.outputs.CACHE_KEY }}"
+          $CacheKey = $env:CACHE_KEY
           $BucketUrl = "gs://litert-lm-cicd/caches/windows/bazel"
 
           Write-Host "REFRESH_CACHE is true. Removing existing cache from GCS: $BucketUrl/$CacheKey.tar.gz"
@@ -328,9 +372,11 @@ jobs:
 
       - name: Save bazel cache if it's new or being refreshed
         if: env.REFRESH_CACHE == 'true' || steps.bazel-cache.outputs.cache-hit != 'true'
+        env:
+          CACHE_KEY: ${{ steps.cache-keys.outputs.CACHE_KEY }}
         run: |
           $TargetDir = "$HOME/.cache/bazel"
-          $CacheKey = "${{ steps.cache-keys.outputs.CACHE_KEY }}"
+          $CacheKey = $env:CACHE_KEY
           $BucketUrl = "gs://litert-lm-cicd/caches/windows/bazel"
           $ArchiveName = "cache.tar.gz"
 

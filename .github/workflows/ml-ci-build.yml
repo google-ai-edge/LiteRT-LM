@@ -49,7 +49,9 @@ jobs:
     env:
       MODEL_KEY: gemma-4-E2B-it.litertlm
       MODEL_PATH: ./models/gemma4
-      MODEL_URL: gs://litert-lm-cicd/models/gemma4/gemma-4-E2B-it.litertlm
+      GCS_MODEL_URL: gs://litert-lm-cicd/models/gemma4/gemma-4-E2B-it.litertlm
+      HF_MODEL_URL: https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm
+
 
       GH_TOKEN: ${{ github.token }}  # For gh release upload.
       REFRESH_CACHE: ${{ github.event_name == 'schedule' ||
@@ -74,14 +76,13 @@ jobs:
       - name: Install pytest
         run: python3 -m pip install --break-system-packages pytest==8.3.4
 
-
       - name: Checkout code.
-        uses: actions/checkout@v4
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
         with:
           lfs: true
 
       - name: Set up Google Cloud SDK
-        uses: google-github-actions/setup-gcloud@v2
+        uses: google-github-actions/setup-gcloud@98ddc00a17442e89a24bbf282954a3b65ce6d200 # v2.1.0
 
       - name: Install Rust
         run: |
@@ -121,26 +122,34 @@ jobs:
           echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> $GITHUB_ENV
 
       - name: Setup Android NDK
-        uses: nttld/setup-ndk@v1
         id: setup-ndk
+        uses: nttld/setup-ndk@afb4c9964b521afb97c864b7d40b11e6911bd410 # v1.5.0
         with:
           ndk-version: r28b
           add-to-path: false
 
       - name: Export NDK Home globally
         # This guarantees Bazel finds it during both the Linux //... eval and the actual Android compile
-        run: echo "ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}" >> $GITHUB_ENV
+        env:
+          NDK_PATH: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: echo "ANDROID_NDK_HOME=$NDK_PATH" >> $GITHUB_ENV
 
 
       - name : Set up cache keys.
         id: cache-keys
+        env:
+          GH_WORKFLOW: ${{ github.workflow }}
+          HASH_WORKSPACE: ${{ hashFiles('**/WORKSPACE', '**/.bazelrc') }}
+          HASH_BUILD: ${{ hashFiles('**/BUILD*') }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.sha }}
         run: |
-          CACHE_RESTORE_KEY_2="${{ github.workflow }}"
-          CACHE_RESTORE_KEY_1="$CACHE_RESTORE_KEY_2-${{ hashFiles('**/WORKSPACE', '**/.bazelrc') }}"
-          CACHE_RESTORE_KEY_0="$CACHE_RESTORE_KEY_1-${{ hashFiles('**/BUILD*') }}"
-          CACHE_RESTORE_KEY_HEAD="$CACHE_RESTORE_KEY_0-${{ github.event.pull_request.base.sha }}"
+          CACHE_RESTORE_KEY_2="$GH_WORKFLOW"
+          CACHE_RESTORE_KEY_1="$CACHE_RESTORE_KEY_2-$HASH_WORKSPACE"
+          CACHE_RESTORE_KEY_0="$CACHE_RESTORE_KEY_1-$HASH_BUILD"
+          CACHE_RESTORE_KEY_HEAD="$CACHE_RESTORE_KEY_0-$BASE_SHA"
 
-          CACHE_KEY="$CACHE_RESTORE_KEY_0-${{ github.sha }}"
+          CACHE_KEY="$CACHE_RESTORE_KEY_0-$HEAD_SHA"
           echo "CACHE_RESTORE_KEY_2=$CACHE_RESTORE_KEY_2" >> "$GITHUB_OUTPUT"
           echo "CACHE_RESTORE_KEY_1=$CACHE_RESTORE_KEY_1" >> "$GITHUB_OUTPUT"
           echo "CACHE_RESTORE_KEY_0=$CACHE_RESTORE_KEY_0" >> "$GITHUB_OUTPUT"
@@ -154,17 +163,23 @@ jobs:
       - name: Restore bazel cache if cache is not being refreshed.
         id: bazel-cache
         if: env.REFRESH_CACHE != 'true'
+        env:
+          KEY: ${{ steps.cache-keys.outputs.CACHE_KEY }}
+          KEY_HEAD: ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_HEAD }}
+          KEY_0: ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_0 }}
+          KEY_1: ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_1 }}
+          KEY_2: ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_2 }}
         run: |
           TARGET_DIR="$HOME/.cache/bazel"
           BUCKET_URL="gs://litert-lm-cicd/caches/linux/bazel"
 
-          echo "cache-primary-key=${{ steps.cache-keys.outputs.CACHE_KEY }}" >> "$GITHUB_OUTPUT"
+          echo "cache-primary-key=$KEY" >> "$GITHUB_OUTPUT"
 
-          CACHE_KEYS=("${{ steps.cache-keys.outputs.CACHE_KEY }}" \
-                      "${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_HEAD }}" \
-                      "${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_0 }}" \
-                      "${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_1 }}" \
-                      "${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_2 }}")
+          CACHE_KEYS=("$KEY" \
+                      "$KEY_HEAD" \
+                      "$KEY_0" \
+                      "$KEY_1" \
+                      "$KEY_2")
 
           FOUND_BLOB=""
 
@@ -212,19 +227,30 @@ jobs:
           fi
 
 
-      - name: Check cache hit.
-        run: |
-          echo "Cache Hit: ${{ steps.bazel-cache.outputs.cache-hit }}"
-          echo "Cache Primary Key: ${{ steps.bazel-cache.outputs.cache-primary-key }}"
-          echo "Cache Matched Key: ${{ steps.bazel-cache.outputs.cache-matched-key }}"
-
       - name: Download Model
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          TARGET_DIR=${{ env.MODEL_PATH }}
-          BUCKET_URL=${{ env.MODEL_URL }}
-          MODEL_KEY=${{ env.MODEL_KEY }}
-          mkdir -p "$TARGET_DIR"
-          gcloud storage cp "$BUCKET_URL" "$TARGET_DIR/$MODEL_KEY"
+          mkdir -p "$MODEL_PATH"
+
+          echo "Attempting to download from GCS..."
+          if ! gcloud storage cp "$GCS_MODEL_URL" "$MODEL_PATH/$MODEL_KEY"; then
+            echo "Model not found in GCS. Falling back to Hugging Face..."
+
+            if [ -z "$HF_TOKEN" ]; then
+              echo "Error: HF_TOKEN is missing or empty. Failing workflow."
+              exit 1
+            fi
+
+            echo "Downloading model from Hugging Face..."
+            curl --http1.1 -L -C - --retry 5 --retry-delay 3 --retry-all-errors -f \
+              --oauth2-bearer "$HF_TOKEN" \
+              -o "$MODEL_PATH/$MODEL_KEY" \
+              "$HF_MODEL_URL"
+
+            echo "Uploading the downloaded model to GCS for future runs..."
+            gcloud storage cp "$MODEL_PATH/$MODEL_KEY" "$GCS_MODEL_URL"
+          fi
 
       - name: Run bazel build on Linux.
         run: |
@@ -241,9 +267,11 @@ jobs:
 
       - name: Update litert_lm_main prebuilt for Linux if new version tag is pushed.
         if: github.ref_type == 'tag'
+        env:
+          GH_REF_NAME: ${{ github.ref_name }}
         run: |
           cp bazel-bin/runtime/engine/litert_lm_main litert_lm_main.linux_x86_64
-          gh release upload ${{ github.ref_name }} litert_lm_main.linux_x86_64 --clobber
+          gh release upload "$GH_REF_NAME" litert_lm_main.linux_x86_64 --clobber
 
       - name: Run bazel test on Linux.
         continue-on-error: true  # Ignore errors when test fails.
@@ -255,6 +283,13 @@ jobs:
             //schema/... \
             //c/...
 
+      - name: Upload bazel test logs
+        if: always()
+        uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874 # v4.4.0
+        with:
+          name: bazel-test-logs-linux
+          path: bazel-testlogs/**/test.log
+
       - name: Run bazel build on Linux with dynamic linking.
         run: |
           bazelisk build --disk_cache=~/.cache/bazel --repository_cache=~/.cache/bazel/repo --config=linux_x86_64 \
@@ -263,7 +298,7 @@ jobs:
             //runtime/engine:litert_lm_main
 
       - name: Run pytest
-        run: pytest tools/pytest/ --backend=cpu --model-path=${{ env.MODEL_PATH }}/${{ env.MODEL_KEY }} --build-system=bazel
+        run: pytest tools/pytest/ --backend=cpu --model-path="$MODEL_PATH/$MODEL_KEY" --build-system=bazel
 
 
       - name: Check if litert_lm_main has only LiteRt symbols undefined.
@@ -287,17 +322,19 @@ jobs:
       - name: Remove cache if cache is being refreshed.
         if: env.REFRESH_CACHE == 'true'
         continue-on-error: true  # Ignore errors when cache is not found.
+        env:
+          CACHE_KEY: ${{ steps.cache-keys.outputs.CACHE_KEY }}
         run: |
-          CACHE_KEY="${{ steps.cache-keys.outputs.CACHE_KEY }}"
           BUCKET_URL="gs://litert-lm-cicd/caches/linux/bazel"
           echo "REFRESH_CACHE is true. Removing existing cache from GCS: $BUCKET_URL/$CACHE_KEY.tar.gz"
           gcloud storage rm "$BUCKET_URL/$CACHE_KEY.tar.gz"
 
       - name: Save bazel cache if it's new or being refreshed.
         if: env.REFRESH_CACHE == 'true' || steps.bazel-cache.outputs.cache-hit != 'true'
+        env:
+          CACHE_KEY: ${{ steps.cache-keys.outputs.CACHE_KEY }}
         run: |
           TARGET_DIR="$HOME/.cache/bazel"
-          CACHE_KEY="${{ steps.cache-keys.outputs.CACHE_KEY }}"
           BUCKET_URL="gs://litert-lm-cicd/caches/linux/bazel"
           ARCHIVE_NAME="cache.tar.gz"
 
