@@ -6,18 +6,20 @@ LiteRT, engineered for **high-performance**, **cross-platform** execution.
 🔗 [Product Website](https://ai.google.dev/edge/litert-lm) | 🌐✨
 [Web Demo](https://google-ai-edge.github.io/LiteRT-LM/web_demos/chat/index.html)
 
-## 🔥 What's New: `v0.15.0`
+## 🔥 What's New: `v0.16.0`
 
--   **🍎 Apple Foundation Framework**: New native adapter integrating Apple's
-    backend for fast text and multimodal execution, thanks to
-    [john-rocky](https://github.com/john-rocky)!
--   **🛠️ CLI Configuration**: Centralized `config.json` for managing model
-    parameters without verbose flags
-    ([doc](https://developers.google.com/edge/litert-lm/cli/configuration)).
--   **🌐 JavaScript API Updates**: Gemma 4 web support (up to 31B),
-    `AutoToolChat` capability, and autosized ringbuffer optimizations.
--   **⚡ Concurrency & Stability**: Resolved critical re-entrancy issues on
-    concurrent engine initializations.
+This release is a quick follow up to [`v0.15.0`](https://github.com/google-ai-edge/LiteRT-LM/releases/tag/v0.15.0) (which brought Apple Foundation
+Framework integration, CLI configuration, and JavaScript API Updates).
+
+-   **📦 C API Prebuilts**: Added the first versioned C API shared library
+    [prebuilts](https://github.com/google-ai-edge/LiteRT-LM/releases/download/v0.16.0/litert_lm_c_api-0.1.0.zip)
+    for all supported platforms. This allows natively integrating LiteRT-LM into
+    your applications and creating language bindings without the hassle of
+    building shared libraries.
+-   **🚀 Experimental YNNPACK Delegate**: Added the experimental
+    [YNNPACK](https://github.com/google/XNNPACK/tree/master/ynnpack)
+    delegate, enabled for linux arm64 builds in the LiteRT-LM CLI and Python
+    API.
 
 👉 Try Gemma4-E4B with MTP on Linux, macOS, Windows or Raspberry Pi with the
 [LiteRT-LM CLI](https://ai.google.dev/edge/litert-lm/cli):
@@ -122,6 +124,10 @@ tag.
 
 ## 📦 Releases
 
+-   **v0.16**: Quick follow up bringing C API prebuilts for all supported
+    platforms and the experimental
+    [YNNPACK](https://github.com/google/XNNPACK/tree/master/ynnpack) delegate
+    for linux arm64.
 -   **v0.15**: Added Apple Foundation framework adapter, centralized
     `config.json` CLI configuration, and JavaScript API enhancements including
     AutoToolChat.
