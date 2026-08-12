@@ -534,11 +534,21 @@ absl::StatusOr<ExecutorInputs> EmbeddingEngineImpl::ProcessAndCombineContents(
 
 absl::StatusOr<EmbeddingResponse> EmbeddingEngineImpl::ComputeEmbeddingInternal(
     const ExecutorInputs& inputs, const EmbeddingOptions& options) {
-  LITERT_ASSIGN_OR_RETURN(auto embedding,
-                          embedding_executor_->ComputeEmbedding(inputs));
+  ComputeEmbeddingOptions compute_options{
+      .input_overflow_strategy = options.input_overflow_strategy,
+  };
+  if (options.insert_special_tokens && !special_tokens_.eos_token_ids.empty()) {
+    compute_options.eos_token_ids = special_tokens_.eos_token_ids;
+  }
+  LITERT_ASSIGN_OR_RETURN(
+      auto embedding_output,
+      embedding_executor_->ComputeEmbedding(inputs, compute_options));
 
   EmbeddingResponse response;
-  response.embedding = embedding;
+  response.embedding = std::move(embedding_output.embedding);
+  response.input_length = embedding_output.input_length;
+  response.truncated_length = embedding_output.truncated_length;
+  response.num_chunks = embedding_output.num_chunks;
 
   if (options.normalize) {
     response.embedding = L2Norm(response.embedding);

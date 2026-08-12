@@ -15,6 +15,7 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_EMBEDDING_EXECUTOR_BASE_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_EMBEDDING_EXECUTOR_BASE_H_
 
+#include <optional>
 #include <vector>
 
 #include "absl/status/status.h"  // from @com_google_absl
@@ -25,19 +26,69 @@
 
 namespace litert::lm {
 
+// Strategy for handling inputs longer than the maximum supported signature
+// length.
+enum class InputOverflowStrategy {
+  // Chunks the input into sub-sequences, embeds each chunk, and returns the
+  // mean embedding across all chunks.
+  kChunkAndAverage = 0,
+  // Truncates the input to the longest signature length.
+  kTruncate,
+  // Returns an error status if the input exceeds the longest signature length.
+  kError,
+};
+
+// Options for configuring the embedding computation in the executor.
+struct ComputeEmbeddingOptions {
+  // Strategy for handling inputs longer than the maximum supported signature
+  // length.
+  InputOverflowStrategy input_overflow_strategy =
+      InputOverflowStrategy::kChunkAndAverage;
+
+  // If non-empty, and input_overflow_strategy is kTruncate, the EOS token IDs
+  // will be preserved at the end of the truncated input sequence.
+  std::vector<int> eos_token_ids = {};
+};
+
+// Represents the output of an embedding computation from the executor.
+struct EmbeddingOutput {
+  // The computed embedding vector.
+  std::vector<float> embedding;
+  // The length of the input.
+  int input_length = 0;
+  // If the input was truncated, contains the length it was truncated to.
+  std::optional<int> truncated_length = std::nullopt;
+  // The number of chunks the input was split into.
+  int num_chunks = 1;
+};
+
 // The Embedding Executor serves as a wrapper around converted text encoder
 // models across diverse hardware accelerators like CPUs, GPUs, and NPUs.
 class EmbeddingExecutorBase {
  public:
   virtual ~EmbeddingExecutorBase() = default;
 
-  // Computes the single fixed-size embedding vector for the given inputs.
-  virtual absl::StatusOr<std::vector<float>> ComputeEmbedding(
-      const ExecutorInputs& inputs) = 0;
+  // Computes the embedding output for the given inputs with default options.
+  absl::StatusOr<EmbeddingOutput> ComputeEmbedding(
+      const ExecutorInputs& inputs) {
+    return ComputeEmbedding(inputs, ComputeEmbeddingOptions{});
+  }
 
-  // Computes a batch of embedding vectors for the given batch of inputs.
-  virtual absl::StatusOr<std::vector<std::vector<float>>> ComputeEmbeddingBatch(
-      const std::vector<ExecutorInputs>& batch_inputs) = 0;
+  // Computes the embedding output for the given inputs.
+  virtual absl::StatusOr<EmbeddingOutput> ComputeEmbedding(
+      const ExecutorInputs& inputs, const ComputeEmbeddingOptions& options) = 0;
+
+  // Computes a batch of embedding outputs for the given batch of inputs with
+  // default options.
+  absl::StatusOr<std::vector<EmbeddingOutput>> ComputeEmbeddingBatch(
+      const std::vector<ExecutorInputs>& batch_inputs) {
+    return ComputeEmbeddingBatch(batch_inputs, ComputeEmbeddingOptions{});
+  }
+
+  // Computes a batch of embedding outputs for the given batch of inputs.
+  virtual absl::StatusOr<std::vector<EmbeddingOutput>> ComputeEmbeddingBatch(
+      const std::vector<ExecutorInputs>& batch_inputs,
+      const ComputeEmbeddingOptions& options) = 0;
 
   virtual absl::string_view ExecutorBackendName() const = 0;
 

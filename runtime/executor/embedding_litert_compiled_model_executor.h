@@ -24,6 +24,7 @@
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
@@ -58,13 +59,18 @@ class EmbeddingLiteRtCompiledModelExecutor : public EmbeddingExecutorBase {
 
   ~EmbeddingLiteRtCompiledModelExecutor() override = default;
 
-  // Computes the single fixed-size embedding vector for the given inputs.
-  absl::StatusOr<std::vector<float>> ComputeEmbedding(
-      const ExecutorInputs& inputs) override;
+  using EmbeddingExecutorBase::ComputeEmbedding;
+  using EmbeddingExecutorBase::ComputeEmbeddingBatch;
 
-  // Computes a batch of embedding vectors for the given batch of inputs.
-  absl::StatusOr<std::vector<std::vector<float>>> ComputeEmbeddingBatch(
-      const std::vector<ExecutorInputs>& batch_inputs) override;
+  // Computes the embedding output for the given inputs.
+  absl::StatusOr<EmbeddingOutput> ComputeEmbedding(
+      const ExecutorInputs& inputs,
+      const ComputeEmbeddingOptions& options) override;
+
+  // Computes a batch of embedding outputs for the given batch of inputs.
+  absl::StatusOr<std::vector<EmbeddingOutput>> ComputeEmbeddingBatch(
+      const std::vector<ExecutorInputs>& batch_inputs,
+      const ComputeEmbeddingOptions& options) override;
 
   // Returns the name of the hardware backend used by this executor.
   absl::string_view ExecutorBackendName() const override;
@@ -81,6 +87,9 @@ class EmbeddingLiteRtCompiledModelExecutor : public EmbeddingExecutorBase {
   litert::Environment* GetEnvironment() const override;
 
  private:
+  absl::StatusOr<std::vector<float>> RunEncoderForTokens(
+      absl::Span<const int32_t> tokens);
+
   EmbeddingLiteRtCompiledModelExecutor(
       EmbeddingExecutorSettings executor_settings, litert::Environment& env,
       std::unique_ptr<ModelResources> resources,

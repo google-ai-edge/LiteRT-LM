@@ -21,6 +21,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/types/optional.h"  // from @com_google_absl
 #include "runtime/engine/io_types.h"
+#include "runtime/executor/embedding_executor_base.h"
 #include "runtime/proto/embedding_metadata.pb.h"
 
 namespace litert::lm {
@@ -33,12 +34,23 @@ struct EmbeddingOptions {
   // If true, automatically inserts the BOS, EOS, start of image, end of image,
   // start of audio, and end of audio tokens.
   bool insert_special_tokens = false;
+
+  // Strategy for handling inputs longer than the maximum supported signature
+  // length.
+  InputOverflowStrategy input_overflow_strategy =
+      InputOverflowStrategy::kChunkAndAverage;
 };
 
 // Represents the result of an embedding computation.
 struct EmbeddingResponse {
   // The computed embedding vector.
   std::vector<float> embedding;
+  // The length of the input.
+  int input_length = 0;
+  // If the input was truncated, contains the length it was truncated to.
+  std::optional<int> truncated_length = std::nullopt;
+  // The number of chunks the input was split into.
+  int num_chunks = 1;
 };
 
 // Interface for embedding models.

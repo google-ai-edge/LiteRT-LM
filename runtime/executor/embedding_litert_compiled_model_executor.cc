@@ -17,13 +17,16 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <iterator>
 #include <map>
 #include <memory>
 #include <optional>
 #include <utility>
 #include <vector>
 
+#include "absl/cleanup/cleanup.h"  // from @com_google_absl
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
+#include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/memory/memory.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
@@ -48,6 +51,7 @@
 #include "absl/strings/match.h"  // from @com_google_absl
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
 #include "runtime/components/model_resources.h"
+#include "runtime/executor/embedding_executor_base.h"
 #include "runtime/executor/embedding_executor_settings.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
@@ -226,31 +230,17 @@ EmbeddingLiteRtCompiledModelExecutor::Create(
 }
 
 absl::StatusOr<std::vector<float>>
-EmbeddingLiteRtCompiledModelExecutor::ComputeEmbedding(
-    const ExecutorInputs& inputs) {
-  ABSL_RETURN_IF_ERROR(embedding_lookup_->UpdateMultiModalEmbeddings(inputs));
-  if (per_layer_embedding_lookup_ != nullptr) {
-    ABSL_RETURN_IF_ERROR(
-        per_layer_embedding_lookup_->UpdateMultiModalEmbeddings(inputs));
-  }
-  ABSL_ASSIGN_OR_RETURN(auto text_data_ptr, inputs.GetTextDataPtr());
-  RET_CHECK_NE(text_data_ptr, nullptr) << "TextData cannot be null.";
-
-  LITERT_ASSIGN_OR_RETURN(
-      auto token_ids_vec,
-      CopyFromTensorBuffer<int32_t>(text_data_ptr->GetTokenIds()));
-
+EmbeddingLiteRtCompiledModelExecutor::RunEncoderForTokens(
+    absl::Span<const int32_t> tokens) {
   ABSL_ASSIGN_OR_RETURN(
       auto text_encoder_model,
       resources_->GetTFLiteModel(ModelType::kTfLiteTextEncoder));
 
-  // Find the smallest signature larger than the input size.
-  auto it = encoder_signatures_.lower_bound(token_ids_vec.size());
+  // Find the smallest signature larger than or equal to the input size.
+  auto it = encoder_signatures_.lower_bound(tokens.size());
   if (it == encoder_signatures_.end()) {
-    int max_available_length = encoder_signatures_.rbegin()->first;
-    return absl::InvalidArgumentError(absl::StrCat(
-        "Max input length of the text encoder is ", max_available_length,
-        ". Input length was ", token_ids_vec.size()));
+    return absl::InternalError(absl::StrCat(
+        "No suitable signature found for sequence length ", tokens.size()));
   }
   size_t signature_index = it->second;
 
@@ -292,8 +282,7 @@ EmbeddingLiteRtCompiledModelExecutor::ComputeEmbedding(
   }
 
   ABSL_RETURN_IF_ERROR(embedding_lookup_->LookupPrefill(
-      absl::MakeSpan(token_ids_vec.data(), token_ids_vec.size()),
-      &input_buffers[embeddings_buffer_index], /*token_offset=*/0));
+      tokens, &input_buffers[embeddings_buffer_index], /*token_offset=*/0));
 
   // Compute mask for text encoder. The mask masks out tokens outside of the
   // input sequence length, which can be smaller than the static size of the
@@ -308,24 +297,18 @@ EmbeddingLiteRtCompiledModelExecutor::ComputeEmbedding(
     LITERT_ASSIGN_OR_RETURN(auto mask_size_bytes, mask_buffer.Size());
     size_t mask_elements = mask_size_bytes / sizeof(float);
 
-    const size_t active_elements =
-        std::min(token_ids_vec.size(), mask_elements);
+    const size_t active_elements = std::min(tokens.size(), mask_elements);
     std::fill_n(mask_ptr, active_elements, 1.0f);
     if (active_elements < mask_elements) {
       std::fill(mask_ptr + active_elements, mask_ptr + mask_elements, 0.0f);
     }
   }
 
-  ABSL_RETURN_IF_ERROR(embedding_lookup_->CleanupMultiModalEmbeddings());
-
   if (per_layer_embeddings_buffer_index.has_value() &&
       per_layer_embedding_lookup_ != nullptr) {
     ABSL_RETURN_IF_ERROR(per_layer_embedding_lookup_->LookupPrefill(
-        absl::MakeSpan(token_ids_vec.data(), token_ids_vec.size()),
-        &input_buffers[*per_layer_embeddings_buffer_index],
+        tokens, &input_buffers[*per_layer_embeddings_buffer_index],
         /*token_offset=*/0));
-    ABSL_RETURN_IF_ERROR(
-        per_layer_embedding_lookup_->CleanupMultiModalEmbeddings());
   }
 
   LITERT_RETURN_IF_ERROR(
@@ -336,15 +319,131 @@ EmbeddingLiteRtCompiledModelExecutor::ComputeEmbedding(
   return output_vector;
 }
 
-absl::StatusOr<std::vector<std::vector<float>>>
+absl::StatusOr<EmbeddingOutput>
+EmbeddingLiteRtCompiledModelExecutor::ComputeEmbedding(
+    const ExecutorInputs& inputs, const ComputeEmbeddingOptions& options) {
+  ABSL_RETURN_IF_ERROR(embedding_lookup_->UpdateMultiModalEmbeddings(inputs));
+  if (per_layer_embedding_lookup_ != nullptr) {
+    ABSL_RETURN_IF_ERROR(
+        per_layer_embedding_lookup_->UpdateMultiModalEmbeddings(inputs));
+  }
+  auto cleanup =
+      absl::MakeCleanup([this]() {
+        auto status = embedding_lookup_->CleanupMultiModalEmbeddings();
+        if (!status.ok()) {
+          ABSL_LOG(WARNING)
+              << "Failed to cleanup multimodal embeddings: " << status;
+        }
+        if (per_layer_embedding_lookup_ != nullptr) {
+          status = per_layer_embedding_lookup_->CleanupMultiModalEmbeddings();
+          if (!status.ok()) {
+            ABSL_LOG(WARNING)
+                << "Failed to cleanup per layer multimodal embeddings: "
+                << status;
+          }
+        }
+      });
+
+  ABSL_ASSIGN_OR_RETURN(auto text_data_ptr, inputs.GetTextDataPtr());
+  RET_CHECK_NE(text_data_ptr, nullptr) << "TextData cannot be null.";
+
+  LITERT_ASSIGN_OR_RETURN(
+      auto token_ids_vec,
+      CopyFromTensorBuffer<int32_t>(text_data_ptr->GetTokenIds()));
+
+  int input_length = static_cast<int>(token_ids_vec.size());
+  if (encoder_signatures_.empty()) {
+    return absl::FailedPreconditionError("No encoder signatures available.");
+  }
+
+  size_t max_seq_len = std::prev(encoder_signatures_.end())->first;
+
+  if (token_ids_vec.size() > max_seq_len) {
+    switch (options.input_overflow_strategy) {
+      case InputOverflowStrategy::kError: {
+        return absl::InvalidArgumentError(
+            absl::StrCat("Input sequence length (", token_ids_vec.size(),
+                         ") exceeds maximum supported signature length (",
+                         max_seq_len, ")."));
+      }
+      case InputOverflowStrategy::kTruncate: {
+        if (!options.eos_token_ids.empty() &&
+            options.eos_token_ids.size() < max_seq_len) {
+          const size_t num_eos = options.eos_token_ids.size();
+          token_ids_vec.resize(max_seq_len);
+          std::copy(options.eos_token_ids.begin(), options.eos_token_ids.end(),
+                    token_ids_vec.end() - num_eos);
+        } else {
+          token_ids_vec.resize(max_seq_len);
+        }
+        LITERT_ASSIGN_OR_RETURN(
+            auto output_vector,
+            RunEncoderForTokens(absl::MakeSpan(token_ids_vec)));
+        return EmbeddingOutput{
+            .embedding = std::move(output_vector),
+            .input_length = input_length,
+            .truncated_length = static_cast<int>(max_seq_len),
+            .num_chunks = 1,
+        };
+      }
+      case InputOverflowStrategy::kChunkAndAverage: {
+        int num_chunks = static_cast<int>(
+            (token_ids_vec.size() + max_seq_len - 1) / max_seq_len);
+        std::vector<float> accumulated_embedding;
+        for (int i = 0; i < num_chunks; ++i) {
+          size_t start = i * max_seq_len;
+          size_t end = std::min(start + max_seq_len, token_ids_vec.size());
+          absl::Span<const int32_t> chunk_tokens =
+              absl::MakeSpan(token_ids_vec.data() + start, end - start);
+          LITERT_ASSIGN_OR_RETURN(auto chunk_embedding,
+                                  RunEncoderForTokens(chunk_tokens));
+          if (i == 0) {
+            accumulated_embedding = std::move(chunk_embedding);
+          } else {
+            if (accumulated_embedding.size() != chunk_embedding.size()) {
+              return absl::InternalError(
+                  "Mismatch in embedding output dimensions between chunks.");
+            }
+            for (size_t j = 0; j < accumulated_embedding.size(); ++j) {
+              accumulated_embedding[j] += chunk_embedding[j];
+            }
+          }
+        }
+        float scale = 1.0f / static_cast<float>(num_chunks);
+        for (float& val : accumulated_embedding) {
+          val *= scale;
+        }
+        return EmbeddingOutput{
+            .embedding = std::move(accumulated_embedding),
+            .input_length = input_length,
+            .truncated_length = std::nullopt,
+            .num_chunks = num_chunks,
+        };
+      }
+    }
+  }
+
+  // Input length <= max_seq_len
+  LITERT_ASSIGN_OR_RETURN(auto output_vector,
+                          RunEncoderForTokens(absl::MakeSpan(token_ids_vec)));
+  return EmbeddingOutput{
+      .embedding = std::move(output_vector),
+      .input_length = input_length,
+      .truncated_length = std::nullopt,
+      .num_chunks = 1,
+  };
+}
+
+absl::StatusOr<std::vector<EmbeddingOutput>>
 EmbeddingLiteRtCompiledModelExecutor::ComputeEmbeddingBatch(
-    const std::vector<ExecutorInputs>& batch_inputs) {
-  std::vector<std::vector<float>> batch_outputs;
+    const std::vector<ExecutorInputs>& batch_inputs,
+    const ComputeEmbeddingOptions& options) {
+  std::vector<EmbeddingOutput> batch_outputs;
   batch_outputs.reserve(batch_inputs.size());
   // Batch inference isn't supported yet. Loop over the batch for now.
   for (const auto& inputs : batch_inputs) {
-    ABSL_ASSIGN_OR_RETURN(auto embedding, ComputeEmbedding(inputs));
-    batch_outputs.push_back(std::move(embedding));
+    ABSL_ASSIGN_OR_RETURN(auto output, ComputeEmbedding(inputs, options));
+    batch_outputs.push_back(std::move(output));
   }
   return batch_outputs;
 }

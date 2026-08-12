@@ -41,12 +41,13 @@
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/test/matchers.h"  // from @litert
 #include "runtime/components/model_resources.h"
+#include "runtime/executor/embedding_executor_base.h"
 #include "runtime/executor/embedding_executor_settings.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
-#include "tensorflow/compiler/mlir/lite/schema/schema_generated.h"  // from @org_tensorflow
+#include "tflite/schema/schema_generated.h"  // from @litert
 
 namespace litert::lm {
 namespace {
@@ -442,9 +443,12 @@ TEST(EmbeddingLiteRtCompiledModelExecutorTest, ComputeEmbedding_Success) {
   ExecutorInputs inputs(ExecutorTextData(std::move(token_ids_buffer)),
                         std::nullopt, std::nullopt);
 
-  ASSERT_OK_AND_ASSIGN(auto embedding,
+  ASSERT_OK_AND_ASSIGN(auto output,
                        embedding_executor->ComputeEmbedding(inputs));
-  EXPECT_EQ(embedding.size(), 8);
+  EXPECT_EQ(output.embedding.size(), 8);
+  EXPECT_EQ(output.input_length, 1);
+  EXPECT_EQ(output.truncated_length, std::nullopt);
+  EXPECT_EQ(output.num_chunks, 1);
 }
 
 TEST(EmbeddingLiteRtCompiledModelExecutorTest, ComputeEmbeddingBatch_Success) {
@@ -498,11 +502,17 @@ TEST(EmbeddingLiteRtCompiledModelExecutorTest, ComputeEmbeddingBatch_Success) {
   batch_inputs.push_back(std::move(inputs1));
   batch_inputs.push_back(std::move(inputs2));
 
-  ASSERT_OK_AND_ASSIGN(auto batch_embeddings,
+  ASSERT_OK_AND_ASSIGN(auto batch_outputs,
                        embedding_executor->ComputeEmbeddingBatch(batch_inputs));
-  EXPECT_EQ(batch_embeddings.size(), 2);
-  EXPECT_EQ(batch_embeddings[0].size(), 8);
-  EXPECT_EQ(batch_embeddings[1].size(), 8);
+  EXPECT_EQ(batch_outputs.size(), 2);
+  EXPECT_EQ(batch_outputs[0].embedding.size(), 8);
+  EXPECT_EQ(batch_outputs[0].input_length, 1);
+  EXPECT_EQ(batch_outputs[0].truncated_length, std::nullopt);
+  EXPECT_EQ(batch_outputs[0].num_chunks, 1);
+  EXPECT_EQ(batch_outputs[1].embedding.size(), 8);
+  EXPECT_EQ(batch_outputs[1].input_length, 1);
+  EXPECT_EQ(batch_outputs[1].truncated_length, std::nullopt);
+  EXPECT_EQ(batch_outputs[1].num_chunks, 1);
 }
 
 TEST(EmbeddingLiteRtCompiledModelExecutorTest,
@@ -650,9 +660,12 @@ TEST(EmbeddingLiteRtCompiledModelExecutorTest,
   ExecutorInputs inputs(ExecutorTextData(std::move(token_ids_buffer)),
                         std::nullopt, std::nullopt);
 
-  ASSERT_OK_AND_ASSIGN(auto embedding,
+  ASSERT_OK_AND_ASSIGN(auto output,
                        embedding_executor->ComputeEmbedding(inputs));
-  EXPECT_EQ(embedding.size(), 8);
+  EXPECT_EQ(output.embedding.size(), 8);
+  EXPECT_EQ(output.input_length, 1);
+  EXPECT_EQ(output.truncated_length, std::nullopt);
+  EXPECT_EQ(output.num_chunks, 1);
 }
 
 TEST(EmbeddingLiteRtCompiledModelExecutorTest,
@@ -699,9 +712,12 @@ TEST(EmbeddingLiteRtCompiledModelExecutorTest,
     ExecutorInputs inputs(ExecutorTextData(std::move(token_ids_buffer)),
                           std::nullopt, std::nullopt);
 
-    ASSERT_OK_AND_ASSIGN(auto embedding,
+    ASSERT_OK_AND_ASSIGN(auto output,
                          embedding_executor->ComputeEmbedding(inputs));
-    EXPECT_EQ(embedding.size(), 12 * 8);
+    EXPECT_EQ(output.embedding.size(), 12 * 8);
+    EXPECT_EQ(output.input_length, 8);
+    EXPECT_EQ(output.truncated_length, std::nullopt);
+    EXPECT_EQ(output.num_chunks, 1);
   }
 
   // Case 2: Input size 16 -> should choose encoder_24.
@@ -717,32 +733,111 @@ TEST(EmbeddingLiteRtCompiledModelExecutorTest,
     ExecutorInputs inputs(ExecutorTextData(std::move(token_ids_buffer)),
                           std::nullopt, std::nullopt);
 
-    ASSERT_OK_AND_ASSIGN(auto embedding,
+    ASSERT_OK_AND_ASSIGN(auto output,
                          embedding_executor->ComputeEmbedding(inputs));
-    EXPECT_EQ(embedding.size(), 24 * 8);
+    EXPECT_EQ(output.embedding.size(), 24 * 8);
+    EXPECT_EQ(output.input_length, 16);
+    EXPECT_EQ(output.truncated_length, std::nullopt);
+    EXPECT_EQ(output.num_chunks, 1);
   }
 
-  // Case 3: Input size 32 -> should fail because it exceeds max signature
-  // length (24).
+  // Case 3: Input size 48 -> default Chunk and Average across 2 chunks of size
+  // 24 (both using encoder_24).
   {
-    alignas(LITERT_HOST_MEMORY_BUFFER_ALIGNMENT) int32_t token_data[32];
-    std::fill_n(token_data, 32, 42);
+    alignas(LITERT_HOST_MEMORY_BUFFER_ALIGNMENT) int32_t token_data[48];
+    std::fill_n(token_data, 48, 42);
     LITERT_ASSERT_OK_AND_ASSIGN(
         auto token_ids_buffer,
         TensorBuffer::CreateFromHostMemory(
-            env, RankedTensorType(ElementType::Int32, Layout(Dimensions({32}))),
+            env, RankedTensorType(ElementType::Int32, Layout(Dimensions({48}))),
             token_data, sizeof(token_data)));
 
     ExecutorInputs inputs(ExecutorTextData(std::move(token_ids_buffer)),
                           std::nullopt, std::nullopt);
 
-    auto embedding = embedding_executor->ComputeEmbedding(inputs);
-    EXPECT_FALSE(embedding.ok());
+    ASSERT_OK_AND_ASSIGN(auto output,
+                         embedding_executor->ComputeEmbedding(inputs));
+    EXPECT_EQ(output.embedding.size(), 24 * 8);
+    EXPECT_EQ(output.input_length, 48);
+    EXPECT_EQ(output.truncated_length, std::nullopt);
+    EXPECT_EQ(output.num_chunks, 2);
+  }
+
+  // Case 4: Input size 48 with kTruncate strategy -> truncates to max signature
+  // length (24).
+  {
+    alignas(LITERT_HOST_MEMORY_BUFFER_ALIGNMENT) int32_t token_data[48];
+    std::fill_n(token_data, 48, 42);
+    LITERT_ASSERT_OK_AND_ASSIGN(
+        auto token_ids_buffer,
+        TensorBuffer::CreateFromHostMemory(
+            env, RankedTensorType(ElementType::Int32, Layout(Dimensions({48}))),
+            token_data, sizeof(token_data)));
+
+    ExecutorInputs inputs(ExecutorTextData(std::move(token_ids_buffer)),
+                          std::nullopt, std::nullopt);
+
+    ComputeEmbeddingOptions options{
+        .input_overflow_strategy = InputOverflowStrategy::kTruncate,
+    };
+    ASSERT_OK_AND_ASSIGN(auto output,
+                         embedding_executor->ComputeEmbedding(inputs, options));
+    EXPECT_EQ(output.embedding.size(), 24 * 8);
+    EXPECT_EQ(output.input_length, 48);
+    EXPECT_EQ(output.truncated_length, 24);
+    EXPECT_EQ(output.num_chunks, 1);
+  }
+
+  // Case 5: Input size 48 with kError strategy -> returns InvalidArgumentError.
+  {
+    alignas(LITERT_HOST_MEMORY_BUFFER_ALIGNMENT) int32_t token_data[48];
+    std::fill_n(token_data, 48, 42);
+    LITERT_ASSERT_OK_AND_ASSIGN(
+        auto token_ids_buffer,
+        TensorBuffer::CreateFromHostMemory(
+            env, RankedTensorType(ElementType::Int32, Layout(Dimensions({48}))),
+            token_data, sizeof(token_data)));
+
+    ExecutorInputs inputs(ExecutorTextData(std::move(token_ids_buffer)),
+                          std::nullopt, std::nullopt);
+
+    ComputeEmbeddingOptions options{
+        .input_overflow_strategy = InputOverflowStrategy::kError,
+    };
+    auto result = embedding_executor->ComputeEmbedding(inputs, options);
     EXPECT_THAT(
-        embedding.status(),
+        result,
         StatusIs(absl::StatusCode::kInvalidArgument,
-                 HasSubstr("Max input length of the text encoder is 24. "
-                           "Input length was 32")));
+                 HasSubstr("exceeds maximum supported signature length")));
+  }
+
+  // Case 6: Input size 48 with kTruncate strategy and eos_token_ids ->
+  // truncates to max signature length (24) and preserves EOS token.
+  {
+    alignas(LITERT_HOST_MEMORY_BUFFER_ALIGNMENT) int32_t token_data[48];
+    for (int i = 0; i < 47; ++i) {
+      token_data[i] = i;
+    }
+    token_data[47] = 999;  // EOS token
+    LITERT_ASSERT_OK_AND_ASSIGN(
+        auto token_ids_buffer,
+        TensorBuffer::CreateFromHostMemory(
+            env, RankedTensorType(ElementType::Int32, Layout(Dimensions({48}))),
+            token_data, sizeof(token_data)));
+
+    ExecutorInputs inputs(ExecutorTextData(std::move(token_ids_buffer)),
+                          std::nullopt, std::nullopt);
+
+    ComputeEmbeddingOptions options{
+        .input_overflow_strategy = InputOverflowStrategy::kTruncate,
+        .eos_token_ids = {999},
+    };
+    ASSERT_OK_AND_ASSIGN(auto output,
+                         embedding_executor->ComputeEmbedding(inputs, options));
+    EXPECT_EQ(output.embedding.size(), 24 * 8);
+    EXPECT_EQ(output.input_length, 48);
+    EXPECT_EQ(output.truncated_length, 24);
+    EXPECT_EQ(output.num_chunks, 1);
   }
 }
 

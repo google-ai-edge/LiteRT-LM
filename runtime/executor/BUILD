@@ -938,7 +938,9 @@ cc_library(
         ":executor_settings_base",
         ":litert_compiled_model_executor_utils",
         ":llm_executor_io_types",
+        "@com_google_absl//absl/cleanup",
         "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/memory",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
@@ -969,6 +971,7 @@ cc_test(
     name = "embedding_litert_compiled_model_executor_test",
     srcs = ["embedding_litert_compiled_model_executor_test.cc"],
     deps = [
+        ":embedding_executor_base",
         ":embedding_executor_settings",
         ":embedding_litert_compiled_model_executor",
         ":executor_settings_base",
@@ -990,7 +993,7 @@ cc_test(
         "//runtime/components:model_resources",
         "//runtime/util:scoped_file",
         "//runtime/util:test_utils",
-        "@org_tensorflow//tensorflow/compiler/mlir/lite/schema:schema_fbs",
+        "@litert//tflite/schema:schema_fbs",
     ],
 )
 

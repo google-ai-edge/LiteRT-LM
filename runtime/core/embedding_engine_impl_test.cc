@@ -420,6 +420,9 @@ TEST(EmbeddingEngineImplTest, ComputeEmbeddingSuccess) {
   ASSERT_OK_AND_ASSIGN(auto response,
                        engine->ComputeEmbedding(contents, options));
   EXPECT_FALSE(response.embedding.empty());
+  EXPECT_EQ(response.input_length, 3);
+  EXPECT_EQ(response.truncated_length, std::nullopt);
+  EXPECT_EQ(response.num_chunks, 1);
 }
 
 TEST(EmbeddingEngineImplTest, ComputeEmbeddingWithNormalization) {
@@ -453,6 +456,9 @@ TEST(EmbeddingEngineImplTest, ComputeEmbeddingWithNormalization) {
   ASSERT_OK_AND_ASSIGN(auto response,
                        engine->ComputeEmbedding(contents, options));
   EXPECT_FALSE(response.embedding.empty());
+  EXPECT_EQ(response.input_length, 3);
+  EXPECT_EQ(response.truncated_length, std::nullopt);
+  EXPECT_EQ(response.num_chunks, 1);
 
   float sum_sq = 0.0f;
   for (float val : response.embedding) {
@@ -502,7 +508,13 @@ TEST(EmbeddingEngineImplTest, ComputeEmbeddingBatchSuccess) {
                        engine->ComputeEmbeddingBatch(batch_contents, options));
   EXPECT_EQ(responses.size(), 2);
   EXPECT_FALSE(responses[0].embedding.empty());
+  EXPECT_EQ(responses[0].input_length, 3);
+  EXPECT_EQ(responses[0].truncated_length, std::nullopt);
+  EXPECT_EQ(responses[0].num_chunks, 1);
   EXPECT_FALSE(responses[1].embedding.empty());
+  EXPECT_EQ(responses[1].input_length, 2);
+  EXPECT_EQ(responses[1].truncated_length, std::nullopt);
+  EXPECT_EQ(responses[1].num_chunks, 1);
 }
 
 TEST(EmbeddingEngineImplTest, ComputeEmbeddingWithBenchmarkEnabled) {
@@ -741,23 +753,36 @@ TEST(EmbeddingEngineImplTest,
 
 class FakeEmbeddingExecutor : public EmbeddingExecutorBase {
  public:
-  absl::StatusOr<std::vector<float>> ComputeEmbedding(
-      const ExecutorInputs& inputs) override {
+  using EmbeddingExecutorBase::ComputeEmbedding;
+  using EmbeddingExecutorBase::ComputeEmbeddingBatch;
+
+  absl::StatusOr<EmbeddingOutput> ComputeEmbedding(
+      const ExecutorInputs& inputs,
+      const ComputeEmbeddingOptions& options) override {
     auto text_token_ids = inputs.GetTextTokenIdsPtr();
+    int input_length = 0;
     if (text_token_ids.ok() && *text_token_ids != nullptr) {
       auto span = ReferTensorBufferAsSpan<int>(**text_token_ids);
       if (span.HasValue()) {
         last_token_ids_.assign(span->begin(), span->end());
+        input_length = static_cast<int>(last_token_ids_.size());
       }
     }
-    return std::vector<float>{1.0f, 2.0f, 3.0f};
+    last_options_ = options;
+    return EmbeddingOutput{
+        .embedding = std::vector<float>{1.0f, 2.0f, 3.0f},
+        .input_length = input_length,
+        .truncated_length = std::nullopt,
+        .num_chunks = 1,
+    };
   }
 
-  absl::StatusOr<std::vector<std::vector<float>>> ComputeEmbeddingBatch(
-      const std::vector<ExecutorInputs>& batch_inputs) override {
-    std::vector<std::vector<float>> results;
+  absl::StatusOr<std::vector<EmbeddingOutput>> ComputeEmbeddingBatch(
+      const std::vector<ExecutorInputs>& batch_inputs,
+      const ComputeEmbeddingOptions& options) override {
+    std::vector<EmbeddingOutput> results;
     for (const auto& inputs : batch_inputs) {
-      LITERT_ASSIGN_OR_RETURN(auto result, ComputeEmbedding(inputs));
+      LITERT_ASSIGN_OR_RETURN(auto result, ComputeEmbedding(inputs, options));
       results.push_back(std::move(result));
     }
     return results;
@@ -775,8 +800,13 @@ class FakeEmbeddingExecutor : public EmbeddingExecutorBase {
 
   const std::vector<int>& GetLastTokenIds() const { return last_token_ids_; }
 
+  const ComputeEmbeddingOptions& GetLastOptions() const {
+    return last_options_;
+  }
+
  private:
   std::vector<int> last_token_ids_;
+  ComputeEmbeddingOptions last_options_;
 };
 
 class FakeVisionExecutor : public VisionExecutor {
@@ -1251,6 +1281,40 @@ TEST(EmbeddingEngineImplTest,
 
   ASSERT_OK(engine.ComputeEmbedding(contents, options).status());
   EXPECT_THAT(raw_executor->GetLastTokenIds(), ElementsAre(10, 11));
+  EXPECT_THAT(raw_executor->GetLastOptions().eos_token_ids, ElementsAre());
+}
+
+TEST(EmbeddingEngineImplTest,
+     ComputeEmbeddingWithInsertSpecialTokensPassesEosTokenIdsToExecutor) {
+  ASSERT_OK_AND_ASSIGN(auto env, CreateTestEnvironment());
+  auto tokenizer = std::make_unique<MockTokenizer>();
+  EXPECT_CALL(*tokenizer, TextToTokenIds("hello"))
+      .WillRepeatedly(Return(std::vector<int>{10, 11}));
+  auto fake_embedding_executor = std::make_unique<FakeEmbeddingExecutor>();
+  auto* raw_executor = fake_embedding_executor.get();
+
+  SpecialTokens special_tokens;
+  special_tokens.bos_token_ids = {2};
+  special_tokens.eos_token_ids = {1};
+
+  EmbeddingEngineImpl engine(std::move(env), std::move(tokenizer),
+                             std::move(fake_embedding_executor),
+                             /*vision_executor=*/nullptr,
+                             /*audio_executor=*/nullptr,
+                             /*benchmark_info=*/std::nullopt, special_tokens);
+
+  std::vector<InputData> contents;
+  contents.push_back(InputText(std::string("hello")));
+
+  EmbeddingOptions options;
+  options.insert_special_tokens = true;
+  options.input_overflow_strategy = InputOverflowStrategy::kTruncate;
+
+  ASSERT_OK(engine.ComputeEmbedding(contents, options).status());
+  EXPECT_THAT(raw_executor->GetLastTokenIds(), ElementsAre(2, 10, 11, 1));
+  EXPECT_THAT(raw_executor->GetLastOptions().eos_token_ids, ElementsAre(1));
+  EXPECT_EQ(raw_executor->GetLastOptions().input_overflow_strategy,
+            InputOverflowStrategy::kTruncate);
 }
 
 }  // namespace

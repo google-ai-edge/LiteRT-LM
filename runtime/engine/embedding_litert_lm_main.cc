@@ -196,6 +196,12 @@ absl::Status MainHelper(int argc, char** argv) {
   EmbeddingResponse response = *std::move(response_result);
 
   std::cout << "\n================ RESULT ================" << std::endl;
+  std::cout << "Input length: " << response.input_length << std::endl;
+  if (response.truncated_length.has_value()) {
+    std::cout << "Truncated length: " << *response.truncated_length
+              << std::endl;
+  }
+  std::cout << "Number of chunks: " << response.num_chunks << std::endl;
   std::cout << "Embedding vector dimension: " << response.embedding.size()
             << std::endl;
 
