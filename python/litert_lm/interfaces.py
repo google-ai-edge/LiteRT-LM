@@ -26,6 +26,8 @@ import os
 import sys
 from typing import Any
 
+from typing_extensions import Self
+
 from ._ffi import ActivationDataType
 from ._ffi import LiteRtLmConstraintProviderType
 from ._messages import Contents
@@ -47,7 +49,6 @@ class Backend(abc.ABC):
   GPU: type[GPU]
   NPU: type[NPU]
   # pylint: enable=invalid-name
-
   def get_name(self) -> str:
     """Returns the string representation of the backend (e.g., 'cpu', 'gpu', 'npu')."""
     return type(self).__name__.lower()
@@ -114,6 +115,7 @@ class NPU(Backend):
             f" platform is '{sys.platform}'."
         )
 
+      ov: Any = None
       try:
         import openvino as ov  # pylint: disable=g-import-not-at-top  # pytype: disable=import-error
       except ImportError as e:
@@ -176,9 +178,7 @@ class ToolEventHandler(abc.ABC):
     """
 
   @abc.abstractmethod
-  def process_tool_response(
-      self, tool_response: dict[str, Any]
-  ) -> dict[str, Any]:
+  def process_tool_response(self, tool_response: Any) -> Any:
     """Handles a tool response.
 
     This allows the user to clean up or modify the response before it is sent
@@ -417,7 +417,7 @@ class AbstractEngine(abc.ABC):
   use_ringbuffers_local_attention: bool | None = None
   enable_ynnpack: bool = False
 
-  def __enter__(self) -> AbstractEngine:
+  def __enter__(self: Self) -> Self:
     """Initializes the engine resources."""
     return self
 
@@ -627,7 +627,7 @@ class AbstractConversation(abc.ABC):
     self.lora_config = lora_config
     self.max_output_tokens = max_output_tokens
 
-  def __enter__(self) -> AbstractConversation:
+  def __enter__(self: Self) -> Self:
     """Initializes the conversation."""
     return self
 
@@ -897,7 +897,7 @@ class AbstractSession(abc.ABC):
   def __init__(self):
     """Initializes the instance."""
 
-  def __enter__(self) -> AbstractSession:
+  def __enter__(self: Self) -> Self:
     """Initializes the session."""
     return self
 

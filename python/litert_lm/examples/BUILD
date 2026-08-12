@@ -18,6 +18,7 @@ pytype_strict_binary(
     name = "multimodal_main",
     srcs = ["multimodal_main.py"],
     tags = ["notap"],
+    type_checking = "pyrefly",
     deps = [
         "//python/litert_lm",
         "@absl_py//absl:app",
@@ -30,6 +31,7 @@ pytype_strict_binary(
     name = "tool_main",
     srcs = ["tool_main.py"],
     tags = ["notap"],
+    type_checking = "pyrefly",
     deps = [
         "//python/litert_lm",
         "@absl_py//absl:app",
