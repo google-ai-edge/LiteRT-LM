@@ -185,5 +185,40 @@ TEST(ModelTypeUtilsTest, GetDefaultJinjaPromptTemplateWithImageAndAudio) {
             "<start_of_turn>model\n");
 }
 
+TEST(ModelTypeUtilsTest, GetModelTypeName) {
+  proto::LlmModelType model_type;
+  EXPECT_EQ(GetModelTypeName(model_type), "Not set");
+
+  model_type.mutable_generic_model();
+  EXPECT_EQ(GetModelTypeName(model_type), "generic_model");
+
+  model_type.mutable_gemma3n();
+  EXPECT_EQ(GetModelTypeName(model_type), "gemma3n");
+
+  model_type.mutable_function_gemma();
+  EXPECT_EQ(GetModelTypeName(model_type), "function_gemma");
+
+  model_type.mutable_gemma3();
+  EXPECT_EQ(GetModelTypeName(model_type), "gemma3");
+
+  model_type.mutable_qwen3();
+  EXPECT_EQ(GetModelTypeName(model_type), "qwen3");
+
+  model_type.mutable_qwen2p5();
+  EXPECT_EQ(GetModelTypeName(model_type), "qwen2p5");
+
+  model_type.mutable_gemma4();
+  EXPECT_EQ(GetModelTypeName(model_type), "gemma4");
+
+  model_type.mutable_fast_vlm();
+  EXPECT_EQ(GetModelTypeName(model_type), "fast_vlm");
+
+  model_type.mutable_lfm2();
+  EXPECT_EQ(GetModelTypeName(model_type), "lfm2");
+
+  model_type.mutable_minicpm5();
+  EXPECT_EQ(GetModelTypeName(model_type), "minicpm5");
+}
+
 }  // namespace
 }  // namespace litert::lm

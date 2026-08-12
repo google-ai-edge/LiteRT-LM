@@ -24,6 +24,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/strings/substitute.h"  // from @com_google_absl
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/proto/llm_model_type.pb.h"
@@ -491,6 +492,34 @@ absl::StatusOr<std::string> GetDefaultJinjaPromptTemplate(
     default:
       return absl::InvalidArgumentError("Unsupported model type for template.");
   }
+}
+
+absl::string_view GetModelTypeName(const proto::LlmModelType& model_type) {
+  switch (model_type.model_type_case()) {
+    case proto::LlmModelType::kGenericModel:
+      return "generic_model";
+    case proto::LlmModelType::kGemma3N:
+      return "gemma3n";
+    case proto::LlmModelType::kFunctionGemma:
+      return "function_gemma";
+    case proto::LlmModelType::kGemma3:
+      return "gemma3";
+    case proto::LlmModelType::kQwen3:
+      return "qwen3";
+    case proto::LlmModelType::kQwen2P5:
+      return "qwen2p5";
+    case proto::LlmModelType::kGemma4:
+      return "gemma4";
+    case proto::LlmModelType::kFastVlm:
+      return "fast_vlm";
+    case proto::LlmModelType::kLfm2:
+      return "lfm2";
+    case proto::LlmModelType::kMinicpm5:
+      return "minicpm5";
+    case proto::LlmModelType::MODEL_TYPE_NOT_SET:
+      return "Not set";
+  }
+  return "Unknown";
 }
 
 }  // namespace litert::lm
