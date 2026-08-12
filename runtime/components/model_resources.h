@@ -226,6 +226,20 @@ class ModelResources {
   GetEmbeddingMetadata() {
     return absl::UnimplementedError("GetEmbeddingMetadata is not implemented.");
   }
+
+  // Returns the system metadata bool value for the given key.
+  // If not found, returns std::nullopt.
+  virtual std::optional<bool> GetSystemMetadataBool(
+      absl::string_view key) const {
+    return std::nullopt;
+  }
+
+  // Returns the system metadata string value for the given key.
+  // If not found, returns std::nullopt.
+  virtual std::optional<std::string> GetSystemMetadataString(
+      absl::string_view key) const {
+    return std::nullopt;
+  }
 };
 
 }  // namespace litert::lm

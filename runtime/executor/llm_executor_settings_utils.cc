@@ -29,6 +29,7 @@
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_options.h"  // from @litert
 #include "litert/cc/options/litert_gpu_options.h"  // from @litert
+#include "runtime/components/model_resources.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/executor/llm_executor_settings.h"
@@ -67,7 +68,7 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
     const LlmExecutorSettings& executor_settings,
     const ActivationDataType& activation_data_type,
     std::optional<ModelSignatures*> signatures,
-    std::optional<std::string> cache_suffix) {
+    std::optional<std::string> cache_suffix, const ModelResources* resources) {
   LITERT_ASSIGN_OR_RETURN(auto compilation_options, Options::Create());
   std::string cache_path = executor_settings.GetCacheDir();
 
@@ -268,7 +269,15 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
       const uint32_t num_threads = cpu_config.number_of_threads;
       ABSL_RETURN_IF_ERROR(
           SetCpuOptions(cpu_compilation_options, num_threads));
-      cpu_compilation_options.SetEnableYNNPack(cpu_config.enable_ynnpack);
+      bool enable_ynnpack = cpu_config.enable_ynnpack;
+      if (resources != nullptr) {
+        auto force_enable_ynnpack =
+            resources->GetSystemMetadataBool("force_enable_ynnpack");
+        if (force_enable_ynnpack.value_or(false)) {
+          enable_ynnpack = true;
+        }
+      }
+      cpu_compilation_options.SetEnableYNNPack(enable_ynnpack);
       auto weight_cache_file = executor_settings.GetWeightCacheFile(
           absl::StrCat(cache_suffix.value_or(""),
                        ExecutorSettingsBase::kXnnpackCacheSuffix),
