@@ -66,6 +66,7 @@ cc_library(
         ":io_types",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/types:optional",
+        "//runtime/proto:embedding_metadata_cc_proto",
     ],
 )
 

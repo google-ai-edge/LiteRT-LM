@@ -15,11 +15,13 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_ENGINE_EMBEDDING_ENGINE_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_ENGINE_EMBEDDING_ENGINE_H_
 
+#include <optional>
 #include <vector>
 
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/types/optional.h"  // from @com_google_absl
 #include "runtime/engine/io_types.h"
+#include "runtime/proto/embedding_metadata.pb.h"
 
 namespace litert::lm {
 
@@ -69,6 +71,10 @@ class EmbeddingEngine {
 
   // Returns the mutable benchmark info of the engine.
   virtual BenchmarkInfo* GetMutableBenchmarkInfo() = 0;
+
+  // Returns the embedding metadata of the engine.
+  virtual const std::optional<proto::EmbeddingMetadata>& GetEmbeddingMetadata()
+      const = 0;
 };
 
 }  // namespace litert::lm

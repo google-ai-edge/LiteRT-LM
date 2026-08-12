@@ -94,11 +94,14 @@ class MockTokenizer : public Tokenizer {
 
 class FakeModelResources : public ModelResources {
  public:
-  FakeModelResources(std::unique_ptr<ModelResources> delegate, bool has_vision,
-                     bool has_audio)
+  explicit FakeModelResources(
+      std::unique_ptr<ModelResources> delegate, bool has_vision = false,
+      bool has_audio = false,
+      std::optional<const proto::EmbeddingMetadata*> metadata = std::nullopt)
       : delegate_(std::move(delegate)),
         has_vision_(has_vision),
-        has_audio_(has_audio) {}
+        has_audio_(has_audio),
+        metadata_(metadata) {}
   ~FakeModelResources() override = default;
 
   absl::StatusOr<const litert::Model*> GetTFLiteModel(
@@ -153,6 +156,9 @@ class FakeModelResources : public ModelResources {
 
   absl::StatusOr<const proto::EmbeddingMetadata*> GetEmbeddingMetadata()
       override {
+    if (metadata_.has_value()) {
+      return *metadata_;
+    }
     return delegate_->GetEmbeddingMetadata();
   }
 
@@ -165,6 +171,7 @@ class FakeModelResources : public ModelResources {
   std::unique_ptr<ModelResources> delegate_;
   bool has_vision_;
   bool has_audio_;
+  std::optional<const proto::EmbeddingMetadata*> metadata_;
 };
 
 absl::StatusOr<std::unique_ptr<ModelResources>> CreateTestModelResources(
@@ -304,6 +311,82 @@ TEST(EmbeddingEngineImplTest, CreateWithSettingsSuccess) {
 
   auto engine = EmbeddingEngineImpl::Create(std::move(settings));
   EXPECT_OK(engine.status());
+}
+
+TEST(EmbeddingEngineImplTest, GetEmbeddingMetadataFromSettings) {
+  const std::string& model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                   std::string(kTestEmbeddingModelPath))
+                                      .string();
+  ASSERT_OK_AND_ASSIGN(auto model_assets, ModelAssets::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(auto resources, CreateTestModelResources(model_path));
+  ASSERT_OK_AND_ASSIGN(auto env, CreateTestEnvironment());
+  auto tokenizer = std::make_unique<MockTokenizer>();
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+
+  proto::EmbeddingMetadata expected_metadata;
+  expected_metadata.mutable_embedding_model_type();
+  settings.GetMutableEmbeddingMetadata() = expected_metadata;
+
+  ASSERT_OK_AND_ASSIGN(
+      auto engine,
+      EmbeddingEngineImpl::Create(std::move(resources), std::move(env),
+                                  std::move(tokenizer), std::move(settings)));
+
+  const auto& metadata = engine->GetEmbeddingMetadata();
+  ASSERT_TRUE(metadata.has_value());
+  EXPECT_TRUE(metadata->has_embedding_model_type());
+}
+
+TEST(EmbeddingEngineImplTest, GetEmbeddingMetadataFromResources) {
+  const std::string& model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                   std::string(kTestEmbeddingModelPath))
+                                      .string();
+  ASSERT_OK_AND_ASSIGN(auto model_assets, ModelAssets::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(auto real_resources,
+                       CreateTestModelResources(model_path));
+  proto::EmbeddingMetadata expected_metadata;
+  expected_metadata.mutable_embedding_model_type();
+  auto resources = std::make_unique<FakeModelResources>(
+      std::move(real_resources), /*has_vision=*/false, /*has_audio=*/false,
+      &expected_metadata);
+  ASSERT_OK_AND_ASSIGN(auto env, CreateTestEnvironment());
+  auto tokenizer = std::make_unique<MockTokenizer>();
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+
+  ASSERT_OK_AND_ASSIGN(
+      auto engine,
+      EmbeddingEngineImpl::Create(std::move(resources), std::move(env),
+                                  std::move(tokenizer), std::move(settings)));
+
+  const auto& metadata = engine->GetEmbeddingMetadata();
+  ASSERT_TRUE(metadata.has_value());
+  EXPECT_TRUE(metadata->has_embedding_model_type());
+}
+
+TEST(EmbeddingEngineImplTest, GetEmbeddingMetadataNullByDefault) {
+  const std::string& model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                   std::string(kTestEmbeddingModelPath))
+                                      .string();
+  ASSERT_OK_AND_ASSIGN(auto model_assets, ModelAssets::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(auto real_resources,
+                       CreateTestModelResources(model_path));
+  auto resources = std::make_unique<FakeModelResources>(
+      std::move(real_resources), /*has_vision=*/false, /*has_audio=*/false,
+      /*metadata=*/nullptr);
+  ASSERT_OK_AND_ASSIGN(auto env, CreateTestEnvironment());
+  auto tokenizer = std::make_unique<MockTokenizer>();
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+
+  ASSERT_OK_AND_ASSIGN(
+      auto engine,
+      EmbeddingEngineImpl::Create(std::move(resources), std::move(env),
+                                  std::move(tokenizer), std::move(settings)));
+
+  const auto& metadata = engine->GetEmbeddingMetadata();
+  EXPECT_FALSE(metadata.has_value());
 }
 
 TEST(EmbeddingEngineImplTest, ComputeEmbeddingSuccess) {

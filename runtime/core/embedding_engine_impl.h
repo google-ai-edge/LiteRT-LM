@@ -29,6 +29,7 @@
 #include "runtime/executor/embedding_executor_base.h"
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/vision_executor.h"
+#include "runtime/proto/embedding_metadata.pb.h"
 #include "runtime/util/litert_util.h"
 #include "support/preprocessor/image_preprocessor.h"
 #include "support/tokenizer/tokenizer.h"
@@ -74,7 +75,8 @@ class EmbeddingEngineImpl : public EmbeddingEngine {
       std::unique_ptr<::litert::support::ImagePreprocessor> image_preprocessor =
           nullptr,
       std::optional<::litert::support::ImagePreprocessParameter>
-          image_preprocess_parameter = std::nullopt);
+          image_preprocess_parameter = std::nullopt,
+      std::optional<proto::EmbeddingMetadata> metadata = std::nullopt);
 
   ~EmbeddingEngineImpl() override = default;
 
@@ -108,6 +110,10 @@ class EmbeddingEngineImpl : public EmbeddingEngine {
     return image_preprocessor_.get();
   }
 
+  // Returns the embedding metadata of the engine.
+  const std::optional<proto::EmbeddingMetadata>& GetEmbeddingMetadata()
+      const override;
+
  private:
   absl::StatusOr<std::vector<InputData>> InsertSpecialTokens(
       const std::vector<InputData>& contents) const;
@@ -128,6 +134,7 @@ class EmbeddingEngineImpl : public EmbeddingEngine {
   std::unique_ptr<::litert::support::ImagePreprocessor> image_preprocessor_;
   std::optional<::litert::support::ImagePreprocessParameter>
       image_preprocess_parameter_;
+  std::optional<proto::EmbeddingMetadata> metadata_;
 };
 
 }  // namespace litert::lm

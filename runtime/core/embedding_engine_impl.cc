@@ -149,25 +149,24 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
     return absl::InvalidArgumentError("Tokenizer cannot be null.");
   }
 
-  // Extract EmbeddingMetadata if available from settings or resources.
-  const proto::EmbeddingMetadata* embedding_metadata = nullptr;
-  if (settings.GetEmbeddingMetadata().has_value()) {
-    embedding_metadata = &*settings.GetEmbeddingMetadata();
-  } else {
+  // Initialize metadata.
+  std::optional<proto::EmbeddingMetadata> metadata =
+      settings.GetEmbeddingMetadata();
+  if (!metadata.has_value()) {
     auto resources_metadata = resources->GetEmbeddingMetadata();
     if (resources_metadata.ok() && *resources_metadata != nullptr) {
-      embedding_metadata = *resources_metadata;
+      metadata = **resources_metadata;
     }
   }
 
   SpecialTokens special_tokens;
   std::optional<::litert::support::ImagePreprocessParameter>
       image_preprocess_parameter = std::nullopt;
-  if (embedding_metadata != nullptr) {
-    LITERT_ASSIGN_OR_RETURN(
-        special_tokens, ExtractSpecialTokens(*embedding_metadata, *tokenizer));
+  if (metadata.has_value()) {
+    LITERT_ASSIGN_OR_RETURN(special_tokens,
+                            ExtractSpecialTokens(*metadata, *tokenizer));
     image_preprocess_parameter =
-        ExtractImagePreprocessParameter(*embedding_metadata);
+        ExtractImagePreprocessParameter(*metadata);
   }
 
   // Initialize BenchmarkInfo if benchmarking is enabled and it wasn't passed
@@ -232,7 +231,8 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
       std::move(env), std::move(tokenizer), std::move(embedding_executor),
       std::move(vision_executor), std::move(audio_executor),
       std::move(benchmark_info), std::move(special_tokens),
-      std::move(image_preprocessor), std::move(image_preprocess_parameter));
+      std::move(image_preprocessor), std::move(image_preprocess_parameter),
+      std::move(metadata));
 }
 
 // static
@@ -299,7 +299,8 @@ EmbeddingEngineImpl::EmbeddingEngineImpl(
     std::optional<BenchmarkInfo> benchmark_info, SpecialTokens special_tokens,
     std::unique_ptr<::litert::support::ImagePreprocessor> image_preprocessor,
     std::optional<::litert::support::ImagePreprocessParameter>
-        image_preprocess_parameter)
+        image_preprocess_parameter,
+    std::optional<proto::EmbeddingMetadata> metadata)
     : env_(std::move(env)),
       tokenizer_(std::move(tokenizer)),
       embedding_executor_(std::move(embedding_executor)),
@@ -308,7 +309,8 @@ EmbeddingEngineImpl::EmbeddingEngineImpl(
       benchmark_info_(std::move(benchmark_info)),
       special_tokens_(std::move(special_tokens)),
       image_preprocessor_(std::move(image_preprocessor)),
-      image_preprocess_parameter_(std::move(image_preprocess_parameter)) {}
+      image_preprocess_parameter_(std::move(image_preprocess_parameter)),
+      metadata_(std::move(metadata)) {}
 
 absl::StatusOr<std::vector<InputData>> EmbeddingEngineImpl::InsertSpecialTokens(
     const std::vector<InputData>& contents) const {
@@ -618,6 +620,11 @@ BenchmarkInfo* EmbeddingEngineImpl::GetMutableBenchmarkInfo() {
     benchmark_info_ = BenchmarkInfo(proto::BenchmarkParams());
   }
   return &(*benchmark_info_);
+}
+
+const std::optional<proto::EmbeddingMetadata>&
+EmbeddingEngineImpl::GetEmbeddingMetadata() const {
+  return metadata_;
 }
 
 }  // namespace litert::lm
