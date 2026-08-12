@@ -528,6 +528,8 @@ cc_library(
         "//runtime/util:litert_status_util",
         "//runtime/util:litert_util",
         "//runtime/util:tensor_buffer_util",
+        "//support/preprocessor:image_preprocessor",
+        "//support/preprocessor:image_preprocessor_impl",  # buildcleaner: keep
         "//support/tokenizer",
         "//support/util:io_types",
     ],
@@ -553,6 +555,7 @@ cc_test(
         "@litert//litert/cc:litert_layout",
         "@litert//litert/cc:litert_macros",
         "@litert//litert/cc:litert_model",
+        "@litert//litert/cc:litert_ranked_tensor_type",
         "@litert//litert/cc:litert_tensor_buffer",
         "@litert//litert/cc:litert_tensor_buffer_types",
         "//runtime/components:model_resources",
@@ -573,6 +576,8 @@ cc_test(
         "//runtime/util:litert_util",
         "//runtime/util:scoped_file",
         "//runtime/util:test_utils",
+        "//support/preprocessor:image_preprocessor",
+        "//support/preprocessor:image_preprocessor_impl",  # buildcleaner: keep
         "//support/tokenizer",
     ],
 )

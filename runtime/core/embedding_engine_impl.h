@@ -30,6 +30,7 @@
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/vision_executor.h"
 #include "runtime/util/litert_util.h"
+#include "support/preprocessor/image_preprocessor.h"
 #include "support/tokenizer/tokenizer.h"
 
 namespace litert::lm {
@@ -67,7 +68,11 @@ class EmbeddingEngineImpl : public EmbeddingEngine {
       std::unique_ptr<VisionExecutor> vision_executor = nullptr,
       std::unique_ptr<AudioExecutor> audio_executor = nullptr,
       std::optional<BenchmarkInfo> benchmark_info = std::nullopt,
-      SpecialTokens special_tokens = {});
+      SpecialTokens special_tokens = {},
+      std::unique_ptr<::litert::support::ImagePreprocessor> image_preprocessor =
+          nullptr,
+      std::optional<::litert::support::ImagePreprocessParameter>
+          image_preprocess_parameter = std::nullopt);
 
   ~EmbeddingEngineImpl() override = default;
 
@@ -90,6 +95,17 @@ class EmbeddingEngineImpl : public EmbeddingEngine {
   // Returns the special tokens configured for the engine.
   const SpecialTokens& GetSpecialTokens() const { return special_tokens_; }
 
+  // Returns the image preprocess parameter configured for the engine.
+  const std::optional<::litert::support::ImagePreprocessParameter>&
+  GetImagePreprocessParameter() const {
+    return image_preprocess_parameter_;
+  }
+
+  // Returns the image preprocessor configured for the engine.
+  const ::litert::support::ImagePreprocessor* GetImagePreprocessor() const {
+    return image_preprocessor_.get();
+  }
+
  private:
   absl::StatusOr<std::vector<InputData>> InsertSpecialTokens(
       const std::vector<InputData>& contents) const;
@@ -107,6 +123,9 @@ class EmbeddingEngineImpl : public EmbeddingEngine {
   std::unique_ptr<AudioExecutor> audio_executor_;
   std::optional<BenchmarkInfo> benchmark_info_;
   SpecialTokens special_tokens_;
+  std::unique_ptr<::litert::support::ImagePreprocessor> image_preprocessor_;
+  std::optional<::litert::support::ImagePreprocessParameter>
+      image_preprocess_parameter_;
 };
 
 }  // namespace litert::lm

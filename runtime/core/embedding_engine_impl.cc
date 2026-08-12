@@ -49,6 +49,7 @@
 #include "runtime/util/litert_util.h"
 #include "runtime/util/status_macros.h"
 #include "runtime/util/tensor_buffer_util.h"
+#include "support/preprocessor/image_preprocessor.h"
 #include "support/tokenizer/tokenizer.h"
 #include "support/util/io_types.h"
 
@@ -78,6 +79,15 @@ absl::StatusOr<SpecialTokens> ExtractSpecialTokens(
   }
   const auto& model_type = metadata.embedding_model_type();
   return special_tokens;
+}
+
+std::optional<::litert::support::ImagePreprocessParameter>
+ExtractImagePreprocessParameter(const proto::EmbeddingMetadata& metadata) {
+  if (!metadata.has_embedding_model_type()) {
+    return std::nullopt;
+  }
+  const auto& model_type = metadata.embedding_model_type();
+  return std::nullopt;
 }
 
 std::vector<float> L2Norm(const std::vector<float>& vec) {
@@ -141,9 +151,13 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
   }
 
   SpecialTokens special_tokens;
+  std::optional<::litert::support::ImagePreprocessParameter>
+      image_preprocess_parameter = std::nullopt;
   if (embedding_metadata != nullptr) {
     LITERT_ASSIGN_OR_RETURN(
         special_tokens, ExtractSpecialTokens(*embedding_metadata, *tokenizer));
+    image_preprocess_parameter =
+        ExtractImagePreprocessParameter(*embedding_metadata);
   }
 
   // Initialize BenchmarkInfo if benchmarking is enabled and it wasn't passed
@@ -182,6 +196,14 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
   special_tokens.has_end_of_audio_model =
       resources->GetTFLiteModel(ModelType::kTfLiteEndOfAudio).ok();
 
+  // Initialize the image preprocessor if requisite parameters are available in
+  // metadata.
+  std::unique_ptr<::litert::support::ImagePreprocessor> image_preprocessor =
+      nullptr;
+  if (image_preprocess_parameter.has_value()) {
+    image_preprocessor = ::litert::support::ImagePreprocessor::Create();
+  }
+
   // Initialize the embedding model executor.
   LITERT_ASSIGN_OR_RETURN(
       auto embedding_executor,
@@ -199,7 +221,8 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
   return std::make_unique<EmbeddingEngineImpl>(
       std::move(env), std::move(tokenizer), std::move(embedding_executor),
       std::move(vision_executor), std::move(audio_executor),
-      std::move(benchmark_info), std::move(special_tokens));
+      std::move(benchmark_info), std::move(special_tokens),
+      std::move(image_preprocessor), std::move(image_preprocess_parameter));
 }
 
 // static
@@ -263,14 +286,19 @@ EmbeddingEngineImpl::EmbeddingEngineImpl(
     std::unique_ptr<EmbeddingExecutorBase> embedding_executor,
     std::unique_ptr<VisionExecutor> vision_executor,
     std::unique_ptr<AudioExecutor> audio_executor,
-    std::optional<BenchmarkInfo> benchmark_info, SpecialTokens special_tokens)
+    std::optional<BenchmarkInfo> benchmark_info, SpecialTokens special_tokens,
+    std::unique_ptr<::litert::support::ImagePreprocessor> image_preprocessor,
+    std::optional<::litert::support::ImagePreprocessParameter>
+        image_preprocess_parameter)
     : env_(std::move(env)),
       tokenizer_(std::move(tokenizer)),
       embedding_executor_(std::move(embedding_executor)),
       vision_executor_(std::move(vision_executor)),
       audio_executor_(std::move(audio_executor)),
       benchmark_info_(std::move(benchmark_info)),
-      special_tokens_(std::move(special_tokens)) {}
+      special_tokens_(std::move(special_tokens)),
+      image_preprocessor_(std::move(image_preprocessor)),
+      image_preprocess_parameter_(std::move(image_preprocess_parameter)) {}
 
 absl::StatusOr<std::vector<InputData>> EmbeddingEngineImpl::InsertSpecialTokens(
     const std::vector<InputData>& contents) const {
@@ -370,8 +398,36 @@ absl::StatusOr<ExecutorInputs> EmbeddingEngineImpl::ProcessAndCombineContents(
         LITERT_ASSIGN_OR_RETURN(single_image_data,
                                 vision_executor_->Encode(*tensor_buffer_map));
       } else {
-        return absl::FailedPreconditionError(
-            "Image tensor or tensor map is null in contents.");
+        if (image_preprocessor_ == nullptr) {
+          return absl::FailedPreconditionError(
+              "Image preprocessor is not available for raw image input.");
+        }
+        if (!image_preprocess_parameter_.has_value()) {
+          return absl::FailedPreconditionError(
+              "Image preprocess parameter is not available for raw image "
+              "input.");
+        }
+        LITERT_ASSIGN_OR_RETURN(
+            auto preprocessed_image,
+            image_preprocessor_->Preprocess(*input_image,
+                                            *image_preprocess_parameter_));
+        if (preprocessed_image.IsTensorBuffer()) {
+          LITERT_ASSIGN_OR_RETURN(
+              auto tensor_buffer,
+              preprocessed_image.GetPreprocessedImageTensor());
+          LITERT_ASSIGN_OR_RETURN(single_image_data,
+                                  vision_executor_->Encode(*tensor_buffer));
+        } else if (preprocessed_image.IsTensorBufferMap()) {
+          LITERT_ASSIGN_OR_RETURN(
+              auto tensor_buffer_map,
+              preprocessed_image.GetPreprocessedImageTensorMap());
+          LITERT_ASSIGN_OR_RETURN(
+              single_image_data,
+              vision_executor_->Encode(*tensor_buffer_map));
+        } else {
+          return absl::InternalError(
+              "Failed to get tensor buffer from preprocessed image.");
+        }
       }
       LITERT_ASSIGN_OR_RETURN(auto embeddings_ptr,
                               single_image_data.GetEmbeddingsPtr());

@@ -46,15 +46,8 @@
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
-#include "runtime/proto/embedding_metadata.pb.h"
-#include "runtime/proto/embedding_model_type.pb.h"
-#include "runtime/proto/token.pb.h"
-#include "runtime/util/litert_util.h"
-#include "runtime/util/memory_mapped_file.h"
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/status_macros.h"
-#include "support/preprocessor/image_preprocessor.h"
-#include "support/tokenizer/tokenizer.h"
 
 ABSL_FLAG(std::string, backend, "cpu",
           "Executor backend to use for embedding execution (cpu, gpu, etc.)");
@@ -64,7 +57,7 @@ ABSL_FLAG(std::string, input_prompt, "",
           "Input string to compute the embedding for.");
 ABSL_FLAG(std::string, image_path, "",
           "Optional path to an image file to compute the embedding for.");
-ABSL_FLAG(bool, normalize, false,
+ABSL_FLAG(bool, normalize, true,
           "Whether to L2-normalize the output embedding vector.");
 ABSL_FLAG(bool, use_mmap, true,
           "Whether to use memory-mapped file for model loading.");
@@ -78,7 +71,6 @@ using ::litert::lm::EmbeddingEngineSettings;
 using ::litert::lm::EmbeddingResponse;
 using ::litert::lm::InputData;
 using ::litert::lm::InputImage;
-using ::litert::lm::InputImageEnd;
 using ::litert::lm::InputText;
 using ::litert::lm::MemoryMappedFile;
 using ::litert::lm::ModelAssets;
@@ -86,21 +78,6 @@ using ::litert::lm::ModelResources;
 using ::litert::lm::ModelType;
 using ::litert::lm::OwnedEnvironment;
 using ::litert::lm::ScopedFile;
-using ::litert::support::Tokenizer;
-
-absl::StatusOr<std::optional<InputText>> GetStartOfImageToken(
-    ModelResources& resources) {
-  auto metadata = resources.GetEmbeddingMetadata();
-  if (!metadata.ok() || *metadata == nullptr) {
-    return std::nullopt;
-  }
-  const auto* embedding_metadata = *metadata;
-  if (!embedding_metadata->has_embedding_model_type()) {
-    return std::nullopt;
-  }
-  const auto& model_type = embedding_metadata->embedding_model_type();
-  return std::nullopt;
-}
 
 absl::StatusOr<ModelAssets> CreateModelAssets(bool use_mmap,
                                               absl::string_view model_path) {
@@ -175,9 +152,6 @@ absl::Status MainHelper(int argc, char** argv) {
       auto settings, EmbeddingEngineSettings::CreateDefault(
                          model_assets, backend, vision_backend, audio_backend));
 
-  LITERT_ASSIGN_OR_RETURN(std::optional<InputText> start_of_image_token,
-                          GetStartOfImageToken(*resources));
-
   std::cout << "Initializing EmbeddingEngine..." << std::endl;
   LITERT_ASSIGN_OR_RETURN(
       auto engine,
@@ -207,35 +181,13 @@ absl::Status MainHelper(int argc, char** argv) {
     }
     std::string image_bytes((std::istreambuf_iterator<char>(file)),
                             std::istreambuf_iterator<char>());
-    InputImage raw_image(std::move(image_bytes));
-
-    auto preprocessor = ::litert::support::ImagePreprocessor::Create();
-    if (preprocessor == nullptr) {
-      return absl::InternalError("Failed to create image preprocessor.");
-    }
-
-    ::litert::support::ImagePreprocessParameter preprocess_param;
-    preprocess_param.SetPatchifyConfig(
-        ::litert::support::ImagePreprocessParameter::PatchifyConfig{
-            .patch_width = 16,
-            .patch_height = 16,
-            .max_num_patches = 2520,
-            .pooling_kernel_size = 3,
-        });
-
-    LITERT_ASSIGN_OR_RETURN(
-        InputImage processed_image,
-        preprocessor->Preprocess(raw_image, preprocess_param));
-
-    if (start_of_image_token.has_value()) {
-      contents.emplace_back(std::move(*start_of_image_token));
-    }
-    contents.emplace_back(std::move(processed_image));
-    contents.emplace_back(InputImageEnd());
+    contents.emplace_back(InputImage(std::move(image_bytes)));
   }
 
   auto response_result = engine->ComputeEmbedding(
-      contents, {.normalize = absl::GetFlag(FLAGS_normalize)});
+      contents,
+      {.normalize = absl::GetFlag(FLAGS_normalize),
+       .insert_special_tokens = true});
   if (!response_result.ok()) {
     std::cerr << "ComputeEmbedding failed with error: "
               << response_result.status() << std::endl;

@@ -36,6 +36,7 @@
 #include "litert/cc/litert_layout.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
+#include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
 #include "runtime/components/model_resources.h"
@@ -56,12 +57,15 @@
 #include "runtime/util/litert_util.h"
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
+#include "support/preprocessor/image_preprocessor.h"
 #include "support/tokenizer/tokenizer.h"
 
 namespace litert::lm {
 namespace {
 
 using ::litert::Environment;
+using ::litert::support::ImagePreprocessParameter;
+using ::litert::support::ImagePreprocessor;
 using ::litert::support::Tokenizer;
 using ::litert::support::TokenizerType;
 using ::testing::Contains;
@@ -546,6 +550,48 @@ TEST(EmbeddingEngineImplTest, ComputeEmbeddingBatchWithBenchmarkEnabled) {
   EXPECT_GT(turn.duration, absl::ZeroDuration());
 }
 
+class FakeImagePreprocessor : public ::litert::support::ImagePreprocessor {
+ public:
+  explicit FakeImagePreprocessor(::litert::TensorBuffer tensor_buffer)
+      : tensor_buffer_(std::move(tensor_buffer)) {}
+
+  absl::StatusOr<InputImage> Preprocess(
+      const InputImage& input_image,
+      const ::litert::support::ImagePreprocessParameter& parameter) override {
+    last_parameter_ = parameter;
+    LITERT_ASSIGN_OR_RETURN(auto duplicate, tensor_buffer_.Duplicate());
+    return InputImage(std::move(duplicate));
+  }
+
+  const std::optional<::litert::support::ImagePreprocessParameter>&
+  GetLastParameter() const {
+    return last_parameter_;
+  }
+
+ private:
+  ::litert::TensorBuffer tensor_buffer_;
+  std::optional<::litert::support::ImagePreprocessParameter> last_parameter_;
+};
+
+absl::StatusOr<::litert::TensorBuffer> CreateDummyTensorBuffer(
+    const ::litert::Environment& env, const std::vector<int>& dimensions) {
+  size_t num_elements = 1;
+  for (int dim : dimensions) {
+    num_elements *= dim;
+  }
+  ::litert::RankedTensorType tensor_type(
+      ::litert::ElementType::Float32,
+      ::litert::Layout(
+          ::litert::Dimensions(dimensions.begin(), dimensions.end())));
+  auto tensor = ::litert::TensorBuffer::CreateManaged(
+      env, ::litert::TensorBufferType::kHostMemory, tensor_type,
+      num_elements * sizeof(float));
+  if (!tensor.HasValue()) {
+    return absl::InternalError("Failed to create tensor buffer");
+  }
+  return std::move(*tensor);
+}
+
 TEST(EmbeddingEngineImplTest,
      CreateWithVisionModelButNoVisionSettingsSucceedsButComputeFails) {
   const std::string& model_path = (std::filesystem::path(::testing::SrcDir()) /
@@ -700,25 +746,6 @@ class FakeAudioExecutor : public AudioExecutor {
   }
 };
 
-absl::StatusOr<::litert::TensorBuffer> CreateDummyTensorBuffer(
-    const ::litert::Environment& env, const std::vector<int>& dimensions) {
-  size_t num_elements = 1;
-  for (int dim : dimensions) {
-    num_elements *= dim;
-  }
-  ::litert::RankedTensorType tensor_type(
-      ::litert::ElementType::Float32,
-      ::litert::Layout(
-          ::litert::Dimensions(dimensions.begin(), dimensions.end())));
-  auto tensor = ::litert::TensorBuffer::CreateManaged(
-      env, ::litert::TensorBufferType::kHostMemory, tensor_type,
-      num_elements * sizeof(float));
-  if (!tensor.HasValue()) {
-    return absl::InternalError("Failed to create tensor buffer");
-  }
-  return std::move(*tensor);
-}
-
 TEST(EmbeddingEngineImplTest,
      ComputeEmbeddingWithInsertSpecialTokensImageTrue) {
   ASSERT_OK_AND_ASSIGN(auto env, CreateTestEnvironment());
@@ -776,6 +803,156 @@ TEST(EmbeddingEngineImplTest,
 
   ASSERT_OK(engine.ComputeEmbedding(contents, options).status());
   EXPECT_THAT(raw_executor->GetLastTokenIds(), ElementsAre(-1, -1, -1, -1));
+}
+
+TEST(EmbeddingEngineImplTest, ComputeEmbeddingWithRawImageSuccess) {
+  ASSERT_OK_AND_ASSIGN(auto env, CreateTestEnvironment());
+  ASSERT_OK_AND_ASSIGN(auto image_tensor,
+                       CreateDummyTensorBuffer(env->env, {1, 224, 224, 3}));
+  auto tokenizer = std::make_unique<MockTokenizer>();
+  auto fake_embedding_executor = std::make_unique<FakeEmbeddingExecutor>();
+  auto* raw_executor = fake_embedding_executor.get();
+
+  auto fake_image_preprocessor =
+      std::make_unique<FakeImagePreprocessor>(std::move(image_tensor));
+  auto* raw_image_preprocessor = fake_image_preprocessor.get();
+
+  ImagePreprocessParameter parameter;
+  parameter.SetPatchifyConfig(ImagePreprocessParameter::PatchifyConfig{
+      .patch_width = 16,
+      .patch_height = 16,
+      .max_num_patches = 2520,
+      .pooling_kernel_size = 3,
+  });
+
+  EmbeddingEngineImpl engine(
+      std::move(env), std::move(tokenizer), std::move(fake_embedding_executor),
+      std::make_unique<FakeVisionExecutor>(),
+      /*audio_executor=*/nullptr,
+      /*benchmark_info=*/std::nullopt,
+      /*special_tokens=*/{},
+      std::move(fake_image_preprocessor), parameter);
+
+  std::vector<InputData> contents;
+  contents.push_back(InputImage(std::string("raw_image_bytes")));
+
+  EmbeddingOptions options;
+  options.insert_special_tokens = false;
+
+  ASSERT_OK(engine.ComputeEmbedding(contents, options).status());
+  EXPECT_THAT(raw_executor->GetLastTokenIds(), ElementsAre(-1, -1, -1, -1));
+  ASSERT_TRUE(raw_image_preprocessor->GetLastParameter().has_value());
+  EXPECT_EQ(raw_image_preprocessor->GetLastParameter()
+                ->GetPatchifyConfig()
+                ->patch_width,
+            16);
+  EXPECT_EQ(raw_image_preprocessor->GetLastParameter()
+                ->GetPatchifyConfig()
+                ->patch_height,
+            16);
+  EXPECT_EQ(raw_image_preprocessor->GetLastParameter()
+                ->GetPatchifyConfig()
+                ->max_num_patches,
+            2520);
+  EXPECT_EQ(raw_image_preprocessor->GetLastParameter()
+                ->GetPatchifyConfig()
+                ->pooling_kernel_size,
+            3);
+}
+
+TEST(EmbeddingEngineImplTest,
+     ComputeEmbeddingWithRawImageNoPreprocessorFails) {
+  ASSERT_OK_AND_ASSIGN(auto env, CreateTestEnvironment());
+  auto tokenizer = std::make_unique<MockTokenizer>();
+  auto fake_embedding_executor = std::make_unique<FakeEmbeddingExecutor>();
+
+  ImagePreprocessParameter parameter;
+  EmbeddingEngineImpl engine(
+      std::move(env), std::move(tokenizer), std::move(fake_embedding_executor),
+      std::make_unique<FakeVisionExecutor>(),
+      /*audio_executor=*/nullptr,
+      /*benchmark_info=*/std::nullopt,
+      /*special_tokens=*/{},
+      /*image_preprocessor=*/nullptr, parameter);
+
+  std::vector<InputData> contents;
+  contents.push_back(InputImage(std::string("raw_image_bytes")));
+
+  EmbeddingOptions options;
+  EXPECT_THAT(engine.ComputeEmbedding(contents, options),
+              StatusIs(absl::StatusCode::kInternal,
+                       HasSubstr("Image preprocessor is not available")));
+}
+
+TEST(EmbeddingEngineImplTest,
+     ComputeEmbeddingWithRawImageNoPreprocessParameterFails) {
+  ASSERT_OK_AND_ASSIGN(auto env, CreateTestEnvironment());
+  ASSERT_OK_AND_ASSIGN(auto image_tensor,
+                       CreateDummyTensorBuffer(env->env, {1, 224, 224, 3}));
+  auto tokenizer = std::make_unique<MockTokenizer>();
+  auto fake_embedding_executor = std::make_unique<FakeEmbeddingExecutor>();
+  auto fake_image_preprocessor =
+      std::make_unique<FakeImagePreprocessor>(std::move(image_tensor));
+
+  EmbeddingEngineImpl engine(
+      std::move(env), std::move(tokenizer), std::move(fake_embedding_executor),
+      std::make_unique<FakeVisionExecutor>(),
+      /*audio_executor=*/nullptr,
+      /*benchmark_info=*/std::nullopt,
+      /*special_tokens=*/{},
+      std::move(fake_image_preprocessor),
+      /*image_preprocess_parameter=*/std::nullopt);
+
+  std::vector<InputData> contents;
+  contents.push_back(InputImage(std::string("raw_image_bytes")));
+
+  EmbeddingOptions options;
+  EXPECT_THAT(
+      engine.ComputeEmbedding(contents, options),
+      StatusIs(absl::StatusCode::kInternal,
+               HasSubstr("Image preprocess parameter is not available")));
+}
+
+TEST(EmbeddingEngineImplTest,
+     ComputeEmbeddingWithRawImageAndInsertSpecialTokens) {
+  ASSERT_OK_AND_ASSIGN(auto env, CreateTestEnvironment());
+  ASSERT_OK_AND_ASSIGN(auto image_tensor,
+                       CreateDummyTensorBuffer(env->env, {1, 224, 224, 3}));
+  auto tokenizer = std::make_unique<MockTokenizer>();
+  auto fake_embedding_executor = std::make_unique<FakeEmbeddingExecutor>();
+  auto* raw_executor = fake_embedding_executor.get();
+
+  auto fake_image_preprocessor =
+      std::make_unique<FakeImagePreprocessor>(std::move(image_tensor));
+
+  SpecialTokens special_tokens;
+  special_tokens.start_of_image_token_ids = {101};
+  special_tokens.end_of_image_token_ids = {102};
+
+  ImagePreprocessParameter parameter;
+  parameter.SetPatchifyConfig(ImagePreprocessParameter::PatchifyConfig{
+      .patch_width = 16,
+      .patch_height = 16,
+      .max_num_patches = 2520,
+      .pooling_kernel_size = 3,
+  });
+
+  EmbeddingEngineImpl engine(
+      std::move(env), std::move(tokenizer), std::move(fake_embedding_executor),
+      std::make_unique<FakeVisionExecutor>(),
+      /*audio_executor=*/nullptr,
+      /*benchmark_info=*/std::nullopt, special_tokens,
+      std::move(fake_image_preprocessor), parameter);
+
+  std::vector<InputData> contents;
+  contents.push_back(InputImage(std::string("raw_image_bytes")));
+
+  EmbeddingOptions options;
+  options.insert_special_tokens = true;
+
+  ASSERT_OK(engine.ComputeEmbedding(contents, options).status());
+  EXPECT_THAT(raw_executor->GetLastTokenIds(),
+              ElementsAre(101, -1, -1, -1, -1, 102));
 }
 
 TEST(EmbeddingEngineImplTest,
