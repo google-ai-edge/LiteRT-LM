@@ -1645,6 +1645,8 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::WarmupInference(
 
   // Clear the KV cache buffers after warmup.
   ABSL_RETURN_IF_ERROR(
+      ClearKVCacheToZero(llm_inference_context.decode_input_buffers));
+  ABSL_RETURN_IF_ERROR(
       ClearKVCacheToZero(llm_inference_context.prefill_input_buffers));
   return absl::OkStatus();
 }
@@ -3441,6 +3443,8 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::Reset() {
   pending_accepted_tokens_.clear();
 
   ABSL_RETURN_IF_ERROR(
+      ClearKVCache(llm_inference_context_.decode_input_buffers));
+  ABSL_RETURN_IF_ERROR(
       ClearKVCache(llm_inference_context_.prefill_input_buffers));
   return absl::OkStatus();
 }
@@ -3527,6 +3531,8 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::RestoreContext(
       }
     }
   } else {
+    ABSL_RETURN_IF_ERROR(
+        ClearKVCache(llm_inference_context_.decode_input_buffers));
     ABSL_RETURN_IF_ERROR(
         ClearKVCache(llm_inference_context_.prefill_input_buffers));
   }
@@ -4134,25 +4140,31 @@ LlmLiteRtNpuCompiledModelExecutor::CreateForModelWithoutPerLayerEmbedding(
   } else if (llm_inference_context.prefill_input_buffers.contains(cache_k25)) {
     LITERT_ASSIGN_OR_RETURN(auto buffer_k, llm_compiled_model.CreateInputBuffer(
                                                kDecodeSignature, cache_k25));
+    LITERT_RETURN_IF_ERROR(FillKVCacheBuffer(buffer_k, kv_cache_init_value));
     llm_inference_context.decode_input_buffers[cache_k25] = std::move(buffer_k);
     LITERT_ASSIGN_OR_RETURN(auto buffer_v, llm_compiled_model.CreateInputBuffer(
                                                kDecodeSignature, cache_v25));
+    LITERT_RETURN_IF_ERROR(FillKVCacheBuffer(buffer_v, kv_cache_init_value));
     llm_inference_context.decode_input_buffers[cache_v25] = std::move(buffer_v);
   } else if (llm_inference_context.prefill_input_buffers.contains(cache_k23)) {
     // Fast VLM model specific fix:
     LITERT_ASSIGN_OR_RETURN(auto buffer_k, llm_compiled_model.CreateInputBuffer(
                                                kDecodeSignature, cache_k23));
+    LITERT_RETURN_IF_ERROR(FillKVCacheBuffer(buffer_k, kv_cache_init_value));
     llm_inference_context.decode_input_buffers[cache_k23] = std::move(buffer_k);
     LITERT_ASSIGN_OR_RETURN(auto buffer_v, llm_compiled_model.CreateInputBuffer(
                                                kDecodeSignature, cache_v23));
+    LITERT_RETURN_IF_ERROR(FillKVCacheBuffer(buffer_v, kv_cache_init_value));
     llm_inference_context.decode_input_buffers[cache_v23] = std::move(buffer_v);
   } else if (llm_inference_context.prefill_input_buffers.contains(cache_k17)) {
     // Tiny Gemma 270M specific fix:
     LITERT_ASSIGN_OR_RETURN(auto buffer_k, llm_compiled_model.CreateInputBuffer(
                                                kDecodeSignature, cache_k17));
+    LITERT_RETURN_IF_ERROR(FillKVCacheBuffer(buffer_k, kv_cache_init_value));
     llm_inference_context.decode_input_buffers[cache_k17] = std::move(buffer_k);
     LITERT_ASSIGN_OR_RETURN(auto buffer_v, llm_compiled_model.CreateInputBuffer(
                                                kDecodeSignature, cache_v17));
+    LITERT_RETURN_IF_ERROR(FillKVCacheBuffer(buffer_v, kv_cache_init_value));
     llm_inference_context.decode_input_buffers[cache_v17] = std::move(buffer_v);
   }
 
