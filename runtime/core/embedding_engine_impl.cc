@@ -74,6 +74,16 @@ absl::StatusOr<SpecialTokens> ExtractSpecialTokens(
     const proto::EmbeddingMetadata& metadata,
     ::litert::support::Tokenizer& tokenizer) {
   SpecialTokens special_tokens;
+  if (metadata.has_bos_token()) {
+    LITERT_ASSIGN_OR_RETURN(
+        special_tokens.bos_token_ids,
+        TokenUnionToTokenIds(metadata.bos_token(), tokenizer));
+  }
+  if (metadata.has_eos_token()) {
+    LITERT_ASSIGN_OR_RETURN(
+        special_tokens.eos_token_ids,
+        TokenUnionToTokenIds(metadata.eos_token(), tokenizer));
+  }
   if (!metadata.has_embedding_model_type()) {
     return special_tokens;
   }
@@ -303,6 +313,13 @@ EmbeddingEngineImpl::EmbeddingEngineImpl(
 absl::StatusOr<std::vector<InputData>> EmbeddingEngineImpl::InsertSpecialTokens(
     const std::vector<InputData>& contents) const {
   std::vector<InputData> new_contents;
+  if (!special_tokens_.bos_token_ids.empty()) {
+    LITERT_ASSIGN_OR_RETURN(
+        auto bos_tensor,
+        litert::support::Tokenizer::TokenIdsToTensorBuffer(
+            special_tokens_.bos_token_ids));
+    new_contents.push_back(InputText(std::move(bos_tensor)));
+  }
   for (const auto& item : contents) {
     if (const auto* input_image = std::get_if<InputImage>(&item)) {
       if (!special_tokens_.start_of_image_token_ids.empty()) {
@@ -344,6 +361,13 @@ absl::StatusOr<std::vector<InputData>> EmbeddingEngineImpl::InsertSpecialTokens(
       LITERT_ASSIGN_OR_RETURN(auto item_copy, CreateInputDataCopy(item));
       new_contents.push_back(std::move(item_copy));
     }
+  }
+  if (!special_tokens_.eos_token_ids.empty()) {
+    LITERT_ASSIGN_OR_RETURN(
+        auto eos_tensor,
+        litert::support::Tokenizer::TokenIdsToTensorBuffer(
+            special_tokens_.eos_token_ids));
+    new_contents.push_back(InputText(std::move(eos_tensor)));
   }
   return new_contents;
 }

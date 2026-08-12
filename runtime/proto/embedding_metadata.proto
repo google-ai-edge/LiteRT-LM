@@ -20,9 +20,17 @@ option java_multiple_files = true;
 option java_outer_classname = "EmbeddingMetadataOuterClass";
 
 import "runtime/proto/embedding_model_type.proto";
+import "runtime/proto/token.proto";
 
 // Parameters for Embedding Models.
 message EmbeddingMetadata {
   // Embedding model type and encoder parameters.
   EmbeddingModelType embedding_model_type = 1;
+
+  // BOS token prepended to the beginning of input sequence.
+  TokenUnion bos_token = 2;
+
+  // EOS token appended to the end of input sequence.
+  TokenUnion eos_token = 3;
 }
+

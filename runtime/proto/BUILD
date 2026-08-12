@@ -194,6 +194,7 @@ tf_proto_library(
     srcs = ["embedding_metadata.proto"],
     deps = [
         ":embedding_model_type_proto",
+        ":token_proto",
     ],
 )
 

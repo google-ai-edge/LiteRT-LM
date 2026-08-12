@@ -36,6 +36,8 @@
 namespace litert::lm {
 
 struct SpecialTokens {
+  std::vector<int> bos_token_ids;
+  std::vector<int> eos_token_ids;
   std::vector<int> start_of_image_token_ids;
   std::vector<int> end_of_image_token_ids;
   std::vector<int> start_of_audio_token_ids;

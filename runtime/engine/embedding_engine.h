@@ -28,8 +28,8 @@ struct EmbeddingOptions {
   // If true, the output embedding vector will be L2-normalized.
   bool normalize = false;
 
-  // If true, automatically inserts the start of image, end of image, start of
-  // audio, and end of audio tokens.
+  // If true, automatically inserts the BOS, EOS, start of image, end of image,
+  // start of audio, and end of audio tokens.
   bool insert_special_tokens = false;
 };
 

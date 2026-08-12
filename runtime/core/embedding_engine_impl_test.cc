@@ -1112,5 +1112,63 @@ TEST(EmbeddingEngineImplTest,
               ElementsAre(201, -2, -2, -2, -4));
 }
 
+TEST(EmbeddingEngineImplTest,
+     ComputeEmbeddingWithInsertSpecialTokensBosEosTrue) {
+  ASSERT_OK_AND_ASSIGN(auto env, CreateTestEnvironment());
+  auto tokenizer = std::make_unique<MockTokenizer>();
+  EXPECT_CALL(*tokenizer, TextToTokenIds("hello"))
+      .WillRepeatedly(Return(std::vector<int>{10, 11}));
+  auto fake_embedding_executor = std::make_unique<FakeEmbeddingExecutor>();
+  auto* raw_executor = fake_embedding_executor.get();
+
+  SpecialTokens special_tokens;
+  special_tokens.bos_token_ids = {2};
+  special_tokens.eos_token_ids = {1};
+
+  EmbeddingEngineImpl engine(std::move(env), std::move(tokenizer),
+                             std::move(fake_embedding_executor),
+                             /*vision_executor=*/nullptr,
+                             /*audio_executor=*/nullptr,
+                             /*benchmark_info=*/std::nullopt, special_tokens);
+
+  std::vector<InputData> contents;
+  contents.push_back(InputText(std::string("hello")));
+
+  EmbeddingOptions options;
+  options.insert_special_tokens = true;
+
+  ASSERT_OK(engine.ComputeEmbedding(contents, options).status());
+  EXPECT_THAT(raw_executor->GetLastTokenIds(), ElementsAre(2, 10, 11, 1));
+}
+
+TEST(EmbeddingEngineImplTest,
+     ComputeEmbeddingWithInsertSpecialTokensBosEosFalse) {
+  ASSERT_OK_AND_ASSIGN(auto env, CreateTestEnvironment());
+  auto tokenizer = std::make_unique<MockTokenizer>();
+  EXPECT_CALL(*tokenizer, TextToTokenIds("hello"))
+      .WillRepeatedly(Return(std::vector<int>{10, 11}));
+  auto fake_embedding_executor = std::make_unique<FakeEmbeddingExecutor>();
+  auto* raw_executor = fake_embedding_executor.get();
+
+  SpecialTokens special_tokens;
+  special_tokens.bos_token_ids = {2};
+  special_tokens.eos_token_ids = {1};
+
+  EmbeddingEngineImpl engine(std::move(env), std::move(tokenizer),
+                             std::move(fake_embedding_executor),
+                             /*vision_executor=*/nullptr,
+                             /*audio_executor=*/nullptr,
+                             /*benchmark_info=*/std::nullopt, special_tokens);
+
+  std::vector<InputData> contents;
+  contents.push_back(InputText(std::string("hello")));
+
+  EmbeddingOptions options;
+  options.insert_special_tokens = false;
+
+  ASSERT_OK(engine.ComputeEmbedding(contents, options).status());
+  EXPECT_THAT(raw_executor->GetLastTokenIds(), ElementsAre(10, 11));
+}
+
 }  // namespace
 }  // namespace litert::lm
