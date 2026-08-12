@@ -35,6 +35,62 @@ void litert_lm_loaded_file_delete(LiteRtLmLoadedFile* loaded_file);
 bool litert_lm_loaded_file_has_speculative_decoding_support(
     LiteRtLmLoadedFile* loaded_file);
 
+// Returns true if the loaded LiteRT-LM file supports vision input.
+bool litert_lm_loaded_file_has_vision_support(LiteRtLmLoadedFile* loaded_file);
+
+// Returns true if the loaded LiteRT-LM file supports audio input.
+bool litert_lm_loaded_file_has_audio_support(LiteRtLmLoadedFile* loaded_file);
+
+// Returns true if the loaded LiteRT-LM file supports function calling.
+bool litert_lm_loaded_file_has_function_calling_support(
+    LiteRtLmLoadedFile* loaded_file);
+
+// Returns true if the loaded LiteRT-LM file supports thinking/reasoning.
+bool litert_lm_loaded_file_has_thinking_support(
+    LiteRtLmLoadedFile* loaded_file);
+
+// Returns maximum context length for the model (-1 if not specified or error).
+int litert_lm_loaded_file_get_max_context_length(
+    LiteRtLmLoadedFile* loaded_file);
+
+// Returns the model class (e.g. "IT", "PT"), or NULL if not specified.
+const char* litert_lm_loaded_file_get_model_class(
+    LiteRtLmLoadedFile* loaded_file);
+
+// Returns the TF Hub model ID, or NULL if not specified.
+const char* litert_lm_loaded_file_get_tf_hub_model_id(
+    LiteRtLmLoadedFile* loaded_file);
+
+// Returns the minimum required LiteRT-LM version, or NULL if not specified.
+const char* litert_lm_loaded_file_get_min_litertlm_version(
+    LiteRtLmLoadedFile* loaded_file);
+
+// Returns the default temperature (e.g. 0.8f, or -1.0f if not set).
+float litert_lm_loaded_file_get_default_temperature(
+    LiteRtLmLoadedFile* loaded_file);
+
+// Returns the default top_k (e.g. 40, or -1 if not set).
+int litert_lm_loaded_file_get_default_top_k(LiteRtLmLoadedFile* loaded_file);
+
+// Returns the default top_p (e.g. 0.95f, or -1.0f if not set).
+float litert_lm_loaded_file_get_default_top_p(LiteRtLmLoadedFile* loaded_file);
+
+// Returns the number of supported hardware backends.
+int litert_lm_loaded_file_get_supported_backend_count(
+    LiteRtLmLoadedFile* loaded_file);
+
+// Returns the backend name at index (e.g. "cpu", "gpu"), or NULL if index out of range.
+const char* litert_lm_loaded_file_get_supported_backend(
+    LiteRtLmLoadedFile* loaded_file, int index);
+
+// Returns the number of supported vision resolutions (e.g. 70, 140, 270, 560, 1120).
+int litert_lm_loaded_file_get_supported_vision_resolution_count(
+    LiteRtLmLoadedFile* loaded_file);
+
+// Returns the vision resolution at index, or -1 if out of range.
+int litert_lm_loaded_file_get_supported_vision_resolution(
+    LiteRtLmLoadedFile* loaded_file, int index);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif

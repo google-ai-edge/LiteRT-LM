@@ -146,6 +146,7 @@ pytype_strict_binary(
     deps = [
         ":litertlm_builder",
         ":litertlm_core",
+        ":litertlm_peek",
     ],
 )
 

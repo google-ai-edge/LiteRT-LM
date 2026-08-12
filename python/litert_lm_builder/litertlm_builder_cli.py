@@ -82,6 +82,7 @@ from typing import BinaryIO, cast
 
 from litert_lm_builder import litertlm_builder
 from litert_lm_builder import litertlm_core
+from litert_lm_builder import litertlm_peek
 
 _SUBCOMMANDS = (
     "toml",
@@ -95,6 +96,7 @@ _SUBCOMMANDS = (
     "hf_tokenizer",
     "output",
     "unpack",
+    "inspect",
 )
 
 
@@ -358,6 +360,24 @@ def _add_unpack_parser(subparsers) -> None:
   )
 
 
+def _add_inspect_parser(subparsers) -> None:
+  """Adds a parser for inspecting a LiteRT-LM file to the subparsers."""
+  inspect_parser = subparsers.add_parser(
+      "inspect",
+      description="Inspect a LiteRT-LM file's capabilities.",
+      help="Inspect a LiteRT-LM file.",
+  )
+  inspect_parser.add_argument(
+      "--input",
+      "--path",
+      "--litertlm_file",
+      dest="input_path",
+      type=str,
+      required=True,
+      help="The path to the input LiteRT-LM file to inspect.",
+  )
+
+
 def _build_parser() -> argparse.ArgumentParser:
   """Builds an argument parser for the litertlm_builder tool."""
   parser = argparse.ArgumentParser(
@@ -375,6 +395,7 @@ def _build_parser() -> argparse.ArgumentParser:
   _add_hf_tokenizer_parser(subparsers)
   _add_output_path_parser(subparsers)
   _add_unpack_parser(subparsers)
+  _add_inspect_parser(subparsers)
 
   return parser
 
@@ -550,6 +571,14 @@ def _build_hf_tokenizer(
 
 def _build_litertlm_file(parsed_args: list[argparse.Namespace]) -> None:
   """Builds or unpacks a LiteRT-LM file from the parsed arguments."""
+  if "inspect" in [pa.command for pa in parsed_args]:
+    if len(parsed_args) != 1:
+      raise ValueError(
+          "The 'inspect' subcommand cannot be combined with other subcommands."
+      )
+    inspect_arg = parsed_args[0]
+    litertlm_peek.inspect_litertlm_file(inspect_arg.input_path, sys.stdout)
+    return
   if "unpack" in [pa.command for pa in parsed_args]:
     if len(parsed_args) != 1:
       raise ValueError(

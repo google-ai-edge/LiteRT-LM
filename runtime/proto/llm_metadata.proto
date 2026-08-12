@@ -100,4 +100,14 @@ message LlmMetadata {
   // Note: This field is curently only used by NPU backends for certain models,
   // proceed with caution.
   optional int64 kv_cache_init_value = 10;
+
+  // Arguments that the jinja prompt template accepts. Used to determine if the
+  // model supports function calling, thinking, etc.
+  repeated string jinja_prompt_template_args = 11;
+
+  // Backends that are supported by this model (e.g. "cpu", "gpu", "npu", "gpu_artisan").
+  repeated string supported_backends = 12;
+
+  // Supported input image resolutions for vision models (e.g., 70, 140, 270, 560, 1120).
+  repeated int32 supported_vision_resolutions = 13;
 }
