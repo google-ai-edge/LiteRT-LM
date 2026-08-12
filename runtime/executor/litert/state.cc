@@ -483,37 +483,36 @@ absl::StatusOr<std::unique_ptr<LitertState>> LitertState::HeuristicBasedCreate(
     Environment& env, CompiledModel& compiled_model,
     absl::string_view signature_name, AllocationPolicy allocation_policy,
     int batch_size, bool clear_kv_cache_before_prefill) {
-  std::string kv_cache_k_root_name;
-  std::string kv_cache_v_root_name;
   LITERT_ASSIGN_OR_RETURN(
       auto sig_input_names,
       compiled_model.GetSignatureInputNames(signature_name));
   LITERT_ASSIGN_OR_RETURN(
       auto sig_output_names,
       compiled_model.GetSignatureOutputNames(signature_name));
+
+  std::string k_root_name;
+  std::string v_root_name;
   ABSL_RETURN_IF_ERROR(GetKVCacheRootNames(sig_input_names, sig_output_names,
-                                           kv_cache_k_root_name,
-                                           kv_cache_v_root_name));
+                                           k_root_name, v_root_name));
 
   std::vector<std::string> key_cache_input_names;
   std::vector<std::string> value_cache_input_names;
   std::string mask_input_name;
   for (auto input_name : sig_input_names) {
-    bool is_key_cache_input =
-        absl::StartsWith(input_name, kv_cache_k_root_name);
-    if (is_key_cache_input) {
+    if (absl::StartsWith(input_name, k_root_name) ||
+        absl::StartsWith(input_name, "kv_cache_c_")) {
       key_cache_input_names.push_back(std::string(input_name));
     }
-
-    bool is_value_cache_input =
-        absl::StartsWith(input_name, kv_cache_v_root_name);
-    if (is_value_cache_input) {
+    if (absl::StartsWith(input_name, v_root_name) ||
+        absl::StartsWith(input_name, "kv_cache_c_")) {
       value_cache_input_names.push_back(std::string(input_name));
     }
-
     if (absl::StrContains(input_name, "mask")) {
       mask_input_name = input_name;
     }
+  }
+  if (key_cache_input_names.empty() || value_cache_input_names.empty()) {
+    return absl::FailedPreconditionError("No KV cache inputs found.");
   }
 
   ABSL_ASSIGN_OR_RETURN(std::optional<int> k_dynamic_dim,
