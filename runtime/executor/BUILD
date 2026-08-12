@@ -278,8 +278,6 @@ cc_library(
         "@litert//litert:litert_runtime_link_mode_dynamic": [],
         "//conditions:default": [
         ],
-    }) + select({
-        "//conditions:default": [],
     }),
 )
 
@@ -548,7 +546,6 @@ cc_library(
     hdrs = ["llm_executor.h"],
     deps = [
         ":llm_executor_base",
-        "//runtime/util:logging_tensor_buffer",
     ],
 )
 
@@ -727,7 +724,6 @@ cc_library(
         ":executor_settings_base",
         ":litert_compiled_model_executor_utils",
         ":llm_executor_settings",
-        "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
@@ -738,8 +734,6 @@ cc_library(
         "@litert//litert/cc/options:litert_gpu_options",
         "//runtime/util:file_util",
         "//runtime/util:litert_status_util",
-        "//runtime/util:scoped_file",
-        "@litert//tflite/delegates/xnnpack:xnnpack_delegate",
     ],
 )
 
@@ -757,7 +751,6 @@ cc_test(
         "@litert//litert/c/options:litert_gpu_options",
         "@litert//litert/cc:litert_common",
         "@litert//litert/cc:litert_options",
-        "@litert//litert/cc/options:litert_runtime_options",
         "@litert//litert/test:matchers",
         "//runtime/util:file_util",
         "//runtime/util:scoped_file",
@@ -863,9 +856,7 @@ cc_library(
         "//runtime/components:model_resources",
         "//runtime/engine:io_types",
         "//runtime/util:convert_tensor_buffer",
-        "//runtime/util:file_util",
         "//runtime/util:litert_status_util",
-        "@litert//tflite/delegates/xnnpack:xnnpack_delegate",
     ],
 )
 
@@ -1043,7 +1034,6 @@ cc_library(
         "//runtime/engine:io_types",
         "//runtime/util:convert_tensor_buffer",
         "//runtime/util:tensor_buffer_util",
-        "@litert//tflite/delegates/xnnpack:xnnpack_delegate",
         "@litert//tflite/types:half",
     ],
 )

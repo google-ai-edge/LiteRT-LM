@@ -122,7 +122,6 @@ cc_library(
         "@com_google_absl//absl/log:absl_check",
         "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:str_format",
@@ -244,8 +243,6 @@ cc_library(
         # If CAPI is linked dynamically, need to link the sampler dynamically as well.
         "@litert//litert:litert_runtime_link_mode_dynamic": [],
         "//conditions:default": [],
-    }) + select({
-        "//conditions:default": [],
     }),
 )
 
@@ -365,7 +362,6 @@ cc_library(
     }),
     deps = [
         "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
@@ -468,7 +464,6 @@ cc_library(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings:string_view",
         "@litert//litert/cc:litert_model",
-        "//runtime/proto:executor_metadata_cc_proto",
         "//runtime/proto:llm_metadata_cc_proto",
         "//runtime/util:scoped_file",
         "//support/tokenizer",
