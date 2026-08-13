@@ -94,7 +94,7 @@ sys.modules["litert_lm_cli.model"] = (
     mock_model_mod
 )
 if "litert_lm_cli" in sys.modules:
-  sys.modules[
+  sys.modules[  # pyrefly: ignore[missing-attribute]
       "litert_lm_cli"
   ].model = mock_model_mod
 

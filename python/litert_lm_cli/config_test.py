@@ -410,7 +410,7 @@ class ConfigTest(parameterized.TestCase):
           f"Expected config_data {config_data} to fail validation with"
           f" {jsonschema_error}, but it passed custom validation.",
       )
-      path_str = ".".join(str(p) for p in jsonschema_path)
+      path_str = ".".join(str(p) for p in jsonschema_path)  # pyrefly: ignore[not-iterable]
       prefix = f"{path_str}: " if path_str else ""
       expected_err_prefix = f"config.json validation error: {prefix}"
       self.assertIn(expected_err_prefix, custom_error)

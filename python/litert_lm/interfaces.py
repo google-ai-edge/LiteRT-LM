@@ -123,7 +123,7 @@ class NPU(Backend):
             " installed."
         ) from e
 
-      available_devices = ov.Core().available_devices
+      available_devices = ov.Core().available_devices  # pyrefly: ignore[unbound-name]
       if "NPU" not in available_devices:
         raise RuntimeError(
             "NPU is supported only for Intel OpenVINO on Windows. No NPU"

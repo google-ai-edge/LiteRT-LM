@@ -195,7 +195,7 @@ def get_or_initialize_server_engine(
   )
   engine = litert_lm.Engine(
       m.model_path,
-      backend=resolved_backend,
+      backend=resolved_backend,  # pyrefly: ignore[bad-argument-type]
       max_num_tokens=resolved_max_num_tokens,
       vision_backend=vision_backend,
       audio_backend=audio_backend,

@@ -303,7 +303,7 @@ def run_interactive(
     else:
       engine_cm = litert_lm.Engine(
           model_obj.model_path,
-          backend=backend_val,
+          backend=backend_val,  # pyrefly: ignore[bad-argument-type]
           enable_speculative_decoding=speculative_decoding,
           max_num_tokens=max_num_tokens,
           max_num_images=max_num_images,

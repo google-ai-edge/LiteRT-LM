@@ -56,10 +56,10 @@ class LitertLmModelTest(parameterized.TestCase):
     }
 
     # Context manager setup.
-    model.engine.create_conversation.return_value.__enter__.return_value = (
+    model.engine.create_conversation.return_value.__enter__.return_value = (  # pyrefly: ignore[missing-attribute]
         mock_conversation
     )
-    model.engine.create_conversation.return_value.__exit__.return_value = None
+    model.engine.create_conversation.return_value.__exit__.return_value = None  # pyrefly: ignore[missing-attribute]
 
     class MockRequest:
 
@@ -90,10 +90,10 @@ class LitertLmModelTest(parameterized.TestCase):
     mock_decode_responses.texts = [" world and some more text"]
     mock_session.run_decode.return_value = mock_decode_responses
 
-    model.engine.create_session.return_value.__enter__.return_value = (
+    model.engine.create_session.return_value.__enter__.return_value = (  # pyrefly: ignore[missing-attribute]
         mock_session
     )
-    model.engine.create_session.return_value.__exit__.return_value = None
+    model.engine.create_session.return_value.__exit__.return_value = None  # pyrefly: ignore[missing-attribute]
 
     class MockRequest:
 
@@ -120,10 +120,10 @@ class LitertLmModelTest(parameterized.TestCase):
     mock_decode_responses.texts = [" everyone"]
     mock_session.run_decode.return_value = mock_decode_responses
 
-    model.engine.create_session.return_value.__enter__.return_value = (
+    model.engine.create_session.return_value.__enter__.return_value = (  # pyrefly: ignore[missing-attribute]
         mock_session
     )
-    model.engine.create_session.return_value.__exit__.return_value = None
+    model.engine.create_session.return_value.__exit__.return_value = None  # pyrefly: ignore[missing-attribute]
 
     class MockRequest:
 
@@ -150,7 +150,7 @@ class LitertLmModelTest(parameterized.TestCase):
     mock_decode_responses.texts = [" world"]
     mock_session.run_decode.return_value = mock_decode_responses
 
-    model.engine.create_session.return_value.__enter__.return_value = (
+    model.engine.create_session.return_value.__enter__.return_value = (  # pyrefly: ignore[missing-attribute]
         mock_session
     )
 
@@ -356,7 +356,7 @@ class LitertLmModelTest(parameterized.TestCase):
         "content": [{"type": "text", "text": "response text"}]
     }
 
-    model.engine.create_conversation.return_value.__enter__.return_value = (
+    model.engine.create_conversation.return_value.__enter__.return_value = (  # pyrefly: ignore[missing-attribute]
         mock_conversation
     )
 

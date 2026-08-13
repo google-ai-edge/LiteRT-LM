@@ -427,7 +427,7 @@ class LitertLmFileBuilder:
           " LlmMetadata section."
       )
 
-    return builder
+    return builder  # pyrefly: ignore[bad-return]
 
   @classmethod
   def from_toml_file(
@@ -479,7 +479,7 @@ class LitertLmFileBuilder:
             f"System metadata already exists for key: {metadata.key}"
         )
     self._system_metadata.append(metadata)
-    return self
+    return self  # pyrefly: ignore[bad-return]
 
   def add_llm_metadata(
       self,
@@ -550,7 +550,7 @@ class LitertLmFileBuilder:
         data_writer=data_writer,
     )
     self._sections.append(section_object)
-    return self
+    return self  # pyrefly: ignore[bad-return]
 
   def add_executor_metadata(
       self,
@@ -600,7 +600,7 @@ class LitertLmFileBuilder:
         data_writer=data_writer,
     )
     self._sections.append(section_object)
-    return self
+    return self  # pyrefly: ignore[bad-return]
 
   def add_embedding_metadata(
       self,
@@ -651,7 +651,7 @@ class LitertLmFileBuilder:
         data_writer=data_writer,
     )
     self._sections.append(section_object)
-    return self
+    return self  # pyrefly: ignore[bad-return]
 
   def add_tflite_model(
       self,
@@ -725,7 +725,7 @@ class LitertLmFileBuilder:
         data_writer=data_writer,
     )
     self._sections.append(section_object)
-    return self
+    return self  # pyrefly: ignore[bad-return]
 
   def add_tflite_weights(
       self,
@@ -770,7 +770,7 @@ class LitertLmFileBuilder:
         data_writer=data_writer,
     )
     self._sections.append(section_object)
-    return self
+    return self  # pyrefly: ignore[bad-return]
 
   def add_sentencepiece_tokenizer(
       self,
@@ -807,7 +807,7 @@ class LitertLmFileBuilder:
         data_writer=data_writer,
     )
     self._sections.append(section_object)
-    return self
+    return self  # pyrefly: ignore[bad-return]
 
   def add_hf_tokenizer(
       self,
@@ -853,7 +853,7 @@ class LitertLmFileBuilder:
         data_writer=write_and_compress,
     )
     self._sections.append(section_object)
-    return self
+    return self  # pyrefly: ignore[bad-return]
 
   def add_generic_binary_data(
       self,
@@ -888,7 +888,7 @@ class LitertLmFileBuilder:
         data_writer=data_writer,
     )
     self._sections.append(section_object)
-    return self
+    return self  # pyrefly: ignore[bad-return]
 
   def build(self, stream: BinaryIO) -> None:
     """Builds the litertlm into the given stream."""
@@ -925,7 +925,7 @@ class LitertLmFileBuilder:
     offset = _round_up_to_block_size(
         litertlm_core.HEADER_BEGIN_BYTE_OFFSET + packed_metadata_size
     )
-    for section, section_fb in zip(self._sections, section_metadata.objects):
+    for section, section_fb in zip(self._sections, section_metadata.objects):  # pyrefly: ignore[bad-argument-type]
       stream.seek(offset)
       section_fb.beginOffset = offset
       section.data_writer(stream)
@@ -1005,7 +1005,7 @@ def _validate_backend_constraints(backend_constraint: str) -> None:
 def _is_binary_proto(
     filepath: str,
     message_type: Any = llm_metadata_pb2.LlmMetadata,
-) -> bool:
+) -> bool:  # pyrefly: ignore[bad-return]
   """Checks if a file is a binary protobuf or a textproto.
 
   Args:
@@ -1056,7 +1056,7 @@ def _resolve_path(path: str, parent_dir: str | None) -> str:
   if not is_abs and not parent_dir:
     raise ValueError("Parent directory is required for relative path.")
 
-  abs_path = path if is_abs else os.path.join(parent_dir, path)
+  abs_path = path if is_abs else os.path.join(parent_dir, path)  # pyrefly: ignore[no-matching-overload]
   if not litertlm_core.path_exists(abs_path):
     raise FileNotFoundError(f"File {abs_path} does not exist.")
   return abs_path

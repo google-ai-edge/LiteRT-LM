@@ -96,7 +96,7 @@ class Conversation(interfaces.AbstractConversation):
       return None
 
     tool_responses = []
-    for tool_call in response_dict.get("tool_calls"):
+    for tool_call in response_dict.get("tool_calls"):  # pyrefly: ignore[not-iterable]
       if "function" not in tool_call:
         raise ValueError("Missing 'function' in tool_call")
       function = tool_call.get("function")
@@ -118,7 +118,7 @@ class Conversation(interfaces.AbstractConversation):
           result = f"Error: {str(e)}"
 
       if self.tool_event_handler:
-        result = self.tool_event_handler.process_tool_response(result)
+        result = self.tool_event_handler.process_tool_response(result)  # pyrefly: ignore[bad-argument-type]
 
       tool_responses.append({
           "role": "tool",

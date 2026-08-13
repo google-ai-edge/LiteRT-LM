@@ -1177,7 +1177,7 @@ class OpenAIHandler(serve_util.CORSRequestHandler):
 
     if isinstance(prompt, dict):
       try:
-        if not translated_messages or prompt is not last_msg:
+        if not translated_messages or prompt is not last_msg:  # pyrefly: ignore[unbound-name]
           prompt = _translate_openai_message(prompt, name_by_tool_call_id)
       except ValueError as e:
         self.send_error(400, f"Invalid prompt: {e}")
@@ -1274,7 +1274,7 @@ class OpenAIHandler(serve_util.CORSRequestHandler):
           stream_options = {}
 
         self._handle_chat_completions(
-            conv,
+            conv,  # pyrefly: ignore[bad-argument-type]
             prompt,
             raw_model_str,
             stream,
@@ -1366,7 +1366,7 @@ class OpenAIHandler(serve_util.CORSRequestHandler):
         created_ts = int(now.timestamp())
 
         self._handle_responses(
-            conv,
+            conv,  # pyrefly: ignore[bad-argument-type]
             prompt,
             stream,
             now_str=now_str,
