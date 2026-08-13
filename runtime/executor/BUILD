@@ -578,6 +578,7 @@ cc_library(
         "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/types:span",
         "@litert//litert/c:litert_layout",
+        "@litert//litert/cc:litert_common",
         "@litert//litert/cc:litert_element_type",
         "@litert//litert/cc:litert_layout",
         "@litert//litert/cc:litert_macros",
