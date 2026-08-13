@@ -16,6 +16,9 @@
 # Engine Library
 # ==============================================================================
 add_litertlm_library(c_engine STATIC
+  embedding_engine.cc
+  embedding_engine.h
+  embedding_engine_internal.h
   engine.cc
   engine_internal.h
 )
@@ -33,11 +36,16 @@ target_link_libraries(c_engine
     LITERTLM_DEPS
     LiteRTLM::Runtime::Conversation
     LiteRTLM::Runtime::Conversation::IoTypes
+    LiteRTLM::Runtime::Core::EmbeddingEngineImpl
     LiteRTLM::Runtime::Core::EngineAdvancedImpl
+    LiteRTLM::Runtime::Components
+    LiteRTLM::Runtime::Engine::EmbeddingEngineSettings
     LiteRTLM::Runtime::Engine::Interface
     LiteRTLM::Runtime::Engine::Settings
     LiteRTLM::Runtime::Engine::IoTypes
     LiteRTLM::Runtime::Executor::ExecutorSettingsBase
+    LiteRTLM::Runtime::Executor::LitertCompiledModelExecutorUtils
+    LiteRTLM::Support::Tokenizer
 )
 
 # ==============================================================================

@@ -663,6 +663,98 @@ def _setup_lib_signatures(lib):
   lib.litert_lm_stream_chunk_get_error.restype = ctypes.c_char_p
   lib.litert_lm_stream_chunk_get_error.argtypes = [ctypes.c_void_p]
 
+  # Embedding Engine Settings
+  lib.litert_lm_embedding_engine_settings_create.restype = ctypes.c_void_p
+  lib.litert_lm_embedding_engine_settings_create.argtypes = [
+      c_string_p,
+      c_string_p,
+      c_string_p,
+      c_string_p,
+  ]
+  lib.litert_lm_embedding_engine_settings_delete.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_embedding_engine_settings_set_audio_num_threads.argtypes = [
+      ctypes.c_void_p,
+      ctypes.c_int,
+  ]
+  lib.litert_lm_embedding_engine_settings_set_cache_dir.argtypes = [
+      ctypes.c_void_p,
+      c_string_p,
+  ]
+  lib.litert_lm_embedding_engine_settings_set_litert_dispatch_lib_dir.argtypes = [
+      ctypes.c_void_p,
+      c_string_p,
+  ]
+  lib.litert_lm_embedding_engine_settings_set_vision_litert_dispatch_lib_dir.argtypes = [
+      ctypes.c_void_p,
+      c_string_p,
+  ]
+  lib.litert_lm_embedding_engine_settings_set_audio_litert_dispatch_lib_dir.argtypes = [
+      ctypes.c_void_p,
+      c_string_p,
+  ]
+
+  # Embedding Options
+  lib.litert_lm_embedding_options_create.restype = ctypes.c_void_p
+  lib.litert_lm_embedding_options_create.argtypes = []
+  lib.litert_lm_embedding_options_delete.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_embedding_options_set_normalize.argtypes = [
+      ctypes.c_void_p,
+      ctypes.c_bool,
+  ]
+  lib.litert_lm_embedding_options_get_normalize.restype = ctypes.c_bool
+  lib.litert_lm_embedding_options_get_normalize.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_embedding_options_set_insert_special_tokens.argtypes = [
+      ctypes.c_void_p,
+      ctypes.c_bool,
+  ]
+  lib.litert_lm_embedding_options_get_insert_special_tokens.restype = (
+      ctypes.c_bool
+  )
+  lib.litert_lm_embedding_options_get_insert_special_tokens.argtypes = [
+      ctypes.c_void_p
+  ]
+
+  # Embedding Response
+  lib.litert_lm_embedding_response_delete.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_embedding_response_get_size.restype = ctypes.c_size_t
+  lib.litert_lm_embedding_response_get_size.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_embedding_response_get_values.restype = ctypes.POINTER(
+      ctypes.c_float
+  )
+  lib.litert_lm_embedding_response_get_values.argtypes = [ctypes.c_void_p]
+
+  # Embedding Responses
+  lib.litert_lm_embedding_responses_delete.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_embedding_responses_get_size.restype = ctypes.c_size_t
+  lib.litert_lm_embedding_responses_get_size.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_embedding_responses_get_at.restype = ctypes.c_void_p
+  lib.litert_lm_embedding_responses_get_at.argtypes = [
+      ctypes.c_void_p,
+      ctypes.c_size_t,
+  ]
+
+  # Embedding Engine
+  lib.litert_lm_embedding_engine_create.restype = ctypes.c_void_p
+  lib.litert_lm_embedding_engine_create.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_embedding_engine_delete.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_embedding_engine_compute_embedding.restype = ctypes.c_void_p
+  lib.litert_lm_embedding_engine_compute_embedding.argtypes = [
+      ctypes.c_void_p,
+      ctypes.POINTER(ctypes.c_void_p),
+      ctypes.c_size_t,
+      ctypes.c_void_p,
+  ]
+  lib.litert_lm_embedding_engine_compute_embedding_batch.restype = (
+      ctypes.c_void_p
+  )
+  lib.litert_lm_embedding_engine_compute_embedding_batch.argtypes = [
+      ctypes.c_void_p,
+      ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p)),
+      ctypes.POINTER(ctypes.c_size_t),
+      ctypes.c_size_t,
+      ctypes.c_void_p,
+  ]
+
 
 def set_min_log_severity(severity: LogSeverity):
   """Sets the minimum logging severity for the C library."""

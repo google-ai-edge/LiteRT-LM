@@ -28,6 +28,8 @@ licenses(["notice"])
 exports_files([
     "conversation.cc",
     "conversation.h",
+    "embedding_engine.cc",
+    "embedding_engine.h",
     "engine.cc",
     "engine.h",
 ])
@@ -76,7 +78,18 @@ CONVERSATION_DEPS = [
     "//runtime/conversation/model_data_processor:gemma4_data_processor_config",
 ]
 
-ENGINE_COMMON_DEPS = ENGINE_LITE_COMMON_DEPS + CONVERSATION_DEPS
+EMBEDDING_ENGINE_DEPS = [
+    ":embedding_engine_internal",
+    "//runtime/components:model_resources",
+    "//runtime/core:embedding_engine_impl",
+    "//runtime/engine:embedding_engine",
+    "//runtime/engine:embedding_engine_settings",
+    "//runtime/executor:litert_compiled_model_executor_utils",
+    "//support/preprocessor:audio_preprocessor",
+    "//support/preprocessor:audio_preprocessor_miniaudio",
+]
+
+ENGINE_COMMON_DEPS = ENGINE_LITE_COMMON_DEPS + CONVERSATION_DEPS + EMBEDDING_ENGINE_DEPS
 
 # Header library for engine + session C API.
 cc_library(
@@ -89,6 +102,14 @@ cc_library(
 cc_library(
     name = "conversation_headers",
     hdrs = ["conversation.h"],
+    visibility = ["//visibility:public"],
+    deps = [":engine_headers"],
+)
+
+# Header library for embedding engine C API.
+cc_library(
+    name = "embedding_engine_headers",
+    hdrs = ["embedding_engine.h"],
     visibility = ["//visibility:public"],
     deps = [":engine_headers"],
 )
@@ -115,13 +136,25 @@ cc_library(
     visibility = ["//visibility:public"],
     deps = [
         ":conversation_headers",
-        ":engine_internal",
         "//runtime/components/logits_processor:no_repeat_ngram_config",
         "//runtime/components/logits_processor:repetition_penalty_config",
         "//runtime/components/logits_processor:suppress_tokens_config",
         "//runtime/conversation",
         "//runtime/conversation:thinking_config",
         "//runtime/engine:engine_settings",
+    ],
+)
+
+cc_library(
+    name = "embedding_engine_internal",
+    hdrs = ["embedding_engine_internal.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":embedding_engine_headers",
+        "//runtime/engine:embedding_engine",
+        "//runtime/engine:embedding_engine_settings",
+        "//runtime/engine:io_types",
+        "//support/preprocessor:image_preprocessor",
     ],
 )
 
@@ -181,10 +214,12 @@ cc_library(
     name = "engine",
     srcs = [
         "conversation.cc",
+        "embedding_engine.cc",
         "engine.cc",
     ],
     hdrs = [
         "conversation.h",
+        "embedding_engine.h",
         "engine.h",
     ],
     visibility = ["//visibility:public"],
@@ -199,10 +234,12 @@ cc_library(
     name = "engine_cpu",
     srcs = [
         "conversation.cc",
+        "embedding_engine.cc",
         "engine.cc",
     ],
     hdrs = [
         "conversation.h",
+        "embedding_engine.h",
         "engine.h",
     ],
     visibility = ["//visibility:public"],
@@ -244,10 +281,33 @@ cc_test(
     ],
 )
 
+cc_test(
+    name = "embedding_engine_test",
+    srcs = ["embedding_engine_test.cc"],
+    data = [
+        "//runtime/testdata",
+    ],
+    tags = ["requires-mac-inputs:hard"],
+    target_compatible_with = select({
+        "@platforms//os:ios": [],
+        "@platforms//os:linux": [],
+        "@platforms//os:osx": [],
+        "@platforms//os:windows": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":embedding_engine_headers",
+        ":engine",
+        ":engine_headers",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
 cc_binary(
     name = "litert-lm",
     srcs = [
         "conversation.cc",
+        "embedding_engine.cc",
         "engine.cc",
     ],
     copts = ["-fvisibility=hidden"],
@@ -272,6 +332,7 @@ cc_binary(
     linkshared = 1,
     deps = ENGINE_COMMON_DEPS + [
         ":conversation_headers",
+        ":embedding_engine_headers",
         ":engine_headers",
         "//runtime/core:engine_impl",
     ] + select({

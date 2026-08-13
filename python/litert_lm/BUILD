@@ -90,6 +90,16 @@ pytype_strict_library(
 )
 
 pytype_strict_library(
+    name = "embedding_engine",
+    srcs = ["embedding_engine.py"],
+    deps = [
+        ":_ffi",
+        ":_messages",
+        ":interfaces",
+    ],
+)
+
+pytype_strict_library(
     name = "benchmark",
     srcs = ["benchmark.py"],
     deps = [
@@ -117,6 +127,7 @@ pytype_strict_library(
         ":_messages",
         ":benchmark",
         ":conversation",
+        ":embedding_engine",
         ":engine",
         ":interfaces",
         ":session",
@@ -127,6 +138,20 @@ pytype_strict_library(
 py_test(
     name = "engine_test",
     srcs = ["engine_test.py"],
+    data = ["//runtime/testdata"],
+    tags = ["nowindows"],
+    deps = [
+        ":litert_lm",
+        "@absl_py//absl/flags",
+        "@absl_py//absl/testing:absltest",
+        "@absl_py//absl/testing:parameterized",
+    ],
+    imports = [".."],
+)
+
+py_test(
+    name = "embedding_engine_test",
+    srcs = ["embedding_engine_test.py"],
     data = ["//runtime/testdata"],
     tags = ["nowindows"],
     deps = [

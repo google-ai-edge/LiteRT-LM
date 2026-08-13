@@ -25,6 +25,9 @@ from ._messages import Role
 from ._messages import ToolCall
 from .benchmark import Benchmark
 from .conversation import Conversation
+from .embedding_engine import EmbeddingEngine
+from .embedding_engine import EmbeddingOptions
+from .embedding_engine import EmbeddingResponse
 from .engine import Engine
 from .interfaces import AbstractBenchmark
 from .interfaces import AbstractConversation
@@ -60,6 +63,9 @@ __all__ = (
     "Content",
     "Contents",
     "Conversation",
+    "EmbeddingEngine",
+    "EmbeddingOptions",
+    "EmbeddingResponse",
     "Engine",
     "LiteRtLmConstraintProviderType",
     "LogSeverity",
