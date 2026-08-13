@@ -19,6 +19,8 @@ package(
     default_visibility = ["//kotlin:__subpackages__"],
 )
 
+exports_files(["litertlm.cc"])
+
 cc_binary(
     name = "litertlm_jni",
     srcs = ["litertlm.cc"],
