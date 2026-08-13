@@ -30,6 +30,8 @@ swift_library(
         "Capabilities.swift",
         "Config.swift",
         "Conversation.swift",
+        "EmbeddingEngine.swift",
+        "EmbeddingEngineConfig.swift",
         "Engine.swift",
         "ExperimentalFlags.swift",
         "LiteRTLMError.swift",
@@ -108,6 +110,7 @@ cc_library(
     name = "CLiteRTLM_objc",
     hdrs = [
         "//c:conversation.h",
+        "//c:embedding_engine.h",
         "//c:engine.h",
         "//schema/capabilities:capabilities_c.h",
     ],
@@ -137,6 +140,7 @@ apple_xcframework(
     public_hdrs = [
         "//c:engine.h",
         "//c:conversation.h",
+        "//c:embedding_engine.h",
         "//schema/capabilities:capabilities_c.h",
     ],
     deps = [
@@ -173,6 +177,7 @@ genrule(
         ":CLiteRTLM_universal",
         "//c:engine.h",
         "//c:conversation.h",
+        "//c:embedding_engine.h",
         "//schema/capabilities:capabilities_c.h",
     ],
     outs = ["CLiteRTLM_mac.zip"],
@@ -183,12 +188,14 @@ genrule(
        # Copy the headers
        cp $(location //c:engine.h) CLiteRTLM_mac/Headers/
        cp $(location //c:conversation.h) CLiteRTLM_mac/Headers/
+       cp $(location //c:embedding_engine.h) CLiteRTLM_mac/Headers/
        cp $(location //schema/capabilities:capabilities_c.h) CLiteRTLM_mac/Headers/
        # Create module map
        cat << 'EOF' > CLiteRTLM_mac/Headers/module.modulemap
 module CLiteRTLM {
    header "engine.h"
    header "conversation.h"
+   header "embedding_engine.h"
    header "capabilities_c.h"
    export *
 }
@@ -266,5 +273,29 @@ ios_unit_test(
     # The ios_unit_test depends on the swift_library containing the test code.
     deps = [
         ":LiteRT_LM_CapabilitiesTestsLib",
+    ],
+)
+
+# Swift library containing test sources for EmbeddingEngine.
+swift_library(
+    name = "LiteRT_LM_EmbeddingEngineTestsLib",
+    testonly = True,
+    srcs = ["EmbeddingEngineTests.swift"],
+    data = ["//runtime/testdata"],
+    deps = [
+        ":LiteRT_LM_Swift",
+
+    ],
+)
+
+ios_unit_test(
+    name = "LiteRT_LM_EmbeddingEngine_Tests",
+    data = [
+        "//runtime/testdata",
+    ],
+    minimum_os_version = "15.0",
+    # The ios_unit_test depends on the swift_library containing the test code.
+    deps = [
+        ":LiteRT_LM_EmbeddingEngineTestsLib",
     ],
 )

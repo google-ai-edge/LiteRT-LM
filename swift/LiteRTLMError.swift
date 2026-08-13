@@ -17,6 +17,7 @@ import Foundation
 /// Errors thrown by the LiteRT-LM Swift API.
 public enum LiteRTLMError: Error, LocalizedError, Equatable {
   case engine(EngineError)
+  case embeddingEngine(EmbeddingEngineError)
   case conversation(ConversationError)
   case config(ConfigError)
   case tool(ToolError)
@@ -25,6 +26,7 @@ public enum LiteRTLMError: Error, LocalizedError, Equatable {
   public var errorDescription: String? {
     switch self {
     case .engine(let error): return error.errorDescription
+    case .embeddingEngine(let error): return error.errorDescription
     case .conversation(let error): return error.errorDescription
     case .config(let error): return error.errorDescription
     case .tool(let error): return error.errorDescription
@@ -70,6 +72,36 @@ public enum LiteRTLMError: Error, LocalizedError, Equatable {
         return "Failed to set supported LoRA ranks."
       case .failedToSetSupportedAudioLoraRanks:
         return "Failed to set supported Audio LoRA ranks."
+      }
+    }
+  }
+
+  /// Specific errors related to the `EmbeddingEngine`.
+  public enum EmbeddingEngineError: Error, LocalizedError, Equatable {
+    case alreadyInitialized
+    case failedToCreateSettings
+    case failedToCreateEngine
+    case notInitialized
+    case failedToCreateInputData
+    case failedToComputeEmbedding
+    case failedToComputeEmbeddingBatch
+
+    public var errorDescription: String? {
+      switch self {
+      case .alreadyInitialized:
+        return "EmbeddingEngine is already initialized."
+      case .failedToCreateSettings:
+        return "Failed to create embedding engine settings."
+      case .failedToCreateEngine:
+        return "Failed to create embedding engine."
+      case .notInitialized:
+        return "EmbeddingEngine is not initialized."
+      case .failedToCreateInputData:
+        return "Failed to create input data for embedding."
+      case .failedToComputeEmbedding:
+        return "Failed to compute embedding."
+      case .failedToComputeEmbeddingBatch:
+        return "Failed to compute embedding batch."
       }
     }
   }
