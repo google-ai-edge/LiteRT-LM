@@ -1,0 +1,267 @@
+# Copyright 2026 The ODML Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: "ML-CI-Linux-CMake"
+on:
+  push:
+    tags:
+    - v*.*.*
+  pull_request:
+    branches:
+    - main
+  schedule:
+    - cron: "0 10 * * *"  # Run at 2am PST (10am UTC) every day to refresh the cache.
+  workflow_dispatch:  # Manual trigger
+    inputs:
+      REFRESH_CACHE:
+        description: 'Refresh cache to remove unused files'
+        type: boolean
+        default: true
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  presubmit:
+    name: "Presubmit-Linux-CMake"
+    runs-on: "linux-x86-c4-16"
+    container:
+      image: ubuntu:24.04
+    permissions:
+      id-token: write
+      actions: write
+      contents: write
+    env:
+      MODEL_KEY: gemma-4-E2B-it.litertlm
+      MODEL_PATH: ./models/gemma4
+      MODEL_URL: gs://litert-lm-cicd/models/gemma4/gemma-4-E2B-it.litertlm
+
+      GH_TOKEN: ${{ github.token }}
+      REFRESH_CACHE: ${{ github.event_name == 'schedule' ||
+                         (github.event_name == 'workflow_dispatch' && inputs.REFRESH_CACHE) }}
+    steps:
+      - name: Install System Dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
+          TZ: Etc/UTC
+        run: |
+          ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+          apt-get update && apt-get install -yq \
+            build-essential gcc clang cmake make gdb pkg-config \
+            openjdk-17-jdk-headless git wget curl unzip \
+            tar python3 python3-dev python3-pip git-lfs \
+            python3-numpy ccache zlib1g-dev libssl-dev \
+            libpng-dev libcurl4-openssl-dev libfftw3-dev \
+            golang-go npm patchelf \
+            apt-file && apt-file update
+          git lfs install
+
+      - name: Install pytest
+        run: python3 -m pip install --break-system-packages pytest==8.3.4
+
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Checkout code
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+        with:
+          lfs: true
+
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@98ddc00a17442e89a24bbf282954a3b65ce6d200 # v2.1.0
+
+
+      - name: Set up Build Cache GCS keys
+        id: cache-keys
+        run: |
+          # Greedy hash of the core source directories used for both builds
+          SRC_HASH="${{ hashFiles('c/**', 'runtime/**', 'schema/**', 'support/**') }}"
+
+          # Prebuild keys
+          PREBUILD_RESTORE_KEY="${{ runner.os }}-prebuild-$SRC_HASH"
+          PREBUILD_KEY="$PREBUILD_RESTORE_KEY-${{ github.sha }}"
+
+          # LiteRT LM keys
+          LITERT_LM_RESTORE_KEY="${{ runner.os }}-litert_lm-$SRC_HASH"
+          LITERT_LM_KEY="$LITERT_LM_RESTORE_KEY-${{ github.sha }}"
+
+          echo "PREBUILD_RESTORE_KEY=$PREBUILD_RESTORE_KEY" >> "$GITHUB_OUTPUT"
+          echo "PREBUILD_KEY=$PREBUILD_KEY" >> "$GITHUB_OUTPUT"
+
+          echo "LITERT_LM_RESTORE_KEY=$LITERT_LM_RESTORE_KEY" >> "$GITHUB_OUTPUT"
+          echo "LITERT_LM_KEY=$LITERT_LM_KEY" >> "$GITHUB_OUTPUT"
+
+      - name: Check Android Toolchain Cache in GCS
+        uses: ./.github/workflows/actions/gcs-cache
+
+        id: android-cache
+        with:
+          mode: 'restore'
+          target-dir: '$HOME/android-sdk'
+          bucket-url: 'gs://litert-lm-cicd/caches/linux/cmake/android-sdk'
+          cache-key: 'linux-android-sdk-api34-buildtools34-v1'
+          restore-key: 'linux-android-sdk-api34-buildtools34-v1'
+          refresh-cache: ${{ env.REFRESH_CACHE }}
+
+      - name: Install Android SDK
+        if: steps.android-cache.outputs.cache-hit != 'true'
+        run: |
+          export ANDROID_HOME="$HOME/android-sdk"
+          mkdir -p "$ANDROID_HOME/cmdline-tools"
+
+          wget -qO cmdline-tools.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+          unzip -q cmdline-tools.zip -d "$ANDROID_HOME/cmdline-tools"
+          mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
+          rm cmdline-tools.zip
+
+          set +o pipefail
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platform-tools" \
+            "platforms;android-33" "platforms;android-34" \
+            "build-tools;33.0.1" "build-tools;34.0.0" > /dev/null
+          set -o pipefail
+
+      - name: Export SDK Environment Variables
+        run: |
+          echo "ANDROID_HOME=$HOME/android-sdk" >> $GITHUB_ENV
+          echo "ANDROID_SDK_ROOT=$HOME/android-sdk" >> $GITHUB_ENV
+
+      - name: Save Android Toolchain Cache to GCS
+        uses: ./.github/workflows/actions/gcs-cache
+
+        with:
+          mode: 'save'
+          target-dir: '$HOME/android-sdk'
+          bucket-url: 'gs://litert-lm-cicd/caches/linux/cmake/android-sdk'
+          cache-key: 'linux-android-sdk-api34-buildtools34-v1'
+          restore-key: 'linux-android-sdk-api34-buildtools34-v1'
+          refresh-cache: ${{ env.REFRESH_CACHE }}
+        env:
+          CACHE_HIT: ${{ steps.android-cache.outputs.cache-hit }}
+
+      - name: Setup Android NDK
+        id: setup-ndk
+        uses: nttld/setup-ndk@afb4c9964b521afb97c864b7d40b11e6911bd410 # v1.5.0
+        with:
+          ndk-version: r28b
+          add-to-path: false
+
+      - name: Export NDK Home globally
+        env:
+          NDK_PATH: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: echo "ANDROID_NDK_HOME=$NDK_PATH" >> $GITHUB_ENV
+
+      - name: Restore CCache from GCS
+        uses: ./.github/workflows/actions/gcs-cache
+
+        id: restore-ccache
+        with:
+          mode: 'restore'
+          target-dir: '.ccache'
+          bucket-url: 'gs://litert-lm-cicd/caches/linux/cmake/ccache'
+          cache-key: '${{ steps.ccache-keys.outputs.CACHE_KEY }}'
+          restore-key: '${{ steps.ccache-keys.outputs.CACHE_RESTORE_KEY_0 }}'
+          refresh-cache: ${{ env.REFRESH_CACHE }}
+
+      - name: Restore Prebuild Cache
+        uses: ./.github/workflows/actions/gcs-cache
+
+        id: restore-prebuild
+        with:
+          mode: 'restore'
+          target-dir: 'cmake/build/prebuild/build'
+          bucket-url: 'gs://litert-lm-cicd/caches/linux/cmake/prebuild'
+          cache-key: ${{ steps.cache-keys.outputs.PREBUILD_KEY }}
+          restore-key: ${{ steps.cache-keys.outputs.PREBUILD_RESTORE_KEY }}
+          refresh-cache: ${{ env.REFRESH_CACHE }}
+
+      - name: Restore LiteRT LM Cache
+        uses: ./.github/workflows/actions/gcs-cache
+
+        id: restore-litert-lm
+        with:
+          mode: 'restore'
+          target-dir: 'cmake/build/litert_lm/build'
+          bucket-url: 'gs://litert-lm-cicd/caches/linux/cmake/litert-lm'
+          cache-key: ${{ steps.cache-keys.outputs.LITERT_LM_KEY }}
+          restore-key: ${{ steps.cache-keys.outputs.LITERT_LM_RESTORE_KEY }}
+          refresh-cache: ${{ env.REFRESH_CACHE }}
+
+
+      - name: Download Model
+        run: |
+          TARGET_DIR=${{ env.MODEL_PATH }}
+          BUCKET_URL=${{ env.MODEL_URL }}
+          MODEL_KEY=${{ env.MODEL_KEY }}
+          mkdir -p "$TARGET_DIR"
+          gcloud storage cp "$BUCKET_URL" "$TARGET_DIR/$MODEL_KEY"
+
+
+      - name: Configure CMake
+        run: |
+          # The restored caches will populate external/ and _deps/ before this runs.
+          CXX=clang++ CC=clang cmake -B cmake/build -G "Unix Makefiles" -S . \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DENABLE_CCACHE=ON
+
+      - name: Build
+        run: CXX=clang++ CC=clang cmake --build cmake/build --config Release --parallel 4
+
+      - name: Run pytest
+        run: pytest tools/pytest/ --backend=cpu --model-path=./models/gemma4/gemma-4-E2B-it.litertlm --build-system=cmake
+
+      - name: Save CCache to GCS
+        uses: ./.github/workflows/actions/gcs-cache
+
+        with:
+          mode: 'save'
+          target-dir: '.ccache'
+          bucket-url: 'gs://litert-lm-cicd/caches/linux/cmake/ccache'
+          cache-key: ${{ steps.ccache-keys.outputs.CACHE_KEY }}           # <--- UPDATED
+          restore-key: ${{ steps.ccache-keys.outputs.CACHE_RESTORE_KEY_0 }} # <--- UPDATED
+          refresh-cache: ${{ env.REFRESH_CACHE }}
+        env:
+          CACHE_HIT: ${{ steps.restore-ccache.outputs.cache-hit }}
+
+      - name: Save Prebuild Cache
+        uses: ./.github/workflows/actions/gcs-cache
+
+        with:
+          mode: 'save'
+          target-dir: 'cmake/build/prebuild/build'
+          bucket-url: 'gs://litert-lm-cicd/caches/linux/cmake/prebuild'
+          cache-key: ${{ steps.cache-keys.outputs.PREBUILD_KEY }}
+          restore-key: ${{ steps.cache-keys.outputs.PREBUILD_RESTORE_KEY }}
+          refresh-cache: ${{ env.REFRESH_CACHE }}
+        env:
+          CACHE_HIT: ${{ steps.restore-prebuild.outputs.cache-hit }}
+
+      - name: Save LiteRT LM Cache
+        uses: ./.github/workflows/actions/gcs-cache
+
+        with:
+          mode: 'save'
+          target-dir: 'cmake/build/litert_lm/build'
+          bucket-url: 'gs://litert-lm-cicd/caches/linux/cmake/litert-lm'
+          cache-key: ${{ steps.cache-keys.outputs.LITERT_LM_KEY }}
+          restore-key: ${{ steps.cache-keys.outputs.LITERT_LM_RESTORE_KEY }}
+          refresh-cache: ${{ env.REFRESH_CACHE }}
+        env:
+          CACHE_HIT: ${{ steps.restore-litert-lm.outputs.cache-hit }}

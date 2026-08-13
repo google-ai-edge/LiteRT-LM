@@ -123,7 +123,8 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     )
   else:
     binary_path = os.path.join(
-        repo_root, "cmake", "build", f"litert_lm_main{exe_ext}"
+        repo_root, "cmake", "build", "litert_lm", "build",
+        f"litert_lm_main{exe_ext}"
     )
 
   if not os.path.exists(binary_path):

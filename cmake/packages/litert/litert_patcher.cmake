@@ -21,14 +21,26 @@ include("${LITERTLM_TFLITE_CONFIG_PATH}")
 
 set(ROOT_LIST "${LITERTLM_LITERT_SRC_DIR}/CMakeLists.txt")
 
-file(REMOVE_RECURSE "${LITERTLM_LITERT_SRC_DIR}/../tflite")
-file(REMOVE_RECURSE "${LITERTLM_LITERT_SRC_DIR}/../tensor")
-file(COPY "${LITERTLM_TFLITE_SRC_DIR}/" 
+if(EXISTS "${LITERTLM_LITERT_SRC_DIR}/../tflite")
+    file(REMOVE_RECURSE "${LITERTLM_LITERT_SRC_DIR}/../tflite")
+endif()
+
+if(EXISTS "${LITERTLM_LITERT_SRC_DIR}/../tensor")
+    file(REMOVE_RECURSE "${LITERTLM_LITERT_SRC_DIR}/../tensor")
+endif()
+
+if(EXISTS "${LITERTLM_TFLITE_SRC_DIR}")
+    file(COPY "${LITERTLM_TFLITE_SRC_DIR}/" 
      DESTINATION "${LITERTLM_LITERT_SRC_DIR}/../tflite")
+endif()
+
+if(EXISTS "${LITERTLM_TENSORFLOW_SOURCE_DIR}")
+file(COPY "${LITERTLM_TENSORFLOW_SOURCE_DIR}/" 
+     DESTINATION "${LITERTLM_LITERT_SRC_DIR}/../tensor")
+endif()
+
 file(COPY_FILE "${LITERTLM_LITERT_PACKAGE_DIR}/shims/CMakeLists-shim.txt"
      "${ROOT_LIST}")
-file(COPY_FILE "${LITERTLM_LITERT_PACKAGE_DIR}/shims/CMakeLists-support-shim.txt"
-     "${LITERTLM_LITERT_SRC_DIR}/../support/CMakeLists.txt")
 file(REMOVE "${LITERTLM_LITERT_SRC_DIR}/../support/preprocessor/CMakeLists.txt")
 
 patch_file_content("${ROOT_LIST}" 

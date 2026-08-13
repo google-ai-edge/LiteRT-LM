@@ -125,7 +125,6 @@ add_litertlm_library(runtime_engine_litert_lm_lib STATIC
   litert_lm_lib.cc
 )
 add_library(LiteRTLM::Runtime::Engine::Lib ALIAS runtime_engine_litert_lm_lib)
-add_dependencies(runtime_engine_litert_lm_lib)
 
 target_include_directories(runtime_engine_litert_lm_lib
   PUBLIC

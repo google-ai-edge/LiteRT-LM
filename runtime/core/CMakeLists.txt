@@ -162,24 +162,35 @@ target_include_directories(runtime_core_engine_advanced_impl
 
 target_link_libraries(runtime_core_engine_advanced_impl
   PUBLIC
-    LiteRTLM::Runtime::Components::ModelResourcesInterface
-    LiteRTLM::Runtime::Engine::Interface
-    LiteRTLM::Runtime::Engine::Settings
-    LiteRTLM::Runtime::Engine::IoTypes
-    LiteRTLM::Runtime::Executor::AudioExecutorInterface
-    LiteRTLM::Runtime::Executor::AudioExecutorSettings
-    LiteRTLM::Runtime::Executor::AudioLitertCompiledModelExecutor
-    LiteRTLM::Runtime::Executor::ExecutorSettingsBase
-    LiteRTLM::Runtime::Executor::LitertCompiledModelExecutorUtils
-    LiteRTLM::Runtime::Executor::LlmExecutorInterface
-    LiteRTLM::Runtime::Executor::LlmExecutorSettings
-    LiteRTLM::Runtime::Executor::LlmLitertCompiledModelExecutor
-    LiteRTLM::Runtime::Executor::MagicNumberConfigsHelper
-    LiteRTLM::Runtime::Executor::VisionExecutorInterface
-    LiteRTLM::Runtime::Executor::VisionLitertCompiledModelExecutor
+    LiteRTLM::Runtime::Components
+    LiteRTLM::Runtime::Engine
+    LiteRTLM::Runtime::Executor
     LiteRTLM::Runtime::Framework::Threadpool
-    LiteRTLM::Runtime::Executor::LlmLitertCompiledModelExecutorFactory
-    LiteRTLM::Runtime::Util::FileFormatUtil
+    LiteRTLM::Runtime::Util
+    LITERTLM_DEPS
+)
+
+# ==============================================================================
+# Embedding Engine Impl
+# ==============================================================================
+add_litertlm_library(runtime_core_embedding_engine_impl STATIC
+  embedding_engine_impl.cc
+)
+add_library(LiteRTLM::Runtime::Core::EmbeddingEngineImpl ALIAS runtime_core_embedding_engine_impl)
+
+target_include_directories(runtime_core_embedding_engine_impl
+  PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+target_link_libraries(runtime_core_embedding_engine_impl
+  PUBLIC
+    LiteRTLM::Runtime::Components
+    LiteRTLM::Runtime::Engine
+    LiteRTLM::Runtime::Executor
+    LiteRTLM::Runtime::Framework::Threadpool
+    LiteRTLM::Runtime::Util
     LITERTLM_DEPS
 )
 
@@ -232,6 +243,7 @@ add_library(LiteRTLM::Runtime::Core ALIAS runtime_core_libs)
 
 target_link_libraries(runtime_core_libs INTERFACE
   LiteRTLM::Runtime::Core::EngineAdvancedImpl
+  LiteRTLM::Runtime::Core::EmbeddingEngineImpl
   LiteRTLM::Runtime::Core::Pipeline
   LiteRTLM::Runtime::Core::SessionAdvanced
   LiteRTLM::Runtime::Core::SessionUtils

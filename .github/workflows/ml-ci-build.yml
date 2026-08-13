@@ -135,7 +135,7 @@ jobs:
         run: echo "ANDROID_NDK_HOME=$NDK_PATH" >> $GITHUB_ENV
 
 
-      - name : Set up cache keys.
+      - name : Set up cache keys
         id: cache-keys
         env:
           GH_WORKFLOW: ${{ github.workflow }}

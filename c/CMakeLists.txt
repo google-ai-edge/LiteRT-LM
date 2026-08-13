@@ -13,39 +13,75 @@
 # limitations under the License.
 
 # ==============================================================================
-# Engine Library
+# Conversation
+# ==============================================================================
+add_litertlm_library(c_conversation STATIC
+  conversation.cc
+)
+add_library(LiteRTLM::C::Conversation ALIAS c_conversation)
+
+target_include_directories(c_conversation
+  PRIVATE
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+target_link_libraries(c_conversation
+  PUBLIC
+    LITERTLM_DEPS
+    LiteRTLM::Runtime::Conversation
+    LiteRTLM::Runtime::Core
+    LiteRTLM::Runtime::Components
+    LiteRTLM::Runtime::Engine
+    LiteRTLM::Runtime::Executor
+    LiteRTLM::Support::Tokenizer
+)
+
+# ==============================================================================
+# Engine
 # ==============================================================================
 add_litertlm_library(c_engine STATIC
-  embedding_engine.cc
-  embedding_engine.h
-  embedding_engine_internal.h
   engine.cc
-  engine_internal.h
 )
 add_library(LiteRTLM::C::Engine ALIAS c_engine)
 
 target_include_directories(c_engine
   PRIVATE
-    ${LITERTLM_INCLUDE_PATHS}        # Project Root & Generated Headers
-    ${LITERT_INCLUDE_PATHS}          # LiteRT External Headers
-    ${THIRD_PARTY_DIR}/json/include # @nlohmann_json//:json
+    ${LITERTLM_INCLUDE_PATHS}
 )
 
 target_link_libraries(c_engine
   PUBLIC
     LITERTLM_DEPS
+    LiteRTLM::C::EmbeddingEngine
+    LiteRTLM::C::Conversation
     LiteRTLM::Runtime::Conversation
-    LiteRTLM::Runtime::Conversation::IoTypes
-    LiteRTLM::Runtime::Core::EmbeddingEngineImpl
-    LiteRTLM::Runtime::Core::EngineAdvancedImpl
+    LiteRTLM::Runtime::Core
     LiteRTLM::Runtime::Components
-    LiteRTLM::Runtime::Engine::EmbeddingEngineSettings
-    LiteRTLM::Runtime::Engine::Interface
-    LiteRTLM::Runtime::Engine::Settings
-    LiteRTLM::Runtime::Engine::IoTypes
-    LiteRTLM::Runtime::Executor::ExecutorSettingsBase
-    LiteRTLM::Runtime::Executor::LitertCompiledModelExecutorUtils
+    LiteRTLM::Runtime::Engine
+    LiteRTLM::Runtime::Executor
     LiteRTLM::Support::Tokenizer
+)
+
+# ==============================================================================
+# Embedding Engine
+# ==============================================================================
+add_litertlm_library(c_embedding_engine STATIC
+  embedding_engine.cc
+)
+add_library(LiteRTLM::C::EmbeddingEngine ALIAS c_embedding_engine)
+
+target_include_directories(c_embedding_engine
+  PRIVATE
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+target_link_libraries(c_embedding_engine
+  PUBLIC
+    LITERTLM_DEPS
+    LiteRTLM::C::Conversation
+    LiteRTLM::Runtime::Components
+    LiteRTLM::Runtime::Engine
+    LiteRTLM::Runtime::Executor
 )
 
 # ==============================================================================
@@ -55,5 +91,7 @@ add_library(c_libs INTERFACE)
 add_library(LiteRTLM::C ALIAS c_libs)
 
 target_link_libraries(c_libs INTERFACE
+  LiteRTLM::C::Conversation
   LiteRTLM::C::Engine
+  LiteRTLM::C::EmbeddingEngine
 )

@@ -735,6 +735,33 @@ target_link_libraries(runtime_executor_embedding_executor_settings
 )
 
 # ==============================================================================
+# Embedding LiteRT Compiled Model Executor
+# ==============================================================================
+add_litertlm_library(runtime_executor_embedding_litert_compiled_model_executor STATIC
+  embedding_litert_compiled_model_executor.cc
+)
+add_library(LiteRTLM::Runtime::Executor::EmbeddingLitertCompiledModelExecutor ALIAS
+  runtime_executor_embedding_litert_compiled_model_executor)
+
+target_include_directories(runtime_executor_embedding_litert_compiled_model_executor
+  PRIVATE
+    ${LITERTLM_GENERATED_SRC_DIR}
+    ${LITERT_INCLUDE_DIR}
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+target_link_libraries(runtime_executor_embedding_litert_compiled_model_executor
+  PUBLIC
+    LiteRTLM::Runtime::Executor::EmbeddingExecutorSettings
+    LiteRTLM::Runtime::Executor::ExecutorSettingsBase
+    LiteRTLM::Runtime::Executor::LitertCompiledModelExecutorUtils
+    LiteRTLM::Runtime::Executor::LlmExecutorIoTypes
+    LiteRTLM::Runtime::Components
+    LiteRTLM::Runtime::Util
+    LITERTLM_DEPS
+)
+
+# ==============================================================================
 # Folder Facade
 # ==============================================================================
 add_library(runtime_executor_libs INTERFACE)
@@ -769,4 +796,5 @@ target_link_libraries(runtime_executor_libs INTERFACE
   LiteRTLM::Runtime::Executor::DefaultStaticGpuAcceleratorInterface
   LiteRTLM::Runtime::Executor::Litert
   LiteRTLM::Runtime::Executor::EmbeddingExecutorSettings
+  LiteRTLM::Runtime::Executor::EmbeddingLitertCompiledModelExecutor
 )
