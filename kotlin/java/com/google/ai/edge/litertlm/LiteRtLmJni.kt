@@ -415,6 +415,7 @@ internal object LiteRtLmJni {
     embeddingEnginePointer: Long,
     inputData: Array<InputData>,
     normalize: Boolean,
+    insertSpecialTokens: Boolean,
   ): EmbeddingResponse
 
   /** Computes embeddings for a batch of input data requests. */
@@ -422,5 +423,6 @@ internal object LiteRtLmJni {
     embeddingEnginePointer: Long,
     inputDataBatch: Array<Array<InputData>>,
     normalize: Boolean,
+    insertSpecialTokens: Boolean,
   ): Array<EmbeddingResponse>
 }
