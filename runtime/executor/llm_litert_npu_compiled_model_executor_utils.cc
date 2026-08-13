@@ -30,6 +30,7 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/c/litert_layout.h"  // from @litert
+#include "litert/cc/litert_common.h"  // from @litert
 #include "litert/cc/litert_layout.h"  // from @litert
 #include "runtime/util/status_macros.h"  // IWYU pragma: keep NOLINT
 #include "tflite/types/half.h"  // from @litert
@@ -1612,6 +1613,14 @@ absl::Status WriteAndPadPleEmbeddings(::litert::TensorBuffer& buffer,
                                       int32_t final_zero_point) {
   RET_CHECK_EQ(ple_embeddings.size(), seq_pos_size * ple_dim);
   LITERT_ASSIGN_OR_RETURN(size_t buffer_size, buffer.PackedSize());
+  // Unlock buffer if locked by a prior submodel run. Ignore
+  // kErrorRuntimeFailure since Unlock() returns an error if the buffer is
+  // already unlocked.
+  if (auto unlock_res = buffer.Unlock();
+      !unlock_res.HasValue() &&
+      unlock_res.Error().StatusCC() != litert::Status::kErrorRuntimeFailure) {
+    LITERT_RETURN_IF_ERROR(unlock_res);
+  }
   LITERT_ASSIGN_OR_RETURN(
       auto lock_and_addr,
       ::litert::TensorBufferScopedLock::Create(
