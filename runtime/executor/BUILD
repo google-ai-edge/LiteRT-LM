@@ -913,6 +913,22 @@ cc_library(
         ":executor_settings_base",
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "//runtime/util:scoped_file",
+    ],
+)
+
+cc_test(
+    name = "embedding_executor_settings_test",
+    srcs = ["embedding_executor_settings_test.cc"],
+    deps = [
+        ":embedding_executor_settings",
+        ":executor_settings_base",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "//runtime/util:scoped_file",
+        "//runtime/util:test_utils",
     ],
 )
 

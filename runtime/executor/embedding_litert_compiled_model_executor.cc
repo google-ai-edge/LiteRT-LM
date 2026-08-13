@@ -157,10 +157,33 @@ EmbeddingLiteRtCompiledModelExecutor::Create(
   litert::Options options;
   switch (executor_settings.GetBackend()) {
     case Backend::CPU: {
+      LITERT_ASSIGN_OR_RETURN(auto& cpu_options, options.GetCpuOptions());
+      LITERT_RETURN_IF_ERROR(
+          SetCpuOptions(cpu_options, executor_settings.GetNumThreads()));
+      auto weight_cache_file = executor_settings.GetWeightCacheFile(
+          absl::StrCat(EmbeddingExecutorSettings::kEncoderName,
+                       ExecutorSettingsBase::kXnnpackCacheSuffix),
+          /*check_and_clean=*/true);
+      ABSL_RETURN_IF_ERROR(SetCpuCacheOptions(
+          weight_cache_file,
+          /*logging_prefix=*/EmbeddingExecutorSettings::kEncoderName,
+          cpu_options));
       options.SetHardwareAccelerators(litert::HwAccelerators::kCpu);
       break;
     }
     case Backend::GPU: {
+      LITERT_ASSIGN_OR_RETURN(auto& gpu_options, options.GetGpuOptions());
+      ABSL_ASSIGN_OR_RETURN(
+          const auto cache_files,
+          GetGpuModelCacheData(executor_settings,
+                               EmbeddingExecutorSettings::kEncoderName));
+      LITERT_RETURN_IF_ERROR(
+          SetCommonGpuOptions(executor_settings, gpu_options));
+      ABSL_RETURN_IF_ERROR(SetGpuCacheOptions(
+          cache_files.weight_cache_file, cache_files.program_cache_file,
+          cache_files.cache_key,
+          /*logging_prefix=*/EmbeddingExecutorSettings::kEncoderName,
+          /*cache_compiled_shaders_only=*/false, gpu_options));
       options.SetHardwareAccelerators(litert::HwAccelerators::kGpu);
       break;
     }

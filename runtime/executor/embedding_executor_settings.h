@@ -15,16 +15,24 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_EMBEDDING_EXECUTOR_SETTINGS_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_EMBEDDING_EXECUTOR_SETTINGS_H_
 
+#include <memory>
 #include <ostream>
+#include <string>
+#include <utility>
+#include <variant>
 
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/util/scoped_file.h"
 
 namespace litert::lm {
 
 // Settings for configuring an embedding executor.
 class EmbeddingExecutorSettings : public ExecutorSettingsBase {
  public:
+  static constexpr absl::string_view kEncoderName = ".text_encoder";
+
   // Creates a default configuration for the embedding executor.
   //
   // Args:
@@ -44,6 +52,55 @@ class EmbeddingExecutorSettings : public ExecutorSettingsBase {
   //   model_assets: The model assets to be used by the executor.
   explicit EmbeddingExecutorSettings(const ModelAssets& model_assets)
       : ExecutorSettingsBase(model_assets) {}
+
+  // Getter for num_threads for CPU backend.
+  int GetNumThreads() const { return num_threads_; }
+  // Setter for num_threads for CPU backend.
+  void SetNumThreads(int num_threads) { num_threads_ = num_threads; }
+
+  // Getter for scoped_encoder_cache_file.
+  std::shared_ptr<litert::lm::ScopedFile> GetScopedEncoderCacheFile() const {
+    return scoped_encoder_cache_file_;
+  }
+
+  // Setter for scoped_encoder_cache_file.
+  void SetScopedEncoderCacheFile(
+      std::shared_ptr<litert::lm::ScopedFile> cache_file) {
+    scoped_encoder_cache_file_ = std::move(cache_file);
+  }
+
+  // Getter for scoped_encoder_program_cache_file.
+  std::shared_ptr<litert::lm::ScopedFile> GetScopedEncoderProgramCacheFile()
+      const {
+    return scoped_encoder_program_cache_file_;
+  }
+
+  // Setter for scoped_encoder_program_cache_file.
+  void SetScopedEncoderProgramCacheFile(
+      std::shared_ptr<litert::lm::ScopedFile> cache_file) {
+    scoped_encoder_program_cache_file_ = std::move(cache_file);
+  }
+
+  using ExecutorSettingsBase::GetWeightCacheFile;
+  absl::StatusOr<
+      std::variant<std::string, std::shared_ptr<litert::lm::ScopedFile>>>
+  GetWeightCacheFile(absl::string_view suffix,
+                     bool check_and_clean) const override;
+
+  using ExecutorSettingsBase::GetProgramCacheFile;
+  absl::StatusOr<
+      std::variant<std::string, std::shared_ptr<litert::lm::ScopedFile>>>
+  GetProgramCacheFile(absl::string_view suffix,
+                      bool check_and_clean) const override;
+
+ private:
+  int num_threads_ = 4;
+
+  // The cache file to use for the text encoder model.
+  std::shared_ptr<litert::lm::ScopedFile> scoped_encoder_cache_file_;
+
+  // The program cache file to use for the text encoder model.
+  std::shared_ptr<litert::lm::ScopedFile> scoped_encoder_program_cache_file_;
 };
 
 std::ostream& operator<<(std::ostream& os,

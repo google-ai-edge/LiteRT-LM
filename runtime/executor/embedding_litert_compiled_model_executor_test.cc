@@ -841,5 +841,38 @@ TEST(EmbeddingLiteRtCompiledModelExecutorTest,
   }
 }
 
+TEST(EmbeddingLiteRtCompiledModelExecutorTest, Create_WithCache_Success) {
+  auto embedder_buf =
+      BuildDummyTfLiteModelBuffer("embedder", {1}, tflite::TensorType_FLOAT32,
+                                  {1, 1, 8}, tflite::TensorType_FLOAT32);
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto embedder_model, Model::CreateFromBuffer(litert::BufferRef<uint8_t>(
+                               embedder_buf.data(), embedder_buf.size())));
+
+  auto encoder_buf = BuildDummyTfLiteModelBuffer(
+      "encoder", {1, 1, 8}, tflite::TensorType_FLOAT32, {1, 8},
+      tflite::TensorType_FLOAT32);
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto encoder_model, Model::CreateFromBuffer(litert::BufferRef<uint8_t>(
+                              encoder_buf.data(), encoder_buf.size())));
+
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create("dummy_model_path"));
+  ASSERT_OK_AND_ASSIGN(EmbeddingExecutorSettings settings,
+                       EmbeddingExecutorSettings::CreateDefault(
+                           model_assets, /*backend=*/Backend::CPU));
+  settings.SetCacheDir("/tmp/test_cache_dir");
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+
+  auto fake_resources = std::make_unique<FakeEmbeddingModelResources>(
+      &embedder_model, &encoder_model);
+  ASSERT_OK_AND_ASSIGN(auto embedding_executor,
+                       EmbeddingLiteRtCompiledModelExecutor::Create(
+                           settings, env, std::move(fake_resources)));
+  EXPECT_EQ(embedding_executor->ExecutorBackendName(), "CPU");
+  EXPECT_NE(embedding_executor->GetEnvironment(), nullptr);
+}
+
 }  // namespace
 }  // namespace litert::lm

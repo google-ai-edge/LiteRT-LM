@@ -84,5 +84,19 @@ TEST(EmbeddingEngineSettingsTest, StreamOutputFormatting) {
   EXPECT_THAT(os.str(), HasSubstr("EmbeddingEngineSettings:"));
 }
 
+TEST(EmbeddingEngineSettingsTest, ModifyMainExecutorSettings) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create("test_embedding_model.tflite"));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+
+  EXPECT_EQ(settings.GetMainExecutorSettings().GetNumThreads(), 4);
+  settings.GetMutableMainExecutorSettings().SetNumThreads(8);
+  EXPECT_EQ(settings.GetMainExecutorSettings().GetNumThreads(), 8);
+
+  settings.GetMutableMainExecutorSettings().SetCacheDir("/tmp/cache");
+  EXPECT_EQ(settings.GetMainExecutorSettings().GetCacheDir(), "/tmp/cache");
+}
+
 }  // namespace
 }  // namespace litert::lm
