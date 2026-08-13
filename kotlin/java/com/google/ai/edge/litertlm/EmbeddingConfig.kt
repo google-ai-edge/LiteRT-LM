@@ -37,7 +37,9 @@ data class EmbeddingEngineConfig(
  *
  * @property normalize Whether to L2-normalize the resulting output vectors. Defaults to `true`.
  */
-data class EmbeddingOptions @JvmOverloads constructor(val normalize: Boolean = true)
+data class EmbeddingOptions
+@JvmOverloads
+constructor(val normalize: Boolean = true, val insertSpecialTokens: Boolean = true)
 
 /**
  * Represents the embedding result for an input item.
