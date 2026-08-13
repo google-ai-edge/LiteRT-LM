@@ -33,6 +33,7 @@
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/ascii.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/str_format.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
@@ -121,6 +122,17 @@ ExtractBufferKeyAndTfLiteSectionHint(const schema::SectionObject* section) {
 absl::Status LitertLmLoader::MapSection(BufferKey buffer_key,
                                         uint64_t begin_offset,
                                         uint64_t end_offset) {
+  std::string section_name =
+      schema::EnumNameAnySectionDataType(buffer_key.data_type);
+  if (buffer_key.model_type.has_value()) {
+    absl::StrAppend(&section_name, ":",
+                    ModelTypeToString(*buffer_key.model_type));
+  }
+  ABSL_LOG(INFO) << "LitertLmLoader::MapSection: Mapping section ["
+                 << section_name << "] begin_offset=" << begin_offset
+                 << ", end_offset=" << end_offset
+                 << " (size: " << (end_offset - begin_offset) << " bytes)";
+
   uint8_t* data = nullptr;
   if (std::holds_alternative<std::shared_ptr<MemoryMappedFile>>(
           model_source_)) {
@@ -149,6 +161,10 @@ absl::Status LitertLmLoader::MapSection(BufferKey buffer_key,
         CreateMemoryMapFromScopedFile(model_file, aligned_begin_offset,
                                       aligned_section_size));
     auto& memory_mapped_file = section_memory_mapped_files_[buffer_key];
+    ABSL_LOG(INFO)
+        << "LitertLmLoader::MapSection: Created MemoryMappedFile for key ["
+        << section_name << "]. Total section_memory_mapped_files_ entries: "
+        << section_memory_mapped_files_.size();
 
     // The section buffer that is stored should point to the section data only,
     // not include the alignment gap.
@@ -259,6 +275,18 @@ absl::Status LitertLmLoader::Initialize() {
     }
     section_locations_[buffer_key] =
         std::make_pair(section->begin_offset(), section->end_offset());
+
+    std::string section_name =
+        schema::EnumNameAnySectionDataType(section->data_type());
+    if (buffer_key.model_type.has_value()) {
+      absl::StrAppend(&section_name, ":",
+                      ModelTypeToString(*buffer_key.model_type));
+    }
+    ABSL_LOG(INFO) << "LitertLmLoader::Initialize: Registered section ["
+                   << section_name << "] offset=[" << section->begin_offset()
+                   << ", " << section->end_offset() << "] (size: "
+                   << (section->end_offset() - section->begin_offset())
+                   << " bytes)";
 
     ABSL_VLOG(1) << "section_index: " << i;
     ABSL_VLOG(1) << "section_data_type: "
