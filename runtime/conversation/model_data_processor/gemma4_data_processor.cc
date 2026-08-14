@@ -190,31 +190,11 @@ Gemma4DataProcessor::Create(Gemma4DataProcessorConfig config,
                             bool enable_constrained_decoding) {
   // For Gemma4 models without mel-spectrogram extraction, it use 640 PCM
   // samples as one audio token.
-  const int frame_length = config.skip_mel_spectrogram_extraction ? 640 : 320;
-  const int hop_length = config.skip_mel_spectrogram_extraction ? 640 : 160;
   ABSL_ASSIGN_OR_RETURN(
       auto audio_preprocessor,
-      AudioPreprocessorMiniAudio::Create(AudioPreprocessorConfig::Create(
-          /* sample_rate_hz= */ 16000,
-          /* num_channels= */ 1,
-          /* frame_length= */ frame_length,
-          /* hop_length= */ hop_length,
-          /* fft_length = */ 512,
-          /* input_scale = */ 1.0,
-          /* pre_emphasis_factor = */ 0.0,
-          /* num_mel_bins= */ 128,
-          /* mel_low_hz= */ 0.0,
-          /* mel_high_hz= */ 8000.0,
-          /* mel_floor= */ 1e-3,
-          /* normalize_mel= */ false,
-          /* add_floor_to_mel_before_log= */ true,
-          /* semicausal_padding= */ true,
-          /* non_zero_hanning= */ false,
-          /* periodic_hanning= */ true,
-          /* fft_padding_type= */
-          AudioPreprocessorConfig::FftPaddingType::kCenter,
-          /*skip_mel_spectrogram_extraction=*/
-          config.skip_mel_spectrogram_extraction)));
+      AudioPreprocessorMiniAudio::Create(
+          litert::support::AudioPreprocessorConfig::CreateDefaultGemma4Config(
+              config.skip_mel_spectrogram_extraction)));
 #if defined(LITERT_LM_FST_CONSTRAINTS_DISABLED)
   if (enable_constrained_decoding) {
     return absl::FailedPreconditionError(

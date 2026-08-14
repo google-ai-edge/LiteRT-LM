@@ -62,6 +62,32 @@ class AudioPreprocessorConfig {
         /* buffer_last_frame= */ false);
   }
 
+  static AudioPreprocessorConfig CreateDefaultGemma4Config(
+      bool skip_mel_spectrogram_extraction = false) {
+    const int frame_length = skip_mel_spectrogram_extraction ? 640 : 320;
+    const int hop_length = skip_mel_spectrogram_extraction ? 640 : 160;
+    return AudioPreprocessorConfig(
+        /* sample_rate_hz= */ 16000,
+        /* num_channels= */ 1,
+        /* frame_length= */ frame_length,
+        /* hop_length= */ hop_length,
+        /* fft_length= */ 512,
+        /* input_scale= */ 1.0,
+        /* pre_emphasis_factor= */ 0.0,
+        /* num_mel_bins= */ 128,
+        /* mel_low_hz= */ 0.0,
+        /* mel_high_hz= */ 8000.0,
+        /* mel_floor= */ 1e-3,
+        /* normalize_mel= */ false,
+        /* add_floor_to_mel_before_log= */ true,
+        /* semicausal_padding= */ true,
+        /* non_zero_hanning= */ false,
+        /* periodic_hanning= */ true,
+        /* fft_padding_type= */ FftPaddingType::kCenter,
+        /* skip_mel_spectrogram_extraction= */ skip_mel_spectrogram_extraction,
+        /* buffer_last_frame= */ false);
+  }
+
   static AudioPreprocessorConfig Create(
       int sample_rate_hz, int num_channels, int frame_length, int hop_length,
       int fft_length, float input_scale, float pre_emphasis_factor,

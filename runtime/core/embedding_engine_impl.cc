@@ -16,6 +16,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <optional>
 #include <utility>
@@ -26,6 +27,7 @@
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/types/optional.h"  // from @com_google_absl
+#include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/model_resources.h"
 #include "runtime/engine/embedding_engine.h"
 #include "runtime/engine/embedding_engine_settings.h"
@@ -49,6 +51,8 @@
 #include "runtime/util/litert_util.h"
 #include "runtime/util/status_macros.h"
 #include "runtime/util/tensor_buffer_util.h"
+#include "support/preprocessor/audio_preprocessor.h"
+#include "support/preprocessor/audio_preprocessor_miniaudio.h"
 #include "support/preprocessor/image_preprocessor.h"
 #include "support/tokenizer/tokenizer.h"
 #include "support/util/io_types.h"
@@ -193,11 +197,18 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
 
   // Initialize the audio executor.
   std::unique_ptr<AudioExecutor> audio_executor = nullptr;
+  std::unique_ptr<::litert::support::AudioPreprocessor> audio_preprocessor =
+      nullptr;
   if ((resources->GetTFLiteModel(ModelType::kTfLiteAudioEncoderHw).ok()) &&
       settings.GetAudioExecutorSettings().has_value()) {
     LITERT_ASSIGN_OR_RETURN(
         audio_executor, AudioLiteRtCompiledModelExecutor::Create(
                             *settings.GetAudioExecutorSettings(), env->env));
+    LITERT_ASSIGN_OR_RETURN(
+        audio_preprocessor,
+        ::litert::support::AudioPreprocessorMiniAudio::Create(
+            ::litert::support::AudioPreprocessorConfig::
+                CreateDefaultGemma4Config()));
   }
 
   special_tokens.has_end_of_vision_model =
@@ -232,7 +243,7 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
       std::move(vision_executor), std::move(audio_executor),
       std::move(benchmark_info), std::move(special_tokens),
       std::move(image_preprocessor), std::move(image_preprocess_parameter),
-      std::move(metadata));
+      std::move(metadata), std::move(audio_preprocessor));
 }
 
 // static
@@ -300,7 +311,8 @@ EmbeddingEngineImpl::EmbeddingEngineImpl(
     std::unique_ptr<::litert::support::ImagePreprocessor> image_preprocessor,
     std::optional<::litert::support::ImagePreprocessParameter>
         image_preprocess_parameter,
-    std::optional<proto::EmbeddingMetadata> metadata)
+    std::optional<proto::EmbeddingMetadata> metadata,
+    std::unique_ptr<::litert::support::AudioPreprocessor> audio_preprocessor)
     : env_(std::move(env)),
       tokenizer_(std::move(tokenizer)),
       embedding_executor_(std::move(embedding_executor)),
@@ -310,7 +322,8 @@ EmbeddingEngineImpl::EmbeddingEngineImpl(
       special_tokens_(std::move(special_tokens)),
       image_preprocessor_(std::move(image_preprocessor)),
       image_preprocess_parameter_(std::move(image_preprocess_parameter)),
-      metadata_(std::move(metadata)) {}
+      metadata_(std::move(metadata)),
+      audio_preprocessor_(std::move(audio_preprocessor)) {}
 
 absl::StatusOr<std::vector<InputData>> EmbeddingEngineImpl::InsertSpecialTokens(
     const std::vector<InputData>& contents) const {
@@ -471,8 +484,36 @@ absl::StatusOr<ExecutorInputs> EmbeddingEngineImpl::ProcessAndCombineContents(
         return absl::FailedPreconditionError(
             "Audio executor is not available for audio input.");
       }
-      LITERT_ASSIGN_OR_RETURN(const auto* spectrogram_tensor,
-                              input_audio->GetPreprocessedAudioTensor());
+      const ::litert::TensorBuffer* spectrogram_tensor = nullptr;
+      std::optional<InputAudio> preprocessed_audio;
+      std::optional<InputAudio> pcm_audio_holder;
+      const InputAudio* audio_to_process = input_audio;
+
+      if (input_audio->IsTensorBuffer()) {
+        LITERT_ASSIGN_OR_RETURN(spectrogram_tensor,
+                                input_audio->GetPreprocessedAudioTensor());
+      } else {
+        if (!input_audio->IsPcmFrames()) {
+          LITERT_ASSIGN_OR_RETURN(absl::string_view raw_bytes,
+                                  input_audio->GetRawAudioBytes());
+          if (raw_bytes.size() % sizeof(float) == 0) {
+            std::vector<float> pcm_frames(raw_bytes.size() / sizeof(float));
+            std::memcpy(pcm_frames.data(), raw_bytes.data(), raw_bytes.size());
+            pcm_audio_holder.emplace(std::move(pcm_frames));
+            audio_to_process = &pcm_audio_holder.value();
+          } else {
+            return absl::InvalidArgumentError(
+                "Audio raw bytes length is not a multiple of sizeof(float).");
+          }
+        }
+        LITERT_ASSIGN_OR_RETURN(
+            InputAudio temp_audio,
+            audio_preprocessor_->Preprocess(*audio_to_process));
+        preprocessed_audio.emplace(std::move(temp_audio));
+        LITERT_ASSIGN_OR_RETURN(
+            spectrogram_tensor,
+            preprocessed_audio->GetPreprocessedAudioTensor());
+      }
       LITERT_ASSIGN_OR_RETURN(auto single_audio_data,
                               audio_executor_->Encode(*spectrogram_tensor));
       const int num_audio_tokens = single_audio_data.GetValidTokens();

@@ -31,6 +31,7 @@
 #include "runtime/executor/vision_executor.h"
 #include "runtime/proto/embedding_metadata.pb.h"
 #include "runtime/util/litert_util.h"
+#include "support/preprocessor/audio_preprocessor.h"
 #include "support/preprocessor/image_preprocessor.h"
 #include "support/tokenizer/tokenizer.h"
 
@@ -76,7 +77,9 @@ class EmbeddingEngineImpl : public EmbeddingEngine {
           nullptr,
       std::optional<::litert::support::ImagePreprocessParameter>
           image_preprocess_parameter = std::nullopt,
-      std::optional<proto::EmbeddingMetadata> metadata = std::nullopt);
+      std::optional<proto::EmbeddingMetadata> metadata = std::nullopt,
+      std::unique_ptr<::litert::support::AudioPreprocessor> audio_preprocessor =
+          nullptr);
 
   ~EmbeddingEngineImpl() override = default;
 
@@ -135,6 +138,7 @@ class EmbeddingEngineImpl : public EmbeddingEngine {
   std::optional<::litert::support::ImagePreprocessParameter>
       image_preprocess_parameter_;
   std::optional<proto::EmbeddingMetadata> metadata_;
+  std::unique_ptr<::litert::support::AudioPreprocessor> audio_preprocessor_;
 };
 
 }  // namespace litert::lm

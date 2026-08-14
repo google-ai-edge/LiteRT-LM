@@ -530,6 +530,7 @@ cc_library(
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/types:optional",
+        "@litert//litert/cc:litert_tensor_buffer",
         "//runtime/components:model_resources",
         "//runtime/engine:embedding_engine",
         "//runtime/engine:embedding_engine_settings",
@@ -553,6 +554,8 @@ cc_library(
         "//runtime/util:litert_status_util",
         "//runtime/util:litert_util",
         "//runtime/util:tensor_buffer_util",
+        "//support/preprocessor:audio_preprocessor",
+        "//support/preprocessor:audio_preprocessor_miniaudio",
         "//support/preprocessor:image_preprocessor",
         "//support/preprocessor:image_preprocessor_impl",  # buildcleaner: keep
         "//support/tokenizer",
