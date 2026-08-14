@@ -19,3 +19,7 @@ EXPORTS
   LiteRtTopKWebGpuSampler_Create
   LiteRtTopKWebGpuSampler_Destroy
   LiteRtTopKWebGpuSampler_SampleToIdAndScoreBuffer
+  LiteRtTopKWebGpuSampler_UpdateConfig
+  LiteRtTopKWebGpuSampler_CanHandleInput
+  LiteRtTopKWebGpuSampler_HandlesInput
+  LiteRtTopKWebGpuSampler_SetInferenceFuncAndInputTensors
