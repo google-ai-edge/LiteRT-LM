@@ -24,6 +24,7 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "runtime/components/logits_processor/constrained_decoding/llg_constraint_config.h"
 #include "runtime/util/test_utils.h"  // NOLINT
 #include "support/tokenizer/tokenizer.h"
@@ -45,7 +46,7 @@ class MockTokenizer : public Tokenizer {
               (override));
   MOCK_METHOD(absl::StatusOr<int>, TokenToId, (absl::string_view), (override));
   MOCK_METHOD(absl::StatusOr<std::string>, TokenIdsToText,
-              (const TokenIds&, bool), (override));
+              (absl::Span<const int>, bool), (override));
   MOCK_METHOD(std::vector<std::string>, GetTokens, (), (const, override));
   MOCK_METHOD(int, GetVocabSize, (), (const, override));
 };

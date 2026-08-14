@@ -29,6 +29,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/internal/scoped_file.h"  // from @litert  // IWYU pragma: keep
 #include "runtime/components/logits_processor/suppress_tokens_config.h"
 #include "runtime/executor/executor_settings_base.h"
@@ -59,7 +60,7 @@ using ::testing::status::StatusIs;
 class MockTokenizer : public Tokenizer {
  public:
   MOCK_METHOD(absl::StatusOr<std::string>, TokenIdsToText,
-              (const std::vector<int>& token_ids, bool skip_special_tokens),
+              (absl::Span<const int> token_ids, bool skip_special_tokens),
               (override));
   MOCK_METHOD(absl::StatusOr<std::vector<int>>, TextToTokenIds,
               (absl::string_view text), (override));
@@ -1270,7 +1271,7 @@ TEST(SessionConfigTest, MaybeUpdateAndValidateLlmGemma3N) {
       .WillRepeatedly(Return(std::vector<int>({1})));
   EXPECT_CALL(tokenizer, TextToTokenIds("<end_of_turn>"))
       .WillRepeatedly(Return(std::vector<int>({1})));
-  EXPECT_CALL(tokenizer, TokenIdsToText(std::vector<int>({105}), false))
+  EXPECT_CALL(tokenizer, TokenIdsToText(::testing::ElementsAre(105), false))
       .WillRepeatedly(Return("<start_of_turn>"));
   EXPECT_CALL(tokenizer, TextToTokenIds("<start_of_audio>"))
       .WillRepeatedly(Return(std::vector<int>({256000})));
@@ -1302,7 +1303,7 @@ TEST(SessionConfigTest, MaybeUpdateAndValidateLlmGemma3) {
       .WillRepeatedly(Return(std::vector<int>({1})));
   EXPECT_CALL(tokenizer, TextToTokenIds("<end_of_turn>"))
       .WillRepeatedly(Return(std::vector<int>({1})));
-  EXPECT_CALL(tokenizer, TokenIdsToText(std::vector<int>({105}), false))
+  EXPECT_CALL(tokenizer, TokenIdsToText(::testing::ElementsAre(105), false))
       .WillRepeatedly(Return("<start_of_turn>"));
   EXPECT_CALL(tokenizer, TextToTokenIds("<start_of_audio>"))
       .WillRepeatedly(Return(

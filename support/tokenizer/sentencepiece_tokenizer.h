@@ -22,6 +22,7 @@
 
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "support/tokenizer/tokenizer.h"
 #include "sentencepiece_model.pb.h"  // from @sentencepiece
 #include "sentencepiece_processor.h"  // from @sentencepiece
@@ -58,8 +59,8 @@ class SentencePieceTokenizer : public Tokenizer {
 
   // Decodes the given sequence of token ids into a string.
   using Tokenizer::TokenIdsToText;  // For skip_special_tokens=false case.
-  absl::StatusOr<std::string> TokenIdsToText(
-      const std::vector<int>& token_ids, bool skip_special_tokens) override;
+  absl::StatusOr<std::string> TokenIdsToText(absl::Span<const int> token_ids,
+                                             bool skip_special_tokens) override;
 
   // Returns the tokens in the SentencePiece model.
   std::vector<std::string> GetTokens() const override;

@@ -26,6 +26,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "support/util/memory_mapped_file.h"
 #include "support/util/status_macros.h"  // NOLINT
 #include "include/tokenizers_c.h"  // from @tokenizers_cpp
@@ -77,7 +78,7 @@ absl::StatusOr<int> HuggingFaceTokenizer::TokenToId(absl::string_view token) {
 
 // Decodes the given TensorBuffer of token ids into a vector of strings.
 absl::StatusOr<std::string> HuggingFaceTokenizer::TokenIdsToText(
-    const std::vector<int>& token_ids, bool skip_special_tokens) {
+    absl::Span<const int> token_ids, bool skip_special_tokens) {
   absl::LeakCheckDisabler disabler;
   // Disable leak check as Google's default leak checker does not properly
   // support Rust's lazy_static initialization.

@@ -21,6 +21,7 @@
 #include <gtest/gtest.h>
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "runtime/components/prompt_template.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/proto/llm_model_type.pb.h"
@@ -37,7 +38,7 @@ using TokenizerType = ::litert::support::TokenizerType;
 class MockTokenizer : public Tokenizer {
  public:
   MOCK_METHOD(absl::StatusOr<std::string>, TokenIdsToText,
-              (const std::vector<int>& token_id, bool skip_special_tokens),
+              (absl::Span<const int> token_id, bool skip_special_tokens),
               (override));
   MOCK_METHOD(absl::StatusOr<std::vector<int>>, TextToTokenIds,
               (absl::string_view text), (override));

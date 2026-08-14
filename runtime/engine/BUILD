@@ -395,7 +395,7 @@ cc_test(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
-        "@com_google_absl//absl/types:optional",
+        "@com_google_absl//absl/types:span",
         "@litert//litert/cc/internal:scoped_file",
         "//runtime/components/logits_processor:suppress_tokens_config",
         "//runtime/executor:executor_settings_base",

@@ -26,6 +26,7 @@
 #include "absl/status/status_matchers.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "omni/asr/speech_recognizer.h"
 #include "omni/base/stage.h"
 #include "support/tokenizer/tokenizer.h"
@@ -48,7 +49,7 @@ class FakeTokenizer : public ::litert::support::Tokenizer {
   absl::StatusOr<int> TokenToId(absl::string_view token) override { return 0; }
 
   absl::StatusOr<std::string> TokenIdsToText(
-      const std::vector<int>& token_ids, bool skip_special_tokens) override {
+      absl::Span<const int> token_ids, bool skip_special_tokens) override {
     if (token_ids_to_text_fn_) {
       return token_ids_to_text_fn_(token_ids);
     }
@@ -58,7 +59,7 @@ class FakeTokenizer : public ::litert::support::Tokenizer {
   std::vector<std::string> GetTokens() const override { return {}; }
   int GetVocabSize() const override { return 100; }
 
-  std::function<absl::StatusOr<std::string>(const std::vector<int>&)>
+  std::function<absl::StatusOr<std::string>(absl::Span<const int>)>
       token_ids_to_text_fn_;
 };
 
@@ -79,7 +80,7 @@ class DummySpeechRecognizer : public SingleThreadedStageWithDeque<
 TEST(TokenizerDetokenizerTest, ProcessEmptyTokensReturnsEmptyVector) {
   DummySpeechRecognizer dummy_decoder;
   FakeTokenizer fake_tokenizer;
-  fake_tokenizer.token_ids_to_text_fn_ = [](const std::vector<int>& ids) {
+  fake_tokenizer.token_ids_to_text_fn_ = [](absl::Span<const int> ids) {
     return "";
   };
 
@@ -95,8 +96,8 @@ TEST(TokenizerDetokenizerTest, ProcessEmptyTokensReturnsEmptyVector) {
 TEST(TokenizerDetokenizerTest, ProcessTokensDecodesWordsWithTimestamps) {
   DummySpeechRecognizer dummy_decoder;
   FakeTokenizer fake_tokenizer;
-  fake_tokenizer.token_ids_to_text_fn_ = [](const std::vector<int>& ids) {
-    if (ids == std::vector<int>{101, 102}) {
+  fake_tokenizer.token_ids_to_text_fn_ = [](absl::Span<const int> ids) {
+    if (ids == absl::Span<const int>({101, 102})) {
       return "hello world";
     }
     return "";
@@ -124,8 +125,8 @@ TEST(TokenizerDetokenizerTest,
      ProcessTokensInterpolatesTimestampsWhenCountsDiffer) {
   DummySpeechRecognizer dummy_decoder;
   FakeTokenizer fake_tokenizer;
-  fake_tokenizer.token_ids_to_text_fn_ = [](const std::vector<int>& ids) {
-    if (ids == std::vector<int>{1, 2, 3, 4, 5}) {
+  fake_tokenizer.token_ids_to_text_fn_ = [](absl::Span<const int> ids) {
+    if (ids == absl::Span<const int>({1, 2, 3, 4, 5})) {
       return "one two three";
     }
     return "";
@@ -158,8 +159,8 @@ TEST(TokenizerDetokenizerTest,
      ProcessTokensPicksClosestTimestampWhenTokenLacksTimestamp) {
   DummySpeechRecognizer dummy_decoder;
   FakeTokenizer fake_tokenizer;
-  fake_tokenizer.token_ids_to_text_fn_ = [](const std::vector<int>& ids) {
-    if (ids == std::vector<int>{1, 2, 3}) {
+  fake_tokenizer.token_ids_to_text_fn_ = [](absl::Span<const int> ids) {
+    if (ids == absl::Span<const int>({1, 2, 3})) {
       return "alpha beta gamma";
     }
     return "";
@@ -193,7 +194,7 @@ TEST(TokenizerDetokenizerTest,
 TEST(TokenizerDetokenizerTest, ResetClearsOutputs) {
   DummySpeechRecognizer dummy_decoder;
   FakeTokenizer fake_tokenizer;
-  fake_tokenizer.token_ids_to_text_fn_ = [](const std::vector<int>& ids) {
+  fake_tokenizer.token_ids_to_text_fn_ = [](absl::Span<const int> ids) {
     return "test word";
   };
 
@@ -213,8 +214,8 @@ TEST(TokenizerDetokenizerTest,
      ProcessTokensWithEndOfChunkTokenAppendsEmptyWordWithTimestamp) {
   DummySpeechRecognizer dummy_decoder;
   FakeTokenizer fake_tokenizer;
-  fake_tokenizer.token_ids_to_text_fn_ = [](const std::vector<int>& ids) {
-    if (ids == std::vector<int>{101, 102}) {
+  fake_tokenizer.token_ids_to_text_fn_ = [](absl::Span<const int> ids) {
+    if (ids == absl::Span<const int>({101, 102})) {
       return "hello world";
     }
     return "";

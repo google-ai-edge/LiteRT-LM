@@ -29,6 +29,7 @@
 #include "absl/strings/escaping.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "runtime/components/logits_processor/constrained_decoding/bitmap.h"
 #include "runtime/components/logits_processor/constrained_decoding/constraint.h"
@@ -132,7 +133,7 @@ class SimpleTokenizer : public Tokenizer {
   }
 
   absl::StatusOr<std::string> TokenIdsToText(
-      const TokenIds& ids, bool skip_special_tokens) override {
+      absl::Span<const int> ids, bool skip_special_tokens) override {
     std::string text;
     for (int id : ids) {
       auto it = id_to_piece_.find(id);

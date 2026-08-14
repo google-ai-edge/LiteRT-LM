@@ -31,6 +31,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_layout.h"  // from @litert
@@ -81,7 +82,7 @@ constexpr absl::string_view kTestEmbeddingModelPath =
 class MockTokenizer : public Tokenizer {
  public:
   MOCK_METHOD(absl::StatusOr<std::string>, TokenIdsToText,
-              (const std::vector<int>& token_ids, bool skip_special_tokens),
+              (absl::Span<const int> token_ids, bool skip_special_tokens),
               (override));
   MOCK_METHOD(absl::StatusOr<std::vector<int>>, TextToTokenIds,
               (absl::string_view text), (override));

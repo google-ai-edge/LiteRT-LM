@@ -23,6 +23,7 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "support/tokenizer/tokenizer.h"
 #include "support/util/test_utils.h"  // NOLINT
 
@@ -46,7 +47,7 @@ class MockTokenizer : public Tokenizer {
   }
 
   absl::StatusOr<std::string> TokenIdsToText(
-      const TokenIds& token_ids, bool skip_special_tokens) override {
+      absl::Span<const int> token_ids, bool skip_special_tokens) override {
     if (token_ids.empty()) {
       return "";
     }

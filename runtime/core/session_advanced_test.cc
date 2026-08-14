@@ -37,6 +37,7 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/time/clock.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/test/matchers.h"  // from @litert
@@ -142,7 +143,7 @@ class ExtendedTokenizer : public Tokenizer {
   }
 
   absl::StatusOr<std::string> TokenIdsToText(
-      const std::vector<int>& token_ids, bool skip_special_tokens) override {
+      absl::Span<const int> token_ids, bool skip_special_tokens) override {
     std::vector<std::string> token_strs;
     std::vector<int> current_standard_tokens;
     for (int token_id : token_ids) {

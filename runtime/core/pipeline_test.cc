@@ -32,6 +32,7 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/time/clock.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "runtime/components/logits_processor/constrained_decoding/fake_constraint.h"
 #include "runtime/components/logits_processor/no_repeat_ngram_config.h"
 #include "runtime/components/logits_processor/repetition_penalty_config.h"
@@ -64,7 +65,7 @@ class BytePairEncodingTokenizer : public Tokenizer {
   MOCK_METHOD(absl::StatusOr<std::vector<int>>, TextToTokenIds,
               (absl::string_view text), (override));
   MOCK_METHOD(absl::StatusOr<std::string>, TokenIdsToText,
-              (const std::vector<int>& token_ids, bool skip_special_tokens),
+              (absl::Span<const int> token_ids, bool skip_special_tokens),
               (override));
   MOCK_METHOD(absl::StatusOr<int>, TokenToId, (absl::string_view token),
               (override));
@@ -707,24 +708,29 @@ TEST_F(PipelineTest, DecodeStreamingWithConstrainedDecoding) {
 TEST_F(PipelineTest, DecodeBytePairEncodingTokens) {
   auto tokenizer = std::make_unique<BytePairEncodingTokenizer>();
   // Pretend the first and second tokens are incomplete.
-  EXPECT_CALL(*tokenizer, TokenIdsToText(std::vector<int>{224}, false))
+  EXPECT_CALL(*tokenizer, TokenIdsToText(::testing::ElementsAre(224), false))
       .WillOnce(testing::Return(""));
-  EXPECT_CALL(*tokenizer, TokenIdsToText(std::vector<int>{224, 24}, false))
+  EXPECT_CALL(*tokenizer,
+              TokenIdsToText(::testing::ElementsAre(224, 24), false))
       .WillOnce(testing::Return(""));
-  EXPECT_CALL(*tokenizer, TokenIdsToText(std::vector<int>{224, 24, 8}, false))
+  EXPECT_CALL(*tokenizer,
+              TokenIdsToText(::testing::ElementsAre(224, 24, 8), false))
       .WillOnce(testing::Return(" How's"));
   EXPECT_CALL(*tokenizer,
-              TokenIdsToText(std::vector<int>{224, 24, 8, 66}, false))
+              TokenIdsToText(::testing::ElementsAre(224, 24, 8, 66), false))
       .WillOnce(testing::Return(" How's "));
-  EXPECT_CALL(*tokenizer,
-              TokenIdsToText(std::vector<int>{224, 24, 8, 66, 246}, false))
+  EXPECT_CALL(
+      *tokenizer,
+      TokenIdsToText(::testing::ElementsAre(224, 24, 8, 66, 246), false))
       .WillOnce(testing::Return(" How's it"));
-  EXPECT_CALL(*tokenizer,
-              TokenIdsToText(std::vector<int>{224, 24, 8, 66, 246, 18}, false))
+  EXPECT_CALL(
+      *tokenizer,
+      TokenIdsToText(::testing::ElementsAre(224, 24, 8, 66, 246, 18), false))
       .WillOnce(testing::Return(" How's it "));
   EXPECT_CALL(
       *tokenizer,
-      TokenIdsToText(std::vector<int>{224, 24, 8, 66, 246, 18, 2295}, false))
+      TokenIdsToText(::testing::ElementsAre(224, 24, 8, 66, 246, 18, 2295),
+                     false))
       .WillOnce(testing::Return(" How's it going?"));
 
   std::optional<BenchmarkInfo> benchmark_info;
@@ -1618,14 +1624,16 @@ TEST_F(PipelineCustomSamplingTest, DecodeStopTokenAndBPEDetector) {
 
   auto tokenizer = std::make_unique<BytePairEncodingTokenizer>();
   // batch 1: 224, 24, 8, 66
-  EXPECT_CALL(*tokenizer, TokenIdsToText(std::vector<int>{224}, false))
+  EXPECT_CALL(*tokenizer, TokenIdsToText(::testing::ElementsAre(224), false))
       .WillOnce(testing::Return(""));
-  EXPECT_CALL(*tokenizer, TokenIdsToText(std::vector<int>{224, 24}, false))
+  EXPECT_CALL(*tokenizer,
+              TokenIdsToText(::testing::ElementsAre(224, 24), false))
       .WillOnce(testing::Return(""));
-  EXPECT_CALL(*tokenizer, TokenIdsToText(std::vector<int>{224, 24, 8}, false))
+  EXPECT_CALL(*tokenizer,
+              TokenIdsToText(::testing::ElementsAre(224, 24, 8), false))
       .WillOnce(testing::Return("BPE"));
 
-  EXPECT_CALL(*tokenizer, TokenIdsToText(std::vector<int>{90}, false))
+  EXPECT_CALL(*tokenizer, TokenIdsToText(::testing::ElementsAre(90), false))
       .WillOnce(testing::Return("a"));
 
   std::optional<BenchmarkInfo> benchmark_info;

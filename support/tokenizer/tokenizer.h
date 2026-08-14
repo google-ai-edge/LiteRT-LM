@@ -56,11 +56,10 @@ class Tokenizer {
   // Helper function to convert a vector of token ids into a 1D
   // litert::TensorBuffer of shape [batch_size(==1), num_tokens].
   static absl::StatusOr<TensorBuffer> TokenIdsToTensorBuffer(
-      const TokenIds& token_ids) {
+      absl::Span<const int> token_ids) {
     LITERT_ASSIGN_OR_RETURN(
-        auto tensor,
-        CopyToTensorBuffer<int>(absl::MakeConstSpan(token_ids),
-                                {1, static_cast<int>(token_ids.size())}));
+        auto tensor, CopyToTensorBuffer<int>(
+                         token_ids, {1, static_cast<int>(token_ids.size())}));
     return tensor;
   }
 
@@ -70,11 +69,11 @@ class Tokenizer {
   // If skip_special_tokens is true, special tokens (BOS, EOS, PAD, UNK, etc.)
   // will be skipped in the decoding process.
   virtual absl::StatusOr<std::string> TokenIdsToText(
-      const TokenIds& token_ids, bool skip_special_tokens) = 0;
+      absl::Span<const int> token_ids, bool skip_special_tokens) = 0;
 
   // Decodes the given sequence of token ids into a string including special
   // tokens.
-  absl::StatusOr<std::string> TokenIdsToText(const TokenIds& token_ids) {
+  absl::StatusOr<std::string> TokenIdsToText(absl::Span<const int> token_ids) {
     return TokenIdsToText(token_ids, /*skip_special_tokens=*/false);
   }
 
@@ -101,8 +100,8 @@ class Tokenizer {
   // Merges the previous and next token ids, by appending each next token
   // id to the corresponding previous token id row by row.
   static absl::StatusOr<std::vector<TokenIds>> MergeTokenIds(
-      const std::vector<TokenIds>& previous_token_ids,
-      const std::vector<TokenIds>& next_token_ids) {
+      absl::Span<const TokenIds> previous_token_ids,
+      absl::Span<const TokenIds> next_token_ids) {
     std::vector<TokenIds> merged_token_ids(next_token_ids.size());
     if (previous_token_ids.size() != next_token_ids.size()) {
       return absl::InvalidArgumentError(
@@ -122,7 +121,7 @@ class Tokenizer {
   // Tokenizer is a vector of strings, each of which is a decoded string of the
   // corresponding batch or absl::DataLossError if an incomplete BPE sequence.
   absl::StatusOr<std::vector<absl::StatusOr<std::string>>> TokenIdsToTexts(
-      int batch_size, const std::vector<TokenIds>& token_ids) {
+      int batch_size, absl::Span<const TokenIds> token_ids) {
     if (token_ids.size() != batch_size) {
       return absl::InvalidArgumentError(
           "The token ID vector must have the same number of rows as the batch "

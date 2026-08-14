@@ -378,17 +378,13 @@ http_archive(
     name = "sentencepiece",
     build_file = "@//:BUILD.sentencepiece",
     patch_cmds = [
-        # Empty config.h seems enough.
-        "touch config.h",
+        "printf '#ifndef CONFIG_H_\\n#define CONFIG_H_\\n#define VERSION \"0.2.2\"\\n#define PACKAGE \"sentencepiece\"\\n#define PACKAGE_STRING \"sentencepiece\"\\n#define INSTALL_DATADIR \"\"\\n#endif\\n' > src/config.h",
         # Replace third_party/absl/ with absl/ in *.h and *.cc files.
-        "sed -i -e 's|#include \"third_party/absl/|#include \"absl/|g' *.h *.cc",
-        # Replace third_party/darts_clone/ with include/ in *.h and *.cc files.
-        "sed -i -e 's|#include \"third_party/darts_clone/|#include \"include/|g' *.h *.cc",
+        "sed -i -e 's|#include \"third_party/absl/|#include \"absl/|g' src/*.h src/*.cc",
     ],
-    patches = ["@//:PATCH.sentencepiece"],
-    sha256 = "9970f0a0afee1648890293321665e5b2efa04eaec9f1671fcf8048f456f5bb86",
-    strip_prefix = "sentencepiece-0.2.0/src",
-    url = "https://github.com/google/sentencepiece/archive/refs/tags/v0.2.0.tar.gz",
+    sha256 = "92381f713e094a15a1ccff1ac4a5315a4c4b82a99ac1332d6ac53c9dc8e1bcf1",
+    strip_prefix = "sentencepiece-0.2.2",
+    url = "https://github.com/google/sentencepiece/archive/refs/tags/v0.2.2.tar.gz",
 )
 
 http_archive(

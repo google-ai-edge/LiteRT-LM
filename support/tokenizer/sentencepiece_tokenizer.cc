@@ -24,6 +24,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "sentencepiece_model.pb.h"  // from @sentencepiece
 #include "sentencepiece_processor.h"  // from @sentencepiece
 
@@ -81,7 +82,7 @@ absl::StatusOr<int> SentencePieceTokenizer::TokenToId(absl::string_view token) {
 
 // Decodes the given TensorBuffer of token ids into a string.
 absl::StatusOr<std::string> SentencePieceTokenizer::TokenIdsToText(
-    const std::vector<int>& token_ids, bool skip_special_tokens) {
+    absl::Span<const int> token_ids, bool skip_special_tokens) {
   if (skip_special_tokens) {
     return absl::InvalidArgumentError(
         "SentencePieceTokenizer does not support skipping special tokens. "
@@ -101,7 +102,12 @@ absl::StatusOr<std::string> SentencePieceTokenizer::TokenIdsToText(
     return processor_->IdToPiece(token_ids[0]);
   }
 
-  return processor_->DecodeIds(token_ids);
+  std::string text;
+  auto status = processor_->Decode(token_ids, &text);
+  if (!status.ok()) {
+    return status;
+  }
+  return text;
 }
 
 std::vector<std::string> SentencePieceTokenizer::GetTokens() const {

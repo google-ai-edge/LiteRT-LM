@@ -31,6 +31,7 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/logits_processor/constrained_decoding/fake_constraint.h"
 #include "runtime/components/logits_processor/no_repeat_ngram_config.h"
@@ -70,7 +71,7 @@ class MockTokenizer : public Tokenizer {
   MOCK_METHOD(absl::StatusOr<int>, TokenToId, (absl::string_view token),
               (override));
   MOCK_METHOD(absl::StatusOr<std::string>, TokenIdsToText,
-              (const std::vector<int>& token_ids, bool skip_special_tokens),
+              (absl::Span<const int> token_ids, bool skip_special_tokens),
               (override));
   MOCK_METHOD(TokenizerType, GetTokenizerType, (), (const, override));
   MOCK_METHOD(std::vector<std::string>, GetTokens, (), (const, override));
@@ -97,7 +98,7 @@ class ExecutionManagerTest
     tokenizer_ = std::make_unique<MockTokenizer>();
     EXPECT_CALL(*tokenizer_, TokenIdsToText(testing::_, false))
         .WillRepeatedly(
-            [](const std::vector<int>& ids, bool skip_special_tokens) {
+            [](absl::Span<const int> ids, bool skip_special_tokens) {
               std::string result;
               for (int id : ids) {
                 result += std::to_string(id);
