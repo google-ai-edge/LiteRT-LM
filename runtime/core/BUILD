@@ -100,11 +100,21 @@ cc_library(
     srcs = ["engine_advanced_impl.cc"],
     local_defines = select({
         "//conditions:default": [],
+    }) + select({
+        "//runtime/util:ai_edge_debugger_enabled": [
+            "AI_EDGE_DEBUGGER_ENABLED=1",
+        ],
+        "//conditions:default": [],
     }),
     deps = ENGINE_IMPL_COMMON_DEPS + [
         "//runtime/components:default_static_gpu_samplers",
         "//runtime/executor:default_static_gpu_accelerator",
     ] + select({
+        "//conditions:default": [],
+    }) + select({
+        "//runtime/util:ai_edge_debugger_enabled": [
+            "//runtime/util:runtime_debugger",
+        ],
         "//conditions:default": [],
     }),
     alwayslink = 1,
@@ -113,7 +123,18 @@ cc_library(
 cc_library(
     name = "engine_advanced_impl_cpu_only",
     srcs = ["engine_advanced_impl.cc"],
-    deps = ENGINE_IMPL_COMMON_DEPS,
+    local_defines = select({
+        "//runtime/util:ai_edge_debugger_enabled": [
+            "AI_EDGE_DEBUGGER_ENABLED=1",
+        ],
+        "//conditions:default": [],
+    }),
+    deps = ENGINE_IMPL_COMMON_DEPS + select({
+        "//runtime/util:ai_edge_debugger_enabled": [
+            "//runtime/util:runtime_debugger",
+        ],
+        "//conditions:default": [],
+    }),
     alwayslink = 1,
 )
 

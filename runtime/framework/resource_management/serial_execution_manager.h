@@ -48,6 +48,8 @@
 
 namespace litert::lm {
 
+class RuntimeDebugger;
+
 // An ExecutionManager implementation for single-threaded management. This
 // implementation is not thread-safe.
 class SerialExecutionManager : public ExecutionManager {
@@ -73,7 +75,9 @@ class SerialExecutionManager : public ExecutionManager {
       std::unique_ptr<AudioExecutorSettings> absl_nullable
       audio_executor_settings,
       ::litert::Environment* absl_nullable litert_env,
-      std::unique_ptr<AudioExecutor> absl_nullable audio_executor = nullptr);
+      std::unique_ptr<AudioExecutor> absl_nullable audio_executor = nullptr,
+      std::shared_ptr<RuntimeDebugger> absl_nullable runtime_debugger =
+          nullptr);
 
   ~SerialExecutionManager() override;
 
@@ -227,7 +231,9 @@ class SerialExecutionManager : public ExecutionManager {
   explicit SerialExecutionManager(
       Tokenizer* absl_nonnull tokenizer,
       std::unique_ptr<ResourceManager> absl_nonnull resource_manager,
-      ::litert::Environment* absl_nullable litert_env);
+      ::litert::Environment* absl_nullable litert_env,
+      std::shared_ptr<RuntimeDebugger> absl_nullable runtime_debugger =
+          nullptr);
 
   // Creates a task with the given task ID, task, dependent tasks, and callback.
   // - session_id: The ID of the session that created the task.
@@ -312,6 +318,8 @@ class SerialExecutionManager : public ExecutionManager {
   std::unique_ptr<ResourceManager> resource_manager_;
   // The LIRTER environment used for creating the LLM context.
   ::litert::Environment* litert_env_;
+  // Process-wide debugger telemetry handle (borrowed/unowned).
+  std::shared_ptr<RuntimeDebugger> absl_nullable runtime_debugger_ = nullptr;
 
   // The session ID.
   SessionId next_session_id_ = 0;

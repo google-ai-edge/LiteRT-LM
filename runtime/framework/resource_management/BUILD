@@ -51,6 +51,12 @@ cc_library(
     name = "threaded_execution_manager",
     srcs = ["threaded_execution_manager.cc"],
     hdrs = ["threaded_execution_manager.h"],
+    local_defines = select({
+        "//runtime/util:ai_edge_debugger_enabled": [
+            "AI_EDGE_DEBUGGER_ENABLED=1",
+        ],
+        "//conditions:default": [],
+    }),
     deps = [
         ":execution_manager",
         ":resource_manager",
@@ -92,13 +98,24 @@ cc_library(
         "//runtime/util:executor_data_util",
         "//runtime/util:litert_status_util",
         "//runtime/util:tensor_buffer_util",
-    ],
+    ] + select({
+        "//runtime/util:ai_edge_debugger_enabled": [
+            "//runtime/util:runtime_debugger",
+        ],
+        "//conditions:default": [],
+    }),
 )
 
 cc_library(
     name = "serial_execution_manager",
     srcs = ["serial_execution_manager.cc"],
     hdrs = ["serial_execution_manager.h"],
+    local_defines = select({
+        "//runtime/util:ai_edge_debugger_enabled": [
+            "AI_EDGE_DEBUGGER_ENABLED=1",
+        ],
+        "//conditions:default": [],
+    }),
     deps = [
         ":execution_manager",
         ":resource_manager",
@@ -138,7 +155,12 @@ cc_library(
         "//runtime/util:executor_data_util",
         "//runtime/util:litert_status_util",
         "//runtime/util:tensor_buffer_util",
-    ],
+    ] + select({
+        "//runtime/util:ai_edge_debugger_enabled": [
+            "//runtime/util:runtime_debugger",
+        ],
+        "//conditions:default": [],
+    }),
 )
 
 cc_test(

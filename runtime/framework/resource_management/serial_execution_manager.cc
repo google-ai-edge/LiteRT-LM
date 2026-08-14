@@ -65,6 +65,10 @@
 #include "runtime/util/status_macros.h"
 #include "runtime/util/tensor_buffer_util.h"
 
+#if defined(AI_EDGE_DEBUGGER_ENABLED)
+#include "runtime/util/runtime_debugger.h"
+#endif  // defined(AI_EDGE_DEBUGGER_ENABLED)
+
 namespace litert::lm {
 
 namespace {
@@ -82,10 +86,12 @@ namespace {
 SerialExecutionManager::SerialExecutionManager(
     Tokenizer* absl_nonnull tokenizer,
     std::unique_ptr<ResourceManager> absl_nonnull resource_manager,
-    ::litert::Environment* absl_nullable litert_env)
+    ::litert::Environment* absl_nullable litert_env,
+    std::shared_ptr<RuntimeDebugger> absl_nullable runtime_debugger)
     : tokenizer_(tokenizer),
       resource_manager_(std::move(resource_manager)),
-      litert_env_(litert_env) {}
+      litert_env_(litert_env),
+      runtime_debugger_(std::move(runtime_debugger)) {}
 
 SerialExecutionManager::~SerialExecutionManager() {
   WaitUntilAllDone(absl::InfiniteDuration()).IgnoreError();
@@ -101,7 +107,8 @@ SerialExecutionManager::Create(
     std::unique_ptr<AudioExecutorSettings> absl_nullable
     audio_executor_settings,
     ::litert::Environment* absl_nullable litert_env,
-    std::unique_ptr<AudioExecutor> absl_nullable audio_executor) {
+    std::unique_ptr<AudioExecutor> absl_nullable audio_executor,
+    std::shared_ptr<RuntimeDebugger> absl_nullable runtime_debugger) {
   ABSL_ASSIGN_OR_RETURN(
       auto resource_manager,
       ResourceManager::Create(model_resources, std::move(llm_executor),
@@ -109,7 +116,8 @@ SerialExecutionManager::Create(
                               std::move(audio_executor_settings), litert_env,
                               std::move(audio_executor)));
   return absl::WrapUnique(new SerialExecutionManager(
-      tokenizer, std::move(resource_manager), litert_env));
+      tokenizer, std::move(resource_manager), litert_env,
+      std::move(runtime_debugger)));
 }
 
 absl::Status SerialExecutionManager::WaitUntilDone(TaskId task_id,
@@ -217,6 +225,11 @@ absl::StatusOr<SessionId> SerialExecutionManager::RegisterNewSession(
     ABSL_RETURN_IF_ERROR(resource_manager_->TryLoadingVisionExecutor());
   }
   session_lookup_.insert({session_id, std::move(session_info)});
+#if defined(AI_EDGE_DEBUGGER_ENABLED)
+  if (runtime_debugger_ != nullptr) {
+    runtime_debugger_->RegisterDebugSession(session_id);
+  }
+#endif  // defined(AI_EDGE_DEBUGGER_ENABLED)
 
   return session_id;
 }
@@ -238,6 +251,11 @@ absl::Status SerialExecutionManager::ReleaseSession(SessionId session_id) {
   absl::erase_if(task_lookup_, [session_id](const auto& kv) {
     return kv.second.session_id == session_id;
   });
+#if defined(AI_EDGE_DEBUGGER_ENABLED)
+  if (runtime_debugger_ != nullptr) {
+    runtime_debugger_->UnregisterDebugSession(session_id);
+  }
+#endif  // defined(AI_EDGE_DEBUGGER_ENABLED)
   session_lookup_.erase(session_id);
   if (session_lookup_.empty()) {
     resource_manager_->ResetCurrentHandler();
@@ -703,7 +721,8 @@ absl::Status SerialExecutionManager::AddPrefillTask(
     callback = [](absl::StatusOr<Responses>) {};
   }
 
-  auto task = [this, task_id, inputs = std::move(inputs)]() mutable {
+  auto task = [this, task_id, session_id,
+               inputs = std::move(inputs)]() mutable {
     auto task_info_or = StartTask(task_id);
     if (!task_info_or.ok()) {
       FinishTaskAndLogErrors(task_id, task_info_or.status(),
@@ -779,6 +798,15 @@ absl::Status SerialExecutionManager::AddPrefillTask(
 
     RETURN_IF_CANCELLED(cancelled, task_id, callback);
 
+#if defined(AI_EDGE_DEBUGGER_ENABLED)
+    if (runtime_debugger_ != nullptr) {
+      runtime_debugger_->SetActiveDebugSession(session_id);
+    }
+#else
+    // Suppress -Wunused-variable for non-debugger builds.
+    (void)session_id;
+#endif
+
     auto responses =
         Tasks::Prefill(*llm_executor.value(), *executor_inputs,
                        /*wait_for_completion=*/true,
@@ -831,7 +859,19 @@ absl::Status SerialExecutionManager::AddDecodeTask(
     callback = [](absl::StatusOr<Responses>) {};
   }
 
-  auto task = [this, task_id,
+#if defined(AI_EDGE_DEBUGGER_ENABLED)
+  if (runtime_debugger_ != nullptr) {
+    callback = [this, session_id, cb = std::move(callback)](
+                   absl::StatusOr<Responses> responses) mutable {
+      if (responses.ok() && runtime_debugger_ != nullptr) {
+        runtime_debugger_->ObserveTokens(session_id, *responses);
+      }
+      cb(std::move(responses));
+    };
+  }
+#endif  // defined(AI_EDGE_DEBUGGER_ENABLED)
+
+  auto task = [this, task_id, session_id,
                repetition_penalty_config = std::move(repetition_penalty_config),
                no_repeat_ngram_config = std::move(no_repeat_ngram_config),
                suppress_tokens_config = std::move(suppress_tokens_config),
@@ -878,6 +918,15 @@ absl::Status SerialExecutionManager::AddDecodeTask(
         }
         decoded_ids_buffer = std::move(decoded_ids_buffer_or.Value());
       }
+
+#if defined(AI_EDGE_DEBUGGER_ENABLED)
+    if (runtime_debugger_ != nullptr) {
+      runtime_debugger_->SetActiveDebugSession(session_id);
+    }
+#else
+    // Suppress -Wunused-variable for non-debugger builds.
+    (void)session_id;
+#endif
 
     auto responses = Tasks::Decode(
         *llm_executor.value(), *tokenizer_, *session_info->stop_token_detector,

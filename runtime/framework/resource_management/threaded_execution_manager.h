@@ -50,6 +50,8 @@
 
 namespace litert::lm {
 
+class RuntimeDebugger;
+
 // The execution manager is responsible for managing the execution of the tasks.
 // It will handle the scheduling of the tasks and the dependencies between them.
 // Note: The execution manager will create its own threadpool for executing the
@@ -77,7 +79,9 @@ class ThreadedExecutionManager : public ExecutionManager {
       std::unique_ptr<AudioExecutorSettings> absl_nullable
       audio_executor_settings,
       ::litert::Environment* absl_nullable litert_env,
-      std::unique_ptr<AudioExecutor> absl_nullable audio_executor = nullptr);
+      std::unique_ptr<AudioExecutor> absl_nullable audio_executor = nullptr,
+      std::shared_ptr<RuntimeDebugger> absl_nullable runtime_debugger =
+          nullptr);
 
   ~ThreadedExecutionManager() override;
 
@@ -246,7 +250,9 @@ class ThreadedExecutionManager : public ExecutionManager {
   ThreadedExecutionManager(
       Tokenizer* absl_nonnull tokenizer,
       std::unique_ptr<ResourceManager> absl_nonnull resource_manager,
-      ::litert::Environment* absl_nullable litert_env = nullptr);
+      ::litert::Environment* absl_nullable litert_env = nullptr,
+      std::shared_ptr<RuntimeDebugger> absl_nullable runtime_debugger =
+          nullptr);
 
   // Creates a task with the given task ID, task, dependent tasks, and callback.
   // - session_id: The ID of the session that created the task.
@@ -365,6 +371,8 @@ class ThreadedExecutionManager : public ExecutionManager {
   std::unique_ptr<ResourceManager> absl_nonnull resource_manager_;
   // LiteRT environment used for creating the sampler.
   ::litert::Environment* absl_nullable litert_env_;
+  // Process-wide debugger telemetry handle (borrowed/unowned).
+  std::shared_ptr<RuntimeDebugger> absl_nullable runtime_debugger_ = nullptr;
   // Thread pool used for executing the tasks.
   std::unique_ptr<ThreadPool> absl_nonnull execution_thread_pool_;
   // Thread pool used for executing the callbacks.

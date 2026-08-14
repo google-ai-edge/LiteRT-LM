@@ -59,6 +59,74 @@ cc_test(
 )
 
 cc_library(
+    name = "safetensors_util",
+    srcs = ["safetensors_util.cc"],
+    hdrs = ["safetensors_util.h"],
+    deps = [
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/strings:string_view",
+        "@nlohmann_json//:json",
+        "@litert//litert/cc:litert_element_type",
+    ],
+)
+
+cc_test(
+    name = "safetensors_util_test",
+    srcs = ["safetensors_util_test.cc"],
+    deps = [
+        ":safetensors_util",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@nlohmann_json//:json",
+        "@litert//litert/cc:litert_element_type",
+    ],
+)
+
+config_setting(
+    name = "ai_edge_debugger_enabled",
+    define_values = {"AI_EDGE_DEBUGGER_ENABLED": "1"},
+)
+
+cc_library(
+    name = "runtime_debugger",
+    srcs = ["runtime_debugger.cc"],
+    hdrs = ["runtime_debugger.h"],
+    deps = [
+        ":safetensors_util",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/log:absl_log",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/synchronization",
+        "@nlohmann_json//:json",
+        "@litert//litert/cc:litert_tensor_buffer",
+        "//runtime/engine:io_types",
+        "//runtime/executor:llm_litert_compiled_model_cache_utils",
+        "//runtime/executor:llm_litert_compiled_model_executor",
+    ],
+)
+
+cc_test(
+    name = "runtime_debugger_test",
+    srcs = ["runtime_debugger_test.cc"],
+    deps = [
+        ":runtime_debugger",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/strings:string_view",
+        "@litert//litert/cc:litert_element_type",
+        "@litert//litert/cc:litert_environment",
+        "@litert//litert/cc:litert_layout",
+        "@litert//litert/cc:litert_ranked_tensor_type",
+        "@litert//litert/cc:litert_tensor_buffer",
+        "@litert//litert/cc:litert_tensor_buffer_types",
+        "//runtime/engine:io_types",
+    ],
+)
+
+cc_library(
     name = "log_tensor_buffer",
     srcs = ["log_tensor_buffer.cc"],
     hdrs = ["log_tensor_buffer.h"],
