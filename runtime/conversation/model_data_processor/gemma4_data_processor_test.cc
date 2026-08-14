@@ -147,8 +147,8 @@ TEST_P(Gemma4DataProcessorImageTest, ToInputDataVectorTextAndImage) {
 
   {
     // Override the visual token budget to 300 at runtime, which is larger than
-    // the max_num_patches / 9 in the config. The visual token budget should be
-    // capped to max_num_patches / 9.
+    // the max_num_patches / 9 in the config. The visual token budget should
+    // overwrite max_num_patches.
     ASSERT_OK_AND_ASSIGN(
         const std::vector<InputData> input_data,
         processor->ToInputDataVector(
@@ -159,7 +159,7 @@ TEST_P(Gemma4DataProcessorImageTest, ToInputDataVectorTextAndImage) {
         "<|turn>user\nHere is an image of apples <|image>");
     InputText expected_text2("<turn|>");
     EXPECT_THAT(input_data,
-                ElementsAre(HasInputText(&expected_text1), HasInputImage(2520),
+                ElementsAre(HasInputText(&expected_text1), HasInputImage(2700),
                             HasInputImageEnd(), HasInputText(&expected_text2)));
   }
 }

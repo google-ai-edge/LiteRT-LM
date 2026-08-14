@@ -96,10 +96,10 @@ absl::StatusOr<std::vector<InputData>> ProcessMultimodalPrompt(
           return absl::InvalidArgumentError(
               "Visual token budget must be positive.");
         }
-        max_num_patches = std::min(
-            max_num_patches,
+        // Overwrite the max_num_patches if the visual token budget is provided.
+        max_num_patches =
             budget * image_params->GetPatchifyConfig()->pooling_kernel_size *
-                image_params->GetPatchifyConfig()->pooling_kernel_size);
+            image_params->GetPatchifyConfig()->pooling_kernel_size;
       }
       img_params.SetPatchifyConfig(ImagePreprocessParameter::PatchifyConfig{
           .patch_width = image_params->GetPatchifyConfig()->patch_width,
