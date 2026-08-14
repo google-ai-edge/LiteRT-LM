@@ -117,6 +117,10 @@ constructor(val noRepeatNgramSize: Int? = null, val windowSize: Int? = null) {
  *   to -inf.
  */
 data class SuppressTokensConfig(val suppressTokens: Collection<Int>) {
+  // @JvmName prevents Kotlin compiler from name-mangling this `internal` method in Java bytecode
+  // (e.g., `getSuppressTokensArray$litertlm_jvm`), allowing JNI to find it via
+  // "getSuppressTokensArray".
+  @JvmName("getSuppressTokensArray")
   internal fun getSuppressTokensArray(): IntArray = suppressTokens.toIntArray()
 }
 
