@@ -19,6 +19,11 @@ package(
     default_visibility = ["//kotlin:__subpackages__"],
 )
 
+config_setting(
+    name = "with_keep_symbols",
+    define_values = {"keep_litertlm_symbols": "false"},
+)
+
 cc_binary(
     name = "litertlm_jni",
     srcs = ["litertlm.cc"],
