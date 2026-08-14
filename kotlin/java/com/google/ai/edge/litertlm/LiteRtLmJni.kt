@@ -414,13 +414,15 @@ internal object LiteRtLmJni {
   external fun nativeComputeEmbedding(
     embeddingEnginePointer: Long,
     inputData: Array<InputData>,
-    normalize: Boolean,
+    normalize: Boolean?,
+    insertSpecialTokens: Boolean?,
   ): EmbeddingResponse
 
   /** Computes embeddings for a batch of input data requests. */
   external fun nativeComputeEmbeddingBatch(
     embeddingEnginePointer: Long,
     inputDataBatch: Array<Array<InputData>>,
-    normalize: Boolean,
+    normalize: Boolean?,
+    insertSpecialTokens: Boolean?,
   ): Array<EmbeddingResponse>
 }

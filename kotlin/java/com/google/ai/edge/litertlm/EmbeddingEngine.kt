@@ -91,6 +91,7 @@ class EmbeddingEngine(val config: EmbeddingEngineConfig) : AutoCloseable {
         handle!!,
         contents.toTypedArray(),
         options.normalize,
+        options.insertSpecialTokens,
       )
     }
   }
@@ -111,7 +112,12 @@ class EmbeddingEngine(val config: EmbeddingEngineConfig) : AutoCloseable {
     synchronized(lock) {
       checkInitialized()
       val nativeBatch = contentsBatch.map { it.toTypedArray() }.toTypedArray()
-      return LiteRtLmJni.nativeComputeEmbeddingBatch(handle!!, nativeBatch, options.normalize)
+      return LiteRtLmJni.nativeComputeEmbeddingBatch(
+          handle!!,
+          nativeBatch,
+          options.normalize,
+          options.insertSpecialTokens,
+        )
         .toList()
     }
   }

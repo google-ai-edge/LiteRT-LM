@@ -35,9 +35,14 @@ data class EmbeddingEngineConfig(
 /**
  * Configuration options for a single or batch embedding calculation.
  *
- * @property normalize Whether to L2-normalize the resulting output vectors. Defaults to `true`.
+ * @property normalize Whether to L2-normalize the resulting output vectors. If `null`, uses the C++
+ *   engine default.
+ * @property insertSpecialTokens Whether to automatically insert special tokens (BOS, EOS, start/end
+ *   of image, start/end of audio). If `null`, uses the C++ engine default.
  */
-data class EmbeddingOptions @JvmOverloads constructor(val normalize: Boolean = true)
+data class EmbeddingOptions
+@JvmOverloads
+constructor(val normalize: Boolean? = null, val insertSpecialTokens: Boolean? = null)
 
 /**
  * Represents the embedding result for an input item.
