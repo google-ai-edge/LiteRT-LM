@@ -27,94 +27,131 @@ BAZEL_BIN=$(bazelisk info bazel-bin)
 WHEEL_DIR="${BAZEL_BIN}/python/litert_lm_cli"
 rm -rf "${WHEEL_DIR}"
 
-# Determine which API wheels to fetch from GCS based on the release mode
-API_WHEELS_GCS_DIR="gs://litert-lm-api/macos/nightly_wheels"
-API_PREFIX="litert_lm_api_nightly"
+# Determine version early
+LITERT_LM_VERSION=$(grep "^VERSION =" version.bzl | cut -d'"' -f2)
+TODAY_DATE=$(TZ='America/Los_Angeles' date +%Y%m%d)
+
+# Determine the build/release mode
+IS_STABLE_RELEASE=false
 if [[ "${PUBLISH_STABLE_RELEASE}" == "1" ]]; then
+  IS_STABLE_RELEASE=true
+fi
+
+IS_STAGE_RELEASE=false
+if [[ "${STAGE_ARTIFACTS_WITH_INTERNAL_SYMBOLS}" == "1" && "${KOKORO_JOB_TYPE:-}" == "RELEASE" ]]; then
+  IS_STAGE_RELEASE=true
+fi
+
+IS_NIGHTLY_RELEASE=false
+if [[ "${PUBLISH_NIGHTLY}" == "1" ]]; then
+  IS_NIGHTLY_RELEASE=true
+fi
+
+# Set configurations based on mode
+# Staging release should behave exactly like stable release (no fallback, stable wheels),
+# but it won't be uploaded to PyPI (handled in build.sh).
+if [[ "${IS_STABLE_RELEASE}" == "true" || "${IS_STAGE_RELEASE}" == "true" ]]; then
+  echo "Mode: Stable Release or Staging Release (Strict)"
   API_WHEELS_GCS_DIR="gs://litert-lm-api/macos/stable_wheels"
   API_PREFIX="litert_lm_api"
+  EXPECTED_VERSION="${LITERT_LM_VERSION}"
+  ALLOW_FALLBACK=false
+  EXTRA_BAZEL_ARGS=""
+elif [[ "${IS_NIGHTLY_RELEASE}" == "true" ]]; then
+  echo "Mode: Nightly Release (Strict)"
+  API_WHEELS_GCS_DIR="gs://litert-lm-api/macos/nightly_wheels"
+  API_PREFIX="litert_lm_api_nightly"
+  EXPECTED_VERSION="${LITERT_LM_VERSION}.dev${TODAY_DATE}"
+  ALLOW_FALLBACK=false
+  EXTRA_BAZEL_ARGS="--define=DEV_BUILD=1 --define=DEV_VERSION=${TODAY_DATE}"
+else
+  echo "Mode: Presubmit or Local Developer Build (Fallback Allowed)"
+  API_WHEELS_GCS_DIR="gs://litert-lm-api/macos/nightly_wheels"
+  API_PREFIX="litert_lm_api_nightly"
+  EXPECTED_VERSION="${LITERT_LM_VERSION}.dev${TODAY_DATE}"
+  ALLOW_FALLBACK=true
+  EXTRA_BAZEL_ARGS="--define=DEV_BUILD=1 --define=DEV_VERSION=${TODAY_DATE}"
 fi
 
 API_WHEELS_DIR="${WORKSPACE_ROOT}/api_wheels"
 mkdir -p "${API_WHEELS_DIR}"
-EXTRA_BAZEL_ARGS=""
 
 # Check if wheels were pre-fetched by Kokoro via gfile_resources into KOKORO_GFILE_DIR
 if [[ -n "${KOKORO_GFILE_DIR:-}" ]]; then
   echo "Checking KOKORO_GFILE_DIR (${KOKORO_GFILE_DIR}) for pre-fetched API wheels..."
-  TODAY_DATE=$(TZ='America/Los_Angeles' date +%Y%m%d)
-  MATCHED_WHEEL=$(find "${KOKORO_GFILE_DIR}" -name "${API_PREFIX}*dev${TODAY_DATE}*.whl" 2>/dev/null | head -n 1 || true)
-  if [[ -z "${MATCHED_WHEEL}" ]]; then
-    echo "Today's wheel (dev${TODAY_DATE}) not found in KOKORO_GFILE_DIR. Falling back to latest pre-fetched wheel..."
-    MATCHED_WHEEL=$(find "${KOKORO_GFILE_DIR}" -name "${API_PREFIX}*.whl" 2>/dev/null | sort -V | tail -n 1 || true)
+  MATCHED_WHEEL_LIST=$(find "${KOKORO_GFILE_DIR}" -name "${API_PREFIX}-${EXPECTED_VERSION}-*.whl" 2>/dev/null)
+  
+  if [[ -z "${MATCHED_WHEEL_LIST}" ]]; then
+    if [[ "${ALLOW_FALLBACK}" == "false" ]]; then
+      echo "❌ Expected API wheels (${EXPECTED_VERSION}) not found in KOKORO_GFILE_DIR."
+      exit 1
+    else
+      echo "Expected API wheels (${EXPECTED_VERSION}) not found in KOKORO_GFILE_DIR. Trying fallback..."
+      LATEST_FALLBACK_WHEEL=$(find "${KOKORO_GFILE_DIR}" -name "${API_PREFIX}-*.whl" 2>/dev/null | sort -V | tail -n 1 || true)
+      if [[ -n "${LATEST_FALLBACK_WHEEL}" ]]; then
+         ACTUAL_VERSION=$(basename "$LATEST_FALLBACK_WHEEL" | cut -d'-' -f2)
+         MATCHED_WHEEL_LIST=$(find "${KOKORO_GFILE_DIR}" -name "${API_PREFIX}-${ACTUAL_VERSION}-*.whl" 2>/dev/null)
+         EXPECTED_VERSION="${ACTUAL_VERSION}"
+         ACTUAL_DATE=$(echo "$ACTUAL_VERSION" | grep -o 'dev[0-9]*' | sed 's/dev//' || true)
+         if [[ -n "${ACTUAL_DATE}" ]]; then
+           EXTRA_BAZEL_ARGS="--define=DEV_BUILD=1 --define=DEV_VERSION=${ACTUAL_DATE}"
+         fi
+      fi
+    fi
   fi
-  if [[ -n "${MATCHED_WHEEL}" ]]; then
-    echo "Copying pre-fetched API wheel: $(basename "${MATCHED_WHEEL}")"
-    cp "${MATCHED_WHEEL}" "${API_WHEELS_DIR}/"
+  
+  if [[ -n "${MATCHED_WHEEL_LIST}" ]]; then
+    echo "Copying pre-fetched API wheels..."
+    echo "${MATCHED_WHEEL_LIST}" | while read -r f; do
+      if [[ -n "$f" ]]; then
+        echo "  $(basename "$f")"
+        cp "$f" "${API_WHEELS_DIR}/"
+      fi
+    done
   fi
 fi
 
-if ls "${API_WHEELS_DIR}"/*.whl > /dev/null 2>&1; then
-  echo "Found pre-fetched API wheels in KOKORO_GFILE_DIR!"
-  PREFETCHED_WHEEL=$(ls "${API_WHEELS_DIR}"/${API_PREFIX}*.whl 2>/dev/null | sort -V | tail -n 1 || true)
-  if [[ -n "${PREFETCHED_WHEEL}" ]]; then
-    PREFETCHED_VERSION=$(basename "$PREFETCHED_WHEEL" | cut -d'-' -f2)
-    PREFETCHED_DATE=$(echo "$PREFETCHED_VERSION" | grep -o 'dev[0-9]*' | sed 's/dev//' || true)
-    if [[ -n "${PREFETCHED_DATE}" ]]; then
-      echo "Pre-fetched API wheel version: ${PREFETCHED_VERSION} (Date: ${PREFETCHED_DATE})"
-      EXTRA_BAZEL_ARGS="--define=DEV_BUILD=1 --define=DEV_VERSION=${PREFETCHED_DATE}"
+# Fetch from GCS if not found in GFILE_DIR
+if ! ls "${API_WHEELS_DIR}"/*.whl > /dev/null 2>&1; then
+  echo "Fetching API wheels from GCS..."
+  set +e
+  WHEEL_LIST=$(gcloud storage ls "${API_WHEELS_GCS_DIR}/${API_PREFIX}-${EXPECTED_VERSION}-*.whl" 2>/dev/null)
+  set -e
+  
+  if [[ -z "${WHEEL_LIST}" ]]; then
+    if [[ "${ALLOW_FALLBACK}" == "false" ]]; then
+      echo "❌ Expected API wheels (${EXPECTED_VERSION}) not found in GCS."
+      exit 1
+    else
+      echo "Expected API wheels (${EXPECTED_VERSION}) not found in GCS. Trying fallback..."
+      set +e
+      LATEST_FALLBACK_PATH=$(gcloud storage ls --sort-by="~updated" --limit=1 "${API_WHEELS_GCS_DIR}/${API_PREFIX}-*.whl" 2>/dev/null | head -n 1 || true)
+      set -e
+      if [[ -n "${LATEST_FALLBACK_PATH}" ]]; then
+        ACTUAL_VERSION=$(basename "$LATEST_FALLBACK_PATH" | cut -d'-' -f2)
+        set +e
+        WHEEL_LIST=$(gcloud storage ls "${API_WHEELS_GCS_DIR}/${API_PREFIX}-${ACTUAL_VERSION}-*.whl" 2>/dev/null)
+        set -e
+        EXPECTED_VERSION="${ACTUAL_VERSION}"
+        ACTUAL_DATE=$(echo "$ACTUAL_VERSION" | grep -o 'dev[0-9]*' | sed 's/dev//' || true)
+        if [[ -n "${ACTUAL_DATE}" ]]; then
+          EXTRA_BAZEL_ARGS="--define=DEV_BUILD=1 --define=DEV_VERSION=${ACTUAL_DATE}"
+        fi
+      fi
     fi
   fi
-else
-  if [[ "${PUBLISH_STABLE_RELEASE}" != "1" ]]; then
-    echo "Continuous/Nightly mode: Fetching latest API wheels from GCS via gcloud..."
-    set +e
-    TODAY_DATE=$(TZ='America/Los_Angeles' date +%Y%m%d)
-    LATEST_WHEEL_PATH=$(gcloud storage ls "${API_WHEELS_GCS_DIR}/${API_PREFIX}-*dev${TODAY_DATE}*.whl" 2>/dev/null | head -n 1 || true)
-    if [[ -z "${LATEST_WHEEL_PATH}" ]]; then
-      echo "Today's wheel (dev${TODAY_DATE}) not found in GCS. Falling back to latest available wheel..."
-      LATEST_WHEEL_PATH=$(gcloud storage ls --sort-by="~updated" --limit=1 "${API_WHEELS_GCS_DIR}/${API_PREFIX}-*.whl" 2>/dev/null | head -n 1 || true)
-    fi
-    set -e
-    
-    if [[ -n "${LATEST_WHEEL_PATH}" ]]; then
-      LATEST_VERSION=$(basename "$LATEST_WHEEL_PATH" | cut -d'-' -f2)
-      LATEST_DATE=$(echo "$LATEST_VERSION" | grep -o 'dev[0-9]*' | sed 's/dev//' || true)
-      
-      echo "Latest available API version in GCS is: ${LATEST_VERSION} (Date: ${LATEST_DATE})"
-      
-      if [[ -n "${LATEST_DATE}" ]]; then
-        EXTRA_BAZEL_ARGS="--define=DEV_BUILD=1 --define=DEV_VERSION=${LATEST_DATE}"
-      fi
-    else
-      echo "⚠️ Failed to find any API wheels in GCS! Proceeding with default version."
-    fi
+  
+  if [[ -n "${WHEEL_LIST}" ]]; then
+    echo "Downloading API wheels..."
+    gcloud storage cp "${API_WHEELS_GCS_DIR}/${API_PREFIX}-${EXPECTED_VERSION}-*.whl" "${API_WHEELS_DIR}/"
+  else
+    echo "❌ Failed to find any matching API wheels in GCS!"
+    exit 1
   fi
 fi
 
 echo "Building wheel using Bazelisk..."
 bazelisk build //python/litert_lm_cli:wheel "$@" ${EXTRA_BAZEL_ARGS}
-
-# 1. Read the EXACT version string from the freshly built CLI wheel!
-CLI_WHEEL_PATH=$(ls "${WHEEL_DIR}"/*.whl 2>/dev/null | head -n 1 || true)
-CLI_VERSION=$(basename "${CLI_WHEEL_PATH}" | cut -d'-' -f2 || true)
-
-if [[ -z "${CLI_VERSION}" ]]; then
-  echo "❌ Failed to parse CLI version from wheel: ${CLI_WHEEL_PATH}"
-  exit 1
-fi
-echo "Detected CLI Version: ${CLI_VERSION}"
-
-# 3. Ensure API wheels exist (if not already found in KOKORO_GFILE_DIR, download matching version via gcloud)
-if ! ls "${API_WHEELS_DIR}"/*.whl > /dev/null 2>&1; then
-  echo "Downloading API wheels for version ${CLI_VERSION}..."
-  gcloud storage cp "${API_WHEELS_GCS_DIR}/${API_PREFIX}-${CLI_VERSION}*.whl" "${API_WHEELS_DIR}/" || true
-fi
-
-if ! ls "${API_WHEELS_DIR}"/*.whl > /dev/null 2>&1; then
-  echo "❌ Failed to find matching API wheels for version ${CLI_VERSION}!"
-  exit 1
-fi
 
 TEST_VENV="${WORKSPACE_ROOT}/python/litert_lm_cli/test_venv"
 
