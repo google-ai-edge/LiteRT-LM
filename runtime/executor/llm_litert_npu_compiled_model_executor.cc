@@ -14,6 +14,7 @@
 
 #include "runtime/executor/llm_litert_npu_compiled_model_executor.h"
 
+#include <cstdlib>
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
@@ -39,6 +40,7 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/str_join.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "absl/time/clock.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
@@ -87,6 +89,19 @@ using ::litert::Model;
 using ::litert::TensorBuffer;
 
 constexpr int kInvalidTokenId = -1;
+
+bool IsNpuSyncWorkaroundEnabled() {
+  static bool enabled = []() {
+    const char* env = std::getenv("LITERT_LM_SYNC_EXECUTION");
+    if (env == nullptr) {
+      // Default is async (false)
+      return false;
+    }
+    std::string env_str(env);
+    return env_str == "1" || env_str == "true" || env_str == "sync";
+  }();
+  return enabled;
+}
 
 absl::Status FillKVCacheBuffer(TensorBuffer& buffer, int64_t init_value) {
   LITERT_ASSIGN_OR_RETURN(RankedTensorType tensor_type, buffer.TensorType());
@@ -1713,6 +1728,10 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::Prefill(
 
 absl::Status LlmLiteRtNpuCompiledModelExecutor::Prefill(
     const ExecutorInputs& inputs, const ExecutorPrefillParams& params) {
+  std::optional<absl::MutexLock> lock;
+  if (IsNpuSyncWorkaroundEnabled()) {
+    lock.emplace(&execution_mutex_);
+  }
   ran_decode_ = false;
   auto start = absl::Now();
   LITERT_ASSIGN_OR_RETURN(const auto* text_token_ids,

@@ -28,6 +28,7 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_element_type.h"  // from @litert
@@ -773,6 +774,7 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
   bool ran_decode_ = false;
   int64_t kv_cache_init_value_ = 0;
   bool has_sliding_window_attention_ = false;
+  absl::Mutex execution_mutex_;
 };
 
 std::ostream& operator<<(
