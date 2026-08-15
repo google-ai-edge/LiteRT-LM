@@ -252,7 +252,7 @@ internal object LiteRtLmJni {
    *   default.
    * @param repetitionPenaltyConfig Configuration for repetition penalty.
    * @param noRepeatNgramConfig Configuration for no repeat ngram.
-   * @param suppressTokensConfig Configuration for suppressing specific tokens.
+   * @param suppressTokens An array of token IDs to suppress.
    * @param maxOutputToken The maximum number of output tokens. For thinking models, both thinking
    *   (reasoning) tokens and the final response tokens count towards this limit. When non-positive,
    *   use the default.
@@ -266,7 +266,7 @@ internal object LiteRtLmJni {
     visualTokenBudget: Int?,
     repetitionPenaltyConfig: RepetitionPenaltyConfig?,
     noRepeatNgramConfig: NoRepeatNgramConfig?,
-    suppressTokensConfig: SuppressTokensConfig?,
+    suppressTokens: IntArray?,
     maxOutputToken: Int,
     thinkingConfig: ThinkingConfig?,
     constraintType: Int,
@@ -284,7 +284,7 @@ internal object LiteRtLmJni {
    *   default.
    * @param repetitionPenaltyConfig Configuration for repetition penalty.
    * @param noRepeatNgramConfig Configuration for no repeat ngram.
-   * @param suppressTokensConfig Configuration for suppressing specific tokens.
+   * @param suppressTokens An array of token IDs to suppress.
    * @param maxOutputToken The maximum number of output tokens. For thinking models, both thinking
    *   (reasoning) tokens and the final response tokens count towards this limit. When non-positive,
    *   use the default.
@@ -298,7 +298,7 @@ internal object LiteRtLmJni {
     visualTokenBudget: Int?,
     repetitionPenaltyConfig: RepetitionPenaltyConfig?,
     noRepeatNgramConfig: NoRepeatNgramConfig?,
-    suppressTokensConfig: SuppressTokensConfig?,
+    suppressTokens: IntArray?,
     maxOutputToken: Int,
     thinkingConfig: ThinkingConfig?,
     constraintType: Int,

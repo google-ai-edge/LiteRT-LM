@@ -438,25 +438,16 @@ litert::lm::NoRepeatNgramConfig CreateNoRepeatNgramConfigFromJni(
 }
 
 litert::lm::SuppressTokensConfig CreateSuppressTokensConfigFromJni(
-    JNIEnv* env, jobject suppress_tokens_config_obj) {
-  jclass cls = env->GetObjectClass(suppress_tokens_config_obj);
-  jmethodID get_array_mid =
-      env->GetMethodID(cls, "getSuppressTokensArray", "()[I");
-  jintArray array_obj = (jintArray)env->CallObjectMethod(
-      suppress_tokens_config_obj, get_array_mid);
-
+    JNIEnv* env, jintArray suppress_tokens_array) {
   absl::flat_hash_set<int> suppress_tokens;
-  if (array_obj != nullptr) {
-    jsize size = env->GetArrayLength(array_obj);
-    jint* elements = env->GetIntArrayElements(array_obj, nullptr);
+  if (suppress_tokens_array != nullptr) {
+    jsize size = env->GetArrayLength(suppress_tokens_array);
+    jint* elements = env->GetIntArrayElements(suppress_tokens_array, nullptr);
     for (int i = 0; i < size; ++i) {
       suppress_tokens.insert(elements[i]);
     }
-    env->ReleaseIntArrayElements(array_obj, elements, JNI_ABORT);
-    env->DeleteLocalRef(array_obj);
+    env->ReleaseIntArrayElements(suppress_tokens_array, elements, JNI_ABORT);
   }
-  env->DeleteLocalRef(cls);
-
   return litert::lm::SuppressTokensConfig(std::move(suppress_tokens));
 }
 
@@ -1223,7 +1214,7 @@ LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeSendMessageAsync)(
     JNIEnv* env, jclass thiz, jlong conversation_pointer,
     jstring messageJSONString, jstring extraContextJsonString, jobject callback,
     jobject visual_token_budget, jobject repetition_penalty_config_obj,
-    jobject no_repeat_ngram_config_obj, jobject suppress_tokens_config_obj,
+    jobject no_repeat_ngram_config_obj, jintArray suppress_tokens_array,
     jint max_output_token, jobject thinking_config_obj, jint constraint_type,
     jstring constraint_string) {
   JavaVM* jvm = nullptr;
@@ -1262,9 +1253,9 @@ LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeSendMessageAsync)(
         CreateNoRepeatNgramConfigFromJni(env, no_repeat_ngram_config_obj);
   }
 
-  if (suppress_tokens_config_obj != nullptr) {
+  if (suppress_tokens_array != nullptr) {
     optional_args.suppress_tokens_config =
-        CreateSuppressTokensConfigFromJni(env, suppress_tokens_config_obj);
+        CreateSuppressTokensConfigFromJni(env, suppress_tokens_array);
   }
 
   if (max_output_token > 0) {
@@ -1377,7 +1368,7 @@ LITERTLM_JNIEXPORT jstring JNICALL JNI_METHOD(nativeSendMessage)(
     JNIEnv* env, jclass thiz, jlong conversation_pointer,
     jstring messageJSONString, jstring extraContextJsonString,
     jobject visual_token_budget, jobject repetition_penalty_config_obj,
-    jobject no_repeat_ngram_config_obj, jobject suppress_tokens_config_obj,
+    jobject no_repeat_ngram_config_obj, jintArray suppress_tokens_array,
     jint max_output_token, jobject thinking_config_obj, jint constraint_type,
     jstring constraint_string) {
   Conversation* conversation =
@@ -1410,9 +1401,9 @@ LITERTLM_JNIEXPORT jstring JNICALL JNI_METHOD(nativeSendMessage)(
         CreateNoRepeatNgramConfigFromJni(env, no_repeat_ngram_config_obj);
   }
 
-  if (suppress_tokens_config_obj != nullptr) {
+  if (suppress_tokens_array != nullptr) {
     optional_args.suppress_tokens_config =
-        CreateSuppressTokensConfigFromJni(env, suppress_tokens_config_obj);
+        CreateSuppressTokensConfigFromJni(env, suppress_tokens_array);
   }
 
   if (max_output_token > 0) {

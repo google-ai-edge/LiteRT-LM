@@ -116,9 +116,7 @@ constructor(val noRepeatNgramSize: Int? = null, val windowSize: Int? = null) {
  * @property suppressTokens A list of token IDs to suppress. Banned tokens will have their logit set
  *   to -inf.
  */
-data class SuppressTokensConfig(val suppressTokens: Collection<Int>) {
-  internal fun getSuppressTokensArray(): IntArray = suppressTokens.toIntArray()
-}
+data class SuppressTokensConfig(val suppressTokens: Collection<Int>)
 
 /**
  * Configuration for thinking/reasoning generation.

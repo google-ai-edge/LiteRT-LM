@@ -144,12 +144,13 @@ class Conversation(
           visualTokenBudget,
           repetitionPenaltyConfig,
           noRepeatNgramConfig,
-          suppressTokensConfig,
+          suppressTokensConfig?.suppressTokens?.toIntArray(),
           maxOutputToken ?: -1,
           if (i == 0) thinkingConfig else null,
           activeResponseFormat?.type?.value ?: 0,
           activeResponseFormat?.schemaOrPattern,
         )
+
       val responseJsonObject = JsonParser.parseString(responseJsonString).asJsonObject
 
       if (responseJsonObject.has("tool_calls")) {
@@ -318,7 +319,7 @@ class Conversation(
       visualTokenBudget,
       repetitionPenaltyConfig,
       noRepeatNgramConfig,
-      suppressTokensConfig,
+      suppressTokensConfig?.suppressTokens?.toIntArray(),
       maxOutputToken ?: -1,
       thinkingConfig,
       activeResponseFormat?.type?.value ?: 0,
@@ -634,12 +635,13 @@ class Conversation(
           @OptIn(ExperimentalApi::class) ExperimentalFlags.visualTokenBudget,
           repetitionPenaltyConfig,
           noRepeatNgramConfig,
-          suppressTokensConfig,
+          suppressTokensConfig?.suppressTokens?.toIntArray(),
           maxOutputToken ?: -1,
           null,
           activeResponseFormat?.type?.value ?: 0,
           activeResponseFormat?.schemaOrPattern,
         )
+
         pendingToolResponseJSONMessage = null // Clear after sending
       } else {
         // If no pending action, then call onDone to the original user callback.
