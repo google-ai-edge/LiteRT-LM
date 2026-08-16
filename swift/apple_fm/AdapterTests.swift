@@ -211,6 +211,93 @@
       XCTAssertLessThan(apple.lowerBound, mango.lowerBound)
       XCTAssertLessThan(mango.lowerBound, zebra.lowerBound)
     }
+
+    // MARK: - Tool routing
+
+    /// The router grammar must stay inside object/properties/required/enum/string.
+    /// Anything richer (anyOf, if/then) is not safe to assume of a JSON-Schema
+    /// grammar compiler, and a schema the compiler rejects silently drops the
+    /// constraint — the failure this whole path exists to prevent.
+    func testRouteSchemaEnumeratesEveryToolPlusTheSentinel() throws {
+      let tools = try Self.toolDefinitions()
+      let schema = LiteRTLMExecutor.routeSchema(tools)
+
+      XCTAssertEqual(schema["type"] as? String, "object")
+      XCTAssertEqual(Set(schema["required"] as? [String] ?? []), ["tool", "answer"])
+
+      let properties = try XCTUnwrap(schema["properties"] as? [String: Any])
+      let tool = try XCTUnwrap(properties["tool"] as? [String: Any])
+      XCTAssertEqual(
+        tool["enum"] as? [String],
+        [LiteRTLMExecutor.noToolSentinel, "get_temperature", "open_url"])
+      XCTAssertEqual((properties["answer"] as? [String: Any])?["type"] as? String, "string")
+
+      // And it has to survive the encoder that hands it to the runtime.
+      XCTAssertNoThrow(try ResponseFormat.json(schema: schema))
+    }
+
+    /// A tool name equal to the sentinel would make "no tool" unaddressable. It
+    /// must not end up in the enum twice; the tool loses, since the sentinel is
+    /// the only way to answer without calling anything.
+    func testRouteSchemaDoesNotDuplicateTheSentinel() throws {
+      let tools = try Self.toolDefinitions()
+      let schema = LiteRTLMExecutor.routeSchema(tools + tools)
+      let properties = try XCTUnwrap(schema["properties"] as? [String: Any])
+      let names = try XCTUnwrap((properties["tool"] as? [String: Any])?["enum"] as? [String])
+      XCTAssertEqual(names.filter { $0 == LiteRTLMExecutor.noToolSentinel }.count, 1)
+    }
+
+    func testParseRouteSelectsTheNamedTool() throws {
+      let tools = try Self.toolDefinitions()
+      let route = LiteRTLMExecutor.parseRoute(
+        from: #"{"tool": "get_temperature", "answer": ""}"#, tools: tools)
+      XCTAssertEqual(route.tool?.name, "get_temperature")
+    }
+
+    func testParseRouteTreatsTheSentinelAsAnAnswer() throws {
+      let tools = try Self.toolDefinitions()
+      let route = LiteRTLMExecutor.parseRoute(
+        from: #"{"tool": "none", "answer": "42"}"#, tools: tools)
+      XCTAssertNil(route.tool)
+      XCTAssertEqual(route.answer, "42")
+    }
+
+    func testParseRouteRejectsAToolThatWasNotOffered() throws {
+      let tools = try Self.toolDefinitions()
+      let route = LiteRTLMExecutor.parseRoute(
+        from: #"{"tool": "rm_rf", "answer": ""}"#, tools: tools)
+      XCTAssertNil(route.tool)
+    }
+
+    /// Constrained decoding is not guaranteed — a runtime built without it, or a
+    /// schema the compiler refused, both land here. Free text must degrade to a
+    /// plain answer rather than to an empty turn.
+    func testParseRouteFallsBackToRawTextWhenTheReplyIsNotJSON() throws {
+      let tools = try Self.toolDefinitions()
+      let route = LiteRTLMExecutor.parseRoute(from: "It is 21 degrees.", tools: tools)
+      XCTAssertNil(route.tool)
+      XCTAssertEqual(route.answer, "It is 21 degrees.")
+    }
+
+    /// `Transcript.ToolDefinition` values as FM itself builds them, taken off a
+    /// session rather than constructed by hand.
+    private static func toolDefinitions() throws -> [Transcript.ToolDefinition] {
+      [
+        Transcript.ToolDefinition(tool: StubTool()),
+        Transcript.ToolDefinition(tool: OpenURLTool()),
+      ]
+    }
+  }
+
+  @available(iOS 27.0, macOS 27.0, *)
+  private struct OpenURLTool: FoundationModels.Tool {
+    let name = "open_url"
+    let description = "Open a web page."
+    @Generable struct Arguments {
+      @Guide(description: "The URL to open")
+      var url: String
+    }
+    func call(arguments: Arguments) async throws -> String { "opened" }
   }
 
   /// Properties intentionally declared out of alphabetical order, so the sorted
