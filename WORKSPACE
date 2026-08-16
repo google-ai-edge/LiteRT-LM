@@ -378,8 +378,9 @@ http_archive(
     name = "sentencepiece",
     build_file = "@//:BUILD.sentencepiece",
     patch_cmds = [
+        # kawai: strip-to-src layout (strip_prefix = ".../src" below) already
+        # flattens src/, so upstream's "mv src/* ." is intentionally omitted.
         "printf '#ifndef CONFIG_H_\\n#define CONFIG_H_\\n#define VERSION \"0.2.2\"\\n#define PACKAGE \"sentencepiece\"\\n#define PACKAGE_STRING \"sentencepiece\"\\n#define INSTALL_DATADIR \"\"\\n#endif\\n' > config.h",
-        "mv src/* .",
         # Replace third_party/absl/ with absl/ in *.h and *.cc files.
         "sed -i -e 's|#include \"third_party/absl/|#include \"absl/|g' *.h *.cc",
         # Replace third_party/protobuf-lite/ with google/protobuf/ in *.h and *.cc files.
@@ -387,9 +388,25 @@ http_archive(
         "sed -i -e 's|#include \"third_party/protobuf/|#include \"google/protobuf/|g' *.h *.cc",
         "rm -rf third_party/protobuf-lite third_party/protobuf third_party/absl third_party/abseil-cpp",
     ],
+    # kawai: fork (cognee-dev) strip-to-src layout applied to upstream's
+    # v0.2.2 content — API matches upstream sources (Decode signature) and
+    # generated .pb.h resolves as a same-directory quoted include, which
+    # passes strict hdrs_check where the v0.2.2 root layout fails on macOS.
+    # v0.2.2's vendored third_party/darts_clone has the newer DoubleArrayImpl
+    # API (copy_array/validate); it lives outside the stripped src/ prefix, so
+    # the patch re-adds it into the repo.
+    patches = ["@//:PATCH.sentencepiece_darts"],
     sha256 = "92381f713e094a15a1ccff1ac4a5315a4c4b82a99ac1332d6ac53c9dc8e1bcf1",
-    strip_prefix = "sentencepiece-0.2.2",
+    strip_prefix = "sentencepiece-0.2.2/src",
     url = "https://github.com/google/sentencepiece/archive/refs/tags/v0.2.2.tar.gz",
+)
+
+http_archive(
+    name = "darts_clone",
+    build_file = "@//:BUILD.darts_clone",
+    sha256 = "4a562824ec2fbb0ef7bd0058d9f73300173d20757b33bb69baa7e50349f65820",
+    strip_prefix = "darts-clone-e40ce4627526985a7767444b6ed6893ab6ff8983",
+    url = "https://github.com/s-yata/darts-clone/archive/e40ce4627526985a7767444b6ed6893ab6ff8983.tar.gz",
 )
 
 http_archive(
