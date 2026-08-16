@@ -164,12 +164,20 @@
       // Guided generation: if the request carries a schema, encode it to JSON,
       // steer the model via the prompt (schema-in-prompt), and additionally
       // constrain decoding to the schema (llguidance), which makes it impossible
-      // for the output to deviate from it. Tools: if enabled, describe them in the
-      // prompt and detect a tool-call in the output (soft / prompt-driven).
+      // for the output to deviate from it.
+      //
+      // Tools take the same treatment, in two constrained steps: first the model
+      // picks a tool name (or "none") out of an enum, then — only if it picked one
+      // — it fills that tool's own parameter schema. A single combined schema
+      // would need `anyOf` to switch the argument shape on the chosen name; the
+      // split keeps every grammar to enum/object/required, which is the part of
+      // JSON Schema that is safe to assume, and it constrains the arguments
+      // rather than hoping the model spells them right.
       let tools = request.enabledToolDefinitions
       let schemaJSON = request.schema.flatMap { try? Self.encodeSchema($0) }
       let plan = try Self.plan(from: request.transcript, schemaJSON: schemaJSON, tools: tools)
       let responseFormat = schemaJSON.flatMap { try? ResponseFormat.json(schema: $0) }
+      let routeFormat = tools.isEmpty ? nil : try? ResponseFormat.json(schema: Self.routeSchema(tools))
 
       let structured = schemaJSON != nil || !tools.isEmpty
       let conversation = try await engine.createConversation(
@@ -177,22 +185,41 @@
           systemMessage: plan.systemMessage,
           initialMessages: plan.history,
           samplerConfig: Self.sampler(for: request.generationOptions, structured: structured),
-          enableResponseFormat: responseFormat != nil,
+          enableResponseFormat: responseFormat != nil || routeFormat != nil,
           visualTokenBudget: model.visualTokenBudget))
 
       if !tools.isEmpty {
-        var full = ""
-        for try await chunk in conversation.sendMessageStream(plan.prompt) {
-          full += chunk.toString
+        var routeText = ""
+        for try await chunk in conversation.sendMessageStream(
+          plan.prompt, responseFormat: routeFormat)
+        {
+          routeText += chunk.toString
         }
-        if let call = Self.parseToolCall(from: full, tools: tools) {
+        let route = Self.parseRoute(from: routeText, tools: tools)
+
+        if let tool = route.tool {
+          // The chosen tool's parameter schema is the grammar for this second
+          // pass, so the arguments cannot come back malformed or under-filled.
+          let argsFormat = (try? Self.encodeSchema(tool.parameters)).flatMap {
+            try? ResponseFormat.json(schema: $0)
+          }
+          var argsText = ""
+          for try await chunk in conversation.sendMessageStream(
+            Message(Self.argumentsRequest(for: tool), role: .user), responseFormat: argsFormat)
+          {
+            argsText += chunk.toString
+          }
+          let arguments = Self.extractJSONObject(from: argsText) ?? "{}"
           await channel.send(
             .toolCalls(
               action: .toolCall(
-                id: UUID().uuidString, name: call.name,
-                action: .appendArguments(call.arguments, tokenCount: call.arguments.count))))
+                id: UUID().uuidString, name: tool.name,
+                action: .appendArguments(arguments, tokenCount: arguments.count))))
         } else {
-          await channel.send(.response(action: .appendText(full, tokenCount: full.count)))
+          // "none": the same constrained pass already carries the reply, so a
+          // plain chat turn still costs one generation.
+          let answer = route.answer.isEmpty ? routeText : route.answer
+          await channel.send(.response(action: .appendText(answer, tokenCount: answer.count)))
         }
       } else if schemaJSON != nil {
         var full = ""
@@ -315,6 +342,11 @@
       )
     }
 
+    /// The name reserved for "answer the user directly". A tool may not take it;
+    /// `Transcript.ToolDefinition` names come from `Tool.name`, so the collision is
+    /// possible in principle and silently breaks routing if it happens.
+    static let noToolSentinel = "none"
+
     private static func toolInstructions(_ tools: [Transcript.ToolDefinition]) -> String {
       var lines = ["You can call tools to help answer the user. Available tools:"]
       for tool in tools {
@@ -322,25 +354,53 @@
         lines.append("- \(tool.name): \(tool.description). arguments schema: \(params)")
       }
       lines.append(
-        "To call a tool, reply with ONLY this JSON and nothing else: "
-          + "{\"tool_call\": {\"name\": \"<tool name>\", \"arguments\": { ... }}}. "
-          + "If no tool is needed, answer the user directly.")
+        "Reply with ONLY this JSON and nothing else: "
+          + "{\"tool\": \"<tool name or \(noToolSentinel)>\", \"answer\": \"<your reply>\"}. "
+          + "Pick a tool when one of them can supply something you do not know, and leave "
+          + "\"answer\" empty in that case — you will be asked for the arguments next. "
+          + "Use \"\(noToolSentinel)\" when you can already answer, and put the reply in "
+          + "\"answer\".")
       return lines.joined(separator: "\n")
     }
 
-    private static func parseToolCall(from text: String, tools: [Transcript.ToolDefinition])
-      -> (name: String, arguments: String)?
+    /// The router grammar: one enum of tool names plus the sentinel, and the reply
+    /// to use when the sentinel is picked. Deliberately limited to
+    /// object/properties/required/enum/string — the subset every JSON-Schema
+    /// grammar compiler supports.
+    static func routeSchema(_ tools: [Transcript.ToolDefinition]) -> [String: Any] {
+      var names = [noToolSentinel]
+      names.append(contentsOf: tools.map { $0.name }.filter { $0 != noToolSentinel })
+      return [
+        "type": "object",
+        "properties": [
+          "tool": ["type": "string", "enum": names],
+          "answer": ["type": "string"],
+        ],
+        "required": ["tool", "answer"],
+      ]
+    }
+
+    private static func argumentsRequest(for tool: Transcript.ToolDefinition) -> String {
+      let params = (try? encodeSchema(tool.parameters)) ?? "{}"
+      return "Now output ONLY the arguments for \"\(tool.name)\" as a JSON object "
+        + "matching this schema, and nothing else:\n\(params)"
+    }
+
+    /// Read the router's answer. A model that ignores the grammar (or a runtime
+    /// without constrained decoding) still lands here, so an unparseable reply is
+    /// treated as "no tool" and its raw text becomes the answer.
+    static func parseRoute(from text: String, tools: [Transcript.ToolDefinition])
+      -> (tool: Transcript.ToolDefinition?, answer: String)
     {
       guard let json = extractJSONObject(from: text),
         let data = json.data(using: .utf8),
-        let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-        let call = obj["tool_call"] as? [String: Any],
-        let name = call["name"] as? String,
-        tools.contains(where: { $0.name == name })
-      else { return nil }
-      let args = call["arguments"] ?? [String: Any]()
-      let argsData = (try? JSONSerialization.data(withJSONObject: args)) ?? Data("{}".utf8)
-      return (name, String(data: argsData, encoding: .utf8) ?? "{}")
+        let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+      else { return (nil, text) }
+      let answer = (obj["answer"] as? String) ?? ""
+      guard let name = obj["tool"] as? String, name != noToolSentinel,
+        let tool = tools.first(where: { $0.name == name })
+      else { return (nil, answer) }
+      return (tool, answer)
     }
 
     private static func text(of segments: [Transcript.Segment]) -> String {
