@@ -100,4 +100,7 @@ message LlmMetadata {
   // Note: This field is curently only used by NPU backends for certain models,
   // proceed with caution.
   optional int64 kv_cache_init_value = 10;
+
+  // Pad token used to pad input sequences.
+  optional TokenUnion pad_token = 11;
 }
