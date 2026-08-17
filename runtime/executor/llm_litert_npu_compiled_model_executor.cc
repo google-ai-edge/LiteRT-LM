@@ -2455,6 +2455,14 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::PrefillInternalFromEmbeddings(
     LITERT_ASSIGN_OR_RETURN(size_t buffer_size, buffer.PackedSize());
     RET_CHECK_GE(buffer_size, embeddings.size() * elem_size);
 
+    // Unlock buffer if locked by a prior submodel run. Ignore
+    // kErrorRuntimeFailure since Unlock() returns an error if the buffer is
+    // already unlocked.
+    if (auto unlock_res = buffer.Unlock();
+        !unlock_res.HasValue() &&
+        unlock_res.Error().StatusCC() != litert::Status::kErrorRuntimeFailure) {
+      LITERT_RETURN_IF_ERROR(unlock_res);
+    }
     LITERT_ASSIGN_OR_RETURN(
         auto lock_and_addr,
         ::litert::TensorBufferScopedLock::Create(
@@ -2523,6 +2531,14 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::PrefillInternalFromEmbeddings(
     LITERT_ASSIGN_OR_RETURN(size_t buffer_size, buffer.PackedSize());
     RET_CHECK_GE(buffer_size, seq_positions.size() * sizeof(int32_t));
 
+    // Unlock buffer if locked by a prior submodel run. Ignore
+    // kErrorRuntimeFailure since Unlock() returns an error if the buffer is
+    // already unlocked.
+    if (auto unlock_res = buffer.Unlock();
+        !unlock_res.HasValue() &&
+        unlock_res.Error().StatusCC() != litert::Status::kErrorRuntimeFailure) {
+      LITERT_RETURN_IF_ERROR(unlock_res);
+    }
     LITERT_ASSIGN_OR_RETURN(
         auto lock_and_addr,
         ::litert::TensorBufferScopedLock::Create(
