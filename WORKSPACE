@@ -102,6 +102,16 @@ http_archive(
     url = "https://github.com/google-ml-infra/rules_ml_toolchain/archive/2eddbc595cc0bbe650c2640204f66b14f015f1a8.tar.gz",
 )
 
+# Darts Clone. Declare this before TensorFlow's workspace macros so they do not
+# install their own incompatible BUILD overlay.
+http_archive(
+    name = "darts_clone",
+    build_file = "@//:BUILD.darts_clone",
+    sha256 = "4a562824ec2fbb0ef7bd0058d9f73300173d20757b33bb69baa7e50349f65820",
+    strip_prefix = "darts-clone-e40ce4627526985a7767444b6ed6893ab6ff8983",
+    url = "https://github.com/s-yata/darts-clone/archive/e40ce4627526985a7767444b6ed6893ab6ff8983.tar.gz",
+)
+
 # TensorFlow
 http_archive(
     name = "org_tensorflow",
@@ -378,12 +388,16 @@ http_archive(
     name = "sentencepiece",
     build_file = "@//:BUILD.sentencepiece",
     patch_cmds = [
-        "printf '#ifndef CONFIG_H_\\n#define CONFIG_H_\\n#define VERSION \"0.2.2\"\\n#define PACKAGE \"sentencepiece\"\\n#define PACKAGE_STRING \"sentencepiece\"\\n#define INSTALL_DATADIR \"\"\\n#endif\\n' > src/config.h",
+        "printf '#ifndef CONFIG_H_\\n#define CONFIG_H_\\n#define VERSION \"0.2.2\"\\n#define PACKAGE \"sentencepiece\"\\n#define PACKAGE_STRING \"sentencepiece\"\\n#define INSTALL_DATADIR \"\"\\n#endif\\n' > config.h",
         # Replace third_party/absl/ with absl/ in *.h and *.cc files.
-        "sed -i -e 's|#include \"third_party/absl/|#include \"absl/|g' src/*.h src/*.cc",
+        "sed -i -e 's|#include \"third_party/absl/|#include \"absl/|g' *.h *.cc",
+        # Replace third_party/darts_clone/ with include/ in *.h and *.cc files.
+        "sed -i -e 's|#include \"third_party/darts_clone/|#include \"include/|g' *.h *.cc",
+        # Replace third_party/protobuf-lite/ with empty string in *.h and *.cc files.
+        "sed -i -e 's|#include \"third_party/protobuf-lite/|#include \"|g' *.h *.cc",
     ],
     sha256 = "92381f713e094a15a1ccff1ac4a5315a4c4b82a99ac1332d6ac53c9dc8e1bcf1",
-    strip_prefix = "sentencepiece-0.2.2",
+    strip_prefix = "sentencepiece-0.2.2/src",
     url = "https://github.com/google/sentencepiece/archive/refs/tags/v0.2.2.tar.gz",
 )
 
