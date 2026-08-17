@@ -193,6 +193,35 @@
         engineConfig: try EngineConfig(modelPath: Self.modelPath, visionBackend: .gpu))
       XCTAssertTrue(vision.capabilities.contains(.vision))
     }
+
+    // MARK: - Guided-generation schema encoding
+
+    /// The encoded schema is embedded verbatim in the prompt, so it must be
+    /// canonical: dictionary key order is randomized per process, and without
+    /// `.sortedKeys` the prompt — and occasionally the model's behavior — varied
+    /// across identical runs.
+    func testSchemaEncodingIsDeterministicAndSorted() throws {
+      let first = try LiteRTLMExecutor.encodeSchema(SortedKeysProbe.generationSchema)
+      for _ in 0..<32 {
+        XCTAssertEqual(try LiteRTLMExecutor.encodeSchema(SortedKeysProbe.generationSchema), first)
+      }
+      let apple = try XCTUnwrap(first.range(of: "\"apple\""))
+      let mango = try XCTUnwrap(first.range(of: "\"mango\""))
+      let zebra = try XCTUnwrap(first.range(of: "\"zebra\""))
+      XCTAssertLessThan(apple.lowerBound, mango.lowerBound)
+      XCTAssertLessThan(mango.lowerBound, zebra.lowerBound)
+    }
+  }
+
+  /// Properties intentionally declared out of alphabetical order, so the sorted
+  /// positions asserted in `testSchemaEncodingIsDeterministicAndSorted` can only
+  /// come from canonical encoding.
+  @available(iOS 27.0, macOS 27.0, *)
+  @Generable
+  private struct SortedKeysProbe {
+    @Guide(description: "zebra") var zebra: String
+    @Guide(description: "apple") var apple: String
+    @Guide(description: "mango") var mango: String
   }
 
 #endif

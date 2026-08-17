@@ -161,13 +161,15 @@
       streamingInto channel: LanguageModelExecutorGenerationChannel
     ) async throws {
       let engine = try await self.engine.ready()
-      // Guided generation: if the request carries a schema, encode it to JSON and
-      // steer the model via the prompt (schema-in-prompt). Tools: if enabled,
-      // describe them in the prompt and detect a tool-call in the output. Both are
-      // soft (prompt-driven); hard constrained decoding (llguidance) is a follow-up.
+      // Guided generation: if the request carries a schema, encode it to JSON,
+      // steer the model via the prompt (schema-in-prompt), and additionally
+      // constrain decoding to the schema (llguidance), which makes it impossible
+      // for the output to deviate from it. Tools: if enabled, describe them in the
+      // prompt and detect a tool-call in the output (soft / prompt-driven).
       let tools = request.enabledToolDefinitions
       let schemaJSON = request.schema.flatMap { try? Self.encodeSchema($0) }
       let plan = try Self.plan(from: request.transcript, schemaJSON: schemaJSON, tools: tools)
+      let responseFormat = schemaJSON.flatMap { try? ResponseFormat.json(schema: $0) }
 
       let structured = schemaJSON != nil || !tools.isEmpty
       let conversation = try await engine.createConversation(
@@ -175,6 +177,7 @@
           systemMessage: plan.systemMessage,
           initialMessages: plan.history,
           samplerConfig: Self.sampler(for: request.generationOptions, structured: structured),
+          enableResponseFormat: responseFormat != nil,
           visualTokenBudget: model.visualTokenBudget))
 
       if !tools.isEmpty {
@@ -193,7 +196,9 @@
         }
       } else if schemaJSON != nil {
         var full = ""
-        for try await chunk in conversation.sendMessageStream(plan.prompt) {
+        for try await chunk in conversation.sendMessageStream(
+          plan.prompt, responseFormat: responseFormat)
+        {
           full += chunk.toString
         }
         let json = Self.extractJSONObject(from: full) ?? full
@@ -344,8 +349,14 @@
       }.joined(separator: " ")
     }
 
-    private static func encodeSchema(_ schema: GenerationSchema) throws -> String {
-      let data = try JSONEncoder().encode(schema)
+    /// Encode a schema to canonical JSON. `.sortedKeys` matters: dictionary key
+    /// order is randomized per process, so without it the schema text differs
+    /// between runs — and since the schema is embedded in the prompt, the prompt
+    /// itself would vary run to run.
+    static func encodeSchema(_ schema: GenerationSchema) throws -> String {
+      let encoder = JSONEncoder()
+      encoder.outputFormatting = [.sortedKeys]
+      let data = try encoder.encode(schema)
       return String(data: data, encoding: .utf8) ?? ""
     }
 
