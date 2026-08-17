@@ -14,6 +14,8 @@
 
 name: "CI-CMake"
 
+on:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -50,9 +52,10 @@ jobs:
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           submodules: recursive
+          persist-credentials: false
 
       - name: Download Model
         env:
@@ -67,7 +70,7 @@ jobs:
           ls -lh ${{ env.MODEL_PATH }}
 
       - name: Cache FetchContent Deps
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             cmake/build/_deps
@@ -75,7 +78,7 @@ jobs:
           key: ${{ runner.os }}-fc-deps-${{ hashFiles('cmake/modules/fetch_content.cmake') }}
 
       - name: Cache ExternalProject Deps
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             cmake/build/external/abseil-cpp
@@ -87,7 +90,7 @@ jobs:
           key: ${{ runner.os }}-ext-deps-${{ hashFiles('cmake/packages/absl/**', 'cmake/packages/protobuf/**', 'cmake/packages/re2/**', 'cmake/packages/sentencepiece/**', 'cmake/packages/tokenizers/**', 'cmake/packages/opencl/**') }}
 
       - name: Cache TensorFlow
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             cmake/build/external/tensorflow
@@ -96,7 +99,7 @@ jobs:
              ${{ runner.os }}-tflite-
 
       - name: Cache LiteRT
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             cmake/build/external/litert
@@ -105,7 +108,7 @@ jobs:
              ${{ runner.os }}-litert-
 
       - name: Cache CCache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: .ccache
           key: ${{ runner.os }}-ccache-${{ hashFiles('**/CMakeLists.txt') }}
@@ -114,7 +117,7 @@ jobs:
 
       - name: Cache Generated Sourcetree & Flatbuffers
         id: cache-generated
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             cmake/build/generated

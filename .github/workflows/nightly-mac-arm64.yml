@@ -32,6 +32,9 @@ on:
   #   - cron: '0 21 * * *'
   #     timezone: 'America/Los_Angeles'
 
+permissions:
+  contents: read
+
 jobs:
   build-mac-wheel:
     name: "Build Python Wheel ${{ matrix.python-version }}"
@@ -44,9 +47,10 @@ jobs:
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
     steps:
       - name: Checkout code.
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           lfs: true
+          persist-credentials: false
 
       - name: Build Python Wheel
         run: |
@@ -55,12 +59,12 @@ jobs:
           bazel build --config=macos_arm64 \
             --repo_env=HERMETIC_PYTHON_VERSION=${PYTHON_VERSION} \
             --@rules_python//python/config_settings:python_version=${PYTHON_VERSION} \
-            --define=DEV_BUILD=${{ env.DEV_BUILD }} \
+            --define=DEV_BUILD=${DEV_BUILD} \
             --define=DEV_VERSION=${DATE} \
             -c opt //python/litert_lm:wheel
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
 
       - name: Test Python Wheel
         run: |
@@ -78,6 +82,7 @@ jobs:
         if: env.PUBLISH_TO_PYPI == 'true'
         env:
           UV_PUBLISH_TOKEN: ${{ secrets.PYPI_UPLOAD_TOKEN }}
+        # zizmor: ignore[use-trusted-publishing]
         run: |
           WHEEL_PATH=$(find bazel-bin/python/litert_lm -name "*.whl" | head -n 1)
           uv publish $WHEEL_PATH
