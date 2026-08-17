@@ -124,7 +124,6 @@ jobs:
           echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> $GITHUB_ENV
 
       - name: Setup Android NDK
-        uses: nttld/setup-ndk@ed92fe6cadad69be94a966a7ee3271275e62f779 # v1
         id: setup-ndk
         uses: nttld/setup-ndk@afb4c9964b521afb97c864b7d40b11e6911bd410 # v1.5.0
         with:
@@ -172,6 +171,12 @@ jobs:
           KEY_0: ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_0 }}
           KEY_1: ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_1 }}
           KEY_2: ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_2 }}
+          STEPS_CACHE_KEYS_OUTPUTS_CACHE_KEY: ${{ steps.cache-keys.outputs.CACHE_KEY }}
+          STEPS_CACHE_KEYS_OUTPUTS_CACHE_RESTORE_KEY_HEAD: ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_HEAD }}
+          STEPS_CACHE_KEYS_OUTPUTS_CACHE_RESTORE_KEY_0: ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_0 }}
+          STEPS_CACHE_KEYS_OUTPUTS_CACHE_RESTORE_KEY_1: ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_1 }}
+          STEPS_CACHE_KEYS_OUTPUTS_CACHE_RESTORE_KEY_2: ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_2 }}
+
         run: |
           TARGET_DIR="$HOME/.cache/bazel"
           BUCKET_URL="gs://litert-lm-cicd/caches/linux/bazel"
@@ -228,12 +233,6 @@ jobs:
             echo "cache-hit=false" >> "$GITHUB_OUTPUT"
             echo "cache-matched-key=" >> "$GITHUB_OUTPUT"
           fi
-        env:
-          STEPS_CACHE_KEYS_OUTPUTS_CACHE_KEY: ${{ steps.cache-keys.outputs.CACHE_KEY }}
-          STEPS_CACHE_KEYS_OUTPUTS_CACHE_RESTORE_KEY_HEAD: ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_HEAD }}
-          STEPS_CACHE_KEYS_OUTPUTS_CACHE_RESTORE_KEY_0: ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_0 }}
-          STEPS_CACHE_KEYS_OUTPUTS_CACHE_RESTORE_KEY_1: ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_1 }}
-          STEPS_CACHE_KEYS_OUTPUTS_CACHE_RESTORE_KEY_2: ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_2 }}
 
 
       - name: Check cache hit.
@@ -343,18 +342,20 @@ jobs:
         continue-on-error: true  # Ignore errors when cache is not found.
         env:
           CACHE_KEY: ${{ steps.cache-keys.outputs.CACHE_KEY }}
+          STEPS_CACHE_KEYS_OUTPUTS_CACHE_KEY: ${{ steps.cache-keys.outputs.CACHE_KEY }}
+
         run: |
           CACHE_KEY="${STEPS_CACHE_KEYS_OUTPUTS_CACHE_KEY}"
           BUCKET_URL="gs://litert-lm-cicd/caches/linux/bazel"
           echo "REFRESH_CACHE is true. Removing existing cache from GCS: $BUCKET_URL/$CACHE_KEY.tar.gz"
           gcloud storage rm "$BUCKET_URL/$CACHE_KEY.tar.gz"
-        env:
-          STEPS_CACHE_KEYS_OUTPUTS_CACHE_KEY: ${{ steps.cache-keys.outputs.CACHE_KEY }}
 
       - name: Save bazel cache if it's new or being refreshed.
         if: env.REFRESH_CACHE == 'true' || steps.bazel-cache.outputs.cache-hit != 'true'
         env:
           CACHE_KEY: ${{ steps.cache-keys.outputs.CACHE_KEY }}
+          STEPS_CACHE_KEYS_OUTPUTS_CACHE_KEY: ${{ steps.cache-keys.outputs.CACHE_KEY }}
+
         run: |
           TARGET_DIR="$HOME/.cache/bazel"
           CACHE_KEY="${STEPS_CACHE_KEYS_OUTPUTS_CACHE_KEY}"
@@ -374,5 +375,3 @@ jobs:
               echo "Uploading cache archive to $BUCKET_URL/$CACHE_KEY.tar.gz..."
               gcloud storage cp ./$ARCHIVE_NAME "$BUCKET_URL/$CACHE_KEY.tar.gz"
           fi
-        env:
-          STEPS_CACHE_KEYS_OUTPUTS_CACHE_KEY: ${{ steps.cache-keys.outputs.CACHE_KEY }}

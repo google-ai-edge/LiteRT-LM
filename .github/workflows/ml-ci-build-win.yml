@@ -185,6 +185,12 @@ jobs:
           KEY_0: ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_0 }}
           KEY_1: ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_1 }}
           KEY_2: ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_2 }}
+          STEPS_CACHE_KEYS_OUTPUTS_CACHE_KEY: ${{ steps.cache-keys.outputs.CACHE_KEY }}
+          STEPS_CACHE_KEYS_OUTPUTS_CACHE_RESTORE_KEY_HEAD: ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_HEAD }}
+          STEPS_CACHE_KEYS_OUTPUTS_CACHE_RESTORE_KEY_0: ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_0 }}
+          STEPS_CACHE_KEYS_OUTPUTS_CACHE_RESTORE_KEY_1: ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_1 }}
+          STEPS_CACHE_KEYS_OUTPUTS_CACHE_RESTORE_KEY_2: ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_2 }}
+
         run: |
           $TARGET_DIR = "$HOME/.cache/bazel"
           $BUCKET_URL = "gs://litert-lm-cicd/caches/windows/bazel"
@@ -243,26 +249,20 @@ jobs:
             Add-Content -Path $env:GITHUB_OUTPUT -Value "cache-hit=false"
             Add-Content -Path $env:GITHUB_OUTPUT -Value "cache-matched-key="
           }
-        env:
-          STEPS_CACHE_KEYS_OUTPUTS_CACHE_KEY: ${{ steps.cache-keys.outputs.CACHE_KEY }}
-          STEPS_CACHE_KEYS_OUTPUTS_CACHE_RESTORE_KEY_HEAD: ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_HEAD }}
-          STEPS_CACHE_KEYS_OUTPUTS_CACHE_RESTORE_KEY_0: ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_0 }}
-          STEPS_CACHE_KEYS_OUTPUTS_CACHE_RESTORE_KEY_1: ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_1 }}
-          STEPS_CACHE_KEYS_OUTPUTS_CACHE_RESTORE_KEY_2: ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_2 }}
 
       - name: Check cache hit
         env:
           CACHE_HIT: ${{ steps.bazel-cache.outputs.cache-hit }}
           CACHE_PRIMARY: ${{ steps.bazel-cache.outputs.cache-primary-key }}
           CACHE_MATCHED: ${{ steps.bazel-cache.outputs.cache-matched-key }}
+          STEPS_BAZEL_CACHE_OUTPUTS_CACHE_HIT: ${{ steps.bazel-cache.outputs.cache-hit }}
+          STEPS_BAZEL_CACHE_OUTPUTS_CACHE_PRIMARY_KEY: ${{ steps.bazel-cache.outputs.cache-primary-key }}
+          STEPS_BAZEL_CACHE_OUTPUTS_CACHE_MATCHED_KEY: ${{ steps.bazel-cache.outputs.cache-matched-key }}
+
         run: |
           echo "Cache Hit: $env:STEPS_BAZEL_CACHE_OUTPUTS_CACHE_HIT"
           echo "Cache Primary Key: $env:STEPS_BAZEL_CACHE_OUTPUTS_CACHE_PRIMARY_KEY"
           echo "Cache Matched Key: $env:STEPS_BAZEL_CACHE_OUTPUTS_CACHE_MATCHED_KEY"
-        env:
-          STEPS_BAZEL_CACHE_OUTPUTS_CACHE_HIT: ${{ steps.bazel-cache.outputs.cache-hit }}
-          STEPS_BAZEL_CACHE_OUTPUTS_CACHE_PRIMARY_KEY: ${{ steps.bazel-cache.outputs.cache-primary-key }}
-          STEPS_BAZEL_CACHE_OUTPUTS_CACHE_MATCHED_KEY: ${{ steps.bazel-cache.outputs.cache-matched-key }}
 
       - name: Download Model
         env:
@@ -373,6 +373,8 @@ jobs:
         continue-on-error: true  # Keeps the build moving if the file wasn't there to begin with
         env:
           CACHE_KEY: ${{ steps.cache-keys.outputs.CACHE_KEY }}
+          STEPS_CACHE_KEYS_OUTPUTS_CACHE_KEY: ${{ steps.cache-keys.outputs.CACHE_KEY }}
+
         run: |
           $CacheKey = "$env:STEPS_CACHE_KEYS_OUTPUTS_CACHE_KEY"
           $BucketUrl = "gs://litert-lm-cicd/caches/windows/bazel"
@@ -381,13 +383,12 @@ jobs:
 
           # Delete the specific tarball from the GCS bucket
           gcloud storage rm "$BucketUrl/$CacheKey.tar.gz"
-        env:
-          STEPS_CACHE_KEYS_OUTPUTS_CACHE_KEY: ${{ steps.cache-keys.outputs.CACHE_KEY }}
 
       - name: Save bazel cache if it's new or being refreshed
         if: env.REFRESH_CACHE == 'true' || steps.bazel-cache.outputs.cache-hit != 'true'
         env:
           CACHE_KEY: ${{ steps.cache-keys.outputs.CACHE_KEY }}
+          STEPS_CACHE_KEYS_OUTPUTS_CACHE_KEY: ${{ steps.cache-keys.outputs.CACHE_KEY }}
         run: |
           $TargetDir = "$HOME/.cache/bazel"
           $CacheKey = "$env:STEPS_CACHE_KEYS_OUTPUTS_CACHE_KEY"
@@ -409,5 +410,3 @@ jobs:
               Write-Host "Uploading cache archive to $BucketUrl/$CacheKey.tar.gz..."
               gcloud storage cp ./$ArchiveName "$BucketUrl/$CacheKey.tar.gz"
           }
-        env:
-          STEPS_CACHE_KEYS_OUTPUTS_CACHE_KEY: ${{ steps.cache-keys.outputs.CACHE_KEY }}
