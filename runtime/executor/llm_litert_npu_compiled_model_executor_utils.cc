@@ -56,6 +56,23 @@
 
 namespace litert::lm {
 
+template <typename T, bool cache_transposed>
+void TransposeCopy(T* dst, const T* src, int64_t real_len, int64_t real_start,
+                   int64_t wp, int64_t cache_seq, int64_t hidden_dim,
+                   int64_t slice_seq) {
+  for (int64_t s = 0; s < real_len; ++s) {
+    int64_t wrapped_pos = (wp + s) % cache_seq;
+    int64_t slice_s = real_start + s;
+    for (int64_t h = 0; h < hidden_dim; ++h) {
+      if constexpr (cache_transposed) {
+        dst[h * cache_seq + wrapped_pos] = src[slice_s * hidden_dim + h];
+      } else {
+        dst[wrapped_pos * hidden_dim + h] = src[h * slice_seq + slice_s];
+      }
+    }
+  }
+}
+
 static constexpr int kSliceOuterRank = 2;
 #if defined(__ANDROID__) && defined(__ARM_NEON)
 int FindMaxIndexFloatNeon(const float* data, int size) {
@@ -569,13 +586,29 @@ absl::Status HWKVCacheUpdate(
           }
         } else {
           // Cache is [..., seq, hidden], Slice is [..., hidden, seq]
-          for (int64_t s = 0; s < real_len; ++s) {
-            int64_t wrapped_pos = (wp + s) % cache_seq;
-            int64_t slice_s = real_start + s;
-            for (int64_t h = 0; h < hidden_dim; ++h) {
-              std::memcpy(c_ptr + (wrapped_pos * hidden_dim + h) * element_size,
-                          s_ptr + (h * slice_seq + slice_s) * element_size,
-                          element_size);
+          if (element_size == 1) {
+            TransposeCopy<uint8_t, false>(c_ptr, s_ptr, real_len, real_start,
+                                          wp, cache_seq, hidden_dim, slice_seq);
+          } else if (element_size == 2) {
+            TransposeCopy<uint16_t, false>(
+                reinterpret_cast<uint16_t*>(c_ptr),
+                reinterpret_cast<const uint16_t*>(s_ptr), real_len, real_start,
+                wp, cache_seq, hidden_dim, slice_seq);
+          } else if (element_size == 4) {
+            TransposeCopy<uint32_t, false>(
+                reinterpret_cast<uint32_t*>(c_ptr),
+                reinterpret_cast<const uint32_t*>(s_ptr), real_len, real_start,
+                wp, cache_seq, hidden_dim, slice_seq);
+          } else {
+            for (int64_t s = 0; s < real_len; ++s) {
+              int64_t wrapped_pos = (wp + s) % cache_seq;
+              int64_t slice_s = real_start + s;
+              for (int64_t h = 0; h < hidden_dim; ++h) {
+                std::memcpy(
+                    c_ptr + (wrapped_pos * hidden_dim + h) * element_size,
+                    s_ptr + (h * slice_seq + slice_s) * element_size,
+                    element_size);
+              }
             }
           }
         }
@@ -654,13 +687,29 @@ absl::Status HWKVCacheUpdate(
           }
         } else {
           // Cache is [..., hidden, seq], Slice is [..., seq, hidden]
-          for (int64_t s = 0; s < real_len; ++s) {
-            int64_t wrapped_pos = (wp + s) % cache_seq;
-            int64_t slice_s = real_start + s;
-            for (int64_t h = 0; h < hidden_dim; ++h) {
-              std::memcpy(c_ptr + (h * cache_seq + wrapped_pos) * element_size,
-                          s_ptr + (slice_s * hidden_dim + h) * element_size,
-                          element_size);
+          if (element_size == 1) {
+            TransposeCopy<uint8_t, true>(c_ptr, s_ptr, real_len, real_start, wp,
+                                         cache_seq, hidden_dim, slice_seq);
+          } else if (element_size == 2) {
+            TransposeCopy<uint16_t, true>(
+                reinterpret_cast<uint16_t*>(c_ptr),
+                reinterpret_cast<const uint16_t*>(s_ptr), real_len, real_start,
+                wp, cache_seq, hidden_dim, slice_seq);
+          } else if (element_size == 4) {
+            TransposeCopy<uint32_t, true>(
+                reinterpret_cast<uint32_t*>(c_ptr),
+                reinterpret_cast<const uint32_t*>(s_ptr), real_len, real_start,
+                wp, cache_seq, hidden_dim, slice_seq);
+          } else {
+            for (int64_t s = 0; s < real_len; ++s) {
+              int64_t wrapped_pos = (wp + s) % cache_seq;
+              int64_t slice_s = real_start + s;
+              for (int64_t h = 0; h < hidden_dim; ++h) {
+                std::memcpy(
+                    c_ptr + (h * cache_seq + wrapped_pos) * element_size,
+                    s_ptr + (slice_s * hidden_dim + h) * element_size,
+                    element_size);
+              }
             }
           }
         }
