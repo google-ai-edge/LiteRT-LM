@@ -30,6 +30,7 @@
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
+#include "litert/test/matchers.h"  // from @litert
 #include "runtime/engine/io_types.h"
 
 namespace litert::lm {
@@ -134,24 +135,27 @@ TEST(RuntimeDebuggerTest, DualCheckpointKvAndPerStepProbeCapturing) {
   auto ranked_type =
       ::litert::RankedTensorType(::litert::ElementType::Float32,
                                  ::litert::Layout(::litert::Dimensions{2, 2}));
-  auto kv_buffer = ::litert::TensorBuffer::CreateManaged(
-      *env, ::litert::TensorBufferType::kHostMemory, ranked_type, 16);
-  ASSERT_TRUE(kv_buffer.HasValue());
 
-  auto probe_buffer = ::litert::TensorBuffer::CreateManaged(
-      *env, ::litert::TensorBufferType::kHostMemory, ranked_type, 16);
-  ASSERT_TRUE(probe_buffer.HasValue());
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto kv_buffer,
+      ::litert::TensorBuffer::CreateManaged(
+          *env, ::litert::TensorBufferType::kHostMemory, ranked_type, 16));
+  LITERT_ASSERT_OK(kv_buffer.Clear());
+
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto probe_buffer,
+      ::litert::TensorBuffer::CreateManaged(
+          *env, ::litert::TensorBufferType::kHostMemory, ranked_type, 16));
+  LITERT_ASSERT_OK(probe_buffer.Clear());
 
   // 1. Prefill Step: Captures BOTH probe and KV cache immediately.
   absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
       prefill_outputs;
-  auto probe_dup_1 = probe_buffer->Duplicate();
-  ASSERT_TRUE(probe_dup_1.HasValue());
-  prefill_outputs.emplace("probe_prefill_out_0", std::move(*probe_dup_1));
+  LITERT_ASSERT_OK_AND_ASSIGN(auto probe_dup_1, probe_buffer.Duplicate());
+  prefill_outputs.emplace("probe_prefill_out_0", std::move(probe_dup_1));
 
-  auto kv_dup_1 = kv_buffer->Duplicate();
-  ASSERT_TRUE(kv_dup_1.HasValue());
-  prefill_outputs.emplace("kv_cache_k_0", std::move(*kv_dup_1));
+  LITERT_ASSERT_OK_AND_ASSIGN(auto kv_dup_1, kv_buffer.Duplicate());
+  prefill_outputs.emplace("kv_cache_k_0", std::move(kv_dup_1));
 
   callback("prefill_128", /*current_step=*/0, prefill_outputs);
 
@@ -164,13 +168,11 @@ TEST(RuntimeDebuggerTest, DualCheckpointKvAndPerStepProbeCapturing) {
 
   // 2. Decode Step 0: Captures probe, but does NOT save decode KV cache yet.
   absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer> decode_outputs;
-  auto probe_dup_2 = probe_buffer->Duplicate();
-  ASSERT_TRUE(probe_dup_2.HasValue());
-  decode_outputs.emplace("probe_decode_out_0", std::move(*probe_dup_2));
+  LITERT_ASSERT_OK_AND_ASSIGN(auto probe_dup_2, probe_buffer.Duplicate());
+  decode_outputs.emplace("probe_decode_out_0", std::move(probe_dup_2));
 
-  auto kv_dup_2 = kv_buffer->Duplicate();
-  ASSERT_TRUE(kv_dup_2.HasValue());
-  decode_outputs.emplace("kv_cache_k_0", std::move(*kv_dup_2));
+  LITERT_ASSERT_OK_AND_ASSIGN(auto kv_dup_2, kv_buffer.Duplicate());
+  decode_outputs.emplace("kv_cache_k_0", std::move(kv_dup_2));
 
   callback("decode", /*current_step=*/0, decode_outputs);
 
