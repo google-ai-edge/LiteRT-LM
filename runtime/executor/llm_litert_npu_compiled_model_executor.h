@@ -30,7 +30,7 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
-#include "litert/cc/litert_compiled_model.h"  // from @litert
+#include "litert/cc/internal/litert_compiled_model_next.h"  // from @litert
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_expected.h"  // from @litert
@@ -99,6 +99,12 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
     uint64_t decode_mtp_rejection_sampling_latency_us = 0;
     uint64_t decode_mtp_activation_copy_latency_us = 0;
     uint64_t decode_token_queue_latency_us = 0;
+
+    // TPU metrics.
+    uint64_t prefill_tpu_tile_time_us = 0;
+    uint64_t prefill_tpu_fw_time_us = 0;
+    uint64_t decode_tpu_tile_time_us = 0;
+    uint64_t decode_tpu_fw_time_us = 0;
 
     // MTP / Speculative Decoding latency stats.
     int mtp_num_draft_tokens = 0;
@@ -339,7 +345,8 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
       LlmExecutorSettings executor_settings, Environment& llm_env,
       EmbedderContext embedder_context,
       NpuAuxiliaryContext npu_auxiliary_context, InferenceContext mask_context,
-      InferenceContext rope_context, ::litert::CompiledModel llm_compiled_model,
+      InferenceContext rope_context,
+      ::litert::CompiledModelNext llm_compiled_model,
       InferenceContext llm_inference_context,
       InferenceContext cache_update_inference_context,
       SortedPrefillSignatureMap prefill_signature_map,
@@ -717,7 +724,7 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
   NpuAuxiliaryContext npu_auxiliary_context_;
   InferenceContext mask_context_;
   InferenceContext rope_context_;
-  ::litert::CompiledModel llm_compiled_model_;
+  ::litert::CompiledModelNext llm_compiled_model_;
   std::unique_ptr<EmbeddingLookupManager> embedding_lookup_manager_;
   std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup_manager_;
   const litert::Model* embedder_per_layer_model_ = nullptr;

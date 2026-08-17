@@ -610,6 +610,7 @@ cc_library(
         "@litert//litert/cc:litert_options",
         "@litert//litert/cc:litert_ranked_tensor_type",
         "@litert//litert/cc:litert_tensor_buffer",
+        "@litert//litert/cc/internal:litert_compiled_model_next",
         "@litert//litert/cc/internal:litert_extended_model",
         "@litert//litert/cc/options:litert_google_tensor_options",
         "@litert//litert/cc/options:litert_mediatek_options",
