@@ -16,7 +16,6 @@
 
 #include <cmath>
 #include <cstdint>
-#include <cstring>
 #include <memory>
 #include <optional>
 #include <utility>
@@ -486,29 +485,12 @@ absl::StatusOr<ExecutorInputs> EmbeddingEngineImpl::ProcessAndCombineContents(
       }
       const ::litert::TensorBuffer* spectrogram_tensor = nullptr;
       std::optional<InputAudio> preprocessed_audio;
-      std::optional<InputAudio> pcm_audio_holder;
-      const InputAudio* audio_to_process = input_audio;
-
       if (input_audio->IsTensorBuffer()) {
         LITERT_ASSIGN_OR_RETURN(spectrogram_tensor,
                                 input_audio->GetPreprocessedAudioTensor());
       } else {
-        if (!input_audio->IsPcmFrames()) {
-          LITERT_ASSIGN_OR_RETURN(absl::string_view raw_bytes,
-                                  input_audio->GetRawAudioBytes());
-          if (raw_bytes.size() % sizeof(float) == 0) {
-            std::vector<float> pcm_frames(raw_bytes.size() / sizeof(float));
-            std::memcpy(pcm_frames.data(), raw_bytes.data(), raw_bytes.size());
-            pcm_audio_holder.emplace(std::move(pcm_frames));
-            audio_to_process = &pcm_audio_holder.value();
-          } else {
-            return absl::InvalidArgumentError(
-                "Audio raw bytes length is not a multiple of sizeof(float).");
-          }
-        }
-        LITERT_ASSIGN_OR_RETURN(
-            InputAudio temp_audio,
-            audio_preprocessor_->Preprocess(*audio_to_process));
+        LITERT_ASSIGN_OR_RETURN(InputAudio temp_audio,
+                                audio_preprocessor_->Preprocess(*input_audio));
         preprocessed_audio.emplace(std::move(temp_audio));
         LITERT_ASSIGN_OR_RETURN(
             spectrogram_tensor,
