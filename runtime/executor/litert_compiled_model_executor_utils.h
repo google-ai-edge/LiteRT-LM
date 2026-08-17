@@ -195,9 +195,9 @@ absl::Status FillSingleBufferCacheParamTensor(
 // Builds the model resources from the model_path for compiled model only.
 // Supports .task and .litertlm formats.
 absl::StatusOr<std::unique_ptr<ModelResources>>
-BuildLiteRtCompiledModelResources(
-    const ModelAssets& model_assets,
-    bool enable_file_backed_model_loading = false);
+BuildLiteRtCompiledModelResources(const ModelAssets& model_assets,
+                                  bool enable_file_backed_model_loading = false,
+                                  bool enable_file_backed_for_aot_npu = false);
 
 // Computes token embeddings using the given lookup managers.
 absl::Status GenericComputeTokenEmbeddings(

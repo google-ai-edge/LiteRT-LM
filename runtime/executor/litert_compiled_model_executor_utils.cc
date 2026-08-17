@@ -64,6 +64,7 @@
 #include "runtime/util/model_asset_bundle_resources.h"
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/tensor_buffer_util.h"
+#include "schema/core/litertlm_header_schema_generated.h"
 #include "tflite/delegates/xnnpack/xnnpack_delegate.h"  // from @litert
 #include "tflite/types/half.h"  // from @litert
 
@@ -120,7 +121,8 @@ BuildModelResourcesFromTaskFormat(const ModelAssets& model_assets) {
 
 absl::StatusOr<std::unique_ptr<ModelResources>>
 BuildModelResourcesFromLitertLmFormat(const ModelAssets& model_assets,
-                                      bool enable_file_backed_model_loading) {
+                                      bool enable_file_backed_model_loading,
+                                      bool enable_file_backed_for_aot_npu) {
   std::unique_ptr<LitertLmLoader> loader;
   if (model_assets.HasMemoryMappedFile()) {
     ABSL_ASSIGN_OR_RETURN(auto memory_mapped_file,
@@ -135,6 +137,17 @@ BuildModelResourcesFromLitertLmFormat(const ModelAssets& model_assets,
     ABSL_ASSIGN_OR_RETURN(auto duplicate_file, scoped_file->Duplicate());
     ABSL_ASSIGN_OR_RETURN(loader,
                           LitertLmLoader::Create(std::move(duplicate_file)));
+  }
+  // AOT NPU models carry a non-empty TF_LITE_AUX and do not use magic-number
+  // replacement, so they can retain the file-backed model source even when
+  // magic-number configuration is enabled globally. Generic compiler-plugin
+  // models omit TF_LITE_AUX and must remain buffer-backed so their flatbuffer
+  // can be mutated in place.
+  if (!enable_file_backed_model_loading && enable_file_backed_for_aot_npu) {
+    auto aux_section = loader->GetSectionLocation(BufferKey(
+        schema::AnySectionDataType_TFLiteModel, ModelType::kTfLiteAux));
+    enable_file_backed_model_loading =
+        aux_section.ok() && aux_section->second > aux_section->first;
   }
   return ModelResourcesLitertLm::Create(
       std::move(loader), enable_file_backed_model_loading);
@@ -770,14 +783,16 @@ absl::Status FillAttentionMask(litert::TensorBuffer& mask, int start_timestep,
 
 absl::StatusOr<std::unique_ptr<ModelResources>>
 BuildLiteRtCompiledModelResources(const ModelAssets& model_assets,
-                                  bool enable_file_backed_model_loading) {
+                                  bool enable_file_backed_model_loading,
+                                  bool enable_file_backed_for_aot_npu) {
   ABSL_ASSIGN_OR_RETURN(auto format, GetFileFormat(model_assets));
   switch (format) {
     case FileFormat::TASK:
       return BuildModelResourcesFromTaskFormat(model_assets);
     case FileFormat::LITERT_LM:
       return BuildModelResourcesFromLitertLmFormat(
-          model_assets, enable_file_backed_model_loading);
+          model_assets, enable_file_backed_model_loading,
+          enable_file_backed_for_aot_npu);
     default:
       return absl::InvalidArgumentError("Unsupported file format.");
   }

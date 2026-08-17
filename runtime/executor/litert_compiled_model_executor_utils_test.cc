@@ -15,10 +15,12 @@
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>  // NOLINT: Required for path manipulation.
 #include <fstream>
 #include <functional>
+#include <ios>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -32,8 +34,11 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "flatbuffers/buffer.h"  // from @flatbuffers
+#include "flatbuffers/flatbuffer_builder.h"  // from @flatbuffers
 #include "litert/c/litert_common.h"  // from @litert
 #include "litert/c/options/litert_gpu_options.h"  // from @litert
+#include "litert/cc/litert_buffer_ref.h"  // from @litert
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_layout.h"  // from @litert
@@ -44,14 +49,20 @@
 #include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
 #include "litert/cc/options/litert_cpu_options.h"  // from @litert
 #include "litert/cc/options/litert_gpu_options.h"  // from @litert
+#include "litert/core/model/model.h"  // from @litert
+#include "litert/core/util/flatbuffer_tools.h"  // from @litert
 #include "litert/test/matchers.h"  // from @litert
 #include "runtime/components/model_resources.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/proto/executor_metadata.pb.h"
 #include "runtime/util/file_util.h"
+#include "runtime/util/litert_lm_loader.h"
 #include "runtime/util/memory_mapped_file.h"
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
+#include "schema/core/litertlm_header.h"
+#include "schema/core/litertlm_header_schema_generated.h"
+#include "tensorflow/compiler/mlir/lite/allocation.h"  // from @org_tensorflow
 #include "tflite/types/half.h"  // from @litert
 
 namespace litert::lm {
@@ -61,6 +72,90 @@ using ::testing::_;  // NOLINT: Required by ASSERT_OK_AND_ASSIGN().
 using ::testing::ElementsAre;
 using ::testing::Pair;
 using ::testing::status::StatusIs;
+
+constexpr uint64_t kLiteRtLmPrefixSize = 32;
+constexpr uint64_t kLiteRtLmSectionAlignment = 16 * 1024;
+
+uint64_t AlignLiteRtLmSection(uint64_t offset) {
+  return ((offset + kLiteRtLmSectionAlignment - 1) /
+          kLiteRtLmSectionAlignment) *
+         kLiteRtLmSectionAlignment;
+}
+
+void BuildAotTestHeader(flatbuffers::FlatBufferBuilder& builder,
+                        uint64_t prefill_begin, uint64_t prefill_end,
+                        uint64_t aux_begin, uint64_t aux_end) {
+  builder.Clear();
+  auto prefill_model_type = schema::CreateKeyValuePair(
+      builder, "model_type",
+      ModelTypeToString(ModelType::kTfLitePrefillDecode));
+  auto prefill_items = builder.CreateVector(
+      std::vector<flatbuffers::Offset<schema::KeyValuePair>>{
+          prefill_model_type});
+  auto prefill_section = schema::CreateSectionObject(
+      builder, prefill_items, prefill_begin, prefill_end,
+      schema::AnySectionDataType_TFLiteModel);
+
+  auto aux_model_type = schema::CreateKeyValuePair(
+      builder, "model_type", ModelTypeToString(ModelType::kTfLiteAux));
+  auto aux_items = builder.CreateVector(
+      std::vector<flatbuffers::Offset<schema::KeyValuePair>>{aux_model_type});
+  auto aux_section =
+      schema::CreateSectionObject(builder, aux_items, aux_begin, aux_end,
+                                  schema::AnySectionDataType_TFLiteModel);
+
+  auto sections = builder.CreateVector(
+      std::vector<flatbuffers::Offset<schema::SectionObject>>{prefill_section,
+                                                              aux_section});
+  auto section_metadata = schema::CreateSectionMetadata(builder, sections);
+  auto metadata = schema::CreateLiteRTLMMetaData(builder, 0, section_metadata);
+  builder.Finish(metadata);
+}
+
+void WriteAotTestModel(const std::filesystem::path& path,
+                       litert::BufferRef<uint8_t> model_buffer) {
+  flatbuffers::FlatBufferBuilder builder;
+  BuildAotTestHeader(builder, 0, 0, 0, 0);
+  const uint64_t prefill_begin =
+      AlignLiteRtLmSection(kLiteRtLmPrefixSize + builder.GetSize());
+  const uint64_t prefill_end = prefill_begin + model_buffer.Size();
+  const uint64_t aux_begin = AlignLiteRtLmSection(prefill_end);
+  const uint64_t aux_end = aux_begin + model_buffer.Size();
+  BuildAotTestHeader(builder, prefill_begin, prefill_end, aux_begin, aux_end);
+
+  std::ofstream file(path, std::ios::binary);
+  ASSERT_TRUE(file.good());
+  file.write("LITERTLM", 8);
+  const uint32_t major_version = 1;
+  const uint32_t minor_version = 0;
+  const uint32_t patch_version = 0;
+  const uint32_t padding = 0;
+  file.write(reinterpret_cast<const char*>(&major_version), 4);
+  file.write(reinterpret_cast<const char*>(&minor_version), 4);
+  file.write(reinterpret_cast<const char*>(&patch_version), 4);
+  file.write(reinterpret_cast<const char*>(&padding), 4);
+  const uint64_t header_end = kLiteRtLmPrefixSize + builder.GetSize();
+  file.write(reinterpret_cast<const char*>(&header_end), 8);
+  file.write(reinterpret_cast<const char*>(builder.GetBufferPointer()),
+             builder.GetSize());
+  file.write(std::string(prefill_begin - header_end, '\0').data(),
+             prefill_begin - header_end);
+  file.write(reinterpret_cast<const char*>(model_buffer.Data()),
+             model_buffer.Size());
+  file.write(std::string(aux_begin - prefill_end, '\0').data(),
+             aux_begin - prefill_end);
+  file.write(reinterpret_cast<const char*>(model_buffer.Data()),
+             model_buffer.Size());
+  ASSERT_TRUE(file.good());
+}
+
+bool IsFileBacked(const ::litert::Model& model) {
+  const auto& flatbuffer =
+      ::litert::internal::GetTflFlatbuffer(*model.Get()).FlatbufferModel();
+  const auto* allocation = flatbuffer.allocation();
+  return allocation != nullptr &&
+         allocation->type() == tflite::Allocation::Type::kMMap;
+}
 
 TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
      GetModelSignaturesFromInputOutputNames_Gemma2JAX) {
@@ -1124,6 +1219,53 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
                        BuildLiteRtCompiledModelResources(*model_assets));
   ASSERT_NE(model_resources, nullptr);
   ASSERT_OK(model_resources->GetTFLiteModel(ModelType::kTfLitePrefillDecode));
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     AotNpuOverrideEnablesFileBackedLoading) {
+  const auto source_model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm.litertlm";
+  ASSERT_OK_AND_ASSIGN(auto source_file,
+                       ScopedFile::Open(source_model_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto source_loader,
+                       LitertLmLoader::Create(std::move(source_file)));
+  auto model_buffer =
+      source_loader->GetTFLiteModel(ModelType::kTfLitePrefillDecode);
+  ASSERT_GT(model_buffer.Size(), 0);
+
+  const auto aot_model_path = std::filesystem::path(::testing::TempDir()) /
+                              "aot_file_backed_override.litertlm";
+  WriteAotTestModel(aot_model_path, model_buffer);
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(aot_model_path.string()));
+
+  ASSERT_OK_AND_ASSIGN(
+      auto model_resources,
+      BuildLiteRtCompiledModelResources(
+          model_assets, /*enable_file_backed_model_loading=*/false,
+          /*enable_file_backed_for_aot_npu=*/true));
+  ASSERT_OK_AND_ASSIGN(const auto* model, model_resources->GetTFLiteModel(
+                                              ModelType::kTfLitePrefillDecode));
+  EXPECT_TRUE(IsFileBacked(*model));
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     GenericNpuOverrideKeepsBufferBackedLoading) {
+  const auto model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm.litertlm";
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(model_path.string()));
+
+  ASSERT_OK_AND_ASSIGN(
+      auto model_resources,
+      BuildLiteRtCompiledModelResources(
+          model_assets, /*enable_file_backed_model_loading=*/false,
+          /*enable_file_backed_for_aot_npu=*/true));
+  ASSERT_OK_AND_ASSIGN(const auto* model, model_resources->GetTFLiteModel(
+                                              ModelType::kTfLitePrefillDecode));
+  EXPECT_FALSE(IsFileBacked(*model));
 }
 
 TEST(LlmLiteRTCompiledModelExecutorUtilsTest,

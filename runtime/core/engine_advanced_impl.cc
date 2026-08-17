@@ -188,10 +188,12 @@ absl::StatusOr<std::unique_ptr<Engine>> EngineAdvancedImpl::Create(
 
   const auto& advanced_settings =
       engine_settings.GetMainExecutorSettings().GetAdvancedSettings();
+  const bool is_npu =
+      engine_settings.GetMainExecutorSettings().GetBackend() == Backend::NPU;
   // Magic-number replacement mutates the model flatbuffer in place.
   const bool enable_file_backed_model_loading =
-      engine_settings.GetMainExecutorSettings().GetBackend() == Backend::NPU &&
-      advanced_settings && !advanced_settings->configure_magic_numbers;
+      is_npu && advanced_settings &&
+      !advanced_settings->configure_magic_numbers;
 
   if (benchmark_info.has_value()) {
     ABSL_RETURN_IF_ERROR(
@@ -203,7 +205,8 @@ absl::StatusOr<std::unique_ptr<Engine>> EngineAdvancedImpl::Create(
       engine_settings.GetMutableMainExecutorSettings().GetModelAssets();
   ABSL_ASSIGN_OR_RETURN(auto model_resources,
                         BuildLiteRtCompiledModelResources(
-                            model_assets, enable_file_backed_model_loading));
+                            model_assets, enable_file_backed_model_loading,
+                            /*enable_file_backed_for_aot_npu=*/is_npu));
   if (benchmark_info.has_value()) {
     ABSL_RETURN_IF_ERROR(benchmark_info->TimeInitPhaseEnd(
         BenchmarkInfo::InitPhase::kModelAssets));
