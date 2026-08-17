@@ -1,13 +1,22 @@
 {
   "$schema": "https://turbo.build/schema.json",
   "globalEnv": ["SKIP_WASM_DOWNLOAD"],
+  "globalPassThroughEnv": [
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "NO_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "no_proxy"
+  ],
   "tasks": {
     "build": {
       "inputs": ["$TURBO_DEFAULT$", ".env*"],
-      "outputs": ["dist/**"],
+      "outputs": ["dist/**", "wasm/**"],
       "dependsOn": ["^build"]
     },
     "dev": {
+      "outputs": ["dist/**", "wasm/**"],
       "persistent": true,
       "dependsOn": ["build"]
     },

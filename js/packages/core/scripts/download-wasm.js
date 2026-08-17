@@ -16,6 +16,7 @@ import fs from 'fs';
 import path from 'path';
 import https from 'https';
 import { fileURLToPath } from 'url';
+import { HttpsProxyAgent } from 'https-proxy-agent';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -47,13 +48,38 @@ if (!fs.existsSync(destDir)) {
   fs.mkdirSync(destDir, { recursive: true });
 }
 
+// Node's built-in `https` module ignores HTTP_PROXY/HTTPS_PROXY env vars, so
+// corporate-proxy networks need an explicit proxy agent to reach the CDN.
+function getProxyAgent(hostname) {
+  const noProxy = (process.env.NO_PROXY || process.env.no_proxy || '')
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  const isBypassed = noProxy.some((pattern) =>
+    pattern === '*' ||
+    hostname === pattern ||
+    hostname.endsWith(pattern.startsWith('.') ? pattern : `.${pattern}`)
+  );
+  if (isBypassed) {
+    return undefined;
+  }
+
+  const proxyUrl =
+    process.env.HTTPS_PROXY ||
+    process.env.https_proxy ||
+    process.env.HTTP_PROXY ||
+    process.env.http_proxy;
+  return proxyUrl ? new HttpsProxyAgent(proxyUrl) : undefined;
+}
+
 function downloadFile(url, destPath, filename, redirectCount = 0) {
   if (redirectCount > 5) {
     console.error(`[Prebuild] Too many redirects for ${filename}`);
     return;
   }
 
-  https.get(url, (response) => {
+  const agent = getProxyAgent(new URL(url).hostname);
+  https.get(url, { agent }, (response) => {
     if (response.statusCode === 301 || response.statusCode === 302) {
       const redirectUrl = response.headers.location;
       downloadFile(redirectUrl, destPath, filename, redirectCount + 1);
@@ -80,7 +106,7 @@ function downloadFile(url, destPath, filename, redirectCount = 0) {
 }
 
 const checkUrl = `${cdnBaseUrl}/${files[0]}`;
-const req = https.request(checkUrl, { method: 'HEAD' }, (res) => {
+const req = https.request(checkUrl, { method: 'HEAD', agent: getProxyAgent(new URL(checkUrl).hostname) }, (res) => {
   res.resume();
   if (res.statusCode === 404) {
     console.log(`[Prebuild] Version ${version} not available on CDN yet, skipping download.`);

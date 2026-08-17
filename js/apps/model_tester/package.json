@@ -10,7 +10,7 @@
     "model-tester": "serve.js"
   },
   "scripts": {
-    "copy-wasm": "mkdirp dist && cp -r `node -e \"console.log(path.join(require.resolve('@litert-lm/core/package.json'), '../wasm'))\"` dist/",
+    "copy-wasm": "node scripts/copy-wasm.js",
     "copy-static-files": "cp -r static dist && npm run copy-wasm",
     "dev": "rimraf dist && npm run copy-static-files && node scripts/devserver.js",
     "build": "rimraf dist && npm run copy-static-files  && esbuild --bundle --target=es2020 --outfile=dist/bundle.js --sourcemap src/index.ts"
@@ -25,13 +25,12 @@
   "description": "",
   "dependencies": {
     "@lit/task": "^1.0.2",
-    "@litert-lm/core": "^0.12.1",
+    "@litert-lm/core": "^0.15.0",
     "@material/web": "^2.3.0",
     "argparse": "^2.0.1",
-    "esbuild": "^0.23.0",
+    "esbuild": "^0.28.2",
     "express": "^5.1.0",
     "lit": "^3.2.1",
-    "mkdirp": "^3.0.1",
     "open": "^10.2.0",
     "rimraf": "^6.0.1"
   },

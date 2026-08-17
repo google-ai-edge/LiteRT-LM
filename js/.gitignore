@@ -1,0 +1,15 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+spec_dist/
+
+# Downloaded WASM artifacts
+packages/core/wasm/
+
+# Turborepo
+.turbo/
+
+# Logs
+npm-debug.log*

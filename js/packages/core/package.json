@@ -1,6 +1,6 @@
 {
   "name": "@litert-lm/core",
-  "version": "0.12.1",
+  "version": "0.15.0",
   "description": "LiteRT-LM package",
   "publishConfig": {
     "access": "public"
@@ -45,8 +45,9 @@
   "devDependencies": {
     "@types/jasmine": "^5.1.8",
     "@webgpu/types": "^0.1.54",
-    "esbuild": "^0.23.0",
+    "esbuild": "^0.28.0",
     "eslint": "^9.8.0",
+    "https-proxy-agent": "^9.1.0",
     "jasmine": "^5.8.0",
     "jasmine-browser-runner": "^3.0.0",
     "jasmine-core": "^5.8.0",
