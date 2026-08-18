@@ -107,7 +107,9 @@ absl::StatusOr<std::unique_ptr<AsrEngine>> AsrEngine::Create(
     gpu_options.EnableConstantTensorSharing(true);
   } else if (config.backend == AsrEngineConfig::Backend::kNpu) {
     accelerators |= static_cast<uint32_t>(::litert::HwAccelerators::kNpu);
-    LITERT_ASSIGN_OR_RETURN(auto& qnn_options, options.GetQualcommOptions());
+    LITERT_ASSIGN_OR_RETURN(
+        auto& qnn_options,
+        options.GetOptions<::litert::qualcomm::QualcommOptions>());
     qnn_options.SetHtpPerformanceMode(::litert::qualcomm::QualcommOptions::
                                           HtpPerformanceMode::kHighPerformance);
   }
