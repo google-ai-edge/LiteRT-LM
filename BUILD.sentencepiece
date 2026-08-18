@@ -55,7 +55,6 @@ cc_library(
         "third_party/darts_clone/darts.h",
     ],
     includes = [
-        ".",
         "src",
     ],
     copts = [

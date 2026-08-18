@@ -381,6 +381,10 @@ http_archive(
         "printf '#ifndef CONFIG_H_\\n#define CONFIG_H_\\n#define VERSION \"0.2.2\"\\n#define PACKAGE \"sentencepiece\"\\n#define PACKAGE_STRING \"sentencepiece\"\\n#define INSTALL_DATADIR \"\"\\n#endif\\n' > src/config.h",
         # Replace third_party/absl/ with absl/ in *.h and *.cc files.
         "sed -i -e 's|#include \"third_party/absl/|#include \"absl/|g' src/*.h src/*.cc",
+        # Replace third_party/protobuf-lite/ with google/protobuf/ in *.h and *.cc files.
+        "sed -i -e 's|#include \"third_party/protobuf-lite/google/protobuf/|#include \"google/protobuf/|g' src/*.h src/*.cc",
+        "sed -i -e 's|#include \"third_party/protobuf/|#include \"google/protobuf/|g' src/*.h src/*.cc",
+        "rm -rf third_party/protobuf-lite third_party/protobuf third_party/absl third_party/abseil-cpp",
     ],
     sha256 = "92381f713e094a15a1ccff1ac4a5315a4c4b82a99ac1332d6ac53c9dc8e1bcf1",
     strip_prefix = "sentencepiece-0.2.2",
