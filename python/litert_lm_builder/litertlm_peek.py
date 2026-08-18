@@ -697,3 +697,157 @@ def peek_litertlm_file(
 
     if dump_files_dir:
       _write_model_toml(dump_files_dir, toml_system_metadata, toml_sections)
+
+
+def inspect_litertlm_file(
+    litertlm_path: str,
+    output_stream: IO[str],
+) -> None:
+  """Reads and prints capability information from a LiteRT-LM file.
+
+  Args:
+    litertlm_path: The path to the LiteRT-LM file.
+    output_stream: The stream to write the output to.
+  """
+  with litertlm_core.open_file(litertlm_path, "rb") as file_stream:
+    magic = file_stream.read(8)
+    if magic != litertlm_core.HEADER_MAGIC_BYTES:
+      raise ValueError(f"Invalid magic number: {magic}")
+
+    file_stream.read(12)  # Discard container format version bytes.
+
+    file_stream.seek(litertlm_core.HEADER_END_LOCATION_BYTE_OFFSET)
+    header_end_offset = struct.unpack("<Q", file_stream.read(8))[0]
+
+    file_stream.seek(litertlm_core.HEADER_BEGIN_BYTE_OFFSET)
+    header_data = file_stream.read(
+        header_end_offset - litertlm_core.HEADER_BEGIN_BYTE_OFFSET
+    )
+    metadata = schema.LiteRTLMMetaData.GetRootAs(header_data, 0)
+
+    # 1. System Metadata
+    model_class = "<none>"
+    tf_hub_model_id = "<none>"
+    min_litertlm_version = "<none>"
+
+    system_metadata = metadata.SystemMetadata()
+    if system_metadata and system_metadata.EntriesLength() > 0:
+      for i in range(system_metadata.EntriesLength()):
+        kvp = system_metadata.Entries(i)
+        if kvp is None:
+          continue
+        key_bytes = kvp.Key()
+        key = key_bytes.decode("utf-8") if key_bytes is not None else None
+        val, _ = _get_kvp_value_and_type(kvp)
+        if key == "model_class":
+          model_class = val
+        elif key == "tf_hub_model_id":
+          tf_hub_model_id = val
+        elif key == "min_litertlm_version":
+          min_litertlm_version = val
+
+    # 2. Sections
+    section_metadata = metadata.SectionMetadata()
+    num_sections = section_metadata.ObjectsLength() if section_metadata else 0
+
+    has_llm_metadata = False
+    llm_metadata_begin = 0
+    llm_metadata_end = 0
+
+    has_vision = False
+    has_audio = False
+    has_speculative_decoding = False
+
+    if section_metadata:
+      for i in range(num_sections):
+        section_object = section_metadata.Objects(i)
+        if section_object is None:
+          continue
+        data_type = section_object.DataType()
+        if data_type == schema.AnySectionDataType.LlmMetadataProto:
+          has_llm_metadata = True
+          llm_metadata_begin = section_object.BeginOffset()
+          llm_metadata_end = section_object.EndOffset()
+        elif data_type == schema.AnySectionDataType.TFLiteModel:
+          model_type = get_model_type(section_object)
+          if model_type in ["tf_lite_vision_adapter", "tf_lite_vision_encoder"]:
+            has_vision = True
+          elif model_type in ["tf_lite_audio_adapter", "tf_lite_audio_encoder_hw"]:
+            has_audio = True
+          elif model_type == "tf_lite_mtp_drafter":
+            has_speculative_decoding = True
+
+    output_stream.write("========================================\n")
+    output_stream.write(" LiteRT-LM Model Inspection Report\n")
+    output_stream.write("========================================\n")
+    output_stream.write(f"File: {litertlm_path}\n")
+    output_stream.write(f"Model Class: {model_class}\n")
+    output_stream.write(f"TF Hub ID:   {tf_hub_model_id}\n")
+    output_stream.write(f"Min Runtime: {min_litertlm_version}\n")
+
+    if has_llm_metadata and llm_metadata_end > llm_metadata_begin:
+      file_stream.seek(llm_metadata_begin)
+      proto_data = file_stream.read(llm_metadata_end - llm_metadata_begin)
+      llm_meta = llm_metadata_pb2.LlmMetadata()
+      llm_meta.ParseFromString(proto_data)
+
+      supports_function_calling = False
+      supports_thinking = False
+      for arg in llm_meta.jinja_prompt_template_args:
+        if arg == "tools":
+          supports_function_calling = True
+        if arg == "thought":
+          supports_thinking = True
+
+      for channel in llm_meta.channels:
+        if channel.is_reasoning_channel:
+          supports_thinking = True
+
+      output_stream.write("\n[LLM Capabilities]\n")
+      output_stream.write(
+          f"  Max Context Length:     {llm_meta.max_num_tokens}\n"
+      )
+      output_stream.write(
+          "  Supports Function Call: "
+          f"{'YES' if supports_function_calling else 'NO'}\n"
+      )
+      output_stream.write(
+          f"  Supports Thinking:      {'YES' if supports_thinking else 'NO'}\n"
+      )
+      output_stream.write(
+          "  Speculative Decoding:   "
+          f"{'YES' if has_speculative_decoding else 'NO'}\n"
+      )
+
+      input_modalities = ["Text"]
+      if has_vision:
+        input_modalities.append("Vision")
+      if has_audio:
+        input_modalities.append("Audio")
+      output_stream.write(
+          f"  Input Modalities:       {' '.join(input_modalities)}\n"
+      )
+
+      backends = list(llm_meta.supported_backends)
+      if not backends:
+        output_stream.write("  Supported Backends:     <none>\n")
+      else:
+        output_stream.write(f"  Supported Backends:     {' '.join(backends)}\n")
+
+      if llm_meta.supported_vision_resolutions:
+        resolutions = [str(r) for r in llm_meta.supported_vision_resolutions]
+        output_stream.write(
+            f"  Vision Resolutions:     {' '.join(resolutions)}\n"
+        )
+
+      if llm_meta.HasField("sampler_params"):
+        sp = llm_meta.sampler_params
+        output_stream.write(
+            f"  Default Sampler:        temp={sp.temperature}, top_k={sp.k},"
+            f" top_p={sp.p}\n"
+        )
+      else:
+        output_stream.write("  Default Sampler:        <none>\n")
+
+    output_stream.write("========================================\n")
+

@@ -15,6 +15,50 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_SCHEMA_CAPABILITIES_CAPABILITIES_H_
 #define THIRD_PARTY_ODML_LITERT_LM_SCHEMA_CAPABILITIES_CAPABILITIES_H_
 
+#include <cstdint>
+#include <istream>
+#include <optional>
+#include <string>
+#include <vector>
+
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "runtime/proto/sampler_params.pb.h"
 #include "schema/capabilities/speculative_decoding.h"  // IWYU pragma: export
+
+namespace litert::lm::schema::capabilities {
+
+enum class Modality {
+  kText = 0,
+  kVision = 1,
+  kAudio = 2,
+};
+
+struct LlmInferenceCapability {
+  std::vector<Modality> input_modalities;
+  std::vector<Modality> output_modalities;
+  bool supports_function_calling = false;
+  bool supports_thinking = false;
+  bool supports_speculative_decoding = false;
+  int32_t max_context_length = 0;
+  std::optional<proto::SamplerParameters> default_sampler_params;
+  std::vector<std::string> supported_backends;
+  std::vector<int32_t> supported_vision_resolutions;
+};
+
+struct ModelMetadataInfo {
+  std::string model_class;
+  std::string tf_hub_model_id;
+  std::string min_litertlm_version;
+  std::optional<LlmInferenceCapability> llm_capability;
+};
+
+// Inspects the given LiteRT-LM file stream.
+absl::StatusOr<ModelMetadataInfo> InspectModel(std::istream& litertlm_stream);
+
+// Inspects the given LiteRT-LM file path.
+absl::StatusOr<ModelMetadataInfo> InspectModel(
+    const std::string& litertlm_path);
+
+}  // namespace litert::lm::schema::capabilities
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_SCHEMA_CAPABILITIES_CAPABILITIES_H_

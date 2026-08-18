@@ -53,6 +53,33 @@ class LitertlmPeekPyTest(absltest.TestCase):
     self.assertIn("LlmMetadataProto", stdout)
     self.assertIn("<<<<<<<< start of LlmMetadata", stdout)
 
+  def test_inspect_litertlm_file(self):
+    """Tests the inspect_litertlm_file function directly."""
+    test_data_path = os.path.join(
+        os.environ.get("TEST_SRCDIR", ""),
+        "litert_lm/schema/testdata/test_tok_tfl_llm.litertlm",
+    )
+
+    # Use an in-memory stream to capture the output.
+    output_stream = io.StringIO()
+
+    # Call the function directly.
+    litertlm_peek.inspect_litertlm_file(test_data_path, output_stream)
+
+    # Get the output and perform assertions.
+    stdout = output_stream.getvalue()
+    self.assertNotEmpty(stdout)
+
+    # Assert that the output contains expected strings.
+    self.assertIn("LiteRT-LM Model Inspection Report", stdout)
+    self.assertIn("Model Class:", stdout)
+    self.assertIn("[LLM Capabilities]", stdout)
+    self.assertIn("Max Context Length:", stdout)
+    self.assertIn("Supports Function Call:", stdout)
+    self.assertIn("Supports Thinking:", stdout)
+    self.assertIn("Speculative Decoding:", stdout)
+    self.assertIn("Input Modalities:       Text", stdout)
+
   def test_process_litertlm_file_hf_tokenizer(self):
     """Tests the process_litertlm_file function directly."""
     test_data_path = os.path.join(
