@@ -231,8 +231,9 @@ AudioLiteRtCompiledModelExecutor::AudioStaticEncoder::Initialize() {
     options.SetHardwareAccelerators(litert::HwAccelerators::kCpu);
 #if !defined(LITERT_DISABLE_NPU)
   } else if (executor_settings_.GetBackend() == Backend::NPU) {
-    LITERT_ASSIGN_OR_RETURN(auto& google_tensor_options,
-                            options.GetGoogleTensorOptions());
+    LITERT_ASSIGN_OR_RETURN(
+        auto& google_tensor_options,
+        options.GetOptions<google_tensor::GoogleTensorOptions>());
     google_tensor_options.SetPerformanceMode(
         google_tensor::GoogleTensorOptions::PerformanceMode::kBurst);
     options.SetHardwareAccelerators(litert::HwAccelerators::kNpu);
@@ -364,8 +365,9 @@ AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::Initialize() {
     options.SetHardwareAccelerators(litert::HwAccelerators::kCpu);
 #if !defined(LITERT_DISABLE_NPU)
   } else if (executor_settings_.GetBackend() == Backend::NPU) {
-    LITERT_ASSIGN_OR_RETURN(auto& google_tensor_options,
-                            options.GetGoogleTensorOptions());
+    LITERT_ASSIGN_OR_RETURN(
+        auto& google_tensor_options,
+        options.GetOptions<google_tensor::GoogleTensorOptions>());
     google_tensor_options.SetPerformanceMode(
         google_tensor::GoogleTensorOptions::PerformanceMode::kBurst);
     options.SetHardwareAccelerators(litert::HwAccelerators::kNpu);
@@ -568,8 +570,9 @@ absl::Status AudioLiteRtCompiledModelExecutor::AudioAdapter::Initialize() {
     options.SetHardwareAccelerators(litert::HwAccelerators::kCpu);
 #if !defined(LITERT_DISABLE_NPU)
   } else if (executor_settings_.GetBackend() == Backend::NPU) {
-    LITERT_ASSIGN_OR_RETURN(auto& google_tensor_options,
-                            options.GetGoogleTensorOptions());
+    LITERT_ASSIGN_OR_RETURN(
+        auto& google_tensor_options,
+        options.GetOptions<google_tensor::GoogleTensorOptions>());
     google_tensor_options.SetPerformanceMode(
         google_tensor::GoogleTensorOptions::PerformanceMode::kBurst);
     options.SetHardwareAccelerators(litert::HwAccelerators::kNpu);
