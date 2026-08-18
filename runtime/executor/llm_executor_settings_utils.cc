@@ -71,6 +71,7 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
     std::optional<ModelSignatures*> signatures,
     std::optional<std::string> cache_suffix) {
   LITERT_ASSIGN_OR_RETURN(auto compilation_options, Options::Create());
+  // TODO: Add GDN registration to OSS once LiteRT custom op stack lands.
   std::string cache_path = executor_settings.GetCacheDir();
 
   switch (executor_settings.GetBackend()) {
