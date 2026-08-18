@@ -390,6 +390,12 @@ TEST(EmbeddingEngineImplTest, GetEmbeddingMetadataNullByDefault) {
   EXPECT_FALSE(metadata.has_value());
 }
 
+TEST(EmbeddingEngineImplTest, DefaultEmbeddingOptions) {
+  EmbeddingOptions options;
+  EXPECT_TRUE(options.normalize);
+  EXPECT_TRUE(options.insert_special_tokens);
+}
+
 TEST(EmbeddingEngineImplTest, ComputeEmbeddingSuccess) {
   const std::string& model_path = (std::filesystem::path(::testing::SrcDir()) /
                                    std::string(kTestEmbeddingModelPath))

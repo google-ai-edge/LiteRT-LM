@@ -42,10 +42,10 @@ TEST(EmbeddingEngineCTest, CreateSettingsInvalidBackend) {
 TEST(EmbeddingEngineCTest, OptionsNormalize) {
   auto* options = litert_lm_embedding_options_create();
   ASSERT_NE(options, nullptr);
-  EXPECT_FALSE(litert_lm_embedding_options_get_normalize(options));
-
-  litert_lm_embedding_options_set_normalize(options, true);
   EXPECT_TRUE(litert_lm_embedding_options_get_normalize(options));
+
+  litert_lm_embedding_options_set_normalize(options, false);
+  EXPECT_FALSE(litert_lm_embedding_options_get_normalize(options));
 
   litert_lm_embedding_options_delete(options);
 }
@@ -53,10 +53,10 @@ TEST(EmbeddingEngineCTest, OptionsNormalize) {
 TEST(EmbeddingEngineCTest, OptionsInsertSpecialTokens) {
   auto* options = litert_lm_embedding_options_create();
   ASSERT_NE(options, nullptr);
-  EXPECT_FALSE(litert_lm_embedding_options_get_insert_special_tokens(options));
-
-  litert_lm_embedding_options_set_insert_special_tokens(options, true);
   EXPECT_TRUE(litert_lm_embedding_options_get_insert_special_tokens(options));
+
+  litert_lm_embedding_options_set_insert_special_tokens(options, false);
+  EXPECT_FALSE(litert_lm_embedding_options_get_insert_special_tokens(options));
 
   litert_lm_embedding_options_delete(options);
 }

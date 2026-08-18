@@ -185,9 +185,7 @@ absl::Status MainHelper(int argc, char** argv) {
   }
 
   auto response_result = engine->ComputeEmbedding(
-      contents,
-      {.normalize = absl::GetFlag(FLAGS_normalize),
-       .insert_special_tokens = true});
+      contents, {.normalize = absl::GetFlag(FLAGS_normalize)});
   if (!response_result.ok()) {
     std::cerr << "ComputeEmbedding failed with error: "
               << response_result.status() << std::endl;

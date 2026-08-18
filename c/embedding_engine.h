@@ -129,9 +129,9 @@ LITERT_LM_C_API_EXPORT
 void litert_lm_embedding_engine_settings_set_audio_litert_dispatch_lib_dir(
     LiteRtLmEmbeddingEngineSettings* settings, const char* lib_dir);
 
-// Creates LiteRT LM Embedding Options with default values (`normalize =
-// false`). The caller is responsible for destroying options using
-// `litert_lm_embedding_options_delete`.
+// Creates LiteRT LM Embedding Options with default values (`normalize = true`,
+// `insert_special_tokens = true`). The caller is responsible for destroying
+// options using `litert_lm_embedding_options_delete`.
 //
 // @return A pointer to the created options, or NULL on failure.
 //

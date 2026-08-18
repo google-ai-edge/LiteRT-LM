@@ -29,11 +29,11 @@ namespace litert::lm {
 // Options for configuring the embedding computation.
 struct EmbeddingOptions {
   // If true, the output embedding vector will be L2-normalized.
-  bool normalize = false;
+  bool normalize = true;
 
   // If true, automatically inserts the BOS, EOS, start of image, end of image,
   // start of audio, and end of audio tokens.
-  bool insert_special_tokens = false;
+  bool insert_special_tokens = true;
 
   // Strategy for handling inputs longer than the maximum supported signature
   // length.
