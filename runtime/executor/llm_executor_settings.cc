@@ -146,6 +146,7 @@ std::ostream& operator<<(std::ostream& os, const LlmExecutorSettings& config) {
   os << "activation_data_type: " << config.GetActivationDataType() << "\n";
   os << "max_num_images: " << config.GetMaxNumImages() << "\n";
   os << "lora_rank: " << config.GetLoraRank() << "\n";
+  os << "pad_token_id: " << config.GetPadTokenId() << "\n";
   os << "cache_dir: " << config.GetCacheDir() << "\n";
   if (config.GetScopedCacheFile()) {
     os << "cache_file: " << config.GetScopedCacheFile()->file() << "\n";
