@@ -103,6 +103,41 @@ ExtractImagePreprocessParameter(const proto::EmbeddingMetadata& metadata) {
   return std::nullopt;
 }
 
+absl::StatusOr<std::unique_ptr<::litert::support::AudioPreprocessor>>
+ExtractAudioPreprocessor(const proto::EmbeddingMetadata& metadata) {
+  if (metadata.has_audio_preprocessor()) {
+    const auto& audio_preprocessor_proto = metadata.audio_preprocessor();
+    switch (audio_preprocessor_proto.preprocessor_case()) {
+      case proto::AudioPreprocessorConfig::kMiniaudio: {
+        const auto& miniaudio = audio_preprocessor_proto.miniaudio();
+        using FftPaddingType =
+            ::litert::support::AudioPreprocessorConfig::FftPaddingType;
+        FftPaddingType padding_type = FftPaddingType::kRight;
+        if (miniaudio.fft_padding_type() ==
+            proto::MiniAudioPreprocessorConfig::FFT_PADDING_TYPE_CENTER) {
+          padding_type = FftPaddingType::kCenter;
+        }
+        auto config = ::litert::support::AudioPreprocessorConfig::Create(
+            miniaudio.sample_rate_hz(), miniaudio.num_channels(),
+            miniaudio.frame_length(), miniaudio.hop_length(),
+            miniaudio.fft_length(), miniaudio.input_scale(),
+            miniaudio.pre_emphasis_factor(), miniaudio.num_mel_bins(),
+            miniaudio.mel_low_hz(), miniaudio.mel_high_hz(),
+            miniaudio.mel_floor(), miniaudio.normalize_mel(),
+            miniaudio.add_floor_to_mel_before_log(),
+            miniaudio.semicausal_padding(), miniaudio.non_zero_hanning(),
+            miniaudio.periodic_hanning(), padding_type,
+            miniaudio.skip_mel_spectrogram_extraction());
+        return ::litert::support::AudioPreprocessorMiniAudio::Create(config);
+      }
+      case proto::AudioPreprocessorConfig::PREPROCESSOR_NOT_SET:
+        break;
+    }
+  }
+
+  return nullptr;
+}
+
 std::vector<float> L2Norm(const std::vector<float>& vec) {
   float sum_sq = 0.0f;
   for (float val : vec) {
@@ -165,11 +200,15 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
   SpecialTokens special_tokens;
   std::optional<::litert::support::ImagePreprocessParameter>
       image_preprocess_parameter = std::nullopt;
+  std::unique_ptr<::litert::support::AudioPreprocessor> audio_preprocessor =
+      nullptr;
   if (metadata.has_value()) {
     LITERT_ASSIGN_OR_RETURN(special_tokens,
                             ExtractSpecialTokens(*metadata, *tokenizer));
     image_preprocess_parameter =
         ExtractImagePreprocessParameter(*metadata);
+    LITERT_ASSIGN_OR_RETURN(audio_preprocessor,
+                            ExtractAudioPreprocessor(*metadata));
   }
 
   // Initialize BenchmarkInfo if benchmarking is enabled and it wasn't passed
@@ -196,18 +235,11 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
 
   // Initialize the audio executor.
   std::unique_ptr<AudioExecutor> audio_executor = nullptr;
-  std::unique_ptr<::litert::support::AudioPreprocessor> audio_preprocessor =
-      nullptr;
   if ((resources->GetTFLiteModel(ModelType::kTfLiteAudioEncoderHw).ok()) &&
       settings.GetAudioExecutorSettings().has_value()) {
     LITERT_ASSIGN_OR_RETURN(
         audio_executor, AudioLiteRtCompiledModelExecutor::Create(
                             *settings.GetAudioExecutorSettings(), env->env));
-    LITERT_ASSIGN_OR_RETURN(
-        audio_preprocessor,
-        ::litert::support::AudioPreprocessorMiniAudio::Create(
-            ::litert::support::AudioPreprocessorConfig::
-                CreateDefaultGemma4Config()));
   }
 
   special_tokens.has_end_of_vision_model =
@@ -242,7 +274,7 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
       std::move(vision_executor), std::move(audio_executor),
       std::move(benchmark_info), std::move(special_tokens),
       std::move(image_preprocessor), std::move(image_preprocess_parameter),
-      std::move(metadata), std::move(audio_preprocessor));
+      std::move(audio_preprocessor), std::move(metadata));
 }
 
 // static
@@ -310,8 +342,8 @@ EmbeddingEngineImpl::EmbeddingEngineImpl(
     std::unique_ptr<::litert::support::ImagePreprocessor> image_preprocessor,
     std::optional<::litert::support::ImagePreprocessParameter>
         image_preprocess_parameter,
-    std::optional<proto::EmbeddingMetadata> metadata,
-    std::unique_ptr<::litert::support::AudioPreprocessor> audio_preprocessor)
+    std::unique_ptr<::litert::support::AudioPreprocessor> audio_preprocessor,
+    std::optional<proto::EmbeddingMetadata> metadata)
     : env_(std::move(env)),
       tokenizer_(std::move(tokenizer)),
       embedding_executor_(std::move(embedding_executor)),
@@ -321,8 +353,8 @@ EmbeddingEngineImpl::EmbeddingEngineImpl(
       special_tokens_(std::move(special_tokens)),
       image_preprocessor_(std::move(image_preprocessor)),
       image_preprocess_parameter_(std::move(image_preprocess_parameter)),
-      metadata_(std::move(metadata)),
-      audio_preprocessor_(std::move(audio_preprocessor)) {}
+      audio_preprocessor_(std::move(audio_preprocessor)),
+      metadata_(std::move(metadata)) {}
 
 absl::StatusOr<std::vector<InputData>> EmbeddingEngineImpl::InsertSpecialTokens(
     const std::vector<InputData>& contents) const {
@@ -489,6 +521,11 @@ absl::StatusOr<ExecutorInputs> EmbeddingEngineImpl::ProcessAndCombineContents(
         LITERT_ASSIGN_OR_RETURN(spectrogram_tensor,
                                 input_audio->GetPreprocessedAudioTensor());
       } else {
+        if (audio_preprocessor_ == nullptr) {
+          return absl::FailedPreconditionError(
+              "Audio preprocessor is not available for unprocessed audio "
+              "input.");
+        }
         LITERT_ASSIGN_OR_RETURN(InputAudio temp_audio,
                                 audio_preprocessor_->Preprocess(*input_audio));
         preprocessed_audio.emplace(std::move(temp_audio));

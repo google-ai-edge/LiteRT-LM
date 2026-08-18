@@ -16,11 +16,66 @@ syntax = "proto3";
 
 package litert.lm.proto;
 
+import "runtime/proto/embedding_model_type.proto";
+import "runtime/proto/token.proto";
+
 option java_multiple_files = true;
 option java_outer_classname = "EmbeddingMetadataOuterClass";
 
-import "runtime/proto/embedding_model_type.proto";
-import "runtime/proto/token.proto";
+// Parameters for MiniAudio-based Mel spectrogram preprocessing.
+message MiniAudioPreprocessorConfig {
+  // The padding type for FFT bins.
+  enum FftPaddingType {
+    FFT_PADDING_TYPE_UNSPECIFIED = 0;
+    FFT_PADDING_TYPE_RIGHT = 1;
+    FFT_PADDING_TYPE_CENTER = 2;
+  }
+
+  // The sample rate of the audio input in Hz.
+  int32 sample_rate_hz = 1;
+  // The number of audio channels in the audio input.
+  int32 num_channels = 2;
+  // The length of the audio frame in samples.
+  int32 frame_length = 3;
+  // The hop length of the audio frame in samples.
+  int32 hop_length = 4;
+  // The length of the FFT window in samples.
+  int32 fft_length = 5;
+  // The scale factor to apply to the audio input.
+  float input_scale = 6;
+  // The factor to apply to the audio signal for pre-emphasis.
+  float pre_emphasis_factor = 7;
+  // The number of Mel bins to use for the audio input.
+  int32 num_mel_bins = 8;
+  // The lower bound of the Mel frequency range in Hz.
+  float mel_low_hz = 9;
+  // The upper bound of the Mel frequency range in Hz.
+  float mel_high_hz = 10;
+  // The floor value to apply to the Mel spectrogram before taking the log.
+  float mel_floor = 11;
+  // Whether to normalize the Mel spectrogram.
+  bool normalize_mel = 12;
+  // Whether to add the floor value to the Mel spectrogram before taking the
+  // log.
+  bool add_floor_to_mel_before_log = 13;
+  // Whether to use semicausal padding for the audio input.
+  bool semicausal_padding = 14;
+  // Whether to use non-zero Hanning window for the audio input.
+  bool non_zero_hanning = 15;
+  // Whether to use periodic Hanning window for the audio input.
+  bool periodic_hanning = 16;
+  // The padding type for FFT bins.
+  FftPaddingType fft_padding_type = 17;
+  // Whether to skip the Mel spectrogram extraction.
+  bool skip_mel_spectrogram_extraction = 18;
+}
+
+// Wrapper with a oneof for audio preprocessor configurations.
+message AudioPreprocessorConfig {
+  oneof preprocessor {
+    MiniAudioPreprocessorConfig miniaudio = 1;
+  }
+}
 
 // Parameters for Embedding Models.
 message EmbeddingMetadata {
@@ -32,5 +87,7 @@ message EmbeddingMetadata {
 
   // EOS token appended to the end of input sequence.
   TokenUnion eos_token = 3;
-}
 
+  // Audio preprocessor configuration.
+  AudioPreprocessorConfig audio_preprocessor = 4;
+}

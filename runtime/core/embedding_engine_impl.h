@@ -77,9 +77,9 @@ class EmbeddingEngineImpl : public EmbeddingEngine {
           nullptr,
       std::optional<::litert::support::ImagePreprocessParameter>
           image_preprocess_parameter = std::nullopt,
-      std::optional<proto::EmbeddingMetadata> metadata = std::nullopt,
       std::unique_ptr<::litert::support::AudioPreprocessor> audio_preprocessor =
-          nullptr);
+          nullptr,
+      std::optional<proto::EmbeddingMetadata> metadata = std::nullopt);
 
   ~EmbeddingEngineImpl() override = default;
 
@@ -113,6 +113,11 @@ class EmbeddingEngineImpl : public EmbeddingEngine {
     return image_preprocessor_.get();
   }
 
+  // Returns the audio preprocessor configured for the engine.
+  const ::litert::support::AudioPreprocessor* GetAudioPreprocessor() const {
+    return audio_preprocessor_.get();
+  }
+
   // Returns the embedding metadata of the engine.
   const std::optional<proto::EmbeddingMetadata>& GetEmbeddingMetadata()
       const override;
@@ -137,8 +142,8 @@ class EmbeddingEngineImpl : public EmbeddingEngine {
   std::unique_ptr<::litert::support::ImagePreprocessor> image_preprocessor_;
   std::optional<::litert::support::ImagePreprocessParameter>
       image_preprocess_parameter_;
-  std::optional<proto::EmbeddingMetadata> metadata_;
   std::unique_ptr<::litert::support::AudioPreprocessor> audio_preprocessor_;
+  std::optional<proto::EmbeddingMetadata> metadata_;
 };
 
 }  // namespace litert::lm
