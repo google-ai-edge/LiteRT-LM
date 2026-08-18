@@ -22,6 +22,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "runtime/components/logits_processor/constrained_decoding/bitmap.h"
 #include "runtime/components/logits_processor/constrained_decoding/constraint.h"
+#include "runtime/components/logits_processor/constrained_decoding/logit_mask.h"
 
 namespace litert::lm {
 
@@ -57,6 +58,9 @@ class FakeConstraint : public Constraint {
 
   absl::StatusOr<std::unique_ptr<State>> ComputeNext(const State& state,
                                                      int token) const override;
+
+  absl::StatusOr<std::unique_ptr<LogitMask>> ComputeMask(
+      const State& state) const override;
 
   absl::StatusOr<std::unique_ptr<Bitmap>> ComputeBitmap(
       const State& state) const override;

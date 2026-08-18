@@ -26,8 +26,10 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "runtime/components/logits_processor/constrained_decoding/bitmap.h"
 #include "runtime/components/logits_processor/constrained_decoding/constraint.h"
+#include "runtime/components/logits_processor/constrained_decoding/logit_mask.h"
 #include "llguidance.h"
 
 namespace litert::lm {
@@ -86,6 +88,34 @@ absl::StatusOr<std::unique_ptr<Constraint::State>> LlgConstraint::ComputeNext(
   }
 
   return std::make_unique<LlgConstraint::LlgState>(llg_state);
+}
+
+absl::StatusOr<std::unique_ptr<LogitMask>> LlgConstraint::ComputeMask(
+    const Constraint::State& state) const {
+  const auto& llg_state = static_cast<const LlgConstraint::LlgState&>(state);
+
+  LlgMaskResult mask_res;
+  if (llg_compute_mask(llg_state.llg_constraint(), &mask_res) != 0) {
+    std::string error_message = llg_get_error(llg_state.llg_constraint());
+    return absl::InternalError(
+        absl::StrCat("Failed to compute mask: ", error_message));
+  }
+
+  if (mask_res.sample_mask == nullptr) {
+    if (mask_res.is_stop) {
+      if (eos_token_id_ >= 0 && eos_token_id_ < vocab_size_) {
+        return BitmapLogitMask::CreateSingleAllowedToken(vocab_size_,
+                                                         eos_token_id_);
+      }
+      return BitmapLogitMask::CreateAllDisallowed(vocab_size_);
+    } else {
+      return BitmapLogitMask::CreateAllAllowed(vocab_size_);
+    }
+  }
+
+  size_t num_u32 = (vocab_size_ + 31) / 32;
+  return std::make_unique<BitmapLogitMask>(
+      vocab_size_, absl::MakeConstSpan(mask_res.sample_mask, num_u32));
 }
 
 absl::StatusOr<std::unique_ptr<Bitmap>> LlgConstraint::ComputeBitmap(

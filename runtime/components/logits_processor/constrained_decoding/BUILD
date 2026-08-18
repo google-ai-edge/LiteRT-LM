@@ -41,10 +41,14 @@ cc_library(
 
 cc_library(
     name = "constraint",
+    srcs = ["constraint.cc"],
     hdrs = ["constraint.h"],
     visibility = ["//visibility:public"],
     deps = [
         ":bitmap",
+        ":logit_mask",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
     ],
 )
@@ -117,6 +121,7 @@ cc_library(
     deps = [
         ":bitmap",
         ":constraint",
+        ":logit_mask",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
     ],
@@ -196,10 +201,12 @@ cc_library(
     deps = [
         ":bitmap",
         ":constraint",
+        ":logit_mask",
         "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/types:span",
         "@crate_index__llguidance-1.3.0//:llguidance_cc"
     ] + select({
         "@platforms//os:windows": [
@@ -370,6 +377,7 @@ cc_test(
         ":constraint_provider",
         ":llg_constraint_config",
         ":llg_constraint_provider",
+        ":logit_mask",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
@@ -439,6 +447,7 @@ cc_library(
     deps = [
         ":bitmap",
         ":constraint",
+        ":logit_mask",
         "@com_google_absl//absl/status:statusor",
         "//runtime/util:litert_status_util",
     ],
@@ -450,8 +459,23 @@ cc_test(
     deps = [
         ":bitmap",
         ":fake_constraint",
+        ":logit_mask",
         ":thinking_budget_constraint",
         "@com_google_googletest//:gtest_main",
+        "//runtime/util:test_utils",
+    ],
+)
+
+cc_test(
+    name = "constraint_test",
+    srcs = ["constraint_test.cc"],
+    deps = [
+        ":bitmap",
+        ":constraint",
+        ":logit_mask",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
         "//runtime/util:test_utils",
     ],
 )

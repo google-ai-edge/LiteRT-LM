@@ -20,6 +20,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "runtime/components/logits_processor/constrained_decoding/bitmap.h"
 #include "runtime/components/logits_processor/constrained_decoding/constraint.h"
+#include "runtime/components/logits_processor/constrained_decoding/logit_mask.h"
 #include "runtime/util/status_macros.h"
 
 namespace litert::lm {
@@ -112,6 +113,27 @@ ThinkingBudgetConstraint::ComputeNext(const Constraint::State& state,
 
   next_s->natural_end_match_index = natural_end_match_index;
   return next_s;
+}
+
+absl::StatusOr<std::unique_ptr<LogitMask>>
+ThinkingBudgetConstraint::ComputeMask(const Constraint::State& state) const {
+  const auto& s = static_cast<const ThinkingState&>(state);
+
+  // Suspend user constraint during start matching and thinking.
+  if (s.in_thinking || s.matching_start_index >= 0) {
+    if (s.forced_end_token_index >= 0) {
+      return BitmapLogitMask::CreateSingleAllowedToken(
+          vocab_size_, end_token_ids_[s.forced_end_token_index]);
+    }
+    return BitmapLogitMask::CreateAllAllowed(vocab_size_);
+  }
+
+  if (user_constraint_ != nullptr) {
+    RET_CHECK(s.user_state != nullptr) << "User constraint state is null.";
+    return user_constraint_->ComputeMask(*s.user_state);
+  }
+
+  return BitmapLogitMask::CreateAllAllowed(vocab_size_);
 }
 
 absl::StatusOr<std::unique_ptr<Bitmap>> ThinkingBudgetConstraint::ComputeBitmap(

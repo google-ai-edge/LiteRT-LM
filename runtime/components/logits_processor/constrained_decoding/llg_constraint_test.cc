@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <cmath>
 #include <memory>
 #include <string>
 #include <utility>
@@ -27,7 +28,8 @@
 #include "runtime/components/logits_processor/constrained_decoding/constraint_provider.h"
 #include "runtime/components/logits_processor/constrained_decoding/llg_constraint_config.h"
 #include "runtime/components/logits_processor/constrained_decoding/llg_constraint_provider.h"
-#include "runtime/util/test_utils.h"  // NOLINT
+#include "runtime/components/logits_processor/constrained_decoding/logit_mask.h"
+#include "runtime/util/test_utils.h"  // IWYU pragma: keep
 #include "support/tokenizer/tokenizer.h"
 
 namespace litert::lm {
@@ -101,6 +103,31 @@ TEST_F(LlgConstraintTest, ComputeBitmap) {
 
   EXPECT_TRUE(bitmap->Get(2));   // a
   EXPECT_FALSE(bitmap->Get(3));  // b
+}
+
+TEST_F(LlgConstraintTest, ComputeMask) {
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<ConstraintProvider> provider,
+                       CreateProvider());
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<Constraint> constraint,
+                       provider->CreateConstraint(LlGuidanceConstraintArg{
+                           .constraint_type = LlgConstraintType::kRegex,
+                           .constraint_string = "a+"}));
+
+  std::unique_ptr<Constraint::State> state = constraint->Start();
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<LogitMask> mask,
+                       constraint->ComputeMask(*state));
+
+  ASSERT_NE(mask, nullptr);
+  EXPECT_EQ(mask->GetType(), MaskType::kBitmap);
+  auto* bitmap_mask = static_cast<BitmapLogitMask*>(mask.get());
+  EXPECT_TRUE(bitmap_mask->IsAllowed(2));   // a
+  EXPECT_FALSE(bitmap_mask->IsAllowed(3));  // b
+
+  // Verify Apply on logits
+  std::vector<float> logits(5, 0.0f);
+  EXPECT_OK(mask->Apply(absl::MakeSpan(logits)));
+  EXPECT_EQ(logits[2], 0.0f);
+  EXPECT_TRUE(std::isinf(logits[3]) && logits[3] < 0.0f);
 }
 
 TEST_F(LlgConstraintTest, TransitionAndEnd) {

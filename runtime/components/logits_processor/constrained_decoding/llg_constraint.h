@@ -22,6 +22,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "runtime/components/logits_processor/constrained_decoding/bitmap.h"
 #include "runtime/components/logits_processor/constrained_decoding/constraint.h"
+#include "runtime/components/logits_processor/constrained_decoding/logit_mask.h"
 #include "llguidance.h"
 
 namespace litert::lm {
@@ -90,6 +91,10 @@ class LlgConstraint : public Constraint {
   // token.
   absl::StatusOr<std::unique_ptr<State>> ComputeNext(const State& state,
                                                      int token) const override;
+
+  // Computes the logit mask given the current state.
+  absl::StatusOr<std::unique_ptr<LogitMask>> ComputeMask(
+      const State& state) const override;
 
   // Computes the allowed tokens bitmap given the current state.
   absl::StatusOr<std::unique_ptr<Bitmap>> ComputeBitmap(

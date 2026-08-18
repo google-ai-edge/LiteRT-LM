@@ -50,20 +50,23 @@ target_link_libraries(runtime_components_constrained_decoding_logit_mask
 # ==============================================================================
 # Constraint Interface
 # ==============================================================================
-add_litertlm_library(runtime_components_constrained_decoding_constraint INTERFACE)
+add_litertlm_library(runtime_components_constrained_decoding_constraint STATIC
+  constraint.cc
+)
 add_library(LiteRTLM::Runtime::Components::ConstrainedDecoding::ConstraintInterface
   ALIAS runtime_components_constrained_decoding_constraint)
 
 target_include_directories(runtime_components_constrained_decoding_constraint
-  INTERFACE
+  PUBLIC
     ${PKG_ROOT}
     ${LITERTLM_INCLUDE_PATHS}
 )
 
 target_link_libraries(runtime_components_constrained_decoding_constraint
-  INTERFACE
+  PUBLIC
     LiteRTLM::Runtime::Components::ConstrainedDecoding::Bitmap
-    LITERTLM_DEP
+    LiteRTLM::Runtime::Components::ConstrainedDecoding::LogitMask
+    LITERTLM_DEPS
 )
 
 # ==============================================================================

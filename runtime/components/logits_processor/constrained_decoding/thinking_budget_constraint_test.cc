@@ -21,7 +21,8 @@
 #include <gtest/gtest.h>
 #include "runtime/components/logits_processor/constrained_decoding/bitmap.h"
 #include "runtime/components/logits_processor/constrained_decoding/fake_constraint.h"
-#include "runtime/util/test_utils.h"  // NOLINT
+#include "runtime/components/logits_processor/constrained_decoding/logit_mask.h"
+#include "runtime/util/test_utils.h"  // IWYU pragma: keep
 
 namespace litert::lm {
 namespace {
@@ -238,6 +239,54 @@ TEST(ThinkingBudgetConstraintTest, TestSkipThinkingWithUserConstraint) {
   ASSERT_OK_AND_ASSIGN(auto bitmap, constraint.ComputeBitmap(*state));
   EXPECT_TRUE(bitmap->Get(21));
   EXPECT_FALSE(bitmap->Get(20));
+}
+
+TEST(ThinkingBudgetConstraintTest, TestComputeMask) {
+  std::vector<int> start_tokens = {10, 11};
+  std::vector<int> end_tokens = {12, 13};
+  FakeConstraint user_constraint({20, 21, 1}, 100);
+  ThinkingBudgetConstraint constraint(&user_constraint, 2, start_tokens,
+                                      end_tokens, 100);
+
+  auto state = constraint.Start();
+
+  // Initially in start matching - ComputeMask allows all tokens
+  ASSERT_OK_AND_ASSIGN(auto mask, constraint.ComputeMask(*state));
+  ASSERT_NE(mask, nullptr);
+  EXPECT_EQ(mask->GetType(), MaskType::kBitmap);
+  auto* bitmap_mask = static_cast<BitmapLogitMask*>(mask.get());
+  EXPECT_TRUE(bitmap_mask->IsAllowed(10));
+  EXPECT_TRUE(bitmap_mask->IsAllowed(50));
+
+  // Match start tokens
+  ASSERT_OK_AND_ASSIGN(state, constraint.ComputeNext(*state, 10));
+  ASSERT_OK_AND_ASSIGN(state, constraint.ComputeNext(*state, 11));
+
+  // In thinking, token 0
+  ASSERT_OK_AND_ASSIGN(state, constraint.ComputeNext(*state, 50));
+  ASSERT_OK_AND_ASSIGN(mask, constraint.ComputeMask(*state));
+  bitmap_mask = static_cast<BitmapLogitMask*>(mask.get());
+  EXPECT_TRUE(bitmap_mask->IsAllowed(50));
+
+  // Token 1 (hits budget of 2)
+  ASSERT_OK_AND_ASSIGN(state, constraint.ComputeNext(*state, 51));
+  // Now budget exceeded, forced end token 12 should be the only allowed token
+  ASSERT_OK_AND_ASSIGN(mask, constraint.ComputeMask(*state));
+  bitmap_mask = static_cast<BitmapLogitMask*>(mask.get());
+  EXPECT_TRUE(bitmap_mask->IsAllowed(12));
+  EXPECT_FALSE(bitmap_mask->IsAllowed(13));
+  EXPECT_FALSE(bitmap_mask->IsAllowed(50));
+
+  // Feed forced end tokens
+  ASSERT_OK_AND_ASSIGN(state, constraint.ComputeNext(*state, 12));
+  ASSERT_OK_AND_ASSIGN(state, constraint.ComputeNext(*state, 13));
+
+  // Out of thinking -> user constraint active (FakeConstraint allows token 20)
+  ASSERT_OK_AND_ASSIGN(mask, constraint.ComputeMask(*state));
+  bitmap_mask = static_cast<BitmapLogitMask*>(mask.get());
+  EXPECT_TRUE(bitmap_mask->IsAllowed(20));
+  EXPECT_FALSE(bitmap_mask->IsAllowed(21));
+  EXPECT_FALSE(bitmap_mask->IsAllowed(12));
 }
 
 }  // namespace

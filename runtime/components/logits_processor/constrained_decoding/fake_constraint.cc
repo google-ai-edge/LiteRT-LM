@@ -20,6 +20,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "runtime/components/logits_processor/constrained_decoding/bitmap.h"
 #include "runtime/components/logits_processor/constrained_decoding/constraint.h"
+#include "runtime/components/logits_processor/constrained_decoding/logit_mask.h"
 
 namespace litert::lm {
 
@@ -40,6 +41,16 @@ absl::StatusOr<std::unique_ptr<Constraint::State>> FakeConstraint::ComputeNext(
   }
 
   return std::make_unique<FakeState>(fake_state.index() + 1);
+}
+
+absl::StatusOr<std::unique_ptr<LogitMask>> FakeConstraint::ComputeMask(
+    const State& state) const {
+  const auto& fake_state = static_cast<const FakeState&>(state);
+  if (fake_state.index() >= token_ids_.size()) {
+    return BitmapLogitMask::CreateAllDisallowed(vocabulary_size_);
+  }
+  return BitmapLogitMask::CreateSingleAllowedToken(
+      vocabulary_size_, token_ids_[fake_state.index()]);
 }
 
 absl::StatusOr<std::unique_ptr<Bitmap>> FakeConstraint::ComputeBitmap(

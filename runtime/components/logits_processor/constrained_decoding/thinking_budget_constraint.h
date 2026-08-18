@@ -21,6 +21,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "runtime/components/logits_processor/constrained_decoding/bitmap.h"
 #include "runtime/components/logits_processor/constrained_decoding/constraint.h"
+#include "runtime/components/logits_processor/constrained_decoding/logit_mask.h"
 
 namespace litert::lm {
 
@@ -81,6 +82,9 @@ class ThinkingBudgetConstraint : public Constraint {
 
   absl::StatusOr<std::unique_ptr<Constraint::State>> ComputeNext(
       const Constraint::State& state, int token) const override;
+
+  absl::StatusOr<std::unique_ptr<LogitMask>> ComputeMask(
+      const Constraint::State& state) const override;
 
   absl::StatusOr<std::unique_ptr<Bitmap>> ComputeBitmap(
       const Constraint::State& state) const override;
