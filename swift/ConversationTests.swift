@@ -31,7 +31,7 @@ class ConversationTests: XCTestCase {
   override func setUp() async throws {
     try await super.setUp()
     let modelResource =
-      + "runtime/testdata/test_lm.litertlm"
+      "runtime/testdata/test_lm.litertlm"
     let modelPath = testDataPath(forResource: modelResource)
     ExperimentalFlags.optIntoExperimentalAPIs()
     ExperimentalFlags.enableBenchmark = true
@@ -506,7 +506,7 @@ class ConversationTests: XCTestCase {
 
   func testConversationTeardownAndEngineRetentionDoesNotCrash() async throws {
     let modelResource =
-      + "runtime/testdata/test_lm.litertlm"
+      "runtime/testdata/test_lm.litertlm"
     var localEngine: Engine? = Engine(
       engineConfig: try EngineConfig(
         modelPath: testDataPath(forResource: modelResource),
