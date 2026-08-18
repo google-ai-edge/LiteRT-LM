@@ -28,6 +28,18 @@ cc_library(
 )
 
 cc_library(
+    name = "logit_mask",
+    srcs = ["logit_mask.cc"],
+    hdrs = ["logit_mask.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/types:span",
+        "@litert//tflite/types:half",
+    ],
+)
+
+cc_library(
     name = "constraint",
     hdrs = ["constraint.h"],
     visibility = ["//visibility:public"],
@@ -441,5 +453,18 @@ cc_test(
         ":thinking_budget_constraint",
         "@com_google_googletest//:gtest_main",
         "//runtime/util:test_utils",
+    ],
+)
+
+cc_test(
+    name = "logit_mask_test",
+    srcs = ["logit_mask_test.cc"],
+    deps = [
+        ":logit_mask",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/types:span",
+        "//runtime/util:test_utils",
+        "@litert//tflite/types:half",
     ],
 )

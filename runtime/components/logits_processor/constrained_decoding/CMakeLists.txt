@@ -28,6 +28,26 @@ target_include_directories(runtime_components_constrained_decoding_bitmap
 )
 
 # ==============================================================================
+# LogitMask Interface & Implementation
+# ==============================================================================
+add_litertlm_library(runtime_components_constrained_decoding_logit_mask STATIC
+  logit_mask.cc
+)
+add_library(LiteRTLM::Runtime::Components::ConstrainedDecoding::LogitMask
+  ALIAS runtime_components_constrained_decoding_logit_mask)
+
+target_include_directories(runtime_components_constrained_decoding_logit_mask
+  PUBLIC
+    ${PKG_ROOT}
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+target_link_libraries(runtime_components_constrained_decoding_logit_mask
+  PUBLIC
+    LITERTLM_DEPS
+)
+
+# ==============================================================================
 # Constraint Interface
 # ==============================================================================
 add_litertlm_library(runtime_components_constrained_decoding_constraint INTERFACE)
@@ -365,6 +385,7 @@ add_library(LiteRTLM::Runtime::Components::ConstrainedDecoding
 
 target_link_libraries(runtime_components_constrained_decoding_libs INTERFACE
   LiteRTLM::Runtime::Components::ConstrainedDecoding::Bitmap
+  LiteRTLM::Runtime::Components::ConstrainedDecoding::LogitMask
   LiteRTLM::Runtime::Components::ConstrainedDecoding::ConstraintInterface
   LiteRTLM::Runtime::Components::ConstrainedDecoding::ConstraintConfig
   LiteRTLM::Runtime::Components::ConstrainedDecoding::FstConstraint
