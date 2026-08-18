@@ -657,6 +657,7 @@ cc_library(
         "@litert//litert/cc:litert_macros",
         "@litert//litert/cc:litert_options",
         "@litert//litert/cc/options:litert_gpu_options",
+        "@litert//litert/experimental/custom_ops/gated_delta_net:gated_delta_net_litert_custom_op",
         "//runtime/util:file_util",
         "//runtime/util:litert_status_util",
     ],
