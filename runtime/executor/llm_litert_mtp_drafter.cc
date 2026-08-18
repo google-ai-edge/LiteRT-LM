@@ -36,10 +36,13 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_compiled_model.h"  // from @litert
+#include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
+#include "litert/cc/litert_layout.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_model_types.h"  // from @litert
 #include "litert/cc/litert_options.h"  // from @litert
+#include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
 #include "runtime/components/model_resources.h"
@@ -77,6 +80,38 @@ absl::StatusOr<std::unique_ptr<Sampler>> CreateGreedySampler(
   return CreateSampler(backend, output_heads, std::move(sampler_params),
                        env.Get(), sequence_size, vocab_size,
                        activation_data_type);
+}
+
+absl::StatusOr<TensorBuffer> CreateFP16OutputBuffer(
+    Environment& env, CompiledModel& compiled_model, size_t signature_index,
+    absl::string_view output_name, size_t output_index) {
+  LITERT_ASSIGN_OR_RETURN(
+      std::vector<Layout> runtime_layouts,
+      compiled_model.GetOutputTensorLayouts(signature_index,
+                                            /*update_allocation=*/true));
+  // Use runtime layout.
+  Layout runtime_layout = runtime_layouts[output_index];
+  LITERT_ASSIGN_OR_RETURN(
+      auto requirements,
+      compiled_model.GetOutputBufferRequirements(signature_index, output_name));
+  LITERT_ASSIGN_OR_RETURN(auto strides, requirements.Strides());
+  if (!strides.empty()) {
+    auto dims = runtime_layout.Dimensions();
+    runtime_layout = Layout(litert::Dimensions(dims.begin(), dims.end()),
+                            litert::Strides(strides.begin(), strides.end()));
+  }
+  RankedTensorType new_tensor_type(litert::ElementType::Float16,
+                                   std::move(runtime_layout));
+  LITERT_ASSIGN_OR_RETURN(size_t size, requirements.BufferSize());
+  LITERT_ASSIGN_OR_RETURN(auto buffer_types, requirements.SupportedTypes());
+  if (buffer_types.empty()) {
+    return absl::InternalError("No supported buffer types found.");
+  }
+  auto buffer_type = buffer_types[0];
+  LITERT_ASSIGN_OR_RETURN(
+      auto buffer, TensorBuffer::CreateManaged(
+                       env, buffer_type, std::move(new_tensor_type), size));
+  return buffer;
 }
 
 absl::Status ConcatenateEmbeddingsAndActivations(
@@ -184,7 +219,9 @@ LlmLiteRtMtpDrafter::Create(
   ActivationDataType activation_data_type =
       executor_settings.GetActivationDataType().value_or(
           ActivationDataType::FLOAT16);
-
+  const Backend backend = executor_settings.GetBackend();
+  bool use_fp16_precision = backend == Backend::GPU &&
+                            activation_data_type == ActivationDataType::FLOAT16;
   auto cache_suffix = std::string(ExecutorSettingsBase::kMtpDrafterCacheSuffix);
   ABSL_ASSIGN_OR_RETURN(
       auto compilation_options,
@@ -224,11 +261,20 @@ LlmLiteRtMtpDrafter::Create(
       mtp_drafter_input_buffers[input_name] = std::move(input_buffer);
     }
 
-    for (absl::string_view output_name : drafter_signature.OutputNames()) {
-      LITERT_ASSIGN_OR_RETURN(auto output_buffer,
-                              compiled_model.CreateOutputBuffer(
-                                  drafter_signature.Key(), output_name));
-      mtp_drafter_output_buffers[output_name] = std::move(output_buffer);
+    for (size_t i = 0; i < drafter_signature.OutputNames().size(); ++i) {
+      absl::string_view output_name = drafter_signature.OutputNames()[i];
+      if (output_name == "logits" && use_fp16_precision) {
+        LITERT_ASSIGN_OR_RETURN(
+            auto output_buffer,
+            CreateFP16OutputBuffer(env, compiled_model, /*signature_index=*/0,
+                                   output_name, i));
+        mtp_drafter_output_buffers[output_name] = std::move(output_buffer);
+      } else {
+        LITERT_ASSIGN_OR_RETURN(auto output_buffer,
+                                compiled_model.CreateOutputBuffer(
+                                    drafter_signature.Key(), output_name));
+        mtp_drafter_output_buffers[output_name] = std::move(output_buffer);
+      }
     }
   }
 
@@ -247,14 +293,26 @@ LlmLiteRtMtpDrafter::Create(
           base_model.CreateInputBuffer(verify_signature.Key(), input_name));
       verifier_input_buffers[input_name] = std::move(input_buffer);
     }
-    for (absl::string_view output_name : verify_signature.OutputNames()) {
+    LITERT_ASSIGN_OR_RETURN(
+        size_t verify_signature_index,
+        base_model.GetSignatureIndex(kVerifySignatureRunner));
+    for (size_t i = 0; i < verify_signature.OutputNames().size(); ++i) {
+      absl::string_view output_name = verify_signature.OutputNames()[i];
       if (absl::StrContains(output_name, "kv")) {
         continue;
       }
-      LITERT_ASSIGN_OR_RETURN(
-          auto output_buffer,
-          base_model.CreateOutputBuffer(verify_signature.Key(), output_name));
-      verifier_output_buffers[output_name] = std::move(output_buffer);
+      if (output_name == "logits" && use_fp16_precision) {
+        LITERT_ASSIGN_OR_RETURN(
+            auto output_buffer,
+            CreateFP16OutputBuffer(env, base_model, verify_signature_index,
+                                   output_name, i));
+        verifier_output_buffers[output_name] = std::move(output_buffer);
+      } else {
+        LITERT_ASSIGN_OR_RETURN(
+            auto output_buffer,
+            base_model.CreateOutputBuffer(verify_signature.Key(), output_name));
+        verifier_output_buffers[output_name] = std::move(output_buffer);
+      }
     }
 
     LITERT_ASSIGN_OR_RETURN(auto input_pos_tensor_type,
@@ -268,17 +326,63 @@ LlmLiteRtMtpDrafter::Create(
       int vocab_size,
       GetVocabSizeFromLogitsTensor(verifier_output_buffers["logits"]));
 
+  ActivationDataType drafter_logits_data_type;
+  {
+    LITERT_ASSIGN_OR_RETURN(auto drafter_logits_type,
+                            mtp_drafter_output_buffers["logits"].TensorType());
+    if (drafter_logits_type.ElementType() == ElementType::Float16) {
+      drafter_logits_data_type = ActivationDataType::FLOAT16;
+    } else if (drafter_logits_type.ElementType() == ElementType::Float32) {
+      drafter_logits_data_type = ActivationDataType::FLOAT32;
+    } else {
+      return absl::InvalidArgumentError("Unsupported drafter logits type");
+    }
+  }
+
+  ActivationDataType verifier_logits_data_type;
+  {
+    LITERT_ASSIGN_OR_RETURN(auto verifier_logits_type,
+                            verifier_output_buffers["logits"].TensorType());
+    if (verifier_logits_type.ElementType() == ElementType::Float16) {
+      verifier_logits_data_type = ActivationDataType::FLOAT16;
+    } else if (verifier_logits_type.ElementType() == ElementType::Float32) {
+      verifier_logits_data_type = ActivationDataType::FLOAT32;
+    } else {
+      return absl::InvalidArgumentError("Unsupported verifier logits type");
+    }
+  }
+
+  {
+    LITERT_ASSIGN_OR_RETURN(
+        auto drafter_projected_activations_type,
+        drafter_signature.OutputTensorType("projected_activations"));
+    if (drafter_projected_activations_type.ElementType() !=
+        ElementType::Float32) {
+      return absl::InvalidArgumentError(
+          "Unsupported drafter projected activations type: must be float32");
+    }
+  }
+
+  {
+    LITERT_ASSIGN_OR_RETURN(auto verifier_activations_type,
+                            verify_signature.OutputTensorType("activations"));
+    if (verifier_activations_type.ElementType() != ElementType::Float32) {
+      return absl::InvalidArgumentError(
+          "Unsupported verifier activations type: must be float32");
+    }
+  }
+
   ABSL_ASSIGN_OR_RETURN(auto drafter_sampler,
-                        CreateGreedySampler(env, executor_settings.GetBackend(),
+                        CreateGreedySampler(env, backend,
                                             /*output_heads=*/1,
                                             /*sequence_size=*/1, vocab_size,
-                                            activation_data_type));
+                                            drafter_logits_data_type));
   ABSL_ASSIGN_OR_RETURN(
       auto verifier_sampler,
-      CreateGreedySampler(env, executor_settings.GetBackend(),
+      CreateGreedySampler(env, backend,
                           /*output_heads=*/1,
                           /*sequence_size=*/num_draft_steps + 1, vocab_size,
-                          activation_data_type));
+                          verifier_logits_data_type));
 
   LITERT_ASSIGN_OR_RETURN(auto drafter_id_tensor,
                           CreateTensorBuffer<int32_t>({1, 1}));
