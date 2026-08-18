@@ -184,6 +184,11 @@ public struct ConversationConfig {
   public let enableToolCallStreaming: Bool
   public let thinkingConfig: ThinkingConfig?
   public let automaticToolCalling: Bool
+  /// Tool descriptions as the engine's own JSON, for a host that already has a
+  /// tool registry of its own. `tools` builds this from Swift types via
+  /// reflection, which a host whose tools are values rather than types cannot
+  /// use. When set, this is passed through untouched.
+  public let toolsJsonOverride: String?
   public let enableResponseFormat: Bool
   public let visualTokenBudget: Int32?
 
@@ -210,6 +215,7 @@ public struct ConversationConfig {
     enableToolCallStreaming: Bool = false,
     thinkingConfig: ThinkingConfig? = nil,
     automaticToolCalling: Bool = true,
+    toolsJsonOverride: String? = nil,
     enableResponseFormat: Bool = false,
     visualTokenBudget: Int32? = nil
   ) {
@@ -228,6 +234,7 @@ public struct ConversationConfig {
     self.enableToolCallStreaming = enableToolCallStreaming
     self.thinkingConfig = thinkingConfig
     self.automaticToolCalling = automaticToolCalling
+    self.toolsJsonOverride = toolsJsonOverride
     self.enableResponseFormat = enableResponseFormat
     self.visualTokenBudget = visualTokenBudget
   }

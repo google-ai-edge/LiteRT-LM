@@ -212,6 +212,92 @@
       XCTAssertLessThan(mango.lowerBound, zebra.lowerBound)
     }
 
+    // MARK: - Tool list encoding
+
+    /// The chat template `tojson`s each entry verbatim into the prompt, so the
+    /// string this produces is exactly what the model reads. `.bare` is LFM2's
+    /// trained format: no OpenAI envelope, `name` first, schema keys in trained
+    /// order, none of FM's bookkeeping left anywhere in it.
+    func testBareToolListMatchesTheTrainedFormat() throws {
+      let json = LiteRTLMExecutor.toolsJson(try Self.toolDefinitions(), style: .bare)
+
+      XCTAssertFalse(json.contains("\"function\""))
+      XCTAssertFalse(json.contains("\"title\""))
+      XCTAssertFalse(json.contains("x-order"))
+      XCTAssertFalse(json.contains("additionalProperties"))
+      XCTAssertTrue(
+        json.hasPrefix("[{\"name\": \"get_temperature\", \"description\": "),
+        "entries must open with the tool's name, not with whatever key sorts first: \(json)")
+      let type = try XCTUnwrap(json.range(of: "{\"type\": \"object\""))
+      let properties = try XCTUnwrap(json.range(of: "\"properties\"", range: type.lowerBound..<json.endIndex))
+      let required = try XCTUnwrap(json.range(of: "\"required\"", range: type.lowerBound..<json.endIndex))
+      XCTAssertLessThan(type.lowerBound, properties.lowerBound)
+      XCTAssertLessThan(properties.lowerBound, required.lowerBound)
+
+      // Still one valid JSON array of one object per tool.
+      let parsed = try XCTUnwrap(
+        try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [[String: Any]])
+      XCTAssertEqual(parsed.count, 2)
+      XCTAssertEqual(parsed.map { $0["name"] as? String }, ["get_temperature", "open_url"])
+    }
+
+    /// The default stays OpenAI-shaped for models (Qwen, Gemma) trained on the
+    /// envelope — but FM's bookkeeping is stripped there too.
+    func testDefaultToolListKeepsTheEnvelope() throws {
+      let json = LiteRTLMExecutor.toolsJson(try Self.toolDefinitions())
+      let parsed = try XCTUnwrap(
+        try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [[String: Any]])
+      XCTAssertEqual(parsed.count, 2)
+      for entry in parsed {
+        XCTAssertEqual(entry["type"] as? String, "function")
+        XCTAssertNotNil(entry["function"])
+      }
+      XCTAssertFalse(json.contains("\"title\""))
+      XCTAssertFalse(json.contains("additionalProperties"))
+    }
+
+    /// Embedded in the prompt, so it must not vary run to run — dictionary key
+    /// order is randomized per process.
+    func testToolListEncodingIsDeterministic() throws {
+      let tools = try Self.toolDefinitions()
+      let first = LiteRTLMExecutor.toolsJson(tools, style: .bare)
+      for _ in 0..<32 {
+        XCTAssertEqual(LiteRTLMExecutor.toolsJson(tools, style: .bare), first)
+      }
+    }
+
+    /// A tool without arguments is a name and a description — an empty
+    /// `parameters` object invites the model to invent some.
+    func testToolWithoutArgumentsCarriesNoParameters() throws {
+      let json = LiteRTLMExecutor.toolsJson(
+        [Transcript.ToolDefinition(tool: NoArgumentsTool())], style: .bare)
+      XCTAssertFalse(json.contains("\"parameters\""))
+      XCTAssertFalse(json.contains("\"required\""))
+    }
+
+    // MARK: - Thinking leak
+
+    /// The budget force-closes `</think>` mid-thought; the model keeps
+    /// reasoning into the visible stream and closes again itself. Only what
+    /// follows the last closer is the answer.
+    func testVisibleAnswerDropsLeakedThought() {
+      XCTAssertEqual(
+        LiteRTLMExecutor.visibleAnswer(
+          "I am near CAFE LA. Let me answer as requested.</think>You are near CAFE LA."),
+        "You are near CAFE LA.")
+      XCTAssertEqual(
+        LiteRTLMExecutor.visibleAnswer("first</think>middle</think> final answer "),
+        "final answer")
+    }
+
+    func testVisibleAnswerKeepsPlainRepliesAndEmptiesThoughtOnly() {
+      XCTAssertEqual(
+        LiteRTLMExecutor.visibleAnswer("  You are in Chuo, Osaka. "), "You are in Chuo, Osaka.")
+      XCTAssertEqual(LiteRTLMExecutor.visibleAnswer("all of this was reasoning</think>"), "")
+      XCTAssertEqual(LiteRTLMExecutor.visibleAnswer("<think>still open, never closed"),
+        "still open, never closed")
+    }
+
     // MARK: - Tool routing
 
     /// The router grammar must stay inside object/properties/required/enum/string.
@@ -298,6 +384,14 @@
       var url: String
     }
     func call(arguments: Arguments) async throws -> String { "opened" }
+  }
+
+  @available(iOS 27.0, macOS 27.0, *)
+  private struct NoArgumentsTool: FoundationModels.Tool {
+    let name = "get_time"
+    let description = "The current time."
+    @Generable struct Arguments {}
+    func call(arguments: Arguments) async throws -> String { "12:00" }
   }
 
   /// Properties intentionally declared out of alphabetical order, so the sorted
