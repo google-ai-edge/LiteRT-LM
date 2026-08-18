@@ -336,23 +336,14 @@ absl::Status VisionLiteRtCompiledModelExecutor::VisionAdapter::Initialize(
 
   LITERT_ASSIGN_OR_RETURN(compiled_model_,
                           CompiledModel::Create(env_, model_.Get(), options));
-  // This check verifies if signature 0 of the adapter model contains any
-  // inputs. This is used to infer whether input buffers should be created at
-  // initialization time (for single-signature models that use signature 0 by
-  // default) or skipped (for multi-signature models like ViT that create
-  // input buffers on-demand in `Encode` for a specific signature). This is a
-  // more direct check than relying on `patch_num_shrink_factor` which was
-  // previously used to detect multi-signature models.
+  // Create signature-0 input buffers when the adapter has inputs. Single-
+  // signature adapters pre-allocate here; multi-signature adapters create
+  // buffers on-demand in Encode. Adapters may take only `features`, or
+  // additional named tensors matched to encoder outputs at Encode time.
   auto signature_or = model_.GetSignature(0);
   if (signature_or.HasValue() && !signature_or->InputNames().empty()) {
     LITERT_ASSIGN_OR_RETURN(input_buffers_,
                             compiled_model_.CreateInputBuffers(0));
-    if (input_buffers_.size() != 1) {
-      return absl::InvalidArgumentError(
-          absl::StrCat("The Vision Adapter model must have exactly one input "
-                       "buffer but got ",
-                       input_buffers_.size()));
-    }
   }
 
   return absl::OkStatus();
@@ -396,22 +387,40 @@ litert::lm::VisionLiteRtCompiledModelExecutor::Create(
                               vision_executor_properties, *resources));
   }
 
-  LITERT_ASSIGN_OR_RETURN(auto tensor_type,
-                          vision_encoder_model->GetInputTensorType(0, 0));
-  const auto& dimensions = tensor_type.Layout().Dimensions();
-  if (dimensions.size() == 4) {
-    if (dimensions[3] < 3 || dimensions[3] > 4) {
-      return absl::FailedPreconditionError(
-          absl::StrCat("Expected encoder input tensor to have 3 or 4 channels",
-                       " but got ", dimensions[3]));
+  // Derive the expected input dimension for the single-tensor Encode overload.
+  // Multi-signature patchified encoders (whose per-signature input dims differ)
+  // are driven exclusively through the map-based Encode overload, so this is
+  // only meaningful for the single-signature, single-input case. Guard against
+  // patchified/multi-input shapes (e.g. images [1,L,patch_dim] where dim[2] is
+  // the patch vector, not a spatial size) which would otherwise produce a
+  // misleading value.
+  std::vector<int> expected_input_dimension;
+  {
+    LITERT_ASSIGN_OR_RETURN(auto tensor_type,
+                            vision_encoder_model->GetInputTensorType(0, 0));
+    const auto& dimensions = tensor_type.Layout().Dimensions();
+    auto input_names_or = vision_encoder_model->GetSignatureInputNames(0);
+    const bool single_sig_single_input =
+        vision_encoder_model->GetNumSignatures() == 1 &&
+        input_names_or.HasValue() && input_names_or->size() == 1;
+    if (single_sig_single_input) {
+      if (dimensions.size() == 4) {
+        if (dimensions[3] < 3 || dimensions[3] > 4) {
+          return absl::FailedPreconditionError(absl::StrCat(
+              "Expected encoder input tensor to have 3 or 4 channels",
+              " but got ", dimensions[3]));
+        }
+      } else if (dimensions.size() != 3) {
+        return absl::FailedPreconditionError(absl::StrCat(
+            "Expected encoder input tensor to have 3 or 4 dimensions, but got ",
+            dimensions.size()));
+      }
+      expected_input_dimension =
+          std::vector<int>(dimensions.begin(), dimensions.end());
     }
-  } else if (dimensions.size() != 3) {
-    return absl::FailedPreconditionError(absl::StrCat(
-        "Expected encoder input tensor to have 3 or 4 dimensions, but got ",
-        dimensions.size()));
+    // else: multi-signature / multi-input (patchified) encoder — the
+    // single-tensor Encode overload is not used; leave the dimension empty.
   }
-  auto expected_input_dimension =
-      std::vector<int>(dimensions.begin(), dimensions.end());
 
   return absl::WrapUnique(new VisionLiteRtCompiledModelExecutor(
       vision_executor_settings, env, std::move(resources),
@@ -500,10 +509,15 @@ absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(
                                              num_patches_from_input));
   std::optional<int> adapter_signature_index;
   if (vision_adapter_ != nullptr) {
-    ABSL_ASSIGN_OR_RETURN(adapter_signature_index,
-                          GetVitSignatureIndex(vision_adapter_->GetModel(),
-                                               vision_executor_properties_,
-                                               num_patches_from_input));
+    if (vision_adapter_->GetModel().GetNumSignatures() > 1) {
+      ABSL_ASSIGN_OR_RETURN(adapter_signature_index,
+                            GetVitSignatureIndex(vision_adapter_->GetModel(),
+                                                 vision_executor_properties_,
+                                                 num_patches_from_input));
+    } else {
+      // Single-signature adapter: fixed output length, no patch-count dispatch.
+      adapter_signature_index = 0;
+    }
   }
   LITERT_ASSIGN_OR_RETURN(
       auto encoder_input_buffers,
@@ -612,6 +626,17 @@ absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(
     // Round up the number of patches so we have at least one patch.
     num_patches = (num_patches_from_input + patch_num_shrink_factor - 1) /
                   patch_num_shrink_factor;
+  } else if (vision_executor_properties_.patch_num_shrink_factor.has_value()) {
+    // Mask is present but marks valid *patches*, not soft tokens. For fused
+    // fixed-token encoders, token count = ceil(padded_L / shrink) instead.
+    LITERT_ASSIGN_OR_RETURN(auto positions_tensor_type,
+                            input_maps.at(kPositionsXy).TensorType());
+    const int& num_patches_from_input =
+        positions_tensor_type.Layout().Dimensions()[1];
+    const int& patch_num_shrink_factor =
+        vision_executor_properties_.patch_num_shrink_factor.value();
+    num_patches = (num_patches_from_input + patch_num_shrink_factor - 1) /
+                  patch_num_shrink_factor;
   } else {
     LITERT_ASSIGN_OR_RETURN(
         auto mask_tensor_type,
@@ -645,9 +670,53 @@ absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(
         auto adapter_input_buffers,
         vision_adapter_->GetCompiledModel().CreateInputBuffers(
             *adapter_signature_index));
-    adapter_input_buffers[0].Clear();
-    LITERT_RETURN_IF_ERROR(adapter_input_buffers[0].Write<float>(absl::MakeSpan(
-        encoder_output_data.data(), num_patches * encoder_output_dim)));
+
+    // Feed the adapter's `features` input from the encoder. Extra adapter
+    // inputs (if any) are matched by name to other encoder outputs.
+    LITERT_ASSIGN_OR_RETURN(
+        auto adapter_signature,
+        vision_adapter_->GetModel().GetSignature(*adapter_signature_index));
+    const auto adapter_input_names = adapter_signature.InputNames();
+    std::string features_input_name =
+        adapter_input_names.empty() ? "" : std::string(adapter_input_names[0]);
+    for (const auto& name : adapter_input_names) {
+      if (name == kFeatures) {
+        features_input_name = std::string(name);
+        break;
+      }
+    }
+    LITERT_ASSIGN_OR_RETURN(
+        auto features_input_index,
+        vision_adapter_->GetCompiledModel().FindInputIndex(
+            *adapter_signature_index, features_input_name));
+    adapter_input_buffers[features_input_index].Clear();
+    LITERT_RETURN_IF_ERROR(
+        adapter_input_buffers[features_input_index].Write<float>(absl::MakeSpan(
+            encoder_output_data.data(), num_patches * encoder_output_dim)));
+
+    // Match remaining adapter inputs by name against the encoder outputs.
+    for (const auto& name : adapter_input_names) {
+      if (name == features_input_name) {
+        continue;
+      }
+      auto enc_out_index = vision_encoder_->GetCompiledModel().FindOutputIndex(
+          encoder_signature_index, name);
+      if (!enc_out_index.HasValue()) {
+        return absl::InvalidArgumentError(absl::StrCat(
+            "Vision adapter input '", name,
+            "' has no matching encoder output to feed it."));
+      }
+      LITERT_ASSIGN_OR_RETURN(
+          auto adapter_input_index,
+          vision_adapter_->GetCompiledModel().FindInputIndex(
+              *adapter_signature_index, name));
+      adapter_input_buffers[adapter_input_index].Clear();
+      LITERT_ASSIGN_OR_RETURN(auto extra_span,
+                              ReferTensorBufferAsSpan<float>(
+                                  encoder_output_buffers[enc_out_index.Value()]));
+      LITERT_RETURN_IF_ERROR(
+          adapter_input_buffers[adapter_input_index].Write<float>(extra_span));
+    }
 
     LITERT_RETURN_IF_ERROR(vision_adapter_->GetCompiledModel().Run(
         *adapter_signature_index,
@@ -657,17 +726,19 @@ absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(
     LITERT_ASSIGN_OR_RETURN(auto adapter_output_tensor_type,
                             adapter_output_tensor_buffers[0].TensorType());
 
-    // The embedding size is the last dimension of the adapter output,
-    // regardless of whether the adapter produces a 2-D ([num_tokens,
-    // embedding_size]) or 3-D ([batch_size, num_tokens, embedding_size])
-    // tensor.
+    // Embedding size is the last adapter-output dim (2-D or 3-D layout). Cap
+    // rows at min(requested tokens, adapter capacity) so a longer encoder
+    // feature sequence cannot overrun a fixed-length adapter output.
     const auto& adapter_output_dimensions =
         adapter_output_tensor_type.Layout().Dimensions();
     const int adapter_output_embedding_size =
         adapter_output_dimensions[adapter_output_dimensions.size() - 1];
+    const int adapter_output_rows =
+        adapter_output_dimensions[adapter_output_dimensions.size() - 2];
+    const int output_rows = std::min(num_patches, adapter_output_rows);
     RankedTensorType output_tensor_type(
         GetElementType<float>(),
-        Layout(Dimensions({1, num_patches, adapter_output_embedding_size})));
+        Layout(Dimensions({1, output_rows, adapter_output_embedding_size})));
     LITERT_ASSIGN_OR_RETURN(
         auto output_tensor,
         TensorBuffer::CreateManaged(
@@ -686,14 +757,14 @@ absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(
 
     LITERT_RETURN_IF_ERROR(
         output_tensor.Write<float>(absl::MakeConstSpan(adapter_output_data)
-                                       .subspan(0, num_patches * output_dim)));
+                                       .subspan(0, output_rows * output_dim)));
 #else
     LITERT_ASSIGN_OR_RETURN(
         auto adapter_output_data,
         ReferTensorBufferAsSpan<float>(adapter_output_tensor_buffers[0]));
 
     LITERT_RETURN_IF_ERROR(output_tensor.Write<float>(
-        adapter_output_data.subspan(0, num_patches * output_dim)));
+        adapter_output_data.subspan(0, output_rows * output_dim)));
 #endif  // !defined(LITERT_DISABLE_NPU)
 
     return ExecutorVisionData(std::move(output_tensor),

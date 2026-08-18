@@ -60,3 +60,30 @@ alias(
     name = "image_preprocessor_utils",
     actual = "//support/preprocessor:image_preprocessor_utils",
 )
+
+# MiniCPM-V multi-slice vision preprocessing (PIL-faithful bicubic resize +
+# normalize + reshape_by_patch). Resampler pos_embed is baked into the fused
+# vision tflite; this target only produces image strips and ViT position ids.
+
+cc_library(
+    name = "pil_resize",
+    srcs = ["pil_resize.cc"],
+    hdrs = ["pil_resize.h"],
+    deps = ["@com_google_absl//absl/base:core_headers"],
+)
+
+cc_library(
+    name = "minicpmv_image_preprocess",
+    srcs = ["minicpmv_image_preprocess.cc"],
+    hdrs = ["minicpmv_image_preprocess.h"],
+    deps = [
+        ":pil_resize",
+        # stb_image.h declarations; the STB_IMAGE_IMPLEMENTATION symbols come
+        # from :stb_image_preprocessor (the single TU that compiles them).
+        ":stb_image_preprocessor",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:str_format",
+        "@stb//:stb_image",
+    ],
+)

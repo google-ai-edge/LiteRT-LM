@@ -31,6 +31,7 @@ message LlmModelType {
     Qwen2p5 qwen2p5 = 7;
     Gemma4 gemma4 = 8;
     FastVlm fast_vlm = 9;
+    Minicpmv minicpmv = 10;
     Lfm2 lfm2 = 11;
     MiniCPM5 minicpm5 = 12;
   }
@@ -315,6 +316,13 @@ message FastVlm {
   // The width of the image tensor that image preprocessor should resize to.
   int32 image_tensor_width = 4;
 
+  reserved 1, 2;
+}
+
+// MiniCPM-V-4 multimodal (fused SigLIP + Resampler vision + Llama LLM).
+// Slice geometry and soft-token count are fixed by the bundled vision tflite
+// and compile-time constants in the runtime; no per-bundle proto fields.
+message Minicpmv {
   reserved 1, 2;
 }
 
