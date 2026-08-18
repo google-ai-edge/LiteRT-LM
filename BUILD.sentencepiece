@@ -3,7 +3,6 @@ package(default_visibility = ["//visibility:public"])
 proto_library(
     name = "sentencepiece_proto",
     srcs = ["src/sentencepiece.proto"],
-    strip_import_prefix = "src",
 )
 
 cc_proto_library(
@@ -14,7 +13,6 @@ cc_proto_library(
 proto_library(
     name = "sentencepiece_model_proto",
     srcs = ["src/sentencepiece_model.proto"],
-    strip_import_prefix = "src",
 )
 
 cc_proto_library(
