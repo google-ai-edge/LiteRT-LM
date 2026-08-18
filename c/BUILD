@@ -26,6 +26,8 @@ package(
 licenses(["notice"])
 
 exports_files([
+    "capabilities.cc",
+    "capabilities.h",
     "conversation.cc",
     "conversation.h",
     "embedding_engine.cc",
@@ -89,7 +91,16 @@ EMBEDDING_ENGINE_DEPS = [
     "//support/preprocessor:audio_preprocessor_miniaudio",
 ]
 
-ENGINE_COMMON_DEPS = ENGINE_LITE_COMMON_DEPS + CONVERSATION_DEPS + EMBEDDING_ENGINE_DEPS
+CAPABILITIES_DEPS = [
+    "//schema/capabilities",
+]
+
+ENGINE_COMMON_DEPS = (
+    ENGINE_LITE_COMMON_DEPS +
+    CONVERSATION_DEPS +
+    EMBEDDING_ENGINE_DEPS +
+    CAPABILITIES_DEPS
+)
 
 # Header library for engine + session C API.
 cc_library(
@@ -102,6 +113,14 @@ cc_library(
 cc_library(
     name = "conversation_headers",
     hdrs = ["conversation.h"],
+    visibility = ["//visibility:public"],
+    deps = [":engine_headers"],
+)
+
+# Header library for capabilities C API.
+cc_library(
+    name = "capabilities_headers",
+    hdrs = ["capabilities.h"],
     visibility = ["//visibility:public"],
     deps = [":engine_headers"],
 )
@@ -213,11 +232,13 @@ cc_test(
 cc_library(
     name = "engine",
     srcs = [
+        "capabilities.cc",
         "conversation.cc",
         "embedding_engine.cc",
         "engine.cc",
     ],
     hdrs = [
+        "capabilities.h",
         "conversation.h",
         "embedding_engine.h",
         "engine.h",
@@ -233,11 +254,13 @@ cc_library(
 cc_library(
     name = "engine_cpu",
     srcs = [
+        "capabilities.cc",
         "conversation.cc",
         "embedding_engine.cc",
         "engine.cc",
     ],
     hdrs = [
+        "capabilities.h",
         "conversation.h",
         "embedding_engine.h",
         "engine.h",
@@ -245,6 +268,27 @@ cc_library(
     visibility = ["//visibility:public"],
     deps = ENGINE_COMMON_DEPS + [
         "//runtime/core:engine_advanced_impl_cpu_only",
+    ],
+)
+
+cc_test(
+    name = "capabilities_test",
+    srcs = ["capabilities_test.cc"],
+    data = [
+        "//runtime/testdata",
+    ],
+    tags = ["requires-mac-inputs:hard"],
+    target_compatible_with = select({
+        "@platforms//os:ios": [],
+        "@platforms//os:linux": [],
+        "@platforms//os:osx": [],
+        "@platforms//os:windows": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":capabilities_headers",
+        ":engine",
+        "@com_google_googletest//:gtest_main",
     ],
 )
 
@@ -306,6 +350,7 @@ cc_test(
 cc_binary(
     name = "litert-lm",
     srcs = [
+        "capabilities.cc",
         "conversation.cc",
         "embedding_engine.cc",
         "engine.cc",
@@ -331,6 +376,7 @@ cc_binary(
     }),
     linkshared = 1,
     deps = ENGINE_COMMON_DEPS + [
+        ":capabilities_headers",
         ":conversation_headers",
         ":embedding_engine_headers",
         ":engine_headers",

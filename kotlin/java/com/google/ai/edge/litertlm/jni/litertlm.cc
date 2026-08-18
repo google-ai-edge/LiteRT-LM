@@ -33,6 +33,7 @@
 #include "nlohmann/json_fwd.hpp"  // from @nlohmann_json
 #include "litert/cc/internal/scoped_file.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
+#include "c/capabilities.h"
 #include "runtime/components/logits_processor/constrained_decoding/llg_constraint_config.h"
 #include "runtime/components/logits_processor/no_repeat_ngram_config.h"
 #include "runtime/components/logits_processor/repetition_penalty_config.h"
@@ -59,7 +60,6 @@
 #include "runtime/util/litert_lm_loader.h"
 #include "runtime/util/litert_util.h"
 #include "runtime/util/logging.h"
-#include "schema/capabilities/capabilities_c.h"
 
 // For Windows, __declspec( dllexport ) is required to export function in .dll.
 // https://learn.microsoft.com/en-us/cpp/cpp/using-dllimport-and-dllexport-in-cpp-classes?view=msvc-170

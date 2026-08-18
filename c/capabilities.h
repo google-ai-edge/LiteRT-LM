@@ -12,26 +12,43 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef THIRD_PARTY_ODML_LITERT_LM_SCHEMA_CAPABILITIES_CAPABILITIES_C_H_
-#define THIRD_PARTY_ODML_LITERT_LM_SCHEMA_CAPABILITIES_CAPABILITIES_C_H_
+#ifndef THIRD_PARTY_ODML_LITERT_LM_C_CAPABILITIES_H_
+#define THIRD_PARTY_ODML_LITERT_LM_C_CAPABILITIES_H_
 
 #include <stdbool.h>
+
+#if defined(__APPLE__)
+#include "engine.h"  // NOLINT
+#else
+#include "c/engine.h"
+#endif
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 // Opaque struct representing a loaded LiteRT-LM file for capability checks.
+//
+// Added in version 0.2.0.
 typedef struct LiteRtLmLoadedFile LiteRtLmLoadedFile;
 
 // Loads a LiteRT-LM file from the given path for capability queries.
 // Returns NULL if the file cannot be opened.
+//
+// Added in version 0.2.0.
+LITERT_LM_C_API_EXPORT
 LiteRtLmLoadedFile* litert_lm_loaded_file_create(const char* litertlm_path);
 
 // Deletes a loaded LiteRT-LM file.
+//
+// Added in version 0.2.0.
+LITERT_LM_C_API_EXPORT
 void litert_lm_loaded_file_delete(LiteRtLmLoadedFile* loaded_file);
 
 // Returns true if the loaded LiteRT-LM file supports speculative decoding.
+//
+// Added in version 0.2.0.
+LITERT_LM_C_API_EXPORT
 bool litert_lm_loaded_file_has_speculative_decoding_support(
     LiteRtLmLoadedFile* loaded_file);
 
@@ -39,4 +56,4 @@ bool litert_lm_loaded_file_has_speculative_decoding_support(
 }  // extern "C"
 #endif
 
-#endif  // THIRD_PARTY_ODML_LITERT_LM_SCHEMA_CAPABILITIES_CAPABILITIES_C_H_
+#endif  // THIRD_PARTY_ODML_LITERT_LM_C_CAPABILITIES_H_

@@ -39,6 +39,8 @@ cc_binary(
         "@nlohmann_json//:json",
         "@litert//litert/c/internal:litert_logging",
         "@litert//litert/cc/internal:scoped_file",
+        "//c:capabilities_headers",
+        "//c:engine",
         "//runtime/components:model_resources",
         "//runtime/components:prompt_template",
         "//runtime/components/logits_processor:no_repeat_ngram_config",
@@ -61,8 +63,6 @@ cc_binary(
         "//runtime/util:litert_lm_loader",
         "//runtime/util:litert_util",
         "//runtime/util:logging",
-        "//runtime/util:scoped_file",
-        "//schema/capabilities:capabilities_c",
         "//schema/core:litertlm_header_schema",
         "@litert//tflite:minimal_logging",
     ] + select({

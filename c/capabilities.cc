@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "schema/capabilities/capabilities_c.h"
+#include "c/capabilities.h"
 
 #include <fstream>
 #include <ios>

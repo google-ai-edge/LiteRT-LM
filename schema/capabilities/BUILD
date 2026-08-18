@@ -24,22 +24,10 @@ package(
 
 licenses(["notice"])
 
-exports_files(["capabilities_c.h"])
-
 cc_library(
     name = "capabilities",
     hdrs = ["capabilities.h"],
     deps = [":speculative_decoding"],
-)
-
-cc_library(
-    name = "capabilities_c",
-    srcs = ["capabilities_c.cc"],
-    hdrs = ["capabilities_c.h"],
-    deps = [
-        ":capabilities",
-    ],
-    alwayslink = True,
 )
 
 cc_library(

@@ -13,24 +13,6 @@
 # limitations under the License.
 
 # ==============================================================================
-# Capabilities C
-# ==============================================================================
-add_litertlm_library(schema_capabilities_c STATIC
-  capabilities_c.cc
-)
-add_library(LiteRTLM::Schema::Capabilities::CapabilitiesC ALIAS schema_capabilities_c)
-
-target_include_directories(schema_capabilities_c
-  PRIVATE
-    "${LITERTLM_GENERATED_SRC_DIR}"
-    "${LITERTLM_INCLUDE_PATHS}"
-)
-target_link_libraries(schema_capabilities_c
-  PUBLIC
-    LITERTLM_DEPS
-)
-
-# ==============================================================================
 # Speculative Decoding
 # ==============================================================================
 add_litertlm_library(runtime_core_speculative_decoding STATIC
@@ -58,6 +40,5 @@ add_library(schema_capabilities_libs INTERFACE)
 add_library(LiteRTLM::Schema::Capabilities ALIAS schema_capabilities_libs)
 
 target_link_libraries(schema_capabilities_libs INTERFACE
-  LiteRTLM::Schema::Capabilities::CapabilitiesC
   LiteRTLM::Schema::Speculative::SpeculativeDecoding
 )
