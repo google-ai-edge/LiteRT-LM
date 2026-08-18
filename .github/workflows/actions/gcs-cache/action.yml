@@ -21,6 +21,10 @@ inputs:
     description: 'Whether to force refresh/clear the cache'
     required: false
     default: 'false'
+  target-subdirs:
+    description: 'Specific subdirectories to compress (space-separated). Defaults to "." (everything)'
+    required: false
+    default: '.'
 
 outputs:
   cache-hit:
@@ -94,7 +98,11 @@ runs:
 
         echo "Compressing cache artifacts from $TARGET_DIR..."
         rm -f ./$ARCHIVE_NAME
-        tar -czf ./$ARCHIVE_NAME -C "$TARGET_DIR" .
+
+        # Pull in the subdirs input
+        TARGET_SUBDIRS="${{ inputs.target-subdirs }}"
+
+        tar -czf ./$ARCHIVE_NAME -C "$TARGET_DIR" $TARGET_SUBDIRS
 
         if [ -f "./$ARCHIVE_NAME" ]; then
             echo "Uploading cache archive to $BUCKET_URL/$CACHE_KEY.tar.gz..."

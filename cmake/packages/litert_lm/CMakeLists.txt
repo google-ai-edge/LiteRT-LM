@@ -147,18 +147,6 @@ add_compile_options("-fpermissive")
 # --- Optional
 option(_unverified_targets "Builds executables that are still in progress" OFF)
 
-option(ENABLE_CCACHE "Enables the use of ccache" OFF)
-if(${ENABLE_CCACHE} STREQUAL "ON")
-  find_program(CCACHE_PROGRAM ccache)
-  if(CCACHE_PROGRAM)
-      message(STATUS "Using CCache to speed up builds")
-      set(CMAKE_C_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
-      set(CMAKE_CXX_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
-  else()
-      message(WARNING "CCache not found. Install it (`sudo apt install ccache`) for faster builds!")
-  endif()
-endif()
-
 include("${LITERTLM_MODULES_DIR}/utils.cmake")
 include("${LITERTLM_MODULES_DIR}/macros.cmake")
 include("${LITERTLM_CMAKE_PACKAGES_DIR}/packages.cmake")

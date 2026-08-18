@@ -18,6 +18,18 @@ project(LiteRT-LM-Orchestrator LANGUAGES NONE)
 
 include(ExternalProject)
 
+option(ENABLE_CCACHE "Enables the use of ccache" OFF)
+if(${ENABLE_CCACHE} STREQUAL "ON")
+  find_program(CCACHE_PROGRAM ccache)
+  if(CCACHE_PROGRAM)
+      message(STATUS "Using CCache to speed up builds")
+      set(CMAKE_C_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
+      set(CMAKE_CXX_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
+  else()
+      message(WARNING "CCache not found. Install it (`sudo apt install ccache`) for faster builds!")
+  endif()
+endif()
+
 set(LITERTLM_PROJECT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}" CACHE PATH "LiteRT-LM: Absolute path to the repository root")
 set(LITERTLM_TOOLCHAIN_ARGS "" CACHE STRING "String used to define parameterized CMAKE_ARGS")
 set(LITERTLM_PREBUILD_DIR "${CMAKE_CURRENT_BINARY_DIR}/prebuild")

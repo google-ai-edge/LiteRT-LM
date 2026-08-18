@@ -15,8 +15,10 @@
 name: "ML-CI-Linux-CMake"
 on:
   push:
+    branches:
+      - main
     tags:
-    - v*.*.*
+      - v*.*.*
   pull_request:
     branches:
     - main
@@ -28,6 +30,13 @@ on:
         description: 'Refresh cache to remove unused files'
         type: boolean
         default: true
+      MyHaltForConnectionInput:
+        description: 'Should this workflow run wait for a remote connection?'
+        type: choice
+        default: 'no'
+        options:
+          - 'yes'
+          - 'no'
 defaults:
   run:
     shell: bash
@@ -47,13 +56,15 @@ jobs:
       actions: write
       contents: write
     env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
       MODEL_KEY: gemma-4-E2B-it.litertlm
       MODEL_PATH: ./models/gemma4
-      MODEL_URL: gs://litert-lm-cicd/models/gemma4/gemma-4-E2B-it.litertlm
-
-      GH_TOKEN: ${{ github.token }}
+      GCS_MODEL_URL: gs://litert-lm-cicd/models/gemma4/gemma-4-E2B-it.litertlm
+      HF_MODEL_URL: https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm
+      GH_TOKEN: ${{ github.token }}  # For gh release upload.
       REFRESH_CACHE: ${{ github.event_name == 'schedule' ||
                          (github.event_name == 'workflow_dispatch' && inputs.REFRESH_CACHE) }}
+
     steps:
       - name: Install System Dependencies
         env:
@@ -87,30 +98,46 @@ jobs:
       - name: Set up Google Cloud SDK
         uses: google-github-actions/setup-gcloud@98ddc00a17442e89a24bbf282954a3b65ce6d200 # v2.1.0
 
-
       - name: Set up Build Cache GCS keys
         id: cache-keys
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          COMMIT_SHA: ${{ github.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          OS: ${{ runner.os }}
         run: |
-          # Greedy hash of the core source directories used for both builds
           SRC_HASH="${{ hashFiles('c/**', 'runtime/**', 'schema/**', 'support/**') }}"
 
-          # Prebuild keys
-          PREBUILD_RESTORE_KEY="${{ runner.os }}-prebuild-$SRC_HASH"
-          PREBUILD_KEY="$PREBUILD_RESTORE_KEY-${{ github.sha }}"
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            # --- PR BUILDS ---
+            # RESTORE from the exact commit of the main branch we are targeting
+            # SAVE to a unique PR key using the source hash and merge commit
 
-          # LiteRT LM keys
-          LITERT_LM_RESTORE_KEY="${{ runner.os }}-litert_lm-$SRC_HASH"
-          LITERT_LM_KEY="$LITERT_LM_RESTORE_KEY-${{ github.sha }}"
+            echo "CCACHE_KEY=$OS-ccache-pr-$COMMIT_SHA" >> "$GITHUB_OUTPUT"
+            echo "CCACHE_RESTORE_KEY=$OS-ccache-main-$BASE_SHA" >> "$GITHUB_OUTPUT"
 
-          echo "PREBUILD_RESTORE_KEY=$PREBUILD_RESTORE_KEY" >> "$GITHUB_OUTPUT"
-          echo "PREBUILD_KEY=$PREBUILD_KEY" >> "$GITHUB_OUTPUT"
+            echo "PREBUILD_KEY=$OS-prebuild-pr-$SRC_HASH-$COMMIT_SHA" >> "$GITHUB_OUTPUT"
+            echo "PREBUILD_RESTORE_KEY=$OS-prebuild-main-$BASE_SHA" >> "$GITHUB_OUTPUT"
 
-          echo "LITERT_LM_RESTORE_KEY=$LITERT_LM_RESTORE_KEY" >> "$GITHUB_OUTPUT"
-          echo "LITERT_LM_KEY=$LITERT_LM_KEY" >> "$GITHUB_OUTPUT"
+            echo "LITERT_LM_KEY=$OS-litert_lm-pr-$SRC_HASH-$COMMIT_SHA" >> "$GITHUB_OUTPUT"
+            echo "LITERT_LM_RESTORE_KEY=$OS-litert_lm-main-$BASE_SHA" >> "$GITHUB_OUTPUT"
+          else
+            # --- SCHEDULED / MAIN BRANCH BUILDS ---
+            # Both SAVE and RESTORE use the exact main branch commit SHA.
+            # This creates the immutable "base artifacts" for PRs to consume.
+
+            echo "CCACHE_KEY=$OS-ccache-main-$COMMIT_SHA" >> "$GITHUB_OUTPUT"
+            echo "CCACHE_RESTORE_KEY=$OS-ccache-main-$COMMIT_SHA" >> "$GITHUB_OUTPUT"
+
+            echo "PREBUILD_KEY=$OS-prebuild-main-$COMMIT_SHA" >> "$GITHUB_OUTPUT"
+            echo "PREBUILD_RESTORE_KEY=$OS-prebuild-main-$COMMIT_SHA" >> "$GITHUB_OUTPUT"
+
+            echo "LITERT_LM_KEY=$OS-litert_lm-main-$COMMIT_SHA" >> "$GITHUB_OUTPUT"
+            echo "LITERT_LM_RESTORE_KEY=$OS-litert_lm-main-$COMMIT_SHA" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Check Android Toolchain Cache in GCS
         uses: ./.github/workflows/actions/gcs-cache
-
         id: android-cache
         with:
           mode: 'restore'
@@ -145,7 +172,6 @@ jobs:
 
       - name: Save Android Toolchain Cache to GCS
         uses: ./.github/workflows/actions/gcs-cache
-
         with:
           mode: 'save'
           target-dir: '$HOME/android-sdk'
@@ -170,19 +196,17 @@ jobs:
 
       - name: Restore CCache from GCS
         uses: ./.github/workflows/actions/gcs-cache
-
         id: restore-ccache
         with:
           mode: 'restore'
-          target-dir: '.ccache'
+          target-dir: '.cache/ccache'
           bucket-url: 'gs://litert-lm-cicd/caches/linux/cmake/ccache'
-          cache-key: '${{ steps.ccache-keys.outputs.CACHE_KEY }}'
-          restore-key: '${{ steps.ccache-keys.outputs.CACHE_RESTORE_KEY_0 }}'
+          cache-key: '${{ steps.cache-keys.outputs.CCACHE_KEY }}'
+          restore-key: '${{ steps.cache-keys.outputs.CCACHE_RESTORE_KEY }}'
           refresh-cache: ${{ env.REFRESH_CACHE }}
 
       - name: Restore Prebuild Cache
         uses: ./.github/workflows/actions/gcs-cache
-
         id: restore-prebuild
         with:
           mode: 'restore'
@@ -194,7 +218,6 @@ jobs:
 
       - name: Restore LiteRT LM Cache
         uses: ./.github/workflows/actions/gcs-cache
-
         id: restore-litert-lm
         with:
           mode: 'restore'
@@ -204,15 +227,35 @@ jobs:
           restore-key: ${{ steps.cache-keys.outputs.LITERT_LM_RESTORE_KEY }}
           refresh-cache: ${{ env.REFRESH_CACHE }}
 
-
       - name: Download Model
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          TARGET_DIR=${{ env.MODEL_PATH }}
-          BUCKET_URL=${{ env.MODEL_URL }}
-          MODEL_KEY=${{ env.MODEL_KEY }}
-          mkdir -p "$TARGET_DIR"
-          gcloud storage cp "$BUCKET_URL" "$TARGET_DIR/$MODEL_KEY"
+          mkdir -p "$MODEL_PATH"
 
+          echo "Attempting to download from GCS..."
+          if ! gcloud storage cp "$GCS_MODEL_URL" "$MODEL_PATH/$MODEL_KEY"; then
+            echo "Model not found in GCS. Falling back to Hugging Face..."
+
+            if [ -z "$HF_TOKEN" ]; then
+              echo "Error: HF_TOKEN is missing or empty. Failing workflow."
+              exit 1
+            fi
+
+            echo "Downloading model from Hugging Face..."
+            curl --http1.1 -L -C - --retry 5 --retry-delay 3 --retry-all-errors -f \
+              --oauth2-bearer "$HF_TOKEN" \
+              -o "$MODEL_PATH/$MODEL_KEY" \
+              "$HF_MODEL_URL"
+
+            echo "Uploading the downloaded model to GCS for future runs..."
+            gcloud storage cp "$MODEL_PATH/$MODEL_KEY" "$GCS_MODEL_URL"
+          fi
+
+      - name: Wait For MyRemoteConnection
+        uses: google-ml-infra/actions/ci_connection@7f5ca0c263a81ed09ea276524c1b9192f1304e3c
+        with:
+          halt-dispatch-input: ${{ inputs.MyHaltForConnectionInput }}
 
       - name: Configure CMake
         run: |
@@ -229,23 +272,22 @@ jobs:
 
       - name: Save CCache to GCS
         uses: ./.github/workflows/actions/gcs-cache
-
         with:
           mode: 'save'
           target-dir: '.ccache'
           bucket-url: 'gs://litert-lm-cicd/caches/linux/cmake/ccache'
-          cache-key: ${{ steps.ccache-keys.outputs.CACHE_KEY }}           # <--- UPDATED
-          restore-key: ${{ steps.ccache-keys.outputs.CACHE_RESTORE_KEY_0 }} # <--- UPDATED
+          cache-key: ${{ steps.cache-keys.outputs.CCACHE_KEY }}
+          restore-key: ${{ steps.cache-keys.outputs.CCACHE_RESTORE_KEY }}
           refresh-cache: ${{ env.REFRESH_CACHE }}
         env:
           CACHE_HIT: ${{ steps.restore-ccache.outputs.cache-hit }}
 
       - name: Save Prebuild Cache
         uses: ./.github/workflows/actions/gcs-cache
-
         with:
           mode: 'save'
           target-dir: 'cmake/build/prebuild/build'
+          target-subdirs: 'external'
           bucket-url: 'gs://litert-lm-cicd/caches/linux/cmake/prebuild'
           cache-key: ${{ steps.cache-keys.outputs.PREBUILD_KEY }}
           restore-key: ${{ steps.cache-keys.outputs.PREBUILD_RESTORE_KEY }}
@@ -255,10 +297,10 @@ jobs:
 
       - name: Save LiteRT LM Cache
         uses: ./.github/workflows/actions/gcs-cache
-
         with:
           mode: 'save'
           target-dir: 'cmake/build/litert_lm/build'
+          target-subdirs: 'c runtime schema support'
           bucket-url: 'gs://litert-lm-cicd/caches/linux/cmake/litert-lm'
           cache-key: ${{ steps.cache-keys.outputs.LITERT_LM_KEY }}
           restore-key: ${{ steps.cache-keys.outputs.LITERT_LM_RESTORE_KEY }}
