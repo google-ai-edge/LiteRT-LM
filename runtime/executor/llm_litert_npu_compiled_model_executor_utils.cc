@@ -15,22 +15,52 @@
 #include "runtime/executor/llm_litert_npu_compiled_model_executor_utils.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <optional>
+#include <ostream>
+#include <set>
 #include <string>
 #include <type_traits>
 #include <utility>
 #include <vector>
 
+#include "absl/algorithm/container.h"  // from @com_google_absl
 #include "absl/base/prefetch.h"  // from @com_google_absl
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
+#include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/match.h"  // from @com_google_absl
+#include "absl/strings/numbers.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "litert/c/litert_common.h"  // from @litert
 #include "litert/c/litert_layout.h"  // from @litert
+#include "litert/c/litert_model_types.h"  // from @litert
+#include "litert/c/litert_op_code.h"  // from @litert
+#include "litert/cc/internal/litert_extended_model.h"  // from @litert
+#include "litert/cc/litert_common.h"  // from @litert
+#include "litert/cc/litert_compiled_model.h"  // from @litert
+#include "litert/cc/litert_element_type.h"  // from @litert
+#include "litert/cc/litert_environment.h"  // from @litert
+#include "litert/cc/litert_expected.h"  // from @litert
 #include "litert/cc/litert_layout.h"  // from @litert
+#include "litert/cc/litert_macros.h"  // from @litert
+#include "litert/cc/litert_options.h"  // from @litert
+#include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
+#include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
+#include "runtime/components/model_resources.h"
+#include "runtime/executor/llm_executor_io_types.h"
+#include "runtime/executor/llm_executor_processed_tokens.h"
+#include "runtime/executor/llm_executor_settings.h"
+#include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/status_macros.h"  // IWYU pragma: keep NOLINT
 #include "tflite/types/half.h"  // from @litert
 
@@ -46,15 +76,24 @@
 #include <limits>  // IWYU pragma: keep NOLINT
 #endif
 
-#include "absl/status/status.h"  // from @com_google_absl
-#include "absl/status/statusor.h"  // from @com_google_absl
-#include "absl/strings/str_cat.h"  // from @com_google_absl
-#include "litert/cc/litert_element_type.h"  // from @litert
-#include "litert/cc/litert_macros.h"  // from @litert
-#include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
-#include "litert/cc/litert_tensor_buffer.h"  // from @litert
-
 namespace litert::lm {
+
+namespace {
+class CompiledModelWrapper : public ::litert::CompiledModel {
+ public:
+  static ::litert::Expected<::litert::CompiledModel> Create(
+      ::litert::Environment& env, const LiteRtModel litert_model,
+      ::litert::Options& compilation_options) {
+    return ::litert::CompiledModel::Create(env, litert_model,
+                                           compilation_options);
+  }
+  static ::litert::Expected<::litert::CompiledModel> Create(
+      ::litert::Environment& env, const LiteRtModel litert_model,
+      litert::HwAccelerators accelerators) {
+    return ::litert::CompiledModel::Create(env, litert_model, accelerators);
+  }
+};
+}  // namespace
 
 static constexpr int kSliceOuterRank = 2;
 #if defined(__ANDROID__) && defined(__ARM_NEON)
@@ -1680,6 +1719,2027 @@ absl::Status WriteAndPadPleEmbeddings(::litert::TensorBuffer& buffer,
       std::memset(
           padding_ptr, 0,
           (num_tokens_to_fill - seq_pos_size) * ple_dim * sizeof(float));
+    }
+  }
+  return absl::OkStatus();
+}
+
+// -----------------------------------------------------------------------------
+// CPU Options & Embedder Context Creation
+// -----------------------------------------------------------------------------
+
+litert::Expected<litert::Options> CreateLiteRtCpuOptions(
+    const LlmExecutorSettings& settings) {
+  LITERT_ASSIGN_OR_RETURN(auto options, ::litert::Options::Create());
+  options.SetHardwareAccelerators(litert::HwAccelerators::kCpu);
+  return options;
+}
+
+// Creates LiteRT options for NPU accelerator.
+litert::Expected<litert::Options> CreateLiteRtNpuOptions(
+    const LlmExecutorSettings& settings) {
+  LITERT_ASSIGN_OR_RETURN(auto options, ::litert::Options::Create());
+  options.SetHardwareAccelerators(litert::HwAccelerators::kNpu |
+                                  litert::HwAccelerators::kCpu);
+  // TODO: saliltambe - Bug: 498622107
+#if defined(__ANDROID__)
+  LITERT_ASSIGN_OR_RETURN(::litert::qualcomm::QualcommOptions & qnn_opts,
+                          options.GetQualcommOptions());
+  qnn_opts.SetLogLevel(::litert::qualcomm::QualcommOptions::LogLevel::kOff);
+  qnn_opts.SetHtpPerformanceMode(
+      ::litert::qualcomm::QualcommOptions::HtpPerformanceMode::kBurst);
+  LITERT_ASSIGN_OR_RETURN(auto& google_tensor_opts,
+                          options.GetGoogleTensorOptions());
+  google_tensor_opts.SetPerformanceMode(
+      ::litert::google_tensor::GoogleTensorOptions::PerformanceMode::kBurst);
+#endif
+  return options;
+}
+
+std::ostream& operator<<(std::ostream& os, const LatencyStats& stats) {
+  auto safe_tokens_per_sec = [](uint32_t num_tokens,
+                                uint64_t latency_us) -> float {
+    if (latency_us == 0) return 0.0f;
+    return (static_cast<float>(num_tokens) * 1000000.0f) /
+           static_cast<float>(latency_us);
+  };
+  auto safe_percentage = [](uint64_t part_us, uint64_t total_us) -> float {
+    if (total_us == 0) return 0.0f;
+    return (static_cast<float>(part_us) * 100.0f) /
+           static_cast<float>(total_us);
+  };
+
+  os << "\n" << "====== PREFILL STATS ======";
+  os << "\n" << "Total prefill latency [us]: " << stats.prefill_e2e_latency_us;
+  os << "\n" << "(e2e) Prefill num tokens: " << stats.prefill_num_tokens;
+  os << "\n"
+     << "(e2e) Prefill tokens per second: "
+     << safe_tokens_per_sec(stats.prefill_num_tokens,
+                            stats.prefill_e2e_latency_us);
+  os << "\n"
+     << "(TransformerStackOnly) Prefill tokens per second: "
+     << safe_tokens_per_sec(stats.prefill_num_tokens,
+                            stats.prefill_llm_inference_latency_us);
+
+  os << "\n" << "------ Prefill breakdown ------";
+  os << "\n"
+     << "Total prefill prepare input tensors latency [us]: "
+     << stats.prefill_prepare_input_latency_us << " ("
+     << safe_percentage(stats.prefill_prepare_input_latency_us,
+                        stats.prefill_e2e_latency_us)
+     << "%)";
+  os << "\n"
+     << "Total prefill embedder inference latency [us]: "
+     << stats.prefill_embedder_inference_latency_us << " ("
+     << safe_percentage(stats.prefill_embedder_inference_latency_us,
+                        stats.prefill_e2e_latency_us)
+     << "%)";
+  if (stats.prefill_embedder_per_layer_inference_latency_us > 0) {
+    os << "\n"
+       << "Total prefill embedder per layer inference latency [us]: "
+       << stats.prefill_embedder_per_layer_inference_latency_us << " ("
+       << safe_percentage(stats.prefill_embedder_per_layer_inference_latency_us,
+                          stats.prefill_e2e_latency_us)
+       << "%)";
+  }
+  os << "\n"
+     << "Total prefill rope inference latency [us]: "
+     << stats.prefill_rope_inference_latency_us << " ("
+     << safe_percentage(stats.prefill_rope_inference_latency_us,
+                        stats.prefill_e2e_latency_us)
+     << "%)";
+  os << "\n"
+     << "Total prefill mask inference latency [us]: "
+     << stats.prefill_mask_inference_latency_us << " ("
+     << safe_percentage(stats.prefill_mask_inference_latency_us,
+                        stats.prefill_e2e_latency_us)
+     << "%)";
+  os << "\n"
+     << "Total prefill llm inference latency [us]: "
+     << stats.prefill_llm_inference_latency_us << " ("
+     << safe_percentage(stats.prefill_llm_inference_latency_us,
+                        stats.prefill_e2e_latency_us)
+     << "%)";
+  os << "\n"
+     << "Total prefill cache update inference latency [us]: "
+     << stats.prefill_cache_update_inference_latency_us << " ("
+     << safe_percentage(stats.prefill_cache_update_inference_latency_us,
+                        stats.prefill_e2e_latency_us)
+     << "%)";
+
+  os << "\n\n" << "====== DECODE STATS ======";
+  os << "\n" << "Total decode latency [us]: " << stats.decode_e2e_latency_us;
+  os << "\n" << "(e2e) Decode num tokens: " << stats.decode_num_tokens;
+  os << "\n"
+     << "(e2e) Decode tokens per second (avg): "
+     << safe_tokens_per_sec(stats.decode_num_tokens,
+                            stats.decode_e2e_latency_us);
+  if (stats.mtp_num_draft_tokens > 0) {
+    os << "\n"
+       << "Speculative decoding acceptance rate [%]: "
+       << (float)stats.mtp_num_accepted_tokens / stats.mtp_num_draft_tokens *
+              100;
+  }
+  os << "\n"
+     << "(TransformerStackOnly) Decode tokens per second: "
+     << safe_tokens_per_sec(stats.decode_num_tokens,
+                            stats.decode_llm_inference_latency_us);
+
+  os << "\n" << "------ Decode breakdown ------";
+  os << "\n"
+     << "Total decode prepare input tensors latency [us]: "
+     << stats.decode_prepare_input_latency_us << " ("
+     << safe_percentage(stats.decode_prepare_input_latency_us,
+                        stats.decode_e2e_latency_us)
+     << "%)";
+  os << "\n"
+     << "Total decode embedder inference latency [us]: "
+     << stats.decode_embedder_inference_latency_us << " ("
+     << safe_percentage(stats.decode_embedder_inference_latency_us,
+                        stats.decode_e2e_latency_us)
+     << "%)";
+  if (stats.decode_embedder_per_layer_inference_latency_us > 0) {
+    os << "\n"
+       << "Total decode embedder per layer inference latency [us]: "
+       << stats.decode_embedder_per_layer_inference_latency_us << " ("
+       << safe_percentage(stats.decode_embedder_per_layer_inference_latency_us,
+                          stats.decode_e2e_latency_us)
+       << "%)";
+  }
+  os << "\n"
+     << "Total decode rope inference latency [us]: "
+     << stats.decode_rope_inference_latency_us << " ("
+     << safe_percentage(stats.decode_rope_inference_latency_us,
+                        stats.decode_e2e_latency_us)
+     << "%)";
+  os << "\n"
+     << "Total decode mask inference latency [us]: "
+     << stats.decode_mask_inference_latency_us << " ("
+     << safe_percentage(stats.decode_mask_inference_latency_us,
+                        stats.decode_e2e_latency_us)
+     << "%)";
+  os << "\n"
+     << "Total decode llm inference latency [us]: "
+     << stats.decode_llm_inference_latency_us << " ("
+     << safe_percentage(stats.decode_llm_inference_latency_us,
+                        stats.decode_e2e_latency_us)
+     << "%)";
+  os << "\n"
+     << "Total decode cache update inference latency [us]: "
+     << stats.decode_cache_update_inference_latency_us << " ("
+     << safe_percentage(stats.decode_cache_update_inference_latency_us,
+                        stats.decode_e2e_latency_us)
+     << "%)";
+  os << "\n"
+     << "Total decode sampling latency [us]: "
+     << stats.decode_sampling_latency_us << " ("
+     << safe_percentage(stats.decode_sampling_latency_us,
+                        stats.decode_e2e_latency_us)
+     << "%)";
+  if (stats.decode_mtp_rejection_sampling_latency_us > 0) {
+    os << "\n"
+       << "Total decode MTP rejection sampling latency [us]: "
+       << stats.decode_mtp_rejection_sampling_latency_us << " ("
+       << safe_percentage(stats.decode_mtp_rejection_sampling_latency_us,
+                          stats.decode_e2e_latency_us)
+       << "%)";
+  }
+  if (stats.decode_mtp_activation_copy_latency_us > 0) {
+    os << "\n"
+       << "Total decode MTP activation copy latency [us]: "
+       << stats.decode_mtp_activation_copy_latency_us << " ("
+       << safe_percentage(stats.decode_mtp_activation_copy_latency_us,
+                          stats.decode_e2e_latency_us)
+       << "%)";
+  }
+  os << "\n"
+     << "Total decode token queue latency [us]: "
+     << stats.decode_token_queue_latency_us << " ("
+     << safe_percentage(stats.decode_token_queue_latency_us,
+                        stats.decode_e2e_latency_us)
+     << "%)";
+
+  return os;
+}
+
+namespace {
+template <typename ContextT>
+absl::StatusOr<ContextT> CreateEmbedderContextHelper(
+    ::litert::Environment& env, const litert::Model& embedder_model,
+    absl::string_view prefill_signature, absl::string_view decode_signature,
+    absl::string_view verify_signature, absl::string_view input_name,
+    absl::string_view output_name, absl::string_view decoder_output_name,
+    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+        text_decoder_prefill_input_buffers,
+    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+        text_decoder_decode_input_buffers,
+    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+        text_decoder_verify_input_buffers,
+    const LlmExecutorSettings& settings) {
+  LITERT_ASSIGN_OR_RETURN(auto options, CreateLiteRtCpuOptions(settings));
+  LITERT_ASSIGN_OR_RETURN(
+      CompiledModel embedder_compiled_model,
+      CompiledModelWrapper::Create(env, embedder_model.Get(), options));
+
+  absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
+      prefill_input_buffers;
+  absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
+      prefill_output_buffers;
+  absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
+      decode_input_buffers;
+  absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
+      decode_output_buffers;
+  absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
+      verify_input_buffers;
+  absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
+      verify_output_buffers;
+
+  LITERT_ASSIGN_OR_RETURN(
+      prefill_input_buffers[input_name],
+      embedder_compiled_model.CreateInputBuffer(prefill_signature, input_name));
+  prefill_input_buffers[input_name].Clear();
+
+  LITERT_ASSIGN_OR_RETURN(
+      prefill_output_buffers[output_name],
+      text_decoder_prefill_input_buffers[decoder_output_name].Duplicate());
+
+  LITERT_ASSIGN_OR_RETURN(
+      decode_input_buffers[input_name],
+      embedder_compiled_model.CreateInputBuffer(decode_signature, input_name));
+  decode_input_buffers[input_name].Clear();
+
+  LITERT_ASSIGN_OR_RETURN(
+      decode_output_buffers[output_name],
+      text_decoder_decode_input_buffers[decoder_output_name].Duplicate());
+
+  if (embedder_compiled_model.FindSignature(verify_signature)) {
+    LITERT_ASSIGN_OR_RETURN(verify_input_buffers[input_name],
+                            embedder_compiled_model.CreateInputBuffer(
+                                verify_signature, input_name));
+    verify_input_buffers[input_name].Clear();
+
+    if (text_decoder_verify_input_buffers.contains(decoder_output_name)) {
+      LITERT_ASSIGN_OR_RETURN(
+          verify_output_buffers[output_name],
+          text_decoder_verify_input_buffers[decoder_output_name].Duplicate());
+    } else {
+      LITERT_ASSIGN_OR_RETURN(verify_output_buffers[output_name],
+                              embedder_compiled_model.CreateOutputBuffer(
+                                  verify_signature, output_name));
+    }
+  }
+
+  return ContextT(
+      std::move(embedder_compiled_model), std::move(prefill_input_buffers),
+      std::move(prefill_output_buffers), std::move(decode_input_buffers),
+      std::move(decode_output_buffers), std::move(verify_input_buffers),
+      std::move(verify_output_buffers));
+}
+}  // namespace
+
+absl::StatusOr<EmbedderContext> NpuEmbedder::CreateEmbedderContext(
+    ::litert::Environment& env, const litert::Model& embedder_model,
+    const ResolvedPrefillSignatures& prefill_signatures,
+    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+        text_decoder_prefill_input_buffers,
+    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+        text_decoder_decode_input_buffers,
+    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+        text_decoder_verify_input_buffers,
+    const LlmExecutorSettings& settings) {
+  return CreateEmbedderContextHelper<EmbedderContext>(
+      env, embedder_model, prefill_signatures.embedder,
+      EmbedderSignatures::kDecodeEmbedder, EmbedderSignatures::kVerifyEmbedder,
+      EmbedderSignatures::kEmbedderInput, EmbedderSignatures::kEmbedderOutput,
+      TextDecoderSignatures::kInputEmbeddings,
+      text_decoder_prefill_input_buffers, text_decoder_decode_input_buffers,
+      text_decoder_verify_input_buffers, settings);
+}
+
+absl::StatusOr<EmbedderPerLayerContext>
+NpuEmbedder::CreateEmbedderPerLayerContext(
+    ::litert::Environment& env, const litert::Model& embedder_model,
+    const ResolvedPrefillSignatures& prefill_signatures,
+    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+        text_decoder_prefill_input_buffers,
+    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+        text_decoder_decode_input_buffers,
+    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+        text_decoder_verify_input_buffers,
+    const LlmExecutorSettings& settings) {
+  return CreateEmbedderContextHelper<EmbedderPerLayerContext>(
+      env, embedder_model, prefill_signatures.embedder_per_layer,
+      EmbedderPerLayerSignatures::kDecodeEmbedderPerLayer,
+      EmbedderPerLayerSignatures::kVerifyEmbedderPerLayer,
+      EmbedderPerLayerSignatures::kEmbedderInput,
+      EmbedderPerLayerSignatures::kEmbedderOutput, kPerLayerEmbedderTensor,
+      text_decoder_prefill_input_buffers, text_decoder_decode_input_buffers,
+      text_decoder_verify_input_buffers, settings);
+}
+
+// -----------------------------------------------------------------------------
+// NpuEmbedder Implementation
+// -----------------------------------------------------------------------------
+
+absl::StatusOr<NpuEmbedder> NpuEmbedder::Create(
+    ::litert::Environment& env, ModelResources& resources,
+    const LlmExecutorSettings& executor_settings,
+    const ResolvedPrefillSignatures& prefill_signatures,
+    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+        text_decoder_prefill_input_buffers,
+    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+        text_decoder_decode_input_buffers,
+    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+        text_decoder_verify_input_buffers,
+    bool has_per_layer_embeddings) {
+  LITERT_ASSIGN_OR_RETURN(auto embedder_lrt_model,
+                          resources.GetTFLiteModel(ModelType::kTfLiteEmbedder));
+  LITERT_ASSIGN_OR_RETURN(
+      auto embedder_context,
+      CreateEmbedderContext(
+          env, *embedder_lrt_model, prefill_signatures,
+          text_decoder_prefill_input_buffers, text_decoder_decode_input_buffers,
+          text_decoder_verify_input_buffers, executor_settings));
+
+  std::unique_ptr<EmbeddingLookupManager> embedding_lookup_manager = nullptr;
+  const bool has_vision_or_audio =
+      resources.GetTFLiteModel(ModelType::kTfLiteVisionEncoder).ok() ||
+      resources.GetTFLiteModel(ModelType::kTfLiteAudioEncoderHw).ok();
+
+  if (has_per_layer_embeddings || has_vision_or_audio) {
+    absl::flat_hash_map<int, const Model*> end_of_multi_modal_embedding_models;
+    auto add_multi_modal_end_model = [&](ModelType type, int token) {
+      auto model_buffer = resources.GetTFLiteModelBuffer(type);
+      if (model_buffer.ok() && !model_buffer->empty()) {
+        auto model = resources.GetTFLiteModel(type);
+        if (model.ok()) {
+          end_of_multi_modal_embedding_models[token] = *model;
+        }
+      }
+    };
+
+    add_multi_modal_end_model(ModelType::kTfLiteEndOfAudio,
+                              litert::lm::ExecutorAudioData::kEndToken);
+    add_multi_modal_end_model(ModelType::kTfLiteEndOfVision,
+                              litert::lm::ExecutorVisionData::kEndToken);
+
+    LITERT_ASSIGN_OR_RETURN(
+        embedding_lookup_manager,
+        EmbeddingLookupManager::Create(env, embedder_lrt_model,
+                                       end_of_multi_modal_embedding_models,
+                                       true, "decode_embedder"));
+  }
+
+  std::optional<EmbedderPerLayerContext> embedder_per_layer_context =
+      std::nullopt;
+  HWPleParams ple_params;
+  const litert::Model* embedder_per_layer_model = nullptr;
+
+  if (has_per_layer_embeddings) {
+    LITERT_ASSIGN_OR_RETURN(
+        embedder_per_layer_model,
+        resources.GetTFLiteModel(ModelType::kTfLitePerLayerEmbedder));
+
+    bool use_hw_ple_for_npu = false;
+    auto npu_config_status = executor_settings.GetBackendConfig<NpuConfig>();
+    if (npu_config_status.ok()) {
+      use_hw_ple_for_npu = npu_config_status->use_hw_ple_for_npu;
+    }
+
+    if (use_hw_ple_for_npu) {
+      ple_params.use_hw_ple = true;
+      auto extended_model = ExtendedModel::CreateFromNonOwnedHandle(
+          embedder_per_layer_model->Get());
+      LITERT_ASSIGN_OR_RETURN(auto subgraph, extended_model.MainSubgraph());
+      auto ops = subgraph.Ops();
+      for (const auto& op : ops) {
+        if (op.Code() == kLiteRtOpCodeTflEmbeddingLookup) {
+          LITERT_ASSIGN_OR_RETURN(auto table_tensor, op.Input(1));
+          LITERT_ASSIGN_OR_RETURN(auto table_type_info,
+                                  table_tensor.RankedTensorType());
+          auto table_dims = table_type_info.Layout().Dimensions();
+          int col_size = table_dims[1];
+
+          if (ple_params.num_tables == 0) {
+            ple_params.ple_table_element_type = table_tensor.ElementType();
+            ple_params.ple_embedding_dim = col_size;
+          } else {
+            RET_CHECK_EQ((int)ple_params.ple_table_element_type,
+                         (int)table_tensor.ElementType())
+                << "All embedding tables must have the same element type";
+            RET_CHECK_EQ(ple_params.ple_embedding_dim, col_size)
+                << "All embedding tables must have the same embedding "
+                   "dimension.";
+          }
+
+          auto weights = table_tensor.Weights();
+          ple_params.ple_table_ptrs.push_back(weights.Bytes().data());
+
+          HWQuantizationParams qp;
+          qp.scales = nullptr;
+          qp.is_per_channel = false;
+
+          if (table_tensor.HasQuantization()) {
+            auto q_type = table_tensor.QTypeId();
+            if (q_type == kLiteRtQuantizationPerTensor) {
+              auto q_params = table_tensor.PerTensorQuantization();
+              ple_params.ple_per_tensor_scales.push_back(q_params.scale);
+              qp.scales = &ple_params.ple_per_tensor_scales.back();
+            } else if (q_type == kLiteRtQuantizationPerChannel) {
+              auto q_params = table_tensor.PerChannelQuantization();
+              qp.scales = q_params.scales;
+              qp.is_per_channel = true;
+            }
+          }
+          ple_params.ple_quant_params.push_back(qp);
+          ple_params.num_tables++;
+        }
+        if (op.Code() == kLiteRtOpCodeTflMul) {
+          auto inputs = op.Inputs();
+          for (const auto& input : inputs) {
+            if (input.HasWeights()) {
+              auto type_info = input.RankedTensorType();
+              if (type_info.HasValue() && type_info.Value().ElementType() ==
+                                              litert::ElementType::Float32) {
+                auto weights = input.Weights();
+                const float* vals =
+                    reinterpret_cast<const float*>(weights.Bytes().data());
+                ple_params.mul_scale = vals[0];
+              }
+            }
+          }
+        }
+      }
+
+      auto outputs = subgraph.Outputs();
+      RET_CHECK(!outputs.empty()) << "No outputs in subgraph";
+      auto output_tensor = outputs[0];
+      ple_params.output_type = output_tensor.ElementType();
+
+      if (ple_params.output_type == litert::ElementType::Int16) {
+        RET_CHECK(output_tensor.HasQuantization());
+        auto q_params = output_tensor.PerTensorQuantization();
+        ple_params.output_scale = q_params.scale;
+        ple_params.final_zero_point = q_params.zero_point;
+      }
+    } else {
+      LITERT_ASSIGN_OR_RETURN(
+          embedder_per_layer_context,
+          CreateEmbedderPerLayerContext(
+              env, *embedder_per_layer_model, prefill_signatures,
+              text_decoder_prefill_input_buffers,
+              text_decoder_decode_input_buffers,
+              text_decoder_verify_input_buffers, executor_settings));
+    }
+  }
+
+  std::optional<::litert::TensorBuffer> prefill_embeddings_buffer;
+  if (text_decoder_prefill_input_buffers.contains(
+          TextDecoderSignatures::kInputEmbeddings)) {
+    LITERT_ASSIGN_OR_RETURN(prefill_embeddings_buffer,
+                            text_decoder_prefill_input_buffers
+                                [TextDecoderSignatures::kInputEmbeddings]
+                                    .Duplicate());
+  }
+
+  std::optional<::litert::TensorBuffer> decode_embeddings_buffer;
+  if (text_decoder_decode_input_buffers.contains(
+          TextDecoderSignatures::kInputEmbeddings)) {
+    LITERT_ASSIGN_OR_RETURN(decode_embeddings_buffer,
+                            text_decoder_decode_input_buffers
+                                [TextDecoderSignatures::kInputEmbeddings]
+                                    .Duplicate());
+  }
+
+  std::optional<::litert::TensorBuffer> verify_embeddings_buffer;
+  if (text_decoder_verify_input_buffers.contains(
+          TextDecoderSignatures::kInputEmbeddings)) {
+    LITERT_ASSIGN_OR_RETURN(verify_embeddings_buffer,
+                            text_decoder_verify_input_buffers
+                                [TextDecoderSignatures::kInputEmbeddings]
+                                    .Duplicate());
+  }
+
+  std::optional<::litert::TensorBuffer> prefill_ple_buffer;
+  if (text_decoder_prefill_input_buffers.contains(kPerLayerEmbedderTensor)) {
+    LITERT_ASSIGN_OR_RETURN(
+        prefill_ple_buffer,
+        text_decoder_prefill_input_buffers[kPerLayerEmbedderTensor]
+            .Duplicate());
+  }
+
+  std::optional<::litert::TensorBuffer> decode_ple_buffer;
+  if (text_decoder_decode_input_buffers.contains(kPerLayerEmbedderTensor)) {
+    LITERT_ASSIGN_OR_RETURN(
+        decode_ple_buffer,
+        text_decoder_decode_input_buffers[kPerLayerEmbedderTensor].Duplicate());
+  }
+
+  std::optional<::litert::TensorBuffer> verify_ple_buffer;
+  if (text_decoder_verify_input_buffers.contains(kPerLayerEmbedderTensor)) {
+    LITERT_ASSIGN_OR_RETURN(
+        verify_ple_buffer,
+        text_decoder_verify_input_buffers[kPerLayerEmbedderTensor].Duplicate());
+  }
+
+  return Create(
+      std::move(embedding_lookup_manager), std::move(embedder_context),
+      std::move(embedder_per_layer_context),
+      /*per_layer_embedding_lookup_manager=*/nullptr, embedder_per_layer_model,
+      std::move(ple_params), std::move(prefill_embeddings_buffer),
+      std::move(decode_embeddings_buffer), std::move(verify_embeddings_buffer),
+      std::move(prefill_ple_buffer), std::move(decode_ple_buffer),
+      std::move(verify_ple_buffer));
+}
+
+absl::StatusOr<NpuEmbedder> NpuEmbedder::Create(
+    std::unique_ptr<EmbeddingLookupManager> embedding_lookup_manager,
+    std::optional<EmbedderContext> embedder_context,
+    std::optional<EmbedderPerLayerContext> embedder_per_layer_context,
+    std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup_manager,
+    const litert::Model* embedder_per_layer_model, HWPleParams ple_params,
+    std::optional<::litert::TensorBuffer> prefill_embeddings_buffer,
+    std::optional<::litert::TensorBuffer> decode_embeddings_buffer,
+    std::optional<::litert::TensorBuffer> verify_embeddings_buffer,
+    std::optional<::litert::TensorBuffer> prefill_ple_buffer,
+    std::optional<::litert::TensorBuffer> decode_ple_buffer,
+    std::optional<::litert::TensorBuffer> verify_ple_buffer) {
+  NpuEmbedder embedder;
+  embedder.embedding_lookup_manager_ = std::move(embedding_lookup_manager);
+  embedder.embedder_context_ = std::move(embedder_context);
+  embedder.embedder_per_layer_context_ = std::move(embedder_per_layer_context);
+  embedder.per_layer_embedding_lookup_manager_ =
+      std::move(per_layer_embedding_lookup_manager);
+  embedder.embedder_per_layer_model_ = embedder_per_layer_model;
+  embedder.ple_params_ = std::move(ple_params);
+  embedder.prefill_embeddings_buffer_ = std::move(prefill_embeddings_buffer);
+  embedder.decode_embeddings_buffer_ = std::move(decode_embeddings_buffer);
+  embedder.verify_embeddings_buffer_ = std::move(verify_embeddings_buffer);
+  embedder.prefill_ple_buffer_ = std::move(prefill_ple_buffer);
+  embedder.decode_ple_buffer_ = std::move(decode_ple_buffer);
+  embedder.verify_ple_buffer_ = std::move(verify_ple_buffer);
+  return embedder;
+}
+
+absl::Status NpuEmbedder::UpdateMultiModalEmbeddings(
+    const ExecutorInputs& inputs) {
+  if (embedding_lookup_manager_ != nullptr) {
+    return embedding_lookup_manager_->UpdateMultiModalEmbeddings(inputs);
+  }
+  return absl::OkStatus();
+}
+
+absl::Status NpuEmbedder::CleanupMultiModalEmbeddings() {
+  if (embedding_lookup_manager_ != nullptr) {
+    return embedding_lookup_manager_->CleanupMultiModalEmbeddings();
+  }
+  return absl::OkStatus();
+}
+
+std::vector<float> NpuEmbedder::GetDefaultEmbeddingVector() const {
+  if (embedding_lookup_manager_ != nullptr) {
+    auto* text_lookup = embedding_lookup_manager_->GetTextEmbeddingLookup();
+    if (text_lookup != nullptr) {
+      return text_lookup->GetDefaultEmbeddingVector();
+    }
+  }
+  return {};
+}
+
+absl::Status NpuEmbedder::RunPrefill(
+    absl::string_view embedder_signature, const TokenData* pending_token,
+    absl::Span<const int> processed_input_tokens, TokenData* last_input_token) {
+  if (embedding_lookup_manager_ != nullptr) {
+    RET_CHECK(prefill_embeddings_buffer_.has_value())
+        << "Prefill embeddings buffer not available.";
+    // Step 1: If a pending token from a previous prefill/turn is present, its
+    // embedding was already looked up in the previous step. Copy it to slot 0.
+    size_t offset = 0;
+    if (pending_token != nullptr && !pending_token->embedding().empty()) {
+      LITERT_RETURN_IF_ERROR(CopyEmbeddingToBuffer(
+          pending_token->embedding(), *prefill_embeddings_buffer_));
+      offset = 1;
+    }
+
+    // Step 2: Look up embeddings for the N processed input tokens directly into
+    // the prefill embedding tensor buffer, starting at the calculated offset.
+    LITERT_RETURN_IF_ERROR(embedding_lookup_manager_->LookupPrefill(
+        processed_input_tokens, &*prefill_embeddings_buffer_, offset));
+
+    // Step 3: Immediately look up and cache the embedding for the new holdback
+    // / pending token so that it is available for subsequent prefill chunks or
+    // the first decode step. Performing this lookup immediately maintains the
+    // sequential order of the prompt inside EmbeddingLookupManager.
+    if (last_input_token != nullptr) {
+      LITERT_RETURN_IF_ERROR(embedding_lookup_manager_->LookupPrefill(
+          last_input_token->id(), last_input_token->mutable_embedding()));
+    }
+  } else {
+    RET_CHECK(embedder_context_.has_value())
+        << "Embedder context not available for prefill embedder model.";
+    {
+      auto& in_buf =
+          embedder_context_->inference_context
+              .prefill_input_buffers[EmbedderSignatures::kEmbedderInput];
+      LITERT_ASSIGN_OR_RETURN(auto prefill_input_size, in_buf.Size());
+      LITERT_ASSIGN_OR_RETURN(
+          auto in_lock, ::litert::TensorBufferScopedLock::Create(
+                            in_buf, ::litert::TensorBuffer::LockMode::kWrite));
+      auto* prefill_input_ptr = static_cast<int32_t*>(in_lock.second);
+      std::memset(prefill_input_ptr, 0, prefill_input_size);
+      const size_t max_tokens = prefill_input_size / sizeof(int32_t);
+      size_t idx = 0;
+      if (pending_token != nullptr && pending_token->id() != kInvalidTokenId &&
+          idx < max_tokens) {
+        prefill_input_ptr[idx++] = pending_token->id();
+      }
+      for (size_t i = 0; i < processed_input_tokens.size() && idx < max_tokens;
+           ++i) {
+        prefill_input_ptr[idx++] = processed_input_tokens[i];
+      }
+    }
+    return RunPrefillEmbedder(embedder_signature);
+  }
+  return absl::OkStatus();
+}
+
+absl::Status NpuEmbedder::RunDecode(const TokenData& token) {
+  // When using EmbeddingLookupManager (or for empty/invalid token IDs), the
+  // token embedding was already retrieved via LookupDecode at the end of the
+  // previous decode step or during prefill holdback. Copy it into the hardware
+  // decode embeddings buffer.
+  if (embedding_lookup_manager_ != nullptr || token.id() == kInvalidTokenId) {
+    RET_CHECK(decode_embeddings_buffer_.has_value())
+        << "Decode embeddings buffer not available.";
+    return CopyEmbeddingToBuffer(token.embedding(), *decode_embeddings_buffer_);
+  }
+  // For compiled embedder models, set the token ID and invoke the compiled
+  // model.
+  RET_CHECK(embedder_context_.has_value())
+      << "Embedder context not available for decode embedder model.";
+  LITERT_RETURN_IF_ERROR(SetFirstElement(
+      embedder_context_->inference_context
+          .decode_input_buffers[EmbedderSignatures::kEmbedderInput],
+      token.id()));
+  return RunDecodeEmbedder();
+}
+
+absl::Status NpuEmbedder::RunPrefillEmbedder(absl::string_view signature) {
+  RET_CHECK(embedder_context_.has_value())
+      << "Embedder context not available for prefill embedder model.";
+  auto res = embedder_context_->embedder_compiled_model.Run(
+      signature, embedder_context_->inference_context.prefill_input_buffers,
+      embedder_context_->inference_context.prefill_output_buffers);
+  RET_CHECK(res) << "Failed to run embedder model: " << res.Error().Message();
+  return absl::OkStatus();
+}
+
+absl::Status NpuEmbedder::RunDecodeEmbedder() {
+  RET_CHECK(embedder_context_.has_value())
+      << "Embedder context not available for decode embedder model.";
+  auto res = embedder_context_->embedder_compiled_model.Run(
+      EmbedderSignatures::kDecodeEmbedder,
+      embedder_context_->inference_context.decode_input_buffers,
+      embedder_context_->inference_context.decode_output_buffers);
+  RET_CHECK(res) << "Failed to run embedder model: " << res.Error().Message();
+  return absl::OkStatus();
+}
+
+absl::Status NpuEmbedder::LookupDecode(int32_t token_id,
+                                       std::vector<float>& out_embedding) {
+  if (embedding_lookup_manager_ == nullptr) {
+    return absl::OkStatus();
+  }
+  if (!out_embedding.empty()) {
+    return absl::OkStatus();
+  }
+  auto* text_lookup = embedding_lookup_manager_->GetTextEmbeddingLookup();
+  RET_CHECK(text_lookup != nullptr)
+      << "Text embedding lookup not available for decode.";
+  out_embedding.resize(text_lookup->GetFloatsPerToken());
+  return embedding_lookup_manager_->LookupDecode(token_id, out_embedding);
+}
+
+absl::Status NpuEmbedder::LookupDecode(TokenData* token) {
+  if (token == nullptr || embedding_lookup_manager_ == nullptr) {
+    return absl::OkStatus();
+  }
+  return LookupDecode(token->id(), token->mutable_embedding());
+}
+
+absl::Status NpuEmbedder::RunVerify(absl::Span<const int> verify_ids) {
+  if (embedding_lookup_manager_ != nullptr) {
+    RET_CHECK(verify_embeddings_buffer_.has_value())
+        << "Verify embeddings buffer not available.";
+    return embedding_lookup_manager_->LookupPrefill(
+        verify_ids, &*verify_embeddings_buffer_, /*offset=*/0);
+  }
+  return RunVerifyEmbedder(verify_ids);
+}
+
+absl::Status NpuEmbedder::CopyEmbeddingToBuffer(
+    absl::Span<const float> embedding,
+    ::litert::TensorBuffer& destination_buffer) {
+  LITERT_ASSIGN_OR_RETURN(
+      auto lock,
+      ::litert::TensorBufferScopedLock::Create(
+          destination_buffer, ::litert::TensorBuffer::LockMode::kWrite));
+  float* ptr = static_cast<float*>(lock.second);
+  RET_CHECK(!embedding.empty()) << "Token embedding is empty.";
+  std::memcpy(ptr, embedding.data(), embedding.size() * sizeof(float));
+  return absl::OkStatus();
+}
+
+absl::Status NpuEmbedder::RunVerifyEmbedder(absl::Span<const int> verify_ids) {
+  RET_CHECK(embedder_context_.has_value())
+      << "Embedder context not available for verify embedder model.";
+  {
+    auto& in_buf =
+        embedder_context_->inference_context
+            .verify_input_buffers[EmbedderSignatures::kEmbedderInput];
+    LITERT_ASSIGN_OR_RETURN(
+        auto lock, ::litert::TensorBufferScopedLock::Create(
+                       in_buf, ::litert::TensorBuffer::LockMode::kWrite));
+    auto* in_ptr = static_cast<int32_t*>(lock.second);
+    for (size_t i = 0; i < verify_ids.size(); ++i) {
+      in_ptr[i] = verify_ids[i];
+    }
+  }
+  auto res = embedder_context_->embedder_compiled_model.Run(
+      EmbedderSignatures::kVerifyEmbedder,
+      embedder_context_->inference_context.verify_input_buffers,
+      embedder_context_->inference_context.verify_output_buffers);
+  RET_CHECK(res) << "Failed to run verify embedder model: "
+                 << res.Error().Message();
+  return absl::OkStatus();
+}
+
+absl::Status NpuEmbedder::LookupHwPle(const int* token_ids, int num_tokens,
+                                      void* output_buffer) const {
+  return HWPerLayerEmbeddingLookup(
+      token_ids, num_tokens, ple_params_.ple_table_ptrs.data(),
+      ple_params_.ple_quant_params.data(), ple_params_.num_tables,
+      ple_params_.ple_embedding_dim, output_buffer, ple_params_.output_type,
+      ple_params_.ple_table_element_type, ple_params_.mul_scale,
+      ple_params_.output_scale, ple_params_.final_zero_point);
+}
+
+absl::Status NpuEmbedder::RunPrefillPerLayer(
+    absl::string_view signature, absl::Span<const int> tokens_to_embed) {
+  if (ple_params_.use_hw_ple && !ple_params_.ple_table_ptrs.empty()) {
+    RET_CHECK(prefill_ple_buffer_.has_value())
+        << "Prefill PLE buffer not available.";
+    LITERT_ASSIGN_OR_RETURN(
+        auto lock,
+        ::litert::TensorBufferScopedLock::Create(
+            *prefill_ple_buffer_, ::litert::TensorBuffer::LockMode::kWrite));
+    return LookupHwPle(tokens_to_embed.data(), tokens_to_embed.size(),
+                       lock.second);
+  } else if (embedder_per_layer_context_.has_value()) {
+    {
+      LITERT_ASSIGN_OR_RETURN(
+          auto ple_input_lock,
+          ::litert::TensorBufferScopedLock::Create(
+              embedder_per_layer_context_->inference_context
+                  .prefill_input_buffers
+                      [EmbedderPerLayerSignatures::kEmbedderInput],
+              ::litert::TensorBuffer::LockMode::kWrite));
+      auto* input_ptr = static_cast<int32_t*>(ple_input_lock.second);
+      for (size_t i = 0; i < tokens_to_embed.size(); ++i) {
+        input_ptr[i] = tokens_to_embed[i] < 0 ? 0 : tokens_to_embed[i];
+      }
+    }
+    auto res =
+        embedder_per_layer_context_->embedder_per_layer_compiled_model.Run(
+            signature,
+            embedder_per_layer_context_->inference_context
+                .prefill_input_buffers,
+            embedder_per_layer_context_->inference_context
+                .prefill_output_buffers);
+    RET_CHECK(res) << "Failed to run embedder per layer model: "
+                   << res.Error().Message();
+  }
+  return absl::OkStatus();
+}
+
+absl::Status NpuEmbedder::RunDecodePerLayer(int32_t token_id) {
+  if (ple_params_.use_hw_ple && !ple_params_.ple_table_ptrs.empty()) {
+    RET_CHECK(decode_ple_buffer_.has_value())
+        << "Decode PLE buffer not available.";
+    LITERT_ASSIGN_OR_RETURN(
+        auto lock,
+        ::litert::TensorBufferScopedLock::Create(
+            *decode_ple_buffer_, ::litert::TensorBuffer::LockMode::kWrite));
+    return LookupHwPle(&token_id, 1, lock.second);
+  } else if (embedder_per_layer_context_.has_value()) {
+    LITERT_RETURN_IF_ERROR(SetFirstElement(
+        embedder_per_layer_context_->inference_context
+            .decode_input_buffers[EmbedderPerLayerSignatures::kEmbedderInput],
+        token_id));
+    auto res =
+        embedder_per_layer_context_->embedder_per_layer_compiled_model.Run(
+            EmbedderPerLayerSignatures::kDecodeEmbedderPerLayer,
+            embedder_per_layer_context_->inference_context.decode_input_buffers,
+            embedder_per_layer_context_->inference_context
+                .decode_output_buffers);
+    RET_CHECK(res) << "Failed to run embedder per layer model: "
+                   << res.Error().Message();
+  }
+  return absl::OkStatus();
+}
+
+absl::Status NpuEmbedder::RunVerifyPerLayer(absl::Span<const int> verify_ids) {
+  if (ple_params_.use_hw_ple && !ple_params_.ple_table_ptrs.empty()) {
+    RET_CHECK(verify_ple_buffer_.has_value())
+        << "Verify PLE buffer not available.";
+    LITERT_ASSIGN_OR_RETURN(
+        auto lock,
+        ::litert::TensorBufferScopedLock::Create(
+            *verify_ple_buffer_, ::litert::TensorBuffer::LockMode::kWrite));
+    return LookupHwPle(verify_ids.data(), verify_ids.size(), lock.second);
+  } else if (embedder_per_layer_context_.has_value()) {
+    {
+      LITERT_ASSIGN_OR_RETURN(
+          auto verify_ple_input_lock,
+          ::litert::TensorBufferScopedLock::Create(
+              embedder_per_layer_context_->inference_context
+                  .verify_input_buffers
+                      [EmbedderPerLayerSignatures::kEmbedderInput],
+              ::litert::TensorBuffer::LockMode::kWrite));
+      auto* input_ptr = static_cast<int32_t*>(verify_ple_input_lock.second);
+      for (size_t i = 0; i < verify_ids.size(); ++i) {
+        input_ptr[i] = verify_ids[i];
+      }
+    }
+    auto res =
+        embedder_per_layer_context_->embedder_per_layer_compiled_model.Run(
+            EmbedderPerLayerSignatures::kVerifyEmbedderPerLayer,
+            embedder_per_layer_context_->inference_context.verify_input_buffers,
+            embedder_per_layer_context_->inference_context
+                .verify_output_buffers);
+    RET_CHECK(res) << "Failed to run embedder per layer model: "
+                   << res.Error().Message();
+  }
+  return absl::OkStatus();
+}
+
+absl::Status NpuEmbedder::WriteDecodePleEmbeddings(
+    absl::Span<const float> ple_embeddings) {
+  RET_CHECK(decode_ple_buffer_.has_value())
+      << "Decode PLE buffer not available.";
+  return WritePleEmbeddings(*decode_ple_buffer_, ple_embeddings,
+                            ple_params_.output_type, ple_params_.output_scale,
+                            ple_params_.final_zero_point);
+}
+
+absl::Status NpuEmbedder::WriteAndPadPleEmbeddings(
+    ::litert::Environment& env, absl::Span<const float> ple_embeddings) {
+  RET_CHECK(prefill_ple_buffer_.has_value())
+      << "Prefill PLE buffer not available.";
+  return WriteAndPadPleEmbeddings(env, *prefill_ple_buffer_, ple_embeddings);
+}
+
+absl::Status NpuEmbedder::WriteAndPadPleEmbeddings(
+    ::litert::Environment& env, ::litert::TensorBuffer& buffer,
+    absl::Span<const float> ple_embeddings) {
+  std::vector<float> default_ple_emb;
+  if (per_layer_embedding_lookup_manager_ == nullptr &&
+      embedder_per_layer_model_ != nullptr) {
+    LITERT_ASSIGN_OR_RETURN(
+        per_layer_embedding_lookup_manager_,
+        EmbeddingLookupManager::Create(env, embedder_per_layer_model_, false));
+  }
+  if (per_layer_embedding_lookup_manager_ != nullptr) {
+    auto* ple_lookup =
+        per_layer_embedding_lookup_manager_->GetTextEmbeddingLookup();
+    if (ple_lookup != nullptr) {
+      default_ple_emb = ple_lookup->GetDefaultEmbeddingVector();
+    }
+  }
+
+  LITERT_ASSIGN_OR_RETURN(RankedTensorType tensor_type, buffer.TensorType());
+  const auto& dims = tensor_type.Layout().Dimensions();
+  if (dims.size() < 3) {
+    return absl::InternalError(
+        "Prefill per-layer embeddings tensor has unexpected shape.");
+  }
+  const size_t ple_dim =
+      default_ple_emb.empty() ? dims[2] : default_ple_emb.size();
+  size_t starting_token = ple_embeddings.size() / ple_dim;
+
+  return ::litert::lm::WriteAndPadPleEmbeddings(
+      buffer, ple_embeddings, ple_dim, starting_token, default_ple_emb,
+      ple_params_.output_type, ple_params_.output_scale,
+      ple_params_.final_zero_point);
+}
+
+// -----------------------------------------------------------------------------
+// NpuRope Implementation
+// -----------------------------------------------------------------------------
+
+absl::StatusOr<NpuRope> NpuRope::CreateForTest(
+    const ::litert::CompiledModel* compiled_model,
+    InferenceContext rope_context) {
+  if (compiled_model == nullptr) {
+    return absl::InvalidArgumentError(
+        "Compiled model is required for NpuRope.");
+  }
+  return NpuRope(compiled_model, std::move(rope_context));
+}
+
+absl::StatusOr<NpuRope> NpuRope::Create(
+    const ::litert::CompiledModel* npu_auxiliary_compiled_model,
+    const ResolvedPrefillSignatures& prefill_signatures,
+    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+        text_decoder_prefill_input_buffers,
+    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+        text_decoder_decode_input_buffers,
+    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+        text_decoder_verify_input_buffers) {
+  RET_CHECK(npu_auxiliary_compiled_model != nullptr)
+      << "Auxiliary compiled model cannot be null for NpuRope";
+  absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
+      prefill_input_buffers, prefill_output_buffers, decode_input_buffers,
+      decode_output_buffers, verify_input_buffers, verify_output_buffers;
+
+  const std::array<absl::string_view, 4> rope_output_names = {
+      RopeSignatures::kOutputPosEmbeddingLocalLow,
+      RopeSignatures::kOutputPosEmbeddingHigh,
+      RopeSignatures::kOutputPosEmbeddingLocalHigh,
+      RopeSignatures::kOutputPosEmbeddingLow};
+
+  auto map_rope_stage =
+      [&](absl::string_view signature,
+          const absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+              decoder_inputs,
+          absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+              in_buffers,
+          absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+              out_buffers) -> absl::Status {
+    LITERT_ASSIGN_OR_RETURN(in_buffers[RopeSignatures::kInputPos],
+                            npu_auxiliary_compiled_model->CreateInputBuffer(
+                                signature, RopeSignatures::kInputPos));
+    in_buffers[RopeSignatures::kInputPos].Clear();
+    for (const auto& name : rope_output_names) {
+      if (decoder_inputs.contains(name)) {
+        LITERT_ASSIGN_OR_RETURN(out_buffers[name],
+                                decoder_inputs.at(name).Duplicate());
+      }
+    }
+    return absl::OkStatus();
+  };
+
+  LITERT_RETURN_IF_ERROR(map_rope_stage(
+      prefill_signatures.rope, text_decoder_prefill_input_buffers,
+      prefill_input_buffers, prefill_output_buffers));
+
+  LITERT_RETURN_IF_ERROR(map_rope_stage(
+      RopeSignatures::kDecodeRope, text_decoder_decode_input_buffers,
+      decode_input_buffers, decode_output_buffers));
+
+  if (npu_auxiliary_compiled_model->FindSignature(
+          RopeSignatures::kVerifyRope)) {
+    LITERT_RETURN_IF_ERROR(map_rope_stage(
+        RopeSignatures::kVerifyRope, text_decoder_verify_input_buffers,
+        verify_input_buffers, verify_output_buffers));
+  }
+
+  InferenceContext rope_context(
+      std::move(prefill_input_buffers), std::move(prefill_output_buffers),
+      std::move(decode_input_buffers), std::move(decode_output_buffers),
+      std::move(verify_input_buffers), std::move(verify_output_buffers));
+  return NpuRope(npu_auxiliary_compiled_model, std::move(rope_context));
+}
+
+absl::StatusOr<NpuRope> NpuRope::CreateForDrafter(
+    const ::litert::CompiledModel* compiled_model,
+    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
+        rope_input_buffers,
+    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
+        rope_output_buffers) {
+  if (compiled_model == nullptr) {
+    return absl::InvalidArgumentError(
+        "Compiled model is required for NpuRope.");
+  }
+  InferenceContext ctx;
+  ctx.decode_input_buffers = std::move(rope_input_buffers);
+  ctx.decode_output_buffers = std::move(rope_output_buffers);
+  return NpuRope(compiled_model, std::move(ctx));
+}
+
+absl::Status NpuRope::RunPrefill(absl::string_view signature) const {
+  RET_CHECK(compiled_model_ != nullptr) << "Compiled model is null.";
+  auto res = compiled_model_->Run(
+      signature,
+      const_cast<
+          absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&>(
+          rope_context_.prefill_input_buffers),
+      const_cast<
+          absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&>(
+          rope_context_.prefill_output_buffers));
+  RET_CHECK(res) << "Failed to run prefill RoPE model: "
+                 << res.Error().Message();
+  return absl::OkStatus();
+}
+
+absl::Status NpuRope::RunDecode() const {
+  RET_CHECK(compiled_model_ != nullptr) << "Compiled model is null.";
+  auto res = compiled_model_->Run(
+      RopeSignatures::kDecodeRope,
+      const_cast<
+          absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&>(
+          rope_context_.decode_input_buffers),
+      const_cast<
+          absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&>(
+          rope_context_.decode_output_buffers));
+  RET_CHECK(res) << "Failed to run decode RoPE model: "
+                 << res.Error().Message();
+  return absl::OkStatus();
+}
+
+absl::Status NpuRope::RunVerify() const {
+  RET_CHECK(compiled_model_ != nullptr) << "Compiled model is null.";
+  auto res = compiled_model_->Run(
+      RopeSignatures::kVerifyRope,
+      const_cast<
+          absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&>(
+          rope_context_.verify_input_buffers),
+      const_cast<
+          absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&>(
+          rope_context_.verify_output_buffers));
+  RET_CHECK(res) << "Failed to run verify RoPE model: "
+                 << res.Error().Message();
+  return absl::OkStatus();
+}
+
+absl::Status NpuRope::RunDrafter() const {
+  RET_CHECK(compiled_model_ != nullptr) << "Compiled model is null.";
+  auto res = compiled_model_->Run(
+      RopeSignatures::kMtpRope,
+      const_cast<
+          absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&>(
+          rope_context_.decode_input_buffers),
+      const_cast<
+          absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&>(
+          rope_context_.decode_output_buffers));
+  RET_CHECK(res) << "Failed to run drafter RoPE model: "
+                 << res.Error().Message();
+  return absl::OkStatus();
+}
+
+absl::Status NpuRope::SetDecodePosition(int32_t step) {
+  RET_CHECK(
+      rope_context_.decode_input_buffers.contains(RopeSignatures::kInputPos))
+      << "RoPE decode input_pos buffer not found.";
+  return SetFirstElement(
+      rope_context_.decode_input_buffers[RopeSignatures::kInputPos], step);
+}
+
+absl::Status NpuRope::SetVerifyPositions(int32_t start_step,
+                                         size_t num_tokens) {
+  RET_CHECK(
+      rope_context_.verify_input_buffers.contains(RopeSignatures::kInputPos))
+      << "RoPE verify input_pos buffer not found.";
+  auto& pos_buf = rope_context_.verify_input_buffers[RopeSignatures::kInputPos];
+  LITERT_ASSIGN_OR_RETURN(
+      auto pos_lock, ::litert::TensorBufferScopedLock::Create(
+                         pos_buf, ::litert::TensorBuffer::LockMode::kWrite));
+  auto* pos_ptr = static_cast<int32_t*>(pos_lock.second);
+  for (size_t i = 0; i < num_tokens; ++i) {
+    pos_ptr[i] = start_step + i;
+  }
+  return absl::OkStatus();
+}
+
+absl::Status NpuRope::SetPrefillPositions(absl::Span<const int32_t> positions) {
+  RET_CHECK(
+      rope_context_.prefill_input_buffers.contains(RopeSignatures::kInputPos))
+      << "RoPE prefill input_pos buffer not found.";
+  auto& buffer = rope_context_.prefill_input_buffers[RopeSignatures::kInputPos];
+  LITERT_ASSIGN_OR_RETURN(size_t buffer_size, buffer.PackedSize());
+  RET_CHECK_GE(buffer_size, positions.size() * sizeof(int32_t));
+
+  LITERT_ASSIGN_OR_RETURN(
+      auto lock, ::litert::TensorBufferScopedLock::Create(
+                     buffer, ::litert::TensorBuffer::LockMode::kWrite));
+  auto* buffer_ptr = static_cast<int32_t*>(lock.second);
+  std::memcpy(buffer_ptr, positions.data(), positions.size() * sizeof(int32_t));
+
+  size_t starting_token = positions.size();
+  size_t num_tokens_to_fill = buffer_size / sizeof(int32_t);
+  std::memset(buffer_ptr + starting_token, 0,
+              (num_tokens_to_fill - starting_token) * sizeof(int32_t));
+  return absl::OkStatus();
+}
+
+// -----------------------------------------------------------------------------
+// NpuMask Implementation
+// -----------------------------------------------------------------------------
+
+absl::StatusOr<NpuMask> NpuMask::CreateForTest(
+    MaskUpdateMethod method, const ::litert::CompiledModel* compiled_model,
+    InferenceContext mask_context) {
+  if (method == MaskUpdateMethod::kModel && compiled_model == nullptr) {
+    return absl::InvalidArgumentError(
+        "Compiled model must be provided when MaskUpdateMethod is kModel.");
+  }
+  return NpuMask(method, compiled_model, std::move(mask_context));
+}
+
+absl::StatusOr<NpuMask> NpuMask::Create(
+    MaskUpdateMethod method,
+    const ::litert::CompiledModel* npu_auxiliary_compiled_model,
+    const ResolvedPrefillSignatures& prefill_signatures,
+    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+        text_decoder_prefill_input_buffers,
+    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+        text_decoder_decode_input_buffers,
+    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+        text_decoder_verify_input_buffers) {
+  RET_CHECK(npu_auxiliary_compiled_model != nullptr)
+      << "Auxiliary compiled model cannot be null for NpuMask";
+  absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
+      prefill_input_buffers, prefill_output_buffers, decode_input_buffers,
+      decode_output_buffers, verify_input_buffers, verify_output_buffers;
+
+  auto setup_mask_stage =
+      [&](absl::string_view signature,
+          const absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+              decoder_inputs,
+          absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+              in_buffers,
+          absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+              out_buffers) -> absl::Status {
+    LITERT_ASSIGN_OR_RETURN(in_buffers[MaskSignatures::kMaskInputTimeStep],
+                            npu_auxiliary_compiled_model->CreateInputBuffer(
+                                signature, MaskSignatures::kMaskInputTimeStep));
+    in_buffers[MaskSignatures::kMaskInputTimeStep].Clear();
+
+    LITERT_ASSIGN_OR_RETURN(in_buffers[MaskSignatures::kMaskInputTokens],
+                            npu_auxiliary_compiled_model->CreateInputBuffer(
+                                signature, MaskSignatures::kMaskInputTokens));
+    in_buffers[MaskSignatures::kMaskInputTokens].Clear();
+
+    LITERT_ASSIGN_OR_RETURN(
+        auto input_names,
+        npu_auxiliary_compiled_model->GetSignatureInputNames(signature));
+    if (absl::c_find(input_names, MaskSignatures::kMaskInputValidMask) !=
+        input_names.end()) {
+      LITERT_ASSIGN_OR_RETURN(
+          in_buffers[MaskSignatures::kMaskInputValidMask],
+          npu_auxiliary_compiled_model->CreateInputBuffer(
+              signature, MaskSignatures::kMaskInputValidMask));
+      in_buffers[MaskSignatures::kMaskInputValidMask].Clear();
+    }
+
+    LITERT_ASSIGN_OR_RETURN(
+        auto output_names,
+        npu_auxiliary_compiled_model->GetSignatureOutputNames(signature));
+    for (const auto& name : output_names) {
+      if (decoder_inputs.contains(name)) {
+        LITERT_ASSIGN_OR_RETURN(out_buffers[name],
+                                decoder_inputs.at(name).Duplicate());
+      } else {
+        LITERT_ASSIGN_OR_RETURN(
+            out_buffers[name],
+            npu_auxiliary_compiled_model->CreateOutputBuffer(signature, name));
+      }
+    }
+    return absl::OkStatus();
+  };
+
+  LITERT_RETURN_IF_ERROR(setup_mask_stage(
+      prefill_signatures.mask, text_decoder_prefill_input_buffers,
+      prefill_input_buffers, prefill_output_buffers));
+
+  LITERT_RETURN_IF_ERROR(setup_mask_stage(
+      MaskSignatures::kDecodeMask, text_decoder_decode_input_buffers,
+      decode_input_buffers, decode_output_buffers));
+
+  if (npu_auxiliary_compiled_model->FindSignature(
+          MaskSignatures::kVerifyMask)) {
+    LITERT_RETURN_IF_ERROR(setup_mask_stage(
+        MaskSignatures::kVerifyMask, text_decoder_verify_input_buffers,
+        verify_input_buffers, verify_output_buffers));
+  }
+
+  InferenceContext mask_context(
+      std::move(prefill_input_buffers), std::move(prefill_output_buffers),
+      std::move(decode_input_buffers), std::move(decode_output_buffers),
+      std::move(verify_input_buffers), std::move(verify_output_buffers));
+  return NpuMask(method, npu_auxiliary_compiled_model, std::move(mask_context));
+}
+
+absl::StatusOr<NpuMask> NpuMask::CreateForDrafter(
+    MaskUpdateMethod method, const ::litert::CompiledModel* compiled_model,
+    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
+        mask_input_buffers,
+    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
+        mask_output_buffers) {
+  if (method == MaskUpdateMethod::kModel && compiled_model == nullptr) {
+    return absl::InvalidArgumentError(
+        "Compiled model must be provided when MaskUpdateMethod is kModel.");
+  }
+  InferenceContext ctx;
+  ctx.decode_input_buffers = std::move(mask_input_buffers);
+  ctx.decode_output_buffers = std::move(mask_output_buffers);
+  return NpuMask(method, compiled_model, std::move(ctx));
+}
+
+absl::Status NpuMask::RunPrefill(absl::string_view signature) const {
+  if (method_ == MaskUpdateMethod::kWH) {
+    return HWMaskUpdate(
+        const_cast<
+            absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&>(
+            mask_context_.prefill_input_buffers),
+        const_cast<
+            absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&>(
+            mask_context_.prefill_output_buffers));
+  }
+  RET_CHECK(compiled_model_ != nullptr)
+      << "Compiled model must be provided for kModel mask update.";
+  auto res = compiled_model_->Run(
+      signature,
+      const_cast<
+          absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&>(
+          mask_context_.prefill_input_buffers),
+      const_cast<
+          absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&>(
+          mask_context_.prefill_output_buffers));
+  RET_CHECK(res) << "Failed to run prefill mask model: "
+                 << res.Error().Message();
+  return absl::OkStatus();
+}
+
+absl::Status NpuMask::RunDecode() const {
+  if (method_ == MaskUpdateMethod::kWH) {
+    return HWMaskUpdate(
+        const_cast<
+            absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&>(
+            mask_context_.decode_input_buffers),
+        const_cast<
+            absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&>(
+            mask_context_.decode_output_buffers));
+  }
+  RET_CHECK(compiled_model_ != nullptr)
+      << "Compiled model must be provided for kModel mask update.";
+  auto res = compiled_model_->Run(
+      MaskSignatures::kDecodeMask,
+      const_cast<
+          absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&>(
+          mask_context_.decode_input_buffers),
+      const_cast<
+          absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&>(
+          mask_context_.decode_output_buffers));
+  RET_CHECK(res) << "Failed to run decode mask model: "
+                 << res.Error().Message();
+  return absl::OkStatus();
+}
+
+absl::Status NpuMask::RunVerify() const {
+  if (method_ == MaskUpdateMethod::kWH) {
+    return HWMaskUpdate(
+        const_cast<
+            absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&>(
+            mask_context_.verify_input_buffers),
+        const_cast<
+            absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&>(
+            mask_context_.verify_output_buffers));
+  }
+  RET_CHECK(compiled_model_ != nullptr)
+      << "Compiled model must be provided for kModel mask update.";
+  auto res = compiled_model_->Run(
+      MaskSignatures::kVerifyMask,
+      const_cast<
+          absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&>(
+          mask_context_.verify_input_buffers),
+      const_cast<
+          absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&>(
+          mask_context_.verify_output_buffers));
+  RET_CHECK(res) << "Failed to run verify mask model: "
+                 << res.Error().Message();
+  return absl::OkStatus();
+}
+
+absl::Status NpuMask::RunDrafter() const {
+  if (method_ == MaskUpdateMethod::kWH) {
+    return HWMaskUpdate(
+        const_cast<
+            absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&>(
+            mask_context_.decode_input_buffers),
+        const_cast<
+            absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&>(
+            mask_context_.decode_output_buffers));
+  }
+  RET_CHECK(compiled_model_ != nullptr)
+      << "Compiled model must be provided for kModel mask update.";
+  auto res = compiled_model_->Run(
+      MaskSignatures::kMtpMask,
+      const_cast<
+          absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&>(
+          mask_context_.decode_input_buffers),
+      const_cast<
+          absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&>(
+          mask_context_.decode_output_buffers));
+  RET_CHECK(res) << "Failed to run drafter mask model: "
+                 << res.Error().Message();
+  return absl::OkStatus();
+}
+
+absl::Status NpuMask::SetDecodeInput(int32_t step, int32_t token_id) {
+  LITERT_RETURN_IF_ERROR(SetFirstElement(
+      mask_context_.decode_input_buffers[MaskSignatures::kMaskInputTimeStep],
+      step));
+  if (mask_context_.decode_input_buffers.contains(
+          MaskSignatures::kMaskInputTokens)) {
+    LITERT_RETURN_IF_ERROR(SetFirstElement(
+        mask_context_.decode_input_buffers[MaskSignatures::kMaskInputTokens],
+        token_id));
+  }
+  if (mask_context_.decode_input_buffers.contains(
+          MaskSignatures::kMaskInputValidMask)) {
+    auto& buf =
+        mask_context_.decode_input_buffers[MaskSignatures::kMaskInputValidMask];
+    LITERT_ASSIGN_OR_RETURN(auto lock,
+                            ::litert::TensorBufferScopedLock::Create(
+                                buf, ::litert::TensorBuffer::LockMode::kWrite));
+    static_cast<bool*>(lock.second)[0] = true;
+  }
+  return absl::OkStatus();
+}
+
+absl::Status NpuMask::SetVerifyInput(int32_t start_step,
+                                     absl::Span<const int> verify_ids) {
+  LITERT_RETURN_IF_ERROR(SetFirstElement(
+      mask_context_.verify_input_buffers[MaskSignatures::kMaskInputTimeStep],
+      start_step));
+  if (mask_context_.verify_input_buffers.contains(
+          MaskSignatures::kMaskInputTokens)) {
+    LITERT_ASSIGN_OR_RETURN(
+        auto mask_tokens_lock,
+        ::litert::TensorBufferScopedLock::Create(
+            mask_context_
+                .verify_input_buffers[MaskSignatures::kMaskInputTokens],
+            ::litert::TensorBuffer::LockMode::kWrite));
+    auto* mask_tokens_ptr = static_cast<int32_t*>(mask_tokens_lock.second);
+    for (size_t i = 0; i < verify_ids.size(); ++i) {
+      mask_tokens_ptr[i] = verify_ids[i];
+    }
+  }
+  return absl::OkStatus();
+}
+
+absl::Status NpuMask::SetPrefillInput(int32_t start_step,
+                                      absl::Span<const int> token_ids) {
+  LITERT_RETURN_IF_ERROR(SetFirstElement(
+      mask_context_.prefill_input_buffers[MaskSignatures::kMaskInputTimeStep],
+      start_step));
+
+  if (mask_context_.prefill_input_buffers.contains(
+          MaskSignatures::kMaskInputTokens)) {
+    auto& buf =
+        mask_context_.prefill_input_buffers[MaskSignatures::kMaskInputTokens];
+    LITERT_ASSIGN_OR_RETURN(auto lock,
+                            ::litert::TensorBufferScopedLock::Create(
+                                buf, ::litert::TensorBuffer::LockMode::kWrite));
+    LITERT_ASSIGN_OR_RETURN(auto type, buf.TensorType());
+    LITERT_ASSIGN_OR_RETURN(auto num_elements, type.Layout().NumElements());
+    auto* ptr = static_cast<int32_t*>(lock.second);
+    for (size_t i = 0; i < num_elements; ++i) {
+      if (i < token_ids.size()) {
+        ptr[i] = token_ids[i] < 0 ? 0 : token_ids[i];
+      } else {
+        ptr[i] = 0;
+      }
+    }
+  }
+
+  if (mask_context_.prefill_input_buffers.contains(
+          MaskSignatures::kMaskInputValidMask)) {
+    auto& buf = mask_context_
+                    .prefill_input_buffers[MaskSignatures::kMaskInputValidMask];
+    LITERT_ASSIGN_OR_RETURN(auto lock,
+                            ::litert::TensorBufferScopedLock::Create(
+                                buf, ::litert::TensorBuffer::LockMode::kWrite));
+    LITERT_ASSIGN_OR_RETURN(auto type, buf.TensorType());
+    LITERT_ASSIGN_OR_RETURN(auto num_elements, type.Layout().NumElements());
+    auto* ptr = static_cast<bool*>(lock.second);
+    for (size_t i = 0; i < num_elements; ++i) {
+      ptr[i] = (i < token_ids.size());
+    }
+  }
+
+  return absl::OkStatus();
+}
+
+// -----------------------------------------------------------------------------
+// NpuKVCache Implementation
+// -----------------------------------------------------------------------------
+
+absl::StatusOr<NpuKVCache> NpuKVCache::CreateForTest(
+    KVCacheUpdateMethod method, const ::litert::CompiledModel* compiled_model,
+    InferenceContext cache_update_context,
+    absl::flat_hash_map<absl::string_view, HWQuantParams> kv_quant_params,
+    bool has_sliding_window_attention) {
+  if (method == KVCacheUpdateMethod::kModel && compiled_model == nullptr) {
+    return absl::InvalidArgumentError(
+        "Compiled model is required when using kModel cache update method.");
+  }
+  return NpuKVCache(method, compiled_model, std::move(cache_update_context),
+                    std::move(kv_quant_params), has_sliding_window_attention);
+}
+
+absl::StatusOr<NpuKVCache> NpuKVCache::Create(
+    KVCacheUpdateMethod method,
+    const ::litert::CompiledModel* npu_auxiliary_compiled_model,
+    const ResolvedPrefillSignatures& prefill_signatures,
+    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+        input_kv_cache_buffers,
+    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+        prefill_output_kv_cache_slice_buffers,
+    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+        decode_output_kv_cache_slice_buffers,
+    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+        verify_output_kv_cache_slice_buffers,
+    absl::flat_hash_map<absl::string_view, HWQuantParams> kv_quant_params,
+    bool has_sliding_window_attention) {
+  RET_CHECK(npu_auxiliary_compiled_model != nullptr)
+      << "Auxiliary compiled model cannot be null for NpuKVCache";
+
+  absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
+      prefill_input_buffers;
+  absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
+      prefill_output_buffers;
+  absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
+      decode_input_buffers;
+  absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
+      decode_output_buffers;
+  absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
+      verify_input_buffers;
+  absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
+      verify_output_buffers;
+
+  for (const auto& [key, value] : input_kv_cache_buffers) {
+    LITERT_ASSIGN_OR_RETURN(prefill_input_buffers[key], value.Duplicate());
+    LITERT_ASSIGN_OR_RETURN(prefill_output_buffers[key], value.Duplicate());
+    LITERT_ASSIGN_OR_RETURN(decode_input_buffers[key], value.Duplicate());
+    LITERT_ASSIGN_OR_RETURN(decode_output_buffers[key], value.Duplicate());
+  }
+
+  for (const auto& [key, value] : prefill_output_kv_cache_slice_buffers) {
+    LITERT_ASSIGN_OR_RETURN(prefill_input_buffers[key], value.Duplicate());
+  }
+  for (const auto& [key, value] : decode_output_kv_cache_slice_buffers) {
+    LITERT_ASSIGN_OR_RETURN(decode_input_buffers[key], value.Duplicate());
+  }
+
+  LITERT_ASSIGN_OR_RETURN(
+      prefill_input_buffers[CacheUpdateSignatures::kInputPos],
+      npu_auxiliary_compiled_model->CreateInputBuffer(
+          prefill_signatures.cache_update, CacheUpdateSignatures::kInputPos));
+  prefill_input_buffers[CacheUpdateSignatures::kInputPos].Clear();
+
+  LITERT_ASSIGN_OR_RETURN(auto prefill_cache_input_names,
+                          npu_auxiliary_compiled_model->GetSignatureInputNames(
+                              prefill_signatures.cache_update));
+  if (absl::c_find(prefill_cache_input_names,
+                   CacheUpdateSignatures::kInputValidMask) !=
+      prefill_cache_input_names.end()) {
+    LITERT_ASSIGN_OR_RETURN(
+        prefill_input_buffers[CacheUpdateSignatures::kInputValidMask],
+        npu_auxiliary_compiled_model->CreateInputBuffer(
+            prefill_signatures.cache_update,
+            CacheUpdateSignatures::kInputValidMask));
+    prefill_input_buffers[CacheUpdateSignatures::kInputValidMask].Clear();
+  }
+
+  LITERT_ASSIGN_OR_RETURN(
+      decode_input_buffers[CacheUpdateSignatures::kInputPos],
+      npu_auxiliary_compiled_model->CreateInputBuffer(
+          CacheUpdateSignatures::kDecodeCacheUpdate,
+          CacheUpdateSignatures::kInputPos));
+  decode_input_buffers[CacheUpdateSignatures::kInputPos].Clear();
+
+  LITERT_ASSIGN_OR_RETURN(auto decode_cache_input_names,
+                          npu_auxiliary_compiled_model->GetSignatureInputNames(
+                              CacheUpdateSignatures::kDecodeCacheUpdate));
+  if (absl::c_find(decode_cache_input_names,
+                   CacheUpdateSignatures::kInputValidMask) !=
+      decode_cache_input_names.end()) {
+    LITERT_ASSIGN_OR_RETURN(
+        decode_input_buffers[CacheUpdateSignatures::kInputValidMask],
+        npu_auxiliary_compiled_model->CreateInputBuffer(
+            CacheUpdateSignatures::kDecodeCacheUpdate,
+            CacheUpdateSignatures::kInputValidMask));
+    decode_input_buffers[CacheUpdateSignatures::kInputValidMask].Clear();
+  }
+
+  if (npu_auxiliary_compiled_model->FindSignature(
+          CacheUpdateSignatures::kVerifyCacheUpdate)) {
+    for (const auto& [key, value] : input_kv_cache_buffers) {
+      LITERT_ASSIGN_OR_RETURN(verify_input_buffers[key], value.Duplicate());
+      LITERT_ASSIGN_OR_RETURN(verify_output_buffers[key], value.Duplicate());
+    }
+    for (const auto& [key, value] : verify_output_kv_cache_slice_buffers) {
+      LITERT_ASSIGN_OR_RETURN(verify_input_buffers[key], value.Duplicate());
+    }
+    LITERT_ASSIGN_OR_RETURN(
+        verify_input_buffers[CacheUpdateSignatures::kInputPos],
+        npu_auxiliary_compiled_model->CreateInputBuffer(
+            CacheUpdateSignatures::kVerifyCacheUpdate,
+            CacheUpdateSignatures::kInputPos));
+    verify_input_buffers[CacheUpdateSignatures::kInputPos].Clear();
+
+    LITERT_ASSIGN_OR_RETURN(
+        auto verify_cache_input_names,
+        npu_auxiliary_compiled_model->GetSignatureInputNames(
+            CacheUpdateSignatures::kVerifyCacheUpdate));
+    if (absl::c_find(verify_cache_input_names,
+                     CacheUpdateSignatures::kInputValidMask) !=
+        verify_cache_input_names.end()) {
+      LITERT_ASSIGN_OR_RETURN(
+          verify_input_buffers[CacheUpdateSignatures::kInputValidMask],
+          npu_auxiliary_compiled_model->CreateInputBuffer(
+              CacheUpdateSignatures::kVerifyCacheUpdate,
+              CacheUpdateSignatures::kInputValidMask));
+      verify_input_buffers[CacheUpdateSignatures::kInputValidMask].Clear();
+    }
+  }
+
+  InferenceContext cache_update_context(
+      std::move(prefill_input_buffers), std::move(prefill_output_buffers),
+      std::move(decode_input_buffers), std::move(decode_output_buffers),
+      std::move(verify_input_buffers), std::move(verify_output_buffers));
+  return NpuKVCache(method, npu_auxiliary_compiled_model,
+                    std::move(cache_update_context), std::move(kv_quant_params),
+                    has_sliding_window_attention);
+}
+
+absl::Status NpuKVCache::SetPrefillPositions(
+    absl::Span<const int32_t> seq_positions) {
+  if (cache_update_context_.prefill_input_buffers.contains(
+          CacheUpdateSignatures::kInputPos)) {
+    auto& pos_buf =
+        cache_update_context_
+            .prefill_input_buffers[CacheUpdateSignatures::kInputPos];
+    LITERT_ASSIGN_OR_RETURN(
+        auto pos_lock, ::litert::TensorBufferScopedLock::Create(
+                           pos_buf, ::litert::TensorBuffer::LockMode::kWrite));
+    auto* pos_ptr = static_cast<int32_t*>(pos_lock.second);
+    LITERT_ASSIGN_OR_RETURN(RankedTensorType tensor_type, pos_buf.TensorType());
+    LITERT_ASSIGN_OR_RETURN(size_t num_elements,
+                            tensor_type.Layout().NumElements());
+    const size_t copy_size = std::min(num_elements, seq_positions.size());
+    std::memcpy(pos_ptr, seq_positions.data(), copy_size * sizeof(int32_t));
+    if (num_elements > copy_size) {
+      std::memset(pos_ptr + copy_size, 0,
+                  (num_elements - copy_size) * sizeof(int32_t));
+    }
+  }
+
+  if (cache_update_context_.prefill_input_buffers.contains(
+          CacheUpdateSignatures::kInputValidMask)) {
+    auto& mask_buf =
+        cache_update_context_
+            .prefill_input_buffers[CacheUpdateSignatures::kInputValidMask];
+    LITERT_ASSIGN_OR_RETURN(
+        auto mask_lock,
+        ::litert::TensorBufferScopedLock::Create(
+            mask_buf, ::litert::TensorBuffer::LockMode::kWrite));
+    auto* mask_ptr = static_cast<bool*>(mask_lock.second);
+    LITERT_ASSIGN_OR_RETURN(RankedTensorType tensor_type,
+                            mask_buf.TensorType());
+    LITERT_ASSIGN_OR_RETURN(size_t num_elements,
+                            tensor_type.Layout().NumElements());
+    for (size_t i = 0; i < num_elements; ++i) {
+      mask_ptr[i] = (i < seq_positions.size());
+    }
+  }
+  return absl::OkStatus();
+}
+
+absl::Status NpuKVCache::SetDecodePosition(int32_t step) {
+  if (cache_update_context_.decode_input_buffers.contains(
+          CacheUpdateSignatures::kInputPos)) {
+    LITERT_RETURN_IF_ERROR(SetFirstElement(
+        cache_update_context_
+            .decode_input_buffers[CacheUpdateSignatures::kInputPos],
+        step));
+  }
+  if (cache_update_context_.decode_input_buffers.contains(
+          CacheUpdateSignatures::kInputValidMask)) {
+    LITERT_RETURN_IF_ERROR(SetFirstElement(
+        cache_update_context_
+            .decode_input_buffers[CacheUpdateSignatures::kInputValidMask],
+        true));
+  }
+  return absl::OkStatus();
+}
+
+absl::Status NpuKVCache::RunPrefill(absl::string_view signature) {
+  if (method_ == KVCacheUpdateMethod::kWH) {
+    return HWKVCacheUpdate(cache_update_context_.prefill_input_buffers,
+                           cache_update_context_.prefill_output_buffers,
+                           kv_quant_params_, has_sliding_window_attention_);
+  }
+  auto res = compiled_model_->Run(signature,
+                                  cache_update_context_.prefill_input_buffers,
+                                  cache_update_context_.prefill_output_buffers);
+  RET_CHECK(res) << "Failed to run cache update model: "
+                 << res.Error().Message();
+  return absl::OkStatus();
+}
+
+absl::Status NpuKVCache::RunDecode() {
+  if (method_ == KVCacheUpdateMethod::kWH) {
+    return HWKVCacheUpdate(cache_update_context_.decode_input_buffers,
+                           cache_update_context_.decode_output_buffers,
+                           kv_quant_params_, has_sliding_window_attention_);
+  }
+  auto res = compiled_model_->Run(CacheUpdateSignatures::kDecodeCacheUpdate,
+                                  cache_update_context_.decode_input_buffers,
+                                  cache_update_context_.decode_output_buffers);
+  RET_CHECK(res) << "Failed to run cache update model: "
+                 << res.Error().Message();
+  return absl::OkStatus();
+}
+
+absl::Status NpuKVCache::SetVerifyPos(int start_step) {
+  if (cache_update_context_.verify_input_buffers.contains(
+          CacheUpdateSignatures::kInputPos)) {
+    auto& pos_buf = cache_update_context_
+                        .verify_input_buffers[CacheUpdateSignatures::kInputPos];
+    LITERT_ASSIGN_OR_RETURN(
+        auto pos_lock, ::litert::TensorBufferScopedLock::Create(
+                           pos_buf, ::litert::TensorBuffer::LockMode::kWrite));
+    auto* pos_ptr = static_cast<int32_t*>(pos_lock.second);
+    LITERT_ASSIGN_OR_RETURN(RankedTensorType tensor_type, pos_buf.TensorType());
+    int tensor_size = tensor_type.Layout().Dimensions()[0];
+    for (int i = 0; i < tensor_size; ++i) {
+      pos_ptr[i] = start_step + i;
+    }
+  }
+  return absl::OkStatus();
+}
+
+absl::Status NpuKVCache::CommitVerifiedKVCache(int start_step) {
+  LITERT_RETURN_IF_ERROR(SetVerifyPos(start_step));
+  if (method_ == KVCacheUpdateMethod::kWH) {
+    return HWKVCacheUpdate(cache_update_context_.verify_input_buffers,
+                           cache_update_context_.verify_output_buffers,
+                           kv_quant_params_, has_sliding_window_attention_);
+  }
+  LITERT_RETURN_IF_ERROR(
+      compiled_model_->Run(CacheUpdateSignatures::kVerifyCacheUpdate,
+                           cache_update_context_.verify_input_buffers,
+                           cache_update_context_.verify_output_buffers));
+  return absl::OkStatus();
+}
+
+// -----------------------------------------------------------------------------
+// DrafterAuxContext Implementation
+// -----------------------------------------------------------------------------
+
+absl::StatusOr<DrafterAuxContext> DrafterAuxContext::Create(
+    ::litert::Environment& env, const litert::Model& mtp_aux_model,
+    const absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+        drafter_aux_output_buffers,
+    MaskUpdateMethod mtp_mask_update_method) {
+  LITERT_ASSIGN_OR_RETURN(
+      auto mtp_aux_compiled_model,
+      CompiledModelWrapper::Create(env, mtp_aux_model.Get(),
+                                   litert::HwAccelerators::kCpu));
+  absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
+      rope_input_buffers;
+  absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
+      rope_output_buffers;
+  absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
+      mask_input_buffers;
+  absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
+      mask_output_buffers;
+
+  // Drafter aux rope signature.
+  LITERT_ASSIGN_OR_RETURN(
+      rope_input_buffers[MtpSignatures::kInputPos],
+      mtp_aux_compiled_model.CreateInputBuffer(MtpSignatures::kMtpRope,
+                                               MtpSignatures::kInputPos));
+  rope_input_buffers[MtpSignatures::kInputPos].Clear();
+
+  LITERT_ASSIGN_OR_RETURN(
+      auto rope_output_names,
+      mtp_aux_compiled_model.GetSignatureOutputNames(MtpSignatures::kMtpRope));
+  for (const auto& name : rope_output_names) {
+    LITERT_ASSIGN_OR_RETURN(rope_output_buffers[name],
+                            drafter_aux_output_buffers.at(name).Duplicate());
+  }
+
+  // Drafter aux mask signature.
+  LITERT_ASSIGN_OR_RETURN(
+      mask_input_buffers[MtpSignatures::kInputTimeStep],
+      mtp_aux_compiled_model.CreateInputBuffer(MtpSignatures::kMtpMask,
+                                               MtpSignatures::kInputTimeStep));
+  mask_input_buffers[MtpSignatures::kInputTimeStep].Clear();
+
+  LITERT_ASSIGN_OR_RETURN(
+      mask_input_buffers[MtpSignatures::kInputTokens],
+      mtp_aux_compiled_model.CreateInputBuffer(MtpSignatures::kMtpMask,
+                                               MtpSignatures::kInputTokens));
+
+  LITERT_ASSIGN_OR_RETURN(
+      auto mask_output_names,
+      mtp_aux_compiled_model.GetSignatureOutputNames(MtpSignatures::kMtpMask));
+  for (const auto& name : mask_output_names) {
+    LITERT_ASSIGN_OR_RETURN(mask_output_buffers[name],
+                            drafter_aux_output_buffers.at(name).Duplicate());
+  }
+
+  LITERT_ASSIGN_OR_RETURN(
+      auto drafter_rope,
+      NpuRope::CreateForDrafter(&mtp_aux_compiled_model,
+                                std::move(rope_input_buffers),
+                                std::move(rope_output_buffers)));
+
+  LITERT_ASSIGN_OR_RETURN(
+      auto drafter_mask,
+      NpuMask::CreateForDrafter(mtp_mask_update_method, &mtp_aux_compiled_model,
+                                std::move(mask_input_buffers),
+                                std::move(mask_output_buffers)));
+
+  return DrafterAuxContext(std::move(mtp_aux_compiled_model),
+                           std::move(drafter_rope), std::move(drafter_mask));
+}
+
+absl::StatusOr<NpuAuxiliaryContext> NpuAuxiliaryContext::Create(
+    ::litert::Environment& env, const litert::Model& npu_auxiliary_model,
+    const LlmExecutorSettings& settings) {
+  LITERT_ASSIGN_OR_RETURN(auto options, CreateLiteRtNpuOptions(settings));
+  LITERT_ASSIGN_OR_RETURN(
+      CompiledModel npu_auxiliary_compiled_model,
+      CompiledModelWrapper::Create(env, npu_auxiliary_model.Get(), options));
+  return NpuAuxiliaryContext(std::move(npu_auxiliary_compiled_model));
+}
+
+absl::StatusOr<NpuAuxiliaryContext> CreateNpuAuxiliaryContext(
+    ::litert::Environment& env, const litert::Model& npu_auxiliary_model,
+    const LlmExecutorSettings& settings) {
+  return NpuAuxiliaryContext::Create(env, npu_auxiliary_model, settings);
+}
+
+absl::StatusOr<DrafterContext> DrafterContext::Create(
+    ::litert::Environment& env, const litert::Model& mtp_drafter_model,
+    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+        drafter_input_kv_cache_buffers,
+    ::litert::TensorBuffer& output_activations_buffers) {
+  LITERT_ASSIGN_OR_RETURN(
+      auto mtp_compiled_model,
+      CompiledModelWrapper::Create(env, mtp_drafter_model.Get(),
+                                   litert::HwAccelerators::kCpu));
+  absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
+      mtp_input_buffers;
+  absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
+      mtp_output_buffers;
+
+  // Create input and output buffers for the MTP drafter.
+  auto mtp_signature =
+      mtp_compiled_model.FindSignature(MtpSignatures::kMtpDrafter);
+  for (const auto& input_name : mtp_signature->InputNames()) {
+    // Reuse kv cache buffers from main model
+    if (absl::StartsWith(input_name, kKvCacheKRootName) ||
+        absl::StartsWith(input_name, kKvCacheVRootName)) {
+      LITERT_ASSIGN_OR_RETURN(
+          mtp_input_buffers[input_name],
+          drafter_input_kv_cache_buffers[input_name].Duplicate());
+    } else {
+      LITERT_ASSIGN_OR_RETURN(mtp_input_buffers[input_name],
+                              mtp_compiled_model.CreateInputBuffer(
+                                  MtpSignatures::kMtpDrafter, input_name));
+      mtp_input_buffers[input_name].Clear();
+    }
+  }
+  for (const auto& output_name : mtp_signature->OutputNames()) {
+    {
+      LITERT_ASSIGN_OR_RETURN(mtp_output_buffers[output_name],
+                              mtp_compiled_model.CreateOutputBuffer(
+                                  MtpSignatures::kMtpDrafter, output_name));
+    }
+  }
+  return DrafterContext(std::move(mtp_compiled_model),
+                        std::move(mtp_input_buffers),
+                        std::move(mtp_output_buffers));
+}
+
+absl::Status DrafterContext::SetInputPos(int32_t pos) {
+  auto it = mtp_input_buffers.find(MtpSignatures::kInputPos);
+  if (it == mtp_input_buffers.end()) {
+    return absl::NotFoundError("Drafter input pos buffer not found.");
+  }
+  LITERT_ASSIGN_OR_RETURN(
+      auto lock, ::litert::TensorBufferScopedLock::Create(
+                     it->second, ::litert::TensorBuffer::LockMode::kWrite));
+  static_cast<int32_t*>(lock.second)[0] = pos;
+  return absl::OkStatus();
+}
+
+bool IsNpuSyncWorkaroundEnabled() {
+  static bool enabled = []() {
+    const char* env = std::getenv("LITERT_LM_SYNC_EXECUTION");
+    if (env == nullptr) {
+      // Default is async (false)
+      return false;
+    }
+    std::string env_str(env);
+    return env_str == "1" || env_str == "true" || env_str == "sync";
+  }();
+  return enabled;
+}
+
+absl::Status Fill(TensorBuffer& tensor_buffer, uint16_t value) {
+  LITERT_ASSIGN_OR_RETURN(RankedTensorType tensor_buffer_type,
+                          tensor_buffer.TensorType());
+  LITERT_ASSIGN_OR_RETURN(
+      auto lock_and_addr,
+      ::litert::TensorBufferScopedLock::Create(
+          tensor_buffer, ::litert::TensorBuffer::LockMode::kWrite));
+  LITERT_ASSIGN_OR_RETURN(size_t num_elements,
+                          tensor_buffer_type.Layout().NumElements());
+  if (tensor_buffer_type.ElementType() == ::litert::ElementType::Float32) {
+    float* ptr = static_cast<float*>(lock_and_addr.second);
+    float float_value = static_cast<float>(value);
+    for (int i = 0; i < num_elements; ++i) {
+      ptr[i] = float_value;
+    }
+  } else if (tensor_buffer_type.ElementType() == ::litert::ElementType::Int16) {
+    int16_t* ptr = static_cast<int16_t*>(lock_and_addr.second);
+    int16_t int16_value = static_cast<int16_t>(value);
+    for (int i = 0; i < num_elements; ++i) {
+      ptr[i] = int16_value;
+    }
+  } else if (tensor_buffer_type.ElementType() ==
+             ::litert::ElementType::UInt16) {
+    uint16_t* ptr = static_cast<uint16_t*>(lock_and_addr.second);
+    for (int i = 0; i < num_elements; ++i) {
+      ptr[i] = value;
+    }
+  } else {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Unsupported tensor element type for Fill: ",
+                     tensor_buffer_type.ElementType()));
+  }
+  return absl::OkStatus();
+}
+
+absl::StatusOr<std::vector<uint8_t>> CopyRawBytesFromTensorBuffer(
+    const TensorBuffer& buffer) {
+  LITERT_ASSIGN_OR_RETURN(RankedTensorType tensor_type, buffer.TensorType());
+  LITERT_ASSIGN_OR_RETURN(size_t num_bytes, buffer.Size());
+  if (tensor_type.ElementType() == ::litert::ElementType::Float32) {
+    LITERT_ASSIGN_OR_RETURN(auto buf, CopyFromTensorBuffer<float>(buffer));
+    std::vector<uint8_t> res(num_bytes);
+    std::memcpy(res.data(), buf.data(), num_bytes);
+    return res;
+  } else if (tensor_type.ElementType() == ::litert::ElementType::Int16) {
+    LITERT_ASSIGN_OR_RETURN(auto buf, CopyFromTensorBuffer<int16_t>(buffer));
+    std::vector<uint8_t> res(num_bytes);
+    std::memcpy(res.data(), buf.data(), num_bytes);
+    return res;
+  } else if (tensor_type.ElementType() == ::litert::ElementType::Int8) {
+    LITERT_ASSIGN_OR_RETURN(auto buf, CopyFromTensorBuffer<int8_t>(buffer));
+    std::vector<uint8_t> res(num_bytes);
+    std::memcpy(res.data(), buf.data(), num_bytes);
+    return res;
+  } else {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Unsupported tensor element type for copying: ",
+                     tensor_type.ElementType()));
+  }
+}
+
+bool DetectIsSwa(const absl::flat_hash_map<absl::string_view, TensorBuffer>&
+                     input_kv_cache_buffers) {
+  std::set<int64_t> cache_seqs;
+  for (const auto& [name, buffer] : input_kv_cache_buffers) {
+    if (name.starts_with(kKvCacheKRootName) ||
+        name.starts_with(kKvCacheVRootName) ||
+        name.starts_with(kKvCacheCRootName)) {
+      auto tensor_type_expected = buffer.TensorType();
+      if (tensor_type_expected.HasValue()) {
+        auto dims = tensor_type_expected->Layout().Dimensions();
+        int rank = dims.size();
+        if (rank >= 2) {
+          int last_dim = dims[rank - 1];
+          int second_last_dim = dims[rank - 2];
+          int64_t cache_seq = std::max(last_dim, second_last_dim);
+          cache_seqs.insert(cache_seq);
+        }
+      }
+    }
+  }
+  return cache_seqs.size() > 1;
+}
+
+std::string PrefillSig(absl::string_view base, int prefill_size) {
+  return absl::StrCat(base, "_", prefill_size);
+}
+
+absl::StatusOr<int> DetectPrefillSize(const litert::Model& transformer_model) {
+  const std::string prefix = absl::StrCat(kPrefillSignatureBase, "_");
+  auto signatures = transformer_model.GetSignatures();
+  if (signatures) {
+    for (const auto& signature : *signatures) {
+      absl::string_view key = signature.Key();
+      if (!absl::StartsWith(key, prefix)) {
+        continue;
+      }
+      // Only the bare LLM prefill signature has a purely numeric suffix; the
+      // auxiliary signatures (prefill_mask_..., prefill_rope_..., etc.) carry a
+      // non-numeric segment after the "prefill_" prefix.
+      absl::string_view suffix = key.substr(prefix.size());
+      int prefill_size = 0;
+      if (absl::SimpleAtoi(suffix, &prefill_size) && prefill_size > 0) {
+        return prefill_size;
+      }
+    }
+  }
+  // Fallback: probe a list of common prefill sizes.
+  for (int candidate : {256, 128, 512, 1024, 64}) {
+    if (transformer_model
+            .FindSignature(PrefillSig(kPrefillSignatureBase, candidate))
+            .HasValue()) {
+      return candidate;
+    }
+  }
+  return absl::NotFoundError(
+      "Could not detect a prefill signature (e.g. \"prefill_128\") in the "
+      "transformer model.");
+}
+
+ResolvedPrefillSignatures BuildResolvedPrefillSignatures(int prefill_size) {
+  return ResolvedPrefillSignatures{
+      .size = prefill_size,
+      .prefill = PrefillSig(kPrefillSignatureBase, prefill_size),
+      .embedder = PrefillSig(kPrefillEmbedderBase, prefill_size),
+      .embedder_per_layer =
+          PrefillSig(kPrefillEmbedderPerLayerBase, prefill_size),
+      .mask = PrefillSig(kPrefillMaskBase, prefill_size),
+      .rope = PrefillSig(kPrefillRopeBase, prefill_size),
+      .cache_update = PrefillSig(kPrefillCacheUpdateBase, prefill_size)};
+}
+
+litert::Expected<bool> HasPerLayerEmbedder(
+    const litert::Model& transformer_model,
+    absl::string_view prefill_signature) {
+  LITERT_ASSIGN_OR_RETURN(
+      auto input_names,
+      transformer_model.GetSignatureInputNames(prefill_signature));
+  for (auto input_name : input_names) {
+    if (kPerLayerEmbedderTensor == input_name) {
+      return true;
+    }
+  }
+  return false;
+}
+
+int64_t GetKvCacheInitValue(ModelResources& resources) {
+  int64_t kv_cache_init_value = 0;
+  if (auto metadata_status = resources.GetLlmMetadata(); metadata_status.ok()) {
+    const proto::LlmMetadata* metadata = *metadata_status;
+    if (metadata && metadata->has_kv_cache_init_value()) {
+      kv_cache_init_value = metadata->kv_cache_init_value();
+    }
+  }
+  return kv_cache_init_value;
+}
+
+absl::Status FillKVCacheBuffer(TensorBuffer& buffer, int64_t init_value) {
+  LITERT_ASSIGN_OR_RETURN(RankedTensorType tensor_type, buffer.TensorType());
+  LITERT_ASSIGN_OR_RETURN(auto size, buffer.PackedSize());
+  LITERT_ASSIGN_OR_RETURN(
+      auto lock, ::litert::TensorBufferScopedLock::Create(
+                     buffer, ::litert::TensorBuffer::LockMode::kWrite));
+
+  auto element_type = tensor_type.ElementType();
+  if (element_type == ::litert::ElementType::Int16) {
+    auto* ptr = static_cast<int16_t*>(lock.second);
+    std::fill(ptr, ptr + size / sizeof(int16_t),
+              static_cast<int16_t>(init_value));
+  } else if (element_type == ::litert::ElementType::UInt16) {
+    auto* ptr = static_cast<uint16_t*>(lock.second);
+    std::fill(ptr, ptr + size / sizeof(uint16_t),
+              static_cast<uint16_t>(init_value));
+  } else {
+    std::memset(lock.second, 0, size);
+  }
+  return absl::OkStatus();
+}
+
+absl::Status ClearKVCacheBuffers(
+    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& buffers,
+    int64_t init_value) {
+  for (auto& [buffer_name, buffer] : buffers) {
+    if (buffer_name.starts_with(kKvCacheKRootName) ||
+        buffer_name.starts_with(kKvCacheVRootName) ||
+        buffer_name.starts_with(kKvCacheCRootName)) {
+      LITERT_RETURN_IF_ERROR(FillKVCacheBuffer(buffer, init_value));
     }
   }
   return absl::OkStatus();

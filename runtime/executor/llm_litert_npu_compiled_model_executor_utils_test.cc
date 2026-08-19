@@ -25,14 +25,17 @@
 
 #include <gtest/gtest.h>
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
+#include "absl/log/absl_check.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_layout.h"  // from @litert
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
+#include "litert/test/matchers.h"  // from @litert
 
 namespace litert::lm {
 namespace {
@@ -94,9 +97,11 @@ class ExecutorUtilsTest : public ::testing::Test {
     auto buffer_expected = TensorBuffer::CreateManaged(
         *env_, ::litert::TensorBufferType::kHostMemory, tensor_type,
         data.size() * sizeof(T));
+    ABSL_CHECK(buffer_expected.HasValue());
     TensorBuffer buffer = std::move(*buffer_expected);
     auto lock_expected = TensorBufferScopedLock::Create<T>(
         buffer, TensorBuffer::LockMode::kWrite);
+    ABSL_CHECK(lock_expected.HasValue());
     std::memcpy(lock_expected->second, data.data(), data.size() * sizeof(T));
     return buffer;
   }
@@ -123,9 +128,9 @@ class ExecutorUtilsTest : public ::testing::Test {
             *std::max_element(current_data.begin(), current_data.end());
         current_data[pos] = current_max + 1;
         TensorBuffer buffer = CreateTensorBuffer(current_data, type);
-        auto result = FindMaxIndex<T>(buffer, use_neon);
-        ASSERT_TRUE(result.ok());
-        EXPECT_EQ(*result, pos) << "Failed at pos " << pos << " for size "
+        LITERT_ASSERT_OK_AND_ASSIGN(auto max_idx,
+                                    FindMaxIndex<T>(buffer, use_neon));
+        EXPECT_EQ(max_idx, pos) << "Failed at pos " << pos << " for size "
                                 << size << " use_neon=" << use_neon;
       }
 
@@ -138,10 +143,10 @@ class ExecutorUtilsTest : public ::testing::Test {
       current_data[first_pos] = current_max + 2;
       current_data[second_pos] = current_max + 2;
       TensorBuffer buffer = CreateTensorBuffer(current_data, type);
-      auto result = FindMaxIndex<T>(buffer, use_neon);
-      ASSERT_TRUE(result.ok());
+      LITERT_ASSERT_OK_AND_ASSIGN(auto max_idx,
+                                  FindMaxIndex<T>(buffer, use_neon));
       // Our implementation should return the first occurrence
-      EXPECT_EQ(*result, first_pos) << "Failed multiple occurrences for size "
+      EXPECT_EQ(max_idx, first_pos) << "Failed multiple occurrences for size "
                                     << size << " use_neon=" << use_neon;
     }
   }
@@ -170,9 +175,9 @@ TEST_F(ExecutorUtilsTest, CrossVerifyFloat32) {
 
   TensorBuffer buffer = CreateTensorBuffer(data, ElementType::Float32);
   for (bool use_neon : {false, true}) {
-    auto result = FindMaxIndex<float>(buffer, use_neon);
-    ASSERT_TRUE(result.ok());
-    EXPECT_EQ(*result, ReferenceFindMaxIndex(data)) << "use_neon=" << use_neon;
+    LITERT_ASSERT_OK_AND_ASSIGN(auto max_idx,
+                                FindMaxIndex<float>(buffer, use_neon));
+    EXPECT_EQ(max_idx, ReferenceFindMaxIndex(data)) << "use_neon=" << use_neon;
   }
 }
 
@@ -185,9 +190,9 @@ TEST_F(ExecutorUtilsTest, CrossVerifyInt16) {
 
   TensorBuffer buffer = CreateTensorBuffer(data, ElementType::Int16);
   for (bool use_neon : {false, true}) {
-    auto result = FindMaxIndex<int16_t>(buffer, use_neon);
-    ASSERT_TRUE(result.ok());
-    EXPECT_EQ(*result, ReferenceFindMaxIndex(data)) << "use_neon=" << use_neon;
+    LITERT_ASSERT_OK_AND_ASSIGN(auto max_idx,
+                                FindMaxIndex<int16_t>(buffer, use_neon));
+    EXPECT_EQ(max_idx, ReferenceFindMaxIndex(data)) << "use_neon=" << use_neon;
   }
 }
 
@@ -200,9 +205,9 @@ TEST_F(ExecutorUtilsTest, CrossVerifyInt8) {
 
   TensorBuffer buffer = CreateTensorBuffer(data, ElementType::Int8);
   for (bool use_neon : {false, true}) {
-    auto result = FindMaxIndex<int8_t>(buffer, use_neon);
-    ASSERT_TRUE(result.ok());
-    EXPECT_EQ(*result, ReferenceFindMaxIndex(data)) << "use_neon=" << use_neon;
+    LITERT_ASSERT_OK_AND_ASSIGN(auto max_idx,
+                                FindMaxIndex<int8_t>(buffer, use_neon));
+    EXPECT_EQ(max_idx, ReferenceFindMaxIndex(data)) << "use_neon=" << use_neon;
   }
 }
 
@@ -210,9 +215,9 @@ TEST_F(ExecutorUtilsTest, ApplyGreedySamplingCrossVerify) {
   std::vector<float> data = {0.1f, 0.9f, 0.4f};
   TensorBuffer buffer = CreateTensorBuffer(data, ElementType::Float32);
   for (bool use_neon : {false, true}) {
-    auto result = ApplyGreedySampling(buffer, use_neon);
-    ASSERT_TRUE(result.ok());
-    EXPECT_EQ(*result, 1) << "use_neon=" << use_neon;
+    LITERT_ASSERT_OK_AND_ASSIGN(auto sample_idx,
+                                ApplyGreedySampling(buffer, use_neon));
+    EXPECT_EQ(sample_idx, 1) << "use_neon=" << use_neon;
   }
 }
 
@@ -434,6 +439,7 @@ TEST_F(ExecutorUtilsTest, HWKVCacheUpdateBasic) {
 
   auto lock_expected = TensorBufferScopedLock::Create<float>(
       in_buffers.at("kv_cache_k_0"), TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(lock_expected.HasValue());
   auto& lock = *lock_expected;
   for (int i = 0; i < slice_seq * hidden_dim; ++i) {
     EXPECT_EQ(lock.second[start_pos * hidden_dim + i], slice_data[i]);
@@ -473,6 +479,7 @@ TEST_F(ExecutorUtilsTest, HWKVCacheUpdateTransposedInt8) {
 
   auto lock_expected = TensorBufferScopedLock::Create<int8_t>(
       in_buffers.at("kv_cache_k_0"), TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(lock_expected.HasValue());
   auto& lock = *lock_expected;
   for (int h = 0; h < hidden_dim; ++h) {
     EXPECT_EQ(lock.second[h * cache_seq + start_pos], slice_data[h]);
@@ -511,6 +518,7 @@ TEST_F(ExecutorUtilsTest, HWKVCacheUpdateTransposedInt16) {
 
   auto lock_expected = TensorBufferScopedLock::Create<int16_t>(
       in_buffers.at("kv_cache_k_0"), TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(lock_expected.HasValue());
   auto& lock = *lock_expected;
   for (int h = 0; h < hidden_dim; ++h) {
     EXPECT_EQ(lock.second[h * cache_seq + start_pos], slice_data[h]);
@@ -581,6 +589,7 @@ TEST_F(ExecutorUtilsTest, HWKVCacheUpdateGemma3nPrefill) {
 
   auto k_lock_expected = TensorBufferScopedLock::Create<int16_t>(
       in_buffers.at("kv_cache_k_0"), TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(k_lock_expected.HasValue());
   auto& k_lock = *k_lock_expected;
   for (int o = 0; o < 2; ++o) {
     for (int i = 0; i < slice_seq * hidden_dim; ++i) {
@@ -591,6 +600,7 @@ TEST_F(ExecutorUtilsTest, HWKVCacheUpdateGemma3nPrefill) {
 
   auto v_lock_expected = TensorBufferScopedLock::Create<int16_t>(
       in_buffers.at("kv_cache_v_0"), TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(v_lock_expected.HasValue());
   auto& v_lock = *v_lock_expected;
   for (int h = 0; h < 2 * hidden_dim; ++h) {
     for (int s = 0; s < slice_seq; ++s) {
@@ -633,6 +643,7 @@ TEST_F(ExecutorUtilsTest, HWKVCacheUpdateSWADecode) {
 
   auto lock_expected = TensorBufferScopedLock::Create<float>(
       in_buffers.at("kv_cache_k_0"), TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(lock_expected.HasValue());
   auto& lock = *lock_expected;
 
   // Verify that only index 1 (wrapped from 9) is updated
@@ -680,6 +691,7 @@ TEST_F(ExecutorUtilsTest, HWKVCacheUpdateSWADecodeTransposed) {
 
   auto lock_expected = TensorBufferScopedLock::Create<float>(
       in_buffers.at("kv_cache_k_0"), TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(lock_expected.HasValue());
   auto& lock = *lock_expected;
 
   int target_pos = start_pos % cache_seq;
@@ -730,6 +742,7 @@ TEST_F(ExecutorUtilsTest, HWKVCacheUpdateSWAPrefillWrap) {
 
   auto lock_expected = TensorBufferScopedLock::Create<float>(
       in_buffers.at("kv_cache_k_0"), TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(lock_expected.HasValue());
   auto& lock = *lock_expected;
 
   // Expected mapping:
@@ -797,6 +810,7 @@ TEST_F(ExecutorUtilsTest, HWKVCacheUpdateSWAPrefillWrapTransposed) {
 
   auto lock_expected = TensorBufferScopedLock::Create<float>(
       in_buffers.at("kv_cache_k_0"), TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(lock_expected.HasValue());
   auto& lock = *lock_expected;
 
   // Expected mapping:
@@ -881,6 +895,7 @@ TEST_F(ExecutorUtilsTest, HWKVCacheUpdateSWAPrefillWithValidMask) {
 
   auto lock_expected = TensorBufferScopedLock::Create<float>(
       in_buffers.at("kv_cache_k_0"), TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(lock_expected.HasValue());
   auto& lock = *lock_expected;
 
   // Expected cache content:
@@ -933,8 +948,10 @@ TEST_F(ExecutorUtilsTest, HWMaskUpdateInt8) {
 
   auto local_lock_expected = TensorBufferScopedLock::Create<int8_t>(
       out_buffers.at("mask_local"), TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(local_lock_expected.HasValue());
   auto global_lock_expected = TensorBufferScopedLock::Create<int8_t>(
       out_buffers.at("mask_global"), TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(global_lock_expected.HasValue());
   auto& local_lock = *local_lock_expected;
   auto& global_lock = *global_lock_expected;
 
@@ -982,8 +999,10 @@ TEST_F(ExecutorUtilsTest, HWMaskUpdateInt16) {
 
   auto local_lock_expected = TensorBufferScopedLock::Create<int16_t>(
       out_buffers.at("mask_local"), TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(local_lock_expected.HasValue());
   auto global_lock_expected = TensorBufferScopedLock::Create<int16_t>(
       out_buffers.at("mask_global"), TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(global_lock_expected.HasValue());
   auto& local_lock = *local_lock_expected;
   auto& global_lock = *global_lock_expected;
 
@@ -1032,6 +1051,7 @@ TEST_F(ExecutorUtilsTest, HWMaskUpdateGemma3Prefill) {
 
   auto global_lock_expected = TensorBufferScopedLock::Create<int8_t>(
       out_buffers.at("mask_global"), TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(global_lock_expected.HasValue());
   auto& global_lock = *global_lock_expected;
 
   // Capacity 1280.
@@ -1074,6 +1094,7 @@ TEST_F(ExecutorUtilsTest, HWMaskUpdateGemma3Decode) {
 
   auto global_lock_expected = TensorBufferScopedLock::Create<int8_t>(
       out_buffers.at("mask_global"), TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(global_lock_expected.HasValue());
   auto& global_lock = *global_lock_expected;
 
   // Check KV cache part
@@ -1121,6 +1142,7 @@ TEST_F(ExecutorUtilsTest, HWMaskUpdateWithValidMask) {
 
   auto global_lock_expected = TensorBufferScopedLock::Create<int8_t>(
       out_buffers.at("mask_global"), TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(global_lock_expected.HasValue());
   ASSERT_TRUE(global_lock_expected);
   auto& global_lock = *global_lock_expected;
 
@@ -1170,8 +1192,10 @@ TEST_F(ExecutorUtilsTest, HWMaskUpdateSWADecode_TimestepSmallerLocalWindow) {
 
   auto local_lock_expected = TensorBufferScopedLock::Create<float>(
       out_buffers.at("mask_local"), TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(local_lock_expected.HasValue());
   auto global_lock_expected = TensorBufferScopedLock::Create<float>(
       out_buffers.at("mask_global"), TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(global_lock_expected.HasValue());
   ASSERT_TRUE(local_lock_expected);
   ASSERT_TRUE(global_lock_expected);
   float* local_ptr = local_lock_expected->second;
@@ -1226,8 +1250,10 @@ TEST_F(ExecutorUtilsTest, HWMaskUpdateSWADecode_TimestepLargerLocalWindow) {
 
   auto local_lock_expected = TensorBufferScopedLock::Create<float>(
       out_buffers.at("mask_local"), TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(local_lock_expected.HasValue());
   auto global_lock_expected = TensorBufferScopedLock::Create<float>(
       out_buffers.at("mask_global"), TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(global_lock_expected.HasValue());
   ASSERT_TRUE(local_lock_expected);
   ASSERT_TRUE(global_lock_expected);
   float* local_ptr = local_lock_expected->second;
@@ -1285,6 +1311,7 @@ TEST_F(ExecutorUtilsTest, HWMaskUpdateCapacity4096Uses512AsWindow) {
 
   auto local_lock_expected = TensorBufferScopedLock::Create<float>(
       out_buffers.at("mask_local"), TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(local_lock_expected.HasValue());
   ASSERT_TRUE(local_lock_expected);
   float* local_ptr = local_lock_expected->second;
 
@@ -1328,8 +1355,10 @@ TEST_F(ExecutorUtilsTest, HWMaskUpdateSWAPrefill) {
 
   auto local_lock_expected = TensorBufferScopedLock::Create<float>(
       out_buffers.at("mask_local"), TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(local_lock_expected.HasValue());
   auto global_lock_expected = TensorBufferScopedLock::Create<float>(
       out_buffers.at("mask_global"), TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(global_lock_expected.HasValue());
   ASSERT_TRUE(local_lock_expected);
   ASSERT_TRUE(global_lock_expected);
   float* local_ptr = local_lock_expected->second;
@@ -1394,8 +1423,10 @@ TEST_F(ExecutorUtilsTest, HWMaskUpdateSWAPrefill_TimestepSmallerLocalWindow) {
 
   auto local_lock_expected = TensorBufferScopedLock::Create<float>(
       out_buffers.at("mask_local"), TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(local_lock_expected.HasValue());
   auto global_lock_expected = TensorBufferScopedLock::Create<float>(
       out_buffers.at("mask_global"), TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(global_lock_expected.HasValue());
   ASSERT_TRUE(local_lock_expected);
   ASSERT_TRUE(global_lock_expected);
   float* local_ptr = local_lock_expected->second;
@@ -1469,8 +1500,10 @@ TEST_F(ExecutorUtilsTest, HWMaskUpdateSWAPrefill_TimestepLargerLocalWindow) {
 
   auto local_lock_expected = TensorBufferScopedLock::Create<float>(
       out_buffers.at("mask_local"), TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(local_lock_expected.HasValue());
   auto global_lock_expected = TensorBufferScopedLock::Create<float>(
       out_buffers.at("mask_global"), TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(global_lock_expected.HasValue());
   ASSERT_TRUE(local_lock_expected);
   ASSERT_TRUE(global_lock_expected);
   float* local_ptr = local_lock_expected->second;
@@ -1888,6 +1921,7 @@ TEST_F(ExecutorUtilsTest, HWKVCacheUpdateConvolution) {
 
   auto lock_expected = TensorBufferScopedLock::Create<float>(
       in_buffers.at("kv_cache_c_0"), TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(lock_expected.HasValue());
   auto& lock = *lock_expected;
   for (int i = 0; i < (int)slice_data.size(); ++i) {
     EXPECT_EQ(lock.second[i], slice_data[i]);
@@ -1924,6 +1958,7 @@ TEST_F(ExecutorUtilsTest, HWKVCacheUpdateConvolutionOutBuffer) {
   {
     auto lock_expected = TensorBufferScopedLock::Create<float>(
         in_buffers.at("kv_cache_c_1"), TensorBuffer::LockMode::kRead);
+    ASSERT_TRUE(lock_expected.HasValue());
     auto& lock = *lock_expected;
     for (int i = 0; i < (int)slice_data.size(); ++i) {
       EXPECT_EQ(lock.second[i], 2.0f);
@@ -1934,6 +1969,7 @@ TEST_F(ExecutorUtilsTest, HWKVCacheUpdateConvolutionOutBuffer) {
   {
     auto lock_expected = TensorBufferScopedLock::Create<float>(
         out_buffers.at("kv_cache_c_1"), TensorBuffer::LockMode::kRead);
+    ASSERT_TRUE(lock_expected.HasValue());
     auto& lock = *lock_expected;
     for (int i = 0; i < (int)slice_data.size(); ++i) {
       EXPECT_EQ(lock.second[i], 2.0f);
@@ -1963,6 +1999,7 @@ TEST_F(ExecutorUtilsTest, HWMaskUpdateFloat16) {
 
   auto global_lock_expected = TensorBufferScopedLock::Create<uint16_t>(
       out_buffers.at("mask_global"), TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(global_lock_expected.HasValue());
   auto& global_lock = *global_lock_expected;
 
   // Check KV cache part (0 to 4095)
@@ -1997,6 +2034,7 @@ TEST_F(ExecutorUtilsTest, HWMaskUpdateBFloat16) {
 
   auto global_lock_expected = TensorBufferScopedLock::Create<uint16_t>(
       out_buffers.at("mask_global"), TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(global_lock_expected.HasValue());
   auto& global_lock = *global_lock_expected;
 
   // Check KV cache part (0 to 4095)
@@ -2316,5 +2354,294 @@ TEST(ExecutorUtilsFormatFirstNTest, FormatFirstNFloat) {
   std::vector<float> data = {1.5f, 2.5f, 3.5f};
   EXPECT_EQ(FormatFirstN<float>(data, 2), "[1.5, 2.5, ...]");
 }
+
+TEST_F(ExecutorUtilsTest,
+       NpuMaskCreateFailsWhenCompiledModelNullForModelMethod) {
+  InferenceContext ctx;
+  auto mask_or =
+      NpuMask::CreateForTest(MaskUpdateMethod::kModel, nullptr, std::move(ctx));
+  EXPECT_FALSE(mask_or.ok());
+}
+
+TEST_F(ExecutorUtilsTest,
+       NpuMaskCreateSucceedsForHwMethodWithoutCompiledModel) {
+  InferenceContext ctx;
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto mask,
+      NpuMask::CreateForTest(MaskUpdateMethod::kWH, nullptr, std::move(ctx)));
+  EXPECT_EQ(mask.GetMethod(), MaskUpdateMethod::kWH);
+}
+
+TEST_F(ExecutorUtilsTest, NpuMaskSettersAndAccessors) {
+  InferenceContext ctx;
+  ctx.decode_input_buffers[MaskSignatures::kMaskInputTimeStep] =
+      CreateTensorBufferWithDims(std::vector<int32_t>{0}, ElementType::Int32,
+                                 {1});
+  ctx.decode_input_buffers[MaskSignatures::kMaskInputTokens] =
+      CreateTensorBufferWithDims(std::vector<int32_t>{0}, ElementType::Int32,
+                                 {1});
+  ctx.decode_input_buffers[MaskSignatures::kMaskInputValidMask] =
+      CreateTensorBufferWithDims(std::vector<uint8_t>{0}, ElementType::Bool,
+                                 {1});
+
+  ctx.verify_input_buffers[MaskSignatures::kMaskInputTimeStep] =
+      CreateTensorBufferWithDims(std::vector<int32_t>{0}, ElementType::Int32,
+                                 {1});
+  ctx.verify_input_buffers[MaskSignatures::kMaskInputTokens] =
+      CreateTensorBufferWithDims(std::vector<int32_t>{0, 0, 0},
+                                 ElementType::Int32, {1, 3});
+
+  ctx.prefill_input_buffers[MaskSignatures::kMaskInputTimeStep] =
+      CreateTensorBufferWithDims(std::vector<int32_t>{0}, ElementType::Int32,
+                                 {1});
+
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto mask,
+      NpuMask::CreateForTest(MaskUpdateMethod::kWH, nullptr, std::move(ctx)));
+
+  // Test SetDecodeInput.
+  EXPECT_TRUE(mask.SetDecodeInput(42, 101).ok());
+  auto time_step_lock = TensorBufferScopedLock::Create<int32_t>(
+      mask.Context().decode_input_buffers.at(
+          MaskSignatures::kMaskInputTimeStep),
+      TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(time_step_lock.HasValue());
+  EXPECT_EQ(time_step_lock->second[0], 42);
+
+  auto tokens_lock = TensorBufferScopedLock::Create<int32_t>(
+      mask.Context().decode_input_buffers.at(MaskSignatures::kMaskInputTokens),
+      TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(tokens_lock.HasValue());
+  EXPECT_EQ(tokens_lock->second[0], 101);
+
+  // Test SetVerifyInput.
+  std::vector<int> verify_tokens = {10, 20, 30};
+  EXPECT_TRUE(mask.SetVerifyInput(50, verify_tokens).ok());
+  auto verify_step_lock = TensorBufferScopedLock::Create<int32_t>(
+      mask.Context().verify_input_buffers.at(
+          MaskSignatures::kMaskInputTimeStep),
+      TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(verify_step_lock.HasValue());
+  EXPECT_EQ(verify_step_lock->second[0], 50);
+
+  auto verify_tokens_lock = TensorBufferScopedLock::Create<int32_t>(
+      mask.Context().verify_input_buffers.at(MaskSignatures::kMaskInputTokens),
+      TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(verify_tokens_lock.HasValue());
+  EXPECT_EQ(verify_tokens_lock->second[0], 10);
+  EXPECT_EQ(verify_tokens_lock->second[1], 20);
+  EXPECT_EQ(verify_tokens_lock->second[2], 30);
+}
+
+TEST_F(ExecutorUtilsTest, NpuMaskCreateForDrafter) {
+  absl::flat_hash_map<absl::string_view, TensorBuffer> in_bufs;
+  absl::flat_hash_map<absl::string_view, TensorBuffer> out_bufs;
+  in_bufs[MaskSignatures::kMaskInputTimeStep] = CreateTensorBufferWithDims(
+      std::vector<int32_t>{0}, ElementType::Int32, {1});
+  in_bufs[MaskSignatures::kMaskInputTokens] = CreateTensorBufferWithDims(
+      std::vector<int32_t>{0}, ElementType::Int32, {1});
+
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto mask,
+      NpuMask::CreateForDrafter(MaskUpdateMethod::kWH, nullptr,
+                                std::move(in_bufs), std::move(out_bufs)));
+  EXPECT_TRUE(mask.SetDecodeInput(77, 88).ok());
+
+  auto step_lock = TensorBufferScopedLock::Create<int32_t>(
+      mask.Context().decode_input_buffers.at(
+          MaskSignatures::kMaskInputTimeStep),
+      TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(step_lock.HasValue());
+  EXPECT_EQ(step_lock->second[0], 77);
+
+  auto token_lock = TensorBufferScopedLock::Create<int32_t>(
+      mask.Context().decode_input_buffers.at(MaskSignatures::kMaskInputTokens),
+      TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(token_lock.HasValue());
+  EXPECT_EQ(token_lock->second[0], 88);
+}
+
+TEST_F(ExecutorUtilsTest, NpuMaskSetPrefillInput) {
+  InferenceContext ctx;
+  ctx.prefill_input_buffers[MaskSignatures::kMaskInputTimeStep] =
+      CreateTensorBufferWithDims(std::vector<int32_t>{0}, ElementType::Int32,
+                                 {1});
+  ctx.prefill_input_buffers[MaskSignatures::kMaskInputTokens] =
+      CreateTensorBufferWithDims(std::vector<int32_t>{0, 0, 0, 0, 0},
+                                 ElementType::Int32, {1, 5});
+  ctx.prefill_input_buffers[MaskSignatures::kMaskInputValidMask] =
+      CreateTensorBufferWithDims(std::vector<uint8_t>{0, 0, 0, 0, 0},
+                                 ElementType::Bool, {1, 5});
+
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto mask,
+      NpuMask::CreateForTest(MaskUpdateMethod::kWH, nullptr, std::move(ctx)));
+
+  std::vector<int> tokens = {101, -5, 202};
+  EXPECT_TRUE(mask.SetPrefillInput(15, tokens).ok());
+
+  auto step_lock = TensorBufferScopedLock::Create<int32_t>(
+      mask.Context().prefill_input_buffers.at(
+          MaskSignatures::kMaskInputTimeStep),
+      TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(step_lock.HasValue());
+  EXPECT_EQ(step_lock->second[0], 15);
+
+  auto tokens_lock = TensorBufferScopedLock::Create<int32_t>(
+      mask.Context().prefill_input_buffers.at(MaskSignatures::kMaskInputTokens),
+      TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(tokens_lock.HasValue());
+  EXPECT_EQ(tokens_lock->second[0], 101);
+  EXPECT_EQ(tokens_lock->second[1], 0);  // negative clamped to 0
+  EXPECT_EQ(tokens_lock->second[2], 202);
+  EXPECT_EQ(tokens_lock->second[3], 0);  // zero padded
+  EXPECT_EQ(tokens_lock->second[4], 0);
+
+  auto valid_mask_lock = TensorBufferScopedLock::Create<bool>(
+      mask.Context().prefill_input_buffers.at(
+          MaskSignatures::kMaskInputValidMask),
+      TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(valid_mask_lock.HasValue());
+  EXPECT_TRUE(valid_mask_lock->second[0]);
+  EXPECT_TRUE(valid_mask_lock->second[1]);
+  EXPECT_TRUE(valid_mask_lock->second[2]);
+  EXPECT_FALSE(valid_mask_lock->second[3]);
+  EXPECT_FALSE(valid_mask_lock->second[4]);
+}
+
+TEST_F(ExecutorUtilsTest,
+       NpuKVCacheCreateFailsWhenCompiledModelNullForModelMethod) {
+  InferenceContext ctx;
+  auto update_or = NpuKVCache::CreateForTest(KVCacheUpdateMethod::kModel,
+                                             nullptr, std::move(ctx));
+  EXPECT_FALSE(update_or.ok());
+}
+
+TEST_F(ExecutorUtilsTest,
+       NpuKVCacheCreateSucceedsForHwMethodWithoutCompiledModel) {
+  InferenceContext ctx;
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto update, NpuKVCache::CreateForTest(KVCacheUpdateMethod::kWH, nullptr,
+                                             std::move(ctx)));
+  EXPECT_EQ(update.GetMethod(), KVCacheUpdateMethod::kWH);
+}
+
+TEST_F(ExecutorUtilsTest, NpuKVCacheCommitVerifiedKVCacheSetsPosition) {
+  InferenceContext ctx;
+  ctx.verify_input_buffers[CacheUpdateSignatures::kInputPos] =
+      CreateTensorBufferWithDims(std::vector<int32_t>{0, 0, 0},
+                                 ElementType::Int32, {3});
+
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto update, NpuKVCache::CreateForTest(KVCacheUpdateMethod::kWH, nullptr,
+                                             std::move(ctx)));
+
+  EXPECT_TRUE(update.SetVerifyPos(100).ok());
+
+  auto read_lock = TensorBufferScopedLock::Create<int32_t>(
+      update.Context().verify_input_buffers.at(
+          CacheUpdateSignatures::kInputPos),
+      TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(read_lock.HasValue());
+  EXPECT_EQ(read_lock->second[0], 100);
+  EXPECT_EQ(read_lock->second[1], 101);
+  EXPECT_EQ(read_lock->second[2], 102);
+}
+
+TEST_F(ExecutorUtilsTest, NpuRopeCreateFailsWhenCompiledModelNull) {
+  InferenceContext ctx;
+  auto rope_or = NpuRope::CreateForTest(nullptr, std::move(ctx));
+  EXPECT_FALSE(rope_or.ok());
+}
+
+TEST_F(ExecutorUtilsTest, NpuRopeSetDecodePosition) {
+  InferenceContext ctx;
+  ctx.decode_input_buffers[RopeSignatures::kInputPos] =
+      CreateTensorBufferWithDims(std::vector<int32_t>{0}, ElementType::Int32,
+                                 {1});
+
+  // For testing SetDecodePosition, create with a dummy compiled model pointer
+  // or cast
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto rope, NpuRope::CreateForTest(
+                     reinterpret_cast<const ::litert::CompiledModel*>(0x1234),
+                     std::move(ctx)));
+
+  EXPECT_TRUE(rope.SetDecodePosition(42).ok());
+
+  auto read_lock = TensorBufferScopedLock::Create<int32_t>(
+      rope.Context().decode_input_buffers.at(RopeSignatures::kInputPos),
+      TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(read_lock.HasValue());
+  EXPECT_EQ(read_lock->second[0], 42);
+}
+
+TEST_F(ExecutorUtilsTest, NpuRopeDrafterSetDecodePosition) {
+  absl::flat_hash_map<absl::string_view, TensorBuffer> in_buffers;
+  in_buffers[RopeSignatures::kInputPos] = CreateTensorBufferWithDims(
+      std::vector<int32_t>{0}, ElementType::Int32, {1});
+
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto rope, NpuRope::CreateForDrafter(
+                     reinterpret_cast<const ::litert::CompiledModel*>(0x1234),
+                     std::move(in_buffers), {}));
+
+  EXPECT_TRUE(rope.SetDecodePosition(77).ok());
+
+  auto read_lock = TensorBufferScopedLock::Create<int32_t>(
+      rope.Context().decode_input_buffers.at(RopeSignatures::kInputPos),
+      TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(read_lock.HasValue());
+  EXPECT_EQ(read_lock->second[0], 77);
+}
+
+TEST_F(ExecutorUtilsTest, NpuRopeSetVerifyPositions) {
+  InferenceContext ctx;
+  ctx.verify_input_buffers[RopeSignatures::kInputPos] =
+      CreateTensorBufferWithDims(std::vector<int32_t>{0, 0, 0, 0},
+                                 ElementType::Int32, {4});
+
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto rope, NpuRope::CreateForTest(
+                     reinterpret_cast<const ::litert::CompiledModel*>(0x1234),
+                     std::move(ctx)));
+
+  EXPECT_TRUE(rope.SetVerifyPositions(10, 3).ok());
+
+  auto read_lock = TensorBufferScopedLock::Create<int32_t>(
+      rope.Context().verify_input_buffers.at(RopeSignatures::kInputPos),
+      TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(read_lock.HasValue());
+  EXPECT_EQ(read_lock->second[0], 10);
+  EXPECT_EQ(read_lock->second[1], 11);
+  EXPECT_EQ(read_lock->second[2], 12);
+  EXPECT_EQ(read_lock->second[3], 0);
+}
+
+TEST_F(ExecutorUtilsTest, NpuRopeSetPrefillPositionsAndZeroPads) {
+  InferenceContext ctx;
+  ctx.prefill_input_buffers[RopeSignatures::kInputPos] =
+      CreateTensorBufferWithDims(std::vector<int32_t>{99, 99, 99, 99, 99},
+                                 ElementType::Int32, {5});
+
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto rope, NpuRope::CreateForTest(
+                     reinterpret_cast<const ::litert::CompiledModel*>(0x1234),
+                     std::move(ctx)));
+
+  std::vector<int32_t> positions = {5, 6, 7};
+  EXPECT_TRUE(rope.SetPrefillPositions(positions).ok());
+
+  auto read_lock = TensorBufferScopedLock::Create<int32_t>(
+      rope.Context().prefill_input_buffers.at(RopeSignatures::kInputPos),
+      TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(read_lock.HasValue());
+  EXPECT_EQ(read_lock->second[0], 5);
+  EXPECT_EQ(read_lock->second[1], 6);
+  EXPECT_EQ(read_lock->second[2], 7);
+  EXPECT_EQ(read_lock->second[3], 0);
+  EXPECT_EQ(read_lock->second[4], 0);
+}
+
 }  // namespace
 }  // namespace litert::lm
