@@ -527,4 +527,38 @@ class ConversationTests: XCTestCase {
     // and then releases localEngine, triggering Engine.deinit, setting handle = nil before litert_lm_engine_delete without crashing.
     localConversation = nil
   }
+
+  func testCloseReleasesNativeSessionAndAllowsNewConversation() async throws {
+    let conversation = try await self.engine.createConversation(with: ConversationConfig())
+    XCTAssertTrue(conversation.isAlive)
+
+    conversation.close()
+    XCTAssertFalse(conversation.isAlive)
+
+    // The native session is released deterministically, so the same engine can create a new
+    // conversation without waiting for ARC to deallocate the closed one.
+    let newConversation = try await self.engine.createConversation(with: ConversationConfig())
+    XCTAssertTrue(newConversation.isAlive)
+  }
+
+  func testCloseIsIdempotent() async throws {
+    let conversation = try await self.engine.createConversation(with: ConversationConfig())
+    XCTAssertTrue(conversation.isAlive)
+
+    conversation.close()
+    conversation.close()
+    XCTAssertFalse(conversation.isAlive)
+  }
+
+  func testSendMessageAfterCloseThrowsNotAlive() async throws {
+    let conversation = try await self.engine.createConversation(with: ConversationConfig())
+    conversation.close()
+
+    do {
+      _ = try await conversation.sendMessage(Message("Hello"))
+      XCTFail("Expected notAlive error to be thrown")
+    } catch let error as LiteRTLMError {
+      XCTAssertEqual(error, LiteRTLMError.conversation(.notAlive))
+    }
+  }
 }

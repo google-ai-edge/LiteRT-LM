@@ -50,6 +50,9 @@ private let recurringToolCallLimit = 25
 /// for try await chunk in conversation.sendMessageStream(Message("Hello world")) {
 ///   print(chunk.text)
 /// }
+///
+/// // Close the conversation at the end to release the underlying native session.
+/// conversation.close()
 /// ```
 ///
 /// This class facilitates interaction with the LiteRT-LM model by handling message sending
@@ -85,6 +88,22 @@ public class Conversation {
   }
 
   deinit {
+    if let handle = handle {
+      self.handle = nil
+      litert_lm_conversation_delete(handle)
+    }
+  }
+
+  /// Releases the underlying native session synchronously.
+  ///
+  /// The engine supports only one session at a time, so call this when the conversation is no
+  /// longer needed to guarantee that a subsequent `Engine.createConversation` succeeds, instead
+  /// of relying on ARC to run `deinit` at a non-deterministic time. If an inference is still in
+  /// progress, call `cancel()` first.
+  ///
+  /// After closing, `isAlive` returns `false` and methods that require a live session throw
+  /// `LiteRTLMError.conversation(.notAlive)`. Calling `close()` again is a no-op.
+  public func close() {
     if let handle = handle {
       self.handle = nil
       litert_lm_conversation_delete(handle)
