@@ -915,6 +915,24 @@ TEST(EngineCTest, OptionalArgsThinkingConfig) {
   litert_lm_conversation_optional_args_delete(optional_args);
 }
 
+TEST(EngineCTest, OptionalArgsDisableSpeculativeDecoding) {
+  LiteRtLmConversationOptionalArgs* optional_args =
+      litert_lm_conversation_optional_args_create();
+  ASSERT_NE(optional_args, nullptr);
+
+  litert_lm_conversation_optional_args_set_disable_speculative_decoding(
+      optional_args, true);
+  ASSERT_TRUE(optional_args->disable_speculative_decoding.has_value());
+  EXPECT_TRUE(*optional_args->disable_speculative_decoding);
+
+  litert_lm_conversation_optional_args_set_disable_speculative_decoding(
+      optional_args, false);
+  ASSERT_TRUE(optional_args->disable_speculative_decoding.has_value());
+  EXPECT_FALSE(*optional_args->disable_speculative_decoding);
+
+  litert_lm_conversation_optional_args_delete(optional_args);
+}
+
 TEST(EngineCTest, TokenizerTest) {
   const std::string task_path = GetTestdataPath(
       "litert_lm/runtime/testdata/test_lm.litertlm");

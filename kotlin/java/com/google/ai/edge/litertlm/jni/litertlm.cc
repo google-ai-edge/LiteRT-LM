@@ -855,11 +855,15 @@ LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeRunPrefill)(
 }
 
 LITERTLM_JNIEXPORT jstring JNICALL
-JNI_METHOD(nativeRunDecode)(JNIEnv* env, jclass thiz, jlong session_pointer) {
+JNI_METHOD(nativeRunDecode)(JNIEnv* env, jclass thiz, jlong session_pointer,
+                            jboolean disable_speculative_decoding) {
   Engine::Session* session =
       reinterpret_cast<Engine::Session*>(session_pointer);
 
-  auto responses = session->RunDecode();
+  litert::lm::DecodeConfig decode_config =
+      litert::lm::DecodeConfig::CreateDefault();
+  decode_config.SetDisableSpeculativeDecoding(disable_speculative_decoding);
+  auto responses = session->RunDecode(decode_config);
 
   if (!responses.ok()) {
     ThrowLiteRtLmJniException(
@@ -1216,7 +1220,7 @@ LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeSendMessageAsync)(
     jobject visual_token_budget, jobject repetition_penalty_config_obj,
     jobject no_repeat_ngram_config_obj, jintArray suppress_tokens_array,
     jint max_output_token, jobject thinking_config_obj, jint constraint_type,
-    jstring constraint_string) {
+    jstring constraint_string, jboolean disable_speculative_decoding) {
   JavaVM* jvm = nullptr;
   if (env->GetJavaVM(&jvm) != JNI_OK) {
     ThrowLiteRtLmJniException(env, "Failed to get JavaVM");
@@ -1231,6 +1235,9 @@ LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeSendMessageAsync)(
   env->ReleaseStringUTFChars(messageJSONString, json_chars);
 
   litert::lm::OptionalArgs optional_args;
+  if (disable_speculative_decoding) {
+    optional_args.disable_speculative_decoding = true;
+  }
   nlohmann::ordered_json extra_context =
       GetExtraContextJson(env, extraContextJsonString);
   if (!extra_context.is_null() && !extra_context.empty()) {
@@ -1370,7 +1377,7 @@ LITERTLM_JNIEXPORT jstring JNICALL JNI_METHOD(nativeSendMessage)(
     jobject visual_token_budget, jobject repetition_penalty_config_obj,
     jobject no_repeat_ngram_config_obj, jintArray suppress_tokens_array,
     jint max_output_token, jobject thinking_config_obj, jint constraint_type,
-    jstring constraint_string) {
+    jstring constraint_string, jboolean disable_speculative_decoding) {
   Conversation* conversation =
       reinterpret_cast<Conversation*>(conversation_pointer);
 
@@ -1379,6 +1386,9 @@ LITERTLM_JNIEXPORT jstring JNICALL JNI_METHOD(nativeSendMessage)(
   env->ReleaseStringUTFChars(messageJSONString, json_chars);
 
   litert::lm::OptionalArgs optional_args;
+  if (disable_speculative_decoding) {
+    optional_args.disable_speculative_decoding = true;
+  }
   nlohmann::ordered_json extra_context =
       GetExtraContextJson(env, extraContextJsonString);
   if (!extra_context.is_null() && !extra_context.empty()) {

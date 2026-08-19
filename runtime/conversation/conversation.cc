@@ -350,8 +350,13 @@ absl::StatusOr<DecodeConfig> Conversation::CreateDecodeConfig(
     std::optional<ConstraintArg> decoding_constraint,
     std::optional<int> max_output_tokens,
     std::optional<ThinkingConfig> thinking_config,
-    std::optional<absl::string_view> open_channel_name) {
+    std::optional<absl::string_view> open_channel_name,
+    std::optional<bool> disable_speculative_decoding) {
   auto decode_config = DecodeConfig::CreateDefault();
+
+  if (disable_speculative_decoding.has_value()) {
+    decode_config.SetDisableSpeculativeDecoding(*disable_speculative_decoding);
+  }
 
   if (repetition_penalty_config.has_value()) {
     decode_config.SetRepetitionPenaltyConfig(
@@ -710,7 +715,8 @@ absl::Status Conversation::SendMessageAsync(
                          std::move(optional_args.decoding_constraint),
                          optional_args.max_output_tokens,
                          ResolveThinkingConfig(config_, optional_args),
-                         open_channel_name));
+                         open_channel_name,
+                         optional_args.disable_speculative_decoding));
 
   std::optional<std::string> task_group_id = optional_args.task_group_id;
 

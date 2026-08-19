@@ -673,6 +673,8 @@ ConstrainedDecoder* ExecutorDecodeParams::GetConstraintDecoder() const {
 
 std::ostream& operator<<(std::ostream& os, const ExecutorDecodeParams& params) {
   os << "ExecutorDecodeParams: {\n";
+  os << kFieldIndent << "DisableSpeculativeDecoding: "
+     << (params.GetDisableSpeculativeDecoding() ? "true" : "false") << "\n";
   os << kFieldIndent << "LogitsProcessor: ";
   if (size_t num_processors = params.GetLogitsProcessorList().size();
       num_processors > 0) {

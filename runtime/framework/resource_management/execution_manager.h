@@ -172,6 +172,13 @@ class ExecutionManager {
   // - constraint: The constraint for the decode task.
   // - cancelled: The cancelled flag for the decode task.
   // - callback: The callback function.
+  // - max_output_tokens: The maximum number of tokens to decode.
+  // - thinking_token_budget: The thinking token budget for the decode task.
+  // - thinking_start_token_ids: The thinking start token ids for the decode
+  //   task.
+  // - thinking_end_token_ids: The thinking end token ids for the decode task.
+  // - disable_speculative_decoding: Whether to disable speculative decoding for
+  //   the decode task.
   virtual absl::Status AddDecodeTask(
       SessionId session_id, TaskId task_id,
       absl::flat_hash_set<TaskId> dep_tasks,
@@ -181,10 +188,10 @@ class ExecutionManager {
       Constraint* absl_nullable constraint,
       std::shared_ptr<std::atomic<bool>> absl_nonnull cancelled,
       absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback,
-      int max_output_tokens,
-      std::optional<int> thinking_token_budget = std::nullopt,
-      std::vector<int> thinking_start_token_ids = {},
-      std::vector<int> thinking_end_token_ids = {}) = 0;
+      int max_output_tokens, std::optional<int> thinking_token_budget,
+      std::vector<int> thinking_start_token_ids,
+      std::vector<int> thinking_end_token_ids,
+      bool disable_speculative_decoding) = 0;
 
   // Adds a decode task to the execution manager with the maximum output tokens
   // set to infinity.
@@ -202,7 +209,8 @@ class ExecutionManager {
                          std::move(no_repeat_ngram_config),
                          std::move(suppress_tokens_config), constraint,
                          std::move(cancelled), std::move(callback),
-                         std::numeric_limits<int>::max(), std::nullopt, {}, {});
+                         std::numeric_limits<int>::max(), std::nullopt, {}, {},
+                         /*disable_speculative_decoding=*/false);
   }
 
   // Adds a clone session task to the execution manager.

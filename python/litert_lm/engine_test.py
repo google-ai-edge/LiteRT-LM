@@ -766,6 +766,32 @@ class EngineTest(LiteRtLmTestBase):
       text_pieces = self._extract_text(stream)
       self.assertNotEmpty(text_pieces)
 
+  def test_conversation_send_message_with_disable_speculative_decoding(self):
+    with (
+        self._create_engine() as engine,
+        engine.create_conversation() as conversation,
+    ):
+      message = conversation.send_message(
+          "Hello world!",
+          disable_speculative_decoding=True,
+      )
+      self.assertIn("role", message)
+      self.assertEqual(message["role"], "assistant")
+
+  def test_conversation_send_message_async_with_disable_speculative_decoding(
+      self,
+  ):
+    with (
+        self._create_engine() as engine,
+        engine.create_conversation() as conversation,
+    ):
+      stream = conversation.send_message_async(
+          "Hello world!",
+          disable_speculative_decoding=True,
+      )
+      text_pieces = self._extract_text(stream)
+      self.assertNotEmpty(text_pieces)
+
   def test_conversation_send_message_with_no_repeat_ngram_config(self):
     no_repeat_ngram_config = litert_lm.NoRepeatNgramConfig(
         no_repeat_ngram_size=3,

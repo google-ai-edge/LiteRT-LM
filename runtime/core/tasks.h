@@ -57,7 +57,8 @@ absl::StatusOr<Responses> Decode(
     int max_output_tokens = std::numeric_limits<int>::max(),
     std::optional<int> thinking_token_budget = std::nullopt,
     const std::vector<int>& thinking_end_token_ids = {},
-    const std::vector<int>& thinking_start_token_ids = {});
+    const std::vector<int>& thinking_start_token_ids = {},
+    bool disable_speculative_decoding = false);
 
 absl::StatusOr<Responses> Score(
     LlmExecutor& executor, Tokenizer& tokenizer,

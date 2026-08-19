@@ -1048,7 +1048,8 @@ LlmLiteRtCompiledModelExecutorBase::Decode(
     const ExecutorDecodeParams& decode_params) {
 
   std::vector<std::vector<int>> output_tokens_vector;
-  if (mtp_drafter_ == nullptr) {
+  if (mtp_drafter_ == nullptr ||
+      decode_params.GetDisableSpeculativeDecoding()) {
     ABSL_ASSIGN_OR_RETURN(auto decoded_logits,
                           DecodeLogits(ExecutorInputs(), decode_params));
     std::optional<TensorBuffer> output_tokens;
