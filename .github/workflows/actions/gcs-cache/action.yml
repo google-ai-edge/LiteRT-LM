@@ -46,7 +46,7 @@ runs:
       run: |
         CACHE_KEYS=(
           "$CACHE_KEY"
-          "$RESTORE_KEY"
+          $RESTORE_KEY
         )
 
         FOUND_BLOB=""
@@ -88,6 +88,7 @@ runs:
         TARGET_DIR: ${{ inputs.target-dir }}
         BUCKET_URL: ${{ inputs.bucket-url }}
         CACHE_KEY: ${{ inputs.cache-key }}
+        TARGET_SUBDIRS: ${{ inputs.target-subdirs }}
       run: |
         ARCHIVE_NAME="gcs-cache-archive.tar.gz"
 
@@ -98,9 +99,6 @@ runs:
 
         echo "Compressing cache artifacts from $TARGET_DIR..."
         rm -f ./$ARCHIVE_NAME
-
-        # Pull in the subdirs input
-        TARGET_SUBDIRS="${{ inputs.target-subdirs }}"
 
         tar -czf ./$ARCHIVE_NAME -C "$TARGET_DIR" $TARGET_SUBDIRS
 

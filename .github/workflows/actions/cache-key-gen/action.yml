@@ -1,0 +1,59 @@
+name: 'Generate Cache Key Pair'
+description: 'Generates contextual SAVE and RESTORE keys for a specific cache component.'
+
+inputs:
+  cache-name:
+    description: 'Name of the cache (e.g., ccache, prebuild-deps, litert_lm)'
+    required: true
+  os:
+    description: 'Runner OS (e.g., Linux)'
+    required: true
+  pr-hash:
+    description: 'Optional hash to inject into PR keys (e.g., for source-based invalidation)'
+    required: false
+    default: ''
+
+outputs:
+  key:
+    description: 'The cache key for saving'
+    value: ${{ steps.gen.outputs.key }}
+  restore-key:
+    description: 'The fallback restore keys (space-separated)'
+    value: ${{ steps.gen.outputs.restore-key }}
+
+runs:
+  using: "composite"
+  steps:
+    - id: gen
+      shell: bash
+      env:
+        OS: ${{ inputs.os }}
+        NAME: ${{ inputs.cache-name }}
+        HASH: ${{ inputs.pr-hash }}
+        EVENT: ${{ github.event_name }}
+        REF_TYPE: ${{ github.ref_type }}
+        COMMIT_SHA: ${{ github.sha }}
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      run: |
+        # Construct the PR-specific segment
+        if [[ -n "$HASH" ]]; then
+          PR_SEGMENT="pr-$HASH-$COMMIT_SHA"
+        else
+          PR_SEGMENT="pr-$COMMIT_SHA"
+        fi
+
+        if [[ "$REF_TYPE" == "tag" ]]; then
+          # Releases create and restore from the permanent baseline
+          echo "key=$OS-$NAME-release-latest" >> "$GITHUB_OUTPUT"
+          echo "restore-key=$OS-$NAME-release-latest" >> "$GITHUB_OUTPUT"
+
+        elif [[ "$EVENT" == "pull_request" ]]; then
+          # PRs look for their own cache, then main base, then release
+          echo "key=$OS-$NAME-$PR_SEGMENT" >> "$GITHUB_OUTPUT"
+          echo "restore-key=$OS-$NAME-main-$BASE_SHA $OS-$NAME-release-latest" >> "$GITHUB_OUTPUT"
+
+        else
+          # Main branch builds create main baselines and fall back to release
+          echo "key=$OS-$NAME-main-$COMMIT_SHA" >> "$GITHUB_OUTPUT"
+          echo "restore-key=$OS-$NAME-release-latest" >> "$GITHUB_OUTPUT"
+        fi
