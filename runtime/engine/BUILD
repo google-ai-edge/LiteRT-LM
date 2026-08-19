@@ -290,7 +290,11 @@ cc_binary(
         "@litert//litert:litert_runtime_link_mode_dynamic": [],
         # Export LiteRt* symbols for LiteRt accelerator shlibs.
         "@platforms//os:ios": ["-Wl,-exported_symbol,_LiteRt*"],
-        "@platforms//os:macos": ["-Wl,-exported_symbol,_LiteRt*"],
+        "@platforms//os:macos": [
+            "-Wl,-exported_symbol,_LiteRt*",
+            "-framework",
+            "IOKit",
+        ],
         "@platforms//os:windows": [
             "/DEF:$(location @litert//litert/c:windows_exported_symbols.def)",
         ],
