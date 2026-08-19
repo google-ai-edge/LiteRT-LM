@@ -149,7 +149,7 @@ TEST_F(ConstrainedDecoderTest, UpdateStateAndProcessLogitsBatchSize1) {
     if (i == spm_processor_.PieceToId("b")) {
       EXPECT_EQ(masked_logits_span[i], 2.0f);
     } else {
-      EXPECT_EQ(masked_logits_span[i], std::numeric_limits<float>::lowest());
+      EXPECT_EQ(masked_logits_span[i], -std::numeric_limits<float>::infinity());
     }
   }
 
@@ -180,7 +180,7 @@ TEST_F(ConstrainedDecoderTest, UpdateStateAndProcessLogitsBatchSize1) {
       EXPECT_EQ(new_masked_logits_span[i], 3.0f);
     } else {
       EXPECT_EQ(new_masked_logits_span[i],
-                std::numeric_limits<float>::lowest());
+                -std::numeric_limits<float>::infinity());
     }
   }
 }
@@ -222,7 +222,7 @@ TEST_F(ConstrainedDecoderTest, UpdateStateAndProcessLogitsBatchSize2) {
     if (token_id == spm_processor_.PieceToId("<e>")) {
       EXPECT_EQ(masked_logits_span[i], 1.0f);
     } else {
-      EXPECT_EQ(masked_logits_span[i], std::numeric_limits<float>::lowest());
+      EXPECT_EQ(masked_logits_span[i], -std::numeric_limits<float>::infinity());
     }
   }
 }
@@ -310,7 +310,7 @@ TEST_F(ConstrainedDecoderTest, ProcessLogitsWithPaddedVocabSize) {
     if (i == spm_processor_.PieceToId("b")) {
       EXPECT_EQ(masked_logits_span[i], 2.0f);
     } else {
-      EXPECT_EQ(masked_logits_span[i], std::numeric_limits<float>::lowest());
+      EXPECT_EQ(masked_logits_span[i], -std::numeric_limits<float>::infinity());
     }
   }
 }

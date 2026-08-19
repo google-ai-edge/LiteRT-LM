@@ -36,16 +36,16 @@
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "runtime/components/logits_processor/constrained_decoding/composite_constraint.h"
 #include "runtime/components/logits_processor/constrained_decoding/constrained_decoder.h"
 #include "runtime/components/logits_processor/constrained_decoding/constraint.h"
+#include "runtime/components/logits_processor/constrained_decoding/no_repeat_ngram_constraint.h"
+#include "runtime/components/logits_processor/constrained_decoding/repetition_penalty_constraint.h"
+#include "runtime/components/logits_processor/constrained_decoding/suppress_tokens_constraint.h"
 #include "runtime/components/logits_processor/constrained_decoding/thinking_budget_constraint.h"
-#include "runtime/components/logits_processor/logits_processor.h"
 #include "runtime/components/logits_processor/no_repeat_ngram_config.h"
-#include "runtime/components/logits_processor/no_repeat_ngram_processor.h"
 #include "runtime/components/logits_processor/repetition_penalty_config.h"
-#include "runtime/components/logits_processor/repetition_penalty_processor.h"
 #include "runtime/components/logits_processor/suppress_tokens_config.h"
-#include "runtime/components/logits_processor/suppress_tokens_processor.h"
 #include "runtime/components/sampler.h"
 #include "runtime/components/scoring_cpu_util.h"
 #include "runtime/components/stop_token_detector.h"
@@ -199,59 +199,83 @@ class StopTokenStreamFilter {
 // A wrapper class to run one step of the decode process, handling both internal
 // and external sampling.
 class DecodeOneStep {
- public:
+ private:
   DecodeOneStep(LlmExecutor* absl_nonnull executor,
                 Tokenizer* absl_nonnull tokenizer, int num_output_candidates,
                 const StopTokenDetector& stop_token_detector,
                 std::optional<BenchmarkInfo>& benchmark_info,
                 std::optional<Sampler*> sampler,
-                RepetitionPenaltyConfig repetition_penalty_config,
-                NoRepeatNgramConfig no_repeat_ngram_config,
-                SuppressTokensConfig suppress_tokens_config,
-                Constraint* constraint,
-                const std::atomic<bool>* cancelled =
-                    nullptr  // Add cancelled signal for one decode step (eg.
-                             // for diffusion-llm)
-                )
+                std::unique_ptr<CompositeConstraint> composite_constraint,
+                std::unique_ptr<ConstrainedDecoder> constrained_decoder,
+                std::optional<litert::TensorBuffer> scores_tensor,
+                const std::atomic<bool>* cancelled)
       : executor_(*executor),
         tokenizer_(*tokenizer),
         detokenizer_(&tokenizer_, num_output_candidates),
         num_output_candidates_(num_output_candidates),
         sampler_(sampler),
+        composite_constraint_(std::move(composite_constraint)),
+        constrained_decoder_(std::move(constrained_decoder)),
         benchmark_info_(benchmark_info),
         stop_token_detector_(stop_token_detector),
         stop_token_filter_(&stop_token_detector_, num_output_candidates),
+        result_text_(num_output_candidates, ""),
+        result_token_ids_(num_output_candidates),
         cancelled_(cancelled) {
-    if (repetition_penalty_config.enabled()) {
-      repetition_penalty_processor_ =
-          std::make_unique<RepetitionPenaltyProcessor>(
-              num_output_candidates_, tokenizer_.GetVocabSize(),
-              std::move(repetition_penalty_config));
-      logits_processors_.push_back(repetition_penalty_processor_.get());
-    }
-    if (no_repeat_ngram_config.enabled()) {
-      no_repeat_ngram_processor_ = std::make_unique<NoRepeatNgramProcessor>(
-          num_output_candidates_, tokenizer_.GetVocabSize(),
-          std::move(no_repeat_ngram_config));
-      logits_processors_.push_back(no_repeat_ngram_processor_.get());
-    }
-    if (suppress_tokens_config.enabled()) {
-      suppress_tokens_processor_ = std::make_unique<SuppressTokensProcessor>(
-          num_output_candidates_, tokenizer_.GetVocabSize(),
-          std::move(suppress_tokens_config));
-      logits_processors_.push_back(suppress_tokens_processor_.get());
-    }
-    if (constraint != nullptr) {
-      constrained_decoder_ = std::make_unique<ConstrainedDecoder>(
-          constraint, num_output_candidates_);
-      logits_processors_.push_back(constrained_decoder_.get());
-    }
-    if (sampler_.has_value()) {  // External sampling setup
-      auto scores_tensor = CreateTensorBuffer<float>({num_output_candidates_});
+    if (scores_tensor.has_value()) {
       scores_tensor_ = std::move(*scores_tensor);
     }
-    result_text_ = std::vector<std::string>(num_output_candidates_, "");
-    result_token_ids_ = std::vector<std::vector<int>>(num_output_candidates_);
+  }
+
+ public:
+  static absl::StatusOr<std::unique_ptr<DecodeOneStep>> Create(
+      LlmExecutor* absl_nonnull executor, Tokenizer* absl_nonnull tokenizer,
+      int num_output_candidates, const StopTokenDetector& stop_token_detector,
+      std::optional<BenchmarkInfo>& benchmark_info,
+      std::optional<Sampler*> sampler,
+      RepetitionPenaltyConfig repetition_penalty_config,
+      NoRepeatNgramConfig no_repeat_ngram_config,
+      SuppressTokensConfig suppress_tokens_config, Constraint* constraint,
+      const std::atomic<bool>* cancelled =
+          nullptr  // Add cancelled signal for one decode step (eg.
+                   // for diffusion-llm)
+  ) {
+    ABSL_ASSIGN_OR_RETURN(auto composite_constraint,
+                          CompositeConstraint::Create());
+    if (repetition_penalty_config.enabled()) {
+      ABSL_RETURN_IF_ERROR(composite_constraint->AddConstraint(
+          std::make_unique<RepetitionPenaltyConstraint>(
+              tokenizer->GetVocabSize(),
+              std::move(repetition_penalty_config))));
+    }
+    if (no_repeat_ngram_config.enabled()) {
+      ABSL_RETURN_IF_ERROR(composite_constraint->AddConstraint(
+          std::make_unique<NoRepeatNgramConstraint>(
+              tokenizer->GetVocabSize(), std::move(no_repeat_ngram_config))));
+    }
+    if (suppress_tokens_config.enabled()) {
+      ABSL_RETURN_IF_ERROR(composite_constraint->AddConstraint(
+          std::make_unique<SuppressTokensConstraint>(
+              tokenizer->GetVocabSize(), std::move(suppress_tokens_config))));
+    }
+    if (constraint != nullptr) {
+      ABSL_RETURN_IF_ERROR(
+          composite_constraint->AddUnownedConstraint(constraint));
+    }
+    std::unique_ptr<ConstrainedDecoder> constrained_decoder;
+    if (!composite_constraint->empty()) {
+      constrained_decoder = std::make_unique<ConstrainedDecoder>(
+          composite_constraint.get(), num_output_candidates);
+    }
+    std::optional<litert::TensorBuffer> scores_tensor;
+    if (sampler.has_value()) {  // External sampling setup
+      LITERT_ASSIGN_OR_RETURN(
+          scores_tensor, CreateTensorBuffer<float>({num_output_candidates}));
+    }
+    return std::unique_ptr<DecodeOneStep>(new DecodeOneStep(
+        executor, tokenizer, num_output_candidates, stop_token_detector,
+        benchmark_info, sampler, std::move(composite_constraint),
+        std::move(constrained_decoder), std::move(scores_tensor), cancelled));
   }
 
   // Runs one step of the decode process and returns if all stops for all
@@ -425,14 +449,12 @@ class DecodeOneStep {
                               decoded_ids->Duplicate());
       ExecutorInputs inputs(ExecutorTextData(std::move(duplicate_decoded_ids)),
                             std::nullopt, std::nullopt);
-      // Update the logits processor state only with decode ids.
+      // Update the constraint state only with decode ids.
       // If this is the first step, last_token_ids comes from prefill, therefore
       // should be ignored.
-      if (!is_first_step_ && !logits_processors_.empty()) {
+      if (!is_first_step_ && constrained_decoder_ != nullptr) {
         LITERT_ASSIGN_OR_RETURN(auto last_token_ids, decoded_ids->Duplicate());
-        for (LogitsProcessor* logits_processor : logits_processors_) {
-          ABSL_RETURN_IF_ERROR(logits_processor->UpdateState(last_token_ids));
-        }
+        ABSL_RETURN_IF_ERROR(constrained_decoder_->UpdateState(last_token_ids));
       }
       // Decoding section.
       if (benchmark_info_.has_value()) {
@@ -442,13 +464,14 @@ class DecodeOneStep {
       if (benchmark_info_.has_value()) {
         ABSL_RETURN_IF_ERROR(benchmark_info_->TimeMarkDelta("executor_decode"));
       }
-      // If the logits processor list is not empty, process the logits based on
-      // the internal state.
-      for (LogitsProcessor* logits_processor : logits_processors_) {
-        ABSL_RETURN_IF_ERROR(logits_processor->ProcessLogits(output_logits));
+      // If constraints are active, process the logits based on the current
+      // state.
+      if (constrained_decoder_ != nullptr) {
+        ABSL_RETURN_IF_ERROR(
+            constrained_decoder_->ProcessLogits(output_logits));
       }
 
-      // Samping section.
+      // Sampling section.
       if (benchmark_info_.has_value()) {
         ABSL_RETURN_IF_ERROR(benchmark_info_->TimeMarkDelta("sampling"));
       }
@@ -471,8 +494,8 @@ class DecodeOneStep {
       auto decode_params = ExecutorDecodeParams();
       // Convey the cancellation token for the decode process.
       decode_params.SetCancelled(cancelled_);
-      if (!logits_processors_.empty()) {
-        decode_params.SetLogitsProcessorList(logits_processors_);
+      if (constrained_decoder_ != nullptr) {
+        decode_params.SetLogitsProcessorList({constrained_decoder_.get()});
       }
       ABSL_ASSIGN_OR_RETURN(output_tokens, executor_.Decode(decode_params));
       if (benchmark_info_.has_value()) {
@@ -488,11 +511,8 @@ class DecodeOneStep {
   litert::support::BufferedStreamingDetokenizer detokenizer_;
   const int num_output_candidates_;
   std::optional<Sampler*> sampler_;
-  std::unique_ptr<RepetitionPenaltyProcessor> repetition_penalty_processor_;
-  std::unique_ptr<NoRepeatNgramProcessor> no_repeat_ngram_processor_;
-  std::unique_ptr<SuppressTokensProcessor> suppress_tokens_processor_;
+  std::unique_ptr<CompositeConstraint> composite_constraint_;
   std::unique_ptr<ConstrainedDecoder> constrained_decoder_;
-  std::vector<LogitsProcessor*> logits_processors_;
   std::optional<BenchmarkInfo> benchmark_info_;
   StopTokenDetector stop_token_detector_;
   StopTokenStreamFilter stop_token_filter_;
@@ -624,11 +644,13 @@ absl::StatusOr<Responses> Decode(
     }
   }
 
-  DecodeOneStep run_one_step(
-      &executor, &tokenizer, num_output_candidates, stop_token_detector,
-      benchmark_info, sampler, std::move(repetition_penalty_config),
-      std::move(no_repeat_ngram_config), std::move(suppress_tokens_config),
-      constraint, cancelled);
+  ABSL_ASSIGN_OR_RETURN(
+      auto run_one_step,
+      DecodeOneStep::Create(
+          &executor, &tokenizer, num_output_candidates, stop_token_detector,
+          benchmark_info, sampler, std::move(repetition_penalty_config),
+          std::move(no_repeat_ngram_config), std::move(suppress_tokens_config),
+          constraint, cancelled));
   while (true) {
     if (cancelled != nullptr && cancelled->load()) {
       if (benchmark_info.has_value()) {
@@ -666,7 +688,7 @@ absl::StatusOr<Responses> Decode(
       LITERT_ASSIGN_OR_RETURN(decoded_ids_to_use, decoded_ids->Duplicate());
     }
     absl::StatusOr<bool> all_done =
-        run_one_step.Run(std::move(decoded_ids_to_use));
+        run_one_step->Run(std::move(decoded_ids_to_use));
     if (!all_done.ok()) {
       return all_done.status();
     }
@@ -680,7 +702,7 @@ absl::StatusOr<Responses> Decode(
     }
     bool any_updates = false;
     for (int j = 0; j < num_output_candidates; ++j) {
-      std::string output_text = run_one_step.GetResultText()[j];
+      std::string output_text = run_one_step->GetResultText()[j];
       if (output_text.empty()) {
         // No output text for this candidate - could be due to
         // 1. early stopping.
@@ -691,17 +713,17 @@ absl::StatusOr<Responses> Decode(
       any_updates = true;
       if (is_streaming) {
         step_texts[j] = output_text;
-        step_token_ids[j] = run_one_step.GetResultTokenIds()[j];
+        step_token_ids[j] = run_one_step->GetResultTokenIds()[j];
         if (is_custom_sampling) {
-          step_scores[j] = run_one_step.GetScores()[j];
+          step_scores[j] = run_one_step->GetScores()[j];
         }
       } else {
         final_texts[j] += output_text;
         final_token_ids[j].insert(final_token_ids[j].end(),
-                                  run_one_step.GetResultTokenIds()[j].begin(),
-                                  run_one_step.GetResultTokenIds()[j].end());
+                                  run_one_step->GetResultTokenIds()[j].begin(),
+                                  run_one_step->GetResultTokenIds()[j].end());
         if (is_custom_sampling) {
-          accumulated_scores[j] += run_one_step.GetScores()[j];
+          accumulated_scores[j] += run_one_step->GetScores()[j];
           num_decoded_tokens[j]++;
         }
       }
@@ -723,7 +745,7 @@ absl::StatusOr<Responses> Decode(
 
   {
     ABSL_ASSIGN_OR_RETURN(std::vector<std::string> flushed_texts,
-                          run_one_step.Flush());
+                          run_one_step->Flush());
 
     if (is_streaming) {
       bool any_updates = false;
@@ -733,7 +755,7 @@ absl::StatusOr<Responses> Decode(
         if (!flushed_texts[j].empty()) {
           any_updates = true;
           step_texts[j] = flushed_texts[j];
-          step_token_ids[j] = run_one_step.GetResultTokenIds()[j];
+          step_token_ids[j] = run_one_step->GetResultTokenIds()[j];
         }
       }
       if (any_updates) {
@@ -745,9 +767,10 @@ absl::StatusOr<Responses> Decode(
       for (int j = 0; j < num_output_candidates; ++j) {
         if (!flushed_texts[j].empty()) {
           final_texts[j] += flushed_texts[j];
-          final_token_ids[j].insert(final_token_ids[j].end(),
-                                    run_one_step.GetResultTokenIds()[j].begin(),
-                                    run_one_step.GetResultTokenIds()[j].end());
+          final_token_ids[j].insert(
+              final_token_ids[j].end(),
+              run_one_step->GetResultTokenIds()[j].begin(),
+              run_one_step->GetResultTokenIds()[j].end());
         }
       }
     }
@@ -821,13 +844,15 @@ absl::StatusOr<Responses> Score(
   std::optional<BenchmarkInfo> benchmark_info;
   // Create a dummy StopTokenDetector as it's not used in ScoreCustomSampling.
   StopTokenDetector dummy_stop_token_detector(num_output_candidates);
-  DecodeOneStep run_one_step(
-      &executor, &tokenizer,
-      /*num_output_candidates=*/num_output_candidates,
-      dummy_stop_token_detector, benchmark_info,
-      /*sampler=*/std::nullopt, RepetitionPenaltyConfig::Default(),
-      NoRepeatNgramConfig::Default(), SuppressTokensConfig::Default(),
-      /*constraint=*/nullptr);
+  ABSL_ASSIGN_OR_RETURN(
+      auto run_one_step,
+      DecodeOneStep::Create(
+          &executor, &tokenizer,
+          /*num_output_candidates=*/num_output_candidates,
+          dummy_stop_token_detector, benchmark_info,
+          /*sampler=*/std::nullopt, RepetitionPenaltyConfig::Default(),
+          NoRepeatNgramConfig::Default(), SuppressTokensConfig::Default(),
+          /*constraint=*/nullptr));
   std::vector<std::vector<int>> ids_for_each_target_in_batch;
   ids_for_each_target_in_batch.reserve(target_texts.size());
   int max_num_tokens_of_target_texts = 0;
@@ -867,7 +892,7 @@ absl::StatusOr<Responses> Score(
     }
     LITERT_ASSIGN_OR_RETURN(auto decoded_ids_copy, decoded_ids.Duplicate());
     ABSL_ASSIGN_OR_RETURN(std::vector<float> step_log_likelihoods,
-                          run_one_step.RunScoreStep(
+                          run_one_step->RunScoreStep(
                               temperature, decoded_ids_for_each_target_in_batch,
                               std::move(decoded_ids_copy)));
     for (int j = 0; j < num_output_candidates; ++j) {

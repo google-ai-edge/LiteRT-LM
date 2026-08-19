@@ -55,23 +55,16 @@ absl::Status ConstrainedDecoder::ProcessLogits(
   int sequence_length = logits_dims[1];
   int vocab_size = logits_dims[2];
   RET_CHECK_EQ(sequence_length, 1) << "Only support sequence length 1.";
-  // It is possible that the model logits vocabulary size is larger than the
-  // constraint vocabulary size (e.g., due to padded vocabulary sizes in the
-  // model), or vice versa. Out-of-bounds token indices in padded logits are
-  // masked out as invalid tokens.
-  const int constraint_vocab_size = constraint_->GetVocabularySize();
   RET_CHECK_EQ(batch_size, batch_size_)
       << "Batch size [" << batch_size
       << "] does not match the expected batch size [" << batch_size_ << "].";
   for (int b = 0; b < batch_size; ++b) {
     auto& constraint_state = constraint_states_[b];
-    ABSL_ASSIGN_OR_RETURN(auto bitmap,
-                          constraint_->ComputeBitmap(*constraint_state));
-    for (int i = 0; i < vocab_size; ++i) {
-      if (i >= constraint_vocab_size || !bitmap->Get(i)) {
-        logits.data()[b * vocab_size + i] =
-            std::numeric_limits<float>::lowest();
-      }
+    ABSL_ASSIGN_OR_RETURN(auto mask,
+                          constraint_->ComputeMask(*constraint_state));
+    if (mask != nullptr) {
+      ABSL_RETURN_IF_ERROR(
+          mask->Apply(logits.subspan(b * vocab_size, vocab_size)));
     }
   }
   return absl::OkStatus();
@@ -86,18 +79,16 @@ absl::Status ConstrainedDecoder::ProcessLogits(
   int sequence_length = logits_dims[1];
   int vocab_size = logits_dims[2];
   RET_CHECK_EQ(sequence_length, 1) << "Only support sequence length 1.";
-  const int constraint_vocab_size = constraint_->GetVocabularySize();
   RET_CHECK_EQ(batch_size, batch_size_)
       << "Batch size [" << batch_size
       << "] does not match the expected batch size [" << batch_size_ << "].";
   for (int b = 0; b < batch_size; ++b) {
     auto& constraint_state = constraint_states_[b];
-    ABSL_ASSIGN_OR_RETURN(auto bitmap,
-                          constraint_->ComputeBitmap(*constraint_state));
-    for (int i = 0; i < vocab_size; ++i) {
-      if (i >= constraint_vocab_size || !bitmap->Get(i)) {
-        logits.data()[b * vocab_size + i] = tflite::half::min();
-      }
+    ABSL_ASSIGN_OR_RETURN(auto mask,
+                          constraint_->ComputeMask(*constraint_state));
+    if (mask != nullptr) {
+      ABSL_RETURN_IF_ERROR(
+          mask->Apply(logits.subspan(b * vocab_size, vocab_size)));
     }
   }
   return absl::OkStatus();
