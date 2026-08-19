@@ -492,3 +492,101 @@ cc_test(
         "@litert//tflite/types:half",
     ],
 )
+
+cc_library(
+    name = "suppress_tokens_constraint",
+    srcs = ["suppress_tokens_constraint.cc"],
+    hdrs = ["suppress_tokens_constraint.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":constraint",
+        ":logit_mask",
+        "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/types:span",
+        "//runtime/components/logits_processor:suppress_tokens_config",
+    ],
+)
+
+cc_test(
+    name = "suppress_tokens_constraint_test",
+    srcs = ["suppress_tokens_constraint_test.cc"],
+    deps = [
+        ":logit_mask",
+        ":suppress_tokens_constraint",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/types:span",
+        "//runtime/components/logits_processor:suppress_tokens_config",
+        "//runtime/util:test_utils",
+        "@litert//tflite/types:half",
+    ],
+)
+
+cc_library(
+    name = "no_repeat_ngram_constraint",
+    srcs = ["no_repeat_ngram_constraint.cc"],
+    hdrs = ["no_repeat_ngram_constraint.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":constraint",
+        ":logit_mask",
+        "@com_google_absl//absl/container:fixed_array",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/hash",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/types:span",
+        "//runtime/components/logits_processor:no_repeat_ngram_config",
+    ],
+)
+
+cc_test(
+    name = "no_repeat_ngram_constraint_test",
+    srcs = ["no_repeat_ngram_constraint_test.cc"],
+    deps = [
+        ":logit_mask",
+        ":no_repeat_ngram_constraint",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/types:span",
+        "//runtime/components/logits_processor:no_repeat_ngram_config",
+        "//runtime/util:test_utils",
+        "@litert//tflite/types:half",
+    ],
+)
+
+cc_library(
+    name = "repetition_penalty_constraint",
+    srcs = ["repetition_penalty_constraint.cc"],
+    hdrs = ["repetition_penalty_constraint.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":constraint",
+        ":logit_mask",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/types:span",
+        "//runtime/components/logits_processor:repetition_penalty_config",
+        "@litert//tflite/types:half",
+    ],
+)
+
+cc_test(
+    name = "repetition_penalty_constraint_test",
+    srcs = ["repetition_penalty_constraint_test.cc"],
+    deps = [
+        ":logit_mask",
+        ":repetition_penalty_constraint",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/types:span",
+        "//runtime/components/logits_processor:repetition_penalty_config",
+        "//runtime/util:test_utils",
+        "@litert//tflite/types:half",
+    ],
+)
