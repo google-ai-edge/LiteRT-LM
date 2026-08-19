@@ -24,6 +24,7 @@
 #include <utility>
 #include <vector>
 
+#include "absl/algorithm/container.h"  // from @com_google_absl
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
@@ -107,7 +108,8 @@ absl::Status SetCpuOptions(const VisionExecutorSettings& executor_settings,
 absl::StatusOr<int> GetVitSignatureIndex(
     const Model& model,
     const VisionExecutorProperties& vision_executor_properties,
-    const int num_patches) {
+    const int num_patches,
+    const std::vector<std::string>& selected_signatures = {}) {
   if (model.GetNumSignatures() == 1) {
     return 0;
   }
@@ -127,6 +129,10 @@ absl::StatusOr<int> GetVitSignatureIndex(
   for (int i = 0; i < model.GetNumSignatures(); ++i) {
     LITERT_ASSIGN_OR_RETURN(auto signature_name, model.GetSignature(i));
     if (absl::StartsWith(signature_name.Key(), kVisionLengthPrefix)) {
+      if (!selected_signatures.empty() &&
+          !absl::c_linear_search(selected_signatures, signature_name.Key())) {
+        continue;
+      }
       found_any_signature = true;
       int current_length = 0;
       size_t last_underscore = signature_name.Key().find_last_of('_');
@@ -152,8 +158,8 @@ absl::StatusOr<int> GetVitSignatureIndex(
   }
 
   if (!found_any_signature) {
-    return absl::InvalidArgumentError(
-        absl::StrCat("No signature found with prefix ", kVisionLengthPrefix));
+    return absl::InvalidArgumentError(absl::StrCat(
+        "No matching signature found with prefix ", kVisionLengthPrefix));
   }
 
   return absl::InvalidArgumentError(
@@ -246,6 +252,19 @@ absl::Status VisionLiteRtCompiledModelExecutor::VisionEncoder::Initialize(
   ABSL_RETURN_IF_ERROR(SetExternalWeightOptions(
       resources, ModelType::kTfLiteVisionEncoder, options));
 
+  if (!vision_executor_settings_.GetEncoderSelectedSignatures().empty()) {
+    std::vector<absl::string_view> selected_signatures;
+    selected_signatures.reserve(
+        vision_executor_settings_.GetEncoderSelectedSignatures().size());
+    for (const auto& sig :
+         vision_executor_settings_.GetEncoderSelectedSignatures()) {
+      selected_signatures.push_back(sig);
+    }
+    LITERT_ASSIGN_OR_RETURN(auto& runtime_options, options.GetRuntimeOptions());
+    LITERT_RETURN_IF_ERROR(
+        runtime_options.SetSelectedSignatures(selected_signatures));
+  }
+
   LITERT_ASSIGN_OR_RETURN(compiled_model_,
                           CompiledModel::Create(env_, model_.Get(), options));
   if (model_.GetNumSignatures() == 1) {
@@ -333,6 +352,19 @@ absl::Status VisionLiteRtCompiledModelExecutor::VisionAdapter::Initialize(
   }
   ABSL_RETURN_IF_ERROR(SetExternalWeightOptions(
       resources, ModelType::kTfLiteVisionAdapter, options));
+
+  if (!vision_executor_settings_.GetAdapterSelectedSignatures().empty()) {
+    std::vector<absl::string_view> adapter_selected_signatures;
+    adapter_selected_signatures.reserve(
+        vision_executor_settings_.GetAdapterSelectedSignatures().size());
+    for (const auto& sig :
+         vision_executor_settings_.GetAdapterSelectedSignatures()) {
+      adapter_selected_signatures.push_back(sig);
+    }
+    LITERT_ASSIGN_OR_RETURN(auto& runtime_options, options.GetRuntimeOptions());
+    LITERT_RETURN_IF_ERROR(
+        runtime_options.SetSelectedSignatures(adapter_selected_signatures));
+  }
 
   LITERT_ASSIGN_OR_RETURN(compiled_model_,
                           CompiledModel::Create(env_, model_.Get(), options));
@@ -494,16 +526,20 @@ absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(
                           input_maps.at(kImages).TensorType());
   const auto& images_dimensions = images_tensor_type.Layout().Dimensions();
   const int num_patches_from_input = images_dimensions[1];
-  ABSL_ASSIGN_OR_RETURN(auto encoder_signature_index,
-                        GetVitSignatureIndex(vision_encoder_->GetModel(),
-                                             vision_executor_properties_,
-                                             num_patches_from_input));
+  ABSL_ASSIGN_OR_RETURN(
+      auto encoder_signature_index,
+      GetVitSignatureIndex(
+          vision_encoder_->GetModel(), vision_executor_properties_,
+          num_patches_from_input,
+          vision_executor_settings_.GetEncoderSelectedSignatures()));
   std::optional<int> adapter_signature_index;
   if (vision_adapter_ != nullptr) {
-    ABSL_ASSIGN_OR_RETURN(adapter_signature_index,
-                          GetVitSignatureIndex(vision_adapter_->GetModel(),
-                                               vision_executor_properties_,
-                                               num_patches_from_input));
+    ABSL_ASSIGN_OR_RETURN(
+        adapter_signature_index,
+        GetVitSignatureIndex(
+            vision_adapter_->GetModel(), vision_executor_properties_,
+            num_patches_from_input,
+            vision_executor_settings_.GetAdapterSelectedSignatures()));
   }
   LITERT_ASSIGN_OR_RETURN(
       auto encoder_input_buffers,

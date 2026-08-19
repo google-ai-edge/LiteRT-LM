@@ -217,5 +217,45 @@ TEST(VisionLiteRtCompiledModelExecutorTest,
   EXPECT_EQ(output_vector.size(), 25);
 }
 
+TEST(VisionLiteRtCompiledModelExecutorTest,
+     CreateExecutorWithSelectedSignaturesTest) {
+  const std::string& model_path =
+      (std::filesystem::path(::testing::SrcDir()) /
+       std::string(kTestVisionModelWithoutAdapterPath))
+          .string();
+
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create(model_path));
+
+  ASSERT_OK_AND_ASSIGN(
+      VisionExecutorSettings settings,
+      VisionExecutorSettings::CreateDefault(model_assets,
+                                            /*encoder_backend=*/Backend::CPU,
+                                            /*adapter_backend=*/Backend::CPU));
+  settings.SetEncoderSelectedSignatures({"serving_default"});
+  settings.SetAdapterSelectedSignatures({"serving_default"});
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+
+  ASSERT_OK_AND_ASSIGN(
+      auto vision_executor,
+      VisionLiteRtCompiledModelExecutor::Create(settings, env));
+
+  std::vector<float> input_data(10 * 8, 1.0f);
+  Layout input_layout(litert::Dimensions{1, 10, 8});
+  RankedTensorType input_tensor_type(ElementType::Float32,
+                                     std::move(input_layout));
+  ASSERT_OK_AND_ASSIGN(
+      auto input_buffer,
+      CreateTensorBuffer<float>(absl::MakeSpan(input_data), input_tensor_type));
+
+  ASSERT_OK_AND_ASSIGN(auto output_data, vision_executor->Encode(input_buffer));
+  ASSERT_OK_AND_ASSIGN(TensorBuffer * output_embeddings,
+                       output_data.GetMutableEmbeddingsPtr());
+  ASSERT_OK_AND_ASSIGN(auto output_vector,
+                       ReadTensorBuffer<float>(*output_embeddings));
+  EXPECT_EQ(output_vector.size(), 25);
+}
+
 }  // namespace
 }  // namespace litert::lm

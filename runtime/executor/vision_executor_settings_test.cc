@@ -25,6 +25,7 @@
 namespace litert::lm {
 namespace {
 
+using ::testing::ElementsAre;
 using ::testing::status::StatusIs;
 
 TEST(VisionExecutorSettingsTest, GetModelAssets) {
@@ -171,6 +172,22 @@ TEST(VisionExecutorSettingsTest, GetProgramCacheFile) {
             adapter_program);
 }
 
+TEST(VisionExecutorSettingsTest, SelectedSignatures) {
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets, ModelAssets::Create(""));
+  ASSERT_OK_AND_ASSIGN(VisionExecutorSettings settings,
+                       VisionExecutorSettings::CreateDefault(
+                           model_assets, Backend::GPU, Backend::GPU));
+  EXPECT_TRUE(settings.GetEncoderSelectedSignatures().empty());
+  EXPECT_TRUE(settings.GetAdapterSelectedSignatures().empty());
+
+  settings.SetEncoderSelectedSignatures({"vision_128", "vision_256"});
+  settings.SetAdapterSelectedSignatures({"adapter_128"});
+
+  EXPECT_THAT(settings.GetEncoderSelectedSignatures(),
+              ElementsAre("vision_128", "vision_256"));
+  EXPECT_THAT(settings.GetAdapterSelectedSignatures(),
+              ElementsAre("adapter_128"));
+}
 
 }  // namespace
 }  // namespace litert::lm

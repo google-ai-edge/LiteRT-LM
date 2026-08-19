@@ -663,5 +663,18 @@ TEST(LlmExecutorConfigTest, NpuConfigDefaults) {
   EXPECT_FALSE(config.enable_npu_debug_logging);
 }
 
+TEST(LlmExecutorConfigTest, SelectedSignatures) {
+  auto model_assets = ModelAssets::Create("/path/to/model1");
+  ASSERT_OK(model_assets);
+  ASSERT_OK_AND_ASSIGN(auto settings,
+                       LlmExecutorSettings::CreateDefault(
+                           *std::move(model_assets), Backend::CPU));
+  EXPECT_TRUE(settings.GetSelectedSignatures().empty());
+
+  settings.SetSelectedSignatures({"llm_signature_1", "llm_signature_2"});
+  EXPECT_THAT(settings.GetSelectedSignatures(),
+              testing::ElementsAre("llm_signature_1", "llm_signature_2"));
+}
+
 }  // namespace
 }  // namespace litert::lm

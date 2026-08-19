@@ -19,6 +19,7 @@
 #include <optional>
 #include <string>
 #include <variant>
+#include <vector>
 
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
@@ -300,6 +301,19 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
     LITERT_ASSIGN_OR_RETURN(auto& runtime_options,
                             compilation_options.GetRuntimeOptions());
     runtime_options.SetEnableProfiling(/*enabled=*/true);
+  }
+
+  if (!executor_settings.GetSelectedSignatures().empty()) {
+    std::vector<absl::string_view> selected_signatures;
+    selected_signatures.reserve(
+        executor_settings.GetSelectedSignatures().size());
+    for (const auto& sig : executor_settings.GetSelectedSignatures()) {
+      selected_signatures.push_back(sig);
+    }
+    LITERT_ASSIGN_OR_RETURN(auto& runtime_options,
+                            compilation_options.GetRuntimeOptions());
+    LITERT_RETURN_IF_ERROR(
+        runtime_options.SetSelectedSignatures(selected_signatures));
   }
 
   return compilation_options;

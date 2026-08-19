@@ -21,6 +21,7 @@
 #include <string>
 #include <utility>
 #include <variant>
+#include <vector>
 
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
@@ -102,6 +103,28 @@ class VisionExecutorSettings : public ExecutorSettingsBase {
     scoped_adapter_program_cache_file_ = std::move(cache_file);
   }
 
+  // Getter for encoder_selected_signatures.
+  const std::vector<std::string>& GetEncoderSelectedSignatures() const {
+    return encoder_selected_signatures_;
+  }
+
+  // Setter for encoder_selected_signatures.
+  void SetEncoderSelectedSignatures(
+      std::vector<std::string> encoder_selected_signatures) {
+    encoder_selected_signatures_ = std::move(encoder_selected_signatures);
+  }
+
+  // Getter for adapter_selected_signatures.
+  const std::vector<std::string>& GetAdapterSelectedSignatures() const {
+    return adapter_selected_signatures_;
+  }
+
+  // Setter for adapter_selected_signatures.
+  void SetAdapterSelectedSignatures(
+      std::vector<std::string> adapter_selected_signatures) {
+    adapter_selected_signatures_ = std::move(adapter_selected_signatures);
+  }
+
   using ExecutorSettingsBase::GetWeightCacheFile;
   absl::StatusOr<
       std::variant<std::string, std::shared_ptr<litert::lm::ScopedFile>>>
@@ -135,6 +158,9 @@ class VisionExecutorSettings : public ExecutorSettingsBase {
 
   // The program cache file to use for the vision adapter model.
   std::shared_ptr<litert::lm::ScopedFile> scoped_adapter_program_cache_file_;
+
+  std::vector<std::string> encoder_selected_signatures_;
+  std::vector<std::string> adapter_selected_signatures_;
 };
 
 std::ostream& operator<<(std::ostream& os,

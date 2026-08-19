@@ -20,6 +20,7 @@
 #include <string>
 #include <utility>
 #include <variant>
+#include <vector>
 
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
@@ -81,6 +82,14 @@ class EmbeddingExecutorSettings : public ExecutorSettingsBase {
     scoped_encoder_program_cache_file_ = std::move(cache_file);
   }
 
+  // Selected signatures APIs.
+  const std::vector<std::string>& GetSelectedSignatures() const {
+    return selected_signatures_;
+  }
+  void SetSelectedSignatures(std::vector<std::string> selected_signatures) {
+    selected_signatures_ = std::move(selected_signatures);
+  }
+
   using ExecutorSettingsBase::GetWeightCacheFile;
   absl::StatusOr<
       std::variant<std::string, std::shared_ptr<litert::lm::ScopedFile>>>
@@ -101,6 +110,8 @@ class EmbeddingExecutorSettings : public ExecutorSettingsBase {
 
   // The program cache file to use for the text encoder model.
   std::shared_ptr<litert::lm::ScopedFile> scoped_encoder_program_cache_file_;
+
+  std::vector<std::string> selected_signatures_;
 };
 
 std::ostream& operator<<(std::ostream& os,

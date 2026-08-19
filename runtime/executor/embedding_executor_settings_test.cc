@@ -28,6 +28,7 @@
 namespace litert::lm {
 namespace {
 
+using ::testing::ElementsAre;
 using ::testing::HasSubstr;
 
 TEST(EmbeddingExecutorSettingsTest, GetModelAssets) {
@@ -147,6 +148,18 @@ TEST(EmbeddingExecutorSettingsTest, StreamOutputFormatting) {
   std::ostringstream os;
   os << settings;
   EXPECT_THAT(os.str(), HasSubstr("backend: "));
+}
+
+TEST(EmbeddingExecutorSettingsTest, SelectedSignatures) {
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets, ModelAssets::Create(""));
+  ASSERT_OK_AND_ASSIGN(
+      EmbeddingExecutorSettings settings,
+      EmbeddingExecutorSettings::CreateDefault(model_assets, Backend::CPU));
+  EXPECT_TRUE(settings.GetSelectedSignatures().empty());
+
+  settings.SetSelectedSignatures({"encoder_256", "encoder_512"});
+  EXPECT_THAT(settings.GetSelectedSignatures(),
+              ElementsAre("encoder_256", "encoder_512"));
 }
 
 }  // namespace

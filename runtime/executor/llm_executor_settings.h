@@ -425,6 +425,14 @@ class LlmExecutorSettings : public ExecutorSettingsBase {
     return absl::OkStatus();
   }
 
+  // Selected signatures APIs.
+  const std::vector<std::string>& GetSelectedSignatures() const {
+    return selected_signatures_;
+  }
+  void SetSelectedSignatures(std::vector<std::string> selected_signatures) {
+    selected_signatures_ = std::move(selected_signatures);
+  }
+
  private:
   explicit LlmExecutorSettings(ModelAssets model_assets)
       : ExecutorSettingsBase(std::move(model_assets)) {}
@@ -448,6 +456,8 @@ class LlmExecutorSettings : public ExecutorSettingsBase {
 
   // Optional advanced settings.
   std::optional<AdvancedSettings> advanced_settings_;
+
+  std::vector<std::string> selected_signatures_;
 
   // Declare the output stream operator as a friend such that it can be used
   // to print the LlmExecutorSettings private member.

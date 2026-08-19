@@ -21,9 +21,11 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
+#include "absl/algorithm/container.h"  // from @com_google_absl
 #include "absl/cleanup/cleanup.h"  // from @com_google_absl
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
@@ -78,13 +80,18 @@ class CompiledModelWrapper : public litert::CompiledModel {
 };
 
 absl::StatusOr<std::map<int, size_t>> GetTextEncoderSignatureMap(
-    const litert::Model& model) {
+    const litert::Model& model,
+    const std::vector<std::string>& selected_signatures = {}) {
   std::map<int, size_t> encoder_signatures;
 
   for (int i = 0; i < model.GetNumSignatures(); ++i) {
     LITERT_ASSIGN_OR_RETURN(auto signature, model.GetSignature(i));
     absl::string_view key = signature.Key();
     if (absl::StartsWith(key, kEncoderSignatureRunner)) {
+      if (!selected_signatures.empty() &&
+          !absl::c_linear_search(selected_signatures, key)) {
+        continue;
+      }
       if (signature.InputNames().empty()) {
         return absl::FailedPreconditionError(
             absl::StrCat("Text encoder signature has no input tensors: ", key));
@@ -211,14 +218,28 @@ EmbeddingLiteRtCompiledModelExecutor::Create(
   ABSL_RETURN_IF_ERROR(SetExternalWeightOptions(
       *resources, ModelType::kTfLiteTextEncoder, options));
 
+  if (!executor_settings.GetSelectedSignatures().empty()) {
+    std::vector<absl::string_view> selected_signatures;
+    selected_signatures.reserve(
+        executor_settings.GetSelectedSignatures().size());
+    for (const auto& sig : executor_settings.GetSelectedSignatures()) {
+      selected_signatures.push_back(sig);
+    }
+    LITERT_ASSIGN_OR_RETURN(auto& runtime_options, options.GetRuntimeOptions());
+    LITERT_RETURN_IF_ERROR(
+        runtime_options.SetSelectedSignatures(selected_signatures));
+  }
+
   LITERT_ASSIGN_OR_RETURN(
       auto compiled_model,
       CompiledModelWrapper::Create(env, text_encoder_model->Get(), options));
   auto compiled_model_ptr =
       std::make_unique<litert::CompiledModel>(std::move(compiled_model));
 
-  ABSL_ASSIGN_OR_RETURN(auto encoder_signatures,
-                        GetTextEncoderSignatureMap(*text_encoder_model));
+  ABSL_ASSIGN_OR_RETURN(
+      auto encoder_signatures,
+      GetTextEncoderSignatureMap(*text_encoder_model,
+                                 executor_settings.GetSelectedSignatures()));
   size_t default_signature_index = encoder_signatures.begin()->second;
 
   LITERT_ASSIGN_OR_RETURN(

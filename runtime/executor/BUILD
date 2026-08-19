@@ -794,6 +794,7 @@ cc_library(
         ":vision_executor",
         ":vision_executor_settings",
         ":vision_executor_utils",
+        "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/log:absl_log",
@@ -920,6 +921,7 @@ cc_library(
         ":executor_settings_base",
         ":litert_compiled_model_executor_utils",
         ":llm_executor_io_types",
+        "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/cleanup",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/log:absl_log",
@@ -1124,6 +1126,44 @@ cc_test(
         "//runtime/components:model_resources",
         "//runtime/util:scoped_file",
         "//runtime/util:test_utils",
+    ],
+)
+
+cc_library(
+    name = "model_signature_utils",
+    srcs = ["model_signature_utils.cc"],
+    hdrs = ["model_signature_utils.h"],
+    deps = [
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/types:span",
+        "@litert//litert/cc:litert_model",
+        "@litert//litert/cc:litert_ranked_tensor_type",
+        "//runtime/components:model_resources",
+        "//runtime/util:litert_status_util",
+    ],
+)
+
+cc_test(
+    name = "model_signature_utils_test",
+    srcs = ["model_signature_utils_test.cc"],
+    deps = [
+        ":model_signature_utils",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@flatbuffers//:runtime_cc",
+        "@litert//litert/cc:litert_buffer_ref",
+        "@litert//litert/cc:litert_environment",
+        "@litert//litert/cc:litert_model",
+        "@litert//litert/test:matchers",
+        "//runtime/components:model_resources",
+        "//runtime/util:scoped_file",
+        "//runtime/util:test_utils",  # buildcleaner: keep
+        "@litert//tflite/schema:schema_fbs",
     ],
 )
 

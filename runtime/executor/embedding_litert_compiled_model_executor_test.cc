@@ -874,5 +874,61 @@ TEST(EmbeddingLiteRtCompiledModelExecutorTest, Create_WithCache_Success) {
   EXPECT_NE(embedding_executor->GetEnvironment(), nullptr);
 }
 
+TEST(EmbeddingLiteRtCompiledModelExecutorTest,
+     Create_WithSelectedSignatures_FiltersSignatures) {
+  auto embedder_buf =
+      BuildDummyTfLiteModelBuffer("embedder", {1}, tflite::TensorType_FLOAT32,
+                                  {1, 1, 8}, tflite::TensorType_FLOAT32);
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto embedder_model, Model::CreateFromBuffer(litert::BufferRef<uint8_t>(
+                               embedder_buf.data(), embedder_buf.size())));
+
+  auto encoder_buf = BuildDummyMultiSignatureEncoderModelBuffer(
+      {"encoder_12", "encoder_24"}, {12, 24}, /*embedding_dim=*/8);
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto encoder_model, Model::CreateFromBuffer(litert::BufferRef<uint8_t>(
+                              encoder_buf.data(), encoder_buf.size())));
+
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create("dummy_model_path"));
+  ASSERT_OK_AND_ASSIGN(EmbeddingExecutorSettings settings,
+                       EmbeddingExecutorSettings::CreateDefault(
+                           model_assets, /*backend=*/Backend::CPU));
+  settings.SetSelectedSignatures({"encoder_12"});
+
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+
+  auto fake_resources = std::make_unique<FakeEmbeddingModelResources>(
+      &embedder_model, &encoder_model);
+  ASSERT_OK_AND_ASSIGN(auto embedding_executor,
+                       EmbeddingLiteRtCompiledModelExecutor::Create(
+                           settings, env, std::move(fake_resources)));
+
+  // Input of 24 tokens with truncate strategy should truncate to 12 since
+  // only encoder_12 was selected.
+  alignas(LITERT_HOST_MEMORY_BUFFER_ALIGNMENT) int32_t token_data[24];
+  for (int i = 0; i < 24; ++i) {
+    token_data[i] = i + 1;
+  }
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto token_ids_buffer,
+      TensorBuffer::CreateFromHostMemory(
+          env, RankedTensorType(ElementType::Int32, Layout(Dimensions({24}))),
+          token_data, sizeof(token_data)));
+
+  ExecutorInputs inputs(ExecutorTextData(std::move(token_ids_buffer)),
+                        std::nullopt, std::nullopt);
+
+  ComputeEmbeddingOptions options{
+      .input_overflow_strategy = InputOverflowStrategy::kTruncate,
+  };
+  ASSERT_OK_AND_ASSIGN(auto output,
+                       embedding_executor->ComputeEmbedding(inputs, options));
+  EXPECT_EQ(output.embedding.size(), 12 * 8);
+  EXPECT_EQ(output.input_length, 24);
+  EXPECT_EQ(output.truncated_length, 12);
+}
+
 }  // namespace
 }  // namespace litert::lm
