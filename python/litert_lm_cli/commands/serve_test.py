@@ -15,6 +15,7 @@
 """Unit tests for the LiteRT-LM serve command."""
 
 import http.server
+import json
 import socket
 import sys
 import threading
@@ -830,6 +831,219 @@ class ServeTest(parameterized.TestCase):
         kwargs.get("activation_data_type"),
         mock_litert_lm.ActivationDataType.FLOAT16,
     )
+
+  def test_normalize_embedding_input(self):
+    self.assertEqual(
+        openai_handler._normalize_embedding_input("hello"), ["hello"]
+    )
+    self.assertEqual(
+        openai_handler._normalize_embedding_input(["hello", "world"]),
+        ["hello", "world"],
+    )
+    self.assertEqual(
+        openai_handler._normalize_embedding_input([101, 2045]),
+        [["101", "2045"]],
+    )
+    self.assertEqual(
+        openai_handler._normalize_embedding_input(
+            {"type": "text", "text": "hello"}
+        ),
+        ["hello"],
+    )
+    self.assertEqual(
+        openai_handler._normalize_embedding_input(
+            [{"type": "text", "text": "hello"}]
+        ),
+        [["hello"]],
+    )
+
+    with self.assertRaisesRegex(ValueError, "input cannot be empty"):
+      openai_handler._normalize_embedding_input("")
+
+    with self.assertRaisesRegex(ValueError, "input cannot be empty"):
+      openai_handler._normalize_embedding_input([])
+
+  def test_embedding_base64_and_l2_normalize(self):
+    vec = [3.0, 4.0]
+    normalized = openai_handler._l2_normalize(vec)
+    self.assertAlmostEqual(normalized[0], 0.6)
+    self.assertAlmostEqual(normalized[1], 0.8)
+
+    b64_str = openai_handler._embedding_to_base64([1.0, 2.0])
+    self.assertIsInstance(b64_str, str)
+    self.assertNotEmpty(b64_str)
+
+  def test_openai_embeddings_success(self):
+    endpoint = "/v1/embeddings"
+    mock_engine = mock.MagicMock()
+    mock_engine.compute_embedding_batch.return_value = [
+        mock.MagicMock(embedding=[0.1, 0.2, 0.3]),
+        mock.MagicMock(embedding=[0.4, 0.5, 0.6]),
+    ]
+    mock_get_engine = self.enter_context(
+        mock.patch.object(
+            openai_handler.OpenAIHandler, "_get_embedding_engine", autospec=True
+        )
+    )
+    mock_get_engine.return_value = mock_engine
+
+    server = serve_util.LiteRTLMServer(
+        ("127.0.0.1", 0), openai_handler.OpenAIHandler
+    )
+    port = server.server_port
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+      data = json.dumps({
+          "model": "embedding-gemma",
+          "input": ["hello", "world"],
+      }).encode("utf-8")
+
+      req = urllib.request.Request(
+          f"http://127.0.0.1:{port}{endpoint}",
+          data=data,
+          headers={"Content-Type": "application/json"},
+      )
+
+      with urllib.request.urlopen(req) as response:
+        self.assertEqual(response.getcode(), 200)
+        res_body = json.loads(response.read().decode("utf-8"))
+        self.assertEqual(res_body["object"], "list")
+        self.assertEqual(res_body["model"], "embedding-gemma")
+        self.assertEqual(len(res_body["data"]), 2)
+        self.assertEqual(res_body["data"][0]["object"], "embedding")
+        self.assertEqual(res_body["data"][0]["index"], 0)
+        self.assertEqual(res_body["data"][0]["embedding"], [0.1, 0.2, 0.3])
+        self.assertEqual(res_body["data"][1]["index"], 1)
+        self.assertEqual(res_body["data"][1]["embedding"], [0.4, 0.5, 0.6])
+        self.assertIn("usage", res_body)
+    finally:
+      server.shutdown()
+      thread.join()
+
+  def test_openai_embeddings_base64_and_dimensions(self):
+    mock_engine = mock.MagicMock()
+    mock_engine.compute_embedding_batch.return_value = [
+        mock.MagicMock(embedding=[3.0, 4.0, 0.0]),
+    ]
+    mock_get_engine = self.enter_context(
+        mock.patch.object(
+            openai_handler.OpenAIHandler, "_get_embedding_engine", autospec=True
+        )
+    )
+    mock_get_engine.return_value = mock_engine
+
+    server = serve_util.LiteRTLMServer(
+        ("127.0.0.1", 0), openai_handler.OpenAIHandler
+    )
+    port = server.server_port
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+      data = json.dumps({
+          "model": "embedding-gemma",
+          "input": "hello",
+          "encoding_format": "base64",
+          "dimensions": 2,
+      }).encode("utf-8")
+
+      req = urllib.request.Request(
+          f"http://127.0.0.1:{port}/v1/embeddings",
+          data=data,
+          headers={"Content-Type": "application/json"},
+      )
+
+      with urllib.request.urlopen(req) as response:
+        self.assertEqual(response.getcode(), 200)
+        res_body = json.loads(response.read().decode("utf-8"))
+        emb = res_body["data"][0]["embedding"]
+        self.assertIsInstance(emb, str)
+        # Expected vector after slicing to 2 and L2-normalizing [3.0, 4.0] is [0.6, 0.8]
+        expected_b64 = openai_handler._embedding_to_base64([0.6, 0.8])
+        self.assertEqual(emb, expected_b64)
+    finally:
+      server.shutdown()
+      thread.join()
+
+  @parameterized.named_parameters(
+      dict(
+          testcase_name="missing_model",
+          body={"input": "hello"},
+          err_code=400,
+      ),
+      dict(
+          testcase_name="missing_input",
+          body={"model": "gemma"},
+          err_code=400,
+      ),
+      dict(
+          testcase_name="invalid_encoding_format",
+          body={"model": "gemma", "input": "hello", "encoding_format": "xml"},
+          err_code=400,
+      ),
+      dict(
+          testcase_name="invalid_dimensions",
+          body={"model": "gemma", "input": "hello", "dimensions": -5},
+          err_code=400,
+      ),
+  )
+  def test_openai_embeddings_errors(self, body, err_code):
+    server = serve_util.LiteRTLMServer(
+        ("127.0.0.1", 0), openai_handler.OpenAIHandler
+    )
+    port = server.server_port
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+      data = json.dumps(body).encode("utf-8")
+      req = urllib.request.Request(
+          f"http://127.0.0.1:{port}/v1/embeddings",
+          data=data,
+          headers={"Content-Type": "application/json"},
+      )
+
+      with self.assertRaises(urllib.error.HTTPError) as cm:
+        urllib.request.urlopen(req)
+      self.assertEqual(cm.exception.code, err_code)
+    finally:
+      server.shutdown()
+      thread.join()
+
+  def test_get_or_initialize_server_embedding_engine(self):
+    mock_m = mock.Mock(spec_set=["exists", "model_path", "model_id"])
+    mock_m.exists.return_value = True
+    mock_m.model_path = "/path/to/embedding-model"
+    mock_m.model_id = "embedding-model"
+
+    mock_model_mod.Model.from_model_id.return_value = mock_m
+
+    mock_emb_engine_instance = mock.MagicMock()
+    with mock.patch.object(
+        mock_litert_lm, "EmbeddingEngine", return_value=mock_emb_engine_instance
+    ) as mock_emb_engine_cls:
+      server = mock.MagicMock(spec=serve_util.LiteRTLMServer)
+      server.litert_lm_embedding_engine = None
+      server.embedding_model_id = None
+      server.embedding_backend = None
+      server.embedding_vision_backend = None
+      server.embedding_audio_backend = None
+
+      # First call initializes engine
+      engine1 = serve_util.get_or_initialize_server_embedding_engine(
+          server, model_id="embedding-model"
+      )
+      self.assertEqual(engine1, mock_emb_engine_instance)
+      mock_emb_engine_cls.assert_called_once()
+
+      # Second call returns cached engine
+      engine2 = serve_util.get_or_initialize_server_embedding_engine(
+          server, model_id="embedding-model"
+      )
+      self.assertEqual(engine2, mock_emb_engine_instance)
+      self.assertEqual(mock_emb_engine_cls.call_count, 1)
 
 
 if __name__ == "__main__":

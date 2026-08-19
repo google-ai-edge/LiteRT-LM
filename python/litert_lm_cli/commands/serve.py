@@ -64,6 +64,9 @@ def run_server(
       finally:
         if server.litert_lm_engine is not None:
           server.litert_lm_engine.__exit__(None, None, None)
+        emb_engine = server.litert_lm_embedding_engine
+        if emb_engine is not None:
+          emb_engine.close()
   except KeyboardInterrupt:
     click.echo(click.style("\nShutting down server...", fg="cyan"))
 
@@ -74,7 +77,8 @@ def run_server(
         "Start an OpenAI-compatible API server.\n\n"
         "Supported OpenAI endpoints:\n"
         "  - /v1/models\n"
-        "  - /v1/chat/completions\n\n"
+        "  - /v1/chat/completions\n"
+        "  - /v1/embeddings\n\n"
         "Tips:\n"
         '  - Use "litert-lm import" to import a new model.\n'
         '  - Use "litert-lm list" to view already imported models.\n\n'

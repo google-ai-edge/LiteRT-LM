@@ -28,12 +28,15 @@ import dataclasses
 import datetime
 import http.server
 import json
+import math
 import os
+import struct
 import traceback
 from typing import Any
 import urllib.request
 
 import click
+
 # Migrate to built-in "typing" when min python version is 3.12.
 from typing_extensions import override
 
@@ -46,6 +49,100 @@ from litert_lm_cli.commands import serve_util
 def _dump_json(data: Any, *, indent: int | None = None) -> str:
   """Dumps data to a JSON string, ensuring non-ASCII characters are handled."""
   return json.dumps(data, ensure_ascii=False, indent=indent)
+
+
+def _embedding_to_base64(embedding: list[float]) -> str:
+  """Converts a float embedding vector to IEEE 754 float32 base64 string."""
+  raw_bytes = struct.pack(f"<{len(embedding)}f", *embedding)
+  return base64.b64encode(raw_bytes).decode("utf-8")
+
+
+def _l2_normalize(vec: list[float]) -> list[float]:
+  """Applies L2 normalization to a float vector (after dimension slicing)."""
+  norm = math.sqrt(sum(x * x for x in vec))
+  if norm > 0:
+    return [x / norm for x in vec]
+  return vec
+
+
+def _parse_embedding_content_part(part: Any) -> str | litert_lm.Content:
+  """Parses a content part (str, int, dict, or Content) into a LiteRT-LM input item."""
+  if isinstance(part, str):
+    return part
+  if isinstance(part, int):
+    return str(part)
+  if isinstance(part, litert_lm.Content):
+    return part
+  if isinstance(part, dict):
+    part_type = part.get("type")
+    if part_type == "text":
+      return part.get("text", "")
+    if part_type == "image_url":
+      image_url = part.get("image_url", {})
+      url = image_url.get("url", "")
+      if url.startswith("data:"):
+        header, data = url.split(",", 1)
+        if "base64" in header:
+          return litert_lm.Content.ImageBytes(base64.b64decode(data))
+        raise ValueError(
+            "Unsupported data URL format (only base64 is supported)"
+        )
+      if url.startswith(("http://", "https://")):
+        with urllib.request.urlopen(url, timeout=10) as response:
+          return litert_lm.Content.ImageBytes(response.read())
+      path = url
+      if path.startswith("file://"):
+        path = path[7:]
+      return litert_lm.Content.ImageFile(path)
+    if part_type == "input_audio":
+      input_audio = part.get("input_audio", {})
+      data = input_audio.get("data", "")
+      return litert_lm.Content.AudioBytes(base64.b64decode(data))
+    if part_type == "image":
+      if "blob" in part:
+        return litert_lm.Content.ImageBytes(base64.b64decode(part["blob"]))
+      if "path" in part:
+        return litert_lm.Content.ImageFile(part["path"])
+    if part_type == "audio":
+      if "blob" in part:
+        return litert_lm.Content.AudioBytes(base64.b64decode(part["blob"]))
+      if "path" in part:
+        return litert_lm.Content.AudioFile(part["path"])
+    raise ValueError(f"Unsupported content part type: {part_type!r}")
+  raise ValueError(f"Unsupported input element type: {type(part).__name__}")
+
+
+def _normalize_embedding_input(
+    input_data: Any,
+) -> list[str | litert_lm.Content | list[str | litert_lm.Content]]:
+  """Normalizes OpenAI embedding 'input' parameter into a batch of items."""
+  if not input_data:
+    raise ValueError("input cannot be empty")
+
+  if isinstance(input_data, (str, dict, litert_lm.Content)):
+    return [_parse_embedding_content_part(input_data)]
+
+  if isinstance(input_data, list):
+    if all(isinstance(x, int) and not isinstance(x, bool) for x in input_data):
+      return [[_parse_embedding_content_part(x) for x in input_data]]
+
+    if all(isinstance(x, str) for x in input_data):
+      return [x for x in input_data]
+
+    if all(isinstance(x, dict) for x in input_data):
+      if all("type" in x for x in input_data):
+        return [[_parse_embedding_content_part(x) for x in input_data]]
+      return [_parse_embedding_content_part(x) for x in input_data]
+
+    if all(isinstance(x, list) for x in input_data):
+      return [
+          [_parse_embedding_content_part(part) for part in item]
+          for item in input_data
+      ]
+
+    return [_parse_embedding_content_part(x) for x in input_data]
+
+  raise ValueError(f"Unsupported input type: {type(input_data).__name__}")
 
 
 def _sse_data(data: str, event: str | None = None) -> bytes:
@@ -1377,6 +1474,133 @@ class OpenAIHandler(serve_util.CORSRequestHandler):
     except Exception as e:  # pylint: disable=broad-exception-caught
       self._handle_inference_error(e, raw_model_str, prompt)
 
+  def _get_embedding_engine(
+      self,
+      model_id: str,
+      backend: str | None = None,
+  ) -> litert_lm.EmbeddingEngine | None:
+    """Retrieves or initializes the embedding engine for the given model ID.
+
+    Args:
+      model_id: The model identifier string.
+      backend: Optional requested backend override.
+
+    Returns:
+      The LiteRT-LM EmbeddingEngine instance, or None if initialization failed.
+    """
+    try:
+      assert isinstance(self.server, serve_util.LiteRTLMServer)
+      return serve_util.get_or_initialize_server_embedding_engine(
+          self.server,
+          model_id=model_id,
+          backend=backend,
+      )
+    except FileNotFoundError as e:
+      self.send_error(404, "".join(traceback.format_exception_only(e)))
+      return None
+    except Exception as e:  # pylint: disable=broad-exception-caught
+      self.send_error(500, f"Failed to load embedding engine: {e!r}")
+      return None
+
+  def _handle_embeddings_endpoint(self) -> None:
+    """Handles POST requests to embeddings endpoints (/v1/embeddings)."""
+    body = self._parse_request_body()
+    if body is None:
+      return
+
+    raw_model_str = body.get("model")
+    if not raw_model_str:
+      self.send_error(400, "Missing model")
+      return
+
+    try:
+      model_id, backend, _ = _parse_model_parameter(raw_model_str)
+    except ValueError as e:
+      self.send_error(400, f"Invalid model parameter: {e}")
+      return
+
+    input_data = body.get("input")
+    try:
+      contents_batch = _normalize_embedding_input(input_data)
+    except (ValueError, RuntimeError) as e:
+      self.send_error(400, f"Invalid input parameter: {e}")
+      return
+
+    encoding_format = body.get("encoding_format", "float")
+    if encoding_format not in ("float", "base64"):
+      self.send_error(
+          400,
+          f"Invalid encoding_format: {encoding_format!r}. Supported formats:"
+          " 'float', 'base64'.",
+      )
+      return
+
+    dimensions = body.get("dimensions")
+    if dimensions is not None:
+      if isinstance(dimensions, bool) or not isinstance(dimensions, int):
+        self.send_error(400, "dimensions must be an integer")
+        return
+      if dimensions <= 0:
+        self.send_error(400, "dimensions must be a positive integer")
+        return
+
+    engine = self._get_embedding_engine(model_id, backend=backend)
+    if engine is None:
+      return
+
+    options = litert_lm.EmbeddingOptions(
+        normalize=body.get("normalize"),
+        insert_special_tokens=body.get("insert_special_tokens"),
+    )
+
+    try:
+      responses = engine.compute_embedding_batch(
+          contents_batch, options=options
+      )
+      data_list = []
+      for i, resp in enumerate(responses):
+        vec = resp.embedding
+        if dimensions is not None:
+          if dimensions > len(vec):
+            self.send_error(
+                400,
+                f"dimensions must be between 1 and {len(vec)}, got"
+                f" {dimensions}",
+            )
+            return
+          vec = _l2_normalize(vec[:dimensions])
+
+        if encoding_format == "base64":
+          formatted_embedding = _embedding_to_base64(vec)
+        else:
+          formatted_embedding = vec
+
+        data_list.append({
+            "object": "embedding",
+            "index": i,
+            "embedding": formatted_embedding,
+        })
+
+      # TODO: Populate prompt_tokens accurately once EmbeddingEngine exposes token
+      # count metadata from tokenization.
+      resp_body = {
+          "object": "list",
+          "data": data_list,
+          "model": raw_model_str,
+          "usage": {
+              "prompt_tokens": 0,
+              "total_tokens": 0,
+          },
+      }
+
+      setattr(self, "_headers_sent", True)
+      self.send_response(200)
+      self.send_header("Content-Type", "application/json")
+      self.end_headers()
+      self.wfile.write((_dump_json(resp_body, indent=2) + "\n").encode("utf-8"))
+    except Exception as e:  # pylint: disable=broad-exception-caught
+      self._handle_inference_error(e, raw_model_str, input_data)
+
   def do_POST(self) -> None:  # pylint: disable=invalid-name
     """Handles POST requests for OpenAI API compatible endpoints."""
     path_without_query, *_ = self.path.split("?", 1)
@@ -1384,6 +1608,7 @@ class OpenAIHandler(serve_util.CORSRequestHandler):
     router = {
         "/v1/chat/completions": self._handle_chat_completions_endpoint,
         "/v1/responses": self._handle_responses_endpoint,
+        "/v1/embeddings": self._handle_embeddings_endpoint,
     }
 
     if path_without_query in router:

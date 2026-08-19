@@ -61,6 +61,11 @@ class LiteRTLMServer(http.server.HTTPServer):
     self.vision_backend: litert_lm.Backend | None = None
     self.audio_backend: litert_lm.Backend | None = None
     self.activation_data_type: litert_lm.ActivationDataType | None = None
+    self.litert_lm_embedding_engine: litert_lm.EmbeddingEngine | None = None
+    self.embedding_model_id: str | None = None
+    self.embedding_backend: litert_lm.Backend | None = None
+    self.embedding_vision_backend: litert_lm.Backend | None = None
+    self.embedding_audio_backend: litert_lm.Backend | None = None
 
 
 class CORSRequestHandler(http.server.BaseHTTPRequestHandler):
@@ -213,4 +218,91 @@ def get_or_initialize_server_engine(
   server.vision_backend = vision_backend
   server.audio_backend = audio_backend
   server.activation_data_type = activation_data_type
+  return engine
+
+
+def get_or_initialize_server_embedding_engine(
+    server: LiteRTLMServer,
+    *,
+    model_id: str,
+    backend: str | None = None,
+) -> litert_lm.EmbeddingEngine:
+  """Retrieves the persistent server embedding engine or initializes it on first request.
+
+  Args:
+    server: The active custom LiteRTLMServer instance object.
+    model_id: The requested model identifier string.
+    backend: Optional requested backend override (e.g. 'cpu', 'gpu', 'npu').
+
+  Returns:
+    The shared LiteRT-LM EmbeddingEngine context object.
+
+  Raises:
+    FileNotFoundError: If the model package path does not exist.
+  """
+  m = model.Model.from_model_reference(model_id)
+
+  if not m.exists():
+    raise FileNotFoundError(f"Model {model_id} not found")
+
+  resolved_backend = model.parse_backend(backend, model_obj=m)
+  vision_backend = model.parse_backend(
+      None,
+      model_obj=m,
+      target_model_types={
+          litertlm_builder.TfLiteModelType.VISION_ENCODER.value,
+      },
+      label="vision",
+  )
+  audio_backend = model.parse_backend(
+      None,
+      model_obj=m,
+      target_model_types={
+          litertlm_builder.TfLiteModelType.AUDIO_ENCODER_HW.value,
+      },
+      label="audio",
+  )
+  cache = model.resolve_config_option(None, m, "cache")
+  cache_dir_val = common.cache_dir_value_from_cache_mode(cache)
+
+  if server.litert_lm_embedding_engine is not None:
+    if (
+        server.embedding_model_id == model_id
+        and server.embedding_backend == resolved_backend
+        and server.embedding_vision_backend == vision_backend
+        and server.embedding_audio_backend == audio_backend
+    ):
+      return server.litert_lm_embedding_engine
+
+    click.echo(
+        click.style(
+            f"Re-initializing embedding engine (model: {model_id}, backend:"
+            f" {resolved_backend})",
+            fg="yellow",
+        )
+    )
+    server.litert_lm_embedding_engine.close()
+    server.litert_lm_embedding_engine = None
+    server.embedding_model_id = None
+    server.embedding_backend = None
+    server.embedding_vision_backend = None
+    server.embedding_audio_backend = None
+
+  click.echo(
+      click.style(
+          f"Initializing embedding engine for model: {m.model_path}", fg="cyan"
+      )
+  )
+  engine = litert_lm.EmbeddingEngine(
+      m.model_path,
+      backend=resolved_backend,  # pyrefly: ignore[bad-argument-type]
+      vision_backend=vision_backend,
+      audio_backend=audio_backend,
+      cache_dir=cache_dir_val,
+  )
+  server.litert_lm_embedding_engine = engine
+  server.embedding_model_id = model_id
+  server.embedding_backend = resolved_backend
+  server.embedding_vision_backend = vision_backend
+  server.embedding_audio_backend = audio_backend
   return engine
