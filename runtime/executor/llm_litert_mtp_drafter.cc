@@ -69,17 +69,17 @@ constexpr bool kEnableMtpDrafterLogs = false;
 constexpr absl::string_view kVerifySignatureRunner = "verify";
 
 absl::StatusOr<std::unique_ptr<Sampler>> CreateGreedySampler(
-    Environment& env, Backend backend, int output_heads, int sequence_size,
-    int vocab_size, std::optional<ActivationDataType> activation_data_type) {
+    const Environment& env, Backend backend, int output_heads,
+    int sequence_size, int vocab_size,
+    std::optional<ActivationDataType> activation_data_type) {
   proto::SamplerParameters sampler_params;
   sampler_params.set_type(proto::SamplerParameters::TOP_P);
   sampler_params.set_k(1);
   sampler_params.set_p(0.0f);
   sampler_params.set_temperature(1.0f);
   sampler_params.set_seed(0);
-  return CreateSampler(backend, output_heads, std::move(sampler_params),
-                       env.Get(), sequence_size, vocab_size,
-                       activation_data_type);
+  return CreateSampler(backend, output_heads, std::move(sampler_params), env,
+                       sequence_size, vocab_size, activation_data_type);
 }
 
 absl::StatusOr<TensorBuffer> CreateFP16OutputBuffer(

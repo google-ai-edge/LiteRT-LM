@@ -15,6 +15,7 @@
 #include "runtime/components/sampler_factory.h"
 
 #include <cstdlib>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <random>
@@ -29,7 +30,6 @@
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
-#include "litert/cc/internal/litert_handle.h"  // from @litert
 #include "litert/cc/internal/litert_shared_library.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_environment_options.h"  // from @litert
@@ -379,8 +379,8 @@ class TopKCApiSampler : public Sampler {
 class TopKOpenClCApiSampler : public TopKCApiSampler {
  public:
   static absl::StatusOr<std::unique_ptr<TopKOpenClCApiSampler>> Create(
-      LiteRtEnvironment env, int batch_size, int sequence_size, int vocab_size,
-      std::optional<ActivationDataType> activation_data_type,
+      const litert::Environment& env, int batch_size, int sequence_size,
+      int vocab_size, std::optional<ActivationDataType> activation_data_type,
       proto::SamplerParameters sampler_params) {
     std::unique_ptr<TopKSamplerCApi> capi;
     auto capi_or = GetSamplerCApi(
@@ -412,7 +412,7 @@ class TopKOpenClCApiSampler : public TopKCApiSampler {
     LiteRtTopKSampler_Sampler* sampler = nullptr;
     char* error_msg = nullptr;
     int error_code = capi->create_func(
-        env, batch_size, sequence_size, vocab_size,
+        env.GetHolder().handle, batch_size, sequence_size, vocab_size,
         activation_data_type.has_value() ? &activation_data_type.value()
                                          : nullptr,
         &sampler_params, &sampler, &error_msg);
@@ -455,8 +455,8 @@ class TopKOpenClCApiSampler : public TopKCApiSampler {
 class TopKWebGpuCApiSampler : public TopKCApiSampler {
  public:
   static absl::StatusOr<std::unique_ptr<TopKWebGpuCApiSampler>> Create(
-      LiteRtEnvironment env, int batch_size, int sequence_size, int vocab_size,
-      std::optional<ActivationDataType> activation_data_type,
+      const litert::Environment& env, int batch_size, int sequence_size,
+      int vocab_size, std::optional<ActivationDataType> activation_data_type,
       proto::SamplerParameters sampler_params) {
     std::unique_ptr<TopKSamplerCApi> capi;
 #if defined(_WIN32)
@@ -495,7 +495,7 @@ class TopKWebGpuCApiSampler : public TopKCApiSampler {
     LiteRtTopKSampler_Sampler* sampler = nullptr;
     char* error_msg = nullptr;
     int error_code = capi->create_func(
-        env, batch_size, sequence_size, vocab_size,
+        env.GetHolder().handle, batch_size, sequence_size, vocab_size,
         activation_data_type.has_value() ? &activation_data_type.value()
                                          : nullptr,
         &sampler_params, &sampler, &error_msg);
@@ -538,8 +538,8 @@ class TopKWebGpuCApiSampler : public TopKCApiSampler {
 class TopKMetalCApiSampler : public TopKCApiSampler {
  public:
   static absl::StatusOr<std::unique_ptr<TopKMetalCApiSampler>> Create(
-      LiteRtEnvironment env, int batch_size, int sequence_size, int vocab_size,
-      std::optional<ActivationDataType> activation_data_type,
+      const litert::Environment& env, int batch_size, int sequence_size,
+      int vocab_size, std::optional<ActivationDataType> activation_data_type,
       proto::SamplerParameters sampler_params) {
     std::unique_ptr<TopKSamplerCApi> capi;
     // Metal is only supported on Apple platforms (macOS/iOS/tvOS/watchOS).
@@ -574,7 +574,7 @@ class TopKMetalCApiSampler : public TopKCApiSampler {
     LiteRtTopKSampler_Sampler* sampler = nullptr;
     char* error_msg = nullptr;
     int error_code = capi->create_func(
-        env, batch_size, sequence_size, vocab_size,
+        env.GetHolder().handle, batch_size, sequence_size, vocab_size,
         activation_data_type.has_value() ? &activation_data_type.value()
                                          : nullptr,
         &sampler_params, &sampler, &error_msg);
@@ -632,11 +632,10 @@ absl::StatusOr<std::unique_ptr<Sampler>> CreateCpuSampler(
 
 absl::StatusOr<std::unique_ptr<Sampler>> CreateGpuSampler(
     int batch_size, proto::SamplerParameters sampler_params,
-    LiteRtEnvironment env, int sequence_size, int vocab_size,
+    const litert::Environment& env, int sequence_size, int vocab_size,
     std::optional<ActivationDataType> activation_data_type) {
   // Check environment options to determine the preferred backend.
-  auto cpp_env = litert::Environment::WrapCObject(env, litert::OwnHandle::kNo);
-  auto options_or = cpp_env.GetOptions();
+  auto options_or = env.GetOptions();
   bool use_metal = false;
   bool use_webgpu = false;
   if (options_or.HasValue()) {
@@ -742,19 +741,19 @@ absl::StatusOr<std::unique_ptr<Sampler>> CreateGpuSampler(
 
 absl::StatusOr<std::unique_ptr<Sampler>> CreateSampler(
     Backend backend, int batch_size, proto::SamplerParameters sampler_params,
-    LiteRtEnvironment env, std::optional<int> sequence_size,
-    std::optional<int> vocab_size,
+    std::optional<std::reference_wrapper<const litert::Environment>> env,
+    std::optional<int> sequence_size, std::optional<int> vocab_size,
     std::optional<ActivationDataType> activation_data_type) {
   int sequence_size_value = sequence_size.value_or(1);
   switch (backend) {
     case Backend::GPU: {
-      RET_CHECK(env != nullptr)
+      RET_CHECK(env.has_value())
           << "LiteRT environment is needed for GPU sampling.";
       RET_CHECK(vocab_size.has_value())
           << "Vocabulary size is needed for GPU sampling.";
-      auto sampler_or =
-          CreateGpuSampler(batch_size, sampler_params, env, sequence_size_value,
-                           vocab_size.value(), activation_data_type);
+      auto sampler_or = CreateGpuSampler(
+          batch_size, sampler_params, env.value().get(), sequence_size_value,
+          vocab_size.value(), activation_data_type);
       if (sampler_or.ok() ||
           sampler_or.status().code() != absl::StatusCode::kUnavailable) {
         // For a normal failure or success, return the result.

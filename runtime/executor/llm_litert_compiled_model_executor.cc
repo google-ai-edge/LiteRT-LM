@@ -1429,7 +1429,7 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::InitializeSampler(
   ABSL_ASSIGN_OR_RETURN(
       sampler_,
       CreateSampler(sampler_backend, output_heads, std::move(sampler_params),
-                    env_.Get(), /*sequence_size=*/1, vocab_size, data_type));
+                    env_, /*sequence_size=*/1, vocab_size, data_type));
 
   // Disable GPU token copy for models that run embedding on the GPU.
   const bool runs_embedding_on_gpu = (embedding_lookup_ == nullptr);

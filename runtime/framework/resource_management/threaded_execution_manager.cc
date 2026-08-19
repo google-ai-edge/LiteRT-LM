@@ -15,6 +15,7 @@
 #include "runtime/framework/resource_management/threaded_execution_manager.h"
 
 #include <atomic>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -140,10 +141,16 @@ absl::StatusOr<SessionId> ThreadedExecutionManager::RegisterNewSession(
           "External sampler currently only supports CPU backend.");
     }
     ABSL_ASSIGN_OR_RETURN(
-        sampler, CreateSampler(session_config.GetSamplerBackend(),
-                               session_config.GetNumOutputCandidates(),
-                               session_config.GetSamplerParams(),
-                               litert_env_ ? litert_env_->Get() : nullptr));
+        sampler,
+        CreateSampler(
+            session_config.GetSamplerBackend(),
+            session_config.GetNumOutputCandidates(),
+            session_config.GetSamplerParams(),
+            litert_env_ == nullptr
+                ? std::nullopt
+                : std::optional<
+                      std::reference_wrapper<const ::litert::Environment>>(
+                      *litert_env_)));
   }
   auto stop_token_detector = std::make_unique<StopTokenDetector>(1);
   for (const auto& stop_token_sequence : session_config.GetStopTokenIds()) {
