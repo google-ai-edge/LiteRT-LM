@@ -380,6 +380,28 @@ target_link_libraries(runtime_components_logits_processor_constrained_decoding_t
 )
 
 # ==============================================================================
+# Composite Constraint
+# ==============================================================================
+add_litertlm_library(runtime_components_logits_processor_constrained_decoding_composite_constraint STATIC
+  composite_constraint.cc
+)
+add_library(LiteRTLM::Runtime::Components::ConstrainedDecoding::CompositeConstraint ALIAS runtime_components_logits_processor_constrained_decoding_composite_constraint)
+
+target_include_directories(runtime_components_logits_processor_constrained_decoding_composite_constraint
+  PRIVATE
+    "${LITERTLM_INCLUDE_PATHS}"
+)
+
+target_link_libraries(runtime_components_logits_processor_constrained_decoding_composite_constraint
+  PUBLIC
+    LiteRTLM::Runtime::Util
+    LiteRTLM::Runtime::Components::ConstrainedDecoding::Bitmap
+    LiteRTLM::Runtime::Components::ConstrainedDecoding::ConstraintInterface
+    LiteRTLM::Runtime::Components::ConstrainedDecoding::LogitMask
+    LITERTLM_DEPS
+)
+
+# ==============================================================================
 # Folder Facade
 # ==============================================================================
 add_litertlm_library(runtime_components_constrained_decoding_libs INTERFACE)
@@ -404,5 +426,6 @@ target_link_libraries(runtime_components_constrained_decoding_libs INTERFACE
   LiteRTLM::Runtime::Components::ConstrainedDecoding::LlgToolCallUtils
   LiteRTLM::Runtime::Components::ConstrainedDecoding::LlguidanceSchemaUtils
   LiteRTLM::Runtime::Components::ConstrainedDecoding::ThinkingBudgetConstraint
-
+  LiteRTLM::Runtime::Components::ConstrainedDecoding::CompositeConstraint
 )
+

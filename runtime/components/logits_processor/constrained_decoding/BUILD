@@ -590,3 +590,49 @@ cc_test(
         "@litert//tflite/types:half",
     ],
 )
+
+cc_library(
+    name = "composite_constraint",
+    srcs = ["composite_constraint.cc"],
+    hdrs = ["composite_constraint.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":constraint",
+        ":logit_mask",
+        "@com_google_absl//absl/memory",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+    ],
+)
+
+cc_test(
+    name = "composite_constraint_test",
+    srcs = ["composite_constraint_test.cc"],
+    deps = [
+        ":composite_constraint",
+        ":constraint",
+        ":constraint_provider",
+        ":fake_constraint",
+        ":llg_constraint_config",
+        ":llg_constraint_provider",
+        ":logit_mask",
+        ":no_repeat_ngram_constraint",
+        ":repetition_penalty_constraint",
+        ":suppress_tokens_constraint",
+        ":thinking_budget_constraint",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/types:span",
+        "//runtime/components/logits_processor:no_repeat_ngram_config",
+        "//runtime/components/logits_processor:repetition_penalty_config",
+        "//runtime/components/logits_processor:suppress_tokens_config",
+        "//runtime/util:test_utils",
+        "//support/tokenizer",
+        "@litert//tflite/types:half",
+    ],
+)
