@@ -122,8 +122,15 @@ class NpuMask {
           text_decoder_verify_input_buffers);
 
   // --- Stage 1: Prefill ---
+  // Sets prefill input buffers (time_step, input_tokens, and valid_mask).
+  // - start_step: The logical sequence start index for this chunk.
+  // - token_ids: The prompt token IDs for the current prefill chunk.
+  // - num_valid_tokens: The number of active valid tokens in this chunk when
+  //   prefilling from pre-computed embeddings directly (where token_ids is
+  //   empty). If token_ids is non-empty, token_ids.size() takes precedence.
   absl::Status SetPrefillInput(int32_t start_step,
-                               absl::Span<const int> token_ids);
+                               absl::Span<const int> token_ids,
+                               size_t num_valid_tokens = 0);
   absl::Status RunPrefill(absl::string_view signature = "") const;
 
   // --- Stage 2: Decode (Main & Drafter) ---

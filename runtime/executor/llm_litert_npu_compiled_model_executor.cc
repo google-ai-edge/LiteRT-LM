@@ -1514,8 +1514,12 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::PrefillInternalFromEmbeddings(
   }
 
   // Set prefill mask input (timestep, tokens, valid mask).
-  LITERT_RETURN_IF_ERROR(
-      main_mask_.SetPrefillInput(seq_positions[0], sliced_tokens));
+  // When prefilling directly from pre-computed embeddings (sliced_tokens may be
+  // empty), pass seq_positions.size() as num_valid_tokens so the mask generator
+  // knows the active token count and does not mask out prompt embeddings as
+  // padding.
+  LITERT_RETURN_IF_ERROR(main_mask_.SetPrefillInput(
+      seq_positions[0], sliced_tokens, seq_positions.size()));
 
   // Set prefill cache inputs (positions, valid mask).
   LITERT_RETURN_IF_ERROR(main_cache_.SetPrefillPositions(seq_positions));

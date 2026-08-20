@@ -219,8 +219,9 @@ TEST_F(NpuMaskTest, NpuMaskSetPrefillInput) {
   EXPECT_EQ(tokens_lock->second[0], 101);
   EXPECT_EQ(tokens_lock->second[1], 0);  // negative clamped to 0
   EXPECT_EQ(tokens_lock->second[2], 202);
-  EXPECT_EQ(tokens_lock->second[3], 0);  // zero padded
-  EXPECT_EQ(tokens_lock->second[4], 0);
+  EXPECT_EQ(tokens_lock->second[3],
+            kInvalidTokenId);  // padded with kInvalidTokenId
+  EXPECT_EQ(tokens_lock->second[4], kInvalidTokenId);
 
   auto valid_mask_lock = TensorBufferScopedLock::Create<bool>(
       mask.Context().prefill_input_buffers.at(
@@ -230,6 +231,50 @@ TEST_F(NpuMaskTest, NpuMaskSetPrefillInput) {
   EXPECT_TRUE(valid_mask_lock->second[0]);
   EXPECT_TRUE(valid_mask_lock->second[1]);
   EXPECT_TRUE(valid_mask_lock->second[2]);
+  EXPECT_FALSE(valid_mask_lock->second[3]);
+  EXPECT_FALSE(valid_mask_lock->second[4]);
+}
+
+TEST_F(NpuMaskTest, NpuMaskSetPrefillInputWithNumValidTokens) {
+  InferenceContext ctx;
+  ctx.prefill_input_buffers[MaskSignatures::kMaskInputTimeStep] =
+      CreateTensorBufferWithDims(std::vector<int32_t>{0}, ElementType::Int32,
+                                 {1});
+  ctx.prefill_input_buffers[MaskSignatures::kMaskInputTokens] =
+      CreateTensorBufferWithDims(std::vector<int32_t>{0, 0, 0, 0, 0},
+                                 ElementType::Int32, {1, 5});
+  ctx.prefill_input_buffers[MaskSignatures::kMaskInputValidMask] =
+      CreateTensorBufferWithDims(std::vector<uint8_t>{0, 0, 0, 0, 0},
+                                 ElementType::Bool, {1, 5});
+
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto mask,
+      NpuMask::CreateForTest(MaskUpdateMethod::kWH, nullptr, std::move(ctx)));
+
+  // Pass empty token_ids with num_valid_tokens = 2 (e.g. from embeddings).
+  EXPECT_TRUE(
+      mask.SetPrefillInput(15, /*token_ids=*/{}, /*num_valid_tokens=*/2).ok());
+
+  auto tokens_lock = TensorBufferScopedLock::Create<int32_t>(
+      mask.Context().prefill_input_buffers.at(MaskSignatures::kMaskInputTokens),
+      TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(tokens_lock.HasValue());
+  EXPECT_EQ(tokens_lock->second[0],
+            0);  // placeholder for valid embedding token
+  EXPECT_EQ(tokens_lock->second[1], 0);
+  EXPECT_EQ(tokens_lock->second[2],
+            kInvalidTokenId);  // padded with kInvalidTokenId
+  EXPECT_EQ(tokens_lock->second[3], kInvalidTokenId);
+  EXPECT_EQ(tokens_lock->second[4], kInvalidTokenId);
+
+  auto valid_mask_lock = TensorBufferScopedLock::Create<bool>(
+      mask.Context().prefill_input_buffers.at(
+          MaskSignatures::kMaskInputValidMask),
+      TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(valid_mask_lock.HasValue());
+  EXPECT_TRUE(valid_mask_lock->second[0]);
+  EXPECT_TRUE(valid_mask_lock->second[1]);
+  EXPECT_FALSE(valid_mask_lock->second[2]);
   EXPECT_FALSE(valid_mask_lock->second[3]);
   EXPECT_FALSE(valid_mask_lock->second[4]);
 }

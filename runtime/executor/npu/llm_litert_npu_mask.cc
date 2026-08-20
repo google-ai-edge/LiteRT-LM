@@ -783,25 +783,38 @@ absl::Status NpuMask::SetVerifyInput(int32_t start_step,
       start_step));
   if (mask_context_.verify_input_buffers.contains(
           MaskSignatures::kMaskInputTokens)) {
-    LITERT_ASSIGN_OR_RETURN(
-        auto mask_tokens_lock,
-        ::litert::TensorBufferScopedLock::Create(
-            mask_context_
-                .verify_input_buffers[MaskSignatures::kMaskInputTokens],
-            ::litert::TensorBuffer::LockMode::kWrite));
+    auto& buf =
+        mask_context_.verify_input_buffers[MaskSignatures::kMaskInputTokens];
+    LITERT_ASSIGN_OR_RETURN(auto mask_tokens_lock,
+                            ::litert::TensorBufferScopedLock::Create(
+                                buf, ::litert::TensorBuffer::LockMode::kWrite));
+    LITERT_ASSIGN_OR_RETURN(auto type, buf.TensorType());
+    LITERT_ASSIGN_OR_RETURN(auto num_elements, type.Layout().NumElements());
     auto* mask_tokens_ptr = static_cast<int32_t*>(mask_tokens_lock.second);
-    for (size_t i = 0; i < verify_ids.size(); ++i) {
-      mask_tokens_ptr[i] = verify_ids[i];
+    for (size_t i = 0; i < num_elements; ++i) {
+      if (i < verify_ids.size()) {
+        mask_tokens_ptr[i] =
+            verify_ids[i] < 0 ? kInvalidTokenId : verify_ids[i];
+      } else {
+        mask_tokens_ptr[i] = kInvalidTokenId;
+      }
     }
   }
   return absl::OkStatus();
 }
 
 absl::Status NpuMask::SetPrefillInput(int32_t start_step,
-                                      absl::Span<const int> token_ids) {
+                                      absl::Span<const int> token_ids,
+                                      size_t num_valid_tokens) {
   LITERT_RETURN_IF_ERROR(SetFirstElement(
       mask_context_.prefill_input_buffers[MaskSignatures::kMaskInputTimeStep],
       start_step));
+
+  // Determine the number of valid tokens in the current prefill chunk. When
+  // prefilling directly from embeddings (e.g. DecodeToLogits), token_ids is
+  // empty so we use num_valid_tokens.
+  const size_t valid_token_count =
+      token_ids.empty() ? num_valid_tokens : token_ids.size();
 
   if (mask_context_.prefill_input_buffers.contains(
           MaskSignatures::kMaskInputTokens)) {
@@ -815,9 +828,20 @@ absl::Status NpuMask::SetPrefillInput(int32_t start_step,
     auto* ptr = static_cast<int32_t*>(lock.second);
     for (size_t i = 0; i < num_elements; ++i) {
       if (i < token_ids.size()) {
+        // For multimodal tokens (e.g. vision or audio placeholders), token IDs
+        // can be negative (< 0). Clamp to 0 so the attention mask logic
+        // (which treats input_tokens[i] != -1 as valid) recognizes them as
+        // active tokens and does not mask them out as padding.
         ptr[i] = token_ids[i] < 0 ? 0 : token_ids[i];
-      } else {
+      } else if (token_ids.empty() && i < valid_token_count) {
+        // Placeholder valid token ID when prefilling from embeddings directly.
         ptr[i] = 0;
+      } else {
+        // Pad remaining slots with kInvalidTokenId (-1). The mask generators
+        // (FillMasksInternal / FillMaskSingle) check `input_tokens[i] != -1`
+        // to identify valid tokens; writing 0 here would mistakenly treat
+        // padding slots as valid vocabulary token 0 and unmask them.
+        ptr[i] = kInvalidTokenId;
       }
     }
   }
@@ -833,7 +857,7 @@ absl::Status NpuMask::SetPrefillInput(int32_t start_step,
     LITERT_ASSIGN_OR_RETURN(auto num_elements, type.Layout().NumElements());
     auto* ptr = static_cast<bool*>(lock.second);
     for (size_t i = 0; i < num_elements; ++i) {
-      ptr[i] = (i < token_ids.size());
+      ptr[i] = (i < valid_token_count);
     }
   }
 
