@@ -58,7 +58,8 @@ class EmbeddingEngine(val config: EmbeddingEngineConfig) : AutoCloseable {
 
       handle =
         LiteRtLmJni.nativeCreateEmbeddingEngine(
-          config.modelPath,
+          config.modelFd ?: -1,
+          config.modelPath ?: "",
           config.backend.name,
           config.visionBackend?.name ?: "",
           config.audioBackend?.name ?: "",

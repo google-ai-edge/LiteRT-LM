@@ -395,6 +395,7 @@ internal object LiteRtLmJni {
 
   /** Creates a new LiteRT-LM embedding engine. */
   external fun nativeCreateEmbeddingEngine(
+    modelFd: Int,
     modelPath: String,
     backend: String,
     visionBackend: String,

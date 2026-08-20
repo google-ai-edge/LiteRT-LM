@@ -23,14 +23,26 @@ package com.google.ai.edge.litertlm
  * @property visionBackend The execution backend for the vision encoder (if model is multimodal).
  * @property audioBackend The execution backend for the audio encoder (if model is multimodal).
  * @property cacheDir Directory for compiled model artifacts and caching.
+ * @property modelFd File descriptor for the model bundle. Supported on Android.
  */
-data class EmbeddingEngineConfig(
-  val modelPath: String,
+data class EmbeddingEngineConfig
+@JvmOverloads
+constructor(
+  val modelPath: String? = null,
   val backend: Backend = Backend.CPU(),
   val visionBackend: Backend? = null,
   val audioBackend: Backend? = null,
   val cacheDir: String? = null,
-)
+  val modelFd: Int? = null,
+) {
+  init {
+    val hasPath = !modelPath.isNullOrEmpty()
+    val hasFd = modelFd != null && modelFd >= 0
+    require(hasPath xor hasFd) {
+      "Either model path or model file descriptor must be specified, but not both."
+    }
+  }
+}
 
 /**
  * Configuration options for a single or batch embedding calculation.

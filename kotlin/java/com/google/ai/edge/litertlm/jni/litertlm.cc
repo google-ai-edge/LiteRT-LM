@@ -15,7 +15,9 @@
 #include <jni.h>
 #include <sys/stat.h>
 
+#include <cerrno>
 #include <cstddef>
+#include <cstring>
 #include <memory>
 #include <optional>
 #include <string>
@@ -1530,24 +1532,61 @@ JNI_METHOD(nativeHasSpeculativeDecodingSupport)(JNIEnv* env, jclass thiz,
 }
 
 LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateEmbeddingEngine)(
-    JNIEnv* env, jclass thiz, jstring model_path, jstring backend,
-    jstring vision_backend, jstring audio_backend, jstring cache_dir,
-    jstring main_npu_native_library_dir, jstring vision_npu_native_library_dir,
-    jstring audio_npu_native_library_dir, jint main_backend_num_threads,
-    jint audio_backend_num_threads) {
-  const char* model_path_chars = env->GetStringUTFChars(model_path, nullptr);
-  std::string model_path_str(model_path_chars);
-  env->ReleaseStringUTFChars(model_path, model_path_chars);
+    JNIEnv* env, jclass thiz, jint model_fd, jstring model_path,
+    jstring backend, jstring vision_backend, jstring audio_backend,
+    jstring cache_dir, jstring main_npu_native_library_dir,
+    jstring vision_npu_native_library_dir, jstring audio_npu_native_library_dir,
+    jint main_backend_num_threads, jint audio_backend_num_threads) {
+  ::litert::ScopedFile scoped_file;
+  absl::StatusOr<litert::lm::ModelAssets> model_assets;
 
-  auto scoped_file = ::litert::ScopedFile::Open(model_path_str);
-  if (!scoped_file.ok()) {
+  if (model_fd >= 0) {
+    auto owned_fd = dup(model_fd);
+    if (owned_fd < 0) {
+      ThrowLiteRtLmJniException(
+          env, absl::StrCat("Failed to duplicate input file descriptor: ",
+                            strerror(errno)));
+      return 0;
+    }
+    scoped_file = ::litert::ScopedFile(owned_fd);
+    auto dup_status = scoped_file.Duplicate();
+    if (!dup_status.ok()) {
+      ThrowLiteRtLmJniException(
+          env, absl::StrCat("Failed to duplicate model file descriptor: ",
+                            dup_status.status().ToString()));
+      return 0;
+    }
+    auto shared_scoped_file =
+        std::make_shared<::litert::ScopedFile>(std::move(*dup_status));
+    model_assets = litert::lm::ModelAssets::Create(shared_scoped_file);
+  } else {
+    std::string model_path_str;
+    if (model_path != nullptr) {
+      const char* model_path_chars =
+          env->GetStringUTFChars(model_path, nullptr);
+      model_path_str = model_path_chars;
+      env->ReleaseStringUTFChars(model_path, model_path_chars);
+    }
+
+    auto open_status = ::litert::ScopedFile::Open(model_path_str);
+    if (!open_status.ok()) {
+      ThrowLiteRtLmJniException(env,
+                                absl::StrCat("Failed to open model file: ",
+                                             open_status.status().ToString()));
+      return 0;
+    }
+    scoped_file = std::move(*open_status);
+    model_assets = litert::lm::ModelAssets::Create(model_path_str);
+  }
+
+  if (!model_assets.ok()) {
     ThrowLiteRtLmJniException(env,
-                              absl::StrCat("Failed to open model file: ",
-                                           scoped_file.status().ToString()));
+                              absl::StrCat("Failed to create model assets: ",
+                                           model_assets.status().ToString()));
     return 0;
   }
 
-  auto loader = litert::lm::LitertLmLoader::Create(std::move(*scoped_file));
+  auto loader = litert::lm::LitertLmLoader::Create(std::move(scoped_file));
   if (!loader.ok()) {
     ThrowLiteRtLmJniException(env, absl::StrCat("Failed to create loader: ",
                                                 loader.status().ToString()));
@@ -1577,15 +1616,6 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateEmbeddingEngine)(
   auto owned_env = std::make_unique<litert::lm::OwnedEnvironment>(
       litert::lm::OwnedEnvironment{/*magic_number_configs_helper=*/nullptr,
                                    std::move(*litert_env)});
-
-  auto model_assets = litert::lm::ModelAssets::Create(model_path_str);
-  if (!model_assets.ok()) {
-    ThrowLiteRtLmJniException(env,
-                              absl::StrCat("Failed to create model assets: ",
-                                           model_assets.status().ToString()));
-    return 0;
-  }
-
   const char* backend_chars = env->GetStringUTFChars(backend, nullptr);
   std::string backend_str(backend_chars);
   env->ReleaseStringUTFChars(backend, backend_chars);
