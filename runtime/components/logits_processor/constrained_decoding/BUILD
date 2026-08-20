@@ -486,7 +486,6 @@ cc_test(
     deps = [
         ":logit_mask",
         "@com_google_googletest//:gtest_main",
-        "@com_google_absl//absl/status",
         "@com_google_absl//absl/types:span",
         "//runtime/util:test_utils",
         "@litert//tflite/types:half",
@@ -597,6 +596,7 @@ cc_library(
     hdrs = ["composite_constraint.h"],
     visibility = ["//visibility:public"],
     deps = [
+        ":bitmap",
         ":constraint",
         ":logit_mask",
         "@com_google_absl//absl/memory",
@@ -604,6 +604,7 @@ cc_library(
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/types:span",
     ],
 )
 
@@ -611,6 +612,7 @@ cc_test(
     name = "composite_constraint_test",
     srcs = ["composite_constraint_test.cc"],
     deps = [
+        ":bitmap",
         ":composite_constraint",
         ":constraint",
         ":constraint_provider",

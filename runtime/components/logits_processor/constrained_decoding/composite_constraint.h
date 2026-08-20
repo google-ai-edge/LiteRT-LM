@@ -22,6 +22,7 @@
 
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "runtime/components/logits_processor/constrained_decoding/bitmap.h"
 #include "runtime/components/logits_processor/constrained_decoding/constraint.h"
 #include "runtime/components/logits_processor/constrained_decoding/logit_mask.h"
 
@@ -80,6 +81,9 @@ class CompositeConstraint : public Constraint {
                                                      int token) const override;
 
   absl::StatusOr<std::unique_ptr<LogitMask>> ComputeMask(
+      const State& state) const override;
+
+  absl::StatusOr<std::unique_ptr<Bitmap>> ComputeBitmap(
       const State& state) const override;
 
  private:

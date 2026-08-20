@@ -24,6 +24,7 @@
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "runtime/components/logits_processor/constrained_decoding/bitmap.h"
 #include "runtime/components/logits_processor/constrained_decoding/constraint.h"
 #include "runtime/components/logits_processor/constrained_decoding/logit_mask.h"
 
@@ -55,9 +56,72 @@ class UnownedConstraint : public Constraint {
     return constraint_.ComputeMask(state);
   }
 
+  absl::StatusOr<std::unique_ptr<Bitmap>> ComputeBitmap(
+      const State& state) const override {
+    return constraint_.ComputeBitmap(state);
+  }
+
  private:
   Constraint& constraint_;
 };
+
+// A Bitmap that combines multiple underlying bitmaps. A token index is allowed
+// only if it is allowed by all non-null underlying bitmaps (logical AND).
+class CompositeBitmap : public Bitmap {
+ public:
+  explicit CompositeBitmap(std::vector<std::unique_ptr<Bitmap>> bitmaps)
+      : bitmaps_(std::move(bitmaps)) {}
+
+  bool Get(int index) const override {
+    for (const auto& bitmap : bitmaps_) {
+      if (bitmap != nullptr && !bitmap->Get(index)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+ private:
+  std::vector<std::unique_ptr<Bitmap>> bitmaps_;
+};
+
+// A Bitmap adapter that wraps an existing BitmapLogitMask.
+class BitmapLogitMaskWrapper : public Bitmap {
+ public:
+  explicit BitmapLogitMaskWrapper(std::unique_ptr<BitmapLogitMask> mask)
+      : mask_(std::move(mask)) {}
+
+  bool Get(int index) const override {
+    if (mask_ == nullptr) {
+      return true;
+    }
+    return mask_->IsAllowed(index);
+  }
+
+ private:
+  std::unique_ptr<BitmapLogitMask> mask_;
+};
+
+// Converts a LogitMask to a Bitmap.
+//
+// - Returns AllAllowedBitmap if `mask` is null or of type kSparse (soft
+//   constraint / penalty).
+// - Wraps `mask` directly in BitmapLogitMaskWrapper if it is of type kBitmap.
+// - Returns an InvalidArgumentError if `mask` is of any other type (such as
+//   kComposite or kCustom) that cannot be directly converted to a Bitmap.
+absl::StatusOr<std::unique_ptr<Bitmap>> LogitMaskToBitmap(
+    std::unique_ptr<LogitMask> mask) {
+  if (mask == nullptr) {
+    return std::make_unique<AllAllowedBitmap>();
+  }
+  if (mask->GetType() == MaskType::kBitmap) {
+    return std::make_unique<BitmapLogitMaskWrapper>(
+        std::unique_ptr<BitmapLogitMask>(
+            static_cast<BitmapLogitMask*>(mask.release())));
+  }
+  return absl::InvalidArgumentError(
+      "Cannot convert non-bitmap LogitMask to Bitmap.");
+}
 
 }  // namespace
 
@@ -174,6 +238,48 @@ absl::StatusOr<std::unique_ptr<LogitMask>> CompositeConstraint::ComputeMask(
   }
 
   return composite_mask;
+}
+
+absl::StatusOr<std::unique_ptr<Bitmap>> CompositeConstraint::ComputeBitmap(
+    const State& state) const {
+  if (constraints_.empty()) {
+    return std::make_unique<AllAllowedBitmap>();
+  }
+  const auto& composite_state = static_cast<const CompositeState&>(state);
+  if (composite_state.sub_states.size() != constraints_.size()) {
+    return absl::InvalidArgumentError(
+        "CompositeState sub-states size does not match constraints count.");
+  }
+
+  std::vector<std::unique_ptr<Bitmap>> bitmaps;
+  bitmaps.reserve(constraints_.size());
+
+  for (size_t i = 0; i < constraints_.size(); ++i) {
+    if (composite_state.sub_states[i] == nullptr) {
+      return absl::InvalidArgumentError("Encountered null sub-state.");
+    }
+    auto bitmap_or =
+        constraints_[i]->ComputeBitmap(*composite_state.sub_states[i]);
+    if (bitmap_or.ok()) {
+      if (*bitmap_or != nullptr) {
+        bitmaps.push_back(std::move(*bitmap_or));
+      }
+    } else if (bitmap_or.status().code() == absl::StatusCode::kUnimplemented) {
+      // Fallback: If a sub-constraint does not implement ComputeBitmap, compute
+      // its LogitMask and convert it to a Bitmap.
+      ABSL_ASSIGN_OR_RETURN(auto mask, constraints_[i]->ComputeMask(
+                                           *composite_state.sub_states[i]));
+      ABSL_ASSIGN_OR_RETURN(auto mask_bitmap,
+                            LogitMaskToBitmap(std::move(mask)));
+      if (mask_bitmap != nullptr) {
+        bitmaps.push_back(std::move(mask_bitmap));
+      }
+    } else {
+      return bitmap_or.status();
+    }
+  }
+
+  return std::make_unique<CompositeBitmap>(std::move(bitmaps));
 }
 
 }  // namespace litert::lm

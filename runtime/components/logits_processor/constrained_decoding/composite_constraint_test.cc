@@ -28,6 +28,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "runtime/components/logits_processor/constrained_decoding/bitmap.h"
 #include "runtime/components/logits_processor/constrained_decoding/constraint.h"
 #include "runtime/components/logits_processor/constrained_decoding/constraint_provider.h"
 #include "runtime/components/logits_processor/constrained_decoding/fake_constraint.h"
@@ -605,6 +606,245 @@ TEST(CompositeConstraintTest, CreateInfersVocabSizeFromConstraints) {
                        CompositeConstraint::Create(std::move(list)));
   EXPECT_EQ(composite->GetVocabularySize(), 10);
   EXPECT_EQ(composite->size(), 2);
+}
+
+class LegacyBitmapTestConstraint : public Constraint {
+ public:
+  class SimpleState : public State {};
+
+  explicit LegacyBitmapTestConstraint(int vocab_size, int allowed_token)
+      : vocab_size_(vocab_size), allowed_token_(allowed_token) {}
+
+  std::unique_ptr<State> Start() const override {
+    return std::make_unique<SimpleState>();
+  }
+
+  bool IsEnded(const State& state) const override { return false; }
+
+  int GetVocabularySize() const override { return vocab_size_; }
+
+  absl::StatusOr<std::unique_ptr<State>> ComputeNext(const State& state,
+                                                     int token) const override {
+    return std::make_unique<SimpleState>();
+  }
+
+  absl::StatusOr<std::unique_ptr<Bitmap>> ComputeBitmap(
+      const State& state) const override {
+    return std::make_unique<SingleAllowedTokenBitmap>(allowed_token_);
+  }
+
+ private:
+  int vocab_size_;
+  int allowed_token_;
+};
+
+class ErrorBitmapTestConstraint : public Constraint {
+ public:
+  class SimpleState : public State {};
+
+  std::unique_ptr<State> Start() const override {
+    return std::make_unique<SimpleState>();
+  }
+
+  bool IsEnded(const State& state) const override { return false; }
+
+  int GetVocabularySize() const override { return 10; }
+
+  absl::StatusOr<std::unique_ptr<State>> ComputeNext(const State& state,
+                                                     int token) const override {
+    return std::make_unique<SimpleState>();
+  }
+
+  absl::StatusOr<std::unique_ptr<Bitmap>> ComputeBitmap(
+      const State& state) const override {
+    return absl::InternalError("Simulated ComputeBitmap failure");
+  }
+};
+
+TEST(CompositeConstraintTest, ComputeBitmapEmptyReturnsAllAllowed) {
+  constexpr int kVocabSize = 5;
+  ASSERT_OK_AND_ASSIGN(auto composite, CompositeConstraint::Create(kVocabSize));
+  auto state = composite->Start();
+
+  ASSERT_OK_AND_ASSIGN(auto bitmap, composite->ComputeBitmap(*state));
+  ASSERT_NE(bitmap, nullptr);
+  for (int i = 0; i < kVocabSize; ++i) {
+    EXPECT_TRUE(bitmap->Get(i));
+  }
+}
+
+TEST(CompositeConstraintTest, ComputeBitmapLegacyConstraint) {
+  constexpr int kVocabSize = 5;
+  auto legacy = std::make_unique<LegacyBitmapTestConstraint>(kVocabSize, 3);
+
+  ASSERT_OK_AND_ASSIGN(auto composite, CompositeConstraint::Create(kVocabSize));
+  ASSERT_OK(composite->AddConstraint(std::move(legacy)));
+
+  auto state = composite->Start();
+  ASSERT_OK_AND_ASSIGN(auto bitmap, composite->ComputeBitmap(*state));
+  ASSERT_NE(bitmap, nullptr);
+
+  EXPECT_FALSE(bitmap->Get(0));
+  EXPECT_FALSE(bitmap->Get(1));
+  EXPECT_FALSE(bitmap->Get(2));
+  EXPECT_TRUE(bitmap->Get(3));
+  EXPECT_FALSE(bitmap->Get(4));
+}
+
+TEST(CompositeConstraintTest, ComputeBitmapUnownedLegacyConstraint) {
+  constexpr int kVocabSize = 5;
+  LegacyBitmapTestConstraint legacy(kVocabSize, 2);
+
+  ASSERT_OK_AND_ASSIGN(auto composite, CompositeConstraint::Create(kVocabSize));
+  ASSERT_OK(composite->AddUnownedConstraint(&legacy));
+
+  auto state = composite->Start();
+  ASSERT_OK_AND_ASSIGN(auto bitmap, composite->ComputeBitmap(*state));
+  ASSERT_NE(bitmap, nullptr);
+
+  EXPECT_FALSE(bitmap->Get(0));
+  EXPECT_FALSE(bitmap->Get(1));
+  EXPECT_TRUE(bitmap->Get(2));
+  EXPECT_FALSE(bitmap->Get(3));
+  EXPECT_FALSE(bitmap->Get(4));
+}
+
+TEST(CompositeConstraintTest, ComputeBitmapModernMaskConstraintFallback) {
+  constexpr int kVocabSize = 5;
+  auto suppress = std::make_unique<SuppressTokensConstraint>(
+      kVocabSize, SuppressTokensConfig(absl::flat_hash_set<int>{1, 3}));
+
+  ASSERT_OK_AND_ASSIGN(auto composite, CompositeConstraint::Create(kVocabSize));
+  ASSERT_OK(composite->AddConstraint(std::move(suppress)));
+
+  auto state = composite->Start();
+  ASSERT_OK_AND_ASSIGN(auto bitmap, composite->ComputeBitmap(*state));
+  ASSERT_NE(bitmap, nullptr);
+
+  EXPECT_TRUE(bitmap->Get(0));
+  EXPECT_FALSE(bitmap->Get(1));
+  EXPECT_TRUE(bitmap->Get(2));
+  EXPECT_FALSE(bitmap->Get(3));
+  EXPECT_TRUE(bitmap->Get(4));
+}
+
+TEST(CompositeConstraintTest, ComputeBitmapMultipleConstraintsChaining) {
+  constexpr int kVocabSize = 5;
+  auto suppress1 = std::make_unique<SuppressTokensConstraint>(
+      kVocabSize, SuppressTokensConfig(absl::flat_hash_set<int>{1}));
+  auto legacy = std::make_unique<LegacyBitmapTestConstraint>(kVocabSize, 2);
+  auto suppress2 = std::make_unique<SuppressTokensConstraint>(
+      kVocabSize, SuppressTokensConfig(absl::flat_hash_set<int>{4}));
+
+  ASSERT_OK_AND_ASSIGN(auto composite, CompositeConstraint::Create(kVocabSize));
+  ASSERT_OK(composite->AddConstraint(std::move(suppress1)));
+  ASSERT_OK(composite->AddConstraint(std::move(legacy)));
+  ASSERT_OK(composite->AddConstraint(std::move(suppress2)));
+
+  auto state = composite->Start();
+  ASSERT_OK_AND_ASSIGN(auto bitmap, composite->ComputeBitmap(*state));
+  ASSERT_NE(bitmap, nullptr);
+
+  EXPECT_FALSE(bitmap->Get(0));
+  EXPECT_FALSE(bitmap->Get(1));
+  EXPECT_TRUE(bitmap->Get(2));
+  EXPECT_FALSE(bitmap->Get(3));
+  EXPECT_FALSE(bitmap->Get(4));
+}
+
+class SparseMaskTestConstraint : public Constraint {
+ public:
+  class SimpleState : public State {};
+
+  std::unique_ptr<State> Start() const override {
+    return std::make_unique<SimpleState>();
+  }
+
+  bool IsEnded(const State& state) const override { return false; }
+
+  int GetVocabularySize() const override { return 5; }
+
+  absl::StatusOr<std::unique_ptr<State>> ComputeNext(const State& state,
+                                                     int token) const override {
+    return std::make_unique<SimpleState>();
+  }
+
+  absl::StatusOr<std::unique_ptr<LogitMask>> ComputeMask(
+      const State& state) const override {
+    return SparseLogitMask::CreateBiases({{1, -1.0f}});
+  }
+};
+
+TEST(CompositeConstraintTest, ComputeBitmapPropagatesError) {
+  auto error_constraint = std::make_unique<ErrorBitmapTestConstraint>();
+  ASSERT_OK_AND_ASSIGN(auto composite, CompositeConstraint::Create(10));
+  ASSERT_OK(composite->AddConstraint(std::move(error_constraint)));
+
+  auto state = composite->Start();
+  EXPECT_THAT(
+      composite->ComputeBitmap(*state),
+      StatusIs(absl::StatusCode::kInternal, "Simulated ComputeBitmap failure"));
+}
+
+class CustomMaskTestConstraint : public Constraint {
+ public:
+  class SimpleState : public State {};
+
+  class CustomLogitMask : public LogitMask {
+   public:
+    MaskType GetType() const override { return MaskType::kCustom; }
+    absl::Status Apply(absl::Span<float> logits) const override {
+      return absl::OkStatus();
+    }
+    absl::Status Apply(absl::Span<tflite::half> logits) const override {
+      return absl::OkStatus();
+    }
+  };
+
+  std::unique_ptr<State> Start() const override {
+    return std::make_unique<SimpleState>();
+  }
+
+  bool IsEnded(const State& state) const override { return false; }
+
+  int GetVocabularySize() const override { return 10; }
+
+  absl::StatusOr<std::unique_ptr<State>> ComputeNext(const State& state,
+                                                     int token) const override {
+    return std::make_unique<SimpleState>();
+  }
+
+  absl::StatusOr<std::unique_ptr<LogitMask>> ComputeMask(
+      const State& state) const override {
+    return std::make_unique<CustomLogitMask>();
+  }
+};
+
+TEST(CompositeConstraintTest, ComputeBitmapUnsupportedMaskTypeReturnsError) {
+  auto custom_constraint = std::make_unique<CustomMaskTestConstraint>();
+  ASSERT_OK_AND_ASSIGN(auto composite, CompositeConstraint::Create(10));
+  ASSERT_OK(composite->AddConstraint(std::move(custom_constraint)));
+
+  auto state = composite->Start();
+  EXPECT_THAT(composite->ComputeBitmap(*state),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       "Cannot convert non-bitmap LogitMask to Bitmap."));
+}
+
+TEST(CompositeConstraintTest, ComputeBitmapStateValidationErrors) {
+  auto suppress = std::make_unique<SuppressTokensConstraint>(
+      10, SuppressTokensConfig(absl::flat_hash_set<int>{1}));
+  ASSERT_OK_AND_ASSIGN(auto composite, CompositeConstraint::Create(10));
+  ASSERT_OK(composite->AddConstraint(std::move(suppress)));
+
+  CompositeConstraint::CompositeState invalid_state;
+  EXPECT_THAT(composite->ComputeBitmap(invalid_state),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  CompositeConstraint::CompositeState null_sub_state;
+  null_sub_state.sub_states.push_back(nullptr);
+  EXPECT_THAT(composite->ComputeBitmap(null_sub_state),
+              StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
 INSTANTIATE_TEST_SUITE_P(CompositeConstraintParamTests,
