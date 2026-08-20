@@ -41,6 +41,7 @@ package_group(
         # for AI Edge Hub
         # for AI Edge Gallery
         # for MediaPipe
+        # for Tunelab Gemma
     ],
 )
 
