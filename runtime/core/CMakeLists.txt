@@ -28,12 +28,7 @@ target_include_directories(runtime_core_tasks
 
 target_link_libraries(runtime_core_tasks
   PUBLIC
-    LiteRTLM::Runtime::Components::SamplerInterface
-    LiteRTLM::Runtime::Components::ScoringCpuUtil
-    LiteRTLM::Runtime::Components::StopTokenDetector
-    LiteRTLM::Runtime::Components::TokenizerInterface
-    LiteRTLM::Runtime::Components::ConstrainedDecoding::Decoder
-    LiteRTLM::Runtime::Components::ConstrainedDecoding::ConstraintInterface
+    LiteRTLM::Runtime::Components
     LiteRTLM::Runtime::Engine::IoTypes
     LiteRTLM::Runtime::Executor::LlmExecutorInterface
     LiteRTLM::Runtime::Executor::LlmExecutorIoTypes

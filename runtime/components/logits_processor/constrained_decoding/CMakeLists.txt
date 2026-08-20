@@ -402,6 +402,69 @@ target_link_libraries(runtime_components_logits_processor_constrained_decoding_c
 )
 
 # ==============================================================================
+# Suppress Tokens Constraint
+# ==============================================================================
+add_litertlm_library(runtime_components_logits_processor_constrained_decoding_suppress_tokens_constraint STATIC
+  suppress_tokens_constraint.cc
+)
+add_library(LiteRTLM::Runtime::Components::ConstrainedDecoding::SuppressTokensConstraint ALIAS runtime_components_logits_processor_constrained_decoding_suppress_tokens_constraint)
+
+target_include_directories(runtime_components_logits_processor_constrained_decoding_suppress_tokens_constraint
+  PRIVATE
+    "${LITERTLM_INCLUDE_PATHS}"
+)
+
+target_link_libraries(runtime_components_logits_processor_constrained_decoding_suppress_tokens_constraint
+  PUBLIC
+    LiteRTLM::Runtime::Util
+    LiteRTLM::Runtime::Components::ConstrainedDecoding::Bitmap
+    LiteRTLM::Runtime::Components::ConstrainedDecoding::ConstraintInterface
+    LiteRTLM::Runtime::Components::ConstrainedDecoding::LogitMask
+    LITERTLM_DEPS
+)
+
+# ==============================================================================
+# Repetition Penalty Constraint
+# ==============================================================================
+add_litertlm_library(runtime_components_logits_processor_constrained_decoding_repetition_penalty_constraint STATIC
+  repetition_penalty_constraint.cc
+)
+add_library(LiteRTLM::Runtime::Components::ConstrainedDecoding::RepetitionPenaltyConstraint ALIAS runtime_components_logits_processor_constrained_decoding_repetition_penalty_constraint)
+
+target_include_directories(runtime_components_logits_processor_constrained_decoding_repetition_penalty_constraint
+  PRIVATE
+    "${LITERTLM_INCLUDE_PATHS}"
+)
+
+target_link_libraries(runtime_components_logits_processor_constrained_decoding_repetition_penalty_constraint
+  PUBLIC
+    LiteRTLM::Runtime::Util
+    LiteRTLM::Runtime::Components
+    LITERTLM_DEPS
+)
+
+# ==============================================================================
+# No Repeat N-gram Constraint
+# ==============================================================================
+add_litertlm_library(runtime_components_logits_processor_constrained_decoding_no_repeat_ngram_constraint STATIC
+  no_repeat_ngram_constraint.cc
+)
+add_library(LiteRTLM::Runtime::Components::ConstrainedDecoding::NoRepeatNgramConstraint ALIAS runtime_components_logits_processor_constrained_decoding_no_repeat_ngram_constraint)
+
+target_include_directories(runtime_components_logits_processor_constrained_decoding_no_repeat_ngram_constraint
+  PRIVATE
+    "${LITERTLM_INCLUDE_PATHS}"
+)
+
+target_link_libraries(runtime_components_logits_processor_constrained_decoding_no_repeat_ngram_constraint
+  PUBLIC
+    LiteRTLM::Runtime::Util
+    LiteRTLM::Runtime::Components
+    LITERTLM_DEPS
+)
+
+
+# ==============================================================================
 # Folder Facade
 # ==============================================================================
 add_litertlm_library(runtime_components_constrained_decoding_libs INTERFACE)
@@ -427,5 +490,8 @@ target_link_libraries(runtime_components_constrained_decoding_libs INTERFACE
   LiteRTLM::Runtime::Components::ConstrainedDecoding::LlguidanceSchemaUtils
   LiteRTLM::Runtime::Components::ConstrainedDecoding::ThinkingBudgetConstraint
   LiteRTLM::Runtime::Components::ConstrainedDecoding::CompositeConstraint
+  LiteRTLM::Runtime::Components::ConstrainedDecoding::SuppressTokensConstraint
+  LiteRTLM::Runtime::Components::ConstrainedDecoding::RepetitionPenaltyConstraint
+  LiteRTLM::Runtime::Components::ConstrainedDecoding::NoRepeatNgramConstraint
 )
 

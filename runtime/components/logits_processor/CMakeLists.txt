@@ -92,6 +92,7 @@ target_include_directories(runtime_components_logits_no_repeat_ngram_processor
 target_link_libraries(runtime_components_logits_no_repeat_ngram_processor
   PUBLIC
     LITERTLM_DEPS
+    LiteRTLM::Runtime::Util
 )
 
 # ==============================================================================
@@ -110,6 +111,7 @@ target_include_directories(runtime_components_logits_repetition_penalty_processo
 target_link_libraries(runtime_components_logits_repetition_penalty_processor
   PUBLIC
     LITERTLM_DEPS
+    LiteRTLM::Runtime::Util
 )
 
 # ==============================================================================
@@ -144,5 +146,4 @@ target_link_libraries(runtime_components_logits_libs INTERFACE
   LiteRTLM::Runtime::Components::LogitsProcessor::NoRepeatNGramProcessor
   LiteRTLM::Runtime::Components::LogitsProcessor::RepetitionPenaltyProcessor
   LiteRTLM::Runtime::Components::LogitsProcessor::SuppressTokensProcessor
-
 )
