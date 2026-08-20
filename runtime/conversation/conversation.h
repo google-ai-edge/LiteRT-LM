@@ -42,6 +42,7 @@
 #include "runtime/conversation/model_data_processor/config_registry.h"
 #include "runtime/conversation/model_data_processor/model_data_processor.h"
 #include "runtime/conversation/thinking_config.h"
+#include "runtime/core/cached_session.h"
 #include "runtime/engine/engine.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
@@ -666,7 +667,7 @@ class Conversation {
 
  private:
   explicit Conversation(
-      Engine& engine, std::unique_ptr<Engine::Session> session,
+      Engine& engine, std::unique_ptr<CachedSession> session,
       std::unique_ptr<ModelDataProcessor> model_data_processor, Preface preface,
       PromptTemplate prompt_template, ConversationConfig config,
       std::unique_ptr<ConstraintProvider> constraint_provider = nullptr)
@@ -680,15 +681,6 @@ class Conversation {
     model_data_processor_->SetReturnErrorOnParseFailure(
         config_.return_error_on_parse_failure());
   }
-
-  absl::StatusOr<std::string> GetSingleTurnText(
-      const Message& message, const OptionalArgs& optional_args);
-
-  absl::StatusOr<std::string> GetSingleTurnTextFromFullHistory(
-      const Message& message, const OptionalArgs& optional_args);
-
-  absl::StatusOr<std::string> GetSingleTurnTextFromSingleTurnTemplate(
-      const Message& message, const OptionalArgs& optional_args);
 
   // Creates a `DecodeConfig` from the session/conversation parameters and
   // optional runtime overrides.
@@ -738,12 +730,14 @@ class Conversation {
       absl::Span<const Message> old_messages,
       absl::Span<const Message> new_messages,
       const OptionalArgs& optional_args = OptionalArgs(),
-      bool include_preface = true);
+      bool include_preface = true, bool add_generation_prompt = false);
 
-  // Returns the input data vector for the given messages.
-  //
-  // Gets the prefill text for `new_messages` and converts it to an input data
-  // vector for `Session::RunPrefill`.
+  struct PrefillData {
+    std::vector<InputData> session_inputs;
+    std::string prefill_text;
+  };
+
+  // Returns the input data vector and prefill text for the given messages.
   //
   // Args:
   // - `old_messages`: The old messages that have already been prefilled.
@@ -751,16 +745,12 @@ class Conversation {
   // - `optional_args`: The optional arguments for template rendering.
   // - `include_preface`: Include the preface in the returned input data vector
   //   when `old_messages` is empty.
-  absl::StatusOr<std::vector<InputData>> GetInputDataVectorForMessages(
+  // - `add_generation_prompt`: Whether to append a generation prompt.
+  absl::StatusOr<PrefillData> GetInputDataVectorForMessages(
       absl::Span<const Message> old_messages,
       absl::Span<const Message> new_messages,
       const OptionalArgs& optional_args = OptionalArgs(),
-      bool include_preface = true);
-
-  // Rewinds the session to the checkpoint after the most recent channel content
-  // and return the input data vector for all messages from that point onward.
-  absl::StatusOr<std::vector<InputData>> RewindAndGetInputDataVector(
-      const OptionalArgs& optional_args = OptionalArgs());
+      bool include_preface = true, bool add_generation_prompt = false);
 
   // Applies the prompt template to the given input. This function will strip
   // heavy blobs from the input before applying the template.
@@ -781,7 +771,7 @@ class Conversation {
   std::vector<Message> history_ ABSL_GUARDED_BY(history_mutex_);
 
   // Whether the current conversation is in message appending state.
-  bool is_appending_message_ = false;
+  bool is_appending_message_ ABSL_GUARDED_BY(history_mutex_) = false;
 
   // Mutex for task_controllers_.
   mutable absl::Mutex task_controllers_mutex_;
@@ -794,14 +784,7 @@ class Conversation {
   // Declare the session after model_data_processor_ and other members it
   // depends on so that the session is destroyed before them. This is to avoid
   // memory corruption and null-pointer deference issues.
-  std::unique_ptr<Engine::Session> session_;
-
-  // The index of the message you have to rewind to in order to remove channel
-  // content from the KV cache. nullopt means no rewind is needed.
-  std::optional<int> checkpoint_message_index_ = std::nullopt;
-
-  // Whether there is channel content present since the last user message.
-  bool channel_content_since_last_user_message_ = false;
+  std::unique_ptr<CachedSession> session_;
 };
 }  // namespace litert::lm
 
