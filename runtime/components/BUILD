@@ -375,7 +375,10 @@ cc_library(
 cc_test(
     name = "prompt_template_test",
     srcs = ["prompt_template_test.cc"],
-    data = ["//runtime/components/testdata"],
+    data = [
+        "//models/qwen3:chat_template.jinja",
+        "//runtime/components/testdata",
+    ],
     deps = [
         ":prompt_template",
         "@com_google_googletest//:gtest_main",

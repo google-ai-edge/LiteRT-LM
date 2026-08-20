@@ -42,7 +42,7 @@ constexpr char kTestdataDir[] =
     "litert_lm/runtime/components/testdata/";
 
 constexpr absl::string_view kTestModelTemplates[] = {
-    "google-gemma-3n-e2b-it", "Qwen-Qwen3-0.6B", "HuggingFaceTB-SmolLM3-3B",
+    "google-gemma-3n-e2b-it", "HuggingFaceTB-SmolLM3-3B",
     "microsoft-Phi-4-mini-instruct", "bos-token-test"};
 
 json GetMessageSystem() {
@@ -199,7 +199,10 @@ TEST(PromptTemplateCustomTest, StripReplacementTest) {
 }
 
 TEST(PromptTemplateCustomTest, Qwen3MultiTurnTemplateRenderingTest) {
-  const std::string test_file_path = GetTestdataPath("Qwen-Qwen3-0.6B.jinja");
+  const std::string test_file_path =
+      (std::filesystem::path(::testing::SrcDir()) /
+       "litert_lm/models/qwen3/chat_template.jinja")
+          .string();
   ASSERT_OK_AND_ASSIGN(const std::string template_content,
                        GetContents(test_file_path));
   PromptTemplate prompt_template(template_content);
