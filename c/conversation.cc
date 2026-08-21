@@ -27,7 +27,7 @@
 #include "c/conversation_internal.h"
 #include "c/engine.h"
 #include "c/engine_internal.h"  // IWYU pragma: keep
-#include "runtime/components/logits_processor/constrained_decoding/llg_constraint_config.h"
+#include "runtime/components/constrained_decoding/llg_constraint_config.h"
 #include "runtime/components/prompt_template.h"
 #include "runtime/conversation/conversation.h"
 #include "runtime/conversation/io_types.h"

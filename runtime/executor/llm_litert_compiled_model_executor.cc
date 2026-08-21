@@ -53,8 +53,8 @@
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
+#include "runtime/components/constrained_decoding/logits_processor.h"
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
-#include "runtime/components/logits_processor/logits_processor.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/components/sampler_factory.h"
 #include "runtime/executor/common_utils.h"
@@ -610,16 +610,15 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::PrefillInternal(
         ABSL_RETURN_IF_ERROR(FillAttentionMask(
             prefill_input_buffers[signatures_.input_attn_mask.value()],
             start_step,
-            /*steps=*/prefill_length + input_idx,
-            attn_params.global_type, token_ids_span,
+            /*steps=*/prefill_length + input_idx, attn_params.global_type,
+            token_ids_span,
             /*sliding_window_size=*/std::nullopt));
         if (signatures_.input_attn_mask_local.has_value()) {
           ABSL_LOG(INFO) << "filling local attention mask";
           ABSL_RETURN_IF_ERROR(FillAttentionMask(
               prefill_input_buffers[signatures_.input_attn_mask_local.value()],
               start_step,
-              /*steps=*/prefill_length + input_idx,
-              attn_params.local_type,
+              /*steps=*/prefill_length + input_idx, attn_params.local_type,
               token_ids_span, attn_params.sliding_window_size));
         }
       }
@@ -922,9 +921,8 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::DecodeInternal(
       ABSL_RETURN_IF_ERROR(FillAttentionMask(
           decode_input_buffers_[signatures_.input_attn_mask_local.value()],
           step,
-          /*steps=*/1,
-          attn_params.local_type,
-          token_ids_span, attn_params.sliding_window_size));
+          /*steps=*/1, attn_params.local_type, token_ids_span,
+          attn_params.sliding_window_size));
     }
   }
   if (gpu_optimized_single_buffer_cache_) {

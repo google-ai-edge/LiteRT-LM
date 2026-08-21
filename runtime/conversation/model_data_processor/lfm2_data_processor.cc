@@ -28,7 +28,7 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl   // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json            // from @nlohmann_json
 #include "litert/cc/litert_layout.h"  // from @litert
-#include "runtime/components/logits_processor/constrained_decoding/constraint.h"
+#include "runtime/components/constrained_decoding/constraint.h"
 #include "runtime/components/prompt_template.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/data_utils.h"

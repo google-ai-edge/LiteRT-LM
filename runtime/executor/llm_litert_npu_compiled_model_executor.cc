@@ -51,7 +51,7 @@
 #include "litert/cc/litert_options.h"  // from @litert
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
-#include "runtime/components/logits_processor/logits_processor.h"
+#include "runtime/components/constrained_decoding/logits_processor.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/executor/litert/legacy_map_state.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"

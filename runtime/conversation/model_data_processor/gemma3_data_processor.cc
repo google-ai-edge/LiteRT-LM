@@ -30,10 +30,10 @@
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "nlohmann/json_fwd.hpp"  // from @nlohmann_json
 #include "litert/cc/litert_layout.h"  // from @litert
-#include "runtime/components/logits_processor/constrained_decoding/constraint.h"
+#include "runtime/components/constrained_decoding/constraint.h"
 #include "runtime/conversation/model_data_processor/multimodal_processor_helper.h"
 #if !defined(LITERT_LM_FST_CONSTRAINTS_DISABLED)
-#include "runtime/components/logits_processor/constrained_decoding/gemma_model_constraint_provider.h"
+#include "runtime/components/constrained_decoding/gemma_model_constraint_provider.h"
 #endif
 #include "runtime/components/prompt_template.h"
 #include "runtime/components/tool_use/parser_utils.h"

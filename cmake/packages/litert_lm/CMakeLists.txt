@@ -204,9 +204,9 @@ if("${LITERTLM_ORCHESTRATION_PHASE}" STREQUAL "litert_lm")
         LiteRTLM::Generated::Protobuf
         litertlm_cxx_bridge)
 
-    if(NOT EXISTS "${LITERTLM_GENERATED_SRC_DIR}/runtime/components/logits_processor/constrained_decoding/gemma_model_constraint_provider.cc")
+    if(NOT EXISTS "${LITERTLM_GENERATED_SRC_DIR}/runtime/components/constrained_decoding/gemma_model_constraint_provider.cc")
       file(COPY "${LITERTLM_PATCHES_DIR}/stubs/gemma_model_constraint_provider.cc"
-        DESTINATION "${LITERTLM_GENERATED_SRC_DIR}/runtime/components/logits_processor/constrained_decoding")
+        DESTINATION "${LITERTLM_GENERATED_SRC_DIR}/runtime/components/constrained_decoding")
     endif()
 
     set(LITERTLM_TENSORFLOW_MISSING_SRCS

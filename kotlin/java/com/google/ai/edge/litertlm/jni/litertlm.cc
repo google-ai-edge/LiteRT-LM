@@ -36,10 +36,10 @@
 #include "litert/cc/internal/scoped_file.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "c/capabilities.h"
-#include "runtime/components/logits_processor/constrained_decoding/llg_constraint_config.h"
-#include "runtime/components/logits_processor/no_repeat_ngram_config.h"
-#include "runtime/components/logits_processor/repetition_penalty_config.h"
-#include "runtime/components/logits_processor/suppress_tokens_config.h"
+#include "runtime/components/constrained_decoding/llg_constraint_config.h"
+#include "runtime/components/constrained_decoding/no_repeat_ngram_config.h"
+#include "runtime/components/constrained_decoding/repetition_penalty_config.h"
+#include "runtime/components/constrained_decoding/suppress_tokens_config.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/components/model_resources_litert_lm.h"
 #include "runtime/components/prompt_template.h"

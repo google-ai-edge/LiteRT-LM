@@ -32,10 +32,10 @@
 #include "litert/cc/litert_layout.h"  // from @litert
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
-#include "runtime/components/logits_processor/constrained_decoding/constrained_decoder.h"
-#include "runtime/components/logits_processor/constrained_decoding/fake_constraint.h"
-#include "runtime/components/logits_processor/logits_processor.h"
-#include "runtime/components/logits_processor/mock_logits_processor.h"
+#include "runtime/components/constrained_decoding/constrained_decoder.h"
+#include "runtime/components/constrained_decoding/fake_constraint.h"
+#include "runtime/components/constrained_decoding/logits_processor.h"
+#include "runtime/components/constrained_decoding/mock_logits_processor.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
 
 namespace litert::lm {

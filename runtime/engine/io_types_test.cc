@@ -25,7 +25,7 @@
 #include "absl/time/clock.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "litert/test/matchers.h"  // from @litert
-#include "runtime/components/logits_processor/constrained_decoding/fake_constraint.h"
+#include "runtime/components/constrained_decoding/fake_constraint.h"
 #include "runtime/proto/engine.pb.h"
 #include "runtime/util/test_utils.h"  // NOLINT
 

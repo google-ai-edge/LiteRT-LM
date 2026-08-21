@@ -97,7 +97,7 @@ LLGuidance constraints can be specified as Regex, JSON Schema, or Lark grammars.
 Constrain the output to match a regular expression.
 
 ```cpp
-#include "runtime/components/logits_processor/constrained_decoding/llg_constraint_config.h"
+#include "runtime/components/constrained_decoding/llg_constraint_config.h"
 
 // ...
 

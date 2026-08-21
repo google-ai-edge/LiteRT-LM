@@ -15,7 +15,7 @@
 set(PKG_ROOT ${CMAKE_CURRENT_SOURCE_DIR})
 
 add_subdirectory(embedding_lookup)
-add_subdirectory(logits_processor)
+add_subdirectory(constrained_decoding)
 add_subdirectory(preprocessor)
 add_subdirectory(tool_use)
 
