@@ -97,7 +97,7 @@ TEST_P(RepetitionPenaltyConstraintParamTest, AppliesMultiplicativePenalty) {
 }
 
 TEST_P(RepetitionPenaltyConstraintParamTest,
-       MultiplicativePenaltyScalesNegatives) {
+       AppliesMultiplicativePenaltyToNegativeLogits) {
   RepetitionPenaltyConfig config(
       /*repetition_penalty=*/1.5f, /*presence_penalty=*/0.0f,
       /*frequency_penalty=*/0.0f, /*window_size=*/0);
@@ -111,16 +111,14 @@ TEST_P(RepetitionPenaltyConstraintParamTest,
 
   RunWithParam([&](auto dummy_type) {
     using T = decltype(dummy_type);
-    std::vector<T> logits = {static_cast<T>(-2.0f), static_cast<T>(3.0f)};
+    std::vector<T> logits = {static_cast<T>(-3.0f), static_cast<T>(-3.0f)};
 
     EXPECT_OK(mask->Apply(absl::MakeSpan(logits)));
 
-    // Token 0 was seen, its negative logit should be scaled up: -2.0 * 1.5 =
-    // -3.0f
-    EXPECT_FLOAT_EQ(static_cast<float>(logits[0]), -3.0f);
-
-    // Token 1 was not seen
-    EXPECT_FLOAT_EQ(static_cast<float>(logits[1]), 3.0f);
+    // Token 0 was seen, scaled to be more negative: -3.0 * 1.5 = -4.5f
+    EXPECT_FLOAT_EQ(static_cast<float>(logits[0]), -4.5f);
+    // Token 1 was not seen: unchanged -3.0f
+    EXPECT_FLOAT_EQ(static_cast<float>(logits[1]), -3.0f);
   });
 }
 

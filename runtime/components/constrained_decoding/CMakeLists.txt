@@ -27,6 +27,11 @@ target_include_directories(runtime_components_constrained_decoding_bitmap
     ${LITERTLM_INCLUDE_PATHS}
 )
 
+target_link_libraries(runtime_components_constrained_decoding_bitmap
+  INTERFACE
+    absl::core_headers
+)
+
 # ==============================================================================
 # LogitMask Interface & Implementation
 # ==============================================================================
@@ -413,23 +418,6 @@ add_library(LiteRTLM::Runtime::Components::LogitsProcessor::SuppressTokensConfig
   ALIAS runtime_components_constrained_decoding_suppress_tokens_config)
 
 target_include_directories(runtime_components_constrained_decoding_suppress_tokens_config
-  INTERFACE
-    ${PKG_ROOT}
-    ${LITERTLM_INCLUDE_PATHS}
-)
-
-# ==============================================================================
-# Logits Processor Interface
-# ==============================================================================
-add_litertlm_library(runtime_components_constrained_decoding_logits_processor INTERFACE)
-add_library(LiteRTLM::Runtime::Components::ConstrainedDecoding::LogitsProcessorInterface
-  ALIAS runtime_components_constrained_decoding_logits_processor)
-add_library(LiteRTLM::Runtime::Components::LogitsProcessor::LogitsProcessorInterface
-  ALIAS runtime_components_constrained_decoding_logits_processor)
-add_library(LiteRTLM::Runtime::Components::LogitsProcessor
-  ALIAS runtime_components_constrained_decoding_logits_processor)
-
-target_include_directories(runtime_components_constrained_decoding_logits_processor
   INTERFACE
     ${PKG_ROOT}
     ${LITERTLM_INCLUDE_PATHS}

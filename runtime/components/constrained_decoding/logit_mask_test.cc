@@ -280,6 +280,34 @@ TEST_P(LogitMaskParamTest, SparseApplyWeightsAndBiases) {
   });
 }
 
+TEST_P(LogitMaskParamTest, SparseApplySignDependentWeight) {
+  // repetition_penalty = 2.0 -> weight = 0.5
+  std::vector<SparseLogitMask::Entry> entries = {
+      {.token_id = 0,
+       .weight = 0.5f,
+       .bias = 0.0f,
+       .sign_dependent_weight = true},  // Positive: 4.0 * 0.5 = 2.0
+      {.token_id = 1,
+       .weight = 0.5f,
+       .bias = 0.0f,
+       .sign_dependent_weight = true},  // Negative: -4.0 / 0.5 = -8.0
+  };
+  SparseLogitMask mask(entries);
+
+  RunWithParam([&](auto dummy_type) {
+    using T = decltype(dummy_type);
+    std::vector<T> logits = {
+        static_cast<T>(4.0f),
+        static_cast<T>(-4.0f),
+    };
+
+    EXPECT_OK(mask.Apply(absl::MakeSpan(logits)));
+
+    EXPECT_FLOAT_EQ(static_cast<float>(logits[0]), 2.0f);
+    EXPECT_FLOAT_EQ(static_cast<float>(logits[1]), -8.0f);
+  });
+}
+
 TEST_P(LogitMaskParamTest, SparseApplyPreservesDisallowedTokens) {
   std::vector<SparseLogitMask::Entry> entries = {
       {.token_id = 0, .weight = 2.0f, .bias = 10.0f},

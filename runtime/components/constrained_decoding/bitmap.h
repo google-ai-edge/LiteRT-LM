@@ -15,10 +15,13 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_COMPONENTS_CONSTRAINED_DECODING_BITMAP_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_COMPONENTS_CONSTRAINED_DECODING_BITMAP_H_
 
+#include "absl/base/attributes.h"  // from @com_google_absl
+
 namespace litert::lm {
 
+// Deprecated: Use LogitMask / BitmapLogitMask instead.
 // The bitmap of vocabulary to indicate the allowed tokens.
-class Bitmap {
+class ABSL_DEPRECATED("Use LogitMask / BitmapLogitMask instead.") Bitmap {
  public:
   // Returns true if the `index`th token is allowed.
   virtual bool Get(int index) const = 0;
@@ -26,14 +29,18 @@ class Bitmap {
   virtual ~Bitmap() = default;
 };
 
+// Deprecated: Use BitmapLogitMask::CreateAllAllowed instead.
 // A bitmap implementation that allows all tokens.
-class AllAllowedBitmap : public Bitmap {
+class ABSL_DEPRECATED("Use BitmapLogitMask::CreateAllAllowed instead.")
+    AllAllowedBitmap : public Bitmap {
  public:
   bool Get(int index) const override { return true; }
 };
 
+// Deprecated: Use BitmapLogitMask::CreateSingleAllowedToken instead.
 // A bitmap implementation that allows only the one specified token.
-class SingleAllowedTokenBitmap : public Bitmap {
+class ABSL_DEPRECATED("Use BitmapLogitMask::CreateSingleAllowedToken instead.")
+    SingleAllowedTokenBitmap : public Bitmap {
  public:
   explicit SingleAllowedTokenBitmap(int allowed_token_id)
       : allowed_token_id_(allowed_token_id) {}

@@ -390,7 +390,6 @@ add_library(LiteRTLM::Runtime::Components ALIAS runtime_components_libs)
 target_link_libraries(runtime_components_libs INTERFACE
   LiteRTLM::Runtime::Components::ConstrainedDecoding
   LiteRTLM::Runtime::Components::EmbeddingLookup
-  LiteRTLM::Runtime::Components::LogitsProcessor
   LiteRTLM::Runtime::Components::Preprocessor
   LiteRTLM::Runtime::Components::ToolUse
   LiteRTLM::Runtime::Components::ModelResourcesInterface

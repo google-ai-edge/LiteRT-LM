@@ -25,6 +25,7 @@ cc_library(
     name = "bitmap",
     hdrs = ["bitmap.h"],
     visibility = ["//visibility:public"],
+    deps = ["@com_google_absl//absl/base:core_headers"],
 )
 
 cc_library(
@@ -88,36 +89,6 @@ cc_library(
         ":constraint",
         ":constraint_provider_config",
         "@com_google_absl//absl/status:statusor",
-    ],
-)
-
-cc_library(
-    name = "logits_processor",
-    hdrs = ["logits_processor.h"],
-    visibility = ["//visibility:public"],
-    deps = [
-        "@com_google_absl//absl/status",
-        "@com_google_absl//absl/types:span",
-        "@litert//litert/cc:litert_layout",
-        "@litert//litert/cc:litert_tensor_buffer",
-        "@litert//tflite/types:half",
-    ],
-)
-
-cc_library(
-    name = "mock_logits_processor",
-    testonly = True,
-    hdrs = ["mock_logits_processor.h"],
-    visibility = ["//visibility:public"],
-    deps = [
-        ":constrained_decoder",
-        ":logits_processor",
-        "@com_google_googletest//:gtest_for_library",
-        "@com_google_absl//absl/status",
-        "@com_google_absl//absl/types:span",
-        "@litert//litert/cc:litert_layout",
-        "@litert//litert/cc:litert_tensor_buffer",
-        "@litert//tflite/types:half",
     ],
 )
 
@@ -186,7 +157,6 @@ cc_library(
     deps = [
         ":constraint",
         ":logit_mask",
-        ":logits_processor",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/types:span",

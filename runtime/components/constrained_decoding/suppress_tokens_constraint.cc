@@ -68,7 +68,7 @@ SuppressTokensConstraint::ComputeNext(const State& state, int token) const {
 
 absl::StatusOr<std::unique_ptr<LogitMask>>
 SuppressTokensConstraint::ComputeMask(const State& state) const {
-  return std::make_unique<BitmapLogitMask>(vocab_size_, mask_->words());
+  return std::make_unique<BitmapLogitMask>(*mask_);
 }
 
 }  // namespace litert::lm

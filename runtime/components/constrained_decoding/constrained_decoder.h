@@ -25,7 +25,6 @@
 #include "litert/cc/litert_layout.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/constrained_decoding/constraint.h"
-#include "runtime/components/constrained_decoding/logits_processor.h"
 #include "tflite/types/half.h"  // from @litert
 
 namespace litert::lm {
@@ -46,7 +45,7 @@ namespace litert::lm {
 //     TensorBuffer next_tokens = sampler.Sample(logits);
 //     ABSL_RETURN_IF_ERROR(decoder.UpdateState(next_tokens));
 //   }
-class ConstrainedDecoder : public LogitsProcessor {
+class ConstrainedDecoder {
  public:
   // Creates a ConstrainedDecoder.
   //
@@ -58,8 +57,8 @@ class ConstrainedDecoder : public LogitsProcessor {
     constraint_states_.reserve(batch_size_);
     std::generate_n(std::back_inserter(constraint_states_), batch_size_,
                     [&]() { return constraint_->Start(); });
-  };
-  virtual ~ConstrainedDecoder() = default;
+  }
+  ~ConstrainedDecoder() = default;
 
   // Masks the input logits tensor based on the current constraint state of
   // each sequence in the batch.
@@ -69,18 +68,16 @@ class ConstrainedDecoder : public LogitsProcessor {
   // @param logits A tensor of shape [batch_size, sequence_length, vocab_size]
   // containing the logits for the next token prediction. This tensor is
   // modified in-place.
-  // @return Ok if masking was successful, or an error if dimensionss are
+  // @return Ok if masking was successful, or an error if dimensions are
   // incorrect or masking fails.
-  absl::Status ProcessLogits(::litert::TensorBuffer& logits) override;
+  absl::Status ProcessLogits(TensorBuffer& logits);
 
   // Same as above, but takes a span of logits instead of a tensor buffer.
-  absl::Status ProcessLogits(
-      absl::Span<float> logits,
-      absl::Span<const ::litert::Layout::Dim> logits_dims) override;
+  absl::Status ProcessLogits(absl::Span<float> logits,
+                             absl::Span<const Layout::Dim> logits_dims);
 
-  absl::Status ProcessLogits(
-      absl::Span<tflite::half> logits,
-      absl::Span<const ::litert::Layout::Dim> logits_dims) override;
+  absl::Status ProcessLogits(absl::Span<tflite::half> logits,
+                             absl::Span<const Layout::Dim> logits_dims);
 
   // Updates the internal constraint state for each sequence in the batch based
   // on the newly selected tokens. If a sequence reaches an end state
@@ -91,19 +88,13 @@ class ConstrainedDecoder : public LogitsProcessor {
   // current step.
   // @return Ok if the states were updated successfully, or an error if any
   // token is invalid for its corresponding state.
-  absl::Status UpdateState(
-      const ::litert::TensorBuffer& next_token_ids) override;
+  absl::Status UpdateState(const TensorBuffer& next_token_ids);
 
   // Same as above, but takes a span of token ids instead of a tensor buffer.
-  absl::Status UpdateState(absl::Span<int> next_token_ids) override;
+  absl::Status UpdateState(absl::Span<int> next_token_ids);
 
   // Returns a pointer to the constraint.
   Constraint* GetConstraint() const { return constraint_; }
-
-  ConstrainedDecoder* GetConstraintDecoder() override { return this; }
-  const ConstrainedDecoder* GetConstraintDecoder() const override {
-    return this;
-  }
 
  private:
   // The constraint to be applied.

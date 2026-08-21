@@ -105,10 +105,14 @@ class SparseLogitMask : public LogitMask {
     int token_id;
     float weight = 1.0f;  // Multiplicative factor (default: 1.0)
     float bias = 0.0f;    // Additive bias (default: 0.0)
+    // When true, positive logits are multiplied by weight (e.g. z * (1/p)), and
+    // negative logits are divided by weight (e.g. z / (1/p) = z * p).
+    bool sign_dependent_weight = false;
 
     bool operator==(const Entry& other) const {
       return token_id == other.token_id && weight == other.weight &&
-             bias == other.bias;
+             bias == other.bias &&
+             sign_dependent_weight == other.sign_dependent_weight;
     }
   };
 

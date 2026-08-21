@@ -160,7 +160,7 @@ absl::StatusOr<std::unique_ptr<Bitmap>> ThinkingBudgetConstraint::ComputeBitmap(
 void ThinkingBudgetConstraint::ProcessForcedEnd(ThinkingState& state,
                                                 int token) const {
   // Verify that the model generated the expected forced end token.
-  // We only allow these tokens in ComputeBitmap, so it should match.
+  // We only allow these tokens in ComputeMask, so it should match.
   if (token == end_token_ids_[state.forced_end_token_index]) {
     state.forced_end_token_index++;
     // If we have generated all forced end tokens, we are done thinking.
@@ -169,7 +169,7 @@ void ThinkingBudgetConstraint::ProcessForcedEnd(ThinkingState& state,
       state.forced_end_token_index = -1;
     }
   } else {
-    // Should not happen under normal circumstances if ComputeBitmap restricts
+    // Should not happen under normal circumstances if ComputeMask restricts
     // vocabulary.
     state.forced_end_token_index = -1;
   }

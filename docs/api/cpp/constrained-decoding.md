@@ -190,17 +190,6 @@ class MyCustomConstraint : public litert::lm::Constraint {
     int step_;
   };
 
-  // A custom bitmap that allows only a single specified token.
-  class SingleAllowedTokenBitmap : public litert::lm::Bitmap {
-   public:
-    explicit SingleAllowedTokenBitmap(int allowed_token)
-        : allowed_token_(allowed_token) {}
-    bool Get(int index) const override { return index == allowed_token_; }
-
-   private:
-    int allowed_token_;
-  };
-
   std::unique_ptr<State> Start() const override {
     return std::make_unique<MyState>(0);
   }
@@ -219,15 +208,17 @@ class MyCustomConstraint : public litert::lm::Constraint {
     return std::make_unique<MyState>(my_state.step() + 1);
   }
 
-  absl::StatusOr<std::unique_ptr<litert::lm::Bitmap>> ComputeBitmap(
+  absl::StatusOr<std::unique_ptr<litert::lm::LogitMask>> ComputeMask(
       const State& state) const override {
     const auto& my_state = static_cast<const MyState&>(state);
     if (my_state.step() == 0) {
       // In the first step, only allow token ID 42.
-      return std::make_unique<SingleAllowedTokenBitmap>(42);
+      return litert::lm::BitmapLogitMask::CreateSingleAllowedToken(
+          GetVocabularySize(), 42);
     } else {
       // In the second step, only allow token ID 99.
-      return std::make_unique<SingleAllowedTokenBitmap>(99);
+      return litert::lm::BitmapLogitMask::CreateSingleAllowedToken(
+          GetVocabularySize(), 99);
     }
   }
 };

@@ -20,8 +20,8 @@
 namespace litert::lm {
 
 // A configuration storing the penalty parameters for the
-// `RepetitionPenaltyProcessor`. `RepetitionPenaltyProcessor` only observes the
-// sequence generated in Decode of the current decode loop.
+// `RepetitionPenaltyConstraint`. `RepetitionPenaltyConstraint` only observes
+// the sequence generated in Decode of the current decode loop.
 //
 // Clamps the given parameters to their valid lower bounds during construction.
 // Parameters are immutable once constructed to prevent unexpected divergence

@@ -56,9 +56,9 @@ class LitertState : public StateInterface {
       AllocationPolicy allocation_policy, int batch_size,
       bool clear_kv_cache_before_prefill = true);
 
-  int GetNumEntries() const override { return num_entries_; };
+  int GetNumEntries() const override { return num_entries_; }
 
-  int GetBatchSize() const override { return batch_size_; };
+  int GetBatchSize() const override { return batch_size_; }
 
   absl::StatusOr<std::string> Serialize() const override {
     return absl::UnimplementedError("Not implemented");

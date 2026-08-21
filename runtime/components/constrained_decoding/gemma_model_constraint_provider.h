@@ -166,7 +166,7 @@ class GemmaModelConstraintProvider : public ConstraintProvider {
       std::unique_ptr<sentencepiece::SentencePieceProcessor> processor,
       std::unique_ptr<ConstraintProvider> internal_provider)
       : processor_(std::move(processor)),
-        internal_provider_(std::move(internal_provider)) {};
+        internal_provider_(std::move(internal_provider)) {}
 
   std::unique_ptr<sentencepiece::SentencePieceProcessor> processor_;
   std::unique_ptr<ConstraintProvider> internal_provider_;

@@ -102,7 +102,15 @@ absl::Status ApplySparseImpl(absl::Span<const SparseLogitMask::Entry> entries,
         continue;
       }
     }
-    val = val * entry.weight + entry.bias;
+    if (entry.sign_dependent_weight) {
+      if (val > 0.0f) {
+        val = val * entry.weight + entry.bias;
+      } else {
+        val = (entry.weight != 0.0f ? (val / entry.weight) : val) + entry.bias;
+      }
+    } else {
+      val = val * entry.weight + entry.bias;
+    }
     logits[entry.token_id] = static_cast<T>(val);
   }
   return absl::OkStatus();
