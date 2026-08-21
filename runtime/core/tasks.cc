@@ -567,14 +567,19 @@ absl::StatusOr<Responses> Prefill(
   ABSL_RETURN_IF_ERROR(executor.Prefill(inputs, params));
   if (benchmark_info.has_value()) {
     ABSL_RETURN_IF_ERROR(benchmark_info->TimePrefillTurnEnd(num_token_ids));
-    absl::StatusOr<std::string> profile_summary = executor.GetProfileSummary();
-    if (!profile_summary.ok()) {
+    auto profile_summary = executor.GetProfileSummary();
+    if (profile_summary.ok()) {
+      if (profile_summary->empty()) {
+        ABSL_LOG(WARNING) << "Prefill profile summary is empty!";
+      } else {
+        benchmark_info->SetProfileSummary(*profile_summary);
+      }
+    } else if (profile_summary.status().code() ==
+               absl::StatusCode::kFailedPrecondition) {
+      ABSL_VLOG(1) << "Profiling is not enabled.";
+    } else {
       ABSL_LOG(WARNING) << "Failed to get prefill profile summary: "
                         << profile_summary.status();
-    } else if (profile_summary->empty()) {
-      ABSL_LOG(WARNING) << "Prefill profile summary is empty!";
-    } else {
-      benchmark_info->SetProfileSummary(*profile_summary);
     }
   }
   return Responses(TaskState::kDone);
@@ -781,14 +786,19 @@ absl::StatusOr<Responses> Decode(
   if (benchmark_info.has_value()) {
     ABSL_RETURN_IF_ERROR(benchmark_info->TimeDecodeTurnEnd(
         num_decode_steps * num_output_candidates));
-    absl::StatusOr<std::string> profile_summary = executor.GetProfileSummary();
-    if (!profile_summary.ok()) {
+    auto profile_summary = executor.GetProfileSummary();
+    if (profile_summary.ok()) {
+      if (profile_summary->empty()) {
+        ABSL_LOG(WARNING) << "Decode profile summary is empty!";
+      } else {
+        benchmark_info->SetProfileSummary(*profile_summary);
+      }
+    } else if (profile_summary.status().code() ==
+               absl::StatusCode::kFailedPrecondition) {
+      ABSL_VLOG(1) << "Profiling is not enabled.";
+    } else {
       ABSL_LOG(WARNING) << "Failed to get decode profile summary: "
                         << profile_summary.status();
-    } else if (profile_summary->empty()) {
-      ABSL_LOG(WARNING) << "Decode profile summary is empty!";
-    } else {
-      benchmark_info->SetProfileSummary(*profile_summary);
     }
   }
 

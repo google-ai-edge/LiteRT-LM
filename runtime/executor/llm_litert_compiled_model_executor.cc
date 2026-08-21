@@ -1629,12 +1629,18 @@ LlmLiteRtCompiledModelExecutorBase::GetProfiler() const {
 
 absl::Status LlmLiteRtCompiledModelExecutorBase::StartProfiling() {
   ABSL_ASSIGN_OR_RETURN(auto profiler, GetProfiler());
+  if (!profiler || profiler.Get() == nullptr) {
+    return absl::FailedPreconditionError("Profiling is not enabled.");
+  }
   LITERT_RETURN_IF_ERROR(profiler.StartProfiling());
   return absl::OkStatus();
 }
 
 absl::Status LlmLiteRtCompiledModelExecutorBase::StopProfiling() {
   ABSL_ASSIGN_OR_RETURN(auto profiler, GetProfiler());
+  if (!profiler || profiler.Get() == nullptr) {
+    return absl::FailedPreconditionError("Profiling is not enabled.");
+  }
   LITERT_RETURN_IF_ERROR(profiler.StopProfiling());
   return absl::OkStatus();
 }
@@ -1642,6 +1648,9 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::StopProfiling() {
 absl::StatusOr<std::string>
 LlmLiteRtCompiledModelExecutorBase::GetProfileSummary() {
   ABSL_ASSIGN_OR_RETURN(auto profiler, GetProfiler());
+  if (!profiler || profiler.Get() == nullptr) {
+    return absl::FailedPreconditionError("Profiling is not enabled.");
+  }
   LITERT_ASSIGN_OR_RETURN(auto summary,
                           profiler.GetProfileSummary(compiled_model_->Get()));
   return summary;
