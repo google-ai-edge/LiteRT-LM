@@ -39,7 +39,7 @@ concurrency:
 jobs:
   presubmit:
     name: "Presubmit-Linux"
-    runs-on: "linux-x86-c4-16"
+    runs-on: "linux-x86-g2-16-l4-1gpu"
     container:
       image: ubuntu:24.04
     permissions:
@@ -68,7 +68,7 @@ jobs:
             tar python3 python3-dev python3-pip git-lfs \
             python3-numpy ccache zlib1g-dev libssl-dev \
             libpng-dev libcurl4-openssl-dev libfftw3-dev \
-            golang-go npm patchelf \
+            golang-go npm patchelf android-liblog-dev \
             apt-file && apt-file update
           git lfs install
 
@@ -127,11 +127,13 @@ jobs:
           ndk-version: r28b
           add-to-path: false
 
-      - name: Export NDK Home globally
-        # This guarantees Bazel finds it during both the Linux //... eval and the actual Android compile
+      - name: Export NDK Home and LD_LIBRARY_PATH
         env:
           NDK_PATH: ${{ steps.setup-ndk.outputs.ndk-path }}
-        run: echo "ANDROID_NDK_HOME=$NDK_PATH" >> $GITHUB_ENV
+        run: |
+          echo "ANDROID_NDK_HOME=$NDK_PATH" >> $GITHUB_ENV
+          LIBLOG_DIR=$(dirname $(find "$NDK_PATH" -path "*/x86_64*/*liblog.so" | head -n 1))
+          echo "LD_LIBRARY_PATH=$LIBLOG_DIR:$LD_LIBRARY_PATH" >> $GITHUB_ENV
 
 
       - name : Set up cache keys
@@ -275,7 +277,9 @@ jobs:
       - name: Run bazel test on Linux.
         continue-on-error: true  # Ignore errors when test fails.
         run: |
-          bazelisk test --disk_cache=~/.cache/bazel --repository_cache=~/.cache/bazel/repo --config=linux_x86_64 \
+          bazelisk test --disk_cache=~/.cache/bazel \
+            --repository_cache=~/.cache/bazel/repo \
+            --config=linux_x86_64 \
             --deleted_packages=swift \
             --test_output=errors \
             //runtime/... \
@@ -291,12 +295,26 @@ jobs:
 
       - name: Run bazel build on Linux with dynamic linking.
         run: |
-          bazelisk build --disk_cache=~/.cache/bazel --repository_cache=~/.cache/bazel/repo --config=linux_x86_64 \
+          bazelisk build --disk_cache=~/.cache/bazel \
+            --repository_cache=~/.cache/bazel/repo \
+            --config=linux_x86_64 \
             --define=litert_runtime_link_mode=dynamic \
-            //runtime/engine:litert_lm_main
+            --define=resolve_symbols_in_exec=false \
+            //runtime/... \
+            //schema/... \
+            //c/...
 
-      - name: Run pytest
-        run: pytest tools/pytest/ --backend=cpu --model-path="$MODEL_PATH/$MODEL_KEY" --build-system=bazel
+      - name: Run pytest CPU Backend
+        run: |
+          pytest tools/pytest/ --backend=cpu \
+            --model-path="$MODEL_PATH/$MODEL_KEY" --build-system=bazel
+
+
+      - name: Run pytest GPU Backend
+        run: |
+          export LD_LIBRARY_PATH="$PWD/prebuilt/linux_x86_64:$LD_LIBRARY_PATH"
+          pytest tools/pytest/ -v --backend=gpu --dynamic --prebuilt \
+            --model-path="$MODEL_PATH/$MODEL_KEY" --build-system=bazel
 
 
       - name: Check if litert_lm_main has only LiteRt symbols undefined.
