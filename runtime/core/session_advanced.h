@@ -203,6 +203,9 @@ class SessionAdvanced : public SessionInterface {
     return session_info_->session_config;
   }
 
+  // Returns debug info for this session.
+  std::optional<SessionDebugInfo> GetSessionDebugInfo() const override;
+
   absl::Status WaitUntilDone() override {
     auto execution_manager_lock = execution_manager_.lock();
     if (execution_manager_lock == nullptr) {

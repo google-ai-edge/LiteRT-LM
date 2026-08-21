@@ -49,7 +49,7 @@ TEST(RuntimeDebuggerTest, CreateHandlesValidAndInvalidCacheDirectories) {
   auto valid_debugger = RuntimeDebugger::Create(test_dir);
   ASSERT_NE(valid_debugger, nullptr);
   EXPECT_EQ(valid_debugger->capture_dir(),
-            (std::filesystem::path(test_dir) / "ai_edge_debugger").string());
+            (std::filesystem::path(test_dir) / "litert_lm_debugger").string());
 
   EXPECT_EQ(RuntimeDebugger::Create(""), nullptr);
   EXPECT_EQ(RuntimeDebugger::Create(":memory"), nullptr);
@@ -70,7 +70,7 @@ TEST(RuntimeDebuggerTest, SessionLifecycleAndSwitching) {
   debugger->ObserveTokens(/*session_id=*/0, responses_s0);
 
   std::string s0_capture_path =
-      (std::filesystem::path(test_dir) / "ai_edge_debugger" / "0" /
+      (std::filesystem::path(test_dir) / "litert_lm_debugger" / "0" /
        "generated_tokens.jsonl")
           .string();
   EXPECT_TRUE(std::filesystem::exists(s0_capture_path));

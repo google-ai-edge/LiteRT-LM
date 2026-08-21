@@ -664,6 +664,14 @@ class Conversation {
   absl::StatusOr<std::string> RenderPrefaceIntoString(
       OptionalArgs optional_args);
 
+  // Returns debug info for this conversation's underlying session.
+  std::optional<SessionDebugInfo> GetSessionDebugInfo() const {
+    if (session_ != nullptr) {
+      return session_->GetSessionDebugInfo();
+    }
+    return std::nullopt;
+  }
+
  private:
   explicit Conversation(
       Engine& engine, std::unique_ptr<Engine::Session> session,

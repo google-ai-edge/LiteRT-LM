@@ -755,6 +755,27 @@ def _setup_lib_signatures(lib):
       ctypes.c_void_p,
   ]
 
+  # Experimental C API
+  lib.litert_lm_experimental_is_debugger_enabled.restype = ctypes.c_int
+  lib.litert_lm_experimental_is_debugger_enabled.argtypes = []
+  lib.litert_lm_experimental_session_get_debug_info.restype = ctypes.c_void_p
+  lib.litert_lm_experimental_session_get_debug_info.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_experimental_session_debug_info_delete.argtypes = [
+      ctypes.c_void_p
+  ]
+  lib.litert_lm_experimental_session_debug_info_get_capture_dir.restype = (
+      ctypes.c_char_p
+  )
+  lib.litert_lm_experimental_session_debug_info_get_capture_dir.argtypes = [
+      ctypes.c_void_p
+  ]
+  lib.litert_lm_experimental_conversation_get_session_debug_info.restype = (
+      ctypes.c_void_p
+  )
+  lib.litert_lm_experimental_conversation_get_session_debug_info.argtypes = [
+      ctypes.c_void_p
+  ]
+
 
 def set_min_log_severity(severity: LogSeverity):
   """Sets the minimum logging severity for the C library."""

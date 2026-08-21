@@ -51,9 +51,9 @@
 #include "runtime/util/logging.h"
 #include "runtime/util/status_macros.h"  // NOLINT
 
-#if defined(AI_EDGE_DEBUGGER_ENABLED)
+#if defined(LITERT_LM_DEBUGGER_ENABLED)
 #include "runtime/util/runtime_debugger.h"
-#endif  // defined(AI_EDGE_DEBUGGER_ENABLED)
+#endif  // defined(LITERT_LM_DEBUGGER_ENABLED)
 
 namespace litert::lm {
 
@@ -308,21 +308,21 @@ absl::StatusOr<std::unique_ptr<Engine>> EngineAdvancedImpl::Create(
 
   std::unique_ptr<LlmExecutor> executor;
 
-  // Engine-scoped Debugger handle enabled via AI_EDGE_DEBUGGER_ENABLED=1.
+  // Engine-scoped Debugger handle enabled via LITERT_LM_DEBUGGER_ENABLED=1.
   // Defaults to nullptr for zero-overhead in standard production Release
   // builds.
   std::shared_ptr<RuntimeDebugger> runtime_debugger = nullptr;
-#if defined(AI_EDGE_DEBUGGER_ENABLED)
+#if defined(LITERT_LM_DEBUGGER_ENABLED)
   runtime_debugger =
       RuntimeDebugger::Create(main_executor_settings.GetCacheDir());
-#endif  // defined(AI_EDGE_DEBUGGER_ENABLED)
+#endif  // defined(LITERT_LM_DEBUGGER_ENABLED)
 
   switch (main_executor_settings.GetBackend()) {
     default: {
       ABSL_ASSIGN_OR_RETURN(executor, CreateLlmLiteRtCompiledModelExecutor(
                                           main_executor_settings,
                                           owned_env->env, *model_resources));
-#if defined(AI_EDGE_DEBUGGER_ENABLED)
+#if defined(LITERT_LM_DEBUGGER_ENABLED)
       if (main_executor_settings.GetBackend() == Backend::CPU ||
           main_executor_settings.GetBackend() == Backend::GPU) {
         if (auto* litert_executor =
@@ -336,7 +336,7 @@ absl::StatusOr<std::unique_ptr<Engine>> EngineAdvancedImpl::Create(
           }
         }
       }
-#endif  // defined(AI_EDGE_DEBUGGER_ENABLED)
+#endif  // defined(LITERT_LM_DEBUGGER_ENABLED)
     }
   };
 

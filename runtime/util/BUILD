@@ -83,8 +83,8 @@ cc_test(
 )
 
 config_setting(
-    name = "ai_edge_debugger_enabled",
-    define_values = {"AI_EDGE_DEBUGGER_ENABLED": "1"},
+    name = "litert_lm_debugger_enabled",
+    define_values = {"LITERT_LM_DEBUGGER_ENABLED": "1"},
 )
 
 cc_library(

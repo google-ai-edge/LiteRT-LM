@@ -15,7 +15,9 @@
 
 import collections.abc
 import ctypes
+import pathlib
 import queue
+import warnings
 from . import interfaces
 from ._ffi import InputDataType
 from ._ffi import STREAM_CALLBACK_TYPE
@@ -176,3 +178,52 @@ class Session(interfaces.AbstractSession):
   def cancel_process(self) -> None:
     if self._ptr:
       self._lib.litert_lm_session_cancel_process(self._ptr)
+
+  def get_debug_artifacts(self) -> interfaces.DebugArtifacts | None:
+    """See base class."""
+    if not self._lib.litert_lm_experimental_is_debugger_enabled():
+      warnings.warn(
+          "LiteRT-LM Debugger is disabled in this runtime build. "
+          "To enable artifact tracing, re-compile using "
+          "'--define LITERT_LM_DEBUGGER_ENABLED=1'.",
+          RuntimeWarning,
+          stacklevel=2,
+      )
+      return None
+
+    if not self._engine or not self._engine.cache_dir:
+      return None
+
+    debug_info_ptr = self._lib.litert_lm_experimental_session_get_debug_info(
+        self._ptr
+    )
+    if not debug_info_ptr:
+      return None
+
+    try:
+      capture_dir_bytes = (
+          self._lib.litert_lm_experimental_session_debug_info_get_capture_dir(
+              debug_info_ptr
+          )
+      )
+      if not capture_dir_bytes:
+        return None
+      capture_dir_str = capture_dir_bytes.decode("utf-8")
+    finally:
+      self._lib.litert_lm_experimental_session_debug_info_delete(debug_info_ptr)
+
+    if not capture_dir_str:
+      return None
+
+    session_dir = pathlib.Path(self._engine.cache_dir) / capture_dir_str
+    if not session_dir.exists() or not session_dir.is_dir():
+      return None
+
+    tensor_paths = sorted(session_dir.glob("*.safetensors"))
+    trace_log = session_dir / "generated_tokens.jsonl"
+    trace_log_path = trace_log if trace_log.exists() else None
+
+    return interfaces.DebugArtifacts(
+        tensor_paths=tensor_paths,
+        trace_log_path=trace_log_path,
+    )

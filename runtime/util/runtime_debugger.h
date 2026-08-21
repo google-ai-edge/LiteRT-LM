@@ -61,6 +61,9 @@ class RuntimeDebugger {
   void RegisterDebugSession(int session_id,
                             absl::string_view preferred_cache_dir = "");
 
+  // Returns the relative capture directory for a given session ID.
+  static std::string GetSessionCaptureDir(int session_id);
+
   // Unregisters a session-specific capture directory.
   void UnregisterDebugSession(int session_id);
 

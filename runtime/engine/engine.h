@@ -16,6 +16,7 @@
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_ENGINE_ENGINE_H_
 
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "absl/base/attributes.h"  // from @com_google_absl
@@ -331,6 +332,12 @@ class SessionInterface {
 
   // Get the reference to the session config for the session.
   virtual const SessionConfig& GetSessionConfig() const = 0;
+
+  // Returns the debug info for the session, or nullopt if unsupported
+  // or debugger is disabled.
+  virtual std::optional<SessionDebugInfo> GetSessionDebugInfo() const {
+    return std::nullopt;
+  }
 };
 
 // EngineT is the templated interface for the LLM runtime.

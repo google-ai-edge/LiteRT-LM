@@ -44,6 +44,10 @@
 #include "runtime/util/status_macros.h"  // IWYU pragma: keep
 #include "support/tokenizer/tokenizer.h"
 
+#if defined(LITERT_LM_DEBUGGER_ENABLED)
+#include "runtime/util/runtime_debugger.h"
+#endif
+
 namespace litert::lm {
 namespace {
 
@@ -558,6 +562,16 @@ absl::StatusOr<int> SessionAdvanced::GetCurrentStep() const {
     return absl::FailedPreconditionError("Execution manager is not available.");
   }
   return execution_manager_lock->GetCurrentStep(*session_info_);
+}
+
+std::optional<SessionDebugInfo> SessionAdvanced::GetSessionDebugInfo() const {
+#if defined(LITERT_LM_DEBUGGER_ENABLED)
+  SessionDebugInfo debug_info;
+  debug_info.capture_dir = RuntimeDebugger::GetSessionCaptureDir(session_id_);
+  return debug_info;
+#else
+  return std::nullopt;
+#endif
 }
 
 }  // namespace litert::lm

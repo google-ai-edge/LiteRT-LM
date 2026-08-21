@@ -52,8 +52,8 @@ cc_library(
     srcs = ["threaded_execution_manager.cc"],
     hdrs = ["threaded_execution_manager.h"],
     local_defines = select({
-        "//runtime/util:ai_edge_debugger_enabled": [
-            "AI_EDGE_DEBUGGER_ENABLED=1",
+        "//runtime/util:litert_lm_debugger_enabled": [
+            "LITERT_LM_DEBUGGER_ENABLED=1",
         ],
         "//conditions:default": [],
     }),
@@ -99,7 +99,7 @@ cc_library(
         "//runtime/util:litert_status_util",
         "//runtime/util:tensor_buffer_util",
     ] + select({
-        "//runtime/util:ai_edge_debugger_enabled": [
+        "//runtime/util:litert_lm_debugger_enabled": [
             "//runtime/util:runtime_debugger",
         ],
         "//conditions:default": [],
@@ -111,8 +111,8 @@ cc_library(
     srcs = ["serial_execution_manager.cc"],
     hdrs = ["serial_execution_manager.h"],
     local_defines = select({
-        "//runtime/util:ai_edge_debugger_enabled": [
-            "AI_EDGE_DEBUGGER_ENABLED=1",
+        "//runtime/util:litert_lm_debugger_enabled": [
+            "LITERT_LM_DEBUGGER_ENABLED=1",
         ],
         "//conditions:default": [],
     }),
@@ -156,7 +156,7 @@ cc_library(
         "//runtime/util:litert_status_util",
         "//runtime/util:tensor_buffer_util",
     ] + select({
-        "//runtime/util:ai_edge_debugger_enabled": [
+        "//runtime/util:litert_lm_debugger_enabled": [
             "//runtime/util:runtime_debugger",
         ],
         "//conditions:default": [],

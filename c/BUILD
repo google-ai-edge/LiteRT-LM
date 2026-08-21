@@ -34,6 +34,8 @@ exports_files([
     "embedding_engine.h",
     "engine.cc",
     "engine.h",
+    "experimental.cc",
+    "experimental.h",
 ])
 
 ENGINE_LITE_COMMON_DEPS = [
@@ -95,12 +97,27 @@ CAPABILITIES_DEPS = [
     "//schema/capabilities",
 ]
 
+EXPERIMENTAL_DEPS = [
+    ":experimental_internal",
+]
+
 ENGINE_COMMON_DEPS = (
     ENGINE_LITE_COMMON_DEPS +
     CONVERSATION_DEPS +
     EMBEDDING_ENGINE_DEPS +
-    CAPABILITIES_DEPS
+    CAPABILITIES_DEPS +
+    EXPERIMENTAL_DEPS
 )
+
+# Preprocessor define map for runtime debugger tracing support.
+# Evaluates statically against the global `--define LITERT_LM_DEBUGGER_ENABLED=1` build flag,
+# and is safely inherited by all `:engine` and `:engine_lite` C-API variant targets.
+LITERT_LM_DEBUGGER_DEFINES = select({
+    "//runtime/util:litert_lm_debugger_enabled": [
+        "LITERT_LM_DEBUGGER_ENABLED=1",
+    ],
+    "//conditions:default": [],
+})
 
 # Header library for engine + session C API.
 cc_library(
@@ -131,6 +148,17 @@ cc_library(
     hdrs = ["embedding_engine.h"],
     visibility = ["//visibility:public"],
     deps = [":engine_headers"],
+)
+
+# Header library for experimental C API.
+cc_library(
+    name = "experimental_headers",
+    hdrs = ["experimental.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":conversation_headers",
+        ":engine_headers",
+    ],
 )
 
 cc_library(
@@ -177,6 +205,16 @@ cc_library(
     ],
 )
 
+cc_library(
+    name = "experimental_internal",
+    hdrs = ["experimental_internal.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":experimental_headers",
+        "//runtime/engine:io_types",
+    ],
+)
+
 # LiteRT LM C API target for Engine + Session only.
 # Use this target when only low-level engine and session APIs (prefill, decode, scoring)
 # are required, avoiding expensive conversation dependencies (prompt templates, JSON handling, etc.).
@@ -184,6 +222,7 @@ cc_library(
     name = "engine_lite",
     srcs = ["engine.cc"],
     hdrs = ["engine.h"],
+    defines = LITERT_LM_DEBUGGER_DEFINES,
     visibility = ["//visibility:public"],
     deps = ENGINE_LITE_COMMON_DEPS + [
         "//runtime/core:engine_impl",
@@ -196,6 +235,7 @@ cc_library(
     name = "engine_lite_cpu",
     srcs = ["engine.cc"],
     hdrs = ["engine.h"],
+    defines = LITERT_LM_DEBUGGER_DEFINES,
     visibility = ["//visibility:public"],
     deps = ENGINE_LITE_COMMON_DEPS + [
         "//runtime/core:engine_advanced_impl_cpu_only",
@@ -236,13 +276,16 @@ cc_library(
         "conversation.cc",
         "embedding_engine.cc",
         "engine.cc",
+        "experimental.cc",
     ],
     hdrs = [
         "capabilities.h",
         "conversation.h",
         "embedding_engine.h",
         "engine.h",
+        "experimental.h",
     ],
+    defines = LITERT_LM_DEBUGGER_DEFINES,
     visibility = ["//visibility:public"],
     deps = ENGINE_COMMON_DEPS + [
         "//runtime/core:engine_impl",
@@ -258,13 +301,16 @@ cc_library(
         "conversation.cc",
         "embedding_engine.cc",
         "engine.cc",
+        "experimental.cc",
     ],
     hdrs = [
         "capabilities.h",
         "conversation.h",
         "embedding_engine.h",
         "engine.h",
+        "experimental.h",
     ],
+    defines = LITERT_LM_DEBUGGER_DEFINES,
     visibility = ["//visibility:public"],
     deps = ENGINE_COMMON_DEPS + [
         "//runtime/core:engine_advanced_impl_cpu_only",
@@ -354,6 +400,7 @@ cc_binary(
         "conversation.cc",
         "embedding_engine.cc",
         "engine.cc",
+        "experimental.cc",
     ],
     copts = ["-fvisibility=hidden"],
     features = ["-legacy_whole_archive"],
@@ -380,6 +427,7 @@ cc_binary(
         ":conversation_headers",
         ":embedding_engine_headers",
         ":engine_headers",
+        ":experimental_headers",
         "//runtime/core:engine_impl",
     ] + select({
         "//conditions:default": [],

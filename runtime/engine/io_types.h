@@ -419,6 +419,13 @@ class DecodeConfig {
   std::vector<int> thinking_end_token_ids_;
 };
 
+// Runtime debug metadata associated with a Session.
+struct SessionDebugInfo {
+  // Relative capture directory path under cache_dir (e.g.
+  // "litert_lm_debugger/0").
+  std::string capture_dir;
+};
+
 }  // namespace litert::lm
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_RUNTIME_ENGINE_IO_TYPES_H_

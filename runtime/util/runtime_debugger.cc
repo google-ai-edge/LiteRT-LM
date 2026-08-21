@@ -50,7 +50,7 @@ constexpr absl::string_view kNoCacheDir = ":nocache";
 
 // Target subdirectory name for tensor dumps, relative to the preferred cache
 // dir.
-constexpr absl::string_view kDebuggerSubdir = "ai_edge_debugger";
+constexpr absl::string_view kDebuggerSubdir = "litert_lm_debugger";
 
 // Trace file specifications for generated tokens and tensor files.
 constexpr absl::string_view kGeneratedTokensFileName = "generated_tokens.jsonl";
@@ -127,8 +127,8 @@ absl::Status SaveTensorBufferToFile(absl::string_view root_directory,
       {std::string(kMetadataSignature), std::string(signature_name)},
       {std::string(kMetadataStep), absl::StrCat(step)},
   };
-  const std::string json_header = BuildSafetensorsHeader(
-      full_tensor_name, dtype, shape, bytes, metadata);
+  const std::string json_header =
+      BuildSafetensorsHeader(full_tensor_name, dtype, shape, bytes, metadata);
   const uint64_t header_size = json_header.size();
 
   std::ofstream outfile(filepath, std::ios::binary);
@@ -242,6 +242,10 @@ void RuntimeDebugger::CaptureTensors(
       ABSL_LOG(ERROR) << "Tensor capture failed for " << name << ": " << status;
     }
   }
+}
+
+std::string RuntimeDebugger::GetSessionCaptureDir(int session_id) {
+  return absl::StrCat(kDebuggerSubdir, "/", session_id);
 }
 
 void RuntimeDebugger::RegisterDebugSession(

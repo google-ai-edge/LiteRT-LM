@@ -102,8 +102,8 @@ cc_library(
     local_defines = select({
         "//conditions:default": [],
     }) + select({
-        "//runtime/util:ai_edge_debugger_enabled": [
-            "AI_EDGE_DEBUGGER_ENABLED=1",
+        "//runtime/util:litert_lm_debugger_enabled": [
+            "LITERT_LM_DEBUGGER_ENABLED=1",
         ],
         "//conditions:default": [],
     }),
@@ -113,7 +113,7 @@ cc_library(
     ] + select({
         "//conditions:default": [],
     }) + select({
-        "//runtime/util:ai_edge_debugger_enabled": [
+        "//runtime/util:litert_lm_debugger_enabled": [
             "//runtime/util:runtime_debugger",
         ],
         "//conditions:default": [],
@@ -125,13 +125,13 @@ cc_library(
     name = "engine_advanced_impl_cpu_only",
     srcs = ["engine_advanced_impl.cc"],
     local_defines = select({
-        "//runtime/util:ai_edge_debugger_enabled": [
-            "AI_EDGE_DEBUGGER_ENABLED=1",
+        "//runtime/util:litert_lm_debugger_enabled": [
+            "LITERT_LM_DEBUGGER_ENABLED=1",
         ],
         "//conditions:default": [],
     }),
     deps = ENGINE_IMPL_COMMON_DEPS + select({
-        "//runtime/util:ai_edge_debugger_enabled": [
+        "//runtime/util:litert_lm_debugger_enabled": [
             "//runtime/util:runtime_debugger",
         ],
         "//conditions:default": [],
@@ -246,6 +246,12 @@ cc_library(
     name = "session_advanced",
     srcs = ["session_advanced.cc"],
     hdrs = ["session_advanced.h"],
+    local_defines = select({
+        "//runtime/util:litert_lm_debugger_enabled": [
+            "LITERT_LM_DEBUGGER_ENABLED=1",
+        ],
+        "//conditions:default": [],
+    }),
     deps = [
         ":session_utils",
         "@com_google_absl//absl/base:core_headers",
@@ -270,7 +276,12 @@ cc_library(
         "//runtime/proto:sampler_params_cc_proto",
         "//runtime/util:litert_status_util",
         "//support/tokenizer",
-    ],
+    ] + select({
+        "//runtime/util:litert_lm_debugger_enabled": [
+            "//runtime/util:runtime_debugger",
+        ],
+        "//conditions:default": [],
+    }),
 )
 
 cc_test(

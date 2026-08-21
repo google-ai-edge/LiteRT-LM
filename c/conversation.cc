@@ -35,6 +35,7 @@
 #include "runtime/conversation/model_data_processor/gemma4_data_processor_config.h"
 #include "runtime/conversation/thinking_config.h"
 #include "runtime/engine/engine_settings.h"
+#include "runtime/executor/llm_executor_settings.h"
 
 namespace {
 

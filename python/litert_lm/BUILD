@@ -150,6 +150,19 @@ py_test(
 )
 
 py_test(
+    name = "debug_artifacts_test",
+    srcs = ["debug_artifacts_test.py"],
+    tags = ["nowindows"],
+    deps = [
+        ":interfaces",
+        ":litert_lm",
+        ":session",
+        "@absl_py//absl/testing:absltest",
+    ],
+    imports = [".."],
+)
+
+py_test(
     name = "embedding_engine_test",
     srcs = ["embedding_engine_test.py"],
     data = ["//runtime/testdata"],
