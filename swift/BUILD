@@ -200,7 +200,7 @@ module CLiteRTLM {
 EOF
        # Zip it all up
        zip -r $@ CLiteRTLM_mac
-   """,
+    """,
     visibility = ["//visibility:public"],
 )
 
