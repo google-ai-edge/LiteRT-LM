@@ -614,7 +614,6 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::PrefillInternal(
             token_ids_span,
             /*sliding_window_size=*/std::nullopt));
         if (signatures_.input_attn_mask_local.has_value()) {
-          ABSL_LOG(INFO) << "filling local attention mask";
           ABSL_RETURN_IF_ERROR(FillAttentionMask(
               prefill_input_buffers[signatures_.input_attn_mask_local.value()],
               start_step,

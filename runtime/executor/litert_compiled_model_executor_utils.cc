@@ -700,11 +700,11 @@ absl::Status FillAttentionMask(litert::TensorBuffer& mask, int start_timestep,
   bool is_ring_buffer_prefill = dims[1] == 1 && dims[2] > 1 &&
                                 ring_buffer_size > 0 &&
                                 sliding_window_size.has_value() &&
-                                ring_buffer_size == sliding_window_size.value();
+                                ring_buffer_size >= sliding_window_size.value();
 
   bool is_ring_buffer_decode = steps == 1 && dims[1] == 1 && dims[2] == 1 &&
                                sliding_window_size.has_value() &&
-                               context_size == sliding_window_size.value();
+                               context_size >= sliding_window_size.value();
 
   if (is_ring_buffer_prefill) {
     FillRingBufferPrefillAttentionMask(
