@@ -1,0 +1,6 @@
+<|turn>system
+<|tool>declaration:get_weather{description:<|"|>Get current weather for a location.<|"|>,parameters:{properties:{location:{description:<|"|>City name<|"|>,type:<|"|>STRING<|"|>}},required:[<|"|>location<|"|>],type:<|"|>OBJECT<|"|>}}<tool|><turn|>
+<|turn>user
+What is the weather in London and Paris?<turn|>
+<|turn>model
+<|tool_call>call:get_weather{location:<|"|>London<|"|>}<tool_call|><|tool_response>response:get_weather{location:<|"|>London<|"|>,temperature:<|"|>18C<|"|>}<tool_response|><|tool_call>call:get_weather{location:<|"|>Paris<|"|>}<tool_call|><|tool_response>response:get_weather{location:<|"|>Paris<|"|>,temperature:<|"|>22C<|"|>}<tool_response|>
