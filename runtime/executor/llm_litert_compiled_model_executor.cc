@@ -53,7 +53,7 @@
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
-#include "runtime/components/constrained_decoding/logits_processor.h"
+#include "runtime/components/constrained_decoding/constrained_decoder.h"
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/components/sampler_factory.h"
@@ -1201,79 +1201,21 @@ absl::StatusOr<TensorBuffer> LlmLiteRtCompiledModelExecutorBase::DecodeLogits(
   ABSL_RETURN_IF_ERROR(DecodeInternal(step_and_token.token, output_logits));
   ABSL_RETURN_IF_ERROR(ConsumePendingOrAddProcessedToken(step_and_token.token));
 
-  if (!decode_params.GetLogitsProcessorList().empty() &&
-      !step_and_token.token.empty()) {
-    int output_heads = 1;
-    if (llm_context_->runtime_config().output_heads.has_value()) {
-      output_heads = llm_context_->runtime_config().output_heads.value();
-    }
-
-    RET_CHECK_EQ(step_and_token.token.size(), output_heads);
+  if (ConstrainedDecoder* constrained_decoder =
+          decode_params.GetConstrainedDecoder();
+      constrained_decoder != nullptr && !step_and_token.token.empty()) {
     std::vector<int> current_token_ids;
-    current_token_ids.reserve(output_heads);
+    current_token_ids.reserve(step_and_token.token.size());
     for (const auto& token : step_and_token.token) {
       current_token_ids.push_back(token->id());
     }
     // Update constraint state only with decode ids.
     if (last_run_is_decode) {
-      for (LogitsProcessor* logits_processor :
-           decode_params.GetLogitsProcessorList()) {
-        ABSL_RETURN_IF_ERROR(
-            logits_processor->UpdateState(absl::MakeSpan(current_token_ids)));
-      }
+      ABSL_RETURN_IF_ERROR(
+          constrained_decoder->UpdateState(absl::MakeSpan(current_token_ids)));
     }
-
-    LITERT_ASSIGN_OR_RETURN(auto output_logits_buffer_type,
-                            output_logits.BufferType());
-    // If the output logits are already on the host memory, use the buffer
-    // directly.
-    if (output_logits_buffer_type == TensorBufferType::kHostMemory) {
-      // Process logits based on the current constraint state.
-      for (LogitsProcessor* logits_processor :
-           decode_params.GetLogitsProcessorList()) {
-        ABSL_RETURN_IF_ERROR(logits_processor->ProcessLogits(output_logits));
-      }
-    } else {
-      // For GPU, we always copy the logits to CPU and mask them, then write
-      // them back to GPU.
-      LITERT_ASSIGN_OR_RETURN(RankedTensorType logits_tensor_type,
-                              output_logits.TensorType());
-      if (logits_tensor_type.ElementType() == ElementType::Float32) {
-        // Copy the logits from the tensor buffer to a vector.
-        LITERT_ASSIGN_OR_RETURN(auto logits_vector,
-                                CopyFromTensorBuffer<float>(output_logits));
-        // Process the logits using the logits processor.
-        for (LogitsProcessor* logits_processor :
-             decode_params.GetLogitsProcessorList()) {
-          ABSL_RETURN_IF_ERROR(logits_processor->ProcessLogits(
-              absl::MakeSpan(logits_vector.data(), logits_vector.size()),
-              logits_tensor_type.Layout().Dimensions()));
-        }
-        // Write the processed logits back to the tensor buffer.
-        output_logits.Write(
-            absl::MakeConstSpan(logits_vector.data(), logits_vector.size()));
-      } else if (logits_tensor_type.ElementType() ==
-                 litert::ElementType::Float16) {
-        // Copy the logits from the tensor buffer to a vector.
-        LITERT_ASSIGN_OR_RETURN(
-            auto logits_vector,
-            CopyFromTensorBuffer<tflite::half>(output_logits));
-
-        // Process the logits using the logits processor.
-        for (LogitsProcessor* logits_processor :
-             decode_params.GetLogitsProcessorList()) {
-          ABSL_RETURN_IF_ERROR(logits_processor->ProcessLogits(
-              absl::MakeSpan(logits_vector.data(), logits_vector.size()),
-              logits_tensor_type.Layout().Dimensions()));
-        }
-        // Write the processed logits back to the tensor buffer.
-        output_logits.Write(
-            absl::MakeConstSpan(logits_vector.data(), logits_vector.size()));
-      } else {
-        return absl::InvalidArgumentError(
-            "Output logits are not in float32 or float16 type.");
-      }
-    }
+    // Process logits based on the current constraint state.
+    ABSL_RETURN_IF_ERROR(constrained_decoder->ProcessLogits(output_logits));
   }
 
   ++llm_context_->runtime_state().current_step;

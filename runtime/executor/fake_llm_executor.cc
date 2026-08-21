@@ -31,7 +31,7 @@
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
-#include "runtime/components/constrained_decoding/logits_processor.h"
+#include "runtime/components/constrained_decoding/constrained_decoder.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/llm_executor_settings.h"
@@ -199,10 +199,9 @@ absl::StatusOr<std::vector<std::vector<int>>> FakeLlmExecutor::Decode(
         decode_times_));
   }
   std::vector<std::vector<int>> output_tokens;
-  if (!decode_params.GetLogitsProcessorList().empty()) {
-    // If the logits processor list is not empty, we will decode logits and
-    // apply the logits processor to the output logits.
-
+  if (ConstrainedDecoder* constrained_decoder =
+          decode_params.GetConstrainedDecoder();
+      constrained_decoder != nullptr) {
     // Get the last token ids from the last prefill or decode call.
     LITERT_ASSIGN_OR_RETURN(auto last_token_ids,
                             CreateTensorBuffer<int>({batch_size_, 1}));
@@ -218,11 +217,8 @@ absl::StatusOr<std::vector<std::vector<int>>> FakeLlmExecutor::Decode(
           last_token_ids_span[i] = last_decode_tokens[i];
         }
       }
-      // Update the logits processor state with the last token ids.
-      for (LogitsProcessor* logits_processor :
-           decode_params.GetLogitsProcessorList()) {
-        ABSL_RETURN_IF_ERROR(logits_processor->UpdateState(last_token_ids));
-      }
+      // Update the constraint state with the last token ids.
+      ABSL_RETURN_IF_ERROR(constrained_decoder->UpdateState(last_token_ids));
     }
 
     LITERT_ASSIGN_OR_RETURN(
@@ -230,11 +226,8 @@ absl::StatusOr<std::vector<std::vector<int>>> FakeLlmExecutor::Decode(
         CreateTensorBuffer<float>({batch_size_, 1, vocab_size_}));
     DecodeIdsToLogits(decode_tokens_set_[decode_times_], vocab_size_,
                       output_logits, decode_logits_options_);
-    // Apply the logits processor to the output logits.
-    for (LogitsProcessor* logits_processor :
-         decode_params.GetLogitsProcessorList()) {
-      ABSL_RETURN_IF_ERROR(logits_processor->ProcessLogits(output_logits));
-    }
+    // Apply the constraint to the output logits.
+    ABSL_RETURN_IF_ERROR(constrained_decoder->ProcessLogits(output_logits));
     output_tokens = DecodeLogitsToIds(batch_size_, vocab_size_, output_logits,
                                       decode_tokens_set_);
   } else {

@@ -31,11 +31,8 @@
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_layout.h"  // from @litert
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
-#include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/constrained_decoding/constrained_decoder.h"
 #include "runtime/components/constrained_decoding/fake_constraint.h"
-#include "runtime/components/constrained_decoding/logits_processor.h"
-#include "runtime/components/constrained_decoding/mock_logits_processor.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
 
 namespace litert::lm {
@@ -824,52 +821,17 @@ TEST(LlmExecutorIoTypesTest, ExecutorPrefillParamsGetSet) {
   EXPECT_EQ(max_prefill_sequence_length_or.value(), 100);
 }
 
-TEST(LlmExecutorIoTypesTest, ExecutorDecodeParamsGetSetLogitsProcessorList) {
+TEST(LlmExecutorIoTypesTest, ExecutorDecodeParamsGetSetConstrainedDecoder) {
   ExecutorDecodeParams params;
-  EXPECT_EQ(params.GetLogitsProcessorList().size(), 0);
-  EXPECT_EQ(params.GetConstraintDecoder(), nullptr);
+  EXPECT_EQ(params.GetConstrainedDecoder(), nullptr);
 
-  // Test setting logits processor list to a single logits processor.
-  auto mock_logits_processor1 = std::make_unique<MockLogitsProcessor>();
-  params.SetLogitsProcessorList({mock_logits_processor1.get()});
-  EXPECT_EQ(params.GetLogitsProcessorList().size(), 1);
-  EXPECT_EQ(params.GetLogitsProcessorList()[0], mock_logits_processor1.get());
-  EXPECT_EQ(params.GetConstraintDecoder(), nullptr);
-
-  // Test setting logits processor list to multiple logits processors.
-  auto mock_logits_processor2 = std::make_unique<MockLogitsProcessor>();
-  std::vector<LogitsProcessor*> logits_processors = {
-      mock_logits_processor1.get(),
-      mock_logits_processor2.get(),
-  };
-  params.SetLogitsProcessorList(logits_processors);
-  EXPECT_EQ(params.GetLogitsProcessorList(), logits_processors);
-  EXPECT_EQ(params.GetConstraintDecoder(), nullptr);
-
-  // Test setting logits processor list to an empty list.
-  params.SetLogitsProcessorList({});
-  EXPECT_TRUE(params.GetLogitsProcessorList().empty());
-  EXPECT_EQ(params.GetConstraintDecoder(), nullptr);
-}
-
-TEST(LlmExecutorIoTypesTest, ExecutorDecodeParamsGetSetConstraintDecoder) {
-  ExecutorDecodeParams params;
-  EXPECT_EQ(params.GetLogitsProcessorList().size(), 0);
-  EXPECT_EQ(params.GetConstraintDecoder(), nullptr);
-
-  // Test setting logits processor list to a constraint decoder & a mock logits
-  // processor.
   FakeConstraint constraint({1, 2, 3}, /*vocabulary_size=*/10);
-  auto constraint_decoder =
-      std::make_unique<ConstrainedDecoder>(&constraint, /*batch_size=*/1);
-  auto mock_logits_processor = std::make_unique<MockLogitsProcessor>();
-  std::vector<LogitsProcessor*> logits_processors = {
-      mock_logits_processor.get(),
-      constraint_decoder.get(),
-  };
-  params.SetLogitsProcessorList(logits_processors);
-  EXPECT_EQ(params.GetLogitsProcessorList(), logits_processors);
-  EXPECT_EQ(params.GetConstraintDecoder(), constraint_decoder.get());
+  ConstrainedDecoder constrained_decoder(&constraint, /*batch_size=*/1);
+  params.SetConstrainedDecoder(&constrained_decoder);
+  EXPECT_EQ(params.GetConstrainedDecoder(), &constrained_decoder);
+
+  params.SetConstrainedDecoder(nullptr);
+  EXPECT_EQ(params.GetConstrainedDecoder(), nullptr);
 }
 
 TEST(LlmExecutorIoTypesTest, ExecutorVisionDataDuplicate) {

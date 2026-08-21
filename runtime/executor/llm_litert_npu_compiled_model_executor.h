@@ -35,6 +35,7 @@
 #include "litert/cc/litert_model.h"  // from @litert
 #include "litert/cc/litert_options.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "runtime/components/constrained_decoding/constrained_decoder.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/executor/llm_executor.h"
@@ -388,8 +389,8 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
   // for next prefill or decode steps.
   litert::lm::ProcessedTokens processed_tokens_;
 
-  // Tracks whether a decode step was run so we know how to update the logits
-  // processor state.
+  // Tracks whether a decode step was run so we know how to update the
+  // constraint state.
   bool ran_decode_ = false;
   int64_t kv_cache_init_value_ = 0;
   absl::Mutex execution_mutex_;

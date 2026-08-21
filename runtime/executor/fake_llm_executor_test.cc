@@ -14,7 +14,6 @@
 
 #include "runtime/executor/fake_llm_executor.h"
 
-#include <memory>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -29,7 +28,6 @@
 #include "litert/test/matchers.h"  // from @litert
 #include "runtime/components/constrained_decoding/constrained_decoder.h"
 #include "runtime/components/constrained_decoding/fake_constraint.h"
-#include "runtime/components/constrained_decoding/logits_processor.h"
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
@@ -385,13 +383,9 @@ TEST(FakeLlmExecutorTest, DecodeWithConstraint) {
   EXPECT_OK(fake_llm_executor.Prefill(inputs));
   EXPECT_EQ(fake_llm_executor.GetCurrentStep().value(), 3);
 
-  auto constrained_decoder =
-      std::make_unique<ConstrainedDecoder>(&constraint,
-                                           /*num_output_candidates=*/1);
   auto decode_params = ExecutorDecodeParams();
-  decode_params.SetLogitsProcessorList({
-      constrained_decoder.get(),
-  });
+  ConstrainedDecoder constrained_decoder(&constraint, /*batch_size=*/1);
+  decode_params.SetConstrainedDecoder(&constrained_decoder);
   // Call Decode for the 1st time. The output tokens should be the 1st decode
   // tokens: 4. (first constraint token)
   ASSERT_OK_AND_ASSIGN(auto output_tokens,

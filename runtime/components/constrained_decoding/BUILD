@@ -194,6 +194,7 @@ cc_library(
         "@litert//litert/cc:litert_layout",
         "@litert//litert/cc:litert_macros",
         "@litert//litert/cc:litert_tensor_buffer",
+        "@litert//litert/cc:litert_tensor_buffer_types",
         "//runtime/util:convert_tensor_buffer",
         "//runtime/util:litert_status_util",
         "@litert//tflite/types:half",

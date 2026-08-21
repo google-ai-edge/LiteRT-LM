@@ -15,22 +15,17 @@
 #include "runtime/executor/llm_executor_io_types.h"
 
 #include <atomic>
-#include <cstddef>
 #include <ios>
 #include <optional>
 #include <ostream>
 #include <string>
 #include <utility>
-#include <vector>
 
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
-#include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
-#include "runtime/components/constrained_decoding/constrained_decoder.h"
-#include "runtime/components/constrained_decoding/logits_processor.h"
 #include "runtime/util/logging_tensor_buffer.h"
 
 namespace litert::lm {
@@ -650,33 +645,11 @@ std::ostream& operator<<(std::ostream& os,
 }
 
 // --- ExecutorDecodeParams Implementation ---
-void ExecutorDecodeParams::SetLogitsProcessorList(
-    std::vector<LogitsProcessor*> logits_processors) {
-  logits_processors_ = std::move(logits_processors);
-}
-
-absl::Span<LogitsProcessor* const>
-ExecutorDecodeParams::GetLogitsProcessorList() const {
-  return logits_processors_;
-}
-
-ConstrainedDecoder* ExecutorDecodeParams::GetConstraintDecoder() const {
-  for (LogitsProcessor* processor : logits_processors_) {
-    if (ConstrainedDecoder* constraint_decoder =
-            processor->GetConstraintDecoder();
-        constraint_decoder != nullptr) {
-      return constraint_decoder;
-    }
-  }
-  return nullptr;
-}
-
 std::ostream& operator<<(std::ostream& os, const ExecutorDecodeParams& params) {
   os << "ExecutorDecodeParams: {\n";
-  os << kFieldIndent << "LogitsProcessor: ";
-  if (size_t num_processors = params.GetLogitsProcessorList().size();
-      num_processors > 0) {
-    os << num_processors << " processors";
+  os << kFieldIndent << "ConstrainedDecoder: ";
+  if (params.GetConstrainedDecoder() != nullptr) {
+    os << "set";
   } else {
     os << "not set";
   }

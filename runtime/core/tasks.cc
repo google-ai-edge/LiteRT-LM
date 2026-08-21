@@ -36,9 +36,6 @@
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
-#include "runtime/components/sampler.h"
-#include "runtime/components/scoring_cpu_util.h"
-#include "runtime/components/stop_token_detector.h"
 #include "runtime/components/constrained_decoding/composite_constraint.h"
 #include "runtime/components/constrained_decoding/constrained_decoder.h"
 #include "runtime/components/constrained_decoding/constraint.h"
@@ -49,6 +46,9 @@
 #include "runtime/components/constrained_decoding/suppress_tokens_config.h"
 #include "runtime/components/constrained_decoding/suppress_tokens_constraint.h"
 #include "runtime/components/constrained_decoding/thinking_budget_constraint.h"
+#include "runtime/components/sampler.h"
+#include "runtime/components/scoring_cpu_util.h"
+#include "runtime/components/stop_token_detector.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/llm_executor.h"
 #include "runtime/executor/llm_executor_io_types.h"
@@ -495,7 +495,7 @@ class DecodeOneStep {
       // Convey the cancellation token for the decode process.
       decode_params.SetCancelled(cancelled_);
       if (constrained_decoder_ != nullptr) {
-        decode_params.SetLogitsProcessorList({constrained_decoder_.get()});
+        decode_params.SetConstrainedDecoder(constrained_decoder_.get());
       }
       ABSL_ASSIGN_OR_RETURN(output_tokens, executor_.Decode(decode_params));
       if (benchmark_info_.has_value()) {

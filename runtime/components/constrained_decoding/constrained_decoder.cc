@@ -14,8 +14,6 @@
 
 #include "runtime/components/constrained_decoding/constrained_decoder.h"
 
-#include <limits>
-
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
@@ -23,6 +21,7 @@
 #include "litert/cc/litert_layout.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/status_macros.h"  //NOLINT
 #include "tflite/types/half.h"  // from @litert
@@ -32,15 +31,42 @@ namespace litert::lm {
 absl::Status ConstrainedDecoder::ProcessLogits(::litert::TensorBuffer& logits) {
   // Compute the allowed tokens bitmap for the current constraint state.
   LITERT_ASSIGN_OR_RETURN(auto logits_tensor_type, logits.TensorType());
-  if (logits_tensor_type.ElementType() == ::litert::ElementType::Float32) {
-    LITERT_ASSIGN_OR_RETURN(auto logits_span,
-                            ReferTensorBufferAsSpan<float>(logits));
-    return ProcessLogits(logits_span, logits_tensor_type.Layout().Dimensions());
-  } else if (logits_tensor_type.ElementType() ==
-             ::litert::ElementType::Float16) {
-    LITERT_ASSIGN_OR_RETURN(auto logits_span,
-                            ReferTensorBufferAsSpan<tflite::half>(logits));
-    return ProcessLogits(logits_span, logits_tensor_type.Layout().Dimensions());
+  LITERT_ASSIGN_OR_RETURN(auto buffer_type, logits.BufferType());
+
+  if (buffer_type == TensorBufferType::kHostMemory) {
+    if (logits_tensor_type.ElementType() == ElementType::Float32) {
+      LITERT_ASSIGN_OR_RETURN(auto logits_span,
+                              ReferTensorBufferAsSpan<float>(logits));
+      return ProcessLogits(logits_span,
+                           logits_tensor_type.Layout().Dimensions());
+    } else if (logits_tensor_type.ElementType() == ElementType::Float16) {
+      LITERT_ASSIGN_OR_RETURN(auto logits_span,
+                              ReferTensorBufferAsSpan<tflite::half>(logits));
+      return ProcessLogits(logits_span,
+                           logits_tensor_type.Layout().Dimensions());
+    }
+  } else {
+    // For non-host memory (e.g. GPU/OpenCL/AHWB), copy the logits to CPU and
+    // mask them, then write them back.
+    if (logits_tensor_type.ElementType() == ElementType::Float32) {
+      LITERT_ASSIGN_OR_RETURN(auto logits_vector,
+                              CopyFromTensorBuffer<float>(logits));
+      ABSL_RETURN_IF_ERROR(ProcessLogits(
+          absl::MakeSpan(logits_vector.data(), logits_vector.size()),
+          logits_tensor_type.Layout().Dimensions()));
+      LITERT_RETURN_IF_ERROR(logits.Write(
+          absl::MakeConstSpan(logits_vector.data(), logits_vector.size())));
+      return absl::OkStatus();
+    } else if (logits_tensor_type.ElementType() == ElementType::Float16) {
+      LITERT_ASSIGN_OR_RETURN(auto logits_vector,
+                              CopyFromTensorBuffer<tflite::half>(logits));
+      ABSL_RETURN_IF_ERROR(ProcessLogits(
+          absl::MakeSpan(logits_vector.data(), logits_vector.size()),
+          logits_tensor_type.Layout().Dimensions()));
+      LITERT_RETURN_IF_ERROR(logits.Write(
+          absl::MakeConstSpan(logits_vector.data(), logits_vector.size())));
+      return absl::OkStatus();
+    }
   }
   return absl::InvalidArgumentError(
       "Unsupported logits type for ConstrainedDecoder::ProcessLogits.");

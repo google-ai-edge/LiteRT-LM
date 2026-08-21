@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <optional>
@@ -51,7 +52,7 @@
 #include "litert/cc/litert_options.h"  // from @litert
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
-#include "runtime/components/constrained_decoding/logits_processor.h"
+#include "runtime/components/constrained_decoding/constrained_decoder.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/executor/litert/legacy_map_state.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
@@ -652,20 +653,15 @@ LlmLiteRtNpuCompiledModelExecutor::DecodeLogits(
       DequantizeLogits(src_buffer, output_logits, per_tensor_logits_scale_,
                        per_tensor_logits_zero_point_, false));
 
-  if (!decode_params.GetLogitsProcessorList().empty()) {
+  if (ConstrainedDecoder* constrained_decoder =
+          decode_params.GetConstrainedDecoder();
+      constrained_decoder != nullptr) {
     std::vector<int> current_token_ids = {token->id()};
     if (last_run_is_decode) {
-      for (LogitsProcessor* logits_processor :
-           decode_params.GetLogitsProcessorList()) {
-        LITERT_RETURN_IF_ERROR(
-            logits_processor->UpdateState(absl::MakeSpan(current_token_ids)));
-      }
+      LITERT_RETURN_IF_ERROR(
+          constrained_decoder->UpdateState(absl::MakeSpan(current_token_ids)));
     }
-
-    for (LogitsProcessor* logits_processor :
-         decode_params.GetLogitsProcessorList()) {
-      LITERT_RETURN_IF_ERROR(logits_processor->ProcessLogits(output_logits));
-    }
+    LITERT_RETURN_IF_ERROR(constrained_decoder->ProcessLogits(output_logits));
   }
 
   current_step_++;
@@ -679,9 +675,7 @@ LlmLiteRtNpuCompiledModelExecutor::DecodeNonSpeculative(
     const ExecutorDecodeParams& decode_params, absl::Time start_time) {
   int max_index = kInvalidTokenId;
 
-  if (!decode_params.GetLogitsProcessorList().empty()) {
-    // If logits processors are present, run DecodeLogits which dequantizes
-    // and applies the processors.
+  if (decode_params.GetConstrainedDecoder() != nullptr) {
     LITERT_ASSIGN_OR_RETURN(auto masked_logits,
                             DecodeLogits(ExecutorInputs(), decode_params));
     auto start_sample = absl::Now();
@@ -807,10 +801,10 @@ LlmLiteRtNpuCompiledModelExecutor::Decode(
     return PopPendingAcceptedToken(start);
   }
 
-  // Early return for standard non-speculative decode or when logits processors
-  // are present.
+  // Early return for standard non-speculative decode or when constrained
+  // decoding is requested.
   if (speculative_decoding_type_ != SpeculativeDecodingType::kMTP ||
-      !decode_params.GetLogitsProcessorList().empty()) {
+      decode_params.GetConstrainedDecoder() != nullptr) {
     return DecodeNonSpeculative(decode_params, start);
   }
 
