@@ -54,6 +54,7 @@
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
 #include "runtime/components/constrained_decoding/constrained_decoder.h"
+#include "runtime/components/constrained_decoding/constraint.h"
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/components/sampler_factory.h"
@@ -1071,6 +1072,12 @@ LlmLiteRtCompiledModelExecutorBase::Decode(
     StateInterface* active_state = state_.get();
     RET_CHECK(active_state != nullptr);
 
+    ConstrainedDecoder* constrained_decoder =
+        decode_params.GetConstrainedDecoder();
+    Constraint* constraint = constrained_decoder != nullptr
+                                 ? constrained_decoder->GetConstraint()
+                                 : nullptr;
+
     bool last_run_is_decode = llm_context_->runtime_state().ran_decode;
     if (last_run_is_decode) {
       ABSL_ASSIGN_OR_RETURN(auto step_and_token,
@@ -1078,11 +1085,11 @@ LlmLiteRtCompiledModelExecutorBase::Decode(
       ABSL_RETURN_IF_ERROR(
           ConsumePendingOrAddProcessedToken(step_and_token.token));
       // Output: [Batch, drafted and verified tokens]
-      LITERT_ASSIGN_OR_RETURN(
-          output_tokens_vector,
-          mtp_drafter_->Draft(step_and_token.step,
-                              step_and_token.token[0]->id(),
-                              /*activations=*/std::nullopt, *active_state));
+      LITERT_ASSIGN_OR_RETURN(output_tokens_vector,
+                              mtp_drafter_->Draft(step_and_token.step,
+                                                  step_and_token.token[0]->id(),
+                                                  /*activations=*/std::nullopt,
+                                                  *active_state, constraint));
       RET_CHECK_EQ(output_tokens_vector.size(), 1);
       llm_context_->runtime_state().current_step +=
           output_tokens_vector[0].size();
@@ -1116,7 +1123,8 @@ LlmLiteRtCompiledModelExecutorBase::Decode(
       LITERT_ASSIGN_OR_RETURN(
           output_tokens_vector,
           mtp_drafter_->Draft(llm_context_->runtime_state().current_step - 1,
-                              token_id, std::move(activations), *active_state));
+                              token_id, std::move(activations), *active_state,
+                              constraint));
       llm_context_->runtime_state().current_step +=
           output_tokens_vector[0].size();
       output_tokens_vector[0].insert(output_tokens_vector[0].begin(), token_id);

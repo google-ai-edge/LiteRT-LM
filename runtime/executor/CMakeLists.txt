@@ -707,6 +707,8 @@ target_link_libraries(runtime_executor_llm_litert_mtp_drafter
     LiteRTLM::Runtime::Components::ModelResourcesInterface
     LiteRTLM::Runtime::Components::SamplerInterface
     LiteRTLM::Runtime::Components::SamplerFactory
+    LiteRTLM::Runtime::Components::ConstrainedDecoding::ConstraintInterface
+    LiteRTLM::Runtime::Components::ConstrainedDecoding::LogitMask
     LiteRTLM::Runtime::Components::EmbeddingLookup::Manager
     LiteRTLM::Runtime::Util::ConvertTensorBuffer
     LITERTLM_DEPS

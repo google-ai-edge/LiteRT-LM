@@ -96,9 +96,6 @@ cc_library(
     name = "no_repeat_ngram_config",
     hdrs = ["no_repeat_ngram_config.h"],
     visibility = ["//visibility:public"],
-    deps = [
-        "@com_google_absl//absl/algorithm:container",
-    ],
 )
 
 cc_test(
@@ -114,9 +111,6 @@ cc_library(
     name = "repetition_penalty_config",
     hdrs = ["repetition_penalty_config.h"],
     visibility = ["//visibility:public"],
-    deps = [
-        "@com_google_absl//absl/algorithm:container",
-    ],
 )
 
 cc_test(
@@ -132,10 +126,7 @@ cc_library(
     name = "suppress_tokens_config",
     hdrs = ["suppress_tokens_config.h"],
     visibility = ["//visibility:public"],
-    deps = [
-        "@com_google_absl//absl/container:flat_hash_set",
-        "@com_google_absl//absl/types:span",
-    ],
+    deps = ["@com_google_absl//absl/container:flat_hash_set"],
 )
 
 cc_test(
@@ -156,7 +147,6 @@ cc_library(
     ],
     deps = [
         ":constraint",
-        ":logit_mask",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/types:span",

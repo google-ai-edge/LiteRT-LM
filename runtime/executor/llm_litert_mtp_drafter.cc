@@ -44,6 +44,9 @@
 #include "litert/cc/litert_options.h"  // from @litert
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
+#include "runtime/components/constrained_decoding/constraint.h"
+#include "runtime/components/constrained_decoding/logit_mask.h"
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/components/sampler.h"
@@ -56,6 +59,7 @@
 #include "runtime/executor/state_interface.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/status_macros.h"
+#include "tflite/types/half.h"  // from @litert
 
 namespace litert::lm {
 
@@ -196,6 +200,93 @@ absl::Status UpdateCompilationOptions(
   }
 
   return absl::OkStatus();
+}
+
+template <typename T>
+absl::Status ApplyMaskToLogitsTyped(TensorBuffer& logits_buffer,
+                                    TensorBufferType buffer_type,
+                                    const LogitMask& mask, int vocab_size) {
+  if (buffer_type == TensorBufferType::kHostMemory) {
+    LITERT_ASSIGN_OR_RETURN(auto span,
+                            ReferTensorBufferAsSpan<T>(logits_buffer));
+    RET_CHECK_GE(static_cast<int>(span.size()), vocab_size);
+    return mask.Apply(span.subspan(0, vocab_size));
+  } else {
+    LITERT_ASSIGN_OR_RETURN(auto vec, CopyFromTensorBuffer<T>(logits_buffer));
+    RET_CHECK_GE(static_cast<int>(vec.size()), vocab_size);
+    ABSL_RETURN_IF_ERROR(
+        mask.Apply(absl::MakeSpan(vec).subspan(0, vocab_size)));
+    LITERT_RETURN_IF_ERROR(logits_buffer.Write(absl::MakeConstSpan(vec)));
+    return absl::OkStatus();
+  }
+}
+
+absl::Status ApplyMaskToLogits(TensorBuffer& logits_buffer,
+                               const LogitMask* mask, int vocab_size) {
+  if (mask == nullptr) {
+    return absl::OkStatus();
+  }
+  LITERT_ASSIGN_OR_RETURN(auto logits_type, logits_buffer.TensorType());
+  LITERT_ASSIGN_OR_RETURN(auto buffer_type, logits_buffer.BufferType());
+
+  if (logits_type.ElementType() == ElementType::Float32) {
+    return ApplyMaskToLogitsTyped<float>(logits_buffer, buffer_type, *mask,
+                                         vocab_size);
+  } else if (logits_type.ElementType() == ElementType::Float16) {
+    return ApplyMaskToLogitsTyped<tflite::half>(logits_buffer, buffer_type,
+                                                *mask, vocab_size);
+  }
+  return absl::InvalidArgumentError("Unsupported logits element type.");
+}
+
+template <typename T>
+absl::Status ApplyMasksToLogitsSequenceTyped(
+    TensorBuffer& logits_buffer, TensorBufferType buffer_type,
+    absl::Span<const std::unique_ptr<LogitMask>> masks, int vocab_size) {
+  if (buffer_type == TensorBufferType::kHostMemory) {
+    LITERT_ASSIGN_OR_RETURN(auto span,
+                            ReferTensorBufferAsSpan<T>(logits_buffer));
+    RET_CHECK_GE(static_cast<int>(span.size()),
+                 static_cast<int>(masks.size()) * vocab_size);
+    for (size_t i = 0; i < masks.size(); ++i) {
+      if (masks[i] != nullptr) {
+        ABSL_RETURN_IF_ERROR(
+            masks[i]->Apply(span.subspan(i * vocab_size, vocab_size)));
+      }
+    }
+    return absl::OkStatus();
+  } else {
+    LITERT_ASSIGN_OR_RETURN(auto vec, CopyFromTensorBuffer<T>(logits_buffer));
+    RET_CHECK_GE(static_cast<int>(vec.size()),
+                 static_cast<int>(masks.size()) * vocab_size);
+    for (size_t i = 0; i < masks.size(); ++i) {
+      if (masks[i] != nullptr) {
+        ABSL_RETURN_IF_ERROR(masks[i]->Apply(
+            absl::MakeSpan(vec).subspan(i * vocab_size, vocab_size)));
+      }
+    }
+    LITERT_RETURN_IF_ERROR(logits_buffer.Write(absl::MakeConstSpan(vec)));
+    return absl::OkStatus();
+  }
+}
+
+absl::Status ApplyMasksToLogitsSequence(
+    TensorBuffer& logits_buffer,
+    absl::Span<const std::unique_ptr<LogitMask>> masks, int vocab_size) {
+  if (masks.empty()) {
+    return absl::OkStatus();
+  }
+  LITERT_ASSIGN_OR_RETURN(auto logits_type, logits_buffer.TensorType());
+  LITERT_ASSIGN_OR_RETURN(auto buffer_type, logits_buffer.BufferType());
+
+  if (logits_type.ElementType() == ElementType::Float32) {
+    return ApplyMasksToLogitsSequenceTyped<float>(logits_buffer, buffer_type,
+                                                  masks, vocab_size);
+  } else if (logits_type.ElementType() == ElementType::Float16) {
+    return ApplyMasksToLogitsSequenceTyped<tflite::half>(
+        logits_buffer, buffer_type, masks, vocab_size);
+  }
+  return absl::InvalidArgumentError("Unsupported logits element type.");
 }
 
 }  // namespace
@@ -396,7 +487,7 @@ LlmLiteRtMtpDrafter::Create(
       ple_manager, std::move(drafter_sampler), std::move(verifier_sampler),
       std::move(kv_cache_input_names), std::move(mtp_drafter_input_buffers),
       std::move(mtp_drafter_output_buffers), std::move(verifier_input_buffers),
-      std::move(verifier_output_buffers), num_draft_steps));
+      std::move(verifier_output_buffers), num_draft_steps, vocab_size));
 
   drafter->drafter_id_tensor_ = std::move(drafter_id_tensor);
   drafter->verifier_id_tensor_ = std::move(verifier_id_tensor);
@@ -442,14 +533,19 @@ absl::Status LlmLiteRtMtpDrafter::PrepareDrafterOutputBuffers() {
   return absl::OkStatus();
 }
 
-absl::StatusOr<std::vector<int>> LlmLiteRtMtpDrafter::RunDraftingLoop(
-    int token_id, std::optional<TensorBuffer>& activations) {
-  std::vector<int> drafted_tokens;
-  drafted_tokens.reserve(num_draft_steps_);
+absl::StatusOr<LlmLiteRtMtpDrafter::DraftingResult>
+LlmLiteRtMtpDrafter::RunDraftingLoop(
+    int token_id, std::optional<TensorBuffer>& activations,
+    const Constraint* constraint,
+    const Constraint::State* verified_constraint_state) {
+  DraftingResult result;
+  result.drafted_tokens.reserve(num_draft_steps_);
+  result.draft_constraint_states.reserve(num_draft_steps_);
   int last_drafted_token_id = token_id;
   std::vector<float> embedding_vector;
   TensorBuffer* activations_ptr =
       activations.has_value() ? &activations.value() : nullptr;
+  const Constraint::State* current_draft_state = verified_constraint_state;
   for (int i = 0; i < num_draft_steps_; ++i) {
     LITERT_RETURN_IF_ERROR(PrepareDrafterOutputBuffers());
     // Concat and lookup embeddings with previous activations.
@@ -475,18 +571,37 @@ absl::StatusOr<std::vector<int>> LlmLiteRtMtpDrafter::RunDraftingLoop(
         drafter_signature_.Key(), active_drafter_input_buffers_,
         active_drafter_output_buffers_, async));
 
+    if (constraint != nullptr && current_draft_state != nullptr) {
+      ABSL_ASSIGN_OR_RETURN(auto mask,
+                            constraint->ComputeMask(*current_draft_state));
+      ABSL_RETURN_IF_ERROR(ApplyMaskToLogits(
+          active_drafter_output_buffers_["logits"], mask.get(), vocab_size_));
+    }
+
     ABSL_RETURN_IF_ERROR(drafter_sampler_->SampleToIdAndScoreBuffer(
         active_drafter_output_buffers_["logits"], drafter_id_tensor_,
         /*scores_tensor=*/nullptr));
     LITERT_ASSIGN_OR_RETURN(auto id_vector,
                             CopyFromTensorBuffer<int32_t>(drafter_id_tensor_));
     RET_CHECK_EQ(id_vector.size(), 1);
-    drafted_tokens.push_back(id_vector[0]);
+    int sampled_draft_id = id_vector[0];
+    result.drafted_tokens.push_back(sampled_draft_id);
 
-    last_drafted_token_id = id_vector[0];
+    if (constraint != nullptr && current_draft_state != nullptr) {
+      ABSL_ASSIGN_OR_RETURN(
+          auto next_state,
+          constraint->ComputeNext(*current_draft_state, sampled_draft_id));
+      if (constraint->IsEnded(*next_state)) {
+        next_state = constraint->Start();
+      }
+      result.draft_constraint_states.push_back(std::move(next_state));
+      current_draft_state = result.draft_constraint_states.back().get();
+    }
+
+    last_drafted_token_id = sampled_draft_id;
     activations_ptr = &active_drafter_output_buffers_["projected_activations"];
   }
-  return drafted_tokens;
+  return result;
 }
 
 absl::Status LlmLiteRtMtpDrafter::PrepareVerifierInputBuffers(
@@ -555,11 +670,38 @@ absl::Status LlmLiteRtMtpDrafter::PrepareVerifierOutputBuffers(
   return absl::OkStatus();
 }
 
-absl::StatusOr<std::vector<int>> LlmLiteRtMtpDrafter::RunVerification() {
+absl::StatusOr<std::vector<int>> LlmLiteRtMtpDrafter::RunVerification(
+    const std::vector<std::unique_ptr<Constraint::State>>&
+        draft_constraint_states) {
   bool async = true;
   LITERT_RETURN_IF_ERROR(base_model_.RunAsync(
       verify_signature_.Key(), active_verifier_input_buffers_,
       active_verifier_output_buffers_, async));
+
+  // Apply constraint masks to verifier logits for all positions in a single
+  // pass.
+  if (constraint_ != nullptr) {
+    std::vector<std::unique_ptr<LogitMask>> masks;
+    masks.reserve(draft_constraint_states.size() + 1);
+    if (constraint_state_ != nullptr) {
+      ABSL_ASSIGN_OR_RETURN(auto mask,
+                            constraint_->ComputeMask(*constraint_state_));
+      masks.push_back(std::move(mask));
+    } else {
+      masks.push_back(nullptr);
+    }
+    for (const auto& draft_state : draft_constraint_states) {
+      if (draft_state != nullptr) {
+        ABSL_ASSIGN_OR_RETURN(auto mask,
+                              constraint_->ComputeMask(*draft_state));
+        masks.push_back(std::move(mask));
+      } else {
+        masks.push_back(nullptr);
+      }
+    }
+    ABSL_RETURN_IF_ERROR(ApplyMasksToLogitsSequence(
+        active_verifier_output_buffers_.at("logits"), masks, vocab_size_));
+  }
 
   ABSL_RETURN_IF_ERROR(verifier_sampler_->SampleToIdAndScoreBuffer(
       active_verifier_output_buffers_.at("logits"), verifier_id_tensor_,
@@ -573,7 +715,7 @@ absl::StatusOr<std::vector<int>> LlmLiteRtMtpDrafter::RunVerification() {
 
 absl::StatusOr<std::vector<std::vector<int>>> LlmLiteRtMtpDrafter::Draft(
     int position, int token_id, std::optional<TensorBuffer> activations,
-    StateInterface& state) {
+    StateInterface& state, const Constraint* constraint) {
   auto* litert_state = dynamic_cast<LitertState*>(&state);
   RET_CHECK(litert_state != nullptr);
   LITERT_ASSIGN_OR_RETURN(
@@ -583,47 +725,83 @@ absl::StatusOr<std::vector<std::vector<int>>> LlmLiteRtMtpDrafter::Draft(
   ABSL_RETURN_IF_ERROR(
       PrepareDrafterInputBuffers(position - 1, state_buffers.output_buffers));
 
-  ABSL_ASSIGN_OR_RETURN(std::vector<int> drafted_tokens,
-                        RunDraftingLoop(token_id, activations));
+  // Initialize or reset constraint state when constraint changes or on first
+  // step of decode turn.
+  if (constraint == nullptr) {
+    constraint_ = nullptr;
+    constraint_state_.reset();
+  } else if (constraint != constraint_ || activations.has_value() ||
+             constraint_state_ == nullptr) {
+    constraint_ = constraint;
+    constraint_state_ = constraint_->Start();
+    // Compute mask on the initial state so the underlying grammar engine (e.g.
+    // llguidance) initializes parser rows and lexer state before committing the
+    // first token.
+    ABSL_RETURN_IF_ERROR(constraint_->ComputeMask(*constraint_state_).status());
+    ABSL_ASSIGN_OR_RETURN(constraint_state_, constraint_->ComputeNext(
+                                                 *constraint_state_, token_id));
+    if (constraint_->IsEnded(*constraint_state_)) {
+      constraint_state_ = constraint_->Start();
+    }
+  }
+
+  ABSL_ASSIGN_OR_RETURN(DraftingResult drafting_result,
+                        RunDraftingLoop(token_id, activations, constraint_,
+                                        constraint_state_.get()));
 
   ABSL_RETURN_IF_ERROR(PrepareVerifierInputBuffers(
-      position, token_id, drafted_tokens, state_buffers.input_buffers));
+      position, token_id, drafting_result.drafted_tokens,
+      state_buffers.input_buffers));
   ABSL_RETURN_IF_ERROR(
       PrepareVerifierOutputBuffers(state_buffers.output_buffers));
 
-  ABSL_ASSIGN_OR_RETURN(std::vector<int> verifier_id_vector, RunVerification());
+  ABSL_ASSIGN_OR_RETURN(
+      std::vector<int> verifier_id_vector,
+      RunVerification(drafting_result.draft_constraint_states));
 
   int num_correct_tokens = 0;
-  int bonus_token = -1;
-  for (int i = 0; i < num_draft_steps_; ++i) {
-    last_verified_token_id_idx_ = i;
-    if (verifier_id_vector[i] != drafted_tokens[i]) {
-      bonus_token = verifier_id_vector[i];
-      break;
-    }
-    num_correct_tokens++;
+  while (num_correct_tokens < num_draft_steps_ &&
+         verifier_id_vector[num_correct_tokens] ==
+             drafting_result.drafted_tokens[num_correct_tokens]) {
+    ++num_correct_tokens;
   }
-  if (bonus_token == -1) {
-    last_verified_token_id_idx_ = num_draft_steps_;
-    bonus_token = verifier_id_vector[num_draft_steps_];
+  int bonus_token = verifier_id_vector[num_correct_tokens];
+  last_verified_token_id_idx_ = num_correct_tokens;
+
+  // Update verified constraint state according to verified + bonus tokens.
+  if (constraint_ != nullptr) {
+    if (num_correct_tokens > 0 &&
+        num_correct_tokens <=
+            static_cast<int>(drafting_result.draft_constraint_states.size())) {
+      constraint_state_ = std::move(
+          drafting_result.draft_constraint_states[num_correct_tokens - 1]);
+    }
+    if (bonus_token >= 0 && constraint_state_ != nullptr) {
+      ABSL_ASSIGN_OR_RETURN(
+          constraint_state_,
+          constraint_->ComputeNext(*constraint_state_, bonus_token));
+      if (constraint_->IsEnded(*constraint_state_)) {
+        constraint_state_ = constraint_->Start();
+      }
+    }
   }
 
   MTP_DRAFTER_LOG() << "drafted_tokens: "
-                    << absl::StrJoin(drafted_tokens, ", ");
+                    << absl::StrJoin(drafting_result.drafted_tokens, ", ");
   MTP_DRAFTER_LOG() << "bonus_token: " << bonus_token;
   MTP_DRAFTER_LOG() << "num_correct_tokens: " << num_correct_tokens;
 
   // The first token comes from the decode output and is always correct.
-  drafted_tokens.resize(num_correct_tokens);
-  drafted_tokens.push_back(bonus_token);
+  std::vector<int> output_tokens = std::move(drafting_result.drafted_tokens);
+  output_tokens.resize(num_correct_tokens);
+  output_tokens.push_back(bonus_token);
   num_drafted_tokens_ += num_draft_steps_;
   num_verified_tokens_ += num_correct_tokens;
 
-  MTP_DRAFTER_LOG() << "drafter output: "
-                    << absl::StrJoin(drafted_tokens, ", ");
+  MTP_DRAFTER_LOG() << "drafter output: " << absl::StrJoin(output_tokens, ", ");
   MTP_DRAFTER_LOG() << "--------------------------------------------------";
 
-  return std::vector<std::vector<int>>{std::move(drafted_tokens)};
+  return std::vector<std::vector<int>>{std::move(output_tokens)};
 }
 
 }  // namespace litert::lm

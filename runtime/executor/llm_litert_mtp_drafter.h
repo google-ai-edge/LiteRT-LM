@@ -31,6 +31,7 @@
 #include "litert/cc/litert_model_types.h"  // from @litert
 #include "litert/cc/litert_options.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "runtime/components/constrained_decoding/constraint.h"
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/components/sampler.h"
@@ -61,17 +62,15 @@ class LlmLiteRtMtpDrafter {
   //   token_id: The id of the last input token.
   //   activations: Activations corresponding to the token_id. This is only
   //    required for the first invocation of the drafter.
-  //   input_kv_cache_buffers:  The key/value cache buffers for the base model,
-  //    used to draft and start the verification process.
-  //   output_kv_cache_buffers: The key/value cache buffers for the base model,
-  //    used to store the key/value cache for the drafted tokens through
+  //   state: The model's runtime KV cache state.
+  //   constraint: Optional decoding constraint to apply during drafting and
   //    verification.
   // Outputs:
   //   The drafted tokens from the MTP drafter model with the shape:
   //   [batch_size, num_tokens].
   absl::StatusOr<std::vector<std::vector<int>>> Draft(
       int position, int token_id, std::optional<TensorBuffer> activations,
-      StateInterface& state);
+      StateInterface& state, const Constraint* constraint = nullptr);
 
  private:
   LlmLiteRtMtpDrafter(
@@ -90,7 +89,7 @@ class LlmLiteRtMtpDrafter {
           verifier_input_buffers,
       absl::flat_hash_map<absl::string_view, TensorBuffer>
           verifier_output_buffers,
-      int num_draft_steps)
+      int num_draft_steps, int vocab_size)
       : mtp_drafter_model_(std::move(mtp_drafter_model)),
         drafter_signature_(std::move(drafter_signature)),
         base_model_(base_model),
@@ -105,7 +104,8 @@ class LlmLiteRtMtpDrafter {
         drafter_output_buffers_(std::move(drafter_output_buffers)),
         verifier_input_buffers_(std::move(verifier_input_buffers)),
         verifier_output_buffers_(std::move(verifier_output_buffers)),
-        num_draft_steps_(num_draft_steps) {
+        num_draft_steps_(num_draft_steps),
+        vocab_size_(vocab_size) {
     for (const auto& [name, buffer] : drafter_input_buffers_) {
       auto expected = buffer.Duplicate();
       active_drafter_input_buffers_[name] = std::move(expected.Value());
@@ -124,14 +124,21 @@ class LlmLiteRtMtpDrafter {
     }
   }
 
+  struct DraftingResult {
+    std::vector<int> drafted_tokens;
+    std::vector<std::unique_ptr<Constraint::State>> draft_constraint_states;
+  };
+
   absl::Status PrepareDrafterInputBuffers(
       int position, absl::flat_hash_map<absl::string_view, TensorBuffer>&
                         output_kv_cache_buffers);
 
   absl::Status PrepareDrafterOutputBuffers();
 
-  absl::StatusOr<std::vector<int>> RunDraftingLoop(
-      int token_id, std::optional<TensorBuffer>& activations);
+  absl::StatusOr<DraftingResult> RunDraftingLoop(
+      int token_id, std::optional<TensorBuffer>& activations,
+      const Constraint* constraint,
+      const Constraint::State* verified_constraint_state);
 
   absl::Status PrepareVerifierInputBuffers(
       int position, int token_id, const std::vector<int>& drafted_tokens,
@@ -142,7 +149,9 @@ class LlmLiteRtMtpDrafter {
       absl::flat_hash_map<absl::string_view, TensorBuffer>&
           output_kv_cache_buffers);
 
-  absl::StatusOr<std::vector<int>> RunVerification();
+  absl::StatusOr<std::vector<int>> RunVerification(
+      const std::vector<std::unique_ptr<Constraint::State>>&
+          draft_constraint_states);
 
   // The MTP drafter model.
   CompiledModel mtp_drafter_model_;
@@ -211,6 +220,13 @@ class LlmLiteRtMtpDrafter {
   // The number of tokens verified by the base model (i.e., accepted) - does not
   // include the bonus token.
   int num_verified_tokens_ = 0;
+
+  // The vocabulary size for logits masking.
+  int vocab_size_ = 0;
+
+  // Active constraint and verified constraint state.
+  const Constraint* constraint_ = nullptr;
+  std::unique_ptr<Constraint::State> constraint_state_;
 };
 
 }  // namespace litert::lm
