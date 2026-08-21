@@ -250,59 +250,12 @@ template <typename TargetType, typename SourceType>
   return std::move(*tensor_buffer);
 }
 
+// References (no copy) the internal buffer of a ::litert::TensorBuffer when
+// it is in the host memory. It's preferable to CopyFromTensorBuffer() whenever
+// possible since it's more efficient.
 template <typename T>
-class ScopedTensorBufferSpan {
- public:
-  ScopedTensorBufferSpan(absl::Span<T> span,
-                         ::litert::TensorBufferScopedLock lock)
-      : span_(span), lock_(std::move(lock)) {}
-
-  ScopedTensorBufferSpan(const ScopedTensorBufferSpan&) = delete;
-  ScopedTensorBufferSpan& operator=(const ScopedTensorBufferSpan&) = delete;
-
-  ScopedTensorBufferSpan(ScopedTensorBufferSpan&&) = default;
-  ScopedTensorBufferSpan& operator=(ScopedTensorBufferSpan&&) = default;
-
-  T* data() const { return span_.data(); }
-  size_t size() const { return span_.size(); }
-  bool empty() const { return span_.empty(); }
-  T& operator[](size_t i) const { return span_[i]; }
-  T& at(size_t i) const { return span_.at(i); }
-  T& front() const { return span_.front(); }
-  T& back() const { return span_.back(); }
-
-  auto begin() const { return span_.begin(); }
-  auto end() const { return span_.end(); }
-  auto rbegin() const { return span_.rbegin(); }
-  auto rend() const { return span_.rend(); }
-
-  absl::Span<T> subspan(size_t pos = 0,
-                        size_t len = absl::Span<T>::npos) const {
-    return span_.subspan(pos, len);
-  }
-  absl::Span<T> first(size_t len) const { return span_.first(len); }
-  absl::Span<T> last(size_t len) const { return span_.last(len); }
-
-  ScopedTensorBufferSpan& operator=(absl::Span<T> span) {
-    span_ = span;
-    return *this;
-  }
-
-  // NOLINTNEXTLINE(google-explicit-constructor)
-  operator absl::Span<T>() const { return span_; }
-  // NOLINTNEXTLINE(google-explicit-constructor)
-  operator absl::Span<const T>() const { return span_; }
-
- private:
-  absl::Span<T> span_;
-  ::litert::TensorBufferScopedLock lock_;
-};
-
-namespace internal {
-template <typename T>
-::litert::Expected<ScopedTensorBufferSpan<T>> GetTensorBufferAsSpan(
-    const ::litert::TensorBuffer& tensor_buffer,
-    TensorBuffer::LockMode lock_mode) {
+::litert::Expected<absl::Span<T>> ReferTensorBufferAsSpan(
+    const ::litert::TensorBuffer& tensor_buffer) {
   if (auto buffer_type = tensor_buffer.BufferType();
       !buffer_type.HasValue() ||
       *buffer_type != ::litert::TensorBufferType::kHostMemory) {
@@ -317,35 +270,12 @@ template <typename T>
         "Element type is not compatible to the target type.");
   }
 
-  LITERT_ASSIGN_OR_RETURN(
-      auto lock_and_addr,
-      ::litert::TensorBufferScopedLock::Create(
-          *const_cast<::litert::TensorBuffer*>(&tensor_buffer), lock_mode));
+  auto lock_and_addr = ::litert::TensorBufferScopedLock::Create(
+      *const_cast<::litert::TensorBuffer*>(&tensor_buffer),
+      TensorBuffer::LockMode::kRead);
+  ABSL_DCHECK(lock_and_addr.HasValue());
   LITERT_ASSIGN_OR_RETURN(auto num_elements, type->Layout().NumElements());
-  return ScopedTensorBufferSpan<T>(
-      absl::MakeSpan(static_cast<T*>(lock_and_addr.second), num_elements),
-      std::move(lock_and_addr.first));
-}
-}  // namespace internal
-
-// References (no copy) the internal buffer of a ::litert::TensorBuffer when
-// it is in the host memory. It's preferable to CopyFromTensorBuffer() whenever
-// possible since it's more efficient.
-template <typename T>
-::litert::Expected<ScopedTensorBufferSpan<T>> ReferTensorBufferAsSpan(
-    const ::litert::TensorBuffer& tensor_buffer) {
-  return internal::GetTensorBufferAsSpan<T>(tensor_buffer,
-                                            TensorBuffer::LockMode::kRead);
-}
-
-// Similar to ReferTensorBufferAsSpan(), but acquires a read-write lock,
-// allowing modifications to the tensor buffer to be synchronized (e.g. uploaded
-// back to GPU) when the buffer is unlocked.
-template <typename T>
-::litert::Expected<ScopedTensorBufferSpan<T>> MutateTensorBufferAsSpan(
-    ::litert::TensorBuffer& tensor_buffer) {
-  return internal::GetTensorBufferAsSpan<T>(tensor_buffer,
-                                            TensorBuffer::LockMode::kReadWrite);
+  return absl::MakeSpan(static_cast<T*>(lock_and_addr->second), num_elements);
 }
 
 // TODO: b/431234598 - This copies data between GPU and CPU backends which
@@ -422,7 +352,7 @@ template <typename T>
   for (int i = 0; i < prev_dims_size; ++i) {
     for (int j = init_tokens_to_retain;
          j < target_dims_size - num_tokens_to_drop; ++j) {
-      int dst_offset =
+       int dst_offset =
           i * next_dims_size * target_dims_size + j * next_dims_size;
       int src_offset = i * next_dims_size * target_dims_size +
                        (j + num_tokens_to_drop) * next_dims_size;
