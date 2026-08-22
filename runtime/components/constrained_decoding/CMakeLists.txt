@@ -27,10 +27,6 @@ target_include_directories(runtime_components_constrained_decoding_bitmap
     ${LITERTLM_INCLUDE_PATHS}
 )
 
-target_link_libraries(runtime_components_constrained_decoding_bitmap
-  INTERFACE
-    absl::core_headers
-)
 
 # ==============================================================================
 # LogitMask Interface & Implementation
