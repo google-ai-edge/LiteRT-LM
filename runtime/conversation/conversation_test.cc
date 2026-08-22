@@ -82,7 +82,7 @@ constexpr char kGemma3TemplatePath[] =
     "litert_lm/runtime/components/testdata/google-gemma-3-1b-it.jinja";
 
 constexpr char kGemma4TemplatePath[] =
-    "litert_lm/runtime/components/testdata/google-gemma-4-multi-prefill.jinja";
+    "litert_lm/models/gemma-4/google-gemma-4-multi-prefill.jinja";
 
 constexpr char kTestImageFilePath[] =
     "litert_lm/support/preprocessor/testdata/apple.png";
