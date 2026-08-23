@@ -28,6 +28,7 @@ from .conversation import Conversation
 from .embedding_engine import EmbeddingEngine
 from .embedding_engine import EmbeddingOptions
 from .embedding_engine import EmbeddingResponse
+from .embedding_engine import InputOverflowStrategy
 from .engine import Engine
 from .interfaces import AbstractBenchmark
 from .interfaces import AbstractConversation
@@ -67,6 +68,7 @@ __all__ = (
     "EmbeddingOptions",
     "EmbeddingResponse",
     "Engine",
+    "InputOverflowStrategy",
     "LiteRtLmConstraintProviderType",
     "LogSeverity",
     "LoraConfig",

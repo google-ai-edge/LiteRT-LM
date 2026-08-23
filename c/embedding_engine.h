@@ -39,6 +39,20 @@ typedef struct LiteRtLmEmbeddingEngine LiteRtLmEmbeddingEngine;
 // Added in version 0.2.0.
 typedef struct LiteRtLmEmbeddingEngineSettings LiteRtLmEmbeddingEngineSettings;
 
+// Strategy for handling inputs longer than the maximum supported signature
+// length.
+//
+// Added in version 0.2.0.
+typedef enum {
+  // Chunks the input into sub-sequences, embeds each chunk, and returns the
+  // mean embedding across all chunks.
+  kLiteRtLmInputOverflowStrategyChunkAndAverage = 0,
+  // Truncates the input to the longest signature length.
+  kLiteRtLmInputOverflowStrategyTruncate = 1,
+  // Returns an error status if the input exceeds the longest signature length.
+  kLiteRtLmInputOverflowStrategyError = 2,
+} LiteRtLmInputOverflowStrategy;
+
 // Opaque pointer for the LiteRT LM Embedding Options.
 //
 // Added in version 0.2.0.
@@ -186,6 +200,27 @@ void litert_lm_embedding_options_set_insert_special_tokens(
 // Added in version 0.2.0.
 LITERT_LM_C_API_EXPORT
 bool litert_lm_embedding_options_get_insert_special_tokens(
+    const LiteRtLmEmbeddingOptions* options);
+
+// Sets the input overflow strategy.
+//
+// @param options The options to modify.
+// @param strategy The overflow strategy to use.
+//
+// Added in version 0.2.0.
+LITERT_LM_C_API_EXPORT
+void litert_lm_embedding_options_set_input_overflow_strategy(
+    LiteRtLmEmbeddingOptions* options, LiteRtLmInputOverflowStrategy strategy);
+
+// Gets the input overflow strategy.
+//
+// @param options The options to inspect.
+// @return The overflow strategy configured in options.
+//
+// Added in version 0.2.0.
+LITERT_LM_C_API_EXPORT
+LiteRtLmInputOverflowStrategy
+litert_lm_embedding_options_get_input_overflow_strategy(
     const LiteRtLmEmbeddingOptions* options);
 
 // Destroys a LiteRT LM Embedding Response.

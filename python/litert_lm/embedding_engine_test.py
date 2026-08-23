@@ -45,12 +45,19 @@ class EmbeddingEngineTest(parameterized.TestCase):
     opts_default = litert_lm.EmbeddingOptions()
     self.assertIsNone(opts_default.normalize)
     self.assertIsNone(opts_default.insert_special_tokens)
+    self.assertIsNone(opts_default.input_overflow_strategy)
 
     opts_custom = litert_lm.EmbeddingOptions(
-        normalize=False, insert_special_tokens=True
+        normalize=False,
+        insert_special_tokens=True,
+        input_overflow_strategy=litert_lm.InputOverflowStrategy.TRUNCATE,
     )
     self.assertFalse(opts_custom.normalize)
     self.assertTrue(opts_custom.insert_special_tokens)
+    self.assertEqual(
+        opts_custom.input_overflow_strategy,
+        litert_lm.InputOverflowStrategy.TRUNCATE,
+    )
 
   def test_compute_embedding_single(self):
     engine = litert_lm.EmbeddingEngine(
@@ -67,6 +74,22 @@ class EmbeddingEngineTest(parameterized.TestCase):
       # Verify L2 normalization
       norm = math.sqrt(sum(x * x for x in response.embedding))
       self.assertAlmostEqual(norm, 1.0, places=4)
+    finally:
+      engine.close()
+
+  def test_compute_embedding_with_overflow_strategy(self):
+    engine = litert_lm.EmbeddingEngine(
+        model_path=self.model_path, backend=litert_lm.Backend.CPU()
+    )
+    try:
+      response = engine.compute_embedding(
+          contents="'s",
+          options=litert_lm.EmbeddingOptions(
+              input_overflow_strategy=litert_lm.InputOverflowStrategy.TRUNCATE
+          ),
+      )
+      self.assertIsInstance(response, litert_lm.EmbeddingResponse)
+      self.assertNotEmpty(response.embedding)
     finally:
       engine.close()
 

@@ -34,6 +34,7 @@
 #include "runtime/engine/embedding_engine.h"
 #include "runtime/engine/embedding_engine_settings.h"
 #include "runtime/engine/io_types.h"
+#include "runtime/executor/embedding_executor_base.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "support/preprocessor/audio_preprocessor.h"
@@ -249,6 +250,24 @@ bool litert_lm_embedding_options_get_insert_special_tokens(
     return false;
   }
   return options->options.insert_special_tokens;
+}
+
+void litert_lm_embedding_options_set_input_overflow_strategy(
+    LiteRtLmEmbeddingOptions* options, LiteRtLmInputOverflowStrategy strategy) {
+  if (options) {
+    options->options.input_overflow_strategy =
+        static_cast<litert::lm::InputOverflowStrategy>(strategy);
+  }
+}
+
+LiteRtLmInputOverflowStrategy
+litert_lm_embedding_options_get_input_overflow_strategy(
+    const LiteRtLmEmbeddingOptions* options) {
+  if (!options) {
+    return kLiteRtLmInputOverflowStrategyChunkAndAverage;
+  }
+  return static_cast<LiteRtLmInputOverflowStrategy>(
+      options->options.input_overflow_strategy);
 }
 
 void litert_lm_embedding_response_delete(LiteRtLmEmbeddingResponse* response) {
