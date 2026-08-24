@@ -275,8 +275,10 @@ jobs:
 
       - name: Run pytest
         run: pytest tools/pytest/ --backend=cpu --model-path=./models/gemma4/gemma-4-E2B-it.litertlm --build-system=cmake
+
       - name: Save CCache to GCS
         uses: ./.github/workflows/actions/gcs-cache
+        continue-on-error: true
         with:
           mode: 'save'
           target-dir: '.ccache'
@@ -288,12 +290,11 @@ jobs:
           CACHE_HIT: ${{ steps.restore-ccache.outputs.cache-hit }}
 
       - name: Save Prebuild Deps Cache
-        if: github.event_name != 'pull_request'
         uses: ./.github/workflows/actions/gcs-cache
+        continue-on-error: true
         with:
           mode: 'save'
           target-dir: 'cmake/build/prebuild/build'
-          target-subdirs: 'external third_party _deps'
           bucket-url: 'gs://litert-lm-cicd/caches/linux/cmake/prebuild-deps'
           cache-key: ${{ steps.keys-prebuild-deps.outputs.key }}
           restore-key: ${{ steps.keys-prebuild-deps.outputs.restore-key }}
@@ -304,6 +305,7 @@ jobs:
       - name: Save LiteRT LM Deps Cache
         if: github.event_name != 'pull_request'
         uses: ./.github/workflows/actions/gcs-cache
+        continue-on-error: true
         with:
           mode: 'save'
           target-dir: 'cmake/build/litert_lm/build'
@@ -317,6 +319,7 @@ jobs:
 
       - name: Save LiteRT LM Sources Cache
         uses: ./.github/workflows/actions/gcs-cache
+        continue-on-error: true
         with:
           mode: 'save'
           target-dir: 'cmake/build/litert_lm/build'
