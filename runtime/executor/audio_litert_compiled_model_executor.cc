@@ -235,7 +235,8 @@ AudioLiteRtCompiledModelExecutor::AudioStaticEncoder::Initialize() {
                             options.GetGoogleTensorOptions());
     google_tensor_options.SetPerformanceMode(
         google_tensor::GoogleTensorOptions::PerformanceMode::kBurst);
-    options.SetHardwareAccelerators(litert::HwAccelerators::kNpu);
+    options.SetHardwareAccelerators(litert::HwAccelerators::kNpu |
+                                    litert::HwAccelerators::kCpu);
 #endif  // !defined(LITERT_DISABLE_NPU)
   } else {
     return absl::InvalidArgumentError(
@@ -368,7 +369,8 @@ AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::Initialize() {
                             options.GetGoogleTensorOptions());
     google_tensor_options.SetPerformanceMode(
         google_tensor::GoogleTensorOptions::PerformanceMode::kBurst);
-    options.SetHardwareAccelerators(litert::HwAccelerators::kNpu);
+    options.SetHardwareAccelerators(litert::HwAccelerators::kNpu |
+                                    litert::HwAccelerators::kCpu);
 #endif  // !defined(LITERT_DISABLE_NPU)
   } else {
     return absl::InvalidArgumentError(
@@ -572,7 +574,8 @@ absl::Status AudioLiteRtCompiledModelExecutor::AudioAdapter::Initialize() {
                             options.GetGoogleTensorOptions());
     google_tensor_options.SetPerformanceMode(
         google_tensor::GoogleTensorOptions::PerformanceMode::kBurst);
-    options.SetHardwareAccelerators(litert::HwAccelerators::kNpu);
+    options.SetHardwareAccelerators(litert::HwAccelerators::kNpu |
+                                    litert::HwAccelerators::kCpu);
 #endif  // !defined(LITERT_DISABLE_NPU)
   } else {
     return absl::InvalidArgumentError(
