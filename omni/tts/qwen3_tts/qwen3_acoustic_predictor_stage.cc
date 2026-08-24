@@ -194,6 +194,26 @@ Qwen3AcousticPredictorStage::Create(
       stage->mtp_model_->CreateOutputBuffer(stage->mtp_signature_name_,
                                             stage->mtp_logits_output_name_));
 
+  // Derive MTP cache length from the exported model's mask tensor.
+  LITERT_ASSIGN_OR_RETURN(
+      auto mtp_mask_type,
+      stage->mtp_mask_buf_.TensorType());
+  
+  auto mtp_mask_dims = mtp_mask_type.Layout().Dimensions();
+  
+  if (mtp_mask_dims.empty()) {
+    return absl::InvalidArgumentError(
+        "Invalid MTP attention mask dimensions.");
+  }
+  
+  // Expected: [1, 1, 1, cache_len]
+  if (mtp_mask_dims.size() < 1) {
+    return absl::InvalidArgumentError(
+        "MTP attention mask has no dimensions.");
+  }
+  
+  stage->mtp_cache_len_ = mtp_mask_dims.back();
+
   for (const auto& k_name : stage->mtp_k_input_names_) {
     LITERT_ASSIGN_OR_RETURN(auto buf0, stage->mtp_model_->CreateInputBuffer(
                                            stage->mtp_signature_name_, k_name));
