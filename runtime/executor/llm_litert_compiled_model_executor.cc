@@ -553,20 +553,25 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::PrefillInternal(
                                            TensorBuffer::LockMode::kWrite));
         int32_t* prefill_input_ptr =
             static_cast<int32_t*>(prefill_input_lock_and_addr.second);
-        if (!has_pending_input_token) {
-          LITERT_ASSIGN_OR_RETURN(auto prefill_input_size,
-                                  prefill_input_buffer.PackedSize());
-          // If there is a pending input token, the zeros and the pending input
-          // token id are already filled in the above
-          // FillInputBufferWithToken() function, so we cannot zero out the
-          // whole prefill input buffer here.
-          //
-          // If there is no pending input token, we need to zero out the whole
-          // prefill input buffer.
-          memset(prefill_input_ptr, 0, prefill_input_size);
-        }
+        LITERT_ASSIGN_OR_RETURN(auto prefill_input_size,
+                                prefill_input_buffer.PackedSize());
         memcpy(prefill_input_ptr + input_idx, processed_input_tokens.data(),
                processed_input_tokens.size() * sizeof(int32_t));
+        int pad_token_id = 0;
+        {
+          absl::MutexLock lock(&executor_settings_mutex_);
+          pad_token_id = executor_settings_.GetPadTokenId();
+        }
+        if (pad_token_id == -1) {
+          pad_token_id = 0;
+        }
+        int active_tokens = input_idx + processed_input_tokens.size();
+        int total_elements = prefill_input_size / sizeof(int32_t);
+        ABSL_VLOG(1) << "Prefill padding with token " << pad_token_id
+                     << " from index " << active_tokens << " to "
+                     << total_elements;
+        std::fill(prefill_input_ptr + active_tokens,
+                  prefill_input_ptr + total_elements, pad_token_id);
       } else {
         // If not using token as lookup, we must have input_embeddings. There is
         // no need to create input_embeddings_ptr because TensorBuffer locking
