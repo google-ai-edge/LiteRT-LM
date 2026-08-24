@@ -844,6 +844,8 @@ absl::Status SerialExecutionManager::AddPrefillTask(
               .at(0);
     }
 
+    llm_executor.value().reset();
+
     FinishTaskAndLogErrors(task_id, std::move(responses), std::move(callback));
   };
 
@@ -952,6 +954,7 @@ absl::Status SerialExecutionManager::AddDecodeTask(
       responses = Responses(TaskState::kCancelled);
     }
 
+    llm_executor.value().reset();
     FinishTaskAndLogErrors(task_id, std::move(responses), std::move(callback));
   };
 
@@ -1117,6 +1120,7 @@ absl::Status SerialExecutionManager::AddTextScoringTask(
       responses = Responses(TaskState::kCancelled);
     }
 
+    llm_executor.value().reset();
     FinishTaskAndLogErrors(task_id, std::move(responses), std::move(callback));
   };
 
