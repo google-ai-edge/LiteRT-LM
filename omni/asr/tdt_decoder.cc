@@ -119,6 +119,8 @@ TdtDecoder::TdtDecoder(
 
 absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> TdtDecoder::Decode(
     std::vector<TensorBuffer>& encoder_outputs) {
+  const int blank_token_id = decode_start_token_id_;
+
   // Clear the states as initial states are all zeros.
   for (auto* buffer : input_states_buffers_) {
     buffer->Clear();
@@ -164,13 +166,15 @@ absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> TdtDecoder::Decode(
                          logits.begin() + end_index_of_token_id);
     int token_id = static_cast<int>(
         std::distance(logits.begin() + start_index_of_token_id, max_token_it));
-    if (token_id != decode_start_token_id_) {
+    if (token_id != blank_token_id) {
       decoded_tokens.push_back(SpeechRecognizer::DecodedToken{
           .token_id = token_id, .timestamp_ms = static_cast<int>(time_index)});
       if (num_inference_token_ids > 1) {
         ++token_index;
-        if (token_index < num_inference_token_ids - 1) {
-          // No-op.
+        if (token_index < num_inference_token_ids) {
+          // Still room in the stateless token array: keep filling it, so the
+          // LSTM states handed to decode_1 below are computed from real tokens
+          // only (an unfilled zero slot skews them).
         } else if (stateful_decode_input_buffers_.has_value()) {
           // Switch to stateful decoding.
           current_signature = kStatefulDecodeSignatureName;
@@ -193,12 +197,14 @@ absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> TdtDecoder::Decode(
                          logits.begin() + end_index_of_duration);
     int duration = static_cast<int>(
         std::distance(logits.begin() + end_index_of_token_id, max_duration_it));
-    time_index +=
-        (duration == 0 && token_id == decode_start_token_id_) ? 1 : duration;
+    time_index += (duration == 0 && token_id == blank_token_id) ? 1 : duration;
 
-    if (num_inference_token_ids == 1) {
-      // Stateful RNN decoder: Swap input and output state buffers for the next
-      // decode.
+    if (num_inference_token_ids == 1 && token_id != blank_token_id) {
+      // Stateful RNN decoder: adopt the new LSTM states by swapping the input
+      // and output state buffers — but only on a non-blank emission. In RNN-T
+      // greedy decoding the prediction network advances only when a token is
+      // emitted; adopting the state on blank steps re-consumes the last token
+      // once per blank and degrades the transcript.
       std::swap(input_states_buffers_, output_states_buffers_);
     }
   }
