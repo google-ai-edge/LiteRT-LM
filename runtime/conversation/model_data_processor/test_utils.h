@@ -29,6 +29,8 @@ namespace litert::lm {
 
 std::string GetTestdataPath(const std::string& file_name);
 
+std::string GetModelPath(absl::string_view relative_path);
+
 std::string GetImageTestdataPath(const std::string& file_name);
 
 std::string ReadFile(absl::string_view path);
