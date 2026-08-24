@@ -24,6 +24,13 @@
 #include <utility>
 #include <variant>
 #include <vector>
+#include <type_traits>
+
+#ifdef _WIN32
+#include <process.h>
+#include <windows.h>
+#endif
+
 
 #include "absl/container/flat_hash_set.h"  // from @com_google_absl
 #include "absl/functional/any_invocable.h"  // from @com_google_absl
@@ -502,6 +509,30 @@ std::optional<litert::lm::DataProcessorArguments> GetDataProcessorArguments(
 
 }  // namespace
 
+template <typename F>
+void RunWithLargeStack(F&& f) {
+#ifdef _WIN32
+  auto wrapper = [](void* arg) -> unsigned {
+    auto* func = static_cast<std::remove_reference_t<F>*>(arg);
+    (*func)();
+    return 0;
+  };
+
+  ABSL_LOG(INFO) << "[litertlm JNI] Spawning 8MB thread with reservation...";
+  HANDLE hThread = (HANDLE)_beginthreadex(
+      nullptr, 8 * 1024 * 1024, wrapper, &f, 0x00010000 /* STACK_SIZE_PARAM_IS_A_RESERVATION */, nullptr);
+
+  if (hThread) {
+    WaitForSingleObject(hThread, INFINITE);
+    CloseHandle(hThread);
+  } else {
+    f();
+  }
+#else
+  f();
+#endif
+}
+
 extern "C" {
 
 LITERTLM_JNIEXPORT void JNICALL
@@ -680,7 +711,10 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateEngine)(
         advanced_settings);
   }
 
-  auto engine = EngineFactory::CreateDefault(*settings);
+  absl::StatusOr<std::unique_ptr<Engine>> engine;
+  RunWithLargeStack([&]() {
+    engine = EngineFactory::CreateDefault(*settings);
+  });
   if (!engine.ok()) {
     ThrowLiteRtLmJniException(
         env, "Failed to create engine: " + engine.status().ToString());
@@ -762,7 +796,10 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateBenchmark)(
   benchmark_params.set_num_prefill_tokens(prefill_tokens);
   benchmark_params.set_num_decode_tokens(decode_tokens);
 
-  auto engine = EngineFactory::CreateDefault(*settings);
+  absl::StatusOr<std::unique_ptr<Engine>> engine;
+  RunWithLargeStack([&]() {
+    engine = EngineFactory::CreateDefault(*settings);
+  });
   if (!engine.ok()) {
     ThrowLiteRtLmJniException(
         env, "Failed to create engine: " + engine.status().ToString());
@@ -822,7 +859,10 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateSession)(
     session_config.SetVisionModalityEnabled(true);
   }
 
-  auto session = engine->CreateSession(session_config);
+  absl::StatusOr<std::unique_ptr<Engine::Session>> session;
+  RunWithLargeStack([&]() {
+    session = engine->CreateSession(session_config);
+  });
   if (!session.ok()) {
     ThrowLiteRtLmJniException(
         env, "Failed to create session: " + session.status().ToString());
@@ -848,7 +888,10 @@ LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeRunPrefill)(
     return;
   }
 
-  auto status = session->RunPrefill(contents);
+  absl::Status status;
+  RunWithLargeStack([&]() {
+    status = session->RunPrefill(contents);
+  });
 
   if (!status.ok()) {
     ThrowLiteRtLmJniException(env,
@@ -861,7 +904,10 @@ JNI_METHOD(nativeRunDecode)(JNIEnv* env, jclass thiz, jlong session_pointer) {
   Engine::Session* session =
       reinterpret_cast<Engine::Session*>(session_pointer);
 
-  auto responses = session->RunDecode();
+  absl::StatusOr<Responses> responses;
+  RunWithLargeStack([&]() {
+    responses = session->RunDecode();
+  });
 
   if (!responses.ok()) {
     ThrowLiteRtLmJniException(
@@ -890,7 +936,10 @@ LITERTLM_JNIEXPORT jstring JNICALL JNI_METHOD(nativeGenerateContent)(
     return nullptr;
   }
 
-  auto responses = session->GenerateContent(contents);
+  absl::StatusOr<Responses> responses;
+  RunWithLargeStack([&]() {
+    responses = session->GenerateContent(contents);
+  });
 
   if (!responses.ok()) {
     ThrowLiteRtLmJniException(
@@ -991,8 +1040,10 @@ LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeGenerateContentStream)(
         }
       };
 
-  auto status =
-      session->GenerateContentStream(contents, std::move(callback_fn));
+  absl::Status status;
+  RunWithLargeStack([&]() {
+    status = session->GenerateContentStream(contents, std::move(callback_fn));
+  });
 
   if (!status.ok()) {
     ThrowLiteRtLmJniException(
@@ -1357,8 +1408,11 @@ LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeSendMessageAsync)(
         }
       };
 
-  auto status = conversation->SendMessageAsync(
-      json_message, std::move(callback_fn), std::move(optional_args));
+  absl::Status status;
+  RunWithLargeStack([&]() {
+    status = conversation->SendMessageAsync(
+        json_message, std::move(callback_fn), std::move(optional_args));
+  });
 
   if (!status.ok()) {
     ThrowLiteRtLmJniException(
@@ -1434,8 +1488,11 @@ LITERTLM_JNIEXPORT jstring JNICALL JNI_METHOD(nativeSendMessage)(
     optional_args.decoding_constraint = constraint_arg;
   }
 
-  auto response =
-      conversation->SendMessage(json_message, std::move(optional_args));
+  absl::StatusOr<litert::lm::Message> response;
+  RunWithLargeStack([&]() {
+    response =
+        conversation->SendMessage(json_message, std::move(optional_args));
+  });
   if (!response.ok()) {
     ThrowLiteRtLmJniException(env, "Failed to call nativeSendMessage: " +
                                        response.status().ToString());
