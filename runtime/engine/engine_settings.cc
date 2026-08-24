@@ -275,6 +275,21 @@ absl::Status EngineSettings::MaybeUpdateAndValidate(
         }
       }
     }
+    if (metadata.has_pad_token() && metadata.pad_token().has_token_str()) {
+      auto pad_token_id =
+          tokenizer->TokenToId(metadata.pad_token().token_str());
+      if (pad_token_id.ok()) {
+        metadata.mutable_pad_token()->mutable_token_ids()->mutable_ids()->Add(
+            *pad_token_id);
+      } else {
+        auto pad_token_ids =
+            tokenizer->TextToTokenIds(metadata.pad_token().token_str());
+        if (pad_token_ids.ok()) {
+          metadata.mutable_pad_token()->mutable_token_ids()->mutable_ids()->Add(
+              pad_token_ids->begin(), pad_token_ids->end());
+        }
+      }
+    }
   }
 
   int num_prompt_tokens = 0;
@@ -309,6 +324,14 @@ absl::Status EngineSettings::MaybeUpdateAndValidate(
 #endif  // !__APPLE__
     }
     main_executor_settings_.SetMaxNumTokens(max_num_tokens);
+  }
+
+  if (main_executor_settings_.GetPadTokenId() == -1) {
+    if (metadata.has_pad_token() &&
+        metadata.pad_token().token_ids().ids_size() > 0) {
+      main_executor_settings_.SetPadTokenId(
+          metadata.pad_token().token_ids().ids(0));
+    }
   }
 
   // By default, the audio executor is configured to use the same max num

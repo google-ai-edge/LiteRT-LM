@@ -377,6 +377,9 @@ class LlmExecutorSettings : public ExecutorSettingsBase {
   uint32_t GetLoraRank() const { return lora_rank_; }
   void SetLoraRank(uint32_t lora_rank) { lora_rank_ = lora_rank; }
 
+  int32_t GetPadTokenId() const { return pad_token_id_; }
+  void SetPadTokenId(int32_t pad_token_id) { pad_token_id_ = pad_token_id; }
+
   template <typename T>
   absl::StatusOr<const T> GetBackendConfig() const {
     if (std::holds_alternative<T>(backend_config_)) {
@@ -446,6 +449,9 @@ class LlmExecutorSettings : public ExecutorSettingsBase {
 
   // LoRA rank. 0 means LoRA is disabled.
   uint32_t lora_rank_ = 0;
+
+  // The pad token id.
+  int32_t pad_token_id_ = -1;
 
   // Backend specific config.
   std::variant<GpuArtisanConfig, GpuConfig, CpuConfig, NpuConfig>
