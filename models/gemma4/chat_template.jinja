@@ -94,16 +94,6 @@
             type:<|"|>{{- params['type'] | upper -}}<|"|>}
         {%- endif -%}
     {%- endif -%}
-    {%- if 'response' in tool_data['function'] -%}
-        {%- set response_declaration = tool_data['function']['response'] -%}
-        ,response:{
-        {%- if response_declaration['description'] -%}
-            description:<|"|>{{- response_declaration['description'] -}}<|"|>,
-        {%- endif -%}
-        {%- if response_declaration['type'] | upper == 'OBJECT' -%}
-            type:<|"|>{{- response_declaration['type'] | upper -}}<|"|>}
-        {%- endif -%}
-    {%- endif -%}
     }
 {%- endmacro -%}
 
