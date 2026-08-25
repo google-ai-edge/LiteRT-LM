@@ -506,6 +506,19 @@ proto::BenchmarkParams& EngineSettings::GetMutableBenchmarkParams() {
   return benchmark_params_.value();
 }
 
+const std::string& EngineSettings::GetBoostPerformance() const {
+  return boost_performance_;
+}
+
+void EngineSettings::SetBoostPerformance(absl::string_view boost_performance) {
+  boost_performance_ = std::string(boost_performance);
+}
+
+bool EngineSettings::ShouldBoostPerformance() const {
+  return (boost_performance_ == "enabled") ||
+         (boost_performance_ == "default" && IsBenchmarkEnabled());
+}
+
 const std::optional<proto::LlmMetadata>& EngineSettings::GetLlmMetadata()
     const {
   return metadata_;
