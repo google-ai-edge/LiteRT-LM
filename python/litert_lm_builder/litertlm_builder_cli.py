@@ -584,7 +584,9 @@ def _build_litertlm_file(parsed_args: list[argparse.Namespace]) -> None:
       os.makedirs(output_dir, exist_ok=True)
     with litertlm_core.open_file(output_path, "wb") as f:
       builder = litertlm_builder.LitertLmFileBuilder.from_toml_file(toml_path)
-      builder.build(f)
+      builder.build(
+          cast(BinaryIO, f),
+      )
   else:
     builder = litertlm_builder.LitertLmFileBuilder()
     output_path = None
@@ -610,13 +612,14 @@ def _build_litertlm_file(parsed_args: list[argparse.Namespace]) -> None:
           output_path = parsed_arg.path
         case _:
           raise ValueError(f"Unknown subcommand: {parsed_arg.command}")
-
     assert output_path, "Output path is required."
     output_dir = os.path.dirname(output_path)
     if output_dir:
       os.makedirs(output_dir, exist_ok=True)
     with litertlm_core.open_file(output_path, "wb") as f:
-      builder.build(cast(BinaryIO, f))
+      builder.build(
+          cast(BinaryIO, f),
+      )
 
   print(f"LiteRT-LM file successfully created at {output_path}")
 
