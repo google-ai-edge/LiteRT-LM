@@ -141,18 +141,6 @@
     {%- endif -%}
 {%- endmacro -%}
 
-{%- macro strip_thinking(text) -%}
-    {%- set ns = namespace(result='') -%}
-    {%- for part in text.split('<channel|>') -%}
-        {%- if '<|channel>' in part -%}
-            {%- set ns.result = ns.result + part.split('<|channel>')[0] -%}
-        {%- else -%}
-            {%- set ns.result = ns.result + part -%}
-        {%- endif -%}
-    {%- endfor -%}
-    {{- ns.result | trim -}}
-{%- endmacro -%}
-
 {%- set ns = namespace(prev_message_type=None) -%}
 {%- set loop_messages = messages -%}
 {{ bos_token }}
@@ -237,19 +225,11 @@
                 {%- set ns.prev_message_type = 'tool_response' -%}
             {%- else -%}
                 {%- if message['content'] is string -%}
-                    {%- if role == 'model' -%}
-                        {{- strip_thinking(message['content']) -}}
-                    {%- else -%}
-                        {{- message['content'] | trim -}}
-                    {%- endif -%}
+                    {{- message['content'] | trim -}}
                 {%- elif message['content'] is sequence -%}
                     {%- for item in message['content'] -%}
                         {%- if item['type'] == 'text' -%}
-                            {%- if role == 'model' -%}
-                                {{- strip_thinking(item['text']) -}}
-                            {%- else -%}
-                                {{- item['text'] | trim -}}
-                            {%- endif -%}
+                            {{- item['text'] | trim -}}
                         {%- elif item['type'] == 'image' -%}
                             {{- '\n\n<|image|>\n\n' -}}
                         {%- elif item['type'] == 'audio' -%}
