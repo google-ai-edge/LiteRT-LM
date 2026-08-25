@@ -244,6 +244,30 @@ TEST(EngineSettingsTest, AudioExecutorSettingsGetModelPath) {
   EXPECT_EQ(*model_path, "test_model_path_1");
 }
 
+TEST(EngineSettingsTest, ShouldBoostPerformance) {
+  auto model_assets = ModelAssets::Create("test_model_path_1");
+  ASSERT_OK(model_assets);
+  ASSERT_OK_AND_ASSIGN(auto settings,
+                       EngineSettings::CreateDefault(*model_assets));
+
+  // Default state without benchmark mode -> false
+  EXPECT_EQ(settings.GetBoostPerformance(), "default");
+  EXPECT_FALSE(settings.ShouldBoostPerformance());
+
+  // Default state with benchmark mode -> true
+  settings.GetMutableBenchmarkParams();
+  EXPECT_TRUE(settings.IsBenchmarkEnabled());
+  EXPECT_TRUE(settings.ShouldBoostPerformance());
+
+  // Explicitly enabled -> true regardless of benchmark mode
+  settings.SetBoostPerformance("enabled");
+  EXPECT_TRUE(settings.ShouldBoostPerformance());
+
+  // Explicitly disabled -> false regardless of benchmark mode
+  settings.SetBoostPerformance("disabled");
+  EXPECT_FALSE(settings.ShouldBoostPerformance());
+}
+
 TEST(EngineSettingsTest, VisionAudioBackendConstraintNoConstraint) {
   auto model_assets = ModelAssets::Create("test_model_path_1");
   ASSERT_OK(model_assets);

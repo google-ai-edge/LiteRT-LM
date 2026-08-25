@@ -94,6 +94,7 @@ struct LiteRtLmSettings {
   bool enable_profiling = false;
   int benchmark_prefill_tokens = 0;
   int benchmark_decode_tokens = 0;
+  std::string boost_performance = "default";
   bool async = true;
   bool report_peak_memory_footprint = false;
   bool force_f32 = false;
