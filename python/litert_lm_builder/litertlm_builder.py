@@ -39,6 +39,7 @@ Note: The build method uses `seek` to write the header and sections. The io
 interface used must support `seek`.
 """
 
+import contextlib
 import dataclasses
 import datetime
 import enum
@@ -46,6 +47,7 @@ import io
 import os
 import pathlib
 import shutil
+
 from typing import Any, BinaryIO, Callable, Optional, TypeVar, cast
 import uuid
 import zlib
@@ -53,6 +55,7 @@ import zlib
 import flatbuffers
 from google.protobuf import message
 from google.protobuf import text_format
+
 # TODO(b/514828153): Migrate to standard library tomllib when Python 3.10
 # support is dropped.
 import tomli as tomllib
@@ -240,6 +243,15 @@ class TfLiteModelType(enum.Enum):
     return cls(value)
 
 
+@dataclasses.dataclass(frozen=True)
+class ExternalizationSummary:
+  """Summary of an opt-in LiteRT-LM weight externalization pass."""
+
+  models_inspected: int
+  models_with_external_weights: int
+  newly_externalized_bytes: int
+
+
 @enum.unique
 class Backend(str, enum.Enum):
   """Backend enum."""
@@ -258,6 +270,8 @@ class _SectionObject:
   data_type: schema.AnySectionDataType | int
   # The data writer for the section. This should write the data to stream.
   data_writer: Callable[[BinaryIO], None]
+  # Source path for sections that can be transformed during packaging.
+  source_path: str | None = None
 
 
 LitertLmFileBuilderT = TypeVar(
@@ -668,10 +682,8 @@ class LitertLmFileBuilder:
       model_type: The type of the tflite model.
       backend_constraint: The backend constraint for the tflite model.
       prefer_activation_type: The preferred activation type for the tflite
-        model.
-        - fp16/float16 for float16 activation.
-        - fp32/float32 for float32 activation.
-        - fp32_fp16 for mixed activation.
+        model. - fp16/float16 for float16 activation. - fp32/float32 for float32
+        activation. - fp32_fp16 for mixed activation.
       additional_metadata: Additional metadata to add to the tflite model.
 
     Returns:
@@ -723,6 +735,7 @@ class LitertLmFileBuilder:
         metadata=metadata,
         data_type=schema.AnySectionDataType.TFLiteModel,
         data_writer=data_writer,
+        source_path=tflite_model_path,
     )
     self._sections.append(section_object)
     return self  # pyrefly: ignore[bad-return]
@@ -768,6 +781,7 @@ class LitertLmFileBuilder:
         metadata=metadata,
         data_type=schema.AnySectionDataType.TFLiteWeights,
         data_writer=data_writer,
+        source_path=tflite_weights_path,
     )
     self._sections.append(section_object)
     return self  # pyrefly: ignore[bad-return]
@@ -890,8 +904,17 @@ class LitertLmFileBuilder:
     self._sections.append(section_object)
     return self  # pyrefly: ignore[bad-return]
 
-  def build(self, stream: BinaryIO) -> None:
+  def build(
+      self,
+      stream: BinaryIO,
+  ) -> ExternalizationSummary | None:
     """Builds the litertlm into the given stream."""
+    self._build_sections(stream, self._sections)
+    return None
+
+  def _build_sections(
+      self, stream: BinaryIO, sections: list[_SectionObject]
+  ) -> None:
     # Add UUID if not already present, but always generate a new timestamp.
     self._system_metadata = populate_system_metadata(self._system_metadata)
 
@@ -909,7 +932,7 @@ class LitertLmFileBuilder:
                 beginOffset=1,  # Use a non-zero (default value) placeholder.
                 endOffset=1,  # Use a non-zero (default value) placeholder
             )
-            for s in self._sections
+            for s in sections
         ]
     )
 
@@ -925,7 +948,7 @@ class LitertLmFileBuilder:
     offset = _round_up_to_block_size(
         litertlm_core.HEADER_BEGIN_BYTE_OFFSET + packed_metadata_size
     )
-    for section, section_fb in zip(self._sections, section_metadata.objects):  # pyrefly: ignore[bad-argument-type]
+    for section, section_fb in zip(sections, section_metadata.objects):  # pyrefly: ignore[bad-argument-type]
       stream.seek(offset)
       section_fb.beginOffset = offset
       section.data_writer(stream)
@@ -1091,6 +1114,25 @@ def unpack(
 unpack_litertlm_file = unpack
 
 
+def pack_with_summary(
+    toml_path: str,
+    output_path: str,
+    jinja_prompt_template_path: str | None = None,
+) -> tuple[str, ExternalizationSummary | None]:
+  """Packs TOML and returns the output path and externalization summary."""
+  output_dir = os.path.dirname(output_path)
+  if output_dir:
+    os.makedirs(output_dir, exist_ok=True)
+  builder = LitertLmFileBuilder.from_toml_file(
+      toml_path, jinja_prompt_template_path=jinja_prompt_template_path
+  )
+  with litertlm_core.open_file(output_path, "wb") as f:
+    summary = builder.build(
+        cast(BinaryIO, f),
+    )
+  return output_path, summary
+
+
 def pack(
     toml_path: str,
     output_path: str,
@@ -1107,15 +1149,12 @@ def pack(
   Returns:
     The path to the generated LiteRT-LM file.
   """
-  output_dir = os.path.dirname(output_path)
-  if output_dir:
-    os.makedirs(output_dir, exist_ok=True)
-  builder = LitertLmFileBuilder.from_toml_file(
-      toml_path, jinja_prompt_template_path=jinja_prompt_template_path
+  packed_path, _ = pack_with_summary(
+      toml_path,
+      output_path,
+      jinja_prompt_template_path,
   )
-  with litertlm_core.open_file(output_path, "wb") as f:
-    builder.build(cast(BinaryIO, f))
-  return output_path
+  return packed_path
 
 
 pack_litertlm_file = pack
