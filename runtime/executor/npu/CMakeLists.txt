@@ -122,6 +122,36 @@ target_link_libraries(runtime_executor_npu_llm_litert_npu_kv_cache
 )
 
 # ==============================================================================
+# LLM LiteRT NPU Embedder
+# ==============================================================================
+add_litertlm_library(runtime_executor_npu_llm_litert_npu_embedder STATIC
+  llm_litert_npu_embedder.cc
+)
+add_library(LiteRTLM::Runtime::Executor::Npu::Embedder
+  ALIAS runtime_executor_npu_llm_litert_npu_embedder)
+
+target_include_directories(runtime_executor_npu_llm_litert_npu_embedder
+  PRIVATE
+    ${LITERTLM_GENERATED_SRC_DIR}
+    ${LITERT_INCLUDE_DIR}
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+target_link_libraries(runtime_executor_npu_llm_litert_npu_embedder
+  PUBLIC
+    LiteRTLM::Runtime::Executor::Npu::CompiledModelExecutorUtils
+    LiteRTLM::Runtime::Components::ModelResourcesInterface
+    LiteRTLM::Runtime::Components::EmbeddingLookup::Manager
+    LiteRTLM::Runtime::Executor::LlmExecutorIoTypes
+    LiteRTLM::Runtime::Executor::LlmExecutorProcessedTokens
+    LiteRTLM::Runtime::Executor::LlmExecutorSettings
+    LiteRTLM::Runtime::Util::ConvertTensorBuffer
+    runtime_util_litert_status_util
+
+    LITERTLM_DEPS
+)
+
+# ==============================================================================
 # Folder Facade
 # ==============================================================================
 add_library(runtime_executor_npu_libs INTERFACE)
@@ -132,5 +162,6 @@ target_link_libraries(runtime_executor_npu_libs INTERFACE
   LiteRTLM::Runtime::Executor::Npu::KVCache
   LiteRTLM::Runtime::Executor::Npu::Rope
   LiteRTLM::Runtime::Executor::Npu::Mask
+  LiteRTLM::Runtime::Executor::Npu::Embedder
 )
 

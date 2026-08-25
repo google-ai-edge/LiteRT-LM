@@ -504,6 +504,7 @@ target_link_libraries(runtime_executor_llm_litert_npu_compiled_model_executor
     LiteRTLM::Runtime::Executor::LlmExecutorSettings
     LiteRTLM::Runtime::Executor::LitertCompiledModelExecutorUtils
     LiteRTLM::Runtime::Executor::Npu::CompiledModelExecutorUtils
+    LiteRTLM::Runtime::Executor::Npu::Embedder
     LiteRTLM::Runtime::Executor::Npu::KVCache
     LiteRTLM::Runtime::Executor::Npu::Mask
     LiteRTLM::Runtime::Executor::Npu::Rope
