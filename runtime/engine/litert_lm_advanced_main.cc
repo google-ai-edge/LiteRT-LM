@@ -276,6 +276,7 @@ absl::Status MainHelper(int argc, char** argv) {
       absl::GetFlag(FLAGS_benchmark_prefill_tokens);
   settings.benchmark_decode_tokens =
       absl::GetFlag(FLAGS_benchmark_decode_tokens);
+  settings.boost_performance = absl::GetFlag(FLAGS_boost_performance);
   settings.async = absl::GetFlag(FLAGS_async);
   settings.report_peak_memory_footprint =
       absl::GetFlag(FLAGS_report_peak_memory_footprint);
