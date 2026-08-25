@@ -129,6 +129,14 @@ class EngineSettings {
   // Returns the mutable benchmark parameters.
   proto::BenchmarkParams& GetMutableBenchmarkParams();
 
+  // CPU performance boosters configuration:
+  // Returns the boost performance state ("enabled", "disabled", or "default").
+  const std::string& GetBoostPerformance() const;
+  // Sets the boost performance state.
+  void SetBoostPerformance(absl::string_view boost_performance);
+  // Returns true if CPU performance boosters should be enabled.
+  bool ShouldBoostPerformance() const;
+
   // Returns the LlmMetadata parameters.
   const std::optional<proto::LlmMetadata>& GetLlmMetadata() const;
   // Returns the mutable LlmMetadata parameters. Note that is the metadata_ is
@@ -180,6 +188,9 @@ class EngineSettings {
 
   // Whether the advanced engine should run tasks in a single thread.
   bool single_threaded_execution_ = false;
+
+  // CPU performance boosters state ("enabled", "disabled", or "default").
+  std::string boost_performance_ = "default";
 };
 std::ostream& operator<<(std::ostream& os, const EngineSettings& settings);
 
