@@ -42,9 +42,52 @@
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/llm_executor_processed_tokens.h"
 #include "runtime/executor/llm_executor_settings.h"
-#include "runtime/executor/llm_litert_npu_compiled_model_executor_utils.h"
+#include "runtime/executor/npu/llm_litert_npu_compiled_model_executor_utils.h"
+#include "runtime/executor/npu/llm_litert_npu_mask.h"
+#include "runtime/executor/npu/llm_litert_npu_rope.h"
 
 namespace litert::lm {
+
+// Holds the context for the drafter auxiliary model (MTP RoPE & Mask).
+struct DrafterAuxContext {
+  ::litert::CompiledModel mtp_aux_compiled_model;
+  NpuRope drafter_rope;
+  NpuMask drafter_mask;
+
+  DrafterAuxContext(::litert::CompiledModel mtp_aux_compiled_model,
+                    NpuRope drafter_rope, NpuMask drafter_mask)
+      : mtp_aux_compiled_model(std::move(mtp_aux_compiled_model)),
+        drafter_rope(std::move(drafter_rope)),
+        drafter_mask(std::move(drafter_mask)) {
+    this->drafter_rope.SetCompiledModel(&this->mtp_aux_compiled_model);
+    this->drafter_mask.SetCompiledModel(&this->mtp_aux_compiled_model);
+  }
+  DrafterAuxContext(DrafterAuxContext&& other) noexcept
+      : mtp_aux_compiled_model(std::move(other.mtp_aux_compiled_model)),
+        drafter_rope(std::move(other.drafter_rope)),
+        drafter_mask(std::move(other.drafter_mask)) {
+    drafter_rope.SetCompiledModel(&mtp_aux_compiled_model);
+    drafter_mask.SetCompiledModel(&mtp_aux_compiled_model);
+  }
+  DrafterAuxContext& operator=(DrafterAuxContext&& other) noexcept {
+    if (this != &other) {
+      mtp_aux_compiled_model = std::move(other.mtp_aux_compiled_model);
+      drafter_rope = std::move(other.drafter_rope);
+      drafter_mask = std::move(other.drafter_mask);
+      drafter_rope.SetCompiledModel(&mtp_aux_compiled_model);
+      drafter_mask.SetCompiledModel(&mtp_aux_compiled_model);
+    }
+    return *this;
+  }
+
+  // Compiles the MTP auxiliary model and initializes drafter_rope and
+  // drafter_mask.
+  static absl::StatusOr<DrafterAuxContext> Create(
+      ::litert::Environment& env, const litert::Model& mtp_aux_model,
+      const absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+          drafter_aux_output_buffers,
+      MaskUpdateMethod mtp_mask_update_method);
+};
 
 // Component intended to be used with an NPU variant of Gemma3.
 class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {

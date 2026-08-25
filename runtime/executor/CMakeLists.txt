@@ -13,6 +13,7 @@
 # limitations under the License.
 
 add_subdirectory(litert)
+add_subdirectory(npu)
 
 # ==============================================================================
 # Audio Executor Interface
@@ -482,38 +483,6 @@ target_link_libraries(runtime_executor_llm_litert_compiled_model_executor
 )
 
 # ==============================================================================
-# LLM LiteRT NPU Compiled Model Executor Utils
-# ==============================================================================
-add_litertlm_library(runtime_executor_llm_litert_npu_compiled_model_executor_utils STATIC
-  llm_litert_npu_compiled_model_executor_utils.cc
-)
-add_library(LiteRTLM::Runtime::Executor::LlmNpuCompiledModelUtils ALIAS runtime_executor_llm_litert_npu_compiled_model_executor_utils)
-
-target_include_directories(runtime_executor_llm_litert_npu_compiled_model_executor_utils
-  PRIVATE
-    ${LITERTLM_GENERATED_SRC_DIR}
-    ${LITERT_INCLUDE_DIR}
-    ${LITERTLM_INCLUDE_PATHS}
-)
-
-target_link_libraries(runtime_executor_llm_litert_npu_compiled_model_executor_utils
-  PUBLIC
-    LiteRTLM::Runtime::Executor::ExecutorSettingsBase
-    LiteRTLM::Runtime::Executor::LlmExecutorIoTypes
-    LiteRTLM::Runtime::Executor::LlmExecutorSettings
-    LiteRTLM::Runtime::Executor::LitertCompiledModelExecutorUtils
-    LiteRTLM::Runtime::Executor::LlmExecutorInterface
-    LiteRTLM::Runtime::Components::ModelResourcesInterface
-    LiteRTLM::Runtime::Components::ModelResourcesTask
-    LiteRTLM::Runtime::Components::EmbeddingLookup::Manager
-    LiteRTLM::Runtime::Executor::LlmExecutorProcessedTokens
-    LiteRTLM::Runtime::Util::ConvertTensorBuffer
-
-    LITERTLM_DEPS
-)
-
-
-# ==============================================================================
 # LLM LiteRT NPU Compiled Model Executor
 # ==============================================================================
 add_litertlm_library(runtime_executor_llm_litert_npu_compiled_model_executor STATIC
@@ -534,7 +503,9 @@ target_link_libraries(runtime_executor_llm_litert_npu_compiled_model_executor
     LiteRTLM::Runtime::Executor::LlmExecutorIoTypes
     LiteRTLM::Runtime::Executor::LlmExecutorSettings
     LiteRTLM::Runtime::Executor::LitertCompiledModelExecutorUtils
-    LiteRTLM::Runtime::Executor::LlmNpuCompiledModelUtils
+    LiteRTLM::Runtime::Executor::Npu::CompiledModelExecutorUtils
+    LiteRTLM::Runtime::Executor::Npu::Mask
+    LiteRTLM::Runtime::Executor::Npu::Rope
     LiteRTLM::Runtime::Executor::LlmExecutorInterface
     LiteRTLM::Runtime::Components::ModelResourcesInterface
     LiteRTLM::Runtime::Components::ModelResourcesTask
@@ -788,7 +759,7 @@ target_link_libraries(runtime_executor_libs INTERFACE
   LiteRTLM::Runtime::Executor::LlmLitertCompiledModelCacheUtils
   LiteRTLM::Runtime::Executor::LlmLitertCompiledModelExecutor
   LiteRTLM::Runtime::Executor::LlmLitertMtpDrafter
-  LiteRTLM::Runtime::Executor::LlmNpuCompiledModelUtils
+  LiteRTLM::Runtime::Executor::Npu
   LiteRTLM::Runtime::Executor::LlmNpuCompiledModel
   LiteRTLM::Runtime::Executor::LlmProcessedContextInterface
   LiteRTLM::Runtime::Executor::MagicNumberConfigsHelper

@@ -40,7 +40,9 @@
 #include "absl/time/clock.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "litert/c/litert_common.h"  // from @litert
 #include "litert/c/litert_model_types.h"  // from @litert
+#include "litert/cc/litert_common.h"  // from @litert
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
@@ -59,8 +61,10 @@
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/llm_executor_processed_tokens.h"
 #include "runtime/executor/llm_executor_settings.h"
-#include "runtime/executor/llm_litert_npu_compiled_model_executor_utils.h"
 #include "runtime/executor/llm_processed_context.h"
+#include "runtime/executor/npu/llm_litert_npu_compiled_model_executor_utils.h"
+#include "runtime/executor/npu/llm_litert_npu_mask.h"
+#include "runtime/executor/npu/llm_litert_npu_rope.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/status_macros.h"  // NOLINT
 #include "runtime/util/tensor_buffer_util.h"
@@ -70,8 +74,25 @@ namespace litert::lm {
 namespace {
 using ::litert::CompiledModel;
 using ::litert::Environment;
+using ::litert::Expected;
 using ::litert::Model;
+using ::litert::Options;
 using ::litert::TensorBuffer;
+
+class CompiledModelWrapper : public ::litert::CompiledModel {
+ public:
+  static ::litert::Expected<::litert::CompiledModel> Create(
+      ::litert::Environment& env, const LiteRtModel litert_model,
+      ::litert::Options& compilation_options) {
+    return ::litert::CompiledModel::Create(env, litert_model,
+                                           compilation_options);
+  }
+  static ::litert::Expected<::litert::CompiledModel> Create(
+      ::litert::Environment& env, const LiteRtModel litert_model,
+      litert::HwAccelerators accelerators) {
+    return ::litert::CompiledModel::Create(env, litert_model, accelerators);
+  }
+};
 
 using LogitsQuantizationParams =
     LlmLiteRtNpuCompiledModelExecutor::LogitsQuantizationParams;
@@ -528,6 +549,75 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::WarmupInference(
   LITERT_RETURN_IF_ERROR(ClearKVCacheBuffers(
       text_decoder_inference_context.prefill_input_buffers));
   return absl::OkStatus();
+}
+
+absl::StatusOr<DrafterAuxContext> DrafterAuxContext::Create(
+    ::litert::Environment& env, const litert::Model& mtp_aux_model,
+    const absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+        drafter_aux_output_buffers,
+    MaskUpdateMethod mtp_mask_update_method) {
+  LITERT_ASSIGN_OR_RETURN(
+      auto mtp_aux_compiled_model,
+      CompiledModelWrapper::Create(env, mtp_aux_model.Get(),
+                                   litert::HwAccelerators::kCpu));
+  absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
+      rope_input_buffers;
+  absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
+      rope_output_buffers;
+  absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
+      mask_input_buffers;
+  absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
+      mask_output_buffers;
+
+  // Drafter aux rope signature.
+  LITERT_ASSIGN_OR_RETURN(
+      rope_input_buffers[MtpSignatures::kInputPos],
+      mtp_aux_compiled_model.CreateInputBuffer(MtpSignatures::kMtpRope,
+                                               MtpSignatures::kInputPos));
+  rope_input_buffers[MtpSignatures::kInputPos].Clear();
+
+  LITERT_ASSIGN_OR_RETURN(
+      auto rope_output_names,
+      mtp_aux_compiled_model.GetSignatureOutputNames(MtpSignatures::kMtpRope));
+  for (const auto& name : rope_output_names) {
+    LITERT_ASSIGN_OR_RETURN(rope_output_buffers[name],
+                            drafter_aux_output_buffers.at(name).Duplicate());
+  }
+
+  // Drafter aux mask signature.
+  LITERT_ASSIGN_OR_RETURN(
+      mask_input_buffers[MtpSignatures::kInputTimeStep],
+      mtp_aux_compiled_model.CreateInputBuffer(MtpSignatures::kMtpMask,
+                                               MtpSignatures::kInputTimeStep));
+  mask_input_buffers[MtpSignatures::kInputTimeStep].Clear();
+
+  LITERT_ASSIGN_OR_RETURN(
+      mask_input_buffers[MtpSignatures::kInputTokens],
+      mtp_aux_compiled_model.CreateInputBuffer(MtpSignatures::kMtpMask,
+                                               MtpSignatures::kInputTokens));
+
+  LITERT_ASSIGN_OR_RETURN(
+      auto mask_output_names,
+      mtp_aux_compiled_model.GetSignatureOutputNames(MtpSignatures::kMtpMask));
+  for (const auto& name : mask_output_names) {
+    LITERT_ASSIGN_OR_RETURN(mask_output_buffers[name],
+                            drafter_aux_output_buffers.at(name).Duplicate());
+  }
+
+  LITERT_ASSIGN_OR_RETURN(
+      auto drafter_rope,
+      NpuRope::CreateForDrafter(&mtp_aux_compiled_model,
+                                std::move(rope_input_buffers),
+                                std::move(rope_output_buffers)));
+
+  LITERT_ASSIGN_OR_RETURN(
+      auto drafter_mask,
+      NpuMask::CreateForDrafter(mtp_mask_update_method, &mtp_aux_compiled_model,
+                                std::move(mask_input_buffers),
+                                std::move(mask_output_buffers)));
+
+  return DrafterAuxContext(std::move(mtp_aux_compiled_model),
+                           std::move(drafter_rope), std::move(drafter_mask));
 }
 
 absl::Status LlmLiteRtNpuCompiledModelExecutor::WarmupDrafterInference(

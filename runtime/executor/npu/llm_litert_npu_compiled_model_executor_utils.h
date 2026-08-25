@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_LLM_LITERT_NPU_COMPILED_MODEL_EXECUTOR_UTILS_H_
-#define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_LLM_LITERT_NPU_COMPILED_MODEL_EXECUTOR_UTILS_H_
+#ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_NPU_LLM_LITERT_NPU_COMPILED_MODEL_EXECUTOR_UTILS_H_
+#define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_NPU_LLM_LITERT_NPU_COMPILED_MODEL_EXECUTOR_UTILS_H_
 
 #include <algorithm>
 #include <cmath>
@@ -323,24 +323,6 @@ absl::Status HWKVCacheUpdate(
     const absl::flat_hash_map<absl::string_view, HWQuantParams>& quant_params =
         {},
     bool enable_swa = false);
-
-enum class MaskUpdateMethod {
-  kModel,
-  kWH,
-};
-
-// Signature names for the mask signatures.
-struct MaskSignatures {
-  static constexpr absl::string_view kDecodeMask = "decode_mask";
-  static constexpr absl::string_view kVerifyMask = "verify_mask";
-  static constexpr absl::string_view kMtpMask = "mask";
-  // Prefill and decode use identical tensor signature names.
-  static constexpr absl::string_view kMaskInputTimeStep = "time_step";
-  static constexpr absl::string_view kMaskInputTokens = "input_tokens";
-  static constexpr absl::string_view kMaskInputValidMask = "valid_mask";
-  static constexpr absl::string_view kMaskLocal = "mask_local";
-  static constexpr absl::string_view kMaskGlobal = "mask_global";
-};
 
 // Context holding input and output tensor buffers for an inference phase.
 struct InferenceContext {
@@ -683,194 +665,6 @@ class NpuEmbedder {
   std::optional<::litert::TensorBuffer> verify_ple_buffer_;
 };
 
-// Signature names for the rope signatures.
-struct RopeSignatures {
-  static constexpr absl::string_view kDecodeRope = "decode_rope";
-  static constexpr absl::string_view kVerifyRope = "verify_rope";
-  static constexpr absl::string_view kMtpRope = "rope";
-  // Prefill and decode use identical tensor signature names.
-  static constexpr absl::string_view kInputPos = "input_pos";
-  static constexpr absl::string_view kOutputPosEmbeddingLocalLow =
-      "pos_emb_local_cos";
-  static constexpr absl::string_view kOutputPosEmbeddingHigh = "pos_emb_sin";
-  static constexpr absl::string_view kOutputPosEmbeddingLocalHigh =
-      "pos_emb_local_sin";
-  static constexpr absl::string_view kOutputPosEmbeddingLow = "pos_emb_cos";
-};
-
-// =============================================================================
-// NpuRope Usage Guide:
-//
-// 1. Regular Prefill:
-//    rope_.SetPrefillPositions(positions_span);
-//    rope_.RunPrefill(prefill_signature);
-//
-// 2. Regular Single-Token Decode:
-//    rope_.SetDecodePosition(current_step);
-//    rope_.RunDecode();
-//
-// 3. MTP Speculative Decoding - Draft Generation (on drafter_rope):
-//    drafter_rope.SetDecodePosition(draft_step);
-//    drafter_rope.RunDrafter();
-//
-// 4. MTP Speculative Decoding - Verification (on main_rope):
-//    main_rope_.SetVerifyPositions(start_step, num_tokens);
-//    main_rope_.RunVerify();
-// =============================================================================
-class NpuRope {
- public:
-  NpuRope() = default;
-  NpuRope(const NpuRope&) = delete;
-  NpuRope& operator=(const NpuRope&) = delete;
-  NpuRope(NpuRope&&) = default;
-  NpuRope& operator=(NpuRope&&) = default;
-
-  // --- Lifecycle & Creation ---
-  static absl::StatusOr<NpuRope> Create(
-      const ::litert::CompiledModel* npu_auxiliary_compiled_model,
-      const ResolvedPrefillSignatures& prefill_signatures,
-      absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-          text_decoder_prefill_input_buffers,
-      absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-          text_decoder_decode_input_buffers,
-      absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-          text_decoder_verify_input_buffers);
-
-  static absl::StatusOr<NpuRope> CreateForDrafter(
-      const ::litert::CompiledModel* compiled_model,
-      absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
-          rope_input_buffers,
-      absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
-          rope_output_buffers);
-
-  static absl::StatusOr<NpuRope> CreateForTest(
-      const ::litert::CompiledModel* compiled_model,
-      InferenceContext rope_context);
-
-  void SetCompiledModel(const ::litert::CompiledModel* compiled_model) {
-    compiled_model_ = compiled_model;
-  }
-
-  // --- Stage 1: Prefill ---
-  absl::Status SetPrefillPositions(absl::Span<const int32_t> positions);
-  absl::Status RunPrefill(absl::string_view signature) const;
-
-  // --- Stage 2: Decode (Main & Drafter) ---
-  absl::Status SetDecodePosition(int32_t step);
-  absl::Status RunDecode() const;
-
-  // --- Stage 3: Speculative Decoding (MTP Draft & Verify) ---
-  absl::Status RunDrafter() const;
-  absl::Status SetVerifyPositions(int32_t start_step, size_t num_tokens);
-  absl::Status RunVerify() const;
-
-  // --- Accessors ---
-  const InferenceContext& Context() const { return rope_context_; }
-  InferenceContext ReleaseContext() { return std::move(rope_context_); }
-
- private:
-  explicit NpuRope(const ::litert::CompiledModel* compiled_model,
-                   InferenceContext rope_context)
-      : compiled_model_(compiled_model),
-        rope_context_(std::move(rope_context)) {}
-
-  const ::litert::CompiledModel* compiled_model_ = nullptr;
-  InferenceContext rope_context_;
-};
-
-// Performs manual attention mask update.
-absl::Status HWMaskUpdate(
-    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& in_buffers,
-    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-        out_buffers);
-
-// =============================================================================
-// NpuMask Usage Guide:
-//
-// 1. Regular Prefill:
-//    mask_.SetPrefillInput(internal_start_step, tokens_to_embed);
-//    mask_.RunPrefill(prefill_signature);
-//
-// 2. Regular Single-Token Decode:
-//    mask_.SetDecodeInput(current_step, token_id);
-//    mask_.RunDecode();
-//
-// 3. MTP Speculative Decoding - Draft Generation (on drafter_mask):
-//    drafter_mask.SetDecodeInput(draft_step, draft_token_id);
-//    drafter_mask.RunDrafter();
-//
-// 4. MTP Speculative Decoding - Verification (on main_mask):
-//    main_mask_.SetVerifyInput(start_step, verify_ids);
-//    main_mask_.RunVerify();
-// =============================================================================
-class NpuMask {
- public:
-  NpuMask() = default;
-  NpuMask(const NpuMask&) = delete;
-  NpuMask& operator=(const NpuMask&) = delete;
-  NpuMask(NpuMask&&) = default;
-  NpuMask& operator=(NpuMask&&) = default;
-
-  // --- Lifecycle & Creation ---
-  static absl::StatusOr<NpuMask> Create(
-      MaskUpdateMethod method,
-      const ::litert::CompiledModel* npu_auxiliary_compiled_model,
-      const ResolvedPrefillSignatures& prefill_signatures,
-      absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-          text_decoder_prefill_input_buffers,
-      absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-          text_decoder_decode_input_buffers,
-      absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-          text_decoder_verify_input_buffers);
-
-  static absl::StatusOr<NpuMask> CreateForDrafter(
-      MaskUpdateMethod method, const ::litert::CompiledModel* compiled_model,
-      absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
-          mask_input_buffers,
-      absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
-          mask_output_buffers);
-
-  static absl::StatusOr<NpuMask> CreateForTest(
-      MaskUpdateMethod method, const ::litert::CompiledModel* compiled_model,
-      InferenceContext mask_context);
-
-  void SetCompiledModel(const ::litert::CompiledModel* compiled_model) {
-    compiled_model_ = compiled_model;
-  }
-
-  // --- Stage 1: Prefill ---
-  absl::Status SetPrefillInput(int32_t start_step,
-                               absl::Span<const int> token_ids);
-  absl::Status RunPrefill(absl::string_view signature) const;
-
-  // --- Stage 2: Decode (Main & Drafter) ---
-  absl::Status SetDecodeInput(int32_t step, int32_t token_id);
-  absl::Status RunDecode() const;
-
-  // --- Stage 3: Speculative Decoding (MTP Draft & Verify) ---
-  absl::Status RunDrafter() const;
-  absl::Status SetVerifyInput(int32_t start_step,
-                              absl::Span<const int> verify_ids);
-  absl::Status RunVerify() const;
-
-  // --- Accessors ---
-  MaskUpdateMethod GetMethod() const { return method_; }
-  const InferenceContext& Context() const { return mask_context_; }
-  InferenceContext ReleaseContext() { return std::move(mask_context_); }
-
- private:
-  explicit NpuMask(MaskUpdateMethod method,
-                   const ::litert::CompiledModel* compiled_model,
-                   InferenceContext mask_context)
-      : method_(method),
-        compiled_model_(compiled_model),
-        mask_context_(std::move(mask_context)) {}
-
-  MaskUpdateMethod method_ = MaskUpdateMethod::kModel;
-  const ::litert::CompiledModel* compiled_model_ = nullptr;
-  InferenceContext mask_context_;
-};
-
 enum class KVCacheUpdateMethod {
   kModel,
   kWH,
@@ -1015,47 +809,6 @@ struct DrafterContext {
       ::litert::TensorBuffer& output_activations_buffers);
 };
 
-// Holds the context for the drafter auxiliary model (MTP RoPE & Mask).
-struct DrafterAuxContext {
-  ::litert::CompiledModel mtp_aux_compiled_model;
-  NpuRope drafter_rope;
-  NpuMask drafter_mask;
-
-  DrafterAuxContext(::litert::CompiledModel mtp_aux_compiled_model,
-                    NpuRope drafter_rope, NpuMask drafter_mask)
-      : mtp_aux_compiled_model(std::move(mtp_aux_compiled_model)),
-        drafter_rope(std::move(drafter_rope)),
-        drafter_mask(std::move(drafter_mask)) {
-    this->drafter_rope.SetCompiledModel(&this->mtp_aux_compiled_model);
-    this->drafter_mask.SetCompiledModel(&this->mtp_aux_compiled_model);
-  }
-  DrafterAuxContext(DrafterAuxContext&& other) noexcept
-      : mtp_aux_compiled_model(std::move(other.mtp_aux_compiled_model)),
-        drafter_rope(std::move(other.drafter_rope)),
-        drafter_mask(std::move(other.drafter_mask)) {
-    drafter_rope.SetCompiledModel(&mtp_aux_compiled_model);
-    drafter_mask.SetCompiledModel(&mtp_aux_compiled_model);
-  }
-  DrafterAuxContext& operator=(DrafterAuxContext&& other) noexcept {
-    if (this != &other) {
-      mtp_aux_compiled_model = std::move(other.mtp_aux_compiled_model);
-      drafter_rope = std::move(other.drafter_rope);
-      drafter_mask = std::move(other.drafter_mask);
-      drafter_rope.SetCompiledModel(&mtp_aux_compiled_model);
-      drafter_mask.SetCompiledModel(&mtp_aux_compiled_model);
-    }
-    return *this;
-  }
-
-  // Compiles the MTP auxiliary model and initializes drafter_rope and
-  // drafter_mask.
-  static absl::StatusOr<DrafterAuxContext> Create(
-      ::litert::Environment& env, const litert::Model& mtp_aux_model,
-      const absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-          drafter_aux_output_buffers,
-      MaskUpdateMethod mtp_mask_update_method);
-};
-
 // Performs manual per-layer embedding lookup.
 absl::Status HWPerLayerEmbeddingLookup(
     const int* token_ids, int num_tokens, const uint8_t* const* table_ptrs,
@@ -1087,4 +840,4 @@ absl::Status WriteAndPadPleEmbeddings(::litert::TensorBuffer& buffer,
 
 }  // namespace litert::lm
 
-#endif  // THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_LLM_LITERT_NPU_COMPILED_MODEL_EXECUTOR_UTILS_H_
+#endif  // THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_NPU_LLM_LITERT_NPU_COMPILED_MODEL_EXECUTOR_UTILS_H_
