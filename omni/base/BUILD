@@ -101,6 +101,7 @@ cc_test(
     deps = [
         ":stage",
         "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/cleanup",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_matchers",
         "@com_google_absl//absl/status:statusor",
@@ -114,7 +115,9 @@ cc_library(
         ":stage",
         "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/base:nullability",
+        "@com_google_absl//absl/cleanup",
         "@com_google_absl//absl/functional:any_invocable",
+        "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",

@@ -51,8 +51,7 @@ FileTextSource::FileTextSource(std::string file_path, TextChunkConfig config)
   }
 }
 
-void FileTextSource::Reset() {
-  WaitForStateThenSetState(State::kIdle, State::kRunning);
+void FileTextSource::ResetInternal() {
   buffer_.clear();
   buffer_start_index_ = 0;
   if (file_stream_.is_open()) {
@@ -65,7 +64,6 @@ void FileTextSource::Reset() {
   if (!is_finished_) {
     ReadFromFileIfNeeded();
   }
-  ClearOutputsThenSetState(State::kIdle);
 }
 
 void FileTextSource::ReadFromFileIfNeeded() {

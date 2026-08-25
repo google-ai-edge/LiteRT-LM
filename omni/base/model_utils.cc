@@ -14,6 +14,7 @@
 
 #include "omni/base/model_utils.h"
 
+#include <cstddef>
 #include <fstream>
 #include <ios>
 #include <memory>
@@ -113,6 +114,36 @@ absl::StatusOr<CompiledModel> CreateCompiledModel(
   ABSL_VLOG(2) << absl::StrCat("Compiled model created successfully with ",
                                target_gpu ? "GPU" : "CPU", " backend");
   return std::move(compiled_model);
+}
+
+absl::StatusOr<size_t> ResolveInputIndex(const CompiledModel& model,
+                                         absl::string_view tensor_name) {
+  auto names_res = model.GetSignatureInputNames();
+  if (names_res.HasValue()) {
+    const auto& names = *names_res;
+    for (size_t i = 0; i < names.size(); ++i) {
+      if (names[i] == tensor_name) {
+        return i;
+      }
+    }
+  }
+  return absl::NotFoundError(absl::StrCat(
+      "Input tensor '", tensor_name, "' not found in model signatures"));
+}
+
+absl::StatusOr<size_t> ResolveOutputIndex(const CompiledModel& model,
+                                          absl::string_view tensor_name) {
+  auto names_res = model.GetSignatureOutputNames();
+  if (names_res.HasValue()) {
+    const auto& names = *names_res;
+    for (size_t i = 0; i < names.size(); ++i) {
+      if (names[i] == tensor_name) {
+        return i;
+      }
+    }
+  }
+  return absl::NotFoundError(absl::StrCat(
+      "Output tensor '", tensor_name, "' not found in model signatures"));
 }
 
 }  // namespace litert::omni

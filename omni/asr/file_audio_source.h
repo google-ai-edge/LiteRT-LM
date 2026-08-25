@@ -39,11 +39,11 @@ class FileAudioSource : public AudioSource {
       absl::string_view file_path, absl::Duration interval,
       absl::Duration overlap, int sample_rate_hz = 16000, int num_channels = 1);
 
-  void Reset() override;
   int GetSampleRateHz() const override { return sample_rate_hz_; }
   int GetNumChannels() const override { return num_channels_; }
 
  protected:
+  void ResetInternal() override;
   bool NeedScheduleInternal() const override;
   absl::Status ScheduleInternal() override;
 

@@ -48,9 +48,6 @@ class AcousticPredictor : public SingleThreadedStageWithDeque<AcousticOutput> {
 
   ~AcousticPredictor() override = default;
 
-  // Resets internal state for a new TTS stream.
-  virtual void Reset() = 0;
-
  protected:
   bool NeedScheduleInternal() const override {
     return text_frontend_.HasOutput();

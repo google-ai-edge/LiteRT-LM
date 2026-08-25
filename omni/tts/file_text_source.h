@@ -55,14 +55,13 @@ class FileTextSource : public TextSource {
 
   ~FileTextSource() override = default;
 
-  // Resets internal state, clears output queues, and re-opens the file from
-  // the beginning for a new synthesis stream.
-  void Reset() override;
-
   // Accessor for the active text chunk configuration.
   const TextChunkConfig& config() const { return config_; }
 
  protected:
+  // Resets internal state and re-opens the file from the beginning.
+  void ResetInternal() override;
+
   // Determines if ScheduleInternal should be called based on buffer state.
   // Side-effect free const method.
   bool NeedScheduleInternal() const override;

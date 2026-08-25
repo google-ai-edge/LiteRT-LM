@@ -45,9 +45,6 @@ class SpeechRecognizer
 
   ~SpeechRecognizer() override = default;
 
-  // Resets internal model decoder state for a new audio stream.
-  virtual void Reset() = 0;
-
  protected:
   bool NeedScheduleInternal() const override {
     return audio_preprocessor_.HasOutput();

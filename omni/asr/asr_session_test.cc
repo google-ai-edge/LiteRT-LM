@@ -49,16 +49,12 @@ class DummyAudioSource : public AudioSource {
   explicit DummyAudioSource(std::vector<std::vector<float>> chunks)
       : chunks_(std::move(chunks)) {}
 
-  void Reset() override {
-    chunk_index_ = 0;
-    absl::MutexLock lock(mutex_);
-    outputs_.clear();
-  }
-
   int GetSampleRateHz() const override { return 16000; }
   int GetNumChannels() const override { return 1; }
 
  protected:
+  void ResetInternal() override { chunk_index_ = 0; }
+
   bool NeedScheduleInternal() const override {
     return chunk_index_ < chunks_.size();
   }
@@ -84,11 +80,6 @@ class DummyAudioPreprocessor : public AudioPreprocessor {
       Stage<std::vector<float>>* absl_nonnull audio_source)
       : AudioPreprocessor(audio_source) {}
 
-  void Reset() override {
-    absl::MutexLock lock(mutex_);
-    outputs_.clear();
-  }
-
  protected:
   absl::Status ScheduleInternal() override {
     auto pcm_samples = audio_source_.GetOutput();
@@ -109,11 +100,6 @@ class DummySpeechRecognizer : public SpeechRecognizer {
   explicit DummySpeechRecognizer(
       Stage<std::vector<float>>* absl_nonnull audio_preprocessor)
       : SpeechRecognizer(audio_preprocessor) {}
-
-  void Reset() override {
-    absl::MutexLock lock(mutex_);
-    outputs_.clear();
-  }
 
  protected:
   absl::Status ScheduleInternal() override {
@@ -143,11 +129,6 @@ class DummyDetokenizer : public Detokenizer {
       Stage<std::vector<SpeechRecognizer::DecodedToken>>* absl_nonnull
           recognizer)
       : Detokenizer(recognizer) {}
-
-  void Reset() override {
-    absl::MutexLock lock(mutex_);
-    outputs_.clear();
-  }
 
  protected:
   absl::Status ScheduleInternal() override {

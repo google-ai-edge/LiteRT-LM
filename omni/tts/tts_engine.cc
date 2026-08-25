@@ -139,9 +139,9 @@ absl::StatusOr<std::unique_ptr<TtsSession>> TtsEngine::CreateSession() {
         auto vocoder,
         Qwen3VocoderStage::Create(latent.get(), options, model_resources_));
 
-    components.text_frontend = std::move(frontend);
-    components.acoustic_predictor = std::move(acoustic);
-    components.latent_decoder = std::move(latent);
+    components.intermediate_stages.push_back(std::move(frontend));
+    components.intermediate_stages.push_back(std::move(acoustic));
+    components.intermediate_stages.push_back(std::move(latent));
     components.vocoder = std::move(vocoder);
   } else {
     return absl::InvalidArgumentError(

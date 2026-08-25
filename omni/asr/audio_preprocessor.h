@@ -32,9 +32,6 @@ class AudioPreprocessor
 
   ~AudioPreprocessor() override = default;
 
-  // Resets internal cached state for a new audio stream.
-  virtual void Reset() = 0;
-
  protected:
   bool NeedScheduleInternal() const override {
     return audio_source_.HasOutput();

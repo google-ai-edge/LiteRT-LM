@@ -54,9 +54,8 @@ class LogMelSpectrogramProcessor : public AudioPreprocessor {
 
   ~LogMelSpectrogramProcessor() override = default;
 
-  void Reset() override;
-
  protected:
+  void ResetInternal() override;
   absl::Status ScheduleInternal() override;
 
  private:

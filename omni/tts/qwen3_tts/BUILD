@@ -136,7 +136,6 @@ cc_library(
         "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/types:span",
         "@litert//litert/cc:litert_compiled_model",
-        "@litert//litert/cc:litert_environment",
         "@litert//litert/cc:litert_macros",
         "@litert//litert/cc:litert_tensor_buffer",
         "//omni/base:io_types",

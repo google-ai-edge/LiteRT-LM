@@ -56,6 +56,9 @@ class StageBase {
   // Indicates whether the stage's output queue contains 1 or more outputs in a
   // thread-safe manner.
   virtual bool HasOutput() const = 0;
+
+  // Resets internal cached state and clears outputs for a new stream/session.
+  virtual void Reset() = 0;
 };
 
 }  // namespace internal
@@ -124,8 +127,17 @@ class SingleThreadedStageWithDeque : public Stage<T> {
     return item;
   }
 
+  void Reset() override {
+    WaitForStateThenSetState(State::kIdle, State::kRunning);
+    ResetInternal();
+    ClearOutputsThenSetState(State::kIdle);
+  }
+
  protected:
   enum class State { kIdle, kScheduling, kRunning };
+
+  // Subclasses can override this method to reset subclass-specific state.
+  virtual void ResetInternal() {};
 
   // Subclasses must implement this method to determine if Schedule() should be
   // called soon to process work.

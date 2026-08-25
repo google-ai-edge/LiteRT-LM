@@ -46,9 +46,6 @@ class TextFrontend : public SingleThreadedStageWithDeque<FrontendOutput> {
 
   ~TextFrontend() override = default;
 
-  // Resets internal state for a new TTS stream.
-  virtual void Reset() = 0;
-
  protected:
   bool NeedScheduleInternal() const override {
     return text_source_.HasOutput();

@@ -49,8 +49,6 @@ class LiteRtSpeechRecognizer : public SpeechRecognizer {
 
   ~LiteRtSpeechRecognizer() override = default;
 
-  void Reset() override;
-
   void PushOutputForTesting(std::vector<DecodedToken> output);
 
  protected:

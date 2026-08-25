@@ -24,7 +24,6 @@
 #include "absl/cleanup/cleanup.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "absl/synchronization/notification.h"  // from @com_google_absl
 #include "omni/base/io_types.h"
 #include "omni/base/stage.h"
@@ -44,11 +43,6 @@ class DummyTextFrontend : public TextFrontend {
  public:
   explicit DummyTextFrontend(Stage<std::string>* text_source)
       : TextFrontend(text_source) {}
-
-  void Reset() override {
-    absl::MutexLock lock(mutex_);
-    outputs_.clear();
-  }
 
  protected:
   absl::Status ScheduleInternal() override {
@@ -72,11 +66,6 @@ class DummyAcousticPredictor : public AcousticPredictor {
       Stage<TextFrontend::FrontendOutput>* text_frontend)
       : AcousticPredictor(text_frontend) {}
 
-  void Reset() override {
-    absl::MutexLock lock(mutex_);
-    outputs_.clear();
-  }
-
  protected:
   absl::Status ScheduleInternal() override {
     absl::Cleanup cleanup = [this] { SetState(State::kIdle); };
@@ -99,11 +88,6 @@ class DummyLatentDecoder : public LatentDecoder {
       Stage<AcousticPredictor::AcousticOutput>* acoustic_predictor)
       : LatentDecoder(acoustic_predictor) {}
 
-  void Reset() override {
-    absl::MutexLock lock(mutex_);
-    outputs_.clear();
-  }
-
  protected:
   absl::Status ScheduleInternal() override {
     absl::Cleanup cleanup = [this] { SetState(State::kIdle); };
@@ -124,24 +108,23 @@ class DummyLatentDecoder : public LatentDecoder {
 class DummyVocoder : public Vocoder {
  public:
   explicit DummyVocoder(Stage<LatentDecoder::LatentOutput>* latent_decoder)
-      : Vocoder(latent_decoder) {}
-
-  void Reset() override {
-    absl::MutexLock lock(mutex_);
-    outputs_.clear();
-    has_pending_audio_ = false;
-  }
+      : latent_decoder_(*latent_decoder) {}
 
   absl::Status Flush() override {
-    absl::MutexLock lock(mutex_);
     if (has_pending_audio_) {
-      outputs_.push_back({{0.5f, -0.5f}, 24000});
+      PushOutput({{0.5f, -0.5f}, 24000});
       has_pending_audio_ = false;
     }
     return absl::OkStatus();
   }
 
  protected:
+  void ResetInternal() override { has_pending_audio_ = false; }
+
+  bool NeedScheduleInternal() const override {
+    return latent_decoder_.HasOutput();
+  }
+
   absl::Status ScheduleInternal() override {
     absl::Cleanup cleanup = [this] { SetState(State::kIdle); };
     auto latent_out = latent_decoder_.GetOutput();
@@ -153,26 +136,31 @@ class DummyVocoder : public Vocoder {
     AudioOutput out;
     out.pcm_samples = {0.1f, 0.2f, 0.3f};
     out.sample_rate_hz = 24000;
-    has_pending_audio_ = true;
     PushOutput(std::move(out));
+    has_pending_audio_ = true;
     return absl::OkStatus();
   }
 
  private:
+  Stage<LatentOutput>& latent_decoder_;
   bool has_pending_audio_ = false;
 };
 
 TtsSession::Components CreateDummyComponents() {
-  auto source = std::make_unique<StreamTextSource>();
-  auto frontend = std::make_unique<DummyTextFrontend>(source.get());
+  TtsSession::Components components;
+  components.text_source = std::make_unique<StreamTextSource>();
+  auto frontend =
+      std::make_unique<DummyTextFrontend>(components.text_source.get());
   auto acoustic = std::make_unique<DummyAcousticPredictor>(frontend.get());
   auto latent = std::make_unique<DummyLatentDecoder>(acoustic.get());
   auto vocoder = std::make_unique<DummyVocoder>(latent.get());
 
-  return TtsSession::Components{
-      std::move(source), std::move(frontend), std::move(acoustic),
-      std::move(latent), std::move(vocoder),
-  };
+  components.intermediate_stages.push_back(std::move(frontend));
+  components.intermediate_stages.push_back(std::move(acoustic));
+  components.intermediate_stages.push_back(std::move(latent));
+  components.vocoder = std::move(vocoder);
+
+  return components;
 }
 
 TEST(TtsEngineTest, CreateFailsWithUnsupportedModelType) {

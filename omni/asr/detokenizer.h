@@ -46,9 +46,6 @@ class Detokenizer : public SingleThreadedStageWithDeque<std::vector<Word>> {
 
   ~Detokenizer() override = default;
 
-  // Resets internal cached state for a new audio stream.
-  virtual void Reset() = 0;
-
  protected:
   bool NeedScheduleInternal() const override {
     return speech_recognizer_.HasOutput();

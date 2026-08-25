@@ -38,11 +38,6 @@ class DummyPreprocessor : public AudioPreprocessor {
 
   ~DummyPreprocessor() override = default;
 
-  void Reset() override {
-    WaitForStateThenSetState(State::kIdle, State::kRunning);
-    ClearOutputsThenSetState(State::kIdle);
-  }
-
  protected:
   absl::Status ScheduleInternal() override {
     auto cleanup = absl::MakeCleanup([this]() { SetState(State::kIdle); });

@@ -29,9 +29,6 @@ namespace litert::omni::tts {
 class TextSource : public SingleThreadedStageWithDeque<std::string> {
  public:
   ~TextSource() override = default;
-
-  // Resets internal state for a new text stream session.
-  virtual void Reset() = 0;
 };
 
 }  // namespace litert::omni::tts

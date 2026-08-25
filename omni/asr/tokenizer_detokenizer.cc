@@ -60,11 +60,6 @@ TokenizerDetokenizer::TokenizerDetokenizer(
     ::litert::support::Tokenizer* absl_nonnull tokenizer)
     : Detokenizer(speech_recognizer), tokenizer_(tokenizer) {}
 
-void TokenizerDetokenizer::Reset() {
-  WaitForStateThenSetState(State::kIdle, State::kRunning);
-  ClearOutputsThenSetState(State::kIdle);
-}
-
 absl::Status TokenizerDetokenizer::ScheduleInternal() {
   auto cleanup = absl::MakeCleanup([this]() { SetState(State::kIdle); });
   ABSL_ASSIGN_OR_RETURN(auto decoded_tokens, speech_recognizer_.GetOutput());

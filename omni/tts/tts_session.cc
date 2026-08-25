@@ -43,15 +43,11 @@ absl::StatusOr<std::unique_ptr<TtsSession>> TtsSession::Create(
   if (components.text_source == nullptr) {
     return absl::InvalidArgumentError("TextSource component is required.");
   }
-  if (components.text_frontend == nullptr) {
-    return absl::InvalidArgumentError("TextFrontend component is required.");
-  }
-  if (components.acoustic_predictor == nullptr) {
-    return absl::InvalidArgumentError(
-        "AcousticPredictor component is required.");
-  }
-  if (components.latent_decoder == nullptr) {
-    return absl::InvalidArgumentError("LatentDecoder component is required.");
+  for (const auto& stage : components.intermediate_stages) {
+    if (stage == nullptr) {
+      return absl::InvalidArgumentError(
+          "intermediate_stages contains null stage pointer.");
+    }
   }
   if (components.vocoder == nullptr) {
     return absl::InvalidArgumentError("Vocoder component is required.");
@@ -79,9 +75,9 @@ void TtsSession::ResetAsyncScheduler() {
 void TtsSession::Reset() {
   ResetAsyncScheduler();
   components_.text_source->Reset();
-  components_.text_frontend->Reset();
-  components_.acoustic_predictor->Reset();
-  components_.latent_decoder->Reset();
+  for (auto& stage : components_.intermediate_stages) {
+    stage->Reset();
+  }
   components_.vocoder->Reset();
 }
 
@@ -97,13 +93,14 @@ absl::Status TtsSession::ProcessAsync(AsyncCallback callback) {
     ABSL_RETURN_IF_ERROR(async_scheduler_->Stop(absl::Seconds(3)));
   }
 
-  std::vector<internal::StageBase*> stages = {
-      components_.text_source.get(),
-      components_.text_frontend.get(),
-      components_.acoustic_predictor.get(),
-      components_.latent_decoder.get(),
-      components_.vocoder.get(),
-  };
+  std::vector<internal::StageBase*> stages;
+  stages.reserve(2 + components_.intermediate_stages.size());
+  stages.push_back(components_.text_source.get());
+  for (const auto& stage : components_.intermediate_stages) {
+    stages.push_back(stage.get());
+  }
+  stages.push_back(components_.vocoder.get());
+
   auto callback_with_flush_on_eos =
       [callback = std::move(callback),
        this](absl::StatusOr<AudioOutput> result) mutable -> absl::Status {

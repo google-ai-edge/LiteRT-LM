@@ -56,14 +56,13 @@ class StreamTextSource : public TextSource {
   // Returns true if Finish() has been called to complete the stream.
   bool IsFinished() const;
 
-  // Resets stream state, clears internal buffers, and re-enables text pushing
-  // for a new stream session.
-  void Reset() override;
-
   // Accessor for the active text chunk configuration.
   const TextChunkConfig& config() const { return config_; }
 
  protected:
+  // Resets stream state and buffers for a new session.
+  void ResetInternal() override;
+
   // Determines if ScheduleInternal should be called based on delimiter match or
   // Finish().
   bool NeedScheduleInternal() const

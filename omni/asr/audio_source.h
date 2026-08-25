@@ -26,9 +26,6 @@ class AudioSource : public SingleThreadedStageWithDeque<std::vector<float>> {
  public:
   ~AudioSource() override = default;
 
-  // Resets internal state for a new audio stream.
-  virtual void Reset() = 0;
-
   // Returns the audio sampling rate in Hertz (e.g. 16000).
   virtual int GetSampleRateHz() const = 0;
 

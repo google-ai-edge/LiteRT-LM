@@ -37,8 +37,6 @@ class TokenizerDetokenizer : public Detokenizer {
 
   ~TokenizerDetokenizer() override = default;
 
-  void Reset() override;
-
  protected:
   absl::Status ScheduleInternal() override;
 

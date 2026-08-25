@@ -44,9 +44,6 @@ class TextMerger : public SingleThreadedStageWithDeque<MergeResult> {
 
   ~TextMerger() override = default;
 
-  // Resets internal cached state for a new audio stream.
-  virtual void Reset() = 0;
-
   // Flushes remaining unconfirmed text into the output queue at end of stream.
   virtual absl::Status Flush() = 0;
 

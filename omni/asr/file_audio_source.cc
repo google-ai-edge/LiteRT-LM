@@ -104,9 +104,7 @@ FileAudioSource::FileAudioSource(
 
 FileAudioSource::~FileAudioSource() = default;
 
-void FileAudioSource::Reset() {
-  WaitForStateThenSetState(State::kIdle, State::kRunning);
-
+void FileAudioSource::ResetInternal() {
   if (decoder_ != nullptr) {
     ma_decoder_seek_to_pcm_frame(decoder_.get(), 0);
   }
@@ -114,8 +112,6 @@ void FileAudioSource::Reset() {
   ring_pos_ = 0;
   is_closed_ = false;
   std::fill(ring_buffer_.begin(), ring_buffer_.end(), 0.0f);
-
-  ClearOutputsThenSetState(State::kIdle);
 }
 
 bool FileAudioSource::NeedScheduleInternal() const {

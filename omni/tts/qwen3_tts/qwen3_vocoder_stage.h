@@ -16,7 +16,6 @@
 #define THIRD_PARTY_ODML_LITERT_LM_OMNI_TTS_QWEN3_TTS_QWEN3_VOCODER_STAGE_H_
 
 #include <memory>
-#include <optional>
 #include <utility>
 #include <vector>
 
@@ -24,7 +23,6 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "litert/cc/litert_compiled_model.h"  // from @litert
-#include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "omni/base/model_resources.h"
 #include "omni/base/stage.h"
@@ -54,9 +52,6 @@ class Qwen3VocoderStage : public Vocoder {
 
   ~Qwen3VocoderStage() override = default;
 
-  // Resets the stage state back to idle and clears any pending outputs.
-  void Reset() override;
-
   // Flushes remaining buffered audio frames and synthesizes audio.
   //
   // returns
@@ -64,6 +59,12 @@ class Qwen3VocoderStage : public Vocoder {
   absl::Status Flush() override;
 
  protected:
+  void ResetInternal() override;
+
+  bool NeedScheduleInternal() const override {
+    return latent_decoder_.HasOutput();
+  }
+
   // Executes one step of vocoder stage processing asynchronously.
   //
   // returns
@@ -74,7 +75,7 @@ class Qwen3VocoderStage : public Vocoder {
   Qwen3VocoderStage(Stage<LatentOutput>* absl_nonnull latent_decoder,
                     Qwen3StageOptions options,
                     std::shared_ptr<ModelResources> absl_nonnull resources)
-      : Vocoder(latent_decoder),
+      : latent_decoder_(*latent_decoder),
         options_(std::move(options)),
         resources_(std::move(resources)) {}
 
@@ -97,6 +98,7 @@ class Qwen3VocoderStage : public Vocoder {
   // If flush_remaining is true, also decodes any remaining sub-chunk frames.
   absl::Status ProcessPendingChunks(bool flush_remaining);
 
+  Stage<LatentOutput>& latent_decoder_;
   Qwen3StageOptions options_;
   std::shared_ptr<ModelResources> resources_;
   std::shared_ptr<CompiledModel> codec_model_;

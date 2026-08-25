@@ -35,9 +35,6 @@ class LevenshteinTextMerger : public TextMerger {
       Stage<std::vector<Detokenizer::Word>>* absl_nonnull detokenizer)
       : TextMerger(detokenizer) {}
 
-  // Resets internal cached state for a new audio stream.
-  void Reset() override;
-
   // Flushes remaining unconfirmed text into output queue at end of stream.
   // Returns error if called when Schedule() is in progress.
   absl::Status Flush() override;
@@ -51,6 +48,9 @@ class LevenshteinTextMerger : public TextMerger {
  private:
   // SingleThreadedStageWithDeque<MergeResult> implementation:
   absl::Status ScheduleInternal() override;
+
+  // Resets internal cached state for a new audio stream.
+  void ResetInternal() override;
 
   absl::Status Execute();
 

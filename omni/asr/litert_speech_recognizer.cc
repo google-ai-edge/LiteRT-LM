@@ -64,11 +64,6 @@ LiteRtSpeechRecognizer::LiteRtSpeechRecognizer(
       encode_input_buffers_(std::move(encode_input_buffers)),
       encode_output_buffers_(std::move(encode_output_buffers)) {}
 
-void LiteRtSpeechRecognizer::Reset() {
-  WaitForStateThenSetState(State::kIdle, State::kRunning);
-  ClearOutputsThenSetState(State::kIdle);
-}
-
 absl::Status LiteRtSpeechRecognizer::ScheduleInternal() {
   auto cleanup = absl::MakeCleanup([this]() { SetState(State::kIdle); });
   ABSL_ASSIGN_OR_RETURN(auto mel_features, audio_preprocessor_.GetOutput());

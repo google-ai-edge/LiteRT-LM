@@ -37,6 +37,8 @@ class TestSourceStage : public SingleThreadedStageWithDeque<int> {
   explicit TestSourceStage(std::vector<int> items) : items_(std::move(items)) {}
 
  protected:
+  void ResetInternal() override { index_ = 0; }
+
   bool NeedScheduleInternal() const override { return index_ < items_.size(); }
 
   absl::Status ScheduleInternal() override {

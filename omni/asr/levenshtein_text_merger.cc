@@ -30,10 +30,8 @@
 
 namespace litert::omni::asr {
 
-void LevenshteinTextMerger::Reset() {
-  WaitForStateThenSetState(State::kIdle, State::kRunning);
+void LevenshteinTextMerger::ResetInternal() {
   unconfirmed_words_.clear();
-  ClearOutputsThenSetState(State::kIdle);
 }
 
 absl::Status LevenshteinTextMerger::ScheduleInternal() {

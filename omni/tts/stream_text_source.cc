@@ -51,14 +51,13 @@ bool StreamTextSource::IsFinished() const {
   return is_finished_;
 }
 
-void StreamTextSource::Reset() {
-  WaitForStateThenSetState(State::kIdle, State::kRunning);
+void StreamTextSource::ResetInternal() {
+  {
+    absl::MutexLock lock(mutex_);
+    is_finished_ = false;
+  }
   buffer_.clear();
   buffer_start_index_ = 0;
-  absl::MutexLock lock(mutex_);
-  is_finished_ = false;
-  outputs_.clear();
-  state_ = State::kIdle;
 }
 
 bool StreamTextSource::NeedScheduleInternal() const {

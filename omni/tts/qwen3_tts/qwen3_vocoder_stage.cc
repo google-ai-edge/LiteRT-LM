@@ -193,11 +193,9 @@ absl::Status Qwen3VocoderStage::Flush() {
   return status;
 }
 
-void Qwen3VocoderStage::Reset() {
-  WaitForStateThenSetState(State::kIdle, State::kRunning);
+void Qwen3VocoderStage::ResetInternal() {
   pending_frames_.clear();
   is_first_chunk_ = true;
-  ClearOutputsThenSetState(State::kIdle);
 }
 
 }  // namespace litert::omni::tts

@@ -16,6 +16,7 @@
 #define THIRD_PARTY_ODML_LITERT_LM_OMNI_TTS_TTS_SESSION_H_
 
 #include <memory>
+#include <vector>
 
 #include "absl/base/thread_annotations.h"  // from @com_google_absl
 #include "absl/functional/any_invocable.h"  // from @com_google_absl
@@ -25,10 +26,8 @@
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "omni/base/async_stage_scheduler.h"
 #include "omni/base/io_types.h"
-#include "omni/tts/acoustic_predictor.h"
-#include "omni/tts/latent_decoder.h"
+#include "omni/base/stage.h"
 #include "omni/tts/stream_text_source.h"
-#include "omni/tts/text_frontend.h"
 #include "omni/tts/vocoder.h"
 #include "runtime/framework/threadpool.h"
 
@@ -39,9 +38,7 @@ class TtsSession {
  public:
   struct Components {
     std::unique_ptr<StreamTextSource> text_source;
-    std::unique_ptr<TextFrontend> text_frontend;
-    std::unique_ptr<AcousticPredictor> acoustic_predictor;
-    std::unique_ptr<LatentDecoder> latent_decoder;
+    std::vector<std::unique_ptr<internal::StageBase>> intermediate_stages;
     std::unique_ptr<Vocoder> vocoder;
   };
 

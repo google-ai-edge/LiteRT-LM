@@ -37,9 +37,6 @@ class TimestampTextMerger : public TextMerger {
       float overlap_ratio = 0.5f, int search_window = 4,
       int max_levenshtein_distance = 3, float pivot_factor = 0.6f);
 
-  // Resets internal cached state for a new audio stream.
-  void Reset() override;
-
   // Flushes remaining unconfirmed text into output queue at end of stream.
   // Returns error if called when Schedule() is in progress.
   absl::Status Flush() override;
@@ -51,6 +48,7 @@ class TimestampTextMerger : public TextMerger {
   }
 
  private:
+  void ResetInternal() override;
   absl::Status ScheduleInternal() override;
 
   absl::Status Execute();

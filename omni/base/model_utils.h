@@ -15,6 +15,7 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_OMNI_BASE_MODEL_UTILS_H_
 #define THIRD_PARTY_ODML_LITERT_LM_OMNI_BASE_MODEL_UTILS_H_
 
+#include <cstddef>
 #include <string>
 
 #include "absl/status/status.h"  // from @com_google_absl
@@ -79,6 +80,28 @@ absl::StatusOr<std::string> LoadFile(absl::string_view model_dir,
 absl::StatusOr<CompiledModel> CreateCompiledModel(
     Environment& env, const ModelOptions& options,
     absl::string_view model_filename);
+
+// Resolves the input tensor index corresponding to a signature tensor name.
+//
+// args
+// - model: CompiledModel instance.
+// - tensor_name: Name of the input tensor.
+//
+// returns
+// - Resolved tensor index, or NotFoundError if not present.
+absl::StatusOr<size_t> ResolveInputIndex(const CompiledModel& model,
+                                         absl::string_view tensor_name);
+
+// Resolves the output tensor index corresponding to a signature tensor name.
+//
+// args
+// - model: CompiledModel instance.
+// - tensor_name: Name of the output tensor.
+//
+// returns
+// - Resolved tensor index, or NotFoundError if not present.
+absl::StatusOr<size_t> ResolveOutputIndex(const CompiledModel& model,
+                                          absl::string_view tensor_name);
 
 }  // namespace litert::omni
 

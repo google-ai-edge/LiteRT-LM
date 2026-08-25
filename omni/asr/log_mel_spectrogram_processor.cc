@@ -144,12 +144,10 @@ LogMelSpectrogramProcessor::LogMelSpectrogramProcessor(
       config_(config),
       preprocessor_(std::move(preprocessor)) {}
 
-void LogMelSpectrogramProcessor::Reset() {
-  WaitForStateThenSetState(State::kIdle, State::kRunning);
+void LogMelSpectrogramProcessor::ResetInternal() {
   if (preprocessor_) {
     preprocessor_->Reset();
   }
-  ClearOutputsThenSetState(State::kIdle);
 }
 
 absl::Status LogMelSpectrogramProcessor::ScheduleInternal() {

@@ -152,15 +152,13 @@ TimestampTextMerger::TimestampTextMerger(
       max_levenshtein_distance_(max_levenshtein_distance),
       pivot_factor_(pivot_factor) {}
 
-void TimestampTextMerger::Reset() {
-  WaitForStateThenSetState(State::kIdle, State::kRunning);
+void TimestampTextMerger::ResetInternal() {
   prev_words_.clear();
   prev_timestamps_.clear();
   last_confirmed_words_.clear();
   prev_word_index_of_unconfirmed_ = -1;
   prev_word_index_of_pivot_ = -1;
   stream_timestamp_offset_ms_ = 0;
-  ClearOutputsThenSetState(State::kIdle);
 }
 
 absl::Status TimestampTextMerger::ScheduleInternal() {

@@ -19,6 +19,7 @@
 #include <utility>
 
 #include <gtest/gtest.h>
+#include "absl/cleanup/cleanup.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_matchers.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
@@ -32,9 +33,17 @@ class TestStageWithDeque : public SingleThreadedStageWithDeque<T> {
   void AddInput(T input) { inputs_.push_front(std::move(input)); }
 
  protected:
+  void ResetInternal() override {
+    SingleThreadedStageWithDeque<T>::ResetInternal();
+    inputs_.clear();
+  }
+
   bool NeedScheduleInternal() const override { return !inputs_.empty(); }
 
   absl::Status ScheduleInternal() override {
+    absl::Cleanup cleanup = [this] {
+      this->SetState(SingleThreadedStageWithDeque<T>::State::kIdle);
+    };
     if (inputs_.empty()) {
       return absl::OkStatus();
     }
@@ -67,6 +76,18 @@ TEST(StageTest, StageWithDequeLifecycle) {
   EXPECT_TRUE(item.ok());
   EXPECT_EQ(*item, "item1");
   EXPECT_FALSE(stage.HasOutput());
+  EXPECT_TRUE(absl::IsNotFound(stage.GetOutput().status()));
+}
+
+TEST(StageTest, ResetClearsOutputsAndResetsState) {
+  TestStageWithDeque<std::string> stage;
+  stage.AddInput("item1");
+  EXPECT_TRUE(stage.Schedule().ok());
+  EXPECT_TRUE(stage.HasOutput());
+
+  stage.Reset();
+  EXPECT_FALSE(stage.HasOutput());
+  EXPECT_TRUE(stage.IsIdle());
   EXPECT_TRUE(absl::IsNotFound(stage.GetOutput().status()));
 }
 
