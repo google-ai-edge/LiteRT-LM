@@ -397,8 +397,6 @@ http_archive(
     patch_cmds = [
         # Replace @//third_party with @litert//third_party in files under third_party/.
         "sed -i -e 's|\"@//third_party/|\"@litert//third_party/|g' third_party/*/*",
-        # Replace @stblib with @stb://stblib in support/*/BUILD files.
-        "sed -i -e 's|\"@stblib\"|\"@stb//:stblib\"|g' support/*/BUILD",
     ],
     sha256 = LITERT_SHA256,
     strip_prefix = "LiteRT-" + LITERT_REF,
