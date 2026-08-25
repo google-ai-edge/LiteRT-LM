@@ -1,12 +1,10 @@
 {%- macro format_parameters(properties, required) -%}
-    {%- set standard_keys = ['description', 'type', 'properties', 'required', 'nullable'] -%}
     {%- set ns = namespace(found_first=false) -%}
     {%- for key, value in properties | dictsort -%}
         {%- set add_comma = false -%}
-        {%- if key not in standard_keys -%}
-            {%- if ns.found_first %},{% endif -%}
-            {%- set ns.found_first = true -%}
-            {{ key }}:{
+        {%- if ns.found_first %},{% endif -%}
+        {%- set ns.found_first = true -%}
+        {{ key }}:{
             {%- if value['description'] -%}
                 description:<|"|>{{ value['description'] }}<|"|>
                 {%- set add_comma = true -%}
@@ -73,7 +71,6 @@
             {%- endif -%}
             {%- if add_comma %},{%- else -%} {%- set add_comma = true -%} {% endif -%}
             type:<|"|>{{ value['type'] | upper }}<|"|>}
-        {%- endif -%}
     {%- endfor -%}
 {%- endmacro -%}
 

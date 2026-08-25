@@ -1,0 +1,79 @@
+{
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "create_schema_field",
+        "description": "Create a new schema field.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "description": {
+              "type": "string",
+              "description": "Field description"
+            },
+            "nullable": {
+              "type": "boolean",
+              "description": "Whether field can be null"
+            },
+            "properties": {
+              "type": "object",
+              "description": "Nested properties map"
+            },
+            "required": {
+              "type": "boolean",
+              "description": "Whether field is mandatory"
+            },
+            "type": {
+              "type": "string",
+              "description": "Field data type",
+              "enum": [
+                "integer",
+                "string"
+              ]
+            }
+          },
+          "required": [
+            "description",
+            "type"
+          ]
+        }
+      }
+    }
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": "Create a string field called username."
+    },
+    {
+      "role": "assistant",
+      "tool_calls": [
+        {
+          "type": "function",
+          "function": {
+            "name": "create_schema_field",
+            "arguments": {
+              "description": "User login name",
+              "nullable": false,
+              "required": true,
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": [
+        {
+          "name": "create_schema_field",
+          "response": {
+            "status": "success"
+          }
+        }
+      ]
+    }
+  ],
+  "add_generation_prompt": true
+}

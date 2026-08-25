@@ -1,0 +1,6 @@
+<|turn>system
+<|tool>declaration:create_schema_field{description:<|"|>Create a new schema field.<|"|>,parameters:{properties:{description:{description:<|"|>Field description<|"|>,type:<|"|>STRING<|"|>},nullable:{description:<|"|>Whether field can be null<|"|>,type:<|"|>BOOLEAN<|"|>},properties:{description:<|"|>Nested properties map<|"|>,properties:{description:{type:<|"|><|"|>},type:{type:<|"|><|"|>}},type:<|"|>OBJECT<|"|>},required:{description:<|"|>Whether field is mandatory<|"|>,type:<|"|>BOOLEAN<|"|>},type:{description:<|"|>Field data type<|"|>,enum:[<|"|>integer<|"|>,<|"|>string<|"|>],type:<|"|>STRING<|"|>}},required:[<|"|>description<|"|>,<|"|>type<|"|>],type:<|"|>OBJECT<|"|>}}<tool|><turn|>
+<|turn>user
+Create a string field called username.<turn|>
+<|turn>model
+<|tool_call>call:create_schema_field{description:<|"|>User login name<|"|>,nullable:false,required:true,type:<|"|>string<|"|>}<tool_call|><|tool_response>response:create_schema_field{status:<|"|>success<|"|>}<tool_response|>
