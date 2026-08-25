@@ -578,6 +578,7 @@ cc_library(
         "//runtime/components/embedding_lookup:embedding_lookup_manager",
         "//runtime/executor/litert:legacy_map_state",
         "//runtime/executor/npu:llm_litert_npu_compiled_model_executor_utils",
+        "//runtime/executor/npu:llm_litert_npu_kv_cache",
         "//runtime/executor/npu:llm_litert_npu_mask",
         "//runtime/executor/npu:llm_litert_npu_rope",
         "//runtime/util:convert_tensor_buffer",

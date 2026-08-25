@@ -43,6 +43,7 @@
 #include "runtime/executor/llm_executor_processed_tokens.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/npu/llm_litert_npu_compiled_model_executor_utils.h"
+#include "runtime/executor/npu/llm_litert_npu_kv_cache.h"
 #include "runtime/executor/npu/llm_litert_npu_mask.h"
 #include "runtime/executor/npu/llm_litert_npu_rope.h"
 

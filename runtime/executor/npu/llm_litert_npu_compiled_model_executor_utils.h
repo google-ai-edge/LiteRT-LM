@@ -199,18 +199,6 @@ litert::Expected<bool> HasPerLayerEmbedder(
     const litert::Model& transformer_model,
     absl::string_view prefill_signature);
 
-// Extracts the KV cache init value from ModelResources metadata if available.
-int64_t GetKvCacheInitValue(ModelResources& resources);
-
-// Fills a KV cache TensorBuffer with the specified initialization value.
-absl::Status FillKVCacheBuffer(::litert::TensorBuffer& buffer,
-                               int64_t init_value);
-
-// Clears all KV cache buffers in the map with the specified initialization
-// value.
-absl::Status ClearKVCacheBuffers(
-    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& buffers,
-    int64_t init_value = 0);
 
 // Creates CPU options for LiteRT compiled models.
 litert::Expected<litert::Options> CreateLiteRtCpuOptions(
@@ -316,13 +304,6 @@ struct HWQuantParams {
   int64_t zero_point = 0;
 };
 
-// Performs manual KV cache update.
-absl::Status HWKVCacheUpdate(
-    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& in_buffers,
-    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& out_buffers,
-    const absl::flat_hash_map<absl::string_view, HWQuantParams>& quant_params =
-        {},
-    bool enable_swa = false);
 
 // Context holding input and output tensor buffers for an inference phase.
 struct InferenceContext {
@@ -665,103 +646,6 @@ class NpuEmbedder {
   std::optional<::litert::TensorBuffer> verify_ple_buffer_;
 };
 
-enum class KVCacheUpdateMethod {
-  kModel,
-  kWH,
-};
-
-struct CacheUpdateSignatures {
-  static constexpr absl::string_view kDecodeCacheUpdate = "decode_cache_update";
-  static constexpr absl::string_view kVerifyCacheUpdate = "verify_cache_update";
-  static constexpr absl::string_view kInputPos = "input_pos";
-  static constexpr absl::string_view kInputValidMask = "valid_mask";
-};
-
-// =============================================================================
-// NpuKVCache Usage Guide:
-//
-// 1. Regular Prefill:
-//    cache_.SetPrefillPositions(seq_positions);
-//    cache_.RunPrefill(prefill_signature);
-//
-// 2. Regular Single-Token Decode:
-//    cache_.SetDecodePosition(current_step);
-//    cache_.RunDecode();
-//
-// 3. MTP Speculative Decoding - Verification:
-//    cache_.CommitVerifiedKVCache(start_step);
-// =============================================================================
-class NpuKVCache {
- public:
-  NpuKVCache() = default;
-  NpuKVCache(const NpuKVCache&) = delete;
-  NpuKVCache& operator=(const NpuKVCache&) = delete;
-  NpuKVCache(NpuKVCache&&) = default;
-  NpuKVCache& operator=(NpuKVCache&&) = default;
-
-  // --- Lifecycle & Creation ---
-  static absl::StatusOr<NpuKVCache> Create(
-      KVCacheUpdateMethod method,
-      const ::litert::CompiledModel* npu_auxiliary_compiled_model,
-      const ResolvedPrefillSignatures& prefill_signatures,
-      absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-          input_kv_cache_buffers,
-      absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-          prefill_output_kv_cache_slice_buffers,
-      absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-          decode_output_kv_cache_slice_buffers,
-      absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-          verify_output_kv_cache_slice_buffers,
-      absl::flat_hash_map<absl::string_view, HWQuantParams> kv_quant_params =
-          {},
-      bool has_sliding_window_attention = false);
-
-  static absl::StatusOr<NpuKVCache> CreateForTest(
-      KVCacheUpdateMethod method, const ::litert::CompiledModel* compiled_model,
-      InferenceContext cache_update_context,
-      absl::flat_hash_map<absl::string_view, HWQuantParams> kv_quant_params =
-          {},
-      bool has_sliding_window_attention = false);
-
-  void SetCompiledModel(const ::litert::CompiledModel* compiled_model) {
-    compiled_model_ = compiled_model;
-  }
-
-  // --- Stage 1: Prefill ---
-  absl::Status SetPrefillPositions(absl::Span<const int32_t> seq_positions);
-  absl::Status RunPrefill(absl::string_view signature);
-
-  // --- Stage 2: Decode ---
-  absl::Status SetDecodePosition(int32_t step);
-  absl::Status RunDecode();
-
-  // --- Stage 3: Speculative Decoding (Verify Commit) ---
-  absl::Status SetVerifyPos(int start_step);
-  absl::Status CommitVerifiedKVCache(int start_step);
-
-  // --- Accessors ---
-  KVCacheUpdateMethod GetMethod() const { return method_; }
-  const InferenceContext& Context() const { return cache_update_context_; }
-  InferenceContext ReleaseContext() { return std::move(cache_update_context_); }
-
- private:
-  explicit NpuKVCache(
-      KVCacheUpdateMethod method, const ::litert::CompiledModel* compiled_model,
-      InferenceContext cache_update_context,
-      absl::flat_hash_map<absl::string_view, HWQuantParams> kv_quant_params,
-      bool has_sliding_window_attention)
-      : method_(method),
-        compiled_model_(compiled_model),
-        cache_update_context_(std::move(cache_update_context)),
-        kv_quant_params_(std::move(kv_quant_params)),
-        has_sliding_window_attention_(has_sliding_window_attention) {}
-
-  KVCacheUpdateMethod method_ = KVCacheUpdateMethod::kModel;
-  const ::litert::CompiledModel* compiled_model_ = nullptr;
-  InferenceContext cache_update_context_;
-  absl::flat_hash_map<absl::string_view, HWQuantParams> kv_quant_params_;
-  bool has_sliding_window_attention_ = false;
-};
 
 // Holds the context for the NPU auxiliary model, which contains several
 // signatures for Mask, RoPE and KV cache update computation.

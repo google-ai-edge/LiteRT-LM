@@ -96,6 +96,32 @@ target_link_libraries(runtime_executor_npu_llm_litert_npu_mask
 )
 
 # ==============================================================================
+# LLM LiteRT NPU KV Cache
+# ==============================================================================
+add_litertlm_library(runtime_executor_npu_llm_litert_npu_kv_cache STATIC
+  llm_litert_npu_kv_cache.cc
+)
+add_library(LiteRTLM::Runtime::Executor::Npu::KVCache
+  ALIAS runtime_executor_npu_llm_litert_npu_kv_cache)
+
+target_include_directories(runtime_executor_npu_llm_litert_npu_kv_cache
+  PRIVATE
+    ${LITERTLM_GENERATED_SRC_DIR}
+    ${LITERT_INCLUDE_DIR}
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+target_link_libraries(runtime_executor_npu_llm_litert_npu_kv_cache
+  PUBLIC
+    LiteRTLM::Runtime::Executor::Npu::CompiledModelExecutorUtils
+    LiteRTLM::Runtime::Components::ModelResourcesInterface
+    LiteRTLM::Generated::Protobuf
+    runtime_util_litert_status_util
+
+    LITERTLM_DEPS
+)
+
+# ==============================================================================
 # Folder Facade
 # ==============================================================================
 add_library(runtime_executor_npu_libs INTERFACE)
@@ -103,6 +129,8 @@ add_library(LiteRTLM::Runtime::Executor::Npu ALIAS runtime_executor_npu_libs)
 
 target_link_libraries(runtime_executor_npu_libs INTERFACE
   LiteRTLM::Runtime::Executor::Npu::CompiledModelExecutorUtils
+  LiteRTLM::Runtime::Executor::Npu::KVCache
   LiteRTLM::Runtime::Executor::Npu::Rope
   LiteRTLM::Runtime::Executor::Npu::Mask
 )
+
