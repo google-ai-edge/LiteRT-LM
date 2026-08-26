@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "omni/tts/qwen3_tts/qwen3_acoustic_predictor_stage.h"
+#include "omni/tts/qwen3_tts/qwen3_tts_acoustic_predictor_stage.h"
 
 #include <algorithm>
 #include <cmath>
@@ -43,10 +43,9 @@
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "omni/base/model_resources.h"
 #include "omni/base/stage.h"
-#include "omni/tts/acoustic_predictor.h"
 #include "omni/tts/qwen3_tts/common.h"
-#include "omni/tts/qwen3_tts/qwen3_stage_options.h"
-#include "omni/tts/text_frontend.h"
+#include "omni/tts/qwen3_tts/qwen3_tts_io_types.h"
+#include "omni/tts/qwen3_tts/qwen3_tts_model_config.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "support/util/convert_tensor_buffer.h"
 
@@ -80,13 +79,13 @@ absl::Status InitializeBuffers(
 }
 }  // namespace
 
-absl::StatusOr<std::unique_ptr<Qwen3AcousticPredictorStage>>
-Qwen3AcousticPredictorStage::Create(
-    Stage<FrontendOutput>* absl_nonnull text_frontend,
-    Qwen3StageOptions options,
+absl::StatusOr<std::unique_ptr<Qwen3TtsAcousticPredictorStage>>
+Qwen3TtsAcousticPredictorStage::Create(
+    Stage<Qwen3TtsFrontendOutput>* absl_nonnull text_frontend,
+    const Qwen3TtsModelConfig& config,
     std::shared_ptr<ModelResources> absl_nonnull resources) {
-  auto stage = absl::WrapUnique(new Qwen3AcousticPredictorStage(
-      text_frontend, std::move(options), std::move(resources)));
+  auto stage = absl::WrapUnique(new Qwen3TtsAcousticPredictorStage(
+      text_frontend, config, std::move(resources)));
 
   LITERT_ASSIGN_OR_RETURN(stage->talker_model_,
                           stage->resources_->GetCompiledModel("talker"));
@@ -114,36 +113,73 @@ Qwen3AcousticPredictorStage::Create(
                           stage->mtp_model_->GetSignature(0));
   stage->mtp_signature_name_ = std::string(decode_signature.Key());
 
-  ABSL_ASSIGN_OR_RETURN(
-      stage->mtp_signatures_,
-      lm::GetModelSignaturesFromInputOutputNames(decode_signature.InputNames(),
-                                                 decode_signature.OutputNames(),
-                                                 /*strict=*/false));
-
-  std::string mtp_k_root_name;
-  std::string mtp_v_root_name;
-  ABSL_RETURN_IF_ERROR(lm::GetKVCacheRootNames(
+  auto mtp_sig_res = lm::GetModelSignaturesFromInputOutputNames(
       decode_signature.InputNames(), decode_signature.OutputNames(),
-      mtp_k_root_name, mtp_v_root_name));
+      /*strict=*/false);
+  // If MTP signature names are not found, default to use the first signature.
+  // This is for backward compatibility with converted models without specifying
+  // signature names.
+  if (mtp_sig_res.ok()) {
+    stage->mtp_signatures_ = std::move(*mtp_sig_res);
+  }
 
   stage->mtp_k_input_names_.clear();
   stage->mtp_v_input_names_.clear();
   stage->mtp_k_output_names_.clear();
   stage->mtp_v_output_names_.clear();
 
-  for (absl::string_view name : decode_signature.InputNames()) {
-    if (absl::StartsWith(name, mtp_k_root_name)) {
-      stage->mtp_k_input_names_.push_back(std::string(name));
-    } else if (absl::StartsWith(name, mtp_v_root_name)) {
-      stage->mtp_v_input_names_.push_back(std::string(name));
+  std::string mtp_k_root_name;
+  std::string mtp_v_root_name;
+  auto kv_status = lm::GetKVCacheRootNames(decode_signature.InputNames(),
+                                           decode_signature.OutputNames(),
+                                           mtp_k_root_name, mtp_v_root_name);
+
+  if (kv_status.ok()) {
+    for (absl::string_view name : decode_signature.InputNames()) {
+      if (absl::StartsWith(name, mtp_k_root_name)) {
+        stage->mtp_k_input_names_.push_back(std::string(name));
+      } else if (absl::StartsWith(name, mtp_v_root_name)) {
+        stage->mtp_v_input_names_.push_back(std::string(name));
+      }
+    }
+    for (absl::string_view name : decode_signature.OutputNames()) {
+      if (absl::StartsWith(name, mtp_k_root_name)) {
+        stage->mtp_k_output_names_.push_back(std::string(name));
+      } else if (absl::StartsWith(name, mtp_v_root_name)) {
+        stage->mtp_v_output_names_.push_back(std::string(name));
+      }
+    }
+  } else {
+    // Fallback for models with positional/generic tensor names
+    // (e.g. args_0..args_4).
+    if (decode_signature.InputNames().size() >= 5) {
+      stage->mtp_k_input_names_.push_back(
+          std::string(decode_signature.InputNames()[3]));
+      stage->mtp_v_input_names_.push_back(
+          std::string(decode_signature.InputNames()[4]));
+    }
+    if (decode_signature.OutputNames().size() >= 3) {
+      stage->mtp_k_output_names_.push_back(
+          std::string(decode_signature.OutputNames()[1]));
+      stage->mtp_v_output_names_.push_back(
+          std::string(decode_signature.OutputNames()[2]));
     }
   }
-  for (absl::string_view name : decode_signature.OutputNames()) {
-    if (absl::StartsWith(name, mtp_k_root_name)) {
-      stage->mtp_k_output_names_.push_back(std::string(name));
-    } else if (absl::StartsWith(name, mtp_v_root_name)) {
-      stage->mtp_v_output_names_.push_back(std::string(name));
-    }
+  if (stage->mtp_k_input_names_.empty()) {
+    return absl::InvalidArgumentError(
+        "Failed to find MTP K cache input names.");
+  }
+  if (stage->mtp_v_input_names_.empty()) {
+    return absl::InvalidArgumentError(
+        "Failed to find MTP V cache input names.");
+  }
+  if (stage->mtp_k_output_names_.empty()) {
+    return absl::InvalidArgumentError(
+        "Failed to find MTP K cache output names.");
+  }
+  if (stage->mtp_v_output_names_.empty()) {
+    return absl::InvalidArgumentError(
+        "Failed to find MTP V cache output names.");
   }
 
   if (stage->mtp_signatures_.input_embeddings.has_value() &&
@@ -189,6 +225,10 @@ Qwen3AcousticPredictorStage::Create(
       stage->mtp_mask_buf_,
       stage->mtp_model_->CreateInputBuffer(stage->mtp_signature_name_,
                                            stage->mtp_mask_input_name_));
+  LITERT_ASSIGN_OR_RETURN(size_t mask_size_bytes, stage->mtp_mask_buf_.Size());
+  if (mask_size_bytes > 0) {
+    stage->mtp_cache_len_ = mask_size_bytes / sizeof(float);
+  }
   LITERT_ASSIGN_OR_RETURN(
       stage->mtp_logits_out_buf_,
       stage->mtp_model_->CreateOutputBuffer(stage->mtp_signature_name_,
@@ -322,8 +362,8 @@ Qwen3AcousticPredictorStage::Create(
 }
 
 // TODO b/538727793: use cpu/gpu sampler from litert-lm.
-int Qwen3AcousticPredictorStage::PickToken(const std::vector<float>& logits,
-                                           bool do_sample) {
+int Qwen3TtsAcousticPredictorStage::PickToken(const std::vector<float>& logits,
+                                              bool do_sample) {
   if (!do_sample) {
     auto max_it = std::max_element(logits.begin(), logits.end());
     return std::distance(logits.begin(), max_it);
@@ -331,7 +371,7 @@ int Qwen3AcousticPredictorStage::PickToken(const std::vector<float>& logits,
 
   int n = logits.size();
   std::vector<double> scaled(n);
-  double temp = std::max(static_cast<double>(options_.temperature), 1e-6);
+  double temp = std::max(static_cast<double>(config_.temperature), 1e-6);
   double max_logit = -1e30;
 
   for (int i = 0; i < n; ++i) {
@@ -339,7 +379,7 @@ int Qwen3AcousticPredictorStage::PickToken(const std::vector<float>& logits,
     if (scaled[i] > max_logit) max_logit = scaled[i];
   }
 
-  int top_k = std::min(options_.top_k, n);
+  int top_k = std::min(config_.top_k, n);
   std::vector<std::pair<double, int>> pairs(n);
   for (int i = 0; i < n; ++i) {
     pairs[i] = {scaled[i], i};
@@ -362,8 +402,8 @@ int Qwen3AcousticPredictorStage::PickToken(const std::vector<float>& logits,
   return pairs[dist(rng_)].second;
 }
 
-absl::StatusOr<std::vector<float>> Qwen3AcousticPredictorStage::EmbedCodecToken(
-    int code_id) {
+absl::StatusOr<std::vector<float>>
+Qwen3TtsAcousticPredictorStage::EmbedCodecToken(int code_id) {
   std::vector<float> out(qwen3_tts::kHiddenDim, 0.0f);
   LITERT_RETURN_IF_ERROR(codec_emb_input_buffers_[0].Write<int32_t>(
       absl::MakeConstSpan(&code_id, 1)));
@@ -374,7 +414,8 @@ absl::StatusOr<std::vector<float>> Qwen3AcousticPredictorStage::EmbedCodecToken(
   return out;
 }
 
-absl::StatusOr<std::vector<float>> Qwen3AcousticPredictorStage::EmbedMtpTokens(
+absl::StatusOr<std::vector<float>>
+Qwen3TtsAcousticPredictorStage::EmbedMtpTokens(
     const std::vector<int>& mtp_codes) {
   std::vector<float> sum_embed(qwen3_tts::kHiddenDim, 0.0f);
   int num_codes = mtp_codes.size();
@@ -394,7 +435,7 @@ absl::StatusOr<std::vector<float>> Qwen3AcousticPredictorStage::EmbedMtpTokens(
   return sum_embed;
 }
 
-absl::Status Qwen3AcousticPredictorStage::RunPrefill(
+absl::Status Qwen3TtsAcousticPredictorStage::RunPrefill(
     const std::vector<float>& prefill, int p) {
   auto it = talker_prefill_buffers_.lower_bound(p);
   if (it == talker_prefill_buffers_.end()) {
@@ -463,8 +504,8 @@ absl::Status Qwen3AcousticPredictorStage::RunPrefill(
   return absl::OkStatus();
 }
 
-absl::StatusOr<Qwen3AcousticPredictorStage::DecodeOutput>
-Qwen3AcousticPredictorStage::RunDecode(const float* embed_1024, int pos) {
+absl::StatusOr<Qwen3TtsAcousticPredictorStage::DecodeOutput>
+Qwen3TtsAcousticPredictorStage::RunDecode(const float* embed_1024, int pos) {
   LITERT_RETURN_IF_ERROR(talker_decode_emb_buf_.Write<float>(
       absl::MakeConstSpan(embed_1024, qwen3_tts::kHiddenDim)));
 
@@ -531,7 +572,7 @@ Qwen3AcousticPredictorStage::RunDecode(const float* embed_1024, int pos) {
   return out;
 }
 
-absl::StatusOr<std::vector<int>> Qwen3AcousticPredictorStage::RunMtp(
+absl::StatusOr<std::vector<int>> Qwen3TtsAcousticPredictorStage::RunMtp(
     const std::vector<float>& hidden, int cb0) {
   LITERT_RETURN_IF_ERROR(InitializeBuffers(mtp_kv_cache_bufs_0_));
   LITERT_RETURN_IF_ERROR(InitializeBuffers(mtp_kv_cache_bufs_1_));
@@ -620,7 +661,7 @@ absl::StatusOr<std::vector<int>> Qwen3AcousticPredictorStage::RunMtp(
       int head_idx = t - 1;
       const float* logits_ptr = lock.second + head_idx * 2048;
       std::vector<float> logits(logits_ptr, logits_ptr + 2048);
-      int picked_code = PickToken(logits, options_.do_sample);
+      int picked_code = PickToken(logits, config_.do_sample);
       codes.push_back(picked_code);
     }
   }
@@ -628,10 +669,10 @@ absl::StatusOr<std::vector<int>> Qwen3AcousticPredictorStage::RunMtp(
   return codes;
 }
 
-absl::Status Qwen3AcousticPredictorStage::ScheduleInternal() {
+absl::Status Qwen3TtsAcousticPredictorStage::ScheduleInternal() {
   absl::Cleanup cleanup = [this] { SetState(State::kIdle); };
   ABSL_VLOG(2)
-      << "[TRACE] Starting Qwen3AcousticPredictorStage::ScheduleInternal";
+      << "[TRACE] Starting Qwen3TtsAcousticPredictorStage::ScheduleInternal";
 
   auto frontend_out = text_frontend_.GetOutput();
   if (absl::IsNotFound(frontend_out.status())) {
@@ -649,7 +690,7 @@ absl::Status Qwen3AcousticPredictorStage::ScheduleInternal() {
 
   int pos = frontend.prompt_len - 1;
   const float* last_emb_ptr = frontend.prompt_embeddings.data() + pos * 1024;
-  ABSL_ASSIGN_OR_RETURN(Qwen3AcousticPredictorStage::DecodeOutput decode_out,
+  ABSL_ASSIGN_OR_RETURN(Qwen3TtsAcousticPredictorStage::DecodeOutput decode_out,
                         RunDecode(last_emb_ptr, pos));
 
   std::vector<float> suppress(qwen3_tts::kCodecVocab, 0.0f);
@@ -664,7 +705,7 @@ absl::Status Qwen3AcousticPredictorStage::ScheduleInternal() {
 
   int total_generated_frames = 0;
 
-  while (total_generated_frames < options_.max_frames) {
+  while (total_generated_frames < config_.max_frames) {
     std::vector<float> scores(qwen3_tts::kCodecVocab);
     for (int i = 0; i < qwen3_tts::kCodecVocab; ++i) {
       scores[i] = decode_out.cb0_logits[i] + suppress[i];
@@ -676,13 +717,13 @@ absl::Status Qwen3AcousticPredictorStage::ScheduleInternal() {
 
     for (int token : history) {
       if (scores[token] > 0) {
-        scores[token] /= options_.repetition_penalty;
+        scores[token] /= config_.repetition_penalty;
       } else {
-        scores[token] *= options_.repetition_penalty;
+        scores[token] *= config_.repetition_penalty;
       }
     }
 
-    int cb0 = PickToken(scores, options_.do_sample);
+    int cb0 = PickToken(scores, config_.do_sample);
     history.insert(cb0);
     ABSL_VLOG(2) << "[TRACE] Generated frame " << total_generated_frames
                  << " with cb0=" << cb0;
@@ -718,7 +759,7 @@ absl::Status Qwen3AcousticPredictorStage::ScheduleInternal() {
     }
 
     if (static_cast<int>(chunk_frames.size()) >= qwen3_tts::kFrameChunkSize) {
-      AcousticOutput out;
+      Qwen3TtsAcousticOutput out;
       out.rvq_frames = std::move(chunk_frames);
       out.codec_features = std::move(chunk_codec_features);
       PushOutput(std::move(out));
@@ -736,7 +777,7 @@ absl::Status Qwen3AcousticPredictorStage::ScheduleInternal() {
   }
 
   if (!chunk_frames.empty()) {
-    AcousticOutput out;
+    Qwen3TtsAcousticOutput out;
     out.rvq_frames = std::move(chunk_frames);
     out.codec_features = std::move(chunk_codec_features);
     PushOutput(std::move(out));
@@ -744,7 +785,7 @@ absl::Status Qwen3AcousticPredictorStage::ScheduleInternal() {
   return absl::OkStatus();
 }
 
-void Qwen3AcousticPredictorStage::Reset() {
+void Qwen3TtsAcousticPredictorStage::Reset() {
   WaitForStateThenSetState(State::kIdle, State::kRunning);
   ClearOutputsThenSetState(State::kIdle);
 }

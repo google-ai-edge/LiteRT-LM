@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef THIRD_PARTY_ODML_LITERT_LM_OMNI_TTS_QWEN3_TTS_QWEN3_FRONTEND_STAGE_H_
-#define THIRD_PARTY_ODML_LITERT_LM_OMNI_TTS_QWEN3_TTS_QWEN3_FRONTEND_STAGE_H_
+#ifndef THIRD_PARTY_ODML_LITERT_LM_OMNI_TTS_QWEN3_TTS_QWEN3_TTS_FRONTEND_STAGE_H_
+#define THIRD_PARTY_ODML_LITERT_LM_OMNI_TTS_QWEN3_TTS_QWEN3_TTS_FRONTEND_STAGE_H_
 
 #include <memory>
 #include <string>
@@ -29,35 +29,44 @@
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "omni/base/model_resources.h"
 #include "omni/base/stage.h"
-#include "omni/tts/qwen3_tts/qwen3_stage_options.h"
-#include "omni/tts/text_frontend.h"
+#include "omni/tts/qwen3_tts/qwen3_tts_io_types.h"
+#include "omni/tts/qwen3_tts/qwen3_tts_model_config.h"
 #include "support/tokenizer/huggingface_tokenizer.h"
 
 namespace litert::omni::tts {
 
 // Stage 1: Text Frontend & Prompt Framing for Qwen3-TTS
-class Qwen3FrontendStage : public TextFrontend {
+class Qwen3TtsFrontendStage
+    : public SingleThreadedStageWithDeque<Qwen3TtsFrontendOutput> {
  public:
-  // Creates a Qwen3FrontendStage instance and initializes its resources.
+  // Creates a Qwen3TtsFrontendStage instance and initializes its resources.
   //
   // args
   // - text_source: Stage that provides the input text.
-  // - options: Options for configuring the Qwen3FrontendStage.
+  // - model_dir: Path to directory containing tokenizer and speaker files.
+  // - config: Model-specific configuration for Qwen3-TTS.
   // - resources: Shared ModelResources container with compiled models.
   //
   // returns
-  // - Unique pointer to the created Qwen3FrontendStage on success, or an error
+  // - Unique pointer to the created Qwen3TtsFrontendStage on success, or an
+  // error
   //   status on failure.
-  static absl::StatusOr<std::unique_ptr<Qwen3FrontendStage>> Create(
-      Stage<std::string>* absl_nonnull text_source, Qwen3StageOptions options,
+  static absl::StatusOr<std::unique_ptr<Qwen3TtsFrontendStage>> Create(
+      Stage<std::string>* absl_nonnull text_source,
+      const std::string& model_dir,
+      const Qwen3TtsModelConfig& config,
       std::shared_ptr<ModelResources> absl_nonnull resources);
 
-  ~Qwen3FrontendStage() override = default;
+  ~Qwen3TtsFrontendStage() override = default;
 
   // Resets the stage state back to idle and clears any pending outputs.
   void Reset() override;
 
  protected:
+  bool NeedScheduleInternal() const override {
+    return text_source_.HasOutput();
+  }
+
   // Executes one step of frontend stage processing asynchronously.
   //
   // returns
@@ -65,12 +74,14 @@ class Qwen3FrontendStage : public TextFrontend {
   absl::Status ScheduleInternal() override;
 
  private:
-  Qwen3FrontendStage(Stage<std::string>* absl_nonnull text_source,
-                     Qwen3StageOptions options,
-                     std::shared_ptr<ModelResources> absl_nonnull resources)
-      : TextFrontend(text_source),
-        options_(std::move(options)),
+  Qwen3TtsFrontendStage(Stage<std::string>* absl_nonnull text_source,
+                        Qwen3TtsModelConfig config,
+                        std::shared_ptr<ModelResources> absl_nonnull resources)
+      : text_source_(*text_source),
+        config_(std::move(config)),
         resources_(std::move(resources)) {}
+
+  Stage<std::string>& text_source_;
 
   // Embeds a single audio codec token ID using the codec embedding model.
   //
@@ -110,9 +121,11 @@ class Qwen3FrontendStage : public TextFrontend {
   // - input_text: Raw input text string to frame into prompt embeddings.
   //
   // returns
-  // - FrontendOutput containing prompt and trailing embeddings on success,
+  // - Qwen3TtsFrontendOutput containing prompt and trailing embeddings on
+  // success,
   //   or error status.
-  absl::StatusOr<FrontendOutput> BuildPrompt(const std::string& input_text);
+  absl::StatusOr<Qwen3TtsFrontendOutput> BuildPrompt(
+      const std::string& input_text);
 
   // Appends the elementwise sum of two float spans to an output vector.
   //
@@ -137,7 +150,7 @@ class Qwen3FrontendStage : public TextFrontend {
   absl::Status AppendCodecSum(absl::Span<const float> base, int code_id,
                               std::vector<float>& out);
 
-  Qwen3StageOptions options_;
+  Qwen3TtsModelConfig config_;
   std::shared_ptr<ModelResources> resources_;
   std::unique_ptr<support::HuggingFaceTokenizer> tokenizer_;
 
@@ -164,4 +177,4 @@ class Qwen3FrontendStage : public TextFrontend {
 
 }  // namespace litert::omni::tts
 
-#endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_TTS_QWEN3_TTS_QWEN3_FRONTEND_STAGE_H_
+#endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_TTS_QWEN3_TTS_QWEN3_TTS_FRONTEND_STAGE_H_

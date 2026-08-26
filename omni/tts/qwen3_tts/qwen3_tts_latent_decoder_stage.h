@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef THIRD_PARTY_ODML_LITERT_LM_OMNI_TTS_QWEN3_TTS_QWEN3_LATENT_DECODER_STAGE_H_
-#define THIRD_PARTY_ODML_LITERT_LM_OMNI_TTS_QWEN3_TTS_QWEN3_LATENT_DECODER_STAGE_H_
+#ifndef THIRD_PARTY_ODML_LITERT_LM_OMNI_TTS_QWEN3_TTS_QWEN3_TTS_LATENT_DECODER_STAGE_H_
+#define THIRD_PARTY_ODML_LITERT_LM_OMNI_TTS_QWEN3_TTS_QWEN3_TTS_LATENT_DECODER_STAGE_H_
 
 #include <memory>
 
@@ -21,41 +21,48 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "omni/base/stage.h"
-#include "omni/tts/acoustic_predictor.h"
-#include "omni/tts/latent_decoder.h"
+#include "omni/tts/qwen3_tts/qwen3_tts_io_types.h"
 
 namespace litert::omni::tts {
 
 // Stage 3: Latent Decoder (Discrete RVQ Codebook Index to Feature
-// Transformation). A dummy stage for now.
-class Qwen3LatentDecoderStage : public LatentDecoder {
+// Transformation).
+class Qwen3TtsLatentDecoderStage
+    : public SingleThreadedStageWithDeque<Qwen3TtsLatentOutput> {
  public:
-  // Creates a Qwen3LatentDecoderStage instance.
+  // Creates a Qwen3TtsLatentDecoderStage instance.
   //
   // args
-  // - acoustic_predictor: Stage providing input AcousticOutput data.
+  // - acoustic_predictor: Stage providing input Qwen3TtsAcousticOutput data.
   //
   // returns
-  // - Unique pointer to created Qwen3LatentDecoderStage on success, or error
+  // - Unique pointer to created Qwen3TtsLatentDecoderStage on success, or error
   //   status on failure.
-  static absl::StatusOr<std::unique_ptr<Qwen3LatentDecoderStage>> Create(
-      Stage<AcousticOutput>* absl_nonnull acoustic_predictor);
+  static absl::StatusOr<std::unique_ptr<Qwen3TtsLatentDecoderStage>> Create(
+      Stage<Qwen3TtsAcousticOutput>* absl_nonnull acoustic_predictor);
 
-  explicit Qwen3LatentDecoderStage(
-      Stage<AcousticOutput>* absl_nonnull acoustic_predictor);
-  ~Qwen3LatentDecoderStage() override = default;
+  explicit Qwen3TtsLatentDecoderStage(
+      Stage<Qwen3TtsAcousticOutput>* absl_nonnull acoustic_predictor);
+  ~Qwen3TtsLatentDecoderStage() override = default;
 
   // Resets the stage state back to idle and clears any pending outputs.
   void Reset() override;
 
  protected:
+  bool NeedScheduleInternal() const override {
+    return acoustic_predictor_.HasOutput();
+  }
+
   // Executes one step of latent decoder stage processing asynchronously.
   //
   // returns
   // - absl::OkStatus() on success, or error status on failure.
   absl::Status ScheduleInternal() override;
+
+ private:
+  Stage<Qwen3TtsAcousticOutput>& acoustic_predictor_;
 };
 
 }  // namespace litert::omni::tts
 
-#endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_TTS_QWEN3_TTS_QWEN3_LATENT_DECODER_STAGE_H_
+#endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_TTS_QWEN3_TTS_QWEN3_TTS_LATENT_DECODER_STAGE_H_

@@ -27,10 +27,7 @@
 #include "absl/synchronization/notification.h"  // from @com_google_absl
 #include "omni/base/io_types.h"
 #include "omni/base/stage.h"
-#include "omni/tts/acoustic_predictor.h"
-#include "omni/tts/latent_decoder.h"
 #include "omni/tts/stream_text_source.h"
-#include "omni/tts/text_frontend.h"
 #include "omni/tts/tts_session.h"
 #include "omni/tts/vocoder.h"
 #include "runtime/framework/threadpool.h"
@@ -39,12 +36,30 @@
 namespace litert::omni::tts {
 namespace {
 
-class DummyTextFrontend : public TextFrontend {
+struct DummyFrontendOutput {
+  std::vector<int> token_ids;
+};
+
+struct DummyAcousticOutput {
+  std::vector<std::vector<int>> rvq_frames;
+};
+
+struct DummyLatentOutput {
+  std::vector<float> codec_features;
+  std::vector<std::vector<int>> rvq_frames;
+};
+
+class DummyTextFrontend
+    : public SingleThreadedStageWithDeque<DummyFrontendOutput> {
  public:
   explicit DummyTextFrontend(Stage<std::string>* text_source)
-      : TextFrontend(text_source) {}
+      : text_source_(*text_source) {}
 
  protected:
+  bool NeedScheduleInternal() const override {
+    return text_source_.HasOutput();
+  }
+
   absl::Status ScheduleInternal() override {
     absl::Cleanup cleanup = [this] { SetState(State::kIdle); };
     auto text_chunk = text_source_.GetOutput();
@@ -53,20 +68,28 @@ class DummyTextFrontend : public TextFrontend {
     } else if (!text_chunk.ok()) {
       return text_chunk.status();
     }
-    FrontendOutput out;
+    DummyFrontendOutput out;
     out.token_ids = {10, 20};
     PushOutput(std::move(out));
     return absl::OkStatus();
   }
+
+ private:
+  Stage<std::string>& text_source_;
 };
 
-class DummyAcousticPredictor : public AcousticPredictor {
+class DummyAcousticPredictor
+    : public SingleThreadedStageWithDeque<DummyAcousticOutput> {
  public:
   explicit DummyAcousticPredictor(
-      Stage<TextFrontend::FrontendOutput>* text_frontend)
-      : AcousticPredictor(text_frontend) {}
+      Stage<DummyFrontendOutput>* text_frontend)
+      : text_frontend_(*text_frontend) {}
 
  protected:
+  bool NeedScheduleInternal() const override {
+    return text_frontend_.HasOutput();
+  }
+
   absl::Status ScheduleInternal() override {
     absl::Cleanup cleanup = [this] { SetState(State::kIdle); };
     auto frontend_out = text_frontend_.GetOutput();
@@ -75,20 +98,28 @@ class DummyAcousticPredictor : public AcousticPredictor {
     } else if (!frontend_out.ok()) {
       return frontend_out.status();
     }
-    AcousticOutput out;
+    DummyAcousticOutput out;
     out.rvq_frames.push_back({1, 2, 3});
     PushOutput(std::move(out));
     return absl::OkStatus();
   }
+
+ private:
+  Stage<DummyFrontendOutput>& text_frontend_;
 };
 
-class DummyLatentDecoder : public LatentDecoder {
+class DummyLatentDecoder
+    : public SingleThreadedStageWithDeque<DummyLatentOutput> {
  public:
   explicit DummyLatentDecoder(
-      Stage<AcousticPredictor::AcousticOutput>* acoustic_predictor)
-      : LatentDecoder(acoustic_predictor) {}
+      Stage<DummyAcousticOutput>* acoustic_predictor)
+      : acoustic_predictor_(*acoustic_predictor) {}
 
  protected:
+  bool NeedScheduleInternal() const override {
+    return acoustic_predictor_.HasOutput();
+  }
+
   absl::Status ScheduleInternal() override {
     absl::Cleanup cleanup = [this] { SetState(State::kIdle); };
     auto acoustic_out = acoustic_predictor_.GetOutput();
@@ -97,17 +128,20 @@ class DummyLatentDecoder : public LatentDecoder {
     } else if (!acoustic_out.ok()) {
       return acoustic_out.status();
     }
-    LatentOutput out;
+    DummyLatentOutput out;
     out.codec_features = {0.1f, 0.2f};
     out.rvq_frames = acoustic_out->rvq_frames;
     PushOutput(std::move(out));
     return absl::OkStatus();
   }
+
+ private:
+  Stage<DummyAcousticOutput>& acoustic_predictor_;
 };
 
 class DummyVocoder : public Vocoder {
  public:
-  explicit DummyVocoder(Stage<LatentDecoder::LatentOutput>* latent_decoder)
+  explicit DummyVocoder(Stage<DummyLatentOutput>* latent_decoder)
       : latent_decoder_(*latent_decoder) {}
 
   absl::Status Flush() override {
@@ -142,7 +176,7 @@ class DummyVocoder : public Vocoder {
   }
 
  private:
-  Stage<LatentOutput>& latent_decoder_;
+  Stage<DummyLatentOutput>& latent_decoder_;
   bool has_pending_audio_ = false;
 };
 

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "omni/tts/qwen3_tts/qwen3_vocoder_stage.h"
+#include "omni/tts/qwen3_tts/qwen3_tts_vocoder_stage.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -35,18 +35,20 @@
 #include "omni/base/io_types.h"
 #include "omni/base/model_resources.h"
 #include "omni/base/stage.h"
-#include "omni/tts/latent_decoder.h"
 #include "omni/tts/qwen3_tts/common.h"
-#include "omni/tts/qwen3_tts/qwen3_stage_options.h"
+#include "omni/tts/qwen3_tts/qwen3_tts_io_types.h"
+#include "omni/tts/qwen3_tts/qwen3_tts_model_config.h"
 #include "support/util/convert_tensor_buffer.h"
 
 namespace litert::omni::tts {
 
-absl::StatusOr<std::unique_ptr<Qwen3VocoderStage>> Qwen3VocoderStage::Create(
-    Stage<LatentOutput>* absl_nonnull latent_decoder, Qwen3StageOptions options,
+absl::StatusOr<std::unique_ptr<Qwen3TtsVocoderStage>>
+Qwen3TtsVocoderStage::Create(
+    Stage<Qwen3TtsLatentOutput>* absl_nonnull latent_decoder,
+    const Qwen3TtsModelConfig& config,
     std::shared_ptr<ModelResources> absl_nonnull resources) {
-  auto stage = absl::WrapUnique(new Qwen3VocoderStage(
-      latent_decoder, std::move(options), std::move(resources)));
+  auto stage = absl::WrapUnique(
+      new Qwen3TtsVocoderStage(latent_decoder, config, std::move(resources)));
 
   LITERT_ASSIGN_OR_RETURN(stage->codec_model_,
                           stage->resources_->GetCompiledModel("codec"));
@@ -78,7 +80,7 @@ absl::StatusOr<std::unique_ptr<Qwen3VocoderStage>> Qwen3VocoderStage::Create(
   return stage;
 }
 
-absl::StatusOr<std::vector<float>> Qwen3VocoderStage::DecodeChunk(
+absl::StatusOr<std::vector<float>> Qwen3TtsVocoderStage::DecodeChunk(
     const std::vector<std::vector<int>>& window_frames, int c,
     int valid_frames_count) {
   int chunk = codec_chunk_;
@@ -115,7 +117,7 @@ absl::StatusOr<std::vector<float>> Qwen3VocoderStage::DecodeChunk(
   return waveform;
 }
 
-absl::Status Qwen3VocoderStage::ProcessPendingChunks(bool flush_remaining) {
+absl::Status Qwen3TtsVocoderStage::ProcessPendingChunks(bool flush_remaining) {
   const int chunk = codec_chunk_;
   const int ctx = qwen3_tts::kVocoderOverlapContext;
   const int step_size = chunk - ctx;
@@ -154,9 +156,9 @@ absl::Status Qwen3VocoderStage::ProcessPendingChunks(bool flush_remaining) {
   return absl::OkStatus();
 }
 
-absl::Status Qwen3VocoderStage::ScheduleInternal() {
+absl::Status Qwen3TtsVocoderStage::ScheduleInternal() {
   absl::Cleanup cleanup = [this] { SetState(State::kIdle); };
-  ABSL_VLOG(2) << "[TRACE] Starting Qwen3VocoderStage::ScheduleInternal";
+  ABSL_VLOG(2) << "[TRACE] Starting Qwen3TtsVocoderStage::ScheduleInternal";
 
   auto latent_out = latent_decoder_.GetOutput();
   if (absl::IsNotFound(latent_out.status())) {
@@ -171,7 +173,7 @@ absl::Status Qwen3VocoderStage::ScheduleInternal() {
   return ProcessPendingChunks(/*flush_remaining=*/false);
 }
 
-absl::Status Qwen3VocoderStage::Flush() {
+absl::Status Qwen3TtsVocoderStage::Flush() {
   {
     absl::MutexLock lock(mutex_);
     if (state_ != State::kIdle) {
@@ -193,7 +195,7 @@ absl::Status Qwen3VocoderStage::Flush() {
   return status;
 }
 
-void Qwen3VocoderStage::ResetInternal() {
+void Qwen3TtsVocoderStage::ResetInternal() {
   pending_frames_.clear();
   is_first_chunk_ = true;
 }

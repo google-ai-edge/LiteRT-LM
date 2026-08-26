@@ -19,8 +19,13 @@ package(default_visibility = ["//visibility:public"])
 licenses(["notice"])
 
 cc_library(
-    name = "qwen3_stage_options",
-    hdrs = ["qwen3_stage_options.h"],
+    name = "qwen3_tts_model_config",
+    hdrs = ["qwen3_tts_model_config.h"],
+)
+
+cc_library(
+    name = "qwen3_tts_io_types",
+    hdrs = ["qwen3_tts_io_types.h"],
 )
 
 cc_library(
@@ -38,12 +43,13 @@ cc_library(
 )
 
 cc_library(
-    name = "qwen3_frontend_stage",
-    srcs = ["qwen3_frontend_stage.cc"],
-    hdrs = ["qwen3_frontend_stage.h"],
+    name = "qwen3_tts_frontend_stage",
+    srcs = ["qwen3_tts_frontend_stage.cc"],
+    hdrs = ["qwen3_tts_frontend_stage.h"],
     deps = [
         ":common",
-        ":qwen3_stage_options",
+        ":qwen3_tts_io_types",
+        ":qwen3_tts_model_config",
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/cleanup",
         "@com_google_absl//absl/log:absl_log",
@@ -54,7 +60,6 @@ cc_library(
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/strings:string_view",
-        "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/types:span",
         "@litert//litert/cc:litert_compiled_model",
         "@litert//litert/cc:litert_environment",
@@ -63,18 +68,18 @@ cc_library(
         "//omni/base:model_resources",
         "//omni/base:model_utils",
         "//omni/base:stage",
-        "//omni/tts:text_frontend",
         "//support/tokenizer:huggingface_tokenizer",
     ],
 )
 
 cc_library(
-    name = "qwen3_acoustic_predictor_stage",
-    srcs = ["qwen3_acoustic_predictor_stage.cc"],
-    hdrs = ["qwen3_acoustic_predictor_stage.h"],
+    name = "qwen3_tts_acoustic_predictor_stage",
+    srcs = ["qwen3_tts_acoustic_predictor_stage.cc"],
+    hdrs = ["qwen3_tts_acoustic_predictor_stage.h"],
     deps = [
         ":common",
-        ":qwen3_stage_options",
+        ":qwen3_tts_io_types",
+        ":qwen3_tts_model_config",
         "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/cleanup",
@@ -94,37 +99,33 @@ cc_library(
         "@litert//litert/cc:litert_tensor_buffer",
         "//omni/base:model_resources",
         "//omni/base:stage",
-        "//omni/tts:acoustic_predictor",
-        "//omni/tts:text_frontend",
         "//runtime/executor:litert_compiled_model_executor_utils",
         "//support/util:convert_tensor_buffer",
     ],
 )
 
 cc_library(
-    name = "qwen3_latent_decoder_stage",
-    srcs = ["qwen3_latent_decoder_stage.cc"],
-    hdrs = ["qwen3_latent_decoder_stage.h"],
+    name = "qwen3_tts_latent_decoder_stage",
+    srcs = ["qwen3_tts_latent_decoder_stage.cc"],
+    hdrs = ["qwen3_tts_latent_decoder_stage.h"],
     deps = [
+        ":qwen3_tts_io_types",
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/cleanup",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/synchronization",
-        "//omni/base:io_types",
         "//omni/base:stage",
-        "//omni/tts:acoustic_predictor",
-        "//omni/tts:latent_decoder",
     ],
 )
 
 cc_library(
-    name = "qwen3_vocoder_stage",
-    srcs = ["qwen3_vocoder_stage.cc"],
-    hdrs = ["qwen3_vocoder_stage.h"],
+    name = "qwen3_tts_vocoder_stage",
+    srcs = ["qwen3_tts_vocoder_stage.cc"],
+    hdrs = ["qwen3_tts_vocoder_stage.h"],
     deps = [
         ":common",
-        ":qwen3_stage_options",
+        ":qwen3_tts_io_types",
+        ":qwen3_tts_model_config",
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/cleanup",
         "@com_google_absl//absl/log:absl_log",
@@ -141,8 +142,32 @@ cc_library(
         "//omni/base:io_types",
         "//omni/base:model_resources",
         "//omni/base:stage",
-        "//omni/tts:latent_decoder",
         "//omni/tts:vocoder",
         "//support/util:convert_tensor_buffer",
+    ],
+)
+
+cc_library(
+    name = "qwen3_tts_factory",
+    srcs = ["qwen3_tts_factory.cc"],
+    hdrs = ["qwen3_tts_factory.h"],
+    deps = [
+        ":qwen3_tts_acoustic_predictor_stage",
+        ":qwen3_tts_frontend_stage",
+        ":qwen3_tts_latent_decoder_stage",
+        ":qwen3_tts_model_config",
+        ":qwen3_tts_vocoder_stage",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@litert//litert/cc:litert_compiled_model",
+        "@litert//litert/cc:litert_environment",
+        "@litert//litert/cc:litert_macros",
+        "//omni/base:model_resources",
+        "//omni/base:model_utils",
+        "//omni/tts:stream_text_source",
+        "//omni/tts:text_chunk_utils",
+        "//omni/tts:tts_session",
+        "//runtime/executor:executor_settings_base",
     ],
 )

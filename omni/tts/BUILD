@@ -61,35 +61,6 @@ cc_library(
 )
 
 cc_library(
-    name = "text_frontend",
-    hdrs = ["text_frontend.h"],
-    deps = [
-        "@com_google_absl//absl/base:nullability",
-        "//omni/base:stage",
-    ],
-)
-
-cc_library(
-    name = "acoustic_predictor",
-    hdrs = ["acoustic_predictor.h"],
-    deps = [
-        ":text_frontend",
-        "@com_google_absl//absl/base:nullability",
-        "//omni/base:stage",
-    ],
-)
-
-cc_library(
-    name = "latent_decoder",
-    hdrs = ["latent_decoder.h"],
-    deps = [
-        ":acoustic_predictor",
-        "@com_google_absl//absl/base:nullability",
-        "//omni/base:stage",
-    ],
-)
-
-cc_library(
     name = "vocoder",
     hdrs = ["vocoder.h"],
     deps = [
@@ -182,7 +153,6 @@ cc_library(
     srcs = ["tts_engine.cc"],
     hdrs = ["tts_engine.h"],
     deps = [
-        ":stream_text_source",
         ":text_chunk_utils",
         ":tts_session",
         "@com_google_absl//absl/functional:any_invocable",
@@ -190,17 +160,12 @@ cc_library(
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
-        "@litert//litert/cc:litert_compiled_model",
         "@litert//litert/cc:litert_environment",
         "@litert//litert/cc:litert_macros",
         "//omni/base:io_types",
         "//omni/base:model_resources",
-        "//omni/base:model_utils",
-        "//omni/tts/qwen3_tts:qwen3_acoustic_predictor_stage",
-        "//omni/tts/qwen3_tts:qwen3_frontend_stage",
-        "//omni/tts/qwen3_tts:qwen3_latent_decoder_stage",
-        "//omni/tts/qwen3_tts:qwen3_stage_options",
-        "//omni/tts/qwen3_tts:qwen3_vocoder_stage",
+        "//omni/tts/qwen3_tts:qwen3_tts_factory",
+        "//omni/tts/qwen3_tts:qwen3_tts_model_config",
         "//runtime/executor:executor_settings_base",
         "//runtime/framework:threadpool",
     ],
@@ -210,14 +175,12 @@ cc_test(
     name = "tts_engine_test",
     srcs = ["tts_engine_test.cc"],
     deps = [
-        ":acoustic_predictor",
-        ":latent_decoder",
         ":stream_text_source",
-        ":text_frontend",
         ":tts_engine",
         ":tts_session",
         ":vocoder",
         "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/cleanup",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",

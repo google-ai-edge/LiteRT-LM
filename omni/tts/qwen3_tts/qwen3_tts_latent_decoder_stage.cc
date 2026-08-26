@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "omni/tts/qwen3_tts/qwen3_latent_decoder_stage.h"
+#include "omni/tts/qwen3_tts/qwen3_tts_latent_decoder_stage.h"
 
 #include <memory>
 #include <utility>
@@ -22,22 +22,21 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "omni/base/stage.h"
-#include "omni/tts/acoustic_predictor.h"
-#include "omni/tts/latent_decoder.h"
+#include "omni/tts/qwen3_tts/qwen3_tts_io_types.h"
 
 namespace litert::omni::tts {
 
-absl::StatusOr<std::unique_ptr<Qwen3LatentDecoderStage>>
-Qwen3LatentDecoderStage::Create(
-    Stage<AcousticOutput>* absl_nonnull acoustic_predictor) {
-  return std::make_unique<Qwen3LatentDecoderStage>(acoustic_predictor);
+absl::StatusOr<std::unique_ptr<Qwen3TtsLatentDecoderStage>>
+Qwen3TtsLatentDecoderStage::Create(
+    Stage<Qwen3TtsAcousticOutput>* absl_nonnull acoustic_predictor) {
+  return std::make_unique<Qwen3TtsLatentDecoderStage>(acoustic_predictor);
 }
 
-Qwen3LatentDecoderStage::Qwen3LatentDecoderStage(
-    Stage<AcousticOutput>* absl_nonnull acoustic_predictor)
-    : LatentDecoder(acoustic_predictor) {}
+Qwen3TtsLatentDecoderStage::Qwen3TtsLatentDecoderStage(
+    Stage<Qwen3TtsAcousticOutput>* absl_nonnull acoustic_predictor)
+    : acoustic_predictor_(*acoustic_predictor) {}
 
-absl::Status Qwen3LatentDecoderStage::ScheduleInternal() {
+absl::Status Qwen3TtsLatentDecoderStage::ScheduleInternal() {
   absl::Cleanup cleanup = [this] { SetState(State::kIdle); };
 
   auto acoustic = acoustic_predictor_.GetOutput();
@@ -47,14 +46,14 @@ absl::Status Qwen3LatentDecoderStage::ScheduleInternal() {
     return acoustic.status();
   }
 
-  LatentOutput out;
+  Qwen3TtsLatentOutput out;
   out.codec_features = std::move(acoustic->codec_features);
   out.rvq_frames = std::move(acoustic->rvq_frames);
   PushOutput(std::move(out));
   return absl::OkStatus();
 }
 
-void Qwen3LatentDecoderStage::Reset() {
+void Qwen3TtsLatentDecoderStage::Reset() {
   WaitForStateThenSetState(State::kIdle, State::kRunning);
   ClearOutputsThenSetState(State::kIdle);
 }

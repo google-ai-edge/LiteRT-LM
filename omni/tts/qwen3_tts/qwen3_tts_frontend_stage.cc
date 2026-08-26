@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "omni/tts/qwen3_tts/qwen3_frontend_stage.h"
+#include "omni/tts/qwen3_tts/qwen3_tts_frontend_stage.h"
 
 #include <cstdint>
 #include <cstring>
@@ -37,21 +37,24 @@
 #include "omni/base/model_utils.h"
 #include "omni/base/stage.h"
 #include "omni/tts/qwen3_tts/common.h"
-#include "omni/tts/qwen3_tts/qwen3_stage_options.h"
-#include "omni/tts/text_frontend.h"
+#include "omni/tts/qwen3_tts/qwen3_tts_io_types.h"
+#include "omni/tts/qwen3_tts/qwen3_tts_model_config.h"
 #include "support/tokenizer/huggingface_tokenizer.h"
 
 namespace litert::omni::tts {
 
-absl::StatusOr<std::unique_ptr<Qwen3FrontendStage>> Qwen3FrontendStage::Create(
-    Stage<std::string>* absl_nonnull text_source, Qwen3StageOptions options,
+absl::StatusOr<std::unique_ptr<Qwen3TtsFrontendStage>>
+Qwen3TtsFrontendStage::Create(
+    Stage<std::string>* absl_nonnull text_source,
+    const std::string& model_dir,
+    const Qwen3TtsModelConfig& config,
     std::shared_ptr<ModelResources> absl_nonnull resources) {
-  auto stage = absl::WrapUnique(new Qwen3FrontendStage(
-      text_source, std::move(options), std::move(resources)));
+  auto stage = absl::WrapUnique(
+      new Qwen3TtsFrontendStage(text_source, config, std::move(resources)));
 
   ABSL_ASSIGN_OR_RETURN(
       std::string tok_json,
-      LoadFile(stage->options_.model_dir, stage->options_.tokenizer_file));
+      LoadFile(model_dir, stage->config_.tokenizer_file));
   ABSL_ASSIGN_OR_RETURN(
       stage->tokenizer_,
       support::HuggingFaceTokenizer::CreateFromJson(std::move(tok_json)));
@@ -97,7 +100,7 @@ absl::StatusOr<std::unique_ptr<Qwen3FrontendStage>> Qwen3FrontendStage::Create(
   // Load speaker embedding from binary file.
   ABSL_ASSIGN_OR_RETURN(
       std::string spk_buf,
-      LoadFile(stage->options_.model_dir, stage->options_.speaker_file));
+      LoadFile(model_dir, stage->config_.speaker_file));
   if (spk_buf.size() != qwen3_tts::kHiddenDim * sizeof(float)) {
     return absl::InvalidArgumentError(
         absl::StrCat("Speaker embedding size is not correct. Expected ",
@@ -110,7 +113,7 @@ absl::StatusOr<std::unique_ptr<Qwen3FrontendStage>> Qwen3FrontendStage::Create(
   return stage;
 }
 
-absl::StatusOr<std::vector<float>> Qwen3FrontendStage::ProjectText(
+absl::StatusOr<std::vector<float>> Qwen3TtsFrontendStage::ProjectText(
     const std::vector<float>& rows, int num_rows) {
   std::vector<float> out(num_rows * qwen3_tts::kHiddenDim);
 
@@ -127,7 +130,7 @@ absl::StatusOr<std::vector<float>> Qwen3FrontendStage::ProjectText(
   return out;
 }
 
-absl::StatusOr<std::vector<float>> Qwen3FrontendStage::EmbedCodecToken(
+absl::StatusOr<std::vector<float>> Qwen3TtsFrontendStage::EmbedCodecToken(
     int code_id) {
   std::vector<float> out(qwen3_tts::kHiddenDim, 0.0f);
   if (code_id >= 0 && code_id < qwen3_tts::kCodecVocab) {
@@ -142,7 +145,7 @@ absl::StatusOr<std::vector<float>> Qwen3FrontendStage::EmbedCodecToken(
   return out;
 }
 
-absl::StatusOr<std::vector<float>> Qwen3FrontendStage::EmbedText(
+absl::StatusOr<std::vector<float>> Qwen3TtsFrontendStage::EmbedText(
     const std::vector<int>& ids) {
   int num_ids = ids.size();
   std::vector<float> rows(num_ids * 2048);
@@ -159,24 +162,24 @@ absl::StatusOr<std::vector<float>> Qwen3FrontendStage::EmbedText(
   return ProjectText(rows, num_ids);
 }
 
-void Qwen3FrontendStage::AppendSum(absl::Span<const float> a,
-                                   absl::Span<const float> b,
-                                   std::vector<float>& out) {
+void Qwen3TtsFrontendStage::AppendSum(absl::Span<const float> a,
+                                      absl::Span<const float> b,
+                                      std::vector<float>& out) {
   for (size_t i = 0; i < a.size(); ++i) {
     out.push_back(a[i] + b[i]);
   }
 }
 
-absl::Status Qwen3FrontendStage::AppendCodecSum(absl::Span<const float> base,
-                                                int code_id,
-                                                std::vector<float>& out) {
+absl::Status Qwen3TtsFrontendStage::AppendCodecSum(absl::Span<const float> base,
+                                                   int code_id,
+                                                   std::vector<float>& out) {
   ABSL_ASSIGN_OR_RETURN(const std::vector<float> codec_emb,
                         EmbedCodecToken(code_id));
   AppendSum(base, codec_emb, out);
   return absl::OkStatus();
 }
 
-absl::StatusOr<FrontendOutput> Qwen3FrontendStage::BuildPrompt(
+absl::StatusOr<Qwen3TtsFrontendOutput> Qwen3TtsFrontendStage::BuildPrompt(
     const std::string& input_text) {
   const std::string prompt_text =
       absl::StrFormat(qwen3_tts::kPromptTemplate, input_text);
@@ -188,16 +191,16 @@ absl::StatusOr<FrontendOutput> Qwen3FrontendStage::BuildPrompt(
   }
 
   std::vector<int> control;
-  if (options_.language == "auto") {
+  if (config_.language == "auto") {
     control = {qwen3_tts::kCodecNoThink, qwen3_tts::kCodecThinkBos,
                qwen3_tts::kCodecThinkEos};
   } else {
-    ABSL_ASSIGN_OR_RETURN(int lang_id, GetLanguageId(options_.language));
+    ABSL_ASSIGN_OR_RETURN(int lang_id, GetLanguageId(config_.language));
     control = {qwen3_tts::kCodecThink, qwen3_tts::kCodecThinkBos, lang_id,
                qwen3_tts::kCodecThinkEos};
   }
 
-  FrontendOutput out;
+  Qwen3TtsFrontendOutput out;
   out.token_ids = ids;
 
   const int dim = qwen3_tts::kHiddenDim;
@@ -245,9 +248,9 @@ absl::StatusOr<FrontendOutput> Qwen3FrontendStage::BuildPrompt(
   return out;
 }
 
-absl::Status Qwen3FrontendStage::ScheduleInternal() {
+absl::Status Qwen3TtsFrontendStage::ScheduleInternal() {
   absl::Cleanup cleanup = [this] { SetState(State::kIdle); };
-  ABSL_VLOG(2) << "[TRACE] Starting Qwen3FrontendStage::ScheduleInternal";
+  ABSL_VLOG(2) << "[TRACE] Starting Qwen3TtsFrontendStage::ScheduleInternal";
 
   auto text = text_source_.GetOutput();
   if (absl::IsNotFound(text.status())) {
@@ -262,7 +265,7 @@ absl::Status Qwen3FrontendStage::ScheduleInternal() {
   return absl::OkStatus();
 }
 
-void Qwen3FrontendStage::Reset() {
+void Qwen3TtsFrontendStage::Reset() {
   WaitForStateThenSetState(State::kIdle, State::kRunning);
   ClearOutputsThenSetState(State::kIdle);
 }

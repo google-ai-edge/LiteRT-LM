@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef THIRD_PARTY_ODML_LITERT_LM_OMNI_TTS_QWEN3_TTS_QWEN3_ACOUSTIC_PREDICTOR_STAGE_H_
-#define THIRD_PARTY_ODML_LITERT_LM_OMNI_TTS_QWEN3_TTS_QWEN3_ACOUSTIC_PREDICTOR_STAGE_H_
+#ifndef THIRD_PARTY_ODML_LITERT_LM_OMNI_TTS_QWEN3_TTS_QWEN3_TTS_ACOUSTIC_PREDICTOR_STAGE_H_
+#define THIRD_PARTY_ODML_LITERT_LM_OMNI_TTS_QWEN3_TTS_QWEN3_TTS_ACOUSTIC_PREDICTOR_STAGE_H_
 
 #include <map>
 #include <memory>
@@ -32,39 +32,43 @@
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "omni/base/model_resources.h"
 #include "omni/base/stage.h"
-#include "omni/tts/acoustic_predictor.h"
-#include "omni/tts/qwen3_tts/qwen3_stage_options.h"
-#include "omni/tts/text_frontend.h"
+#include "omni/tts/qwen3_tts/qwen3_tts_io_types.h"
+#include "omni/tts/qwen3_tts/qwen3_tts_model_config.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 
 namespace litert::omni::tts {
 
 // Stage 2: Acoustic Predictor (Talker + MTP Autoregressive RVQ Generation)
-class Qwen3AcousticPredictorStage : public AcousticPredictor {
+class Qwen3TtsAcousticPredictorStage
+    : public SingleThreadedStageWithDeque<Qwen3TtsAcousticOutput> {
  public:
-  // Creates a Qwen3AcousticPredictorStage instance and initializes its
+  // Creates a Qwen3TtsAcousticPredictorStage instance and initializes its
   // resources.
   //
   // args
-  // - text_frontend: Stage providing input FrontendOutput prompts.
-  // - options: Options for configuring the Qwen3AcousticPredictorStage.
+  // - text_frontend: Stage providing input Qwen3TtsFrontendOutput prompts.
+  // - config: Configuration for the Qwen3TtsAcousticPredictorStage.
   // - resources: Shared ModelResources container with compiled models.
   //
   // returns
-  // - Unique pointer to created Qwen3AcousticPredictorStage on success, or
+  // - Unique pointer to created Qwen3TtsAcousticPredictorStage on success, or
   // error
   //   status on failure.
-  static absl::StatusOr<std::unique_ptr<Qwen3AcousticPredictorStage>> Create(
-      Stage<FrontendOutput>* absl_nonnull text_frontend,
-      Qwen3StageOptions options,
+  static absl::StatusOr<std::unique_ptr<Qwen3TtsAcousticPredictorStage>> Create(
+      Stage<Qwen3TtsFrontendOutput>* absl_nonnull text_frontend,
+      const Qwen3TtsModelConfig& config,
       std::shared_ptr<ModelResources> absl_nonnull resources);
 
-  ~Qwen3AcousticPredictorStage() override = default;
+  ~Qwen3TtsAcousticPredictorStage() override = default;
 
   // Resets the stage state back to idle and clears any pending outputs.
   void Reset() override;
 
  protected:
+  bool NeedScheduleInternal() const override {
+    return text_frontend_.HasOutput();
+  }
+
   // Executes one step of acoustic predictor stage processing asynchronously.
   //
   // returns
@@ -77,19 +81,21 @@ class Qwen3AcousticPredictorStage : public AcousticPredictor {
     std::vector<float> hidden;      // Shape [1024]
   };
 
-  Qwen3AcousticPredictorStage(
-      Stage<FrontendOutput>* absl_nonnull text_frontend,
-      Qwen3StageOptions options,
+  Qwen3TtsAcousticPredictorStage(
+      Stage<Qwen3TtsFrontendOutput>* absl_nonnull text_frontend,
+      Qwen3TtsModelConfig config,
       std::shared_ptr<ModelResources> absl_nonnull resources)
-      : AcousticPredictor(text_frontend),
-        options_(std::move(options)),
+      : text_frontend_(*text_frontend),
+        config_(std::move(config)),
         resources_(std::move(resources)) {
-    if (options_.seed.has_value()) {
-      rng_.seed(*options_.seed);
+    if (config_.seed.has_value()) {
+      rng_.seed(*config_.seed);
     } else {
       rng_.seed(0);
     }
   }
+
+  Stage<Qwen3TtsFrontendOutput>& text_frontend_;
 
   // Runs the Talker model prefill step on input prompt embeddings to populate
   // KV cache.
@@ -157,7 +163,7 @@ class Qwen3AcousticPredictorStage : public AcousticPredictor {
   absl::StatusOr<std::vector<float>> EmbedMtpTokens(
       const std::vector<int>& mtp_codes);
 
-  Qwen3StageOptions options_;
+  Qwen3TtsModelConfig config_;
   std::shared_ptr<ModelResources> resources_;
 
   // Required compiled models
@@ -218,4 +224,4 @@ class Qwen3AcousticPredictorStage : public AcousticPredictor {
 
 }  // namespace litert::omni::tts
 
-#endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_TTS_QWEN3_TTS_QWEN3_ACOUSTIC_PREDICTOR_STAGE_H_
+#endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_TTS_QWEN3_TTS_QWEN3_TTS_ACOUSTIC_PREDICTOR_STAGE_H_
