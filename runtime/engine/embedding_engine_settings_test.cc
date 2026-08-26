@@ -98,5 +98,29 @@ TEST(EmbeddingEngineSettingsTest, ModifyMainExecutorSettings) {
   EXPECT_EQ(settings.GetMainExecutorSettings().GetCacheDir(), "/tmp/cache");
 }
 
+TEST(EmbeddingEngineSettingsTest, MaxInputLengthGetterAndSetter) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create("test_embedding_model.tflite"));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+
+  EXPECT_EQ(settings.GetMaxInputLength(), std::nullopt);
+  settings.SetMaxInputLength(512);
+  EXPECT_EQ(settings.GetMaxInputLength(), 512);
+}
+
+TEST(EmbeddingEngineSettingsTest, VisionTokensPerImageGetterAndSetter) {
+  ASSERT_OK_AND_ASSIGN(
+      auto model_assets,
+      ModelAssets::Create("test_multimodal_embedding.litertlm"));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU,
+                                          Backend::CPU, std::nullopt));
+
+  EXPECT_EQ(settings.GetVisionTokensPerImage(), std::nullopt);
+  settings.SetVisionTokensPerImage(70);
+  EXPECT_EQ(settings.GetVisionTokensPerImage(), 70);
+}
+
 }  // namespace
 }  // namespace litert::lm

@@ -25,6 +25,7 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/types/optional.h"  // from @com_google_absl
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/model_resources.h"
@@ -39,6 +40,7 @@
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/executor/llm_executor_io_types.h"
+#include "runtime/executor/model_signature_utils.h"
 #include "runtime/executor/vision_executor.h"
 #include "runtime/executor/vision_litert_compiled_model_executor.h"
 #include "runtime/proto/embedding_metadata.pb.h"
@@ -197,6 +199,76 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
     }
   }
 
+  // Auto-select text encoder signatures if max_input_length is set.
+  std::optional<SelectedTextSignaturesInfo> selected_text_signatures_info =
+      std::nullopt;
+  if (settings.GetMaxInputLength().has_value()) {
+    if (*settings.GetMaxInputLength() <= 0) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("max_input_length must be positive, got: ",
+                       *settings.GetMaxInputLength()));
+    }
+    LITERT_ASSIGN_OR_RETURN(
+        auto text_sig_info,
+        SelectTextEncoderSignatures(*resources, *settings.GetMaxInputLength()));
+    settings.GetMutableMainExecutorSettings().SetSelectedSignatures(
+        text_sig_info.signature_names);
+    selected_text_signatures_info = std::move(text_sig_info);
+  }
+
+  // Auto-select vision encoder and adapter signatures if
+  // vision_tokens_per_image is set.
+  std::optional<SelectedVisionSignatureInfo> selected_vision_signature_info =
+      std::nullopt;
+  if (settings.GetVisionTokensPerImage().has_value()) {
+    if (!settings.GetVisionExecutorSettings().has_value()) {
+      return absl::FailedPreconditionError(
+          "Vision executor settings are not configured.");
+    }
+    const int vision_tokens_per_image = *settings.GetVisionTokensPerImage();
+    if (vision_tokens_per_image <= 0) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("vision_tokens_per_image must be positive, got: ",
+                       vision_tokens_per_image));
+    }
+
+    // Configure vision patch metadata.
+    int pooling_kernel_size = 1;
+
+    const int patch_num_shrink_factor =
+        pooling_kernel_size * pooling_kernel_size;
+    const int max_num_patches =
+        vision_tokens_per_image * patch_num_shrink_factor;
+
+    LITERT_ASSIGN_OR_RETURN(
+        auto vision_sig_info,
+        SelectVisionEncoderSignatures(*resources, vision_tokens_per_image));
+    settings.GetMutableVisionExecutorSettings()->SetEncoderSelectedSignatures(
+        vision_sig_info.signature_names);
+
+    LITERT_ASSIGN_OR_RETURN(
+        auto adapter_sig_info,
+        SelectVisionAdapterSignatures(*resources, vision_tokens_per_image));
+    if (adapter_sig_info.has_value()) {
+      settings.GetMutableVisionExecutorSettings()->SetAdapterSelectedSignatures(
+          adapter_sig_info->signature_names);
+    }
+
+    SelectedVisionSignatureInfo selected_vision_info;
+    selected_vision_info.signature_names = vision_sig_info.signature_names;
+    selected_vision_info.signature_lengths = vision_sig_info.signature_lengths;
+    selected_vision_info.max_signature_length =
+        vision_sig_info.max_signature_length;
+    if (adapter_sig_info.has_value()) {
+      selected_vision_info.adapter_signature_names =
+          adapter_sig_info->signature_names;
+      selected_vision_info.adapter_signature_lengths =
+          adapter_sig_info->signature_lengths;
+    }
+    selected_vision_info.max_num_patches = max_num_patches;
+    selected_vision_signature_info = std::move(selected_vision_info);
+  }
+
   SpecialTokens special_tokens;
   std::optional<::litert::support::ImagePreprocessParameter>
       image_preprocess_parameter = std::nullopt;
@@ -274,7 +346,9 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
       std::move(vision_executor), std::move(audio_executor),
       std::move(benchmark_info), std::move(special_tokens),
       std::move(image_preprocessor), std::move(image_preprocess_parameter),
-      std::move(audio_preprocessor), std::move(metadata));
+      std::move(audio_preprocessor), std::move(metadata),
+      std::move(selected_text_signatures_info),
+      std::move(selected_vision_signature_info));
 }
 
 // static
@@ -343,7 +417,9 @@ EmbeddingEngineImpl::EmbeddingEngineImpl(
     std::optional<::litert::support::ImagePreprocessParameter>
         image_preprocess_parameter,
     std::unique_ptr<::litert::support::AudioPreprocessor> audio_preprocessor,
-    std::optional<proto::EmbeddingMetadata> metadata)
+    std::optional<proto::EmbeddingMetadata> metadata,
+    std::optional<SelectedTextSignaturesInfo> selected_text_signatures_info,
+    std::optional<SelectedVisionSignatureInfo> selected_vision_signature_info)
     : env_(std::move(env)),
       tokenizer_(std::move(tokenizer)),
       embedding_executor_(std::move(embedding_executor)),
@@ -354,7 +430,10 @@ EmbeddingEngineImpl::EmbeddingEngineImpl(
       image_preprocessor_(std::move(image_preprocessor)),
       image_preprocess_parameter_(std::move(image_preprocess_parameter)),
       audio_preprocessor_(std::move(audio_preprocessor)),
-      metadata_(std::move(metadata)) {}
+      metadata_(std::move(metadata)),
+      selected_text_signatures_info_(std::move(selected_text_signatures_info)),
+      selected_vision_signature_info_(
+          std::move(selected_vision_signature_info)) {}
 
 absl::StatusOr<std::vector<InputData>> EmbeddingEngineImpl::InsertSpecialTokens(
     const std::vector<InputData>& contents) const {

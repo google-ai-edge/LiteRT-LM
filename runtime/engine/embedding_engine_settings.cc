@@ -18,7 +18,6 @@
 #include <ostream>
 #include <utility>
 
-#include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "runtime/executor/audio_executor_settings.h"
 #include "runtime/executor/embedding_executor_settings.h"
@@ -65,6 +64,23 @@ EmbeddingEngineSettings::EmbeddingEngineSettings(
       vision_executor_settings_(std::move(vision_executor_settings)),
       audio_executor_settings_(std::move(audio_executor_settings)),
       benchmark_params_(std::move(benchmark_params)) {}
+
+std::optional<int> EmbeddingEngineSettings::GetMaxInputLength() const {
+  return max_input_length_;
+}
+
+void EmbeddingEngineSettings::SetMaxInputLength(int max_input_length) {
+  max_input_length_ = max_input_length;
+}
+
+std::optional<int> EmbeddingEngineSettings::GetVisionTokensPerImage() const {
+  return vision_tokens_per_image_;
+}
+
+void EmbeddingEngineSettings::SetVisionTokensPerImage(
+    int vision_tokens_per_image) {
+  vision_tokens_per_image_ = vision_tokens_per_image;
+}
 
 const EmbeddingExecutorSettings&
 EmbeddingEngineSettings::GetMainExecutorSettings() const {

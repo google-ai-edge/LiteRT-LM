@@ -18,7 +18,6 @@
 #include <optional>
 #include <ostream>
 
-#include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "runtime/executor/audio_executor_settings.h"
 #include "runtime/executor/embedding_executor_settings.h"
@@ -40,6 +39,17 @@ class EmbeddingEngineSettings {
       ModelAssets model_assets, Backend backend = Backend::CPU,
       std::optional<Backend> vision_backend = std::nullopt,
       std::optional<Backend> audio_backend = std::nullopt);
+
+  // Maximum sequence length (in tokens) for text encoder signatures. If set,
+  // EmbeddingEngine will automatically select signatures up to this length.
+  std::optional<int> GetMaxInputLength() const;
+  void SetMaxInputLength(int max_input_length);
+
+  // Desired number of vision tokens generated per image. If set,
+  // EmbeddingEngine will automatically select the smallest vision encoder
+  // (and adapter) signatures and configure patch metadata accordingly.
+  std::optional<int> GetVisionTokensPerImage() const;
+  void SetVisionTokensPerImage(int vision_tokens_per_image);
 
   // Returns the EmbeddingExecutorSettings for the embedding model.
   const EmbeddingExecutorSettings& GetMainExecutorSettings() const;
@@ -78,6 +88,8 @@ class EmbeddingEngineSettings {
   std::optional<AudioExecutorSettings> audio_executor_settings_;
   std::optional<proto::EmbeddingMetadata> metadata_;
   std::optional<proto::BenchmarkParams> benchmark_params_;
+  std::optional<int> max_input_length_;
+  std::optional<int> vision_tokens_per_image_;
 };
 
 std::ostream& operator<<(std::ostream& os,

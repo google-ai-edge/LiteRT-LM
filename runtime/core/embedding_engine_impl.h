@@ -79,7 +79,11 @@ class EmbeddingEngineImpl : public EmbeddingEngine {
           image_preprocess_parameter = std::nullopt,
       std::unique_ptr<::litert::support::AudioPreprocessor> audio_preprocessor =
           nullptr,
-      std::optional<proto::EmbeddingMetadata> metadata = std::nullopt);
+      std::optional<proto::EmbeddingMetadata> metadata = std::nullopt,
+      std::optional<SelectedTextSignaturesInfo> selected_text_signatures_info =
+          std::nullopt,
+      std::optional<SelectedVisionSignatureInfo>
+          selected_vision_signature_info = std::nullopt);
 
   ~EmbeddingEngineImpl() override = default;
 
@@ -122,6 +126,20 @@ class EmbeddingEngineImpl : public EmbeddingEngine {
   const std::optional<proto::EmbeddingMetadata>& GetEmbeddingMetadata()
       const override;
 
+  // Returns the selected text encoder signatures info if auto-selection was
+  // performed during engine creation, or nullopt otherwise.
+  const std::optional<SelectedTextSignaturesInfo>&
+  GetSelectedTextSignaturesInfo() const override {
+    return selected_text_signatures_info_;
+  }
+
+  // Returns the selected vision signature info if auto-selection was performed
+  // during engine creation, or nullopt otherwise.
+  const std::optional<SelectedVisionSignatureInfo>&
+  GetSelectedVisionSignatureInfo() const override {
+    return selected_vision_signature_info_;
+  }
+
  private:
   absl::StatusOr<std::vector<InputData>> InsertSpecialTokens(
       const std::vector<InputData>& contents) const;
@@ -144,6 +162,8 @@ class EmbeddingEngineImpl : public EmbeddingEngine {
       image_preprocess_parameter_;
   std::unique_ptr<::litert::support::AudioPreprocessor> audio_preprocessor_;
   std::optional<proto::EmbeddingMetadata> metadata_;
+  std::optional<SelectedTextSignaturesInfo> selected_text_signatures_info_;
+  std::optional<SelectedVisionSignatureInfo> selected_vision_signature_info_;
 };
 
 }  // namespace litert::lm

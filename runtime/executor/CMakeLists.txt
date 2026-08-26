@@ -737,6 +737,29 @@ target_link_libraries(runtime_executor_embedding_litert_compiled_model_executor
 )
 
 # ==============================================================================
+# Model Signature Utils
+# ==============================================================================
+add_litertlm_library(runtime_executor_model_signature_utils STATIC
+  model_signature_utils.cc
+)
+add_library(LiteRTLM::Runtime::Executor::ModelSignatureUtils ALIAS
+  runtime_executor_model_signature_utils)
+
+target_include_directories(runtime_executor_model_signature_utils
+  PRIVATE
+    ${LITERTLM_GENERATED_SRC_DIR}
+    ${LITERT_INCLUDE_DIR}
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+target_link_libraries(runtime_executor_model_signature_utils
+  PUBLIC
+    LiteRTLM::Runtime::Components
+    LiteRTLM::Runtime::Util
+    LITERTLM_DEPS
+)
+
+# ==============================================================================
 # Folder Facade
 # ==============================================================================
 add_library(runtime_executor_libs INTERFACE)
@@ -772,4 +795,5 @@ target_link_libraries(runtime_executor_libs INTERFACE
   LiteRTLM::Runtime::Executor::Litert
   LiteRTLM::Runtime::Executor::EmbeddingExecutorSettings
   LiteRTLM::Runtime::Executor::EmbeddingLitertCompiledModelExecutor
+  LiteRTLM::Runtime::Executor::ModelSignatureUtils
 )

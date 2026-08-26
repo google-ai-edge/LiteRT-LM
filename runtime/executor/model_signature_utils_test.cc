@@ -372,5 +372,177 @@ TEST(ModelSignatureUtilsTest, UnsupportedModelTypeReturnsError) {
       StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
+TEST(ModelSignatureUtilsTest, SelectTextEncoderSignatures_Success) {
+  std::vector<SignatureInfo> signatures = {
+      {.signature_name = "encoder_1024", .length = 1024},
+      {.signature_name = "encoder_256", .length = 256},
+      {.signature_name = "encoder_512", .length = 512},
+  };
+
+  ASSERT_OK_AND_ASSIGN(auto result, SelectTextEncoderSignatures(
+                                        signatures, /*max_input_length=*/500));
+  EXPECT_THAT(result.signature_names,
+              ElementsAre("encoder_256", "encoder_512"));
+  EXPECT_THAT(result.signature_lengths, ElementsAre(256, 512));
+  EXPECT_EQ(result.max_signature_length, 512);
+
+  // Exact match
+  ASSERT_OK_AND_ASSIGN(
+      auto result_exact,
+      SelectTextEncoderSignatures(signatures, /*max_input_length=*/256));
+  EXPECT_THAT(result_exact.signature_names, ElementsAre("encoder_256"));
+  EXPECT_THAT(result_exact.signature_lengths, ElementsAre(256));
+  EXPECT_EQ(result_exact.max_signature_length, 256);
+
+  // Exceeds all signatures -> loads all
+  ASSERT_OK_AND_ASSIGN(
+      auto result_all,
+      SelectTextEncoderSignatures(signatures, /*max_input_length=*/2000));
+  EXPECT_THAT(result_all.signature_names,
+              ElementsAre("encoder_256", "encoder_512", "encoder_1024"));
+  EXPECT_THAT(result_all.signature_lengths, ElementsAre(256, 512, 1024));
+  EXPECT_EQ(result_all.max_signature_length, 1024);
+}
+
+TEST(ModelSignatureUtilsTest,
+     SelectTextEncoderSignatures_InvalidLengthReturnsError) {
+  std::vector<SignatureInfo> signatures = {
+      {.signature_name = "encoder_256", .length = 256},
+  };
+  EXPECT_THAT(SelectTextEncoderSignatures(signatures, 0),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(SelectTextEncoderSignatures(signatures, -10),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST(ModelSignatureUtilsTest,
+     SelectTextEncoderSignatures_EmptySignaturesReturnsError) {
+  std::vector<SignatureInfo> signatures;
+  EXPECT_THAT(SelectTextEncoderSignatures(signatures, 100),
+              StatusIs(absl::StatusCode::kNotFound));
+}
+
+TEST(ModelSignatureUtilsTest, SelectVisionEncoderSignatures_Success) {
+  std::vector<SignatureInfo> signatures = {
+      {.signature_name = "vision_280",
+       .length = 280,
+       .input_shape = {1, 1120, 3}},
+      {.signature_name = "vision_70", .length = 70, .input_shape = {1, 280, 3}},
+      {.signature_name = "vision_140",
+       .length = 140,
+       .input_shape = {1, 560, 3}},
+  };
+
+  ASSERT_OK_AND_ASSIGN(auto result_70,
+                       SelectVisionEncoderSignatures(signatures, 70));
+  EXPECT_THAT(result_70.signature_names, ElementsAre("vision_70"));
+  EXPECT_THAT(result_70.signature_lengths, ElementsAre(70));
+  EXPECT_EQ(result_70.max_signature_length, 70);
+
+  ASSERT_OK_AND_ASSIGN(auto result_100,
+                       SelectVisionEncoderSignatures(signatures, 100));
+  EXPECT_THAT(result_100.signature_names,
+              ElementsAre("vision_70", "vision_140"));
+  EXPECT_THAT(result_100.signature_lengths, ElementsAre(70, 140));
+  EXPECT_EQ(result_100.max_signature_length, 140);
+
+  // Exceeds all capacities -> loads all
+  ASSERT_OK_AND_ASSIGN(auto result_all,
+                       SelectVisionEncoderSignatures(signatures, 500));
+  EXPECT_THAT(result_all.signature_names,
+              ElementsAre("vision_70", "vision_140", "vision_280"));
+  EXPECT_THAT(result_all.signature_lengths, ElementsAre(70, 140, 280));
+  EXPECT_EQ(result_all.max_signature_length, 280);
+}
+
+TEST(ModelSignatureUtilsTest,
+     SelectVisionEncoderSignatures_InvalidLengthReturnsError) {
+  std::vector<SignatureInfo> signatures = {
+      {.signature_name = "vision_70", .length = 70},
+  };
+  EXPECT_THAT(SelectVisionEncoderSignatures(signatures, 0),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(SelectVisionEncoderSignatures(signatures, -5),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST(ModelSignatureUtilsTest,
+     SelectVisionEncoderSignatures_EmptySignaturesReturnsError) {
+  std::vector<SignatureInfo> signatures;
+  EXPECT_THAT(SelectVisionEncoderSignatures(signatures, 100),
+              StatusIs(absl::StatusCode::kNotFound));
+}
+
+TEST(ModelSignatureUtilsTest, SelectVisionAdapterSignatures_Success) {
+  std::vector<SignatureInfo> signatures = {
+      {.signature_name = "adapter_280", .length = 280},
+      {.signature_name = "adapter_70", .length = 70},
+      {.signature_name = "adapter_140", .length = 140},
+  };
+
+  ASSERT_OK_AND_ASSIGN(auto result_70,
+                       SelectVisionAdapterSignatures(
+                           signatures, /*vision_tokens_per_image=*/70));
+  ASSERT_TRUE(result_70.has_value());
+  EXPECT_THAT(result_70->signature_names, ElementsAre("adapter_70"));
+  EXPECT_THAT(result_70->signature_lengths, ElementsAre(70));
+  EXPECT_EQ(result_70->max_signature_length, 70);
+
+  ASSERT_OK_AND_ASSIGN(auto result_100,
+                       SelectVisionAdapterSignatures(
+                           signatures, /*vision_tokens_per_image=*/100));
+  ASSERT_TRUE(result_100.has_value());
+  EXPECT_THAT(result_100->signature_names,
+              ElementsAre("adapter_70", "adapter_140"));
+  EXPECT_THAT(result_100->signature_lengths, ElementsAre(70, 140));
+  EXPECT_EQ(result_100->max_signature_length, 140);
+
+  // Exceeds all capacities -> loads all
+  ASSERT_OK_AND_ASSIGN(auto result_all,
+                       SelectVisionAdapterSignatures(
+                           signatures, /*vision_tokens_per_image=*/500));
+  ASSERT_TRUE(result_all.has_value());
+  EXPECT_THAT(result_all->signature_names,
+              ElementsAre("adapter_70", "adapter_140", "adapter_280"));
+  EXPECT_THAT(result_all->signature_lengths, ElementsAre(70, 140, 280));
+  EXPECT_EQ(result_all->max_signature_length, 280);
+}
+
+TEST(ModelSignatureUtilsTest,
+     SelectVisionAdapterSignatures_EmptyReturnsNullopt) {
+  std::vector<SignatureInfo> signatures;
+  ASSERT_OK_AND_ASSIGN(auto result,
+                       SelectVisionAdapterSignatures(
+                           signatures, /*vision_tokens_per_image=*/70));
+  EXPECT_FALSE(result.has_value());
+}
+
+TEST(ModelSignatureUtilsTest,
+     SelectVisionAdapterSignatures_InvalidLengthReturnsError) {
+  std::vector<SignatureInfo> signatures = {
+      {.signature_name = "adapter_70", .length = 70},
+  };
+  EXPECT_THAT(
+      SelectVisionAdapterSignatures(signatures, /*vision_tokens_per_image=*/0),
+      StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(
+      SelectVisionAdapterSignatures(signatures, /*vision_tokens_per_image=*/-1),
+      StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST(ModelSignatureUtilsTest, GetSignatureInputLength_ReturnsCorrectDimension) {
+  SignatureInfo sig3d{.input_shape = {1, 280, 64}};
+  EXPECT_EQ(GetSignatureInputLength(sig3d), 280);
+
+  SignatureInfo sig2d{.input_shape = {128, 64}};
+  EXPECT_EQ(GetSignatureInputLength(sig2d), 64);
+
+  SignatureInfo sig1d{.input_shape = {512}};
+  EXPECT_EQ(GetSignatureInputLength(sig1d), 512);
+
+  SignatureInfo empty_sig;
+  EXPECT_EQ(GetSignatureInputLength(empty_sig), 0);
+}
+
 }  // namespace
 }  // namespace litert::lm

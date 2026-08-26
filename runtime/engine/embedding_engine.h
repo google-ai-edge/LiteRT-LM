@@ -22,6 +22,7 @@
 #include "absl/types/optional.h"  // from @com_google_absl
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/embedding_executor_base.h"
+#include "runtime/executor/model_signature_utils.h"
 #include "runtime/proto/embedding_metadata.pb.h"
 
 namespace litert::lm {
@@ -87,6 +88,16 @@ class EmbeddingEngine {
   // Returns the embedding metadata of the engine.
   virtual const std::optional<proto::EmbeddingMetadata>& GetEmbeddingMetadata()
       const = 0;
+
+  // Returns the selected text encoder signatures info if auto-selection was
+  // performed during engine creation, or nullopt otherwise.
+  virtual const std::optional<SelectedTextSignaturesInfo>&
+  GetSelectedTextSignaturesInfo() const = 0;
+
+  // Returns the selected vision signature info if auto-selection was performed
+  // during engine creation, or nullopt otherwise.
+  virtual const std::optional<SelectedVisionSignatureInfo>&
+  GetSelectedVisionSignatureInfo() const = 0;
 };
 
 }  // namespace litert::lm

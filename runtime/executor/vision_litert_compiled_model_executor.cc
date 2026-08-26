@@ -68,8 +68,6 @@ namespace litert::lm {
 
 namespace {
 
-// The position input tensor name for ViT encoder.
-constexpr absl::string_view kPositionsXy = "positions_xy";
 // The image patch input tensor name for ViT encoder.
 constexpr absl::string_view kImages = "images";
 // The image patch input tensor name for ViT encoder with multi-signature

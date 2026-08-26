@@ -165,6 +165,27 @@ target_link_libraries(runtime_engine_shared_flags
 )
 
 # ==============================================================================
+# Embedding Engine Interface
+# ==============================================================================
+add_litertlm_library(runtime_engine_embedding_engine_interface INTERFACE)
+add_library(LiteRTLM::Runtime::Engine::EmbeddingEngineInterface ALIAS runtime_engine_embedding_engine_interface)
+
+target_include_directories(runtime_engine_embedding_engine_interface
+  INTERFACE
+    ${LITERTLM_GENERATED_SRC_DIR}
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+target_link_libraries(runtime_engine_embedding_engine_interface
+  INTERFACE
+    LiteRTLM::Runtime::Engine::EmbeddingEngineSettings
+    LiteRTLM::Runtime::Engine::IoTypes
+    LiteRTLM::Runtime::Components::TokenizerInterface
+    LiteRTLM::Runtime::Executor::ModelSignatureUtils
+    LITERTLM_DEPS
+)
+
+# ==============================================================================
 # Folder Facade
 # ==============================================================================
 add_library(runtime_engine_libs INTERFACE)
@@ -172,6 +193,7 @@ add_library(LiteRTLM::Runtime::Engine ALIAS runtime_engine_libs)
 
 target_link_libraries(runtime_engine_libs INTERFACE
   LiteRTLM::Runtime::Engine::Interface
+  LiteRTLM::Runtime::Engine::EmbeddingEngineInterface
   LiteRTLM::Runtime::Engine::CpuAffinityUtils
   LiteRTLM::Runtime::Engine::Settings
   LiteRTLM::Runtime::Engine::EmbeddingEngineSettings
