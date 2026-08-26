@@ -766,29 +766,8 @@ TEST(EmbeddingLiteRtCompiledModelExecutorTest,
     EXPECT_EQ(output.num_chunks, 2);
   }
 
-  // Case 4: Input size 48 with default kTruncate strategy -> truncates to max
-  // signature length (24).
-  {
-    alignas(LITERT_HOST_MEMORY_BUFFER_ALIGNMENT) int32_t token_data[48];
-    std::fill_n(token_data, 48, 42);
-    LITERT_ASSERT_OK_AND_ASSIGN(
-        auto token_ids_buffer,
-        TensorBuffer::CreateFromHostMemory(
-            env, RankedTensorType(ElementType::Int32, Layout(Dimensions({48}))),
-            token_data, sizeof(token_data)));
-
-    ExecutorInputs inputs(ExecutorTextData(std::move(token_ids_buffer)),
-                          std::nullopt, std::nullopt);
-
-    ASSERT_OK_AND_ASSIGN(auto output,
-                         embedding_executor->ComputeEmbedding(inputs));
-    EXPECT_EQ(output.embedding.size(), 24 * 8);
-    EXPECT_EQ(output.input_length, 48);
-    EXPECT_EQ(output.truncated_length, 24);
-    EXPECT_EQ(output.num_chunks, 1);
-  }
-
-  // Case 5: Input size 48 with kError strategy -> returns InvalidArgumentError.
+  // Case 4: Input size 48 with kTruncate strategy -> truncates to max signature
+  // length (24).
   {
     alignas(LITERT_HOST_MEMORY_BUFFER_ALIGNMENT) int32_t token_data[48];
     std::fill_n(token_data, 48, 42);
@@ -802,9 +781,31 @@ TEST(EmbeddingLiteRtCompiledModelExecutorTest,
                           std::nullopt, std::nullopt);
 
     ComputeEmbeddingOptions options{
-        .input_overflow_strategy = InputOverflowStrategy::kError,
+        .input_overflow_strategy = InputOverflowStrategy::kTruncate,
     };
-    auto result = embedding_executor->ComputeEmbedding(inputs, options);
+    ASSERT_OK_AND_ASSIGN(auto output,
+                         embedding_executor->ComputeEmbedding(inputs, options));
+    EXPECT_EQ(output.embedding.size(), 24 * 8);
+    EXPECT_EQ(output.input_length, 48);
+    EXPECT_EQ(output.truncated_length, 24);
+    EXPECT_EQ(output.num_chunks, 1);
+  }
+
+  // Case 5: Input size 48 with default kError strategy -> returns
+  // InvalidArgumentError.
+  {
+    alignas(LITERT_HOST_MEMORY_BUFFER_ALIGNMENT) int32_t token_data[48];
+    std::fill_n(token_data, 48, 42);
+    LITERT_ASSERT_OK_AND_ASSIGN(
+        auto token_ids_buffer,
+        TensorBuffer::CreateFromHostMemory(
+            env, RankedTensorType(ElementType::Int32, Layout(Dimensions({48}))),
+            token_data, sizeof(token_data)));
+
+    ExecutorInputs inputs(ExecutorTextData(std::move(token_ids_buffer)),
+                          std::nullopt, std::nullopt);
+
+    auto result = embedding_executor->ComputeEmbedding(inputs);
     EXPECT_THAT(
         result,
         StatusIs(absl::StatusCode::kInvalidArgument,
