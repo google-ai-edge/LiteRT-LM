@@ -61,6 +61,25 @@ TEST(EmbeddingEngineCTest, OptionsInsertSpecialTokens) {
   litert_lm_embedding_options_delete(options);
 }
 
+TEST(EmbeddingEngineCTest, OptionsInputOverflowStrategy) {
+  auto* options = litert_lm_embedding_options_create();
+  ASSERT_NE(options, nullptr);
+  EXPECT_EQ(litert_lm_embedding_options_get_input_overflow_strategy(options),
+            kLiteRtLmInputOverflowStrategyChunkAndAverage);
+
+  litert_lm_embedding_options_set_input_overflow_strategy(
+      options, kLiteRtLmInputOverflowStrategyTruncate);
+  EXPECT_EQ(litert_lm_embedding_options_get_input_overflow_strategy(options),
+            kLiteRtLmInputOverflowStrategyTruncate);
+
+  litert_lm_embedding_options_set_input_overflow_strategy(
+      options, kLiteRtLmInputOverflowStrategyError);
+  EXPECT_EQ(litert_lm_embedding_options_get_input_overflow_strategy(options),
+            kLiteRtLmInputOverflowStrategyError);
+
+  litert_lm_embedding_options_delete(options);
+}
+
 TEST(EmbeddingEngineCTest, ComputeEmbeddingSuccess) {
   auto* settings = litert_lm_embedding_engine_settings_create(
       kTestEmbeddingModelPath, "cpu", nullptr, nullptr);

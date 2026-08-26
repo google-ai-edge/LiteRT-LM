@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import ctypes
 import dataclasses
+import enum
 from typing import Any, Sequence
 
 from . import interfaces
@@ -30,6 +31,18 @@ from ._messages import ImageFile
 from ._messages import Text
 
 
+@enum.unique
+class InputOverflowStrategy(enum.IntEnum):
+  """Strategy for handling inputs longer than maximum supported length."""
+
+  # Chunk the input to the maximum supported length and average the embeddings.
+  CHUNK_AND_AVERAGE = 0
+  # Truncate the input to the maximum supported length.
+  TRUNCATE = 1
+  # Return an error if the input is longer than the maximum supported length.
+  ERROR = 2
+
+
 @dataclasses.dataclass(frozen=True, kw_only=True)
 class EmbeddingOptions:
   """Options for embedding generation.
@@ -40,10 +53,13 @@ class EmbeddingOptions:
     insert_special_tokens: Whether to automatically insert special tokens (BOS,
       EOS, start/end of image, start/end of audio). If None, uses the C++ engine
       default.
+    input_overflow_strategy: Strategy for handling inputs longer than the
+      maximum supported signature length. If None, uses the C++ engine default.
   """
 
   normalize: bool | None = None
   insert_special_tokens: bool | None = None
+  input_overflow_strategy: InputOverflowStrategy | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -223,6 +239,10 @@ class EmbeddingEngine:
         self._lib.litert_lm_embedding_options_set_insert_special_tokens(
             options_ptr, options.insert_special_tokens
         )
+      if options.input_overflow_strategy is not None:
+        self._lib.litert_lm_embedding_options_set_input_overflow_strategy(
+            options_ptr, int(options.input_overflow_strategy)
+        )
 
       created_ptrs = [_create_c_input_data(self._lib, item) for item in items]
 
@@ -283,6 +303,10 @@ class EmbeddingEngine:
       if options.insert_special_tokens is not None:
         self._lib.litert_lm_embedding_options_set_insert_special_tokens(
             options_ptr, options.insert_special_tokens
+        )
+      if options.input_overflow_strategy is not None:
+        self._lib.litert_lm_embedding_options_set_input_overflow_strategy(
+            options_ptr, int(options.input_overflow_strategy)
         )
 
       batch_inputs_arrays: list[Any] = []

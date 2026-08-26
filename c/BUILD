@@ -88,6 +88,7 @@ EMBEDDING_ENGINE_DEPS = [
     "//runtime/core:embedding_engine_impl",
     "//runtime/engine:embedding_engine",
     "//runtime/engine:embedding_engine_settings",
+    "//runtime/executor:embedding_executor_base",
     "//runtime/executor:litert_compiled_model_executor_utils",
     "//support/preprocessor:audio_preprocessor",
     "//support/preprocessor:audio_preprocessor_miniaudio",
