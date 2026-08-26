@@ -43,7 +43,7 @@ struct ComputeEmbeddingOptions {
   // Strategy for handling inputs longer than the maximum supported signature
   // length.
   InputOverflowStrategy input_overflow_strategy =
-      InputOverflowStrategy::kChunkAndAverage;
+      InputOverflowStrategy::kTruncate;
 
   // If non-empty, and input_overflow_strategy is kTruncate, the EOS token IDs
   // will be preserved at the end of the truncated input sequence.
