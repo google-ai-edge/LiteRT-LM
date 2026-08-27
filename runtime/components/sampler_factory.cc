@@ -30,6 +30,7 @@
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "litert/c/litert_common.h"  // from @litert
 #include "litert/cc/internal/litert_shared_library.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_environment_options.h"  // from @litert
@@ -51,7 +52,8 @@ using LiteRtTopKSampler_SamplerParameters = void;
 
 // OpenCL Sampler C API function pointers.
 extern "C" int (*LiteRtTopKOpenClSampler_Create_Static)(
-    LiteRtEnvironment env, int batch_size, int sequence_size, int vocab_size,
+    const struct LiteRtRuntimeCApiStruct* runtime_c_api, LiteRtEnvironment env,
+    int batch_size, int sequence_size, int vocab_size,
     const LiteRtTopKSampler_ActivationDataType* activation_data_type,
     const LiteRtTopKSampler_SamplerParameters* sampler_params,
     LiteRtTopKSampler_Sampler** sampler_out, char** error_msg) = nullptr;
@@ -88,7 +90,8 @@ extern "C" int (
 
 // WebGPU Sampler C API function pointers.
 extern "C" int (*LiteRtTopKWebGpuSampler_Create_Static)(
-    LiteRtEnvironment env, int batch_size, int sequence_size, int vocab_size,
+    const struct LiteRtRuntimeCApiStruct* runtime_c_api, LiteRtEnvironment env,
+    int batch_size, int sequence_size, int vocab_size,
     const LiteRtTopKSampler_ActivationDataType* activation_data_type,
     const LiteRtTopKSampler_SamplerParameters* sampler_params,
     LiteRtTopKSampler_Sampler** sampler_out, char** error_msg) = nullptr;
@@ -125,7 +128,8 @@ extern "C" int (
 
 // Metal Sampler C API function pointers.
 extern "C" int (*LiteRtTopKMetalSampler_Create_Static)(
-    LiteRtEnvironment env, int batch_size, int sequence_size, int vocab_size,
+    const struct LiteRtRuntimeCApiStruct* runtime_c_api, LiteRtEnvironment env,
+    int batch_size, int sequence_size, int vocab_size,
     const LiteRtTopKSampler_ActivationDataType* activation_data_type,
     const LiteRtTopKSampler_SamplerParameters* sampler_params,
     LiteRtTopKSampler_Sampler** sampler_out, char** error_msg) = nullptr;
@@ -174,6 +178,7 @@ absl::Status CreateStatusAndFreeErrorMsg(int error_code, char* error_msg) {
 class TopKCApiSampler : public Sampler {
  public:
   using LiteRtTopKSampler_Create = int (*)(
+      const struct LiteRtRuntimeCApiStruct* runtime_c_api,
       LiteRtEnvironment env, int batch_size, int sequence_size, int vocab_size,
       const LiteRtTopKSampler_ActivationDataType* absl_nullable
           activation_data_type,
@@ -409,10 +414,11 @@ class TopKOpenClCApiSampler : public TopKCApiSampler {
       ABSL_VLOG(1) << "Statically linked LiteRtTopKOpenClSampler C API.";
     }
 
+    auto [runtime_c_api, env_handle] = env.GetHolderForCApi();
     LiteRtTopKSampler_Sampler* sampler = nullptr;
     char* error_msg = nullptr;
     int error_code = capi->create_func(
-        env.GetHolder().handle, batch_size, sequence_size, vocab_size,
+        runtime_c_api, env_handle, batch_size, sequence_size, vocab_size,
         activation_data_type.has_value() ? &activation_data_type.value()
                                          : nullptr,
         &sampler_params, &sampler, &error_msg);
@@ -494,8 +500,9 @@ class TopKWebGpuCApiSampler : public TopKCApiSampler {
 
     LiteRtTopKSampler_Sampler* sampler = nullptr;
     char* error_msg = nullptr;
+    auto [runtime_c_api, env_handle] = env.GetHolderForCApi();
     int error_code = capi->create_func(
-        env.GetHolder().handle, batch_size, sequence_size, vocab_size,
+        runtime_c_api, env_handle, batch_size, sequence_size, vocab_size,
         activation_data_type.has_value() ? &activation_data_type.value()
                                          : nullptr,
         &sampler_params, &sampler, &error_msg);
@@ -573,8 +580,9 @@ class TopKMetalCApiSampler : public TopKCApiSampler {
 
     LiteRtTopKSampler_Sampler* sampler = nullptr;
     char* error_msg = nullptr;
+    auto [runtime_c_api, env_handle] = env.GetHolderForCApi();
     int error_code = capi->create_func(
-        env.GetHolder().handle, batch_size, sequence_size, vocab_size,
+        runtime_c_api, env_handle, batch_size, sequence_size, vocab_size,
         activation_data_type.has_value() ? &activation_data_type.value()
                                          : nullptr,
         &sampler_params, &sampler, &error_msg);
