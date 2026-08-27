@@ -1844,6 +1844,10 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::RestoreContext(
     sampler_params_ = *context_data->runtime_config().sampler_params;
   }
 
+  last_verify_activations_.clear();
+  pending_accepted_tokens_.clear();
+  has_valid_verify_activations_ = false;
+
   return absl::OkStatus();
 }
 
