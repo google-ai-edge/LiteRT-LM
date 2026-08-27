@@ -394,6 +394,7 @@ TEST(EmbeddingEngineImplTest, DefaultEmbeddingOptions) {
   EmbeddingOptions options;
   EXPECT_TRUE(options.normalize);
   EXPECT_TRUE(options.insert_special_tokens);
+  EXPECT_FALSE(options.vision_tokens_per_image.has_value());
 }
 
 TEST(EmbeddingEngineImplTest, ComputeEmbeddingSuccess) {
@@ -978,6 +979,103 @@ TEST(EmbeddingEngineImplTest, ComputeEmbeddingWithRawImageSuccess) {
                 ->GetPatchifyConfig()
                 ->pooling_kernel_size,
             3);
+}
+
+TEST(EmbeddingEngineImplTest,
+     ComputeEmbeddingWithRawImageOverridingVisionTokensPerImage) {
+  ASSERT_OK_AND_ASSIGN(auto env, CreateTestEnvironment());
+  ASSERT_OK_AND_ASSIGN(auto image_tensor,
+                       CreateDummyTensorBuffer(env->env, {1, 224, 224, 3}));
+  auto tokenizer = std::make_unique<MockTokenizer>();
+  auto fake_embedding_executor = std::make_unique<FakeEmbeddingExecutor>();
+  auto* raw_executor = fake_embedding_executor.get();
+
+  auto fake_image_preprocessor =
+      std::make_unique<FakeImagePreprocessor>(std::move(image_tensor));
+  auto* raw_image_preprocessor = fake_image_preprocessor.get();
+
+  ImagePreprocessParameter parameter;
+  parameter.SetPatchifyConfig(ImagePreprocessParameter::PatchifyConfig{
+      .patch_width = 16,
+      .patch_height = 16,
+      .max_num_patches = 2520,
+      .pooling_kernel_size = 3,
+  });
+
+  EmbeddingEngineImpl engine(
+      std::move(env), std::move(tokenizer), std::move(fake_embedding_executor),
+      std::make_unique<FakeVisionExecutor>(),
+      /*audio_executor=*/nullptr,
+      /*benchmark_info=*/std::nullopt,
+      /*special_tokens=*/{}, std::move(fake_image_preprocessor), parameter);
+
+  std::vector<InputData> contents;
+  contents.push_back(InputImage(std::string("raw_image_bytes")));
+
+  EmbeddingOptions options;
+  options.insert_special_tokens = false;
+  options.vision_tokens_per_image = 70;
+
+  ASSERT_OK(engine.ComputeEmbedding(contents, options).status());
+  EXPECT_THAT(raw_executor->GetLastTokenIds(), ElementsAre(-1, -1, -1, -1));
+  ASSERT_TRUE(raw_image_preprocessor->GetLastParameter().has_value());
+  EXPECT_EQ(raw_image_preprocessor->GetLastParameter()
+                ->GetPatchifyConfig()
+                ->patch_width,
+            16);
+  EXPECT_EQ(raw_image_preprocessor->GetLastParameter()
+                ->GetPatchifyConfig()
+                ->patch_height,
+            16);
+  // max_num_patches = vision_tokens_per_image (70) * pooling_kernel_size^2 (9)
+  // = 630.
+  EXPECT_EQ(raw_image_preprocessor->GetLastParameter()
+                ->GetPatchifyConfig()
+                ->max_num_patches,
+            630);
+  EXPECT_EQ(raw_image_preprocessor->GetLastParameter()
+                ->GetPatchifyConfig()
+                ->pooling_kernel_size,
+            3);
+}
+
+TEST(EmbeddingEngineImplTest,
+     ComputeEmbeddingWithInvalidVisionTokensPerImageFails) {
+  ASSERT_OK_AND_ASSIGN(auto env, CreateTestEnvironment());
+  ASSERT_OK_AND_ASSIGN(auto image_tensor,
+                       CreateDummyTensorBuffer(env->env, {1, 224, 224, 3}));
+  auto tokenizer = std::make_unique<MockTokenizer>();
+  auto fake_embedding_executor = std::make_unique<FakeEmbeddingExecutor>();
+  auto fake_image_preprocessor =
+      std::make_unique<FakeImagePreprocessor>(std::move(image_tensor));
+
+  ImagePreprocessParameter parameter;
+  parameter.SetPatchifyConfig(ImagePreprocessParameter::PatchifyConfig{
+      .patch_width = 16,
+      .patch_height = 16,
+      .max_num_patches = 2520,
+      .pooling_kernel_size = 3,
+  });
+
+  EmbeddingEngineImpl engine(
+      std::move(env), std::move(tokenizer), std::move(fake_embedding_executor),
+      std::make_unique<FakeVisionExecutor>(),
+      /*audio_executor=*/nullptr,
+      /*benchmark_info=*/std::nullopt,
+      /*special_tokens=*/{}, std::move(fake_image_preprocessor), parameter);
+
+  std::vector<InputData> contents;
+  contents.push_back(InputImage(std::string("raw_image_bytes")));
+
+  EmbeddingOptions options_zero;
+  options_zero.vision_tokens_per_image = 0;
+  EXPECT_THAT(engine.ComputeEmbedding(contents, options_zero),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  EmbeddingOptions options_negative;
+  options_negative.vision_tokens_per_image = -5;
+  EXPECT_THAT(engine.ComputeEmbedding(contents, options_negative),
+              StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
 TEST(EmbeddingEngineImplTest,

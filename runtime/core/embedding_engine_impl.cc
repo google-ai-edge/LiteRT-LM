@@ -14,6 +14,7 @@
 
 #include "runtime/core/embedding_engine_impl.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <memory>
@@ -498,7 +499,14 @@ absl::StatusOr<std::vector<InputData>> EmbeddingEngineImpl::InsertSpecialTokens(
 }
 
 absl::StatusOr<ExecutorInputs> EmbeddingEngineImpl::ProcessAndCombineContents(
-    const std::vector<InputData>& contents) {
+    const std::vector<InputData>& contents, const EmbeddingOptions& options) {
+  if (options.vision_tokens_per_image.has_value() &&
+      *options.vision_tokens_per_image <= 0) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("vision_tokens_per_image must be positive, got: ",
+                     *options.vision_tokens_per_image));
+  }
+
   std::vector<int> combined_token_ids;
   std::vector<ExecutorVisionData> all_image_data;
   std::vector<ExecutorAudioData> all_audio_data;
@@ -556,10 +564,26 @@ absl::StatusOr<ExecutorInputs> EmbeddingEngineImpl::ProcessAndCombineContents(
               "Image preprocess parameter is not available for raw image "
               "input.");
         }
+        ::litert::support::ImagePreprocessParameter
+            per_call_image_preprocess_parameter = *image_preprocess_parameter_;
+        if (options.vision_tokens_per_image.has_value() &&
+            per_call_image_preprocess_parameter.GetPatchifyConfig()
+                .has_value()) {
+          auto patchify_config =
+              *per_call_image_preprocess_parameter.GetPatchifyConfig();
+          const int pooling_kernel_size =
+              std::max(patchify_config.pooling_kernel_size, 1);
+          const int patches_per_vision_token =
+              pooling_kernel_size * pooling_kernel_size;
+          patchify_config.max_num_patches =
+              *options.vision_tokens_per_image * patches_per_vision_token;
+          per_call_image_preprocess_parameter.SetPatchifyConfig(
+              patchify_config);
+        }
         LITERT_ASSIGN_OR_RETURN(
             auto preprocessed_image,
-            image_preprocessor_->Preprocess(*input_image,
-                                            *image_preprocess_parameter_));
+            image_preprocessor_->Preprocess(
+                *input_image, per_call_image_preprocess_parameter));
         if (preprocessed_image.IsTensorBuffer()) {
           LITERT_ASSIGN_OR_RETURN(
               auto tensor_buffer,
@@ -709,8 +733,9 @@ absl::StatusOr<EmbeddingResponse> EmbeddingEngineImpl::ComputeEmbedding(
     contents_to_process = &expanded_contents;
   }
 
-  LITERT_ASSIGN_OR_RETURN(auto executor_inputs,
-                          ProcessAndCombineContents(*contents_to_process));
+  LITERT_ASSIGN_OR_RETURN(
+      auto executor_inputs,
+      ProcessAndCombineContents(*contents_to_process, options));
   ABSL_ASSIGN_OR_RETURN(auto response,
                         ComputeEmbeddingInternal(executor_inputs, options));
 
@@ -742,8 +767,9 @@ EmbeddingEngineImpl::ComputeEmbeddingBatch(
                               InsertSpecialTokens(single_contents));
       contents_to_process = &expanded_contents;
     }
-    LITERT_ASSIGN_OR_RETURN(auto executor_inputs,
-                            ProcessAndCombineContents(*contents_to_process));
+    LITERT_ASSIGN_OR_RETURN(
+        auto executor_inputs,
+        ProcessAndCombineContents(*contents_to_process, options));
     if (benchmark_info_.has_value()) {
       ABSL_ASSIGN_OR_RETURN(uint64_t num_tokens, GetNumTokens(executor_inputs));
       total_tokens += num_tokens;

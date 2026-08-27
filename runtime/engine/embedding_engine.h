@@ -40,6 +40,11 @@ struct EmbeddingOptions {
   // length.
   InputOverflowStrategy input_overflow_strategy =
       InputOverflowStrategy::kChunkAndAverage;
+
+  // The number of vision soft tokens to generate per image. If set, overrides
+  // the default max_num_patches parameter for image preprocessing during this
+  // computation.
+  std::optional<int> vision_tokens_per_image = std::nullopt;
 };
 
 // Represents the result of an embedding computation.

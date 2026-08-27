@@ -145,7 +145,7 @@ class EmbeddingEngineImpl : public EmbeddingEngine {
       const std::vector<InputData>& contents) const;
 
   absl::StatusOr<ExecutorInputs> ProcessAndCombineContents(
-      const std::vector<InputData>& contents);
+      const std::vector<InputData>& contents, const EmbeddingOptions& options);
 
   absl::StatusOr<EmbeddingResponse> ComputeEmbeddingInternal(
       const ExecutorInputs& inputs, const EmbeddingOptions& options);
