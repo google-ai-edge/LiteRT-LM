@@ -46,6 +46,7 @@
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
+#include "runtime/util/litert_util.h"
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/status_macros.h"
 
@@ -61,6 +62,8 @@ ABSL_FLAG(bool, normalize, true,
           "Whether to L2-normalize the output embedding vector.");
 ABSL_FLAG(bool, use_mmap, true,
           "Whether to use memory-mapped file for model loading.");
+ABSL_FLAG(std::string, dispatch_library_dir, "",
+          "Path to directory containing LiteRT dispatch libraries.");
 
 namespace {
 
@@ -134,10 +137,6 @@ absl::Status MainHelper(int argc, char** argv) {
     return absl::NotFoundError("Tokenizer not found in model resources.");
   }
 
-  LITERT_ASSIGN_OR_RETURN(auto env, ::litert::Environment::Create({}));
-  auto owned_env = std::make_unique<OwnedEnvironment>(OwnedEnvironment{
-      /*magic_number_configs_helper=*/nullptr, std::move(env)});
-
   std::optional<Backend> vision_backend = std::nullopt;
   if (resources->GetTFLiteModel(ModelType::kTfLiteVisionEncoder).ok()) {
     vision_backend = backend;
@@ -152,11 +151,25 @@ absl::Status MainHelper(int argc, char** argv) {
       auto settings, EmbeddingEngineSettings::CreateDefault(
                          model_assets, backend, vision_backend, audio_backend));
 
+  const std::string dispatch_library_dir =
+      absl::GetFlag(FLAGS_dispatch_library_dir);
+  if (!dispatch_library_dir.empty()) {
+    settings.GetMutableMainExecutorSettings().SetLitertDispatchLibDir(
+        dispatch_library_dir);
+  }
+
+  LITERT_ASSIGN_OR_RETURN(auto owned_env,
+                          CreateEnvironment(settings, resources.get()));
+  auto owned_env_ptr =
+      std::make_unique<OwnedEnvironment>(std::move(owned_env));
+
   std::cout << "Initializing EmbeddingEngine..." << std::endl;
   LITERT_ASSIGN_OR_RETURN(
       auto engine,
-      EmbeddingEngineImpl::Create(std::move(resources), std::move(owned_env),
-                                  std::move(tokenizer), std::move(settings)));
+      EmbeddingEngineImpl::Create(std::move(resources),
+                                  std::move(owned_env_ptr),
+                                  std::move(tokenizer),
+                                  std::move(settings)));
 
   const std::string prompt = absl::GetFlag(FLAGS_input_prompt);
   const std::string image_path = absl::GetFlag(FLAGS_image_path);

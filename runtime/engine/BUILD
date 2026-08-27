@@ -350,6 +350,7 @@ cc_binary(
         "//runtime/executor:executor_settings_base",
         "//runtime/executor:litert_compiled_model_executor_utils",
         "//runtime/util:litert_status_util",
+        "//runtime/util:litert_util",
         "//runtime/util:scoped_file",
         "//support/preprocessor:image_preprocessor_impl",  # buildcleaner: keep
     ],
