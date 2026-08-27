@@ -537,11 +537,24 @@ std::ostream& operator<<(std::ostream& os, const EngineSettings& settings) {
   } else {
     os << "  AudioExecutorSettings: Not set" << std::endl;
   }
+  if (settings.GetMaxVisionTokensPerImage().has_value()) {
+    os << "  MaxVisionTokensPerImage: "
+       << settings.GetMaxVisionTokensPerImage().value() << std::endl;
+  }
   os << "  ParallelFileSectionLoading: "
      << settings.GetParallelFileSectionLoading() << std::endl;
   os << "  SingleThreadedExecution: " << settings.GetSingleThreadedExecution()
      << std::endl;
   return os;
+}
+
+std::optional<int> EngineSettings::GetMaxVisionTokensPerImage() const {
+  return max_vision_tokens_per_image_;
+}
+
+void EngineSettings::SetMaxVisionTokensPerImage(
+    int max_vision_tokens_per_image) {
+  max_vision_tokens_per_image_ = max_vision_tokens_per_image;
 }
 
 proto::LlmMetadata& EngineSettings::GetMutableLlmMetadata() {

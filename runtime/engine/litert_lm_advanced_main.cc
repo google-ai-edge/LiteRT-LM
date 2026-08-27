@@ -265,6 +265,7 @@ absl::Status MainHelper(int argc, char** argv) {
   settings.max_num_tokens = absl::GetFlag(FLAGS_max_num_tokens);
   settings.max_output_tokens = absl::GetFlag(FLAGS_max_output_tokens);
   settings.max_num_images = absl::GetFlag(FLAGS_max_num_images);
+  settings.visual_token_budget = absl::GetFlag(FLAGS_visual_token_budget);
   ABSL_ASSIGN_OR_RETURN(
       settings.prefill_batch_sizes,
       ParsePrefillBatchSizes(absl::GetFlag(FLAGS_prefill_batch_sizes)));

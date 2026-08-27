@@ -134,6 +134,10 @@ absl::Status MainHelper(int argc, char** argv) {
   // Enable benchmark by default.
   engine_settings.GetMutableBenchmarkParams() =
       litert::lm::proto::BenchmarkParams();
+  const int visual_token_budget = absl::GetFlag(FLAGS_visual_token_budget);
+  if (visual_token_budget > 0) {
+    engine_settings.SetMaxVisionTokensPerImage(visual_token_budget);
+  }
 
   if (backend == Backend::CPU) {
     auto& executor_settings = engine_settings.GetMutableMainExecutorSettings();

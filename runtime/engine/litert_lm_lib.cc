@@ -520,6 +520,9 @@ absl::StatusOr<EngineSettings> CreateEngineSettings(
     engine_settings.GetMutableMainExecutorSettings().SetMaxNumTokens(
         settings.max_num_tokens);
   }
+  if (settings.visual_token_budget > 0) {
+    engine_settings.SetMaxVisionTokensPerImage(settings.visual_token_budget);
+  }
   if (settings.force_f32) {
     engine_settings.GetMutableMainExecutorSettings().SetActivationDataType(
         litert::lm::ActivationDataType::FLOAT32);

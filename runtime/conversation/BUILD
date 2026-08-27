@@ -202,6 +202,7 @@ cc_test(
         "//runtime/components/constrained_decoding:no_repeat_ngram_config",
         "//runtime/components/constrained_decoding:repetition_penalty_config",
         "//runtime/components/constrained_decoding:suppress_tokens_config",
+        "//runtime/conversation/model_data_processor:gemma4_data_processor_config",
         "//runtime/engine:engine_factory",
         "//runtime/engine:engine_interface",
         "//runtime/engine:engine_settings",

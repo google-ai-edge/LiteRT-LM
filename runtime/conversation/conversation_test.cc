@@ -47,6 +47,7 @@
 #include "runtime/components/constrained_decoding/suppress_tokens_config.h"
 #include "runtime/components/prompt_template.h"
 #include "runtime/conversation/io_types.h"
+#include "runtime/conversation/model_data_processor/gemma4_data_processor_config.h"
 #include "runtime/conversation/thinking_config.h"
 #include "runtime/engine/engine.h"
 #include "runtime/engine/engine_factory.h"
@@ -4565,6 +4566,35 @@ TEST(AppendMessageTest, Gemma4SyncPrefillPrefaceOnInitAndAlternateRoles) {
         ]
       })json"),
                                       {.has_pending_message = false}));
+}
+
+TEST_P(ConversationTest,
+       SendMessageVisualTokenBudgetExceedingEngineSettingFails) {
+  ASSERT_OK(engine_settings_);
+  engine_settings_->SetMaxVisionTokensPerImage(200);
+  auto mock_session = CreateMockSession();
+  auto mock_engine = CreateMockEngine(std::move(mock_session));
+
+  ASSERT_OK_AND_ASSIGN(
+      auto conversation_config,
+      ConversationConfig::Builder()
+          .SetSessionConfig(session_config_)
+          .SetOverwritePromptTemplate(PromptTemplate("{{ prompt }}"))
+          .Build(*mock_engine));
+  ASSERT_OK_AND_ASSIGN(auto conversation,
+                       Conversation::Create(*mock_engine, conversation_config));
+
+  Message user_message = {{"role", "user"}, {"content", "Hello"}};
+  OptionalArgs optional_args;
+  optional_args.args = Gemma4DataProcessorArguments{.visual_token_budget = 300};
+
+  EXPECT_THAT(
+      conversation->SendMessage(user_message, std::move(optional_args)),
+      testing::status::StatusIs(
+          absl::StatusCode::kInvalidArgument,
+          testing::HasSubstr(
+              "Visual token budget (300) cannot be larger than the engine's "
+              "max vision tokens per image (200).")));
 }
 
 }  // namespace

@@ -569,6 +569,13 @@ absl::Status Conversation::SendMessageAsync(
     const Message& message,
     absl::AnyInvocable<void(absl::StatusOr<Message>)> user_callback,
     OptionalArgs optional_args) {
+  if (optional_args.args.has_value() &&
+      engine_.GetEngineSettings().GetMaxVisionTokensPerImage().has_value()) {
+    ABSL_RETURN_IF_ERROR(ValidateVisualTokenBudget(
+        *optional_args.args,
+        *engine_.GetEngineSettings().GetMaxVisionTokensPerImage()));
+  }
+
   ABSL_ASSIGN_OR_RETURN(std::string single_turn_text,
                         GetSingleTurnText(message, optional_args));
   auto open_channel_name =

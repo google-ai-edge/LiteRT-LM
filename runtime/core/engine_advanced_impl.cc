@@ -23,10 +23,10 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/time/clock.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
-#include "litert/cc/litert_macros.h"  // from @litert
 #include "runtime/components/model_resources.h"
 #include "runtime/core/session_advanced.h"
 #include "runtime/engine/engine.h"
@@ -40,6 +40,7 @@
 #include "runtime/executor/llm_executor.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/llm_litert_compiled_model_executor_factory.h"
+#include "runtime/executor/model_signature_utils.h"
 #include "runtime/executor/vision_executor_settings.h"
 #include "runtime/executor/vision_executor_utils.h"
 #include "runtime/framework/resource_management/execution_manager.h"
@@ -56,6 +57,40 @@
 #endif  // defined(LITERT_LM_DEBUGGER_ENABLED)
 
 namespace litert::lm {
+namespace {
+
+std::optional<int> GetVisionTokensPerImageFromMetadata(
+    const proto::LlmMetadata* llm_metadata) {
+  if (llm_metadata == nullptr || !llm_metadata->has_llm_model_type()) {
+    return std::nullopt;
+  }
+  const auto& model_type = llm_metadata->llm_model_type();
+  int max_num_patches = 0;
+  int pooling_kernel_size = 1;
+  if (model_type.has_gemma4()) {
+    max_num_patches = model_type.gemma4().max_num_patches();
+    if (model_type.gemma4().pooling_kernel_size() > 0) {
+      pooling_kernel_size = model_type.gemma4().pooling_kernel_size();
+    }
+  } else if (model_type.has_generic_model()) {
+    max_num_patches = model_type.generic_model().max_num_patches();
+    if (model_type.generic_model().pooling_kernel_size() > 0) {
+      pooling_kernel_size = model_type.generic_model().pooling_kernel_size();
+    }
+  } else if (model_type.has_lfm2()) {
+    max_num_patches = model_type.lfm2().max_num_patches();
+    if (model_type.lfm2().pooling_kernel_size() > 0) {
+      pooling_kernel_size = model_type.lfm2().pooling_kernel_size();
+    }
+  }
+  if (max_num_patches <= 0) {
+    return std::nullopt;
+  }
+  const int patch_num_shrink_factor = pooling_kernel_size * pooling_kernel_size;
+  return max_num_patches / patch_num_shrink_factor;
+}
+
+}  // namespace
 
 class EngineAdvancedImpl : public Engine {
  public:
@@ -223,12 +258,53 @@ absl::StatusOr<std::unique_ptr<Engine>> EngineAdvancedImpl::Create(
         BenchmarkInfo::InitPhase::kLlmMetadata));
   }
 
-  ABSL_ASSIGN_OR_RETURN(auto* llm_metadata, model_resources->GetLlmMetadata());
+  ABSL_ASSIGN_OR_RETURN(const auto* llm_metadata,
+                        model_resources->GetLlmMetadata());
   if (benchmark_info.has_value()) {
     ABSL_RETURN_IF_ERROR(benchmark_info->TimeInitPhaseEnd(
         BenchmarkInfo::InitPhase::kLlmMetadata));
   }
-  bool hasLlmModelType = llm_metadata->has_llm_model_type();
+
+  // Select vision encoder and adapter signatures if max_vision_tokens_per_image
+  // is set by user, or fallback to metadata from proto if it exists.
+  std::optional<int> vision_token_limit;
+  if (engine_settings.GetMaxVisionTokensPerImage().has_value()) {
+    if (!engine_settings.GetVisionExecutorSettings().has_value()) {
+      return absl::FailedPreconditionError(
+          "Vision executor settings are not configured.");
+    }
+    const int max_vision_tokens_per_image =
+        *engine_settings.GetMaxVisionTokensPerImage();
+    if (max_vision_tokens_per_image <= 0) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("max_vision_tokens_per_image must be positive, got: ",
+                       max_vision_tokens_per_image));
+    }
+    vision_token_limit = max_vision_tokens_per_image;
+  } else if (engine_settings.GetVisionExecutorSettings().has_value()) {
+    vision_token_limit = GetVisionTokensPerImageFromMetadata(llm_metadata);
+    if (vision_token_limit.has_value() && *vision_token_limit > 0) {
+      engine_settings.SetMaxVisionTokensPerImage(*vision_token_limit);
+    }
+  }
+
+  if (vision_token_limit.has_value() && *vision_token_limit > 0) {
+    ABSL_ASSIGN_OR_RETURN(
+        auto vision_sig_info,
+        SelectVisionEncoderSignatures(*model_resources, *vision_token_limit));
+    engine_settings.GetMutableVisionExecutorSettings()
+        ->SetEncoderSelectedSignatures(vision_sig_info.signature_names);
+
+    ABSL_ASSIGN_OR_RETURN(
+        auto adapter_sig_info,
+        SelectVisionAdapterSignatures(*model_resources, *vision_token_limit));
+    if (adapter_sig_info.has_value()) {
+      engine_settings.GetMutableVisionExecutorSettings()
+          ->SetAdapterSelectedSignatures(adapter_sig_info->signature_names);
+    }
+  }
+  bool hasLlmModelType =
+      llm_metadata != nullptr && llm_metadata->has_llm_model_type();
   absl::Duration tokenizer_duration = absl::ZeroDuration();
   // This lambda is used to create the tokenizer asynchronously if the model
   // type is available, such that the tokenizer can be created in parallel with

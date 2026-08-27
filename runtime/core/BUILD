@@ -78,6 +78,7 @@ ENGINE_IMPL_COMMON_DEPS = [
     "//runtime/executor:llm_litert_compiled_model_executor",
     "//runtime/executor:llm_litert_compiled_model_executor_factory",
     "//runtime/executor:magic_number_configs_helper",
+    "//runtime/executor:model_signature_utils",
     "//runtime/executor:vision_executor",
     "//runtime/executor:vision_executor_settings",
     "//runtime/executor:vision_executor_utils",

@@ -766,6 +766,19 @@ TEST(EngineSettingsTest, SingleThreadedExecution) {
   EXPECT_FALSE(settings->GetSingleThreadedExecution());
 }
 
+TEST(EngineSettingsTest, MaxVisionTokensPerImage) {
+  auto model_assets = ModelAssets::Create("test_model_path_1");
+  ASSERT_OK(model_assets);
+  auto settings = EngineSettings::CreateDefault(*model_assets);
+  ASSERT_OK(settings);
+
+  EXPECT_FALSE(settings->GetMaxVisionTokensPerImage().has_value());
+
+  settings->SetMaxVisionTokensPerImage(200);
+  EXPECT_TRUE(settings->GetMaxVisionTokensPerImage().has_value());
+  EXPECT_EQ(settings->GetMaxVisionTokensPerImage().value(), 200);
+}
+
 absl::Status IsExpectedLlmMetadata(const proto::LlmMetadata& llm_metadata) {
   if (!llm_metadata.has_start_token() ||
       llm_metadata.start_token().token_ids().ids_size() != 1 ||

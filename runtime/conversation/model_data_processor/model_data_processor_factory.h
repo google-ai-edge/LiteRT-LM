@@ -19,6 +19,7 @@
 #include <optional>
 #include <vector>
 
+#include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "runtime/components/prompt_template.h"
 #include "runtime/conversation/io_types.h"
@@ -51,6 +52,9 @@ absl::StatusOr<std::unique_ptr<ModelDataProcessor>> CreateModelDataProcessor(
 // set in the LlmModelType.
 absl::StatusOr<DataProcessorConfig> CreateDataProcessorConfigFromLlmModelType(
     const proto::LlmModelType& llm_model_type);
+
+absl::Status ValidateVisualTokenBudget(const DataProcessorArguments& args,
+                                       int max_vision_tokens_per_image);
 
 }  // namespace litert::lm
 

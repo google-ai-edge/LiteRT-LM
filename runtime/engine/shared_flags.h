@@ -33,6 +33,7 @@ ABSL_DECLARE_FLAG(std::optional<std::string>, log_sink_file);
 ABSL_DECLARE_FLAG(int, max_num_tokens);
 ABSL_DECLARE_FLAG(int, max_output_tokens);
 ABSL_DECLARE_FLAG(int, max_num_images);
+ABSL_DECLARE_FLAG(int, visual_token_budget);
 ABSL_DECLARE_FLAG(std::vector<std::string>, prefill_batch_sizes);
 ABSL_DECLARE_FLAG(int, num_output_candidates);
 ABSL_DECLARE_FLAG(bool, benchmark);

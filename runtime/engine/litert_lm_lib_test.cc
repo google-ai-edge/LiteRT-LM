@@ -298,6 +298,19 @@ TEST(LiteRtLmLibTest, CreateEngineSettings_MaxNumTokens) {
             1024);
 }
 
+TEST(LiteRtLmLibTest, CreateEngineSettings_VisualTokenBudget) {
+  const auto model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm.litertlm";
+  LiteRtLmSettings settings;
+  settings.model_path = model_path.string();
+  settings.visual_token_budget = 200;
+
+  auto engine_settings = CreateEngineSettings(settings);
+  ASSERT_OK(engine_settings.status());
+  EXPECT_EQ(engine_settings->GetMaxVisionTokensPerImage(), 200);
+}
+
 TEST(LiteRtLmLibTest, CreateEngineSettings_CacheConfig) {
   const auto model_path =
       std::filesystem::path(::testing::SrcDir()) /

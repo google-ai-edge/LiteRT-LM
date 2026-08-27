@@ -417,6 +417,65 @@ TEST(EngineTest, CreateEngine_FailsNoAudioModel) {
                   "TF_LITE_AUDIO_ENCODER_HW not found in the model."));
 }
 
+TEST(EngineTest, CreateEngine_MaxVisionTokensPerImage_NoVisionSettingsFails) {
+  auto task_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm_new_metadata.task";
+  auto model_assets = ModelAssets::Create(task_path.string());
+  ASSERT_OK(model_assets);
+  auto engine_settings =
+      EngineSettings::CreateDefault(*model_assets, Backend::CPU);
+  ASSERT_OK(engine_settings);
+  engine_settings->GetMutableMainExecutorSettings().SetMaxNumTokens(
+      kMaxNumTokens);
+  engine_settings->GetMutableMainExecutorSettings().SetCacheDir(":nocache");
+  engine_settings->SetMaxVisionTokensPerImage(200);
+
+  EXPECT_THAT(CreateEngine(*engine_settings),
+              testing::status::StatusIs(
+                  absl::StatusCode::kFailedPrecondition,
+                  "Vision executor settings are not configured."));
+}
+
+TEST(EngineTest, CreateEngine_MaxVisionTokensPerImage_InvalidValueFails) {
+  auto task_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm_new_metadata.task";
+  auto model_assets = ModelAssets::Create(task_path.string());
+  ASSERT_OK(model_assets);
+  auto engine_settings = EngineSettings::CreateDefault(
+      *model_assets, Backend::CPU, /*vision_backend=*/Backend::CPU);
+  ASSERT_OK(engine_settings);
+  engine_settings->GetMutableMainExecutorSettings().SetMaxNumTokens(
+      kMaxNumTokens);
+  engine_settings->GetMutableMainExecutorSettings().SetCacheDir(":nocache");
+  engine_settings->SetMaxVisionTokensPerImage(-5);
+
+  EXPECT_THAT(
+      CreateEngine(*engine_settings),
+      testing::status::StatusIs(
+          absl::StatusCode::kInvalidArgument,
+          testing::HasSubstr("max_vision_tokens_per_image must be positive")));
+}
+
+TEST(EngineTest,
+     CreateEngine_VisionExecutorSettings_WithoutMaxVisionTokensPerImage) {
+  auto task_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm_new_metadata.task";
+  auto model_assets = ModelAssets::Create(task_path.string());
+  ASSERT_OK(model_assets);
+  auto engine_settings = EngineSettings::CreateDefault(
+      *model_assets, Backend::CPU, /*vision_backend=*/Backend::CPU);
+  ASSERT_OK(engine_settings);
+  engine_settings->GetMutableMainExecutorSettings().SetMaxNumTokens(
+      kMaxNumTokens);
+  engine_settings->GetMutableMainExecutorSettings().SetCacheDir(":nocache");
+
+  ASSERT_OK_AND_ASSIGN(auto llm, CreateEngine(*engine_settings));
+  EXPECT_NE(llm, nullptr);
+}
+
 // TODO (b/397975034): Add more tests for Engine.
 
 TEST(EngineTest, UpdateGpuEnableMetalResidencySet) {

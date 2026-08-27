@@ -49,6 +49,9 @@ ABSL_FLAG(int, max_output_tokens, -1,
           "tokens count towards this limit.");
 ABSL_FLAG(int, max_num_images, 1,
           "Maximum number of images to use for LLM execution.");
+ABSL_FLAG(int, visual_token_budget, -1,
+          "Visual token budget for multimodal processing (maximum number of "
+          "vision tokens per image).");
 ABSL_FLAG(std::vector<std::string>, prefill_batch_sizes, {},
           "A list of maximum numbers of prefill tokens processed at once. If "
           "empty, it will be the list of one entry with the length of input "

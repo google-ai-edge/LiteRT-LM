@@ -151,6 +151,13 @@ class EngineSettings {
   // false.
   void SetSingleThreadedExecution(bool single_threaded_execution);
 
+  // Desired maximum number of vision tokens generated per image. If set,
+  // the engine will automatically select vision encoder (and adapter)
+  // signatures with capacity up to this length and the smallest signature that
+  // fits it.
+  std::optional<int> GetMaxVisionTokensPerImage() const;
+  void SetMaxVisionTokensPerImage(int max_vision_tokens_per_image);
+
  private:
   explicit EngineSettings(
       LlmExecutorSettings executor_settings,
@@ -180,6 +187,9 @@ class EngineSettings {
 
   // Whether the advanced engine should run tasks in a single thread.
   bool single_threaded_execution_ = false;
+
+  // Desired maximum number of vision tokens generated per image.
+  std::optional<int> max_vision_tokens_per_image_;
 };
 std::ostream& operator<<(std::ostream& os, const EngineSettings& settings);
 
