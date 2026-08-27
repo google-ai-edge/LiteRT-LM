@@ -17,6 +17,20 @@ package com.google.ai.edge.litertlm
 
 import kotlin.jvm.Volatile
 
+data class SupportedModalities(
+  val text: Boolean,
+  val vision: Boolean,
+  val audio: Boolean,
+  val video: Boolean,
+)
+
+data class SamplerParameters(
+  val type: Int,
+  val temperature: Float,
+  val topK: Int,
+  val topP: Float,
+)
+
 /**
  * Provides information about capabilities and features supported by a LiteRT-LM file.
  *
@@ -46,11 +60,55 @@ class Capabilities(modelPath: String) : AutoCloseable {
     }
   }
 
+  /** Checks if the loaded LiteRT-LM file supports thinking/reasoning. */
+  fun supportsThinking(): Boolean {
+    synchronized(lock) {
+      checkInitialized()
+      return LiteRtLmJni.nativeSupportsThinking(handle!!)
+    }
+  }
+
+  /**
+   * Checks if the loaded LiteRT-LM file supports function calling/tool use.
+   */
+  fun supportsFunctionCalling(): Boolean {
+    synchronized(lock) {
+      checkInitialized()
+      return LiteRtLmJni.nativeSupportsFunctionCalling(handle!!)
+    }
+  }
+
+  /** Returns the supported input modalities. */
+  fun inputModalities(): SupportedModalities {
+    synchronized(lock) {
+      checkInitialized()
+      return SupportedModalities(
+        text = LiteRtLmJni.nativeSupportsInputModality(handle!!, 0),
+        vision = LiteRtLmJni.nativeSupportsInputModality(handle!!, 1),
+        audio = LiteRtLmJni.nativeSupportsInputModality(handle!!, 2),
+        video = LiteRtLmJni.nativeSupportsInputModality(handle!!, 3),
+      )
+    }
+  }
+
+  /** Returns the default sampler parameters for the model. */
+  fun defaultSamplerParams(): SamplerParameters {
+    synchronized(lock) {
+      checkInitialized()
+      return SamplerParameters(
+        type = LiteRtLmJni.nativeSamplerType(handle!!),
+        temperature = LiteRtLmJni.nativeSamplerTemp(handle!!),
+        topK = LiteRtLmJni.nativeSamplerTopK(handle!!),
+        topP = LiteRtLmJni.nativeSamplerTopP(handle!!),
+      )
+    }
+  }
+
   /** Closes the loaded capabilities and releases underlying resources. */
   override fun close() {
     synchronized(lock) {
-      checkInitialized()
-      LiteRtLmJni.nativeDeleteCapabilities(handle!!)
+      val ptr = handle ?: return
+      LiteRtLmJni.nativeDeleteCapabilities(ptr)
       handle = null
     }
   }

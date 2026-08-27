@@ -17,6 +17,12 @@
 #include <algorithm>
 #include <string>
 
+#if defined(__APPLE__)
+#include "engine.h"  // NOLINT
+#else
+#include "c/engine.h"
+#endif
+
 #include <gtest/gtest.h>
 
 namespace {
@@ -29,12 +35,33 @@ std::string GetRunfilePath(const std::string& relative_path) {
   return srcdir + "/" + relative_path;
 }
 
-TEST(CapabilitiesCTest, HasSpeculativeDecodingSupport) {
+TEST(CapabilitiesCTest, InspectCapabilities) {
   std::string model_path = GetRunfilePath(
       "litert_lm/runtime/testdata/test_lm.litertlm");
   LiteRtLmLoadedFile* file = litert_lm_loaded_file_create(model_path.c_str());
   ASSERT_NE(file, nullptr);
+
+  // Verify core capabilities and fallback defaults
   EXPECT_FALSE(litert_lm_loaded_file_has_speculative_decoding_support(file));
+  EXPECT_FALSE(litert_lm_loaded_file_supports_thinking(file));
+  EXPECT_FALSE(litert_lm_loaded_file_supports_function_calling(file));
+
+  // Verify modalities
+  EXPECT_TRUE(litert_lm_loaded_file_supports_input_modality(
+      file, kLiteRtLmModalityText));
+  EXPECT_FALSE(litert_lm_loaded_file_supports_input_modality(
+      file, kLiteRtLmModalityVision));
+  EXPECT_FALSE(litert_lm_loaded_file_supports_input_modality(
+      file, kLiteRtLmModalityAudio));
+  EXPECT_FALSE(litert_lm_loaded_file_supports_input_modality(
+      file, kLiteRtLmModalityVideo));
+
+  // Verify default sampler parameters (from model config)
+  EXPECT_EQ(litert_lm_loaded_file_sampler_type(file), kLiteRtLmSamplerTypeTopP);
+  EXPECT_FLOAT_EQ(litert_lm_loaded_file_sampler_temperature(file), 0.0f);
+  EXPECT_EQ(litert_lm_loaded_file_sampler_top_k(file), 1);
+  EXPECT_FLOAT_EQ(litert_lm_loaded_file_sampler_top_p(file), 0.7f);
+
   litert_lm_loaded_file_delete(file);
 }
 

@@ -16,6 +16,7 @@
 #define THIRD_PARTY_ODML_LITERT_LM_C_CAPABILITIES_H_
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #if defined(__APPLE__)
 #include "engine.h"  // NOLINT
@@ -31,6 +32,16 @@ extern "C" {
 //
 // Added in version 0.2.0.
 typedef struct LiteRtLmLoadedFile LiteRtLmLoadedFile;
+
+// Input and output modalities supported by LiteRT-LM models.
+//
+// Added in version 0.2.0.
+typedef enum LiteRtLmModality {
+  kLiteRtLmModalityText = 0,
+  kLiteRtLmModalityVision = 1,
+  kLiteRtLmModalityAudio = 2,
+  kLiteRtLmModalityVideo = 3,
+} LiteRtLmModality;
 
 // Loads a LiteRT-LM file from the given path for capability queries.
 // Returns NULL if the file cannot be opened.
@@ -51,6 +62,54 @@ void litert_lm_loaded_file_delete(LiteRtLmLoadedFile* loaded_file);
 LITERT_LM_C_API_EXPORT
 bool litert_lm_loaded_file_has_speculative_decoding_support(
     LiteRtLmLoadedFile* loaded_file);
+
+// Returns true if the model supports thinking / reasoning steps.
+// If the metadata is not explicitly set in the model, this returns false.
+//
+// Added in version 0.2.0.
+LITERT_LM_C_API_EXPORT
+bool litert_lm_loaded_file_supports_thinking(LiteRtLmLoadedFile* loaded_file);
+
+// Returns true if the model supports function calling / tool use.
+// If the metadata is not explicitly set in the model, this returns false.
+//
+// Added in version 0.2.0.
+LITERT_LM_C_API_EXPORT
+bool litert_lm_loaded_file_supports_function_calling(
+    LiteRtLmLoadedFile* loaded_file);
+
+// Returns the default sampler type for the model.
+//
+// Added in version 0.2.0.
+LITERT_LM_C_API_EXPORT
+LiteRtLmSamplerType litert_lm_loaded_file_sampler_type(
+    LiteRtLmLoadedFile* loaded_file);
+
+// Returns the default sampler temperature for the model.
+//
+// Added in version 0.2.0.
+LITERT_LM_C_API_EXPORT
+float litert_lm_loaded_file_sampler_temperature(
+    LiteRtLmLoadedFile* loaded_file);
+
+// Returns the default sampler top_k for the model.
+//
+// Added in version 0.2.0.
+LITERT_LM_C_API_EXPORT
+int32_t litert_lm_loaded_file_sampler_top_k(LiteRtLmLoadedFile* loaded_file);
+
+// Returns the default sampler top_p for the model.
+//
+// Added in version 0.2.0.
+LITERT_LM_C_API_EXPORT
+float litert_lm_loaded_file_sampler_top_p(LiteRtLmLoadedFile* loaded_file);
+
+// Returns true if the input modality is supported.
+//
+// Added in version 0.2.0.
+LITERT_LM_C_API_EXPORT
+bool litert_lm_loaded_file_supports_input_modality(
+    LiteRtLmLoadedFile* loaded_file, LiteRtLmModality modality);
 
 #ifdef __cplusplus
 }  // extern "C"

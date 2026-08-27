@@ -26,6 +26,7 @@ private func testDataPath(forResource resource: String) -> String {
 class CapabilitiesTests: XCTestCase {
 
   func testInit_SuccessfulWithValidModel() {
+    // swift-format-ignore
     let modelResource =
       "runtime/testdata/test_lm.litertlm"
     let modelPath = testDataPath(forResource: modelResource)
@@ -40,6 +41,7 @@ class CapabilitiesTests: XCTestCase {
   }
 
   func testHasSpeculativeDecodingSupport() {
+    // swift-format-ignore
     let modelResource =
       "runtime/testdata/test_lm.litertlm"
     let modelPath = testDataPath(forResource: modelResource)
@@ -52,5 +54,22 @@ class CapabilitiesTests: XCTestCase {
     // Verify that calling hasSpeculativeDecodingSupport doesn't crash and returns a boolean.
     let supportsSpeculativeDecoding = capabilities.hasSpeculativeDecodingSupport()
     XCTAssertFalse(supportsSpeculativeDecoding)
+
+    // Verify thinking and function calling (false for legacy test model)
+    XCTAssertFalse(capabilities.supportsThinking())
+    XCTAssertFalse(capabilities.supportsFunctionCalling())
+
+    // Verify modalities
+    XCTAssertTrue(capabilities.inputModalities.text)
+    XCTAssertFalse(capabilities.inputModalities.vision)
+    XCTAssertFalse(capabilities.inputModalities.audio)
+    XCTAssertFalse(capabilities.inputModalities.video)
+
+    // Verify default sampler parameters (from model config)
+    let defaultSamplerParams = capabilities.defaultSamplerParams
+    XCTAssertEqual(defaultSamplerParams.type.rawValue, 2)
+    XCTAssertEqual(defaultSamplerParams.temperature, 0.0)
+    XCTAssertEqual(defaultSamplerParams.topK, 1)
+    XCTAssertEqual(defaultSamplerParams.topP, 0.7)
   }
 }

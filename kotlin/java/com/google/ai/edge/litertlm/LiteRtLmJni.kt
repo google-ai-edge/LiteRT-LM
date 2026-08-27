@@ -384,14 +384,84 @@ internal object LiteRtLmJni {
    */
   external fun nativeSetMinLogSeverity(logSeverity: Int)
 
-  /** Loads a LiteRT-LM file from the given path for capability queries. */
+  /**
+   * Loads a LiteRT-LM file from the given path for capability queries.
+   *
+   * @param modelPath The path to the model file.
+   * @return A pointer to the native capabilities wrapper instance.
+   */
   external fun nativeCreateCapabilities(modelPath: String): Long
 
-  /** Deletes a loaded LiteRT-LM file. */
+  /**
+   * Deletes a loaded LiteRT-LM capabilities instance and frees resources.
+   *
+   * @param capabilitiesPointer A pointer to the native capabilities instance.
+   */
   external fun nativeDeleteCapabilities(capabilitiesPointer: Long)
 
-  /** Returns true if the loaded LiteRT-LM file supports speculative decoding. */
+  /**
+   * Returns true if the loaded LiteRT-LM file supports speculative decoding.
+   *
+   * @param capabilitiesPointer A pointer to the native capabilities instance.
+   * @return True if speculative decoding is supported, false otherwise.
+   */
   external fun nativeHasSpeculativeDecodingSupport(capabilitiesPointer: Long): Boolean
+
+  /**
+   * Returns true if the model supports thinking / reasoning.
+   *
+   * @param capabilitiesPointer A pointer to the native capabilities instance.
+   * @return True if thinking is supported, false otherwise.
+   */
+  external fun nativeSupportsThinking(capabilitiesPointer: Long): Boolean
+
+  /**
+   * Returns true if the model supports function calling / tool use.
+   *
+   * @param capabilitiesPointer A pointer to the native capabilities instance.
+   * @return True if function calling is supported, false otherwise.
+   */
+  external fun nativeSupportsFunctionCalling(capabilitiesPointer: Long): Boolean
+
+  /**
+   * Returns the default sampler type.
+   *
+   * @param capabilitiesPointer A pointer to the native capabilities instance.
+   * @return The sampler type integer value.
+   */
+  external fun nativeSamplerType(capabilitiesPointer: Long): Int
+
+  /**
+   * Returns the default sampler temperature.
+   *
+   * @param capabilitiesPointer A pointer to the native capabilities instance.
+   * @return The sampler temperature.
+   */
+  external fun nativeSamplerTemp(capabilitiesPointer: Long): Float
+
+  /**
+   * Returns the default sampler top_k.
+   *
+   * @param capabilitiesPointer A pointer to the native capabilities instance.
+   * @return The sampler top_k.
+   */
+  external fun nativeSamplerTopK(capabilitiesPointer: Long): Int
+
+  /**
+   * Returns the default sampler top_p.
+   *
+   * @param capabilitiesPointer A pointer to the native capabilities instance.
+   * @return The sampler top_p.
+   */
+  external fun nativeSamplerTopP(capabilitiesPointer: Long): Float
+  /**
+   * Returns true if the model supports the given input modality.
+   *
+   * @param capabilitiesPointer A pointer to the native capabilities instance.
+   * @param modality The modality integer value (0 = Text, 1 = Vision, 2 = Audio, 3 = Video).
+   * @return True if the modality is supported, false otherwise.
+   */
+  external fun nativeSupportsInputModality(capabilitiesPointer: Long, modality: Int): Boolean
 
   /** Creates a new LiteRT-LM embedding engine. */
   external fun nativeCreateEmbeddingEngine(

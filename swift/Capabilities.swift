@@ -15,9 +15,43 @@
 import Foundation
 import CLiteRTLM
 
+/// Supported input/output modalities.
+public struct SupportedModalities: Equatable {
+  public let text: Bool
+  public let vision: Bool
+  public let audio: Bool
+  public let video: Bool
+}
+
+/// Default sampler parameters.
+public struct SamplerParameters: Equatable {
+  public let type: LiteRtLmSamplerType
+  public let temperature: Float
+  public let topK: Int
+  public let topP: Float
+}
+
 /// Provides information about capabilities and features supported by a LiteRT-LM file.
+///
+/// ### Example Usage:
+/// ```swift
+/// // 1. Load the model metadata
+/// guard let capabilities = Capabilities(modelPath: "/path/to/model.litertlm") else {
+///   print("Failed to load model file capabilities.")
+///   return
+/// }
+/// // 2. Query basic capability flags
+/// let supportsThinking = capabilities.supportsThinking()
+/// let supportsFunctionCall = capabilities.supportsFunctionCalling()
+/// let hasSpeculativeDecoding = capabilities.hasSpeculativeDecodingSupport()
+///
+/// // 3. Check supported input modalities
+/// if capabilities.inputModalities.vision {
+///   print("Vision input is supported!")
+/// }
+/// ```
 public class Capabilities {
-  private let handle: OpaquePointer?
+  private let handle: OpaquePointer
 
   /// Loads a LiteRT-LM file from the given path.
   /// Returns nil if the file cannot be opened.
@@ -33,9 +67,37 @@ public class Capabilities {
     return litert_lm_loaded_file_has_speculative_decoding_support(handle)
   }
 
+  /// Checks if the loaded LiteRT-LM file supports thinking/reasoning.
+  public func supportsThinking() -> Bool {
+    return litert_lm_loaded_file_supports_thinking(handle)
+  }
+
+  /// Checks if the loaded LiteRT-LM file supports function calling/tool use.
+  public func supportsFunctionCalling() -> Bool {
+    return litert_lm_loaded_file_supports_function_calling(handle)
+  }
+
+  /// Returns the supported input modalities.
+  public var inputModalities: SupportedModalities {
+    return SupportedModalities(
+      text: litert_lm_loaded_file_supports_input_modality(handle, kLiteRtLmModalityText),
+      vision: litert_lm_loaded_file_supports_input_modality(handle, kLiteRtLmModalityVision),
+      audio: litert_lm_loaded_file_supports_input_modality(handle, kLiteRtLmModalityAudio),
+      video: litert_lm_loaded_file_supports_input_modality(handle, kLiteRtLmModalityVideo)
+    )
+  }
+
+  /// Returns the default sampler parameters for the model.
+  public var defaultSamplerParams: SamplerParameters {
+    return SamplerParameters(
+      type: litert_lm_loaded_file_sampler_type(handle),
+      temperature: litert_lm_loaded_file_sampler_temperature(handle),
+      topK: Int(litert_lm_loaded_file_sampler_top_k(handle)),
+      topP: litert_lm_loaded_file_sampler_top_p(handle)
+    )
+  }
+
   deinit {
-    if let handle = handle {
-      litert_lm_loaded_file_delete(handle)
-    }
+    litert_lm_loaded_file_delete(handle)
   }
 }

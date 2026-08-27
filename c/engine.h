@@ -128,6 +128,8 @@ typedef struct LiteRtLmSessionConfig LiteRtLmSessionConfig;
 //
 // Added in version 0.1.0.
 typedef enum {
+  // Default fallback/unspecified.
+  kLiteRtLmSamplerTypeUnspecified = 0,
   // Probabilistically pick among the top k tokens.
   kLiteRtLmSamplerTypeTopK = 1,
   // Probabilistically pick among the tokens such that the sum is greater

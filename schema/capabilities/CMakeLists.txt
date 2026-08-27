@@ -13,32 +13,22 @@
 # limitations under the License.
 
 # ==============================================================================
-# Speculative Decoding
+# Model Capabilities
 # ==============================================================================
-add_litertlm_library(runtime_core_speculative_decoding STATIC
-  speculative_decoding.cc
+add_litertlm_library(schema_capabilities STATIC
+  capabilities.cc
 )
-add_library(LiteRTLM::Schema::Speculative::SpeculativeDecoding ALIAS runtime_core_speculative_decoding)
+add_library(LiteRTLM::Schema::Capabilities ALIAS schema_capabilities)
 
-target_include_directories(runtime_core_speculative_decoding
+target_include_directories(schema_capabilities
   PRIVATE
     "${LITERTLM_GENERATED_SRC_DIR}"
     "${LITERTLM_INCLUDE_PATHS}"
 )
 
-target_link_libraries(runtime_core_speculative_decoding
+target_link_libraries(schema_capabilities
   PUBLIC
     LiteRTLM::Schema::Core::HeaderSchema
     LiteRTLM::Schema::Core::Read
     LITERTLM_DEPS
-)
-
-# ==============================================================================
-# Folder Facade
-# ==============================================================================
-add_library(schema_capabilities_libs INTERFACE)
-add_library(LiteRTLM::Schema::Capabilities ALIAS schema_capabilities_libs)
-
-target_link_libraries(schema_capabilities_libs INTERFACE
-  LiteRTLM::Schema::Speculative::SpeculativeDecoding
 )

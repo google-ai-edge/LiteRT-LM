@@ -1524,6 +1524,7 @@ LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeDeleteCapabilities)(
       reinterpret_cast<LiteRtLmLoadedFile*>(capabilities_pointer));
 }
 
+// JNI bridge method to check speculative decoding support.
 LITERTLM_JNIEXPORT jboolean JNICALL
 JNI_METHOD(nativeHasSpeculativeDecodingSupport)(JNIEnv* env, jclass thiz,
                                                 jlong capabilities_pointer) {
@@ -1531,6 +1532,52 @@ JNI_METHOD(nativeHasSpeculativeDecodingSupport)(JNIEnv* env, jclass thiz,
       reinterpret_cast<LiteRtLmLoadedFile*>(capabilities_pointer));
 }
 
+// JNI bridge method to check thinking/reasoning budget support.
+LITERTLM_JNIEXPORT jboolean JNICALL JNI_METHOD(nativeSupportsThinking)(
+    JNIEnv* env, jclass thiz, jlong capabilities_pointer) {
+  return litert_lm_loaded_file_supports_thinking(
+      reinterpret_cast<LiteRtLmLoadedFile*>(capabilities_pointer));
+}
+
+// JNI bridge method to check function calling/tool use support.
+LITERTLM_JNIEXPORT jboolean JNICALL
+JNI_METHOD(nativeSupportsFunctionCalling)(
+    JNIEnv* env, jclass thiz, jlong capabilities_pointer) {
+  return litert_lm_loaded_file_supports_function_calling(
+      reinterpret_cast<LiteRtLmLoadedFile*>(capabilities_pointer));
+}
+
+LITERTLM_JNIEXPORT jint JNICALL JNI_METHOD(nativeSamplerType)(
+    JNIEnv* env, jclass thiz, jlong capabilities_pointer) {
+  return litert_lm_loaded_file_sampler_type(
+      reinterpret_cast<LiteRtLmLoadedFile*>(capabilities_pointer));
+}
+
+LITERTLM_JNIEXPORT jfloat JNICALL JNI_METHOD(nativeSamplerTemp)(
+    JNIEnv* env, jclass thiz, jlong capabilities_pointer) {
+  return litert_lm_loaded_file_sampler_temperature(
+      reinterpret_cast<LiteRtLmLoadedFile*>(capabilities_pointer));
+}
+
+LITERTLM_JNIEXPORT jint JNICALL JNI_METHOD(nativeSamplerTopK)(
+    JNIEnv* env, jclass thiz, jlong capabilities_pointer) {
+  return litert_lm_loaded_file_sampler_top_k(
+      reinterpret_cast<LiteRtLmLoadedFile*>(capabilities_pointer));
+}
+
+LITERTLM_JNIEXPORT jfloat JNICALL JNI_METHOD(nativeSamplerTopP)(
+    JNIEnv* env, jclass thiz, jlong capabilities_pointer) {
+  return litert_lm_loaded_file_sampler_top_p(
+      reinterpret_cast<LiteRtLmLoadedFile*>(capabilities_pointer));
+}
+// JNI bridge method to check if the model supports the requested input
+// modality.
+LITERTLM_JNIEXPORT jboolean JNICALL JNI_METHOD(nativeSupportsInputModality)(
+    JNIEnv* env, jclass thiz, jlong capabilities_pointer, jint modality) {
+  return litert_lm_loaded_file_supports_input_modality(
+      reinterpret_cast<LiteRtLmLoadedFile*>(capabilities_pointer),
+      static_cast<LiteRtLmModality>(modality));
+}
 LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateEmbeddingEngine)(
     JNIEnv* env, jclass thiz, jint model_fd, jstring model_path,
     jstring backend, jstring vision_backend, jstring audio_backend,

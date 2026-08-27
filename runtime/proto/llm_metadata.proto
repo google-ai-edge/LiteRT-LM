@@ -100,4 +100,16 @@ message LlmMetadata {
   // Note: This field is curently only used by NPU backends for certain models,
   // proceed with caution.
   optional int64 kv_cache_init_value = 10;
+
+  // Whether the model supports thinking/reasoning.
+  //
+  // Note: Models exported prior to this field will return false even if they
+  // support thinking.
+  optional bool supports_thinking = 11;
+
+  // Whether the model supports function calling/tool usage.
+  //
+  // Note: Models exported prior to this field will return false even if they
+  // support function calling.
+  optional bool supports_function_calling = 12;
 }

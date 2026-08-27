@@ -207,6 +207,8 @@ void litert_lm_set_min_log_level(LiteRtLmLogSeverity level) {
 
 SamplerParameters::Type ToSamplerParametersType(LiteRtLmSamplerType type) {
   switch (type) {
+    case kLiteRtLmSamplerTypeUnspecified:
+      return SamplerParameters::TYPE_UNSPECIFIED;
     case kLiteRtLmSamplerTypeTopK:
       return SamplerParameters::TOP_K;
     case kLiteRtLmSamplerTypeTopP:
