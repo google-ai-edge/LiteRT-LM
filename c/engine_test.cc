@@ -186,6 +186,22 @@ TEST(EngineCTest, SetMaxNumImages) {
             10);
 }
 
+TEST(EngineCTest, SetMaxVisionTokensPerImage) {
+  const std::string task_path = "test_model_path_1";
+  EngineSettingsPtr settings(
+      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
+                                       /* vision_backend_str */ nullptr,
+                                       /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+  EXPECT_FALSE(settings->settings->GetMaxVisionTokensPerImage().has_value());
+
+  litert_lm_engine_settings_set_max_vision_tokens_per_image(settings.get(),
+                                                            280);
+  EXPECT_TRUE(settings->settings->GetMaxVisionTokensPerImage().has_value());
+  EXPECT_EQ(settings->settings->GetMaxVisionTokensPerImage().value(), 280);
+}
+
 TEST(EngineCTest, SetPrefillChunkSize) {
   const std::string task_path = "test_model_path_1";
   EngineSettingsPtr settings(
@@ -460,14 +476,12 @@ TEST(EngineCTest, CreateConversationConfig) {
 
   litert_lm_engine_settings_set_gpu_enable_metal_residency_set(settings.get(),
                                                                true);
-  EXPECT_EQ(
-      litert_lm_experimental_engine_update_gpu_enable_metal_residency_set(
-          engine.get(), true),
-      0);
-  EXPECT_EQ(
-      litert_lm_experimental_engine_update_gpu_enable_metal_residency_set(
-          engine.get(), false),
-      0);
+  EXPECT_EQ(litert_lm_experimental_engine_update_gpu_enable_metal_residency_set(
+                engine.get(), true),
+            0);
+  EXPECT_EQ(litert_lm_experimental_engine_update_gpu_enable_metal_residency_set(
+                engine.get(), false),
+            0);
 }
 
 TEST(EngineCTest, CreateConversationConfigWithNoSamplerParams) {

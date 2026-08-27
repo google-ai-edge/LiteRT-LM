@@ -576,6 +576,20 @@ LITERT_LM_C_API_EXPORT
 void litert_lm_engine_settings_set_max_num_images(
     LiteRtLmEngineSettings* settings, int max_num_images);
 
+// Sets the maximum vision tokens generated per image for the engine.
+//
+// When set, the engine automatically selects vision encoder and adapter
+// signatures with capacity up to this limit and configures vision patch
+// metadata.
+//
+// @param settings The engine settings.
+// @param max_vision_tokens_per_image The maximum vision tokens per image.
+//
+// Added in version 0.1.0.
+LITERT_LM_C_API_EXPORT
+void litert_lm_engine_settings_set_max_vision_tokens_per_image(
+    LiteRtLmEngineSettings* settings, int max_vision_tokens_per_image);
+
 // Sets the cache directory for the engine.
 //
 // @param settings The engine settings.

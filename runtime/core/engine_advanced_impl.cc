@@ -268,23 +268,21 @@ absl::StatusOr<std::unique_ptr<Engine>> EngineAdvancedImpl::Create(
   // Select vision encoder and adapter signatures if max_vision_tokens_per_image
   // is set by user, or fallback to metadata from proto if it exists.
   std::optional<int> vision_token_limit;
-  if (engine_settings.GetMaxVisionTokensPerImage().has_value()) {
-    if (!engine_settings.GetVisionExecutorSettings().has_value()) {
-      return absl::FailedPreconditionError(
-          "Vision executor settings are not configured.");
-    }
-    const int max_vision_tokens_per_image =
-        *engine_settings.GetMaxVisionTokensPerImage();
-    if (max_vision_tokens_per_image <= 0) {
-      return absl::InvalidArgumentError(
-          absl::StrCat("max_vision_tokens_per_image must be positive, got: ",
-                       max_vision_tokens_per_image));
-    }
-    vision_token_limit = max_vision_tokens_per_image;
-  } else if (engine_settings.GetVisionExecutorSettings().has_value()) {
-    vision_token_limit = GetVisionTokensPerImageFromMetadata(llm_metadata);
-    if (vision_token_limit.has_value() && *vision_token_limit > 0) {
-      engine_settings.SetMaxVisionTokensPerImage(*vision_token_limit);
+  if (engine_settings.GetVisionExecutorSettings().has_value()) {
+    if (engine_settings.GetMaxVisionTokensPerImage().has_value()) {
+      const int max_vision_tokens_per_image =
+          *engine_settings.GetMaxVisionTokensPerImage();
+      if (max_vision_tokens_per_image <= 0) {
+        return absl::InvalidArgumentError(
+            absl::StrCat("max_vision_tokens_per_image must be positive, got: ",
+                         max_vision_tokens_per_image));
+      }
+      vision_token_limit = max_vision_tokens_per_image;
+    } else {
+      vision_token_limit = GetVisionTokensPerImageFromMetadata(llm_metadata);
+      if (vision_token_limit.has_value() && *vision_token_limit > 0) {
+        engine_settings.SetMaxVisionTokensPerImage(*vision_token_limit);
+      }
     }
   }
 

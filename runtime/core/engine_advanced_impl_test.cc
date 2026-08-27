@@ -417,7 +417,8 @@ TEST(EngineTest, CreateEngine_FailsNoAudioModel) {
                   "TF_LITE_AUDIO_ENCODER_HW not found in the model."));
 }
 
-TEST(EngineTest, CreateEngine_MaxVisionTokensPerImage_NoVisionSettingsFails) {
+TEST(EngineTest,
+     CreateEngine_MaxVisionTokensPerImage_NoVisionSettingsSucceeds) {
   auto task_path =
       std::filesystem::path(::testing::SrcDir()) /
       "litert_lm/runtime/testdata/test_lm_new_metadata.task";
@@ -431,10 +432,7 @@ TEST(EngineTest, CreateEngine_MaxVisionTokensPerImage_NoVisionSettingsFails) {
   engine_settings->GetMutableMainExecutorSettings().SetCacheDir(":nocache");
   engine_settings->SetMaxVisionTokensPerImage(200);
 
-  EXPECT_THAT(CreateEngine(*engine_settings),
-              testing::status::StatusIs(
-                  absl::StatusCode::kFailedPrecondition,
-                  "Vision executor settings are not configured."));
+  EXPECT_OK(CreateEngine(*engine_settings));
 }
 
 TEST(EngineTest, CreateEngine_MaxVisionTokensPerImage_InvalidValueFails) {
