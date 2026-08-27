@@ -38,7 +38,6 @@ internal object LiteRtLmJni {
    *   non-positive, use the engine's default.
    * @param maxNumImages The maximum number of images the model can handle. When non-positive, use
    *   the engine's default.
-   * @param enableBenchmark Whether to enable benchmark mode or not.
    * @param cacheDir The directory for cache files.
    * @param enableBenchmark Whether to enable benchmark or not.
    * @param enableSpeculativeDecoding Whether to enable speculative decoding.
@@ -47,6 +46,8 @@ internal object LiteRtLmJni {
    * @param audioNpuNativeLibraryDir The directory for the audio backend NPU libraries.
    * @param mainBackendNumThreads The number of threads for the main backend (CPU).
    * @param audioBackendNumThreads The number of threads for the audio backend (CPU).
+   * @param maxVisionTokensPerImage The maximum vision tokens per image. When non-positive, use the
+   *   engine's default.
    * @return A pointer to the native engine instance.
    */
   external fun nativeCreateEngine(
@@ -64,6 +65,7 @@ internal object LiteRtLmJni {
     audioNpuNativeLibraryDir: String,
     mainBackendNumThreads: Int,
     audioBackendNumThreads: Int,
+    maxVisionTokensPerImage: Int,
   ): Long
 
   /**

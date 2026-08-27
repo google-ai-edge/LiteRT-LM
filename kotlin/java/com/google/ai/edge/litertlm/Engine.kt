@@ -89,6 +89,7 @@ class Engine(val engineConfig: EngineConfig) : AutoCloseable {
           (engineConfig.audioBackend as? Backend.NPU)?.nativeLibraryDir ?: "",
           mainBackendNumThreads,
           audioBackendNumThreads,
+          @OptIn(ExperimentalApi::class) ExperimentalFlags.visualTokenBudget ?: -1,
         )
     }
   }

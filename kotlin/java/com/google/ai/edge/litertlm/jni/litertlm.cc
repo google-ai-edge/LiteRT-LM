@@ -520,7 +520,8 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateEngine)(
     jint max_num_images, jstring cache_dir, jboolean enable_benchmark,
     jobject enable_speculative_decoding, jstring main_npu_native_library_dir,
     jstring vision_npu_native_library_dir, jstring audio_npu_native_library_dir,
-    jint main_backend_num_threads, jint audio_backend_num_threads) {
+    jint main_backend_num_threads, jint audio_backend_num_threads,
+    jint max_vision_tokens_per_image) {
   const char* model_path_chars = env->GetStringUTFChars(model_path, nullptr);
   std::string model_path_str(model_path_chars);
   env->ReleaseStringUTFChars(model_path, model_path_chars);
@@ -678,6 +679,10 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateEngine)(
     advanced_settings.enable_speculative_decoding = (is_enabled == JNI_TRUE);
     settings->GetMutableMainExecutorSettings().SetAdvancedSettings(
         advanced_settings);
+  }
+
+  if (max_vision_tokens_per_image > 0) {
+    settings->SetMaxVisionTokensPerImage(max_vision_tokens_per_image);
   }
 
   auto engine = EngineFactory::CreateDefault(*settings);
