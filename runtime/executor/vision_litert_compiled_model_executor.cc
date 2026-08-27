@@ -134,9 +134,18 @@ absl::StatusOr<int> GetVitSignatureIndex(
       found_any_signature = true;
       int current_length = 0;
       size_t last_underscore = signature_name.Key().find_last_of('_');
-      if (last_underscore == absl::string_view::npos ||
-          !absl::SimpleAtoi(signature_name.Key().substr(last_underscore + 1),
-                            &current_length)) {
+      if (last_underscore == absl::string_view::npos) {
+        return absl::InvalidArgumentError(
+            absl::StrCat("Failed to parse signature name ",
+                         signature_name.Key(), " to integer."));
+      }
+      absl::string_view length_str =
+          signature_name.Key().substr(last_underscore + 1);
+      if (const auto x_pos = length_str.find('x');
+          x_pos != absl::string_view::npos) {
+        length_str = length_str.substr(x_pos + 1);
+      }
+      if (!absl::SimpleAtoi(length_str, &current_length)) {
         return absl::InvalidArgumentError(
             absl::StrCat("Failed to parse signature name ",
                          signature_name.Key(), " to integer."));
