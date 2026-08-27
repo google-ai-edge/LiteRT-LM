@@ -76,8 +76,6 @@ struct Gemma4DataProcessorConfig {
   bool escape_fence_strings = true;
   // An optional regex to match each line of the tool code block.
   std::string tool_code_regex = "";
-  // Whether to use the chat template for applying FC format.
-  bool use_template_for_fc_format = true;
   // The constraint mode when constrained decoding is enabled. Default is
   // kTextAndOr.
   ConstraintMode constraint_mode = ConstraintMode::kTextAndOr;

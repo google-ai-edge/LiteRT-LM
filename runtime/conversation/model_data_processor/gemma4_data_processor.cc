@@ -26,7 +26,6 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "runtime/components/constrained_decoding/constraint.h"
@@ -36,7 +35,6 @@
 #if !defined(LITERT_LM_FST_CONSTRAINTS_DISABLED)
 #include "runtime/components/constrained_decoding/gemma_model_constraint_provider.h"
 #endif
-#include "runtime/components/tool_use/fc_tool_format_utils.h"
 #include "runtime/components/tool_use/parser_utils.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/gemma4_data_processor_config.h"
@@ -48,139 +46,6 @@
 #include "sentencepiece_model.pb.h"  // from @sentencepiece
 
 namespace litert::lm {
-namespace {
-
-// Formats a tool response in FC format.
-//
-// The expected structure of a tool response is:
-//
-// ```json
-//   {
-//     "name": "foo",
-//     "response": {
-//       "key1": "bar",
-//       "key2": true
-//     }
-//   }
-// ```
-//
-// (fields are inside an object named "response")
-//
-// or
-//
-// ```json
-// {
-//   "name": "foo",
-//   "key1": "bar",
-//   "key2": true
-// }
-// ```
-//
-// (fields are at the top-level)
-//
-// The key-value pairs of the response can be set under the key "response" or
-// "value".
-//
-// The tool's name can be set under the key "name" or "tool_name".
-//
-// The formatted tool response string will look like:
-//
-// ```
-// foo{key1:<escape>bar<escape>,key2:true}
-// ```
-//
-// If the tool response does not have a tool name, the tool response will be
-// formatted as an FC object *without* a tool name before it. This is not a
-// valid tool response in FC format, but it's the best we can do without a tool
-// name.
-absl::StatusOr<std::string> FormatToolResponse(
-    const nlohmann::ordered_json& tool_response, absl::string_view escape_tag) {
-  std::optional<std::string> tool_name;
-  if (tool_response.contains("name") && tool_response["name"].is_string()) {
-    tool_name = tool_response["name"].get<std::string>();
-  } else if (tool_response.contains("tool_name") &&
-             tool_response["tool_name"].is_string()) {
-    tool_name = tool_response["tool_name"].get<std::string>();
-  }
-
-  if (!tool_name.has_value()) {
-    return FormatValueAsFc(tool_response, escape_tag);
-  }
-
-  // If the contents of the tool response are contained inside a "response" or
-  // "value" field, format it as an FC object.
-  nlohmann::ordered_json response;
-  if (tool_response.contains("response") &&
-      tool_response["response"].is_object()) {
-    response = tool_response["response"];
-  } else if (tool_response.contains("value") &&
-             tool_response["value"].is_object()) {
-    response = tool_response["value"];
-  }
-
-  if (!response.is_null()) {
-    ABSL_ASSIGN_OR_RETURN(std::string value,
-                          FormatValueAsFc(response, escape_tag));
-    return absl::StrCat(*tool_name, value);
-  }
-
-  // If the contents of the tool response are at the top-level, format them as
-  // an FC object (without the tool name).
-  nlohmann::ordered_json fields = tool_response;
-  fields.erase("tool_name");
-  fields.erase("name");
-  ABSL_ASSIGN_OR_RETURN(std::string value, FormatValueAsFc(fields, escape_tag));
-  return absl::StrCat(*tool_name, value);
-}
-
-// Formats "content" as a tool response in FC format.
-//
-// Case 1: If "content" is an object, formats "content" directly as a tool
-// response in FC format as a string.
-//
-// Case 2: If "content" is an array, formats each tool response item in the
-// array in FC format and returns an array of *text* items. A tool response
-// item is an object with "name" and "response" fields or an object with a
-// "tool_response" field.
-//
-// Case 3: If "content" is neither an object nor an array, returns it unchanged.
-absl::StatusOr<nlohmann::ordered_json> FormatToolResponses(
-    const nlohmann::ordered_json& content, absl::string_view escape_tag) {
-  if (content.is_object()) {
-    return FormatToolResponse(content, escape_tag);
-  }
-
-  if (content.is_array()) {
-    nlohmann::ordered_json tool_content = nlohmann::ordered_json::array();
-    for (const auto& item : content) {
-      nlohmann::ordered_json tool_response;
-      if (item.contains("tool_response")) {
-        tool_response = item["tool_response"];
-      } else {
-        tool_response = item;
-      }
-
-      // Format each tool response in FC format and add it as a text item.
-      ABSL_ASSIGN_OR_RETURN(std::string formatted_tool_response,
-                            FormatToolResponse(tool_response, escape_tag));
-      tool_content.push_back(
-          {{"type", "text"}, {"text", formatted_tool_response}});
-    }
-
-    return tool_content;
-  }
-
-  // If the content of the message is not an array or object, pass it through
-  // unchanged.
-  return content;
-}
-
-// A message is a tool response if its role is "tool".
-bool IsToolMessage(const nlohmann::ordered_json& template_input,
-                   const nlohmann::ordered_json& message) {
-  return template_input.contains("role") && template_input["role"] == "tool";
-}
-}  // namespace
 
 absl::StatusOr<std::unique_ptr<Gemma4DataProcessor>>
 Gemma4DataProcessor::Create(Gemma4DataProcessorConfig config,
@@ -246,66 +111,7 @@ Gemma4DataProcessor::Create(Gemma4DataProcessorConfig config,
 absl::StatusOr<nlohmann::ordered_json>
 Gemma4DataProcessor::MessageToTemplateInput(
     const nlohmann::ordered_json& message) const {
-  if (config_.use_template_for_fc_format) {
-    return message;
-  }
-
-  // If the message doesn't contain any tool calls and isn't a tool message,
-  // then the template input is the same as the message.
-  if (!message.contains("tool_calls") && message["role"] != "tool") {
-    return message;
-  }
-
-  nlohmann::ordered_json template_input = nlohmann::ordered_json::object();
-  if (message.contains("role")) {
-    template_input["role"] = message["role"];
-  }
-
-  if (message.contains("content")) {
-    if (IsToolMessage(template_input, message)) {
-      // Convert tool responses to FC format.
-      ABSL_ASSIGN_OR_RETURN(
-          template_input["content"],
-          FormatToolResponses(message["content"], config_.open_quote));
-    } else {
-      // If the role is not "tool" or "content" is a string, pass through the
-      // content unchanged.
-      template_input["content"] = message["content"];
-    }
-  }
-
-  // If the message contains tool calls, convert them to FC format and add them
-  // to the template input.
-  if (message.contains("tool_calls")) {
-    template_input["tool_calls"] = nlohmann::ordered_json::array();
-    for (const auto& tool_call : message["tool_calls"]) {
-      if (!tool_call.contains("function")) {
-        continue;
-      }
-      const nlohmann::ordered_json& function = tool_call["function"];
-      nlohmann::ordered_json tool_call_input = nlohmann::ordered_json::object();
-      tool_call_input["type"] = "function";
-      tool_call_input["function"]["name"] = function["name"];
-
-      if (function.contains("arguments")) {
-        if (function["arguments"].is_object()) {
-          // If `arguments` is an object, format the values in FC format.
-          for (const auto& [key, value] : function["arguments"].items()) {
-            ABSL_ASSIGN_OR_RETURN(std::string formatted_value,
-                                  FormatValueAsFc(value, config_.open_quote));
-            tool_call_input["function"]["arguments"][key] = formatted_value;
-          }
-        } else {
-          // Otherwise, pass through `arguments` unchanged.
-          tool_call_input["function"]["arguments"] = function["arguments"];
-        }
-      }
-
-      template_input["tool_calls"].push_back(tool_call_input);
-    }
-  }
-
-  return template_input;
+  return message;
 }
 
 absl::StatusOr<std::vector<InputData>>
@@ -386,20 +192,7 @@ Gemma4DataProcessor::RenderSingleTurnTemplate(
 
 absl::StatusOr<nlohmann::ordered_json> Gemma4DataProcessor::FormatTools(
     const nlohmann::ordered_json& tools) const {
-  if (config_.use_template_for_fc_format) {
-    return tools;
-  }
-
-  if (!tools.is_array()) {
-    return absl::InvalidArgumentError("Tools must be an array.");
-  }
-  nlohmann::ordered_json formatted_tools = nlohmann::ordered_json::array();
-  for (const auto& tool : tools) {
-    ABSL_ASSIGN_OR_RETURN(std::string formatted_tool,
-                          FormatToolAsFc(tool, config_.open_quote));
-    formatted_tools.push_back(formatted_tool);
-  }
-  return formatted_tools;
+  return tools;
 }
 
 absl::StatusOr<std::unique_ptr<Constraint>>

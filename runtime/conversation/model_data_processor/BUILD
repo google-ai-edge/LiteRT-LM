@@ -617,7 +617,6 @@ cc_library(
         "@nlohmann_json//:json",
         "//runtime/components:prompt_template",
         "//runtime/components/constrained_decoding:constraint",
-        "//runtime/components/tool_use:fc_tool_format_utils",
         "//runtime/components/tool_use:parser_utils",
         "//runtime/conversation:io_types",
         "//runtime/conversation:prompt_utils",

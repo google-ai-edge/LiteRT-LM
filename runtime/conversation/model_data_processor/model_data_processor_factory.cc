@@ -236,10 +236,6 @@ absl::StatusOr<DataProcessorConfig> CreateGemma4DataProcessorConfig(
       default_gemma4.function_response_start()) {
     config.function_response_start = gemma4.function_response_start();
   }
-  if (gemma4.use_template_for_fc_format() !=
-      default_gemma4.use_template_for_fc_format()) {
-    config.use_template_for_fc_format = gemma4.use_template_for_fc_format();
-  }
   if (gemma4.constraint_mode() != default_gemma4.constraint_mode()) {
     switch (gemma4.constraint_mode()) {
       case proto::CONSTRAINT_MODE_FUNCTION_CALL_ONLY:

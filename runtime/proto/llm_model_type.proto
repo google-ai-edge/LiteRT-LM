@@ -301,8 +301,9 @@ message Gemma4 {
   string close_quote = 11;
   // Signifies the start of function response.
   string function_response_start = 12;
-  // Whether to use the chat template for applying FC format.
-  bool use_template_for_fc_format = 13;
+  // Deprecated: Starting from LiteRT-LM 0.17.0 (C API 0.2.0), this field will
+  // be ignored and the engine will always use template for FC formatting.
+  bool use_template_for_fc_format = 13 [deprecated = true];
   // The constraint mode when constrained decoding is enabled.
   ConstraintMode constraint_mode = 14;
 }
