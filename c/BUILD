@@ -156,10 +156,7 @@ cc_library(
     name = "experimental_headers",
     hdrs = ["experimental.h"],
     visibility = ["//visibility:public"],
-    deps = [
-        ":conversation_headers",
-        ":engine_headers",
-    ],
+    deps = [":engine_headers"],
 )
 
 cc_library(

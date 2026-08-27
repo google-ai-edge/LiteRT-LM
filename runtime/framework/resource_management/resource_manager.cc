@@ -398,6 +398,11 @@ class LockedLlmExecutor : public LlmExecutor {
     return llm_executor_->GetExecutorSettings();
   }
 
+  absl::Status UpdateExecutorSettings(
+      const LlmExecutorSettings& executor_settings) override {
+    return llm_executor_->UpdateExecutorSettings(executor_settings);
+  }
+
   absl::StatusOr<int> GetCurrentStep() const override {
     return llm_executor_->GetCurrentStep();
   }
@@ -897,6 +902,24 @@ void ResourceManager::ResetCurrentHandler() {
     llm_executor_->Reset().IgnoreError();
   }
   current_handler_ = nullptr;
+}
+
+absl::Status ResourceManager::UpdateGpuEnableMetalResidencySet(
+    bool enable_metal_residency_set) {
+  ABSL_ASSIGN_OR_RETURN(auto executor, AcquireExecutor());
+  ABSL_ASSIGN_OR_RETURN(auto executor_settings,
+                        executor->GetExecutorSettings());
+  auto advanced_settings =
+      executor_settings.GetAdvancedSettings().value_or(AdvancedSettings());
+  advanced_settings.gpu_enable_metal_residency_set = enable_metal_residency_set;
+  executor_settings.SetAdvancedSettings(advanced_settings);
+  return executor->UpdateExecutorSettings(executor_settings);
+}
+
+absl::Status ResourceManager::UpdateExecutorSettings(
+    const LlmExecutorSettings& executor_settings) {
+  ABSL_ASSIGN_OR_RETURN(auto executor, AcquireExecutor());
+  return executor->UpdateExecutorSettings(executor_settings);
 }
 
 }  // namespace litert::lm

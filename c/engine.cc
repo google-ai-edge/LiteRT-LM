@@ -764,6 +764,20 @@ void litert_lm_engine_settings_set_enable_ynnpack(
   }
 }
 
+void litert_lm_engine_settings_set_gpu_enable_metal_residency_set(
+    LiteRtLmEngineSettings* settings, bool enable_metal_residency_set) {
+  if (settings && settings->settings) {
+    auto advanced_settings =
+        settings->settings->GetMainExecutorSettings()
+            .GetAdvancedSettings()
+            .value_or(litert::lm::AdvancedSettings());
+    advanced_settings.gpu_enable_metal_residency_set =
+        enable_metal_residency_set;
+    settings->settings->GetMutableMainExecutorSettings().SetAdvancedSettings(
+        advanced_settings);
+  }
+}
+
 LiteRtLmEngine* litert_lm_engine_create(
     const LiteRtLmEngineSettings* settings) {
   if (!settings || !settings->settings) {

@@ -47,6 +47,8 @@ public enum LiteRTLMError: Error, LocalizedError, Equatable {
     case failedToSetAudioLoraPath
     case failedToSetSupportedLoraRanks
     case failedToSetSupportedAudioLoraRanks
+    case notOptedIntoExperimentalAPIs
+    case failedToUpdateGPUEnableMetalResidencySet
 
     public var errorDescription: String? {
       switch self {
@@ -72,6 +74,13 @@ public enum LiteRTLMError: Error, LocalizedError, Equatable {
         return "Failed to set supported LoRA ranks."
       case .failedToSetSupportedAudioLoraRanks:
         return "Failed to set supported Audio LoRA ranks."
+      case .notOptedIntoExperimentalAPIs:
+        return """
+          Must opt into experimental APIs by calling `ExperimentalFlags.optIntoExperimentalAPIs()` \
+          before calling this method.
+          """
+      case .failedToUpdateGPUEnableMetalResidencySet:
+        return "Failed to update GPU enable Metal residency set."
       }
     }
   }

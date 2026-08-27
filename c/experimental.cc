@@ -16,6 +16,7 @@
 
 #include <utility>
 
+#include "absl/log/absl_log.h"  // from @com_google_absl
 #include "c/conversation.h"
 #include "c/conversation_internal.h"  // IWYU pragma: keep
 #include "c/engine.h"
@@ -25,6 +26,22 @@
 #include "runtime/engine/engine.h"
 
 extern "C" {
+
+int litert_lm_experimental_engine_update_gpu_enable_metal_residency_set(
+    LiteRtLmEngine* engine, bool enable_metal_residency_set) {
+  if (engine == nullptr || engine->engine == nullptr) {
+    ABSL_LOG(ERROR) << "Engine is null.";
+    return -1;
+  }
+  auto status = engine->engine->UpdateGpuEnableMetalResidencySet(
+      enable_metal_residency_set);
+  if (!status.ok()) {
+    ABSL_LOG(ERROR) << "Failed to update GPU enable metal residency set: "
+                    << status;
+    return -1;
+  }
+  return 0;
+}
 
 // TODO(b/549220913): Migrate debugger from build-time macro to runtime
 // configuration in EngineSettings / SessionConfig.

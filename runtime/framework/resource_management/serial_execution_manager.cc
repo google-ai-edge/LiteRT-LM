@@ -270,6 +270,12 @@ absl::Status SerialExecutionManager::ReleaseSession(SessionId session_id) {
   return absl::OkStatus();
 }
 
+absl::Status SerialExecutionManager::UpdateGpuEnableMetalResidencySet(
+    bool enable_metal_residency_set) {
+  return resource_manager_->UpdateGpuEnableMetalResidencySet(
+      enable_metal_residency_set);
+}
+
 absl::Status SerialExecutionManager::CancelAllTasksInSession(
     SessionId session_id) {
   if (!session_lookup_.contains(session_id)) {

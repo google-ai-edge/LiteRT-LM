@@ -120,6 +120,10 @@ public actor Engine {
     if let enableSpeculativeDecoding = ExperimentalFlags.enableSpeculativeDecoding {
       litert_lm_engine_settings_set_enable_speculative_decoding(settings, enableSpeculativeDecoding)
     }
+    if let gpuEnableMetalResidencySet = ExperimentalFlags.gpuEnableMetalResidencySet {
+      litert_lm_engine_settings_set_gpu_enable_metal_residency_set(
+        settings, gpuEnableMetalResidencySet)
+    }
 
     guard let engine = litert_lm_engine_create(settings) else {
       throw LiteRTLMError.engine(.failedToCreateEngine)
@@ -265,6 +269,30 @@ public actor Engine {
       engine: self,
       enableResponseFormat: conversationConfig.enableResponseFormat,
       visualTokenBudget: conversationConfig.visualTokenBudget)
+  }
+
+  /// Updates whether to enable Metal residency set on GPU at runtime.
+  ///
+  /// Note: This is an experimental API. To use it, call
+  /// `ExperimentalFlags.optIntoExperimentalAPIs()` first.
+  ///
+  /// - Parameter enable: Whether to enable Metal residency set on GPU.
+  /// - Throws: A `LiteRTLMError` if experimental APIs are not opted into, the engine is not
+  ///   initialized, or update fails.
+  public func updateGPUEnableMetalResidencySet(_ enable: Bool) throws {
+    guard ExperimentalFlags.optedIn else {
+      logger.error("LiteRTLM: Must opt into experimental APIs before calling this method.")
+      throw LiteRTLMError.engine(.notOptedIntoExperimentalAPIs)
+    }
+    guard let handle else {
+      throw LiteRTLMError.engine(.notInitialized)
+    }
+    let status =
+      litert_lm_experimental_engine_update_gpu_enable_metal_residency_set(
+        handle, enable)
+    guard status == 0 else {
+      throw LiteRTLMError.engine(.failedToUpdateGPUEnableMetalResidencySet)
+    }
   }
 
   deinit {

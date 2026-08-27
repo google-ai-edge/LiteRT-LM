@@ -148,6 +148,15 @@ class ResourceManager {
   // Resets the LLM executor and clears the current context handler.
   void ResetCurrentHandler() ABSL_LOCKS_EXCLUDED(executor_mutex_);
 
+  // Updates whether to enable Metal residency set on GPU at runtime.
+  absl::Status UpdateGpuEnableMetalResidencySet(bool enable_metal_residency_set)
+      ABSL_LOCKS_EXCLUDED(executor_mutex_);
+
+  // Updates the LLM executor settings.
+  absl::Status UpdateExecutorSettings(
+      const LlmExecutorSettings& executor_settings)
+      ABSL_LOCKS_EXCLUDED(executor_mutex_);
+
  private:
   // Creates the litert environment if it is not created yet.
   absl::Status MaybeCreateLitertEnv();

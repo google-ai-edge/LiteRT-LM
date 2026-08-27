@@ -15,6 +15,8 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_C_EXPERIMENTAL_H_
 #define THIRD_PARTY_ODML_LITERT_LM_C_EXPERIMENTAL_H_
 
+#include <stdbool.h>
+
 #if defined(__APPLE__)
 #include "engine.h"  // NOLINT
 #else
@@ -32,6 +34,30 @@ typedef struct LiteRtLmConversation LiteRtLmConversation;
 // change or removal without notice. API stability and backward compatibility
 // are not guaranteed.
 // =============================================================================
+
+// Updates whether to enable Metal residency set on GPU for the given engine at
+// runtime.
+//
+// To configure this setting during initialization, use
+// `litert_lm_engine_settings_set_gpu_enable_metal_residency_set` instead.
+//
+// When enabled on Apple platforms (macOS and iOS with Metal GPU backend), this
+// uses Apple's MTLResidencySet API to ensure model weights and allocations
+// remain resident in GPU memory, preventing memory swapping and reducing
+// allocation overhead.
+//
+// This setting is only supported on Apple platforms (macOS / iOS) with the GPU
+// backend. On other platforms (e.g. Linux, Android, Windows) or non-GPU
+// backends, this setting has no effect and is safely ignored.
+//
+// @param engine The engine to update.
+// @param enable_metal_residency_set Whether to enable Metal residency set.
+// @return 0 on success, non-zero on failure.
+//
+// Added in version 0.2.0.
+LITERT_LM_C_API_EXPORT
+int litert_lm_experimental_engine_update_gpu_enable_metal_residency_set(
+    LiteRtLmEngine* engine, bool enable_metal_residency_set);
 
 // Opaque pointer for session debug info.
 // Use `litert_lm_experimental_session_debug_info_delete` to free memory.

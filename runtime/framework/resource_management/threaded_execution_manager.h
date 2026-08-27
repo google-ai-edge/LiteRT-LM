@@ -117,6 +117,9 @@ class ThreadedExecutionManager : public ExecutionManager {
   absl::Status ReleaseSession(SessionId session_id) override
       ABSL_LOCKS_EXCLUDED(session_and_task_lookup_mutex_);
 
+  absl::Status UpdateGpuEnableMetalResidencySet(
+      bool enable_metal_residency_set) override;
+
   // Cancels all tasks in the session with the given session ID.
   absl::Status CancelAllTasksInSession(SessionId session_id) override
       ABSL_LOCKS_EXCLUDED(session_and_task_lookup_mutex_);

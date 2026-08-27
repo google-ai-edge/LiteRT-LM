@@ -91,6 +91,11 @@ class FakeLlmExecutor : public LlmExecutor {
   absl::StatusOr<LlmExecutorSettings> GetExecutorSettings() const override {
     return executor_settings_;
   };
+  absl::Status UpdateExecutorSettings(
+      const LlmExecutorSettings& executor_settings) override {
+    executor_settings_ = executor_settings;
+    return absl::OkStatus();
+  }
   absl::StatusOr<LlmExecutorSettings*> GetMutableExecutorSettings() {
     return &executor_settings_;
   };

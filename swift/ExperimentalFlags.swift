@@ -19,7 +19,7 @@ import OSLog
 /// These flags guard experimental APIs that may still undergo significant changes.
 /// To use any experimental flags, first call `ExperimentalFlags.optIntoExperimentalAPIs()`.
 public struct ExperimentalFlags {
-  private static var optedIn = false
+  public private(set) static var optedIn = false
 
   private static let logger = Logger(
     subsystem: "com.google.odml.litertlm.swift",
@@ -179,6 +179,22 @@ public struct ExperimentalFlags {
         return
       }
       _filterChannelContentFromKvCache = newValue
+    }
+  }
+
+  private static var _gpuEnableMetalResidencySet: Bool? = nil
+
+  /// Whether to enable Metal residency set on GPU.
+  ///
+  /// If true, the GPU backend will use MTLResidencySet to prevent memory swapping on macOS.
+  public static var gpuEnableMetalResidencySet: Bool? {
+    get { return _gpuEnableMetalResidencySet }
+    set {
+      guard optedIn else {
+        logger.error("LiteRTLM: Must opt into experimental APIs before setting this flag.")
+        return
+      }
+      _gpuEnableMetalResidencySet = newValue
     }
   }
 

@@ -152,6 +152,12 @@ class EngineAdvancedImpl : public Engine {
         *litert_model_resources_);
   }
 
+  absl::Status UpdateGpuEnableMetalResidencySet(
+      bool enable_metal_residency_set) override {
+    return execution_manager_->UpdateGpuEnableMetalResidencySet(
+        enable_metal_residency_set);
+  }
+
  private:
   // Stored engine settings.
   EngineSettings engine_settings_;

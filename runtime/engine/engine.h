@@ -384,6 +384,26 @@ class EngineT {
   virtual absl::StatusOr<VisionExecutorProperties> GetVisionExecutorProperties()
       const = 0;
 
+  // Updates whether to enable Metal residency set on GPU at runtime.
+  //
+  // To configure this setting during initialization, configure
+  // AdvancedSettings::gpu_enable_metal_residency_set in EngineSettings before
+  // creating the engine.
+  //
+  // When enabled on Apple platforms (macOS and iOS with Metal GPU backend),
+  // this uses Apple's MTLResidencySet API to ensure model weights and
+  // allocations remain resident in GPU memory, preventing memory swapping and
+  // reducing allocation overhead.
+  //
+  // This setting is only supported on Apple platforms (macOS / iOS) with the
+  // GPU backend. On other platforms (e.g. Linux, Android, Windows) or non-GPU
+  // backends, this setting has no effect and is safely ignored.
+  virtual absl::Status UpdateGpuEnableMetalResidencySet(
+      bool enable_metal_residency_set) {
+    return absl::UnimplementedError(
+        "UpdateGpuEnableMetalResidencySet not implemented.");
+  }
+
   // Default timeout duration for the engine/session processes.
   static constexpr absl::Duration kDefaultTimeout = absl::Minutes(10);
 };

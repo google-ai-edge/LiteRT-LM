@@ -108,6 +108,9 @@ class SerialExecutionManager : public ExecutionManager {
   // Releases the session with the given session ID.
   absl::Status ReleaseSession(SessionId session_id) override;
 
+  absl::Status UpdateGpuEnableMetalResidencySet(
+      bool enable_metal_residency_set) override;
+
   // Cancels all tasks in the session with the given session ID.
   absl::Status CancelAllTasksInSession(SessionId session_id) override;
 

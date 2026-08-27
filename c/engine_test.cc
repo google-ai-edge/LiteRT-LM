@@ -30,6 +30,7 @@
 #include "c/conversation.h"
 #include "c/conversation_internal.h"
 #include "c/engine_internal.h"
+#include "c/experimental.h"
 #include "runtime/conversation/conversation.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/thinking_config.h"
@@ -456,6 +457,17 @@ TEST(EngineCTest, CreateConversationConfig) {
   nlohmann::ordered_json expected_messages =
       nlohmann::ordered_json::array({message});
   EXPECT_EQ(preface.messages, expected_messages);
+
+  litert_lm_engine_settings_set_gpu_enable_metal_residency_set(settings.get(),
+                                                               true);
+  EXPECT_EQ(
+      litert_lm_experimental_engine_update_gpu_enable_metal_residency_set(
+          engine.get(), true),
+      0);
+  EXPECT_EQ(
+      litert_lm_experimental_engine_update_gpu_enable_metal_residency_set(
+          engine.get(), false),
+      0);
 }
 
 TEST(EngineCTest, CreateConversationConfigWithNoSamplerParams) {

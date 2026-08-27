@@ -762,6 +762,25 @@ LITERT_LM_C_API_EXPORT
 int litert_lm_engine_settings_set_supported_audio_lora_ranks(
     LiteRtLmEngineSettings* settings, const int* lora_ranks, size_t num_ranks);
 
+// Sets whether to enable Metal residency set on GPU.
+//
+// When enabled on Apple platforms (macOS and iOS with Metal GPU backend), this
+// uses Apple's MTLResidencySet API to ensure model weights and allocations
+// remain resident in GPU memory, preventing memory swapping and reducing
+// allocation overhead.
+//
+// This setting is only supported on Apple platforms (macOS / iOS) with the GPU
+// backend. On other platforms (e.g. Linux, Android, Windows) or non-GPU
+// backends, this setting has no effect and is safely ignored.
+//
+// @param settings The engine settings.
+// @param enable_metal_residency_set Whether to enable Metal residency set.
+//
+// Added in version 0.2.0.
+LITERT_LM_C_API_EXPORT
+void litert_lm_engine_settings_set_gpu_enable_metal_residency_set(
+    LiteRtLmEngineSettings* settings, bool enable_metal_residency_set);
+
 // Creates a LiteRT LM Engine from the given settings. The caller is responsible
 // for destroying the engine using `litert_lm_engine_delete`.
 //

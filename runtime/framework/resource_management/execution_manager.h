@@ -103,6 +103,13 @@ class ExecutionManager {
   virtual absl::Status WaitUntilSessionDone(SessionId session_id,
                                             absl::Duration timeout) = 0;
 
+  // Updates whether to enable Metal residency set on GPU at runtime.
+  virtual absl::Status UpdateGpuEnableMetalResidencySet(
+      bool enable_metal_residency_set) {
+    return absl::UnimplementedError(
+        "UpdateGpuEnableMetalResidencySet not implemented.");
+  }
+
   // Waits until all tasks are done or the timeout is reached.
   // Returns:
   // - OK if all tasks are done.

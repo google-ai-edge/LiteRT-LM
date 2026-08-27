@@ -220,6 +220,12 @@ absl::Status ThreadedExecutionManager::ReleaseSession(SessionId session_id) {
   return absl::OkStatus();
 }
 
+absl::Status ThreadedExecutionManager::UpdateGpuEnableMetalResidencySet(
+    bool enable_metal_residency_set) {
+  return resource_manager_->UpdateGpuEnableMetalResidencySet(
+      enable_metal_residency_set);
+}
+
 absl::Status ThreadedExecutionManager::CancelAllTasksInSession(
     SessionId session_id) {
   absl::MutexLock lock(session_and_task_lookup_mutex_);

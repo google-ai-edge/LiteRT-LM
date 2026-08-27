@@ -419,5 +419,25 @@ TEST(EngineTest, CreateEngine_FailsNoAudioModel) {
 
 // TODO (b/397975034): Add more tests for Engine.
 
+TEST(EngineTest, UpdateGpuEnableMetalResidencySet) {
+  auto task_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm_new_metadata.task";
+  auto model_assets = ModelAssets::Create(task_path.string());
+  ASSERT_OK(model_assets);
+  auto engine_settings =
+      EngineSettings::CreateDefault(*model_assets, Backend::CPU);
+  ASSERT_OK(engine_settings);
+  engine_settings->GetMutableMainExecutorSettings().SetMaxNumTokens(
+      kMaxNumTokens);
+  engine_settings->GetMutableMainExecutorSettings().SetCacheDir(":nocache");
+
+  absl::StatusOr<std::unique_ptr<Engine>> llm = CreateEngine(*engine_settings);
+  ASSERT_OK(llm);
+
+  EXPECT_OK((*llm)->UpdateGpuEnableMetalResidencySet(true));
+  EXPECT_OK((*llm)->UpdateGpuEnableMetalResidencySet(false));
+}
+
 }  // namespace
 }  // namespace litert::lm
