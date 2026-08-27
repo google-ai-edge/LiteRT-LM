@@ -352,6 +352,7 @@ cc_test(
     tags = [
         "noasan",
         "nomsan",
+        "notap",
         "notsan",
         "requires-gpu-nvidia",
     ],
