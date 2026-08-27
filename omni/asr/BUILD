@@ -523,5 +523,6 @@ cc_binary(
         "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/time",
         "@nlohmann_json//:json",
+        "//runtime/executor:default_static_gpu_accelerator",
     ],
 )
