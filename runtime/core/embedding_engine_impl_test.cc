@@ -14,6 +14,7 @@
 
 #include "runtime/core/embedding_engine_impl.h"
 
+#include <cmath>
 #include <cstddef>
 #include <filesystem>  // NOLINT: Required for path manipulation.
 #include <functional>
@@ -395,6 +396,7 @@ TEST(EmbeddingEngineImplTest, DefaultEmbeddingOptions) {
   EXPECT_TRUE(options.normalize);
   EXPECT_TRUE(options.insert_special_tokens);
   EXPECT_FALSE(options.vision_tokens_per_image.has_value());
+  EXPECT_EQ(options.output_size, std::nullopt);
 }
 
 TEST(EmbeddingEngineImplTest, ComputeEmbeddingSuccess) {
@@ -924,6 +926,179 @@ TEST(EmbeddingEngineImplTest,
 
   ASSERT_OK(engine.ComputeEmbedding(contents, options).status());
   EXPECT_THAT(raw_executor->GetLastTokenIds(), ElementsAre(-1, -1, -1, -1));
+}
+
+TEST(EmbeddingEngineImplTest, ComputeEmbeddingWithOutputSize) {
+  ASSERT_OK_AND_ASSIGN(auto env, CreateTestEnvironment());
+  auto tokenizer = std::make_unique<MockTokenizer>();
+  ON_CALL(*tokenizer, TextToTokenIds(::testing::_))
+      .WillByDefault(Return(std::vector<int>{1, 2, 3}));
+  auto fake_embedding_executor = std::make_unique<FakeEmbeddingExecutor>();
+
+  EmbeddingEngineImpl engine(std::move(env), std::move(tokenizer),
+                             std::move(fake_embedding_executor));
+
+  std::vector<InputData> contents;
+  contents.push_back(InputText(std::string("hello")));
+
+  EmbeddingOptions options;
+  options.normalize = false;
+  options.output_size = 2;
+
+  ASSERT_OK_AND_ASSIGN(auto response,
+                       engine.ComputeEmbedding(contents, options));
+  EXPECT_THAT(response.embedding, ElementsAre(1.0f, 2.0f));
+}
+
+TEST(EmbeddingEngineImplTest, ComputeEmbeddingWithOutputSizeAndNormalization) {
+  ASSERT_OK_AND_ASSIGN(auto env, CreateTestEnvironment());
+  auto tokenizer = std::make_unique<MockTokenizer>();
+  ON_CALL(*tokenizer, TextToTokenIds(::testing::_))
+      .WillByDefault(Return(std::vector<int>{1, 2, 3}));
+  auto fake_embedding_executor = std::make_unique<FakeEmbeddingExecutor>();
+
+  EmbeddingEngineImpl engine(std::move(env), std::move(tokenizer),
+                             std::move(fake_embedding_executor));
+
+  std::vector<InputData> contents;
+  contents.push_back(InputText(std::string("hello")));
+
+  EmbeddingOptions options;
+  options.normalize = true;
+  options.output_size = 2;
+
+  ASSERT_OK_AND_ASSIGN(auto response,
+                       engine.ComputeEmbedding(contents, options));
+  ASSERT_EQ(response.embedding.size(), 2);
+  const float norm = std::sqrt(1.0f * 1.0f + 2.0f * 2.0f);
+  EXPECT_NEAR(response.embedding[0], 1.0f / norm, 1e-5f);
+  EXPECT_NEAR(response.embedding[1], 2.0f / norm, 1e-5f);
+  const float sum_sq = response.embedding[0] * response.embedding[0] +
+                       response.embedding[1] * response.embedding[1];
+  EXPECT_NEAR(sum_sq, 1.0f, 1e-5f);
+}
+
+TEST(EmbeddingEngineImplTest, ComputeEmbeddingWithOutputSizeEqualToDefault) {
+  ASSERT_OK_AND_ASSIGN(auto env, CreateTestEnvironment());
+  auto tokenizer = std::make_unique<MockTokenizer>();
+  ON_CALL(*tokenizer, TextToTokenIds(::testing::_))
+      .WillByDefault(Return(std::vector<int>{1, 2, 3}));
+  auto fake_embedding_executor = std::make_unique<FakeEmbeddingExecutor>();
+
+  EmbeddingEngineImpl engine(std::move(env), std::move(tokenizer),
+                             std::move(fake_embedding_executor));
+
+  std::vector<InputData> contents;
+  contents.push_back(InputText(std::string("hello")));
+
+  EmbeddingOptions options;
+  options.normalize = false;
+  options.output_size = 3;
+
+  ASSERT_OK_AND_ASSIGN(auto response,
+                       engine.ComputeEmbedding(contents, options));
+  EXPECT_THAT(response.embedding, ElementsAre(1.0f, 2.0f, 3.0f));
+}
+
+TEST(EmbeddingEngineImplTest, ComputeEmbeddingWithOutputSizeZero) {
+  ASSERT_OK_AND_ASSIGN(auto env, CreateTestEnvironment());
+  auto tokenizer = std::make_unique<MockTokenizer>();
+  ON_CALL(*tokenizer, TextToTokenIds(::testing::_))
+      .WillByDefault(Return(std::vector<int>{1, 2, 3}));
+  auto fake_embedding_executor = std::make_unique<FakeEmbeddingExecutor>();
+
+  EmbeddingEngineImpl engine(std::move(env), std::move(tokenizer),
+                             std::move(fake_embedding_executor));
+
+  std::vector<InputData> contents;
+  contents.push_back(InputText(std::string("hello")));
+
+  EmbeddingOptions options;
+  options.output_size = 0;
+
+  ASSERT_OK_AND_ASSIGN(auto response,
+                       engine.ComputeEmbedding(contents, options));
+  EXPECT_TRUE(response.embedding.empty());
+}
+
+TEST(EmbeddingEngineImplTest,
+     ComputeEmbeddingWithOutputSizeNegativeReturnsError) {
+  ASSERT_OK_AND_ASSIGN(auto env, CreateTestEnvironment());
+  auto tokenizer = std::make_unique<MockTokenizer>();
+  ON_CALL(*tokenizer, TextToTokenIds(::testing::_))
+      .WillByDefault(Return(std::vector<int>{1, 2, 3}));
+  auto fake_embedding_executor = std::make_unique<FakeEmbeddingExecutor>();
+
+  EmbeddingEngineImpl engine(std::move(env), std::move(tokenizer),
+                             std::move(fake_embedding_executor));
+
+  std::vector<InputData> contents;
+  contents.push_back(InputText(std::string("hello")));
+
+  EmbeddingOptions options;
+  options.output_size = -1;
+
+  EXPECT_THAT(engine.ComputeEmbedding(contents, options),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       HasSubstr("cannot be negative")));
+}
+
+TEST(EmbeddingEngineImplTest,
+     ComputeEmbeddingWithOutputSizeLargerThanDefaultReturnsError) {
+  ASSERT_OK_AND_ASSIGN(auto env, CreateTestEnvironment());
+  auto tokenizer = std::make_unique<MockTokenizer>();
+  ON_CALL(*tokenizer, TextToTokenIds(::testing::_))
+      .WillByDefault(Return(std::vector<int>{1, 2, 3}));
+  auto fake_embedding_executor = std::make_unique<FakeEmbeddingExecutor>();
+
+  EmbeddingEngineImpl engine(std::move(env), std::move(tokenizer),
+                             std::move(fake_embedding_executor));
+
+  std::vector<InputData> contents;
+  contents.push_back(InputText(std::string("hello")));
+
+  EmbeddingOptions options;
+  options.output_size = 5;
+
+  EXPECT_THAT(
+      engine.ComputeEmbedding(contents, options),
+      StatusIs(
+          absl::StatusCode::kInvalidArgument,
+          HasSubstr("cannot be larger than default output embedding size")));
+}
+
+TEST(EmbeddingEngineImplTest,
+     ComputeEmbeddingBatchWithOutputSizeAndNormalization) {
+  ASSERT_OK_AND_ASSIGN(auto env, CreateTestEnvironment());
+  auto tokenizer = std::make_unique<MockTokenizer>();
+  ON_CALL(*tokenizer, TextToTokenIds(::testing::_))
+      .WillByDefault(Return(std::vector<int>{1, 2, 3}));
+  auto fake_embedding_executor = std::make_unique<FakeEmbeddingExecutor>();
+
+  EmbeddingEngineImpl engine(std::move(env), std::move(tokenizer),
+                             std::move(fake_embedding_executor));
+
+  std::vector<std::vector<InputData>> contents;
+  std::vector<InputData> contents1;
+  contents1.push_back(InputText(std::string("hello")));
+  contents.push_back(std::move(contents1));
+  std::vector<InputData> contents2;
+  contents2.push_back(InputText(std::string("world")));
+  contents.push_back(std::move(contents2));
+
+  EmbeddingOptions options;
+  options.normalize = true;
+  options.output_size = 2;
+
+  ASSERT_OK_AND_ASSIGN(auto responses,
+                       engine.ComputeEmbeddingBatch(contents, options));
+  ASSERT_EQ(responses.size(), 2);
+  const float norm = std::sqrt(1.0f * 1.0f + 2.0f * 2.0f);
+  for (const auto& response : responses) {
+    ASSERT_EQ(response.embedding.size(), 2);
+    EXPECT_NEAR(response.embedding[0], 1.0f / norm, 1e-5f);
+    EXPECT_NEAR(response.embedding[1], 2.0f / norm, 1e-5f);
+  }
 }
 
 TEST(EmbeddingEngineImplTest, ComputeEmbeddingWithRawImageSuccess) {

@@ -713,6 +713,19 @@ absl::StatusOr<EmbeddingResponse> EmbeddingEngineImpl::ComputeEmbeddingInternal(
   response.truncated_length = embedding_output.truncated_length;
   response.num_chunks = embedding_output.num_chunks;
 
+  if (options.output_size.has_value()) {
+    if (*options.output_size < 0) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "output_size cannot be negative, got: ", *options.output_size));
+    }
+    if (*options.output_size > response.embedding.size()) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "output_size cannot be larger than default output embedding size (",
+          response.embedding.size(), "), got: ", *options.output_size));
+    }
+    response.embedding.resize(*options.output_size);
+  }
+
   if (options.normalize) {
     response.embedding = L2Norm(response.embedding);
   }
