@@ -26,6 +26,7 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_model_types.h"  // from @litert
@@ -35,6 +36,7 @@
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/components/sampler.h"
+#include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/state_interface.h"
 
@@ -53,8 +55,8 @@ class LlmLiteRtMtpDrafter {
       Environment& env, ModelResources& resources,
       const LlmExecutorSettings& executor_settings, CompiledModel& base_model,
       EmbeddingLookupManager& embedding_manager,
-      std::optional<std::reference_wrapper<EmbeddingLookupManager>>
-          ple_manager);
+      std::optional<std::reference_wrapper<EmbeddingLookupManager>> ple_manager,
+      const proto::ExecutorMetadata* executor_metadata = nullptr);
 
   // Draft the next set of tokens using the MTP drafter model.
   // Inputs:
@@ -89,7 +91,10 @@ class LlmLiteRtMtpDrafter {
           verifier_input_buffers,
       absl::flat_hash_map<absl::string_view, TensorBuffer>
           verifier_output_buffers,
-      int num_draft_steps, int vocab_size)
+      TensorBuffer drafter_id_tensor, TensorBuffer verifier_id_tensor,
+      int num_draft_steps, ModelSignatures drafter_signatures,
+      ModelSignatures verifier_signatures, int vocab_size,
+      AttentionMaskParams attn_params)
       : mtp_drafter_model_(std::move(mtp_drafter_model)),
         drafter_signature_(std::move(drafter_signature)),
         base_model_(base_model),
@@ -104,8 +109,13 @@ class LlmLiteRtMtpDrafter {
         drafter_output_buffers_(std::move(drafter_output_buffers)),
         verifier_input_buffers_(std::move(verifier_input_buffers)),
         verifier_output_buffers_(std::move(verifier_output_buffers)),
+        drafter_id_tensor_(std::move(drafter_id_tensor)),
+        verifier_id_tensor_(std::move(verifier_id_tensor)),
         num_draft_steps_(num_draft_steps),
-        vocab_size_(vocab_size) {
+        drafter_signatures_(std::move(drafter_signatures)),
+        verifier_signatures_(std::move(verifier_signatures)),
+        vocab_size_(vocab_size),
+        attn_params_(attn_params) {
     for (const auto& [name, buffer] : drafter_input_buffers_) {
       auto expected = buffer.Duplicate();
       active_drafter_input_buffers_[name] = std::move(expected.Value());
@@ -210,6 +220,10 @@ class LlmLiteRtMtpDrafter {
   // The number of draft steps.
   const int num_draft_steps_;
 
+  // Model signatures for drafter and verifier.
+  ModelSignatures drafter_signatures_;
+  ModelSignatures verifier_signatures_;
+
   // The index of the last verified token in the verifier output buffers.
   int last_verified_token_id_idx_ = -1;
 
@@ -223,6 +237,9 @@ class LlmLiteRtMtpDrafter {
 
   // The vocabulary size for logits masking.
   int vocab_size_ = 0;
+
+  // Attention mask params.
+  AttentionMaskParams attn_params_;
 
   // Active constraint and verified constraint state.
   const Constraint* constraint_ = nullptr;

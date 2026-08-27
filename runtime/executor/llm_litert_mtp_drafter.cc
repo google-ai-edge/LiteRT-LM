@@ -306,7 +306,8 @@ LlmLiteRtMtpDrafter::Create(
     Environment& env, ModelResources& resources,
     const LlmExecutorSettings& executor_settings, CompiledModel& base_model,
     EmbeddingLookupManager& embedding_manager,
-    std::optional<std::reference_wrapper<EmbeddingLookupManager>> ple_manager) {
+    std::optional<std::reference_wrapper<EmbeddingLookupManager>> ple_manager,
+    const proto::ExecutorMetadata* executor_metadata) {
   ActivationDataType activation_data_type =
       executor_settings.GetActivationDataType().value_or(
           ActivationDataType::FLOAT16);
@@ -339,6 +340,7 @@ LlmLiteRtMtpDrafter::Create(
   std::vector<std::string> kv_cache_input_names;
   LITERT_ASSIGN_OR_RETURN(SimpleSignature drafter_signature,
                           compiled_model.GetSignature(/*signature_index=*/0));
+
   {
     for (absl::string_view input_name : drafter_signature.InputNames()) {
       if (absl::StartsWith(input_name, "kv_cache_")) {
@@ -371,6 +373,7 @@ LlmLiteRtMtpDrafter::Create(
 
   LITERT_ASSIGN_OR_RETURN(SimpleSignature verify_signature,
                           base_model.FindSignature(kVerifySignatureRunner));
+
   absl::flat_hash_map<absl::string_view, TensorBuffer> verifier_input_buffers;
   absl::flat_hash_map<absl::string_view, TensorBuffer> verifier_output_buffers;
   int num_draft_steps;
@@ -481,19 +484,27 @@ LlmLiteRtMtpDrafter::Create(
       auto verifier_id_tensor,
       CreateTensorBuffer<int32_t>({1, num_draft_steps + 1}));
 
-  auto drafter = absl::WrapUnique(new LlmLiteRtMtpDrafter(
+  ABSL_ASSIGN_OR_RETURN(
+      auto drafter_model_signatures,
+      GetModelSignaturesFromInputOutputNames(drafter_signature.InputNames(),
+                                             drafter_signature.OutputNames(),
+                                             /*strict=*/false));
+  ABSL_ASSIGN_OR_RETURN(
+      auto verifier_model_signatures,
+      GetModelSignaturesFromInputOutputNames(verify_signature.InputNames(),
+                                             verify_signature.OutputNames(),
+                                             /*strict=*/false));
+
+  return absl::WrapUnique(new LlmLiteRtMtpDrafter(
       std::move(compiled_model), std::move(drafter_signature), base_model,
       std::move(verify_signature), *base_model_desc, embedding_manager,
       ple_manager, std::move(drafter_sampler), std::move(verifier_sampler),
       std::move(kv_cache_input_names), std::move(mtp_drafter_input_buffers),
       std::move(mtp_drafter_output_buffers), std::move(verifier_input_buffers),
-      std::move(verifier_output_buffers), num_draft_steps, vocab_size));
-
-  drafter->drafter_id_tensor_ = std::move(drafter_id_tensor);
-  drafter->verifier_id_tensor_ = std::move(verifier_id_tensor);
-
-  return absl::StatusOr<std::unique_ptr<LlmLiteRtMtpDrafter>>(
-      std::move(drafter));
+      std::move(verifier_output_buffers), std::move(drafter_id_tensor),
+      std::move(verifier_id_tensor), num_draft_steps,
+      std::move(drafter_model_signatures), std::move(verifier_model_signatures),
+      vocab_size, GetAttentionMaskParams(executor_metadata)));
 }
 
 absl::Status LlmLiteRtMtpDrafter::PrepareDrafterInputBuffers(
@@ -509,18 +520,32 @@ absl::Status LlmLiteRtMtpDrafter::PrepareDrafterInputBuffers(
   LITERT_RETURN_IF_ERROR(
       active_drafter_input_buffers_["input_pos"].Write<int32_t>(
           absl::MakeSpan(&position, 1)));
-  ABSL_RETURN_IF_ERROR(
-      InitializeAttentionMask(active_drafter_input_buffers_["mask"],
-                              /*use_fp16_precision=*/false));
-  ABSL_RETURN_IF_ERROR(FillAttentionMask(active_drafter_input_buffers_["mask"],
-                                         /*start_step=*/position,
-                                         /*steps=*/1,
-                                         proto::ATTENTION_MASK_TYPE_CAUSAL,
-                                         /*token_ids=*/std::nullopt,
-                                         /*sliding_window_size=*/std::nullopt));
-  if (active_drafter_input_buffers_.contains("param_tensor")) {
+  if (drafter_signatures_.input_attn_mask.has_value()) {
+    auto& mask_buf =
+        active_drafter_input_buffers_[*drafter_signatures_.input_attn_mask];
+    ABSL_RETURN_IF_ERROR(
+        InitializeAttentionMask(mask_buf, /*use_fp16_precision=*/false));
+    ABSL_RETURN_IF_ERROR(FillAttentionMask(mask_buf,
+                                           /*start_timestep=*/position,
+                                           /*steps=*/1,
+                                           attn_params_.global_type));
+  }
+  if (drafter_signatures_.input_attn_mask_local.has_value()) {
+    auto& mask_buf = active_drafter_input_buffers_[*drafter_signatures_
+                                                        .input_attn_mask_local];
+    ABSL_RETURN_IF_ERROR(
+        InitializeAttentionMask(mask_buf, /*use_fp16_precision=*/false));
+    ABSL_RETURN_IF_ERROR(FillAttentionMask(
+        mask_buf,
+        /*start_timestep=*/position,
+        /*steps=*/1, attn_params_.local_type,
+        /*token_ids=*/std::nullopt, attn_params_.sliding_window_size,
+        RingBufferAttentionMaskMode::kDecode));
+  }
+  if (drafter_signatures_.input_int32_param.has_value()) {
     ABSL_RETURN_IF_ERROR(FillSingleBufferCacheParamTensor(
-        active_drafter_input_buffers_["param_tensor"], position,
+        active_drafter_input_buffers_[*drafter_signatures_.input_int32_param],
+        position,
         /*update_length=*/1));
   }
   return absl::OkStatus();
@@ -609,10 +634,10 @@ absl::Status LlmLiteRtMtpDrafter::PrepareVerifierInputBuffers(
     absl::flat_hash_map<absl::string_view, TensorBuffer>&
         input_kv_cache_buffers) {
   {
-    LITERT_ASSIGN_OR_RETURN(
-        auto verifier_input_pos_lock_and_addr,
-        TensorBufferScopedLock::Create(verifier_input_buffers_["input_pos"],
-                                       TensorBuffer::LockMode::kWrite));
+    LITERT_ASSIGN_OR_RETURN(auto verifier_input_pos_lock_and_addr,
+                            TensorBufferScopedLock::Create(
+                                active_verifier_input_buffers_["input_pos"],
+                                TensorBuffer::LockMode::kWrite));
     auto* prefill_input_pos_ptr =
         static_cast<int32_t*>(verifier_input_pos_lock_and_addr.second);
     for (int i = 0; i < num_draft_steps_ + 1; ++i) {
@@ -620,28 +645,49 @@ absl::Status LlmLiteRtMtpDrafter::PrepareVerifierInputBuffers(
     }
   }
 
-  ABSL_RETURN_IF_ERROR(InitializeAttentionMask(verifier_input_buffers_["mask"],
-                                               /*use_fp16_precision=*/false));
-  ABSL_RETURN_IF_ERROR(FillAttentionMask(verifier_input_buffers_["mask"],
-                                         /*start_step=*/position,
-                                         /*steps=*/num_draft_steps_ + 1,
-                                         proto::ATTENTION_MASK_TYPE_CAUSAL,
-                                         /*token_ids=*/std::nullopt,
-                                         /*sliding_window_size=*/std::nullopt));
-
   std::vector<int> drafted_tokens_with_input_token;
   drafted_tokens_with_input_token.reserve(num_draft_steps_ + 1);
   drafted_tokens_with_input_token.push_back(token_id);
   drafted_tokens_with_input_token.insert(drafted_tokens_with_input_token.end(),
                                          drafted_tokens.begin(),
                                          drafted_tokens.end());
-  ABSL_RETURN_IF_ERROR(embedding_manager_.LookupPrefill(
-      drafted_tokens_with_input_token, &verifier_input_buffers_["embeddings"],
-      /*offset=*/0));
-  if (ple_manager_.has_value()) {
+
+  if (verifier_signatures_.input_attn_mask.has_value()) {
+    auto& mask_buf =
+        active_verifier_input_buffers_[*verifier_signatures_.input_attn_mask];
+    ABSL_RETURN_IF_ERROR(
+        InitializeAttentionMask(mask_buf, /*use_fp16_precision=*/false));
+    ABSL_RETURN_IF_ERROR(FillAttentionMask(mask_buf,
+                                           /*start_timestep=*/position,
+                                           /*steps=*/num_draft_steps_ + 1,
+                                           attn_params_.global_type));
+  }
+  if (verifier_signatures_.input_attn_mask_local.has_value()) {
+    auto& mask_buf =
+        active_verifier_input_buffers_[*verifier_signatures_
+                                            .input_attn_mask_local];
+    ABSL_RETURN_IF_ERROR(
+        InitializeAttentionMask(mask_buf, /*use_fp16_precision=*/false));
+    ABSL_RETURN_IF_ERROR(FillAttentionMask(
+        mask_buf,
+        /*start_timestep=*/position,
+        /*steps=*/num_draft_steps_ + 1, attn_params_.local_type,
+        /*token_ids=*/std::nullopt, attn_params_.sliding_window_size,
+        RingBufferAttentionMaskMode::kVerify));
+  }
+
+  if (verifier_signatures_.input_embeddings.has_value()) {
+    ABSL_RETURN_IF_ERROR(embedding_manager_.LookupPrefill(
+        drafted_tokens_with_input_token,
+        &active_verifier_input_buffers_[*verifier_signatures_.input_embeddings],
+        /*offset=*/0));
+  }
+  if (ple_manager_.has_value() &&
+      verifier_signatures_.input_per_layer_embeddings.has_value()) {
     ABSL_RETURN_IF_ERROR(ple_manager_->get().LookupPrefill(
         drafted_tokens_with_input_token,
-        &verifier_input_buffers_["per_layer_embeddings"],
+        &active_verifier_input_buffers_[*verifier_signatures_
+                                             .input_per_layer_embeddings],
         /*offset=*/0));
   }
 
@@ -649,10 +695,10 @@ absl::Status LlmLiteRtMtpDrafter::PrepareVerifierInputBuffers(
     LITERT_ASSIGN_OR_RETURN(auto input_buffer_dup, input_buffer.Duplicate());
     active_verifier_input_buffers_[input_name] = std::move(input_buffer_dup);
   }
-  if (active_verifier_input_buffers_.contains("param_tensor")) {
+  if (verifier_signatures_.input_int32_param.has_value()) {
     ABSL_RETURN_IF_ERROR(FillSingleBufferCacheParamTensor(
-        active_verifier_input_buffers_["param_tensor"], position,
-        num_draft_steps_ + 1));
+        active_verifier_input_buffers_[*verifier_signatures_.input_int32_param],
+        position, num_draft_steps_ + 1));
   }
   return absl::OkStatus();
 }

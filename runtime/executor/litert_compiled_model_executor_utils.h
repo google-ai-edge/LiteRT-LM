@@ -170,6 +170,16 @@ struct AttentionMaskParams {
 AttentionMaskParams GetAttentionMaskParams(
     const proto::ExecutorMetadata* executor_metadata);
 
+// The operational mode for filling the ring-buffer attention mask.
+enum class RingBufferAttentionMaskMode {
+  // Prefill mode: keys are split into past cache and fresh chunk.
+  kPrefill = 0,
+  // Single-step decode mode.
+  kDecode,
+  // Multi-step verifier mode.
+  kVerify,
+};
+
 // Fills attention mask for a given range of timesteps.
 // The mask is a 4D tensor with shape [batch=1, seq_len, 1, max_kv_len].
 // mask - The attention mask tensor to be filled.
@@ -177,13 +187,16 @@ AttentionMaskParams GetAttentionMaskParams(
 // steps - The number of steps to fill (the number of sequences to be filled).
 // attention_mask_type - The attention mask type.
 // token_ids - The token ids of the full context. Required for
-//             kVisionBidirectional attention mask type.
+//             kVisionBidirectional attention mask type during prefill.
 // sliding_window_size - The sliding window size.
+// mode - Explicit operational mode for ring-buffer masks (prefill, decode, or
+// verify).
 absl::Status FillAttentionMask(
     ::litert::TensorBuffer& mask, int start_timestep, int steps,
     proto::AttentionMaskType attention_mask_type,
     std::optional<absl::Span<const int>> token_ids = std::nullopt,
-    std::optional<int> sliding_window_size = std::nullopt);
+    std::optional<int> sliding_window_size = std::nullopt,
+    std::optional<RingBufferAttentionMaskMode> mode = std::nullopt);
 
 // Fills the parameters used by single buffer cache update from
 // start_index to start_index + update_length.

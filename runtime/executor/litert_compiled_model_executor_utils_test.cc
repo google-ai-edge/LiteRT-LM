@@ -1097,7 +1097,8 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
   ASSERT_OK(FillAttentionMask(*mask_buffer, /*start_timestep=*/0, /*steps=*/4,
                               proto::ATTENTION_MASK_TYPE_CAUSAL,
                               /*token_ids=*/std::nullopt,
-                              /*sliding_window_size=*/8));
+                              /*sliding_window_size=*/8,
+                              RingBufferAttentionMaskMode::kPrefill));
 
   auto lock = litert::TensorBufferScopedLock::Create(
       *mask_buffer, litert::TensorBuffer::LockMode::kRead);
@@ -1136,10 +1137,10 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
   // token_ids: token 0 is text, tokens 1..3 are vision (-1), tokens 4..5 are
   // text.
   std::vector<int> token_ids = {10, -1, -1, -1, 11, 12};
-  ASSERT_OK(FillAttentionMask(*mask_buffer, /*start_timestep=*/0, /*steps=*/6,
-                              proto::ATTENTION_MASK_TYPE_VISION_BIDIRECTIONAL,
-                              token_ids,
-                              /*sliding_window_size=*/8));
+  ASSERT_OK(FillAttentionMask(
+      *mask_buffer, /*start_timestep=*/0, /*steps=*/6,
+      proto::ATTENTION_MASK_TYPE_VISION_BIDIRECTIONAL, token_ids,
+      /*sliding_window_size=*/8, RingBufferAttentionMaskMode::kPrefill));
 
   auto lock = litert::TensorBufferScopedLock::Create(
       *mask_buffer, litert::TensorBuffer::LockMode::kRead);
@@ -1192,7 +1193,8 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
   ASSERT_OK(FillAttentionMask(*mask_buffer, /*start_timestep=*/3, /*steps=*/1,
                               proto::ATTENTION_MASK_TYPE_CAUSAL,
                               /*token_ids=*/std::nullopt,
-                              /*sliding_window_size=*/8));
+                              /*sliding_window_size=*/8,
+                              RingBufferAttentionMaskMode::kDecode));
 
   auto lock = litert::TensorBufferScopedLock::Create(
       *mask_buffer, litert::TensorBuffer::LockMode::kRead);
@@ -1203,6 +1205,70 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
   for (int k = 0; k < 8; ++k) {
     bool expected = (k <= 3);
     EXPECT_EQ(mask_ptr[k], expected) << "k=" << k;
+  }
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     FillAttentionMask_RingBuffer_Verifier) {
+  LITERT_ASSERT_OK_AND_ASSIGN(auto env, ::litert::Environment::Create({}));
+
+  // Verifier mask shape: [1, 1, steps=4, S=1028] where sliding_window_size =
+  // 1024.
+  auto layout = ::litert::Layout(::litert::Dimensions({1, 1, 4, 1028}));
+  RankedTensorType ranked_tensor_type(ElementType::Bool, std::move(layout));
+  auto mask_buffer =
+      TensorBuffer::CreateManaged(env, ::litert::TensorBufferType::kHostMemory,
+                                  ranked_tensor_type, sizeof(bool) * 4 * 1028);
+  ASSERT_TRUE(mask_buffer);
+
+  // 1. Initial verification at start_timestep = 0:
+  ASSERT_OK(FillAttentionMask(*mask_buffer, /*start_timestep=*/0, /*steps=*/4,
+                              proto::ATTENTION_MASK_TYPE_CAUSAL,
+                              /*token_ids=*/std::nullopt,
+                              /*sliding_window_size=*/1024,
+                              RingBufferAttentionMaskMode::kVerify));
+
+  {
+    auto lock = litert::TensorBufferScopedLock::Create(
+        *mask_buffer, litert::TensorBuffer::LockMode::kRead);
+    ASSERT_TRUE(lock);
+    bool* mask_ptr = static_cast<bool*>(lock->second);
+
+    for (int step = 0; step < 4; ++step) {
+      int row_offset = step * 1028;
+      for (int col = 0; col < 1028; ++col) {
+        bool expected = (col <= step);
+        EXPECT_EQ(mask_ptr[row_offset + col], expected)
+            << "step=" << step << ", col=" << col;
+      }
+    }
+  }
+
+  // 2. Verification after wrap-around at start_timestep = 1500:
+  ASSERT_OK(FillAttentionMask(
+      *mask_buffer, /*start_timestep=*/1500, /*steps=*/4,
+      proto::ATTENTION_MASK_TYPE_VISION_BIDIRECTIONAL,
+      /*token_ids=*/std::nullopt,
+      /*sliding_window_size=*/1024, RingBufferAttentionMaskMode::kVerify));
+
+  {
+    auto lock = litert::TensorBufferScopedLock::Create(
+        *mask_buffer, litert::TensorBuffer::LockMode::kRead);
+    ASSERT_TRUE(lock);
+    bool* mask_ptr = static_cast<bool*>(lock->second);
+
+    for (int step = 0; step < 4; ++step) {
+      int query_step = 1500 + step;
+      int row_offset = step * 1028;
+      for (int col = 0; col < 1028; ++col) {
+        int diff = query_step - col;
+        int distance = ((diff % 1028) + 1028) % 1028;
+        bool expected = (distance <= 1023) && (distance <= query_step) &&
+                        (distance <= (1028 - 4));
+        EXPECT_EQ(mask_ptr[row_offset + col], expected)
+            << "step=" << step << ", col=" << col;
+      }
+    }
   }
 }
 

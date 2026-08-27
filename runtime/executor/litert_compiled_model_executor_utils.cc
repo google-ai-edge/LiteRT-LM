@@ -272,12 +272,15 @@ void FillRingBufferPrefillAttentionMask(
   }
 }
 
-// Helper function to fill ring buffer decode attention mask with shape
-// [batch_size, 1, 1, ring_buffer_size].
+// Helper function to fill ring buffer decode/verifier attention mask with shape
+// [batch_size, 1, steps, ring_buffer_size].
 //
-// In decode mode, a single query token at start_timestep attends to keys in the
-// circular KV cache ring buffer that are within the sliding window distance
-// (<= window_size - 1) and have already been populated (<= start_timestep).
+// In decode/verifier mode, query tokens at timesteps [start_timestep,
+// start_timestep + steps - 1] attend to keys in the circular KV cache ring
+// buffer that are within the sliding window distance
+// (<= window_size - 1) and have already been populated (<= query_step) and have
+// not been overwritten by subsequent steps (distance <= ring_buffer_size -
+// steps).
 //
 // Arguments:
 //   elem_type: Element type of the mask tensor (Bool, Float16, or Float32).
@@ -285,23 +288,28 @@ void FillRingBufferPrefillAttentionMask(
 //   batch_size: Number of batches.
 //   batch_offset: Element stride between consecutive batches.
 //   ring_buffer_size: Size of the ring buffer KV cache.
-//   start_timestep: Current decode timestep.
+//   start_timestep: Current decode/verifier starting timestep.
+//   steps: Number of tokens to verify/decode.
 //   sliding_window_size: Effective sliding window size.
 void FillRingBufferDecodeAttentionMask(litert::ElementType elem_type,
                                        void* mask_ptr, int batch_size,
                                        int batch_offset, int ring_buffer_size,
-                                       int start_timestep,
+                                       int start_timestep, int steps,
                                        int sliding_window_size) {
   const int window_size = sliding_window_size;
 
   for (int batch_idx = 0; batch_idx < batch_size; ++batch_idx) {
-    int offset = batch_idx * batch_offset;
-    for (int col = 0; col < ring_buffer_size; ++col) {
-      int diff = start_timestep - col;
-      int distance =
-          ((diff % ring_buffer_size) + ring_buffer_size) % ring_buffer_size;
-      if (distance <= window_size - 1 && distance <= start_timestep) {
-        FillRange(elem_type, mask_ptr, offset + col, offset + col + 1);
+    for (int step_idx = 0; step_idx < steps; ++step_idx) {
+      int query_step = start_timestep + step_idx;
+      int offset = batch_idx * batch_offset + step_idx * ring_buffer_size;
+      for (int col = 0; col < ring_buffer_size; ++col) {
+        int diff = query_step - col;
+        int distance =
+            ((diff % ring_buffer_size) + ring_buffer_size) % ring_buffer_size;
+        if (distance <= window_size - 1 && distance <= query_step &&
+            distance <= (ring_buffer_size - steps)) {
+          FillRange(elem_type, mask_ptr, offset + col, offset + col + 1);
+        }
       }
     }
   }
@@ -652,23 +660,18 @@ AttentionMaskParams GetAttentionMaskParams(
   return params;
 }
 
-absl::Status FillAttentionMask(litert::TensorBuffer& mask, int start_timestep,
-                               int steps,
-                               proto::AttentionMaskType attention_mask_type,
-                               std::optional<absl::Span<const int>> token_ids,
-                               std::optional<int> sliding_window_size) {
+absl::Status FillAttentionMask(
+    litert::TensorBuffer& mask, int start_timestep, int steps,
+    proto::AttentionMaskType attention_mask_type,
+    std::optional<absl::Span<const int>> token_ids,
+    std::optional<int> sliding_window_size,
+    std::optional<RingBufferAttentionMaskMode> mode) {
   LITERT_ASSIGN_OR_RETURN(auto mask_tensor_type, mask.TensorType());
   RET_CHECK_EQ(mask_tensor_type.Layout().Rank(), 4)
           .SetCode(absl::StatusCode::kInvalidArgument)
       << "Attention mask must be 4D.";
   int batch_size = mask_tensor_type.Layout().Dimensions()[0];
   int context_size = mask_tensor_type.Layout().Dimensions()[3];
-  if (attention_mask_type == proto::ATTENTION_MASK_TYPE_VISION_BIDIRECTIONAL &&
-      !token_ids.has_value()) {
-    return absl::InvalidArgumentError(
-        "Empty token ids with vision bidirectional attention mask type is "
-        "not allowed.");
-  }
   LITERT_ASSIGN_OR_RETURN(auto mask_size, mask.PackedSize());
   LITERT_ASSIGN_OR_RETURN(auto mask_lock_and_addr,
                           litert::TensorBufferScopedLock::Create(
@@ -686,41 +689,44 @@ absl::Status FillAttentionMask(litert::TensorBuffer& mask, int start_timestep,
     return absl::InvalidArgumentError("Unsupported attention mask data type.");
   }
 
-  // Detection for ring buffer local attention mask:
-  // In prefill: [1, 1, chunk_len, S + chunk_len] where S is ring buffer size
-  // (e.g. 1024), and chunk_len is the prefill chunk size of this tensor buffer
-  // (e.g. 128 or 1024).
-  // In decode:  [1, 1, 1, S] where S is ring buffer size
-  // (e.g. 1024). Note: For global attention mask, sliding_window_size is
-  // nullopt.
   const auto& dims = mask_tensor_type.Layout().Dimensions();
   int chunk_len = dims[2];
   int ring_buffer_size = context_size - chunk_len;
 
-  bool is_ring_buffer_prefill = dims[1] == 1 && dims[2] > 1 &&
-                                ring_buffer_size > 0 &&
-                                sliding_window_size.has_value() &&
-                                ring_buffer_size >= sliding_window_size.value();
-
-  bool is_ring_buffer_decode = steps == 1 && dims[1] == 1 && dims[2] == 1 &&
-                               sliding_window_size.has_value() &&
-                               context_size >= sliding_window_size.value();
-
-  if (is_ring_buffer_prefill) {
-    FillRingBufferPrefillAttentionMask(
-        mask_tensor_type.ElementType(), mask_lock_and_addr.second, batch_size,
-        batch_offset, context_size, start_timestep, steps, ring_buffer_size,
-        sliding_window_size.value_or(ring_buffer_size), attention_mask_type,
-        token_ids);
-    return absl::OkStatus();
+  if (sliding_window_size.has_value() && mode.has_value() && dims[1] == 1) {
+    if (*mode == RingBufferAttentionMaskMode::kPrefill && dims[2] > 1 &&
+        ring_buffer_size > 0 &&
+        ring_buffer_size >= sliding_window_size.value()) {
+      FillRingBufferPrefillAttentionMask(
+          mask_tensor_type.ElementType(), mask_lock_and_addr.second, batch_size,
+          batch_offset, context_size, start_timestep, steps, ring_buffer_size,
+          sliding_window_size.value_or(ring_buffer_size), attention_mask_type,
+          token_ids);
+      return absl::OkStatus();
+    }
+    if (*mode == RingBufferAttentionMaskMode::kDecode && dims[2] == 1 &&
+        context_size >= sliding_window_size.value()) {
+      FillRingBufferDecodeAttentionMask(
+          mask_tensor_type.ElementType(), mask_lock_and_addr.second, batch_size,
+          batch_offset, context_size, start_timestep, steps,
+          sliding_window_size.value_or(context_size));
+      return absl::OkStatus();
+    }
+    if (*mode == RingBufferAttentionMaskMode::kVerify &&
+        context_size >= sliding_window_size.value()) {
+      FillRingBufferDecodeAttentionMask(
+          mask_tensor_type.ElementType(), mask_lock_and_addr.second, batch_size,
+          batch_offset, context_size, start_timestep, steps,
+          sliding_window_size.value_or(context_size));
+      return absl::OkStatus();
+    }
   }
 
-  if (is_ring_buffer_decode) {
-    FillRingBufferDecodeAttentionMask(
-        mask_tensor_type.ElementType(), mask_lock_and_addr.second, batch_size,
-        batch_offset, context_size, start_timestep,
-        sliding_window_size.value_or(context_size));
-    return absl::OkStatus();
+  if (attention_mask_type == proto::ATTENTION_MASK_TYPE_VISION_BIDIRECTIONAL &&
+      !token_ids.has_value()) {
+    return absl::InvalidArgumentError(
+        "Empty token ids with vision bidirectional attention mask type is "
+        "not allowed.");
   }
 
   for (int batch_idx = 0; batch_idx < batch_size; ++batch_idx) {

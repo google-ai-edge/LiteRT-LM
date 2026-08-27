@@ -612,14 +612,14 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::PrefillInternal(
             prefill_input_buffers[signatures_.input_attn_mask.value()],
             start_step,
             /*steps=*/prefill_length + input_idx, attn_params.global_type,
-            token_ids_span,
-            /*sliding_window_size=*/std::nullopt));
+            token_ids_span));
         if (signatures_.input_attn_mask_local.has_value()) {
           ABSL_RETURN_IF_ERROR(FillAttentionMask(
               prefill_input_buffers[signatures_.input_attn_mask_local.value()],
               start_step,
               /*steps=*/prefill_length + input_idx, attn_params.local_type,
-              token_ids_span, attn_params.sliding_window_size));
+              token_ids_span, attn_params.sliding_window_size,
+              RingBufferAttentionMaskMode::kPrefill));
         }
       }
       if (gpu_optimized_single_buffer_cache_) {
@@ -915,14 +915,14 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::DecodeInternal(
 
     ABSL_RETURN_IF_ERROR(FillAttentionMask(
         decode_input_buffers_[signatures_.input_attn_mask.value()], step,
-        /*steps=*/1, attn_params.global_type, token_ids_span,
-        /*sliding_window_size=*/std::nullopt));
+        /*steps=*/1, attn_params.global_type, token_ids_span));
     if (signatures_.input_attn_mask_local.has_value()) {
       ABSL_RETURN_IF_ERROR(FillAttentionMask(
           decode_input_buffers_[signatures_.input_attn_mask_local.value()],
           step,
           /*steps=*/1, attn_params.local_type, token_ids_span,
-          attn_params.sliding_window_size));
+          attn_params.sliding_window_size,
+          RingBufferAttentionMaskMode::kDecode));
     }
   }
   if (gpu_optimized_single_buffer_cache_) {
@@ -1905,7 +1905,7 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
           mtp_drafter,
           LlmLiteRtMtpDrafter::Create(lrt_env, resources, executor_settings,
                                       *compiled_model, *embedding_lookup,
-                                      ple_manager_opt));
+                                      ple_manager_opt, executor_metadata));
     }
   }
 
