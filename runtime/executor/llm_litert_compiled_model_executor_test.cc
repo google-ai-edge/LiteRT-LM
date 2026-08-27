@@ -461,14 +461,12 @@ class FakeSamplerWithInputHandling : public Sampler {
   bool CanHandleInput() const override { return true; }
   bool HandlesInput() const override { return inference_func_ != nullptr; }
 
-  absl::Status SetInferenceFuncAndInputTensors(
-      int (*run_inference_func)(void* arg), void* arg,
+  absl::Status SetInputTensorsAndInferenceFunc(
       const TensorBuffer* ids_tensor,
       const TensorBuffer* prev_input_positions_tensor,
       const TensorBuffer* input_positions_tensor,
       const TensorBuffer* prev_mask_tensor, const TensorBuffer* mask_tensor,
-      const TensorBuffer* prev_param_tensor,
-      const TensorBuffer* param_tensor) override {
+      int (*run_inference_func)(void* arg), void* arg) override {
     inference_func_ = run_inference_func;
     arg_ = arg;
     prev_input_positions_tensor_ = prev_input_positions_tensor;
