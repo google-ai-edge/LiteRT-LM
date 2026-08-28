@@ -143,6 +143,30 @@ LITERT_LM_C_API_EXPORT
 void litert_lm_embedding_engine_settings_set_audio_litert_dispatch_lib_dir(
     LiteRtLmEmbeddingEngineSettings* settings, const char* lib_dir);
 
+// Sets the maximum sequence length (in tokens) for text encoder signatures in
+// Embedding Engine Settings.
+//
+// @param settings The embedding engine settings.
+// @param max_input_length The maximum input length. Passing a non-positive
+//   value unsets the option.
+//
+// Added in version 0.2.0.
+LITERT_LM_C_API_EXPORT
+void litert_lm_embedding_engine_settings_set_max_input_length(
+    LiteRtLmEmbeddingEngineSettings* settings, int max_input_length);
+
+// Sets the desired number of vision tokens generated per image in Embedding
+// Engine Settings.
+//
+// @param settings The embedding engine settings.
+// @param vision_tokens_per_image The vision tokens per image. Passing a
+//   non-positive value unsets the option.
+//
+// Added in version 0.2.0.
+LITERT_LM_C_API_EXPORT
+void litert_lm_embedding_engine_settings_set_vision_tokens_per_image(
+    LiteRtLmEmbeddingEngineSettings* settings, int vision_tokens_per_image);
+
 // Creates LiteRT LM Embedding Options with default values (`normalize = true`,
 // `insert_special_tokens = true`). The caller is responsible for destroying
 // options using `litert_lm_embedding_options_delete`.

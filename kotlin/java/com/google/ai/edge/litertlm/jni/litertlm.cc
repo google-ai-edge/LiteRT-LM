@@ -1588,7 +1588,8 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateEmbeddingEngine)(
     jstring backend, jstring vision_backend, jstring audio_backend,
     jstring cache_dir, jstring main_npu_native_library_dir,
     jstring vision_npu_native_library_dir, jstring audio_npu_native_library_dir,
-    jint main_backend_num_threads, jint audio_backend_num_threads) {
+    jint main_backend_num_threads, jint audio_backend_num_threads,
+    jint max_input_length, jint vision_tokens_per_image) {
   ::litert::ScopedFile scoped_file;
   absl::StatusOr<litert::lm::ModelAssets> model_assets;
 
@@ -1776,6 +1777,13 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateEmbeddingEngine)(
       settings->GetAudioExecutorSettings().has_value()) {
     settings->GetMutableAudioExecutorSettings()->SetNumThreads(
         audio_backend_num_threads);
+  }
+
+  if (max_input_length > 0) {
+    settings->SetMaxInputLength(max_input_length);
+  }
+  if (vision_tokens_per_image > 0) {
+    settings->SetVisionTokensPerImage(vision_tokens_per_image);
   }
 
   auto engine = litert::lm::EmbeddingEngineImpl::Create(

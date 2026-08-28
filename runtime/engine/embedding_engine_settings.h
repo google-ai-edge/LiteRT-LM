@@ -43,13 +43,13 @@ class EmbeddingEngineSettings {
   // Maximum sequence length (in tokens) for text encoder signatures. If set,
   // EmbeddingEngine will automatically select signatures up to this length.
   std::optional<int> GetMaxInputLength() const;
-  void SetMaxInputLength(int max_input_length);
+  void SetMaxInputLength(std::optional<int> max_input_length);
 
   // Desired number of vision tokens generated per image. If set,
   // EmbeddingEngine will automatically select the smallest vision encoder
   // (and adapter) signatures and configure patch metadata accordingly.
   std::optional<int> GetVisionTokensPerImage() const;
-  void SetVisionTokensPerImage(int vision_tokens_per_image);
+  void SetVisionTokensPerImage(std::optional<int> vision_tokens_per_image);
 
   // Returns the EmbeddingExecutorSettings for the embedding model.
   const EmbeddingExecutorSettings& GetMainExecutorSettings() const;

@@ -69,6 +69,8 @@ class EmbeddingEngine(val config: EmbeddingEngineConfig) : AutoCloseable {
           (config.audioBackend as? Backend.NPU)?.nativeLibraryDir ?: "",
           mainBackendNumThreads,
           audioBackendNumThreads,
+          config.maxInputLength ?: -1,
+          config.visionTokensPerImage ?: -1,
         )
     }
   }

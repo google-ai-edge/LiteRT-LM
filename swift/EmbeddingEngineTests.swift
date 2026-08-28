@@ -57,6 +57,39 @@ class EmbeddingEngineTests: XCTestCase {
     XCTAssertFalse(isInit)
   }
 
+  func testEmbeddingEngineConfig_MaxInputLengthAndVisionTokens_IsCorrectlySet() async throws {
+    let config = EmbeddingEngineConfig(
+      modelPath: modelPath,
+      backend: .cpu(),
+      maxInputLength: 512,
+      visionTokensPerImage: 280
+    )
+
+    let engine = EmbeddingEngine(config: config)
+    let engineConfig = await engine.config
+
+    XCTAssertEqual(engineConfig.maxInputLength, 512)
+    XCTAssertEqual(engineConfig.visionTokensPerImage, 280)
+  }
+
+  func testComputeEmbedding_WithMaxInputLength_Success() async throws {
+    let config = EmbeddingEngineConfig(
+      modelPath: modelPath,
+      backend: .cpu(),
+      maxInputLength: 512
+    )
+    let engine = EmbeddingEngine(config: config)
+    try await engine.initialize()
+
+    let response = try await engine.computeEmbedding(
+      contents: [.text("'s")],
+      options: EmbeddingOptions(normalize: true)
+    )
+
+    XCTAssertFalse(response.embedding.isEmpty)
+    await engine.close()
+  }
+
   func testComputeEmbedding_Success() async throws {
     let config = EmbeddingEngineConfig(
       modelPath: modelPath,

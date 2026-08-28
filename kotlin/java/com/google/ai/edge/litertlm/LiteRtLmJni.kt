@@ -456,6 +456,7 @@ internal object LiteRtLmJni {
    * @return The sampler top_p.
    */
   external fun nativeSamplerTopP(capabilitiesPointer: Long): Float
+
   /**
    * Returns true if the model supports the given input modality.
    *
@@ -478,6 +479,8 @@ internal object LiteRtLmJni {
     audioNpuNativeLibraryDir: String,
     mainBackendNumThreads: Int,
     audioBackendNumThreads: Int,
+    maxInputLength: Int,
+    visionTokensPerImage: Int,
   ): Long
 
   /** Deletes the LiteRT-LM embedding engine. */

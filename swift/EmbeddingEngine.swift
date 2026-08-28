@@ -85,6 +85,16 @@ public actor EmbeddingEngine {
       litert_lm_embedding_engine_settings_set_cache_dir(settings, cacheDir)
     }
 
+    if let maxInputLength = config.maxInputLength {
+      litert_lm_embedding_engine_settings_set_max_input_length(
+        settings, Int32(maxInputLength))
+    }
+
+    if let visionTokensPerImage = config.visionTokensPerImage {
+      litert_lm_embedding_engine_settings_set_vision_tokens_per_image(
+        settings, Int32(visionTokensPerImage))
+    }
+
     guard let engineHandle = litert_lm_embedding_engine_create(settings) else {
       throw LiteRTLMError.embeddingEngine(.failedToCreateEngine)
     }

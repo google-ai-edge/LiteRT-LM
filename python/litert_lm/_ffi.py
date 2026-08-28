@@ -692,6 +692,14 @@ def _setup_lib_signatures(lib):
       ctypes.c_void_p,
       c_string_p,
   ]
+  lib.litert_lm_embedding_engine_settings_set_max_input_length.argtypes = [
+      ctypes.c_void_p,
+      ctypes.c_int,
+  ]
+  lib.litert_lm_embedding_engine_settings_set_vision_tokens_per_image.argtypes = [
+      ctypes.c_void_p,
+      ctypes.c_int,
+  ]
 
   # Embedding Options
   lib.litert_lm_embedding_options_create.restype = ctypes.c_void_p

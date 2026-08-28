@@ -33,6 +33,19 @@ TEST(EmbeddingEngineCTest, CreateSettingsSuccess) {
   litert_lm_embedding_engine_settings_delete(settings);
 }
 
+TEST(EmbeddingEngineCTest, CreateSettingsWithMaxInputLengthAndVisionTokens) {
+  auto* settings = litert_lm_embedding_engine_settings_create(
+      kTestEmbeddingModelPath, "cpu", nullptr, nullptr);
+  ASSERT_NE(settings, nullptr);
+  litert_lm_embedding_engine_settings_set_max_input_length(settings, 512);
+  litert_lm_embedding_engine_settings_set_vision_tokens_per_image(settings,
+                                                                  280);
+  // Passing a non-positive value unsets the option.
+  litert_lm_embedding_engine_settings_set_max_input_length(settings, 0);
+  litert_lm_embedding_engine_settings_set_vision_tokens_per_image(settings, -1);
+  litert_lm_embedding_engine_settings_delete(settings);
+}
+
 TEST(EmbeddingEngineCTest, CreateSettingsInvalidBackend) {
   auto* settings = litert_lm_embedding_engine_settings_create(
       kTestEmbeddingModelPath, "invalid_backend", nullptr, nullptr);
@@ -114,6 +127,38 @@ TEST(EmbeddingEngineCTest, ComputeEmbeddingSuccess) {
     sum_sq += values[i] * values[i];
   }
   EXPECT_NEAR(sum_sq, 1.0f, 1e-4f);
+
+  litert_lm_embedding_response_delete(response);
+  litert_lm_embedding_options_delete(options);
+  litert_lm_input_data_delete(input_data);
+  litert_lm_embedding_engine_delete(engine);
+}
+
+TEST(EmbeddingEngineCTest, ComputeEmbeddingWithMaxInputLengthSuccess) {
+  auto* settings = litert_lm_embedding_engine_settings_create(
+      kTestEmbeddingModelPath, "cpu", nullptr, nullptr);
+  ASSERT_NE(settings, nullptr);
+  litert_lm_embedding_engine_settings_set_max_input_length(settings, 512);
+
+  auto* engine = litert_lm_embedding_engine_create(settings);
+  litert_lm_embedding_engine_settings_delete(settings);
+  ASSERT_NE(engine, nullptr);
+
+  std::string prompt = "'s";
+  auto* input_data = litert_lm_input_data_create(kLiteRtLmInputDataTypeText,
+                                                 prompt.data(), prompt.size());
+  ASSERT_NE(input_data, nullptr);
+
+  const LiteRtLmInputData* inputs[] = {input_data};
+  auto* options = litert_lm_embedding_options_create();
+  litert_lm_embedding_options_set_normalize(options, true);
+
+  auto* response =
+      litert_lm_embedding_engine_compute_embedding(engine, inputs, 1, options);
+  ASSERT_NE(response, nullptr);
+
+  size_t dim = litert_lm_embedding_response_get_size(response);
+  EXPECT_GT(dim, 0);
 
   litert_lm_embedding_response_delete(response);
   litert_lm_embedding_options_delete(options);

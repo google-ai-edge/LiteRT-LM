@@ -24,6 +24,8 @@ package com.google.ai.edge.litertlm
  * @property audioBackend The execution backend for the audio encoder (if model is multimodal).
  * @property cacheDir Directory for compiled model artifacts and caching.
  * @property modelFd File descriptor for the model bundle. Supported on Android.
+ * @property maxInputLength Maximum sequence length (in tokens) for text encoder signatures.
+ * @property visionTokensPerImage Desired number of vision tokens generated per image.
  */
 data class EmbeddingEngineConfig
 @JvmOverloads
@@ -34,6 +36,8 @@ constructor(
   val audioBackend: Backend? = null,
   val cacheDir: String? = null,
   val modelFd: Int? = null,
+  val maxInputLength: Int? = null,
+  val visionTokensPerImage: Int? = null,
 ) {
   init {
     val hasPath = !modelPath.isNullOrEmpty()

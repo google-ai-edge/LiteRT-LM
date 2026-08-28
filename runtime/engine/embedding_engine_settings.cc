@@ -69,7 +69,8 @@ std::optional<int> EmbeddingEngineSettings::GetMaxInputLength() const {
   return max_input_length_;
 }
 
-void EmbeddingEngineSettings::SetMaxInputLength(int max_input_length) {
+void EmbeddingEngineSettings::SetMaxInputLength(
+    std::optional<int> max_input_length) {
   max_input_length_ = max_input_length;
 }
 
@@ -78,7 +79,7 @@ std::optional<int> EmbeddingEngineSettings::GetVisionTokensPerImage() const {
 }
 
 void EmbeddingEngineSettings::SetVisionTokensPerImage(
-    int vision_tokens_per_image) {
+    std::optional<int> vision_tokens_per_image) {
   vision_tokens_per_image_ = vision_tokens_per_image;
 }
 
