@@ -850,6 +850,135 @@ TEST(EngineSettingsTest, MaybeUpdateAndValidateTokenToIdReturnsError) {
   EXPECT_OK(IsExpectedLlmMetadata(settings->GetLlmMetadata().value()));
 }
 
+TEST(EngineSettingsTest, MaybeUpdateAndValidatePadTokenStr) {
+  auto model_assets = ModelAssets::Create("test_model_path_1");
+  ASSERT_OK(model_assets);
+  auto settings = EngineSettings::CreateDefault(*model_assets);
+  ASSERT_OK(settings);
+
+  MockTokenizer tokenizer;
+  EXPECT_CALL(tokenizer, TokenIdsToText).WillRepeatedly(Return("fake_text"));
+  EXPECT_CALL(tokenizer, TokenToId("<pad>")).WillRepeatedly(Return(10));
+  EXPECT_CALL(tokenizer, TokenToId("<eos>")).WillRepeatedly(Return(1));
+  EXPECT_CALL(tokenizer, TokenToId("<end_of_turn>")).WillRepeatedly(Return(1));
+  EXPECT_CALL(tokenizer, TokenToId("<ctrl>")).WillRepeatedly(Return(1));
+  EXPECT_CALL(tokenizer, TextToTokenIds)
+      .WillRepeatedly(Return(std::vector<int>{1}));
+  proto::LlmMetadata llm_metadata = CreateLlmMetadata();
+  llm_metadata.mutable_pad_token()->set_token_str("<pad>");
+
+  EXPECT_OK(settings->MaybeUpdateAndValidate(&tokenizer, &llm_metadata));
+  EXPECT_EQ(settings->GetMainExecutorSettings().GetPadTokenId(), 10);
+}
+
+TEST(EngineSettingsTest,
+     MaybeUpdateAndValidatePadTokenStrFallbackToTextToTokenIds) {
+  auto model_assets = ModelAssets::Create("test_model_path_1");
+  ASSERT_OK(model_assets);
+  auto settings = EngineSettings::CreateDefault(*model_assets);
+  ASSERT_OK(settings);
+
+  MockTokenizer tokenizer;
+  EXPECT_CALL(tokenizer, TokenIdsToText).WillRepeatedly(Return("fake_text"));
+  EXPECT_CALL(tokenizer, TextToTokenIds)
+      .WillRepeatedly(Return(std::vector<int>{1}));
+  EXPECT_CALL(tokenizer, TokenToId("<pad>"))
+      .WillRepeatedly(Return(absl::NotFoundError("")));
+  EXPECT_CALL(tokenizer, TextToTokenIds("<pad>"))
+      .WillRepeatedly(Return(std::vector<int>{10}));
+  EXPECT_CALL(tokenizer, TokenToId("<eos>")).WillRepeatedly(Return(1));
+  EXPECT_CALL(tokenizer, TokenToId("<end_of_turn>")).WillRepeatedly(Return(1));
+  EXPECT_CALL(tokenizer, TokenToId("<ctrl>")).WillRepeatedly(Return(1));
+  proto::LlmMetadata llm_metadata = CreateLlmMetadata();
+  llm_metadata.mutable_pad_token()->set_token_str("<pad>");
+
+  EXPECT_OK(settings->MaybeUpdateAndValidate(&tokenizer, &llm_metadata));
+  EXPECT_EQ(settings->GetMainExecutorSettings().GetPadTokenId(), 10);
+}
+
+TEST(EngineSettingsTest, MaybeUpdateAndValidatePadTokenIds) {
+  auto model_assets = ModelAssets::Create("test_model_path_1");
+  ASSERT_OK(model_assets);
+  auto settings = EngineSettings::CreateDefault(*model_assets);
+  ASSERT_OK(settings);
+
+  MockTokenizer tokenizer;
+  EXPECT_CALL(tokenizer, TokenIdsToText).WillRepeatedly(Return("fake_text"));
+  EXPECT_CALL(tokenizer, TokenToId).WillRepeatedly(Return(1));
+  EXPECT_CALL(tokenizer, TextToTokenIds)
+      .WillRepeatedly(Return(std::vector<int>{1}));
+  proto::LlmMetadata llm_metadata = CreateLlmMetadata();
+  llm_metadata.mutable_pad_token()->mutable_token_ids()->add_ids(42);
+
+  EXPECT_OK(settings->MaybeUpdateAndValidate(&tokenizer, &llm_metadata));
+  EXPECT_EQ(settings->GetMainExecutorSettings().GetPadTokenId(), 42);
+}
+
+TEST(EngineSettingsTest,
+     MaybeUpdateAndValidatePadTokenNotOverwritingUserConfig) {
+  auto model_assets = ModelAssets::Create("test_model_path_1");
+  ASSERT_OK(model_assets);
+  auto settings = EngineSettings::CreateDefault(*model_assets);
+  ASSERT_OK(settings);
+  settings->GetMutableMainExecutorSettings().SetPadTokenId(99);
+
+  MockTokenizer tokenizer;
+  EXPECT_CALL(tokenizer, TokenIdsToText).WillRepeatedly(Return("fake_text"));
+  EXPECT_CALL(tokenizer, TokenToId).WillRepeatedly(Return(1));
+  EXPECT_CALL(tokenizer, TextToTokenIds)
+      .WillRepeatedly(Return(std::vector<int>{1}));
+  proto::LlmMetadata llm_metadata = CreateLlmMetadata();
+  llm_metadata.mutable_pad_token()->mutable_token_ids()->add_ids(42);
+
+  EXPECT_OK(settings->MaybeUpdateAndValidate(&tokenizer, &llm_metadata));
+  EXPECT_EQ(settings->GetMainExecutorSettings().GetPadTokenId(), 99);
+}
+
+TEST(EngineSettingsTest,
+     MaybeUpdateAndValidatePadTokenMultipleIdsReturnsError) {
+  auto model_assets = ModelAssets::Create("test_model_path_1");
+  ASSERT_OK(model_assets);
+  auto settings = EngineSettings::CreateDefault(*model_assets);
+  ASSERT_OK(settings);
+
+  MockTokenizer tokenizer;
+  EXPECT_CALL(tokenizer, TokenIdsToText).WillRepeatedly(Return("fake_text"));
+  EXPECT_CALL(tokenizer, TokenToId).WillRepeatedly(Return(1));
+  EXPECT_CALL(tokenizer, TextToTokenIds)
+      .WillRepeatedly(Return(std::vector<int>{1}));
+  proto::LlmMetadata llm_metadata = CreateLlmMetadata();
+  llm_metadata.mutable_pad_token()->mutable_token_ids()->add_ids(42);
+  llm_metadata.mutable_pad_token()->mutable_token_ids()->add_ids(43);
+
+  EXPECT_THAT(settings->MaybeUpdateAndValidate(&tokenizer, &llm_metadata),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST(EngineSettingsTest,
+     MaybeUpdateAndValidatePadTokenStrMultipleIdsReturnsError) {
+  auto model_assets = ModelAssets::Create("test_model_path_1");
+  ASSERT_OK(model_assets);
+  auto settings = EngineSettings::CreateDefault(*model_assets);
+  ASSERT_OK(settings);
+
+  MockTokenizer tokenizer;
+  EXPECT_CALL(tokenizer, TokenIdsToText).WillRepeatedly(Return("fake_text"));
+  EXPECT_CALL(tokenizer, TextToTokenIds)
+      .WillRepeatedly(Return(std::vector<int>{1}));
+  EXPECT_CALL(tokenizer, TokenToId("<pad>"))
+      .WillRepeatedly(Return(absl::NotFoundError("")));
+  EXPECT_CALL(tokenizer, TextToTokenIds("<pad>"))
+      .WillRepeatedly(Return(std::vector<int>{10, 20}));
+  EXPECT_CALL(tokenizer, TokenToId("<eos>")).WillRepeatedly(Return(1));
+  EXPECT_CALL(tokenizer, TokenToId("<end_of_turn>")).WillRepeatedly(Return(1));
+  EXPECT_CALL(tokenizer, TokenToId("<ctrl>")).WillRepeatedly(Return(1));
+  proto::LlmMetadata llm_metadata = CreateLlmMetadata();
+  llm_metadata.mutable_pad_token()->set_token_str("<pad>");
+
+  EXPECT_THAT(settings->MaybeUpdateAndValidate(&tokenizer, &llm_metadata),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
 TEST(EngineSettingsTest, MaybeUpdateAndValidateNPU) {
   auto model_assets = ModelAssets::Create("test_model_path_1");
   ASSERT_OK(model_assets);

@@ -252,6 +252,7 @@ max_tokens: 1024
 activation_data_type: FLOAT16
 max_num_images: 1
 lora_rank: 0
+pad_token_id: -1
 cache_dir: )",
       kPathToCache, R"(
 cache_file: Not set
@@ -326,6 +327,7 @@ max_tokens: 1024
 activation_data_type: FLOAT16
 max_num_images: 1
 lora_rank: 0
+pad_token_id: -1
 cache_dir: )",
       kPathToCache, R"(
 cache_file: Not set

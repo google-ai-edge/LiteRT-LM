@@ -311,6 +311,38 @@ absl::Status EngineSettings::MaybeUpdateAndValidate(
     main_executor_settings_.SetMaxNumTokens(max_num_tokens);
   }
 
+  if (main_executor_settings_.GetPadTokenId() == -1 &&
+      metadata.has_pad_token()) {
+    if (metadata.pad_token().has_token_str()) {
+      if (tokenizer != nullptr) {
+        auto pad_token_id =
+            tokenizer->TokenToId(metadata.pad_token().token_str());
+        if (pad_token_id.ok()) {
+          main_executor_settings_.SetPadTokenId(*pad_token_id);
+        } else {
+          auto pad_token_ids =
+              tokenizer->TextToTokenIds(metadata.pad_token().token_str());
+          if (pad_token_ids.ok()) {
+            if (pad_token_ids->size() != 1) {
+              return absl::InvalidArgumentError(absl::StrCat(
+                  "Pad token should only contain a single token ID, but got ",
+                  pad_token_ids->size()));
+            }
+            main_executor_settings_.SetPadTokenId((*pad_token_ids)[0]);
+          }
+        }
+      }
+    } else if (metadata.pad_token().token_ids().ids_size() > 0) {
+      if (metadata.pad_token().token_ids().ids_size() != 1) {
+        return absl::InvalidArgumentError(absl::StrCat(
+            "Pad token should only contain a single token ID, but got ",
+            metadata.pad_token().token_ids().ids_size()));
+      }
+      main_executor_settings_.SetPadTokenId(
+          metadata.pad_token().token_ids().ids(0));
+    }
+  }
+
   // By default, the audio executor is configured to use the same max num
   // tokens as the main executor.
   if (audio_executor_settings_.has_value() &&

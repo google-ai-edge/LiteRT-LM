@@ -112,4 +112,7 @@ message LlmMetadata {
   // Note: Models exported prior to this field will return false even if they
   // support function calling.
   optional bool supports_function_calling = 12;
+
+  // Pad token used to pad input sequences.
+  optional TokenUnion pad_token = 13;
 }
