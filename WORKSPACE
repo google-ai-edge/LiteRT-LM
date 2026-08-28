@@ -92,6 +92,15 @@ http_archive(
     url = "https://github.com/abseil/abseil-cpp/archive/20260526.0.tar.gz",
 )
 
+# Kotlin rules
+http_archive(
+    name = "rules_kotlin",
+    patch_args = ["-p0"],
+    patches = ["@//:PATCH.rules_kotlin"],
+    sha256 = "3b772976fec7bdcda1d84b9d39b176589424c047eb2175bed09aac630e50af43",
+    url = "https://github.com/bazelbuild/rules_kotlin/releases/download/v1.9.6/rules_kotlin-v1.9.6.tar.gz",
+)
+
 # Toolchains for ML projects
 # Older version than one tensorflow uses as current tensorflow breaks workspace build.
 # Details: https://github.com/google-ml-infra/rules_ml_toolchain
@@ -181,9 +190,9 @@ load("@rules_jvm_external//:defs.bzl", "maven_install")
 maven_install(
     name = "maven",
     artifacts = [
-        "com.google.code.gson:gson:2.13.2",
-        "org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.9.0",
-        "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0",
+        "com.google.code.gson:gson:2.14.0",
+        "org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.11.0",
+        "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0",
     ],
     repositories = [
         "https://maven.google.com",
@@ -257,20 +266,15 @@ load(
 
 nccl_configure(name = "local_config_nccl")
 
-# Kotlin rules
-http_archive(
-    name = "rules_kotlin",
-    sha256 = "13d5b767d697473ced9b55547a18a6ab65ab3fae5440555deee8a44c886b50aa",
-    url = "https://github.com/bazelbuild/rules_kotlin/releases/download/v2.3.20/rules_kotlin-v2.3.20.tar.gz",
-)
+# Kotlin toolchain setup
 
 load("@rules_kotlin//kotlin:repositories.bzl", "kotlin_repositories")
 
-kotlin_repositories()  # if you want the default. Otherwise see custom kotlinc distribution below
+kotlin_repositories()
 
 load("@rules_kotlin//kotlin:core.bzl", "kt_register_toolchains")
 
-kt_register_toolchains()  # to use the default toolchain, otherwise see toolchains below
+kt_register_toolchains()
 
 # Rust (for HuggingFace Tokenizers)
 http_archive(
