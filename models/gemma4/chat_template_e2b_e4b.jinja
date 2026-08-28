@@ -1,9 +1,7 @@
 {%- macro format_parameters(properties) -%}
-    {%- set ns = namespace(found_first=false) -%}
     {%- for key, value in properties | dictsort -%}
         {%- set add_comma = false -%}
-        {%- if ns.found_first %},{% endif -%}
-        {%- set ns.found_first = true -%}
+        {%- if not loop.first %},{% endif -%}
         {{ key }}:{
             {%- if value['description'] -%}
                 description:<|"|>{{ value['description'] }}<|"|>
@@ -37,33 +35,29 @@
             {%- elif value['type'] | upper == 'ARRAY' -%}
                 {%- if value['items'] is mapping and value['items'] -%}
                     ,items:{
-                    {%- set ns_items = namespace(found_first=false) -%}
-                    {%- for item_key, item_value in value['items'] | dictsort -%}
-                        {%- if item_value is not none -%}
-                            {%- if ns_items.found_first %},{% endif -%}
-                            {%- set ns_items.found_first = true -%}
-                            {%- if item_key == 'properties' -%}
-                                properties:{
-                                {%- if item_value is mapping -%}
-                                    {{- format_parameters(item_value) -}}
-                                {%- endif -%}
-                                }
-                            {%- elif item_key == 'required' -%}
-                                required:[
-                                {%- for req_item in item_value -%}
-                                    <|"|>{{- req_item -}}<|"|>
-                                    {%- if not loop.last %},{% endif -%}
-                                {%- endfor -%}
-                                ]
-                            {%- elif item_key == 'type' -%}
-                                {%- if item_value is string -%}
-                                    type:{{ format_argument(item_value | upper) }}
-                                {%- else -%}
-                                    type:{{ format_argument(item_value | map('upper') | list) }}
-                                {%- endif -%}
-                            {%- else -%}
-                                {{ item_key }}:{{ format_argument(item_value) }}
+                    {%- for item_key, item_value in value['items'] | dictsort if item_value is not none -%}
+                        {%- if not loop.first %},{% endif -%}
+                        {%- if item_key == 'properties' -%}
+                            properties:{
+                            {%- if item_value is mapping -%}
+                                {{- format_parameters(item_value) -}}
                             {%- endif -%}
+                            }
+                        {%- elif item_key == 'required' -%}
+                            required:[
+                            {%- for req_item in item_value -%}
+                                <|"|>{{- req_item -}}<|"|>
+                                {%- if not loop.last %},{% endif -%}
+                            {%- endfor -%}
+                            ]
+                        {%- elif item_key == 'type' -%}
+                            {%- if item_value is string -%}
+                                type:{{ format_argument(item_value | upper) }}
+                            {%- else -%}
+                                type:{{ format_argument(item_value | map('upper') | list) }}
+                            {%- endif -%}
+                        {%- else -%}
+                            {{ item_key }}:{{ format_argument(item_value) }}
                         {%- endif -%}
                     {%- endfor -%}
                     }
@@ -114,10 +108,8 @@
         {{- 'true' if argument else 'false' -}}
     {%- elif argument is mapping -%}
         {{- '{' -}}
-        {%- set ns = namespace(found_first=false) -%}
         {%- for key, value in argument | dictsort -%}
-            {%- if ns.found_first %},{% endif -%}
-            {%- set ns.found_first = true -%}
+            {%- if not loop.first %},{% endif -%}
             {%- if escape_keys -%}
                 {{- '<|"|>' + key + '<|"|>' -}}
             {%- else -%}
@@ -189,10 +181,8 @@
                     {%- set function = tool_call['function'] -%}
                     {{- '<|tool_call>call:' + function['name'] + '{' -}}
                     {%- if function['arguments'] is mapping -%}
-                        {%- set ns_args = namespace(found_first=false) -%}
                         {%- for key, value in function['arguments'] | dictsort -%}
-                            {%- if ns_args.found_first %},{% endif -%}
-                            {%- set ns_args.found_first = true -%}
+                            {%- if not loop.first %},{% endif -%}
                             {{- key -}}:{{- format_argument(value, escape_keys=False) -}}
                         {%- endfor -%}
                     {%- elif function['arguments'] is string -%}
