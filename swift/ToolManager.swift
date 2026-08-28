@@ -15,7 +15,7 @@
 import Foundation
 
 /// Manages the discovery, schema generation, and execution of tools.
-public class ToolManager {
+public final class ToolManager: Sendable {
 
   /// A map of tool names to their corresponding Swift Types.
   /// We store the `Type` so we can instantiate new copies via Codable.

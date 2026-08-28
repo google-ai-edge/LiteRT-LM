@@ -54,13 +54,13 @@ private let recurringToolCallLimit = 25
 ///
 /// This class facilitates interaction with the LiteRT-LM model by handling message sending
 /// and response reception.
-public class Conversation {
+public final class Conversation: Sendable {
   private let logger = Logger(
     subsystem: "com.google.ai.edge.litertlm.swift",
     category: "Conversation"
   )
 
-  private var handle: CConversationHandle?
+  private let handle: CConversationHandle?
   private let toolManager: ToolManager
   private let automaticToolCalling: Bool
   private let engine: Engine
@@ -86,7 +86,6 @@ public class Conversation {
 
   deinit {
     if let handle = handle {
-      self.handle = nil
       litert_lm_conversation_delete(handle)
     }
   }
