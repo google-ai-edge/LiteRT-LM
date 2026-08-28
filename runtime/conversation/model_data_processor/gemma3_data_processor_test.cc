@@ -26,17 +26,19 @@
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "litert/cc/litert_layout.h"  // from @litert
 #include "runtime/components/prompt_template.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/gemma3_data_processor_config.h"
+#include "runtime/conversation/model_data_processor/model_data_processor.h"
 #include "runtime/conversation/model_data_processor/test_utils.h"
 #include "runtime/engine/io_types.h"
-#include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/test_utils.h"  // NOLINT
 #include "support/preprocessor/audio_preprocessor_miniaudio.h"
 #include "support/preprocessor/image_preprocessor.h"
+#include "support/tokenizer/tokenizer.h"
 
 namespace litert::lm {
 namespace {
@@ -44,6 +46,24 @@ namespace {
 using json = nlohmann::ordered_json;
 using ::testing::ElementsAre;
 using ::testing::status::IsOkAndHolds;
+
+class FakeNonSentencePieceTokenizer : public ::litert::support::Tokenizer {
+ public:
+  ::litert::support::TokenizerType GetTokenizerType() const override {
+    return ::litert::support::TokenizerType::kHuggingFace;
+  }
+  absl::StatusOr<std::vector<int>> TextToTokenIds(
+      absl::string_view text) override {
+    return std::vector<int>{};
+  }
+  absl::StatusOr<int> TokenToId(absl::string_view token) override { return 0; }
+  absl::StatusOr<std::string> TokenIdsToText(
+      absl::Span<const int> token_ids, bool skip_special_tokens) override {
+    return "";
+  }
+  std::vector<std::string> GetTokens() const override { return {}; }
+  int GetVocabSize() const override { return 0; }
+};
 
 class Gemma3DataProcessorTest : public ::testing::Test {
  protected:
@@ -1077,6 +1097,34 @@ TEST_F(Gemma3DataProcessorTest, CreateConstraintAlternativeToolFormat) {
   ])json");
 
   ASSERT_OK_AND_ASSIGN(auto constraint, processor->CreateConstraint(tools));
+}
+
+TEST_F(Gemma3DataProcessorTest, CreateConstraintWithNonSentencePieceTokenizer) {
+  FakeNonSentencePieceTokenizer fake_tokenizer;
+  ASSERT_OK_AND_ASSIGN(
+      auto processor,
+      Gemma3DataProcessor::Create(Gemma3DataProcessorConfig(),
+                                  /*preface=*/std::nullopt, &fake_tokenizer,
+                                  /*stop_token_ids=*/{},
+                                  /*enable_constrained_decoding=*/true));
+  const nlohmann::ordered_json tools = nlohmann::ordered_json::parse(R"json([
+    {
+      "name": "get_weather",
+      "description": "Gets weather information.",
+      "parameters": {
+        "properties": {
+          "location": {
+            "type": "STRING",
+            "description": "Weather location."
+          }
+        },
+        "required": ["location"]
+      }
+    }
+  ])json");
+
+  ASSERT_OK_AND_ASSIGN(auto constraint, processor->CreateConstraint(tools));
+  EXPECT_EQ(constraint, nullptr);
 }
 
 TEST_F(Gemma3DataProcessorTest, CloneState) {

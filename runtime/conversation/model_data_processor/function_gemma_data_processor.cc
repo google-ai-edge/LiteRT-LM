@@ -22,6 +22,7 @@
 #include <variant>
 #include <vector>
 
+#include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/memory/memory.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
@@ -37,6 +38,7 @@
 #include "runtime/components/tool_use/parser_utils.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/function_gemma_data_processor_config.h"
+#include "runtime/conversation/model_data_processor/model_data_processor.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/util/status_macros.h"
 #include "sentencepiece_model.pb.h"  // from @sentencepiece
@@ -194,33 +196,34 @@ FunctionGemmaDataProcessor::Create(
       constraint_provider(nullptr,
                           &LiteRtLmGemmaModelConstraintProvider_Destroy);
   if (enable_constrained_decoding) {
-    std::vector<const int*> stop_token_ids_ptrs;
-    std::vector<size_t> stop_token_lengths;
-    stop_token_ids_ptrs.reserve(stop_token_ids.size());
-    stop_token_lengths.reserve(stop_token_ids.size());
-    for (const auto& stop_tokens : stop_token_ids) {
-      stop_token_ids_ptrs.push_back(stop_tokens.data());
-      stop_token_lengths.push_back(stop_tokens.size());
-    }
     if (tokenizer->GetTokenizerType() != TokenizerType::kSentencePiece) {
-      return absl::InvalidArgumentError(
-          "Constrained decoding is only supported for SentencePiece "
-          "tokenizer.");
+      ABSL_LOG(WARNING)
+          << "Constrained decoding is only supported for SentencePiece "
+             "tokenizer.";
+    } else {
+      std::vector<const int*> stop_token_ids_ptrs;
+      std::vector<size_t> stop_token_lengths;
+      stop_token_ids_ptrs.reserve(stop_token_ids.size());
+      stop_token_lengths.reserve(stop_token_ids.size());
+      for (const auto& stop_tokens : stop_token_ids) {
+        stop_token_ids_ptrs.push_back(stop_tokens.data());
+        stop_token_lengths.push_back(stop_tokens.size());
+      }
+      auto sp_tokenizer =
+          reinterpret_cast<const SentencePieceTokenizer*>(tokenizer);
+      auto serialized_model_proto =
+          sp_tokenizer->GetProcessor().model_proto().SerializeAsString();
+      LiteRtLmGemmaModelConstraintProvider* provider =
+          LiteRtLmGemmaModelConstraintProvider_Create(
+              serialized_model_proto.data(), serialized_model_proto.size(),
+              stop_token_ids_ptrs.data(), stop_token_lengths.data(),
+              stop_token_ids.size());
+      if (provider == nullptr) {
+        return absl::InternalError(
+            "Failed to create GemmaModelConstraintProvider.");
+      }
+      constraint_provider.reset(provider);
     }
-    auto sp_tokenizer =
-        reinterpret_cast<const SentencePieceTokenizer*>(tokenizer);
-    auto serialized_model_proto =
-        sp_tokenizer->GetProcessor().model_proto().SerializeAsString();
-    LiteRtLmGemmaModelConstraintProvider* provider =
-        LiteRtLmGemmaModelConstraintProvider_Create(
-            serialized_model_proto.data(), serialized_model_proto.size(),
-            stop_token_ids_ptrs.data(), stop_token_lengths.data(),
-            stop_token_ids.size());
-    if (provider == nullptr) {
-      return absl::InternalError(
-          "Failed to create GemmaModelConstraintProvider.");
-    }
-    constraint_provider.reset(provider);
   }
   return absl::WrapUnique(new FunctionGemmaDataProcessor(
       std::move(constraint_provider), config, preface));

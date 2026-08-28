@@ -29,12 +29,16 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "runtime/components/prompt_template.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/function_gemma_data_processor_config.h"
+#include "runtime/conversation/model_data_processor/model_data_processor.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/util/test_utils.h"  // NOLINT
+#include "support/tokenizer/tokenizer.h"
 
 namespace litert::lm {
 namespace {
@@ -69,11 +73,30 @@ MATCHER_P(HasInputText, text_input, "") {
     return false;
   }
   auto text_bytes = std::get<InputText>(arg).GetRawTextString();
-  if (!text_bytes.ok()) {
+  auto expected_text_bytes = text_input->GetRawTextString();
+  if (!text_bytes.ok() || !expected_text_bytes.ok()) {
     return false;
   }
-  return text_bytes.value() == text_input->GetRawTextString().value();
+  return *text_bytes == *expected_text_bytes;
 }
+
+class FakeNonSentencePieceTokenizer : public ::litert::support::Tokenizer {
+ public:
+  ::litert::support::TokenizerType GetTokenizerType() const override {
+    return ::litert::support::TokenizerType::kHuggingFace;
+  }
+  absl::StatusOr<std::vector<int>> TextToTokenIds(
+      absl::string_view text) override {
+    return std::vector<int>{};
+  }
+  absl::StatusOr<int> TokenToId(absl::string_view token) override { return 0; }
+  absl::StatusOr<std::string> TokenIdsToText(
+      absl::Span<const int> token_ids, bool skip_special_tokens) override {
+    return "";
+  }
+  std::vector<std::string> GetTokens() const override { return {}; }
+  int GetVocabSize() const override { return 0; }
+};
 
 class FunctionGemmaDataProcessorTest : public ::testing::Test {
  protected:
