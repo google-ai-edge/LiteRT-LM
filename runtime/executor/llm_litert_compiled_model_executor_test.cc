@@ -14,6 +14,7 @@
 
 #include "runtime/executor/llm_litert_compiled_model_executor.h"
 
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -26,6 +27,7 @@
 #include <random>
 #include <string>
 #include <system_error>  // NOLINT: Required for std::error_code used with std::filesystem.
+#include <thread>        // NOLINT(build/c++11)
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -853,6 +855,46 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest, UpdateExecutorSettingsTest) {
   ASSERT_OK_AND_ASSIGN(auto updated_settings, executor->GetExecutorSettings());
   EXPECT_EQ(updated_settings.GetBackend(), Backend::GPU);
   EXPECT_EQ(updated_settings.GetMaxNumTokens(), kMaxNumTokens + 1);
+}
+
+TEST(LlmLiteRtCompiledModelExecutorStaticTest,
+     ConcurrentUpdateAndGetExecutorSettingsTest) {
+  auto model_path =
+      std::filesystem::path(::testing::SrcDir()) / kTestStaticModelPath;
+  ASSERT_OK_AND_ASSIGN(
+      auto model_resources,
+      CreateExecutorModelResourcesLitertLm(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(model_path.string()));
+  auto executor_settings =
+      LlmExecutorSettings::CreateDefault(model_assets, Backend::CPU);
+  ASSERT_OK(executor_settings);
+  executor_settings->SetMaxNumTokens(kMaxNumTokens);
+
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  ASSERT_OK_AND_ASSIGN(auto executor,
+                       LlmLiteRtCompiledModelExecutorStatic::Create(
+                           *executor_settings, env, *model_resources));
+
+  std::atomic<bool> stop = false;
+  std::thread reader([&]() {
+    while (!stop.load()) {
+      auto settings = executor->GetExecutorSettings();
+      EXPECT_OK(settings);
+    }
+  });
+
+  for (int i = 0; i < 50; ++i) {
+    auto new_executor_settings =
+        LlmExecutorSettings::CreateDefault(model_assets, Backend::CPU);
+    ASSERT_OK(new_executor_settings);
+    new_executor_settings->SetMaxNumTokens(kMaxNumTokens + i);
+    EXPECT_OK(executor->UpdateExecutorSettings(*new_executor_settings));
+  }
+
+  stop.store(true);
+  reader.join();
 }
 
 TEST(LlmLiteRtCompiledModelExecutorStaticTest, CreateExecutorTest_WithCache) {

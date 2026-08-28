@@ -295,6 +295,7 @@ cc_library(
         ":llm_litert_mtp_drafter",
         ":llm_processed_context",
         ":state_interface",
+        "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/cleanup",
         "@com_google_absl//absl/container:flat_hash_map",
@@ -306,6 +307,7 @@ cc_library(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/types:span",
         "@litert//litert/c:litert_common",  # buildcleaner: keep
         "@litert//litert/c/internal:litert_external_litert_buffer_context",  # buildcleaner: keep
