@@ -96,6 +96,7 @@ class EmbeddingEngine(val config: EmbeddingEngineConfig) : AutoCloseable {
         options.normalize,
         options.insertSpecialTokens,
         options.outputSize,
+        options.visionTokensPerImage,
       )
     }
   }
@@ -122,6 +123,7 @@ class EmbeddingEngine(val config: EmbeddingEngineConfig) : AutoCloseable {
           options.normalize,
           options.insertSpecialTokens,
           options.outputSize,
+          options.visionTokensPerImage,
         )
         .toList()
     }

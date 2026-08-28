@@ -269,6 +269,26 @@ LITERT_LM_C_API_EXPORT
 int litert_lm_embedding_options_get_output_size(
     const LiteRtLmEmbeddingOptions* options);
 
+// Sets the vision tokens per image.
+//
+// @param options The options to modify.
+// @param vision_tokens_per_image The number of vision tokens per image. Passing
+//   a non-positive value unsets the option.
+//
+// Added in version 0.2.0.
+LITERT_LM_C_API_EXPORT
+void litert_lm_embedding_options_set_vision_tokens_per_image(
+    LiteRtLmEmbeddingOptions* options, int vision_tokens_per_image);
+
+// Gets the vision tokens per image.
+//
+// @param options The options to inspect.
+// @return The vision tokens per image configured in options, or 0 if not set.
+//
+// Added in version 0.2.0.
+LITERT_LM_C_API_EXPORT
+int litert_lm_embedding_options_get_vision_tokens_per_image(
+    const LiteRtLmEmbeddingOptions* options);
 // Destroys a LiteRT LM Embedding Response.
 //
 // @param response The response to destroy.

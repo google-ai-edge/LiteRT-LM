@@ -57,12 +57,15 @@ class EmbeddingOptions:
       maximum supported signature length. If None, uses the C++ engine default.
     output_size: The output embedding size to truncate the embedding to. If
       None, uses the C++ engine default.
+    vision_tokens_per_image: The number of vision soft tokens to generate per
+      image. If None, uses the C++ engine default.
   """
 
   normalize: bool | None = None
   insert_special_tokens: bool | None = None
   input_overflow_strategy: InputOverflowStrategy | None = None
   output_size: int | None = None
+  vision_tokens_per_image: int | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -272,6 +275,10 @@ class EmbeddingEngine:
         self._lib.litert_lm_embedding_options_set_output_size(
             options_ptr, options.output_size
         )
+      if options.vision_tokens_per_image is not None:
+        self._lib.litert_lm_embedding_options_set_vision_tokens_per_image(
+            options_ptr, options.vision_tokens_per_image
+        )
 
       created_ptrs = [_create_c_input_data(self._lib, item) for item in items]
 
@@ -340,6 +347,10 @@ class EmbeddingEngine:
       if options.output_size is not None:
         self._lib.litert_lm_embedding_options_set_output_size(
             options_ptr, options.output_size
+        )
+      if options.vision_tokens_per_image is not None:
+        self._lib.litert_lm_embedding_options_set_vision_tokens_per_image(
+            options_ptr, options.vision_tokens_per_image
         )
 
       batch_inputs_arrays: list[Any] = []

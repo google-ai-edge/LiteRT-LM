@@ -1815,7 +1815,7 @@ LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeDeleteEmbeddingEngine)(
 LITERTLM_JNIEXPORT jobject JNICALL JNI_METHOD(nativeComputeEmbedding)(
     JNIEnv* env, jclass thiz, jlong embedding_engine_pointer,
     jobjectArray input_data, jobject normalize, jobject insert_special_tokens,
-    jobject output_size) {
+    jobject output_size, jobject vision_tokens_per_image) {
   auto* engine =
       reinterpret_cast<litert::lm::EmbeddingEngine*>(embedding_engine_pointer);
   if (!engine) {
@@ -1840,6 +1840,10 @@ LITERTLM_JNIEXPORT jobject JNICALL JNI_METHOD(nativeComputeEmbedding)(
   }
   if (auto opt_size = GetOptionalInt(env, output_size); opt_size.has_value()) {
     options.output_size = *opt_size;
+  }
+  if (auto opt_vision_tokens = GetOptionalInt(env, vision_tokens_per_image);
+      opt_vision_tokens.has_value()) {
+    options.vision_tokens_per_image = *opt_vision_tokens;
   }
 
   auto response = engine->ComputeEmbedding(contents, options);
@@ -1869,7 +1873,8 @@ LITERTLM_JNIEXPORT jobject JNICALL JNI_METHOD(nativeComputeEmbedding)(
 LITERTLM_JNIEXPORT jobjectArray JNICALL JNI_METHOD(nativeComputeEmbeddingBatch)(
     JNIEnv* env, jclass thiz, jlong embedding_engine_pointer,
     jobjectArray input_data_batch, jobject normalize,
-    jobject insert_special_tokens, jobject output_size) {
+    jobject insert_special_tokens, jobject output_size,
+    jobject vision_tokens_per_image) {
   auto* engine =
       reinterpret_cast<litert::lm::EmbeddingEngine*>(embedding_engine_pointer);
   if (!engine) {
@@ -1902,6 +1907,10 @@ LITERTLM_JNIEXPORT jobjectArray JNICALL JNI_METHOD(nativeComputeEmbeddingBatch)(
   }
   if (auto opt_size = GetOptionalInt(env, output_size); opt_size.has_value()) {
     options.output_size = *opt_size;
+  }
+  if (auto opt_vision_tokens = GetOptionalInt(env, vision_tokens_per_image);
+      opt_vision_tokens.has_value()) {
+    options.vision_tokens_per_image = *opt_vision_tokens;
   }
 
   auto batch_response = engine->ComputeEmbeddingBatch(contents_batch, options);

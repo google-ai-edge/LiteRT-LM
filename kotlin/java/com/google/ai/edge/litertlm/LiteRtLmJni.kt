@@ -493,6 +493,7 @@ internal object LiteRtLmJni {
     normalize: Boolean?,
     insertSpecialTokens: Boolean?,
     outputSize: Int?,
+    visionTokensPerImage: Int?,
   ): EmbeddingResponse
 
   /** Computes embeddings for a batch of input data requests. */
@@ -502,5 +503,6 @@ internal object LiteRtLmJni {
     normalize: Boolean?,
     insertSpecialTokens: Boolean?,
     outputSize: Int?,
+    visionTokensPerImage: Int?,
   ): Array<EmbeddingResponse>
 }

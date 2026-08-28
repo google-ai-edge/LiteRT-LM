@@ -69,18 +69,27 @@ public struct EmbeddingOptions: Hashable, Sendable {
   /// The output embedding size to truncate the embedding to. If `nil`, uses the C++ engine default.
   public let outputSize: Int?
 
+  /// The number of vision soft tokens to generate per image.
+  ///
+  /// If `nil`, uses the C++ engine default.
+  public let visionTokensPerImage: Int?
+
   /// - Parameters:
   ///   - normalize: Whether to L2-normalize the output embedding vector. If `nil`, uses the C++ engine default.
   ///   - insertSpecialTokens: Whether to automatically insert special tokens. If `nil`, uses the C++ engine default.
   ///   - outputSize: The output embedding size to truncate to. If `nil`, uses the C++ engine default.
+  ///   - visionTokensPerImage: The number of vision soft tokens to generate per image. If `nil`,
+  ///     uses the C++ engine default.
   public init(
     normalize: Bool? = nil,
     insertSpecialTokens: Bool? = nil,
-    outputSize: Int? = nil
+    outputSize: Int? = nil,
+    visionTokensPerImage: Int? = nil
   ) {
     self.normalize = normalize
     self.insertSpecialTokens = insertSpecialTokens
     self.outputSize = outputSize
+    self.visionTokensPerImage = visionTokensPerImage
   }
 }
 

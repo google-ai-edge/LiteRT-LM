@@ -113,6 +113,30 @@ TEST(EmbeddingEngineCTest, OptionsOutputSize) {
   litert_lm_embedding_options_delete(options);
 }
 
+TEST(EmbeddingEngineCTest, OptionsVisionTokensPerImage) {
+  auto* options = litert_lm_embedding_options_create();
+  ASSERT_NE(options, nullptr);
+  EXPECT_EQ(litert_lm_embedding_options_get_vision_tokens_per_image(options),
+            0);
+
+  litert_lm_embedding_options_set_vision_tokens_per_image(options, 70);
+  EXPECT_EQ(litert_lm_embedding_options_get_vision_tokens_per_image(options),
+            70);
+
+  litert_lm_embedding_options_set_vision_tokens_per_image(options, 0);
+  EXPECT_EQ(litert_lm_embedding_options_get_vision_tokens_per_image(options),
+            0);
+
+  litert_lm_embedding_options_set_vision_tokens_per_image(options, 70);
+  EXPECT_EQ(litert_lm_embedding_options_get_vision_tokens_per_image(options),
+            70);
+
+  litert_lm_embedding_options_set_vision_tokens_per_image(options, -1);
+  EXPECT_EQ(litert_lm_embedding_options_get_vision_tokens_per_image(options),
+            0);
+
+  litert_lm_embedding_options_delete(options);
+}
 TEST(EmbeddingEngineCTest, ComputeEmbeddingSuccess) {
   auto* settings = litert_lm_embedding_engine_settings_create(
       kTestEmbeddingModelPath, "cpu", nullptr, nullptr);
