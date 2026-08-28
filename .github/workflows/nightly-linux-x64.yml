@@ -61,7 +61,6 @@ jobs:
             --define=DEV_BUILD=${{ env.DEV_BUILD }} \
             --define=DEV_VERSION=${DATE} \
             --define=litert_runtime_link_mode=dynamic \
-            --define=resolve_symbols_in_exec=false \
             --define=xnn_enable_avxvnniint8=false \
             -c opt //python/litert_lm:wheel
 

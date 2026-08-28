@@ -293,7 +293,6 @@ jobs:
         run: |
           bazelisk build --disk_cache=~/.cache/bazel --repository_cache=~/.cache/bazel/repo --config=linux_x86_64 \
             --define=litert_runtime_link_mode=dynamic \
-            --define=resolve_symbols_in_exec=false \
             //runtime/engine:litert_lm_main
 
       - name: Run pytest
