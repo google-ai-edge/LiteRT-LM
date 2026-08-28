@@ -18,7 +18,7 @@ import os
 import unittest.mock
 
 from absl.testing import absltest
-from click.testing import CliRunner
+from click import testing
 from prompt_toolkit import key_binding
 
 import litert_lm
@@ -30,7 +30,7 @@ from litert_lm_cli.commands import run as run_cmd
 class MainTest(absltest.TestCase):
 
   def test_help_shorthand(self):
-    runner = CliRunner()
+    runner = testing.CliRunner()
     result_help = runner.invoke(main.cli, ["--help"])
     result_h = runner.invoke(main.cli, ["-h"])
     self.assertEqual(result_help.exit_code, 0)
@@ -47,7 +47,7 @@ class MainTest(absltest.TestCase):
       common.cache_dir_value_from_cache_mode("invalid")
 
   def test_subcommand_help_shorthand(self):
-    runner = CliRunner()
+    runner = testing.CliRunner()
     result_help = runner.invoke(main.cli, ["list", "--help"])
     result_h = runner.invoke(main.cli, ["list", "-h"])
     self.assertEqual(result_help.exit_code, 0)
@@ -67,7 +67,7 @@ class MainTest(absltest.TestCase):
     mock_from_model_ref.return_value = mock_model
     mock_model.exists.return_value = True
 
-    runner = CliRunner()
+    runner = testing.CliRunner()
     # Mocking stdin by providing input to the runner
     result = runner.invoke(
         main.cli, ["run", "my-model"], input="Hello from pipe\n"
@@ -91,7 +91,7 @@ class MainTest(absltest.TestCase):
     mock_from_model_ref.return_value = mock_model
     mock_model.exists.return_value = True
 
-    runner = CliRunner()
+    runner = testing.CliRunner()
     # Mocking stdin by providing input to the runner
     result = runner.invoke(
         main.cli,
@@ -117,8 +117,8 @@ class MainTest(absltest.TestCase):
     mock_from_model_ref.return_value = mock_model
     mock_model.exists.return_value = True
 
-    runner = CliRunner()
-    # No input provided, isatty will be False in CliRunner
+    runner = testing.CliRunner()
+    # No input provided, isatty will be False in testing.CliRunner
     result = runner.invoke(main.cli, ["run", "my-model"])
 
     self.assertEqual(result.exit_code, 0)
@@ -148,7 +148,7 @@ class MainTest(absltest.TestCase):
       mock_from_model_ref.return_value = mock_model
       mock_model.exists.return_value = True
 
-      runner = CliRunner()
+      runner = testing.CliRunner()
       result = runner.invoke(
           main.cli,
           [
@@ -190,7 +190,7 @@ class MainTest(absltest.TestCase):
 
     for choice in ["fp32", "fp16", "int16", "int8"]:
       mock_run_interactive.reset_mock()
-      runner = CliRunner()
+      runner = testing.CliRunner()
       result = runner.invoke(
           main.cli,
           [
@@ -211,7 +211,7 @@ class MainTest(absltest.TestCase):
       )
 
   def test_run_activation_data_type_flag_invalid(self):
-    runner = CliRunner()
+    runner = testing.CliRunner()
     result = runner.invoke(
         main.cli,
         [
@@ -240,7 +240,7 @@ class MainTest(absltest.TestCase):
 
     for choice in ["fp32", "fp16", "int16", "int8"]:
       mock_run_benchmark.reset_mock()
-      runner = CliRunner()
+      runner = testing.CliRunner()
       result = runner.invoke(
           main.cli,
           [
@@ -259,7 +259,7 @@ class MainTest(absltest.TestCase):
       )
 
   def test_benchmark_activation_data_type_flag_invalid(self):
-    runner = CliRunner()
+    runner = testing.CliRunner()
     result = runner.invoke(
         main.cli,
         [
@@ -283,7 +283,7 @@ class MainTest(absltest.TestCase):
       mock_from_model_ref.return_value = mock_model
       mock_model.exists.return_value = True
 
-      runner = CliRunner()
+      runner = testing.CliRunner()
       result = runner.invoke(
           main.cli,
           [
@@ -302,7 +302,7 @@ class MainTest(absltest.TestCase):
       self.assertEqual(kwargs["thinking_budget"], 10)
 
   def test_run_no_template_flag(self):
-    runner = CliRunner()
+    runner = testing.CliRunner()
     # Test that --no-template is a valid option for the run command.
     # We use --help to avoid actually running the model.
     result = runner.invoke(main.cli, ["run", "--help"])
@@ -322,7 +322,7 @@ class MainTest(absltest.TestCase):
     mock_from_model_ref.return_value = mock_model
     mock_model.exists.return_value = True
 
-    runner = CliRunner()
+    runner = testing.CliRunner()
     result = runner.invoke(
         main.cli,
         [
@@ -356,7 +356,7 @@ class MainTest(absltest.TestCase):
     mock_from_model_ref.return_value = mock_model
     mock_model.exists.return_value = True
 
-    runner = CliRunner()
+    runner = testing.CliRunner()
     result = runner.invoke(
         main.cli,
         [
@@ -389,7 +389,7 @@ class MainTest(absltest.TestCase):
     # Mock expanduser to return the path as is, or a fake expanded path
     mock_expanduser.side_effect = lambda x: x.replace("~", "/home/user")
 
-    runner = CliRunner()
+    runner = testing.CliRunner()
     with runner.isolated_filesystem():
       # We need to make sure the "expanded" path exists for the check in main.py
       # Since we are in an isolated filesystem, we'll just use simple names
@@ -441,7 +441,7 @@ class MainTest(absltest.TestCase):
     mock_from_model_ref.return_value = mock_model
     mock_model.exists.return_value = True
 
-    runner = CliRunner()
+    runner = testing.CliRunner()
     result = runner.invoke(
         main.cli,
         [
@@ -475,7 +475,7 @@ class MainTest(absltest.TestCase):
     mock_from_model_ref.return_value = mock_model
     mock_model.exists.return_value = True
 
-    runner = CliRunner()
+    runner = testing.CliRunner()
     result = runner.invoke(
         main.cli,
         [
@@ -509,7 +509,7 @@ class MainTest(absltest.TestCase):
     mock_from_model_ref.return_value = mock_model
     mock_model.exists.return_value = True
 
-    runner = CliRunner()
+    runner = testing.CliRunner()
     result = runner.invoke(
         main.cli,
         [
@@ -541,7 +541,7 @@ class MainTest(absltest.TestCase):
     mock_from_model_ref.return_value = mock_model
     mock_model.exists.return_value = True
 
-    runner = CliRunner()
+    runner = testing.CliRunner()
     result = runner.invoke(
         main.cli,
         [
@@ -571,7 +571,7 @@ class MainTest(absltest.TestCase):
     mock_from_model_ref.return_value = mock_model
     mock_model.exists.return_value = True
 
-    runner = CliRunner()
+    runner = testing.CliRunner()
     result = runner.invoke(
         main.cli,
         [
@@ -605,7 +605,7 @@ class MainTest(absltest.TestCase):
     mock_from_model_ref.return_value = mock_model
     mock_model.exists.return_value = True
 
-    runner = CliRunner()
+    runner = testing.CliRunner()
     with runner.isolated_filesystem():
       with open("tmpl.jinja", "w") as f:
         f.write("custom tmpl")
@@ -642,7 +642,7 @@ class MainTest(absltest.TestCase):
     mock_from_model_ref.return_value = mock_model
     mock_model.exists.return_value = True
 
-    runner = CliRunner()
+    runner = testing.CliRunner()
     with runner.isolated_filesystem():
       with open("tmpl.jinja", "w") as f:
         f.write("my jinja template")
@@ -685,7 +685,7 @@ class MainTest(absltest.TestCase):
     mock_stat_result.st_mtime = 1741212053  # 2026-03-05 17:00:53
     mock_stat.return_value = mock_stat_result
 
-    runner = CliRunner()
+    runner = testing.CliRunner()
     result = runner.invoke(main.cli, ["list"])
 
     self.assertEqual(result.exit_code, 0)
@@ -695,7 +695,7 @@ class MainTest(absltest.TestCase):
     self.assertNotIn("Unknown", result.output)
 
   def test_run_invalid_cpu_thread_count(self):
-    runner = CliRunner()
+    runner = testing.CliRunner()
     result = runner.invoke(
         main.cli,
         ["run", "my-model", "--cpu-thread-count", "0"],
@@ -721,7 +721,7 @@ class MainTest(absltest.TestCase):
     mock_model.model_path = "/path/to/my-model/model.litertlm"
     mock_builder_unpack.return_value = "/path/to/unpacked/model.toml"
 
-    runner = CliRunner()
+    runner = testing.CliRunner()
     with runner.isolated_filesystem():
       result = runner.invoke(
           main.cli, ["unpack", "my-model", "--output-dir", "unpacked"]
@@ -746,7 +746,7 @@ class MainTest(absltest.TestCase):
     mock_model.model_path = "/path/to/my-model/model.litertlm"
     mock_builder_unpack.return_value = "/path/to/unpacked/model.toml"
 
-    runner = CliRunner()
+    runner = testing.CliRunner()
     with runner.isolated_filesystem():
       result = runner.invoke(
           main.cli,
@@ -780,7 +780,7 @@ class MainTest(absltest.TestCase):
     mock_model.exists.return_value = True
     mock_model.model_path = "/path/to/my-model/model.litertlm"
 
-    runner = CliRunner()
+    runner = testing.CliRunner()
     with runner.isolated_filesystem():
       with open("existing_file", "w") as f:
         f.write("dummy")
@@ -809,7 +809,7 @@ class MainTest(absltest.TestCase):
     mock_model.model_path = "/path/to/my-model/model.litertlm"
     mock_builder_unpack.return_value = "my-model.litertlm.unpacked/model.toml"
 
-    runner = CliRunner()
+    runner = testing.CliRunner()
     with runner.isolated_filesystem():
       # Create a dummy source file to simulate unpacking a local .litertlm file
       with open("my-model.litertlm", "w") as f:
@@ -834,7 +834,7 @@ class MainTest(absltest.TestCase):
     mock_model.exists.return_value = True
     mock_model.model_path = "/path/to/my-model/model.litertlm"
 
-    runner = CliRunner()
+    runner = testing.CliRunner()
     with runner.isolated_filesystem():
       with open("my-model", "w") as f:
         f.write("existing file")
@@ -863,7 +863,7 @@ class MainTest(absltest.TestCase):
     mock_model.exists.return_value = True
     mock_model.model_path = "/path/to/my-model/model.litertlm"
 
-    runner = CliRunner()
+    runner = testing.CliRunner()
     with runner.isolated_filesystem():
       os.makedirs("sub/dir", exist_ok=True)
       with open("sub/dir/model.litertlm", "w") as f:
@@ -888,7 +888,7 @@ class MainTest(absltest.TestCase):
     mock_model.exists.return_value = True
     mock_model.model_path = "/path/to/my-model/model.litertlm"
 
-    runner = CliRunner()
+    runner = testing.CliRunner()
     with runner.isolated_filesystem():
       result = runner.invoke(main.cli, ["unpack", "my-model"])
       self.assertEqual(result.exit_code, 0)
@@ -913,7 +913,7 @@ class MainTest(absltest.TestCase):
     mock_model.model_path = "/path/to/my-model/model.litertlm"
     mock_builder_unpack.return_value = "/path/to/unpacked/model.toml"
 
-    runner = CliRunner()
+    runner = testing.CliRunner()
     with runner.isolated_filesystem():
       result = runner.invoke(
           main.cli, ["unpack", "my-model", "--output-dir", "~/unpacked"]
@@ -928,7 +928,7 @@ class MainTest(absltest.TestCase):
       "litert_lm_builder.litertlm_builder.pack"
   )
   def test_pack_command(self, mock_builder_pack):
-    runner = CliRunner()
+    runner = testing.CliRunner()
     with runner.isolated_filesystem():
       with open("model.toml", "w") as f:
         f.write('[[section]]\nsection_type = "TFLiteModel"')
@@ -945,7 +945,7 @@ class MainTest(absltest.TestCase):
       "litert_lm_builder.litertlm_builder.pack"
   )
   def test_pack_command_with_chat_template(self, mock_builder_pack):
-    runner = CliRunner()
+    runner = testing.CliRunner()
     with runner.isolated_filesystem():
       with open("model.toml", "w") as f:
         f.write('[[section]]\nsection_type = "TFLiteModel"')
@@ -976,7 +976,7 @@ class MainTest(absltest.TestCase):
       "litert_lm_builder.litertlm_builder.pack"
   )
   def test_pack_command_default_output(self, mock_builder_pack):
-    runner = CliRunner()
+    runner = testing.CliRunner()
     with runner.isolated_filesystem():
       with open("model.toml", "w") as f:
         f.write('[[section]]\nsection_type = "TFLiteModel"')
@@ -990,7 +990,7 @@ class MainTest(absltest.TestCase):
       "litert_lm_builder.litertlm_builder.pack"
   )
   def test_pack_command_directory_fails(self, mock_builder_pack):
-    runner = CliRunner()
+    runner = testing.CliRunner()
     with runner.isolated_filesystem():
       os.makedirs("my_dir", exist_ok=True)
       result = runner.invoke(main.cli, ["pack", "my_dir"])
@@ -1002,7 +1002,7 @@ class MainTest(absltest.TestCase):
       "litert_lm_builder.litertlm_builder.pack"
   )
   def test_pack_command_default_config_not_found(self, mock_builder_pack):
-    runner = CliRunner()
+    runner = testing.CliRunner()
     with runner.isolated_filesystem():
       result = runner.invoke(main.cli, ["pack"])
       self.assertEqual(result.exit_code, 2)
@@ -1016,7 +1016,7 @@ class MainTest(absltest.TestCase):
       "litert_lm_builder.litertlm_builder.pack"
   )
   def test_pack_command_with_directory(self, mock_builder_pack):
-    runner = CliRunner()
+    runner = testing.CliRunner()
     with runner.isolated_filesystem():
       os.makedirs("my-model", exist_ok=True)
       with open("my-model/model.toml", "w") as f:
@@ -1031,7 +1031,7 @@ class MainTest(absltest.TestCase):
       "litert_lm_builder.litertlm_builder.pack"
   )
   def test_pack_command_with_current_directory(self, mock_builder_pack):
-    runner = CliRunner()
+    runner = testing.CliRunner()
     with runner.isolated_filesystem():
       os.makedirs("my-model", exist_ok=True)
       with open("my-model/model.toml", "w") as f:
@@ -1052,7 +1052,7 @@ class MainTest(absltest.TestCase):
       "litert_lm_builder.litertlm_builder.pack"
   )
   def test_pack_command_with_config_file_succeeds(self, mock_builder_pack):
-    runner = CliRunner()
+    runner = testing.CliRunner()
     with runner.isolated_filesystem():
       with open("test-model.toml", "w") as f:
         f.write("dummy")
@@ -1065,7 +1065,7 @@ class MainTest(absltest.TestCase):
       "litert_lm_builder.litertlm_builder.pack"
   )
   def test_pack_command_with_non_existent_path_fails(self, mock_builder_pack):
-    runner = CliRunner()
+    runner = testing.CliRunner()
     with runner.isolated_filesystem():
       result = runner.invoke(main.cli, ["pack", "invalid_path"])
       self.assertEqual(result.exit_code, 2)
@@ -1076,7 +1076,7 @@ class MainTest(absltest.TestCase):
       "litert_lm_builder.litertlm_builder.pack"
   )
   def test_pack_command_with_directory_output_fails(self, mock_builder_pack):
-    runner = CliRunner()
+    runner = testing.CliRunner()
     with runner.isolated_filesystem():
       with open("model.toml", "w") as f:
         f.write('[[section]]\nsection_type = "TFLiteModel"')
@@ -1095,7 +1095,7 @@ class MainTest(absltest.TestCase):
   def test_pack_command_default_output_conflict_with_directory_fails(
       self, mock_builder_pack
   ):
-    runner = CliRunner()
+    runner = testing.CliRunner()
     with runner.isolated_filesystem():
       with open("model.toml", "w") as f:
         f.write('[[section]]\nsection_type = "TFLiteModel"')
@@ -1112,7 +1112,7 @@ class MainTest(absltest.TestCase):
       "litert_lm_builder.litertlm_builder.pack"
   )
   def test_pack_existing_output_non_interactive_fails(self, mock_builder_pack):
-    runner = CliRunner()
+    runner = testing.CliRunner()
     with runner.isolated_filesystem():
       with open("model.toml", "w") as f:
         f.write('[[section]]\nsection_type = "TFLiteModel"')
@@ -1133,7 +1133,7 @@ class MainTest(absltest.TestCase):
   def test_pack_existing_output_with_allow_overwrite_succeeds(
       self, mock_builder_pack
   ):
-    runner = CliRunner()
+    runner = testing.CliRunner()
     with runner.isolated_filesystem():
       with open("model.toml", "w") as f:
         f.write('[[section]]\nsection_type = "TFLiteModel"')
@@ -1157,7 +1157,7 @@ class MainTest(absltest.TestCase):
       self, mock_builder_pack, mock_is_interactive
   ):
     del mock_is_interactive  # unused
-    runner = CliRunner()
+    runner = testing.CliRunner()
     with runner.isolated_filesystem():
       with open("model.toml", "w") as f:
         f.write('[[section]]\nsection_type = "TFLiteModel"')
@@ -1182,7 +1182,7 @@ class MainTest(absltest.TestCase):
       self, mock_builder_pack, mock_is_interactive
   ):
     del mock_is_interactive  # unused
-    runner = CliRunner()
+    runner = testing.CliRunner()
     with runner.isolated_filesystem():
       with open("model.toml", "w") as f:
         f.write('[[section]]\nsection_type = "TFLiteModel"')
@@ -1211,7 +1211,7 @@ class MainTest(absltest.TestCase):
     mock_model.exists.return_value = True
     mock_model.model_path = "/path/to/my-model/model.litertlm"
 
-    runner = CliRunner()
+    runner = testing.CliRunner()
     with runner.isolated_filesystem():
       with open("my-model.litertlm", "w") as f:
         f.write("dummy")
@@ -1237,7 +1237,7 @@ class MainTest(absltest.TestCase):
     mock_model.exists.return_value = True
     mock_model.model_path = "/path/to/my-model/model.litertlm"
 
-    runner = CliRunner()
+    runner = testing.CliRunner()
     with runner.isolated_filesystem():
       with open("my-model.litertlm", "w") as f:
         f.write("dummy")
@@ -1267,7 +1267,7 @@ class MainTest(absltest.TestCase):
     mock_model.exists.return_value = True
     mock_model.model_path = "/path/to/my-model/model.litertlm"
 
-    runner = CliRunner()
+    runner = testing.CliRunner()
     with runner.isolated_filesystem():
       with open("my-model.litertlm", "w") as f:
         f.write("dummy")
@@ -1297,7 +1297,7 @@ class MainTest(absltest.TestCase):
     mock_model.exists.return_value = True
     mock_model.model_path = "/path/to/my-model/model.litertlm"
 
-    runner = CliRunner()
+    runner = testing.CliRunner()
     with runner.isolated_filesystem():
       with open("my-model.litertlm", "w") as f:
         f.write("dummy")
@@ -1308,6 +1308,22 @@ class MainTest(absltest.TestCase):
       self.assertEqual(result.exit_code, 0)
       self.assertIn("Aborted.", result.output)
       mock_builder_unpack.assert_not_called()
+
+  def test_registered_commands(self):
+    expected_commands = {
+        "serve",
+        "convert",
+        "list",
+        "import",
+        "describe",
+        "delete",
+        "rename",
+        "benchmark",
+        "run",
+        "pack",
+        "unpack",
+    }
+    self.assertContainsSubset(expected_commands, set(main.cli.commands.keys()))
 
 
 if __name__ == "__main__":

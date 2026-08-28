@@ -26,6 +26,7 @@ from litert_lm_cli import version
 from litert_lm_cli.commands import benchmark as _benchmark_module
 from litert_lm_cli.commands import convert as _convert_module
 from litert_lm_cli.commands import delete as _delete_module
+from litert_lm_cli.commands import describe as _describe_module
 from litert_lm_cli.commands import list as _list_module
 from litert_lm_cli.commands import pack as _pack_module
 from litert_lm_cli.commands import rename as _rename_module
@@ -58,7 +59,9 @@ _serve_module.register(cli)
 _convert_module.register(cli)
 _list_module.register(cli)
 _import_module.register(cli)
+_describe_module.register(cli)
 _delete_module.register(cli)
+
 _rename_module.register(cli)
 _benchmark_module.register(cli)
 _run_module.register(cli)

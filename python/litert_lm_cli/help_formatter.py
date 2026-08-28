@@ -83,7 +83,13 @@ class ColorCommand(click.Command):
 
 COMMAND_SECTIONS: dict[str, list[str]] = {
     "Inference Commands": ["run", "benchmark", "serve"],
-    "Model Management Commands": ["list", "import", "rename", "delete"],
+    "Model Management Commands": [
+        "list",
+        "import",
+        "describe",
+        "rename",
+        "delete",
+    ],
     "LiteRT-LM File Commands": ["pack", "unpack", "convert"],
 }
 

@@ -31,6 +31,15 @@ pytype_strict_library(
 )
 
 pytype_strict_library(
+    name = "capabilities",
+    srcs = ["capabilities.py"],
+    deps = [
+        ":_ffi",
+        ":interfaces",
+    ],
+)
+
+pytype_strict_library(
     name = "_messages",
     srcs = ["_messages.py"],
 )
@@ -126,6 +135,7 @@ pytype_strict_library(
         ":_ffi",
         ":_messages",
         ":benchmark",
+        ":capabilities",
         ":conversation",
         ":embedding_engine",
         ":engine",
@@ -145,6 +155,19 @@ py_test(
         "@absl_py//absl/flags",
         "@absl_py//absl/testing:absltest",
         "@absl_py//absl/testing:parameterized",
+    ],
+    imports = [".."],
+)
+
+py_test(
+    name = "capabilities_test",
+    srcs = ["capabilities_test.py"],
+    data = ["//runtime/testdata"],
+    tags = ["nowindows"],
+    deps = [
+        ":litert_lm",
+        "@absl_py//absl/flags",
+        "@absl_py//absl/testing:absltest",
     ],
     imports = [".."],
 )

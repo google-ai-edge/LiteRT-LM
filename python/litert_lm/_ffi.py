@@ -47,9 +47,17 @@ class TokenUnionType(enum.IntEnum):
 
 
 class SamplerType(enum.IntEnum):
+  UNSPECIFIED = 0
   TOP_K = 1
   TOP_P = 2
   GREEDY = 3
+
+
+class LiteRtLmModality(enum.IntEnum):
+  TEXT = 0
+  VISION = 1
+  AUDIO = 2
+  VIDEO = 3
 
 
 # C-compatible callback type that matches 'LiteRtLmStreamCallback' in engine.h.
@@ -808,6 +816,37 @@ def _setup_lib_signatures(lib):
   )
   lib.litert_lm_experimental_conversation_get_session_debug_info.argtypes = [
       ctypes.c_void_p
+  ]
+
+  # Model Capabilities API
+  lib.litert_lm_loaded_file_create.restype = ctypes.c_void_p
+  lib.litert_lm_loaded_file_create.argtypes = [c_string_p]
+  lib.litert_lm_loaded_file_delete.restype = None
+  lib.litert_lm_loaded_file_delete.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_loaded_file_has_speculative_decoding_support.restype = (
+      ctypes.c_bool
+  )
+  lib.litert_lm_loaded_file_has_speculative_decoding_support.argtypes = [
+      ctypes.c_void_p
+  ]
+  lib.litert_lm_loaded_file_supports_thinking.restype = ctypes.c_bool
+  lib.litert_lm_loaded_file_supports_thinking.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_loaded_file_supports_function_calling.restype = ctypes.c_bool
+  lib.litert_lm_loaded_file_supports_function_calling.argtypes = [
+      ctypes.c_void_p
+  ]
+  lib.litert_lm_loaded_file_sampler_type.restype = ctypes.c_int
+  lib.litert_lm_loaded_file_sampler_type.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_loaded_file_sampler_temperature.restype = ctypes.c_float
+  lib.litert_lm_loaded_file_sampler_temperature.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_loaded_file_sampler_top_k.restype = ctypes.c_int32
+  lib.litert_lm_loaded_file_sampler_top_k.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_loaded_file_sampler_top_p.restype = ctypes.c_float
+  lib.litert_lm_loaded_file_sampler_top_p.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_loaded_file_supports_input_modality.restype = ctypes.c_bool
+  lib.litert_lm_loaded_file_supports_input_modality.argtypes = [
+      ctypes.c_void_p,
+      ctypes.c_int,
   ]
 
 
