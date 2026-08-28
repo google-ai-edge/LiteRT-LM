@@ -1594,6 +1594,11 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateEmbeddingEngine)(
   absl::StatusOr<litert::lm::ModelAssets> model_assets;
 
   if (model_fd >= 0) {
+#if defined(_WIN32)
+    ThrowLiteRtLmJniException(
+        env, "Model file descriptor is not supported on Windows.");
+    return 0;
+#else
     auto owned_fd = dup(model_fd);
     if (owned_fd < 0) {
       ThrowLiteRtLmJniException(
@@ -1612,6 +1617,7 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateEmbeddingEngine)(
     auto shared_scoped_file =
         std::make_shared<::litert::ScopedFile>(std::move(*dup_status));
     model_assets = litert::lm::ModelAssets::Create(shared_scoped_file);
+#endif
   } else {
     std::string model_path_str;
     if (model_path != nullptr) {
