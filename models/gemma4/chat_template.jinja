@@ -25,12 +25,7 @@
                 {%- endif -%}
                 }
                 {%- if value['required'] -%}
-                    ,required:[
-                    {%- for item in value['required'] | default([]) -%}
-                        <|"|>{{- item -}}<|"|>
-                        {%- if not loop.last %},{% endif -%}
-                    {%- endfor -%}
-                    ]
+                    ,required:{{ format_argument(value['required']) }}
                 {%- endif -%}
             {%- elif value['type'] | upper == 'ARRAY' -%}
                 {%- if value['items'] is mapping and value['items'] -%}
@@ -43,13 +38,6 @@
                                 {{- format_parameters(item_value) -}}
                             {%- endif -%}
                             }
-                        {%- elif item_key == 'required' -%}
-                            required:[
-                            {%- for req_item in item_value -%}
-                                <|"|>{{- req_item -}}<|"|>
-                                {%- if not loop.last %},{% endif -%}
-                            {%- endfor -%}
-                            ]
                         {%- elif item_key == 'type' -%}
                             {%- if item_value is string -%}
                                 type:{{ format_argument(item_value | upper) }}
@@ -77,12 +65,7 @@
             properties:{ {{- format_parameters(params['properties']) -}} },
         {%- endif -%}
         {%- if params['required'] -%}
-            required:[
-            {%- for item in params['required'] -%}
-                <|"|>{{- item -}}<|"|>
-                {{- ',' if not loop.last -}}
-            {%- endfor -%}
-            ],
+            required:{{ format_argument(params['required']) }},
         {%- endif -%}
         {%- if params['type'] -%}
             type:<|"|>{{- params['type'] | upper -}}<|"|>}
