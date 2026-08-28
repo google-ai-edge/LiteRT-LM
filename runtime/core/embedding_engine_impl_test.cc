@@ -395,6 +395,7 @@ TEST(EmbeddingEngineImplTest, DefaultEmbeddingOptions) {
   EmbeddingOptions options;
   EXPECT_TRUE(options.normalize);
   EXPECT_TRUE(options.insert_special_tokens);
+  EXPECT_EQ(options.input_overflow_strategy, InputOverflowStrategy::kError);
   EXPECT_FALSE(options.vision_tokens_per_image.has_value());
   EXPECT_EQ(options.output_size, std::nullopt);
 }
