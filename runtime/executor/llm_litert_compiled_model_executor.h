@@ -29,7 +29,6 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
-#include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
@@ -107,7 +106,6 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
 
   // Gets the executor settings.
   absl::StatusOr<LlmExecutorSettings> GetExecutorSettings() const override {
-    absl::MutexLock lock(executor_settings_mutex_);
     return executor_settings_;
   }
 
@@ -247,6 +245,11 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
     llm_context_ = std::make_unique<LlmContext>(std::move(processed_context),
                                                 std::move(runtime_config),
                                                 std::move(runtime_state));
+    if (executor_settings_.GetAdvancedSettings().has_value()) {
+      gpu_enable_metal_residency_set_ =
+          executor_settings_.GetAdvancedSettings()
+              ->gpu_enable_metal_residency_set;
+    }
   }
 
  protected:
@@ -360,9 +363,8 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
   // Gets the LiteRT run options based on the current executor settings.
   litert::Options GetRunOptions() const;
 
-  mutable absl::Mutex executor_settings_mutex_;
-  LlmExecutorSettings executor_settings_
-      ABSL_GUARDED_BY(executor_settings_mutex_);
+  LlmExecutorSettings executor_settings_;
+  std::atomic<bool> gpu_enable_metal_residency_set_ = false;
   Environment& env_;
   const Model& model_;
   std::unique_ptr<CompiledModel> compiled_model_;

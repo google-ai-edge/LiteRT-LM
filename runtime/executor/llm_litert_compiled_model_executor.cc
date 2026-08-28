@@ -36,7 +36,6 @@
 #include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
-#include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/c/litert_common.h"  // from @litert
 #include "litert/cc/internal/litert_handle.h"  // from @litert
@@ -1143,7 +1142,6 @@ LlmLiteRtCompiledModelExecutorBase::Decode(
     }
   }
   if (has_invalid_output_token) {
-    absl::MutexLock lock(executor_settings_mutex_);
     const auto& advanced_settings = executor_settings_.GetAdvancedSettings();
     if (advanced_settings.has_value() &&
         advanced_settings->error_on_invalid_sampled_token_id) {
@@ -1228,11 +1226,7 @@ absl::StatusOr<TensorBuffer> LlmLiteRtCompiledModelExecutorBase::DecodeLogits(
 
   ++llm_context_->runtime_state().current_step;
 
-  std::optional<AdvancedSettings> advanced_settings;
-  {
-    absl::MutexLock lock(executor_settings_mutex_);
-    advanced_settings = executor_settings_.GetAdvancedSettings();
-  }
+  const auto& advanced_settings = executor_settings_.GetAdvancedSettings();
   if (advanced_settings &&
       advanced_settings->num_logits_to_print_after_decode > 0) {
     LogTensor(output_logits,
@@ -1350,11 +1344,8 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::InitializeSampler(
   auto data_type = logits_data_type.value_or(logits_data_type_);
 
   ABSL_ASSIGN_OR_RETURN(auto vocab_size, GetVocabSize());
-  LlmExecutorSettings settings = [this]() {
-    absl::MutexLock lock(executor_settings_mutex_);
-    return executor_settings_;
-  }();
-  ABSL_ASSIGN_OR_RETURN(auto sampler_backend, GetSamplerBackend(settings));
+  ABSL_ASSIGN_OR_RETURN(auto sampler_backend,
+                        GetSamplerBackend(executor_settings_));
   int output_heads = 1;
   if (llm_context_->runtime_config().output_heads.has_value()) {
     output_heads = llm_context_->runtime_config().output_heads.value();
@@ -1383,12 +1374,9 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::InitializeSampler(
 
   // If the sampler can handle input, prepare the input tensors for it.
   bool sampler_handles_input = true;
-  {
-    absl::MutexLock lock(executor_settings_mutex_);
-    if (executor_settings_.GetAdvancedSettings().has_value()) {
-      sampler_handles_input =
-          executor_settings_.GetAdvancedSettings()->sampler_handles_input;
-    }
+  if (executor_settings_.GetAdvancedSettings().has_value()) {
+    sampler_handles_input =
+        executor_settings_.GetAdvancedSettings()->sampler_handles_input;
   }
   sampler_handles_input_ =
       sampler_handles_input && sampler_->CanHandleInput() &&
@@ -1490,24 +1478,23 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::SampleLogits(
 
 absl::Status LlmLiteRtCompiledModelExecutorBase::UpdateExecutorSettings(
     const LlmExecutorSettings& executor_settings) {
-  absl::MutexLock lock(executor_settings_mutex_);
   executor_settings_ = executor_settings;
+  if (executor_settings_.GetAdvancedSettings().has_value()) {
+    gpu_enable_metal_residency_set_ =
+        executor_settings_.GetAdvancedSettings()
+            ->gpu_enable_metal_residency_set;
+  }
   return absl::OkStatus();
 }
 
 litert::Options LlmLiteRtCompiledModelExecutorBase::GetRunOptions() const {
-  absl::MutexLock lock(executor_settings_mutex_);
   litert::Options run_options;
-  if (executor_settings_.GetAdvancedSettings().has_value()) {
 #if defined(__APPLE__)
-    const auto& advanced_settings = *executor_settings_.GetAdvancedSettings();
-    auto gpu_options = run_options.GetGpuOptions();
-    if (gpu_options.HasValue()) {
-      (void)gpu_options->EnableMetalResidencySet(
-          advanced_settings.gpu_enable_metal_residency_set);
-    }
-#endif
+  auto gpu_options = run_options.GetGpuOptions();
+  if (gpu_options.HasValue()) {
+    (void)gpu_options->EnableMetalResidencySet(gpu_enable_metal_residency_set_);
   }
+#endif
   return run_options;
 }
 
@@ -1647,10 +1634,7 @@ absl::Status LlmLiteRtCompiledModelExecutorStatic::Prefill(
   int remaining_capacity =
       state_->GetNumEntries() - llm_context_->runtime_state().current_step;
 
-  const bool is_cpu = [this]() {
-    absl::MutexLock lock(executor_settings_mutex_);
-    return executor_settings_.GetBackend() == Backend::CPU;
-  }();
+  const bool is_cpu = executor_settings_.GetBackend() == Backend::CPU;
   ABSL_ASSIGN_OR_RETURN(auto work_groups, GetOptimizedPrefillWorkGroups(
                                               prefill_signature_map_,
                                               ids.size(), remaining_capacity,
