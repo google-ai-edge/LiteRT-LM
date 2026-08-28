@@ -1,4 +1,4 @@
-{%- macro format_parameters(properties, required) -%}
+{%- macro format_parameters(properties) -%}
     {%- set ns = namespace(found_first=false) -%}
     {%- for key, value in properties | dictsort -%}
         {%- set add_comma = false -%}
@@ -21,9 +21,9 @@
             {%- elif value['type'] | upper == 'OBJECT' -%}
                 ,properties:{
                 {%- if value['properties'] is defined and value['properties'] is mapping -%}
-                    {{- format_parameters(value['properties'], value['required'] | default([])) -}}
+                    {{- format_parameters(value['properties']) -}}
                 {%- elif value is mapping -%}
-                    {{- format_parameters(value, value['required'] | default([])) -}}
+                    {{- format_parameters(value) -}}
                 {%- endif -%}
                 }
                 {%- if value['required'] -%}
@@ -45,7 +45,7 @@
                             {%- if item_key == 'properties' -%}
                                 properties:{
                                 {%- if item_value is mapping -%}
-                                    {{- format_parameters(item_value, value['items']['required'] | default([])) -}}
+                                    {{- format_parameters(item_value) -}}
                                 {%- endif -%}
                                 }
                             {%- elif item_key == 'required' -%}
@@ -80,7 +80,7 @@
     {%- if params -%}
         ,parameters:{
         {%- if params['properties'] -%}
-            properties:{ {{- format_parameters(params['properties'], params['required']) -}} },
+            properties:{ {{- format_parameters(params['properties']) -}} },
         {%- endif -%}
         {%- if params['required'] -%}
             required:[

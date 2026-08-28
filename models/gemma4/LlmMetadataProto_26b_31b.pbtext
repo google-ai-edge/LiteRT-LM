@@ -52,7 +52,7 @@ llm_model_type {
   }
 }
 jinja_prompt_template:
-  "{%- macro format_parameters(properties, required) -%}\n"
+  "{%- macro format_parameters(properties) -%}\n"
   "    {%- set ns = namespace(found_first=false) -%}\n"
   "    {%- for key, value in properties | dictsort -%}\n"
   "        {%- set add_comma = false -%}\n"
@@ -75,9 +75,9 @@ jinja_prompt_template:
   "            {%- elif value['type'] | upper == 'OBJECT' -%}\n"
   "                ,properties:{\n"
   "                {%- if value['properties'] is defined and value['properties'] is mapping -%}\n"
-  "                    {{- format_parameters(value['properties'], value['required'] | default([])) -}}\n"
+  "                    {{- format_parameters(value['properties']) -}}\n"
   "                {%- elif value is mapping -%}\n"
-  "                    {{- format_parameters(value, value['required'] | default([])) -}}\n"
+  "                    {{- format_parameters(value) -}}\n"
   "                {%- endif -%}\n"
   "                }\n"
   "                {%- if value['required'] -%}\n"
@@ -99,7 +99,7 @@ jinja_prompt_template:
   "                            {%- if item_key == 'properties' -%}\n"
   "                                properties:{\n"
   "                                {%- if item_value is mapping -%}\n"
-  "                                    {{- format_parameters(item_value, value['items']['required'] | default([])) -}}\n"
+  "                                    {{- format_parameters(item_value) -}}\n"
   "                                {%- endif -%}\n"
   "                                }\n"
   "                            {%- elif item_key == 'required' -%}\n"
@@ -134,7 +134,7 @@ jinja_prompt_template:
   "    {%- if params -%}\n"
   "        ,parameters:{\n"
   "        {%- if params['properties'] -%}\n"
-  "            properties:{ {{- format_parameters(params['properties'], params['required']) -}} },\n"
+  "            properties:{ {{- format_parameters(params['properties']) -}} },\n"
   "        {%- endif -%}\n"
   "        {%- if params['required'] -%}\n"
   "            required:[\n"
