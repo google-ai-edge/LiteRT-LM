@@ -26,6 +26,9 @@ struct KokoroModelConfig {
   // Voice profile name or filename (e.g., "af_heart", "af_bella",
   // "am_michael").
   std::string voice_name = "af_heart";
+  // Language identifier or voice prefix (e.g., "en-us", "en-gb", "es", "fr-fr",
+  // "hi", "it", "pt-br", "ja", "zh", "a", "b", "e", etc.). Defaults to "en-us".
+  std::string language = "en-us";
   // Optional explicit path/file to voice embedding. If empty, resolves from
   // voice_name.
   std::string voice_file;
