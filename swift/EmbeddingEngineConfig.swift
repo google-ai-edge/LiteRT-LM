@@ -66,12 +66,21 @@ public struct EmbeddingOptions: Hashable, Sendable {
   /// Whether to automatically insert special tokens (BOS, EOS, start/end of image, start/end of audio). If `nil`, uses the C++ engine default.
   public let insertSpecialTokens: Bool?
 
+  /// The output embedding size to truncate the embedding to. If `nil`, uses the C++ engine default.
+  public let outputSize: Int?
+
   /// - Parameters:
   ///   - normalize: Whether to L2-normalize the output embedding vector. If `nil`, uses the C++ engine default.
   ///   - insertSpecialTokens: Whether to automatically insert special tokens. If `nil`, uses the C++ engine default.
-  public init(normalize: Bool? = nil, insertSpecialTokens: Bool? = nil) {
+  ///   - outputSize: The output embedding size to truncate to. If `nil`, uses the C++ engine default.
+  public init(
+    normalize: Bool? = nil,
+    insertSpecialTokens: Bool? = nil,
+    outputSize: Int? = nil
+  ) {
     self.normalize = normalize
     self.insertSpecialTokens = insertSpecialTokens
+    self.outputSize = outputSize
   }
 }
 

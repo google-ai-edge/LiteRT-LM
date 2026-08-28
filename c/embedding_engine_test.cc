@@ -93,6 +93,26 @@ TEST(EmbeddingEngineCTest, OptionsInputOverflowStrategy) {
   litert_lm_embedding_options_delete(options);
 }
 
+TEST(EmbeddingEngineCTest, OptionsOutputSize) {
+  auto* options = litert_lm_embedding_options_create();
+  ASSERT_NE(options, nullptr);
+  EXPECT_EQ(litert_lm_embedding_options_get_output_size(options), -1);
+
+  litert_lm_embedding_options_set_output_size(options, 128);
+  EXPECT_EQ(litert_lm_embedding_options_get_output_size(options), 128);
+
+  litert_lm_embedding_options_set_output_size(options, 0);
+  EXPECT_EQ(litert_lm_embedding_options_get_output_size(options), -1);
+
+  litert_lm_embedding_options_set_output_size(options, 128);
+  EXPECT_EQ(litert_lm_embedding_options_get_output_size(options), 128);
+
+  litert_lm_embedding_options_set_output_size(options, -1);
+  EXPECT_EQ(litert_lm_embedding_options_get_output_size(options), -1);
+
+  litert_lm_embedding_options_delete(options);
+}
+
 TEST(EmbeddingEngineCTest, ComputeEmbeddingSuccess) {
   auto* settings = litert_lm_embedding_engine_settings_create(
       kTestEmbeddingModelPath, "cpu", nullptr, nullptr);
@@ -203,6 +223,93 @@ TEST(EmbeddingEngineCTest, ComputeEmbeddingBatchSuccess) {
 
   EXPECT_GT(litert_lm_embedding_response_get_size(resp0), 0);
   EXPECT_GT(litert_lm_embedding_response_get_size(resp1), 0);
+
+  litert_lm_embedding_responses_delete(responses);
+  litert_lm_embedding_options_delete(options);
+  litert_lm_input_data_delete(input1);
+  litert_lm_input_data_delete(input2);
+  litert_lm_embedding_engine_delete(engine);
+}
+
+TEST(EmbeddingEngineCTest, ComputeEmbeddingWithOutputSize) {
+  auto* settings = litert_lm_embedding_engine_settings_create(
+      kTestEmbeddingModelPath, "cpu", nullptr, nullptr);
+  ASSERT_NE(settings, nullptr);
+
+  auto* engine = litert_lm_embedding_engine_create(settings);
+  litert_lm_embedding_engine_settings_delete(settings);
+  ASSERT_NE(engine, nullptr);
+
+  std::string prompt = "'s";
+  auto* input_data = litert_lm_input_data_create(kLiteRtLmInputDataTypeText,
+                                                 prompt.data(), prompt.size());
+  ASSERT_NE(input_data, nullptr);
+
+  const LiteRtLmInputData* inputs[] = {input_data};
+  auto* options = litert_lm_embedding_options_create();
+  litert_lm_embedding_options_set_normalize(options, true);
+  litert_lm_embedding_options_set_output_size(options, 64);
+
+  auto* response =
+      litert_lm_embedding_engine_compute_embedding(engine, inputs, 1, options);
+  ASSERT_NE(response, nullptr);
+
+  size_t dim = litert_lm_embedding_response_get_size(response);
+  EXPECT_EQ(dim, 64);
+
+  const float* values = litert_lm_embedding_response_get_values(response);
+  ASSERT_NE(values, nullptr);
+
+  float sum_sq = 0.0f;
+  for (size_t i = 0; i < dim; ++i) {
+    sum_sq += values[i] * values[i];
+  }
+  EXPECT_NEAR(sum_sq, 1.0f, 1e-4f);
+
+  litert_lm_embedding_response_delete(response);
+  litert_lm_embedding_options_delete(options);
+  litert_lm_input_data_delete(input_data);
+  litert_lm_embedding_engine_delete(engine);
+}
+
+TEST(EmbeddingEngineCTest, ComputeEmbeddingBatchWithOutputSize) {
+  auto* settings = litert_lm_embedding_engine_settings_create(
+      kTestEmbeddingModelPath, "cpu", nullptr, nullptr);
+  ASSERT_NE(settings, nullptr);
+
+  auto* engine = litert_lm_embedding_engine_create(settings);
+  litert_lm_embedding_engine_settings_delete(settings);
+  ASSERT_NE(engine, nullptr);
+
+  std::string prompt1 = "'s";
+  std::string prompt2 = "'s";
+  auto* input1 = litert_lm_input_data_create(kLiteRtLmInputDataTypeText,
+                                             prompt1.data(), prompt1.size());
+  auto* input2 = litert_lm_input_data_create(kLiteRtLmInputDataTypeText,
+                                             prompt2.data(), prompt2.size());
+
+  const LiteRtLmInputData* req1[] = {input1};
+  const LiteRtLmInputData* req2[] = {input2};
+  const LiteRtLmInputData* const* batch_inputs[] = {req1, req2};
+  size_t num_inputs_per_batch[] = {1, 1};
+
+  auto* options = litert_lm_embedding_options_create();
+  litert_lm_embedding_options_set_normalize(options, true);
+  litert_lm_embedding_options_set_output_size(options, 64);
+
+  auto* responses = litert_lm_embedding_engine_compute_embedding_batch(
+      engine, batch_inputs, num_inputs_per_batch, 2, options);
+  ASSERT_NE(responses, nullptr);
+
+  EXPECT_EQ(litert_lm_embedding_responses_get_size(responses), 2);
+
+  const auto* resp0 = litert_lm_embedding_responses_get_at(responses, 0);
+  const auto* resp1 = litert_lm_embedding_responses_get_at(responses, 1);
+  ASSERT_NE(resp0, nullptr);
+  ASSERT_NE(resp1, nullptr);
+
+  EXPECT_EQ(litert_lm_embedding_response_get_size(resp0), 64);
+  EXPECT_EQ(litert_lm_embedding_response_get_size(resp1), 64);
 
   litert_lm_embedding_responses_delete(responses);
   litert_lm_embedding_options_delete(options);

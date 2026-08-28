@@ -247,6 +247,28 @@ LiteRtLmInputOverflowStrategy
 litert_lm_embedding_options_get_input_overflow_strategy(
     const LiteRtLmEmbeddingOptions* options);
 
+// Sets the output embedding size to truncate the embedding to.
+//
+// @param options The options to modify.
+// @param output_size The output embedding size to truncate to. Pass 0 or a
+//   negative value (e.g., 0 or -1) to unset and use the default output
+//   embedding size.
+//
+// Added in version 0.2.0.
+LITERT_LM_C_API_EXPORT
+void litert_lm_embedding_options_set_output_size(
+    LiteRtLmEmbeddingOptions* options, int output_size);
+
+// Gets the output embedding size.
+//
+// @param options The options to inspect.
+// @return The output embedding size, or -1 if not set (using default size).
+//
+// Added in version 0.2.0.
+LITERT_LM_C_API_EXPORT
+int litert_lm_embedding_options_get_output_size(
+    const LiteRtLmEmbeddingOptions* options);
+
 // Destroys a LiteRT LM Embedding Response.
 //
 // @param response The response to destroy.

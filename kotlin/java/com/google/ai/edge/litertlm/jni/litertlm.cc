@@ -1808,7 +1808,8 @@ LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeDeleteEmbeddingEngine)(
 
 LITERTLM_JNIEXPORT jobject JNICALL JNI_METHOD(nativeComputeEmbedding)(
     JNIEnv* env, jclass thiz, jlong embedding_engine_pointer,
-    jobjectArray input_data, jobject normalize, jobject insert_special_tokens) {
+    jobjectArray input_data, jobject normalize, jobject insert_special_tokens,
+    jobject output_size) {
   auto* engine =
       reinterpret_cast<litert::lm::EmbeddingEngine*>(embedding_engine_pointer);
   if (!engine) {
@@ -1830,6 +1831,9 @@ LITERTLM_JNIEXPORT jobject JNICALL JNI_METHOD(nativeComputeEmbedding)(
   if (auto opt_tokens = GetOptionalBoolean(env, insert_special_tokens);
       opt_tokens.has_value()) {
     options.insert_special_tokens = *opt_tokens;
+  }
+  if (auto opt_size = GetOptionalInt(env, output_size); opt_size.has_value()) {
+    options.output_size = *opt_size;
   }
 
   auto response = engine->ComputeEmbedding(contents, options);
@@ -1859,7 +1863,7 @@ LITERTLM_JNIEXPORT jobject JNICALL JNI_METHOD(nativeComputeEmbedding)(
 LITERTLM_JNIEXPORT jobjectArray JNICALL JNI_METHOD(nativeComputeEmbeddingBatch)(
     JNIEnv* env, jclass thiz, jlong embedding_engine_pointer,
     jobjectArray input_data_batch, jobject normalize,
-    jobject insert_special_tokens) {
+    jobject insert_special_tokens, jobject output_size) {
   auto* engine =
       reinterpret_cast<litert::lm::EmbeddingEngine*>(embedding_engine_pointer);
   if (!engine) {
@@ -1889,6 +1893,9 @@ LITERTLM_JNIEXPORT jobjectArray JNICALL JNI_METHOD(nativeComputeEmbeddingBatch)(
   if (auto opt_tokens = GetOptionalBoolean(env, insert_special_tokens);
       opt_tokens.has_value()) {
     options.insert_special_tokens = *opt_tokens;
+  }
+  if (auto opt_size = GetOptionalInt(env, output_size); opt_size.has_value()) {
+    options.output_size = *opt_size;
   }
 
   auto batch_response = engine->ComputeEmbeddingBatch(contents_batch, options);

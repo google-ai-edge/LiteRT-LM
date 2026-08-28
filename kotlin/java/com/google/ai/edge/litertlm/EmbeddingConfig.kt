@@ -55,10 +55,16 @@ constructor(
  *   engine default.
  * @property insertSpecialTokens Whether to automatically insert special tokens (BOS, EOS, start/end
  *   of image, start/end of audio). If `null`, uses the C++ engine default.
+ * @property outputSize The output embedding size to truncate to. If `null`, uses the C++ engine
+ *   default.
  */
 data class EmbeddingOptions
 @JvmOverloads
-constructor(val normalize: Boolean? = null, val insertSpecialTokens: Boolean? = null)
+constructor(
+  val normalize: Boolean? = null,
+  val insertSpecialTokens: Boolean? = null,
+  val outputSize: Int? = null,
+)
 
 /**
  * Represents the embedding result for an input item.

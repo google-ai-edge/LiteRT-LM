@@ -731,6 +731,12 @@ def _setup_lib_signatures(lib):
   lib.litert_lm_embedding_options_get_input_overflow_strategy.argtypes = [
       ctypes.c_void_p
   ]
+  lib.litert_lm_embedding_options_set_output_size.argtypes = [
+      ctypes.c_void_p,
+      ctypes.c_int,
+  ]
+  lib.litert_lm_embedding_options_get_output_size.restype = ctypes.c_int
+  lib.litert_lm_embedding_options_get_output_size.argtypes = [ctypes.c_void_p]
 
   # Embedding Response
   lib.litert_lm_embedding_response_delete.argtypes = [ctypes.c_void_p]

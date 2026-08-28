@@ -292,6 +292,25 @@ litert_lm_embedding_options_get_input_overflow_strategy(
       options->options.input_overflow_strategy);
 }
 
+void litert_lm_embedding_options_set_output_size(
+    LiteRtLmEmbeddingOptions* options, int output_size) {
+  if (options) {
+    if (output_size <= 0) {
+      options->options.output_size = std::nullopt;
+    } else {
+      options->options.output_size = output_size;
+    }
+  }
+}
+
+int litert_lm_embedding_options_get_output_size(
+    const LiteRtLmEmbeddingOptions* options) {
+  if (!options || !options->options.output_size.has_value()) {
+    return -1;
+  }
+  return *options->options.output_size;
+}
+
 void litert_lm_embedding_response_delete(LiteRtLmEmbeddingResponse* response) {
   delete response;
 }

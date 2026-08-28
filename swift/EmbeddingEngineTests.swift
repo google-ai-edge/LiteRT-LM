@@ -35,10 +35,14 @@ class EmbeddingEngineTests: XCTestCase {
     let options = EmbeddingOptions()
     XCTAssertNil(options.normalize)
     XCTAssertNil(options.insertSpecialTokens)
+    XCTAssertNil(options.outputSize)
 
-    let customOptions = EmbeddingOptions(normalize: false, insertSpecialTokens: true)
+    let customOptions = EmbeddingOptions(
+      normalize: false, insertSpecialTokens: true, outputSize: 128
+    )
     XCTAssertEqual(customOptions.normalize, false)
     XCTAssertEqual(customOptions.insertSpecialTokens, true)
+    XCTAssertEqual(customOptions.outputSize, 128)
   }
 
   func testEmbeddingEngineConfig_IsCorrectlySet() async throws {
@@ -120,6 +124,19 @@ class EmbeddingEngineTests: XCTestCase {
     let norm = sqrt(sumSquares)
     XCTAssertEqual(norm, 1.0, accuracy: 1e-4)
 
+    // Test with outputSize set to truncate
+    let responseTruncated = try await engine.computeEmbedding(
+      contents: [.text("'s")],
+      options: EmbeddingOptions(normalize: true, outputSize: 64)
+    )
+    XCTAssertEqual(responseTruncated.embedding.count, 64)
+    var truncatedSumSquares: Float = 0.0
+    for val in responseTruncated.embedding {
+      truncatedSumSquares += val * val
+    }
+    let truncatedNorm = sqrt(truncatedSumSquares)
+    XCTAssertEqual(truncatedNorm, 1.0, accuracy: 1e-4)
+
     await engine.close()
   }
 
@@ -140,6 +157,15 @@ class EmbeddingEngineTests: XCTestCase {
     XCTAssertFalse(responses[0].embedding.isEmpty)
     XCTAssertFalse(responses[1].embedding.isEmpty)
     XCTAssertEqual(responses[0].embedding.count, responses[1].embedding.count)
+
+    // Test batch with outputSize set to truncate
+    let responsesTruncated = try await engine.computeEmbeddingBatch(
+      contentsBatch: [[.text("'s")], [.text("'s")]],
+      options: EmbeddingOptions(normalize: true, outputSize: 64)
+    )
+    XCTAssertEqual(responsesTruncated.count, 2)
+    XCTAssertEqual(responsesTruncated[0].embedding.count, 64)
+    XCTAssertEqual(responsesTruncated[1].embedding.count, 64)
 
     await engine.close()
   }

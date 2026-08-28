@@ -145,6 +145,11 @@ public actor EmbeddingEngine {
         optionsHandle, insertSpecialTokens
       )
     }
+    if let outputSize = options.outputSize {
+      litert_lm_embedding_options_set_output_size(
+        optionsHandle, Int32(outputSize)
+      )
+    }
 
     let responseHandle = inputPointers.withUnsafeBufferPointer { buffer in
       litert_lm_embedding_engine_compute_embedding(
@@ -227,6 +232,11 @@ public actor EmbeddingEngine {
     if let insertSpecialTokens = options.insertSpecialTokens {
       litert_lm_embedding_options_set_insert_special_tokens(
         optionsHandle, insertSpecialTokens
+      )
+    }
+    if let outputSize = options.outputSize {
+      litert_lm_embedding_options_set_output_size(
+        optionsHandle, Int32(outputSize)
       )
     }
 
