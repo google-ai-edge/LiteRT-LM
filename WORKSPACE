@@ -481,6 +481,14 @@ http_archive(
     urls = ["https://github.com/google/skia/archive/226ae9d866748a2e68b6dbf114b37129c380a298.zip"],
 )
 
+http_archive(
+    name = "espeak_ng",
+    build_file = "@//:BUILD.espeak_ng",
+    sha256 = "bb4338102ff3b49a81423da8a1a158b420124b055b60fa76cfb4b18677130a23",
+    strip_prefix = "espeak-ng-1.52.0",
+    urls = ["https://github.com/espeak-ng/espeak-ng/archive/refs/tags/1.52.0.tar.gz"],
+)
+
 # Android rules. Need latest rules_android_ndk to use NDK 26+.
 load("@rules_android_ndk//:rules.bzl", "android_ndk_repository")
 
