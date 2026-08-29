@@ -350,7 +350,9 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
       const ResolvedPrefillSignatures& prefill_signatures,
       const InferenceContext& rope_inference_context,
       const InferenceContext& mask_inference_context,
-      const InferenceContext& cache_update_inference_context);
+      const InferenceContext& cache_update_inference_context,
+      // Skip aux cache_update warmup (host-side KV update path).
+      bool skip_aux_cache_update);
 
   // Run a 'warmup' inference on the drafter model.  This is intended to be
   // called before the first actual inference.

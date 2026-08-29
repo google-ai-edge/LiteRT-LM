@@ -27,6 +27,7 @@
 
 #include "absl/algorithm/container.h"  // from @com_google_absl
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
+#include "absl/container/flat_hash_set.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/log/log.h"  // from @com_google_absl
 #include "absl/memory/memory.h"  // from @com_google_absl
@@ -171,14 +172,38 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::AllocateTextDecoderBuffers(
     }
   }
 
+  // Precompute decode KV input names to size shared KV buffers (split-context).
+  auto decode_signature = text_decoder_model->FindSignature(kDecodeSignature);
+  absl::flat_hash_set<std::string> decode_input_name_set;
+  if (decode_signature.HasValue()) {
+    for (auto decode_input_name : decode_signature->InputNames()) {
+      decode_input_name_set.insert(std::string(decode_input_name));
+    }
+  }
+
   // Create input buffers for prefill signature.
   for (auto input_name : prefill_signature->InputNames()) {
     if (absl::StartsWith(input_name, kv_cache_k_root_name) ||
         absl::StartsWith(input_name, kv_cache_v_root_name) ||
         absl::StartsWith(input_name, kv_cache_c_root_name)) {
-      LITERT_ASSIGN_OR_RETURN(input_kv_cache_buffers[input_name],
+      LITERT_ASSIGN_OR_RETURN(::litert::TensorBuffer prefill_kv,
                               text_decoder_compiled_model.CreateInputBuffer(
                                   prefill_signatures.prefill, input_name));
+      if (decode_input_name_set.contains(std::string(input_name))) {
+        // Shared with decode: keep the larger buffer so both signatures bind.
+        LITERT_ASSIGN_OR_RETURN(::litert::TensorBuffer decode_kv,
+                                text_decoder_compiled_model.CreateInputBuffer(
+                                    kDecodeSignature, input_name));
+        LITERT_ASSIGN_OR_RETURN(size_t prefill_sz, prefill_kv.PackedSize());
+        LITERT_ASSIGN_OR_RETURN(size_t decode_sz, decode_kv.PackedSize());
+        if (decode_sz > prefill_sz) {
+          input_kv_cache_buffers[input_name] = std::move(decode_kv);
+        } else {
+          input_kv_cache_buffers[input_name] = std::move(prefill_kv);
+        }
+      } else {
+        input_kv_cache_buffers[input_name] = std::move(prefill_kv);
+      }
       LITERT_RETURN_IF_ERROR(FillKVCacheBuffer(
           input_kv_cache_buffers[input_name], kv_cache_init_value));
     } else {
@@ -189,8 +214,7 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::AllocateTextDecoderBuffers(
     }
   }
   // Create input buffers for decode signature. Skip kv cache input buffers as
-  // they are already created in the prefill signature.
-  auto decode_signature = text_decoder_model->FindSignature(kDecodeSignature);
+  // they are already created (at the larger shape) in the prefill loop above.
   for (auto input_name : decode_signature->InputNames()) {
     if (absl::StartsWith(input_name, kv_cache_k_root_name) ||
         absl::StartsWith(input_name, kv_cache_v_root_name) ||
@@ -427,7 +451,8 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::WarmupInference(
     const ResolvedPrefillSignatures& prefill_signatures,
     const InferenceContext& rope_inference_context,
     const InferenceContext& mask_inference_context,
-    const InferenceContext& cache_update_inference_context) {
+    const InferenceContext& cache_update_inference_context,
+    bool skip_aux_cache_update) {
   // We need to fill the embedding input buffers with non-zero values because
   // some of the Gemma3 models contain embedding lookup preprocessing that
   // quantize a float embedding tensor into a quantized embedding tensor and use
@@ -488,20 +513,23 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::WarmupInference(
       << "Inference warmup run for mask signature (decode) failed."
       << result.Error().Message();
 
-  result = compiled_model_auxiliary.Run(
-      prefill_signatures.cache_update,
-      cache_update_inference_context.prefill_input_buffers,
-      cache_update_inference_context.prefill_output_buffers);
-  RET_CHECK(result)
-      << "Inference warmup run for cache update signature (prefill) failed."
-      << result.Error().Message();
-  result = compiled_model_auxiliary.Run(
-      CacheUpdateSignatures::kDecodeCacheUpdate,
-      cache_update_inference_context.decode_input_buffers,
-      cache_update_inference_context.decode_output_buffers);
-  RET_CHECK(result)
-      << "Inference warmup run for cache update signature (decode) failed."
-      << result.Error().Message();
+  // Aux cache_update signatures are unused when host-side KV update is enabled.
+  if (!skip_aux_cache_update) {
+    result = compiled_model_auxiliary.Run(
+        prefill_signatures.cache_update,
+        cache_update_inference_context.prefill_input_buffers,
+        cache_update_inference_context.prefill_output_buffers);
+    RET_CHECK(result)
+        << "Inference warmup run for cache update signature (prefill) failed."
+        << result.Error().Message();
+    result = compiled_model_auxiliary.Run(
+        CacheUpdateSignatures::kDecodeCacheUpdate,
+        cache_update_inference_context.decode_input_buffers,
+        cache_update_inference_context.decode_output_buffers);
+    RET_CHECK(result)
+        << "Inference warmup run for cache update signature (decode) failed."
+        << result.Error().Message();
+  }
 
   // Warmup verify signatures if they exist.
   if (text_decoder_compiled_model.FindSignature(
@@ -534,7 +562,8 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::WarmupInference(
         << result.Error().Message();
   }
 
-  if (compiled_model_auxiliary.FindSignature(
+  if (!skip_aux_cache_update &&
+      compiled_model_auxiliary.FindSignature(
           CacheUpdateSignatures::kVerifyCacheUpdate)) {
     result = compiled_model_auxiliary.Run(
         CacheUpdateSignatures::kVerifyCacheUpdate,
@@ -2217,10 +2246,14 @@ LlmLiteRtNpuCompiledModelExecutor::Create(
     }
   }
 
+  // Skip aux cache_update warmup when host-side KV update is enabled.
+  bool skip_aux_cache_update =
+      npu_config_status.ok() && npu_config_status->use_hw_cache_update_for_npu;
   LITERT_RETURN_IF_ERROR(WarmupInference(
       text_decoder_compiled_model, text_decoder_inference_context,
       npu_auxiliary_context.npu_auxiliary_compiled_model, prefill_signatures,
-      main_rope.Context(), main_mask.Context(), main_cache.Context()));
+      main_rope.Context(), main_mask.Context(), main_cache.Context(),
+      skip_aux_cache_update));
 
   return absl::WrapUnique(new LlmLiteRtNpuCompiledModelExecutor(
       mutable_settings, env, std::move(npu_auxiliary_context),
