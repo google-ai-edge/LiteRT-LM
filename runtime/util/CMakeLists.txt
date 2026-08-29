@@ -461,6 +461,26 @@ target_link_libraries(runtime_util_metrics_util
 )
 
 # ==============================================================================
+# Streamed Weights Manager
+# ==============================================================================
+add_litertlm_library(runtime_util_streamed_weights_manager STATIC
+  streamed_weights_manager.cc
+)
+add_library(LiteRTLM::Runtime::Util::StreamedWeightsManager
+  ALIAS runtime_util_streamed_weights_manager)
+
+target_include_directories(runtime_util_streamed_weights_manager
+  PRIVATE
+    "${LITERTLM_INCLUDE_PATHS}"
+)
+
+target_link_libraries(runtime_util_streamed_weights_manager
+  PUBLIC
+    LiteRTLM::Runtime::Engine::IoTypes
+    LITERTLM_DEPS
+)
+
+# ==============================================================================
 # Folder Facade
 # ==============================================================================
 add_library(runtime_util_libs INTERFACE)
@@ -486,6 +506,7 @@ target_link_libraries(runtime_util_libs INTERFACE
   LiteRTLM::Runtime::Util::ModelAssetBundleResources
   LiteRTLM::Runtime::Util::ModelTypeUtils
   LiteRTLM::Runtime::Util::ScopedFile
+  LiteRTLM::Runtime::Util::StreamedWeightsManager
   LiteRTLM::Runtime::Util::TensorBufferUtil
   LiteRTLM::Runtime::Util::ZipReadonlyMemFile
   LiteRTLM::Runtime::Util::ZipUtils

@@ -13,7 +13,13 @@
 # limitations under the License.
 
 include("${LITERTLM_MODULES_DIR}/utils.cmake")
-include("${LITERTLM_TFLITE_PACKAGE_DIR}/tflite_target_map.cmake")
+include("${LITERTLM_TFLITE_TARGET_MAP_PATH}")
+
+string(APPEND LITERTLM_TFLITE_TARGET_MAP
+    ";LiteRTLM::tflite::tensorflow-lite=${LITERTLM_TFLITE_BUILD_DIR}/libtensorflow-lite.a"
+    ";LiteRTLM::tflite::xnnpack-delegate=${LITERTLM_TFLITE_BUILD_DIR}/libxnnpack-delegate.a"
+    ";LiteRTLM::tflite::profiling=${LITERTLM_TFLITE_BUILD_DIR}/libtflite_profiling.a"
+)
 
 macro(generate_tflite_aggregate)
     if(NOT TARGET LiteRTLM::tflite::tflite)
