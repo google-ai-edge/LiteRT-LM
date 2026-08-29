@@ -286,7 +286,7 @@ LiteRtLmInputOverflowStrategy
 litert_lm_embedding_options_get_input_overflow_strategy(
     const LiteRtLmEmbeddingOptions* options) {
   if (!options) {
-    return kLiteRtLmInputOverflowStrategyError;
+    return kLiteRtLmInputOverflowStrategyChunkAndAverage;
   }
   return static_cast<LiteRtLmInputOverflowStrategy>(
       options->options.input_overflow_strategy);
