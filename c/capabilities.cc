@@ -134,4 +134,12 @@ bool litert_lm_loaded_file_supports_input_modality(
   return false;
 }
 
+int32_t litert_lm_loaded_file_max_vision_token_budget(
+    LiteRtLmLoadedFile* loaded_file) {
+  if (loaded_file == nullptr || !loaded_file->info.llm_capability.has_value()) {
+    return -1;
+  }
+  return loaded_file->info.llm_capability->max_vision_token_budget;
+}
+
 }  // extern "C"

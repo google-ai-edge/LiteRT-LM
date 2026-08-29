@@ -466,6 +466,14 @@ internal object LiteRtLmJni {
    */
   external fun nativeSupportsInputModality(capabilitiesPointer: Long, modality: Int): Boolean
 
+  /**
+   * Returns the maximum vision token budget for the model.
+   *
+   * @param capabilitiesPointer A pointer to the native capabilities instance.
+   * @return The maximum vision token budget, or -1 if not defined.
+   */
+  external fun nativeMaxVisionTokenBudget(capabilitiesPointer: Long): Int
+
   /** Creates a new LiteRT-LM embedding engine. */
   external fun nativeCreateEmbeddingEngine(
     modelFd: Int,

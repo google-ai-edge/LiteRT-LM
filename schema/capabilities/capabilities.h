@@ -73,6 +73,10 @@ struct LlmInferenceCapability {
   // drafter).
   bool supports_speculative_decoding = false;
 
+  // Maximum vision token budget for multimodal inputs. Defaults to -1 if not
+  // defined.
+  int max_vision_token_budget = -1;
+
   // Default sampler parameters for the model.
   SamplerParameters default_sampler_params;
 };

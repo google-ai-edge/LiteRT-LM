@@ -111,6 +111,15 @@ LITERT_LM_C_API_EXPORT
 bool litert_lm_loaded_file_supports_input_modality(
     LiteRtLmLoadedFile* loaded_file, LiteRtLmModality modality);
 
+// Returns the maximum vision token budget for the model.
+// Returns -1 if the model does not support vision or if the budget is not
+// defined.
+//
+// Added in version 0.2.0.
+LITERT_LM_C_API_EXPORT
+int32_t litert_lm_loaded_file_max_vision_token_budget(
+    LiteRtLmLoadedFile* loaded_file);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif

@@ -41,6 +41,7 @@ class DescribeTest(absltest.TestCase):
     )
 
     self.mock_capabilities = mock.MagicMock(spec=litert_lm.Capabilities)
+    self.mock_capabilities.max_vision_token_budget = -1
     self.mock_capabilities_cls = self.enter_context(
         mock.patch.object(
             litert_lm,
@@ -58,6 +59,7 @@ class DescribeTest(absltest.TestCase):
     self.mock_capabilities.input_modalities = litert_lm.SupportedModalities(
         text=True, vision=True, audio=False, video=False
     )
+    self.mock_capabilities.max_vision_token_budget = 280
     self.mock_capabilities.default_sampler_params = litert_lm.SamplerConfig(
         temperature=0.7,
         top_k=40,
@@ -86,6 +88,7 @@ class DescribeTest(absltest.TestCase):
     self.assertIn("Supports Function Call: NO", result.output)
     self.assertIn("Supports Thinking:      YES", result.output)
     self.assertIn("Speculative Decoding:   YES", result.output)
+    self.assertIn("Max Vision Token Budget: 280", result.output)
     self.assertIn("Sampler Temp:           0.70", result.output)
     self.assertIn("Sampler Top K:          40", result.output)
     self.assertIn("Sampler Top P:          0.90", result.output)

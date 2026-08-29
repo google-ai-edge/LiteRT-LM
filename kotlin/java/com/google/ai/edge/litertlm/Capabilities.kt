@@ -24,18 +24,38 @@ data class SupportedModalities(
   val video: Boolean,
 )
 
-data class SamplerParameters(
-  val type: Int,
-  val temperature: Float,
-  val topK: Int,
-  val topP: Float,
-)
+// TODO: b/554164915 - Reuse SamplerConfig instead of SamplerParameters (matching Python),
+// once SamplerConfig can support nullable fields to represent unset/0 values from models.
+data class SamplerParameters(val type: Int, val temperature: Float, val topK: Int, val topP: Float)
 
 /**
  * Provides information about capabilities and features supported by a LiteRT-LM file.
  *
  * The users is expected to leverage the Capabilities API to investigate the capabilities of a
  * LiteRT-LM file before using it to build a LiteRtLmEngine instance.
+ *
+ * ### Example Usage:
+ * ```kotlin
+ * // 1. Load the model metadata
+ * try {
+ *   Capabilities("/path/to/model.litertlm").use { capabilities ->
+ *     // 2. Query basic capability flags
+ *     val supportsThinking = capabilities.supportsThinking()
+ *     val supportsFunctionCall = capabilities.supportsFunctionCalling()
+ *     val hasSpeculativeDecoding = capabilities.hasSpeculativeDecodingSupport()
+ *
+ *     // 3. Check supported input modalities
+ *     if (capabilities.inputModalities().vision) {
+ *       println("Vision input is supported!")
+ *     }
+ *
+ *     // 4. Check vision token budget
+ *     val visionBudget = capabilities.maxVisionTokenBudget()
+ *   }
+ * } catch (e: Exception) {
+ *   println("Failed to load model file capabilities: ${e.message}")
+ * }
+ * ```
  *
  * @param modelPath The file path to the LiteRT-LM model.
  */
@@ -68,9 +88,7 @@ class Capabilities(modelPath: String) : AutoCloseable {
     }
   }
 
-  /**
-   * Checks if the loaded LiteRT-LM file supports function calling/tool use.
-   */
+  /** Checks if the loaded LiteRT-LM file supports function calling/tool use. */
   fun supportsFunctionCalling(): Boolean {
     synchronized(lock) {
       checkInitialized()
@@ -101,6 +119,14 @@ class Capabilities(modelPath: String) : AutoCloseable {
         topK = LiteRtLmJni.nativeSamplerTopK(handle!!),
         topP = LiteRtLmJni.nativeSamplerTopP(handle!!),
       )
+    }
+  }
+
+  /** Returns the maximum vision token budget for the model, or -1 if not defined. */
+  fun maxVisionTokenBudget(): Int {
+    synchronized(lock) {
+      checkInitialized()
+      return LiteRtLmJni.nativeMaxVisionTokenBudget(handle!!)
     }
   }
 

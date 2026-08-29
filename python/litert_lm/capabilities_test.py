@@ -40,6 +40,7 @@ class CapabilitiesTest(absltest.TestCase):
     self.assertFalse(capabilities.supports_thinking())
     self.assertFalse(capabilities.supports_function_calling())
     self.assertFalse(capabilities.has_speculative_decoding_support())
+    self.assertEqual(capabilities.max_vision_token_budget, -1)
 
     # Modalities
     self.assertTrue(capabilities.input_modalities.text)
@@ -144,6 +145,19 @@ class CapabilitiesTest(absltest.TestCase):
       _ = capabilities.default_sampler_params
     with self.assertRaises(RuntimeError):
       _ = capabilities.input_modalities
+
+  @mock.patch(
+      "litert_lm.capabilities._ffi._get_lib"
+  )
+  @mock.patch("os.path.exists", return_value=True)
+  def test_max_vision_token_budget(self, unused_mock_exists, mock_get_lib):
+    mock_lib = mock.MagicMock()
+    mock_get_lib.return_value = mock_lib
+    mock_lib.litert_lm_loaded_file_create.return_value = 12345
+    mock_lib.litert_lm_loaded_file_max_vision_token_budget.return_value = 280
+
+    capabilities = litert_lm.Capabilities("/fake/path")
+    self.assertEqual(capabilities.max_vision_token_budget, 280)
 
 
 if __name__ == "__main__":

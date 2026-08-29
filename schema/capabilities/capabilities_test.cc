@@ -189,6 +189,121 @@ TEST(CapabilitiesTest, InspectModel_ExtractsSystemMetadataAndLlmCapabilities) {
   EXPECT_FALSE(llm.output_modalities.video);
 }
 
+TEST(CapabilitiesTest, InspectModel_ExtractsMaxVisionTokenBudget) {
+  proto::LlmMetadata proto_meta;
+  auto* model_type = proto_meta.mutable_llm_model_type();
+  auto* gemma4 = model_type->mutable_gemma4();
+  gemma4->set_max_num_patches(2520);
+  gemma4->set_pooling_kernel_size(3);
+
+  std::string file_data = CreateTestLiteRTLM(
+      "IT", "google/gemma-4-2b-it", {"tf_lite_vision_adapter"}, &proto_meta);
+
+  std::istringstream stream(file_data, std::ios::binary);
+  auto result_or = InspectModel(stream);
+  ASSERT_OK(result_or);
+  ModelCapabilities result = std::move(*result_or);
+  ASSERT_TRUE(result.llm_capability.has_value());
+  const auto& llm = *result.llm_capability;
+  EXPECT_EQ(llm.max_vision_token_budget, 280);
+}
+
+TEST(CapabilitiesTest, InspectModel_ExtractsMaxVisionTokenBudget_GenericModel) {
+  proto::LlmMetadata proto_meta;
+  auto* model_type = proto_meta.mutable_llm_model_type();
+  auto* generic = model_type->mutable_generic_model();
+  generic->set_max_num_patches(100);
+  generic->set_pooling_kernel_size(2);
+
+  std::string file_data = CreateTestLiteRTLM(
+      "IT", "google/generic-it", {"tf_lite_vision_adapter"}, &proto_meta);
+
+  std::istringstream stream(file_data, std::ios::binary);
+  auto result_or = InspectModel(stream);
+  ASSERT_OK(result_or);
+  ModelCapabilities result = std::move(*result_or);
+  ASSERT_TRUE(result.llm_capability.has_value());
+  const auto& llm = *result.llm_capability;
+  EXPECT_EQ(llm.max_vision_token_budget, 25);
+}
+
+TEST(CapabilitiesTest,
+     InspectModel_ExtractsMaxVisionTokenBudget_GenericModel_DefaultPooling) {
+  proto::LlmMetadata proto_meta;
+  auto* model_type = proto_meta.mutable_llm_model_type();
+  auto* generic = model_type->mutable_generic_model();
+  generic->set_max_num_patches(100);
+
+  std::string file_data = CreateTestLiteRTLM(
+      "IT", "google/generic-it", {"tf_lite_vision_adapter"}, &proto_meta);
+
+  std::istringstream stream(file_data, std::ios::binary);
+  auto result_or = InspectModel(stream);
+  ASSERT_OK(result_or);
+  ModelCapabilities result = std::move(*result_or);
+  ASSERT_TRUE(result.llm_capability.has_value());
+  const auto& llm = *result.llm_capability;
+  EXPECT_EQ(llm.max_vision_token_budget, 100);  // Defaults to 1
+}
+
+
+TEST(CapabilitiesTest, InspectModel_ExtractsMaxVisionTokenBudget_Lfm2) {
+  proto::LlmMetadata proto_meta;
+  auto* model_type = proto_meta.mutable_llm_model_type();
+  auto* lfm2 = model_type->mutable_lfm2();
+  lfm2->set_max_num_patches(180);
+  lfm2->set_pooling_kernel_size(3);
+
+  std::string file_data = CreateTestLiteRTLM(
+      "IT", "google/lfm2-it", {"tf_lite_vision_adapter"}, &proto_meta);
+
+  std::istringstream stream(file_data, std::ios::binary);
+  auto result_or = InspectModel(stream);
+  ASSERT_OK(result_or);
+  ModelCapabilities result = std::move(*result_or);
+  ASSERT_TRUE(result.llm_capability.has_value());
+  const auto& llm = *result.llm_capability;
+  EXPECT_EQ(llm.max_vision_token_budget, 20);
+}
+
+TEST(CapabilitiesTest,
+     InspectModel_ExtractsMaxVisionTokenBudget_Lfm2_DefaultPooling) {
+  proto::LlmMetadata proto_meta;
+  auto* model_type = proto_meta.mutable_llm_model_type();
+  auto* lfm2 = model_type->mutable_lfm2();
+  lfm2->set_max_num_patches(180);
+
+  std::string file_data = CreateTestLiteRTLM(
+      "IT", "google/lfm2-it", {"tf_lite_vision_adapter"}, &proto_meta);
+
+  std::istringstream stream(file_data, std::ios::binary);
+  auto result_or = InspectModel(stream);
+  ASSERT_OK(result_or);
+  ModelCapabilities result = std::move(*result_or);
+  ASSERT_TRUE(result.llm_capability.has_value());
+  const auto& llm = *result.llm_capability;
+  EXPECT_EQ(llm.max_vision_token_budget, 45);  // Defaults to 2
+}
+
+TEST(CapabilitiesTest,
+     InspectModel_ExtractsMaxVisionTokenBudget_Gemma4_DefaultPooling) {
+  proto::LlmMetadata proto_meta;
+  auto* model_type = proto_meta.mutable_llm_model_type();
+  auto* gemma4 = model_type->mutable_gemma4();
+  gemma4->set_max_num_patches(2520);
+
+  std::string file_data = CreateTestLiteRTLM(
+      "IT", "google/gemma-4-2b-it", {"tf_lite_vision_adapter"}, &proto_meta);
+
+  std::istringstream stream(file_data, std::ios::binary);
+  auto result_or = InspectModel(stream);
+  ASSERT_OK(result_or);
+  ModelCapabilities result = std::move(*result_or);
+  ASSERT_TRUE(result.llm_capability.has_value());
+  const auto& llm = *result.llm_capability;
+  EXPECT_EQ(llm.max_vision_token_budget, 280);  // Defaults to 3
+}
+
 // Tests that unconfigured capability flags return std::nullopt for
 // older models.
 TEST(CapabilitiesTest, InspectModel_NoExplicitCapabilities_ReturnsFalse) {

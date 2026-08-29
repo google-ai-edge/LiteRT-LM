@@ -24,6 +24,8 @@ public struct SupportedModalities: Equatable {
 }
 
 /// Default sampler parameters.
+/// TODO: b/554164915 - Reuse SamplerConfig instead of SamplerParameters (matching Python),
+/// once SamplerConfig can support optional fields to represent unset/0 values from models.
 public struct SamplerParameters: Equatable {
   public let type: LiteRtLmSamplerType
   public let temperature: Float
@@ -49,6 +51,9 @@ public struct SamplerParameters: Equatable {
 /// if capabilities.inputModalities.vision {
 ///   print("Vision input is supported!")
 /// }
+///
+/// // 4. Check vision token budget
+/// let visionBudget = capabilities.maxVisionTokenBudget()
 /// ```
 public class Capabilities {
   private let handle: OpaquePointer
@@ -95,6 +100,12 @@ public class Capabilities {
       topK: Int(litert_lm_loaded_file_sampler_top_k(handle)),
       topP: litert_lm_loaded_file_sampler_top_p(handle)
     )
+  }
+
+  /// Returns the maximum vision token budget for the model.
+  /// Returns -1 if the model does not support vision or if the budget is not defined.
+  public func maxVisionTokenBudget() -> Int {
+    return Int(litert_lm_loaded_file_max_vision_token_budget(handle))
   }
 
   deinit {

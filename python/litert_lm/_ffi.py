@@ -848,6 +848,8 @@ def _setup_lib_signatures(lib):
       ctypes.c_void_p,
       ctypes.c_int,
   ]
+  lib.litert_lm_loaded_file_max_vision_token_budget.restype = ctypes.c_int32
+  lib.litert_lm_loaded_file_max_vision_token_budget.argtypes = [ctypes.c_void_p]
 
 
 def set_min_log_severity(severity: LogSeverity):

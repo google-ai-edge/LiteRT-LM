@@ -14,7 +14,6 @@
 
 #include "schema/capabilities/capabilities.h"
 
-#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <fstream>
@@ -33,6 +32,7 @@
 #include "absl/strings/str_format.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "runtime/proto/llm_metadata.pb.h"
+#include "runtime/proto/llm_model_type.pb.h"
 #include "runtime/util/status_macros.h"
 #include "schema/core/litertlm_header_schema_generated.h"
 #include "schema/core/litertlm_read.h"
@@ -46,8 +46,7 @@ namespace {
 // scientific notation) to explicitly signal that it is a float type.
 std::string FormatFloatForReport(float val) {
   std::string s = absl::StrFormat("%g", val);
-  if (std::isfinite(val) && !absl::StrContains(s, '.') &&
-      !absl::StrContains(s, 'e')) {
+  if (!absl::StrContains(s, '.') && !absl::StrContains(s, 'e')) {
     absl::StrAppend(&s, ".0");
   }
   return s;
@@ -133,25 +132,50 @@ absl::StatusOr<ModelCapabilities> InspectModel(std::istream& litertlm_stream) {
     litertlm_stream.seekg(llm_metadata_begin);
     auto buffer = std::make_unique<char[]>(size);
     litertlm_stream.read(buffer.get(), size);
-    if (!litertlm_stream) {
-      return absl::DataLossError("Failed to read LLM metadata from stream");
-    }
-    proto::LlmMetadata proto_metadata;
-    if (!proto_metadata.ParseFromArray(
-            static_cast<const void*>(buffer.get()), size)) {
-      return absl::InvalidArgumentError(
-          "Failed to parse LLM metadata protobuf");
-    }
-    llm_cap.supports_thinking = proto_metadata.supports_thinking();
-    llm_cap.supports_function_calling =
-        proto_metadata.supports_function_calling();
-    if (proto_metadata.has_sampler_params()) {
-      const auto& sp = proto_metadata.sampler_params();
-      llm_cap.default_sampler_params.type =
-          static_cast<SamplerType>(sp.type());
-      llm_cap.default_sampler_params.k = sp.k();
-      llm_cap.default_sampler_params.p = sp.p();
-      llm_cap.default_sampler_params.temperature = sp.temperature();
+    if (litertlm_stream) {
+      proto::LlmMetadata proto_metadata;
+      if (proto_metadata.ParseFromString(
+              absl::string_view(buffer.get(), size))) {
+        llm_cap.supports_thinking = proto_metadata.supports_thinking();
+        llm_cap.supports_function_calling =
+            proto_metadata.supports_function_calling();
+        if (proto_metadata.has_sampler_params()) {
+          const auto& sp = proto_metadata.sampler_params();
+          llm_cap.default_sampler_params.type =
+              static_cast<SamplerType>(sp.type());
+          llm_cap.default_sampler_params.k = sp.k();
+          llm_cap.default_sampler_params.p = sp.p();
+          llm_cap.default_sampler_params.temperature = sp.temperature();
+        }
+        if (proto_metadata.has_llm_model_type()) {
+          const auto& model_type = proto_metadata.llm_model_type();
+          int max_num_patches = 0;
+          // Default to 3, which is the standard default for embedding gemma v2
+          // and gemma4.
+          int pooling_kernel_size = 3;
+          if (model_type.has_gemma4()) {
+            max_num_patches = model_type.gemma4().max_num_patches();
+            if (model_type.gemma4().pooling_kernel_size() > 0) {
+              pooling_kernel_size = model_type.gemma4().pooling_kernel_size();
+            }
+          } else if (model_type.has_generic_model()) {
+            max_num_patches = model_type.generic_model().max_num_patches();
+            pooling_kernel_size =
+                model_type.generic_model().pooling_kernel_size() > 0
+                    ? model_type.generic_model().pooling_kernel_size()
+                    : 1;
+          } else if (model_type.has_lfm2()) {
+            max_num_patches = model_type.lfm2().max_num_patches();
+            pooling_kernel_size = model_type.lfm2().pooling_kernel_size() > 0
+                                      ? model_type.lfm2().pooling_kernel_size()
+                                      : 2;
+          }
+          if (max_num_patches > 0) {
+            llm_cap.max_vision_token_budget =
+                max_num_patches / (pooling_kernel_size * pooling_kernel_size);
+          }
+        }
+      }
     }
   }
   info.llm_capability = llm_cap;
@@ -200,12 +224,12 @@ std::ostream& operator<<(std::ostream& os,
      << (llm_cap.supports_thinking ? "YES" : "NO") << "\n"
      << "  Speculative Decoding:   "
      << (llm_cap.supports_speculative_decoding ? "YES" : "NO") << "\n"
+     << "  Max Vision Token Budget: " << llm_cap.max_vision_token_budget << "\n"
      << "  Sampler Type:           "
      << sampler_type_str(llm_cap.default_sampler_params.type) << "\n"
      << "  Sampler Temp:           "
      << FormatFloatForReport(llm_cap.default_sampler_params.temperature) << "\n"
-     << "  Sampler Top K:          " << llm_cap.default_sampler_params.k
-     << "\n"
+     << "  Sampler Top K:          " << llm_cap.default_sampler_params.k << "\n"
      << "  Sampler Top P:          "
      << FormatFloatForReport(llm_cap.default_sampler_params.p) << "\n"
      << "  Input Modalities:       " << llm_cap.input_modalities << "\n";

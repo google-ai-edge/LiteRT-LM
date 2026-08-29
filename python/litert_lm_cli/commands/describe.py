@@ -99,6 +99,9 @@ def describe_model(
       "  Speculative Decoding:   "
       f"{'YES' if capabilities.has_speculative_decoding_support() else 'NO'}"
   )
+  click.echo(
+      f"  Max Vision Token Budget: {capabilities.max_vision_token_budget}"
+  )
 
   sampler_config = capabilities.default_sampler_params
   click.echo(f"  Sampler Temp:           {sampler_config.temperature:.2f}")

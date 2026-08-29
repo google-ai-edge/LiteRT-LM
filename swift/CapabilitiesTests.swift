@@ -58,6 +58,7 @@ class CapabilitiesTests: XCTestCase {
     // Verify thinking and function calling (false for legacy test model)
     XCTAssertFalse(capabilities.supportsThinking())
     XCTAssertFalse(capabilities.supportsFunctionCalling())
+    XCTAssertEqual(capabilities.maxVisionTokenBudget(), -1)
 
     // Verify modalities
     XCTAssertTrue(capabilities.inputModalities.text)

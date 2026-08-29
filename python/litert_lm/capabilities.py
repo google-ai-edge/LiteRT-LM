@@ -145,3 +145,11 @@ class Capabilities:
         top_k=top_k if top_k > 0 else None,
         top_p=self._lib.litert_lm_loaded_file_sampler_top_p(self._handle),
     )
+
+  @property
+  def max_vision_token_budget(self) -> int:
+    """Returns the maximum vision token budget for multimodal inputs, or -1 if not defined."""
+    self._check_closed()
+    return int(
+        self._lib.litert_lm_loaded_file_max_vision_token_budget(self._handle)
+    )

@@ -45,6 +45,7 @@ TEST(CapabilitiesCTest, InspectCapabilities) {
   EXPECT_FALSE(litert_lm_loaded_file_has_speculative_decoding_support(file));
   EXPECT_FALSE(litert_lm_loaded_file_supports_thinking(file));
   EXPECT_FALSE(litert_lm_loaded_file_supports_function_calling(file));
+  EXPECT_EQ(litert_lm_loaded_file_max_vision_token_budget(file), -1);
 
   // Verify modalities
   EXPECT_TRUE(litert_lm_loaded_file_supports_input_modality(
