@@ -166,11 +166,7 @@
     {%- if message['tool_calls'] -%}
         {%- for tool_call in message['tool_calls'] -%}
             {%- set function = tool_call['function'] -%}
-            {%- if function['arguments'] is mapping -%}
-                {{- '<|tool_call>call:' + function['name'] + format_argument(function['arguments'], escape_keys=False) + '<tool_call|>' -}}
-            {%- elif function['arguments'] is string -%}
-                {{- '<|tool_call>call:' + function['name'] + '{' + function['arguments'] + '}<tool_call|>' -}}
-            {%- endif -%}
+            {{- '<|tool_call>call:' + function['name'] + format_argument(function['arguments'], escape_keys=False) + '<tool_call|>' -}}
         {%- endfor -%}
         {%- set ns.prev_message_type = 'tool_call' -%}
     {%- endif -%}
