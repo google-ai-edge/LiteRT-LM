@@ -39,14 +39,14 @@ endif()
 
 set(Protobuf_INCLUDE_DIR "${LITERTLM_PROTOBUF_INCLUDE_DIRS}" CACHE INTERNAL "")
 set(Protobuf_LIBRARIES LiteRTLM::protobuf::libprotobuf CACHE INTERNAL "")
-set(Protobuf_PROTOC_EXECUTABLE "${LITERTLM_PROTOC_EXECUTABLE}" CACHE INTERNAL "")
+set(Protobuf_PROTOC_EXECUTABLE "${LITERTLM_HOST_PROTOC}" CACHE INTERNAL "")
 set(Protobuf_FOUND TRUE CACHE INTERNAL "")
 set(PROTOBUF_FOUND TRUE CACHE INTERNAL "")
 
 if(NOT TARGET protobuf::protoc)
     add_executable(protobuf::protoc IMPORTED GLOBAL)
     set_target_properties(protobuf::protoc PROPERTIES
-        IMPORTED_LOCATION "${LITERTLM_PROTOC_EXECUTABLE}"
+        IMPORTED_LOCATION "${LITERTLM_HOST_PROTOC}"
     )
 endif()
 

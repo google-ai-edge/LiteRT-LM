@@ -18,7 +18,7 @@ include("${LITERTLM_ABSL_CONFIG_PATH}")
 
 setup_external_install_structure("${LITERTLM_PROTOBUF_INSTALL_PREFIX}")
 
-set(LITERTLM_PROTOBUF_TAG "v35.1" CACHE STRING "Protobuf git tag")
+set(LITERTLM_PROTOBUF_TAG "v36.0" CACHE STRING "Protobuf git tag")
 
 include(ExternalProject)
 if(NOT EXISTS "${LITERTLM_PROTOBUF_CONFIG_CMAKE_FILE}")

@@ -5,6 +5,9 @@ inputs:
   cache-name:
     description: 'Name of the cache (e.g., ccache, prebuild-deps, litert_lm)'
     required: true
+  presubmit-name:
+    description: 'Name of the presubmit (e.g., presubmit-linux-cmake)'
+    required: true
   os:
     description: 'Runner OS (e.g., Linux)'
     required: true
@@ -28,6 +31,7 @@ runs:
       shell: bash
       env:
         OS: ${{ inputs.os }}
+        PRESUBMIT: ${{ inputs.presubmit-name }}
         NAME: ${{ inputs.cache-name }}
         HASH: ${{ inputs.pr-hash }}
         EVENT: ${{ github.event_name }}
@@ -43,17 +47,22 @@ runs:
         fi
 
         if [[ "$REF_TYPE" == "tag" ]]; then
-          # Releases create and restore from the permanent baseline
-          echo "key=$OS-$NAME-release-latest" >> "$GITHUB_OUTPUT"
-          echo "restore-key=$OS-$NAME-release-latest" >> "$GITHUB_OUTPUT"
+          # EXACT match: Release baseline
+          echo "key=$PRESUBMIT-$OS-$NAME-release-latest" >> "$GITHUB_OUTPUT"
+          echo "restore-key=$PRESUBMIT-$OS-$NAME-release-latest" >> "$GITHUB_OUTPUT"
 
         elif [[ "$EVENT" == "pull_request" ]]; then
-          # PRs look for their own cache, then main base, then release
-          echo "key=$OS-$NAME-$PR_SEGMENT" >> "$GITHUB_OUTPUT"
-          echo "restore-key=$OS-$NAME-main-$BASE_SHA $OS-$NAME-release-latest" >> "$GITHUB_OUTPUT"
+          # EXACT match hierarchy for PRs:
+          # 1. This exact PR commit ($PR_SEGMENT)
+          # 2. Base commit on main ($BASE_SHA)
+          # 3. Latest release baseline
+          echo "key=$PRESUBMIT-$OS-$NAME-$PR_SEGMENT" >> "$GITHUB_OUTPUT"
+          echo "restore-key=$PRESUBMIT-$OS-$NAME-main-$BASE_SHA $PRESUBMIT-$OS-$NAME-release-latest" >> "$GITHUB_OUTPUT"
 
         else
-          # Main branch builds create main baselines and fall back to release
-          echo "key=$OS-$NAME-main-$COMMIT_SHA" >> "$GITHUB_OUTPUT"
-          echo "restore-key=$OS-$NAME-release-latest" >> "$GITHUB_OUTPUT"
+          # EXACT match hierarchy for Main branch:
+          # 1. This exact main commit ($COMMIT_SHA)
+          # 2. Latest release baseline
+          echo "key=$PRESUBMIT-$OS-$NAME-main-$COMMIT_SHA" >> "$GITHUB_OUTPUT"
+          echo "restore-key=$PRESUBMIT-$OS-$NAME-release-latest" >> "$GITHUB_OUTPUT"
         fi

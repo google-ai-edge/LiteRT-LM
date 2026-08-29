@@ -19,7 +19,7 @@ function(generate_protobuf TARGET_NAME _root_path)
 
     add_custom_command(
         OUTPUT ""
-        COMMAND $<TARGET_FILE:protobuf::protoc>
+        COMMAND ${LITERTLM_HOST_PROTOC}
         ARGS --version
     )
 
@@ -37,7 +37,7 @@ function(generate_protobuf TARGET_NAME _root_path)
 
         add_custom_command(
             OUTPUT "${SRC_FILE}" "${HDR_FILE}"
-            COMMAND $<TARGET_FILE:protobuf::protoc>
+            COMMAND ${LITERTLM_HOST_PROTOC}
             ARGS --cpp_out "${CMAKE_CURRENT_BINARY_DIR}"
                  -I "${_root_path}"
                  "${PROTO_FILE}"
