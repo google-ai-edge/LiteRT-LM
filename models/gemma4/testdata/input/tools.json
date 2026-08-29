@@ -22,6 +22,10 @@
   ],
   "messages": [
     {
+      "role": "system",
+      "content": "You are a helpful assistant."
+    },
+    {
       "role": "user",
       "content": "What is the weather in London and Paris?"
     },

@@ -129,21 +129,21 @@
 {%- set loop_messages = messages -%}
 {{ bos_token }}
 {#- Handle System/Tool Definitions Block -#}
-{%- if thinking or tools or messages[0]['role'] in ['system', 'developer'] -%}
-    {{- '<|turn>system\n' -}}
+{%- if thinking or tools or messages[0]['role'] == 'system' -%}
+    {{- '<|turn>system' -}}
 
     {#- Inject Thinking token at the very top of the FIRST system turn -#}
     {%- if thinking -%}
-        {{- '<|think|>\n' -}}
+        {{- '\n<|think|>' -}}
     {%- endif -%}
 
-    {%- if messages[0]['role'] in ['system', 'developer'] -%}
-        {{- format_content(messages[0]['content']) -}}
+    {%- if messages[0]['role'] == 'system' -%}
+        {{- '\n' + format_content(messages[0]['content']) -}}
         {%- set loop_messages = messages[1:] -%}
     {%- endif -%}
 
     {%- if tools -%}
-        {%- if messages[0]['role'] in ['system', 'developer'] and messages[0]['content'] %}{{- '\n' -}}{% endif -%}
+        {{- '\n' -}}
         {%- for tool in tools %}
             {{- '<|tool>' -}}
             {{- format_function_declaration(tool) | trim -}}
@@ -190,7 +190,7 @@
             {%- else -%}
                 {{- format_content(message['content']) -}}
                 {%- if not message['tool_calls'] -%}
-                    {%- set ns.prev_message_type = None -%} 
+                    {%- set ns.prev_message_type = None -%}
                 {%- endif -%}
             {%- endif -%}
         {%- if ns.prev_message_type == None -%}
