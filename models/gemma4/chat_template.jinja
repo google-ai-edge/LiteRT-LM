@@ -157,52 +157,53 @@
 {#- Loop through messages -#}
 {%- for message in loop_messages -%}
     {%- set role = 'model' if message['role'] == 'assistant' else message['role'] -%}
-        {%- if role != 'tool' -%}
-            {%- if not (role == 'model' and ns.prev_message_type == 'tool_response') -%}
-                {{- '<|turn>' + role + '\n' }}
-            {%- endif -%}
+    {%- if role != 'tool' -%}
+        {%- if not (role == 'model' and ns.prev_message_type == 'tool_response') -%}
+            {{- '<|turn>' + role + '\n' }}
         {%- endif -%}
+    {%- endif -%}
 
-            {%- if message['tool_calls'] -%}
-                {%- for tool_call in message['tool_calls'] -%}
-                    {%- set function = tool_call['function'] -%}
-                    {%- if function['arguments'] is mapping -%}
-                        {{- '<|tool_call>call:' + function['name'] + format_argument(function['arguments'], escape_keys=False) + '<tool_call|>' -}}
-                    {%- elif function['arguments'] is string -%}
-                        {{- '<|tool_call>call:' + function['name'] + '{' + function['arguments'] + '}<tool_call|>' -}}
-                    {%- endif -%}
-                {%- endfor -%}
-                {%- set ns.prev_message_type = 'tool_call' -%}
+    {%- if message['tool_calls'] -%}
+        {%- for tool_call in message['tool_calls'] -%}
+            {%- set function = tool_call['function'] -%}
+            {%- if function['arguments'] is mapping -%}
+                {{- '<|tool_call>call:' + function['name'] + format_argument(function['arguments'], escape_keys=False) + '<tool_call|>' -}}
+            {%- elif function['arguments'] is string -%}
+                {{- '<|tool_call>call:' + function['name'] + '{' + function['arguments'] + '}<tool_call|>' -}}
             {%- endif -%}
+        {%- endfor -%}
+        {%- set ns.prev_message_type = 'tool_call' -%}
+    {%- endif -%}
 
-            {%- if role == 'tool' and message['content'] is sequence -%}
-                {#- Tool Response handling -#}
-                {%- for item in message['content'] -%}
-                    {{- '<|tool_response>response:' + item['name'] | default('unknown') -}}
-                    {%- if item['response'] is mapping -%}
-                        {{- format_argument(item['response'], escape_keys=False) -}}
-                    {%- else -%}
-                        {{- '{value:' + format_argument(item['response'], escape_keys=False) + '}' -}}
-                    {%- endif -%}
-                    {{- '<tool_response|>' -}}
-                {%- endfor -%}
-                {%- set ns.prev_message_type = 'tool_response' -%}
+    {%- if role == 'tool' and message['content'] is sequence -%}
+        {#- Tool Response handling -#}
+        {%- for item in message['content'] -%}
+            {{- '<|tool_response>response:' + item['name'] | default('unknown') -}}
+            {%- if item['response'] is mapping -%}
+                {{- format_argument(item['response'], escape_keys=False) -}}
             {%- else -%}
-                {{- format_content(message['content']) -}}
-                {%- if not message['tool_calls'] -%}
-                    {%- set ns.prev_message_type = None -%}
-                {%- endif -%}
+                {{- '{value:' + format_argument(item['response'], escape_keys=False) + '}' -}}
             {%- endif -%}
-        {%- if ns.prev_message_type == None -%}
-            {{- '<turn|>\n' -}}
+            {{- '<tool_response|>' -}}
+        {%- endfor -%}
+        {%- set ns.prev_message_type = 'tool_response' -%}
+    {%- else -%}
+        {{- format_content(message['content']) -}}
+        {%- if not message['tool_calls'] -%}
+            {%- set ns.prev_message_type = None -%}
         {%- endif -%}
+    {%- endif -%}
+
+    {%- if ns.prev_message_type == None -%}
+        {{- '<turn|>\n' -}}
+    {%- endif -%}
 {%- endfor -%}
 
 {%- if add_generation_prompt -%}
     {%- if ns.prev_message_type != 'tool_response' and ns.prev_message_type != 'tool_call' -%}
         {{- '<|turn>model\n' -}}
-    {%- if not thinking -%}
-        {{- '<|channel>thought\n<channel|>' -}}
+        {%- if not thinking -%}
+            {{- '<|channel>thought\n<channel|>' -}}
         {%- endif -%}
     {%- elif ns.prev_message_type == 'tool_response' and thinking -%}
         {{- '<|channel>thought\n' -}}
