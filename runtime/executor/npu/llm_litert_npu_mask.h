@@ -65,6 +65,14 @@ struct MaskSignatures {
 // 4. MTP Speculative Decoding - Verification (on main_mask):
 //    main_mask_.SetVerifyInput(start_step, verify_ids);
 //    main_mask_.RunVerify();
+//
+// 5. Dynamic Context Switching:
+//    When the text decoder switches from one context length to the next,
+//    its input buffer bindings change. Rebind Mask output buffers:
+//    mask_.UpdateOutputBuffers(
+//        active_group.text_decoder_inference_context.prefill_input_buffers,
+//        active_group.text_decoder_inference_context.decode_input_buffers,
+//        active_group.text_decoder_inference_context.verify_input_buffers);
 // =============================================================================
 class NpuMask {
  public:
@@ -78,7 +86,8 @@ class NpuMask {
   static absl::StatusOr<NpuMask> Create(
       MaskUpdateMethod method,
       const ::litert::CompiledModel* npu_auxiliary_compiled_model,
-      const ResolvedPrefillSignatures& prefill_signatures,
+      absl::string_view prefill_signature, absl::string_view decode_signature,
+      absl::string_view verify_signature,
       absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
           text_decoder_prefill_input_buffers,
       absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
@@ -101,20 +110,31 @@ class NpuMask {
     compiled_model_ = compiled_model;
   }
 
+  // Updates the internal Mask output buffer bindings (e.g. mask_local,
+  // mask_global) to point to the newly active context group's text decoder
+  // input buffers when switching from one context length to the next.
+  absl::Status UpdateOutputBuffers(
+      const absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+          text_decoder_prefill_input_buffers,
+      const absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+          text_decoder_decode_input_buffers,
+      const absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+          text_decoder_verify_input_buffers);
+
   // --- Stage 1: Prefill ---
   absl::Status SetPrefillInput(int32_t start_step,
                                absl::Span<const int> token_ids);
-  absl::Status RunPrefill(absl::string_view signature) const;
+  absl::Status RunPrefill(absl::string_view signature = "") const;
 
   // --- Stage 2: Decode (Main & Drafter) ---
   absl::Status SetDecodeInput(int32_t step, int32_t token_id);
-  absl::Status RunDecode() const;
+  absl::Status RunDecode(absl::string_view signature = "") const;
 
   // --- Stage 3: Speculative Decoding (MTP Draft & Verify) ---
   absl::Status RunDrafter() const;
   absl::Status SetVerifyInput(int32_t start_step,
                               absl::Span<const int> verify_ids);
-  absl::Status RunVerify() const;
+  absl::Status RunVerify(absl::string_view signature = "") const;
 
   // --- Accessors ---
   MaskUpdateMethod GetMethod() const { return method_; }

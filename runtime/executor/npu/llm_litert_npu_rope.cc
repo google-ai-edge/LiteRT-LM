@@ -45,7 +45,8 @@ absl::StatusOr<NpuRope> NpuRope::CreateForTest(
 
 absl::StatusOr<NpuRope> NpuRope::Create(
     const ::litert::CompiledModel* npu_auxiliary_compiled_model,
-    const ResolvedPrefillSignatures& prefill_signatures,
+    absl::string_view prefill_signature, absl::string_view decode_signature,
+    absl::string_view verify_signature,
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
         text_decoder_prefill_input_buffers,
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
@@ -85,19 +86,19 @@ absl::StatusOr<NpuRope> NpuRope::Create(
     return absl::OkStatus();
   };
 
-  LITERT_RETURN_IF_ERROR(map_rope_stage(
-      prefill_signatures.rope, text_decoder_prefill_input_buffers,
-      prefill_input_buffers, prefill_output_buffers));
+  LITERT_RETURN_IF_ERROR(
+      map_rope_stage(prefill_signature, text_decoder_prefill_input_buffers,
+                     prefill_input_buffers, prefill_output_buffers));
 
-  LITERT_RETURN_IF_ERROR(map_rope_stage(
-      RopeSignatures::kDecodeRope, text_decoder_decode_input_buffers,
-      decode_input_buffers, decode_output_buffers));
+  LITERT_RETURN_IF_ERROR(
+      map_rope_stage(decode_signature, text_decoder_decode_input_buffers,
+                     decode_input_buffers, decode_output_buffers));
 
-  if (npu_auxiliary_compiled_model->FindSignature(
-          RopeSignatures::kVerifyRope)) {
-    LITERT_RETURN_IF_ERROR(map_rope_stage(
-        RopeSignatures::kVerifyRope, text_decoder_verify_input_buffers,
-        verify_input_buffers, verify_output_buffers));
+  if (!verify_signature.empty() &&
+      npu_auxiliary_compiled_model->FindSignature(verify_signature)) {
+    LITERT_RETURN_IF_ERROR(
+        map_rope_stage(verify_signature, text_decoder_verify_input_buffers,
+                       verify_input_buffers, verify_output_buffers));
   }
 
   InferenceContext rope_context(
@@ -123,10 +124,39 @@ absl::StatusOr<NpuRope> NpuRope::CreateForDrafter(
   return NpuRope(compiled_model, std::move(ctx));
 }
 
+absl::Status NpuRope::UpdateOutputBuffers(
+    const absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+        text_decoder_prefill_input_buffers,
+    const absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+        text_decoder_decode_input_buffers,
+    const absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+        text_decoder_verify_input_buffers) {
+  for (const auto& [name, buf] : text_decoder_prefill_input_buffers) {
+    if (rope_context_.prefill_output_buffers.contains(name)) {
+      LITERT_ASSIGN_OR_RETURN(rope_context_.prefill_output_buffers[name],
+                              buf.Duplicate());
+    }
+  }
+  for (const auto& [name, buf] : text_decoder_decode_input_buffers) {
+    if (rope_context_.decode_output_buffers.contains(name)) {
+      LITERT_ASSIGN_OR_RETURN(rope_context_.decode_output_buffers[name],
+                              buf.Duplicate());
+    }
+  }
+  for (const auto& [name, buf] : text_decoder_verify_input_buffers) {
+    if (rope_context_.verify_output_buffers.contains(name)) {
+      LITERT_ASSIGN_OR_RETURN(rope_context_.verify_output_buffers[name],
+                              buf.Duplicate());
+    }
+  }
+  return absl::OkStatus();
+}
+
 absl::Status NpuRope::RunPrefill(absl::string_view signature) const {
   RET_CHECK(compiled_model_ != nullptr) << "Compiled model is null.";
+  absl::string_view sig = signature.empty() ? kPrefillRopeBase : signature;
   auto res = compiled_model_->Run(
-      signature,
+      sig,
       const_cast<
           absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&>(
           rope_context_.prefill_input_buffers),
@@ -138,10 +168,12 @@ absl::Status NpuRope::RunPrefill(absl::string_view signature) const {
   return absl::OkStatus();
 }
 
-absl::Status NpuRope::RunDecode() const {
+absl::Status NpuRope::RunDecode(absl::string_view signature) const {
   RET_CHECK(compiled_model_ != nullptr) << "Compiled model is null.";
+  absl::string_view sig =
+      signature.empty() ? RopeSignatures::kDecodeRope : signature;
   auto res = compiled_model_->Run(
-      RopeSignatures::kDecodeRope,
+      sig,
       const_cast<
           absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&>(
           rope_context_.decode_input_buffers),
@@ -153,10 +185,12 @@ absl::Status NpuRope::RunDecode() const {
   return absl::OkStatus();
 }
 
-absl::Status NpuRope::RunVerify() const {
+absl::Status NpuRope::RunVerify(absl::string_view signature) const {
   RET_CHECK(compiled_model_ != nullptr) << "Compiled model is null.";
+  absl::string_view sig =
+      signature.empty() ? RopeSignatures::kVerifyRope : signature;
   auto res = compiled_model_->Run(
-      RopeSignatures::kVerifyRope,
+      sig,
       const_cast<
           absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&>(
           rope_context_.verify_input_buffers),

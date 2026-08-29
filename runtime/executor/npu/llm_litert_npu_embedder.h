@@ -182,6 +182,14 @@ struct HWPleParams {
 //    if (embedder_.HasPerLayerEmbeddings()) {
 //      embedder_.RunVerifyPerLayer(verify_ids);
 //    }
+//
+// 6. Dynamic Context Switching:
+//    When the text decoder switches from one context length to the next,
+//    its input buffer bindings change. Rebind Embedder output buffers:
+//    embedder_.UpdateOutputBuffers(
+//        active_group.text_decoder_inference_context.prefill_input_buffers,
+//        active_group.text_decoder_inference_context.decode_input_buffers,
+//        active_group.text_decoder_inference_context.verify_input_buffers);
 // =============================================================================
 class NpuEmbedder {
  public:
@@ -209,12 +217,12 @@ class NpuEmbedder {
   std::vector<float> GetDefaultEmbeddingVector() const;
 
   // --- Stage 1: Prefill ---
-  absl::Status RunPrefill(absl::string_view embedder_signature,
-                          const TokenData* pending_token,
-                          absl::Span<const int> processed_input_tokens,
-                          TokenData* last_input_token);
-  absl::Status RunPrefillPerLayer(absl::string_view signature,
-                                  absl::Span<const int> tokens_to_embed);
+  absl::Status RunPrefill(absl::string_view embedder_signature = "",
+                          const TokenData* pending_token = nullptr,
+                          absl::Span<const int> processed_input_tokens = {},
+                          TokenData* last_input_token = nullptr);
+  absl::Status RunPrefillPerLayer(absl::string_view signature = "",
+                                  absl::Span<const int> tokens_to_embed = {});
   absl::Status WriteAndPadPleEmbeddings(::litert::Environment& env,
                                         absl::Span<const float> ple_embeddings);
 
@@ -243,6 +251,17 @@ class NpuEmbedder {
   // --- Warmup & Context Accessors ---
   absl::Status RunPrefillEmbedder(absl::string_view signature);
   absl::Status RunDecodeEmbedder();
+
+  // Updates the internal Embedder output buffer bindings to point to the
+  // newly active context group's text decoder input buffers when switching
+  // from one context length to the next.
+  absl::Status UpdateOutputBuffers(
+      const absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+          text_decoder_prefill_input_buffers,
+      const absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+          text_decoder_decode_input_buffers,
+      const absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+          text_decoder_verify_input_buffers);
 
   EmbedderContext* MutableEmbedderContext() {
     return embedder_context_.has_value() ? &*embedder_context_ : nullptr;

@@ -51,6 +51,38 @@ namespace {
 
 constexpr int kSliceOuterRank = 2;
 
+// Copies KV cache slice to main cache, transposing if necessary.
+// Loop order ensures sequential writes to dst (enables write-coalescing on
+// uncached memory).
+template <typename T, bool cache_transposed>
+void TransposeCopy(uint8_t* dst, const uint8_t* src, int64_t real_len,
+                   int64_t real_start, int64_t wp, int64_t cache_seq,
+                   int64_t hidden_dim, int64_t slice_seq) {
+  T* d = reinterpret_cast<T*>(dst);
+  const T* s = reinterpret_cast<const T*>(src);
+  if constexpr (cache_transposed) {
+    // Outer loop over hidden_dim ensures sequential writes to d[h * cache_seq +
+    // wrapped_pos]
+    for (int64_t h = 0; h < hidden_dim; ++h) {
+      for (int64_t s_idx = 0; s_idx < real_len; ++s_idx) {
+        int64_t wrapped_pos = (wp + s_idx) % cache_seq;
+        int64_t slice_s = real_start + s_idx;
+        d[h * cache_seq + wrapped_pos] = s[slice_s * hidden_dim + h];
+      }
+    }
+  } else {
+    // Outer loop over s_idx ensures sequential writes to d[wrapped_pos *
+    // hidden_dim + h]
+    for (int64_t s_idx = 0; s_idx < real_len; ++s_idx) {
+      int64_t wrapped_pos = (wp + s_idx) % cache_seq;
+      int64_t slice_s = real_start + s_idx;
+      for (int64_t h = 0; h < hidden_dim; ++h) {
+        d[wrapped_pos * hidden_dim + h] = s[h * slice_seq + slice_s];
+      }
+    }
+  }
+}
+
 }  // namespace
 
 int64_t GetKvCacheInitValue(ModelResources& resources) {
@@ -344,13 +376,28 @@ absl::Status HWKVCacheUpdate(
           }
         } else {
           // Cache is [..., seq, hidden], Slice is [..., hidden, seq]
-          for (int64_t s = 0; s < real_len; ++s) {
-            int64_t wrapped_pos = (wp + s) % cache_seq;
-            int64_t slice_s = real_start + s;
-            for (int64_t h = 0; h < hidden_dim; ++h) {
-              std::memcpy(c_ptr + (wrapped_pos * hidden_dim + h) * element_size,
-                          s_ptr + (h * slice_seq + slice_s) * element_size,
-                          element_size);
+          if (element_size == 1) {
+            TransposeCopy<uint8_t, false>(c_ptr, s_ptr, real_len, real_start,
+                                          wp, cache_seq, hidden_dim, slice_seq);
+          } else if (element_size == 2) {
+            TransposeCopy<uint16_t, false>(c_ptr, s_ptr, real_len, real_start,
+                                           wp, cache_seq, hidden_dim,
+                                           slice_seq);
+          } else if (element_size == 4) {
+            TransposeCopy<uint32_t, false>(c_ptr, s_ptr, real_len, real_start,
+                                           wp, cache_seq, hidden_dim,
+                                           slice_seq);
+          } else {
+            // Slow fallback
+            for (int64_t s = 0; s < real_len; ++s) {
+              int64_t wrapped_pos = (wp + s) % cache_seq;
+              int64_t slice_s = real_start + s;
+              for (int64_t h = 0; h < hidden_dim; ++h) {
+                std::memcpy(
+                    c_ptr + (wrapped_pos * hidden_dim + h) * element_size,
+                    s_ptr + (h * slice_seq + slice_s) * element_size,
+                    element_size);
+              }
             }
           }
         }
@@ -429,13 +476,26 @@ absl::Status HWKVCacheUpdate(
           }
         } else {
           // Cache is [..., hidden, seq], Slice is [..., seq, hidden]
-          for (int64_t s = 0; s < real_len; ++s) {
-            int64_t wrapped_pos = (wp + s) % cache_seq;
-            int64_t slice_s = real_start + s;
-            for (int64_t h = 0; h < hidden_dim; ++h) {
-              std::memcpy(c_ptr + (h * cache_seq + wrapped_pos) * element_size,
-                          s_ptr + (slice_s * hidden_dim + h) * element_size,
-                          element_size);
+          if (element_size == 1) {
+            TransposeCopy<uint8_t, true>(c_ptr, s_ptr, real_len, real_start, wp,
+                                         cache_seq, hidden_dim, slice_seq);
+          } else if (element_size == 2) {
+            TransposeCopy<uint16_t, true>(c_ptr, s_ptr, real_len, real_start,
+                                          wp, cache_seq, hidden_dim, slice_seq);
+          } else if (element_size == 4) {
+            TransposeCopy<uint32_t, true>(c_ptr, s_ptr, real_len, real_start,
+                                          wp, cache_seq, hidden_dim, slice_seq);
+          } else {
+            // Slow fallback
+            for (int64_t s = 0; s < real_len; ++s) {
+              int64_t wrapped_pos = (wp + s) % cache_seq;
+              int64_t slice_s = real_start + s;
+              for (int64_t h = 0; h < hidden_dim; ++h) {
+                std::memcpy(
+                    c_ptr + (h * cache_seq + wrapped_pos) * element_size,
+                    s_ptr + (slice_s * hidden_dim + h) * element_size,
+                    element_size);
+              }
             }
           }
         }
@@ -624,19 +684,21 @@ absl::StatusOr<NpuKVCache> NpuKVCache::CreateForTest(
     KVCacheUpdateMethod method, const ::litert::CompiledModel* compiled_model,
     InferenceContext cache_update_context,
     absl::flat_hash_map<absl::string_view, HWQuantParams> kv_quant_params,
-    bool has_sliding_window_attention) {
+    bool has_sliding_window_attention, int64_t kv_cache_init_value) {
   if (method == KVCacheUpdateMethod::kModel && compiled_model == nullptr) {
     return absl::InvalidArgumentError(
         "Compiled model is required when using kModel cache update method.");
   }
   return NpuKVCache(method, compiled_model, std::move(cache_update_context),
-                    std::move(kv_quant_params), has_sliding_window_attention);
+                    std::move(kv_quant_params), has_sliding_window_attention,
+                    kv_cache_init_value);
 }
 
 absl::StatusOr<NpuKVCache> NpuKVCache::Create(
     KVCacheUpdateMethod method,
     const ::litert::CompiledModel* npu_auxiliary_compiled_model,
-    const ResolvedPrefillSignatures& prefill_signatures,
+    absl::string_view prefill_signature, absl::string_view decode_signature,
+    absl::string_view verify_signature,
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
         input_kv_cache_buffers,
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
@@ -646,7 +708,7 @@ absl::StatusOr<NpuKVCache> NpuKVCache::Create(
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
         verify_output_kv_cache_slice_buffers,
     absl::flat_hash_map<absl::string_view, HWQuantParams> kv_quant_params,
-    bool has_sliding_window_attention) {
+    bool has_sliding_window_attention, int64_t kv_cache_init_value) {
   RET_CHECK(npu_auxiliary_compiled_model != nullptr)
       << "Auxiliary compiled model cannot be null for NpuKVCache";
 
@@ -677,49 +739,53 @@ absl::StatusOr<NpuKVCache> NpuKVCache::Create(
     LITERT_ASSIGN_OR_RETURN(decode_input_buffers[key], value.Duplicate());
   }
 
-  LITERT_ASSIGN_OR_RETURN(
-      prefill_input_buffers[CacheUpdateSignatures::kInputPos],
-      npu_auxiliary_compiled_model->CreateInputBuffer(
-          prefill_signatures.cache_update, CacheUpdateSignatures::kInputPos));
-  prefill_input_buffers[CacheUpdateSignatures::kInputPos].Clear();
-
-  LITERT_ASSIGN_OR_RETURN(auto prefill_cache_input_names,
-                          npu_auxiliary_compiled_model->GetSignatureInputNames(
-                              prefill_signatures.cache_update));
-  if (absl::c_find(prefill_cache_input_names,
-                   CacheUpdateSignatures::kInputValidMask) !=
-      prefill_cache_input_names.end()) {
+  if (!prefill_signature.empty() &&
+      npu_auxiliary_compiled_model->FindSignature(prefill_signature)) {
     LITERT_ASSIGN_OR_RETURN(
-        prefill_input_buffers[CacheUpdateSignatures::kInputValidMask],
+        prefill_input_buffers[CacheUpdateSignatures::kInputPos],
         npu_auxiliary_compiled_model->CreateInputBuffer(
-            prefill_signatures.cache_update,
-            CacheUpdateSignatures::kInputValidMask));
-    prefill_input_buffers[CacheUpdateSignatures::kInputValidMask].Clear();
+            prefill_signature, CacheUpdateSignatures::kInputPos));
+    prefill_input_buffers[CacheUpdateSignatures::kInputPos].Clear();
+
+    LITERT_ASSIGN_OR_RETURN(
+        auto prefill_cache_input_names,
+        npu_auxiliary_compiled_model->GetSignatureInputNames(
+            prefill_signature));
+    if (absl::c_find(prefill_cache_input_names,
+                     CacheUpdateSignatures::kInputValidMask) !=
+        prefill_cache_input_names.end()) {
+      LITERT_ASSIGN_OR_RETURN(
+          prefill_input_buffers[CacheUpdateSignatures::kInputValidMask],
+          npu_auxiliary_compiled_model->CreateInputBuffer(
+              prefill_signature, CacheUpdateSignatures::kInputValidMask));
+      prefill_input_buffers[CacheUpdateSignatures::kInputValidMask].Clear();
+    }
   }
 
-  LITERT_ASSIGN_OR_RETURN(
-      decode_input_buffers[CacheUpdateSignatures::kInputPos],
-      npu_auxiliary_compiled_model->CreateInputBuffer(
-          CacheUpdateSignatures::kDecodeCacheUpdate,
-          CacheUpdateSignatures::kInputPos));
-  decode_input_buffers[CacheUpdateSignatures::kInputPos].Clear();
-
-  LITERT_ASSIGN_OR_RETURN(auto decode_cache_input_names,
-                          npu_auxiliary_compiled_model->GetSignatureInputNames(
-                              CacheUpdateSignatures::kDecodeCacheUpdate));
-  if (absl::c_find(decode_cache_input_names,
-                   CacheUpdateSignatures::kInputValidMask) !=
-      decode_cache_input_names.end()) {
+  if (!decode_signature.empty() &&
+      npu_auxiliary_compiled_model->FindSignature(decode_signature)) {
     LITERT_ASSIGN_OR_RETURN(
-        decode_input_buffers[CacheUpdateSignatures::kInputValidMask],
+        decode_input_buffers[CacheUpdateSignatures::kInputPos],
         npu_auxiliary_compiled_model->CreateInputBuffer(
-            CacheUpdateSignatures::kDecodeCacheUpdate,
-            CacheUpdateSignatures::kInputValidMask));
-    decode_input_buffers[CacheUpdateSignatures::kInputValidMask].Clear();
+            decode_signature, CacheUpdateSignatures::kInputPos));
+    decode_input_buffers[CacheUpdateSignatures::kInputPos].Clear();
+
+    LITERT_ASSIGN_OR_RETURN(
+        auto decode_cache_input_names,
+        npu_auxiliary_compiled_model->GetSignatureInputNames(decode_signature));
+    if (absl::c_find(decode_cache_input_names,
+                     CacheUpdateSignatures::kInputValidMask) !=
+        decode_cache_input_names.end()) {
+      LITERT_ASSIGN_OR_RETURN(
+          decode_input_buffers[CacheUpdateSignatures::kInputValidMask],
+          npu_auxiliary_compiled_model->CreateInputBuffer(
+              decode_signature, CacheUpdateSignatures::kInputValidMask));
+      decode_input_buffers[CacheUpdateSignatures::kInputValidMask].Clear();
+    }
   }
 
-  if (npu_auxiliary_compiled_model->FindSignature(
-          CacheUpdateSignatures::kVerifyCacheUpdate)) {
+  if (!verify_signature.empty() &&
+      npu_auxiliary_compiled_model->FindSignature(verify_signature)) {
     for (const auto& [key, value] : input_kv_cache_buffers) {
       LITERT_ASSIGN_OR_RETURN(verify_input_buffers[key], value.Duplicate());
       LITERT_ASSIGN_OR_RETURN(verify_output_buffers[key], value.Duplicate());
@@ -730,22 +796,19 @@ absl::StatusOr<NpuKVCache> NpuKVCache::Create(
     LITERT_ASSIGN_OR_RETURN(
         verify_input_buffers[CacheUpdateSignatures::kInputPos],
         npu_auxiliary_compiled_model->CreateInputBuffer(
-            CacheUpdateSignatures::kVerifyCacheUpdate,
-            CacheUpdateSignatures::kInputPos));
+            verify_signature, CacheUpdateSignatures::kInputPos));
     verify_input_buffers[CacheUpdateSignatures::kInputPos].Clear();
 
     LITERT_ASSIGN_OR_RETURN(
         auto verify_cache_input_names,
-        npu_auxiliary_compiled_model->GetSignatureInputNames(
-            CacheUpdateSignatures::kVerifyCacheUpdate));
+        npu_auxiliary_compiled_model->GetSignatureInputNames(verify_signature));
     if (absl::c_find(verify_cache_input_names,
                      CacheUpdateSignatures::kInputValidMask) !=
         verify_cache_input_names.end()) {
       LITERT_ASSIGN_OR_RETURN(
           verify_input_buffers[CacheUpdateSignatures::kInputValidMask],
           npu_auxiliary_compiled_model->CreateInputBuffer(
-              CacheUpdateSignatures::kVerifyCacheUpdate,
-              CacheUpdateSignatures::kInputValidMask));
+              verify_signature, CacheUpdateSignatures::kInputValidMask));
       verify_input_buffers[CacheUpdateSignatures::kInputValidMask].Clear();
     }
   }
@@ -756,7 +819,7 @@ absl::StatusOr<NpuKVCache> NpuKVCache::Create(
       std::move(verify_input_buffers), std::move(verify_output_buffers));
   return NpuKVCache(method, npu_auxiliary_compiled_model,
                     std::move(cache_update_context), std::move(kv_quant_params),
-                    has_sliding_window_attention);
+                    has_sliding_window_attention, kv_cache_init_value);
 }
 
 absl::Status NpuKVCache::SetPrefillPositions(
@@ -826,23 +889,27 @@ absl::Status NpuKVCache::RunPrefill(absl::string_view signature) {
                            cache_update_context_.prefill_output_buffers,
                            kv_quant_params_, has_sliding_window_attention_);
   }
-  auto res = compiled_model_->Run(signature,
-                                  cache_update_context_.prefill_input_buffers,
-                                  cache_update_context_.prefill_output_buffers);
+  absl::string_view sig =
+      signature.empty() ? kPrefillCacheUpdateBase : signature;
+  auto res =
+      compiled_model_->Run(sig, cache_update_context_.prefill_input_buffers,
+                           cache_update_context_.prefill_output_buffers);
   RET_CHECK(res) << "Failed to run cache update model: "
                  << res.Error().Message();
   return absl::OkStatus();
 }
 
-absl::Status NpuKVCache::RunDecode() {
+absl::Status NpuKVCache::RunDecode(absl::string_view signature) {
   if (method_ == KVCacheUpdateMethod::kWH) {
     return HWKVCacheUpdate(cache_update_context_.decode_input_buffers,
                            cache_update_context_.decode_output_buffers,
                            kv_quant_params_, has_sliding_window_attention_);
   }
-  auto res = compiled_model_->Run(CacheUpdateSignatures::kDecodeCacheUpdate,
-                                  cache_update_context_.decode_input_buffers,
-                                  cache_update_context_.decode_output_buffers);
+  absl::string_view sig =
+      signature.empty() ? CacheUpdateSignatures::kDecodeCacheUpdate : signature;
+  auto res =
+      compiled_model_->Run(sig, cache_update_context_.decode_input_buffers,
+                           cache_update_context_.decode_output_buffers);
   RET_CHECK(res) << "Failed to run cache update model: "
                  << res.Error().Message();
   return absl::OkStatus();
@@ -866,17 +933,208 @@ absl::Status NpuKVCache::SetVerifyPos(int start_step) {
   return absl::OkStatus();
 }
 
-absl::Status NpuKVCache::CommitVerifiedKVCache(int start_step) {
+absl::Status NpuKVCache::CommitVerifiedKVCache(int start_step,
+                                               absl::string_view signature) {
   LITERT_RETURN_IF_ERROR(SetVerifyPos(start_step));
   if (method_ == KVCacheUpdateMethod::kWH) {
     return HWKVCacheUpdate(cache_update_context_.verify_input_buffers,
                            cache_update_context_.verify_output_buffers,
                            kv_quant_params_, has_sliding_window_attention_);
   }
+  absl::string_view sig =
+      signature.empty() ? CacheUpdateSignatures::kVerifyCacheUpdate : signature;
   LITERT_RETURN_IF_ERROR(
-      compiled_model_->Run(CacheUpdateSignatures::kVerifyCacheUpdate,
-                           cache_update_context_.verify_input_buffers,
+      compiled_model_->Run(sig, cache_update_context_.verify_input_buffers,
                            cache_update_context_.verify_output_buffers));
+  return absl::OkStatus();
+}
+
+absl::Status NpuKVCache::CopySingleKVCacheBuffer(
+    const ::litert::TensorBuffer& src, ::litert::TensorBuffer& dst,
+    int active_seq_len, int64_t kv_cache_init_value) {
+  if (active_seq_len <= 0) {
+    return absl::OkStatus();
+  }
+  LITERT_ASSIGN_OR_RETURN(auto src_type, src.TensorType());
+  LITERT_ASSIGN_OR_RETURN(auto dst_type, dst.TensorType());
+
+  auto src_dims = src_type.Layout().Dimensions();
+  auto dst_dims = dst_type.Layout().Dimensions();
+
+  int seq_dim_idx = -1;
+  for (int i = 0; i < src_dims.size(); ++i) {
+    if (src_dims[i] != dst_dims[i]) {
+      seq_dim_idx = i;
+      break;
+    }
+  }
+
+  if (seq_dim_idx == -1) {
+    return absl::OkStatus();
+  }
+
+  for (int i = 0; i < src_dims.size(); ++i) {
+    if (i != seq_dim_idx && src_dims[i] != dst_dims[i]) {
+      return absl::InternalError(
+          absl::StrCat("KV cache buffers differ in non-sequence dimension ", i,
+                       ": src=", src_dims[i], ", dst=", dst_dims[i]));
+    }
+  }
+
+  LITERT_ASSIGN_OR_RETURN(auto src_lock,
+                          ::litert::TensorBufferScopedLock::Create(
+                              const_cast<::litert::TensorBuffer&>(src),
+                              ::litert::TensorBuffer::LockMode::kRead));
+  LITERT_ASSIGN_OR_RETURN(auto dst_lock,
+                          ::litert::TensorBufferScopedLock::Create(
+                              dst, ::litert::TensorBuffer::LockMode::kWrite));
+
+  auto byte_width_opt = ::litert::GetByteWidth(src_type.ElementType());
+  if (!byte_width_opt.has_value()) {
+    return absl::InternalError("Unsupported element type in KV cache.");
+  }
+  const auto& byte_width = *byte_width_opt;
+
+  const char* src_ptr = static_cast<const char*>(src_lock.second);
+  char* dst_ptr = static_cast<char*>(dst_lock.second);
+
+  auto clear_range = [&](size_t element_offset, size_t num_elements) {
+    size_t byte_offset = byte_width.NumBytes(element_offset);
+    size_t byte_size = byte_width.NumBytes(num_elements);
+    void* target_ptr = dst_ptr + byte_offset;
+    auto element_type = dst_type.ElementType();
+    if (element_type == ::litert::ElementType::Int16) {
+      int16_t* ptr = static_cast<int16_t*>(target_ptr);
+      std::fill(ptr, ptr + num_elements,
+                static_cast<int16_t>(kv_cache_init_value));
+    } else if (element_type == ::litert::ElementType::UInt16) {
+      uint16_t* ptr = static_cast<uint16_t*>(target_ptr);
+      std::fill(ptr, ptr + num_elements,
+                static_cast<uint16_t>(kv_cache_init_value));
+    } else if (element_type == ::litert::ElementType::Int8) {
+      int8_t* ptr = static_cast<int8_t*>(target_ptr);
+      std::fill(ptr, ptr + num_elements,
+                static_cast<int8_t>(kv_cache_init_value));
+    } else if (element_type == ::litert::ElementType::UInt8) {
+      uint8_t* ptr = static_cast<uint8_t*>(target_ptr);
+      std::fill(ptr, ptr + num_elements,
+                static_cast<uint8_t>(kv_cache_init_value));
+    } else {
+      std::memset(target_ptr, 0, byte_size);
+    }
+  };
+
+  size_t outer_count = 1;
+  for (int i = 0; i < seq_dim_idx; ++i) {
+    outer_count *= src_dims[i];
+  }
+  size_t inner_count = 1;
+  for (size_t i = seq_dim_idx + 1; i < src_dims.size(); ++i) {
+    inner_count *= src_dims[i];
+  }
+
+  size_t S_src = src_dims[seq_dim_idx];
+  size_t S_dst = dst_dims[seq_dim_idx];
+  size_t valid_seq_len = std::min(static_cast<size_t>(active_seq_len), S_src);
+  size_t copy_elements_per_seq = valid_seq_len * inner_count;
+  size_t bytes_to_copy = byte_width.NumBytes(copy_elements_per_seq);
+
+  for (int64_t outer = static_cast<int64_t>(outer_count) - 1; outer >= 0;
+       --outer) {
+    size_t src_element_offset = outer * S_src * inner_count;
+    size_t dst_element_offset = outer * S_dst * inner_count;
+    size_t src_byte_offset = byte_width.NumBytes(src_element_offset);
+    size_t dst_byte_offset = byte_width.NumBytes(dst_element_offset);
+    std::memmove(dst_ptr + dst_byte_offset, src_ptr + src_byte_offset,
+                 bytes_to_copy);
+  }
+
+  for (size_t outer = 0; outer < outer_count; ++outer) {
+    size_t padding_element_offset =
+        (outer * S_dst + valid_seq_len) * inner_count;
+    size_t padding_num_elements = (S_dst - valid_seq_len) * inner_count;
+    clear_range(padding_element_offset, padding_num_elements);
+  }
+
+  return absl::OkStatus();
+}
+
+absl::Status NpuKVCache::CopyKVCache(
+    const absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+        src_buffers,
+    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& dst_buffers,
+    int active_seq_len) {
+  if (active_seq_len <= 0) {
+    return absl::OkStatus();
+  }
+
+  for (const auto& [name, src_buf] : src_buffers) {
+    if (name.starts_with(kKvCacheKRootName) ||
+        name.starts_with(kKvCacheVRootName) ||
+        name.starts_with(kKvCacheCRootName)) {
+      if (dst_buffers.contains(name)) {
+        LITERT_RETURN_IF_ERROR(CopySingleKVCacheBuffer(
+            src_buf, dst_buffers[name], active_seq_len, kv_cache_init_value_));
+      }
+    }
+  }
+
+  return absl::OkStatus();
+}
+
+absl::Status NpuKVCache::UpdateKVCacheBuffers(
+    const absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+        input_kv_cache_buffers,
+    const absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+        prefill_output_kv_cache_slice_buffers,
+    const absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+        decode_output_kv_cache_slice_buffers,
+    const absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+        verify_output_kv_cache_slice_buffers) {
+  for (const auto& [name, buf] : input_kv_cache_buffers) {
+    if (cache_update_context_.prefill_input_buffers.contains(name)) {
+      LITERT_ASSIGN_OR_RETURN(cache_update_context_.prefill_input_buffers[name],
+                              buf.Duplicate());
+    }
+    if (cache_update_context_.prefill_output_buffers.contains(name)) {
+      LITERT_ASSIGN_OR_RETURN(
+          cache_update_context_.prefill_output_buffers[name], buf.Duplicate());
+    }
+    if (cache_update_context_.decode_input_buffers.contains(name)) {
+      LITERT_ASSIGN_OR_RETURN(cache_update_context_.decode_input_buffers[name],
+                              buf.Duplicate());
+    }
+    if (cache_update_context_.decode_output_buffers.contains(name)) {
+      LITERT_ASSIGN_OR_RETURN(cache_update_context_.decode_output_buffers[name],
+                              buf.Duplicate());
+    }
+    if (cache_update_context_.verify_input_buffers.contains(name)) {
+      LITERT_ASSIGN_OR_RETURN(cache_update_context_.verify_input_buffers[name],
+                              buf.Duplicate());
+    }
+    if (cache_update_context_.verify_output_buffers.contains(name)) {
+      LITERT_ASSIGN_OR_RETURN(cache_update_context_.verify_output_buffers[name],
+                              buf.Duplicate());
+    }
+  }
+  for (const auto& [name, buf] : prefill_output_kv_cache_slice_buffers) {
+    if (cache_update_context_.prefill_input_buffers.contains(name)) {
+      LITERT_ASSIGN_OR_RETURN(cache_update_context_.prefill_input_buffers[name],
+                              buf.Duplicate());
+    }
+  }
+  for (const auto& [name, buf] : decode_output_kv_cache_slice_buffers) {
+    if (cache_update_context_.decode_input_buffers.contains(name)) {
+      LITERT_ASSIGN_OR_RETURN(cache_update_context_.decode_input_buffers[name],
+                              buf.Duplicate());
+    }
+  }
+  for (const auto& [name, buf] : verify_output_kv_cache_slice_buffers) {
+    if (cache_update_context_.verify_input_buffers.contains(name)) {
+      LITERT_ASSIGN_OR_RETURN(cache_update_context_.verify_input_buffers[name],
+                              buf.Duplicate());
+    }
+  }
   return absl::OkStatus();
 }
 

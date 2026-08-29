@@ -1112,4 +1112,104 @@ absl::Status NpuEmbedder::WriteAndPadPleEmbeddings(
       ple_params_.final_zero_point);
 }
 
+absl::Status NpuEmbedder::UpdateOutputBuffers(
+    const absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+        text_decoder_prefill_input_buffers,
+    const absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+        text_decoder_decode_input_buffers,
+    const absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+        text_decoder_verify_input_buffers) {
+  if (text_decoder_prefill_input_buffers.contains(
+          TextDecoderSignatures::kInputEmbeddings)) {
+    LITERT_ASSIGN_OR_RETURN(prefill_embeddings_buffer_,
+                            text_decoder_prefill_input_buffers
+                                .at(TextDecoderSignatures::kInputEmbeddings)
+                                .Duplicate());
+    if (embedder_context_.has_value()) {
+      LITERT_ASSIGN_OR_RETURN(
+          embedder_context_->inference_context
+              .prefill_output_buffers[EmbedderSignatures::kEmbedderOutput],
+          text_decoder_prefill_input_buffers
+              .at(TextDecoderSignatures::kInputEmbeddings)
+              .Duplicate());
+    }
+  }
+
+  if (text_decoder_decode_input_buffers.contains(
+          TextDecoderSignatures::kInputEmbeddings)) {
+    LITERT_ASSIGN_OR_RETURN(decode_embeddings_buffer_,
+                            text_decoder_decode_input_buffers
+                                .at(TextDecoderSignatures::kInputEmbeddings)
+                                .Duplicate());
+    if (embedder_context_.has_value()) {
+      LITERT_ASSIGN_OR_RETURN(
+          embedder_context_->inference_context
+              .decode_output_buffers[EmbedderSignatures::kEmbedderOutput],
+          text_decoder_decode_input_buffers
+              .at(TextDecoderSignatures::kInputEmbeddings)
+              .Duplicate());
+    }
+  }
+
+  if (text_decoder_verify_input_buffers.contains(
+          TextDecoderSignatures::kInputEmbeddings)) {
+    LITERT_ASSIGN_OR_RETURN(verify_embeddings_buffer_,
+                            text_decoder_verify_input_buffers
+                                .at(TextDecoderSignatures::kInputEmbeddings)
+                                .Duplicate());
+    if (embedder_context_.has_value()) {
+      LITERT_ASSIGN_OR_RETURN(
+          embedder_context_->inference_context
+              .verify_output_buffers[EmbedderSignatures::kEmbedderOutput],
+          text_decoder_verify_input_buffers
+              .at(TextDecoderSignatures::kInputEmbeddings)
+              .Duplicate());
+    }
+  }
+
+  if (text_decoder_prefill_input_buffers.contains(kPerLayerEmbedderTensor)) {
+    LITERT_ASSIGN_OR_RETURN(
+        prefill_ple_buffer_,
+        text_decoder_prefill_input_buffers.at(kPerLayerEmbedderTensor)
+            .Duplicate());
+    if (embedder_per_layer_context_.has_value()) {
+      LITERT_ASSIGN_OR_RETURN(
+          embedder_per_layer_context_->inference_context.prefill_output_buffers
+              [EmbedderPerLayerSignatures::kEmbedderOutput],
+          text_decoder_prefill_input_buffers.at(kPerLayerEmbedderTensor)
+              .Duplicate());
+    }
+  }
+
+  if (text_decoder_decode_input_buffers.contains(kPerLayerEmbedderTensor)) {
+    LITERT_ASSIGN_OR_RETURN(
+        decode_ple_buffer_,
+        text_decoder_decode_input_buffers.at(kPerLayerEmbedderTensor)
+            .Duplicate());
+    if (embedder_per_layer_context_.has_value()) {
+      LITERT_ASSIGN_OR_RETURN(
+          embedder_per_layer_context_->inference_context.decode_output_buffers
+              [EmbedderPerLayerSignatures::kEmbedderOutput],
+          text_decoder_decode_input_buffers.at(kPerLayerEmbedderTensor)
+              .Duplicate());
+    }
+  }
+
+  if (text_decoder_verify_input_buffers.contains(kPerLayerEmbedderTensor)) {
+    LITERT_ASSIGN_OR_RETURN(
+        verify_ple_buffer_,
+        text_decoder_verify_input_buffers.at(kPerLayerEmbedderTensor)
+            .Duplicate());
+    if (embedder_per_layer_context_.has_value()) {
+      LITERT_ASSIGN_OR_RETURN(
+          embedder_per_layer_context_->inference_context.verify_output_buffers
+              [EmbedderPerLayerSignatures::kEmbedderOutput],
+          text_decoder_verify_input_buffers.at(kPerLayerEmbedderTensor)
+              .Duplicate());
+    }
+  }
+
+  return absl::OkStatus();
+}
+
 }  // namespace litert::lm

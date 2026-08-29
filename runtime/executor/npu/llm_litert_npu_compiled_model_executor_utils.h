@@ -48,6 +48,7 @@
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
 #include "runtime/components/model_resources.h"
+#include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/llm_executor_processed_tokens.h"
 #include "runtime/executor/llm_executor_settings.h"
@@ -93,9 +94,11 @@ struct LatencyStats {
 std::ostream& operator<<(std::ostream& os, const LatencyStats& stats);
 
 // The prefill family of signature names resolved for the prefill length the
-// model was compiled with (e.g. 128 or 256).
+// model was compiled with (e.g. 128 or 256) and optional context size (e.g.
+// 640).
 struct ResolvedPrefillSignatures {
   int size = 0;
+  int context_size = 0;
   std::string prefill;
   std::string embedder;
   std::string embedder_per_layer;
@@ -157,6 +160,14 @@ inline constexpr absl::string_view kPrefillRopeBase = "prefill_rope";
 inline constexpr absl::string_view kPrefillCacheUpdateBase =
     "prefill_cache_update";
 inline constexpr char kDecodeSignature[] = "decode";
+inline constexpr absl::string_view kDecodeMaskBase = "decode_mask";
+inline constexpr absl::string_view kDecodeRopeBase = "decode_rope";
+inline constexpr absl::string_view kDecodeCacheUpdateBase =
+    "decode_cache_update";
+inline constexpr absl::string_view kVerifyMaskBase = "verify_mask";
+inline constexpr absl::string_view kVerifyRopeBase = "verify_rope";
+inline constexpr absl::string_view kVerifyCacheUpdateBase =
+    "verify_cache_update";
 
 inline constexpr absl::string_view kKvCacheKRootName = "kv_cache_k_";
 inline constexpr absl::string_view kKvCacheVRootName = "kv_cache_v_";
@@ -191,8 +202,16 @@ std::string PrefillSig(absl::string_view base, int prefill_size);
 // and returns <N>.
 absl::StatusOr<int> DetectPrefillSize(const litert::Model& transformer_model);
 
-// Builds the prefill family of signature names for a given prefill length.
-ResolvedPrefillSignatures BuildResolvedPrefillSignatures(int prefill_size);
+// Detects all supported context sizes by scanning transformer signatures for
+// "_cache_<N>" pattern. Returns sorted vector of context sizes in ascending
+// order. Returns empty vector if no dynamic context sizes are found.
+absl::StatusOr<std::vector<int>> DetectSupportedContextSizes(
+    const litert::Model& transformer_model);
+
+// Builds the prefill family of signature names for a given prefill length and
+// optional context length.
+ResolvedPrefillSignatures BuildResolvedPrefillSignatures(int prefill_size,
+                                                         int context_size = 0);
 
 static constexpr absl::string_view kPerLayerEmbedderTensor =
     "per_layer_embeddings";
@@ -350,6 +369,34 @@ struct InferenceContext {
         verify_output_buffers(std::move(verify_output_buffers)) {}
 };
 
+// Holds pre-resolved signatures for auxiliary models (Mask, RoPE, Cache
+// Update).
+struct ResolvedAuxiliarySignatures {
+  std::string mask;
+  std::string rope;
+  std::string cache_update;
+};
+
+// Holds model signatures and tensor buffer bindings for a specific context
+// size.
+struct ContextGroup {
+  int context_size = 0;
+  ResolvedPrefillSignatures prefill_signatures;
+  std::string decode_signature;
+  ResolvedAuxiliarySignatures decode_aux_signatures;
+  std::string verify_signature;
+  ResolvedAuxiliarySignatures verify_aux_signatures;
+  absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
+      input_kv_cache_buffers;
+  InferenceContext text_decoder_inference_context;
+};
+
+ResolvedAuxiliarySignatures BuildResolvedDecodeAuxiliarySignatures(
+    const ::litert::CompiledModel& aux_model, int context_size);
+
+ResolvedAuxiliarySignatures BuildResolvedVerifyAuxiliarySignatures(
+    const ::litert::CompiledModel& aux_model, int context_size);
+
 inline absl::Status SetFirstElement(::litert::TensorBuffer& buffer,
                                     int32_t value) {
   LITERT_ASSIGN_OR_RETURN(
@@ -401,6 +448,12 @@ struct DrafterContext {
   // mtp_input_buffers[MtpSignatures::kInputPos].
   absl::Status SetInputPos(int32_t pos);
 
+  // Re-binds the drafter's KV cache input buffers to the new active context
+  // group.
+  absl::Status UpdateKVCacheBuffers(
+      const absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+          new_input_kv_cache_buffers);
+
   // Allocates the MTP drafter buffers and creates the DrafterContext.
   static absl::StatusOr<DrafterContext> Create(
       ::litert::Environment& env, const litert::Model& mtp_drafter_model,
@@ -413,6 +466,14 @@ struct DrafterContext {
 absl::Status DequantizeLogits(const ::litert::TensorBuffer& src,
                               ::litert::TensorBuffer& dst, float scale,
                               int32_t zero_point, bool should_dump);
+
+// Creates a zero-copy alias of `source_buffer` with a smaller `target_type`
+// layout. Supports LiteRT platform buffer backends (AHWB, DMA-BUF, ION,
+// FastRPC, Host).
+absl::StatusOr<::litert::TensorBuffer> CreateAliasBuffer(
+    const ::litert::Environment& env,
+    const ::litert::TensorBuffer& source_buffer,
+    const ::litert::RankedTensorType& target_type);
 
 }  // namespace litert::lm
 

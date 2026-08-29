@@ -46,6 +46,7 @@
 #include "litert/cc/litert_options.h"  // from @litert
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/status_macros.h"  // IWYU pragma: keep NOLINT
@@ -674,6 +675,17 @@ absl::Status DrafterContext::SetInputPos(int32_t pos) {
   return absl::OkStatus();
 }
 
+absl::Status DrafterContext::UpdateKVCacheBuffers(
+    const absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+        new_input_kv_cache_buffers) {
+  for (const auto& [name, buf] : new_input_kv_cache_buffers) {
+    if (mtp_input_buffers.contains(name)) {
+      LITERT_ASSIGN_OR_RETURN(mtp_input_buffers[name], buf.Duplicate());
+    }
+  }
+  return absl::OkStatus();
+}
+
 bool IsNpuSyncWorkaroundEnabled() {
   static bool enabled = []() {
     const char* env = std::getenv("LITERT_LM_SYNC_EXECUTION");
@@ -784,10 +796,20 @@ absl::StatusOr<int> DetectPrefillSize(const litert::Model& transformer_model) {
       if (!absl::StartsWith(key, prefix)) {
         continue;
       }
-      // Only the bare LLM prefill signature has a purely numeric suffix; the
-      // auxiliary signatures (prefill_mask_..., prefill_rope_..., etc.) carry a
-      // non-numeric segment after the "prefill_" prefix.
+      // Only the bare LLM prefill signature has a purely numeric suffix or
+      // numeric_cache_<N> suffix (excluding auxiliary signatures).
+      if (absl::StartsWith(key, kPrefillMaskBase) ||
+          absl::StartsWith(key, kPrefillRopeBase) ||
+          absl::StartsWith(key, kPrefillCacheUpdateBase) ||
+          absl::StartsWith(key, kPrefillEmbedderBase) ||
+          absl::StartsWith(key, kPrefillEmbedderPerLayerBase)) {
+        continue;
+      }
       absl::string_view suffix = key.substr(prefix.size());
+      size_t cache_pos = suffix.find("_cache_");
+      if (cache_pos != absl::string_view::npos) {
+        suffix = suffix.substr(0, cache_pos);
+      }
       int prefill_size = 0;
       if (absl::SimpleAtoi(suffix, &prefill_size) && prefill_size > 0) {
         return prefill_size;
@@ -807,16 +829,55 @@ absl::StatusOr<int> DetectPrefillSize(const litert::Model& transformer_model) {
       "transformer model.");
 }
 
-ResolvedPrefillSignatures BuildResolvedPrefillSignatures(int prefill_size) {
+absl::StatusOr<std::vector<int>> DetectSupportedContextSizes(
+    const litert::Model& transformer_model) {
+  std::set<int> context_sizes_set;
+  auto signatures = transformer_model.GetSignatures();
+  if (signatures) {
+    for (const auto& signature : *signatures) {
+      absl::string_view key = signature.Key();
+      size_t cache_pos = key.find("_cache_");
+      if (cache_pos != absl::string_view::npos) {
+        absl::string_view suffix = key.substr(cache_pos + 7);
+        // Suffix should be pure integer (e.g. "640")
+        int ctx_size = 0;
+        if (absl::SimpleAtoi(suffix, &ctx_size) && ctx_size > 0) {
+          context_sizes_set.insert(ctx_size);
+        }
+      }
+    }
+  }
+  return std::vector<int>(context_sizes_set.begin(), context_sizes_set.end());
+}
+
+ResolvedPrefillSignatures BuildResolvedPrefillSignatures(int prefill_size,
+                                                         int context_size) {
+  if (context_size <= 0) {
+    return ResolvedPrefillSignatures{
+        .size = prefill_size,
+        .context_size = 0,
+        .prefill = PrefillSig(kPrefillSignatureBase, prefill_size),
+        .embedder = PrefillSig(kPrefillEmbedderBase, prefill_size),
+        .embedder_per_layer =
+            PrefillSig(kPrefillEmbedderPerLayerBase, prefill_size),
+        .mask = PrefillSig(kPrefillMaskBase, prefill_size),
+        .rope = PrefillSig(kPrefillRopeBase, prefill_size),
+        .cache_update = PrefillSig(kPrefillCacheUpdateBase, prefill_size)};
+  }
   return ResolvedPrefillSignatures{
       .size = prefill_size,
-      .prefill = PrefillSig(kPrefillSignatureBase, prefill_size),
+      .context_size = context_size,
+      .prefill = absl::StrCat(kPrefillSignatureBase, "_", prefill_size,
+                              "_cache_", context_size),
       .embedder = PrefillSig(kPrefillEmbedderBase, prefill_size),
       .embedder_per_layer =
           PrefillSig(kPrefillEmbedderPerLayerBase, prefill_size),
-      .mask = PrefillSig(kPrefillMaskBase, prefill_size),
-      .rope = PrefillSig(kPrefillRopeBase, prefill_size),
-      .cache_update = PrefillSig(kPrefillCacheUpdateBase, prefill_size)};
+      .mask = absl::StrCat(kPrefillMaskBase, "_", prefill_size, "_cache_",
+                           context_size),
+      .rope = absl::StrCat(kPrefillRopeBase, "_", prefill_size, "_cache_",
+                           context_size),
+      .cache_update = absl::StrCat(kPrefillCacheUpdateBase, "_", prefill_size,
+                                   "_cache_", context_size)};
 }
 
 litert::Expected<bool> HasPerLayerEmbedder(
@@ -833,5 +894,149 @@ litert::Expected<bool> HasPerLayerEmbedder(
   return false;
 }
 
+ResolvedAuxiliarySignatures BuildResolvedDecodeAuxiliarySignatures(
+    const ::litert::CompiledModel& aux_model, int context_size) {
+  ResolvedAuxiliarySignatures sigs;
+
+  // 1. Mask signature
+  std::string mask_cand =
+      absl::StrCat(kDecodeMaskBase, "_cache_", context_size);
+  if (context_size > 0 && aux_model.FindSignature(mask_cand)) {
+    sigs.mask = mask_cand;
+  } else {
+    sigs.mask = std::string(kDecodeMaskBase);
+  }
+
+  // 2. RoPE signature
+  std::string rope_cand =
+      absl::StrCat(kDecodeRopeBase, "_cache_", context_size);
+  if (context_size > 0 && aux_model.FindSignature(rope_cand)) {
+    sigs.rope = rope_cand;
+  } else if (aux_model.FindSignature(kDecodeRopeBase)) {
+    sigs.rope = std::string(kDecodeRopeBase);
+  } else {
+    sigs.rope = "rope";
+  }
+
+  // 3. Cache Update signature
+  std::string cache_cand =
+      absl::StrCat(kDecodeCacheUpdateBase, "_cache_", context_size);
+  if (context_size > 0 && aux_model.FindSignature(cache_cand)) {
+    sigs.cache_update = cache_cand;
+  } else if (aux_model.FindSignature(kDecodeCacheUpdateBase)) {
+    sigs.cache_update = std::string(kDecodeCacheUpdateBase);
+  } else {
+    sigs.cache_update = "cache_update";
+  }
+
+  return sigs;
+}
+
+ResolvedAuxiliarySignatures BuildResolvedVerifyAuxiliarySignatures(
+    const ::litert::CompiledModel& aux_model, int context_size) {
+  ResolvedAuxiliarySignatures sigs;
+
+  std::string mask_cand =
+      absl::StrCat(kVerifyMaskBase, "_cache_", context_size);
+  sigs.mask = (context_size > 0 && aux_model.FindSignature(mask_cand))
+                  ? mask_cand
+                  : std::string(kVerifyMaskBase);
+
+  std::string rope_cand =
+      absl::StrCat(kVerifyRopeBase, "_cache_", context_size);
+  sigs.rope = (context_size > 0 && aux_model.FindSignature(rope_cand))
+                  ? rope_cand
+                  : std::string(kVerifyRopeBase);
+
+  std::string cache_cand =
+      absl::StrCat(kVerifyCacheUpdateBase, "_cache_", context_size);
+  sigs.cache_update = (context_size > 0 && aux_model.FindSignature(cache_cand))
+                          ? cache_cand
+                          : std::string(kVerifyCacheUpdateBase);
+
+  return sigs;
+}
+
+absl::StatusOr<::litert::TensorBuffer> CreateAliasBuffer(
+    const ::litert::Environment& env,
+    const ::litert::TensorBuffer& source_buffer,
+    const ::litert::RankedTensorType& target_type) {
+  LITERT_ASSIGN_OR_RETURN(auto buffer_type, source_buffer.BufferType());
+  LITERT_ASSIGN_OR_RETURN(size_t source_bytes, source_buffer.Size());
+  LITERT_ASSIGN_OR_RETURN(size_t target_bytes, target_type.Bytes());
+
+  if (target_bytes > source_bytes) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Cannot create alias buffer: target bytes (", target_bytes,
+                     ") exceeds source bytes (", source_bytes, ")"));
+  }
+
+  if (buffer_type == ::litert::TensorBufferType::kHostMemory) {
+    auto env_holder = env.GetHolder();
+    void* host_mem_addr = nullptr;
+    if (env_holder.runtime->GetTensorBufferHostMemory(
+            source_buffer.Get(), &host_mem_addr) == kLiteRtStatusOk) {
+      LITERT_ASSIGN_OR_RETURN(
+          auto buf, ::litert::TensorBuffer::CreateFromHostMemory(
+                        env, target_type, host_mem_addr, target_bytes));
+      return std::move(buf);
+    }
+  }
+
+#if LITERT_HAS_AHWB_SUPPORT
+  if (buffer_type == ::litert::TensorBufferType::kAhwb) {
+    auto ahwb_res = source_buffer.GetAhwb();
+    if (ahwb_res.HasValue()) {
+      LITERT_ASSIGN_OR_RETURN(
+          auto buf, ::litert::TensorBuffer::CreateFromAhwb(
+                        env, target_type, ahwb_res.Value(), /*ahwb_offset=*/0));
+      return std::move(buf);
+    }
+  }
+#endif
+
+#if LITERT_HAS_DMABUF_SUPPORT
+  if (buffer_type == ::litert::TensorBufferType::kDmaBuf) {
+    auto dma_res = source_buffer.GetDmaBuf();
+    if (dma_res.HasValue()) {
+      LITERT_ASSIGN_OR_RETURN(auto buf,
+                              ::litert::TensorBuffer::CreateFromDmaBufBuffer(
+                                  env, target_type, dma_res->addr, dma_res->fd,
+                                  source_bytes, /*dmabuf_buffer_offset=*/0));
+      return std::move(buf);
+    }
+  }
+#endif
+
+#if LITERT_HAS_ION_SUPPORT
+  if (buffer_type == ::litert::TensorBufferType::kIon) {
+    auto ion_res = source_buffer.GetIonBuf();
+    if (ion_res.HasValue()) {
+      LITERT_ASSIGN_OR_RETURN(auto buf,
+                              ::litert::TensorBuffer::CreateFromIonBuffer(
+                                  env, target_type, ion_res->addr, ion_res->fd,
+                                  source_bytes, /*ion_buffer_offset=*/0));
+      return std::move(buf);
+    }
+  }
+#endif
+
+#if LITERT_HAS_FASTRPC_SUPPORT
+  if (buffer_type == ::litert::TensorBufferType::kFastRpc) {
+    auto fastrpc_res = source_buffer.GetFastRpcBuf();
+    if (fastrpc_res.HasValue()) {
+      LITERT_ASSIGN_OR_RETURN(
+          auto buf, ::litert::TensorBuffer::CreateFromFastRpcBuffer(
+                        env, target_type, fastrpc_res->addr, fastrpc_res->fd,
+                        source_bytes, /*fastrpc_buffer_offset=*/0));
+      return std::move(buf);
+    }
+  }
+#endif
+
+  return absl::InternalError(absl::StrCat(
+      "Unsupported tensor buffer type for cross-platform aliasing: ",
+      static_cast<int>(buffer_type)));
+}
 
 }  // namespace litert::lm

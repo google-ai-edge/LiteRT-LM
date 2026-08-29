@@ -63,6 +63,14 @@ struct RopeSignatures {
 // 4. MTP Speculative Decoding - Verification (on main_rope):
 //    main_rope_.SetVerifyPositions(start_step, num_tokens);
 //    main_rope_.RunVerify();
+//
+// 5. Dynamic Context Switching:
+//    When the text decoder switches from one context length to the next,
+//    its input buffer bindings change. Rebind RoPE output buffers:
+//    rope_.UpdateOutputBuffers(
+//        active_group.text_decoder_inference_context.prefill_input_buffers,
+//        active_group.text_decoder_inference_context.decode_input_buffers,
+//        active_group.text_decoder_inference_context.verify_input_buffers);
 // =============================================================================
 class NpuRope {
  public:
@@ -75,7 +83,8 @@ class NpuRope {
   // --- Lifecycle & Creation ---
   static absl::StatusOr<NpuRope> Create(
       const ::litert::CompiledModel* npu_auxiliary_compiled_model,
-      const ResolvedPrefillSignatures& prefill_signatures,
+      absl::string_view prefill_signature, absl::string_view decode_signature,
+      absl::string_view verify_signature,
       absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
           text_decoder_prefill_input_buffers,
       absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
@@ -98,18 +107,29 @@ class NpuRope {
     compiled_model_ = compiled_model;
   }
 
+  // Updates the internal RoPE output buffer bindings (e.g. pos_emb_cos,
+  // pos_emb_sin) to point to the newly active context group's text decoder
+  // input buffers when switching from one context length to the next.
+  absl::Status UpdateOutputBuffers(
+      const absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+          text_decoder_prefill_input_buffers,
+      const absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+          text_decoder_decode_input_buffers,
+      const absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+          text_decoder_verify_input_buffers);
+
   // --- Stage 1: Prefill ---
   absl::Status SetPrefillPositions(absl::Span<const int32_t> positions);
-  absl::Status RunPrefill(absl::string_view signature) const;
+  absl::Status RunPrefill(absl::string_view signature = "") const;
 
   // --- Stage 2: Decode (Main & Drafter) ---
   absl::Status SetDecodePosition(int32_t step);
-  absl::Status RunDecode() const;
+  absl::Status RunDecode(absl::string_view signature = "") const;
 
   // --- Stage 3: Speculative Decoding (MTP Draft & Verify) ---
   absl::Status RunDrafter() const;
   absl::Status SetVerifyPositions(int32_t start_step, size_t num_tokens);
-  absl::Status RunVerify() const;
+  absl::Status RunVerify(absl::string_view signature = "") const;
 
   // --- Accessors ---
   const InferenceContext& Context() const { return rope_context_; }

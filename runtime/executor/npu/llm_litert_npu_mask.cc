@@ -523,7 +523,8 @@ absl::StatusOr<NpuMask> NpuMask::CreateForTest(
 absl::StatusOr<NpuMask> NpuMask::Create(
     MaskUpdateMethod method,
     const ::litert::CompiledModel* npu_auxiliary_compiled_model,
-    const ResolvedPrefillSignatures& prefill_signatures,
+    absl::string_view prefill_signature, absl::string_view decode_signature,
+    absl::string_view verify_signature,
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
         text_decoder_prefill_input_buffers,
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
@@ -582,19 +583,19 @@ absl::StatusOr<NpuMask> NpuMask::Create(
     return absl::OkStatus();
   };
 
-  LITERT_RETURN_IF_ERROR(setup_mask_stage(
-      prefill_signatures.mask, text_decoder_prefill_input_buffers,
-      prefill_input_buffers, prefill_output_buffers));
+  LITERT_RETURN_IF_ERROR(
+      setup_mask_stage(prefill_signature, text_decoder_prefill_input_buffers,
+                       prefill_input_buffers, prefill_output_buffers));
 
-  LITERT_RETURN_IF_ERROR(setup_mask_stage(
-      MaskSignatures::kDecodeMask, text_decoder_decode_input_buffers,
-      decode_input_buffers, decode_output_buffers));
+  LITERT_RETURN_IF_ERROR(
+      setup_mask_stage(decode_signature, text_decoder_decode_input_buffers,
+                       decode_input_buffers, decode_output_buffers));
 
-  if (npu_auxiliary_compiled_model->FindSignature(
-          MaskSignatures::kVerifyMask)) {
-    LITERT_RETURN_IF_ERROR(setup_mask_stage(
-        MaskSignatures::kVerifyMask, text_decoder_verify_input_buffers,
-        verify_input_buffers, verify_output_buffers));
+  if (!verify_signature.empty() &&
+      npu_auxiliary_compiled_model->FindSignature(verify_signature)) {
+    LITERT_RETURN_IF_ERROR(
+        setup_mask_stage(verify_signature, text_decoder_verify_input_buffers,
+                         verify_input_buffers, verify_output_buffers));
   }
 
   InferenceContext mask_context(
@@ -620,6 +621,34 @@ absl::StatusOr<NpuMask> NpuMask::CreateForDrafter(
   return NpuMask(method, compiled_model, std::move(ctx));
 }
 
+absl::Status NpuMask::UpdateOutputBuffers(
+    const absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+        text_decoder_prefill_input_buffers,
+    const absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+        text_decoder_decode_input_buffers,
+    const absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+        text_decoder_verify_input_buffers) {
+  for (const auto& [name, buf] : text_decoder_prefill_input_buffers) {
+    if (mask_context_.prefill_output_buffers.contains(name)) {
+      LITERT_ASSIGN_OR_RETURN(mask_context_.prefill_output_buffers[name],
+                              buf.Duplicate());
+    }
+  }
+  for (const auto& [name, buf] : text_decoder_decode_input_buffers) {
+    if (mask_context_.decode_output_buffers.contains(name)) {
+      LITERT_ASSIGN_OR_RETURN(mask_context_.decode_output_buffers[name],
+                              buf.Duplicate());
+    }
+  }
+  for (const auto& [name, buf] : text_decoder_verify_input_buffers) {
+    if (mask_context_.verify_output_buffers.contains(name)) {
+      LITERT_ASSIGN_OR_RETURN(mask_context_.verify_output_buffers[name],
+                              buf.Duplicate());
+    }
+  }
+  return absl::OkStatus();
+}
+
 absl::Status NpuMask::RunPrefill(absl::string_view signature) const {
   if (method_ == MaskUpdateMethod::kWH) {
     return HWMaskUpdate(
@@ -632,8 +661,9 @@ absl::Status NpuMask::RunPrefill(absl::string_view signature) const {
   }
   RET_CHECK(compiled_model_ != nullptr)
       << "Compiled model must be provided for kModel mask update.";
+  absl::string_view sig = signature.empty() ? kPrefillMaskBase : signature;
   auto res = compiled_model_->Run(
-      signature,
+      sig,
       const_cast<
           absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&>(
           mask_context_.prefill_input_buffers),
@@ -645,7 +675,7 @@ absl::Status NpuMask::RunPrefill(absl::string_view signature) const {
   return absl::OkStatus();
 }
 
-absl::Status NpuMask::RunDecode() const {
+absl::Status NpuMask::RunDecode(absl::string_view signature) const {
   if (method_ == MaskUpdateMethod::kWH) {
     return HWMaskUpdate(
         const_cast<
@@ -657,8 +687,10 @@ absl::Status NpuMask::RunDecode() const {
   }
   RET_CHECK(compiled_model_ != nullptr)
       << "Compiled model must be provided for kModel mask update.";
+  absl::string_view sig =
+      signature.empty() ? MaskSignatures::kDecodeMask : signature;
   auto res = compiled_model_->Run(
-      MaskSignatures::kDecodeMask,
+      sig,
       const_cast<
           absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&>(
           mask_context_.decode_input_buffers),
@@ -670,7 +702,7 @@ absl::Status NpuMask::RunDecode() const {
   return absl::OkStatus();
 }
 
-absl::Status NpuMask::RunVerify() const {
+absl::Status NpuMask::RunVerify(absl::string_view signature) const {
   if (method_ == MaskUpdateMethod::kWH) {
     return HWMaskUpdate(
         const_cast<
@@ -682,8 +714,10 @@ absl::Status NpuMask::RunVerify() const {
   }
   RET_CHECK(compiled_model_ != nullptr)
       << "Compiled model must be provided for kModel mask update.";
+  absl::string_view sig =
+      signature.empty() ? MaskSignatures::kVerifyMask : signature;
   auto res = compiled_model_->Run(
-      MaskSignatures::kVerifyMask,
+      sig,
       const_cast<
           absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&>(
           mask_context_.verify_input_buffers),
