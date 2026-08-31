@@ -378,6 +378,11 @@ absl::Status GetKVCacheRootNames(std::vector<absl::string_view> input_names,
                                  std::vector<absl::string_view> output_names,
                                  std::string& k_root_name,
                                  std::string& v_root_name) {
+  // First, check for standard key/value cache root names across inputs and
+  // outputs. Models with hybrid architectures (e.g. LFM) contain both conv
+  // cache (kv_cache_c_) and standard attention KV cache (kv_cache_k_/v_).
+  // Standard KV cache prefixes must take priority so k_root_name and
+  // v_root_name correctly match the key/value tensors.
   for (auto input_name : input_names) {
     if (absl::StartsWith(input_name, "kv_cache_k_")) {
       k_root_name = "kv_cache_k_";
@@ -386,10 +391,6 @@ absl::Status GetKVCacheRootNames(std::vector<absl::string_view> input_names,
     } else if (absl::StartsWith(input_name, "k_cache_")) {
       k_root_name = "k_cache_";
       v_root_name = "v_cache_";
-      return absl::OkStatus();
-    } else if (absl::StartsWith(input_name, "kv_cache_c_")) {
-      k_root_name = "kv_cache_c_";
-      v_root_name = "kv_cache_c_";
       return absl::OkStatus();
     }
   }
@@ -402,7 +403,18 @@ absl::Status GetKVCacheRootNames(std::vector<absl::string_view> input_names,
       k_root_name = "k_cache_";
       v_root_name = "v_cache_";
       return absl::OkStatus();
-    } else if (absl::StartsWith(output_name, "kv_cache_c_")) {
+    }
+  }
+  // Fall back to conv cache if no standard key/value cache names exist.
+  for (auto input_name : input_names) {
+    if (absl::StartsWith(input_name, "kv_cache_c_")) {
+      k_root_name = "kv_cache_c_";
+      v_root_name = "kv_cache_c_";
+      return absl::OkStatus();
+    }
+  }
+  for (auto output_name : output_names) {
+    if (absl::StartsWith(output_name, "kv_cache_c_")) {
       k_root_name = "kv_cache_c_";
       v_root_name = "kv_cache_c_";
       return absl::OkStatus();

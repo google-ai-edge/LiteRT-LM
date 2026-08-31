@@ -132,33 +132,39 @@ absl::StatusOr<bool> IsDynamicModel(ModelResources& resources) {
 
   bool is_kv_cache_dynamic = false;
   {
+    const auto input_names = prefill_signature.InputNames();
     std::string kv_cache_k_root_name;
     std::string kv_cache_v_root_name;
     ABSL_RETURN_IF_ERROR(GetKVCacheRootNames(
-        prefill_signature.InputNames(), prefill_signature.OutputNames(),
+        input_names, prefill_signature.OutputNames(),
         kv_cache_k_root_name, kv_cache_v_root_name));
 
     // TODO(b/477657050): Investigate support for dynamic model with optimized
     // gpu cache.
-    if (!absl::c_any_of(
-            prefill_signature.InputNames(), [&](absl::string_view input_name) {
-              return absl::StartsWith(input_name, kv_cache_k_root_name) ||
-                     absl::StartsWith(input_name, kv_cache_v_root_name);
-            })) {
+    if (!absl::c_any_of(input_names, [&](absl::string_view input_name) {
+          return absl::StartsWith(input_name, kv_cache_k_root_name) ||
+                 absl::StartsWith(input_name, kv_cache_v_root_name);
+        })) {
       return false;
     }
 
-    std::string first_kv_cache_k_input_name = kv_cache_k_root_name + "0";
-    LITERT_ASSIGN_OR_RETURN(
-        SimpleTensor k_tensor,
-        prefill_signature.InputTensor(first_kv_cache_k_input_name));
-    ABSL_ASSIGN_OR_RETURN(bool is_k_dynamic, IsDynamicTensor(k_tensor));
+    auto is_cache_dynamic =
+        [&](absl::string_view root_name) -> absl::StatusOr<bool> {
+      for (absl::string_view input_name : input_names) {
+        if (absl::StartsWith(input_name, root_name)) {
+          LITERT_ASSIGN_OR_RETURN(const SimpleTensor& tensor,
+                                  prefill_signature.InputTensor(input_name));
+          return IsDynamicTensor(tensor);
+        }
+      }
+      return absl::FailedPreconditionError(
+          absl::StrCat("No cache input tensor found for prefix: ", root_name));
+    };
 
-    std::string first_kv_cache_v_input_name = kv_cache_v_root_name + "0";
-    LITERT_ASSIGN_OR_RETURN(
-        SimpleTensor v_tensor,
-        prefill_signature.InputTensor(first_kv_cache_v_input_name));
-    ABSL_ASSIGN_OR_RETURN(bool is_v_dynamic, IsDynamicTensor(v_tensor));
+    ABSL_ASSIGN_OR_RETURN(bool is_k_dynamic,
+                          is_cache_dynamic(kv_cache_k_root_name));
+    ABSL_ASSIGN_OR_RETURN(bool is_v_dynamic,
+                          is_cache_dynamic(kv_cache_v_root_name));
 
     RET_CHECK(is_k_dynamic == is_v_dynamic)
         << "KV cache k and v need to be dynamic or static at the same time.";

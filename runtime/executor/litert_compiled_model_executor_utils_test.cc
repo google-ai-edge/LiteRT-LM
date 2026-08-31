@@ -301,6 +301,22 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest, GetKVCacheRootNames_KvCacheC) {
 }
 
 TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     GetKVCacheRootNames_HybridConvAndKVCache) {
+  // Hybrid models like LFM start with conv cache (kv_cache_c_0) followed by
+  // attention layers (kv_cache_k_2, kv_cache_v_2). Standard KV cache names
+  // should take precedence.
+  std::vector<absl::string_view> input_names = {"kv_cache_c_0", "kv_cache_c_1",
+                                                "kv_cache_k_2", "kv_cache_v_2"};
+  std::vector<absl::string_view> output_names = {};
+  std::string k_root_name;
+  std::string v_root_name;
+  ASSERT_OK(
+      GetKVCacheRootNames(input_names, output_names, k_root_name, v_root_name));
+  EXPECT_EQ(k_root_name, "kv_cache_k_");
+  EXPECT_EQ(v_root_name, "kv_cache_v_");
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
      FillSingleBufferCacheParamTensor) {
   LITERT_ASSERT_OK_AND_ASSIGN(auto env, ::litert::Environment::Create({}));
   auto layout = ::litert::Layout(::litert::Dimensions({12}));
