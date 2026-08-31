@@ -1587,7 +1587,7 @@ TEST(EngineCTest, SessionGenerateContentStreamAndCancel) {
                                        /* audio_backend_str */ nullptr),
       &litert_lm_engine_settings_delete);
   ASSERT_NE(settings, nullptr);
-  litert_lm_engine_settings_set_max_num_tokens(settings.get(), 128);
+  litert_lm_engine_settings_set_max_num_tokens(settings.get(), 512);
 
   EnginePtr engine(litert_lm_engine_create(settings.get()),
                    &litert_lm_engine_delete);
