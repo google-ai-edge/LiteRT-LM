@@ -37,18 +37,24 @@
 #include "absl/log/globals.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/str_format.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/time/clock.h"  // from @com_google_absl
+#include "absl/time/time.h"  // from @com_google_absl
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "runtime/components/model_resources.h"
 #include "runtime/core/embedding_engine_impl.h"
 #include "runtime/engine/embedding_engine.h"
 #include "runtime/engine/embedding_engine_settings.h"
 #include "runtime/engine/io_types.h"
+#include "runtime/engine/shared_flags.h"
+#include "runtime/executor/embedding/embedding_executor_base.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/util/litert_util.h"
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/status_macros.h"
+#include "tflite/profiling/memory_info.h"  // from @litert
 
 ABSL_FLAG(std::string, backend, "cpu",
           "Executor backend to use for embedding execution (cpu, gpu, etc.)");
@@ -64,6 +70,9 @@ ABSL_FLAG(bool, use_mmap, true,
           "Whether to use memory-mapped file for model loading.");
 ABSL_FLAG(std::string, dispatch_library_dir, "",
           "Path to directory containing LiteRT dispatch libraries.");
+ABSL_FLAG(int, num_warmup, 2, "Number of warmup iterations for benchmarking.");
+ABSL_FLAG(std::string, input_overflow_strategy, "truncate",
+          "Input overflow strategy: error, truncate, or chunk_and_average.");
 
 namespace {
 
@@ -71,9 +80,11 @@ using ::litert::lm::Backend;
 using ::litert::lm::BuildLiteRtCompiledModelResources;
 using ::litert::lm::EmbeddingEngineImpl;
 using ::litert::lm::EmbeddingEngineSettings;
+using ::litert::lm::EmbeddingOptions;
 using ::litert::lm::EmbeddingResponse;
 using ::litert::lm::InputData;
 using ::litert::lm::InputImage;
+using ::litert::lm::InputOverflowStrategy;
 using ::litert::lm::InputText;
 using ::litert::lm::MemoryMappedFile;
 using ::litert::lm::ModelAssets;
@@ -99,6 +110,20 @@ absl::StatusOr<ModelAssets> CreateModelAssets(bool use_mmap,
         std::make_shared<ScopedFile>(std::move(local_scoped_file));
     return ModelAssets::Create(scoped_file, model_path);
   }
+}
+
+absl::StatusOr<InputOverflowStrategy> ParseInputOverflowStrategy(
+    absl::string_view strategy_str) {
+  if (strategy_str == "error") {
+    return InputOverflowStrategy::kError;
+  } else if (strategy_str == "truncate") {
+    return InputOverflowStrategy::kTruncate;
+  } else if (strategy_str == "chunk_and_average") {
+    return InputOverflowStrategy::kChunkAndAverage;
+  }
+  return absl::InvalidArgumentError(
+      absl::StrCat("Invalid --input_overflow_strategy: ", strategy_str,
+                   ". Must be 'error', 'truncate', or 'chunk_and_average'."));
 }
 
 absl::Status MainHelper(int argc, char** argv) {
@@ -158,6 +183,32 @@ absl::Status MainHelper(int argc, char** argv) {
         dispatch_library_dir);
   }
 
+  if (backend == Backend::CPU) {
+    const int num_cpu_threads = absl::GetFlag(FLAGS_num_cpu_threads);
+    if (num_cpu_threads > 0) {
+      settings.GetMutableMainExecutorSettings().SetNumThreads(num_cpu_threads);
+    }
+  }
+
+  const bool is_benchmark = absl::GetFlag(FLAGS_benchmark);
+  if (is_benchmark) {
+    auto& benchmark_params = settings.GetMutableBenchmarkParams();
+    const int benchmark_prefill_tokens =
+        absl::GetFlag(FLAGS_benchmark_prefill_tokens);
+    if (benchmark_prefill_tokens < 0) {
+      return absl::InvalidArgumentError(
+          "--benchmark_prefill_tokens must be non-negative.");
+    }
+    if (benchmark_prefill_tokens > 0) {
+      benchmark_params.set_num_prefill_tokens(benchmark_prefill_tokens);
+    }
+  }
+
+  const int visual_token_budget = absl::GetFlag(FLAGS_visual_token_budget);
+  if (visual_token_budget > 0) {
+    settings.SetVisionTokensPerImage(visual_token_budget);
+  }
+
   LITERT_ASSIGN_OR_RETURN(auto owned_env,
                           CreateEnvironment(settings, resources.get()));
   auto owned_env_ptr =
@@ -171,17 +222,35 @@ absl::Status MainHelper(int argc, char** argv) {
                                   std::move(tokenizer),
                                   std::move(settings)));
 
-  const std::string prompt = absl::GetFlag(FLAGS_input_prompt);
+  std::string prompt = absl::GetFlag(FLAGS_input_prompt);
   const std::string image_path = absl::GetFlag(FLAGS_image_path);
+  const int benchmark_prefill_tokens =
+      is_benchmark ? absl::GetFlag(FLAGS_benchmark_prefill_tokens) : 0;
+
   if (prompt.empty() && image_path.empty()) {
-    return absl::InvalidArgumentError(
-        "At least one of --input_prompt or --image_path must be provided.");
+    if (!is_benchmark || benchmark_prefill_tokens <= 0) {
+      return absl::InvalidArgumentError(
+          is_benchmark
+              ? "At least one of --input_prompt, --image_path, or "
+                "--benchmark_prefill_tokens must be provided in benchmark mode."
+              : "At least one of --input_prompt or --image_path must be "
+                "provided.");
+    }
   }
 
   std::vector<InputData> contents;
-  if (!prompt.empty()) {
-    std::cout << "Computing embedding for input prompt: \"" << prompt << "\""
-              << std::endl;
+  if (!prompt.empty() || benchmark_prefill_tokens > 0) {
+    if (prompt.empty()) {
+      prompt = "benchmark";
+    }
+    if (benchmark_prefill_tokens > 0) {
+      std::cout << "Computing embedding for input prompt: \"" << prompt
+                << "\" (fixed to " << benchmark_prefill_tokens
+                << " prefill tokens)" << std::endl;
+    } else {
+      std::cout << "Computing embedding for input prompt: \"" << prompt << "\""
+                << std::endl;
+    }
     contents.emplace_back(InputText(prompt));
   }
 
@@ -197,8 +266,95 @@ absl::Status MainHelper(int argc, char** argv) {
     contents.emplace_back(InputImage(std::move(image_bytes)));
   }
 
-  auto response_result = engine->ComputeEmbedding(
-      contents, {.normalize = absl::GetFlag(FLAGS_normalize)});
+  LITERT_ASSIGN_OR_RETURN(
+      auto overflow_strategy,
+      ParseInputOverflowStrategy(absl::GetFlag(FLAGS_input_overflow_strategy)));
+  EmbeddingOptions options{
+      .normalize = absl::GetFlag(FLAGS_normalize),
+      .input_overflow_strategy = overflow_strategy,
+  };
+
+  if (absl::GetFlag(FLAGS_benchmark)) {
+    const int num_warmup = absl::GetFlag(FLAGS_num_warmup);
+    const int num_iterations = absl::GetFlag(FLAGS_num_iterations);
+    std::cout << "Starting benchmark with " << num_warmup << " warmup and "
+              << num_iterations << " measurement iterations..." << std::endl;
+
+    for (int i = 0; i < num_warmup; ++i) {
+      auto warmup_res = engine->ComputeEmbedding(contents, options);
+      if (!warmup_res.ok()) {
+        std::cerr << "Warmup iteration " << i
+                  << " failed: " << warmup_res.status() << std::endl;
+        return warmup_res.status();
+      }
+    }
+
+    std::vector<double> latencies_ms;
+    latencies_ms.reserve(num_iterations);
+    EmbeddingResponse last_response;
+    for (int i = 0; i < num_iterations; ++i) {
+      absl::Time start_time = absl::Now();
+      auto response_result = engine->ComputeEmbedding(contents, options);
+      absl::Time end_time = absl::Now();
+      if (!response_result.ok()) {
+        std::cerr << "Measurement iteration " << i
+                  << " failed: " << response_result.status() << std::endl;
+        return response_result.status();
+      }
+      double elapsed_ms = absl::ToDoubleMilliseconds(end_time - start_time);
+      latencies_ms.push_back(elapsed_ms);
+      last_response = *std::move(response_result);
+    }
+
+    double total_ms = 0.0;
+    double min_ms = latencies_ms.empty() ? 0.0 : latencies_ms[0];
+    double max_ms = latencies_ms.empty() ? 0.0 : latencies_ms[0];
+    for (double l : latencies_ms) {
+      total_ms += l;
+      min_ms = std::min(min_ms, l);
+      max_ms = std::max(max_ms, l);
+    }
+    double avg_ms =
+        latencies_ms.empty() ? 0.0 : (total_ms / latencies_ms.size());
+
+    // Print and log benchmark metrics
+    std::cout << "\n================ BENCHMARK RESULT ================"
+              << std::endl;
+    auto benchmark_info = engine->GetBenchmarkInfo();
+    if (benchmark_info.has_value()) {
+      for (const auto& mark : benchmark_info->GetMarkDurations()) {
+        double mark_ms = absl::ToDoubleMilliseconds(mark.second);
+        ABSL_LOG(INFO) << absl::StrFormat("- %s: %.2f ms", mark.first, mark_ms);
+        std::cout << "- " << mark.first << ": " << mark_ms << " ms"
+                  << std::endl;
+      }
+    }
+
+    ABSL_LOG(INFO) << absl::StrFormat(
+        "Average Latency: %.2f ms (min: %.2f ms, max: %.2f ms)", avg_ms, min_ms,
+        max_ms);
+    std::cout << absl::StrFormat(
+                     "Average Latency: %.2f ms (min: %.2f ms, max: %.2f ms)\n",
+                     avg_ms, min_ms, max_ms);
+
+    if (absl::GetFlag(FLAGS_report_peak_memory_footprint)) {
+      auto mem_usage = tflite::profiling::memory::GetMemoryUsage();
+      if (mem_usage.IsSupported()) {
+        double peak_ram_mb = mem_usage.mem_footprint_kb / 1024.0;
+        ABSL_LOG(INFO) << absl::StrFormat("Peak system ram usage: %.2f MB",
+                                          peak_ram_mb);
+        std::cout << absl::StrFormat("Peak system ram usage: %.2f MB\n",
+                                     peak_ram_mb);
+      }
+    }
+    std::cout << "Embedding vector dimension: "
+              << last_response.embedding.size() << std::endl;
+    std::cout << "=================================================="
+              << std::endl;
+    return absl::OkStatus();
+  }
+
+  auto response_result = engine->ComputeEmbedding(contents, options);
   if (!response_result.ok()) {
     std::cerr << "ComputeEmbedding failed with error: "
               << response_result.status() << std::endl;

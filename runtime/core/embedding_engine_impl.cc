@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <string>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -27,6 +28,7 @@
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/optional.h"  // from @com_google_absl
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/model_resources.h"
@@ -62,6 +64,11 @@
 namespace litert::lm {
 
 namespace {
+
+constexpr absl::string_view kMarkVisionExecutor = "vision_executor";
+constexpr absl::string_view kMarkImagePreprocessor = "image_preprocessor";
+constexpr absl::string_view kMarkAudioExecutor = "audio_executor";
+constexpr absl::string_view kMarkAudioPreprocessor = "audio_preprocessor";
 
 absl::StatusOr<std::vector<int>> TokenUnionToTokenIds(
     const proto::TokenUnion& token_union,
@@ -544,6 +551,11 @@ absl::StatusOr<ExecutorInputs> EmbeddingEngineImpl::ProcessAndCombineContents(
         LITERT_ASSIGN_OR_RETURN(auto raw_text, input_text->GetRawTextString());
         LITERT_ASSIGN_OR_RETURN(auto token_ids,
                                 tokenizer_->TextToTokenIds(raw_text));
+        if (benchmark_info_.has_value() &&
+            benchmark_info_->GetBenchmarkParams().num_prefill_tokens() > 0) {
+          token_ids.resize(
+              benchmark_info_->GetBenchmarkParams().num_prefill_tokens());
+        }
         combined_token_ids.insert(combined_token_ids.end(), token_ids.begin(),
                                   token_ids.end());
         if (benchmark_info_.has_value()) {
@@ -560,13 +572,29 @@ absl::StatusOr<ExecutorInputs> EmbeddingEngineImpl::ProcessAndCombineContents(
       if (input_image->IsTensorBuffer()) {
         LITERT_ASSIGN_OR_RETURN(auto tensor_buffer,
                                 input_image->GetPreprocessedImageTensor());
+        if (benchmark_info_.has_value()) {
+          ABSL_RETURN_IF_ERROR(
+              benchmark_info_->TimeMarkDelta(std::string(kMarkVisionExecutor)));
+        }
         LITERT_ASSIGN_OR_RETURN(single_image_data,
                                 vision_executor_->Encode(*tensor_buffer));
+        if (benchmark_info_.has_value()) {
+          ABSL_RETURN_IF_ERROR(
+              benchmark_info_->TimeMarkDelta(std::string(kMarkVisionExecutor)));
+        }
       } else if (input_image->IsTensorBufferMap()) {
         LITERT_ASSIGN_OR_RETURN(auto tensor_buffer_map,
                                 input_image->GetPreprocessedImageTensorMap());
+        if (benchmark_info_.has_value()) {
+          ABSL_RETURN_IF_ERROR(
+              benchmark_info_->TimeMarkDelta(std::string(kMarkVisionExecutor)));
+        }
         LITERT_ASSIGN_OR_RETURN(single_image_data,
                                 vision_executor_->Encode(*tensor_buffer_map));
+        if (benchmark_info_.has_value()) {
+          ABSL_RETURN_IF_ERROR(
+              benchmark_info_->TimeMarkDelta(std::string(kMarkVisionExecutor)));
+        }
       } else {
         if (image_preprocessor_ == nullptr) {
           return absl::FailedPreconditionError(
@@ -593,23 +621,47 @@ absl::StatusOr<ExecutorInputs> EmbeddingEngineImpl::ProcessAndCombineContents(
           per_call_image_preprocess_parameter.SetPatchifyConfig(
               patchify_config);
         }
+        if (benchmark_info_.has_value()) {
+          ABSL_RETURN_IF_ERROR(benchmark_info_->TimeMarkDelta(
+              std::string(kMarkImagePreprocessor)));
+        }
         LITERT_ASSIGN_OR_RETURN(
             auto preprocessed_image,
             image_preprocessor_->Preprocess(
                 *input_image, per_call_image_preprocess_parameter));
+        if (benchmark_info_.has_value()) {
+          ABSL_RETURN_IF_ERROR(benchmark_info_->TimeMarkDelta(
+              std::string(kMarkImagePreprocessor)));
+        }
         if (preprocessed_image.IsTensorBuffer()) {
           LITERT_ASSIGN_OR_RETURN(
               auto tensor_buffer,
               preprocessed_image.GetPreprocessedImageTensor());
+          if (benchmark_info_.has_value()) {
+            ABSL_RETURN_IF_ERROR(benchmark_info_->TimeMarkDelta(
+                std::string(kMarkVisionExecutor)));
+          }
           LITERT_ASSIGN_OR_RETURN(single_image_data,
                                   vision_executor_->Encode(*tensor_buffer));
+          if (benchmark_info_.has_value()) {
+            ABSL_RETURN_IF_ERROR(benchmark_info_->TimeMarkDelta(
+                std::string(kMarkVisionExecutor)));
+          }
         } else if (preprocessed_image.IsTensorBufferMap()) {
           LITERT_ASSIGN_OR_RETURN(
               auto tensor_buffer_map,
               preprocessed_image.GetPreprocessedImageTensorMap());
+          if (benchmark_info_.has_value()) {
+            ABSL_RETURN_IF_ERROR(benchmark_info_->TimeMarkDelta(
+                std::string(kMarkVisionExecutor)));
+          }
           LITERT_ASSIGN_OR_RETURN(
               single_image_data,
               vision_executor_->Encode(*tensor_buffer_map));
+          if (benchmark_info_.has_value()) {
+            ABSL_RETURN_IF_ERROR(benchmark_info_->TimeMarkDelta(
+                std::string(kMarkVisionExecutor)));
+          }
         } else {
           return absl::InternalError(
               "Failed to get tensor buffer from preprocessed image.");
@@ -642,15 +694,31 @@ absl::StatusOr<ExecutorInputs> EmbeddingEngineImpl::ProcessAndCombineContents(
               "Audio preprocessor is not available for unprocessed audio "
               "input.");
         }
+        if (benchmark_info_.has_value()) {
+          ABSL_RETURN_IF_ERROR(benchmark_info_->TimeMarkDelta(
+              std::string(kMarkAudioPreprocessor)));
+        }
         LITERT_ASSIGN_OR_RETURN(InputAudio temp_audio,
                                 audio_preprocessor_->Preprocess(*input_audio));
+        if (benchmark_info_.has_value()) {
+          ABSL_RETURN_IF_ERROR(benchmark_info_->TimeMarkDelta(
+              std::string(kMarkAudioPreprocessor)));
+        }
         preprocessed_audio.emplace(std::move(temp_audio));
         LITERT_ASSIGN_OR_RETURN(
             spectrogram_tensor,
             preprocessed_audio->GetPreprocessedAudioTensor());
       }
+      if (benchmark_info_.has_value()) {
+        ABSL_RETURN_IF_ERROR(
+            benchmark_info_->TimeMarkDelta(std::string(kMarkAudioExecutor)));
+      }
       LITERT_ASSIGN_OR_RETURN(auto single_audio_data,
                               audio_executor_->Encode(*spectrogram_tensor));
+      if (benchmark_info_.has_value()) {
+        ABSL_RETURN_IF_ERROR(
+            benchmark_info_->TimeMarkDelta(std::string(kMarkAudioExecutor)));
+      }
       const int num_audio_tokens = single_audio_data.GetValidTokens();
       if (num_audio_tokens > 0) {
         all_audio_data.push_back(std::move(single_audio_data));
@@ -694,7 +762,8 @@ absl::StatusOr<ExecutorInputs> EmbeddingEngineImpl::ProcessAndCombineContents(
   }
 
   if (benchmark_info_.has_value() &&
-      benchmark_info_->GetBenchmarkParams().num_prefill_tokens() > 0) {
+      benchmark_info_->GetBenchmarkParams().num_prefill_tokens() > 0 &&
+      all_image_data.empty() && all_audio_data.empty()) {
     combined_token_ids.resize(
         benchmark_info_->GetBenchmarkParams().num_prefill_tokens());
   }
