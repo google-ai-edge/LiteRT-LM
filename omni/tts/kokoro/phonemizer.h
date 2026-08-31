@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
+#include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
@@ -124,8 +125,8 @@ class KokoroPhonemizer {
   // - word: Input word string view.
   //
   // returns
-  // - IPA pronunciation string.
-  std::string WordToIpa(absl::string_view word) const;
+  // - IPA pronunciation string, or error status on failure.
+  absl::StatusOr<std::string> WordToIpa(absl::string_view word) const;
 
   // Converts raw text in the configured language to normalized
   // Kokoro-compatible IPA phoneme transcript.
@@ -134,8 +135,9 @@ class KokoroPhonemizer {
   // - text: Input raw text string view.
   //
   // returns
-  // - Normalized IPA phoneme transcription string.
-  std::string TextToIpa(absl::string_view text) const;
+  // - Normalized IPA phoneme transcription string, or error status on
+  // failure.
+  absl::StatusOr<std::string> TextToIpa(absl::string_view text) const;
 
   // Converts raw text into framed sequence of Kokoro phoneme token IDs (with
   // BOS/EOS).
@@ -144,8 +146,10 @@ class KokoroPhonemizer {
   // - text: Input raw text string view.
   //
   // returns
-  // - Vector of integer phoneme token IDs framed with BOS (0) and EOS (0).
-  std::vector<int> TextToPhonemeIds(absl::string_view text) const;
+  // - Vector of integer phoneme token IDs framed with BOS (0) and EOS (0), or
+  // error status on failure.
+  absl::StatusOr<std::vector<int>> TextToPhonemeIds(
+      absl::string_view text) const;
 
   // Returns the active espeak-ng language / voice name.
   absl::string_view language() const { return language_; }
@@ -155,8 +159,15 @@ class KokoroPhonemizer {
 
   // Converts an accumulated word token into its IPA representation and appends
   // it to the combined IPA string.
-  void FlushWordToIpa(std::string& current_word,
-                      std::string& combined_ipa) const;
+  //
+  // args
+  // - current_word: The current word being processed.
+  // - combined_ipa: The combined IPA string to append to.
+  //
+  // returns
+  // - Error status on failure.
+  absl::Status FlushWordToIpa(std::string& current_word,
+                              std::string& combined_ipa) const;
 
   // Process-wide mutex protecting the non-reentrant libespeak-ng C library.
   // Because libespeak-ng maintains process-global static state, all library

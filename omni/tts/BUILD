@@ -164,6 +164,8 @@ cc_library(
         "@litert//litert/cc:litert_macros",
         "//omni/base:io_types",
         "//omni/base:model_resources",
+        "//omni/tts/kokoro:kokoro_factory",
+        "//omni/tts/kokoro:kokoro_model_config",
         "//omni/tts/qwen3_tts:qwen3_tts_factory",
         "//omni/tts/qwen3_tts:qwen3_tts_model_config",
         "//runtime/executor:executor_settings_base",
@@ -174,6 +176,9 @@ cc_library(
 cc_test(
     name = "tts_engine_test",
     srcs = ["tts_engine_test.cc"],
+    data = [
+        "@espeak_ng//:espeak_ng_data",
+    ],
     deps = [
         ":stream_text_source",
         ":tts_engine",
@@ -187,6 +192,8 @@ cc_test(
         "@com_google_absl//absl/synchronization",
         "//omni/base:io_types",
         "//omni/base:stage",
+        "//omni/tts/kokoro:common",
+        "//omni/tts/kokoro:phonemizer",
         "//runtime/framework:threadpool",
         "//support/util:test_utils",
     ],

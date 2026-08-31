@@ -18,12 +18,15 @@
 #include <memory>
 #include <string>
 #include <utility>
+#include <variant>
 
 #include "absl/functional/any_invocable.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "omni/base/io_types.h"
 #include "omni/base/model_resources.h"
+#include "omni/tts/kokoro/kokoro_model_config.h"
+#include "omni/tts/qwen3_tts/qwen3_tts_model_config.h"
 #include "omni/tts/text_chunk_utils.h"
 #include "omni/tts/tts_session.h"
 #include "runtime/executor/executor_settings_base.h"
@@ -40,9 +43,18 @@ enum class ModelType {
   QWEN3_TTS = 2,
 };
 
+// Model-specific configuration variant.
+using ModelConfig =
+    std::variant<std::monostate, KokoroModelConfig, Qwen3TtsModelConfig>;
+
+// Configuration settings for a TtsSession instance.
+struct TtsSessionConfig {
+  // Text chunk configuration.
+  TextChunkConfig text_chunk_config;
+};
+
 // Configuration settings for TtsEngine initialization.
 struct TtsEngineSettings {
-  ModelType model_type = ModelType::UNSPECIFIED;
   // Folder containing the TTS model files.
   std::string model_folder;
   // Optional cache directory for model acceleration (e.g., XNNPack weight
@@ -50,14 +62,21 @@ struct TtsEngineSettings {
   std::string cache_dir;
   // Backend to use for model execution.
   lm::Backend backend = lm::Backend::CPU;
-  // Text chunk configuration.
-  TextChunkConfig text_chunk_config;
   // Number of threads to use for model execution (CPU only).
   int num_threads = 4;
-  // Maximum number of frames to synthesize.
-  int max_frames = 500;
-  // TODO b/538727793 introduce more settings for TtsEngine, and need to add
-  // model type specific settings.
+
+  // Model-specific configuration.
+  ModelConfig model_config;
+
+  ModelType GetModelType() const {
+    if (std::holds_alternative<KokoroModelConfig>(model_config)) {
+      return ModelType::KOKORO;
+    }
+    if (std::holds_alternative<Qwen3TtsModelConfig>(model_config)) {
+      return ModelType::QWEN3_TTS;
+    }
+    return ModelType::UNSPECIFIED;
+  }
 };
 
 // High-level TTS Engine owning heavy model resources and creating lightweight
@@ -74,7 +93,8 @@ class TtsEngine {
   ~TtsEngine() = default;
 
   // Creates a lightweight TtsSession for a synthesis stream.
-  absl::StatusOr<std::unique_ptr<TtsSession>> CreateSession();
+  absl::StatusOr<std::unique_ptr<TtsSession>> CreateSession(
+      const TtsSessionConfig& session_config = {});
 
   const TtsEngineSettings& settings() const { return settings_; }
   std::shared_ptr<ModelResources> model_resources() const {

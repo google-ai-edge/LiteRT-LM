@@ -76,7 +76,8 @@ TEST(PhonemizerTest, KokoroPhonemizerBasic) {
                        KokoroPhonemizer::Create(GetTestEspeakDataDir()));
 
   std::string text = "Hello world.";
-  std::vector<int> tokens = phonemizer->TextToPhonemeIds(text);
+  ASSERT_OK_AND_ASSIGN(std::vector<int> tokens,
+                       phonemizer->TextToPhonemeIds(text));
   const std::vector<int> expected_tokens = {0,  50,  42, 54, 156, 31, 16,
                                             65, 156, 87, 54, 46,  4,  0};
   EXPECT_EQ(tokens, expected_tokens);
@@ -91,16 +92,22 @@ TEST(PhonemizerTest, CustomLexicon) {
       auto phonemizer,
       KokoroPhonemizer::Create(GetTestEspeakDataDir(), custom_lexicon));
 
-  EXPECT_EQ(phonemizer->WordToIpa("customword"), "kˈʌstəmˌwɜːd");
-  EXPECT_EQ(phonemizer->WordToIpa("CUSTOMWORD"), "kˈʌstəmˌwɜːd");
-  EXPECT_FALSE(phonemizer->TextToIpa("customword").empty());
+  ASSERT_OK_AND_ASSIGN(std::string custom_ipa,
+                       phonemizer->WordToIpa("customword"));
+  EXPECT_EQ(custom_ipa, "kˈʌstəmˌwɜːd");
+  ASSERT_OK_AND_ASSIGN(std::string upper_custom_ipa,
+                       phonemizer->WordToIpa("CUSTOMWORD"));
+  EXPECT_EQ(upper_custom_ipa, "kˈʌstəmˌwɜːd");
+  ASSERT_OK_AND_ASSIGN(std::string text_ipa,
+                       phonemizer->TextToIpa("customword"));
+  EXPECT_FALSE(text_ipa.empty());
 }
 
 TEST(PhonemizerTest, TextToIpa) {
   ASSERT_OK_AND_ASSIGN(auto phonemizer,
                        KokoroPhonemizer::Create(GetTestEspeakDataDir()));
 
-  std::string ipa = phonemizer->TextToIpa("Hello world!");
+  ASSERT_OK_AND_ASSIGN(std::string ipa, phonemizer->TextToIpa("Hello world!"));
   EXPECT_FALSE(ipa.empty());
   EXPECT_NE(ipa.find('!'), std::string::npos);
 }
@@ -159,14 +166,9 @@ TEST(PhonemizerTest, MultilingualPhonemization) {
       auto phonemizer_us,
       KokoroPhonemizer::Create(GetTestEspeakDataDir(), "en-us"));
   EXPECT_EQ(phonemizer_us->language(), "en-us");
-  EXPECT_FALSE(phonemizer_us->TextToIpa("Hello world").empty());
-
-  // British English ('b' / "en-gb")
-  ASSERT_OK_AND_ASSIGN(
-      auto phonemizer_gb,
-      KokoroPhonemizer::Create(GetTestEspeakDataDir(), "en-gb"));
-  EXPECT_EQ(phonemizer_gb->language(), "en-gb");
-  EXPECT_FALSE(phonemizer_gb->TextToIpa("Hello world").empty());
+  ASSERT_OK_AND_ASSIGN(std::string us_ipa,
+                       phonemizer_us->TextToIpa("Hello world"));
+  EXPECT_FALSE(us_ipa.empty());
 
   // Multilingual with custom lexicon override (e.g. Spanish)
   absl::flat_hash_map<std::string, std::string> spanish_lexicon = {
@@ -177,9 +179,14 @@ TEST(PhonemizerTest, MultilingualPhonemization) {
       auto phonemizer_es,
       KokoroPhonemizer::Create(GetTestEspeakDataDir(), "es", spanish_lexicon));
   EXPECT_EQ(phonemizer_es->language(), "es");
-  EXPECT_EQ(phonemizer_es->WordToIpa("hola"), "ˈola");
-  EXPECT_EQ(phonemizer_es->WordToIpa("mundo"), "mˈundo");
-  EXPECT_FALSE(phonemizer_es->TextToIpa("hola mundo").empty());
+  ASSERT_OK_AND_ASSIGN(std::string hola_ipa, phonemizer_es->WordToIpa("hola"));
+  EXPECT_EQ(hola_ipa, "ˈola");
+  ASSERT_OK_AND_ASSIGN(std::string mundo_ipa,
+                       phonemizer_es->WordToIpa("mundo"));
+  EXPECT_EQ(mundo_ipa, "mˈundo");
+  ASSERT_OK_AND_ASSIGN(std::string es_ipa,
+                       phonemizer_es->TextToIpa("hola mundo"));
+  EXPECT_FALSE(es_ipa.empty());
 }
 
 TEST(PhonemizerTest, NonAsciiUtf8Tokenization) {
@@ -190,7 +197,8 @@ TEST(PhonemizerTest, NonAsciiUtf8Tokenization) {
   ASSERT_OK_AND_ASSIGN(
       auto phonemizer,
       KokoroPhonemizer::Create(GetTestEspeakDataDir(), "en-us", lexicon));
-  std::string ipa = phonemizer->TextToIpa("El español y café.");
+  ASSERT_OK_AND_ASSIGN(std::string ipa,
+                       phonemizer->TextToIpa("El español y café."));
   EXPECT_FALSE(ipa.empty());
   // Verify that multi-byte UTF-8 accented words like "español" and "café"
   // are tokenized as unified words and match custom lexicon entries without
@@ -234,7 +242,20 @@ TEST(PhonemizerTest, SetLanguageDynamically) {
   // Dynamically update to British English using 1-letter voice code.
   phonemizer->SetLanguage("b");
   EXPECT_EQ(phonemizer->language(), "en-gb");
-  EXPECT_FALSE(phonemizer->TextToIpa("Hello world").empty());
+  // The test data fixture contains only en-us data, so en-gb returns an error
+  // without falling back silently to en-us.
+  auto gb_status = phonemizer->TextToIpa("Hello world");
+  EXPECT_FALSE(gb_status.ok());
+  EXPECT_TRUE(
+      absl::StrContains(gb_status.status().message(),
+                        "Failed to set espeak voice for language: en-gb"));
+
+  // Dynamically update using full name alias "english".
+  phonemizer->SetLanguage("english");
+  EXPECT_EQ(phonemizer->language(), "en-us");
+  ASSERT_OK_AND_ASSIGN(std::string en_ipa,
+                       phonemizer->TextToIpa("Hello world"));
+  EXPECT_FALSE(en_ipa.empty());
 
   // Dynamically update to Spanish.
   phonemizer->SetLanguage("spanish");
@@ -296,7 +317,8 @@ TEST(PhonemizerTest, PhonemeTokensDiagnostic) {
   };
 
   for (const auto& test_case : test_cases) {
-    std::string ipa = phonemizer->TextToIpa(test_case.prompt);
+    ASSERT_OK_AND_ASSIGN(std::string ipa,
+                         phonemizer->TextToIpa(test_case.prompt));
     bool ipa_matched = false;
     for (const auto& candidate : test_case.valid_ipa_candidates) {
       if (ipa == candidate) {
@@ -306,7 +328,8 @@ TEST(PhonemizerTest, PhonemeTokensDiagnostic) {
     }
     EXPECT_TRUE(ipa_matched) << "Got unexpected IPA: " << ipa;
 
-    std::vector<int> tokens = phonemizer->TextToPhonemeIds(test_case.prompt);
+    ASSERT_OK_AND_ASSIGN(std::vector<int> tokens,
+                         phonemizer->TextToPhonemeIds(test_case.prompt));
     bool tokens_matched = false;
     for (const auto& candidate : test_case.valid_token_candidates) {
       if (tokens == candidate) {

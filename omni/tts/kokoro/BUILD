@@ -66,6 +66,7 @@ cc_library(
         "@espeak_ng//:espeak_ng_base_headers",
         "@espeak_ng//:espeak_ng_speak_lib_header",
         "@espeak_ng//:libespeak_ng_la_sources",  # buildcleaner: keep
+        "@litert//litert/cc:litert_macros",
     ],
 )
 

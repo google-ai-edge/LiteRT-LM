@@ -29,6 +29,7 @@
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/ascii.h"  // from @com_google_absl
 #include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
@@ -37,6 +38,7 @@
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "espeak-ng/espeak_ng.h"  // from @espeak_ng
 #include "espeak-ng/speak_lib.h"  // from @espeak_ng
+#include "litert/cc/litert_macros.h"  // from @litert
 #include "omni/tts/kokoro/common.h"
 
 namespace litert::omni::tts {
@@ -186,11 +188,14 @@ std::string NormalizeLanguageCode(absl::string_view language_code) {
           {"en-us", "en-us"},
           {"en_us", "en-us"},
           {"american", "en-us"},
+          {"english", "en-us"},
+          {"american english", "en-us"},
           // British English ('b')
           {"b", "en-gb"},
           {"en-gb", "en-gb"},
           {"en_gb", "en-gb"},
           {"british", "en-gb"},
+          {"british english", "en-gb"},
           // Spanish ('e')
           {"e", "es"},
           {"es", "es"},
@@ -295,8 +300,11 @@ void KokoroPhonemizer::SetLanguage(absl::string_view language) {
   language_ = NormalizeLanguageCode(language);
 }
 
-std::string KokoroPhonemizer::WordToIpa(absl::string_view word) const {
-  if (word.empty()) return "";
+absl::StatusOr<std::string> KokoroPhonemizer::WordToIpa(
+    absl::string_view word) const {
+  if (word.empty()) {
+    return "";
+  }
   std::string lower_word = absl::AsciiStrToLower(word);
   auto it = merged_lexicon_.find(lower_word);
   if (it != merged_lexicon_.end()) {
@@ -305,7 +313,10 @@ std::string KokoroPhonemizer::WordToIpa(absl::string_view word) const {
 
   absl::MutexLock lock(espeak_mutex_);
   // Ensure active espeak voice matches this phonemizer's target language.
-  espeak_SetVoiceByName(language_.c_str());
+  if (espeak_SetVoiceByName(language_.c_str()) != EE_OK) {
+    return absl::InternalError(
+        absl::StrCat("Failed to set espeak voice for language: ", language_));
+  }
 
   std::string word_str(word);
   const void* text_ptr = word_str.c_str();
@@ -335,16 +346,16 @@ std::string KokoroPhonemizer::WordToIpa(absl::string_view word) const {
   return res;
 }
 
-void KokoroPhonemizer::FlushWordToIpa(std::string& current_word,
-                                      std::string& combined_ipa) const {
-  if (current_word.empty()) return;
+absl::Status KokoroPhonemizer::FlushWordToIpa(std::string& current_word,
+                                              std::string& combined_ipa) const {
+  if (current_word.empty()) return absl::OkStatus();
   std::string lower_word = absl::AsciiStrToLower(current_word);
   auto it = merged_lexicon_.find(lower_word);
   std::string word_ipa;
   if (it != merged_lexicon_.end()) {
     word_ipa = it->second;
   } else {
-    word_ipa = WordToIpa(current_word);
+    LITERT_ASSIGN_OR_RETURN(word_ipa, WordToIpa(current_word));
   }
   if (!word_ipa.empty()) {
     // Add separating whitespace between words unless following open
@@ -356,9 +367,11 @@ void KokoroPhonemizer::FlushWordToIpa(std::string& current_word,
     combined_ipa += word_ipa;
   }
   current_word.clear();
+  return absl::OkStatus();
 }
 
-std::string KokoroPhonemizer::TextToIpa(absl::string_view text) const {
+absl::StatusOr<std::string> KokoroPhonemizer::TextToIpa(
+    absl::string_view text) const {
   std::string combined_ipa;
   std::string current_word;
 
@@ -371,7 +384,7 @@ std::string KokoroPhonemizer::TextToIpa(absl::string_view text) const {
     if (std::isalnum(uc) || uc >= 0x80 || c == '\'' || c == '-') {
       current_word += c;
     } else {
-      FlushWordToIpa(current_word, combined_ipa);
+      LITERT_RETURN_IF_ERROR(FlushWordToIpa(current_word, combined_ipa));
       if (c == ' ') {
         if (!combined_ipa.empty() && combined_ipa.back() != ' ') {
           combined_ipa += ' ';
@@ -381,20 +394,20 @@ std::string KokoroPhonemizer::TextToIpa(absl::string_view text) const {
       }
     }
   }
-  FlushWordToIpa(current_word, combined_ipa);
+  LITERT_RETURN_IF_ERROR(FlushWordToIpa(current_word, combined_ipa));
 
   // Normalize IPA output to match Kokoro's vocabulary symbols.
   return NormalizeMisakiPhonemes(combined_ipa);
 }
 
-std::vector<int> KokoroPhonemizer::TextToPhonemeIds(
+absl::StatusOr<std::vector<int>> KokoroPhonemizer::TextToPhonemeIds(
     absl::string_view text) const {
   // Initialize output token buffer with BOS token (ID 0) at index 0.
   std::vector<int> ids(kokoro::kMaxTokens, kokoro::kBosTokenId);
   const auto& vocab = GetKokoroVocabMap();
 
   // Convert raw input text to normalized IPA phoneme transcript.
-  std::string ipa_str = TextToIpa(text);
+  LITERT_ASSIGN_OR_RETURN(std::string ipa_str, TextToIpa(text));
   if (ipa_str.empty()) {
     ipa_str = std::string(text);
   }

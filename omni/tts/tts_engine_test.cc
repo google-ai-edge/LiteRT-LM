@@ -17,6 +17,7 @@
 #include <memory>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <gmock/gmock.h>
@@ -81,8 +82,7 @@ class DummyTextFrontend
 class DummyAcousticPredictor
     : public SingleThreadedStageWithDeque<DummyAcousticOutput> {
  public:
-  explicit DummyAcousticPredictor(
-      Stage<DummyFrontendOutput>* text_frontend)
+  explicit DummyAcousticPredictor(Stage<DummyFrontendOutput>* text_frontend)
       : text_frontend_(*text_frontend) {}
 
  protected:
@@ -111,8 +111,7 @@ class DummyAcousticPredictor
 class DummyLatentDecoder
     : public SingleThreadedStageWithDeque<DummyLatentOutput> {
  public:
-  explicit DummyLatentDecoder(
-      Stage<DummyAcousticOutput>* acoustic_predictor)
+  explicit DummyLatentDecoder(Stage<DummyAcousticOutput>* acoustic_predictor)
       : acoustic_predictor_(*acoustic_predictor) {}
 
  protected:
@@ -199,7 +198,7 @@ TtsSession::Components CreateDummyComponents() {
 
 TEST(TtsEngineTest, CreateFailsWithUnsupportedModelType) {
   TtsEngineSettings settings;
-  settings.model_type = ModelType::UNSPECIFIED;
+  settings.model_config = std::monostate{};
 
   auto engine = TtsEngine::Create(settings);
   EXPECT_FALSE(engine.ok());
@@ -253,6 +252,20 @@ TEST(TtsEngineTest, SequentialSynthesizeCallsOnSession) {
 
   ASSERT_OK_AND_ASSIGN(auto audio2, session->Synthesize("Second chunk "));
   EXPECT_GE(audio2.pcm_samples.size(), 3);
+}
+
+TEST(TtsEngineTest, TtsSessionConfigDefault) {
+  TtsSessionConfig config;
+  EXPECT_EQ(config.text_chunk_config.max_buffer_size, 0);
+  EXPECT_FALSE(config.text_chunk_config.delimiters.empty());
+}
+
+TEST(TtsEngineTest, TtsSessionConfigCustomChunkConfig) {
+  TtsSessionConfig config;
+  config.text_chunk_config.max_buffer_size = 120;
+  config.text_chunk_config.delimiters = {".", "!", "?"};
+  EXPECT_EQ(config.text_chunk_config.max_buffer_size, 120);
+  EXPECT_EQ(config.text_chunk_config.delimiters.size(), 3);
 }
 
 }  // namespace

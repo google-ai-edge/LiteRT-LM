@@ -183,13 +183,18 @@ absl::Status KokoroAcousticStage::ScheduleInternal() {
 
   // Step 1: Phonemize raw input text using the persistent KokoroPhonemizer into
   // token IDs.
-  std::vector<int> full_token_ids = phonemizer_->TextToPhonemeIds(input_text);
+  LITERT_ASSIGN_OR_RETURN(std::vector<int> full_token_ids,
+                          phonemizer_->TextToPhonemeIds(input_text));
 
   // Step 2: Determine bucketing capacity and slice token IDs into sentence
   // chunks.
+  LITERT_ASSIGN_OR_RETURN(
+      auto ids_buf_bytes,
+      acoustic_input_buffers_[input_indices_.phoneme_ids].PackedSize());
+  const int model_capacity = static_cast<int>(ids_buf_bytes / sizeof(int64_t));
   const int bucket_size = config_.target_bucket > 0
-                              ? config_.target_bucket
-                              : kokoro::kDefaultBucketSize;
+                              ? std::min(config_.target_bucket, model_capacity)
+                              : model_capacity;
   // Reserve 4 tokens because each acoustic slice input:
   // 1) Must start with BOS token and end with EOS token.
   // 2) Reserve headroom for potential punctuation and delimiter spaces, at
@@ -250,10 +255,20 @@ absl::Status KokoroAcousticStage::ScheduleInternal() {
         std::min<int>(kokoro::kMaxSpeechFrames,
                       std::max<int>(1, static_cast<int>(speech_len_vec[0])));
 
-    std::vector<float> asr_data(
-        kokoro::kAcousticFeatureDim * kokoro::kMaxSpeechFrames, 0.0f);
-    std::vector<float> f0_n_data(kokoro::kF0NDim, 0.0f);
-    std::vector<float> n_aux_data(kokoro::kF0NDim, 0.0f);
+    LITERT_ASSIGN_OR_RETURN(
+        auto asr_packed_size,
+        acoustic_output_buffers_[output_indices_.acoustic_features]
+            .PackedSize());
+    LITERT_ASSIGN_OR_RETURN(
+        auto f0_packed_size,
+        acoustic_output_buffers_[output_indices_.pitch_contour].PackedSize());
+    LITERT_ASSIGN_OR_RETURN(
+        auto n_packed_size,
+        acoustic_output_buffers_[output_indices_.energy_contour].PackedSize());
+
+    std::vector<float> asr_data(asr_packed_size / sizeof(float), 0.0f);
+    std::vector<float> f0_n_data(f0_packed_size / sizeof(float), 0.0f);
+    std::vector<float> n_aux_data(n_packed_size / sizeof(float), 0.0f);
 
     LITERT_RETURN_IF_ERROR(
         acoustic_output_buffers_[output_indices_.acoustic_features].Read<float>(
