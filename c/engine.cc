@@ -556,6 +556,13 @@ void litert_lm_engine_settings_set_parallel_file_section_loading(
   }
 }
 
+void litert_lm_engine_settings_set_single_threaded_execution(
+    LiteRtLmEngineSettings* settings, bool single_threaded_execution) {
+  if (settings && settings->settings) {
+    settings->settings->SetSingleThreadedExecution(single_threaded_execution);
+  }
+}
+
 void litert_lm_engine_settings_set_max_num_images(
     LiteRtLmEngineSettings* settings, int max_num_images) {
   if (settings && settings->settings) {

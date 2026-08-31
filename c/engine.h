@@ -564,6 +564,17 @@ LITERT_LM_C_API_EXPORT
 void litert_lm_engine_settings_set_parallel_file_section_loading(
     LiteRtLmEngineSettings* settings, bool parallel_file_section_loading);
 
+// Sets whether to enable single threaded execution.
+//
+// @param settings The engine settings.
+// @param single_threaded_execution Whether to enable single threaded
+// execution.
+//
+// Added in version 0.2.0.
+LITERT_LM_C_API_EXPORT
+void litert_lm_engine_settings_set_single_threaded_execution(
+    LiteRtLmEngineSettings* settings, bool single_threaded_execution);
+
 // Sets the maximum number of images for the engine.
 //
 // This is only used for the legacy implementation of the engine.
