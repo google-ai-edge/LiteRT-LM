@@ -870,6 +870,84 @@ data_path = "{tflite_name}"
           toml_path, output_path, jinja_prompt_template_path=jinja_path
       )
 
+  @parameterized.named_parameters(
+      (
+          "prefill_decode_lowercase",
+          "prefill_decode",
+          litertlm_builder.TfLiteModelType.PREFILL_DECODE,
+      ),
+      (
+          "prefill_decode_uppercase",
+          "PREFILL_DECODE",
+          litertlm_builder.TfLiteModelType.PREFILL_DECODE,
+      ),
+      (
+          "mtp_drafter",
+          "mtp_drafter",
+          litertlm_builder.TfLiteModelType.MTP_DRAFTER,
+      ),
+      (
+          "vision_encoder",
+          "vision_encoder",
+          litertlm_builder.TfLiteModelType.VISION_ENCODER,
+      ),
+  )
+  def test_get_enum_from_tf_free_value_without_prefix(
+      self, input_val: str, expected_enum: litertlm_builder.TfLiteModelType
+  ):
+    self.assertEqual(
+        litertlm_builder.TfLiteModelType.get_enum_from_tf_free_value(input_val),
+        expected_enum,
+    )
+
+  @parameterized.named_parameters(
+      (
+          "prefill_decode_with_prefix",
+          "tf_lite_prefill_decode",
+          litertlm_builder.TfLiteModelType.PREFILL_DECODE,
+      ),
+      (
+          "prefill_decode_with_prefix_upper",
+          "TF_LITE_PREFILL_DECODE",
+          litertlm_builder.TfLiteModelType.PREFILL_DECODE,
+      ),
+      (
+          "embedder_with_prefix",
+          "tf_lite_embedder",
+          litertlm_builder.TfLiteModelType.EMBEDDER,
+      ),
+      (
+          "mtp_drafter_with_prefix",
+          "tf_lite_mtp_drafter",
+          litertlm_builder.TfLiteModelType.MTP_DRAFTER,
+      ),
+  )
+  def test_get_enum_from_tf_free_value_with_prefix(
+      self, input_val: str, expected_enum: litertlm_builder.TfLiteModelType
+  ):
+    with self.assertLogs(level="WARNING") as cm:
+      result = litertlm_builder.TfLiteModelType.get_enum_from_tf_free_value(
+          input_val
+      )
+    self.assertEqual(result, expected_enum)
+    self.assertTrue(
+        any(
+            f"Input '{input_val}' already starts with 'tf_lite_'." in output
+            for output in cm.output
+        )
+    )
+
+  def test_get_enum_from_tf_free_value_invalid_raises_error(self):
+    for invalid_val in (
+        "nonexistent_model_type",
+        "tf_lite_nonexistent_model_type",
+    ):
+      with self.subTest(invalid_val=invalid_val):
+        with self.assertRaises(ValueError):
+          litertlm_builder.TfLiteModelType.get_enum_from_tf_free_value(
+              invalid_val
+          )
+
 
 if __name__ == "__main__":
   absltest.main()
