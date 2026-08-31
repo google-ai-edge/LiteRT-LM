@@ -51,6 +51,16 @@ llm_model_type {
     use_template_for_fc_format: true
   }
 }
+prompt_templates {
+  user {
+    prefix: "<|turn>user\n"
+    suffix: "<turn|>\n"
+  }
+  model {
+    prefix: "<|turn>model\n"
+    suffix: "<turn|>\n"
+  }
+}
 jinja_prompt_template:
   "{%- macro format_parameters(properties) -%}\n"
   "    {%- for key, value in properties | dictsort -%}\n"

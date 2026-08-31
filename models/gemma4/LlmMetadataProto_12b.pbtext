@@ -62,6 +62,16 @@ llm_model_type {
     skip_mel_spectrogram_extraction: true
   }
 }
+prompt_templates {
+  user {
+    prefix: "<|turn>user\n"
+    suffix: "<turn|>\n"
+  }
+  model {
+    prefix: "<|turn>model\n"
+    suffix: "<turn|>\n"
+  }
+}
 jinja_prompt_template:
   "{%- macro format_parameters(properties) -%}\n"
   "    {%- for key, value in properties | dictsort -%}\n"
