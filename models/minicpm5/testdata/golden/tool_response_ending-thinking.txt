@@ -14,15 +14,13 @@ Tool usage guidelines:
 <|im_start|>user
 What is the weather in London and Paris?<|im_end|>
 <|im_start|>assistant
-
-<function name="get_weather"></function><|im_end|>
+<function name="get_weather"><param name="location">London</param></function><|im_end|>
 <|im_start|>user
 <tool_response>
 {"location": "London", "temperature": "18C"}
 </tool_response><|im_end|>
 <|im_start|>assistant
-
-<function name="get_weather"></function><|im_end|>
+<function name="get_weather"><param name="location">Paris</param></function><|im_end|>
 <|im_start|>user
 <tool_response>
 {"location": "Paris", "temperature": "22C"}
