@@ -18,6 +18,8 @@ include("${LITERTLM_ABSL_CONFIG_PATH}")
 
 setup_external_install_structure("${LITERTLM_PROTOBUF_INSTALL_PREFIX}")
 
+set(LITERTLM_PROTOBUF_TAG "v35.1" CACHE STRING "Protobuf git tag")
+
 include(ExternalProject)
 if(NOT EXISTS "${LITERTLM_PROTOBUF_CONFIG_CMAKE_FILE}")
   message(STATUS "Protobuf not found. Configuring external build...")
@@ -29,12 +31,15 @@ if(NOT EXISTS "${LITERTLM_PROTOBUF_CONFIG_CMAKE_FILE}")
     GIT_REPOSITORY
       https://github.com/protocolbuffers/protobuf
     GIT_TAG
-      v35.1
+      ${LITERTLM_PROTOBUF_TAG}
     PREFIX
       ${LITERTLM_PROTOBUF_EXT_PREFIX}
+    UPDATE_COMMAND
+      git fetch origin ${LITERTLM_PROTOBUF_TAG}
+      COMMAND git reset --hard FETCH_HEAD
+      COMMAND git clean -dfx
     PATCH_COMMAND
-        git checkout -- . && git clean -df
-      COMMAND ${CMAKE_COMMAND}
+      ${CMAKE_COMMAND}
       "-DLITERTLM_EXTERNAL_PROJECT_BIN_DIR=${LITERTLM_EXTERNAL_PROJECT_BIN_DIR}"
       "-DLITERTLM_CMAKE_PACKAGES_DIR=${LITERTLM_CMAKE_PACKAGES_DIR}"
       "-DLITERTLM_MODULES_DIR=${LITERTLM_MODULES_DIR}"

@@ -20,18 +20,22 @@ include("${LITERTLM_PROTOBUF_CONFIG_PATH}")
 include(ExternalProject)
 setup_external_install_structure("${LITERTLM_SENTENCEPIECE_INSTALL_PREFIX}")
 
+set(LITERTLM_SENTENCEPIECE_TAG "v0.2.2" CACHE STRING "Sentencepiece git tag")
+
   ExternalProject_Add(
     sentencepiece_external
     DEPENDS
       absl_external
       protobuf_external
     GIT_REPOSITORY https://github.com/google/sentencepiece.git
-    GIT_TAG        v0.2.2
+    GIT_TAG        ${LITERTLM_SENTENCEPIECE_TAG}
     PREFIX         ${LITERTLM_SENTENCEPIECE_EXT_PREFIX}
-
+    UPDATE_COMMAND
+      git fetch origin ${LITERTLM_SENTENCEPIECE_TAG}
+      COMMAND git reset --hard FETCH_HEAD
+      COMMAND git clean -dfx
     PATCH_COMMAND
-      git checkout -- . && git clean -df
-      COMMAND ${CMAKE_COMMAND}
+      ${CMAKE_COMMAND}
       "-DLITERTLM_EXTERNAL_PROJECT_BIN_DIR=${LITERTLM_EXTERNAL_PROJECT_BIN_DIR}"
       "-DLITERTLM_MODULES_DIR=${LITERTLM_MODULES_DIR}"
       "-DLITERTLM_CMAKE_PACKAGES_DIR=${LITERTLM_CMAKE_PACKAGES_DIR}"

@@ -33,6 +33,8 @@ set(LITERTLM_TOKENIZERS_INCLUDE_DIR
 set(LITERTLM_TOKENIZERS_LIB_CHECK "${LITERTLM_TOKENIZERS_BUILD_DIR}/libtokenizers_cpp.a")
 set(LITERTLM_TOKENIZERSS_CMAKE_PATH "${LITERTLM_CMAKE_PACKAGES_DIR}/tokenizers/tokenizers.cmake" CACHE PATH "")
 
+set(LITERTLM_TOKENIZERS_TAG "main" CACHE STRING "Tokenizers-cpp git tag")
+
 if(TRUE)
   message(STATUS "tokenizers-cpp not found. Configuring external build...")
   ExternalProject_Add(
@@ -45,11 +47,13 @@ if(TRUE)
     GIT_REPOSITORY
       https://github.com/mlc-ai/tokenizers-cpp
     GIT_TAG
-      main
+      ${LITERTLM_TOKENIZERS_TAG}
     PREFIX
       ${LITERTLM_TOKENIZERS_EXT_PREFIX}
-    PATCH_COMMAND
-      git checkout -- . && git clean -df
+    UPDATE_COMMAND
+      git fetch origin ${LITERTLM_TOKENIZERS_TAG}
+      COMMAND git reset --hard FETCH_HEAD
+      COMMAND git clean -dfx
     CMAKE_ARGS
       ${LITERTLM_TOOLCHAIN_FILE}
       ${LITERTLM_TOOLCHAIN_ARGS}

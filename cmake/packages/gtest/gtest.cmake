@@ -19,6 +19,7 @@ include("${LITERTLM_GTEST_PACKAGE_DIR}/gtest_config.cmake")
 set(LITERTLM_GTEST_EXTERNAL_DONE ${LITERTLM_GTEST_STAMP_DIR}/gtest_external-done CACHE INTERNAL "")
 
 setup_external_install_structure("${LITERTLM_GTEST_INSTALL_PREFIX}")
+set(LITERTLM_GTEST_TAG "v1.17.0" CACHE STRING "GoogleTest git tag")
 
 include(ExternalProject)
 if(NOT EXISTS "${LITERTLM_GTEST_EXTERNAL_DONE}")
@@ -31,11 +32,13 @@ if(NOT EXISTS "${LITERTLM_GTEST_EXTERNAL_DONE}")
     GIT_REPOSITORY
       https://github.com/google/googletest
     GIT_TAG
-      v1.17.0
+      ${LITERTLM_GTEST_TAG}
     PREFIX
       ${LITERTLM_GTEST_EXT_PREFIX}
-    PATCH_COMMAND
-      git checkout -- . && git clean -df
+    UPDATE_COMMAND
+      git fetch origin ${LITERTLM_GTEST_TAG}
+      COMMAND git reset --hard FETCH_HEAD
+      COMMAND git clean -dfx
     CMAKE_ARGS
       ${LITERTLM_TOOLCHAIN_FILE}
       ${LITERTLM_TOOLCHAIN_ARGS}

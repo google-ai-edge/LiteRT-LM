@@ -20,6 +20,8 @@ set(LITERTLM_ABSL_EXTERNAL_DONE ${LITERTLM_ABSL_STAMP_DIR}/absl_external-done CA
 
 setup_external_install_structure("${LITERTLM_ABSL_INSTALL_PREFIX}")
 
+set(LITERTLM_ABSL_TAG "20260526.0" CACHE STRING "Abseil git tag")
+
 include(ExternalProject)
 if(NOT EXISTS "${LITERTLM_ABSL_EXTERNAL_DONE}")
   message(STATUS "Abseil not found. Configuring external build...")
@@ -28,12 +30,15 @@ if(NOT EXISTS "${LITERTLM_ABSL_EXTERNAL_DONE}")
     GIT_REPOSITORY
       https://github.com/abseil/abseil-cpp
     GIT_TAG
-      20260526.0
+      ${LITERTLM_ABSL_TAG}
     PREFIX
       ${LITERTLM_ABSL_EXT_PREFIX}
+    UPDATE_COMMAND
+      git fetch origin ${LITERTLM_ABSL_TAG}
+      COMMAND git reset --hard FETCH_HEAD
+      COMMAND git clean -dfx
     PATCH_COMMAND
-      git checkout -- . && git clean -df
-      COMMAND ${CMAKE_COMMAND}
+      ${CMAKE_COMMAND}
       -DLITERTLM_ORCHESTRATION_PHASE=${LITERTLM_ORCHESTRATION_PHASE}
       -DLITERTLM_EXTERNAL_PROJECT_BIN_DIR=${LITERTLM_EXTERNAL_PROJECT_BIN_DIR}
       -DLITERTLM_MODULES_DIR=${LITERTLM_MODULES_DIR}

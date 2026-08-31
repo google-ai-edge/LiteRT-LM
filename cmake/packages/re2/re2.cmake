@@ -16,9 +16,10 @@ set(LITERTLM_RE2_CONFIG_PATH "${LITERTLM_RE2_PACKAGE_DIR}/re2_config.cmake" CACH
 include("${LITERTLM_RE2_CONFIG_PATH}")
 include("${LITERTLM_ABSL_CONFIG_PATH}")
 
-include(ExternalProject)
-
 setup_external_install_structure("${LITERTLM_RE2_INSTALL_PREFIX}")
+set(LITERTLM_RE2_TAG "main" CACHE STRING "RE2 git tag")
+
+include(ExternalProject)
 if(NOT EXISTS "${LITERTLM_RE2_CONFIG_CMAKE_FILE}")
   message(STATUS "RE2 not found. Configuring external build...")
   ExternalProject_Add(
@@ -28,12 +29,15 @@ if(NOT EXISTS "${LITERTLM_RE2_CONFIG_CMAKE_FILE}")
     GIT_REPOSITORY
       https://github.com/google/re2/
     GIT_TAG
-      main
+      ${LITERTLM_RE2_TAG}
     PREFIX
       ${LITERTLM_RE2_EXT_PREFIX}
+    UPDATE_COMMAND
+      git fetch origin ${LITERTLM_RE2_TAG}
+      COMMAND git reset --hard FETCH_HEAD
+      COMMAND git clean -dfx
     PATCH_COMMAND
-      git checkout -- . && git clean -df
-      COMMAND ${CMAKE_COMMAND}
+      ${CMAKE_COMMAND}
       "-DLITERTLM_EXTERNAL_PROJECT_BIN_DIR=${LITERTLM_EXTERNAL_PROJECT_BIN_DIR}"
       "-DLITERTLM_MODULES_DIR=${LITERTLM_MODULES_DIR}"
       "-DLITERTLM_CMAKE_PACKAGES_DIR=${LITERTLM_CMAKE_PACKAGES_DIR}"

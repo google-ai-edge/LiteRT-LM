@@ -22,6 +22,7 @@ include("${LITERTLM_FLATBUFFERS_CONFIG_PATH}")
 include("${LITERTLM_SENTENCEPIECE_CONFIG_PATH}")
 
 set(LITERTLM_LITERT_EXTERNAL_DONE ${LITERTLM_LITERT_STAMP_DIR}/litert_external-done CACHE INTERNAL "")
+set(LITERTLM_LITERT_TAG "main" CACHE STRING "LiteRT git tag")
 
 include(ExternalProject)
 if(NOT EXISTS "${LITERTLM_LITERT_EXTERNAL_DONE}")
@@ -49,17 +50,19 @@ if(NOT EXISTS "${LITERTLM_LITERT_EXTERNAL_DONE}")
       GIT_REPOSITORY
         https://github.com/google-ai-edge/LiteRT.git
       GIT_TAG
-        main
+        ${LITERTLM_LITERT_TAG}
       GIT_SUBMODULES ""
       GIT_SUBMODULES_RECURSE FALSE
       PREFIX
         ${LITERTLM_LITERT_EXT_PREFIX}
       SOURCE_SUBDIR
         litert
+      UPDATE_COMMAND
+        git fetch origin ${LITERTLM_LITERT_TAG}
+        COMMAND git reset --hard FETCH_HEAD
+        COMMAND git clean -dfx
       PATCH_COMMAND
-        git checkout -- . && git clean -df
-
-        COMMAND ${CMAKE_COMMAND}
+        ${CMAKE_COMMAND}
         "-DLITERTLM_EXTERNAL_PROJECT_BIN_DIR=${LITERTLM_EXTERNAL_PROJECT_BIN_DIR}"
         "-DLITERTLM_MODULES_DIR=${LITERTLM_MODULES_DIR}"
         "-DLITERTLM_CMAKE_PACKAGES_DIR=${LITERTLM_CMAKE_PACKAGES_DIR}"

@@ -19,6 +19,7 @@ include("${LITERTLM_FLATBUFFERS_CONFIG_PATH}")
 set(LITERTLM_FLATBUFFERS_EXTERNAL_DONE ${LITERTLM_FLATBUFFERS_STAMP_DIR}/flatbuffers_external-done CACHE INTERNAL "")
 
 setup_external_install_structure("${LITERTLM_FLATBUFFERS_INSTALL_PREFIX}")
+set(LITERTLM_FLATBUFFERS_TAG "v25.9.23" CACHE STRING "Flatbuffers git tag")
 
 include(ExternalProject)
 if(NOT EXISTS "${LITERTLM_FLATBUFFERS_EXTERNAL_DONE}")
@@ -31,11 +32,13 @@ if(NOT EXISTS "${LITERTLM_FLATBUFFERS_EXTERNAL_DONE}")
     GIT_REPOSITORY
       https://github.com/google/flatbuffers.git
     GIT_TAG
-      v25.9.23
+      ${LITERTLM_FLATBUFFERS_TAG}
     PREFIX
       ${LITERTLM_FLATBUFFERS_EXT_PREFIX}
-    PATCH_COMMAND
-      git checkout -- . && git clean -df
+    UPDATE_COMMAND
+      git fetch origin ${LITERTLM_FLATBUFFERS_TAG}
+      COMMAND git reset --hard FETCH_HEAD
+      COMMAND git clean -dfx
     CMAKE_ARGS
       ${LITERTLM_TOOLCHAIN_FILE}
       ${LITERTLM_TOOLCHAIN_ARGS}

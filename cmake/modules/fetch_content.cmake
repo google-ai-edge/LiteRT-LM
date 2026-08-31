@@ -19,10 +19,11 @@ set(LITERTLM_ANTLR_SRC_DIR
   ${CMAKE_BINARY_DIR}/_deps/antlr_lib-src/runtime/Cpp/runtime/src 
   CACHE PATH "Path to antlr source directory"
 )
+set(LITERTLM_ANTLR_TAG "7d5770395bb7b02eb56e7c62662cb1d7c08f42a3" CACHE STRING "ANTLR git tag")
 FetchContent_Declare(
   antlr_lib
   GIT_REPOSITORY https://github.com/antlr/antlr4.git
-  GIT_TAG 7d5770395bb7b02eb56e7c62662cb1d7c08f42a3
+  GIT_TAG ${LITERTLM_ANTLR_TAG}
   GIT_SHALLOW true
   SOURCE_SUBDIR runtime/Cpp
   PATCH_COMMAND 
@@ -58,10 +59,11 @@ message(STATUS "[LiteRTLM] ANTLR JAR located at: ${ANTLR_JAR_PATH}")
 # --- Corrosion ---
 set(LITERTLM_CORROSION_SRC_DIR ${LITERTLM_THIRD_PARTY_DIR}/corrosion CACHE PATH "Path to corrosion source directory")
 set(LITERTLM_CORROSION_INCLUDE_DIR "${CMAKE_BINARY_DIR}/corrosion_generated/cxxbridge/litertlm_cxx_bridge/include")
+set(LITERTLM_CORROSION_TAG "v0.6.1" CACHE STRING "Corrosion git tag")
 FetchContent_Declare(
     Corrosion
     GIT_REPOSITORY https://github.com/corrosion-rs/corrosion.git
-    GIT_TAG v0.6.1
+    GIT_TAG ${LITERTLM_CORROSION_TAG}
     SOURCE_DIR ${LITERTLM_CORROSION_SRC_DIR}
 )
 FetchContent_MakeAvailable(Corrosion)
@@ -73,20 +75,22 @@ endif()
 # --- Llguidance ---
 set(LITERTLM_LLGUIDANCE_SRC_DIR ${LITERTLM_THIRD_PARTY_DIR}/llguidance CACHE PATH "Path to llguidance source directory")
 set(LITERTLM_LLGUIDANCE_INCLUDE_DIR "${LITERTLM_THIRD_PARTY_DIR}/llguidance/parser")
+set(LITERTLM_LLGUIDANCE_TAG "v1.3.0" CACHE STRING "Llguidance git tag")
 FetchContent_Declare(
   llguidance
   GIT_REPOSITORY https://github.com/guidance-ai/llguidance.git
-  GIT_TAG v1.3.0
+  GIT_TAG ${LITERTLM_LLGUIDANCE_TAG}
   SOURCE_DIR ${LITERTLM_LLGUIDANCE_SRC_DIR}
 )
 FetchContent_Populate(llguidance)
 
 # --- LibPNG ---
 set(LITERTLM_LIBPNG_SRC_DIR ${LITERTLM_THIRD_PARTY_DIR}/libpng CACHE PATH "Path to libpng source directory")
+set(LITERTLM_LIBPNG_TAG "v1.6.40" CACHE STRING "LibPNG git tag")
 FetchContent_Declare(
   libpng_lib
   GIT_REPOSITORY https://github.com/glennrp/libpng.git
-  GIT_TAG v1.6.40
+  GIT_TAG ${LITERTLM_LIBPNG_TAG}
   GIT_SHALLOW true
   SOURCE_DIR ${LITERTLM_LIBPNG_SRC_DIR}
 )
@@ -113,10 +117,11 @@ endif()
 
 # --- KissFFT ---
 set(LITERTLM_KISSFFT_SRC_DIR ${LITERTLM_THIRD_PARTY_DIR}/kissfft CACHE PATH "Path to kissfft source directory")
+set(LITERTLM_KISSFFT_TAG "131.2.0" CACHE STRING "KissFFT git tag")
 FetchContent_Declare(
   kissfft_lib
   GIT_REPOSITORY https://github.com/mborgerding/kissfft
-  GIT_TAG 131.2.0
+  GIT_TAG ${LITERTLM_KISSFFT_TAG}
   GIT_SHALLOW true
   SOURCE_DIR ${LITERTLM_KISSFFT_SRC_DIR}
 )
@@ -132,10 +137,11 @@ endif()
 
 # --- MiniAudio ---
 set(LITERTLM_MINIAUDIO_SRC_DIR ${LITERTLM_THIRD_PARTY_DIR}/miniaudio CACHE PATH "Path to miniaudio source directory")
+set(LITERTLM_MINIAUDIO_TAG "0.11.25" CACHE STRING "MiniAudio git tag")
 FetchContent_Declare(
   miniaudio_lib
   GIT_REPOSITORY https://github.com/mackron/miniaudio
-  GIT_TAG 0.11.25
+  GIT_TAG ${LITERTLM_MINIAUDIO_TAG}
   GIT_SHALLOW true
   SOURCE_DIR ${LITERTLM_MINIAUDIO_SRC_DIR}
 )
@@ -146,10 +152,11 @@ endif()
 
 # --- MiniZip ---
 set(LITERTLM_MINIZIP_SRC_DIR ${LITERTLM_THIRD_PARTY_DIR}/minizip CACHE PATH "Path to minizip source directory")
+set(LITERTLM_MINIZIP_TAG aee7fbddf118d9363575af96310c29fa747d70c0 CACHE STRING "MiniZip git tag")
 FetchContent_Declare(
   minizip_lib
   GIT_REPOSITORY https://github.com/domoticz/minizip
-  GIT_TAG aee7fbddf118d9363575af96310c29fa747d70c0
+  GIT_TAG ${LITERTLM_MINIZIP_TAG}
   GIT_SHALLOW true
   SOURCE_DIR ${LITERTLM_MINIZIP_SRC_DIR}
 )
@@ -163,10 +170,11 @@ endif()
 
 # --- Minja ---
 set(LITERTLM_MINJA_SRC_DIR ${LITERTLM_THIRD_PARTY_DIR}/minja CACHE PATH "Path to minja source directory")
+set(LITERTLM_MINJA_TAG "021c2293c187789ef13d56c6cfd89c9b134fd80f" CACHE STRING "Minja git tag")
 FetchContent_Declare(
   minja_lib
   GIT_REPOSITORY https://github.com/google/minja
-  GIT_TAG 021c2293c187789ef13d56c6cfd89c9b134fd80f
+  GIT_TAG ${LITERTLM_MINJA_TAG}
   GIT_SHALLOW true
   SOURCE_DIR ${LITERTLM_MINJA_SRC_DIR}
   PATCH_COMMAND ${CMAKE_COMMAND} -DTARGET_FILE=${LITERTLM_MINJA_SRC_DIR}/CMakeLists.txt -P${LITERTLM_PATCHES_DIR}/minja_patch.cmake
@@ -185,10 +193,11 @@ endif()
 
 # --- JSON (Header Only - Populated) ---
 set(LITERTLM_JSON_SRC_DIR ${LITERTLM_THIRD_PARTY_DIR}/json CACHE PATH "Path to json headers")
+set(LITERTLM_JSON_TAG "v3.12.0" CACHE STRING "JSON git tag")
 FetchContent_Declare(
   json_lib
   GIT_REPOSITORY https://github.com/nlohmann/json
-  GIT_TAG v3.12.0
+  GIT_TAG ${LITERTLM_JSON_TAG}
   GIT_SHALLOW true
   SOURCE_DIR ${LITERTLM_JSON_SRC_DIR}
 )
@@ -208,10 +217,11 @@ endif()
 
 # --- STB (Header Only - Populated) ---
 set(LITERTLM_STB_SRC_DIR ${LITERTLM_THIRD_PARTY_DIR}/stb_lib CACHE PATH "Path to libstb headers")
+set(LITERTLM_STB_TAG "master" CACHE STRING "STB git tag")
 FetchContent_Declare(
   stb_lib
   GIT_REPOSITORY https://github.com/nothings/stb.git
-  GIT_TAG master
+  GIT_TAG ${LITERTLM_STB_TAG}
   GIT_SHALLOW true
   SOURCE_DIR ${LITERTLM_STB_SRC_DIR}
 )
@@ -223,10 +233,11 @@ endif()
 
 # --- ZLIB ---
 set(LITERTLM_ZLIB_SRC_DIR ${LITERTLM_THIRD_PARTY_DIR}/zlib CACHE PATH "Path to zlib source directory")
+set(LITERTLM_ZLIB_TAG "master" CACHE STRING "ZLIB git tag")
 FetchContent_Declare(
   zlib_lib
   GIT_REPOSITORY https://github.com/madler/zlib
-  GIT_TAG master
+  GIT_TAG ${LITERTLM_ZLIB_TAG}
   GIT_SHALLOW true
   SOURCE_DIR ${LITERTLM_ZLIB_SRC_DIR}
 )
