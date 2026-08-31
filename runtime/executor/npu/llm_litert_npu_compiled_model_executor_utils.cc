@@ -874,8 +874,7 @@ ResolvedPrefillSignatures BuildResolvedPrefillSignatures(int prefill_size,
           PrefillSig(kPrefillEmbedderPerLayerBase, prefill_size),
       .mask = absl::StrCat(kPrefillMaskBase, "_", prefill_size, "_cache_",
                            context_size),
-      .rope = absl::StrCat(kPrefillRopeBase, "_", prefill_size, "_cache_",
-                           context_size),
+      .rope = PrefillSig(kPrefillRopeBase, prefill_size),
       .cache_update = absl::StrCat(kPrefillCacheUpdateBase, "_", prefill_size,
                                    "_cache_", context_size)};
 }
@@ -907,12 +906,8 @@ ResolvedAuxiliarySignatures BuildResolvedDecodeAuxiliarySignatures(
     sigs.mask = std::string(kDecodeMaskBase);
   }
 
-  // 2. RoPE signature
-  std::string rope_cand =
-      absl::StrCat(kDecodeRopeBase, "_cache_", context_size);
-  if (context_size > 0 && aux_model.FindSignature(rope_cand)) {
-    sigs.rope = rope_cand;
-  } else if (aux_model.FindSignature(kDecodeRopeBase)) {
+  // 2. RoPE signature (single signature, does not vary by context size)
+  if (aux_model.FindSignature(kDecodeRopeBase)) {
     sigs.rope = std::string(kDecodeRopeBase);
   } else {
     sigs.rope = "rope";
@@ -942,11 +937,8 @@ ResolvedAuxiliarySignatures BuildResolvedVerifyAuxiliarySignatures(
                   ? mask_cand
                   : std::string(kVerifyMaskBase);
 
-  std::string rope_cand =
-      absl::StrCat(kVerifyRopeBase, "_cache_", context_size);
-  sigs.rope = (context_size > 0 && aux_model.FindSignature(rope_cand))
-                  ? rope_cand
-                  : std::string(kVerifyRopeBase);
+  // RoPE signature (single signature, does not vary by context size)
+  sigs.rope = std::string(kVerifyRopeBase);
 
   std::string cache_cand =
       absl::StrCat(kVerifyCacheUpdateBase, "_cache_", context_size);
