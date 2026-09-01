@@ -1,0 +1,20 @@
+--- src/main/starlark/core/options/opts.kotlinc.bzl	2026-09-01 13:59:48.306547878 -0700
++++ src/main/starlark/core/options/opts.kotlinc.bzl	2026-09-01 13:59:48.306804128 -0700
+@@ -55,6 +55,17 @@
+             "none": ["-no-stdlib"],
+         },
+     ),
++    "x_skip_metadata_version_check": struct(
++        flag = "-Xskip-metadata-version-check",
++        args = dict(
++            default = True,
++            doc = "Suppress errors thrown when using pre-release classes.",
++        ),
++        type = attr.bool,
++        value_to_flag = {
++            True: ["-Xskip-metadata-version-check"],
++        },
++    ),
+     "x_skip_prerelease_check": struct(
+         flag = "-Xskip-prerelease-check",
+         args = dict(
