@@ -178,30 +178,6 @@ absl::StatusOr<int> GetVocabSizeFromLogitsTensor(TensorBuffer& logits_tensor) {
   return logits_tensor_type.Layout().Dimensions()[2];
 }
 
-absl::Status UpdateCompilationOptions(
-    const LlmExecutorSettings& executor_settings,
-    litert::Options& compilation_options) {
-  switch (executor_settings.GetBackend()) {
-    case Backend::GPU: {
-      LITERT_ASSIGN_OR_RETURN(auto& gpu_compilation_options,
-                              compilation_options.GetGpuOptions());
-      gpu_compilation_options.AddExternalTensorPattern("kv_cache_");
-      gpu_compilation_options.AddBufferStorageTensorPattern("kv_cache_");
-      gpu_compilation_options.AddExternalTensorPattern("param_tensor");
-      gpu_compilation_options.AddBufferStorageTensorPattern("param_tensor");
-      break;
-    }
-    case Backend::CPU: {
-      break;
-    }
-    default:
-      return absl::InvalidArgumentError(absl::StrCat(
-          "Unsupported backend: ", executor_settings.GetBackend()));
-  }
-
-  return absl::OkStatus();
-}
-
 template <typename T>
 absl::Status ApplyMaskToLogitsTyped(TensorBuffer& logits_buffer,
                                     TensorBufferType buffer_type,
@@ -291,6 +267,29 @@ absl::Status ApplyMasksToLogitsSequence(
 
 }  // namespace
 
+absl::Status UpdateCompilationOptions(
+    const LlmExecutorSettings& executor_settings,
+    litert::Options& compilation_options) {
+  switch (executor_settings.GetBackend()) {
+    case Backend::GPU: {
+      LITERT_ASSIGN_OR_RETURN(auto& gpu_compilation_options,
+                              compilation_options.GetGpuOptions());
+      gpu_compilation_options.AddExternalTensorPattern("kv_cache_");
+      gpu_compilation_options.AddBufferStorageTensorPattern("kv_cache_");
+      gpu_compilation_options.AddExternalTensorPattern("param_tensor");
+      gpu_compilation_options.AddBufferStorageTensorPattern("param_tensor");
+      break;
+    }
+    case Backend::CPU: {
+      break;
+    }
+    default:
+      return absl::InvalidArgumentError(absl::StrCat(
+          "Unsupported backend: ", executor_settings.GetBackend()));
+  }
+
+  return absl::OkStatus();
+}
 LlmLiteRtMtpDrafter::~LlmLiteRtMtpDrafter() {
   ABSL_VLOG(1) << "Num drafted tokens: " << num_drafted_tokens_;
   ABSL_VLOG(1) << "Num verified tokens: " << num_verified_tokens_;
@@ -311,9 +310,6 @@ LlmLiteRtMtpDrafter::Create(
   ActivationDataType activation_data_type =
       executor_settings.GetActivationDataType().value_or(
           ActivationDataType::FLOAT16);
-  const Backend backend = executor_settings.GetBackend();
-  bool use_fp16_precision = backend == Backend::GPU &&
-                            activation_data_type == ActivationDataType::FLOAT16;
   auto cache_suffix = std::string(ExecutorSettingsBase::kMtpDrafterCacheSuffix);
   ABSL_ASSIGN_OR_RETURN(
       auto compilation_options,
@@ -333,14 +329,33 @@ LlmLiteRtMtpDrafter::Create(
       auto base_model_desc,
       resources.GetTFLiteModel(ModelType::kTfLitePrefillDecode));
 
+  return Create(env, std::move(compiled_model), executor_settings, base_model,
+                *base_model_desc, embedding_manager, ple_manager,
+                executor_metadata);
+}
+
+absl::StatusOr<std::unique_ptr<LlmLiteRtMtpDrafter>>
+LlmLiteRtMtpDrafter::Create(
+    Environment& env, CompiledModel mtp_drafter_model,
+    const LlmExecutorSettings& executor_settings, CompiledModel& base_model,
+    const Model& base_model_desc, EmbeddingLookupManager& embedding_manager,
+    std::optional<std::reference_wrapper<EmbeddingLookupManager>> ple_manager,
+    const proto::ExecutorMetadata* executor_metadata) {
+  ActivationDataType activation_data_type =
+      executor_settings.GetActivationDataType().value_or(
+          ActivationDataType::FLOAT16);
+  const Backend backend = executor_settings.GetBackend();
+  bool use_fp16_precision = backend == Backend::GPU &&
+                            activation_data_type == ActivationDataType::FLOAT16;
+
   absl::flat_hash_map<absl::string_view, TensorBuffer>
       mtp_drafter_input_buffers;
   absl::flat_hash_map<absl::string_view, TensorBuffer>
       mtp_drafter_output_buffers;
   std::vector<std::string> kv_cache_input_names;
-  LITERT_ASSIGN_OR_RETURN(SimpleSignature drafter_signature,
-                          compiled_model.GetSignature(/*signature_index=*/0));
-
+  LITERT_ASSIGN_OR_RETURN(
+      SimpleSignature drafter_signature,
+      mtp_drafter_model.GetSignature(/*signature_index=*/0));
   {
     for (absl::string_view input_name : drafter_signature.InputNames()) {
       if (absl::StartsWith(input_name, "kv_cache_")) {
@@ -349,7 +364,7 @@ LlmLiteRtMtpDrafter::Create(
       }
 
       LITERT_ASSIGN_OR_RETURN(auto input_buffer,
-                              compiled_model.CreateInputBuffer(
+                              mtp_drafter_model.CreateInputBuffer(
                                   drafter_signature.Key(), input_name));
       mtp_drafter_input_buffers[input_name] = std::move(input_buffer);
     }
@@ -359,12 +374,12 @@ LlmLiteRtMtpDrafter::Create(
       if (output_name == "logits" && use_fp16_precision) {
         LITERT_ASSIGN_OR_RETURN(
             auto output_buffer,
-            CreateFP16OutputBuffer(env, compiled_model, /*signature_index=*/0,
-                                   output_name, i));
+            CreateFP16OutputBuffer(env, mtp_drafter_model,
+                                   /*signature_index=*/0, output_name, i));
         mtp_drafter_output_buffers[output_name] = std::move(output_buffer);
       } else {
         LITERT_ASSIGN_OR_RETURN(auto output_buffer,
-                                compiled_model.CreateOutputBuffer(
+                                mtp_drafter_model.CreateOutputBuffer(
                                     drafter_signature.Key(), output_name));
         mtp_drafter_output_buffers[output_name] = std::move(output_buffer);
       }
@@ -496,8 +511,8 @@ LlmLiteRtMtpDrafter::Create(
                                              /*strict=*/false));
 
   return absl::WrapUnique(new LlmLiteRtMtpDrafter(
-      std::move(compiled_model), std::move(drafter_signature), base_model,
-      std::move(verify_signature), *base_model_desc, embedding_manager,
+      std::move(mtp_drafter_model), std::move(drafter_signature), base_model,
+      std::move(verify_signature), base_model_desc, embedding_manager,
       ple_manager, std::move(drafter_sampler), std::move(verifier_sampler),
       std::move(kv_cache_input_names), std::move(mtp_drafter_input_buffers),
       std::move(mtp_drafter_output_buffers), std::move(verifier_input_buffers),
