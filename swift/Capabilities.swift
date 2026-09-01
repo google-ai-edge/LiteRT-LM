@@ -108,6 +108,21 @@ public class Capabilities {
     return Int(litert_lm_loaded_file_max_vision_token_budget(handle))
   }
 
+  /// Returns the maximum supported context tokens for the loaded LiteRT-LM file.
+  ///
+  /// - If the model is static (`isDynamicContext()` is false), this is the fixed context size.
+  /// - If the model is dynamic (`isDynamicContext()` is true), this is the largest context size that can be set.
+  public func maxContextTokens() -> Int {
+    return Int(litert_lm_loaded_file_max_context_tokens(handle))
+  }
+
+  /// Returns whether the loaded LiteRT-LM file has dynamic context.
+  ///
+  /// Dynamic context means the context size can be configured by the caller up to the maximum
+  /// limit.
+  public func isDynamicContext() -> Bool {
+    return litert_lm_loaded_file_is_dynamic_context(handle)
+  }
   deinit {
     litert_lm_loaded_file_delete(handle)
   }

@@ -248,6 +248,7 @@ TEST(CapabilitiesTest, InspectModel_ExtractsSystemMetadataAndLlmCapabilities) {
   proto::LlmMetadata proto_meta;
   proto_meta.set_supports_thinking(true);
   proto_meta.set_supports_function_calling(true);
+  proto_meta.set_max_num_tokens(10007);  // Prime number
   auto* sp = proto_meta.mutable_sampler_params();
   sp->set_type(proto::SamplerParameters::TOP_P);
   sp->set_k(10);
@@ -269,6 +270,8 @@ TEST(CapabilitiesTest, InspectModel_ExtractsSystemMetadataAndLlmCapabilities) {
   EXPECT_EQ(llm.supports_function_calling, true);
   EXPECT_EQ(llm.supports_thinking, true);
   EXPECT_TRUE(llm.supports_speculative_decoding);
+  EXPECT_EQ(llm.max_context_tokens, 10007);
+  EXPECT_TRUE(llm.is_dynamic_context);
 
   // Check default sampler parameters
   EXPECT_EQ(llm.default_sampler_params.type, SamplerType::kTopP);
@@ -406,6 +409,7 @@ TEST(CapabilitiesTest,
 // older models.
 TEST(CapabilitiesTest, InspectModel_NoExplicitCapabilities_ReturnsFalse) {
   proto::LlmMetadata proto_meta;
+  proto_meta.set_max_num_tokens(2048);  // Non-prime number
   // Do not set explicit supports_thinking/supports_function_calling
 
   std::string file_data = CreateTestLiteRTLM(
@@ -419,6 +423,8 @@ TEST(CapabilitiesTest, InspectModel_NoExplicitCapabilities_ReturnsFalse) {
   const auto& llm = *result.llm_capability;
   EXPECT_EQ(llm.supports_thinking, false);
   EXPECT_EQ(llm.supports_function_calling, false);
+  EXPECT_EQ(llm.max_context_tokens, 2048);
+  EXPECT_FALSE(llm.is_dynamic_context);
 
   EXPECT_TRUE(llm.input_modalities.text);
   EXPECT_TRUE(llm.input_modalities.audio);

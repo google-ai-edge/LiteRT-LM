@@ -66,6 +66,22 @@ TEST(CapabilitiesCTest, InspectCapabilities) {
   litert_lm_loaded_file_delete(file);
 }
 
+TEST(CapabilitiesCTest, GetMaxContextTokens) {
+  // Test null handle behavior
+  EXPECT_EQ(litert_lm_loaded_file_max_context_tokens(nullptr), 0);
+  EXPECT_FALSE(litert_lm_loaded_file_is_dynamic_context(nullptr));
+
+  std::string model_path = GetRunfilePath(
+      "litert_lm/runtime/testdata/test_lm.litertlm");
+  LiteRtLmLoadedFile* file = litert_lm_loaded_file_create(model_path.c_str());
+  ASSERT_NE(file, nullptr);
+
+  EXPECT_EQ(litert_lm_loaded_file_max_context_tokens(file), 128);
+  EXPECT_FALSE(litert_lm_loaded_file_is_dynamic_context(file));
+
+  litert_lm_loaded_file_delete(file);
+}
+
 TEST(CapabilitiesCTest, CreateInvalidPathReturnsNull) {
   LiteRtLmLoadedFile* file =
       litert_lm_loaded_file_create("/invalid/path/that/does/not/exist");

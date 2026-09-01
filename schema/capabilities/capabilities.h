@@ -104,7 +104,6 @@ struct LlmInferenceCapability {
 
   // Default sampler parameters for the model.
   SamplerParameters default_sampler_params;
-
   // Modality-specific hardware backends.
   // When a modality is not supported (e.g. input_modalities.vision == false),
   // all backend flags (cpu, gpu, npu) in the corresponding struct remain false.
@@ -115,6 +114,18 @@ struct LlmInferenceCapability {
 
   // The minimum LiteRT-LM runtime version required to run this model.
   std::string min_runtime_version;
+
+  // Maximum supported context tokens for the model.
+  // - If is_dynamic_context is false (static model), this is the fixed
+  //   context size.
+  // - If is_dynamic_context is true (dynamic model), this is the largest
+  //   context size that can be set.
+  uint32_t max_context_tokens = 0;
+
+  // Whether the model has dynamic context.
+  // Dynamic context means the context size can be configured by the caller
+  // up to the maximum limit at initialization time.
+  bool is_dynamic_context = false;
 };
 
 // Container for overall model metadata and capabilities.

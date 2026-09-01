@@ -474,6 +474,12 @@ internal object LiteRtLmJni {
    */
   external fun nativeMaxVisionTokenBudget(capabilitiesPointer: Long): Int
 
+  /** Returns the maximum supported context tokens for the loaded LiteRT-LM file. */
+  external fun nativeMaxContextTokens(capabilitiesPointer: Long): Int
+
+  /** Returns true if the model has dynamic context. */
+  external fun nativeIsDynamicContext(capabilitiesPointer: Long): Boolean
+
   /** Creates a new LiteRT-LM embedding engine. */
   external fun nativeCreateEmbeddingEngine(
     modelFd: Int,

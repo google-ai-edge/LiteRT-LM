@@ -130,6 +130,30 @@ class Capabilities(modelPath: String) : AutoCloseable {
     }
   }
 
+  /**
+   * Gets the maximum supported context tokens for the loaded LiteRT-LM file.
+   * - If the model is static ([isDynamicContext] is false), this is the fixed context size.
+   * - If the model is dynamic ([isDynamicContext] is true), this is the largest context size that
+   *   can be set.
+   */
+  fun maxContextTokens(): Int {
+    synchronized(lock) {
+      checkInitialized()
+      return LiteRtLmJni.nativeMaxContextTokens(handle!!)
+    }
+  }
+
+  /**
+   * Checks if the loaded LiteRT-LM file has dynamic context. Dynamic context means the context size
+   * can be configured by the caller up to the maximum limit.
+   */
+  fun isDynamicContext(): Boolean {
+    synchronized(lock) {
+      checkInitialized()
+      return LiteRtLmJni.nativeIsDynamicContext(handle!!)
+    }
+  }
+
   /** Closes the loaded capabilities and releases underlying resources. */
   override fun close() {
     synchronized(lock) {

@@ -120,6 +120,28 @@ LITERT_LM_C_API_EXPORT
 int32_t litert_lm_loaded_file_max_vision_token_budget(
     LiteRtLmLoadedFile* loaded_file);
 
+// Returns the maximum supported context tokens for the loaded LiteRT-LM file.
+// - If the model is static (litert_lm_loaded_file_is_dynamic_context is
+//   false), this is the fixed context size determined by the model graph.
+// - If the model is dynamic (litert_lm_loaded_file_is_dynamic_context is
+//   true), this is the largest context size that can be set.
+// Returns 0 if not found or on error.
+//
+// Added in version 0.2.0.
+LITERT_LM_C_API_EXPORT
+uint32_t litert_lm_loaded_file_max_context_tokens(
+    LiteRtLmLoadedFile* loaded_file);
+
+// Returns whether the model has dynamic context.
+// Dynamic context means the context size can be configured by the caller
+// up to the maximum limit.
+//
+// @param loaded_file The loaded file handle.
+// @return True if the model has dynamic context, false otherwise.
+//
+// Added in version 0.2.0.
+LITERT_LM_C_API_EXPORT
+bool litert_lm_loaded_file_is_dynamic_context(LiteRtLmLoadedFile* loaded_file);
 #ifdef __cplusplus
 }  // extern "C"
 #endif

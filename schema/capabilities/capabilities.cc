@@ -75,6 +75,7 @@ std::string FormatFloatForReport(float val) {
   return s;
 }
 
+
 NpuBrand DetectNpuBrandFromTfliteBuffer(const char* data, size_t size) {
   flatbuffers::Verifier verifier(reinterpret_cast<const uint8_t*>(data), size);
   if (!tflite::VerifyModelBuffer(verifier)) {
@@ -269,6 +270,25 @@ absl::StatusOr<std::vector<int>> ExtractVisionSignatureLengths(
   return extracted_lengths;
 }
 
+
+// Check if the number is a magic number.
+// The number is a magic number if it is prime and greater than 10.
+bool IsMagicNumber(int64_t number) {
+  if (number < 11) {
+    return false;
+  }
+  if (number % 2 == 0) {
+    return false;
+  }
+  for (int64_t i = 3; i * i <= number; i += 2) {
+    if (number % i == 0) {
+      return false;
+    }
+  }
+  return true;
+}
+
+
 }  // namespace
 
 absl::StatusOr<ModelCapabilities> InspectModel(std::istream& litertlm_stream) {
@@ -294,6 +314,10 @@ absl::StatusOr<ModelCapabilities> InspectModel(std::istream& litertlm_stream) {
   bool has_llm_metadata = false;
   uint64_t llm_metadata_begin = 0;
   uint64_t llm_metadata_end = 0;
+
+  bool found_main_tflite = false;
+  uint64_t main_tflite_begin = 0;
+  uint64_t main_tflite_end = 0;
 
   bool has_vision = false;
   bool has_audio = false;
@@ -327,12 +351,18 @@ absl::StatusOr<ModelCapabilities> InspectModel(std::istream& litertlm_stream) {
       bool is_vision = false;
       std::string model_type;
       std::string backend_constraint;
+      // In this context, "is_adapter" refers to any auxiliary model (like
+      // vision/audio adapters, encoders, or speculative drafters) that is not
+      // the main compute pipeline. We skip these when searching for the main
+      // TFLite model.
+      bool is_adapter = false;
       if (const auto* items = section->items()) {
         for (size_t j = 0; j < items->size(); ++j) {
           const KeyValuePair* item = items->Get(j);
           if (item == nullptr || item->key() == nullptr) continue;
           if (item->key()->string_view() == "model_type") {
             const auto* value = item->value_as_StringValue();
+
             if (value && value->value()) {
               model_type = absl::AsciiStrToLower(value->value()->string_view());
             }
@@ -350,14 +380,18 @@ absl::StatusOr<ModelCapabilities> InspectModel(std::istream& litertlm_stream) {
             model_type == "tf_lite_vision_encoder") {
           has_vision = true;
           is_vision = true;
+          is_adapter = true;
         } else if (model_type == "tf_lite_audio_adapter" ||
                    model_type == "tf_lite_audio_encoder_hw") {
           has_audio = true;
+          is_adapter = true;
         } else if (model_type == "tf_lite_video_adapter" ||
                    model_type == "tf_lite_video_encoder") {
           has_video = true;
+          is_adapter = true;
         } else if (model_type == "tf_lite_mtp_drafter") {
           has_speculative_decoding = true;
+          is_adapter = true;
         } else if (model_type == "tf_lite_aux") {
           has_npu = true;
           npu_section_begin = section->begin_offset();
@@ -380,6 +414,12 @@ absl::StatusOr<ModelCapabilities> InspectModel(std::istream& litertlm_stream) {
       if (is_vision) {
         vision_sections.push_back(
             {section->begin_offset(), section->end_offset()});
+      }
+
+      if (!is_adapter) {
+        main_tflite_begin = section->begin_offset();
+        main_tflite_end = section->end_offset();
+        found_main_tflite = true;
       }
     }
   }
@@ -516,9 +556,12 @@ absl::StatusOr<ModelCapabilities> InspectModel(std::istream& litertlm_stream) {
                 max_num_patches / (pooling_kernel_size * pooling_kernel_size);
           }
         }
+        llm_cap.max_context_tokens = proto_metadata.max_num_tokens();
+        llm_cap.is_dynamic_context = IsMagicNumber(llm_cap.max_context_tokens);
       }
     }
   }
+
   if (has_vision) {
     llm_cap.vision_signature_selection = std::vector<int>();
 
@@ -561,6 +604,62 @@ absl::StatusOr<ModelCapabilities> InspectModel(std::istream& litertlm_stream) {
   } else {
     llm_cap.vision_signature_selection = std::nullopt;
   }
+
+
+
+  // 3. Inspect TFLite model for source of truth on context size.
+  if (found_main_tflite && main_tflite_end > main_tflite_begin) {
+    size_t size = main_tflite_end - main_tflite_begin;
+    litertlm_stream.seekg(main_tflite_begin);
+    auto buffer = std::make_unique<char[]>(size);
+    litertlm_stream.read(buffer.get(), size);
+    if (litertlm_stream) {
+      flatbuffers::Verifier verifier(
+          reinterpret_cast<const uint8_t*>(buffer.get()), size);
+      if (tflite::VerifyModelBuffer(verifier)) {
+        const tflite::Model* tflite_model = tflite::GetModel(buffer.get());
+        if (tflite_model != nullptr &&
+            tflite_model->signature_defs() != nullptr) {
+          for (const auto* sig : *tflite_model->signature_defs()) {
+            if (sig == nullptr || sig->signature_key() == nullptr) continue;
+            absl::string_view sig_key = sig->signature_key()->string_view();
+            if (absl::StartsWith(sig_key, "prefill")) {
+              if (sig->inputs() != nullptr) {
+                for (const auto* input : *sig->inputs()) {
+                  if (input == nullptr || input->name() == nullptr) continue;
+                  absl::string_view input_name = input->name()->string_view();
+                  if (absl::StrContains(input_name, "mask")) {
+                    uint32_t tensor_idx = input->tensor_index();
+                    uint32_t subgraph_idx = sig->subgraph_index();
+                    if (tflite_model->subgraphs() != nullptr &&
+                        subgraph_idx < tflite_model->subgraphs()->size()) {
+                      const auto* subgraph =
+                          tflite_model->subgraphs()->Get(subgraph_idx);
+                      if (subgraph != nullptr &&
+                          subgraph->tensors() != nullptr &&
+                          tensor_idx < subgraph->tensors()->size()) {
+                        const auto* tensor =
+                            subgraph->tensors()->Get(tensor_idx);
+                        if (tensor != nullptr && tensor->shape() != nullptr) {
+                          int rank = tensor->shape()->size();
+                          if (rank > 0) {
+                            int64_t dim = tensor->shape()->Get(rank - 1);
+                            llm_cap.max_context_tokens = dim;
+                            llm_cap.is_dynamic_context = IsMagicNumber(dim);
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
 
   info.llm_capability = llm_cap;
 
@@ -661,6 +760,9 @@ std::ostream& operator<<(std::ostream& os,
      << "  Sampler Top K:          " << llm_cap.default_sampler_params.k << "\n"
      << "  Sampler Top P:          "
      << FormatFloatForReport(llm_cap.default_sampler_params.p) << "\n"
+     << "  Max Context Tokens:     " << llm_cap.max_context_tokens << "\n"
+     << "  Is Dynamic Context:     "
+     << (llm_cap.is_dynamic_context ? "YES" : "NO") << "\n"
      << "  Input Modalities:       " << llm_cap.input_modalities << "\n";
 
   if (llm_cap.input_modalities.text) {

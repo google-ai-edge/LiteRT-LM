@@ -142,4 +142,16 @@ int32_t litert_lm_loaded_file_max_vision_token_budget(
   return loaded_file->info.llm_capability->max_vision_token_budget;
 }
 
+uint32_t litert_lm_loaded_file_max_context_tokens(
+    LiteRtLmLoadedFile* loaded_file) {
+  if (loaded_file == nullptr) return 0;
+  if (!loaded_file->info.llm_capability.has_value()) return 0;
+  return loaded_file->info.llm_capability->max_context_tokens;
+}
+
+bool litert_lm_loaded_file_is_dynamic_context(LiteRtLmLoadedFile* loaded_file) {
+  if (loaded_file == nullptr) return false;
+  if (!loaded_file->info.llm_capability.has_value()) return false;
+  return loaded_file->info.llm_capability->is_dynamic_context;
+}
 }  // extern "C"

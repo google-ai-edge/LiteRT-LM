@@ -72,5 +72,9 @@ class CapabilitiesTests: XCTestCase {
     XCTAssertEqual(defaultSamplerParams.temperature, 0.0)
     XCTAssertEqual(defaultSamplerParams.topK, 1)
     XCTAssertEqual(defaultSamplerParams.topP, 0.7)
+
+    // Verify context capabilities (128 from TFLite graph and static context for test model)
+    XCTAssertEqual(capabilities.maxContextTokens(), 128)
+    XCTAssertFalse(capabilities.isDynamicContext())
   }
 }

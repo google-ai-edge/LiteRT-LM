@@ -1583,13 +1583,23 @@ LITERTLM_JNIEXPORT jboolean JNICALL JNI_METHOD(nativeSupportsInputModality)(
       reinterpret_cast<LiteRtLmLoadedFile*>(capabilities_pointer),
       static_cast<LiteRtLmModality>(modality));
 }
-
 LITERTLM_JNIEXPORT jint JNICALL JNI_METHOD(nativeMaxVisionTokenBudget)(
     JNIEnv* env, jclass thiz, jlong capabilities_pointer) {
   return litert_lm_loaded_file_max_vision_token_budget(
       reinterpret_cast<LiteRtLmLoadedFile*>(capabilities_pointer));
 }
 
+LITERTLM_JNIEXPORT jint JNICALL JNI_METHOD(nativeMaxContextTokens)(
+    JNIEnv* env, jclass thiz, jlong capabilities_pointer) {
+  return litert_lm_loaded_file_max_context_tokens(
+      reinterpret_cast<LiteRtLmLoadedFile*>(capabilities_pointer));
+}
+
+LITERTLM_JNIEXPORT jboolean JNICALL JNI_METHOD(nativeIsDynamicContext)(
+    JNIEnv* env, jclass thiz, jlong capabilities_pointer) {
+  return litert_lm_loaded_file_is_dynamic_context(
+      reinterpret_cast<LiteRtLmLoadedFile*>(capabilities_pointer));
+}
 LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateEmbeddingEngine)(
     JNIEnv* env, jclass thiz, jint model_fd, jstring model_path,
     jstring backend, jstring vision_backend, jstring audio_backend,
