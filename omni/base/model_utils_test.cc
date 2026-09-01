@@ -14,18 +14,25 @@
 
 #include "omni/base/model_utils.h"
 
+#include <cstdint>
 #include <string>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_matchers.h"  // from @com_google_absl
+#include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
+#include "litert/cc/litert_layout.h"  // from @litert
+#include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
+#include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
 #include "support/util/test_utils.h"  // IWYU pragma: keep
 
 namespace litert::omni {
 namespace {
 
+using ::absl_testing::IsOk;
 using ::absl_testing::StatusIs;
 
 TEST(ModelUtilsTest, CheckFileReadableNonExistent) {
@@ -46,6 +53,45 @@ TEST(ModelUtilsTest, CreateCompiledModelNonExistent) {
     EXPECT_THAT(CreateCompiledModel(*env_expected, options, "model.tflite"),
                 StatusIs(absl::StatusCode::kNotFound));
   }
+}
+
+TEST(ModelUtilsTest, CreateExecutorInputsWithText) {
+  auto env = Environment::Create({});
+  ASSERT_TRUE(env.HasValue());
+  RankedTensorType type(ElementType::Int32, Layout(Dimensions({1, 4})));
+  auto buffer = TensorBuffer::CreateManaged(*env, TensorBufferType::kHostMemory,
+                                            type, 4 * sizeof(int32_t));
+  ASSERT_TRUE(buffer.HasValue());
+
+  auto inputs = CreateExecutorInputsWithText(*buffer);
+  ASSERT_THAT(inputs, IsOk());
+  EXPECT_THAT(inputs->GetTextDataPtr(), IsOk());
+}
+
+TEST(ModelUtilsTest, CreateExecutorInputsWithAudio) {
+  auto env = Environment::Create({});
+  ASSERT_TRUE(env.HasValue());
+  RankedTensorType type(ElementType::Float32, Layout(Dimensions({1, 1024})));
+  auto buffer = TensorBuffer::CreateManaged(*env, TensorBufferType::kHostMemory,
+                                            type, 1024 * sizeof(float));
+  ASSERT_TRUE(buffer.HasValue());
+
+  auto inputs = CreateExecutorInputsWithAudio(*buffer);
+  ASSERT_THAT(inputs, IsOk());
+  EXPECT_THAT(inputs->GetAudioDataPtr(), IsOk());
+}
+
+TEST(ModelUtilsTest, CreateExecutorInputsWithVision) {
+  auto env = Environment::Create({});
+  ASSERT_TRUE(env.HasValue());
+  RankedTensorType type(ElementType::Float32, Layout(Dimensions({1, 512})));
+  auto buffer = TensorBuffer::CreateManaged(*env, TensorBufferType::kHostMemory,
+                                            type, 512 * sizeof(float));
+  ASSERT_TRUE(buffer.HasValue());
+
+  auto inputs = CreateExecutorInputsWithVision(*buffer);
+  ASSERT_THAT(inputs, IsOk());
+  EXPECT_THAT(inputs->GetVisionDataPtr(), IsOk());
 }
 
 }  // namespace

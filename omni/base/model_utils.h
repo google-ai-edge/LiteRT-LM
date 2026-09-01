@@ -16,6 +16,7 @@
 #define THIRD_PARTY_ODML_LITERT_LM_OMNI_BASE_MODEL_UTILS_H_
 
 #include <cstddef>
+#include <memory>
 #include <string>
 
 #include "absl/status/status.h"  // from @com_google_absl
@@ -23,9 +24,44 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
+#include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "omni/base/litert_lm_runner.h"
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/executor/llm_executor_io_types.h"
 
 namespace litert::omni {
+
+// Creates ExecutorInputs from a text token IDs TensorBuffer.
+//
+// args
+// - buffer: TensorBuffer containing token IDs.
+//
+// returns
+// - Populated ExecutorInputs with ExecutorTextData on success, or error status.
+absl::StatusOr<lm::ExecutorInputs> CreateExecutorInputsWithText(
+    const TensorBuffer& buffer);
+
+// Creates ExecutorInputs from an audio embeddings TensorBuffer.
+//
+// args
+// - buffer: TensorBuffer containing audio embeddings.
+//
+// returns
+// - Populated ExecutorInputs with ExecutorAudioData on success, or error
+// status.
+absl::StatusOr<lm::ExecutorInputs> CreateExecutorInputsWithAudio(
+    const TensorBuffer& buffer);
+
+// Creates ExecutorInputs from a vision embeddings TensorBuffer.
+//
+// args
+// - buffer: TensorBuffer containing vision embeddings.
+//
+// returns
+// - Populated ExecutorInputs with ExecutorVisionData on success, or error
+// status.
+absl::StatusOr<lm::ExecutorInputs> CreateExecutorInputsWithVision(
+    const TensorBuffer& buffer);
 
 // Options for loading and compiling LiteRT models across Omni pipelines.
 struct ModelOptions {
@@ -78,6 +114,19 @@ absl::StatusOr<std::string> LoadFile(absl::string_view model_dir,
 // returns
 // - CompiledModel instance on success, or error status on failure.
 absl::StatusOr<CompiledModel> CreateCompiledModel(
+    Environment& env, const ModelOptions& options,
+    absl::string_view model_filename);
+
+// Creates a LiteRtLmRunner from model directory and filename.
+//
+// args
+// - env: LiteRT environment instance.
+// - options: ModelOptions containing model directory, cache_dir, backend, etc.
+// - model_filename: Model file name to load.
+//
+// returns
+// - Unique pointer to LiteRtLmRunner on success, or error status on failure.
+absl::StatusOr<std::unique_ptr<LiteRtLmRunner>> CreateLmRunner(
     Environment& env, const ModelOptions& options,
     absl::string_view model_filename);
 

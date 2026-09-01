@@ -26,6 +26,7 @@
 #include <utility>
 #include <variant>
 
+#include "absl/base/thread_annotations.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
@@ -103,6 +104,10 @@ class LitertLmLoader {
   // model header from and map the sections to the section buffers.
   static absl::StatusOr<std::unique_ptr<LitertLmLoader>> Create(
       ScopedFile model_file);
+
+  // Creates a LitertLmLoader from a shared ScopedFile.
+  static absl::StatusOr<std::unique_ptr<LitertLmLoader>> Create(
+      std::shared_ptr<ScopedFile> shared_scoped_file);
 
   // Creates a LitertLmLoader from an already memory-mapped model file.
   // This is useful when the file is managed externally.
@@ -210,6 +215,9 @@ class LitertLmLoader {
  private:
   explicit LitertLmLoader(ScopedFile model_file)
       : model_source_(std::make_shared<ScopedFile>(std::move(model_file))) {}
+
+  explicit LitertLmLoader(std::shared_ptr<ScopedFile> shared_scoped_file)
+      : model_source_(std::move(shared_scoped_file)) {}
 
   explicit LitertLmLoader(
       std::shared_ptr<MemoryMappedFile> memory_mapped_model_file)

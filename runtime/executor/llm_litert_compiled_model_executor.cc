@@ -128,6 +128,32 @@ absl::Status ResolveDynamicShape(CompiledModel& compiled_model,
   return absl::OkStatus();
 }
 
+absl::Status CopyOrAssignTensorBuffer(const TensorBuffer& src,
+                                      TensorBuffer& dst) {
+  LITERT_ASSIGN_OR_RETURN(auto src_type, src.BufferType());
+  LITERT_ASSIGN_OR_RETURN(auto dst_type, dst.BufferType());
+  LITERT_ASSIGN_OR_RETURN(auto in_size, src.PackedSize());
+  LITERT_ASSIGN_OR_RETURN(auto out_size, dst.PackedSize());
+  if (src_type == dst_type && in_size == out_size) {
+    auto src_tensor_type = src.TensorType();
+    auto dst_tensor_type = dst.TensorType();
+    if (src_tensor_type.HasValue() && dst_tensor_type.HasValue() &&
+        *src_tensor_type == *dst_tensor_type) {
+      LITERT_ASSIGN_OR_RETURN(dst, src.Duplicate());
+      return absl::OkStatus();
+    }
+  }
+  LITERT_ASSIGN_OR_RETURN(auto in_lock,
+                          TensorBufferScopedLock::Create<const char>(
+                              src, TensorBuffer::LockMode::kRead));
+  LITERT_ASSIGN_OR_RETURN(auto out_lock,
+                          TensorBufferScopedLock::Create<char>(
+                              dst, TensorBuffer::LockMode::kWrite));
+  size_t bytes_to_copy = std::min(in_size, out_size);
+  std::memcpy(out_lock.second, in_lock.second, bytes_to_copy);
+  return absl::OkStatus();
+}
+
 // Builds the output tensor type for the embedding lookup. The output tensor
 // type is the same as the input tensor type, except the first dimension is the
 // number of tokens.
@@ -221,6 +247,34 @@ absl::StatusOr<TensorBuffer> CreateHostOutputBuffer(
   return buffer;
 }
 
+absl::StatusOr<std::pair<const TensorBuffer*, int /*placeholder_token_id*/>>
+GetEmbeddingsFromInputs(const ExecutorInputs& inputs) {
+  if (auto vision_emb = inputs.GetVisionEmbeddingsPtr(); vision_emb.ok()) {
+    return std::make_pair(*vision_emb, ExecutorVisionData::kSpecialToken);
+  }
+  if (auto proj_audio = inputs.GetProjectedAudioEmbeddingsPtr();
+      proj_audio.ok()) {
+    return std::make_pair(*proj_audio, ExecutorAudioData::kSpecialToken);
+  }
+  if (auto audio_emb = inputs.GetAudioEmbeddingsPtr(); audio_emb.ok()) {
+    return std::make_pair(*audio_emb, ExecutorAudioData::kSpecialToken);
+  }
+  return absl::NotFoundError("No embeddings found in inputs.");
+}
+
+absl::StatusOr<std::pair<const TensorBuffer*, int /*placeholder_token_id*/>>
+GetPerLayerEmbeddingsFromInputs(const ExecutorInputs& inputs) {
+  if (auto vision_per_layer = inputs.GetVisionPerLayerEmbeddingsPtr();
+      vision_per_layer.ok()) {
+    return std::make_pair(*vision_per_layer, ExecutorVisionData::kSpecialToken);
+  }
+  if (auto audio_per_layer = inputs.GetAudioPerLayerEmbeddingsPtr();
+      audio_per_layer.ok()) {
+    return std::make_pair(*audio_per_layer, ExecutorAudioData::kSpecialToken);
+  }
+  return absl::NotFoundError("No per-layer embeddings found in inputs.");
+}
+
 }  // namespace
 
 absl::Status LlmLiteRtCompiledModelExecutorBase::CreatePrefillInputBuffers(
@@ -246,11 +300,6 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::CreatePrefillInputBuffers(
       return absl::FailedPreconditionError(
           "Input tokens or embeddings must be provided.");
     }
-    if (embedding_lookup_ == nullptr) {
-      return absl::FailedPreconditionError(
-          "Input embeddings required by signature but embedding lookup "
-          "model is not initialized.");
-    }
     ABSL_RETURN_IF_ERROR(
         dyn_shape_resolver(signatures_.input_embeddings.value()));
     LITERT_ASSIGN_OR_RETURN(
@@ -262,11 +311,6 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::CreatePrefillInputBuffers(
 
     // We may have per layer embedding as well.
     if (signatures_.input_per_layer_embeddings.has_value()) {
-      if (embedding_lookup_ == nullptr) {
-        return absl::FailedPreconditionError(
-            "Input per layer embeddings required by signature but "
-            "embedding lookup model is not initialized.");
-      }
       ABSL_RETURN_IF_ERROR(
           dyn_shape_resolver(signatures_.input_per_layer_embeddings.value()));
       LITERT_ASSIGN_OR_RETURN(
@@ -453,7 +497,7 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::PrefillInternal(
     absl::flat_hash_map<absl::string_view, TensorBuffer>& prefill_input_buffers,
     absl::flat_hash_map<absl::string_view, TensorBuffer>&
         prefill_output_buffers,
-    Span<const int> ids, bool async) {
+    Span<const int> ids, bool async, const ExecutorInputs* inputs) {
   ABSL_RETURN_IF_ERROR(RollBackProcessedTokens());
 
   auto [internal_start_step_initial, pending_input_token_initial] =
@@ -568,34 +612,53 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::PrefillInternal(
         std::fill(prefill_input_ptr + active_tokens,
                   prefill_input_ptr + total_elements, pad_token_id);
       } else {
-        // If not using token as lookup, we must have input_embeddings. There is
-        // no need to create input_embeddings_ptr because TensorBuffer locking
-        // and filling is handled by the embedding lookup.
-        if (embedding_lookup_ == nullptr) {
-          return absl::FailedPreconditionError(
-              "Prefill requires embedding_lookup_ when use_token_as_lookup is "
-              "false, but embedding_lookup_ is null.");
-        }
+        // If not using token as lookup, we must have input_embeddings.
         TensorBuffer* prefill_input_embeddings_buffer =
             &(prefill_input_buffers[signatures_.input_embeddings.value()]);
-        ABSL_RETURN_IF_ERROR(embedding_lookup_->LookupPrefill(
-            processed_input_tokens, prefill_input_embeddings_buffer,
-            /*offset=*/input_idx));
+        if (embedding_lookup_ != nullptr) {
+          ABSL_RETURN_IF_ERROR(embedding_lookup_->LookupPrefill(
+              processed_input_tokens, prefill_input_embeddings_buffer,
+              /*offset=*/input_idx));
+        } else if (inputs == nullptr) {
+          return absl::InvalidArgumentError(
+              "Prefill requires inputs when embedding_lookup_ is null.");
+        } else {
+          LITERT_ASSIGN_OR_RETURN(auto embeddings,
+                                  GetEmbeddingsFromInputs(*inputs));
+          if (embeddings.first == nullptr) {
+            return absl::InvalidArgumentError(
+                "Prefill requires embeddings in inputs when embedding_lookup_ "
+                "is null.");
+          }
+          ABSL_RETURN_IF_ERROR(CopyOrAssignTensorBuffer(
+              *embeddings.first, *prefill_input_embeddings_buffer));
+        }
 
         // We may have per layer embedding as well.
         if (signatures_.input_per_layer_embeddings) {
-          if (per_layer_embedding_lookup_ == nullptr) {
-            return absl::FailedPreconditionError(
-                "Prefill requires per_layer_embedding_lookup_ when signature "
-                "has input_per_layer_embeddings, but per_layer_embedding_"
-                "lookup_ is null.");
-          }
           TensorBuffer* prefill_input_per_layer_embeddings_buffer =
               &(prefill_input_buffers[signatures_.input_per_layer_embeddings
                                           .value()]);
-          ABSL_RETURN_IF_ERROR(per_layer_embedding_lookup_->LookupPrefill(
-              processed_input_tokens, prefill_input_per_layer_embeddings_buffer,
-              /*offset=*/input_idx));
+          if (per_layer_embedding_lookup_ != nullptr) {
+            ABSL_RETURN_IF_ERROR(per_layer_embedding_lookup_->LookupPrefill(
+                processed_input_tokens,
+                prefill_input_per_layer_embeddings_buffer,
+                /*offset=*/input_idx));
+          } else if (inputs == nullptr) {
+            return absl::InvalidArgumentError(
+                "Prefill requires inputs when per_layer_embedding_lookup_ is "
+                "null.");
+          } else {
+            LITERT_ASSIGN_OR_RETURN(auto per_layer,
+                                    GetPerLayerEmbeddingsFromInputs(*inputs));
+            if (per_layer.first == nullptr) {
+              return absl::InvalidArgumentError(
+                  "Prefill requires per_layer_embeddings in inputs when "
+                  "per_layer_embedding_lookup_ is null.");
+            }
+            ABSL_RETURN_IF_ERROR(CopyOrAssignTensorBuffer(
+                *per_layer.first, *prefill_input_per_layer_embeddings_buffer));
+          }
         }
       }
       if (signatures_.input_attn_mask.has_value()) {
@@ -634,26 +697,44 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::PrefillInternal(
     // used in the next prefill or decode.
     auto last_input_token = std::make_shared<TokenData>(ids.back());
     if (!use_token_as_lookup) {
-      // Look up the embeddings for the last token so they can be used in the
-      // next prefill or decode. This has to be done now in the case of
-      // multi-modal prefill so the embeddings are used in the correct order.
-      if (embedding_lookup_ == nullptr) {
-        return absl::FailedPreconditionError(
-            "Prefill requires embedding_lookup_ for the last pending token "
-            "when use_token_as_lookup is false, but embedding_lookup_ is "
-            "null.");
-      }
-      ABSL_RETURN_IF_ERROR(embedding_lookup_->LookupPrefill(
-          last_input_token->id(), last_input_token->mutable_embedding()));
-      if (use_per_layer_embedding) {
-        if (per_layer_embedding_lookup_ == nullptr) {
-          return absl::FailedPreconditionError(
-              "Prefill requires per_layer_embedding_lookup_ for the last "
-              "pending token, but per_layer_embedding_lookup_ is null.");
+      if (embedding_lookup_ != nullptr) {
+        // Look up the embeddings for the last token so they can be used in the
+        // next prefill or decode. This has to be done now in the case of
+        // multi-modal prefill so the embeddings are used in the correct order.
+        ABSL_RETURN_IF_ERROR(embedding_lookup_->LookupPrefill(
+            last_input_token->id(), last_input_token->mutable_embedding()));
+        if (use_per_layer_embedding) {
+          if (per_layer_embedding_lookup_ != nullptr) {
+            ABSL_RETURN_IF_ERROR(per_layer_embedding_lookup_->LookupPrefill(
+                last_input_token->id(),
+                last_input_token->mutable_per_layer_embedding()));
+          }
         }
-        ABSL_RETURN_IF_ERROR(per_layer_embedding_lookup_->LookupPrefill(
-            last_input_token->id(),
-            last_input_token->mutable_per_layer_embedding()));
+      } else if (inputs == nullptr) {
+        return absl::InvalidArgumentError(
+            "Prefill requires inputs when embedding_lookup_ is null.");
+      } else {
+        LITERT_ASSIGN_OR_RETURN(auto embeddings,
+                                GetEmbeddingsFromInputs(*inputs));
+        if (embeddings.first == nullptr) {
+          return absl::InvalidArgumentError(
+              "Prefill requires embeddings in inputs when embedding_lookup_ "
+              "is null.");
+        }
+        LITERT_ASSIGN_OR_RETURN(
+            auto in_lock,
+            TensorBufferScopedLock::Create<const float>(
+                *embeddings.first, TensorBuffer::LockMode::kRead));
+        LITERT_ASSIGN_OR_RETURN(auto in_size, embeddings.first->Size());
+        size_t num_floats = in_size / sizeof(float);
+        size_t num_tokens = ids.size();
+        if (num_tokens > 0) {
+          size_t hidden_dim = num_floats / num_tokens;
+          const float* last_tok_emb =
+              in_lock.second + (num_tokens - 1) * hidden_dim;
+          last_input_token->mutable_embedding().assign(
+              last_tok_emb, last_tok_emb + hidden_dim);
+        }
       }
     }
     // Add the last input token to the pending input token list.
@@ -768,6 +849,28 @@ LlmLiteRtCompiledModelExecutorBase::GetTokenToDecode(
                                  .AddPendingInputToken(token));
       }
     }
+  }
+
+  // If multimodal embeddings (such as vision or audio embeddings) are provided
+  // directly in the input, extract them and populate a pending input token to
+  // be consumed during decoding.
+  auto embeddings = GetEmbeddingsFromInputs(inputs);
+  if (embeddings.ok() && embeddings->first != nullptr) {
+    auto& emb_buffer = *embeddings->first;
+    LITERT_ASSIGN_OR_RETURN(auto lock,
+                            TensorBufferScopedLock::Create<const float>(
+                                emb_buffer, TensorBuffer::LockMode::kRead));
+    LITERT_ASSIGN_OR_RETURN(auto size, emb_buffer.Size());
+    int num_floats = size / sizeof(float);
+    std::vector<float> emb_vec(lock.second, lock.second + num_floats);
+    auto token = std::make_shared<TokenData>(
+        embeddings->second, std::move(emb_vec), std::vector<float>{});
+    llm_context_->processed_context()
+        .processed_tokens()
+        .InvalidatePendingInputToken();
+    ABSL_RETURN_IF_ERROR(llm_context_->processed_context()
+                             .processed_tokens()
+                             .AddPendingInputToken({token}));
   }
 
   // Here we must have a pending input token to decode that's either coming from
@@ -1670,7 +1773,7 @@ absl::Status LlmLiteRtCompiledModelExecutorStatic::Prefill(
     ABSL_RETURN_IF_ERROR(PrefillInternal(
         prefill_signature, prefill_input_buffers_[prefill_signature],
         prefill_output_buffers_[prefill_signature],
-        ids.subspan(/*pos=*/0, prefill_length), async));
+        ids.subspan(/*pos=*/0, prefill_length), async, &inputs));
     ids = ids.subspan(/*pos=*/prefill_length);
   }
   RET_CHECK_EQ(ids.size(), 0).SetCode(absl::StatusCode::kInternal)

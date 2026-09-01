@@ -33,42 +33,39 @@ class LiteRtRunner {
  public:
   virtual ~LiteRtRunner() = default;
 
-  virtual absl::StatusOr<std::vector<::litert::TensorBuffer>>
-  CreateInputBuffers(absl::string_view signature_name) = 0;
+  virtual absl::StatusOr<std::vector<TensorBuffer>> CreateInputBuffers(
+      absl::string_view signature_name) = 0;
 
-  virtual absl::StatusOr<std::vector<::litert::TensorBuffer>>
-  CreateOutputBuffers(absl::string_view signature_name) = 0;
+  virtual absl::StatusOr<std::vector<TensorBuffer>> CreateOutputBuffers(
+      absl::string_view signature_name) = 0;
 
-  virtual absl::Status Run(
-      absl::string_view signature_name,
-      absl::Span<const ::litert::TensorBuffer> input_buffers,
-      absl::Span<const ::litert::TensorBuffer> output_buffers) = 0;
+  virtual absl::Status Run(absl::string_view signature_name,
+                           absl::Span<const TensorBuffer> input_buffers,
+                           absl::Span<const TensorBuffer> output_buffers) = 0;
 };
 
 // Implementation of LiteRtRunner wrapping LiteRT CompiledModel.
 class LiteRtRunnerImpl : public LiteRtRunner {
  public:
+  explicit LiteRtRunnerImpl(CompiledModel* absl_nonnull compiled_model);
   explicit LiteRtRunnerImpl(
-      ::litert::CompiledModel* absl_nonnull compiled_model);
-  explicit LiteRtRunnerImpl(
-      std::unique_ptr<::litert::CompiledModel> absl_nonnull compiled_model);
+      std::unique_ptr<CompiledModel> absl_nonnull compiled_model);
 
   ~LiteRtRunnerImpl() override = default;
 
-  absl::StatusOr<std::vector<::litert::TensorBuffer>> CreateInputBuffers(
+  absl::StatusOr<std::vector<TensorBuffer>> CreateInputBuffers(
       absl::string_view signature_name) override;
 
-  absl::StatusOr<std::vector<::litert::TensorBuffer>> CreateOutputBuffers(
+  absl::StatusOr<std::vector<TensorBuffer>> CreateOutputBuffers(
       absl::string_view signature_name) override;
 
-  absl::Status Run(
-      absl::string_view signature_name,
-      absl::Span<const ::litert::TensorBuffer> input_buffers,
-      absl::Span<const ::litert::TensorBuffer> output_buffers) override;
+  absl::Status Run(absl::string_view signature_name,
+                   absl::Span<const TensorBuffer> input_buffers,
+                   absl::Span<const TensorBuffer> output_buffers) override;
 
  private:
-  std::unique_ptr<::litert::CompiledModel> owned_compiled_model_;
-  ::litert::CompiledModel* const absl_nonnull compiled_model_;
+  std::unique_ptr<CompiledModel> owned_compiled_model_;
+  CompiledModel* const absl_nonnull compiled_model_;
 };
 
 }  // namespace litert::omni

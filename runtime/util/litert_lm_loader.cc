@@ -187,6 +187,14 @@ absl::StatusOr<std::unique_ptr<LitertLmLoader>> LitertLmLoader::Create(
 }
 
 absl::StatusOr<std::unique_ptr<LitertLmLoader>> LitertLmLoader::Create(
+    std::shared_ptr<ScopedFile> shared_scoped_file) {
+  auto loader =
+      absl::WrapUnique(new LitertLmLoader(std::move(shared_scoped_file)));
+  ABSL_RETURN_IF_ERROR(loader->Initialize());
+  return std::move(loader);
+}
+
+absl::StatusOr<std::unique_ptr<LitertLmLoader>> LitertLmLoader::Create(
     std::shared_ptr<MemoryMappedFile> memory_mapped_model_file) {
   auto loader =
       absl::WrapUnique(new LitertLmLoader(std::move(memory_mapped_model_file)));

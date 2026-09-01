@@ -32,18 +32,16 @@ class MockLiteRtRunner : public LiteRtRunner {
   MockLiteRtRunner() = default;
   ~MockLiteRtRunner() override = default;
 
-  MOCK_METHOD(absl::StatusOr<std::vector<::litert::TensorBuffer>>,
-              CreateInputBuffers, (absl::string_view signature_name),
-              (override));
+  MOCK_METHOD(absl::StatusOr<std::vector<TensorBuffer>>, CreateInputBuffers,
+              (absl::string_view signature_name), (override));
 
-  MOCK_METHOD(absl::StatusOr<std::vector<::litert::TensorBuffer>>,
-              CreateOutputBuffers, (absl::string_view signature_name),
-              (override));
+  MOCK_METHOD(absl::StatusOr<std::vector<TensorBuffer>>, CreateOutputBuffers,
+              (absl::string_view signature_name), (override));
 
   MOCK_METHOD(absl::Status, Run,
               (absl::string_view signature_name,
-               absl::Span<const ::litert::TensorBuffer> input_buffers,
-               absl::Span<const ::litert::TensorBuffer> output_buffers),
+               absl::Span<const TensorBuffer> input_buffers,
+               absl::Span<const TensorBuffer> output_buffers),
               (override));
 };
 

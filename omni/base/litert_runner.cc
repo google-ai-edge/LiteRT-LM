@@ -30,24 +30,23 @@
 
 namespace litert::omni {
 
-LiteRtRunnerImpl::LiteRtRunnerImpl(
-    ::litert::CompiledModel* absl_nonnull compiled_model)
+LiteRtRunnerImpl::LiteRtRunnerImpl(CompiledModel* absl_nonnull compiled_model)
     : compiled_model_(compiled_model) {}
 
 LiteRtRunnerImpl::LiteRtRunnerImpl(
-    std::unique_ptr<::litert::CompiledModel> absl_nonnull compiled_model)
+    std::unique_ptr<CompiledModel> absl_nonnull compiled_model)
     : owned_compiled_model_(std::move(compiled_model)),
       compiled_model_(owned_compiled_model_.get()) {}
 
-absl::StatusOr<std::vector<::litert::TensorBuffer>>
-LiteRtRunnerImpl::CreateInputBuffers(absl::string_view signature_name) {
+absl::StatusOr<std::vector<TensorBuffer>> LiteRtRunnerImpl::CreateInputBuffers(
+    absl::string_view signature_name) {
   LITERT_ASSIGN_OR_RETURN(auto inputs,
                           compiled_model_->CreateInputBuffers(signature_name));
   return inputs;
 }
 
-absl::StatusOr<std::vector<::litert::TensorBuffer>>
-LiteRtRunnerImpl::CreateOutputBuffers(absl::string_view signature_name) {
+absl::StatusOr<std::vector<TensorBuffer>> LiteRtRunnerImpl::CreateOutputBuffers(
+    absl::string_view signature_name) {
   LITERT_ASSIGN_OR_RETURN(auto outputs,
                           compiled_model_->CreateOutputBuffers(signature_name));
   return outputs;
@@ -55,8 +54,8 @@ LiteRtRunnerImpl::CreateOutputBuffers(absl::string_view signature_name) {
 
 absl::Status LiteRtRunnerImpl::Run(
     absl::string_view signature_name,
-    absl::Span<const ::litert::TensorBuffer> input_buffers,
-    absl::Span<const ::litert::TensorBuffer> output_buffers) {
+    absl::Span<const TensorBuffer> input_buffers,
+    absl::Span<const TensorBuffer> output_buffers) {
   LITERT_ASSIGN_OR_RETURN(size_t signature_index,
                           compiled_model_->GetSignatureIndex(signature_name));
   LITERT_RETURN_IF_ERROR(

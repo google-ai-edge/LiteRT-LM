@@ -284,7 +284,8 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
           prefill_input_buffers,
       absl::flat_hash_map<absl::string_view /*output_name*/, TensorBuffer>&
           prefill_output_buffers,
-      absl::Span<const int> ids, bool async);
+      absl::Span<const int> ids, bool async,
+      const ExecutorInputs* inputs = nullptr);
 
   // Helper function of PrefillInternal to bind input/output tensors for prefill
   // and run prefill signature.

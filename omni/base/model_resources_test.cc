@@ -52,5 +52,16 @@ TEST(ModelResourcesTest, SetAndGetEnvironment) {
   }
 }
 
+TEST(ModelResourcesTest, AddAndGetLmRunner) {
+  ModelResources resources;
+  EXPECT_FALSE(resources.HasLmRunner("test_lm"));
+  EXPECT_THAT(resources.GetLmRunner("test_lm"),
+              StatusIs(absl::StatusCode::kNotFound));
+
+  // Reject adding null pointer
+  EXPECT_THAT(resources.AddLmRunner("test_lm", nullptr),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
 }  // namespace
 }  // namespace litert::omni

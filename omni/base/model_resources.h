@@ -24,11 +24,13 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
+#include "omni/base/litert_lm_runner.h"
 
 namespace litert::omni {
 
 // Generic key-value container for shared heavy resources (such as LiteRT
-// CompiledModel instances and Environment) used across Omni pipeline sessions.
+// CompiledModel, LiteRtLmRunner instances, and Environment) used across Omni
+// pipeline sessions.
 class ModelResources {
  public:
   ModelResources() = default;
@@ -47,6 +49,17 @@ class ModelResources {
   // Checks if a CompiledModel exists under the given string key.
   bool HasCompiledModel(absl::string_view key) const;
 
+  // Registers a LiteRtLmRunner instance under a string key.
+  absl::Status AddLmRunner(absl::string_view key,
+                           std::shared_ptr<LiteRtLmRunner> runner);
+
+  // Retrieves a LiteRtLmRunner instance by string key.
+  absl::StatusOr<std::shared_ptr<LiteRtLmRunner>> GetLmRunner(
+      absl::string_view key) const;
+
+  // Checks if a LiteRtLmRunner exists under the given string key.
+  bool HasLmRunner(absl::string_view key) const;
+
   // Sets the shared LiteRT Environment.
   void SetEnvironment(std::shared_ptr<Environment> env);
 
@@ -56,6 +69,7 @@ class ModelResources {
  private:
   std::shared_ptr<Environment> env_;
   absl::flat_hash_map<std::string, std::shared_ptr<CompiledModel>> models_;
+  absl::flat_hash_map<std::string, std::shared_ptr<LiteRtLmRunner>> lm_runners_;
 };
 
 }  // namespace litert::omni

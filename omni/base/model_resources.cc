@@ -24,6 +24,7 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
+#include "omni/base/litert_lm_runner.h"
 
 namespace litert::omni {
 
@@ -52,6 +53,30 @@ absl::StatusOr<std::shared_ptr<CompiledModel>> ModelResources::GetCompiledModel(
 
 bool ModelResources::HasCompiledModel(absl::string_view key) const {
   return models_.contains(key);
+}
+
+absl::Status ModelResources::AddLmRunner(
+    absl::string_view key, std::shared_ptr<LiteRtLmRunner> runner) {
+  if (runner == nullptr) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Cannot add null LiteRtLmRunner for key: ", key));
+  }
+  lm_runners_.insert_or_assign(std::string(key), std::move(runner));
+  return absl::OkStatus();
+}
+
+absl::StatusOr<std::shared_ptr<LiteRtLmRunner>> ModelResources::GetLmRunner(
+    absl::string_view key) const {
+  auto it = lm_runners_.find(key);
+  if (it == lm_runners_.end()) {
+    return absl::NotFoundError(
+        absl::StrCat("LiteRtLmRunner not found for key: ", key));
+  }
+  return it->second;
+}
+
+bool ModelResources::HasLmRunner(absl::string_view key) const {
+  return lm_runners_.contains(key);
 }
 
 void ModelResources::SetEnvironment(std::shared_ptr<Environment> env) {
