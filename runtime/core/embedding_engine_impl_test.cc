@@ -225,7 +225,7 @@ TEST(EmbeddingEngineImplTest, CreateWithNullEnvironmentFails) {
                HasSubstr("OwnedEnvironment cannot be null.")));
 }
 
-TEST(EmbeddingEngineImplTest, CreateWithNullTokenizerFails) {
+TEST(EmbeddingEngineImplTest, CreateWithNullTokenizerSuccess) {
   const std::string& model_path = (std::filesystem::path(::testing::SrcDir()) /
                                    std::string(kTestEmbeddingModelPath))
                                       .string();
@@ -235,11 +235,143 @@ TEST(EmbeddingEngineImplTest, CreateWithNullTokenizerFails) {
   ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
                                           model_assets, Backend::CPU));
 
-  EXPECT_THAT(
-      EmbeddingEngineImpl::Create(std::move(resources), std::move(env),
-                                  /*tokenizer=*/nullptr, std::move(settings)),
-      StatusIs(absl::StatusCode::kInvalidArgument,
-               HasSubstr("Tokenizer cannot be null.")));
+  // 3-arg overload without Tokenizer parameter.
+  EXPECT_OK(EmbeddingEngineImpl::Create(std::move(resources), std::move(env),
+                                        std::move(settings)));
+
+  // 4-arg overload with explicit nullptr Tokenizer.
+  ASSERT_OK_AND_ASSIGN(auto resources2, CreateTestModelResources(model_path));
+  ASSERT_OK_AND_ASSIGN(auto env2, CreateTestEnvironment());
+  ASSERT_OK_AND_ASSIGN(auto settings2, EmbeddingEngineSettings::CreateDefault(
+                                           model_assets, Backend::CPU));
+  EXPECT_OK(EmbeddingEngineImpl::Create(std::move(resources2), std::move(env2),
+                                        /*tokenizer=*/nullptr,
+                                        std::move(settings2)));
+}
+
+TEST(EmbeddingEngineImplTest,
+     CreateWithNullTokenizerAndTokenStrInMetadataSuccess) {
+  const std::string& model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                   std::string(kTestEmbeddingModelPath))
+                                      .string();
+  ASSERT_OK_AND_ASSIGN(auto model_assets, ModelAssets::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(auto real_resources,
+                       CreateTestModelResources(model_path));
+  proto::EmbeddingMetadata expected_metadata;
+  expected_metadata.mutable_bos_token()->set_token_str("<bos>");
+  auto resources = std::make_unique<FakeModelResources>(
+      std::move(real_resources), /*has_vision=*/false, /*has_audio=*/false,
+      &expected_metadata);
+  ASSERT_OK_AND_ASSIGN(auto env, CreateTestEnvironment());
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+
+  ASSERT_OK_AND_ASSIGN(auto engine, EmbeddingEngineImpl::Create(
+                                        std::move(resources), std::move(env),
+                                        std::move(settings)));
+  auto* engine_impl = dynamic_cast<EmbeddingEngineImpl*>(engine.get());
+  ASSERT_NE(engine_impl, nullptr);
+  EXPECT_TRUE(engine_impl->GetSpecialTokens().bos_token_ids.empty());
+}
+
+TEST(EmbeddingEngineImplTest,
+     ComputeEmbeddingWithNullTokenizerAndTokenIdsSuccess) {
+  const std::string& model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                   std::string(kTestEmbeddingModelPath))
+                                      .string();
+  ASSERT_OK_AND_ASSIGN(auto model_assets, ModelAssets::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(auto resources, CreateTestModelResources(model_path));
+  ASSERT_OK_AND_ASSIGN(auto env, CreateTestEnvironment());
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+
+  ASSERT_OK_AND_ASSIGN(auto engine, EmbeddingEngineImpl::Create(
+                                        std::move(resources), std::move(env),
+                                        std::move(settings)));
+
+  ASSERT_OK_AND_ASSIGN(auto token_tensor,
+                       litert::support::Tokenizer::TokenIdsToTensorBuffer(
+                           std::vector<int>{1, 2, 3}));
+  std::vector<InputData> contents;
+  contents.push_back(InputText(std::move(token_tensor)));
+
+  EmbeddingOptions options;
+  options.normalize = false;
+
+  ASSERT_OK_AND_ASSIGN(auto response,
+                       engine->ComputeEmbedding(contents, options));
+  EXPECT_FALSE(response.embedding.empty());
+  EXPECT_EQ(response.input_length, 3);
+}
+
+TEST(EmbeddingEngineImplTest,
+     ComputeEmbeddingBatchWithNullTokenizerAndTokenIdsSuccess) {
+  const std::string& model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                   std::string(kTestEmbeddingModelPath))
+                                      .string();
+  ASSERT_OK_AND_ASSIGN(auto model_assets, ModelAssets::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(auto resources, CreateTestModelResources(model_path));
+  ASSERT_OK_AND_ASSIGN(auto env, CreateTestEnvironment());
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+
+  ASSERT_OK_AND_ASSIGN(auto engine, EmbeddingEngineImpl::Create(
+                                        std::move(resources), std::move(env),
+                                        std::move(settings)));
+
+  ASSERT_OK_AND_ASSIGN(auto token_tensor1,
+                       litert::support::Tokenizer::TokenIdsToTensorBuffer(
+                           std::vector<int>{1, 2, 3}));
+  ASSERT_OK_AND_ASSIGN(auto token_tensor2,
+                       litert::support::Tokenizer::TokenIdsToTensorBuffer(
+                           std::vector<int>{4, 5}));
+
+  std::vector<std::vector<InputData>> batch_contents;
+  std::vector<InputData> contents1;
+  contents1.push_back(InputText(std::move(token_tensor1)));
+  batch_contents.push_back(std::move(contents1));
+
+  std::vector<InputData> contents2;
+  contents2.push_back(InputText(std::move(token_tensor2)));
+  batch_contents.push_back(std::move(contents2));
+
+  EmbeddingOptions options;
+  options.normalize = false;
+
+  ASSERT_OK_AND_ASSIGN(auto responses,
+                       engine->ComputeEmbeddingBatch(batch_contents, options));
+  EXPECT_EQ(responses.size(), 2);
+  EXPECT_FALSE(responses[0].embedding.empty());
+  EXPECT_EQ(responses[0].input_length, 3);
+  EXPECT_FALSE(responses[1].embedding.empty());
+  EXPECT_EQ(responses[1].input_length, 2);
+}
+
+TEST(EmbeddingEngineImplTest,
+     ComputeEmbeddingWithNullTokenizerAndRawTextFails) {
+  const std::string& model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                   std::string(kTestEmbeddingModelPath))
+                                      .string();
+  ASSERT_OK_AND_ASSIGN(auto model_assets, ModelAssets::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(auto resources, CreateTestModelResources(model_path));
+  ASSERT_OK_AND_ASSIGN(auto env, CreateTestEnvironment());
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+
+  ASSERT_OK_AND_ASSIGN(auto engine, EmbeddingEngineImpl::Create(
+                                        std::move(resources), std::move(env),
+                                        std::move(settings)));
+
+  std::vector<InputData> contents;
+  contents.push_back(InputText("hello world"));
+
+  EmbeddingOptions options;
+  options.normalize = false;
+
+  EXPECT_THAT(engine->ComputeEmbedding(contents, options),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       HasSubstr("Raw text input requires a tokenizer, but no "
+                                 "tokenizer was provided.")));
 }
 
 TEST(EmbeddingEngineImplTest, CreateSuccess) {

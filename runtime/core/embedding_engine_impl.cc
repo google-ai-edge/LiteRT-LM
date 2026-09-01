@@ -176,6 +176,15 @@ absl::StatusOr<uint64_t> GetNumTokens(const ExecutorInputs& executor_inputs) {
 // static
 absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
     std::unique_ptr<ModelResources> resources,
+    std::unique_ptr<OwnedEnvironment> env, EmbeddingEngineSettings settings,
+    std::optional<BenchmarkInfo> benchmark_info) {
+  return Create(std::move(resources), std::move(env), /*tokenizer=*/nullptr,
+                std::move(settings), std::move(benchmark_info));
+}
+
+// static
+absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
+    std::unique_ptr<ModelResources> resources,
     std::unique_ptr<OwnedEnvironment> env,
     std::unique_ptr<::litert::support::Tokenizer> tokenizer,
     EmbeddingEngineSettings settings,
@@ -185,9 +194,6 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
   }
   if (env == nullptr) {
     return absl::InvalidArgumentError("OwnedEnvironment cannot be null.");
-  }
-  if (tokenizer == nullptr) {
-    return absl::InvalidArgumentError("Tokenizer cannot be null.");
   }
 
   // Initialize metadata.
@@ -276,8 +282,10 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
   std::unique_ptr<::litert::support::AudioPreprocessor> audio_preprocessor =
       nullptr;
   if (metadata.has_value()) {
-    LITERT_ASSIGN_OR_RETURN(special_tokens,
-                            ExtractSpecialTokens(*metadata, *tokenizer));
+    if (tokenizer != nullptr) {
+      LITERT_ASSIGN_OR_RETURN(special_tokens,
+                              ExtractSpecialTokens(*metadata, *tokenizer));
+    }
     image_preprocess_parameter =
         ExtractImagePreprocessParameter(*metadata);
     LITERT_ASSIGN_OR_RETURN(audio_preprocessor,
@@ -525,6 +533,11 @@ absl::StatusOr<ExecutorInputs> EmbeddingEngineImpl::ProcessAndCombineContents(
                                   ids_buffer_span.begin(),
                                   ids_buffer_span.end());
       } else {
+        if (tokenizer_ == nullptr) {
+          return absl::InvalidArgumentError(
+              "Raw text input requires a tokenizer, but no tokenizer was "
+              "provided.");
+        }
         if (benchmark_info_.has_value()) {
           ABSL_RETURN_IF_ERROR(benchmark_info_->TimeTextToTokenIdsStart());
         }

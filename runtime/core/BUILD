@@ -40,6 +40,7 @@ package_group(
         # for SpeechProcessor
         # for AI Edge Hub
         # for AI Edge Gallery
+        # for AICore
         # for MediaPipe
         # for Tunelab Gemma
     ],
