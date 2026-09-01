@@ -204,6 +204,7 @@ cc_library(
         ":litert_speech_recognizer",
         ":speech_recognizer",
         "@com_google_absl//absl/base:nullability",
+        "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
@@ -212,6 +213,7 @@ cc_library(
         "@litert//litert/cc:litert_macros",
         "@litert//litert/cc:litert_tensor_buffer",
         "//omni/base:litert_runner",
+        "//omni/base:stateful_litert_runner",
     ],
 )
 

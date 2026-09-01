@@ -26,6 +26,7 @@
 #include "omni/asr/litert_speech_recognizer.h"
 #include "omni/asr/speech_recognizer.h"
 #include "omni/base/litert_runner.h"
+#include "omni/base/stateful_litert_runner.h"
 
 namespace litert::omni::asr {
 
@@ -43,29 +44,20 @@ class TdtDecoder : public LiteRtSpeechRecognizer::Decoder {
       std::vector<TensorBuffer>& encoder_outputs) override;
 
  private:
-  TdtDecoder(
-      LiteRtRunner* absl_nonnull runner,
-      std::vector<TensorBuffer> decode_input_buffers,
-      std::vector<TensorBuffer> decode_output_buffers,
-      std::optional<std::vector<TensorBuffer>> stateful_decode_input_buffers,
-      std::optional<std::vector<TensorBuffer>> stateful_decode_output_buffers,
-      size_t max_time_index, size_t num_token_ids, size_t num_logits_per_token,
-      int decode_start_token_id, int decode_statefully_after);
+  TdtDecoder(LiteRtRunner* absl_nonnull runner,
+             std::unique_ptr<StatefulLiteRtRunner> stateful_runner,
+             std::vector<TensorBuffer> decode_input_buffers,
+             std::vector<TensorBuffer> decode_output_buffers,
+             std::optional<TensorBuffer> stateful_decode_token_ids_buffer,
+             size_t max_time_index, size_t num_token_ids,
+             size_t num_logits_per_token, int decode_start_token_id,
+             int decode_statefully_after);
 
-  // Prepares input and output buffers for a single inference call.
-  absl::StatusOr<std::vector<TensorBuffer>> GetInputBuffersForInference(
-      std::vector<TensorBuffer>& encoder_outputs,
-      TensorBuffer& token_ids_buffer);
-  absl::StatusOr<std::vector<TensorBuffer>> GetOutputBuffersForInference(
-      TensorBuffer& logits_buffer);
-
-  LiteRtRunner* const absl_nonnull runner_;
+  LiteRtRunner* runner_;
+  std::unique_ptr<StatefulLiteRtRunner> stateful_runner_;
   std::vector<TensorBuffer> decode_input_buffers_;
   std::vector<TensorBuffer> decode_output_buffers_;
-  std::optional<std::vector<TensorBuffer>> stateful_decode_input_buffers_;
-  std::optional<std::vector<TensorBuffer>> stateful_decode_output_buffers_;
-  std::vector<TensorBuffer*> input_states_buffers_;
-  std::vector<TensorBuffer*> output_states_buffers_;
+  std::optional<TensorBuffer> stateful_decode_token_ids_buffer_;
   const size_t max_time_index_;
   const size_t num_token_ids_;
   const size_t num_logits_per_token_;
