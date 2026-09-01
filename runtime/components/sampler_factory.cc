@@ -631,7 +631,8 @@ absl::StatusOr<std::unique_ptr<Sampler>> CreateCpuSampler(
     case proto::SamplerParameters::TOP_P:
       return TopPSampler::Create(sampler_params.k(), sampler_params.p(),
                                  sampler_params.temperature(), batch_size,
-                                 sequence_size, sampler_params.seed());
+                                 sequence_size, sampler_params.seed(),
+                                 sampler_params.compute_exact_log_probs());
     default:
       return absl::UnimplementedError(absl::StrCat(
           "Sampler type: ", sampler_params.type(), " not implemented yet."));
