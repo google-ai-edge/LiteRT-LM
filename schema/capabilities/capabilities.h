@@ -18,6 +18,9 @@
 #include <istream>
 #include <optional>
 #include <ostream>
+#include <string>
+#include <vector>
+
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 
@@ -55,6 +58,22 @@ struct SamplerParameters {
   float temperature = 0.0;
 };
 
+// NPU brands supported by the model.
+enum class NpuBrand {
+  kUnknown = 0,
+  kQualcomm = 1,
+  kGoogleTensor = 2,
+  kMediaTek = 3,
+};
+
+// Hardware backends supported by the model.
+struct SupportedBackends {
+  bool cpu = false;
+  bool gpu = false;
+  bool npu = false;
+  NpuBrand npu_brand = NpuBrand::kUnknown;
+};
+
 // Extracted capabilities and configurations for Large Language Models (LLM).
 struct LlmInferenceCapability {
   // Input modalities supported by the model (e.g. Text, Vision, Audio, Video).
@@ -77,8 +96,25 @@ struct LlmInferenceCapability {
   // defined.
   int max_vision_token_budget = -1;
 
+  // Vision signature selection capacities, representing the discrete vision
+  // token budgets supported by each signature (e.g. [64, 256, 1024]).
+  // std::nullopt if the model does not support vision or does not define
+  // signature capacities.
+  std::optional<std::vector<int>> vision_signature_selection;
+
   // Default sampler parameters for the model.
   SamplerParameters default_sampler_params;
+
+  // Modality-specific hardware backends.
+  // When a modality is not supported (e.g. input_modalities.vision == false),
+  // all backend flags (cpu, gpu, npu) in the corresponding struct remain false.
+  SupportedBackends text_supported_backends;
+  SupportedBackends vision_supported_backends;
+  SupportedBackends audio_supported_backends;
+  SupportedBackends video_supported_backends;
+
+  // The minimum LiteRT-LM runtime version required to run this model.
+  std::string min_runtime_version;
 };
 
 // Container for overall model metadata and capabilities.
@@ -99,6 +135,8 @@ absl::StatusOr<ModelCapabilities> InspectModel(
 
 std::ostream& operator<<(std::ostream& os,
                          const SupportedModalities& modalities);
+std::ostream& operator<<(std::ostream& os, const NpuBrand& brand);
+std::ostream& operator<<(std::ostream& os, const SupportedBackends& backends);
 std::ostream& operator<<(std::ostream& os,
                          const LlmInferenceCapability& llm_cap);
 std::ostream& operator<<(std::ostream& os,

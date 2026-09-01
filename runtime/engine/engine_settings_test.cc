@@ -1202,14 +1202,13 @@ TEST(SessionConfigTest, MaybeUpdateAndValidate) {
 TEST(SessionConfigTest, MaybeUpdateAndValidatePickGpuAsSamplerBackend) {
   auto model_assets = ModelAssets::Create("test_model_path_1");
   ASSERT_OK(model_assets);
-  auto settings = EngineSettings::CreateDefault(*model_assets);
-  EXPECT_OK(
-      settings->GetMutableMainExecutorSettings().SetBackend(Backend::GPU));
+  ASSERT_OK_AND_ASSIGN(auto settings,
+                       EngineSettings::CreateDefault(*model_assets));
+  EXPECT_OK(settings.GetMutableMainExecutorSettings().SetBackend(Backend::GPU));
   auto session_config = SessionConfig::CreateDefault();
-  ASSERT_OK(settings);
   // We didn't call MaybeUpdateAndValidate on EngineSettings, so some of the
   // required fields are not set. So the validation should fail.
-  EXPECT_THAT(session_config.MaybeUpdateAndValidate(*settings),
+  EXPECT_THAT(session_config.MaybeUpdateAndValidate(settings),
               testing::status::StatusIs(absl::StatusCode::kInvalidArgument));
 
   MockTokenizer tokenizer;
@@ -1219,9 +1218,9 @@ TEST(SessionConfigTest, MaybeUpdateAndValidatePickGpuAsSamplerBackend) {
       .WillRepeatedly(Return(std::vector<int>{1}));
   proto::LlmMetadata llm_metadata = CreateLlmMetadata();
 
-  EXPECT_OK(settings->MaybeUpdateAndValidate(&tokenizer, &llm_metadata));
+  EXPECT_OK(settings.MaybeUpdateAndValidate(&tokenizer, &llm_metadata));
   // The validation should pass now.
-  EXPECT_OK(session_config.MaybeUpdateAndValidate(*settings));
+  EXPECT_OK(session_config.MaybeUpdateAndValidate(settings));
   EXPECT_EQ(session_config.GetSamplerBackend(), Backend::GPU);
 }
 
@@ -1596,6 +1595,48 @@ TEST(SessionConfigTest,
   EXPECT_FALSE(session_config.GetPromptTemplates().has_user());
   EXPECT_FALSE(session_config.GetPromptTemplates().has_model());
   EXPECT_FALSE(session_config.GetPromptTemplates().has_system());
+}
+
+TEST(EngineSettingsTest, MaybeUpdateAndValidate_RuntimeVersionCompatible) {
+  auto model_assets = ModelAssets::Create("test_model_path_1");
+  ASSERT_OK(model_assets);
+  auto settings = EngineSettings::CreateDefault(*model_assets);
+  ASSERT_OK(settings);
+
+  MockTokenizer tokenizer;
+  EXPECT_CALL(tokenizer, TokenToId).WillRepeatedly(Return(1));
+  EXPECT_CALL(tokenizer, TextToTokenIds)
+      .WillRepeatedly(Return(std::vector<int>{1}));
+  EXPECT_CALL(tokenizer, TokenIdsToText)
+      .WillRepeatedly(Return(absl::NotFoundError("not found")));
+
+  proto::LlmMetadata llm_metadata = CreateLlmMetadata();
+  // Current runtime is 0.17.0, model requires 0.11.0. This should succeed.
+  llm_metadata.set_min_runtime_version("0.11.0");
+
+  EXPECT_OK(settings->MaybeUpdateAndValidate(&tokenizer, &llm_metadata));
+}
+
+TEST(EngineSettingsTest,
+     MaybeUpdateAndValidate_RuntimeVersionIncompatible_LogsWarning) {
+  auto model_assets = ModelAssets::Create("test_model_path_1");
+  ASSERT_OK(model_assets);
+  auto settings = EngineSettings::CreateDefault(*model_assets);
+  ASSERT_OK(settings);
+
+  MockTokenizer tokenizer;
+  EXPECT_CALL(tokenizer, TokenToId).WillRepeatedly(Return(1));
+  EXPECT_CALL(tokenizer, TextToTokenIds)
+      .WillRepeatedly(Return(std::vector<int>{1}));
+  EXPECT_CALL(tokenizer, TokenIdsToText)
+      .WillRepeatedly(Return(absl::NotFoundError("not found")));
+
+  proto::LlmMetadata llm_metadata = CreateLlmMetadata();
+  // Current runtime is 0.17.0, model requires 0.18.0. Should not fail, but log
+  // a warning.
+  llm_metadata.set_min_runtime_version("0.18.0");
+
+  EXPECT_OK(settings->MaybeUpdateAndValidate(&tokenizer, &llm_metadata));
 }
 
 }  // namespace

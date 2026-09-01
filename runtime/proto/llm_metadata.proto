@@ -115,4 +115,8 @@ message LlmMetadata {
 
   // Pad token used to pad input sequences.
   optional TokenUnion pad_token = 13;
+
+  // The minimum LiteRT-LM runtime version required to run this model (e.g., "0.11.0").
+  // Note: This refers to the official LiteRT-LM release version, not the C API release version.
+  optional string min_runtime_version = 14;
 }

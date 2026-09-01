@@ -35,11 +35,13 @@ cc_library(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:str_format",
+        "@flatbuffers",
         "//runtime/proto:llm_metadata_cc_proto",
         "//runtime/proto:llm_model_type_cc_proto",
         "//runtime/util:litert_status_util",
         "//schema/core:litertlm_header_schema",
         "//schema/core:litertlm_read",
+        "@litert//tflite/schema:schema_fbs",
     ],
 )
 
@@ -51,11 +53,14 @@ cc_test(
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_matchers",
+        "@com_google_absl//absl/strings",
         "@flatbuffers",
         "//runtime/proto:llm_metadata_cc_proto",
         "//schema/core:litertlm_header",
         "//schema/core:litertlm_header_schema",
         "//support/util:test_utils",
+        "@litert//tflite:version",
+        "@litert//tflite/schema:schema_fbs",
     ],
 )
 

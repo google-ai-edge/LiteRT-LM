@@ -30,8 +30,10 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/str_format.h"  // from @com_google_absl
 #include "absl/strings/str_split.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "runtime/core/version.h"
 #include "runtime/components/constrained_decoding/suppress_tokens_config.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/executor/audio/audio_executor_settings.h"
@@ -251,6 +253,19 @@ absl::Status EngineSettings::MaybeUpdateAndValidate(
   // Copy the metadata from the file if it is provided.
   if (metadata_from_file != nullptr) {
     metadata = *metadata_from_file;
+  }
+
+  // Graceful runtime version compatibility check.
+  if (!metadata.min_runtime_version().empty()) {
+    if (CompareVersions(LITERT_LM_VERSION,
+                        metadata.min_runtime_version()) < 0) {
+      ABSL_LOG(WARNING) << absl::StrFormat(
+          "Model expects minimum LiteRT-LM runtime version %s, but current "
+          "runtime version is %s. If errors are encountered, please upgrade "
+          "the LiteRT-LM runtime to version %s or newer.",
+          metadata.min_runtime_version(), LITERT_LM_VERSION,
+          metadata.min_runtime_version());
+    }
   }
 
   // Convert the start/stop tokens from string to token ids.

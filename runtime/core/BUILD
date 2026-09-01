@@ -14,6 +14,7 @@
 
 # [Google-internal load of `cc_library`]
 # [Google-internal load of `cc_test`]
+load("//:version.bzl", "VERSION")
 
 package(
     default_hdrs_check = "strict",
@@ -624,5 +625,25 @@ cc_test(
         "//support/preprocessor:image_preprocessor",
         "//support/preprocessor:image_preprocessor_impl",  # buildcleaner: keep
         "//support/tokenizer",
+    ],
+)
+
+cc_library(
+    name = "version",
+    hdrs = ["version.h"],
+    defines = [
+        'LITERT_LM_VERSION_STRING=\\"' + VERSION + '\\"',
+    ],
+    deps = [
+        "@com_google_absl//absl/strings",
+    ],
+)
+
+cc_test(
+    name = "version_test",
+    srcs = ["version_test.cc"],
+    deps = [
+        ":version",
+        "@com_google_googletest//:gtest_main",
     ],
 )
