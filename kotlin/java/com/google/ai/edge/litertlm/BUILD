@@ -19,8 +19,16 @@ package(default_visibility = ["//visibility:public"])
 
 kt_jvm_library(
     name = "litertlm-jvm",
-    srcs = glob(["*.kt"]),
-    resources = ["//kotlin/java/com/google/ai/edge/litertlm/jni:litertlm_jni"],
+    srcs = glob(
+        ["*.kt"],
+        exclude = [
+            "*Tts*.kt",
+            "LiteRtOmniJni.kt",
+        ],
+    ),
+    resources = [
+        "//kotlin/java/com/google/ai/edge/litertlm/jni:litertlm_jni",
+    ],
     resource_strip_prefix = "kotlin/java",
     deps = [
         "@rules_kotlin//kotlin/compiler:kotlin-reflect",
@@ -32,7 +40,13 @@ kt_jvm_library(
 # Note: To build with dynamic linking, use the following build flags:
 kt_android_library(
     name = "litertlm-android",
-    srcs = glob(["*.kt"]),
+    srcs = glob(
+        ["*.kt"],
+        exclude = [
+            "*Tts*.kt",
+            "LiteRtOmniJni.kt",
+        ],
+    ),
     deps = [
         "@rules_kotlin//kotlin/compiler:kotlin-reflect",
         "@maven//:com_google_code_gson_gson",
