@@ -76,6 +76,7 @@
 #include "tflite/types/half.h"  // from @litert
 
 namespace litert::lm {
+
 namespace {
 
 using ::absl::Span;
@@ -219,6 +220,57 @@ absl::StatusOr<TensorBuffer> CreateHostOutputBuffer(
                                            env, TensorBufferType::kHostMemory,
                                            std::move(host_tensor_type), size));
   return buffer;
+}
+
+absl::Status InitializeAuxiliaryExecutorComponents(
+    ::litert::Environment& lrt_env,
+    const LlmExecutorSettings& executor_settings, CompiledModel& compiled_model,
+    ModelResources* resources,
+    std::unique_ptr<EmbeddingLookupManager>& embedding_lookup,
+    std::unique_ptr<EmbeddingLookupManager>& per_layer_embedding_lookup,
+    std::unique_ptr<CompiledModel> compiled_mtp_drafter_model,
+    std::unique_ptr<LlmLiteRtMtpDrafter>& mtp_drafter,
+    const proto::ExecutorMetadata*& executor_metadata) {
+  if (resources != nullptr) {
+    auto executor_metadata_or = resources->GetExecutorMetadata();
+    if (executor_metadata_or.ok()) {
+      executor_metadata = *executor_metadata_or;
+    }
+  }
+  if (embedding_lookup == nullptr && resources != nullptr) {
+    ABSL_RETURN_IF_ERROR(InitializeEmbeddingLookups(
+        lrt_env, *resources, embedding_lookup, per_layer_embedding_lookup));
+  }
+  if (mtp_drafter == nullptr && resources != nullptr) {
+    const auto& advanced_settings = executor_settings.GetAdvancedSettings();
+    if (advanced_settings.has_value() &&
+        advanced_settings->enable_speculative_decoding) {
+      RET_CHECK_NE(embedding_lookup, nullptr);
+      std::optional<std::reference_wrapper<EmbeddingLookupManager>>
+          ple_manager_opt;
+      if (per_layer_embedding_lookup) {
+        ple_manager_opt = std::ref(*per_layer_embedding_lookup);
+      }
+      if (compiled_mtp_drafter_model != nullptr) {
+        ABSL_ASSIGN_OR_RETURN(
+            const litert::Model* base_model_desc,
+            resources->GetTFLiteModel(ModelType::kTfLitePrefillDecode));
+        ABSL_ASSIGN_OR_RETURN(
+            mtp_drafter,
+            LlmLiteRtMtpDrafter::Create(
+                lrt_env, std::move(*compiled_mtp_drafter_model),
+                executor_settings, compiled_model, *base_model_desc,
+                *embedding_lookup, ple_manager_opt, executor_metadata));
+      } else {
+        ABSL_ASSIGN_OR_RETURN(
+            mtp_drafter,
+            LlmLiteRtMtpDrafter::Create(lrt_env, *resources, executor_settings,
+                                        compiled_model, *embedding_lookup,
+                                        ple_manager_opt, executor_metadata));
+      }
+    }
+  }
+  return absl::OkStatus();
 }
 
 }  // namespace
@@ -1240,8 +1292,8 @@ absl::StatusOr<TensorBuffer> LlmLiteRtCompiledModelExecutorBase::DecodeLogits(
 absl::StatusOr<std::string>
 LlmLiteRtCompiledModelExecutorBase::GetPrefillSignatureKey() const {
   std::string prefill_signature_key;
-  for (int i = 0; i < model_.GetNumSignatures(); ++i) {
-    LITERT_ASSIGN_OR_RETURN(auto sig, model_.GetSignature(i));
+  for (int i = 0; i < compiled_model_->GetNumSignatures(); ++i) {
+    LITERT_ASSIGN_OR_RETURN(auto sig, compiled_model_->GetSignature(i));
     absl::string_view key = sig.Key();
     if (absl::StartsWith(key, kPrefillSignatureRunner)) {
       prefill_signature_key = key;
@@ -1692,6 +1744,51 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
   ABSL_ASSIGN_OR_RETURN(
       auto litert_model,
       resources.GetTFLiteModel(ModelType::kTfLitePrefillDecode));
+  if (!litert_model || !*litert_model) {
+    return absl::InternalError("Failed to build LiteRt model");
+  }
+  auto activation_data_type = ActivationDataType::FLOAT16;
+  // TODO: b/433590109 - Some GPUs do not support FP16, so we need to check the
+  // capabilities of the GPU and set the activation data type accordingly.
+  if (executor_settings.GetActivationDataType().has_value()) {
+    activation_data_type = executor_settings.GetActivationDataType().value();
+  }
+  LITERT_ASSIGN_OR_RETURN(auto decode_signature,
+                          litert_model->FindSignature(kDecodeSignatureRunner));
+  ABSL_ASSIGN_OR_RETURN(
+      ModelSignatures signatures,
+      GetModelSignaturesFromInputOutputNames(decode_signature.InputNames(),
+                                             decode_signature.OutputNames()));
+  LITERT_ASSIGN_OR_RETURN(
+      auto compilation_options,
+      CreateCompilationOptions(executor_settings, activation_data_type,
+                               &signatures));
+
+  ABSL_RETURN_IF_ERROR(SetExternalWeightOptions(
+      resources, ModelType::kTfLitePrefillDecode, compilation_options));
+
+  LITERT_ASSIGN_OR_RETURN(
+      auto compiled_model,
+      CompiledModel::Create(lrt_env, litert_model->Get(), compilation_options));
+
+  return Create(std::move(executor_settings), lrt_env,
+                std::make_unique<CompiledModel>(std::move(compiled_model)),
+                &resources);
+}
+
+absl::StatusOr<std::unique_ptr<LlmLiteRtCompiledModelExecutorStatic>>
+LlmLiteRtCompiledModelExecutorStatic::Create(
+    LlmExecutorSettings executor_settings, Environment& lrt_env,
+    std::unique_ptr<CompiledModel> compiled_model, ModelResources* resources,
+    std::unique_ptr<EmbeddingLookupManager> embedding_lookup,
+    std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup,
+    std::unique_ptr<CompiledModel> compiled_mtp_drafter_model,
+    std::unique_ptr<LlmLiteRtMtpDrafter> mtp_drafter) {
+  const proto::ExecutorMetadata* executor_metadata = nullptr;
+  ABSL_RETURN_IF_ERROR(InitializeAuxiliaryExecutorComponents(
+      lrt_env, executor_settings, *compiled_model, resources, embedding_lookup,
+      per_layer_embedding_lookup, std::move(compiled_mtp_drafter_model),
+      mtp_drafter, executor_metadata));
   std::string cache_path = executor_settings.GetCacheDir();
   auto activation_data_type = ActivationDataType::FLOAT16;
   // TODO: b/433590109 - Some GPUs do not support FP16, so we need to check the
@@ -1710,56 +1807,23 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
       activation_data_type == ActivationDataType::FLOAT16 &&
       backend == Backend::GPU;
 
-  if (!litert_model || !*litert_model) {
-    return absl::InternalError("Failed to build LiteRt model");
-  }
-
-  const proto::ExecutorMetadata* executor_metadata = nullptr;
-  auto executor_metadata_or = resources.GetExecutorMetadata();
-  if (executor_metadata_or.ok()) {
-    executor_metadata = *executor_metadata_or;
-  }
-
-  absl::string_view prefill_signature_key = "";
-  for (int i = 0; i < litert_model->GetNumSignatures(); ++i) {
-    LITERT_ASSIGN_OR_RETURN(auto sig, litert_model->GetSignature(i));
-    absl::string_view key = sig.Key();
+  std::string prefill_signature_key;
+  LITERT_ASSIGN_OR_RETURN(auto signature_keys,
+                          compiled_model->GetSignatureKeys());
+  for (absl::string_view key : signature_keys) {
     if (absl::StartsWith(key, kPrefillSignatureRunner)) {
-      prefill_signature_key = key;
+      prefill_signature_key = std::string(key);
       break;
     }
   }
+  RET_CHECK(!prefill_signature_key.empty());
 
-  LITERT_ASSIGN_OR_RETURN(auto decode_signature,
-                          litert_model->FindSignature(kDecodeSignatureRunner));
+  LITERT_ASSIGN_OR_RETURN(auto decode_signature, compiled_model->FindSignature(
+                                                     kDecodeSignatureRunner));
   ABSL_ASSIGN_OR_RETURN(
       ModelSignatures signatures,
       GetModelSignaturesFromInputOutputNames(decode_signature.InputNames(),
                                              decode_signature.OutputNames()));
-
-  LITERT_ASSIGN_OR_RETURN(
-      auto compilation_options,
-      CreateCompilationOptions(executor_settings, activation_data_type,
-                               &signatures));
-
-  ABSL_RETURN_IF_ERROR(SetExternalWeightOptions(
-      resources, ModelType::kTfLitePrefillDecode, compilation_options));
-
-  std::unique_ptr<CompiledModel> compiled_model;
-  {
-    LITERT_ASSIGN_OR_RETURN(auto compiled_model_tmp,
-                            CompiledModel::Create(lrt_env, litert_model->Get(),
-                                                  compilation_options));
-    compiled_model =
-        std::make_unique<CompiledModel>(std::move(compiled_model_tmp));
-  }
-
-  ABSL_ASSIGN_OR_RETURN(
-      auto prefill_runner_set,
-      GetPrefillRunnerSetFromModel(
-          *litert_model, kPrefillSignatureRunner,
-          /*input_positions_name=*/signatures.input_positions));
-  RET_CHECK(!prefill_runner_set.empty()) << "No prefill runner available.";
 
   LitertState::AllocationPolicy allocation_policy =
       LitertState::AllocationPolicy::kInplace;
@@ -1869,42 +1933,23 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
                             clear_kv_cache_before_prefill));
   }
 
-  std::unique_ptr<EmbeddingLookupManager> embedding_lookup;
-  std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup;
-  ABSL_RETURN_IF_ERROR(InitializeEmbeddingLookups(
-      lrt_env, resources, embedding_lookup, per_layer_embedding_lookup));
-  std::unique_ptr<LlmLiteRtMtpDrafter> mtp_drafter;
-  {
-    const auto& advanced_settings = executor_settings.GetAdvancedSettings();
-    if (advanced_settings.has_value() &&
-        advanced_settings->enable_speculative_decoding) {
-      RET_CHECK_EQ(batch_size, 1)
-          << "Speculative decoding (MTP) only supports a single output head.";
-      RET_CHECK_NE(embedding_lookup, nullptr);
-      std::optional<std::reference_wrapper<EmbeddingLookupManager>>
-          ple_manager_opt;
-      if (per_layer_embedding_lookup) {
-        ple_manager_opt = std::ref(*per_layer_embedding_lookup);
-      }
-      ABSL_ASSIGN_OR_RETURN(
-          mtp_drafter,
-          LlmLiteRtMtpDrafter::Create(lrt_env, resources, executor_settings,
-                                      *compiled_model, *embedding_lookup,
-                                      ple_manager_opt, executor_metadata));
-    }
-  }
-
+  ABSL_ASSIGN_OR_RETURN(
+      auto prefill_runner_set,
+      GetPrefillRunnerSetFromModel(
+          *compiled_model, kPrefillSignatureRunner,
+          /*input_positions_name=*/signatures.input_positions));
+  RET_CHECK(!prefill_runner_set.empty()) << "No prefill runner available.";
   bool enable_profiling =
       executor_settings.GetAdvancedSettings() &&
       executor_settings.GetAdvancedSettings()->enable_profiling;
   auto executor = absl::WrapUnique(new LlmLiteRtCompiledModelExecutorStatic(
-      std::move(executor_settings), lrt_env, litert_model,
-      std::move(compiled_model), std::move(decode_input_buffers),
-      std::move(decode_output_buffers), std::move(state),
-      std::move(decode_state), std::move(prefill_runner_set), signatures,
-      batch_size, std::move(cache_path), std::move(embedding_lookup),
-      std::move(per_layer_embedding_lookup), use_fp16_precision,
-      activation_data_type, std::move(mtp_drafter), executor_metadata));
+      std::move(executor_settings), lrt_env, std::move(compiled_model),
+      std::move(decode_input_buffers), std::move(decode_output_buffers),
+      std::move(state), std::move(decode_state), std::move(prefill_runner_set),
+      signatures, batch_size, std::move(cache_path),
+      std::move(embedding_lookup), std::move(per_layer_embedding_lookup),
+      use_fp16_precision, activation_data_type, std::move(mtp_drafter),
+      executor_metadata));
 
   if (enable_profiling) {
     auto status = executor->StartProfiling();
@@ -2053,16 +2098,37 @@ LlmLiteRtCompiledModelExecutorDynamic::Create(
   ABSL_ASSIGN_OR_RETURN(
       auto litert_model,
       resources.GetTFLiteModel(ModelType::kTfLitePrefillDecode));
-
-  const proto::ExecutorMetadata* executor_metadata = nullptr;
-  auto executor_metadata_or = resources.GetExecutorMetadata();
-  if (executor_metadata_or.ok()) {
-    executor_metadata = *executor_metadata_or;
+  if (!litert_model || !*litert_model) {
+    return absl::InternalError("Failed to build LiteRt model");
   }
   ABSL_ASSIGN_OR_RETURN(
       auto compilation_options,
       CreateCompilationOptions(executor_settings, ActivationDataType::FLOAT32,
                                /*signatures=*/std::nullopt));
+
+  LITERT_ASSIGN_OR_RETURN(
+      auto compiled_model,
+      CompiledModel::Create(lrt_env, litert_model->Get(), compilation_options));
+
+  return Create(std::move(executor_settings), lrt_env,
+                std::make_unique<CompiledModel>(std::move(compiled_model)),
+                &resources);
+}
+
+absl::StatusOr<std::unique_ptr<LlmLiteRtCompiledModelExecutorDynamic>>
+LlmLiteRtCompiledModelExecutorDynamic::Create(
+    LlmExecutorSettings executor_settings, Environment& lrt_env,
+    std::unique_ptr<CompiledModel> compiled_model, ModelResources* resources,
+    std::unique_ptr<EmbeddingLookupManager> embedding_lookup,
+    std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup,
+    std::unique_ptr<CompiledModel> compiled_mtp_drafter_model,
+    std::unique_ptr<LlmLiteRtMtpDrafter> mtp_drafter) {
+  const proto::ExecutorMetadata* executor_metadata = nullptr;
+  ABSL_RETURN_IF_ERROR(InitializeAuxiliaryExecutorComponents(
+      lrt_env, executor_settings, *compiled_model, resources, embedding_lookup,
+      per_layer_embedding_lookup, std::move(compiled_mtp_drafter_model),
+      mtp_drafter, executor_metadata));
+
   std::string weight_cache_path = executor_settings.GetCacheDir();
 
   const Backend backend = executor_settings.GetBackend();
@@ -2079,27 +2145,19 @@ LlmLiteRtCompiledModelExecutorDynamic::Create(
         << "KV increment size must be greater than 0.";
   }
 
-  std::unique_ptr<CompiledModel> compiled_model;
-  {
-    LITERT_ASSIGN_OR_RETURN(auto compiled_model_tmp,
-                            CompiledModel::Create(lrt_env, litert_model->Get(),
-                                                  compilation_options));
-    compiled_model =
-        std::make_unique<CompiledModel>(std::move(compiled_model_tmp));
-  }
-
-  LITERT_ASSIGN_OR_RETURN(auto decode_signature,
-                          litert_model->FindSignature(kDecodeSignatureRunner));
+  LITERT_ASSIGN_OR_RETURN(auto decode_signature, compiled_model->FindSignature(
+                                                     kDecodeSignatureRunner));
   ABSL_ASSIGN_OR_RETURN(
       ModelSignatures signatures,
       GetModelSignaturesFromInputOutputNames(decode_signature.InputNames(),
                                              decode_signature.OutputNames()));
 
   LITERT_ASSIGN_OR_RETURN(
-      const SimpleTensor& output_logits_tensor,
-      decode_signature.OutputTensor(signatures.output_logits));
-  LITERT_ASSIGN_OR_RETURN(const RankedTensorType output_logits_tensor_type,
-                          output_logits_tensor.RankedTensorType());
+      const SimpleSignature& output_logits_sig,
+      compiled_model->FindSignature(kDecodeSignatureRunner));
+  LITERT_ASSIGN_OR_RETURN(
+      const RankedTensorType output_logits_tensor_type,
+      output_logits_sig.OutputTensorType(signatures.output_logits));
   RET_CHECK(output_logits_tensor_type.Layout().Dimensions().size() == 3)
       << "Output logits must be (batch, seq, vocab)";
   int batch_size = output_logits_tensor_type.Layout().Dimensions()[0];
@@ -2142,23 +2200,18 @@ LlmLiteRtCompiledModelExecutorDynamic::Create(
     decode_output_buffers[output_name] = std::move(output_buffer);
   }
 
-  std::unique_ptr<EmbeddingLookupManager> embedding_lookup;
-  std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup;
-  ABSL_RETURN_IF_ERROR(InitializeEmbeddingLookups(
-      lrt_env, resources, embedding_lookup, per_layer_embedding_lookup));
-
   bool enable_profiling =
       executor_settings.GetAdvancedSettings() &&
       executor_settings.GetAdvancedSettings()->enable_profiling;
   auto executor = absl::WrapUnique(new LlmLiteRtCompiledModelExecutorDynamic(
-      std::move(executor_settings), lrt_env, litert_model,
-      std::move(compiled_model), std::move(decode_input_buffers),
-      std::move(decode_output_buffers), std::move(state), prefill_chunk_size,
-      kv_increament_size, signatures, batch_size, std::move(weight_cache_path),
-      std::move(embedding_lookup), std::move(per_layer_embedding_lookup),
+      std::move(executor_settings), lrt_env, std::move(compiled_model),
+      std::move(decode_input_buffers), std::move(decode_output_buffers),
+      std::move(state), prefill_chunk_size, kv_increament_size, signatures,
+      batch_size, std::move(weight_cache_path), std::move(embedding_lookup),
+      std::move(per_layer_embedding_lookup),
       /*use_fp16_precision=*/false,
-      /*logits_data_type=*/LogitsDataType::FLOAT32,
-      /*mtp_drafter=*/nullptr, executor_metadata));
+      /*logits_data_type=*/LogitsDataType::FLOAT32, std::move(mtp_drafter),
+      executor_metadata));
   if (enable_profiling) {
     auto status = executor->StartProfiling();
     if (!status.ok()) {

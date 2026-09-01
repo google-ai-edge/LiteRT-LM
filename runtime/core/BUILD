@@ -95,8 +95,19 @@ ENGINE_IMPL_COMMON_DEPS = [
     "//runtime/util:litert_status_util",
     "//runtime/util:litert_util",
     "//runtime/util:logging",
+    "//runtime/components:model_resources_streaming",
+    "//runtime/components:sentencepiece_tokenizer",
+    "//runtime/util:data_stream",
+    "//runtime/util:file_data_stream",
+    "//runtime/util:litert_lm_streaming_loader",
+    "//schema/core:litertlm_header_schema",
+    "@litert//litert/cc:litert_buffer_ref",
     "@litert//litert/cc:litert_environment",
     "@litert//litert/cc:litert_environment_options",
+    "@litert//litert/cc:litert_model",
+    "@litert//litert/cc:litert_compiled_model",
+    "//runtime/executor:llm_executor_settings_utils",
+    "//runtime/executor:llm_litert_mtp_drafter",
 ]
 
 cc_library(
@@ -111,8 +122,10 @@ cc_library(
         "//conditions:default": [],
     }),
     deps = ENGINE_IMPL_COMMON_DEPS + [
+        "@com_google_absl//absl/synchronization",
         "//runtime/components:default_static_gpu_samplers",
         "//runtime/executor:default_static_gpu_accelerator",
+        "//runtime/util:scoped_file",
     ] + select({
         "//conditions:default": [],
     }) + select({
@@ -133,7 +146,10 @@ cc_library(
         ],
         "//conditions:default": [],
     }),
-    deps = ENGINE_IMPL_COMMON_DEPS + select({
+    deps = ENGINE_IMPL_COMMON_DEPS + [
+        "@com_google_absl//absl/synchronization",
+        "//runtime/util:scoped_file",
+    ] + select({
         "//runtime/util:litert_lm_debugger_enabled": [
             "//runtime/util:runtime_debugger",
         ],
@@ -145,7 +161,10 @@ cc_library(
 cc_test(
     name = "engine_advanced_impl_test",
     srcs = ["engine_advanced_impl_test.cc"],
-    data = ["//runtime/testdata"],
+    data = [
+        "//runtime/e2e_tests/data:tiny_gemma_model",
+        "//runtime/testdata",
+    ],
     defines = ["ENGINE_ADVANCED"],
     tags = ["requires-mac-inputs:hard"],
     deps = [
@@ -164,6 +183,7 @@ cc_test(
         "//runtime/executor:executor_settings_base",
         "//runtime/executor:llm_executor_settings",
         "//runtime/proto:sampler_params_cc_proto",
+        "//runtime/util:file_data_stream",
         "//runtime/util:litert_status_util",
         "//runtime/util:scoped_file",
         "//runtime/util:test_utils",
