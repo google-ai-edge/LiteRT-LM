@@ -19,9 +19,15 @@
 
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "litert/cc/litert_environment.h"  // from @litert
+#include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/executor/llm_executor.h"
 #include "runtime/executor/llm_executor_settings.h"
+#include "runtime/executor/llm_litert_mtp_drafter.h"
+
+namespace litert {
+class CompiledModel;
+}  // namespace litert
 
 namespace litert::lm {
 
@@ -35,6 +41,17 @@ absl::StatusOr<std::unique_ptr<LlmExecutor>>
 CreateLlmLiteRtCompiledModelExecutor(LlmExecutorSettings executor_settings,
                                      Environment& lrt_env,
                                      ModelResources& resources);
+
+absl::StatusOr<std::unique_ptr<LlmExecutor>>
+CreateLlmLiteRtCompiledModelExecutor(
+    LlmExecutorSettings executor_settings, Environment& lrt_env,
+    std::unique_ptr<CompiledModel> compiled_model,
+    ModelResources* resources = nullptr,
+    std::unique_ptr<EmbeddingLookupManager> embedding_lookup = nullptr,
+    std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup =
+        nullptr,
+    std::unique_ptr<CompiledModel> compiled_mtp_drafter_model = nullptr,
+    std::unique_ptr<LlmLiteRtMtpDrafter> mtp_drafter = nullptr);
 
 }  // namespace litert::lm
 
