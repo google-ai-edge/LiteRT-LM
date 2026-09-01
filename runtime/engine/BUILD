@@ -382,6 +382,7 @@ cc_library(
         "//runtime/proto:llm_model_type_cc_proto",
         "//runtime/proto:sampler_params_cc_proto",
         "//runtime/proto:token_cc_proto",
+        "//runtime/util:file_util",
         "//runtime/util:litert_lm_loader",
         "//runtime/util:litert_status_util",
         "//runtime/util:model_type_utils",

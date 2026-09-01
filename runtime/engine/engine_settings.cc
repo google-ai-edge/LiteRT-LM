@@ -43,6 +43,7 @@
 #include "runtime/proto/llm_model_type.pb.h"
 #include "runtime/proto/sampler_params.pb.h"
 #include "runtime/proto/token.pb.h"
+#include "runtime/util/file_util.h"
 #include "runtime/util/litert_lm_loader.h"
 #include "runtime/util/model_type_utils.h"
 #include "runtime/util/scoped_file.h"
@@ -135,6 +136,17 @@ absl::Status MaybeOverrideActivationType(
       // and set the enable_mixed_precision to true.
       executor_settings.SetEnableMixedPrecision(true);
     }
+  }
+  return absl::OkStatus();
+}
+
+absl::Status ValidateCacheDir(absl::string_view cache_dir) {
+  if (cache_dir.empty() || cache_dir == ":nocache" || cache_dir == ":memory") {
+    return absl::OkStatus();
+  }
+  if (!IsDirectoryWritable(cache_dir)) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Cache directory does not exist or is not writable: ", cache_dir));
   }
   return absl::OkStatus();
 }
@@ -475,6 +487,16 @@ absl::Status EngineSettings::MaybeUpdateAndValidate(
         audio_executor_settings_.value(), audio_backend_constraint, "Audio"));
     ABSL_RETURN_IF_ERROR(MaybeOverrideActivationType(
         audio_executor_settings_.value(), audio_prefer_activation_type));
+  }
+
+  ABSL_RETURN_IF_ERROR(ValidateCacheDir(main_executor_settings_.GetCacheDir()));
+  if (vision_executor_settings_.has_value()) {
+    ABSL_RETURN_IF_ERROR(
+        ValidateCacheDir(vision_executor_settings_->GetCacheDir()));
+  }
+  if (audio_executor_settings_.has_value()) {
+    ABSL_RETURN_IF_ERROR(
+        ValidateCacheDir(audio_executor_settings_->GetCacheDir()));
   }
 
   ABSL_VLOG(5) << "The llm metadata: " << metadata.DebugString();

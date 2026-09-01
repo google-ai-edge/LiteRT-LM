@@ -167,6 +167,7 @@ TEST(EngineTest, CreateEngine_WithCache) {
   auto cache_path = std::filesystem::path(::testing::TempDir()) /
                     absl::StrCat("cache-", std::rand());
   std::filesystem::remove_all(cache_path);
+  std::filesystem::create_directories(cache_path);
   absl::Cleanup remove_cache = [cache_path] {
     std::filesystem::remove_all(cache_path);
   };

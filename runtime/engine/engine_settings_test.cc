@@ -832,6 +832,25 @@ TEST(EngineSettingsTest, MaybeUpdateAndValidate) {
   EXPECT_OK(IsExpectedLlmMetadata(settings->GetLlmMetadata().value()));
 }
 
+TEST(EngineSettingsTest, MaybeUpdateAndValidateInvalidCacheDirReturnsError) {
+  auto model_assets = ModelAssets::Create("test_model_path_1");
+  ASSERT_OK(model_assets);
+  auto settings = EngineSettings::CreateDefault(*model_assets);
+  ASSERT_OK(settings);
+  settings->GetMutableMainExecutorSettings().SetCacheDir(
+      "/non_existent_directory_for_test/12345");
+
+  MockTokenizer tokenizer;
+  EXPECT_CALL(tokenizer, TokenIdsToText).WillRepeatedly(Return("fake_text"));
+  EXPECT_CALL(tokenizer, TokenToId).WillRepeatedly(Return(1));
+  EXPECT_CALL(tokenizer, TextToTokenIds)
+      .WillRepeatedly(Return(std::vector<int>{1}));
+  proto::LlmMetadata llm_metadata = CreateLlmMetadata();
+
+  EXPECT_THAT(settings->MaybeUpdateAndValidate(&tokenizer, &llm_metadata),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
 TEST(EngineSettingsTest, MaybeUpdateAndValidateTokenToIdReturnsError) {
   auto model_assets = ModelAssets::Create("test_model_path_1");
   ASSERT_OK(model_assets);

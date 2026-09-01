@@ -48,6 +48,9 @@ absl::StatusOr<std::string> GetFileCacheIdentifier(
 // Returns true if the file exists.
 bool FileExists(absl::string_view path);
 
+// Returns true if the path exists, is a directory, and is writable.
+bool IsDirectoryWritable(absl::string_view path);
+
 // Deletes all cache files for a given model and suffix.
 // Any file matching the pattern (model_basename + * + suffix) or
 // (model_basename + suffix + *) will be deleted.

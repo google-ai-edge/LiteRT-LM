@@ -26,8 +26,10 @@
 
 #if defined(_WIN32)
 #include <Windows.h>
+#include <io.h>
 #else
 #include <sys/stat.h>
+#include <unistd.h>
 #endif
 
 #include "absl/base/no_destructor.h"  // from @com_google_absl
@@ -187,6 +189,24 @@ bool FileExists(absl::string_view path) {
   std::filesystem::path p{std::string(path)};
   return std::filesystem::exists(p, ec) &&
          std::filesystem::is_regular_file(p, ec);
+}
+
+bool IsDirectoryWritable(absl::string_view path) {
+  if (path.empty()) {
+    return false;
+  }
+  std::string path_str(path);
+  std::error_code ec;
+  std::filesystem::path p{path_str};
+  if (!std::filesystem::exists(p, ec) ||
+      !std::filesystem::is_directory(p, ec)) {
+    return false;
+  }
+#if defined(_WIN32)
+  return _waccess(p.c_str(), 2) == 0;
+#else
+  return access(path_str.c_str(), W_OK) == 0;
+#endif
 }
 
 absl::StatusOr<int> DeleteStaleCaches(absl::string_view cache_dir,
