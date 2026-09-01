@@ -1,4 +1,6 @@
 <|im_start|>system
+You are a helpful assistant.
+
 # Tools
 
 You may call one or more functions to assist with the user query.
