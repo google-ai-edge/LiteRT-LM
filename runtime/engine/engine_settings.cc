@@ -34,10 +34,10 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "runtime/components/constrained_decoding/suppress_tokens_config.h"
 #include "runtime/components/model_resources.h"
-#include "runtime/executor/audio_executor_settings.h"
+#include "runtime/executor/audio/audio_executor_settings.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/llm_executor_settings.h"
-#include "runtime/executor/vision_executor_settings.h"
+#include "runtime/executor/vision/vision_executor_settings.h"
 #include "runtime/proto/engine.pb.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/proto/llm_model_type.pb.h"

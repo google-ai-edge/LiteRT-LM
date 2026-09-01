@@ -20,7 +20,7 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include "runtime/executor/embedding_executor_settings.h"
+#include "runtime/executor/embedding/embedding_executor_settings.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/proto/embedding_metadata.pb.h"
 #include "runtime/proto/embedding_model_type.pb.h"

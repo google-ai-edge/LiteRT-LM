@@ -53,8 +53,8 @@
 #include "absl/strings/match.h"  // from @com_google_absl
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
 #include "runtime/components/model_resources.h"
-#include "runtime/executor/embedding_executor_base.h"
-#include "runtime/executor/embedding_executor_settings.h"
+#include "runtime/executor/embedding/embedding_executor_base.h"
+#include "runtime/executor/embedding/embedding_executor_settings.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/executor/llm_executor_io_types.h"

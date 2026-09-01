@@ -19,10 +19,10 @@
 #include <utility>
 
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "runtime/executor/audio_executor_settings.h"
-#include "runtime/executor/embedding_executor_settings.h"
+#include "runtime/executor/audio/audio_executor_settings.h"
+#include "runtime/executor/embedding/embedding_executor_settings.h"
 #include "runtime/executor/executor_settings_base.h"
-#include "runtime/executor/vision_executor_settings.h"
+#include "runtime/executor/vision/vision_executor_settings.h"
 #include "runtime/proto/embedding_metadata.pb.h"
 #include "runtime/util/status_macros.h"
 

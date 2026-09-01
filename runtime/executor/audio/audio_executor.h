@@ -12,15 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_VISION_EXECUTOR_H_
-#define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_VISION_EXECUTOR_H_
+#ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_AUDIO_EXECUTOR_H_
+#define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_AUDIO_EXECUTOR_H_
 
-#include "runtime/executor/vision_executor_base.h"
+#include "runtime/executor/audio/audio_executor_base.h"
 
 namespace litert::lm {
 
-using VisionExecutor = VisionExecutorBase;
+using AudioExecutor = AudioExecutorBase;
 
 }  // namespace litert::lm
 
-#endif  // THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_VISION_EXECUTOR_H_
+#endif  // THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_AUDIO_EXECUTOR_H_

@@ -32,8 +32,8 @@
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/llm_executor_io_types.h"
-#include "runtime/executor/vision_executor.h"
-#include "runtime/executor/vision_executor_settings.h"
+#include "runtime/executor/vision/vision_executor.h"
+#include "runtime/executor/vision/vision_executor_settings.h"
 
 namespace litert::lm {
 

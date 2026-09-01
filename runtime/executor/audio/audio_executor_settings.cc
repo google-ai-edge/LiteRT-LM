@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "runtime/executor/audio_executor_settings.h"
+#include "runtime/executor/audio/audio_executor_settings.h"
 
 #include <memory>
 #include <ostream>

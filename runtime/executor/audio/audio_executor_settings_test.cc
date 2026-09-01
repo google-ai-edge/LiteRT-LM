@@ -12,16 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "runtime/executor/audio_executor_settings.h"
+#include "runtime/executor/audio/audio_executor_settings.h"
+
 #include <memory>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
-#include "runtime/executor/executor_settings_base.h"
 #include "litert/cc/internal/scoped_file.h"  // from @litert
+#include "runtime/executor/executor_settings_base.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
-
 
 namespace litert::lm {
 namespace {

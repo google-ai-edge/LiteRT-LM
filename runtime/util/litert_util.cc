@@ -31,10 +31,10 @@
 #include "runtime/components/model_resources.h"
 #include "runtime/engine/embedding_engine_settings.h"
 #include "runtime/engine/engine_settings.h"
-#include "runtime/executor/audio_executor_settings.h"
+#include "runtime/executor/audio/audio_executor_settings.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/magic_number_configs_helper.h"
-#include "runtime/executor/vision_executor_settings.h"
+#include "runtime/executor/vision/vision_executor_settings.h"
 #include "runtime/util/logging.h"
 
 namespace litert::lm {

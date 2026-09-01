@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "runtime/executor/vision_executor_utils.h"
+#include "runtime/executor/vision/vision_executor_utils.h"
 
 #include <cstddef>
 #include <filesystem>  // NOLINT

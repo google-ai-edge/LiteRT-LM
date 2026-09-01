@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "runtime/executor/embedding_executor_settings.h"
+#include "runtime/executor/embedding/embedding_executor_settings.h"
 
 #include <memory>
 #include <sstream>

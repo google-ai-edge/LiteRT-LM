@@ -36,7 +36,7 @@
 #include "litert/test/matchers.h"  // from @litert
 #include "runtime/components/model_resources_litert_lm.h"
 #include "runtime/executor/executor_settings_base.h"
-#include "runtime/executor/vision_executor_settings.h"
+#include "runtime/executor/vision/vision_executor_settings.h"
 #include "runtime/util/litert_lm_loader.h"
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep

@@ -21,7 +21,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/types/optional.h"  // from @com_google_absl
 #include "runtime/engine/io_types.h"
-#include "runtime/executor/embedding_executor_base.h"
+#include "runtime/executor/embedding/embedding_executor_base.h"
 #include "runtime/executor/model_signature_utils.h"
 #include "runtime/proto/embedding_metadata.pb.h"
 

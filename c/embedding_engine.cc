@@ -34,7 +34,7 @@
 #include "runtime/engine/embedding_engine.h"
 #include "runtime/engine/embedding_engine_settings.h"
 #include "runtime/engine/io_types.h"
-#include "runtime/executor/embedding_executor_base.h"
+#include "runtime/executor/embedding/embedding_executor_base.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "support/preprocessor/audio_preprocessor.h"

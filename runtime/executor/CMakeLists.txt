@@ -14,40 +14,10 @@
 
 add_subdirectory(litert)
 add_subdirectory(npu)
+add_subdirectory(audio)
+add_subdirectory(vision)
+add_subdirectory(embedding)
 
-# ==============================================================================
-# Audio Executor Interface
-# ==============================================================================
-add_litertlm_library(runtime_executor_audio_executor INTERFACE)
-add_library(LiteRTLM::Runtime::Executor::AudioExecutorInterface
-ALIAS runtime_executor_audio_executor)
-
-target_include_directories(runtime_executor_audio_executor
-  INTERFACE
-    ${LITERTLM_GENERATED_SRC_DIR}
-    ${LITERT_INCLUDE_DIR}
-    ${LITERTLM_INCLUDE_PATHS}
-)
-
-# ==============================================================================
-# Audio Executor Base Interface
-# ==============================================================================
-add_litertlm_library(runtime_executor_audio_executor_base INTERFACE)
-add_library(LiteRTLM::Runtime::Executor::AudioExecutorBaseInterface
-  ALIAS runtime_executor_audio_executor_base)
-
-target_include_directories(runtime_executor_audio_executor_base
-  INTERFACE
-    ${LITERTLM_GENERATED_SRC_DIR}
-    ${LITERT_INCLUDE_DIR}
-    ${LITERTLM_INCLUDE_PATHS}
-)
-
-target_link_libraries(runtime_executor_audio_executor_base
-  INTERFACE
-    LiteRTLM::Runtime::Executor::LlmExecutorIoTypes
-    LITERTLM_DEPS
-)
 
 # ==============================================================================
 # Default Static GPU Accelerator
@@ -70,48 +40,6 @@ target_include_directories(runtime_executor_llm_processed_context
     ${LITERTLM_INCLUDE_PATHS}
 )
 
-# ==============================================================================
-# Audio Executor Settings
-# ==============================================================================
-add_litertlm_library(runtime_executor_audio_executor_settings STATIC
-  audio_executor_settings.cc
-)
-add_library(LiteRTLM::Runtime::Executor::AudioExecutorSettings
-  ALIAS runtime_executor_audio_executor_settings)
-
-target_include_directories(runtime_executor_audio_executor_settings
-  PRIVATE
-    ${LITERTLM_GENERATED_SRC_DIR}
-    ${LITERT_INCLUDE_DIR}
-    ${LITERTLM_INCLUDE_PATHS}
-)
-
-target_link_libraries(runtime_executor_audio_executor_settings
-  PUBLIC
-    LiteRTLM::Runtime::Executor::ExecutorSettingsBase
-    LITERTLM_DEPS
-)
-
-# ==============================================================================
-# Audio Executor Utils
-# ==============================================================================
-add_litertlm_library(runtime_executor_audio_executor_utils STATIC
-  audio_executor_utils.cc
-)
-add_library(LiteRTLM::Runtime::Executor::AudioExecutorUtils
-  ALIAS runtime_executor_audio_executor_utils)
-
-target_include_directories(runtime_executor_audio_executor_utils
-  PRIVATE
-    ${LITERTLM_GENERATED_SRC_DIR}
-    ${LITERT_INCLUDE_DIR}
-    ${LITERTLM_INCLUDE_PATHS}
-)
-
-target_link_libraries(runtime_executor_audio_executor_utils
-  PUBLIC
-    LiteRTLM::Runtime::Executor::ExecutorSettingsBase
-)
 
 # ==============================================================================
 # Audio LiteRT Compiled Model Executor
@@ -543,89 +471,6 @@ target_link_libraries(runtime_executor_magic_number_configs_helper
     LITERTLM_DEPS
 )
 
-# ==============================================================================
-# Vision Executor Interface
-# ==============================================================================
-add_litertlm_library(runtime_executor_vision_executor INTERFACE)
-add_library(LiteRTLM::Runtime::Executor::VisionExecutorInterface
-  ALIAS runtime_executor_vision_executor)
-
-target_include_directories(runtime_executor_vision_executor
-  INTERFACE
-    ${LITERTLM_GENERATED_SRC_DIR}
-    ${LITERT_INCLUDE_DIR}
-    ${LITERTLM_INCLUDE_PATHS}
-)
-
-target_link_libraries(runtime_executor_vision_executor
-  INTERFACE
-    LiteRTLM::Runtime::Executor::VisionBaseInterface
-)
-
-# ==============================================================================
-# Vision Executor Base
-# ==============================================================================
-add_litertlm_library(runtime_executor_vision_executor_base INTERFACE)
-add_library(LiteRTLM::Runtime::Executor::VisionBaseInterface
-  ALIAS runtime_executor_vision_executor_base)
-
-target_include_directories(runtime_executor_vision_executor_base
-  INTERFACE
-    ${LITERTLM_GENERATED_SRC_DIR}
-    ${LITERT_INCLUDE_DIR}
-    ${LITERTLM_INCLUDE_PATHS}
-)
-
-target_link_libraries(runtime_executor_vision_executor_base
-  INTERFACE
-    LiteRTLM::Runtime::Executor::LlmExecutorIoTypes
-    LITERTLM_DEPS
-)
-
-# ==============================================================================
-# Vision Executor Settings
-# ==============================================================================
-add_litertlm_library(runtime_executor_vision_executor_settings STATIC
-  vision_executor_settings.cc
-)
-add_library(LiteRTLM::Runtime::Executor::VisionExecutorSettings ALIAS runtime_executor_vision_executor_settings)
-
-target_include_directories(runtime_executor_vision_executor_settings
-  PRIVATE
-    ${LITERTLM_GENERATED_SRC_DIR}
-    ${LITERT_INCLUDE_DIR}
-    ${LITERTLM_INCLUDE_PATHS}
-)
-
-target_link_libraries(runtime_executor_vision_executor_settings
-  PUBLIC
-    LiteRTLM::Runtime::Executor::ExecutorSettingsBase
-    LITERTLM_DEPS
-)
-
-
-# ==============================================================================
-# Vision Executor Utils
-# ==============================================================================
-
-add_litertlm_library(runtime_executor_vision_executor_utils STATIC
-  vision_executor_utils.cc
-)
-add_library(LiteRTLM::Runtime::Executor::VisionExecutorUtils ALIAS runtime_executor_vision_executor_utils)
-
-target_include_directories(runtime_executor_vision_executor_utils
-  PUBLIC
-    ${LITERTLM_GENERATED_SRC_DIR}
-    ${LITERT_INCLUDE_DIR}
-    ${LITERTLM_INCLUDE_PATHS}
-)
-
-target_link_libraries(runtime_executor_vision_executor_utils
-  PUBLIC
-    LiteRTLM::Runtime::Engine::IoTypes
-    LiteRTLM::Runtime::Components::ModelResourcesInterface
-    LITERTLM_DEPS
-)
 
 # ==============================================================================
 # Vision LiteRT Compiled Model Executor
@@ -688,26 +533,6 @@ target_link_libraries(runtime_executor_llm_litert_mtp_drafter
 )
 
 
-# ==============================================================================
-# Embedding Executor Settings
-# ==============================================================================
-add_litertlm_library(runtime_executor_embedding_executor_settings STATIC
-  embedding_executor_settings.cc
-)
-add_library(LiteRTLM::Runtime::Executor::EmbeddingExecutorSettings ALIAS runtime_executor_embedding_executor_settings)
-
-target_include_directories(runtime_executor_embedding_executor_settings
-  PRIVATE
-    ${LITERTLM_GENERATED_SRC_DIR}
-    ${LITERT_INCLUDE_DIR}
-    ${LITERTLM_INCLUDE_PATHS}
-)
-
-target_link_libraries(runtime_executor_embedding_executor_settings
-  PUBLIC
-    LiteRTLM::Runtime::Executor::ExecutorSettingsBase
-    LITERTLM_DEPS
-)
 
 # ==============================================================================
 # Embedding LiteRT Compiled Model Executor
@@ -766,11 +591,9 @@ add_library(runtime_executor_libs INTERFACE)
 add_library(LiteRTLM::Runtime::Executor ALIAS runtime_executor_libs)
 
 target_link_libraries(runtime_executor_libs INTERFACE
-  LiteRTLM::Runtime::Executor::AudioExecutorInterface
-  LiteRTLM::Runtime::Executor::VisionExecutorInterface
+  LiteRTLM::Runtime::Executor::Audio
+  LiteRTLM::Runtime::Executor::Vision
   LiteRTLM::Runtime::Executor::LlmExecutorInterface
-  LiteRTLM::Runtime::Executor::AudioExecutorSettings
-  LiteRTLM::Runtime::Executor::AudioExecutorUtils
   LiteRTLM::Runtime::Executor::AudioLitertCompiledModelExecutor
   LiteRTLM::Runtime::Executor::CommonUtils
   LiteRTLM::Runtime::Executor::ExecutorSettingsBase
@@ -788,12 +611,10 @@ target_link_libraries(runtime_executor_libs INTERFACE
   LiteRTLM::Runtime::Executor::LlmNpuCompiledModel
   LiteRTLM::Runtime::Executor::LlmProcessedContextInterface
   LiteRTLM::Runtime::Executor::MagicNumberConfigsHelper
-  LiteRTLM::Runtime::Executor::VisionExecutorSettings
-  LiteRTLM::Runtime::Executor::VisionExecutorUtils
   LiteRTLM::Runtime::Executor::VisionLitertCompiledModelExecutor
   LiteRTLM::Runtime::Executor::DefaultStaticGpuAcceleratorInterface
   LiteRTLM::Runtime::Executor::Litert
-  LiteRTLM::Runtime::Executor::EmbeddingExecutorSettings
+  LiteRTLM::Runtime::Executor::Embedding
   LiteRTLM::Runtime::Executor::EmbeddingLitertCompiledModelExecutor
   LiteRTLM::Runtime::Executor::ModelSignatureUtils
 )

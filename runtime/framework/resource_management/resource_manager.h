@@ -31,12 +31,12 @@
 #include "runtime/components/model_resources.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
-#include "runtime/executor/audio_executor.h"
-#include "runtime/executor/audio_executor_settings.h"
+#include "runtime/executor/audio/audio_executor.h"
+#include "runtime/executor/audio/audio_executor_settings.h"
 #include "runtime/executor/llm_executor.h"
 #include "runtime/executor/llm_executor_settings.h"
-#include "runtime/executor/vision_executor.h"
-#include "runtime/executor/vision_executor_settings.h"
+#include "runtime/executor/vision/vision_executor.h"
+#include "runtime/executor/vision/vision_executor_settings.h"
 #include "runtime/framework/resource_management/context_handler/context_handler.h"
 
 namespace litert::lm {
