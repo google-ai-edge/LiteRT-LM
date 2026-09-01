@@ -14,22 +14,17 @@
 
 #include "runtime/conversation/model_data_processor/minicpm5_data_processor.h"
 
-#include <filesystem>  // NOLINT
-#include <fstream>
-#include <iterator>
 #include <string>
 #include <variant>
 #include <vector>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include "absl/status/status.h"  // from @com_google_absl
-#include "absl/status/statusor.h"  // from @com_google_absl
-#include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "nlohmann/json_fwd.hpp"  // from @nlohmann_json
 #include "runtime/components/prompt_template.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/minicpm5_data_processor_config.h"
+#include "runtime/conversation/model_data_processor/test_utils.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/util/test_utils.h"  // NOLINT
 
@@ -38,35 +33,6 @@ namespace {
 
 using json = nlohmann::ordered_json;
 using ::testing::ElementsAre;
-
-constexpr char kTestdataDir[] =
-    "litert_lm/runtime/components/testdata/";
-
-std::string GetTestdataPath(const std::string& file_name) {
-  return (std::filesystem::path(::testing::SrcDir()) / kTestdataDir / file_name)
-      .string();
-}
-
-absl::StatusOr<std::string> GetContents(const std::string& path) {
-  std::ifstream input_stream(path);
-  if (!input_stream.is_open()) {
-    return absl::InternalError(absl::StrCat("Could not open file: ", path));
-  }
-  return std::string((std::istreambuf_iterator<char>(input_stream)),
-                     (std::istreambuf_iterator<char>()));
-}
-
-MATCHER_P(HasInputText, text_input, "") {
-  if (!std::holds_alternative<InputText>(arg)) {
-    return false;
-  }
-  auto text_bytes = std::get<InputText>(arg).GetRawTextString();
-  auto expected_bytes = text_input->GetRawTextString();
-  if (!text_bytes.ok() || !expected_bytes.ok()) {
-    return false;
-  }
-  return *text_bytes == *expected_bytes;
-}
 
 TEST(MiniCpm5DataProcessorTest, ToInputDataVector) {
   ASSERT_OK_AND_ASSIGN(auto processor, MiniCpm5DataProcessor::Create(
@@ -164,7 +130,8 @@ TEST(MiniCpm5DataProcessorTest, CodeFence) {
 }
 
 TEST(MiniCpm5DataProcessorTest, TemplateEquivalenceThinkingDisabled) {
-  const std::string template_path = GetTestdataPath("MiniCPM5-1B.jinja");
+  const std::string template_path =
+      GetModelPath("minicpm5/chat_template.jinja");
   ASSERT_OK_AND_ASSIGN(const std::string template_content,
                        GetContents(template_path));
 
@@ -186,7 +153,8 @@ TEST(MiniCpm5DataProcessorTest, TemplateEquivalenceThinkingDisabled) {
 }
 
 TEST(MiniCpm5DataProcessorTest, TemplateEquivalenceThinkingEnabled) {
-  const std::string template_path = GetTestdataPath("MiniCPM5-1B.jinja");
+  const std::string template_path =
+      GetModelPath("minicpm5/chat_template.jinja");
   ASSERT_OK_AND_ASSIGN(const std::string template_content,
                        GetContents(template_path));
 
@@ -208,7 +176,8 @@ TEST(MiniCpm5DataProcessorTest, TemplateEquivalenceThinkingEnabled) {
 }
 
 TEST(MiniCpm5DataProcessorTest, TemplateEquivalenceFunctionCalling) {
-  const std::string template_path = GetTestdataPath("MiniCPM5-1B.jinja");
+  const std::string template_path =
+      GetModelPath("minicpm5/chat_template.jinja");
   ASSERT_OK_AND_ASSIGN(const std::string template_content,
                        GetContents(template_path));
 

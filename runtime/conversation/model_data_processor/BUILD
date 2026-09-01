@@ -395,15 +395,13 @@ cc_test(
     name = "minicpm5_data_processor_test",
     srcs = ["minicpm5_data_processor_test.cc"],
     data = [
-        "//runtime/components/testdata",
+        "//models/minicpm5:chat_template.jinja",
     ],
     deps = [
         ":minicpm5_data_processor",
         ":minicpm5_data_processor_config",
+        ":processor_test_utils",
         "@com_google_googletest//:gtest_main",
-        "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/strings",
         "@nlohmann_json//:json",
         "//runtime/components:prompt_template",
         "//runtime/conversation:io_types",
