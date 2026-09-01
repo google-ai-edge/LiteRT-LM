@@ -27,6 +27,8 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "absl/base/log_severity.h"  // from @com_google_absl
+#include "absl/log/scoped_mock_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "flatbuffers/buffer.h"  // from @flatbuffers
 #include "flatbuffers/flatbuffer_builder.h"  // from @flatbuffers
@@ -356,6 +358,25 @@ TEST(LitertLmLoaderTest, GetSharedScopedFileFailure) {
       loader.GetSharedScopedFile(),
       StatusIs(absl::StatusCode::kInvalidArgument,
                ::testing::HasSubstr("Model source is not a ScopedFile")));
+}
+
+TEST(LitertLmLoaderTest, MissingSectionLogsHumanReadableEnumName) {
+  const auto model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm.litertlm";
+  ASSERT_OK_AND_ASSIGN(auto model_file, ScopedFile::Open(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto loader_ptr,
+                       LitertLmLoader::Create(std::move(model_file)));
+
+  absl::ScopedMockLog log;
+  EXPECT_CALL(
+      log,
+      Log(absl::LogSeverity::kWarning, ::testing::_,
+          ::testing::HasSubstr("Section not found: ExecutorMetadataProto")))
+      .Times(1);
+
+  log.StartCapturingLogs();
+  EXPECT_FALSE(loader_ptr->GetExecutorMetadata().has_value());
 }
 
 }  // namespace
