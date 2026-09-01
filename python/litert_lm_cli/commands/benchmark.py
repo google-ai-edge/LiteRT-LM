@@ -49,7 +49,7 @@ def run_benchmark(
     activation_data_type: litert_lm.ActivationDataType | None = None,
     ringbuffers_local_attention: bool | None = None,
     gpu_decode_steps_per_sync: int | None = None,
-    enable_ynnpack: bool = False,
+    enable_ynnpack: bool | None = None,
     runs: int = 1,
     skip_warmup: bool = False,
 ) -> None:
@@ -81,9 +81,8 @@ def run_benchmark(
       )
     else:
       activation_data_type_val = activation_data_type_opt
-    enable_ynnpack = (
-        model.resolve_config_option(enable_ynnpack, model_obj, "enable_ynnpack")
-        or False
+    enable_ynnpack = model.resolve_config_option(
+        enable_ynnpack, model_obj, "enable_ynnpack"
     )
 
     backend_val = model.parse_backend(
@@ -258,7 +257,7 @@ def benchmark(
     activation_data_type: str | None = None,
     ringbuffers_local_attention: bool | None = None,
     gpu_decode_steps_per_sync: int | None = None,
-    enable_ynnpack: bool = False,
+    enable_ynnpack: bool | None = None,
     runs: int = 1,
     skip_warmup: bool = False,
 ) -> None:

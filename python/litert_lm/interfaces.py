@@ -402,7 +402,7 @@ class AbstractEngine(abc.ABC):
         disabled, memory is allocated for the full context length, enabling
         instant rewinding at higher memory cost.
       enable_ynnpack: Whether YNNPACK should delegate supported operations
-        before XNNPACK.
+        before XNNPACK. If None, use the native engine's default.
   """
 
   model_path: str
@@ -416,7 +416,7 @@ class AbstractEngine(abc.ABC):
   lora_rank_config: LoraRankConfig | None = None
   activation_data_type: ActivationDataType | None = None
   use_ringbuffers_local_attention: bool | None = None
-  enable_ynnpack: bool = False
+  enable_ynnpack: bool | None = None
 
   def __enter__(self) -> AbstractEngine:
     """Initializes the engine resources."""
@@ -848,7 +848,7 @@ class AbstractBenchmark(abc.ABC):
         disabled, memory is allocated for the full context length, enabling
         instant rewinding at higher memory cost.
       enable_ynnpack: Whether YNNPACK should delegate supported operations
-        before XNNPACK.
+        before XNNPACK. If None, use the native engine's default.
   """
 
   model_path: str
@@ -861,7 +861,7 @@ class AbstractBenchmark(abc.ABC):
   prompt: str = "How are you"
   activation_data_type: ActivationDataType | None = None
   use_ringbuffers_local_attention: bool | None = None
-  enable_ynnpack: bool = False
+  enable_ynnpack: bool | None = None
 
   @abc.abstractmethod
   def run(self) -> BenchmarkInfo:

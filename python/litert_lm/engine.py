@@ -68,7 +68,7 @@ class Engine(interfaces.AbstractEngine):
       activation_data_type: ActivationDataType | None = None,
       enable_benchmark: bool = False,
       use_ringbuffers_local_attention: bool | None = None,
-      enable_ynnpack: bool = False,
+      enable_ynnpack: bool | None = None,
       **kwargs,
   ):
     backend = _normalize_backend(backend)
@@ -158,7 +158,7 @@ class Engine(interfaces.AbstractEngine):
       self._lib.litert_lm_engine_settings_set_activation_data_type(
           settings, self.activation_data_type.value
       )
-    if self.enable_ynnpack:
+    if self.enable_ynnpack is not None:
       self._lib.litert_lm_engine_settings_set_enable_ynnpack(
           settings, self.enable_ynnpack
       )

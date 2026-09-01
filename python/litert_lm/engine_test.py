@@ -156,14 +156,32 @@ class EngineTest(LiteRtLmTestBase):
         )
     )
 
+    # Default should not call set_enable_ynnpack.
+    litert_lm.Engine(
+        self.model_path,
+        backend=litert_lm.Backend.CPU(),
+        cache_dir=":nocache",
+    )
+    mock_set_enable_ynnpack.assert_not_called()
+
+    # enable_ynnpack=True
     litert_lm.Engine(
         self.model_path,
         backend=litert_lm.Backend.CPU(),
         enable_ynnpack=True,
         cache_dir=":nocache",
     )
-
     mock_set_enable_ynnpack.assert_called_once_with(mock.ANY, True)
+    mock_set_enable_ynnpack.reset_mock()
+
+    # enable_ynnpack=False
+    litert_lm.Engine(
+        self.model_path,
+        backend=litert_lm.Backend.CPU(),
+        enable_ynnpack=False,
+        cache_dir=":nocache",
+    )
+    mock_set_enable_ynnpack.assert_called_once_with(mock.ANY, False)
 
   @mock.patch("sys.platform", "win32")
   def test_engine_init_with_npu_backend(self):

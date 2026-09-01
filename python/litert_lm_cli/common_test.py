@@ -239,10 +239,20 @@ class CommonInferenceOptionsTest(parameterized.TestCase):
     self.assertEqual(result.exit_code, 0)
     self.assertIn('enable_ynnpack: True', result.output)
 
-    # Not set mode (default is False)
-    result = runner.invoke(dummy_cmd, [])
+    # Explicit value: true
+    result = runner.invoke(dummy_cmd, ['--enable-ynnpack', 'true'])
+    self.assertEqual(result.exit_code, 0)
+    self.assertIn('enable_ynnpack: True', result.output)
+
+    # Explicit value: false
+    result = runner.invoke(dummy_cmd, ['--enable-ynnpack', 'false'])
     self.assertEqual(result.exit_code, 0)
     self.assertIn('enable_ynnpack: False', result.output)
+
+    # Not set mode (default is None)
+    result = runner.invoke(dummy_cmd, [])
+    self.assertEqual(result.exit_code, 0)
+    self.assertIn('enable_ynnpack: None', result.output)
 
     # Test hidden from --help
     result = runner.invoke(dummy_cmd, ['--help'])

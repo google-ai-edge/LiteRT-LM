@@ -87,7 +87,7 @@ class Benchmark(interfaces.AbstractBenchmark):
       lib.litert_lm_engine_settings_set_use_ringbuffers_local_attention(
           settings, self.use_ringbuffers_local_attention
       )
-    if self.enable_ynnpack:
+    if self.enable_ynnpack is not None:
       lib.litert_lm_engine_settings_set_enable_ynnpack(
           settings, self.enable_ynnpack
       )

@@ -242,8 +242,11 @@ def common_inference_options(f):
   )(f)
   f = click.option(
       "--enable-ynnpack",
-      is_flag=True,
-      default=False,
+      is_flag=False,
+      flag_value="true",
+      type=click.Choice(["true", "false"], case_sensitive=False),
+      default=None,
+      callback=parse_bool_opt,
       hidden=True,
       help="Delegate supported CPU operations to YNNPACK before XNNPACK.",
   )(f)

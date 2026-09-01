@@ -200,7 +200,7 @@ def run_interactive(
     activation_data_type: litert_lm.ActivationDataType | None = None,
     ringbuffers_local_attention: bool | None = None,
     gpu_decode_steps_per_sync: int | None = None,
-    enable_ynnpack: bool = False,
+    enable_ynnpack: bool | None = None,
 ) -> None:
   """Runs the model interactively or with a single prompt."""
   if speculative_decoding is None:
@@ -245,9 +245,8 @@ def run_interactive(
       )
     else:
       activation_data_type_val = activation_data_type_opt
-    enable_ynnpack = (
-        model.resolve_config_option(enable_ynnpack, model_obj, "enable_ynnpack")
-        or False
+    enable_ynnpack = model.resolve_config_option(
+        enable_ynnpack, model_obj, "enable_ynnpack"
     )
 
     backend_val = model.parse_backend(
@@ -602,7 +601,7 @@ def run(
     activation_data_type: str | None = None,
     ringbuffers_local_attention: bool | None = None,
     gpu_decode_steps_per_sync: int | None = None,
-    enable_ynnpack: bool = False,
+    enable_ynnpack: bool | None = None,
 ) -> None:
   r"""Runs a LiteRT-LM model interactively or with a single prompt.
 
