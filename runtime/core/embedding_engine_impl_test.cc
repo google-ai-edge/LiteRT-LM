@@ -1836,5 +1836,98 @@ TEST(EmbeddingEngineImplTest,
       StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
+TEST(EmbeddingEngineImplTest, ComputeEmbeddingWithBenchmarkEnabledImageInput) {
+  ASSERT_OK_AND_ASSIGN(auto env, CreateTestEnvironment());
+  ASSERT_OK_AND_ASSIGN(auto image_tensor,
+                       CreateDummyTensorBuffer(env->env, {1, 224, 224, 3}));
+  auto fake_image_preprocessor =
+      std::make_unique<FakeImagePreprocessor>(std::move(image_tensor));
+  auto tokenizer = std::make_unique<MockTokenizer>();
+  auto fake_embedding_executor = std::make_unique<FakeEmbeddingExecutor>();
+
+  ImagePreprocessParameter parameter;
+  parameter.SetPatchifyConfig(ImagePreprocessParameter::PatchifyConfig{
+      .patch_width = 16,
+      .patch_height = 16,
+      .max_num_patches = 2520,
+      .pooling_kernel_size = 3,
+  });
+
+  BenchmarkInfo benchmark_info(proto::BenchmarkParams{});
+
+  EmbeddingEngineImpl engine(
+      std::move(env), std::move(tokenizer), std::move(fake_embedding_executor),
+      std::make_unique<FakeVisionExecutor>(),
+      /*audio_executor=*/nullptr,
+      benchmark_info,
+      /*special_tokens=*/{},
+      std::move(fake_image_preprocessor), parameter);
+
+  std::vector<InputData> contents;
+  contents.push_back(InputImage(std::string("raw_image_bytes")));
+
+  EmbeddingOptions options;
+  options.insert_special_tokens = false;
+
+  ASSERT_OK(engine.ComputeEmbedding(contents, options).status());
+  auto recorded_info = engine.GetBenchmarkInfo();
+  ASSERT_TRUE(recorded_info.has_value());
+  EXPECT_TRUE(recorded_info->GetMarkDurations().contains("image_preprocessor"));
+  EXPECT_TRUE(recorded_info->GetMarkDurations().contains("vision_executor"));
+}
+
+TEST(EmbeddingEngineImplTest,
+     ComputeEmbeddingWithBenchmarkPrefillTokensMultimodal) {
+  ASSERT_OK_AND_ASSIGN(auto env, CreateTestEnvironment());
+  ASSERT_OK_AND_ASSIGN(auto image_tensor,
+                       CreateDummyTensorBuffer(env->env, {1, 224, 224, 3}));
+  auto fake_image_preprocessor =
+      std::make_unique<FakeImagePreprocessor>(std::move(image_tensor));
+  auto tokenizer = std::make_unique<MockTokenizer>();
+  EXPECT_CALL(*tokenizer, TextToTokenIds("hello"))
+      .WillOnce(Return(std::vector<int>{1, 2, 3}));
+
+  auto fake_embedding_executor = std::make_unique<FakeEmbeddingExecutor>();
+  auto* raw_executor = fake_embedding_executor.get();
+
+  ImagePreprocessParameter parameter;
+  parameter.SetPatchifyConfig(ImagePreprocessParameter::PatchifyConfig{
+      .patch_width = 16,
+      .patch_height = 16,
+      .max_num_patches = 2520,
+      .pooling_kernel_size = 3,
+  });
+
+  proto::BenchmarkParams params;
+  params.set_num_prefill_tokens(5);
+  BenchmarkInfo benchmark_info(params);
+
+  EmbeddingEngineImpl engine(
+      std::move(env), std::move(tokenizer), std::move(fake_embedding_executor),
+      std::make_unique<FakeVisionExecutor>(),
+      /*audio_executor=*/nullptr,
+      benchmark_info,
+      /*special_tokens=*/{},
+      std::move(fake_image_preprocessor), parameter);
+
+  std::vector<InputData> contents;
+  contents.push_back(InputText(std::string("hello")));
+  contents.push_back(InputImage(std::string("raw_image_bytes")));
+
+  EmbeddingOptions options;
+  options.insert_special_tokens = false;
+
+  ASSERT_OK(engine.ComputeEmbedding(contents, options).status());
+  // FakeVisionExecutor generates 4 tokens (kSpecialToken = -1).
+  // Text generates 3 tokens {1, 2, 3} resized to 5 tokens {1, 2, 3, 0, 0}.
+  // Total tokens must be 5 + 4 = 9 tokens, neither truncated!
+  EXPECT_EQ(raw_executor->GetLastTokenIds().size(), 9);
+  auto recorded_info = engine.GetBenchmarkInfo();
+  ASSERT_TRUE(recorded_info.has_value());
+  EXPECT_EQ(recorded_info->GetTotalPrefillTurns(), 1);
+  ASSERT_OK_AND_ASSIGN(auto turn, recorded_info->GetPrefillTurn(0));
+  EXPECT_EQ(turn.num_tokens, 9);
+}
+
 }  // namespace
 }  // namespace litert::lm

@@ -337,6 +337,7 @@ cc_binary(
         ":embedding_engine",
         ":embedding_engine_settings",
         ":io_types",
+        ":shared_flags",
         "@com_google_absl//absl/base:log_severity",
         "@com_google_absl//absl/flags:flag",
         "@com_google_absl//absl/flags:parse",
@@ -344,15 +345,19 @@ cc_binary(
         "@com_google_absl//absl/log:globals",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/time",
         "@litert//litert/cc:litert_environment",
         "//runtime/components:model_resources",
         "//runtime/core:embedding_engine_impl",
+        "//runtime/executor:embedding_executor_base",
         "//runtime/executor:executor_settings_base",
         "//runtime/executor:litert_compiled_model_executor_utils",
         "//runtime/util:litert_status_util",
         "//runtime/util:litert_util",
         "//runtime/util:scoped_file",
         "//support/preprocessor:image_preprocessor_impl",  # buildcleaner: keep
+        "@litert//tflite/profiling:memory_info",
     ],
 )
 
