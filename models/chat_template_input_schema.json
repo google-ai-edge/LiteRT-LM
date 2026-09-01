@@ -1,0 +1,196 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LiteRT-LM Chat Template Standard Input Schema",
+  "description": "Defines the JSON schema for variables passed to LiteRT-LM Jinja chat templates.",
+  "type": "object",
+  "properties": {
+    "messages": {
+      "type": "array",
+      "description": "The list of messages in the conversation history.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "role": {
+            "type": "string",
+            "description": "The role of the message author.",
+            "enum": ["system", "user", "assistant", "tool"]
+          },
+          "name": {
+            "type": "string",
+            "description": "The name of the author or tool."
+          },
+          "content": {
+            "description": "The content of the message. Can be a string or an array of content parts.",
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "description": "A standard multi-modal content part.",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": ["text", "image", "audio", "video"]
+                        },
+                        "text": {
+                          "type": "string",
+                          "description": "The text content. Required if type is 'text'."
+                        }
+                      },
+                      "required": ["type"]
+                    },
+                    {
+                      "type": "object",
+                      "description": "A tool response part (only valid if role is 'tool').",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": ["tool_response"]
+                        },
+                        "name": {
+                          "type": "string",
+                          "description": "The name of the tool."
+                        },
+                        "response": {
+                          "description": "The response payload returned by the tool."
+                        }
+                      },
+                      "required": ["type", "name", "response"]
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          "tool_calls": {
+            "type": "array",
+            "description": "The list of function calls requested by the model.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": ["function"],
+                  "description": "The type of the tool call."
+                },
+                "function": {
+                  "type": "object",
+                  "description": "The function call details.",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "description": "The name of the function."
+                    },
+                    "arguments": {
+                      "description": "The arguments to the function, either as a key-value map or a raw string.",
+                      "oneOf": [
+                        {
+                          "type": "object"
+                        },
+                        {
+                          "type": "string"
+                        }
+                      ]
+                    }
+                  },
+                  "required": ["name"]
+                }
+              },
+              "required": ["function"]
+            }
+          }
+        },
+        "required": ["role"]
+      }
+    },
+    "tools": {
+      "type": "array",
+      "description": "The list of available tools (function declarations) that the model can invoke.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": ["function"],
+            "description": "The type of the tool. Must be 'function'."
+          },
+          "function": {
+            "type": "object",
+            "description": "The function declaration details.",
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "The name of the function."
+              },
+              "description": {
+                "type": "string",
+                "description": "A description of what the function does."
+              },
+              "parameters": {
+                "type": "object",
+                "description": "The parameters schema in OpenAPI JSON Schema format.",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": ["object"]
+                  },
+                  "properties": {
+                    "type": "object",
+                    "description": "The parameter definitions."
+                  },
+                  "required": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": ["type"]
+              },
+              "response": {
+                "type": "object",
+                "description": "Optional response schema declaration.",
+                "properties": {
+                  "description": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "required": ["name", "description"]
+          }
+        },
+        "required": ["type", "function"]
+      }
+    },
+    "enable_thinking": {
+      "type": "boolean",
+      "description": "Flag indicating whether the model should generate thinking/reasoning content before its final response."
+    },
+    "add_generation_prompt": {
+      "type": "boolean",
+      "description": "Flag indicating whether to append the model's turn-start sequence to prompt the model to begin generating its response."
+    },
+    "now": {
+      "type": "integer",
+      "description": "Unix timestamp in seconds passed to time-aware prompt templates (e.g., used by strftime_now)."
+    },
+    "bos_token": {
+      "type": "string",
+      "description": "The beginning-of-sequence token."
+    },
+    "eos_token": {
+      "type": "string",
+      "description": "The end-of-sequence token."
+    }
+  },
+  "required": ["messages"]
+}
