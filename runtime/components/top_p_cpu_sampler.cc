@@ -14,9 +14,11 @@
 
 #include "runtime/components/top_p_cpu_sampler.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <random>
 #include <string>
@@ -154,10 +156,50 @@ absl::Status TopPSampler::SampleToIdAndScoreBuffer(
       return status;
     }
     std::vector<float> scores(batch_size_ * sequence_size_);
+    const int vocab_size =
+        logits_data_span.size() / (batch_size_ * sequence_size_);
+    const float temp =
+        std::max(temperature_, std::numeric_limits<float>::epsilon());
     for (int i = 0; i < batch_size_; ++i) {
       for (int j = 0; j < sequence_size_; ++j) {
-        // The scores are the log of the probability of the sampled token.
-        scores[i * sequence_size_ + j] = std::log(sampled_scores[i][j]);
+        const int idx = i * sequence_size_ + j;
+        const int sampled_id = flat_sampled_ids[idx];
+        if (vocab_size > 0 && sampled_id >= 0 && sampled_id < vocab_size) {
+          const int offset = idx * vocab_size;
+          const float* seq_logits = logits_data_span.data() + offset;
+          float max_logit = seq_logits[0];
+          for (int v = 1; v < vocab_size; ++v) {
+            if (seq_logits[v] > max_logit) {
+              max_logit = seq_logits[v];
+            }
+          }
+          if (!std::isfinite(max_logit)) {
+            if (seq_logits[sampled_id] == max_logit) {
+              scores[idx] = 0.0f;
+            } else {
+              scores[idx] = -std::numeric_limits<float>::infinity();
+            }
+          } else {
+            double sum_exp = 0.0;
+            for (int v = 0; v < vocab_size; ++v) {
+              sum_exp += std::exp(static_cast<double>(
+                  (seq_logits[v] - max_logit) / temp));
+            }
+            if (!std::isfinite(sum_exp) || sum_exp <= 0.0) {
+              scores[idx] = 0.0f;
+            } else {
+              double log_partition =
+                  static_cast<double>(max_logit) + temp * std::log(sum_exp);
+              scores[idx] = static_cast<float>(
+                  (static_cast<double>(seq_logits[sampled_id]) -
+                   log_partition) /
+                  temp);
+            }
+          }
+        } else {
+          // The scores are the log of the probability of the sampled token.
+          scores[idx] = std::log(sampled_scores[i][j]);
+        }
       }
     }
     scores_tensor->Write(absl::MakeConstSpan(scores));

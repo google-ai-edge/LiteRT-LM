@@ -39,6 +39,7 @@ namespace litert::lm {
 namespace {
 
 using ::testing::ElementsAre;
+using ::testing::FloatNear;
 
 Expected<TensorBuffer> CopyFp16ToTensorBuffer(absl::Span<const float> data,
                                               absl::Span<const int> dims) {
@@ -179,8 +180,11 @@ TEST(TopPSamplerTest, SampleToIdAndScoreBuffer_BatchSize2SequenceLength2) {
   auto scores = CopyFromTensorBuffer<float>(*scores_tensor);
   ASSERT_TRUE(scores.HasValue());
   // The scores are the log of the probability of the sampled token.
-  EXPECT_THAT(*scores, ElementsAre(std::log(1.0f), std::log(1.0f),
-                                   std::log(1.0f), std::log(1.0f)));
+  EXPECT_THAT(
+      *scores,
+      ElementsAre(
+          FloatNear(-0.00013619f, 1e-6), FloatNear(-5.010385e-05f, 1e-6),
+          FloatNear(-1.843247e-05f, 1e-6), FloatNear(-6.780965e-06f, 1e-6)));
 }
 
 TEST(TopPSamplerTest, SampleToIdAndScoreBufferFp16_IdsOnly_BatchSize2) {
@@ -283,8 +287,11 @@ TEST(TopPSamplerTest, SampleToIdAndScoreBufferFp16_BatchSize2SequenceLength2) {
   auto scores = CopyFromTensorBuffer<float>(*scores_tensor);
   ASSERT_TRUE(scores.HasValue());
   // The scores are the log of the probability of the sampled token.
-  EXPECT_THAT(*scores, ElementsAre(std::log(1.0f), std::log(1.0f),
-                                   std::log(1.0f), std::log(1.0f)));
+  EXPECT_THAT(
+      *scores,
+      ElementsAre(
+          FloatNear(-0.00013619f, 1e-5), FloatNear(-5.010385e-05f, 1e-5),
+          FloatNear(-1.843247e-05f, 1e-5), FloatNear(-6.780965e-06f, 1e-5)));
 }
 
 TEST(TopPSamplerTest, UpdateConfig) {
