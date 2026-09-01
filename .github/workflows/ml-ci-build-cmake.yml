@@ -190,7 +190,7 @@ jobs:
         run: echo "ANDROID_NDK_HOME=$NDK_PATH" >> $GITHUB_ENV
 
       - name: Restore CCache from GCS
-        if: !contains(github.event.pull_request.labels.*.name, 'skip-cache')
+        if: ${{ !contains(github.event.pull_request.labels.*.name, 'skip-cache') }}
         uses: ./.github/workflows/actions/gcs-cache
         id: restore-ccache
         with:
@@ -202,7 +202,7 @@ jobs:
           refresh-cache: ${{ env.REFRESH_CACHE }}
 
       - name: Restore Prebuild Deps Cache
-        if: !contains(github.event.pull_request.labels.*.name, 'skip-cache')
+        if: ${{ !contains(github.event.pull_request.labels.*.name, 'skip-cache') }}
         uses: ./.github/workflows/actions/gcs-cache
         id: restore-prebuild-deps
         with:
@@ -214,7 +214,7 @@ jobs:
           refresh-cache: ${{ env.REFRESH_CACHE }}
 
       - name: Restore LiteRT LM Deps Cache
-        if: !contains(github.event.pull_request.labels.*.name, 'skip-cache')
+        if: ${{ !contains(github.event.pull_request.labels.*.name, 'skip-cache') }}
         uses: ./.github/workflows/actions/gcs-cache
         id: restore-litert-lm-deps
         with:
@@ -226,7 +226,7 @@ jobs:
           refresh-cache: ${{ env.REFRESH_CACHE }}
 
       - name: Restore LiteRT LM Cache (internal sources)
-        if: !contains(github.event.pull_request.labels.*.name, 'skip-cache')
+        if: ${{ !contains(github.event.pull_request.labels.*.name, 'skip-cache') }}
         uses: ./.github/workflows/actions/gcs-cache
         id: restore-litert-lm
         with:
