@@ -102,6 +102,22 @@ EXPERIMENTAL_DEPS = [
     ":experimental_internal",
 ]
 
+# Standalone .tflite text-embedding runner (see tflite_embed.h). Runs
+# self-contained embedding graphs (EmbeddingGemma published tflites) through
+# LiteRT directly, with SentencePiece tokenization.
+TFLITE_EMBED_DEPS = [
+    "@com_google_absl//absl/log:absl_log",
+    "@com_google_absl//absl/status",
+    "@com_google_absl//absl/status:statusor",
+    "@com_google_absl//absl/strings:strings",
+    "@com_google_absl//absl/types:span",
+    "@litert//litert/cc:litert_compiled_model",
+    "@litert//litert/cc:litert_environment",
+    "@litert//litert/cc:litert_model",
+    "@litert//litert/cc:litert_options",
+    "//support/tokenizer:sentencepiece_tokenizer",
+]
+
 ENGINE_COMMON_DEPS = (
     ENGINE_LITE_COMMON_DEPS +
     CONVERSATION_DEPS +
@@ -399,6 +415,7 @@ cc_binary(
         "embedding_engine.cc",
         "engine.cc",
         "experimental.cc",
+        "tflite_embed.cc",
     ],
     copts = ["-fvisibility=hidden"],
     features = ["-legacy_whole_archive"],
@@ -426,8 +443,16 @@ cc_binary(
         ":embedding_engine_headers",
         ":engine_headers",
         ":experimental_headers",
+        ":tflite_embed_internal",
         "//runtime/core:engine_impl",
     ] + select({
         "//conditions:default": [],
     }),
+)
+
+cc_library(
+    name = "tflite_embed_internal",
+    hdrs = ["tflite_embed.h"],
+    visibility = ["//visibility:public"],
+    deps = [":engine_headers"] + TFLITE_EMBED_DEPS,
 )

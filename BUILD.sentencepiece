@@ -54,7 +54,6 @@ cc_library(
     ],
     copts = [
         "-DENABLE_NFKC_COMPILE",
-        "-DSENTENCEPIECE_PG3_BUILD",
         "-DINSTALL_DATADIR=\\\"\\\"",
     ],
     deps = [
