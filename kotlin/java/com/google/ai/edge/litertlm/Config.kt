@@ -148,6 +148,11 @@ sealed class Backend(val name: String) {
 
   class GPU : Backend("GPU")
 
+  // copybara:strip_begin
+  class GpuArtisan : Backend("gpu_artisan")
+
+  // copybara:strip_end
+
   /**
    * @property nativeLibraryDir The directory contains the NPU libraries for [Backend.NPU]. On
    *   Android, for apps with built-in NPU libraries, including NPU libraries delivered as Google
