@@ -571,6 +571,18 @@ absl::StatusOr<DataProcessorConfig> CreateLfm2DataProcessorConfig(
       default_lfm2.normalization_rescale_factor()) {
     config.normalization_rescale_factor = lfm2.normalization_rescale_factor();
   }
+  if (lfm2.has_code_fence_start()) {
+    config.code_fence_start = lfm2.code_fence_start();
+  }
+  if (lfm2.has_code_fence_end()) {
+    config.code_fence_end = lfm2.code_fence_end();
+  }
+  if (lfm2.has_escape_fence_strings()) {
+    config.escape_fence_strings = lfm2.escape_fence_strings();
+  }
+  if (lfm2.has_tool_code_regex()) {
+    config.tool_code_regex = lfm2.tool_code_regex();
+  }
   return config;
 }
 

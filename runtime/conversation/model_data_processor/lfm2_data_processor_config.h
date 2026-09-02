@@ -22,6 +22,12 @@ namespace litert::lm {
 
 // Config for LFM2DataProcessor.
 struct Lfm2DataProcessorConfig {
+  // Code fence start and end for tool calling.
+  std::string code_fence_start = "<|tool_call_start|>";
+  std::string code_fence_end = "<|tool_call_end|>";
+  bool escape_fence_strings = true;
+  std::string tool_code_regex = "";
+
   // The string for beginning of image token.
   std::string boi_token = "<|image_start|>";
   // The string for end of image token.
