@@ -65,6 +65,7 @@
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/llm_processed_context.h"
 #include "runtime/executor/npu/llm_litert_npu_compiled_model_executor_utils.h"
+#include "runtime/executor/npu/llm_litert_npu_dynamism.h"
 #include "runtime/executor/npu/llm_litert_npu_embedder.h"
 #include "runtime/executor/npu/llm_litert_npu_kv_cache.h"
 #include "runtime/executor/npu/llm_litert_npu_mask.h"
@@ -132,7 +133,8 @@ LlmLiteRtNpuCompiledModelExecutor::~LlmLiteRtNpuCompiledModelExecutor() {
 // - {prefill,decode,verify}_output_kv_cache_slice_buffers: Stores the newly
 //   computed KV cache slices output by the text decoder, to be written into the
 //   persistent input_kv_cache_buffers during cache update.
-absl::Status LlmLiteRtNpuCompiledModelExecutor::AllocateTextDecoderBuffers(
+absl::StatusOr<int>
+LlmLiteRtNpuCompiledModelExecutor::AllocateTextDecoderBuffers(
     litert::Environment& env, const litert::Model* text_decoder_model,
     CompiledModel& text_decoder_compiled_model,
     const ResolvedPrefillSignatures& prefill_signatures,
@@ -152,10 +154,43 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::AllocateTextDecoderBuffers(
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
         verify_output_kv_cache_slice_buffers,
     absl::flat_hash_map<absl::string_view, HWQuantParams>& kv_quant_params,
-    int64_t kv_cache_init_value) {
+    int64_t kv_cache_init_value, std::optional<int> target_context_size) {
+  int actual_context_size = 0;
+  if (target_context_size.has_value()) {
+    LITERT_ASSIGN_OR_RETURN(
+        actual_context_size,
+        NpuDynamismHelper::ResizeDynamicInputs(text_decoder_compiled_model,
+                                               prefill_signatures.prefill,
+                                               *target_context_size));
+    LITERT_ASSIGN_OR_RETURN(actual_context_size,
+                            NpuDynamismHelper::ResizeDynamicInputs(
+                                text_decoder_compiled_model, decode_signature,
+                                actual_context_size));
+  } else {
+    auto decode_sig = text_decoder_model->FindSignature(decode_signature);
+    if (decode_sig.HasValue()) {
+      for (auto input_name : decode_sig->InputNames()) {
+        if (absl::StartsWith(input_name, kv_cache_k_root_name) ||
+            absl::StartsWith(input_name, kv_cache_v_root_name) ||
+            absl::StartsWith(input_name, kv_cache_c_root_name)) {
+          auto tensor = decode_sig->InputTensor(input_name);
+          if (tensor.HasValue()) {
+            auto type = tensor->RankedTensorType();
+            if (type.HasValue()) {
+              for (auto dim : type->Layout().Dimensions()) {
+                actual_context_size = std::max(actual_context_size, dim);
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Initialize kv_quant_params from the prefill signature output tensors if
+  // available.
   auto prefill_sig =
       text_decoder_model->FindSignature(prefill_signatures.prefill);
-
   if (prefill_sig.HasValue()) {
     for (auto output_name : prefill_sig->OutputNames()) {
       if (absl::StartsWith(output_name, kv_cache_slice_k_root_name) ||
@@ -260,7 +295,7 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::AllocateTextDecoderBuffers(
     }
   }
 
-  return absl::OkStatus();
+  return actual_context_size;
 }
 
 absl::StatusOr<InferenceContext>
@@ -304,22 +339,28 @@ LlmLiteRtNpuCompiledModelExecutor::CreateTextDecoderInferenceContext(
       // although it's not used in the model, CompiledModel will complain about
       // the mismatched buffer size. So we need to correct the buffer size here,
       // by creating a new buffer with the correct size.
-      LITERT_ASSIGN_OR_RETURN(auto input_tensor_type,
-                              text_decoder_compiled_model.GetInputTensorType(
-                                  prefill_signatures.prefill, key));
-      LITERT_ASSIGN_OR_RETURN(auto input_tensor_size,
-                              input_tensor_type.Bytes());
-      LITERT_ASSIGN_OR_RETURN(auto input_buffer_size, value.Size());
-      if (input_tensor_size != input_buffer_size) {
-        LITERT_ASSIGN_OR_RETURN(auto corrected_input_buffer,
-                                text_decoder_compiled_model.CreateInputBuffer(
-                                    prefill_signatures.prefill, key));
-        corrected_input_buffer.Clear();
-        LITERT_ASSIGN_OR_RETURN(prefill_input_buffers[key],
-                                corrected_input_buffer.Duplicate());
-      } else {
-        LITERT_ASSIGN_OR_RETURN(prefill_input_buffers[key], value.Duplicate());
+      // Note: For dynamic shape models,
+      // input_tensor_type->Bytes() returns an error on dynamic dimensions (-1),
+      // so we safely check HasValue().
+      auto input_tensor_type = text_decoder_compiled_model.GetInputTensorType(
+          prefill_signatures.prefill, key);
+      if (input_tensor_type.HasValue()) {
+        auto input_tensor_size = input_tensor_type->Bytes();
+        if (input_tensor_size.HasValue()) {
+          LITERT_ASSIGN_OR_RETURN(auto input_buffer_size, value.Size());
+          if (*input_tensor_size != input_buffer_size) {
+            LITERT_ASSIGN_OR_RETURN(
+                auto corrected_input_buffer,
+                text_decoder_compiled_model.CreateInputBuffer(
+                    prefill_signatures.prefill, key));
+            corrected_input_buffer.Clear();
+            LITERT_ASSIGN_OR_RETURN(prefill_input_buffers[key],
+                                    corrected_input_buffer.Duplicate());
+            continue;
+          }
+        }
       }
+      LITERT_ASSIGN_OR_RETURN(prefill_input_buffers[key], value.Duplicate());
     }
   }
   absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
@@ -2166,8 +2207,20 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::RestoreContext(
   return absl::OkStatus();
 }
 
+std::optional<int>
+LlmLiteRtNpuCompiledModelExecutor::DetermineMaxSequenceLengthDynamicModel(
+    ModelResources& resources) {
+  if (auto metadata_status = resources.GetLlmMetadata(); metadata_status.ok()) {
+    const proto::LlmMetadata* metadata = *metadata_status;
+    if (metadata && metadata->max_num_tokens() > 0) {
+      return metadata->max_num_tokens();
+    }
+  }
+  return std::nullopt;
+}
+
 absl::StatusOr<int>
-LlmLiteRtNpuCompiledModelExecutor::DetermineMaxSequenceLength(
+LlmLiteRtNpuCompiledModelExecutor::DetermineMaxSequenceLengthStaticModel(
     const LlmExecutorSettings& executor_settings, ModelResources& resources,
     const litert::Model& text_decoder_model) {
   int ans = 0;
@@ -2237,6 +2290,33 @@ LlmLiteRtNpuCompiledModelExecutor::DetermineMaxSequenceLength(
   return ans;
 }
 
+absl::StatusOr<int> LlmLiteRtNpuCompiledModelExecutor::DetermineSequenceLength(
+    const LlmExecutorSettings& executor_settings, ModelResources& resources,
+    const litert::Model& text_decoder_model) {
+  if (NpuDynamismHelper::HasDynamicKVCache(text_decoder_model)) {
+    const int requested_tokens = executor_settings.GetMaxNumTokens();
+    if (requested_tokens <= 0) {
+      return absl::InvalidArgumentError(
+          "Dynamic KV cache models require max_num_tokens to be specified in "
+          "executor settings to determine resize target.");
+    }
+
+    std::optional<int> model_max_limit =
+        DetermineMaxSequenceLengthDynamicModel(resources);
+    if (model_max_limit.has_value() && requested_tokens > *model_max_limit) {
+      ABSL_LOG(WARNING) << "Passed in max_num_tokens (" << requested_tokens
+                        << ") is larger than what the dynamic model supports ("
+                        << *model_max_limit << "). Using model limit.";
+      return *model_max_limit;
+    }
+
+    return requested_tokens;
+  }
+
+  return DetermineMaxSequenceLengthStaticModel(executor_settings, resources,
+                                               text_decoder_model);
+}
+
 // static
 absl::StatusOr<std::unique_ptr<LlmLiteRtNpuCompiledModelExecutor>>
 LlmLiteRtNpuCompiledModelExecutor::Create(
@@ -2252,10 +2332,9 @@ LlmLiteRtNpuCompiledModelExecutor::Create(
       const litert::Model* text_decoder_model,
       resources.GetTFLiteModel(ModelType::kTfLitePrefillDecode));
 
-  LITERT_ASSIGN_OR_RETURN(
-      int max_sequence_length,
-      DetermineMaxSequenceLength(executor_settings, resources,
-                                 *text_decoder_model));
+  LITERT_ASSIGN_OR_RETURN(int max_sequence_length,
+                          DetermineSequenceLength(executor_settings, resources,
+                                                  *text_decoder_model));
 
   // `DetermineMaxSequenceLength` resolves the effective limit by taking the
   // minimum of the user-requested limit (if > 0) and the model-supported limit.
@@ -2337,6 +2416,12 @@ LlmLiteRtNpuCompiledModelExecutor::Create(
   absl::flat_hash_map<absl::string_view, TensorBuffer> input_kv_cache_buffers;
   absl::flat_hash_map<absl::string_view, HWQuantParams> kv_quant_params;
 
+  int actual_context_size = 0;
+  std::optional<int> target_context_size;
+  if (NpuDynamismHelper::HasDynamicKVCache(*text_decoder_model)) {
+    target_context_size = mutable_settings.GetMaxNumTokens();
+  }
+
   std::vector<ContextGroup> context_groups;
   context_groups.resize(sorted_supported_context_sizes.size());
 
@@ -2368,12 +2453,23 @@ LlmLiteRtNpuCompiledModelExecutor::Create(
     absl::flat_hash_map<absl::string_view, TensorBuffer>
         group_verify_out_slices;
 
-    LITERT_RETURN_IF_ERROR(AllocateTextDecoderBuffers(
-        env, text_decoder_model, text_decoder_compiled_model, max_prefill_sigs,
-        max_decode_sig, max_verify_sig, group_prefill_in, group_decode_in,
-        group_verify_in, master_kv_cache_buffers, group_prefill_out_slices,
-        group_decode_out_slices, group_verify_out_slices, kv_quant_params,
-        kv_cache_init_value));
+    LITERT_ASSIGN_OR_RETURN(
+        actual_context_size,
+        AllocateTextDecoderBuffers(
+            env, text_decoder_model, text_decoder_compiled_model,
+            max_prefill_sigs, max_decode_sig, max_verify_sig, group_prefill_in,
+            group_decode_in, group_verify_in, master_kv_cache_buffers,
+            group_prefill_out_slices, group_decode_out_slices,
+            group_verify_out_slices, kv_quant_params, kv_cache_init_value,
+            target_context_size));
+
+    if (target_context_size.has_value() &&
+        actual_context_size != *target_context_size) {
+      ABSL_LOG(INFO) << "Dynamic KV cache resized to bucket size: "
+                     << actual_context_size
+                     << " (requested: " << *target_context_size << ").";
+      mutable_settings.SetMaxNumTokens(actual_context_size);
+    }
 
     // Dynamic HostMemory workaround: ensure all KV buffers in the master group
     // are on NPU memory (e.g. layer 19 in Gemma3n or other layers unconnected
@@ -2460,12 +2556,15 @@ LlmLiteRtNpuCompiledModelExecutor::Create(
     absl::flat_hash_map<absl::string_view, TensorBuffer>
         group_verify_out_slices;
 
-    LITERT_RETURN_IF_ERROR(AllocateTextDecoderBuffers(
-        env, text_decoder_model, text_decoder_compiled_model,
-        group_prefill_sigs, group_decode_sig, group_verify_sig,
-        group_prefill_in, group_decode_in, group_verify_in, aliased_kv_buffers,
-        group_prefill_out_slices, group_decode_out_slices,
-        group_verify_out_slices, kv_quant_params, kv_cache_init_value));
+    LITERT_RETURN_IF_ERROR(
+        AllocateTextDecoderBuffers(
+            env, text_decoder_model, text_decoder_compiled_model,
+            group_prefill_sigs, group_decode_sig, group_verify_sig,
+            group_prefill_in, group_decode_in, group_verify_in,
+            aliased_kv_buffers, group_prefill_out_slices,
+            group_decode_out_slices, group_verify_out_slices, kv_quant_params,
+            kv_cache_init_value)
+            .status());
 
     LITERT_ASSIGN_OR_RETURN(
         auto group_inference_context,
@@ -2588,6 +2687,22 @@ LlmLiteRtNpuCompiledModelExecutor::Create(
       context_groups[0].text_decoder_inference_context.decode_input_buffers;
   auto& first_verify_in =
       context_groups[0].text_decoder_inference_context.verify_input_buffers;
+
+  if (target_context_size.has_value()) {
+    LITERT_RETURN_IF_ERROR(NpuDynamismHelper::ResizeDynamicMaskInputs(
+        npu_auxiliary_context.npu_auxiliary_compiled_model,
+        first_prefill_sigs.mask, actual_context_size));
+    LITERT_RETURN_IF_ERROR(NpuDynamismHelper::ResizeDynamicMaskInputs(
+        npu_auxiliary_context.npu_auxiliary_compiled_model,
+        first_decode_aux_sigs.mask, actual_context_size));
+    if (!first_verify_aux_sigs.mask.empty() &&
+        npu_auxiliary_context.npu_auxiliary_compiled_model.FindSignature(
+            first_verify_aux_sigs.mask)) {
+      LITERT_RETURN_IF_ERROR(NpuDynamismHelper::ResizeDynamicMaskInputs(
+          npu_auxiliary_context.npu_auxiliary_compiled_model,
+          first_verify_aux_sigs.mask, actual_context_size));
+    }
+  }
 
   LITERT_ASSIGN_OR_RETURN(
       auto main_mask,
