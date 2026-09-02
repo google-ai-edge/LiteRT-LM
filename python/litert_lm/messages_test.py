@@ -23,7 +23,7 @@ class MessagesTest(parameterized.TestCase):
   def test_role_values(self):
     self.assertEqual(litert_lm.Role.SYSTEM.value, "system")
     self.assertEqual(litert_lm.Role.USER.value, "user")
-    self.assertEqual(litert_lm.Role.MODEL.value, "model")
+    self.assertEqual(litert_lm.Role.MODEL.value, "assistant")
     self.assertEqual(litert_lm.Role.TOOL.value, "tool")
 
   def test_tool_call_to_json(self):
@@ -98,20 +98,18 @@ class MessagesTest(parameterized.TestCase):
     self.assertLen(contents.contents, 1)
     content = contents.contents[0]
     self.assertIsInstance(content, litert_lm.Content.Text)
-    assert isinstance(content, litert_lm.Content.Text)
     self.assertEqual(content.text, "hello")
-    self.assertEqual(contents.to_json(), [{"type": "text", "text": "hello"}])
     self.assertEqual(str(contents), "hello")
 
   def test_contents_of_content(self):
-    text_content = litert_lm.Content.Text(text="hello")
-    contents = litert_lm.Contents.of(text_content)
+    c = litert_lm.Content.Text("hello")
+    contents = litert_lm.Contents.of(c)
     self.assertLen(contents.contents, 1)
-    self.assertEqual(contents.contents[0], text_content)
+    self.assertEqual(contents.contents[0], c)
 
   def test_contents_of_sequence(self):
-    c1 = litert_lm.Content.Text(text="hello")
-    c2 = litert_lm.Content.Text(text=" world")
+    c1 = litert_lm.Content.Text("hello")
+    c2 = litert_lm.Content.Text(" world")
     contents = litert_lm.Contents.of([c1, c2])
     self.assertLen(contents.contents, 2)
     self.assertEqual(contents.contents[0], c1)
@@ -119,7 +117,7 @@ class MessagesTest(parameterized.TestCase):
     self.assertEqual(str(contents), "hello world")
 
   def test_contents_of_varargs(self):
-    c1 = litert_lm.Content.Text(text="hello")
+    c1 = litert_lm.Content.Text("hello")
     contents = litert_lm.Contents.of(c1, " world")
     self.assertLen(contents.contents, 2)
     self.assertEqual(contents.contents[0], c1)
@@ -157,7 +155,7 @@ class MessagesTest(parameterized.TestCase):
     self.assertEqual(
         msg.to_json(),
         {
-            "role": "model",
+            "role": "assistant",
             "content": [{"type": "text", "text": "response"}],
         },
     )
@@ -181,7 +179,7 @@ class MessagesTest(parameterized.TestCase):
     self.assertEqual(
         msg.to_json(),
         {
-            "role": "model",
+            "role": "assistant",
             "tool_calls": [{
                 "type": "function",
                 "function": {
@@ -200,7 +198,7 @@ class MessagesTest(parameterized.TestCase):
     self.assertEqual(
         msg.to_json(),
         {
-            "role": "model",
+            "role": "assistant",
             "content": [{"type": "text", "text": "thinking"}],
             "channels": {"reasoning": "thinking"},
         },

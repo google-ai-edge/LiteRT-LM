@@ -28,7 +28,7 @@ class Role(enum.Enum):
 
   SYSTEM = "system"
   USER = "user"
-  MODEL = "model"
+  MODEL = "assistant"
   TOOL = "tool"
 
 

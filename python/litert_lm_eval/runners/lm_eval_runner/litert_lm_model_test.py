@@ -211,10 +211,10 @@ class LitertLmModelTest(parameterized.TestCase):
     # List context
     history, last_msg = model._split_context([
         {"role": "user", "content": "hi"},
-        {"role": "model", "content": "hello_back"},
+        {"role": "assistant", "content": "hello_back"},
     ])
     self.assertEqual([{"role": "user", "content": "hi"}], history)
-    self.assertEqual({"role": "model", "content": "hello_back"}, last_msg)
+    self.assertEqual({"role": "assistant", "content": "hello_back"}, last_msg)
 
     # Empty list context
     history, last_msg = model._split_context([])
@@ -238,7 +238,7 @@ class LitertLmModelTest(parameterized.TestCase):
             mock_conversation,
             [
                 {"role": "user", "content": "hi"},
-                {"role": "model", "content": "hello"},
+                {"role": "assistant", "content": "hello"},
             ],
         ),
     )

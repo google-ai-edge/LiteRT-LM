@@ -19,7 +19,7 @@ import OSLog
 public enum Role: String {
   case system
   case user
-  case model
+  case model = "assistant"
   case tool
 }
 
