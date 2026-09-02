@@ -480,6 +480,40 @@ internal object LiteRtLmJni {
   /** Returns true if the model has dynamic context. */
   external fun nativeIsDynamicContext(capabilitiesPointer: Long): Boolean
 
+  /**
+   * Returns the list of vision signature selection choices, or null if vision is not supported.
+   *
+   * @param capabilitiesPointer A pointer to the native capabilities instance.
+   * @return An IntArray of supported lengths, or null.
+   */
+  external fun nativeVisionSignatureSelection(capabilitiesPointer: Long): IntArray?
+
+  /**
+   * Returns the minimum LiteRT-LM runtime version required to run this model.
+   *
+   * @param capabilitiesPointer A pointer to the native capabilities instance.
+   * @return The minimum runtime version string, or null if not defined.
+   */
+  external fun nativeMinRuntimeVersion(capabilitiesPointer: Long): String?
+
+  /**
+   * Returns the bitmask of supported backends for a given modality.
+   *
+   * @param capabilitiesPointer A pointer to the native capabilities instance.
+   * @param modality The modality integer value (0 = Text, 1 = Vision, 2 = Audio, 3 = Video).
+   * @return A bitmask of supported backends.
+   */
+  external fun nativeModalitySupportedBackends(capabilitiesPointer: Long, modality: Int): Int
+
+  /**
+   * Returns the NPU brand of the model for a given modality.
+   *
+   * @param capabilitiesPointer A pointer to the native capabilities instance.
+   * @param modality The modality integer value (0 = Text, 1 = Vision, 2 = Audio, 3 = Video).
+   * @return The NPU brand int value (0 = Unknown, 1 = Qualcomm, 2 = Google Tensor, 3 = MediaTek).
+   */
+  external fun nativeModalityNpuBrand(capabilitiesPointer: Long, modality: Int): Int
+
   /** Creates a new LiteRT-LM embedding engine. */
   external fun nativeCreateEmbeddingEngine(
     modelFd: Int,

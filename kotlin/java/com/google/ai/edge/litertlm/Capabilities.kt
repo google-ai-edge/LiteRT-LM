@@ -28,6 +28,33 @@ data class SupportedModalities(
 // once SamplerConfig can support nullable fields to represent unset/0 values from models.
 data class SamplerParameters(val type: Int, val temperature: Float, val topK: Int, val topP: Float)
 
+/** Hardware backends supported by LiteRT-LM models. */
+enum class BackendType(internal val mask: Int) {
+  CPU(1),
+  GPU(2),
+  NPU(4),
+}
+
+/** NPU brand options. */
+enum class NpuBrand(val value: Int) {
+  UNKNOWN(0),
+  QUALCOMM(1),
+  GOOGLE_TENSOR(2),
+  MEDIATEK(3);
+
+  companion object {
+    fun fromValue(value: Int): NpuBrand = entries.firstOrNull { it.value == value } ?: UNKNOWN
+  }
+}
+
+/** Input and output modalities supported by LiteRT-LM models. */
+enum class Modality(val value: Int) {
+  TEXT(0),
+  VISION(1),
+  AUDIO(2),
+  VIDEO(3),
+}
+
 /**
  * Provides information about capabilities and features supported by a LiteRT-LM file.
  *
@@ -153,6 +180,44 @@ class Capabilities(modelPath: String) : AutoCloseable {
       return LiteRtLmJni.nativeIsDynamicContext(handle!!)
     }
   }
+
+  /** Returns the list of vision signature selection choices, or null if vision is not supported. */
+  fun visionSignatureSelection(): IntArray? {
+    synchronized(lock) {
+      checkInitialized()
+      return LiteRtLmJni.nativeVisionSignatureSelection(handle!!)
+    }
+  }
+
+  /**
+   * Returns the minimum LiteRT-LM runtime version required to run this model, or null if not
+   * defined.
+   */
+  fun minRuntimeVersion(): String? {
+    synchronized(lock) {
+      checkInitialized()
+      return LiteRtLmJni.nativeMinRuntimeVersion(handle!!)
+    }
+  }
+
+  /** Returns the set of supported backends for a given modality. */
+  fun supportedBackends(modality: Modality): Set<BackendType> {
+    synchronized(lock) {
+      checkInitialized()
+      val mask = LiteRtLmJni.nativeModalitySupportedBackends(handle!!, modality.value)
+      return BackendType.entries.filter { (mask and it.mask) != 0 }.toSet()
+    }
+  }
+
+  /** Returns the detected NPU brand for a given modality, or NpuBrand.UNKNOWN. */
+  fun npuBrand(modality: Modality): NpuBrand {
+    synchronized(lock) {
+      checkInitialized()
+      val brandVal = LiteRtLmJni.nativeModalityNpuBrand(handle!!, modality.value)
+      return NpuBrand.fromValue(brandVal)
+    }
+  }
+
 
   /** Closes the loaded capabilities and releases underlying resources. */
   override fun close() {

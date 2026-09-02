@@ -59,6 +59,7 @@ class CapabilitiesTests: XCTestCase {
     XCTAssertFalse(capabilities.supportsThinking())
     XCTAssertFalse(capabilities.supportsFunctionCalling())
     XCTAssertEqual(capabilities.maxVisionTokenBudget(), -1)
+    XCTAssertNil(capabilities.visionSignatureSelection())
 
     // Verify modalities
     XCTAssertTrue(capabilities.inputModalities.text)
@@ -76,5 +77,34 @@ class CapabilitiesTests: XCTestCase {
     // Verify context capabilities (128 from TFLite graph and static context for test model)
     XCTAssertEqual(capabilities.maxContextTokens(), 128)
     XCTAssertFalse(capabilities.isDynamicContext())
+
+    // Verify minRuntimeVersion is nil for legacy model
+    XCTAssertNil(capabilities.minRuntimeVersion)
+
+    // Verify modality-specific backends for text (defaults to CPU and GPU)
+    XCTAssertEqual(capabilities.supportedBackends(for: .text), [.cpu, .gpu])
+    // Verify modality-specific backends for vision (not present -> empty)
+    XCTAssertEqual(capabilities.supportedBackends(for: .vision), [])
+
+    XCTAssertEqual(capabilities.npuBrand(for: .text), .unknown)
+  }
+
+  func testVisionSignatureSelection_returnsLengthsForMultimodal() {
+    // swift-format-ignore
+    let modelResource =
+      "runtime/testdata/dummy_vision_with_adapter.litertlm"
+    let modelPath = testDataPath(forResource: modelResource)
+
+    guard let capabilities = Capabilities(modelPath: modelPath) else {
+      XCTFail("Failed to load model capabilities")
+      return
+    }
+
+    XCTAssertTrue(capabilities.inputModalities.vision)
+    guard let lengths = capabilities.visionSignatureSelection() else {
+      XCTFail("visionSignatureSelection returned nil")
+      return
+    }
+    XCTAssertEqual(lengths, [5])
   }
 }

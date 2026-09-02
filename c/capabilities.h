@@ -142,6 +142,61 @@ uint32_t litert_lm_loaded_file_max_context_tokens(
 // Added in version 0.2.0.
 LITERT_LM_C_API_EXPORT
 bool litert_lm_loaded_file_is_dynamic_context(LiteRtLmLoadedFile* loaded_file);
+
+// Returns the number of supported vision token lengths.
+// Writes up to `max_size` lengths to the provided array.
+// If lengths is NULL, only returns the count.
+// Returns -1 if the model does not support vision.
+//
+// Added in version 0.3.0.
+LITERT_LM_C_API_EXPORT
+int32_t litert_lm_loaded_file_vision_signature_selection(
+    LiteRtLmLoadedFile* loaded_file, int32_t* lengths, int32_t max_size);
+
+// Hardware backends supported by LiteRT-LM models.
+//
+// Added in version 0.3.0.
+typedef enum LiteRtLmBackendMask {
+  kLiteRtLmBackendCpu = 1 << 0,
+  kLiteRtLmBackendGpu = 1 << 1,
+  kLiteRtLmBackendNpu = 1 << 2,
+} LiteRtLmBackendMask;
+
+// Returns a bitmask of supported backends (combination of LiteRtLmBackendMask)
+// for a given modality.
+//
+// Added in version 0.3.0.
+LITERT_LM_C_API_EXPORT
+int32_t litert_lm_loaded_file_modality_supported_backends(
+    LiteRtLmLoadedFile* loaded_file, LiteRtLmModality modality);
+
+// NPU brand options.
+//
+// Added in version 0.3.0.
+typedef enum LiteRtLmNpuBrand {
+  kLiteRtLmNpuBrandUnknown = 0,
+  kLiteRtLmNpuBrandQualcomm = 1,
+  kLiteRtLmNpuBrandGoogleTensor = 2,
+  kLiteRtLmNpuBrandMediaTek = 3,
+} LiteRtLmNpuBrand;
+
+// Returns the detected NPU brand of the model for a given modality, or
+// kLiteRtLmNpuBrandUnknown if not NPU-compiled for this modality.
+//
+// Added in version 0.3.0.
+LITERT_LM_C_API_EXPORT
+LiteRtLmNpuBrand litert_lm_loaded_file_modality_npu_brand(
+    LiteRtLmLoadedFile* loaded_file, LiteRtLmModality modality);
+
+// Returns the minimum LiteRT-LM runtime version required to run this model.
+// The returned pointer is valid as long as the loaded_file is valid.
+// Returns NULL if the version requirement is not defined.
+//
+// Added in version 0.3.0.
+LITERT_LM_C_API_EXPORT
+const char* litert_lm_loaded_file_min_runtime_version(
+    LiteRtLmLoadedFile* loaded_file);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif

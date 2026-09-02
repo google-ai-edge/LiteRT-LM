@@ -15,6 +15,7 @@
 #include "c/capabilities.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <string>
 
 #if defined(__APPLE__)
@@ -46,6 +47,23 @@ TEST(CapabilitiesCTest, InspectCapabilities) {
   EXPECT_FALSE(litert_lm_loaded_file_supports_thinking(file));
   EXPECT_FALSE(litert_lm_loaded_file_supports_function_calling(file));
   EXPECT_EQ(litert_lm_loaded_file_max_vision_token_budget(file), -1);
+  EXPECT_EQ(
+      litert_lm_loaded_file_vision_signature_selection(file, nullptr, 0),
+      -1);
+  EXPECT_EQ(litert_lm_loaded_file_min_runtime_version(file), nullptr);
+  EXPECT_EQ(litert_lm_loaded_file_min_runtime_version(nullptr), nullptr);
+
+  // Verify modality-specific backends for text (default to CPU | GPU)
+  EXPECT_EQ(litert_lm_loaded_file_modality_supported_backends(
+                file, kLiteRtLmModalityText),
+            kLiteRtLmBackendCpu | kLiteRtLmBackendGpu);
+  // Verify modality-specific backends for vision (not present -> 0)
+  EXPECT_EQ(litert_lm_loaded_file_modality_supported_backends(
+                file, kLiteRtLmModalityVision),
+            0);
+  EXPECT_EQ(
+      litert_lm_loaded_file_modality_npu_brand(file, kLiteRtLmModalityText),
+      kLiteRtLmNpuBrandUnknown);
 
   // Verify modalities
   EXPECT_TRUE(litert_lm_loaded_file_supports_input_modality(
@@ -88,4 +106,74 @@ TEST(CapabilitiesCTest, CreateInvalidPathReturnsNull) {
   EXPECT_EQ(file, nullptr);
 }
 
+TEST(CapabilitiesCTest, InspectMultimodalCapabilities) {
+  std::string model_path = GetRunfilePath(
+      "litert_lm/runtime/testdata/dummy_vision_with_adapter.litertlm");
+  LiteRtLmLoadedFile* file = litert_lm_loaded_file_create(model_path.c_str());
+  ASSERT_NE(file, nullptr);
+
+  // Verify modality
+  EXPECT_TRUE(litert_lm_loaded_file_supports_input_modality(
+      file, kLiteRtLmModalityVision));
+
+  // Verify supported lengths
+  // 1. Get count only
+  int32_t count =
+      litert_lm_loaded_file_vision_signature_selection(file, nullptr, 0);
+  EXPECT_EQ(count, 1);
+
+  // 2. Fetch values
+  int32_t lengths[1] = {0};
+  int32_t written = litert_lm_loaded_file_vision_signature_selection(
+      file, lengths, 1);
+  EXPECT_EQ(written, 1);
+  EXPECT_EQ(lengths[0], 5);
+
+  litert_lm_loaded_file_delete(file);
+}
+
+TEST(CapabilitiesCTest, NullPointerSafety) {
+  EXPECT_FALSE(litert_lm_loaded_file_has_speculative_decoding_support(nullptr));
+  EXPECT_FALSE(litert_lm_loaded_file_supports_thinking(nullptr));
+  EXPECT_FALSE(litert_lm_loaded_file_supports_function_calling(nullptr));
+  EXPECT_EQ(litert_lm_loaded_file_max_vision_token_budget(nullptr), -1);
+  EXPECT_EQ(
+      litert_lm_loaded_file_vision_signature_selection(nullptr, nullptr, 0),
+      -1);
+  EXPECT_EQ(litert_lm_loaded_file_min_runtime_version(nullptr), nullptr);
+  EXPECT_EQ(litert_lm_loaded_file_modality_supported_backends(
+                nullptr, kLiteRtLmModalityText),
+            0);
+  EXPECT_EQ(litert_lm_loaded_file_modality_npu_brand(
+                nullptr, kLiteRtLmModalityText),
+            kLiteRtLmNpuBrandUnknown);
+  EXPECT_FALSE(litert_lm_loaded_file_supports_input_modality(
+      nullptr, kLiteRtLmModalityText));
+  EXPECT_EQ(litert_lm_loaded_file_sampler_type(nullptr),
+            kLiteRtLmSamplerTypeUnspecified);
+  EXPECT_FLOAT_EQ(litert_lm_loaded_file_sampler_temperature(nullptr), 0.0f);
+  EXPECT_EQ(litert_lm_loaded_file_sampler_top_k(nullptr), 0);
+  EXPECT_FLOAT_EQ(litert_lm_loaded_file_sampler_top_p(nullptr), 0.0f);
+  litert_lm_loaded_file_delete(nullptr);
+}
+
+TEST(CapabilitiesCTest, InspectAudioCapabilities) {
+  std::string model_path = GetRunfilePath(
+      "litert_lm/runtime/testdata/dummy_audio_only.litertlm");
+  LiteRtLmLoadedFile* file = litert_lm_loaded_file_create(model_path.c_str());
+  ASSERT_NE(file, nullptr);
+
+  // Verify audio modality
+  EXPECT_TRUE(litert_lm_loaded_file_supports_input_modality(
+      file, kLiteRtLmModalityAudio));
+
+  // Verify supported backends for audio
+  EXPECT_EQ(litert_lm_loaded_file_modality_supported_backends(
+                file, kLiteRtLmModalityAudio),
+            kLiteRtLmBackendCpu | kLiteRtLmBackendGpu);
+
+  litert_lm_loaded_file_delete(file);
+}
+
 }  // namespace
+

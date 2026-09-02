@@ -17,6 +17,7 @@
 
 #include <cerrno>
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <memory>
 #include <optional>
@@ -1600,6 +1601,53 @@ LITERTLM_JNIEXPORT jboolean JNICALL JNI_METHOD(nativeIsDynamicContext)(
   return litert_lm_loaded_file_is_dynamic_context(
       reinterpret_cast<LiteRtLmLoadedFile*>(capabilities_pointer));
 }
+
+LITERTLM_JNIEXPORT jintArray JNICALL
+JNI_METHOD(nativeVisionSignatureSelection)(JNIEnv* env, jclass thiz,
+                                           jlong capabilities_pointer) {
+  auto* loaded_file =
+      reinterpret_cast<LiteRtLmLoadedFile*>(capabilities_pointer);
+  int32_t count = litert_lm_loaded_file_vision_signature_selection(
+      loaded_file, nullptr, 0);
+  if (count == -1) {
+    return nullptr;
+  }
+  std::vector<int32_t> lengths(count);
+  litert_lm_loaded_file_vision_signature_selection(
+      loaded_file, lengths.data(), count);
+  jintArray result = env->NewIntArray(count);
+  if (result == nullptr) {
+    return nullptr;
+  }
+  env->SetIntArrayRegion(result, 0, count,
+                         reinterpret_cast<const jint*>(lengths.data()));
+  return result;
+}
+
+LITERTLM_JNIEXPORT jstring JNICALL JNI_METHOD(nativeMinRuntimeVersion)(
+    JNIEnv* env, jclass thiz, jlong capabilities_pointer) {
+  const char* version = litert_lm_loaded_file_min_runtime_version(
+      reinterpret_cast<LiteRtLmLoadedFile*>(capabilities_pointer));
+  if (version == nullptr) {
+    return nullptr;
+  }
+  return env->NewStringUTF(version);
+}
+
+LITERTLM_JNIEXPORT jint JNICALL JNI_METHOD(nativeModalitySupportedBackends)(
+    JNIEnv* env, jclass thiz, jlong capabilities_pointer, jint modality) {
+  return litert_lm_loaded_file_modality_supported_backends(
+      reinterpret_cast<LiteRtLmLoadedFile*>(capabilities_pointer),
+      static_cast<LiteRtLmModality>(modality));
+}
+
+LITERTLM_JNIEXPORT jint JNICALL JNI_METHOD(nativeModalityNpuBrand)(
+    JNIEnv* env, jclass thiz, jlong capabilities_pointer, jint modality) {
+  return static_cast<jint>(litert_lm_loaded_file_modality_npu_brand(
+      reinterpret_cast<LiteRtLmLoadedFile*>(capabilities_pointer),
+      static_cast<LiteRtLmModality>(modality)));
+}
+
 LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateEmbeddingEngine)(
     JNIEnv* env, jclass thiz, jint model_fd, jstring model_path,
     jstring backend, jstring vision_backend, jstring audio_backend,

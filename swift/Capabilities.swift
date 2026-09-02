@@ -23,6 +23,38 @@ public struct SupportedModalities: Equatable {
   public let video: Bool
 }
 
+/// Hardware backends.
+public enum BackendType: Hashable, Sendable {
+  case cpu
+  case gpu
+  case npu
+}
+
+/// NPU brand options.
+public enum NPUBrand: Hashable, Sendable {
+  case unknown
+  case qualcomm
+  case googleTensor
+  case mediaTek
+}
+
+/// Modality options.
+public enum Modality: Int, Hashable, Sendable {
+  case text = 0
+  case vision = 1
+  case audio = 2
+  case video = 3
+
+  internal var cValue: LiteRtLmModality {
+    switch self {
+    case .text: return kLiteRtLmModalityText
+    case .vision: return kLiteRtLmModalityVision
+    case .audio: return kLiteRtLmModalityAudio
+    case .video: return kLiteRtLmModalityVideo
+    }
+  }
+}
+
 /// Default sampler parameters.
 /// TODO: b/554164915 - Reuse SamplerConfig instead of SamplerParameters (matching Python),
 /// once SamplerConfig can support optional fields to represent unset/0 values from models.
@@ -123,6 +155,58 @@ public class Capabilities {
   public func isDynamicContext() -> Bool {
     return litert_lm_loaded_file_is_dynamic_context(handle)
   }
+
+  /// Returns the list of vision signature selection choices, or nil if vision is not supported.
+  public func visionSignatureSelection() -> [Int]? {
+    let count = litert_lm_loaded_file_vision_signature_selection(handle, nil, 0)
+    if count == -1 {
+      return nil
+    }
+    if count == 0 {
+      return []
+    }
+    var lengths = [Int32](repeating: 0, count: Int(count))
+    let written = litert_lm_loaded_file_vision_signature_selection(handle, &lengths, count)
+    guard written > 0 else {
+      return []
+    }
+    return lengths[0..<Int(written)].map { Int($0) }
+  }
+
+  /// Returns the minimum LiteRT-LM runtime version required to run this model.
+  /// Returns nil if not defined.
+  public var minRuntimeVersion: String? {
+    guard let versionChars = litert_lm_loaded_file_min_runtime_version(handle) else {
+      return nil
+    }
+    return String(cString: versionChars)
+  }
+
+  /// Returns the set of supported backends for a given modality.
+  public func supportedBackends(for modality: Modality) -> Set<BackendType> {
+    let mask = litert_lm_loaded_file_modality_supported_backends(
+      handle, modality.cValue
+    )
+    var backends = Set<BackendType>()
+    if (mask & Int32(kLiteRtLmBackendCpu.rawValue)) != 0 { backends.insert(.cpu) }
+    if (mask & Int32(kLiteRtLmBackendGpu.rawValue)) != 0 { backends.insert(.gpu) }
+    if (mask & Int32(kLiteRtLmBackendNpu.rawValue)) != 0 { backends.insert(.npu) }
+    return backends
+  }
+
+  /// Returns the detected NPU brand of the model for a given modality, or .unknown if not NPU-compiled.
+  public func npuBrand(for modality: Modality) -> NPUBrand {
+    let brand = litert_lm_loaded_file_modality_npu_brand(
+      handle, modality.cValue
+    )
+    switch brand {
+    case kLiteRtLmNpuBrandQualcomm: return .qualcomm
+    case kLiteRtLmNpuBrandGoogleTensor: return .googleTensor
+    case kLiteRtLmNpuBrandMediaTek: return .mediaTek
+    default: return .unknown
+    }
+  }
+
   deinit {
     litert_lm_loaded_file_delete(handle)
   }

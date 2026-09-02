@@ -14,6 +14,7 @@
 
 #include "c/capabilities.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <utility>
 
@@ -31,6 +32,27 @@ struct LiteRtLmLoadedFile {
   // Contains the parsed model capabilities.
   litert::lm::schema::capabilities::ModelCapabilities info;
 };
+
+namespace {
+using ::litert::lm::schema::capabilities::LlmInferenceCapability;
+using ::litert::lm::schema::capabilities::SupportedBackends;
+
+const SupportedBackends* GetModalityBackends(
+    const LlmInferenceCapability& llm_cap, LiteRtLmModality modality) {
+  switch (modality) {
+    case kLiteRtLmModalityText:
+      return &llm_cap.text_supported_backends;
+    case kLiteRtLmModalityVision:
+      return &llm_cap.vision_supported_backends;
+    case kLiteRtLmModalityAudio:
+      return &llm_cap.audio_supported_backends;
+    case kLiteRtLmModalityVideo:
+      return &llm_cap.video_supported_backends;
+    default:
+      return nullptr;
+  }
+}
+}  // namespace
 
 extern "C" {
 
@@ -111,8 +133,6 @@ float litert_lm_loaded_file_sampler_top_p(LiteRtLmLoadedFile* loaded_file) {
   return loaded_file->info.llm_capability->default_sampler_params.p;
 }
 
-
-
 bool litert_lm_loaded_file_supports_input_modality(
     LiteRtLmLoadedFile* loaded_file, LiteRtLmModality modality) {
   if (loaded_file == nullptr || !loaded_file->info.llm_capability.has_value()) {
@@ -154,4 +174,67 @@ bool litert_lm_loaded_file_is_dynamic_context(LiteRtLmLoadedFile* loaded_file) {
   if (!loaded_file->info.llm_capability.has_value()) return false;
   return loaded_file->info.llm_capability->is_dynamic_context;
 }
+
+int32_t litert_lm_loaded_file_vision_signature_selection(
+    LiteRtLmLoadedFile* loaded_file, int32_t* lengths, int32_t max_size) {
+  if (loaded_file == nullptr || !loaded_file->info.llm_capability.has_value()) {
+    return -1;
+  }
+  const auto& opt_lengths =
+      loaded_file->info.llm_capability->vision_signature_selection;
+  if (!opt_lengths.has_value()) {
+    return -1;
+  }
+  if (lengths != nullptr) {
+    int32_t count =
+        std::min(max_size, static_cast<int32_t>(opt_lengths->size()));
+    for (int32_t i = 0; i < count; ++i) {
+      lengths[i] = (*opt_lengths)[i];
+    }
+  }
+  return static_cast<int32_t>(opt_lengths->size());
+}
+
+int32_t litert_lm_loaded_file_modality_supported_backends(
+    LiteRtLmLoadedFile* loaded_file, LiteRtLmModality modality) {
+  if (loaded_file == nullptr || !loaded_file->info.llm_capability.has_value()) {
+    return 0;
+  }
+  const auto* backends =
+      GetModalityBackends(*loaded_file->info.llm_capability, modality);
+  if (backends == nullptr) {
+    return 0;
+  }
+  int32_t mask = 0;
+  if (backends->cpu) mask |= kLiteRtLmBackendCpu;
+  if (backends->gpu) mask |= kLiteRtLmBackendGpu;
+  if (backends->npu) mask |= kLiteRtLmBackendNpu;
+  return mask;
+}
+
+LiteRtLmNpuBrand litert_lm_loaded_file_modality_npu_brand(
+    LiteRtLmLoadedFile* loaded_file, LiteRtLmModality modality) {
+  if (loaded_file == nullptr || !loaded_file->info.llm_capability.has_value()) {
+    return kLiteRtLmNpuBrandUnknown;
+  }
+  const auto* backends =
+      GetModalityBackends(*loaded_file->info.llm_capability, modality);
+  if (backends == nullptr) {
+    return kLiteRtLmNpuBrandUnknown;
+  }
+  return static_cast<LiteRtLmNpuBrand>(backends->npu_brand);
+}
+
+const char* litert_lm_loaded_file_min_runtime_version(
+    LiteRtLmLoadedFile* loaded_file) {
+  if (loaded_file == nullptr || !loaded_file->info.llm_capability.has_value()) {
+    return nullptr;
+  }
+  const auto& version = loaded_file->info.llm_capability->min_runtime_version;
+  if (version.empty()) {
+    return nullptr;
+  }
+  return version.c_str();
+}
+
 }  // extern "C"
