@@ -117,7 +117,7 @@ TEST(ModelTypeUtilsTest, GetDefaultJinjaPromptTemplate) {
   prompt_template_input.messages = {
       {{"role", "system"}, {"content", "This is a system message"}},
       {{"role", "user"}, {"content", "This is a user message"}},
-      {{"role", "model"}, {"content", "This is a model message"}}};
+      {{"role", "assistant"}, {"content", "This is a model message"}}};
   ASSERT_OK_AND_ASSIGN(auto rendered_prompt,
                        prompt_template.Apply(prompt_template_input));
   EXPECT_EQ(rendered_prompt,
@@ -139,7 +139,7 @@ TEST(ModelTypeUtilsTest, GetDefaultJinjaPromptTemplateEmpty) {
   prompt_template_input.messages = {
       {{"role", "system"}, {"content", "This is a system message"}},
       {{"role", "user"}, {"content", "This is a user message"}},
-      {{"role", "model"}, {"content", "This is a model message"}}};
+      {{"role", "assistant"}, {"content", "This is a model message"}}};
   ASSERT_OK_AND_ASSIGN(auto rendered_prompt,
                        prompt_template.Apply(prompt_template_input));
   EXPECT_EQ(rendered_prompt,
@@ -175,7 +175,7 @@ TEST(ModelTypeUtilsTest, GetDefaultJinjaPromptTemplateWithImageAndAudio) {
                {{"type", "audio"}, {"audio", "audio_bytes"}},
            }},
       },
-      {{"role", "model"}, {"content", "This is a model message"}}};
+      {{"role", "assistant"}, {"content", "This is a model message"}}};
   ASSERT_OK_AND_ASSIGN(auto rendered_prompt,
                        prompt_template.Apply(prompt_template_input));
   EXPECT_EQ(rendered_prompt,
