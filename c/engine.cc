@@ -16,6 +16,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #if defined(_WIN32)
@@ -798,6 +799,29 @@ LiteRtLmEngine* litert_lm_engine_create(
     const LiteRtLmEngineSettings* settings) {
   if (!settings || !settings->settings) {
     return nullptr;
+  }
+
+  bool force_f32 = false;
+#if defined(__linux__)
+  // May consider enable this for other platforms (Windows, macOS)
+  if (char* env_force_f32 = std::getenv("LITERT_LM_FORCE_F32")) {
+    if (*env_force_f32 == '1') {
+      force_f32 = true;
+      ABSL_LOG(INFO) << "LITERT_LM_FORCE_F32 is set";
+    }
+  }
+#endif
+  if (force_f32) {
+    settings->settings->GetMutableMainExecutorSettings().SetActivationDataType(
+        litert::lm::ActivationDataType::FLOAT32);
+    if (settings->settings->GetVisionExecutorSettings().has_value()) {
+      settings->settings->GetMutableVisionExecutorSettings()
+          ->SetActivationDataType(litert::lm::ActivationDataType::FLOAT32);
+    }
+    if (settings->settings->GetAudioExecutorSettings().has_value()) {
+      settings->settings->GetMutableAudioExecutorSettings()
+          ->SetActivationDataType(litert::lm::ActivationDataType::FLOAT32);
+    }
   }
 
   absl::StatusOr<std::unique_ptr<Engine>> engine =
