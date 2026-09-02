@@ -49,19 +49,28 @@ absl::StatusOr<std::vector<litert::lm::InputData>> ToEngineInputData(
     return engine_inputs;
   }
   engine_inputs.reserve(num_inputs);
+
+  // Lazily initialized and reused across multiple audio inputs to avoid
+  // redundant AudioPreprocessor and mel filterbank allocations.
+  std::unique_ptr<::litert::support::AudioPreprocessorMiniAudio>
+      audio_preprocessor = nullptr;
+
   for (size_t i = 0; i < num_inputs; ++i) {
     if (inputs[i] != nullptr) {
       if (const auto* raw_audio =
               std::get_if<litert::lm::InputAudio>(&inputs[i]->data)) {
         if (!raw_audio->GetPreprocessedAudioTensor().ok()) {
-          auto preprocessor =
-              ::litert::support::AudioPreprocessorMiniAudio::Create(
-                  ::litert::support::AudioPreprocessorConfig::
-                      CreateDefaultUsmConfig());
-          if (!preprocessor.ok()) {
-            return preprocessor.status();
+          if (audio_preprocessor == nullptr) {
+            auto preprocessor =
+                ::litert::support::AudioPreprocessorMiniAudio::Create(
+                    ::litert::support::AudioPreprocessorConfig::
+                        CreateDefaultUsmConfig());
+            if (!preprocessor.ok()) {
+              return preprocessor.status();
+            }
+            audio_preprocessor = std::move(*preprocessor);
           }
-          auto processed_audio = (*preprocessor)->Preprocess(*raw_audio);
+          auto processed_audio = audio_preprocessor->Preprocess(*raw_audio);
           if (!processed_audio.ok()) {
             return processed_audio.status();
           }
