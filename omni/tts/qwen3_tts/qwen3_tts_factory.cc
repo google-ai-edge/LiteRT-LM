@@ -43,7 +43,7 @@ absl::Status InitQwen3TtsResources(const Qwen3TtsModelConfig& config,
                                    const std::string& model_folder,
                                    const std::string& cache_dir,
                                    lm::Backend backend, int num_threads,
-                                   ::litert::Environment& env,
+                                   Environment& env,
                                    ModelResources& resources) {
   ModelOptions model_options;
   model_options.model_dir = model_folder;
@@ -65,9 +65,10 @@ absl::Status InitQwen3TtsResources(const Qwen3TtsModelConfig& config,
       std::make_shared<CompiledModel>(std::move(text_proj))));
 
   LITERT_ASSIGN_OR_RETURN(
-      auto talker, CreateCompiledModel(env, model_options, config.talker_file));
-  ABSL_RETURN_IF_ERROR(resources.AddCompiledModel(
-      "talker", std::make_shared<CompiledModel>(std::move(talker))));
+      auto talker_runner,
+      CreateLmRunner(env, model_options, config.talker_file));
+  ABSL_RETURN_IF_ERROR(
+      resources.AddLmRunner("talker", std::move(talker_runner)));
 
   LITERT_ASSIGN_OR_RETURN(
       auto mtp, CreateCompiledModel(env, model_options, config.mtp_file));

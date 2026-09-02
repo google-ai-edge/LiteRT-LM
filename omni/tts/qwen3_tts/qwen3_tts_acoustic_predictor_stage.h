@@ -15,7 +15,6 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_OMNI_TTS_QWEN3_TTS_QWEN3_TTS_ACOUSTIC_PREDICTOR_STAGE_H_
 #define THIRD_PARTY_ODML_LITERT_LM_OMNI_TTS_QWEN3_TTS_QWEN3_TTS_ACOUSTIC_PREDICTOR_STAGE_H_
 
-#include <map>
 #include <memory>
 #include <random>
 #include <string>
@@ -23,18 +22,16 @@
 #include <vector>
 
 #include "absl/base/nullability.h"  // from @com_google_absl
-#include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_compiled_model.h"  // from @litert
-#include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "omni/base/litert_lm_runner.h"
 #include "omni/base/model_resources.h"
 #include "omni/base/stage.h"
+#include "omni/base/stateful_litert_runner.h"
 #include "omni/tts/qwen3_tts/qwen3_tts_io_types.h"
 #include "omni/tts/qwen3_tts/qwen3_tts_model_config.h"
-#include "runtime/executor/litert_compiled_model_executor_utils.h"
 
 namespace litert::omni::tts {
 
@@ -48,12 +45,12 @@ class Qwen3TtsAcousticPredictorStage
   // args
   // - text_frontend: Stage providing input Qwen3TtsFrontendOutput prompts.
   // - config: Configuration for the Qwen3TtsAcousticPredictorStage.
-  // - resources: Shared ModelResources container with compiled models.
+  // - resources: Shared ModelResources container with LM runners and compiled
+  // models.
   //
   // returns
   // - Unique pointer to created Qwen3TtsAcousticPredictorStage on success, or
-  // error
-  //   status on failure.
+  // error status.
   static absl::StatusOr<std::unique_ptr<Qwen3TtsAcousticPredictorStage>> Create(
       Stage<Qwen3TtsFrontendOutput>* absl_nonnull text_frontend,
       const Qwen3TtsModelConfig& config,
@@ -76,11 +73,6 @@ class Qwen3TtsAcousticPredictorStage
   absl::Status ScheduleInternal() override;
 
  private:
-  struct DecodeOutput {
-    std::vector<float> cb0_logits;  // Shape [3072]
-    std::vector<float> hidden;      // Shape [1024]
-  };
-
   Qwen3TtsAcousticPredictorStage(
       Stage<Qwen3TtsFrontendOutput>* absl_nonnull text_frontend,
       Qwen3TtsModelConfig config,
@@ -95,8 +87,6 @@ class Qwen3TtsAcousticPredictorStage
     }
   }
 
-  Stage<Qwen3TtsFrontendOutput>& text_frontend_;
-
   // Runs the Talker model prefill step on input prompt embeddings to populate
   // KV cache.
   //
@@ -107,18 +97,6 @@ class Qwen3TtsAcousticPredictorStage
   // returns
   // - absl::OkStatus() on success, or error status on execution failure.
   absl::Status RunPrefill(const std::vector<float>& prefill, int p);
-
-  // Runs one step of Talker model decode to produce codebook 0 logits and
-  // hidden vector.
-  //
-  // args
-  // - embed_1024: Input embedding float array of size 1024.
-  // - pos: Current sequence position index.
-  //
-  // returns
-  // - DecodeOutput containing logits and hidden state on success, or error
-  // status.
-  absl::StatusOr<DecodeOutput> RunDecode(const float* embed_1024, int pos);
 
   // Runs Multi-Token Predictor (MTP) model to generate remaining codebook
   // tokens.
@@ -131,18 +109,6 @@ class Qwen3TtsAcousticPredictorStage
   // - Vector of predicted codebook token IDs on success, or error status.
   absl::StatusOr<std::vector<int>> RunMtp(const std::vector<float>& hidden,
                                           int cb0);
-
-  // Selects a token ID from a probability logits distribution by sampling or
-  // argmax.
-  //
-  // args
-  // - logits: Unnormalized logit values float vector.
-  // - do_sample: Whether to sample randomly according to softmax probabilities
-  //   or select greedy argmax.
-  //
-  // returns
-  // - Selected token index integer.
-  int PickToken(const std::vector<float>& logits, bool do_sample);
 
   // Embeds a single audio codec token ID using the codec embedding model.
   //
@@ -163,61 +129,39 @@ class Qwen3TtsAcousticPredictorStage
   absl::StatusOr<std::vector<float>> EmbedMtpTokens(
       const std::vector<int>& mtp_codes);
 
+  // Selects a token ID from a probability logits distribution by sampling or
+  // argmax.
+  //
+  // args
+  // - logits: Unnormalized logit values float vector.
+  // - do_sample: Whether to sample randomly according to softmax probabilities
+  //   or select greedy argmax.
+  //
+  // returns
+  // - Selected token index integer.
+  int PickToken(const std::vector<float>& logits, bool do_sample);
+
+  Stage<Qwen3TtsFrontendOutput>& text_frontend_;
   Qwen3TtsModelConfig config_;
   std::shared_ptr<ModelResources> resources_;
 
-  // Required compiled models
-  std::shared_ptr<CompiledModel> talker_model_;
-  std::shared_ptr<CompiledModel> mtp_model_;
+  // LM Runner for Talker
+  std::shared_ptr<LiteRtLmRunner> talker_runner_;
+
+  // Stateful runner for MTP
+  std::unique_ptr<LiteRtRunner> mtp_runner_raw_;
+  std::unique_ptr<StatefulLiteRtRunner> mtp_runner_;
+
+  // Embedding compiled models
   std::shared_ptr<CompiledModel> codec_embedding_model_;
   std::shared_ptr<CompiledModel> mtp_embedding_model_;
 
-  // Pre-allocated TensorBuffers for embedding models
+  // Pre-allocated reusable buffers for embedding models
   std::vector<TensorBuffer> codec_emb_input_buffers_;
   std::vector<TensorBuffer> codec_emb_output_buffers_;
   std::vector<TensorBuffer> mtp_emb_input_buffers_;
   std::vector<TensorBuffer> mtp_emb_output_buffers_;
 
-  struct TalkerPrefillBuffers {
-    int seq_len = 0;
-    std::string signature_name;
-    TensorBuffer emb_buf;
-    TensorBuffer pos_buf;
-    TensorBuffer mask_buf;
-    absl::flat_hash_map<std::string, TensorBuffer> kv_output_bufs;
-  };
-
-  // Pre-allocated TensorBuffers for Talker prefill signatures (keyed by
-  // seq_len)
-  std::map<int, TalkerPrefillBuffers> talker_prefill_buffers_;
-
-  TensorBuffer talker_decode_emb_buf_;
-  TensorBuffer talker_decode_pos_buf_;
-  TensorBuffer talker_decode_mask_buf_;
-  TensorBuffer talker_decode_logits_buf_;
-  absl::flat_hash_map<std::string, TensorBuffer> talker_kv_cache_bufs_0_;
-  absl::flat_hash_map<std::string, TensorBuffer> talker_kv_cache_bufs_1_;
-
-  // Pre-allocated TensorBuffers for MTP model
-  TensorBuffer mtp_embed_buf_;
-  TensorBuffer mtp_pos_buf_;
-  TensorBuffer mtp_mask_buf_;
-  TensorBuffer mtp_logits_out_buf_;
-  absl::flat_hash_map<std::string, TensorBuffer> mtp_kv_cache_bufs_0_;
-  absl::flat_hash_map<std::string, TensorBuffer> mtp_kv_cache_bufs_1_;
-
-  std::vector<std::string> talker_kv_names_;
-  lm::ModelSignatures mtp_signatures_;
-  std::string mtp_signature_name_;
-  std::string mtp_embed_input_name_;
-  std::string mtp_pos_input_name_;
-  std::string mtp_mask_input_name_;
-  std::string mtp_logits_output_name_;
-  std::vector<std::string> mtp_k_input_names_;
-  std::vector<std::string> mtp_v_input_names_;
-  std::vector<std::string> mtp_k_output_names_;
-  std::vector<std::string> mtp_v_output_names_;
-  int talker_cache_len_ = 512;
   int mtp_cache_len_ = 32;
   std::mt19937_64 rng_;
 };

@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <iterator>
@@ -41,43 +42,19 @@
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "omni/base/litert_runner.h"
 #include "omni/base/model_resources.h"
+#include "omni/base/model_utils.h"
 #include "omni/base/stage.h"
+#include "omni/base/stateful_litert_runner.h"
 #include "omni/tts/qwen3_tts/common.h"
 #include "omni/tts/qwen3_tts/qwen3_tts_io_types.h"
 #include "omni/tts/qwen3_tts/qwen3_tts_model_config.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
+#include "runtime/executor/llm_executor_io_types.h"
 #include "support/util/convert_tensor_buffer.h"
 
 namespace litert::omni::tts {
-
-namespace {
-
-constexpr absl::string_view kPrefillSignaturePrefix = "prefill";
-constexpr absl::string_view kDecodeSignature = "decode";
-constexpr absl::string_view kEmbedInputName = "embeddings";
-constexpr absl::string_view kPosInputName = "input_pos";
-constexpr absl::string_view kMaskInputName = "mask";
-constexpr absl::string_view kLogitsOutputName = "logits";
-constexpr int kCacheLen = 512;
-
-absl::Status InitializeBuffer(TensorBuffer& buffer) {
-  LITERT_ASSIGN_OR_RETURN(
-      auto buffer_lock_and_addr,
-      TensorBufferScopedLock::Create(buffer, TensorBuffer::LockMode::kWrite));
-  LITERT_ASSIGN_OR_RETURN(auto packed_size, buffer.PackedSize());
-  std::memset(buffer_lock_and_addr.second, 0, packed_size);
-  return absl::OkStatus();
-}
-
-absl::Status InitializeBuffers(
-    absl::flat_hash_map<std::string, TensorBuffer>& buffers) {
-  for (auto& [name, buffer] : buffers) {
-    LITERT_RETURN_IF_ERROR(InitializeBuffer(buffer));
-  }
-  return absl::OkStatus();
-}
-}  // namespace
 
 absl::StatusOr<std::unique_ptr<Qwen3TtsAcousticPredictorStage>>
 Qwen3TtsAcousticPredictorStage::Create(
@@ -87,9 +64,12 @@ Qwen3TtsAcousticPredictorStage::Create(
   auto stage = absl::WrapUnique(new Qwen3TtsAcousticPredictorStage(
       text_frontend, config, std::move(resources)));
 
-  LITERT_ASSIGN_OR_RETURN(stage->talker_model_,
-                          stage->resources_->GetCompiledModel("talker"));
-  LITERT_ASSIGN_OR_RETURN(stage->mtp_model_,
+  // Retrieve LM Runner for Talker model.
+  LITERT_ASSIGN_OR_RETURN(stage->talker_runner_,
+                          stage->resources_->GetLmRunner("talker"));
+
+  // Retrieve auxiliary compiled models.
+  LITERT_ASSIGN_OR_RETURN(auto mtp_model,
                           stage->resources_->GetCompiledModel("mtp"));
   LITERT_ASSIGN_OR_RETURN(
       stage->codec_embedding_model_,
@@ -108,479 +88,57 @@ Qwen3TtsAcousticPredictorStage::Create(
   LITERT_ASSIGN_OR_RETURN(stage->mtp_emb_output_buffers_,
                           stage->mtp_embedding_model_->CreateOutputBuffers());
 
-  // Set up MTP signature and input/output names
-  LITERT_ASSIGN_OR_RETURN(auto decode_signature,
-                          stage->mtp_model_->GetSignature(0));
-  stage->mtp_signature_name_ = std::string(decode_signature.Key());
-
-  auto mtp_sig_res = lm::GetModelSignaturesFromInputOutputNames(
-      decode_signature.InputNames(), decode_signature.OutputNames(),
-      /*strict=*/false);
-  // If MTP signature names are not found, default to use the first signature.
-  // This is for backward compatibility with converted models without specifying
-  // signature names.
-  if (mtp_sig_res.ok()) {
-    stage->mtp_signatures_ = std::move(*mtp_sig_res);
-  }
-
-  stage->mtp_k_input_names_.clear();
-  stage->mtp_v_input_names_.clear();
-  stage->mtp_k_output_names_.clear();
-  stage->mtp_v_output_names_.clear();
-
-  std::string mtp_k_root_name;
-  std::string mtp_v_root_name;
-  auto kv_status = lm::GetKVCacheRootNames(decode_signature.InputNames(),
-                                           decode_signature.OutputNames(),
-                                           mtp_k_root_name, mtp_v_root_name);
-
-  if (kv_status.ok()) {
-    for (absl::string_view name : decode_signature.InputNames()) {
-      if (absl::StartsWith(name, mtp_k_root_name)) {
-        stage->mtp_k_input_names_.push_back(std::string(name));
-      } else if (absl::StartsWith(name, mtp_v_root_name)) {
-        stage->mtp_v_input_names_.push_back(std::string(name));
-      }
-    }
-    for (absl::string_view name : decode_signature.OutputNames()) {
-      if (absl::StartsWith(name, mtp_k_root_name)) {
-        stage->mtp_k_output_names_.push_back(std::string(name));
-      } else if (absl::StartsWith(name, mtp_v_root_name)) {
-        stage->mtp_v_output_names_.push_back(std::string(name));
-      }
-    }
-  } else {
-    // Fallback for models with positional/generic tensor names
-    // (e.g. args_0..args_4).
-    if (decode_signature.InputNames().size() >= 5) {
-      stage->mtp_k_input_names_.push_back(
-          std::string(decode_signature.InputNames()[3]));
-      stage->mtp_v_input_names_.push_back(
-          std::string(decode_signature.InputNames()[4]));
-    }
-    if (decode_signature.OutputNames().size() >= 3) {
-      stage->mtp_k_output_names_.push_back(
-          std::string(decode_signature.OutputNames()[1]));
-      stage->mtp_v_output_names_.push_back(
-          std::string(decode_signature.OutputNames()[2]));
-    }
-  }
-  if (stage->mtp_k_input_names_.empty()) {
-    return absl::InvalidArgumentError(
-        "Failed to find MTP K cache input names.");
-  }
-  if (stage->mtp_v_input_names_.empty()) {
-    return absl::InvalidArgumentError(
-        "Failed to find MTP V cache input names.");
-  }
-  if (stage->mtp_k_output_names_.empty()) {
-    return absl::InvalidArgumentError(
-        "Failed to find MTP K cache output names.");
-  }
-  if (stage->mtp_v_output_names_.empty()) {
-    return absl::InvalidArgumentError(
-        "Failed to find MTP V cache output names.");
-  }
-
-  if (stage->mtp_signatures_.input_embeddings.has_value() &&
-      !stage->mtp_signatures_.input_embeddings->empty()) {
-    stage->mtp_embed_input_name_ = *stage->mtp_signatures_.input_embeddings;
-  } else if (!stage->mtp_signatures_.input_tokens.empty()) {
-    stage->mtp_embed_input_name_ = stage->mtp_signatures_.input_tokens;
-  } else if (!decode_signature.InputNames().empty()) {
-    stage->mtp_embed_input_name_ =
-        std::string(decode_signature.InputNames()[0]);
-  }
-
-  if (!stage->mtp_signatures_.input_positions.empty()) {
-    stage->mtp_pos_input_name_ = stage->mtp_signatures_.input_positions;
-  } else if (decode_signature.InputNames().size() > 1) {
-    stage->mtp_pos_input_name_ = std::string(decode_signature.InputNames()[1]);
-  }
-
-  if (stage->mtp_signatures_.input_attn_mask.has_value() &&
-      !stage->mtp_signatures_.input_attn_mask->empty()) {
-    stage->mtp_mask_input_name_ = *stage->mtp_signatures_.input_attn_mask;
-  } else if (decode_signature.InputNames().size() > 2) {
-    stage->mtp_mask_input_name_ = std::string(decode_signature.InputNames()[2]);
-  }
-
-  if (!stage->mtp_signatures_.output_logits.empty()) {
-    stage->mtp_logits_output_name_ = stage->mtp_signatures_.output_logits;
-  } else if (!decode_signature.OutputNames().empty()) {
-    stage->mtp_logits_output_name_ =
-        std::string(decode_signature.OutputNames()[0]);
-  }
-
-  // Pre-allocate MTP TensorBuffers
+  // Initialize MTP stateful runner
+  stage->mtp_runner_raw_ = std::make_unique<LiteRtRunnerImpl>(mtp_model.get());
   LITERT_ASSIGN_OR_RETURN(
-      stage->mtp_embed_buf_,
-      stage->mtp_model_->CreateInputBuffer(stage->mtp_signature_name_,
-                                           stage->mtp_embed_input_name_));
-  LITERT_ASSIGN_OR_RETURN(
-      stage->mtp_pos_buf_,
-      stage->mtp_model_->CreateInputBuffer(stage->mtp_signature_name_,
-                                           stage->mtp_pos_input_name_));
-  LITERT_ASSIGN_OR_RETURN(
-      stage->mtp_mask_buf_,
-      stage->mtp_model_->CreateInputBuffer(stage->mtp_signature_name_,
-                                           stage->mtp_mask_input_name_));
-  LITERT_ASSIGN_OR_RETURN(size_t mask_size_bytes, stage->mtp_mask_buf_.Size());
+      stage->mtp_runner_,
+      StatefulLiteRtRunnerImpl::Create(
+          stage->mtp_runner_raw_.get(), /*signature_name=*/"",
+          /*num_non_state_inputs=*/3, /*num_non_state_outputs=*/1));
+
+  auto non_state_in_bufs = stage->mtp_runner_->GetNonStateInputBuffers();
+  if (non_state_in_bufs.size() < 3) {
+    return absl::InternalError(
+        "MTP model missing required non-state input buffers.");
+  }
+
+  LITERT_ASSIGN_OR_RETURN(size_t mask_size_bytes, non_state_in_bufs[2].Size());
   if (mask_size_bytes > 0) {
     stage->mtp_cache_len_ = mask_size_bytes / sizeof(float);
-  }
-  LITERT_ASSIGN_OR_RETURN(
-      stage->mtp_logits_out_buf_,
-      stage->mtp_model_->CreateOutputBuffer(stage->mtp_signature_name_,
-                                            stage->mtp_logits_output_name_));
-
-  for (const auto& k_name : stage->mtp_k_input_names_) {
-    LITERT_ASSIGN_OR_RETURN(auto buf0, stage->mtp_model_->CreateInputBuffer(
-                                           stage->mtp_signature_name_, k_name));
-    LITERT_ASSIGN_OR_RETURN(auto buf1, stage->mtp_model_->CreateInputBuffer(
-                                           stage->mtp_signature_name_, k_name));
-    stage->mtp_kv_cache_bufs_0_[k_name] = std::move(buf0);
-    stage->mtp_kv_cache_bufs_1_[k_name] = std::move(buf1);
-  }
-  for (const auto& v_name : stage->mtp_v_input_names_) {
-    LITERT_ASSIGN_OR_RETURN(auto buf0, stage->mtp_model_->CreateInputBuffer(
-                                           stage->mtp_signature_name_, v_name));
-    LITERT_ASSIGN_OR_RETURN(auto buf1, stage->mtp_model_->CreateInputBuffer(
-                                           stage->mtp_signature_name_, v_name));
-    stage->mtp_kv_cache_bufs_0_[v_name] = std::move(buf0);
-    stage->mtp_kv_cache_bufs_1_[v_name] = std::move(buf1);
-  }
-
-  // Set up Talker model signature and pre-allocate TensorBuffers
-  LITERT_ASSIGN_OR_RETURN(
-      auto decode_inputs,
-      stage->talker_model_->GetSignatureInputNames(kDecodeSignature));
-  for (auto input_name : decode_inputs) {
-    if (absl::StartsWith(input_name, "kv_cache")) {
-      stage->talker_kv_names_.emplace_back(input_name);
-    }
-  }
-
-  // Find all prefill signatures starting with "prefill" and pre-allocate
-  // buffers
-  LITERT_ASSIGN_OR_RETURN(auto signature_keys,
-                          stage->talker_model_->GetSignatureKeys());
-  for (const auto& key : signature_keys) {
-    if (absl::StartsWith(key, kPrefillSignaturePrefix)) {
-      std::string sig_name = std::string(key);
-      LITERT_ASSIGN_OR_RETURN(
-          auto pos_tensor_type,
-          stage->talker_model_->GetInputTensorType(sig_name, kPosInputName));
-      auto pos_dims = pos_tensor_type.Layout().Dimensions();
-      if (pos_dims.empty()) {
-        return absl::InvalidArgumentError(
-            absl::StrCat("Invalid ", kPosInputName,
-                         " dimensions in prefill signature ", sig_name));
-      }
-      int seq_len = pos_dims.back();
-
-      TalkerPrefillBuffers bufs;
-      bufs.seq_len = seq_len;
-      bufs.signature_name = sig_name;
-
-      LITERT_ASSIGN_OR_RETURN(
-          bufs.emb_buf,
-          stage->talker_model_->CreateInputBuffer(sig_name, kEmbedInputName));
-      LITERT_ASSIGN_OR_RETURN(
-          bufs.pos_buf,
-          stage->talker_model_->CreateInputBuffer(sig_name, kPosInputName));
-      LITERT_ASSIGN_OR_RETURN(
-          bufs.mask_buf,
-          stage->talker_model_->CreateInputBuffer(sig_name, kMaskInputName));
-      for (const auto& kv_name : stage->talker_kv_names_) {
-        LITERT_ASSIGN_OR_RETURN(
-            auto out_kv,
-            stage->talker_model_->CreateOutputBuffer(sig_name, kv_name));
-        bufs.kv_output_bufs[kv_name] = std::move(out_kv);
-      }
-
-      stage->talker_prefill_buffers_[seq_len] = std::move(bufs);
-    }
-  }
-  if (stage->talker_prefill_buffers_.empty()) {
-    return absl::NotFoundError(absl::StrCat("No signature starting with '",
-                                            kPrefillSignaturePrefix,
-                                            "' found in talker_model."));
-  }
-
-  // Pre-allocate Talker decode buffers
-  LITERT_ASSIGN_OR_RETURN(stage->talker_decode_emb_buf_,
-                          stage->talker_model_->CreateInputBuffer(
-                              kDecodeSignature, kEmbedInputName));
-  LITERT_ASSIGN_OR_RETURN(
-      stage->talker_decode_pos_buf_,
-      stage->talker_model_->CreateInputBuffer(kDecodeSignature, kPosInputName));
-  LITERT_ASSIGN_OR_RETURN(stage->talker_decode_mask_buf_,
-                          stage->talker_model_->CreateInputBuffer(
-                              kDecodeSignature, kMaskInputName));
-  LITERT_ASSIGN_OR_RETURN(stage->talker_decode_logits_buf_,
-                          stage->talker_model_->CreateOutputBuffer(
-                              kDecodeSignature, kLogitsOutputName));
-  for (const auto& kv_name : stage->talker_kv_names_) {
-    LITERT_ASSIGN_OR_RETURN(auto in_kv, stage->talker_model_->CreateInputBuffer(
-                                            kDecodeSignature, kv_name));
-    stage->talker_kv_cache_bufs_0_[kv_name] = std::move(in_kv);
-    LITERT_ASSIGN_OR_RETURN(
-        auto out_kv,
-        stage->talker_model_->CreateOutputBuffer(kDecodeSignature, kv_name));
-    stage->talker_kv_cache_bufs_1_[kv_name] = std::move(out_kv);
-  }
-
-  stage->talker_cache_len_ = kCacheLen;
-  LITERT_ASSIGN_OR_RETURN(auto type,
-                          stage->talker_decode_mask_buf_.TensorType());
-  auto dims = type.Layout().Dimensions();
-  if (dims.size() > 3) {
-    stage->talker_cache_len_ = dims[3];
-  }
-
-  for (auto& [seq_len, prefill_bufs] : stage->talker_prefill_buffers_) {
-    std::vector<int32_t> pos_buf(seq_len, 0);
-    for (int i = 0; i < seq_len; ++i) {
-      pos_buf[i] = i;
-    }
-    LITERT_RETURN_IF_ERROR(
-        prefill_bufs.pos_buf.Write<int32_t>(absl::MakeConstSpan(pos_buf)));
-
-    std::vector<float> mask_buf(seq_len * stage->talker_cache_len_,
-                                qwen3_tts::kNegInf);
-    for (int i = 0; i < seq_len; ++i) {
-      for (int j = 0; j <= i && j < stage->talker_cache_len_; ++j) {
-        mask_buf[i * stage->talker_cache_len_ + j] = 0.0f;
-      }
-    }
-    LITERT_RETURN_IF_ERROR(
-        prefill_bufs.mask_buf.Write<float>(absl::MakeConstSpan(mask_buf)));
   }
 
   return stage;
 }
 
-// TODO b/538727793: use cpu/gpu sampler from litert-lm.
-int Qwen3TtsAcousticPredictorStage::PickToken(const std::vector<float>& logits,
-                                              bool do_sample) {
-  if (!do_sample) {
-    auto max_it = std::max_element(logits.begin(), logits.end());
-    return std::distance(logits.begin(), max_it);
-  }
-
-  int n = logits.size();
-  std::vector<double> scaled(n);
-  double temp = std::max(static_cast<double>(config_.temperature), 1e-6);
-  double max_logit = -1e30;
-
-  for (int i = 0; i < n; ++i) {
-    scaled[i] = static_cast<double>(logits[i]) / temp;
-    if (scaled[i] > max_logit) max_logit = scaled[i];
-  }
-
-  int top_k = std::min(config_.top_k, n);
-  std::vector<std::pair<double, int>> pairs(n);
-  for (int i = 0; i < n; ++i) {
-    pairs[i] = {scaled[i], i};
-  }
-  absl::c_partial_sort(
-      pairs, pairs.begin() + top_k,
-      [](const auto& a, const auto& b) { return a.first > b.first; });
-
-  std::vector<double> probs(top_k);
-  double sum_p = 0.0;
-  for (int i = 0; i < top_k; ++i) {
-    probs[i] = std::exp(pairs[i].first - max_logit);
-    sum_p += probs[i];
-  }
-  for (int i = 0; i < top_k; ++i) {
-    probs[i] /= sum_p;
-  }
-
-  std::discrete_distribution<int> dist(probs.begin(), probs.end());
-  return pairs[dist(rng_)].second;
-}
-
-absl::StatusOr<std::vector<float>>
-Qwen3TtsAcousticPredictorStage::EmbedCodecToken(int code_id) {
-  std::vector<float> out(qwen3_tts::kHiddenDim, 0.0f);
-  LITERT_RETURN_IF_ERROR(codec_emb_input_buffers_[0].Write<int32_t>(
-      absl::MakeConstSpan(&code_id, 1)));
-  LITERT_RETURN_IF_ERROR(codec_embedding_model_->Run(
-      codec_emb_input_buffers_, codec_emb_output_buffers_));
-  LITERT_RETURN_IF_ERROR(
-      codec_emb_output_buffers_[0].Read<float>(absl::MakeSpan(out)));
-  return out;
-}
-
-absl::StatusOr<std::vector<float>>
-Qwen3TtsAcousticPredictorStage::EmbedMtpTokens(
-    const std::vector<int>& mtp_codes) {
-  std::vector<float> sum_embed(qwen3_tts::kHiddenDim, 0.0f);
-  int num_codes = mtp_codes.size();
-
-  for (int g = 0; g < num_codes; ++g) {
-    int32_t global_id = g * 2048 + mtp_codes[g];
-    LITERT_RETURN_IF_ERROR(mtp_emb_input_buffers_[0].Write<int32_t>(
-        absl::MakeConstSpan(&global_id, 1)));
-
-    LITERT_RETURN_IF_ERROR(mtp_embedding_model_->Run(mtp_emb_input_buffers_,
-                                                     mtp_emb_output_buffers_));
-    LITERT_ASSIGN_OR_RETURN(auto copy_res, support::CopyFromTensorBuffer<float>(
-                                               mtp_emb_output_buffers_[0]));
-    absl::c_transform(copy_res, sum_embed, sum_embed.begin(),
-                      [](float a, float b) { return a + b; });
-  }
-  return sum_embed;
-}
-
+// Runs the Talker model prefill step on input prompt embeddings to populate
+// the KV cache.
 absl::Status Qwen3TtsAcousticPredictorStage::RunPrefill(
     const std::vector<float>& prefill, int p) {
-  auto it = talker_prefill_buffers_.lower_bound(p);
-  if (it == talker_prefill_buffers_.end()) {
-    int max_seq_len = talker_prefill_buffers_.rbegin()->first;
-    return absl::InvalidArgumentError(
-        absl::StrCat("Prompt length ", p,
-                     " exceeds maximum prefill sequence length ", max_seq_len));
-  }
-
-  auto& prefill_bufs = it->second;
-  const std::string& sig_name = prefill_bufs.signature_name;
-
-  // TODO b/538727793: refactor to use multi chunk prefill, so we don't need to
-  // clear out the buffers for each prefill run.
-  {
-    LITERT_ASSIGN_OR_RETURN(
-        auto lock, TensorBufferScopedLock::Create<float>(
-                       prefill_bufs.emb_buf, TensorBuffer::LockMode::kWrite));
-    std::memcpy(lock.second, prefill.data(),
-                p * qwen3_tts::kHiddenDim * sizeof(float));
-  }
-
-  absl::flat_hash_map<absl::string_view, TensorBuffer> input_map;
-  LITERT_ASSIGN_OR_RETURN(auto emb_dup, prefill_bufs.emb_buf.Duplicate());
-  LITERT_ASSIGN_OR_RETURN(auto pos_dup, prefill_bufs.pos_buf.Duplicate());
-  LITERT_ASSIGN_OR_RETURN(auto mask_dup, prefill_bufs.mask_buf.Duplicate());
-  input_map.insert_or_assign(kEmbedInputName, std::move(emb_dup));
-  input_map.insert_or_assign(kPosInputName, std::move(pos_dup));
-  input_map.insert_or_assign(kMaskInputName, std::move(mask_dup));
-
-  for (const auto& kv_name : talker_kv_names_) {
-    if (talker_kv_cache_bufs_0_.contains(kv_name)) {
-      LITERT_ASSIGN_OR_RETURN(auto dup,
-                              talker_kv_cache_bufs_0_[kv_name].Duplicate());
-      input_map.insert_or_assign(kv_name, std::move(dup));
-    }
-  }
-
-  absl::flat_hash_map<absl::string_view, TensorBuffer> output_map;
-  for (const auto& kv_name : talker_kv_names_) {
-    LITERT_ASSIGN_OR_RETURN(auto dup,
-                            prefill_bufs.kv_output_bufs[kv_name].Duplicate());
-    output_map.insert_or_assign(kv_name, std::move(dup));
-  }
-
-  LITERT_RETURN_IF_ERROR(talker_model_->Run(sig_name, input_map, output_map));
-
-  for (const auto& kv_name : talker_kv_names_) {
-    if (output_map.contains(kv_name)) {
-      LITERT_ASSIGN_OR_RETURN(
-          auto lock, TensorBufferScopedLock::Create<const float>(
-                         output_map[kv_name], TensorBuffer::LockMode::kRead));
-      LITERT_ASSIGN_OR_RETURN(size_t bytes, output_map[kv_name].Size());
-      size_t num_floats = bytes / sizeof(float);
-
-      LITERT_ASSIGN_OR_RETURN(size_t dec_bytes,
-                              talker_kv_cache_bufs_0_[kv_name].PackedSize());
-      size_t total_dec_floats = dec_bytes / sizeof(float);
-      std::vector<float> dec_buffer(total_dec_floats, 0.0f);
-      std::memcpy(dec_buffer.data(), lock.second,
-                  std::min(num_floats, total_dec_floats) * sizeof(float));
-      LITERT_RETURN_IF_ERROR(talker_kv_cache_bufs_0_[kv_name].Write<float>(
-          absl::MakeConstSpan(dec_buffer)));
-    }
-  }
-  return absl::OkStatus();
+  LITERT_ASSIGN_OR_RETURN(auto buf, support::CreateTensorBuffer<float>(
+                                        {1, p, qwen3_tts::kHiddenDim}));
+  LITERT_RETURN_IF_ERROR(buf.Write<float>(
+      absl::MakeConstSpan(prefill.data(), p * qwen3_tts::kHiddenDim)));
+  LITERT_ASSIGN_OR_RETURN(auto inputs, CreateExecutorInputsWithAudio(buf));
+  return talker_runner_->Prefill(inputs);
 }
 
-absl::StatusOr<Qwen3TtsAcousticPredictorStage::DecodeOutput>
-Qwen3TtsAcousticPredictorStage::RunDecode(const float* embed_1024, int pos) {
-  LITERT_RETURN_IF_ERROR(talker_decode_emb_buf_.Write<float>(
-      absl::MakeConstSpan(embed_1024, qwen3_tts::kHiddenDim)));
-
-  int32_t pos_val = pos;
-  LITERT_RETURN_IF_ERROR(
-      talker_decode_pos_buf_.Write<int32_t>(absl::MakeConstSpan(&pos_val, 1)));
-
-  std::vector<float> mask(talker_cache_len_, qwen3_tts::kNegInf);
-  for (int j = 0; j <= pos && j < talker_cache_len_; ++j) {
-    mask[j] = 0.0f;
-  }
-  LITERT_RETURN_IF_ERROR(
-      talker_decode_mask_buf_.Write<float>(absl::MakeConstSpan(mask)));
-
-  absl::flat_hash_map<absl::string_view, TensorBuffer> input_map;
-  LITERT_ASSIGN_OR_RETURN(auto emb_dup, talker_decode_emb_buf_.Duplicate());
-  LITERT_ASSIGN_OR_RETURN(auto pos_dup, talker_decode_pos_buf_.Duplicate());
-  LITERT_ASSIGN_OR_RETURN(auto mask_dup, talker_decode_mask_buf_.Duplicate());
-  input_map.insert_or_assign(kEmbedInputName, std::move(emb_dup));
-  input_map.insert_or_assign(kPosInputName, std::move(pos_dup));
-  input_map.insert_or_assign(kMaskInputName, std::move(mask_dup));
-
-  for (const auto& kv_name : talker_kv_names_) {
-    if (talker_kv_cache_bufs_0_.contains(kv_name)) {
-      LITERT_ASSIGN_OR_RETURN(auto dup,
-                              talker_kv_cache_bufs_0_[kv_name].Duplicate());
-      input_map.insert_or_assign(kv_name, std::move(dup));
-    }
-  }
-
-  absl::flat_hash_map<absl::string_view, TensorBuffer> output_map;
-  LITERT_ASSIGN_OR_RETURN(auto logits_dup,
-                          talker_decode_logits_buf_.Duplicate());
-  output_map.insert_or_assign(kLogitsOutputName, std::move(logits_dup));
-  for (const auto& kv_name : talker_kv_names_) {
-    LITERT_ASSIGN_OR_RETURN(auto dup,
-                            talker_kv_cache_bufs_1_[kv_name].Duplicate());
-    output_map.insert_or_assign(kv_name, std::move(dup));
-  }
-
-  LITERT_RETURN_IF_ERROR(
-      talker_model_->Run(kDecodeSignature, input_map, output_map));
-
-  // Swap talker_kv_cache_bufs_0_ and talker_kv_cache_bufs_1_ for next decode
-  // run
-  std::swap(talker_kv_cache_bufs_0_, talker_kv_cache_bufs_1_);
-
-  DecodeOutput out;
-  out.cb0_logits.resize(qwen3_tts::kCodecVocab);
-  out.hidden.resize(qwen3_tts::kHiddenDim);
-
-  {
-    LITERT_ASSIGN_OR_RETURN(
-        auto lock,
-        TensorBufferScopedLock::Create<const float>(
-            talker_decode_logits_buf_, TensorBuffer::LockMode::kRead));
-    const float* raw_logits = lock.second;
-    std::memcpy(out.cb0_logits.data(), raw_logits,
-                qwen3_tts::kCodecVocab * sizeof(float));
-    std::memcpy(out.hidden.data(), raw_logits + qwen3_tts::kCodecVocab,
-                qwen3_tts::kHiddenDim * sizeof(float));
-  }
-
-  return out;
-}
-
+// Runs Multi-Token Predictor (MTP) model to generate remaining codebook tokens.
 absl::StatusOr<std::vector<int>> Qwen3TtsAcousticPredictorStage::RunMtp(
     const std::vector<float>& hidden, int cb0) {
-  LITERT_RETURN_IF_ERROR(InitializeBuffers(mtp_kv_cache_bufs_0_));
-  LITERT_RETURN_IF_ERROR(InitializeBuffers(mtp_kv_cache_bufs_1_));
+  LITERT_RETURN_IF_ERROR(mtp_runner_->Reset());
 
   std::vector<int> codes;
   codes.reserve(qwen3_tts::kNumCodeGroups - 1);
 
-  for (int t = 0; t < qwen3_tts::kNumCodeGroups - 1; ++t) {
+  for (int t = 0; t < qwen3_tts::kNumCodeGroups; ++t) {
+    auto non_state_inputs = mtp_runner_->GetNonStateInputBuffers();
+    if (non_state_inputs.size() < 3) {
+      return absl::InternalError("MTP runner missing non-state input buffers.");
+    }
+    auto& embed_buf = non_state_inputs[0];
+    auto& pos_buf = non_state_inputs[1];
+    auto& mask_buf = non_state_inputs[2];
+
     std::vector<float> embed(qwen3_tts::kHiddenDim, 0.0f);
     if (t == 0) {
       embed = hidden;
@@ -598,75 +156,132 @@ absl::StatusOr<std::vector<int>> Qwen3TtsAcousticPredictorStage::RunMtp(
           absl::MakeSpan(embed.data(), qwen3_tts::kHiddenDim)));
     }
 
-    LITERT_RETURN_IF_ERROR(
-        mtp_embed_buf_.Write<float>(absl::MakeConstSpan(embed)));
+    LITERT_RETURN_IF_ERROR(embed_buf.Write<float>(absl::MakeConstSpan(embed)));
     int32_t t_val = t;
     LITERT_RETURN_IF_ERROR(
-        mtp_pos_buf_.Write<int32_t>(absl::MakeConstSpan(&t_val, 1)));
+        pos_buf.Write<int32_t>(absl::MakeConstSpan(&t_val, 1)));
     std::vector<float> mask(mtp_cache_len_, qwen3_tts::kNegInf);
     for (int j = 0; j <= t && j < mtp_cache_len_; ++j) mask[j] = 0.0f;
-    LITERT_RETURN_IF_ERROR(
-        mtp_mask_buf_.Write<float>(absl::MakeConstSpan(mask)));
+    LITERT_RETURN_IF_ERROR(mask_buf.Write<float>(absl::MakeConstSpan(mask)));
 
-    absl::flat_hash_map<absl::string_view, TensorBuffer> input_map;
-    LITERT_ASSIGN_OR_RETURN(auto embed_dup, mtp_embed_buf_.Duplicate());
-    LITERT_ASSIGN_OR_RETURN(auto pos_dup, mtp_pos_buf_.Duplicate());
-    LITERT_ASSIGN_OR_RETURN(auto mask_dup, mtp_mask_buf_.Duplicate());
-    input_map.insert_or_assign(mtp_embed_input_name_, std::move(embed_dup));
-    input_map.insert_or_assign(mtp_pos_input_name_, std::move(pos_dup));
-    input_map.insert_or_assign(mtp_mask_input_name_, std::move(mask_dup));
-
-    for (const auto& k_name : mtp_k_input_names_) {
-      LITERT_ASSIGN_OR_RETURN(auto dup,
-                              mtp_kv_cache_bufs_0_[k_name].Duplicate());
-      input_map.insert_or_assign(k_name, std::move(dup));
+    LITERT_ASSIGN_OR_RETURN(
+        auto step_outputs,
+        mtp_runner_->Step(/*non_state_inputs=*/{}, /*auto_commit_state=*/true));
+    if (step_outputs.empty()) {
+      return absl::InternalError("MTP step returned empty outputs.");
     }
-    for (const auto& v_name : mtp_v_input_names_) {
-      LITERT_ASSIGN_OR_RETURN(auto dup,
-                              mtp_kv_cache_bufs_0_[v_name].Duplicate());
-      input_map.insert_or_assign(v_name, std::move(dup));
-    }
-
-    absl::flat_hash_map<absl::string_view, TensorBuffer> step_output_map;
-    LITERT_ASSIGN_OR_RETURN(auto logits_dup, mtp_logits_out_buf_.Duplicate());
-    step_output_map.insert_or_assign(mtp_logits_output_name_,
-                                     std::move(logits_dup));
-
-    for (size_t i = 0;
-         i < mtp_k_output_names_.size() && i < mtp_k_input_names_.size(); ++i) {
-      const auto& out_name = mtp_k_output_names_[i];
-      const auto& in_name = mtp_k_input_names_[i];
-      LITERT_ASSIGN_OR_RETURN(auto dup,
-                              mtp_kv_cache_bufs_1_[in_name].Duplicate());
-      step_output_map.insert_or_assign(out_name, std::move(dup));
-    }
-    for (size_t i = 0;
-         i < mtp_v_output_names_.size() && i < mtp_v_input_names_.size(); ++i) {
-      const auto& out_name = mtp_v_output_names_[i];
-      const auto& in_name = mtp_v_input_names_[i];
-      LITERT_ASSIGN_OR_RETURN(auto dup,
-                              mtp_kv_cache_bufs_1_[in_name].Duplicate());
-      step_output_map.insert_or_assign(out_name, std::move(dup));
-    }
-
-    LITERT_RETURN_IF_ERROR(
-        mtp_model_->Run(mtp_signature_name_, input_map, step_output_map));
-
-    std::swap(mtp_kv_cache_bufs_0_, mtp_kv_cache_bufs_1_);
 
     if (t >= 1) {
       LITERT_ASSIGN_OR_RETURN(
           auto lock, TensorBufferScopedLock::Create<const float>(
-                         mtp_logits_out_buf_, TensorBuffer::LockMode::kRead));
+                         step_outputs[0], TensorBuffer::LockMode::kRead));
       int head_idx = t - 1;
       const float* logits_ptr = lock.second + head_idx * 2048;
-      std::vector<float> logits(logits_ptr, logits_ptr + 2048);
-      int picked_code = PickToken(logits, config_.do_sample);
+      const float* max_it = std::max_element(logits_ptr, logits_ptr + 2048);
+      int picked_code = std::distance(logits_ptr, max_it);
       codes.push_back(picked_code);
     }
   }
 
   return codes;
+}
+
+// Embeds a single audio codec token ID using the codec embedding model.
+absl::StatusOr<std::vector<float>>
+Qwen3TtsAcousticPredictorStage::EmbedCodecToken(int code_id) {
+  int32_t cid = code_id;
+  LITERT_RETURN_IF_ERROR(
+      codec_emb_input_buffers_[0].Write<int32_t>(absl::MakeConstSpan(&cid, 1)));
+  LITERT_RETURN_IF_ERROR(codec_embedding_model_->Run(
+      codec_emb_input_buffers_, codec_emb_output_buffers_));
+  std::vector<float> vec(qwen3_tts::kHiddenDim);
+  LITERT_RETURN_IF_ERROR(codec_emb_output_buffers_[0].Read<float>(
+      absl::MakeSpan(vec.data(), qwen3_tts::kHiddenDim)));
+  return vec;
+}
+
+// Embeds a sequence of MTP codebook token IDs using the MTP embedding model.
+absl::StatusOr<std::vector<float>>
+Qwen3TtsAcousticPredictorStage::EmbedMtpTokens(
+    const std::vector<int>& mtp_codes) {
+  std::vector<float> total_vec(qwen3_tts::kHiddenDim, 0.0f);
+  for (size_t i = 0; i < mtp_codes.size(); ++i) {
+    int32_t global_id = i * 2048 + mtp_codes[i];
+    LITERT_RETURN_IF_ERROR(mtp_emb_input_buffers_[0].Write<int32_t>(
+        absl::MakeConstSpan(&global_id, 1)));
+    LITERT_RETURN_IF_ERROR(mtp_embedding_model_->Run(mtp_emb_input_buffers_,
+                                                     mtp_emb_output_buffers_));
+    std::vector<float> vec(qwen3_tts::kHiddenDim);
+    LITERT_RETURN_IF_ERROR(mtp_emb_output_buffers_[0].Read<float>(
+        absl::MakeSpan(vec.data(), qwen3_tts::kHiddenDim)));
+    for (int d = 0; d < qwen3_tts::kHiddenDim; ++d) {
+      total_vec[d] += vec[d];
+    }
+  }
+  return total_vec;
+}
+
+int Qwen3TtsAcousticPredictorStage::PickToken(const std::vector<float>& logits,
+                                              bool do_sample) {
+  if (!do_sample) {
+    return std::distance(logits.begin(),
+                         std::max_element(logits.begin(), logits.end()));
+  }
+
+  std::vector<double> probs(logits.size());
+  double max_logit = -1e30;
+  for (float val : logits) {
+    if (val > max_logit) max_logit = val;
+  }
+  double temp = std::max(static_cast<double>(config_.temperature), 1e-6);
+
+  double sum_exp = 0.0;
+  for (size_t i = 0; i < logits.size(); ++i) {
+    if (logits[i] <= qwen3_tts::kNegInf / 2) {
+      probs[i] = 0.0;
+    } else {
+      probs[i] = std::exp((logits[i] - max_logit) / temp);
+      sum_exp += probs[i];
+    }
+  }
+
+  if (sum_exp <= 0.0) {
+    return 0;
+  }
+
+  for (size_t i = 0; i < probs.size(); ++i) {
+    probs[i] /= sum_exp;
+  }
+
+  int top_k = std::min(config_.top_k, static_cast<int>(probs.size()));
+  if (top_k > 0) {
+    std::vector<std::pair<double, int>> pairs(probs.size());
+    for (size_t i = 0; i < probs.size(); ++i) {
+      pairs[i] = {probs[i], static_cast<int>(i)};
+    }
+    absl::c_partial_sort(
+        pairs, pairs.begin() + top_k,
+        [](const auto& a, const auto& b) { return a.first > b.first; });
+
+    double top_k_sum = 0.0;
+    for (int i = 0; i < top_k; ++i) {
+      top_k_sum += pairs[i].first;
+    }
+    for (int i = 0; i < top_k; ++i) {
+      pairs[i].first /= top_k_sum;
+    }
+
+    std::vector<double> top_k_probs(top_k);
+    for (int i = 0; i < top_k; ++i) {
+      top_k_probs[i] = pairs[i].first;
+    }
+    std::discrete_distribution<int> dist(top_k_probs.begin(),
+                                         top_k_probs.end());
+    return pairs[dist(rng_)].second;
+  }
+
+  std::discrete_distribution<int> dist(probs.begin(), probs.end());
+  return dist(rng_);
 }
 
 absl::Status Qwen3TtsAcousticPredictorStage::ScheduleInternal() {
@@ -678,20 +293,28 @@ absl::Status Qwen3TtsAcousticPredictorStage::ScheduleInternal() {
   if (absl::IsNotFound(frontend_out.status())) {
     return absl::OkStatus();
   } else if (!frontend_out.ok()) {
+    ABSL_LOG(ERROR) << "Frontend GetOutput error: " << frontend_out.status();
     return frontend_out.status();
   }
   const auto& frontend = *frontend_out;
+  ABSL_VLOG(2) << "Acoustic stage got frontend output with prompt_len="
+               << frontend.prompt_len;
 
-  LITERT_RETURN_IF_ERROR(InitializeBuffers(talker_kv_cache_bufs_0_));
-  LITERT_RETURN_IF_ERROR(InitializeBuffers(talker_kv_cache_bufs_1_));
+  // 1. Reset Talker LM KV cache for new prompt
+  LITERT_RETURN_IF_ERROR(talker_runner_->Reset());
+  ABSL_VLOG(2) << "Acoustic stage reset talker_runner";
 
-  LITERT_RETURN_IF_ERROR(
-      RunPrefill(frontend.prompt_embeddings, frontend.prompt_len));
+  // 2. Prefill prompt embeddings
+  auto prefill_status =
+      RunPrefill(frontend.prompt_embeddings, frontend.prompt_len);
+  if (!prefill_status.ok()) {
+    ABSL_LOG(ERROR) << "RunPrefill failed: " << prefill_status;
+    return prefill_status;
+  }
+  ABSL_VLOG(2) << "Acoustic stage finished RunPrefill";
 
-  int pos = frontend.prompt_len - 1;
-  const float* last_emb_ptr = frontend.prompt_embeddings.data() + pos * 1024;
-  ABSL_ASSIGN_OR_RETURN(Qwen3TtsAcousticPredictorStage::DecodeOutput decode_out,
-                        RunDecode(last_emb_ptr, pos));
+  std::vector<std::vector<int>> chunk_frames;
+  std::vector<float> chunk_codec_features;
 
   std::vector<float> suppress(qwen3_tts::kCodecVocab, 0.0f);
   for (int i = 2048; i < qwen3_tts::kCodecVocab; ++i) {
@@ -699,16 +322,34 @@ absl::Status Qwen3TtsAcousticPredictorStage::ScheduleInternal() {
   }
   suppress[qwen3_tts::kCodecEos] = 0.0f;
 
-  std::vector<std::vector<int>> chunk_frames;
-  std::vector<float> chunk_codec_features;
+  std::vector<float> cb0_logits(qwen3_tts::kCodecVocab);
+  std::vector<float> hidden(qwen3_tts::kHiddenDim);
   absl::flat_hash_set<int> history;
 
   int total_generated_frames = 0;
+  lm::ExecutorInputs next_inputs;
 
   while (total_generated_frames < config_.max_frames) {
+    auto decode_res = talker_runner_->Decode(next_inputs);
+    if (!decode_res.ok()) {
+      ABSL_LOG(ERROR) << "talker_runner_->Decode failed at frame "
+                      << total_generated_frames << ": " << decode_res.status();
+      return decode_res.status();
+    }
+    auto decode_logits_buf = std::move(*decode_res);
+
+    std::vector<float> raw_output(qwen3_tts::kCodecVocab +
+                                  qwen3_tts::kHiddenDim);
+    LITERT_RETURN_IF_ERROR(decode_logits_buf.Read<float>(
+        absl::MakeSpan(raw_output.data(), raw_output.size())));
+    std::copy(raw_output.begin(), raw_output.begin() + qwen3_tts::kCodecVocab,
+              cb0_logits.begin());
+    std::copy(raw_output.begin() + qwen3_tts::kCodecVocab, raw_output.end(),
+              hidden.begin());
+
     std::vector<float> scores(qwen3_tts::kCodecVocab);
     for (int i = 0; i < qwen3_tts::kCodecVocab; ++i) {
-      scores[i] = decode_out.cb0_logits[i] + suppress[i];
+      scores[i] = cb0_logits[i] + suppress[i];
     }
 
     if (total_generated_frames < 2) {
@@ -725,11 +366,12 @@ absl::Status Qwen3TtsAcousticPredictorStage::ScheduleInternal() {
 
     int cb0 = PickToken(scores, config_.do_sample);
     history.insert(cb0);
+
     ABSL_VLOG(2) << "[TRACE] Generated frame " << total_generated_frames
                  << " with cb0=" << cb0;
     if (cb0 == qwen3_tts::kCodecEos) break;
 
-    ABSL_ASSIGN_OR_RETURN(auto mtp_codes, RunMtp(decode_out.hidden, cb0));
+    ABSL_ASSIGN_OR_RETURN(auto mtp_codes, RunMtp(hidden, cb0));
     std::vector<int> frame;
     frame.reserve(qwen3_tts::kNumCodeGroups);
     frame.push_back(cb0);
@@ -767,13 +409,11 @@ absl::Status Qwen3TtsAcousticPredictorStage::ScheduleInternal() {
       chunk_codec_features.clear();
     }
 
-    pos += 1;
-    if (pos >= talker_cache_len_) {
-      ABSL_LOG(WARNING) << "Reached talker_cache_len_ (" << talker_cache_len_
-                        << "), stopping decode generation.";
-      break;
-    }
-    ABSL_ASSIGN_OR_RETURN(decode_out, RunDecode(embed.data(), pos));
+    LITERT_ASSIGN_OR_RETURN(auto buf, support::CreateTensorBuffer<float>(
+                                          {1, 1, qwen3_tts::kHiddenDim}));
+    LITERT_RETURN_IF_ERROR(
+        buf.Write<float>(absl::MakeConstSpan(embed.data(), embed.size())));
+    LITERT_ASSIGN_OR_RETURN(next_inputs, CreateExecutorInputsWithAudio(buf));
   }
 
   if (!chunk_frames.empty()) {
@@ -782,6 +422,7 @@ absl::Status Qwen3TtsAcousticPredictorStage::ScheduleInternal() {
     out.codec_features = std::move(chunk_codec_features);
     PushOutput(std::move(out));
   }
+
   return absl::OkStatus();
 }
 

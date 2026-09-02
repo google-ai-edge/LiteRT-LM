@@ -47,8 +47,7 @@ absl::Status InitQwen3TtsResources(const Qwen3TtsModelConfig& config,
                                    const std::string& model_folder,
                                    const std::string& cache_dir,
                                    lm::Backend backend, int num_threads,
-                                   ::litert::Environment& env,
-                                   ModelResources& resources);
+                                   Environment& env, ModelResources& resources);
 
 // Instantiates all stage components for a Qwen3-TTS inference.
 //
