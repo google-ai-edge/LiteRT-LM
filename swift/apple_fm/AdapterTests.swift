@@ -298,72 +298,142 @@
         "still open, never closed")
     }
 
-    // MARK: - Tool routing
+    // MARK: - Guided generation
 
-    /// The router grammar must stay inside object/properties/required/enum/string.
-    /// Anything richer (anyOf, if/then) is not safe to assume of a JSON-Schema
-    /// grammar compiler, and a schema the compiler rejects silently drops the
-    /// constraint — the failure this whole path exists to prevent.
-    func testRouteSchemaEnumeratesEveryToolPlusTheSentinel() throws {
+    /// The mode is a conversation-level choice, so two models over one engine
+    /// configuration in different modes share the engine.
+    func testGuidedGenerationModesShareOneEngine() throws {
+      let config = try EngineConfig(modelPath: Self.modelPath, backend: .cpu())
+      let constrained = LiteRTLanguageModel(engineConfig: config)
+      let promptOnly = LiteRTLanguageModel(engineConfig: config, guidedGeneration: .promptOnly)
+      XCTAssertEqual(constrained.guidedGeneration, .constrained)
+      XCTAssertEqual(promptOnly.guidedGeneration, .promptOnly)
+
+      let a = LanguageModelSession(model: constrained)
+      a.prewarm()
+      let b = LanguageModelSession(model: promptOnly)
+      b.prewarm()
+
+      withExtendedLifetime((a, b)) {
+        XCTAssertEqual(EngineCache.shared.count, 1)
+      }
+    }
+
+    /// The schema goes into the trigger prompt and nowhere else. When the
+    /// caller keeps it out of the prompt (`includeSchemaInPrompt: false`) the
+    /// trigger is the user's words alone, whatever the engine enforces.
+    func testPlanWritesTheSchemaIntoTheTriggerOnly() throws {
+      let schema = #"{"type":"object"}"#
+      let transcript = Transcript(entries: [
+        .instructions(
+          Transcript.Instructions(
+            segments: [.text(.init(content: "Be brief."))], toolDefinitions: [])),
+        .prompt(Transcript.Prompt(segments: [.text(.init(content: "Hi"))])),
+        .prompt(Transcript.Prompt(segments: [.text(.init(content: "List the colors"))])),
+      ])
+
+      let hinted = try LiteRTLMExecutor.plan(
+        from: transcript, schemaJSON: schema, guided: true, tools: [])
+      XCTAssertEqual(hinted.systemText, "Be brief.")
+      XCTAssertTrue(hinted.prompt.toString.hasPrefix("List the colors"))
+      XCTAssertTrue(hinted.prompt.toString.contains(schema))
+      XCTAssertEqual(hinted.history.map(\.toString), ["Hi"])
+      XCTAssertFalse(hinted.respondingToTool)
+
+      let bare = try LiteRTLMExecutor.plan(
+        from: transcript, schemaJSON: nil, guided: true, tools: [])
+      XCTAssertEqual(bare.prompt.toString, "List the colors")
+    }
+
+    /// On the turn that answers a tool result, a guided request asks for the
+    /// structure; the plain turn asks for a sentence and forbids JSON.
+    func testPlanToolResultTriggerFollowsTheTurnKind() throws {
       let tools = try Self.toolDefinitions()
-      let schema = LiteRTLMExecutor.routeSchema(tools)
+      let transcript = Transcript(entries: [
+        .prompt(Transcript.Prompt(segments: [.text(.init(content: "Weather?"))])),
+        .toolOutput(
+          Transcript.ToolOutput(
+            id: "1", toolName: "get_temperature", segments: [.text(.init(content: "21°C"))])),
+      ])
 
-      XCTAssertEqual(schema["type"] as? String, "object")
-      XCTAssertEqual(Set(schema["required"] as? [String] ?? []), ["tool", "answer"])
+      let plain = try LiteRTLMExecutor.plan(from: transcript, schemaJSON: nil, tools: tools)
+      XCTAssertTrue(plain.respondingToTool)
+      XCTAssertEqual(plain.toolResult, "21°C")
+      XCTAssertEqual(plain.toolRounds, 1)
+      XCTAssertTrue(plain.prompt.toString.contains("Do not output JSON"))
 
-      let properties = try XCTUnwrap(schema["properties"] as? [String: Any])
-      let tool = try XCTUnwrap(properties["tool"] as? [String: Any])
+      let schema = #"{"type":"object"}"#
+      let guided = try LiteRTLMExecutor.plan(
+        from: transcript, schemaJSON: schema, guided: true, tools: tools)
+      XCTAssertTrue(guided.respondingToTool)
+      XCTAssertFalse(guided.prompt.toString.contains("Do not output JSON"))
+      XCTAssertTrue(guided.prompt.toString.contains("Tool \"get_temperature\" returned: 21°C"))
+      XCTAssertTrue(guided.prompt.toString.contains("Using that result, respond with ONLY"))
+      XCTAssertTrue(guided.prompt.toString.contains(schema))
+    }
+
+    /// Under the grammar the prompt names only the keys, in declared order:
+    /// the engine holds the types and the enum values, and every further word
+    /// in the hint was something the model copied into a value.
+    func testSchemaHintUnderTheConstraintNamesOnlyTheKeys() {
+      let hint = LiteRTLMExecutor.schemaHint(Self.orderSchema, constrained: true)
       XCTAssertEqual(
-        tool["enum"] as? [String],
-        [LiteRTLMExecutor.noToolSentinel, "get_temperature", "open_url"])
-      XCTAssertEqual((properties["answer"] as? [String: Any])?["type"] as? String, "string")
-
-      // And it has to survive the encoder that hands it to the runtime.
-      XCTAssertNoThrow(try ResponseFormat.json(schema: schema))
+        hint,
+        "Respond with ONLY a JSON object with exactly these keys, in this order: "
+          + "item, size, quantity, extras. Output valid JSON and nothing else.")
     }
 
-    /// A tool name equal to the sentinel would make "no tool" unaddressable. It
-    /// must not end up in the enum twice; the tool loses, since the sentinel is
-    /// the only way to answer without calling anything.
-    func testRouteSchemaDoesNotDuplicateTheSentinel() throws {
-      let tools = try Self.toolDefinitions()
-      let schema = LiteRTLMExecutor.routeSchema(tools + tools)
-      let properties = try XCTUnwrap(schema["properties"] as? [String: Any])
-      let names = try XCTUnwrap((properties["tool"] as? [String: Any])?["enum"] as? [String])
-      XCTAssertEqual(names.filter { $0 == LiteRTLMExecutor.noToolSentinel }.count, 1)
+    /// A schema as Foundation Models encodes one — `x-order`, `title`,
+    /// descriptions, an enum, an optional — rendered for the prompt: one line
+    /// per field in declared order, and none of the schema's own vocabulary
+    /// for the model to echo.
+    func testSchemaHintListsFieldsInDeclaredOrder() throws {
+      let hint = LiteRTLMExecutor.schemaHint(Self.orderSchema)
+      let item = try XCTUnwrap(hint.range(of: "- item (string): The drink ordered"))
+      let size = try XCTUnwrap(hint.range(of: "- size (string, one of: small, medium, large)"))
+      let quantity = try XCTUnwrap(hint.range(of: "- quantity (integer)"))
+      let extras = try XCTUnwrap(hint.range(of: "- extras (array of string, optional)"))
+      XCTAssertLessThan(item.lowerBound, size.lowerBound)
+      XCTAssertLessThan(size.lowerBound, quantity.lowerBound)
+      XCTAssertLessThan(quantity.lowerBound, extras.lowerBound)
+      XCTAssertFalse(hint.contains("x-order"))
+      XCTAssertFalse(hint.contains("CoffeeOrder"))
+      XCTAssertTrue(hint.hasSuffix("Output valid JSON and nothing else."))
     }
 
-    func testParseRouteSelectsTheNamedTool() throws {
-      let tools = try Self.toolDefinitions()
-      let route = LiteRTLMExecutor.parseRoute(
-        from: #"{"tool": "get_temperature", "answer": ""}"#, tools: tools)
-      XCTAssertEqual(route.tool?.name, "get_temperature")
+    /// A schema with no properties — a bare type — is shown as it is.
+    func testSchemaHintFallsBackToTheRawSchemaWithoutProperties() {
+      let hint = LiteRTLMExecutor.schemaHint(#"{"type":"string"}"#)
+      XCTAssertTrue(hint.contains(#"{"type":"string"}"#))
+      XCTAssertTrue(hint.hasSuffix("Output valid JSON and nothing else."))
     }
 
-    func testParseRouteTreatsTheSentinelAsAnAnswer() throws {
-      let tools = try Self.toolDefinitions()
-      let route = LiteRTLMExecutor.parseRoute(
-        from: #"{"tool": "none", "answer": "42"}"#, tools: tools)
-      XCTAssertNil(route.tool)
-      XCTAssertEqual(route.answer, "42")
+    /// The engine sees the properties in `x-order` — the order the model
+    /// fills them in under the grammar — with the bookkeeping keys gone, and
+    /// the same text every time.
+    func testEngineSchemaFollowsDeclaredOrder() throws {
+      let engine = LiteRTLMExecutor.engineSchema(Self.orderSchema)
+      let item = try XCTUnwrap(engine.range(of: "\"item\""))
+      let size = try XCTUnwrap(engine.range(of: "\"size\""))
+      let quantity = try XCTUnwrap(engine.range(of: "\"quantity\""))
+      let extras = try XCTUnwrap(engine.range(of: "\"extras\""))
+      XCTAssertLessThan(item.lowerBound, size.lowerBound)
+      XCTAssertLessThan(size.lowerBound, quantity.lowerBound)
+      XCTAssertLessThan(quantity.lowerBound, extras.lowerBound)
+      XCTAssertFalse(engine.contains("x-order"))
+      XCTAssertFalse(engine.contains("\"title\""))
+      XCTAssertTrue(engine.contains("\"required\":[\"item\",\"size\",\"quantity\"]"))
+      for _ in 0..<16 {
+        XCTAssertEqual(LiteRTLMExecutor.engineSchema(Self.orderSchema), engine)
+      }
+      XCTAssertNoThrow(try ResponseFormat.json(schema: engine))
     }
 
-    func testParseRouteRejectsAToolThatWasNotOffered() throws {
-      let tools = try Self.toolDefinitions()
-      let route = LiteRTLMExecutor.parseRoute(
-        from: #"{"tool": "rm_rf", "answer": ""}"#, tools: tools)
-      XCTAssertNil(route.tool)
-    }
-
-    /// Constrained decoding is not guaranteed — a runtime built without it, or a
-    /// schema the compiler refused, both land here. Free text must degrade to a
-    /// plain answer rather than to an empty turn.
-    func testParseRouteFallsBackToRawTextWhenTheReplyIsNotJSON() throws {
-      let tools = try Self.toolDefinitions()
-      let route = LiteRTLMExecutor.parseRoute(from: "It is 21 degrees.", tools: tools)
-      XCTAssertNil(route.tool)
-      XCTAssertEqual(route.answer, "It is 21 degrees.")
-    }
+    /// Sorted-keys encoding of a four-field schema, as `encodeSchema` emits it:
+    /// alphabetical, with `x-order` carrying the declared order.
+    private static let orderSchema = #"""
+      {"additionalProperties":false,"properties":{"extras":{"description":"Extras asked for","items":{"type":"string"},"type":"array"},"item":{"description":"The drink ordered","type":"string"},"quantity":{"description":"How many cups","type":"integer"},"size":{"description":"Cup size","enum":["small","medium","large"],"type":"string"}},"required":["item","size","quantity"],"title":"CoffeeOrder","type":"object","x-order":["item","size","quantity","extras"]}
+      """#
 
     /// `Transcript.ToolDefinition` values as FM itself builds them, taken off a
     /// session rather than constructed by hand.
