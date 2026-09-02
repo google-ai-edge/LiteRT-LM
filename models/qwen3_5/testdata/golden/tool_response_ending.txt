@@ -32,10 +32,6 @@ Reminder:
 <|im_start|>user
 What is the weather in London and Paris?<|im_end|>
 <|im_start|>assistant
-<think>
-
-</think>
-
 <tool_call>
 <function=get_weather>
 <parameter=location>
@@ -48,10 +44,6 @@ London
 {"location": "London", "temperature": "18C"}
 </tool_response><|im_end|>
 <|im_start|>assistant
-<think>
-
-</think>
-
 <tool_call>
 <function=get_weather>
 <parameter=location>
