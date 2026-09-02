@@ -354,6 +354,7 @@ cc_test(
 cc_test(
     name = "llg_fc_tool_calls_test",
     srcs = ["llg_fc_tool_calls_test.cc"],
+    data = ["//runtime/components/testdata"],
     deps = [
         ":bitmap",
         ":constraint",
@@ -372,6 +373,7 @@ cc_test(
         "//runtime/util:litert_status_util",
         "//runtime/util:test_utils",
         "//support/tokenizer",
+        "//support/tokenizer:sentencepiece_tokenizer",
     ],
 )
 
