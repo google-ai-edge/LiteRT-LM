@@ -74,12 +74,23 @@ LlgConstraintProvider::Create(const Tokenizer& tokenizer,
 
   token_lens.reserve(tokens.size());
   for (const auto& token : tokens) {
-    token_lens.push_back(token.size());
-    total_size += token.size();
+    bool is_special = std::find(llg_config.special_tokens.begin(),
+                                llg_config.special_tokens.end(),
+                                token) != llg_config.special_tokens.end();
+    token_lens.push_back(token.size() + (is_special ? 1 : 0));
+    total_size += token.size() + (is_special ? 1 : 0);
   }
 
   token_bytes.reserve(total_size);
   for (const auto& token : tokens) {
+    bool is_special = std::find(llg_config.special_tokens.begin(),
+                                llg_config.special_tokens.end(),
+                                token) != llg_config.special_tokens.end();
+    if (is_special) {
+      // Special tokens need to be prefixed with 0xFF.
+      // https://github.com/guidance-ai/llguidance/blob/main/docs/special_tokens.md
+      token_bytes.push_back(0xFF);
+    }
     token_bytes.insert(token_bytes.end(), token.begin(), token.end());
   }
 
