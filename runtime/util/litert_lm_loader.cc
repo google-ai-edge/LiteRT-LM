@@ -296,7 +296,9 @@ std::optional<litert::BufferRef<uint8_t>> LitertLmLoader::GetSectionBuffer(
 
   auto section_location_it = section_locations_.find(buffer_key);
   if (section_location_it == section_locations_.end()) {
-    ABSL_LOG(WARNING) << "Section not found: " << buffer_key.data_type;
+    ABSL_LOG(WARNING) << "Section not found: "
+                      << schema::EnumNameAnySectionDataType(
+                             buffer_key.data_type);
     return std::nullopt;
   }
 
