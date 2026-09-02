@@ -17,10 +17,12 @@
 #include <utility>
 
 #include "absl/log/absl_log.h"  // from @com_google_absl
+#include "absl/status/status.h"  // from @com_google_absl
 #include "c/conversation.h"
 #include "c/conversation_internal.h"  // IWYU pragma: keep
 #include "c/engine.h"
 #include "c/engine_internal.h"  // IWYU pragma: keep
+#include "c/error_reporter_internal.h"
 #include "c/experimental_internal.h"  // IWYU pragma: keep
 #include "runtime/conversation/conversation.h"
 #include "runtime/engine/engine.h"
@@ -31,6 +33,8 @@ int litert_lm_experimental_engine_update_gpu_enable_metal_residency_set(
     LiteRtLmEngine* engine, bool enable_metal_residency_set) {
   if (engine == nullptr || engine->engine == nullptr) {
     ABSL_LOG(ERROR) << "Engine is null.";
+    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
+                                "Engine is null.");
     return -1;
   }
   auto status = engine->engine->UpdateGpuEnableMetalResidencySet(
@@ -38,8 +42,10 @@ int litert_lm_experimental_engine_update_gpu_enable_metal_residency_set(
   if (!status.ok()) {
     ABSL_LOG(ERROR) << "Failed to update GPU enable metal residency set: "
                     << status;
+    litert::lm::c::SetLastError(status);
     return -1;
   }
+  litert::lm::c::SetLastError(absl::OkStatus());
   return 0;
 }
 
