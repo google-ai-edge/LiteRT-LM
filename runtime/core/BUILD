@@ -541,6 +541,7 @@ cc_library(
     hdrs = ["embedding_engine_impl.h"],
     visibility = [":engine_impl_users"],
     deps = [
+        "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
@@ -548,6 +549,7 @@ cc_library(
         "@com_google_absl//absl/types:optional",
         "@litert//litert/cc:litert_tensor_buffer",
         "//runtime/components:model_resources",
+        "//runtime/engine:cpu_affinity_utils",
         "//runtime/engine:embedding_engine",
         "//runtime/engine:embedding_engine_settings",
         "//runtime/engine:io_types",

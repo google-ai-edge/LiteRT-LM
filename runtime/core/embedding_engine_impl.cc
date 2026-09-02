@@ -23,6 +23,7 @@
 #include <variant>
 #include <vector>
 
+#include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
@@ -30,6 +31,7 @@
 #include "absl/types/optional.h"  // from @com_google_absl
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/model_resources.h"
+#include "runtime/engine/cpu_affinity_utils.h"
 #include "runtime/engine/embedding_engine.h"
 #include "runtime/engine/embedding_engine_settings.h"
 #include "runtime/engine/io_types.h"
@@ -194,6 +196,14 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
   }
   if (env == nullptr) {
     return absl::InvalidArgumentError("OwnedEnvironment cannot be null.");
+  }
+
+  if (IsPixelTensorDevice()) {
+    auto cores = GetPixelPerformanceCores();
+    auto status = SetCpuAffinity(cores);
+    if (!status.ok()) {
+      ABSL_LOG(WARNING) << "Failed to set CPU affinity: " << status;
+    }
   }
 
   // Initialize metadata.

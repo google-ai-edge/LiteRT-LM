@@ -97,7 +97,11 @@ class EmbeddingLiteRtCompiledModelExecutor : public EmbeddingExecutorBase {
       std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup,
       std::unique_ptr<litert::CompiledModel> compiled_model,
       std::vector<int> expected_input_dimension, int embedding_dimension,
-      std::map<int, size_t> encoder_signatures);
+      std::map<int, size_t> encoder_signatures,
+      absl::flat_hash_map<size_t, std::vector<litert::TensorBuffer>>
+          input_buffers_cache,
+      absl::flat_hash_map<size_t, std::vector<litert::TensorBuffer>>
+          output_buffers_cache);
 
   EmbeddingExecutorSettings executor_settings_;
   litert::Environment& env_;

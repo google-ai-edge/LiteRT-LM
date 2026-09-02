@@ -256,11 +256,39 @@ EmbeddingLiteRtCompiledModelExecutor::Create(
   RET_CHECK(!output_dims.empty()) << "Output dimensions cannot be empty.";
   int embedding_dimension = output_dims.back();
 
+  absl::flat_hash_map<size_t, std::vector<litert::TensorBuffer>>
+      input_buffers_cache;
+  absl::flat_hash_map<size_t, std::vector<litert::TensorBuffer>>
+      output_buffers_cache;
+  for (const auto& [seq_len, signature_index] : encoder_signatures) {
+    LITERT_ASSIGN_OR_RETURN(
+        auto input_buffers,
+        compiled_model_ptr->CreateInputBuffers(signature_index));
+    LITERT_ASSIGN_OR_RETURN(
+        auto output_buffers,
+        compiled_model_ptr->CreateOutputBuffers(signature_index));
+
+    // Run a warmup inference to prime the NPU driver and execution pipelines.
+    if (executor_settings.GetBackend() == Backend::NPU) {
+      auto warmup_status = compiled_model_ptr->Run(
+          signature_index, input_buffers, output_buffers);
+      if (!warmup_status) {
+        ABSL_LOG(WARNING) << "Warmup inference failed for signature index "
+                          << signature_index << ": "
+                          << warmup_status.Error().Message();
+      }
+    }
+
+    input_buffers_cache[signature_index] = std::move(input_buffers);
+    output_buffers_cache[signature_index] = std::move(output_buffers);
+  }
+
   return absl::WrapUnique(new EmbeddingLiteRtCompiledModelExecutor(
       std::move(executor_settings), env, std::move(resources),
       std::move(embedding_lookup), std::move(per_layer_embedding_lookup),
       std::move(compiled_model_ptr), std::move(expected_input_dimension),
-      embedding_dimension, std::move(encoder_signatures)));
+      embedding_dimension, std::move(encoder_signatures),
+      std::move(input_buffers_cache), std::move(output_buffers_cache)));
 }
 
 // static
@@ -519,7 +547,11 @@ EmbeddingLiteRtCompiledModelExecutor::EmbeddingLiteRtCompiledModelExecutor(
     std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup,
     std::unique_ptr<litert::CompiledModel> compiled_model,
     std::vector<int> expected_input_dimension, int embedding_dimension,
-    std::map<int, size_t> encoder_signatures)
+    std::map<int, size_t> encoder_signatures,
+    absl::flat_hash_map<size_t, std::vector<litert::TensorBuffer>>
+        input_buffers_cache,
+    absl::flat_hash_map<size_t, std::vector<litert::TensorBuffer>>
+        output_buffers_cache)
     : executor_settings_(std::move(executor_settings)),
       env_(env),
       resources_(std::move(resources)),
@@ -529,6 +561,8 @@ EmbeddingLiteRtCompiledModelExecutor::EmbeddingLiteRtCompiledModelExecutor(
       expected_input_dimension_(std::move(expected_input_dimension)),
       embedding_dimension_(embedding_dimension),
       backend_name_(GetBackendString(executor_settings_.GetBackend())),
-      encoder_signatures_(std::move(encoder_signatures)) {}
+      encoder_signatures_(std::move(encoder_signatures)),
+      input_buffers_cache_(std::move(input_buffers_cache)),
+      output_buffers_cache_(std::move(output_buffers_cache)) {}
 
 }  // namespace litert::lm
