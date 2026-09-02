@@ -324,6 +324,11 @@ crates_repository(
                 patches = ["@//:PATCH.toktrie"],
             ),
         ],
+        "link-cplusplus": [
+            crate.annotation(
+                build_script_rundir = ".",
+            ),
+        ],
     },
     cargo_lockfile = "//:Cargo.lock",
     lockfile = "//:cargo-bazel-lock.json",
