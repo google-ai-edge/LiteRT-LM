@@ -27,6 +27,7 @@
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
+#include "runtime/executor/executor_settings_base.h"
 #include "support/util/test_utils.h"  // IWYU pragma: keep
 
 namespace litert::omni {
@@ -92,6 +93,40 @@ TEST(ModelUtilsTest, CreateExecutorInputsWithVision) {
   auto inputs = CreateExecutorInputsWithVision(*buffer);
   ASSERT_THAT(inputs, IsOk());
   EXPECT_THAT(inputs->GetVisionDataPtr(), IsOk());
+}
+
+TEST(ModelUtilsTest, CreateCompiledModelForStatefulRunnerCpuNonExistent) {
+  auto env = Environment::Create({});
+  ASSERT_TRUE(env.HasValue());
+  ModelOptions options;
+  options.model_dir = "/non/existent/dir";
+  options.backend = lm::Backend::CPU;
+  EXPECT_THAT(CreateCompiledModelForStatefulRunner(
+                  *env, options, "model.tflite",
+                  /*signature_name=*/"", /*num_non_state_inputs=*/1,
+                  /*num_non_state_outputs=*/1),
+              StatusIs(absl::StatusCode::kNotFound));
+}
+
+TEST(ModelUtilsTest, CreateCompiledModelForStatefulRunnerGpuNonExistent) {
+  auto env = Environment::Create({});
+  ASSERT_TRUE(env.HasValue());
+  ModelOptions options;
+  options.model_dir = "/non/existent/dir";
+  options.backend = lm::Backend::GPU;
+  EXPECT_THAT(CreateCompiledModelForStatefulRunner(
+                  *env, options, "model.tflite",
+                  /*signature_name=*/"", /*num_non_state_inputs=*/1,
+                  /*num_non_state_outputs=*/1),
+              StatusIs(absl::StatusCode::kNotFound));
+}
+
+TEST(ModelUtilsTest, ModelOptionsExternalTensorPatterns) {
+  ModelOptions options;
+  EXPECT_TRUE(options.external_tensor_patterns.empty());
+  options.external_tensor_patterns.push_back("kv_cache_");
+  EXPECT_EQ(options.external_tensor_patterns.size(), 1);
+  EXPECT_EQ(options.external_tensor_patterns[0], "kv_cache_");
 }
 
 }  // namespace

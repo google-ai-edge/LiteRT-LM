@@ -34,6 +34,20 @@
 namespace litert::omni {
 
 absl::StatusOr<std::unique_ptr<StatefulLiteRtRunnerImpl>>
+StatefulLiteRtRunnerImpl::Create(
+    std::unique_ptr<LiteRtRunner> absl_nonnull runner,
+    absl::string_view signature_name, size_t num_non_state_inputs,
+    size_t num_non_state_outputs) {
+  LiteRtRunner* runner_ptr = runner.get();
+  LITERT_ASSIGN_OR_RETURN(
+      auto impl,
+      Create(runner_ptr, signature_name, num_non_state_inputs,
+             num_non_state_outputs));
+  impl->owned_runner_ = std::move(runner);
+  return impl;
+}
+
+absl::StatusOr<std::unique_ptr<StatefulLiteRtRunnerImpl>>
 StatefulLiteRtRunnerImpl::Create(LiteRtRunner* absl_nonnull runner,
                                  absl::string_view signature_name,
                                  size_t num_non_state_inputs,

@@ -74,6 +74,11 @@ struct AsrEngineConfig {
   int vocab_size = 0;
   int blank_token_id = 0;
 
+  // Patterns for state and intermediate buffer tensor names (e.g., recurrent
+  // states, encoder outputs) to be declared as external tensors for GPU
+  // (ml_drift).
+  std::vector<std::string> state_buffer_name_patterns;
+
   std::string cache_dir = "/tmp/asr_models";
 };
 

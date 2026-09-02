@@ -69,6 +69,12 @@ class StatefulLiteRtRunnerImpl : public StatefulLiteRtRunner {
       LiteRtRunner* absl_nonnull runner, absl::string_view signature_name,
       size_t num_non_state_inputs, size_t num_non_state_outputs);
 
+  // Creates a StatefulLiteRtRunner taking ownership of the LiteRtRunner.
+  static absl::StatusOr<std::unique_ptr<StatefulLiteRtRunnerImpl>> Create(
+      std::unique_ptr<LiteRtRunner> absl_nonnull runner,
+      absl::string_view signature_name, size_t num_non_state_inputs,
+      size_t num_non_state_outputs);
+
   ~StatefulLiteRtRunnerImpl() override = default;
 
   absl::Status Reset() override;
@@ -95,6 +101,7 @@ class StatefulLiteRtRunnerImpl : public StatefulLiteRtRunner {
         num_non_state_inputs_(num_non_state_inputs),
         num_non_state_outputs_(num_non_state_outputs) {}
 
+  std::unique_ptr<LiteRtRunner> owned_runner_;
   LiteRtRunner& runner_;
   std::string signature_name_;
   size_t num_non_state_inputs_;

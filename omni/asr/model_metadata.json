@@ -10,7 +10,18 @@
       "nFrames": 500,
       "preemphasis": 0.97
     },
-    "decodeStartTokenId": 8192
+    "decodeStartTokenId": 8192,
+    "stateBufferNamePatterns": [
+      "encode_output_0_output",
+      "decode_args_0",
+      "decode_1_args_0",
+      "decode_1_args_2",
+      "decode_1_args_3",
+      "decode_1_output_1_output",
+      "decode_1_output_2_output",
+      "decode_output_1_output",
+      "decode_output_2_output"
+    ]
   },
   "parakeet-ctc-0.6b": {
     "modelRemoteUrl": "https://huggingface.co/litert-community/parakeet-ctc-0.6b/resolve/main/parakeet_ctc_0.6b_5s_i8.tflite",

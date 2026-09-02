@@ -16,12 +16,14 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>  // NOLINT: Required for path manipulation.
 #include <fstream>
 #include <functional>
 #include <ios>
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -148,6 +150,30 @@ absl::StatusOr<std::unique_ptr<lm::ModelResources>> CreateModelResources(
   return lm::ModelResourcesLitertLm::Create(std::move(loader));
 }
 
+absl::StatusOr<std::vector<std::string>> GetStateTensorPatterns(
+    const Model& model, absl::string_view signature_name,
+    size_t num_non_state_inputs, size_t num_non_state_outputs) {
+  std::vector<std::string> patterns;
+  LITERT_ASSIGN_OR_RETURN(const auto& in_names,
+                          model.GetSignatureInputNames(signature_name));
+  for (size_t i = num_non_state_inputs; i < in_names.size(); ++i) {
+    patterns.push_back(std::string(in_names[i]));
+  }
+
+  LITERT_ASSIGN_OR_RETURN(const auto& out_names,
+                          model.GetSignatureOutputNames(signature_name));
+  for (size_t i = num_non_state_outputs; i < out_names.size(); ++i) {
+    patterns.push_back(std::string(out_names[i]));
+  }
+  return patterns;
+}
+
+std::string JoinPath(absl::string_view dir, absl::string_view filename) {
+  return (std::filesystem::path(std::string_view(dir)) /
+          std::string_view(filename))
+      .string();
+}
+
 }  // namespace
 
 absl::Status CheckFileReadable(absl::string_view path) {
@@ -179,7 +205,7 @@ absl::StatusOr<std::string> LoadFile(absl::string_view path) {
 
 absl::StatusOr<std::string> LoadFile(absl::string_view model_dir,
                                      absl::string_view filename) {
-  return LoadFile(absl::StrCat(model_dir, "/", filename));
+  return LoadFile(JoinPath(model_dir, filename));
 }
 
 absl::StatusOr<CompiledModel> CreateCompiledModel(
@@ -201,6 +227,10 @@ absl::StatusOr<CompiledModel> CreateCompiledModel(
     gpu_compilation_options.SetMadviseOriginalSharedTensors(true);
     gpu_compilation_options.SetConvertWeightsOnGpu(true);
     gpu_compilation_options.SetHintFullyDelegatedToSingleDelegate(true);
+    for (const auto& pattern : options.external_tensor_patterns) {
+      gpu_compilation_options.AddExternalTensorPattern(pattern.c_str());
+      gpu_compilation_options.AddBufferStorageTensorPattern(pattern.c_str());
+    }
     comp_options.SetHardwareAccelerators(HwAccelerators::kGpu);
   } else {
     comp_options.SetHardwareAccelerators(HwAccelerators::kCpu);
@@ -209,8 +239,8 @@ absl::StatusOr<CompiledModel> CreateCompiledModel(
     ABSL_RETURN_IF_ERROR(lm::SetCpuOptions(cpu_options, options.num_threads));
 
     if (!options.cache_dir.empty()) {
-      std::string cache_path = absl::StrCat(options.cache_dir, "/",
-                                            model_filename, ".xnnpack_cache");
+      std::string cache_path = JoinPath(
+          options.cache_dir, absl::StrCat(model_filename, ".xnnpack_cache"));
       absl::StatusOr<std::variant<std::string, std::shared_ptr<lm::ScopedFile>>>
           cache_variant(cache_path);
       ABSL_RETURN_IF_ERROR(
@@ -218,13 +248,38 @@ absl::StatusOr<CompiledModel> CreateCompiledModel(
     }
   }
 
-  std::string path = absl::StrCat(options.model_dir, "/", model_filename);
+  std::string path = JoinPath(options.model_dir, model_filename);
   ABSL_RETURN_IF_ERROR(CheckFileReadable(path));
   LITERT_ASSIGN_OR_RETURN(auto compiled_model,
                           CompiledModel::Create(env, path, comp_options));
   ABSL_VLOG(2) << absl::StrCat("Compiled model created successfully with ",
                                target_gpu ? "GPU" : "CPU", " backend");
   return std::move(compiled_model);
+}
+
+absl::StatusOr<CompiledModel> CreateCompiledModelForStatefulRunner(
+    Environment& env, const ModelOptions& options,
+    absl::string_view model_filename, absl::string_view signature_name,
+    size_t num_non_state_inputs, size_t num_non_state_outputs) {
+  if (options.backend != lm::Backend::GPU) {
+    return CreateCompiledModel(env, options, model_filename);
+  }
+
+  std::string path = JoinPath(options.model_dir, model_filename);
+  ABSL_RETURN_IF_ERROR(CheckFileReadable(path));
+
+  LITERT_ASSIGN_OR_RETURN(auto model, Model::CreateFromFile(path));
+  LITERT_ASSIGN_OR_RETURN(
+      auto state_patterns,
+      GetStateTensorPatterns(model, signature_name, num_non_state_inputs,
+                             num_non_state_outputs));
+
+  ModelOptions stateful_options = options;
+  stateful_options.external_tensor_patterns.insert(
+      stateful_options.external_tensor_patterns.end(), state_patterns.begin(),
+      state_patterns.end());
+
+  return CreateCompiledModel(env, stateful_options, model_filename);
 }
 
 absl::StatusOr<std::unique_ptr<LiteRtLmRunner>> CreateLmRunner(

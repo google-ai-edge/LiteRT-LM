@@ -18,6 +18,7 @@
 #include <cstddef>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
@@ -73,6 +74,9 @@ struct ModelOptions {
   lm::Backend backend = lm::Backend::CPU;
   // Number of threads for CPU execution.
   int num_threads = 4;
+  // Patterns for tensor names to be declared as external tensors for GPU
+  // (ml_drift).
+  std::vector<std::string> external_tensor_patterns;
 };
 
 // Checks if a file exists and is readable at the specified path.
@@ -116,6 +120,26 @@ absl::StatusOr<std::string> LoadFile(absl::string_view model_dir,
 absl::StatusOr<CompiledModel> CreateCompiledModel(
     Environment& env, const ModelOptions& options,
     absl::string_view model_filename);
+
+// Creates and compiles a LiteRT model for use with StatefulLiteRtRunner,
+// automatically declaring the recurrent state tensors as external tensors for
+// GPU (ml_drift).
+//
+// args
+// - env: LiteRT environment instance.
+// - options: ModelOptions containing model directory, cache_dir, backend, etc.
+// - model_filename: Model file name to load.
+// - signature_name: Name of the stateful signature (or empty for default).
+// - num_non_state_inputs: Number of leading non-state inputs in the signature.
+// - num_non_state_outputs: Number of leading non-state outputs in the
+//   signature.
+//
+// returns
+// - CompiledModel instance on success, or error status on failure.
+absl::StatusOr<CompiledModel> CreateCompiledModelForStatefulRunner(
+    Environment& env, const ModelOptions& options,
+    absl::string_view model_filename, absl::string_view signature_name,
+    size_t num_non_state_inputs, size_t num_non_state_outputs);
 
 // Creates a LiteRtLmRunner from model directory and filename.
 //

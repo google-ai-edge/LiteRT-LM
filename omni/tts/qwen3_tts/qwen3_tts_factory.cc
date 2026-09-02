@@ -71,7 +71,10 @@ absl::Status InitQwen3TtsResources(const Qwen3TtsModelConfig& config,
       resources.AddLmRunner("talker", std::move(talker_runner)));
 
   LITERT_ASSIGN_OR_RETURN(
-      auto mtp, CreateCompiledModel(env, model_options, config.mtp_file));
+      auto mtp, CreateCompiledModelForStatefulRunner(
+                    env, model_options, config.mtp_file,
+                    /*signature_name=*/"", /*num_non_state_inputs=*/3,
+                    /*num_non_state_outputs=*/1));
   ABSL_RETURN_IF_ERROR(resources.AddCompiledModel(
       "mtp", std::make_shared<CompiledModel>(std::move(mtp))));
 

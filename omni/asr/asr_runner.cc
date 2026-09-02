@@ -19,6 +19,7 @@
 #include <sstream>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "absl/flags/flag.h"  // from @com_google_absl
 #include "absl/flags/parse.h"  // from @com_google_absl
@@ -115,6 +116,10 @@ absl::StatusOr<litert::omni::asr::AsrEngineConfig> LoadConfigFromJsonFile(
   }
   if (m.contains("decodeSkipUntilTokenId")) {
     config.decode_skip_until_token_id = m["decodeSkipUntilTokenId"].get<int>();
+  }
+  if (m.contains("stateBufferNamePatterns")) {
+    config.state_buffer_name_patterns =
+        m["stateBufferNamePatterns"].get<std::vector<std::string>>();
   }
 
   std::string merger_str;

@@ -107,6 +107,10 @@ absl::StatusOr<std::unique_ptr<AsrEngine>> AsrEngine::Create(
                             options.GetOptions<::litert::GpuOptions>());
     gpu_options.SetPrecision(::litert::GpuOptions::Precision::kFp32);
     gpu_options.EnableConstantTensorSharing(true);
+    for (const auto& pattern : config.state_buffer_name_patterns) {
+      gpu_options.AddExternalTensorPattern(pattern.c_str());
+      gpu_options.AddBufferStorageTensorPattern(pattern.c_str());
+    }
   } else if (config.backend == AsrEngineConfig::Backend::kNpu) {
     accelerators |= static_cast<uint32_t>(::litert::HwAccelerators::kNpu);
     LITERT_ASSIGN_OR_RETURN(
