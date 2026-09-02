@@ -798,8 +798,6 @@ class Conversation(
         }
       }
 
-      // Note: consider to parse the "role" from the messageJsonObject.
-      // It seems that models can return "assistant" or "model".
       return Message.model(Contents.of(contents), toolCalls, channels)
     }
   }
