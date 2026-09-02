@@ -31,6 +31,7 @@
 #include "litert/cc/litert_options.h"  // from @litert
 #include "litert/cc/options/litert_cpu_options.h"  // from @litert
 #include "litert/cc/options/litert_gpu_options.h"  // from @litert
+#include "litert/experimental/custom_ops/gated_delta_net/gated_delta_update_litert_custom_op.h"  // from @litert
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/executor/llm_executor_settings.h"
@@ -71,6 +72,9 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
     std::optional<ModelSignatures*> signatures,
     std::optional<std::string> cache_suffix) {
   LITERT_ASSIGN_OR_RETURN(auto compilation_options, Options::Create());
+  LITERT_RETURN_IF_ERROR(
+      litert::gated_delta_net::RegisterGatedDeltaNetCustomOps(
+          compilation_options));
   std::string cache_path = executor_settings.GetCacheDir();
 
   switch (executor_settings.GetBackend()) {
