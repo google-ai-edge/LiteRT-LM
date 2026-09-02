@@ -41,6 +41,27 @@ class CapabilitiesTest(absltest.TestCase):
     self.assertFalse(capabilities.supports_function_calling())
     self.assertFalse(capabilities.has_speculative_decoding_support())
     self.assertEqual(capabilities.max_vision_token_budget, -1)
+    self.assertIsNone(capabilities.vision_signature_selection)
+    self.assertIsNone(capabilities.min_runtime_version)
+
+    # Verify modality-specific backends for text (defaults to CPU and GPU)
+    self.assertEqual(
+        capabilities.supported_backends_for_modality(
+            litert_lm.LiteRtLmModality.TEXT
+        ),
+        {"cpu", "gpu"},
+    )
+    # Verify modality-specific backends for vision (not present -> empty)
+    self.assertEqual(
+        capabilities.supported_backends_for_modality(
+            litert_lm.LiteRtLmModality.VISION
+        ),
+        set(),
+    )
+    self.assertEqual(
+        capabilities.npu_brand_for_modality(litert_lm.LiteRtLmModality.TEXT),
+        litert_lm.LiteRtLmNpuBrand.UNKNOWN,
+    )
 
     # Modalities
     self.assertTrue(capabilities.input_modalities.text)
@@ -158,6 +179,107 @@ class CapabilitiesTest(absltest.TestCase):
 
     capabilities = litert_lm.Capabilities("/fake/path")
     self.assertEqual(capabilities.max_vision_token_budget, 280)
+
+  @mock.patch(
+      "litert_lm.capabilities._ffi._get_lib"
+  )
+  @mock.patch("os.path.exists", return_value=True)
+  def test_vision_signature_selection(
+      self, unused_mock_exists, mock_get_lib
+  ):
+    mock_lib = mock.MagicMock()
+    mock_get_lib.return_value = mock_lib
+    mock_lib.litert_lm_loaded_file_create.return_value = 12345
+
+    def side_effect(unused_handle, lengths, unused_max_size):
+      if lengths is None:
+        return 2
+      lengths[0] = 64
+      lengths[1] = 256
+      return 2
+
+    mock_lib.litert_lm_loaded_file_vision_signature_selection.side_effect = (
+        side_effect
+    )
+
+    capabilities = litert_lm.Capabilities("/fake/path")
+    self.assertEqual(capabilities.vision_signature_selection, [64, 256])
+
+  @mock.patch(
+      "litert_lm.capabilities._ffi._get_lib"
+  )
+  @mock.patch("os.path.exists", return_value=True)
+  def test_min_runtime_version(self, unused_mock_exists, mock_get_lib):
+    mock_lib = mock.MagicMock()
+    mock_get_lib.return_value = mock_lib
+    mock_lib.litert_lm_loaded_file_create.return_value = 12345
+    mock_lib.litert_lm_loaded_file_min_runtime_version.return_value = b"0.12.3"
+
+    capabilities = litert_lm.Capabilities("/fake/path")
+    self.assertEqual(capabilities.min_runtime_version, "0.12.3")
+
+  @mock.patch(
+      "litert_lm.capabilities._ffi._get_lib"
+  )
+  @mock.patch("os.path.exists", return_value=True)
+  def test_min_runtime_version_not_set(self, unused_mock_exists, mock_get_lib):
+    mock_lib = mock.MagicMock()
+    mock_get_lib.return_value = mock_lib
+    mock_lib.litert_lm_loaded_file_create.return_value = 12345
+    mock_lib.litert_lm_loaded_file_min_runtime_version.return_value = None
+
+    capabilities = litert_lm.Capabilities("/fake/path")
+    self.assertIsNone(capabilities.min_runtime_version)
+
+  @mock.patch(
+      "litert_lm.capabilities._ffi._get_lib"
+  )
+  @mock.patch("os.path.exists", return_value=True)
+  def test_supported_backends_for_modality(
+      self, unused_mock_exists, mock_get_lib
+  ):
+    mock_lib = mock.MagicMock()
+    mock_get_lib.return_value = mock_lib
+    mock_lib.litert_lm_loaded_file_create.return_value = 12345
+
+    # CPU (1) and GPU (2) = 3
+    mock_lib.litert_lm_loaded_file_modality_supported_backends.return_value = 3
+
+    capabilities = litert_lm.Capabilities("/fake/path")
+    self.assertEqual(
+        capabilities.supported_backends_for_modality(
+            litert_lm.LiteRtLmModality.VISION
+        ),
+        {"cpu", "gpu"},
+    )
+    assert_backends = (
+        mock_lib.litert_lm_loaded_file_modality_supported_backends
+    )
+    assert_backends.assert_called_once_with(
+        12345, int(litert_lm.LiteRtLmModality.VISION)
+    )
+
+  @mock.patch(
+      "litert_lm.capabilities._ffi._get_lib"
+  )
+  @mock.patch("os.path.exists", return_value=True)
+  def test_npu_brand_for_modality(self, unused_mock_exists, mock_get_lib):
+    mock_lib = mock.MagicMock()
+    mock_get_lib.return_value = mock_lib
+    mock_lib.litert_lm_loaded_file_create.return_value = 12345
+    mock_lib.litert_lm_loaded_file_modality_npu_brand.return_value = int(
+        litert_lm.LiteRtLmNpuBrand.MEDIATEK
+    )
+
+    capabilities = litert_lm.Capabilities("/fake/path")
+    self.assertEqual(
+        capabilities.npu_brand_for_modality(litert_lm.LiteRtLmModality.AUDIO),
+        litert_lm.LiteRtLmNpuBrand.MEDIATEK,
+    )
+    assert_brand = mock_lib.litert_lm_loaded_file_modality_npu_brand
+    assert_brand.assert_called_once_with(
+        12345, int(litert_lm.LiteRtLmModality.AUDIO)
+    )
 
 
 if __name__ == "__main__":

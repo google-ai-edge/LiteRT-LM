@@ -19,6 +19,7 @@
 from ._ffi import ActivationDataType
 from ._ffi import LiteRtLmConstraintProviderType
 from ._ffi import LiteRtLmModality
+from ._ffi import LiteRtLmNpuBrand
 from ._ffi import LogSeverity
 from ._ffi import set_min_log_severity
 from ._messages import Content
@@ -77,6 +78,7 @@ __all__ = (
     "InputOverflowStrategy",
     "LiteRtLmConstraintProviderType",
     "LiteRtLmModality",
+    "LiteRtLmNpuBrand",
     "LogSeverity",
     "LoraConfig",
     "LoraRankConfig",

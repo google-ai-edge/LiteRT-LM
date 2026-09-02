@@ -385,6 +385,7 @@ class LitertLmFileBuilder:
               _resolve_path(section["data_path"], parent_dir),
               additional_metadata=additional_metadata,
               jinja_prompt_template_path=jinja_prompt_template_path,
+              min_runtime_version=section.get("min_runtime_version", None),
           )
         elif section["section_type"] == "ExecutorMetadata":
           builder.add_executor_metadata(
@@ -507,6 +508,7 @@ class LitertLmFileBuilder:
       llm_metadata_path: str,
       additional_metadata: Optional[list[Metadata]] = None,
       jinja_prompt_template_path: Optional[str] = None,
+      min_runtime_version: Optional[str] = None,
   ) -> LitertLmFileBuilderT:
     """Adds llm metadata to the litertlm file.
 
@@ -516,6 +518,7 @@ class LitertLmFileBuilder:
       additional_metadata: Additional metadata to add to the llm metadata.
       jinja_prompt_template_path: Optional path to a Jinja file to overwrite
         jinja_prompt_template.
+      min_runtime_version: The minimum LiteRT-LM runtime version required.
 
     Returns:
       The currentLitertLmFileBuilder object.
@@ -542,13 +545,16 @@ class LitertLmFileBuilder:
 
       def data_writer(stream: BinaryIO):
         with litertlm_core.open_file(llm_metadata_path, "rb") as f:
-          if jinja_prompt_template_path:
+          if jinja_prompt_template_path or min_runtime_version:
             msg = llm_metadata_pb2.LlmMetadata()
             msg.ParseFromString(f.read())
-            with litertlm_core.open_file(
-                jinja_prompt_template_path, "r"
-            ) as f_jinja:
-              msg.jinja_prompt_template = f_jinja.read()
+            if jinja_prompt_template_path:
+              with litertlm_core.open_file(
+                  jinja_prompt_template_path, "r"
+              ) as f_jinja:
+                msg.jinja_prompt_template = f_jinja.read()
+            if min_runtime_version:
+              msg.min_runtime_version = min_runtime_version
             stream.write(msg.SerializeToString())
           else:
             _copy_file_to_stream(f, stream)
@@ -563,6 +569,8 @@ class LitertLmFileBuilder:
                 jinja_prompt_template_path, "r"
             ) as f_jinja:
               msg.jinja_prompt_template = f_jinja.read()
+          if min_runtime_version:
+            msg.min_runtime_version = min_runtime_version
           stream.write(msg.SerializeToString())
 
     section_object = _SectionObject(

@@ -102,12 +102,71 @@ def describe_model(
   click.echo(
       f"  Max Vision Token Budget: {capabilities.max_vision_token_budget}"
   )
+  click.echo(
+      f"  Min Runtime Version:    {capabilities.min_runtime_version or '-1'}"
+  )
+  lengths = capabilities.vision_signature_selection
+  lengths_str = str(lengths) if lengths is not None else "-1"
+  click.echo(f"  Vision Signature Selection: {lengths_str}")
 
   sampler_config = capabilities.default_sampler_params
   click.echo(f"  Sampler Temp:           {sampler_config.temperature:.2f}")
   click.echo(f"  Sampler Top K:          {sampler_config.top_k}")
   click.echo(f"  Sampler Top P:          {sampler_config.top_p:.2f}")
   click.echo(f"  Input Modalities:       {modalities_str}")
+
+  if capabilities.input_modalities.text:
+    backends_str = (
+        " ".join([
+            b.upper()
+            for b in sorted(
+                capabilities.supported_backends_for_modality(
+                    litert_lm.LiteRtLmModality.TEXT
+                )
+            )
+        ])
+        or "None"
+    )
+    click.echo(f"  Text Backends:          {backends_str}")
+  if capabilities.input_modalities.vision:
+    backends_str = (
+        " ".join([
+            b.upper()
+            for b in sorted(
+                capabilities.supported_backends_for_modality(
+                    litert_lm.LiteRtLmModality.VISION
+                )
+            )
+        ])
+        or "None"
+    )
+    click.echo(f"  Vision Backends:        {backends_str}")
+  if capabilities.input_modalities.audio:
+    backends_str = (
+        " ".join([
+            b.upper()
+            for b in sorted(
+                capabilities.supported_backends_for_modality(
+                    litert_lm.LiteRtLmModality.AUDIO
+                )
+            )
+        ])
+        or "None"
+    )
+    click.echo(f"  Audio Backends:         {backends_str}")
+  if capabilities.input_modalities.video:
+    backends_str = (
+        " ".join([
+            b.upper()
+            for b in sorted(
+                capabilities.supported_backends_for_modality(
+                    litert_lm.LiteRtLmModality.VIDEO
+                )
+            )
+        ])
+        or "None"
+    )
+    click.echo(f"  Video Backends:         {backends_str}")
   click.echo("========================================")
 
 

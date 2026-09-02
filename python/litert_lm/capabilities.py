@@ -34,6 +34,7 @@ Example:
 
 from __future__ import annotations
 
+import ctypes
 import dataclasses
 import os
 
@@ -148,8 +149,78 @@ class Capabilities:
 
   @property
   def max_vision_token_budget(self) -> int:
-    """Returns the maximum vision token budget for multimodal inputs, or -1 if not defined."""
+    """Returns maximum vision token budget, or -1 if not defined."""
     self._check_closed()
     return int(
         self._lib.litert_lm_loaded_file_max_vision_token_budget(self._handle)
     )
+
+  @property
+  def vision_signature_selection(self) -> list[int] | None:
+    """Returns vision signature choices, or None if vision is unsupported."""
+    self._check_closed()
+    count = self._lib.litert_lm_loaded_file_vision_signature_selection(
+        self._handle, None, 0
+    )
+    if count == -1:
+      return None
+    lengths = (ctypes.c_int32 * count)()
+    self._lib.litert_lm_loaded_file_vision_signature_selection(
+        self._handle, lengths, count
+    )
+    return list(lengths)
+
+  @property
+  def min_runtime_version(self) -> str | None:
+    """Returns minimum runtime version required, or None if not defined."""
+    self._check_closed()
+    version_bytes = self._lib.litert_lm_loaded_file_min_runtime_version(
+        self._handle
+    )
+    if version_bytes is None:
+      return None
+    return version_bytes.decode("utf-8")
+
+  def supported_backends_for_modality(
+      self, modality: _ffi.LiteRtLmModality
+  ) -> set[str]:
+    """Returns the set of supported backends for a given modality.
+
+    Args:
+      modality: The input modality to query backends for.
+
+    Returns:
+      A set of backend name strings (e.g. {"cpu", "gpu"}).
+    """
+    self._check_closed()
+    mask = self._lib.litert_lm_loaded_file_modality_supported_backends(
+        self._handle, int(modality)
+    )
+    backends = set()
+    if mask & _ffi.LiteRtLmBackendMask.CPU:
+      backends.add("cpu")
+    if mask & _ffi.LiteRtLmBackendMask.GPU:
+      backends.add("gpu")
+    if mask & _ffi.LiteRtLmBackendMask.NPU:
+      backends.add("npu")
+    return backends
+
+  def npu_brand_for_modality(
+      self, modality: _ffi.LiteRtLmModality
+  ) -> _ffi.LiteRtLmNpuBrand:
+    """Returns the NPU brand of the model for a given modality.
+
+    Args:
+      modality: The input modality to query NPU brand for.
+
+    Returns:
+      The NpuBrand enum value for the modality.
+    """
+    self._check_closed()
+    brand_val = self._lib.litert_lm_loaded_file_modality_npu_brand(
+        self._handle, int(modality)
+    )
+    try:
+      return _ffi.LiteRtLmNpuBrand(brand_val)
+    except ValueError:
+      return _ffi.LiteRtLmNpuBrand.UNKNOWN

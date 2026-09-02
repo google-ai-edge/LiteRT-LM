@@ -948,6 +948,43 @@ data_path = "{tflite_name}"
               invalid_val
           )
 
+  def test_add_llm_metadata_with_min_runtime_version(self):
+    """Tests that min_runtime_version is added to llm metadata."""
+    meta_path = self._create_dummy_file(
+        "metadata.pb", llm_metadata_pb2.LlmMetadata().SerializeToString()
+    )
+    builder = litertlm_builder.LitertLmFileBuilder()
+    self._add_system_metadata(builder)
+    builder.add_llm_metadata(meta_path, min_runtime_version="0.12.3")
+    ss = self._build_and_read_litertlm(builder)
+    self.assertIn("min_runtime_version: \"0.12.3\"", ss)
+
+  def test_add_llm_metadata_textproto_with_min_runtime_version(self):
+    """Tests that min_runtime_version is added to textproto llm metadata."""
+    meta_path = self._create_dummy_file("metadata.pbtext", b"")
+    builder = litertlm_builder.LitertLmFileBuilder()
+    self._add_system_metadata(builder)
+    builder.add_llm_metadata(meta_path, min_runtime_version="0.12.3")
+    ss = self._build_and_read_litertlm(builder)
+    self.assertIn("min_runtime_version: \"0.12.3\"", ss)
+
+  def test_from_toml_file_with_min_runtime_version(self):
+    """Tests that min_runtime_version specified in TOML section is applied."""
+    metadata_path = self._create_dummy_file("metadata.pbtext", b"")
+    metadata_filename = os.path.basename(metadata_path)
+    toml_content = f"""
+[[section]]
+section_type = "LlmMetadata"
+data_path = "{metadata_filename}"
+min_runtime_version = "0.12.3"
+"""
+    toml_path = self._create_dummy_file(
+        "min_version.toml", toml_content.encode()
+    )
+    builder = litertlm_builder.LitertLmFileBuilder.from_toml_file(toml_path)
+    ss = self._build_and_read_litertlm(builder)
+    self.assertIn("min_runtime_version: \"0.12.3\"", ss)
+
 
 if __name__ == "__main__":
   absltest.main()

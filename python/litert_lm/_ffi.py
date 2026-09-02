@@ -60,6 +60,19 @@ class LiteRtLmModality(enum.IntEnum):
   VIDEO = 3
 
 
+class LiteRtLmBackendMask(enum.IntFlag):
+  CPU = 1 << 0
+  GPU = 1 << 1
+  NPU = 1 << 2
+
+
+class LiteRtLmNpuBrand(enum.IntEnum):
+  UNKNOWN = 0
+  QUALCOMM = 1
+  GOOGLE_TENSOR = 2
+  MEDIATEK = 3
+
+
 # C-compatible callback type that matches 'LiteRtLmStreamCallback' in engine.h.
 STREAM_CALLBACK_TYPE = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p)
 
@@ -850,6 +863,28 @@ def _setup_lib_signatures(lib):
   ]
   lib.litert_lm_loaded_file_max_vision_token_budget.restype = ctypes.c_int32
   lib.litert_lm_loaded_file_max_vision_token_budget.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_loaded_file_vision_signature_selection.restype = (
+      ctypes.c_int32
+  )
+  lib.litert_lm_loaded_file_vision_signature_selection.argtypes = [
+      ctypes.c_void_p,
+      ctypes.POINTER(ctypes.c_int32),
+      ctypes.c_int32,
+  ]
+
+  lib.litert_lm_loaded_file_min_runtime_version.restype = ctypes.c_char_p
+  lib.litert_lm_loaded_file_min_runtime_version.argtypes = [ctypes.c_void_p]
+
+  lib.litert_lm_loaded_file_modality_supported_backends.restype = ctypes.c_int32
+  lib.litert_lm_loaded_file_modality_supported_backends.argtypes = [
+      ctypes.c_void_p,
+      ctypes.c_int,
+  ]
+  lib.litert_lm_loaded_file_modality_npu_brand.restype = ctypes.c_int
+  lib.litert_lm_loaded_file_modality_npu_brand.argtypes = [
+      ctypes.c_void_p,
+      ctypes.c_int,
+  ]
 
 
 def set_min_log_severity(severity: LogSeverity):

@@ -42,6 +42,11 @@ class DescribeTest(absltest.TestCase):
 
     self.mock_capabilities = mock.MagicMock(spec=litert_lm.Capabilities)
     self.mock_capabilities.max_vision_token_budget = -1
+    self.mock_capabilities.vision_signature_selection = None
+    self.mock_capabilities.supported_backends_for_modality.return_value = {
+        "cpu",
+        "gpu",
+    }
     self.mock_capabilities_cls = self.enter_context(
         mock.patch.object(
             litert_lm,
@@ -60,6 +65,8 @@ class DescribeTest(absltest.TestCase):
         text=True, vision=True, audio=False, video=False
     )
     self.mock_capabilities.max_vision_token_budget = 280
+    self.mock_capabilities.vision_signature_selection = [280]
+    self.mock_capabilities.min_runtime_version = "0.12.3"
     self.mock_capabilities.default_sampler_params = litert_lm.SamplerConfig(
         temperature=0.7,
         top_k=40,
@@ -93,6 +100,10 @@ class DescribeTest(absltest.TestCase):
     self.assertIn("Sampler Top K:          40", result.output)
     self.assertIn("Sampler Top P:          0.90", result.output)
     self.assertIn("Input Modalities:       Text Vision", result.output)
+    self.assertIn("Text Backends:          CPU GPU", result.output)
+    self.assertIn("Vision Backends:        CPU GPU", result.output)
+    self.assertIn("Min Runtime Version:    0.12.3", result.output)
+    self.assertIn("Vision Signature Selection: [280]", result.output)
 
   def test_describe_model_multimodal_audio_video(self):
     self.mock_capabilities.supports_thinking.return_value = False
@@ -102,6 +113,8 @@ class DescribeTest(absltest.TestCase):
     self.mock_capabilities.input_modalities = litert_lm.SupportedModalities(
         text=True, vision=True, audio=True, video=True
     )
+    self.mock_capabilities.min_runtime_version = None
+    self.mock_capabilities.vision_signature_selection = None
     self.mock_capabilities.default_sampler_params = litert_lm.SamplerConfig(
         temperature=0.7,
         top_k=40,
@@ -118,6 +131,12 @@ class DescribeTest(absltest.TestCase):
     self.assertIn(
         "Input Modalities:       Text Vision Audio Video", result.output
     )
+    self.assertIn("Text Backends:          CPU GPU", result.output)
+    self.assertIn("Vision Backends:        CPU GPU", result.output)
+    self.assertIn("Audio Backends:         CPU GPU", result.output)
+    self.assertIn("Video Backends:         CPU GPU", result.output)
+    self.assertIn("Min Runtime Version:    -1", result.output)
+    self.assertIn("Vision Signature Selection: -1", result.output)
 
   def test_describe_model_not_found(self):
     self.mock_model.exists.return_value = False
