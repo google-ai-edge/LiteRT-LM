@@ -218,6 +218,7 @@ absl::StatusOr<TensorBuffer> CreateFP16OutputBuffer(
     return absl::InternalError("No supported buffer types found.");
   }
   auto buffer_type = buffer_types[0];
+
   LITERT_ASSIGN_OR_RETURN(
       auto buffer, TensorBuffer::CreateManaged(
                        env, buffer_type, std::move(new_tensor_type), size));
