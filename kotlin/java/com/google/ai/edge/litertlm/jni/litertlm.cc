@@ -35,7 +35,6 @@
 #include "absl/time/time.h"  // from @com_google_absl
 #include "nlohmann/json_fwd.hpp"  // from @nlohmann_json
 #include "litert/cc/internal/scoped_file.h"  // from @litert
-#include "litert/cc/litert_environment.h"  // from @litert
 #include "c/capabilities.h"
 #include "runtime/components/constrained_decoding/llg_constraint_config.h"
 #include "runtime/components/constrained_decoding/no_repeat_ngram_config.h"
@@ -1743,14 +1742,6 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateEmbeddingEngine)(
     return 0;
   }
 
-  auto litert_env = ::litert::Environment::Create({});
-  if (!litert_env.HasValue()) {
-    ThrowLiteRtLmJniException(env, "Failed to create LiteRT environment.");
-    return 0;
-  }
-  auto owned_env = std::make_unique<litert::lm::OwnedEnvironment>(
-      litert::lm::OwnedEnvironment{/*magic_number_configs_helper=*/nullptr,
-                                   std::move(*litert_env)});
   const char* backend_chars = env->GetStringUTFChars(backend, nullptr);
   std::string backend_str(backend_chars);
   env->ReleaseStringUTFChars(backend, backend_chars);
@@ -1868,9 +1859,17 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateEmbeddingEngine)(
     settings->SetVisionTokensPerImage(vision_tokens_per_image);
   }
 
+  auto owned_env = litert::lm::CreateEnvironment(*settings, (*resources).get());
+  if (!owned_env.ok()) {
+    ThrowLiteRtLmJniException(
+        env, "Failed to create environment: " + owned_env.status().ToString());
+    return 0;
+  }
+
   auto engine = litert::lm::EmbeddingEngineImpl::Create(
-      std::move(*resources), std::move(owned_env), std::move(*tokenizer),
-      std::move(*settings));
+      std::move(*resources),
+      std::make_unique<litert::lm::OwnedEnvironment>(std::move(*owned_env)),
+      std::move(*tokenizer), std::move(*settings));
   if (!engine.ok()) {
     ThrowLiteRtLmJniException(env, "Failed to create EmbeddingEngineImpl: " +
                                        engine.status().ToString());
