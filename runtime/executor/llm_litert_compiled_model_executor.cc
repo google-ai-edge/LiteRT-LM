@@ -52,6 +52,9 @@
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
+#if defined(__APPLE__)
+#include "litert/cc/options/litert_gpu_options.h"  // from @litert
+#endif  // defined(__APPLE__)
 #include "runtime/components/constrained_decoding/constrained_decoder.h"
 #include "runtime/components/constrained_decoding/constraint.h"
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
@@ -1630,7 +1633,7 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::UpdateExecutorSettings(
 litert::Options LlmLiteRtCompiledModelExecutorBase::GetRunOptions() const {
   litert::Options run_options;
 #if defined(__APPLE__)
-  auto gpu_options = run_options.GetGpuOptions();
+  auto gpu_options = run_options.GetOptions<::litert::GpuOptions>();
   if (gpu_options.HasValue()) {
     (void)gpu_options->EnableMetalResidencySet(gpu_enable_metal_residency_set_);
   }

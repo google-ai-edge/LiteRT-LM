@@ -210,7 +210,8 @@ AudioLiteRtCompiledModelExecutor::AudioStaticEncoder::Initialize() {
                    ExecutorSettingsBase::kXnnpackCacheSuffix),
       /*check_and_clean=*/true);
   if (executor_settings_.GetBackend() == Backend::GPU) {
-    LITERT_ASSIGN_OR_RETURN(auto& gpu_options, options.GetGpuOptions());
+    LITERT_ASSIGN_OR_RETURN(auto& gpu_options,
+                            options.GetOptions<::litert::GpuOptions>());
     ABSL_ASSIGN_OR_RETURN(
         const auto cache_files,
         GetGpuModelCacheData(executor_settings_,
@@ -223,7 +224,8 @@ AudioLiteRtCompiledModelExecutor::AudioStaticEncoder::Initialize() {
         /*cache_compiled_shaders_only=*/false, gpu_options));
     options.SetHardwareAccelerators(litert::HwAccelerators::kGpu);
   } else if (executor_settings_.GetBackend() == Backend::CPU) {
-    LITERT_ASSIGN_OR_RETURN(auto& cpu_options, options.GetCpuOptions());
+    LITERT_ASSIGN_OR_RETURN(auto& cpu_options,
+                            options.GetOptions<::litert::CpuOptions>());
     ABSL_RETURN_IF_ERROR(SetCpuOptions(executor_settings_, cpu_options));
     ABSL_RETURN_IF_ERROR(SetCpuCacheOptions(
         weight_cache_file, AudioExecutorSettings::kEncoderName, cpu_options));
@@ -231,8 +233,9 @@ AudioLiteRtCompiledModelExecutor::AudioStaticEncoder::Initialize() {
     options.SetHardwareAccelerators(litert::HwAccelerators::kCpu);
 #if !defined(LITERT_DISABLE_NPU)
   } else if (executor_settings_.GetBackend() == Backend::NPU) {
-    LITERT_ASSIGN_OR_RETURN(auto& google_tensor_options,
-                            options.GetGoogleTensorOptions());
+    LITERT_ASSIGN_OR_RETURN(
+        auto& google_tensor_options,
+        options.GetOptions<google_tensor::GoogleTensorOptions>());
     google_tensor_options.SetPerformanceMode(
         google_tensor::GoogleTensorOptions::PerformanceMode::kBurst);
     options.SetHardwareAccelerators(litert::HwAccelerators::kNpu);
@@ -344,7 +347,8 @@ AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::Initialize() {
                    ExecutorSettingsBase::kXnnpackCacheSuffix),
       /*check_and_clean=*/true);
   if (executor_settings_.GetBackend() == Backend::GPU) {
-    LITERT_ASSIGN_OR_RETURN(auto& gpu_options, options.GetGpuOptions());
+    LITERT_ASSIGN_OR_RETURN(auto& gpu_options,
+                            options.GetOptions<::litert::GpuOptions>());
     ABSL_ASSIGN_OR_RETURN(
         const auto cache_files,
         GetGpuModelCacheData(executor_settings_,
@@ -357,15 +361,17 @@ AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::Initialize() {
         /*cache_compiled_shaders_only=*/false, gpu_options));
     options.SetHardwareAccelerators(litert::HwAccelerators::kGpu);
   } else if (executor_settings_.GetBackend() == Backend::CPU) {
-    LITERT_ASSIGN_OR_RETURN(auto& cpu_options, options.GetCpuOptions());
+    LITERT_ASSIGN_OR_RETURN(auto& cpu_options,
+                            options.GetOptions<::litert::CpuOptions>());
     ABSL_RETURN_IF_ERROR(SetCpuOptions(executor_settings_, cpu_options));
     ABSL_RETURN_IF_ERROR(SetCpuCacheOptions(
         weight_cache_file, AudioExecutorSettings::kEncoderName, cpu_options));
     options.SetHardwareAccelerators(litert::HwAccelerators::kCpu);
 #if !defined(LITERT_DISABLE_NPU)
   } else if (executor_settings_.GetBackend() == Backend::NPU) {
-    LITERT_ASSIGN_OR_RETURN(auto& google_tensor_options,
-                            options.GetGoogleTensorOptions());
+    LITERT_ASSIGN_OR_RETURN(
+        auto& google_tensor_options,
+        options.GetOptions<google_tensor::GoogleTensorOptions>());
     google_tensor_options.SetPerformanceMode(
         google_tensor::GoogleTensorOptions::PerformanceMode::kBurst);
     options.SetHardwareAccelerators(litert::HwAccelerators::kNpu);
@@ -540,7 +546,8 @@ absl::Status AudioLiteRtCompiledModelExecutor::AudioAdapter::Initialize() {
                    ExecutorSettingsBase::kXnnpackCacheSuffix),
       /*check_and_clean=*/true);
   if (executor_settings_.GetBackend() == Backend::GPU) {
-    LITERT_ASSIGN_OR_RETURN(auto& gpu_options, options.GetGpuOptions());
+    LITERT_ASSIGN_OR_RETURN(auto& gpu_options,
+                            options.GetOptions<::litert::GpuOptions>());
     ABSL_ASSIGN_OR_RETURN(
         const auto cache_files,
         GetGpuModelCacheData(executor_settings_,
@@ -559,7 +566,8 @@ absl::Status AudioLiteRtCompiledModelExecutor::AudioAdapter::Initialize() {
 #endif  // defined(LITERT_USE_WEBGPU_ACCELERATOR)
     options.SetHardwareAccelerators(litert::HwAccelerators::kGpu);
   } else if (executor_settings_.GetBackend() == Backend::CPU) {
-    LITERT_ASSIGN_OR_RETURN(auto& cpu_options, options.GetCpuOptions());
+    LITERT_ASSIGN_OR_RETURN(auto& cpu_options,
+                            options.GetOptions<::litert::CpuOptions>());
     ABSL_RETURN_IF_ERROR(SetCpuOptions(executor_settings_, cpu_options));
 
     ABSL_RETURN_IF_ERROR(SetCpuCacheOptions(
@@ -568,8 +576,9 @@ absl::Status AudioLiteRtCompiledModelExecutor::AudioAdapter::Initialize() {
     options.SetHardwareAccelerators(litert::HwAccelerators::kCpu);
 #if !defined(LITERT_DISABLE_NPU)
   } else if (executor_settings_.GetBackend() == Backend::NPU) {
-    LITERT_ASSIGN_OR_RETURN(auto& google_tensor_options,
-                            options.GetGoogleTensorOptions());
+    LITERT_ASSIGN_OR_RETURN(
+        auto& google_tensor_options,
+        options.GetOptions<google_tensor::GoogleTensorOptions>());
     google_tensor_options.SetPerformanceMode(
         google_tensor::GoogleTensorOptions::PerformanceMode::kBurst);
     options.SetHardwareAccelerators(litert::HwAccelerators::kNpu);

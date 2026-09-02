@@ -42,6 +42,7 @@
 #include "litert/cc/litert_model.h"  // from @litert
 #include "litert/cc/litert_options.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "litert/cc/options/litert_cpu_options.h"  // from @litert
 #include "litert/cc/options/litert_gpu_options.h"  // from @litert
 #include "omni/base/litert_lm_runner.h"
 #include "runtime/components/model_resources.h"
@@ -189,7 +190,7 @@ absl::StatusOr<CompiledModel> CreateCompiledModel(
 
   if (target_gpu) {
     LITERT_ASSIGN_OR_RETURN(auto& gpu_compilation_options,
-                            comp_options.GetGpuOptions());
+                            comp_options.GetOptions<::litert::GpuOptions>());
     gpu_compilation_options.EnableInfiniteFloatCapping(true);
     gpu_compilation_options.SetPrecision(GpuOptions::Precision::kFp32);
 #if defined(__APPLE__)
@@ -203,7 +204,8 @@ absl::StatusOr<CompiledModel> CreateCompiledModel(
     comp_options.SetHardwareAccelerators(HwAccelerators::kGpu);
   } else {
     comp_options.SetHardwareAccelerators(HwAccelerators::kCpu);
-    LITERT_ASSIGN_OR_RETURN(auto& cpu_options, comp_options.GetCpuOptions());
+    LITERT_ASSIGN_OR_RETURN(auto& cpu_options,
+                            comp_options.GetOptions<::litert::CpuOptions>());
     ABSL_RETURN_IF_ERROR(lm::SetCpuOptions(cpu_options, options.num_threads));
 
     if (!options.cache_dir.empty()) {

@@ -31,7 +31,6 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
-
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/internal/scoped_file.h"  // from @litert
 #include "litert/cc/litert_common.h"  // from @litert
@@ -44,6 +43,9 @@
 #include "litert/cc/litert_options.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/util/status_macros.h"  // NOLINT
+#if defined(__EMSCRIPTEN__)
+#include "litert/cc/options/litert_gpu_options.h"  // from @litert
+#endif
 #if defined(__ANDROID__)
 #include "litert/cc/options/litert_qualcomm_options.h"  // from @litert
 #endif
@@ -156,7 +158,6 @@ size_t EmbeddingLookupText::GetFloatsPerToken() {
 absl::Status EmbeddingLookupText::LookupPrefill(absl::Span<const int> tokens,
                                                 TensorBuffer* prefill_output,
                                                 size_t byte_offset) {
-
   if (prefill_output == nullptr) {
     return absl::InvalidArgumentError("Prefill output tensor buffer is null.");
   }
@@ -291,7 +292,8 @@ absl::Status EmbeddingLookupText::Initialize() {
 #elif defined(__EMSCRIPTEN__)
     options.SetHardwareAccelerators(litert::HwAccelerators::kGpu |
                                     litert::HwAccelerators::kCpu);
-    LITERT_ASSIGN_OR_RETURN(auto& gpu_opts, options.GetGpuOptions());
+    LITERT_ASSIGN_OR_RETURN(auto& gpu_opts,
+                            options.GetOptions<::litert::GpuOptions>());
     LITERT_RETURN_IF_ERROR(gpu_opts.EnableConstantTensorSharing(true));
     LITERT_RETURN_IF_ERROR(gpu_opts.SetConvertWeightsOnGpu(true));
 #else
@@ -308,8 +310,9 @@ absl::Status EmbeddingLookupText::Initialize() {
       }
     }
 #if defined(__ANDROID__)
-    LITERT_ASSIGN_OR_RETURN(::litert::qualcomm::QualcommOptions & qnn_opts,
-                            options.GetQualcommOptions());
+    LITERT_ASSIGN_OR_RETURN(
+        ::litert::qualcomm::QualcommOptions & qnn_opts,
+        options.GetOptions<::litert::qualcomm::QualcommOptions>());
     qnn_opts.SetLogLevel(::litert::qualcomm::QualcommOptions::LogLevel::kOff);
     qnn_opts.SetHtpPerformanceMode(
         ::litert::qualcomm::QualcommOptions::HtpPerformanceMode::
@@ -405,5 +408,4 @@ absl::Status EmbeddingLookupText::Initialize() {
 
   return absl::OkStatus();
 }
-
 }  // namespace litert::lm

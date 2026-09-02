@@ -218,7 +218,8 @@ absl::Status VisionLiteRtCompiledModelExecutor::VisionEncoder::Initialize(
   switch (backend_) {
     case Backend::CPU: {
       // TODO: b/403132820 - Add accelerator compilation options for XNNPACK.
-      LITERT_ASSIGN_OR_RETURN(auto& cpu_options, options.GetCpuOptions());
+      LITERT_ASSIGN_OR_RETURN(auto& cpu_options,
+                              options.GetOptions<::litert::CpuOptions>());
       ABSL_RETURN_IF_ERROR(
           SetCpuOptions(vision_executor_settings_, cpu_options));
       ABSL_RETURN_IF_ERROR(SetCpuCacheOptions(
@@ -230,7 +231,8 @@ absl::Status VisionLiteRtCompiledModelExecutor::VisionEncoder::Initialize(
     }
     case Backend::GPU: {
       // TODO: b/403132820 - Add accelerator compilation options for ML_DRIFT.
-      LITERT_ASSIGN_OR_RETURN(auto& gpu_options, options.GetGpuOptions());
+      LITERT_ASSIGN_OR_RETURN(auto& gpu_options,
+                              options.GetOptions<::litert::GpuOptions>());
       ABSL_ASSIGN_OR_RETURN(
           const auto cache_files,
           GetGpuModelCacheData(vision_executor_settings_,
@@ -248,12 +250,13 @@ absl::Status VisionLiteRtCompiledModelExecutor::VisionEncoder::Initialize(
 #if !defined(LITERT_DISABLE_NPU)
     case Backend::NPU: {
       LITERT_ASSIGN_OR_RETURN(auto& qualcomm_options,
-                              options.GetQualcommOptions());
+                              options.GetOptions<qualcomm::QualcommOptions>());
       qualcomm_options.SetLogLevel(qualcomm::QualcommOptions::LogLevel::kOff);
       qualcomm_options.SetHtpPerformanceMode(
           qualcomm::QualcommOptions::HtpPerformanceMode::kBurst);
-      LITERT_ASSIGN_OR_RETURN(auto& google_tensor_options,
-                              options.GetGoogleTensorOptions());
+      LITERT_ASSIGN_OR_RETURN(
+          auto& google_tensor_options,
+          options.GetOptions<google_tensor::GoogleTensorOptions>());
       google_tensor_options.SetPerformanceMode(
           google_tensor::GoogleTensorOptions::PerformanceMode::kBurst);
       options.SetHardwareAccelerators(litert::HwAccelerators::kNpu |
@@ -322,7 +325,8 @@ absl::Status VisionLiteRtCompiledModelExecutor::VisionAdapter::Initialize(
   switch (backend_) {
     case Backend::CPU: {
       // TODO: b/403132820 - Add accelerator compilation options for XNNPACK.
-      LITERT_ASSIGN_OR_RETURN(auto& cpu_options, options.GetCpuOptions());
+      LITERT_ASSIGN_OR_RETURN(auto& cpu_options,
+                              options.GetOptions<::litert::CpuOptions>());
       ABSL_RETURN_IF_ERROR(
           SetCpuOptions(vision_executor_settings_, cpu_options));
       ABSL_RETURN_IF_ERROR(SetCpuCacheOptions(
@@ -332,7 +336,8 @@ absl::Status VisionLiteRtCompiledModelExecutor::VisionAdapter::Initialize(
       break;
     }
     case Backend::GPU: {
-      LITERT_ASSIGN_OR_RETURN(auto& gpu_options, options.GetGpuOptions());
+      LITERT_ASSIGN_OR_RETURN(auto& gpu_options,
+                              options.GetOptions<::litert::GpuOptions>());
       ABSL_ASSIGN_OR_RETURN(
           const auto cache_files,
           GetGpuModelCacheData(vision_executor_settings_,
@@ -348,12 +353,13 @@ absl::Status VisionLiteRtCompiledModelExecutor::VisionAdapter::Initialize(
 #if !defined(LITERT_DISABLE_NPU)
     case Backend::NPU: {
       LITERT_ASSIGN_OR_RETURN(auto& qualcomm_options,
-                              options.GetQualcommOptions());
+                              options.GetOptions<qualcomm::QualcommOptions>());
       qualcomm_options.SetLogLevel(qualcomm::QualcommOptions::LogLevel::kOff);
       qualcomm_options.SetHtpPerformanceMode(
           qualcomm::QualcommOptions::HtpPerformanceMode::kBurst);
-      LITERT_ASSIGN_OR_RETURN(auto& google_tensor_options,
-                              options.GetGoogleTensorOptions());
+      LITERT_ASSIGN_OR_RETURN(
+          auto& google_tensor_options,
+          options.GetOptions<google_tensor::GoogleTensorOptions>());
       google_tensor_options.SetPerformanceMode(
           google_tensor::GoogleTensorOptions::PerformanceMode::kBurst);
 

@@ -59,7 +59,13 @@ cc_library(
         "@litert//litert/cc:litert_ranked_tensor_type",
         "@litert//litert/cc:litert_tensor_buffer",
         "@litert//litert/cc/internal:scoped_file",
+        "@litert//litert/cc/options:litert_cpu_options",
+        "@litert//litert/cc/options:litert_google_tensor_options",
+        "@litert//litert/cc/options:litert_gpu_options",
+        "@litert//litert/cc/options:litert_intel_openvino_options",
+        "@litert//litert/cc/options:litert_mediatek_options",
         "@litert//litert/cc/options:litert_qualcomm_options",
+        "@litert//litert/cc/options:litert_samsung_options",
         "//runtime/util:litert_status_util",
     ],
 )

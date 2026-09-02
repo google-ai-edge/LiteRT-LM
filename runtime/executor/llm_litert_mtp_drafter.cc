@@ -45,6 +45,7 @@
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
+#include "litert/cc/options/litert_gpu_options.h"  // from @litert
 #include "runtime/components/constrained_decoding/constraint.h"
 #include "runtime/components/constrained_decoding/logit_mask.h"
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"

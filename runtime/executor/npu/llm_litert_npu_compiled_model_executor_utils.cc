@@ -421,13 +421,15 @@ litert::Expected<litert::Options> CreateLiteRtNpuOptions(
                                   litert::HwAccelerators::kCpu);
   // TODO: saliltambe - Bug: 498622107
 #if defined(__ANDROID__)
-  LITERT_ASSIGN_OR_RETURN(::litert::qualcomm::QualcommOptions & qnn_opts,
-                          options.GetQualcommOptions());
+  LITERT_ASSIGN_OR_RETURN(
+      ::litert::qualcomm::QualcommOptions & qnn_opts,
+      options.GetOptions<::litert::qualcomm::QualcommOptions>());
   qnn_opts.SetLogLevel(::litert::qualcomm::QualcommOptions::LogLevel::kOff);
   qnn_opts.SetHtpPerformanceMode(
       ::litert::qualcomm::QualcommOptions::HtpPerformanceMode::kBurst);
-  LITERT_ASSIGN_OR_RETURN(auto& google_tensor_opts,
-                          options.GetGoogleTensorOptions());
+  LITERT_ASSIGN_OR_RETURN(
+      auto& google_tensor_opts,
+      options.GetOptions<::litert::google_tensor::GoogleTensorOptions>());
   google_tensor_opts.SetPerformanceMode(
       ::litert::google_tensor::GoogleTensorOptions::PerformanceMode::kBurst);
 #endif

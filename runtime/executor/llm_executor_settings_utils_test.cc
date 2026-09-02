@@ -27,6 +27,8 @@
 #include "litert/c/options/litert_gpu_options.h"  // from @litert
 #include "litert/cc/litert_common.h"  // from @litert
 #include "litert/cc/litert_options.h"  // from @litert
+#include "litert/cc/options/litert_cpu_options.h"  // from @litert
+#include "litert/cc/options/litert_gpu_options.h"  // from @litert
 #include "litert/test/matchers.h"  // from @litert
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/llm_executor_settings.h"

@@ -29,6 +29,7 @@
 #include "litert/cc/litert_common.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_options.h"  // from @litert
+#include "litert/cc/options/litert_cpu_options.h"  // from @litert
 #include "litert/cc/options/litert_gpu_options.h"  // from @litert
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
@@ -79,8 +80,9 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
         advanced_settings = *executor_settings.GetAdvancedSettings();
       }
       // TODO: b/403132820 - Add accelerator compilation options for ML_DRIFT.
-      LITERT_ASSIGN_OR_RETURN(auto& gpu_compilation_options,
-                              compilation_options.GetGpuOptions());
+      LITERT_ASSIGN_OR_RETURN(
+          auto& gpu_compilation_options,
+          compilation_options.GetOptions<::litert::GpuOptions>());
       gpu_compilation_options.EnableInfiniteFloatCapping(true);
       if (activation_data_type == ActivationDataType::FLOAT32) {
         gpu_compilation_options.SetPrecision(GpuOptions::Precision::kFp32);
@@ -262,8 +264,9 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
       break;
     }
     case Backend::CPU: {
-      LITERT_ASSIGN_OR_RETURN(auto& cpu_compilation_options,
-                              compilation_options.GetCpuOptions());
+      LITERT_ASSIGN_OR_RETURN(
+          auto& cpu_compilation_options,
+          compilation_options.GetOptions<::litert::CpuOptions>());
       ABSL_ASSIGN_OR_RETURN(const CpuConfig cpu_config,
                             executor_settings.GetBackendConfig<CpuConfig>());
       const uint32_t num_threads = cpu_config.number_of_threads;

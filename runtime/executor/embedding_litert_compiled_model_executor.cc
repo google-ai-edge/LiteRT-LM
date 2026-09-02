@@ -46,6 +46,8 @@
 #include "litert/cc/litert_options.h"  // from @litert
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "litert/cc/options/litert_cpu_options.h"  // from @litert
+#include "litert/cc/options/litert_gpu_options.h"  // from @litert
 #if !defined(LITERT_DISABLE_NPU)
 #include "litert/cc/options/litert_google_tensor_options.h"  // from @litert
 #include "litert/cc/options/litert_qualcomm_options.h"  // from @litert
@@ -164,7 +166,8 @@ EmbeddingLiteRtCompiledModelExecutor::Create(
   litert::Options options;
   switch (executor_settings.GetBackend()) {
     case Backend::CPU: {
-      LITERT_ASSIGN_OR_RETURN(auto& cpu_options, options.GetCpuOptions());
+      LITERT_ASSIGN_OR_RETURN(auto& cpu_options,
+                              options.GetOptions<::litert::CpuOptions>());
       LITERT_RETURN_IF_ERROR(
           SetCpuOptions(cpu_options, executor_settings.GetNumThreads()));
       auto weight_cache_file = executor_settings.GetWeightCacheFile(
@@ -179,7 +182,8 @@ EmbeddingLiteRtCompiledModelExecutor::Create(
       break;
     }
     case Backend::GPU: {
-      LITERT_ASSIGN_OR_RETURN(auto& gpu_options, options.GetGpuOptions());
+      LITERT_ASSIGN_OR_RETURN(auto& gpu_options,
+                              options.GetOptions<::litert::GpuOptions>());
       ABSL_ASSIGN_OR_RETURN(
           const auto cache_files,
           GetGpuModelCacheData(executor_settings,
@@ -197,12 +201,13 @@ EmbeddingLiteRtCompiledModelExecutor::Create(
 #if !defined(LITERT_DISABLE_NPU)
     case Backend::NPU: {
       LITERT_ASSIGN_OR_RETURN(auto& qualcomm_options,
-                              options.GetQualcommOptions());
+                              options.GetOptions<qualcomm::QualcommOptions>());
       qualcomm_options.SetLogLevel(qualcomm::QualcommOptions::LogLevel::kOff);
       qualcomm_options.SetHtpPerformanceMode(
           qualcomm::QualcommOptions::HtpPerformanceMode::kBurst);
-      LITERT_ASSIGN_OR_RETURN(auto& google_tensor_options,
-                              options.GetGoogleTensorOptions());
+      LITERT_ASSIGN_OR_RETURN(
+          auto& google_tensor_options,
+          options.GetOptions<google_tensor::GoogleTensorOptions>());
       google_tensor_options.SetPerformanceMode(
           google_tensor::GoogleTensorOptions::PerformanceMode::kBurst);
       options.SetHardwareAccelerators(litert::HwAccelerators::kNpu |

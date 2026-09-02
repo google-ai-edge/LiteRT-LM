@@ -46,6 +46,13 @@ swift_library(
     deps = [
 
 
+        "@litert//litert/cc/options:litert_cpu_options",
+        "@litert//litert/cc/options:litert_google_tensor_options",
+        "@litert//litert/cc/options:litert_gpu_options",
+        "@litert//litert/cc/options:litert_intel_openvino_options",
+        "@litert//litert/cc/options:litert_mediatek_options",
+        "@litert//litert/cc/options:litert_qualcomm_options",
+        "@litert//litert/cc/options:litert_samsung_options",
         "//c:engine",
     ],
 )
