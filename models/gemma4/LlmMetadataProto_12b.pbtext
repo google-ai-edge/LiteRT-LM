@@ -24,15 +24,11 @@ sampler_params {
   p: 0.95
   temperature: 1.0
 }
-max_num_tokens: 128021
+max_num_tokens: 131071
 channels {
   channel_name: "thought"
   start: "<|channel>thought\n"
   end: "<channel|>"
-}
-suppress_tokens {
-  ids: 258883
-  ids: 258882
 }
 llm_model_type {
   gemma4 {
