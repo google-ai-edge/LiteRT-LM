@@ -84,7 +84,9 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
           auto& gpu_compilation_options,
           compilation_options.GetOptions<::litert::GpuOptions>());
       gpu_compilation_options.EnableInfiniteFloatCapping(true);
-      if (activation_data_type == ActivationDataType::FLOAT32) {
+      if (executor_settings.IsMixedPrecisionEnabled()) {
+        gpu_compilation_options.SetPrecision(GpuOptions::Precision::kFp32);
+      } else if (activation_data_type == ActivationDataType::FLOAT32) {
         gpu_compilation_options.SetPrecision(GpuOptions::Precision::kFp32);
       } else {
         gpu_compilation_options.SetPrecision(GpuOptions::Precision::kFp16);
