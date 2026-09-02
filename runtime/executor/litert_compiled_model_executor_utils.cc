@@ -129,14 +129,10 @@ BuildModelResourcesFromLitertLmFormat(const ModelAssets& model_assets,
                           model_assets.GetMemoryMappedFile());
     ABSL_ASSIGN_OR_RETURN(loader, LitertLmLoader::Create(memory_mapped_file));
   } else {
-    // `BuildModelResourcesFromLitertLmFormat` expects a ScopedFile that it
-    // takes ownership of, so we need to duplicate the ScopedFile to keep
-    // the original alive.
     ABSL_ASSIGN_OR_RETURN(auto scoped_file,
                           model_assets.GetOrCreateScopedFile());
-    ABSL_ASSIGN_OR_RETURN(auto duplicate_file, scoped_file->Duplicate());
     ABSL_ASSIGN_OR_RETURN(loader,
-                          LitertLmLoader::Create(std::move(duplicate_file)));
+                          LitertLmLoader::Create(std::move(scoped_file)));
   }
   // AOT NPU models carry a non-empty TF_LITE_AUX and do not use magic-number
   // replacement, so they can retain the file-backed model source even when
