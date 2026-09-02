@@ -908,12 +908,22 @@ absl::StatusOr<std::unique_ptr<Conversation>> Conversation::Clone() {
 }
 
 absl::StatusOr<std::string> Conversation::RenderMessageIntoString(
-    const Message& message, OptionalArgs optional_args) {
-  return GetSingleTurnText(message, optional_args);
+    const Message& message, const OptionalArgs& optional_args) const {
+  absl::MutexLock lock(history_mutex_);  // NOLINT
+  std::vector<Message> new_messages;
+  if (message.is_array()) {
+    for (const auto& msg : message) {
+      new_messages.push_back(msg);
+    }
+  } else {
+    new_messages.push_back(message);
+  }
+  return GetPrefillTextForMessages(history_, new_messages, optional_args,
+                                   /*include_preface=*/false);
 }
 
 absl::StatusOr<std::string> Conversation::RenderPrefaceIntoString(
-    OptionalArgs optional_args) {
+    const OptionalArgs& optional_args) const {
   PromptTemplateInput tmpl_input;
   ABSL_RETURN_IF_ERROR(FillPrefaceForPromptTemplateInput(
       preface_, model_data_processor_.get(), tmpl_input));
@@ -943,7 +953,7 @@ absl::StatusOr<std::string> Conversation::RenderPrefaceIntoString(
 absl::StatusOr<std::string> Conversation::GetPrefillTextForMessages(
     absl::Span<const Message> old_messages,
     absl::Span<const Message> new_messages, const OptionalArgs& optional_args,
-    bool include_preface) {
+    bool include_preface) const {
   // Create the template context for the `old` string.
   PromptTemplateInput old_context;
   old_context.add_generation_prompt = false;
@@ -1030,7 +1040,7 @@ absl::StatusOr<std::vector<InputData>>
 Conversation::GetInputDataVectorForMessages(
     absl::Span<const Message> old_messages,
     absl::Span<const Message> new_messages, const OptionalArgs& optional_args,
-    bool include_preface) {
+    bool include_preface) const {
   ABSL_ASSIGN_OR_RETURN(
       std::string prefill_text,
       GetPrefillTextForMessages(old_messages, new_messages, optional_args,
@@ -1082,7 +1092,7 @@ Conversation::RewindAndGetInputDataVector(const OptionalArgs& optional_args) {
 }
 
 absl::StatusOr<std::string> Conversation::ApplyTemplate(
-    PromptTemplateInput& input) {
+    PromptTemplateInput& input) const {
   StripBlobsFromTemplateInput(input);
   return prompt_template_.Apply(input);
 }
