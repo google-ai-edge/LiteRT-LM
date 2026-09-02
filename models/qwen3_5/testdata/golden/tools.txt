@@ -1,0 +1,68 @@
+<|im_start|>system
+# Tools
+
+You have access to the following functions:
+
+<tools>
+{"type": "function", "function": {"name": "get_weather", "description": "Get current weather for a location.", "parameters": {"type": "object", "properties": {"location": {"type": "string", "description": "City name"}}, "required": ["location"]}}}
+</tools>
+
+If you choose to call a function ONLY reply in the following format with NO suffix:
+
+<tool_call>
+<function=example_function_name>
+<parameter=example_parameter_1>
+value_1
+</parameter>
+<parameter=example_parameter_2>
+This is the value for the second parameter
+that can span
+multiple lines
+</parameter>
+</function>
+</tool_call>
+
+<IMPORTANT>
+Reminder:
+- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags
+- Required parameters MUST be specified
+- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after
+- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls
+</IMPORTANT>
+
+You are a helpful assistant.<|im_end|>
+<|im_start|>user
+What is the weather in London and Paris?<|im_end|>
+<|im_start|>assistant
+<tool_call>
+<function=get_weather>
+<parameter=location>
+London
+</parameter>
+</function>
+</tool_call><|im_end|>
+<|im_start|>user
+<tool_response>
+{"location": "London", "temperature": "18C"}
+</tool_response><|im_end|>
+<|im_start|>assistant
+<tool_call>
+<function=get_weather>
+<parameter=location>
+Paris
+</parameter>
+</function>
+</tool_call><|im_end|>
+<|im_start|>user
+<tool_response>
+{"location": "Paris", "temperature": "22C"}
+</tool_response><|im_end|>
+<|im_start|>assistant
+18C and 22C.<|im_end|>
+<|im_start|>user
+Thanks!<|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
