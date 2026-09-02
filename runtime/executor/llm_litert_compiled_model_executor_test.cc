@@ -950,6 +950,10 @@ class TfLiteModelResources : public ModelResources {
       : model_(std::move(model)), with_mtp_drafter_(with_mtp_drafter) {}
 
  public:
+  void set_with_mtp_drafter(bool with_mtp_drafter) {
+    with_mtp_drafter_ = with_mtp_drafter;
+  }
+
   // ModelResources implementation:
   absl::StatusOr<const Model*> GetTFLiteModel(ModelType model_type) override {
     if (model_type == ModelType::kTfLitePrefillDecode) {
@@ -1032,6 +1036,51 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest,
       auto executor, LlmLiteRtCompiledModelExecutorStatic::Create(
                          std::move(executor_settings), env, *model_resources));
   EXPECT_TRUE(executor);
+}
+
+TEST(LlmLiteRtCompiledModelExecutorStaticTest,
+     Decode_ExplicitSpeculativeDecoding) {
+  const std::filesystem::path model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/magic_test_none.tflite";
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto executor_settings,
+                       LlmExecutorSettings::CreateDefault(model_assets));
+
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  ASSERT_OK_AND_ASSIGN(auto model_resources, TfLiteModelResources::Create(
+                                                 model_assets,
+                                                 /*with_mtp_drafter=*/false));
+  ASSERT_OK_AND_ASSIGN(
+      auto executor, LlmLiteRtCompiledModelExecutorStatic::Create(
+                         std::move(executor_settings), env, *model_resources));
+  ASSERT_TRUE(executor);
+
+  // Prefill 5 tokens.
+  ExecutorInputs inputs;
+  const std::vector<int> input_tokens = {1, 2, 3, 4, 5};
+  auto input_tokens_buffer =
+      CopyToTensorBuffer<int>(absl::MakeSpan(input_tokens), {1, 5});
+  ASSERT_TRUE(input_tokens_buffer);
+  inputs.SetTextData(ExecutorTextData(std::move(*input_tokens_buffer)));
+  ASSERT_OK(executor->Prefill(inputs));
+
+  // Decode with default/nullopt enable_speculative_decoding succeeds.
+  ASSERT_OK(executor->Decode());
+
+  // Decode with enable_speculative_decoding = false succeeds.
+  ExecutorDecodeParams decode_params_disabled;
+  decode_params_disabled.SetEnableSpeculativeDecoding(false);
+  ASSERT_OK(executor->Decode(decode_params_disabled));
+
+  // Decode with enable_speculative_decoding = true attempts lazy load and fails
+  // when model does not meet MTP requirements (e.g. embedding lookup).
+  ExecutorDecodeParams decode_params_enabled;
+  decode_params_enabled.SetEnableSpeculativeDecoding(true);
+  EXPECT_THAT(executor->Decode(decode_params_enabled),
+              StatusIs(absl::StatusCode::kInternal));
 }
 
 TEST(LlmLiteRtCompiledModelExecutorStaticTest, MultipleOutput_Decode) {

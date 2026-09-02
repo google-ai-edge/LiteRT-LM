@@ -244,8 +244,13 @@ class Engine(interfaces.AbstractEngine):
       lora_config: interfaces.LoraConfig | None = None,
       max_output_tokens: int | None = None,
       chat_template: str | None = None,
+      enable_speculative_decoding: bool | None = None,
   ) -> Conversation:
     session_config = self._lib.litert_lm_session_config_create()
+    if enable_speculative_decoding is not None:
+      self._lib.litert_lm_session_config_set_enable_speculative_decoding(
+          session_config, enable_speculative_decoding
+      )
     if sampler_config:
       params = _sampler_config_to_params(self._lib, sampler_config)
       try:
@@ -394,10 +399,16 @@ class Engine(interfaces.AbstractEngine):
       sampler_config: interfaces.SamplerConfig | None = None,
       max_output_tokens: int | None = None,
       lora_config: interfaces.LoraConfig | None = None,
+      enable_speculative_decoding: bool | None = None,
   ) -> Session:
     session_config = self._lib.litert_lm_session_config_create()
     if not session_config:
       raise RuntimeError("Failed to create session config")
+
+    if enable_speculative_decoding is not None:
+      self._lib.litert_lm_session_config_set_enable_speculative_decoding(
+          session_config, enable_speculative_decoding
+      )
 
     self._lib.litert_lm_session_config_set_apply_prompt_template(
         session_config, apply_prompt_template

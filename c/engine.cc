@@ -283,6 +283,13 @@ void litert_lm_session_config_set_apply_prompt_template(
   }
 }
 
+void litert_lm_session_config_set_enable_speculative_decoding(
+    LiteRtLmSessionConfig* config, bool enable_speculative_decoding) {
+  if (config && config->config) {
+    config->config->SetEnableSpeculativeDecoding(enable_speculative_decoding);
+  }
+}
+
 void litert_lm_session_config_set_sampler_params(
     LiteRtLmSessionConfig* config,
     const LiteRtLmSamplerParams* sampler_params) {

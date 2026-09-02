@@ -163,6 +163,7 @@ class Engine(val engineConfig: EngineConfig) : AutoCloseable {
           conversationConfig.maxOutputToken ?: -1,
           conversationConfig.thinkingConfig,
           conversationConfig.enableResponseFormat,
+          conversationConfig.enableSpeculativeDecoding,
         ),
         toolManager,
         conversationConfig.automaticToolCalling,
@@ -189,6 +190,7 @@ class Engine(val engineConfig: EngineConfig) : AutoCloseable {
           sessionConfig.samplerConfig,
           sessionConfig.loraConfig?.loraPath,
           sessionConfig.loraConfig?.audioLoraPath,
+          sessionConfig.enableSpeculativeDecoding,
         )
       )
     }

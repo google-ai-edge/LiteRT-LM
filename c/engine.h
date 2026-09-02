@@ -223,6 +223,23 @@ LITERT_LM_C_API_EXPORT
 void litert_lm_session_config_set_apply_prompt_template(
     LiteRtLmSessionConfig* config, bool apply_prompt_template);
 
+// Sets whether to enable speculative decoding for this session.
+// @param config The config to modify.
+// @param enable_speculative_decoding Whether to enable speculative decoding.
+// If set to true, speculative decoding is enabled for this session. If the
+// engine was not initialized with speculative decoding enabled, setting this
+// flag to true causes the executor to perform lazy loading of the
+// MTP drafter on the first session request. If set to false, speculative
+// decoding is explicitly disabled for this session even if the engine was
+// initialized with speculative decoding enabled. If this function is not called
+// on the config, the session inherits the engine's speculative decoding setting
+// by default.
+//
+// Added in version 0.2.0.
+LITERT_LM_C_API_EXPORT
+void litert_lm_session_config_set_enable_speculative_decoding(
+    LiteRtLmSessionConfig* config, bool enable_speculative_decoding);
+
 // Sets the sampler parameters for this session config.
 // @param config The config to modify.
 // @param sampler_params The sampler parameters to use.

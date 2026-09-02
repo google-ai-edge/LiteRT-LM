@@ -214,6 +214,13 @@ public actor Engine {
       }
     }
 
+    if let enableSpeculativeDecoding =
+      conversationConfig.enableSpeculativeDecoding
+    {
+      litert_lm_session_config_set_enable_speculative_decoding(
+        cSessionConfig, enableSpeculativeDecoding)
+    }
+
     guard let cConversationConfig = litert_lm_conversation_config_create() else {
       throw LiteRTLMError.engine(.failedToCreateConversationConfig)
     }

@@ -448,6 +448,7 @@ class AbstractEngine(abc.ABC):
       lora_config: LoraConfig | None = None,
       max_output_tokens: int | None = None,
       chat_template: str | None = None,
+      enable_speculative_decoding: bool | None = None,
   ) -> AbstractConversation:
     """Creates a new conversation for this engine.
 
@@ -473,8 +474,15 @@ class AbstractEngine(abc.ABC):
           the final response tokens count towards this limit.
         chat_template: The Jinja chat template content to use for formatting. If
           not set, use the default provided by the model or the engine.
-        enable_response_format: Whether to enable response format (constrained
-          decoding). If True, initializes the constraint provider LLGuidance.
+        enable_speculative_decoding: Whether to enable speculative decoding for
+          this conversation. - If None (default): Inherits the engine's
+          speculative decoding setting. - If True: Explicitly enables
+          speculative decoding for this conversation. If the engine was
+          initialized without speculative decoding enabled, requesting True
+          triggers lazy initialization of the speculative decoding drafter (e.g.
+          MTP) on first use. - If False: Explicitly disables speculative
+          decoding for this conversation even if the engine was initialized with
+          speculative decoding enabled.
     """
 
   @abc.abstractmethod
@@ -484,6 +492,7 @@ class AbstractEngine(abc.ABC):
       apply_prompt_template: bool = True,
       sampler_config: SamplerConfig | None = None,
       lora_config: LoraConfig | None = None,
+      enable_speculative_decoding: bool | None = None,
   ) -> AbstractSession:
     """Creates a new session for this engine.
 
@@ -493,6 +502,14 @@ class AbstractEngine(abc.ABC):
         sampler_config: Configuration for the sampling process. If None, then
           uses the engine's default values.
         lora_config: Configuration for LoRA adapters.
+        enable_speculative_decoding: Whether to enable speculative decoding for
+          this session. - If None (default): Inherits the engine's speculative
+          decoding setting. - If True: Explicitly enables speculative decoding
+          for this session. If the engine was initialized without speculative
+          decoding enabled, requesting True triggers lazy initialization of the
+          speculative decoding drafter (e.g. MTP) on first use. - If False:
+          Explicitly disables speculative decoding for this session even if the
+          engine was initialized with speculative decoding enabled.
 
     Returns:
         A new session instance for low-level interaction with the model.

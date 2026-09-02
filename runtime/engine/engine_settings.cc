@@ -881,6 +881,13 @@ std::ostream& operator<<(std::ostream& os, const SessionConfig& config) {
   os << "  ScopedAudioLoraFile: "
      << (config.GetAudioScopedLoraFile() != nullptr ? "Present" : "Not present")
      << std::endl;
+  os << "  EnableSpeculativeDecoding: ";
+  if (config.GetEnableSpeculativeDecoding().has_value()) {
+    os << (*config.GetEnableSpeculativeDecoding() ? "true" : "false");
+  } else {
+    os << "not set";
+  }
+  os << std::endl;
   os << "  AudioEmbeddingsCallback: "
      << (config.GetAudioEmbeddingsCallback() != nullptr ? "Present"
                                                         : "Not present")

@@ -541,6 +541,26 @@ class EngineTest(LiteRtLmTestBase):
     ):
       self.assertIsNotNone(conversation)
 
+  def test_create_conversation_with_enable_speculative_decoding(self):
+    with self._create_engine() as engine:
+      with engine.create_conversation(
+          enable_speculative_decoding=True
+      ) as conversation:
+        self.assertIsNotNone(conversation)
+
+      with engine.create_conversation(
+          enable_speculative_decoding=False
+      ) as conversation:
+        self.assertIsNotNone(conversation)
+
+  def test_create_session_with_enable_speculative_decoding(self):
+    with self._create_engine() as engine:
+      with engine.create_session(enable_speculative_decoding=True) as session:
+        self.assertIsNotNone(session)
+
+      with engine.create_session(enable_speculative_decoding=False) as session:
+        self.assertIsNotNone(session)
+
   def test_create_conversation_with_max_output_tokens_async(self):
     with (
         self._create_engine() as engine,

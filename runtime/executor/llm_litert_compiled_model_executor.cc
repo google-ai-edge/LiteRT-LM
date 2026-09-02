@@ -1139,6 +1139,33 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::PrepareFirstDecode() {
   return absl::OkStatus();
 }
 
+absl::Status LlmLiteRtCompiledModelExecutorBase::EnsureMtpDrafterLoaded() {
+  if (mtp_drafter_ != nullptr) {
+    return absl::OkStatus();
+  }
+  if (resources_ == nullptr) {
+    return absl::FailedPreconditionError(
+        "Cannot lazily load MTP drafter: ModelResources is not available.");
+  }
+  int output_heads = 1;
+  if (llm_context_->runtime_config().output_heads.has_value()) {
+    output_heads = llm_context_->runtime_config().output_heads.value();
+  }
+  RET_CHECK_EQ(output_heads, 1)
+      << "Speculative decoding (MTP) only supports a single output head.";
+  RET_CHECK_NE(embedding_lookup_, nullptr)
+      << "Speculative decoding requires embedding lookup.";
+  std::optional<std::reference_wrapper<EmbeddingLookupManager>> ple_manager_opt;
+  if (per_layer_embedding_lookup_) {
+    ple_manager_opt = std::ref(*per_layer_embedding_lookup_);
+  }
+  ABSL_ASSIGN_OR_RETURN(mtp_drafter_, LlmLiteRtMtpDrafter::Create(
+                                          env_, *resources_, executor_settings_,
+                                          *compiled_model_, *embedding_lookup_,
+                                          ple_manager_opt, executor_metadata_));
+  return absl::OkStatus();
+}
+
 absl::StatusOr<std::vector<std::vector<int>>>
 LlmLiteRtCompiledModelExecutorBase::Decode() {
   return Decode(ExecutorDecodeParams());
@@ -1148,8 +1175,18 @@ absl::StatusOr<std::vector<std::vector<int>>>
 LlmLiteRtCompiledModelExecutorBase::Decode(
     const ExecutorDecodeParams& decode_params) {
 
+  bool enable_mtp_drafter = false;
+  if (decode_params.GetEnableSpeculativeDecoding().has_value()) {
+    enable_mtp_drafter = *decode_params.GetEnableSpeculativeDecoding();
+    if (enable_mtp_drafter && mtp_drafter_ == nullptr) {
+      ABSL_RETURN_IF_ERROR(EnsureMtpDrafterLoaded());
+    }
+  } else {
+    enable_mtp_drafter = (mtp_drafter_ != nullptr);
+  }
+
   std::vector<std::vector<int>> output_tokens_vector;
-  if (mtp_drafter_ == nullptr) {
+  if (!enable_mtp_drafter) {
     ABSL_ASSIGN_OR_RETURN(auto decoded_logits,
                           DecodeLogits(ExecutorInputs(), decode_params));
     std::optional<TensorBuffer> output_tokens;
@@ -1584,9 +1621,8 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::UpdateExecutorSettings(
     const LlmExecutorSettings& executor_settings) {
   executor_settings_ = executor_settings;
   if (executor_settings_.GetAdvancedSettings().has_value()) {
-    gpu_enable_metal_residency_set_ =
-        executor_settings_.GetAdvancedSettings()
-            ->gpu_enable_metal_residency_set;
+    gpu_enable_metal_residency_set_ = executor_settings_.GetAdvancedSettings()
+                                          ->gpu_enable_metal_residency_set;
   }
   return absl::OkStatus();
 }
@@ -2007,7 +2043,8 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
       std::move(decode_state), std::move(prefill_runner_set), signatures,
       batch_size, std::move(cache_path), std::move(embedding_lookup),
       std::move(per_layer_embedding_lookup), use_fp16_precision,
-      activation_data_type, std::move(mtp_drafter), executor_metadata));
+      activation_data_type, std::move(mtp_drafter), executor_metadata,
+      &resources));
 
   if (enable_profiling) {
     auto status = executor->StartProfiling();
@@ -2261,7 +2298,7 @@ LlmLiteRtCompiledModelExecutorDynamic::Create(
       std::move(embedding_lookup), std::move(per_layer_embedding_lookup),
       /*use_fp16_precision=*/false,
       /*logits_data_type=*/LogitsDataType::FLOAT32,
-      /*mtp_drafter=*/nullptr, executor_metadata));
+      /*mtp_drafter=*/nullptr, executor_metadata, &resources));
   if (enable_profiling) {
     auto status = executor->StartProfiling();
     if (!status.ok()) {

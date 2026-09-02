@@ -405,6 +405,23 @@ TEST(EngineCTest, CreateSessionConfigWithApplyPromptTemplate) {
   EXPECT_TRUE(config->config->GetApplyPromptTemplateInSession());
 }
 
+TEST(EngineCTest, CreateSessionConfigWithEnableSpeculativeDecoding) {
+  SessionConfigPtr config(litert_lm_session_config_create(),
+                          &litert_lm_session_config_delete);
+  ASSERT_NE(config, nullptr);
+
+  // By default, enable_speculative_decoding is std::nullopt.
+  EXPECT_FALSE(config->config->GetEnableSpeculativeDecoding().has_value());
+
+  litert_lm_session_config_set_enable_speculative_decoding(config.get(), true);
+  ASSERT_TRUE(config->config->GetEnableSpeculativeDecoding().has_value());
+  EXPECT_TRUE(*config->config->GetEnableSpeculativeDecoding());
+
+  litert_lm_session_config_set_enable_speculative_decoding(config.get(), false);
+  ASSERT_TRUE(config->config->GetEnableSpeculativeDecoding().has_value());
+  EXPECT_FALSE(*config->config->GetEnableSpeculativeDecoding());
+}
+
 TEST(EngineCTest, CreateConversationConfig) {
   // 1. Create an engine.
   const std::string task_path = GetTestdataPath(

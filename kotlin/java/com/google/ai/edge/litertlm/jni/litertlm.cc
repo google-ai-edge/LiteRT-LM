@@ -785,8 +785,14 @@ JNI_METHOD(nativeDeleteEngine)(JNIEnv* env, jclass thiz, jlong engine_pointer) {
 
 LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateSession)(
     JNIEnv* env, jclass thiz, jlong engine_pointer, jobject sampler_config_obj,
-    jstring lora_path_str, jstring audio_lora_path_str) {
+    jstring lora_path_str, jstring audio_lora_path_str,
+    jobject enable_speculative_decoding) {
   auto session_config = SessionConfig::CreateDefault();
+  if (auto enable_spec_dec =
+          GetOptionalBoolean(env, enable_speculative_decoding);
+      enable_spec_dec.has_value()) {
+    session_config.SetEnableSpeculativeDecoding(*enable_spec_dec);
+  }
 
   if (sampler_config_obj != nullptr) {
     session_config.GetMutableSamplerParams() =
@@ -1053,11 +1059,16 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateConversation)(
     jstring overwrite_prompt_template, jstring lora_path_str,
     jstring audio_lora_path_str, jboolean prefill_preface_on_init,
     jint max_output_token, jobject thinking_config_obj,
-    jboolean enable_response_format) {
+    jboolean enable_response_format, jobject enable_speculative_decoding) {
   Engine* engine = reinterpret_cast<Engine*>(engine_pointer);
 
   // Create a native SessionConfig
   auto session_config = SessionConfig::CreateDefault();
+  if (auto enable_spec_dec =
+          GetOptionalBoolean(env, enable_speculative_decoding);
+      enable_spec_dec.has_value()) {
+    session_config.SetEnableSpeculativeDecoding(*enable_spec_dec);
+  }
   if (max_output_token > 0) {
     session_config.SetMaxOutputTokens(max_output_token);
   }

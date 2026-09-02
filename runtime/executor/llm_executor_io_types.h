@@ -457,9 +457,24 @@ class ExecutorDecodeParams {
   // Returns the cancellation flag if set, otherwise nullptr.
   const std::atomic<bool>* GetCancelled() const { return cancelled_; }
 
+  // Sets whether to enable speculative decoding for this decode step.
+  // If std::nullopt, the executor inherits the engine's speculative decoding
+  // configuration. If true, speculative decoding is enabled (with lazy loading
+  // if not previously initialized). If false, speculative decoding is disabled.
+  void SetEnableSpeculativeDecoding(
+      std::optional<bool> enable_speculative_decoding) {
+    enable_speculative_decoding_ = enable_speculative_decoding;
+  }
+
+  // Returns whether speculative decoding is enabled for this decode step.
+  const std::optional<bool>& GetEnableSpeculativeDecoding() const {
+    return enable_speculative_decoding_;
+  }
+
  private:
   ConstrainedDecoder* constrained_decoder_ = nullptr;
   const std::atomic<bool>* cancelled_ = nullptr;
+  std::optional<bool> enable_speculative_decoding_ = std::nullopt;
 };
 std::ostream& operator<<(std::ostream& os, const ExecutorDecodeParams& params);
 

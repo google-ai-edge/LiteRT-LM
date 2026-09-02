@@ -1011,9 +1011,10 @@ LlmLiteRtNpuCompiledModelExecutor::Decode(
     return PopPendingAcceptedToken(start);
   }
 
-  // Early return for standard non-speculative decode or when constrained
-  // decoding is requested.
+  // Early return for non-speculative decode if MTP is not enabled, explicitly
+  // disabled in decode params, or when constrained decoding is requested.
   if (speculative_decoding_type_ != SpeculativeDecodingType::kMTP ||
+      !decode_params.GetEnableSpeculativeDecoding().value_or(true) ||
       decode_params.GetConstrainedDecoder() != nullptr) {
     return DecodeNonSpeculative(decode_params, start);
   }

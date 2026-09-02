@@ -223,6 +223,13 @@ data class EngineConfig(
  * @property thinkingConfig Configuration for thinking/reasoning generation.
  * @property enableResponseFormat Whether to enable response format (constrained decoding). If true,
  *   initializes the constraint provider LLGuidance.
+ * @property enableSpeculativeDecoding Whether to enable speculative decoding for this conversation.
+ *     - If `null` (default): Inherits the engine's speculative decoding setting.
+ *     - If `true`: Explicitly enables speculative decoding for this conversation. If the engine was
+ *       initialized without speculative decoding enabled, requesting `true` triggers lazy
+ *       initialization of the speculative decoding drafter (e.g. MTP) on first use.
+ *     - If `false`: Explicitly disables speculative decoding for this conversation even if the
+ *       engine was initialized with speculative decoding enabled.
  */
 data class ConversationConfig
 @JvmOverloads
@@ -239,6 +246,7 @@ constructor(
   val maxOutputToken: Int? = null,
   val thinkingConfig: ThinkingConfig? = null,
   val enableResponseFormat: Boolean = false,
+  val enableSpeculativeDecoding: Boolean? = null,
 ) {
   init {
     require(maxOutputToken == null || maxOutputToken > 0) {
@@ -282,8 +290,16 @@ data class LoraConfig(val loraPath: String? = null, val audioLoraPath: String? =
  * @property samplerConfig Configuration for the sampling process. If `null`, then uses the engine's
  *   default values.
  * @property loraConfig Configuration for LoRA weights.
+ * @property enableSpeculativeDecoding Whether to enable speculative decoding for this session.
+ *     - If `null` (default): Inherits the engine's speculative decoding setting.
+ *     - If `true`: Explicitly enables speculative decoding for this session. If the engine was
+ *       initialized without speculative decoding enabled, requesting `true` triggers lazy
+ *       initialization of the speculative decoding drafter (e.g. MTP) on first use.
+ *     - If `false`: Explicitly disables speculative decoding for this session even if the engine
+ *       was initialized with speculative decoding enabled.
  */
 data class SessionConfig(
   val samplerConfig: SamplerConfig? = null,
   val loraConfig: LoraConfig? = null,
+  val enableSpeculativeDecoding: Boolean? = null,
 )

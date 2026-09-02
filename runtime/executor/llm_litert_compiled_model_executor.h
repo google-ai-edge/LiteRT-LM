@@ -218,7 +218,8 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
       std::unique_ptr<LlmLiteRtMtpDrafter> mtp_drafter,
       const proto::ExecutorMetadata* executor_metadata = nullptr,
       GraphRunCallback pre_graph_run_callback = nullptr,
-      GraphRunCallback post_graph_run_callback = nullptr)
+      GraphRunCallback post_graph_run_callback = nullptr,
+      ModelResources* resources = nullptr)
       : executor_settings_(std::move(executor_settings)),
         env_(env),
         model_(*model),
@@ -236,7 +237,8 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
         mtp_drafter_(std::move(mtp_drafter)),
         executor_metadata_(executor_metadata),
         pre_graph_run_callback_(std::move(pre_graph_run_callback)),
-        post_graph_run_callback_(std::move(post_graph_run_callback)) {
+        post_graph_run_callback_(std::move(post_graph_run_callback)),
+        resources_(resources) {
     auto processed_context = std::make_unique<LlmProcessedContext>(
         std::nullopt, nullptr, ProcessedTokens());
     auto runtime_config = std::make_unique<RuntimeConfig>();
@@ -253,6 +255,10 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
   }
 
  protected:
+  // Lazily initializes and loads the MTP drafter if it has not already been
+  // loaded.
+  absl::Status EnsureMtpDrafterLoaded();
+
   // Attempts to create a compiled model for the MTP drafter.
   // Returns a unique_ptr to the compiled model if the resource is found, or
   // nullptr if the drafter model is optional and missing.
@@ -432,6 +438,10 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
   // graph/subgraph (signature runner like "prefill_128" or "decode"). Allows
   // inspecting or dumping output buffers.
   GraphRunCallback post_graph_run_callback_;
+
+  // Pointer to model resources for lazy loading of components (e.g. MTP
+  // drafter).
+  ModelResources* resources_ = nullptr;
 };
 
 // The static executor for the prefill-decode compiled model.
@@ -467,7 +477,8 @@ class LlmLiteRtCompiledModelExecutorStatic
       bool use_fp16_precision = true,
       LogitsDataType logits_data_type = LogitsDataType::FLOAT32,
       std::unique_ptr<LlmLiteRtMtpDrafter> mtp_drafter = nullptr,
-      const proto::ExecutorMetadata* executor_metadata = nullptr)
+      const proto::ExecutorMetadata* executor_metadata = nullptr,
+      ModelResources* resources = nullptr)
       : LlmLiteRtCompiledModelExecutorBase(
             std::move(executor_settings), env, model, std::move(compiled_model),
             std::move(decode_input_buffers), std::move(decode_output_buffers),
@@ -475,7 +486,8 @@ class LlmLiteRtCompiledModelExecutorStatic
             output_batch_size, std::move(weight_cache_path),
             std::move(embedding_lookup), std::move(per_layer_embedding_lookup),
             use_fp16_precision, logits_data_type, std::move(mtp_drafter),
-            executor_metadata),
+            executor_metadata, /*pre_graph_run_callback=*/nullptr,
+            /*post_graph_run_callback=*/nullptr, resources),
         prefill_signature_map_(std::move(prefill_signature_map)) {}
 
   SortedPrefillSignatureMap prefill_signature_map_;
@@ -526,7 +538,8 @@ class LlmLiteRtCompiledModelExecutorDynamic
       bool use_fp16_precision = true,
       LogitsDataType logits_data_type = LogitsDataType::FLOAT32,
       std::unique_ptr<LlmLiteRtMtpDrafter> mtp_drafter = nullptr,
-      const proto::ExecutorMetadata* executor_metadata = nullptr)
+      const proto::ExecutorMetadata* executor_metadata = nullptr,
+      ModelResources* resources = nullptr)
       : LlmLiteRtCompiledModelExecutorBase(
             std::move(executor_settings), env, model, std::move(compiled_model),
             std::move(decode_input_buffers), std::move(decode_output_buffers),
@@ -534,7 +547,8 @@ class LlmLiteRtCompiledModelExecutorDynamic
             output_batch_size, std::move(weight_cache_path),
             std::move(embedding_lookup), std::move(per_layer_embedding_lookup),
             use_fp16_precision, logits_data_type, std::move(mtp_drafter),
-            executor_metadata),
+            executor_metadata, /*pre_graph_run_callback=*/nullptr,
+            /*post_graph_run_callback=*/nullptr, resources),
         prefill_chunk_size_(prefill_chunk_size),
         kv_increament_size_(kv_increament_size) {}
 

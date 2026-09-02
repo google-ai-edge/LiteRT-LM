@@ -104,6 +104,7 @@ internal object LiteRtLmJni {
    * @param samplerConfig The sampler configuration.
    * @param loraPath Path to the LoRA weights file.
    * @param audioLoraPath Path to the Audio LoRA weights file.
+   * @param enableSpeculativeDecoding Whether to enable speculative decoding.
    * @return A pointer to the native session instance.
    */
   external fun nativeCreateSession(
@@ -111,6 +112,7 @@ internal object LiteRtLmJni {
     samplerConfig: SamplerConfig?,
     loraPath: String?,
     audioLoraPath: String?,
+    enableSpeculativeDecoding: Boolean?,
   ): Long
 
   /**
@@ -231,6 +233,7 @@ internal object LiteRtLmJni {
     maxOutputToken: Int,
     thinkingConfig: ThinkingConfig?,
     enableResponseFormat: Boolean,
+    enableSpeculativeDecoding: Boolean?,
   ): Long
 
   /**

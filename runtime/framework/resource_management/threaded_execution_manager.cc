@@ -1071,7 +1071,8 @@ absl::Status ThreadedExecutionManager::AddDecodeTask(
         std::move(suppress_tokens_config), constraint,
         std::move(decoded_ids_buffer), callback, cancelled.get(),
         max_output_tokens, thinking_token_budget, thinking_end_token_ids,
-        thinking_start_token_ids);
+        thinking_start_token_ids,
+        session_info->session_config.GetEnableSpeculativeDecoding());
     if (!responses.ok() && absl::IsCancelled(responses.status())) {
       responses = Responses(TaskState::kCancelled);
     }

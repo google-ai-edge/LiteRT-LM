@@ -94,6 +94,7 @@ fun benchmark(
         -1, // maxOutputToken
         null, // thinkingConfig
         false, // enableResponseFormat
+        null, // enableSpeculativeDecoding
       )
 
     Conversation(conversationHandle).use { conversation ->

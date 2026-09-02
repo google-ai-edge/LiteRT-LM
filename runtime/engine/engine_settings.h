@@ -292,6 +292,31 @@ class SessionConfig {
     max_output_tokens_ = max_output_tokens;
   }
 
+  // Speculative decoding:
+  // Getters and setters for configuring speculative decoding in the session.
+  //
+  // Semantics & Caveats:
+  // - std::nullopt (default): Inherits the engine's speculative decoding
+  // configuration.
+  // - true: Enables speculative decoding for this session. If the engine was
+  //   not initialized with speculative decoding (e.g. MTP drafter was not
+  //   loaded at startup), setting this flag to true causes the executor
+  //   to perform lazy loading of the MTP drafter on the first session request
+  //   that requires it. Note that lazy loading may incur a one-time
+  //   initialization latency and requires that the model asset package contains
+  //   MTP drafter artifacts.
+  // - false: Explicitly disables speculative decoding for this session even if
+  //   the engine was initialized with speculative decoding enabled.
+  // - Batching: Speculative decoding (MTP) only supports a single output head
+  //   (batch size 1).
+  const std::optional<bool>& GetEnableSpeculativeDecoding() const {
+    return enable_speculative_decoding_;
+  }
+  void SetEnableSpeculativeDecoding(
+      std::optional<bool> enable_speculative_decoding) {
+    enable_speculative_decoding_ = enable_speculative_decoding;
+  }
+
   using AudioEmbeddingsCallback =
       absl::AnyInvocable<void(const ExecutorAudioData&) const>;
   const AudioEmbeddingsCallback* GetAudioEmbeddingsCallback() const {
@@ -364,6 +389,11 @@ class SessionConfig {
   // tokens (input + output) stored in the KV cache over the lifetime of a
   // session.
   int max_output_tokens_ = std::numeric_limits<int>::max();
+
+  // Whether to enable speculative decoding for the session.
+  // By default, std::nullopt (inherits the engine's speculative decoding
+  // configuration).
+  std::optional<bool> enable_speculative_decoding_ = std::nullopt;
 
   // Optional callback to receive audio embeddings. If not set, it will be
   // nullptr.

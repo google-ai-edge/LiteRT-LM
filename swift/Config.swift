@@ -186,6 +186,7 @@ public struct ConversationConfig {
   public let automaticToolCalling: Bool
   public let enableResponseFormat: Bool
   public let visualTokenBudget: Int32?
+  public let enableSpeculativeDecoding: Bool?
 
   /// - Parameters:
   ///   - systemMessage: The system message to be used in the conversation.
@@ -200,6 +201,14 @@ public struct ConversationConfig {
   ///   - automaticToolCalling: Whether to enable automatic tool calling. Default is true.
   ///   - enableResponseFormat: Whether to enable response format (constrained decoding). Default
   ///     is false.
+  ///   - visualTokenBudget: Visual token budget.
+  ///   - enableSpeculativeDecoding: Whether to enable speculative decoding for this conversation.
+  ///     - If `nil` (default): Inherits the engine's speculative decoding setting.
+  ///     - If `true`: Explicitly enables speculative decoding for this conversation. If the engine was
+  ///       initialized without speculative decoding enabled, requesting `true` triggers lazy
+  ///       initialization of the speculative decoding drafter (e.g. MTP) on first use.
+  ///     - If `false`: Explicitly disables speculative decoding for this conversation even if the engine
+  ///       was initialized with speculative decoding enabled.
   public init(
     systemMessage: Message? = nil,
     initialMessages: [Message] = [],
@@ -211,7 +220,8 @@ public struct ConversationConfig {
     thinkingConfig: ThinkingConfig? = nil,
     automaticToolCalling: Bool = true,
     enableResponseFormat: Bool = false,
-    visualTokenBudget: Int32? = nil
+    visualTokenBudget: Int32? = nil,
+    enableSpeculativeDecoding: Bool? = nil
   ) {
     self.systemMessage = systemMessage.flatMap { msg in
       if msg.toString.isEmpty {
@@ -230,6 +240,7 @@ public struct ConversationConfig {
     self.automaticToolCalling = automaticToolCalling
     self.enableResponseFormat = enableResponseFormat
     self.visualTokenBudget = visualTokenBudget
+    self.enableSpeculativeDecoding = enableSpeculativeDecoding
   }
 }
 
