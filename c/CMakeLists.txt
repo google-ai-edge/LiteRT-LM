@@ -41,6 +41,7 @@ target_link_libraries(c_conversation
 # ==============================================================================
 add_litertlm_library(c_engine STATIC
   engine.cc
+  error_reporter.cc
 )
 add_library(LiteRTLM::C::Engine ALIAS c_engine)
 

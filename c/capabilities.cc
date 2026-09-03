@@ -18,12 +18,14 @@
 #include <cstdint>
 #include <utility>
 
+#include "absl/status/status.h"  // from @com_google_absl
+
 #if defined(__APPLE__)
 #include "engine.h"  // NOLINT
 #else
 #include "c/engine.h"
 #endif
-
+#include "c/error_reporter_internal.h"
 #include "schema/capabilities/capabilities.h"
 
 // Definition of the internal C++ struct that implements the opaque
@@ -34,6 +36,7 @@ struct LiteRtLmLoadedFile {
 };
 
 namespace {
+using ::litert::lm::c::SetLastError;
 using ::litert::lm::schema::capabilities::LlmInferenceCapability;
 using ::litert::lm::schema::capabilities::SupportedBackends;
 
@@ -58,13 +61,17 @@ extern "C" {
 
 LiteRtLmLoadedFile* litert_lm_loaded_file_create(const char* litertlm_path) {
   if (litertlm_path == nullptr) {
+    SetLastError(absl::StatusCode::kInvalidArgument,
+                 "litertlm_path must not be null.");
     return nullptr;
   }
   // Call the core capabilities parser to extract the metadata from the file.
   auto info_or = litert::lm::schema::capabilities::InspectModel(litertlm_path);
   if (!info_or.ok()) {
+    SetLastError(info_or.status());
     return nullptr;
   }
+  SetLastError(absl::OkStatus());
   // Allocate the opaque handle on the heap and store the parsed
   // metadata inside it.
   auto* file = new LiteRtLmLoadedFile;

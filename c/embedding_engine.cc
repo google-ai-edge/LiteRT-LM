@@ -29,6 +29,7 @@
 #include "c/embedding_engine_internal.h"  // IWYU pragma: keep
 #include "c/engine.h"
 #include "c/engine_internal.h"  // IWYU pragma: keep
+#include "c/error_reporter_internal.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/core/embedding_engine_impl.h"
 #include "runtime/engine/embedding_engine.h"
@@ -86,6 +87,8 @@ LiteRtLmEmbeddingEngineSettings* litert_lm_embedding_engine_settings_create(
     const char* vision_backend_str, const char* audio_backend_str) {
   if (model_path == nullptr || backend_str == nullptr) {
     ABSL_LOG(ERROR) << "model_path and backend_str must not be null.";
+    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
+                                "model_path and backend_str must not be null.");
     return nullptr;
   }
 
@@ -93,12 +96,14 @@ LiteRtLmEmbeddingEngineSettings* litert_lm_embedding_engine_settings_create(
   if (!model_assets.ok()) {
     ABSL_LOG(ERROR) << "Failed to create model assets: "
                     << model_assets.status();
+    litert::lm::c::SetLastError(model_assets.status());
     return nullptr;
   }
 
   auto backend = litert::lm::GetBackendFromString(backend_str);
   if (!backend.ok()) {
     ABSL_LOG(ERROR) << "Failed to parse backend: " << backend.status();
+    litert::lm::c::SetLastError(backend.status());
     return nullptr;
   }
 
@@ -108,6 +113,7 @@ LiteRtLmEmbeddingEngineSettings* litert_lm_embedding_engine_settings_create(
     if (!v_backend.ok()) {
       ABSL_LOG(ERROR) << "Failed to parse vision backend: "
                       << v_backend.status();
+      litert::lm::c::SetLastError(v_backend.status());
       return nullptr;
     }
     vision_backend = *v_backend;
@@ -119,6 +125,7 @@ LiteRtLmEmbeddingEngineSettings* litert_lm_embedding_engine_settings_create(
     if (!a_backend.ok()) {
       ABSL_LOG(ERROR) << "Failed to parse audio backend: "
                       << a_backend.status();
+      litert::lm::c::SetLastError(a_backend.status());
       return nullptr;
     }
     audio_backend = *a_backend;
@@ -151,9 +158,11 @@ LiteRtLmEmbeddingEngineSettings* litert_lm_embedding_engine_settings_create(
   if (!settings.ok()) {
     ABSL_LOG(ERROR) << "Failed to create embedding engine settings: "
                     << settings.status();
+    litert::lm::c::SetLastError(settings.status());
     return nullptr;
   }
 
+  litert::lm::c::SetLastError(absl::OkStatus());
   return new LiteRtLmEmbeddingEngineSettings{
       std::make_unique<litert::lm::EmbeddingEngineSettings>(
           std::move(*settings))};
@@ -375,15 +384,19 @@ LiteRtLmEmbeddingEngine* litert_lm_embedding_engine_create(
     const LiteRtLmEmbeddingEngineSettings* settings) {
   if (settings == nullptr || settings->settings == nullptr) {
     ABSL_LOG(ERROR) << "Settings must not be null.";
+    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
+                                "Settings must not be null.");
     return nullptr;
   }
 
   auto engine = litert::lm::EmbeddingEngineImpl::Create(*settings->settings);
   if (!engine.ok()) {
     ABSL_LOG(ERROR) << "Failed to create EmbeddingEngine: " << engine.status();
+    litert::lm::c::SetLastError(engine.status());
     return nullptr;
   }
 
+  litert::lm::c::SetLastError(absl::OkStatus());
   return new LiteRtLmEmbeddingEngine{std::move(*engine)};
 }
 
@@ -396,6 +409,8 @@ LiteRtLmEmbeddingResponse* litert_lm_embedding_engine_compute_embedding(
     size_t num_inputs, const LiteRtLmEmbeddingOptions* options) {
   if (!engine || !engine->engine) {
     ABSL_LOG(ERROR) << "EmbeddingEngine is null.";
+    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
+                                "EmbeddingEngine is null.");
     return nullptr;
   }
 
@@ -403,6 +418,7 @@ LiteRtLmEmbeddingResponse* litert_lm_embedding_engine_compute_embedding(
   if (!engine_inputs.ok()) {
     ABSL_LOG(ERROR) << "Failed to convert input data: "
                     << engine_inputs.status();
+    litert::lm::c::SetLastError(engine_inputs.status());
     return nullptr;
   }
 
@@ -412,9 +428,11 @@ LiteRtLmEmbeddingResponse* litert_lm_embedding_engine_compute_embedding(
   auto response = engine->engine->ComputeEmbedding(*engine_inputs, opts);
   if (!response.ok()) {
     ABSL_LOG(ERROR) << "ComputeEmbedding failed: " << response.status();
+    litert::lm::c::SetLastError(response.status());
     return nullptr;
   }
 
+  litert::lm::c::SetLastError(absl::OkStatus());
   return new LiteRtLmEmbeddingResponse{std::move(*response)};
 }
 
@@ -425,6 +443,8 @@ LiteRtLmEmbeddingResponses* litert_lm_embedding_engine_compute_embedding_batch(
     const LiteRtLmEmbeddingOptions* options) {
   if (!engine || !engine->engine) {
     ABSL_LOG(ERROR) << "EmbeddingEngine is null.";
+    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
+                                "EmbeddingEngine is null.");
     return nullptr;
   }
 
@@ -439,6 +459,7 @@ LiteRtLmEmbeddingResponses* litert_lm_embedding_engine_compute_embedding_batch(
     if (!engine_inputs.ok()) {
       ABSL_LOG(ERROR) << "Failed to convert input data for batch index " << i
                       << ": " << engine_inputs.status();
+      litert::lm::c::SetLastError(engine_inputs.status());
       return nullptr;
     }
     contents_batch.push_back(std::move(*engine_inputs));
@@ -450,8 +471,10 @@ LiteRtLmEmbeddingResponses* litert_lm_embedding_engine_compute_embedding_batch(
   auto responses = engine->engine->ComputeEmbeddingBatch(contents_batch, opts);
   if (!responses.ok()) {
     ABSL_LOG(ERROR) << "ComputeEmbeddingBatch failed: " << responses.status();
+    litert::lm::c::SetLastError(responses.status());
     return nullptr;
   }
 
+  litert::lm::c::SetLastError(absl::OkStatus());
   return new LiteRtLmEmbeddingResponses{std::move(*responses)};
 }
