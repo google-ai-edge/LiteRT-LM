@@ -752,6 +752,14 @@ absl::StatusOr<EmbeddingResponse> EmbeddingEngineImpl::ComputeEmbeddingInternal(
   if (options.normalize) {
     response.embedding = L2Norm(response.embedding);
   }
+  if (audio_executor_ != nullptr) {
+    // If underlying audio encoder is stateful, (e.g. streaming AudioEncoder),
+    // we must reset the state.
+    auto reset_status = audio_executor_->Reset();
+    if (!reset_status.ok() && !absl::IsUnimplemented(reset_status)) {
+      return reset_status;
+    }
+  }
 
   return response;
 }
