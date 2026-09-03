@@ -56,6 +56,7 @@
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/audio/audio_executor.h"
 #include "runtime/executor/audio/audio_executor_settings.h"
+#include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/llm_executor.h"
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/vision/vision_executor_settings.h"
@@ -675,17 +676,36 @@ ThreadedExecutionManager::ProcessAndCombineContents(
       combined_token_ids.push_back(ExecutorVisionData::kEndToken);
     } else if (const auto* input_audio =
                    std::get_if<InputAudio>(&preprocessed_content)) {
-      ABSL_ASSIGN_OR_RETURN(const auto* spectrogram_tensor,
-                            input_audio->GetPreprocessedAudioTensor());
-      if (benchmark_info.has_value()) {
-        ABSL_RETURN_IF_ERROR(benchmark_info->TimeMarkDelta("audio_executor"));
-      }
-      ABSL_ASSIGN_OR_RETURN(auto audio_executor,
-                            resource_manager_->AcquireAudioExecutor());
-      ABSL_ASSIGN_OR_RETURN(auto single_audio_data,
-                            audio_executor->Encode(*spectrogram_tensor));
-      if (benchmark_info.has_value()) {
-        ABSL_RETURN_IF_ERROR(benchmark_info->TimeMarkDelta("audio_executor"));
+      ExecutorAudioData single_audio_data;
+      if (input_audio->IsAudioEmbeddings()) {
+        ABSL_ASSIGN_OR_RETURN(const auto* embeddings,
+                              input_audio->GetAudioEmbeddings());
+        LITERT_ASSIGN_OR_RETURN(auto dup, embeddings->tensor.Duplicate());
+        int valid_tokens = embeddings->valid_tokens;
+        if (valid_tokens <= 0) {
+          ABSL_ASSIGN_OR_RETURN(const auto& dimensions, TensorBufferDims(dup));
+          valid_tokens =
+              dimensions.size() >= 2 ? dimensions[dimensions.size() - 2] : 0;
+        }
+        single_audio_data.SetProjectedAudioEmbeddings(std::move(dup));
+        single_audio_data.SetValidTokens(valid_tokens);
+      } else {
+        if (!input_audio->IsTensorBuffer()) {
+          return absl::FailedPreconditionError(
+              "The audio is not a preprocessed tensor.");
+        }
+        ABSL_ASSIGN_OR_RETURN(const auto* spectrogram_tensor,
+                              input_audio->GetPreprocessedAudioTensor());
+        if (benchmark_info.has_value()) {
+          ABSL_RETURN_IF_ERROR(benchmark_info->TimeMarkDelta("audio_executor"));
+        }
+        ABSL_ASSIGN_OR_RETURN(auto audio_executor,
+                              resource_manager_->AcquireAudioExecutor());
+        ABSL_ASSIGN_OR_RETURN(single_audio_data,
+                              audio_executor->Encode(*spectrogram_tensor));
+        if (benchmark_info.has_value()) {
+          ABSL_RETURN_IF_ERROR(benchmark_info->TimeMarkDelta("audio_executor"));
+        }
       }
       const int num_audio_tokens = single_audio_data.GetValidTokens();
       if (num_audio_tokens > 0) {
@@ -859,14 +879,6 @@ absl::Status ThreadedExecutionManager::AddPrefillTask(
 
     auto executor_inputs =
         ProcessAndCombineContents(inputs, session_info->benchmark_info);
-    if (executor_inputs.ok() &&
-        session_info->session_config.GetAudioEmbeddingsCallback() != nullptr) {
-      auto audio_data_status = executor_inputs->GetAudioDataPtr();
-      if (audio_data_status.ok() && *audio_data_status != nullptr) {
-        (*session_info->session_config.GetAudioEmbeddingsCallback())(
-            **audio_data_status);
-      }
-    }
     if (!executor_inputs.ok()) {
       llm_executor.value().reset();
       if (executor_inputs.status().message() ==
@@ -1302,6 +1314,24 @@ absl::Status ThreadedExecutionManager::SetCurrentStep(
 absl::StatusOr<AudioExecutorProperties>
 ThreadedExecutionManager::GetAudioExecutorProperties() const {
   return resource_manager_->GetAudioExecutorProperties();
+}
+
+absl::StatusOr<ExecutorAudioData> ThreadedExecutionManager::EncodeAudio(
+    const ::litert::TensorBuffer& spectrogram_tensor) {
+  ABSL_ASSIGN_OR_RETURN(auto audio_executor,
+                        resource_manager_->AcquireAudioExecutor());
+  return audio_executor->Encode(spectrogram_tensor);
+}
+
+absl::StatusOr<ExecutorAudioData> ThreadedExecutionManager::EncodeAudio(
+    const SessionInfo& session_info,
+    const ::litert::TensorBuffer& spectrogram_tensor) {
+  ABSL_ASSIGN_OR_RETURN(auto llm_executor,
+                        resource_manager_->AcquireExecutorWithContextHandler(
+                            session_info.context_handler));
+  ABSL_ASSIGN_OR_RETURN(auto audio_executor,
+                        resource_manager_->AcquireAudioExecutor());
+  return audio_executor->Encode(spectrogram_tensor);
 }
 
 absl::StatusOr<VisionExecutorProperties>

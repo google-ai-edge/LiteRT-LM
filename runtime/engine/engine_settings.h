@@ -25,7 +25,6 @@
 #include <vector>
 
 #include "absl/base/nullability.h"  // from @com_google_absl
-#include "absl/functional/any_invocable.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
@@ -33,7 +32,6 @@
 #include "runtime/components/constrained_decoding/suppress_tokens_config.h"
 #include "runtime/executor/audio/audio_executor_settings.h"
 #include "runtime/executor/executor_settings_base.h"
-#include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/vision/vision_executor_settings.h"
 #include "runtime/proto/engine.pb.h"
@@ -317,16 +315,6 @@ class SessionConfig {
     enable_speculative_decoding_ = enable_speculative_decoding;
   }
 
-  using AudioEmbeddingsCallback =
-      absl::AnyInvocable<void(const ExecutorAudioData&) const>;
-  const AudioEmbeddingsCallback* GetAudioEmbeddingsCallback() const {
-    return audio_embeddings_callback_.get();
-  }
-  void SetAudioEmbeddingsCallback(AudioEmbeddingsCallback callback) {
-    audio_embeddings_callback_ =
-        std::make_shared<AudioEmbeddingsCallback>(std::move(callback));
-  }
-
  private:
   // Private constructor for the SessionConfig. The user should use the
   // CreateDefault() method to create a SessionConfig.
@@ -394,13 +382,6 @@ class SessionConfig {
   // By default, std::nullopt (inherits the engine's speculative decoding
   // configuration).
   std::optional<bool> enable_speculative_decoding_ = std::nullopt;
-
-  // Optional callback to receive audio embeddings. If not set, it will be
-  // nullptr.
-  // We use std::shared_ptr to wrap the move-only absl::AnyInvocable callback.
-  // This allows SessionConfig to remain copy-constructible, which is required
-  // because SessionConfig is copied in various engine and library interfaces.
-  std::shared_ptr<AudioEmbeddingsCallback> audio_embeddings_callback_;
 };
 
 std::ostream& operator<<(std::ostream& os, const SessionConfig& config);
