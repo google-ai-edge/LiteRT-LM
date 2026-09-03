@@ -789,7 +789,7 @@ class Conversation {
   std::vector<Message> history_ ABSL_GUARDED_BY(history_mutex_);
 
   // Whether the current conversation is in message appending state.
-  bool is_appending_message_ = false;
+  bool is_appending_message_ ABSL_GUARDED_BY(history_mutex_) = false;
 
   // Mutex for task_controllers_.
   mutable absl::Mutex task_controllers_mutex_;

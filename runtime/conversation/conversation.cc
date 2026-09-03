@@ -14,6 +14,7 @@
 
 #include "runtime/conversation/conversation.h"
 
+#include <cstddef>
 #include <memory>
 #include <optional>
 #include <string>
@@ -516,7 +517,11 @@ absl::StatusOr<Message> Conversation::SendMessage(const Message& message,
                                                   OptionalArgs optional_args) {
   absl::Notification done;
   absl::Status error_status;
-  bool appending = is_appending_message_;
+  bool appending = false;
+  {
+    absl::MutexLock lock(history_mutex_);  // NOLINT
+    appending = is_appending_message_;
+  }
 
   absl::Status status = SendMessageAsync(
       message,
@@ -576,23 +581,42 @@ absl::Status Conversation::SendMessageAsync(
         *engine_.GetEngineSettings().GetMaxVisionTokensPerImage()));
   }
 
+  bool prev_is_appending_message = false;
+  {
+    absl::MutexLock lock(history_mutex_);  // NOLINT
+    prev_is_appending_message = is_appending_message_;
+  }
   ABSL_ASSIGN_OR_RETURN(std::string single_turn_text,
                         GetSingleTurnText(message, optional_args));
   auto open_channel_name =
       GetOpenChannelName(single_turn_text, config_.GetChannels());
 
+  size_t num_messages_added = 0;
   bool was_history_empty = false;
+  bool is_appending_message = false;
   {
     absl::MutexLock lock(history_mutex_);  // NOLINT
     was_history_empty = history_.empty();
     if (message.is_array()) {
       for (const auto& message : message) {
         history_.push_back(message);
+        num_messages_added++;
       }
     } else {
       history_.push_back(message);
+      num_messages_added++;
     }
+    is_appending_message = is_appending_message_;
   }
+
+  absl::AnyInvocable<void()> cancel_callback = [this, num_messages_added,
+                                                prev_is_appending_message]() {
+    absl::MutexLock lock(history_mutex_);
+    for (size_t i = 0; i < num_messages_added && !history_.empty(); ++i) {
+      history_.pop_back();
+    }
+    is_appending_message_ = prev_is_appending_message;
+  };
 
   if (!config_.enable_rewinding() && was_history_empty) {
     ABSL_RETURN_IF_ERROR(session_->SaveCheckpoint(kStartContentCheckpoint));
@@ -603,7 +627,7 @@ absl::Status Conversation::SendMessageAsync(
   // need to be "refilled" into the session.
   std::vector<InputData> refill_session_inputs;
   if (config_.filter_channel_content_from_kv_cache() &&
-      IsUserMessage(message) && !is_appending_message_) {
+      IsUserMessage(message) && !is_appending_message) {
     if (channel_content_since_last_user_message_) {
       ABSL_ASSIGN_OR_RETURN(refill_session_inputs,
                             RewindAndGetInputDataVector(optional_args));
@@ -652,15 +676,19 @@ absl::Status Conversation::SendMessageAsync(
                             single_turn_text, messages_for_conversion,
                             optional_args.args.value_or(std::monostate())));
 
-  if (is_appending_message_) {
+  if (is_appending_message) {
     ABSL_ASSIGN_OR_RETURN(
         auto task_controller,
         session_->RunPrefillAsync(
-            session_inputs, [callback = std::move(user_callback)](
+            session_inputs, [callback = std::move(user_callback),
+                             cancel_callback = std::move(cancel_callback)](
                                 absl::StatusOr<Responses> responses) mutable {
               if (!responses.ok()) {
                 auto status = IgnoreEmptyInputError(responses.status());
                 if (!status.ok()) {
+                  if (absl::IsCancelled(status)) {
+                    cancel_callback();
+                  }
                   callback(status);
                 } else {
                   callback(Message());
@@ -669,6 +697,11 @@ absl::Status Conversation::SendMessageAsync(
               }
               if (responses->GetTaskState() == TaskState::kDone) {
                 callback(Message());
+              } else if (responses->GetTaskState() == TaskState::kCancelled ||
+                         responses->GetTaskState() ==
+                             TaskState::kDependentTaskCancelled) {
+                cancel_callback();
+                callback(absl::CancelledError("Task cancelled"));
               } else if (IsTaskEndState(responses->GetTaskState())) {
                 callback(absl::InternalError(absl::StrCat(
                     "Prefill failed with task state: ",
@@ -681,8 +714,8 @@ absl::Status Conversation::SendMessageAsync(
 
   absl::AnyInvocable<void(Message)> complete_message_callback =
       [this](const Message& complete_message) {
-        absl::MutexLock lock(this->history_mutex_);
-        this->history_.push_back(complete_message);
+        absl::MutexLock lock(history_mutex_);
+        history_.push_back(complete_message);
 
         // If the model's output message contains channel content, set a
         // variable indicating the session needs to be rewound to the last user
@@ -692,11 +725,6 @@ absl::Status Conversation::SendMessageAsync(
           channel_content_since_last_user_message_ = true;
         }
       };
-
-  absl::AnyInvocable<void()> cancel_callback = [this]() {
-    absl::MutexLock lock(this->history_mutex_);
-    this->history_.pop_back();
-  };
 
   auto internal_callback =
       std::make_shared<absl::AnyInvocable<void(absl::StatusOr<Responses>)>>(
@@ -899,9 +927,9 @@ absl::StatusOr<std::unique_ptr<Conversation>> Conversation::Clone() {
       engine_, std::move(session), std::move(model_data_processor),
       config_.GetPreface(), config_.GetPromptTemplate(), config_,
       std::move(constraint_provider)));
-  new_conversation->is_appending_message_ = is_appending_message_;
   {
     absl::MutexLock lock(history_mutex_);  // NOLINT
+    new_conversation->is_appending_message_ = is_appending_message_;
     new_conversation->history_ = history_;
   }
   return new_conversation;
