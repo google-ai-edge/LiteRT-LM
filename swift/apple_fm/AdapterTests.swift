@@ -298,6 +298,34 @@
         "still open, never closed")
     }
 
+    // MARK: - Native tool calls
+
+    /// The model writes its calls Python-style. `True` is a boolean, not the
+    /// string "True" (device run 2026-09-04: `set_torch(on=True)` reached FM
+    /// as a string and the call failed), and a doubled closer must not leak
+    /// into the last value.
+    func testNativeToolCallParsesPythonBooleansAndStrayClosers() throws {
+      let call = try XCTUnwrap(
+        LiteRTLMExecutor.parseNativeToolCall(
+          "<|tool_call_start|>[set_torch(on=True)]<|tool_call_end|>"))
+      XCTAssertEqual(call.name, "set_torch")
+      XCTAssertEqual(call.arguments, #"{"on":true}"#)
+
+      let doubled = try XCTUnwrap(
+        LiteRTLMExecutor.parseNativeToolCall(
+          "<|tool_call_start|>[set_torch(on=False))]<|tool_call_end|>"))
+      XCTAssertEqual(doubled.arguments, #"{"on":false}"#)
+
+      let mixed = try XCTUnwrap(
+        LiteRTLMExecutor.parseNativeToolCall(
+          "<|tool_call_start|>[translate(source='a, b)', to=\"ja\", n=2)]<|tool_call_end|>"))
+      let data = try XCTUnwrap(mixed.arguments.data(using: .utf8))
+      let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+      XCTAssertEqual(object["source"] as? String, "a, b)")
+      XCTAssertEqual(object["to"] as? String, "ja")
+      XCTAssertEqual(object["n"] as? Int, 2)
+    }
+
     // MARK: - Guided generation
 
     /// The mode is a conversation-level choice, so two models over one engine
