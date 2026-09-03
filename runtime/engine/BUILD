@@ -38,6 +38,8 @@ cc_library(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/time",
+        "@litert//litert/cc:litert_tensor_buffer",
+        "//runtime/executor:llm_executor_io_types",
         "//support/tokenizer",
     ],
 )

@@ -14,8 +14,6 @@
 
 #include "support/util/io_types.h"
 
-#include <cstddef>
-#include <cstdint>
 #include <string>
 #include <utility>
 #include <variant>
@@ -26,6 +24,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 
 namespace litert::support {
@@ -139,11 +138,11 @@ absl::StatusOr<absl::Span<const float>> InputAudio::GetPcmFrames() const {
 
 absl::StatusOr<InputAudio> InputAudio::CreateCopy() const {
   if (std::holds_alternative<std::string>(data_)) {
-    return InputAudio(std::move(std::get<std::string>(data_)));
+    return InputAudio(std::get<std::string>(data_));
   } else if (std::holds_alternative<::litert::TensorBuffer>(data_)) {
     LITERT_ASSIGN_OR_RETURN(auto tensor_buffer_clone,
                             std::get<::litert::TensorBuffer>(data_).Duplicate());
-    return InputAudio(std::move(tensor_buffer_clone));
+    return InputAudio(std::move(tensor_buffer_clone), is_embeddings_);
   } else if (std::holds_alternative<std::vector<float>>(data_)) {
     return InputAudio(std::get<std::vector<float>>(data_));
   }

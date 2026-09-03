@@ -97,6 +97,8 @@ ENGINE_IMPL_COMMON_DEPS = [
     "//runtime/util:logging",
     "@litert//litert/cc:litert_environment",
     "@litert//litert/cc:litert_environment_options",
+    "@litert//litert/cc:litert_tensor_buffer",
+    "//runtime/executor:llm_executor_io_types",
 ]
 
 cc_library(
@@ -272,9 +274,11 @@ cc_library(
         "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/time",
+        "@litert//litert/cc:litert_tensor_buffer",
         "//runtime/engine:engine_interface",
         "//runtime/engine:engine_settings",
         "//runtime/engine:io_types",
+        "//runtime/executor:llm_executor_io_types",
         "//runtime/framework/resource_management:execution_manager",
         "//runtime/proto:sampler_params_cc_proto",
         "//runtime/util:litert_status_util",
