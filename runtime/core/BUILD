@@ -97,6 +97,8 @@ ENGINE_IMPL_COMMON_DEPS = [
     "//runtime/util:logging",
     "@litert//litert/cc:litert_environment",
     "@litert//litert/cc:litert_environment_options",
+    "@litert//litert/cc:litert_tensor_buffer",
+    "//runtime/executor:llm_executor_io_types",
 ]
 
 cc_library(

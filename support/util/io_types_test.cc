@@ -16,8 +16,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <optional>
-#include <sstream>
 #include <string>
 #include <utility>
 #include <variant>
@@ -28,15 +26,14 @@
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "litert/c/litert_model_types.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_layout.h"  // from @litert
-#include "litert/cc/litert_model.h"  // from @litert
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
 #include "litert/test/matchers.h"  // from @litert
 #include "support/util/convert_tensor_buffer.h"
-#include "support/util/test_utils.h"  // NOLINT
 
 namespace litert::support {
 namespace {
@@ -219,6 +216,84 @@ TEST(InputAudioTest, GetAudioFloatData) {
   EXPECT_TRUE(input_audio.IsPcmFrames());
   ASSERT_OK_AND_ASSIGN(auto retrieved_audio_data, input_audio.GetPcmFrames());
   EXPECT_THAT(retrieved_audio_data, ElementsAreArray(audio_data));
+}
+
+TEST(InputAudioTest, GetAudioEmbeddings) {
+  LITERT_ASSERT_OK_AND_ASSIGN(auto env, ::litert::Environment::Create({}));
+  const ::litert::RankedTensorType kTensorType(kTestTensorType);
+  constexpr auto kTensorBufferType = ::litert::TensorBufferType::kHostMemory;
+  const size_t kTensorSize = sizeof(kTensorData);
+
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      ::litert::TensorBuffer original_tensor_buffer,
+      ::litert::TensorBuffer::CreateManaged(env, kTensorBufferType, kTensorType,
+                                            kTensorSize));
+  LITERT_ASSERT_OK(
+      original_tensor_buffer.Write<float>(absl::MakeSpan(kTensorData, 4)));
+
+  InputAudio::AudioEmbeddings embeddings{
+      .tensor = std::move(original_tensor_buffer),
+      .valid_tokens = 4,
+  };
+
+  InputAudio input_audio(std::move(embeddings));
+  EXPECT_TRUE(input_audio.IsAudioEmbeddings());
+  EXPECT_FALSE(input_audio.IsTensorBuffer());
+  EXPECT_FALSE(input_audio.IsPcmFrames());
+  EXPECT_THAT(input_audio.GetRawAudioBytes(),
+              StatusIs(absl::StatusCode::kFailedPrecondition));
+  EXPECT_THAT(input_audio.GetPreprocessedAudioTensor(),
+              StatusIs(absl::StatusCode::kFailedPrecondition));
+  EXPECT_THAT(input_audio.GetPcmFrames(),
+              StatusIs(absl::StatusCode::kFailedPrecondition));
+
+  ASSERT_OK_AND_ASSIGN(const auto* retrieved_embeddings,
+                       input_audio.GetAudioEmbeddings());
+  EXPECT_EQ(retrieved_embeddings->valid_tokens, 4);
+
+  LITERT_ASSERT_OK_AND_ASSIGN(auto retrieved_data,
+                              ::litert::support::ReferTensorBufferAsSpan<float>(
+                                  retrieved_embeddings->tensor));
+  EXPECT_THAT(retrieved_data, ElementsAreArray(kTensorData));
+}
+
+TEST(InputAudioTest, CreateCopyFromAudioEmbeddings) {
+  LITERT_ASSERT_OK_AND_ASSIGN(auto env, ::litert::Environment::Create({}));
+  const ::litert::RankedTensorType kTensorType(kTestTensorType);
+  constexpr auto kTensorBufferType = ::litert::TensorBufferType::kHostMemory;
+  const size_t kTensorSize = sizeof(kTensorData);
+
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      ::litert::TensorBuffer original_tensor_buffer,
+      ::litert::TensorBuffer::CreateManaged(env, kTensorBufferType, kTensorType,
+                                            kTensorSize));
+  LITERT_ASSERT_OK(
+      original_tensor_buffer.Write<float>(absl::MakeSpan(kTensorData, 4)));
+
+  InputAudio::AudioEmbeddings embeddings{
+      .tensor = std::move(original_tensor_buffer),
+      .valid_tokens = 4,
+  };
+
+  InputAudio original_input_audio(std::move(embeddings));
+  ASSERT_OK_AND_ASSIGN(InputAudio copied_input_audio,
+                       original_input_audio.CreateCopy());
+
+  EXPECT_TRUE(copied_input_audio.IsAudioEmbeddings());
+  EXPECT_THAT(copied_input_audio.GetRawAudioBytes(),
+              StatusIs(absl::StatusCode::kFailedPrecondition));
+  EXPECT_THAT(copied_input_audio.GetPreprocessedAudioTensor(),
+              StatusIs(absl::StatusCode::kFailedPrecondition));
+  EXPECT_THAT(copied_input_audio.GetPcmFrames(),
+              StatusIs(absl::StatusCode::kFailedPrecondition));
+
+  ASSERT_OK_AND_ASSIGN(const auto* retrieved_embeddings,
+                       copied_input_audio.GetAudioEmbeddings());
+  EXPECT_EQ(retrieved_embeddings->valid_tokens, 4);
+  LITERT_ASSERT_OK_AND_ASSIGN(auto retrieved_data,
+                              ::litert::support::ReferTensorBufferAsSpan<float>(
+                                  retrieved_embeddings->tensor));
+  EXPECT_THAT(retrieved_data, ElementsAreArray(kTensorData));
 }
 
 TEST(InputTextTest, CreateCopyFromString) {
@@ -453,6 +528,37 @@ TEST(CreateInputDataCopyTest, InputAudioWithFloatVector) {
   ASSERT_OK_AND_ASSIGN(auto retrieved_audio_data,
                        std::get<InputAudio>(copied_data).GetPcmFrames());
   EXPECT_THAT(retrieved_audio_data, ElementsAreArray(audio_data));
+}
+
+TEST(CreateInputDataCopyTest, InputAudioWithAudioEmbeddings) {
+  LITERT_ASSERT_OK_AND_ASSIGN(auto env, ::litert::Environment::Create({}));
+  const ::litert::RankedTensorType kTensorType(kTestTensorType);
+  constexpr auto kTensorBufferType = ::litert::TensorBufferType::kHostMemory;
+  const size_t kTensorSize = sizeof(kTensorData);
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      ::litert::TensorBuffer original_tensor_buffer,
+      ::litert::TensorBuffer::CreateManaged(env, kTensorBufferType, kTensorType,
+                                            kTensorSize));
+  LITERT_ASSERT_OK(
+      original_tensor_buffer.Write<float>(absl::MakeSpan(kTensorData, 4)));
+
+  InputAudio::AudioEmbeddings embeddings{
+      .tensor = std::move(original_tensor_buffer),
+      .valid_tokens = 4,
+  };
+  InputData original_data = InputAudio(std::move(embeddings));
+  ASSERT_OK_AND_ASSIGN(InputData copied_data,
+                       CreateInputDataCopy(original_data));
+  ASSERT_TRUE(std::holds_alternative<InputAudio>(copied_data));
+  const auto& copied_audio = std::get<InputAudio>(copied_data);
+  EXPECT_TRUE(copied_audio.IsAudioEmbeddings());
+  ASSERT_OK_AND_ASSIGN(const auto* retrieved_embeddings,
+                       copied_audio.GetAudioEmbeddings());
+  EXPECT_EQ(retrieved_embeddings->valid_tokens, 4);
+  LITERT_ASSERT_OK_AND_ASSIGN(auto retrieved_data,
+                              ::litert::support::ReferTensorBufferAsSpan<float>(
+                                  retrieved_embeddings->tensor));
+  EXPECT_THAT(retrieved_data, ElementsAreArray(kTensorData));
 }
 
 TEST(CreateInputDataCopyTest, InputAudioEnd) {
