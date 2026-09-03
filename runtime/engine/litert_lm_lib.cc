@@ -171,7 +171,7 @@ absl::Status CheckExpectedOutput(const std::string& captured_output,
   // Skip printing the output when using fake prefill tokens.
   bool should_print_output = settings.benchmark_prefill_tokens == 0;
   if (should_print_output) {
-    ABSL_VLOG(1) << "Captured model output: " << captured_output;
+    ABSL_LOG(INFO) << "Captured model output: " << captured_output;
   }
   if (settings.expected_output.has_value()) {
     if (!absl::StrContainsIgnoreCase(captured_output,
@@ -418,8 +418,14 @@ void LogBenchmarkInfo(const litert::lm::BenchmarkInfo& benchmark_info,
     std::stringstream ss;
     ss << benchmark_info;
     std::string line;
+    bool is_first_line = true;
     while (std::getline(ss, line)) {
-      ABSL_LOG(INFO).NoPrefix() << line;
+      if (is_first_line) {
+        ABSL_LOG(INFO) << line;
+        is_first_line = false;
+      } else {
+        ABSL_LOG(INFO).NoPrefix() << line;
+      }
     }
   } else {
     std::string extra_flags = "";
