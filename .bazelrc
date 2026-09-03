@@ -158,6 +158,8 @@ build:android_x86_64 --platforms=@org_tensorflow//tensorflow/tools/toolchains/an
 build:android --dynamic_mode=off
 # TODO(belitskiy): Remove once on Clang 20.
 build:android --define=xnn_enable_avxvnniint8=false
+# Ensure OpenCL is not inadvertently disabled when cross-compiling from a Linux host.
+build:android --copt=-ULITERT_DISABLE_OPENCL_SUPPORT
 
 # Sets the default Apple platform to macOS.
 build:macos --apple_platform_type=macos
@@ -236,9 +238,6 @@ build:nonccl --define=no_nccl_support=true
 build:dynamic_kernels --define=dynamic_loaded_kernels=true
 build:dynamic_kernels --copt=-DAUTOLOAD_DYNAMIC_KERNELS
 
-# Don't trigger --config=<host platform> when cross-compiling.
-build:android --noenable_platform_specific_config
-build:ios --noenable_platform_specific_config
 
 # Suppress all C++ compiler warnings, otherwise build logs become 10s of MBs.
 build:android --copt=-w
