@@ -40,7 +40,6 @@ containing the following top-level fields:
 | `tools`                 | `array`   | *(Optional)* Available tools (function declarations) that the model can invoke.                 |
 | `enable_thinking`       | `boolean` | *(Optional)* Whether the model should produce reasoning thoughts before answering.              |
 | `add_generation_prompt` | `boolean` | *(Optional)* Whether to append the model turn prefix to prompt generation (defaults to `true`). |
-| `now`                   | `integer` | *(Optional)* Current Unix timestamp in seconds (used by time-aware models via `strftime_now`).  |
 <!-- mdformat on -->
 
 ## Message Structure
@@ -176,8 +175,10 @@ The Minijinja engine provides several built-in utilities:
     tojson }}`).
 -   `lstrip(chars)` / `rstrip(chars)`: Trims leading/trailing whitespace or
     specific characters.
--   `strftime_now(format)`: Formats the `now` timestamp (e.g. `{{
-    strftime_now("%d %b %Y") }}`).
+-   `strftime_now(format)`: Formats the current date/time into a string using
+    the given format (e.g. `{{ strftime_now("%d %b %Y") }}`). Time-aware
+    templates should use this function rather than referencing a raw `now`
+    variable.
 -   `raise_exception(message)`: Raises an error during template rendering if an
     invariant is violated.
 -   `is none`: Test for undefined or null variables.

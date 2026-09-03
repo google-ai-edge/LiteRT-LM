@@ -178,10 +178,6 @@
     "add_generation_prompt": {
       "type": "boolean",
       "description": "Flag indicating whether to append the model's turn-start sequence to prompt the model to begin generating its response."
-    },
-    "now": {
-      "type": "integer",
-      "description": "Unix timestamp in seconds passed to time-aware prompt templates (e.g., used by strftime_now)."
     }
   },
   "required": ["messages"]
