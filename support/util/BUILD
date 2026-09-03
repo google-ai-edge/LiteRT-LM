@@ -145,11 +145,10 @@ cc_library(
     hdrs = ["io_types.h"],
     deps = [
         ":litert_status_util",
-        "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/container:flat_hash_map",
-        "@com_google_absl//absl/log",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/types:span",
         "@litert//litert/cc:litert_environment",  # litert runtime dependency
@@ -164,14 +163,13 @@ cc_test(
     deps = [
         ":convert_tensor_buffer",
         ":io_types",
-        ":test_utils",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/types:span",
+        "@litert//litert/c:litert_model_types",
         "@litert//litert/cc:litert_environment",
         "@litert//litert/cc:litert_layout",
-        "@litert//litert/cc:litert_model",
         "@litert//litert/cc:litert_ranked_tensor_type",
         "@litert//litert/cc:litert_tensor_buffer",
         "@litert//litert/cc:litert_tensor_buffer_types",
