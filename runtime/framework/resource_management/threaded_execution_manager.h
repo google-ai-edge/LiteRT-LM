@@ -245,6 +245,16 @@ class ThreadedExecutionManager : public ExecutionManager {
   absl::StatusOr<AudioExecutorProperties> GetAudioExecutorProperties()
       const override;
 
+  // Synchronously encodes an audio spectrogram tensor into audio soft tokens.
+  absl::StatusOr<ExecutorAudioData> EncodeAudio(
+      const ::litert::TensorBuffer& spectrogram_tensor) override;
+
+  // Synchronously encodes an audio spectrogram tensor into audio soft tokens
+  // within the context of the given session.
+  absl::StatusOr<ExecutorAudioData> EncodeAudio(
+      const SessionInfo& session_info,
+      const ::litert::TensorBuffer& spectrogram_tensor) override;
+
   // Returns the vision executor properties.
   absl::StatusOr<VisionExecutorProperties> GetVisionExecutorProperties()
       const override;
