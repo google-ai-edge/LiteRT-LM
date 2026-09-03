@@ -196,6 +196,41 @@ TEST(PromptTemplateCustomTest, StripReplacementTest) {
     ASSERT_OK(res);
     EXPECT_EQ(*res, "ohell");
   }
+  {
+    PromptTemplate prompt_template("{{ '  hello\n  '.strip('\n') }}");
+    PromptTemplateInput input;
+    auto res = prompt_template.Apply(input);
+    ASSERT_OK(res);
+    EXPECT_EQ(*res, "  hello\n  ");
+  }
+  {
+    PromptTemplate prompt_template("{{ '\n  hello\n'.strip('\n') }}");
+    PromptTemplateInput input;
+    auto res = prompt_template.Apply(input);
+    ASSERT_OK(res);
+    EXPECT_EQ(*res, "  hello");
+  }
+  {
+    PromptTemplate prompt_template("{{ '  hello\n  '.lstrip('\n') }}");
+    PromptTemplateInput input;
+    auto res = prompt_template.Apply(input);
+    ASSERT_OK(res);
+    EXPECT_EQ(*res, "  hello\n  ");
+  }
+  {
+    PromptTemplate prompt_template("{{ '\n  hello\n'.lstrip('\n') }}");
+    PromptTemplateInput input;
+    auto res = prompt_template.Apply(input);
+    ASSERT_OK(res);
+    EXPECT_EQ(*res, "  hello\n");
+  }
+  {
+    PromptTemplate prompt_template("{{ '\nhello'.lstrip('\n') }}");
+    PromptTemplateInput input;
+    auto res = prompt_template.Apply(input);
+    ASSERT_OK(res);
+    EXPECT_EQ(*res, "hello");
+  }
 }
 
 TEST(PromptTemplateCustomTest, Qwen3MultiTurnTemplateRenderingTest) {
