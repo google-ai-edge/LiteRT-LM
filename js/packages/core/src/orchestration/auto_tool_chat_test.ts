@@ -63,7 +63,7 @@ describe('AutoToolChat', () => {
     const conversation = new AutoToolChat({engine, tools});
 
     engine.cachedConversation.queueResponse({
-      role: 'model',
+      role: 'assistant',
       tool_calls: [{
         type: 'function',
         function:
@@ -71,7 +71,7 @@ describe('AutoToolChat', () => {
       }]
     });
     engine.cachedConversation.queueResponse({
-      role: 'model',
+      role: 'assistant',
       content: 'The weather in Seattle is sunny and 72 degrees.'
     });
 
@@ -99,7 +99,7 @@ describe('AutoToolChat', () => {
        const conversation = new AutoToolChat({engine, tools});
 
        engine.cachedConversation.queueResponse({
-         role: 'model',
+         role: 'assistant',
          tool_calls: [{
            type: 'function',
            function:
@@ -107,7 +107,7 @@ describe('AutoToolChat', () => {
          }]
        });
        engine.cachedConversation.queueResponse({
-         role: 'model',
+         role: 'assistant',
          content: 'The weather in Seattle is sunny and 72 degrees.'
        });
 
@@ -130,13 +130,11 @@ describe('AutoToolChat', () => {
        }));
      });
 
-  it('throws after exceeding the recursive tool call limit configurable',
-     async () => {
-       const tools = [{
+  it('stops and throws an error if recursion limit is exceeded', async () => {
+       const tools: ToolWithImplementation[] = [{
          name: 'loop_tool',
-         execute: async (args: Record<string, JsonValue>) => {
-           return {info: 'more_tools'};
-         }
+         description: 'Keeps looping',
+         execute: async () => ({again: true})
        }];
 
        const conversation =
@@ -145,7 +143,7 @@ describe('AutoToolChat', () => {
        // Enqueue 5 of them.
        for (let i = 0; i < 5; i++) {
          engine.cachedConversation.queueResponse({
-           role: 'model',
+           role: 'assistant',
            tool_calls: [
              {type: 'function', function: {name: 'loop_tool', arguments: {}}}
            ]
@@ -191,13 +189,13 @@ describe('AutoToolChat', () => {
        const conversation = new AutoToolChat({engine, tools});
 
        engine.cachedConversation.queueResponse({
-         role: 'model',
+         role: 'assistant',
          tool_calls: [
            {type: 'function', function: {name: 'unknown_tool', arguments: {}}}
          ]
        });
        engine.cachedConversation.queueResponse(
-           {role: 'model', content: 'Oops, that tool doesnt exist.'});
+           {role: 'assistant', content: 'Oops, that tool doesnt exist.'});
 
        const response = await conversation.sendMessage('call unknown tool');
 
@@ -212,7 +210,7 @@ describe('AutoToolChat', () => {
                         // actually: history[0] = user input, history[1] = model
                         // tool call, history[2] = fake tool_response
        expect(history.length).toBe(4);
-       expect((userMsg as Message).role).toEqual('model');
+       expect((userMsg as Message).role).toEqual('assistant');
        expect((history[2] as Message).role).toEqual('tool');
        const content = (history[2] as Message).content as ToolResponsePart[];
        expect((content[0].response as JsonObject)['error'] as string)
@@ -225,13 +223,13 @@ describe('AutoToolChat', () => {
        const conversation = new AutoToolChat({engine, tools});
 
        engine.cachedConversation.queueResponse({
-         role: 'model',
+         role: 'assistant',
          tool_calls: [
            {type: 'function', function: {name: 'unknown_tool', arguments: {}}}
          ]
        });
        engine.cachedConversation.queueResponse(
-           {role: 'model', content: 'Oops, that streaming tool doesnt exist.'});
+           {role: 'assistant', content: 'Oops, that streaming tool doesnt exist.'});
 
        const stream = conversation.sendMessageStreaming('call unknown tool');
        const reader = stream.getReader();
@@ -268,12 +266,12 @@ describe('AutoToolChat', () => {
       const conversation = new AutoToolChat({engine, tools});
 
       engine.cachedConversation.queueResponse({
-        role: 'model',
+        role: 'assistant',
         tool_calls:
             [{type: 'function', function: {name: 'error_tool', arguments: {}}}]
       });
       engine.cachedConversation.queueResponse(
-          {role: 'model', content: 'Handled the error gracefully.'});
+          {role: 'assistant', content: 'Handled the error gracefully.'});
 
       const response = await conversation.sendMessage('call error tool');
       expect(response.content).toBe('Handled the error gracefully.');
@@ -322,14 +320,14 @@ describe('AutoToolChat', () => {
       const conversation = new AutoToolChat({engine, tools});
 
       engine.cachedConversation.queueResponse({
-        role: 'model',
+        role: 'assistant',
         tool_calls: [
           {type: 'function', function: {name: 'tool_one', arguments: {}}},
           {type: 'function', function: {name: 'tool_two', arguments: {}}}
         ]
       });
       engine.cachedConversation.queueResponse(
-          {role: 'model', content: 'Both done.'});
+          {role: 'assistant', content: 'Both done.'});
 
       const response = await conversation.sendMessage('call both tools');
       expect(response.content).toBe('Both done.');
@@ -357,14 +355,14 @@ describe('AutoToolChat', () => {
       const conversation = new AutoToolChat({engine, tools});
 
       engine.cachedConversation.queueResponse({
-        role: 'model',
+        role: 'assistant',
         tool_calls: [
           {type: 'function', function: {name: 'tool_success', arguments: {}}},
           {type: 'function', function: {name: 'tool_fail', arguments: {}}}
         ]
       });
       engine.cachedConversation.queueResponse(
-          {role: 'model', content: 'Both handled.'});
+          {role: 'assistant', content: 'Both handled.'});
 
       const response = await conversation.sendMessage('call both tools');
       expect(response.content).toBe('Both handled.');
@@ -392,14 +390,14 @@ describe('AutoToolChat', () => {
       const conversation = new AutoToolChat({engine, tools});
 
       engine.cachedConversation.queueResponse({
-        role: 'model',
+        role: 'assistant',
         tool_calls: [
           {type: 'function', function: {name: 'tool_success', arguments: {}}},
           {type: 'function', function: {name: 'tool_not_exist', arguments: {}}}
         ]
       });
       engine.cachedConversation.queueResponse(
-          {role: 'model', content: 'Both handled.'});
+          {role: 'assistant', content: 'Both handled.'});
 
       const response = await conversation.sendMessage('call both tools');
       expect(response.content).toBe('Both handled.');
@@ -433,14 +431,14 @@ describe('AutoToolChat', () => {
                {engine, tools, onToolProgress: (e) => events.push(e)});
 
            engine.cachedConversation.queueResponse({
-             role: 'model',
+             role: 'assistant',
              tool_calls: [{
                type: 'function',
                function: {name: 'test_tool', arguments: {param: 1}}
              }]
            });
            engine.cachedConversation.queueResponse(
-               {role: 'model', content: 'Finished.'});
+               {role: 'assistant', content: 'Finished.'});
 
            await conversation.sendMessage('start');
 
@@ -477,13 +475,13 @@ describe('AutoToolChat', () => {
                {engine, tools, onToolProgress: (e) => events.push(e)});
 
            engine.cachedConversation.queueResponse({
-             role: 'model',
+             role: 'assistant',
              tool_calls: [
                {type: 'function', function: {name: 'error_tool', arguments: {}}}
              ]
            });
            engine.cachedConversation.queueResponse(
-               {role: 'model', content: 'Finished.'});
+               {role: 'assistant', content: 'Finished.'});
 
            await conversation.sendMessage('start');
 
@@ -511,13 +509,13 @@ describe('AutoToolChat', () => {
                {engine, tools: [], onToolProgress: (e) => events.push(e)});
 
            engine.cachedConversation.queueResponse({
-             role: 'model',
+             role: 'assistant',
              tool_calls: [
                {type: 'function', function: {name: 'fake_tool', arguments: {}}}
              ]
            });
            engine.cachedConversation.queueResponse(
-               {role: 'model', content: 'Finished.'});
+               {role: 'assistant', content: 'Finished.'});
 
            await conversation.sendMessage('start');
 
@@ -549,14 +547,14 @@ describe('AutoToolChat', () => {
                {engine, tools, onToolProgress: (e) => events.push(e)});
 
            engine.cachedConversation.queueResponse({
-             role: 'model',
+             role: 'assistant',
              tool_calls: [
                {type: 'function', function: {name: 'toolA', arguments: {}}},
                {type: 'function', function: {name: 'toolB', arguments: {}}}
              ]
            });
            engine.cachedConversation.queueResponse(
-               {role: 'model', content: 'Finished.'});
+               {role: 'assistant', content: 'Finished.'});
 
            await conversation.sendMessage('start');
 
@@ -589,13 +587,13 @@ describe('AutoToolChat', () => {
                {engine, tools, onToolProgress: (e) => events.push(e)});
 
            engine.cachedConversation.queueResponse({
-             role: 'model',
+             role: 'assistant',
              tool_calls: [
                {type: 'function', function: {name: 'long_tool', arguments: {}}}
              ]
            });
            engine.cachedConversation.queueResponse(
-               {role: 'model', content: 'Finished.'});
+               {role: 'assistant', content: 'Finished.'});
 
            // Fire it off, but don't await because it will get stuck waiting for
            // `toolPromise`

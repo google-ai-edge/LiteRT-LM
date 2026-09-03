@@ -226,7 +226,7 @@ describe('ChatSessionStore', () => {
         Promise.resolve({resultAsString: '42', consoleMessages: []}));
 
     converseFake.queueResponse({
-      role: 'model',
+      role: 'assistant',
       content: 'Let me calculate that.',
       tool_calls: [{
         type: 'function',
@@ -234,7 +234,7 @@ describe('ChatSessionStore', () => {
       }]
     });
 
-    converseFake.queueResponse({role: 'model', content: ' The answer is 42.'});
+    converseFake.queueResponse({role: 'assistant', content: ' The answer is 42.'});
 
     await chatSessionStore.sendMessage('What is 21+21?');
 

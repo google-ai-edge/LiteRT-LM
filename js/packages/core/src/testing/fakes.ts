@@ -45,7 +45,7 @@ export class ConversationFake implements ChatInterface {
     if (this.nextResponses.length > 0) {
       return this.nextResponses.shift()!;
     }
-    return {role: 'model', content: 'hello from fake'};
+    return {role: 'assistant', content: 'hello from fake'};
   }
 
   private appendInput(message: MessageLike|MessageLike[]) {

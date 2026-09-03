@@ -39,7 +39,7 @@ describe('Conversation', () => {
         new Conversation(mockWasmConversation, mockWasmEngine, mockMutexes);
 
     mockWasmConversation.sendMessage.and.returnValue(
-        Promise.resolve(JSON.stringify({role: 'model', content: 'hello'})));
+        Promise.resolve(JSON.stringify({role: 'assistant', content: 'hello'})));
 
     const response = await conversation.sendMessage('hi');
 
@@ -76,7 +76,7 @@ describe('Conversation', () => {
            'WasmConversation', ['sendMessage', 'delete']);
        mockWasmConversation.clone.and.returnValue(mockClonedWasmConversation);
        mockClonedWasmConversation.sendMessage.and.returnValue(Promise.resolve(
-           JSON.stringify({role: 'model', content: 'cloned response'})));
+           JSON.stringify({role: 'assistant', content: 'cloned response'})));
 
        const clonedConversation = await conversation.clone();
        expect(clonedConversation).toBeDefined();
@@ -96,7 +96,7 @@ describe('Conversation', () => {
     mockWasmConversation.sendMessage.and.returnValue(
         new Promise<string>(resolve => {
           finishSend = () =>
-              resolve(JSON.stringify({role: 'model', content: 'done'}));
+              resolve(JSON.stringify({role: 'assistant', content: 'done'}));
         }));
 
     const p = conversation.sendMessage('hi');
