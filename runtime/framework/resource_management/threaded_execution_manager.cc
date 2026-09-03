@@ -681,9 +681,18 @@ ThreadedExecutionManager::ProcessAndCombineContents(
         ABSL_ASSIGN_OR_RETURN(const auto* tensor,
                               input_audio->GetPreprocessedAudioTensor());
         LITERT_ASSIGN_OR_RETURN(auto dup, tensor->Duplicate());
-        ABSL_ASSIGN_OR_RETURN(const auto& dimensions, TensorBufferDims(dup));
-        const int valid_tokens =
-            dimensions.size() >= 2 ? dimensions[dimensions.size() - 2] : 0;
+        int valid_tokens = 0;
+        if (input_audio->GetValidTokens().has_value()) {
+          valid_tokens = *input_audio->GetValidTokens();
+        } else {
+          ABSL_ASSIGN_OR_RETURN(const auto& dimensions, TensorBufferDims(dup));
+          if (dimensions.size() == 5) {
+            // 5D tensor in BHWDC format: W is sequence length.
+            valid_tokens = dimensions[2];
+          } else if (dimensions.size() >= 2) {
+            valid_tokens = dimensions[dimensions.size() - 2];
+          }
+        }
         single_audio_data.SetProjectedAudioEmbeddings(std::move(dup));
         single_audio_data.SetValidTokens(valid_tokens);
       } else {
@@ -1319,6 +1328,61 @@ absl::Status ThreadedExecutionManager::SetCurrentStep(
 absl::StatusOr<AudioExecutorProperties>
 ThreadedExecutionManager::GetAudioExecutorProperties() const {
   return resource_manager_->GetAudioExecutorProperties();
+}
+
+absl::StatusOr<ExecutorAudioData> ThreadedExecutionManager::EncodeAudio(
+    const SessionInfo& session_info, const TensorBuffer& spectrogram_tensor) {
+  ABSL_ASSIGN_OR_RETURN(auto llm_executor,
+                        resource_manager_->AcquireExecutorWithContextHandler(
+                            session_info.context_handler));
+  ABSL_ASSIGN_OR_RETURN(auto audio_executor,
+                        resource_manager_->AcquireAudioExecutor());
+  ABSL_ASSIGN_OR_RETURN(auto audio_data,
+                        audio_executor->Encode(spectrogram_tensor));
+  if (session_info.context_handler != nullptr &&
+      session_info.context_handler->HasAudioContext()) {
+    ABSL_ASSIGN_OR_RETURN(auto current_audio_context,
+                          audio_executor->CloneContext());
+    ABSL_RETURN_IF_ERROR(session_info.context_handler->SetAudioContext(
+        std::move(current_audio_context)));
+  }
+  return audio_data;
+}
+
+absl::Status ThreadedExecutionManager::ResetAudio(
+    const SessionInfo& session_info) {
+  ABSL_ASSIGN_OR_RETURN(auto llm_executor,
+                        resource_manager_->AcquireExecutorWithContextHandler(
+                            session_info.context_handler));
+  ABSL_ASSIGN_OR_RETURN(auto audio_executor,
+                        resource_manager_->AcquireAudioExecutor());
+  ABSL_RETURN_IF_ERROR(audio_executor->Reset());
+  if (session_info.context_handler != nullptr &&
+      session_info.context_handler->HasAudioContext()) {
+    ABSL_ASSIGN_OR_RETURN(auto new_audio_context,
+                          audio_executor->CreateNewContext());
+    ABSL_RETURN_IF_ERROR(session_info.context_handler->SetAudioContext(
+        std::move(new_audio_context)));
+  }
+  return absl::OkStatus();
+}
+
+absl::StatusOr<ExecutorAudioData> ThreadedExecutionManager::FlushAudio(
+    const SessionInfo& session_info) {
+  ABSL_ASSIGN_OR_RETURN(auto llm_executor,
+                        resource_manager_->AcquireExecutorWithContextHandler(
+                            session_info.context_handler));
+  ABSL_ASSIGN_OR_RETURN(auto audio_executor,
+                        resource_manager_->AcquireAudioExecutor());
+  ABSL_ASSIGN_OR_RETURN(auto audio_data, audio_executor->Flush());
+  if (session_info.context_handler != nullptr &&
+      session_info.context_handler->HasAudioContext()) {
+    ABSL_ASSIGN_OR_RETURN(auto current_audio_context,
+                          audio_executor->CloneContext());
+    ABSL_RETURN_IF_ERROR(session_info.context_handler->SetAudioContext(
+        std::move(current_audio_context)));
+  }
+  return audio_data;
 }
 
 absl::StatusOr<VisionExecutorProperties>

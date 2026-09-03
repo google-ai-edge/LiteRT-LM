@@ -171,9 +171,13 @@ class InputAudio {
       : data_(std::move(data)), is_embeddings_(false) {}
 
   // Constructs an InputAudio from a TensorBuffer of processed audio bytes or
-  // pre-computed audio embeddings.
-  explicit InputAudio(::litert::TensorBuffer tensor, bool is_embeddings = false)
-      : data_(std::move(tensor)), is_embeddings_(is_embeddings) {}
+  // pre-computed audio embeddings. An optional valid_tokens count can be
+  // provided for audio embeddings where the tensor shape contains padding.
+  explicit InputAudio(::litert::TensorBuffer tensor, bool is_embeddings = false,
+                      std::optional<int> valid_tokens = std::nullopt)
+      : data_(std::move(tensor)),
+        is_embeddings_(is_embeddings),
+        valid_tokens_(valid_tokens) {}
 
   // Copy constructor.
   InputAudio(const InputAudio& other) = delete;
@@ -208,6 +212,10 @@ class InputAudio {
   // float vector.
   absl::StatusOr<absl::Span<const float>> GetPcmFrames() const;
 
+  // Returns the valid token count for pre-computed audio embeddings if
+  // specified.
+  std::optional<int> GetValidTokens() const { return valid_tokens_; }
+
   // Creates a copy of the InputAudio.
   // If the audio is preprocessed or embeddings, the copy will be a TensorBuffer
   // shallow copy. If the data is a `std::vector<float>`, a deep copy of the
@@ -218,6 +226,7 @@ class InputAudio {
  private:
   std::variant<std::string, ::litert::TensorBuffer, std::vector<float>> data_;
   bool is_embeddings_ = false;
+  std::optional<int> valid_tokens_ = std::nullopt;
 };
 
 inline std::ostream& operator<<(std::ostream& os,

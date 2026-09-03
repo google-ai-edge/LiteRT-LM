@@ -1063,6 +1063,13 @@ TEST(SessionConfigTest, SetAndGetVisionModalityEnabled) {
   EXPECT_TRUE(session_config.VisionModalityEnabled());
 }
 
+TEST(SessionConfigTest, SetAndGetEnableAudioSessionAdvanced) {
+  SessionConfig session_config = SessionConfig::CreateDefault();
+  EXPECT_FALSE(session_config.EnableAudioSessionAdvanced());
+  session_config.SetEnableAudioSessionAdvanced(true);
+  EXPECT_TRUE(session_config.EnableAudioSessionAdvanced());
+}
+
 TEST(SessionConfigTest, SetAndGetSamplerParams) {
   SessionConfig session_config = SessionConfig::CreateDefault();
   proto::SamplerParameters& sampler_params =

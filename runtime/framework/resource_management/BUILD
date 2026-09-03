@@ -35,6 +35,7 @@ cc_library(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/time",
+        "@litert//litert/cc:litert_tensor_buffer",
         "//runtime/components:sampler",
         "//runtime/components:stop_token_detector",
         "//runtime/components/constrained_decoding:constraint",
@@ -43,6 +44,7 @@ cc_library(
         "//runtime/components/constrained_decoding:suppress_tokens_config",
         "//runtime/engine:engine_settings",
         "//runtime/engine:io_types",
+        "//runtime/executor:llm_executor_io_types",
         "//runtime/framework/resource_management/context_handler",
     ],
 )
