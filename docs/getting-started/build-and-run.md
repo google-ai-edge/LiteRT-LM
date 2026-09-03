@@ -283,6 +283,12 @@ With the above set up, let's try to build the `litert_lm_main` binary:
 bazel build --config=android_arm64 //runtime/engine:litert_lm_main
 ```
 
+*Note: On macOS, host tool compilation (such as `rules_rust` procedural macros) requires macOS host configuration. If running on an older checkout or encountering crate errors like `can't find crate for thiserror_impl`, explicitly pass `--enable_platform_specific_config`:*
+
+```
+bazel build --config=android_arm64 --enable_platform_specific_config //runtime/engine:litert_lm_main
+```
+
 </details>
 
 After the binary is successfully built, we can now try to run the model on
