@@ -194,6 +194,7 @@ cc_test(
         "//runtime/executor:fake_llm_executor",
         "//runtime/executor:llm_executor_io_types",
         "//runtime/proto:token_cc",
+        "//runtime/util:convert_tensor_buffer",
         "//runtime/util:litert_status_util",
         "//runtime/util:test_utils",
         "//support/tokenizer",
