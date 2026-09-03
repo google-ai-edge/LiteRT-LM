@@ -213,6 +213,7 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
         gpu_compilation_options.WaitForWeightsConversionComplete(
             advanced_settings
                 .wait_for_weights_conversion_complete_in_benchmark);
+        gpu_compilation_options.EnableBenchmarkMode(true);
       }
       if (advanced_settings.gpu_context_low_priority.has_value() &&
           advanced_settings.gpu_context_low_priority.value()) {
