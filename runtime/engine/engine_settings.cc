@@ -859,6 +859,8 @@ std::ostream& operator<<(std::ostream& os, const SessionConfig& config) {
      << std::endl;
   os << "  VisionModalityEnabled: " << config.VisionModalityEnabled()
      << std::endl;
+  os << "  EnableAudioSessionAdvanced: " << config.EnableAudioSessionAdvanced()
+     << std::endl;
   os << "  SamplerParams: " << config.GetSamplerParams().DebugString()
      << std::endl;
   os << "  SamplerBackend: " << config.GetSamplerBackend() << std::endl;
@@ -888,10 +890,6 @@ std::ostream& operator<<(std::ostream& os, const SessionConfig& config) {
     os << "not set";
   }
   os << std::endl;
-  os << "  AudioEmbeddingsCallback: "
-     << (config.GetAudioEmbeddingsCallback() != nullptr ? "Present"
-                                                        : "Not present")
-     << std::endl;
   return os;
 }
 

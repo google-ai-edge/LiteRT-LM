@@ -142,7 +142,8 @@ absl::StatusOr<InputAudio> InputAudio::CreateCopy() const {
   } else if (std::holds_alternative<::litert::TensorBuffer>(data_)) {
     LITERT_ASSIGN_OR_RETURN(auto tensor_buffer_clone,
                             std::get<::litert::TensorBuffer>(data_).Duplicate());
-    return InputAudio(std::move(tensor_buffer_clone), is_embeddings_);
+    return InputAudio(std::move(tensor_buffer_clone), is_embeddings_,
+                      valid_tokens_);
   } else if (std::holds_alternative<std::vector<float>>(data_)) {
     return InputAudio(std::get<std::vector<float>>(data_));
   }
