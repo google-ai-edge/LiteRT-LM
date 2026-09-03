@@ -89,12 +89,6 @@ struct PromptTemplateInput {
   // The time when the prompt template is applied. This is used to support
   // things time-aware knowledge cut models, e.g. SmolLM-V3,
   absl::Time now = absl::Now();
-
-  // The beginning of sequence token.
-  nlohmann::ordered_json bos_token = "";
-
-  // The end of sequence token.
-  nlohmann::ordered_json eos_token = "";
 };
 
 // The capabilities of the prompt template.

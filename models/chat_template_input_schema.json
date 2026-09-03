@@ -182,14 +182,6 @@
     "now": {
       "type": "integer",
       "description": "Unix timestamp in seconds passed to time-aware prompt templates (e.g., used by strftime_now)."
-    },
-    "bos_token": {
-      "type": "string",
-      "description": "The beginning-of-sequence token."
-    },
-    "eos_token": {
-      "type": "string",
-      "description": "The end-of-sequence token."
     }
   },
   "required": ["messages"]

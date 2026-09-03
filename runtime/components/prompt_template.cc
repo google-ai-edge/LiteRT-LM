@@ -124,8 +124,6 @@ absl::StatusOr<std::string> PromptTemplate::Apply(
   minijinja_inputs["add_generation_prompt"] = input.add_generation_prompt;
   minijinja_inputs["extra_context"] = input.extra_context;
   minijinja_inputs["now"] = absl::ToUnixSeconds(input.now);
-  minijinja_inputs["bos_token"] = input.bos_token;
-  minijinja_inputs["eos_token"] = input.eos_token;
   auto result = minijinja_template_->apply(minijinja_inputs.dump());
   if (!result.is_ok) {
     return absl::InternalError(

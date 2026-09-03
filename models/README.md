@@ -24,6 +24,7 @@ For the formal JSON Schema specification of all input variables, see
     -   [Built-in Filters and Functions](#built-in-filters-and-functions)
     -   [Handling Tool Calls](#handling-tool-calls)
     -   [Handling Thinking Mode](#handling-thinking-mode)
+    -   [Beginning-of-Sequence and End-of-Sequence Tokens](#beginning-of-sequence-and-end-of-sequence-tokens)
 -   [Examples](#examples)
 -   [Testing and Validation](#testing-and-validation)
 
@@ -32,26 +33,15 @@ For the formal JSON Schema specification of all input variables, see
 When rendering a prompt template, LiteRT-LM passes a context dictionary
 containing the following top-level fields:
 
-| Field                   | Type      | Description                            |
-| :---------------------- | :-------- | :------------------------------------- |
-| `messages`              | `array`   | **(Required)** The conversation        |
-:                         :           : history as a list of message objects.  :
-| `tools`                 | `array`   | *(Optional)* Available tools (function |
-:                         :           : declarations) that the model can       :
-:                         :           : invoke.                                :
-| `enable_thinking`       | `boolean` | *(Optional)* Whether the model should  |
-:                         :           : produce reasoning thoughts before      :
-:                         :           : answering.                             :
-| `add_generation_prompt` | `boolean` | *(Optional)* Whether to append the     |
-:                         :           : model turn prefix to prompt generation :
-:                         :           : (defaults to `true`).                  :
-| `now`                   | `integer` | *(Optional)* Current Unix timestamp in |
-:                         :           : seconds (used by time-aware models via :
-:                         :           : `strftime_now`).                       :
-| `bos_token`             | `string`  | *(Optional)* Beginning-of-sequence     |
-:                         :           : token (e.g. `<bos>`, `<s>`).           :
-| `eos_token`             | `string`  | *(Optional)* End-of-sequence token     |
-:                         :           : (e.g. `<eos>`, `</s>`).                :
+<!-- mdformat off(prevent table wrapping for GitHub compatibility) -->
+| Field                   | Type      | Description                                                                                     |
+|:------------------------|:----------|:------------------------------------------------------------------------------------------------|
+| `messages`              | `array`   | **(Required)** The conversation history as a list of message objects.                           |
+| `tools`                 | `array`   | *(Optional)* Available tools (function declarations) that the model can invoke.                 |
+| `enable_thinking`       | `boolean` | *(Optional)* Whether the model should produce reasoning thoughts before answering.              |
+| `add_generation_prompt` | `boolean` | *(Optional)* Whether to append the model turn prefix to prompt generation (defaults to `true`). |
+| `now`                   | `integer` | *(Optional)* Current Unix timestamp in seconds (used by time-aware models via `strftime_now`).  |
+<!-- mdformat on -->
 
 ## Message Structure
 
@@ -231,6 +221,19 @@ filter:
 </think>
 {%- endif -%}
 ```
+
+### Beginning-of-Sequence and End-of-Sequence Tokens
+
+Special sequence tokens are handled directly by the LiteRT-LM runtime engine
+rather than embedded in the template text:
+
+-   **Beginning-of-Sequence (`bos_token`)**: The BOS token is defined in the
+    model's metadata configuration (`LlmMetadataProto`) under `start_token`
+    (e.g., token ID `2`). During prefill, the LiteRT-LM runtime engine
+    automatically prepends the `start_token` to the tokenized prompt sequence.
+    Therefore, prompt templates do not need to explicitly include `bos_token`.
+-   **End-of-Sequence (`eos_token`)**: The EOS token is not used for LiteRT-LM
+    inference engine. We don't need it in LLM metadata nor the chat template.
 
 ## Examples
 
