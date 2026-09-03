@@ -888,10 +888,6 @@ std::ostream& operator<<(std::ostream& os, const SessionConfig& config) {
     os << "not set";
   }
   os << std::endl;
-  os << "  AudioEmbeddingsCallback: "
-     << (config.GetAudioEmbeddingsCallback() != nullptr ? "Present"
-                                                        : "Not present")
-     << std::endl;
   return os;
 }
 

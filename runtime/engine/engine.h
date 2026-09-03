@@ -26,8 +26,10 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
+#include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
+#include "runtime/executor/llm_executor_io_types.h"
 #include "support/tokenizer/tokenizer.h"
 
 namespace litert::lm {
@@ -330,6 +332,13 @@ class SessionInterface {
     return absl::UnimplementedError("GetCurrentStep not implemented.");
   }
 
+  // Synchronously encodes an audio spectrogram tensor into audio soft tokens
+  // within the context of this session.
+  virtual absl::StatusOr<ExecutorAudioData> EncodeAudio(
+      const ::litert::TensorBuffer& spectrogram_tensor) {
+    return absl::UnimplementedError("EncodeAudio is not implemented.");
+  }
+
   // Get the reference to the session config for the session.
   virtual const SessionConfig& GetSessionConfig() const = 0;
 
@@ -383,6 +392,13 @@ class EngineT {
   // if the engine is created with vision modality enabled.
   virtual absl::StatusOr<VisionExecutorProperties> GetVisionExecutorProperties()
       const = 0;
+
+  // Synchronously encodes an audio spectrogram tensor into audio soft tokens.
+  // This is a stateless call and does not require an active session.
+  virtual absl::StatusOr<ExecutorAudioData> EncodeAudio(
+      const ::litert::TensorBuffer& spectrogram_tensor) {
+    return absl::UnimplementedError("EncodeAudio is not implemented.");
+  }
 
   // Updates whether to enable Metal residency set on GPU at runtime.
   //
