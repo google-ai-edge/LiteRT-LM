@@ -127,7 +127,6 @@
 {%- set thinking = enable_thinking | default(false) -%}
 {%- set ns = namespace(prev_message_type=None) -%}
 {%- set loop_messages = messages -%}
-{{ bos_token }}
 {#- Handle System/Tool Definitions Block -#}
 {%- if thinking or tools or messages[0]['role'] == 'system' -%}
     {{- '<|turn>system' -}}

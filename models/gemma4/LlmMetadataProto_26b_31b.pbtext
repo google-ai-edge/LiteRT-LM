@@ -191,7 +191,6 @@ jinja_prompt_template:
   "{%- set thinking = enable_thinking | default(false) -%}\n"
   "{%- set ns = namespace(prev_message_type=None) -%}\n"
   "{%- set loop_messages = messages -%}\n"
-  "{{ bos_token }}\n"
   "{#- Handle System/Tool Definitions Block -#}\n"
   "{%- if thinking or tools or messages[0]['role'] == 'system' -%}\n"
   "    {{- '<|turn>system' -}}\n"
