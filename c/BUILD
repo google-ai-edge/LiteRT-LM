@@ -90,8 +90,6 @@ EMBEDDING_ENGINE_DEPS = [
     "//runtime/engine:embedding_engine_settings",
     "//runtime/executor:embedding_executor_base",
     "//runtime/executor:litert_compiled_model_executor_utils",
-    "//support/preprocessor:audio_preprocessor",
-    "//support/preprocessor:audio_preprocessor_miniaudio",
 ]
 
 CAPABILITIES_DEPS = [

@@ -19,7 +19,6 @@
 #include <optional>
 #include <string>
 #include <utility>
-#include <variant>
 #include <vector>
 
 #include "absl/log/absl_log.h"  // from @com_google_absl
@@ -37,8 +36,6 @@
 #include "runtime/executor/embedding/embedding_executor_base.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
-#include "support/preprocessor/audio_preprocessor.h"
-#include "support/preprocessor/audio_preprocessor_miniaudio.h"
 
 namespace {
 
@@ -51,24 +48,6 @@ absl::StatusOr<std::vector<litert::lm::InputData>> ToEngineInputData(
   engine_inputs.reserve(num_inputs);
   for (size_t i = 0; i < num_inputs; ++i) {
     if (inputs[i] != nullptr) {
-      if (const auto* raw_audio =
-              std::get_if<litert::lm::InputAudio>(&inputs[i]->data)) {
-        if (!raw_audio->GetPreprocessedAudioTensor().ok()) {
-          auto preprocessor =
-              ::litert::support::AudioPreprocessorMiniAudio::Create(
-                  ::litert::support::AudioPreprocessorConfig::
-                      CreateDefaultUsmConfig());
-          if (!preprocessor.ok()) {
-            return preprocessor.status();
-          }
-          auto processed_audio = (*preprocessor)->Preprocess(*raw_audio);
-          if (!processed_audio.ok()) {
-            return processed_audio.status();
-          }
-          engine_inputs.push_back(std::move(*processed_audio));
-          continue;
-        }
-      }
       auto copy_status = litert::lm::CreateInputDataCopy(inputs[i]->data);
       if (!copy_status.ok()) {
         return copy_status.status();
