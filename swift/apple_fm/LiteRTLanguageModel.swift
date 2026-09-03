@@ -729,17 +729,34 @@
           value.removeFirst()
           value.removeLast()
           arguments[key] = value
-        } else if let number = Int(value) {
+          continue
+        }
+        // An unquoted value never ends in a parenthesis; a stray one is the
+        // call's own closer that a doubled `))` left behind.
+        while value.hasSuffix(")") { value.removeLast() }
+        if let number = Int(value) {
           arguments[key] = number
         } else if let number = Double(value) {
           arguments[key] = number
-        } else if value == "true" || value == "false" {
-          arguments[key] = value == "true"
+        } else if let flag = booleanLiteral(value) {
+          arguments[key] = flag
         } else {
           arguments[key] = value
         }
       }
       return (name, argumentsJSON(arguments))
+    }
+
+    /// `true`/`false` as JSON writes them and `True`/`False` as Python does:
+    /// the call format is Python-ish, and on device the 1.2B wrote
+    /// `set_torch(on=True)` — passed through as the string "True", FM failed
+    /// the call with "GeneratedContent does not contain Bool".
+    private static func booleanLiteral(_ text: String) -> Bool? {
+      switch text.lowercased() {
+      case "true": return true
+      case "false": return false
+      default: return nil
+      }
     }
 
     /// Split on commas that are not inside quotes, so a quoted value may contain
