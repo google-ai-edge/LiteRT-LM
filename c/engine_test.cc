@@ -264,6 +264,26 @@ TEST(EngineCTest, SetParallelFileSectionLoading) {
   EXPECT_TRUE(settings->settings->GetParallelFileSectionLoading());
 }
 
+TEST(EngineCTest, SetSingleThreadedExecution) {
+  const std::string task_path = "test_model_path_1";
+  EngineSettingsPtr settings(
+      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
+                                       /* vision_backend_str */ nullptr,
+                                       /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+
+  // Default should be false.
+  EXPECT_FALSE(settings->settings->GetSingleThreadedExecution());
+
+  litert_lm_engine_settings_set_single_threaded_execution(settings.get(), true);
+  EXPECT_TRUE(settings->settings->GetSingleThreadedExecution());
+
+  litert_lm_engine_settings_set_single_threaded_execution(settings.get(),
+                                                          false);
+  EXPECT_FALSE(settings->settings->GetSingleThreadedExecution());
+}
+
 TEST(EngineCTest, BenchmarkSettings) {
   const std::string task_path = "test_model_path_1";
   EngineSettingsPtr settings(
