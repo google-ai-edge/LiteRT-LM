@@ -20,16 +20,43 @@ Example:
 
   import litert_lm
 
-  capabilities = litert_lm.Capabilities("/path/to/model.litertlm")
-  thinking = capabilities.supports_thinking()
-  vision = capabilities.input_modalities.vision
-  text = capabilities.input_modalities.text
-  video = capabilities.input_modalities.video
-  audio = capabilities.input_modalities.audio
-  sampler_config = capabilities.default_sampler_params
-  temperature = sampler_config.temperature
-  top_k = sampler_config.top_k
-  top_p = sampler_config.top_p
+  # 1. Load model capabilities
+  with litert_lm.Capabilities("/path/to/model.litertlm") as capabilities:
+    # 2. Query basic capability flags
+    thinking = capabilities.supports_thinking()
+    function_calling = capabilities.supports_function_calling()
+    speculative_decoding = capabilities.has_speculative_decoding_support()
+
+    # 3. Inspect context limits and runtime requirements
+    max_context = capabilities.max_context_tokens
+    is_dynamic = capabilities.is_dynamic_context
+    min_version = capabilities.min_runtime_version
+
+    # 4. Check supported input modalities and vision token budget
+    if capabilities.input_modalities.vision:
+      vision_budget = capabilities.max_vision_token_budget
+      signatures = capabilities.vision_signature_selection
+
+    # 5. Inspect hardware backends (ordered by priority), NPU brand, etc.
+    text_backends = capabilities.supported_backends_for_modality(
+        litert_lm.LiteRtLmModality.TEXT
+    )  # e.g. ["cpu", "gpu", "npu"]
+    default_backend = text_backends[0] if text_backends else None
+
+
+    if "npu" in text_backends:
+      brand = capabilities.npu_brand_for_modality(
+          litert_lm.LiteRtLmModality.TEXT
+      )  # e.g. LiteRtLmNpuBrand.QUALCOMM
+      soc_name = capabilities.soc_name_for_modality(
+          litert_lm.LiteRtLmModality.TEXT
+      )  # e.g. "SM8750"
+
+    # 6. Retrieve default sampler parameters
+    sampler_config = capabilities.default_sampler_params
+    temperature = sampler_config.temperature
+    top_k = sampler_config.top_k
+    top_p = sampler_config.top_p
 """
 
 from __future__ import annotations
@@ -171,6 +198,26 @@ class Capabilities:
     return list(lengths)
 
   @property
+  def max_context_tokens(self) -> int:
+    """Returns maximum supported context tokens for the loaded LiteRT-LM file.
+
+    - If the model is static (is_dynamic_context is False), this is the fixed
+      context size.
+    - If the model is dynamic (is_dynamic_context is True), this is the largest
+      context size that can be set.
+    """
+    self._check_closed()
+    return int(self._lib.litert_lm_loaded_file_max_context_tokens(self._handle))
+
+  @property
+  def is_dynamic_context(self) -> bool:
+    """Returns whether the model has dynamic context support."""
+    self._check_closed()
+    return bool(
+        self._lib.litert_lm_loaded_file_is_dynamic_context(self._handle)
+    )
+
+  @property
   def min_runtime_version(self) -> str | None:
     """Returns minimum runtime version required, or None if not defined."""
     self._check_closed()
@@ -183,27 +230,34 @@ class Capabilities:
 
   def supported_backends_for_modality(
       self, modality: _ffi.LiteRtLmModality
-  ) -> set[str]:
-    """Returns the set of supported backends for a given modality.
+  ) -> list[str]:
+    """Returns the list of supported backends for a given modality.
+
+    The returned list is ordered by priority (first is default).
 
     Args:
       modality: The input modality to query backends for.
 
     Returns:
-      A set of backend name strings (e.g. {"cpu", "gpu"}).
+      A list of backend name strings (e.g. ["cpu", "gpu"]), where the first
+      entry is the default/highest-priority backend.
     """
     self._check_closed()
-    mask = self._lib.litert_lm_loaded_file_modality_supported_backends(
-        self._handle, int(modality)
+    count = self._lib.litert_lm_loaded_file_modality_supported_backends(
+        self._handle, int(modality), None, 0
     )
-    backends = set()
-    if mask & _ffi.LiteRtLmBackendMask.CPU:
-      backends.add("cpu")
-    if mask & _ffi.LiteRtLmBackendMask.GPU:
-      backends.add("gpu")
-    if mask & _ffi.LiteRtLmBackendMask.NPU:
-      backends.add("npu")
-    return backends
+    if count <= 0:
+      return []
+    backends_arr = (ctypes.c_int * count)()
+    self._lib.litert_lm_loaded_file_modality_supported_backends(
+        self._handle, int(modality), backends_arr, count
+    )
+    backend_map = {
+        _ffi.LiteRtLmBackendType.CPU: "cpu",
+        _ffi.LiteRtLmBackendType.GPU: "gpu",
+        _ffi.LiteRtLmBackendType.NPU: "npu",
+    }
+    return [backend_map[b] for b in backends_arr if b in backend_map]
 
   def npu_brand_for_modality(
       self, modality: _ffi.LiteRtLmModality
@@ -224,3 +278,22 @@ class Capabilities:
       return _ffi.LiteRtLmNpuBrand(brand_val)
     except ValueError:
       return _ffi.LiteRtLmNpuBrand.UNKNOWN
+
+  def soc_name_for_modality(
+      self, modality: _ffi.LiteRtLmModality
+  ) -> str | None:
+    """Returns the NPU SoC name string for a given modality, or None if not set.
+
+    Args:
+      modality: The input modality to query SoC name for.
+
+    Returns:
+      The SoC name string (e.g. 'SM8750') or None.
+    """
+    self._check_closed()
+    soc_bytes = self._lib.litert_lm_loaded_file_modality_soc_name(
+        self._handle, int(modality)
+    )
+    if soc_bytes is None:
+      return None
+    return soc_bytes.decode("utf-8")

@@ -14,8 +14,10 @@
 
 #include "schema/capabilities/capabilities.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <ios>
 #include <optional>
 #include <sstream>
@@ -98,13 +100,16 @@ std::string CreateMinimalTFLiteModel(const std::vector<int>& token_lengths) {
 struct TFLiteSectionConfig {
   std::string model_type;
   std::string backend_constraint = "";
+  std::string soc_name = "";
   std::string payload = "";
 };
 
 std::string CreateTestLiteRTLMWithConfigs(
     const std::string& model_class, const std::string& tf_hub_model_id,
     const std::vector<TFLiteSectionConfig>& section_configs,
-    const proto::LlmMetadata* llm_metadata_proto = nullptr) {
+    const proto::LlmMetadata* llm_metadata_proto = nullptr,
+    const std::vector<std::pair<std::string, std::string>>&
+        extra_system_entries = {}) {
   flatbuffers::FlatBufferBuilder builder;
 
   // 1. System Metadata
@@ -116,6 +121,10 @@ std::string CreateTestLiteRTLMWithConfigs(
   if (!tf_hub_model_id.empty()) {
     system_entries.push_back(
         CreateKeyValuePair(builder, "tf_hub_model_id", tf_hub_model_id));
+  }
+  for (const auto& entry : extra_system_entries) {
+    system_entries.push_back(
+        CreateKeyValuePair(builder, entry.first, entry.second));
   }
   flatbuffers::Offset<SystemMetadata> system_metadata = 0;
   if (!system_entries.empty()) {
@@ -147,6 +156,9 @@ std::string CreateTestLiteRTLMWithConfigs(
     if (!config.backend_constraint.empty()) {
       items.push_back(CreateKeyValuePair(builder, "backend_constraint",
                                          config.backend_constraint));
+    }
+    if (!config.soc_name.empty()) {
+      items.push_back(CreateKeyValuePair(builder, "soc_name", config.soc_name));
     }
 
     std::string payload = config.payload;
@@ -586,6 +598,7 @@ TEST(CapabilitiesTest, InspectModel_NoBackendConstraints_DefaultsToCpuAndGpu) {
   EXPECT_TRUE(llm.text_supported_backends.cpu);
   EXPECT_TRUE(llm.text_supported_backends.gpu);
   EXPECT_FALSE(llm.text_supported_backends.npu);
+  EXPECT_EQ(llm.text_supported_backends.default_backend, BackendType::kCpu);
 }
 
 TEST(CapabilitiesTest, InspectModel_CpuBackendConstraint_CpuOnly) {
@@ -603,6 +616,7 @@ TEST(CapabilitiesTest, InspectModel_CpuBackendConstraint_CpuOnly) {
   EXPECT_TRUE(llm.text_supported_backends.cpu);
   EXPECT_FALSE(llm.text_supported_backends.gpu);
   EXPECT_FALSE(llm.text_supported_backends.npu);
+  EXPECT_EQ(llm.text_supported_backends.default_backend, BackendType::kCpu);
 }
 
 TEST(CapabilitiesTest, InspectModel_GpuBackendConstraint_GpuOnly) {
@@ -620,6 +634,7 @@ TEST(CapabilitiesTest, InspectModel_GpuBackendConstraint_GpuOnly) {
   EXPECT_FALSE(llm.text_supported_backends.cpu);
   EXPECT_TRUE(llm.text_supported_backends.gpu);
   EXPECT_FALSE(llm.text_supported_backends.npu);
+  EXPECT_EQ(llm.text_supported_backends.default_backend, BackendType::kGpu);
 }
 
 TEST(CapabilitiesTest, InspectModel_GpuAndNpuBackendConstraints_GpuAndNpu) {
@@ -637,6 +652,7 @@ TEST(CapabilitiesTest, InspectModel_GpuAndNpuBackendConstraints_GpuAndNpu) {
   EXPECT_FALSE(llm.text_supported_backends.cpu);
   EXPECT_TRUE(llm.text_supported_backends.gpu);
   EXPECT_TRUE(llm.text_supported_backends.npu);
+  EXPECT_EQ(llm.text_supported_backends.default_backend, BackendType::kGpu);
 }
 
 TEST(CapabilitiesTest, InspectModel_AuxModelPresent_ForcesNpu) {
@@ -655,6 +671,7 @@ TEST(CapabilitiesTest, InspectModel_AuxModelPresent_ForcesNpu) {
   EXPECT_TRUE(llm.text_supported_backends.cpu);
   EXPECT_FALSE(llm.text_supported_backends.gpu);
   EXPECT_TRUE(llm.text_supported_backends.npu);
+  EXPECT_EQ(llm.text_supported_backends.default_backend, BackendType::kCpu);
 }
 
 TEST(CapabilitiesTest, InspectModel_MinRuntimeVersionExposed) {
@@ -710,6 +727,37 @@ TEST(CapabilitiesTest, InspectModel_ArtisanModelType_NpuOnly) {
   EXPECT_FALSE(llm.text_supported_backends.gpu);
   EXPECT_TRUE(llm.text_supported_backends.npu);
   EXPECT_EQ(llm.text_supported_backends.npu_brand, NpuBrand::kGoogleTensor);
+  EXPECT_EQ(llm.text_supported_backends.default_backend, BackendType::kNpu);
+}
+
+TEST(CapabilitiesTest, InspectModel_BackendConstraintPreference) {
+  // "gpu,cpu" should default to GPU
+  {
+    std::string file_data = CreateTestLiteRTLMWithConfigs(
+        /*model_class=*/"", /*tf_hub_model_id=*/"",
+        {{"tf_lite_prefill_decode", "gpu,cpu", "main_payload"}});
+    std::istringstream stream(file_data, std::ios::binary);
+    auto result_or = InspectModel(stream);
+    ASSERT_OK(result_or);
+    const auto& llm = *result_or->llm_capability;
+    EXPECT_TRUE(llm.text_supported_backends.cpu);
+    EXPECT_TRUE(llm.text_supported_backends.gpu);
+    EXPECT_EQ(llm.text_supported_backends.default_backend, BackendType::kGpu);
+  }
+
+  // "cpu,gpu" should default to CPU
+  {
+    std::string file_data = CreateTestLiteRTLMWithConfigs(
+        /*model_class=*/"", /*tf_hub_model_id=*/"",
+        {{"tf_lite_prefill_decode", "cpu,gpu", "main_payload"}});
+    std::istringstream stream(file_data, std::ios::binary);
+    auto result_or = InspectModel(stream);
+    ASSERT_OK(result_or);
+    const auto& llm = *result_or->llm_capability;
+    EXPECT_TRUE(llm.text_supported_backends.cpu);
+    EXPECT_TRUE(llm.text_supported_backends.gpu);
+    EXPECT_EQ(llm.text_supported_backends.default_backend, BackendType::kCpu);
+  }
 }
 
 std::string CreateMockNpuTfliteModel(const std::string& dispatch_name) {
@@ -751,6 +799,117 @@ std::string CreateMockNpuTfliteModel(const std::string& dispatch_name) {
   const uint8_t* buf = fbb.GetBufferPointer();
   size_t size = fbb.GetSize();
   return std::string(reinterpret_cast<const char*>(buf), size);
+}
+
+std::string CreateMockNpuTfliteModelWithStamp(
+    const std::string& dispatch_name, const std::string& soc_manufacturer,
+    const std::string& soc_name) {
+  flatbuffers::FlatBufferBuilder fbb;
+
+  flexbuffers::Builder flex_builder;
+  flex_builder.Map([&]() {
+    flex_builder.String("name", dispatch_name);
+    flex_builder.Int("bytecode_offset", 0);
+    flex_builder.Int("bytecode_size", 0);
+  });
+  flex_builder.Finish();
+  auto opt_vec = fbb.CreateVector(flex_builder.GetBuffer());
+
+  auto custom_code = fbb.CreateString("DISPATCH_OP");
+  auto op_code = tflite::CreateOperatorCode(fbb, tflite::BuiltinOperator_CUSTOM,
+                                            custom_code);
+  std::vector<flatbuffers::Offset<tflite::OperatorCode>> op_codes = {op_code};
+  auto op_codes_vec = fbb.CreateVector(op_codes);
+
+  std::vector<int32_t> inputs = {};
+  auto inputs_vec = fbb.CreateVector(inputs);
+  std::vector<int32_t> outputs = {};
+  auto outputs_vec = fbb.CreateVector(outputs);
+  auto op = tflite::CreateOperator(fbb, 0, inputs_vec, outputs_vec,
+                                   tflite::BuiltinOptions_NONE, 0, opt_vec,
+                                   tflite::CustomOptionsFormat_FLEXBUFFERS);
+  std::vector<flatbuffers::Offset<tflite::Operator>> ops = {op};
+  auto ops_vec = fbb.CreateVector(ops);
+
+  std::vector<flatbuffers::Offset<tflite::Tensor>> tensors = {};
+  auto tensors_vec = fbb.CreateVector(tensors);
+  auto subgraph = tflite::CreateSubGraph(fbb, tensors_vec, inputs_vec,
+                                         outputs_vec, ops_vec);
+  std::vector<flatbuffers::Offset<tflite::SubGraph>> subgraphs = {subgraph};
+  auto subgraphs_vec = fbb.CreateVector(subgraphs);
+
+  // LiteRtStamp: 125 bytes manufacturer, 125 bytes model
+  std::vector<uint8_t> stamp_data(250, 0);
+  std::memcpy(stamp_data.data(), soc_manufacturer.data(),
+              std::min(soc_manufacturer.size(), size_t{124}));
+  std::memcpy(stamp_data.data() + 125, soc_name.data(),
+              std::min(soc_name.size(), size_t{124}));
+  auto stamp_vec = fbb.CreateVector(stamp_data);
+
+  std::vector<uint8_t> empty_data = {};
+  auto empty_vec = fbb.CreateVector(empty_data);
+
+  std::vector<flatbuffers::Offset<tflite::Buffer>> buffers;
+  buffers.push_back(tflite::CreateBuffer(fbb, empty_vec));
+  buffers.push_back(tflite::CreateBuffer(fbb, stamp_vec));
+  auto buffers_vec = fbb.CreateVector(buffers);
+
+  auto stamp_name = fbb.CreateString("LiteRtStamp");
+  std::vector<flatbuffers::Offset<tflite::Metadata>> metadata;
+  metadata.push_back(tflite::CreateMetadata(fbb, stamp_name, /*buffer=*/1));
+  auto metadata_vec = fbb.CreateVector(metadata);
+
+  auto model = tflite::CreateModel(fbb, 3, op_codes_vec, subgraphs_vec,
+                                   /*description=*/0, buffers_vec,
+                                   /*metadata_buffer=*/0, metadata_vec);
+  tflite::FinishModelBuffer(fbb, model);
+
+  return std::string(reinterpret_cast<const char*>(fbb.GetBufferPointer()),
+                     fbb.GetSize());
+}
+
+std::string CreateMockNpuTfliteModelWithSocFlexbuffer(
+    const std::string& dispatch_name, const std::string& soc_name) {
+  flatbuffers::FlatBufferBuilder fbb;
+
+  flexbuffers::Builder flex_builder;
+  flex_builder.Map([&]() {
+    flex_builder.String("name", dispatch_name);
+    flex_builder.String("soc_name", soc_name);
+    flex_builder.Int("bytecode_offset", 0);
+    flex_builder.Int("bytecode_size", 0);
+  });
+  flex_builder.Finish();
+  auto opt_vec = fbb.CreateVector(flex_builder.GetBuffer());
+
+  auto custom_code = fbb.CreateString("DISPATCH_OP");
+  auto op_code = tflite::CreateOperatorCode(fbb, tflite::BuiltinOperator_CUSTOM,
+                                            custom_code);
+  std::vector<flatbuffers::Offset<tflite::OperatorCode>> op_codes = {op_code};
+  auto op_codes_vec = fbb.CreateVector(op_codes);
+
+  std::vector<int32_t> inputs = {};
+  auto inputs_vec = fbb.CreateVector(inputs);
+  std::vector<int32_t> outputs = {};
+  auto outputs_vec = fbb.CreateVector(outputs);
+  auto op = tflite::CreateOperator(fbb, 0, inputs_vec, outputs_vec,
+                                   tflite::BuiltinOptions_NONE, 0, opt_vec,
+                                   tflite::CustomOptionsFormat_FLEXBUFFERS);
+  std::vector<flatbuffers::Offset<tflite::Operator>> ops = {op};
+  auto ops_vec = fbb.CreateVector(ops);
+
+  std::vector<flatbuffers::Offset<tflite::Tensor>> tensors = {};
+  auto tensors_vec = fbb.CreateVector(tensors);
+  auto subgraph = tflite::CreateSubGraph(fbb, tensors_vec, inputs_vec,
+                                         outputs_vec, ops_vec);
+  std::vector<flatbuffers::Offset<tflite::SubGraph>> subgraphs = {subgraph};
+  auto subgraphs_vec = fbb.CreateVector(subgraphs);
+
+  auto model = tflite::CreateModel(fbb, 3, op_codes_vec, subgraphs_vec);
+  tflite::FinishModelBuffer(fbb, model);
+
+  return std::string(reinterpret_cast<const char*>(fbb.GetBufferPointer()),
+                     fbb.GetSize());
 }
 
 TEST(CapabilitiesTest, DetectsNpuBrandFromAuxModel) {
@@ -807,6 +966,140 @@ TEST(CapabilitiesTest, DetectsNpuBrandFromAuxModel) {
     EXPECT_EQ(cap_or->llm_capability->text_supported_backends.npu_brand,
               NpuBrand::kMediaTek);
   }
+
+  // Test Intel OpenVINO
+  {
+    std::string aux_payload = CreateMockNpuTfliteModel("openvino_partition_0");
+    std::string litertlm_data = CreateTestLiteRTLMWithConfigs(
+        "gemma", "gemma3",
+        {{.model_type = "tf_lite_prefill_decode",
+          .backend_constraint = "cpu,gpu"},
+         {.model_type = "tf_lite_aux", .payload = aux_payload}});
+    std::stringstream stream(litertlm_data);
+    auto cap_or = InspectModel(stream);
+    ASSERT_OK(cap_or.status());
+    EXPECT_TRUE(cap_or->llm_capability->text_supported_backends.npu);
+    EXPECT_EQ(cap_or->llm_capability->text_supported_backends.npu_brand,
+              NpuBrand::kIntel);
+  }
+
+  // Test Samsung Exynos
+  {
+    std::string aux_payload = CreateMockNpuTfliteModel("exynos_partition_0");
+    std::string litertlm_data = CreateTestLiteRTLMWithConfigs(
+        "gemma", "gemma3",
+        {{.model_type = "tf_lite_prefill_decode",
+          .backend_constraint = "cpu,gpu"},
+         {.model_type = "tf_lite_aux", .payload = aux_payload}});
+    std::stringstream stream(litertlm_data);
+    auto cap_or = InspectModel(stream);
+    ASSERT_OK(cap_or.status());
+    EXPECT_TRUE(cap_or->llm_capability->text_supported_backends.npu);
+    EXPECT_EQ(cap_or->llm_capability->text_supported_backends.npu_brand,
+              NpuBrand::kSamsung);
+  }
+}
+
+TEST(CapabilitiesTest, InspectModel_ExtractsSocNameFromSectionItems) {
+  std::string litertlm_data =
+      CreateTestLiteRTLMWithConfigs("gemma", "gemma4",
+                                    {{.model_type = "tf_lite_prefill_decode",
+                                      .backend_constraint = "npu",
+                                      .soc_name = "SM8850"}});
+  std::stringstream stream(litertlm_data);
+  auto cap_or = InspectModel(stream);
+  ASSERT_OK(cap_or.status());
+  const auto& llm = *cap_or->llm_capability;
+  EXPECT_TRUE(llm.text_supported_backends.npu);
+  EXPECT_EQ(llm.text_supported_backends.soc_name, "SM8850");
+  EXPECT_EQ(llm.text_supported_backends.default_backend, BackendType::kNpu);
+}
+
+TEST(CapabilitiesTest, InspectModel_ExtractsSocNameFromSystemMetadata) {
+  std::string litertlm_data = CreateTestLiteRTLMWithConfigs(
+      "gemma", "gemma3",
+      {{.model_type = "tf_lite_prefill_decode", .backend_constraint = "npu"}},
+      /*llm_metadata_proto=*/nullptr,
+      /*extra_system_entries=*/{{"target_soc", "SM8750"}});
+  std::stringstream stream(litertlm_data);
+  auto cap_or = InspectModel(stream);
+  ASSERT_OK(cap_or.status());
+  const auto& llm = *cap_or->llm_capability;
+  EXPECT_TRUE(llm.text_supported_backends.npu);
+  EXPECT_EQ(llm.text_supported_backends.soc_name, "SM8750");
+}
+
+TEST(CapabilitiesTest, InspectModel_ExtractsNpuBrandAndSocFromLiteRtStamp) {
+  // Test Qualcomm stamp
+  {
+    std::string aux_payload = CreateMockNpuTfliteModelWithStamp(
+        "dispatch_op_0", "Qualcomm", "SM8850");
+    std::string litertlm_data = CreateTestLiteRTLMWithConfigs(
+        "gemma", "gemma4",
+        {{.model_type = "tf_lite_prefill_decode", .backend_constraint = "npu"},
+         {.model_type = "tf_lite_aux", .payload = aux_payload}});
+    std::stringstream stream(litertlm_data);
+    auto cap_or = InspectModel(stream);
+    ASSERT_OK(cap_or.status());
+    const auto& llm = *cap_or->llm_capability;
+    EXPECT_TRUE(llm.text_supported_backends.npu);
+    EXPECT_EQ(llm.text_supported_backends.npu_brand, NpuBrand::kQualcomm);
+    EXPECT_EQ(llm.text_supported_backends.soc_name, "SM8850");
+    EXPECT_EQ(llm.text_supported_backends.default_backend, BackendType::kNpu);
+  }
+
+  // Test Intel stamp
+  {
+    std::string aux_payload = CreateMockNpuTfliteModelWithStamp(
+        "dispatch_op_0", "IntelOpenVINO", "PantherLake");
+    std::string litertlm_data = CreateTestLiteRTLMWithConfigs(
+        "gemma", "gemma4",
+        {{.model_type = "tf_lite_prefill_decode", .backend_constraint = "npu"},
+         {.model_type = "tf_lite_aux", .payload = aux_payload}});
+    std::stringstream stream(litertlm_data);
+    auto cap_or = InspectModel(stream);
+    ASSERT_OK(cap_or.status());
+    const auto& llm = *cap_or->llm_capability;
+    EXPECT_TRUE(llm.text_supported_backends.npu);
+    EXPECT_EQ(llm.text_supported_backends.npu_brand, NpuBrand::kIntel);
+    EXPECT_EQ(llm.text_supported_backends.soc_name, "PantherLake");
+    EXPECT_EQ(llm.text_supported_backends.default_backend, BackendType::kNpu);
+  }
+
+  // Test Samsung stamp
+  {
+    std::string aux_payload = CreateMockNpuTfliteModelWithStamp(
+        "dispatch_op_0", "Samsung", "Exynos 2500");
+    std::string litertlm_data = CreateTestLiteRTLMWithConfigs(
+        "gemma", "gemma4",
+        {{.model_type = "tf_lite_prefill_decode", .backend_constraint = "npu"},
+         {.model_type = "tf_lite_aux", .payload = aux_payload}});
+    std::stringstream stream(litertlm_data);
+    auto cap_or = InspectModel(stream);
+    ASSERT_OK(cap_or.status());
+    const auto& llm = *cap_or->llm_capability;
+    EXPECT_TRUE(llm.text_supported_backends.npu);
+    EXPECT_EQ(llm.text_supported_backends.npu_brand, NpuBrand::kSamsung);
+    EXPECT_EQ(llm.text_supported_backends.soc_name, "Exynos 2500");
+    EXPECT_EQ(llm.text_supported_backends.default_backend, BackendType::kNpu);
+  }
+}
+
+TEST(CapabilitiesTest, InspectModel_ExtractsSocNameFromDispatchOpFlexbuffers) {
+  std::string aux_payload = CreateMockNpuTfliteModelWithSocFlexbuffer(
+      "Partition_0", "Dimensity 9400");
+  std::string litertlm_data = CreateTestLiteRTLMWithConfigs(
+      "gemma", "gemma3",
+      {{.model_type = "tf_lite_prefill_decode",
+        .backend_constraint = "cpu,gpu"},
+       {.model_type = "tf_lite_aux", .payload = aux_payload}});
+  std::stringstream stream(litertlm_data);
+  auto cap_or = InspectModel(stream);
+  ASSERT_OK(cap_or.status());
+  const auto& llm = *cap_or->llm_capability;
+  EXPECT_TRUE(llm.text_supported_backends.npu);
+  EXPECT_EQ(llm.text_supported_backends.npu_brand, NpuBrand::kMediaTek);
+  EXPECT_EQ(llm.text_supported_backends.soc_name, "Dimensity 9400");
 }
 
 TEST(CapabilitiesTest, InspectModel_ModalitySpecificSupportedBackends) {
@@ -829,23 +1122,72 @@ TEST(CapabilitiesTest, InspectModel_ModalitySpecificSupportedBackends) {
   EXPECT_FALSE(llm.text_supported_backends.gpu);
   EXPECT_TRUE(llm.text_supported_backends.npu);
   EXPECT_EQ(llm.text_supported_backends.npu_brand, NpuBrand::kQualcomm);
+  EXPECT_EQ(llm.text_supported_backends.default_backend, BackendType::kCpu);
 
   // Vision
   EXPECT_FALSE(llm.vision_supported_backends.cpu);
   EXPECT_TRUE(llm.vision_supported_backends.gpu);
   EXPECT_FALSE(llm.vision_supported_backends.npu);
   EXPECT_EQ(llm.vision_supported_backends.npu_brand, NpuBrand::kUnknown);
+  EXPECT_EQ(llm.vision_supported_backends.default_backend, BackendType::kGpu);
 
   // Audio
   EXPECT_FALSE(llm.audio_supported_backends.cpu);
   EXPECT_TRUE(llm.audio_supported_backends.gpu);
   EXPECT_FALSE(llm.audio_supported_backends.npu);
   EXPECT_EQ(llm.audio_supported_backends.npu_brand, NpuBrand::kUnknown);
+  EXPECT_EQ(llm.audio_supported_backends.default_backend, BackendType::kGpu);
 
   // Video (not present)
   EXPECT_FALSE(llm.video_supported_backends.cpu);
   EXPECT_FALSE(llm.video_supported_backends.gpu);
   EXPECT_FALSE(llm.video_supported_backends.npu);
+  EXPECT_EQ(llm.video_supported_backends.default_backend,
+            BackendType::kUnspecified);
+}
+
+TEST(CapabilitiesTest, StreamOperators_BackendTypeAndSupportedBackends) {
+  // Test BackendType formatting
+  {
+    std::ostringstream ss;
+    ss << BackendType::kCpu << " " << BackendType::kGpu << " "
+       << BackendType::kNpu << " " << BackendType::kUnspecified;
+    EXPECT_EQ(ss.str(), "CPU GPU NPU UNSPECIFIED");
+  }
+
+  // Test SupportedBackends formatting with CPU & GPU
+  {
+    SupportedBackends backends;
+    backends.cpu = true;
+    backends.gpu = true;
+    backends.default_backend = BackendType::kCpu;
+    std::ostringstream ss;
+    ss << backends;
+    EXPECT_EQ(ss.str(), "CPU GPU (Default: CPU)");
+  }
+
+  // Test SupportedBackends formatting with GPU preference
+  {
+    SupportedBackends backends;
+    backends.cpu = true;
+    backends.gpu = true;
+    backends.default_backend = BackendType::kGpu;
+    std::ostringstream ss;
+    ss << backends;
+    EXPECT_EQ(ss.str(), "CPU GPU (Default: GPU)");
+  }
+
+  // Test SupportedBackends formatting with NPU and SoC name
+  {
+    SupportedBackends backends;
+    backends.npu = true;
+    backends.npu_brand = NpuBrand::kQualcomm;
+    backends.soc_name = "SM8850";
+    backends.default_backend = BackendType::kNpu;
+    std::ostringstream ss;
+    ss << backends;
+    EXPECT_EQ(ss.str(), "NPU (Qualcomm QNN SM8850) (Default: NPU)");
+  }
 }
 
 }  // namespace

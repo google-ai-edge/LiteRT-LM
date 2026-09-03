@@ -1644,11 +1644,29 @@ LITERTLM_JNIEXPORT jstring JNICALL JNI_METHOD(nativeMinRuntimeVersion)(
   return env->NewStringUTF(version);
 }
 
-LITERTLM_JNIEXPORT jint JNICALL JNI_METHOD(nativeModalitySupportedBackends)(
-    JNIEnv* env, jclass thiz, jlong capabilities_pointer, jint modality) {
-  return litert_lm_loaded_file_modality_supported_backends(
-      reinterpret_cast<LiteRtLmLoadedFile*>(capabilities_pointer),
-      static_cast<LiteRtLmModality>(modality));
+LITERTLM_JNIEXPORT jintArray JNICALL
+JNI_METHOD(nativeModalitySupportedBackends)(JNIEnv* env, jclass thiz,
+                                            jlong capabilities_pointer,
+                                            jint modality) {
+  auto* loaded_file =
+      reinterpret_cast<LiteRtLmLoadedFile*>(capabilities_pointer);
+  int32_t count = litert_lm_loaded_file_modality_supported_backends(
+      loaded_file, static_cast<LiteRtLmModality>(modality), nullptr, 0);
+  if (count <= 0) {
+    return nullptr;
+  }
+  std::vector<LiteRtLmBackendType> backends(count);
+  litert_lm_loaded_file_modality_supported_backends(
+      loaded_file, static_cast<LiteRtLmModality>(modality), backends.data(),
+      count);
+  jintArray result = env->NewIntArray(count);
+  if (result == nullptr) return nullptr;
+  std::vector<jint> j_backends(count);
+  for (int i = 0; i < count; ++i) {
+    j_backends[i] = static_cast<jint>(backends[i]);
+  }
+  env->SetIntArrayRegion(result, 0, count, j_backends.data());
+  return result;
 }
 
 LITERTLM_JNIEXPORT jint JNICALL JNI_METHOD(nativeModalityNpuBrand)(
@@ -1656,6 +1674,18 @@ LITERTLM_JNIEXPORT jint JNICALL JNI_METHOD(nativeModalityNpuBrand)(
   return static_cast<jint>(litert_lm_loaded_file_modality_npu_brand(
       reinterpret_cast<LiteRtLmLoadedFile*>(capabilities_pointer),
       static_cast<LiteRtLmModality>(modality)));
+}
+
+// JNI bridge method to get the NPU SoC name string for a given modality.
+LITERTLM_JNIEXPORT jstring JNICALL JNI_METHOD(nativeModalitySocName)(
+    JNIEnv* env, jclass thiz, jlong capabilities_pointer, jint modality) {
+  const char* soc_name = litert_lm_loaded_file_modality_soc_name(
+      reinterpret_cast<LiteRtLmLoadedFile*>(capabilities_pointer),
+      static_cast<LiteRtLmModality>(modality));
+  if (soc_name == nullptr) {
+    return nullptr;
+  }
+  return env->NewStringUTF(soc_name);
 }
 
 LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateEmbeddingEngine)(

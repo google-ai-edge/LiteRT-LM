@@ -64,14 +64,46 @@ enum class NpuBrand {
   kQualcomm = 1,
   kGoogleTensor = 2,
   kMediaTek = 3,
+  kIntel = 4,
+  kSamsung = 5,
 };
 
-// Hardware backends supported by the model.
+// Hardware backend types supported by LiteRT-LM.
+enum class BackendType {
+  kUnspecified = 0,
+  kCpu = 1,
+  kGpu = 2,
+  kNpu = 3,
+};
+
+// Hardware backends and chipset details supported for a specific modality.
 struct SupportedBackends {
+  // Ordered list of supported hardware backends (the first entry is the
+  // default / highest-priority backend, followed by fallback backends).
+  std::vector<BackendType> preferred_backends;
+
+  // Whether the CPU backend is supported.
   bool cpu = false;
+
+  // Whether the GPU backend is supported (e.g. OpenCL/Vulkan/Metal).
   bool gpu = false;
+
+  // Whether an NPU backend is supported.
   bool npu = false;
+
+  // The detected NPU brand (e.g., Qualcomm, Google Tensor, MediaTek, Intel,
+  // Samsung).
   NpuBrand npu_brand = NpuBrand::kUnknown;
+
+  // The specific NPU SoC name / chipset identifier (e.g., "SM8750", "SM8850",
+  // "Tensor_G5", "MT6989"), extracted from model metadata or flexbuffers.
+  // Empty if the model is not targeted to a specific SoC or not compiled for
+  // NPU.
+  std::string soc_name;
+
+  // The preferred default backend derived from model constraints or compiler
+  // flags (e.g., the first entry in comma-separated backend constraints).
+  BackendType default_backend = BackendType::kUnspecified;
 };
 
 // Extracted capabilities and configurations for Large Language Models (LLM).
@@ -147,6 +179,7 @@ absl::StatusOr<ModelCapabilities> InspectModel(
 std::ostream& operator<<(std::ostream& os,
                          const SupportedModalities& modalities);
 std::ostream& operator<<(std::ostream& os, const NpuBrand& brand);
+std::ostream& operator<<(std::ostream& os, const BackendType& backend);
 std::ostream& operator<<(std::ostream& os, const SupportedBackends& backends);
 std::ostream& operator<<(std::ostream& os,
                          const LlmInferenceCapability& llm_cap);

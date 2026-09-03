@@ -153,22 +153,26 @@ LITERT_LM_C_API_EXPORT
 int32_t litert_lm_loaded_file_vision_signature_selection(
     LiteRtLmLoadedFile* loaded_file, int32_t* lengths, int32_t max_size);
 
-// Hardware backends supported by LiteRT-LM models.
+// Hardware backend type.
 //
 // Added in version 0.3.0.
-typedef enum LiteRtLmBackendMask {
-  kLiteRtLmBackendCpu = 1 << 0,
-  kLiteRtLmBackendGpu = 1 << 1,
-  kLiteRtLmBackendNpu = 1 << 2,
-} LiteRtLmBackendMask;
+typedef enum LiteRtLmBackendType {
+  kLiteRtLmBackendTypeCpu = 1,
+  kLiteRtLmBackendTypeGpu = 2,
+  kLiteRtLmBackendTypeNpu = 3,
+} LiteRtLmBackendType;
 
-// Returns a bitmask of supported backends (combination of LiteRtLmBackendMask)
-// for a given modality.
+// Returns the number of supported backends for a given modality, ordered by
+// priority (first entry is the default/highest-priority backend).
+// Writes up to `max_size` backends to the provided `backends` array.
+// If `backends` is NULL, only returns the count of supported backends.
+// Returns 0 if the modality is not supported.
 //
 // Added in version 0.3.0.
 LITERT_LM_C_API_EXPORT
 int32_t litert_lm_loaded_file_modality_supported_backends(
-    LiteRtLmLoadedFile* loaded_file, LiteRtLmModality modality);
+    LiteRtLmLoadedFile* loaded_file, LiteRtLmModality modality,
+    LiteRtLmBackendType* backends, int32_t max_size);
 
 // NPU brand options.
 //
@@ -178,6 +182,8 @@ typedef enum LiteRtLmNpuBrand {
   kLiteRtLmNpuBrandQualcomm = 1,
   kLiteRtLmNpuBrandGoogleTensor = 2,
   kLiteRtLmNpuBrandMediaTek = 3,
+  kLiteRtLmNpuBrandIntel = 4,
+  kLiteRtLmNpuBrandSamsung = 5,
 } LiteRtLmNpuBrand;
 
 // Returns the detected NPU brand of the model for a given modality, or
@@ -186,6 +192,15 @@ typedef enum LiteRtLmNpuBrand {
 // Added in version 0.3.0.
 LITERT_LM_C_API_EXPORT
 LiteRtLmNpuBrand litert_lm_loaded_file_modality_npu_brand(
+    LiteRtLmLoadedFile* loaded_file, LiteRtLmModality modality);
+
+// Returns the target SoC name for a given modality (e.g. "SM8750",
+// "Tensor_G5"), or NULL if not specified or not NPU-compiled.
+// The returned pointer is valid as long as the loaded_file is valid.
+//
+// Added in version 0.3.0.
+LITERT_LM_C_API_EXPORT
+const char* litert_lm_loaded_file_modality_soc_name(
     LiteRtLmLoadedFile* loaded_file, LiteRtLmModality modality);
 
 // Returns the minimum LiteRT-LM runtime version required to run this model.

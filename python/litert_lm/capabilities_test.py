@@ -43,24 +43,29 @@ class CapabilitiesTest(absltest.TestCase):
     self.assertEqual(capabilities.max_vision_token_budget, -1)
     self.assertIsNone(capabilities.vision_signature_selection)
     self.assertIsNone(capabilities.min_runtime_version)
+    self.assertEqual(capabilities.max_context_tokens, 128)
+    self.assertFalse(capabilities.is_dynamic_context)
 
     # Verify modality-specific backends for text (defaults to CPU and GPU)
     self.assertEqual(
         capabilities.supported_backends_for_modality(
             litert_lm.LiteRtLmModality.TEXT
         ),
-        {"cpu", "gpu"},
+        ["cpu", "gpu"],
     )
     # Verify modality-specific backends for vision (not present -> empty)
     self.assertEqual(
         capabilities.supported_backends_for_modality(
             litert_lm.LiteRtLmModality.VISION
         ),
-        set(),
+        [],
     )
     self.assertEqual(
         capabilities.npu_brand_for_modality(litert_lm.LiteRtLmModality.TEXT),
         litert_lm.LiteRtLmNpuBrand.UNKNOWN,
+    )
+    self.assertIsNone(
+        capabilities.soc_name_for_modality(litert_lm.LiteRtLmModality.TEXT)
     )
 
     # Modalities
@@ -242,21 +247,25 @@ class CapabilitiesTest(absltest.TestCase):
     mock_get_lib.return_value = mock_lib
     mock_lib.litert_lm_loaded_file_create.return_value = 12345
 
-    # CPU (1) and GPU (2) = 3
-    mock_lib.litert_lm_loaded_file_modality_supported_backends.return_value = 3
+    def fake_supported_backends(
+        unused_handle, unused_modality, out_arr, unused_max_size
+    ):
+      if out_arr is None:
+        return 2
+      out_arr[0] = int(litert_lm.LiteRtLmBackendType.GPU)
+      out_arr[1] = int(litert_lm.LiteRtLmBackendType.CPU)
+      return 2
+
+    mock_lib.litert_lm_loaded_file_modality_supported_backends.side_effect = (
+        fake_supported_backends
+    )
 
     capabilities = litert_lm.Capabilities("/fake/path")
     self.assertEqual(
         capabilities.supported_backends_for_modality(
             litert_lm.LiteRtLmModality.VISION
         ),
-        {"cpu", "gpu"},
-    )
-    assert_backends = (
-        mock_lib.litert_lm_loaded_file_modality_supported_backends
-    )
-    assert_backends.assert_called_once_with(
-        12345, int(litert_lm.LiteRtLmModality.VISION)
+        ["gpu", "cpu"],
     )
 
   @mock.patch(
@@ -279,6 +288,73 @@ class CapabilitiesTest(absltest.TestCase):
     assert_brand = mock_lib.litert_lm_loaded_file_modality_npu_brand
     assert_brand.assert_called_once_with(
         12345, int(litert_lm.LiteRtLmModality.AUDIO)
+    )
+
+  @mock.patch(
+      "litert_lm.capabilities._ffi._get_lib"
+  )
+  @mock.patch("os.path.exists", return_value=True)
+  def test_soc_name_for_modality(self, unused_mock_exists, mock_get_lib):
+    mock_lib = mock.MagicMock()
+    mock_get_lib.return_value = mock_lib
+    mock_lib.litert_lm_loaded_file_create.return_value = 12345
+    mock_lib.litert_lm_loaded_file_modality_soc_name.return_value = b"SM8750"
+
+    capabilities = litert_lm.Capabilities("/fake/path")
+    self.assertEqual(
+        capabilities.soc_name_for_modality(litert_lm.LiteRtLmModality.TEXT),
+        "SM8750",
+    )
+    assert_fn = mock_lib.litert_lm_loaded_file_modality_soc_name
+    assert_fn.assert_called_once_with(
+        12345, int(litert_lm.LiteRtLmModality.TEXT)
+    )
+
+  @mock.patch(
+      "litert_lm.capabilities._ffi._get_lib"
+  )
+  @mock.patch("os.path.exists", return_value=True)
+  def test_soc_name_for_modality_none(self, unused_mock_exists, mock_get_lib):
+    mock_lib = mock.MagicMock()
+    mock_get_lib.return_value = mock_lib
+    mock_lib.litert_lm_loaded_file_create.return_value = 12345
+    mock_lib.litert_lm_loaded_file_modality_soc_name.return_value = None
+
+    capabilities = litert_lm.Capabilities("/fake/path")
+    self.assertIsNone(
+        capabilities.soc_name_for_modality(litert_lm.LiteRtLmModality.TEXT)
+    )
+
+  @mock.patch(
+      "litert_lm.capabilities._ffi._get_lib"
+  )
+  @mock.patch("os.path.exists", return_value=True)
+  def test_max_context_tokens(self, unused_mock_exists, mock_get_lib):
+    mock_lib = mock.MagicMock()
+    mock_get_lib.return_value = mock_lib
+    mock_lib.litert_lm_loaded_file_create.return_value = 12345
+    mock_lib.litert_lm_loaded_file_max_context_tokens.return_value = 4096
+
+    capabilities = litert_lm.Capabilities("/fake/path")
+    self.assertEqual(capabilities.max_context_tokens, 4096)
+    mock_lib.litert_lm_loaded_file_max_context_tokens.assert_called_once_with(
+        12345
+    )
+
+  @mock.patch(
+      "litert_lm.capabilities._ffi._get_lib"
+  )
+  @mock.patch("os.path.exists", return_value=True)
+  def test_is_dynamic_context(self, unused_mock_exists, mock_get_lib):
+    mock_lib = mock.MagicMock()
+    mock_get_lib.return_value = mock_lib
+    mock_lib.litert_lm_loaded_file_create.return_value = 12345
+    mock_lib.litert_lm_loaded_file_is_dynamic_context.return_value = True
+
+    capabilities = litert_lm.Capabilities("/fake/path")
+    self.assertTrue(capabilities.is_dynamic_context)
+    mock_lib.litert_lm_loaded_file_is_dynamic_context.assert_called_once_with(
+        12345
     )
 
 

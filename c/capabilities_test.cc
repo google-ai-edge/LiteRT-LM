@@ -53,17 +53,25 @@ TEST(CapabilitiesCTest, InspectCapabilities) {
   EXPECT_EQ(litert_lm_loaded_file_min_runtime_version(file), nullptr);
   EXPECT_EQ(litert_lm_loaded_file_min_runtime_version(nullptr), nullptr);
 
-  // Verify modality-specific backends for text (default to CPU | GPU)
-  EXPECT_EQ(litert_lm_loaded_file_modality_supported_backends(
-                file, kLiteRtLmModalityText),
-            kLiteRtLmBackendCpu | kLiteRtLmBackendGpu);
+  // Verify modality-specific backends for text (default to CPU, GPU)
+  LiteRtLmBackendType text_backends[3];
+  int32_t text_backend_count =
+      litert_lm_loaded_file_modality_supported_backends(
+          file, kLiteRtLmModalityText, text_backends, 3);
+  EXPECT_EQ(text_backend_count, 2);
+  EXPECT_EQ(text_backends[0], kLiteRtLmBackendTypeCpu);
+  EXPECT_EQ(text_backends[1], kLiteRtLmBackendTypeGpu);
+
   // Verify modality-specific backends for vision (not present -> 0)
   EXPECT_EQ(litert_lm_loaded_file_modality_supported_backends(
-                file, kLiteRtLmModalityVision),
+                file, kLiteRtLmModalityVision, nullptr, 0),
             0);
   EXPECT_EQ(
       litert_lm_loaded_file_modality_npu_brand(file, kLiteRtLmModalityText),
       kLiteRtLmNpuBrandUnknown);
+  EXPECT_EQ(
+      litert_lm_loaded_file_modality_soc_name(file, kLiteRtLmModalityText),
+      nullptr);
 
   // Verify modalities
   EXPECT_TRUE(litert_lm_loaded_file_supports_input_modality(
@@ -142,11 +150,14 @@ TEST(CapabilitiesCTest, NullPointerSafety) {
       -1);
   EXPECT_EQ(litert_lm_loaded_file_min_runtime_version(nullptr), nullptr);
   EXPECT_EQ(litert_lm_loaded_file_modality_supported_backends(
-                nullptr, kLiteRtLmModalityText),
+                nullptr, kLiteRtLmModalityText, nullptr, 0),
             0);
   EXPECT_EQ(litert_lm_loaded_file_modality_npu_brand(
                 nullptr, kLiteRtLmModalityText),
             kLiteRtLmNpuBrandUnknown);
+  EXPECT_EQ(
+      litert_lm_loaded_file_modality_soc_name(nullptr, kLiteRtLmModalityText),
+      nullptr);
   EXPECT_FALSE(litert_lm_loaded_file_supports_input_modality(
       nullptr, kLiteRtLmModalityText));
   EXPECT_EQ(litert_lm_loaded_file_sampler_type(nullptr),
@@ -168,9 +179,12 @@ TEST(CapabilitiesCTest, InspectAudioCapabilities) {
       file, kLiteRtLmModalityAudio));
 
   // Verify supported backends for audio
-  EXPECT_EQ(litert_lm_loaded_file_modality_supported_backends(
-                file, kLiteRtLmModalityAudio),
-            kLiteRtLmBackendCpu | kLiteRtLmBackendGpu);
+  LiteRtLmBackendType audio_backends[3];
+  int32_t count = litert_lm_loaded_file_modality_supported_backends(
+      file, kLiteRtLmModalityAudio, audio_backends, 3);
+  EXPECT_EQ(count, 2);
+  EXPECT_EQ(audio_backends[0], kLiteRtLmBackendTypeCpu);
+  EXPECT_EQ(audio_backends[1], kLiteRtLmBackendTypeGpu);
 
   litert_lm_loaded_file_delete(file);
 }

@@ -29,10 +29,14 @@ data class SupportedModalities(
 data class SamplerParameters(val type: Int, val temperature: Float, val topK: Int, val topP: Float)
 
 /** Hardware backends supported by LiteRT-LM models. */
-enum class BackendType(internal val mask: Int) {
+enum class BackendType(val value: Int) {
   CPU(1),
   GPU(2),
-  NPU(4),
+  NPU(3);
+
+  companion object {
+    fun fromValue(value: Int): BackendType? = entries.firstOrNull { it.value == value }
+  }
 }
 
 /** NPU brand options. */
@@ -40,7 +44,9 @@ enum class NpuBrand(val value: Int) {
   UNKNOWN(0),
   QUALCOMM(1),
   GOOGLE_TENSOR(2),
-  MEDIATEK(3);
+  MEDIATEK(3),
+  INTEL(4),
+  SAMSUNG(5);
 
   companion object {
     fun fromValue(value: Int): NpuBrand = entries.firstOrNull { it.value == value } ?: UNKNOWN
@@ -58,26 +64,53 @@ enum class Modality(val value: Int) {
 /**
  * Provides information about capabilities and features supported by a LiteRT-LM file.
  *
- * The users is expected to leverage the Capabilities API to investigate the capabilities of a
- * LiteRT-LM file before using it to build a LiteRtLmEngine instance.
+ * The user is expected to leverage the Capabilities API to investigate the capabilities of a
+ * LiteRT-LM file before using it to build an engine instance.
  *
  * ### Example Usage:
  * ```kotlin
- * // 1. Load the model metadata
  * try {
+ *   // 1. Load the model metadata
  *   Capabilities("/path/to/model.litertlm").use { capabilities ->
  *     // 2. Query basic capability flags
  *     val supportsThinking = capabilities.supportsThinking()
  *     val supportsFunctionCall = capabilities.supportsFunctionCalling()
  *     val hasSpeculativeDecoding = capabilities.hasSpeculativeDecodingSupport()
  *
- *     // 3. Check supported input modalities
- *     if (capabilities.inputModalities().vision) {
- *       println("Vision input is supported!")
+ *     // 3. Inspect context limits and runtime version requirements
+ *     val maxContext = capabilities.maxContextTokens()
+ *     val isDynamic = capabilities.isDynamicContext()
+ *     val minVersion = capabilities.minRuntimeVersion()
+ *     if (minVersion != null) {
+ *       println("Minimum required LiteRT-LM runtime version: $minVersion")
  *     }
  *
- *     // 4. Check vision token budget
- *     val visionBudget = capabilities.maxVisionTokenBudget()
+ *     // 4. Check supported input modalities and vision signatures
+ *     if (capabilities.inputModalities().vision) {
+ *       val visionBudget = capabilities.maxVisionTokenBudget()
+ *       val signatures = capabilities.visionSignatureSelection()
+ *       if (signatures != null) {
+ *         println("Supported vision token capacities: ${signatures.contentToString()}")
+ *       }
+ *     }
+ *
+ *     // 5. Inspect hardware backends (ordered by priority), NPU brand, etc.
+ *     val textBackends =
+ *       capabilities.supportedBackends(Modality.TEXT) // e.g. [CPU, GPU, NPU]
+ *     val defaultBackend = textBackends.firstOrNull() // e.g. BackendType.CPU
+ *     println("Default backend for text: $defaultBackend")
+ *
+ *     if (textBackends.contains(BackendType.NPU)) {
+ *       val brand = capabilities.npuBrand(Modality.TEXT) // e.g. QUALCOMM, GOOGLE_TENSOR, MEDIATEK
+ *       val socName = capabilities.socName(Modality.TEXT)
+ *       if (socName != null) {
+ *         println("Target NPU SoC: $socName ($brand)") // e.g. "SM8750 (QUALCOMM)"
+ *       }
+ *     }
+ *
+ *     // 6. Retrieve default sampler parameters
+ *     val sampler = capabilities.defaultSamplerParams()
+ *     println("Temperature: ${sampler.temperature}, TopK: ${sampler.topK}, TopP: ${sampler.topP}")
  *   }
  * } catch (e: Exception) {
  *   println("Failed to load model file capabilities: ${e.message}")
@@ -200,12 +233,20 @@ class Capabilities(modelPath: String) : AutoCloseable {
     }
   }
 
-  /** Returns the set of supported backends for a given modality. */
-  fun supportedBackends(modality: Modality): Set<BackendType> {
+  /**
+   * Returns the list of supported backends for a given modality, ordered by priority (first is
+   * default).
+   */
+  fun supportedBackends(modality: Modality): List<BackendType> {
     synchronized(lock) {
       checkInitialized()
-      val mask = LiteRtLmJni.nativeModalitySupportedBackends(handle!!, modality.value)
-      return BackendType.entries.filter { (mask and it.mask) != 0 }.toSet()
+      val backendValues =
+        LiteRtLmJni.nativeModalitySupportedBackends(handle!!, modality.value) ?: return emptyList()
+      val result = mutableListOf<BackendType>()
+      for (v in backendValues) {
+        BackendType.fromValue(v)?.let { result.add(it) }
+      }
+      return result
     }
   }
 
@@ -218,6 +259,13 @@ class Capabilities(modelPath: String) : AutoCloseable {
     }
   }
 
+  /** Returns the NPU SoC name string for a given modality, or null if not set. */
+  fun socName(modality: Modality): String? {
+    synchronized(lock) {
+      checkInitialized()
+      return LiteRtLmJni.nativeModalitySocName(handle!!, modality.value)
+    }
+  }
 
   /** Closes the loaded capabilities and releases underlying resources. */
   override fun close() {

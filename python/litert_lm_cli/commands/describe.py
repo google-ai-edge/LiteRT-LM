@@ -23,6 +23,27 @@ from litert_lm_cli import huggingface_download
 from litert_lm_cli import model
 
 
+def _format_npu_soc_and_brand(
+    brand: litert_lm.LiteRtLmNpuBrand, soc_name: str | None
+) -> str | None:
+  """Combines NPU brand and SoC name (e.g. 'Qualcomm QNN SM8850')."""
+  brand_names = {
+      litert_lm.LiteRtLmNpuBrand.QUALCOMM: "Qualcomm QNN",
+      litert_lm.LiteRtLmNpuBrand.GOOGLE_TENSOR: "Google Tensor TPU",
+      litert_lm.LiteRtLmNpuBrand.MEDIATEK: "MediaTek Neuron",
+      litert_lm.LiteRtLmNpuBrand.INTEL: "Intel NPU",
+      litert_lm.LiteRtLmNpuBrand.SAMSUNG: "Samsung Exynos NPU",
+  }
+  brand_name = brand_names.get(brand)
+  if brand_name and soc_name:
+    return f"{brand_name} {soc_name}"
+  elif brand_name:
+    return brand_name
+  elif soc_name:
+    return soc_name
+  return None
+
+
 @click.command(cls=help_formatter.ColorCommand, name="describe")
 @click.argument("model_reference", required=False)
 @common.config_option
@@ -113,60 +134,38 @@ def describe_model(
   click.echo(f"  Sampler Temp:           {sampler_config.temperature:.2f}")
   click.echo(f"  Sampler Top K:          {sampler_config.top_k}")
   click.echo(f"  Sampler Top P:          {sampler_config.top_p:.2f}")
+  click.echo(f"  Max Context Tokens:     {capabilities.max_context_tokens}")
+  click.echo(
+      "  Is Dynamic Context:     "
+      f"{'YES' if capabilities.is_dynamic_context else 'NO'}"
+  )
   click.echo(f"  Input Modalities:       {modalities_str}")
 
-  if capabilities.input_modalities.text:
-    backends_str = (
-        " ".join([
-            b.upper()
-            for b in sorted(
-                capabilities.supported_backends_for_modality(
-                    litert_lm.LiteRtLmModality.TEXT
-                )
-            )
-        ])
-        or "None"
-    )
-    click.echo(f"  Text Backends:          {backends_str}")
-  if capabilities.input_modalities.vision:
-    backends_str = (
-        " ".join([
-            b.upper()
-            for b in sorted(
-                capabilities.supported_backends_for_modality(
-                    litert_lm.LiteRtLmModality.VISION
-                )
-            )
-        ])
-        or "None"
-    )
-    click.echo(f"  Vision Backends:        {backends_str}")
-  if capabilities.input_modalities.audio:
-    backends_str = (
-        " ".join([
-            b.upper()
-            for b in sorted(
-                capabilities.supported_backends_for_modality(
-                    litert_lm.LiteRtLmModality.AUDIO
-                )
-            )
-        ])
-        or "None"
-    )
-    click.echo(f"  Audio Backends:         {backends_str}")
-  if capabilities.input_modalities.video:
-    backends_str = (
-        " ".join([
-            b.upper()
-            for b in sorted(
-                capabilities.supported_backends_for_modality(
-                    litert_lm.LiteRtLmModality.VIDEO
-                )
-            )
-        ])
-        or "None"
-    )
-    click.echo(f"  Video Backends:         {backends_str}")
+  # Report supported backends, default backend, and target NPU SoC per
+  # active modality.
+  for mod_name, mod_enum in [
+      ("Text", litert_lm.LiteRtLmModality.TEXT),
+      ("Vision", litert_lm.LiteRtLmModality.VISION),
+      ("Audio", litert_lm.LiteRtLmModality.AUDIO),
+      ("Video", litert_lm.LiteRtLmModality.VIDEO),
+  ]:
+    if getattr(capabilities.input_modalities, mod_name.lower()):
+      supported_backends = capabilities.supported_backends_for_modality(
+          mod_enum
+      )
+      backends_str = " ".join([b.upper() for b in supported_backends]) or "None"
+      click.echo(f"  {mod_name} Backends:".ljust(26) + backends_str)
+      if supported_backends:
+        click.echo(
+            f"  {mod_name} Default Backend:".ljust(26)
+            + supported_backends[0].upper()
+        )
+      soc_desc = _format_npu_soc_and_brand(
+          capabilities.npu_brand_for_modality(mod_enum),
+          capabilities.soc_name_for_modality(mod_enum),
+      )
+      if soc_desc:
+        click.echo(f"  {mod_name} SoC Name:".ljust(26) + soc_desc)
   click.echo("========================================")
 
 

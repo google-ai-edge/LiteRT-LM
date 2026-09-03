@@ -60,17 +60,20 @@ class LiteRtLmModality(enum.IntEnum):
   VIDEO = 3
 
 
-class LiteRtLmBackendMask(enum.IntFlag):
-  CPU = 1 << 0
-  GPU = 1 << 1
-  NPU = 1 << 2
-
-
 class LiteRtLmNpuBrand(enum.IntEnum):
   UNKNOWN = 0
   QUALCOMM = 1
   GOOGLE_TENSOR = 2
   MEDIATEK = 3
+  INTEL = 4
+  SAMSUNG = 5
+
+
+class LiteRtLmBackendType(enum.IntEnum):
+  UNSPECIFIED = 0
+  CPU = 1
+  GPU = 2
+  NPU = 3
 
 
 # C-compatible callback type that matches 'LiteRtLmStreamCallback' in engine.h.
@@ -876,6 +879,11 @@ def _setup_lib_signatures(lib):
       ctypes.c_int32,
   ]
 
+  lib.litert_lm_loaded_file_max_context_tokens.restype = ctypes.c_uint32
+  lib.litert_lm_loaded_file_max_context_tokens.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_loaded_file_is_dynamic_context.restype = ctypes.c_bool
+  lib.litert_lm_loaded_file_is_dynamic_context.argtypes = [ctypes.c_void_p]
+
   lib.litert_lm_loaded_file_min_runtime_version.restype = ctypes.c_char_p
   lib.litert_lm_loaded_file_min_runtime_version.argtypes = [ctypes.c_void_p]
 
@@ -883,9 +891,16 @@ def _setup_lib_signatures(lib):
   lib.litert_lm_loaded_file_modality_supported_backends.argtypes = [
       ctypes.c_void_p,
       ctypes.c_int,
+      ctypes.POINTER(ctypes.c_int),
+      ctypes.c_int32,
   ]
   lib.litert_lm_loaded_file_modality_npu_brand.restype = ctypes.c_int
   lib.litert_lm_loaded_file_modality_npu_brand.argtypes = [
+      ctypes.c_void_p,
+      ctypes.c_int,
+  ]
+  lib.litert_lm_loaded_file_modality_soc_name.restype = ctypes.c_char_p
+  lib.litert_lm_loaded_file_modality_soc_name.argtypes = [
       ctypes.c_void_p,
       ctypes.c_int,
   ]

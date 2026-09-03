@@ -87,6 +87,7 @@ class CapabilitiesTests: XCTestCase {
     XCTAssertEqual(capabilities.supportedBackends(for: .vision), [])
 
     XCTAssertEqual(capabilities.npuBrand(for: .text), .unknown)
+    XCTAssertNil(capabilities.socName(for: .text))
   }
 
   func testVisionSignatureSelection_returnsLengthsForMultimodal() {

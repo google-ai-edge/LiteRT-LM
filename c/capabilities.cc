@@ -37,6 +37,9 @@ namespace {
 using ::litert::lm::schema::capabilities::LlmInferenceCapability;
 using ::litert::lm::schema::capabilities::SupportedBackends;
 
+// Helper function to extract modality-specific SupportedBackends from the
+// parsed LLM inference capabilities struct. Returns nullptr if the modality is
+// invalid or unhandled.
 const SupportedBackends* GetModalityBackends(
     const LlmInferenceCapability& llm_cap, LiteRtLmModality modality) {
   switch (modality) {
@@ -60,13 +63,10 @@ LiteRtLmLoadedFile* litert_lm_loaded_file_create(const char* litertlm_path) {
   if (litertlm_path == nullptr) {
     return nullptr;
   }
-  // Call the core capabilities parser to extract the metadata from the file.
   auto info_or = litert::lm::schema::capabilities::InspectModel(litertlm_path);
   if (!info_or.ok()) {
     return nullptr;
   }
-  // Allocate the opaque handle on the heap and store the parsed
-  // metadata inside it.
   auto* file = new LiteRtLmLoadedFile;
   file->info = std::move(*info_or);
   return file;
@@ -76,7 +76,6 @@ void litert_lm_loaded_file_delete(LiteRtLmLoadedFile* loaded_file) {
   delete loaded_file;
 }
 
-// Checks if speculative decoding is supported.
 bool litert_lm_loaded_file_has_speculative_decoding_support(
     LiteRtLmLoadedFile* loaded_file) {
   if (loaded_file == nullptr || !loaded_file->info.llm_capability.has_value()) {
@@ -85,7 +84,6 @@ bool litert_lm_loaded_file_has_speculative_decoding_support(
   return loaded_file->info.llm_capability->supports_speculative_decoding;
 }
 
-// Checks if thinking/reasoning budget generation is supported.
 bool litert_lm_loaded_file_supports_thinking(LiteRtLmLoadedFile* loaded_file) {
   if (loaded_file == nullptr || !loaded_file->info.llm_capability.has_value()) {
     return false;
@@ -93,7 +91,6 @@ bool litert_lm_loaded_file_supports_thinking(LiteRtLmLoadedFile* loaded_file) {
   return loaded_file->info.llm_capability->supports_thinking;
 }
 
-// Checks if function calling/tool use is supported.
 bool litert_lm_loaded_file_supports_function_calling(
     LiteRtLmLoadedFile* loaded_file) {
   if (loaded_file == nullptr || !loaded_file->info.llm_capability.has_value()) {
@@ -196,20 +193,24 @@ int32_t litert_lm_loaded_file_vision_signature_selection(
 }
 
 int32_t litert_lm_loaded_file_modality_supported_backends(
-    LiteRtLmLoadedFile* loaded_file, LiteRtLmModality modality) {
+    LiteRtLmLoadedFile* loaded_file, LiteRtLmModality modality,
+    LiteRtLmBackendType* backends, int32_t max_size) {
   if (loaded_file == nullptr || !loaded_file->info.llm_capability.has_value()) {
     return 0;
   }
-  const auto* backends =
+  const auto* modality_backends =
       GetModalityBackends(*loaded_file->info.llm_capability, modality);
-  if (backends == nullptr) {
+  if (modality_backends == nullptr) {
     return 0;
   }
-  int32_t mask = 0;
-  if (backends->cpu) mask |= kLiteRtLmBackendCpu;
-  if (backends->gpu) mask |= kLiteRtLmBackendGpu;
-  if (backends->npu) mask |= kLiteRtLmBackendNpu;
-  return mask;
+  const auto& preferred = modality_backends->preferred_backends;
+  if (backends != nullptr) {
+    int32_t count = std::min(max_size, static_cast<int32_t>(preferred.size()));
+    for (int32_t i = 0; i < count; ++i) {
+      backends[i] = static_cast<LiteRtLmBackendType>(preferred[i]);
+    }
+  }
+  return static_cast<int32_t>(preferred.size());
 }
 
 LiteRtLmNpuBrand litert_lm_loaded_file_modality_npu_brand(
@@ -223,6 +224,19 @@ LiteRtLmNpuBrand litert_lm_loaded_file_modality_npu_brand(
     return kLiteRtLmNpuBrandUnknown;
   }
   return static_cast<LiteRtLmNpuBrand>(backends->npu_brand);
+}
+
+const char* litert_lm_loaded_file_modality_soc_name(
+    LiteRtLmLoadedFile* loaded_file, LiteRtLmModality modality) {
+  if (loaded_file == nullptr || !loaded_file->info.llm_capability.has_value()) {
+    return nullptr;
+  }
+  const auto* backends =
+      GetModalityBackends(*loaded_file->info.llm_capability, modality);
+  if (backends == nullptr || backends->soc_name.empty()) {
+    return nullptr;
+  }
+  return backends->soc_name.c_str();
 }
 
 const char* litert_lm_loaded_file_min_runtime_version(

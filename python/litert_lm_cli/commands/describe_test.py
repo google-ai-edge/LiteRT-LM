@@ -43,10 +43,13 @@ class DescribeTest(absltest.TestCase):
     self.mock_capabilities = mock.MagicMock(spec=litert_lm.Capabilities)
     self.mock_capabilities.max_vision_token_budget = -1
     self.mock_capabilities.vision_signature_selection = None
-    self.mock_capabilities.supported_backends_for_modality.return_value = {
+    self.mock_capabilities.max_context_tokens = 0
+    self.mock_capabilities.is_dynamic_context = False
+    self.mock_capabilities.supported_backends_for_modality.return_value = [
         "cpu",
         "gpu",
-    }
+    ]
+    self.mock_capabilities.soc_name_for_modality.return_value = None
     self.mock_capabilities_cls = self.enter_context(
         mock.patch.object(
             litert_lm,
@@ -67,6 +70,8 @@ class DescribeTest(absltest.TestCase):
     self.mock_capabilities.max_vision_token_budget = 280
     self.mock_capabilities.vision_signature_selection = [280]
     self.mock_capabilities.min_runtime_version = "0.12.3"
+    self.mock_capabilities.max_context_tokens = 2048
+    self.mock_capabilities.is_dynamic_context = True
     self.mock_capabilities.default_sampler_params = litert_lm.SamplerConfig(
         temperature=0.7,
         top_k=40,
@@ -99,6 +104,8 @@ class DescribeTest(absltest.TestCase):
     self.assertIn("Sampler Temp:           0.70", result.output)
     self.assertIn("Sampler Top K:          40", result.output)
     self.assertIn("Sampler Top P:          0.90", result.output)
+    self.assertIn("Max Context Tokens:     2048", result.output)
+    self.assertIn("Is Dynamic Context:     YES", result.output)
     self.assertIn("Input Modalities:       Text Vision", result.output)
     self.assertIn("Text Backends:          CPU GPU", result.output)
     self.assertIn("Vision Backends:        CPU GPU", result.output)
@@ -258,6 +265,68 @@ class DescribeTest(absltest.TestCase):
         "/path/to/model.litertlm"
     )
     self.assertIn("File: /path/to/model.litertlm", result.output)
+
+  def test_describe_with_default_backend_and_soc_name(self):
+    self.mock_capabilities.supports_thinking.return_value = True
+    self.mock_capabilities.supports_function_calling.return_value = False
+    self.mock_capabilities.has_speculative_decoding_support.return_value = False
+    self.mock_capabilities.input_modalities = litert_lm.SupportedModalities(
+        text=True, vision=False, audio=False, video=False
+    )
+    self.mock_capabilities.default_sampler_params = litert_lm.SamplerConfig(
+        temperature=0.0,
+        top_k=None,
+        top_p=0.0,
+    )
+    self.mock_capabilities.supported_backends_for_modality.return_value = [
+        "npu",
+    ]
+    self.mock_capabilities.npu_brand_for_modality.return_value = (
+        litert_lm.LiteRtLmNpuBrand.QUALCOMM
+    )
+    self.mock_capabilities.soc_name_for_modality.return_value = "SM8750"
+
+    runner = testing.CliRunner()
+    result = runner.invoke(
+        describe_cmd.describe_model,
+        ["my-model-id"],
+    )
+
+    self.assertEqual(result.exit_code, 0)
+    self.assertIn("Text Backends:          NPU", result.output)
+    self.assertIn("Text Default Backend:   NPU", result.output)
+    self.assertIn("Text SoC Name:          Qualcomm QNN SM8750", result.output)
+
+  def test_describe_with_intel_npu_brand(self):
+    self.mock_capabilities.supports_thinking.return_value = False
+    self.mock_capabilities.supports_function_calling.return_value = False
+    self.mock_capabilities.has_speculative_decoding_support.return_value = False
+    self.mock_capabilities.input_modalities = litert_lm.SupportedModalities(
+        text=True, vision=False, audio=False, video=False
+    )
+    self.mock_capabilities.default_sampler_params = litert_lm.SamplerConfig(
+        temperature=0.0,
+        top_k=None,
+        top_p=0.0,
+    )
+    self.mock_capabilities.supported_backends_for_modality.return_value = [
+        "npu",
+    ]
+    self.mock_capabilities.npu_brand_for_modality.return_value = (
+        litert_lm.LiteRtLmNpuBrand.INTEL
+    )
+    self.mock_capabilities.soc_name_for_modality.return_value = "LunarLake"
+
+    runner = testing.CliRunner()
+    result = runner.invoke(
+        describe_cmd.describe_model,
+        ["my-model-id"],
+    )
+
+    self.assertEqual(result.exit_code, 0)
+    self.assertIn("Text Backends:          NPU", result.output)
+    self.assertIn("Text Default Backend:   NPU", result.output)
+    self.assertIn("Text SoC Name:          Intel NPU LunarLake", result.output)
 
 
 if __name__ == "__main__":

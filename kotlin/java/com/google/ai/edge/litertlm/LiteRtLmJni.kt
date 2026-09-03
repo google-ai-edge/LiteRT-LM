@@ -500,22 +500,32 @@ internal object LiteRtLmJni {
   external fun nativeMinRuntimeVersion(capabilitiesPointer: Long): String?
 
   /**
-   * Returns the bitmask of supported backends for a given modality.
+   * Returns the list of supported backends for a given modality ordered by priority.
    *
    * @param capabilitiesPointer A pointer to the native capabilities instance.
    * @param modality The modality integer value (0 = Text, 1 = Vision, 2 = Audio, 3 = Video).
-   * @return A bitmask of supported backends.
+   * @return An IntArray of supported backends ordered by priority, or null.
    */
-  external fun nativeModalitySupportedBackends(capabilitiesPointer: Long, modality: Int): Int
+  external fun nativeModalitySupportedBackends(capabilitiesPointer: Long, modality: Int): IntArray?
 
   /**
    * Returns the NPU brand of the model for a given modality.
    *
    * @param capabilitiesPointer A pointer to the native capabilities instance.
    * @param modality The modality integer value (0 = Text, 1 = Vision, 2 = Audio, 3 = Video).
-   * @return The NPU brand int value (0 = Unknown, 1 = Qualcomm, 2 = Google Tensor, 3 = MediaTek).
+   * @return The NPU brand int value (0 = Unknown, 1 = Qualcomm, 2 = Google Tensor, 3 = MediaTek, 4
+   *   = Intel, 5 = Samsung).
    */
   external fun nativeModalityNpuBrand(capabilitiesPointer: Long, modality: Int): Int
+
+  /**
+   * Returns the NPU SoC name string for a given modality, or null if not set.
+   *
+   * @param capabilitiesPointer A pointer to the native capabilities instance.
+   * @param modality The modality integer value (0 = Text, 1 = Vision, 2 = Audio, 3 = Video).
+   * @return The SoC name string (e.g. 'SM8750'), or null.
+   */
+  external fun nativeModalitySocName(capabilitiesPointer: Long, modality: Int): String?
 
   /** Creates a new LiteRT-LM embedding engine. */
   external fun nativeCreateEmbeddingEngine(

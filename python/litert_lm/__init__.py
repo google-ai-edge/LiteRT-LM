@@ -17,6 +17,7 @@
 # pylint: disable=g-importing-member
 
 from ._ffi import ActivationDataType
+from ._ffi import LiteRtLmBackendType
 from ._ffi import LiteRtLmConstraintProviderType
 from ._ffi import LiteRtLmModality
 from ._ffi import LiteRtLmNpuBrand
@@ -76,6 +77,7 @@ __all__ = (
     "EmbeddingResponse",
     "Engine",
     "InputOverflowStrategy",
+    "LiteRtLmBackendType",
     "LiteRtLmConstraintProviderType",
     "LiteRtLmModality",
     "LiteRtLmNpuBrand",

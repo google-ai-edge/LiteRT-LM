@@ -36,6 +36,8 @@ public enum NPUBrand: Hashable, Sendable {
   case qualcomm
   case googleTensor
   case mediaTek
+  case intel
+  case samsung
 }
 
 /// Modality options.
@@ -74,18 +76,43 @@ public struct SamplerParameters: Equatable {
 ///   print("Failed to load model file capabilities.")
 ///   return
 /// }
+///
 /// // 2. Query basic capability flags
 /// let supportsThinking = capabilities.supportsThinking()
 /// let supportsFunctionCall = capabilities.supportsFunctionCalling()
 /// let hasSpeculativeDecoding = capabilities.hasSpeculativeDecodingSupport()
 ///
-/// // 3. Check supported input modalities
-/// if capabilities.inputModalities.vision {
-///   print("Vision input is supported!")
+/// // 3. Inspect context limits and runtime version requirements
+/// let maxContext = capabilities.maxContextTokens()
+/// let isDynamic = capabilities.isDynamicContext()
+/// if let minVersion = capabilities.minRuntimeVersion {
+///   print("Minimum required LiteRT-LM runtime version: \(minVersion)")
 /// }
 ///
-/// // 4. Check vision token budget
-/// let visionBudget = capabilities.maxVisionTokenBudget()
+/// // 4. Check supported input modalities and vision signatures
+/// if capabilities.inputModalities.vision {
+///   let visionBudget = capabilities.maxVisionTokenBudget()
+///   if let signatures = capabilities.visionSignatureSelection() {
+///     print("Supported vision token capacities: \(signatures)")
+///   }
+/// }
+///
+/// // 5. Inspect hardware backends (ordered by priority), NPU brand, etc.
+/// let textBackends = capabilities.supportedBackends(for: .text)  // e.g. [.cpu, .gpu, .npu]
+/// if let defaultBackend = textBackends.first {
+///   print("Default backend for text: \(defaultBackend)")  // e.g. .cpu or .npu
+/// }
+///
+/// if textBackends.contains(.npu) {
+///   let brand = capabilities.npuBrand(for: .text)  // e.g. .qualcomm, .googleTensor, .mediaTek
+///   if let socName = capabilities.socName(for: .text) {
+///     print("Target NPU SoC: \(socName) (\(brand))")  // e.g. "SM8750 (qualcomm)"
+///   }
+/// }
+///
+/// // 6. Retrieve default sampler parameters
+/// let sampler = capabilities.defaultSamplerParams
+/// print("Temperature: \(sampler.temperature), TopK: \(sampler.topK), TopP: \(sampler.topP)")
 /// ```
 public class Capabilities {
   private let handle: OpaquePointer
@@ -182,16 +209,29 @@ public class Capabilities {
     return String(cString: versionChars)
   }
 
-  /// Returns the set of supported backends for a given modality.
-  public func supportedBackends(for modality: Modality) -> Set<BackendType> {
-    let mask = litert_lm_loaded_file_modality_supported_backends(
-      handle, modality.cValue
+  /// Returns the list of supported backends for a given modality, ordered by
+  /// priority (first is default).
+  public func supportedBackends(for modality: Modality) -> [BackendType] {
+    let count = litert_lm_loaded_file_modality_supported_backends(
+      handle, modality.cValue, nil, 0
     )
-    var backends = Set<BackendType>()
-    if (mask & Int32(kLiteRtLmBackendCpu.rawValue)) != 0 { backends.insert(.cpu) }
-    if (mask & Int32(kLiteRtLmBackendGpu.rawValue)) != 0 { backends.insert(.gpu) }
-    if (mask & Int32(kLiteRtLmBackendNpu.rawValue)) != 0 { backends.insert(.npu) }
-    return backends
+    guard count > 0 else { return [] }
+    var cBackends = [LiteRtLmBackendType](
+      repeating: LiteRtLmBackendType(0), count: Int(count)
+    )
+    let written = litert_lm_loaded_file_modality_supported_backends(
+      handle, modality.cValue, &cBackends, count
+    )
+    guard written > 0 else { return [] }
+    let validCount = min(Int(written), cBackends.count)
+    return cBackends[0..<validCount].compactMap { cType in
+      switch cType {
+      case kLiteRtLmBackendTypeCpu: return .cpu
+      case kLiteRtLmBackendTypeGpu: return .gpu
+      case kLiteRtLmBackendTypeNpu: return .npu
+      default: return nil
+      }
+    }
   }
 
   /// Returns the detected NPU brand of the model for a given modality, or .unknown if not NPU-compiled.
@@ -203,8 +243,18 @@ public class Capabilities {
     case kLiteRtLmNpuBrandQualcomm: return .qualcomm
     case kLiteRtLmNpuBrandGoogleTensor: return .googleTensor
     case kLiteRtLmNpuBrandMediaTek: return .mediaTek
+    case kLiteRtLmNpuBrandIntel: return .intel
+    case kLiteRtLmNpuBrandSamsung: return .samsung
     default: return .unknown
     }
+  }
+
+  /// Returns the NPU SoC name string for a given modality, or nil if not set.
+  public func socName(for modality: Modality) -> String? {
+    guard let chars = litert_lm_loaded_file_modality_soc_name(handle, modality.cValue) else {
+      return nil
+    }
+    return String(cString: chars)
   }
 
   deinit {
