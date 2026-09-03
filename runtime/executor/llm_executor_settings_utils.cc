@@ -171,11 +171,24 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
         // This option prevents KVCache handling from being affected by
         // BHWC conversion in NoExternalTensorsMode.
         gpu_compilation_options.AddExternalTensorPattern("kv_cache_");
+        gpu_compilation_options.AddExternalTensorPattern("cache");
+        gpu_compilation_options.AddExternalTensorPattern("kv");
         gpu_compilation_options.AddBufferStorageTensorPattern("kv_cache_c_");
+        gpu_compilation_options.AddBufferStorageTensorPattern("kv_cache_");
+        gpu_compilation_options.AddBufferStorageTensorPattern("cache");
+        gpu_compilation_options.AddBufferStorageTensorPattern("kv");
+        gpu_compilation_options.AddExternalTensorPattern("param_tensor");
+        gpu_compilation_options.AddExternalTensorPattern("param");
+        gpu_compilation_options.AddBufferStorageTensorPattern("param_tensor");
+        gpu_compilation_options.AddBufferStorageTensorPattern("param");
         if (single_kv_cache_buffer) {
           gpu_compilation_options.AddBufferStorageTensorPattern("kv_cache_");
+          gpu_compilation_options.AddBufferStorageTensorPattern("cache");
+          gpu_compilation_options.AddBufferStorageTensorPattern("kv");
           gpu_compilation_options.AddExternalTensorPattern("param_tensor");
+          gpu_compilation_options.AddExternalTensorPattern("param");
           gpu_compilation_options.AddBufferStorageTensorPattern("param_tensor");
+          gpu_compilation_options.AddBufferStorageTensorPattern("param");
         }
         ABSL_ASSIGN_OR_RETURN(auto sampler_backend,
                               GetSamplerBackend(executor_settings));
@@ -185,9 +198,14 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
         }
         gpu_compilation_options.AddExternalTensorPattern("w_prime");
         gpu_compilation_options.AddExternalTensorPattern("lora_");
+        gpu_compilation_options.AddExternalTensorPattern("lora");
       }
       gpu_compilation_options.AddBufferStorageTensorPattern("w_prime");
       gpu_compilation_options.AddBufferStorageTensorPattern("lora_");
+      gpu_compilation_options.AddBufferStorageTensorPattern("lora");
+      gpu_compilation_options.AddBufferStorageTensorPattern("cache");
+      gpu_compilation_options.AddBufferStorageTensorPattern("kv");
+      gpu_compilation_options.AddBufferStorageTensorPattern("param");
       // Prefill and decode are always fully delegated to single delegate.
       gpu_compilation_options.SetHintFullyDelegatedToSingleDelegate(true);
 
