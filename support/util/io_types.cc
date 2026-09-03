@@ -14,8 +14,6 @@
 
 #include "support/util/io_types.h"
 
-#include <cstddef>
-#include <cstdint>
 #include <string>
 #include <utility>
 #include <variant>
@@ -26,6 +24,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 
 namespace litert::support {
@@ -137,6 +136,15 @@ absl::StatusOr<absl::Span<const float>> InputAudio::GetPcmFrames() const {
   return absl::FailedPreconditionError("The audio is not a float vector.");
 }
 
+absl::StatusOr<const InputAudio::AudioEmbeddings*>
+InputAudio::GetAudioEmbeddings() const {
+  if (std::holds_alternative<AudioEmbeddings>(data_)) {
+    return &std::get<AudioEmbeddings>(data_);
+  }
+  return absl::FailedPreconditionError(
+      "The audio is not pre-computed audio embeddings.");
+}
+
 absl::StatusOr<InputAudio> InputAudio::CreateCopy() const {
   if (std::holds_alternative<std::string>(data_)) {
     return InputAudio(std::move(std::get<std::string>(data_)));
@@ -146,9 +154,17 @@ absl::StatusOr<InputAudio> InputAudio::CreateCopy() const {
     return InputAudio(std::move(tensor_buffer_clone));
   } else if (std::holds_alternative<std::vector<float>>(data_)) {
     return InputAudio(std::get<std::vector<float>>(data_));
+  } else if (std::holds_alternative<AudioEmbeddings>(data_)) {
+    const auto& embeddings = std::get<AudioEmbeddings>(data_);
+    LITERT_ASSIGN_OR_RETURN(auto tensor_clone, embeddings.tensor.Duplicate());
+    return InputAudio(AudioEmbeddings{
+        .tensor = std::move(tensor_clone),
+        .valid_tokens = embeddings.valid_tokens,
+    });
   }
   return absl::FailedPreconditionError(
-      "The data_ is not a string, TensorBuffer, or float vector.");
+      "The data_ is not a string, TensorBuffer, float vector, or "
+      "AudioEmbeddings.");
 }
 
 }  // namespace litert::support
