@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "c/model_info.h"
+#include "c/capabilities.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -24,18 +24,18 @@
 #include "c/engine.h"
 #endif
 
-#include "schema/model_info/model_info.h"
+#include "schema/capabilities/capabilities.h"
 
 // Definition of the internal C++ struct that implements the opaque
 // LiteRtLmLoadedFile handle declared in the header.
 struct LiteRtLmLoadedFile {
-  // Contains the parsed model info and capabilities.
-  litert::lm::schema::model_info::ModelInfo info;
+  // Contains the parsed model capabilities.
+  litert::lm::schema::capabilities::ModelCapabilities info;
 };
 
 namespace {
-using ::litert::lm::schema::model_info::LlmInferenceCapability;
-using ::litert::lm::schema::model_info::SupportedBackends;
+using ::litert::lm::schema::capabilities::LlmInferenceCapability;
+using ::litert::lm::schema::capabilities::SupportedBackends;
 
 // Helper function to extract modality-specific SupportedBackends from the
 // parsed LLM inference capabilities struct. Returns nullptr if the modality is
@@ -63,7 +63,7 @@ LiteRtLmLoadedFile* litert_lm_loaded_file_create(const char* litertlm_path) {
   if (litertlm_path == nullptr) {
     return nullptr;
   }
-  auto info_or = litert::lm::schema::model_info::InspectModel(litertlm_path);
+  auto info_or = litert::lm::schema::capabilities::InspectModel(litertlm_path);
   if (!info_or.ok()) {
     return nullptr;
   }
@@ -137,15 +137,15 @@ bool litert_lm_loaded_file_supports_input_modality(
   }
   const auto& modalities = loaded_file->info.llm_capability->input_modalities;
   auto target_modality =
-      static_cast<litert::lm::schema::model_info::Modality>(modality);
+      static_cast<litert::lm::schema::capabilities::Modality>(modality);
   switch (target_modality) {
-    case litert::lm::schema::model_info::Modality::kText:
+    case litert::lm::schema::capabilities::Modality::kText:
       return modalities.text;
-    case litert::lm::schema::model_info::Modality::kVision:
+    case litert::lm::schema::capabilities::Modality::kVision:
       return modalities.vision;
-    case litert::lm::schema::model_info::Modality::kAudio:
+    case litert::lm::schema::capabilities::Modality::kAudio:
       return modalities.audio;
-    case litert::lm::schema::model_info::Modality::kVideo:
+    case litert::lm::schema::capabilities::Modality::kVideo:
       return modalities.video;
   }
   return false;

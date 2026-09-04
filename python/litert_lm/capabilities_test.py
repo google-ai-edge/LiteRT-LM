@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Tests for model info extraction API."""
+"""Tests for model capabilities extraction API."""
 
 import pathlib
 from unittest import mock
@@ -24,7 +24,7 @@ import litert_lm
 FLAGS = flags.FLAGS
 
 
-class ModelInfoTest(absltest.TestCase):
+class CapabilitiesTest(absltest.TestCase):
 
   def setUp(self):
     super().setUp()
@@ -33,49 +33,49 @@ class ModelInfoTest(absltest.TestCase):
         / "litert_lm/runtime/testdata/test_lm.litertlm"
     )
 
-  def test_model_info_load(self):
-    model_info = litert_lm.ModelInfo(self.model_path)
+  def test_capabilities_load(self):
+    capabilities = litert_lm.Capabilities(self.model_path)
 
     # Check simple capability flags (expect False for the legacy test model)
-    self.assertFalse(model_info.supports_thinking())
-    self.assertFalse(model_info.supports_function_calling())
-    self.assertFalse(model_info.has_speculative_decoding_support())
-    self.assertEqual(model_info.max_vision_token_budget, -1)
-    self.assertIsNone(model_info.vision_signature_selection)
-    self.assertIsNone(model_info.min_runtime_version)
-    self.assertEqual(model_info.max_context_tokens, 128)
-    self.assertFalse(model_info.is_dynamic_context)
+    self.assertFalse(capabilities.supports_thinking())
+    self.assertFalse(capabilities.supports_function_calling())
+    self.assertFalse(capabilities.has_speculative_decoding_support())
+    self.assertEqual(capabilities.max_vision_token_budget, -1)
+    self.assertIsNone(capabilities.vision_signature_selection)
+    self.assertIsNone(capabilities.min_runtime_version)
+    self.assertEqual(capabilities.max_context_tokens, 128)
+    self.assertFalse(capabilities.is_dynamic_context)
 
     # Verify modality-specific backends for text (defaults to CPU and GPU)
     self.assertEqual(
-        model_info.supported_backends_for_modality(
+        capabilities.supported_backends_for_modality(
             litert_lm.LiteRtLmModality.TEXT
         ),
         ["cpu", "gpu"],
     )
     # Verify modality-specific backends for vision (not present -> empty)
     self.assertEqual(
-        model_info.supported_backends_for_modality(
+        capabilities.supported_backends_for_modality(
             litert_lm.LiteRtLmModality.VISION
         ),
         [],
     )
     self.assertEqual(
-        model_info.npu_brand_for_modality(litert_lm.LiteRtLmModality.TEXT),
+        capabilities.npu_brand_for_modality(litert_lm.LiteRtLmModality.TEXT),
         litert_lm.LiteRtLmNpuBrand.UNKNOWN,
     )
     self.assertIsNone(
-        model_info.soc_name_for_modality(litert_lm.LiteRtLmModality.TEXT)
+        capabilities.soc_name_for_modality(litert_lm.LiteRtLmModality.TEXT)
     )
 
     # Modalities
-    self.assertTrue(model_info.input_modalities.text)
-    self.assertFalse(model_info.input_modalities.vision)
-    self.assertFalse(model_info.input_modalities.audio)
-    self.assertFalse(model_info.input_modalities.video)
+    self.assertTrue(capabilities.input_modalities.text)
+    self.assertFalse(capabilities.input_modalities.vision)
+    self.assertFalse(capabilities.input_modalities.audio)
+    self.assertFalse(capabilities.input_modalities.video)
 
     # Sampler default parameters (from test model config)
-    sampler_config = model_info.default_sampler_params
+    sampler_config = capabilities.default_sampler_params
     self.assertIsInstance(sampler_config, litert_lm.SamplerConfig)
     self.assertEqual(sampler_config.temperature, 0.0)
     self.assertEqual(sampler_config.top_k, 1)
@@ -83,15 +83,15 @@ class ModelInfoTest(absltest.TestCase):
     self.assertIsNotNone(top_p)
     self.assertAlmostEqual(top_p, 0.7)
 
-  def test_model_info_non_existent_file(self):
+  def test_capabilities_non_existent_file(self):
     with self.assertRaises(FileNotFoundError):
-      litert_lm.ModelInfo("/non/existent/path")
+      litert_lm.Capabilities("/non/existent/path")
 
   @mock.patch(
-      "litert_lm.model_info._ffi._get_lib"
+      "litert_lm.capabilities._ffi._get_lib"
   )
   @mock.patch("os.path.exists", return_value=True)
-  def test_model_info_destructor_deletes_handle(
+  def test_capabilities_destructor_deletes_handle(
       self, mock_exists, mock_get_lib
   ):
     del mock_exists  # Unused.
@@ -99,17 +99,17 @@ class ModelInfoTest(absltest.TestCase):
     mock_get_lib.return_value = mock_lib
     mock_lib.litert_lm_loaded_file_create.return_value = 12345
 
-    model_info = litert_lm.ModelInfo("/fake/path")
-    self.assertEqual(model_info._handle, 12345)
+    capabilities = litert_lm.Capabilities("/fake/path")
+    self.assertEqual(capabilities._handle, 12345)
 
-    model_info.__del__()
+    capabilities.__del__()
     mock_lib.litert_lm_loaded_file_delete.assert_called_once_with(12345)
 
   @mock.patch(
-      "litert_lm.model_info._ffi._get_lib"
+      "litert_lm.capabilities._ffi._get_lib"
   )
   @mock.patch("os.path.exists", return_value=True)
-  def test_model_info_creation_failure_raises_runtime_error(
+  def test_capabilities_creation_failure_raises_runtime_error(
       self, mock_exists, mock_get_lib
   ):
     del mock_exists
@@ -118,13 +118,13 @@ class ModelInfoTest(absltest.TestCase):
     mock_lib.litert_lm_loaded_file_create.return_value = 0
 
     with self.assertRaises(RuntimeError):
-      litert_lm.ModelInfo("/invalid/model.litertlm")
+      litert_lm.Capabilities("/invalid/model.litertlm")
 
   @mock.patch(
-      "litert_lm.model_info._ffi._get_lib"
+      "litert_lm.capabilities._ffi._get_lib"
   )
   @mock.patch("os.path.exists", return_value=True)
-  def test_model_info_destructor_noop_when_handle_none(
+  def test_capabilities_destructor_noop_when_handle_none(
       self, mock_exists, mock_get_lib
   ):
     del mock_exists
@@ -132,48 +132,48 @@ class ModelInfoTest(absltest.TestCase):
     mock_get_lib.return_value = mock_lib
     mock_lib.litert_lm_loaded_file_create.return_value = 12345
 
-    model_info = litert_lm.ModelInfo("/fake/path")
-    model_info._handle = None  # Clear handle manually
-    model_info.__del__()
+    capabilities = litert_lm.Capabilities("/fake/path")
+    capabilities._handle = None  # Clear handle manually
+    capabilities.__del__()
     mock_lib.litert_lm_loaded_file_delete.assert_not_called()
 
   @mock.patch(
-      "litert_lm.model_info._ffi._get_lib"
+      "litert_lm.capabilities._ffi._get_lib"
   )
   @mock.patch("os.path.exists", return_value=True)
-  def test_model_info_destructor_noop_when_handle_not_set(
+  def test_capabilities_destructor_noop_when_handle_not_set(
       self, mock_exists, mock_get_lib
   ):
     del mock_exists
     mock_lib = mock.MagicMock()
     mock_get_lib.return_value = mock_lib
 
-    # Create uninitialized model_info object
-    model_info = object.__new__(litert_lm.ModelInfo)
+    # Create uninitialized capabilities object
+    capabilities = object.__new__(litert_lm.Capabilities)
     try:
-      model_info.__del__()
+      capabilities.__del__()
     except AttributeError as e:
       self.fail(f"__del__ raised AttributeError on uninitialized object: {e}")
 
-  def test_model_info_context_manager(self):
-    with litert_lm.ModelInfo(self.model_path) as model_info:
-      self.assertFalse(model_info.supports_thinking())
-    # Outside context block, model_info should be closed
+  def test_capabilities_context_manager(self):
+    with litert_lm.Capabilities(self.model_path) as capabilities:
+      self.assertFalse(capabilities.supports_thinking())
+    # Outside context block, capabilities should be closed
     with self.assertRaises(RuntimeError):
-      _ = model_info.supports_thinking()
+      _ = capabilities.supports_thinking()
 
-  def test_model_info_close_explicit(self):
-    model_info = litert_lm.ModelInfo(self.model_path)
-    model_info.close()
+  def test_capabilities_close_explicit(self):
+    capabilities = litert_lm.Capabilities(self.model_path)
+    capabilities.close()
     with self.assertRaises(RuntimeError):
-      _ = model_info.supports_thinking()
+      _ = capabilities.supports_thinking()
     with self.assertRaises(RuntimeError):
-      _ = model_info.default_sampler_params
+      _ = capabilities.default_sampler_params
     with self.assertRaises(RuntimeError):
-      _ = model_info.input_modalities
+      _ = capabilities.input_modalities
 
   @mock.patch(
-      "litert_lm.model_info._ffi._get_lib"
+      "litert_lm.capabilities._ffi._get_lib"
   )
   @mock.patch("os.path.exists", return_value=True)
   def test_max_vision_token_budget(self, unused_mock_exists, mock_get_lib):
@@ -182,11 +182,11 @@ class ModelInfoTest(absltest.TestCase):
     mock_lib.litert_lm_loaded_file_create.return_value = 12345
     mock_lib.litert_lm_loaded_file_max_vision_token_budget.return_value = 280
 
-    model_info = litert_lm.ModelInfo("/fake/path")
-    self.assertEqual(model_info.max_vision_token_budget, 280)
+    capabilities = litert_lm.Capabilities("/fake/path")
+    self.assertEqual(capabilities.max_vision_token_budget, 280)
 
   @mock.patch(
-      "litert_lm.model_info._ffi._get_lib"
+      "litert_lm.capabilities._ffi._get_lib"
   )
   @mock.patch("os.path.exists", return_value=True)
   def test_vision_signature_selection(
@@ -207,11 +207,11 @@ class ModelInfoTest(absltest.TestCase):
         side_effect
     )
 
-    model_info = litert_lm.ModelInfo("/fake/path")
-    self.assertEqual(model_info.vision_signature_selection, [64, 256])
+    capabilities = litert_lm.Capabilities("/fake/path")
+    self.assertEqual(capabilities.vision_signature_selection, [64, 256])
 
   @mock.patch(
-      "litert_lm.model_info._ffi._get_lib"
+      "litert_lm.capabilities._ffi._get_lib"
   )
   @mock.patch("os.path.exists", return_value=True)
   def test_min_runtime_version(self, unused_mock_exists, mock_get_lib):
@@ -220,11 +220,11 @@ class ModelInfoTest(absltest.TestCase):
     mock_lib.litert_lm_loaded_file_create.return_value = 12345
     mock_lib.litert_lm_loaded_file_min_runtime_version.return_value = b"0.12.3"
 
-    model_info = litert_lm.ModelInfo("/fake/path")
-    self.assertEqual(model_info.min_runtime_version, "0.12.3")
+    capabilities = litert_lm.Capabilities("/fake/path")
+    self.assertEqual(capabilities.min_runtime_version, "0.12.3")
 
   @mock.patch(
-      "litert_lm.model_info._ffi._get_lib"
+      "litert_lm.capabilities._ffi._get_lib"
   )
   @mock.patch("os.path.exists", return_value=True)
   def test_min_runtime_version_not_set(self, unused_mock_exists, mock_get_lib):
@@ -233,11 +233,11 @@ class ModelInfoTest(absltest.TestCase):
     mock_lib.litert_lm_loaded_file_create.return_value = 12345
     mock_lib.litert_lm_loaded_file_min_runtime_version.return_value = None
 
-    model_info = litert_lm.ModelInfo("/fake/path")
-    self.assertIsNone(model_info.min_runtime_version)
+    capabilities = litert_lm.Capabilities("/fake/path")
+    self.assertIsNone(capabilities.min_runtime_version)
 
   @mock.patch(
-      "litert_lm.model_info._ffi._get_lib"
+      "litert_lm.capabilities._ffi._get_lib"
   )
   @mock.patch("os.path.exists", return_value=True)
   def test_supported_backends_for_modality(
@@ -260,16 +260,16 @@ class ModelInfoTest(absltest.TestCase):
         fake_supported_backends
     )
 
-    model_info = litert_lm.ModelInfo("/fake/path")
+    capabilities = litert_lm.Capabilities("/fake/path")
     self.assertEqual(
-        model_info.supported_backends_for_modality(
+        capabilities.supported_backends_for_modality(
             litert_lm.LiteRtLmModality.VISION
         ),
         ["gpu", "cpu"],
     )
 
   @mock.patch(
-      "litert_lm.model_info._ffi._get_lib"
+      "litert_lm.capabilities._ffi._get_lib"
   )
   @mock.patch("os.path.exists", return_value=True)
   def test_npu_brand_for_modality(self, unused_mock_exists, mock_get_lib):
@@ -280,9 +280,9 @@ class ModelInfoTest(absltest.TestCase):
         litert_lm.LiteRtLmNpuBrand.MEDIATEK
     )
 
-    model_info = litert_lm.ModelInfo("/fake/path")
+    capabilities = litert_lm.Capabilities("/fake/path")
     self.assertEqual(
-        model_info.npu_brand_for_modality(litert_lm.LiteRtLmModality.AUDIO),
+        capabilities.npu_brand_for_modality(litert_lm.LiteRtLmModality.AUDIO),
         litert_lm.LiteRtLmNpuBrand.MEDIATEK,
     )
     assert_brand = mock_lib.litert_lm_loaded_file_modality_npu_brand
@@ -291,7 +291,7 @@ class ModelInfoTest(absltest.TestCase):
     )
 
   @mock.patch(
-      "litert_lm.model_info._ffi._get_lib"
+      "litert_lm.capabilities._ffi._get_lib"
   )
   @mock.patch("os.path.exists", return_value=True)
   def test_soc_name_for_modality(self, unused_mock_exists, mock_get_lib):
@@ -300,9 +300,9 @@ class ModelInfoTest(absltest.TestCase):
     mock_lib.litert_lm_loaded_file_create.return_value = 12345
     mock_lib.litert_lm_loaded_file_modality_soc_name.return_value = b"SM8750"
 
-    model_info = litert_lm.ModelInfo("/fake/path")
+    capabilities = litert_lm.Capabilities("/fake/path")
     self.assertEqual(
-        model_info.soc_name_for_modality(litert_lm.LiteRtLmModality.TEXT),
+        capabilities.soc_name_for_modality(litert_lm.LiteRtLmModality.TEXT),
         "SM8750",
     )
     assert_fn = mock_lib.litert_lm_loaded_file_modality_soc_name
@@ -311,7 +311,7 @@ class ModelInfoTest(absltest.TestCase):
     )
 
   @mock.patch(
-      "litert_lm.model_info._ffi._get_lib"
+      "litert_lm.capabilities._ffi._get_lib"
   )
   @mock.patch("os.path.exists", return_value=True)
   def test_soc_name_for_modality_none(self, unused_mock_exists, mock_get_lib):
@@ -320,13 +320,13 @@ class ModelInfoTest(absltest.TestCase):
     mock_lib.litert_lm_loaded_file_create.return_value = 12345
     mock_lib.litert_lm_loaded_file_modality_soc_name.return_value = None
 
-    model_info = litert_lm.ModelInfo("/fake/path")
+    capabilities = litert_lm.Capabilities("/fake/path")
     self.assertIsNone(
-        model_info.soc_name_for_modality(litert_lm.LiteRtLmModality.TEXT)
+        capabilities.soc_name_for_modality(litert_lm.LiteRtLmModality.TEXT)
     )
 
   @mock.patch(
-      "litert_lm.model_info._ffi._get_lib"
+      "litert_lm.capabilities._ffi._get_lib"
   )
   @mock.patch("os.path.exists", return_value=True)
   def test_max_context_tokens(self, unused_mock_exists, mock_get_lib):
@@ -335,14 +335,14 @@ class ModelInfoTest(absltest.TestCase):
     mock_lib.litert_lm_loaded_file_create.return_value = 12345
     mock_lib.litert_lm_loaded_file_max_context_tokens.return_value = 4096
 
-    model_info = litert_lm.ModelInfo("/fake/path")
-    self.assertEqual(model_info.max_context_tokens, 4096)
+    capabilities = litert_lm.Capabilities("/fake/path")
+    self.assertEqual(capabilities.max_context_tokens, 4096)
     mock_lib.litert_lm_loaded_file_max_context_tokens.assert_called_once_with(
         12345
     )
 
   @mock.patch(
-      "litert_lm.model_info._ffi._get_lib"
+      "litert_lm.capabilities._ffi._get_lib"
   )
   @mock.patch("os.path.exists", return_value=True)
   def test_is_dynamic_context(self, unused_mock_exists, mock_get_lib):
@@ -351,8 +351,8 @@ class ModelInfoTest(absltest.TestCase):
     mock_lib.litert_lm_loaded_file_create.return_value = 12345
     mock_lib.litert_lm_loaded_file_is_dynamic_context.return_value = True
 
-    model_info = litert_lm.ModelInfo("/fake/path")
-    self.assertTrue(model_info.is_dynamic_context)
+    capabilities = litert_lm.Capabilities("/fake/path")
+    self.assertTrue(capabilities.is_dynamic_context)
     mock_lib.litert_lm_loaded_file_is_dynamic_context.assert_called_once_with(
         12345
     )

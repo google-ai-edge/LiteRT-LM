@@ -13,20 +13,20 @@
 # limitations under the License.
 
 # ==============================================================================
-# Model Info
+# Model Capabilities
 # ==============================================================================
-add_litertlm_library(schema_model_info STATIC
-  model_info.cc
+add_litertlm_library(schema_capabilities STATIC
+  capabilities.cc
 )
-add_library(LiteRTLM::Schema::ModelInfo ALIAS schema_model_info)
+add_library(LiteRTLM::Schema::Capabilities ALIAS schema_capabilities)
 
-target_include_directories(schema_model_info
+target_include_directories(schema_capabilities
   PRIVATE
     "${LITERTLM_GENERATED_SRC_DIR}"
     "${LITERTLM_INCLUDE_PATHS}"
 )
 
-target_link_libraries(schema_model_info
+target_link_libraries(schema_capabilities
   PUBLIC
     LiteRTLM::Schema::Core::HeaderSchema
     LiteRTLM::Schema::Core::Read

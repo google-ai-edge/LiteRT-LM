@@ -27,6 +27,7 @@ swift_library(
     name = "LiteRT_LM_Swift",
     srcs = [
         "Benchmark.swift",
+        "Capabilities.swift",
         "Config.swift",
         "Conversation.swift",
         "EmbeddingEngine.swift",
@@ -35,7 +36,6 @@ swift_library(
         "ExperimentalFlags.swift",
         "LiteRTLMError.swift",
         "Message.swift",
-        "ModelInfo.swift",
         "ResponseFormat.swift",
         "Tool.swift",
         "ToolManager.swift",
@@ -118,10 +118,10 @@ swift_interop_hint(
 cc_library(
     name = "CLiteRTLM_objc",
     hdrs = [
+        "//c:capabilities.h",
         "//c:conversation.h",
         "//c:embedding_engine.h",
         "//c:engine.h",
-        "//c:model_info.h",
     ],
     aspect_hints = [":CLiteRTLM_swift_hint"],
     deps = [
@@ -149,7 +149,7 @@ apple_xcframework(
         "//c:engine.h",
         "//c:conversation.h",
         "//c:embedding_engine.h",
-        "//c:model_info.h",
+        "//c:capabilities.h",
     ],
     deps = [
         ":CLiteRTLM_objc",
@@ -186,7 +186,7 @@ genrule(
         "//c:engine.h",
         "//c:conversation.h",
         "//c:embedding_engine.h",
-        "//c:model_info.h",
+        "//c:capabilities.h",
     ],
     outs = ["CLiteRTLM_mac.zip"],
     cmd = """
@@ -197,14 +197,14 @@ genrule(
        cp $(location //c:engine.h) CLiteRTLM_mac/Headers/
        cp $(location //c:conversation.h) CLiteRTLM_mac/Headers/
        cp $(location //c:embedding_engine.h) CLiteRTLM_mac/Headers/
-       cp $(location //c:model_info.h) CLiteRTLM_mac/Headers/
+       cp $(location //c:capabilities.h) CLiteRTLM_mac/Headers/
        # Create module map
        cat << 'EOF' > CLiteRTLM_mac/Headers/module.modulemap
 module CLiteRTLM {
    header "engine.h"
    header "conversation.h"
    header "embedding_engine.h"
-   header "model_info.h"
+   header "capabilities.h"
    export *
 }
 EOF
@@ -259,11 +259,11 @@ ios_unit_test(
     ],
 )
 
-# Swift library containing test sources for ModelInfo.
+# Swift library containing test sources for Capabilities.
 swift_library(
-    name = "LiteRT_LM_ModelInfoTestsLib",
+    name = "LiteRT_LM_CapabilitiesTestsLib",
     testonly = True,
-    srcs = ["ModelInfoTests.swift"],
+    srcs = ["CapabilitiesTests.swift"],
     copts = ["-enable-testing"],
     data = ["//runtime/testdata"],
     deps = [
@@ -273,14 +273,14 @@ swift_library(
 )
 
 ios_unit_test(
-    name = "LiteRT_LM_ModelInfo_Tests",
+    name = "LiteRT_LM_Capabilities_Tests",
     data = [
         "//runtime/testdata",
     ],
     minimum_os_version = "15.0",
     # The ios_unit_test depends on the swift_library containing the test code.
     deps = [
-        ":LiteRT_LM_ModelInfoTestsLib",
+        ":LiteRT_LM_CapabilitiesTestsLib",
     ],
 )
 

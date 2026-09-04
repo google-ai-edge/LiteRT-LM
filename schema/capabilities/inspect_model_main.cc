@@ -16,10 +16,10 @@
 #include <string>
 
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "schema/model_info/model_info.h"
+#include "schema/capabilities/capabilities.h"
 
-using litert::lm::schema::model_info::InspectModel;
-using litert::lm::schema::model_info::ModelInfo;
+using litert::lm::schema::capabilities::InspectModel;
+using litert::lm::schema::capabilities::ModelCapabilities;
 
 int main(int argc, char* argv[]) {
   if (argc < 2) {
@@ -28,17 +28,17 @@ int main(int argc, char* argv[]) {
   }
 
   std::string model_path = argv[1];
-  absl::StatusOr<ModelInfo> info_or = InspectModel(model_path);
+  absl::StatusOr<ModelCapabilities> info_or = InspectModel(model_path);
   if (!info_or.ok()) {
     std::cerr << "Error inspecting model: " << info_or.status().message()
               << "\n";
     return 1;
   }
 
-  const ModelInfo& info = *info_or;
+  const ModelCapabilities& info = *info_or;
 
   std::cout << "========================================\n";
-  std::cout << " LiteRT-LM Model Info Report\n";
+  std::cout << " LiteRT-LM Model Inspection Report\n";
   std::cout << "========================================\n";
   std::cout << "File: " << model_path << "\n\n";
 

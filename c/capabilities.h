@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef THIRD_PARTY_ODML_LITERT_LM_C_MODEL_INFO_H_
-#define THIRD_PARTY_ODML_LITERT_LM_C_MODEL_INFO_H_
+#ifndef THIRD_PARTY_ODML_LITERT_LM_C_CAPABILITIES_H_
+#define THIRD_PARTY_ODML_LITERT_LM_C_CAPABILITIES_H_
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -216,4 +216,4 @@ const char* litert_lm_loaded_file_min_runtime_version(
 }  // extern "C"
 #endif
 
-#endif  // THIRD_PARTY_ODML_LITERT_LM_C_MODEL_INFO_H_
+#endif  // THIRD_PARTY_ODML_LITERT_LM_C_CAPABILITIES_H_

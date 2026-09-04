@@ -57,7 +57,7 @@ let package = Package(
       exclude: [
         "apple_fm",
         "device_tests",
-        "ModelInfoTests.swift",
+        "CapabilitiesTests.swift",
         "EngineTests.swift",
         "EmbeddingEngineTests.swift",
         "ConversationTests.swift",
@@ -80,10 +80,10 @@ let package = Package(
     ),
     // Separate test targets for each file to avoid naming conflicts:
     .testTarget(
-      name: "ModelInfoTests",
+      name: "CapabilitiesTests",
       dependencies: ["LiteRTLM"],
       path: "swift",
-      sources: ["ModelInfoTests.swift"]
+      sources: ["CapabilitiesTests.swift"]
     ),
     .testTarget(
       name: "ConversationTests",

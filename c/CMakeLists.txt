@@ -85,22 +85,22 @@ target_link_libraries(c_embedding_engine
 )
 
 # ==============================================================================
-# Model Info
+# Capabilities
 # ==============================================================================
-add_litertlm_library(c_model_info STATIC
-  model_info.cc
+add_litertlm_library(c_capabilities STATIC
+  capabilities.cc
 )
-add_library(LiteRTLM::C::ModelInfo ALIAS c_model_info)
+add_library(LiteRTLM::C::Capabilities ALIAS c_capabilities)
 
-target_include_directories(c_model_info
+target_include_directories(c_capabilities
   PRIVATE
     ${LITERTLM_INCLUDE_PATHS}
 )
 
-target_link_libraries(c_model_info
+target_link_libraries(c_capabilities
   PUBLIC
     LITERTLM_DEPS
-    LiteRTLM::Schema::ModelInfo
+    LiteRTLM::Schema::Capabilities
 )
 
 # ==============================================================================
@@ -110,7 +110,7 @@ add_library(c_libs INTERFACE)
 add_library(LiteRTLM::C ALIAS c_libs)
 
 target_link_libraries(c_libs INTERFACE
-  LiteRTLM::C::ModelInfo
+  LiteRTLM::C::Capabilities
   LiteRTLM::C::Conversation
   LiteRTLM::C::Engine
   LiteRTLM::C::EmbeddingEngine

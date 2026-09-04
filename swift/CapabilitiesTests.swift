@@ -23,7 +23,7 @@ private func testDataPath(forResource resource: String) -> String {
   return "\(testSrcdir)/\(resource)"
 }
 
-class ModelInfoTests: XCTestCase {
+class CapabilitiesTests: XCTestCase {
 
   func testInit_SuccessfulWithValidModel() {
     // swift-format-ignore
@@ -31,13 +31,13 @@ class ModelInfoTests: XCTestCase {
       "runtime/testdata/test_lm.litertlm"
     let modelPath = testDataPath(forResource: modelResource)
 
-    let modelInfo = ModelInfo(modelPath: modelPath)
-    XCTAssertNotNil(modelInfo)
+    let capabilities = Capabilities(modelPath: modelPath)
+    XCTAssertNotNil(capabilities)
   }
 
   func testInit_ReturnsNilWithInvalidModelPath() {
-    let modelInfo = ModelInfo(modelPath: "/non/existent/path.litertlm")
-    XCTAssertNil(modelInfo)
+    let capabilities = Capabilities(modelPath: "/non/existent/path.litertlm")
+    XCTAssertNil(capabilities)
   }
 
   func testHasSpeculativeDecodingSupport() {
@@ -46,48 +46,48 @@ class ModelInfoTests: XCTestCase {
       "runtime/testdata/test_lm.litertlm"
     let modelPath = testDataPath(forResource: modelResource)
 
-    guard let modelInfo = ModelInfo(modelPath: modelPath) else {
-      XCTFail("Failed to load model info")
+    guard let capabilities = Capabilities(modelPath: modelPath) else {
+      XCTFail("Failed to load model capabilities")
       return
     }
 
-    // Verify that calling hasSpeculativeDecodingSupport doesn't crash.
-    let supportsSpeculativeDecoding = modelInfo.hasSpeculativeDecodingSupport()
+    // Verify that calling hasSpeculativeDecodingSupport doesn't crash and returns a boolean.
+    let supportsSpeculativeDecoding = capabilities.hasSpeculativeDecodingSupport()
     XCTAssertFalse(supportsSpeculativeDecoding)
 
     // Verify thinking and function calling (false for legacy test model)
-    XCTAssertFalse(modelInfo.supportsThinking())
-    XCTAssertFalse(modelInfo.supportsFunctionCalling())
-    XCTAssertEqual(modelInfo.maxVisionTokenBudget(), -1)
-    XCTAssertNil(modelInfo.visionSignatureSelection())
+    XCTAssertFalse(capabilities.supportsThinking())
+    XCTAssertFalse(capabilities.supportsFunctionCalling())
+    XCTAssertEqual(capabilities.maxVisionTokenBudget(), -1)
+    XCTAssertNil(capabilities.visionSignatureSelection())
 
     // Verify modalities
-    XCTAssertTrue(modelInfo.inputModalities.text)
-    XCTAssertFalse(modelInfo.inputModalities.vision)
-    XCTAssertFalse(modelInfo.inputModalities.audio)
-    XCTAssertFalse(modelInfo.inputModalities.video)
+    XCTAssertTrue(capabilities.inputModalities.text)
+    XCTAssertFalse(capabilities.inputModalities.vision)
+    XCTAssertFalse(capabilities.inputModalities.audio)
+    XCTAssertFalse(capabilities.inputModalities.video)
 
     // Verify default sampler parameters (from model config)
-    let defaultSamplerParams = modelInfo.defaultSamplerParams
+    let defaultSamplerParams = capabilities.defaultSamplerParams
     XCTAssertEqual(defaultSamplerParams.type.rawValue, 2)
     XCTAssertEqual(defaultSamplerParams.temperature, 0.0)
     XCTAssertEqual(defaultSamplerParams.topK, 1)
     XCTAssertEqual(defaultSamplerParams.topP, 0.7)
 
-    // Verify context capabilities (128 from TFLite graph and static context)
-    XCTAssertEqual(modelInfo.maxContextTokens(), 128)
-    XCTAssertFalse(modelInfo.isDynamicContext())
+    // Verify context capabilities (128 from TFLite graph and static context for test model)
+    XCTAssertEqual(capabilities.maxContextTokens(), 128)
+    XCTAssertFalse(capabilities.isDynamicContext())
 
     // Verify minRuntimeVersion is nil for legacy model
-    XCTAssertNil(modelInfo.minRuntimeVersion)
+    XCTAssertNil(capabilities.minRuntimeVersion)
 
     // Verify modality-specific backends for text (defaults to CPU and GPU)
-    XCTAssertEqual(modelInfo.supportedBackends(for: .text), [.cpu, .gpu])
+    XCTAssertEqual(capabilities.supportedBackends(for: .text), [.cpu, .gpu])
     // Verify modality-specific backends for vision (not present -> empty)
-    XCTAssertEqual(modelInfo.supportedBackends(for: .vision), [])
+    XCTAssertEqual(capabilities.supportedBackends(for: .vision), [])
 
-    XCTAssertEqual(modelInfo.npuBrand(for: .text), .unknown)
-    XCTAssertNil(modelInfo.socName(for: .text))
+    XCTAssertEqual(capabilities.npuBrand(for: .text), .unknown)
+    XCTAssertNil(capabilities.socName(for: .text))
   }
 
   func testVisionSignatureSelection_returnsLengthsForMultimodal() {
@@ -96,13 +96,13 @@ class ModelInfoTests: XCTestCase {
       "runtime/testdata/dummy_vision_with_adapter.litertlm"
     let modelPath = testDataPath(forResource: modelResource)
 
-    guard let modelInfo = ModelInfo(modelPath: modelPath) else {
-      XCTFail("Failed to load model info")
+    guard let capabilities = Capabilities(modelPath: modelPath) else {
+      XCTFail("Failed to load model capabilities")
       return
     }
 
-    XCTAssertTrue(modelInfo.inputModalities.vision)
-    guard let lengths = modelInfo.visionSignatureSelection() else {
+    XCTAssertTrue(capabilities.inputModalities.vision)
+    guard let lengths = capabilities.visionSignatureSelection() else {
       XCTFail("visionSignatureSelection returned nil")
       return
     }

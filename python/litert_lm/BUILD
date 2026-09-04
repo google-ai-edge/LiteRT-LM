@@ -31,8 +31,8 @@ pytype_strict_library(
 )
 
 pytype_strict_library(
-    name = "model_info",
-    srcs = ["model_info.py"],
+    name = "capabilities",
+    srcs = ["capabilities.py"],
     deps = [
         ":_ffi",
         ":interfaces",
@@ -135,11 +135,11 @@ pytype_strict_library(
         ":_ffi",
         ":_messages",
         ":benchmark",
+        ":capabilities",
         ":conversation",
         ":embedding_engine",
         ":engine",
         ":interfaces",
-        ":model_info",
         ":session",
         ":tools",
     ],
@@ -160,8 +160,8 @@ py_test(
 )
 
 py_test(
-    name = "model_info_test",
-    srcs = ["model_info_test.py"],
+    name = "capabilities_test",
+    srcs = ["capabilities_test.py"],
     data = ["//runtime/testdata"],
     tags = ["nowindows"],
     deps = [
