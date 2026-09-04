@@ -1,0 +1,19 @@
+<|im_start|>system
+You are a helpful assistant.
+List of tools: [{"name": "get_weather", "description": "Get current weather for a location.", "parameters": {"type": "object", "properties": {"location": {"type": "string", "description": "City name"}}, "required": ["location"]}}]<|im_end|>
+<|im_start|>user
+What is the weather in London and Paris?<|im_end|>
+<|im_start|>assistant
+<|tool_call_start|>[get_weather(location="London")]<|tool_call_end|><|im_end|>
+<|im_start|>tool
+[{"location": "London", "temperature": "18C"}]<|im_end|>
+<|im_start|>assistant
+<|tool_call_start|>[get_weather(location="Paris")]<|tool_call_end|><|im_end|>
+<|im_start|>tool
+[{"location": "Paris", "temperature": "22C"}]<|im_end|>
+<|im_start|>assistant
+18C and 22C.<|im_end|>
+<|im_start|>user
+Thanks!<|im_end|>
+<|im_start|>assistant
+<think>

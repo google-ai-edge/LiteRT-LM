@@ -348,6 +348,16 @@ message Lfm2 {
   repeated float normalization_mean = 9;
   repeated float normalization_std = 10;
   float normalization_rescale_factor = 11;
+
+  // Options for tool calling.
+  // Signifies the beginning of a tool call.
+  optional string code_fence_start = 12;
+  // Signifies the end of tool call.
+  optional string code_fence_end = 13;
+  // Whether to escape the fence strings for regex matching.
+  optional bool escape_fence_strings = 14;
+  // An optional regex to match each line of the tool code block.
+  optional string tool_code_regex = 15;
 }
 
 // Model configuration for MiniCPM5.
