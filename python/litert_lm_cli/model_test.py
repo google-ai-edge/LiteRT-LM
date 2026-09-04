@@ -460,6 +460,65 @@ class ParseBackendWithConfigTest(parameterized.TestCase):
     self.assertEqual(m2.model_id, "custom_model.litertlm")
     self.assertEqual(m2.model_path, "/custom/path/custom_model.litertlm")
 
+  def test_from_model_reference_prefers_imported_model_over_local_directory(
+      self,
+  ):
+    # Setup a mock imported model directory:
+    # ~/.litert-lm/models/gemma4-26b/model.litertlm
+    temp_dir = self.create_tempdir()
+    mock_base = temp_dir.mkdir("models")
+    model_dir = mock_base.mkdir("gemma4-26b")
+    model_file = model_dir.create_file("model.litertlm")
+
+    # Also create a directory named 'gemma4-26b' in current working directory
+    temp_dir.mkdir("gemma4-26b")
+
+    with mock.patch.object(
+        model,
+        "get_converted_models_base_dir",
+        return_value=mock_base.full_path,
+    ):
+      # Even if a local directory exists, from_model_reference should resolve
+      # to the imported model.
+      m = model.Model.from_model_reference("gemma4-26b")
+      self.assertEqual(m.model_id, "gemma4-26b")
+      self.assertEqual(m.model_path, model_file.full_path)
+      self.assertTrue(m.exists())
+
+  def test_from_model_reference_local_file(self):
+    temp_dir = self.create_tempdir()
+    file_path = temp_dir.create_file("my_model.litertlm")
+
+    m = model.Model.from_model_reference(file_path.full_path)
+    self.assertEqual(m.model_id, "my_model.litertlm")
+    self.assertEqual(m.model_path, file_path.full_path)
+    self.assertTrue(m.exists())
+
+  def test_from_model_reference_directory_with_model(self):
+    temp_dir = self.create_tempdir()
+    dir_path = temp_dir.mkdir("exported_model")
+    model_file = dir_path.create_file("model.litertlm")
+
+    m = model.Model.from_model_reference(dir_path.full_path)
+    self.assertEqual(m.model_id, "exported_model")
+    self.assertEqual(m.model_path, model_file.full_path)
+    self.assertTrue(m.exists())
+
+  def test_from_model_id_fallback_to_direct_file(self):
+    temp_dir = self.create_tempdir()
+    mock_base = temp_dir.mkdir("models")
+    direct_file = mock_base.create_file("gemma-2b.litertlm")
+
+    with mock.patch.object(
+        model,
+        "get_converted_models_base_dir",
+        return_value=mock_base.full_path,
+    ):
+      m = model.Model.from_model_id("gemma-2b")
+      self.assertEqual(m.model_id, "gemma-2b")
+      self.assertEqual(m.model_path, direct_file.full_path)
+      self.assertTrue(m.exists())
+
 
 if __name__ == "__main__":
   absltest.main()
