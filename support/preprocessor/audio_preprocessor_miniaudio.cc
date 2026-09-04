@@ -78,6 +78,7 @@ absl::Status AudioPreprocessorMiniAudio::DecodeAudio(
   if (frames_read != frame_count) {
     ABSL_LOG(WARNING) << "Read " << frames_read << " PCM frames instead of "
                       << frame_count << " frames as requested.";
+    pcm_frames.resize(frames_read);
   }
   ma_decoder_uninit(&decoder);
 
