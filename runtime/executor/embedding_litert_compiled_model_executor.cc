@@ -91,6 +91,7 @@ constexpr absl::string_view kEmbeddingEncoderStackTokensPerSecondMetric =
     "(EncoderStackOnly) Embedding tokens per second";
 constexpr absl::string_view kEmbeddingEncoderStackPaddedTokensPerSecondMetric =
     "(EncoderStackOnly) Embedding tokens per second (padded)";
+constexpr absl::string_view kTextEncoderMetricsPrefix = "Text encoder ";
 
 constexpr absl::string_view kEncoderSignatureRunner = "encoder";
 constexpr absl::string_view kPerLayerEmbeddingsName = "per_layer";
@@ -592,6 +593,9 @@ litert::Environment* EmbeddingLiteRtCompiledModelExecutor::GetEnvironment()
 
 absl::Status EmbeddingLiteRtCompiledModelExecutor::StartProfiling() {
   latency_stats_ = ExecutorStats();
+  if (compiled_model_ != nullptr) {
+    StartCompiledModelMetricsCollection(*compiled_model_);
+  }
   return absl::OkStatus();
 }
 
@@ -603,6 +607,11 @@ EmbeddingLiteRtCompiledModelExecutor::StopProfiling() {
   ExecutorStats stats = *std::move(latency_stats_);
   latency_stats_ = std::nullopt;
   stats.module_name = kEmbeddingModuleName;
+
+  if (compiled_model_ != nullptr) {
+    CollectCompiledModelMetrics(*compiled_model_, stats,
+                                kTextEncoderMetricsPrefix);
+  }
 
   auto num_tokens_metric = stats.GetMetric(kEmbeddingNumTokensMetric);
   int64_t num_tokens = 0;

@@ -29,6 +29,7 @@
 #include <vector>
 
 #include "absl/algorithm/container.h"  // from @com_google_absl
+#include "absl/cleanup/cleanup.h"  // from @com_google_absl
 #include "absl/container/btree_map.h"  // from @com_google_absl
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
@@ -39,6 +40,10 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "litert/c/litert_any.h"  // from @litert
+#include "litert/c/litert_common.h"  // from @litert
+#include "litert/c/litert_compiled_model.h"  // from @litert
+#include "litert/c/litert_metrics.h"  // from @litert
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_expected.h"  // from @litert
@@ -52,6 +57,7 @@
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
 #include "runtime/components/embedding_lookup/embedding_lookup_text.h"
 #include "runtime/components/model_resources.h"
+#include "runtime/executor/executor_stats.h"
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/util/status_macros.h"  // IWYU pragma: keep NOLINT
 #include "runtime/components/model_resources_litert_lm.h"  // IWYU pragma: keep
@@ -1170,6 +1176,67 @@ absl::Status InitializeEmbeddingLookups(
   }
 
   return absl::OkStatus();
+}
+
+void StartCompiledModelMetricsCollection(LiteRtCompiledModel compiled_model,
+                                         int detail_level) {
+  if (compiled_model == nullptr) {
+    return;
+  }
+  // Triggers metrics collection for delegates (e.g., GPU, NPU) attached to the
+  // compiled model.
+  LiteRtCompiledModelStartMetricsCollection(compiled_model, detail_level);
+}
+
+void CollectCompiledModelMetrics(LiteRtCompiledModel compiled_model,
+                                 ExecutorStats& stats,
+                                 absl::string_view prefix) {
+  if (compiled_model == nullptr) {
+    return;
+  }
+  LiteRtMetrics metrics = nullptr;
+  if (LiteRtCreateMetrics(&metrics) != kLiteRtStatusOk) {
+    return;
+  }
+  absl::Cleanup metrics_cleanup = [&] { LiteRtDestroyMetrics(metrics); };
+
+  // Stops metrics collection on attached delegates, retrieves the metrics, and
+  // clears the accumulated stats on the delegates.
+  if (LiteRtCompiledModelStopMetricsCollection(compiled_model, metrics) !=
+      kLiteRtStatusOk) {
+    return;
+  }
+
+  int num_metrics = 0;
+  if (LiteRtGetNumMetrics(metrics, &num_metrics) != kLiteRtStatusOk) {
+    return;
+  }
+
+  for (int i = 0; i < num_metrics; ++i) {
+    LiteRtMetric metric;
+    if (LiteRtGetMetric(metrics, i, &metric) != kLiteRtStatusOk) {
+      continue;
+    }
+    std::string metric_name = prefix.empty()
+                                  ? std::string(metric.name)
+                                  : absl::StrCat(prefix, metric.name);
+    switch (metric.value.type) {
+      case kLiteRtAnyTypeInt:
+        stats.Accumulate(metric_name, metric.value.int_value);
+        break;
+      case kLiteRtAnyTypeReal:
+        stats.Accumulate(metric_name, metric.value.real_value);
+        break;
+      case kLiteRtAnyTypeBool:
+        stats.Accumulate(metric_name,
+                         metric.value.bool_value ? int64_t{1} : int64_t{0});
+        break;
+      default:
+        ABSL_LOG(WARNING) << "Unsupported metric type for '" << metric_name
+                          << "': " << metric.value.type;
+        break;
+    }
+  }
 }
 
 }  // namespace litert::lm

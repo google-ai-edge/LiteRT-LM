@@ -75,6 +75,8 @@ constexpr absl::string_view kVisionEncoderInferenceLatency =
     "Vision encoder inference";
 constexpr absl::string_view kVisionAdapterInferenceLatency =
     "Vision adapter inference";
+constexpr absl::string_view kVisionEncoderMetricsPrefix = "Vision encoder ";
+constexpr absl::string_view kVisionAdapterMetricsPrefix = "Vision adapter ";
 
 // The image patch input tensor name for ViT encoder.
 constexpr absl::string_view kImages = "images";
@@ -821,6 +823,12 @@ VisionLiteRtCompiledModelExecutor::GetVisionExecutorProperties() const {
 
 absl::Status VisionLiteRtCompiledModelExecutor::StartProfiling() {
   latency_stats_ = ExecutorStats();
+  if (vision_encoder_ != nullptr) {
+    StartCompiledModelMetricsCollection(vision_encoder_->GetCompiledModel());
+  }
+  if (vision_adapter_ != nullptr) {
+    StartCompiledModelMetricsCollection(vision_adapter_->GetCompiledModel());
+  }
   return absl::OkStatus();
 }
 
@@ -832,6 +840,14 @@ VisionLiteRtCompiledModelExecutor::StopProfiling() {
   ExecutorStats stats = *std::move(latency_stats_);
   stats.module_name = kVisionModuleName;
   latency_stats_ = std::nullopt;
+  if (vision_encoder_ != nullptr) {
+    CollectCompiledModelMetrics(vision_encoder_->GetCompiledModel(), stats,
+                                kVisionEncoderMetricsPrefix);
+  }
+  if (vision_adapter_ != nullptr) {
+    CollectCompiledModelMetrics(vision_adapter_->GetCompiledModel(), stats,
+                                kVisionAdapterMetricsPrefix);
+  }
   return stats;
 }
 

@@ -77,6 +77,8 @@ constexpr absl::string_view kAudioEncoderInferenceLatency =
     "Audio encoder inference";
 constexpr absl::string_view kAudioAdapterInferenceLatency =
     "Audio adapter inference";
+constexpr absl::string_view kAudioEncoderMetricsPrefix = "Audio encoder ";
+constexpr absl::string_view kAudioAdapterMetricsPrefix = "Audio adapter ";
 
 // Set the default GPU options for the model.
 absl::Status SetGpuOptions(const AudioExecutorSettings& executor_settings,
@@ -1424,6 +1426,12 @@ AudioLiteRtCompiledModelExecutor::CreateAndLockAudioTensor(int num_tokens,
 
 absl::Status AudioLiteRtCompiledModelExecutor::StartProfiling() {
   latency_stats_ = ExecutorStats();
+  if (audio_encoder_ != nullptr) {
+    StartCompiledModelMetricsCollection(audio_encoder_->GetCompiledModel());
+  }
+  if (audio_adapter_ != nullptr) {
+    StartCompiledModelMetricsCollection(audio_adapter_->GetCompiledModel());
+  }
   return absl::OkStatus();
 }
 
@@ -1435,6 +1443,14 @@ AudioLiteRtCompiledModelExecutor::StopProfiling() {
   ExecutorStats stats = *std::move(latency_stats_);
   stats.module_name = kAudioModuleName;
   latency_stats_ = std::nullopt;
+  if (audio_encoder_ != nullptr) {
+    CollectCompiledModelMetrics(audio_encoder_->GetCompiledModel(), stats,
+                                kAudioEncoderMetricsPrefix);
+  }
+  if (audio_adapter_ != nullptr) {
+    CollectCompiledModelMetrics(audio_adapter_->GetCompiledModel(), stats,
+                                kAudioAdapterMetricsPrefix);
+  }
   return stats;
 }
 

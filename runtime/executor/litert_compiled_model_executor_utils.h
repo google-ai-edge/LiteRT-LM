@@ -28,6 +28,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "litert/c/litert_common.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
 #include "litert/cc/litert_options.h"  // from @litert
@@ -37,6 +38,7 @@
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/executor/executor_stats.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/proto/executor_metadata.pb.h"
 #include "runtime/proto/sampler_params.pb.h"
@@ -313,6 +315,25 @@ absl::Status InitializeEmbeddingLookups(
     ::litert::Environment& env, ModelResources& resources,
     std::unique_ptr<EmbeddingLookupManager>& embedding_lookup,
     std::unique_ptr<EmbeddingLookupManager>& per_layer_embedding_lookup);
+
+// Starts hardware-specific metrics collection on a compiled model.
+void StartCompiledModelMetricsCollection(LiteRtCompiledModel compiled_model,
+                                         int detail_level = 100);
+inline void StartCompiledModelMetricsCollection(
+    const ::litert::CompiledModel& compiled_model, int detail_level = 100) {
+  StartCompiledModelMetricsCollection(compiled_model.Get(), detail_level);
+}
+
+// Stops hardware-specific metrics collection and records the collected metrics
+// into `stats` with an optional prefix for metric names.
+void CollectCompiledModelMetrics(LiteRtCompiledModel compiled_model,
+                                 ExecutorStats& stats,
+                                 absl::string_view prefix = "");
+inline void CollectCompiledModelMetrics(
+    const ::litert::CompiledModel& compiled_model, ExecutorStats& stats,
+    absl::string_view prefix = "") {
+  CollectCompiledModelMetrics(compiled_model.Get(), stats, prefix);
+}
 
 }  // namespace litert::lm
 
