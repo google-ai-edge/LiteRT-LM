@@ -334,6 +334,44 @@ cc_test(
     ],
 )
 
+# Public shared library for the C API. Lets language wrappers (Dart FFI,
+# Python ctypes, Node N-API, Rust bindgen) consume LiteRT-LM without
+# embedding the full Bazel build graph. Only LiteRT* / litert_lm_*
+# symbols are exposed via the platform-specific export mechanism (.def
+# on Windows, --dynamic-list on Linux, -exported_symbol on Apple) — the
+# rest of the symbol table (absl, protobuf, internal helpers) stays
+# hidden so plugin-internal namespaces don't collide with consumer code.
+cc_binary(
+    name = "LiteRtLm",
+    linkshared = True,
+    win_def_file = "windows_exports.def",
+    linkopts = select({
+        "@platforms//os:macos": [
+            "-Wl,-exported_symbol,_LiteRt*",
+            "-Wl,-exported_symbol,_litert_lm_*",
+        ],
+        "@platforms//os:ios": [
+            "-Wl,-exported_symbol,_LiteRt*",
+            "-Wl,-exported_symbol,_litert_lm_*",
+        ],
+        "@platforms//os:linux": [
+            "-Wl,--dynamic-list=$(location :dynamic_list.lds)",
+        ],
+        "//conditions:default": [],
+    }),
+    additional_linker_inputs = select({
+        "@platforms//os:linux": [":dynamic_list.lds"],
+        "//conditions:default": [],
+    }),
+    visibility = ["//visibility:public"],
+    deps = [":engine"],
+)
+
+exports_files([
+    "dynamic_list.lds",
+    "windows_exports.def",
+])
+
 cc_test(
     name = "engine_test",
     srcs = ["engine_test.cc"],
