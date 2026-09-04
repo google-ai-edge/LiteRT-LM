@@ -1,0 +1,14 @@
+<|start_header_id|>system<|end_header_id|>
+
+I am The System!<|eot_id|>
+<|start_header_id|>user<|end_header_id|>
+
+I need help<|eot_id|>
+<|start_header_id|>assistant<|end_header_id|>
+
+Hi, what can I do for you?<|eot_id|>
+<|start_header_id|>user<|end_header_id|>
+
+Write a poem about a cat<|eot_id|>
+<|start_header_id|>assistant<|end_header_id|>
+

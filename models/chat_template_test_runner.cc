@@ -141,6 +141,12 @@ PromptTemplateInput ParseInputJson(const json& j) {
     if (j.contains("extra_context")) {
       input.extra_context = j["extra_context"];
     }
+    if (j.contains("bos_token")) {
+      input.bos_token = j["bos_token"];
+    }
+    if (j.contains("eos_token")) {
+      input.eos_token = j["eos_token"];
+    }
   }
   return input;
 }

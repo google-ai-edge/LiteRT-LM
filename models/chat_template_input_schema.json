@@ -178,6 +178,14 @@
     "add_generation_prompt": {
       "type": "boolean",
       "description": "Flag indicating whether to append the model's turn-start sequence to prompt the model to begin generating its response."
+    },
+    "bos_token": {
+      "type": "string",
+      "description": "The beginning-of-sequence token."
+    },
+    "eos_token": {
+      "type": "string",
+      "description": "The end-of-sequence token."
     }
   },
   "required": ["messages"]

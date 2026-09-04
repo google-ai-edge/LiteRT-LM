@@ -43,7 +43,7 @@ constexpr char kTestdataDir[] =
 
 constexpr absl::string_view kTestModelTemplates[] = {
     "google-gemma-3n-e2b-it", "HuggingFaceTB-SmolLM3-3B",
-    "microsoft-Phi-4-mini-instruct"};
+    "microsoft-Phi-4-mini-instruct", "bos-token-test"};
 
 json GetMessageSystem() {
   return {

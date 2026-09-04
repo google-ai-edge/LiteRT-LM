@@ -59,6 +59,10 @@ struct ChatTemplateInputs {
     extra_context: Value,
     #[serde(default)]
     now: Option<i64>,
+    #[serde(default)]
+    bos_token: Value,
+    #[serde(default)]
+    eos_token: Value,
 }
 
 #[derive(Clone)]
@@ -300,6 +304,9 @@ impl MinijinjaTemplate {
         if let Some(now) = inputs.now {
             ctx.insert("now".to_string(), Value::Number(serde_json::Number::from(now)));
         }
+
+        ctx.insert("bos_token".to_string(), inputs.bos_token.clone());
+        ctx.insert("eos_token".to_string(), inputs.eos_token.clone());
 
         if let Some(obj) = inputs.extra_context.as_object() {
             for (k, v) in obj {
