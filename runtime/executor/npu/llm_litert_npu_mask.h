@@ -39,10 +39,13 @@ struct MaskSignatures {
   static constexpr absl::string_view kDecodeMask = "decode_mask";
   static constexpr absl::string_view kVerifyMask = "verify_mask";
   static constexpr absl::string_view kMtpMask = "mask";
-  // Prefill and decode use identical tensor signature names.
   static constexpr absl::string_view kMaskInputTimeStep = "time_step";
   static constexpr absl::string_view kMaskInputTokens = "input_tokens";
   static constexpr absl::string_view kMaskInputValidMask = "valid_mask";
+  static constexpr absl::string_view kMaskLocalContextLength =
+      "local_context_length";
+  static constexpr absl::string_view kMaskGlobalContextLength =
+      "global_context_length";
   static constexpr absl::string_view kMaskLocal = "mask_local";
   static constexpr absl::string_view kMaskGlobal = "mask_global";
 };

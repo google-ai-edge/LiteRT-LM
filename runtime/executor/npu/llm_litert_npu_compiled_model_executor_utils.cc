@@ -427,11 +427,17 @@ litert::Expected<litert::Options> CreateLiteRtNpuOptions(
   qnn_opts.SetLogLevel(::litert::qualcomm::QualcommOptions::LogLevel::kOff);
   qnn_opts.SetHtpPerformanceMode(
       ::litert::qualcomm::QualcommOptions::HtpPerformanceMode::kBurst);
+  // Dynamic models embed fine-grained EdgetpuMemoryPowerState directives
+  // directly in the graph bytecode. Setting PerformanceMode here causes
+  // SouthBound to reject execution due to mutual exclusivity (Cannot mix
+  // PerformanceMode with EdgetpuMemoryPowerState).
+#if !defined(LITERT_ENABLE_FABRIC_INTEGRATION)
   LITERT_ASSIGN_OR_RETURN(
       auto& google_tensor_opts,
       options.GetOptions<::litert::google_tensor::GoogleTensorOptions>());
   google_tensor_opts.SetPerformanceMode(
       ::litert::google_tensor::GoogleTensorOptions::PerformanceMode::kBurst);
+#endif  // !defined(LITERT_ENABLE_FABRIC_INTEGRATION)
 #endif
   return options;
 }

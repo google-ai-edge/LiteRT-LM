@@ -589,6 +589,7 @@ cc_library(
         "//runtime/components/constrained_decoding:constrained_decoder",
         "//runtime/executor/litert:legacy_map_state",
         "//runtime/executor/npu:llm_litert_npu_compiled_model_executor_utils",
+        "//runtime/executor/npu:llm_litert_npu_dynamism",
         "//runtime/executor/npu:llm_litert_npu_embedder",
         "//runtime/executor/npu:llm_litert_npu_kv_cache",
         "//runtime/executor/npu:llm_litert_npu_mask",
