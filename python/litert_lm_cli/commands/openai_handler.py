@@ -238,7 +238,7 @@ def _parse_thinking_config(
     body: dict[str, Any],
     model_id: str | None = None,
 ) -> litert_lm.ThinkingConfig | None:
-  """Parses and validates thinking/reasoning parameters from the request body or config.json."""
+  """Parses and validates thinking/reasoning parameters."""
   reasoning_effort = body.get("reasoning_effort")
   if reasoning_effort is not None:
     if not isinstance(reasoning_effort, str):
@@ -609,17 +609,101 @@ class OpenAIResponse:
 
 
 def _parse_tool_arguments(args_str: str) -> dict[str, Any]:
-  """Parses a JSON string of arguments into a dictionary, returning empty dict on error."""
+  """Parses a JSON string of arguments into a dictionary."""
   try:
     return json.loads(args_str)
   except json.JSONDecodeError:
     return {}
 
 
+def _normalize_incoming_messages(
+    messages: Sequence[Any],
+) -> list[dict[str, Any]]:
+  """Normalizes incoming message history to repair consecutive assistant turns.
+
+  Handles serialization fallthrough where tool execution results were assigned
+  role="assistant" instead of role="tool", and merges consecutive plain
+  assistant turns to maintain strict user/assistant/tool turn alternation.
+
+  Args:
+    messages: Raw messages sequence from chat completions request body.
+
+  Returns:
+    A normalized list of message dictionaries.
+  """
+  if not messages:
+    return []
+
+  normalized: list[dict[str, Any]] = []
+  last_tool_calls: list[dict[str, Any]] | None = None
+
+  for raw_msg in messages:
+    if not isinstance(raw_msg, dict):
+      continue
+    msg = dict(raw_msg)
+    role = msg.get("role")
+
+    if role == "assistant":
+      tool_calls = msg.get("tool_calls")
+      if tool_calls and isinstance(tool_calls, list):
+        last_tool_calls = [tc for tc in tool_calls if isinstance(tc, dict)]
+        normalized.append(msg)
+        continue
+
+      # If there is a preceding assistant message with tool calls that has not
+      # been answered by a "tool" message, this assistant message is an
+      # orphaned tool observation turn. Convert it to role: "tool".
+      if last_tool_calls:
+        tc = last_tool_calls.pop(0)
+        tc_id = tc.get("id", "")
+        func_name = ""
+        func_obj = tc.get("function")
+        if isinstance(func_obj, dict):
+          func_name = func_obj.get("name", "")
+        tool_msg: dict[str, Any] = {
+            "role": "tool",
+            "content": msg.get("content", ""),
+        }
+        if tc_id:
+          tool_msg["tool_call_id"] = tc_id
+        if func_name:
+          tool_msg["name"] = func_name
+        normalized.append(tool_msg)
+        if not last_tool_calls:
+          last_tool_calls = None
+        continue
+
+      # Merge consecutive plain assistant turns.
+      if (
+          normalized
+          and normalized[-1].get("role") == "assistant"
+          and not normalized[-1].get("tool_calls")
+      ):
+        prev_content = normalized[-1].get("content", "")
+        curr_content = msg.get("content", "")
+        if isinstance(prev_content, str) and isinstance(curr_content, str):
+          if prev_content and curr_content:
+            normalized[-1]["content"] = f"{prev_content}\n{curr_content}"
+          elif curr_content:
+            normalized[-1]["content"] = curr_content
+        continue
+
+      normalized.append(msg)
+      last_tool_calls = None
+    elif role == "tool":
+      last_tool_calls = None
+      normalized.append(msg)
+    else:
+      last_tool_calls = None
+      normalized.append(msg)
+
+  return normalized
+
+
 def _build_name_by_tool_call_id_map(
     messages: Sequence[Any],
 ) -> dict[str, str]:
-  """Builds a mapping from tool_call_id to function name from message history."""
+  """Builds a mapping from tool_call_id to function name from history."""
   name_by_tool_call_id = {}
   for m in messages:
     if not isinstance(m, dict):
@@ -844,7 +928,7 @@ class OpenAIHandler(serve_util.CORSRequestHandler):
       client_address: Any,
       server: http.server.HTTPServer,
   ):
-    """Pre-assigns internal routing state flags before standard lifecycle execution."""
+    """Initializes handler state flags before execution."""
     self._headers_sent = False
     super().__init__(request, client_address, server)
 
@@ -1253,6 +1337,7 @@ class OpenAIHandler(serve_util.CORSRequestHandler):
 
     messages = body.get("messages")
     if isinstance(messages, list) and messages:
+      messages = _normalize_incoming_messages(messages)
       name_by_tool_call_id = _build_name_by_tool_call_id_map(messages)
 
       try:
@@ -1345,15 +1430,12 @@ class OpenAIHandler(serve_util.CORSRequestHandler):
 
     try:
       context_messages = translated_messages[:-1] if translated_messages else []
-      provider = (
-          litert_lm.LiteRtLmConstraintProviderType.LL_GUIDANCE
-          if response_format is not None
-          else None
-      )
-      constrained_decoding_config = litert_lm.ConstrainedDecodingConfig(
-          enable=True,
-          provider=provider,
-      )
+      constrained_decoding_config = None
+      if response_format is not None:
+        constrained_decoding_config = litert_lm.ConstrainedDecodingConfig(
+            enable=True,
+            provider=litert_lm.LiteRtLmConstraintProviderType.LL_GUIDANCE,
+        )
       with engine.create_conversation(
           messages=context_messages,
           tools=tools or None,
