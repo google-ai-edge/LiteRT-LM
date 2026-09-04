@@ -43,6 +43,7 @@
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
 #include "runtime/engine/io_types.h"
+#include "runtime/executor/executor_stats.h"
 #include "runtime/executor/vision/vision_executor_utils.h"
 #if !defined(LITERT_DISABLE_NPU)
 #include "litert/cc/options/litert_google_tensor_options.h"  // from @litert
@@ -65,8 +66,15 @@
 #include "runtime/util/status_macros.h"  // NOLINT
 
 namespace litert::lm {
-
 namespace {
+
+constexpr absl::string_view kVisionModuleName = "Vision";
+constexpr absl::string_view kVisionNumImagesMetric = "Vision num images";
+constexpr absl::string_view kVisionNumPatchesMetric = "Vision num patches";
+constexpr absl::string_view kVisionEncoderInferenceLatency =
+    "Vision encoder inference";
+constexpr absl::string_view kVisionAdapterInferenceLatency =
+    "Vision adapter inference";
 
 // The image patch input tensor name for ViT encoder.
 constexpr absl::string_view kImages = "images";
@@ -473,6 +481,7 @@ litert::lm::VisionLiteRtCompiledModelExecutor::Create(
 
 absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(
     const litert::TensorBuffer& input_image_tensor) {
+  ScopedLatency scoped_total_latency(latency_stats_);
   LITERT_ASSIGN_OR_RETURN(auto input_image_data,
                           ReferTensorBufferAsSpan<float>(input_image_tensor));
   LITERT_RETURN_IF_ERROR(
@@ -483,9 +492,13 @@ absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(
     LITERT_ASSIGN_OR_RETURN(
         auto encoder_outputs,
         vision_encoder_->GetCompiledModel().CreateOutputBuffers(0));
-    LITERT_RETURN_IF_ERROR(vision_encoder_->GetCompiledModel().Run(
-        /*input_buffers=*/vision_encoder_->GetInputBuffers(),
-        /*output_buffers=*/encoder_outputs));
+    {
+      ScopedLatency scoped(latency_stats_, kVisionEncoderInferenceLatency);
+      LITERT_RETURN_IF_ERROR(vision_encoder_->GetCompiledModel().Run(
+          /*input_buffers=*/vision_encoder_->GetInputBuffers(),
+          /*output_buffers=*/encoder_outputs));
+    }
+    AccumulateStat(latency_stats_, kVisionNumImagesMetric, int64_t{1});
     return ExecutorVisionData(std::move(encoder_outputs[0]),
                               /*per_layer_embeddings=*/std::nullopt);
   }
@@ -511,13 +524,21 @@ absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(
         vision_encoder_->GetCompiledModel().CreateOutputBuffers(0));
   }
 
-  LITERT_RETURN_IF_ERROR(vision_encoder_->GetCompiledModel().Run(
-      /*input_buffers=*/vision_encoder_->GetInputBuffers(),
-      /*output_buffers=*/encoder_outputs));
+  {
+    ScopedLatency scoped(latency_stats_, kVisionEncoderInferenceLatency);
+    LITERT_RETURN_IF_ERROR(vision_encoder_->GetCompiledModel().Run(
+        /*input_buffers=*/vision_encoder_->GetInputBuffers(),
+        /*output_buffers=*/encoder_outputs));
+  }
 
-  LITERT_RETURN_IF_ERROR(vision_adapter_->GetCompiledModel().Run(
-      /*input_buffers=*/encoder_outputs,
-      /*output_buffers=*/output_tensor_buffers));
+  {
+    ScopedLatency scoped(latency_stats_, kVisionAdapterInferenceLatency);
+    LITERT_RETURN_IF_ERROR(vision_adapter_->GetCompiledModel().Run(
+        /*input_buffers=*/encoder_outputs,
+        /*output_buffers=*/output_tensor_buffers));
+  }
+
+  AccumulateStat(latency_stats_, kVisionNumImagesMetric, int64_t{1});
 
   return ExecutorVisionData(std::move(output_tensor_buffers[0]),
                             /*per_layer_embeddings=*/std::nullopt);
@@ -530,6 +551,7 @@ VisionLiteRtCompiledModelExecutor::GetExpectedInputDimension() const {
 
 absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(
     const absl::flat_hash_map<std::string, litert::TensorBuffer>& input_maps) {
+  ScopedLatency scoped_total_latency(latency_stats_);
 
   // Note: `positions_xy` is only required by transformer (ViT) encoders. Single
   // input encoders (e.g. LFM2 VL) do not provide it, so we only validate the
@@ -643,8 +665,12 @@ absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(
       vision_encoder_->GetCompiledModel().CreateOutputBuffers(
           encoder_signature_index));
 
-  LITERT_RETURN_IF_ERROR(vision_encoder_->GetCompiledModel().Run(
-      encoder_signature_index, encoder_input_buffers, encoder_output_buffers));
+  {
+    ScopedLatency scoped(latency_stats_, kVisionEncoderInferenceLatency);
+    LITERT_RETURN_IF_ERROR(vision_encoder_->GetCompiledModel().Run(
+        encoder_signature_index, encoder_input_buffers,
+        encoder_output_buffers));
+  }
 
   int num_patches = 0;
   auto mask_index = vision_encoder_->GetCompiledModel().FindOutputIndex(
@@ -706,10 +732,13 @@ absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(
     LITERT_RETURN_IF_ERROR(adapter_input_buffers[0].Write<float>(absl::MakeSpan(
         encoder_output_data.data(), num_patches * encoder_output_dim)));
 
-    LITERT_RETURN_IF_ERROR(vision_adapter_->GetCompiledModel().Run(
-        *adapter_signature_index,
-        /*input_buffers=*/adapter_input_buffers,
-        /*output_buffers=*/adapter_output_tensor_buffers));
+    {
+      ScopedLatency scoped(latency_stats_, kVisionAdapterInferenceLatency);
+      LITERT_RETURN_IF_ERROR(vision_adapter_->GetCompiledModel().Run(
+          *adapter_signature_index,
+          /*input_buffers=*/adapter_input_buffers,
+          /*output_buffers=*/adapter_output_tensor_buffers));
+    }
 
     LITERT_ASSIGN_OR_RETURN(auto adapter_output_tensor_type,
                             adapter_output_tensor_buffers[0].TensorType());
@@ -753,6 +782,10 @@ absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(
         adapter_output_data.subspan(0, num_patches * output_dim)));
 #endif  // !defined(LITERT_DISABLE_NPU)
 
+    AccumulateStat(latency_stats_, kVisionNumImagesMetric, int64_t{1});
+    AccumulateStat(latency_stats_, kVisionNumPatchesMetric,
+                   static_cast<int64_t>(num_patches));
+
     return ExecutorVisionData(std::move(output_tensor),
                               /*per_layer_embeddings=*/std::nullopt);
   } else {
@@ -772,6 +805,10 @@ absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(
         output_tensor.Write<float>(absl::MakeConstSpan(encoder_output_data)
                                        .subspan(0, num_patches * output_dim)));
 
+    AccumulateStat(latency_stats_, kVisionNumImagesMetric, int64_t{1});
+    AccumulateStat(latency_stats_, kVisionNumPatchesMetric,
+                   static_cast<int64_t>(num_patches));
+
     return ExecutorVisionData(std::move(output_tensor),
                               /*per_layer_embeddings=*/std::nullopt);
   }
@@ -780,6 +817,22 @@ absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(
 absl::StatusOr<VisionExecutorProperties>
 VisionLiteRtCompiledModelExecutor::GetVisionExecutorProperties() const {
   return vision_executor_properties_;
+}
+
+absl::Status VisionLiteRtCompiledModelExecutor::StartProfiling() {
+  latency_stats_ = ExecutorStats();
+  return absl::OkStatus();
+}
+
+absl::StatusOr<ExecutorStats>
+VisionLiteRtCompiledModelExecutor::StopProfiling() {
+  if (!latency_stats_.has_value()) {
+    return absl::FailedPreconditionError("Profiling has not been started.");
+  }
+  ExecutorStats stats = *std::move(latency_stats_);
+  stats.module_name = kVisionModuleName;
+  latency_stats_ = std::nullopt;
+  return stats;
 }
 
 }  // namespace litert::lm

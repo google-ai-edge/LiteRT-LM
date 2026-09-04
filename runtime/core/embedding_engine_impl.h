@@ -19,6 +19,7 @@
 #include <optional>
 #include <vector>
 
+#include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/types/optional.h"  // from @com_google_absl
 #include "runtime/components/model_resources.h"
@@ -27,6 +28,7 @@
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/audio/audio_executor.h"
 #include "runtime/executor/embedding/embedding_executor_base.h"
+#include "runtime/executor/executor_stats.h"
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/vision/vision_executor.h"
 #include "runtime/proto/embedding_metadata.pb.h"
@@ -148,6 +150,9 @@ class EmbeddingEngineImpl : public EmbeddingEngine {
   }
 
  private:
+  absl::Status StartExecutorProfiling();
+  absl::Status StopExecutorProfiling();
+
   absl::StatusOr<std::vector<InputData>> InsertSpecialTokens(
       const std::vector<InputData>& contents) const;
 

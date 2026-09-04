@@ -38,6 +38,7 @@
 #include "runtime/executor/audio/audio_executor.h"
 #include "runtime/executor/audio/audio_executor_settings.h"
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/executor/executor_stats.h"
 #include "runtime/executor/llm_executor_io_types.h"
 
 namespace litert::lm {
@@ -152,6 +153,9 @@ class AudioLiteRtCompiledModelExecutor : public AudioExecutor {
   absl::Status UseLoRA(std::optional<uint32_t> lora_id) override {
     return audio_encoder_->UseLoRA(lora_id);
   }
+
+  absl::Status StartProfiling() override;
+  absl::StatusOr<ExecutorStats> StopProfiling() override;
 
  private:
   // The Audio Encoder LiteRT CompiledModel wrapper manage the input and
@@ -552,6 +556,8 @@ class AudioLiteRtCompiledModelExecutor : public AudioExecutor {
   std::unique_ptr<ModelResources> resources_;
   std::unique_ptr<AudioEncoder> audio_encoder_;
   std::unique_ptr<AudioAdapter> audio_adapter_;
+
+  std::optional<ExecutorStats> latency_stats_;
 };
 
 }  // namespace litert::lm

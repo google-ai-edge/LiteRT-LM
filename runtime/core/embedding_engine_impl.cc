@@ -28,6 +28,7 @@
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/optional.h"  // from @com_google_absl
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/model_resources.h"
@@ -41,6 +42,7 @@
 #include "runtime/executor/embedding/embedding_executor_settings.h"
 #include "runtime/executor/embedding_litert_compiled_model_executor.h"
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/executor/executor_stats.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/model_signature_utils.h"
@@ -64,6 +66,8 @@
 namespace litert::lm {
 
 namespace {
+
+constexpr absl::string_view kEmbeddingModuleName = "Embedding";
 
 absl::StatusOr<std::vector<int>> TokenUnionToTokenIds(
     const proto::TokenUnion& token_union,
@@ -458,10 +462,9 @@ absl::StatusOr<std::vector<InputData>> EmbeddingEngineImpl::InsertSpecialTokens(
     const std::vector<InputData>& contents) const {
   std::vector<InputData> new_contents;
   if (!special_tokens_.bos_token_ids.empty()) {
-    LITERT_ASSIGN_OR_RETURN(
-        auto bos_tensor,
-        litert::support::Tokenizer::TokenIdsToTensorBuffer(
-            special_tokens_.bos_token_ids));
+    LITERT_ASSIGN_OR_RETURN(auto bos_tensor,
+                            litert::support::Tokenizer::TokenIdsToTensorBuffer(
+                                special_tokens_.bos_token_ids));
     new_contents.push_back(InputText(std::move(bos_tensor)));
   }
   for (const auto& item : contents) {
@@ -507,10 +510,9 @@ absl::StatusOr<std::vector<InputData>> EmbeddingEngineImpl::InsertSpecialTokens(
     }
   }
   if (!special_tokens_.eos_token_ids.empty()) {
-    LITERT_ASSIGN_OR_RETURN(
-        auto eos_tensor,
-        litert::support::Tokenizer::TokenIdsToTensorBuffer(
-            special_tokens_.eos_token_ids));
+    LITERT_ASSIGN_OR_RETURN(auto eos_tensor,
+                            litert::support::Tokenizer::TokenIdsToTensorBuffer(
+                                special_tokens_.eos_token_ids));
     new_contents.push_back(InputText(std::move(eos_tensor)));
   }
   return new_contents;
@@ -617,9 +619,8 @@ absl::StatusOr<ExecutorInputs> EmbeddingEngineImpl::ProcessAndCombineContents(
           LITERT_ASSIGN_OR_RETURN(
               auto tensor_buffer_map,
               preprocessed_image.GetPreprocessedImageTensorMap());
-          LITERT_ASSIGN_OR_RETURN(
-              single_image_data,
-              vision_executor_->Encode(*tensor_buffer_map));
+          LITERT_ASSIGN_OR_RETURN(single_image_data,
+                                  vision_executor_->Encode(*tensor_buffer_map));
         } else {
           return absl::InternalError(
               "Failed to get tensor buffer from preprocessed image.");
@@ -768,6 +769,7 @@ absl::StatusOr<EmbeddingResponse> EmbeddingEngineImpl::ComputeEmbedding(
     const std::vector<InputData>& contents, const EmbeddingOptions& options) {
   if (benchmark_info_.has_value()) {
     ABSL_RETURN_IF_ERROR(benchmark_info_->TimePrefillTurnStart());
+    ABSL_RETURN_IF_ERROR(StartExecutorProfiling());
   }
 
   const std::vector<InputData>* contents_to_process = &contents;
@@ -786,6 +788,7 @@ absl::StatusOr<EmbeddingResponse> EmbeddingEngineImpl::ComputeEmbedding(
   if (benchmark_info_.has_value()) {
     ABSL_ASSIGN_OR_RETURN(uint64_t num_tokens, GetNumTokens(executor_inputs));
     ABSL_RETURN_IF_ERROR(benchmark_info_->TimePrefillTurnEnd(num_tokens));
+    ABSL_RETURN_IF_ERROR(StopExecutorProfiling());
   }
 
   return response;
@@ -797,6 +800,7 @@ EmbeddingEngineImpl::ComputeEmbeddingBatch(
     const EmbeddingOptions& options) {
   if (benchmark_info_.has_value()) {
     ABSL_RETURN_IF_ERROR(benchmark_info_->TimePrefillTurnStart());
+    ABSL_RETURN_IF_ERROR(StartExecutorProfiling());
   }
 
   std::vector<EmbeddingResponse> batch_responses;
@@ -825,6 +829,7 @@ EmbeddingEngineImpl::ComputeEmbeddingBatch(
 
   if (benchmark_info_.has_value()) {
     ABSL_RETURN_IF_ERROR(benchmark_info_->TimePrefillTurnEnd(total_tokens));
+    ABSL_RETURN_IF_ERROR(StopExecutorProfiling());
   }
 
   return batch_responses;
@@ -844,6 +849,48 @@ BenchmarkInfo* EmbeddingEngineImpl::GetMutableBenchmarkInfo() {
 const std::optional<proto::EmbeddingMetadata>&
 EmbeddingEngineImpl::GetEmbeddingMetadata() const {
   return metadata_;
+}
+
+absl::Status EmbeddingEngineImpl::StartExecutorProfiling() {
+  if (embedding_executor_ != nullptr) {
+    ABSL_RETURN_IF_ERROR(embedding_executor_->StartProfiling());
+  }
+  if (vision_executor_ != nullptr) {
+    ABSL_RETURN_IF_ERROR(vision_executor_->StartProfiling());
+  }
+  if (audio_executor_ != nullptr) {
+    ABSL_RETURN_IF_ERROR(audio_executor_->StartProfiling());
+  }
+  return absl::OkStatus();
+}
+
+absl::Status EmbeddingEngineImpl::StopExecutorProfiling() {
+  ExecutorStats stats;
+  stats.module_name = kEmbeddingModuleName;
+
+  if (embedding_executor_ != nullptr) {
+    ABSL_ASSIGN_OR_RETURN(stats, embedding_executor_->StopProfiling());
+  }
+
+  if (vision_executor_ != nullptr) {
+    ABSL_ASSIGN_OR_RETURN(auto vision_stats, vision_executor_->StopProfiling());
+    if (!vision_stats.latencies.empty() || !vision_stats.metrics.empty()) {
+      stats.substats.push_back(std::move(vision_stats));
+    }
+  }
+
+  if (audio_executor_ != nullptr) {
+    ABSL_ASSIGN_OR_RETURN(auto audio_stats, audio_executor_->StopProfiling());
+    if (!audio_stats.latencies.empty() || !audio_stats.metrics.empty()) {
+      stats.substats.push_back(std::move(audio_stats));
+    }
+  }
+
+  if (benchmark_info_.has_value()) {
+    benchmark_info_->SetExecutorStats(std::move(stats));
+  }
+
+  return absl::OkStatus();
 }
 
 }  // namespace litert::lm

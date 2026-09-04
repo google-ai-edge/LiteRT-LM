@@ -34,6 +34,7 @@
 #include "runtime/components/constrained_decoding/no_repeat_ngram_config.h"
 #include "runtime/components/constrained_decoding/repetition_penalty_config.h"
 #include "runtime/components/constrained_decoding/suppress_tokens_config.h"
+#include "runtime/executor/executor_stats.h"
 #include "runtime/proto/engine.pb.h"
 #include "support/util/io_types.h"
 
@@ -290,6 +291,10 @@ class BenchmarkInfo {
   const std::string& GetProfileSummary() const;
   void SetProfileSummary(absl::string_view profile_summary);
 
+  // --- Executor stats ---
+  const std::optional<ExecutorStats>& GetExecutorStats() const;
+  void SetExecutorStats(ExecutorStats executor_stats);
+
  private:
   proto::BenchmarkParams benchmark_params_;
 
@@ -308,6 +313,7 @@ class BenchmarkInfo {
   std::vector<BenchmarkTurnData> decode_turns_;
   std::vector<BenchmarkTurnData> text_to_token_ids_turns_;
   std::string profile_summary_;
+  std::optional<ExecutorStats> executor_stats_;
 };
 std::ostream& operator<<(std::ostream& os, const BenchmarkInfo& info);
 

@@ -20,8 +20,10 @@
 
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_environment.h"  // from @litert
+#include "runtime/executor/executor_stats.h"
 #include "runtime/executor/llm_executor_io_types.h"
 
 namespace litert::lm {
@@ -100,6 +102,19 @@ class EmbeddingExecutorBase {
 
   // Gets the litert environment used by the executor.
   virtual ::litert::Environment* GetEnvironment() const = 0;
+
+  // Starts profiling if supported by the underlying executor/backend.
+  virtual absl::Status StartProfiling() {
+    return absl::UnimplementedError(absl::StrCat(
+        "StartProfiling not implemented for backend: ", ExecutorBackendName()));
+  }
+
+  // Stops profiling if supported by the underlying executor/backend and
+  // returns the collected latency statistics.
+  virtual absl::StatusOr<ExecutorStats> StopProfiling() {
+    return absl::UnimplementedError(absl::StrCat(
+        "StopProfiling not implemented for backend: ", ExecutorBackendName()));
+  }
 };
 
 }  // namespace litert::lm

@@ -69,6 +69,7 @@ cc_library(
     hdrs = ["embedding_engine.h"],
     deps = [
         ":io_types",
+        "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/types:optional",
         "//runtime/executor:embedding_executor_base",
@@ -136,6 +137,7 @@ cc_library(
         "//runtime/components/constrained_decoding:no_repeat_ngram_config",
         "//runtime/components/constrained_decoding:repetition_penalty_config",
         "//runtime/components/constrained_decoding:suppress_tokens_config",
+        "//runtime/executor:executor_stats",
         "//runtime/proto:engine_cc_proto",
         "//support/util:io_types",
     ],
@@ -152,6 +154,7 @@ cc_test(
         "@com_google_absl//absl/time",
         "@litert//litert/test:matchers",
         "//runtime/components/constrained_decoding:fake_constraint",
+        "//runtime/executor:executor_stats",
         "//runtime/proto:engine_cc_proto",
         "//runtime/util:test_utils",
     ],

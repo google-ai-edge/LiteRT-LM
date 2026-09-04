@@ -39,6 +39,7 @@
 #include "absl/time/time.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_macros.h"  // from @litert
+#include "runtime/executor/executor_stats.h"
 
 namespace litert::lm {
 namespace {
@@ -363,6 +364,14 @@ void BenchmarkInfo::SetProfileSummary(absl::string_view profile_summary) {
   profile_summary_ = profile_summary;
 }
 
+const std::optional<ExecutorStats>& BenchmarkInfo::GetExecutorStats() const {
+  return executor_stats_;
+}
+
+void BenchmarkInfo::SetExecutorStats(ExecutorStats executor_stats) {
+  executor_stats_ = std::move(executor_stats);
+}
+
 std::ostream& operator<<(std::ostream& os, const BenchmarkTurnData& data) {
   os << "Processed " << data.num_tokens << " tokens in " << data.duration
      << " duration." << std::endl;
@@ -461,6 +470,11 @@ std::ostream& operator<<(std::ostream& os, const BenchmarkInfo& info) {
     os << "--------------------------------------------------" << std::endl;
     os << "  Profile Summary:" << std::endl;
     os << info.GetProfileSummary() << std::endl;
+  }
+  if (info.GetExecutorStats().has_value()) {
+    os << "--------------------------------------------------" << std::endl;
+    os << "  Executor Stats:" << std::endl;
+    os << *info.GetExecutorStats() << std::endl;
   }
   os << "--------------------------------------------------" << std::endl;
   return os;

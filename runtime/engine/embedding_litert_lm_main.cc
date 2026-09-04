@@ -64,6 +64,8 @@ ABSL_FLAG(bool, use_mmap, true,
           "Whether to use memory-mapped file for model loading.");
 ABSL_FLAG(std::string, dispatch_library_dir, "",
           "Path to directory containing LiteRT dispatch libraries.");
+ABSL_FLAG(bool, benchmark, false,
+          "Whether to benchmark and collect latency and execution statistics.");
 
 namespace {
 
@@ -158,6 +160,10 @@ absl::Status MainHelper(int argc, char** argv) {
         dispatch_library_dir);
   }
 
+  if (absl::GetFlag(FLAGS_benchmark)) {
+    settings.GetMutableBenchmarkParams();
+  }
+
   LITERT_ASSIGN_OR_RETURN(auto owned_env,
                           CreateEnvironment(settings, resources.get()));
   auto owned_env_ptr =
@@ -228,6 +234,11 @@ absl::Status MainHelper(int argc, char** argv) {
   }
   std::cout << "]" << std::endl;
   std::cout << "========================================" << std::endl;
+
+  // Print benchmark info if enabled.
+  if (auto benchmark_info = engine->GetBenchmarkInfo()) {
+    std::cout << *benchmark_info << std::endl;
+  }
 
   return absl::OkStatus();
 }

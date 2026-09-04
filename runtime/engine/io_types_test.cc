@@ -26,6 +26,7 @@
 #include "absl/time/time.h"  // from @com_google_absl
 #include "litert/test/matchers.h"  // from @litert
 #include "runtime/components/constrained_decoding/fake_constraint.h"
+#include "runtime/executor/executor_stats.h"
 #include "runtime/proto/engine.pb.h"
 #include "runtime/util/test_utils.h"  // NOLINT
 
@@ -554,6 +555,29 @@ TEST(AudioExecutorPropertiesTest, OperatorOutput) {
   EXPECT_THAT(ss.str(), ContainsRegex("streaming_chunk_size: 1024"));
   EXPECT_THAT(ss.str(), ContainsRegex("streaming_chunk_overlap_size: 256"));
   EXPECT_THAT(ss.str(), ContainsRegex("audio_shrink_factor: 8"));
+}
+
+TEST(BenchmarkInfoTest, SetAndGetExecutorStats) {
+  BenchmarkInfo benchmark_info((proto::BenchmarkParams()));
+  EXPECT_FALSE(benchmark_info.GetExecutorStats().has_value());
+
+  ExecutorStats stats;
+  stats.module_name = "Embedding";
+  stats.Accumulate(kTotalLatency, absl::Milliseconds(15));
+  stats.Accumulate("hardware_execution_time_us", 15000);
+
+  benchmark_info.SetExecutorStats(stats);
+  ASSERT_TRUE(benchmark_info.GetExecutorStats().has_value());
+  EXPECT_EQ(benchmark_info.GetExecutorStats()->module_name, "Embedding");
+  EXPECT_EQ(benchmark_info.GetExecutorStats()->GetTotalLatency(),
+            absl::Milliseconds(15));
+
+  std::stringstream ss;
+  ss << benchmark_info;
+  EXPECT_THAT(ss.str(), ContainsRegex("Executor Stats:"));
+  EXPECT_THAT(ss.str(),
+              ContainsRegex("Total Embedding latency \\[us\\]: 15000"));
+  EXPECT_THAT(ss.str(), ContainsRegex("hardware_execution_time_us: 15000"));
 }
 
 }  // namespace

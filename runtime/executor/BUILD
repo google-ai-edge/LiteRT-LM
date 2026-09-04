@@ -746,9 +746,33 @@ cc_library(
 )
 
 cc_library(
+    name = "executor_stats",
+    srcs = ["executor_stats.cc"],
+    hdrs = ["executor_stats.h"],
+    deps = [
+        "@com_google_absl//absl/log:absl_log",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/time",
+    ],
+)
+
+cc_test(
+    name = "executor_stats_test",
+    srcs = ["executor_stats_test.cc"],
+    deps = [
+        ":executor_stats",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/time",
+    ],
+)
+
+cc_library(
     name = "vision_executor_base",
     hdrs = ["vision/vision_executor_base.h"],
     deps = [
+        ":executor_settings_base",
+        ":executor_stats",
         ":llm_executor_io_types",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/status",
@@ -764,6 +788,7 @@ cc_library(
     hdrs = ["vision_litert_compiled_model_executor.h"],
     deps = [
         ":executor_settings_base",
+        ":executor_stats",
         ":litert_compiled_model_executor_utils",
         ":llm_executor_io_types",
         ":vision_executor",
@@ -779,6 +804,7 @@ cc_library(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/time",
         "@com_google_absl//absl/types:span",
         "@litert//litert/cc:litert_common",
         "@litert//litert/cc:litert_compiled_model",
@@ -815,6 +841,7 @@ cc_test(
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/time",
         "@com_google_absl//absl/types:span",
         "@litert//litert/cc:litert_element_type",
         "@litert//litert/cc:litert_environment",
@@ -841,6 +868,7 @@ cc_library(
     hdrs = ["audio/audio_executor_base.h"],
     deps = [
         ":executor_settings_base",
+        ":executor_stats",
         ":llm_executor_io_types",
         "@com_google_absl//absl/status:statusor",
         "@litert//litert/cc:litert_tensor_buffer",
@@ -878,9 +906,11 @@ cc_library(
     name = "embedding_executor_base",
     hdrs = ["embedding/embedding_executor_base.h"],
     deps = [
+        ":executor_stats",
         ":llm_executor_io_types",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
         "@litert//litert/cc:litert_environment",
     ],
@@ -894,6 +924,7 @@ cc_library(
         ":embedding_executor_base",
         ":embedding_executor_settings",
         ":executor_settings_base",
+        ":executor_stats",
         ":litert_compiled_model_executor_utils",
         ":llm_executor_io_types",
         "@com_google_absl//absl/algorithm:container",
@@ -906,6 +937,7 @@ cc_library(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/time",
         "@com_google_absl//absl/types:span",
         "@litert//litert/c:litert_common",
         "@litert//litert/cc:litert_common",
@@ -939,11 +971,13 @@ cc_test(
         ":embedding_executor_settings",
         ":embedding_litert_compiled_model_executor",
         ":executor_settings_base",
+        ":executor_stats",
         ":llm_executor_io_types",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/time",
         "@flatbuffers",
         "@litert//litert/c:litert_tensor_buffer_types",
         "@litert//litert/cc:litert_buffer_ref",
@@ -970,6 +1004,7 @@ cc_library(
         ":audio_executor_settings",
         ":audio_executor_utils",
         ":executor_settings_base",
+        ":executor_stats",
         ":litert_compiled_model_executor_utils",
         ":llm_executor_io_types",
         "@com_google_absl//absl/algorithm:container",

@@ -23,6 +23,7 @@
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/executor/executor_stats.h"
 #include "runtime/executor/llm_executor_io_types.h"
 
 namespace litert::lm {
@@ -91,6 +92,16 @@ class AudioExecutorBase {
   // Sets the current LoRA ID to use.
   virtual absl::Status UseLoRA(std::optional<uint32_t> lora_id) {
     return absl::UnimplementedError("Not implemented.");
+  }
+
+  // Starts profiling the audio executor.
+  virtual absl::Status StartProfiling() {
+    return absl::UnimplementedError("StartProfiling not implemented.");
+  }
+
+  // Stops profiling and returns the collected latency statistics.
+  virtual absl::StatusOr<ExecutorStats> StopProfiling() {
+    return absl::UnimplementedError("StopProfiling not implemented.");
   }
 };
 

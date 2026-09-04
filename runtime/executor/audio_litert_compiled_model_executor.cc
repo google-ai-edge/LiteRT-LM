@@ -56,6 +56,7 @@
 #include "runtime/executor/audio/audio_executor_settings.h"
 #include "runtime/executor/audio/audio_executor_utils.h"
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/executor/executor_stats.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/util/convert_tensor_buffer.h"  // IWYU pragma: keep
@@ -68,6 +69,14 @@
 
 namespace litert::lm {
 namespace {
+
+constexpr absl::string_view kAudioModuleName = "Audio";
+constexpr absl::string_view kAudioNumClipsMetric = "Audio num clips";
+constexpr absl::string_view kAudioNumTokensMetric = "Audio num tokens";
+constexpr absl::string_view kAudioEncoderInferenceLatency =
+    "Audio encoder inference";
+constexpr absl::string_view kAudioAdapterInferenceLatency =
+    "Audio adapter inference";
 
 // Set the default GPU options for the model.
 absl::Status SetGpuOptions(const AudioExecutorSettings& executor_settings,
@@ -821,8 +830,11 @@ absl::StatusOr<int> AudioLiteRtCompiledModelExecutor::EncodeInternal(
     }
   }
 
-  LITERT_RETURN_IF_ERROR(audio_encoder_->GetMutableCompiledModel().Run(
-      input_buffers_map, audio_encoder_->GetMutableOutputBuffersMap()));
+  {
+    ScopedLatency scoped(latency_stats_, kAudioEncoderInferenceLatency);
+    LITERT_RETURN_IF_ERROR(audio_encoder_->GetMutableCompiledModel().Run(
+        input_buffers_map, audio_encoder_->GetMutableOutputBuffersMap()));
+  }
 
   int chunk_valid_tokens = 0;
   if (audio_encoder_->GetOutputMaskBuffer() != nullptr) {
@@ -870,9 +882,12 @@ absl::StatusOr<int> AudioLiteRtCompiledModelExecutor::EncodeInternal(
                          chunk_valid_tokens * audio_embedding_dimensions_)));
     }
 
-    LITERT_RETURN_IF_ERROR(audio_adapter_->GetMutableCompiledModel().Run(
-        audio_adapter_->GetMutableInputBuffers(),
-        audio_adapter_->GetMutableOutputBuffers()));
+    {
+      ScopedLatency scoped(latency_stats_, kAudioAdapterInferenceLatency);
+      LITERT_RETURN_IF_ERROR(audio_adapter_->GetMutableCompiledModel().Run(
+          audio_adapter_->GetMutableInputBuffers(),
+          audio_adapter_->GetMutableOutputBuffers()));
+    }
 
     LITERT_RETURN_IF_ERROR(
         audio_adapter_->GetMutableOutputBuffers()[0].Read<float>(absl::MakeSpan(
@@ -1027,6 +1042,7 @@ AudioLiteRtCompiledModelExecutor::EncodeSpecsAndMasks(
     const std::vector<float>& spectrogram_host_buffer,
     const std::vector<uint8_t>& spectrogram_mask_host_buffer, int total_frames,
     bool is_flush) {
+  ScopedLatency scoped_total_latency(latency_stats_);
   const int feature_dim = spectrogram_feature_dimensions_;
 
   // Determine window parameters (same as Encode).
@@ -1228,6 +1244,11 @@ AudioLiteRtCompiledModelExecutor::EncodeSpecsAndMasks(
       std::move(projected_audio_embeddings_tensor));
   audio_data.SetAudioEmbeddings(std::move(*audio_embeddings_tensor));
   audio_data.SetValidTokens(total_valid_tokens);
+
+  AccumulateStat(latency_stats_, kAudioNumClipsMetric, int64_t{1});
+  AccumulateStat(latency_stats_, kAudioNumTokensMetric,
+                 static_cast<int64_t>(total_valid_tokens));
+
   return audio_data;
 }
 
@@ -1399,6 +1420,22 @@ AudioLiteRtCompiledModelExecutor::CreateAndLockAudioTensor(int num_tokens,
                               tensor, TensorBuffer::LockMode::kWrite));
   return LockedTensor(std::move(tensor), std::move(lock_and_ptr.first),
                       lock_and_ptr.second);
+}
+
+absl::Status AudioLiteRtCompiledModelExecutor::StartProfiling() {
+  latency_stats_ = ExecutorStats();
+  return absl::OkStatus();
+}
+
+absl::StatusOr<ExecutorStats>
+AudioLiteRtCompiledModelExecutor::StopProfiling() {
+  if (!latency_stats_.has_value()) {
+    return absl::FailedPreconditionError("Profiling has not been started.");
+  }
+  ExecutorStats stats = *std::move(latency_stats_);
+  stats.module_name = kAudioModuleName;
+  latency_stats_ = std::nullopt;
+  return stats;
 }
 
 }  // namespace litert::lm

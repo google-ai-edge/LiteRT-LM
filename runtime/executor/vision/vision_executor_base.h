@@ -23,6 +23,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/engine/io_types.h"
+#include "runtime/executor/executor_stats.h"
 #include "runtime/executor/llm_executor_io_types.h"
 
 namespace litert::lm {
@@ -59,6 +60,16 @@ class VisionExecutorBase {
   virtual absl::StatusOr<VisionExecutorProperties> GetVisionExecutorProperties()
       const {
     return absl::UnimplementedError("Not implemented.");
+  }
+
+  // Starts profiling the vision executor.
+  virtual absl::Status StartProfiling() {
+    return absl::UnimplementedError("StartProfiling not implemented.");
+  }
+
+  // Stops profiling and returns the collected latency statistics.
+  virtual absl::StatusOr<ExecutorStats> StopProfiling() {
+    return absl::UnimplementedError("StopProfiling not implemented.");
   }
 };
 

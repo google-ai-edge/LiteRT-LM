@@ -16,6 +16,7 @@
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_VISION_LITERT_COMPILED_MODEL_EXECUTOR_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -31,6 +32,7 @@
 #include "runtime/components/model_resources.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/executor/executor_stats.h"
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/vision/vision_executor.h"
 #include "runtime/executor/vision/vision_executor_settings.h"
@@ -67,6 +69,9 @@ class VisionLiteRtCompiledModelExecutor : public VisionExecutor {
   // Returns the vision executor properties.
   absl::StatusOr<VisionExecutorProperties> GetVisionExecutorProperties()
       const override;
+
+  absl::Status StartProfiling() override;
+  absl::StatusOr<ExecutorStats> StopProfiling() override;
 
  private:
   // The Vision Encoder LiteRT CompiledModel wrapper manage the input and
@@ -272,6 +277,8 @@ class VisionLiteRtCompiledModelExecutor : public VisionExecutor {
 
   // The vision executor properties.
   VisionExecutorProperties vision_executor_properties_;
+
+  std::optional<ExecutorStats> latency_stats_;
 };
 
 }  // namespace litert::lm

@@ -23,6 +23,7 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "absl/algorithm/container.h"  // from @com_google_absl
@@ -35,6 +36,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/time/time.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/c/litert_common.h"  // from @litert
 #include "litert/cc/litert_common.h"  // from @litert
@@ -48,6 +50,7 @@
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/cc/options/litert_cpu_options.h"  // from @litert
 #include "litert/cc/options/litert_gpu_options.h"  // from @litert
+#include "runtime/executor/executor_stats.h"
 #if !defined(LITERT_DISABLE_NPU)
 #include "litert/cc/options/litert_google_tensor_options.h"  // from @litert
 #include "litert/cc/options/litert_qualcomm_options.h"  // from @litert
@@ -65,6 +68,29 @@
 
 namespace litert::lm {
 namespace {
+
+constexpr absl::string_view kEmbeddingModuleName = "Embedding";
+
+constexpr absl::string_view kEmbedderLookupLatency = "Embedder lookup";
+constexpr absl::string_view kMaskPreparationLatency = "Mask preparation";
+constexpr absl::string_view kPerLayerEmbedderLookupLatency =
+    "Per-layer embedder lookup";
+constexpr absl::string_view kTextEncoderInferenceLatency =
+    "Text encoder inference";
+constexpr absl::string_view kOutputCopyLatency = "Output copy";
+
+constexpr absl::string_view kEmbeddingNumTokensMetric =
+    "(e2e) Embedding num tokens";
+constexpr absl::string_view kEmbeddingNumPaddedTokensMetric =
+    "(e2e) Embedding num padded tokens";
+constexpr absl::string_view kEmbeddingE2eTokensPerSecondMetric =
+    "(e2e) Embedding tokens per second";
+constexpr absl::string_view kEmbeddingE2ePaddedTokensPerSecondMetric =
+    "(e2e) Embedding tokens per second (padded)";
+constexpr absl::string_view kEmbeddingEncoderStackTokensPerSecondMetric =
+    "(EncoderStackOnly) Embedding tokens per second";
+constexpr absl::string_view kEmbeddingEncoderStackPaddedTokensPerSecondMetric =
+    "(EncoderStackOnly) Embedding tokens per second (padded)";
 
 constexpr absl::string_view kEncoderSignatureRunner = "encoder";
 constexpr absl::string_view kPerLayerEmbeddingsName = "per_layer";
@@ -309,6 +335,7 @@ EmbeddingLiteRtCompiledModelExecutor::Create(
 absl::StatusOr<std::vector<float>>
 EmbeddingLiteRtCompiledModelExecutor::RunEncoderForTokens(
     absl::Span<const int32_t> tokens) {
+  ScopedLatency scoped_total_latency(latency_stats_);
   ABSL_ASSIGN_OR_RETURN(
       auto text_encoder_model,
       resources_->GetTFLiteModel(ModelType::kTfLiteTextEncoder));
@@ -358,13 +385,17 @@ EmbeddingLiteRtCompiledModelExecutor::RunEncoderForTokens(
     }
   }
 
-  ABSL_RETURN_IF_ERROR(embedding_lookup_->LookupPrefill(
-      tokens, &input_buffers[embeddings_buffer_index], /*token_offset=*/0));
+  {
+    ScopedLatency scoped(latency_stats_, kEmbedderLookupLatency);
+    ABSL_RETURN_IF_ERROR(embedding_lookup_->LookupPrefill(
+        tokens, &input_buffers[embeddings_buffer_index], /*token_offset=*/0));
+  }
 
   // Compute mask for text encoder. The mask masks out tokens outside of the
   // input sequence length, which can be smaller than the static size of the
   // TFLite graph.
   if (input_mask_buffer_index.has_value()) {
+    ScopedLatency scoped(latency_stats_, kMaskPreparationLatency);
     auto& mask_buffer = input_buffers[*input_mask_buffer_index];
     LITERT_ASSIGN_OR_RETURN(
         auto mask_lock_and_addr,
@@ -383,16 +414,30 @@ EmbeddingLiteRtCompiledModelExecutor::RunEncoderForTokens(
 
   if (per_layer_embeddings_buffer_index.has_value() &&
       per_layer_embedding_lookup_ != nullptr) {
+    ScopedLatency scoped(latency_stats_, kPerLayerEmbedderLookupLatency);
     ABSL_RETURN_IF_ERROR(per_layer_embedding_lookup_->LookupPrefill(
         tokens, &input_buffers[*per_layer_embeddings_buffer_index],
         /*token_offset=*/0));
   }
 
-  LITERT_RETURN_IF_ERROR(
-      compiled_model_->Run(signature_index, input_buffers, output_buffers));
+  {
+    ScopedLatency scoped(latency_stats_, kTextEncoderInferenceLatency);
+    LITERT_RETURN_IF_ERROR(
+        compiled_model_->Run(signature_index, input_buffers, output_buffers));
+  }
 
-  LITERT_ASSIGN_OR_RETURN(auto output_vector,
-                          CopyFromTensorBuffer<float>(output_buffers[0]));
+  std::vector<float> output_vector;
+  {
+    ScopedLatency scoped(latency_stats_, kOutputCopyLatency);
+    LITERT_ASSIGN_OR_RETURN(output_vector,
+                            CopyFromTensorBuffer<float>(output_buffers[0]));
+  }
+
+  AccumulateStat(latency_stats_, kEmbeddingNumTokensMetric,
+                 static_cast<int64_t>(tokens.size()));
+  AccumulateStat(latency_stats_, kEmbeddingNumPaddedTokensMetric,
+                 static_cast<int64_t>(it->first));
+
   return output_vector;
 }
 
@@ -543,6 +588,70 @@ EmbeddingLiteRtCompiledModelExecutor::GetEmbeddingDimension() const {
 litert::Environment* EmbeddingLiteRtCompiledModelExecutor::GetEnvironment()
     const {
   return &env_;
+}
+
+absl::Status EmbeddingLiteRtCompiledModelExecutor::StartProfiling() {
+  latency_stats_ = ExecutorStats();
+  return absl::OkStatus();
+}
+
+absl::StatusOr<ExecutorStats>
+EmbeddingLiteRtCompiledModelExecutor::StopProfiling() {
+  if (!latency_stats_.has_value()) {
+    return absl::FailedPreconditionError("Profiling has not been started.");
+  }
+  ExecutorStats stats = *std::move(latency_stats_);
+  latency_stats_ = std::nullopt;
+  stats.module_name = kEmbeddingModuleName;
+
+  auto num_tokens_metric = stats.GetMetric(kEmbeddingNumTokensMetric);
+  int64_t num_tokens = 0;
+  if (num_tokens_metric.has_value() &&
+      std::holds_alternative<int64_t>(*num_tokens_metric)) {
+    num_tokens = std::get<int64_t>(*num_tokens_metric);
+  }
+
+  auto num_padded_tokens_metric =
+      stats.GetMetric(kEmbeddingNumPaddedTokensMetric);
+  int64_t num_padded_tokens = 0;
+  if (num_padded_tokens_metric.has_value() &&
+      std::holds_alternative<int64_t>(*num_padded_tokens_metric)) {
+    num_padded_tokens = std::get<int64_t>(*num_padded_tokens_metric);
+  }
+
+  absl::Duration total_latency = stats.GetTotalLatency();
+  if (total_latency > absl::ZeroDuration()) {
+    double total_seconds = absl::ToDoubleSeconds(total_latency);
+    if (total_seconds > 0.0) {
+      if (num_tokens > 0) {
+        stats.Accumulate(kEmbeddingE2eTokensPerSecondMetric,
+                         static_cast<double>(num_tokens) / total_seconds);
+      }
+      if (num_padded_tokens > 0) {
+        stats.Accumulate(
+            kEmbeddingE2ePaddedTokensPerSecondMetric,
+            static_cast<double>(num_padded_tokens) / total_seconds);
+      }
+    }
+  }
+
+  auto encoder_latency = stats.GetLatency(kTextEncoderInferenceLatency);
+  if (encoder_latency.has_value() && *encoder_latency > absl::ZeroDuration()) {
+    double encoder_seconds = absl::ToDoubleSeconds(*encoder_latency);
+    if (encoder_seconds > 0.0) {
+      if (num_tokens > 0) {
+        stats.Accumulate(kEmbeddingEncoderStackTokensPerSecondMetric,
+                         static_cast<double>(num_tokens) / encoder_seconds);
+      }
+      if (num_padded_tokens > 0) {
+        stats.Accumulate(
+            kEmbeddingEncoderStackPaddedTokensPerSecondMetric,
+            static_cast<double>(num_padded_tokens) / encoder_seconds);
+      }
+    }
+  }
+
+  return stats;
 }
 
 EmbeddingLiteRtCompiledModelExecutor::EmbeddingLiteRtCompiledModelExecutor(

@@ -18,6 +18,7 @@
 #include <cstddef>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -32,6 +33,7 @@
 #include "runtime/components/model_resources.h"
 #include "runtime/executor/embedding/embedding_executor_base.h"
 #include "runtime/executor/embedding/embedding_executor_settings.h"
+#include "runtime/executor/executor_stats.h"
 #include "runtime/executor/llm_executor_io_types.h"
 
 namespace litert::lm {
@@ -58,6 +60,9 @@ class EmbeddingLiteRtCompiledModelExecutor : public EmbeddingExecutorBase {
   Create(EmbeddingExecutorSettings executor_settings, litert::Environment& env);
 
   ~EmbeddingLiteRtCompiledModelExecutor() override = default;
+
+  absl::Status StartProfiling() override;
+  absl::StatusOr<ExecutorStats> StopProfiling() override;
 
   using EmbeddingExecutorBase::ComputeEmbedding;
   using EmbeddingExecutorBase::ComputeEmbeddingBatch;
@@ -123,6 +128,8 @@ class EmbeddingLiteRtCompiledModelExecutor : public EmbeddingExecutorBase {
   // Output buffer map: Signature Index -> Output Buffers
   absl::flat_hash_map<size_t, std::vector<litert::TensorBuffer>>
       output_buffers_cache_;
+
+  std::optional<ExecutorStats> latency_stats_;
 };
 
 }  // namespace litert::lm
