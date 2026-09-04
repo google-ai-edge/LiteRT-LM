@@ -15,6 +15,7 @@
 # [Google-internal load of `cc_binary`]
 # [Google-internal load of `cc_library`]
 # [Google-internal load of `cc_test`]
+load("@litert//litert/build_common:litert_build_defs.bzl", "litert_bin")
 
 package(
     default_hdrs_check = "strict",
@@ -276,7 +277,7 @@ cc_binary(
     ],
 )
 
-cc_binary(
+litert_bin(
     name = "litert_lm_advanced_main",
     srcs = ["litert_lm_advanced_main.cc"],
     additional_linker_inputs = select({
@@ -300,6 +301,7 @@ cc_binary(
         "@platforms//os:android": ["-lEGL", "-lGLESv3"],
         "//conditions:default": [],
     }),
+    ungrte = True,
     deps = [
         ":io_types",
         ":litert_lm_lib",
