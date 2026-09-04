@@ -138,8 +138,8 @@ jobs:
           mode: 'restore'
           target-dir: 'android-sdk'
           bucket-url: 'gs://litert-lm-cicd/caches/linux/cmake/android-sdk'
-          cache-key: 'linux-android-sdk-api35-buildtools35-v1'
-          restore-key: 'linux-android-sdk-api35-buildtools35-v1'
+          cache-key: 'linux-android-sdk-api35-buildtools35-v2'
+          restore-key: 'linux-android-sdk-api35-buildtools35-v2'
           refresh-cache: ${{ env.REFRESH_CACHE }}
 
       - name: Install Android SDK
@@ -156,8 +156,8 @@ jobs:
           set +o pipefail
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
             "platform-tools" \
-            "platforms;android-33" "platforms;android-34" "platforms;android-35" \
-            "build-tools;33.0.1" "build-tools;34.0.0" "build-tools;35.0.0" > /dev/null
+            "platforms;android-35" \
+            "build-tools;35.0.0" > /dev/null
           set -o pipefail
 
       - name: Export SDK Environment Variables
@@ -171,8 +171,8 @@ jobs:
           mode: 'save'
           target-dir: 'android-sdk'
           bucket-url: 'gs://litert-lm-cicd/caches/linux/cmake/android-sdk'
-          cache-key: 'linux-android-sdk-api35-buildtools35-v1'
-          restore-key: 'linux-android-sdk-api35-buildtools35-v1'
+          cache-key: 'linux-android-sdk-api35-buildtools35-v2'
+          restore-key: 'linux-android-sdk-api35-buildtools35-v2'
           refresh-cache: ${{ env.REFRESH_CACHE }}
         env:
           CACHE_HIT: ${{ steps.android-cache.outputs.cache-hit }}
