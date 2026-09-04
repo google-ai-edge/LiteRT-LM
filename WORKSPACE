@@ -102,6 +102,36 @@ http_archive(
     url = "https://github.com/google-ml-infra/rules_ml_toolchain/archive/2eddbc595cc0bbe650c2640204f66b14f015f1a8.tar.gz",
 )
 
+# Kotlin rules (must be declared before tf_workspace to override)
+http_archive(
+    name = "rules_kotlin",
+    sha256 = "e40ccc013f874e063bb64fed0f816b881991cb300bce45085e1204644892c59c",
+    url = "https://github.com/bazel-contrib/rules_kotlin/releases/download/v2.4.10/rules_kotlin-v2.4.10.tar.gz",
+)
+
+# Go rules and Gazelle for rules_android (must be declared before tf_workspace to override ancient versions)
+http_archive(
+    name = "io_bazel_rules_go",
+    sha256 = "68af54cb97fbdee5e5e8fe8d210d15a518f9d62abfd71620c3eaff3b26a5ff86",
+    urls = [
+        "https://mirror.bazel.build/github.com/bazel-contrib/rules_go/releases/download/v0.59.0/rules_go-v0.59.0.zip",
+        "https://github.com/bazel-contrib/rules_go/releases/download/v0.59.0/rules_go-v0.59.0.zip",
+    ],
+)
+
+http_archive(
+    name = "bazel_gazelle",
+    sha256 = "675114d8b433d0a9f54d81171833be96ebc4113115664b791e6f204d58e93446",
+    urls = [
+        "https://mirror.bazel.build/github.com/bazelbuild/bazel-gazelle/releases/download/v0.47.0/bazel-gazelle-v0.47.0.tar.gz",
+        "https://github.com/bazelbuild/bazel-gazelle/releases/download/v0.47.0/bazel-gazelle-v0.47.0.tar.gz",
+    ],
+)
+
+load("@io_bazel_rules_go//go:deps.bzl", "go_rules_dependencies")
+
+go_rules_dependencies()
+
 # TensorFlow
 http_archive(
     name = "org_tensorflow",
@@ -181,9 +211,9 @@ load("@rules_jvm_external//:defs.bzl", "maven_install")
 maven_install(
     name = "maven",
     artifacts = [
-        "com.google.code.gson:gson:2.13.2",
-        "org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.9.0",
-        "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0",
+        "com.google.code.gson:gson:2.14.0",
+        "org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.11.0",
+        "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0",
     ],
     repositories = [
         "https://maven.google.com",
@@ -258,11 +288,6 @@ load(
 nccl_configure(name = "local_config_nccl")
 
 # Kotlin rules
-http_archive(
-    name = "rules_kotlin",
-    sha256 = "13d5b767d697473ced9b55547a18a6ab65ab3fae5440555deee8a44c886b50aa",
-    url = "https://github.com/bazelbuild/rules_kotlin/releases/download/v2.3.20/rules_kotlin-v2.3.20.tar.gz",
-)
 
 load("@rules_kotlin//kotlin:repositories.bzl", "kotlin_repositories")
 
@@ -489,12 +514,34 @@ http_archive(
     urls = ["https://github.com/espeak-ng/espeak-ng/archive/refs/tags/1.52.0.tar.gz"],
 )
 
-# Android rules. Need latest rules_android_ndk to use NDK 26+.
+# Android rules ####################################################################################
+
+# Android SDK
+load("@rules_android//:prereqs.bzl", "rules_android_prereqs")
+
+rules_android_prereqs()
+
+load("@rules_android//:defs.bzl", "rules_android_workspace")
+
+rules_android_workspace()
+
+load("@rules_java//java:repositories.bzl", "java_tools_repos")
+
+java_tools_repos()
+
+load("@rules_android//rules:rules.bzl", "android_sdk_repository")
+
+android_sdk_repository(name = "androidsdk")
+
+register_toolchains(
+    "@rules_android//toolchains/android:android_default_toolchain",
+    "@rules_android//toolchains/android_sdk:android_sdk_tools",
+)
+
+# Android NDK. Need latest rules_android_ndk to use NDK 26+.
 load("@rules_android_ndk//:rules.bzl", "android_ndk_repository")
 
 android_ndk_repository(name = "androidndk")
-
-android_sdk_repository(name = "androidsdk")
 
 # Configure Android NDK only when ANDROID_NDK_HOME is set.
 # Creates current_android_ndk_env.bzl as a workaround since shell environment is available only

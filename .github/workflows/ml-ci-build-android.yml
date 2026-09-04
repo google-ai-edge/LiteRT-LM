@@ -95,19 +95,19 @@ jobs:
           mkdir -p $ANDROID_HOME/cmdline-tools
 
           # Download the official Android headless command-line tools
-          wget -qO cmdline-tools.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+          wget -qO cmdline-tools.zip https://dl.google.com/android/repository/commandlinetools-linux-15859902_latest.zip
           unzip -q cmdline-tools.zip -d $ANDROID_HOME/cmdline-tools
           mv $ANDROID_HOME/cmdline-tools/cmdline-tools $ANDROID_HOME/cmdline-tools/latest
           rm cmdline-tools.zip
 
-          # Cast a wider net: Install both API 33 and 34 to satisfy whatever version Bazel requires
+          # Cast a wider net: Install API 33, 34, and 35 to satisfy whatever version Bazel requires
           # Turn off pipefail temporarily so the SIGPIPE on 'yes' doesn't crash the step
           set +o pipefail
 
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager \
             "platform-tools" \
-            "platforms;android-33" "platforms;android-34" \
-            "build-tools;33.0.1" "build-tools;34.0.0" > /dev/null
+            "platforms;android-33" "platforms;android-34" "platforms;android-35" \
+            "build-tools;33.0.1" "build-tools;34.0.0" "build-tools;35.0.0" > /dev/null
 
           # Turn pipefail back on to keep the rest of your script safe
           set -o pipefail

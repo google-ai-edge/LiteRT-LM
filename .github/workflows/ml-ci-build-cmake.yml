@@ -138,8 +138,8 @@ jobs:
           mode: 'restore'
           target-dir: 'android-sdk'
           bucket-url: 'gs://litert-lm-cicd/caches/linux/cmake/android-sdk'
-          cache-key: 'linux-android-sdk-api34-buildtools34-v1'
-          restore-key: 'linux-android-sdk-api34-buildtools34-v1'
+          cache-key: 'linux-android-sdk-api35-buildtools35-v1'
+          restore-key: 'linux-android-sdk-api35-buildtools35-v1'
           refresh-cache: ${{ env.REFRESH_CACHE }}
 
       - name: Install Android SDK
@@ -148,7 +148,7 @@ jobs:
           export ANDROID_HOME="${{ github.workspace }}/android-sdk"
           mkdir -p "$ANDROID_HOME/cmdline-tools"
 
-          wget -qO cmdline-tools.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+          wget -qO cmdline-tools.zip https://dl.google.com/android/repository/commandlinetools-linux-15859902_latest.zip
           unzip -q cmdline-tools.zip -d "$ANDROID_HOME/cmdline-tools"
           mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
           rm cmdline-tools.zip
@@ -156,8 +156,8 @@ jobs:
           set +o pipefail
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
             "platform-tools" \
-            "platforms;android-33" "platforms;android-34" \
-            "build-tools;33.0.1" "build-tools;34.0.0" > /dev/null
+            "platforms;android-33" "platforms;android-34" "platforms;android-35" \
+            "build-tools;33.0.1" "build-tools;34.0.0" "build-tools;35.0.0" > /dev/null
           set -o pipefail
 
       - name: Export SDK Environment Variables
@@ -171,8 +171,8 @@ jobs:
           mode: 'save'
           target-dir: 'android-sdk'
           bucket-url: 'gs://litert-lm-cicd/caches/linux/cmake/android-sdk'
-          cache-key: 'linux-android-sdk-api34-buildtools34-v1'
-          restore-key: 'linux-android-sdk-api34-buildtools34-v1'
+          cache-key: 'linux-android-sdk-api35-buildtools35-v1'
+          restore-key: 'linux-android-sdk-api35-buildtools35-v1'
           refresh-cache: ${{ env.REFRESH_CACHE }}
         env:
           CACHE_HIT: ${{ steps.android-cache.outputs.cache-hit }}
