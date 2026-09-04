@@ -1191,5 +1191,67 @@ TEST(ModelInfoFileTest, StreamOperators_BackendTypeAndSupportedBackends) {
   }
 }
 
+TEST(ModelInfoFileTest, InspectModel_OddCompositeTokens_NotDynamicContext) {
+  proto::LlmMetadata proto_meta;
+  // 2025 is an odd composite number (45 * 45). Tests prime search divisor loop.
+  proto_meta.set_max_num_tokens(2025);
+
+  std::string file_data = CreateTestLiteRTLM(
+      "IT", "google/gemma-3-1b-it", {"tf_lite_audio_adapter"}, &proto_meta);
+
+  std::istringstream stream(file_data, std::ios::binary);
+  auto result_or = InspectModel(stream);
+  ASSERT_OK(result_or);
+  ASSERT_TRUE(result_or->llm_capability.has_value());
+  EXPECT_EQ(result_or->llm_capability->max_context_tokens, 2025);
+  EXPECT_FALSE(result_or->llm_capability->is_dynamic_context);
+}
+
+TEST(ModelInfoFileTest, InspectModel_DetectsNpuFromRawBufferFallbackScan) {
+  // Create a raw payload that is not a valid TFLite flatbuffer, but contains
+  // the LiteRtStamp magic window and length prefix.
+  std::string raw_payload(5000, 'x');
+  size_t stamp_marker_pos = 2000;
+  std::string marker = "LiteRtStamp";
+  std::memcpy(&raw_payload[stamp_marker_pos], marker.data(), marker.size());
+
+  size_t prefix_pos = stamp_marker_pos + 50;
+  static constexpr char kLenPrefix[4] = {'\xfa', '\x00', '\x00', '\x00'};
+  std::memcpy(&raw_payload[prefix_pos], kLenPrefix, 4);
+
+  std::vector<char> stamp_data(250, 0);
+  std::string mfg = "Qualcomm";
+  std::string model = "SM8850";
+  std::memcpy(stamp_data.data(), mfg.data(), mfg.size());
+  std::memcpy(stamp_data.data() + 125, model.data(), model.size());
+  std::memcpy(&raw_payload[prefix_pos + 4], stamp_data.data(), 250);
+
+  std::string litertlm_data = CreateTestLiteRTLMWithConfigs(
+      "gemma", "gemma4",
+      {{.model_type = "tf_lite_prefill_decode", .backend_constraint = "npu"},
+       {.model_type = "tf_lite_aux", .payload = raw_payload}});
+  std::stringstream stream(litertlm_data);
+  auto cap_or = InspectModel(stream);
+  ASSERT_OK(cap_or.status());
+  const auto& llm = *cap_or->llm_capability;
+  EXPECT_TRUE(llm.text_supported_backends.npu);
+  EXPECT_EQ(llm.text_supported_backends.npu_brand, NpuBrand::kQualcomm);
+  EXPECT_EQ(llm.text_supported_backends.soc_name, "SM8850");
+}
+
+TEST(ModelInfoFileTest,
+     InspectModel_UnrecognizedModelType_TreatedAsMainTfliteFallback) {
+  std::string litertlm_data = CreateTestLiteRTLMWithConfigs(
+      /*model_class=*/"", /*tf_hub_model_id=*/"",
+      {{.model_type = "custom_graph",
+        .backend_constraint = "cpu",
+        .payload = "payload"}});
+  std::stringstream stream(litertlm_data);
+  auto cap_or = InspectModel(stream);
+  ASSERT_OK(cap_or.status());
+  EXPECT_TRUE(cap_or->llm_capability.has_value());
+}
+
 }  // namespace
 }  // namespace litert::lm::schema::model_info
+

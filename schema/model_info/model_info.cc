@@ -24,6 +24,7 @@
 #include <optional>
 #include <ostream>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "absl/status/status.h"  // from @com_google_absl
@@ -74,6 +75,31 @@ std::string FormatFloatForReport(float val) {
   }
   return s;
 }
+
+// Check if the number is a magic number.
+// The number is a magic number if it is prime and greater than 10.
+bool IsMagicNumber(int64_t number) {
+  if (number < 11 || number % 2 == 0) {
+    return false;
+  }
+  for (int64_t i = 3; i * i <= number; i += 2) {
+    if (number % i == 0) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Represents byte offsets of a section in the container stream.
+struct StreamSection {
+  uint64_t begin = 0;
+  uint64_t end = 0;
+
+  bool is_valid() const { return end > begin; }
+  size_t size() const {
+    return is_valid() ? static_cast<size_t>(end - begin) : 0;
+  }
+};
 
 // Information extracted from NPU models and stamps.
 struct NpuInfo {
@@ -164,6 +190,123 @@ void ParseLiteRtStampPayload(absl::string_view stamp_payload, NpuInfo& info) {
   }
 }
 
+// Extracts NpuInfo from LiteRtStamp in TFLite model metadata if present.
+void ExtractNpuInfoFromStampMetadata(const tflite::Model* model,
+                                     NpuInfo& info) {
+  if (model == nullptr || model->metadata() == nullptr ||
+      model->buffers() == nullptr) {
+    return;
+  }
+  for (size_t i = 0; i < model->metadata()->size(); ++i) {
+    const auto* meta = model->metadata()->Get(i);
+    if (meta == nullptr || meta->name() == nullptr ||
+        meta->name()->string_view() != "LiteRtStamp") {
+      continue;
+    }
+    uint32_t buf_idx = meta->buffer();
+    if (buf_idx >= model->buffers()->size()) continue;
+    const auto* buf = model->buffers()->Get(buf_idx);
+    if (buf == nullptr || buf->data() == nullptr) continue;
+    const auto* data_vec = buf->data();
+    if (data_vec->size() >= 250) {
+      ParseLiteRtStampPayload(
+          absl::string_view(reinterpret_cast<const char*>(data_vec->data()),
+                            data_vec->size()),
+          info);
+    }
+  }
+}
+
+// Extracts NpuInfo from DISPATCH_OP custom flexbuffer options in subgraphs.
+void ExtractNpuInfoFromDispatchOps(const tflite::Model* model, NpuInfo& info) {
+  if (model == nullptr || model->operator_codes() == nullptr ||
+      model->subgraphs() == nullptr) {
+    return;
+  }
+  std::vector<int> dispatch_op_indices;
+  for (int i = 0; i < model->operator_codes()->size(); ++i) {
+    const auto* op_code = model->operator_codes()->Get(i);
+    if (op_code != nullptr && op_code->custom_code() != nullptr &&
+        op_code->custom_code()->string_view() == "DISPATCH_OP") {
+      dispatch_op_indices.push_back(i);
+    }
+  }
+  if (dispatch_op_indices.empty()) return;
+
+  for (int s = 0; s < model->subgraphs()->size(); ++s) {
+    const auto* subgraph = model->subgraphs()->Get(s);
+    if (subgraph == nullptr || subgraph->operators() == nullptr) continue;
+
+    for (int o = 0; o < subgraph->operators()->size(); ++o) {
+      const auto* op = subgraph->operators()->Get(o);
+      if (op == nullptr) continue;
+      bool is_dispatch =
+          std::find(dispatch_op_indices.begin(), dispatch_op_indices.end(),
+                    op->opcode_index()) != dispatch_op_indices.end();
+      if (!is_dispatch) continue;
+
+      const auto* custom_options = op->custom_options();
+      if (custom_options == nullptr || custom_options->empty()) continue;
+
+      auto root = flexbuffers::GetRoot(
+          reinterpret_cast<const uint8_t*>(custom_options->data()),
+          custom_options->size());
+      if (!root.IsMap()) continue;
+
+      auto map = root.AsMap();
+      auto name_val = map["name"];
+      if (name_val.IsString() && info.brand == NpuBrand::kUnknown) {
+        absl::string_view name(name_val.AsString().c_str(),
+                               name_val.AsString().length());
+        for (const auto& spec : GetNpuBrandRegistry()) {
+          for (absl::string_view token : spec.dispatch_op_tokens) {
+            if (absl::StrContainsIgnoreCase(name, token)) {
+              info.brand = spec.brand;
+              break;
+            }
+          }
+          if (info.brand != NpuBrand::kUnknown) break;
+        }
+      }
+
+      if (info.soc_name.empty()) {
+        auto soc_val = map["soc_name"];
+        if (!soc_val.IsString()) {
+          soc_val = map["soc_model"];
+        }
+        if (!soc_val.IsString()) {
+          soc_val = map["target_soc"];
+        }
+        if (soc_val.IsString()) {
+          info.soc_name = std::string(soc_val.AsString().c_str(),
+                                      soc_val.AsString().length());
+        }
+      }
+    }
+  }
+}
+
+// Fallback scan for LiteRtStamp string and 250-byte payload in raw buffer.
+void ExtractNpuInfoFromBufferScan(absl::string_view tflite_buffer,
+                                  NpuInfo& info) {
+  if (info.brand != NpuBrand::kUnknown && !info.soc_name.empty()) {
+    return;
+  }
+  size_t stamp_pos = tflite_buffer.find("LiteRtStamp");
+  if (stamp_pos == absl::string_view::npos) return;
+
+  size_t search_start = stamp_pos > 4096 ? stamp_pos - 4096 : 0;
+  size_t search_end = std::min(tflite_buffer.size(), stamp_pos + 4096);
+  absl::string_view window =
+      tflite_buffer.substr(search_start, search_end - search_start);
+  static constexpr char kLenPrefix[4] = {'\xfa', '\x00', '\x00', '\x00'};
+  size_t prefix_pos = window.find(absl::string_view(kLenPrefix, 4));
+  if (prefix_pos != absl::string_view::npos &&
+      prefix_pos + 4 + 250 <= window.size()) {
+    ParseLiteRtStampPayload(window.substr(prefix_pos + 4, 250), info);
+  }
+}
+
 // Inspects a TFLite model buffer to detect target NPU brand and SoC model.
 // Checks:
 // 1. LiteRtStamp metadata buffer embedded in the TFLite model.
@@ -177,125 +320,11 @@ NpuInfo DetectNpuInfoFromTfliteBuffer(absl::string_view tflite_buffer) {
         tflite_buffer.size());
     if (tflite::VerifyModelBuffer(verifier)) {
       const tflite::Model* model = tflite::GetModel(tflite_buffer.data());
-      if (model != nullptr) {
-        // 1. Inspect LiteRtStamp in TFLite metadata if present.
-        if (model->metadata() != nullptr && model->buffers() != nullptr) {
-          for (size_t i = 0; i < model->metadata()->size(); ++i) {
-            const auto* meta = model->metadata()->Get(i);
-            if (meta != nullptr && meta->name() != nullptr &&
-                meta->name()->string_view() == "LiteRtStamp") {
-              uint32_t buf_idx = meta->buffer();
-              if (buf_idx < model->buffers()->size()) {
-                const auto* buf = model->buffers()->Get(buf_idx);
-                if (buf != nullptr && buf->data() != nullptr) {
-                  const auto* data_vec = buf->data();
-                  if (data_vec->size() >= 250) {
-                    ParseLiteRtStampPayload(
-                        absl::string_view(
-                            reinterpret_cast<const char*>(data_vec->data()),
-                            data_vec->size()),
-                        info);
-                  }
-                }
-              }
-            }
-          }
-        }
-
-        // 2. Inspect DISPATCH_OP operators in subgraphs.
-        std::vector<int> dispatch_op_indices;
-        if (model->operator_codes() != nullptr) {
-          for (int i = 0; i < model->operator_codes()->size(); ++i) {
-            const auto* op_code = model->operator_codes()->Get(i);
-            if (op_code != nullptr && op_code->custom_code() != nullptr &&
-                op_code->custom_code()->string_view() == "DISPATCH_OP") {
-              dispatch_op_indices.push_back(i);
-            }
-          }
-        }
-
-        if (!dispatch_op_indices.empty() && model->subgraphs() != nullptr) {
-          for (int s = 0; s < model->subgraphs()->size(); ++s) {
-            const auto* subgraph = model->subgraphs()->Get(s);
-            if (subgraph->operators() == nullptr) continue;
-
-            for (int o = 0; o < subgraph->operators()->size(); ++o) {
-              const auto* op = subgraph->operators()->Get(o);
-              bool is_dispatch = false;
-              for (int idx : dispatch_op_indices) {
-                if (op->opcode_index() == idx) {
-                  is_dispatch = true;
-                  break;
-                }
-              }
-
-              if (is_dispatch) {
-                const auto* custom_options = op->custom_options();
-                if (custom_options != nullptr && !custom_options->empty()) {
-                  auto root = flexbuffers::GetRoot(
-                      reinterpret_cast<const uint8_t*>(custom_options->data()),
-                      custom_options->size());
-                  if (root.IsMap()) {
-                    auto map = root.AsMap();
-                    auto name_val = map["name"];
-                    if (name_val.IsString() &&
-                        info.brand == NpuBrand::kUnknown) {
-                      absl::string_view name(name_val.AsString().c_str(),
-                                             name_val.AsString().length());
-                      for (const auto& spec : GetNpuBrandRegistry()) {
-                        for (absl::string_view token :
-                             spec.dispatch_op_tokens) {
-                          if (absl::StrContainsIgnoreCase(name, token)) {
-                            info.brand = spec.brand;
-                            break;
-                          }
-                        }
-                        if (info.brand != NpuBrand::kUnknown) break;
-                      }
-                    }
-                    auto soc_val = map["soc_name"];
-                    if (!soc_val.IsString()) {
-                      soc_val = map["soc_model"];
-                    }
-                    if (soc_val.IsString() && info.soc_name.empty()) {
-                      info.soc_name = std::string(soc_val.AsString().c_str(),
-                                                  soc_val.AsString().length());
-                    }
-                    auto target_soc_val = map["target_soc"];
-                    if (target_soc_val.IsString() && info.soc_name.empty()) {
-                      info.soc_name =
-                          std::string(target_soc_val.AsString().c_str(),
-                                      target_soc_val.AsString().length());
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
+      ExtractNpuInfoFromStampMetadata(model, info);
+      ExtractNpuInfoFromDispatchOps(model, info);
     }
   }
-
-  // 3. Fallback scan for LiteRtStamp string and 250-byte stamp in the buffer.
-  if (info.brand == NpuBrand::kUnknown || info.soc_name.empty()) {
-    size_t stamp_pos = tflite_buffer.find("LiteRtStamp");
-    if (stamp_pos != absl::string_view::npos) {
-      size_t search_start = stamp_pos > 4096 ? stamp_pos - 4096 : 0;
-      size_t search_end = std::min(tflite_buffer.size(), stamp_pos + 4096);
-      absl::string_view window =
-          tflite_buffer.substr(search_start, search_end - search_start);
-      // Flatbuffer byte vector for 250 bytes has 32-bit little-endian length
-      // 250: 0xfa 0x00 0x00 0x00
-      static constexpr char kLenPrefix[4] = {'\xfa', '\x00', '\x00', '\x00'};
-      size_t prefix_pos = window.find(absl::string_view(kLenPrefix, 4));
-      if (prefix_pos != absl::string_view::npos &&
-          prefix_pos + 4 + 250 <= window.size()) {
-        ParseLiteRtStampPayload(window.substr(prefix_pos + 4, 250), info);
-      }
-    }
-  }
-
+  ExtractNpuInfoFromBufferScan(tflite_buffer, info);
   return info;
 }
 
@@ -308,6 +337,65 @@ bool IsMainLlmSection(absl::string_view model_type) {
          model_type == "tf_lite_decode" ||
          model_type == "tf_lite_artisan_text_decoder";
 }
+
+// Functional classification of sub-models inside the container.
+enum class SectionKind {
+  kMainLlm,
+  kVision,
+  kAudio,
+  kVideo,
+  kSpeculativeDrafter,
+  kNpuAux,
+  kOther,
+};
+
+// Classifies the sub-model section by its model_type to identify supported
+// input modalities (vision, audio, video), speculative decoding drafters,
+// and hardware-accelerated NPU sub-models.
+SectionKind ClassifyModelType(absl::string_view model_type) {
+  if (IsMainLlmSection(model_type)) return SectionKind::kMainLlm;
+  if (model_type == "tf_lite_vision_adapter" ||
+      model_type == "tf_lite_vision_encoder") {
+    return SectionKind::kVision;
+  }
+  if (model_type == "tf_lite_audio_adapter" ||
+      model_type == "tf_lite_audio_encoder_hw") {
+    return SectionKind::kAudio;
+  }
+  if (model_type == "tf_lite_video_adapter" ||
+      model_type == "tf_lite_video_encoder") {
+    return SectionKind::kVideo;
+  }
+  if (model_type == "tf_lite_mtp_drafter") {
+    return SectionKind::kSpeculativeDrafter;
+  }
+  if (model_type == "tf_lite_aux") {
+    return SectionKind::kNpuAux;
+  }
+  return SectionKind::kOther;
+}
+
+// Metadata associated with a specific modality sub-model.
+struct ModalityMetadata {
+  bool present = false;
+  std::string backend_constraint;
+  std::string soc_name;
+};
+
+// All sections and metadata discovered from the container header.
+struct DiscoveredSections {
+  std::string global_soc_name;
+  StreamSection llm_metadata_proto;
+  StreamSection main_tflite;
+  StreamSection npu_aux;
+  std::vector<StreamSection> vision_sections;
+  bool has_speculative_decoding = false;
+
+  ModalityMetadata text;
+  ModalityMetadata vision;
+  ModalityMetadata audio;
+  ModalityMetadata video;
+};
 
 // Determines hardware backend support (CPU, GPU, NPU) and priority ordering
 // from backend constraint strings specified in the LiteRTLM container section
@@ -450,238 +538,200 @@ absl::StatusOr<std::vector<int>> ExtractVisionSignatureLengths(
   return extracted_lengths;
 }
 
-// Check if the number is a magic number.
-// The number is a magic number if it is prime and greater than 10.
-bool IsMagicNumber(int64_t number) {
-  if (number < 11) {
-    return false;
+// Reads a section from the container stream into memory with size and bounds
+// validation.
+absl::StatusOr<std::string> ReadStreamSection(
+    std::istream& stream, std::streamoff total_stream_size,
+    const StreamSection& section, size_t max_size,
+    absl::string_view section_name) {
+  if (section.end <= section.begin) {
+    return absl::InternalError(
+        absl::StrFormat("Invalid %s section offsets.", section_name));
   }
-  if (number % 2 == 0) {
-    return false;
+  if (total_stream_size >= 0 &&
+      static_cast<uint64_t>(total_stream_size) < section.end) {
+    return absl::InternalError(
+        absl::StrFormat("%s section exceeds stream bounds.", section_name));
   }
-  for (int64_t i = 3; i * i <= number; i += 2) {
-    if (number % i == 0) {
-      return false;
-    }
+  size_t size = section.size();
+  if (size > max_size) {
+    return absl::InternalError(absl::StrFormat(
+        "%s section size exceeds maximum allowed limit.", section_name));
   }
-  return true;
+  stream.seekg(section.begin);
+  std::string buffer(size, '\0');
+  stream.read(&buffer[0], size);
+  if (!stream && stream.gcount() == 0) {
+    return absl::InternalError(absl::StrFormat(
+        "Failed to read %s section from stream.", section_name));
+  }
+  if (static_cast<size_t>(stream.gcount()) < size) {
+    buffer.resize(stream.gcount());
+  }
+  return buffer;
 }
 
-}  // namespace
+// Scans container system metadata and section entries to discover sections.
+absl::StatusOr<DiscoveredSections> DiscoverSections(
+    const LiteRTLMMetaData& metadata) {
+  DiscoveredSections sections;
+  sections.text.present = true;
 
-absl::StatusOr<ModelInfo> InspectModel(std::istream& litertlm_stream) {
-  litertlm_stream.seekg(0, std::ios::end);
-  const std::streamoff total_stream_size = litertlm_stream.tellg();
-  litertlm_stream.seekg(0, std::ios::beg);
-
-  LitertlmHeader header;
-  ABSL_RETURN_IF_ERROR(ReadHeaderFromLiteRTLM(litertlm_stream, &header));
-
-  const LiteRTLMMetaData* metadata = header.metadata;
-  RET_CHECK_NE(metadata, nullptr);
-
-  ModelInfo info;
-
-  // 1. Discover sections and identify modality models / speculative drafters.
-  const litert::lm::schema::SectionMetadata* section_metadata_obj =
-      metadata->section_metadata();
-  RET_CHECK_NE(section_metadata_obj, nullptr);
-  auto section_objects = section_metadata_obj->objects();
-  RET_CHECK_NE(section_objects, nullptr);
-
-  bool has_llm_metadata = false;
-  uint64_t llm_metadata_begin = 0;
-  uint64_t llm_metadata_end = 0;
-
-  bool found_main_tflite = false;
-  uint64_t main_tflite_begin = 0;
-  uint64_t main_tflite_end = 0;
-
-  bool has_vision = false;
-  bool has_audio = false;
-  bool has_video = false;
-  bool has_speculative_decoding = false;
-  bool has_npu = false;
-  uint64_t npu_section_begin = 0;
-  uint64_t npu_section_end = 0;
-  std::string text_backend_constraint;
-  std::string vision_backend_constraint;
-  std::string audio_backend_constraint;
-  std::string video_backend_constraint;
-
-  std::string text_soc_name;
-  std::string vision_soc_name;
-  std::string audio_soc_name;
-  std::string video_soc_name;
-  std::string global_soc_name;
-
-  if (const auto* sys_meta = metadata->system_metadata()) {
+  // Extract global SoC name from system metadata if present.
+  if (const auto* sys_meta = metadata.system_metadata()) {
     if (const auto* entries = sys_meta->entries()) {
       for (size_t j = 0; j < entries->size(); ++j) {
         const KeyValuePair* item = entries->Get(j);
         if (item == nullptr || item->key() == nullptr) continue;
-        absl::string_view key = item->key()->string_view();
-        if (key == "soc_name" || key == "soc_model" || key == "target_soc" ||
-            key == "soc") {
+        if (IsSocNameKey(item->key()->string_view())) {
           const auto* value = item->value_as_StringValue();
-          if (value && value->value() && global_soc_name.empty()) {
-            global_soc_name = std::string(value->value()->string_view());
+          if (value && value->value() && sections.global_soc_name.empty()) {
+            sections.global_soc_name =
+                std::string(value->value()->string_view());
           }
         }
       }
     }
   }
 
-  struct VisionSectionInfo {
-    uint64_t begin;
-    uint64_t end;
-  };
-  std::vector<VisionSectionInfo> vision_sections;
+  // 1. Discover sections and identify modality models / speculative drafters.
+  const auto* section_metadata = metadata.section_metadata();
+  RET_CHECK_NE(section_metadata, nullptr);
+  const auto* section_objects = section_metadata->objects();
+  RET_CHECK_NE(section_objects, nullptr);
+
+  bool found_main_tflite = false;
 
   for (size_t i = 0; i < section_objects->size(); ++i) {
     const auto* section = section_objects->Get(i);
     if (section == nullptr) continue;
 
+    StreamSection sec{section->begin_offset(), section->end_offset()};
+
     if (section->data_type() == AnySectionDataType_LlmMetadataProto) {
       // LLM Metadata Protobuf section found: record its stream offsets.
-      has_llm_metadata = true;
-      llm_metadata_begin = section->begin_offset();
-      llm_metadata_end = section->end_offset();
-    } else if (section->data_type() == AnySectionDataType_TFLiteModel) {
-      // Scan TFLite model attributes to detect media and speculative features.
-      bool is_vision = false;
-      std::string model_type;
-      std::string backend_constraint;
-      std::string section_soc_name;
-      // In this context, "is_adapter" refers to any auxiliary model (like
-      // vision/audio adapters, encoders, or speculative drafters) that is not
-      // the main compute pipeline. We skip these when searching for the main
-      // TFLite model.
-      bool is_adapter = false;
-      if (const auto* items = section->items()) {
-        for (size_t j = 0; j < items->size(); ++j) {
-          const KeyValuePair* item = items->Get(j);
-          if (item == nullptr || item->key() == nullptr) continue;
-          absl::string_view key = item->key()->string_view();
-          if (key == "model_type") {
-            const auto* value = item->value_as_StringValue();
+      sections.llm_metadata_proto = sec;
+      continue;
+    }
+    if (section->data_type() != AnySectionDataType_TFLiteModel) {
+      continue;
+    }
 
-            if (value && value->value()) {
-              model_type = absl::AsciiStrToLower(value->value()->string_view());
-            }
-          } else if (key == "backend_constraint") {
-            const auto* value = item->value_as_StringValue();
-            if (value && value->value()) {
-              backend_constraint = absl::AsciiStrToLower(
-                  value->value()->string_view());
-            }
-          } else if (IsSocNameKey(key)) {
-            const auto* value = item->value_as_StringValue();
-            if (value && value->value()) {
-              section_soc_name = std::string(value->value()->string_view());
-              if (global_soc_name.empty()) {
-                global_soc_name = section_soc_name;
-              }
-            }
+    // Scan TFLite model attributes to detect media and speculative features.
+    std::string model_type;
+    std::string backend_constraint;
+    std::string section_soc_name;
+
+    if (const auto* items = section->items()) {
+      for (size_t j = 0; j < items->size(); ++j) {
+        const KeyValuePair* item = items->Get(j);
+        if (item == nullptr || item->key() == nullptr) continue;
+        absl::string_view key = item->key()->string_view();
+        const auto* value = item->value_as_StringValue();
+        if (value == nullptr || value->value() == nullptr) continue;
+        absl::string_view val = value->value()->string_view();
+
+        if (key == "model_type") {
+          model_type = absl::AsciiStrToLower(val);
+        } else if (key == "backend_constraint") {
+          backend_constraint = absl::AsciiStrToLower(val);
+        } else if (IsSocNameKey(key)) {
+          section_soc_name = std::string(val);
+          if (sections.global_soc_name.empty()) {
+            sections.global_soc_name = section_soc_name;
           }
         }
       }
+    }
 
-      // Classify the sub-model section by its model_type to identify supported
-      // input modalities (vision, audio, video), speculative decoding drafters,
-      // and hardware-accelerated NPU sub-models.
-      if (!model_type.empty()) {
-        if (model_type == "tf_lite_vision_adapter" ||
-            model_type == "tf_lite_vision_encoder") {
-          has_vision = true;
-          is_vision = true;
-          is_adapter = true;
-        } else if (model_type == "tf_lite_audio_adapter" ||
-                   model_type == "tf_lite_audio_encoder_hw") {
-          has_audio = true;
-          is_adapter = true;
-        } else if (model_type == "tf_lite_video_adapter" ||
-                   model_type == "tf_lite_video_encoder") {
-          has_video = true;
-          is_adapter = true;
-        } else if (model_type == "tf_lite_mtp_drafter") {
-          has_speculative_decoding = true;
-          is_adapter = true;
-        } else if (model_type == "tf_lite_aux") {
-          has_npu = true;
-          npu_section_begin = section->begin_offset();
-          npu_section_end = section->end_offset();
-        }
+    SectionKind kind = ClassifyModelType(model_type);
+    // In this context, "is_adapter" refers to any auxiliary model (like
+    // vision/audio adapters, encoders, or speculative drafters) that is not
+    // the main compute pipeline. We skip these when searching for the main
+    // TFLite model.
+    bool is_adapter = true;
 
-        // Associate backend constraints and SoC models with their respective
-        // modality.
-        if (IsMainLlmSection(model_type)) {
-          text_backend_constraint = backend_constraint;
-          if (!section_soc_name.empty()) text_soc_name = section_soc_name;
-        } else if (model_type == "tf_lite_vision_adapter" ||
-                   model_type == "tf_lite_vision_encoder") {
-          vision_backend_constraint = backend_constraint;
-          if (!section_soc_name.empty()) vision_soc_name = section_soc_name;
-        } else if (model_type == "tf_lite_audio_adapter" ||
-                   model_type == "tf_lite_audio_encoder_hw") {
-          audio_backend_constraint = backend_constraint;
-          if (!section_soc_name.empty()) audio_soc_name = section_soc_name;
-        } else if (model_type == "tf_lite_video_adapter" ||
-                   model_type == "tf_lite_video_encoder") {
-          video_backend_constraint = backend_constraint;
-          if (!section_soc_name.empty()) video_soc_name = section_soc_name;
-        }
+    // Associate backend constraints and SoC models with their respective
+    // modality.
+    auto record_modality = [&](ModalityMetadata& mod) {
+      mod.present = true;
+      mod.backend_constraint = backend_constraint;
+      if (!section_soc_name.empty()) {
+        mod.soc_name = section_soc_name;
       }
-      if (is_vision) {
-        vision_sections.push_back(
-            {section->begin_offset(), section->end_offset()});
-      }
+    };
 
-      // Identify the main TFLite graph section for fallback NPU/SoC inspection.
-      if (IsMainLlmSection(model_type)) {
-        main_tflite_begin = section->begin_offset();
-        main_tflite_end = section->end_offset();
+    switch (kind) {
+      case SectionKind::kMainLlm:
+        is_adapter = false;
+        record_modality(sections.text);
+        sections.main_tflite = sec;
         found_main_tflite = true;
-      } else if (!is_adapter && !found_main_tflite) {
-        main_tflite_begin = section->begin_offset();
-        main_tflite_end = section->end_offset();
-        found_main_tflite = true;
-      }
+        break;
+      case SectionKind::kVision:
+        record_modality(sections.vision);
+        sections.vision_sections.push_back(sec);
+        break;
+      case SectionKind::kAudio:
+        record_modality(sections.audio);
+        break;
+      case SectionKind::kVideo:
+        record_modality(sections.video);
+        break;
+      case SectionKind::kSpeculativeDrafter:
+        sections.has_speculative_decoding = true;
+        break;
+      case SectionKind::kNpuAux:
+        sections.npu_aux = sec;
+        break;
+      case SectionKind::kOther:
+        is_adapter = false;
+        break;
+    }
+
+    // Identify the main TFLite graph section for fallback NPU/SoC inspection.
+    if (!is_adapter && !found_main_tflite) {
+      sections.main_tflite = sec;
+      found_main_tflite = true;
     }
   }
 
+  return sections;
+}
+
+// Configures supported modalities, backends, NPU brand, and SoC name.
+absl::Status ConfigureModalitiesAndBackends(
+    std::istream& stream, std::streamoff total_stream_size,
+    const DiscoveredSections& sections, LlmInferenceCapability& llm_cap) {
   // 2. Populate LlmInferenceCapability.
-  LlmInferenceCapability llm_cap;
-  llm_cap.input_modalities.text = true;
-  llm_cap.input_modalities.vision = has_vision;
-  llm_cap.input_modalities.audio = has_audio;
-  llm_cap.input_modalities.video = has_video;
+  llm_cap.input_modalities.text = sections.text.present;
+  llm_cap.input_modalities.vision = sections.vision.present;
+  llm_cap.input_modalities.audio = sections.audio.present;
+  llm_cap.input_modalities.video = sections.video.present;
 
   llm_cap.output_modalities.text = true;
-  llm_cap.supports_speculative_decoding = has_speculative_decoding;
+  llm_cap.supports_speculative_decoding = sections.has_speculative_decoding;
 
-  NpuBrand npu_brand = NpuBrand::kUnknown;
   bool is_artisan_tensor = false;
-
   // Resolve backend support for each active modality from section constraints.
-  ParseBackendConstraint(text_backend_constraint,
+  ParseBackendConstraint(sections.text.backend_constraint,
                          llm_cap.text_supported_backends, is_artisan_tensor);
-  if (has_vision) {
-    ParseBackendConstraint(vision_backend_constraint,
+  if (sections.vision.present) {
+    ParseBackendConstraint(sections.vision.backend_constraint,
                            llm_cap.vision_supported_backends,
                            is_artisan_tensor);
   }
-  if (has_audio) {
-    ParseBackendConstraint(audio_backend_constraint,
+  if (sections.audio.present) {
+    ParseBackendConstraint(sections.audio.backend_constraint,
                            llm_cap.audio_supported_backends, is_artisan_tensor);
   }
-  if (has_video) {
-    ParseBackendConstraint(video_backend_constraint,
+  if (sections.video.present) {
+    ParseBackendConstraint(sections.video.backend_constraint,
                            llm_cap.video_supported_backends, is_artisan_tensor);
   }
 
   // If a hardware-accelerated NPU sub-model section exists, enable NPU.
-  if (has_npu) {
+  if (sections.npu_aux.is_valid()) {
     llm_cap.text_supported_backends.npu = true;
     if (std::find(llm_cap.text_supported_backends.preferred_backends.begin(),
                   llm_cap.text_supported_backends.preferred_backends.end(),
@@ -702,27 +752,20 @@ absl::StatusOr<ModelInfo> InspectModel(std::istream& litertlm_stream) {
                      llm_cap.audio_supported_backends.npu ||
                      llm_cap.video_supported_backends.npu;
 
-  auto inspect_section_for_npu = [&](uint64_t begin, uint64_t end) {
-    if (end <= begin) return;
-    if (total_stream_size >= 0 &&
-        static_cast<uint64_t>(total_stream_size) < begin) {
-      return;
+  NpuBrand npu_brand = NpuBrand::kUnknown;
+  std::string detected_soc = sections.global_soc_name;
+
+  auto inspect_section_for_npu = [&](const StreamSection& sec) {
+    if (!sec.is_valid()) return;
+    auto buffer_or = ReadStreamSection(stream, total_stream_size, sec,
+                                       kMaxNpuSectionSize, "NPU");
+    if (!buffer_or.ok()) return;
+    NpuInfo info = DetectNpuInfoFromTfliteBuffer(*buffer_or);
+    if (npu_brand == NpuBrand::kUnknown) {
+      npu_brand = info.brand;
     }
-    size_t size = end - begin;
-    size_t read_size = std::min(size, kMaxNpuSectionSize);
-    litertlm_stream.seekg(begin);
-    std::vector<char> buffer(read_size);
-    litertlm_stream.read(buffer.data(), read_size);
-    if (litertlm_stream || litertlm_stream.gcount() > 0) {
-      size_t actual_read = litertlm_stream.gcount();
-      NpuInfo npu_info = DetectNpuInfoFromTfliteBuffer(
-          absl::string_view(buffer.data(), actual_read));
-      if (npu_brand == NpuBrand::kUnknown) {
-        npu_brand = npu_info.brand;
-      }
-      if (global_soc_name.empty() && !npu_info.soc_name.empty()) {
-        global_soc_name = npu_info.soc_name;
-      }
+    if (detected_soc.empty() && !info.soc_name.empty()) {
+      detected_soc = info.soc_name;
     }
   };
 
@@ -730,212 +773,257 @@ absl::StatusOr<ModelInfo> InspectModel(std::istream& litertlm_stream) {
     if (is_artisan_tensor && npu_brand == NpuBrand::kUnknown) {
       npu_brand = NpuBrand::kGoogleTensor;
     }
-    if (npu_section_end > npu_section_begin) {
-      inspect_section_for_npu(npu_section_begin, npu_section_end);
+    if (sections.npu_aux.is_valid()) {
+      inspect_section_for_npu(sections.npu_aux);
     }
-    if (found_main_tflite &&
-        (npu_brand == NpuBrand::kUnknown || global_soc_name.empty())) {
-      inspect_section_for_npu(main_tflite_begin, main_tflite_end);
+    if (sections.main_tflite.is_valid() &&
+        (npu_brand == NpuBrand::kUnknown || detected_soc.empty())) {
+      inspect_section_for_npu(sections.main_tflite);
     }
   }
-
-  auto resolve_soc_name = [&](const std::string& modality_soc) -> std::string {
-    return !modality_soc.empty() ? modality_soc : global_soc_name;
-  };
 
   // Propagate detected NPU brand and SoC name to all modalities that support
   // NPU.
   auto update_npu_modality = [&](SupportedBackends& sb,
                                  const std::string& modality_soc) {
-    if (sb.npu) {
-      sb.npu_brand = npu_brand;
-      sb.soc_name = resolve_soc_name(modality_soc);
-      if (std::find(sb.preferred_backends.begin(), sb.preferred_backends.end(),
-                    BackendType::kNpu) == sb.preferred_backends.end()) {
-        sb.preferred_backends.push_back(BackendType::kNpu);
-      }
+    if (!sb.npu) return;
+    sb.npu_brand = npu_brand;
+    sb.soc_name = !modality_soc.empty() ? modality_soc : detected_soc;
+    if (std::find(sb.preferred_backends.begin(), sb.preferred_backends.end(),
+                  BackendType::kNpu) == sb.preferred_backends.end()) {
+      sb.preferred_backends.push_back(BackendType::kNpu);
     }
   };
-  update_npu_modality(llm_cap.text_supported_backends, text_soc_name);
-  update_npu_modality(llm_cap.vision_supported_backends, vision_soc_name);
-  update_npu_modality(llm_cap.audio_supported_backends, audio_soc_name);
-  update_npu_modality(llm_cap.video_supported_backends, video_soc_name);
 
-  // Overwrite from serialized binary LlmMetadata protobuf if present.
-  if (has_llm_metadata && llm_metadata_end > llm_metadata_begin) {
-    if (total_stream_size >= 0 &&
-        static_cast<uint64_t>(total_stream_size) < llm_metadata_end) {
-      return absl::InternalError("LLM metadata section exceeds stream bounds.");
+  update_npu_modality(llm_cap.text_supported_backends, sections.text.soc_name);
+  update_npu_modality(llm_cap.vision_supported_backends,
+                      sections.vision.soc_name);
+  update_npu_modality(llm_cap.audio_supported_backends,
+                      sections.audio.soc_name);
+  update_npu_modality(llm_cap.video_supported_backends,
+                      sections.video.soc_name);
+
+  return absl::OkStatus();
+}
+
+// Calculates max vision token budget from LlmModelType protobuf.
+int CalculateMaxVisionTokenBudget(const proto::LlmModelType& model_type) {
+  int max_num_patches = 0;
+  // Default to 3, which is the standard default for Gemma 4.
+  int pooling_kernel_size = 3;
+
+  if (model_type.has_gemma4()) {
+    max_num_patches = model_type.gemma4().max_num_patches();
+    if (model_type.gemma4().pooling_kernel_size() > 0) {
+      pooling_kernel_size = model_type.gemma4().pooling_kernel_size();
     }
-    size_t size = llm_metadata_end - llm_metadata_begin;
-    if (size > kMaxProtoMetadataSize) {
-      return absl::InternalError(
-          "LLM metadata section size exceeds maximum allowed limit.");
-    }
-    litertlm_stream.seekg(llm_metadata_begin);
-    auto buffer = std::make_unique<char[]>(size);
-    litertlm_stream.read(buffer.get(), size);
-    if (litertlm_stream) {
-      proto::LlmMetadata proto_metadata;
-      if (proto_metadata.ParseFromString(
-              absl::string_view(buffer.get(), size))) {
-        llm_cap.supports_thinking = proto_metadata.supports_thinking();
-        llm_cap.min_runtime_version = proto_metadata.min_runtime_version();
-        llm_cap.supports_function_calling =
-            proto_metadata.supports_function_calling();
-        if (proto_metadata.has_sampler_params()) {
-          const auto& sp = proto_metadata.sampler_params();
-          llm_cap.default_sampler_params.type =
-              static_cast<SamplerType>(sp.type());
-          llm_cap.default_sampler_params.k = sp.k();
-          llm_cap.default_sampler_params.p = sp.p();
-          llm_cap.default_sampler_params.temperature = sp.temperature();
-        }
-        if (proto_metadata.has_llm_model_type()) {
-          const auto& model_type = proto_metadata.llm_model_type();
-          int max_num_patches = 0;
-          // Default to 3, which is the standard default for vision pooling.
-          int pooling_kernel_size = 3;
-          if (model_type.has_gemma4()) {
-            max_num_patches = model_type.gemma4().max_num_patches();
-            if (model_type.gemma4().pooling_kernel_size() > 0) {
-              pooling_kernel_size = model_type.gemma4().pooling_kernel_size();
-            }
-          } else if (model_type.has_generic_model()) {
-            max_num_patches = model_type.generic_model().max_num_patches();
-            pooling_kernel_size =
-                model_type.generic_model().pooling_kernel_size() > 0
-                    ? model_type.generic_model().pooling_kernel_size()
-                    : 1;
-          } else if (model_type.has_lfm2()) {
-            max_num_patches = model_type.lfm2().max_num_patches();
-            pooling_kernel_size = model_type.lfm2().pooling_kernel_size() > 0
-                                      ? model_type.lfm2().pooling_kernel_size()
-                                      : 2;
-          }
-          if (max_num_patches > 0) {
-            llm_cap.max_vision_token_budget =
-                max_num_patches / (pooling_kernel_size * pooling_kernel_size);
-          }
-        }
-        llm_cap.max_context_tokens = proto_metadata.max_num_tokens();
-        llm_cap.is_dynamic_context = IsMagicNumber(llm_cap.max_context_tokens);
-      }
+  } else if (model_type.has_generic_model()) {
+    max_num_patches = model_type.generic_model().max_num_patches();
+    pooling_kernel_size =
+        model_type.generic_model().pooling_kernel_size() > 0
+            ? model_type.generic_model().pooling_kernel_size()
+            : 1;
+  } else if (model_type.has_lfm2()) {
+    max_num_patches = model_type.lfm2().max_num_patches();
+    pooling_kernel_size = model_type.lfm2().pooling_kernel_size() > 0
+                              ? model_type.lfm2().pooling_kernel_size()
+                              : 2;
+  }
+
+  if (max_num_patches > 0) {
+    return max_num_patches / (pooling_kernel_size * pooling_kernel_size);
+  }
+  return -1;
+}
+
+// Overwrite from serialized binary LlmMetadata protobuf if present.
+absl::Status LoadLlmMetadataProtoIfPresent(
+    std::istream& stream, std::streamoff total_stream_size,
+    const StreamSection& proto_section, LlmInferenceCapability& llm_cap) {
+  if (!proto_section.is_valid()) return absl::OkStatus();
+
+  ABSL_ASSIGN_OR_RETURN(
+      std::string buffer,
+      ReadStreamSection(stream, total_stream_size, proto_section,
+                        kMaxProtoMetadataSize, "LLM metadata"));
+
+  proto::LlmMetadata proto_metadata;
+  if (!proto_metadata.ParseFromString(buffer)) {
+    return absl::OkStatus();
+  }
+
+  llm_cap.supports_thinking = proto_metadata.supports_thinking();
+  llm_cap.min_runtime_version = proto_metadata.min_runtime_version();
+  llm_cap.supports_function_calling =
+      proto_metadata.supports_function_calling();
+
+  if (proto_metadata.has_sampler_params()) {
+    const auto& sp = proto_metadata.sampler_params();
+    llm_cap.default_sampler_params.type = static_cast<SamplerType>(sp.type());
+    llm_cap.default_sampler_params.k = sp.k();
+    llm_cap.default_sampler_params.p = sp.p();
+    llm_cap.default_sampler_params.temperature = sp.temperature();
+  }
+
+  if (proto_metadata.has_llm_model_type()) {
+    int budget = CalculateMaxVisionTokenBudget(proto_metadata.llm_model_type());
+    if (budget > 0) {
+      llm_cap.max_vision_token_budget = budget;
     }
   }
 
-  if (has_vision) {
-    llm_cap.vision_signature_selection = std::vector<int>();
+  llm_cap.max_context_tokens = proto_metadata.max_num_tokens();
+  llm_cap.is_dynamic_context = IsMagicNumber(llm_cap.max_context_tokens);
 
-    for (const auto& vision_sec : vision_sections) {
-      if (vision_sec.end <= vision_sec.begin) {
-        return absl::InternalError("Invalid vision section offsets.");
-      }
-      if (total_stream_size >= 0 &&
-          static_cast<uint64_t>(total_stream_size) < vision_sec.end) {
-        return absl::InternalError("Vision section exceeds stream bounds.");
-      }
-      size_t size = vision_sec.end - vision_sec.begin;
-      if (size > kMaxVisionSectionSize) {
-        return absl::InternalError(
-            "Vision model section exceeds maximum allowed limit.");
-      }
-      litertlm_stream.seekg(vision_sec.begin);
-      auto buffer = std::make_unique<char[]>(size);
-      litertlm_stream.read(buffer.get(), size);
-      if (!litertlm_stream) {
-        return absl::InternalError(
-            "Failed to read vision model section from stream.");
-      }
+  return absl::OkStatus();
+}
 
-      ABSL_ASSIGN_OR_RETURN(
-          auto lengths,
-          ExtractVisionSignatureLengths(absl::string_view(buffer.get(), size)));
-      llm_cap.vision_signature_selection->insert(
-          llm_cap.vision_signature_selection->end(), lengths.begin(),
-          lengths.end());
-    }
-
-    if (llm_cap.vision_signature_selection->empty()) {
-      llm_cap.vision_signature_selection = std::nullopt;
-    } else {
-      auto& lengths = *llm_cap.vision_signature_selection;
-      std::sort(lengths.begin(), lengths.end());
-      lengths.erase(std::unique(lengths.begin(), lengths.end()), lengths.end());
-    }
-  } else {
+// Extracts vision signature token lengths if vision is supported.
+absl::Status LoadVisionSignaturesIfPresent(
+    std::istream& stream, std::streamoff total_stream_size,
+    const std::vector<StreamSection>& vision_sections,
+    LlmInferenceCapability& llm_cap) {
+  if (!llm_cap.input_modalities.vision) {
     llm_cap.vision_signature_selection = std::nullopt;
+    return absl::OkStatus();
   }
 
-  // 3. Fallback: inspect main TFLite model graph for context size if not
-  // already populated from LlmMetadata protobuf (e.g. for legacy or raw
-  // TFLite models). For large models (e.g. 7B+ models > 4GB), LlmMetadata
-  // protobuf is the primary source of truth, avoiding multi-gigabyte memory
-  // allocations.
-  if (llm_cap.max_context_tokens == 0 && found_main_tflite &&
-      main_tflite_end > main_tflite_begin) {
-    if (total_stream_size < 0 ||
-        static_cast<uint64_t>(total_stream_size) >= main_tflite_end) {
-      size_t size = main_tflite_end - main_tflite_begin;
-      if (size <= kMaxVisionSectionSize) {
-        litertlm_stream.seekg(main_tflite_begin);
-        auto buffer = std::make_unique<char[]>(size);
-        litertlm_stream.read(buffer.get(), size);
-        if (litertlm_stream) {
-          flatbuffers::Verifier verifier(
-              reinterpret_cast<const uint8_t*>(buffer.get()), size);
-          if (tflite::VerifyModelBuffer(verifier)) {
-            const tflite::Model* tflite_model = tflite::GetModel(buffer.get());
-            if (tflite_model != nullptr &&
-                tflite_model->signature_defs() != nullptr) {
-              for (const auto* sig : *tflite_model->signature_defs()) {
-                if (sig == nullptr || sig->signature_key() == nullptr) continue;
-                absl::string_view sig_key = sig->signature_key()->string_view();
-                if (absl::StartsWith(sig_key, "prefill")) {
-                  if (sig->inputs() != nullptr) {
-                    for (const auto* input : *sig->inputs()) {
-                      if (input == nullptr || input->name() == nullptr) {
-                        continue;
-                      }
-                      absl::string_view input_name =
-                          input->name()->string_view();
-                      if (absl::StrContains(input_name, "mask")) {
-                        uint32_t tensor_idx = input->tensor_index();
-                        uint32_t subgraph_idx = sig->subgraph_index();
-                        if (tflite_model->subgraphs() != nullptr &&
-                            subgraph_idx < tflite_model->subgraphs()->size()) {
-                          const auto* subgraph =
-                              tflite_model->subgraphs()->Get(subgraph_idx);
-                          if (subgraph != nullptr &&
-                              subgraph->tensors() != nullptr &&
-                              tensor_idx < subgraph->tensors()->size()) {
-                            const auto* tensor =
-                                subgraph->tensors()->Get(tensor_idx);
-                            if (tensor != nullptr &&
-                                tensor->shape() != nullptr) {
-                              int rank = tensor->shape()->size();
-                              if (rank > 0) {
-                                int64_t dim = tensor->shape()->Get(rank - 1);
-                                llm_cap.max_context_tokens = dim;
-                                llm_cap.is_dynamic_context = IsMagicNumber(dim);
-                              }
-                            }
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
+  std::vector<int> all_lengths;
+  for (const auto& vision_sec : vision_sections) {
+    ABSL_ASSIGN_OR_RETURN(
+        std::string buffer,
+        ReadStreamSection(stream, total_stream_size, vision_sec,
+                          kMaxVisionSectionSize, "Vision model"));
+
+    ABSL_ASSIGN_OR_RETURN(auto lengths,
+                          ExtractVisionSignatureLengths(buffer));
+    all_lengths.insert(all_lengths.end(), lengths.begin(), lengths.end());
+  }
+
+  if (all_lengths.empty()) {
+    llm_cap.vision_signature_selection = std::nullopt;
+  } else {
+    std::sort(all_lengths.begin(), all_lengths.end());
+    all_lengths.erase(std::unique(all_lengths.begin(), all_lengths.end()),
+                      all_lengths.end());
+    llm_cap.vision_signature_selection = std::move(all_lengths);
+  }
+
+  return absl::OkStatus();
+}
+
+// Inspects a TFLite model buffer to extract context token limit from prefill
+// signature input mask tensor.
+std::optional<int64_t> ExtractContextTokensFromTfliteBuffer(
+    absl::string_view buffer) {
+  flatbuffers::Verifier verifier(
+      reinterpret_cast<const uint8_t*>(buffer.data()), buffer.size());
+  if (!tflite::VerifyModelBuffer(verifier)) return std::nullopt;
+
+  const tflite::Model* model = tflite::GetModel(buffer.data());
+  if (model == nullptr || model->signature_defs() == nullptr ||
+      model->subgraphs() == nullptr) {
+    return std::nullopt;
+  }
+
+  for (const auto* sig : *model->signature_defs()) {
+    if (sig == nullptr || sig->signature_key() == nullptr ||
+        sig->inputs() == nullptr) {
+      continue;
+    }
+    if (!absl::StartsWith(sig->signature_key()->string_view(), "prefill")) {
+      continue;
+    }
+    for (const auto* input : *sig->inputs()) {
+      if (input == nullptr || input->name() == nullptr) continue;
+      if (!absl::StrContains(input->name()->string_view(), "mask")) continue;
+
+      uint32_t tensor_idx = input->tensor_index();
+      uint32_t subgraph_idx = sig->subgraph_index();
+      if (subgraph_idx >= model->subgraphs()->size()) continue;
+
+      const auto* subgraph = model->subgraphs()->Get(subgraph_idx);
+      if (subgraph == nullptr || subgraph->tensors() == nullptr) continue;
+      if (tensor_idx >= subgraph->tensors()->size()) continue;
+
+      const auto* tensor = subgraph->tensors()->Get(tensor_idx);
+      if (tensor == nullptr || tensor->shape() == nullptr) continue;
+
+      int rank = tensor->shape()->size();
+      if (rank > 0) {
+        return tensor->shape()->Get(rank - 1);
       }
     }
   }
+  return std::nullopt;
+}
 
-  info.llm_capability = llm_cap;
+// 3. Fallback: inspect main TFLite model graph for context size if not
+// already populated from LlmMetadata protobuf (e.g. for legacy or raw
+// TFLite models). For large models (e.g. 7B+ models > 4GB), LlmMetadata
+// protobuf is the primary source of truth, avoiding multi-gigabyte memory
+// allocations.
+absl::Status InferContextTokensFallbackIfMissing(
+    std::istream& stream, std::streamoff total_stream_size,
+    const StreamSection& main_tflite_sec, LlmInferenceCapability& llm_cap) {
+  if (llm_cap.max_context_tokens != 0 || !main_tflite_sec.is_valid()) {
+    return absl::OkStatus();
+  }
+  if (total_stream_size >= 0 &&
+      static_cast<uint64_t>(total_stream_size) < main_tflite_sec.end) {
+    return absl::OkStatus();
+  }
+  if (main_tflite_sec.size() > kMaxVisionSectionSize) {
+    return absl::OkStatus();
+  }
 
+  stream.seekg(main_tflite_sec.begin);
+  std::string buffer(main_tflite_sec.size(), '\0');
+  stream.read(&buffer[0], main_tflite_sec.size());
+  if (!stream && stream.gcount() == 0) return absl::OkStatus();
+  if (static_cast<size_t>(stream.gcount()) < buffer.size()) {
+    buffer.resize(stream.gcount());
+  }
+
+  auto context_tokens = ExtractContextTokensFromTfliteBuffer(buffer);
+  if (context_tokens.has_value()) {
+    llm_cap.max_context_tokens = *context_tokens;
+    llm_cap.is_dynamic_context = IsMagicNumber(*context_tokens);
+  }
+
+  return absl::OkStatus();
+}
+
+}  // namespace
+
+absl::StatusOr<ModelInfo> InspectModel(std::istream& litertlm_stream) {
+  litertlm_stream.seekg(0, std::ios::end);
+  const std::streamoff total_stream_size = litertlm_stream.tellg();
+  litertlm_stream.seekg(0, std::ios::beg);
+
+  LitertlmHeader header;
+  ABSL_RETURN_IF_ERROR(ReadHeaderFromLiteRTLM(litertlm_stream, &header));
+  RET_CHECK_NE(header.metadata, nullptr);
+
+  ABSL_ASSIGN_OR_RETURN(DiscoveredSections sections,
+                        DiscoverSections(*header.metadata));
+
+  LlmInferenceCapability llm_cap;
+  ABSL_RETURN_IF_ERROR(ConfigureModalitiesAndBackends(
+      litertlm_stream, total_stream_size, sections, llm_cap));
+
+  ABSL_RETURN_IF_ERROR(LoadLlmMetadataProtoIfPresent(
+      litertlm_stream, total_stream_size, sections.llm_metadata_proto,
+      llm_cap));
+
+  ABSL_RETURN_IF_ERROR(LoadVisionSignaturesIfPresent(
+      litertlm_stream, total_stream_size, sections.vision_sections, llm_cap));
+
+  ABSL_RETURN_IF_ERROR(InferContextTokensFallbackIfMissing(
+      litertlm_stream, total_stream_size, sections.main_tflite, llm_cap));
+
+  ModelInfo info;
+  info.llm_capability = std::move(llm_cap);
   return info;
 }
 
