@@ -677,6 +677,7 @@ cc_library(
         "@litert//litert/cc/options:litert_mediatek_options",
         "@litert//litert/cc/options:litert_qualcomm_options",
         "@litert//litert/cc/options:litert_samsung_options",
+        "@litert//litert/experimental/custom_ops/gated_delta_net:gated_delta_update_litert_custom_op",
         "//runtime/util:file_util",
         "//runtime/util:litert_status_util",
     ],
