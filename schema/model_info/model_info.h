@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef THIRD_PARTY_ODML_LITERT_LM_SCHEMA_CAPABILITIES_CAPABILITIES_H_
-#define THIRD_PARTY_ODML_LITERT_LM_SCHEMA_CAPABILITIES_CAPABILITIES_H_
+#ifndef THIRD_PARTY_ODML_LITERT_LM_SCHEMA_MODEL_INFO_MODEL_INFO_H_
+#define THIRD_PARTY_ODML_LITERT_LM_SCHEMA_MODEL_INFO_MODEL_INFO_H_
 
 #include <istream>
 #include <optional>
@@ -24,7 +24,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 
-namespace litert::lm::schema::capabilities {
+namespace litert::lm::schema::model_info {
 
 // Input and output modalities supported by the model.
 enum class Modality {
@@ -164,17 +164,16 @@ struct LlmInferenceCapability {
 // This wrapper is used to support future non-LLM model types (like Embeddings
 // or Classifiers) by adding new optional capability fields without breaking the
 // API.
-struct ModelCapabilities {
+struct ModelInfo {
   // LLM capabilities and configuration parameters, if available.
   std::optional<LlmInferenceCapability> llm_capability;
 };
 
 // Inspects the given LiteRT-LM file stream.
-absl::StatusOr<ModelCapabilities> InspectModel(std::istream& litertlm_stream);
+absl::StatusOr<ModelInfo> InspectModel(std::istream& litertlm_stream);
 
 // Inspects the given LiteRT-LM file path.
-absl::StatusOr<ModelCapabilities> InspectModel(
-    absl::string_view litertlm_path);
+absl::StatusOr<ModelInfo> InspectModel(absl::string_view litertlm_path);
 
 std::ostream& operator<<(std::ostream& os,
                          const SupportedModalities& modalities);
@@ -183,9 +182,8 @@ std::ostream& operator<<(std::ostream& os, const BackendType& backend);
 std::ostream& operator<<(std::ostream& os, const SupportedBackends& backends);
 std::ostream& operator<<(std::ostream& os,
                          const LlmInferenceCapability& llm_cap);
-std::ostream& operator<<(std::ostream& os,
-                         const ModelCapabilities& capabilities);
+std::ostream& operator<<(std::ostream& os, const ModelInfo& model_info);
 
-}  // namespace litert::lm::schema::capabilities
+}  // namespace litert::lm::schema::model_info
 
-#endif  // THIRD_PARTY_ODML_LITERT_LM_SCHEMA_CAPABILITIES_CAPABILITIES_H_
+#endif  // THIRD_PARTY_ODML_LITERT_LM_SCHEMA_MODEL_INFO_MODEL_INFO_H_

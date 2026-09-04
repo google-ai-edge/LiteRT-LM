@@ -40,39 +40,39 @@ class DescribeTest(absltest.TestCase):
         )
     )
 
-    self.mock_capabilities = mock.MagicMock(spec=litert_lm.Capabilities)
-    self.mock_capabilities.max_vision_token_budget = -1
-    self.mock_capabilities.vision_signature_selection = None
-    self.mock_capabilities.max_context_tokens = 0
-    self.mock_capabilities.is_dynamic_context = False
-    self.mock_capabilities.supported_backends_for_modality.return_value = [
+    self.mock_model_info = mock.MagicMock(spec=litert_lm.ModelInfo)
+    self.mock_model_info.max_vision_token_budget = -1
+    self.mock_model_info.vision_signature_selection = None
+    self.mock_model_info.max_context_tokens = 0
+    self.mock_model_info.is_dynamic_context = False
+    self.mock_model_info.supported_backends_for_modality.return_value = [
         "cpu",
         "gpu",
     ]
-    self.mock_capabilities.soc_name_for_modality.return_value = None
-    self.mock_capabilities_cls = self.enter_context(
+    self.mock_model_info.soc_name_for_modality.return_value = None
+    self.mock_model_info_cls = self.enter_context(
         mock.patch.object(
             litert_lm,
-            "Capabilities",
-            return_value=self.mock_capabilities,
+            "ModelInfo",
+            return_value=self.mock_model_info,
             autospec=True,
         )
     )
 
   def test_describe_success(self):
-    self.mock_capabilities.supports_thinking.return_value = True
-    self.mock_capabilities.supports_function_calling.return_value = False
-    self.mock_capabilities.has_speculative_decoding_support.return_value = True
+    self.mock_model_info.supports_thinking.return_value = True
+    self.mock_model_info.supports_function_calling.return_value = False
+    self.mock_model_info.has_speculative_decoding_support.return_value = True
 
-    self.mock_capabilities.input_modalities = litert_lm.SupportedModalities(
+    self.mock_model_info.input_modalities = litert_lm.SupportedModalities(
         text=True, vision=True, audio=False, video=False
     )
-    self.mock_capabilities.max_vision_token_budget = 280
-    self.mock_capabilities.vision_signature_selection = [280]
-    self.mock_capabilities.min_runtime_version = "0.12.3"
-    self.mock_capabilities.max_context_tokens = 2048
-    self.mock_capabilities.is_dynamic_context = True
-    self.mock_capabilities.default_sampler_params = litert_lm.SamplerConfig(
+    self.mock_model_info.max_vision_token_budget = 280
+    self.mock_model_info.vision_signature_selection = [280]
+    self.mock_model_info.min_runtime_version = "0.12.3"
+    self.mock_model_info.max_context_tokens = 2048
+    self.mock_model_info.is_dynamic_context = True
+    self.mock_model_info.default_sampler_params = litert_lm.SamplerConfig(
         temperature=0.7,
         top_k=40,
         top_p=0.9,
@@ -86,15 +86,13 @@ class DescribeTest(absltest.TestCase):
 
     self.assertEqual(result.exit_code, 0)
     self.mock_from_reference.assert_called_once_with("my-model-id")
-    self.mock_capabilities_cls.assert_called_once_with(
-        "/path/to/model.litertlm"
-    )
+    self.mock_model_info_cls.assert_called_once_with("/path/to/model.litertlm")
 
     # Verify stdout report formatting
     self.assertEqual(
         result.output.count("========================================"), 3
     )
-    self.assertIn("LiteRT-LM Model Capabilities Report", result.output)
+    self.assertIn("LiteRT-LM Model Info Report", result.output)
     self.assertIn("[LLM Capabilities]", result.output)
     self.assertIn("File: /path/to/model.litertlm", result.output)
     self.assertIn("Supports Function Call: NO", result.output)
@@ -113,16 +111,16 @@ class DescribeTest(absltest.TestCase):
     self.assertIn("Vision Signature Selection: [280]", result.output)
 
   def test_describe_model_multimodal_audio_video(self):
-    self.mock_capabilities.supports_thinking.return_value = False
-    self.mock_capabilities.supports_function_calling.return_value = False
-    self.mock_capabilities.has_speculative_decoding_support.return_value = False
+    self.mock_model_info.supports_thinking.return_value = False
+    self.mock_model_info.supports_function_calling.return_value = False
+    self.mock_model_info.has_speculative_decoding_support.return_value = False
 
-    self.mock_capabilities.input_modalities = litert_lm.SupportedModalities(
+    self.mock_model_info.input_modalities = litert_lm.SupportedModalities(
         text=True, vision=True, audio=True, video=True
     )
-    self.mock_capabilities.min_runtime_version = None
-    self.mock_capabilities.vision_signature_selection = None
-    self.mock_capabilities.default_sampler_params = litert_lm.SamplerConfig(
+    self.mock_model_info.min_runtime_version = None
+    self.mock_model_info.vision_signature_selection = None
+    self.mock_model_info.default_sampler_params = litert_lm.SamplerConfig(
         temperature=0.7,
         top_k=40,
         top_p=0.9,
@@ -145,6 +143,32 @@ class DescribeTest(absltest.TestCase):
     self.assertIn("Min Runtime Version:    -1", result.output)
     self.assertIn("Vision Signature Selection: -1", result.output)
 
+  def test_describe_model_default_sampler_params_top_k_none(self):
+    self.mock_model_info.supports_thinking.return_value = False
+    self.mock_model_info.supports_function_calling.return_value = False
+    self.mock_model_info.has_speculative_decoding_support.return_value = False
+    self.mock_model_info.input_modalities = litert_lm.SupportedModalities(
+        text=True, vision=False, audio=False, video=False
+    )
+    self.mock_model_info.min_runtime_version = None
+    self.mock_model_info.vision_signature_selection = None
+    self.mock_model_info.default_sampler_params = litert_lm.SamplerConfig(
+        temperature=0.0,
+        top_k=None,
+        top_p=0.0,
+    )
+
+    runner = testing.CliRunner()
+    result = runner.invoke(
+        describe_cmd.describe_model,
+        ["my-model-id"],
+    )
+
+    self.assertEqual(result.exit_code, 0)
+    self.assertIn("Sampler Top K:          0", result.output)
+    self.assertIn("Sampler Temp:           0.00", result.output)
+    self.assertIn("Sampler Top P:          0.00", result.output)
+
   def test_describe_model_not_found(self):
     self.mock_model.exists.return_value = False
 
@@ -158,10 +182,10 @@ class DescribeTest(absltest.TestCase):
     self.assertIn(
         "Error: Failed to find model 'missing-model-id'", result.output
     )
-    self.mock_capabilities_cls.assert_not_called()
+    self.mock_model_info_cls.assert_not_called()
 
   def test_describe_load_error(self):
-    self.mock_capabilities_cls.side_effect = RuntimeError("Failed to open file")
+    self.mock_model_info_cls.side_effect = RuntimeError("Failed to open file")
 
     runner = testing.CliRunner()
     result = runner.invoke(
@@ -202,13 +226,13 @@ class DescribeTest(absltest.TestCase):
         )
     )
 
-    self.mock_capabilities.supports_thinking.return_value = True
-    self.mock_capabilities.supports_function_calling.return_value = False
-    self.mock_capabilities.has_speculative_decoding_support.return_value = True
-    self.mock_capabilities.input_modalities = litert_lm.SupportedModalities(
+    self.mock_model_info.supports_thinking.return_value = True
+    self.mock_model_info.supports_function_calling.return_value = False
+    self.mock_model_info.has_speculative_decoding_support.return_value = True
+    self.mock_model_info.input_modalities = litert_lm.SupportedModalities(
         text=True, vision=False, audio=False, video=False
     )
-    self.mock_capabilities.default_sampler_params = litert_lm.SamplerConfig(
+    self.mock_model_info.default_sampler_params = litert_lm.SamplerConfig(
         temperature=0.0,
         top_k=None,
         top_p=0.0,
@@ -228,7 +252,7 @@ class DescribeTest(absltest.TestCase):
         token=None,
     )
     mock_from_path.assert_called_once_with("/path/to/downloaded/model.litertlm")
-    self.mock_capabilities_cls.assert_called_once_with(
+    self.mock_model_info_cls.assert_called_once_with(
         "/path/to/downloaded/model.litertlm"
     )
 
@@ -243,13 +267,13 @@ class DescribeTest(absltest.TestCase):
             return_value="gemma3-1b",
         )
     )
-    self.mock_capabilities.supports_thinking.return_value = True
-    self.mock_capabilities.supports_function_calling.return_value = False
-    self.mock_capabilities.has_speculative_decoding_support.return_value = True
-    self.mock_capabilities.input_modalities = litert_lm.SupportedModalities(
+    self.mock_model_info.supports_thinking.return_value = True
+    self.mock_model_info.supports_function_calling.return_value = False
+    self.mock_model_info.has_speculative_decoding_support.return_value = True
+    self.mock_model_info.input_modalities = litert_lm.SupportedModalities(
         text=True, vision=False, audio=False, video=False
     )
-    self.mock_capabilities.default_sampler_params = litert_lm.SamplerConfig(
+    self.mock_model_info.default_sampler_params = litert_lm.SamplerConfig(
         temperature=0.0,
         top_k=None,
         top_p=0.0,
@@ -261,30 +285,28 @@ class DescribeTest(absltest.TestCase):
     self.assertEqual(result.exit_code, 0)
     mock_resolve.assert_called_once_with(None, None)
     self.mock_from_reference.assert_called_once_with("gemma3-1b")
-    self.mock_capabilities_cls.assert_called_once_with(
-        "/path/to/model.litertlm"
-    )
+    self.mock_model_info_cls.assert_called_once_with("/path/to/model.litertlm")
     self.assertIn("File: /path/to/model.litertlm", result.output)
 
   def test_describe_with_default_backend_and_soc_name(self):
-    self.mock_capabilities.supports_thinking.return_value = True
-    self.mock_capabilities.supports_function_calling.return_value = False
-    self.mock_capabilities.has_speculative_decoding_support.return_value = False
-    self.mock_capabilities.input_modalities = litert_lm.SupportedModalities(
+    self.mock_model_info.supports_thinking.return_value = True
+    self.mock_model_info.supports_function_calling.return_value = False
+    self.mock_model_info.has_speculative_decoding_support.return_value = False
+    self.mock_model_info.input_modalities = litert_lm.SupportedModalities(
         text=True, vision=False, audio=False, video=False
     )
-    self.mock_capabilities.default_sampler_params = litert_lm.SamplerConfig(
+    self.mock_model_info.default_sampler_params = litert_lm.SamplerConfig(
         temperature=0.0,
         top_k=None,
         top_p=0.0,
     )
-    self.mock_capabilities.supported_backends_for_modality.return_value = [
+    self.mock_model_info.supported_backends_for_modality.return_value = [
         "npu",
     ]
-    self.mock_capabilities.npu_brand_for_modality.return_value = (
+    self.mock_model_info.npu_brand_for_modality.return_value = (
         litert_lm.LiteRtLmNpuBrand.QUALCOMM
     )
-    self.mock_capabilities.soc_name_for_modality.return_value = "SM8750"
+    self.mock_model_info.soc_name_for_modality.return_value = "SM8750"
 
     runner = testing.CliRunner()
     result = runner.invoke(
@@ -298,24 +320,24 @@ class DescribeTest(absltest.TestCase):
     self.assertIn("Text SoC Name:          Qualcomm QNN SM8750", result.output)
 
   def test_describe_with_intel_npu_brand(self):
-    self.mock_capabilities.supports_thinking.return_value = False
-    self.mock_capabilities.supports_function_calling.return_value = False
-    self.mock_capabilities.has_speculative_decoding_support.return_value = False
-    self.mock_capabilities.input_modalities = litert_lm.SupportedModalities(
+    self.mock_model_info.supports_thinking.return_value = False
+    self.mock_model_info.supports_function_calling.return_value = False
+    self.mock_model_info.has_speculative_decoding_support.return_value = False
+    self.mock_model_info.input_modalities = litert_lm.SupportedModalities(
         text=True, vision=False, audio=False, video=False
     )
-    self.mock_capabilities.default_sampler_params = litert_lm.SamplerConfig(
+    self.mock_model_info.default_sampler_params = litert_lm.SamplerConfig(
         temperature=0.0,
         top_k=None,
         top_p=0.0,
     )
-    self.mock_capabilities.supported_backends_for_modality.return_value = [
+    self.mock_model_info.supported_backends_for_modality.return_value = [
         "npu",
     ]
-    self.mock_capabilities.npu_brand_for_modality.return_value = (
+    self.mock_model_info.npu_brand_for_modality.return_value = (
         litert_lm.LiteRtLmNpuBrand.INTEL
     )
-    self.mock_capabilities.soc_name_for_modality.return_value = "LunarLake"
+    self.mock_model_info.soc_name_for_modality.return_value = "LunarLake"
 
     runner = testing.CliRunner()
     result = runner.invoke(

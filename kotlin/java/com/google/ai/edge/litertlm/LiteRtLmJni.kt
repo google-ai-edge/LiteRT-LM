@@ -390,142 +390,142 @@ internal object LiteRtLmJni {
   external fun nativeSetMinLogSeverity(logSeverity: Int)
 
   /**
-   * Loads a LiteRT-LM file from the given path for capability queries.
+   * Loads a LiteRT-LM file from the given path for model info queries.
    *
    * @param modelPath The path to the model file.
-   * @return A pointer to the native capabilities wrapper instance.
+   * @return A pointer to the native model info wrapper instance.
    */
-  external fun nativeCreateCapabilities(modelPath: String): Long
+  external fun nativeCreateModelInfo(modelPath: String): Long
 
   /**
-   * Deletes a loaded LiteRT-LM capabilities instance and frees resources.
+   * Deletes a loaded LiteRT-LM model info instance and frees resources.
    *
-   * @param capabilitiesPointer A pointer to the native capabilities instance.
+   * @param modelInfoPointer A pointer to the native model info instance.
    */
-  external fun nativeDeleteCapabilities(capabilitiesPointer: Long)
+  external fun nativeDeleteModelInfo(modelInfoPointer: Long)
 
   /**
    * Returns true if the loaded LiteRT-LM file supports speculative decoding.
    *
-   * @param capabilitiesPointer A pointer to the native capabilities instance.
+   * @param modelInfoPointer A pointer to the native model info instance.
    * @return True if speculative decoding is supported, false otherwise.
    */
-  external fun nativeHasSpeculativeDecodingSupport(capabilitiesPointer: Long): Boolean
+  external fun nativeHasSpeculativeDecodingSupport(modelInfoPointer: Long): Boolean
 
   /**
    * Returns true if the model supports thinking / reasoning.
    *
-   * @param capabilitiesPointer A pointer to the native capabilities instance.
+   * @param modelInfoPointer A pointer to the native model info instance.
    * @return True if thinking is supported, false otherwise.
    */
-  external fun nativeSupportsThinking(capabilitiesPointer: Long): Boolean
+  external fun nativeSupportsThinking(modelInfoPointer: Long): Boolean
 
   /**
    * Returns true if the model supports function calling / tool use.
    *
-   * @param capabilitiesPointer A pointer to the native capabilities instance.
+   * @param modelInfoPointer A pointer to the native model info instance.
    * @return True if function calling is supported, false otherwise.
    */
-  external fun nativeSupportsFunctionCalling(capabilitiesPointer: Long): Boolean
+  external fun nativeSupportsFunctionCalling(modelInfoPointer: Long): Boolean
 
   /**
    * Returns the default sampler type.
    *
-   * @param capabilitiesPointer A pointer to the native capabilities instance.
+   * @param modelInfoPointer A pointer to the native model info instance.
    * @return The sampler type integer value.
    */
-  external fun nativeSamplerType(capabilitiesPointer: Long): Int
+  external fun nativeSamplerType(modelInfoPointer: Long): Int
 
   /**
    * Returns the default sampler temperature.
    *
-   * @param capabilitiesPointer A pointer to the native capabilities instance.
+   * @param modelInfoPointer A pointer to the native model info instance.
    * @return The sampler temperature.
    */
-  external fun nativeSamplerTemp(capabilitiesPointer: Long): Float
+  external fun nativeSamplerTemp(modelInfoPointer: Long): Float
 
   /**
    * Returns the default sampler top_k.
    *
-   * @param capabilitiesPointer A pointer to the native capabilities instance.
+   * @param modelInfoPointer A pointer to the native model info instance.
    * @return The sampler top_k.
    */
-  external fun nativeSamplerTopK(capabilitiesPointer: Long): Int
+  external fun nativeSamplerTopK(modelInfoPointer: Long): Int
 
   /**
    * Returns the default sampler top_p.
    *
-   * @param capabilitiesPointer A pointer to the native capabilities instance.
+   * @param modelInfoPointer A pointer to the native model info instance.
    * @return The sampler top_p.
    */
-  external fun nativeSamplerTopP(capabilitiesPointer: Long): Float
+  external fun nativeSamplerTopP(modelInfoPointer: Long): Float
 
   /**
    * Returns true if the model supports the given input modality.
    *
-   * @param capabilitiesPointer A pointer to the native capabilities instance.
+   * @param modelInfoPointer A pointer to the native model info instance.
    * @param modality The modality integer value (0 = Text, 1 = Vision, 2 = Audio, 3 = Video).
    * @return True if the modality is supported, false otherwise.
    */
-  external fun nativeSupportsInputModality(capabilitiesPointer: Long, modality: Int): Boolean
+  external fun nativeSupportsInputModality(modelInfoPointer: Long, modality: Int): Boolean
 
   /**
    * Returns the maximum vision token budget for the model.
    *
-   * @param capabilitiesPointer A pointer to the native capabilities instance.
+   * @param modelInfoPointer A pointer to the native model info instance.
    * @return The maximum vision token budget, or -1 if not defined.
    */
-  external fun nativeMaxVisionTokenBudget(capabilitiesPointer: Long): Int
+  external fun nativeMaxVisionTokenBudget(modelInfoPointer: Long): Int
 
   /** Returns the maximum supported context tokens for the loaded LiteRT-LM file. */
-  external fun nativeMaxContextTokens(capabilitiesPointer: Long): Int
+  external fun nativeMaxContextTokens(modelInfoPointer: Long): Int
 
   /** Returns true if the model has dynamic context. */
-  external fun nativeIsDynamicContext(capabilitiesPointer: Long): Boolean
+  external fun nativeIsDynamicContext(modelInfoPointer: Long): Boolean
 
   /**
    * Returns the list of vision signature selection choices, or null if vision is not supported.
    *
-   * @param capabilitiesPointer A pointer to the native capabilities instance.
+   * @param modelInfoPointer A pointer to the native model info instance.
    * @return An IntArray of supported lengths, or null.
    */
-  external fun nativeVisionSignatureSelection(capabilitiesPointer: Long): IntArray?
+  external fun nativeVisionSignatureSelection(modelInfoPointer: Long): IntArray?
 
   /**
    * Returns the minimum LiteRT-LM runtime version required to run this model.
    *
-   * @param capabilitiesPointer A pointer to the native capabilities instance.
+   * @param modelInfoPointer A pointer to the native model info instance.
    * @return The minimum runtime version string, or null if not defined.
    */
-  external fun nativeMinRuntimeVersion(capabilitiesPointer: Long): String?
+  external fun nativeMinRuntimeVersion(modelInfoPointer: Long): String?
 
   /**
    * Returns the list of supported backends for a given modality ordered by priority.
    *
-   * @param capabilitiesPointer A pointer to the native capabilities instance.
+   * @param modelInfoPointer A pointer to the native model info instance.
    * @param modality The modality integer value (0 = Text, 1 = Vision, 2 = Audio, 3 = Video).
    * @return An IntArray of supported backends ordered by priority, or null.
    */
-  external fun nativeModalitySupportedBackends(capabilitiesPointer: Long, modality: Int): IntArray?
+  external fun nativeModalitySupportedBackends(modelInfoPointer: Long, modality: Int): IntArray?
 
   /**
    * Returns the NPU brand of the model for a given modality.
    *
-   * @param capabilitiesPointer A pointer to the native capabilities instance.
+   * @param modelInfoPointer A pointer to the native model info instance.
    * @param modality The modality integer value (0 = Text, 1 = Vision, 2 = Audio, 3 = Video).
    * @return The NPU brand int value (0 = Unknown, 1 = Qualcomm, 2 = Google Tensor, 3 = MediaTek, 4
    *   = Intel, 5 = Samsung).
    */
-  external fun nativeModalityNpuBrand(capabilitiesPointer: Long, modality: Int): Int
+  external fun nativeModalityNpuBrand(modelInfoPointer: Long, modality: Int): Int
 
   /**
    * Returns the NPU SoC name string for a given modality, or null if not set.
    *
-   * @param capabilitiesPointer A pointer to the native capabilities instance.
+   * @param modelInfoPointer A pointer to the native model info instance.
    * @param modality The modality integer value (0 = Text, 1 = Vision, 2 = Audio, 3 = Video).
    * @return The SoC name string (e.g. 'SM8750'), or null.
    */
-  external fun nativeModalitySocName(capabilitiesPointer: Long, modality: Int): String?
+  external fun nativeModalitySocName(modelInfoPointer: Long, modality: Int): String?
 
   /** Creates a new LiteRT-LM embedding engine. */
   external fun nativeCreateEmbeddingEngine(

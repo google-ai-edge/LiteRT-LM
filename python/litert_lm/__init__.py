@@ -29,8 +29,6 @@ from ._messages import Message
 from ._messages import Role
 from ._messages import ToolCall
 from .benchmark import Benchmark
-from .capabilities import Capabilities
-from .capabilities import SupportedModalities
 from .conversation import Conversation
 from .embedding_engine import EmbeddingEngine
 from .embedding_engine import EmbeddingOptions
@@ -55,6 +53,8 @@ from .interfaces import SuppressTokensConfig
 from .interfaces import ThinkingConfig
 from .interfaces import Tool
 from .interfaces import ToolEventHandler
+from .model_info import ModelInfo
+from .model_info import SupportedModalities
 from .session import Session
 from .tools import tool_from_function
 
@@ -67,7 +67,6 @@ __all__ = (
     "Backend",
     "Benchmark",
     "BenchmarkInfo",
-    "Capabilities",
     "ConstrainedDecodingConfig",
     "Content",
     "Contents",
@@ -85,6 +84,7 @@ __all__ = (
     "LoraConfig",
     "LoraRankConfig",
     "Message",
+    "ModelInfo",
     "NoRepeatNgramConfig",
     "RepetitionPenaltyConfig",
     "ResponseFormat",

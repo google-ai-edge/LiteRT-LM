@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "c/capabilities.h"
+#include "c/model_info.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -36,7 +36,7 @@ std::string GetRunfilePath(const std::string& relative_path) {
   return srcdir + "/" + relative_path;
 }
 
-TEST(CapabilitiesCTest, InspectCapabilities) {
+TEST(ModelInfoCTest, InspectLoadedFile) {
   std::string model_path = GetRunfilePath(
       "litert_lm/runtime/testdata/test_lm.litertlm");
   LiteRtLmLoadedFile* file = litert_lm_loaded_file_create(model_path.c_str());
@@ -47,9 +47,8 @@ TEST(CapabilitiesCTest, InspectCapabilities) {
   EXPECT_FALSE(litert_lm_loaded_file_supports_thinking(file));
   EXPECT_FALSE(litert_lm_loaded_file_supports_function_calling(file));
   EXPECT_EQ(litert_lm_loaded_file_max_vision_token_budget(file), -1);
-  EXPECT_EQ(
-      litert_lm_loaded_file_vision_signature_selection(file, nullptr, 0),
-      -1);
+  EXPECT_EQ(litert_lm_loaded_file_vision_signature_selection(file, nullptr, 0),
+            -1);
   EXPECT_EQ(litert_lm_loaded_file_min_runtime_version(file), nullptr);
   EXPECT_EQ(litert_lm_loaded_file_min_runtime_version(nullptr), nullptr);
 
@@ -92,7 +91,7 @@ TEST(CapabilitiesCTest, InspectCapabilities) {
   litert_lm_loaded_file_delete(file);
 }
 
-TEST(CapabilitiesCTest, GetMaxContextTokens) {
+TEST(ModelInfoCTest, GetMaxContextTokens) {
   // Test null handle behavior
   EXPECT_EQ(litert_lm_loaded_file_max_context_tokens(nullptr), 0);
   EXPECT_FALSE(litert_lm_loaded_file_is_dynamic_context(nullptr));
@@ -108,13 +107,13 @@ TEST(CapabilitiesCTest, GetMaxContextTokens) {
   litert_lm_loaded_file_delete(file);
 }
 
-TEST(CapabilitiesCTest, CreateInvalidPathReturnsNull) {
+TEST(ModelInfoCTest, CreateInvalidPathReturnsNull) {
   LiteRtLmLoadedFile* file =
       litert_lm_loaded_file_create("/invalid/path/that/does/not/exist");
   EXPECT_EQ(file, nullptr);
 }
 
-TEST(CapabilitiesCTest, InspectMultimodalCapabilities) {
+TEST(ModelInfoCTest, InspectMultimodalCapabilities) {
   std::string model_path = GetRunfilePath(
       "litert_lm/runtime/testdata/dummy_vision_with_adapter.litertlm");
   LiteRtLmLoadedFile* file = litert_lm_loaded_file_create(model_path.c_str());
@@ -132,15 +131,15 @@ TEST(CapabilitiesCTest, InspectMultimodalCapabilities) {
 
   // 2. Fetch values
   int32_t lengths[1] = {0};
-  int32_t written = litert_lm_loaded_file_vision_signature_selection(
-      file, lengths, 1);
+  int32_t written =
+      litert_lm_loaded_file_vision_signature_selection(file, lengths, 1);
   EXPECT_EQ(written, 1);
   EXPECT_EQ(lengths[0], 5);
 
   litert_lm_loaded_file_delete(file);
 }
 
-TEST(CapabilitiesCTest, NullPointerSafety) {
+TEST(ModelInfoCTest, NullPointerSafety) {
   EXPECT_FALSE(litert_lm_loaded_file_has_speculative_decoding_support(nullptr));
   EXPECT_FALSE(litert_lm_loaded_file_supports_thinking(nullptr));
   EXPECT_FALSE(litert_lm_loaded_file_supports_function_calling(nullptr));
@@ -152,9 +151,9 @@ TEST(CapabilitiesCTest, NullPointerSafety) {
   EXPECT_EQ(litert_lm_loaded_file_modality_supported_backends(
                 nullptr, kLiteRtLmModalityText, nullptr, 0),
             0);
-  EXPECT_EQ(litert_lm_loaded_file_modality_npu_brand(
-                nullptr, kLiteRtLmModalityText),
-            kLiteRtLmNpuBrandUnknown);
+  EXPECT_EQ(
+      litert_lm_loaded_file_modality_npu_brand(nullptr, kLiteRtLmModalityText),
+      kLiteRtLmNpuBrandUnknown);
   EXPECT_EQ(
       litert_lm_loaded_file_modality_soc_name(nullptr, kLiteRtLmModalityText),
       nullptr);
@@ -168,7 +167,7 @@ TEST(CapabilitiesCTest, NullPointerSafety) {
   litert_lm_loaded_file_delete(nullptr);
 }
 
-TEST(CapabilitiesCTest, InspectAudioCapabilities) {
+TEST(ModelInfoCTest, InspectAudioCapabilities) {
   std::string model_path = GetRunfilePath(
       "litert_lm/runtime/testdata/dummy_audio_only.litertlm");
   LiteRtLmLoadedFile* file = litert_lm_loaded_file_create(model_path.c_str());

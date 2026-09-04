@@ -838,7 +838,7 @@ def _setup_lib_signatures(lib):
       ctypes.c_void_p
   ]
 
-  # Model Capabilities API
+  # Loaded File / Model Info API
   lib.litert_lm_loaded_file_create.restype = ctypes.c_void_p
   lib.litert_lm_loaded_file_create.argtypes = [c_string_p]
   lib.litert_lm_loaded_file_delete.restype = None
@@ -870,9 +870,7 @@ def _setup_lib_signatures(lib):
   ]
   lib.litert_lm_loaded_file_max_vision_token_budget.restype = ctypes.c_int32
   lib.litert_lm_loaded_file_max_vision_token_budget.argtypes = [ctypes.c_void_p]
-  lib.litert_lm_loaded_file_vision_signature_selection.restype = (
-      ctypes.c_int32
-  )
+  lib.litert_lm_loaded_file_vision_signature_selection.restype = ctypes.c_int32
   lib.litert_lm_loaded_file_vision_signature_selection.argtypes = [
       ctypes.c_void_p,
       ctypes.POINTER(ctypes.c_int32),
