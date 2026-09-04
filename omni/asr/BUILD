@@ -236,6 +236,50 @@ cc_test(
 )
 
 cc_library(
+    name = "lm_decoder",
+    srcs = ["lm_decoder.cc"],
+    hdrs = ["lm_decoder.h"],
+    deps = [
+        ":litert_speech_recognizer",
+        ":speech_recognizer",
+        "@com_google_absl//absl/base:nullability",
+        "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/types:span",
+        "@litert//litert/cc:litert_macros",
+        "@litert//litert/cc:litert_tensor_buffer",
+        "@litert//litert/cc:litert_tensor_buffer_types",
+        "//omni/base:litert_lm_runner",
+        "//omni/base:model_utils",
+        "//runtime/proto:token_cc_proto",
+        "//runtime/util:tensor_buffer_util",
+        "//support/tokenizer",
+        "//support/util:convert_tensor_buffer",
+    ],
+)
+
+cc_test(
+    name = "lm_decoder_test",
+    srcs = ["lm_decoder_test.cc"],
+    deps = [
+        ":lm_decoder",
+        ":speech_recognizer",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
+        "@com_google_absl//absl/types:span",
+        "@litert//litert/cc:litert_element_type",
+        "@litert//litert/cc:litert_layout",
+        "@litert//litert/cc:litert_ranked_tensor_type",
+        "@litert//litert/cc:litert_tensor_buffer",
+        "//omni/base:mock_litert_lm_runner",
+        "//support/util:test_utils",
+    ],
+)
+
+cc_library(
     name = "litert_speech_recognizer",
     srcs = ["litert_speech_recognizer.cc"],
     hdrs = ["litert_speech_recognizer.h"],
@@ -483,6 +527,7 @@ cc_library(
         ":dummy_preprocessor",
         ":levenshtein_text_merger",
         ":litert_speech_recognizer",
+        ":lm_decoder",
         ":log_mel_spectrogram_processor",
         ":stateless_decoder",
         ":tdt_decoder",
@@ -494,6 +539,7 @@ cc_library(
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
+        "@litert//litert/cc:litert_buffer_ref",
         "@litert//litert/cc:litert_common",
         "@litert//litert/cc:litert_compiled_model",
         "@litert//litert/cc:litert_environment",
@@ -502,7 +548,11 @@ cc_library(
         "@litert//litert/cc/options:litert_cpu_options",
         "@litert//litert/cc/options:litert_gpu_options",
         "@litert//litert/cc/options:litert_qualcomm_options",
+        "//omni/base:litert_lm_runner",
         "//omni/base:litert_runner",
+        "//omni/base:model_utils",
+        "//runtime/components:model_resources",
+        "//runtime/executor:executor_settings_base",
         "//support/tokenizer",
         "//support/tokenizer:huggingface_tokenizer",
     ],

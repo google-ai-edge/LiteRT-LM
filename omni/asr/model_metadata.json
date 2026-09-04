@@ -57,9 +57,8 @@
     "decodeStopTokenId": 50257
   },
   "qwen3-asr-0.6b": {
-    "modelRemoteUrl": "https://huggingface.co/litert-community/Qwen3-ASR-0.6B/resolve/main/qwen3_asr_0.6b_5s_i8.tflite",
-    "npuModelRemoteUrlPattern": "https://huggingface.co/litert-community/Qwen3-ASR-0.6B/resolve/main/qwen3_asr_0.6b_5s_f32_<target>.tflite",
-    "tokenizerUrl": "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct/resolve/main/tokenizer.json",
+    "modelRemoteUrl": "https://huggingface.co/litert-community/Qwen3-ASR-0.6B/resolve/main/qwen3_asr_0.6b_5s_i8.litertlm",
+    "npuModelRemoteUrlPattern": "https://huggingface.co/litert-community/Qwen3-ASR-0.6B/resolve/main/qwen3_asr_0.6b_5s_f32_<target>.litertlm",
     "inputMilliseconds": 5000,
     "logMelSpectro": {
       "nFFT": 400,
@@ -67,8 +66,6 @@
       "nFrames": 500,
       "normType": "whisper"
     },
-    "decodeStartTokenId": 198,
-    "decodeStopTokenId": 151645,
     "decodeSkipUntilTokenId": 151704
   }
 }

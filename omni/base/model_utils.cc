@@ -285,7 +285,7 @@ absl::StatusOr<CompiledModel> CreateCompiledModelForStatefulRunner(
 absl::StatusOr<std::unique_ptr<LiteRtLmRunner>> CreateLmRunner(
     Environment& env, const ModelOptions& options,
     absl::string_view model_filename) {
-  std::string path = absl::StrCat(options.model_dir, "/", model_filename);
+  std::string path = JoinPath(options.model_dir, model_filename);
   ABSL_RETURN_IF_ERROR(CheckFileReadable(path));
   ABSL_ASSIGN_OR_RETURN(auto scoped_file, lm::ScopedFile::Open(path));
   auto shared_scoped_file =

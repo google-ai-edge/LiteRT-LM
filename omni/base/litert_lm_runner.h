@@ -41,6 +41,10 @@ class LiteRtLmRunner {
 
   // Resets the runner state and KV cache.
   virtual absl::Status Reset() = 0;
+
+  // Returns a pointer to ModelResources if available, or nullptr otherwise.
+  virtual const lm::ModelResources* model_resources() const { return nullptr; }
+  virtual lm::ModelResources* mutable_model_resources() { return nullptr; }
 };
 
 // Implementation of LiteRtLmRunner wrapping an owned LlmExecutorBase instance.
@@ -58,6 +62,13 @@ class LiteRtLmRunnerImpl : public LiteRtLmRunner {
       const lm::ExecutorInputs& inputs) override;
 
   absl::Status Reset() override;
+
+  const lm::ModelResources* model_resources() const override {
+    return model_resources_.get();
+  }
+  lm::ModelResources* mutable_model_resources() override {
+    return model_resources_.get();
+  }
 
  private:
   std::unique_ptr<lm::ModelResources> model_resources_;

@@ -23,8 +23,10 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "litert/cc/litert_buffer_ref.h"  // from @litert
 #include "litert/cc/litert_common.h"  // from @litert
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
@@ -40,13 +42,18 @@
 #include "omni/asr/dummy_preprocessor.h"
 #include "omni/asr/levenshtein_text_merger.h"
 #include "omni/asr/litert_speech_recognizer.h"
+#include "omni/asr/lm_decoder.h"
 #include "omni/asr/log_mel_spectrogram_processor.h"
 #include "omni/asr/stateless_decoder.h"
 #include "omni/asr/tdt_decoder.h"
 #include "omni/asr/text_merger.h"
 #include "omni/asr/timestamp_text_merger.h"
 #include "omni/asr/tokenizer_detokenizer.h"
+#include "omni/base/litert_lm_runner.h"
 #include "omni/base/litert_runner.h"
+#include "omni/base/model_utils.h"
+#include "runtime/components/model_resources.h"
+#include "runtime/executor/executor_settings_base.h"
 #include "support/tokenizer/huggingface_tokenizer.h"
 #include "support/tokenizer/tokenizer.h"
 
@@ -86,13 +93,6 @@ absl::StatusOr<std::unique_ptr<AsrEngine>> AsrEngine::Create(
     AsrEngineConfig config, FileDownloader downloader) {
   ABSL_RETURN_IF_ERROR(EnsureFilesDownloaded(config, downloader));
 
-  ABSL_ASSIGN_OR_RETURN(auto tokenizer,
-                        ::litert::support::HuggingFaceTokenizer::CreateFromFile(
-                            config.tokenizer_path));
-  if (config.vocab_size == 0) {
-    config.vocab_size = tokenizer->GetVocabSize();
-  }
-
   LITERT_ASSIGN_OR_RETURN(auto environment, ::litert::Environment::Create({}));
   LITERT_ASSIGN_OR_RETURN(auto options, ::litert::Options::Create());
   uint32_t accelerators = static_cast<uint32_t>(::litert::HwAccelerators::kCpu);
@@ -122,6 +122,63 @@ absl::StatusOr<std::unique_ptr<AsrEngine>> AsrEngine::Create(
   LITERT_RETURN_IF_ERROR(options.SetHardwareAccelerators(
       static_cast<::litert::HwAccelerators>(accelerators)));
 
+  if (config.decoder_type == AsrEngineConfig::DecoderType::kLm ||
+      absl::EndsWith(config.model_path, ".litertlm")) {
+    config.decoder_type = AsrEngineConfig::DecoderType::kLm;
+
+    ModelOptions lm_options;
+    if (config.backend == AsrEngineConfig::Backend::kGpu) {
+      lm_options.backend = lm::Backend::GPU;
+    } else if (config.backend == AsrEngineConfig::Backend::kNpu) {
+      lm_options.backend = lm::Backend::NPU;
+    } else {
+      lm_options.backend = lm::Backend::CPU;
+    }
+    lm_options.num_threads = config.num_threads;
+    lm_options.cache_dir = config.cache_dir;
+
+    ABSL_ASSIGN_OR_RETURN(
+        auto lm_runner,
+        CreateLmRunner(environment, lm_options, config.model_path));
+
+    auto* model_resources = lm_runner->mutable_model_resources();
+    if (model_resources == nullptr) {
+      return absl::InternalError("ModelResources not available in LmRunner.");
+    }
+
+    ABSL_ASSIGN_OR_RETURN(auto tokenizer, model_resources->GetTokenizer());
+    if (config.vocab_size == 0) {
+      config.vocab_size = tokenizer->GetVocabSize();
+    }
+
+    ABSL_ASSIGN_OR_RETURN(
+        auto audio_model_flatbuffer,
+        model_resources->GetTFLiteModelBuffer(
+            lm::ModelType::kTfLiteAudioEncoderHw));
+    LITERT_ASSIGN_OR_RETURN(
+        auto compiled_model,
+        ::litert::CompiledModel::Create(
+            environment,
+            ::litert::BufferRef<uint8_t>(
+                reinterpret_cast<const uint8_t*>(
+                    audio_model_flatbuffer.data()),
+                audio_model_flatbuffer.size()),
+            options));
+
+    return std::unique_ptr<AsrEngine>(new AsrEngine(
+        std::move(config), std::move(tokenizer),
+        std::make_unique<::litert::Environment>(std::move(environment)),
+        std::make_unique<::litert::CompiledModel>(std::move(compiled_model)),
+        std::move(lm_runner)));
+  }
+
+  ABSL_ASSIGN_OR_RETURN(auto tokenizer,
+                        ::litert::support::HuggingFaceTokenizer::CreateFromFile(
+                            config.tokenizer_path));
+  if (config.vocab_size == 0) {
+    config.vocab_size = tokenizer->GetVocabSize();
+  }
+
   LITERT_ASSIGN_OR_RETURN(
       auto compiled_model,
       ::litert::CompiledModel::Create(environment, config.model_path, options));
@@ -135,11 +192,13 @@ absl::StatusOr<std::unique_ptr<AsrEngine>> AsrEngine::Create(
 AsrEngine::AsrEngine(AsrEngineConfig config,
                      std::unique_ptr<::litert::support::Tokenizer> tokenizer,
                      std::unique_ptr<::litert::Environment> environment,
-                     std::unique_ptr<::litert::CompiledModel> compiled_model)
+                     std::unique_ptr<::litert::CompiledModel> compiled_model,
+                     std::unique_ptr<LiteRtLmRunner> lm_runner)
     : config_(std::move(config)),
       tokenizer_(std::move(tokenizer)),
       environment_(std::move(environment)),
-      compiled_model_(std::move(compiled_model)) {}
+      compiled_model_(std::move(compiled_model)),
+      lm_runner_(std::move(lm_runner)) {}
 
 absl::StatusOr<std::unique_ptr<AsrSession>> AsrEngine::CreateSession(
     std::unique_ptr<AudioSource> audio_source) {
@@ -172,9 +231,23 @@ absl::StatusOr<std::unique_ptr<AsrSession>> AsrEngine::CreateSession(
     case AsrEngineConfig::DecoderType::kStateless: {
       ABSL_ASSIGN_OR_RETURN(
           decoder,
-          StatelessDecoder::Create(runner.get(), config_.decode_start_token_id,
-                                   config_.decode_stop_token_id,
-                                   config_.decode_skip_until_token_id));
+          StatelessDecoder::Create(
+              runner.get(), config_.decode_start_token_id,
+              config_.decode_stop_token_id,
+              config_.decode_skip_until_token_id));
+      break;
+    }
+    case AsrEngineConfig::DecoderType::kLm: {
+      if (lm_runner_ == nullptr) {
+        return absl::InternalError(
+            "LmDecoder requested but lm_runner_ is null.");
+      }
+      ABSL_ASSIGN_OR_RETURN(
+          decoder,
+          LmDecoder::Create(
+              lm_runner_.get(), config_.decode_start_token_id,
+              config_.decode_stop_token_id,
+              config_.decode_skip_until_token_id));
       break;
     }
   }

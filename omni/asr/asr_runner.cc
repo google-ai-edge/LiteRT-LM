@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include <cstdlib>
+#include <filesystem>  // NOLINT: Required for path manipulation.
 #include <fstream>
 #include <iostream>
 #include <memory>
@@ -137,7 +138,15 @@ absl::StatusOr<litert::omni::asr::AsrEngineConfig> LoadConfigFromJsonFile(
         litert::omni::asr::AsrEngineConfig::TextMergerType::kTimestamp;
   }
 
-  if (absl::StrContains(config.model_name, "tdt")) {
+  std::string model_ext =
+      std::filesystem::path(config.model_url).extension().string();
+  if (model_ext.empty()) {
+    model_ext = ".tflite";
+  }
+
+  if (model_ext == ".litertlm") {
+    config.decoder_type = litert::omni::asr::AsrEngineConfig::DecoderType::kLm;
+  } else if (absl::StrContains(config.model_name, "tdt")) {
     config.decoder_type = litert::omni::asr::AsrEngineConfig::DecoderType::kTdt;
   } else if (absl::StrContains(config.model_name, "ctc")) {
     config.decoder_type = litert::omni::asr::AsrEngineConfig::DecoderType::kCtc;
@@ -177,11 +186,11 @@ absl::StatusOr<litert::omni::asr::AsrEngineConfig> LoadConfigFromJsonFile(
     config.has_log_mel_config = false;
   }
 
-  std::string model_filename = absl::StrCat(model_name, ".tflite");
+  std::filesystem::path cache_path(config.cache_dir);
+  std::string model_filename = absl::StrCat(model_name, model_ext);
   std::string tokenizer_filename = absl::StrCat(model_name, "_tokenizer.json");
-  config.model_path = absl::StrCat(config.cache_dir, "/", model_filename);
-  config.tokenizer_path =
-      absl::StrCat(config.cache_dir, "/", tokenizer_filename);
+  config.model_path = (cache_path / model_filename).string();
+  config.tokenizer_path = (cache_path / tokenizer_filename).string();
 
   return config;
 }
