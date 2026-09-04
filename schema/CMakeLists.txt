@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_subdirectory(capabilities)
+add_subdirectory(model_info)
 add_subdirectory(core)
 
 # ==============================================================================
@@ -23,5 +23,5 @@ add_library(LiteRTLM::Schema ALIAS schema_libs)
 
 target_link_libraries(schema_core_libs INTERFACE
   LiteRTLM::Schema::Core
-  LiteRTLM::Schema::Capabilities
+  LiteRTLM::Schema::ModelInfo
 )

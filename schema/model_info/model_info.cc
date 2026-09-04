@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "schema/capabilities/capabilities.h"
+#include "schema/model_info/model_info.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -44,7 +44,7 @@
 #include "schema/core/litertlm_read.h"
 #include "tflite/schema/schema_generated.h"  // from @litert
 
-namespace litert::lm::schema::capabilities {
+namespace litert::lm::schema::model_info {
 namespace {
 
 // Maximum allowed size (10 MB) for serialized binary LlmMetadata protobuf
@@ -469,7 +469,7 @@ bool IsMagicNumber(int64_t number) {
 
 }  // namespace
 
-absl::StatusOr<ModelCapabilities> InspectModel(std::istream& litertlm_stream) {
+absl::StatusOr<ModelInfo> InspectModel(std::istream& litertlm_stream) {
   litertlm_stream.seekg(0, std::ios::end);
   const std::streamoff total_stream_size = litertlm_stream.tellg();
   litertlm_stream.seekg(0, std::ios::beg);
@@ -480,7 +480,7 @@ absl::StatusOr<ModelCapabilities> InspectModel(std::istream& litertlm_stream) {
   const LiteRTLMMetaData* metadata = header.metadata;
   RET_CHECK_NE(metadata, nullptr);
 
-  ModelCapabilities info;
+  ModelInfo info;
 
   // 1. Discover sections and identify modality models / speculative drafters.
   const litert::lm::schema::SectionMetadata* section_metadata_obj =
@@ -794,8 +794,7 @@ absl::StatusOr<ModelCapabilities> InspectModel(std::istream& litertlm_stream) {
         if (proto_metadata.has_llm_model_type()) {
           const auto& model_type = proto_metadata.llm_model_type();
           int max_num_patches = 0;
-          // Default to 3, which is the standard default for embedding gemma v2
-          // and gemma4.
+          // Default to 3, which is the standard default for vision pooling.
           int pooling_kernel_size = 3;
           if (model_type.has_gemma4()) {
             max_num_patches = model_type.gemma4().max_num_patches();
@@ -942,8 +941,7 @@ absl::StatusOr<ModelCapabilities> InspectModel(std::istream& litertlm_stream) {
 
 // Inspects a LiteRT-LM model file located at the specified file path and
 // returns its extracted capabilities and configuration parameters.
-absl::StatusOr<ModelCapabilities> InspectModel(
-    absl::string_view litertlm_path) {
+absl::StatusOr<ModelInfo> InspectModel(absl::string_view litertlm_path) {
   std::ifstream input_file_stream(std::string(litertlm_path), std::ios::binary);
   if (!input_file_stream.is_open()) {
     return absl::InternalError(
@@ -1106,15 +1104,14 @@ std::ostream& operator<<(std::ostream& os,
   return os;
 }
 
-// Formats the top-level ModelCapabilities object into the output stream.
-std::ostream& operator<<(std::ostream& os,
-                         const ModelCapabilities& capabilities) {
-  if (capabilities.llm_capability.has_value()) {
-    os << *capabilities.llm_capability;
+// Formats the top-level ModelInfo object into the output stream.
+std::ostream& operator<<(std::ostream& os, const ModelInfo& model_info) {
+  if (model_info.llm_capability.has_value()) {
+    os << *model_info.llm_capability;
   } else {
     os << "[LLM Capabilities]\n  <none>\n";
   }
   return os;
 }
 
-}  // namespace litert::lm::schema::capabilities
+}  // namespace litert::lm::schema::model_info

@@ -11,49 +11,48 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Model capabilities extraction API.
+"""Model info extraction API.
 
-This API allows querying model capabilities and defaults directly from a
+This API allows querying model info and defaults directly from a
 compiled .litertlm file.
 
 Example:
 
   import litert_lm
 
-  # 1. Load model capabilities
-  with litert_lm.Capabilities("/path/to/model.litertlm") as capabilities:
+  # 1. Load model info
+  with litert_lm.ModelInfo("/path/to/model.litertlm") as model_info:
     # 2. Query basic capability flags
-    thinking = capabilities.supports_thinking()
-    function_calling = capabilities.supports_function_calling()
-    speculative_decoding = capabilities.has_speculative_decoding_support()
+    thinking = model_info.supports_thinking()
+    function_calling = model_info.supports_function_calling()
+    speculative_decoding = model_info.has_speculative_decoding_support()
 
     # 3. Inspect context limits and runtime requirements
-    max_context = capabilities.max_context_tokens
-    is_dynamic = capabilities.is_dynamic_context
-    min_version = capabilities.min_runtime_version
+    max_context = model_info.max_context_tokens
+    is_dynamic = model_info.is_dynamic_context
+    min_version = model_info.min_runtime_version
 
     # 4. Check supported input modalities and vision token budget
-    if capabilities.input_modalities.vision:
-      vision_budget = capabilities.max_vision_token_budget
-      signatures = capabilities.vision_signature_selection
+    if model_info.input_modalities.vision:
+      vision_budget = model_info.max_vision_token_budget
+      signatures = model_info.vision_signature_selection
 
     # 5. Inspect hardware backends (ordered by priority), NPU brand, etc.
-    text_backends = capabilities.supported_backends_for_modality(
+    text_backends = model_info.supported_backends_for_modality(
         litert_lm.LiteRtLmModality.TEXT
     )  # e.g. ["cpu", "gpu", "npu"]
     default_backend = text_backends[0] if text_backends else None
 
-
     if "npu" in text_backends:
-      brand = capabilities.npu_brand_for_modality(
+      brand = model_info.npu_brand_for_modality(
           litert_lm.LiteRtLmModality.TEXT
       )  # e.g. LiteRtLmNpuBrand.QUALCOMM
-      soc_name = capabilities.soc_name_for_modality(
+      soc_name = model_info.soc_name_for_modality(
           litert_lm.LiteRtLmModality.TEXT
       )  # e.g. "SM8750"
 
     # 6. Retrieve default sampler parameters
-    sampler_config = capabilities.default_sampler_params
+    sampler_config = model_info.default_sampler_params
     temperature = sampler_config.temperature
     top_k = sampler_config.top_k
     top_p = sampler_config.top_p
@@ -79,8 +78,8 @@ class SupportedModalities:
   video: bool
 
 
-class Capabilities:
-  """Exposes model capabilities directly from a LiteRT-LM file."""
+class ModelInfo:
+  """Exposes model capabilities and metadata directly from a LiteRT-LM file."""
 
   def __init__(self, model_path: str | os.PathLike[str]):
     """Loads a LiteRT-LM file and parses its metadata capabilities.
@@ -90,7 +89,7 @@ class Capabilities:
 
     Raises:
       FileNotFoundError: If the file does not exist.
-      RuntimeError: If the capabilities could not be loaded.
+      RuntimeError: If the model info could not be loaded.
     """
     model_path_str = os.fspath(model_path)
     if not os.path.exists(model_path_str):
@@ -101,16 +100,16 @@ class Capabilities:
 
     if not self._handle:
       raise RuntimeError(
-          f"Failed to load capabilities for model: {model_path_str}"
+          f"Failed to load model info for model: {model_path_str}"
       )
 
   def close(self) -> None:
-    """Closes the capabilities loader and releases C resources."""
+    """Closes the model info loader and releases C resources."""
     if hasattr(self, "_handle") and self._handle:
       self._lib.litert_lm_loaded_file_delete(self._handle)
       self._handle = None
 
-  def __enter__(self) -> Capabilities:
+  def __enter__(self) -> ModelInfo:
     return self
 
   def __exit__(self, exc_type, exc_val, exc_tb) -> None:
@@ -121,7 +120,7 @@ class Capabilities:
 
   def _check_closed(self) -> None:
     if not self._handle:
-      raise RuntimeError("Capabilities object is closed")
+      raise RuntimeError("ModelInfo object is closed")
 
   def has_speculative_decoding_support(self) -> bool:
     """Returns True if the model supports speculative decoding."""

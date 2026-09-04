@@ -35,7 +35,7 @@
 #include "absl/time/time.h"  // from @com_google_absl
 #include "nlohmann/json_fwd.hpp"  // from @nlohmann_json
 #include "litert/cc/internal/scoped_file.h"  // from @litert
-#include "c/capabilities.h"
+#include "c/model_info.h"
 #include "runtime/components/constrained_decoding/llg_constraint_config.h"
 #include "runtime/components/constrained_decoding/no_repeat_ngram_config.h"
 #include "runtime/components/constrained_decoding/repetition_penalty_config.h"
@@ -1518,113 +1518,112 @@ LITERTLM_JNIEXPORT jstring JNICALL JNI_METHOD(
   return NewStringStandardUTF(env, *response);
 }
 
-LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateCapabilities)(
+LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateModelInfo)(
     JNIEnv* env, jclass thiz, jstring model_path) {
   const char* model_path_chars = env->GetStringUTFChars(model_path, nullptr);
   std::string model_path_str(model_path_chars);
   env->ReleaseStringUTFChars(model_path, model_path_chars);
 
-  auto loaded_file = litert_lm_loaded_file_create(model_path_str.c_str());
-  if (loaded_file == nullptr) {
+  auto model_info = litert_lm_loaded_file_create(model_path_str.c_str());
+  if (model_info == nullptr) {
     ThrowLiteRtLmJniException(
         env, "Failed to open LiteRT-LM file: " + model_path_str);
     return 0;
   }
 
-  return reinterpret_cast<jlong>(loaded_file);
+  return reinterpret_cast<jlong>(model_info);
 }
 
-LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeDeleteCapabilities)(
-    JNIEnv* env, jclass thiz, jlong capabilities_pointer) {
+LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeDeleteModelInfo)(
+    JNIEnv* env, jclass thiz, jlong model_info_pointer) {
   litert_lm_loaded_file_delete(
-      reinterpret_cast<LiteRtLmLoadedFile*>(capabilities_pointer));
+      reinterpret_cast<LiteRtLmLoadedFile*>(model_info_pointer));
 }
 
 // JNI bridge method to check speculative decoding support.
 LITERTLM_JNIEXPORT jboolean JNICALL
 JNI_METHOD(nativeHasSpeculativeDecodingSupport)(JNIEnv* env, jclass thiz,
-                                                jlong capabilities_pointer) {
+                                                jlong model_info_pointer) {
   return litert_lm_loaded_file_has_speculative_decoding_support(
-      reinterpret_cast<LiteRtLmLoadedFile*>(capabilities_pointer));
+      reinterpret_cast<LiteRtLmLoadedFile*>(model_info_pointer));
 }
 
 // JNI bridge method to check thinking/reasoning budget support.
 LITERTLM_JNIEXPORT jboolean JNICALL JNI_METHOD(nativeSupportsThinking)(
-    JNIEnv* env, jclass thiz, jlong capabilities_pointer) {
+    JNIEnv* env, jclass thiz, jlong model_info_pointer) {
   return litert_lm_loaded_file_supports_thinking(
-      reinterpret_cast<LiteRtLmLoadedFile*>(capabilities_pointer));
+      reinterpret_cast<LiteRtLmLoadedFile*>(model_info_pointer));
 }
 
 // JNI bridge method to check function calling/tool use support.
-LITERTLM_JNIEXPORT jboolean JNICALL
-JNI_METHOD(nativeSupportsFunctionCalling)(
-    JNIEnv* env, jclass thiz, jlong capabilities_pointer) {
+LITERTLM_JNIEXPORT jboolean JNICALL JNI_METHOD(nativeSupportsFunctionCalling)(
+    JNIEnv* env, jclass thiz, jlong model_info_pointer) {
   return litert_lm_loaded_file_supports_function_calling(
-      reinterpret_cast<LiteRtLmLoadedFile*>(capabilities_pointer));
+      reinterpret_cast<LiteRtLmLoadedFile*>(model_info_pointer));
 }
 
 LITERTLM_JNIEXPORT jint JNICALL JNI_METHOD(nativeSamplerType)(
-    JNIEnv* env, jclass thiz, jlong capabilities_pointer) {
+    JNIEnv* env, jclass thiz, jlong model_info_pointer) {
   return litert_lm_loaded_file_sampler_type(
-      reinterpret_cast<LiteRtLmLoadedFile*>(capabilities_pointer));
+      reinterpret_cast<LiteRtLmLoadedFile*>(model_info_pointer));
 }
 
 LITERTLM_JNIEXPORT jfloat JNICALL JNI_METHOD(nativeSamplerTemp)(
-    JNIEnv* env, jclass thiz, jlong capabilities_pointer) {
+    JNIEnv* env, jclass thiz, jlong model_info_pointer) {
   return litert_lm_loaded_file_sampler_temperature(
-      reinterpret_cast<LiteRtLmLoadedFile*>(capabilities_pointer));
+      reinterpret_cast<LiteRtLmLoadedFile*>(model_info_pointer));
 }
 
 LITERTLM_JNIEXPORT jint JNICALL JNI_METHOD(nativeSamplerTopK)(
-    JNIEnv* env, jclass thiz, jlong capabilities_pointer) {
+    JNIEnv* env, jclass thiz, jlong model_info_pointer) {
   return litert_lm_loaded_file_sampler_top_k(
-      reinterpret_cast<LiteRtLmLoadedFile*>(capabilities_pointer));
+      reinterpret_cast<LiteRtLmLoadedFile*>(model_info_pointer));
 }
 
 LITERTLM_JNIEXPORT jfloat JNICALL JNI_METHOD(nativeSamplerTopP)(
-    JNIEnv* env, jclass thiz, jlong capabilities_pointer) {
+    JNIEnv* env, jclass thiz, jlong model_info_pointer) {
   return litert_lm_loaded_file_sampler_top_p(
-      reinterpret_cast<LiteRtLmLoadedFile*>(capabilities_pointer));
+      reinterpret_cast<LiteRtLmLoadedFile*>(model_info_pointer));
 }
+
 // JNI bridge method to check if the model supports the requested input
 // modality.
 LITERTLM_JNIEXPORT jboolean JNICALL JNI_METHOD(nativeSupportsInputModality)(
-    JNIEnv* env, jclass thiz, jlong capabilities_pointer, jint modality) {
+    JNIEnv* env, jclass thiz, jlong model_info_pointer, jint modality) {
   return litert_lm_loaded_file_supports_input_modality(
-      reinterpret_cast<LiteRtLmLoadedFile*>(capabilities_pointer),
+      reinterpret_cast<LiteRtLmLoadedFile*>(model_info_pointer),
       static_cast<LiteRtLmModality>(modality));
 }
+
 LITERTLM_JNIEXPORT jint JNICALL JNI_METHOD(nativeMaxVisionTokenBudget)(
-    JNIEnv* env, jclass thiz, jlong capabilities_pointer) {
+    JNIEnv* env, jclass thiz, jlong model_info_pointer) {
   return litert_lm_loaded_file_max_vision_token_budget(
-      reinterpret_cast<LiteRtLmLoadedFile*>(capabilities_pointer));
+      reinterpret_cast<LiteRtLmLoadedFile*>(model_info_pointer));
 }
 
 LITERTLM_JNIEXPORT jint JNICALL JNI_METHOD(nativeMaxContextTokens)(
-    JNIEnv* env, jclass thiz, jlong capabilities_pointer) {
+    JNIEnv* env, jclass thiz, jlong model_info_pointer) {
   return litert_lm_loaded_file_max_context_tokens(
-      reinterpret_cast<LiteRtLmLoadedFile*>(capabilities_pointer));
+      reinterpret_cast<LiteRtLmLoadedFile*>(model_info_pointer));
 }
 
 LITERTLM_JNIEXPORT jboolean JNICALL JNI_METHOD(nativeIsDynamicContext)(
-    JNIEnv* env, jclass thiz, jlong capabilities_pointer) {
+    JNIEnv* env, jclass thiz, jlong model_info_pointer) {
   return litert_lm_loaded_file_is_dynamic_context(
-      reinterpret_cast<LiteRtLmLoadedFile*>(capabilities_pointer));
+      reinterpret_cast<LiteRtLmLoadedFile*>(model_info_pointer));
 }
 
-LITERTLM_JNIEXPORT jintArray JNICALL
-JNI_METHOD(nativeVisionSignatureSelection)(JNIEnv* env, jclass thiz,
-                                           jlong capabilities_pointer) {
-  auto* loaded_file =
-      reinterpret_cast<LiteRtLmLoadedFile*>(capabilities_pointer);
-  int32_t count = litert_lm_loaded_file_vision_signature_selection(
-      loaded_file, nullptr, 0);
+LITERTLM_JNIEXPORT jintArray JNICALL JNI_METHOD(nativeVisionSignatureSelection)(
+    JNIEnv* env, jclass thiz, jlong model_info_pointer) {
+  auto* model_info = reinterpret_cast<LiteRtLmLoadedFile*>(model_info_pointer);
+  int32_t count =
+      litert_lm_loaded_file_vision_signature_selection(model_info, nullptr, 0);
   if (count == -1) {
     return nullptr;
   }
   std::vector<int32_t> lengths(count);
-  litert_lm_loaded_file_vision_signature_selection(
-      loaded_file, lengths.data(), count);
+  litert_lm_loaded_file_vision_signature_selection(model_info, lengths.data(),
+                                                   count);
   jintArray result = env->NewIntArray(count);
   if (result == nullptr) {
     return nullptr;
@@ -1635,29 +1634,27 @@ JNI_METHOD(nativeVisionSignatureSelection)(JNIEnv* env, jclass thiz,
 }
 
 LITERTLM_JNIEXPORT jstring JNICALL JNI_METHOD(nativeMinRuntimeVersion)(
-    JNIEnv* env, jclass thiz, jlong capabilities_pointer) {
+    JNIEnv* env, jclass thiz, jlong model_info_pointer) {
   const char* version = litert_lm_loaded_file_min_runtime_version(
-      reinterpret_cast<LiteRtLmLoadedFile*>(capabilities_pointer));
+      reinterpret_cast<LiteRtLmLoadedFile*>(model_info_pointer));
   if (version == nullptr) {
     return nullptr;
   }
   return env->NewStringUTF(version);
 }
 
-LITERTLM_JNIEXPORT jintArray JNICALL
-JNI_METHOD(nativeModalitySupportedBackends)(JNIEnv* env, jclass thiz,
-                                            jlong capabilities_pointer,
-                                            jint modality) {
-  auto* loaded_file =
-      reinterpret_cast<LiteRtLmLoadedFile*>(capabilities_pointer);
+LITERTLM_JNIEXPORT jintArray JNICALL JNI_METHOD(
+    nativeModalitySupportedBackends)(JNIEnv* env, jclass thiz,
+                                     jlong model_info_pointer, jint modality) {
+  auto* model_info = reinterpret_cast<LiteRtLmLoadedFile*>(model_info_pointer);
   int32_t count = litert_lm_loaded_file_modality_supported_backends(
-      loaded_file, static_cast<LiteRtLmModality>(modality), nullptr, 0);
+      model_info, static_cast<LiteRtLmModality>(modality), nullptr, 0);
   if (count <= 0) {
     return nullptr;
   }
   std::vector<LiteRtLmBackendType> backends(count);
   litert_lm_loaded_file_modality_supported_backends(
-      loaded_file, static_cast<LiteRtLmModality>(modality), backends.data(),
+      model_info, static_cast<LiteRtLmModality>(modality), backends.data(),
       count);
   jintArray result = env->NewIntArray(count);
   if (result == nullptr) return nullptr;
@@ -1670,17 +1667,17 @@ JNI_METHOD(nativeModalitySupportedBackends)(JNIEnv* env, jclass thiz,
 }
 
 LITERTLM_JNIEXPORT jint JNICALL JNI_METHOD(nativeModalityNpuBrand)(
-    JNIEnv* env, jclass thiz, jlong capabilities_pointer, jint modality) {
+    JNIEnv* env, jclass thiz, jlong model_info_pointer, jint modality) {
   return static_cast<jint>(litert_lm_loaded_file_modality_npu_brand(
-      reinterpret_cast<LiteRtLmLoadedFile*>(capabilities_pointer),
+      reinterpret_cast<LiteRtLmLoadedFile*>(model_info_pointer),
       static_cast<LiteRtLmModality>(modality)));
 }
 
 // JNI bridge method to get the NPU SoC name string for a given modality.
 LITERTLM_JNIEXPORT jstring JNICALL JNI_METHOD(nativeModalitySocName)(
-    JNIEnv* env, jclass thiz, jlong capabilities_pointer, jint modality) {
+    JNIEnv* env, jclass thiz, jlong model_info_pointer, jint modality) {
   const char* soc_name = litert_lm_loaded_file_modality_soc_name(
-      reinterpret_cast<LiteRtLmLoadedFile*>(capabilities_pointer),
+      reinterpret_cast<LiteRtLmLoadedFile*>(model_info_pointer),
       static_cast<LiteRtLmModality>(modality));
   if (soc_name == nullptr) {
     return nullptr;

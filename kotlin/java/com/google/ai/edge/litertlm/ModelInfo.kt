@@ -62,72 +62,76 @@ enum class Modality(val value: Int) {
 }
 
 /**
- * Provides information about capabilities and features supported by a LiteRT-LM file.
+ * Provides information about capabilities and metadata of a LiteRT-LM file.
  *
- * The user is expected to leverage the Capabilities API to investigate the capabilities of a
- * LiteRT-LM file before using it to build an engine instance.
+ * The user is expected to leverage the ModelInfo API to investigate the metadata of a LiteRT-LM
+ * file before using it to build an engine instance.
  *
  * ### Example Usage:
  * ```kotlin
  * try {
  *   // 1. Load the model metadata
- *   Capabilities("/path/to/model.litertlm").use { capabilities ->
+ *   ModelInfo("/path/to/model.litertlm").use { modelInfo ->
  *     // 2. Query basic capability flags
- *     val supportsThinking = capabilities.supportsThinking()
- *     val supportsFunctionCall = capabilities.supportsFunctionCalling()
- *     val hasSpeculativeDecoding = capabilities.hasSpeculativeDecodingSupport()
+ *     val supportsThinking = modelInfo.supportsThinking()
+ *     val supportsFunctionCall = modelInfo.supportsFunctionCalling()
+ *     val hasSpeculativeDecoding = modelInfo.hasSpeculativeDecodingSupport()
  *
  *     // 3. Inspect context limits and runtime version requirements
- *     val maxContext = capabilities.maxContextTokens()
- *     val isDynamic = capabilities.isDynamicContext()
- *     val minVersion = capabilities.minRuntimeVersion()
+ *     val maxContext = modelInfo.maxContextTokens()
+ *     val isDynamic = modelInfo.isDynamicContext()
+ *     val minVersion = modelInfo.minRuntimeVersion()
  *     if (minVersion != null) {
  *       println("Minimum required LiteRT-LM runtime version: $minVersion")
  *     }
  *
  *     // 4. Check supported input modalities and vision signatures
- *     if (capabilities.inputModalities().vision) {
- *       val visionBudget = capabilities.maxVisionTokenBudget()
- *       val signatures = capabilities.visionSignatureSelection()
+ *     if (modelInfo.inputModalities().vision) {
+ *       val visionBudget = modelInfo.maxVisionTokenBudget()
+ *       val signatures = modelInfo.visionSignatureSelection()
  *       if (signatures != null) {
- *         println("Supported vision token capacities: ${signatures.contentToString()}")
+ *         println(
+ *           "Supported vision token capacities: ${signatures.contentToString()}"
+ *         )
  *       }
  *     }
  *
  *     // 5. Inspect hardware backends (ordered by priority), NPU brand, etc.
  *     val textBackends =
- *       capabilities.supportedBackends(Modality.TEXT) // e.g. [CPU, GPU, NPU]
+ *       modelInfo.supportedBackends(Modality.TEXT) // e.g. [CPU, GPU, NPU]
  *     val defaultBackend = textBackends.firstOrNull() // e.g. BackendType.CPU
  *     println("Default backend for text: $defaultBackend")
  *
  *     if (textBackends.contains(BackendType.NPU)) {
- *       val brand = capabilities.npuBrand(Modality.TEXT) // e.g. QUALCOMM, GOOGLE_TENSOR, MEDIATEK
- *       val socName = capabilities.socName(Modality.TEXT)
+ *       val brand = modelInfo.npuBrand(Modality.TEXT)
+ *       val socName = modelInfo.socName(Modality.TEXT)
  *       if (socName != null) {
- *         println("Target NPU SoC: $socName ($brand)") // e.g. "SM8750 (QUALCOMM)"
+ *         println("Target NPU SoC: $socName ($brand)")
  *       }
  *     }
  *
  *     // 6. Retrieve default sampler parameters
- *     val sampler = capabilities.defaultSamplerParams()
- *     println("Temperature: ${sampler.temperature}, TopK: ${sampler.topK}, TopP: ${sampler.topP}")
+ *     val sampler = modelInfo.defaultSamplerParams()
+ *     println(
+ *       "Temp: ${sampler.temperature}, TopK: ${sampler.topK}, TopP: ${sampler.topP}"
+ *     )
  *   }
  * } catch (e: Exception) {
- *   println("Failed to load model file capabilities: ${e.message}")
+ *   println("Failed to load model file info: ${e.message}")
  * }
  * ```
  *
  * @param modelPath The file path to the LiteRT-LM model.
  */
-class Capabilities(modelPath: String) : AutoCloseable {
+class ModelInfo(modelPath: String) : AutoCloseable {
   private val lock = Any()
 
   @Volatile private var handle: Long? = null
 
   init {
-    val ptr = LiteRtLmJni.nativeCreateCapabilities(modelPath)
+    val ptr = LiteRtLmJni.nativeCreateModelInfo(modelPath)
     if (ptr == 0L) {
-      throw LiteRtLmJniException("Failed to load capabilities for model: $modelPath")
+      throw LiteRtLmJniException("Failed to load model info for model: $modelPath")
     }
     handle = ptr
   }
@@ -267,16 +271,16 @@ class Capabilities(modelPath: String) : AutoCloseable {
     }
   }
 
-  /** Closes the loaded capabilities and releases underlying resources. */
+  /** Closes the loaded model info and releases underlying resources. */
   override fun close() {
     synchronized(lock) {
       val ptr = handle ?: return
-      LiteRtLmJni.nativeDeleteCapabilities(ptr)
+      LiteRtLmJni.nativeDeleteModelInfo(ptr)
       handle = null
     }
   }
 
   private fun checkInitialized() {
-    check(handle != null) { "Capabilities instance is already closed." }
+    check(handle != null) { "ModelInfo instance is already closed." }
   }
 }

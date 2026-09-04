@@ -26,9 +26,9 @@ package(
 licenses(["notice"])
 
 cc_library(
-    name = "capabilities",
-    srcs = ["capabilities.cc"],
-    hdrs = ["capabilities.h"],
+    name = "model_info",
+    srcs = ["model_info.cc"],
+    hdrs = ["model_info.h"],
     deps = [
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
@@ -46,10 +46,10 @@ cc_library(
 )
 
 cc_test(
-    name = "capabilities_test",
-    srcs = ["capabilities_test.cc"],
+    name = "model_info_test",
+    srcs = ["model_info_test.cc"],
     deps = [
-        ":capabilities",
+        ":model_info",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_matchers",
@@ -65,10 +65,10 @@ cc_test(
 )
 
 cc_binary(
-    name = "inspect_model",
-    srcs = ["inspect_model_main.cc"],
+    name = "model_info_cli",
+    srcs = ["model_info_cli.cc"],
     deps = [
-        ":capabilities",
+        ":model_info",
         "@com_google_absl//absl/status:statusor",
     ],
 )

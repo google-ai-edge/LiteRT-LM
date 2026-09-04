@@ -86,58 +86,57 @@ def describe_model(
       raise click.ClickException(f"Failed to find model '{model_reference}'.")
 
   try:
-    capabilities = litert_lm.Capabilities(model_obj.model_path)
+    model_info = litert_lm.ModelInfo(model_obj.model_path)
   except (FileNotFoundError, RuntimeError) as e:
     raise click.ClickException(
         f"Failed to load capabilities for model '{model_reference}': {e}"
     )
 
   modalities = []
-  if capabilities.input_modalities.text:
+  if model_info.input_modalities.text:
     modalities.append("Text")
-  if capabilities.input_modalities.vision:
+  if model_info.input_modalities.vision:
     modalities.append("Vision")
-  if capabilities.input_modalities.audio:
+  if model_info.input_modalities.audio:
     modalities.append("Audio")
-  if capabilities.input_modalities.video:
+  if model_info.input_modalities.video:
     modalities.append("Video")
   modalities_str = " ".join(modalities) if modalities else "None"
 
   click.echo("========================================")
-  click.echo(" LiteRT-LM Model Capabilities Report")
+  click.echo(" LiteRT-LM Model Info Report")
   click.echo("========================================")
   click.echo(f"File: {model_obj.model_path}\n")
   click.echo("[LLM Capabilities]")
   click.echo(
       "  Supports Function Call: "
-      f"{'YES' if capabilities.supports_function_calling() else 'NO'}"
+      f"{'YES' if model_info.supports_function_calling() else 'NO'}"
   )
   click.echo(
       "  Supports Thinking:      "
-      f"{'YES' if capabilities.supports_thinking() else 'NO'}"
+      f"{'YES' if model_info.supports_thinking() else 'NO'}"
   )
   click.echo(
       "  Speculative Decoding:   "
-      f"{'YES' if capabilities.has_speculative_decoding_support() else 'NO'}"
+      f"{'YES' if model_info.has_speculative_decoding_support() else 'NO'}"
   )
+  click.echo(f"  Max Vision Token Budget: {model_info.max_vision_token_budget}")
   click.echo(
-      f"  Max Vision Token Budget: {capabilities.max_vision_token_budget}"
+      f"  Min Runtime Version:    {model_info.min_runtime_version or '-1'}"
   )
-  click.echo(
-      f"  Min Runtime Version:    {capabilities.min_runtime_version or '-1'}"
-  )
-  lengths = capabilities.vision_signature_selection
+  lengths = model_info.vision_signature_selection
   lengths_str = str(lengths) if lengths is not None else "-1"
   click.echo(f"  Vision Signature Selection: {lengths_str}")
 
-  sampler_config = capabilities.default_sampler_params
+  sampler_config = model_info.default_sampler_params
+  top_k_val = sampler_config.top_k if sampler_config.top_k is not None else 0
   click.echo(f"  Sampler Temp:           {sampler_config.temperature:.2f}")
-  click.echo(f"  Sampler Top K:          {sampler_config.top_k}")
+  click.echo(f"  Sampler Top K:          {top_k_val}")
   click.echo(f"  Sampler Top P:          {sampler_config.top_p:.2f}")
-  click.echo(f"  Max Context Tokens:     {capabilities.max_context_tokens}")
+  click.echo(f"  Max Context Tokens:     {model_info.max_context_tokens}")
   click.echo(
       "  Is Dynamic Context:     "
-      f"{'YES' if capabilities.is_dynamic_context else 'NO'}"
+      f"{'YES' if model_info.is_dynamic_context else 'NO'}"
   )
   click.echo(f"  Input Modalities:       {modalities_str}")
 
@@ -149,10 +148,8 @@ def describe_model(
       ("Audio", litert_lm.LiteRtLmModality.AUDIO),
       ("Video", litert_lm.LiteRtLmModality.VIDEO),
   ]:
-    if getattr(capabilities.input_modalities, mod_name.lower()):
-      supported_backends = capabilities.supported_backends_for_modality(
-          mod_enum
-      )
+    if getattr(model_info.input_modalities, mod_name.lower()):
+      supported_backends = model_info.supported_backends_for_modality(mod_enum)
       backends_str = " ".join([b.upper() for b in supported_backends]) or "None"
       click.echo(f"  {mod_name} Backends:".ljust(26) + backends_str)
       if supported_backends:
@@ -161,8 +158,8 @@ def describe_model(
             + supported_backends[0].upper()
         )
       soc_desc = _format_npu_soc_and_brand(
-          capabilities.npu_brand_for_modality(mod_enum),
-          capabilities.soc_name_for_modality(mod_enum),
+          model_info.npu_brand_for_modality(mod_enum),
+          model_info.soc_name_for_modality(mod_enum),
       )
       if soc_desc:
         click.echo(f"  {mod_name} SoC Name:".ljust(26) + soc_desc)

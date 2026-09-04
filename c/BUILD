@@ -26,8 +26,6 @@ package(
 licenses(["notice"])
 
 exports_files([
-    "capabilities.cc",
-    "capabilities.h",
     "conversation.cc",
     "conversation.h",
     "embedding_engine.cc",
@@ -36,6 +34,8 @@ exports_files([
     "engine.h",
     "experimental.cc",
     "experimental.h",
+    "model_info.cc",
+    "model_info.h",
 ])
 
 ENGINE_LITE_COMMON_DEPS = [
@@ -92,8 +92,8 @@ EMBEDDING_ENGINE_DEPS = [
     "//runtime/executor:litert_compiled_model_executor_utils",
 ]
 
-CAPABILITIES_DEPS = [
-    "//schema/capabilities",
+MODEL_INFO_DEPS = [
+    "//schema/model_info",
 ]
 
 EXPERIMENTAL_DEPS = [
@@ -104,7 +104,7 @@ ENGINE_COMMON_DEPS = (
     ENGINE_LITE_COMMON_DEPS +
     CONVERSATION_DEPS +
     EMBEDDING_ENGINE_DEPS +
-    CAPABILITIES_DEPS +
+    MODEL_INFO_DEPS +
     EXPERIMENTAL_DEPS
 )
 
@@ -133,10 +133,10 @@ cc_library(
     deps = [":engine_headers"],
 )
 
-# Header library for capabilities C API.
+# Header library for model info C API.
 cc_library(
-    name = "capabilities_headers",
-    hdrs = ["capabilities.h"],
+    name = "model_info_headers",
+    hdrs = ["model_info.h"],
     visibility = ["//visibility:public"],
     deps = [":engine_headers"],
 )
@@ -268,18 +268,18 @@ cc_test(
 cc_library(
     name = "engine",
     srcs = [
-        "capabilities.cc",
         "conversation.cc",
         "embedding_engine.cc",
         "engine.cc",
         "experimental.cc",
+        "model_info.cc",
     ],
     hdrs = [
-        "capabilities.h",
         "conversation.h",
         "embedding_engine.h",
         "engine.h",
         "experimental.h",
+        "model_info.h",
     ],
     defines = LITERT_LM_DEBUGGER_DEFINES,
     visibility = ["//visibility:public"],
@@ -293,18 +293,18 @@ cc_library(
 cc_library(
     name = "engine_cpu",
     srcs = [
-        "capabilities.cc",
         "conversation.cc",
         "embedding_engine.cc",
         "engine.cc",
         "experimental.cc",
+        "model_info.cc",
     ],
     hdrs = [
-        "capabilities.h",
         "conversation.h",
         "embedding_engine.h",
         "engine.h",
         "experimental.h",
+        "model_info.h",
     ],
     defines = LITERT_LM_DEBUGGER_DEFINES,
     visibility = ["//visibility:public"],
@@ -314,8 +314,8 @@ cc_library(
 )
 
 cc_test(
-    name = "capabilities_test",
-    srcs = ["capabilities_test.cc"],
+    name = "model_info_test",
+    srcs = ["model_info_test.cc"],
     data = [
         "//runtime/testdata",
     ],
@@ -328,8 +328,8 @@ cc_test(
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     deps = [
-        ":capabilities_headers",
         ":engine",
+        ":model_info_headers",
         "@com_google_googletest//:gtest_main",
     ],
 )
@@ -392,11 +392,11 @@ cc_test(
 cc_binary(
     name = "litert-lm",
     srcs = [
-        "capabilities.cc",
         "conversation.cc",
         "embedding_engine.cc",
         "engine.cc",
         "experimental.cc",
+        "model_info.cc",
     ],
     copts = ["-fvisibility=hidden"],
     features = ["-legacy_whole_archive"],
@@ -419,11 +419,11 @@ cc_binary(
     }),
     linkshared = 1,
     deps = ENGINE_COMMON_DEPS + [
-        ":capabilities_headers",
         ":conversation_headers",
         ":embedding_engine_headers",
         ":engine_headers",
         ":experimental_headers",
+        ":model_info_headers",
         "//runtime/core:engine_impl",
     ] + select({
         "//conditions:default": [],
