@@ -23,6 +23,7 @@
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "support/preprocessor/audio_preprocessor.h"
 #include "support/preprocessor/mel_filterbank.h"
@@ -44,8 +45,18 @@ class AudioPreprocessorPffft : public AudioPreprocessor {
   static absl::StatusOr<absl_nonnull std::unique_ptr<AudioPreprocessorPffft>>
   Create(const AudioPreprocessorConfig& config);
 
-  // Preprocesses the audio (PCM frames or pre-processed audio) and returns the
-  // preprocessed audio mel spectrograms.
+  // Decodes raw audio bytes (WAV format) to PCM frames.
+  // Args:
+  //   - audio_bytes: The raw audio bytes in WAV format to decode.
+  //   - num_channels: Expected channel count (typically 1 for mono).
+  //   - sample_rate_hz: Expected sample rate in Hz (typically 16000).
+  //   - pcm_frames: The decoded PCM frames in [-1.0, 1.0].
+  static absl::Status DecodeAudio(absl::string_view audio_bytes,
+                                  int num_channels, int sample_rate_hz,
+                                  std::vector<float>& pcm_frames);
+
+  // Preprocesses the audio (undecoded WAV bytes, PCM frames, or pre-processed
+  // audio) and returns the preprocessed audio mel spectrograms.
   absl::StatusOr<InputAudio> Preprocess(const InputAudio& input_audio) override;
 
   // Exposes PcmFramesToSpectrogram for testing purposes.
