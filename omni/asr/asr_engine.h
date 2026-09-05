@@ -27,6 +27,7 @@
 #include "omni/asr/asr_session.h"
 #include "omni/asr/audio_source.h"
 #include "omni/asr/log_mel_spectrogram_processor.h"
+#include "omni/base/litert_lm_engine_runner.h"
 #include "omni/base/litert_lm_runner.h"
 #include "support/tokenizer/tokenizer.h"
 
@@ -110,7 +111,8 @@ class AsrEngine {
             std::unique_ptr<::litert::support::Tokenizer> tokenizer,
             std::unique_ptr<::litert::Environment> environment,
             std::unique_ptr<::litert::CompiledModel> compiled_model,
-            std::unique_ptr<LiteRtLmRunner> lm_runner = nullptr);
+            std::unique_ptr<LiteRtLmRunner> lm_runner = nullptr,
+            std::unique_ptr<LiteRtLmEngineRunner> lm_engine_runner = nullptr);
 
   static absl::Status EnsureFilesDownloaded(AsrEngineConfig& config,
                                             const FileDownloader& downloader);
@@ -120,6 +122,7 @@ class AsrEngine {
   std::unique_ptr<::litert::Environment> environment_;
   std::unique_ptr<::litert::CompiledModel> compiled_model_;
   std::unique_ptr<LiteRtLmRunner> lm_runner_;
+  std::unique_ptr<LiteRtLmEngineRunner> lm_engine_runner_;
 };
 
 }  // namespace litert::omni::asr

@@ -54,6 +54,9 @@ ABSL_FLAG(float, overlap_ratio, 0.4f,
           "between 0.0 and 1.0.");
 ABSL_FLAG(std::string, text_merger_type, "timestamp",
           "Text merger implementation to use: timestamp or levenshtein.");
+ABSL_FLAG(std::string, model_path, "",
+          "Direct path to model file (.litertlm or .tflite), bypassing curl "
+          "download.");
 
 namespace {
 
@@ -76,7 +79,8 @@ absl::Status DownloadFileWithCurl(absl::string_view url,
 absl::StatusOr<litert::omni::asr::AsrEngineConfig> LoadConfigFromJsonFile(
     absl::string_view json_path, absl::string_view model_name,
     absl::string_view cache_dir, absl::string_view backend_flag,
-    int num_threads, float overlap_ratio, absl::string_view text_merger_flag) {
+    int num_threads, float overlap_ratio, absl::string_view text_merger_flag,
+    absl::string_view model_path_flag) {
   std::ifstream f(std::string(json_path).c_str());
   if (!f.is_open()) {
     return absl::NotFoundError(
@@ -175,6 +179,21 @@ absl::StatusOr<litert::omni::asr::AsrEngineConfig> LoadConfigFromJsonFile(
       config.log_mel_config.transpose = l["transpose"].get<bool>();
     if (l.contains("preemphasis"))
       config.log_mel_config.preemphasis = l["preemphasis"].get<float>();
+    if (l.contains("fftLength"))
+      config.log_mel_config.fft_length = l["fftLength"].get<int>();
+    if (l.contains("inputScale"))
+      config.log_mel_config.input_scale = l["inputScale"].get<float>();
+    if (l.contains("melLowHz"))
+      config.log_mel_config.mel_low_hz = l["melLowHz"].get<float>();
+    if (l.contains("melHighHz"))
+      config.log_mel_config.mel_high_hz = l["melHighHz"].get<float>();
+    if (l.contains("melFloor"))
+      config.log_mel_config.mel_floor = l["melFloor"].get<float>();
+    if (l.contains("normalizeMel"))
+      config.log_mel_config.normalize_mel = l["normalizeMel"].get<bool>();
+    if (l.contains("addFloorToMelBeforeLog"))
+      config.log_mel_config.add_floor_to_mel_before_log =
+          l["addFloorToMelBeforeLog"].get<bool>();
     if (l.contains("normType")) {
       std::string norm = l["normType"].get<std::string>();
       if (norm == "whisper") {
@@ -192,16 +211,19 @@ absl::StatusOr<litert::omni::asr::AsrEngineConfig> LoadConfigFromJsonFile(
   config.model_path = (cache_path / model_filename).string();
   config.tokenizer_path = (cache_path / tokenizer_filename).string();
 
+  if (!model_path_flag.empty()) {
+    config.model_path = std::string(model_path_flag);
+    config.model_url.clear();
+  }
+
   return config;
 }
 
-absl::Status RunAsrRunner(absl::string_view model_name,
-                          absl::string_view metadata_path,
-                          absl::string_view audio_path,
-                          absl::string_view cache_dir,
-                          absl::string_view backend_flag, int num_threads,
-                          float overlap_ratio,
-                          absl::string_view text_merger_flag) {
+absl::Status RunAsrRunner(
+    absl::string_view model_name, absl::string_view metadata_path,
+    absl::string_view audio_path, absl::string_view cache_dir,
+    absl::string_view backend_flag, int num_threads, float overlap_ratio,
+    absl::string_view text_merger_flag, absl::string_view model_path_flag) {
   if (audio_path.empty()) {
     return absl::InvalidArgumentError("--audio_path flag is required.");
   }
@@ -209,7 +231,8 @@ absl::Status RunAsrRunner(absl::string_view model_name,
   ABSL_ASSIGN_OR_RETURN(
       auto config,
       LoadConfigFromJsonFile(metadata_path, model_name, cache_dir, backend_flag,
-                             num_threads, overlap_ratio, text_merger_flag));
+                             num_threads, overlap_ratio, text_merger_flag,
+                             model_path_flag));
   absl::Duration interval = absl::Milliseconds(config.input_milliseconds);
   absl::Duration overlap = interval * overlap_ratio;
   ABSL_ASSIGN_OR_RETURN(
@@ -252,8 +275,8 @@ int main(int argc, char* argv[]) {
       absl::GetFlag(FLAGS_model_name), absl::GetFlag(FLAGS_metadata_path),
       absl::GetFlag(FLAGS_audio_path), absl::GetFlag(FLAGS_cache_dir),
       absl::GetFlag(FLAGS_backend), absl::GetFlag(FLAGS_num_threads),
-      absl::GetFlag(FLAGS_overlap_ratio),
-      absl::GetFlag(FLAGS_text_merger_type));
+      absl::GetFlag(FLAGS_overlap_ratio), absl::GetFlag(FLAGS_text_merger_type),
+      absl::GetFlag(FLAGS_model_path));
   if (!status.ok()) {
     ABSL_LOG(ERROR) << "ASR Runner failed: " << status;
     return 1;

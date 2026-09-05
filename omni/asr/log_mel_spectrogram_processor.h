@@ -45,6 +45,13 @@ class LogMelSpectrogramProcessor : public AudioPreprocessor {
     int n_frames = 0;
     bool transpose = false;
     float preemphasis = 0.0f;
+    int fft_length = 0;
+    float input_scale = 1.0f;
+    float mel_low_hz = 0.0f;
+    float mel_high_hz = 0.0f;
+    float mel_floor = 1e-5f;
+    bool normalize_mel = false;
+    bool add_floor_to_mel_before_log = true;
     NormType norm_type = NormType::kStandard;
   };
 
@@ -53,6 +60,8 @@ class LogMelSpectrogramProcessor : public AudioPreprocessor {
       Stage<std::vector<float>>* absl_nonnull audio_source);
 
   ~LogMelSpectrogramProcessor() override = default;
+
+  const LogMelSpectrogramConfig& config() const { return config_; }
 
  protected:
   void ResetInternal() override;

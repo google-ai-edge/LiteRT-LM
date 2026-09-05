@@ -219,5 +219,39 @@ TEST(LogMelSpectrogramProcessorTest, SchedulePullsFromSourceAndPushesFeatures) {
   EXPECT_FALSE(output.empty());
 }
 
+TEST(LogMelSpectrogramProcessorTest,
+     ProcessWithUsmNormalizationProduces128Mels) {
+  DummyAudioSource dummy_source;
+  ASSERT_OK_AND_ASSIGN(auto processor,
+                       LogMelSpectrogramProcessor::Create(
+                           16000,
+                           LogMelSpectrogramProcessor::LogMelSpectrogramConfig{
+                               .n_fft = 512,
+                               .n_mels = 128,
+                               .transpose = true,
+                               .preemphasis = 0.97f,
+                               .fft_length = 1024,
+                               .input_scale = 32768.0f,
+                               .mel_low_hz = 125.0f,
+                               .mel_high_hz = 7500.0f,
+                               .mel_floor = 1e-6f,
+                               .normalize_mel = true,
+                               .add_floor_to_mel_before_log = false},
+                           &dummy_source));
+
+  int sample_rate = 16000;
+  std::vector<float> audio(sample_rate);
+  for (int i = 0; i < audio.size(); ++i) {
+    audio[i] = std::sin(2.0 * M_PI * 440.0 * i / sample_rate);
+  }
+
+  dummy_source.PushChunk(audio);
+  ASSERT_OK(processor->Schedule());
+  ASSERT_OK_AND_ASSIGN(auto result, processor->GetOutput());
+  EXPECT_FALSE(result.empty());
+  constexpr int kUsmMelBins = 128;
+  EXPECT_EQ(result.size() % kUsmMelBins, 0);
+  EXPECT_TRUE(processor->config().transpose);
+}
 }  // namespace
 }  // namespace litert::omni::asr

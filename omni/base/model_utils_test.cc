@@ -129,5 +129,15 @@ TEST(ModelUtilsTest, ModelOptionsExternalTensorPatterns) {
   EXPECT_EQ(options.external_tensor_patterns[0], "kv_cache_");
 }
 
+TEST(ModelUtilsTest, CreateLmEngineRunnerNonExistent) {
+  auto env_expected = Environment::Create({});
+  if (env_expected.HasValue()) {
+    ModelOptions options;
+    options.model_dir = "/non/existent/dir";
+    EXPECT_THAT(CreateLmEngineRunner(*env_expected, options, "model.litertlm"),
+                StatusIs(absl::StatusCode::kNotFound));
+  }
+}
+
 }  // namespace
 }  // namespace litert::omni

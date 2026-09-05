@@ -115,16 +115,26 @@ LogMelSpectrogramProcessor::Create(
   if (config.n_mels <= 0) {
     return absl::InvalidArgumentError("n_mels must be positive.");
   }
-  int padded_n_fft = GetSmallestPowerOfTwoGreaterOrEqualTo(config.n_fft);
+  int fft_length = config.fft_length > 0
+                       ? config.fft_length
+                       : GetSmallestPowerOfTwoGreaterOrEqualTo(config.n_fft);
+  float mel_high_hz =
+      config.mel_high_hz > 0.0f ? config.mel_high_hz : sample_rate_hz / 2.0f;
   litert::support::AudioPreprocessorConfig preprocessor_config =
       litert::support::AudioPreprocessorConfig::Create(
-          sample_rate_hz, /*num_channels=*/1, /*frame_length=*/config.n_fft,
-          /*hop_length=*/config.hop_length, /*fft_length=*/padded_n_fft,
-          /*input_scale=*/1.0f,
-          /*pre_emphasis_factor=*/0.0f, /*num_mel_bins=*/config.n_mels,
-          /*mel_low_hz=*/0.0f, /*mel_high_hz=*/sample_rate_hz / 2.0f,
-          /*mel_floor=*/kLogZeroGuardValue, /*normalize_mel=*/false,
-          /*add_floor_to_mel_before_log=*/true, /*semicausal_padding=*/false,
+          sample_rate_hz, /*num_channels=*/1,
+          /*frame_length=*/config.n_fft,
+          /*hop_length=*/config.hop_length,
+          /*fft_length=*/fft_length,
+          /*input_scale=*/config.input_scale,
+          /*pre_emphasis_factor=*/config.preemphasis,
+          /*num_mel_bins=*/config.n_mels,
+          /*mel_low_hz=*/config.mel_low_hz,
+          /*mel_high_hz=*/mel_high_hz,
+          /*mel_floor=*/config.mel_floor,
+          /*normalize_mel=*/config.normalize_mel,
+          /*add_floor_to_mel_before_log=*/config.add_floor_to_mel_before_log,
+          /*semicausal_padding=*/false,
           /*non_zero_hanning=*/true, /*periodic_hanning=*/true,
           litert::support::AudioPreprocessorConfig::FftPaddingType::kRight);
 
@@ -211,6 +221,8 @@ absl::StatusOr<std::vector<float>> LogMelSpectrogramProcessor::Process(
         mel_spec[m][f] = (std::max(mel_spec[m][f], clip_val) + 4.0f) / 4.0f;
       }
     }
+  } else if (config_.normalize_mel) {
+    // AudioPreprocessorMiniAudio applies kUsmMelMean and kUsmMelStdDev.
   } else {
     auto means = ComputeMean(mel_spec, valid_frames);
     auto stds = ComputeStd(mel_spec, means, valid_frames);

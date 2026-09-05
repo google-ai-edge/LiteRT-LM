@@ -55,6 +55,7 @@ cc_library(
     srcs = ["model_utils.cc"],
     hdrs = ["model_utils.h"],
     deps = [
+        ":litert_lm_engine_runner",
         ":litert_lm_runner",
         "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/memory",
@@ -81,15 +82,21 @@ cc_library(
         "//runtime/components:model_resources",
         "//runtime/components:model_resources_litert_lm",
         "//runtime/components:model_resources_task",
+        "//runtime/core:engine_advanced_impl",
+        "//runtime/engine:engine_factory",
+        "//runtime/engine:engine_interface",
+        "//runtime/engine:engine_settings",
         "//runtime/executor:executor_settings_base",
         "//runtime/executor:litert_compiled_model_executor_utils",
         "//runtime/executor:llm_executor_io_types",
         "//runtime/executor:llm_executor_settings",
         "//runtime/executor:llm_litert_compiled_model_executor_factory",
+        "//runtime/proto:token_cc_proto",
         "//runtime/util:file_format_util",
         "//runtime/util:litert_lm_loader",
         "//runtime/util:model_asset_bundle_resources",
         "//runtime/util:scoped_file",
+        "//support/tokenizer",
         "//support/util:convert_tensor_buffer",
     ],
 )
@@ -181,8 +188,11 @@ cc_library(
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/types:span",
         "@litert//litert/cc:litert_compiled_model",
+        "@litert//litert/cc:litert_element_type",
         "@litert//litert/cc:litert_environment",
+        "@litert//litert/cc:litert_layout",
         "@litert//litert/cc:litert_macros",
+        "@litert//litert/cc:litert_ranked_tensor_type",
         "@litert//litert/cc:litert_tensor_buffer",
     ],
 )
@@ -219,6 +229,22 @@ cc_library(
 )
 
 cc_library(
+    name = "litert_lm_engine_runner",
+    srcs = ["litert_lm_engine_runner.cc"],
+    hdrs = ["litert_lm_engine_runner.h"],
+    deps = [
+        "@com_google_absl//absl/base:nullability",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "//runtime/components:model_resources",
+        "//runtime/engine:engine_interface",
+        "//runtime/engine:engine_settings",
+        "//runtime/engine:io_types",
+    ],
+)
+
+cc_library(
     name = "mock_litert_lm_runner",
     testonly = 1,
     hdrs = ["mock_litert_lm_runner.h"],
@@ -237,12 +263,29 @@ cc_test(
     name = "litert_lm_runner_test",
     srcs = ["litert_lm_runner_test.cc"],
     deps = [
+        ":litert_lm_runner",
         ":mock_litert_lm_runner",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_matchers",
         "@litert//litert/cc:litert_tensor_buffer",
         "//runtime/executor:llm_executor_io_types",
+    ],
+)
+
+cc_test(
+    name = "litert_lm_engine_runner_test",
+    srcs = ["litert_lm_engine_runner_test.cc"],
+    deps = [
+        ":litert_lm_engine_runner",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/functional:any_invocable",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
+        "@com_google_absl//absl/strings:string_view",
+        "//runtime/engine:engine_interface",
+        "//runtime/engine:engine_settings",
+        "//runtime/engine:io_types",
     ],
 )
 

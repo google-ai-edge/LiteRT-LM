@@ -280,6 +280,45 @@ cc_test(
 )
 
 cc_library(
+    name = "lm_engine_decoder",
+    srcs = ["lm_engine_decoder.cc"],
+    hdrs = ["lm_engine_decoder.h"],
+    deps = [
+        ":litert_speech_recognizer",
+        ":speech_recognizer",
+        "@com_google_absl//absl/base:nullability",
+        "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@litert//litert/cc:litert_macros",
+        "@litert//litert/cc:litert_tensor_buffer",
+        "//omni/base:litert_lm_engine_runner",
+        "//runtime/components:model_resources",
+        "//runtime/engine:io_types",
+        "//runtime/proto:token_cc_proto",
+        "//support/tokenizer",
+        "//support/util:convert_tensor_buffer",
+    ],
+)
+
+cc_test(
+    name = "lm_engine_decoder_test",
+    srcs = ["lm_engine_decoder_test.cc"],
+    deps = [
+        ":lm_engine_decoder",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
+        "@litert//litert/cc:litert_tensor_buffer",
+        "//omni/base:litert_lm_engine_runner",
+        "//runtime/components:model_resources",
+        "//runtime/engine:io_types",
+        "//support/util:convert_tensor_buffer",
+    ],
+)
+
+cc_library(
     name = "litert_speech_recognizer",
     srcs = ["litert_speech_recognizer.cc"],
     hdrs = ["litert_speech_recognizer.h"],
@@ -528,6 +567,7 @@ cc_library(
         ":levenshtein_text_merger",
         ":litert_speech_recognizer",
         ":lm_decoder",
+        ":lm_engine_decoder",
         ":log_mel_spectrogram_processor",
         ":stateless_decoder",
         ":tdt_decoder",
@@ -539,6 +579,7 @@ cc_library(
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/types:span",
         "@litert//litert/cc:litert_buffer_ref",
         "@litert//litert/cc:litert_common",
         "@litert//litert/cc:litert_compiled_model",
@@ -548,6 +589,7 @@ cc_library(
         "@litert//litert/cc/options:litert_cpu_options",
         "@litert//litert/cc/options:litert_gpu_options",
         "@litert//litert/cc/options:litert_qualcomm_options",
+        "//omni/base:litert_lm_engine_runner",
         "//omni/base:litert_lm_runner",
         "//omni/base:litert_runner",
         "//omni/base:model_utils",

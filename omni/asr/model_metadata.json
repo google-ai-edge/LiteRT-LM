@@ -67,5 +67,25 @@
       "normType": "whisper"
     },
     "decodeSkipUntilTokenId": 151704
+  },
+  "tinygemma-asr": {
+    "modelRemoteUrl": "https://huggingface.co/litert-community/TinyGemma-ASR/resolve/main/tiny_gemma_asr_5s_i8.litertlm",
+    "inputMilliseconds": 5000,
+    "decodeStartTokenId": 2,
+    "decodeStopTokenId": 1,
+    "logMelSpectro": {
+      "nFFT": 512,
+      "nMels": 128,
+      "nFrames": 500,
+      "fftLength": 1024,
+      "inputScale": 32768,
+      "preemphasis": 0.97,
+      "melLowHz": 125,
+      "melHighHz": 7500,
+      "melFloor": 1e-6,
+      "normalizeMel": true,
+      "addFloorToMelBeforeLog": false,
+      "transpose": true
+    }
   }
 }

@@ -26,6 +26,7 @@
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "omni/base/litert_lm_engine_runner.h"
 #include "omni/base/litert_lm_runner.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/llm_executor_io_types.h"
@@ -151,6 +152,19 @@ absl::StatusOr<CompiledModel> CreateCompiledModelForStatefulRunner(
 // returns
 // - Unique pointer to LiteRtLmRunner on success, or error status on failure.
 absl::StatusOr<std::unique_ptr<LiteRtLmRunner>> CreateLmRunner(
+    Environment& env, const ModelOptions& options,
+    absl::string_view model_filename);
+
+// Creates a LiteRtLmEngineRunner backed by litert::lm::Engine.
+//
+// args
+// - env: LiteRT environment instance.
+// - options: ModelOptions containing model directory, cache_dir, backend, etc.
+// - model_filename: Model file name to load.
+//
+// returns
+// - Unique pointer to LiteRtLmEngineRunner on success, or error status.
+absl::StatusOr<std::unique_ptr<LiteRtLmEngineRunner>> CreateLmEngineRunner(
     Environment& env, const ModelOptions& options,
     absl::string_view model_filename);
 

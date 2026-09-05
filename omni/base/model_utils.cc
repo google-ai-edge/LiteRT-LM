@@ -14,6 +14,7 @@
 
 #include "omni/base/model_utils.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>  // NOLINT: Required for path manipulation.
@@ -46,19 +47,25 @@
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/cc/options/litert_cpu_options.h"  // from @litert
 #include "litert/cc/options/litert_gpu_options.h"  // from @litert
+#include "omni/base/litert_lm_engine_runner.h"
 #include "omni/base/litert_lm_runner.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/components/model_resources_litert_lm.h"
 #include "runtime/components/model_resources_task.h"
+#include "runtime/engine/engine.h"
+#include "runtime/engine/engine_factory.h"
+#include "runtime/engine/engine_settings.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/llm_litert_compiled_model_executor_factory.h"
+#include "runtime/proto/token.pb.h"
 #include "runtime/util/file_format_util.h"
 #include "runtime/util/litert_lm_loader.h"
 #include "runtime/util/model_asset_bundle_resources.h"
 #include "runtime/util/scoped_file.h"
+#include "support/tokenizer/tokenizer.h"
 #include "support/util/convert_tensor_buffer.h"
 
 namespace litert::omni {
@@ -310,6 +317,105 @@ absl::StatusOr<std::unique_ptr<LiteRtLmRunner>> CreateLmRunner(
                               executor_settings, env, *model_resources));
   return std::make_unique<LiteRtLmRunnerImpl>(std::move(executor),
                                               std::move(model_resources));
+}
+
+absl::StatusOr<std::unique_ptr<LiteRtLmEngineRunner>> CreateLmEngineRunner(
+    Environment& env, const ModelOptions& options,
+    absl::string_view model_filename) {
+  std::string path = JoinPath(options.model_dir, model_filename);
+  ABSL_RETURN_IF_ERROR(CheckFileReadable(path));
+  ABSL_ASSIGN_OR_RETURN(auto scoped_file, lm::ScopedFile::Open(path));
+  auto shared_scoped_file =
+      std::make_shared<lm::ScopedFile>(std::move(scoped_file));
+  ABSL_ASSIGN_OR_RETURN(auto model_assets,
+                        lm::ModelAssets::Create(shared_scoped_file));
+  ABSL_ASSIGN_OR_RETURN(auto engine_settings,
+                        lm::EngineSettings::CreateDefault(
+                            std::move(model_assets), options.backend,
+                            /*vision_backend=*/std::nullopt,
+                            /*audio_backend=*/options.backend));
+  if (options.backend == lm::Backend::CPU && options.num_threads > 0) {
+    lm::CpuConfig cpu_config;
+    cpu_config.number_of_threads = options.num_threads;
+    engine_settings.GetMutableMainExecutorSettings().SetBackendConfig(
+        cpu_config);
+  }
+  if (!options.cache_dir.empty()) {
+    engine_settings.GetMutableMainExecutorSettings().SetCacheDir(
+        options.cache_dir);
+    if (engine_settings.GetMutableAudioExecutorSettings().has_value()) {
+      engine_settings.GetMutableAudioExecutorSettings()->SetCacheDir(
+          options.cache_dir);
+    }
+  }
+  ABSL_ASSIGN_OR_RETURN(auto model_resources,
+                        CreateModelResources(path, shared_scoped_file));
+  ABSL_ASSIGN_OR_RETURN(auto engine, lm::EngineFactory::CreateDefault(
+                                         std::move(engine_settings)));
+
+  auto tok_status = model_resources->GetTokenizer();
+  support::Tokenizer* tokenizer =
+      (tok_status.ok() && *tok_status != nullptr)
+          ? tok_status->get()
+          : &const_cast<support::Tokenizer&>(engine->GetTokenizer());
+
+  int stop_token_id = -1;
+  auto metadata_status = model_resources->GetLlmMetadata();
+  if (metadata_status.ok() && *metadata_status != nullptr) {
+    for (const auto& stop_token : (*metadata_status)->stop_tokens()) {
+      if (stop_token.has_token_ids() && !stop_token.token_ids().ids().empty()) {
+        stop_token_id = stop_token.token_ids().ids(0);
+        break;
+      } else if (stop_token.has_token_str()) {
+        auto id = tokenizer->TokenToId(stop_token.token_str());
+        if (id.ok()) {
+          stop_token_id = *id;
+          break;
+        }
+      }
+    }
+  }
+  if (stop_token_id < 0) {
+    auto id = tokenizer->TokenToId("<eos>");
+    if (id.ok()) {
+      stop_token_id = *id;
+    }
+  }
+
+  lm::SessionConfig session_config = lm::SessionConfig::CreateDefault();
+  session_config.SetApplyPromptTemplateInSession(false);
+  session_config.SetAudioModalityEnabled(true);
+  if (stop_token_id >= 0) {
+    session_config.GetMutableStopTokenIds().push_back({stop_token_id});
+  }
+  if (metadata_status.ok() && *metadata_status != nullptr) {
+    for (const auto& stop_token : (*metadata_status)->stop_tokens()) {
+      if (stop_token.has_token_ids() && !stop_token.token_ids().ids().empty()) {
+        std::vector<int> ids(stop_token.token_ids().ids().begin(),
+                             stop_token.token_ids().ids().end());
+        if (std::find(session_config.GetMutableStopTokenIds().begin(),
+                      session_config.GetMutableStopTokenIds().end(),
+                      ids) == session_config.GetMutableStopTokenIds().end()) {
+          session_config.GetMutableStopTokenIds().push_back(std::move(ids));
+        }
+      } else if (stop_token.has_token_str()) {
+        auto id = tokenizer->TokenToId(stop_token.token_str());
+        if (id.ok()) {
+          std::vector<int> ids{*id};
+          if (std::find(session_config.GetMutableStopTokenIds().begin(),
+                        session_config.GetMutableStopTokenIds().end(),
+                        ids) == session_config.GetMutableStopTokenIds().end()) {
+            session_config.GetMutableStopTokenIds().push_back(std::move(ids));
+          }
+        }
+      }
+    }
+  }
+  ABSL_ASSIGN_OR_RETURN(auto session, engine->CreateSession(session_config));
+
+  return std::make_unique<LiteRtLmEngineRunnerImpl>(
+      std::move(engine), std::move(session), session_config,
+      std::move(model_resources));
 }
 
 absl::StatusOr<size_t> ResolveInputIndex(const CompiledModel& model,

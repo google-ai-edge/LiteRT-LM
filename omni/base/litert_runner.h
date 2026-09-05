@@ -15,6 +15,7 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_OMNI_BASE_LITERT_RUNNER_H_
 #define THIRD_PARTY_ODML_LITERT_LM_OMNI_BASE_LITERT_RUNNER_H_
 
+#include <cstddef>
 #include <memory>
 #include <vector>
 
@@ -66,6 +67,28 @@ class LiteRtRunnerImpl : public LiteRtRunner {
  private:
   std::unique_ptr<CompiledModel> owned_compiled_model_;
   CompiledModel* const absl_nonnull compiled_model_;
+};
+
+// Passthrough implementation of LiteRtRunner that copies input tensors directly
+// to output tensors.
+class PassthroughRunner : public LiteRtRunner {
+ public:
+  explicit PassthroughRunner(std::vector<size_t> buffer_sizes_bytes);
+
+  ~PassthroughRunner() override = default;
+
+  absl::StatusOr<std::vector<TensorBuffer>> CreateInputBuffers(
+      absl::string_view signature_name) override;
+
+  absl::StatusOr<std::vector<TensorBuffer>> CreateOutputBuffers(
+      absl::string_view signature_name) override;
+
+  absl::Status Run(absl::string_view signature_name,
+                   absl::Span<const TensorBuffer> input_buffers,
+                   absl::Span<const TensorBuffer> output_buffers) override;
+
+ private:
+  std::vector<size_t> buffer_sizes_bytes_;
 };
 
 }  // namespace litert::omni
