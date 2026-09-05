@@ -121,6 +121,7 @@ cc_library(
         "//c:conversation.h",
         "//c:embedding_engine.h",
         "//c:engine.h",
+        "//c:experimental.h",
         "//c:model_info.h",
     ],
     aspect_hints = [":CLiteRTLM_swift_hint"],
@@ -149,6 +150,7 @@ apple_xcframework(
         "//c:engine.h",
         "//c:conversation.h",
         "//c:embedding_engine.h",
+        "//c:experimental.h",
         "//c:model_info.h",
     ],
     deps = [
@@ -186,6 +188,7 @@ genrule(
         "//c:engine.h",
         "//c:conversation.h",
         "//c:embedding_engine.h",
+        "//c:experimental.h",
         "//c:model_info.h",
     ],
     outs = ["CLiteRTLM_mac.zip"],
@@ -197,6 +200,7 @@ genrule(
        cp $(location //c:engine.h) CLiteRTLM_mac/Headers/
        cp $(location //c:conversation.h) CLiteRTLM_mac/Headers/
        cp $(location //c:embedding_engine.h) CLiteRTLM_mac/Headers/
+       cp $(location //c:experimental.h) CLiteRTLM_mac/Headers/
        cp $(location //c:model_info.h) CLiteRTLM_mac/Headers/
        # Create module map
        cat << 'EOF' > CLiteRTLM_mac/Headers/module.modulemap
@@ -204,6 +208,7 @@ module CLiteRTLM {
    header "engine.h"
    header "conversation.h"
    header "embedding_engine.h"
+   header "experimental.h"
    header "model_info.h"
    export *
 }
