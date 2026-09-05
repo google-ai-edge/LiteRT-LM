@@ -96,6 +96,10 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
           advanced_settings.gpu_enable_metal_residency_set);
 #else   // !__APPLE__
       gpu_compilation_options.SetPreferTextureWeights(true);
+      // Force BUFFER storage to avoid ml_drift IMAGE_2D vs linear-read
+      // incompatibility on Adreno/OpenCL when GPU composite ops are used.
+      gpu_compilation_options.SetBufferStorageType(
+          GpuOptions::BufferStorageType::kBuffer);
 #endif  // !__APPLE__
 
       auto model_scoped_file =
