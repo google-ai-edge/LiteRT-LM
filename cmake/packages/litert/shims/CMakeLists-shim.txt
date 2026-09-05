@@ -70,7 +70,7 @@ endif()
 # Options
 option(LITERT_BUILD_TESTS "Build LiteRT tests" OFF)
 option(LITERT_AUTO_BUILD_TFLITE "Automatically build TFLite if not found" ON)
-option(LITERT_ENABLE_GPU "Enable GPU acceleration support" ON)
+option(LITERT_ENABLE_GPU "Enable GPU acceleration support" OFF)
 option(LITERT_ENABLE_NPU "Enable NPU acceleration support" ON)
 option(LITERT_DISABLE_KLEIDIAI "Disable KleidiAI delegate when bundling host TFLite (default ON for Linux/macOS x86_64 hosts)" ${_litert_disable_kleidiai_default})
 

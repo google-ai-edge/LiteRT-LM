@@ -63,9 +63,28 @@ if(NOT DEFINED CMAKE_ANDROID_STL_TYPE)
     set(CMAKE_ANDROID_STL_TYPE "${ANDROID_STL}" CACHE STRING "Target Android STL (Native)")
 endif()
 
-if(NOT DEFINED CMAKE_ANDROID_NDK)
-    set(CMAKE_ANDROID_NDK "${_LITERTLM_NDK_ROOT}" CACHE PATH "Path to the Android NDK (Native)")
+# ==============================================================================
+# Resolve NDK Path (CMake Arg -> Env Var -> Fatal Error)
+# ==============================================================================
+if(DEFINED CMAKE_ANDROID_NDK)
+    set(_LITERTLM_RESOLVED_NDK "${CMAKE_ANDROID_NDK}")
+elseif(DEFINED ANDROID_NDK_ROOT)
+    set(_LITERTLM_RESOLVED_NDK "${ANDROID_NDK_ROOT}")
+elseif(DEFINED ENV{ANDROID_NDK_HOME})
+    set(_LITERTLM_RESOLVED_NDK "$ENV{ANDROID_NDK_HOME}")
+elseif(DEFINED ENV{ANDROID_NDK_ROOT})
+    set(_LITERTLM_RESOLVED_NDK "$ENV{ANDROID_NDK_ROOT}")
+else()
+    message(FATAL_ERROR "[LiteRTLM] NDK path not found.
+    Please pass -DANDROID_NDK_ROOT=/path/to/ndk or set ANDROID_NDK_HOME in your environment.")
 endif()
+
+# Normalize the path for CMake
+file(TO_CMAKE_PATH "${_LITERTLM_RESOLVED_NDK}" _LITERTLM_RESOLVED_NDK)
+
+# Set both variables that Android/CMake care about
+set(ANDROID_NDK_ROOT "${_LITERTLM_RESOLVED_NDK}" CACHE PATH "Path to the Android NDK")
+set(CMAKE_ANDROID_NDK "${_LITERTLM_RESOLVED_NDK}" CACHE PATH "Path to the Android NDK (Native)")
 
 set(_REAL_NDK_TOOLCHAIN "${ANDROID_NDK_ROOT}/build/cmake/android.toolchain.cmake")
 

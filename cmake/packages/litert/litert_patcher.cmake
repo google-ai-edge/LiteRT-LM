@@ -48,6 +48,11 @@ patch_file_content("${ROOT_LIST}"
     "# Add TFLite as a subdirectory\nif(FALSE)"
     FALSE
 )
+patch_file_content("${ROOT_LIST}" 
+    "CMAKE_CROSSCOMPILING"
+    "FALSE"
+    FALSE
+)
 
 patch_file_content("${ROOT_LIST}"
     "add_subdirectory(compiler_plugin)"
@@ -147,14 +152,6 @@ patch_file_content("${LITERTLM_LITERT_SRC_DIR}/cc/internal/litert_runtime_builti
     FALSE
 )
 
-
-# file(READ "${LITERTLM_LITERT_PACKAGE_DIR}/shims/litert_cc_options_shim.cmake" litert_cc_options_shim_CONTENT)
-# patch_file_content("${LITERTLM_LITERT_SRC_DIR}/cc/options/CMakeLists.txt"
-#     "cmake_minimum_required\\(VERSION 3.20\\).*"
-#     "${LITERTLM_litert_cc_options_shim_CONTENT}"
-#     TRUE
-# )
-
 set(GPU_INJECTION_STR
     "\${LITERTLM_TFLITE_SOURCE_DIR}/delegates/gpu/cl/gl_interop.cc
     \${LITERTLM_TFLITE_SOURCE_DIR}/delegates/gpu/common/convert.cc
@@ -175,10 +172,18 @@ set(GPU_INJECTION_STR
     \${LITERTLM_TFLITE_SOURCE_DIR}/delegates/gpu/cl/util.cc
     \${LITERTLM_TFLITE_SOURCE_DIR}/delegates/gpu/api.cc
     \${LITERTLM_TFLITE_SOURCE_DIR}/delegates/gpu/cl/cl_kernel.cc)"
-)
+    )
+
+
 patch_file_content("${LITERTLM_LITERT_SRC_DIR}/c/CMakeLists.txt"
     "\${LITERTLM_TFLITE_SOURCE_DIR}/delegates/gpu/cl/gl_interop.cc)"
     "${GPU_INJECTION_STR}"
+    FALSE
+)
+
+patch_file_content("${LITERTLM_LITERT_SRC_DIR}/c/CMakeLists.txt"
+    "if(LITERT_PLATFORM_ANDROID)"
+    "if(LITERT_PLATFORM_ANDROID AND LITERT_ENABLE_GPU)"
     FALSE
 )
 
