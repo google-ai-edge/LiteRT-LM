@@ -102,7 +102,7 @@ absl::StatusOr<std::string> GetFileCacheIdentifier(absl::string_view path) {
   static absl::NoDestructor<absl::Mutex> cached_identifiers_mutex;
   std::string path_str(path);
   {
-    absl::MutexLock lock(cached_identifiers_mutex.get());
+    absl::MutexLock lock(*cached_identifiers_mutex.get());
     if (auto it = cached_identifiers->find(path_str);
         it != cached_identifiers->end()) {
       return it->second;
@@ -139,7 +139,7 @@ absl::StatusOr<std::string> GetFileCacheIdentifier(absl::string_view path) {
 
   std::string identifier = absl::StrCat(seconds, "_", size);
   {
-    absl::MutexLock lock(cached_identifiers_mutex.get());
+    absl::MutexLock lock(*cached_identifiers_mutex.get());
     (*cached_identifiers)[path_str] = identifier;
   }
   return identifier;
