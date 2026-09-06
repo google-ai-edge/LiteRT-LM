@@ -69,6 +69,12 @@ and
 
 `latest.release` can be used to get the latest release.
 
+The published packages are built with a current Kotlin release, so the consuming
+project needs a matching Kotlin Gradle plugin: `litertlm-android` 0.17.0 carries
+Kotlin metadata 2.4.0 and needs Kotlin 2.4 or newer (a 2.2.x compiler stops with
+`The actual metadata version is 2.4.0, but the compiler version 2.2.0 can read
+versions up to 2.3.0`); 0.16.1 needed Kotlin 2.2.
+
 ### 2. Initialize the Engine
 
 The `Engine` is the entry point to the API. Initialize it with the model path
