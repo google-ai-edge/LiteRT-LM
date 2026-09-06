@@ -538,7 +538,99 @@ class TestableLlmLiteRtCompiledModelExecutorStatic
     testable->sampler_ = std::move(sampler);
     testable->sampler_handles_input_ = true;
   }
+
+  static const std::optional<proto::SamplerParameters>&
+  SamplerParamsInUseForTest(LlmLiteRtCompiledModelExecutorStatic* executor) {
+    return static_cast<TestableLlmLiteRtCompiledModelExecutorStatic*>(executor)
+        ->sampler_params_in_use_;
+  }
 };
+
+// A second context with different sampler params must not keep sampling with
+// the sampler the first context built (github.com/google-ai-edge/LiteRT-LM
+// issue #2080): the executor caches one sampler, and before this check a
+// stochastic session opened after a greedy one on the same engine stayed
+// greedy for the engine's whole lifetime.
+TEST(LlmLiteRtCompiledModelExecutorStaticTest,
+     SamplerFollowsActiveContextParams) {
+  auto model_path =
+      std::filesystem::path(::testing::SrcDir()) / kTestStaticModelPath;
+  ASSERT_OK_AND_ASSIGN(
+      auto model_resources,
+      CreateExecutorModelResourcesLitertLm(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(model_path.string()));
+  auto executor_settings =
+      LlmExecutorSettings::CreateDefault(model_assets, Backend::CPU);
+  executor_settings->SetCacheDir(":nocache");
+  executor_settings->SetMaxNumTokens(kMaxNumTokens);
+  ::litert::lm::CpuConfig config;
+  config.number_of_threads = kNumThreads;
+  executor_settings->SetBackendConfig(config);
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  ASSERT_OK_AND_ASSIGN(auto executor,
+                       LlmLiteRtCompiledModelExecutorStatic::Create(
+                           *executor_settings, env, *model_resources));
+  ASSERT_NE(executor, nullptr);
+
+  proto::SamplerParameters greedy;
+  greedy.set_type(proto::SamplerParameters::TOP_P);
+  greedy.set_k(1);
+  greedy.set_p(0.0f);
+  greedy.set_temperature(1.0f);
+  greedy.set_seed(1);
+  proto::SamplerParameters stochastic = greedy;
+  stochastic.set_k(40);
+  stochastic.set_p(0.95f);
+  stochastic.set_temperature(1.5f);
+  stochastic.set_seed(7);
+
+  auto run_context = [&](const proto::SamplerParameters& params) {
+    RuntimeConfig runtime_config;
+    runtime_config.sampler_params = params;
+    ASSERT_OK_AND_ASSIGN(
+        auto context, executor->CreateNewContext(std::nullopt, runtime_config));
+    ASSERT_OK(executor->RestoreContext(std::move(context)));
+    const std::vector<int> input_tokens = {1, 2, 0};
+    LITERT_ASSERT_OK_AND_ASSIGN(
+        auto input_tokens_buffer,
+        CopyToTensorBuffer<int>(absl::MakeSpan(input_tokens), {1, 3}));
+    ExecutorInputs inputs;
+    inputs.SetTextData(ExecutorTextData(std::move(input_tokens_buffer)));
+    ASSERT_OK(executor->Prefill(inputs));
+    ASSERT_OK(executor->Decode().status());
+  };
+  auto params_in_use = [&]() -> proto::SamplerParameters {
+    const auto& in_use =
+        TestableLlmLiteRtCompiledModelExecutorStatic::SamplerParamsInUseForTest(
+            executor.get());
+    EXPECT_TRUE(in_use.has_value());
+    return in_use.value_or(proto::SamplerParameters());
+  };
+
+  // First session: greedy. The sampler is built from this context's params.
+  run_context(greedy);
+  EXPECT_EQ(params_in_use().k(), 1);
+  EXPECT_FLOAT_EQ(params_in_use().temperature(), 1.0f);
+  EXPECT_EQ(params_in_use().seed(), 1);
+
+  // Second session on the same engine asks for stochastic sampling: the
+  // sampler must be rebuilt from the new context's params. (The rebuilt
+  // sampler may well land at the freed sampler's address, so the params it
+  // was built with are the observable, not the pointer.)
+  run_context(stochastic);
+  EXPECT_EQ(params_in_use().k(), 40);
+  EXPECT_FLOAT_EQ(params_in_use().p(), 0.95f);
+  EXPECT_FLOAT_EQ(params_in_use().temperature(), 1.5f);
+  EXPECT_EQ(params_in_use().seed(), 7);
+
+  // And back: a greedy session after a stochastic one is greedy again.
+  run_context(greedy);
+  EXPECT_EQ(params_in_use().k(), 1);
+  EXPECT_FLOAT_EQ(params_in_use().temperature(), 1.0f);
+  EXPECT_EQ(params_in_use().seed(), 1);
+}
 
 TEST(LlmLiteRtCompiledModelExecutorStaticTest,
      SamplerInputHandlingMultiTurnTest) {

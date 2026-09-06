@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <functional>
@@ -88,6 +89,22 @@ using ::absl::Span;
 constexpr absl::string_view kPrefillSignatureRunner = "prefill";
 constexpr absl::string_view kDecodeSignatureRunner = "decode";
 constexpr int kDynamicDimValue = -1;
+
+// Field-wise equality for the sampler parameters the executor cares about.
+// Comparing fields rather than the serialized proto keeps this independent of
+// unknown-field / lite-runtime differences. Floats compare by value with NaN
+// equal to NaN: the sampler factory accepts NaN, and an IEEE `==` would make
+// such a config look "changed" on every step and rebuild the sampler each
+// time.
+bool SameFloat(float a, float b) {
+  return a == b || (std::isnan(a) && std::isnan(b));
+}
+
+bool SameSamplerParams(const proto::SamplerParameters& a,
+                       const proto::SamplerParameters& b) {
+  return a.type() == b.type() && a.k() == b.k() && SameFloat(a.p(), b.p()) &&
+         SameFloat(a.temperature(), b.temperature()) && a.seed() == b.seed();
+}
 
 absl::StatusOr<bool> HasDynamicDim(const CompiledModel& compiled_model,
                                    absl::string_view signature,
@@ -1479,8 +1496,31 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::RestoreContext(
 
 absl::Status LlmLiteRtCompiledModelExecutorBase::InitializeSampler(
     std::optional<ActivationDataType> logits_data_type) {
+  proto::SamplerParameters sampler_params;
+  if (llm_context_->runtime_config().sampler_params.has_value()) {
+    sampler_params = llm_context_->runtime_config().sampler_params.value();
+  }
+  if (sampler_params.type() == proto::SamplerParameters::TYPE_UNSPECIFIED) {
+    sampler_params.set_type(proto::SamplerParameters::TOP_P);
+    sampler_params.set_k(1);
+    sampler_params.set_p(0.0f);
+    sampler_params.set_temperature(1.0f);
+    sampler_params.set_seed(0);
+  }
   if (sampler_ != nullptr) {
-    return absl::OkStatus();
+    // A sampler installed from outside (tests, subclasses) has no recorded
+    // params; leave it alone. One we built ourselves is kept only while the
+    // active context still asks for the same sampling.
+    if (!sampler_params_in_use_.has_value() ||
+        SameSamplerParams(*sampler_params_in_use_, sampler_params)) {
+      return absl::OkStatus();
+    }
+    // The active context asks for different sampling than the sampler was
+    // built with -- typically a second session on the same engine. Rebuild
+    // rather than UpdateConfig(): the CPU sampler's UpdateConfig() leaves the
+    // random engine (and so the seed) untouched, and not every GPU sampler
+    // library exports UpdateConfig at all.
+    sampler_.reset();
   }
 
   // Use the provided activation data type if available, otherwise fallback to
@@ -1494,24 +1534,13 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::InitializeSampler(
   if (llm_context_->runtime_config().output_heads.has_value()) {
     output_heads = llm_context_->runtime_config().output_heads.value();
   }
-  proto::SamplerParameters sampler_params;
-  if (llm_context_->runtime_config().sampler_params.has_value()) {
-    sampler_params = llm_context_->runtime_config().sampler_params.value();
-  }
-  if (sampler_params.type() == proto::SamplerParameters::TYPE_UNSPECIFIED) {
-    sampler_params.set_type(proto::SamplerParameters::TOP_P);
-    sampler_params.set_k(1);
-    sampler_params.set_p(0.0f);
-    sampler_params.set_temperature(1.0f);
-    sampler_params.set_seed(0);
-  }
 
   gpu_sampler_max_top_k_ = sampler_params.k();
 
   ABSL_ASSIGN_OR_RETURN(
-      sampler_,
-      CreateSampler(sampler_backend, output_heads, std::move(sampler_params),
-                    env_, /*sequence_size=*/1, vocab_size, data_type));
+      sampler_, CreateSampler(sampler_backend, output_heads, sampler_params,
+                              env_, /*sequence_size=*/1, vocab_size, data_type));
+  sampler_params_in_use_ = std::move(sampler_params);
 
   // Disable GPU token copy for models that run embedding on the GPU.
   const bool runs_embedding_on_gpu = (embedding_lookup_ == nullptr);
@@ -1595,21 +1624,21 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::SetSamplerInputHandling(
 
 absl::Status LlmLiteRtCompiledModelExecutorBase::SampleLogits(
     const TensorBuffer& logits, TensorBuffer& ids_tensor) {
-  if (sampler_ == nullptr) {
-    LITERT_ASSIGN_OR_RETURN(auto logits_tensor_type, logits.TensorType());
-    ActivationDataType logits_data_type;
-    if (logits_tensor_type.ElementType() == ElementType::Float16) {
-      logits_data_type = ActivationDataType::FLOAT16;
-    } else if (logits_tensor_type.ElementType() == ElementType::Float32) {
-      logits_data_type = ActivationDataType::FLOAT32;
-    } else {
-      return absl::InvalidArgumentError(
-          absl::StrCat("Unsupported logits data type for sampler: ",
-                       static_cast<int>(logits_tensor_type.ElementType())));
-    }
-
-    ABSL_RETURN_IF_ERROR(InitializeSampler(logits_data_type));
+  // Always consult InitializeSampler(): it is a no-op while the active
+  // context's sampler params match the ones the sampler was built with, and
+  // rebuilds the sampler when a new context (session) changed them.
+  LITERT_ASSIGN_OR_RETURN(auto logits_tensor_type, logits.TensorType());
+  ActivationDataType logits_data_type;
+  if (logits_tensor_type.ElementType() == ElementType::Float16) {
+    logits_data_type = ActivationDataType::FLOAT16;
+  } else if (logits_tensor_type.ElementType() == ElementType::Float32) {
+    logits_data_type = ActivationDataType::FLOAT32;
+  } else {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Unsupported logits data type for sampler: ",
+                     static_cast<int>(logits_tensor_type.ElementType())));
   }
+  ABSL_RETURN_IF_ERROR(InitializeSampler(logits_data_type));
 
   if (sampler_handles_input_) {
     ABSL_RETURN_IF_ERROR(SwapSamplerInputTensors());
