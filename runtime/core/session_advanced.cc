@@ -41,6 +41,7 @@
 #include "runtime/engine/io_types.h"
 #include "runtime/framework/resource_management/execution_manager.h"
 #include "runtime/proto/sampler_params.pb.h"
+#include "runtime/util/perfetto_profiling.h"
 #include "runtime/util/status_macros.h"  // IWYU pragma: keep
 #include "support/tokenizer/tokenizer.h"
 
@@ -79,6 +80,7 @@ absl::StatusOr<std::unique_ptr<SessionAdvanced>> SessionAdvanced::Create(
 
 absl::Status SessionAdvanced::RunPrefill(
     const std::vector<InputData>& contents) {
+  LITERT_LM_PERFETTO_TRACE_EVENT("SessionAdvanced::RunPrefill");
   absl::Status status = absl::OkStatus();
   ABSL_ASSIGN_OR_RETURN(
       auto task_controller,
@@ -93,6 +95,7 @@ absl::StatusOr<std::unique_ptr<TaskController>>
 SessionAdvanced::RunPrefillAsync(
     const std::vector<InputData>& contents,
     absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback) {
+  LITERT_LM_PERFETTO_TRACE_EVENT("SessionAdvanced::RunPrefillAsync");
   if (contents.empty()) {
     return absl::InvalidArgumentError("Input is empty.");
   }
@@ -170,6 +173,7 @@ absl::StatusOr<Responses> SessionAdvanced::RunDecode() {
 
 absl::StatusOr<Responses> SessionAdvanced::RunDecode(
     const DecodeConfig& decode_config) {
+  LITERT_LM_PERFETTO_TRACE_EVENT("SessionAdvanced::RunDecode");
   auto execution_manager_lock = execution_manager_.lock();
   if (execution_manager_lock == nullptr) {
     return absl::FailedPreconditionError("Execution manager is not available.");
@@ -253,6 +257,7 @@ absl::StatusOr<std::unique_ptr<TaskController>> SessionAdvanced::RunDecodeAsync(
 absl::StatusOr<std::unique_ptr<TaskController>> SessionAdvanced::RunDecodeAsync(
     absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback,
     const DecodeConfig& decode_config) {
+  LITERT_LM_PERFETTO_TRACE_EVENT("SessionAdvanced::RunDecodeAsync");
   absl::MutexLock lock(mutex_);
   if (session_state_ != SessionState::kPrefilled) {
     return absl::InternalError("Session is not prefilled yet.");
