@@ -228,7 +228,7 @@ litert::Expected<litert::Options> CreateLiteRtCpuOptions(
 
 // Creates LiteRT options for NPU accelerator.
 litert::Expected<litert::Options> CreateLiteRtNpuOptions(
-    const LlmExecutorSettings& settings);
+    const LlmExecutorSettings& settings, bool is_dynamic_model = false);
 
 // Formats the first N elements of a span as a comma-separated list inside
 // brackets, e.g., "[1, 2, 3, ...]".
@@ -420,13 +420,13 @@ struct NpuAuxiliaryContext {
 
   static absl::StatusOr<NpuAuxiliaryContext> Create(
       ::litert::Environment& env, const litert::Model& npu_auxiliary_model,
-      const LlmExecutorSettings& settings);
+      const LlmExecutorSettings& settings, bool is_dynamic_model = false);
 };
 
 // Creates the context for the NPU auxiliary model.
 absl::StatusOr<NpuAuxiliaryContext> CreateNpuAuxiliaryContext(
     ::litert::Environment& env, const litert::Model& npu_auxiliary_model,
-    const LlmExecutorSettings& settings);
+    const LlmExecutorSettings& settings, bool is_dynamic_model = false);
 
 // Holds the context for the drafter model.
 struct DrafterContext {

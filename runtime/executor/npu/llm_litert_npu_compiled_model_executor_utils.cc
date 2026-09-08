@@ -415,7 +415,7 @@ litert::Expected<litert::Options> CreateLiteRtCpuOptions(
 
 // Creates LiteRT options for NPU accelerator.
 litert::Expected<litert::Options> CreateLiteRtNpuOptions(
-    const LlmExecutorSettings& settings) {
+    const LlmExecutorSettings& settings, bool is_dynamic_model) {
   LITERT_ASSIGN_OR_RETURN(auto options, ::litert::Options::Create());
   options.SetHardwareAccelerators(litert::HwAccelerators::kNpu |
                                   litert::HwAccelerators::kCpu);
@@ -427,11 +427,17 @@ litert::Expected<litert::Options> CreateLiteRtNpuOptions(
   qnn_opts.SetLogLevel(::litert::qualcomm::QualcommOptions::LogLevel::kOff);
   qnn_opts.SetHtpPerformanceMode(
       ::litert::qualcomm::QualcommOptions::HtpPerformanceMode::kBurst);
-  LITERT_ASSIGN_OR_RETURN(
-      auto& google_tensor_opts,
-      options.GetOptions<::litert::google_tensor::GoogleTensorOptions>());
-  google_tensor_opts.SetPerformanceMode(
-      ::litert::google_tensor::GoogleTensorOptions::PerformanceMode::kBurst);
+  // Dynamic models embed fine-grained EdgetpuMemoryPowerState directives
+  // directly in the graph bytecode. Setting PerformanceMode here causes
+  // SouthBound to reject execution due to mutual exclusivity (Cannot mix
+  // PerformanceMode with EdgetpuMemoryPowerState).
+  if (!is_dynamic_model) {
+    LITERT_ASSIGN_OR_RETURN(
+        auto& google_tensor_opts,
+        options.GetOptions<::litert::google_tensor::GoogleTensorOptions>());
+    google_tensor_opts.SetPerformanceMode(
+        ::litert::google_tensor::GoogleTensorOptions::PerformanceMode::kBurst);
+  }
 #endif
   return options;
 }
@@ -608,8 +614,9 @@ std::ostream& operator<<(std::ostream& os, const LatencyStats& stats) {
 
 absl::StatusOr<NpuAuxiliaryContext> NpuAuxiliaryContext::Create(
     ::litert::Environment& env, const litert::Model& npu_auxiliary_model,
-    const LlmExecutorSettings& settings) {
-  LITERT_ASSIGN_OR_RETURN(auto options, CreateLiteRtNpuOptions(settings));
+    const LlmExecutorSettings& settings, bool is_dynamic_model) {
+  LITERT_ASSIGN_OR_RETURN(auto options,
+                          CreateLiteRtNpuOptions(settings, is_dynamic_model));
   LITERT_ASSIGN_OR_RETURN(
       CompiledModel npu_auxiliary_compiled_model,
       CompiledModelWrapper::Create(env, npu_auxiliary_model.Get(), options));
@@ -618,8 +625,9 @@ absl::StatusOr<NpuAuxiliaryContext> NpuAuxiliaryContext::Create(
 
 absl::StatusOr<NpuAuxiliaryContext> CreateNpuAuxiliaryContext(
     ::litert::Environment& env, const litert::Model& npu_auxiliary_model,
-    const LlmExecutorSettings& settings) {
-  return NpuAuxiliaryContext::Create(env, npu_auxiliary_model, settings);
+    const LlmExecutorSettings& settings, bool is_dynamic_model) {
+  return NpuAuxiliaryContext::Create(env, npu_auxiliary_model, settings,
+                                     is_dynamic_model);
 }
 
 absl::StatusOr<DrafterContext> DrafterContext::Create(

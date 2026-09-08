@@ -558,13 +558,14 @@ absl::StatusOr<NpuMask> NpuMask::Create(
     LITERT_ASSIGN_OR_RETURN(
         auto input_names,
         npu_auxiliary_compiled_model->GetSignatureInputNames(signature));
-    if (absl::c_find(input_names, MaskSignatures::kMaskInputValidMask) !=
-        input_names.end()) {
-      LITERT_ASSIGN_OR_RETURN(
-          in_buffers[MaskSignatures::kMaskInputValidMask],
-          npu_auxiliary_compiled_model->CreateInputBuffer(
-              signature, MaskSignatures::kMaskInputValidMask));
-      in_buffers[MaskSignatures::kMaskInputValidMask].Clear();
+    for (const auto& name : input_names) {
+      if (name == MaskSignatures::kMaskLocalContextLength ||
+          name == MaskSignatures::kMaskGlobalContextLength) {
+        LITERT_ASSIGN_OR_RETURN(
+            in_buffers[name],
+            npu_auxiliary_compiled_model->CreateInputBuffer(signature, name));
+        in_buffers[name].Clear();
+      }
     }
 
     LITERT_ASSIGN_OR_RETURN(

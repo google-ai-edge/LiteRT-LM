@@ -24,6 +24,24 @@ package(
 licenses(["notice"])
 
 cc_library(
+    name = "llm_litert_npu_dynamism",
+    srcs = ["llm_litert_npu_dynamism.cc"],
+    hdrs = ["llm_litert_npu_dynamism.h"],
+    deps = [
+        ":llm_litert_npu_mask",
+        "@com_google_absl//absl/log:absl_log",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@litert//litert/cc:litert_compiled_model",
+        "@litert//litert/cc:litert_layout",
+        "@litert//litert/cc:litert_macros",
+        "@litert//litert/cc:litert_model",
+        "@litert//litert/cc:litert_ranked_tensor_type",
+    ],
+)
+
+cc_library(
     name = "llm_litert_npu_compiled_model_executor_utils",
     srcs = ["llm_litert_npu_compiled_model_executor_utils.cc"],
     hdrs = ["llm_litert_npu_compiled_model_executor_utils.h"],
