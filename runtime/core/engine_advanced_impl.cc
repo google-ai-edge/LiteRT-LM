@@ -27,6 +27,7 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/time/clock.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
+#include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/model_resources.h"
 #include "runtime/core/session_advanced.h"
 #include "runtime/engine/engine.h"
@@ -38,6 +39,7 @@
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/executor/llm_executor.h"
+#include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/llm_litert_compiled_model_executor_factory.h"
 #include "runtime/executor/model_signature_utils.h"
@@ -191,6 +193,11 @@ class EngineAdvancedImpl : public Engine {
       bool enable_metal_residency_set) override {
     return execution_manager_->UpdateGpuEnableMetalResidencySet(
         enable_metal_residency_set);
+  }
+
+  absl::StatusOr<ExecutorAudioData> EncodeAudio(
+      const ::litert::TensorBuffer& spectrogram_tensor) override {
+    return execution_manager_->EncodeAudio(spectrogram_tensor);
   }
 
  private:

@@ -29,6 +29,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
+#include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/constrained_decoding/constraint.h"
 #include "runtime/components/constrained_decoding/no_repeat_ngram_config.h"
 #include "runtime/components/constrained_decoding/repetition_penalty_config.h"
@@ -37,6 +38,7 @@
 #include "runtime/components/stop_token_detector.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
+#include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/framework/resource_management/context_handler/context_handler.h"
 
 namespace litert::lm {
@@ -263,6 +265,16 @@ class ExecutionManager {
   // Returns the audio executor properties.
   virtual absl::StatusOr<AudioExecutorProperties> GetAudioExecutorProperties()
       const = 0;
+
+  // Synchronously encodes an audio spectrogram tensor into audio soft tokens.
+  virtual absl::StatusOr<ExecutorAudioData> EncodeAudio(
+      const ::litert::TensorBuffer& spectrogram_tensor) = 0;
+
+  // Synchronously encodes an audio spectrogram tensor into audio soft tokens
+  // within the context of the given session.
+  virtual absl::StatusOr<ExecutorAudioData> EncodeAudio(
+      const SessionInfo& session_info,
+      const ::litert::TensorBuffer& spectrogram_tensor) = 0;
 
   // Returns the vision executor properties.
   virtual absl::StatusOr<VisionExecutorProperties> GetVisionExecutorProperties()

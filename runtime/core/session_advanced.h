@@ -203,6 +203,9 @@ class SessionAdvanced : public SessionInterface {
     return session_info_->session_config;
   }
 
+  absl::StatusOr<ExecutorAudioData> EncodeAudio(
+      const ::litert::TensorBuffer& spectrogram_tensor) override;
+
   // Returns debug info for this session.
   std::optional<SessionDebugInfo> GetSessionDebugInfo() const override;
 

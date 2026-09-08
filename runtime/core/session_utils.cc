@@ -26,7 +26,6 @@
 #include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
-#include "litert/cc/internal/litert_detail.h"  // from @litert
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/util/status_macros.h"  // IWYU pragma: keep
@@ -204,7 +203,7 @@ absl::StatusOr<std::vector<InputData>> PreprocessContents(
                    std::get_if<InputImageEnd>(&content)) {
       preprocessed_contents.emplace_back(InputImageEnd());
     } else if (const auto* input_audio = std::get_if<InputAudio>(&content)) {
-      if (input_audio->IsTensorBuffer()) {
+      if (input_audio->IsTensorBuffer() || input_audio->IsAudioEmbeddings()) {
         ABSL_ASSIGN_OR_RETURN(auto input_audio_copy, input_audio->CreateCopy());
         preprocessed_contents.emplace_back(std::move(input_audio_copy));
       } else {
