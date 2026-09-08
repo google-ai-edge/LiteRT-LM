@@ -56,13 +56,6 @@ int GetSmallestPowerOfTwoGreaterOrEqualTo(int n) {
   return p;
 }
 
-void ApplyPreemphasisInPlace(std::vector<float>& audio, float coeff) {
-  if (audio.size() <= 1) return;
-  for (size_t i = audio.size() - 1; i > 0; --i) {
-    audio[i] = audio[i] - coeff * audio[i - 1];
-  }
-}
-
 std::vector<float> ComputeMean(const std::vector<std::vector<float>>& mel_spec,
                                int n_frames) {
   std::vector<float> result(mel_spec.size(), 0.0f);
@@ -172,10 +165,6 @@ absl::StatusOr<std::vector<float>> LogMelSpectrogramProcessor::Process(
     std::vector<float> raw_speech) {
   if (raw_speech.empty()) {
     return std::vector<float>();
-  }
-
-  if (config_.preemphasis > 0.0f) {
-    ApplyPreemphasisInPlace(raw_speech, config_.preemphasis);
   }
 
   int valid_frames = raw_speech.size() / config_.hop_length;

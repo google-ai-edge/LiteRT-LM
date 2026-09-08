@@ -53,13 +53,14 @@ absl::StatusOr<lm::Responses> LiteRtLmEngineRunnerImpl::Decode(
 }
 
 absl::Status LiteRtLmEngineRunnerImpl::Reset() {
-  auto status = session_->RewindToStep(0);
-  if (!status.ok()) {
-    if (engine_ != nullptr) {
-      ABSL_ASSIGN_OR_RETURN(session_, engine_->CreateSession(session_config_));
-    }
+  if (engine_ != nullptr) {
+    // SessionInterface::RewindToStep(0) only resets the LLM decode step
+    // counter without resetting multimodal audio encoder/adapter/executor state
+    // buffers. Recreate the session to cleanly reset all multimodal state.
+    ABSL_ASSIGN_OR_RETURN(session_, engine_->CreateSession(session_config_));
+    return absl::OkStatus();
   }
-  return absl::OkStatus();
+  return session_->RewindToStep(0);
 }
 
 }  // namespace litert::omni
