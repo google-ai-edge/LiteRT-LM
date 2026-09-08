@@ -81,3 +81,17 @@ cc_binary(
         "//support/preprocessor:image_preprocessor_impl",  # buildcleaner: keep
     ],
 )
+
+cc_library(
+    name = "jni_utils",
+    hdrs = ["jni_utils.h"],
+    copts = ["-fvisibility=hidden"],
+    deps = [
+        "@com_google_absl//absl/log:absl_log",
+    ] + select({
+        "@platforms//os:android": [],
+        "//conditions:default": [
+            "//third_party/java/jdk:jni",
+        ],
+    }),
+)

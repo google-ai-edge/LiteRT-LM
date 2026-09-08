@@ -21,45 +21,48 @@ import java.io.FileOutputStream
 import java.io.IOException
 import java.io.InputStream
 
-/** Helper class for loading the LiteRT-LM native library. */
-internal object NativeLibraryLoader {
-  private const val JNI_LIBNAME = "litertlm_jni"
+/** Helper class for loading native libraries. */
+object NativeLibraryLoader {
+  private const val DEFAULT_JNI_LIBNAME = "litertlm_jni"
   private val DEBUG =
     System.getProperty("com.google.ai.edge.litertlm.NativeLibraryLoader.DEBUG") != null
 
-  fun load() {
-    // 0. Skip loading if loaded already.
-    if (isLoaded()) {
+  fun load(
+    libName: String = DEFAULT_JNI_LIBNAME,
+    packagePath: String = "com/google/ai/edge/litertlm",
+  ) {
+    // 0. Skip loading if loaded already (only checked for default litertlm_jni).
+    if (libName == DEFAULT_JNI_LIBNAME && isLoaded()) {
       log("Skip loading as the native library is loaded already.")
       return
     }
 
     // 1. Try loading from library path. (e.g., for Android)
-    if (tryLoadLibrary(JNI_LIBNAME)) {
-      log("Loaded $JNI_LIBNAME from library path.")
+    if (tryLoadLibrary(libName)) {
+      log("Loaded $libName from library path.")
       return
     }
 
     // For simplicity, the native library extension is ".so" instead of the default ".dylib" on
-    // MacOS since it is the the default cc_binary output for MacOS.
-    val jniLibName = System.mapLibraryName(JNI_LIBNAME).replace(".dylib", ".so")
+    // MacOS since it is the default cc_binary output for MacOS.
+    val jniLibName = System.mapLibraryName(libName).replace(".dylib", ".so")
 
     // 2. Try extracting from JAR (generic path). (e.g., for bazel)
-    val genericResourcePath = "com/google/ai/edge/litertlm/jni/$jniLibName"
+    val genericResourcePath = "$packagePath/jni/$jniLibName"
     if (tryExtractAndLoad(genericResourcePath, jniLibName)) {
-      log("Loaded $JNI_LIBNAME from JAR: $genericResourcePath")
+      log("Loaded $libName from JAR: $genericResourcePath")
       return
     }
 
     // 3. Try extracting from JAR (OS-Arch specific path). (e.g., for multi-platform Maven packages)
-    val osArchResourcePath = "com/google/ai/edge/litertlm/jni/${os()}-${architecture()}/$jniLibName"
+    val osArchResourcePath = "$packagePath/jni/${os()}-${architecture()}/$jniLibName"
     if (tryExtractAndLoad(osArchResourcePath, jniLibName)) {
-      log("Loaded $JNI_LIBNAME from JAR: $osArchResourcePath")
+      log("Loaded $libName from JAR: $osArchResourcePath")
       return
     }
 
     throw UnsatisfiedLinkError(
-      "Failed to load native library $JNI_LIBNAME. Tried system path, $genericResourcePath, and $osArchResourcePath"
+      "Failed to load native library $libName. Tried system path, $genericResourcePath, and $osArchResourcePath"
     )
   }
 
