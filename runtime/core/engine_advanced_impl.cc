@@ -18,6 +18,8 @@
 #include <optional>
 #include <utility>
 
+#include "absl/base/thread_annotations.h"  // from @com_google_absl
+#include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/log/check.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
@@ -25,6 +27,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "absl/time/clock.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "runtime/components/model_resources.h"
@@ -52,6 +55,7 @@
 #include "runtime/util/litert_util.h"
 #include "runtime/util/logging.h"
 #include "runtime/util/status_macros.h"  // NOLINT
+#include "support/tokenizer/tokenizer.h"
 
 #if defined(LITERT_LM_DEBUGGER_ENABLED)
 #include "runtime/util/runtime_debugger.h"
@@ -108,6 +112,10 @@ class EngineAdvancedImpl : public Engine {
 
     execution_manager_.reset();
     owned_env_.reset();
+    {
+      absl::MutexLock lock(tokenizers_mutex_);
+      auxiliary_tokenizers_.clear();
+    }
     tokenizer_.reset();
     litert_model_resources_.reset();
   }
@@ -183,6 +191,32 @@ class EngineAdvancedImpl : public Engine {
 
   const Tokenizer& GetTokenizer() const override { return *tokenizer_; }
 
+  absl::StatusOr<const support::Tokenizer*> GetTokenizer(
+      ModelType model_type) const override {
+    if (model_type == ModelType::kTfLitePrefillDecode) {
+      if (!tokenizer_) {
+        return absl::NotFoundError("Primary tokenizer not initialized.");
+      }
+      return tokenizer_.get();
+    }
+    absl::MutexLock lock(tokenizers_mutex_);
+    auto it = auxiliary_tokenizers_.find(model_type);
+    if (it != auxiliary_tokenizers_.end()) {
+      return it->second.get();
+    }
+    if (!litert_model_resources_) {
+      return absl::FailedPreconditionError(
+          "Model resources are not initialized.");
+    }
+    auto tokenizer_or = litert_model_resources_->GetTokenizer(model_type);
+    if (!tokenizer_or.ok()) {
+      return tokenizer_or.status();
+    }
+    auto [inserted_it, _] =
+        auxiliary_tokenizers_.emplace(model_type, *std::move(tokenizer_or));
+    return inserted_it->second.get();
+  }
+
   absl::StatusOr<AudioExecutorProperties> GetAudioExecutorProperties()
       const override {
     return GetAudioExecutorPropertiesFromModelResources(
@@ -213,6 +247,11 @@ class EngineAdvancedImpl : public Engine {
 
   // Tokenizer shared by all sessions.
   std::unique_ptr<Tokenizer> tokenizer_;
+
+  // Tokenizers mutex to protect lazy loading of auxiliary tokenizers.
+  mutable absl::Mutex tokenizers_mutex_;
+  mutable absl::flat_hash_map<ModelType, std::unique_ptr<Tokenizer>>
+      auxiliary_tokenizers_ ABSL_GUARDED_BY(tokenizers_mutex_);
 
   // Execution manager for the engine. All additional pointers to this object
   // must be weak pointers. The ultimate ownership of this object is in the

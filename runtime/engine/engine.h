@@ -24,8 +24,10 @@
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
+#include "runtime/components/model_resources.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
 #include "support/tokenizer/tokenizer.h"
@@ -373,6 +375,18 @@ class EngineT {
 
   // Get the reference to the tokenizer for the engine.
   virtual const support::Tokenizer& GetTokenizer() const = 0;
+
+  // Get the reference to the tokenizer for the engine for a specific model
+  // type. Defaults to GetTokenizer() for kTfLitePrefillDecode.
+  virtual absl::StatusOr<const support::Tokenizer*> GetTokenizer(
+      ModelType model_type) const {
+    if (model_type == ModelType::kTfLitePrefillDecode) {
+      return &GetTokenizer();
+    }
+    return absl::UnimplementedError(absl::StrCat("GetTokenizer for model type ",
+                                                 ModelTypeToString(model_type),
+                                                 " is not implemented."));
+  }
 
   // Get the audio model properties for the session. This is only available
   // if the engine is created with audio modality enabled.

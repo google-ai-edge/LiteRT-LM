@@ -51,6 +51,7 @@ ENGINE_IMPL_COMMON_DEPS = [
     ":audio_session_advanced",
     ":session_advanced",
     ":cached_session",
+    "@com_google_absl//absl/base:core_headers",
     "@com_google_absl//absl/base:no_destructor",
     "@com_google_absl//absl/log",
     "@com_google_absl//absl/log:absl_check",
@@ -112,6 +113,8 @@ cc_library(
         "//conditions:default": [],
     }),
     deps = ENGINE_IMPL_COMMON_DEPS + [
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/synchronization",
         "//runtime/components:default_static_gpu_samplers",
         "//runtime/executor:default_static_gpu_accelerator",
     ] + select({
@@ -158,6 +161,7 @@ cc_test(
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
+        "//runtime/components:model_resources",
         "//runtime/engine:engine_factory",
         "//runtime/engine:engine_interface",
         "//runtime/engine:engine_settings",

@@ -157,6 +157,11 @@ absl::StatusOr<absl::string_view> ModelResourcesLitertLm::GetTFLiteModelBuffer(
 
 absl::StatusOr<std::unique_ptr<Tokenizer>>
 ModelResourcesLitertLm::GetTokenizer() {
+  return GetTokenizer(ModelType::kTfLitePrefillDecode);
+}
+
+absl::StatusOr<std::unique_ptr<Tokenizer>> ModelResourcesLitertLm::GetTokenizer(
+    ModelType model_type) {
 #if !defined(ENABLE_SENTENCEPIECE_TOKENIZER) && \
     !defined(ENABLE_HUGGINGFACE_TOKENIZER)
   return absl::UnimplementedError(
@@ -164,14 +169,14 @@ ModelResourcesLitertLm::GetTokenizer() {
       "ENABLE_HUGGINGFACE_TOKENIZER are defined during build.");
 #endif  // !ENABLE_SENTENCEPIECE_TOKENIZER && !ENABLE_HUGGINGFACE_TOKENIZER
 
-  auto sp_tokenizer = litert_lm_loader_->GetSentencePieceTokenizer();
+  auto sp_tokenizer = litert_lm_loader_->GetSentencePieceTokenizer(model_type);
 #ifdef ENABLE_SENTENCEPIECE_TOKENIZER
   if (sp_tokenizer) {
     return SentencePieceTokenizer::CreateFromBuffer(sp_tokenizer->StrView());
   }
 #endif  // ENABLE_SENTENCEPIECE_TOKENIZER
 
-  auto hf_tokenizer = litert_lm_loader_->GetHuggingFaceTokenizer();
+  auto hf_tokenizer = litert_lm_loader_->GetHuggingFaceTokenizer(model_type);
 #ifdef ENABLE_HUGGINGFACE_TOKENIZER
   if (hf_tokenizer) {
     std::string json_data(hf_tokenizer->StrData(), hf_tokenizer->Size());
@@ -188,7 +193,9 @@ ModelResourcesLitertLm::GetTokenizer() {
         "HuggingFace tokenizer found, but LiteRT LM was built with "
         "--define=DISABLE_HUGGINGFACE_TOKENIZER=1.");
   } else {
-    return absl::NotFoundError("No tokenizer found in the model.");
+    return absl::NotFoundError(
+        absl::StrCat("No tokenizer found in the model for model type: ",
+                     ModelTypeToString(model_type)));
   }
 }
 
