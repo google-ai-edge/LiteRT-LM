@@ -26,8 +26,9 @@ private func testDataPath(forResource resource: String) -> String {
 class EmbeddingEngineTests: XCTestCase {
 
   private var modelPath: String {
+    // swift-format-ignore
     let modelResource =
-      + "runtime/testdata/test_embedding.litertlm"
+      "runtime/testdata/test_embedding.litertlm"
     return testDataPath(forResource: modelResource)
   }
 
