@@ -28,6 +28,7 @@
 #include "absl/time/clock.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "runtime/components/model_resources.h"
+#include "runtime/core/audio_session_advanced.h"
 #include "runtime/core/session_advanced.h"
 #include "runtime/engine/engine.h"
 #include "runtime/engine/engine_factory.h"
@@ -149,11 +150,18 @@ class EngineAdvancedImpl : public Engine {
           "Model resources are not initialized.");
     }
 
-    ABSL_ASSIGN_OR_RETURN(
-        auto session,
-        SessionAdvanced::Create(execution_manager_, tokenizer_.get(), config,
-                                std::move(session_benchmark_info),
-                                &living_sessions_));
+    std::unique_ptr<SessionAdvanced> session;
+    if (config.EnableAudioSessionAdvanced()) {
+      ABSL_ASSIGN_OR_RETURN(
+          session, AudioSessionAdvanced::Create(
+                       execution_manager_, tokenizer_.get(), config,
+                       std::move(session_benchmark_info), &living_sessions_));
+    } else {
+      ABSL_ASSIGN_OR_RETURN(
+          session, SessionAdvanced::Create(
+                       execution_manager_, tokenizer_.get(), config,
+                       std::move(session_benchmark_info), &living_sessions_));
+    }
 
     if (benchmark_info_.has_value()) {
       auto session_benchmark_info_or = session->GetMutableBenchmarkInfo();
