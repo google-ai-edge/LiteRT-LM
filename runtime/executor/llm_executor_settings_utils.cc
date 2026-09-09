@@ -95,7 +95,6 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
       }
 #if defined(__APPLE__)
       gpu_compilation_options.SetPreferTextureWeights(false);
-      gpu_compilation_options.SetUseMetalArgumentBuffers(true);
       gpu_compilation_options.EnableMetalResidencySet(
           advanced_settings.gpu_enable_metal_residency_set);
 #else   // !__APPLE__
