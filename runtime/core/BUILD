@@ -278,6 +278,7 @@ cc_library(
         "//runtime/framework/resource_management:execution_manager",
         "//runtime/proto:sampler_params_cc_proto",
         "//runtime/util:litert_status_util",
+        "//runtime/util:perfetto_profiling",
         "//support/tokenizer",
     ] + select({
         "//runtime/util:litert_lm_debugger_enabled": [
@@ -418,6 +419,7 @@ cc_library(
         "//runtime/proto:sampler_params_cc",
         "//runtime/util:convert_tensor_buffer",
         "//runtime/util:litert_status_util",
+        "//runtime/util:perfetto_profiling",
         "//support/tokenizer",
         "//support/tokenizer:buffered_streaming_detokenizer",
         "@litert//tflite/types:half",

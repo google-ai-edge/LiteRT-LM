@@ -56,6 +56,7 @@
 #include "runtime/executor/llm_litert_compiled_model_executor.h"
 #include "runtime/proto/sampler_params.pb.h"
 #include "runtime/util/convert_tensor_buffer.h"
+#include "runtime/util/perfetto_profiling.h"
 #include "runtime/util/status_macros.h"  //NOLINT
 #include "support/tokenizer/buffered_streaming_detokenizer.h"
 #include "tflite/types/half.h"  // from @litert
@@ -287,6 +288,7 @@ class DecodeOneStep {
   // For internal sampling, `decoded_ids` is ignored.
   absl::StatusOr<bool> Run(
       std::optional<litert::TensorBuffer> decoded_ids = std::nullopt) {
+    LITERT_LM_PERFETTO_TRACE_EVENT("Tasks::DecodeOneStep::Run");
     ABSL_ASSIGN_OR_RETURN(auto token_ids,
                           DecodeAndSample(std::move(decoded_ids)));
 
@@ -541,6 +543,7 @@ class DecodeOneStep {
 absl::StatusOr<Responses> Prefill(
     LlmExecutor& executor, ExecutorInputs& inputs, bool wait_for_completion,
     std::optional<BenchmarkInfo>& benchmark_info) {
+  LITERT_LM_PERFETTO_TRACE_EVENT("Tasks::Prefill");
   const int max_num_tokens = TryGetMaxNumTokens(executor);
   ABSL_ASSIGN_OR_RETURN(auto text_data, inputs.GetTextDataPtr());
   RET_CHECK(text_data != nullptr) << "text_data must not be null.";
@@ -605,6 +608,7 @@ absl::StatusOr<Responses> Decode(
     const std::vector<int>& thinking_end_token_ids,
     const std::vector<int>& thinking_start_token_ids,
     std::optional<bool> enable_speculative_decoding) {
+  LITERT_LM_PERFETTO_TRACE_EVENT("Tasks::Decode");
   const bool is_streaming = callback != nullptr;
   const bool is_custom_sampling = sampler.has_value();
 
