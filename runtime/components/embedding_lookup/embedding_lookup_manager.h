@@ -69,7 +69,9 @@ class EmbeddingLookupManager {
       bool fully_supports_multi_modal = true,
       std::optional<std::string> signature_key = std::nullopt,
       std::optional<ScopedFile> external_weight_file = std::nullopt,
-      litert::Options::ScopedWeightSectionMap external_weight_sections = {});
+      litert::Options::ScopedWeightSectionMap external_weight_sections = {},
+      const absl::flat_hash_map<std::string, absl::Span<const std::byte>>*
+          weight_in_memory_map = nullptr);
 
   static absl::StatusOr<std::unique_ptr<EmbeddingLookupManager>> Create(
       litert::Environment& env,
@@ -77,7 +79,9 @@ class EmbeddingLookupManager {
       bool fully_supports_multi_modal = true,
       std::optional<std::string> signature_key = std::nullopt,
       std::optional<ScopedFile> external_weight_file = std::nullopt,
-      litert::Options::ScopedWeightSectionMap external_weight_sections = {});
+      litert::Options::ScopedWeightSectionMap external_weight_sections = {},
+      const absl::flat_hash_map<std::string, absl::Span<const std::byte>>*
+          weight_in_memory_map = nullptr);
 
   static absl::StatusOr<std::unique_ptr<EmbeddingLookupManager>> Create(
       litert::Environment& env,
@@ -149,7 +153,9 @@ class EmbeddingLookupManager {
           end_of_multi_modal_embedding_models,
       bool fully_supports_multi_modal, std::optional<std::string> signature_key,
       std::optional<ScopedFile> external_weight_file,
-      litert::Options::ScopedWeightSectionMap external_weight_sections);
+      litert::Options::ScopedWeightSectionMap external_weight_sections,
+      const absl::flat_hash_map<std::string, absl::Span<const std::byte>>*
+          weight_in_memory_map = nullptr);
 
   absl::Status Initialize(
       litert::Environment& env,

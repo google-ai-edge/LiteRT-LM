@@ -24,11 +24,13 @@
 #include <string>
 #include <utility>
 
+#include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/ascii.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_model.h"  // from @litert
 #ifdef ENABLE_HUGGINGFACE_TOKENIZER
 #include "support/tokenizer/huggingface_tokenizer.h"
@@ -225,6 +227,13 @@ class ModelResources {
   virtual absl::StatusOr<const proto::EmbeddingMetadata*>
   GetEmbeddingMetadata() {
     return absl::UnimplementedError("GetEmbeddingMetadata is not implemented.");
+  }
+
+  // Returns in-memory weights for a specific model type if available.
+  // Used by the streaming weights API when running a model on CPU.
+  virtual const absl::flat_hash_map<std::string, absl::Span<const std::byte>>*
+  GetWeightInMemoryMap(ModelType model_type) const {
+    return nullptr;
   }
 };
 

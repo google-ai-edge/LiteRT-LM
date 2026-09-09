@@ -1106,6 +1106,10 @@ absl::StatusOr<ExternalWeightResources> GetExternalWeightResources(
 absl::Status SetExternalWeightOptions(ModelResources& resources,
                                       ModelType model_type,
                                       litert::Options& compilation_options) {
+  if (const auto* weight_map = resources.GetWeightInMemoryMap(model_type);
+      weight_map != nullptr) {
+    compilation_options.SetWeightInMemoryMap(weight_map);
+  }
   ABSL_ASSIGN_OR_RETURN(auto external_weights,
                         GetExternalWeightResources(resources, model_type));
   if (!external_weights.scoped_file.has_value()) {
@@ -1143,20 +1147,35 @@ absl::Status InitializeEmbeddingLookups(
     }
   }
 
+#ifdef __EMSCRIPTEN__
+  extern void SetCurrentlyCompilingModel(ModelType model_type)
+      __attribute__((weak));
+#endif
+
   auto text_embedder_model =
       resources.GetTFLiteModel(ModelType::kTfLiteEmbedder);
   if (text_embedder_model.ok()) {
     ABSL_ASSIGN_OR_RETURN(
         auto external_weights,
         GetExternalWeightResources(resources, ModelType::kTfLiteEmbedder));
-    ABSL_ASSIGN_OR_RETURN(
-        embedding_lookup,
-        EmbeddingLookupManager::Create(env, *text_embedder_model,
-                                       end_of_multi_modal_embedding_models,
-                                       /*fully_supports_multi_modal=*/true,
-                                       /*signature_key=*/std::nullopt,
-                                       std::move(external_weights.scoped_file),
-                                       std::move(external_weights.sections)));
+#ifdef __EMSCRIPTEN__
+    if (SetCurrentlyCompilingModel) {
+      SetCurrentlyCompilingModel(ModelType::kTfLiteEmbedder);
+    }
+#endif
+    auto status_or_embedding_lookup = EmbeddingLookupManager::Create(
+        env, *text_embedder_model, end_of_multi_modal_embedding_models,
+        /*fully_supports_multi_modal=*/true,
+        /*signature_key=*/std::nullopt, std::move(external_weights.scoped_file),
+        std::move(external_weights.sections),
+        resources.GetWeightInMemoryMap(ModelType::kTfLiteEmbedder));
+#ifdef __EMSCRIPTEN__
+    if (SetCurrentlyCompilingModel) {
+      SetCurrentlyCompilingModel(ModelType::kUnknown);
+    }
+#endif
+    ABSL_ASSIGN_OR_RETURN(embedding_lookup,
+                          std::move(status_or_embedding_lookup));
   }
 
   // Create per layer embedding lookups from the resources.
@@ -1166,13 +1185,24 @@ absl::Status InitializeEmbeddingLookups(
     ABSL_ASSIGN_OR_RETURN(auto external_weights,
                           GetExternalWeightResources(
                               resources, ModelType::kTfLitePerLayerEmbedder));
-    ABSL_ASSIGN_OR_RETURN(
-        per_layer_embedding_lookup,
-        EmbeddingLookupManager::Create(env, *per_layer_embedder_model,
-                                       /*fully_supports_multi_modal=*/false,
-                                       /*signature_key=*/std::nullopt,
-                                       std::move(external_weights.scoped_file),
-                                       std::move(external_weights.sections)));
+#ifdef __EMSCRIPTEN__
+    if (SetCurrentlyCompilingModel) {
+      SetCurrentlyCompilingModel(ModelType::kTfLitePerLayerEmbedder);
+    }
+#endif
+    auto status_or_per_layer_embedding_lookup = EmbeddingLookupManager::Create(
+        env, *per_layer_embedder_model,
+        /*fully_supports_multi_modal=*/false,
+        /*signature_key=*/std::nullopt, std::move(external_weights.scoped_file),
+        std::move(external_weights.sections),
+        resources.GetWeightInMemoryMap(ModelType::kTfLitePerLayerEmbedder));
+#ifdef __EMSCRIPTEN__
+    if (SetCurrentlyCompilingModel) {
+      SetCurrentlyCompilingModel(ModelType::kUnknown);
+    }
+#endif
+    ABSL_ASSIGN_OR_RETURN(per_layer_embedding_lookup,
+                          std::move(status_or_per_layer_embedding_lookup));
   }
 
   return absl::OkStatus();

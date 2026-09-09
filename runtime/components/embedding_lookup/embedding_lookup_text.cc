@@ -16,6 +16,7 @@
 
 #include <sys/types.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <memory>
@@ -25,6 +26,7 @@
 #include <vector>
 
 #include "absl/base/nullability.h"  // from @com_google_absl
+#include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
@@ -260,10 +262,12 @@ EmbeddingLookupText::Create(
     litert::Environment& env, const litert::Model* absl_nonnull model,
     std::optional<std::string> signature_key,
     std::optional<ScopedFile> external_weight_file,
-    litert::Options::ScopedWeightSectionMap external_weight_sections) {
+    litert::Options::ScopedWeightSectionMap external_weight_sections,
+    const absl::flat_hash_map<std::string, absl::Span<const std::byte>>*
+        weight_in_memory_map) {
   auto handler = std::unique_ptr<EmbeddingLookupText>(new EmbeddingLookupText(
       env, model, std::move(signature_key), std::move(external_weight_file),
-      std::move(external_weight_sections)));
+      std::move(external_weight_sections), weight_in_memory_map));
   ABSL_RETURN_IF_ERROR(handler->Initialize());
   return handler;
 }
@@ -289,13 +293,6 @@ absl::Status EmbeddingLookupText::Initialize() {
 #if defined(__ANDROID__)
     options.SetHardwareAccelerators(litert::HwAccelerators::kNpu |
                                     litert::HwAccelerators::kCpu);
-#elif defined(__EMSCRIPTEN__)
-    options.SetHardwareAccelerators(litert::HwAccelerators::kGpu |
-                                    litert::HwAccelerators::kCpu);
-    LITERT_ASSIGN_OR_RETURN(auto& gpu_opts,
-                            options.GetOptions<::litert::GpuOptions>());
-    LITERT_RETURN_IF_ERROR(gpu_opts.EnableConstantTensorSharing(true));
-    LITERT_RETURN_IF_ERROR(gpu_opts.SetConvertWeightsOnGpu(true));
 #else
     options.SetHardwareAccelerators(litert::HwAccelerators::kCpu);
 #endif
@@ -305,6 +302,14 @@ absl::Status EmbeddingLookupText::Initialize() {
           *external_weight_file_, std::move(external_weight_sections_));
       if (!res.HasValue()) {
         ABSL_LOG(ERROR) << "  SetExternalWeightScopedFile failed: "
+                        << res.Error().Message();
+        return absl::InternalError(res.Error().Message());
+      }
+    }
+    if (weight_in_memory_map_ != nullptr) {
+      auto res = options.SetWeightInMemoryMap(weight_in_memory_map_);
+      if (!res.HasValue()) {
+        ABSL_LOG(ERROR) << "  SetWeightInMemoryMap failed: "
                         << res.Error().Message();
         return absl::InternalError(res.Error().Message());
       }
