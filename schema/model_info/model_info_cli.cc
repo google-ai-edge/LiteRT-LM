@@ -18,7 +18,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "schema/model_info/model_info.h"
 
-using litert::lm::schema::model_info::GetModelInfo;
+using litert::lm::schema::model_info::InspectModel;
 using litert::lm::schema::model_info::ModelInfo;
 
 int main(int argc, char* argv[]) {
@@ -28,7 +28,7 @@ int main(int argc, char* argv[]) {
   }
 
   std::string model_path = argv[1];
-  absl::StatusOr<ModelInfo> info_or = GetModelInfo(model_path);
+  absl::StatusOr<ModelInfo> info_or = InspectModel(model_path);
   if (!info_or.ok()) {
     std::cerr << "Error inspecting model: " << info_or.status().message()
               << "\n";

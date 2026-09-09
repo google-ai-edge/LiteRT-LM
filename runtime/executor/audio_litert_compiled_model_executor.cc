@@ -259,8 +259,20 @@ AudioLiteRtCompiledModelExecutor::AudioStaticEncoder::Initialize() {
   ABSL_RETURN_IF_ERROR(SetExternalWeightOptions(
       resources_, ModelType::kTfLiteAudioEncoderHw, options));
 
-  LITERT_ASSIGN_OR_RETURN(compiled_model_,
-                          CompiledModel::Create(env_, model_.Get(), options));
+#ifdef __EMSCRIPTEN__
+  extern void SetCurrentlyCompilingModel(ModelType model_type)
+      __attribute__((weak));
+  if (SetCurrentlyCompilingModel) {
+    SetCurrentlyCompilingModel(ModelType::kTfLiteAudioEncoderHw);
+  }
+#endif
+  auto compiled_model_or = CompiledModel::Create(env_, model_.Get(), options);
+#ifdef __EMSCRIPTEN__
+  if (SetCurrentlyCompilingModel) {
+    SetCurrentlyCompilingModel(ModelType::kUnknown);
+  }
+#endif
+  LITERT_ASSIGN_OR_RETURN(compiled_model_, std::move(compiled_model_or));
   LITERT_ASSIGN_OR_RETURN(auto signatures, model_.GetSignatures());
   if (signatures.size() != 1) {
     return absl::InvalidArgumentError(
@@ -395,8 +407,20 @@ AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::Initialize() {
   ABSL_RETURN_IF_ERROR(SetExternalWeightOptions(
       resources_, ModelType::kTfLiteAudioEncoderHw, options));
 
-  LITERT_ASSIGN_OR_RETURN(compiled_model_,
-                          CompiledModel::Create(env_, model_.Get(), options));
+#ifdef __EMSCRIPTEN__
+  extern void SetCurrentlyCompilingModel(ModelType model_type)
+      __attribute__((weak));
+  if (SetCurrentlyCompilingModel) {
+    SetCurrentlyCompilingModel(ModelType::kTfLiteAudioEncoderHw);
+  }
+#endif
+  auto compiled_model_or = CompiledModel::Create(env_, model_.Get(), options);
+#ifdef __EMSCRIPTEN__
+  if (SetCurrentlyCompilingModel) {
+    SetCurrentlyCompilingModel(ModelType::kUnknown);
+  }
+#endif
+  LITERT_ASSIGN_OR_RETURN(compiled_model_, std::move(compiled_model_or));
   LITERT_ASSIGN_OR_RETURN(auto signatures, model_.GetSignatures());
   if (signatures.size() != 1) {
     return absl::InvalidArgumentError(absl::StrCat(
@@ -602,8 +626,20 @@ absl::Status AudioLiteRtCompiledModelExecutor::AudioAdapter::Initialize() {
   ABSL_RETURN_IF_ERROR(SetExternalWeightOptions(
       resources_, ModelType::kTfLiteAudioAdapter, options));
 
-  LITERT_ASSIGN_OR_RETURN(compiled_model_,
-                          CompiledModel::Create(env_, model_.Get(), options));
+#ifdef __EMSCRIPTEN__
+  extern void SetCurrentlyCompilingModel(ModelType model_type)
+      __attribute__((weak));
+  if (SetCurrentlyCompilingModel) {
+    SetCurrentlyCompilingModel(ModelType::kTfLiteAudioAdapter);
+  }
+#endif
+  auto compiled_model_or = CompiledModel::Create(env_, model_.Get(), options);
+#ifdef __EMSCRIPTEN__
+  if (SetCurrentlyCompilingModel) {
+    SetCurrentlyCompilingModel(ModelType::kUnknown);
+  }
+#endif
+  LITERT_ASSIGN_OR_RETURN(compiled_model_, std::move(compiled_model_or));
   LITERT_ASSIGN_OR_RETURN(auto signatures, model_.GetSignatures());
   if (signatures.size() != 1) {
     return absl::InvalidArgumentError(absl::StrCat(
@@ -646,40 +682,50 @@ absl::Status AudioLiteRtCompiledModelExecutor::AudioAdapter::Initialize() {
 absl::StatusOr<std::unique_ptr<AudioLiteRtCompiledModelExecutor>>
 AudioLiteRtCompiledModelExecutor::Create(
     AudioExecutorSettings executor_settings, Environment& env) {
+  LITERT_ASSIGN_OR_RETURN(
+      auto resources,
+      BuildLiteRtCompiledModelResources(executor_settings.GetModelAssets()));
+  ABSL_ASSIGN_OR_RETURN(auto executor,
+                        Create(executor_settings, env, *resources));
+  executor->resources_ = std::move(resources);
+  return executor;
+}
+
+absl::StatusOr<std::unique_ptr<AudioLiteRtCompiledModelExecutor>>
+AudioLiteRtCompiledModelExecutor::Create(
+    AudioExecutorSettings executor_settings, Environment& env,
+    ModelResources& resources) {
   if (executor_settings.GetMaxSequenceLength() > 0) {
     ABSL_VLOG(1) << "Max sequence length is not used for "
                     "AudioLiteRtCompiledModelExecutor, "
                     "which can handle variable length input.";
   }
-  LITERT_ASSIGN_OR_RETURN(
-      auto resources,
-      BuildLiteRtCompiledModelResources(executor_settings.GetModelAssets()));
   ABSL_ASSIGN_OR_RETURN(
       auto audio_encoder_model,
-      resources->GetTFLiteModel(ModelType::kTfLiteAudioEncoderHw));
+      resources.GetTFLiteModel(ModelType::kTfLiteAudioEncoderHw));
   auto audio_adapter_model_or =
-      resources->GetTFLiteModel(ModelType::kTfLiteAudioAdapter);
+      resources.GetTFLiteModel(ModelType::kTfLiteAudioAdapter);
   std::unique_ptr<AudioEncoder> audio_encoder;
   LITERT_ASSIGN_OR_RETURN(auto encoder_signature,
                           audio_encoder_model->GetSignature(0));
   LITERT_ASSIGN_OR_RETURN(
       auto executor_properties,
-      GetAudioExecutorPropertiesFromModelResources(*resources));
+      GetAudioExecutorPropertiesFromModelResources(resources));
   if (executor_properties.is_streaming_model) {
     ABSL_ASSIGN_OR_RETURN(audio_encoder, AudioStreamingEncoder::Create(
                                              executor_settings, env,
-                                             audio_encoder_model, *resources));
+                                             audio_encoder_model, resources));
   } else {
     ABSL_ASSIGN_OR_RETURN(audio_encoder, AudioStaticEncoder::Create(
                                              executor_settings, env,
-                                             audio_encoder_model, *resources));
+                                             audio_encoder_model, resources));
   }
   std::unique_ptr<AudioAdapter> audio_adapter;
   if (audio_adapter_model_or.ok() && *audio_adapter_model_or != nullptr) {
     ABSL_ASSIGN_OR_RETURN(
         audio_adapter,
         AudioAdapter::Create(executor_settings, env, *audio_adapter_model_or,
-                             *resources));
+                             resources));
   } else {
     ABSL_VLOG(1) << "Audio adapter model is not found. Audio encoder output "
                     "will be used directly.";
@@ -787,7 +833,7 @@ AudioLiteRtCompiledModelExecutor::Create(
                << encoder_shrinking_factor;
   return absl::WrapUnique(new AudioLiteRtCompiledModelExecutor(
       std::move(executor_settings), std::move(executor_properties), env,
-      std::move(resources), std::move(audio_encoder), std::move(audio_adapter),
+      /*resources=*/nullptr, std::move(audio_encoder), std::move(audio_adapter),
       sequence_length, spectrogram_feature_dimensions,
       projected_audio_embedding_dimensions, audio_embedding_dimensions,
       encoder_shrinking_factor));
