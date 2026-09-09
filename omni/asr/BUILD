@@ -606,7 +606,7 @@ cc_binary(
     deps = [
         ":asr_engine",
         ":file_audio_source",
-        ":log_mel_spectrogram_processor",
+        ":model_metadata",
         "@com_google_absl//absl/flags:flag",
         "@com_google_absl//absl/flags:parse",
         "@com_google_absl//absl/log:absl_log",
@@ -616,7 +616,62 @@ cc_binary(
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/time",
-        "@nlohmann_json//:json",
         "//runtime/executor:default_static_gpu_accelerator",
+    ],
+)
+
+genrule(
+    name = "model_metadata_embedded_h",
+    srcs = ["model_metadata.json"],
+    outs = ["model_metadata_embedded.h"],
+    cmd = """
+cat << 'EOF' > $@
+#ifndef THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_MODEL_METADATA_EMBEDDED_H_
+#define THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_MODEL_METADATA_EMBEDDED_H_
+
+namespace litert::omni::asr {
+
+inline constexpr char kEmbeddedModelMetadataJson[] = R"json(
+EOF
+cat $< >> $@
+cat << 'EOF' >> $@
+)json";
+
+}  // namespace litert::omni::asr
+
+#endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_ASR_MODEL_METADATA_EMBEDDED_H_
+EOF
+""",
+)
+
+cc_library(
+    name = "model_metadata_embedded",
+    hdrs = ["model_metadata_embedded.h"],
+)
+
+cc_library(
+    name = "model_metadata",
+    srcs = ["model_metadata.cc"],
+    hdrs = ["model_metadata.h"],
+    deps = [
+        ":asr_engine",
+        ":log_mel_spectrogram_processor",
+        ":model_metadata_embedded",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@nlohmann_json//:json",  # TPMonster:discouraged-dependencies
+    ],
+)
+
+cc_test(
+    name = "model_metadata_test",
+    srcs = ["model_metadata_test.cc"],
+    deps = [
+        ":asr_engine",
+        ":model_metadata",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
     ],
 )
