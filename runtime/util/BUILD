@@ -45,6 +45,30 @@ cc_library(
     ],
 )
 
+cc_library(
+    name = "streamed_weights_manager",
+    srcs = ["streamed_weights_manager.cc"],
+    hdrs = ["streamed_weights_manager.h"],
+    deps = [
+        ":data_stream",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/strings",
+        "//runtime/components:model_resources",
+    ],
+)
+
+cc_test(
+    name = "streamed_weights_manager_test",
+    srcs = ["streamed_weights_manager_test.cc"],
+    deps = [
+        ":data_stream",
+        ":streamed_weights_manager",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "//runtime/components:model_resources",
+    ],
+)
+
 cc_test(
     name = "data_stream_test",
     srcs = ["data_stream_test.cc"],
