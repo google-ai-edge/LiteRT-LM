@@ -117,6 +117,8 @@ constexpr char cache_k19[] = "kv_cache_k_19";
 constexpr char cache_v19[] = "kv_cache_v_19";
 constexpr char cache_k23[] = "kv_cache_k_23";
 constexpr char cache_v23[] = "kv_cache_v_23";
+constexpr char cache_k17[] = "kv_cache_k_17";
+constexpr char cache_v17[] = "kv_cache_v_17";
 }  // namespace
 
 LlmLiteRtNpuCompiledModelExecutor::~LlmLiteRtNpuCompiledModelExecutor() {
@@ -1912,36 +1914,22 @@ absl::Status ApplyLegacyKvCacheWorkarounds(
     return absl::OkStatus();
   }
 
-  const bool has_model_type =
-      llm_metadata != nullptr && llm_metadata->has_llm_model_type();
-
-  bool apply_gemma3_fix = false;
-  bool apply_fast_vlm_fix = false;
-
-  if (has_model_type) {
-    apply_gemma3_fix =
-        llm_metadata->llm_model_type().has_gemma3() &&
-        text_decoder_inference_context.prefill_input_buffers.contains(
-            cache_k25);
-    apply_fast_vlm_fix =
-        llm_metadata->llm_model_type().has_fast_vlm() &&
-        text_decoder_inference_context.prefill_input_buffers.contains(
-            cache_k23);
-  } else {
-    // Legacy fallback when LlmModelType metadata is not present:
-    if (text_decoder_inference_context.prefill_input_buffers.contains(
-            cache_k31)) {
-      // For models with 32 layers. Do nothing.
-    } else if (text_decoder_inference_context.prefill_input_buffers.contains(
-                   cache_k25)) {
-      apply_gemma3_fix = true;
-    } else if (text_decoder_inference_context.prefill_input_buffers.contains(
-                   cache_k23)) {
-      apply_fast_vlm_fix = true;
+  // If the model specifies a known model type, only apply workarounds if it is
+  // one of the legacy models that actually requires it.
+  if (llm_metadata != nullptr && llm_metadata->has_llm_model_type()) {
+    const auto& model_type = llm_metadata->llm_model_type();
+    bool needs_workaround =
+        model_type.has_gemma3() || model_type.has_fast_vlm();
+    if (!needs_workaround) {
+      return absl::OkStatus();
     }
   }
 
-  if (apply_gemma3_fix) {
+  if (text_decoder_inference_context.prefill_input_buffers.contains(
+          cache_k31)) {
+    // For models with 32 layers. Do nothing.
+  } else if (text_decoder_inference_context.prefill_input_buffers.contains(
+                 cache_k25)) {
     // Gemma3 specific fix:
     //
     // TODO(b/416702118): Buffers kv_cache_{k,v}_25 have float element type for
@@ -1966,7 +1954,8 @@ absl::Status ApplyLegacyKvCacheWorkarounds(
     LITERT_RETURN_IF_ERROR(FillKVCacheBuffer(buffer_v, kv_cache_init_value));
     text_decoder_inference_context.decode_input_buffers[cache_v25] =
         std::move(buffer_v);
-  } else if (apply_fast_vlm_fix) {
+  } else if (text_decoder_inference_context.prefill_input_buffers.contains(
+                 cache_k23)) {
     // Fast VLM model specific fix:
     ABSL_LOG_IF(INFO, enable_npu_debug_logging)
         << "Applying Fast VLM layer 23 KV cache workaround.";
@@ -1981,6 +1970,23 @@ absl::Status ApplyLegacyKvCacheWorkarounds(
                                 kDecodeSignature, cache_v23));
     LITERT_RETURN_IF_ERROR(FillKVCacheBuffer(buffer_v, kv_cache_init_value));
     text_decoder_inference_context.decode_input_buffers[cache_v23] =
+        std::move(buffer_v);
+  } else if (text_decoder_inference_context.prefill_input_buffers.contains(
+                 cache_k17)) {
+    // Tiny Gemma 270M specific fix:
+    ABSL_LOG_IF(INFO, enable_npu_debug_logging)
+        << "Applying Tiny Gemma layer 17 KV cache workaround.";
+    LITERT_ASSIGN_OR_RETURN(auto buffer_k,
+                            text_decoder_compiled_model.CreateInputBuffer(
+                                kDecodeSignature, cache_k17));
+    LITERT_RETURN_IF_ERROR(FillKVCacheBuffer(buffer_k, kv_cache_init_value));
+    text_decoder_inference_context.decode_input_buffers[cache_k17] =
+        std::move(buffer_k);
+    LITERT_ASSIGN_OR_RETURN(auto buffer_v,
+                            text_decoder_compiled_model.CreateInputBuffer(
+                                kDecodeSignature, cache_v17));
+    LITERT_RETURN_IF_ERROR(FillKVCacheBuffer(buffer_v, kv_cache_init_value));
+    text_decoder_inference_context.decode_input_buffers[cache_v17] =
         std::move(buffer_v);
   }
 
