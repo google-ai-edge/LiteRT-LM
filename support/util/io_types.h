@@ -15,8 +15,6 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_SUPPORT_UTIL_IO_TYPES_H_
 #define THIRD_PARTY_ODML_LITERT_LM_SUPPORT_UTIL_IO_TYPES_H_
 
-#include <cstdint>
-#include <map>
 #include <optional>
 #include <ostream>
 #include <string>
@@ -24,10 +22,10 @@
 #include <variant>
 #include <vector>
 
-#include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
@@ -168,8 +166,14 @@ class InputAudio {
   // processed audio bytes, or a vector of float audio samples. The InputAudio
   // takes ownership of the provided data.
   explicit InputAudio(
-      std::variant<std::string, ::litert::TensorBuffer, std::vector<float>> data)
-      : data_(std::move(data)) {}
+      std::variant<std::string, ::litert::TensorBuffer, std::vector<float>>
+          data)
+      : data_(std::move(data)), is_embeddings_(false) {}
+
+  // Constructs an InputAudio from a TensorBuffer of processed audio bytes or
+  // pre-computed audio embeddings.
+  explicit InputAudio(::litert::TensorBuffer tensor, bool is_embeddings = false)
+      : data_(std::move(tensor)), is_embeddings_(is_embeddings) {}
 
   // Copy constructor.
   InputAudio(const InputAudio& other) = delete;
@@ -190,6 +194,9 @@ class InputAudio {
     return std::holds_alternative<std::vector<float>>(data_);
   }
 
+  // Returns true if the audio is pre-computed audio embeddings.
+  bool IsAudioEmbeddings() const { return is_embeddings_; }
+
   // Returns the raw audio bytes. Returns an error if the audio is preprocessed.
   absl::StatusOr<absl::string_view> GetRawAudioBytes() const;
 
@@ -202,13 +209,15 @@ class InputAudio {
   absl::StatusOr<absl::Span<const float>> GetPcmFrames() const;
 
   // Creates a copy of the InputAudio.
-  // If the audio is preprocessed, the copy will be a TensorBuffer shallow copy.
-  // If the data is a `std::vector<float>`, a deep copy of the vector is made.
-  // Otherwise (if it's a string), the copy will be a string byte deep copy.
+  // If the audio is preprocessed or embeddings, the copy will be a TensorBuffer
+  // shallow copy. If the data is a `std::vector<float>`, a deep copy of the
+  // vector is made. Otherwise (if it's a string), the copy will be a string
+  // byte deep copy.
   absl::StatusOr<InputAudio> CreateCopy() const;
 
  private:
   std::variant<std::string, ::litert::TensorBuffer, std::vector<float>> data_;
+  bool is_embeddings_ = false;
 };
 
 inline std::ostream& operator<<(std::ostream& os,

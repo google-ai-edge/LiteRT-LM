@@ -344,7 +344,6 @@ cc_library(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
-        "@litert//litert/cc/internal:litert_detail",
         "//runtime/engine:engine_settings",
         "//runtime/engine:io_types",
         "//runtime/util:litert_status_util",
