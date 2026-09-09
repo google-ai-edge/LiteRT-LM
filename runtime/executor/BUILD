@@ -594,6 +594,7 @@ cc_library(
         "//runtime/executor/npu:llm_litert_npu_kv_cache",
         "//runtime/executor/npu:llm_litert_npu_mask",
         "//runtime/executor/npu:llm_litert_npu_rope",
+        "//runtime/proto:llm_model_type_cc_proto",
         "//runtime/util:convert_tensor_buffer",
         "//runtime/util:litert_status_util",
         "//runtime/util:tensor_buffer_util",
