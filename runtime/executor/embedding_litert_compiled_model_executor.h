@@ -39,6 +39,21 @@
 namespace litert::lm {
 
 // The EmbeddingLiteRtCompiledModelExecutor runs the two-stage embedding
+struct CompiledTextEncoderInfo {
+  std::unique_ptr<litert::CompiledModel> compiled_model;
+  std::vector<int> expected_input_dimension;
+  int embedding_dimension;
+  // Sorted map from input sequence length to signature index. Sorted order is
+  // required to use lower_bound() to select the smallest signature bucket that
+  // fits a given input token length.
+  std::map<int, size_t> encoder_signatures;
+  absl::flat_hash_map<size_t, std::vector<litert::TensorBuffer>>
+      input_buffers_cache;
+  absl::flat_hash_map<size_t, std::vector<litert::TensorBuffer>>
+      output_buffers_cache;
+};
+
+// EmbeddingLiteRtCompiledModelExecutor implements a two-stage embedding
 // pipeline:
 // Stage 1 (EMBEDDER): Maps token IDs + multimodal soft tokens to sequence
 // embedding vectors (`[batch, seq_len, embed_dim]`) using
@@ -48,11 +63,25 @@ namespace litert::lm {
 // embedding vector (`[batch, output_dim]`).
 class EmbeddingLiteRtCompiledModelExecutor : public EmbeddingExecutorBase {
  public:
+  // Compiles the text encoder model from the given resources.
+  static absl::StatusOr<CompiledTextEncoderInfo> CompileTextEncoder(
+      const EmbeddingExecutorSettings& executor_settings,
+      litert::Environment& env, ModelResources& resources);
+
   // Creates an EmbeddingLiteRtCompiledModelExecutor from the given settings,
   // LiteRT environment, and model resources.
   static absl::StatusOr<std::unique_ptr<EmbeddingLiteRtCompiledModelExecutor>>
   Create(EmbeddingExecutorSettings executor_settings, litert::Environment& env,
          std::unique_ptr<ModelResources> resources);
+
+  // Creates an EmbeddingLiteRtCompiledModelExecutor with pre-compiled
+  // components.
+  static absl::StatusOr<std::unique_ptr<EmbeddingLiteRtCompiledModelExecutor>>
+  Create(EmbeddingExecutorSettings executor_settings, litert::Environment& env,
+         std::unique_ptr<ModelResources> resources,
+         std::unique_ptr<EmbeddingLookupManager> embedding_lookup,
+         std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup,
+         CompiledTextEncoderInfo compiled_text_encoder_info);
 
   // Creates an EmbeddingLiteRtCompiledModelExecutor from the given settings and
   // LiteRT environment.

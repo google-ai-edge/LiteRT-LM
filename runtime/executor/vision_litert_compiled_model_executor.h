@@ -50,6 +50,12 @@ class VisionLiteRtCompiledModelExecutor : public VisionExecutor {
   Create(const VisionExecutorSettings& vision_executor_settings,
          Environment& env);
 
+  // Creates a VisionLiteRtCompiledModelExecutor from the given
+  // VisionExecutorSettings and ModelResources.
+  static absl::StatusOr<std::unique_ptr<VisionLiteRtCompiledModelExecutor>>
+  Create(const VisionExecutorSettings& vision_executor_settings,
+         Environment& env, ModelResources& resources);
+
   // Encodes the input image tensor into vision embeddings.
   // Args:
   //   - input_image_tensor: The input image tensor to encode.

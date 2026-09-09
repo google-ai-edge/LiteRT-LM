@@ -83,6 +83,19 @@ class AudioLiteRtCompiledModelExecutor : public AudioExecutor {
   static absl::StatusOr<std::unique_ptr<AudioLiteRtCompiledModelExecutor>>
   Create(AudioExecutorSettings executor_settings, Environment& env);
 
+  // Create an AudioLiteRtCompiledModelExecutor to encode the spectrogram
+  // LiteRT TensorBuffer into audio embeddings LiteRT TensorBuffer.
+  // Args:
+  //   - executor_settings: The audio executor settings.
+  //   - env: The LiteRT environment.
+  //   - resources: The model resources.
+  // Returns:
+  //   A unique pointer to the AudioLiteRtCompiledModelExecutor if successful,
+  //   or an error status if failed.
+  static absl::StatusOr<std::unique_ptr<AudioLiteRtCompiledModelExecutor>>
+  Create(AudioExecutorSettings executor_settings, Environment& env,
+         ModelResources& resources);
+
   // Run the audio encoder and audio adapter models to encode the spectrogram
   // tensor into audio embeddings. It is caller's responsibility to ensure the
   // spectrogram tensor is valid and has the correct shape. It is assumed that

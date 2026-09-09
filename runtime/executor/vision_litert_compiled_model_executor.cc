@@ -294,8 +294,20 @@ absl::Status VisionLiteRtCompiledModelExecutor::VisionEncoder::Initialize(
         runtime_options.SetSelectedSignatures(selected_signatures));
   }
 
-  LITERT_ASSIGN_OR_RETURN(compiled_model_,
-                          CompiledModel::Create(env_, model_.Get(), options));
+#ifdef __EMSCRIPTEN__
+  extern void SetCurrentlyCompilingModel(ModelType model_type)
+      __attribute__((weak));
+  if (SetCurrentlyCompilingModel) {
+    SetCurrentlyCompilingModel(ModelType::kTfLiteVisionEncoder);
+  }
+#endif
+  auto compiled_model_or = CompiledModel::Create(env_, model_.Get(), options);
+#ifdef __EMSCRIPTEN__
+  if (SetCurrentlyCompilingModel) {
+    SetCurrentlyCompilingModel(ModelType::kUnknown);
+  }
+#endif
+  LITERT_ASSIGN_OR_RETURN(compiled_model_, std::move(compiled_model_or));
   if (model_.GetNumSignatures() == 1) {
     // A single signature encoder(non-ViT model + single input LFM2-VL)
     // uses a single buffer encode path, so buffers must be created in advance,
@@ -398,8 +410,20 @@ absl::Status VisionLiteRtCompiledModelExecutor::VisionAdapter::Initialize(
         runtime_options.SetSelectedSignatures(adapter_selected_signatures));
   }
 
-  LITERT_ASSIGN_OR_RETURN(compiled_model_,
-                          CompiledModel::Create(env_, model_.Get(), options));
+#ifdef __EMSCRIPTEN__
+  extern void SetCurrentlyCompilingModel(ModelType model_type)
+      __attribute__((weak));
+  if (SetCurrentlyCompilingModel) {
+    SetCurrentlyCompilingModel(ModelType::kTfLiteVisionAdapter);
+  }
+#endif
+  auto compiled_model_or = CompiledModel::Create(env_, model_.Get(), options);
+#ifdef __EMSCRIPTEN__
+  if (SetCurrentlyCompilingModel) {
+    SetCurrentlyCompilingModel(ModelType::kUnknown);
+  }
+#endif
+  LITERT_ASSIGN_OR_RETURN(compiled_model_, std::move(compiled_model_or));
   // For single-signature models that use signature 0 by default, create
   // input buffers at initialization time. For multi-signature models like ViT,
   // input buffers are created on-demand in `Encode` for the selected signature.
@@ -422,32 +446,29 @@ absl::Status VisionLiteRtCompiledModelExecutor::VisionAdapter::Initialize(
 
 absl::StatusOr<std::unique_ptr<VisionLiteRtCompiledModelExecutor>>
 litert::lm::VisionLiteRtCompiledModelExecutor::Create(
-    const VisionExecutorSettings& vision_executor_settings, Environment& env) {
-  LITERT_ASSIGN_OR_RETURN(auto resources,
-                          BuildLiteRtCompiledModelResources(
-                              vision_executor_settings.GetModelAssets()));
-
+    const VisionExecutorSettings& vision_executor_settings, Environment& env,
+    ModelResources& resources) {
   ABSL_ASSIGN_OR_RETURN(
       auto vision_encoder_model,
-      resources->GetTFLiteModel(ModelType::kTfLiteVisionEncoder));
+      resources.GetTFLiteModel(ModelType::kTfLiteVisionEncoder));
   if (!vision_encoder_model) {
     return absl::InternalError("Failed to build LiteRt encoder model.");
   }
   // Vision adapter is optional.
   auto vision_adapter_model =
-      resources->GetTFLiteModel(ModelType::kTfLiteVisionAdapter);
+      resources.GetTFLiteModel(ModelType::kTfLiteVisionAdapter);
   if (!vision_adapter_model.ok() &&
       vision_adapter_model.status().code() != absl::StatusCode::kNotFound) {
     return vision_adapter_model.status();
   }
   ABSL_ASSIGN_OR_RETURN(
       auto vision_executor_properties,
-      GetVisionExecutorPropertiesFromModelResources(*resources.get()));
+      GetVisionExecutorPropertiesFromModelResources(resources));
 
   ABSL_ASSIGN_OR_RETURN(
       auto vision_encoder,
       VisionEncoder::Create(env, vision_encoder_model, vision_executor_settings,
-                            vision_executor_properties, *resources));
+                            vision_executor_properties, resources));
 
   std::unique_ptr<VisionAdapter> vision_adapter;
   if (vision_adapter_model.ok()) {
@@ -455,7 +476,7 @@ litert::lm::VisionLiteRtCompiledModelExecutor::Create(
         vision_adapter,
         VisionAdapter::Create(env, *vision_adapter_model,
                               vision_executor_settings,
-                              vision_executor_properties, *resources));
+                              vision_executor_properties, resources));
   }
 
   LITERT_ASSIGN_OR_RETURN(auto tensor_type,
@@ -476,9 +497,21 @@ litert::lm::VisionLiteRtCompiledModelExecutor::Create(
       std::vector<int>(dimensions.begin(), dimensions.end());
 
   return absl::WrapUnique(new VisionLiteRtCompiledModelExecutor(
-      vision_executor_settings, env, std::move(resources),
+      vision_executor_settings, env, /*resources=*/nullptr,
       std::move(vision_encoder), std::move(vision_adapter),
       expected_input_dimension, vision_executor_properties));
+}
+
+absl::StatusOr<std::unique_ptr<VisionLiteRtCompiledModelExecutor>>
+litert::lm::VisionLiteRtCompiledModelExecutor::Create(
+    const VisionExecutorSettings& vision_executor_settings, Environment& env) {
+  LITERT_ASSIGN_OR_RETURN(auto resources,
+                          BuildLiteRtCompiledModelResources(
+                              vision_executor_settings.GetModelAssets()));
+  ABSL_ASSIGN_OR_RETURN(auto executor,
+                        Create(vision_executor_settings, env, *resources));
+  executor->resources_ = std::move(resources);
+  return executor;
 }
 
 absl::StatusOr<ExecutorVisionData> VisionLiteRtCompiledModelExecutor::Encode(

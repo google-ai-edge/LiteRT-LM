@@ -170,24 +170,13 @@ absl::StatusOr<std::map<int, size_t>> GetTextEncoderSignatureMap(
 }  // namespace
 
 // static
-absl::StatusOr<std::unique_ptr<EmbeddingLiteRtCompiledModelExecutor>>
-EmbeddingLiteRtCompiledModelExecutor::Create(
-    EmbeddingExecutorSettings executor_settings, Environment& env,
-    std::unique_ptr<ModelResources> resources) {
-  RET_CHECK_NE(resources, nullptr) << "ModelResources is null.";
-
-  std::unique_ptr<EmbeddingLookupManager> embedding_lookup;
-  std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup;
-  ABSL_RETURN_IF_ERROR(InitializeEmbeddingLookups(
-      env, *resources, embedding_lookup, per_layer_embedding_lookup));
-  if (embedding_lookup == nullptr) {
-    return absl::NotFoundError(
-        "kTfLiteEmbedder model not found in resources for embedding.");
-  }
-
+absl::StatusOr<CompiledTextEncoderInfo>
+EmbeddingLiteRtCompiledModelExecutor::CompileTextEncoder(
+    const EmbeddingExecutorSettings& executor_settings, Environment& env,
+    ModelResources& resources) {
   ABSL_ASSIGN_OR_RETURN(
       auto text_encoder_model,
-      resources->GetTFLiteModel(ModelType::kTfLiteTextEncoder));
+      resources.GetTFLiteModel(ModelType::kTfLiteTextEncoder));
   RET_CHECK_NE(text_encoder_model, nullptr) << "TEXT_ENCODER model is null.";
 
   litert::Options options;
@@ -248,7 +237,7 @@ EmbeddingLiteRtCompiledModelExecutor::Create(
                        GetBackendString(executor_settings.GetBackend())));
   }
   ABSL_RETURN_IF_ERROR(SetExternalWeightOptions(
-      *resources, ModelType::kTfLiteTextEncoder, options));
+      resources, ModelType::kTfLiteTextEncoder, options));
 
   if (!executor_settings.GetSelectedSignatures().empty()) {
     std::vector<absl::string_view> selected_signatures;
@@ -262,9 +251,22 @@ EmbeddingLiteRtCompiledModelExecutor::Create(
         runtime_options.SetSelectedSignatures(selected_signatures));
   }
 
-  LITERT_ASSIGN_OR_RETURN(
-      auto compiled_model,
-      CompiledModelWrapper::Create(env, text_encoder_model->Get(), options));
+#ifdef __EMSCRIPTEN__
+  extern void SetCurrentlyCompilingModel(ModelType model_type)
+      __attribute__((weak));
+  if (SetCurrentlyCompilingModel) {
+    SetCurrentlyCompilingModel(ModelType::kTfLiteTextEncoder);
+  }
+#endif
+  auto compiled_model_status_or =
+      CompiledModelWrapper::Create(env, text_encoder_model->Get(), options);
+#ifdef __EMSCRIPTEN__
+  if (SetCurrentlyCompilingModel) {
+    SetCurrentlyCompilingModel(ModelType::kUnknown);
+  }
+#endif
+  LITERT_ASSIGN_OR_RETURN(auto compiled_model,
+                          std::move(compiled_model_status_or));
   auto compiled_model_ptr =
       std::make_unique<litert::CompiledModel>(std::move(compiled_model));
 
@@ -315,12 +317,63 @@ EmbeddingLiteRtCompiledModelExecutor::Create(
     output_buffers_cache[signature_index] = std::move(output_buffers);
   }
 
+  CompiledTextEncoderInfo info;
+  info.compiled_model = std::move(compiled_model_ptr);
+  info.expected_input_dimension = std::move(expected_input_dimension);
+  info.embedding_dimension = embedding_dimension;
+  info.encoder_signatures = std::move(encoder_signatures);
+  info.input_buffers_cache = std::move(input_buffers_cache);
+  info.output_buffers_cache = std::move(output_buffers_cache);
+  return info;
+}
+
+// static
+absl::StatusOr<std::unique_ptr<EmbeddingLiteRtCompiledModelExecutor>>
+EmbeddingLiteRtCompiledModelExecutor::Create(
+    EmbeddingExecutorSettings executor_settings, Environment& env,
+    std::unique_ptr<ModelResources> resources) {
+  RET_CHECK_NE(resources, nullptr) << "ModelResources is null.";
+
+  std::unique_ptr<EmbeddingLookupManager> embedding_lookup;
+  std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup;
+  ABSL_RETURN_IF_ERROR(InitializeEmbeddingLookups(
+      env, *resources, embedding_lookup, per_layer_embedding_lookup));
+  if (embedding_lookup == nullptr) {
+    return absl::NotFoundError(
+        "kTfLiteEmbedder model not found in resources for embedding.");
+  }
+
+  ABSL_ASSIGN_OR_RETURN(auto compiled_text_encoder_info,
+                        CompileTextEncoder(executor_settings, env, *resources));
+
+  return Create(std::move(executor_settings), env, std::move(resources),
+                std::move(embedding_lookup),
+                std::move(per_layer_embedding_lookup),
+                std::move(compiled_text_encoder_info));
+}
+
+// static
+absl::StatusOr<std::unique_ptr<EmbeddingLiteRtCompiledModelExecutor>>
+EmbeddingLiteRtCompiledModelExecutor::Create(
+    EmbeddingExecutorSettings executor_settings, Environment& env,
+    std::unique_ptr<ModelResources> resources,
+    std::unique_ptr<EmbeddingLookupManager> embedding_lookup,
+    std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup,
+    CompiledTextEncoderInfo compiled_text_encoder_info) {
+  if (embedding_lookup == nullptr) {
+    return absl::NotFoundError(
+        "kTfLiteEmbedder model not found in resources for embedding.");
+  }
+
   return absl::WrapUnique(new EmbeddingLiteRtCompiledModelExecutor(
       std::move(executor_settings), env, std::move(resources),
       std::move(embedding_lookup), std::move(per_layer_embedding_lookup),
-      std::move(compiled_model_ptr), std::move(expected_input_dimension),
-      embedding_dimension, std::move(encoder_signatures),
-      std::move(input_buffers_cache), std::move(output_buffers_cache)));
+      std::move(compiled_text_encoder_info.compiled_model),
+      std::move(compiled_text_encoder_info.expected_input_dimension),
+      compiled_text_encoder_info.embedding_dimension,
+      std::move(compiled_text_encoder_info.encoder_signatures),
+      std::move(compiled_text_encoder_info.input_buffers_cache),
+      std::move(compiled_text_encoder_info.output_buffers_cache)));
 }
 
 // static
@@ -337,9 +390,6 @@ absl::StatusOr<std::vector<float>>
 EmbeddingLiteRtCompiledModelExecutor::RunEncoderForTokens(
     absl::Span<const int32_t> tokens) {
   ScopedLatency scoped_total_latency(latency_stats_);
-  ABSL_ASSIGN_OR_RETURN(
-      auto text_encoder_model,
-      resources_->GetTFLiteModel(ModelType::kTfLiteTextEncoder));
 
   // Find the smallest signature larger than or equal to the input size.
   auto it = encoder_signatures_.lower_bound(tokens.size());
@@ -366,10 +416,9 @@ EmbeddingLiteRtCompiledModelExecutor::RunEncoderForTokens(
     output_buffers_cache_[signature_index] = std::move(output_buffers);
   }
   auto& output_buffers = output_buffers_cache_[signature_index];
-  LITERT_ASSIGN_OR_RETURN(auto sig,
-                          text_encoder_model->GetSignature(signature_index));
-
-  auto input_names = sig.InputNames();
+  LITERT_ASSIGN_OR_RETURN(
+      auto input_names,
+      compiled_model_->GetSignatureInputNames(signature_index));
 
   size_t embeddings_buffer_index = 0;
   std::optional<size_t> input_mask_buffer_index;
