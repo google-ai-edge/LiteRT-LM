@@ -294,6 +294,25 @@ cc_library(
 )
 
 cc_library(
+    name = "tool_utils",
+    srcs = ["tool_utils.cc"],
+    hdrs = ["tool_utils.h"],
+    deps = [
+        "@nlohmann_json//:json",
+    ],
+)
+
+cc_test(
+    name = "tool_utils_test",
+    srcs = ["tool_utils_test.cc"],
+    deps = [
+        ":tool_utils",
+        "@com_google_googletest//:gtest_main",
+        "@nlohmann_json//:json",
+    ],
+)
+
+cc_library(
     name = "llguidance_schema_utils",
     srcs = [
         "llg_fc_tool_calls.cc",
@@ -308,6 +327,7 @@ cc_library(
         "llguidance_schema_utils.h",
     ],
     deps = [
+        ":tool_utils",
         "@com_google_absl//absl/functional:any_invocable",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",

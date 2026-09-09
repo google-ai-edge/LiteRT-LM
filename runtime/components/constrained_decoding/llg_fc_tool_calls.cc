@@ -25,6 +25,7 @@
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "runtime/components/constrained_decoding/llg_tool_call_utils.h"
 #include "runtime/components/constrained_decoding/llguidance_schema_utils.h"
+#include "runtime/components/constrained_decoding/tool_utils.h"
 
 namespace litert::lm {
 namespace {
@@ -43,6 +44,19 @@ std::string GenerateFcValueRule(const nlohmann::ordered_json& prop_schema,
     }
     if (!enum_vals.empty()) {
       return absl::StrFormat("(%s)", absl::StrJoin(enum_vals, " | "));
+    }
+  }
+
+  for (const char* key : {"one_of", "oneOf", "any_of", "anyOf"}) {
+    if (prop_schema.contains(key) && prop_schema[key].is_array()) {
+      std::vector<std::string> sub_rules;
+      sub_rules.reserve(prop_schema[key].size());
+      for (const auto& sub_schema : prop_schema[key]) {
+        sub_rules.push_back(GenerateFcValueRule(sub_schema, is_req));
+      }
+      if (!sub_rules.empty()) {
+        return absl::StrFormat("(%s)", absl::StrJoin(sub_rules, " | "));
+      }
     }
   }
 
@@ -103,10 +117,14 @@ fc_resp: %s
 
 absl::StatusOr<std::string> CreateLarkGrammarForFcToolCalls(
     const nlohmann::ordered_json& tools, const LlgConstraintsOptions& options) {
+  const nlohmann::ordered_json& tools_array = GetToolsArray(tools);
+  if (!tools_array.is_array()) {
+    return absl::InvalidArgumentError("tools must be an array.");
+  }
   std::vector<std::string> tool_names;
   std::vector<std::string> tool_blocks;
 
-  for (const auto& tool : tools) {
+  for (const auto& tool : tools_array) {
     if (!tool.contains("name") || !tool["name"].is_string()) {
       continue;
     }

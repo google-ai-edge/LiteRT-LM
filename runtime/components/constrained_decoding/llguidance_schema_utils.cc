@@ -21,16 +21,21 @@
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "runtime/components/constrained_decoding/llg_fc_tool_calls.h"
 #include "runtime/components/constrained_decoding/llg_python_tool_calls.h"
+#include "runtime/components/constrained_decoding/tool_utils.h"
 
 namespace litert::lm {
 
 absl::StatusOr<std::string> CreateLarkGrammarForTools(
     const nlohmann::ordered_json& tools, const LlgConstraintsOptions& options) {
+  const nlohmann::ordered_json& tools_array = GetToolsArray(tools);
+  if (!tools_array.is_array()) {
+    return absl::InvalidArgumentError("tools must be an array.");
+  }
   switch (options.funcall_format) {
     case FuncallFormat::kFc:
-      return CreateLarkGrammarForFcToolCalls(tools, options);
+      return CreateLarkGrammarForFcToolCalls(tools_array, options);
     case FuncallFormat::kPython:
-      return CreateLarkGrammarForPythonToolCalls(tools, options);
+      return CreateLarkGrammarForPythonToolCalls(tools_array, options);
   }
   return absl::InvalidArgumentError("Unknown function call format.");
 }

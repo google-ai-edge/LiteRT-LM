@@ -324,5 +324,31 @@ get_weather(location="Mountain View")
 ```)");
 }
 
+TEST_F(LlguidanceSchemaUtilsTest, WrappedToolsObject) {
+  nlohmann::ordered_json tools_obj = nlohmann::ordered_json::parse(R"json({
+    "tools": [
+      {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "location": { "type": "string" }
+          },
+          "required": ["location"]
+        }
+      }
+    ]
+  })json");
+
+  LlgConstraintsOptions options =
+      GetDefaultPythonOptions(LlgConstraintMode::kFunctionCallsOnly);
+
+  auto constraint = CreateConstraint(tools_obj, options);
+  AssertAccepts(*constraint,
+                R"(```tool_code
+get_weather(location="Mountain View")
+```)");
+}
+
 }  // namespace
 }  // namespace litert::lm

@@ -941,5 +941,98 @@ get_weather()
 ```)");
 }
 
+TEST_F(LlgPythonToolCallsTest, OneOfPropertyConstraint) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "selection",
+    "description": "Select an element",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "bounds": {
+          "one_of": [
+            { "type": "string" },
+            { "type": "number" }
+          ]
+        }
+      },
+      "required": ["bounds"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+
+  LlgConstraintsOptions options =
+      GetDefaultPythonOptions(LlgConstraintMode::kFunctionCallsOnly);
+  auto constraint = CreateConstraint(tools, options);
+
+  AssertAccepts(*constraint,
+                R"(```tool_code
+selection(bounds="top_left")
+```)");
+  AssertAccepts(*constraint,
+                R"(```tool_code
+selection(bounds=42)
+```)");
+  AssertRejects(*constraint,
+                R"(```tool_code
+selection(bounds=True)
+```)");
+}
+
+TEST_F(LlgPythonToolCallsTest, OneOfCamelCasePropertyConstraint) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "selection",
+    "description": "Select an element",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "bounds": {
+          "oneOf": [
+            { "type": "string" },
+            { "type": "number" }
+          ]
+        }
+      },
+      "required": ["bounds"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+
+  LlgConstraintsOptions options =
+      GetDefaultPythonOptions(LlgConstraintMode::kFunctionCallsOnly);
+  auto constraint = CreateConstraint(tools, options);
+
+  AssertAccepts(*constraint,
+                R"(```tool_code
+selection(bounds="top_left")
+```)");
+  AssertAccepts(*constraint,
+                R"(```tool_code
+selection(bounds=42)
+```)");
+  AssertRejects(*constraint,
+                R"(```tool_code
+selection(bounds=True)
+```)");
+}
+
+TEST_F(LlgPythonToolCallsTest, OneOfToolsObjectWrapper) {
+  nlohmann::ordered_json tools_obj = nlohmann::ordered_json::parse(R"json({
+    "oneOf": [
+      {
+        "name": "get_time"
+      }
+    ]
+  })json");
+
+  LlgConstraintsOptions options =
+      GetDefaultPythonOptions(LlgConstraintMode::kFunctionCallsOnly);
+  auto constraint = CreateConstraint(tools_obj, options);
+
+  AssertAccepts(*constraint,
+                R"(```tool_code
+get_time()
+```)");
+}
+
 }  // namespace
 }  // namespace litert::lm

@@ -944,5 +944,91 @@ TEST_F(LlgFcToolCallsTest, MultipleFunctionCalls) {
       R"(<start_function_call>call:get_time{}<end_function_call><start_function_call>call:get_time{}<end_function_call><start_function_response>)");
 }
 
+TEST_F(LlgFcToolCallsTest, OneOfPropertyConstraint) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "selection",
+    "description": "Select an element",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "bounds": {
+          "one_of": [
+            { "type": "string" },
+            { "type": "number" }
+          ]
+        }
+      },
+      "required": ["bounds"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+
+  auto constraint = CreateConstraint(
+      tools, GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsOnly));
+
+  AssertAccepts(
+      *constraint,
+      R"(<start_function_call>call:selection{bounds:<escape>top_left<escape>}<end_function_call><start_function_response>)");
+  AssertAccepts(
+      *constraint,
+      R"(<start_function_call>call:selection{bounds:42}<end_function_call><start_function_response>)");
+  AssertRejects(
+      *constraint,
+      R"(<start_function_call>call:selection{bounds:true}<end_function_call><start_function_response>)");
+}
+
+TEST_F(LlgFcToolCallsTest, OneOfCamelCasePropertyConstraint) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "selection",
+    "description": "Select an element",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "bounds": {
+          "oneOf": [
+            { "type": "string" },
+            { "type": "number" }
+          ]
+        }
+      },
+      "required": ["bounds"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+
+  auto constraint = CreateConstraint(
+      tools, GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsOnly));
+
+  AssertAccepts(
+      *constraint,
+      R"(<start_function_call>call:selection{bounds:<escape>top_left<escape>}<end_function_call><start_function_response>)");
+  AssertAccepts(
+      *constraint,
+      R"(<start_function_call>call:selection{bounds:42}<end_function_call><start_function_response>)");
+  AssertRejects(
+      *constraint,
+      R"(<start_function_call>call:selection{bounds:true}<end_function_call><start_function_response>)");
+}
+
+TEST_F(LlgFcToolCallsTest, OneOfToolsObjectWrapper) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "get_time"
+  })json");
+  nlohmann::ordered_json tools_obj = nlohmann::ordered_json::parse(R"json({
+    "oneOf": [
+      {
+        "name": "get_time"
+      }
+    ]
+  })json");
+
+  auto constraint = CreateConstraint(
+      tools_obj, GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsOnly));
+
+  AssertAccepts(
+      *constraint,
+      R"(<start_function_call>call:get_time{}<end_function_call><start_function_response>)");
+}
+
 }  // namespace
 }  // namespace litert::lm
