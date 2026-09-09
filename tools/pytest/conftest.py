@@ -46,6 +46,16 @@ def pytest_addoption(parser: pytest.Parser) -> None:
   )
 
   parser.addoption(
+      "--build-name",
+      action="store",
+      default="default",
+      help=(
+          "The name of the CMake build directory (e.g., 'default',"
+          " 'android-x86_64')."
+      ),
+  )
+
+  parser.addoption(
       "--backend",
       action="store",
       default="cpu",
@@ -108,6 +118,7 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     return
 
   build_system = metafunc.config.getoption("--build-system")
+  build_name = metafunc.config.getoption("--build-name")
   repo_root = os.path.abspath(
       os.path.join(os.path.dirname(__file__), "..", "..")
   )
@@ -123,7 +134,7 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     )
   else:
     binary_path = os.path.join(
-        repo_root, "cmake", "build", "litert_lm", "build",
+        repo_root, "cmake", "build", build_name, "litert_lm", "build",
         f"litert_lm_main{exe_ext}"
     )
 

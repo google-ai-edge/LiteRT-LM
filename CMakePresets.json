@@ -8,34 +8,40 @@
   "configurePresets": [
     {
       "name": "default",
-      "hidden": true,
-      "generator": "Unix Makefiles",
+      "displayName": "Default",
+      "description": "Default build configuration.",
       "binaryDir": "${sourceDir}/cmake/build/${presetName}",
       "environment": {
         "CC": "clang",
         "CXX": "clang++"
+      },
+      "cacheVariables": {
+        "LITERTLM_CC": "clang",
+        "LITERTLM_CXX": "clang++"
       }
     },
     {
-      "name": "android-arm64",
-      "displayName": "Android arm64-v8a (API 28)",
-      "description": "Cross-compiles LiteRT-LM for Android arm64. Auto-builds host tools first.",
+      "name": "android-x86_64",
+      "displayName": "Android x86_64 (API 34)",
+      "description": "Cross-compiles LiteRT-LM for Android x86_64. Auto-builds host tools first.",
       "inherits": "default",
       "environment": {
-        "ANDROID_NDK_ROOT": "$env{HOME}/android-ndk/android-ndk-r26d"
+        "ANDROID_NDK_ROOT": "$env{HOME}/android-ndk/android-ndk-r28b"
       },
       "cacheVariables": {
         "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/cmake/toolchains/litertlm_android.toolchain.cmake",
         "LITERTLM_TOOLCHAIN_SCRIPT": "${sourceDir}/cmake/toolchains/litertlm_android.script.cmake",
         "CMAKE_SYSTEM_NAME": "Android",
-        "CMAKE_SYSTEM_VERSION": "28",
-        "CMAKE_ANDROID_ARCH_ABI": "arm64-v8a",
-        "CMAKE_ANDROID_NDK": "$env{HOME}/android-ndk/android-ndk-r26d",
+        "CMAKE_SYSTEM_VERSION": "34",
+        "CMAKE_ANDROID_ARCH_ABI": "x86_64",
+        "CMAKE_ANDROID_NDK": "$env{HOME}/android-ndk/android-ndk-r28b",
         "CMAKE_ANDROID_STL_TYPE": "c++_shared",
-        "ANDROID_ABI": "arm64-v8a",
-        "ANDROID_PLATFORM": "android-28",
+        "ANDROID_ABI": "x86_64",
+        "ANDROID_PLATFORM": "android-34",
         "ANDROID_STL": "c++_shared",
-        "ANDROID_NDK_ROOT": "$env{HOME}/android-ndk/android-ndk-r26d"
+        "ANDROID_NDK_ROOT": "$env{HOME}/android-ndk/android-ndk-r28b",
+        "LITERTLM_CC_NDK": "$env{HOME}/android-ndk/android-ndk-r28b/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android34-clang",
+        "LITERTLM_CXX_NDK": "$env{HOME}/android-ndk/android-ndk-r28b/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android34-clang++"
       }
     }
   ]

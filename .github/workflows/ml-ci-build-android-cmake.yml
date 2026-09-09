@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-name: "ML-CI-Linux-CMake"
+name: "ML-CI-Android-CMake"
 on:
   push:
     branches:
@@ -47,7 +47,7 @@ concurrency:
 
 jobs:
   presubmit:
-    name: "Presubmit-Linux-CMake"
+    name: "Presubmit-Android-CMake"
     runs-on: "linux-x86-c4-16"
     container:
       image: ubuntu:24.04
@@ -107,8 +107,7 @@ jobs:
         uses: ./.github/workflows/actions/cache-key-gen
         with:
           cache-name: 'ccache'
-          presubmit-name: 'presubmit-linux-cmake'
-
+          presubmit-name: 'presubmit-android-cmake'
           os: ${{ runner.os }}
 
       - name: Keys - Prebuild Deps
@@ -116,8 +115,7 @@ jobs:
         uses: ./.github/workflows/actions/cache-key-gen
         with:
           cache-name: 'prebuild-deps'
-          presubmit-name: 'presubmit-linux-cmake'
-
+          presubmit-name: 'presubmit-android-cmake'
           os: ${{ runner.os }}
 
       - name: Keys - LiteRT LM Deps
@@ -125,8 +123,7 @@ jobs:
         uses: ./.github/workflows/actions/cache-key-gen
         with:
           cache-name: 'litert-lm-deps'
-          presubmit-name: 'presubmit-linux-cmake'
-
+          presubmit-name: 'presubmit-android-cmake'
           os: ${{ runner.os }}
 
       - name: Keys - LiteRT LM Sources
@@ -134,7 +131,7 @@ jobs:
         uses: ./.github/workflows/actions/cache-key-gen
         with:
           cache-name: 'litert-lm'
-          presubmit-name: 'presubmit-linux-cmake'
+          presubmit-name: 'presubmit-android-cmake'
           os: ${{ runner.os }}
           pr-hash: ${{ steps.src-hash.outputs.hash }}
 
@@ -144,9 +141,9 @@ jobs:
         with:
           mode: 'restore'
           target-dir: 'android-sdk'
-          bucket-url: 'gs://litert-lm-cicd/caches/linux/cmake/android-sdk'
-          cache-key: 'linux-android-sdk-api35-buildtools35-v2'
-          restore-key: 'linux-android-sdk-api35-buildtools35-v2'
+          bucket-url: 'gs://litert-lm-cicd/caches/android/cmake/android-sdk'
+          cache-key: 'linux-android-sdk-api34-buildtools34-v1'
+          restore-key: 'linux-android-sdk-api34-buildtools34-v1'
           refresh-cache: ${{ env.REFRESH_CACHE }}
 
       - name: Install Android SDK
@@ -155,7 +152,7 @@ jobs:
           export ANDROID_HOME="${{ github.workspace }}/android-sdk"
           mkdir -p "$ANDROID_HOME/cmdline-tools"
 
-          wget -qO cmdline-tools.zip https://dl.google.com/android/repository/commandlinetools-linux-15859902_latest.zip
+          wget -qO cmdline-tools.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
           unzip -q cmdline-tools.zip -d "$ANDROID_HOME/cmdline-tools"
           mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
           rm cmdline-tools.zip
@@ -163,8 +160,8 @@ jobs:
           set +o pipefail
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
             "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;35.0.0" > /dev/null
+            "platforms;android-33" "platforms;android-34" \
+            "build-tools;33.0.1" "build-tools;34.0.0" > /dev/null
           set -o pipefail
 
       - name: Export SDK Environment Variables
@@ -177,9 +174,9 @@ jobs:
         with:
           mode: 'save'
           target-dir: 'android-sdk'
-          bucket-url: 'gs://litert-lm-cicd/caches/linux/cmake/android-sdk'
-          cache-key: 'linux-android-sdk-api35-buildtools35-v2'
-          restore-key: 'linux-android-sdk-api35-buildtools35-v2'
+          bucket-url: 'gs://litert-lm-cicd/caches/android/cmake/android-sdk'
+          cache-key: 'linux-android-sdk-api34-buildtools34-v1'
+          restore-key: 'linux-android-sdk-api34-buildtools34-v1'
           refresh-cache: ${{ env.REFRESH_CACHE }}
         env:
           CACHE_HIT: ${{ steps.android-cache.outputs.cache-hit }}
@@ -197,77 +194,52 @@ jobs:
         run: echo "ANDROID_NDK_HOME=$NDK_PATH" >> $GITHUB_ENV
 
       - name: Restore CCache from GCS
-        if: ${{ !contains(github.event.pull_request.labels.*.name, 'skip-cache') }}
+        if: ${{ !contains(github.event.pull_request.labels.*.name, 'skip-cache-restore') }}
         uses: ./.github/workflows/actions/gcs-cache
         id: restore-ccache
         with:
           mode: 'restore'
           target-dir: '.ccache'
-          bucket-url: 'gs://litert-lm-cicd/caches/linux/cmake/ccache'
+          bucket-url: 'gs://litert-lm-cicd/caches/android/cmake/ccache'
           cache-key: '${{ steps.keys-ccache.outputs.key }}'
           restore-key: '${{ steps.keys-ccache.outputs.restore-key }}'
           refresh-cache: ${{ env.REFRESH_CACHE }}
 
       - name: Restore Prebuild Deps Cache
-        if: ${{ !contains(github.event.pull_request.labels.*.name, 'skip-cache') }}
+        if: ${{ !contains(github.event.pull_request.labels.*.name, 'skip-cache-restore') }}
         uses: ./.github/workflows/actions/gcs-cache
         id: restore-prebuild-deps
         with:
           mode: 'restore'
-          target-dir: 'cmake/build/default/prebuild/build'
-          bucket-url: 'gs://litert-lm-cicd/caches/linux/cmake/prebuild-deps'
+          target-dir: 'cmake/build/android-x86_64/prebuild/build'
+          bucket-url: 'gs://litert-lm-cicd/caches/android/cmake/prebuild-deps'
           cache-key: '${{ steps.keys-prebuild-deps.outputs.key }}'
           restore-key: '${{ steps.keys-prebuild-deps.outputs.restore-key }}'
           refresh-cache: ${{ env.REFRESH_CACHE }}
 
       - name: Restore LiteRT LM Deps Cache
-        if: ${{ !contains(github.event.pull_request.labels.*.name, 'skip-cache') }}
+        if: ${{ !contains(github.event.pull_request.labels.*.name, 'skip-cache-restore') }}
         uses: ./.github/workflows/actions/gcs-cache
         id: restore-litert-lm-deps
         with:
           mode: 'restore'
-          target-dir: 'cmake/build/default/litert_lm/build'
-          bucket-url: 'gs://litert-lm-cicd/caches/linux/cmake/litert-lm-deps'
+          target-dir: 'cmake/build/android-x86_64/litert_lm/build'
+          bucket-url: 'gs://litert-lm-cicd/caches/android/cmake/litert-lm-deps'
           cache-key: ${{ steps.keys-litert-lm-deps.outputs.key }}
           restore-key: ${{ steps.keys-litert-lm-deps.outputs.restore-key }}
           refresh-cache: ${{ env.REFRESH_CACHE }}
 
       - name: Restore LiteRT LM Cache (internal sources)
-        if: ${{ !contains(github.event.pull_request.labels.*.name, 'skip-cache') }}
+        if: ${{ !contains(github.event.pull_request.labels.*.name, 'skip-cache-restore') }}
         uses: ./.github/workflows/actions/gcs-cache
         id: restore-litert-lm
         with:
           mode: 'restore'
-          target-dir: 'cmake/build/default/litert_lm/build'
-          bucket-url: 'gs://litert-lm-cicd/caches/linux/cmake/litert-lm'
+          target-dir: 'cmake/build/android-x86_64/litert_lm/build'
+          bucket-url: 'gs://litert-lm-cicd/caches/android/cmake/litert-lm'
           cache-key: ${{ steps.keys-litert-lm.outputs.key }}
           restore-key: ${{ steps.keys-litert-lm.outputs.restore-key }}
           refresh-cache: ${{ env.REFRESH_CACHE }}
-
-      - name: Download Model
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: |
-          mkdir -p "$MODEL_PATH"
-
-          echo "Attempting to download from GCS..."
-          if ! gcloud storage cp "$GCS_MODEL_URL" "$MODEL_PATH/$MODEL_KEY"; then
-            echo "Model not found in GCS. Falling back to Hugging Face..."
-
-            if [ -z "$HF_TOKEN" ]; then
-              echo "Error: HF_TOKEN is missing or empty. Failing workflow."
-              exit 1
-            fi
-
-            echo "Downloading model from Hugging Face..."
-            curl --http1.1 -L -C - --retry 5 --retry-delay 3 --retry-all-errors -f \
-              --oauth2-bearer "$HF_TOKEN" \
-              -o "$MODEL_PATH/$MODEL_KEY" \
-              "$HF_MODEL_URL"
-
-            echo "Uploading the downloaded model to GCS for future runs..."
-            gcloud storage cp "$MODEL_PATH/$MODEL_KEY" "$GCS_MODEL_URL"
-          fi
 
       - name: Wait For MyRemoteConnection
         uses: google-ml-infra/actions/ci_connection@7f5ca0c263a81ed09ea276524c1b9192f1304e3c
@@ -276,13 +248,10 @@ jobs:
 
       - name: Configure CMake
         run: |
-          cmake --preset default
+          cmake --preset android-x86_64 -DANDROID_NDK_ROOT="$ANDROID_NDK_HOME"
 
       - name: Build
-        run: cmake --build cmake/build/default -j $(nproc)
-
-      - name: Run pytest
-        run: pytest tools/pytest/ --build-name=default --backend=cpu --model-path=./models/gemma4/gemma-4-E2B-it.litertlm --build-system=cmake
+        run: cmake --build cmake/build/android-x86_64 -j $(nproc)
 
       - name: Save CCache to GCS
         uses: ./.github/workflows/actions/gcs-cache
@@ -290,7 +259,7 @@ jobs:
         with:
           mode: 'save'
           target-dir: '.ccache'
-          bucket-url: 'gs://litert-lm-cicd/caches/linux/cmake/ccache'
+          bucket-url: 'gs://litert-lm-cicd/caches/android/cmake/ccache'
           cache-key: ${{ steps.keys-ccache.outputs.key }}
           restore-key: ${{ steps.keys-ccache.outputs.restore-key }}
           refresh-cache: ${{ env.REFRESH_CACHE }}
@@ -302,8 +271,8 @@ jobs:
         continue-on-error: true
         with:
           mode: 'save'
-          target-dir: 'cmake/build/default/prebuild/build'
-          bucket-url: 'gs://litert-lm-cicd/caches/linux/cmake/prebuild-deps'
+          target-dir: 'cmake/build/android-x86_64/prebuild/build'
+          bucket-url: 'gs://litert-lm-cicd/caches/android/cmake/prebuild-deps'
           cache-key: ${{ steps.keys-prebuild-deps.outputs.key }}
           restore-key: ${{ steps.keys-prebuild-deps.outputs.restore-key }}
           refresh-cache: ${{ env.REFRESH_CACHE }}
@@ -316,9 +285,9 @@ jobs:
         continue-on-error: true
         with:
           mode: 'save'
-          target-dir: 'cmake/build/default/litert_lm/build'
+          target-dir: 'cmake/build/android-x86_64/litert_lm/build'
           target-subdirs: 'external third_party _deps'
-          bucket-url: 'gs://litert-lm-cicd/caches/linux/cmake/litert-lm-deps'
+          bucket-url: 'gs://litert-lm-cicd/caches/android/cmake/litert-lm-deps'
           cache-key: ${{ steps.keys-litert-lm-deps.outputs.key }}
           restore-key: ${{ steps.keys-litert-lm-deps.outputs.restore-key }}
           refresh-cache: ${{ env.REFRESH_CACHE }}
@@ -330,9 +299,9 @@ jobs:
         continue-on-error: true
         with:
           mode: 'save'
-          target-dir: 'cmake/build/default/litert_lm/build'
+          target-dir: 'cmake/build/android-x86_64/litert_lm/build'
           target-subdirs: 'c runtime schema support'
-          bucket-url: 'gs://litert-lm-cicd/caches/linux/cmake/litert-lm'
+          bucket-url: 'gs://litert-lm-cicd/caches/android/cmake/litert-lm'
           cache-key: ${{ steps.keys-litert-lm.outputs.key }}
           restore-key: ${{ steps.keys-litert-lm.outputs.restore-key }}
           refresh-cache: ${{ env.REFRESH_CACHE }}

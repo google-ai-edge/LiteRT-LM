@@ -54,7 +54,7 @@ endif()
 if(NOT TARGET protobuf::protoc)
     add_executable(protobuf::protoc IMPORTED GLOBAL)
     set_target_properties(protobuf::protoc PROPERTIES
-        IMPORTED_LOCATION "${LITERTLM_PROTO_PROTOC_EXECUTABLE}"
+        IMPORTED_LOCATION "${LITERTLM_HOST_PROTOC}"
     )
 endif()
 
@@ -100,6 +100,9 @@ include_directories(
   "${LITERTLM_TFLITE_BUILD_DIR}/ruy"
   "${LITERTLM_TFLITE_BUILD_DIR}/gemmlowp"
 )
+
+set(TFLITE_ENABLE_GPU OFF CACHE BOOL "" FORCE)
+set(LITERT_ENABLE_GPU OFF CACHE BOOL "" FORCE)
 
 if(LITERT_BUILD_CONFIG_DISABLE_GPU_VAL)
   add_compile_definitions(LITERT_DISABLE_GPU)
