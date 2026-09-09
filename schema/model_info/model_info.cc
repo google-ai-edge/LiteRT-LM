@@ -996,7 +996,7 @@ absl::Status InferContextTokensFallbackIfMissing(
 
 }  // namespace
 
-absl::StatusOr<ModelInfo> GetModelInfo(std::istream& litertlm_stream) {
+absl::StatusOr<ModelInfo> InspectModel(std::istream& litertlm_stream) {
   litertlm_stream.seekg(0, std::ios::end);
   const std::streamoff total_stream_size = litertlm_stream.tellg();
   litertlm_stream.seekg(0, std::ios::beg);
@@ -1027,14 +1027,15 @@ absl::StatusOr<ModelInfo> GetModelInfo(std::istream& litertlm_stream) {
   return info;
 }
 
-// Extracts model metadata and capabilities from the given LiteRT-LM file path.
-absl::StatusOr<ModelInfo> GetModelInfo(absl::string_view litertlm_path) {
+// Inspects a LiteRT-LM model file located at the specified file path and
+// returns its extracted capabilities and configuration parameters.
+absl::StatusOr<ModelInfo> InspectModel(absl::string_view litertlm_path) {
   std::ifstream input_file_stream(std::string(litertlm_path), std::ios::binary);
   if (!input_file_stream.is_open()) {
     return absl::InternalError(
         absl::StrFormat("Could not open file: %s", litertlm_path));
   }
-  return GetModelInfo(input_file_stream);
+  return InspectModel(input_file_stream);
 }
 
 // Formats the supported input/output modalities into a space-separated string

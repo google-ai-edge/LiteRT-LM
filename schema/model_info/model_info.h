@@ -169,12 +169,11 @@ struct ModelInfo {
   std::optional<LlmInferenceCapability> llm_capability;
 };
 
-// Extracts model metadata and capabilities from the given LiteRT-LM file
-// stream.
-absl::StatusOr<ModelInfo> GetModelInfo(std::istream& litertlm_stream);
+// Inspects the given LiteRT-LM file stream.
+absl::StatusOr<ModelInfo> InspectModel(std::istream& litertlm_stream);
 
-// Extracts model metadata and capabilities from the given LiteRT-LM file path.
-absl::StatusOr<ModelInfo> GetModelInfo(absl::string_view litertlm_path);
+// Inspects the given LiteRT-LM file path.
+absl::StatusOr<ModelInfo> InspectModel(absl::string_view litertlm_path);
 
 std::ostream& operator<<(std::ostream& os,
                          const SupportedModalities& modalities);
