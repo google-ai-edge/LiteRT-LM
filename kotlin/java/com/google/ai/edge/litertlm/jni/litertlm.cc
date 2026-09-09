@@ -36,6 +36,7 @@
 #include "nlohmann/json_fwd.hpp"  // from @nlohmann_json
 #include "litert/cc/internal/scoped_file.h"  // from @litert
 #include "c/model_info.h"
+#include "kotlin/java/com/google/ai/edge/litertlm/jni/jni_utils.h"
 #include "runtime/components/constrained_decoding/llg_constraint_config.h"
 #include "runtime/components/constrained_decoding/no_repeat_ngram_config.h"
 #include "runtime/components/constrained_decoding/repetition_penalty_config.h"
@@ -100,6 +101,9 @@ using litert::lm::Responses;
 using litert::lm::SessionConfig;
 using litert::lm::proto::SamplerParameters;
 
+using litert::lm::jni::GetJniEnvAndAttach;
+using litert::lm::jni::NewStringStandardUTF;
+
 void ThrowLiteRtLmJniException(JNIEnv* env, const std::string& message) {
   jclass exClass =
       env->FindClass("com/google/ai/edge/litertlm/LiteRtLmJniException");
@@ -108,59 +112,6 @@ void ThrowLiteRtLmJniException(JNIEnv* env, const std::string& message) {
     // Clean up local reference
     env->DeleteLocalRef(exClass);
   }
-}
-
-// Replacement of env->NewStringUTF(str.c_str()) to handle "Standard UTF-8".
-//
-// NewStringUTF() expects a "modified UTF-8" string. "Standard UTF-8" and
-// "modified UTF-8" are mostly the same, but differ in the encoding of null
-// characters and characters outside the Basic Multilingual Plane (BMP). Emojis
-// often fall into this latter category. nlohmann::json::dump() also returns a
-// "Standard UTF-8".
-//
-// https://developer.android.com/ndk/guides/jni-tips#utf-8-and-utf-16-strings
-jstring NewStringStandardUTF(JNIEnv* env, std::string standard_utf8_str) {
-  // Create a jbyteArray from the UTF-8 string
-  jbyteArray bytes = env->NewByteArray(standard_utf8_str.length());
-  if (bytes == nullptr) return nullptr;
-  env->SetByteArrayRegion(
-      bytes, 0, standard_utf8_str.length(),
-      reinterpret_cast<const jbyte*>(standard_utf8_str.c_str()));
-
-  // Get the java.lang.String class
-  jclass string_class = env->FindClass("java/lang/String");
-  if (string_class == nullptr) {
-    env->DeleteLocalRef(bytes);
-    return nullptr;
-  }
-
-  // Get the constructor for String(byte[], String)
-  jmethodID string_ctor =
-      env->GetMethodID(string_class, "<init>", "([BLjava/lang/String;)V");
-  if (string_ctor == nullptr) {
-    env->DeleteLocalRef(string_class);
-    env->DeleteLocalRef(bytes);
-    return nullptr;
-  }
-
-  // Create a jstring for the charset name "UTF-8"
-  jstring charset_name = env->NewStringUTF("UTF-8");
-  if (charset_name == nullptr) {
-    env->DeleteLocalRef(string_class);
-    env->DeleteLocalRef(bytes);
-    return nullptr;
-  }
-
-  // Create the new String object
-  jstring result =
-      (jstring)env->NewObject(string_class, string_ctor, bytes, charset_name);
-
-  // Clean up local references
-  env->DeleteLocalRef(bytes);
-  env->DeleteLocalRef(string_class);
-  env->DeleteLocalRef(charset_name);
-
-  return result;
 }
 
 // Helper function to convert BenchmarkInfo to Java object
@@ -267,35 +218,6 @@ std::vector<InputData> GetNativeInputData(JNIEnv* env,
   env->DeleteLocalRef(image_class);
 
   return contents;
-}
-
-// Helper to get JNIEnv and attach to the current thread if necessary.
-// Returns nullptr if an error occurs.
-JNIEnv* GetJniEnvAndAttach(JavaVM* jvm, bool* attached) {
-  JNIEnv* env = nullptr;
-  *attached = false;
-  // Requesting JNI_VERSION_1_6, but the returned JNIEnv* will support
-  // the highest version the current JVM provides. This is safe because
-  // newer JNI versions are backward-compatible.
-  int get_env_stat = jvm->GetEnv((void**)&env, JNI_VERSION_1_6);
-  if (get_env_stat == JNI_EDETACHED) {
-#if defined(__ANDROID__)
-    if (jvm->AttachCurrentThread(&env, nullptr) == 0) {
-#else
-    if (jvm->AttachCurrentThread((void**)&env, nullptr) == 0) {
-#endif
-      *attached = true;
-      return env;
-    } else {
-      ABSL_LOG(ERROR) << "Failed to attach to JVM.";
-      return nullptr;
-    }
-  } else if (get_env_stat == JNI_OK) {
-    return env;
-  } else {
-    ABSL_LOG(ERROR) << "Failed to get JNIEnv: GetEnv returned " << get_env_stat;
-    return nullptr;
-  }
 }
 
 // Helper function to create SamplerParameters from Java SamplerConfig object.

@@ -41,6 +41,7 @@ cc_binary(
         "@litert//litert/cc/internal:scoped_file",
         "//c:engine",
         "//c:model_info_headers",
+        "//kotlin/java/com/google/ai/edge/litertlm/jni:jni_utils",
         "//runtime/components:model_resources",
         "//runtime/components:prompt_template",
         "//runtime/components/constrained_decoding:llg_constraint_config",
@@ -80,4 +81,19 @@ cc_binary(
         "//support/preprocessor:image_preprocessor",
         "//support/preprocessor:image_preprocessor_impl",  # buildcleaner: keep
     ],
+)
+
+cc_library(
+    name = "jni_utils",
+    srcs = ["jni_utils.cc"],
+    hdrs = ["jni_utils.h"],
+    copts = ["-fvisibility=hidden"],
+    deps = [
+        "@com_google_absl//absl/log:absl_log",
+    ] + select({
+        "@platforms//os:android": [],
+        "//conditions:default": [
+            "@rules_java//toolchains:jni"
+        ],
+    }),
 )
