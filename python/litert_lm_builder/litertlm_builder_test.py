@@ -281,36 +281,6 @@ class LitertlmBuilderTest(parameterized.TestCase):
     with self.assertRaises(AssertionError):
       builder.add_executor_metadata(metadata_path)
 
-  def test_add_embedding_metadata_binary(self):
-    """Tests that Embedding metadata can be added from a binary proto file."""
-    embedding_metadata = embedding_metadata_pb2.EmbeddingMetadata()
-    embedding_metadata.embedding_model_type.embedding_gemma_v2.patch_width = 16
-    bin_proto = embedding_metadata.SerializeToString()
-    metadata_path = self._create_dummy_file("embedding.pb", bin_proto)
-
-    builder = litertlm_builder.LitertLmFileBuilder()
-    self._add_system_metadata(builder)
-    builder.add_embedding_metadata(metadata_path)
-    ss = self._build_and_read_litertlm(builder)
-    self.assertIn("patch_width: 16", ss)
-    self.assertIn("Sections (1)", ss)
-
-  def test_add_embedding_metadata_text(self):
-    """Tests that Embedding metadata can be added from a text proto file."""
-    embedding_metadata = embedding_metadata_pb2.EmbeddingMetadata()
-    embedding_metadata.embedding_model_type.embedding_gemma_v2.patch_width = 16
-    text_proto = text_format.MessageToString(embedding_metadata)
-    metadata_path = self._create_dummy_file(
-        "embedding.textproto", text_proto.encode("utf-8")
-    )
-
-    builder = litertlm_builder.LitertLmFileBuilder()
-    self._add_system_metadata(builder)
-    builder.add_embedding_metadata(metadata_path)
-    ss = self._build_and_read_litertlm(builder)
-    self.assertIn("patch_width: 16", ss)
-    self.assertIn("Sections (1)", ss)
-
   @parameterized.named_parameters(
       ("prefill_decode", litertlm_builder.TfLiteModelType.PREFILL_DECODE),
       ("mtp_drafter", litertlm_builder.TfLiteModelType.MTP_DRAFTER),

@@ -52,8 +52,7 @@
 
 ABSL_FLAG(std::string, backend, "cpu",
           "Executor backend to use for embedding execution (cpu, gpu, etc.)");
-ABSL_FLAG(std::string, model_path, "/tmp/embedding-gemma-v2.litertlm",
-          "Path to the embedding .litertlm file.");
+ABSL_FLAG(std::string, model_path, "", "Path to the embedding .litertlm file.");
 ABSL_FLAG(std::string, input_prompt, "",
           "Input string to compute the embedding for.");
 ABSL_FLAG(std::string, image_path, "",
