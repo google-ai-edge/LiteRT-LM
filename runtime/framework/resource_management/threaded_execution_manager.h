@@ -32,6 +32,7 @@
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "litert/cc/litert_environment.h"  // from @litert
+#include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/constrained_decoding/constraint.h"
 #include "runtime/components/constrained_decoding/no_repeat_ngram_config.h"
 #include "runtime/components/constrained_decoding/repetition_penalty_config.h"
@@ -244,6 +245,20 @@ class ThreadedExecutionManager : public ExecutionManager {
   // Returns the audio executor properties.
   absl::StatusOr<AudioExecutorProperties> GetAudioExecutorProperties()
       const override;
+
+  // Synchronously encodes an audio spectrogram tensor into audio soft tokens
+  // within the context of the given session.
+  absl::StatusOr<ExecutorAudioData> EncodeAudio(
+      const SessionInfo& session_info,
+      const TensorBuffer& spectrogram_tensor) override;
+
+  // Resets the audio executor for the given session.
+  absl::Status ResetAudio(const SessionInfo& session_info) override;
+
+  // Flushes remaining buffered audio frames from the audio executor for the
+  // given session.
+  absl::StatusOr<ExecutorAudioData> FlushAudio(
+      const SessionInfo& session_info) override;
 
   // Returns the vision executor properties.
   absl::StatusOr<VisionExecutorProperties> GetVisionExecutorProperties()

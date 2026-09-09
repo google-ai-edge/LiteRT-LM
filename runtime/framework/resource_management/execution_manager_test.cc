@@ -64,6 +64,7 @@ using ::testing::ElementsAre;
 using ::testing::Return;
 
 constexpr int kVocabSize = 10;
+constexpr int kValidTokensInAudioData = 4;
 
 class MockTokenizer : public Tokenizer {
  public:
@@ -81,16 +82,33 @@ class MockTokenizer : public Tokenizer {
 
 class FakeAudioExecutor : public AudioExecutor {
  public:
-  absl::StatusOr<::litert::lm::ExecutorAudioData> Encode(
-      const litert::TensorBuffer& spectrogram_tensor) override {
-    return ::litert::lm::ExecutorAudioData();
+  absl::StatusOr<ExecutorAudioData> Encode(
+      const TensorBuffer& spectrogram_tensor) override {
+    ExecutorAudioData data;
+    data.SetValidTokens(kValidTokensInAudioData);
+    return data;
   }
+
+  absl::Status Reset() override {
+    reset_called_ = true;
+    return absl::OkStatus();
+  }
+
+  absl::StatusOr<ExecutorAudioData> Flush() override {
+    flush_called_ = true;
+    ExecutorAudioData data;
+    data.SetValidTokens(kValidTokensInAudioData);
+    return data;
+  }
+
+  bool reset_called_ = false;
+  bool flush_called_ = false;
 };
 
 class FailingAudioExecutor : public AudioExecutor {
  public:
-  absl::StatusOr<::litert::lm::ExecutorAudioData> Encode(
-      const litert::TensorBuffer& spectrogram_tensor) override {
+  absl::StatusOr<ExecutorAudioData> Encode(
+      const TensorBuffer& spectrogram_tensor) override {
     return absl::InternalError(
         "Encode() should not be called when precomputed audio embeddings are "
         "provided.");
@@ -298,6 +316,50 @@ TEST_P(ExecutionManagerTest, AddPrefillTaskWithAudioModality) {
   EXPECT_OK(execution_manager_->WaitUntilDone(task_id, absl::Seconds(3)));
 }
 
+TEST_P(ExecutionManagerTest, EncodeAudioWithSessionInfo) {
+  auto fake_llm_executor = CreateDefaultFakeLlmExecutor();
+
+  ASSERT_OK_AND_ASSIGN(auto* settings,
+                       fake_llm_executor->GetMutableExecutorSettings());
+  EXPECT_OK(settings->SetBackend(Backend::GPU_ARTISAN));
+
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create("test_model_path_2"));
+  ASSERT_OK_AND_ASSIGN(auto audio_settings,
+                       AudioExecutorSettings::CreateDefault(
+                           model_assets, 128, Backend::GPU_ARTISAN));
+
+  auto fake_audio_executor = std::make_unique<FakeAudioExecutor>();
+  auto* fake_audio_executor_ptr = fake_audio_executor.get();
+
+  CreateExecutionManager(
+      std::move(fake_llm_executor),
+      std::make_unique<AudioExecutorSettings>(std::move(audio_settings)),
+      std::move(fake_audio_executor));
+
+  ASSERT_OK_AND_ASSIGN(auto session_config, CreateDefaultSessionConfig());
+  ASSERT_OK_AND_ASSIGN(const SessionId session_id,
+                       execution_manager_->RegisterNewSession(session_config));
+  ASSERT_OK_AND_ASSIGN(auto session_info,
+                       execution_manager_->GetSessionInfo(session_id));
+
+  const std::vector<float> kSpectrogramData = {1.0f, 2.0f, 3.0f, 4.0f};
+  auto tensor_or = CopyToTensorBuffer<float>(kSpectrogramData, {1, 4});
+  ASSERT_TRUE(tensor_or.HasValue());
+
+  ASSERT_OK_AND_ASSIGN(auto audio_data, execution_manager_->EncodeAudio(
+                                            *session_info, *tensor_or));
+  EXPECT_EQ(audio_data.GetValidTokens(), 4);
+
+  EXPECT_OK(execution_manager_->ResetAudio(*session_info));
+  EXPECT_TRUE(fake_audio_executor_ptr->reset_called_);
+
+  ASSERT_OK_AND_ASSIGN(auto flush_data,
+                       execution_manager_->FlushAudio(*session_info));
+  EXPECT_EQ(flush_data.GetValidTokens(), 4);
+  EXPECT_TRUE(fake_audio_executor_ptr->flush_called_);
+}
+
 TEST_P(ExecutionManagerTest, AddPrefillTaskWithPrecomputedAudioEmbeddings) {
   const std::vector<float> kEmbeddingData = {1.0f, 2.0f, 3.0f, 4.0f,
                                              5.0f, 6.0f, 7.0f, 8.0f};
@@ -341,6 +403,75 @@ TEST_P(ExecutionManagerTest, AddPrefillTaskWithPrecomputedAudioEmbeddings) {
   inputs.push_back(InputText(std::move(input_text)));
   inputs.push_back(
       InputAudio(std::move(embedding_tensor), /*is_embeddings=*/true));
+  inputs.push_back(InputAudioEnd());
+
+  std::vector<TaskState> task_states;
+  absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback =
+      [&task_states](absl::StatusOr<Responses> responses) {
+        ASSERT_OK(responses);
+        task_states.push_back(responses->GetTaskState());
+      };
+
+  ASSERT_OK_AND_ASSIGN(const TaskId task_id,
+                       execution_manager_->GetNewTaskId());
+  ASSERT_OK(execution_manager_->AddPrefillTask(
+      session_id, task_id, std::move(inputs), {},
+      std::make_shared<std::atomic<bool>>(false), std::move(callback)));
+
+  EXPECT_OK(execution_manager_->WaitUntilDone(task_id, absl::Seconds(3)));
+
+  EXPECT_THAT(task_states,
+              ElementsAre(TaskState::kCreated, TaskState::kQueued,
+                          TaskState::kProcessing, TaskState::kDone));
+}
+
+TEST_P(ExecutionManagerTest,
+       AddPrefillTaskWithPrecomputedAudioEmbeddingsExplicitValidTokens) {
+  // Test with a 5D padded tensor shape [1, 1, 4, 1, 2] where only 2 tokens are
+  // valid.
+  const std::vector<float> kEmbeddingData = {1.0f, 2.0f, 3.0f, 4.0f,
+                                             5.0f, 6.0f, 7.0f, 8.0f};
+  auto embedding_tensor_or =
+      CopyToTensorBuffer<float>(kEmbeddingData, {1, 1, 4, 1, 2});
+  ASSERT_TRUE(embedding_tensor_or.HasValue());
+  auto embedding_tensor = std::move(*embedding_tensor_or);
+
+  auto fake_llm_executor = std::make_unique<FakeLlmExecutor>(
+      kVocabSize,
+      std::vector<std::vector<int>>{{1, 2, 3, ExecutorAudioData::kSpecialToken,
+                                     ExecutorAudioData::kSpecialToken,
+                                     ExecutorAudioData::kEndToken}},
+      std::vector<std::vector<int>>{{4}, {5}, {6}},
+      /*batch_size=*/1,
+      /*projected_audio_embedding=*/kEmbeddingData);
+
+  ASSERT_OK_AND_ASSIGN(auto* settings,
+                       fake_llm_executor->GetMutableExecutorSettings());
+  EXPECT_OK(settings->SetBackend(Backend::GPU_ARTISAN));
+
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create("test_model_path_2"));
+  ASSERT_OK_AND_ASSIGN(auto audio_settings,
+                       AudioExecutorSettings::CreateDefault(
+                           model_assets, 128, Backend::GPU_ARTISAN));
+
+  CreateExecutionManager(
+      std::move(fake_llm_executor),
+      std::make_unique<AudioExecutorSettings>(std::move(audio_settings)),
+      std::make_unique<FailingAudioExecutor>());
+
+  ASSERT_OK_AND_ASSIGN(auto session_config, CreateDefaultSessionConfig());
+  session_config.SetAudioModalityEnabled(true);
+
+  ASSERT_OK_AND_ASSIGN(const SessionId session_id,
+                       execution_manager_->RegisterNewSession(session_config));
+
+  std::vector<InputData> inputs;
+  ASSERT_OK_AND_ASSIGN(auto input_text,
+                       tokenizer_->TokenIdsToTensorBuffer({1, 2, 3}));
+  inputs.push_back(InputText(std::move(input_text)));
+  inputs.push_back(InputAudio(std::move(embedding_tensor),
+                              /*is_embeddings=*/true, /*valid_tokens=*/2));
   inputs.push_back(InputAudioEnd());
 
   std::vector<TaskState> task_states;

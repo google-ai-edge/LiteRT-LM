@@ -229,10 +229,11 @@ TEST(InputAudioTest, AudioEmbeddings) {
       original_tensor_buffer.Write<float>(absl::MakeSpan(kTensorData, 4)));
 
   InputAudio input_audio(std::move(original_tensor_buffer),
-                         /*is_embeddings=*/true);
+                         /*is_embeddings=*/true, /*valid_tokens=*/4);
   EXPECT_TRUE(input_audio.IsAudioEmbeddings());
   EXPECT_TRUE(input_audio.IsTensorBuffer());
   EXPECT_FALSE(input_audio.IsPcmFrames());
+  EXPECT_EQ(input_audio.GetValidTokens(), 4);
   EXPECT_THAT(input_audio.GetRawAudioBytes(),
               StatusIs(absl::StatusCode::kFailedPrecondition));
   EXPECT_THAT(input_audio.GetPcmFrames(),
@@ -260,12 +261,14 @@ TEST(InputAudioTest, CreateCopyFromAudioEmbeddings) {
       original_tensor_buffer.Write<float>(absl::MakeSpan(kTensorData, 4)));
 
   InputAudio original_input_audio(std::move(original_tensor_buffer),
-                                  /*is_embeddings=*/true);
+                                  /*is_embeddings=*/true,
+                                  /*valid_tokens=*/4);
   ASSERT_OK_AND_ASSIGN(InputAudio copied_input_audio,
                        original_input_audio.CreateCopy());
 
   EXPECT_TRUE(copied_input_audio.IsAudioEmbeddings());
   EXPECT_TRUE(copied_input_audio.IsTensorBuffer());
+  EXPECT_EQ(copied_input_audio.GetValidTokens(), 4);
   EXPECT_THAT(copied_input_audio.GetRawAudioBytes(),
               StatusIs(absl::StatusCode::kFailedPrecondition));
   EXPECT_THAT(copied_input_audio.GetPcmFrames(),
