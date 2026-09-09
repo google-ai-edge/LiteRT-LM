@@ -20,7 +20,6 @@
 #include <sstream>
 #include <string>
 #include <utility>
-#include <vector>
 
 #include "absl/flags/flag.h"  // from @com_google_absl
 #include "absl/flags/parse.h"  // from @com_google_absl
@@ -33,10 +32,9 @@
 #include "absl/strings/str_format.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
-#include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "omni/asr/asr_engine.h"
 #include "omni/asr/file_audio_source.h"
-#include "omni/asr/log_mel_spectrogram_processor.h"
+#include "omni/asr/model_metadata.h"
 
 ABSL_FLAG(std::string, model_name, "parakeet-tdt-0.6b-v3",
           "ASR model name as defined in metadata JSON.");
@@ -60,8 +58,6 @@ ABSL_FLAG(std::string, model_path, "",
 
 namespace {
 
-using json = nlohmann::json;
-
 absl::Status DownloadFileWithCurl(absl::string_view url,
                                   absl::string_view target_path) {
   ABSL_LOG(INFO) << "Downloading " << url << " to " << target_path;
@@ -81,82 +77,37 @@ absl::StatusOr<litert::omni::asr::AsrEngineConfig> LoadConfigFromJsonFile(
     absl::string_view cache_dir, absl::string_view backend_flag,
     int num_threads, float overlap_ratio, absl::string_view text_merger_flag,
     absl::string_view model_path_flag) {
-  std::ifstream f(std::string(json_path).c_str());
-  if (!f.is_open()) {
-    return absl::NotFoundError(
-        absl::StrCat("Could not open JSON config file: ", json_path));
+  std::string json_content;
+  if (!json_path.empty() && std::filesystem::exists(std::string(json_path))) {
+    std::ifstream f{std::string(json_path)};
+    if (!f.is_open()) {
+      return absl::NotFoundError(
+          absl::StrCat("Could not open JSON config file: ", json_path));
+    }
+    std::stringstream buffer;
+    buffer << f.rdbuf();
+    json_content = buffer.str();
   }
-  std::stringstream buffer;
-  buffer << f.rdbuf();
 
-  auto j = json::parse(buffer.str(), nullptr, /*allow_exceptions=*/false);
-  if (j.is_discarded()) {
-    return absl::InvalidArgumentError("Failed to parse metadata JSON");
-  }
-  if (!j.contains(std::string(model_name))) {
-    return absl::NotFoundError(
-        absl::StrCat("Model ", model_name, " not found in configuration JSON"));
-  }
-  const auto& m = j[std::string(model_name)];
   litert::omni::asr::AsrEngineConfig config;
-  config.model_name = std::string(model_name);
   config.cache_dir = std::string(cache_dir);
   config.num_threads = num_threads;
   config.overlap_ratio = overlap_ratio;
-
-  if (m.contains("modelRemoteUrl")) {
-    config.model_url = m["modelRemoteUrl"].get<std::string>();
-  }
-  if (m.contains("tokenizerUrl")) {
-    config.tokenizer_url = m["tokenizerUrl"].get<std::string>();
-  }
-  if (m.contains("inputMilliseconds")) {
-    config.input_milliseconds = m["inputMilliseconds"].get<int>();
-  }
-  if (m.contains("decodeStartTokenId")) {
-    config.decode_start_token_id = m["decodeStartTokenId"].get<int>();
-  }
-  if (m.contains("decodeStopTokenId")) {
-    config.decode_stop_token_id = m["decodeStopTokenId"].get<int>();
-  }
-  if (m.contains("decodeSkipUntilTokenId")) {
-    config.decode_skip_until_token_id = m["decodeSkipUntilTokenId"].get<int>();
-  }
-  if (m.contains("stateBufferNamePatterns")) {
-    config.state_buffer_name_patterns =
-        m["stateBufferNamePatterns"].get<std::vector<std::string>>();
+  if (!model_path_flag.empty()) {
+    config.model_path = std::string(model_path_flag);
   }
 
-  std::string merger_str;
-  if (m.contains("textMergerType")) {
-    merger_str = m["textMergerType"].get<std::string>();
-  }
+  ABSL_RETURN_IF_ERROR(litert::omni::asr::PopulateConfigFromMetadataJson(
+      model_name, json_content, config));
+
   if (!text_merger_flag.empty()) {
-    merger_str = std::string(text_merger_flag);
-  }
-  if (absl::EqualsIgnoreCase(merger_str, "levenshtein")) {
-    config.text_merger_type =
-        litert::omni::asr::AsrEngineConfig::TextMergerType::kLevenshtein;
-  } else {
-    config.text_merger_type =
-        litert::omni::asr::AsrEngineConfig::TextMergerType::kTimestamp;
-  }
-
-  std::string model_ext =
-      std::filesystem::path(config.model_url).extension().string();
-  if (model_ext.empty()) {
-    model_ext = ".tflite";
-  }
-
-  if (model_ext == ".litertlm") {
-    config.decoder_type = litert::omni::asr::AsrEngineConfig::DecoderType::kLm;
-  } else if (absl::StrContains(config.model_name, "tdt")) {
-    config.decoder_type = litert::omni::asr::AsrEngineConfig::DecoderType::kTdt;
-  } else if (absl::StrContains(config.model_name, "ctc")) {
-    config.decoder_type = litert::omni::asr::AsrEngineConfig::DecoderType::kCtc;
-  } else {
-    config.decoder_type =
-        litert::omni::asr::AsrEngineConfig::DecoderType::kStateless;
+    if (absl::EqualsIgnoreCase(text_merger_flag, "levenshtein")) {
+      config.text_merger_type =
+          litert::omni::asr::AsrEngineConfig::TextMergerType::kLevenshtein;
+    } else {
+      config.text_merger_type =
+          litert::omni::asr::AsrEngineConfig::TextMergerType::kTimestamp;
+    }
   }
 
   if (backend_flag == "gpu") {
@@ -167,53 +118,22 @@ absl::StatusOr<litert::omni::asr::AsrEngineConfig> LoadConfigFromJsonFile(
     config.backend = litert::omni::asr::AsrEngineConfig::Backend::kCpu;
   }
 
-  if (m.contains("logMelSpectro")) {
-    config.has_log_mel_config = true;
-    const auto& l = m["logMelSpectro"];
-    if (l.contains("nFFT")) config.log_mel_config.n_fft = l["nFFT"].get<int>();
-    if (l.contains("nMels"))
-      config.log_mel_config.n_mels = l["nMels"].get<int>();
-    if (l.contains("nFrames"))
-      config.log_mel_config.n_frames = l["nFrames"].get<int>();
-    if (l.contains("transpose"))
-      config.log_mel_config.transpose = l["transpose"].get<bool>();
-    if (l.contains("preemphasis"))
-      config.log_mel_config.preemphasis = l["preemphasis"].get<float>();
-    if (l.contains("fftLength"))
-      config.log_mel_config.fft_length = l["fftLength"].get<int>();
-    if (l.contains("inputScale"))
-      config.log_mel_config.input_scale = l["inputScale"].get<float>();
-    if (l.contains("melLowHz"))
-      config.log_mel_config.mel_low_hz = l["melLowHz"].get<float>();
-    if (l.contains("melHighHz"))
-      config.log_mel_config.mel_high_hz = l["melHighHz"].get<float>();
-    if (l.contains("melFloor"))
-      config.log_mel_config.mel_floor = l["melFloor"].get<float>();
-    if (l.contains("normalizeMel"))
-      config.log_mel_config.normalize_mel = l["normalizeMel"].get<bool>();
-    if (l.contains("addFloorToMelBeforeLog"))
-      config.log_mel_config.add_floor_to_mel_before_log =
-          l["addFloorToMelBeforeLog"].get<bool>();
-    if (l.contains("normType")) {
-      std::string norm = l["normType"].get<std::string>();
-      if (norm == "whisper") {
-        config.log_mel_config.norm_type =
-            litert::omni::asr::LogMelSpectrogramProcessor::NormType::kWhisper;
-      }
-    }
-  } else {
-    config.has_log_mel_config = false;
+  std::string model_ext =
+      std::filesystem::path(config.model_url).extension().string();
+  if (model_ext.empty()) {
+    model_ext = ".tflite";
   }
 
   std::filesystem::path cache_path(config.cache_dir);
   std::string model_filename = absl::StrCat(model_name, model_ext);
   std::string tokenizer_filename = absl::StrCat(model_name, "_tokenizer.json");
-  config.model_path = (cache_path / model_filename).string();
-  config.tokenizer_path = (cache_path / tokenizer_filename).string();
-
-  if (!model_path_flag.empty()) {
-    config.model_path = std::string(model_path_flag);
+  if (config.model_path.empty()) {
+    config.model_path = (cache_path / model_filename).string();
+  } else {
     config.model_url.clear();
+  }
+  if (config.tokenizer_path.empty()) {
+    config.tokenizer_path = (cache_path / tokenizer_filename).string();
   }
 
   return config;
