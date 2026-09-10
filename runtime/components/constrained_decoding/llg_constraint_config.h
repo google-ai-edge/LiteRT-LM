@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace litert::lm {
 
@@ -39,6 +40,10 @@ enum class LlgConstraintType {
 
 struct LlGuidanceConfig {
   std::optional<uint32_t> eos_id = std::nullopt;
+  // Control tokens that should be matched as a single token, instead of treated
+  // as bytes:
+  // https://github.com/guidance-ai/llguidance/blob/main/docs/special_tokens.md
+  std::vector<std::string> special_tokens;
 };
 
 struct LlGuidanceConstraintArg {

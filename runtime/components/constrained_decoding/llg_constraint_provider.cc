@@ -24,6 +24,7 @@
 #include <variant>
 #include <vector>
 
+#include "absl/container/flat_hash_set.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
@@ -68,18 +69,28 @@ LlgConstraintProvider::Create(const Tokenizer& tokenizer,
 
   std::vector<std::string> tokens = tokenizer.GetTokens();
 
+  absl::flat_hash_set<absl::string_view> special_tokens_set(
+      llg_config.special_tokens.begin(), llg_config.special_tokens.end());
+
   std::vector<uint32_t> token_lens;
   std::vector<uint8_t> token_bytes;
   size_t total_size = 0;
 
   token_lens.reserve(tokens.size());
   for (const auto& token : tokens) {
-    token_lens.push_back(token.size());
-    total_size += token.size();
+    bool is_special = special_tokens_set.contains(token);
+    token_lens.push_back(token.size() + (is_special ? 1 : 0));
+    total_size += token.size() + (is_special ? 1 : 0);
   }
 
   token_bytes.reserve(total_size);
   for (const auto& token : tokens) {
+    bool is_special = special_tokens_set.contains(token);
+    if (is_special) {
+      // Special tokens need to be prefixed with 0xFF.
+      // https://github.com/guidance-ai/llguidance/blob/main/docs/special_tokens.md
+      token_bytes.push_back(0xFF);
+    }
     token_bytes.insert(token_bytes.end(), token.begin(), token.end());
   }
 
