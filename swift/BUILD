@@ -110,6 +110,15 @@ swift_library(
     ],
 )
 
+C_LITERT_LM_PUBLIC_HDRS = [
+    "//c:conversation.h",
+    "//c:embedding_engine.h",
+    "//c:engine.h",
+    "//c:error_reporter.h",
+    "//c:experimental.h",
+    "//c:model_info.h",
+]
+
 swift_interop_hint(
     name = "CLiteRTLM_swift_hint",
     module_name = "CLiteRTLM",
@@ -117,13 +126,7 @@ swift_interop_hint(
 
 cc_library(
     name = "CLiteRTLM_objc",
-    hdrs = [
-        "//c:conversation.h",
-        "//c:embedding_engine.h",
-        "//c:engine.h",
-        "//c:experimental.h",
-        "//c:model_info.h",
-    ],
+    hdrs = C_LITERT_LM_PUBLIC_HDRS,
     aspect_hints = [":CLiteRTLM_swift_hint"],
     deps = [
         "//c:engine",
@@ -146,13 +149,7 @@ apple_xcframework(
     minimum_os_versions = {
         "ios": "15.0",
     },
-    public_hdrs = [
-        "//c:engine.h",
-        "//c:conversation.h",
-        "//c:embedding_engine.h",
-        "//c:experimental.h",
-        "//c:model_info.h",
-    ],
+    public_hdrs = C_LITERT_LM_PUBLIC_HDRS,
     deps = [
         ":CLiteRTLM_objc",
     ],
@@ -185,29 +182,26 @@ genrule(
     name = "CLiteRTLM_mac",
     srcs = [
         ":CLiteRTLM_universal",
-        "//c:engine.h",
-        "//c:conversation.h",
-        "//c:embedding_engine.h",
-        "//c:experimental.h",
-        "//c:model_info.h",
-    ],
+    ] + C_LITERT_LM_PUBLIC_HDRS,
     outs = ["CLiteRTLM_mac.zip"],
     cmd = """
        mkdir -p CLiteRTLM_mac/Headers
        # Copy the universal dylib
        cp $(location :CLiteRTLM_universal) CLiteRTLM_mac/libCLiteRTLM_mac.dylib
        # Copy the headers
-       cp $(location //c:engine.h) CLiteRTLM_mac/Headers/
        cp $(location //c:conversation.h) CLiteRTLM_mac/Headers/
        cp $(location //c:embedding_engine.h) CLiteRTLM_mac/Headers/
+       cp $(location //c:engine.h) CLiteRTLM_mac/Headers/
+       cp $(location //c:error_reporter.h) CLiteRTLM_mac/Headers/
        cp $(location //c:experimental.h) CLiteRTLM_mac/Headers/
        cp $(location //c:model_info.h) CLiteRTLM_mac/Headers/
        # Create module map
        cat << 'EOF' > CLiteRTLM_mac/Headers/module.modulemap
 module CLiteRTLM {
-   header "engine.h"
    header "conversation.h"
    header "embedding_engine.h"
+   header "engine.h"
+   header "error_reporter.h"
    header "experimental.h"
    header "model_info.h"
    export *
