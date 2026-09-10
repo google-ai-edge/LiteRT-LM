@@ -180,6 +180,18 @@ absl::StatusOr<AudioOutput> TtsSession::Synthesize(absl::string_view text) {
 
 absl::Status TtsSession::SynthesizeAsync(absl::string_view text,
                                          AsyncCallback callback) {
+  bool should_reset = false;
+  {
+    absl::MutexLock lock(mutex_);
+    // If the previous stream already finished, reset the stages so new text can
+    // be pushed.
+    if (async_scheduler_ != nullptr && !async_scheduler_->IsRunning()) {
+      should_reset = true;
+    }
+  }
+  if (should_reset) {
+    Reset();
+  }
   ABSL_RETURN_IF_ERROR(components_.text_source->PushText(text));
   absl::Status status = ProcessAsync(std::move(callback));
   if (absl::IsAlreadyExists(status)) {

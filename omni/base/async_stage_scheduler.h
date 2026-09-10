@@ -99,10 +99,23 @@ class AsyncStageScheduler {
   enum class State { kNotStarted, kRunning, kStopping, kStopped };
 
   void CallCallbackOnError(absl::Status status) {
-    // Lock mutex_ even when status is ok to inform schedule the state change.
-    absl::MutexLock lock(mutex_);
-    if (!status.ok() && state_ == State::kRunning && !callback_(status).ok()) {
-      state_ = State::kStopping;
+    if (status.ok()) return;
+    bool should_call = false;
+    {
+      absl::MutexLock lock(mutex_);
+      if (state_ == State::kRunning) {
+        should_call = true;
+      }
+      // Note: Transition directly to kStopped rather than kStopping.
+      // kStopping is a transitional state reserved for an external caller in
+      // Stop() actively waiting on `!IsAnyStageRunning()`. Here, in an internal
+      // error/EOS callback triggered from worker threads, setting kStopped
+      // immediately halts the recursive scheduling loop and ensures subsequent
+      // calls to Stop() or Reset() exit cleanly without waiting on timeouts.
+      state_ = State::kStopped;
+    }
+    if (should_call) {
+      callback_(status).IgnoreError();
     }
   }
 

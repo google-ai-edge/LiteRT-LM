@@ -246,6 +246,55 @@ TEST(TtsSessionTest, SequentialSynthesizeCalls) {
   EXPECT_FALSE(audio2.pcm_samples.empty());
 }
 
+TEST(TtsSessionTest, SequentialSynthesizeAsyncCalls) {
+  ::litert::lm::ThreadPool thread_pool("tts_test_pool", 4);
+  ASSERT_OK_AND_ASSIGN(
+      auto session, TtsSession::Create(CreateStreamComponents(), &thread_pool));
+
+  // First async call
+  {
+    absl::Notification done;
+    int chunk_count = 0;
+    absl::Status final_status;
+    absl::Status status = session->SynthesizeAsync(
+        "First call.", [&](absl::StatusOr<AudioOutput> result) -> absl::Status {
+          if (!result.ok()) {
+            final_status = result.status();
+            done.Notify();
+            return result.status();
+          }
+          chunk_count++;
+          return absl::OkStatus();
+        });
+    ASSERT_TRUE(status.ok());
+    done.WaitForNotification();
+    EXPECT_TRUE(absl::IsOutOfRange(final_status));
+    EXPECT_GT(chunk_count, 0);
+  }
+
+  // Second async call on the same session
+  {
+    absl::Notification done;
+    int chunk_count = 0;
+    absl::Status final_status;
+    absl::Status status = session->SynthesizeAsync(
+        "Second call.",
+        [&](absl::StatusOr<AudioOutput> result) -> absl::Status {
+          if (!result.ok()) {
+            final_status = result.status();
+            done.Notify();
+            return result.status();
+          }
+          chunk_count++;
+          return absl::OkStatus();
+        });
+    ASSERT_TRUE(status.ok());
+    done.WaitForNotification();
+    EXPECT_TRUE(absl::IsOutOfRange(final_status));
+    EXPECT_GT(chunk_count, 0);
+  }
+}
+
 TEST(TtsSessionTest, ResetAndFlush) {
   ::litert::lm::ThreadPool thread_pool("tts_test_pool", 4);
   ASSERT_OK_AND_ASSIGN(
