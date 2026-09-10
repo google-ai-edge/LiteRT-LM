@@ -15,6 +15,7 @@
 #include "runtime/executor/embedding/embedding_executor_settings.h"
 
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <variant>
@@ -48,8 +49,15 @@ TEST(EmbeddingExecutorSettingsTest, GetAndSetBackend) {
                        EmbeddingExecutorSettings::CreateDefault(
                            model_assets, Backend::CPU));
   EXPECT_EQ(settings.GetBackend(), Backend::CPU);
+  EXPECT_EQ(settings.GetActivationDataType(), std::nullopt);
   EXPECT_OK(settings.SetBackend(Backend::GPU));
   EXPECT_EQ(settings.GetBackend(), Backend::GPU);
+
+  ASSERT_OK_AND_ASSIGN(
+      EmbeddingExecutorSettings gpu_settings,
+      EmbeddingExecutorSettings::CreateDefault(model_assets, Backend::GPU));
+  EXPECT_EQ(gpu_settings.GetBackend(), Backend::GPU);
+  EXPECT_EQ(gpu_settings.GetActivationDataType(), std::nullopt);
 }
 
 TEST(EmbeddingExecutorSettingsTest, GetAndSetNumThreads) {

@@ -14,16 +14,25 @@
 
 #include "runtime/engine/embedding_engine_settings.h"
 
+#include <algorithm>
 #include <optional>
 #include <ostream>
+#include <string>
 #include <utility>
+#include <vector>
 
+#include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/match.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/str_split.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "runtime/executor/audio/audio_executor_settings.h"
 #include "runtime/executor/embedding/embedding_executor_settings.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/vision/vision_executor_settings.h"
 #include "runtime/proto/embedding_metadata.pb.h"
+#include "runtime/util/file_util.h"
 #include "runtime/util/status_macros.h"
 
 namespace litert::lm {
@@ -140,6 +149,122 @@ EmbeddingEngineSettings::GetMutableEmbeddingMetadata() {
     metadata_ = proto::EmbeddingMetadata();
   }
   return *metadata_;
+}
+
+namespace {
+
+// Resolves the activation data type according to the precedence waterfall:
+// 1. User settings in code (takes priority if already set).
+// 2. prefer_activation_type from model metadata / TOML (if provided).
+// 3. FLOAT16 fallback if the backend is GPU.
+absl::Status ResolveActivationDataType(
+    ExecutorSettingsBase& executor_settings,
+    const std::optional<std::string>& prefer_activation_type) {
+  // Precedence 1: User explicitly set it in code.
+  if (executor_settings.GetActivationDataType().has_value()) {
+    return absl::OkStatus();
+  }
+
+  // Precedence 2: prefer_activation_type from metadata / TOML.
+  if (prefer_activation_type.has_value() && !prefer_activation_type->empty()) {
+    LITERT_ASSIGN_OR_RETURN(
+        ActivationDataType activation_data_type,
+        GetActivationDataTypeFromString(*prefer_activation_type));
+    executor_settings.SetActivationDataType(activation_data_type);
+    if (*prefer_activation_type == "fp32_fp16") {
+      executor_settings.SetEnableMixedPrecision(true);
+    }
+    return absl::OkStatus();
+  }
+
+  // Precedence 3: Fallback to FLOAT16 if the backend is GPU.
+  if (executor_settings.GetBackend() == Backend::GPU) {
+    executor_settings.SetActivationDataType(ActivationDataType::FLOAT16);
+  }
+  return absl::OkStatus();
+}
+
+absl::Status ValidateBackendConstraint(
+    const ExecutorSettingsBase& executor_settings,
+    const std::optional<std::string>& backend_constraint,
+    absl::string_view modality_name) {
+  if (!backend_constraint.has_value() || backend_constraint->empty()) {
+    return absl::OkStatus();
+  }
+  std::string backend_str = GetBackendString(executor_settings.GetBackend());
+  std::vector<std::string> constraints =
+      absl::StrSplit(*backend_constraint, ',');
+  bool found =
+      std::any_of(constraints.begin(), constraints.end(),
+                  [&](absl::string_view constraint) {
+                    return absl::EqualsIgnoreCase(constraint, backend_str);
+                  });
+  if (!found) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        modality_name, " backend constraint mismatch. Model requires one of [",
+        *backend_constraint, "] but ", modality_name, " backend is ",
+        backend_str));
+  }
+  return absl::OkStatus();
+}
+
+absl::Status ValidateCacheDir(absl::string_view cache_dir) {
+  if (cache_dir.empty() || cache_dir == ":nocache" || cache_dir == ":memory") {
+    return absl::OkStatus();
+  }
+  if (!IsDirectoryWritable(cache_dir)) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Cache directory does not exist or is not writable: ", cache_dir));
+  }
+  return absl::OkStatus();
+}
+
+}  // namespace
+
+absl::Status EmbeddingEngineSettings::ResolveDefaults(
+    const std::optional<std::string>& text_prefer_activation_type,
+    const std::optional<std::string>& vision_prefer_activation_type,
+    const std::optional<std::string>& audio_prefer_activation_type) {
+  LITERT_RETURN_IF_ERROR(ResolveActivationDataType(
+      main_executor_settings_, text_prefer_activation_type));
+  if (vision_executor_settings_.has_value()) {
+    LITERT_RETURN_IF_ERROR(ResolveActivationDataType(
+        *vision_executor_settings_, vision_prefer_activation_type));
+  }
+  if (audio_executor_settings_.has_value()) {
+    LITERT_RETURN_IF_ERROR(ResolveActivationDataType(
+        *audio_executor_settings_, audio_prefer_activation_type));
+  }
+  return absl::OkStatus();
+}
+
+absl::Status EmbeddingEngineSettings::Validate(
+    const std::optional<std::string>& text_backend_constraint,
+    const std::optional<std::string>& vision_backend_constraint,
+    const std::optional<std::string>& audio_backend_constraint) const {
+  LITERT_RETURN_IF_ERROR(ValidateBackendConstraint(
+      main_executor_settings_, text_backend_constraint, "Main"));
+  if (vision_executor_settings_.has_value()) {
+    LITERT_RETURN_IF_ERROR(ValidateBackendConstraint(
+        *vision_executor_settings_, vision_backend_constraint, "Vision"));
+  }
+  if (audio_executor_settings_.has_value()) {
+    LITERT_RETURN_IF_ERROR(ValidateBackendConstraint(
+        *audio_executor_settings_, audio_backend_constraint, "Audio"));
+  }
+
+  LITERT_RETURN_IF_ERROR(
+      ValidateCacheDir(main_executor_settings_.GetCacheDir()));
+  if (vision_executor_settings_.has_value()) {
+    LITERT_RETURN_IF_ERROR(
+        ValidateCacheDir(vision_executor_settings_->GetCacheDir()));
+  }
+  if (audio_executor_settings_.has_value()) {
+    LITERT_RETURN_IF_ERROR(
+        ValidateCacheDir(audio_executor_settings_->GetCacheDir()));
+  }
+
+  return absl::OkStatus();
 }
 
 std::ostream& operator<<(std::ostream& os,

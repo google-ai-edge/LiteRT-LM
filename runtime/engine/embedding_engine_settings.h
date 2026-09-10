@@ -17,8 +17,11 @@
 
 #include <optional>
 #include <ostream>
+#include <string>
 
+#include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "runtime/executor/audio/audio_executor_settings.h"
 #include "runtime/executor/embedding/embedding_executor_settings.h"
 #include "runtime/executor/executor_settings_base.h"
@@ -75,6 +78,29 @@ class EmbeddingEngineSettings {
   // Returns the EmbeddingMetadata parameters if loaded.
   const std::optional<proto::EmbeddingMetadata>& GetEmbeddingMetadata() const;
   proto::EmbeddingMetadata& GetMutableEmbeddingMetadata();
+
+  // Resolves default values and metadata preferences across all executor
+  // settings based on the precedence waterfall:
+  // 1. Settings explicitly set by user in code (highest precedence).
+  // 2. prefer_activation_type from model metadata / TOML (supports "fp32_fp16"
+  //    for mixed precision).
+  // 3. Fallback to FLOAT16 if the backend is GPU.
+  absl::Status ResolveDefaults(
+      const std::optional<std::string>& text_prefer_activation_type =
+          std::nullopt,
+      const std::optional<std::string>& vision_prefer_activation_type =
+          std::nullopt,
+      const std::optional<std::string>& audio_prefer_activation_type =
+          std::nullopt);
+
+  // Validates the engine settings to ensure cache directories and backend
+  // constraints are valid. Returns an error if validation fails.
+  absl::Status Validate(
+      const std::optional<std::string>& text_backend_constraint = std::nullopt,
+      const std::optional<std::string>& vision_backend_constraint =
+          std::nullopt,
+      const std::optional<std::string>& audio_backend_constraint =
+          std::nullopt) const;
 
  private:
   explicit EmbeddingEngineSettings(

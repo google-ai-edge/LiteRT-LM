@@ -122,5 +122,130 @@ TEST(EmbeddingEngineSettingsTest, VisionTokensPerImageGetterAndSetter) {
   EXPECT_EQ(settings.GetVisionTokensPerImage(), 70);
 }
 
+TEST(EmbeddingEngineSettingsTest, ResolveDefaultsUserSettingTakesPrecedence) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create("test_embedding_model.tflite"));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::GPU));
+  // User explicitly sets activation data type in code.
+  settings.GetMutableMainExecutorSettings().SetActivationDataType(
+      ActivationDataType::FLOAT32);
+
+  // Even though prefer_activation_type is fp16 and backend is GPU, user setting
+  // wins.
+  EXPECT_OK(settings.ResolveDefaults(/*text_prefer_activation_type=*/"fp16"));
+  EXPECT_EQ(settings.GetMainExecutorSettings().GetActivationDataType(),
+            ActivationDataType::FLOAT32);
+}
+
+TEST(EmbeddingEngineSettingsTest,
+     ResolveDefaultsPreferActivationTypeTakesPrecedenceOverGpuDefault) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create("test_embedding_model.tflite"));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::GPU));
+
+  // User did not set it in code. prefer_activation_type is set to "fp32".
+  EXPECT_OK(settings.ResolveDefaults(/*text_prefer_activation_type=*/"fp32"));
+  EXPECT_EQ(settings.GetMainExecutorSettings().GetActivationDataType(),
+            ActivationDataType::FLOAT32);
+}
+
+TEST(EmbeddingEngineSettingsTest,
+     ResolveDefaultsPreferActivationTypeMixedPrecision) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create("test_embedding_model.tflite"));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::GPU));
+
+  // prefer_activation_type "fp32_fp16" should set FLOAT32 and enable mixed
+  // precision.
+  EXPECT_OK(
+      settings.ResolveDefaults(/*text_prefer_activation_type=*/"fp32_fp16"));
+  EXPECT_EQ(settings.GetMainExecutorSettings().GetActivationDataType(),
+            ActivationDataType::FLOAT32);
+  EXPECT_TRUE(settings.GetMainExecutorSettings().IsMixedPrecisionEnabled());
+}
+
+TEST(EmbeddingEngineSettingsTest, ResolveDefaultsGpuFallbackToFloat16) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create("test_embedding_model.tflite"));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::GPU));
+
+  // Neither user set nor prefer_activation_type provided. Falls back to FLOAT16
+  // on GPU.
+  EXPECT_OK(
+      settings.ResolveDefaults(/*text_prefer_activation_type=*/std::nullopt));
+  EXPECT_EQ(settings.GetMainExecutorSettings().GetActivationDataType(),
+            ActivationDataType::FLOAT16);
+}
+
+TEST(EmbeddingEngineSettingsTest, ResolveDefaultsCpuNoDefaultActivationType) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create("test_embedding_model.tflite"));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+
+  // On CPU with no prefer_activation_type, activation data type remains
+  // nullopt.
+  EXPECT_OK(
+      settings.ResolveDefaults(/*text_prefer_activation_type=*/std::nullopt));
+  EXPECT_EQ(settings.GetMainExecutorSettings().GetActivationDataType(),
+            std::nullopt);
+}
+
+TEST(EmbeddingEngineSettingsTest, ResolveDefaultsMultimodal) {
+  ASSERT_OK_AND_ASSIGN(
+      auto model_assets,
+      ModelAssets::Create("test_multimodal_embedding.litertlm"));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::GPU,
+                                          Backend::CPU, Backend::GPU));
+
+  EXPECT_OK(settings.ResolveDefaults(
+      /*text_prefer_activation_type=*/"fp16",
+      /*vision_prefer_activation_type=*/"fp32",
+      /*audio_prefer_activation_type=*/std::nullopt));
+
+  EXPECT_EQ(settings.GetMainExecutorSettings().GetActivationDataType(),
+            ActivationDataType::FLOAT16);
+  ASSERT_TRUE(settings.GetVisionExecutorSettings().has_value());
+  EXPECT_EQ(settings.GetVisionExecutorSettings()->GetActivationDataType(),
+            ActivationDataType::FLOAT32);
+  ASSERT_TRUE(settings.GetAudioExecutorSettings().has_value());
+  EXPECT_EQ(settings.GetAudioExecutorSettings()->GetActivationDataType(),
+            ActivationDataType::FLOAT16);
+}
+
+TEST(EmbeddingEngineSettingsTest, ValidateBackendConstraintSuccess) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create("test_embedding_model.tflite"));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::GPU));
+
+  EXPECT_OK(settings.Validate(/*text_backend_constraint=*/"cpu,gpu"));
+}
+
+TEST(EmbeddingEngineSettingsTest, ValidateBackendConstraintMismatch) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create("test_embedding_model.tflite"));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::GPU));
+
+  EXPECT_FALSE(settings.Validate(/*text_backend_constraint=*/"cpu").ok());
+}
+
+TEST(EmbeddingEngineSettingsTest, ValidateInvalidCacheDir) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create("test_embedding_model.tflite"));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+  settings.GetMutableMainExecutorSettings().SetCacheDir(
+      "/non_existent_directory_for_test/invalid");
+
+  EXPECT_FALSE(settings.Validate().ok());
+}
+
 }  // namespace
 }  // namespace litert::lm

@@ -237,6 +237,20 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
 
   // TODO: b/534849903 - Support min_input_length from metadata and settings.
 
+  // Resolve defaults and metadata preferences, then validate settings.
+  LITERT_RETURN_IF_ERROR(
+      settings.ResolveDefaults(resources->GetTFLiteModelPreferActivationType(
+                                   ModelType::kTfLiteTextEncoder),
+                               resources->GetTFLiteModelPreferActivationType(
+                                   ModelType::kTfLiteVisionEncoder),
+                               resources->GetTFLiteModelPreferActivationType(
+                                   ModelType::kTfLiteAudioEncoderHw)));
+  LITERT_RETURN_IF_ERROR(settings.Validate(
+      resources->GetTFLiteModelBackendConstraint(ModelType::kTfLiteTextEncoder),
+      resources->GetTFLiteModelBackendConstraint(
+          ModelType::kTfLiteVisionEncoder),
+      resources->GetTFLiteModelBackendConstraint(
+          ModelType::kTfLiteAudioEncoderHw)));
   // Auto-select text encoder signatures if max_input_length is set.
   std::optional<SelectedTextSignaturesInfo> selected_text_signatures_info =
       std::nullopt;
