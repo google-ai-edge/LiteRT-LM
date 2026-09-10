@@ -63,7 +63,7 @@ annotation class Tool(val description: String)
  */
 @Target(AnnotationTarget.VALUE_PARAMETER) // This annotation can only be applied to functions
 @Retention(AnnotationRetention.RUNTIME) // IMPORTANT: Makes the annotation available at runtime
-annotation class ToolParam(val description: String)
+annotation class ToolParam(val description: String, val allowedValues: Array<String> = [])
 
 /**
  * Tool provider for Conversation.
@@ -104,6 +104,19 @@ abstract class ToolProvider {
  * }
  * ```
  */
+/**
+ * Interface to customize how enum constants are mapped to LLM values. If an enum class implements
+ * this interface, [getToolEnumValue] will be used in the JSON schema and for mapping back from the
+ * LLM response.
+ */
+interface ToolEnum<Type> {
+  /**
+   * The value representation of this enum constant for the LLM. Supported types: String, Int,
+   * Float, Double, Boolean.
+   */
+  fun getToolEnumValue(): Type
+}
+
 interface ToolSet {}
 
 /**
@@ -294,7 +307,24 @@ internal class ReflectionTool(
         val paramAnnotation = param.annotations.find { it is ToolParam } as? ToolParam
         val paramJsonSchema = getTypeJsonSchema(param.type)
         // add "description" if provided
-        paramAnnotation?.description?.let { paramJsonSchema.addProperty("description", it) }
+        paramAnnotation?.description?.let {
+          if (it.isNotEmpty()) paramJsonSchema.addProperty("description", it)
+        }
+        paramAnnotation?.allowedValues?.let { values ->
+          if (values.isNotEmpty()) {
+            val enumArray = JsonArray()
+            for (valStr in values) {
+              when (param.type.classifier) {
+                Int::class -> enumArray.add(valStr.toIntOrNull() ?: 0)
+                Float::class -> enumArray.add(valStr.toFloatOrNull() ?: 0.0f)
+                Double::class -> enumArray.add(valStr.toDoubleOrNull() ?: 0.0)
+                Boolean::class -> enumArray.add(valStr.toBooleanStrictOrNull() ?: false)
+                else -> enumArray.add(valStr)
+              }
+            }
+            paramJsonSchema.add("enum", enumArray)
+          }
+        }
         if (param.type.isMarkedNullable) paramJsonSchema.addProperty("nullable", true)
         properties.add(param.toModelParamName(), paramJsonSchema)
       }
@@ -353,7 +383,27 @@ internal class ReflectionTool(
    * @return The converted value.
    * @throws IllegalArgumentException if the value cannot be converted to the target type.
    */
+  @Suppress("UNCHECKED_CAST")
   private fun convertJsonValueToKotlinValue(value: JsonElement, type: kotlin.reflect.KType): Any {
+    val kClass = type.classifier as? kotlin.reflect.KClass<*>
+    if (
+      kClass != null && kClass.java.isEnum && ToolEnum::class.java.isAssignableFrom(kClass.java)
+    ) {
+      val enumConstants = kClass.java.enumConstants as Array<ToolEnum<*>>
+      val matched = enumConstants.find { constant ->
+        when (val valObj = constant.getToolEnumValue()) {
+          is Int -> value is JsonPrimitive && value.isNumber && value.asInt == valObj
+          is Float -> value is JsonPrimitive && value.isNumber && value.asFloat == valObj
+          is Double -> value is JsonPrimitive && value.isNumber && value.asDouble == valObj
+          is Boolean -> value is JsonPrimitive && value.isBoolean && value.asBoolean == valObj
+          is String -> value is JsonPrimitive && value.isString && value.asString == valObj
+          else -> value is JsonPrimitive && value.asString == valObj.toString()
+        }
+      }
+      if (matched != null) return matched
+      throw IllegalArgumentException("Invalid enum value: $value for ${kClass.simpleName}")
+    }
+
     val classifier = type.classifier
     return when {
       classifier == List::class && value is JsonArray -> {
@@ -377,7 +427,40 @@ internal class ReflectionTool(
    * @return A JsonObject representing the JSON schema.
    * @throws IllegalArgumentException if the type is not supported.
    */
+  @Suppress("UNCHECKED_CAST")
   private fun getTypeJsonSchema(type: kotlin.reflect.KType): JsonObject {
+    val kClass = type.classifier as? kotlin.reflect.KClass<*>
+    if (
+      kClass != null && kClass.java.isEnum && ToolEnum::class.java.isAssignableFrom(kClass.java)
+    ) {
+      val enumConstants = kClass.java.enumConstants as Array<ToolEnum<*>>
+      val firstVal = enumConstants.firstOrNull()?.getToolEnumValue()
+      val jsonType =
+        when (firstVal) {
+          is Int -> "integer"
+          is Float,
+          is Double -> "number"
+          is Boolean -> "boolean"
+          is String -> "string"
+          else -> "string"
+        }
+      val schema = JsonObject()
+      schema.addProperty("type", jsonType)
+      val enumArray = JsonArray()
+      for (constant in enumConstants) {
+        when (val valObj = constant.getToolEnumValue()) {
+          is Int -> enumArray.add(valObj)
+          is Float -> enumArray.add(valObj)
+          is Double -> enumArray.add(valObj)
+          is Boolean -> enumArray.add(valObj)
+          is String -> enumArray.add(valObj)
+          else -> enumArray.add(valObj.toString())
+        }
+      }
+      schema.add("enum", enumArray)
+      return schema
+    }
+
     val classifier = type.classifier
     val jsonType = javaTypeToJsonTypeString[classifier]
 
