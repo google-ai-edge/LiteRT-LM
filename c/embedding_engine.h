@@ -92,6 +92,16 @@ LITERT_LM_C_API_EXPORT
 void litert_lm_embedding_engine_settings_delete(
     LiteRtLmEmbeddingEngineSettings* settings);
 
+// Sets the number of threads for the CPU backend in Embedding Engine Settings.
+//
+// @param settings The embedding engine settings.
+// @param num_threads The number of threads.
+//
+// Added in version 0.2.0.
+LITERT_LM_C_API_EXPORT
+void litert_lm_embedding_engine_settings_set_num_threads(
+    LiteRtLmEmbeddingEngineSettings* settings, int num_threads);
+
 // Sets the number of threads for the audio CPU backend in Embedding Engine
 // Settings.
 //

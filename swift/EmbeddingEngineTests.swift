@@ -100,6 +100,23 @@ class EmbeddingEngineTests: XCTestCase {
     await engine.close()
   }
 
+  func testComputeEmbedding_WithCpuThreadCount_Success() async throws {
+    let config = EmbeddingEngineConfig(
+      modelPath: modelPath,
+      backend: .cpu(threadCount: 4)
+    )
+    let engine = EmbeddingEngine(config: config)
+    try await engine.initialize()
+
+    let response = try await engine.computeEmbedding(
+      contents: [.text("'s")],
+      options: EmbeddingOptions(normalize: true)
+    )
+
+    XCTAssertFalse(response.embedding.isEmpty)
+    await engine.close()
+  }
+
   func testComputeEmbedding_Success() async throws {
     let config = EmbeddingEngineConfig(
       modelPath: modelPath,
