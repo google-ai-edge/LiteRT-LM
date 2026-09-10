@@ -77,6 +77,10 @@ public actor EmbeddingEngine {
 
     defer { litert_lm_embedding_engine_settings_delete(settings) }
 
+    if case .cpu(let threadCount) = config.backend, let threadCount, threadCount > 0 {
+      litert_lm_embedding_engine_settings_set_num_threads(settings, Int32(threadCount))
+    }
+
     if case .cpu(let threadCount) = config.audioBackend, let threadCount, threadCount > 0 {
       litert_lm_embedding_engine_settings_set_audio_num_threads(settings, Int32(threadCount))
     }
