@@ -336,11 +336,11 @@ ExecutorSettingsBase::GetWeightCacheFile(absl::string_view suffix,
 
   std::string cache_path;
   if (GetCacheDir().empty()) {
-    cache_path = absl::StrCat(model_path, metadata_id, suffix);
+    cache_path = absl::StrCat(model_path, suffix, metadata_id);
   } else {
     ABSL_ASSIGN_OR_RETURN(
         cache_path, JoinPath(GetCacheDir(), absl::StrCat(Basename(model_path),
-                                                         metadata_id, suffix)));
+                                                         suffix, metadata_id)));
   }
 
   // Try to delete stale caches if the current cache file doesn't exist.
