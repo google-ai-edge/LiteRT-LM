@@ -32,16 +32,9 @@
 #include "support/preprocessor/image_preprocessor_utils.h"
 #include "support/util/io_types.h"
 #include "support/util/status_macros.h"  // IWYU pragma: keep
-#include "include/codec/SkBmpDecoder.h"  // from @skia
 #include "include/codec/SkCodec.h"  // from @skia
 #include "include/codec/SkEncodedOrigin.h"  // from @skia
 #include "include/codec/SkJpegDecoder.h"  // from @skia
-#if defined(SK_CODEC_DECODES_PNG_WITH_RUST)
-#include "include/codec/SkPngRustDecoder.h"  // from @skia
-#include "include/core/SkStream.h"  // from @skia
-#else
-#include "include/codec/SkPngDecoder.h"  // from @skia
-#endif
 #include "include/codec/SkPixmapUtils.h"  // from @skia
 #include "include/core/SkAlphaType.h"  // from @skia
 #include "include/core/SkBitmap.h"  // from @skia
@@ -50,6 +43,19 @@
 #include "include/core/SkImageInfo.h"  // from @skia
 #include "include/core/SkRefCnt.h"  // from @skia
 #include "include/core/SkSamplingOptions.h"  // from @skia
+
+#if defined(SK_CODEC_DECODES_BMP_WITH_RUST)
+#include "include/codec/SkBmpRustDecoder.h"  // from @skia
+#else
+#include "include/codec/SkBmpDecoder.h"  // from @skia
+#endif
+
+#if defined(SK_CODEC_DECODES_PNG_WITH_RUST)
+#include "include/codec/SkPngRustDecoder.h"  // from @skia
+#include "include/core/SkStream.h"  // from @skia
+#else
+#include "include/codec/SkPngDecoder.h"  // from @skia
+#endif
 
 namespace litert::support {
 
@@ -67,11 +73,21 @@ absl::StatusOr<sk_sp<SkImage>> DecodeDataAsImage(sk_sp<SkData> data) {
   }
 
   std::unique_ptr<SkCodec> codec;
-  if (SkBmpDecoder::IsBmp(data->bytes(), data->size())) {
-    codec = SkBmpDecoder::Decode(data, nullptr);
-  } else if (SkJpegDecoder::IsJpeg(data->bytes(), data->size())) {
+  if (SkJpegDecoder::IsJpeg(data->bytes(), data->size())) {
     codec = SkJpegDecoder::Decode(data, nullptr);
-  } else {
+  }
+  if (!codec) {
+#if defined(SK_CODEC_DECODES_BMP_WITH_RUST)
+    if (SkBmpRustDecoder::IsBmp(data->bytes(), data->size())) {
+      codec = SkBmpRustDecoder::Decode(data, nullptr);
+    }
+#else
+    if (SkBmpDecoder::IsBmp(data->bytes(), data->size())) {
+      codec = SkBmpDecoder::Decode(data, nullptr);
+    }
+#endif
+  }
+  if (!codec) {
 #if defined(SK_CODEC_DECODES_PNG_WITH_RUST)
     if (SkPngRustDecoder::IsPng(data->bytes(), data->size())) {
       codec = SkPngRustDecoder::Decode(std::make_unique<SkMemoryStream>(data),
