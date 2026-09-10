@@ -395,6 +395,11 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
 
   // Sampler for internal sampling.
   std::unique_ptr<Sampler> sampler_;
+  // The parameters `sampler_` was built with. InitializeSampler() rebuilds the
+  // sampler when the active context carries different ones, so a later
+  // session's seed / top_k / top_p / temperature reach the sampler instead of
+  // the first session's. Unset for a sampler installed from outside.
+  std::optional<proto::SamplerParameters> sampler_params_in_use_;
   int gpu_sampler_max_top_k_ = 0;
   bool sampler_handles_input_ = true;
 
