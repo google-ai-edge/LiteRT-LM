@@ -76,6 +76,20 @@ export declare interface VectorVectorIntConstructor {
 }
 
 /**
+ * A C++ vector of float.
+ */
+export declare interface VectorFloatConstructor {
+  new(): EmscriptenVector<number>;
+}
+
+/**
+ * A C++ vector of EmbeddingResponse.
+ */
+export declare interface VectorEmbeddingResponseConstructor {
+  new(): EmscriptenVector<WasmEmbeddingResponse>;
+}
+
+/**
  * A C++ enum value in Wasm.
  */
 export declare interface EmscriptenEnumElement<T> {
@@ -239,6 +253,7 @@ export declare interface ExecutorSettingsBase extends Deletable {
   [ExecutorSettingsBaseBrand]: void;
   getCacheDir(): string;
   setCacheDir(cacheDir: string): void;
+  getBackend(): EmscriptenEnumElement<Backend>;
 }
 
 /**
@@ -499,6 +514,97 @@ type BackendEnum = EmscriptenEnum<{
 }>;
 
 /**
+ * Input overflow strategies for embedding computations.
+ */
+export const InputOverflowStrategy = {
+  CHUNK_AND_AVERAGE: 0,
+  TRUNCATE: 1,
+  ERROR: 2,
+} as const;
+
+/**
+ * An input overflow strategy.
+ */
+export type InputOverflowStrategy =
+    (typeof InputOverflowStrategy)[keyof typeof InputOverflowStrategy];
+
+/**
+ * Options for configuring the embedding computation.
+ */
+export interface EmbeddingOptions {
+  normalize?: boolean;
+  insertSpecialTokens?: boolean;
+  inputOverflowStrategy?: InputOverflowStrategy;
+  visionTokensPerImage?: number;
+  outputSize?: number;
+}
+
+/**
+ * Wasm-level result of an embedding computation.
+ */
+export interface WasmEmbeddingResponse {
+  embedding: EmscriptenVector<number>;
+  inputLength: number;
+  truncatedLength?: number;
+  numChunks: number;
+}
+
+declare const EmbeddingExecutorSettingsBrand: unique symbol;
+
+/**
+ * LiteRT-LM EmbeddingExecutorSettings
+ */
+export declare interface EmbeddingExecutorSettings extends ExecutorSettingsBase {
+  [EmbeddingExecutorSettingsBrand]: void;
+  getNumThreads(): number;
+  setNumThreads(numThreads: number): void;
+}
+
+declare interface EmbeddingEngineSettingsConstructor {
+  new(...args: never[]): EmbeddingEngineSettings;  // Do not call.
+  createDefault(
+      modelAssets: ModelAssets,
+      backend: EmscriptenEnumElement<Backend>): EmbeddingEngineSettings;
+  createDefaultMultimodal(
+      modelAssets: ModelAssets,
+      backend: EmscriptenEnumElement<Backend>,
+      visionBackend?: EmscriptenEnumElement<Backend>,
+      audioBackend?: EmscriptenEnumElement<Backend>): EmbeddingEngineSettings;
+}
+
+declare const EmbeddingEngineSettingsBrand: unique symbol;
+
+/**
+ * LiteRT-LM EmbeddingEngineSettings
+ */
+export declare interface EmbeddingEngineSettings extends Deletable {
+  [EmbeddingEngineSettingsBrand]: void;
+  getMaxInputLength(): number | undefined;
+  setMaxInputLength(maxInputLength?: number): void;
+  getVisionTokensPerImage(): number | undefined;
+  setVisionTokensPerImage(visionTokensPerImage?: number): void;
+  getMutableMainExecutorSettings(): EmbeddingExecutorSettings;
+}
+
+declare interface EmbeddingEngineConstructor {
+  new(...args: never[]): EmbeddingEngine;  // Do not call.
+  createEngine(settings: EmbeddingEngineSettings): Promise<EmbeddingEngine>;
+}
+
+declare const EmbeddingEngineBrand: unique symbol;
+
+/**
+ * LiteRT-LM EmbeddingEngine
+ */
+export declare interface EmbeddingEngine extends Deletable {
+  [EmbeddingEngineBrand]: void;
+  computeEmbedding(input: unknown, options: EmbeddingOptions):
+      Promise<WasmEmbeddingResponse>;
+  computeEmbeddingBatch(inputs: unknown[], options: EmbeddingOptions):
+      Promise<EmscriptenVector<WasmEmbeddingResponse>>;
+}
+
+/**
  * Interface for the C++ LiteRt LM bindings.
  */
 export declare interface LiteRtLmWasm extends WasmModule {
@@ -506,6 +612,8 @@ export declare interface LiteRtLmWasm extends WasmModule {
   VectorUint32: VectorUint32Constructor;
   VectorInt: VectorIntConstructor;
   VectorVectorInt: VectorVectorIntConstructor;
+  VectorFloat: VectorFloatConstructor;
+  VectorEmbeddingResponse: VectorEmbeddingResponseConstructor;
   FS: FileSystemApi;
   setupLogging(): void;
   Backend: BackendEnum;
@@ -513,10 +621,31 @@ export declare interface LiteRtLmWasm extends WasmModule {
   EngineSettings: EngineSettingsConstructor;
   LlmExecutorSettings: LlmExecutorSettingsConstructor;
   Engine: EngineConstructor;
+  EmbeddingEngineSettings: EmbeddingEngineSettingsConstructor;
+  EmbeddingEngine: EmbeddingEngineConstructor;
   SessionConfig: SessionConfigConstructor;
   ReadableStreamDataStream: ReadableStreamDataStreamConstructor;
   ConversationConfig: ConversationConfigConstructor;
   Conversation: ConversationConstructor;
+  registerStreamWeightsCallback(
+      callback: ((
+          tflIds: Int32Array,
+          wgpuBufferIds: Uint32Array,
+          offsets: Float64Array,
+          lengths: Float64Array,
+      ) => Promise<void>)|undefined,
+  ): void;
+  readStoredWeights(
+      modelType: number,
+      offset: number,
+      size: number,
+      destAddress: number,
+  ): Promise<void>;
+  clearStoredWeightsStreams(): Promise<void>;
+  getCurrentlyCompilingModel(): number;
+  WebGPU: {
+    getJsObject(id: number): unknown;
+  };
 }
 
 

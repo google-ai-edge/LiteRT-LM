@@ -28,7 +28,8 @@ export * from './session.js';
 export * from './conversation.js';
 export * from './session_config.js';
 export * from './conversation_config.js';
-
+export * from './embedding_engine_settings.js';
+export * from './embedding_engine.js';
 
 export * as Wasm from './wasm_binding_types.js';
 export * from './types.js';

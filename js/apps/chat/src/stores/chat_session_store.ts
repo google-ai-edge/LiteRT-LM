@@ -345,9 +345,10 @@ export class ChatSessionStore {
         }
 
         if (value && value.content) {
+          const firstPart = Array.isArray(value.content) ? value.content[0] : undefined;
           const newChunkText = typeof value.content === 'string' ?
               value.content :
-              (value.content[0]?.['text'] || '');
+              (firstPart?.type === 'text' ? firstPart.text : '');
 
           fullResponseText += newChunkText;
           this.messages[activeMsgIndex] = {

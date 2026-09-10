@@ -71,23 +71,49 @@ export interface TextContentPart {
 }
 
 /**
+ * Supported MIME types for image input.
+ */
+export const SUPPORTED_IMAGE_MIME_TYPES: ReadonlySet<string> = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/bmp',
+  'image/gif',
+  'image/x-tga',
+  'image/vnd.adobe.photoshop',
+  'image/vnd.radiance',
+  'image/x-portable-pixmap',
+  'image/x-portable-graymap',
+]);
+
+/**
+ * Supported MIME types for audio input.
+ */
+export const SUPPORTED_AUDIO_MIME_TYPES: ReadonlySet<string> = new Set([
+  'audio/wav',
+  'audio/x-wav',
+  'audio/wave',
+  'audio/mp3',
+  'audio/mpeg',
+  'audio/flac',
+  'audio/x-flac',
+]);
+
+/**
  * Image content part of a message.
- *
- * This is a placeholder. Images are not supported in JS yet.
  */
 export interface ImageContentPart {
   type: 'image';
-  [key: string]: JsonValue|undefined;
+  // 'string' is base64 encoded
+  data: Uint8Array | ArrayBuffer | string | Blob;
 }
 
 /**
  * Audio content part of a message.
- *
- * This is a placeholder. Audio is not supported in JS yet.
  */
 export interface AudioContentPart {
   type: 'audio';
-  [key: string]: JsonValue|undefined;
+  // 'string' is base64 encoded
+  data: Uint8Array | ArrayBuffer | string | Blob;
 }
 
 /**
@@ -138,7 +164,7 @@ export declare interface Message {
   content?: string|ContentPart[];
   channels?: Record<string, string>;
   tool_calls?: ToolCall[];
-  [key: string]: JsonValue|undefined;
+  [key: string]: JsonValue|ContentPart[]|undefined;
 }
 
 /**

@@ -22,23 +22,54 @@
 #include <emscripten/bind.h>
 
 #include "research/drishti/app/pursuit/wasm/wasm_logging.h"
+#include "absl/strings/escaping.h"  // from @com_google_absl
 #include "litert/js/packages/core/src/cpp/global_error_reporter.h"  // from @litert
 #include "js/packages/core/src/cpp/readable_stream_data_stream.h"
 #include "js/packages/core/src/cpp/unwrap_statusor.h"
 #include "runtime/conversation/conversation.h"
 #include "runtime/conversation/io_types.h"
+#include "runtime/core/embedding_engine_impl.h"
+#include "runtime/engine/embedding_engine.h"
+#include "runtime/engine/embedding_engine_settings.h"
 #include "runtime/engine/engine.h"
 #include "runtime/engine/engine_factory.h"
 #include "runtime/engine/engine_settings.h"
+#include "runtime/executor/embedding/embedding_executor_settings.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/proto/sampler_params.pb.h"
 #include "runtime/util/data_stream.h"
+#include "runtime/util/streamed_weights_manager.h"
 
 using emscripten::optional_override;
 using emscripten::val;
 
 namespace litertlm_web {
+
+// Stored callback for streaming weights.
+static std::optional<emscripten::val> stream_weights_callback;
+
+void RegisterStreamWeightsCallback(emscripten::val callback) {
+  if (callback.isNull() || callback.isUndefined()) {
+    stream_weights_callback = std::nullopt;
+  } else {
+    stream_weights_callback = callback;
+  }
+}
+
+/**
+ * Get the callback that, when called, will stream weights to WebGPU.
+ *
+ * This is used by litert/weight_loader/external_weights_loader.cc
+ */
+emscripten::val GetStreamWeightsCallback() {
+  // TODO: b/555784020 - Use a better approach to identifying which model is
+  // being loaded.
+  if (!stream_weights_callback.has_value()) {
+    return emscripten::val::undefined();
+  }
+  return stream_weights_callback.value();
+}
 
 void SetupLogging() { drishti::wasm::InitializeLog(); }
 
@@ -78,9 +109,150 @@ struct JsBenchmarkInfo {
   double timeToFirstTokenInSecond = 0.0;
 };
 
+static litert::lm::EmbeddingOptions ParseEmbeddingOptions(
+    emscripten::val options_val) {
+  litert::lm::EmbeddingOptions options;
+  if (!options_val.isUndefined() && !options_val.isNull()) {
+    auto normalize_val = options_val["normalize"];
+    if (!normalize_val.isUndefined() && !normalize_val.isNull()) {
+      options.normalize = normalize_val.as<bool>();
+    }
+    auto insert_special_tokens_val = options_val["insertSpecialTokens"];
+    if (!insert_special_tokens_val.isUndefined() &&
+        !insert_special_tokens_val.isNull()) {
+      options.insert_special_tokens = insert_special_tokens_val.as<bool>();
+    }
+    auto overflow_val = options_val["inputOverflowStrategy"];
+    if (!overflow_val.isUndefined() && !overflow_val.isNull()) {
+      options.input_overflow_strategy =
+          overflow_val.as<litert::lm::InputOverflowStrategy>();
+    }
+    auto vision_tokens_val = options_val["visionTokensPerImage"];
+    if (!vision_tokens_val.isUndefined() && !vision_tokens_val.isNull()) {
+      options.vision_tokens_per_image = vision_tokens_val.as<int>();
+    }
+    auto output_size_val = options_val["outputSize"];
+    if (!output_size_val.isUndefined() && !output_size_val.isNull()) {
+      options.output_size = output_size_val.as<int>();
+    }
+  }
+  return options;
+}
+
+static std::string ReadBytesFromVal(emscripten::val data_val) {
+  if (data_val.isUndefined() || data_val.isNull()) {
+    return "";
+  }
+  if (data_val.instanceof(emscripten::val::global("Uint8Array"))) {
+    size_t length = data_val["length"].as<size_t>();
+    std::string result(length, '\0');
+    emscripten::val memory_view = emscripten::val(emscripten::typed_memory_view(
+        length, reinterpret_cast<uint8_t*>(result.data())));
+    memory_view.call<void>("set", data_val);
+    return result;
+  }
+  if (data_val.instanceof(emscripten::val::global("ArrayBuffer"))) {
+    emscripten::val uint8_array =
+        emscripten::val::global("Uint8Array").new_(data_val);
+    size_t length = uint8_array["length"].as<size_t>();
+    std::string result(length, '\0');
+    emscripten::val memory_view = emscripten::val(emscripten::typed_memory_view(
+        length, reinterpret_cast<uint8_t*>(result.data())));
+    memory_view.call<void>("set", uint8_array);
+    return result;
+  }
+  return data_val.as<std::string>();
+}
+
+static absl::StatusOr<std::vector<litert::lm::InputData>> ParseInputData(
+    emscripten::val input_val) {
+  std::vector<litert::lm::InputData> contents;
+  if (input_val.isUndefined() || input_val.isNull()) {
+    return contents;
+  }
+
+  auto parse_single_item = [&](emscripten::val item) -> absl::Status {
+    if (item.isString()) {
+      contents.push_back(litert::lm::InputText(item.as<std::string>()));
+      return absl::OkStatus();
+    }
+    if (item.typeOf().as<std::string>() == "object") {
+      std::string type = "text";
+      if (item.hasOwnProperty("type") && item["type"].isString()) {
+        type = item["type"].as<std::string>();
+      }
+      if (type == "text") {
+        std::string text = "";
+        if (item.hasOwnProperty("text") && item["text"].isString()) {
+          text = item["text"].as<std::string>();
+        }
+        contents.push_back(litert::lm::InputText(std::move(text)));
+      } else if (type == "image" || type == "audio") {
+        if (!item.hasOwnProperty("data") || item["data"].isNull() ||
+            item["data"].isUndefined()) {
+          return absl::InvalidArgumentError(
+              absl::StrCat(type, " content part must have data."));
+        }
+        std::string bytes;
+        emscripten::val data = item["data"];
+        if (data.isString()) {
+          if (!absl::Base64Unescape(data.as<std::string>(), &bytes)) {
+            return absl::InvalidArgumentError(
+                absl::StrCat("Failed to decode base64 data for ", type, "."));
+          }
+        } else {
+          bytes = ReadBytesFromVal(data);
+        }
+        if (type == "image") {
+          contents.push_back(litert::lm::InputImage(std::move(bytes)));
+        } else {
+          contents.push_back(litert::lm::InputAudio(std::move(bytes)));
+        }
+      } else {
+        return absl::InvalidArgumentError(
+            absl::StrCat("Unsupported content type: ", type));
+      }
+      return absl::OkStatus();
+    }
+    return absl::InvalidArgumentError("Input item must be string or object.");
+  };
+
+  if (input_val.isArray()) {
+    size_t length = input_val["length"].as<size_t>();
+    for (size_t i = 0; i < length; ++i) {
+      ABSL_RETURN_IF_ERROR(parse_single_item(input_val[i]));
+    }
+  } else {
+    ABSL_RETURN_IF_ERROR(parse_single_item(input_val));
+  }
+  return contents;
+}
+
 EMSCRIPTEN_BINDINGS(litertlm_web) {
   emscripten::function("setupLogging", &SetupLogging);
   emscripten::function("setErrorReporter", &litert_web::SetErrorReporter);
+  emscripten::function("registerStreamWeightsCallback",
+                       &RegisterStreamWeightsCallback);
+  emscripten::function("getStreamWeightsCallback", &GetStreamWeightsCallback);
+  emscripten::function(
+      "readStoredWeights",
+      optional_override([](int model_type, double offset_double,
+                           double size_double, uintptr_t dest_address) {
+        uint64_t offset = static_cast<uint64_t>(offset_double);
+        uint64_t size = static_cast<uint64_t>(size_double);
+        void* buffer = reinterpret_cast<void*>(dest_address);
+        UnwrapStatus(
+            litert::lm::ReadStoredWeights(model_type, offset, size, buffer));
+      }),
+      emscripten::async());
+  emscripten::function("clearStoredWeightsStreams", optional_override([]() {
+                         UnwrapStatus(litert::lm::ClearStoredWeightsStreams());
+                       }),
+                       emscripten::async());
+  emscripten::function(
+      "getCurrentlyCompilingModel", optional_override([]() {
+        return static_cast<int>(litert::lm::GetCurrentlyCompilingModel());
+      }));
 
   emscripten::enum_<litert::lm::Backend>("Backend")
       .value("UNSPECIFIED", litert::lm::Backend::UNSPECIFIED)
@@ -200,7 +372,8 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
 
   emscripten::class_<litert::lm::ExecutorSettingsBase>("ExecutorSettingsBase")
       .function("getCacheDir", &litert::lm::ExecutorSettingsBase::GetCacheDir)
-      .function("setCacheDir", &litert::lm::ExecutorSettingsBase::SetCacheDir);
+      .function("setCacheDir", &litert::lm::ExecutorSettingsBase::SetCacheDir)
+      .function("getBackend", &litert::lm::ExecutorSettingsBase::GetBackend);
 
   emscripten::class_<litert::lm::LlmExecutorSettings,
                      emscripten::base<litert::lm::ExecutorSettingsBase>>(
@@ -296,8 +469,8 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
                                litert::lm::SessionConfig& session_config) {
             return UnwrapStatusOr(engine.CreateSession(session_config));
           }),
-          emscripten::return_value_policy::take_ownership());  // returns unique
-                                                               // ptr
+          emscripten::return_value_policy::take_ownership());  // returns
+                                                               // unique ptr
 
   emscripten::enum_<litert::lm::proto::SamplerParameters::Type>("SamplerType")
       .value("TYPE_UNSPECIFIED",
@@ -375,8 +548,8 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
           optional_override([](litert::lm::Engine::Session& session,
                                val inputs_array) {
             // Embind does not support std::variant, so we use a JS array
-            // instead of a std::vector<std::variant<...>> and parse the inputs
-            // manually.
+            // instead of a std::vector<std::variant<...>> and parse the
+            // inputs manually.
             if (!val::global("Array").call<bool>("isArray", inputs_array)) {
               litert_web::GetGlobalErrorReporter()->ReportAndThrowError(
                   "inputs_array must be an Array");
@@ -490,8 +663,8 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
             auto message = nlohmann::ordered_json::parse(message_json);
             auto status = conversation.SendMessageAsync(
                 message,
-                // Note: This capture is not thread-safe, but we're only using a
-                // single thread for now.
+                // Note: This capture is not thread-safe, but we're only using
+                // a single thread for now.
                 [callback](absl::StatusOr<litert::lm::Message> result) mutable {
                   if (!result.ok()) {
                     callback(emscripten::val::null(), true,
@@ -566,6 +739,155 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
       .smart_ptr<std::shared_ptr<litert::lm::ReadableStreamDataStream>>(
           "shared_ptr<ReadableStreamDataStream>")
       .class_function("create", &litert::lm::ReadableStreamDataStream::Create);
+
+  emscripten::enum_<litert::lm::InputOverflowStrategy>("InputOverflowStrategy")
+      .value("ERROR", litert::lm::InputOverflowStrategy::kError)
+      .value("TRUNCATE", litert::lm::InputOverflowStrategy::kTruncate)
+      .value("CHUNK_AND_AVERAGE",
+             litert::lm::InputOverflowStrategy::kChunkAndAverage);
+
+  emscripten::register_optional<int>();
+  emscripten::register_vector<float>("VectorFloat");
+
+  emscripten::value_object<litert::lm::EmbeddingOptions>("EmbeddingOptions")
+      .field("normalize", &litert::lm::EmbeddingOptions::normalize)
+      .field("insertSpecialTokens",
+             &litert::lm::EmbeddingOptions::insert_special_tokens)
+      .field("inputOverflowStrategy",
+             &litert::lm::EmbeddingOptions::input_overflow_strategy)
+      .field("visionTokensPerImage",
+             &litert::lm::EmbeddingOptions::vision_tokens_per_image)
+      .field("outputSize", &litert::lm::EmbeddingOptions::output_size);
+
+  emscripten::value_object<litert::lm::EmbeddingResponse>("EmbeddingResponse")
+      .field("embedding", &litert::lm::EmbeddingResponse::embedding)
+      .field("inputLength", &litert::lm::EmbeddingResponse::input_length)
+      .field("truncatedLength",
+             &litert::lm::EmbeddingResponse::truncated_length)
+      .field("numChunks", &litert::lm::EmbeddingResponse::num_chunks);
+
+  emscripten::register_vector<litert::lm::EmbeddingResponse>(
+      "VectorEmbeddingResponse");
+
+  emscripten::class_<litert::lm::EmbeddingExecutorSettings,
+                     emscripten::base<litert::lm::ExecutorSettingsBase>>(
+      "EmbeddingExecutorSettings")
+      .function("getNumThreads",
+                &litert::lm::EmbeddingExecutorSettings::GetNumThreads)
+      .function("setNumThreads",
+                &litert::lm::EmbeddingExecutorSettings::SetNumThreads);
+
+  emscripten::class_<litert::lm::EmbeddingEngineSettings>(
+      "EmbeddingEngineSettings")
+      .class_function(
+          "createDefault",
+          optional_override([](litert::lm::ModelAssets model_assets,
+                               litert::lm::Backend backend) {
+            auto settings = UnwrapStatusOr(
+                litert::lm::EmbeddingEngineSettings::CreateDefault(
+                    std::move(model_assets), backend));
+            settings.GetMutableMainExecutorSettings().SetCacheDir(":nocache");
+            return settings;
+          }),
+          emscripten::return_value_policy::take_ownership())
+      .class_function(
+          "createDefaultMultimodal",
+          optional_override([](litert::lm::ModelAssets model_assets,
+                               litert::lm::Backend backend,
+                               emscripten::val vision_backend_val,
+                               emscripten::val audio_backend_val) {
+            std::optional<litert::lm::Backend> vision_backend;
+            if (!vision_backend_val.isUndefined() &&
+                !vision_backend_val.isNull()) {
+              int val_int = 0;
+              if (vision_backend_val.hasOwnProperty("value")) {
+                val_int = vision_backend_val["value"].as<int>();
+              } else {
+                val_int = vision_backend_val.as<int>();
+              }
+              vision_backend = static_cast<litert::lm::Backend>(val_int);
+            }
+            std::optional<litert::lm::Backend> audio_backend;
+            if (!audio_backend_val.isUndefined() &&
+                !audio_backend_val.isNull()) {
+              int val_int = 0;
+              if (audio_backend_val.hasOwnProperty("value")) {
+                val_int = audio_backend_val["value"].as<int>();
+              } else {
+                val_int = audio_backend_val.as<int>();
+              }
+              audio_backend = static_cast<litert::lm::Backend>(val_int);
+            }
+            auto settings = UnwrapStatusOr(
+                litert::lm::EmbeddingEngineSettings::CreateDefault(
+                    std::move(model_assets), backend, vision_backend,
+                    audio_backend));
+            settings.GetMutableMainExecutorSettings().SetCacheDir(":nocache");
+            if (settings.GetVisionExecutorSettings().has_value()) {
+              settings.GetMutableVisionExecutorSettings()->SetCacheDir(
+                  ":nocache");
+            }
+            if (settings.GetAudioExecutorSettings().has_value()) {
+              settings.GetMutableAudioExecutorSettings()->SetCacheDir(
+                  ":nocache");
+            }
+            return settings;
+          }),
+          emscripten::return_value_policy::take_ownership())
+      .function("getMaxInputLength",
+                &litert::lm::EmbeddingEngineSettings::GetMaxInputLength)
+      .function("setMaxInputLength",
+                &litert::lm::EmbeddingEngineSettings::SetMaxInputLength)
+      .function("getVisionTokensPerImage",
+                &litert::lm::EmbeddingEngineSettings::GetVisionTokensPerImage)
+      .function("setVisionTokensPerImage",
+                &litert::lm::EmbeddingEngineSettings::SetVisionTokensPerImage)
+      .function(
+          "getMutableMainExecutorSettings",
+          &litert::lm::EmbeddingEngineSettings::GetMutableMainExecutorSettings,
+          emscripten::return_value_policy::reference());
+
+  emscripten::class_<litert::lm::EmbeddingEngine>("EmbeddingEngine")
+      .class_function(
+          "createEngine",
+          optional_override([](litert::lm::EmbeddingEngineSettings& settings) {
+            return UnwrapStatusOr(
+                litert::lm::EmbeddingEngineImpl::Create(std::move(settings)));
+          }),
+          emscripten::return_value_policy::take_ownership(),
+          emscripten::async())
+      .function(
+          "computeEmbedding",
+          optional_override([](litert::lm::EmbeddingEngine& engine,
+                               emscripten::val input_val,
+                               emscripten::val options_val) {
+            auto options = ParseEmbeddingOptions(options_val);
+            auto contents = UnwrapStatusOr(ParseInputData(input_val));
+            return UnwrapStatusOr(engine.ComputeEmbedding(contents, options));
+          }),
+          emscripten::async())
+      .function(
+          "computeEmbeddingBatch",
+          optional_override([](litert::lm::EmbeddingEngine& engine,
+                               emscripten::val batch_val,
+                               emscripten::val options_val) {
+            auto options = ParseEmbeddingOptions(options_val);
+            std::vector<std::vector<litert::lm::InputData>> batch_contents;
+            if (!batch_val.isArray()) {
+              auto contents = UnwrapStatusOr(ParseInputData(batch_val));
+              batch_contents.push_back(std::move(contents));
+            } else {
+              size_t length = batch_val["length"].as<size_t>();
+              batch_contents.reserve(length);
+              for (size_t i = 0; i < length; ++i) {
+                auto contents = UnwrapStatusOr(ParseInputData(batch_val[i]));
+                batch_contents.push_back(std::move(contents));
+              }
+            }
+            return UnwrapStatusOr(
+                engine.ComputeEmbeddingBatch(batch_contents, options));
+          }),
+          emscripten::async());
 }
 }  // namespace litertlm_web
 #endif  // __EMSCRIPTEN__
