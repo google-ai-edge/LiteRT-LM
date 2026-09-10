@@ -63,7 +63,7 @@ LiteRtLmLoadedFile* litert_lm_loaded_file_create(const char* litertlm_path) {
   if (litertlm_path == nullptr) {
     return nullptr;
   }
-  auto info_or = litert::lm::schema::model_info::InspectModel(litertlm_path);
+  auto info_or = litert::lm::schema::model_info::GetModelInfo(litertlm_path);
   if (!info_or.ok()) {
     return nullptr;
   }
