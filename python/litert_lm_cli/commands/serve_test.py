@@ -802,7 +802,7 @@ class ServeTest(parameterized.TestCase):
             "fp16" if config_key == "activation_data_type" else value
         )
     )
-    mock_litert_lm.ActivationDataType.from_str.side_effect = (
+    mock_litert_lm.ActivationDataType.from_str.side_effect = (  # pyrefly: ignore[missing-attribute]
         lambda s: mock_litert_lm.ActivationDataType.FLOAT16
         if s == "fp16"
         else None
