@@ -56,6 +56,7 @@
 #include "runtime/proto/embedding_model_type.pb.h"
 #include "runtime/proto/token.pb.h"
 #include "runtime/util/convert_tensor_buffer.h"
+#include "runtime/util/file_data_stream.h"
 #include "runtime/util/litert_lm_loader.h"
 #include "runtime/util/litert_util.h"
 #include "runtime/util/scoped_file.h"
@@ -248,6 +249,18 @@ TEST(EmbeddingEngineImplTest, CreateWithNullTokenizerSuccess) {
   EXPECT_OK(EmbeddingEngineImpl::Create(std::move(resources2), std::move(env2),
                                         /*tokenizer=*/nullptr,
                                         std::move(settings2)));
+}
+
+TEST(EmbeddingEngineImplTest, CreateStreamingWeightsSuccess) {
+  const std::string& model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                   std::string(kTestEmbeddingModelPath))
+                                      .string();
+  ASSERT_OK_AND_ASSIGN(auto file_stream, FileDataStream::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(std::move(file_stream)));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+  EXPECT_OK(EmbeddingEngineImpl::CreateStreamingWeights(std::move(settings)));
 }
 
 TEST(EmbeddingEngineImplTest,

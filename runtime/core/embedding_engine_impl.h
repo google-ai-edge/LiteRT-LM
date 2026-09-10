@@ -72,6 +72,10 @@ class EmbeddingEngineImpl : public EmbeddingEngine {
   static absl::StatusOr<std::unique_ptr<EmbeddingEngine>> Create(
       EmbeddingEngineSettings settings);
 
+  // Creates an EmbeddingEngineImpl instance using streaming model weights.
+  static absl::StatusOr<std::unique_ptr<EmbeddingEngine>>
+  CreateStreamingWeights(EmbeddingEngineSettings settings);
+
   // Constructs an `EmbeddingEngineImpl` with a LiteRT environment, a tokenizer
   // and executors.
   EmbeddingEngineImpl(
