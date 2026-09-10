@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import Foundation
+import OSLog
 import CLiteRTLM
 
 /// Supported input/output modalities.
@@ -115,12 +116,39 @@ public struct SamplerParameters: Equatable {
 /// print("Temp: \(sampler.temperature), TopK: \(sampler.topK), TopP: \(sampler.topP)")
 /// ```
 public class ModelInfo {
+  private static let logger = Logger(
+    subsystem: "com.google.odml.litertlm.swift",
+    category: "ModelInfo"
+  )
+
   private let handle: OpaquePointer
+
+  /// Loads a LiteRT-LM file from the given path.
+  ///
+  /// - Parameter modelPath: The path to the LiteRT-LM model file.
+  /// - Throws: A `LiteRTLMError` if the model file cannot be loaded.
+  public init(throwingModelPath modelPath: String) throws {
+    guard let handle = litert_lm_loaded_file_create(modelPath) else {
+      let errorMsg = LiteRTLMError.consumeLastError() ?? ""
+      if !errorMsg.isEmpty {
+        Self.logger.error("Failed to load model file at '\(modelPath)': \(errorMsg)")
+      } else {
+        Self.logger.error("Failed to load model file at '\(modelPath)'")
+      }
+      throw LiteRTLMError.modelInfo(.failedToLoadModel(errorMsg))
+    }
+    self.handle = handle
+  }
 
   /// Loads a LiteRT-LM file from the given path.
   /// Returns nil if the file cannot be opened.
   public init?(modelPath: String) {
     guard let handle = litert_lm_loaded_file_create(modelPath) else {
+      if let errorMsg = LiteRTLMError.getLastErrorMessage(), !errorMsg.isEmpty {
+        Self.logger.error("Failed to load model file at '\(modelPath)': \(errorMsg)")
+      } else {
+        Self.logger.error("Failed to load model file at '\(modelPath)'")
+      }
       return nil
     }
     self.handle = handle
