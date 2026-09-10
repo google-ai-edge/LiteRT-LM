@@ -27,6 +27,7 @@
 #include "c/conversation_internal.h"
 #include "c/engine.h"
 #include "c/engine_internal.h"  // IWYU pragma: keep
+#include "c/error_reporter_internal.h"
 #include "runtime/components/constrained_decoding/llg_constraint_config.h"
 #include "runtime/components/prompt_template.h"
 #include "runtime/conversation/conversation.h"
@@ -142,6 +143,7 @@ using ::litert::lm::Conversation;
 using ::litert::lm::ConversationConfig;
 using ::litert::lm::OptionalArgs;
 using ::litert::lm::SessionConfig;
+using ::litert::lm::c::SetLastError;
 
 extern "C" {
 
@@ -372,6 +374,7 @@ void litert_lm_conversation_optional_args_delete(
 LiteRtLmConversation* litert_lm_conversation_create(
     LiteRtLmEngine* engine, LiteRtLmConversationConfig* c_config) {
   if (!engine || !engine->engine) {
+    SetLastError(absl::StatusCode::kInvalidArgument, "Invalid engine.");
     return nullptr;
   }
 
@@ -486,6 +489,7 @@ LiteRtLmConversation* litert_lm_conversation_create(
     if (!config.ok()) {
       ABSL_LOG(ERROR) << "Failed to create conversation config: "
                       << config.status();
+      SetLastError(config.status());
       return nullptr;
     }
     conversation = Conversation::Create(*engine->engine, *config);
@@ -495,6 +499,7 @@ LiteRtLmConversation* litert_lm_conversation_create(
     if (!default_conversation_config.ok()) {
       ABSL_LOG(ERROR) << "Failed to create default conversation config: "
                       << default_conversation_config.status();
+      SetLastError(default_conversation_config.status());
       return nullptr;
     }
     conversation =
@@ -504,6 +509,7 @@ LiteRtLmConversation* litert_lm_conversation_create(
   if (!conversation.ok()) {
     ABSL_LOG(ERROR) << "Failed to create conversation: "
                     << conversation.status();
+    SetLastError(conversation.status());
     return nullptr;
   }
   auto* c_conversation = new LiteRtLmConversation;
@@ -518,11 +524,13 @@ void litert_lm_conversation_delete(LiteRtLmConversation* conversation) {
 LiteRtLmConversation* litert_lm_conversation_clone(
     LiteRtLmConversation* conversation) {
   if (!conversation || !conversation->conversation) {
+    SetLastError(absl::StatusCode::kInvalidArgument, "Invalid conversation.");
     return nullptr;
   }
   auto cloned = conversation->conversation->Clone();
   if (!cloned.ok()) {
     ABSL_LOG(ERROR) << "Failed to clone conversation: " << cloned.status();
+    SetLastError(cloned.status());
     return nullptr;
   }
   auto c_conversation = std::make_unique<LiteRtLmConversation>();
@@ -535,6 +543,7 @@ LiteRtLmJsonResponse* litert_lm_conversation_send_message(
     const char* extra_context,
     const LiteRtLmConversationOptionalArgs* optional_args) {
   if (!conversation || !conversation->conversation) {
+    SetLastError(absl::StatusCode::kInvalidArgument, "Invalid conversation.");
     return nullptr;
   }
   nlohmann::json json_message =
@@ -542,6 +551,8 @@ LiteRtLmJsonResponse* litert_lm_conversation_send_message(
                             /*allow_exceptions=*/false);
   if (json_message.is_discarded()) {
     ABSL_LOG(ERROR) << "Failed to parse message JSON.";
+    SetLastError(absl::StatusCode::kInvalidArgument,
+                 "Failed to parse message JSON.");
     return nullptr;
   }
 
@@ -552,6 +563,7 @@ LiteRtLmJsonResponse* litert_lm_conversation_send_message(
       json_message, std::move(litert_lm_optional_args));
   if (!response.ok()) {
     ABSL_LOG(ERROR) << "Failed to send message: " << response.status();
+    SetLastError(response.status());
     return nullptr;
   }
   auto* c_response = new LiteRtLmJsonResponse;
@@ -577,6 +589,7 @@ int litert_lm_conversation_send_message_stream(
     const LiteRtLmConversationOptionalArgs* optional_args,
     LiteRtLmStreamCallback callback, void* callback_data) {
   if (!conversation || !conversation->conversation) {
+    SetLastError(absl::StatusCode::kInvalidArgument, "Invalid conversation.");
     return -1;
   }
   nlohmann::json json_message =
@@ -584,6 +597,8 @@ int litert_lm_conversation_send_message_stream(
                             /*allow_exceptions=*/false);
   if (json_message.is_discarded()) {
     ABSL_LOG(ERROR) << "Failed to parse message JSON.";
+    SetLastError(absl::StatusCode::kInvalidArgument,
+                 "Failed to parse message JSON.");
     return -1;
   }
 
@@ -596,6 +611,7 @@ int litert_lm_conversation_send_message_stream(
 
   if (!status.ok()) {
     ABSL_LOG(ERROR) << "Failed to start message stream: " << status;
+    SetLastError(status);
     return static_cast<int>(status.code());
   }
   return 0;
@@ -604,6 +620,8 @@ int litert_lm_conversation_send_message_stream(
 const char* litert_lm_conversation_render_message_to_string(
     LiteRtLmConversation* conversation, const char* message_json) {
   if (!conversation || !conversation->conversation || !message_json) {
+    SetLastError(absl::StatusCode::kInvalidArgument,
+                 "Invalid conversation or message JSON.");
     return nullptr;
   }
   nlohmann::json json_message =
@@ -611,6 +629,8 @@ const char* litert_lm_conversation_render_message_to_string(
                             /*allow_exceptions=*/false);
   if (json_message.is_discarded()) {
     ABSL_LOG(ERROR) << "Failed to parse message JSON.";
+    SetLastError(absl::StatusCode::kInvalidArgument,
+                 "Failed to parse message JSON.");
     return nullptr;
   }
 
@@ -618,6 +638,7 @@ const char* litert_lm_conversation_render_message_to_string(
       json_message, litert::lm::OptionalArgs());
   if (!rendered.ok()) {
     ABSL_LOG(ERROR) << "Failed to render message: " << rendered.status();
+    SetLastError(rendered.status());
     return nullptr;
   }
   conversation->last_rendered_message = std::move(*rendered);
@@ -627,12 +648,14 @@ const char* litert_lm_conversation_render_message_to_string(
 const char* litert_lm_conversation_render_preface_to_string(
     LiteRtLmConversation* conversation) {
   if (!conversation || !conversation->conversation) {
+    SetLastError(absl::StatusCode::kInvalidArgument, "Invalid conversation.");
     return nullptr;
   }
   auto rendered = conversation->conversation->RenderPrefaceIntoString(
       litert::lm::OptionalArgs());
   if (!rendered.ok()) {
     ABSL_LOG(ERROR) << "Failed to render preface: " << rendered.status();
+    SetLastError(rendered.status());
     return nullptr;
   }
   conversation->last_rendered_preface = std::move(*rendered);
@@ -649,12 +672,14 @@ void litert_lm_conversation_cancel_process(LiteRtLmConversation* conversation) {
 LiteRtLmBenchmarkInfo* litert_lm_conversation_get_benchmark_info(
     LiteRtLmConversation* conversation) {
   if (!conversation || !conversation->conversation) {
+    SetLastError(absl::StatusCode::kInvalidArgument, "Invalid conversation.");
     return nullptr;
   }
   auto benchmark_info = conversation->conversation->GetBenchmarkInfo();
   if (!benchmark_info.ok()) {
     ABSL_LOG(ERROR) << "Failed to get benchmark info: "
                     << benchmark_info.status();
+    SetLastError(benchmark_info.status());
     return nullptr;
   }
   return new LiteRtLmBenchmarkInfo{std::move(*benchmark_info)};
@@ -662,11 +687,13 @@ LiteRtLmBenchmarkInfo* litert_lm_conversation_get_benchmark_info(
 
 int litert_lm_conversation_get_token_count(LiteRtLmConversation* conversation) {
   if (!conversation || !conversation->conversation) {
+    SetLastError(absl::StatusCode::kInvalidArgument, "Invalid conversation.");
     return -1;
   }
   absl::StatusOr<int> token_count = conversation->conversation->GetTokenCount();
   if (!token_count.ok()) {
     ABSL_LOG(ERROR) << "Failed to get token count: " << token_count.status();
+    SetLastError(token_count.status());
     return -1;
   }
   return *token_count;

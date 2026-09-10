@@ -35,6 +35,7 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "c/engine_internal.h"
+#include "c/error_reporter_internal.h"
 #include "runtime/components/constrained_decoding/no_repeat_ngram_config.h"
 #include "runtime/components/constrained_decoding/repetition_penalty_config.h"
 #include "runtime/components/constrained_decoding/suppress_tokens_config.h"
@@ -162,6 +163,7 @@ static LiteRtLmEngineSettings* CreateEngineSettingsHelper(
   auto backend = litert::lm::GetBackendFromString(backend_str);
   if (!backend.ok()) {
     ABSL_LOG(ERROR) << "Failed to parse backend: " << backend.status();
+    litert::lm::c::SetLastError(backend.status());
     return nullptr;
   }
 
@@ -170,6 +172,7 @@ static LiteRtLmEngineSettings* CreateEngineSettingsHelper(
     auto backend = litert::lm::GetBackendFromString(vision_backend_str);
     if (!backend.ok()) {
       ABSL_LOG(ERROR) << "Failed to parse vision backend: " << backend.status();
+      litert::lm::c::SetLastError(backend.status());
       return nullptr;
     }
     vision_backend = *backend;
@@ -180,6 +183,7 @@ static LiteRtLmEngineSettings* CreateEngineSettingsHelper(
     auto backend = litert::lm::GetBackendFromString(audio_backend_str);
     if (!backend.ok()) {
       ABSL_LOG(ERROR) << "Failed to parse audio backend: " << backend.status();
+      litert::lm::c::SetLastError(backend.status());
       return nullptr;
     }
     audio_backend = *backend;
@@ -190,6 +194,7 @@ static LiteRtLmEngineSettings* CreateEngineSettingsHelper(
   if (!engine_settings.ok()) {
     ABSL_LOG(ERROR) << "Failed to create engine settings: "
                     << engine_settings.status();
+    litert::lm::c::SetLastError(engine_settings.status());
     return nullptr;
   }
 
@@ -312,15 +317,20 @@ void litert_lm_session_config_delete(LiteRtLmSessionConfig* config) {
 int litert_lm_session_config_set_lora_path(LiteRtLmSessionConfig* config,
                                            const char* lora_path) {
   if (!config || !config->config || !lora_path) {
+    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
+                                "Invalid session config or LoRA path.");
     return -1;
   }
   absl::string_view path_view(lora_path);
   if (path_view.empty()) {
+    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
+                                "LoRA path is empty.");
     return -1;
   }
   auto lora_file = ScopedFile::Open(lora_path);
   if (!lora_file.ok()) {
     ABSL_LOG(ERROR) << "Failed to open LoRA file: " << lora_file.status();
+    litert::lm::c::SetLastError(lora_file.status());
     return -1;
   }
   config->config->SetScopedLoraFile(
@@ -331,15 +341,20 @@ int litert_lm_session_config_set_lora_path(LiteRtLmSessionConfig* config,
 int litert_lm_session_config_set_audio_lora_path(LiteRtLmSessionConfig* config,
                                                  const char* audio_lora_path) {
   if (!config || !config->config || !audio_lora_path) {
+    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
+                                "Invalid session config or Audio LoRA path.");
     return -1;
   }
   absl::string_view path_view(audio_lora_path);
   if (path_view.empty()) {
+    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
+                                "Audio LoRA path is empty.");
     return -1;
   }
   auto lora_file = ScopedFile::Open(path_view);
   if (!lora_file.ok()) {
     ABSL_LOG(ERROR) << "Failed to open Audio LoRA file: " << lora_file.status();
+    litert::lm::c::SetLastError(lora_file.status());
     return -1;
   }
   config->config->SetAudioScopedLoraFile(
@@ -474,10 +489,16 @@ void litert_lm_suppress_tokens_config_set_suppress_tokens(
 LiteRtLmEngineSettings* litert_lm_engine_settings_create(
     const char* model_path, const char* backend_str,
     const char* vision_backend_str, const char* audio_backend_str) {
+  if (model_path == nullptr) {
+    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
+                                "model_path cannot be null");
+    return nullptr;
+  }
   auto model_assets = ModelAssets::Create(model_path);
   if (!model_assets.ok()) {
     ABSL_LOG(ERROR) << "Failed to create model assets: "
                     << model_assets.status();
+    litert::lm::c::SetLastError(model_assets.status());
     return nullptr;
   }
   return CreateEngineSettingsHelper(
@@ -492,6 +513,8 @@ litert_lm_engine_settings_create_from_raw_file_descriptor(
     const char* audio_backend_str) {
   if (fd < 0) {
     ABSL_LOG(ERROR) << "Invalid file descriptor: " << fd;
+    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
+                                "Invalid file descriptor.");
     return nullptr;
   }
   auto model_assets = ModelAssets::Create(
@@ -505,6 +528,7 @@ litert_lm_engine_settings_create_from_raw_file_descriptor(
   if (!model_assets.ok()) {
     ABSL_LOG(ERROR) << "Failed to create model assets from raw FD: "
                     << model_assets.status();
+    litert::lm::c::SetLastError(model_assets.status());
     return nullptr;
   }
   ABSL_VLOG(1) << "LiteRT-LM successfully created EngineSettings directly "
@@ -709,6 +733,8 @@ void litert_lm_engine_settings_set_lora_rank(LiteRtLmEngineSettings* settings,
 int litert_lm_engine_settings_set_supported_lora_ranks(
     LiteRtLmEngineSettings* settings, const int* lora_ranks, size_t num_ranks) {
   if (!settings || !settings->settings || !lora_ranks || num_ranks == 0) {
+    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
+                                "Invalid engine settings or LoRA ranks.");
     return -1;
   }
   std::vector<uint32_t> ranks;
@@ -718,7 +744,11 @@ int litert_lm_engine_settings_set_supported_lora_ranks(
   }
   auto status = settings->settings->GetMutableMainExecutorSettings()
                     .SetSupportedLoraRanks(ranks);
-  return status.ok() ? 0 : -1;
+  if (!status.ok()) {
+    litert::lm::c::SetLastError(status);
+    return -1;
+  }
+  return 0;
 }
 
 void litert_lm_engine_settings_set_audio_lora_rank(
@@ -733,9 +763,14 @@ void litert_lm_engine_settings_set_audio_lora_rank(
 int litert_lm_engine_settings_set_supported_audio_lora_ranks(
     LiteRtLmEngineSettings* settings, const int* lora_ranks, size_t num_ranks) {
   if (!settings || !settings->settings || !lora_ranks || num_ranks == 0) {
+    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
+                                "Invalid engine settings or Audio LoRA ranks.");
     return -1;
   }
   if (!settings->settings->GetAudioExecutorSettings().has_value()) {
+    litert::lm::c::SetLastError(
+        absl::StatusCode::kFailedPrecondition,
+        "Audio executor settings not configured in engine settings.");
     return -1;
   }
   std::vector<uint32_t> ranks;
@@ -745,7 +780,11 @@ int litert_lm_engine_settings_set_supported_audio_lora_ranks(
   }
   auto status = settings->settings->GetMutableAudioExecutorSettings()
                     ->SetSupportedLoraRanks(ranks);
-  return status.ok() ? 0 : -1;
+  if (!status.ok()) {
+    litert::lm::c::SetLastError(status);
+    return -1;
+  }
+  return 0;
 }
 
 void litert_lm_engine_settings_set_activation_data_type(
@@ -790,10 +829,9 @@ void litert_lm_engine_settings_set_enable_ynnpack(
 void litert_lm_engine_settings_set_gpu_enable_metal_residency_set(
     LiteRtLmEngineSettings* settings, bool enable_metal_residency_set) {
   if (settings && settings->settings) {
-    auto advanced_settings =
-        settings->settings->GetMainExecutorSettings()
-            .GetAdvancedSettings()
-            .value_or(litert::lm::AdvancedSettings());
+    auto advanced_settings = settings->settings->GetMainExecutorSettings()
+                                 .GetAdvancedSettings()
+                                 .value_or(litert::lm::AdvancedSettings());
     advanced_settings.gpu_enable_metal_residency_set =
         enable_metal_residency_set;
     settings->settings->GetMutableMainExecutorSettings().SetAdvancedSettings(
@@ -804,6 +842,8 @@ void litert_lm_engine_settings_set_gpu_enable_metal_residency_set(
 LiteRtLmEngine* litert_lm_engine_create(
     const LiteRtLmEngineSettings* settings) {
   if (!settings || !settings->settings) {
+    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
+                                "Invalid engine settings.");
     return nullptr;
   }
 
@@ -812,6 +852,7 @@ LiteRtLmEngine* litert_lm_engine_create(
 
   if (!engine.ok()) {
     ABSL_LOG(ERROR) << "Failed to create engine: " << engine.status();
+    litert::lm::c::SetLastError(engine.status());
     return nullptr;
   }
 
@@ -825,6 +866,8 @@ void litert_lm_engine_delete(LiteRtLmEngine* engine) { delete engine; }
 LiteRtLmSession* litert_lm_engine_create_session(
     LiteRtLmEngine* engine, LiteRtLmSessionConfig* config) {
   if (!engine || !engine->engine) {
+    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
+                                "Invalid engine.");
     return nullptr;
   }
 
@@ -846,6 +889,7 @@ LiteRtLmSession* litert_lm_engine_create_session(
       engine->engine->CreateSession(session_config);
   if (!session.ok()) {
     ABSL_LOG(ERROR) << "Failed to create session: " << session.status();
+    litert::lm::c::SetLastError(session.status());
     return nullptr;
   }
 
@@ -865,11 +909,14 @@ void litert_lm_session_cancel_process(LiteRtLmSession* session) {
 int litert_lm_session_save_checkpoint(LiteRtLmSession* session,
                                       const char* label) {
   if (!session || !session->session || !label) {
+    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
+                                "Invalid session or checkpoint label.");
     return -1;
   }
   auto status = session->session->SaveCheckpoint(label);
   if (!status.ok()) {
     ABSL_LOG(ERROR) << "Failed to save checkpoint " << label << ": " << status;
+    litert::lm::c::SetLastError(status);
     return -1;
   }
   return 0;
@@ -878,12 +925,15 @@ int litert_lm_session_save_checkpoint(LiteRtLmSession* session,
 int litert_lm_session_rewind_to_checkpoint(LiteRtLmSession* session,
                                            const char* label) {
   if (!session || !session->session || !label) {
+    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
+                                "Invalid session or checkpoint label.");
     return -1;
   }
   auto status = session->session->RewindToCheckpoint(label);
   if (!status.ok()) {
     ABSL_LOG(ERROR) << "Failed to rewind to checkpoint " << label << ": "
                     << status;
+    litert::lm::c::SetLastError(status);
     return -1;
   }
   return 0;
@@ -891,11 +941,14 @@ int litert_lm_session_rewind_to_checkpoint(LiteRtLmSession* session,
 
 int litert_lm_session_rewind_to_step(LiteRtLmSession* session, int step) {
   if (!session || !session->session) {
+    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
+                                "Invalid session.");
     return -1;
   }
   auto status = session->session->RewindToStep(step);
   if (!status.ok()) {
     ABSL_LOG(ERROR) << "Failed to rewind to step " << step << ": " << status;
+    litert::lm::c::SetLastError(status);
     return -1;
   }
   return 0;
@@ -905,6 +958,8 @@ LiteRtLmResponses* litert_lm_session_run_text_scoring(
     LiteRtLmSession* session, const char** target_text, size_t num_targets,
     bool store_token_lengths) {
   if (!session || !session->session || !target_text || num_targets <= 0) {
+    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
+                                "Invalid session or target texts.");
     return nullptr;
   }
   std::vector<absl::string_view> target_text_views;
@@ -916,6 +971,7 @@ LiteRtLmResponses* litert_lm_session_run_text_scoring(
       session->session->RunTextScoring(target_text_views, store_token_lengths);
   if (!responses.ok()) {
     ABSL_LOG(ERROR) << "Failed to run text scoring: " << responses.status();
+    litert::lm::c::SetLastError(responses.status());
     return nullptr;
   }
   auto* c_responses = new LiteRtLmResponses{std::move(*responses)};
@@ -933,16 +989,20 @@ int litert_lm_session_run_prefill(LiteRtLmSession* session,
                                   const LiteRtLmInputData* const* inputs,
                                   size_t num_inputs) {
   if (!session || !session->session || !inputs || num_inputs <= 0) {
+    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
+                                "Invalid session or inputs.");
     return -1;
   }
   auto engine_inputs = ToEngineInputData(inputs, num_inputs);
   if (!engine_inputs.ok()) {
     ABSL_LOG(ERROR) << "Failed to copy inputs: " << engine_inputs.status();
+    litert::lm::c::SetLastError(engine_inputs.status());
     return -1;
   }
   auto status = session->session->RunPrefill(*engine_inputs);
   if (!status.ok()) {
     ABSL_LOG(ERROR) << "Failed to run prefill: " << status;
+    litert::lm::c::SetLastError(status);
     return -1;
   }
   return 0;
@@ -950,11 +1010,14 @@ int litert_lm_session_run_prefill(LiteRtLmSession* session,
 
 LiteRtLmResponses* litert_lm_session_run_decode(LiteRtLmSession* session) {
   if (!session || !session->session) {
+    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
+                                "Invalid session.");
     return nullptr;
   }
   auto responses = session->session->RunDecode();
   if (!responses.ok()) {
     ABSL_LOG(ERROR) << "Failed to run decode: " << responses.status();
+    litert::lm::c::SetLastError(responses.status());
     return nullptr;
   }
   return new LiteRtLmResponses{std::move(*responses)};
@@ -964,12 +1027,15 @@ int litert_lm_session_run_decode_async(LiteRtLmSession* session,
                                        LiteRtLmStreamCallback callback,
                                        void* callback_data) {
   if (!session || !session->session) {
+    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
+                                "Invalid session.");
     return -1;
   }
   auto status =
       session->session->RunDecodeAsync(CreateCallback(callback, callback_data));
   if (!status.ok()) {
     ABSL_LOG(ERROR) << "Failed to start decode stream: " << status.status();
+    litert::lm::c::SetLastError(status.status());
     return static_cast<int>(status.status().code());
   }
   return 0;
@@ -979,16 +1045,20 @@ LiteRtLmResponses* litert_lm_session_generate_content(
     LiteRtLmSession* session, const LiteRtLmInputData* const* inputs,
     size_t num_inputs) {
   if (!session || !session->session) {
+    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
+                                "Invalid session.");
     return nullptr;
   }
   auto engine_inputs = ToEngineInputData(inputs, num_inputs);
   if (!engine_inputs.ok()) {
     ABSL_LOG(ERROR) << "Failed to copy inputs: " << engine_inputs.status();
+    litert::lm::c::SetLastError(engine_inputs.status());
     return nullptr;
   }
   auto responses = session->session->GenerateContent(std::move(*engine_inputs));
   if (!responses.ok()) {
     ABSL_LOG(ERROR) << "Failed to generate content: " << responses.status();
+    litert::lm::c::SetLastError(responses.status());
     return nullptr;
   }
 
@@ -1000,11 +1070,14 @@ int litert_lm_session_generate_content_stream(
     LiteRtLmSession* session, const LiteRtLmInputData* const* inputs,
     size_t num_inputs, LiteRtLmStreamCallback callback, void* callback_data) {
   if (!session || !session->session) {
+    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
+                                "Invalid session.");
     return -1;
   }
   auto engine_inputs = ToEngineInputData(inputs, num_inputs);
   if (!engine_inputs.ok()) {
     ABSL_LOG(ERROR) << "Failed to copy inputs: " << engine_inputs.status();
+    litert::lm::c::SetLastError(engine_inputs.status());
     return -1;
   }
 
@@ -1013,6 +1086,7 @@ int litert_lm_session_generate_content_stream(
 
   if (!status.ok()) {
     ABSL_LOG(ERROR) << "Failed to start content stream: " << status;
+    litert::lm::c::SetLastError(status);
     // No need to delete callbacks, unique_ptr handles it if not moved.
     return static_cast<int>(status.code());
   }
@@ -1111,12 +1185,15 @@ const float* litert_lm_responses_get_token_scores_at(
 LiteRtLmBenchmarkInfo* litert_lm_session_get_benchmark_info(
     LiteRtLmSession* session) {
   if (!session || !session->session) {
+    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
+                                "Invalid session.");
     return nullptr;
   }
   auto benchmark_info = session->session->GetBenchmarkInfo();
   if (!benchmark_info.ok()) {
     ABSL_LOG(ERROR) << "Failed to get benchmark info: "
                     << benchmark_info.status();
+    litert::lm::c::SetLastError(benchmark_info.status());
     return nullptr;
   }
   return new LiteRtLmBenchmarkInfo{std::move(*benchmark_info)};
@@ -1205,6 +1282,8 @@ double litert_lm_benchmark_info_get_decode_tokens_per_sec_at(
 LiteRtLmTokenizeResult* litert_lm_engine_tokenize(LiteRtLmEngine* engine,
                                                   const char* text) {
   if (!engine || !engine->engine || !text) {
+    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
+                                "Invalid engine or text.");
     return nullptr;
   }
   const auto& tokenizer = engine->engine->GetTokenizer();
@@ -1212,6 +1291,7 @@ LiteRtLmTokenizeResult* litert_lm_engine_tokenize(LiteRtLmEngine* engine,
       const_cast<litert::support::Tokenizer&>(tokenizer).TextToTokenIds(text);
   if (!token_ids.ok()) {
     ABSL_LOG(ERROR) << "Failed to tokenize: " << token_ids.status();
+    litert::lm::c::SetLastError(token_ids.status());
     return nullptr;
   }
   return new LiteRtLmTokenizeResult{std::move(*token_ids)};
@@ -1241,6 +1321,8 @@ LiteRtLmDetokenizeResult* litert_lm_engine_detokenize(LiteRtLmEngine* engine,
                                                       const int* tokens,
                                                       size_t num_tokens) {
   if (!engine || !engine->engine || !tokens) {
+    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
+                                "Invalid engine or tokens.");
     return nullptr;
   }
   const auto& tokenizer = engine->engine->GetTokenizer();
@@ -1249,6 +1331,7 @@ LiteRtLmDetokenizeResult* litert_lm_engine_detokenize(LiteRtLmEngine* engine,
       token_ids);
   if (!text.ok()) {
     ABSL_LOG(ERROR) << "Failed to detokenize: " << text.status();
+    litert::lm::c::SetLastError(text.status());
     return nullptr;
   }
   return new LiteRtLmDetokenizeResult{std::move(*text)};
@@ -1291,6 +1374,9 @@ int litert_lm_token_union_get_ids(const LiteRtLmTokenUnion* token_union,
                                   size_t* out_num_tokens) {
   if (!token_union || !token_union->token_union.has_token_ids() ||
       !out_tokens || !out_num_tokens) {
+    litert::lm::c::SetLastError(
+        absl::StatusCode::kInvalidArgument,
+        "Token union does not contain token ids or null output pointer.");
     return -1;
   }
   *out_tokens = token_union->token_union.token_ids().ids().data();
@@ -1313,6 +1399,8 @@ size_t litert_lm_token_unions_get_num_tokens(
 LiteRtLmTokenUnion* litert_lm_token_unions_get_token_at(
     const LiteRtLmTokenUnions* tokens, size_t index) {
   if (!tokens || index >= tokens->tokens.size()) {
+    litert::lm::c::SetLastError(absl::StatusCode::kOutOfRange,
+                                "Token index out of range.");
     return nullptr;
   }
   auto* result = new LiteRtLmTokenUnion();
@@ -1322,6 +1410,8 @@ LiteRtLmTokenUnion* litert_lm_token_unions_get_token_at(
 
 LiteRtLmTokenUnion* litert_lm_engine_get_start_token(LiteRtLmEngine* engine) {
   if (!engine || !engine->engine) {
+    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
+                                "Invalid engine.");
     return nullptr;
   }
   const auto& metadata = engine->engine->GetEngineSettings().GetLlmMetadata();
@@ -1333,6 +1423,8 @@ LiteRtLmTokenUnion* litert_lm_engine_get_start_token(LiteRtLmEngine* engine) {
 
 LiteRtLmTokenUnions* litert_lm_engine_get_stop_tokens(LiteRtLmEngine* engine) {
   if (!engine || !engine->engine) {
+    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
+                                "Invalid engine.");
     return nullptr;
   }
   const auto& metadata = engine->engine->GetEngineSettings().GetLlmMetadata();
