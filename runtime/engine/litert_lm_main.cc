@@ -43,6 +43,7 @@
 #include "litert/cc/internal/scoped_file.h"  // from @litert
 #include "runtime/conversation/conversation.h"
 #include "runtime/conversation/io_types.h"
+#include "runtime/conversation/thinking_config.h"
 #include "runtime/engine/engine.h"
 #include "runtime/engine/engine_factory.h"
 #include "runtime/engine/engine_settings.h"
@@ -58,6 +59,12 @@ ABSL_FLAG(std::string, model_path, "", "Model path to use for LLM execution.");
 ABSL_FLAG(std::string, input_prompt, "",
           "Input prompt to use for testing LLM execution.");
 ABSL_FLAG(std::string, input_prompt_file, "", "File path to the input prompt.");
+ABSL_FLAG(bool, enable_thinking, true,
+          "Whether to enable thinking mode (Qwen3-style). Set to false to "
+          "suppress <think>...</think> in the response.");
+ABSL_FLAG(int, thinking_token_budget, -1,
+          "Max tokens for the thinking phase (-1 = unlimited). Only used when "
+          "--enable_thinking=true.");
 
 namespace {
 
@@ -68,6 +75,7 @@ using ::litert::lm::EngineSettings;
 using ::litert::lm::InputData;
 using ::litert::lm::Message;
 using ::litert::lm::ModelAssets;
+using ::litert::lm::ThinkingConfig;
 using ::nlohmann::json;
 
 absl::AnyInvocable<void(absl::StatusOr<Message>)> CreateMessageCallback() {
@@ -162,6 +170,9 @@ absl::Status MainHelper(int argc, char** argv) {
   ABSL_ASSIGN_OR_RETURN(auto conversation_config,
                         ConversationConfig::Builder()
                             .SetSessionConfig(session_config)
+                            .SetThinkingConfig(ThinkingConfig(
+                                absl::GetFlag(FLAGS_enable_thinking),
+                                absl::GetFlag(FLAGS_thinking_token_budget)))
                             .Build(*engine));
   ABSL_ASSIGN_OR_RETURN(conversation,
                         Conversation::Create(*engine, conversation_config));
