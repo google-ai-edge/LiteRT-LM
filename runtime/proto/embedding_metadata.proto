@@ -90,4 +90,15 @@ message EmbeddingMetadata {
 
   // Audio preprocessor configuration.
   AudioPreprocessorConfig audio_preprocessor = 4;
+
+  // Default minimum input length (in tokens) for the embedding model.
+  // When auto-selecting text encoder signatures to load, signatures with
+  // capacities strictly less than `min_input_length` will not be loaded.
+  int32 min_input_length = 5;
+
+  // Default maximum input length (in tokens) for the embedding model.
+  // The smallest signature that can accommodate `max_input_length` will be
+  // loaded. Signatures with capacity between `min_input_length` and
+  // `max_input_length` will also be loaded.
+  int32 max_input_length = 6;
 }

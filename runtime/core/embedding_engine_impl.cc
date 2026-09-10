@@ -229,6 +229,14 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
     }
   }
 
+  // Default max_input_length from metadata if not explicitly set in settings.
+  if (!settings.GetMaxInputLength().has_value() && metadata.has_value() &&
+      metadata->max_input_length() != 0) {
+    settings.SetMaxInputLength(metadata->max_input_length());
+  }
+
+  // TODO: b/534849903 - Support min_input_length from metadata and settings.
+
   // Auto-select text encoder signatures if max_input_length is set.
   std::optional<SelectedTextSignaturesInfo> selected_text_signatures_info =
       std::nullopt;
