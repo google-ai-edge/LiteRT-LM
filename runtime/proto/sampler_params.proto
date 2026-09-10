@@ -58,4 +58,8 @@ message SamplerParameters {
   // The specific backend used for sampling. If not specified, the default
   // backend will be used.
   Backend backend = 6;
+
+  // Whether to compute exact full-vocabulary token log-probabilities on CPU.
+  // Defaults to false to avoid penalizing other workloads.
+  bool compute_exact_log_probs = 7;
 }
