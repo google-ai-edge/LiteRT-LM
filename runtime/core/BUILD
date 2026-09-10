@@ -48,6 +48,7 @@ package_group(
 )
 
 ENGINE_IMPL_COMMON_DEPS = [
+    ":audio_session_advanced",
     ":session_advanced",
     ":cached_session",
     "@com_google_absl//absl/base:no_destructor",
@@ -285,6 +286,59 @@ cc_library(
         ],
         "//conditions:default": [],
     }),
+)
+
+cc_library(
+    name = "audio_session_advanced",
+    srcs = ["audio_session_advanced.cc"],
+    hdrs = ["audio_session_advanced.h"],
+    deps = [
+        ":session_advanced",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/base:nullability",
+        "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/functional:any_invocable",
+        "@com_google_absl//absl/memory",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/synchronization",
+        "@litert//litert/cc:litert_tensor_buffer",
+        "//runtime/engine:engine_interface",
+        "//runtime/engine:engine_settings",
+        "//runtime/engine:io_types",
+        "//runtime/executor:llm_executor_io_types",
+        "//runtime/framework/resource_management:execution_manager",
+        "//runtime/util:litert_status_util",
+        "//support/tokenizer",
+    ],
+)
+
+cc_test(
+    name = "audio_session_advanced_test",
+    srcs = ["audio_session_advanced_test.cc"],
+    tags = ["requires-mac-inputs:hard"],
+    deps = [
+        ":audio_session_advanced",
+        ":session_advanced",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/types:span",
+        "@litert//litert/cc:litert_tensor_buffer",
+        "//runtime/engine:engine_interface",
+        "//runtime/engine:engine_settings",
+        "//runtime/executor:audio_executor",
+        "//runtime/executor:audio_executor_settings",
+        "//runtime/executor:executor_settings_base",
+        "//runtime/executor:fake_llm_executor",
+        "//runtime/executor:llm_executor_io_types",
+        "//runtime/framework/resource_management:threaded_execution_manager",
+        "//runtime/util:convert_tensor_buffer",
+        "//runtime/util:litert_status_util",
+        "//runtime/util:test_utils",
+        "//support/tokenizer",
+    ],
 )
 
 cc_test(

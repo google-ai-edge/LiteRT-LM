@@ -218,6 +218,14 @@ class SessionConfig {
     vision_modality_enabled_ = enable_vision_modality;
   }
 
+  // Configures whether to instantiate AudioSessionAdvanced.
+  bool EnableAudioSessionAdvanced() const {
+    return enable_audio_session_advanced_;
+  }
+  void SetEnableAudioSessionAdvanced(bool enable_audio_session_advanced) {
+    enable_audio_session_advanced_ = enable_audio_session_advanced;
+  }
+
   // Sampler parameters:
   // Getters for the sampler parameters.
   const proto::SamplerParameters& GetSamplerParams() const;
@@ -337,6 +345,9 @@ class SessionConfig {
 
   // Whether to enable vision modality in the session.
   bool vision_modality_enabled_ = false;
+
+  // Whether to instantiate AudioSessionAdvanced instead of SessionAdvanced.
+  bool enable_audio_session_advanced_ = false;
 
   // Parameters used to configure the sampling process.
   proto::SamplerParameters sampler_params_;

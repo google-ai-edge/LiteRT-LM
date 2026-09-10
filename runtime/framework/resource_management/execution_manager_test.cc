@@ -64,6 +64,7 @@ using ::testing::ElementsAre;
 using ::testing::Return;
 
 constexpr int kVocabSize = 10;
+constexpr int kValidTokensInAudioData = 4;
 
 class MockTokenizer : public Tokenizer {
  public:
@@ -79,18 +80,85 @@ class MockTokenizer : public Tokenizer {
   MOCK_METHOD(int, GetVocabSize, (), (const, override));
 };
 
+class FakeAudioContext : public AudioContext {
+ public:
+  FakeAudioContext() = default;
+  absl::StatusOr<std::unique_ptr<AudioContext>> Clone() const override {
+    return std::make_unique<FakeAudioContext>(*this);
+  }
+};
+
 class FakeAudioExecutor : public AudioExecutor {
  public:
-  absl::StatusOr<::litert::lm::ExecutorAudioData> Encode(
-      const litert::TensorBuffer& spectrogram_tensor) override {
-    return ::litert::lm::ExecutorAudioData();
+  absl::StatusOr<ExecutorAudioData> Encode(
+      const TensorBuffer& spectrogram_tensor) override {
+    ExecutorAudioData data;
+    data.SetValidTokens(kValidTokensInAudioData);
+    return data;
   }
+
+  absl::Status Reset() override {
+    reset_called_ = true;
+    return absl::OkStatus();
+  }
+
+  absl::StatusOr<ExecutorAudioData> Flush() override {
+    flush_called_ = true;
+    ExecutorAudioData data;
+    data.SetValidTokens(kValidTokensInAudioData);
+    return data;
+  }
+
+  absl::StatusOr<std::unique_ptr<AudioContext>> CreateNewContext() override {
+    return std::make_unique<FakeAudioContext>();
+  }
+
+  absl::StatusOr<std::unique_ptr<AudioContext>> CloneContext() override {
+    return std::make_unique<FakeAudioContext>();
+  }
+
+  absl::Status RestoreContext(
+      std::unique_ptr<AudioContext> audio_context) override {
+    return absl::OkStatus();
+  }
+
+  bool reset_called_ = false;
+  bool flush_called_ = false;
+};
+
+class NonStreamingFakeAudioExecutor : public AudioExecutor {
+ public:
+  absl::StatusOr<ExecutorAudioData> Encode(
+      const TensorBuffer& spectrogram_tensor) override {
+    ExecutorAudioData data;
+    data.SetValidTokens(kValidTokensInAudioData);
+    return data;
+  }
+
+  absl::Status Reset() override {
+    reset_called_ = true;
+    return absl::OkStatus();
+  }
+
+  absl::StatusOr<ExecutorAudioData> Flush() override {
+    flush_called_ = true;
+    ExecutorAudioData data;
+    data.SetValidTokens(0);
+    return data;
+  }
+
+  // Intentionally do NOT override CreateNewContext, CloneContext,
+  // RestoreContext; they return absl::UnimplementedError from
+  // AudioExecutorBase.
+
+  bool reset_called_ = false;
+  bool flush_called_ = false;
 };
 
 class FailingAudioExecutor : public AudioExecutor {
  public:
-  absl::StatusOr<::litert::lm::ExecutorAudioData> Encode(
-      const litert::TensorBuffer& spectrogram_tensor) override {
+  absl::StatusOr<ExecutorAudioData> Encode(
+      const TensorBuffer& spectrogram_tensor) override {
     return absl::InternalError(
         "Encode() should not be called when precomputed audio embeddings are "
         "provided.");
@@ -296,6 +364,94 @@ TEST_P(ExecutionManagerTest, AddPrefillTaskWithAudioModality) {
       std::make_shared<std::atomic<bool>>(false), nullptr));
 
   EXPECT_OK(execution_manager_->WaitUntilDone(task_id, absl::Seconds(3)));
+}
+
+TEST_P(ExecutionManagerTest, EncodeAudioWithSessionInfo) {
+  auto fake_llm_executor = CreateDefaultFakeLlmExecutor();
+
+  ASSERT_OK_AND_ASSIGN(auto* settings,
+                       fake_llm_executor->GetMutableExecutorSettings());
+  EXPECT_OK(settings->SetBackend(Backend::GPU_ARTISAN));
+
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create("test_model_path_2"));
+  ASSERT_OK_AND_ASSIGN(auto audio_settings,
+                       AudioExecutorSettings::CreateDefault(
+                           model_assets, 128, Backend::GPU_ARTISAN));
+
+  auto fake_audio_executor = std::make_unique<FakeAudioExecutor>();
+  auto* fake_audio_executor_ptr = fake_audio_executor.get();
+
+  CreateExecutionManager(
+      std::move(fake_llm_executor),
+      std::make_unique<AudioExecutorSettings>(std::move(audio_settings)),
+      std::move(fake_audio_executor));
+
+  ASSERT_OK_AND_ASSIGN(auto session_config, CreateDefaultSessionConfig());
+  ASSERT_OK_AND_ASSIGN(const SessionId session_id,
+                       execution_manager_->RegisterNewSession(session_config));
+  ASSERT_OK_AND_ASSIGN(auto session_info,
+                       execution_manager_->GetSessionInfo(session_id));
+
+  const std::vector<float> kSpectrogramData = {1.0f, 2.0f, 3.0f, 4.0f};
+  auto tensor_or = CopyToTensorBuffer<float>(kSpectrogramData, {1, 4});
+  ASSERT_TRUE(tensor_or.HasValue());
+
+  ASSERT_OK_AND_ASSIGN(auto audio_data, execution_manager_->EncodeAudio(
+                                            *session_info, *tensor_or));
+  EXPECT_EQ(audio_data.GetValidTokens(), 4);
+
+  EXPECT_OK(execution_manager_->ResetAudio(*session_info));
+  EXPECT_TRUE(fake_audio_executor_ptr->reset_called_);
+
+  ASSERT_OK_AND_ASSIGN(auto flush_data,
+                       execution_manager_->FlushAudio(*session_info));
+  EXPECT_EQ(flush_data.GetValidTokens(), 4);
+  EXPECT_TRUE(fake_audio_executor_ptr->flush_called_);
+}
+
+TEST_P(ExecutionManagerTest, EncodeAudioWithNonStreamingAudioExecutor) {
+  auto fake_llm_executor = CreateDefaultFakeLlmExecutor();
+
+  ASSERT_OK_AND_ASSIGN(auto* settings,
+                       fake_llm_executor->GetMutableExecutorSettings());
+  EXPECT_OK(settings->SetBackend(Backend::GPU_ARTISAN));
+
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create("test_model_path_2"));
+  ASSERT_OK_AND_ASSIGN(auto audio_settings,
+                       AudioExecutorSettings::CreateDefault(
+                           model_assets, 128, Backend::GPU_ARTISAN));
+
+  auto fake_audio_executor = std::make_unique<NonStreamingFakeAudioExecutor>();
+  auto* fake_audio_executor_ptr = fake_audio_executor.get();
+
+  CreateExecutionManager(
+      std::move(fake_llm_executor),
+      std::make_unique<AudioExecutorSettings>(std::move(audio_settings)),
+      std::move(fake_audio_executor));
+
+  ASSERT_OK_AND_ASSIGN(auto session_config, CreateDefaultSessionConfig());
+  ASSERT_OK_AND_ASSIGN(const SessionId session_id,
+                       execution_manager_->RegisterNewSession(session_config));
+  ASSERT_OK_AND_ASSIGN(auto session_info,
+                       execution_manager_->GetSessionInfo(session_id));
+
+  const std::vector<float> kSpectrogramData = {1.0f, 2.0f, 3.0f, 4.0f};
+  auto tensor_or = CopyToTensorBuffer<float>(kSpectrogramData, {1, 4});
+  ASSERT_TRUE(tensor_or.HasValue());
+
+  ASSERT_OK_AND_ASSIGN(auto audio_data, execution_manager_->EncodeAudio(
+                                            *session_info, *tensor_or));
+  EXPECT_EQ(audio_data.GetValidTokens(), 4);
+
+  EXPECT_OK(execution_manager_->ResetAudio(*session_info));
+  EXPECT_TRUE(fake_audio_executor_ptr->reset_called_);
+
+  ASSERT_OK_AND_ASSIGN(auto flush_data,
+                       execution_manager_->FlushAudio(*session_info));
+  EXPECT_EQ(flush_data.GetValidTokens(), 0);
+  EXPECT_TRUE(fake_audio_executor_ptr->flush_called_);
 }
 
 TEST_P(ExecutionManagerTest, AddPrefillTaskWithPrecomputedAudioEmbeddings) {

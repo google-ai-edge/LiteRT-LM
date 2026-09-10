@@ -859,6 +859,8 @@ std::ostream& operator<<(std::ostream& os, const SessionConfig& config) {
      << std::endl;
   os << "  VisionModalityEnabled: " << config.VisionModalityEnabled()
      << std::endl;
+  os << "  EnableAudioSessionAdvanced: " << config.EnableAudioSessionAdvanced()
+     << std::endl;
   os << "  SamplerParams: " << config.GetSamplerParams().DebugString()
      << std::endl;
   os << "  SamplerBackend: " << config.GetSamplerBackend() << std::endl;

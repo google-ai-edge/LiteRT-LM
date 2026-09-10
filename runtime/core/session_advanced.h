@@ -225,7 +225,7 @@ class SessionAdvanced : public SessionInterface {
       absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback) override
       ABSL_LOCKS_EXCLUDED(mutex_);
 
- private:
+ protected:
   // The state of the session.
   // * `kFresh` means the session is just created and
   //   hasn't been prefilled yet.
@@ -259,7 +259,7 @@ class SessionAdvanced : public SessionInterface {
   }
 
   // The implementation of CloneAsync which assumes mutex_ is locked.
-  absl::StatusOr<std::unique_ptr<SessionInterface>> CloneAsyncLocked(
+  virtual absl::StatusOr<std::unique_ptr<SessionInterface>> CloneAsyncLocked(
       absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
 

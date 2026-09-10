@@ -656,8 +656,13 @@ SerialExecutionManager::ProcessAndCombineContents(
                               input_audio->GetPreprocessedAudioTensor());
         LITERT_ASSIGN_OR_RETURN(auto dup, tensor->Duplicate());
         ABSL_ASSIGN_OR_RETURN(const auto& dimensions, TensorBufferDims(dup));
-        const int valid_tokens =
-            dimensions.size() >= 2 ? dimensions[dimensions.size() - 2] : 0;
+        int valid_tokens = 0;
+        if (dimensions.size() == 5) {
+          // 5D tensor in BHWDC format: W is sequence length.
+          valid_tokens = dimensions[2];
+        } else if (dimensions.size() >= 2) {
+          valid_tokens = dimensions[dimensions.size() - 2];
+        }
         single_audio_data.SetProjectedAudioEmbeddings(std::move(dup));
         single_audio_data.SetValidTokens(valid_tokens);
       } else {
@@ -1171,6 +1176,78 @@ absl::Status SerialExecutionManager::SetCurrentStep(
 absl::StatusOr<AudioExecutorProperties>
 SerialExecutionManager::GetAudioExecutorProperties() const {
   return resource_manager_->GetAudioExecutorProperties();
+}
+
+absl::StatusOr<ExecutorAudioData> SerialExecutionManager::EncodeAudio(
+    const SessionInfo& session_info, const TensorBuffer& spectrogram_tensor) {
+  ABSL_ASSIGN_OR_RETURN(auto llm_executor,
+                        resource_manager_->AcquireExecutorWithContextHandler(
+                            session_info.context_handler));
+  ABSL_ASSIGN_OR_RETURN(auto audio_executor,
+                        resource_manager_->AcquireAudioExecutor());
+  ABSL_ASSIGN_OR_RETURN(auto audio_data,
+                        audio_executor->Encode(spectrogram_tensor));
+  if (session_info.context_handler != nullptr) {
+    auto current_audio_context = audio_executor->CloneContext();
+    if (current_audio_context.ok()) {
+      ABSL_RETURN_IF_ERROR(session_info.context_handler->SetAudioContext(
+          std::move(*current_audio_context)));
+    } else if (!absl::IsUnimplemented(current_audio_context.status())) {
+      return current_audio_context.status();
+    }
+  }
+  return audio_data;
+}
+
+absl::Status SerialExecutionManager::ResetAudio(
+    const SessionInfo& session_info) {
+  ABSL_ASSIGN_OR_RETURN(auto llm_executor,
+                        resource_manager_->AcquireExecutorWithContextHandler(
+                            session_info.context_handler));
+  ABSL_ASSIGN_OR_RETURN(auto audio_executor,
+                        resource_manager_->AcquireAudioExecutor());
+  auto reset_status = audio_executor->Reset();
+  if (!reset_status.ok() && !absl::IsUnimplemented(reset_status)) {
+    return reset_status;
+  }
+  if (session_info.context_handler != nullptr) {
+    auto new_audio_context = audio_executor->CreateNewContext();
+    if (new_audio_context.ok()) {
+      ABSL_RETURN_IF_ERROR(session_info.context_handler->SetAudioContext(
+          std::move(*new_audio_context)));
+    } else if (!absl::IsUnimplemented(new_audio_context.status())) {
+      return new_audio_context.status();
+    }
+  }
+  return absl::OkStatus();
+}
+
+absl::StatusOr<ExecutorAudioData> SerialExecutionManager::FlushAudio(
+    const SessionInfo& session_info) {
+  ABSL_ASSIGN_OR_RETURN(auto llm_executor,
+                        resource_manager_->AcquireExecutorWithContextHandler(
+                            session_info.context_handler));
+  ABSL_ASSIGN_OR_RETURN(auto audio_executor,
+                        resource_manager_->AcquireAudioExecutor());
+  auto audio_data = audio_executor->Flush();
+  if (!audio_data.ok() && !absl::IsUnimplemented(audio_data.status())) {
+    return audio_data.status();
+  }
+  if (session_info.context_handler != nullptr) {
+    auto current_audio_context = audio_executor->CloneContext();
+    if (current_audio_context.ok()) {
+      ABSL_RETURN_IF_ERROR(session_info.context_handler->SetAudioContext(
+          std::move(*current_audio_context)));
+    } else if (!absl::IsUnimplemented(current_audio_context.status())) {
+      return current_audio_context.status();
+    }
+  }
+  if (!audio_data.ok()) {
+    ExecutorAudioData empty_audio_data;
+    empty_audio_data.SetValidTokens(0);
+    return empty_audio_data;
+  }
+  return audio_data;
 }
 
 absl::StatusOr<VisionExecutorProperties>
