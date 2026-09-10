@@ -130,6 +130,15 @@ class CachedSession {
     return session_->GetMutableBenchmarkInfo();
   }
 
+  // Returns the debug info for the session, or nullopt if unsupported
+  // or debugger is disabled.
+  std::optional<SessionDebugInfo> GetSessionDebugInfo() const {
+    if (session_ != nullptr) {
+      return session_->GetSessionDebugInfo();
+    }
+    return std::nullopt;
+  }
+
   // Clones the CachedSession along with its underlying Session and prefix
   // cache.
   absl::StatusOr<std::unique_ptr<CachedSession>> Clone() const;
