@@ -63,9 +63,12 @@ ABSL_FLAG(std::string, input_prompt, "",
           "Input string to compute the embedding for.");
 ABSL_FLAG(std::string, image_path, "",
           "Optional path to an image file to compute the embedding for.");
+ABSL_FLAG(
+    std::string, audio_path, "",
+    "Optional path to an audio file (.wav) to compute the embedding for.");
 ABSL_FLAG(bool, normalize, true,
           "Whether to L2-normalize the output embedding vector.");
-ABSL_FLAG(bool, use_mmap, true,
+ABSL_FLAG(bool, use_mmap, false,
           "Whether to use memory-mapped file for model loading.");
 ABSL_FLAG(std::string, dispatch_library_dir, "",
           "Path to directory containing LiteRT dispatch libraries.");
@@ -75,18 +78,29 @@ ABSL_FLAG(std::string, input_overflow_strategy, "truncate",
 // Note: the `benchmark` flag is provided by
 // //runtime/engine:shared_flags.
 ABSL_FLAG(
+    int, max_input_length, 0,
+    "Maximum input length for embedding execution. If greater than 0, "
+    "text encoder signatures will be pruned to only load signatures up to "
+    "this capacity.");
+ABSL_FLAG(
+    std::string, activation_data_type, "",
+    "Activation data type for execution: float32, float16, int16, or int8. "
+    "Defaults to float32 on GPU.");
+ABSL_FLAG(
     int, min_input_length, 0,
     "Minimum input length for embedding execution. If greater than 0, "
     "text encoder signatures smaller than this capacity will be excluded.");
 
 namespace {
 
+using ::litert::lm::ActivationDataType;
 using ::litert::lm::Backend;
 using ::litert::lm::BuildLiteRtCompiledModelResources;
 using ::litert::lm::EmbeddingEngineImpl;
 using ::litert::lm::EmbeddingEngineSettings;
 using ::litert::lm::EmbeddingOptions;
 using ::litert::lm::EmbeddingResponse;
+using ::litert::lm::InputAudio;
 using ::litert::lm::InputData;
 using ::litert::lm::InputImage;
 using ::litert::lm::InputOverflowStrategy;
@@ -167,12 +181,21 @@ absl::Status MainHelper(int argc, char** argv) {
   }
 
   std::optional<Backend> vision_backend = std::nullopt;
-  if (resources->GetTFLiteModel(ModelType::kTfLiteVisionEncoder).ok()) {
+  if (const auto vision_backend_str = absl::GetFlag(FLAGS_vision_backend);
+      vision_backend_str.has_value() && !vision_backend_str->empty()) {
+    LITERT_ASSIGN_OR_RETURN(vision_backend, ::litert::lm::GetBackendFromString(
+                                                *vision_backend_str));
+  } else if (resources->GetTFLiteModel(ModelType::kTfLiteVisionEncoder).ok()) {
     vision_backend = backend;
   }
+
   std::optional<Backend> audio_backend = std::nullopt;
-  if (resources->GetTFLiteModel(ModelType::kTfLiteAudioEncoderHw).ok() ||
-      resources->GetTFLiteModel(ModelType::kTfLiteAudioFrontend).ok()) {
+  if (const auto audio_backend_str = absl::GetFlag(FLAGS_audio_backend);
+      audio_backend_str.has_value() && !audio_backend_str->empty()) {
+    LITERT_ASSIGN_OR_RETURN(
+        audio_backend, ::litert::lm::GetBackendFromString(*audio_backend_str));
+  } else if (resources->GetTFLiteModel(ModelType::kTfLiteAudioEncoderHw).ok() ||
+             resources->GetTFLiteModel(ModelType::kTfLiteAudioFrontend).ok()) {
     audio_backend = backend;
   }
 
@@ -213,15 +236,31 @@ absl::Status MainHelper(int argc, char** argv) {
     settings.SetVisionTokensPerImage(visual_token_budget);
   }
 
-  if (absl::GetFlag(FLAGS_benchmark)) {
-    settings.GetMutableBenchmarkParams();
+  const int max_input_length = absl::GetFlag(FLAGS_max_input_length);
+  if (max_input_length > 0) {
+    settings.SetMaxInputLength(max_input_length);
   }
-
   const int min_input_length = absl::GetFlag(FLAGS_min_input_length);
   if (min_input_length > 0) {
     settings.SetMinInputLength(min_input_length);
   }
 
+  const std::string activation_data_type_str =
+      absl::GetFlag(FLAGS_activation_data_type);
+  if (!activation_data_type_str.empty()) {
+    LITERT_ASSIGN_OR_RETURN(ActivationDataType act_type,
+                            ::litert::lm::GetActivationDataTypeFromString(
+                                activation_data_type_str));
+    settings.GetMutableMainExecutorSettings().SetActivationDataType(act_type);
+    if (settings.GetMutableVisionExecutorSettings().has_value()) {
+      settings.GetMutableVisionExecutorSettings()->SetActivationDataType(
+          act_type);
+    }
+    if (settings.GetMutableAudioExecutorSettings().has_value()) {
+      settings.GetMutableAudioExecutorSettings()->SetActivationDataType(
+          act_type);
+    }
+  }
   LITERT_ASSIGN_OR_RETURN(auto owned_env,
                           CreateEnvironment(settings, resources.get()));
   auto owned_env_ptr =
@@ -237,17 +276,19 @@ absl::Status MainHelper(int argc, char** argv) {
 
   std::string prompt = absl::GetFlag(FLAGS_input_prompt);
   const std::string image_path = absl::GetFlag(FLAGS_image_path);
+  const std::string audio_path = absl::GetFlag(FLAGS_audio_path);
   const int benchmark_prefill_tokens =
       is_benchmark ? absl::GetFlag(FLAGS_benchmark_prefill_tokens) : 0;
 
-  if (prompt.empty() && image_path.empty()) {
+  if (prompt.empty() && image_path.empty() && audio_path.empty()) {
     if (!is_benchmark || benchmark_prefill_tokens <= 0) {
       return absl::InvalidArgumentError(
           is_benchmark
-              ? "At least one of --input_prompt, --image_path, or "
-                "--benchmark_prefill_tokens must be provided in benchmark mode."
-              : "At least one of --input_prompt or --image_path must be "
-                "provided.");
+              ? "At least one of --input_prompt, --image_path, --audio_path, "
+                "or --benchmark_prefill_tokens must be provided in benchmark "
+                "mode."
+              : "At least one of --input_prompt, --image_path, or "
+                "--audio_path must be provided.");
     }
   }
 
@@ -277,6 +318,18 @@ absl::Status MainHelper(int argc, char** argv) {
     std::string image_bytes((std::istreambuf_iterator<char>(file)),
                             std::istreambuf_iterator<char>());
     contents.emplace_back(InputImage(std::move(image_bytes)));
+  }
+
+  if (!audio_path.empty()) {
+    std::cout << "Loading audio from: " << audio_path << std::endl;
+    std::ifstream file(audio_path, std::ios::binary);
+    if (!file.is_open()) {
+      return absl::NotFoundError(
+          absl::StrCat("Failed to open audio file: ", audio_path));
+    }
+    std::string audio_bytes((std::istreambuf_iterator<char>(file)),
+                            std::istreambuf_iterator<char>());
+    contents.emplace_back(InputAudio(std::move(audio_bytes)));
   }
 
   LITERT_ASSIGN_OR_RETURN(
