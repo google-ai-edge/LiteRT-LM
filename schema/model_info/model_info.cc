@@ -20,13 +20,13 @@
 #include <fstream>
 #include <ios>
 #include <istream>
-#include <memory>
 #include <optional>
 #include <ostream>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "absl/algorithm/container.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
@@ -38,6 +38,8 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "flatbuffers/flexbuffers.h"  // from @flatbuffers
 #include "flatbuffers/verifier.h"  // from @flatbuffers
+#include "runtime/proto/embedding_metadata.pb.h"
+#include "runtime/proto/embedding_model_type.pb.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/proto/llm_model_type.pb.h"
 #include "runtime/util/status_macros.h"
@@ -48,20 +50,20 @@
 namespace litert::lm::schema::model_info {
 namespace {
 
-// Maximum allowed size (10 MB) for serialized binary LlmMetadata protobuf
-// sections. Protobuf metadata is typically a few KB; 10 MB provides ample
-// headroom while guarding against OOM from corrupted offset values in
-// malformed model files.
+// Maximum allowed size (10 MB) for serialized binary LlmMetadata /
+// EmbeddingMetadata protobuf sections. Protobuf metadata is typically a few
+// KB; 10 MB provides ample headroom while guarding against OOM from corrupted
+// offset values in malformed model files.
 constexpr size_t kMaxProtoMetadataSize = 10 * 1024 * 1024;
 
 // Maximum allowed size (10 MB) for reading NPU dispatch headers. The TFLite
 // auxiliary model header containing DISPATCH_OP metadata is typically small.
 constexpr size_t kMaxNpuSectionSize = 10 * 1024 * 1024;
 
-// Maximum allowed size (2 GB) for vision sub-model FlatBuffers. In multimodal
-// models, vision encoders typically range between 50 MB and 500 MB. 2 GB is the
-// maximum buffer size addressable by the FlatBuffers specification (due to
-// 32-bit signed offsets) and protects against unbounded memory allocations.
+// Maximum allowed size (2 GB) for sub-model FlatBuffers (vision encoders, main
+// compute graphs, embedding models). 2 GB is the maximum buffer size
+// addressable by the FlatBuffers specification (due to 32-bit signed offsets)
+// and protects against unbounded memory allocations.
 constexpr size_t kMaxVisionSectionSize = 2ULL * 1024 * 1024 * 1024;
 
 // Formats a float for the CLI report. Uses general format '%g' to preserve
@@ -341,6 +343,7 @@ bool IsMainLlmSection(absl::string_view model_type) {
 // Functional classification of sub-models inside the container.
 enum class SectionKind {
   kMainLlm,
+  kTextEncoder,
   kVision,
   kAudio,
   kVideo,
@@ -351,15 +354,20 @@ enum class SectionKind {
 
 // Classifies the sub-model section by its model_type to identify supported
 // input modalities (vision, audio, video), speculative decoding drafters,
-// and hardware-accelerated NPU sub-models.
+// hardware-accelerated NPU sub-models, and embedding encoders.
 SectionKind ClassifyModelType(absl::string_view model_type) {
   if (IsMainLlmSection(model_type)) return SectionKind::kMainLlm;
+  if (model_type == "tf_lite_text_encoder" ||
+      model_type == "tf_lite_embedder") {
+    return SectionKind::kTextEncoder;
+  }
   if (model_type == "tf_lite_vision_adapter" ||
       model_type == "tf_lite_vision_encoder") {
     return SectionKind::kVision;
   }
   if (model_type == "tf_lite_audio_adapter" ||
-      model_type == "tf_lite_audio_encoder_hw") {
+      model_type == "tf_lite_audio_encoder_hw" ||
+      model_type == "tf_lite_audio_frontend") {
     return SectionKind::kAudio;
   }
   if (model_type == "tf_lite_video_adapter" ||
@@ -386,7 +394,9 @@ struct ModalityMetadata {
 struct DiscoveredSections {
   std::string global_soc_name;
   StreamSection llm_metadata_proto;
+  StreamSection embedding_metadata_proto;
   StreamSection main_tflite;
+  StreamSection embedding_encoder_tflite;
   StreamSection npu_aux;
   std::vector<StreamSection> vision_sections;
   bool has_speculative_decoding = false;
@@ -613,6 +623,11 @@ absl::StatusOr<DiscoveredSections> DiscoverSections(
       sections.llm_metadata_proto = sec;
       continue;
     }
+    if (section->data_type() == AnySectionDataType_EmbeddingMetadataProto) {
+      // Embedding Metadata Protobuf section found: record its stream offsets.
+      sections.embedding_metadata_proto = sec;
+      continue;
+    }
     if (section->data_type() != AnySectionDataType_TFLiteModel) {
       continue;
     }
@@ -668,6 +683,10 @@ absl::StatusOr<DiscoveredSections> DiscoverSections(
         sections.main_tflite = sec;
         found_main_tflite = true;
         break;
+      case SectionKind::kTextEncoder:
+        record_modality(sections.text);
+        sections.embedding_encoder_tflite = sec;
+        break;
       case SectionKind::kVision:
         record_modality(sections.vision);
         sections.vision_sections.push_back(sec);
@@ -699,58 +718,52 @@ absl::StatusOr<DiscoveredSections> DiscoverSections(
   return sections;
 }
 
-// Configures supported modalities, backends, NPU brand, and SoC name.
-absl::Status ConfigureModalitiesAndBackends(
+// Configures supported hardware backends, default backend priority, NPU brand,
+// and SoC chipset details across all active modalities for LLM or Embedding
+// models.
+absl::Status ConfigureSupportedBackendsAndNpu(
     std::istream& stream, std::streamoff total_stream_size,
-    const DiscoveredSections& sections, LlmInferenceCapability& llm_cap) {
-  // 2. Populate LlmInferenceCapability.
-  llm_cap.input_modalities.text = sections.text.present;
-  llm_cap.input_modalities.vision = sections.vision.present;
-  llm_cap.input_modalities.audio = sections.audio.present;
-  llm_cap.input_modalities.video = sections.video.present;
-
-  llm_cap.output_modalities.text = true;
-  llm_cap.supports_speculative_decoding = sections.has_speculative_decoding;
-
+    const DiscoveredSections& sections,
+    const StreamSection& primary_compute_sec,
+    SupportedModalities& input_modalities, SupportedBackends& text_backends,
+    SupportedBackends& vision_backends, SupportedBackends& audio_backends,
+    SupportedBackends& video_backends) {
   bool is_artisan_tensor = false;
-  // Resolve backend support for each active modality from section constraints.
-  ParseBackendConstraint(sections.text.backend_constraint,
-                         llm_cap.text_supported_backends, is_artisan_tensor);
-  if (sections.vision.present) {
-    ParseBackendConstraint(sections.vision.backend_constraint,
-                           llm_cap.vision_supported_backends,
+
+  // 1. Resolve backend constraints for each active modality.
+  if (input_modalities.text) {
+    ParseBackendConstraint(sections.text.backend_constraint, text_backends,
                            is_artisan_tensor);
   }
-  if (sections.audio.present) {
-    ParseBackendConstraint(sections.audio.backend_constraint,
-                           llm_cap.audio_supported_backends, is_artisan_tensor);
+  if (input_modalities.vision) {
+    ParseBackendConstraint(sections.vision.backend_constraint, vision_backends,
+                           is_artisan_tensor);
   }
-  if (sections.video.present) {
-    ParseBackendConstraint(sections.video.backend_constraint,
-                           llm_cap.video_supported_backends, is_artisan_tensor);
+  if (input_modalities.audio) {
+    ParseBackendConstraint(sections.audio.backend_constraint, audio_backends,
+                           is_artisan_tensor);
+  }
+  if (input_modalities.video) {
+    ParseBackendConstraint(sections.video.backend_constraint, video_backends,
+                           is_artisan_tensor);
   }
 
-  // If a hardware-accelerated NPU sub-model section exists, enable NPU.
+  // 2. If a dedicated NPU auxiliary sub-model section exists, enable NPU for
+  // text.
   if (sections.npu_aux.is_valid()) {
-    llm_cap.text_supported_backends.npu = true;
-    if (std::find(llm_cap.text_supported_backends.preferred_backends.begin(),
-                  llm_cap.text_supported_backends.preferred_backends.end(),
-                  BackendType::kNpu) ==
-        llm_cap.text_supported_backends.preferred_backends.end()) {
-      llm_cap.text_supported_backends.preferred_backends.push_back(
-          BackendType::kNpu);
+    text_backends.npu = true;
+    auto& preferred = text_backends.preferred_backends;
+    if (!absl::c_linear_search(preferred, BackendType::kNpu)) {
+      preferred.push_back(BackendType::kNpu);
     }
-    if (llm_cap.text_supported_backends.default_backend ==
-        BackendType::kUnspecified) {
-      llm_cap.text_supported_backends.default_backend = BackendType::kNpu;
+    if (text_backends.default_backend == BackendType::kUnspecified) {
+      text_backends.default_backend = BackendType::kNpu;
     }
   }
 
-  // Detect specific NPU hardware brand and SoC if any modality has NPU enabled.
-  bool has_any_npu = llm_cap.text_supported_backends.npu ||
-                     llm_cap.vision_supported_backends.npu ||
-                     llm_cap.audio_supported_backends.npu ||
-                     llm_cap.video_supported_backends.npu;
+  // 3. Check if any modality targets NPU.
+  bool has_any_npu = text_backends.npu || vision_backends.npu ||
+                     audio_backends.npu || video_backends.npu;
 
   NpuBrand npu_brand = NpuBrand::kUnknown;
   std::string detected_soc = sections.global_soc_name;
@@ -776,14 +789,14 @@ absl::Status ConfigureModalitiesAndBackends(
     if (sections.npu_aux.is_valid()) {
       inspect_section_for_npu(sections.npu_aux);
     }
-    if (sections.main_tflite.is_valid() &&
+    if (primary_compute_sec.is_valid() &&
         (npu_brand == NpuBrand::kUnknown || detected_soc.empty())) {
-      inspect_section_for_npu(sections.main_tflite);
+      inspect_section_for_npu(primary_compute_sec);
     }
   }
 
-  // Propagate detected NPU brand and SoC name to all modalities that support
-  // NPU.
+  // 4. Propagate detected NPU brand and SoC name to all modalities with NPU
+  // support.
   auto update_npu_modality = [&](SupportedBackends& sb,
                                  const std::string& modality_soc) {
     if (!sb.npu) return;
@@ -795,44 +808,66 @@ absl::Status ConfigureModalitiesAndBackends(
     }
   };
 
-  update_npu_modality(llm_cap.text_supported_backends, sections.text.soc_name);
-  update_npu_modality(llm_cap.vision_supported_backends,
-                      sections.vision.soc_name);
-  update_npu_modality(llm_cap.audio_supported_backends,
-                      sections.audio.soc_name);
-  update_npu_modality(llm_cap.video_supported_backends,
-                      sections.video.soc_name);
+  update_npu_modality(text_backends, sections.text.soc_name);
+  update_npu_modality(vision_backends, sections.vision.soc_name);
+  update_npu_modality(audio_backends, sections.audio.soc_name);
+  update_npu_modality(video_backends, sections.video.soc_name);
 
   return absl::OkStatus();
 }
 
-// Calculates max vision token budget from LlmModelType protobuf.
-int CalculateMaxVisionTokenBudget(const proto::LlmModelType& model_type) {
-  int max_num_patches = 0;
-  // Default to 3, which is the standard default for Gemma 4.
-  int pooling_kernel_size = 3;
+// Configures supported modalities and hardware backends for Large Language
+// Models.
+absl::Status ConfigureModalitiesAndBackends(
+    std::istream& stream, std::streamoff total_stream_size,
+    const DiscoveredSections& sections, LlmInferenceCapability& llm_cap) {
+  llm_cap.input_modalities.text = sections.text.present;
+  llm_cap.input_modalities.vision = sections.vision.present;
+  llm_cap.input_modalities.audio = sections.audio.present;
+  llm_cap.input_modalities.video = sections.video.present;
+  llm_cap.output_modalities.text = true;
+  llm_cap.supports_speculative_decoding = sections.has_speculative_decoding;
 
+  return ConfigureSupportedBackendsAndNpu(
+      stream, total_stream_size, sections, sections.main_tflite,
+      llm_cap.input_modalities, llm_cap.text_supported_backends,
+      llm_cap.vision_supported_backends, llm_cap.audio_supported_backends,
+      llm_cap.video_supported_backends);
+}
+
+// Calculates max vision token budget for LLM models.
+int CalculateMaxVisionTokenBudget(const proto::LlmModelType& model_type) {
   if (model_type.has_gemma4()) {
-    max_num_patches = model_type.gemma4().max_num_patches();
-    if (model_type.gemma4().pooling_kernel_size() > 0) {
-      pooling_kernel_size = model_type.gemma4().pooling_kernel_size();
+    const auto& gemma4 = model_type.gemma4();
+    if (gemma4.max_num_patches() > 0) {
+      int pool =
+          gemma4.pooling_kernel_size() > 0 ? gemma4.pooling_kernel_size() : 3;
+      return gemma4.max_num_patches() / (pool * pool);
     }
   } else if (model_type.has_generic_model()) {
-    max_num_patches = model_type.generic_model().max_num_patches();
-    pooling_kernel_size =
-        model_type.generic_model().pooling_kernel_size() > 0
-            ? model_type.generic_model().pooling_kernel_size()
-            : 1;
+    const auto& generic_model = model_type.generic_model();
+    if (generic_model.has_max_num_patches() &&
+        generic_model.max_num_patches() > 0) {
+      int pool = generic_model.has_pooling_kernel_size() &&
+                         generic_model.pooling_kernel_size() > 0
+                     ? generic_model.pooling_kernel_size()
+                     : 1;
+      return generic_model.max_num_patches() / (pool * pool);
+    }
   } else if (model_type.has_lfm2()) {
-    max_num_patches = model_type.lfm2().max_num_patches();
-    pooling_kernel_size = model_type.lfm2().pooling_kernel_size() > 0
-                              ? model_type.lfm2().pooling_kernel_size()
-                              : 2;
+    const auto& lfm2 = model_type.lfm2();
+    if (lfm2.max_num_patches() > 0) {
+      int pool =
+          lfm2.pooling_kernel_size() > 0 ? lfm2.pooling_kernel_size() : 2;
+      return lfm2.max_num_patches() / (pool * pool);
+    }
   }
+  return -1;
+}
 
-  if (max_num_patches > 0) {
-    return max_num_patches / (pooling_kernel_size * pooling_kernel_size);
-  }
+// Calculates max vision token budget for Embedding models.
+int CalculateMaxVisionTokenBudget(
+    const proto::EmbeddingModelType& model_type) {
   return -1;
 }
 
@@ -958,40 +993,298 @@ std::optional<int64_t> ExtractContextTokensFromTfliteBuffer(
   return std::nullopt;
 }
 
-// 3. Fallback: inspect main TFLite model graph for context size if not
-// already populated from LlmMetadata protobuf (e.g. for legacy or raw
-// TFLite models). For large models (e.g. 7B+ models > 4GB), LlmMetadata
-// protobuf is the primary source of truth, avoiding multi-gigabyte memory
-// allocations.
+// Inspects main TFLite model graph for context size if not already populated
+// from LlmMetadata protobuf (e.g. for legacy or raw TFLite models).
 absl::Status InferContextTokensFallbackIfMissing(
     std::istream& stream, std::streamoff total_stream_size,
     const StreamSection& main_tflite_sec, LlmInferenceCapability& llm_cap) {
   if (llm_cap.max_context_tokens != 0 || !main_tflite_sec.is_valid()) {
     return absl::OkStatus();
   }
-  if (total_stream_size >= 0 &&
-      static_cast<uint64_t>(total_stream_size) < main_tflite_sec.end) {
-    return absl::OkStatus();
-  }
-  if (main_tflite_sec.size() > kMaxVisionSectionSize) {
+  auto buffer_or = ReadStreamSection(stream, total_stream_size, main_tflite_sec,
+                                     kMaxVisionSectionSize, "Main TFLite");
+  if (!buffer_or.ok()) {
     return absl::OkStatus();
   }
 
-  stream.seekg(main_tflite_sec.begin);
-  std::string buffer(main_tflite_sec.size(), '\0');
-  stream.read(&buffer[0], main_tflite_sec.size());
-  if (!stream && stream.gcount() == 0) return absl::OkStatus();
-  if (static_cast<size_t>(stream.gcount()) < buffer.size()) {
-    buffer.resize(stream.gcount());
-  }
-
-  auto context_tokens = ExtractContextTokensFromTfliteBuffer(buffer);
+  auto context_tokens = ExtractContextTokensFromTfliteBuffer(*buffer_or);
   if (context_tokens.has_value()) {
     llm_cap.max_context_tokens = *context_tokens;
     llm_cap.is_dynamic_context = IsMagicNumber(*context_tokens);
   }
 
   return absl::OkStatus();
+}
+
+// Parses embedding metadata protobuf if present.
+absl::Status LoadEmbeddingMetadataProtoIfPresent(
+    std::istream& stream, std::streamoff total_stream_size,
+    const StreamSection& proto_section,
+    EmbeddingInferenceCapability& embed_cap) {
+  if (proto_section.is_valid()) {
+    ABSL_ASSIGN_OR_RETURN(
+        std::string buffer,
+        ReadStreamSection(stream, total_stream_size, proto_section,
+                          kMaxProtoMetadataSize, "Embedding metadata"));
+
+    proto::EmbeddingMetadata proto_metadata;
+    if (proto_metadata.ParseFromString(buffer)) {
+      if (proto_metadata.has_embedding_model_type()) {
+        int budget = CalculateMaxVisionTokenBudget(
+            proto_metadata.embedding_model_type());
+        if (budget > 0) {
+          embed_cap.max_vision_token_budget = budget;
+          embed_cap.input_modalities.vision = true;
+        }
+      }
+      if (proto_metadata.has_audio_preprocessor()) {
+        embed_cap.input_modalities.audio = true;
+      }
+
+      embed_cap.min_runtime_version = proto_metadata.min_runtime_version();
+    }
+  }
+
+  return absl::OkStatus();
+}
+
+// Extracts input sequence length from tensor shape based on rank and embedding
+// dimension.
+int ExtractSequenceLengthFromShape(const tflite::Tensor* tensor,
+                                   int embedding_dimension) {
+  if (tensor == nullptr || tensor->shape() == nullptr) return 0;
+  const auto* shape = tensor->shape();
+  if (shape->size() == 3) {
+    // [batch, seq_len, embed_dim]
+    return shape->Get(1);
+  }
+  if (shape->size() == 2) {
+    // [batch, seq_len] or [seq_len, embed_dim]
+    if (tensor->name() != nullptr &&
+        (absl::StrContains(tensor->name()->string_view(), "ids") ||
+         absl::StrContains(tensor->name()->string_view(), "tokens") ||
+         absl::StrContains(tensor->name()->string_view(), "mask"))) {
+      return shape->Get(1);
+    }
+    if (embedding_dimension > 0 && shape->Get(1) == embedding_dimension) {
+      return shape->Get(0);
+    }
+    return shape->Get(1);
+  }
+  if (shape->size() == 1) {
+    return shape->Get(0);
+  }
+  return 0;
+}
+
+// Extracts embedding dimension and signature lengths from an embedding encoder
+// TFLite model buffer.
+absl::Status ExtractEmbeddingInfoFromTfliteBuffer(
+    absl::string_view tflite_buffer, EmbeddingInferenceCapability& embed_cap) {
+  flatbuffers::Verifier verifier(
+      reinterpret_cast<const uint8_t*>(tflite_buffer.data()),
+      tflite_buffer.size());
+  if (!tflite::VerifyModelBuffer(verifier)) {
+    return absl::InternalError(
+        "Failed to verify embedding encoder TFLite buffer (corrupt model).");
+  }
+
+  const tflite::Model* model = tflite::GetModel(tflite_buffer.data());
+  if (model == nullptr) {
+    return absl::InternalError(
+        "Failed to parse embedding encoder TFLite model.");
+  }
+
+  std::vector<int> signature_lengths;
+
+  // 1. Inspect signature defs for output embedding dimension and sequence
+  // lengths.
+  if (model->signature_defs() != nullptr && !model->signature_defs()->empty()) {
+    for (size_t sig_idx = 0; sig_idx < model->signature_defs()->size();
+         ++sig_idx) {
+      const auto* sig = model->signature_defs()->Get(sig_idx);
+      if (sig == nullptr) continue;
+
+      uint32_t subgraph_idx = sig->subgraph_index();
+      if (model->subgraphs() == nullptr ||
+          subgraph_idx >= model->subgraphs()->size()) {
+        continue;
+      }
+      const auto* subgraph = model->subgraphs()->Get(subgraph_idx);
+      if (subgraph == nullptr || subgraph->tensors() == nullptr) continue;
+
+      // Extract output embedding dimension.
+      if (sig->outputs() != nullptr) {
+        for (size_t out_idx = 0; out_idx < sig->outputs()->size(); ++out_idx) {
+          const auto* out = sig->outputs()->Get(out_idx);
+          if (out == nullptr ||
+              out->tensor_index() >= subgraph->tensors()->size()) {
+            continue;
+          }
+          const auto* tensor = subgraph->tensors()->Get(out->tensor_index());
+          if (tensor != nullptr && tensor->shape() != nullptr &&
+              !tensor->shape()->empty()) {
+            int dim = tensor->shape()->Get(tensor->shape()->size() - 1);
+            if (dim > 0) {
+              if (embed_cap.embedding_dimension == 0) {
+                embed_cap.embedding_dimension = dim;
+              } else if (embed_cap.embedding_dimension != dim) {
+                return absl::InternalError(
+                    absl::StrFormat("Conflicting embedding output dimensions "
+                                    "found across signatures: %d vs %d",
+                                    embed_cap.embedding_dimension, dim));
+              }
+              break;
+            }
+          }
+        }
+      }
+
+      // Extract input sequence length.
+      if (sig->inputs() != nullptr) {
+        for (size_t in_idx = 0; in_idx < sig->inputs()->size(); ++in_idx) {
+          const auto* in = sig->inputs()->Get(in_idx);
+          if (in == nullptr ||
+              in->tensor_index() >= subgraph->tensors()->size()) {
+            continue;
+          }
+          const auto* tensor = subgraph->tensors()->Get(in->tensor_index());
+          int seq_len = ExtractSequenceLengthFromShape(
+              tensor, embed_cap.embedding_dimension);
+          if (seq_len > 0) {
+            signature_lengths.push_back(seq_len);
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  // 2. Fallback: inspect primary subgraph tensors directly if signatures are
+  // missing.
+  if (model->subgraphs() != nullptr && !model->subgraphs()->empty()) {
+    const auto* subgraph = model->subgraphs()->Get(0);
+    if (subgraph != nullptr && subgraph->tensors() != nullptr) {
+      if (embed_cap.embedding_dimension == 0 &&
+          subgraph->outputs() != nullptr && !subgraph->outputs()->empty()) {
+        uint32_t out_tensor_idx = subgraph->outputs()->Get(0);
+        if (out_tensor_idx < subgraph->tensors()->size()) {
+          const auto* tensor = subgraph->tensors()->Get(out_tensor_idx);
+          if (tensor != nullptr && tensor->shape() != nullptr &&
+              !tensor->shape()->empty()) {
+            embed_cap.embedding_dimension =
+                tensor->shape()->Get(tensor->shape()->size() - 1);
+          }
+        }
+      }
+      if (signature_lengths.empty() && subgraph->inputs() != nullptr &&
+          !subgraph->inputs()->empty()) {
+        uint32_t in_tensor_idx = subgraph->inputs()->Get(0);
+        if (in_tensor_idx < subgraph->tensors()->size()) {
+          const auto* tensor = subgraph->tensors()->Get(in_tensor_idx);
+          int seq_len = ExtractSequenceLengthFromShape(
+              tensor, embed_cap.embedding_dimension);
+          if (seq_len > 0) signature_lengths.push_back(seq_len);
+        }
+      }
+    }
+  }
+
+  if (!signature_lengths.empty()) {
+    std::sort(signature_lengths.begin(), signature_lengths.end());
+    signature_lengths.erase(
+        std::unique(signature_lengths.begin(), signature_lengths.end()),
+        signature_lengths.end());
+    embed_cap.max_context_tokens = signature_lengths.back();
+    embed_cap.is_dynamic_context = (signature_lengths.size() > 1);
+    embed_cap.supported_signature_lengths = std::move(signature_lengths);
+  }
+
+  return absl::OkStatus();
+}
+
+// Loads embedding model TFLite and extracts dimensions and signatures.
+absl::Status LoadEmbeddingModelTfliteIfPresent(
+    std::istream& stream, std::streamoff total_stream_size,
+    const StreamSection& encoder_section,
+    EmbeddingInferenceCapability& embed_cap) {
+  if (!encoder_section.is_valid()) return absl::OkStatus();
+
+  ABSL_ASSIGN_OR_RETURN(
+      std::string buffer,
+      ReadStreamSection(stream, total_stream_size, encoder_section,
+                        kMaxVisionSectionSize, "Embedding encoder model"));
+
+  return ExtractEmbeddingInfoFromTfliteBuffer(buffer, embed_cap);
+}
+
+// Configures supported modalities and hardware backends for embedding models.
+absl::Status ConfigureEmbeddingModalitiesAndBackends(
+    std::istream& stream, std::streamoff total_stream_size,
+    const DiscoveredSections& sections,
+    EmbeddingInferenceCapability& embed_cap) {
+  embed_cap.input_modalities.text = sections.text.present;
+  if (sections.vision.present) {
+    embed_cap.input_modalities.vision = true;
+    std::vector<int> vision_lengths;
+    for (const auto& vision_sec : sections.vision_sections) {
+      auto buffer_or = ReadStreamSection(stream, total_stream_size, vision_sec,
+                                         kMaxVisionSectionSize, "Vision model");
+      if (buffer_or.ok()) {
+        auto lengths_or = ExtractVisionSignatureLengths(*buffer_or);
+        if (lengths_or.ok() && !lengths_or->empty()) {
+          for (int len : *lengths_or) {
+            vision_lengths.push_back(len);
+            embed_cap.max_vision_token_budget =
+                std::max(embed_cap.max_vision_token_budget, len);
+          }
+        }
+      }
+    }
+    if (!vision_lengths.empty()) {
+      std::sort(vision_lengths.begin(), vision_lengths.end());
+      vision_lengths.erase(
+          std::unique(vision_lengths.begin(), vision_lengths.end()),
+          vision_lengths.end());
+      embed_cap.vision_signature_selection = std::move(vision_lengths);
+    }
+  }
+  if (sections.audio.present) {
+    embed_cap.input_modalities.audio = true;
+  }
+  embed_cap.input_modalities.video = sections.video.present;
+
+  const auto& primary_sec = sections.embedding_encoder_tflite.is_valid()
+                                ? sections.embedding_encoder_tflite
+                                : sections.main_tflite;
+
+  return ConfigureSupportedBackendsAndNpu(
+      stream, total_stream_size, sections, primary_sec,
+      embed_cap.input_modalities, embed_cap.text_supported_backends,
+      embed_cap.vision_supported_backends, embed_cap.audio_supported_backends,
+      embed_cap.video_supported_backends);
+}
+
+// Helper to format modality backends consistently across both LLM and
+// Embedding models.
+void PrintModalityBackends(std::ostream& os,
+                           const SupportedModalities& modalities,
+                           const SupportedBackends& text_backends,
+                           const SupportedBackends& vision_backends,
+                           const SupportedBackends& audio_backends,
+                           const SupportedBackends& video_backends) {
+  if (modalities.text) {
+    os << "  Text Backends:          " << text_backends << "\n";
+  }
+  if (modalities.vision) {
+    os << "  Vision Backends:        " << vision_backends << "\n";
+  }
+  if (modalities.audio) {
+    os << "  Audio Backends:         " << audio_backends << "\n";
+  }
+  if (modalities.video) {
+    os << "  Video Backends:         " << video_backends << "\n";
+  }
 }
 
 }  // namespace
@@ -1008,22 +1301,53 @@ absl::StatusOr<ModelInfo> GetModelInfo(std::istream& litertlm_stream) {
   ABSL_ASSIGN_OR_RETURN(DiscoveredSections sections,
                         DiscoverSections(*header.metadata));
 
-  LlmInferenceCapability llm_cap;
-  ABSL_RETURN_IF_ERROR(ConfigureModalitiesAndBackends(
-      litertlm_stream, total_stream_size, sections, llm_cap));
-
-  ABSL_RETURN_IF_ERROR(LoadLlmMetadataProtoIfPresent(
-      litertlm_stream, total_stream_size, sections.llm_metadata_proto,
-      llm_cap));
-
-  ABSL_RETURN_IF_ERROR(LoadVisionSignaturesIfPresent(
-      litertlm_stream, total_stream_size, sections.vision_sections, llm_cap));
-
-  ABSL_RETURN_IF_ERROR(InferContextTokensFallbackIfMissing(
-      litertlm_stream, total_stream_size, sections.main_tflite, llm_cap));
-
   ModelInfo info;
-  info.llm_capability = std::move(llm_cap);
+
+  // 1. If EmbeddingMetadata proto is present OR if this is a dedicated
+  // embedding encoder model (without main LLM compute graph / LLM metadata):
+  bool is_embedding_model =
+      sections.embedding_metadata_proto.is_valid() ||
+      (sections.embedding_encoder_tflite.is_valid() &&
+       !sections.llm_metadata_proto.is_valid() &&
+       !sections.main_tflite.is_valid());
+
+  if (is_embedding_model) {
+    EmbeddingInferenceCapability embed_cap;
+    ABSL_RETURN_IF_ERROR(LoadEmbeddingMetadataProtoIfPresent(
+        litertlm_stream, total_stream_size, sections.embedding_metadata_proto,
+        embed_cap));
+
+    const auto& encoder_sec = sections.embedding_encoder_tflite.is_valid()
+                                  ? sections.embedding_encoder_tflite
+                                  : sections.main_tflite;
+    ABSL_RETURN_IF_ERROR(LoadEmbeddingModelTfliteIfPresent(
+        litertlm_stream, total_stream_size, encoder_sec, embed_cap));
+
+    ABSL_RETURN_IF_ERROR(ConfigureEmbeddingModalitiesAndBackends(
+        litertlm_stream, total_stream_size, sections, embed_cap));
+
+    info.embedding_capability = std::move(embed_cap);
+  }
+
+  // 2. If LlmMetadata proto is present OR if this is not an embedding model:
+  if (sections.llm_metadata_proto.is_valid() || !is_embedding_model) {
+    LlmInferenceCapability llm_cap;
+    ABSL_RETURN_IF_ERROR(ConfigureModalitiesAndBackends(
+        litertlm_stream, total_stream_size, sections, llm_cap));
+
+    ABSL_RETURN_IF_ERROR(LoadLlmMetadataProtoIfPresent(
+        litertlm_stream, total_stream_size, sections.llm_metadata_proto,
+        llm_cap));
+
+    ABSL_RETURN_IF_ERROR(LoadVisionSignaturesIfPresent(
+        litertlm_stream, total_stream_size, sections.vision_sections, llm_cap));
+
+    ABSL_RETURN_IF_ERROR(InferContextTokensFallbackIfMissing(
+        litertlm_stream, total_stream_size, sections.main_tflite, llm_cap));
+
+    info.llm_capability = std::move(llm_cap);
+  }
+
   return info;
 }
 
@@ -1134,7 +1458,7 @@ std::ostream& operator<<(std::ostream& os,
     }
   };
 
-  os << "[LLM Capabilities]\n"
+  os << "[LLM Model Info]\n"
      << "  Supports Function Call: "
      << (llm_cap.supports_function_calling ? "YES" : "NO") << "\n"
      << "  Supports Thinking:      "
@@ -1172,22 +1496,46 @@ std::ostream& operator<<(std::ostream& os,
      << (llm_cap.is_dynamic_context ? "YES" : "NO") << "\n"
      << "  Input Modalities:       " << llm_cap.input_modalities << "\n";
 
-  if (llm_cap.input_modalities.text) {
-    os << "  Text Backends:          " << llm_cap.text_supported_backends
-       << "\n";
+  PrintModalityBackends(os, llm_cap.input_modalities,
+                        llm_cap.text_supported_backends,
+                        llm_cap.vision_supported_backends,
+                        llm_cap.audio_supported_backends,
+                        llm_cap.video_supported_backends);
+  return os;
+}
+
+// Formats the full Embedding inference capabilities into a structured report.
+std::ostream& operator<<(std::ostream& os,
+                         const EmbeddingInferenceCapability& embed_cap) {
+  os << "[Embedding Model Info]\n"
+     << "  Embedding Dimension:    " << embed_cap.embedding_dimension << "\n"
+     << "  Max Context Tokens:     " << embed_cap.max_context_tokens << "\n"
+     << "  Max Vision Token Budget: " << embed_cap.max_vision_token_budget
+     << "\n";
+
+  if (embed_cap.supported_signature_lengths.has_value()) {
+    os << "  Supported Signature Lengths: [";
+    const auto& lengths = *embed_cap.supported_signature_lengths;
+    for (size_t i = 0; i < lengths.size(); ++i) {
+      os << lengths[i];
+      if (i + 1 < lengths.size()) os << ", ";
+    }
+    os << "]\n";
+  } else {
+    os << "  Supported Signature Lengths: -1\n";
   }
-  if (llm_cap.input_modalities.vision) {
-    os << "  Vision Backends:        " << llm_cap.vision_supported_backends
-       << "\n";
-  }
-  if (llm_cap.input_modalities.audio) {
-    os << "  Audio Backends:         " << llm_cap.audio_supported_backends
-       << "\n";
-  }
-  if (llm_cap.input_modalities.video) {
-    os << "  Video Backends:         " << llm_cap.video_supported_backends
-       << "\n";
-  }
+
+  os << "  Min Runtime Version:    "
+     << (embed_cap.min_runtime_version.empty() ? "-1"
+                                               : embed_cap.min_runtime_version)
+     << "\n"
+     << "  Input Modalities:       " << embed_cap.input_modalities << "\n";
+
+  PrintModalityBackends(os, embed_cap.input_modalities,
+                        embed_cap.text_supported_backends,
+                        embed_cap.vision_supported_backends,
+                        embed_cap.audio_supported_backends,
+                        embed_cap.video_supported_backends);
   return os;
 }
 
@@ -1195,8 +1543,16 @@ std::ostream& operator<<(std::ostream& os,
 std::ostream& operator<<(std::ostream& os, const ModelInfo& model_info) {
   if (model_info.llm_capability.has_value()) {
     os << *model_info.llm_capability;
-  } else {
-    os << "[LLM Capabilities]\n  <none>\n";
+  }
+  if (model_info.embedding_capability.has_value()) {
+    if (model_info.llm_capability.has_value()) {
+      os << "\n";
+    }
+    os << *model_info.embedding_capability;
+  }
+  if (!model_info.llm_capability.has_value() &&
+      !model_info.embedding_capability.has_value()) {
+    os << "[Model Info]\n  <none>\n";
   }
   return os;
 }

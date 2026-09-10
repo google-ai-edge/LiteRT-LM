@@ -212,6 +212,38 @@ LITERT_LM_C_API_EXPORT
 const char* litert_lm_loaded_file_min_runtime_version(
     LiteRtLmLoadedFile* loaded_file);
 
+// Returns true if the loaded LiteRT-LM file is an embedding model.
+//
+// Added in version 0.3.0.
+LITERT_LM_C_API_EXPORT
+bool litert_lm_loaded_file_is_embedding_model(LiteRtLmLoadedFile* loaded_file);
+
+// Returns true if the loaded LiteRT-LM file is an LLM (generative) model.
+//
+// Added in version 0.3.0.
+LITERT_LM_C_API_EXPORT
+bool litert_lm_loaded_file_is_llm_model(LiteRtLmLoadedFile* loaded_file);
+
+// Returns the output embedding dimension for the model.
+// Returns -1 if the model is not an embedding model or if the dimension is not
+// defined.
+//
+// Added in version 0.3.0.
+LITERT_LM_C_API_EXPORT
+int32_t litert_lm_loaded_file_embedding_dimension(
+    LiteRtLmLoadedFile* loaded_file);
+
+// Returns the number of supported embedding signature sequence lengths.
+// Writes up to `max_size` lengths to the provided `lengths` array.
+// If `lengths` is NULL, only returns the count.
+// Returns -1 if the model is not an embedding model or if signature lengths are
+// not defined.
+//
+// Added in version 0.3.0.
+LITERT_LM_C_API_EXPORT
+int32_t litert_lm_loaded_file_embedding_signature_selection(
+    LiteRtLmLoadedFile* loaded_file, int32_t* lengths, int32_t max_size);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif
