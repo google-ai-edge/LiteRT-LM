@@ -38,17 +38,31 @@ class EmbeddingEngineTests: XCTestCase {
     XCTAssertNil(options.insertSpecialTokens)
     XCTAssertNil(options.outputSize)
     XCTAssertNil(options.visionTokensPerImage)
+    XCTAssertNil(options.inputOverflowStrategy)
 
     let customOptions = EmbeddingOptions(
       normalize: false,
       insertSpecialTokens: true,
       outputSize: 128,
-      visionTokensPerImage: 70
+      visionTokensPerImage: 70,
+      inputOverflowStrategy: .truncate
     )
     XCTAssertEqual(customOptions.normalize, false)
     XCTAssertEqual(customOptions.insertSpecialTokens, true)
     XCTAssertEqual(customOptions.outputSize, 128)
     XCTAssertEqual(customOptions.visionTokensPerImage, 70)
+    XCTAssertEqual(customOptions.inputOverflowStrategy, .truncate)
+  }
+
+  func testInputOverflowStrategy_RawValues() {
+    XCTAssertEqual(InputOverflowStrategy.chunkAndAverage.rawValue, 0)
+    XCTAssertEqual(InputOverflowStrategy.truncate.rawValue, 1)
+    XCTAssertEqual(InputOverflowStrategy.error.rawValue, 2)
+
+    XCTAssertEqual(InputOverflowStrategy(rawValue: 0), .chunkAndAverage)
+    XCTAssertEqual(InputOverflowStrategy(rawValue: 1), .truncate)
+    XCTAssertEqual(InputOverflowStrategy(rawValue: 2), .error)
+    XCTAssertNil(InputOverflowStrategy(rawValue: 99))
   }
 
   func testEmbeddingEngineConfig_IsCorrectlySet() async throws {
@@ -87,6 +101,23 @@ class EmbeddingEngineTests: XCTestCase {
       modelPath: modelPath,
       backend: .cpu(),
       maxInputLength: 512
+    )
+    let engine = EmbeddingEngine(config: config)
+    try await engine.initialize()
+
+    let response = try await engine.computeEmbedding(
+      contents: [.text("'s")],
+      options: EmbeddingOptions(normalize: true)
+    )
+
+    XCTAssertFalse(response.embedding.isEmpty)
+    await engine.close()
+  }
+
+  func testComputeEmbedding_WithCpuThreadCount_Success() async throws {
+    let config = EmbeddingEngineConfig(
+      modelPath: modelPath,
+      backend: .cpu(threadCount: 4)
     )
     let engine = EmbeddingEngine(config: config)
     try await engine.initialize()
@@ -143,6 +174,13 @@ class EmbeddingEngineTests: XCTestCase {
     let truncatedNorm = sqrt(truncatedSumSquares)
     XCTAssertEqual(truncatedNorm, 1.0, accuracy: 1e-4)
 
+    // Test with inputOverflowStrategy
+    let responseOverflow = try await engine.computeEmbedding(
+      contents: [.text("'s")],
+      options: EmbeddingOptions(inputOverflowStrategy: .truncate)
+    )
+    XCTAssertFalse(responseOverflow.embedding.isEmpty)
+
     await engine.close()
   }
 
@@ -172,6 +210,14 @@ class EmbeddingEngineTests: XCTestCase {
     XCTAssertEqual(responsesTruncated.count, 2)
     XCTAssertEqual(responsesTruncated[0].embedding.count, 64)
     XCTAssertEqual(responsesTruncated[1].embedding.count, 64)
+
+    // Test batch with inputOverflowStrategy
+    let responsesOverflow = try await engine.computeEmbeddingBatch(
+      contentsBatch: [[.text("'s")]],
+      options: EmbeddingOptions(inputOverflowStrategy: .chunkAndAverage)
+    )
+    XCTAssertEqual(responsesOverflow.count, 1)
+    XCTAssertFalse(responsesOverflow[0].embedding.isEmpty)
 
     await engine.close()
   }

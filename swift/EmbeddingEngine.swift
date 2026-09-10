@@ -77,6 +77,10 @@ public actor EmbeddingEngine {
 
     defer { litert_lm_embedding_engine_settings_delete(settings) }
 
+    if case .cpu(let threadCount) = config.backend, let threadCount, threadCount > 0 {
+      litert_lm_embedding_engine_settings_set_num_threads(settings, Int32(threadCount))
+    }
+
     if case .cpu(let threadCount) = config.audioBackend, let threadCount, threadCount > 0 {
       litert_lm_embedding_engine_settings_set_audio_num_threads(settings, Int32(threadCount))
     }
@@ -153,6 +157,11 @@ public actor EmbeddingEngine {
     if let visionTokensPerImage = options.visionTokensPerImage {
       litert_lm_embedding_options_set_vision_tokens_per_image(
         optionsHandle, Int32(visionTokensPerImage)
+      )
+    }
+    if let inputOverflowStrategy = options.inputOverflowStrategy {
+      litert_lm_embedding_options_set_input_overflow_strategy(
+        optionsHandle, toCInputOverflowStrategy(inputOverflowStrategy)
       )
     }
 
@@ -247,6 +256,11 @@ public actor EmbeddingEngine {
     if let visionTokensPerImage = options.visionTokensPerImage {
       litert_lm_embedding_options_set_vision_tokens_per_image(
         optionsHandle, Int32(visionTokensPerImage)
+      )
+    }
+    if let inputOverflowStrategy = options.inputOverflowStrategy {
+      litert_lm_embedding_options_set_input_overflow_strategy(
+        optionsHandle, toCInputOverflowStrategy(inputOverflowStrategy)
       )
     }
 
@@ -350,6 +364,19 @@ public actor EmbeddingEngine {
       })
     case .toolResponse:
       return nil
+    }
+  }
+
+  private func toCInputOverflowStrategy(
+    _ strategy: InputOverflowStrategy
+  ) -> LiteRtLmInputOverflowStrategy {
+    switch strategy {
+    case .chunkAndAverage:
+      return kLiteRtLmInputOverflowStrategyChunkAndAverage
+    case .truncate:
+      return kLiteRtLmInputOverflowStrategyTruncate
+    case .error:
+      return kLiteRtLmInputOverflowStrategyError
     }
   }
 }

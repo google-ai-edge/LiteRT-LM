@@ -46,6 +46,17 @@ TEST(EmbeddingEngineCTest, CreateSettingsWithMaxInputLengthAndVisionTokens) {
   litert_lm_embedding_engine_settings_delete(settings);
 }
 
+TEST(EmbeddingEngineCTest, CreateSettingsWithNumThreads) {
+  auto* settings = litert_lm_embedding_engine_settings_create(
+      kTestEmbeddingModelPath, "cpu", nullptr, nullptr);
+  ASSERT_NE(settings, nullptr);
+  litert_lm_embedding_engine_settings_set_num_threads(settings, 4);
+  auto* engine = litert_lm_embedding_engine_create(settings);
+  litert_lm_embedding_engine_settings_delete(settings);
+  ASSERT_NE(engine, nullptr);
+  litert_lm_embedding_engine_delete(engine);
+}
+
 TEST(EmbeddingEngineCTest, CreateSettingsInvalidBackend) {
   auto* settings = litert_lm_embedding_engine_settings_create(
       kTestEmbeddingModelPath, "invalid_backend", nullptr, nullptr);
