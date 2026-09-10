@@ -72,10 +72,25 @@ enum class Modality(val value: Int) {
  * try {
  *   // 1. Load the model metadata
  *   ModelInfo("/path/to/model.litertlm").use { modelInfo ->
- *     // 2. Query basic capability flags
- *     val supportsThinking = modelInfo.supportsThinking()
- *     val supportsFunctionCall = modelInfo.supportsFunctionCalling()
- *     val hasSpeculativeDecoding = modelInfo.hasSpeculativeDecodingSupport()
+ *     // 2. Check model type
+ *     if (modelInfo.isEmbeddingModel()) {
+ *       // Embedding model capabilities
+ *       val dim = modelInfo.embeddingDimension() // e.g. 768
+ *       val signatures = modelInfo.embeddingSignatureSelection() // e.g. [128, 256, 512]
+ *     }
+ *
+ *     if (modelInfo.isLlmModel()) {
+ *       // Generative LLM capability flags
+ *       val supportsThinking = modelInfo.supportsThinking()
+ *       val supportsFunctionCall = modelInfo.supportsFunctionCalling()
+ *       val hasSpeculativeDecoding = modelInfo.hasSpeculativeDecodingSupport()
+ *
+ *       // Retrieve default sampler parameters
+ *       val sampler = modelInfo.defaultSamplerParams()
+ *       println(
+ *         "Temp: ${sampler.temperature}, TopK: ${sampler.topK}, TopP: ${sampler.topP}"
+ *       )
+ *     }
  *
  *     // 3. Inspect context limits and runtime version requirements
  *     val maxContext = modelInfo.maxContextTokens()
@@ -109,12 +124,6 @@ enum class Modality(val value: Int) {
  *         println("Target NPU SoC: $socName ($brand)")
  *       }
  *     }
- *
- *     // 6. Retrieve default sampler parameters
- *     val sampler = modelInfo.defaultSamplerParams()
- *     println(
- *       "Temp: ${sampler.temperature}, TopK: ${sampler.topK}, TopP: ${sampler.topP}"
- *     )
  *   }
  * } catch (e: Exception) {
  *   println("Failed to load model file info: ${e.message}")
@@ -223,6 +232,39 @@ class ModelInfo(modelPath: String) : AutoCloseable {
     synchronized(lock) {
       checkInitialized()
       return LiteRtLmJni.nativeVisionSignatureSelection(handle!!)
+    }
+  }
+
+  /** Checks if the loaded LiteRT-LM file is an embedding model. */
+  fun isEmbeddingModel(): Boolean {
+    synchronized(lock) {
+      checkInitialized()
+      return LiteRtLmJni.nativeIsEmbeddingModel(handle!!)
+    }
+  }
+
+  /** Checks if the loaded LiteRT-LM file is an LLM (generative) model. */
+  fun isLlmModel(): Boolean {
+    synchronized(lock) {
+      checkInitialized()
+      return LiteRtLmJni.nativeIsLlmModel(handle!!)
+    }
+  }
+
+  /** Returns the output embedding dimension, or null if not defined. */
+  fun embeddingDimension(): Int? {
+    synchronized(lock) {
+      checkInitialized()
+      val dim = LiteRtLmJni.nativeEmbeddingDimension(handle!!)
+      return if (dim > 0) dim else null
+    }
+  }
+
+  /** Returns the list of supported embedding signature lengths, or null if not defined. */
+  fun embeddingSignatureSelection(): IntArray? {
+    synchronized(lock) {
+      checkInitialized()
+      return LiteRtLmJni.nativeEmbeddingSignatureSelection(handle!!)
     }
   }
 

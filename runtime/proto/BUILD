@@ -171,7 +171,7 @@ alias(
 tf_proto_library(
     name = "embedding_model_type",
     srcs = ["embedding_model_type.proto"],
-    deps = [":token_proto"],
+    deps = [":token"],
 )
 
 alias(
@@ -193,8 +193,8 @@ tf_proto_library(
     name = "embedding_metadata",
     srcs = ["embedding_metadata.proto"],
     deps = [
-        ":embedding_model_type_proto",
-        ":token_proto",
+        ":embedding_model_type",
+        ":token",
     ],
 )
 

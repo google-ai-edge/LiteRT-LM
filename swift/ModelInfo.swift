@@ -77,10 +77,23 @@ public struct SamplerParameters: Equatable {
 ///   return
 /// }
 ///
-/// // 2. Query basic capability flags
-/// let supportsThinking = modelInfo.supportsThinking()
-/// let supportsFunctionCall = modelInfo.supportsFunctionCalling()
-/// let hasSpeculativeDecoding = modelInfo.hasSpeculativeDecodingSupport()
+/// // 2. Check model type
+/// if modelInfo.isEmbeddingModel() {
+///   // Embedding model capabilities
+///   let dim = modelInfo.embeddingDimension() // e.g. 768
+///   let signatures = modelInfo.embeddingSignatureSelection() // e.g. [128, 256, 512]
+/// }
+///
+/// if modelInfo.isLlmModel() {
+///   // Generative LLM capability flags
+///   let supportsThinking = modelInfo.supportsThinking()
+///   let supportsFunctionCall = modelInfo.supportsFunctionCalling()
+///   let hasSpeculativeDecoding = modelInfo.hasSpeculativeDecodingSupport()
+///
+///   // Retrieve default sampler parameters
+///   let sampler = modelInfo.defaultSamplerParams
+///   print("Temp: \(sampler.temperature), TopK: \(sampler.topK), TopP: \(sampler.topP)")
+/// }
 ///
 /// // 3. Inspect context limits and runtime version requirements
 /// let maxContext = modelInfo.maxContextTokens()
@@ -109,10 +122,6 @@ public struct SamplerParameters: Equatable {
 ///     print("Target NPU SoC: \(socName) (\(brand))")
 ///   }
 /// }
-///
-/// // 6. Retrieve default sampler parameters
-/// let sampler = modelInfo.defaultSamplerParams
-/// print("Temp: \(sampler.temperature), TopK: \(sampler.topK), TopP: \(sampler.topP)")
 /// ```
 public class ModelInfo {
   private let handle: OpaquePointer
@@ -209,6 +218,40 @@ public class ModelInfo {
       return []
     }
     return lengths[0..<Int(written)].map { Int($0) }
+  }
+
+  /// Returns whether the loaded LiteRT-LM file is an embedding model.
+  public func isEmbeddingModel() -> Bool {
+    return litert_lm_loaded_file_is_embedding_model(handle)
+  }
+
+  /// Returns whether the loaded LiteRT-LM file is an LLM (generative) model.
+  public func isLlmModel() -> Bool {
+    return litert_lm_loaded_file_is_llm_model(handle)
+  }
+
+  /// Returns the output embedding dimension for the model.
+  /// Returns nil if not an embedding model or if not defined.
+  public func embeddingDimension() -> Int? {
+    let dim = litert_lm_loaded_file_embedding_dimension(handle)
+    return dim > 0 ? Int(dim) : nil
+  }
+
+  /// Returns the list of supported embedding signature lengths, or nil if
+  /// not defined or not an embedding model.
+  public func embeddingSignatureSelection() -> [Int]? {
+    let count = litert_lm_loaded_file_embedding_signature_selection(
+      handle, nil, 0
+    )
+    guard count >= 0 else {
+      return nil
+    }
+    var lengths = [Int32](repeating: 0, count: Int(count))
+    let written = litert_lm_loaded_file_embedding_signature_selection(
+      handle, &lengths, count
+    )
+    let validCount = max(0, Int(written))
+    return lengths[0..<validCount].map { Int($0) }
   }
 
   /// Returns the minimum LiteRT-LM runtime version required to run this model.

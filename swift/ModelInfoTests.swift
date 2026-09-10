@@ -58,6 +58,10 @@ class ModelInfoTests: XCTestCase {
     // Verify thinking and function calling (false for legacy test model)
     XCTAssertFalse(modelInfo.supportsThinking())
     XCTAssertFalse(modelInfo.supportsFunctionCalling())
+    XCTAssertFalse(modelInfo.isEmbeddingModel())
+    XCTAssertTrue(modelInfo.isLlmModel())
+    XCTAssertNil(modelInfo.embeddingDimension())
+    XCTAssertNil(modelInfo.embeddingSignatureSelection())
     XCTAssertEqual(modelInfo.maxVisionTokenBudget(), -1)
     XCTAssertNil(modelInfo.visionSignatureSelection())
 
@@ -90,6 +94,29 @@ class ModelInfoTests: XCTestCase {
     XCTAssertNil(modelInfo.socName(for: .text))
   }
 
+  func testEmbeddingModel_returnsExpectedCapabilities() {
+    // swift-format-ignore
+    let modelResource =
+      "runtime/testdata/test_embedding.litertlm"
+    let modelPath = testDataPath(forResource: modelResource)
+
+    guard let modelInfo = ModelInfo(modelPath: modelPath) else {
+      XCTFail("Failed to load model info")
+      return
+    }
+
+    XCTAssertTrue(modelInfo.isEmbeddingModel())
+    XCTAssertFalse(modelInfo.isLlmModel())
+    XCTAssertEqual(modelInfo.embeddingDimension(), 768)
+    XCTAssertEqual(modelInfo.maxContextTokens(), 128)
+    XCTAssertFalse(modelInfo.isDynamicContext())
+    guard let lengths = modelInfo.embeddingSignatureSelection() else {
+      XCTFail("embeddingSignatureSelection returned nil")
+      return
+    }
+    XCTAssertEqual(lengths, [128])
+  }
+
   func testVisionSignatureSelection_returnsLengthsForMultimodal() {
     // swift-format-ignore
     let modelResource =
@@ -109,3 +136,4 @@ class ModelInfoTests: XCTestCase {
     XCTAssertEqual(lengths, [5])
   }
 }
+

@@ -1607,6 +1607,45 @@ LITERTLM_JNIEXPORT jstring JNICALL JNI_METHOD(nativeModalitySocName)(
   return env->NewStringUTF(soc_name);
 }
 
+LITERTLM_JNIEXPORT jboolean JNICALL JNI_METHOD(nativeIsEmbeddingModel)(
+    JNIEnv* env, jclass thiz, jlong model_info_pointer) {
+  return litert_lm_loaded_file_is_embedding_model(
+      reinterpret_cast<LiteRtLmLoadedFile*>(model_info_pointer));
+}
+
+LITERTLM_JNIEXPORT jboolean JNICALL JNI_METHOD(nativeIsLlmModel)(
+    JNIEnv* env, jclass thiz, jlong model_info_pointer) {
+  return litert_lm_loaded_file_is_llm_model(
+      reinterpret_cast<LiteRtLmLoadedFile*>(model_info_pointer));
+}
+
+LITERTLM_JNIEXPORT jint JNICALL JNI_METHOD(nativeEmbeddingDimension)(
+    JNIEnv* env, jclass thiz, jlong model_info_pointer) {
+  return litert_lm_loaded_file_embedding_dimension(
+      reinterpret_cast<LiteRtLmLoadedFile*>(model_info_pointer));
+}
+
+LITERTLM_JNIEXPORT jintArray JNICALL
+JNI_METHOD(nativeEmbeddingSignatureSelection)(JNIEnv* env, jclass thiz,
+                                              jlong model_info_pointer) {
+  auto* model_info = reinterpret_cast<LiteRtLmLoadedFile*>(model_info_pointer);
+  int32_t count = litert_lm_loaded_file_embedding_signature_selection(
+      model_info, nullptr, 0);
+  if (count == -1) {
+    return nullptr;
+  }
+  std::vector<int32_t> lengths(count);
+  litert_lm_loaded_file_embedding_signature_selection(
+      model_info, lengths.data(), count);
+  jintArray result = env->NewIntArray(count);
+  if (result == nullptr) {
+    return nullptr;
+  }
+  env->SetIntArrayRegion(result, 0, count,
+                         reinterpret_cast<const jint*>(lengths.data()));
+  return result;
+}
+
 LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateEmbeddingEngine)(
     JNIEnv* env, jclass thiz, jint model_fd, jstring model_path,
     jstring backend, jstring vision_backend, jstring audio_backend,

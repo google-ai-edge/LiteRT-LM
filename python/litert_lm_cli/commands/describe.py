@@ -44,6 +44,31 @@ def _format_npu_soc_and_brand(
   return None
 
 
+def _print_modality_backends(model_info: litert_lm.ModelInfo) -> None:
+  """Prints supported backends, default backend, and target NPU SoC per active modality."""
+  for mod_name, mod_enum in [
+      ("Text", litert_lm.LiteRtLmModality.TEXT),
+      ("Vision", litert_lm.LiteRtLmModality.VISION),
+      ("Audio", litert_lm.LiteRtLmModality.AUDIO),
+      ("Video", litert_lm.LiteRtLmModality.VIDEO),
+  ]:
+    if getattr(model_info.input_modalities, mod_name.lower()):
+      supported_backends = model_info.supported_backends_for_modality(mod_enum)
+      backends_str = " ".join([b.upper() for b in supported_backends]) or "None"
+      click.echo(f"  {mod_name} Backends:".ljust(26) + backends_str)
+      if supported_backends:
+        click.echo(
+            f"  {mod_name} Default Backend:".ljust(26)
+            + supported_backends[0].upper()
+        )
+      soc_desc = _format_npu_soc_and_brand(
+          model_info.npu_brand_for_modality(mod_enum),
+          model_info.soc_name_for_modality(mod_enum),
+      )
+      if soc_desc:
+        click.echo(f"  {mod_name} SoC Name:".ljust(26) + soc_desc)
+
+
 @click.command(cls=help_formatter.ColorCommand, name="describe")
 @click.argument("model_reference", required=False)
 @common.config_option
@@ -107,62 +132,75 @@ def describe_model(
   click.echo(" LiteRT-LM Model Info Report")
   click.echo("========================================")
   click.echo(f"File: {model_obj.model_path}\n")
-  click.echo("[LLM Capabilities]")
-  click.echo(
-      "  Supports Function Call: "
-      f"{'YES' if model_info.supports_function_calling() else 'NO'}"
-  )
-  click.echo(
-      "  Supports Thinking:      "
-      f"{'YES' if model_info.supports_thinking() else 'NO'}"
-  )
-  click.echo(
-      "  Speculative Decoding:   "
-      f"{'YES' if model_info.has_speculative_decoding_support() else 'NO'}"
-  )
-  click.echo(f"  Max Vision Token Budget: {model_info.max_vision_token_budget}")
-  click.echo(
-      f"  Min Runtime Version:    {model_info.min_runtime_version or '-1'}"
-  )
-  lengths = model_info.vision_signature_selection
-  lengths_str = str(lengths) if lengths is not None else "-1"
-  click.echo(f"  Vision Signature Selection: {lengths_str}")
 
-  sampler_config = model_info.default_sampler_params
-  top_k_val = sampler_config.top_k if sampler_config.top_k is not None else 0
-  click.echo(f"  Sampler Temp:           {sampler_config.temperature:.2f}")
-  click.echo(f"  Sampler Top K:          {top_k_val}")
-  click.echo(f"  Sampler Top P:          {sampler_config.top_p:.2f}")
-  click.echo(f"  Max Context Tokens:     {model_info.max_context_tokens}")
-  click.echo(
-      "  Is Dynamic Context:     "
-      f"{'YES' if model_info.is_dynamic_context else 'NO'}"
-  )
-  click.echo(f"  Input Modalities:       {modalities_str}")
+  if model_info.is_llm_model:
+    click.echo("[LLM Capabilities]")
+    click.echo(
+        "  Supports Function Call: "
+        f"{'YES' if model_info.supports_function_calling() else 'NO'}"
+    )
+    click.echo(
+        "  Supports Thinking:      "
+        f"{'YES' if model_info.supports_thinking() else 'NO'}"
+    )
+    click.echo(
+        "  Speculative Decoding:   "
+        f"{'YES' if model_info.has_speculative_decoding_support() else 'NO'}"
+    )
+    click.echo(
+        f"  Max Vision Token Budget: {model_info.max_vision_token_budget}"
+    )
+    click.echo(
+        f"  Min Runtime Version:    {model_info.min_runtime_version or '-1'}"
+    )
+    lengths = model_info.vision_signature_selection
+    lengths_str = str(lengths) if lengths is not None else "-1"
+    click.echo(f"  Vision Signature Selection: {lengths_str}")
 
-  # Report supported backends, default backend, and target NPU SoC per
-  # active modality.
-  for mod_name, mod_enum in [
-      ("Text", litert_lm.LiteRtLmModality.TEXT),
-      ("Vision", litert_lm.LiteRtLmModality.VISION),
-      ("Audio", litert_lm.LiteRtLmModality.AUDIO),
-      ("Video", litert_lm.LiteRtLmModality.VIDEO),
-  ]:
-    if getattr(model_info.input_modalities, mod_name.lower()):
-      supported_backends = model_info.supported_backends_for_modality(mod_enum)
-      backends_str = " ".join([b.upper() for b in supported_backends]) or "None"
-      click.echo(f"  {mod_name} Backends:".ljust(26) + backends_str)
-      if supported_backends:
-        click.echo(
-            f"  {mod_name} Default Backend:".ljust(26)
-            + supported_backends[0].upper()
-        )
-      soc_desc = _format_npu_soc_and_brand(
-          model_info.npu_brand_for_modality(mod_enum),
-          model_info.soc_name_for_modality(mod_enum),
-      )
-      if soc_desc:
-        click.echo(f"  {mod_name} SoC Name:".ljust(26) + soc_desc)
+    sampler_config = model_info.default_sampler_params
+    top_k_val = sampler_config.top_k if sampler_config.top_k is not None else 0
+    click.echo(f"  Sampler Temp:           {sampler_config.temperature:.2f}")
+    click.echo(f"  Sampler Top K:          {top_k_val}")
+    click.echo(f"  Sampler Top P:          {sampler_config.top_p:.2f}")
+    click.echo(f"  Max Context Tokens:     {model_info.max_context_tokens}")
+    click.echo(
+        "  Is Dynamic Context:     "
+        f"{'YES' if model_info.is_dynamic_context else 'NO'}"
+    )
+    click.echo(f"  Input Modalities:       {modalities_str}")
+    _print_modality_backends(model_info)
+
+  if model_info.is_embedding_model:
+    if model_info.is_llm_model:
+      click.echo("")
+    click.echo("[Embedding Capabilities]")
+    dim_str = (
+        str(model_info.embedding_dimension)
+        if model_info.embedding_dimension is not None
+        else "-1"
+    )
+    click.echo(f"  Embedding Dimension:    {dim_str}")
+    click.echo(f"  Max Context Tokens:     {model_info.max_context_tokens}")
+    click.echo(
+        "  Is Dynamic Context:     "
+        f"{'YES' if model_info.is_dynamic_context else 'NO'}"
+    )
+    click.echo(
+        f"  Max Vision Token Budget: {model_info.max_vision_token_budget}"
+    )
+    lengths = model_info.embedding_signature_selection
+    lengths_str = str(lengths) if lengths is not None else "-1"
+    click.echo(f"  Supported Signature Lengths: {lengths_str}")
+    click.echo(
+        f"  Min Runtime Version:    {model_info.min_runtime_version or '-1'}"
+    )
+    click.echo(f"  Input Modalities:       {modalities_str}")
+    _print_modality_backends(model_info)
+
+  if not model_info.is_llm_model and not model_info.is_embedding_model:
+    click.echo("[Model Info]")
+    click.echo("  <none>")
+
   click.echo("========================================")
 
 

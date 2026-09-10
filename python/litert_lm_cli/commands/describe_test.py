@@ -41,6 +41,10 @@ class DescribeTest(absltest.TestCase):
     )
 
     self.mock_model_info = mock.MagicMock(spec=litert_lm.ModelInfo)
+    self.mock_model_info.is_llm_model = True
+    self.mock_model_info.is_embedding_model = False
+    self.mock_model_info.embedding_dimension = None
+    self.mock_model_info.embedding_signature_selection = None
     self.mock_model_info.max_vision_token_budget = -1
     self.mock_model_info.vision_signature_selection = None
     self.mock_model_info.max_context_tokens = 0
@@ -92,8 +96,8 @@ class DescribeTest(absltest.TestCase):
     self.assertEqual(
         result.output.count("========================================"), 3
     )
-    self.assertIn("LiteRT-LM Model Info Report", result.output)
     self.assertIn("[LLM Capabilities]", result.output)
+    self.assertNotIn("[Embedding Capabilities]", result.output)
     self.assertIn("File: /path/to/model.litertlm", result.output)
     self.assertIn("Supports Function Call: NO", result.output)
     self.assertIn("Supports Thinking:      YES", result.output)
@@ -349,6 +353,90 @@ class DescribeTest(absltest.TestCase):
     self.assertIn("Text Backends:          NPU", result.output)
     self.assertIn("Text Default Backend:   NPU", result.output)
     self.assertIn("Text SoC Name:          Intel NPU LunarLake", result.output)
+
+  def test_describe_embedding_model_success(self):
+    self.mock_model_info.is_llm_model = False
+    self.mock_model_info.is_embedding_model = True
+    self.mock_model_info.embedding_dimension = 768
+    self.mock_model_info.embedding_signature_selection = [128, 256]
+    self.mock_model_info.max_context_tokens = 512
+    self.mock_model_info.is_dynamic_context = False
+    self.mock_model_info.max_vision_token_budget = -1
+    self.mock_model_info.min_runtime_version = "0.12.3"
+    self.mock_model_info.input_modalities = litert_lm.SupportedModalities(
+        text=True, vision=False, audio=False, video=False
+    )
+    self.mock_model_info.supported_backends_for_modality.return_value = ["cpu"]
+
+    runner = testing.CliRunner()
+    result = runner.invoke(
+        describe_cmd.describe_model,
+        ["my-embedding-model"],
+    )
+
+    self.assertEqual(result.exit_code, 0)
+    self.assertIn("LiteRT-LM Model Info Report", result.output)
+    self.assertIn("[Embedding Capabilities]", result.output)
+    self.assertNotIn("[LLM Capabilities]", result.output)
+    self.assertIn("Embedding Dimension:    768", result.output)
+    self.assertIn("Max Context Tokens:     512", result.output)
+    self.assertIn("Is Dynamic Context:     NO", result.output)
+    self.assertIn("Max Vision Token Budget: -1", result.output)
+    self.assertIn("Supported Signature Lengths: [128, 256]", result.output)
+    self.assertIn("Min Runtime Version:    0.12.3", result.output)
+    self.assertIn("Input Modalities:       Text", result.output)
+    self.assertIn("Text Backends:          CPU", result.output)
+
+  def test_describe_model_with_both_llm_and_embedding_capabilities(self):
+    self.mock_model_info.is_llm_model = True
+    self.mock_model_info.is_embedding_model = True
+    self.mock_model_info.supports_thinking.return_value = False
+    self.mock_model_info.supports_function_calling.return_value = False
+    self.mock_model_info.has_speculative_decoding_support.return_value = False
+    self.mock_model_info.default_sampler_params = litert_lm.SamplerConfig(
+        temperature=0.0,
+        top_k=None,
+        top_p=0.0,
+    )
+    self.mock_model_info.embedding_dimension = 512
+    self.mock_model_info.embedding_signature_selection = [128]
+    self.mock_model_info.max_context_tokens = 256
+    self.mock_model_info.is_dynamic_context = False
+    self.mock_model_info.max_vision_token_budget = -1
+    self.mock_model_info.min_runtime_version = "0.1.0"
+    self.mock_model_info.vision_signature_selection = None
+    self.mock_model_info.input_modalities = litert_lm.SupportedModalities(
+        text=True, vision=False, audio=False, video=False
+    )
+    self.mock_model_info.supported_backends_for_modality.return_value = ["cpu"]
+
+    runner = testing.CliRunner()
+    result = runner.invoke(
+        describe_cmd.describe_model,
+        ["hybrid-model"],
+    )
+
+    self.assertEqual(result.exit_code, 0)
+    self.assertIn("[LLM Capabilities]", result.output)
+    self.assertIn("[Embedding Capabilities]", result.output)
+    self.assertIn("\n\n[Embedding Capabilities]", result.output)
+    self.assertIn("Embedding Dimension:    512", result.output)
+
+  def test_describe_model_with_neither_llm_nor_embedding(self):
+    self.mock_model_info.is_llm_model = False
+    self.mock_model_info.is_embedding_model = False
+
+    runner = testing.CliRunner()
+    result = runner.invoke(
+        describe_cmd.describe_model,
+        ["unknown-model"],
+    )
+
+    self.assertEqual(result.exit_code, 0)
+    self.assertNotIn("[LLM Capabilities]", result.output)
+    self.assertNotIn("[Embedding Capabilities]", result.output)
+    self.assertIn("[Model Info]", result.output)
+    self.assertIn("<none>", result.output)
 
 
 if __name__ == "__main__":

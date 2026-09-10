@@ -43,6 +43,12 @@ TEST(ModelInfoCTest, InspectLoadedFile) {
   ASSERT_NE(file, nullptr);
 
   // Verify core capabilities and fallback defaults
+  EXPECT_TRUE(litert_lm_loaded_file_is_llm_model(file));
+  EXPECT_FALSE(litert_lm_loaded_file_is_embedding_model(file));
+  EXPECT_EQ(litert_lm_loaded_file_embedding_dimension(file), -1);
+  EXPECT_EQ(
+      litert_lm_loaded_file_embedding_signature_selection(file, nullptr, 0),
+      -1);
   EXPECT_FALSE(litert_lm_loaded_file_has_speculative_decoding_support(file));
   EXPECT_FALSE(litert_lm_loaded_file_supports_thinking(file));
   EXPECT_FALSE(litert_lm_loaded_file_supports_function_calling(file));
@@ -159,6 +165,12 @@ TEST(ModelInfoCTest, NullPointerSafety) {
       nullptr);
   EXPECT_FALSE(litert_lm_loaded_file_supports_input_modality(
       nullptr, kLiteRtLmModalityText));
+  EXPECT_FALSE(litert_lm_loaded_file_is_embedding_model(nullptr));
+  EXPECT_FALSE(litert_lm_loaded_file_is_llm_model(nullptr));
+  EXPECT_EQ(litert_lm_loaded_file_embedding_dimension(nullptr), -1);
+  EXPECT_EQ(
+      litert_lm_loaded_file_embedding_signature_selection(nullptr, nullptr, 0),
+      -1);
   EXPECT_EQ(litert_lm_loaded_file_sampler_type(nullptr),
             kLiteRtLmSamplerTypeUnspecified);
   EXPECT_FLOAT_EQ(litert_lm_loaded_file_sampler_temperature(nullptr), 0.0f);
@@ -184,6 +196,45 @@ TEST(ModelInfoCTest, InspectAudioCapabilities) {
   EXPECT_EQ(count, 2);
   EXPECT_EQ(audio_backends[0], kLiteRtLmBackendTypeCpu);
   EXPECT_EQ(audio_backends[1], kLiteRtLmBackendTypeGpu);
+
+  litert_lm_loaded_file_delete(file);
+}
+
+TEST(ModelInfoCTest, InspectEmbeddingCapabilities) {
+  std::string model_path = GetRunfilePath(
+      "litert_lm/runtime/testdata/test_embedding.litertlm");
+  LiteRtLmLoadedFile* file = litert_lm_loaded_file_create(model_path.c_str());
+  ASSERT_NE(file, nullptr);
+
+  EXPECT_TRUE(litert_lm_loaded_file_is_embedding_model(file));
+  EXPECT_FALSE(litert_lm_loaded_file_is_llm_model(file));
+  EXPECT_EQ(litert_lm_loaded_file_embedding_dimension(file), 768);
+  EXPECT_EQ(litert_lm_loaded_file_max_context_tokens(file), 128);
+  EXPECT_FALSE(litert_lm_loaded_file_is_dynamic_context(file));
+
+  EXPECT_TRUE(litert_lm_loaded_file_supports_input_modality(
+      file, kLiteRtLmModalityText));
+  EXPECT_FALSE(litert_lm_loaded_file_supports_input_modality(
+      file, kLiteRtLmModalityVision));
+  EXPECT_EQ(litert_lm_loaded_file_max_vision_token_budget(file), -1);
+  EXPECT_EQ(
+      litert_lm_loaded_file_vision_signature_selection(file, nullptr, 0), -1);
+
+  LiteRtLmBackendType text_backends[3];
+  int32_t text_count = litert_lm_loaded_file_modality_supported_backends(
+      file, kLiteRtLmModalityText, text_backends, 3);
+  EXPECT_EQ(text_count, 2);
+  EXPECT_EQ(text_backends[0], kLiteRtLmBackendTypeCpu);
+  EXPECT_EQ(text_backends[1], kLiteRtLmBackendTypeGpu);
+
+  int32_t sig_count =
+      litert_lm_loaded_file_embedding_signature_selection(file, nullptr, 0);
+  EXPECT_EQ(sig_count, 1);
+  int32_t lengths[1] = {0};
+  int32_t written =
+      litert_lm_loaded_file_embedding_signature_selection(file, lengths, 1);
+  EXPECT_EQ(written, 1);
+  EXPECT_EQ(lengths[0], 128);
 
   litert_lm_loaded_file_delete(file);
 }
