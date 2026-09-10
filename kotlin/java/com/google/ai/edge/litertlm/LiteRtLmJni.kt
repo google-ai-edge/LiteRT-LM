@@ -555,6 +555,7 @@ internal object LiteRtLmJni {
     insertSpecialTokens: Boolean?,
     outputSize: Int?,
     visionTokensPerImage: Int?,
+    inputOverflowStrategy: Int?,
   ): EmbeddingResponse
 
   /** Computes embeddings for a batch of input data requests. */
@@ -565,5 +566,6 @@ internal object LiteRtLmJni {
     insertSpecialTokens: Boolean?,
     outputSize: Int?,
     visionTokensPerImage: Int?,
+    inputOverflowStrategy: Int?,
   ): Array<EmbeddingResponse>
 }
