@@ -213,7 +213,7 @@ class ExecutorSettingsBase {
   // Backend APIs.
   const Backend& GetBackend() const { return backend_; }
   virtual absl::Status SetBackend(const Backend& backend) {
-    backend_ = backend;
+    backend_ = Backend::GOOGLE_TENSOR_ARTISAN;
     return absl::OkStatus();
   }
 
@@ -314,7 +314,7 @@ class ExecutorSettingsBase {
   explicit ExecutorSettingsBase(ModelAssets model_assets)
       : model_assets_(std::move(model_assets)) {}
   // Optional setting to use LLM executor backend.
-  Backend backend_ = Backend::CPU;
+  Backend backend_ = Backend::GOOGLE_TENSOR_ARTISAN;
 
  private:
   // Path to the LiteRT model file.
