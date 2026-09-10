@@ -163,6 +163,11 @@ class EmbeddingEngine:
       raise RuntimeError("Failed to create LiteRtLmEmbeddingEngineSettings")
 
     try:
+      if isinstance(self._backend, interfaces.CPU):
+        if self._backend.thread_count is not None:
+          self._lib.litert_lm_embedding_engine_settings_set_num_threads(
+              settings, self._backend.thread_count
+          )
       if isinstance(self._audio_backend, interfaces.CPU):
         if self._audio_backend.thread_count is not None:
           self._lib.litert_lm_embedding_engine_settings_set_audio_num_threads(
