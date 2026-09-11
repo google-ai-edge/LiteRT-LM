@@ -414,6 +414,27 @@ class LiteRTLMBuilderCLITest(absltest.TestCase):
   def test_cns_output_paths_rejected(self):
     """Tests that outputting or unpacking directly to /cns/ is rejected."""
 
+  def test_sp_tokenizer_with_model_type(self):
+    """Tests that a SentencePiece tokenizer with model_type can be added."""
+    sp_path = self._create_placeholder_file("sp.model", b"dummy sp content")
+    args = [
+        "system_metadata",
+        "--int",
+        "my_key",
+        "23",
+        "sp_tokenizer",
+        "--path",
+        sp_path,
+        "--model_type",
+        "prefill_decode",
+    ]
+    output_path = self._run_command(*args)
+    self.assertTrue(os.path.exists(output_path))
+    ss = self._peek_litertlm_file(output_path)
+    self.assertIn("Sections (1)", ss)
+    self.assertIn("Data Type:    SP_Tokenizer", ss)
+    self.assertIn("Key: model_type, Value (String): tf_lite_prefill_decode", ss)
+
 
 if __name__ == "__main__":
   absltest.main()

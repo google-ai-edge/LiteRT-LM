@@ -298,6 +298,17 @@ def _add_sentencepiece_tokenizer_parser(subparsers) -> None:
       required=True,
       help="The path to the sentencepiece tokenizer file.",
   )
+  sp_tokenizer_parser.add_argument(
+      "--model_type",
+      type=str,
+      required=False,
+      default=None,
+      choices=[
+          str(model_type.value).lower().replace("tf_lite_", "")
+          for model_type in litertlm_builder.TfLiteModelType
+      ],
+      help="The type of the model this tokenizer corresponds to.",
+  )
   _add_metadata_arguments(sp_tokenizer_parser)
 
 
@@ -313,6 +324,17 @@ def _add_hf_tokenizer_parser(subparsers) -> None:
       type=str,
       required=True,
       help="The path to the huggingface tokenizer `tokenizer.json` file.",
+  )
+  hf_tokenizer_parser.add_argument(
+      "--model_type",
+      type=str,
+      required=False,
+      default=None,
+      choices=[
+          str(model_type.value).lower().replace("tf_lite_", "")
+          for model_type in litertlm_builder.TfLiteModelType
+      ],
+      help="The type of the model this tokenizer corresponds to.",
   )
   _add_metadata_arguments(hf_tokenizer_parser)
 
@@ -536,7 +558,14 @@ def _build_sp_tokenizer(
 ) -> None:
   """Builds sentencepiece tokenizer from the parsed arguments."""
   metadata = _get_metadata_from_args(args)
-  builder.add_sentencepiece_tokenizer(args.path, additional_metadata=metadata)
+  model_type = None
+  if args.model_type:
+    model_type = litertlm_builder.TfLiteModelType.get_enum_from_tf_free_value(
+        args.model_type
+    )
+  builder.add_sentencepiece_tokenizer(
+      args.path, model_type=model_type, additional_metadata=metadata
+  )
 
 
 def _build_hf_tokenizer(
@@ -545,7 +574,14 @@ def _build_hf_tokenizer(
 ) -> None:
   """Builds huggingface tokenizer from the parsed arguments."""
   metadata = _get_metadata_from_args(args)
-  builder.add_hf_tokenizer(args.path, additional_metadata=metadata)
+  model_type = None
+  if args.model_type:
+    model_type = litertlm_builder.TfLiteModelType.get_enum_from_tf_free_value(
+        args.model_type
+    )
+  builder.add_hf_tokenizer(
+      args.path, model_type=model_type, additional_metadata=metadata
+  )
 
 
 def _build_litertlm_file(parsed_args: list[argparse.Namespace]) -> None:

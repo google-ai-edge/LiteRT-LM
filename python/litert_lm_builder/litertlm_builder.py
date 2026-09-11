@@ -319,7 +319,11 @@ class LitertLmFileBuilder:
     self._has_llm_metadata = False
     self._has_executor_metadata = False
     self._has_embedding_metadata = False
-    self._has_tokenizer = False
+    self._tokenizers_by_model_type: set[str | None] = set()
+
+  @property
+  def _has_tokenizer(self) -> bool:
+    return bool(self._tokenizers_by_model_type)
 
   @classmethod
   def from_toml_str(
@@ -424,13 +428,25 @@ class LitertLmFileBuilder:
               additional_metadata=additional_metadata,
           )
         elif section["section_type"] == "SP_Tokenizer":
+          model_type = None
+          if "model_type" in section:
+            model_type = TfLiteModelType.get_enum_from_tf_free_value(
+                section["model_type"]
+            )
           builder.add_sentencepiece_tokenizer(
               _resolve_path(section["data_path"], parent_dir),
+              model_type=model_type,
               additional_metadata=additional_metadata,
           )
         elif section["section_type"] == "HF_Tokenizer":
+          model_type = None
+          if "model_type" in section:
+            model_type = TfLiteModelType.get_enum_from_tf_free_value(
+                section["model_type"]
+            )
           builder.add_hf_tokenizer(
               _resolve_path(section["data_path"], parent_dir),
+              model_type=model_type,
               additional_metadata=additional_metadata,
           )
         elif section["section_type"] == "GenericBinaryData":
@@ -801,15 +817,79 @@ class LitertLmFileBuilder:
     self._sections.append(section_object)
     return self  # pyrefly: ignore[bad-return]
 
+  def _prepare_tokenizer_metadata(
+      self,
+      model_type: Optional[TfLiteModelType | str],
+      additional_metadata: Optional[list[Metadata]],
+  ) -> list[Metadata]:
+    """Validates tokenizer uniqueness and prepares its metadata.
+
+    Args:
+      model_type: The model type associated with this tokenizer.
+      additional_metadata: Additional metadata to associate with the tokenizer.
+
+    Returns:
+      A list of metadata items including the model_type metadata.
+
+    Raises:
+      ValueError: If model_type metadata is overridden or if a tokenizer for the
+        given model_type has already been added.
+    """
+    if isinstance(model_type, str):
+      model_type = TfLiteModelType.get_enum_from_tf_free_value(model_type)
+
+    metadata: list[Metadata] = []
+    if model_type is not None:
+      metadata.append(
+          Metadata(key="model_type", value=model_type.value, dtype=DType.STRING)
+      )
+
+    model_type_key = model_type.value if model_type is not None else None
+    if additional_metadata:
+      for metadata_item in additional_metadata:
+        if metadata_item.key == "model_type":
+          if model_type is not None:
+            raise ValueError("Model type metadata cannot be overridden.")
+          if isinstance(metadata_item.value, str):
+            model_type_key = TfLiteModelType.get_enum_from_tf_free_value(
+                metadata_item.value
+            ).value
+          else:
+            model_type_key = metadata_item.value
+      metadata.extend(additional_metadata)
+
+    # Check for conflicts
+    if (
+        model_type_key is None
+        or model_type_key == TfLiteModelType.PREFILL_DECODE.value
+    ):
+      if (
+          None in self._tokenizers_by_model_type
+          or TfLiteModelType.PREFILL_DECODE.value
+          in self._tokenizers_by_model_type
+      ):
+        raise ValueError("Tokenizer already added.")
+    else:
+      if model_type_key in self._tokenizers_by_model_type:
+        raise ValueError(
+            f"Tokenizer already added for model_type: {model_type_key}."
+        )
+
+    self._tokenizers_by_model_type.add(model_type_key)
+    return metadata
+
   def add_sentencepiece_tokenizer(
       self,
       sp_tokenizer_path: str,
+      model_type: Optional[TfLiteModelType | str] = None,
       additional_metadata: Optional[list[Metadata]] = None,
   ) -> LitertLmFileBuilderT:
     """Adds a sentencepiece tokenizer to the litertlm file.
 
     Args:
       sp_tokenizer_path: The path to the sentencepiece tokenizer file.
+      model_type: The model type this tokenizer corresponds to (e.g.
+        TfLiteModelType.PREFILL_DECODE).
       additional_metadata: Additional metadata to add to the sentencepiece
         tokenizer.
 
@@ -818,20 +898,20 @@ class LitertLmFileBuilder:
 
     Raises:
       FileNotFoundError: If the sentencepiece tokenizer file is not found.
+      ValueError: If model_type metadata is overridden.
     """
-    assert not self._has_tokenizer, "Tokenizer already added."
-    self._has_tokenizer = True
     if not litertlm_core.path_exists(sp_tokenizer_path):
       raise FileNotFoundError(
           f"Sentencepiece tokenizer file not found: {sp_tokenizer_path}"
       )
+    metadata = self._prepare_tokenizer_metadata(model_type, additional_metadata)
 
     def data_writer(stream: BinaryIO):
       with litertlm_core.open_file(sp_tokenizer_path, "rb") as f:
         _copy_file_to_stream(f, stream)
 
     section_object = _SectionObject(
-        metadata=additional_metadata if additional_metadata else [],
+        metadata=metadata,
         data_type=schema.AnySectionDataType.SP_Tokenizer,
         data_writer=data_writer,
     )
@@ -841,12 +921,15 @@ class LitertLmFileBuilder:
   def add_hf_tokenizer(
       self,
       hf_tokenizer_path: str,
+      model_type: Optional[TfLiteModelType | str] = None,
       additional_metadata: Optional[list[Metadata]] = None,
   ) -> LitertLmFileBuilderT:
     """Adds a hf tokenizer to the litertlm file.
 
     Args:
       hf_tokenizer_path: The path to the hf tokenizer `tokenizer.json` file.
+      model_type: The model type this tokenizer corresponds to (e.g.
+        TfLiteModelType.PREFILL_DECODE).
       additional_metadata: Additional metadata to add to the hf tokenizer.
 
     Returns:
@@ -854,13 +937,13 @@ class LitertLmFileBuilder:
 
     Raises:
       FileNotFoundError: If the hf tokenizer file is not found.
+      ValueError: If model_type metadata is overridden.
     """
-    assert not self._has_tokenizer, "Tokenizer already added."
-    self._has_tokenizer = True
     if not litertlm_core.path_exists(hf_tokenizer_path):
       raise FileNotFoundError(
           f"HF tokenizer file not found: {hf_tokenizer_path}"
       )
+    metadata = self._prepare_tokenizer_metadata(model_type, additional_metadata)
 
     def write_and_compress(stream: BinaryIO):
       with litertlm_core.open_file(hf_tokenizer_path, "rb") as f:
@@ -877,7 +960,7 @@ class LitertLmFileBuilder:
           stream.write(compressed_content)
 
     section_object = _SectionObject(
-        metadata=additional_metadata if additional_metadata else [],
+        metadata=metadata,
         data_type=schema.AnySectionDataType.HF_Tokenizer_Zlib,
         data_writer=write_and_compress,
     )

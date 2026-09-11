@@ -541,16 +541,16 @@ class LitertlmBuilderTest(parameterized.TestCase):
       self.assertEqual(read_content, zlib_content)
 
   def test_add_tokenizer_already_added(self):
-    """Tests that adding a tokenizer more than once raises an AssertionError."""
+    """Tests that adding a tokenizer more than once raises a ValueError."""
     sp_path = self._create_dummy_file("sp.model", b"")
 
     builder = litertlm_builder.LitertLmFileBuilder()
     self._add_system_metadata(builder)
     builder.add_sentencepiece_tokenizer(sp_path)
 
-    with self.assertRaises(AssertionError):
+    with self.assertRaises(ValueError):
       builder.add_hf_tokenizer(self._create_dummy_file("tokenizer.json", b""))
-    with self.assertRaises(AssertionError):
+    with self.assertRaises(ValueError):
       builder.add_sentencepiece_tokenizer(
           self._create_dummy_file("tokenizer.json", b"")
       )
@@ -954,6 +954,50 @@ min_runtime_version = "0.12.3"
     builder = litertlm_builder.LitertLmFileBuilder.from_toml_file(toml_path)
     ss = self._build_and_read_litertlm(builder)
     self.assertIn("min_runtime_version: \"0.12.3\"", ss)
+
+  def test_add_multiple_tokenizers(self):
+    """Tests that multiple tokenizers with different model types can be added."""
+    sp_prefill = self._create_dummy_file(
+        "sp_prefill.model", b"dummy prefill sp"
+    )
+    sp_embedder = self._create_dummy_file(
+        "sp_embedder.model", b"dummy embedder sp"
+    )
+
+    builder = litertlm_builder.LitertLmFileBuilder()
+    self._add_system_metadata(builder)
+    builder.add_sentencepiece_tokenizer(
+        sp_prefill,
+        model_type=litertlm_builder.TfLiteModelType.PREFILL_DECODE,
+    )
+    builder.add_sentencepiece_tokenizer(
+        sp_embedder,
+        model_type=litertlm_builder.TfLiteModelType.EMBEDDER,
+    )
+    ss = self._build_and_read_litertlm(builder)
+    self.assertIn("Sections (2)", ss)
+    self.assertIn("Key: model_type, Value (String): tf_lite_prefill_decode", ss)
+    self.assertIn("Key: model_type, Value (String): tf_lite_embedder", ss)
+
+    # Adding a duplicate model_type should fail
+    with self.assertRaises(ValueError):
+      builder.add_sentencepiece_tokenizer(
+          sp_embedder,
+          model_type=litertlm_builder.TfLiteModelType.EMBEDDER,
+      )
+
+    # Adding duplicate via additional_metadata without tf_lite_ prefix fails
+    with self.assertRaises(ValueError):
+      builder.add_sentencepiece_tokenizer(
+          sp_embedder,
+          additional_metadata=[
+              litertlm_builder.Metadata(
+                  key="model_type",
+                  value="embedder",
+                  dtype=litertlm_builder.DType.STRING,
+              )
+          ],
+      )
 
 
 if __name__ == "__main__":
