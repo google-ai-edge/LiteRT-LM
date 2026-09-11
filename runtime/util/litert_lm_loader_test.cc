@@ -35,7 +35,7 @@
 #include "runtime/components/model_resources.h"
 #include "runtime/util/memory_mapped_file.h"
 #include "runtime/util/scoped_file.h"
-#include "runtime/util/status_macros.h"  // IWYU pragma: keep
+#include "schema/core/litertlm_header.h"
 #include "schema/core/litertlm_header_schema_generated.h"
 
 namespace litert::lm {

@@ -57,6 +57,11 @@ class ModelResourcesLitertLm : public ModelResources {
   // configuration, the SentencePiece tokenizer will be used.
   absl::StatusOr<std::unique_ptr<Tokenizer>> GetTokenizer() override;
 
+  // Returns the tokenizer for the specified model type from the *.litertlm
+  // file.
+  absl::StatusOr<std::unique_ptr<Tokenizer>> GetTokenizer(
+      ModelType model_type) override;
+
   absl::StatusOr<const proto::LlmMetadata*> GetLlmMetadata() override;
 
   absl::StatusOr<const proto::ExecutorMetadata*> GetExecutorMetadata() override;

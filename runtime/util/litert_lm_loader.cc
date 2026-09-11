@@ -76,7 +76,9 @@ ExtractBufferKeyAndTfLiteSectionHint(const schema::SectionObject* section) {
   TfLiteSectionHint section_hint;
   // Extract the specific model type from the section items KeyValuePairs.
   if ((section->data_type() == schema::AnySectionDataType_TFLiteModel ||
-       section->data_type() == schema::AnySectionDataType_TFLiteWeights) &&
+       section->data_type() == schema::AnySectionDataType_TFLiteWeights ||
+       section->data_type() == schema::AnySectionDataType_SP_Tokenizer ||
+       section->data_type() == schema::AnySectionDataType_HF_Tokenizer_Zlib) &&
       items != nullptr) {
     bool found_model_type = false;
     std::string model_type;
@@ -108,11 +110,14 @@ ExtractBufferKeyAndTfLiteSectionHint(const schema::SectionObject* section) {
                             StringToModelType(model_type));
       buffer_key = BufferKey(section->data_type(), model_type_enum);
     } else {
-      ABSL_LOG(WARNING) << "model_type not found, use kTfLitePrefillDecode";
-      // For backward compatibility, we will use the default model type if
-      // model_type is not found.
-      buffer_key =
-          BufferKey(section->data_type(), ModelType::kTfLitePrefillDecode);
+      if (section->data_type() == schema::AnySectionDataType_TFLiteModel ||
+          section->data_type() == schema::AnySectionDataType_TFLiteWeights) {
+        ABSL_LOG(WARNING) << "model_type not found, use kTfLitePrefillDecode";
+        // For backward compatibility, we will use the default model type if
+        // model_type is not found.
+        buffer_key =
+            BufferKey(section->data_type(), ModelType::kTfLitePrefillDecode);
+      }
     }
   }
   return std::make_pair(buffer_key, section_hint);
@@ -323,9 +328,14 @@ absl::StatusOr<std::pair<size_t, size_t>> LitertLmLoader::GetSectionLocation(
 }
 
 std::optional<litert::OwningBufferRef<uint8_t>>
-LitertLmLoader::GetHuggingFaceTokenizer() {
-  auto optional_section_buffer =
-      GetSectionBuffer(BufferKey(schema::AnySectionDataType_HF_Tokenizer_Zlib));
+LitertLmLoader::GetHuggingFaceTokenizer(ModelType model_type) {
+  auto optional_section_buffer = GetSectionBuffer(
+      BufferKey(schema::AnySectionDataType_HF_Tokenizer_Zlib, model_type));
+  if (!optional_section_buffer.has_value() &&
+      model_type == ModelType::kTfLitePrefillDecode) {
+    optional_section_buffer = GetSectionBuffer(
+        BufferKey(schema::AnySectionDataType_HF_Tokenizer_Zlib));
+  }
   if (!optional_section_buffer.has_value()) {
     return std::nullopt;
   }

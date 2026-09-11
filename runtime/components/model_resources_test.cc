@@ -85,6 +85,11 @@ TEST(ModelResourcesTest, InitializeWithValidLitertLmLoader) {
   auto tokenizer = model_resources.value()->GetTokenizer();
   ASSERT_OK(tokenizer);
   ASSERT_NE(tokenizer.value(), nullptr);
+
+  auto prefill_tokenizer =
+      model_resources.value()->GetTokenizer(ModelType::kTfLitePrefillDecode);
+  ASSERT_OK(prefill_tokenizer);
+  ASSERT_NE(prefill_tokenizer.value(), nullptr);
 }
 
 TEST(ModelResourcesTest, InitializeWithExternalWeights) {
