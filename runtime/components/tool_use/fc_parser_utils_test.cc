@@ -246,4 +246,23 @@ TEST(FcParserUtilsTest, ParameterNameWithDotsAndDashes) {
               }])json")));
 }
 
+TEST(FcParserUtilsTest, TrailingDuplicateParameterInStringArgument) {
+  EXPECT_THAT(
+      ParseFcExpression(
+          R"(call:write_to_file{CodeContent:<|"|><!DOCTYPE html>
+<html lang="en">
+</html>`,Description:<|"|>,Description:<|"|>Create an HTML5 canvas Asteroids game in a single file.<|"|>,Overwrite:true,TargetFile:<|"|>/usr/local/google/home/whhone/agy-test/index.html<|"|>,toolAction:<|"|>Creating file<|"|>,toolSummary:<|"|>Creating file<|"|>})"),
+      IsOkAndHolds(nlohmann::ordered_json::parse(R"json([{
+        "name": "write_to_file",
+        "arguments": {
+          "CodeContent": "<!DOCTYPE html>\n<html lang=\"en\">\n</html>",
+          "Description": "Create an HTML5 canvas Asteroids game in a single file.",
+          "Overwrite": true,
+          "TargetFile": "/usr/local/google/home/whhone/agy-test/index.html",
+          "toolAction": "Creating file",
+          "toolSummary": "Creating file"
+        }
+      }])json")));
+}
+
 }  // namespace

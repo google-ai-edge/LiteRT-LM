@@ -167,6 +167,7 @@ cc_library(
         "@com_google_absl//absl/strings",
         "@nlohmann_json//:json",
         "//runtime/components/tool_use/rust:parsers_cpp",
+        "@com_googlesource_code_re2//:re2",
     ],
 )
 
