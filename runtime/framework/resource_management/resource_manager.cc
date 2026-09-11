@@ -484,7 +484,11 @@ ResourceManager::~ResourceManager() {
   }
 
   // Environment is only released after all the executors are destroyed.
-  backup_litert_env_.reset();
+  {
+    absl::MutexLock lock(env_mutex_);
+    backup_litert_env_.reset();
+    litert_env_ = nullptr;
+  }
 }
 
 ResourceManager::ResourceManager(
@@ -533,7 +537,7 @@ std::optional<uint32_t> ResourceManager::AssignLoraId(
   return lora_id;
 }
 
-absl::Status ResourceManager::MaybeCreateLitertEnv() {
+absl::Status ResourceManager::MaybeCreateLitertEnvLocked() const {
   if (litert_env_ != nullptr) {
     return absl::OkStatus();
   }
@@ -550,6 +554,16 @@ absl::Status ResourceManager::MaybeCreateLitertEnv() {
       std::make_unique<litert::Environment>(std::move(new_litert_env));
   litert_env_ = backup_litert_env_.get();
   return absl::OkStatus();
+}
+
+absl::StatusOr<const ::litert::Environment*> ResourceManager::GetEnvironment()
+    const {
+  absl::MutexLock lock(env_mutex_);
+  ABSL_RETURN_IF_ERROR(MaybeCreateLitertEnvLocked());
+  if (litert_env_ == nullptr) {
+    return absl::InternalError("Failed to initialize LiteRT environment.");
+  }
+  return litert_env_;
 }
 
 absl::StatusOr<std::unique_ptr<ContextHandler>>
@@ -804,10 +818,17 @@ absl::Status ResourceManager::TryLoadingVisionExecutor() {
     return absl::InvalidArgumentError("Vision options should not be null.");
   }
 
-  ABSL_RETURN_IF_ERROR(MaybeCreateLitertEnv());
+  ::litert::Environment* env = nullptr;
+  {
+    absl::MutexLock lock(env_mutex_);
+    ABSL_RETURN_IF_ERROR(MaybeCreateLitertEnvLocked());
+    RET_CHECK_NE(litert_env_, nullptr);
+    env = litert_env_;
+  }
+  RET_CHECK_NE(env, nullptr);
   ABSL_ASSIGN_OR_RETURN(vision_executor_,
                         VisionLiteRtCompiledModelExecutor::Create(
-                            *vision_executor_settings_, *litert_env_));
+                            *vision_executor_settings_, *env));
   return absl::OkStatus();
 }
 
@@ -840,11 +861,17 @@ absl::Status ResourceManager::TryLoadingAudioExecutor() {
     return absl::InvalidArgumentError("Audio options should not be null.");
   }
   {
-    ABSL_RETURN_IF_ERROR(MaybeCreateLitertEnv());
-    RET_CHECK_NE(litert_env_, nullptr);
+    ::litert::Environment* audio_env = nullptr;
+    {
+      absl::MutexLock lock(env_mutex_);
+      ABSL_RETURN_IF_ERROR(MaybeCreateLitertEnvLocked());
+      RET_CHECK_NE(litert_env_, nullptr);
+      audio_env = litert_env_;
+    }
+    RET_CHECK_NE(audio_env, nullptr);
     ABSL_ASSIGN_OR_RETURN(audio_executor_,
                           litert::lm::AudioLiteRtCompiledModelExecutor::Create(
-                              *audio_executor_settings_, *litert_env_));
+                              *audio_executor_settings_, *audio_env));
   }
   return absl::OkStatus();
 }

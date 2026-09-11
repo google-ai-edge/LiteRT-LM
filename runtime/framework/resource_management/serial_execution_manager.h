@@ -245,6 +245,9 @@ class SerialExecutionManager : public ExecutionManager {
   absl::StatusOr<VisionExecutorProperties> GetVisionExecutorProperties()
       const override;
 
+  // Returns the LiteRT environment managed by this execution manager.
+  absl::StatusOr<const ::litert::Environment*> GetEnvironment() const override;
+
  private:
   explicit SerialExecutionManager(
       Tokenizer* absl_nonnull tokenizer,

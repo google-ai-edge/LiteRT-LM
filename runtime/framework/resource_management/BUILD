@@ -35,6 +35,7 @@ cc_library(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/time",
+        "@litert//litert/cc:litert_environment",
         "@litert//litert/cc:litert_tensor_buffer",
         "//runtime/components:sampler",
         "//runtime/components:stop_token_detector",
