@@ -349,7 +349,11 @@ LlmLiteRtNpuCompiledModelExecutor::CreateTextDecoderInferenceContext(
         auto input_tensor_size = input_tensor_type->Bytes();
         if (input_tensor_size.HasValue()) {
           LITERT_ASSIGN_OR_RETURN(auto input_buffer_size, value.Size());
-          if (*input_tensor_size != input_buffer_size) {
+          // For multi-context models, input_buffer_size is sized for the max
+          // decode context and is larger than input_tensor_size for smaller
+          // prefill signatures, which is safe to share. Only reallocate if the
+          // buffer is smaller than the required tensor size.
+          if (*input_tensor_size > input_buffer_size) {
             LITERT_ASSIGN_OR_RETURN(
                 auto corrected_input_buffer,
                 text_decoder_compiled_model.CreateInputBuffer(
