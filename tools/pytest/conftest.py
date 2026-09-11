@@ -147,34 +147,81 @@ def _get_dynamic_lib_dirs(
   )
   lib_dirs = set()
 
-  if prebuilt_dir:
-    lib_dirs.add(os.path.dirname(os.path.join(repo_root, "prebuilt")))
-
+  if sys.platform == "win32":
+    ext = ".dll"
+  elif sys.platform == "darwin":
+    ext = ".dylib"
   else:
-    if sys.platform == "win32":
-      ext = ".dll"
-    elif sys.platform == "darwin":
-      ext = ".dylib"
+    ext = ".so"
+
+  if prebuilt_dir:
+    if isinstance(prebuilt_dir, str) and prebuilt_dir.lower() != "true":
+      target_dir = os.path.join(repo_root, "prebuilt", prebuilt_dir)
     else:
-      ext = ".so"
+      target_dir = os.path.join(repo_root, "prebuilt")
 
-    path_parts = os.path.normpath(engine_binary).split(os.sep)
-    if "bazel-bin" in path_parts:
-      bazel_bin_idx = path_parts.index("bazel-bin")
-      bazel_bin_root = os.sep.join(path_parts[:bazel_bin_idx + 1])
-
-      if os.path.exists(bazel_bin_root):
-        for item in os.listdir(bazel_bin_root):
-          if item.startswith("_solib_"):
-            lib_dirs.add(os.path.join(bazel_bin_root, item))
-
-    runfiles_dir = engine_binary + ".runfiles"
-    if os.path.exists(runfiles_dir):
-      for root, _, files in os.walk(runfiles_dir):
+    if os.path.exists(target_dir):
+      for root, _, files in os.walk(target_dir):
         if any(f.endswith(ext) for f in files):
           lib_dirs.add(root)
 
+  path_parts = os.path.normpath(engine_binary).split(os.sep)
+  if "bazel-bin" in path_parts:
+    bazel_bin_idx = path_parts.index("bazel-bin")
+    bazel_bin_root = os.sep.join(path_parts[:bazel_bin_idx + 1])
+
+    if os.path.exists(bazel_bin_root):
+      for item in os.listdir(bazel_bin_root):
+        if item.startswith("_solib_"):
+          lib_dirs.add(os.path.join(bazel_bin_root, item))
+
+  runfiles_dir = engine_binary + ".runfiles"
+  if os.path.exists(runfiles_dir):
+    for root, _, files in os.walk(runfiles_dir):
+      if any(f.endswith(ext) for f in files):
+        lib_dirs.add(root)
+
   return list(lib_dirs)
+
+# def _get_dynamic_lib_dirs(
+#     engine_binary: str, request: pytest.FixtureRequest
+# ) -> list[str]:
+#   """Returns a list of directories containing dynamic libraries."""
+#   prebuilt_dir = request.config.getoption("--prebuilt")
+
+#   repo_root = os.path.abspath(
+#       os.path.join(os.path.dirname(__file__), "..", "..")
+#   )
+#   lib_dirs = set()
+
+#   if prebuilt_dir:
+#     lib_dirs.add(os.path.dirname(os.path.join(repo_root, "prebuilt")))
+
+#   else:
+#     if sys.platform == "win32":
+#       ext = ".dll"
+#     elif sys.platform == "darwin":
+#       ext = ".dylib"
+#     else:
+#       ext = ".so"
+
+#     path_parts = os.path.normpath(engine_binary).split(os.sep)
+#     if "bazel-bin" in path_parts:
+#       bazel_bin_idx = path_parts.index("bazel-bin")
+#       bazel_bin_root = os.sep.join(path_parts[:bazel_bin_idx + 1])
+
+#       if os.path.exists(bazel_bin_root):
+#         for item in os.listdir(bazel_bin_root):
+#           if item.startswith("_solib_"):
+#             lib_dirs.add(os.path.join(bazel_bin_root, item))
+
+#     runfiles_dir = engine_binary + ".runfiles"
+#     if os.path.exists(runfiles_dir):
+#       for root, _, files in os.walk(runfiles_dir):
+#         if any(f.endswith(ext) for f in files):
+#           lib_dirs.add(root)
+
+#   return list(lib_dirs)
 
 
 @pytest.fixture
@@ -235,9 +282,7 @@ def run_engine(
 
     # Instantly fail the test if the C++ engine segfaults or OOMs
     if result.returncode != 0:
-      error_tail = (result.stderr if result.stderr else result.stdout).strip()[
-          -800:
-      ]
+      error_tail = (result.stderr if result.stderr else result.stdout).strip()
       pytest.fail(
           f"Engine crashed with code {result.returncode}!\nCrash"
           f" Tail:\n{error_tail}"
