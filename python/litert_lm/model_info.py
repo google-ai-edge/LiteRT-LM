@@ -22,10 +22,26 @@ Example:
 
   # 1. Load model info
   with litert_lm.ModelInfo("/path/to/model.litertlm") as model_info:
-    # 2. Query basic capability flags
-    thinking = model_info.supports_thinking()
-    function_calling = model_info.supports_function_calling()
-    speculative_decoding = model_info.has_speculative_decoding_support()
+    # 2. Check model type
+    if model_info.is_embedding_model:
+      # Embedding model capabilities
+      dim = model_info.embedding_dimension  # e.g. 768
+      # e.g. [128, 256, 512]
+      signatures = model_info.embedding_signature_selection
+      max_context = model_info.max_context_tokens
+      is_dynamic = model_info.is_dynamic_context
+
+    if model_info.is_llm_model:
+      # Generative LLM capability flags
+      thinking = model_info.supports_thinking()
+      function_calling = model_info.supports_function_calling()
+      speculative_decoding = model_info.has_speculative_decoding_support()
+
+      # Retrieve default sampler parameters
+      sampler_config = model_info.default_sampler_params
+      temperature = sampler_config.temperature
+      top_k = sampler_config.top_k
+      top_p = sampler_config.top_p
 
     # 3. Inspect context limits and runtime requirements
     max_context = model_info.max_context_tokens
@@ -35,7 +51,7 @@ Example:
     # 4. Check supported input modalities and vision token budget
     if model_info.input_modalities.vision:
       vision_budget = model_info.max_vision_token_budget
-      signatures = model_info.vision_signature_selection
+      vision_signatures = model_info.vision_signature_selection
 
     # 5. Inspect hardware backends (ordered by priority), NPU brand, etc.
     text_backends = model_info.supported_backends_for_modality(
@@ -50,12 +66,6 @@ Example:
       soc_name = model_info.soc_name_for_modality(
           litert_lm.LiteRtLmModality.TEXT
       )  # e.g. "SM8750"
-
-    # 6. Retrieve default sampler parameters
-    sampler_config = model_info.default_sampler_params
-    temperature = sampler_config.temperature
-    top_k = sampler_config.top_k
-    top_p = sampler_config.top_p
 """
 
 from __future__ import annotations
@@ -207,6 +217,42 @@ class ModelInfo:
     """
     self._check_closed()
     return int(self._lib.litert_lm_loaded_file_max_context_tokens(self._handle))
+
+  @property
+  def is_embedding_model(self) -> bool:
+    """Returns True if the loaded file is an embedding model."""
+    self._check_closed()
+    return bool(
+        self._lib.litert_lm_loaded_file_is_embedding_model(self._handle)
+    )
+
+  @property
+  def is_llm_model(self) -> bool:
+    """Returns True if the loaded file is an LLM (generative) model."""
+    self._check_closed()
+    return bool(self._lib.litert_lm_loaded_file_is_llm_model(self._handle))
+
+  @property
+  def embedding_dimension(self) -> int | None:
+    """Returns output embedding dimension, or None if not defined."""
+    self._check_closed()
+    dim = self._lib.litert_lm_loaded_file_embedding_dimension(self._handle)
+    return int(dim) if dim > 0 else None
+
+  @property
+  def embedding_signature_selection(self) -> list[int] | None:
+    """Returns supported embedding signature lengths, or None if not defined."""
+    self._check_closed()
+    count = self._lib.litert_lm_loaded_file_embedding_signature_selection(
+        self._handle, None, 0
+    )
+    if count == -1:
+      return None
+    lengths = (ctypes.c_int32 * count)()
+    self._lib.litert_lm_loaded_file_embedding_signature_selection(
+        self._handle, lengths, count
+    )
+    return list(lengths)
 
   @property
   def is_dynamic_context(self) -> bool:

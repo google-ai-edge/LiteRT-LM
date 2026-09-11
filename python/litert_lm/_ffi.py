@@ -892,6 +892,21 @@ def _setup_lib_signatures(lib):
       ctypes.POINTER(ctypes.c_int),
       ctypes.c_int32,
   ]
+  lib.litert_lm_loaded_file_is_embedding_model.restype = ctypes.c_bool
+  lib.litert_lm_loaded_file_is_embedding_model.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_loaded_file_is_llm_model.restype = ctypes.c_bool
+  lib.litert_lm_loaded_file_is_llm_model.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_loaded_file_embedding_dimension.restype = ctypes.c_int32
+  lib.litert_lm_loaded_file_embedding_dimension.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_loaded_file_embedding_signature_selection.restype = (
+      ctypes.c_int32
+  )
+  lib.litert_lm_loaded_file_embedding_signature_selection.argtypes = [
+      ctypes.c_void_p,
+      ctypes.POINTER(ctypes.c_int32),
+      ctypes.c_int32,
+  ]
+
   lib.litert_lm_loaded_file_modality_npu_brand.restype = ctypes.c_int
   lib.litert_lm_loaded_file_modality_npu_brand.argtypes = [
       ctypes.c_void_p,
