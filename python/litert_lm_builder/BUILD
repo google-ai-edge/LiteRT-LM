@@ -100,6 +100,16 @@ py_test(
 )
 
 pytype_strict_library(
+    name = "litertlm_test_util",
+    testonly = 1,
+    srcs = ["litertlm_test_util.py"],
+    deps = [
+        ":litertlm_peek",
+        "//schema/core:litertlm_header_schema_py",
+    ],
+)
+
+pytype_strict_library(
     name = "litertlm_builder",
     srcs = ["litertlm_builder.py"],
     visibility = ["//visibility:public"],
@@ -131,6 +141,18 @@ py_test(
         "@absl_py//absl/testing:absltest",
         "@absl_py//absl/testing:parameterized",
         "@com_google_protobuf//:protobuf_python",
+    ],
+)
+
+py_test(
+    name = "litertlm_test_util_test",
+    srcs = ["litertlm_test_util_test.py"],
+    deps = [
+        ":litertlm_builder",
+        ":litertlm_peek",
+        ":litertlm_test_util",
+        "//schema/core:litertlm_header_schema_py",
+        "@absl_py//absl/testing:absltest",
     ],
 )
 
