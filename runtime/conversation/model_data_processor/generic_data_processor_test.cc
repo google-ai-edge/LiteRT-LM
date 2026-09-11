@@ -96,7 +96,7 @@ TEST(GenericDataProcessorTest, ToMessageModelRole) {
             {"content", {{{"type", "text"}, {"text", "test response"}}}}}));
 }
 
-TEST(GenericDataProcessorTest, ToTemplateInputNoTypedContent) {
+TEST(GenericDataProcessorTest, ToTemplateInputNormalizesStringToTypedContent) {
   ASSERT_OK_AND_ASSIGN(
       auto processor,
       GenericDataProcessor::Create(
@@ -106,14 +106,16 @@ TEST(GenericDataProcessorTest, ToTemplateInputNoTypedContent) {
                        processor->MessageToTemplateInput(json(
                            {{"role", "user"}, {"content", "test prompt"}})));
   EXPECT_EQ(template_input_1,
-            json({{"role", "user"}, {"content", "test prompt"}}));
+            json({{"role", "user"},
+                  {"content", {{{"type", "text"}, {"text", "test prompt"}}}}}));
   ASSERT_OK_AND_ASSIGN(
       const json template_input_2,
       processor->MessageToTemplateInput(
           json({{"role", "user"},
                 {"content", {{{"type", "text"}, {"text", "test prompt"}}}}})));
   EXPECT_EQ(template_input_2,
-            json({{"role", "user"}, {"content", "test prompt"}}));
+            json({{"role", "user"},
+                  {"content", {{{"type", "text"}, {"text", "test prompt"}}}}}));
 }
 
 TEST(GenericDataProcessorTest, ToTemplateInputTypedContent) {

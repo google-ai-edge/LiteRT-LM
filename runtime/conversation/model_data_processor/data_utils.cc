@@ -56,4 +56,24 @@ absl::StatusOr<std::unique_ptr<MemoryMappedFile>> LoadItemData(
                                   item["type"].get<std::string>());
 }
 
+ordered_json NormalizeContent(const ordered_json& content) {
+  if (content.is_string()) {
+    return ordered_json::array(
+        {{{"type", "text"}, {"text", content.get<std::string>()}}});
+  }
+  if (content.is_object()) {
+    return ordered_json::array({content});
+  }
+  return content;
+}
+
+ordered_json NormalizeMessageContent(const ordered_json& message) {
+  if (!message.contains("content")) {
+    return message;
+  }
+  ordered_json result = message;
+  result["content"] = NormalizeContent(message["content"]);
+  return result;
+}
+
 }  // namespace litert::lm

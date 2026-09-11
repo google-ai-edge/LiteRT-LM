@@ -49,20 +49,6 @@ MiniCpm5DataProcessor::Create(MiniCpm5DataProcessorConfig config,
       new MiniCpm5DataProcessor(std::move(config), std::move(preface)));
 }
 
-absl::StatusOr<nlohmann::ordered_json>
-MiniCpm5DataProcessor::MessageToTemplateInput(
-    const nlohmann::ordered_json& message) const {
-  if (message["content"].is_array()) {
-    const auto& content = message["content"];
-    if (content.size() == 1 && content[0].contains("text")) {
-      auto result = nlohmann::ordered_json::object(
-          {{"role", message["role"]}, {"content", content[0]["text"]}});
-      return result;
-    }
-  }
-  return message;
-}
-
 absl::StatusOr<std::vector<InputData>>
 MiniCpm5DataProcessor::ToInputDataVectorImpl(
     const std::string& rendered_template_prompt,

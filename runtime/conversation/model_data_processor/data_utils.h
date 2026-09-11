@@ -56,6 +56,21 @@ namespace litert::lm {
 absl::StatusOr<std::unique_ptr<MemoryMappedFile>> LoadItemData(
     const nlohmann::ordered_json& item);
 
+// Normalizes a message's "content" value into a list of multimodal parts.
+// - If "content" is a string, wraps it into [{"type": "text", "text": string}].
+// - If "content" is an object, wraps it into [object].
+// - If "content" is already an array, preserves it.
+nlohmann::ordered_json NormalizeContent(const nlohmann::ordered_json& content);
+
+// Normalizes the "content" field of a message into a list of multimodal parts.
+// - If "content" is a string, wraps it into [{"type": "text", "text": string}].
+// - If "content" is an object, wraps it into [object].
+// - If "content" is already an array, preserves it.
+// - If "content" is absent (e.g. assistant tool calls), returns message
+// unchanged.
+nlohmann::ordered_json NormalizeMessageContent(
+    const nlohmann::ordered_json& message);
+
 }  // namespace litert::lm
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_RUNTIME_CONVERSATION_MODEL_DATA_PROCESSOR_DATA_UTILS_H_

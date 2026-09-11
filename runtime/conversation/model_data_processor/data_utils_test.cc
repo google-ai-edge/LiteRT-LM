@@ -144,5 +144,49 @@ TEST(DataUtilsTest, LoadItemData_MissingType) {
   EXPECT_EQ(memory_mapped_file, nullptr);
 }
 
+TEST(DataUtilsTest, NormalizeContent_String) {
+  const ordered_json content = "Hello";
+  const ordered_json expected = {{{"type", "text"}, {"text", "Hello"}}};
+  EXPECT_EQ(NormalizeContent(content), expected);
+}
+
+TEST(DataUtilsTest, NormalizeContent_Object) {
+  const ordered_json content = {{"type", "text"}, {"text", "Hello"}};
+  const ordered_json expected = {{{"type", "text"}, {"text", "Hello"}}};
+  EXPECT_EQ(NormalizeContent(content), expected);
+}
+
+TEST(DataUtilsTest, NormalizeContent_Array) {
+  const ordered_json content = {{{"type", "text"}, {"text", "Hello"}}};
+  EXPECT_EQ(NormalizeContent(content), content);
+}
+
+TEST(DataUtilsTest, NormalizeMessageContent_StringContent) {
+  const ordered_json msg = {{"role", "user"}, {"content", "Hello"}};
+  const ordered_json expected = {
+      {"role", "user"}, {"content", {{{"type", "text"}, {"text", "Hello"}}}}};
+  EXPECT_EQ(NormalizeMessageContent(msg), expected);
+}
+
+TEST(DataUtilsTest, NormalizeMessageContent_ArrayContent) {
+  const ordered_json msg = {
+      {"role", "user"}, {"content", {{{"type", "text"}, {"text", "Hello"}}}}};
+  EXPECT_EQ(NormalizeMessageContent(msg), msg);
+}
+
+TEST(DataUtilsTest, NormalizeMessageContent_NoContent) {
+  const ordered_json msg = {{"role", "assistant"},
+                            {"tool_calls", ordered_json::array()}};
+  EXPECT_EQ(NormalizeMessageContent(msg), msg);
+}
+
+TEST(DataUtilsTest, NormalizeMessageContent_ObjectContent) {
+  const ordered_json msg = {{"role", "user"},
+                            {"content", {{"type", "text"}, {"text", "Hello"}}}};
+  const ordered_json expected = {
+      {"role", "user"}, {"content", {{{"type", "text"}, {"text", "Hello"}}}}};
+  EXPECT_EQ(NormalizeMessageContent(msg), expected);
+}
+
 }  // namespace
 }  // namespace litert::lm

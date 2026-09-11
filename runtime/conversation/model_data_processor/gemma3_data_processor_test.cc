@@ -520,10 +520,11 @@ TEST_F(Gemma3DataProcessorTest, MessageToTemplateInputWithStringContent) {
       {"content", "test prompt"},
   };
 
-  // The template input is identical to the original message if the content is
-  // a string.
   EXPECT_THAT(processor->MessageToTemplateInput(message),
-              IsOkAndHolds(message));
+              IsOkAndHolds(nlohmann::ordered_json({
+                  {"role", "user"},
+                  {"content", {{{"type", "text"}, {"text", "test prompt"}}}},
+              })));
 }
 
 TEST_F(Gemma3DataProcessorTest, MessageToTemplateInputWithTextContent) {
@@ -753,11 +754,17 @@ TEST_F(Gemma3DataProcessorTest,
   })json");
 
   // The "tool_response" in "content", which is an object rather than an array,
-  // is converted into a string representation of a Python dict.
+  // is converted into a string representation of a Python dict wrapped in an
+  // array of multimodal text parts.
   EXPECT_THAT(processor->MessageToTemplateInput(message),
               IsOkAndHolds(nlohmann::ordered_json::parse(R"json({
                 "role": "tool",
-                "content": "{\"key1\": \"value1\", \"key2\": \"value2\"}"
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "{\"key1\": \"value1\", \"key2\": \"value2\"}"
+                  }
+                ]
               })json")));
 }
 
@@ -766,7 +773,7 @@ TEST_F(Gemma3DataProcessorTest,
   ASSERT_OK_AND_ASSIGN(auto processor, Gemma3DataProcessor::Create());
 
   // Case 1: tool_response key
-  const nlohmann::ordered_json message1 = nlohmann::ordered_json::parse(R"json({
+  nlohmann::ordered_json message1 = nlohmann::ordered_json::parse(R"json({
     "role": "tool",
     "content": {
       "tool_response": {
@@ -777,11 +784,16 @@ TEST_F(Gemma3DataProcessorTest,
   EXPECT_THAT(processor->MessageToTemplateInput(message1),
               IsOkAndHolds(nlohmann::ordered_json::parse(R"json({
                 "role": "tool",
-                "content": "{\"key1\": \"value1\"}"
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "{\"key1\": \"value1\"}"
+                  }
+                ]
               })json")));
 
   // Case 2: response key
-  const nlohmann::ordered_json message2 = nlohmann::ordered_json::parse(R"json({
+  nlohmann::ordered_json message2 = nlohmann::ordered_json::parse(R"json({
     "role": "tool",
     "content": {
       "response": {
@@ -792,11 +804,16 @@ TEST_F(Gemma3DataProcessorTest,
   EXPECT_THAT(processor->MessageToTemplateInput(message2),
               IsOkAndHolds(nlohmann::ordered_json::parse(R"json({
                 "role": "tool",
-                "content": "{\"key2\": \"value2\"}"
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "{\"key2\": \"value2\"}"
+                  }
+                ]
               })json")));
 
   // Case 3: Top-level fields
-  const nlohmann::ordered_json message3 = nlohmann::ordered_json::parse(R"json({
+  nlohmann::ordered_json message3 = nlohmann::ordered_json::parse(R"json({
     "role": "tool",
     "content": {
       "key3": "value3"
@@ -805,7 +822,12 @@ TEST_F(Gemma3DataProcessorTest,
   EXPECT_THAT(processor->MessageToTemplateInput(message3),
               IsOkAndHolds(nlohmann::ordered_json::parse(R"json({
                 "role": "tool",
-                "content": "{\"key3\": \"value3\"}"
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "{\"key3\": \"value3\"}"
+                  }
+                ]
               })json")));
 }
 

@@ -47,9 +47,6 @@ class MiniCpm5DataProcessor
     return tools;
   }
 
-  absl::StatusOr<nlohmann::ordered_json> MessageToTemplateInput(
-      const nlohmann::ordered_json& message) const override;
-
   absl::string_view CodeFenceStart() const override;
 
   absl::string_view CodeFenceEnd() const override;

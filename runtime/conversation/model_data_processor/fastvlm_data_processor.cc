@@ -14,11 +14,8 @@
 
 #include "runtime/conversation/model_data_processor/fastvlm_data_processor.h"
 
-#include <deque>
 #include <memory>
 #include <string>
-#include <utility>
-#include <variant>
 #include <vector>
 
 #include "absl/memory/memory.h"  // from @com_google_absl
@@ -29,22 +26,16 @@
 #include "litert/cc/litert_layout.h"  // from @litert
 #include "runtime/components/prompt_template.h"
 #include "runtime/conversation/io_types.h"
-#include "runtime/conversation/model_data_processor/data_utils.h"
 #include "runtime/conversation/model_data_processor/fastvlm_data_processor_config.h"
 #include "runtime/conversation/model_data_processor/model_data_processor.h"
 #include "runtime/conversation/model_data_processor/multimodal_processor_helper.h"
 #include "runtime/engine/io_types.h"
-#include "runtime/util/memory_mapped_file.h"
-#include "runtime/util/status_macros.h"
-#include "re2/re2.h"  // from @com_googlesource_code_re2
 
 namespace litert::lm {
 
 namespace {
 
 using ::nlohmann::ordered_json;
-
-bool IsImage(absl::string_view part) { return part == "<image_soft_token>"; }
 
 }  // namespace
 
@@ -53,23 +44,6 @@ FastVlmDataProcessor::Create(FastVlmDataProcessorConfig config,
                              const PromptTemplateCapabilities& capabilities) {
   return absl::WrapUnique(new FastVlmDataProcessor(
       config, capabilities, std::make_unique<StbImagePreprocessor>()));
-}
-
-absl::StatusOr<ordered_json> FastVlmDataProcessor::MessageToTemplateInput(
-    const ordered_json& message) const {
-  if (message["content"].is_string() && capabilities_.requires_typed_content) {
-    return ordered_json::object(
-        {{"role", message["role"]},
-         {"content", ordered_json::array(
-                         {{{"type", "text"}, {"text", message["content"]}}})}});
-  } else if (message["content"].is_array() && message["content"].size() == 1 &&
-             message["content"][0]["type"] == "text" &&
-             !capabilities_.requires_typed_content) {
-    return ordered_json::object({{"role", message["role"]},
-                                 {"content", message["content"][0]["text"]}});
-  } else {
-    return message;
-  }
 }
 
 absl::StatusOr<ordered_json> FastVlmDataProcessor::FormatTools(

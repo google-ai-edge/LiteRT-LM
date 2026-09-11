@@ -63,12 +63,6 @@ absl::StatusOr<std::unique_ptr<Lfm2DataProcessor>> Lfm2DataProcessor::Create(
       std::move(config), preface, std::make_unique<StbImagePreprocessor>()));
 }
 
-absl::StatusOr<ordered_json> Lfm2DataProcessor::MessageToTemplateInput(
-    const ordered_json& message) const {
-  // For LFM2, the template input is the same as the message.
-  return message;
-}
-
 absl::StatusOr<ordered_json> Lfm2DataProcessor::FormatTools(
     const ordered_json& tools) const {
   if (!tools.is_array()) {
@@ -266,7 +260,9 @@ Lfm2DataProcessor::RenderSingleTurnTemplate(
     if (!json_preface.messages.empty() || !json_preface.tools.empty() ||
         !json_preface.extra_context.is_null()) {
       preface_tmpl_input.messages.push_back(
-          Message{{"role", "user"}, {"content", ""}});
+          Message{{"role", "user"},
+                  {"content",
+                   ordered_json::array({{{"type", "text"}, {"text", ""}}})}});
       preface_tmpl_input.add_generation_prompt = false;
       if (extra_context.has_value()) {
         for (const auto& [key, value] : extra_context.value().items()) {

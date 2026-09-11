@@ -29,6 +29,7 @@
 #include "runtime/components/prompt_template.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/config_registry.h"
+#include "runtime/conversation/model_data_processor/data_utils.h"
 #include "runtime/engine/io_types.h"
 #include "support/preprocessor/audio_preprocessor.h"
 #include "support/preprocessor/audio_preprocessor_miniaudio.h"
@@ -85,8 +86,14 @@ class ModelDataProcessor {
   // For example, messages represent tool calls as a list of JSON objects, but a
   // model's Jinja template may expect the tool calls to already be formatted
   // in a particular tool calling syntax.
+  //
+  // By default, this normalizes the message content to a list of multimodal
+  // parts using NormalizeMessageContent. Models that require specific tool
+  // syntax formatting (e.g. Gemma 3, Function Gemma) can override this method.
   virtual absl::StatusOr<nlohmann::ordered_json> MessageToTemplateInput(
-      const nlohmann::ordered_json& message) const = 0;
+      const nlohmann::ordered_json& message) const {
+    return NormalizeMessageContent(message);
+  }
 
   // Renders a single turn template for the given message and history. Only the
   // prompt template supporting single turn is valid for this method.

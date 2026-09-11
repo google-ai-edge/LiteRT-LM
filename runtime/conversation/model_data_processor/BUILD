@@ -183,6 +183,7 @@ cc_library(
     hdrs = ["model_data_processor.h"],
     deps = [
         ":config_registry",
+        ":data_utils",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings:string_view",
@@ -322,7 +323,6 @@ cc_library(
     srcs = ["fastvlm_data_processor.cc"],
     hdrs = ["fastvlm_data_processor.h"],
     deps = [
-        ":data_utils",
         ":fastvlm_data_processor_config",
         ":model_data_processor",
         ":multimodal_processor_helper",
@@ -335,11 +335,8 @@ cc_library(
         "//runtime/components:prompt_template",
         "//runtime/conversation:io_types",
         "//runtime/engine:io_types",
-        "//runtime/util:litert_status_util",
-        "//runtime/util:memory_mapped_file",
         "//support/preprocessor:image_preprocessor",
         "//support/preprocessor:stb_image_preprocessor",
-        "@com_googlesource_code_re2//:re2",
     ],
 )
 
@@ -379,14 +376,11 @@ cc_library(
         "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/memory",
         "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings:string_view",
         "@nlohmann_json//:json",
-        "//runtime/components/tool_use:parser_utils",
         "//runtime/conversation:io_types",
         "//runtime/engine:io_types",
-        "//runtime/util:litert_status_util",
         "@com_googlesource_code_re2//:re2",
     ],
 )
@@ -550,6 +544,7 @@ cc_library(
         "//conditions:default": [],
     }),
     deps = [
+        ":data_utils",
         ":function_gemma_data_processor_config",
         ":model_data_processor",
         "@com_google_absl//absl/log:absl_log",

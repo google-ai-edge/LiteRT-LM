@@ -54,10 +54,6 @@ class Lfm2DataProcessor
   // Returns the config of the Lfm2DataProcessor.
   const Lfm2DataProcessorConfig& GetConfig() const override { return config_; }
 
-  // Converts a message into the template input for that message.
-  absl::StatusOr<nlohmann::ordered_json> MessageToTemplateInput(
-      const nlohmann::ordered_json& message) const override;
-
   // Formats tool declarations.
   absl::StatusOr<nlohmann::ordered_json> FormatTools(
       const nlohmann::ordered_json& tools) const override;

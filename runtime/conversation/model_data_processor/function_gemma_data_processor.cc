@@ -37,6 +37,7 @@
 #include "runtime/components/tool_use/fc_tool_format_utils.h"
 #include "runtime/components/tool_use/parser_utils.h"
 #include "runtime/conversation/io_types.h"
+#include "runtime/conversation/model_data_processor/data_utils.h"
 #include "runtime/conversation/model_data_processor/function_gemma_data_processor_config.h"
 #include "runtime/conversation/model_data_processor/model_data_processor.h"
 #include "runtime/engine/io_types.h"
@@ -131,18 +132,20 @@ absl::StatusOr<std::string> FormatToolResponse(
 // Formats "content" as a tool response in FC format.
 //
 // Case 1: If "content" is an object, formats "content" directly as a tool
-// response in FC format as a string.
+// response in FC format and returns an array of text parts.
 //
 // Case 2: If "content" is an array, formats each tool response item in the
-// array in FC format and returns an array of *text* items. A tool response
-// item is an object with "name" and "response" fields or an object with a
-// "tool_response" field.
+// array in FC format and returns an array of text parts.
 //
-// Case 3: If "content" is neither an object nor an array, returns it unchanged.
+// Case 3: If "content" is neither an object nor an array, normalizes it into
+// an array of text parts.
 absl::StatusOr<nlohmann::ordered_json> FormatToolResponses(
     const nlohmann::ordered_json& content) {
   if (content.is_object()) {
-    return FormatToolResponse(content);
+    ABSL_ASSIGN_OR_RETURN(std::string formatted_tool_response,
+                          FormatToolResponse(content));
+    return nlohmann::ordered_json::array(
+        {{{"type", "text"}, {"text", formatted_tool_response}}});
   }
 
   if (content.is_array()) {
@@ -165,9 +168,7 @@ absl::StatusOr<nlohmann::ordered_json> FormatToolResponses(
     return tool_content;
   }
 
-  // If the content of the message is not an array or object, pass it through
-  // unchanged.
-  return content;
+  return NormalizeContent(content);
 }
 
 // A message is a tool response if its role is "tool".
@@ -234,13 +235,13 @@ absl::StatusOr<nlohmann::ordered_json>
 FunctionGemmaDataProcessor::MessageToTemplateInput(
     const nlohmann::ordered_json& message) const {
   if (config_.use_template_for_fc_format) {
-    return message;
+    return ModelDataProcessor::MessageToTemplateInput(message);
   }
 
   // If the message doesn't contain any tool calls and isn't a tool message,
-  // then the template input is the same as the message.
+  // then normalize message content and return.
   if (!message.contains("tool_calls") && message["role"] != "tool") {
-    return message;
+    return ModelDataProcessor::MessageToTemplateInput(message);
   }
 
   nlohmann::ordered_json template_input = nlohmann::ordered_json::object();
@@ -254,9 +255,7 @@ FunctionGemmaDataProcessor::MessageToTemplateInput(
       ABSL_ASSIGN_OR_RETURN(template_input["content"],
                             FormatToolResponses(message["content"]));
     } else {
-      // If the role is not "tool" or "content" is a string, pass through the
-      // content unchanged.
-      template_input["content"] = message["content"];
+      template_input["content"] = NormalizeContent(message["content"]);
     }
   }
 

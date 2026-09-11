@@ -110,12 +110,6 @@ Gemma4DataProcessor::Create(Gemma4DataProcessorConfig config,
 #endif
 }
 
-absl::StatusOr<nlohmann::ordered_json>
-Gemma4DataProcessor::MessageToTemplateInput(
-    const nlohmann::ordered_json& message) const {
-  return message;
-}
-
 absl::StatusOr<std::vector<InputData>>
 Gemma4DataProcessor::ToInputDataVectorImpl(
     const std::string& rendered_template_prompt,

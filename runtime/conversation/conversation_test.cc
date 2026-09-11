@@ -3993,7 +3993,8 @@ You are a helpful assistant.
   absl::string_view expected_prefill_5 = R"(<end_of_turn>
 <start_of_turn>user
 ```tool_outputs
-{"location": "Paris", "temperature": 20, "unit": "C", "weather": "Sunny"})";
+{"location": "Paris", "temperature": 20, "unit": "C", "weather": "Sunny"}
+)";
   EXPECT_CALL(
       *mock_session_ptr,
       RunPrefillAsync(testing::ElementsAre(testing::VariantWith<InputText>(
@@ -4024,6 +4025,7 @@ You are a helpful assistant.
   // Append the 6th message.
   absl::string_view expected_prefill_6 =
       R"({"location": "London", "temperature": 15, "unit": "C", "weather": "Cloudy"}
+
 ```<end_of_turn>
 <start_of_turn>model
 )";

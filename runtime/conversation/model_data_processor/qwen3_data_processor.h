@@ -51,10 +51,6 @@ class Qwen3DataProcessor
     return tools;
   }
 
-  // Return the same message as the template input for generic models.
-  absl::StatusOr<nlohmann::ordered_json> MessageToTemplateInput(
-      const nlohmann::ordered_json& message) const override;
-
   // No-op for generic models.
   absl::string_view CodeFenceStart() const override;
 

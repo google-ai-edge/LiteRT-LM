@@ -92,29 +92,6 @@ absl::StatusOr<Message> GenericDataProcessor::ToMessageImpl(
       {{"role", GetConfig().model_role}, {"content", content}});
 }
 
-absl::StatusOr<nlohmann::ordered_json>
-GenericDataProcessor::MessageToTemplateInput(
-    const nlohmann::ordered_json& message) const {
-  if (message["content"].is_string() && capabilities_.requires_typed_content) {
-    // If the content is a string and the template requires typed content,
-    // convert the content to a typed content.
-    return nlohmann::ordered_json::object(
-        {{"role", message["role"]},
-         {"content", nlohmann::ordered_json::array(
-                         {{{"type", "text"}, {"text", message["content"]}}})}});
-  } else if (message["content"].is_array() && message["content"].size() == 1 &&
-             message["content"][0]["type"] == "text" &&
-             !capabilities_.requires_typed_content) {
-    // If the content is a typed content and the template does not require
-    // typed content, always convert the content to a string.
-    return nlohmann::ordered_json::object(
-        {{"role", message["role"]},
-         {"content", message["content"][0]["text"]}});
-  } else {
-    return message;
-  }
-}
-
 absl::StatusOr<ModelDataProcessor::SingleTurnTemplateRenderResult>
 GenericDataProcessor::RenderSingleTurnTemplate(
     std::vector<Message>& history, const Preface& preface,

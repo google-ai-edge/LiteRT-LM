@@ -129,5 +129,25 @@ TEST(Qwen3DataProcessorTest, CodeFence) {
   EXPECT_EQ(processor->CodeFenceEnd(), "</tool_call>");
 }
 
+TEST(Qwen3DataProcessorTest, MessageToTemplateInput) {
+  ASSERT_OK_AND_ASSIGN(auto processor,
+                       Qwen3DataProcessor::Create(Qwen3DataProcessorConfig{}));
+
+  // String content is converted to array of parts
+  json string_msg = {{"role", "user"}, {"content", "hello"}};
+  ASSERT_OK_AND_ASSIGN(json result1,
+                       processor->MessageToTemplateInput(string_msg));
+  EXPECT_EQ(result1,
+            json({{"role", "user"},
+                  {"content", {{{"type", "text"}, {"text", "hello"}}}}}));
+
+  // Array content is preserved
+  json array_msg = {{"role", "user"},
+                    {"content", {{{"type", "text"}, {"text", "hello"}}}}};
+  ASSERT_OK_AND_ASSIGN(json result2,
+                       processor->MessageToTemplateInput(array_msg));
+  EXPECT_EQ(result2, array_msg);
+}
+
 }  // namespace
 }  // namespace litert::lm

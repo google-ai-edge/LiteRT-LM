@@ -115,6 +115,7 @@ target_include_directories(runtime_conversation_model_data_processor
 target_link_libraries(runtime_conversation_model_data_processor
   INTERFACE
     LiteRTLM::Runtime::Conversation::ModelDataProcessor::ConfigRegistry
+    LiteRTLM::Runtime::Conversation::ModelDataProcessor::DataUtils
     LiteRTLM::Runtime::Components::ConstrainedDecoding::ConstraintInterface
     LiteRTLM::Runtime::Conversation::IoTypes
     LiteRTLM::Runtime::Engine::IoTypes
@@ -195,7 +196,6 @@ target_link_libraries(runtime_conversation_model_data_processor_fastvlm_data_pro
     LiteRTLM::Runtime::Engine
     LiteRTLM::Runtime::Components
     LiteRTLM::Runtime::Conversation::IoTypes
-    LiteRTLM::Runtime::Conversation::ModelDataProcessor::DataUtils
     LiteRTLM::Runtime::Conversation::ModelDataProcessor::MultimodalProcessorHelper
     LITERTLM_DEPS
 )

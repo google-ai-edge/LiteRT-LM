@@ -40,6 +40,7 @@
 #include "runtime/components/tool_use/parser_utils.h"
 #include "runtime/components/tool_use/python_tool_format_utils.h"
 #include "runtime/conversation/io_types.h"
+#include "runtime/conversation/model_data_processor/data_utils.h"
 #include "runtime/conversation/model_data_processor/gemma3_data_processor_config.h"
 #include "runtime/conversation/model_data_processor/model_data_processor.h"
 #include "runtime/conversation/prompt_utils.h"
@@ -164,9 +165,9 @@ Gemma3DataProcessor::Create(Gemma3DataProcessorConfig config,
 absl::StatusOr<ordered_json> Gemma3DataProcessor::MessageToTemplateInput(
     const ordered_json& message) const {
   // If the message doesn't contain any tool calls and isn't a tool message,
-  // then the template input is the same as the message.
+  // then normalize message content and return.
   if (!HasToolCalls(message) && !IsToolMessage(message)) {
-    return message;
+    return ModelDataProcessor::MessageToTemplateInput(message);
   }
 
   ordered_json template_input = ordered_json::object();
@@ -191,15 +192,13 @@ absl::StatusOr<ordered_json> Gemma3DataProcessor::MessageToTemplateInput(
         // If the content is an object, treat it as a single tool response.
         ABSL_ASSIGN_OR_RETURN(std::string formatted_tool_response,
                               FormatToolResponse(message["content"]));
-        template_input["content"] = formatted_tool_response;
+        template_input["content"] = ordered_json::array(
+            {{{"type", "text"}, {"text", std::move(formatted_tool_response)}}});
       } else {
-        // If the content is neither an array nor an object, pass it through
-        // unchanged.
-        template_input["content"] = message["content"];
+        template_input["content"] = NormalizeContent(message["content"]);
       }
     } else {
-      // If the role is not "tool", then pass through content unchanged.
-      template_input["content"] = message["content"];
+      template_input["content"] = NormalizeContent(message["content"]);
     }
   }
 

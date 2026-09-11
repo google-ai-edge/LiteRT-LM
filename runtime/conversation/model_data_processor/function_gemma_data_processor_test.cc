@@ -330,10 +330,11 @@ TEST_F(FunctionGemmaDataProcessorTest,
       {"content", "test prompt"},
   };
 
-  // The template input is identical to the original message if the content is a
-  // string.
   EXPECT_THAT(processor->MessageToTemplateInput(message),
-              IsOkAndHolds(message));
+              IsOkAndHolds(nlohmann::ordered_json({
+                  {"role", "user"},
+                  {"content", {{{"type", "text"}, {"text", "test prompt"}}}},
+              })));
 }
 
 TEST_F(FunctionGemmaDataProcessorTest, MessageToTemplateInputWithTextContent) {
@@ -346,6 +347,33 @@ TEST_F(FunctionGemmaDataProcessorTest, MessageToTemplateInputWithTextContent) {
   // Text content items should be unchanged.
   EXPECT_THAT(processor->MessageToTemplateInput(message),
               IsOkAndHolds(message));
+}
+
+TEST_F(FunctionGemmaDataProcessorTest,
+       MessageToTemplateInputWithUseTemplateForFcFormat) {
+  FunctionGemmaDataProcessorConfig config;
+  config.use_template_for_fc_format = true;
+  ASSERT_OK_AND_ASSIGN(auto processor,
+                       FunctionGemmaDataProcessor::Create(config));
+
+  // String content is normalized to an array of text parts.
+  const nlohmann::ordered_json string_message = {
+      {"role", "user"},
+      {"content", "test prompt"},
+  };
+  EXPECT_THAT(processor->MessageToTemplateInput(string_message),
+              IsOkAndHolds(nlohmann::ordered_json({
+                  {"role", "user"},
+                  {"content", {{{"type", "text"}, {"text", "test prompt"}}}},
+              })));
+
+  // Already-structured parts are preserved.
+  const nlohmann::ordered_json array_message = {
+      {"role", "user"},
+      {"content", {{{"type", "text"}, {"text", "test prompt"}}}},
+  };
+  EXPECT_THAT(processor->MessageToTemplateInput(array_message),
+              IsOkAndHolds(array_message));
 }
 
 TEST_F(FunctionGemmaDataProcessorTest, MessageToTemplateInputNoContent) {
@@ -655,7 +683,12 @@ TEST_F(FunctionGemmaDataProcessorTest,
   EXPECT_THAT(processor->MessageToTemplateInput(message),
               IsOkAndHolds(nlohmann::ordered_json::parse(R"json({
                 "role": "tool",
-                "content": "get_weather{temperature:72,units:<escape>Fahrenheit<escape>}"
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "get_weather{temperature:72,units:<escape>Fahrenheit<escape>}"
+                  }
+                ]
               })json")));
 }
 
@@ -675,7 +708,12 @@ TEST_F(FunctionGemmaDataProcessorTest,
   EXPECT_THAT(processor->MessageToTemplateInput(message),
               IsOkAndHolds(nlohmann::ordered_json::parse(R"json({
                 "role": "tool",
-                "content": "tool_1{key1:<escape>value1<escape>}"
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "tool_1{key1:<escape>value1<escape>}"
+                  }
+                ]
               })json")));
 }
 
@@ -714,11 +752,15 @@ TEST_F(FunctionGemmaDataProcessorTest,
     "content": "get_weather{temperature:72,units:<escape>Fahrenheit<escape>}"
   })json");
 
-  // String content should be kept as is.
   EXPECT_THAT(processor->MessageToTemplateInput(message),
               IsOkAndHolds(nlohmann::ordered_json::parse(R"json({
                 "role": "tool",
-                "content": "get_weather{temperature:72,units:<escape>Fahrenheit<escape>}"
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "get_weather{temperature:72,units:<escape>Fahrenheit<escape>}"
+                  }
+                ]
               })json")));
 }
 

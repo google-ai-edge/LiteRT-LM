@@ -267,11 +267,20 @@ TEST_F(Gemma4DataProcessorTest, PromptTemplateToInputDataVectorTextOnly) {
   PromptTemplate prompt_template(template_content);
 
   const nlohmann::ordered_json messages = {
-      {{"role", "system"}, {"content", "Hello world!"}},
-      {{"role", "user"}, {"content", "How are you?"}},
+      {{"role", "system"},
+       {"content", nlohmann::ordered_json::array(
+                       {{{"type", "text"}, {"text", "Hello world!"}}})}},
+      {{"role", "user"},
+       {"content", nlohmann::ordered_json::array(
+                       {{{"type", "text"}, {"text", "How are you?"}}})}},
       {{"role", "assistant"},
-       {"content", "I am doing well, thanks for asking."}},
-      {{"role", "user"}, {"content", "What is the capital of France?"}},
+       {"content", nlohmann::ordered_json::array(
+                       {{{"type", "text"},
+                         {"text", "I am doing well, thanks for asking."}}})}},
+      {{"role", "user"},
+       {"content",
+        nlohmann::ordered_json::array(
+            {{{"type", "text"}, {"text", "What is the capital of France?"}}})}},
   };
   PromptTemplateInput template_input = {.messages = messages,
                                         .add_generation_prompt = true};
@@ -338,10 +347,11 @@ TEST_F(Gemma4DataProcessorTest, MessageToTemplateInputWithStringContent) {
       {"content", "test prompt"},
   };
 
-  // The template input is identical to the original message if the content is a
-  // string.
   EXPECT_THAT(processor->MessageToTemplateInput(message),
-              IsOkAndHolds(message));
+              IsOkAndHolds(nlohmann::ordered_json({
+                  {"role", "user"},
+                  {"content", {{{"type", "text"}, {"text", "test prompt"}}}},
+              })));
 }
 
 TEST_F(Gemma4DataProcessorTest, MessageToTemplateInputWithTextContent) {
@@ -604,7 +614,12 @@ TEST_P(Gemma4RenderTemplateTest, RenderTemplateWithToolDeclarations) {
   nlohmann::ordered_json messages = nlohmann::ordered_json::parse(R"json([
     {
       "role": "user",
-      "content": "How is the weather in Paris and London?"
+      "content": [
+        {
+          "type": "text",
+          "text": "How is the weather in Paris and London?"
+        }
+      ]
     }
   ])json");
 
@@ -920,10 +935,13 @@ TEST_P(Gemma4RenderTemplateTest, RenderTemplateWithMultipleToolMessages) {
       "How is the weather in Paris and London?<turn|>\n"
       "<|turn>model\n"
       "<|tool_call>call:get_weather{location:<|\"|>Paris<|\"|>}<tool_call|>"
-      "<|tool_call>call:get_weather{location:<|\"|>London<|\"|>}<tool_call|><"
-      "turn|>\n"
-      "<turn|>\n"
-      "<|turn>model\n");
+      "<|tool_call>call:get_weather{location:<|\"|>London<|\"|>}<tool_call|>"
+      "<|tool_response>response:get_weather{location:<|\"|>Paris<|\"|>,"
+      "temperature:20,unit:<|\"|>C<|\"|>,weather:<|\"|>Sunny<|\"|>}<tool_"
+      "response|>"
+      "<|tool_response>response:get_weather{location:<|\"|>London<|\"|>,"
+      "temperature:15,unit:<|\"|>C<|\"|>,weather:<|\"|>Cloudy<|\"|>}<tool_"
+      "response|>");
 }
 
 TEST_P(Gemma4RenderTemplateTest,

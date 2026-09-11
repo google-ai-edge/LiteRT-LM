@@ -55,10 +55,6 @@ class GenericDataProcessor
     return tools;
   }
 
-  // Return the same message as the template input for generic models.
-  absl::StatusOr<nlohmann::ordered_json> MessageToTemplateInput(
-      const nlohmann::ordered_json& message) const override;
-
   // Renders a single turn template for the given message and history. Only the
   // prompt template supporting single turn is valid for this method.
   absl::StatusOr<SingleTurnTemplateRenderResult> RenderSingleTurnTemplate(

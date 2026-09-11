@@ -138,7 +138,10 @@ TEST(MiniCpm5DataProcessorTest, TemplateEquivalenceThinkingDisabled) {
   PromptTemplate prompt_template(template_content);
   PromptTemplateInput input{
       .messages = json::array(
-          {{{"role", "user"}, {"content", "What is quantum computing?"}}}),
+          {{{"role", "user"},
+            {"content",
+             json::array({{{"type", "text"},
+                           {"text", "What is quantum computing?"}}})}}}),
       .add_generation_prompt = true,
       .extra_context = json::object({{"enable_thinking", false}}),
   };
@@ -161,7 +164,10 @@ TEST(MiniCpm5DataProcessorTest, TemplateEquivalenceThinkingEnabled) {
   PromptTemplate prompt_template(template_content);
   PromptTemplateInput input{
       .messages = json::array(
-          {{{"role", "user"}, {"content", "What is quantum computing?"}}}),
+          {{{"role", "user"},
+            {"content",
+             json::array({{{"type", "text"},
+                           {"text", "What is quantum computing?"}}})}}}),
       .add_generation_prompt = true,
       .extra_context = json::object({{"enable_thinking", true}}),
   };
@@ -184,7 +190,10 @@ TEST(MiniCpm5DataProcessorTest, TemplateEquivalenceFunctionCalling) {
   PromptTemplate prompt_template(template_content);
   PromptTemplateInput input{
       .messages = json::array(
-          {{{"role", "user"}, {"content", "whats the weather in tokyo?"}}}),
+          {{{"role", "user"},
+            {"content",
+             json::array({{{"type", "text"},
+                           {"text", "whats the weather in tokyo?"}}})}}}),
       .tools = json::array(
           {{{"name", "get_current_weather"}, {"description", "Get weather"}}}),
       .add_generation_prompt = true,
@@ -207,6 +216,26 @@ TEST(MiniCpm5DataProcessorTest, TemplateEquivalenceFunctionCalling) {
               ::testing::HasSubstr("<|im_start|>user\nwhats the weather in "
                                    "tokyo?<|im_end|>"));
   EXPECT_THAT(rendered, ::testing::HasSubstr("<|im_start|>assistant\n"));
+}
+
+TEST(MiniCpm5DataProcessorTest, MessageToTemplateInput) {
+  ASSERT_OK_AND_ASSIGN(auto processor, MiniCpm5DataProcessor::Create(
+                                           MiniCpm5DataProcessorConfig{}));
+
+  // String content is converted to array of parts
+  json string_msg = {{"role", "user"}, {"content", "hello"}};
+  ASSERT_OK_AND_ASSIGN(json result1,
+                       processor->MessageToTemplateInput(string_msg));
+  EXPECT_EQ(result1,
+            json({{"role", "user"},
+                  {"content", {{{"type", "text"}, {"text", "hello"}}}}}));
+
+  // Array content is preserved
+  json array_msg = {{"role", "user"},
+                    {"content", {{{"type", "text"}, {"text", "hello"}}}}};
+  ASSERT_OK_AND_ASSIGN(json result2,
+                       processor->MessageToTemplateInput(array_msg));
+  EXPECT_EQ(result2, array_msg);
 }
 
 }  // namespace
