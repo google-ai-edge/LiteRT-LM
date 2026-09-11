@@ -188,6 +188,11 @@ public struct ConversationConfig {
   public let visualTokenBudget: Int32?
   public let enableSpeculativeDecoding: Bool?
 
+  // An optional Jinja chat template string to override the default template defined in the model
+  // metadata for this conversation. If nil, the conversation uses the template defined in the model
+  // metadata.
+  public let chatTemplate: String?
+
   /// - Parameters:
   ///   - systemMessage: The system message to be used in the conversation.
   ///   - initialMessages: The initial messages to populate the conversation history.
@@ -209,6 +214,9 @@ public struct ConversationConfig {
   ///       initialization of the speculative decoding drafter (e.g. MTP) on first use.
   ///     - If `false`: Explicitly disables speculative decoding for this conversation even if the engine
   ///       was initialized with speculative decoding enabled.
+  ///   - chatTemplate: An optional Jinja chat template string to override the default template defined
+  ///     in the model metadata for this conversation. If nil, the conversation uses the template
+  ///     defined in the model metadata.
   public init(
     systemMessage: Message? = nil,
     initialMessages: [Message] = [],
@@ -221,7 +229,8 @@ public struct ConversationConfig {
     automaticToolCalling: Bool = true,
     enableResponseFormat: Bool = false,
     visualTokenBudget: Int32? = nil,
-    enableSpeculativeDecoding: Bool? = nil
+    enableSpeculativeDecoding: Bool? = nil,
+    chatTemplate: String? = nil
   ) {
     self.systemMessage = systemMessage.flatMap { msg in
       if msg.toString.isEmpty {
@@ -241,6 +250,7 @@ public struct ConversationConfig {
     self.enableResponseFormat = enableResponseFormat
     self.visualTokenBudget = visualTokenBudget
     self.enableSpeculativeDecoding = enableSpeculativeDecoding
+    self.chatTemplate = chatTemplate
   }
 }
 
