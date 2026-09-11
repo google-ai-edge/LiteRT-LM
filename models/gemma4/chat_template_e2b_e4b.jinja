@@ -109,19 +109,15 @@
 {%- endmacro -%}
 
 {%- macro format_content(content) -%}
-    {%- if content is string -%}
-        {{- content | trim -}}
-    {%- elif content is sequence -%}
-        {%- for item in content -%}
-            {%- if item['type'] == 'text' -%}
-                {{- item['text'] | trim -}}
-            {%- elif item['type'] == 'image' -%}
-                {{- '\n\n<|image|>\n\n' -}}
-            {%- elif item['type'] == 'audio' -%}
-                {{- '<|audio|>' -}}
-            {%- endif -%}
-        {%- endfor -%}
-    {%- endif -%}
+    {%- for item in content -%}
+        {%- if item['type'] == 'text' -%}
+            {{- item['text'] | trim -}}
+        {%- elif item['type'] == 'image' -%}
+            {{- '\n\n<|image|>\n\n' -}}
+        {%- elif item['type'] == 'audio' -%}
+            {{- '<|audio|>' -}}
+        {%- endif -%}
+    {%- endfor -%}
 {%- endmacro -%}
 
 {%- set thinking = enable_thinking | default(false) -%}
@@ -170,7 +166,7 @@
         {%- set ns.prev_message_type = 'tool_call' -%}
     {%- endif -%}
 
-    {%- if role == 'tool' and message['content'] is sequence -%}
+    {%- if role == 'tool' -%}
         {#- Tool Response handling -#}
         {%- for item in message['content'] -%}
             {{- '<|tool_response>response:' + item['name'] | default('unknown') -}}

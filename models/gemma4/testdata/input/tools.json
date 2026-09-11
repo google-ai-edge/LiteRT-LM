@@ -23,11 +23,21 @@
   "messages": [
     {
       "role": "system",
-      "content": "You are a helpful assistant."
+      "content": [
+        {
+          "type": "text",
+          "text": "You are a helpful assistant."
+        }
+      ]
     },
     {
       "role": "user",
-      "content": "What is the weather in London and Paris?"
+      "content": [
+        {
+          "type": "text",
+          "text": "What is the weather in London and Paris?"
+        }
+      ]
     },
     {
       "role": "assistant",
@@ -47,6 +57,7 @@
       "role": "tool",
       "content": [
         {
+          "type": "tool_response",
           "name": "get_weather",
           "response": {
             "location": "London",
@@ -73,6 +84,7 @@
       "role": "tool",
       "content": [
         {
+          "type": "tool_response",
           "name": "get_weather",
           "response": {
             "location": "Paris",
@@ -83,11 +95,21 @@
     },
     {
       "role": "assistant",
-      "content": "18C and 22C."
+      "content": [
+        {
+          "type": "text",
+          "text": "18C and 22C."
+        }
+      ]
     },
     {
       "role": "user",
-      "content": "Thanks!"
+      "content": [
+        {
+          "type": "text",
+          "text": "Thanks!"
+        }
+      ]
     }
   ],
   "add_generation_prompt": true

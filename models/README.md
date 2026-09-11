@@ -58,28 +58,30 @@ The `role` string specifies the author of the turn:
 
 ### Content Types
 
-The `content` field can be either:
+The `content` field is strictly a **list of multimodal parts**. Plain text
+prompts are wrapped in a text part object:
 
-1.  **Plain text string**:
+```json
+{
+  "role": "user",
+  "content": [
+    {"type": "text", "text": "What is the capital of France?"}
+  ]
+}
+```
 
-    ```json
-    {
-      "role": "user",
-      "content": "What is the capital of France?"
-    }
-    ```
+Multimodal prompts with images, audio, or video include the corresponding part
+objects alongside text parts:
 
-2.  **List of multimodal parts**:
-
-    ```json
-    {
-      "role": "user",
-      "content": [
-        {"type": "text", "text": "What is in this image?"},
-        {"type": "image"}
-      ]
-    }
-    ```
+```json
+{
+  "role": "user",
+  "content": [
+    {"type": "text", "text": "What is in this image?"},
+    {"type": "image"}
+  ]
+}
+```
 
 ### Tool Calls
 
@@ -101,6 +103,30 @@ includes a `tool_calls` list:
 }
 ```
 
+When multiple tool calls are invoked in parallel within a single turn:
+
+```json
+{
+  "role": "assistant",
+  "tool_calls": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "arguments": {"location": "San Francisco, CA"}
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_time",
+        "arguments": {"location": "San Francisco, CA"}
+      }
+    }
+  ]
+}
+```
+
 > **Note**: `arguments` can be provided either as a JSON object or as a
 > serialized JSON string. When `tool_calls` is present, `content` is optional
 > and may be omitted or empty.
@@ -113,7 +139,6 @@ When a function executes, its result is supplied as a message with `role:
 ```json
 {
   "role": "tool",
-  "name": "get_weather",
   "content": [
     {
       "type": "tool_response",
@@ -124,13 +149,24 @@ When a function executes, its result is supplied as a message with `role:
 }
 ```
 
-Or as a plain text / stringified JSON content:
+When multiple tool calls are executed, their responses are bundled into a single
+message with multiple `tool_response` items in `content`:
 
 ```json
 {
   "role": "tool",
-  "name": "get_weather",
-  "content": "{\"temperature\": \"18C\", \"condition\": \"Sunny\"}"
+  "content": [
+    {
+      "type": "tool_response",
+      "name": "get_weather",
+      "response": {"temperature": "18C", "condition": "Sunny"}
+    },
+    {
+      "type": "tool_response",
+      "name": "get_time",
+      "response": {"time": "14:30"}
+    }
+  ]
 }
 ```
 
@@ -233,15 +269,21 @@ filter:
   "messages": [
     {
       "role": "system",
-      "content": "You are a concise, helpful assistant."
+      "content": [
+        {"type": "text", "text": "You are a concise, helpful assistant."}
+      ]
     },
     {
       "role": "user",
-      "content": "Hello!"
+      "content": [
+        {"type": "text", "text": "Hello!"}
+      ]
     },
     {
       "role": "assistant",
-      "content": "Hi! How can I help you today?"
+      "content": [
+        {"type": "text", "text": "Hi! How can I help you today?"}
+      ]
     }
   ],
   "add_generation_prompt": true
@@ -288,7 +330,9 @@ filter:
   "messages": [
     {
       "role": "user",
-      "content": "What is the price of GOOG?"
+      "content": [
+        {"type": "text", "text": "What is the price of GOOG?"}
+      ]
     },
     {
       "role": "assistant",
@@ -304,12 +348,77 @@ filter:
     },
     {
       "role": "tool",
-      "name": "lookup_stock",
       "content": [
         {
           "type": "tool_response",
           "name": "lookup_stock",
           "response": {"price": "180.50", "currency": "USD"}
+        }
+      ]
+    }
+  ],
+  "add_generation_prompt": true
+}
+```
+
+### Parallel Tool Calling Turn
+
+```json
+{
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "description": "Get current weather for a location.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "location": {"type": "string", "description": "City name"}
+          },
+          "required": ["location"]
+        }
+      }
+    }
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {"type": "text", "text": "What is the weather in London and Paris?"}
+      ]
+    },
+    {
+      "role": "assistant",
+      "tool_calls": [
+        {
+          "type": "function",
+          "function": {
+            "name": "get_weather",
+            "arguments": {"location": "London"}
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "get_weather",
+            "arguments": {"location": "Paris"}
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": [
+        {
+          "type": "tool_response",
+          "name": "get_weather",
+          "response": {"location": "London", "temperature": "18C"}
+        },
+        {
+          "type": "tool_response",
+          "name": "get_weather",
+          "response": {"location": "Paris", "temperature": "22C"}
         }
       ]
     }

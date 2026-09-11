@@ -23,7 +23,12 @@
   "messages": [
     {
       "role": "user",
-      "content": "What is the weather in London and Paris?"
+      "content": [
+        {
+          "type": "text",
+          "text": "What is the weather in London and Paris?"
+        }
+      ]
     },
     {
       "role": "assistant",
@@ -41,7 +46,16 @@
     },
     {
       "role": "tool",
-      "content": "{\"location\": \"London\", \"temperature\": \"18C\"}"
+      "content": [
+        {
+          "type": "tool_response",
+          "name": "get_weather",
+          "response": {
+            "location": "London",
+            "temperature": "18C"
+          }
+        }
+      ]
     },
     {
       "role": "assistant",
@@ -59,9 +73,19 @@
     },
     {
       "role": "tool",
-      "content": "{\"location\": \"Paris\", \"temperature\": \"22C\"}"
+      "content": [
+        {
+          "type": "tool_response",
+          "name": "get_weather",
+          "response": {
+            "location": "Paris",
+            "temperature": "22C"
+          }
+        }
+      ]
     }
   ],
   "add_generation_prompt": true,
   "bos_token": "<|startoftext|>"
 }
+

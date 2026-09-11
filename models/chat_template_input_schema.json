@@ -20,52 +20,45 @@
             "description": "The name of the author or tool."
           },
           "content": {
-            "description": "The content of the message. Can be a string or an array of content parts.",
-            "oneOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "array",
-                "items": {
-                  "anyOf": [
-                    {
-                      "type": "object",
-                      "description": "A standard multi-modal content part.",
-                      "properties": {
-                        "type": {
-                          "type": "string",
-                          "enum": ["text", "image", "audio", "video"]
-                        },
-                        "text": {
-                          "type": "string",
-                          "description": "The text content. Required if type is 'text'."
-                        }
-                      },
-                      "required": ["type"]
+            "type": "array",
+            "description": "The content of the message as a list of multimodal parts.",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "description": "A standard multi-modal content part.",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "enum": ["text", "image", "audio", "video"]
                     },
-                    {
-                      "type": "object",
-                      "description": "A tool response part (only valid if role is 'tool').",
-                      "properties": {
-                        "type": {
-                          "type": "string",
-                          "enum": ["tool_response"]
-                        },
-                        "name": {
-                          "type": "string",
-                          "description": "The name of the tool."
-                        },
-                        "response": {
-                          "description": "The response payload returned by the tool."
-                        }
-                      },
-                      "required": ["type", "name", "response"]
+                    "text": {
+                      "type": "string",
+                      "description": "The text content. Required if type is 'text'."
                     }
-                  ]
+                  },
+                  "required": ["type"]
+                },
+                {
+                  "type": "object",
+                  "description": "A tool response part (only valid if role is 'tool').",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "enum": ["tool_response"]
+                    },
+                    "name": {
+                      "type": "string",
+                      "description": "The name of the tool."
+                    },
+                    "response": {
+                      "description": "The response payload returned by the tool."
+                    }
+                  },
+                  "required": ["type", "name", "response"]
                 }
-              }
-            ]
+              ]
+            }
           },
           "tool_calls": {
             "type": "array",

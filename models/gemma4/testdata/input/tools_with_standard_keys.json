@@ -44,7 +44,12 @@
   "messages": [
     {
       "role": "user",
-      "content": "Create a string field called username."
+      "content": [
+        {
+          "type": "text",
+          "text": "Create a string field called username."
+        }
+      ]
     },
     {
       "role": "assistant",
@@ -67,6 +72,7 @@
       "role": "tool",
       "content": [
         {
+          "type": "tool_response",
           "name": "create_schema_field",
           "response": {
             "status": "success"

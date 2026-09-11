@@ -1,13 +1,15 @@
 {%- macro format_content(content) -%}
-    {%- if content is string -%}
-        {{- content -}}
-    {%- elif content is sequence -%}
-        {%- for item in content -%}
-            {%- if item['type'] == 'text' -%}
-                {{- item['text'] -}}
+    {%- for item in content -%}
+        {%- if item['type'] == 'text' -%}
+            {{- item['text'] -}}
+        {%- elif item['type'] == 'tool_response' -%}
+            {%- if item['response'] is mapping or item['response'] is sequence -%}
+                {{- item['response'] | tojson -}}
+            {%- else -%}
+                {{- item['response'] | string -}}
             {%- endif -%}
-        {%- endfor -%}
-    {%- endif -%}
+        {%- endif -%}
+    {%- endfor -%}
 {%- endmacro -%}
 
 {%- set loop_messages = messages[1:] if messages[0]['role'] == 'system' else messages -%}
