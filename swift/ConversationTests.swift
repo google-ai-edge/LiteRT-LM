@@ -50,6 +50,14 @@ class ConversationTests: XCTestCase {
     XCTAssertTrue(conversation.isAlive)
   }
 
+  func testConversationConfigChatTemplate() {
+    let defaultConfig = ConversationConfig()
+    XCTAssertNil(defaultConfig.chatTemplate)
+
+    let customConfig = ConversationConfig(chatTemplate: "custom_template")
+    XCTAssertEqual(customConfig.chatTemplate, "custom_template")
+  }
+
   func testConversationConfigSystemMessageSerialization() throws {
     let config = ConversationConfig(
       systemMessage: Message("Talk like a pirate", role: .system))
@@ -298,6 +306,25 @@ class ConversationTests: XCTestCase {
     let rendered = try conversation.renderMessageIntoString(Message("Hello world", role: .user))
     XCTAssertFalse(rendered.isEmpty)
     XCTAssertTrue(rendered.contains("Hello world"))
+  }
+
+  func testCreateConversationWithChatTemplate() async throws {
+    let template = """
+      {%- for message in messages -%}
+        {{- '<start_of_turn>' + message.role + '\n' -}}
+        {%- if message.content is string -%}
+          {{- message.content + '<end_of_turn>\n' -}}
+        {%- else -%}
+          {{- message.content[0].text + '<end_of_turn>\n' -}}
+        {%- endif -%}
+      {%- endfor -%}
+      """
+    let config = ConversationConfig(chatTemplate: template)
+    let conversation = try await self.engine.createConversation(with: config)
+    XCTAssertTrue(conversation.isAlive)
+
+    let rendered = try conversation.renderMessageIntoString(Message("How are you", role: .user))
+    XCTAssertEqual(rendered, "<start_of_turn>user\nHow are you<end_of_turn>\n")
   }
 
   func testRenderPrefaceIntoString() async throws {
