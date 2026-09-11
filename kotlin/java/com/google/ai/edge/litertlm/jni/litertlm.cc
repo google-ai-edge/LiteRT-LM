@@ -1813,6 +1813,11 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateEmbeddingEngine)(
         audio_npu_native_library_dir_str);
   }
 
+  if (main_backend_num_threads > 0) {
+    settings->GetMutableMainExecutorSettings().SetNumThreads(
+        main_backend_num_threads);
+  }
+
   if (audio_backend_optional.has_value() && audio_backend_num_threads > 0 &&
       settings->GetAudioExecutorSettings().has_value()) {
     settings->GetMutableAudioExecutorSettings()->SetNumThreads(
