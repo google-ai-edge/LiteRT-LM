@@ -410,6 +410,18 @@ TEST_P(ExecutionManagerTest, EncodeAudioWithSessionInfo) {
   EXPECT_TRUE(fake_audio_executor_ptr->flush_called_);
 }
 
+TEST_P(ExecutionManagerTest, GetEnvironmentReturnsValidEnvironment) {
+  auto fake_llm_executor = CreateDefaultFakeLlmExecutor();
+  CreateExecutionManager(std::move(fake_llm_executor));
+
+  ASSERT_OK_AND_ASSIGN(const auto* env1, execution_manager_->GetEnvironment());
+  EXPECT_NE(env1, nullptr);
+
+  // Verify idempotence across repeated calls.
+  ASSERT_OK_AND_ASSIGN(const auto* env2, execution_manager_->GetEnvironment());
+  EXPECT_EQ(env1, env2);
+}
+
 TEST_P(ExecutionManagerTest, EncodeAudioWithNonStreamingAudioExecutor) {
   auto fake_llm_executor = CreateDefaultFakeLlmExecutor();
 

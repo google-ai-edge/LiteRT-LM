@@ -29,6 +29,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
+#include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/constrained_decoding/constraint.h"
 #include "runtime/components/constrained_decoding/no_repeat_ngram_config.h"
@@ -283,6 +284,13 @@ class ExecutionManager {
   // Returns the vision executor properties.
   virtual absl::StatusOr<VisionExecutorProperties> GetVisionExecutorProperties()
       const = 0;
+
+  // Returns the LiteRT environment managed by this execution manager.
+  // The returned pointer is non-owning and guaranteed valid for the lifetime
+  // of this execution manager.
+  virtual absl::StatusOr<const ::litert::Environment*> GetEnvironment() const {
+    return absl::UnimplementedError("GetEnvironment is not implemented.");
+  }
 };
 
 }  // namespace litert::lm
