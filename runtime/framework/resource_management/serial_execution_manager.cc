@@ -1255,4 +1255,15 @@ SerialExecutionManager::GetVisionExecutorProperties() const {
   return resource_manager_->GetVisionExecutorProperties();
 }
 
+absl::StatusOr<const ::litert::Environment*>
+SerialExecutionManager::GetEnvironment() const {
+  if (resource_manager_ != nullptr) {
+    return resource_manager_->GetEnvironment();
+  }
+  if (litert_env_ != nullptr) {
+    return litert_env_;
+  }
+  return absl::NotFoundError("LiteRT environment is not available.");
+}
+
 }  // namespace litert::lm
