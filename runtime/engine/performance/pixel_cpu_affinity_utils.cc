@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "runtime/engine/cpu_affinity_utils.h"
+#include "runtime/engine/performance/pixel_cpu_affinity_utils.h"
 
 #if defined(__ANDROID__)
 #include <sched.h>
@@ -100,7 +100,7 @@ std::vector<int> GetPixelPerformanceCores() {
   return {};
 }
 
-absl::Status SetCpuAffinity(const std::vector<int>& cpu_affinity_cores) {
+absl::Status SetPixelCpuAffinity(const std::vector<int>& cpu_affinity_cores) {
   if (cpu_affinity_cores.empty()) {
     ABSL_LOG(WARNING) << "CPU affinity cores are empty, skipping CPU affinity "
                          "setting.";
@@ -127,7 +127,7 @@ bool IsPixelTensorDevice() { return false; }
 
 std::vector<int> GetPixelPerformanceCores() { return {}; }
 
-absl::Status SetCpuAffinity(const std::vector<int>& cpu_affinity_cores) {
+absl::Status SetPixelCpuAffinity(const std::vector<int>& cpu_affinity_cores) {
   return absl::OkStatus();
 }
 #endif  // defined(__ANDROID__)
