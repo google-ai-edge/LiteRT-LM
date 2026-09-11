@@ -38,6 +38,7 @@ constructor(
   val modelFd: Int? = null,
   val maxInputLength: Int? = null,
   val visionTokensPerImage: Int? = null,
+  val activationDataType: ActivationDataType? = null,
 ) {
   init {
     val hasPath = !modelPath.isNullOrEmpty()

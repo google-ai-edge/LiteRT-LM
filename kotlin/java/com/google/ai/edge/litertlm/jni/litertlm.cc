@@ -114,6 +114,23 @@ void ThrowLiteRtLmJniException(JNIEnv* env, const std::string& message) {
   }
 }
 
+absl::StatusOr<litert::lm::ActivationDataType> ConvertActivationDataType(
+    jint activation_data_type) {
+  switch (activation_data_type) {
+    case 0:
+      return litert::lm::ActivationDataType::FLOAT32;
+    case 1:
+      return litert::lm::ActivationDataType::FLOAT16;
+    case 2:
+      return litert::lm::ActivationDataType::INT16;
+    case 3:
+      return litert::lm::ActivationDataType::INT8;
+    default:
+      return absl::InvalidArgumentError(absl::StrCat(
+          "Unsupported activation data type: ", activation_data_type));
+  }
+}
+
 // Helper function to convert BenchmarkInfo to Java object
 jobject CreateBenchmarkInfoJni(
     JNIEnv* env, const litert::lm::BenchmarkInfo& benchmark_info) {
@@ -1613,7 +1630,8 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateEmbeddingEngine)(
     jstring cache_dir, jstring main_npu_native_library_dir,
     jstring vision_npu_native_library_dir, jstring audio_npu_native_library_dir,
     jint main_backend_num_threads, jint audio_backend_num_threads,
-    jint max_input_length, jint vision_tokens_per_image) {
+    jint max_input_length, jint vision_tokens_per_image,
+    jint activation_data_type) {
   ::litert::ScopedFile scoped_file;
   absl::StatusOr<litert::lm::ModelAssets> model_assets;
 
@@ -1806,6 +1824,24 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateEmbeddingEngine)(
   }
   if (vision_tokens_per_image > 0) {
     settings->SetVisionTokensPerImage(vision_tokens_per_image);
+  }
+
+  if (activation_data_type >= 0) {
+    auto data_type = ConvertActivationDataType(activation_data_type);
+    if (!data_type.ok()) {
+      ThrowLiteRtLmJniException(env, data_type.status().ToString());
+      return 0;
+    }
+    settings->GetMutableMainExecutorSettings().SetActivationDataType(
+        *data_type);
+    if (settings->GetMutableVisionExecutorSettings().has_value()) {
+      settings->GetMutableVisionExecutorSettings()->SetActivationDataType(
+          *data_type);
+    }
+    if (settings->GetMutableAudioExecutorSettings().has_value()) {
+      settings->GetMutableAudioExecutorSettings()->SetActivationDataType(
+          *data_type);
+    }
   }
 
   auto owned_env = litert::lm::CreateEnvironment(*settings, (*resources).get());

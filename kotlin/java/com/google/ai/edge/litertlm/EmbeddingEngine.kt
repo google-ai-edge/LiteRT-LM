@@ -71,6 +71,7 @@ class EmbeddingEngine(val config: EmbeddingEngineConfig) : AutoCloseable {
           audioBackendNumThreads,
           config.maxInputLength ?: -1,
           config.visionTokensPerImage ?: -1,
+          config.activationDataType?.value ?: -1,
         )
     }
   }

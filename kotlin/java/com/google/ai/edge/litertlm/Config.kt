@@ -160,6 +160,14 @@ sealed class Backend(val name: String) {
   class GOOGLE_TENSOR : Backend("GOOGLE_TENSOR_ARTISAN")
 }
 
+/** Activation data type for inference. */
+enum class ActivationDataType(val value: Int) {
+  FLOAT32(0),
+  FLOAT16(1),
+  INT16(2),
+  INT8(3),
+}
+
 /**
  * Configuration for the LiteRT-LM engine.
  *

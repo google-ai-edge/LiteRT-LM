@@ -542,6 +542,7 @@ internal object LiteRtLmJni {
     audioBackendNumThreads: Int,
     maxInputLength: Int,
     visionTokensPerImage: Int,
+    activationDataType: Int = -1,
   ): Long
 
   /** Deletes the LiteRT-LM embedding engine. */
