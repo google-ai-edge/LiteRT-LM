@@ -134,5 +134,27 @@ TEST(StopTokenDetectorTest, ResetBatch) {
   EXPECT_EQ(0, detector.GetStepsBeforeStopTokens()[0]);
 }
 
+TEST(StopTokenDetectorTest, ProcessTokensSelfOverlap) {
+  StopTokenDetector detector(1);
+  EXPECT_OK(detector.AddStopTokenSequence({1, 1, 2}));
+
+  std::vector<int> tokens = {1, 1, 1, 2};
+
+  size_t i;
+  for (i = 0; i < tokens.size(); ++i) {
+    std::vector<int> current_batch_tokens = {tokens[i]};
+    EXPECT_OK(detector.ProcessTokens(absl::MakeSpan(current_batch_tokens)));
+    auto all_done = detector.AllDone();
+    ASSERT_OK(all_done.status());
+    if (*all_done) {
+      break;
+    }
+  }
+  EXPECT_EQ(i, 3);
+  auto final_all_done = detector.AllDone();
+  ASSERT_OK(final_all_done.status());
+  EXPECT_TRUE(*final_all_done);
+}
+
 }  // namespace
 }  // namespace litert::lm
