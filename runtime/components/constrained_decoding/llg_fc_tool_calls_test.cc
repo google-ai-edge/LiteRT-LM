@@ -31,6 +31,7 @@
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "runtime/components/constrained_decoding/bitmap.h"
 #include "runtime/components/constrained_decoding/constraint.h"
+#include "runtime/components/constrained_decoding/constraint_provider.h"
 #include "runtime/components/constrained_decoding/llg_constraint_config.h"
 #include "runtime/components/constrained_decoding/llg_constraint_provider.h"
 #include "runtime/components/constrained_decoding/llguidance_schema_utils.h"
@@ -95,20 +96,33 @@ class TestSentencePieceTokenizer : public Tokenizer {
 
 class LlgFcToolCallsTest : public testing::Test {
  protected:
-  void SetUp() override {
+  static void SetUpTestSuite() {
     ASSERT_OK_AND_ASSIGN(
         auto tokenizer,
         ::litert::support::SentencePieceTokenizer::CreateFromFile(
             GetTestdataPath("gemma4_sentencepiece.model")));
-    tokenizer_ =
-        std::make_unique<TestSentencePieceTokenizer>(std::move(tokenizer));
+    tokenizer_ = new TestSentencePieceTokenizer(std::move(tokenizer));
+    ASSERT_OK_AND_ASSIGN(
+        auto provider, LlgConstraintProvider::Create(*tokenizer_, GetConfig()));
+    provider_ = provider.release();
   }
 
-  std::unique_ptr<TestSentencePieceTokenizer> tokenizer_;
-  LlGuidanceConfig config_{
-      .eos_id = 1,
-      .special_tokens = {"<|tool_call>", "<tool_call|>", "<|tool_response>",
-                         "<tool_response|>", "<|\"|>"}};
+  static void TearDownTestSuite() {
+    delete provider_;
+    provider_ = nullptr;
+    delete tokenizer_;
+    tokenizer_ = nullptr;
+  }
+
+  static const LlGuidanceConfig& GetConfig() {
+    static const auto* const config = new LlGuidanceConfig{
+        .eos_id = 1,
+        .special_tokens = {"<|tool_call>", "<tool_call|>", "<|tool_response>",
+                           "<tool_response|>", "<|\"|>"}};
+    return *config;
+  }
+  static inline TestSentencePieceTokenizer* tokenizer_ = nullptr;
+  static inline ConstraintProvider* provider_ = nullptr;
 
   LlgConstraintsOptions GetDefaultFcOptions(LlgConstraintMode mode) {
     LlgConstraintsOptions options;
@@ -139,26 +153,26 @@ class LlgFcToolCallsTest : public testing::Test {
       ABSL_ASSIGN_OR_RETURN(state, constraint.ComputeNext(*state, id));
     }
     ABSL_ASSIGN_OR_RETURN(auto final_bitmap, constraint.ComputeBitmap(*state));
-    return final_bitmap->Get(*config_.eos_id);
+    return final_bitmap->Get(*GetConfig().eos_id);
   }
 
   void AssertAccepts(Constraint& constraint, absl::string_view text) {
-    auto accepts_or = AcceptsInternal(constraint, text);
-    if (!accepts_or.ok()) {
+    auto accepts = AcceptsInternal(constraint, text);
+    if (!accepts.ok()) {
       ADD_FAILURE() << "AcceptsInternal failed for text: \"" << text
-                    << "\"\nStatus: " << accepts_or.status();
+                    << "\"\nStatus: " << accepts.status();
       return;
     }
-    if (!*accepts_or) {
+    if (!*accepts) {
       ADD_FAILURE() << "Constraint failed to ACCEPT text: \""
                     << absl::Utf8SafeCEscape(text) << "\"";
     }
   }
 
   void AssertRejects(Constraint& constraint, absl::string_view text) {
-    auto accepts_or = AcceptsInternal(constraint, text);
-    if (!accepts_or.ok() || !*accepts_or) return;
-    if (*accepts_or) {
+    auto accepts = AcceptsInternal(constraint, text);
+    if (!accepts.ok() || !*accepts) return;
+    if (*accepts) {
       ADD_FAILURE() << "Constraint failed to REJECT text: \""
                     << absl::Utf8SafeCEscape(text) << "\"";
     }
@@ -167,28 +181,23 @@ class LlgFcToolCallsTest : public testing::Test {
   std::unique_ptr<Constraint> CreateConstraint(
       const nlohmann::ordered_json& tools,
       const LlgConstraintsOptions& options) {
-    auto provider_status_or =
-        LlgConstraintProvider::Create(*tokenizer_, config_);
-    if (!provider_status_or.ok()) {
-      ADD_FAILURE() << "Failed to create provider: "
-                    << provider_status_or.status();
+    if (!provider_) {
+      ADD_FAILURE() << "Constraint provider is not initialized.";
       return nullptr;
     }
-    auto provider = std::move(*provider_status_or);
 
     auto res = CreateLarkGrammarForFcToolCalls(tools, options);
     EXPECT_OK(res);
     if (!res.ok()) return nullptr;
 
-    auto constraint_status_or = provider->CreateConstraint(
+    auto constraint = provider_->CreateConstraint(
         LlGuidanceConstraintArg{.constraint_type = LlgConstraintType::kLark,
                                 .constraint_string = *res});
-    if (!constraint_status_or.ok()) {
-      ADD_FAILURE() << "Failed to create constraint: "
-                    << constraint_status_or.status();
+    if (!constraint.ok()) {
+      ADD_FAILURE() << "Failed to create constraint: " << constraint.status();
       return nullptr;
     }
-    return std::move(*constraint_status_or);
+    return std::move(*constraint);
   }
 };
 
