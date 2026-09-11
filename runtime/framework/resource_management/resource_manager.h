@@ -157,9 +157,16 @@ class ResourceManager {
       const LlmExecutorSettings& executor_settings)
       ABSL_LOCKS_EXCLUDED(executor_mutex_);
 
+  // Returns the LiteRT environment. If not provided at construction, creates
+  // a backup environment lazily.
+  // The returned pointer is non-owning and guaranteed valid for the lifetime
+  // of this resource manager.
+  absl::StatusOr<const ::litert::Environment*> GetEnvironment() const;
+
  private:
   // Creates the litert environment if it is not created yet.
-  absl::Status MaybeCreateLitertEnv();
+  absl::Status MaybeCreateLitertEnvLocked() const
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(env_mutex_);
 
   // Guards the llm_executor_.
   absl::Mutex executor_mutex_;
@@ -193,14 +200,19 @@ class ResourceManager {
   // The audio executor options, needed for loading the audio executor.
   std::unique_ptr<AudioExecutorSettings> audio_executor_settings_;
 
+  // Guards the litert environment and backup litert environment.
+  mutable absl::Mutex env_mutex_;
+
   // The potential litert compiled model environment for the vision and audio
   // executor.
-  ::litert::Environment* absl_nullable litert_env_;
+  mutable ::litert::Environment* absl_nullable litert_env_
+      ABSL_GUARDED_BY(env_mutex_);
 
   // The backup litert compiled model environment for the vision and audio
   // executor, created if litert_env is not provided when resource manager is
   // created.
-  std::unique_ptr<::litert::Environment> backup_litert_env_;
+  mutable std::unique_ptr<::litert::Environment> backup_litert_env_
+      ABSL_GUARDED_BY(env_mutex_);
 
   // The llm executor settings.
   std::optional<LlmExecutorSettings> llm_executor_settings_;

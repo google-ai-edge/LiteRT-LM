@@ -18,6 +18,7 @@
 #include <atomic>
 #include <memory>
 #include <optional>
+#include <vector>
 
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/base/thread_annotations.h"  // from @com_google_absl
@@ -25,6 +26,7 @@
 #include "absl/functional/any_invocable.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/core/session_advanced.h"
 #include "runtime/engine/engine.h"
@@ -60,12 +62,26 @@ class AudioSessionAdvanced : public SessionAdvanced {
   absl::StatusOr<ExecutorAudioData> EncodeAudio(
       const TensorBuffer& spectrogram_tensor) ABSL_LOCKS_EXCLUDED(mutex_);
 
+  // Synchronously encodes a sequence of audio spectrogram tensors into audio
+  // soft tokens within the context of this session.
+  absl::StatusOr<std::vector<ExecutorAudioData>> EncodeAudio(
+      absl::Span<const TensorBuffer> spectrogram_tensors)
+      ABSL_LOCKS_EXCLUDED(mutex_);
+
   // Resets the streaming audio encoder state for this session.
   absl::Status ResetAudio() ABSL_LOCKS_EXCLUDED(mutex_);
 
   // Flushes remaining buffered audio frames from the streaming audio encoder
   // for this session.
   absl::StatusOr<ExecutorAudioData> FlushAudio() ABSL_LOCKS_EXCLUDED(mutex_);
+
+  using SessionAdvanced::RunPrefill;
+
+  // Prefills audio embeddings from ExecutorAudioData into this session.
+  // Adapts/slices the underlying embeddings tensor to match valid_tokens,
+  // preventing padded tokens from leaking into the session prompt.
+  absl::Status RunPrefill(const ExecutorAudioData& audio_data)
+      ABSL_LOCKS_EXCLUDED(mutex_);
 
  protected:
   absl::StatusOr<std::unique_ptr<SessionInterface>> CloneAsyncLocked(

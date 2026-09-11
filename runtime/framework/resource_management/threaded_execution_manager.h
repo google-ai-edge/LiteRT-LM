@@ -264,6 +264,9 @@ class ThreadedExecutionManager : public ExecutionManager {
   absl::StatusOr<VisionExecutorProperties> GetVisionExecutorProperties()
       const override;
 
+  // Returns the LiteRT environment managed by this execution manager.
+  absl::StatusOr<const ::litert::Environment*> GetEnvironment() const override;
+
  private:
   ThreadedExecutionManager(
       Tokenizer* absl_nonnull tokenizer,

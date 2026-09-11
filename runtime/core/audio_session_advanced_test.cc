@@ -154,6 +154,33 @@ class AudioSessionAdvancedTest : public ::testing::Test {
     config.SetEnableAudioSessionAdvanced(true);
     return config;
   }
+
+  absl::StatusOr<std::shared_ptr<ThreadedExecutionManager>>
+  CreateAudioExecutionManager(const std::vector<float>& expected_embeddings,
+                              const std::vector<int>& expected_tokens) {
+    auto fake_llm_executor = std::make_unique<FakeLlmExecutor>(
+        kVocabSize, std::vector<std::vector<int>>{expected_tokens},
+        std::vector<std::vector<int>>{{4}, {5}, {6}},
+        /*batch_size=*/1,
+        /*projected_audio_embedding=*/expected_embeddings);
+    ABSL_ASSIGN_OR_RETURN(auto* settings,
+                          fake_llm_executor->GetMutableExecutorSettings());
+    EXPECT_OK(settings->SetBackend(Backend::GPU_ARTISAN));
+
+    ABSL_ASSIGN_OR_RETURN(auto model_assets,
+                          ModelAssets::Create("test_model_path_audio"));
+    ABSL_ASSIGN_OR_RETURN(auto audio_settings,
+                          AudioExecutorSettings::CreateDefault(
+                              model_assets, 128, Backend::GPU_ARTISAN));
+    auto fake_audio_executor = std::make_unique<FakeAudioExecutor>();
+
+    return ThreadedExecutionManager::Create(
+        tokenizer_.get(), /*model_resources=*/nullptr,
+        std::move(fake_llm_executor),
+        /*vision_executor_settings=*/nullptr,
+        std::make_unique<AudioExecutorSettings>(std::move(audio_settings)),
+        /*litert_env=*/nullptr, std::move(fake_audio_executor));
+  }
 };
 
 TEST_F(AudioSessionAdvancedTest, FromSessionNullptrReturnsError) {
@@ -200,6 +227,30 @@ TEST_F(AudioSessionAdvancedTest, EncodeAudioSucceeds) {
 
   ASSERT_OK_AND_ASSIGN(auto audio_data, audio_session->EncodeAudio(*tensor_or));
   EXPECT_EQ(audio_data.GetValidTokens(), kValidTokensInAudioData);
+}
+
+TEST_F(AudioSessionAdvancedTest, EncodeAudioMultipleChunksSucceeds) {
+  SessionConfig config = CreateAudioSessionConfig();
+  ASSERT_OK_AND_ASSIGN(
+      auto audio_session,
+      AudioSessionAdvanced::Create(execution_manager_, tokenizer_.get(), config,
+                                   /*benchmark_info=*/std::nullopt));
+
+  const std::vector<float> kSpectrogramData1 = {1.0f, 2.0f, 3.0f, 4.0f};
+  const std::vector<float> kSpectrogramData2 = {5.0f, 6.0f, 7.0f, 8.0f};
+  auto tensor_or1 = CopyToTensorBuffer<float>(kSpectrogramData1, {1, 4});
+  auto tensor_or2 = CopyToTensorBuffer<float>(kSpectrogramData2, {1, 4});
+  ASSERT_TRUE(tensor_or1.HasValue());
+  ASSERT_TRUE(tensor_or2.HasValue());
+
+  std::vector<litert::TensorBuffer> chunks;
+  chunks.push_back(std::move(*tensor_or1));
+  chunks.push_back(std::move(*tensor_or2));
+
+  ASSERT_OK_AND_ASSIGN(auto audio_datas, audio_session->EncodeAudio(chunks));
+  ASSERT_EQ(audio_datas.size(), 2);
+  EXPECT_EQ(audio_datas[0].GetValidTokens(), kValidTokensInAudioData);
+  EXPECT_EQ(audio_datas[1].GetValidTokens(), kValidTokensInAudioData);
 }
 
 TEST_F(AudioSessionAdvancedTest, ResetAudioSucceeds) {
@@ -257,6 +308,131 @@ TEST_F(AudioSessionAdvancedTest, CloneTracksLivingSessionsCount) {
 
   audio_session.reset();
   EXPECT_EQ(living_sessions_count.load(), 0);
+}
+
+TEST_F(AudioSessionAdvancedTest, RunPrefillWithoutEmbeddingsReturnsError) {
+  SessionConfig config = CreateAudioSessionConfig();
+  ASSERT_OK_AND_ASSIGN(
+      auto audio_session,
+      AudioSessionAdvanced::Create(execution_manager_, tokenizer_.get(), config,
+                                   /*benchmark_info=*/std::nullopt));
+
+  ExecutorAudioData empty_audio_data;
+  EXPECT_THAT(audio_session->RunPrefill(empty_audio_data),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST_F(AudioSessionAdvancedTest, RunPrefillSingleAudioDataSucceeds) {
+  // Expected sliced embedding: 2 tokens x 4 features = 8 floats.
+  const std::vector<float> kExpectedData = {1.0f, 2.0f, 3.0f, 4.0f,
+                                            5.0f, 6.0f, 7.0f, 8.0f};
+  const std::vector<int> kExpectedTokens = {ExecutorAudioData::kSpecialToken,
+                                            ExecutorAudioData::kSpecialToken};
+  ASSERT_OK_AND_ASSIGN(
+      auto execution_manager,
+      CreateAudioExecutionManager(kExpectedData, kExpectedTokens));
+
+  SessionConfig config = CreateAudioSessionConfig();
+  ASSERT_OK_AND_ASSIGN(
+      auto audio_session,
+      AudioSessionAdvanced::Create(execution_manager, tokenizer_.get(), config,
+                                   /*benchmark_info=*/std::nullopt));
+
+  // 5D tensor: [1, 1, 4, 1, 4] -> 4 frames (16 floats), with valid_tokens = 2.
+  // The first 2 frames (8 floats) match kExpectedData.
+  std::vector<float> data = {1.0f,  2.0f,  3.0f,  4.0f,  5.0f,  6.0f,
+                             7.0f,  8.0f,  9.0f,  10.0f, 11.0f, 12.0f,
+                             13.0f, 14.0f, 15.0f, 16.0f};
+  auto tensor_or = CopyToTensorBuffer<float>(data, {1, 1, 4, 1, 4});
+  ASSERT_TRUE(tensor_or.HasValue());
+
+  ExecutorAudioData audio_data;
+  audio_data.SetProjectedAudioEmbeddings(std::move(*tensor_or));
+  audio_data.SetValidTokens(2);
+
+  EXPECT_OK(audio_session->RunPrefill(audio_data));
+}
+
+TEST_F(AudioSessionAdvancedTest, RunPrefillZeroValidTokensReturnsError) {
+  SessionConfig config = CreateAudioSessionConfig();
+  ASSERT_OK_AND_ASSIGN(
+      auto audio_session,
+      AudioSessionAdvanced::Create(execution_manager_, tokenizer_.get(), config,
+                                   /*benchmark_info=*/std::nullopt));
+
+  auto tensor_or = CopyToTensorBuffer<float>({1.0f, 2.0f}, {1, 1, 2});
+  ASSERT_TRUE(tensor_or.HasValue());
+  ExecutorAudioData audio_data;
+  audio_data.SetProjectedAudioEmbeddings(std::move(*tensor_or));
+  audio_data.SetValidTokens(0);
+
+  EXPECT_THAT(audio_session->RunPrefill(audio_data),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST_F(AudioSessionAdvancedTest,
+       RunPrefillValidTokensExceedsDimensionReturnsError) {
+  SessionConfig config = CreateAudioSessionConfig();
+  ASSERT_OK_AND_ASSIGN(
+      auto audio_session,
+      AudioSessionAdvanced::Create(execution_manager_, tokenizer_.get(), config,
+                                   /*benchmark_info=*/std::nullopt));
+
+  auto tensor_or = CopyToTensorBuffer<float>({1.0f, 2.0f}, {1, 1, 2});
+  ASSERT_TRUE(tensor_or.HasValue());
+  ExecutorAudioData audio_data;
+  audio_data.SetProjectedAudioEmbeddings(std::move(*tensor_or));
+  audio_data.SetValidTokens(5);
+
+  EXPECT_THAT(audio_session->RunPrefill(audio_data),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST_F(AudioSessionAdvancedTest, RunPrefillAllTokensValidSucceeds) {
+  const std::vector<float> kExpectedData = {1.0f, 2.0f, 3.0f, 4.0f};
+  const std::vector<int> kExpectedTokens = {ExecutorAudioData::kSpecialToken,
+                                            ExecutorAudioData::kSpecialToken};
+  ASSERT_OK_AND_ASSIGN(
+      auto execution_manager,
+      CreateAudioExecutionManager(kExpectedData, kExpectedTokens));
+
+  SessionConfig config = CreateAudioSessionConfig();
+  ASSERT_OK_AND_ASSIGN(
+      auto audio_session,
+      AudioSessionAdvanced::Create(execution_manager, tokenizer_.get(), config,
+                                   /*benchmark_info=*/std::nullopt));
+
+  auto tensor_or = CopyToTensorBuffer<float>(kExpectedData, {1, 2, 2});
+  ASSERT_TRUE(tensor_or.HasValue());
+  ExecutorAudioData audio_data;
+  audio_data.SetProjectedAudioEmbeddings(std::move(*tensor_or));
+  audio_data.SetValidTokens(-1);
+
+  EXPECT_OK(audio_session->RunPrefill(audio_data));
+}
+
+TEST_F(AudioSessionAdvancedTest,
+       RunPrefillUnprojectedEmbeddingsFallbackSucceeds) {
+  const std::vector<float> kExpectedData = {1.0f, 2.0f, 3.0f, 4.0f};
+  const std::vector<int> kExpectedTokens = {ExecutorAudioData::kSpecialToken,
+                                            ExecutorAudioData::kSpecialToken};
+  ASSERT_OK_AND_ASSIGN(
+      auto execution_manager,
+      CreateAudioExecutionManager(kExpectedData, kExpectedTokens));
+
+  SessionConfig config = CreateAudioSessionConfig();
+  ASSERT_OK_AND_ASSIGN(
+      auto audio_session,
+      AudioSessionAdvanced::Create(execution_manager, tokenizer_.get(), config,
+                                   /*benchmark_info=*/std::nullopt));
+
+  auto tensor_or = CopyToTensorBuffer<float>(kExpectedData, {1, 2, 2});
+  ASSERT_TRUE(tensor_or.HasValue());
+  ExecutorAudioData audio_data;
+  audio_data.SetAudioEmbeddings(std::move(*tensor_or));
+  audio_data.SetValidTokens(2);
+
+  EXPECT_OK(audio_session->RunPrefill(audio_data));
 }
 
 }  // namespace
