@@ -52,6 +52,9 @@
 #include "runtime/util/metrics_util.h"
 #include "runtime/util/status_macros.h"
 
+#include "third_party/dawn/include/dawn/dawn_proc.h"
+#include "third_party/dawn/include/dawn/native/DawnNative.h"
+
 ABSL_FLAG(std::string, backend, "cpu",
           "Executor backend to use for LLM execution (cpu, gpu, etc.)");
 ABSL_FLAG(std::string, model_path, "", "Model path to use for LLM execution.");
@@ -184,6 +187,7 @@ absl::Status WriteMetricsToFile(
 
 absl::Status MainHelper(int argc, char** argv) {
   absl::ParseCommandLine(argc, argv);
+  dawnProcSetProcs(&dawn::native::GetProcs());
 
   int min_log_severity = absl::GetFlag(FLAGS_min_log_severity);
   if (min_log_severity >= 0) {
