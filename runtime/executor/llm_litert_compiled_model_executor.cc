@@ -1401,10 +1401,13 @@ absl::StatusOr<TensorBuffer> LlmLiteRtCompiledModelExecutorBase::DecodeLogits(
 absl::StatusOr<std::string>
 LlmLiteRtCompiledModelExecutorBase::GetPrefillSignatureKey() const {
   std::string prefill_signature_key;
+  const auto& selected = executor_settings_.GetSelectedSignatures();
   for (int i = 0; i < model_.GetNumSignatures(); ++i) {
     LITERT_ASSIGN_OR_RETURN(auto sig, model_.GetSignature(i));
     absl::string_view key = sig.Key();
-    if (absl::StartsWith(key, kPrefillSignatureRunner)) {
+    if (absl::StartsWith(key, kPrefillSignatureRunner) &&
+        (selected.empty() ||
+         std::find(selected.begin(), selected.end(), key) != selected.end())) {
       prefill_signature_key = key;
       break;
     }
@@ -1881,10 +1884,13 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
   }
 
   absl::string_view prefill_signature_key = "";
+  const auto& selected = executor_settings.GetSelectedSignatures();
   for (int i = 0; i < litert_model->GetNumSignatures(); ++i) {
     LITERT_ASSIGN_OR_RETURN(auto sig, litert_model->GetSignature(i));
     absl::string_view key = sig.Key();
-    if (absl::StartsWith(key, kPrefillSignatureRunner)) {
+    if (absl::StartsWith(key, kPrefillSignatureRunner) &&
+        (selected.empty() ||
+         std::find(selected.begin(), selected.end(), key) != selected.end())) {
       prefill_signature_key = key;
       break;
     }
@@ -1902,6 +1908,14 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
       CreateCompilationOptions(executor_settings, activation_data_type,
                                &signatures));
 
+  if (prefill_signature_key.empty() ||
+      (!selected.empty() &&
+       std::find(selected.begin(), selected.end(), kDecodeSignatureRunner) ==
+           selected.end())) {
+    return absl::InvalidArgumentError(
+        "Selected signatures must include decode and an available prefill.");
+  }
+
   ABSL_RETURN_IF_ERROR(SetExternalWeightOptions(
       resources, ModelType::kTfLitePrefillDecode, compilation_options));
 
@@ -1914,11 +1928,11 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
         std::make_unique<CompiledModel>(std::move(compiled_model_tmp));
   }
 
-  ABSL_ASSIGN_OR_RETURN(
-      auto prefill_runner_set,
-      GetPrefillRunnerSetFromModel(
-          *litert_model, kPrefillSignatureRunner,
-          /*input_positions_name=*/signatures.input_positions));
+  ABSL_ASSIGN_OR_RETURN(auto prefill_runner_set,
+                        GetPrefillRunnerSetFromModel(
+                            *litert_model, kPrefillSignatureRunner,
+                            /*input_positions_name=*/signatures.input_positions,
+                            executor_settings.GetSelectedSignatures()));
   RET_CHECK(!prefill_runner_set.empty()) << "No prefill runner available.";
 
   LitertState::AllocationPolicy allocation_policy =
