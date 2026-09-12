@@ -212,6 +212,17 @@ void litert_lm_embedding_engine_settings_set_max_input_length(
   }
 }
 
+void litert_lm_embedding_engine_settings_set_min_input_length(
+    LiteRtLmEmbeddingEngineSettings* settings, int min_input_length) {
+  if (settings && settings->settings) {
+    if (min_input_length >= 0) {
+      settings->settings->SetMinInputLength(min_input_length);
+    } else {
+      settings->settings->SetMinInputLength(std::nullopt);
+    }
+  }
+}
+
 void litert_lm_embedding_engine_settings_set_vision_tokens_per_image(
     LiteRtLmEmbeddingEngineSettings* settings, int vision_tokens_per_image) {
   if (settings && settings->settings) {

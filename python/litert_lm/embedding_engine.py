@@ -137,6 +137,7 @@ class EmbeddingEngine:
       vision_backend: interfaces.Backend | None = None,
       audio_backend: interfaces.Backend | None = None,
       cache_dir: str | None = None,
+      min_input_length: int | None = None,
       max_input_length: int | None = None,
       vision_tokens_per_image: int | None = None,
       **kwargs: Any,
@@ -147,6 +148,7 @@ class EmbeddingEngine:
     self._vision_backend = vision_backend
     self._audio_backend = audio_backend
     self._cache_dir = cache_dir
+    self._min_input_length = min_input_length
     self._max_input_length = max_input_length
     self._vision_tokens_per_image = vision_tokens_per_image
 
@@ -187,6 +189,10 @@ class EmbeddingEngine:
           self._lib.litert_lm_embedding_engine_settings_set_audio_litert_dispatch_lib_dir(
               settings, self._audio_backend.litert_dispatch_lib_dir
           )
+      if self._min_input_length is not None:
+        self._lib.litert_lm_embedding_engine_settings_set_min_input_length(
+            settings, self._min_input_length
+        )
       if self._max_input_length is not None:
         self._lib.litert_lm_embedding_engine_settings_set_max_input_length(
             settings, self._max_input_length
@@ -221,6 +227,11 @@ class EmbeddingEngine:
   @property
   def cache_dir(self) -> str | None:
     return self._cache_dir
+
+  @property
+  def min_input_length(self) -> int | None:
+    """Returns the minimum input sequence length in tokens, or None if unset."""
+    return self._min_input_length
 
   @property
   def max_input_length(self) -> int | None:

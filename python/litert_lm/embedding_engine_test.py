@@ -169,13 +169,15 @@ class EmbeddingEngineTest(parameterized.TestCase):
       response = engine.compute_embedding("'s")
       self.assertNotEmpty(response.embedding)
 
-  def test_max_input_length_and_vision_tokens_properties(self):
+  def test_min_max_input_length_and_vision_tokens_properties(self):
     engine = litert_lm.EmbeddingEngine(
         model_path=self.model_path,
         backend=litert_lm.Backend.CPU(),
+        min_input_length=128,
         max_input_length=512,
     )
     try:
+      self.assertEqual(engine.min_input_length, 128)
       self.assertEqual(engine.max_input_length, 512)
       self.assertIsNone(engine.vision_tokens_per_image)
       response = engine.compute_embedding("'s")

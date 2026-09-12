@@ -155,6 +155,18 @@ LITERT_LM_C_API_EXPORT
 void litert_lm_embedding_engine_settings_set_max_input_length(
     LiteRtLmEmbeddingEngineSettings* settings, int max_input_length);
 
+// Sets the minimum sequence length (in tokens) for text encoder signatures in
+// Embedding Engine Settings.
+//
+// @param settings The embedding engine settings.
+// @param min_input_length The minimum input length. Passing a negative
+//   value unsets the option.
+//
+// Added in version 0.2.0.
+LITERT_LM_C_API_EXPORT
+void litert_lm_embedding_engine_settings_set_min_input_length(
+    LiteRtLmEmbeddingEngineSettings* settings, int min_input_length);
+
 // Sets the desired number of vision tokens generated per image in Embedding
 // Engine Settings.
 //

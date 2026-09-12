@@ -33,14 +33,17 @@ TEST(EmbeddingEngineCTest, CreateSettingsSuccess) {
   litert_lm_embedding_engine_settings_delete(settings);
 }
 
-TEST(EmbeddingEngineCTest, CreateSettingsWithMaxInputLengthAndVisionTokens) {
+TEST(EmbeddingEngineCTest, CreateSettingsWithMinMaxInputLengthAndVisionTokens) {
   auto* settings = litert_lm_embedding_engine_settings_create(
       kTestEmbeddingModelPath, "cpu", nullptr, nullptr);
   ASSERT_NE(settings, nullptr);
+  litert_lm_embedding_engine_settings_set_min_input_length(settings, 128);
   litert_lm_embedding_engine_settings_set_max_input_length(settings, 512);
   litert_lm_embedding_engine_settings_set_vision_tokens_per_image(settings,
                                                                   280);
-  // Passing a non-positive value unsets the option.
+  // Passing a negative value unsets min_input_length; non-positive unsets
+  // max_input_length and vision_tokens_per_image.
+  litert_lm_embedding_engine_settings_set_min_input_length(settings, -1);
   litert_lm_embedding_engine_settings_set_max_input_length(settings, 0);
   litert_lm_embedding_engine_settings_set_vision_tokens_per_image(settings, -1);
   litert_lm_embedding_engine_settings_delete(settings);

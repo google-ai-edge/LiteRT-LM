@@ -18,6 +18,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -229,13 +230,17 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
     }
   }
 
-  // Default max_input_length from metadata if not explicitly set in settings.
-  if (!settings.GetMaxInputLength().has_value() && metadata.has_value() &&
-      metadata->max_input_length() != 0) {
-    settings.SetMaxInputLength(metadata->max_input_length());
+  // Default min_input_length from metadata if not explicitly set in settings.
+  if (!settings.GetMinInputLength().has_value() && metadata.has_value() &&
+      metadata->has_min_input_length()) {
+    settings.SetMinInputLength(metadata->min_input_length());
   }
 
-  // TODO: b/534849903 - Support min_input_length from metadata and settings.
+  // Default max_input_length from metadata if not explicitly set in settings.
+  if (!settings.GetMaxInputLength().has_value() && metadata.has_value() &&
+      metadata->has_max_input_length()) {
+    settings.SetMaxInputLength(metadata->max_input_length());
+  }
 
   // Resolve defaults and metadata preferences, then validate settings.
   LITERT_RETURN_IF_ERROR(
@@ -251,18 +256,38 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
           ModelType::kTfLiteVisionEncoder),
       resources->GetTFLiteModelBackendConstraint(
           ModelType::kTfLiteAudioEncoderHw)));
-  // Auto-select text encoder signatures if max_input_length is set.
+  // Auto-select text encoder signatures if max_input_length or
+  // min_input_length is set.
   std::optional<SelectedTextSignaturesInfo> selected_text_signatures_info =
       std::nullopt;
-  if (settings.GetMaxInputLength().has_value()) {
-    if (*settings.GetMaxInputLength() <= 0) {
+  if (settings.GetMaxInputLength().has_value() ||
+      settings.GetMinInputLength().has_value()) {
+    if (settings.GetMaxInputLength().has_value() &&
+        *settings.GetMaxInputLength() <= 0) {
       return absl::InvalidArgumentError(
           absl::StrCat("max_input_length must be positive, got: ",
                        *settings.GetMaxInputLength()));
     }
+    if (settings.GetMinInputLength().has_value() &&
+        *settings.GetMinInputLength() < 0) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("min_input_length must be non-negative, got: ",
+                       *settings.GetMinInputLength()));
+    }
+    if (settings.GetMaxInputLength().has_value() &&
+        settings.GetMinInputLength().has_value() &&
+        *settings.GetMinInputLength() > *settings.GetMaxInputLength()) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("min_input_length (", *settings.GetMinInputLength(),
+                       ") cannot be greater than max_input_length (",
+                       *settings.GetMaxInputLength(), ")"));
+    }
+    const int target_max_length =
+        settings.GetMaxInputLength().value_or(std::numeric_limits<int>::max());
     LITERT_ASSIGN_OR_RETURN(
         auto text_sig_info,
-        SelectTextEncoderSignatures(*resources, *settings.GetMaxInputLength()));
+        SelectTextEncoderSignatures(*resources, target_max_length,
+                                    settings.GetMinInputLength()));
     settings.GetMutableMainExecutorSettings().SetSelectedSignatures(
         text_sig_info.signature_names);
     selected_text_signatures_info = std::move(text_sig_info);

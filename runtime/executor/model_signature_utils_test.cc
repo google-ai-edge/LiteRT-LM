@@ -402,6 +402,48 @@ TEST(ModelSignatureUtilsTest, SelectTextEncoderSignatures_Success) {
               ElementsAre("encoder_256", "encoder_512", "encoder_1024"));
   EXPECT_THAT(result_all.signature_lengths, ElementsAre(256, 512, 1024));
   EXPECT_EQ(result_all.max_signature_length, 1024);
+
+  // min_input_length filtering
+  ASSERT_OK_AND_ASSIGN(
+      auto result_min,
+      SelectTextEncoderSignatures(signatures, /*max_input_length=*/1024,
+                                  /*min_input_length=*/512));
+  EXPECT_THAT(result_min.signature_names,
+              ElementsAre("encoder_512", "encoder_1024"));
+  EXPECT_THAT(result_min.signature_lengths, ElementsAre(512, 1024));
+  EXPECT_EQ(result_min.max_signature_length, 1024);
+
+  // min_input_length == max_input_length selecting single signature
+  ASSERT_OK_AND_ASSIGN(
+      auto result_single,
+      SelectTextEncoderSignatures(signatures, /*max_input_length=*/512,
+                                  /*min_input_length=*/512));
+  EXPECT_THAT(result_single.signature_names, ElementsAre("encoder_512"));
+  EXPECT_THAT(result_single.signature_lengths, ElementsAre(512));
+  EXPECT_EQ(result_single.max_signature_length, 512);
+
+  // min_input_length > max_input_length returns error
+  EXPECT_THAT(SelectTextEncoderSignatures(signatures, /*max_input_length=*/256,
+                                          /*min_input_length=*/512),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  // min_input_length == 0 is valid (non-negative)
+  ASSERT_OK_AND_ASSIGN(
+      auto result_zero,
+      SelectTextEncoderSignatures(signatures, /*max_input_length=*/512,
+                                  /*min_input_length=*/0));
+  EXPECT_THAT(result_zero.signature_names,
+              ElementsAre("encoder_256", "encoder_512"));
+
+  // Negative min_input_length returns error
+  EXPECT_THAT(SelectTextEncoderSignatures(signatures, /*max_input_length=*/512,
+                                          /*min_input_length=*/-1),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  // min_input_length filters out everything up to max_input_length
+  EXPECT_THAT(SelectTextEncoderSignatures(signatures, /*max_input_length=*/512,
+                                          /*min_input_length=*/1024),
+              StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
 TEST(ModelSignatureUtilsTest,

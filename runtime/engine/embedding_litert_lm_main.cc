@@ -38,7 +38,6 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
-#include "litert/cc/litert_environment.h"  // from @litert
 #include "runtime/components/model_resources.h"
 #include "runtime/core/embedding_engine_impl.h"
 #include "runtime/engine/embedding_engine.h"
@@ -47,6 +46,7 @@
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/util/litert_util.h"
+#include "runtime/util/memory_mapped_file.h"
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/status_macros.h"
 
@@ -65,6 +65,10 @@ ABSL_FLAG(std::string, dispatch_library_dir, "",
           "Path to directory containing LiteRT dispatch libraries.");
 ABSL_FLAG(bool, benchmark, false,
           "Whether to benchmark and collect latency and execution statistics.");
+ABSL_FLAG(
+    int, min_input_length, 0,
+    "Minimum input length for embedding execution. If greater than 0, "
+    "text encoder signatures smaller than this capacity will be excluded.");
 
 namespace {
 
@@ -78,7 +82,6 @@ using ::litert::lm::InputImage;
 using ::litert::lm::InputText;
 using ::litert::lm::MemoryMappedFile;
 using ::litert::lm::ModelAssets;
-using ::litert::lm::ModelResources;
 using ::litert::lm::ModelType;
 using ::litert::lm::OwnedEnvironment;
 using ::litert::lm::ScopedFile;
@@ -161,6 +164,11 @@ absl::Status MainHelper(int argc, char** argv) {
 
   if (absl::GetFlag(FLAGS_benchmark)) {
     settings.GetMutableBenchmarkParams();
+  }
+
+  const int min_input_length = absl::GetFlag(FLAGS_min_input_length);
+  if (min_input_length > 0) {
+    settings.SetMinInputLength(min_input_length);
   }
 
   LITERT_ASSIGN_OR_RETURN(auto owned_env,
