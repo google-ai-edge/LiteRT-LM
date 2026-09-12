@@ -487,6 +487,43 @@ class ServeOpenAIStreamingTest(absltest.TestCase):
       )
       self.assertEqual(res_body["choices"][0]["message"]["content"], "Hi")
 
+  def test_normalize_incoming_messages_orphaned_assistant(self):
+    messages = [
+        {"role": "user", "content": "list directory"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{
+                "id": "call_123",
+                "type": "function",
+                "function": {
+                    "name": "list_dir",
+                    "arguments": '{"DirectoryPath": "."}',
+                },
+            }],
+        },
+        {"role": "assistant", "content": "file1.txt\nfile2.txt"},
+    ]
+    normalized = openai_handler._normalize_incoming_messages(messages)
+    self.assertLen(normalized, 3)
+    self.assertEqual(normalized[0]["role"], "user")
+    self.assertEqual(normalized[1]["role"], "assistant")
+    self.assertEqual(normalized[2]["role"], "tool")
+    self.assertEqual(normalized[2]["tool_call_id"], "call_123")
+    self.assertEqual(normalized[2]["name"], "list_dir")
+    self.assertEqual(normalized[2]["content"], "file1.txt\nfile2.txt")
+
+  def test_normalize_incoming_messages_merge_consecutive_assistant(self):
+    messages = [
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "part 1"},
+        {"role": "assistant", "content": "part 2"},
+    ]
+    normalized = openai_handler._normalize_incoming_messages(messages)
+    self.assertLen(normalized, 2)
+    self.assertEqual(normalized[1]["role"], "assistant")
+    self.assertEqual(normalized[1]["content"], "part 1\npart 2")
+
 
 if __name__ == "__main__":
   absltest.main()
