@@ -1880,7 +1880,8 @@ LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeDeleteEmbeddingEngine)(
 LITERTLM_JNIEXPORT jobject JNICALL JNI_METHOD(nativeComputeEmbedding)(
     JNIEnv* env, jclass thiz, jlong embedding_engine_pointer,
     jobjectArray input_data, jobject normalize, jobject insert_special_tokens,
-    jobject output_size, jobject vision_tokens_per_image) {
+    jobject output_size, jobject vision_tokens_per_image,
+    jobject input_overflow_strategy) {
   auto* engine =
       reinterpret_cast<litert::lm::EmbeddingEngine*>(embedding_engine_pointer);
   if (!engine) {
@@ -1909,6 +1910,11 @@ LITERTLM_JNIEXPORT jobject JNICALL JNI_METHOD(nativeComputeEmbedding)(
   if (auto opt_vision_tokens = GetOptionalInt(env, vision_tokens_per_image);
       opt_vision_tokens.has_value()) {
     options.vision_tokens_per_image = *opt_vision_tokens;
+  }
+  if (auto opt_strategy = GetOptionalInt(env, input_overflow_strategy);
+      opt_strategy.has_value()) {
+    options.input_overflow_strategy =
+        static_cast<litert::lm::InputOverflowStrategy>(*opt_strategy);
   }
 
   auto response = engine->ComputeEmbedding(contents, options);
@@ -1939,7 +1945,7 @@ LITERTLM_JNIEXPORT jobjectArray JNICALL JNI_METHOD(nativeComputeEmbeddingBatch)(
     JNIEnv* env, jclass thiz, jlong embedding_engine_pointer,
     jobjectArray input_data_batch, jobject normalize,
     jobject insert_special_tokens, jobject output_size,
-    jobject vision_tokens_per_image) {
+    jobject vision_tokens_per_image, jobject input_overflow_strategy) {
   auto* engine =
       reinterpret_cast<litert::lm::EmbeddingEngine*>(embedding_engine_pointer);
   if (!engine) {
@@ -1976,6 +1982,11 @@ LITERTLM_JNIEXPORT jobjectArray JNICALL JNI_METHOD(nativeComputeEmbeddingBatch)(
   if (auto opt_vision_tokens = GetOptionalInt(env, vision_tokens_per_image);
       opt_vision_tokens.has_value()) {
     options.vision_tokens_per_image = *opt_vision_tokens;
+  }
+  if (auto opt_strategy = GetOptionalInt(env, input_overflow_strategy);
+      opt_strategy.has_value()) {
+    options.input_overflow_strategy =
+        static_cast<litert::lm::InputOverflowStrategy>(*opt_strategy);
   }
 
   auto batch_response = engine->ComputeEmbeddingBatch(contents_batch, options);

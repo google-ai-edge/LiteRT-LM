@@ -58,6 +58,17 @@ public struct EmbeddingEngineConfig: Hashable, Sendable {
   }
 }
 
+/// Strategy for handling input that exceeds the maximum supported signature length.
+public enum InputOverflowStrategy: Int, CaseIterable, Hashable, Sendable {
+  /// Chunks the input text to multiple sequences that fit the max input length, computes the
+  /// embedding for each chunk, and averages the embeddings.
+  case chunkAndAverage = 0
+  /// Truncates the input text to fit the max input length.
+  case truncate = 1
+  /// Returns an error if the input text exceeds the max input length.
+  case error = 2
+}
+
 /// Configuration options for an embedding computation.
 public struct EmbeddingOptions: Hashable, Sendable {
   /// Whether to L2-normalize the output embedding vector. If `nil`, uses the C++ engine default.
@@ -74,22 +85,30 @@ public struct EmbeddingOptions: Hashable, Sendable {
   /// If `nil`, uses the C++ engine default.
   public let visionTokensPerImage: Int?
 
+  /// Strategy for handling inputs longer than the maximum supported signature length.
+  /// If `nil`, uses the C++ engine default.
+  public let inputOverflowStrategy: InputOverflowStrategy?
+
   /// - Parameters:
   ///   - normalize: Whether to L2-normalize the output embedding vector. If `nil`, uses the C++ engine default.
   ///   - insertSpecialTokens: Whether to automatically insert special tokens. If `nil`, uses the C++ engine default.
   ///   - outputSize: The output embedding size to truncate to. If `nil`, uses the C++ engine default.
   ///   - visionTokensPerImage: The number of vision soft tokens to generate per image. If `nil`,
   ///     uses the C++ engine default.
+  ///   - inputOverflowStrategy: Strategy for handling inputs longer than the maximum supported
+  ///     signature length. If `nil`, uses the C++ engine default.
   public init(
     normalize: Bool? = nil,
     insertSpecialTokens: Bool? = nil,
     outputSize: Int? = nil,
-    visionTokensPerImage: Int? = nil
+    visionTokensPerImage: Int? = nil,
+    inputOverflowStrategy: InputOverflowStrategy? = nil
   ) {
     self.normalize = normalize
     self.insertSpecialTokens = insertSpecialTokens
     self.outputSize = outputSize
     self.visionTokensPerImage = visionTokensPerImage
+    self.inputOverflowStrategy = inputOverflowStrategy
   }
 }
 
