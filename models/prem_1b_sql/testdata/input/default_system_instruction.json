@@ -1,0 +1,33 @@
+{
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "Hello!"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "Hello! How can I help you today?"
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "What is the capital of France?"
+        }
+      ]
+    }
+  ],
+  "add_generation_prompt": true,
+  "bos_token": "<｜begin of sentence｜>"
+}

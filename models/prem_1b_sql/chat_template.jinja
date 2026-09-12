@@ -1,0 +1,29 @@
+{%- macro format_content(content) -%}
+    {%- for item in content -%}
+        {%- if item['type'] == 'text' -%}
+            {{- item['text'] -}}
+        {%- endif -%}
+    {%- endfor -%}
+{%- endmacro -%}
+
+{{- bos_token -}}
+{%- set is_first_system = messages and messages[0]['role'] == 'system' -%}
+{%- set loop_messages = messages[1:] if is_first_system else messages -%}
+{%- if is_first_system -%}
+    {{- format_content(messages[0]['content']) | trim + '\n' -}}
+{%- else -%}
+    {{- 'You are an AI programming assistant, utilizing the Deepseek Coder model, developed by Deepseek Company, and you only answer questions related to computer science. For politically sensitive questions, security and privacy issues, and other non-computer science questions, you will refuse to answer\n' -}}
+{%- endif -%}
+
+{%- for message in loop_messages -%}
+    {%- set content = format_content(message['content']) -%}
+    {%- if message['role'] == 'user' -%}
+        {{- '### Instruction:\n' + content + '\n' -}}
+    {%- elif message['role'] == 'assistant' -%}
+        {{- '### Response:\n' + content + '\n<|EOT|>\n' -}}
+    {%- endif -%}
+{%- endfor -%}
+
+{%- if add_generation_prompt -%}
+    {{- '### Response:\n' -}}
+{%- endif -%}

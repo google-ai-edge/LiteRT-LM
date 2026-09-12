@@ -1,0 +1,47 @@
+# proto-file: runtime/proto/llm_metadata.proto
+# proto-message: LlmMetadataProto
+
+start_token {
+  token_str: "<｜begin of sentence｜>"
+}
+stop_tokens {
+  token_ids {
+    ids: 32021
+  }
+}
+max_num_tokens: 4096
+llm_model_type {
+  generic_model {
+  }
+}
+
+jinja_prompt_template:
+  "{%- macro format_content(content) -%}\n"
+  "    {%- for item in content -%}\n"
+  "        {%- if item['type'] == 'text' -%}\n"
+  "            {{- item['text'] -}}\n"
+  "        {%- endif -%}\n"
+  "    {%- endfor -%}\n"
+  "{%- endmacro -%}\n"
+  "\n"
+  "{{- bos_token -}}\n"
+  "{%- set is_first_system = messages and messages[0]['role'] == 'system' -%}\n"
+  "{%- set loop_messages = messages[1:] if is_first_system else messages -%}\n"
+  "{%- if is_first_system -%}\n"
+  "    {{- format_content(messages[0]['content']) | trim + '\\n' -}}\n"
+  "{%- else -%}\n"
+  "    {{- 'You are an AI programming assistant, utilizing the Deepseek Coder model, developed by Deepseek Company, and you only answer questions related to computer science. For politically sensitive questions, security and privacy issues, and other non-computer science questions, you will refuse to answer\\n' -}}\n"
+  "{%- endif -%}\n"
+  "\n"
+  "{%- for message in loop_messages -%}\n"
+  "    {%- set content = format_content(message['content']) -%}\n"
+  "    {%- if message['role'] == 'user' -%}\n"
+  "        {{- '### Instruction:\\n' + content + '\\n' -}}\n"
+  "    {%- elif message['role'] == 'assistant' -%}\n"
+  "        {{- '### Response:\\n' + content + '\\n<|EOT|>\\n' -}}\n"
+  "    {%- endif -%}\n"
+  "{%- endfor -%}\n"
+  "\n"
+  "{%- if add_generation_prompt -%}\n"
+  "    {{- '### Response:\\n' -}}\n"
+  "{%- endif -%}\n"

@@ -1,0 +1,9 @@
+<｜begin of sentence｜>You are a helpful assistant.
+### Instruction:
+Hello!
+### Response:
+Hello! How can I help you today?
+<|EOT|>
+### Instruction:
+What is the capital of France?
+### Response:
