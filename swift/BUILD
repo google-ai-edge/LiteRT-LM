@@ -41,7 +41,6 @@ swift_library(
         "ToolManager.swift",
     ],
     copts = ["-enable-testing"],
-    features = ["-swift.enable_v6"],
     module_name = "LiteRTLM",
     deps = [
 
@@ -64,7 +63,6 @@ swift_library(
     srcs = ["EngineTests.swift"],
     copts = ["-enable-testing"],
     data = ["//runtime/testdata"],
-    features = ["-swift.enable_v6"],
     deps = [
         ":LiteRT_LM_Swift",
 
@@ -78,7 +76,6 @@ swift_library(
     srcs = ["ConversationTests.swift"],
     copts = ["-enable-testing"],
     data = ["//runtime/testdata"],
-    features = ["-swift.enable_v6"],
     deps = [
         ":LiteRT_LM_Swift",
 
