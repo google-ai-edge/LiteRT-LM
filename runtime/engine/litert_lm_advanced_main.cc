@@ -66,6 +66,11 @@ ABSL_FLAG(
 ABSL_FLAG(std::string, input_prompt, "",
           "Input prompt to use for testing LLM execution.");
 ABSL_FLAG(std::string, input_prompt_file, "", "File path to the input prompt.");
+ABSL_FLAG(std::vector<std::string>, selected_signatures, {},
+          "Optional comma-separated main-model signatures to initialize. "
+          "Empty keeps all signatures. Include decode and a prefill signature; "
+          "include verify when using speculative decoding. On the generic NPU "
+          "path, also prune unselected graphs before compilation.");
 ABSL_FLAG(std::string, metric_proto_file_path, "",
           "Path to the file where the benchmark metrics will be saved in "
           "protobuf format. Only collected when --benchmark is true.");
@@ -260,6 +265,7 @@ absl::Status MainHelper(int argc, char** argv) {
   settings.load_model_from_descriptor =
       absl::GetFlag(FLAGS_load_model_from_descriptor);
   settings.input_prompt = GetInputPrompt();
+  settings.selected_signatures = absl::GetFlag(FLAGS_selected_signatures);
   settings.expected_output = absl::GetFlag(FLAGS_expected_output);
   settings.log_sink_file = absl::GetFlag(FLAGS_log_sink_file);
   settings.max_num_tokens = absl::GetFlag(FLAGS_max_num_tokens);

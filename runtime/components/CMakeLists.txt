@@ -382,12 +382,37 @@ target_link_libraries(runtime_components_top_p_cpu_sampler
 )
 
 # ==============================================================================
+# NVIDIA Greedy Sampler
+# ==============================================================================
+add_litertlm_library(runtime_components_nvidia_greedy_sampler STATIC
+  nvidia_greedy_sampler.cc
+)
+add_library(LiteRTLM::Runtime::Components::NvidiaGreedySampler
+  ALIAS runtime_components_nvidia_greedy_sampler)
+
+target_include_directories(runtime_components_nvidia_greedy_sampler
+  PUBLIC
+    ${LITERTLM_GENERATED_SRC_DIR}
+    ${LITERT_INCLUDE_DIR}
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+target_link_libraries(runtime_components_nvidia_greedy_sampler
+  PUBLIC
+    LiteRTLM::Runtime::Components::SamplerInterface
+    LiteRTLM::Runtime::Executor::ExecutorSettingsBase
+    LITERTLM_DEPS
+    ${CMAKE_DL_LIBS}
+)
+
+# ==============================================================================
 # Folder Facade
 # ==============================================================================
 add_litertlm_library(runtime_components_libs INTERFACE)
 add_library(LiteRTLM::Runtime::Components ALIAS runtime_components_libs)
 
 target_link_libraries(runtime_components_libs INTERFACE
+  LiteRTLM::Runtime::Components::NvidiaGreedySampler
   LiteRTLM::Runtime::Components::ConstrainedDecoding
   LiteRTLM::Runtime::Components::EmbeddingLookup
   LiteRTLM::Runtime::Components::Preprocessor
