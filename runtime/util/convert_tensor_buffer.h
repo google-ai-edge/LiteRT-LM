@@ -25,7 +25,9 @@ using ::litert::support::CopyToTensorBuffer;
 using ::litert::support::CreateTensorBuffer;
 using ::litert::support::DropTokensfromTensorBuffer;
 using ::litert::support::ElementTypeFor;
+using ::litert::support::MutateTensorBufferAsSpan;
 using ::litert::support::ReferTensorBufferAsSpan;
+using ::litert::support::ScopedTensorBufferSpan;
 }  // namespace litert::lm
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_RUNTIME_UTIL_CONVERT_TENSOR_BUFFER_H_
