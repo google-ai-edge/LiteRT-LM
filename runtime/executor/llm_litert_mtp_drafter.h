@@ -29,9 +29,11 @@
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
+#include "litert/cc/litert_layout.h"  // from @litert
 #include "litert/cc/litert_model_types.h"  // from @litert
 #include "litert/cc/litert_options.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "litert/cc/litert_tensor_buffer_requirements.h"  // from @litert
 #include "runtime/components/constrained_decoding/constraint.h"
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
 #include "runtime/components/model_resources.h"
@@ -41,6 +43,39 @@
 #include "runtime/executor/state_interface.h"
 
 namespace litert::lm {
+
+// A verifier writes a contiguous token block. Its cached activation is reusable
+// only at the position immediately after the accepted prefix, and never after
+// an intervening ordinary decode or a restored context.
+class MtpVerificationState {
+ public:
+  MtpVerificationState(int num_verify_tokens,
+                       std::optional<int> global_capacity,
+                       std::optional<int> local_ring_capacity)
+      : num_verify_tokens_(num_verify_tokens),
+        global_capacity_(global_capacity),
+        local_ring_capacity_(local_ring_capacity) {}
+
+  bool CanVerify(int position,
+                 std::optional<int> output_budget = std::nullopt) const;
+  // Reserves one output for the verifier's bonus token. The returned index
+  // selects both that bonus and the activation for the next pending position.
+  absl::StatusOr<int> CountAcceptedDrafts(
+      absl::Span<const int> drafted_tokens,
+      absl::Span<const int> verified_tokens,
+      std::optional<int> output_budget = std::nullopt) const;
+  bool CanDecode(int position) const;
+  std::optional<int> ActivationIndex(int position) const;
+  void RecordVerification(int position, int num_accepted);
+  void InvalidateActivations() { next_position_.reset(); }
+
+ private:
+  int num_verify_tokens_;
+  std::optional<int> global_capacity_;
+  std::optional<int> local_ring_capacity_;
+  std::optional<int> next_position_;
+  int activation_index_ = -1;
+};
 
 class LlmLiteRtMtpDrafter {
  public:
@@ -79,17 +114,38 @@ class LlmLiteRtMtpDrafter {
   // Inputs:
   //   position: The current position of the input sequence.
   //   token_id: The id of the last input token.
-  //   activations: Activations corresponding to the token_id. This is only
-  //    required for the first invocation of the drafter.
+  //   activations: Previous-position activations used with token_id. Required
+  //    initially and after ordinary decode or a context change; otherwise the
+  //    previous verifier's accepted-prefix activation is reused.
   //   state: The model's runtime KV cache state.
   //   constraint: Optional decoding constraint to apply during drafting and
-  //    verification.
+  //    verification. Constraint-state handoff across ordinary/MTP transitions
+  //    is not supported yet. The executor rejects constrained MTP on NPU;
+  //    existing CPU/GPU behavior is retained and has the same transition
+  //    caveat.
+  //   output_budget: Optional positive limit on committed outputs, including
+  //    the bonus token. Verification still writes its full physical KV block.
   // Outputs:
   //   The drafted tokens from the MTP drafter model with the shape:
   //   [batch_size, num_tokens].
   absl::StatusOr<std::vector<std::vector<int>>> Draft(
       int position, int token_id, std::optional<TensorBuffer> activations,
-      StateInterface& state, const Constraint* constraint = nullptr);
+      StateInterface& state, const Constraint* constraint = nullptr,
+      std::optional<int> output_budget = std::nullopt);
+
+  bool CanDraft(int position,
+                std::optional<int> output_budget = std::nullopt) const {
+    return verification_state_.CanVerify(position, output_budget);
+  }
+  bool HasVerifiedActivations(int position) const {
+    return verification_state_.ActivationIndex(position).has_value();
+  }
+  void InvalidateVerifiedActivations() {
+    verification_state_.InvalidateActivations();
+  }
+  bool CanDecode(int position) const {
+    return verification_state_.CanDecode(position);
+  }
 
  private:
   LlmLiteRtMtpDrafter(
@@ -111,7 +167,7 @@ class LlmLiteRtMtpDrafter {
       TensorBuffer drafter_id_tensor, TensorBuffer verifier_id_tensor,
       int num_draft_steps, ModelSignatures drafter_signatures,
       ModelSignatures verifier_signatures, int vocab_size,
-      AttentionMaskParams attn_params)
+      AttentionMaskParams attn_params, MtpVerificationState verification_state)
       : mtp_drafter_model_(std::move(mtp_drafter_model)),
         drafter_signature_(std::move(drafter_signature)),
         base_model_(base_model),
@@ -131,6 +187,7 @@ class LlmLiteRtMtpDrafter {
         num_draft_steps_(num_draft_steps),
         drafter_signatures_(std::move(drafter_signatures)),
         verifier_signatures_(std::move(verifier_signatures)),
+        verification_state_(std::move(verification_state)),
         vocab_size_(vocab_size),
         attn_params_(attn_params) {
     for (const auto& [name, buffer] : drafter_input_buffers_) {
@@ -164,7 +221,7 @@ class LlmLiteRtMtpDrafter {
 
   absl::StatusOr<DraftingResult> RunDraftingLoop(
       int token_id, std::optional<TensorBuffer>& activations,
-      const Constraint* constraint,
+      int verified_activation_index, const Constraint* constraint,
       const Constraint::State* verified_constraint_state);
 
   absl::Status PrepareVerifierInputBuffers(
@@ -241,8 +298,7 @@ class LlmLiteRtMtpDrafter {
   ModelSignatures drafter_signatures_;
   ModelSignatures verifier_signatures_;
 
-  // The index of the last verified token in the verifier output buffers.
-  int last_verified_token_id_idx_ = -1;
+  MtpVerificationState verification_state_;
 
   // Misc statistics for the MTP drafter.
   // The number of tokens drafted by the MTP drafter model, regardless of
@@ -268,6 +324,14 @@ class LlmLiteRtMtpDrafter {
 absl::Status UpdateCompilationOptions(
     const LlmExecutorSettings& executor_settings,
     litert::Options& compilation_options);
+
+// Identifies NVIDIA's physical [1,H,S,D] value-cache layout from the producer's
+// requirements for a logical [1,H,D,S] tensor. Other backends are left
+// unchanged; unsupported NVIDIA strides are rejected before compiling the
+// reader.
+absl::StatusOr<bool> UsesNvidiaTransposedValueCache(
+    const Layout& logical_layout,
+    const TensorBufferRequirements& producer_requirements);
 
 }  // namespace litert::lm
 

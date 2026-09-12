@@ -710,7 +710,7 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::PrefillInternal(
         LITERT_RETURN_IF_ERROR(signatures_.input_int32_param.has_value());
         ABSL_RETURN_IF_ERROR(FillSingleBufferCacheParamTensor(
             prefill_input_buffers[signatures_.input_int32_param.value()],
-            start_step, ids.size()));
+            start_step, /*update_length=*/prefill_length + input_idx));
       }
     }
 
@@ -1196,14 +1196,50 @@ absl::StatusOr<std::vector<std::vector<int>>>
 LlmLiteRtCompiledModelExecutorBase::Decode(
     const ExecutorDecodeParams& decode_params) {
 
-  bool enable_mtp_drafter = false;
-  if (decode_params.GetEnableSpeculativeDecoding().has_value()) {
-    enable_mtp_drafter = *decode_params.GetEnableSpeculativeDecoding();
-    if (enable_mtp_drafter && mtp_drafter_ == nullptr) {
-      ABSL_RETURN_IF_ERROR(EnsureMtpDrafterLoaded());
+  const auto& output_budget = decode_params.GetMaxOutputTokens();
+  if (output_budget.has_value() && *output_budget <= 0) {
+    return absl::InvalidArgumentError("Decode output budget must be positive");
+  }
+
+  bool enable_mtp_drafter =
+      decode_params.GetEnableSpeculativeDecoding().value_or(mtp_drafter_ !=
+                                                            nullptr);
+  if (enable_mtp_drafter && executor_settings_.GetBackend() == Backend::NPU &&
+      decode_params.GetConstrainedDecoder() != nullptr) {
+    // The new NPU path must not silently lose grammar/thinking-budget state
+    // when cache boundaries or the output budget require ordinary decoding.
+    return absl::UnimplementedError(
+        "NPU MTP does not support constraint state handoff between ordinary "
+        "and speculative decoding yet");
+  }
+  if (enable_mtp_drafter && mtp_drafter_ == nullptr) {
+    ABSL_RETURN_IF_ERROR(EnsureMtpDrafterLoaded());
+  }
+
+  bool reuse_verified_activations = false;
+  std::optional<int> verify_budget = output_budget;
+  if (enable_mtp_drafter) {
+    if (!llm_context_->runtime_state().ran_decode || force_prepare_needed_) {
+      mtp_drafter_->InvalidateVerifiedActivations();
     }
-  } else {
-    enable_mtp_drafter = (mtp_drafter_ != nullptr);
+    // current_step includes the pending token. A fresh activation bootstrap
+    // consumes it with ordinary decode before verifying the following token.
+    const int pending_position = llm_context_->runtime_state().current_step - 1;
+    if (!mtp_drafter_->CanDecode(pending_position)) {
+      return absl::OutOfRangeError("Decode position is outside the KV cache");
+    }
+    reuse_verified_activations =
+        mtp_drafter_->HasVerifiedActivations(pending_position);
+    const int bootstrap_tokens = reuse_verified_activations ? 0 : 1;
+    if (verify_budget.has_value()) {
+      *verify_budget -= bootstrap_tokens;
+    }
+    // The verifier writes a fixed contiguous block even when drafts reject.
+    // Keep ordinary decode at ring tails, at global capacity, or when only the
+    // bootstrap output fits. Otherwise Draft caps its committed prefix while
+    // the full physical block still has to fit safely in the cache.
+    enable_mtp_drafter = mtp_drafter_->CanDraft(
+        pending_position + bootstrap_tokens, verify_budget);
   }
 
   std::vector<std::vector<int>> output_tokens_vector;
@@ -1227,9 +1263,8 @@ LlmLiteRtCompiledModelExecutorBase::Decode(
   } else {
     // MTP keeps an internal state of the last time it was called and will
     // use those projected activations to kick off the next draft steps. As
-    // such, we need to do a single decode step on the first decode call after
-    // prefill and provide the projected activations to the MTP drafted only
-    // once.
+    // such, a new decode turn, ordinary-decode fallback, or context change
+    // requires a single decode step to supply fresh projected activations.
     StateInterface* active_state = state_.get();
     RET_CHECK(active_state != nullptr);
 
@@ -1239,18 +1274,18 @@ LlmLiteRtCompiledModelExecutorBase::Decode(
                                  ? constrained_decoder->GetConstraint()
                                  : nullptr;
 
-    bool last_run_is_decode = llm_context_->runtime_state().ran_decode;
-    if (last_run_is_decode) {
+    if (reuse_verified_activations) {
       ABSL_ASSIGN_OR_RETURN(auto step_and_token,
                             GetTokenToDecode(ExecutorInputs()));
       ABSL_RETURN_IF_ERROR(
           ConsumePendingOrAddProcessedToken(step_and_token.token));
       // Output: [Batch, drafted and verified tokens]
-      LITERT_ASSIGN_OR_RETURN(output_tokens_vector,
-                              mtp_drafter_->Draft(step_and_token.step,
-                                                  step_and_token.token[0]->id(),
-                                                  /*activations=*/std::nullopt,
-                                                  *active_state, constraint));
+      LITERT_ASSIGN_OR_RETURN(
+          output_tokens_vector,
+          mtp_drafter_->Draft(step_and_token.step,
+                              step_and_token.token[0]->id(),
+                              /*activations=*/std::nullopt, *active_state,
+                              constraint, verify_budget));
       RET_CHECK_EQ(output_tokens_vector.size(), 1);
       llm_context_->runtime_state().current_step +=
           output_tokens_vector[0].size();
@@ -1285,7 +1320,7 @@ LlmLiteRtCompiledModelExecutorBase::Decode(
           output_tokens_vector,
           mtp_drafter_->Draft(llm_context_->runtime_state().current_step - 1,
                               token_id, std::move(activations), *active_state,
-                              constraint));
+                              constraint, verify_budget));
       llm_context_->runtime_state().current_step +=
           output_tokens_vector[0].size();
       output_tokens_vector[0].insert(output_tokens_vector[0].begin(), token_id);
@@ -1344,6 +1379,10 @@ LlmLiteRtCompiledModelExecutorBase::Decode(
 
 absl::Status LlmLiteRtCompiledModelExecutorBase::Decode(
     const ExecutorInputs& inputs, TensorBuffer& output_logits) {
+
+  if (mtp_drafter_ != nullptr) {
+    mtp_drafter_->InvalidateVerifiedActivations();
+  }
   ABSL_RETURN_IF_ERROR(PrepareFirstDecode());
   ABSL_ASSIGN_OR_RETURN(auto step_and_token, GetTokenToDecode(inputs));
   ABSL_RETURN_IF_ERROR(DecodeInternal(step_and_token.token, output_logits));
@@ -1359,6 +1398,9 @@ absl::StatusOr<TensorBuffer> LlmLiteRtCompiledModelExecutorBase::DecodeLogits(
 
 absl::StatusOr<TensorBuffer> LlmLiteRtCompiledModelExecutorBase::DecodeLogits(
     const ExecutorInputs& inputs, const ExecutorDecodeParams& decode_params) {
+  if (mtp_drafter_ != nullptr) {
+    mtp_drafter_->InvalidateVerifiedActivations();
+  }
   LITERT_ASSIGN_OR_RETURN(
       auto output_logits,
       decode_output_buffers_[signatures_.output_logits].Duplicate());
@@ -1401,10 +1443,13 @@ absl::StatusOr<TensorBuffer> LlmLiteRtCompiledModelExecutorBase::DecodeLogits(
 absl::StatusOr<std::string>
 LlmLiteRtCompiledModelExecutorBase::GetPrefillSignatureKey() const {
   std::string prefill_signature_key;
+  const auto& selected = executor_settings_.GetSelectedSignatures();
   for (int i = 0; i < model_.GetNumSignatures(); ++i) {
     LITERT_ASSIGN_OR_RETURN(auto sig, model_.GetSignature(i));
     absl::string_view key = sig.Key();
-    if (absl::StartsWith(key, kPrefillSignatureRunner)) {
+    if (absl::StartsWith(key, kPrefillSignatureRunner) &&
+        (selected.empty() ||
+         std::find(selected.begin(), selected.end(), key) != selected.end())) {
       prefill_signature_key = key;
       break;
     }
@@ -1479,6 +1524,9 @@ LlmLiteRtCompiledModelExecutorBase::CloneContext() const {
 
 absl::Status LlmLiteRtCompiledModelExecutorBase::RestoreContext(
     std::unique_ptr<LlmContext> context_data) {
+  if (mtp_drafter_ != nullptr) {
+    mtp_drafter_->InvalidateVerifiedActivations();
+  }
   llm_context_ = std::move(context_data);
 
   // We can keep our kv cache buffers if this is the first step. This lets us
@@ -1672,6 +1720,9 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::SetCurrentStep(int new_step) {
       << "New step cannot be greater than the max step: " << max_step;
   RET_CHECK_GE(new_step, 0).SetCode(absl::StatusCode::kInvalidArgument)
       << "New step cannot be negative.";
+  if (mtp_drafter_ != nullptr) {
+    mtp_drafter_->InvalidateVerifiedActivations();
+  }
   if (new_step == max_step) {
     llm_context_->runtime_state().current_step = new_step;
     return absl::OkStatus();
@@ -1690,6 +1741,9 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::SetCurrentStep(int new_step) {
 }
 
 absl::Status LlmLiteRtCompiledModelExecutorBase::Reset() {
+  if (mtp_drafter_ != nullptr) {
+    mtp_drafter_->InvalidateVerifiedActivations();
+  }
   llm_context_->runtime_state().current_step = 0;
   return absl::OkStatus();
 }
@@ -1881,10 +1935,13 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
   }
 
   absl::string_view prefill_signature_key = "";
+  const auto& selected = executor_settings.GetSelectedSignatures();
   for (int i = 0; i < litert_model->GetNumSignatures(); ++i) {
     LITERT_ASSIGN_OR_RETURN(auto sig, litert_model->GetSignature(i));
     absl::string_view key = sig.Key();
-    if (absl::StartsWith(key, kPrefillSignatureRunner)) {
+    if (absl::StartsWith(key, kPrefillSignatureRunner) &&
+        (selected.empty() ||
+         std::find(selected.begin(), selected.end(), key) != selected.end())) {
       prefill_signature_key = key;
       break;
     }
@@ -1902,6 +1959,14 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
       CreateCompilationOptions(executor_settings, activation_data_type,
                                &signatures));
 
+  if (prefill_signature_key.empty() ||
+      (!selected.empty() &&
+       std::find(selected.begin(), selected.end(), kDecodeSignatureRunner) ==
+           selected.end())) {
+    return absl::InvalidArgumentError(
+        "Selected signatures must include decode and an available prefill.");
+  }
+
   ABSL_RETURN_IF_ERROR(SetExternalWeightOptions(
       resources, ModelType::kTfLitePrefillDecode, compilation_options));
 
@@ -1914,11 +1979,11 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
         std::make_unique<CompiledModel>(std::move(compiled_model_tmp));
   }
 
-  ABSL_ASSIGN_OR_RETURN(
-      auto prefill_runner_set,
-      GetPrefillRunnerSetFromModel(
-          *litert_model, kPrefillSignatureRunner,
-          /*input_positions_name=*/signatures.input_positions));
+  ABSL_ASSIGN_OR_RETURN(auto prefill_runner_set,
+                        GetPrefillRunnerSetFromModel(
+                            *litert_model, kPrefillSignatureRunner,
+                            /*input_positions_name=*/signatures.input_positions,
+                            executor_settings.GetSelectedSignatures()));
   RET_CHECK(!prefill_runner_set.empty()) << "No prefill runner available.";
 
   LitertState::AllocationPolicy allocation_policy =

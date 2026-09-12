@@ -286,9 +286,11 @@ class DecodeOneStep {
   // For external sampling, `decoded_ids` must be provided and will be updated.
   // For internal sampling, `decoded_ids` is ignored.
   absl::StatusOr<bool> Run(
-      std::optional<litert::TensorBuffer> decoded_ids = std::nullopt) {
-    ABSL_ASSIGN_OR_RETURN(auto token_ids,
-                          DecodeAndSample(std::move(decoded_ids)));
+      std::optional<litert::TensorBuffer> decoded_ids = std::nullopt,
+      std::optional<int> max_output_tokens = std::nullopt) {
+    ABSL_ASSIGN_OR_RETURN(
+        auto token_ids,
+        DecodeAndSample(std::move(decoded_ids), max_output_tokens));
 
     size_t sequence_length = token_ids[0].size();
     for (size_t i = 1; i < token_ids.size(); ++i) {
@@ -442,7 +444,8 @@ class DecodeOneStep {
   // sampling. Returns a pointer to the tensor buffer containing the next token
   // IDs.
   absl::StatusOr<std::vector<std::vector<int>>> DecodeAndSample(
-      std::optional<litert::TensorBuffer> decoded_ids) {
+      std::optional<litert::TensorBuffer> decoded_ids,
+      std::optional<int> max_output_tokens) {
     if (sampler_) {  // External sampling path
       if (!decoded_ids) {
         return absl::InternalError(
@@ -495,6 +498,9 @@ class DecodeOneStep {
       }
       std::vector<std::vector<int>> output_tokens;
       auto decode_params = ExecutorDecodeParams();
+      if (max_output_tokens.has_value()) {
+        decode_params.SetMaxOutputTokens(*max_output_tokens);
+      }
       // Convey the cancellation token for the decode process.
       decode_params.SetCancelled(cancelled_);
       decode_params.SetEnableSpeculativeDecoding(enable_speculative_decoding_);
@@ -634,6 +640,7 @@ absl::StatusOr<Responses> Decode(
 
   ABSL_ASSIGN_OR_RETURN(int executor_step_before_decode,
                         executor.GetCurrentStep());
+  int current_decode_step = executor_step_before_decode;
   const int max_num_tokens = TryGetMaxNumTokens(executor);
 
   std::unique_ptr<Constraint> thinking_budget_constraint;
@@ -694,12 +701,29 @@ absl::StatusOr<Responses> Decode(
       }
       return absl::CancelledError("Process cancelled.");
     }
+    std::optional<int> remaining_output_tokens;
+    if (!is_custom_sampling) {
+      // An internal Decode may return a speculative batch. Give it the actual
+      // remaining budget before it runs, rather than trimming committed tokens.
+      const int decoded_steps =
+          current_decode_step - executor_step_before_decode;
+      remaining_output_tokens = std::min(max_num_tokens - current_decode_step,
+                                         max_output_tokens - decoded_steps);
+      if (benchmark_decode_token_count > 0) {
+        remaining_output_tokens =
+            std::min(*remaining_output_tokens,
+                     benchmark_decode_token_count - decoded_steps);
+      }
+      if (*remaining_output_tokens <= 0) {
+        break;
+      }
+    }
     std::optional<litert::TensorBuffer> decoded_ids_to_use = std::nullopt;
     if (decoded_ids.has_value()) {
       LITERT_ASSIGN_OR_RETURN(decoded_ids_to_use, decoded_ids->Duplicate());
     }
-    absl::StatusOr<bool> all_done =
-        run_one_step->Run(std::move(decoded_ids_to_use));
+    absl::StatusOr<bool> all_done = run_one_step->Run(
+        std::move(decoded_ids_to_use), remaining_output_tokens);
     if (!all_done.ok()) {
       return all_done.status();
     }
@@ -746,10 +770,10 @@ absl::StatusOr<Responses> Decode(
                          std::move(step_token_ids)));
     }
 
-    ABSL_ASSIGN_OR_RETURN(int current_step, executor.GetCurrentStep());
-    int num_decode_steps = current_step - executor_step_before_decode;
+    ABSL_ASSIGN_OR_RETURN(current_decode_step, executor.GetCurrentStep());
+    int num_decode_steps = current_decode_step - executor_step_before_decode;
     if (ShouldStop(*all_done, benchmark_decode_token_count, num_decode_steps,
-                   current_step, max_num_tokens, max_output_tokens)) {
+                   current_decode_step, max_num_tokens, max_output_tokens)) {
       break;
     }
   }

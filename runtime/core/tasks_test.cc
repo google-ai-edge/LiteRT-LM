@@ -14,6 +14,7 @@
 
 #include "runtime/core/tasks.h"
 
+#include <algorithm>
 #include <atomic>
 #include <filesystem>  // NOLINT: Required for path manipulation.
 #include <limits>
@@ -143,6 +144,137 @@ class TasksTest : public testing::Test {
   std::unique_ptr<Tokenizer> gemma3_tokenizer_;
   std::unique_ptr<FakeLlmExecutor> executor_;
 };
+
+class BudgetRecordingExecutor : public FakeLlmExecutor {
+ public:
+  using FakeLlmExecutor::FakeLlmExecutor;
+
+  absl::StatusOr<std::vector<std::vector<int>>> Decode(
+      const ExecutorDecodeParams& params) override {
+    decode_params.push_back(params);
+    std::vector<std::vector<int>> output(1);
+    const int count = std::min(
+        tokens_per_call, params.GetMaxOutputTokens().value_or(tokens_per_call));
+    for (int i = 0; i < count; ++i) {
+      ABSL_ASSIGN_OR_RETURN(auto token, FakeLlmExecutor::Decode(params));
+      output[0].push_back(token[0][0]);
+    }
+    return output;
+  }
+
+  int tokens_per_call = 1;
+  std::vector<ExecutorDecodeParams> decode_params;
+};
+
+TEST_F(TasksTest, DecodeForwardsRemainingInternalOutputBudget) {
+  struct TestCase {
+    int output_limit;
+    int context_limit;
+    int benchmark_limit;
+    std::optional<bool> speculative_decoding;
+    std::vector<int> expected_budgets;
+    int tokens_per_call = 1;
+  };
+  const std::vector<TestCase> cases = {
+      {3, 10, 0, false, {3, 2, 1}}, {8, 4, 0, true, {3, 2, 1}},
+      {8, 10, 3, true, {3, 2, 1}},  {3, 4, 2, std::nullopt, {2, 1}},
+      {0, 10, 0, true, {}},         {3, 1, 0, true, {}},
+      {5, 10, 0, true, {5, 2}, 3},
+  };
+  const std::vector<std::vector<int>> prefill_tokens = {{2}};
+  const std::vector<std::vector<int>> decode_tokens = {
+      {224}, {24}, {8}, {66}, {246}};
+  const std::vector<int> expected_ids = {224, 24, 8, 66, 246};
+  for (const auto& test_case : cases) {
+    SCOPED_TRACE(testing::Message()
+                 << "output=" << test_case.output_limit
+                 << " context=" << test_case.context_limit
+                 << " benchmark=" << test_case.benchmark_limit);
+    BudgetRecordingExecutor executor(tokenizer_->GetVocabSize(), prefill_tokens,
+                                     decode_tokens);
+    executor.tokens_per_call = test_case.tokens_per_call;
+    std::optional<BenchmarkInfo> benchmark_info;
+    if (test_case.benchmark_limit > 0) {
+      proto::BenchmarkParams params;
+      params.set_num_decode_tokens(test_case.benchmark_limit);
+      benchmark_info.emplace(params);
+    }
+    ASSERT_OK_AND_ASSIGN(auto token_ids_buffer,
+                         tokenizer_->TokenIdsToTensorBuffer(prefill_tokens[0]));
+    ExecutorInputs inputs(ExecutorTextData(std::move(token_ids_buffer)),
+                          std::nullopt, std::nullopt);
+    ASSERT_OK(Tasks::Prefill(executor, inputs, /*wait_for_completion=*/true,
+                             benchmark_info));
+    ASSERT_OK_AND_ASSIGN(auto settings, executor.GetMutableExecutorSettings());
+    settings->SetMaxNumTokens(test_case.context_limit);
+    StopTokenDetector stop_token_detector(1);
+    ASSERT_OK(stop_token_detector.AddStopTokenSequence({2294}));
+    absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback = nullptr;
+    ASSERT_OK_AND_ASSIGN(
+        auto response,
+        Tasks::Decode(
+            executor, *tokenizer_, stop_token_detector,
+            /*num_output_candidates=*/1, benchmark_info,
+            /*sampler=*/std::nullopt, RepetitionPenaltyConfig::Default(),
+            NoRepeatNgramConfig::Default(), SuppressTokensConfig::Default(),
+            /*constraint=*/nullptr,
+            /*decoded_ids=*/std::nullopt, callback,
+            /*cancelled=*/nullptr, test_case.output_limit,
+            /*thinking_token_budget=*/std::nullopt,
+            /*thinking_end_token_ids=*/{},
+            /*thinking_start_token_ids=*/{}, test_case.speculative_decoding));
+
+    ASSERT_EQ(executor.decode_params.size(), test_case.expected_budgets.size());
+    for (size_t i = 0; i < executor.decode_params.size(); ++i) {
+      EXPECT_EQ(executor.decode_params[i].GetMaxOutputTokens(),
+                test_case.expected_budgets[i]);
+      EXPECT_EQ(executor.decode_params[i].GetEnableSpeculativeDecoding(),
+                test_case.speculative_decoding);
+    }
+    ASSERT_EQ(response.GetTokenIds().size(), 1);
+    const int expected_output_count = test_case.expected_budgets.empty()
+                                          ? 0
+                                          : test_case.expected_budgets.front();
+    EXPECT_EQ(response.GetTokenIds()[0],
+              std::vector<int>(expected_ids.begin(),
+                               expected_ids.begin() + expected_output_count));
+  }
+}
+
+TEST_F(TasksTest, DecodeOutputBudgetLeavesExternalSamplingUnchanged) {
+  const std::vector<std::vector<int>> prefill_tokens = {{2}, {8}};
+  const std::vector<std::vector<int>> decode_tokens = {{224}, {24}, {8}, {66}};
+  BudgetRecordingExecutor executor(tokenizer_->GetVocabSize(), prefill_tokens,
+                                   decode_tokens);
+  std::optional<BenchmarkInfo> benchmark_info;
+  ASSERT_OK_AND_ASSIGN(auto token_ids_buffer,
+                       tokenizer_->TokenIdsToTensorBuffer(prefill_tokens[0]));
+  ExecutorInputs inputs(ExecutorTextData(std::move(token_ids_buffer)),
+                        std::nullopt, std::nullopt);
+  ASSERT_OK(Tasks::Prefill(executor, inputs, /*wait_for_completion=*/true,
+                           benchmark_info));
+  ASSERT_OK_AND_ASSIGN(auto decoded_ids,
+                       tokenizer_->TokenIdsToTensorBuffer(prefill_tokens[0]));
+  ASSERT_OK_AND_ASSIGN(
+      auto sampler, TopPSampler::Create(/*k=*/1, /*p=*/0.0,
+                                        /*temperature=*/1.0, /*batch_size=*/1,
+                                        /*sequence_size=*/1, /*seed=*/0));
+  StopTokenDetector stop_token_detector(1);
+  ASSERT_OK(stop_token_detector.AddStopTokenSequence({2294}));
+  absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback = nullptr;
+  ASSERT_OK_AND_ASSIGN(
+      auto response,
+      Tasks::Decode(executor, *tokenizer_, stop_token_detector,
+                    /*num_output_candidates=*/1, benchmark_info, sampler.get(),
+                    RepetitionPenaltyConfig::Default(),
+                    NoRepeatNgramConfig::Default(),
+                    SuppressTokensConfig::Default(), /*constraint=*/nullptr,
+                    std::move(decoded_ids), callback, /*cancelled=*/nullptr,
+                    /*max_output_tokens=*/3));
+  EXPECT_TRUE(executor.decode_params.empty());
+  ASSERT_EQ(response.GetTokenIds().size(), 1);
+  EXPECT_THAT(response.GetTokenIds()[0], ElementsAre(224, 24, 8));
+}
 
 TEST_F(TasksTest, PrefillTooLong) {
   const std::string prompt = "Hello World!";

@@ -235,6 +235,54 @@ cc_library(
     ],
 )
 
+cc_library(
+    name = "nvidia_greedy_sampler",
+    srcs = ["nvidia_greedy_sampler.cc"],
+    hdrs = ["nvidia_greedy_sampler.h"],
+    deps = [
+        ":sampler",
+        "@com_google_absl//absl/log:absl_log",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@litert//litert/cc:litert_element_type",
+        "@litert//litert/cc:litert_environment",
+        "@litert//litert/cc:litert_environment_options",
+        "@litert//litert/cc:litert_layout",
+        "@litert//litert/cc:litert_macros",
+        "@litert//litert/cc:litert_ranked_tensor_type",
+        "@litert//litert/cc:litert_tensor_buffer",
+        "@litert//litert/cc:litert_tensor_buffer_types",
+        "@litert//litert/cc/internal:litert_shared_library",
+        "@litert//litert/vendors/nvidia:cache_layout",
+        "@litert//litert/vendors/nvidia/dispatch:greedy_sampler_c_api",
+        "//runtime/executor:executor_settings_base",
+        "//runtime/proto:sampler_params_cc_proto",
+        "//runtime/util:litert_status_util",
+    ],
+)
+
+cc_test(
+    name = "nvidia_greedy_sampler_test",
+    srcs = ["nvidia_greedy_sampler_test.cc"],
+    deps = [
+        ":nvidia_greedy_sampler",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@litert//litert/cc:litert_element_type",
+        "@litert//litert/cc:litert_environment",
+        "@litert//litert/cc:litert_layout",
+        "@litert//litert/cc:litert_ranked_tensor_type",
+        "@litert//litert/cc:litert_tensor_buffer",
+        "@litert//litert/test:matchers",
+        "@litert//litert/vendors/nvidia:cache_layout",
+        "//runtime/executor:executor_settings_base",
+        "//runtime/proto:sampler_params_cc_proto",
+        "//runtime/util:test_utils",
+    ],
+)
+
 # This is the target to link all the static GPU samplers. If you plan to enable GPU sampling, this
 # target should be linked.
 cc_library(
