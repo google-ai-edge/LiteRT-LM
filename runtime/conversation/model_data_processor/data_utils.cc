@@ -42,7 +42,8 @@ absl::StatusOr<std::unique_ptr<MemoryMappedFile>> LoadItemData(
     if (item.contains("blob")) {
       std::string blob_b64 = item["blob"].get<std::string>();
       std::string blob;
-      if (!absl::Base64Unescape(blob_b64, &blob)) {
+      if (!absl::Base64Unescape(blob_b64, &blob) &&
+          !absl::WebSafeBase64Unescape(blob_b64, &blob)) {
         return absl::InvalidArgumentError("Failed to decode base64 blob.");
       }
       return InMemoryFile::Create(blob);
