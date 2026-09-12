@@ -156,7 +156,7 @@ class Engine(val engineConfig: EngineConfig) : AutoCloseable {
           conversationConfig.extraContext.toJsonObject().toString(),
           ExperimentalFlags.enableConversationConstrainedDecoding,
           ExperimentalFlags.filterChannelContentFromKvCache,
-          ExperimentalFlags.overwritePromptTemplate,
+          conversationConfig.chatTemplate ?: ExperimentalFlags.overwritePromptTemplate,
           conversationConfig.loraConfig?.loraPath,
           conversationConfig.loraConfig?.audioLoraPath,
           conversationConfig.prefillPrefaceOnInit,

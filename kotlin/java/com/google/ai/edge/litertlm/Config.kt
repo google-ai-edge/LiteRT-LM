@@ -238,6 +238,9 @@ data class EngineConfig(
  *       initialization of the speculative decoding drafter (e.g. MTP) on first use.
  *     - If `false`: Explicitly disables speculative decoding for this conversation even if the
  *       engine was initialized with speculative decoding enabled.
+ * @property chatTemplate An optional Jinja chat template string to override the default template
+ *   defined in the model metadata for this conversation. If null, the conversation uses the
+ *   template defined in the model metadata.
  */
 data class ConversationConfig
 @JvmOverloads
@@ -255,6 +258,7 @@ constructor(
   val thinkingConfig: ThinkingConfig? = null,
   val enableResponseFormat: Boolean = false,
   val enableSpeculativeDecoding: Boolean? = null,
+  val chatTemplate: String? = null,
 ) {
   init {
     require(maxOutputToken == null || maxOutputToken > 0) {
