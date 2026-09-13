@@ -17,6 +17,7 @@
 #include <string>
 
 #include <gtest/gtest.h>
+#include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "runtime/components/tool_use/rust/parsers.rs.h"
 
@@ -63,16 +64,65 @@ TEST(ConvertJsonValueTest, HandlesComplexStructure) {
   EXPECT_NEAR(converted["number_float"].get<double>(), 3.14, 0.0001);
   EXPECT_EQ(converted["string_val"], "hello");
 
+  // Numeric *type* must survive the conversion, not just the numeric value.
+  // The EXPECT_EQ above cannot catch a regression here: nlohmann's operator==
+  // compares numbers across representations, so 42 == 42.0 holds.
+  EXPECT_TRUE(converted["number_int"].is_number_integer());
+  EXPECT_TRUE(converted["number_float"].is_number_float());
+
   // Verify array.
   ASSERT_TRUE(converted["array_mixed"].is_array());
   ASSERT_EQ(converted["array_mixed"].size(), 3);
   EXPECT_EQ(converted["array_mixed"][0], 1);
+  EXPECT_TRUE(converted["array_mixed"][0].is_number_integer());
   EXPECT_EQ(converted["array_mixed"][1], "two");
   EXPECT_EQ(converted["array_mixed"][2], false);
 
   // Verify nested object.
   ASSERT_TRUE(converted["object_nested"].is_object());
   EXPECT_EQ(converted["object_nested"]["inner_key"], "inner_val");
+}
+
+// Asserts on the serialized form, which -- unlike operator== -- distinguishes
+// an integer from a float. Downstream consumers see exactly this text, and a
+// strict JSON decoder rejects "1000.0" for a field declared as an integer.
+TEST(ConvertJsonValueTest, PreservesNumericRepresentation) {
+  struct TestCase {
+    std::string name;
+    std::string literal;
+    std::string expected_dump;
+    bool expect_integer;
+  };
+  const TestCase kTestCases[] = {
+      {"positive_int", "1000", "1000", true},
+      {"negative_int", "-678", "-678", true},
+      {"zero", "0", "0", true},
+      {"float_with_zero_fraction", "1000.0", "1000.0", false},
+      {"float", "3.14", "3.14", false},
+      // Exponent notation stays a float: the writer chose that form, and there
+      // is no way to tell an intended integer from an intended float.
+      {"exponent", "1e3", "1000.0", false},
+      // Beyond 2^53 an f64 round trip would silently change the digits.
+      {"large_int_above_2_53", "9007199254740993", "9007199254740993", true},
+  };
+
+  for (const TestCase& test_case : kTestCases) {
+    SCOPED_TRACE(test_case.name);
+    const std::string input =
+        absl::StrCat(R"({"name": "test_tool", "arguments": {"value": )",
+                     test_case.literal, "}}");
+
+    const auto result = parse_json_expression(input);
+    ASSERT_TRUE(result.is_ok)
+        << "Failed to parse setup JSON: " << std::string(result.error);
+    ASSERT_EQ(result.tool_calls.size(), 1);
+
+    const auto arguments = result.tool_calls[0].object_get("arguments");
+    const nlohmann::ordered_json converted = ConvertJsonValue(*arguments);
+
+    EXPECT_EQ(converted["value"].dump(), test_case.expected_dump);
+    EXPECT_EQ(converted["value"].is_number_integer(), test_case.expect_integer);
+  }
 }
 
 }  // namespace

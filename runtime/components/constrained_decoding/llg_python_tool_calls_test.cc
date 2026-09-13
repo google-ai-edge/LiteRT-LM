@@ -620,6 +620,93 @@ set_timer(sound=True, duration=10)
 ```)");
 }
 
+// "integer" and "number" are distinct JSON Schema types and must map to
+// distinct grammar rules. GetRuleForType is shared with the FC grammar, so
+// both grammars have to define INTEGER; these cases would fail if only one
+// did.
+TEST_F(LlgPythonToolCallsTest, PythonIntegerParametersRejectFloats) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "set_timer",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "duration": {
+          "type": "integer"
+        }
+      },
+      "required": ["duration"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+
+  LlgConstraintsOptions options =
+      GetDefaultPythonOptions(LlgConstraintMode::kFunctionCallsOnly);
+
+  auto constraint = CreateConstraint(tools, options);
+
+  AssertAccepts(*constraint,
+                R"(```tool_code
+set_timer(duration=10)
+```)");
+  AssertAccepts(*constraint,
+                R"(```tool_code
+set_timer(duration=0)
+```)");
+  AssertAccepts(*constraint,
+                R"(```tool_code
+set_timer(duration=-5)
+```)");
+
+  AssertRejects(*constraint,
+                R"(```tool_code
+set_timer(duration=10.5)
+```)");
+  AssertRejects(*constraint,
+                R"(```tool_code
+set_timer(duration=10.0)
+```)");
+  AssertRejects(*constraint,
+                R"(```tool_code
+set_timer(duration=1e3)
+```)");
+}
+
+// Guards the other direction: tightening "integer" must not also tighten
+// "number".
+TEST_F(LlgPythonToolCallsTest, PythonNumberParametersStillAcceptFloats) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "set_temperature",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "celsius": {
+          "type": "number"
+        }
+      },
+      "required": ["celsius"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+
+  LlgConstraintsOptions options =
+      GetDefaultPythonOptions(LlgConstraintMode::kFunctionCallsOnly);
+
+  auto constraint = CreateConstraint(tools, options);
+
+  AssertAccepts(*constraint,
+                R"(```tool_code
+set_temperature(celsius=21.5)
+```)");
+  AssertAccepts(*constraint,
+                R"(```tool_code
+set_temperature(celsius=21)
+```)");
+  AssertAccepts(*constraint,
+                R"(```tool_code
+set_temperature(celsius=2.15e1)
+```)");
+}
+
 TEST_F(LlgPythonToolCallsTest, PythonOptionalParametersFlexibleOrder) {
   nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
     "name": "search",

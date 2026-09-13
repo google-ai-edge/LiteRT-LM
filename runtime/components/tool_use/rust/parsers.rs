@@ -38,6 +38,8 @@ mod ffi {
 
         fn get_bool(self: &JsonValue) -> bool;
         fn get_number(self: &JsonValue) -> f64;
+        fn is_integer(self: &JsonValue) -> bool;
+        fn get_integer(self: &JsonValue) -> i64;
         fn get_string(self: &JsonValue) -> &str;
 
         fn array_len(self: &JsonValue) -> usize;
@@ -113,6 +115,28 @@ impl JsonValue {
         match &*self.inner {
             InnerValue::Number(n) => n.as_f64().unwrap_or(0.0),
             _ => 0.0,
+        }
+    }
+    /// Returns true if this value is a number that was written as an integer.
+    ///
+    /// `serde_json::Number` already records whether the literal had a fraction
+    /// or exponent; `get_number` discards that by widening everything to f64.
+    /// Callers should consult this before `get_number` so that `1000` is not
+    /// silently re-serialized as `1000.0`.
+    ///
+    /// Note this is deliberately gated on `is_i64` alone: values above
+    /// `i64::MAX` keep falling through to the f64 path, which is exactly the
+    /// pre-existing behavior, rather than trapping to zero in `get_integer`.
+    fn is_integer(self: &JsonValue) -> bool {
+        match &*self.inner {
+            InnerValue::Number(n) => n.is_i64(),
+            _ => false,
+        }
+    }
+    fn get_integer(self: &JsonValue) -> i64 {
+        match &*self.inner {
+            InnerValue::Number(n) => n.as_i64().unwrap_or(0),
+            _ => 0,
         }
     }
     fn get_string(self: &JsonValue) -> &str {
@@ -202,3 +226,6 @@ pub fn parse_json_expression(text: &str) -> ffi::ToolCalls {
         Err(e) => ffi::ToolCalls { tool_calls: Vec::new(), is_ok: false, error: e },
     }
 }
+
+#[cfg(test)]
+mod parsers_test;

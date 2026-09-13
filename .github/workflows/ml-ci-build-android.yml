@@ -226,7 +226,8 @@ jobs:
             -- \
             -//python/... \
             -//kotlin/java/com/google/ai/edge/litertlm/example/... \
-            -//runtime/components/rust/...
+            -//runtime/components/rust/... \
+            -//runtime/components/tool_use/rust/...
 
       - name: Update litert_lm_main prebuilt for Android if new version tag is pushed.
         if: github.ref_type == 'tag'

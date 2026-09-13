@@ -80,6 +80,10 @@ pair: IDENTIFIER ":" json_value
 IDENTIFIER: /[a-zA-Z_][a-zA-Z0-9_]*/
 
 // Primitives (Standard JSON)
+// INTEGER is NUMBER without the fraction and exponent groups. Parameters
+// declared as "type": "integer" bind to it so the model cannot emit 1000.0
+// or 1e3 where an integer is required.
+INTEGER: /-?(?:0|[1-9]\d*)/
 NUMBER: /-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/
 BOOLEAN: "true" | "false"
 NULL: "null"

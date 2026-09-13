@@ -17,6 +17,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "runtime/util/test_utils.h"  // NOLINT
 
@@ -180,6 +181,39 @@ TEST(FcParserUtilsTest, ParseComplexArguments) {
                   }
                 }
               }])json")));
+}
+
+// The FC grammar has a single NUMBER token for both integers and floats, so
+// the parser has to decide the type from the literal text.
+//
+// This asserts on the serialized form rather than comparing parsed values:
+// nlohmann's operator== compares numbers across representations, so the
+// IsOkAndHolds matcher used by the tests above holds equally for 123 and
+// 123.0 and cannot detect a loss of integer-ness.
+TEST(FcParserUtilsTest, PreservesNumericRepresentation) {
+  struct TestCase {
+    std::string name;
+    std::string literal;
+    std::string expected_dump;
+  };
+  const TestCase kTestCases[] = {
+      {"positive_int", "1000", "1000"},
+      {"negative_int", "-678", "-678"},
+      {"zero", "0", "0"},
+      {"float_with_zero_fraction", "1000.0", "1000.0"},
+      {"float", "3.14", "3.14"},
+      {"exponent", "1e3", "1000.0"},
+      {"large_int_above_2_53", "9007199254740993", "9007199254740993"},
+  };
+
+  for (const TestCase& test_case : kTestCases) {
+    SCOPED_TRACE(test_case.name);
+    ASSERT_OK_AND_ASSIGN(const auto tool_calls,
+                         ParseFcExpression(absl::StrCat(
+                             "call:test_tool{value:", test_case.literal, "}")));
+    EXPECT_EQ(tool_calls[0]["arguments"]["value"].dump(),
+              test_case.expected_dump);
+  }
 }
 
 TEST(FcParserUtilsTest, InvalidToolCallSyntax) {

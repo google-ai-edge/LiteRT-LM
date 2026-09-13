@@ -150,7 +150,12 @@ start : SAFE_TEXT
 std::string GetRuleForType(const std::string& type,
                            const std::string& fallback_rule) {
   if (type == "string") return "string";
-  if (type == "number" || type == "integer") return "NUMBER";
+  // "integer" and "number" are distinct JSON Schema types and must map to
+  // distinct rules: NUMBER permits a fraction and an exponent, so sharing it
+  // would let the model emit 1000.0 for an integer field. Both the FC and the
+  // Python grammar define INTEGER; they have to stay in sync with this.
+  if (type == "integer") return "INTEGER";
+  if (type == "number") return "NUMBER";
   if (type == "boolean") return "BOOLEAN";
   if (type == "array") return "array";
   if (type == "object") return "object";

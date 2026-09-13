@@ -52,7 +52,15 @@ fn parse_value(value_ctx: &ValueContext) -> Result<Value, String> {
         Ok(json!(strip_escape_tokens(&escaped_string_ctx.get_text())))
     } else if let Some(number_ctx) = value_ctx.NUMBER() {
         let text = number_ctx.get_text();
-        if let Ok(double_val) = text.parse::<f64>() {
+        // The FC grammar uses a single NUMBER token for both integers and
+        // floats (unlike the Python grammar, which has separate INT and FLOAT
+        // tokens), so branch on the literal text instead of the token type.
+        // Parsing everything as f64 rewrites `1000` as `1000.0` and loses
+        // precision above 2^53. A literal with a fraction or exponent fails
+        // the i64 parse and correctly falls through to f64.
+        if let Ok(int_val) = text.parse::<i64>() {
+            Ok(json!(int_val))
+        } else if let Ok(double_val) = text.parse::<f64>() {
             Ok(json!(double_val))
         } else {
             Err(format!("Failed to parse number: {}", text))
@@ -171,3 +179,6 @@ pub fn parse_fc_expression(text: &str) -> Result<Vec<Value>, String> {
         Err(e) => Err(e.to_string()),
     }
 }
+
+#[cfg(test)]
+mod fc_parser_test;
