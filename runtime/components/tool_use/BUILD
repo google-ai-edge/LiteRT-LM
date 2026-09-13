@@ -98,6 +98,7 @@ cc_test(
     deps = [
         ":parser_common",
         "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/strings",
         "@nlohmann_json//:json",
         "//runtime/components/tool_use/rust:parsers_cpp",
     ],
@@ -182,6 +183,7 @@ cc_test(
         ":fc_parser_utils",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/strings",
         "@nlohmann_json//:json",
         "//runtime/util:test_utils",
     ],

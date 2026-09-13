@@ -106,6 +106,11 @@ object: "{" [pair ("," pair)*] "}"
 pair: string ":" python_value
 
 // Primitives (Python-style)
+// INTEGER is NUMBER without the fraction and exponent groups. Parameters
+// declared as "type": "integer" bind to it so the model cannot emit 1000.0
+// or 1e3 where an integer is required. This must stay in sync with the FC
+// grammar because GetRuleForType is shared by both.
+INTEGER: /-?(?:0|[1-9]\d*)/
 NUMBER: /-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/
 BOOLEAN: "True" | "False"
 NULL: "None"
