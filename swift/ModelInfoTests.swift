@@ -36,8 +36,37 @@ class ModelInfoTests: XCTestCase {
   }
 
   func testInit_ReturnsNilWithInvalidModelPath() {
+    LiteRTLMError.clearLastError()
     let modelInfo = ModelInfo(modelPath: "/non/existent/path.litertlm")
     XCTAssertNil(modelInfo)
+    XCTAssertNotNil(LiteRTLMError.getLastErrorMessage())
+  }
+
+  func testThrowingInit_SuccessfulWithValidModel() throws {
+    // swift-format-ignore
+    let modelResource =
+      "runtime/testdata/test_lm.litertlm"
+    let modelPath = testDataPath(forResource: modelResource)
+
+    let modelInfo = try ModelInfo(throwingModelPath: modelPath)
+    XCTAssertNotNil(modelInfo)
+  }
+
+  func testThrowingInit_ThrowsWithInvalidModelPath() {
+    XCTAssertThrowsError(try ModelInfo(throwingModelPath: "/non/existent/path.litertlm")) { error in
+      guard let litertError = error as? LiteRTLMError else {
+        XCTFail("Expected LiteRTLMError, got \(error)")
+        return
+      }
+      XCTAssertEqual(litertError, .modelInfo(.failedToLoadModel))
+      guard case .modelInfo(.failedToLoadModel(let message)) = litertError else {
+        XCTFail("Expected failedToLoadModel error, got \(litertError)")
+        return
+      }
+      XCTAssertFalse(message.isEmpty)
+      XCTAssertTrue(litertError.localizedDescription.contains(message))
+      XCTAssertNil(LiteRTLMError.getLastErrorMessage())
+    }
   }
 
   func testHasSpeculativeDecodingSupport() {
