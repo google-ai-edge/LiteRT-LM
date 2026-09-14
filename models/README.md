@@ -40,7 +40,6 @@ containing the following top-level fields:
 | `enable_thinking`       | `boolean` | *(Optional)* Whether the model should produce reasoning thoughts before answering.              |
 | `add_generation_prompt` | `boolean` | *(Optional)* Whether to append the model turn prefix to prompt generation (defaults to `true`). |
 | `bos_token`             | `string`  | *(Optional)* Beginning-of-sequence token (e.g. `<bos>`, `<s>`).                                |
-| `eos_token`             | `string`  | *(Optional)* End-of-sequence token (e.g. `<eos>`, `</s>`).                                      |
 <!-- mdformat on -->
 
 ## Message Structure

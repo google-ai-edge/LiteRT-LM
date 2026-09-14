@@ -175,10 +175,6 @@
     "bos_token": {
       "type": "string",
       "description": "The beginning-of-sequence token."
-    },
-    "eos_token": {
-      "type": "string",
-      "description": "The end-of-sequence token."
     }
   },
   "required": ["messages"]
