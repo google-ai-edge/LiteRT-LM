@@ -76,12 +76,13 @@ jobs:
         run: python3 -m pip install --break-system-packages pytest==8.3.4
 
       - name: Checkout code.
-        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           lfs: true
+          persist-credentials: false
 
       - name: Set up Google Cloud SDK
-        uses: google-github-actions/setup-gcloud@98ddc00a17442e89a24bbf282954a3b65ce6d200 # v2.1.0
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
 
       - name: Install Rust
         run: |
@@ -89,6 +90,7 @@ jobs:
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
       - name: Install Bazelisk
+        # zizmor: ignore[adhoc-packages]
         run: |
           npm install -g @bazel/bazelisk
 
@@ -128,9 +130,9 @@ jobs:
 
       - name: Export NDK Home globally
         # This guarantees Bazel finds it during both the Linux //... eval and the actual Android compile
+        run: echo "ANDROID_NDK_HOME=${STEPS_SETUP_NDK_OUTPUTS_NDK_PATH}" >> $GITHUB_ENV
         env:
-          NDK_PATH: ${{ steps.setup-ndk.outputs.ndk-path }}
-        run: echo "ANDROID_NDK_HOME=$NDK_PATH" >> $GITHUB_ENV
+          STEPS_SETUP_NDK_OUTPUTS_NDK_PATH: ${{ steps.setup-ndk.outputs.ndk-path }}
 
 
       - name : Set up cache keys
@@ -142,10 +144,10 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.sha }}
         run: |
-          CACHE_RESTORE_KEY_2="$GH_WORKFLOW"
-          CACHE_RESTORE_KEY_1="$CACHE_RESTORE_KEY_2-$HASH_WORKSPACE"
-          CACHE_RESTORE_KEY_0="$CACHE_RESTORE_KEY_1-$HASH_BUILD"
-          CACHE_RESTORE_KEY_HEAD="$CACHE_RESTORE_KEY_0-$BASE_SHA"
+          CACHE_RESTORE_KEY_2="${GITHUB_WORKFLOW}"
+          CACHE_RESTORE_KEY_1="$CACHE_RESTORE_KEY_2-${{ hashFiles('**/WORKSPACE', '**/.bazelrc') }}"
+          CACHE_RESTORE_KEY_0="$CACHE_RESTORE_KEY_1-${{ hashFiles('**/BUILD*') }}"
+          CACHE_RESTORE_KEY_HEAD="$CACHE_RESTORE_KEY_0-${{ github.event.pull_request.base.sha }}"
 
           CACHE_KEY="$CACHE_RESTORE_KEY_0-$HEAD_SHA"
           echo "CACHE_RESTORE_KEY_2=$CACHE_RESTORE_KEY_2" >> "$GITHUB_OUTPUT"
@@ -167,17 +169,23 @@ jobs:
           KEY_0: ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_0 }}
           KEY_1: ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_1 }}
           KEY_2: ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_2 }}
+          STEPS_CACHE_KEYS_OUTPUTS_CACHE_KEY: ${{ steps.cache-keys.outputs.CACHE_KEY }}
+          STEPS_CACHE_KEYS_OUTPUTS_CACHE_RESTORE_KEY_HEAD: ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_HEAD }}
+          STEPS_CACHE_KEYS_OUTPUTS_CACHE_RESTORE_KEY_0: ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_0 }}
+          STEPS_CACHE_KEYS_OUTPUTS_CACHE_RESTORE_KEY_1: ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_1 }}
+          STEPS_CACHE_KEYS_OUTPUTS_CACHE_RESTORE_KEY_2: ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_2 }}
+
         run: |
           TARGET_DIR="$HOME/.cache/bazel"
           BUCKET_URL="gs://litert-lm-cicd/caches/linux/bazel"
 
-          echo "cache-primary-key=$KEY" >> "$GITHUB_OUTPUT"
+          echo "cache-primary-key=${STEPS_CACHE_KEYS_OUTPUTS_CACHE_KEY}" >> "$GITHUB_OUTPUT"
 
-          CACHE_KEYS=("$KEY" \
-                      "$KEY_HEAD" \
-                      "$KEY_0" \
-                      "$KEY_1" \
-                      "$KEY_2")
+          CACHE_KEYS=("${STEPS_CACHE_KEYS_OUTPUTS_CACHE_KEY}" \
+                      "${STEPS_CACHE_KEYS_OUTPUTS_CACHE_RESTORE_KEY_HEAD}" \
+                      "${STEPS_CACHE_KEYS_OUTPUTS_CACHE_RESTORE_KEY_0}" \
+                      "${STEPS_CACHE_KEYS_OUTPUTS_CACHE_RESTORE_KEY_1}" \
+                      "${STEPS_CACHE_KEYS_OUTPUTS_CACHE_RESTORE_KEY_2}")
 
           FOUND_BLOB=""
 
@@ -225,6 +233,16 @@ jobs:
           fi
 
 
+      - name: Check cache hit.
+        run: |
+          echo "Cache Hit: ${STEPS_BAZEL_CACHE_OUTPUTS_CACHE_HIT}"
+          echo "Cache Primary Key: ${STEPS_BAZEL_CACHE_OUTPUTS_CACHE_PRIMARY_KEY}"
+          echo "Cache Matched Key: ${STEPS_BAZEL_CACHE_OUTPUTS_CACHE_MATCHED_KEY}"
+        env:
+          STEPS_BAZEL_CACHE_OUTPUTS_CACHE_HIT: ${{ steps.bazel-cache.outputs.cache-hit }}
+          STEPS_BAZEL_CACHE_OUTPUTS_CACHE_PRIMARY_KEY: ${{ steps.bazel-cache.outputs.cache-primary-key }}
+          STEPS_BAZEL_CACHE_OUTPUTS_CACHE_MATCHED_KEY: ${{ steps.bazel-cache.outputs.cache-matched-key }}
+
       - name: Download Model
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
@@ -269,7 +287,7 @@ jobs:
           GH_REF_NAME: ${{ github.ref_name }}
         run: |
           cp bazel-bin/runtime/engine/litert_lm_main litert_lm_main.linux_x86_64
-          gh release upload "$GH_REF_NAME" litert_lm_main.linux_x86_64 --clobber
+          gh release upload ${GITHUB_REF_NAME} litert_lm_main.linux_x86_64 --clobber
 
       - name: Run bazel test on Linux.
         continue-on-error: true  # Ignore errors when test fails.
@@ -321,7 +339,10 @@ jobs:
         continue-on-error: true  # Ignore errors when cache is not found.
         env:
           CACHE_KEY: ${{ steps.cache-keys.outputs.CACHE_KEY }}
+          STEPS_CACHE_KEYS_OUTPUTS_CACHE_KEY: ${{ steps.cache-keys.outputs.CACHE_KEY }}
+
         run: |
+          CACHE_KEY="${STEPS_CACHE_KEYS_OUTPUTS_CACHE_KEY}"
           BUCKET_URL="gs://litert-lm-cicd/caches/linux/bazel"
           echo "REFRESH_CACHE is true. Removing existing cache from GCS: $BUCKET_URL/$CACHE_KEY.tar.gz"
           gcloud storage rm "$BUCKET_URL/$CACHE_KEY.tar.gz"
@@ -330,8 +351,11 @@ jobs:
         if: env.REFRESH_CACHE == 'true' || steps.bazel-cache.outputs.cache-hit != 'true'
         env:
           CACHE_KEY: ${{ steps.cache-keys.outputs.CACHE_KEY }}
+          STEPS_CACHE_KEYS_OUTPUTS_CACHE_KEY: ${{ steps.cache-keys.outputs.CACHE_KEY }}
+
         run: |
           TARGET_DIR="$HOME/.cache/bazel"
+          CACHE_KEY="${STEPS_CACHE_KEYS_OUTPUTS_CACHE_KEY}"
           BUCKET_URL="gs://litert-lm-cicd/caches/linux/bazel"
           ARCHIVE_NAME="cache.tar.gz"
 
