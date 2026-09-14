@@ -382,16 +382,30 @@ class Model:
     ]
 
   @classmethod
-  def from_model_reference(cls, model_reference):
+  def from_model_reference(cls, model_reference: str) -> Model:
     """Creates a Model instance from a model reference."""
-    if os.path.exists(model_reference):
+    # 1. Check if model_reference matches an imported model ID in
+    # ~/.litert-lm/models/.
+    imported_model = cls.from_model_id(model_reference)
+    if imported_model.exists():
+      return imported_model
+
+    # 2. Check if model_reference is an existing local file
+    if os.path.isfile(model_reference):
       return cls.from_model_path(model_reference)
-    else:
-      # assume the reference is model_id
-      return cls.from_model_id(model_reference)
+
+    # 3. Check if model_reference is a local directory containing a model
+    if os.path.isdir(model_reference):
+      dir_model_path = os.path.join(model_reference, "model.litertlm")
+      if os.path.isfile(dir_model_path):
+        return cls.from_model_path(dir_model_path)
+
+    # 4. Fallback: Return imported_model representation (so .exists() returns
+    # False).
+    return imported_model
 
   @classmethod
-  def from_model_path(cls, model_path):
+  def from_model_path(cls, model_path: str) -> Model:
     """Creates a Model instance from a model path."""
     abs_path = os.path.abspath(model_path)
     if os.path.basename(abs_path) == "model.litertlm":
@@ -405,13 +419,13 @@ class Model:
     )
 
   @classmethod
-  def from_model_id(cls, model_id):
+  def from_model_id(cls, model_id: str) -> Model:
     """Creates a Model instance from a model ID."""
     return cls(
         model_id=model_id,
         model_path=os.path.join(
             get_converted_models_base_dir(),
-            model_id.replace("/", "--"),
+            model_id_dir_name(model_id),
             "model.litertlm",
         ),
     )
