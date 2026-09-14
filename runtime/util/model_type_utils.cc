@@ -370,6 +370,9 @@ absl::StatusOr<std::string> GetDefaultJinjaPromptTemplate(
 {%- if add_generation_prompt -%}
     {{'<start_of_turn>model\n'}}
 {%- endif -%})tmpl";
+    // MiniCPM-V shares the FastVLM fallback template: both mark image
+    // placeholders with `<image_soft_token>`.
+    case proto::LlmModelType::kMinicpmv:
     case proto::LlmModelType::kFastVlm:
       // absl::Substitute takes up to 10 arguments, so we have to split the
       // template into two parts.
@@ -516,6 +519,8 @@ absl::string_view GetModelTypeName(const proto::LlmModelType& model_type) {
       return "lfm2";
     case proto::LlmModelType::kMinicpm5:
       return "minicpm5";
+    case proto::LlmModelType::kMinicpmv:
+      return "minicpmv";
     case proto::LlmModelType::MODEL_TYPE_NOT_SET:
       return "Not set";
   }
