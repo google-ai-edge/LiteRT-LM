@@ -538,7 +538,521 @@ class TestableLlmLiteRtCompiledModelExecutorStatic
     testable->sampler_ = std::move(sampler);
     testable->sampler_handles_input_ = true;
   }
+
+  // Same, but recording the params the sampler stands for -- what the executor
+  // does for a sampler it built itself, and what a context switch compares
+  // against.
+  static void SetSamplerWithInputHandlingAndParamsForTest(
+      LlmLiteRtCompiledModelExecutorStatic* executor,
+      std::unique_ptr<Sampler> sampler,
+      const proto::SamplerParameters& sampler_params) {
+    auto* testable =
+        static_cast<TestableLlmLiteRtCompiledModelExecutorStatic*>(executor);
+    testable->sampler_ = std::move(sampler);
+    testable->sampler_handles_input_ = true;
+    // A single-head CPU context with the default input handling, which is what
+    // these tests restore.
+    testable->sampler_built_from_ = SamplerConstruction{
+        .params = sampler_params,
+        .output_heads = 1,
+        .backend = Backend::CPU,
+        .handles_input_requested = true,
+    };
+  }
+
+  // Same, for a sampler that stands for a given number of output heads.
+  static void SetSamplerWithParamsAndOutputHeadsForTest(
+      LlmLiteRtCompiledModelExecutorStatic* executor,
+      std::unique_ptr<Sampler> sampler,
+      const proto::SamplerParameters& sampler_params, int output_heads) {
+    auto* testable =
+        static_cast<TestableLlmLiteRtCompiledModelExecutorStatic*>(executor);
+    testable->sampler_ = std::move(sampler);
+    testable->sampler_handles_input_ = true;
+    testable->sampler_built_from_ = SamplerConstruction{
+        .params = sampler_params,
+        .output_heads = output_heads,
+        .backend = Backend::CPU,
+        .handles_input_requested = true,
+    };
+  }
+
+  static bool HasSamplerForTest(
+      LlmLiteRtCompiledModelExecutorStatic* executor) {
+    return static_cast<TestableLlmLiteRtCompiledModelExecutorStatic*>(executor)
+               ->sampler_ != nullptr;
+  }
+
+  static std::optional<proto::SamplerParameters> SamplerParamsInUseForTest(
+      LlmLiteRtCompiledModelExecutorStatic* executor) {
+    const auto& built =
+        static_cast<TestableLlmLiteRtCompiledModelExecutorStatic*>(executor)
+            ->sampler_built_from_;
+    if (!built.has_value()) return std::nullopt;
+    return built->params;
+  }
 };
+
+// A handling sampler that reports through counters which outlive it. The
+// release under test destroys the sampler, so the object itself cannot be
+// asked afterwards what happened to it.
+class FakeSamplerReportingTeardown : public FakeSamplerWithInputHandling {
+ public:
+  FakeSamplerReportingTeardown(int* disconnect_count, bool* destroyed)
+      : disconnect_count_(disconnect_count), destroyed_(destroyed) {}
+
+  ~FakeSamplerReportingTeardown() override { *destroyed_ = true; }
+
+  absl::Status SetInferenceFuncAndInputTensors(
+      int (*run_inference_func)(void* arg), void* arg,
+      const TensorBuffer* ids_tensor,
+      const TensorBuffer* prev_input_positions_tensor,
+      const TensorBuffer* input_positions_tensor,
+      const TensorBuffer* prev_mask_tensor, const TensorBuffer* mask_tensor,
+      const TensorBuffer* prev_param_tensor,
+      const TensorBuffer* param_tensor) override {
+    if (run_inference_func == nullptr) {
+      ++*disconnect_count_;
+    }
+    return FakeSamplerWithInputHandling::SetInferenceFuncAndInputTensors(
+        run_inference_func, arg, ids_tensor, prev_input_positions_tensor,
+        input_positions_tensor, prev_mask_tensor, mask_tensor,
+        prev_param_tensor, param_tensor);
+  }
+
+ private:
+  int* disconnect_count_;
+  bool* destroyed_;
+};
+
+// Sampler params a session would carry. Two of them, differing in every field
+// the executor builds a sampler from.
+proto::SamplerParameters GreedySamplerParams() {
+  proto::SamplerParameters params;
+  params.set_type(proto::SamplerParameters::TOP_P);
+  params.set_k(1);
+  params.set_p(0.0f);
+  params.set_temperature(1.0f);
+  params.set_seed(1);
+  return params;
+}
+
+proto::SamplerParameters StochasticSamplerParams() {
+  proto::SamplerParameters params;
+  params.set_type(proto::SamplerParameters::TOP_P);
+  params.set_k(40);
+  params.set_p(0.95f);
+  params.set_temperature(1.5f);
+  params.set_seed(7);
+  return params;
+}
+
+// A second context with different sampler params must not keep sampling with
+// the sampler the first context built (#2080): the executor caches one
+// sampler, and before this a stochastic session opened after a greedy one on
+// the same engine stayed greedy for the engine's whole lifetime.
+TEST(LlmLiteRtCompiledModelExecutorStaticTest,
+     SamplerFollowsActiveContextParams) {
+  auto model_path =
+      std::filesystem::path(::testing::SrcDir()) / kTestStaticModelPath;
+  ASSERT_OK_AND_ASSIGN(
+      auto model_resources,
+      CreateExecutorModelResourcesLitertLm(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(
+      auto executor_settings,
+      LlmExecutorSettings::CreateDefault(model_assets, Backend::CPU));
+  executor_settings.SetCacheDir(":nocache");
+  executor_settings.SetMaxNumTokens(kMaxNumTokens);
+  ::litert::lm::CpuConfig config;
+  config.number_of_threads = kNumThreads;
+  executor_settings.SetBackendConfig(config);
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  ASSERT_OK_AND_ASSIGN(auto executor,
+                       LlmLiteRtCompiledModelExecutorStatic::Create(
+                           executor_settings, env, *model_resources));
+  ASSERT_NE(executor, nullptr);
+
+  auto run_session = [&](const proto::SamplerParameters& params) {
+    RuntimeConfig runtime_config;
+    runtime_config.sampler_params = params;
+    ASSERT_OK_AND_ASSIGN(
+        auto context, executor->CreateNewContext(std::nullopt, runtime_config));
+    ASSERT_OK(executor->RestoreContext(std::move(context)));
+    const std::vector<int> input_tokens = {1, 2, 3};
+    LITERT_ASSERT_OK_AND_ASSIGN(
+        auto input_tokens_buffer,
+        CopyToTensorBuffer<int>(absl::MakeSpan(input_tokens), {1, 3}));
+    ExecutorInputs inputs;
+    inputs.SetTextData(ExecutorTextData(std::move(input_tokens_buffer)));
+    ASSERT_OK(executor->Prefill(inputs));
+    ASSERT_OK(executor->Decode().status());
+  };
+  auto params_in_use = [&]() -> proto::SamplerParameters {
+    const auto& in_use =
+        TestableLlmLiteRtCompiledModelExecutorStatic::SamplerParamsInUseForTest(
+            executor.get());
+    EXPECT_TRUE(in_use.has_value());
+    return in_use.value_or(proto::SamplerParameters());
+  };
+
+  // First session: greedy. The sampler is built from this context's params.
+  run_session(GreedySamplerParams());
+  EXPECT_EQ(params_in_use().k(), 1);
+  EXPECT_FLOAT_EQ(params_in_use().temperature(), 1.0f);
+  EXPECT_EQ(params_in_use().seed(), 1);
+
+  // Second session on the same engine asks for stochastic sampling. (A rebuilt
+  // sampler may well land at the freed one's address, so the params it was
+  // built with are the observable, not the pointer.)
+  run_session(StochasticSamplerParams());
+  EXPECT_EQ(params_in_use().k(), 40);
+  EXPECT_FLOAT_EQ(params_in_use().p(), 0.95f);
+  EXPECT_FLOAT_EQ(params_in_use().temperature(), 1.5f);
+  EXPECT_EQ(params_in_use().seed(), 7);
+
+  // And back: a greedy session after a stochastic one is greedy again.
+  run_session(GreedySamplerParams());
+  EXPECT_EQ(params_in_use().k(), 1);
+  EXPECT_FLOAT_EQ(params_in_use().temperature(), 1.0f);
+  EXPECT_EQ(params_in_use().seed(), 1);
+}
+
+// The release happens when the context is restored, NOT when logits are
+// sampled. A sampler that handles input is bound into the decode graph, and
+// DecodeLogits() reads its presence as proof that the step already ran -- so a
+// sampler dropped only at sampling time would hand the new session a token the
+// previous context's graph produced.
+TEST(LlmLiteRtCompiledModelExecutorStaticTest,
+     SamplerIsReleasedWhenTheRestoredContextChangesParams) {
+  auto model_path =
+      std::filesystem::path(::testing::SrcDir()) / kTestStaticModelPath;
+  ASSERT_OK_AND_ASSIGN(
+      auto model_resources,
+      CreateExecutorModelResourcesLitertLm(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(
+      auto executor_settings,
+      LlmExecutorSettings::CreateDefault(model_assets, Backend::CPU));
+  executor_settings.SetCacheDir(":nocache");
+  executor_settings.SetMaxNumTokens(kMaxNumTokens);
+  executor_settings.SetAdvancedSettings(AdvancedSettings{
+      .sampler_handles_input = true,
+  });
+  ::litert::lm::CpuConfig config;
+  config.number_of_threads = kNumThreads;
+  executor_settings.SetBackendConfig(config);
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  ASSERT_OK_AND_ASSIGN(auto executor,
+                       LlmLiteRtCompiledModelExecutorStatic::Create(
+                           executor_settings, env, *model_resources));
+  ASSERT_NE(executor, nullptr);
+
+  // A first session, with a sampler that handles input and stands for greedy
+  // params -- as one the executor built for this context would.
+  RuntimeConfig greedy_config;
+  greedy_config.sampler_params = GreedySamplerParams();
+  ASSERT_OK_AND_ASSIGN(auto greedy_context,
+                       executor->CreateNewContext(std::nullopt, greedy_config));
+  ASSERT_OK(executor->RestoreContext(std::move(greedy_context)));
+  int disconnect_count = 0;
+  bool destroyed = false;
+  auto fake_sampler = std::make_unique<FakeSamplerReportingTeardown>(
+      &disconnect_count, &destroyed);
+  auto* fake_sampler_ptr = fake_sampler.get();
+  TestableLlmLiteRtCompiledModelExecutorStatic::
+      SetSamplerWithInputHandlingAndParamsForTest(
+          executor.get(), std::move(fake_sampler), GreedySamplerParams());
+
+  ExecutorInputs inputs;
+  const std::vector<int> tokens = {1, 2, 3};
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto input_tokens_buffer,
+      CopyToTensorBuffer<int>(absl::MakeSpan(tokens), {1, 3}));
+  inputs.SetTextData(ExecutorTextData(std::move(input_tokens_buffer)));
+  ASSERT_OK(executor->Prefill(inputs));
+  ASSERT_OK(executor->Decode().status());
+  // The decode bound the sampler into the graph -- the state that makes a late
+  // release unsafe.
+  ASSERT_TRUE(fake_sampler_ptr->HandlesInput());
+  ASSERT_EQ(disconnect_count, 0);
+
+  // Restoring a context that asks for different sampling releases it, and
+  // disconnects it from the decode graph on the way out.
+  RuntimeConfig stochastic_config;
+  stochastic_config.sampler_params = StochasticSamplerParams();
+  ASSERT_OK_AND_ASSIGN(
+      auto stochastic_context,
+      executor->CreateNewContext(std::nullopt, stochastic_config));
+  ASSERT_OK(executor->RestoreContext(std::move(stochastic_context)));
+  EXPECT_FALSE(
+      TestableLlmLiteRtCompiledModelExecutorStatic::HasSamplerForTest(
+          executor.get()));
+  EXPECT_TRUE(destroyed);
+  // Disconnected from the decode graph before it was dropped, not left bound
+  // to a model that outlives it.
+  EXPECT_EQ(disconnect_count, 1);
+  EXPECT_FALSE(
+      TestableLlmLiteRtCompiledModelExecutorStatic::SamplerParamsInUseForTest(
+          executor.get())
+          .has_value());
+}
+
+// The mirror of the test above: a context asking for the SAME sampling keeps
+// the sampler, so an ordinary second turn neither rebuilds it nor restarts its
+// random stream.
+TEST(LlmLiteRtCompiledModelExecutorStaticTest,
+     SamplerSurvivesARestoreThatKeepsTheParams) {
+  auto model_path =
+      std::filesystem::path(::testing::SrcDir()) / kTestStaticModelPath;
+  ASSERT_OK_AND_ASSIGN(
+      auto model_resources,
+      CreateExecutorModelResourcesLitertLm(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(
+      auto executor_settings,
+      LlmExecutorSettings::CreateDefault(model_assets, Backend::CPU));
+  executor_settings.SetCacheDir(":nocache");
+  executor_settings.SetMaxNumTokens(kMaxNumTokens);
+  ::litert::lm::CpuConfig config;
+  config.number_of_threads = kNumThreads;
+  executor_settings.SetBackendConfig(config);
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  ASSERT_OK_AND_ASSIGN(auto executor,
+                       LlmLiteRtCompiledModelExecutorStatic::Create(
+                           executor_settings, env, *model_resources));
+  ASSERT_NE(executor, nullptr);
+
+  RuntimeConfig runtime_config;
+  runtime_config.sampler_params = GreedySamplerParams();
+  ASSERT_OK_AND_ASSIGN(auto context,
+                       executor->CreateNewContext(std::nullopt, runtime_config));
+  ASSERT_OK(executor->RestoreContext(std::move(context)));
+  auto fake_sampler = std::make_unique<FakeSamplerWithInputHandling>();
+  auto* fake_sampler_ptr = fake_sampler.get();
+  TestableLlmLiteRtCompiledModelExecutorStatic::
+      SetSamplerWithInputHandlingAndParamsForTest(
+          executor.get(), std::move(fake_sampler), GreedySamplerParams());
+  const int reset_count_before = fake_sampler_ptr->reset_count();
+
+  ASSERT_OK_AND_ASSIGN(auto same_params_context,
+                       executor->CreateNewContext(std::nullopt, runtime_config));
+  ASSERT_OK(executor->RestoreContext(std::move(same_params_context)));
+  EXPECT_TRUE(TestableLlmLiteRtCompiledModelExecutorStatic::HasSamplerForTest(
+      executor.get()));
+  EXPECT_EQ(fake_sampler_ptr->reset_count(), reset_count_before);
+
+  // An in-place config change is the other way the active context's sampling
+  // moves, and it releases the sampler too.
+  RuntimeConfig changed_config;
+  changed_config.sampler_params = StochasticSamplerParams();
+  ASSERT_OK(executor->UpdateRuntimeConfig(changed_config));
+  EXPECT_FALSE(
+      TestableLlmLiteRtCompiledModelExecutorStatic::HasSamplerForTest(
+          executor.get()));
+}
+
+// `output_heads` is a construction parameter too -- it is the sampler's batch
+// size, and the CPU sampler validates the logits and ids it is handed against
+// it. So a context that asks for the same sampling but a different number of
+// heads must not keep the sampler either, in either direction.
+TEST(LlmLiteRtCompiledModelExecutorStaticTest,
+     SamplerIsReleasedWhenTheRestoredContextChangesOutputHeads) {
+  auto model_path =
+      std::filesystem::path(::testing::SrcDir()) / kTestStaticModelPath;
+  ASSERT_OK_AND_ASSIGN(
+      auto model_resources,
+      CreateExecutorModelResourcesLitertLm(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(
+      auto executor_settings,
+      LlmExecutorSettings::CreateDefault(model_assets, Backend::CPU));
+  executor_settings.SetCacheDir(":nocache");
+  executor_settings.SetMaxNumTokens(kMaxNumTokens);
+  ::litert::lm::CpuConfig config;
+  config.number_of_threads = kNumThreads;
+  executor_settings.SetBackendConfig(config);
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  ASSERT_OK_AND_ASSIGN(auto executor,
+                       LlmLiteRtCompiledModelExecutorStatic::Create(
+                           executor_settings, env, *model_resources));
+  ASSERT_NE(executor, nullptr);
+
+  // Restore a context, then install a sampler standing for that context: same
+  // sampling parameters, built for `heads` output heads.
+  auto install_sampler_for = [&](std::optional<int> heads) {
+    RuntimeConfig runtime_config;
+    runtime_config.sampler_params = GreedySamplerParams();
+    runtime_config.output_heads = heads;
+    ASSERT_OK_AND_ASSIGN(
+        auto context, executor->CreateNewContext(std::nullopt, runtime_config));
+    ASSERT_OK(executor->RestoreContext(std::move(context)));
+    TestableLlmLiteRtCompiledModelExecutorStatic::
+        SetSamplerWithParamsAndOutputHeadsForTest(
+            executor.get(), std::make_unique<FakeSamplerWithInputHandling>(),
+            GreedySamplerParams(), heads.value_or(1));
+  };
+  auto restore_with_heads = [&](std::optional<int> heads) {
+    RuntimeConfig runtime_config;
+    runtime_config.sampler_params = GreedySamplerParams();
+    runtime_config.output_heads = heads;
+    ASSERT_OK_AND_ASSIGN(
+        auto context, executor->CreateNewContext(std::nullopt, runtime_config));
+    ASSERT_OK(executor->RestoreContext(std::move(context)));
+  };
+
+  // One head -> four heads.
+  install_sampler_for(std::nullopt);
+  restore_with_heads(4);
+  EXPECT_FALSE(
+      TestableLlmLiteRtCompiledModelExecutorStatic::HasSamplerForTest(
+          executor.get()));
+
+  // And back, four heads -> one.
+  install_sampler_for(4);
+  restore_with_heads(1);
+  EXPECT_FALSE(
+      TestableLlmLiteRtCompiledModelExecutorStatic::HasSamplerForTest(
+          executor.get()));
+
+  // The same head count keeps it, so this is not just "release on every
+  // restore".
+  install_sampler_for(4);
+  restore_with_heads(4);
+  EXPECT_TRUE(TestableLlmLiteRtCompiledModelExecutorStatic::HasSamplerForTest(
+      executor.get()));
+
+  // An unset head count is one head, so it matches an explicit one.
+  install_sampler_for(std::nullopt);
+  restore_with_heads(1);
+  EXPECT_TRUE(TestableLlmLiteRtCompiledModelExecutorStatic::HasSamplerForTest(
+      executor.get()));
+}
+
+// The sampler backend and the requested input-handling mode come from the
+// executor settings rather than the context, and a live executor can have its
+// settings replaced. A sampler built under the old settings must not survive a
+// change to either -- while an update that touches neither must not rebuild
+// it for nothing.
+TEST(LlmLiteRtCompiledModelExecutorStaticTest,
+     SamplerIsReleasedWhenExecutorSettingsChangeHowItIsBuilt) {
+  auto model_path =
+      std::filesystem::path(::testing::SrcDir()) / kTestStaticModelPath;
+  ASSERT_OK_AND_ASSIGN(
+      auto model_resources,
+      CreateExecutorModelResourcesLitertLm(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(
+      auto executor_settings,
+      LlmExecutorSettings::CreateDefault(model_assets, Backend::CPU));
+  executor_settings.SetCacheDir(":nocache");
+  executor_settings.SetMaxNumTokens(kMaxNumTokens);
+  ::litert::lm::CpuConfig config;
+  config.number_of_threads = kNumThreads;
+  executor_settings.SetBackendConfig(config);
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  ASSERT_OK_AND_ASSIGN(auto executor,
+                       LlmLiteRtCompiledModelExecutorStatic::Create(
+                           executor_settings, env, *model_resources));
+  ASSERT_NE(executor, nullptr);
+
+  RuntimeConfig runtime_config;
+  runtime_config.sampler_params = GreedySamplerParams();
+  ASSERT_OK_AND_ASSIGN(auto context,
+                       executor->CreateNewContext(std::nullopt, runtime_config));
+  ASSERT_OK(executor->RestoreContext(std::move(context)));
+  auto install_sampler = [&]() {
+    TestableLlmLiteRtCompiledModelExecutorStatic::
+        SetSamplerWithInputHandlingAndParamsForTest(
+            executor.get(), std::make_unique<FakeSamplerWithInputHandling>(),
+            GreedySamplerParams());
+  };
+
+  // An update to a setting the sampler is not built from keeps it.
+  install_sampler();
+  {
+    LlmExecutorSettings settings = executor_settings;
+    AdvancedSettings advanced_settings;
+    advanced_settings.gpu_enable_metal_residency_set = true;
+    settings.SetAdvancedSettings(advanced_settings);
+    ASSERT_OK(executor->UpdateExecutorSettings(settings));
+  }
+  EXPECT_TRUE(TestableLlmLiteRtCompiledModelExecutorStatic::HasSamplerForTest(
+      executor.get()));
+
+  // A different sampler backend releases it.
+  {
+    LlmExecutorSettings settings = executor_settings;
+    settings.SetSamplerBackend(Backend::GPU);
+    ASSERT_OK(executor->UpdateExecutorSettings(settings));
+  }
+  EXPECT_FALSE(
+      TestableLlmLiteRtCompiledModelExecutorStatic::HasSamplerForTest(
+          executor.get()));
+
+  // So does turning off the sampler's handling of decode input.
+  ASSERT_OK(executor->UpdateExecutorSettings(executor_settings));
+  install_sampler();
+  {
+    LlmExecutorSettings settings = executor_settings;
+    settings.SetAdvancedSettings(
+        AdvancedSettings{.sampler_handles_input = false});
+    ASSERT_OK(executor->UpdateExecutorSettings(settings));
+  }
+  EXPECT_FALSE(
+      TestableLlmLiteRtCompiledModelExecutorStatic::HasSamplerForTest(
+          executor.get()));
+}
+
+// A sampler installed from outside records no params, so a context switch must
+// leave it alone rather than replace it with one of its own.
+TEST(LlmLiteRtCompiledModelExecutorStaticTest,
+     AnExternallyInstalledSamplerIsNotReleased) {
+  auto model_path =
+      std::filesystem::path(::testing::SrcDir()) / kTestStaticModelPath;
+  ASSERT_OK_AND_ASSIGN(
+      auto model_resources,
+      CreateExecutorModelResourcesLitertLm(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(
+      auto executor_settings,
+      LlmExecutorSettings::CreateDefault(model_assets, Backend::CPU));
+  executor_settings.SetCacheDir(":nocache");
+  executor_settings.SetMaxNumTokens(kMaxNumTokens);
+  ::litert::lm::CpuConfig config;
+  config.number_of_threads = kNumThreads;
+  executor_settings.SetBackendConfig(config);
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  ASSERT_OK_AND_ASSIGN(auto executor,
+                       LlmLiteRtCompiledModelExecutorStatic::Create(
+                           executor_settings, env, *model_resources));
+  ASSERT_NE(executor, nullptr);
+
+  auto fake_sampler = std::make_unique<FakeSamplerWithInputHandling>();
+  TestableLlmLiteRtCompiledModelExecutorStatic::
+      SetSamplerWithInputHandlingForTest(executor.get(),
+                                         std::move(fake_sampler));
+
+  RuntimeConfig runtime_config;
+  runtime_config.sampler_params = StochasticSamplerParams();
+  ASSERT_OK_AND_ASSIGN(auto context,
+                       executor->CreateNewContext(std::nullopt, runtime_config));
+  ASSERT_OK(executor->RestoreContext(std::move(context)));
+  EXPECT_TRUE(TestableLlmLiteRtCompiledModelExecutorStatic::HasSamplerForTest(
+      executor.get()));
+}
 
 TEST(LlmLiteRtCompiledModelExecutorStaticTest,
      SamplerInputHandlingMultiTurnTest) {

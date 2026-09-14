@@ -49,6 +49,7 @@
 #include "runtime/executor/llm_processed_context.h"
 #include "runtime/executor/state_interface.h"
 #include "runtime/proto/executor_metadata.pb.h"
+#include "runtime/proto/sampler_params.pb.h"
 
 namespace litert::lm {
 
@@ -131,7 +132,7 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
   absl::Status UpdateRuntimeConfig(
       const RuntimeConfig& runtime_config) override {
     llm_context_->runtime_config() = runtime_config;
-    return absl::OkStatus();
+    return ReleaseSamplerIfStale();
   }
 
   // Gets the runtime state.
@@ -156,6 +157,15 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
   absl::Status Reset() override;
 
   absl::StatusOr<int> GetVocabSize() override;
+
+  // Drops `sampler_` when anything it was built from no longer matches what
+  // InitializeSampler() would build now: the active context's sampler params
+  // or output heads, or the settings' sampler backend or input-handling mode.
+  // Called wherever one of those changes -- a context restore, a runtime config
+  // update, an executor settings update -- and never from the decode path: a
+  // sampler that handles input is already bound into the decode graph by the
+  // time logits exist.
+  absl::Status ReleaseSamplerIfStale();
 
   // Initializes the sampler.
   // `logits_data_type` is optional because the executor usually knows the
@@ -395,6 +405,19 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
 
   // Sampler for internal sampling.
   std::unique_ptr<Sampler> sampler_;
+  // What an internally built `sampler_` was constructed from: everything that
+  // can change on a live executor and would build a different sampler.
+  struct SamplerConstruction {
+    proto::SamplerParameters params;
+    // The sampler's batch size, which it validates its inputs against.
+    int output_heads = 1;
+    Backend backend = Backend::UNSPECIFIED;
+    // The setting as requested. Whether the sampler really handles input also
+    // depends on the model, and is recomputed on every build.
+    bool handles_input_requested = true;
+  };
+  // Unset for a sampler installed from outside, which is never released.
+  std::optional<SamplerConstruction> sampler_built_from_;
   int gpu_sampler_max_top_k_ = 0;
   bool sampler_handles_input_ = true;
 
