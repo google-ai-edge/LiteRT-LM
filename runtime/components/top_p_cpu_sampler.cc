@@ -14,9 +14,11 @@
 
 #include "runtime/components/top_p_cpu_sampler.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <random>
 #include <string>
@@ -37,6 +39,75 @@
 
 namespace litert::lm {
 namespace {
+
+// Computes exact full-vocabulary token log-probability:
+// log P(sampled_id) = logits[sampled_id] - logsumexp(logits / temp).
+float ComputeTokenLogProb(const float* logits, int vocab_size, int sampled_id,
+                          float temperature) {
+  if (logits == nullptr || vocab_size <= 0 || sampled_id < 0 ||
+      sampled_id >= vocab_size) {
+    return -std::numeric_limits<float>::infinity();
+  }
+  // When temperature <= 0.0 (greedy decoding), evaluate token
+  // log-probabilities against the nominal model logits (temperature = 1.0)
+  // rather than dividing by epsilon which causes non-argmax logits to
+  // underflow to 0.0 and collapse the score to 0.0.
+  const float temp = (temperature <= 0.0f) ? 1.0f : temperature;
+
+  float max_logit = logits[0];
+  for (int v = 1; v < vocab_size; ++v) {
+    if (logits[v] > max_logit) {
+      max_logit = logits[v];
+    }
+  }
+
+  if (!std::isfinite(max_logit)) {
+    return (logits[sampled_id] == max_logit)
+               ? 0.0f
+               : -std::numeric_limits<float>::infinity();
+  }
+
+  double sum_exp = 0.0;
+  for (int v = 0; v < vocab_size; ++v) {
+    sum_exp += std::exp(static_cast<double>((logits[v] - max_logit) / temp));
+  }
+
+  if (!std::isfinite(sum_exp) || sum_exp <= 0.0) {
+    return 0.0f;
+  }
+
+  float log_prob = static_cast<float>(
+      (static_cast<double>(logits[sampled_id] - max_logit) / temp) -
+      std::log(sum_exp));
+  return std::min(0.0f, log_prob);
+}
+
+std::vector<float> ComputeExactLogProbsForBatch(
+    absl::Span<const float> logits_data_span,
+    absl::Span<const int> flat_sampled_ids,
+    const std::vector<std::vector<float>>& sampled_scores, int batch_size,
+    int sequence_size, float temperature) {
+  std::vector<float> scores(batch_size * sequence_size);
+  const int total_tokens = batch_size * sequence_size;
+  const int vocab_size =
+      (total_tokens > 0 && logits_data_span.size() % total_tokens == 0)
+          ? logits_data_span.size() / total_tokens
+          : 0;
+  for (int i = 0; i < batch_size; ++i) {
+    for (int j = 0; j < sequence_size; ++j) {
+      const int idx = i * sequence_size + j;
+      const int sampled_id = flat_sampled_ids[idx];
+      if (vocab_size > 0 && sampled_id >= 0 && sampled_id < vocab_size) {
+        scores[idx] = ComputeTokenLogProb(
+            logits_data_span.data() + static_cast<size_t>(idx) * vocab_size,
+            vocab_size, sampled_id, temperature);
+      } else {
+        scores[idx] = std::log(sampled_scores[i][j]);
+      }
+    }
+  }
+  return scores;
+}
 
 absl::Status ValidateTensor(const TensorBuffer& tensor, int max_num_dims,
                             int batch_size, const std::string& tensor_name) {
@@ -73,7 +144,7 @@ void ConvertFp16ToFp32(absl::Span<const uint16_t> fp16_values,
 
 absl::StatusOr<std::unique_ptr<TopPSampler>> TopPSampler::Create(
     int k, float p, float temperature, int batch_size, int sequence_size,
-    int seed) {
+    int seed, bool compute_exact_log_probs) {
   if (k <= 0) {
     return absl::InvalidArgumentError("k must be positive.");
   }
@@ -90,8 +161,9 @@ absl::StatusOr<std::unique_ptr<TopPSampler>> TopPSampler::Create(
     return absl::InvalidArgumentError(
         absl::StrCat("Temperature must be >= 0, but got ", temperature));
   }
-  return absl::WrapUnique(
-      new TopPSampler(k, p, temperature, batch_size, sequence_size, seed));
+  return absl::WrapUnique(new TopPSampler(
+      k, p, temperature, batch_size, sequence_size, seed,
+      compute_exact_log_probs));
 }
 
 absl::Status TopPSampler::SampleToIdAndScoreBuffer(
@@ -154,11 +226,17 @@ absl::Status TopPSampler::SampleToIdAndScoreBuffer(
       return status;
     }
     std::vector<float> scores(batch_size_ * sequence_size_);
-    for (int i = 0; i < batch_size_; ++i) {
-      for (int j = 0; j < sequence_size_; ++j) {
-        // The scores are the log of the probability of the sampled token.
-        scores[i * sequence_size_ + j] = std::log(sampled_scores[i][j]);
+    if (!compute_exact_log_probs_) {
+      for (int i = 0; i < batch_size_; ++i) {
+        for (int j = 0; j < sequence_size_; ++j) {
+          // The scores are the log of the probability of the sampled token.
+          scores[i * sequence_size_ + j] = std::log(sampled_scores[i][j]);
+        }
       }
+    } else {
+      scores = ComputeExactLogProbsForBatch(
+          logits_data_span, absl::MakeConstSpan(flat_sampled_ids),
+          sampled_scores, batch_size_, sequence_size_, temperature_);
     }
     scores_tensor->Write(absl::MakeConstSpan(scores));
   }
@@ -172,6 +250,7 @@ absl::Status TopPSampler::UpdateConfig(
   p_ = sampler_params.p();
   temperature_ = sampler_params.temperature();
   batch_size_ = batch_size;
+  compute_exact_log_probs_ = sampler_params.compute_exact_log_probs();
   if (rand_gen != nullptr) {
     generator_ = rand_gen;
   }

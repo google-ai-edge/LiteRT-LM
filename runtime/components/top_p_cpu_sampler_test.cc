@@ -39,6 +39,7 @@ namespace litert::lm {
 namespace {
 
 using ::testing::ElementsAre;
+using ::testing::FloatNear;
 
 Expected<TensorBuffer> CopyFp16ToTensorBuffer(absl::Span<const float> data,
                                               absl::Span<const int> dims) {
@@ -337,5 +338,114 @@ TEST(TopPSamplerTest, UpdateConfig) {
   EXPECT_NE(ids.Value()[0], 4);
 }
 
+TEST(TopPSamplerTest,
+     SampleToIdAndScoreBuffer_GreedyScoresTensorNullAndNonNull) {
+  auto sampler_or =
+      TopPSampler::Create(/*k=*/1, /*p=*/1.0, /*temperature=*/0.0,
+                          /*batch_size=*/1, /*sequence_size=*/1, /*seed=*/1);
+  ASSERT_TRUE(sampler_or.ok());
+  if (!sampler_or.ok()) {
+    return;
+  }
+  auto sampler = std::move(*sampler_or);
+  EXPECT_FALSE(sampler->ComputeExactLogProbs());
+
+  // Vocabulary of size 4: logits = {0.0, 1.0, 2.0, 3.0}
+  // Argmax token is 3.
+  const std::vector<float> logits = {0.0f, 1.0f, 2.0f, 3.0f};
+  auto logits_tensor = CopyToTensorBuffer<float>(logits, {1, 4});
+  ASSERT_TRUE(logits_tensor.HasValue());
+
+  // 1. Fast-path greedy decode: scores_tensor == nullptr
+  std::vector<int> ids_vector_fast(1);
+  auto ids_tensor_fast =
+      CopyToTensorBuffer<int>(absl::MakeConstSpan(ids_vector_fast), {1});
+  ASSERT_TRUE(ids_tensor_fast.HasValue());
+
+  auto status_fast = sampler->SampleToIdAndScoreBuffer(
+      *logits_tensor, *ids_tensor_fast, /*scores_tensor=*/nullptr);
+  EXPECT_TRUE(status_fast.ok());
+
+  auto ids_fast = CopyFromTensorBuffer<int>(*ids_tensor_fast);
+  ASSERT_TRUE(ids_fast.HasValue());
+  EXPECT_THAT(*ids_fast, ElementsAre(3));
+
+  // 2. Decode with scores requested: default compute_exact_log_probs == false.
+  // Preserves fast default Top-K score behavior (std::log(1.0f) = 0.0f).
+  std::vector<int> ids_vector_scores(1);
+  auto ids_tensor_scores =
+      CopyToTensorBuffer<int>(absl::MakeConstSpan(ids_vector_scores), {1});
+  ASSERT_TRUE(ids_tensor_scores.HasValue());
+
+  std::vector<float> scores_vector(1);
+  auto scores_tensor =
+      CopyToTensorBuffer<float>(absl::MakeConstSpan(scores_vector), {1});
+  ASSERT_TRUE(scores_tensor.HasValue());
+
+  auto status_scores = sampler->SampleToIdAndScoreBuffer(
+      *logits_tensor, *ids_tensor_scores, &(*scores_tensor));
+  EXPECT_TRUE(status_scores.ok());
+
+  auto ids_scores = CopyFromTensorBuffer<int>(*ids_tensor_scores);
+  ASSERT_TRUE(ids_scores.HasValue());
+  // Token ID selection is identical whether scores are requested or not.
+  EXPECT_EQ(ids_fast.Value()[0], ids_scores.Value()[0]);
+  EXPECT_THAT(*ids_scores, ElementsAre(3));
+
+  auto scores_default = CopyFromTensorBuffer<float>(*scores_tensor);
+  ASSERT_TRUE(scores_default.HasValue());
+  EXPECT_THAT(*scores_default, ElementsAre(std::log(1.0f)));
+
+  // 3. Opt-in exact full-vocabulary log-probabilities.
+  // log_prob = 3.0 - (3.0 + ln(exp(-3) + exp(-2) + exp(-1) + exp(0)))
+  //          = 3.0 - (3.0 + ln(1.5529918)) = -0.4401868
+  sampler->SetComputeExactLogProbs(true);
+  EXPECT_TRUE(sampler->ComputeExactLogProbs());
+
+  status_scores = sampler->SampleToIdAndScoreBuffer(
+      *logits_tensor, *ids_tensor_scores, &(*scores_tensor));
+  EXPECT_TRUE(status_scores.ok());
+
+  auto scores_exact = CopyFromTensorBuffer<float>(*scores_tensor);
+  ASSERT_TRUE(scores_exact.HasValue());
+  EXPECT_THAT(*scores_exact, ElementsAre(FloatNear(-0.44018677f, 1e-5)));
+}
+
+TEST(TopPSamplerTest, SampleToIdAndScoreBuffer_ExactLogProbsViaCreate) {
+  auto sampler_or =
+      TopPSampler::Create(/*k=*/1, /*p=*/1.0, /*temperature=*/0.0,
+                          /*batch_size=*/1, /*sequence_size=*/1, /*seed=*/1,
+                          /*compute_exact_log_probs=*/true);
+  ASSERT_TRUE(sampler_or.ok());
+  if (!sampler_or.ok()) {
+    return;
+  }
+  auto sampler = std::move(*sampler_or);
+  EXPECT_TRUE(sampler->ComputeExactLogProbs());
+
+  const std::vector<float> logits = {0.0f, 1.0f, 2.0f, 3.0f};
+  auto logits_tensor = CopyToTensorBuffer<float>(logits, {1, 4});
+  ASSERT_TRUE(logits_tensor.HasValue());
+
+  std::vector<int> ids_vector(1);
+  auto ids_tensor =
+      CopyToTensorBuffer<int>(absl::MakeConstSpan(ids_vector), {1});
+  ASSERT_TRUE(ids_tensor.HasValue());
+
+  std::vector<float> scores_vector(1);
+  auto scores_tensor =
+      CopyToTensorBuffer<float>(absl::MakeConstSpan(scores_vector), {1});
+  ASSERT_TRUE(scores_tensor.HasValue());
+
+  auto status = sampler->SampleToIdAndScoreBuffer(*logits_tensor, *ids_tensor,
+                                                  &(*scores_tensor));
+  EXPECT_TRUE(status.ok());
+
+  auto scores = CopyFromTensorBuffer<float>(*scores_tensor);
+  ASSERT_TRUE(scores.HasValue());
+  EXPECT_THAT(*scores, ElementsAre(FloatNear(-0.44018677f, 1e-5)));
+}
+
 }  // namespace
 }  // namespace litert::lm
+
