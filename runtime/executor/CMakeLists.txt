@@ -519,6 +519,7 @@ target_include_directories(runtime_executor_llm_litert_mtp_drafter
 
 target_link_libraries(runtime_executor_llm_litert_mtp_drafter
   PUBLIC
+    LiteRTLM::Runtime::Components::NvidiaGreedySampler
     LiteRTLM::Runtime::Executor::ExecutorSettingsBase
     LiteRTLM::Runtime::Executor::LitertCompiledModelExecutorUtils
     LiteRTLM::Runtime::Executor::LlmExecutorSettings

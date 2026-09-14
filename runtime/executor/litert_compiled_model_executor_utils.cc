@@ -427,10 +427,16 @@ absl::Status GetKVCacheRootNames(std::vector<absl::string_view> input_names,
 
 absl::StatusOr<SortedPrefillSignatureMap> GetPrefillRunnerSetFromModel(
     const ::litert::Model& model, absl::string_view signature_name_base,
-    absl::string_view input_positions_name) {
+    absl::string_view input_positions_name,
+    absl::Span<const std::string> selected_signatures) {
   SortedPrefillSignatureMap prefill_runner_set;
   auto signatures = model.GetSignatures();
   for (auto& signature : *signatures) {
+    if (!selected_signatures.empty() &&
+        std::find(selected_signatures.begin(), selected_signatures.end(),
+                  signature.Key()) == selected_signatures.end()) {
+      continue;
+    }
     if (auto signature_key = signature.Key();
         absl::StartsWith(signature_key, signature_name_base)) {
       LITERT_ASSIGN_OR_RETURN(auto input_positions_tensor,

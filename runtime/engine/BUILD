@@ -331,6 +331,20 @@ cc_binary(
     }),
 )
 
+cc_test(
+    name = "signature_selection_test",
+    srcs = ["signature_selection_test.cc"],
+    data = ["//runtime/testdata"],
+    deps = [
+        ":litert_lm_lib",
+        "//runtime/components:model_resources",
+        "//runtime/components:model_resources_litert_lm",
+        "//runtime/executor:litert_compiled_model_executor_utils",
+        "//runtime/util:test_utils",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
 cc_binary(
     name = "embedding_litert_lm_main",
     srcs = ["embedding_litert_lm_main.cc"],

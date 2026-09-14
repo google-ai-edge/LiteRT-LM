@@ -54,6 +54,7 @@
 #include "runtime/components/model_resources_litert_lm.h"
 #include "runtime/components/sampler.h"
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/util/convert_tensor_buffer.h"
@@ -538,7 +539,114 @@ class TestableLlmLiteRtCompiledModelExecutorStatic
     testable->sampler_ = std::move(sampler);
     testable->sampler_handles_input_ = true;
   }
+
+  static absl::Status PrefillWithCacheParamsForTest(
+      LlmLiteRtCompiledModelExecutorStatic* executor,
+      absl::Span<const int> ids, TensorBuffer& cache_params) {
+    auto* testable =
+        static_cast<TestableLlmLiteRtCompiledModelExecutorStatic*>(executor);
+    ABSL_ASSIGN_OR_RETURN(
+        auto signatures,
+        GetPrefillRunnerSetFromModel(testable->model_, "prefill",
+                                    testable->signatures_.input_positions));
+    auto runner = signatures.rbegin();
+    while (runner != signatures.rend() && runner->first < ids.size()) {
+      ++runner;
+    }
+    if (runner == signatures.rend() || runner->first > kMaxNumTokens) {
+      return absl::FailedPreconditionError("Missing test prefill signature");
+    }
+    ABSL_RETURN_IF_ERROR(testable->PrepareFirstPrefillAfterDecode(0));
+    absl::flat_hash_map<absl::string_view, TensorBuffer> inputs;
+    absl::flat_hash_map<absl::string_view, TensorBuffer> outputs;
+    ABSL_RETURN_IF_ERROR(testable->CreatePrefillInputBuffers(
+        runner->second, runner->first, kMaxNumTokens, inputs));
+    ABSL_RETURN_IF_ERROR(testable->CreatePrefillOutputBuffers(
+        runner->second, runner->first, outputs));
+
+    // Exercise the real prefill parameter producer with the existing CPU
+    // fixture. Its graph has no parameter input, so remove only the injected
+    // buffer at the graph boundary, after PrefillInternal has populated it.
+    constexpr absl::string_view param_name = "test_cache_params";
+    const auto original_param = testable->signatures_.input_int32_param;
+    const bool original_cache_mode =
+        testable->gpu_optimized_single_buffer_cache_;
+    absl::Cleanup restore = [&] {
+      testable->signatures_.input_int32_param = original_param;
+      testable->gpu_optimized_single_buffer_cache_ = original_cache_mode;
+      testable->UpdatePreGraphRunCallback(nullptr);
+    };
+    testable->signatures_.input_int32_param = std::string(param_name);
+    testable->gpu_optimized_single_buffer_cache_ = true;
+    LITERT_ASSIGN_OR_RETURN(inputs[param_name], cache_params.Duplicate());
+    testable->UpdatePreGraphRunCallback(
+        [param_name](absl::string_view, int, auto& graph_inputs) {
+          graph_inputs.erase(param_name);
+        });
+    return testable->PrefillInternal(runner->second, inputs, outputs, ids,
+                                     /*async=*/false);
+  }
 };
+
+TEST(LlmLiteRtCompiledModelExecutorStaticTest,
+     PrefillCacheParamsCountOnlyProcessedRows) {
+  const auto model_path =
+      std::filesystem::path(::testing::SrcDir()) / kTestStaticModelPath;
+  ASSERT_OK_AND_ASSIGN(
+      auto resources,
+      CreateExecutorModelResourcesLitertLm(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto assets, ModelAssets::Create(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(
+      auto settings, LlmExecutorSettings::CreateDefault(assets, Backend::CPU));
+  settings.SetCacheDir(":nocache");
+  settings.SetMaxNumTokens(kMaxNumTokens);
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  ASSERT_OK_AND_ASSIGN(auto executor,
+                       LlmLiteRtCompiledModelExecutorStatic::Create(
+                           settings, env, *resources));
+  const std::vector<int32_t> initial_params(7, -1);
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto params, CopyToTensorBuffer<int32_t>(initial_params, {7}));
+
+  for (int session = 0; session < 2; ++session) {
+    SCOPED_TRACE(session);
+    ASSERT_OK(executor->Reset());
+    // The first call leaves its last token pending. Static padding and that
+    // pending token must not be included in the cache update extent.
+    ASSERT_OK(TestableLlmLiteRtCompiledModelExecutorStatic::
+                  PrefillWithCacheParamsForTest(executor.get(), {0, 1, 2},
+                                               params));
+    LITERT_ASSERT_OK_AND_ASSIGN(auto first_params,
+                                CopyFromTensorBuffer<int32_t>(params));
+    EXPECT_THAT(first_params, ::testing::ElementsAre(0, 2, 2, 0, 0, 0, 0));
+    ASSERT_OK_AND_ASSIGN(int first_step, executor->GetCurrentStep());
+    EXPECT_EQ(first_step, 3);
+
+    // Subsequent prefill consumes the old pending token in addition to all
+    // but the last new token. Here two new IDs still produce two cache rows.
+    ASSERT_OK(TestableLlmLiteRtCompiledModelExecutorStatic::
+                  PrefillWithCacheParamsForTest(executor.get(), {1, 0}, params));
+    LITERT_ASSERT_OK_AND_ASSIGN(auto next_params,
+                                CopyFromTensorBuffer<int32_t>(params));
+    EXPECT_THAT(next_params, ::testing::ElementsAre(2, 4, 4, 0, 0, 0, 0));
+    ASSERT_OK_AND_ASSIGN(int next_step, executor->GetCurrentStep());
+    EXPECT_EQ(next_step, 5);
+  }
+
+  ASSERT_OK(executor->Reset());
+  // A lone first token does no prefill work, leaving parameters untouched.
+  ASSERT_OK(TestableLlmLiteRtCompiledModelExecutorStatic::
+                PrefillWithCacheParamsForTest(executor.get(), {0}, params));
+  LITERT_ASSERT_OK_AND_ASSIGN(auto skipped_params,
+                              CopyFromTensorBuffer<int32_t>(params));
+  EXPECT_THAT(skipped_params, ::testing::ElementsAre(2, 4, 4, 0, 0, 0, 0));
+  ASSERT_OK(TestableLlmLiteRtCompiledModelExecutorStatic::
+                PrefillWithCacheParamsForTest(executor.get(), {1}, params));
+  LITERT_ASSERT_OK_AND_ASSIGN(auto pending_params,
+                              CopyFromTensorBuffer<int32_t>(params));
+  EXPECT_THAT(pending_params, ::testing::ElementsAre(0, 1, 1, 0, 0, 0, 0));
+}
 
 TEST(LlmLiteRtCompiledModelExecutorStaticTest,
      SamplerInputHandlingMultiTurnTest) {
@@ -1067,6 +1175,17 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest,
   inputs.SetTextData(ExecutorTextData(std::move(*input_tokens_buffer)));
   ASSERT_OK(executor->Prefill(inputs));
 
+  ASSERT_OK_AND_ASSIGN(int step_before_invalid_budget,
+                       executor->GetCurrentStep());
+  for (int budget : {0, -1}) {
+    ExecutorDecodeParams decode_params;
+    decode_params.SetMaxOutputTokens(budget);
+    EXPECT_THAT(executor->Decode(decode_params),
+                StatusIs(absl::StatusCode::kInvalidArgument));
+    ASSERT_OK_AND_ASSIGN(int current_step, executor->GetCurrentStep());
+    EXPECT_EQ(current_step, step_before_invalid_budget);
+  }
+
   // Decode with default/nullopt enable_speculative_decoding succeeds.
   ASSERT_OK(executor->Decode());
 
@@ -1081,6 +1200,42 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest,
   decode_params_enabled.SetEnableSpeculativeDecoding(true);
   EXPECT_THAT(executor->Decode(decode_params_enabled),
               StatusIs(absl::StatusCode::kInternal));
+}
+
+TEST(LlmLiteRtCompiledModelExecutorStaticTest,
+     NpuConstrainedMtpIsRejectedBeforeLoadingOrDecoding) {
+  const std::filesystem::path model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/magic_test_none.tflite";
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto settings,
+                       LlmExecutorSettings::CreateDefault(model_assets));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  ASSERT_OK_AND_ASSIGN(auto resources,
+                       TfLiteModelResources::Create(model_assets));
+  ASSERT_OK_AND_ASSIGN(auto executor,
+                       LlmLiteRtCompiledModelExecutorStatic::Create(
+                           std::move(settings), env, *resources));
+
+  // Only exercise the pre-execution policy: retain the CPU fixture's compiled
+  // model and select NPU settings without loading any accelerator or drafter.
+  ASSERT_OK_AND_ASSIGN(auto npu_settings, LlmExecutorSettings::CreateDefault(
+                                            model_assets, Backend::NPU));
+  ASSERT_OK(executor->UpdateExecutorSettings(npu_settings));
+  FakeConstraint constraint({2, 3}, /*vocabulary_size=*/262144);
+  ConstrainedDecoder constrained_decoder(&constraint, /*batch_size=*/1);
+  ExecutorDecodeParams params;
+  params.SetEnableSpeculativeDecoding(true);
+  params.SetConstrainedDecoder(&constrained_decoder);
+  ASSERT_OK_AND_ASSIGN(int initial_step, executor->GetCurrentStep());
+
+  EXPECT_THAT(executor->Decode(params),
+              StatusIs(absl::StatusCode::kUnimplemented,
+                       ::testing::HasSubstr("constraint state handoff")));
+  ASSERT_OK_AND_ASSIGN(int final_step, executor->GetCurrentStep());
+  EXPECT_EQ(final_step, initial_step);
 }
 
 TEST(LlmLiteRtCompiledModelExecutorStaticTest, MultipleOutput_Decode) {
