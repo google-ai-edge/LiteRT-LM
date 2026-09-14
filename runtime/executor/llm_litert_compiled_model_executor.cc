@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <functional>
@@ -88,6 +89,61 @@ using ::absl::Span;
 constexpr absl::string_view kPrefillSignatureRunner = "prefill";
 constexpr absl::string_view kDecodeSignatureRunner = "decode";
 constexpr int kDynamicDimValue = -1;
+
+// The sampler parameters an active context effectively asks for: the ones it
+// carries, or the runtime's defaults when it carries none. Kept in one place
+// so the sampler that gets built and the comparison that decides to keep it
+// can never drift apart.
+proto::SamplerParameters EffectiveSamplerParams(
+    const RuntimeConfig& runtime_config) {
+  proto::SamplerParameters sampler_params;
+  if (runtime_config.sampler_params.has_value()) {
+    sampler_params = runtime_config.sampler_params.value();
+  }
+  if (sampler_params.type() == proto::SamplerParameters::TYPE_UNSPECIFIED) {
+    sampler_params.set_type(proto::SamplerParameters::TOP_P);
+    sampler_params.set_k(1);
+    sampler_params.set_p(0.0f);
+    sampler_params.set_temperature(1.0f);
+    sampler_params.set_seed(0);
+  }
+  return sampler_params;
+}
+
+// The batch size the sampler is built with: one per output head, defaulting
+// to a single head. Like the params above, it belongs to the active context,
+// so it is part of what makes a live sampler match or not match it.
+int EffectiveOutputHeads(const RuntimeConfig& runtime_config) {
+  return runtime_config.output_heads.value_or(1);
+}
+
+// Whether the settings allow the sampler to handle decode input. The default
+// is yes; whether a given sampler really does also depends on the model, and
+// is decided when the sampler is built.
+bool RequestedSamplerHandlesInput(const LlmExecutorSettings& executor_settings) {
+  if (executor_settings.GetAdvancedSettings().has_value()) {
+    return executor_settings.GetAdvancedSettings()->sampler_handles_input;
+  }
+  return true;
+}
+
+// Floats compare by value, with NaN equal to NaN: the sampler factory accepts
+// NaN, and an IEEE `==` would report such a config as changed on every step.
+bool SameFloat(float a, float b) {
+  return a == b || (std::isnan(a) && std::isnan(b));
+}
+
+// Field-wise equality rather than serialized-proto equality, which would
+// depend on unknown-field and lite-runtime behaviour. `backend` is included:
+// this executor picks the sampler backend from the engine settings, but the
+// whole proto is forwarded to the GPU C-API samplers, so a change there is
+// not ours to declare irrelevant.
+bool SameSamplerParams(const proto::SamplerParameters& a,
+                       const proto::SamplerParameters& b) {
+  return a.type() == b.type() && a.k() == b.k() && SameFloat(a.p(), b.p()) &&
+         SameFloat(a.temperature(), b.temperature()) && a.seed() == b.seed() &&
+         a.backend() == b.backend();
+}
 
 absl::StatusOr<bool> HasDynamicDim(const CompiledModel& compiled_model,
                                    absl::string_view signature,
@@ -1463,6 +1519,11 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::RestoreContext(
     std::unique_ptr<LlmContext> context_data) {
   llm_context_ = std::move(context_data);
 
+  // Before anything can decode on the restored context: a sampler built for
+  // the previous one must not survive into a session that asked for different
+  // sampling.
+  ABSL_RETURN_IF_ERROR(ReleaseSamplerIfStale());
+
   // We can keep our kv cache buffers if this is the first step. This lets us
   // restore from LlmContexts at step 0 with an empty kv cache.
   if (llm_context_->runtime_state().current_step > 0) {
@@ -1474,6 +1535,40 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::RestoreContext(
 
   force_prepare_needed_ = true;
 
+  return absl::OkStatus();
+}
+
+absl::Status LlmLiteRtCompiledModelExecutorBase::ReleaseSamplerIfStale() {
+  // A sampler installed from outside (tests, subclasses) records nothing; it
+  // is not ours to replace.
+  if (sampler_ == nullptr || !sampler_built_from_.has_value()) {
+    return absl::OkStatus();
+  }
+  const SamplerConstruction& built = *sampler_built_from_;
+  const RuntimeConfig& runtime_config = llm_context_->runtime_config();
+  // Settings that no longer resolve to a sampler backend count as a change:
+  // dropping the sampler leaves that error to InitializeSampler(), which is
+  // where it surfaced before.
+  const absl::StatusOr<Backend> backend = GetSamplerBackend(executor_settings_);
+  const bool still_matches =
+      backend.ok() && *backend == built.backend &&
+      built.handles_input_requested ==
+          RequestedSamplerHandlesInput(executor_settings_) &&
+      built.output_heads == EffectiveOutputHeads(runtime_config) &&
+      SameSamplerParams(built.params, EffectiveSamplerParams(runtime_config));
+  if (still_matches) {
+    return absl::OkStatus();
+  }
+
+  // Disconnect before dropping it. A sampler that handles input is bound into
+  // the decode graph and DecodeLogits() reads its presence as proof that this
+  // step already ran -- the same disconnect PrepareFirstPrefillAfterDecode()
+  // performs between turns.
+  if (sampler_->HandlesInput()) {
+    ABSL_RETURN_IF_ERROR(SetSamplerInputHandling(/*reset=*/true));
+  }
+  sampler_.reset();
+  sampler_built_from_.reset();
   return absl::OkStatus();
 }
 
@@ -1490,38 +1585,30 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::InitializeSampler(
   ABSL_ASSIGN_OR_RETURN(auto vocab_size, GetVocabSize());
   ABSL_ASSIGN_OR_RETURN(auto sampler_backend,
                         GetSamplerBackend(executor_settings_));
-  int output_heads = 1;
-  if (llm_context_->runtime_config().output_heads.has_value()) {
-    output_heads = llm_context_->runtime_config().output_heads.value();
-  }
-  proto::SamplerParameters sampler_params;
-  if (llm_context_->runtime_config().sampler_params.has_value()) {
-    sampler_params = llm_context_->runtime_config().sampler_params.value();
-  }
-  if (sampler_params.type() == proto::SamplerParameters::TYPE_UNSPECIFIED) {
-    sampler_params.set_type(proto::SamplerParameters::TOP_P);
-    sampler_params.set_k(1);
-    sampler_params.set_p(0.0f);
-    sampler_params.set_temperature(1.0f);
-    sampler_params.set_seed(0);
-  }
+  const int output_heads = EffectiveOutputHeads(llm_context_->runtime_config());
+  proto::SamplerParameters sampler_params =
+      EffectiveSamplerParams(llm_context_->runtime_config());
 
   gpu_sampler_max_top_k_ = sampler_params.k();
 
   ABSL_ASSIGN_OR_RETURN(
-      sampler_,
-      CreateSampler(sampler_backend, output_heads, std::move(sampler_params),
-                    env_, /*sequence_size=*/1, vocab_size, data_type));
+      sampler_, CreateSampler(sampler_backend, output_heads, sampler_params,
+                              env_, /*sequence_size=*/1, vocab_size,
+                              data_type));
+  sampler_built_from_ = SamplerConstruction{
+      .params = std::move(sampler_params),
+      .output_heads = output_heads,
+      .backend = sampler_backend,
+      .handles_input_requested =
+          RequestedSamplerHandlesInput(executor_settings_),
+  };
 
   // Disable GPU token copy for models that run embedding on the GPU.
   const bool runs_embedding_on_gpu = (embedding_lookup_ == nullptr);
 
   // If the sampler can handle input, prepare the input tensors for it.
-  bool sampler_handles_input = true;
-  if (executor_settings_.GetAdvancedSettings().has_value()) {
-    sampler_handles_input =
-        executor_settings_.GetAdvancedSettings()->sampler_handles_input;
-  }
+  const bool sampler_handles_input =
+      RequestedSamplerHandlesInput(executor_settings_);
   sampler_handles_input_ =
       sampler_handles_input && sampler_->CanHandleInput() &&
       runs_embedding_on_gpu && !signatures_.input_tokens.empty() &&
@@ -1627,7 +1714,11 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::UpdateExecutorSettings(
     gpu_enable_metal_residency_set_ = executor_settings_.GetAdvancedSettings()
                                           ->gpu_enable_metal_residency_set;
   }
-  return absl::OkStatus();
+  // The sampler backend and whether the sampler may handle decode input are
+  // read when it is built, so a sampler built under the previous settings goes
+  // the way a context change sends it. A change that touches neither (the
+  // Metal residency set above, for one) leaves it alone.
+  return ReleaseSamplerIfStale();
 }
 
 litert::Options LlmLiteRtCompiledModelExecutorBase::GetRunOptions() const {
