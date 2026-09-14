@@ -90,7 +90,8 @@ class ResourceManager {
   // If a session specific lora is provided, the lora will be loaded and the
   // corresponding lora id will be assigned.
   absl::StatusOr<std::unique_ptr<ContextHandler>> CreateContextHandler(
-      const SessionConfig& session_config);
+      const SessionConfig& session_config) ABSL_LOCKS_EXCLUDED(executor_mutex_)
+      ABSL_LOCKS_EXCLUDED(audio_executor_mutex_);
 
   // Clones the context handler.
   // The cloned context handler will have the same shared processed context as
@@ -99,7 +100,9 @@ class ResourceManager {
   // be copied from the original context handler, thus the values will initially
   // be the same, but can be different afterward.
   absl::StatusOr<std::unique_ptr<ContextHandler>> CloneContextHandler(
-      std::shared_ptr<const ContextHandler> llm_context_handler);
+      std::shared_ptr<const ContextHandler> llm_context_handler)
+      ABSL_LOCKS_EXCLUDED(executor_mutex_)
+          ABSL_LOCKS_EXCLUDED(audio_executor_mutex_);
 
   // Acquires the executor without any context handler. This function should
   // only be called when the usage of the returned executor does not involve any

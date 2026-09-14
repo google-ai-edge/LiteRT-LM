@@ -636,6 +636,8 @@ ResourceManager::CloneContextHandler(
   RET_CHECK_NE(llm_context_handler, nullptr)
       << "The provided context handler should not be null.";
 
+  MovableMutexLock lock(&executor_mutex_);
+
   RuntimeConfig runtime_config;
   RuntimeState runtime_state;
 
@@ -651,7 +653,6 @@ ResourceManager::CloneContextHandler(
     // Otherwise, assume the context handler is loaded by the manager to the
     // executor, and get the runtime config and runtime state from the
     // executor.
-    MovableMutexLock lock(&executor_mutex_);
     RET_CHECK_EQ(current_handler_, llm_context_handler)
         << "The provided context handler does not have the runtime config "
            "and "
