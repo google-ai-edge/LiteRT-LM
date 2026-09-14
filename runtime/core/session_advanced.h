@@ -33,6 +33,7 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
+#include "litert/cc/litert_environment.h"  // from @litert
 #include "runtime/engine/engine.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
@@ -87,7 +88,8 @@ class SessionAdvanced : public SessionInterface {
       support::Tokenizer* absl_nonnull tokenizer,
       const SessionConfig& session_config,
       std::optional<BenchmarkInfo> benchmark_info,
-      std::atomic<int>* living_sessions_count = nullptr);
+      std::atomic<int>* living_sessions_count = nullptr,
+      const Engine* engine = nullptr);
 
   // Destroys the SessionAdvanced object. It will wait for all tasks to be
   // done and release the session from the execution manager.
@@ -206,6 +208,10 @@ class SessionAdvanced : public SessionInterface {
   // Returns debug info for this session.
   std::optional<SessionDebugInfo> GetSessionDebugInfo() const override;
 
+  // Returns the LiteRT environment associated with this session's engine,
+  // if available.
+  absl::StatusOr<const ::litert::Environment*> GetEnvironment() const override;
+
   absl::Status WaitUntilDone() override {
     auto execution_manager_lock = execution_manager_.lock();
     if (execution_manager_lock == nullptr) {
@@ -245,14 +251,16 @@ class SessionAdvanced : public SessionInterface {
                            std::shared_ptr<const SessionInfo> session_info,
                            SessionState session_state = SessionState::kFresh,
                            absl::flat_hash_set<TaskId> last_task_ids = {},
-                           std::atomic<int>* living_sessions_count = nullptr)
+                           std::atomic<int>* living_sessions_count = nullptr,
+                           const Engine* engine = nullptr)
       : session_id_(session_id),
         execution_manager_(execution_manager),
         tokenizer_(tokenizer),
         session_info_(session_info),
         session_state_(session_state),
         last_task_ids_(last_task_ids),
-        living_sessions_count_(living_sessions_count) {
+        living_sessions_count_(living_sessions_count),
+        engine_(engine) {
     if (living_sessions_count_) {
       (*living_sessions_count_)++;
     }
@@ -296,6 +304,9 @@ class SessionAdvanced : public SessionInterface {
 
   // Pointer to the counter of living sessions in Engine.
   std::atomic<int>* living_sessions_count_;
+
+  // Non-owning pointer to the Engine that created this session.
+  const Engine* engine_;
 };
 
 }  // namespace litert::lm

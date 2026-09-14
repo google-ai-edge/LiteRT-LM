@@ -43,7 +43,8 @@ AudioSessionAdvanced::Create(std::weak_ptr<ExecutionManager> execution_manager,
                              support::Tokenizer* absl_nonnull tokenizer,
                              const SessionConfig& session_config,
                              std::optional<BenchmarkInfo> benchmark_info,
-                             std::atomic<int>* living_sessions_count) {
+                             std::atomic<int>* living_sessions_count,
+                             const Engine* engine) {
   auto execution_manager_lock = execution_manager.lock();
   if (execution_manager_lock == nullptr) {
     return absl::FailedPreconditionError("Execution manager is not available.");
@@ -56,7 +57,7 @@ AudioSessionAdvanced::Create(std::weak_ptr<ExecutionManager> execution_manager,
   return absl::WrapUnique(new AudioSessionAdvanced(
       session_id, execution_manager, tokenizer, session_info,
       /*session_state=*/SessionState::kFresh,
-      /*last_task_ids=*/{}, living_sessions_count));
+      /*last_task_ids=*/{}, living_sessions_count, engine));
 }
 
 // static
@@ -129,7 +130,7 @@ AudioSessionAdvanced::CloneAsyncLocked(
 
   return absl::WrapUnique(new AudioSessionAdvanced(
       session_id, execution_manager_, tokenizer_, session_info, session_state_,
-      last_task_ids_, living_sessions_count_));
+      last_task_ids_, living_sessions_count_, engine_));
 }
 
 }  // namespace litert::lm

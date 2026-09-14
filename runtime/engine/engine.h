@@ -26,6 +26,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
+#include "litert/cc/litert_environment.h"  // from @litert
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
 #include "support/tokenizer/tokenizer.h"
@@ -338,6 +339,13 @@ class SessionInterface {
   virtual std::optional<SessionDebugInfo> GetSessionDebugInfo() const {
     return std::nullopt;
   }
+
+  // Returns the LiteRT environment associated with this session, if available.
+  // The returned pointer is non-owning and guaranteed valid as long as the
+  // parent Engine is alive.
+  virtual absl::StatusOr<const Environment*> GetEnvironment() const {
+    return absl::UnimplementedError("GetEnvironment is not implemented.");
+  }
 };
 
 // EngineT is the templated interface for the LLM runtime.
@@ -402,6 +410,13 @@ class EngineT {
       bool enable_metal_residency_set) {
     return absl::UnimplementedError(
         "UpdateGpuEnableMetalResidencySet not implemented.");
+  }
+
+  // Returns the LiteRT environment managed by the engine.
+  // The returned pointer is non-owning and guaranteed valid for the lifetime
+  // of this engine.
+  virtual absl::StatusOr<const Environment*> GetEnvironment() const {
+    return absl::UnimplementedError("GetEnvironment is not implemented.");
   }
 
   // Default timeout duration for the engine/session processes.

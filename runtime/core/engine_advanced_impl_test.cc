@@ -497,5 +497,28 @@ TEST(EngineTest, UpdateGpuEnableMetalResidencySet) {
   EXPECT_OK((*llm)->UpdateGpuEnableMetalResidencySet(false));
 }
 
+TEST(EngineTest, GetEnvironmentReturnsValidEnvironment) {
+  auto task_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm_new_metadata.task";
+  auto model_assets = ModelAssets::Create(task_path.string());
+  ASSERT_OK(model_assets);
+  auto engine_settings =
+      EngineSettings::CreateDefault(*model_assets, Backend::CPU);
+  ASSERT_OK(engine_settings);
+  engine_settings->GetMutableMainExecutorSettings().SetMaxNumTokens(
+      kMaxNumTokens);
+  engine_settings->GetMutableMainExecutorSettings().SetCacheDir(":nocache");
+
+  ASSERT_OK_AND_ASSIGN(auto engine, CreateEngine(*engine_settings));
+  ASSERT_OK_AND_ASSIGN(const auto* env, engine->GetEnvironment());
+  EXPECT_NE(env, nullptr);
+
+  ASSERT_OK_AND_ASSIGN(auto session,
+                       engine->CreateSession(SessionConfig::CreateDefault()));
+  ASSERT_OK_AND_ASSIGN(const auto* session_env, session->GetEnvironment());
+  EXPECT_EQ(session_env, env);
+}
+
 }  // namespace
 }  // namespace litert::lm

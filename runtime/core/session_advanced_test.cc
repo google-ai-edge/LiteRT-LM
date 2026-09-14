@@ -28,6 +28,7 @@
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/container/flat_hash_set.h"  // from @com_google_absl
 #include "absl/functional/any_invocable.h"  // from @com_google_absl
+#include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/memory/memory.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
@@ -47,6 +48,7 @@
 #include "runtime/components/constrained_decoding/suppress_tokens_config.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/core/session_utils.h"
+#include "runtime/engine/engine.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/audio/audio_executor_settings.h"
@@ -218,7 +220,8 @@ class SessionAdvancedTest : public testing::Test {
                                              batch_size, audio_embedding);
   }
 
-  absl::StatusOr<std::unique_ptr<SessionAdvanced>> CreateTestSession() {
+  absl::StatusOr<std::unique_ptr<SessionAdvanced>> CreateTestSession(
+      const Engine* engine = nullptr) {
     const std::vector<std::vector<int>> stop_token_ids = {{2294}};
     SessionConfig session_config = SessionConfig::CreateDefault();
     session_config.GetMutableSamplerParams() = sampler_params_;
@@ -243,7 +246,8 @@ class SessionAdvancedTest : public testing::Test {
 
     return SessionAdvanced::Create(execution_manager_, tokenizer_.get(),
                                    session_config,
-                                   /*benchmark_info=*/std::nullopt);
+                                   /*benchmark_info=*/std::nullopt,
+                                   /*living_sessions_count=*/nullptr, engine);
   }
 
   std::unique_ptr<Tokenizer> tokenizer_;
@@ -2638,6 +2642,72 @@ TEST_F(SessionAdvancedTest, RunTextScoringAsyncWithTokenLengthsSuccess) {
   EXPECT_TRUE(responses->GetTokenLengths().has_value());
   EXPECT_EQ(responses->GetTokenLengths()->size(), 1);
   EXPECT_EQ((*responses->GetTokenLengths())[0], 7);
+}
+
+class FakeEngineForEnvironmentTest : public Engine {
+ public:
+  explicit FakeEngineForEnvironmentTest(const ::litert::Environment* env)
+      : env_(env) {}
+
+  absl::StatusOr<const ::litert::Environment*> GetEnvironment() const override {
+    if (env_ == nullptr) {
+      return absl::NotFoundError("LiteRT environment is not available.");
+    }
+    return env_;
+  }
+
+  const EngineSettings& GetEngineSettings() const override {
+    ABSL_LOG(FATAL) << "Not needed for test.";
+  }
+
+  const support::Tokenizer& GetTokenizer() const override {
+    ABSL_LOG(FATAL) << "Not needed for test.";
+  }
+
+  absl::StatusOr<AudioExecutorProperties> GetAudioExecutorProperties()
+      const override {
+    return absl::UnimplementedError("Not needed for test.");
+  }
+
+  absl::StatusOr<VisionExecutorProperties> GetVisionExecutorProperties()
+      const override {
+    return absl::UnimplementedError("Not needed for test.");
+  }
+
+  absl::StatusOr<std::unique_ptr<SessionInterface>> CreateSession(
+      const SessionConfig& session_config) override {
+    return absl::UnimplementedError("Not needed for test.");
+  }
+
+ private:
+  const ::litert::Environment* env_;
+};
+
+TEST_F(SessionAdvancedTest, GetEnvironmentWithoutEngineReturnsNotFoundError) {
+  using ::testing::HasSubstr;
+  ASSERT_OK_AND_ASSIGN(auto session, CreateTestSession());
+  EXPECT_THAT(session->GetEnvironment(),
+              StatusIs(absl::StatusCode::kNotFound,
+                       HasSubstr("Engine is not available")));
+}
+
+TEST_F(SessionAdvancedTest, GetEnvironmentWithEngineReturnsEnvironment) {
+  LITERT_ASSERT_OK_AND_ASSIGN(auto litert_env,
+                              ::litert::Environment::Create({}));
+  FakeEngineForEnvironmentTest fake_engine(&litert_env);
+  ASSERT_OK_AND_ASSIGN(auto session, CreateTestSession(&fake_engine));
+  ASSERT_OK_AND_ASSIGN(const auto* env, session->GetEnvironment());
+  EXPECT_EQ(env, &litert_env);
+}
+
+TEST_F(SessionAdvancedTest, ClonedSessionPreservesEngine) {
+  LITERT_ASSERT_OK_AND_ASSIGN(auto litert_env,
+                              ::litert::Environment::Create({}));
+  FakeEngineForEnvironmentTest fake_engine(&litert_env);
+  ASSERT_OK_AND_ASSIGN(auto session, CreateTestSession(&fake_engine));
+  ASSERT_OK_AND_ASSIGN(auto clone, session->CloneAsync([](auto) {}));
+  ASSERT_OK_AND_ASSIGN(const auto* env, clone->GetEnvironment());
+  EXPECT_EQ(env, &litert_env);
 }
 
 }  // namespace

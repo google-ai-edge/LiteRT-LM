@@ -47,7 +47,8 @@ class AudioSessionAdvanced : public SessionAdvanced {
       support::Tokenizer* absl_nonnull tokenizer,
       const SessionConfig& session_config,
       std::optional<BenchmarkInfo> benchmark_info,
-      std::atomic<int>* living_sessions_count = nullptr);
+      std::atomic<int>* living_sessions_count = nullptr,
+      const Engine* engine = nullptr);
 
   // Casts a SessionInterface unique_ptr to AudioSessionAdvanced if supported.
   static absl::StatusOr<std::unique_ptr<AudioSessionAdvanced>> FromSession(
@@ -79,9 +80,11 @@ class AudioSessionAdvanced : public SessionAdvanced {
                        std::shared_ptr<const SessionInfo> session_info,
                        SessionState session_state = SessionState::kFresh,
                        absl::flat_hash_set<TaskId> last_task_ids = {},
-                       std::atomic<int>* living_sessions_count = nullptr)
+                       std::atomic<int>* living_sessions_count = nullptr,
+                       const Engine* engine = nullptr)
       : SessionAdvanced(session_id, execution_manager, tokenizer, session_info,
-                        session_state, last_task_ids, living_sessions_count) {}
+                        session_state, last_task_ids, living_sessions_count,
+                        engine) {}
 };
 
 }  // namespace litert::lm

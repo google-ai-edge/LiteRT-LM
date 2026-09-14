@@ -27,6 +27,7 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/time/clock.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
+#include "litert/cc/litert_environment.h"  // from @litert
 #include "runtime/components/model_resources.h"
 #include "runtime/core/audio_session_advanced.h"
 #include "runtime/core/session_advanced.h"
@@ -155,12 +156,14 @@ class EngineAdvancedImpl : public Engine {
       ABSL_ASSIGN_OR_RETURN(
           session, AudioSessionAdvanced::Create(
                        execution_manager_, tokenizer_.get(), config,
-                       std::move(session_benchmark_info), &living_sessions_));
+                       std::move(session_benchmark_info), &living_sessions_,
+                       /*engine=*/this));
     } else {
       ABSL_ASSIGN_OR_RETURN(
           session, SessionAdvanced::Create(
                        execution_manager_, tokenizer_.get(), config,
-                       std::move(session_benchmark_info), &living_sessions_));
+                       std::move(session_benchmark_info), &living_sessions_,
+                       /*engine=*/this));
     }
 
     if (benchmark_info_.has_value()) {
@@ -199,6 +202,13 @@ class EngineAdvancedImpl : public Engine {
       bool enable_metal_residency_set) override {
     return execution_manager_->UpdateGpuEnableMetalResidencySet(
         enable_metal_residency_set);
+  }
+
+  absl::StatusOr<const ::litert::Environment*> GetEnvironment() const override {
+    if (owned_env_ == nullptr) {
+      return absl::NotFoundError("LiteRT environment is not available.");
+    }
+    return &owned_env_->env;
   }
 
  private:

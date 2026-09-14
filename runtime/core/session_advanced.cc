@@ -35,6 +35,7 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
+#include "litert/cc/litert_environment.h"  // from @litert  // IWYU pragma: keep
 #include "runtime/core/session_utils.h"
 #include "runtime/engine/engine.h"
 #include "runtime/engine/engine_settings.h"
@@ -61,7 +62,7 @@ absl::StatusOr<std::unique_ptr<SessionAdvanced>> SessionAdvanced::Create(
     support::Tokenizer* absl_nonnull tokenizer,
     const SessionConfig& session_config,
     std::optional<BenchmarkInfo> benchmark_info,
-    std::atomic<int>* living_sessions_count) {
+    std::atomic<int>* living_sessions_count, const Engine* engine) {
   auto execution_manager_lock = execution_manager.lock();
   if (execution_manager_lock == nullptr) {
     return absl::FailedPreconditionError("Execution manager is not available.");
@@ -74,7 +75,7 @@ absl::StatusOr<std::unique_ptr<SessionAdvanced>> SessionAdvanced::Create(
   return absl::WrapUnique(new SessionAdvanced(
       session_id, execution_manager, tokenizer, session_info_,
       /*session_state=*/SessionState::kFresh,
-      /*last_task_ids=*/{}, living_sessions_count));
+      /*last_task_ids=*/{}, living_sessions_count, engine));
 }
 
 absl::Status SessionAdvanced::RunPrefill(
@@ -469,9 +470,9 @@ SessionAdvanced::CloneAsyncLocked(
   ABSL_ASSIGN_OR_RETURN(auto session_info,
                         execution_manager_lock->GetSessionInfo(session_id));
 
-  return absl::WrapUnique(new SessionAdvanced(session_id, execution_manager_,
-                                              tokenizer_, session_info,
-                                              session_state_, last_task_ids_));
+  return absl::WrapUnique(new SessionAdvanced(
+      session_id, execution_manager_, tokenizer_, session_info, session_state_,
+      last_task_ids_, living_sessions_count_, engine_));
 }
 
 SessionAdvanced::~SessionAdvanced() {
@@ -572,6 +573,14 @@ std::optional<SessionDebugInfo> SessionAdvanced::GetSessionDebugInfo() const {
 #else
   return std::nullopt;
 #endif
+}
+
+absl::StatusOr<const ::litert::Environment*> SessionAdvanced::GetEnvironment()
+    const {
+  if (engine_ == nullptr) {
+    return absl::NotFoundError("Engine is not available.");
+  }
+  return engine_->GetEnvironment();
 }
 
 }  // namespace litert::lm
