@@ -487,6 +487,148 @@ class ServeOpenAIStreamingTest(absltest.TestCase):
       )
       self.assertEqual(res_body["choices"][0]["message"]["content"], "Hi")
 
+  def test_parse_repetition_penalty_config(self):
+    self.assertIsNone(openai_handler._parse_repetition_penalty_config({}))
+
+    config = openai_handler._parse_repetition_penalty_config(
+        {"frequency_penalty": 0.5, "presence_penalty": 1}
+    )
+    self.assertIsNotNone(config)
+    self.assertEqual(config.frequency_penalty, 0.5)
+    self.assertEqual(config.presence_penalty, 1.0)
+
+    with self.assertRaises(ValueError):
+      openai_handler._parse_repetition_penalty_config(
+          {"frequency_penalty": "invalid"}
+      )
+
+    with self.assertRaises(ValueError):
+      openai_handler._parse_repetition_penalty_config(
+          {"frequency_penalty": True}
+      )
+
+    with self.assertRaises(ValueError):
+      openai_handler._parse_repetition_penalty_config(
+          {"presence_penalty": "invalid"}
+      )
+
+  def test_openai_chat_completions_with_repetition_penalty(self):
+    mock_engine = mock.MagicMock()
+    mock_conv = mock.MagicMock()
+    mock_engine.create_conversation.return_value.__enter__.return_value = (
+        mock_conv
+    )
+    mock_get_engine = self.enter_context(
+        mock.patch.object(
+            openai_handler.OpenAIHandler, "_get_engine", autospec=True
+        )
+    )
+    mock_get_engine.return_value = mock_engine
+
+    mock_conv.send_message_async.return_value = [
+        {"role": "assistant", "content": [{"type": "text", "text": "Hello"}]},
+    ]
+    mock_conv.get_benchmark_info.return_value = litert_lm.BenchmarkInfo(
+        init_time_in_second=0.1,
+        time_to_first_token_in_second=0.05,
+        last_prefill_token_count=5,
+        last_prefill_tokens_per_second=100.0,
+        last_decode_token_count=3,
+        last_decode_tokens_per_second=100.0,
+    )
+
+    data = json.dumps({
+        "model": "gemma3",
+        "messages": [{"role": "user", "content": "Say hi"}],
+        "frequency_penalty": 0.5,
+        "presence_penalty": 0.2,
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        f"http://localhost:{self.port}/v1/chat/completions",
+        data=data,
+        headers={"Content-Type": "application/json"},
+    )
+
+    with urllib.request.urlopen(req) as response:
+      self.assertEqual(response.getcode(), 200)
+      res_body = json.loads(response.read().decode("utf-8"))
+      self.assertEqual(res_body["choices"][0]["message"]["content"], "Hello")
+
+    mock_conv.send_message_async.assert_called_once_with(
+        {"role": "user", "content": "Say hi"},
+        max_output_tokens=None,
+        response_format=None,
+        repetition_penalty_config=litert_lm.RepetitionPenaltyConfig(
+            frequency_penalty=0.5, presence_penalty=0.2
+        ),
+    )
+
+  def test_openai_responses_with_repetition_penalty(self):
+    mock_engine = mock.MagicMock()
+    mock_conv = mock.MagicMock()
+    mock_engine.create_conversation.return_value.__enter__.return_value = (
+        mock_conv
+    )
+    mock_get_engine = self.enter_context(
+        mock.patch.object(
+            openai_handler.OpenAIHandler, "_get_engine", autospec=True
+        )
+    )
+    mock_get_engine.return_value = mock_engine
+
+    mock_conv.send_message.return_value = {
+        "role": "assistant",
+        "content": [{"type": "text", "text": "Hello"}],
+    }
+
+    data = json.dumps({
+        "model": "gemma3",
+        "input": "Say hi",
+        "frequency_penalty": 0.3,
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        f"http://localhost:{self.port}/v1/responses",
+        data=data,
+        headers={"Content-Type": "application/json"},
+    )
+
+    with urllib.request.urlopen(req) as response:
+      self.assertEqual(response.getcode(), 200)
+
+    mock_conv.send_message.assert_called_once_with(
+        "Say hi",
+        response_format=None,
+        repetition_penalty_config=litert_lm.RepetitionPenaltyConfig(
+            frequency_penalty=0.3, presence_penalty=None
+        ),
+    )
+
+  def test_openai_invalid_repetition_penalty(self):
+    mock_from_id = self.enter_context(
+        mock.patch.object(model.Model, "from_model_id", autospec=True)
+    )
+    mock_from_id.return_value = model.Model(
+        model_id="gemma3", model_path=str(self.model_path)
+    )
+
+    data = json.dumps({
+        "model": "gemma3",
+        "messages": [{"role": "user", "content": "Say hi"}],
+        "frequency_penalty": "invalid",
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        f"http://localhost:{self.port}/v1/chat/completions",
+        data=data,
+        headers={"Content-Type": "application/json"},
+    )
+
+    with self.assertRaises(urllib.error.HTTPError) as cm:
+      urllib.request.urlopen(req)
+    self.assertEqual(cm.exception.code, 400)
+
 
 if __name__ == "__main__":
   absltest.main()
