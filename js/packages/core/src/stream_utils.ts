@@ -71,7 +71,10 @@ export function setupStreamWeightsCallback(wasm: LiteRtLmWasm): void {
     requests.sort((a, b) => a.offset - b.offset);
 
     const CHUNK_SIZE = 4 * 1024 * 1024;
-    const tempPtr = wasm._malloc(CHUNK_SIZE);
+    // `_malloc` returns a signed i32, which reads back negative once the heap
+    // grows past 2GB. Reinterpret it as unsigned before using it to index the
+    // heap, or the `Uint8Array` view below throws a `RangeError`.
+    const tempPtr = wasm._malloc(CHUNK_SIZE) >>> 0;
     if (tempPtr === 0) {
       throw new Error('Failed to allocate Wasm memory for streaming weights');
     }
