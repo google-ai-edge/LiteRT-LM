@@ -81,7 +81,34 @@ def download_experimental_model(
     ) from e
 
 
-def _copy_source(
+def _link_or_copy(source: str, dest: str) -> None:
+  """Links source to dest using a hard link, falling back to copy if needed.
+
+  Args:
+    source: The path to the source file.
+    dest: The path to the destination file.
+
+  Raises:
+    FileNotFoundError: If the source file does not exist.
+  """
+  if not os.path.exists(source):
+    raise FileNotFoundError(f"Source file not found: {source}")
+
+  if os.path.lexists(dest):
+    try:
+      if os.path.exists(dest) and os.path.samefile(source, dest):
+        return
+    except OSError:
+      pass
+    os.remove(dest)
+
+  try:
+    os.link(source, dest)
+  except OSError:
+    shutil.copy(source, dest)
+
+
+def _link_source(
     source: str,
     dest: str,
     *,
@@ -89,16 +116,16 @@ def _copy_source(
     user_agent: str | None,
     ssl_context: ssl.SSLContext | None = None,
 ) -> str | None:
-  """Copies the source file to dest, falling back to download if needed.
+  """Links the source file to dest using hard link, falling back to download if needed.
 
   If the source is a local file (equal to model_file) and is not found, and a
   user_agent is provided, it attempts to download it as an experimental model
-  and then copies it.
+  and then links it.
 
   Args:
     source: The resolved source path (might be HF downloaded file or local
       file).
-    dest: The destination path to copy to.
+    dest: The destination path to link to.
     model_file: The original model file argument (used for download ID).
     user_agent: The user agent for experimental model download.
     ssl_context: The SSL context to use for experimental download.
@@ -113,7 +140,7 @@ def _copy_source(
       model also fails.
   """
   try:
-    shutil.copy(source, dest)
+    _link_or_copy(source, dest)
     return None
   except FileNotFoundError as e:
     if source == model_file and user_agent:
@@ -123,7 +150,7 @@ def _copy_source(
           ssl_context=ssl_context,
       )
       try:
-        shutil.copy(downloaded_file, dest)
+        _link_or_copy(downloaded_file, dest)
         return downloaded_file
       except BaseException:
         try:
@@ -132,6 +159,9 @@ def _copy_source(
           pass
         raise
     raise click.ClickException(f"Source file not found: {source}") from e
+
+
+_copy_source = _link_source  # For backward compatibility
 
 
 @click.command(
@@ -208,7 +238,7 @@ def import_model(
   ssl_context = None
 
   try:
-    temporary_file = _copy_source(
+    temporary_file = _link_source(
         source,
         model_path,
         model_file=resolved_file,
