@@ -61,7 +61,7 @@ TEST(FileTextSourceTest, ReadFileWithDefaultDelimiters) {
   }
 
   EXPECT_THAT(chunks, ::testing::ElementsAre("Hello world.", " How are you?",
-                                             "\n", "Fine!"));
+                                             "Fine!"));
 }
 
 TEST(FileTextSourceTest, ReadFileWithCustomDelimiterAndNoInclude) {
@@ -119,7 +119,7 @@ TEST(FileTextSourceTest, ResetReReadsFile) {
     }
   }
   EXPECT_THAT(pass1,
-              ::testing::ElementsAre("First line.", "\n", "Second line."));
+              ::testing::ElementsAre("First line.", "Second line."));
 
   // Reset
   source->Reset();
@@ -134,7 +134,7 @@ TEST(FileTextSourceTest, ResetReReadsFile) {
     }
   }
   EXPECT_THAT(pass2,
-              ::testing::ElementsAre("First line.", "\n", "Second line."));
+              ::testing::ElementsAre("First line.", "Second line."));
 }
 
 }  // namespace

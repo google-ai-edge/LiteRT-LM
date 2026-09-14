@@ -341,5 +341,42 @@ TEST(PhonemizerTest, PhonemeTokensDiagnostic) {
   }
 }
 
+TEST(PhonemizerTest, EmDashAndUnicodePunctuation) {
+  ASSERT_OK_AND_ASSIGN(auto phonemizer,
+                       KokoroPhonemizer::Create(GetTestEspeakDataDir()));
+
+  ASSERT_OK_AND_ASSIGN(std::string dash_ipa1,
+                       phonemizer->TextToIpa("Obamacare — the"));
+  EXPECT_TRUE(absl::StrContains(dash_ipa1, "—"));
+
+  ASSERT_OK_AND_ASSIGN(std::string dash_ipa2,
+                       phonemizer->TextToIpa("Obamacare—the"));
+  EXPECT_TRUE(absl::StrContains(dash_ipa2, "—"));
+
+  ASSERT_OK_AND_ASSIGN(std::vector<int> dash_tokens,
+                       phonemizer->TextToPhonemeIds("Obamacare — the"));
+  // Token ID 9 is '—' in Kokoro vocab.
+  EXPECT_THAT(dash_tokens, ::testing::Contains(9));
+}
+
+TEST(PhonemizerTest, CurlyApostropheContraction) {
+  ASSERT_OK_AND_ASSIGN(auto phonemizer,
+                       KokoroPhonemizer::Create(GetTestEspeakDataDir()));
+
+  ASSERT_OK_AND_ASSIGN(std::string straight_ipa,
+                       phonemizer->TextToIpa("don't"));
+  ASSERT_OK_AND_ASSIGN(std::string curly_ipa, phonemizer->TextToIpa("don’t"));
+  EXPECT_EQ(curly_ipa, straight_ipa);
+}
+
+TEST(PhonemizerTest, WhitespaceOnlyReturnsEmptyTokens) {
+  ASSERT_OK_AND_ASSIGN(auto phonemizer,
+                       KokoroPhonemizer::Create(GetTestEspeakDataDir()));
+
+  ASSERT_OK_AND_ASSIGN(std::vector<int> tokens1,
+                       phonemizer->TextToPhonemeIds("   \n\n\t  "));
+  EXPECT_TRUE(tokens1.empty());
+}
+
 }  // namespace
 }  // namespace litert::omni::tts

@@ -154,5 +154,74 @@ TEST(TextChunkUtilsTest, ExtractNextChunkLeadingDelimiterExcluded) {
   EXPECT_EQ(chunk1->next_start_index, 7);
 }
 
+TEST(TextChunkUtilsTest, ExtractNextChunkParagraphNewlinesNoEmptyChunks) {
+  TextChunkConfig config;
+  config.include_delimiter = true;
+  std::string buffer = "Sentence one.\n\nSentence two.";
+
+  auto chunk1 = ExtractNextChunk(buffer, /*start_index=*/0,
+                                 /*is_finished=*/false, config);
+  ASSERT_TRUE(chunk1.has_value());
+  EXPECT_EQ(chunk1->chunk, "Sentence one.");
+
+  auto chunk2 =
+      ExtractNextChunk(buffer, /*start_index=*/chunk1->next_start_index,
+                       /*is_finished=*/true, config);
+  ASSERT_TRUE(chunk2.has_value());
+  EXPECT_EQ(chunk2->chunk, "Sentence two.");
+  EXPECT_EQ(chunk2->next_start_index, buffer.size());
+
+  // Further extractions yield nullopt.
+  auto chunk3 =
+      ExtractNextChunk(buffer, /*start_index=*/chunk2->next_start_index,
+                       /*is_finished=*/true, config);
+  EXPECT_FALSE(chunk3.has_value());
+}
+
+TEST(TextChunkUtilsTest, ExtractNextChunkMaxBufferSizeSplitsAtWordBoundary) {
+  TextChunkConfig config;
+  config.delimiters = {".", "!"};
+  config.max_buffer_size = 20;
+  config.include_delimiter = true;
+  std::string buffer =
+      "This is a very long sentence without terminal punctuation until later.";
+
+  auto chunk1 = ExtractNextChunk(buffer, /*start_index=*/0,
+                                 /*is_finished=*/false, config);
+  ASSERT_TRUE(chunk1.has_value());
+  // Should split at space before character 20 ("This is a very long")
+  EXPECT_EQ(chunk1->chunk, "This is a very long");
+  EXPECT_LE(chunk1->chunk.size(), 20);
+
+  auto chunk2 =
+      ExtractNextChunk(buffer, /*start_index=*/chunk1->next_start_index,
+                       /*is_finished=*/false, config);
+  ASSERT_TRUE(chunk2.has_value());
+  EXPECT_EQ(chunk2->chunk, "sentence without");
+  EXPECT_LE(chunk2->chunk.size(), 20);
+}
+
+TEST(TextChunkUtilsTest, ExactlyMaxBufferSizeNoDelimiterNoWhitespace) {
+  TextChunkConfig config;
+  config.delimiters = {"."};
+  config.max_buffer_size = 8;
+  // Exactly max_buffer_size bytes, no delimiter, no space (C1 regression test).
+  auto chunk = ExtractNextChunk("abcdefgh", 0, /*is_finished=*/false, config);
+  ASSERT_TRUE(chunk.has_value());
+  EXPECT_EQ(chunk->chunk, "abcdefgh");
+  EXPECT_EQ(chunk->next_start_index, 8);
+}
+
+TEST(TextChunkUtilsTest, MultiByteContinuationBufferTerminates) {
+  TextChunkConfig config;
+  config.delimiters = {"."};
+  config.max_buffer_size = 4;
+  // Non-ASCII UTF-8 multibyte characters spanning max_buffer_size boundary (C2 regression test).
+  auto chunk =
+      ExtractNextChunk("日本語テキスト", 0, /*is_finished=*/false, config);
+  ASSERT_TRUE(chunk.has_value());
+  EXPECT_GT(chunk->next_start_index, 0);
+}
+
 }  // namespace
 }  // namespace litert::omni::tts

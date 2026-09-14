@@ -24,6 +24,7 @@ cc_library(
     hdrs = ["kokoro_model_config.h"],
     deps = [
         "@com_google_absl//absl/container:flat_hash_map",
+        "//runtime/executor:executor_settings_base",
     ],
 )
 
@@ -32,10 +33,12 @@ cc_library(
     srcs = ["common.cc"],
     hdrs = ["common.h"],
     deps = [
+        ":kokoro_io_types",
         "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/types:span",
     ],
 )
 
@@ -44,6 +47,7 @@ cc_test(
     srcs = ["common_test.cc"],
     deps = [
         ":common",
+        ":kokoro_io_types",
         "@com_google_googletest//:gtest_main",
     ],
 )
@@ -62,7 +66,6 @@ cc_library(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/synchronization",
-        "@com_google_absl//absl/types:span",
         "@espeak_ng//:espeak_ng_base_headers",
         "@espeak_ng//:espeak_ng_speak_lib_header",
         "@espeak_ng//:libespeak_ng_la_sources",  # buildcleaner: keep
@@ -77,7 +80,6 @@ cc_test(
         "@espeak_ng//:espeak_ng_data",
     ],
     deps = [
-        ":common",
         ":phonemizer",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/container:flat_hash_map",

@@ -16,7 +16,7 @@
 
 #include <unistd.h>
 
-#include <cctype>
+#include <algorithm>
 #include <cstddef>
 #include <filesystem>  // NOLINT: Required for path manipulation.
 #include <memory>
@@ -155,6 +155,43 @@ std::string NormalizeMisakiPhonemes(absl::string_view raw_ipa) {
                                             {"ɬ", "l"},
                                             {"ː", ""},
                                         });
+}
+
+// Returns the byte length of the UTF-8 sequence starting at `text[pos]`,
+// clamped so it never runs past the end of `text`.
+//
+// - 0xxxxxxx                -> 1 byte  (ASCII: 0x00..0x7F)
+// - 110xxxxx (& 0xE0==0xC0) -> 2 bytes (IPA letters: ɑ, ə, ɪ, ð, ʃ; accented
+// Latin: 0xC0..0xDF)
+// - 1110xxxx (& 0xF0==0xE0) -> 3 bytes (punctuation: —, …, curly quotes;
+// modifiers: ᵊ)
+// - 11110xxx (& 0xF8==0xF0) -> 4 bytes (rare symbols: ꭧ)
+size_t Utf8SequenceLength(absl::string_view text, size_t pos) {
+  if (pos >= text.size()) return 0;
+  const unsigned char c = static_cast<unsigned char>(text[pos]);
+  size_t char_len = 1;
+  if ((c & 0x80) == 0) {
+    char_len = 1;
+  } else if ((c & 0xE0) == 0xC0) {
+    char_len = 2;
+  } else if ((c & 0xF0) == 0xE0) {
+    char_len = 3;
+  } else if ((c & 0xF8) == 0xF0) {
+    char_len = 4;
+  }
+  return std::min(char_len, text.size() - pos);
+}
+
+// Multi-byte Unicode punctuation that Kokoro's vocabulary or phonetic mapping
+// expects, mapped to its target replacement representation.
+const absl::flat_hash_map<absl::string_view, absl::string_view>&
+GetUnicodePunctuationMap() {
+  static const auto* kMap =
+      new absl::flat_hash_map<absl::string_view, absl::string_view>{
+          {"—", "—"},  {"–", "—"},  {"…", "…"},  {"“", "“"},  {"”", "”"},
+          {"，", ","}, {"。", "."}, {"！", "!"}, {"？", "?"},
+      };
+  return *kMap;
 }
 
 std::string ResolveEspeakDataDir(absl::string_view path) {
@@ -375,24 +412,55 @@ absl::StatusOr<std::string> KokoroPhonemizer::TextToIpa(
   std::string combined_ipa;
   std::string current_word;
 
-  // Tokenize input sentence by word characters (alphanumeric, non-ASCII UTF-8
-  // bytes, apostrophe, hyphen) and punctuation, converting each word to IPA
-  // while preserving punctuation marks.
-  for (size_t i = 0; i < text.size(); ++i) {
-    char c = text[i];
-    unsigned char uc = static_cast<unsigned char>(c);
-    if (std::isalnum(uc) || uc >= 0x80 || c == '\'' || c == '-') {
-      current_word += c;
-    } else {
+  const auto& unicode_punct_map = GetUnicodePunctuationMap();
+
+  size_t i = 0;
+  while (i < text.size()) {
+    const size_t char_len = Utf8SequenceLength(text, i);
+    const unsigned char c = static_cast<unsigned char>(text[i]);
+    absl::string_view symbol = text.substr(i, char_len);
+    i += char_len;
+
+    // 1. Whitespace handling (' ', '\t', '\n', '\r', etc.)
+    if (char_len == 1 && absl::ascii_isspace(c)) {
       LITERT_RETURN_IF_ERROR(FlushWordToIpa(current_word, combined_ipa));
-      if (c == ' ') {
-        if (!combined_ipa.empty() && combined_ipa.back() != ' ') {
-          combined_ipa += ' ';
-        }
-      } else {
-        combined_ipa += c;
+      if (!combined_ipa.empty() && combined_ipa.back() != ' ') {
+        combined_ipa += ' ';
+      }
+      continue;
+    }
+
+    // 2. Curly apostrophe: U+2019 (’ : 0xE2 0x80 0x99) or U+2018 (‘)
+    // If inside a word (e.g. don’t), treat as an ASCII apostrophe '\''.
+    if (symbol == "’" || symbol == "‘") {
+      if (!current_word.empty()) {
+        current_word += '\'';
+        continue;
       }
     }
+
+    // 3. Known multi-byte Unicode punctuation
+    if (auto it = unicode_punct_map.find(symbol);
+        it != unicode_punct_map.end()) {
+      LITERT_RETURN_IF_ERROR(FlushWordToIpa(current_word, combined_ipa));
+      absl::StrAppend(&combined_ipa, it->second);
+      continue;
+    }
+
+    // 4. Word characters:
+    // - ASCII alphanumeric
+    // - ASCII apostrophe or hyphen (when inside words)
+    // - 2-byte UTF-8 letters (accented Latin, e.g. café, español: 0xC0..0xDF)
+    if ((char_len == 1 && (absl::ascii_isalnum(c) || c == '\'' || c == '-')) ||
+        (char_len == 2 && (c & 0xE0) == 0xC0)) {
+      current_word.append(symbol.data(), symbol.size());
+      continue;
+    }
+
+    // 5. Standard ASCII punctuation / delimiters (e.g. '.', ',', '!', '?', ';',
+    // ':', '(', ')')
+    LITERT_RETURN_IF_ERROR(FlushWordToIpa(current_word, combined_ipa));
+    combined_ipa.append(symbol.data(), symbol.size());
   }
   LITERT_RETURN_IF_ERROR(FlushWordToIpa(current_word, combined_ipa));
 
@@ -402,47 +470,28 @@ absl::StatusOr<std::string> KokoroPhonemizer::TextToIpa(
 
 absl::StatusOr<std::vector<int>> KokoroPhonemizer::TextToPhonemeIds(
     absl::string_view text) const {
+  if (absl::StripAsciiWhitespace(text).empty()) {
+    return std::vector<int>();
+  }
+
+  // Convert raw input text to normalized IPA phoneme transcript.
+  LITERT_ASSIGN_OR_RETURN(std::string ipa_str, TextToIpa(text));
+  if (absl::StripAsciiWhitespace(ipa_str).empty()) {
+    return std::vector<int>();
+  }
+
   // Initialize output token buffer with BOS token (ID 0) at index 0.
   std::vector<int> ids(kokoro::kMaxTokens, kokoro::kBosTokenId);
   const auto& vocab = GetKokoroVocabMap();
 
-  // Convert raw input text to normalized IPA phoneme transcript.
-  LITERT_ASSIGN_OR_RETURN(std::string ipa_str, TextToIpa(text));
-  if (ipa_str.empty()) {
-    ipa_str = std::string(text);
-  }
-
   int idx = 1;
   size_t pos = 0;
+  bool has_phonetic_token = false;
 
   // Iterate over the UTF-8 encoded IPA string character by character (Unicode
-  // codepoints). Multi-byte UTF-8 sequences (such as IPA phonetic characters
-  // 'ɑ', 'ə', 'ɪ', and punctuation '—', '…') are parsed using standard UTF-8
-  // leading-byte bitmasks:
+  // codepoints).
   while (pos < ipa_str.size() && idx < kokoro::kMaxTokens - 1) {
-    unsigned char c = ipa_str[pos];
-    size_t char_len = 1;
-
-    // Bitwise check on UTF-8 leading byte header:
-    // - 0xxxxxxx: 1-byte ASCII character (0x00..0x7F).
-    // - 110xxxxx (c & 0xE0 == 0xC0): 2-byte sequence (e.g. IPA letters: ɑ, ə,
-    // ɪ, ð, ʃ).
-    // - 1110xxxx (c & 0xF0 == 0xE0): 3-byte sequence (e.g. punctuation: —, …,
-    // modifiers: ᵊ).
-    // - 11110xxx (c & 0xF8 == 0xF0): 4-byte sequence (e.g. rare Unicode plane 1
-    // symbols: ꭧ).
-    if ((c & 0x80) == 0) {
-      char_len = 1;
-    } else if ((c & 0xE0) == 0xC0) {
-      char_len = 2;
-    } else if ((c & 0xF0) == 0xE0) {
-      char_len = 3;
-    } else if ((c & 0xF8) == 0xF0) {
-      char_len = 4;
-    }
-
-    // Boundary check to prevent reading past the end of the string.
-    if (pos + char_len > ipa_str.size()) char_len = ipa_str.size() - pos;
+    const size_t char_len = Utf8SequenceLength(ipa_str, pos);
     absl::string_view symbol = absl::string_view(ipa_str).substr(pos, char_len);
     pos += char_len;
 
@@ -451,9 +500,17 @@ absl::StatusOr<std::vector<int>> KokoroPhonemizer::TextToPhonemeIds(
     auto it = vocab.find(symbol);
     if (it != vocab.end()) {
       ids[idx++] = it->second;
+      if (it->second != kokoro::kSpaceTokenId) {
+        has_phonetic_token = true;
+      }
     } else if (symbol == " ") {
       ids[idx++] = kokoro::kSpaceTokenId;
     }
+  }
+
+  // If no actual phonetic or punctuation tokens were mapped, return empty.
+  if (!has_phonetic_token) {
+    return std::vector<int>();
   }
 
   // Resize token array to include the trailing EOS token (ID 0).
