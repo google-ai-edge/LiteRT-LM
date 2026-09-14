@@ -33,6 +33,8 @@
 #include "flatbuffers/buffer.h"  // from @flatbuffers
 #include "flatbuffers/flatbuffer_builder.h"  // from @flatbuffers
 #include "flatbuffers/flexbuffers.h"  // from @flatbuffers
+#include "runtime/proto/embedding_metadata.pb.h"
+#include "runtime/proto/embedding_model_type.pb.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "schema/core/litertlm_header.h"
 #include "schema/core/litertlm_header_schema_generated.h"
@@ -97,6 +99,66 @@ std::string CreateMinimalTFLiteModel(const std::vector<int>& token_lengths) {
                      builder.GetSize());
 }
 
+// Helper to create a minimal embedding encoder TFLite model in memory with
+// signature defs specifying input sequence lengths and output embedding
+// dimension.
+std::string CreateMinimalEmbeddingTFLiteModel(
+    int embedding_dim, const std::vector<int>& input_lengths) {
+  flatbuffers::FlatBufferBuilder builder;
+
+  std::vector<flatbuffers::Offset<tflite::SignatureDef>> signature_defs;
+  std::vector<flatbuffers::Offset<tflite::SubGraph>> subgraphs;
+  std::vector<flatbuffers::Offset<tflite::Tensor>> tensors;
+
+  for (size_t i = 0; i < input_lengths.size(); ++i) {
+    int length = input_lengths[i];
+    std::vector<int32_t> in_shape = {1, length};
+    auto in_shape_offset = builder.CreateVector(in_shape);
+    auto in_tensor = tflite::CreateTensor(
+        builder, in_shape_offset, tflite::TensorType_INT32, /*buffer=*/0,
+        builder.CreateString(absl::StrCat("tokens_", i)));
+    tensors.push_back(in_tensor);
+
+    std::vector<int32_t> out_shape = {1, embedding_dim};
+    auto out_shape_offset = builder.CreateVector(out_shape);
+    auto out_tensor = tflite::CreateTensor(
+        builder, out_shape_offset, tflite::TensorType_FLOAT32, /*buffer=*/0,
+        builder.CreateString(absl::StrCat("embeddings_", i)));
+    tensors.push_back(out_tensor);
+  }
+
+  auto subgraph_offset = tflite::CreateSubGraph(
+      builder, builder.CreateVector(tensors), /*inputs=*/0, /*outputs=*/0);
+  subgraphs.push_back(subgraph_offset);
+
+  for (size_t i = 0; i < input_lengths.size(); ++i) {
+    std::vector<flatbuffers::Offset<tflite::TensorMap>> inputs;
+    inputs.push_back(tflite::CreateTensorMap(
+        builder, builder.CreateString("tokens"), /*tensor_index=*/2 * i));
+
+    std::vector<flatbuffers::Offset<tflite::TensorMap>> outputs;
+    outputs.push_back(tflite::CreateTensorMap(
+        builder, builder.CreateString("embeddings"),
+        /*tensor_index=*/2 * i + 1));
+
+    auto signature_offset = tflite::CreateSignatureDef(
+        builder, builder.CreateVector(inputs), builder.CreateVector(outputs),
+        builder.CreateString(absl::StrCat("encoder_", input_lengths[i])),
+        /*subgraph_index=*/0);
+    signature_defs.push_back(signature_offset);
+  }
+
+  auto model_offset = tflite::CreateModel(
+      builder, TFLITE_SCHEMA_VERSION, /*operator_codes=*/0,
+      builder.CreateVector(subgraphs), /*description=*/0, /*buffers=*/0,
+      /*metadata_buffer=*/0, /*metadata=*/0,
+      builder.CreateVector(signature_defs));
+
+  tflite::FinishModelBuffer(builder, model_offset);
+  return std::string(reinterpret_cast<const char*>(builder.GetBufferPointer()),
+                     builder.GetSize());
+}
+
 struct TFLiteSectionConfig {
   std::string model_type;
   std::string backend_constraint = "";
@@ -109,7 +171,8 @@ std::string CreateTestLiteRTLMWithConfigs(
     const std::vector<TFLiteSectionConfig>& section_configs,
     const proto::LlmMetadata* llm_metadata_proto = nullptr,
     const std::vector<std::pair<std::string, std::string>>&
-        extra_system_entries = {}) {
+        extra_system_entries = {},
+    const proto::EmbeddingMetadata* embedding_metadata_proto = nullptr) {
   flatbuffers::FlatBufferBuilder builder;
 
   // 1. System Metadata
@@ -146,6 +209,19 @@ std::string CreateTestLiteRTLMWithConfigs(
     section_objects.push_back(
         CreateSectionObject(builder, 0, proto_begin, proto_end,
                             AnySectionDataType_LlmMetadataProto));
+  }
+
+  std::string serialized_embedding_proto;
+  if (embedding_metadata_proto != nullptr) {
+    serialized_embedding_proto =
+        embedding_metadata_proto->SerializeAsString();
+    uint64_t proto_begin = current_offset;
+    uint64_t proto_end = proto_begin + serialized_embedding_proto.size();
+    current_offset = proto_end;
+
+    section_objects.push_back(
+        CreateSectionObject(builder, 0, proto_begin, proto_end,
+                            AnySectionDataType_EmbeddingMetadataProto));
   }
 
   std::vector<std::string> payloads;
@@ -225,6 +301,7 @@ std::string CreateTestLiteRTLMWithConfigs(
 
   // Append serialized proto
   header_data.append(serialized_llm_proto);
+  header_data.append(serialized_embedding_proto);
 
   // Append payloads
   for (const auto& p : payloads) {
@@ -1250,6 +1327,145 @@ TEST(ModelInfoFileTest,
   auto cap_or = GetModelInfo(stream);
   ASSERT_OK(cap_or.status());
   EXPECT_TRUE(cap_or->llm_capability.has_value());
+}
+
+TEST(ModelInfoFileTest, GetModelInfo_EmbeddingModel_TextOnly_GenericModel) {
+  proto::EmbeddingMetadata embed_meta;
+  embed_meta.mutable_embedding_model_type()->mutable_generic_model();
+
+  std::string encoder_model =
+      CreateMinimalEmbeddingTFLiteModel(/*embedding_dim=*/768,
+                                        /*input_lengths=*/{128, 256, 512});
+
+  std::string litertlm_data = CreateTestLiteRTLMWithConfigs(
+      /*model_class=*/"EMBEDDING", /*tf_hub_model_id=*/"google/embedding-v1",
+      {{.model_type = "tf_lite_text_encoder", .payload = encoder_model}},
+      /*llm_metadata_proto=*/nullptr,
+      /*extra_system_entries=*/{}, &embed_meta);
+
+  std::istringstream stream(litertlm_data, std::ios::binary);
+  auto result_or = GetModelInfo(stream);
+  ASSERT_OK(result_or);
+  ModelInfo result = std::move(*result_or);
+
+  EXPECT_FALSE(result.llm_capability.has_value());
+  ASSERT_TRUE(result.embedding_capability.has_value());
+
+  const auto& embed = *result.embedding_capability;
+  EXPECT_EQ(embed.embedding_dimension, 768);
+  EXPECT_EQ(embed.max_context_tokens, 512);
+  ASSERT_TRUE(embed.supported_signature_lengths.has_value());
+  EXPECT_THAT(*embed.supported_signature_lengths,
+              ::testing::ElementsAre(128, 256, 512));
+
+  EXPECT_TRUE(embed.input_modalities.text);
+  EXPECT_FALSE(embed.input_modalities.vision);
+  EXPECT_FALSE(embed.input_modalities.audio);
+  EXPECT_FALSE(embed.input_modalities.video);
+
+  EXPECT_TRUE(embed.text_supported_backends.cpu);
+  EXPECT_TRUE(embed.text_supported_backends.gpu);
+  EXPECT_FALSE(embed.text_supported_backends.npu);
+  EXPECT_EQ(embed.text_supported_backends.default_backend, BackendType::kCpu);
+}
+
+TEST(ModelInfoFileTest, GetModelInfo_EmbeddingModel_WithNpuStamp) {
+  std::string encoder_model =
+      CreateMinimalEmbeddingTFLiteModel(/*embedding_dim=*/3072,
+                                        /*input_lengths=*/{1024});
+  std::string aux_payload = CreateMockNpuTfliteModelWithStamp(
+      "dispatch_op_0", "Qualcomm", "SM8850");
+
+  std::string litertlm_data = CreateTestLiteRTLMWithConfigs(
+      /*model_class=*/"EMBEDDING",
+      /*tf_hub_model_id=*/"google/embedding-npu-3b",
+      {
+          {.model_type = "tf_lite_text_encoder",
+           .backend_constraint = "npu",
+           .payload = encoder_model},
+          {.model_type = "tf_lite_aux", .payload = aux_payload},
+      });
+
+  std::istringstream stream(litertlm_data, std::ios::binary);
+  auto result_or = GetModelInfo(stream);
+  ASSERT_OK(result_or);
+  ModelInfo result = std::move(*result_or);
+
+  ASSERT_TRUE(result.embedding_capability.has_value());
+  const auto& embed = *result.embedding_capability;
+  EXPECT_EQ(embed.embedding_dimension, 3072);
+  EXPECT_EQ(embed.max_context_tokens, 1024);
+  EXPECT_EQ(embed.max_vision_token_budget, -1);
+  EXPECT_TRUE(embed.text_supported_backends.npu);
+  EXPECT_EQ(embed.text_supported_backends.npu_brand, NpuBrand::kQualcomm);
+  EXPECT_EQ(embed.text_supported_backends.soc_name, "SM8850");
+  EXPECT_EQ(embed.text_supported_backends.default_backend, BackendType::kNpu);
+}
+
+TEST(ModelInfoFileTest, GetModelInfo_EmbeddingModel_StreamFormatting) {
+  EmbeddingInferenceCapability embed_cap;
+  embed_cap.embedding_dimension = 768;
+  embed_cap.max_context_tokens = 512;
+  embed_cap.max_vision_token_budget = 280;
+  embed_cap.min_runtime_version = "0.12.0";
+  embed_cap.supported_signature_lengths = std::vector<int>{128, 256, 512};
+  embed_cap.input_modalities.text = true;
+  embed_cap.input_modalities.vision = true;
+  embed_cap.input_modalities.audio = true;
+  embed_cap.input_modalities.video = true;
+  embed_cap.text_supported_backends.cpu = true;
+  embed_cap.text_supported_backends.gpu = true;
+  embed_cap.text_supported_backends.default_backend = BackendType::kCpu;
+  embed_cap.text_supported_backends.preferred_backends = {BackendType::kCpu,
+                                                          BackendType::kGpu};
+  embed_cap.vision_supported_backends.gpu = true;
+  embed_cap.vision_supported_backends.default_backend = BackendType::kGpu;
+  embed_cap.vision_supported_backends.preferred_backends = {BackendType::kGpu};
+  embed_cap.audio_supported_backends.cpu = true;
+  embed_cap.audio_supported_backends.default_backend = BackendType::kCpu;
+  embed_cap.audio_supported_backends.preferred_backends = {BackendType::kCpu};
+  embed_cap.video_supported_backends.gpu = true;
+  embed_cap.video_supported_backends.default_backend = BackendType::kGpu;
+  embed_cap.video_supported_backends.preferred_backends = {BackendType::kGpu};
+
+  ModelInfo info;
+  info.embedding_capability = embed_cap;
+
+  std::ostringstream ss;
+  ss << info;
+  std::string output = ss.str();
+
+  EXPECT_THAT(output, ::testing::HasSubstr("[Embedding Model Info]"));
+  EXPECT_THAT(output, ::testing::HasSubstr("Embedding Dimension:    768"));
+  EXPECT_THAT(output, ::testing::HasSubstr("Max Context Tokens:     512"));
+  EXPECT_THAT(output, ::testing::HasSubstr("Max Vision Token Budget: 280"));
+  EXPECT_THAT(output, ::testing::HasSubstr(
+                          "Supported Signature Lengths: [128, 256, 512]"));
+  EXPECT_THAT(output, ::testing::HasSubstr("Min Runtime Version:    0.12.0"));
+  EXPECT_THAT(
+      output,
+      ::testing::HasSubstr("Input Modalities:       Text Vision Audio Video"));
+  EXPECT_THAT(
+      output,
+      ::testing::HasSubstr("Text Backends:          CPU GPU (Default: CPU)"));
+  EXPECT_THAT(output, ::testing::HasSubstr(
+                          "Vision Backends:        GPU (Default: GPU)"));
+  EXPECT_THAT(output, ::testing::HasSubstr(
+                          "Audio Backends:         CPU (Default: CPU)"));
+  EXPECT_THAT(output, ::testing::HasSubstr(
+                          "Video Backends:         GPU (Default: GPU)"));
+}
+
+TEST(ModelInfoFileTest,
+     GetModelInfo_EmbeddingModel_CorruptEncoder_ReturnsError) {
+  std::string litertlm_data = CreateTestLiteRTLMWithConfigs(
+      /*model_class=*/"EMBEDDING", /*tf_hub_model_id=*/"",
+      {{.model_type = "tf_lite_text_encoder",
+        .payload = "corrupt_data_not_a_flatbuffer"}});
+
+  std::istringstream stream(litertlm_data, std::ios::binary);
+  auto result_or = GetModelInfo(stream);
+  EXPECT_THAT(result_or, StatusIs(absl::StatusCode::kInternal));
 }
 
 }  // namespace

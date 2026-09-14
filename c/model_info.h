@@ -148,14 +148,14 @@ bool litert_lm_loaded_file_is_dynamic_context(LiteRtLmLoadedFile* loaded_file);
 // If lengths is NULL, only returns the count.
 // Returns -1 if the model does not support vision.
 //
-// Added in version 0.3.0.
+// Added in version 0.2.0.
 LITERT_LM_C_API_EXPORT
 int32_t litert_lm_loaded_file_vision_signature_selection(
     LiteRtLmLoadedFile* loaded_file, int32_t* lengths, int32_t max_size);
 
 // Hardware backend type.
 //
-// Added in version 0.3.0.
+// Added in version 0.2.0.
 typedef enum LiteRtLmBackendType {
   kLiteRtLmBackendTypeCpu = 1,
   kLiteRtLmBackendTypeGpu = 2,
@@ -168,7 +168,7 @@ typedef enum LiteRtLmBackendType {
 // If `backends` is NULL, only returns the count of supported backends.
 // Returns 0 if the modality is not supported.
 //
-// Added in version 0.3.0.
+// Added in version 0.2.0.
 LITERT_LM_C_API_EXPORT
 int32_t litert_lm_loaded_file_modality_supported_backends(
     LiteRtLmLoadedFile* loaded_file, LiteRtLmModality modality,
@@ -176,7 +176,7 @@ int32_t litert_lm_loaded_file_modality_supported_backends(
 
 // NPU brand options.
 //
-// Added in version 0.3.0.
+// Added in version 0.2.0.
 typedef enum LiteRtLmNpuBrand {
   kLiteRtLmNpuBrandUnknown = 0,
   kLiteRtLmNpuBrandQualcomm = 1,
@@ -189,7 +189,7 @@ typedef enum LiteRtLmNpuBrand {
 // Returns the detected NPU brand of the model for a given modality, or
 // kLiteRtLmNpuBrandUnknown if not NPU-compiled for this modality.
 //
-// Added in version 0.3.0.
+// Added in version 0.2.0.
 LITERT_LM_C_API_EXPORT
 LiteRtLmNpuBrand litert_lm_loaded_file_modality_npu_brand(
     LiteRtLmLoadedFile* loaded_file, LiteRtLmModality modality);
@@ -198,7 +198,7 @@ LiteRtLmNpuBrand litert_lm_loaded_file_modality_npu_brand(
 // "Tensor_G5"), or NULL if not specified or not NPU-compiled.
 // The returned pointer is valid as long as the loaded_file is valid.
 //
-// Added in version 0.3.0.
+// Added in version 0.2.0.
 LITERT_LM_C_API_EXPORT
 const char* litert_lm_loaded_file_modality_soc_name(
     LiteRtLmLoadedFile* loaded_file, LiteRtLmModality modality);
@@ -207,10 +207,46 @@ const char* litert_lm_loaded_file_modality_soc_name(
 // The returned pointer is valid as long as the loaded_file is valid.
 // Returns NULL if the version requirement is not defined.
 //
-// Added in version 0.3.0.
+// Added in version 0.2.0.
 LITERT_LM_C_API_EXPORT
 const char* litert_lm_loaded_file_min_runtime_version(
     LiteRtLmLoadedFile* loaded_file);
+
+// Model type of the loaded LiteRT-LM file.
+//
+// Added in version 0.2.0.
+typedef enum LiteRtLmModelType {
+  kLiteRtLmModelTypeUnknown = 0,
+  kLiteRtLmModelTypeLlm = 1,
+  kLiteRtLmModelTypeEmbedding = 2,
+} LiteRtLmModelType;
+
+// Returns the model type of the loaded LiteRT-LM file.
+//
+// Added in version 0.2.0.
+LITERT_LM_C_API_EXPORT
+LiteRtLmModelType litert_lm_loaded_file_model_type(
+    LiteRtLmLoadedFile* loaded_file);
+
+// Returns the output embedding dimension for the model.
+// Returns -1 if the model is not an embedding model or if the dimension is not
+// defined.
+//
+// Added in version 0.2.0.
+LITERT_LM_C_API_EXPORT
+int32_t litert_lm_loaded_file_embedding_dimension(
+    LiteRtLmLoadedFile* loaded_file);
+
+// Returns the number of supported embedding signature sequence lengths.
+// Writes up to `max_size` lengths to the provided `lengths` array.
+// If `lengths` is NULL, only returns the count.
+// Returns -1 if the model is not an embedding model or if signature lengths are
+// not defined.
+//
+// Added in version 0.2.0.
+LITERT_LM_C_API_EXPORT
+int32_t litert_lm_loaded_file_embedding_signature_selection(
+    LiteRtLmLoadedFile* loaded_file, int32_t* lengths, int32_t max_size);
 
 #ifdef __cplusplus
 }  // extern "C"

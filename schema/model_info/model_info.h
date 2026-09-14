@@ -15,6 +15,7 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_SCHEMA_MODEL_INFO_MODEL_INFO_H_
 #define THIRD_PARTY_ODML_LITERT_LM_SCHEMA_MODEL_INFO_MODEL_INFO_H_
 
+#include <cstdint>
 #include <istream>
 #include <optional>
 #include <ostream>
@@ -160,13 +161,62 @@ struct LlmInferenceCapability {
   bool is_dynamic_context = false;
 };
 
+// Extracted capabilities and configurations for Embedding Models.
+struct EmbeddingInferenceCapability {
+  // The output embedding vector dimension (e.g. 256, 768, 1024, 3072).
+  int embedding_dimension = 0;
+
+  // Maximum supported context tokens for the embedding model.
+  // - If is_dynamic_context is false (static model), this is the fixed
+  //   context size.
+  // - If is_dynamic_context is true (dynamic model), this is the largest
+  //   context size that can be set.
+  uint32_t max_context_tokens = 0;
+
+  // Whether the model has dynamic context.
+  // Dynamic context means the context size can be configured by the caller
+  // up to the maximum limit at initialization time.
+  bool is_dynamic_context = false;
+
+  // Maximum vision token budget for multimodal inputs. Defaults to -1 if not
+  // defined or if the model does not support vision.
+  int max_vision_token_budget = -1;
+
+  // Vision signature selection capacities, representing the discrete vision
+  // token budgets supported by each signature (e.g. [64, 256, 1024]).
+  // std::nullopt if the model does not support vision or does not define
+  // signature capacities.
+  std::optional<std::vector<int>> vision_signature_selection;
+
+  // Discrete supported input signature token lengths if defined by the model
+  // (e.g. [128, 256, 512, 1024]).
+  std::optional<std::vector<int>> supported_signature_lengths;
+
+  // The minimum LiteRT-LM runtime version required to run this model.
+  std::string min_runtime_version;
+
+  // Input modalities supported by the model (e.g. Text, Vision, Audio, Video).
+  SupportedModalities input_modalities;
+
+  // Output modalities supported by the model (typically just embedding vector).
+  SupportedModalities output_modalities;
+
+  // Modality-specific hardware backends for the embedding encoder.
+  SupportedBackends text_supported_backends;
+  SupportedBackends vision_supported_backends;
+  SupportedBackends audio_supported_backends;
+  SupportedBackends video_supported_backends;
+};
+
 // Container for overall model metadata and capabilities.
-// This wrapper is used to support future non-LLM model types (like Embeddings
-// or Classifiers) by adding new optional capability fields without breaking the
-// API.
+// This wrapper supports various model types (LLMs, Embeddings, Classifiers)
+// by adding new optional capability fields without breaking the API.
 struct ModelInfo {
   // LLM capabilities and configuration parameters, if available.
   std::optional<LlmInferenceCapability> llm_capability;
+
+  // Embedding model capabilities and configuration parameters, if available.
+  std::optional<EmbeddingInferenceCapability> embedding_capability;
 };
 
 // Extracts model metadata and capabilities from the given LiteRT-LM file
@@ -183,6 +233,8 @@ std::ostream& operator<<(std::ostream& os, const BackendType& backend);
 std::ostream& operator<<(std::ostream& os, const SupportedBackends& backends);
 std::ostream& operator<<(std::ostream& os,
                          const LlmInferenceCapability& llm_cap);
+std::ostream& operator<<(std::ostream& os,
+                         const EmbeddingInferenceCapability& embed_cap);
 std::ostream& operator<<(std::ostream& os, const ModelInfo& model_info);
 
 }  // namespace litert::lm::schema::model_info
