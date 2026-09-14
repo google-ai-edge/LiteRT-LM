@@ -151,6 +151,14 @@ void litert_lm_embedding_engine_settings_delete(
   delete settings;
 }
 
+void litert_lm_embedding_engine_settings_set_num_threads(
+    LiteRtLmEmbeddingEngineSettings* settings, int num_threads) {
+  if (settings && settings->settings && num_threads > 0) {
+    settings->settings->GetMutableMainExecutorSettings().SetNumThreads(
+        num_threads);
+  }
+}
+
 void litert_lm_embedding_engine_settings_set_audio_num_threads(
     LiteRtLmEmbeddingEngineSettings* settings, int num_threads) {
   if (settings && settings->settings && num_threads > 0 &&

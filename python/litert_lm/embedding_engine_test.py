@@ -114,6 +114,18 @@ class EmbeddingEngineTest(parameterized.TestCase):
     finally:
       engine.close()
 
+  def test_compute_embedding_with_cpu_thread_count(self):
+    engine = litert_lm.EmbeddingEngine(
+        model_path=self.model_path,
+        backend=litert_lm.Backend.CPU(thread_count=4),
+    )
+    try:
+      response = engine.compute_embedding(contents="'s")
+      self.assertIsInstance(response, litert_lm.EmbeddingResponse)
+      self.assertNotEmpty(response.embedding)
+    finally:
+      engine.close()
+
   def test_compute_embedding_with_overflow_strategy(self):
     engine = litert_lm.EmbeddingEngine(
         model_path=self.model_path, backend=litert_lm.Backend.CPU()
