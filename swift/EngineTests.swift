@@ -51,6 +51,7 @@ class EngineTests: XCTestCase {
     XCTAssertEqual(config.modelPath, modelPath)
     XCTAssertEqual(config.maxNumTokens, 16)
     XCTAssertEqual(config.cacheDir, NSTemporaryDirectory())
+    XCTAssertNil(config.activationDataType)
   }
 
   func testEngineConfigThrowsErrorWithInvalidMaxNumTokens() throws {
@@ -87,6 +88,25 @@ class EngineTests: XCTestCase {
     let engineConfig = try EngineConfig(
       modelPath: modelPath, maxNumTokens: 16, cacheDir: NSTemporaryDirectory())
     let engine = Engine(engineConfig: engineConfig)
+    try await engine.initialize()
+    let isInitialized = await engine.isInitialized()
+    XCTAssertTrue(isInitialized)
+  }
+
+  func testInitialize_WithActivationDataType_Succeeds() async throws {
+    // swift-format-ignore
+    let modelResource =
+      "runtime/testdata/test_lm_new_metadata.task"
+    let modelPath = testDataPath(forResource: modelResource)
+    let engineConfig = try EngineConfig(
+      modelPath: modelPath,
+      maxNumTokens: 16,
+      cacheDir: NSTemporaryDirectory(),
+      activationDataType: .float32
+    )
+    let engine = Engine(engineConfig: engineConfig)
+    let config = await engine.engineConfig
+    XCTAssertEqual(config.activationDataType, .float32)
     try await engine.initialize()
     let isInitialized = await engine.isInitialized()
     XCTAssertTrue(isInitialized)

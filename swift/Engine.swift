@@ -90,6 +90,20 @@ public actor Engine {
     if let cacheDir = engineConfig.cacheDir {
       litert_lm_engine_settings_set_cache_dir(settings, cacheDir)
     }
+    if let activationDataType = engineConfig.activationDataType {
+      let cActivationDataType: LiteRtLmActivationDataType
+      switch activationDataType {
+      case .float32:
+        cActivationDataType = kLiteRtLmActivationDataTypeFloat32
+      case .float16:
+        cActivationDataType = kLiteRtLmActivationDataTypeFloat16
+      case .int16:
+        cActivationDataType = kLiteRtLmActivationDataTypeInt16
+      case .int8:
+        cActivationDataType = kLiteRtLmActivationDataTypeInt8
+      }
+      litert_lm_engine_settings_set_activation_data_type(settings, cActivationDataType)
+    }
     if let loraRank = engineConfig.loraRank {
       litert_lm_engine_settings_set_lora_rank(settings, Int32(loraRank))
       if loraRank > 0 {
