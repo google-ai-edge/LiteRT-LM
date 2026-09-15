@@ -130,7 +130,12 @@ BuildModelResourcesFromLitertLmFormat(const ModelAssets& model_assets,
                                       bool enable_file_backed_model_loading,
                                       bool enable_file_backed_for_aot_npu) {
   std::unique_ptr<LitertLmLoader> loader;
-  if (model_assets.HasMemoryMappedFile()) {
+  if (model_assets.HasScopedFile() || model_assets.GetPath().ok()) {
+    ABSL_ASSIGN_OR_RETURN(auto scoped_file,
+                          model_assets.GetOrCreateScopedFile());
+    ABSL_ASSIGN_OR_RETURN(loader,
+                          LitertLmLoader::Create(std::move(scoped_file)));
+  } else if (model_assets.HasMemoryMappedFile()) {
     ABSL_ASSIGN_OR_RETURN(auto memory_mapped_file,
                           model_assets.GetMemoryMappedFile());
     ABSL_ASSIGN_OR_RETURN(loader, LitertLmLoader::Create(memory_mapped_file));
