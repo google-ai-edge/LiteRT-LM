@@ -336,6 +336,25 @@ def _setup_lib_signatures(lib):
       ctypes.c_void_p,
   ]
   lib.litert_lm_session_delete.argtypes = [ctypes.c_void_p]
+
+  # CachedSession
+  lib.litert_lm_engine_create_cached_session.restype = ctypes.c_void_p
+  lib.litert_lm_engine_create_cached_session.argtypes = [
+      ctypes.c_void_p,
+      ctypes.c_void_p,
+  ]
+  lib.litert_lm_cached_session_delete.restype = None
+  lib.litert_lm_cached_session_delete.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_cached_session_get_last_matched_tokens.restype = ctypes.c_int
+  lib.litert_lm_cached_session_get_last_matched_tokens.argtypes = [
+      ctypes.c_void_p
+  ]
+  lib.litert_lm_cached_session_get_last_total_prompt_tokens.restype = (
+      ctypes.c_int
+  )
+  lib.litert_lm_cached_session_get_last_total_prompt_tokens.argtypes = [
+      ctypes.c_void_p
+  ]
   lib.litert_lm_session_cancel_process.argtypes = [ctypes.c_void_p]
   lib.litert_lm_session_run_prefill.restype = ctypes.c_int
   lib.litert_lm_session_run_prefill.argtypes = [
@@ -378,6 +397,10 @@ def _setup_lib_signatures(lib):
   lib.litert_lm_conversation_config_create.argtypes = []
   lib.litert_lm_conversation_config_delete.argtypes = [ctypes.c_void_p]
   lib.litert_lm_conversation_config_set_session_config.argtypes = [
+      ctypes.c_void_p,
+      ctypes.c_void_p,
+  ]
+  lib.litert_lm_conversation_config_set_cached_session.argtypes = [
       ctypes.c_void_p,
       ctypes.c_void_p,
   ]

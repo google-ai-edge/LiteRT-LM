@@ -1306,5 +1306,61 @@ TEST_F(CachedSessionTest, RunDecodeAsyncStreamingSuccess) {
             std::vector<CacheElement>({10, 20, 30}));
 }
 
+TEST_F(CachedSessionTest, TokenMetricsTracking) {
+  auto mock_session = std::make_unique<MockSession>();
+  auto* mock_session_ptr = mock_session.get();
+  CachedSession cached_session(std::move(mock_session), tokenizer_.get());
+
+  // Prime with "hello" (33, 547, 58)
+  EXPECT_CALL(*mock_session_ptr,
+              PrefillPreprocessedContents(testing::_, testing::_))
+      .WillOnce(
+          [](std::vector<InputData> contents,
+             absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback) {
+            callback(Responses(TaskState::kDone));
+            return std::make_unique<NoOpTaskController>();
+          });
+
+  std::vector<InputData> inputs1;
+  inputs1.push_back(InputText("hello"));
+  LITERT_EXPECT_OK(cached_session.RunPrefill(inputs1));
+
+  EXPECT_EQ(cached_session.GetLastMatchedTokens(), 0);
+  EXPECT_EQ(cached_session.GetLastTotalPromptTokens(), 3);
+
+  // Second prefill: "hello" again -> 100% match
+  std::vector<InputData> inputs2;
+  inputs2.push_back(InputText("hello"));
+  LITERT_EXPECT_OK(cached_session.RunPrefill(inputs2));
+
+  EXPECT_EQ(cached_session.GetLastMatchedTokens(), 3);
+  EXPECT_EQ(cached_session.GetLastTotalPromptTokens(), 3);
+}
+
+TEST_F(CachedSessionTest, RewindToStepTruncatesPrefixCache) {
+  auto mock_session = std::make_unique<MockSession>();
+  auto* mock_session_ptr = mock_session.get();
+  CachedSession cached_session(std::move(mock_session), tokenizer_.get());
+
+  EXPECT_CALL(*mock_session_ptr,
+              PrefillPreprocessedContents(testing::_, testing::_))
+      .WillOnce(
+          [](std::vector<InputData> contents,
+             absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback) {
+            callback(Responses(TaskState::kDone));
+            return std::make_unique<NoOpTaskController>();
+          });
+
+  std::vector<InputData> inputs;
+  inputs.push_back(InputText("hello"));  // 3 tokens: 33, 547, 58
+  LITERT_EXPECT_OK(cached_session.RunPrefill(inputs));
+  EXPECT_EQ(cached_session.GetPrefixCache().Size(), 3);
+
+  EXPECT_CALL(*mock_session_ptr, RewindToStep(2)).WillOnce(testing::Return(absl::OkStatus()));
+  LITERT_EXPECT_OK(cached_session.RewindToStep(2));
+  EXPECT_EQ(cached_session.GetPrefixCache().Size(), 2);
+}
+
 }  // namespace
 }  // namespace litert::lm
+

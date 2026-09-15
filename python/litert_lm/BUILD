@@ -74,6 +74,14 @@ pytype_strict_library(
 )
 
 pytype_strict_library(
+    name = "cached_session",
+    srcs = ["cached_session.py"],
+    deps = [
+        ":_ffi",
+    ],
+)
+
+pytype_strict_library(
     name = "conversation",
     srcs = ["conversation.py"],
     deps = [
@@ -90,6 +98,7 @@ pytype_strict_library(
     deps = [
         ":_ffi",
         ":_messages",
+        ":cached_session",
         ":conversation",
         ":interfaces",
         ":session",
@@ -135,6 +144,7 @@ pytype_strict_library(
         ":_ffi",
         ":_messages",
         ":benchmark",
+        ":cached_session",
         ":conversation",
         ":embedding_engine",
         ":engine",

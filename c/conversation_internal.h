@@ -72,6 +72,7 @@ struct LiteRtLmConversationConfig {
   std::string stream_tool_calls_channel_name = "tool_call";
   std::optional<litert::lm::ThinkingConfig> thinking_config;
   std::optional<LiteRtLmConstraintProviderType> constraint_provider_type;
+  LiteRtLmCachedSession* cached_session = nullptr;
 };
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_C_CONVERSATION_INTERNAL_H_

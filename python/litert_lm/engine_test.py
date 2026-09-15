@@ -524,6 +524,30 @@ class EngineTest(LiteRtLmTestBase):
       text = "".join([c.get("text", "") for c in message.get("content", [])])
       self.assertLess(len(text), 15)
 
+  def test_cached_session_conversation(self):
+    with self._create_engine(max_num_tokens=64) as engine:
+      with engine.create_cached_session() as cached_session:
+        self.assertEqual(cached_session.last_matched_tokens, 0)
+
+        # Turn 1
+        with engine.create_conversation(cached_session=cached_session) as conv1:
+          self.assertIs(conv1.cached_session, cached_session)
+          chunks1 = list(conv1.send_message_async("Hello world"))
+          self.assertNotEmpty(chunks1)
+          self.assertEqual(cached_session.last_matched_tokens, 0)
+          self.assertGreater(cached_session.last_total_prompt_tokens, 0)
+
+        # Turn 2: Reusing cached_session with matching prefix
+        with engine.create_conversation(cached_session=cached_session) as conv2:
+          self.assertIs(conv2.cached_session, cached_session)
+          chunks2 = list(conv2.send_message_async("Hello world again"))
+          self.assertNotEmpty(chunks2)
+          self.assertGreater(cached_session.last_matched_tokens, 0)
+          self.assertGreater(
+              cached_session.last_total_prompt_tokens,
+              cached_session.last_matched_tokens,
+          )
+
   def test_create_conversation_with_chat_template(self):
     tmpl = "{{ bos_token }}{% for m in messages %}{{ m.content }}{% endfor %}"
     with (

@@ -90,6 +90,18 @@ void litert_lm_conversation_config_set_session_config(
     LiteRtLmConversationConfig* config,
     const LiteRtLmSessionConfig* session_config);
 
+// Sets the cached session for this conversation config.
+// When set, the conversation will delegate to this cached session without
+// taking ownership of its destruction.
+// @param config The config to modify.
+// @param cached_session The cached session to use.
+//
+// Added in version 0.1.0.
+LITERT_LM_C_API_EXPORT
+void litert_lm_conversation_config_set_cached_session(
+    LiteRtLmConversationConfig* config,
+    LiteRtLmCachedSession* cached_session);
+
 // Sets the system message for this conversation config.
 // @param config The config to modify.
 // @param system_message_json The system message in JSON format.

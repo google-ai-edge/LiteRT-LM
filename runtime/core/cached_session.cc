@@ -340,6 +340,31 @@ absl::StatusOr<ConversionResult> ConvertToCacheElements(
 
 }  // namespace
 
+absl::StatusOr<std::unique_ptr<CachedSession>> CachedSession::Create(
+    Engine& engine, const SessionConfig& session_config,
+    const CachedSessionOptions& options) {
+  SessionConfig session_config_copy = session_config;
+  session_config_copy.SetApplyPromptTemplateInSession(false);
+  ABSL_ASSIGN_OR_RETURN(auto session,
+                        engine.CreateSession(session_config_copy));
+  CachedSessionOptions final_options = options;
+  if (!final_options.vision_properties.has_value()) {
+    auto vision_props = engine.GetVisionExecutorProperties();
+    if (vision_props.ok()) {
+      final_options.vision_properties = *vision_props;
+    }
+  }
+  if (!final_options.audio_properties.has_value()) {
+    auto audio_props = engine.GetAudioExecutorProperties();
+    if (audio_props.ok()) {
+      final_options.audio_properties = *audio_props;
+    }
+  }
+  auto* tokenizer = const_cast<support::Tokenizer*>(&engine.GetTokenizer());
+  return std::make_unique<CachedSession>(std::move(session), tokenizer,
+                                         final_options);
+}
+
 CachedSession::CachedSession(std::unique_ptr<SessionInterface> session,
                              support::Tokenizer* tokenizer,
                              const CachedSessionOptions& options)
@@ -386,20 +411,35 @@ CachedSession::RunPrefillAsync(
       ConvertToCacheElements(preprocessed_contents, vision_properties_,
                              audio_properties_));
 
+  int total_incoming_tokens = 0;
+  for (const auto& elem : incoming_elements.elements) {
+    if (std::holds_alternative<int>(elem)) {
+      total_incoming_tokens += 1;
+    } else {
+      total_incoming_tokens += std::get<MediaHash>(elem).token_length;
+    }
+  }
+  last_total_prompt_tokens_ = total_incoming_tokens;
+
   // Search the local PrefixCache for the longest matched prefix.
   // Find the longest common prefix between the input and the cached elements.
   auto match_result =
       prefix_cache_.FindLongestCommonPrefix(incoming_elements.elements);
+  last_matched_tokens_ = match_result.matched_tokens;
 
   // If no new tokens need to be prefilled, complete immediately.
   if (incoming_elements.elements.size() == match_result.matched_elements) {
+    last_matched_tokens_ = total_incoming_tokens;
+    if (prefix_cache_.TokenLength() > 0) {
+      ABSL_RETURN_IF_ERROR(session_->RewindToStep(match_result.matched_tokens));
+    }
     callback(Responses(TaskState::kDone));
     return std::make_unique<NoOpTaskController>();
   }
 
-  // Rewind the session to the matched token offset if it differs from the
-  // current step.
-  if (match_result.matched_tokens != prefix_cache_.TokenLength()) {
+  // Rewind the session to the matched token offset if previous tokens were
+  // cached.
+  if (prefix_cache_.TokenLength() > 0) {
     ABSL_RETURN_IF_ERROR(session_->RewindToStep(match_result.matched_tokens));
   }
 
@@ -561,7 +601,54 @@ CachedSession::RunTextScoringAsync(
                                        store_token_lengths);
 }
 
-absl::StatusOr<std::unique_ptr<CachedSession>> CachedSession::Clone() const {
+absl::StatusOr<Responses> CachedSession::GenerateContent(
+    const std::vector<InputData>& contents) {
+  return session_->GenerateContent(contents);
+}
+
+absl::Status CachedSession::GenerateContentStream(
+    const std::vector<InputData>& contents,
+    absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback) {
+  return session_->GenerateContentStream(contents, std::move(callback));
+}
+
+absl::Status CachedSession::GenerateContentStream(
+    const std::vector<InputData>& contents,
+    absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback,
+    const DecodeConfig& decode_config) {
+  return session_->GenerateContentStream(contents, std::move(callback),
+                                         decode_config);
+}
+
+absl::Status CachedSession::SaveCheckpoint(absl::string_view label) {
+  return session_->SaveCheckpoint(label);
+}
+
+absl::Status CachedSession::RewindToCheckpoint(absl::string_view label) {
+  return session_->RewindToCheckpoint(label);
+}
+
+absl::Status CachedSession::RewindToStep(int step) {
+  if (step == 0) {
+    return Reset();
+  }
+  int current_tokens = 0;
+  int element_count = 0;
+  for (const auto& elem : prefix_cache_.GetElements()) {
+    int tok_len = std::holds_alternative<int>(elem)
+                      ? 1
+                      : std::get<MediaHash>(elem).token_length;
+    if (current_tokens + tok_len > step) {
+      break;
+    }
+    current_tokens += tok_len;
+    element_count++;
+  }
+  prefix_cache_.Truncate(element_count);
+  return session_->RewindToStep(step);
+}
+
+absl::StatusOr<std::unique_ptr<SessionInterface>> CachedSession::Clone() {
   ABSL_ASSIGN_OR_RETURN(auto cloned_session, session_->Clone());
   CachedSessionOptions options;
   options.vision_properties = vision_properties_;
@@ -570,11 +657,13 @@ absl::StatusOr<std::unique_ptr<CachedSession>> CachedSession::Clone() const {
   auto new_cached_session = std::make_unique<CachedSession>(
       std::move(cloned_session), tokenizer_, options);
   new_cached_session->prefix_cache_ = prefix_cache_;
+  new_cached_session->last_matched_tokens_ = last_matched_tokens_;
+  new_cached_session->last_total_prompt_tokens_ = last_total_prompt_tokens_;
   return new_cached_session;
 }
 
-absl::StatusOr<std::unique_ptr<CachedSession>> CachedSession::CloneAsync(
-    absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback) const {
+absl::StatusOr<std::unique_ptr<SessionInterface>> CachedSession::CloneAsync(
+    absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback) {
   ABSL_ASSIGN_OR_RETURN(auto cloned_session,
                         session_->CloneAsync(std::move(callback)));
   CachedSessionOptions options;
@@ -584,6 +673,8 @@ absl::StatusOr<std::unique_ptr<CachedSession>> CachedSession::CloneAsync(
   auto new_cached_session = std::make_unique<CachedSession>(
       std::move(cloned_session), tokenizer_, options);
   new_cached_session->prefix_cache_ = prefix_cache_;
+  new_cached_session->last_matched_tokens_ = last_matched_tokens_;
+  new_cached_session->last_total_prompt_tokens_ = last_total_prompt_tokens_;
   return new_cached_session;
 }
 

@@ -137,6 +137,137 @@ absl::string_view TaskStateToString(TaskState task_state) {
   return "Unknown";
 }
 
+// A wrapper around a non-owning SessionInterface pointer so that Conversation
+// can hold it in std::unique_ptr<Engine::Session> without deleting the
+// underlying session on destruction.
+class NonOwningSessionWrapper : public SessionInterface {
+ public:
+  explicit NonOwningSessionWrapper(SessionInterface* session)
+      : session_(session) {}
+
+  absl::StatusOr<Responses> GenerateContent(
+      const std::vector<InputData>& contents) override {
+    return session_->GenerateContent(contents);
+  }
+
+  absl::Status GenerateContentStream(
+      const std::vector<InputData>& contents,
+      absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback) override {
+    return session_->GenerateContentStream(contents, std::move(callback));
+  }
+
+  absl::Status GenerateContentStream(
+      const std::vector<InputData>& contents,
+      absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback,
+      const DecodeConfig& decode_config) override {
+    return session_->GenerateContentStream(contents, std::move(callback),
+                                           decode_config);
+  }
+
+  absl::StatusOr<Responses> RunTextScoring(
+      const std::vector<absl::string_view>& target_text,
+      bool store_token_lengths) override {
+    return session_->RunTextScoring(target_text, store_token_lengths);
+  }
+
+  absl::StatusOr<std::unique_ptr<TaskController>> RunTextScoringAsync(
+      const std::vector<absl::string_view>& target_text,
+      absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback,
+      bool store_token_lengths) override {
+    return session_->RunTextScoringAsync(target_text, std::move(callback),
+                                         store_token_lengths);
+  }
+
+  absl::Status RunPrefill(const std::vector<InputData>& contents) override {
+    return session_->RunPrefill(contents);
+  }
+
+  absl::StatusOr<std::unique_ptr<TaskController>> RunPrefillAsync(
+      const std::vector<InputData>& contents,
+      absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback) override {
+    return session_->RunPrefillAsync(contents, std::move(callback));
+  }
+
+  absl::StatusOr<std::unique_ptr<TaskController>> PrefillPreprocessedContents(
+      std::vector<InputData> preprocessed_contents,
+      absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback) override {
+    return session_->PrefillPreprocessedContents(
+        std::move(preprocessed_contents), std::move(callback));
+  }
+
+  absl::StatusOr<Responses> RunDecode() override {
+    return session_->RunDecode();
+  }
+
+  absl::StatusOr<Responses> RunDecode(
+      const DecodeConfig& decode_config) override {
+    return session_->RunDecode(decode_config);
+  }
+
+  absl::StatusOr<std::unique_ptr<TaskController>> RunDecodeAsync(
+      absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback) override {
+    return session_->RunDecodeAsync(std::move(callback));
+  }
+
+  absl::StatusOr<std::unique_ptr<TaskController>> RunDecodeAsync(
+      absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback,
+      const DecodeConfig& decode_config) override {
+    return session_->RunDecodeAsync(std::move(callback), decode_config);
+  }
+
+  absl::StatusOr<BenchmarkInfo> GetBenchmarkInfo() override {
+    return session_->GetBenchmarkInfo();
+  }
+
+  absl::StatusOr<BenchmarkInfo*> GetMutableBenchmarkInfo() override {
+    return session_->GetMutableBenchmarkInfo();
+  }
+
+  void CancelProcess() override { session_->CancelProcess(); }
+
+  absl::Status WaitUntilDone() override { return session_->WaitUntilDone(); }
+
+  absl::StatusOr<std::unique_ptr<SessionInterface>> Clone() override {
+    return session_->Clone();
+  }
+
+  absl::StatusOr<std::unique_ptr<SessionInterface>> CloneAsync(
+      absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback) override {
+    return session_->CloneAsync(std::move(callback));
+  }
+
+  absl::Status SaveCheckpoint(absl::string_view label) override {
+    return session_->SaveCheckpoint(label);
+  }
+
+  absl::Status RewindToCheckpoint(absl::string_view label) override {
+    return session_->RewindToCheckpoint(label);
+  }
+
+  absl::Status RewindToStep(int step) override {
+    return session_->RewindToStep(step);
+  }
+
+  absl::StatusOr<int> GetCurrentStep() const override {
+    return session_->GetCurrentStep();
+  }
+
+  const SessionConfig& GetSessionConfig() const override {
+    return session_->GetSessionConfig();
+  }
+
+  std::optional<SessionDebugInfo> GetSessionDebugInfo() const override {
+    return session_->GetSessionDebugInfo();
+  }
+
+  absl::StatusOr<const Environment*> GetEnvironment() const override {
+    return session_->GetEnvironment();
+  }
+
+ private:
+  SessionInterface* session_;
+};
+
 }  // namespace
 
 absl::StatusOr<ConversationConfig> ConversationConfig::CreateDefault(
@@ -155,7 +286,8 @@ absl::StatusOr<ConversationConfig> ConversationConfig::CreateInternal(
     bool filter_channel_content_from_kv_cache,
     bool return_error_on_parse_failure, bool return_error_on_max_tokens_reached,
     std::optional<ThinkingConfig> thinking_config, bool stream_tool_calls,
-    const std::string& stream_tool_calls_channel_name, bool enable_rewinding) {
+    const std::string& stream_tool_calls_channel_name, bool enable_rewinding,
+    SessionInterface* session) {
   if (preface.has_value() && !std::holds_alternative<JsonPreface>(*preface)) {
     return absl::InvalidArgumentError("Only JsonPreface is supported for now.");
   }
@@ -224,7 +356,7 @@ absl::StatusOr<ConversationConfig> ConversationConfig::CreateInternal(
       std::move(constraint_provider_config), std::move(channels),
       filter_channel_content_from_kv_cache, return_error_on_parse_failure,
       return_error_on_max_tokens_reached, thinking_config, stream_tool_calls,
-      stream_tool_calls_channel_name, enable_rewinding);
+      stream_tool_calls_channel_name, enable_rewinding, session);
 }
 
 absl::StatusOr<std::string>
@@ -427,8 +559,13 @@ absl::StatusOr<std::unique_ptr<Conversation>> Conversation::Create(
   if (!std::holds_alternative<JsonPreface>(config.GetPreface())) {
     return absl::InvalidArgumentError("Only JsonPreface is supported for now.");
   }
-  ABSL_ASSIGN_OR_RETURN(std::unique_ptr<Engine::Session> session,
-                        engine.CreateSession(config.GetSessionConfig()));
+  std::unique_ptr<Engine::Session> session;
+  if (config.GetSession() != nullptr) {
+    session = std::make_unique<NonOwningSessionWrapper>(config.GetSession());
+  } else {
+    ABSL_ASSIGN_OR_RETURN(session,
+                          engine.CreateSession(config.GetSessionConfig()));
+  }
   ABSL_ASSIGN_OR_RETURN(
       std::unique_ptr<ModelDataProcessor> model_data_processor,
       CreateModelDataProcessor(config.GetProcessorConfig(), config.GetPreface(),
@@ -497,8 +634,12 @@ absl::StatusOr<std::unique_ptr<Conversation>> Conversation::Create(
   if (engine.GetEngineSettings().IsBenchmarkEnabled()) {
     ABSL_ASSIGN_OR_RETURN(BenchmarkInfo * benchmark_info,
                           conversation->GetMutableBenchmarkInfo());
-    ABSL_RETURN_IF_ERROR(benchmark_info->InitPhaseRecord(
-        BenchmarkInfo::InitPhase::kConversation, absl::Now() - start_time));
+    std::string phase_name = std::string(BenchmarkInfo::InitPhaseToString(
+        BenchmarkInfo::InitPhase::kConversation));
+    if (!benchmark_info->GetInitPhases().contains(phase_name)) {
+      ABSL_RETURN_IF_ERROR(benchmark_info->InitPhaseRecord(
+          BenchmarkInfo::InitPhase::kConversation, absl::Now() - start_time));
+    }
   }
 
   return conversation;

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import http.server
 import socket
+import threading
 
 import click
 
@@ -30,6 +31,10 @@ class LiteRTLMServer(http.server.HTTPServer):
 
   Attributes:
     litert_lm_engine: The LiteRT-LM engine instance, or None if not initialized.
+    cached_session: The shared CachedSession instance for prefix caching, or
+      None.
+    session_lock: Threading lock protecting cached_session during inference.
+    enable_prefix_caching: Whether prefix caching is enabled for this server.
     model_id: The identifier of the model currently loaded in the engine, or
       None.
     backend: The hardware backend used by the current engine, or None.
@@ -48,12 +53,16 @@ class LiteRTLMServer(http.server.HTTPServer):
       server_address: tuple[str, int],
       RequestHandlerClass: type[http.server.BaseHTTPRequestHandler],
       allowed_origins: tuple[str, ...] = (),
+      enable_prefix_caching: bool = True,
   ):
     host, _ = server_address
     if ":" in host:
       self.address_family = socket.AF_INET6
     super().__init__(server_address, RequestHandlerClass)
     self.allowed_origins = allowed_origins
+    self.enable_prefix_caching = enable_prefix_caching
+    self.cached_session: litert_lm.CachedSession | None = None
+    self.session_lock = threading.Lock()
     self.litert_lm_engine: litert_lm.Engine | None = None
     self.model_id: str | None = None
     self.backend: litert_lm.Backend | None = None
@@ -66,6 +75,30 @@ class LiteRTLMServer(http.server.HTTPServer):
     self.embedding_backend: litert_lm.Backend | None = None
     self.embedding_vision_backend: litert_lm.Backend | None = None
     self.embedding_audio_backend: litert_lm.Backend | None = None
+
+  def server_close(self) -> None:
+    cached_sess = self.cached_session
+    if cached_sess is not None:
+      try:
+        cached_sess.close()
+      except Exception:  # pylint: disable=broad-exception-caught
+        pass
+      self.cached_session = None
+    engine = self.litert_lm_engine
+    if engine is not None:
+      try:
+        engine.__exit__(None, None, None)
+      except Exception:  # pylint: disable=broad-exception-caught
+        pass
+      self.litert_lm_engine = None
+    emb_engine = self.litert_lm_embedding_engine
+    if emb_engine is not None:
+      try:
+        emb_engine.close()
+      except Exception:  # pylint: disable=broad-exception-caught
+        pass
+      self.litert_lm_embedding_engine = None
+    super().server_close()
 
 
 class CORSRequestHandler(http.server.BaseHTTPRequestHandler):
@@ -175,6 +208,22 @@ def get_or_initialize_server_engine(
         and server.audio_backend == audio_backend
         and server.activation_data_type == activation_data_type
     ):
+      if getattr(server, "enable_prefix_caching", True) and getattr(
+          server, "cached_session", None
+      ) is None:
+        try:
+          server.cached_session = (
+              server.litert_lm_engine.create_cached_session()
+          )
+        except Exception as e:  # pylint: disable=broad-exception-caught
+          click.echo(
+              click.style(
+                  f"Warning: Failed to create cached session ({e}), prefix"
+                  " caching disabled.",
+                  fg="yellow",
+              )
+          )
+          server.cached_session = None
       return server.litert_lm_engine
 
     click.echo(
@@ -186,7 +235,15 @@ def get_or_initialize_server_engine(
     )
     # TODO: b/513076049 - Support multiple concurrent engines instead of
     # re-initializing (which is disruptive to other clients).
-    server.litert_lm_engine.__exit__(None, None, None)
+    cached_sess = getattr(server, "cached_session", None)
+    if cached_sess is not None:
+      try:
+        cached_sess.close()
+      except Exception:  # pylint: disable=broad-exception-caught
+        pass
+      setattr(server, "cached_session", None)
+    if server.litert_lm_engine is not None:
+      server.litert_lm_engine.__exit__(None, None, None)
     server.litert_lm_engine = None
     server.model_id = None
     server.backend = None
@@ -212,6 +269,20 @@ def get_or_initialize_server_engine(
   )
   engine.__enter__()
   server.litert_lm_engine = engine
+  if getattr(server, "enable_prefix_caching", True):
+    try:
+      server.cached_session = engine.create_cached_session()
+    except Exception as e:  # pylint: disable=broad-exception-caught
+      click.echo(
+          click.style(
+              f"Warning: Failed to create cached session ({e}), prefix"
+              " caching disabled.",
+              fg="yellow",
+          )
+      )
+      server.cached_session = None
+  else:
+    server.cached_session = None
   server.model_id = model_id
   server.backend = resolved_backend
   server.max_num_tokens = resolved_max_num_tokens

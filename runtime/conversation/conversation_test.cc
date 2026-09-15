@@ -4846,5 +4846,51 @@ TEST_P(ConversationTest,
               "max vision tokens per image (200).")));
 }
 
+TEST_P(ConversationTest, ConversationUsesProvidedNonOwningSession) {
+  auto mock_engine = std::make_unique<MockEngine>();
+  EXPECT_CALL(*mock_engine, GetEngineSettings())
+      .WillRepeatedly(testing::ReturnRef(*engine_settings_));
+  EXPECT_CALL(*mock_engine, GetTokenizer())
+      .WillRepeatedly(testing::ReturnRef(*tokenizer_));
+  EXPECT_CALL(*mock_engine, CreateSession(testing::_)).Times(0);
+
+  auto external_session = CreateMockSession();
+  MockSession* session_ptr = external_session.get();
+
+  ASSERT_OK_AND_ASSIGN(
+      auto conversation_config,
+      ConversationConfig::Builder()
+          .SetSession(session_ptr)
+          .SetOverwritePromptTemplate(PromptTemplate("{{ prompt }}"))
+          .Build(*mock_engine));
+  EXPECT_EQ(conversation_config.GetSession(), session_ptr);
+
+  {
+    ASSERT_OK_AND_ASSIGN(
+        auto conversation,
+        Conversation::Create(*mock_engine, conversation_config));
+
+    EXPECT_CALL(*session_ptr, RunPrefillAsync(testing::_, testing::_))
+        .WillOnce(
+            [](const std::vector<InputData>& inputs,
+               absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback) {
+              callback(Responses(TaskState::kDone));
+              return nullptr;
+            });
+    EXPECT_CALL(*session_ptr, RunDecodeAsync(testing::_, testing::_))
+        .WillOnce(
+            [](absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback,
+               const DecodeConfig& decode_config) {
+              callback(Responses(TaskState::kProcessing, {"Response"}));
+              callback(Responses(TaskState::kDone));
+              return nullptr;
+            });
+
+    Message user_message = {{"role", "user"}, {"content", "Hello"}};
+    ASSERT_OK_AND_ASSIGN(auto response, conversation->SendMessage(user_message));
+  }
+  EXPECT_EQ(&session_ptr->GetSessionConfig(), &session_config_);
+}
+
 }  // namespace
 }  // namespace litert::lm

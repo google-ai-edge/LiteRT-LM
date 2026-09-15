@@ -26,6 +26,7 @@ from . import tools as litert_tools
 from ._ffi import _get_lib
 from ._ffi import ActivationDataType
 from ._messages import Message
+from .cached_session import CachedSession
 from .conversation import Conversation
 from .session import Session
 from .utils import _parse_token_union
@@ -245,6 +246,7 @@ class Engine(interfaces.AbstractEngine):
       max_output_tokens: int | None = None,
       chat_template: str | None = None,
       enable_speculative_decoding: bool | None = None,
+      cached_session: CachedSession | None = None,
   ) -> Conversation:
     session_config = self._lib.litert_lm_session_config_create()
     if enable_speculative_decoding is not None:
@@ -365,6 +367,11 @@ class Engine(interfaces.AbstractEngine):
           if tc_ptr:
             self._lib.litert_lm_thinking_config_delete(tc_ptr)
 
+      if cached_session is not None and cached_session._ptr:
+        self._lib.litert_lm_conversation_config_set_cached_session(
+            conv_config, cached_session._ptr
+        )
+
       conv_ptr = self._lib.litert_lm_conversation_create(
           self._engine_ptr, conv_config
       )
@@ -390,6 +397,7 @@ class Engine(interfaces.AbstractEngine):
         max_output_tokens=max_output_tokens,
         chat_template=chat_template,
         constrained_decoding_config=constrained_decoding_config,
+        cached_session=cached_session,
     )
 
   def create_session(
@@ -453,6 +461,67 @@ class Engine(interfaces.AbstractEngine):
     if not sess_ptr:
       raise RuntimeError("Failed to create session")
     return Session(self._lib, sess_ptr, engine=self)
+
+  def create_cached_session(
+      self,
+      *,
+      sampler_config: interfaces.SamplerConfig | None = None,
+      max_output_tokens: int | None = None,
+      lora_config: interfaces.LoraConfig | None = None,
+      enable_speculative_decoding: bool | None = None,
+  ) -> CachedSession:
+    session_config = self._lib.litert_lm_session_config_create()
+    if not session_config:
+      raise RuntimeError("Failed to create session config")
+
+    if enable_speculative_decoding is not None:
+      self._lib.litert_lm_session_config_set_enable_speculative_decoding(
+          session_config, enable_speculative_decoding
+      )
+
+    self._lib.litert_lm_session_config_set_apply_prompt_template(
+        session_config, False
+    )
+
+    if sampler_config:
+      params = _sampler_config_to_params(self._lib, sampler_config)
+      try:
+        self._lib.litert_lm_session_config_set_sampler_params(
+            session_config, params
+        )
+      finally:
+        self._lib.litert_lm_sampler_params_delete(params)
+
+    if max_output_tokens is not None:
+      self._lib.litert_lm_session_config_set_max_output_tokens(
+          session_config, int(max_output_tokens)
+      )
+
+    lora_path = lora_config.lora_path if lora_config else None
+    audio_lora_path = lora_config.audio_lora_path if lora_config else None
+
+    if lora_path:
+      status = self._lib.litert_lm_session_config_set_lora_path(
+          session_config, lora_path
+      )
+      if status != 0:
+        raise RuntimeError(f"Failed to set LoRA path: {lora_path}")
+
+    if audio_lora_path:
+      status = self._lib.litert_lm_session_config_set_audio_lora_path(
+          session_config, audio_lora_path
+      )
+      if status != 0:
+        raise RuntimeError(f"Failed to set audio LoRA path: {audio_lora_path}")
+
+    sess_ptr = self._lib.litert_lm_engine_create_cached_session(
+        self._engine_ptr, session_config
+    )
+    self._lib.litert_lm_session_config_delete(session_config)
+
+    if not sess_ptr:
+      raise RuntimeError("Failed to create cached session")
+    return CachedSession(self._lib, sess_ptr, engine=self)
 
   @property
   def bos_token_id(self) -> int | None:

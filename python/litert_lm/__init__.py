@@ -30,6 +30,7 @@ from ._messages import Message
 from ._messages import Role
 from ._messages import ToolCall
 from .benchmark import Benchmark
+from .cached_session import CachedSession
 from .conversation import Conversation
 from .embedding_engine import EmbeddingEngine
 from .embedding_engine import EmbeddingOptions
@@ -72,6 +73,7 @@ __all__ = (
     "Backend",
     "Benchmark",
     "BenchmarkInfo",
+    "CachedSession",
     "ConstrainedDecodingConfig",
     "Content",
     "Contents",
