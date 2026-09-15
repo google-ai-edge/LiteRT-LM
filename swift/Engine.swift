@@ -166,7 +166,8 @@ public actor Engine {
     let toolManager = ToolManager(tools: conversationConfig.tools)
 
     let systemMessageJsonStr = (try? conversationConfig.systemMessage?.contents.jsonString) ?? ""
-    let toolDescriptionJsonStr = toolManager.toolsJsonDescription
+    let toolDescriptionJsonStr =
+      conversationConfig.toolsJsonOverride ?? toolManager.toolsJsonDescription
 
     let initialMessagesJson = conversationConfig.initialMessages.map { $0.toJson }
     let messagesJsonStr: String
