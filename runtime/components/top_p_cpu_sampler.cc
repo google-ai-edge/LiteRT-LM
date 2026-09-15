@@ -14,6 +14,12 @@
 
 #include "runtime/components/top_p_cpu_sampler.h"
 
+#if defined(__has_feature)
+#if __has_feature(memory_sanitizer)
+#include <sanitizer/msan_interface.h>
+#endif
+#endif
+
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -116,8 +122,20 @@ absl::Status TopPSampler::SampleToIdAndScoreBuffer(
       LITERT_ASSIGN_OR_RETURN(logits_data_,
                               CopyFromTensorBuffer<float>(logits_tensor));
       logits_data_span = absl::MakeSpan(logits_data_);
+#if defined(__has_feature)
+#if __has_feature(memory_sanitizer)
+      __msan_unpoison(logits_data_span.data(),
+                      logits_data_span.size() * sizeof(float));
+#endif
+#endif
     } else {
       logits_data_span = *logits_data_or;
+#if defined(__has_feature)
+#if __has_feature(memory_sanitizer)
+      __msan_unpoison(logits_data_span.data(),
+                      logits_data_span.size() * sizeof(float));
+#endif
+#endif
     }
   } else if (logits_tensor_type.ElementType() == ElementType::Float16) {
     LITERT_ASSIGN_OR_RETURN(auto logits_size, logits_tensor.PackedSize());
@@ -128,6 +146,12 @@ absl::Status TopPSampler::SampleToIdAndScoreBuffer(
         mutable_logits_tensor.Read(absl::MakeSpan(logits_data_f16)));
     ConvertFp16ToFp32(logits_data_f16, logits_data_);
     logits_data_span = absl::MakeSpan(logits_data_);
+#if defined(__has_feature)
+#if __has_feature(memory_sanitizer)
+    __msan_unpoison(logits_data_span.data(),
+                    logits_data_span.size() * sizeof(float));
+#endif
+#endif
   } else {
     return absl::InvalidArgumentError(
         "Unsupported logits data type for sampler.");
