@@ -24,6 +24,7 @@ from __future__ import annotations
 import abc
 import base64
 from collections.abc import Mapping, Sequence
+import contextlib
 import dataclasses
 import datetime
 import http.server
@@ -363,6 +364,7 @@ def _compute_token_usage(
   """Computes token usage statistics for the completed conversation turn."""
   prompt_tokens = 0
   completion_tokens = 0
+  cached_tokens = 0
 
   try:
     info = conv.get_benchmark_info()
@@ -371,9 +373,20 @@ def _compute_token_usage(
   except Exception:  # pylint: disable=broad-exception-caught
     pass
 
+  if getattr(conv, "cached_session", None) is not None:
+    try:
+      cached_tokens = conv.cached_session.last_matched_tokens
+      total_prompt = conv.cached_session.last_total_prompt_tokens
+      if total_prompt > 0:
+        prompt_tokens = total_prompt
+      else:
+        prompt_tokens += cached_tokens
+    except Exception:  # pylint: disable=broad-exception-caught
+      pass
+
   total_tokens = prompt_tokens + completion_tokens
 
-  return {
+  usage: dict[str, Any] = {
       "prompt_tokens": prompt_tokens,
       "completion_tokens": completion_tokens,
       "total_tokens": total_tokens,
@@ -381,6 +394,11 @@ def _compute_token_usage(
           "reasoning_tokens": reasoning_tokens,
       },
   }
+  if getattr(conv, "cached_session", None) is not None or cached_tokens > 0:
+    usage["prompt_tokens_details"] = {
+        "cached_tokens": cached_tokens,
+    }
+  return usage
 
 
 class _OpenAIStreamFormatter(abc.ABC):
@@ -923,6 +941,13 @@ class OpenAIHandler(serve_util.CORSRequestHandler):
           )
       )
       conv.cancel_process()
+      cached_sess = getattr(self.server, "cached_session", None)
+      if cached_sess is not None:
+        try:
+          cached_sess.close()
+        except Exception:  # pylint: disable=broad-exception-caught
+          pass
+        setattr(self.server, "cached_session", None)
       try:
         self.wfile.write(formatter.format_error(e))
         self.wfile.flush()
@@ -1228,6 +1253,13 @@ class OpenAIHandler(serve_util.CORSRequestHandler):
             fg="red",
         )
     )
+    cached_sess = getattr(self.server, "cached_session", None)
+    if cached_sess is not None:
+      try:
+        cached_sess.close()
+      except Exception:  # pylint: disable=broad-exception-caught
+        pass
+      setattr(self.server, "cached_session", None)
     if not self.wfile.closed and not self._headers_sent:
       try:
         self.send_error(500, "".join(traceback.format_exception_only(e)))
@@ -1354,33 +1386,39 @@ class OpenAIHandler(serve_util.CORSRequestHandler):
           enable=True,
           provider=provider,
       )
-      with engine.create_conversation(
-          messages=context_messages,
-          tools=tools or None,
-          automatic_tool_calling=False,
-          sampler_config=sampler_config,
-          thinking_config=thinking_config,
-          constrained_decoding_config=constrained_decoding_config,
-      ) as conv:
-        now = datetime.datetime.now(datetime.timezone.utc)
-        now_str = now.strftime("%Y%m%d%H%M%S%f")
-        created_ts = int(now.timestamp())
+      session_lock = getattr(self.server, "session_lock", None)
+      lock_ctx = (
+          session_lock if session_lock is not None else contextlib.nullcontext()
+      )
+      with lock_ctx:
+        with engine.create_conversation(
+            messages=context_messages,
+            tools=tools or None,
+            automatic_tool_calling=False,
+            sampler_config=sampler_config,
+            thinking_config=thinking_config,
+            constrained_decoding_config=constrained_decoding_config,
+            cached_session=getattr(self.server, "cached_session", None),
+        ) as conv:
+          now = datetime.datetime.now(datetime.timezone.utc)
+          now_str = now.strftime("%Y%m%d%H%M%S%f")
+          created_ts = int(now.timestamp())
 
-        stream_options = body.get("stream_options")
-        if not isinstance(stream_options, dict):
-          stream_options = {}
+          stream_options = body.get("stream_options")
+          if not isinstance(stream_options, dict):
+            stream_options = {}
 
-        self._handle_chat_completions(
-            conv,  # pyrefly: ignore[bad-argument-type]
-            prompt,
-            raw_model_str,
-            stream,
-            now_str=now_str,
-            created_ts=created_ts,
-            max_completion_tokens=max_completion_tokens,
-            stream_options=stream_options,
-            response_format=response_format,
-        )
+          self._handle_chat_completions(
+              conv,  # pyrefly: ignore[bad-argument-type]
+              prompt,
+              raw_model_str,
+              stream,
+              now_str=now_str,
+              created_ts=created_ts,
+              max_completion_tokens=max_completion_tokens,
+              stream_options=stream_options,
+              response_format=response_format,
+          )
     except Exception as e:  # pylint: disable=broad-exception-caught
       self._handle_inference_error(e, raw_model_str, prompt)
 
@@ -1451,26 +1489,32 @@ class OpenAIHandler(serve_util.CORSRequestHandler):
           enable=True,
           provider=provider,
       )
-      with engine.create_conversation(
-          messages=[],
-          automatic_tool_calling=False,
-          sampler_config=None,
-          thinking_config=thinking_config,
-          constrained_decoding_config=constrained_decoding_config,
-      ) as conv:
-        now = datetime.datetime.now(datetime.timezone.utc)
-        now_str = now.strftime("%Y%m%d%H%M%S%f")
-        created_ts = int(now.timestamp())
+      session_lock = getattr(self.server, "session_lock", None)
+      lock_ctx = (
+          session_lock if session_lock is not None else contextlib.nullcontext()
+      )
+      with lock_ctx:
+        with engine.create_conversation(
+            messages=[],
+            automatic_tool_calling=False,
+            sampler_config=None,
+            thinking_config=thinking_config,
+            constrained_decoding_config=constrained_decoding_config,
+            cached_session=getattr(self.server, "cached_session", None),
+        ) as conv:
+          now = datetime.datetime.now(datetime.timezone.utc)
+          now_str = now.strftime("%Y%m%d%H%M%S%f")
+          created_ts = int(now.timestamp())
 
-        self._handle_responses(
-            conv,  # pyrefly: ignore[bad-argument-type]
-            prompt,
-            stream,
-            now_str=now_str,
-            created_ts=created_ts,
-            model_id=raw_model_str,
-            response_format=response_format,
-        )
+          self._handle_responses(
+              conv,  # pyrefly: ignore[bad-argument-type]
+              prompt,
+              stream,
+              now_str=now_str,
+              created_ts=created_ts,
+              model_id=raw_model_str,
+              response_format=response_format,
+          )
     except Exception as e:  # pylint: disable=broad-exception-caught
       self._handle_inference_error(e, raw_model_str, prompt)
 

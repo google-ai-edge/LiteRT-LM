@@ -25,6 +25,7 @@
 #include "runtime/components/constrained_decoding/no_repeat_ngram_config.h"
 #include "runtime/components/constrained_decoding/repetition_penalty_config.h"
 #include "runtime/components/constrained_decoding/suppress_tokens_config.h"
+#include "runtime/core/cached_session.h"
 #include "runtime/engine/engine.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
@@ -71,6 +72,10 @@ struct LiteRtLmEngine {
 
 struct LiteRtLmSession {
   std::unique_ptr<litert::lm::Engine::Session> session;
+};
+
+struct LiteRtLmCachedSession {
+  std::unique_ptr<litert::lm::CachedSession> cached_session;
 };
 
 struct LiteRtLmResponses {

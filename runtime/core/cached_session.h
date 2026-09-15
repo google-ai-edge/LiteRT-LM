@@ -63,13 +63,18 @@ struct CachedSessionOptions {
 //    and only executes prefill on the unmatched suffix.
 // 3. Decode: Call RunDecode or RunDecodeAsync. Newly generated tokens are
 //    automatically recorded in the prefix cache.
-class CachedSession {
+class CachedSession : public SessionInterface {
  public:
   CachedSession(std::unique_ptr<SessionInterface> session,
                 litert::support::Tokenizer* tokenizer,
                 const CachedSessionOptions& options = {});
 
-  ~CachedSession() = default;
+  // Factory method to create a CachedSession using an existing Engine.
+  static absl::StatusOr<std::unique_ptr<CachedSession>> Create(
+      Engine& engine, const SessionConfig& session_config,
+      const CachedSessionOptions& options = {});
+
+  ~CachedSession() override = default;
 
   CachedSession(const CachedSession&) = delete;
   CachedSession& operator=(const CachedSession&) = delete;
@@ -81,63 +86,90 @@ class CachedSession {
   // Input text can be raw or preprocessed; preprocessing is handled internally.
   absl::StatusOr<std::unique_ptr<SessionInterface::TaskController>>
   RunPrefillAsync(const std::vector<InputData>& contents,
-                  absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback);
+                  absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback)
+      override;
 
   // Synchronous version of RunPrefillAsync.
-  absl::Status RunPrefill(const std::vector<InputData>& contents);
+  absl::Status RunPrefill(const std::vector<InputData>& contents) override;
 
   // Asynchronously generates tokens and appends them to the PrefixCache.
   absl::StatusOr<std::unique_ptr<SessionInterface::TaskController>>
   RunDecodeAsync(absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback,
-                 const DecodeConfig& decode_config);
+                 const DecodeConfig& decode_config) override;
 
   // Same as RunDecodeAsync but with a default decode_config.
   absl::StatusOr<std::unique_ptr<SessionInterface::TaskController>>
-  RunDecodeAsync(absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback);
+  RunDecodeAsync(absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback)
+      override;
 
   // Generates tokens and appends them to the PrefixCache.
-  absl::StatusOr<Responses> RunDecode(const DecodeConfig& decode_config);
+  absl::StatusOr<Responses> RunDecode(const DecodeConfig& decode_config)
+      override;
 
   // Same as RunDecode but with a default decode_config.
-  absl::StatusOr<Responses> RunDecode();
+  absl::StatusOr<Responses> RunDecode() override;
+
+  // Deprecated generation APIs forwarding to the underlying session.
+  absl::StatusOr<Responses> GenerateContent(
+      const std::vector<InputData>& contents) override;
+  absl::Status GenerateContentStream(
+      const std::vector<InputData>& contents,
+      absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback) override;
+  absl::Status GenerateContentStream(
+      const std::vector<InputData>& contents,
+      absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback,
+      const DecodeConfig& decode_config) override;
 
   // Cancels the current process in the Session.
-  void CancelProcess() { session_->CancelProcess(); }
+  void CancelProcess() override { session_->CancelProcess(); }
 
   // Waits until the Session is done.
-  absl::Status WaitUntilDone() { return session_->WaitUntilDone(); }
+  absl::Status WaitUntilDone() override { return session_->WaitUntilDone(); }
+
+  // Checkpointing and rewinding support.
+  absl::Status SaveCheckpoint(absl::string_view label) override;
+  absl::Status RewindToCheckpoint(absl::string_view label) override;
+  absl::Status RewindToStep(int step) override;
 
   // Resets the PrefixCache and rewinds the underlying Session to step 0.
   absl::Status Reset();
 
   // Returns the config of the contained Session.
-  const SessionConfig& GetSessionConfig() const {
+  const SessionConfig& GetSessionConfig() const override {
     return session_->GetSessionConfig();
   }
 
   // Returns the current step of the contained Session.
-  absl::StatusOr<int> GetCurrentStep() const {
+  absl::StatusOr<int> GetCurrentStep() const override {
     return session_->GetCurrentStep();
   }
 
   // Returns the benchmark info of the contained Session.
-  absl::StatusOr<BenchmarkInfo> GetBenchmarkInfo() {
+  absl::StatusOr<BenchmarkInfo> GetBenchmarkInfo() override {
     return session_->GetBenchmarkInfo();
   }
 
   // Returns the mutable benchmark info of the contained Session.
-  absl::StatusOr<BenchmarkInfo*> GetMutableBenchmarkInfo() {
+  absl::StatusOr<BenchmarkInfo*> GetMutableBenchmarkInfo() override {
     return session_->GetMutableBenchmarkInfo();
+  }
+
+  std::optional<SessionDebugInfo> GetSessionDebugInfo() const override {
+    return session_->GetSessionDebugInfo();
+  }
+
+  absl::StatusOr<const Environment*> GetEnvironment() const override {
+    return session_->GetEnvironment();
   }
 
   // Clones the CachedSession along with its underlying Session and prefix
   // cache.
-  absl::StatusOr<std::unique_ptr<CachedSession>> Clone() const;
+  absl::StatusOr<std::unique_ptr<SessionInterface>> Clone() override;
 
   // Clones the CachedSession asynchronously along with its underlying Session
   // and prefix cache.
-  absl::StatusOr<std::unique_ptr<CachedSession>> CloneAsync(
-      absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback) const;
+  absl::StatusOr<std::unique_ptr<SessionInterface>> CloneAsync(
+      absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback) override;
 
   // Runs text scoring on the target texts. This function is meant to be used
   // for evaluation after the session has already been prefilled with context.
@@ -146,7 +178,7 @@ class CachedSession {
   // `RunPrefill` expects).
   absl::StatusOr<Responses> RunTextScoring(
       const std::vector<absl::string_view>& target_text,
-      bool store_token_lengths);
+      bool store_token_lengths) override;
 
   // Asynchronously runs text scoring on the target texts. This function is
   // meant to be used for evaluation after the session has already been
@@ -157,7 +189,7 @@ class CachedSession {
   RunTextScoringAsync(
       const std::vector<absl::string_view>& target_text,
       absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback,
-      bool store_token_lengths);
+      bool store_token_lengths) override;
 
   // Sets whether to insert a BOS token ID at the beginning of the prefill
   // contents.
@@ -168,6 +200,12 @@ class CachedSession {
   // Returns the PrefixCache.
   const PrefixCache& GetPrefixCache() const { return prefix_cache_; }
 
+  // Returns the number of tokens matched from the cache during the last prefill.
+  int GetLastMatchedTokens() const { return last_matched_tokens_; }
+
+  // Returns the total prompt token count of the last prefill.
+  int GetLastTotalPromptTokens() const { return last_total_prompt_tokens_; }
+
  private:
   std::unique_ptr<SessionInterface> session_;
   litert::support::Tokenizer* tokenizer_;  // Not owned.
@@ -175,6 +213,8 @@ class CachedSession {
   std::optional<AudioExecutorProperties> audio_properties_;
   PrefixCache prefix_cache_;
   bool insert_bos_token_id_ = false;
+  int last_matched_tokens_ = 0;
+  int last_total_prompt_tokens_ = 0;
 };
 
 }  // namespace litert::lm

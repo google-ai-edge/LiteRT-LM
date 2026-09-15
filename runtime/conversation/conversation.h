@@ -129,6 +129,9 @@ class ConversationConfig {
   // without fully resetting to the beginning of the conversation).
   bool enable_rewinding() const { return enable_rewinding_; }
 
+  // Returns the non-owning SessionInterface if provided.
+  SessionInterface* GetSession() const { return session_; }
+
  public:
   // Builder class for ConversationConfig.
   //
@@ -246,6 +249,16 @@ class ConversationConfig {
       return *this;
     }
 
+    // Sets the non-owning session instance to be used for the conversation.
+    // When set, Conversation will delegate to this session without destroying it.
+    Builder& SetSession(SessionInterface* session) {
+      session_ = session;
+      if (session != nullptr) {
+        session_config_ = session->GetSessionConfig();
+      }
+      return *this;
+    }
+
     absl::StatusOr<ConversationConfig> Build(const Engine& engine) {
       return ConversationConfig::CreateInternal(
           engine, session_config_, preface_, overwrite_prompt_template_,
@@ -254,7 +267,7 @@ class ConversationConfig {
           filter_channel_content_from_kv_cache_, return_error_on_parse_failure_,
           return_error_on_max_tokens_reached_, thinking_config_,
           stream_tool_calls_, stream_tool_calls_channel_name_,
-          enable_rewinding_);
+          enable_rewinding_, session_);
     }
 
     // Returns a unique pointer to a ConversationConfig.
@@ -280,6 +293,7 @@ class ConversationConfig {
     bool stream_tool_calls_ = false;
     std::string stream_tool_calls_channel_name_ = "tool_call";
     bool enable_rewinding_ = true;
+    SessionInterface* session_ = nullptr;
   };
 
   // Returns the constrained decoding config.
@@ -331,7 +345,8 @@ class ConversationConfig {
       std::optional<ThinkingConfig> thinking_config = std::nullopt,
       bool stream_tool_calls = false,
       const std::string& stream_tool_calls_channel_name = "tool_call",
-      bool enable_rewinding = true);
+      bool enable_rewinding = true,
+      SessionInterface* session = nullptr);
 
   explicit ConversationConfig(
       SessionConfig session_config, Preface preface,
@@ -347,7 +362,8 @@ class ConversationConfig {
       std::optional<ThinkingConfig> thinking_config = std::nullopt,
       bool stream_tool_calls = false,
       const std::string& stream_tool_calls_channel_name = "tool_call",
-      bool enable_rewinding = true)
+      bool enable_rewinding = true,
+      SessionInterface* session = nullptr)
       : session_config_(std::move(session_config)),
         preface_(std::move(preface)),
         prompt_template_(std::move(prompt_template)),
@@ -363,7 +379,8 @@ class ConversationConfig {
         thinking_config_(thinking_config),
         stream_tool_calls_(stream_tool_calls),
         stream_tool_calls_channel_name_(stream_tool_calls_channel_name),
-        enable_rewinding_(enable_rewinding) {}
+        enable_rewinding_(enable_rewinding),
+        session_(session) {}
 
   SessionConfig session_config_;
   Preface preface_;
@@ -380,6 +397,7 @@ class ConversationConfig {
   bool stream_tool_calls_;
   std::string stream_tool_calls_channel_name_;
   bool enable_rewinding_;
+  SessionInterface* session_ = nullptr;
 };
 
 // Optional arguments for sending a message to the LLM.

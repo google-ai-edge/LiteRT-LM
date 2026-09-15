@@ -47,6 +47,11 @@ typedef struct LiteRtLmEngine LiteRtLmEngine;
 // Added in version 0.1.0.
 typedef struct LiteRtLmSession LiteRtLmSession;
 
+// Opaque pointer for the LiteRT LM Cached Session.
+//
+// Added in version 0.1.0.
+typedef struct LiteRtLmCachedSession LiteRtLmCachedSession;
+
 // Opaque pointer for the LiteRT LM Responses.
 //
 // Added in version 0.1.0.
@@ -863,6 +868,47 @@ LiteRtLmSession* litert_lm_engine_create_session(LiteRtLmEngine* engine,
 // Added in version 0.1.0.
 LITERT_LM_C_API_EXPORT
 void litert_lm_session_delete(LiteRtLmSession* session);
+
+// Creates a LiteRT LM Cached Session. The caller is responsible for destroying
+// the cached session using `litert_lm_cached_session_delete`.
+//
+// @param engine The engine to create the cached session from.
+// @param config The session config of the session. If NULL, use the default
+// session config.
+// @return A pointer to the created cached session, or NULL on failure.
+//
+// Added in version 0.1.0.
+LITERT_LM_C_API_EXPORT
+LiteRtLmCachedSession* litert_lm_engine_create_cached_session(
+    LiteRtLmEngine* engine, LiteRtLmSessionConfig* config);
+
+// Destroys a LiteRT LM Cached Session.
+//
+// @param session The cached session to destroy.
+//
+// Added in version 0.1.0.
+LITERT_LM_C_API_EXPORT
+void litert_lm_cached_session_delete(LiteRtLmCachedSession* session);
+
+// Returns the number of prefix-cached tokens matched in the last prefill.
+//
+// @param session The cached session.
+// @return The number of matched tokens, or 0 if none or invalid.
+//
+// Added in version 0.1.0.
+LITERT_LM_C_API_EXPORT
+int litert_lm_cached_session_get_last_matched_tokens(
+    const LiteRtLmCachedSession* session);
+
+// Returns the total prompt tokens in the last prefill.
+//
+// @param session The cached session.
+// @return The total prompt tokens, or 0 if none or invalid.
+//
+// Added in version 0.1.0.
+LITERT_LM_C_API_EXPORT
+int litert_lm_cached_session_get_last_total_prompt_tokens(
+    const LiteRtLmCachedSession* session);
 
 // Cancels the current processing in the session.
 //

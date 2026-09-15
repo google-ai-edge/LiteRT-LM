@@ -54,6 +54,7 @@ class Conversation(interfaces.AbstractConversation):
       max_output_tokens=None,
       chat_template=None,
       constrained_decoding_config=None,
+      cached_session=None,
   ):
     super().__init__(
         messages=messages,
@@ -70,12 +71,17 @@ class Conversation(interfaces.AbstractConversation):
     self._lib = lib
     self._ptr = conv_ptr
     self._engine = engine  # Keep engine alive
+    self._cached_session = cached_session
     self._tools_map = tools_map or {}
     self.constrained_decoding_config = constrained_decoding_config
     # Keep the active ctypes callback alive to prevent SIGSEGV if the C++ thread
     # calls it after the local variable is garbage collected during
     # cancellation.
     self._current_callback = None
+
+  @property
+  def cached_session(self):
+    return self._cached_session
 
   def close(self):
     if hasattr(self, "_ptr") and self._ptr and self._lib:

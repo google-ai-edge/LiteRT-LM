@@ -159,6 +159,14 @@ void litert_lm_conversation_config_set_session_config(
   }
 }
 
+void litert_lm_conversation_config_set_cached_session(
+    LiteRtLmConversationConfig* config,
+    LiteRtLmCachedSession* cached_session) {
+  if (config) {
+    config->cached_session = cached_session;
+  }
+}
+
 void litert_lm_conversation_config_set_system_message(
     LiteRtLmConversationConfig* config, const char* system_message_json) {
   if (config && system_message_json) {
@@ -483,6 +491,9 @@ LiteRtLmConversation* litert_lm_conversation_create(
     if (gpu_artisan_config.ok() &&
         gpu_artisan_config->use_autosized_ringbuffers) {
       builder.SetEnableRewinding(false);
+    }
+    if (c_config->cached_session && c_config->cached_session->cached_session) {
+      builder.SetSession(c_config->cached_session->cached_session.get());
     }
     auto config = builder.Build(*engine->engine);
 

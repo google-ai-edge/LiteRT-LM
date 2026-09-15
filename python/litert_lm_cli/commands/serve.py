@@ -37,6 +37,7 @@ def run_server(
     handler_class: type[http.server.BaseHTTPRequestHandler],
     api_name: str,
     cors_origins: tuple[str, ...],
+    prefix_caching: bool = True,
 ) -> None:
   """Starts the HTTP server.
 
@@ -46,11 +47,15 @@ def run_server(
     handler_class: The HTTP handler class to use.
     api_name: The API protocol name (e.g., "OpenAI", "Gemini").
     cors_origins: Allowed CORS origins.
+    prefix_caching: Whether to enable KV cache prefix caching.
   """
   server_address = (host, port)
   try:
     with serve_util.LiteRTLMServer(
-        server_address, handler_class, cors_origins
+        server_address,
+        handler_class,
+        cors_origins,
+        enable_prefix_caching=prefix_caching,
     ) as server:
       click.echo(
           click.style(
@@ -62,6 +67,9 @@ def run_server(
       try:
         server.serve_forever()
       finally:
+        if server.cached_session is not None:
+          server.cached_session.close()
+          server.cached_session = None
         if server.litert_lm_engine is not None:
           server.litert_lm_engine.__exit__(None, None, None)
         emb_engine = server.litert_lm_embedding_engine
@@ -103,6 +111,11 @@ def run_server(
         " none (CORS disabled)."
     ),
 )
+@click.option(
+    "--prefix-caching/--no-prefix-caching",
+    default=True,
+    help="Enable or disable KV cache prefix caching across requests.",
+)
 @click.option("--verbose", is_flag=True, help="Enable verbose logging")
 def serve(
     host: str,
@@ -110,6 +123,7 @@ def serve(
     *,
     api: str,
     cors_origin: tuple[str, ...],
+    prefix_caching: bool = True,
     verbose: bool,
 ) -> None:
   """Starts a local HTTP server speaking the OpenAI or Gemini API protocol.
@@ -119,6 +133,7 @@ def serve(
     port: Port to listen on.
     api: The API protocol to use (openai or gemini).
     cors_origin: Allowed CORS origins.
+    prefix_caching: Whether to enable KV cache prefix caching.
     verbose: Whether to enable verbose logging.
   """
   if verbose:
@@ -134,7 +149,14 @@ def serve(
   else:
     raise click.BadParameter(f"Unsupported API: {api}")
 
-  run_server(host, port, handler_class, api_name, cors_origin)
+  run_server(
+      host,
+      port,
+      handler_class,
+      api_name,
+      cors_origin,
+      prefix_caching=prefix_caching,
+  )
 
 
 def register(cli: click.Group) -> None:

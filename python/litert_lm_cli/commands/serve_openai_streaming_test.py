@@ -67,18 +67,9 @@ class ServeOpenAIStreamingTest(absltest.TestCase):
     )
 
   def tearDown(self):
-    if (
-        hasattr(self.server, "litert_lm_engine")
-        and self.server.litert_lm_engine is not None
-    ):
-      try:
-        self.server.litert_lm_engine.__exit__(None, None, None)
-      except Exception:  # pylint: disable=broad-exception-caught
-        pass
-      self.server.litert_lm_engine = None
     self.server.shutdown()
-    self.server.server_close()
     self.server_thread.join()
+    self.server.server_close()
     super().tearDown()
 
   def test_openai_responses_streaming(self):
@@ -343,6 +334,7 @@ class ServeOpenAIStreamingTest(absltest.TestCase):
     data = json.dumps({
         "model": "gemma3",
         "messages": [{"role": "user", "content": "Say hi"}],
+        "max_completion_tokens": 10,
     }).encode("utf-8")
 
     req = urllib.request.Request(
@@ -367,7 +359,40 @@ class ServeOpenAIStreamingTest(absltest.TestCase):
       self.assertEqual(
           usage["completion_tokens_details"], {"reasoning_tokens": 0}
       )
-      self.assertNotIn("prompt_tokens_details", usage)
+      self.assertIn("prompt_tokens_details", usage)
+      self.assertEqual(usage["prompt_tokens_details"], {"cached_tokens": 0})
+
+    # Second request with identical initial turn to verify prefix caching reuse.
+    data2 = json.dumps({
+        "model": "gemma3",
+        "messages": [
+            {"role": "user", "content": "Say hi"},
+            {
+                "role": "assistant",
+                "content": res_body["choices"][0]["message"]["content"],
+            },
+            {"role": "user", "content": "Say hi again"},
+        ],
+        "max_completion_tokens": 10,
+    }).encode("utf-8")
+
+    req2 = urllib.request.Request(
+        f"http://localhost:{self.port}/v1/chat/completions",
+        data=data2,
+        headers={"Content-Type": "application/json"},
+    )
+
+    with urllib.request.urlopen(req2) as response2:
+      self.assertEqual(response2.getcode(), 200)
+      res_body2 = json.loads(response2.read().decode("utf-8"))
+      self.assertIn("usage", res_body2)
+      usage2 = res_body2["usage"]
+      self.assertIn("prompt_tokens_details", usage2)
+      self.assertGreater(usage2["prompt_tokens_details"]["cached_tokens"], 0)
+      self.assertEqual(
+          usage2["total_tokens"],
+          usage2["prompt_tokens"] + usage2["completion_tokens"],
+      )
 
   def test_openai_chat_completions_streaming_usage(self):
     mock_from_id = self.enter_context(
@@ -382,6 +407,7 @@ class ServeOpenAIStreamingTest(absltest.TestCase):
         "messages": [{"role": "user", "content": "Say hi"}],
         "stream": True,
         "stream_options": {"include_usage": True},
+        "max_completion_tokens": 10,
     }).encode("utf-8")
 
     req = urllib.request.Request(
@@ -411,6 +437,8 @@ class ServeOpenAIStreamingTest(absltest.TestCase):
       self.assertEqual(
           usage["completion_tokens_details"], {"reasoning_tokens": 0}
       )
+      self.assertIn("prompt_tokens_details", usage)
+      self.assertEqual(usage["prompt_tokens_details"], {"cached_tokens": 0})
 
   def test_compute_token_usage_benchmark_info(self):
     mock_conv = mock.MagicMock()

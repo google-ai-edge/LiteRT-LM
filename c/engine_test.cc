@@ -56,6 +56,9 @@ using EnginePtr =
     std::unique_ptr<LiteRtLmEngine, decltype(&litert_lm_engine_delete)>;
 using SessionPtr =
     std::unique_ptr<LiteRtLmSession, decltype(&litert_lm_session_delete)>;
+using CachedSessionPtr =
+    std::unique_ptr<LiteRtLmCachedSession,
+                    decltype(&litert_lm_cached_session_delete)>;
 using ResponsesPtr =
     std::unique_ptr<LiteRtLmResponses, decltype(&litert_lm_responses_delete)>;
 using InputDataPtr =
@@ -2161,6 +2164,85 @@ TEST(EngineCTest, ConversationOptionalArgsTest) {
   EXPECT_GT(text.length(), 0);
   EXPECT_LT(text.length(), 5);
   EXPECT_EQ(text, "\xE6\xB2\xBF");
+}
+
+TEST(EngineCTest, CachedSessionConversationTest) {
+  const std::string task_path = GetTestdataPath(
+      "litert_lm/runtime/testdata/test_lm.litertlm");
+
+  EngineSettingsPtr settings(
+      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
+                                       /* vision_backend_str */ nullptr,
+                                       /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+  litert_lm_engine_settings_set_max_num_tokens(settings.get(), 64);
+
+  EnginePtr engine(litert_lm_engine_create(settings.get()),
+                   &litert_lm_engine_delete);
+  ASSERT_NE(engine, nullptr);
+
+  CachedSessionPtr cached_session(
+      litert_lm_engine_create_cached_session(engine.get(), /*config=*/nullptr),
+      &litert_lm_cached_session_delete);
+  ASSERT_NE(cached_session, nullptr);
+
+  // Turn 1: Fresh prompt
+  {
+    ConversationConfigPtr config(litert_lm_conversation_config_create(),
+                                 &litert_lm_conversation_config_delete);
+    litert_lm_conversation_config_set_cached_session(config.get(),
+                                                     cached_session.get());
+    ConversationPtr conversation(
+        litert_lm_conversation_create(engine.get(), config.get()),
+        &litert_lm_conversation_delete);
+    ASSERT_NE(conversation, nullptr);
+
+    const char* message_json =
+        R"({"role": "user", "content": [{"type": "text", "text": "Hello world"}]})";
+    JsonResponsePtr response(
+        litert_lm_conversation_send_message(
+            conversation.get(), message_json,
+            /*extra_context=*/nullptr, /*optional_args=*/nullptr),
+        &litert_lm_json_response_delete);
+    ASSERT_NE(response, nullptr);
+
+    EXPECT_EQ(litert_lm_cached_session_get_last_matched_tokens(
+                  cached_session.get()),
+              0);
+    EXPECT_GT(litert_lm_cached_session_get_last_total_prompt_tokens(
+                  cached_session.get()),
+              0);
+  }
+
+  // Turn 2: New conversation reusing the cached_session with the same prefix.
+  {
+    ConversationConfigPtr config(litert_lm_conversation_config_create(),
+                                 &litert_lm_conversation_config_delete);
+    litert_lm_conversation_config_set_cached_session(config.get(),
+                                                     cached_session.get());
+    ConversationPtr conversation(
+        litert_lm_conversation_create(engine.get(), config.get()),
+        &litert_lm_conversation_delete);
+    ASSERT_NE(conversation, nullptr);
+
+    const char* message_json =
+        R"({"role": "user", "content": [{"type": "text", "text": "Hello world again"}]})";
+    JsonResponsePtr response(
+        litert_lm_conversation_send_message(
+            conversation.get(), message_json,
+            /*extra_context=*/nullptr, /*optional_args=*/nullptr),
+        &litert_lm_json_response_delete);
+    ASSERT_NE(response, nullptr);
+
+    EXPECT_GT(litert_lm_cached_session_get_last_matched_tokens(
+                  cached_session.get()),
+              0);
+    EXPECT_GT(litert_lm_cached_session_get_last_total_prompt_tokens(
+                  cached_session.get()),
+              litert_lm_cached_session_get_last_matched_tokens(
+                  cached_session.get()));
+  }
 }
 
 }  // namespace

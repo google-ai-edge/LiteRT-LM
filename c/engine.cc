@@ -900,6 +900,63 @@ LiteRtLmSession* litert_lm_engine_create_session(
 
 void litert_lm_session_delete(LiteRtLmSession* session) { delete session; }
 
+LiteRtLmCachedSession* litert_lm_engine_create_cached_session(
+    LiteRtLmEngine* engine, LiteRtLmSessionConfig* config) {
+  if (!engine || !engine->engine) {
+    litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
+                                "Invalid engine.");
+    return nullptr;
+  }
+
+  SessionConfig session_config = config && config->config
+                                     ? *config->config
+                                     : SessionConfig::CreateDefault();
+  session_config.SetApplyPromptTemplateInSession(false);
+  if (engine->engine->GetEngineSettings()
+          .GetAudioExecutorSettings()
+          .has_value()) {
+    session_config.SetAudioModalityEnabled(true);
+  }
+  if (engine->engine->GetEngineSettings()
+          .GetVisionExecutorSettings()
+          .has_value()) {
+    session_config.SetVisionModalityEnabled(true);
+  }
+
+  absl::StatusOr<std::unique_ptr<litert::lm::CachedSession>> cached_session =
+      litert::lm::CachedSession::Create(*engine->engine, session_config);
+  if (!cached_session.ok()) {
+    ABSL_LOG(ERROR) << "Failed to create cached session: "
+                    << cached_session.status();
+    litert::lm::c::SetLastError(cached_session.status());
+    return nullptr;
+  }
+
+  auto* c_cached_session = new LiteRtLmCachedSession;
+  c_cached_session->cached_session = *std::move(cached_session);
+  return c_cached_session;
+}
+
+void litert_lm_cached_session_delete(LiteRtLmCachedSession* session) {
+  delete session;
+}
+
+int litert_lm_cached_session_get_last_matched_tokens(
+    const LiteRtLmCachedSession* session) {
+  if (!session || !session->cached_session) {
+    return 0;
+  }
+  return session->cached_session->GetLastMatchedTokens();
+}
+
+int litert_lm_cached_session_get_last_total_prompt_tokens(
+    const LiteRtLmCachedSession* session) {
+  if (!session || !session->cached_session) {
+    return 0;
+  }
+  return session->cached_session->GetLastTotalPromptTokens();
+}
+
 void litert_lm_session_cancel_process(LiteRtLmSession* session) {
   if (session && session->session) {
     session->session->CancelProcess();
