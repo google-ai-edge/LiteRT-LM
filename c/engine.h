@@ -825,6 +825,25 @@ LITERT_LM_C_API_EXPORT
 void litert_lm_engine_settings_set_gpu_enable_metal_residency_set(
     LiteRtLmEngineSettings* settings, bool enable_metal_residency_set);
 
+// Enables per-op profiling of the main executor. When enabled, the compiled
+// model records per-op timings and the profile summary of the most recent
+// prefill or decode turn is available through
+// `litert_lm_benchmark_info_get_profile_summary`, provided
+// `litert_lm_engine_settings_enable_benchmark` was called on the same settings.
+// Profiling adds overhead; take speed figures from unprofiled runs.
+//
+// The summary stays empty when the executor does not implement profiling. A
+// LiteRT GPU delegate whose profiler is not implemented fails the profiled turn
+// with UNIMPLEMENTED instead, as it does with the CLI's --enable_profiling.
+//
+// @param settings The engine settings.
+// @param enable_profiling Whether to enable per-op profiling.
+//
+// Added in version 0.2.0.
+LITERT_LM_C_API_EXPORT
+void litert_lm_engine_settings_set_enable_profiling(
+    LiteRtLmEngineSettings* settings, bool enable_profiling);
+
 // Creates a LiteRT LM Engine from the given settings. The caller is responsible
 // for destroying the engine using `litert_lm_engine_delete`.
 //
@@ -1180,6 +1199,21 @@ double litert_lm_benchmark_info_get_prefill_tokens_per_sec_at(
 LITERT_LM_C_API_EXPORT
 double litert_lm_benchmark_info_get_decode_tokens_per_sec_at(
     const LiteRtLmBenchmarkInfo* benchmark_info, int index);
+
+// Returns the per-op profile summary recorded for the most recent turn, as
+// produced by the executor when profiling is enabled with
+// `litert_lm_engine_settings_set_enable_profiling`. The returned string is
+// owned by the benchmark info object and stays valid as long as that object is
+// alive. It is empty when profiling was not enabled or the executor does not
+// implement it.
+//
+// @param benchmark_info The benchmark info object.
+// @return The profile summary, or NULL if benchmark_info is NULL.
+//
+// Added in version 0.2.0.
+LITERT_LM_C_API_EXPORT
+const char* litert_lm_benchmark_info_get_profile_summary(
+    const LiteRtLmBenchmarkInfo* benchmark_info);
 
 // Opaque pointer for LiteRT LM Stream Chunk.
 // This object represents a single chunk of data returned during streaming.
