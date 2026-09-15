@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <cstring>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <random>
@@ -88,6 +89,23 @@ using ::absl::Span;
 constexpr absl::string_view kPrefillSignatureRunner = "prefill";
 constexpr absl::string_view kDecodeSignatureRunner = "decode";
 constexpr int kDynamicDimValue = -1;
+
+void ClampMaxNumTokens(LlmExecutorSettings& executor_settings,
+                       int model_max_num_tokens) {
+  if (model_max_num_tokens > 0 &&
+      model_max_num_tokens != std::numeric_limits<int>::max()) {
+    if (executor_settings.GetMaxNumTokens() >
+        static_cast<uint32_t>(model_max_num_tokens)) {
+      ABSL_LOG(WARNING) << "Passed in max_num_tokens ("
+                        << executor_settings.GetMaxNumTokens()
+                        << ") is larger than what the static model supports ("
+                        << model_max_num_tokens << "). Using model limit.";
+      executor_settings.SetMaxNumTokens(model_max_num_tokens);
+    } else if (executor_settings.GetMaxNumTokens() == 0) {
+      executor_settings.SetMaxNumTokens(model_max_num_tokens);
+    }
+  }
+}
 
 absl::StatusOr<bool> HasDynamicDim(const CompiledModel& compiled_model,
                                    absl::string_view signature,
@@ -1922,6 +1940,7 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
       LitertState::Create(lrt_env, *compiled_model, prefill_signature_key,
                           executor_metadata, allocation_policy,
                           /*batch_size=*/1, clear_kv_cache_before_prefill));
+  ClampMaxNumTokens(executor_settings, state->GetNumEntries());
 
   absl::flat_hash_map<absl::string_view, TensorBuffer> decode_input_buffers;
   absl::flat_hash_map<absl::string_view, TensorBuffer> decode_output_buffers;
@@ -2056,6 +2075,17 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
     }
   }
   return executor;
+}
+
+absl::Status LlmLiteRtCompiledModelExecutorStatic::UpdateExecutorSettings(
+    const LlmExecutorSettings& executor_settings) {
+  ABSL_RETURN_IF_ERROR(
+      LlmLiteRtCompiledModelExecutorBase::UpdateExecutorSettings(
+          executor_settings));
+  if (state_ != nullptr) {
+    ClampMaxNumTokens(executor_settings_, state_->GetNumEntries());
+  }
+  return absl::OkStatus();
 }
 
 /* ===========================================================================*/

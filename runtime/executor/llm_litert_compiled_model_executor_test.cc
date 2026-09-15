@@ -855,6 +855,41 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest, UpdateExecutorSettingsTest) {
   EXPECT_EQ(updated_settings.GetMaxNumTokens(), kMaxNumTokens + 1);
 }
 
+TEST(LlmLiteRtCompiledModelExecutorStaticTest,
+     CreateExecutorClampsMaxNumTokensToModelLimit) {
+  auto model_path =
+      std::filesystem::path(::testing::SrcDir()) / kTestStaticModelPath;
+  ASSERT_OK_AND_ASSIGN(
+      auto model_resources,
+      CreateExecutorModelResourcesLitertLm(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(model_path.string()));
+  auto executor_settings =
+      LlmExecutorSettings::CreateDefault(model_assets, Backend::CPU);
+  ASSERT_OK(executor_settings);
+  // Request more tokens than the static model supports (1024 > 128).
+  executor_settings->SetMaxNumTokens(1024);
+
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  ASSERT_OK_AND_ASSIGN(auto executor,
+                       LlmLiteRtCompiledModelExecutorStatic::Create(
+                           *executor_settings, env, *model_resources));
+
+  ASSERT_OK_AND_ASSIGN(auto actual_settings, executor->GetExecutorSettings());
+  EXPECT_EQ(actual_settings.GetMaxNumTokens(), 128);
+
+  // Updating executor settings with an excessive token count should also clamp.
+  auto new_executor_settings =
+      LlmExecutorSettings::CreateDefault(model_assets, Backend::CPU);
+  ASSERT_OK(new_executor_settings);
+  new_executor_settings->SetMaxNumTokens(2048);
+  EXPECT_OK(executor->UpdateExecutorSettings(*new_executor_settings));
+
+  ASSERT_OK_AND_ASSIGN(auto updated_settings, executor->GetExecutorSettings());
+  EXPECT_EQ(updated_settings.GetMaxNumTokens(), 128);
+}
+
 TEST(LlmLiteRtCompiledModelExecutorStaticTest, CreateExecutorTest_WithCache) {
   auto cache_path = std::filesystem::path(::testing::TempDir()) /
                     absl::StrCat("cache-", std::rand());

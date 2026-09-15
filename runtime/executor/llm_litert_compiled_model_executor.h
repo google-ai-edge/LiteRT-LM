@@ -458,6 +458,9 @@ class LlmLiteRtCompiledModelExecutorStatic
   absl::Status Prefill(const ExecutorInputs& inputs,
                        const ExecutorPrefillParams& params) override;
 
+  absl::Status UpdateExecutorSettings(
+      const LlmExecutorSettings& executor_settings) override;
+
  private:
   LlmLiteRtCompiledModelExecutorStatic(
       LlmExecutorSettings executor_settings, Environment& env,
