@@ -184,8 +184,12 @@ enum class ActivationDataType(val value: Int) {
  * @property cacheDir The directory for placing cache files. It should be a directory with write
  *   access. If not set, it uses the directory of the [modelPath]. Set to ":nocache" to disable
  *   caching at all.
+ * @property activationDataType Optional activation data type override for inference (e.g., FLOAT32,
+ *   FLOAT16). When `null`, use the default value from the model or the engine.
  */
-data class EngineConfig(
+data class EngineConfig
+@JvmOverloads
+constructor(
   val modelPath: String,
   val backend: Backend = Backend.CPU(),
   val visionBackend: Backend? = null,
@@ -193,6 +197,7 @@ data class EngineConfig(
   val maxNumTokens: Int? = null,
   val maxNumImages: Int? = null,
   val cacheDir: String? = null,
+  val activationDataType: ActivationDataType? = null,
 ) {
   init {
     require(maxNumTokens == null || maxNumTokens > 0) {
