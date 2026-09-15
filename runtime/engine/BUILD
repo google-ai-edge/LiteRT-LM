@@ -336,6 +336,27 @@ cc_binary(
 cc_binary(
     name = "embedding_litert_lm_main",
     srcs = ["embedding_litert_lm_main.cc"],
+    additional_linker_inputs = select({
+        "@platforms//os:windows": [
+            "@litert//litert/c:windows_exported_symbols.def",
+        ],
+        "@platforms//os:linux": [":litert_lm_main.exported_symbols"],
+        "//conditions:default": [],
+    }),
+    linkopts = select({
+        "@litert//litert:litert_runtime_link_mode_dynamic": [],
+        # Export LiteRt* symbols for LiteRt accelerator shlibs.
+        "@platforms//os:ios": ["-Wl,-exported_symbol,_LiteRt*"],
+        "@platforms//os:macos": ["-Wl,-exported_symbol,_LiteRt*"],
+        "@platforms//os:windows": [
+            "/DEF:$(location @litert//litert/c:windows_exported_symbols.def)",
+        ],
+        "@platforms//os:linux": ["-Wl,--dynamic-list=$(location :litert_lm_main.exported_symbols)"],
+        "//conditions:default": ["-Wl,--export-dynamic-symbol=LiteRt*"],
+    }) + select({
+        "@platforms//os:android": ["-lEGL", "-lGLESv3"],
+        "//conditions:default": [],
+    }),
     deps = [
         ":embedding_engine",
         ":embedding_engine_settings",
@@ -352,6 +373,7 @@ cc_binary(
         "@com_google_absl//absl/time",
         "//runtime/components:model_resources",
         "//runtime/core:embedding_engine_impl",
+        "//runtime/executor:default_static_gpu_accelerator",
         "//runtime/executor:embedding_executor_base",
         "//runtime/executor:executor_settings_base",
         "//runtime/executor:litert_compiled_model_executor_utils",
