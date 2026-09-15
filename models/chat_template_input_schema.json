@@ -15,10 +15,6 @@
             "description": "The role of the message author.",
             "enum": ["system", "user", "assistant", "tool"]
           },
-          "name": {
-            "type": "string",
-            "description": "The name of the author or tool."
-          },
           "content": {
             "type": "array",
             "description": "The content of the message as a list of multimodal parts.",
