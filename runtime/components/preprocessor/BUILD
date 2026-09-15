@@ -1,4 +1,5 @@
 # [Google-internal load of `cc_library`]
+# [Google-internal load of `cc_test`]
 
 package(default_visibility = ["//visibility:public"])
 
@@ -59,4 +60,48 @@ alias(
 alias(
     name = "image_preprocessor_utils",
     actual = "//support/preprocessor:image_preprocessor_utils",
+)
+
+# MiniCPM-V multi-slice vision preprocessing (PIL-faithful bicubic resize +
+# normalize + reshape_by_patch). The resampler pos_embed is baked into the
+# fused vision tflite, so these targets only produce image strips and ViT
+# position ids.
+
+cc_library(
+    name = "pil_resize",
+    srcs = ["pil_resize.cc"],
+    hdrs = ["pil_resize.h"],
+)
+
+cc_library(
+    name = "minicpmv_image_preprocess",
+    srcs = ["minicpmv_image_preprocess.cc"],
+    hdrs = ["minicpmv_image_preprocess.h"],
+    deps = [
+        ":pil_resize",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:str_format",
+        "@stb//:stblib",
+    ],
+)
+
+cc_test(
+    name = "pil_resize_test",
+    srcs = ["pil_resize_test.cc"],
+    deps = [
+        ":pil_resize",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "minicpmv_image_preprocess_test",
+    srcs = ["minicpmv_image_preprocess_test.cc"],
+    deps = [
+        ":minicpmv_image_preprocess",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status:status_matchers",
+        "//runtime/util:test_utils",
+    ],
 )
