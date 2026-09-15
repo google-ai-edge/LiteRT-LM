@@ -20,6 +20,7 @@ from ._ffi import ActivationDataType
 from ._ffi import LiteRtLmBackendType
 from ._ffi import LiteRtLmConstraintProviderType
 from ._ffi import LiteRtLmModality
+from ._ffi import LiteRtLmModelType
 from ._ffi import LiteRtLmNpuBrand
 from ._ffi import LogSeverity
 from ._ffi import set_min_log_severity
@@ -53,10 +54,14 @@ from .interfaces import SuppressTokensConfig
 from .interfaces import ThinkingConfig
 from .interfaces import Tool
 from .interfaces import ToolEventHandler
+from .model_info import EmbeddingCapability
+from .model_info import LlmCapability
 from .model_info import ModelInfo
 from .model_info import SupportedModalities
 from .session import Session
 from .tools import tool_from_function
+
+ModelType = LiteRtLmModelType
 
 __all__ = (
     "AbstractBenchmark",
@@ -71,6 +76,7 @@ __all__ = (
     "Content",
     "Contents",
     "Conversation",
+    "EmbeddingCapability",
     "EmbeddingEngine",
     "EmbeddingOptions",
     "EmbeddingResponse",
@@ -79,12 +85,15 @@ __all__ = (
     "LiteRtLmBackendType",
     "LiteRtLmConstraintProviderType",
     "LiteRtLmModality",
+    "LiteRtLmModelType",
     "LiteRtLmNpuBrand",
+    "LlmCapability",
     "LogSeverity",
     "LoraConfig",
     "LoraRankConfig",
     "Message",
     "ModelInfo",
+    "ModelType",
     "NoRepeatNgramConfig",
     "RepetitionPenaltyConfig",
     "ResponseFormat",

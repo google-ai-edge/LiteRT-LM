@@ -51,15 +51,27 @@ class ModelInfoTests: XCTestCase {
       return
     }
 
+    guard let llm = modelInfo.llm else {
+      XCTFail("modelInfo.llm is nil for LLM model")
+      return
+    }
+
+    XCTAssertNil(modelInfo.embedding)
+
     // Verify that calling hasSpeculativeDecodingSupport doesn't crash.
-    let supportsSpeculativeDecoding = modelInfo.hasSpeculativeDecodingSupport()
+    let supportsSpeculativeDecoding = llm.hasSpeculativeDecodingSupport()
     XCTAssertFalse(supportsSpeculativeDecoding)
 
     // Verify thinking and function calling (false for legacy test model)
-    XCTAssertFalse(modelInfo.supportsThinking())
-    XCTAssertFalse(modelInfo.supportsFunctionCalling())
+    XCTAssertFalse(llm.supportsThinking())
+    XCTAssertFalse(llm.supportsFunctionCalling())
+    XCTAssertEqual(modelInfo.modelType(), .llm)
+    XCTAssertFalse(modelInfo.isEmbeddingModel())
+    XCTAssertTrue(modelInfo.isLlmModel())
     XCTAssertEqual(modelInfo.maxVisionTokenBudget(), -1)
+    XCTAssertEqual(llm.maxVisionTokenBudget(), -1)
     XCTAssertNil(modelInfo.visionSignatureSelection())
+    XCTAssertNil(llm.visionSignatureSelection())
 
     // Verify modalities
     XCTAssertTrue(modelInfo.inputModalities.text)
@@ -68,7 +80,7 @@ class ModelInfoTests: XCTestCase {
     XCTAssertFalse(modelInfo.inputModalities.video)
 
     // Verify default sampler parameters (from model config)
-    let defaultSamplerParams = modelInfo.defaultSamplerParams
+    let defaultSamplerParams = llm.defaultSamplerParams
     XCTAssertEqual(defaultSamplerParams.type.rawValue, 2)
     XCTAssertEqual(defaultSamplerParams.temperature, 0.0)
     XCTAssertEqual(defaultSamplerParams.topK, 1)
@@ -77,6 +89,7 @@ class ModelInfoTests: XCTestCase {
     // Verify context capabilities (128 from TFLite graph and static context)
     XCTAssertEqual(modelInfo.maxContextTokens(), 128)
     XCTAssertFalse(modelInfo.isDynamicContext())
+    XCTAssertFalse(llm.isDynamicContext())
 
     // Verify minRuntimeVersion is nil for legacy model
     XCTAssertNil(modelInfo.minRuntimeVersion)
@@ -88,6 +101,36 @@ class ModelInfoTests: XCTestCase {
 
     XCTAssertEqual(modelInfo.npuBrand(for: .text), .unknown)
     XCTAssertNil(modelInfo.socName(for: .text))
+  }
+
+  func testEmbeddingModel_returnsExpectedCapabilities() {
+    // swift-format-ignore
+    let modelResource =
+      "runtime/testdata/test_embedding.litertlm"
+    let modelPath = testDataPath(forResource: modelResource)
+
+    guard let modelInfo = ModelInfo(modelPath: modelPath) else {
+      XCTFail("Failed to load model info")
+      return
+    }
+
+    guard let embedding = modelInfo.embedding else {
+      XCTFail("modelInfo.embedding is nil for embedding model")
+      return
+    }
+
+    XCTAssertNil(modelInfo.llm)
+    XCTAssertEqual(modelInfo.modelType(), .embedding)
+    XCTAssertTrue(modelInfo.isEmbeddingModel())
+    XCTAssertFalse(modelInfo.isLlmModel())
+    XCTAssertEqual(embedding.dimension(), 768)
+    XCTAssertEqual(modelInfo.maxContextTokens(), 128)
+    XCTAssertFalse(modelInfo.isDynamicContext())
+    guard let lengths = embedding.signatureSelection() else {
+      XCTFail("signatureSelection returned nil")
+      return
+    }
+    XCTAssertEqual(lengths, [128])
   }
 
   func testVisionSignatureSelection_returnsLengthsForMultimodal() {
@@ -109,3 +152,4 @@ class ModelInfoTests: XCTestCase {
     XCTAssertEqual(lengths, [5])
   }
 }
+

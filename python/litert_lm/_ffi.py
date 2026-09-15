@@ -76,6 +76,12 @@ class LiteRtLmBackendType(enum.IntEnum):
   NPU = 3
 
 
+class LiteRtLmModelType(enum.IntEnum):
+  UNKNOWN = 0
+  LLM = 1
+  EMBEDDING = 2
+
+
 # C-compatible callback type that matches 'LiteRtLmStreamCallback' in engine.h.
 STREAM_CALLBACK_TYPE = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p)
 
@@ -900,6 +906,19 @@ def _setup_lib_signatures(lib):
       ctypes.POINTER(ctypes.c_int),
       ctypes.c_int32,
   ]
+  lib.litert_lm_loaded_file_model_type.restype = ctypes.c_int
+  lib.litert_lm_loaded_file_model_type.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_loaded_file_embedding_dimension.restype = ctypes.c_int32
+  lib.litert_lm_loaded_file_embedding_dimension.argtypes = [ctypes.c_void_p]
+  lib.litert_lm_loaded_file_embedding_signature_selection.restype = (
+      ctypes.c_int32
+  )
+  lib.litert_lm_loaded_file_embedding_signature_selection.argtypes = [
+      ctypes.c_void_p,
+      ctypes.POINTER(ctypes.c_int32),
+      ctypes.c_int32,
+  ]
+
   lib.litert_lm_loaded_file_modality_npu_brand.restype = ctypes.c_int
   lib.litert_lm_loaded_file_modality_npu_brand.argtypes = [
       ctypes.c_void_p,

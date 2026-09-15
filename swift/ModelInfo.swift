@@ -40,6 +40,13 @@ public enum NPUBrand: Hashable, Sendable {
   case samsung
 }
 
+/// Model type options.
+public enum ModelType: Hashable, Sendable {
+  case unknown
+  case llm
+  case embedding
+}
+
 /// Modality options.
 public enum Modality: Int, Hashable, Sendable {
   case text = 0
@@ -67,6 +74,139 @@ public struct SamplerParameters: Equatable {
   public let topP: Float
 }
 
+/// Capabilities specific to Large Language Models (LLM).
+public class LLMCapability {
+  private let handle: OpaquePointer
+
+  internal init(handle: OpaquePointer) {
+    self.handle = handle
+  }
+
+  /// Checks if the loaded LiteRT-LM file supports speculative decoding.
+  public func hasSpeculativeDecodingSupport() -> Bool {
+    return litert_lm_loaded_file_has_speculative_decoding_support(handle)
+  }
+
+  /// Checks if the loaded LiteRT-LM file supports thinking/reasoning.
+  public func supportsThinking() -> Bool {
+    return litert_lm_loaded_file_supports_thinking(handle)
+  }
+
+  /// Checks if the loaded LiteRT-LM file supports function calling/tool use.
+  public func supportsFunctionCalling() -> Bool {
+    return litert_lm_loaded_file_supports_function_calling(handle)
+  }
+
+  /// Returns the default sampler parameters for the model.
+  public var defaultSamplerParams: SamplerParameters {
+    return SamplerParameters(
+      type: litert_lm_loaded_file_sampler_type(handle),
+      temperature: litert_lm_loaded_file_sampler_temperature(handle),
+      topK: Int(litert_lm_loaded_file_sampler_top_k(handle)),
+      topP: litert_lm_loaded_file_sampler_top_p(handle)
+    )
+  }
+
+  /// Returns whether the loaded LiteRT-LM file has dynamic context.
+  ///
+  /// Dynamic context means the context size can be configured by the caller
+  /// up to the maximum limit.
+  public func isDynamicContext() -> Bool {
+    return litert_lm_loaded_file_is_dynamic_context(handle)
+  }
+
+  /// Returns the maximum vision token budget for the model.
+  /// Returns -1 if the model does not support vision or if not defined.
+  public func maxVisionTokenBudget() -> Int {
+    return Int(litert_lm_loaded_file_max_vision_token_budget(handle))
+  }
+
+  /// Returns the list of vision signature selection choices, or nil if
+  /// vision is not supported.
+  public func visionSignatureSelection() -> [Int]? {
+    let count = litert_lm_loaded_file_vision_signature_selection(
+      handle, nil, 0
+    )
+    if count == -1 {
+      return nil
+    }
+    if count == 0 {
+      return []
+    }
+    var lengths = [Int32](repeating: 0, count: Int(count))
+    let written = litert_lm_loaded_file_vision_signature_selection(
+      handle, &lengths, count
+    )
+    guard written > 0 else {
+      return []
+    }
+    return lengths[0..<Int(written)].map { Int($0) }
+  }
+}
+
+public typealias LlmCapability = LLMCapability
+
+/// Capabilities specific to Embedding models.
+public class EmbeddingCapability {
+  private let handle: OpaquePointer
+
+  internal init(handle: OpaquePointer) {
+    self.handle = handle
+  }
+
+  /// Returns the output embedding dimension for the model.
+  /// Returns nil if not defined.
+  public func dimension() -> Int? {
+    let dim = litert_lm_loaded_file_embedding_dimension(handle)
+    return dim > 0 ? Int(dim) : nil
+  }
+
+  /// Returns the list of supported embedding signature lengths, or nil if
+  /// not defined.
+  public func signatureSelection() -> [Int]? {
+    let count = litert_lm_loaded_file_embedding_signature_selection(
+      handle, nil, 0
+    )
+    guard count >= 0 else {
+      return nil
+    }
+    var lengths = [Int32](repeating: 0, count: Int(count))
+    let written = litert_lm_loaded_file_embedding_signature_selection(
+      handle, &lengths, count
+    )
+    let validCount = max(0, Int(written))
+    return lengths[0..<validCount].map { Int($0) }
+  }
+
+  /// Returns the maximum vision token budget for the model.
+  /// Returns -1 if the model does not support vision or if not defined.
+  public func maxVisionTokenBudget() -> Int {
+    return Int(litert_lm_loaded_file_max_vision_token_budget(handle))
+  }
+
+  /// Returns the list of vision signature selection choices, or nil if
+  /// vision is not supported.
+  public func visionSignatureSelection() -> [Int]? {
+    let count = litert_lm_loaded_file_vision_signature_selection(
+      handle, nil, 0
+    )
+    if count == -1 {
+      return nil
+    }
+    if count == 0 {
+      return []
+    }
+    var lengths = [Int32](repeating: 0, count: Int(count))
+    let written = litert_lm_loaded_file_vision_signature_selection(
+      handle, &lengths, count
+    )
+    guard written > 0 else {
+      return []
+    }
+    return lengths[0..<Int(written)].map { Int($0) }
+  }
+}
+
 /// Provides information about capabilities and metadata of a LiteRT-LM file.
 ///
 /// ### Example Usage:
@@ -77,10 +217,19 @@ public struct SamplerParameters: Equatable {
 ///   return
 /// }
 ///
-/// // 2. Query basic capability flags
-/// let supportsThinking = modelInfo.supportsThinking()
-/// let supportsFunctionCall = modelInfo.supportsFunctionCalling()
-/// let hasSpeculativeDecoding = modelInfo.hasSpeculativeDecodingSupport()
+/// // 2. Access LLM or Embedding capabilities
+/// if modelInfo.isEmbeddingModel(), let embedding = modelInfo.embedding {
+///   let dim = embedding.dimension() // e.g. 768
+///   let signatures = embedding.signatureSelection() // e.g. [128, 256, 512]
+/// } else if modelInfo.isLlmModel(), let llm = modelInfo.llm {
+///   let supportsThinking = llm.supportsThinking()
+///   let supportsFunctionCall = llm.supportsFunctionCalling()
+///   let hasSpeculativeDecoding = llm.hasSpeculativeDecodingSupport()
+///
+///   // Retrieve default sampler parameters
+///   let sampler = llm.defaultSamplerParams
+///   print("Temp: \(sampler.temperature), TopK: \(sampler.topK), TopP: \(sampler.topP)")
+/// }
 ///
 /// // 3. Inspect context limits and runtime version requirements
 /// let maxContext = modelInfo.maxContextTokens()
@@ -109,10 +258,6 @@ public struct SamplerParameters: Equatable {
 ///     print("Target NPU SoC: \(socName) (\(brand))")
 ///   }
 /// }
-///
-/// // 6. Retrieve default sampler parameters
-/// let sampler = modelInfo.defaultSamplerParams
-/// print("Temp: \(sampler.temperature), TopK: \(sampler.topK), TopP: \(sampler.topP)")
 /// ```
 public class ModelInfo {
   private let handle: OpaquePointer
@@ -126,20 +271,15 @@ public class ModelInfo {
     self.handle = handle
   }
 
-  /// Checks if the loaded LiteRT-LM file supports speculative decoding.
-  public func hasSpeculativeDecodingSupport() -> Bool {
-    return litert_lm_loaded_file_has_speculative_decoding_support(handle)
-  }
+  /// LLM-specific capabilities, or nil if the model is not an LLM.
+  public private(set) lazy var llm: LLMCapability? = {
+    return isLlmModel() ? LLMCapability(handle: handle) : nil
+  }()
 
-  /// Checks if the loaded LiteRT-LM file supports thinking/reasoning.
-  public func supportsThinking() -> Bool {
-    return litert_lm_loaded_file_supports_thinking(handle)
-  }
-
-  /// Checks if the loaded LiteRT-LM file supports function calling/tool use.
-  public func supportsFunctionCalling() -> Bool {
-    return litert_lm_loaded_file_supports_function_calling(handle)
-  }
+  /// Embedding-specific capabilities, or nil if the model is not an embedding model.
+  public private(set) lazy var embedding: EmbeddingCapability? = {
+    return isEmbeddingModel() ? EmbeddingCapability(handle: handle) : nil
+  }()
 
   /// Returns the supported input modalities.
   public var inputModalities: SupportedModalities {
@@ -152,16 +292,6 @@ public class ModelInfo {
         handle, kLiteRtLmModalityAudio),
       video: litert_lm_loaded_file_supports_input_modality(
         handle, kLiteRtLmModalityVideo)
-    )
-  }
-
-  /// Returns the default sampler parameters for the model.
-  public var defaultSamplerParams: SamplerParameters {
-    return SamplerParameters(
-      type: litert_lm_loaded_file_sampler_type(handle),
-      temperature: litert_lm_loaded_file_sampler_temperature(handle),
-      topK: Int(litert_lm_loaded_file_sampler_top_k(handle)),
-      topP: litert_lm_loaded_file_sampler_top_p(handle)
     )
   }
 
@@ -209,6 +339,25 @@ public class ModelInfo {
       return []
     }
     return lengths[0..<Int(written)].map { Int($0) }
+  }
+
+  /// Returns the type of the loaded LiteRT-LM model.
+  public func modelType() -> ModelType {
+    switch litert_lm_loaded_file_model_type(handle) {
+    case kLiteRtLmModelTypeLlm: return .llm
+    case kLiteRtLmModelTypeEmbedding: return .embedding
+    default: return .unknown
+    }
+  }
+
+  /// Returns whether the loaded LiteRT-LM file is an embedding model.
+  public func isEmbeddingModel() -> Bool {
+    return modelType() == .embedding
+  }
+
+  /// Returns whether the loaded LiteRT-LM file is an LLM (generative) model.
+  public func isLlmModel() -> Bool {
+    return modelType() == .llm
   }
 
   /// Returns the minimum LiteRT-LM runtime version required to run this model.

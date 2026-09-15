@@ -22,10 +22,22 @@ Example:
 
   # 1. Load model info
   with litert_lm.ModelInfo("/path/to/model.litertlm") as model_info:
-    # 2. Query basic capability flags
-    thinking = model_info.supports_thinking()
-    function_calling = model_info.supports_function_calling()
-    speculative_decoding = model_info.has_speculative_decoding_support()
+    # 2. Access LLM or Embedding capabilities
+    if model_info.is_embedding_model and model_info.embedding:
+      dim = model_info.embedding.dimension  # e.g. 768
+      # e.g. [128, 256, 512]
+      signatures = model_info.embedding.signature_selection
+
+    elif model_info.is_llm_model and model_info.llm:
+      thinking = model_info.llm.supports_thinking()
+      function_calling = model_info.llm.supports_function_calling()
+      speculative_decoding = model_info.llm.has_speculative_decoding_support()
+
+      # Retrieve default sampler parameters
+      sampler_config = model_info.llm.default_sampler_params
+      temperature = sampler_config.temperature
+      top_k = sampler_config.top_k
+      top_p = sampler_config.top_p
 
     # 3. Inspect context limits and runtime requirements
     max_context = model_info.max_context_tokens
@@ -35,7 +47,7 @@ Example:
     # 4. Check supported input modalities and vision token budget
     if model_info.input_modalities.vision:
       vision_budget = model_info.max_vision_token_budget
-      signatures = model_info.vision_signature_selection
+      vision_signatures = model_info.vision_signature_selection
 
     # 5. Inspect hardware backends (ordered by priority), NPU brand, etc.
     text_backends = model_info.supported_backends_for_modality(
@@ -50,19 +62,15 @@ Example:
       soc_name = model_info.soc_name_for_modality(
           litert_lm.LiteRtLmModality.TEXT
       )  # e.g. "SM8750"
-
-    # 6. Retrieve default sampler parameters
-    sampler_config = model_info.default_sampler_params
-    temperature = sampler_config.temperature
-    top_k = sampler_config.top_k
-    top_p = sampler_config.top_p
 """
 
 from __future__ import annotations
 
+import collections.abc
 import ctypes
 import dataclasses
 import os
+from typing import Any
 
 from . import _ffi
 from . import interfaces
@@ -76,6 +84,96 @@ class SupportedModalities:
   vision: bool
   audio: bool
   video: bool
+
+
+class _Capability:
+  """Base class for model capabilities."""
+
+  def __init__(
+      self,
+      lib: Any,
+      handle_fn: collections.abc.Callable[[], ctypes.c_void_p],
+      model_info: ModelInfo,
+  ):
+    self._lib = lib
+    self._handle_fn = handle_fn
+    self._model_info = model_info
+
+  @property
+  def max_vision_token_budget(self) -> int:
+    """Returns maximum vision token budget, or -1 if not defined."""
+    return self._model_info.max_vision_token_budget
+
+  @property
+  def vision_signature_selection(self) -> list[int] | None:
+    """Returns vision signature choices, or None if vision is unsupported."""
+    return self._model_info.vision_signature_selection
+
+
+class LlmCapability(_Capability):
+  """Capabilities specific to Large Language Models (LLM)."""
+
+  def has_speculative_decoding_support(self) -> bool:
+    """Returns True if the model supports speculative decoding."""
+    handle = self._handle_fn()
+    return bool(
+        self._lib.litert_lm_loaded_file_has_speculative_decoding_support(handle)
+    )
+
+  def supports_thinking(self) -> bool:
+    """Returns True if the model supports thinking/reasoning steps."""
+    handle = self._handle_fn()
+    return bool(self._lib.litert_lm_loaded_file_supports_thinking(handle))
+
+  def supports_function_calling(self) -> bool:
+    """Returns True if the model supports function calling."""
+    handle = self._handle_fn()
+    return bool(
+        self._lib.litert_lm_loaded_file_supports_function_calling(handle)
+    )
+
+  @property
+  def default_sampler_params(self) -> interfaces.SamplerConfig:
+    """Returns the default sampler parameters configured in the model."""
+    handle = self._handle_fn()
+    top_k = self._lib.litert_lm_loaded_file_sampler_top_k(handle)
+    return interfaces.SamplerConfig(
+        temperature=self._lib.litert_lm_loaded_file_sampler_temperature(handle),
+        top_k=top_k if top_k > 0 else None,
+        top_p=self._lib.litert_lm_loaded_file_sampler_top_p(handle),
+    )
+
+  @property
+  def is_dynamic_context(self) -> bool:
+    """Returns whether the model has dynamic context support."""
+    handle = self._handle_fn()
+    return bool(self._lib.litert_lm_loaded_file_is_dynamic_context(handle))
+
+
+class EmbeddingCapability(_Capability):
+  """Capabilities specific to Embedding models."""
+
+  @property
+  def dimension(self) -> int | None:
+    """Returns output embedding dimension, or None if not defined."""
+    handle = self._handle_fn()
+    dim = self._lib.litert_lm_loaded_file_embedding_dimension(handle)
+    return int(dim) if dim > 0 else None
+
+  @property
+  def signature_selection(self) -> list[int] | None:
+    """Returns supported embedding signature lengths, or None if not defined."""
+    handle = self._handle_fn()
+    count = self._lib.litert_lm_loaded_file_embedding_signature_selection(
+        handle, None, 0
+    )
+    if count == -1:
+      return None
+    lengths = (ctypes.c_int32 * count)()
+    self._lib.litert_lm_loaded_file_embedding_signature_selection(
+        handle, lengths, count
+    )
+    return list(lengths)
 
 
 class ModelInfo:
@@ -103,6 +201,17 @@ class ModelInfo:
           f"Failed to load model info for model: {model_path_str}"
       )
 
+    self._llm = (
+        LlmCapability(self._lib, self._get_active_handle, self)
+        if self.is_llm_model
+        else None
+    )
+    self._embedding = (
+        EmbeddingCapability(self._lib, self._get_active_handle, self)
+        if self.is_embedding_model
+        else None
+    )
+
   def close(self) -> None:
     """Closes the model info loader and releases C resources."""
     if hasattr(self, "_handle") and self._handle:
@@ -122,24 +231,19 @@ class ModelInfo:
     if not self._handle:
       raise RuntimeError("ModelInfo object is closed")
 
-  def has_speculative_decoding_support(self) -> bool:
-    """Returns True if the model supports speculative decoding."""
+  def _get_active_handle(self) -> ctypes.c_void_p:
     self._check_closed()
-    return self._lib.litert_lm_loaded_file_has_speculative_decoding_support(
-        self._handle
-    )
+    return self._handle
 
-  def supports_thinking(self) -> bool:
-    """Returns True if the model supports thinking/reasoning steps."""
-    self._check_closed()
-    return self._lib.litert_lm_loaded_file_supports_thinking(self._handle)
+  @property
+  def llm(self) -> LlmCapability | None:
+    """Returns LLM capabilities, or None if not an LLM model."""
+    return self._llm
 
-  def supports_function_calling(self) -> bool:
-    """Returns True if the model supports function calling."""
-    self._check_closed()
-    return self._lib.litert_lm_loaded_file_supports_function_calling(
-        self._handle
-    )
+  @property
+  def embedding(self) -> EmbeddingCapability | None:
+    """Returns Embedding capabilities, or None if not an embedding model."""
+    return self._embedding
 
   @property
   def input_modalities(self) -> SupportedModalities:
@@ -158,19 +262,6 @@ class ModelInfo:
         video=self._lib.litert_lm_loaded_file_supports_input_modality(
             self._handle, _ffi.LiteRtLmModality.VIDEO
         ),
-    )
-
-  @property
-  def default_sampler_params(self) -> interfaces.SamplerConfig:
-    """Returns the default sampler parameters configured in the model."""
-    self._check_closed()
-    top_k = self._lib.litert_lm_loaded_file_sampler_top_k(self._handle)
-    return interfaces.SamplerConfig(
-        temperature=self._lib.litert_lm_loaded_file_sampler_temperature(
-            self._handle
-        ),
-        top_k=top_k if top_k > 0 else None,
-        top_p=self._lib.litert_lm_loaded_file_sampler_top_p(self._handle),
     )
 
   @property
@@ -207,6 +298,26 @@ class ModelInfo:
     """
     self._check_closed()
     return int(self._lib.litert_lm_loaded_file_max_context_tokens(self._handle))
+
+  @property
+  def model_type(self) -> _ffi.LiteRtLmModelType:
+    """Returns the model type of the loaded file."""
+    self._check_closed()
+    raw_type = self._lib.litert_lm_loaded_file_model_type(self._handle)
+    try:
+      return _ffi.LiteRtLmModelType(raw_type)
+    except ValueError:
+      return _ffi.LiteRtLmModelType.UNKNOWN
+
+  @property
+  def is_embedding_model(self) -> bool:
+    """Returns True if the loaded file is an embedding model."""
+    return self.model_type == _ffi.LiteRtLmModelType.EMBEDDING
+
+  @property
+  def is_llm_model(self) -> bool:
+    """Returns True if the loaded file is an LLM (generative) model."""
+    return self.model_type == _ffi.LiteRtLmModelType.LLM
 
   @property
   def is_dynamic_context(self) -> bool:
