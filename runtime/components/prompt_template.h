@@ -124,10 +124,7 @@ class PromptTemplate {
  public:
   // Creates a PromptTemplate from the string content.
   // template_content: the jinja template string.
-  // edit_template_for_minijinja: whether to edit the template to be compatible
-  // with Mini Jinja.
-  explicit PromptTemplate(absl::string_view template_content,
-                          bool edit_template_for_minijinja = true);
+  explicit PromptTemplate(absl::string_view template_content);
 
   // Copying constructor.
   PromptTemplate(const PromptTemplate&);

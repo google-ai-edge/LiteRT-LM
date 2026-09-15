@@ -77,12 +77,9 @@ std::string EditTemplateForMinijinja(absl::string_view template_content) {
 
 using json = nlohmann::ordered_json;
 
-PromptTemplate::PromptTemplate(absl::string_view template_content,
-                               bool edit_template_for_minijinja)
-    : minijinja_template_(new_minijinja_template(
-          edit_template_for_minijinja
-              ? EditTemplateForMinijinja(template_content)
-              : std::string(template_content))) {
+PromptTemplate::PromptTemplate(absl::string_view template_content)
+    : minijinja_template_(
+          new_minijinja_template(EditTemplateForMinijinja(template_content))) {
   const auto caps = minijinja_template_->get_capabilities();
   capabilities_ = PromptTemplateCapabilities{
       .supports_tools = caps.supports_tools,
