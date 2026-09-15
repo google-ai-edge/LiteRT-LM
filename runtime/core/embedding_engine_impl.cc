@@ -1187,9 +1187,17 @@ absl::StatusOr<ExecutorInputs> EmbeddingEngineImpl::ProcessAndCombineContents(
           LITERT_ASSIGN_OR_RETURN(
               auto tensor_buffer_map,
               preprocessed_image.GetPreprocessedImageTensorMap());
+          if (benchmark_info_.has_value()) {
+            ABSL_RETURN_IF_ERROR(benchmark_info_->TimeMarkDelta(
+                std::string(kMarkVisionExecutor)));
+          }
           LITERT_ASSIGN_OR_RETURN(
               single_image_data,
               vision_executor_->Encode(*tensor_buffer_map));
+          if (benchmark_info_.has_value()) {
+            ABSL_RETURN_IF_ERROR(benchmark_info_->TimeMarkDelta(
+                std::string(kMarkVisionExecutor)));
+          }
         } else {
           return absl::InternalError(
               "Failed to get tensor buffer from preprocessed image.");
