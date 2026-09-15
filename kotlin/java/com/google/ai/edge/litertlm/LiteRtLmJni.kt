@@ -48,6 +48,8 @@ internal object LiteRtLmJni {
    * @param audioBackendNumThreads The number of threads for the audio backend (CPU).
    * @param maxVisionTokensPerImage The maximum vision tokens per image. When non-positive, use the
    *   engine's default.
+   * @param activationDataType The activation data type override for inference. When negative, use
+   *   the engine's default.
    * @return A pointer to the native engine instance.
    */
   external fun nativeCreateEngine(
@@ -66,6 +68,7 @@ internal object LiteRtLmJni {
     mainBackendNumThreads: Int,
     audioBackendNumThreads: Int,
     maxVisionTokensPerImage: Int,
+    activationDataType: Int = -1,
   ): Long
 
   /**
