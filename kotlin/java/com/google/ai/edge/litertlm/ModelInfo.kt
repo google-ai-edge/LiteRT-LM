@@ -53,71 +53,12 @@ enum class NpuBrand(val value: Int) {
   }
 }
 
-/** Type of the LiteRT-LM model. */
-enum class ModelType(val value: Int) {
-  UNKNOWN(0),
-  LLM(1),
-  EMBEDDING(2);
-
-  companion object {
-    fun fromValue(value: Int): ModelType = entries.firstOrNull { it.value == value } ?: UNKNOWN
-  }
-}
-
 /** Input and output modalities supported by LiteRT-LM models. */
 enum class Modality(val value: Int) {
   TEXT(0),
   VISION(1),
   AUDIO(2),
   VIDEO(3),
-}
-
-/** Capabilities specific to Large Language Models (LLM). */
-interface LlmCapability {
-  /** Checks if the loaded LiteRT-LM file supports speculative decoding. */
-  fun hasSpeculativeDecodingSupport(): Boolean
-
-  /** Checks if the loaded LiteRT-LM file supports thinking/reasoning. */
-  fun supportsThinking(): Boolean
-
-  /** Checks if the loaded LiteRT-LM file supports function calling/tool use. */
-  fun supportsFunctionCalling(): Boolean
-
-  /** Returns the default sampler parameters for the model. */
-  fun defaultSamplerParams(): SamplerParameters
-
-  /**
-   * Checks if the loaded LiteRT-LM file has dynamic context. Dynamic context means the context size
-   * can be configured by the caller up to the maximum limit.
-   */
-  fun isDynamicContext(): Boolean
-
-  /** Returns the maximum vision token budget for the model, or -1 if not defined. */
-  fun maxVisionTokenBudget(): Int
-
-  /** Returns the list of vision signature selection choices, or null if vision is not supported. */
-  fun visionSignatureSelection(): IntArray?
-}
-
-/** Capabilities specific to Embedding models. */
-interface EmbeddingCapability {
-  /** Returns the output embedding dimension, or null if not defined. */
-  fun dimension(): Int?
-
-  /** Returns the list of supported embedding signature lengths, or null if not defined. */
-  fun signatureSelection(): IntArray?
-
-  /**
-   * Checks if the loaded LiteRT-LM file has dynamic context. Dynamic context means the context size
-   * can be configured by the caller up to the maximum limit.
-   */
-  fun isDynamicContext(): Boolean
-
-  /** Returns the maximum vision token budget for the model, or -1 if not defined. */
-  fun maxVisionTokenBudget(): Int
-
-  /** Returns the list of vision signature selection choices, or null if vision is not supported. */
-  fun visionSignatureSelection(): IntArray?
 }
 
 /**
@@ -130,35 +71,35 @@ interface EmbeddingCapability {
  * ```kotlin
  * try {
  *   // 1. Load the model metadata
- *   ModelInfo.from("/path/to/model.litertlm").use { modelInfo ->
- *     // 2. Pattern-match using Kotlin sealed class
- *     when (modelInfo) {
- *       is ModelInfo.Llm -> {
- *         val supportsThinking = modelInfo.supportsThinking()
- *         val supportsFunctionCall = modelInfo.supportsFunctionCalling()
- *         val hasSpeculativeDecoding = modelInfo.hasSpeculativeDecodingSupport()
- *         val sampler = modelInfo.defaultSamplerParams()
- *         println("Temp: ${sampler.temperature}, TopK: ${sampler.topK}, TopP: ${sampler.topP}")
- *       }
- *       is ModelInfo.Embedding -> {
- *         val dim = modelInfo.dimension() // e.g. 768
- *         val signatures = modelInfo.signatureSelection() // e.g. [128, 256, 512]
- *       }
- *       is ModelInfo.Unknown -> {
- *         println("Unknown model type")
- *       }
- *     }
+ *   ModelInfo("/path/to/model.litertlm").use { modelInfo ->
+ *     // 2. Query basic capability flags
+ *     val supportsThinking = modelInfo.supportsThinking()
+ *     val supportsFunctionCall = modelInfo.supportsFunctionCalling()
+ *     val hasSpeculativeDecoding = modelInfo.hasSpeculativeDecodingSupport()
  *
- *     // 3. Inspect shared context limits and runtime version requirements
+ *     // 3. Inspect context limits and runtime version requirements
  *     val maxContext = modelInfo.maxContextTokens()
+ *     val isDynamic = modelInfo.isDynamicContext()
  *     val minVersion = modelInfo.minRuntimeVersion()
  *     if (minVersion != null) {
  *       println("Minimum required LiteRT-LM runtime version: $minVersion")
  *     }
  *
- *     // 4. Inspect hardware backends (ordered by priority), NPU brand, etc.
- *     val textBackends = modelInfo.supportedBackends(Modality.TEXT)
- *     val defaultBackend = textBackends.firstOrNull()
+ *     // 4. Check supported input modalities and vision signatures
+ *     if (modelInfo.inputModalities().vision) {
+ *       val visionBudget = modelInfo.maxVisionTokenBudget()
+ *       val signatures = modelInfo.visionSignatureSelection()
+ *       if (signatures != null) {
+ *         println(
+ *           "Supported vision token capacities: ${signatures.contentToString()}"
+ *         )
+ *       }
+ *     }
+ *
+ *     // 5. Inspect hardware backends (ordered by priority), NPU brand, etc.
+ *     val textBackends =
+ *       modelInfo.supportedBackends(Modality.TEXT) // e.g. [CPU, GPU, NPU]
+ *     val defaultBackend = textBackends.firstOrNull() // e.g. BackendType.CPU
  *     println("Default backend for text: $defaultBackend")
  *
  *     if (textBackends.contains(BackendType.NPU)) {
@@ -168,80 +109,166 @@ interface EmbeddingCapability {
  *         println("Target NPU SoC: $socName ($brand)")
  *       }
  *     }
+ *
+ *     // 6. Retrieve default sampler parameters
+ *     val sampler = modelInfo.defaultSamplerParams()
+ *     println(
+ *       "Temp: ${sampler.temperature}, TopK: ${sampler.topK}, TopP: ${sampler.topP}"
+ *     )
  *   }
  * } catch (e: Exception) {
  *   println("Failed to load model file info: ${e.message}")
  * }
  * ```
+ *
+ * @param modelPath The file path to the LiteRT-LM model.
  */
-sealed class ModelInfo protected constructor(ptr: Long) : AutoCloseable {
+class ModelInfo(modelPath: String) : AutoCloseable {
   private val lock = Any()
 
-  @Volatile internal var handle: Long? = ptr
+  @Volatile private var handle: Long? = null
 
-  abstract val modelType: ModelType
+  init {
+    val ptr = LiteRtLmJni.nativeCreateModelInfo(modelPath)
+    if (ptr == 0L) {
+      throw LiteRtLmJniException("Failed to load model info for model: $modelPath")
+    }
+    handle = ptr
+  }
+
+  /** Checks if the loaded LiteRT-LM file supports speculative decoding. */
+  fun hasSpeculativeDecodingSupport(): Boolean {
+    synchronized(lock) {
+      checkInitialized()
+      return LiteRtLmJni.nativeHasSpeculativeDecodingSupport(handle!!)
+    }
+  }
+
+  /** Checks if the loaded LiteRT-LM file supports thinking/reasoning. */
+  fun supportsThinking(): Boolean {
+    synchronized(lock) {
+      checkInitialized()
+      return LiteRtLmJni.nativeSupportsThinking(handle!!)
+    }
+  }
+
+  /** Checks if the loaded LiteRT-LM file supports function calling/tool use. */
+  fun supportsFunctionCalling(): Boolean {
+    synchronized(lock) {
+      checkInitialized()
+      return LiteRtLmJni.nativeSupportsFunctionCalling(handle!!)
+    }
+  }
 
   /** Returns the supported input modalities. */
-  fun inputModalities(): SupportedModalities = withHandle {
-    SupportedModalities(
-      text = LiteRtLmJni.nativeSupportsInputModality(it, 0),
-      vision = LiteRtLmJni.nativeSupportsInputModality(it, 1),
-      audio = LiteRtLmJni.nativeSupportsInputModality(it, 2),
-      video = LiteRtLmJni.nativeSupportsInputModality(it, 3),
-    )
+  fun inputModalities(): SupportedModalities {
+    synchronized(lock) {
+      checkInitialized()
+      return SupportedModalities(
+        text = LiteRtLmJni.nativeSupportsInputModality(handle!!, 0),
+        vision = LiteRtLmJni.nativeSupportsInputModality(handle!!, 1),
+        audio = LiteRtLmJni.nativeSupportsInputModality(handle!!, 2),
+        video = LiteRtLmJni.nativeSupportsInputModality(handle!!, 3),
+      )
+    }
+  }
+
+  /** Returns the default sampler parameters for the model. */
+  fun defaultSamplerParams(): SamplerParameters {
+    synchronized(lock) {
+      checkInitialized()
+      return SamplerParameters(
+        type = LiteRtLmJni.nativeSamplerType(handle!!),
+        temperature = LiteRtLmJni.nativeSamplerTemp(handle!!),
+        topK = LiteRtLmJni.nativeSamplerTopK(handle!!),
+        topP = LiteRtLmJni.nativeSamplerTopP(handle!!),
+      )
+    }
   }
 
   /** Returns the maximum vision token budget for the model, or -1 if not defined. */
-  fun maxVisionTokenBudget(): Int = withHandle { LiteRtLmJni.nativeMaxVisionTokenBudget(it) }
+  fun maxVisionTokenBudget(): Int {
+    synchronized(lock) {
+      checkInitialized()
+      return LiteRtLmJni.nativeMaxVisionTokenBudget(handle!!)
+    }
+  }
 
   /**
    * Gets the maximum supported context tokens for the loaded LiteRT-LM file.
-   * - If the model is static, this is the fixed context size.
-   * - If the model is dynamic, this is the largest context size that can be set.
+   * - If the model is static ([isDynamicContext] is false), this is the fixed context size.
+   * - If the model is dynamic ([isDynamicContext] is true), this is the largest context size that
+   *   can be set.
    */
-  fun maxContextTokens(): Int = withHandle { LiteRtLmJni.nativeMaxContextTokens(it) }
+  fun maxContextTokens(): Int {
+    synchronized(lock) {
+      checkInitialized()
+      return LiteRtLmJni.nativeMaxContextTokens(handle!!)
+    }
+  }
 
   /**
    * Checks if the loaded LiteRT-LM file has dynamic context. Dynamic context means the context size
    * can be configured by the caller up to the maximum limit.
    */
-  open fun isDynamicContext(): Boolean = withHandle { LiteRtLmJni.nativeIsDynamicContext(it) }
+  fun isDynamicContext(): Boolean {
+    synchronized(lock) {
+      checkInitialized()
+      return LiteRtLmJni.nativeIsDynamicContext(handle!!)
+    }
+  }
 
   /** Returns the list of vision signature selection choices, or null if vision is not supported. */
-  open fun visionSignatureSelection(): IntArray? = withHandle {
-    LiteRtLmJni.nativeVisionSignatureSelection(it)
+  fun visionSignatureSelection(): IntArray? {
+    synchronized(lock) {
+      checkInitialized()
+      return LiteRtLmJni.nativeVisionSignatureSelection(handle!!)
+    }
   }
 
   /**
    * Returns the minimum LiteRT-LM runtime version required to run this model, or null if not
    * defined.
    */
-  fun minRuntimeVersion(): String? = withHandle { LiteRtLmJni.nativeMinRuntimeVersion(it) }
+  fun minRuntimeVersion(): String? {
+    synchronized(lock) {
+      checkInitialized()
+      return LiteRtLmJni.nativeMinRuntimeVersion(handle!!)
+    }
+  }
 
   /**
    * Returns the list of supported backends for a given modality, ordered by priority (first is
    * default).
    */
-  fun supportedBackends(modality: Modality): List<BackendType> = withHandle {
-    val backendValues =
-      LiteRtLmJni.nativeModalitySupportedBackends(it, modality.value)
-        ?: return@withHandle emptyList()
-    val result = mutableListOf<BackendType>()
-    for (v in backendValues) {
-      BackendType.fromValue(v)?.let { result.add(it) }
+  fun supportedBackends(modality: Modality): List<BackendType> {
+    synchronized(lock) {
+      checkInitialized()
+      val backendValues =
+        LiteRtLmJni.nativeModalitySupportedBackends(handle!!, modality.value) ?: return emptyList()
+      val result = mutableListOf<BackendType>()
+      for (v in backendValues) {
+        BackendType.fromValue(v)?.let { result.add(it) }
+      }
+      return result
     }
-    result
   }
 
   /** Returns the detected NPU brand for a given modality, or NpuBrand.UNKNOWN. */
-  fun npuBrand(modality: Modality): NpuBrand = withHandle {
-    val brandVal = LiteRtLmJni.nativeModalityNpuBrand(it, modality.value)
-    NpuBrand.fromValue(brandVal)
+  fun npuBrand(modality: Modality): NpuBrand {
+    synchronized(lock) {
+      checkInitialized()
+      val brandVal = LiteRtLmJni.nativeModalityNpuBrand(handle!!, modality.value)
+      return NpuBrand.fromValue(brandVal)
+    }
   }
 
   /** Returns the NPU SoC name string for a given modality, or null if not set. */
-  fun socName(modality: Modality): String? = withHandle {
-    LiteRtLmJni.nativeModalitySocName(it, modality.value)
+  fun socName(modality: Modality): String? {
+    synchronized(lock) {
+      checkInitialized()
+      return LiteRtLmJni.nativeModalitySocName(handle!!, modality.value)
+    }
   }
 
   /** Closes the loaded model info and releases underlying resources. */
@@ -253,76 +280,7 @@ sealed class ModelInfo protected constructor(ptr: Long) : AutoCloseable {
     }
   }
 
-  internal fun <T> withHandle(block: (Long) -> T): T {
-    synchronized(lock) {
-      val h = checkNotNull(handle) { "ModelInfo instance is already closed." }
-      return block(h)
-    }
-  }
-
-  /** Capabilities specific to Large Language Models (LLM). */
-  class Llm internal constructor(ptr: Long) : ModelInfo(ptr), LlmCapability {
-    override val modelType: ModelType = ModelType.LLM
-
-    override fun hasSpeculativeDecodingSupport(): Boolean = withHandle {
-      LiteRtLmJni.nativeHasSpeculativeDecodingSupport(it)
-    }
-
-    override fun supportsThinking(): Boolean = withHandle { LiteRtLmJni.nativeSupportsThinking(it) }
-
-    override fun supportsFunctionCalling(): Boolean = withHandle {
-      LiteRtLmJni.nativeSupportsFunctionCalling(it)
-    }
-
-    override fun defaultSamplerParams(): SamplerParameters = withHandle {
-      SamplerParameters(
-        type = LiteRtLmJni.nativeSamplerType(it),
-        temperature = LiteRtLmJni.nativeSamplerTemp(it),
-        topK = LiteRtLmJni.nativeSamplerTopK(it),
-        topP = LiteRtLmJni.nativeSamplerTopP(it),
-      )
-    }
-
-    override fun isDynamicContext(): Boolean = super.isDynamicContext()
-
-    override fun visionSignatureSelection(): IntArray? = super.visionSignatureSelection()
-  }
-
-  /** Capabilities specific to Embedding models. */
-  class Embedding internal constructor(ptr: Long) : ModelInfo(ptr), EmbeddingCapability {
-    override val modelType: ModelType = ModelType.EMBEDDING
-
-    override fun dimension(): Int? = withHandle {
-      val dim = LiteRtLmJni.nativeEmbeddingDimension(it)
-      if (dim > 0) dim else null
-    }
-
-    override fun signatureSelection(): IntArray? = withHandle {
-      LiteRtLmJni.nativeEmbeddingSignatureSelection(it)
-    }
-
-    override fun isDynamicContext(): Boolean = super.isDynamicContext()
-
-    override fun visionSignatureSelection(): IntArray? = super.visionSignatureSelection()
-  }
-
-  /** Default fallback type when model type is UNKNOWN. */
-  class Unknown internal constructor(ptr: Long) : ModelInfo(ptr) {
-    override val modelType: ModelType = ModelType.UNKNOWN
-  }
-
-  companion object {
-    @JvmStatic
-    fun from(modelPath: String): ModelInfo {
-      val ptr = LiteRtLmJni.nativeCreateModelInfo(modelPath)
-      if (ptr == 0L) {
-        throw LiteRtLmJniException("Failed to load model info for model: $modelPath")
-      }
-      return when (ModelType.fromValue(LiteRtLmJni.nativeModelType(ptr))) {
-        ModelType.LLM -> Llm(ptr)
-        ModelType.EMBEDDING -> Embedding(ptr)
-        else -> Unknown(ptr)
-      }
-    }
+  private fun checkInitialized() {
+    check(handle != null) { "ModelInfo instance is already closed." }
   }
 }
