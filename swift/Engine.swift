@@ -236,6 +236,9 @@ public actor Engine {
     if !messagesJsonStr.isEmpty {
       litert_lm_conversation_config_set_messages(cConversationConfig, messagesJsonStr)
     }
+    if let chatTemplate = conversationConfig.chatTemplate {
+      litert_lm_conversation_config_set_prompt_template(cConversationConfig, chatTemplate)
+    }
     if conversationConfig.enableResponseFormat {
       var providerType = kLiteRtLmConstraintProviderTypeLlGuidance
       litert_lm_conversation_config_set_constraint_provider(cConversationConfig, &providerType)
