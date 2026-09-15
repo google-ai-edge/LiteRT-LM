@@ -30,6 +30,7 @@
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "runtime/components/model_resources.h"
 #include "runtime/engine/engine.h"
 #include "runtime/engine/engine_factory.h"
 #include "runtime/engine/engine_settings.h"
@@ -74,6 +75,11 @@ TEST(EngineTest, CreateEngine_WithoutCache) {
 
   absl::StatusOr<std::unique_ptr<Engine>> llm = CreateEngine(*engine_settings);
   ABSL_CHECK_OK(llm);
+
+  const Tokenizer& default_tok = (*llm)->GetTokenizer();
+  auto prefill_tok = (*llm)->GetTokenizer(ModelType::kTfLitePrefillDecode);
+  ASSERT_OK(prefill_tok);
+  EXPECT_EQ(prefill_tok.value(), &default_tok);
 
   absl::StatusOr<std::unique_ptr<Engine::Session>> session =
       (*llm)->CreateSession(SessionConfig::CreateDefault());

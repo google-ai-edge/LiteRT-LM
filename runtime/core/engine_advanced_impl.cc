@@ -53,6 +53,7 @@
 #include "runtime/util/litert_util.h"
 #include "runtime/util/logging.h"
 #include "runtime/util/status_macros.h"  // NOLINT
+#include "support/tokenizer/tokenizer.h"
 
 #if defined(LITERT_LM_DEBUGGER_ENABLED)
 #include "runtime/util/runtime_debugger.h"
@@ -185,6 +186,21 @@ class EngineAdvancedImpl : public Engine {
   }
 
   const Tokenizer& GetTokenizer() const override { return *tokenizer_; }
+
+  absl::StatusOr<const support::Tokenizer*> GetTokenizer(
+      ModelType model_type) const override {
+    if (model_type == ModelType::kTfLitePrefillDecode) {
+      if (!tokenizer_) {
+        return absl::NotFoundError("Primary tokenizer not initialized.");
+      }
+      return tokenizer_.get();
+    }
+    if (!litert_model_resources_) {
+      return absl::FailedPreconditionError(
+          "Model resources are not initialized.");
+    }
+    return litert_model_resources_->GetOrCreateTokenizer(model_type);
+  }
 
   absl::StatusOr<AudioExecutorProperties> GetAudioExecutorProperties()
       const override {

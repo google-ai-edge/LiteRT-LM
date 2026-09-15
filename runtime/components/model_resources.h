@@ -216,6 +216,28 @@ class ModelResources {
   // Builds a tokenizer instance from the model and returns it.
   virtual absl::StatusOr<std::unique_ptr<Tokenizer>> GetTokenizer() = 0;
 
+  // Builds a tokenizer instance for the specified model type and returns it.
+  // Defaults to GetTokenizer() when model_type is kTfLitePrefillDecode.
+  virtual absl::StatusOr<std::unique_ptr<Tokenizer>> GetTokenizer(
+      ModelType model_type) {
+    if (model_type == ModelType::kTfLitePrefillDecode) {
+      return GetTokenizer();
+    }
+    return absl::UnimplementedError(absl::StrCat("GetTokenizer for model type ",
+                                                 ModelTypeToString(model_type),
+                                                 " is not implemented."));
+  }
+
+  // Returns a tokenizer for `model_type`, creating it on first use and
+  // re-using it afterwards. Ownership stays with ModelResources; the returned
+  // pointer is valid for the lifetime of this object.
+  virtual absl::StatusOr<const Tokenizer*> GetOrCreateTokenizer(
+      ModelType model_type) {
+    return absl::UnimplementedError(
+        absl::StrCat("GetOrCreateTokenizer for model type ",
+                     ModelTypeToString(model_type), " is not implemented."));
+  }
+
   // Returns the llm metadata.
   virtual absl::StatusOr<const proto::LlmMetadata*> GetLlmMetadata() = 0;
 

@@ -57,6 +57,11 @@ class ModelResourcesLitertLm : public ModelResources {
   // configuration, the SentencePiece tokenizer will be used.
   absl::StatusOr<std::unique_ptr<Tokenizer>> GetTokenizer() override;
 
+  // Returns the tokenizer for the specified model type from the *.litertlm
+  // file.
+  absl::StatusOr<std::unique_ptr<Tokenizer>> GetTokenizer(
+      ModelType model_type) override;
+
   absl::StatusOr<const proto::LlmMetadata*> GetLlmMetadata() override;
 
   absl::StatusOr<const proto::ExecutorMetadata*> GetExecutorMetadata() override;
@@ -85,8 +90,12 @@ class ModelResourcesLitertLm : public ModelResources {
   std::unique_ptr<LitertLmLoader> litert_lm_loader_;
   bool enable_file_backed_model_loading_;
 
+  absl::StatusOr<const Tokenizer*> GetOrCreateTokenizer(
+      ModelType model_type) override;
+
  private:
   absl::flat_hash_map<ModelType, std::unique_ptr<litert::Model>> model_map_;
+  absl::flat_hash_map<ModelType, std::unique_ptr<Tokenizer>> tokenizer_map_;
   std::unique_ptr<proto::LlmMetadata> llm_metadata_;
   std::unique_ptr<proto::EmbeddingMetadata> embedding_metadata_;
   std::unique_ptr<proto::ExecutorMetadata> executor_metadata_;

@@ -15,7 +15,6 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_UTIL_LITERT_LM_LOADER_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_UTIL_LITERT_LM_LOADER_H_
 
-#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -55,13 +54,16 @@ struct BufferKey {
   explicit BufferKey(schema::AnySectionDataType type)
       : data_type(type), model_type(std::nullopt) {}
 
-  // Constructor for TFLiteModel or TFLiteWeights case
+  // Constructor for TFLiteModel, TFLiteWeights, SP_Tokenizer, or
+  // HF_Tokenizer_Zlib case
   explicit BufferKey(schema::AnySectionDataType type, ModelType model_type)
       : data_type(type), model_type(model_type) {
     if (type != schema::AnySectionDataType_TFLiteModel &&
-        type != schema::AnySectionDataType_TFLiteWeights) {
-      ABSL_LOG(ERROR) << "ModelType should only be provided for TFLiteModel or "
-                         "TFLiteWeights";
+        type != schema::AnySectionDataType_TFLiteWeights &&
+        type != schema::AnySectionDataType_SP_Tokenizer &&
+        type != schema::AnySectionDataType_HF_Tokenizer_Zlib) {
+      ABSL_LOG(ERROR) << "ModelType should only be provided for TFLiteModel, "
+                         "TFLiteWeights, SP_Tokenizer, or HF_Tokenizer_Zlib";
     }
   }
 
@@ -114,15 +116,29 @@ class LitertLmLoader {
   static absl::StatusOr<std::unique_ptr<LitertLmLoader>> Create(
       std::shared_ptr<MemoryMappedFile> memory_mapped_model_file);
 
-  // Returns the tokenizer section buffer for the SentencePiece tokenizer.
+  // Returns the tokenizer section buffer for the SentencePiece tokenizer
+  // for a given ModelType. This enables loading multiple tokenizers
+  // simultaneously (e.g., kTfLitePrefillDecode and kTfLiteTextEncoder)
+  // from the same LiteRT-LM bundle.
   // If not found, returns std::nullopt.
-  std::optional<litert::BufferRef<uint8_t>> GetSentencePieceTokenizer() {
-    return GetSectionBuffer(BufferKey(schema::AnySectionDataType_SP_Tokenizer));
+  std::optional<litert::BufferRef<uint8_t>> GetSentencePieceTokenizer(
+      ModelType model_type = ModelType::kTfLitePrefillDecode) {
+    auto buf = GetSectionBuffer(
+        BufferKey(schema::AnySectionDataType_SP_Tokenizer, model_type));
+    if (!buf.has_value() && model_type == ModelType::kTfLitePrefillDecode) {
+      buf =
+          GetSectionBuffer(BufferKey(schema::AnySectionDataType_SP_Tokenizer));
+    }
+    return buf;
   }
 
-  // Returns the tokenizer section buffer for the HuggingFace tokenizer.
+  // Returns the tokenizer section buffer for the HuggingFace tokenizer
+  // for a given ModelType. This enables loading multiple tokenizers
+  // simultaneously (e.g., kTfLitePrefillDecode and kTfLiteTextEncoder)
+  // from the same LiteRT-LM bundle.
   // If not found, returns std::nullopt.
-  std::optional<litert::OwningBufferRef<uint8_t>> GetHuggingFaceTokenizer();
+  std::optional<litert::OwningBufferRef<uint8_t>> GetHuggingFaceTokenizer(
+      ModelType model_type = ModelType::kTfLitePrefillDecode);
 
   // Returns the TFLite model section buffer.
   litert::BufferRef<uint8_t> GetTFLiteModel(ModelType model_type) {
