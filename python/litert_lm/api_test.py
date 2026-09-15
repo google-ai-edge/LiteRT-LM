@@ -20,6 +20,7 @@ import pathlib
 import re
 import shutil
 import subprocess
+import tempfile
 import litert_lm
 
 
@@ -208,7 +209,9 @@ def verify_gpu_suite(model_path: pathlib.Path):
   print("------------------------------------------------")
   with (
       litert_lm.Engine(
-          str(model_path), backend=litert_lm.Backend.GPU(), max_num_tokens=4096
+          str(model_path),
+          backend=litert_lm.Backend.GPU(),
+          max_num_tokens=4096,
       ) as engine,
       engine.create_conversation() as conversation,
   ):
@@ -219,15 +222,36 @@ def verify_gpu_suite(model_path: pathlib.Path):
   print("   ✅ GPU Hardware Acceleration Passed!")
 
 
+def verify_npu_suite(model_path: pathlib.Path):
+  """Quick smoke test to ensure the NPU backend initializes correctly."""
+  print("------------------------------------------------")
+  print("🚀 Running NPU Backend Verification")
+  print("------------------------------------------------")
+  with (
+      litert_lm.Engine(
+          str(model_path),
+          backend=litert_lm.Backend.NPU(litert_dispatch_lib_dir=""),
+          max_num_tokens=4096,
+      ) as engine,
+      engine.create_conversation() as conversation,
+  ):
+    msg = conversation.send_message("What is the capital of France?")
+    text = msg["content"][0]["text"]
+    print(f"   NPU Response: '{text.strip()}'")
+    assert "paris" in text.lower(), f"NPU Failure: Got '{text}'"
+  print("   ✅ NPU Acceleration Passed!")
+
+
 def main():
   parser = argparse.ArgumentParser()
   parser.add_argument("--test-gpu", action="store_true", help="Run GPU tests")
+  parser.add_argument("--test-npu", action="store_true", help="Run NPU tests")
   args = parser.parse_args()
 
   litert_lm.set_min_log_severity(litert_lm.LogSeverity.INFO)
 
   # Target GCS model cached in temporary storage
-  model_dir = pathlib.Path("/tmp/litert_lm_models")
+  model_dir = pathlib.Path(tempfile.gettempdir()) / "litert_lm_models"
   model_dir.mkdir(parents=True, exist_ok=True)
   target_model = model_dir / "gemma-4-E2B-it.litertlm"
 
@@ -320,6 +344,9 @@ def main():
 
   if args.test_gpu:
     verify_gpu_suite(target_model)
+
+  if args.test_npu:
+    verify_npu_suite(target_model)
 
 
 if __name__ == "__main__":
