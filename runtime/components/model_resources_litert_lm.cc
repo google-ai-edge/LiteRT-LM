@@ -269,6 +269,10 @@ ModelResourcesLitertLm::GetWeightsSectionOffset(ModelType model_type) {
       BufferKey(schema::AnySectionDataType_TFLiteWeights, model_type));
 }
 
+bool ModelResourcesLitertLm::HasTFLiteWeights(ModelType model_type) const {
+  return litert_lm_loader_->HasTFLiteWeights(model_type);
+}
+
 absl::StatusOr<FileRegion>
 ModelResourcesLitertLm::GetTFLiteModelSectionFileRegion(
     ModelType model_type) {

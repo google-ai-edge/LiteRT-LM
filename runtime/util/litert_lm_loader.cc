@@ -26,6 +26,16 @@
 #include <variant>
 #include <vector>
 
+#if !defined(_WIN32)
+#include <unistd.h>
+
+#include <cerrno>
+#else
+#include <windows.h>
+
+#include <limits>
+#endif  // !defined(_WIN32)
+
 #include "absl/log/absl_check.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/memory/memory.h"  // from @com_google_absl
@@ -65,6 +75,60 @@ absl::StatusOr<std::unique_ptr<MemoryMappedFile>> CreateMemoryMapFromScopedFile(
   // such cross-file aliasing.
   return litert::lm::MemoryMappedFile::Create(platform_file, offset, size,
                                               /*key=*/"");
+}
+
+absl::Status ReadFromScopedFile(ScopedFile& scoped_file, uint64_t offset,
+                                size_t size, void* destination) {
+  if (!scoped_file.IsValid()) {
+    return absl::InvalidArgumentError("Invalid ScopedFile provided.");
+  }
+#if !defined(_WIN32)
+  int fd = scoped_file.file();
+  size_t remaining = size;
+  uint8_t* cursor = static_cast<uint8_t*>(destination);
+  off_t current_offset = static_cast<off_t>(offset);
+  while (remaining > 0) {
+    ssize_t read_bytes = pread(fd, cursor, remaining, current_offset);
+    if (read_bytes < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      return absl::ErrnoToStatus(errno, "pread failed for scoped file section");
+    }
+    if (read_bytes == 0) {
+      return absl::InvalidArgumentError(
+          "Unexpected EOF while reading scoped file section");
+    }
+    cursor += read_bytes;
+    remaining -= read_bytes;
+    current_offset += read_bytes;
+  }
+  return absl::OkStatus();
+#else
+  HANDLE handle = scoped_file.file();
+  LARGE_INTEGER li;
+  li.QuadPart = offset;
+  if (!SetFilePointerEx(handle, li, nullptr, FILE_BEGIN)) {
+    return absl::UnknownError("Failed to seek scoped file");
+  }
+  size_t remaining = size;
+  uint8_t* cursor = static_cast<uint8_t*>(destination);
+  while (remaining > 0) {
+    DWORD chunk = static_cast<DWORD>(
+        std::min<uint64_t>(remaining, std::numeric_limits<DWORD>::max()));
+    DWORD bytes_read = 0;
+    if (!ReadFile(handle, cursor, chunk, &bytes_read, nullptr)) {
+      return absl::UnknownError("Failed to read scoped file");
+    }
+    if (bytes_read == 0) {
+      return absl::InvalidArgumentError(
+          "Unexpected EOF while reading scoped file");
+    }
+    cursor += bytes_read;
+    remaining -= bytes_read;
+  }
+  return absl::OkStatus();
+#endif
 }
 
 }  // namespace
@@ -127,8 +191,22 @@ absl::Status LitertLmLoader::MapSection(BufferKey buffer_key,
                                         uint64_t begin_offset,
                                         uint64_t end_offset) {
   uint8_t* data = nullptr;
-  if (std::holds_alternative<std::shared_ptr<MemoryMappedFile>>(
-          model_source_)) {
+  uint64_t section_size = end_offset - begin_offset;
+
+  if (buffer_key.data_type == schema::AnySectionDataType_TFLiteModel &&
+      HasTFLiteWeights(buffer_key) &&
+      std::holds_alternative<std::shared_ptr<ScopedFile>>(model_source_)) {
+    // If this TFLiteModel section has an associated TFLiteWeights section,
+    // avoid memory mapping by reading the section into an owned in-memory
+    // buffer.
+    auto& model_file = *std::get<std::shared_ptr<ScopedFile>>(model_source_);
+    std::vector<uint8_t> buffer(section_size);
+    ABSL_RETURN_IF_ERROR(ReadFromScopedFile(model_file, begin_offset,
+                                            section_size, buffer.data()));
+    section_owned_buffers_[buffer_key] = std::move(buffer);
+    data = section_owned_buffers_[buffer_key].data();
+  } else if (std::holds_alternative<std::shared_ptr<MemoryMappedFile>>(
+                 model_source_)) {
     // If the loader was initialized with an existing memory-mapped file, the
     // entire file content is already mapped into memory. We can access any
     // section by adding its begin_offset to the base pointer of the mapped
@@ -160,7 +238,6 @@ absl::Status LitertLmLoader::MapSection(BufferKey buffer_key,
     data = static_cast<uint8_t*>(memory_mapped_file->data()) + alignment_gap;
   }
 
-  uint64_t section_size = end_offset - begin_offset;
   section_buffers_[buffer_key] = BufferRef<uint8_t>(data, section_size);
 
   return absl::OkStatus();

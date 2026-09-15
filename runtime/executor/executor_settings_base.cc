@@ -235,13 +235,16 @@ absl::StatusOr<std::shared_ptr<ScopedFile>> ModelAssets::GetOrCreateScopedFile()
   if (HasScopedFile()) {
     return scoped_file_;
   }
+  if (!path_.empty()) {
+    ABSL_ASSIGN_OR_RETURN(auto scoped_file, ScopedFile::Open(path_));
+    return std::make_shared<ScopedFile>(std::move(scoped_file));
+  }
   if (HasMemoryMappedFile()) {
     return absl::InvalidArgumentError(
         "Cannot create ScopedFile from MemoryMappedFile.");
   }
 
-  ABSL_ASSIGN_OR_RETURN(auto scoped_file, ScopedFile::Open(path_));
-  return std::make_shared<ScopedFile>(std::move(scoped_file));
+  return absl::InvalidArgumentError("Assets do not have a valid file source.");
 }
 
 std::ostream& operator<<(std::ostream& os, const ModelAssets& model_assets) {

@@ -221,6 +221,24 @@ class LitertLmLoader {
         BufferKey(schema::AnySectionDataType_EmbeddingMetadataProto));
   }
 
+  // Returns true if an associated TFLiteWeights section exists for the given
+  // ModelType.
+  bool HasTFLiteWeights(ModelType model_type) const {
+    return section_locations_.contains(
+        BufferKey(schema::AnySectionDataType_TFLiteWeights, model_type));
+  }
+
+  // Returns true if an associated TFLiteWeights section exists for the given
+  // BufferKey.
+  bool HasTFLiteWeights(const BufferKey& buffer_key) const {
+    if (buffer_key.model_type.has_value()) {
+      return section_locations_.contains(BufferKey(
+          schema::AnySectionDataType_TFLiteWeights, *buffer_key.model_type));
+    }
+    return section_locations_.contains(
+        BufferKey(schema::AnySectionDataType_TFLiteWeights));
+  }
+
   absl::StatusOr<std::pair<size_t, size_t>> GetSectionLocation(
       BufferKey buffer_key) const;
 
@@ -274,6 +292,10 @@ class LitertLmLoader {
   ::std::unordered_map<BufferKey, std::unique_ptr<MemoryMappedFile>,
                        BufferKeyHash>
       section_memory_mapped_files_ ABSL_GUARDED_BY(section_buffers_mutex_);
+  // In-memory buffers for sections loaded without mmap (e.g. TFLiteModel
+  // sections with associated external TFLiteWeights).
+  ::std::unordered_map<BufferKey, std::vector<uint8_t>, BufferKeyHash>
+      section_owned_buffers_ ABSL_GUARDED_BY(section_buffers_mutex_);
   // The section buffers. Unlike the section_memory_mapped_files_, these
   // buffers point to only the data of the each section, even on Windows.
   ::std::unordered_map<BufferKey, litert::BufferRef<uint8_t>, BufferKeyHash>

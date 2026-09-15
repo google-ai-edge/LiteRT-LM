@@ -198,6 +198,10 @@ class ModelResources {
   virtual absl::StatusOr<std::pair<size_t, size_t>> GetWeightsSectionOffset(
       ModelType model_type) = 0;
 
+  // Returns true if the model has an associated TFLiteWeights section for the
+  // given model type.
+  virtual bool HasTFLiteWeights(ModelType model_type) const { return false; }
+
   // Returns the region of the requested ModelType in the ModelResources.
   virtual absl::StatusOr<FileRegion> GetTFLiteModelSectionFileRegion(
       ModelType model_type) = 0;
