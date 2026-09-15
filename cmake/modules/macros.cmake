@@ -177,3 +177,53 @@ macro(try_generate_aggregate target)
         message(STATUS "[LiteRTLM] Aggregate filepath not found: ${_aggregate_path}")       
     endif()
 endmacro()
+
+macro(litertlm_scan_and_map_libs DEP_NAME SEARCH_DIR OUTPUT_LIST)
+    set(${OUTPUT_LIST} "")
+    if(WIN32)
+        file(GLOB_RECURSE _FOUND_LIBS
+            "${SEARCH_DIR}/*.lib"
+        )
+    elseif(APPLE)
+        file(GLOB_RECURSE _FOUND_LIBS
+            "${SEARCH_DIR}/*.a"
+            "${SEARCH_DIR}/*.dylib"
+        )
+    else()
+        file(GLOB_RECURSE _FOUND_LIBS
+            "${SEARCH_DIR}/*.a"
+            "${SEARCH_DIR}/*.so"
+        )
+    endif()
+
+    foreach(_LIB_PATH IN LISTS _FOUND_LIBS)
+        get_filename_component(_FILE_NAME "${_LIB_PATH}" NAME_WE)
+        string(REGEX REPLACE "^lib" "" _LIB_NAME "${_FILE_NAME}")
+        set(_MAPPED_STR "${DEP_NAME}::${_LIB_NAME}=${}${_FILE_NAME}")
+        list(APPEND ${OUTPUT_LIST} "${_MAPPED_STR}")
+    endforeach()
+endmacro()
+
+macro(litertlm_update_target_map_file DEP_NAME TARGET_MAP_LIST)
+    string(TOUPPER "${DEP_NAME}" _DEP_UPPER)
+    set(_VAR_NAME "LITERTLM_${_DEP_UPPER}_TARGET_MAP")
+    set(_OUTPUT_FILE "LITERTLM_${_DEP_UPPER}_PACKAGE_DIR/${DEP_NAME}_${LITERTLM_ORCHESTRATION_PHASE}_target_map.cmake")
+    set(_FILE_CONTENT "set(${_VAR_NAME}\n")
+
+    foreach(_MAP_ITEM IN LISTS ${TARGET_MAP_LIST})
+        string(APPEND _FILE_CONTENT "    \"${_MAP_ITEM}\"\n")
+    endforeach()
+
+    string(APPEND _FILE_CONTENT "    CACHE INTERNAL \"Mapping of ${DEP_NAME} targets to their corresponding library paths\"\n)\n")
+
+    if(EXISTS "${_OUTPUT_FILE}")
+        file(READ "${_OUTPUT_FILE}" _EXISTING_CONTENT)
+        if(NOT _EXISTING_CONTENT STREQUAL _FILE_CONTENT)
+            file(WRITE "${_OUTPUT_FILE}" "${_FILE_CONTENT}")
+            message(STATUS "[LiteRTLM] Updated existing target map for ${DEP_NAME} in ${_OUTPUT_FILE}")
+        endif()
+    else()
+        file(WRITE "${_OUTPUT_FILE}" "${_FILE_CONTENT}")
+        message(STATUS "[LiteRTLM] Created new target map for ${DEP_NAME} in ${_OUTPUT_FILE}")
+    endif()
+endmacro()

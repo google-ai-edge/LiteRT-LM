@@ -18,6 +18,7 @@
 # ==============================================================================
 set(LITERTLM_ABSL_TARGET_MAP
     "absl::base=${LITERTLM_ABSL_LIB_DIR}/libabsl_base.a"
+    "absl::base_cpu_detect=${LITERTLM_ABSL_LIB_DIR}/libabsl_base_cpu_detect.a"
     "absl::city=${LITERTLM_ABSL_LIB_DIR}/libabsl_city.a"
     "absl::civil_time=${LITERTLM_ABSL_LIB_DIR}/libabsl_civil_time.a"
     "absl::clock_interface=${LITERTLM_ABSL_LIB_DIR}/libabsl_clock_interface.a"
@@ -29,7 +30,6 @@ set(LITERTLM_ABSL_TARGET_MAP
     "absl::cordz_sample_token=${LITERTLM_ABSL_LIB_DIR}/libabsl_cordz_sample_token.a"
     "absl::crc32c=${LITERTLM_ABSL_LIB_DIR}/libabsl_crc32c.a"
     "absl::crc_cord_state=${LITERTLM_ABSL_LIB_DIR}/libabsl_crc_cord_state.a"
-    "absl::crc_cpu_detect=${LITERTLM_ABSL_LIB_DIR}/libabsl_crc_cpu_detect.a"
     "absl::crc_internal=${LITERTLM_ABSL_LIB_DIR}/libabsl_crc_internal.a"
     "absl::debugging_internal=${LITERTLM_ABSL_LIB_DIR}/libabsl_debugging_internal.a"
     "absl::decode_rust_punycode=${LITERTLM_ABSL_LIB_DIR}/libabsl_decode_rust_punycode.a"
@@ -52,6 +52,7 @@ set(LITERTLM_ABSL_TARGET_MAP
     "absl::flags_usage_internal=${LITERTLM_ABSL_LIB_DIR}/libabsl_flags_usage_internal.a"
     "absl::generic_printer_internal=${LITERTLM_ABSL_LIB_DIR}/libabsl_generic_printer_internal.a"
     "absl::graphcycles_internal=${LITERTLM_ABSL_LIB_DIR}/libabsl_graphcycles_internal.a"
+    "absl::hardening=${LITERTLM_ABSL_LIB_DIR}/libabsl_hardening.a"
     "absl::hash=${LITERTLM_ABSL_LIB_DIR}/libabsl_hash.a"
     "absl::hashtable_profiler=${LITERTLM_ABSL_LIB_DIR}/libabsl_hashtable_profiler.a"
     "absl::hashtablez_sampler=${LITERTLM_ABSL_LIB_DIR}/libabsl_hashtablez_sampler.a"

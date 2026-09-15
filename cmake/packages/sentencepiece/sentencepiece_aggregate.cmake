@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-include(${LITERTLM_SENTENCEPIECE_PACKAGE_DIR}/sentencepiece_target_map.cmake)
+include("${LITERTLM_SENTENCEPIECE_TARGET_MAP_PATH}")
 
 macro(generate_sentencepiece_aggregate)
     if(NOT TARGET LiteRTLM::sentencepiece::sentencepiece)

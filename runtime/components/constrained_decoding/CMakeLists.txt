@@ -508,6 +508,26 @@ target_link_libraries(runtime_components_constrained_decoding_composite_constrai
 )
 
 # ==============================================================================
+# Tool Utils
+# ==============================================================================
+add_litertlm_library(runtime_components_constrained_decoding_tool_utils STATIC
+  tool_utils.cc
+)
+add_library(LiteRTLM::Runtime::Components::ConstrainedDecoding::ToolUtils ALIAS runtime_components_constrained_decoding_tool_utils)
+
+target_include_directories(runtime_components_constrained_decoding_tool_utils
+  PRIVATE
+    "${LITERTLM_INCLUDE_PATHS}"
+)
+
+target_link_libraries(runtime_components_constrained_decoding_tool_utils
+  PUBLIC
+    LiteRTLM::Runtime::Util
+    LiteRTLM::Runtime::Components
+    LITERTLM_DEPS
+)
+
+# ==============================================================================
 # Folder Facade
 # ==============================================================================
 add_litertlm_library(runtime_components_constrained_decoding_libs INTERFACE)
@@ -536,6 +556,5 @@ target_link_libraries(runtime_components_constrained_decoding_libs INTERFACE
   LiteRTLM::Runtime::Components::ConstrainedDecoding::SuppressTokensConstraint
   LiteRTLM::Runtime::Components::ConstrainedDecoding::NoRepeatNgramConstraint
   LiteRTLM::Runtime::Components::ConstrainedDecoding::RepetitionPenaltyConstraint
+  LiteRTLM::Runtime::Components::ConstrainedDecoding::ToolUtils
 )
-
-

@@ -87,9 +87,30 @@ target_include_directories(runtime_executor_executor_settings_base
 
 target_link_libraries(runtime_executor_executor_settings_base
   PUBLIC
-    LiteRTLM::Runtime::Util::ScopedFile
-    # LiteRTLM::Runtime::Util::MemoryMappedFile
+    LiteRTLM::Runtime::Util
+    LITERTLM_DEPS
+)
 
+# ==============================================================================
+# Executor Stats
+# ==============================================================================
+add_litertlm_library(runtime_executor_executor_stats STATIC
+  executor_stats.cc
+)
+add_library(LiteRTLM::Runtime::Executor::ExecutorStats
+ALIAS runtime_executor_executor_stats)
+
+target_include_directories(runtime_executor_executor_stats
+  PUBLIC
+    ${LITERTLM_GENERATED_SRC_DIR}
+    ${LITERT_INCLUDE_DIR}
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+target_link_libraries(runtime_executor_executor_stats
+  PUBLIC
+    LiteRTLM::Runtime::Util
+    LiteRTLM::Runtime::Executor::LlmExecutorIoTypes
     LITERTLM_DEPS
 )
 
@@ -271,17 +292,16 @@ add_library(LiteRTLM::Runtime::Executor::LlmExecutorSettingsUtils
 
 target_include_directories(runtime_executor_llm_executor_settings_utils
   PUBLIC
-    ${LITERTLM_GENERATED_SRC_DIR}
-    ${LITERT_INCLUDE_DIR}
-    ${LITERTLM_INCLUDE_PATHS}
+    "${LITERTLM_GENERATED_SRC_DIR}"
+    "${LITERT_INCLUDE_DIR}"
+    "${LITERTLM_INCLUDE_PATHS}"
+    "${LITERTLM_LITERT_SRC_DIR}/experimental/custom_ops/gated_delta_net"
 )
 
 target_link_libraries(runtime_executor_llm_executor_settings_utils
   PUBLIC
-    LiteRTLM::Runtime::Executor::ExecutorSettingsBase
-    LiteRTLM::Runtime::Executor::LlmExecutorSettings
-    LiteRTLM::Runtime::Util::FileUtil
-    LiteRTLM::Runtime::Util::Logging
+    LiteRTLM::Runtime::Executor
+    LiteRTLM::Runtime::Util
     LITERTLM_DEPS
 )
 # ==============================================================================
@@ -552,10 +572,7 @@ target_include_directories(runtime_executor_embedding_litert_compiled_model_exec
 
 target_link_libraries(runtime_executor_embedding_litert_compiled_model_executor
   PUBLIC
-    LiteRTLM::Runtime::Executor::EmbeddingExecutorSettings
-    LiteRTLM::Runtime::Executor::ExecutorSettingsBase
-    LiteRTLM::Runtime::Executor::LitertCompiledModelExecutorUtils
-    LiteRTLM::Runtime::Executor::LlmExecutorIoTypes
+    LiteRTLM::Runtime::Executor
     LiteRTLM::Runtime::Components
     LiteRTLM::Runtime::Util
     LITERTLM_DEPS
@@ -597,6 +614,7 @@ target_link_libraries(runtime_executor_libs INTERFACE
   LiteRTLM::Runtime::Executor::AudioLitertCompiledModelExecutor
   LiteRTLM::Runtime::Executor::CommonUtils
   LiteRTLM::Runtime::Executor::ExecutorSettingsBase
+  LiteRTLM::Runtime::Executor::ExecutorStats
   LiteRTLM::Runtime::Executor::FakeLlmExecutor
   LiteRTLM::Runtime::Executor::LitertCompiledModelExecutorUtils
   LiteRTLM::Runtime::Executor::LlmExecutorIoTypes

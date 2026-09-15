@@ -61,4 +61,3 @@ macro(generate_absl_aggregate)
         message(STATUS "[LiteRTLM] Abseil aggregate has been generated.")
     endif()
 endmacro()
-

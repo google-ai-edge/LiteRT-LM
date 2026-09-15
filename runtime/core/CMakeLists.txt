@@ -141,6 +141,33 @@ target_link_libraries(runtime_core_session_advanced
     LITERTLM_DEPS
 )
 
+
+# ==============================================================================
+# Audio Session Advanced
+# ==============================================================================
+add_litertlm_library(runtime_core_audio_session_advanced STATIC
+  audio_session_advanced.cc
+)
+add_library(LiteRTLM::Runtime::Core::AudioSessionAdvanced ALIAS runtime_core_audio_session_advanced)
+
+target_include_directories(runtime_core_audio_session_advanced
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+target_link_libraries(runtime_core_audio_session_advanced
+  PUBLIC
+    LiteRTLM::Runtime::Core
+    LiteRTLM::Runtime::Components
+    LiteRTLM::Runtime::Engine
+    LiteRTLM::Runtime::Executor
+    LiteRTLM::Runtime::Framework
+    LiteRTLM::Runtime::Util
+    LITERTLM_DEPS
+)
+
+
 # ==============================================================================
 # Engine Advanced Impl
 # ==============================================================================
@@ -241,6 +268,7 @@ target_link_libraries(runtime_core_libs INTERFACE
   LiteRTLM::Runtime::Core::EmbeddingEngineImpl
   LiteRTLM::Runtime::Core::Pipeline
   LiteRTLM::Runtime::Core::SessionAdvanced
+  LiteRTLM::Runtime::Core::AudioSessionAdvanced
   LiteRTLM::Runtime::Core::SessionUtils
   LiteRTLM::Runtime::Core::Tasks
   LiteRTLM::Runtime::Core::CachedSession

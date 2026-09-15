@@ -33,6 +33,37 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(CMAKE_POLICY_VERSION_MINIMUM 3.20 CACHE STRING "Required CMake policy version" FORCE)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fpermissive" CACHE STRING "Required CXX flags" FORCE)
 
+if(CMAKE_CROSSCOMPILING)
+  set(_litertlm_cross_compile "ON")
+else()
+  set(_litertlm_cross_compile "OFF")
+endif()
+
+set(LITERTLM_CROSSCOMPILING "${_litertlm_cross_compile}" CACHE INTERNAL "LiteRTLM cross compile flag")
+
+set(ENV{VIRTUAL_ENV} "${LITERTLM_VENV_DIR}")
+
+if(LITERTLM_CROSS_COMPILE)
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  set(PYTHON3_LIB "")
+else()
+  find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
+  set(PYTHON3_LIB Python3::Python)
+endif()
+include_directories(SYSTEM "${LITERTLM_VENV_DIR}/include")
+
+message(STATUS "Using isolated Python: ${Python3_EXECUTABLE}")
+set(LITERTLM_ENV_WRAPPER 
+"VIRTUAL_ENV=${LITERTLM_VENV_DIR}"
+"PATH=${LITERTLM_VENV_DIR}/bin:$ENV{PATH}"
+CACHE INTERNAL "LiteRT-LM: Environment variables for uv virtual environment"
+)
+set(LITERTLM_UV_ARGS 
+"-DPython3_ROOT_DIR=${LITERTLM_VENV_DIR}"
+"-DPython3_FIND_VIRTUALENV=FIRST")
+
+
+
 if(NOT LITERTLM_PROJECT_ROOT)
     message(WARNING "LITERTLM_PROJECT_ROOT is not defined. Setting LITERTLM_PROJECT_ROOT to ${CMAKE_CURRENT_SOURCE_DIR}/../../..}")
     set(LITERTLM_PROJECT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../.." CACHE PATH "LiteRT-LM: Absolute path to the repository root")
@@ -42,6 +73,14 @@ set(CMAKE_SOURCE_DIR ${LITERTLM_PROJECT_ROOT} CACHE PATH
 message(DEBUG "[LiteRTLM] CMAKE_SOURCE_DIR: ${CMAKE_SOURCE_DIR}")
 
 # --- Setup ---
+set(LITERTLM_ENV_WRAPPER "${LITERTLM_ENV_WRAPPER}" CACHE INTERNAL
+    "LiteRT-LM: Environment variables for UV virtual environment")
+set(LITERTLM_UV_ARGS "${LITERTLM_UV_ARGS}" CACHE INTERNAL
+    "LiteRT-LM: Arguments for UV virtual environment")
+set(LITERTLM_VENV_DIR "${LITERTLM_VENV_DIR}" CACHE PATH 
+    "LiteRT-LM: Path to the uv virtual environment")
+set(LITERTLM_BUILD_COMMAND_ARGS "${LITERTLM_BUILD_COMMAND_ARGS}" CACHE INTERNAL
+    "LiteRT-LM: Arguments for the build command")
 set(LITERTLM_ORCHESTRATION_PHASE
     ${LITERTLM_ORCHESTRATION_PHASE} CACHE INTERNAL
     "LiteRT-LM: Phase of the super build" FORCE)
@@ -60,6 +99,7 @@ set(LITERTLM_PATCHES_DIR "${LITERTLM_CMAKE_DIR}/patches"
     CACHE PATH "LiteRT-LM: Directory for build patches")
 set(LITERTLM_SCRIPTS_DIR "${LITERTLM_CMAKE_DIR}/scripts"
     CACHE PATH "LiteRT-LM: Directory for internal build and automation scripts")
+
 set(LITERTLM_GENERATED_SRC_DIR "${CMAKE_BINARY_DIR}" 
     CACHE PATH "Root for generated code")
 set(LITERTLM_STAGING_DIR "${CMAKE_BINARY_DIR}/../tmp/lib" 
@@ -74,6 +114,10 @@ set(LITERTLM_INCLUDE_PATHS
   "${LITERTLM_GENERATED_SRC_DIR}"
   "${CMAKE_BINARY_DIR}"
   CACHE PATH "")
+
+set(LITERTLM_TARGET_MAP_PATH 
+    "${LITERTLM_CMAKE_PACKAGES_DIR}/litert_lm/${LITERTLM_ORCHESTRATION_PHASE}_target_map.cmake" 
+    CACHE PATH "")
 
 list(APPEND CMAKE_MODULE_PATH   "${LITERTLM_MODULES_DIR}")
 set(LITERTLM_GENERATORS_DIR "${LITERTLM_MODULES_DIR}/generators" CACHE PATH "")
@@ -152,10 +196,10 @@ include("${LITERTLM_MODULES_DIR}/macros.cmake")
 include("${LITERTLM_CMAKE_PACKAGES_DIR}/packages.cmake")
 
 if("${LITERTLM_ORCHESTRATION_PHASE}" STREQUAL "litert_lm")
-    set(LITERTLM_HOST_PROTOC "${LITERTLM_PREBUILD_PROTOC}" CACHE PATH "")
-    set(LITERTLM_HOST_PROTOC_BIN_DIR "${LITERTLM_PREBUILD_PROTOC_BIN_DIR}" CACHE PATH "")
-    set(LITERTLM_HOST_FLATC "${LITERTLM_PREBUILD_FLATC}" CACHE PATH "")
-    set(LITERTLM_HOST_FLATC_BIN_DIR "${LITERTLM_PREBUILD_FLATC_BIN_DIR}" CACHE PATH "")
+    set(LITERTLM_HOST_PROTOC "${LITERTLM_HOST_PROTOC}" CACHE PATH "")
+    set(LITERTLM_HOST_PROTOC_BIN_DIR "${LITERTLM_HOST_PROTOC_BIN_DIR}" CACHE PATH "")
+    set(LITERTLM_HOST_FLATC "${LITERTLM_HOST_FLATC}" CACHE PATH "")
+    set(LITERTLM_HOST_FLATC_BIN_DIR "${LITERTLM_HOST_FLATC_BIN_DIR}" CACHE PATH "")
 endif()
 
 # --- Targeted Prebuild Execution
@@ -197,6 +241,8 @@ if("${LITERTLM_ORCHESTRATION_PHASE}" STREQUAL "litert_lm")
     generate_src_files(LITERTLM_CORE_FILES ${ALL_SOURCE_FILES} ${ALL_HEADER_FILES})
     generate_src_files(LITERTLM_FLATBUFFERS_FILES ${ALL_SCHEMA_FILES})
     generate_src_files(LITERTLM_RUST_FILES ${ALL_RUST_FILES})
+
+
 
     add_custom_target(generator_complete
         COMMENT "--- ALL GENERATORS COMPLETE: RELEASING COMPILER GATE ---")
@@ -307,6 +353,8 @@ if("${LITERTLM_ORCHESTRATION_PHASE}" STREQUAL "litert_lm")
             antlr_lib
             LiteRTLM::nlohmann_json::nlohmann_json
             opencl_headers_lib
+
+            ${PYTHON3_LIB}
 
             ${_LITERTLM_SYSLIBS}
             ${_LITERTLM_LINK_GROUP_END}
