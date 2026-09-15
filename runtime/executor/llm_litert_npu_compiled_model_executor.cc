@@ -113,12 +113,8 @@ constexpr absl::string_view kv_cache_slice_c_root_name = kKvCacheSliceCRootName;
 constexpr char cache_k31[] = "kv_cache_k_31";
 constexpr char cache_k25[] = "kv_cache_k_25";
 constexpr char cache_v25[] = "kv_cache_v_25";
-constexpr char cache_k19[] = "kv_cache_k_19";
-constexpr char cache_v19[] = "kv_cache_v_19";
 constexpr char cache_k23[] = "kv_cache_k_23";
 constexpr char cache_v23[] = "kv_cache_v_23";
-constexpr char cache_k17[] = "kv_cache_k_17";
-constexpr char cache_v17[] = "kv_cache_v_17";
 }  // namespace
 
 LlmLiteRtNpuCompiledModelExecutor::~LlmLiteRtNpuCompiledModelExecutor() {
@@ -336,31 +332,6 @@ LlmLiteRtNpuCompiledModelExecutor::CreateTextDecoderInferenceContext(
         continue;
       }
 
-      // The last layer kv cache in the prefill signature has float32 elements,
-      // although it's not used in the model, CompiledModel will complain about
-      // the mismatched buffer size. So we need to correct the buffer size here,
-      // by creating a new buffer with the correct size.
-      // Note: For dynamic shape models,
-      // input_tensor_type->Bytes() returns an error on dynamic dimensions (-1),
-      // so we safely check HasValue().
-      auto input_tensor_type = text_decoder_compiled_model.GetInputTensorType(
-          prefill_signatures.prefill, key);
-      if (input_tensor_type.HasValue()) {
-        auto input_tensor_size = input_tensor_type->Bytes();
-        if (input_tensor_size.HasValue()) {
-          LITERT_ASSIGN_OR_RETURN(auto input_buffer_size, value.Size());
-          if (*input_tensor_size != input_buffer_size) {
-            LITERT_ASSIGN_OR_RETURN(
-                auto corrected_input_buffer,
-                text_decoder_compiled_model.CreateInputBuffer(
-                    prefill_signatures.prefill, key));
-            corrected_input_buffer.Clear();
-            LITERT_ASSIGN_OR_RETURN(prefill_input_buffers[key],
-                                    corrected_input_buffer.Duplicate());
-            continue;
-          }
-        }
-      }
       LITERT_ASSIGN_OR_RETURN(prefill_input_buffers[key], value.Duplicate());
     }
   }
@@ -1905,89 +1876,127 @@ absl::StatusOr<int> SampleLogitsSliceFromLockedPtr(
 // model types.
 absl::Status ApplyLegacyKvCacheWorkarounds(
     const CompiledModel& text_decoder_compiled_model,
-    const proto::LlmMetadata* llm_metadata,
+    absl::string_view prefill_signature, const proto::LlmMetadata* llm_metadata,
     absl::Span<const int> sorted_supported_context_sizes,
     bool has_per_layer_embeddings, int64_t kv_cache_init_value,
     bool enable_npu_debug_logging,
     InferenceContext& text_decoder_inference_context) {
-  if (has_per_layer_embeddings || sorted_supported_context_sizes.size() != 1) {
+  if (sorted_supported_context_sizes.size() != 1) {
     return absl::OkStatus();
   }
+
+  bool is_gemma3 = false;
+  bool is_gemma3n = false;
+  bool is_fast_vlm = false;
 
   // If the model specifies a known model type, only apply workarounds if it is
   // one of the legacy models that actually requires it.
   if (llm_metadata != nullptr && llm_metadata->has_llm_model_type()) {
     const auto& model_type = llm_metadata->llm_model_type();
-    bool needs_workaround =
-        model_type.has_gemma3() || model_type.has_fast_vlm();
+    is_gemma3 = model_type.has_gemma3();
+    is_gemma3n = model_type.has_gemma3n();
+    is_fast_vlm = model_type.has_fast_vlm();
+    bool needs_workaround = is_gemma3 || is_gemma3n || is_fast_vlm;
     if (!needs_workaround) {
+      return absl::OkStatus();
+    }
+  } else {
+    // Fallback when LlmModelType metadata is not present in legacy models:
+    if (has_per_layer_embeddings) {
+      is_gemma3n = true;
+    } else if (text_decoder_inference_context.prefill_input_buffers.contains(
+                   cache_k31)) {
+      // For models with 32 layers. Do nothing.
+      return absl::OkStatus();
+    } else if (text_decoder_inference_context.prefill_input_buffers.contains(
+                   cache_k25)) {
+      is_gemma3 = true;
+    } else if (text_decoder_inference_context.prefill_input_buffers.contains(
+                   cache_k23)) {
+      is_fast_vlm = true;
+    } else {
       return absl::OkStatus();
     }
   }
 
-  if (text_decoder_inference_context.prefill_input_buffers.contains(
-          cache_k31)) {
-    // For models with 32 layers. Do nothing.
-  } else if (text_decoder_inference_context.prefill_input_buffers.contains(
-                 cache_k25)) {
-    // Gemma3 specific fix:
-    //
-    // TODO(b/416702118): Buffers kv_cache_{k,v}_25 have float element type for
-    // the prefill signature but int16_t for the decode signature. Therefore,
-    // unlike for the other KV cache tensors, we can not re-use the same tensor
-    // during prefill and decode (because trying to register a tensor of element
-    // type float for the decode signature that expects it in int16_t will
-    // fail). Luckily these buffers are not used, so we can simply create new
-    // ones to satisfy the compiled model run API.  We can remove this
-    // workaround once we have a model that removes these buffers.
-    ABSL_LOG_IF(INFO, enable_npu_debug_logging)
-        << "Applying Gemma3 layer 25 KV cache workaround.";
-    LITERT_ASSIGN_OR_RETURN(auto buffer_k,
-                            text_decoder_compiled_model.CreateInputBuffer(
-                                kDecodeSignature, cache_k25));
-    LITERT_RETURN_IF_ERROR(FillKVCacheBuffer(buffer_k, kv_cache_init_value));
-    text_decoder_inference_context.decode_input_buffers[cache_k25] =
-        std::move(buffer_k);
-    LITERT_ASSIGN_OR_RETURN(auto buffer_v,
-                            text_decoder_compiled_model.CreateInputBuffer(
-                                kDecodeSignature, cache_v25));
-    LITERT_RETURN_IF_ERROR(FillKVCacheBuffer(buffer_v, kv_cache_init_value));
-    text_decoder_inference_context.decode_input_buffers[cache_v25] =
-        std::move(buffer_v);
-  } else if (text_decoder_inference_context.prefill_input_buffers.contains(
-                 cache_k23)) {
-    // Fast VLM model specific fix:
-    ABSL_LOG_IF(INFO, enable_npu_debug_logging)
-        << "Applying Fast VLM layer 23 KV cache workaround.";
-    LITERT_ASSIGN_OR_RETURN(auto buffer_k,
-                            text_decoder_compiled_model.CreateInputBuffer(
-                                kDecodeSignature, cache_k23));
-    LITERT_RETURN_IF_ERROR(FillKVCacheBuffer(buffer_k, kv_cache_init_value));
-    text_decoder_inference_context.decode_input_buffers[cache_k23] =
-        std::move(buffer_k);
-    LITERT_ASSIGN_OR_RETURN(auto buffer_v,
-                            text_decoder_compiled_model.CreateInputBuffer(
-                                kDecodeSignature, cache_v23));
-    LITERT_RETURN_IF_ERROR(FillKVCacheBuffer(buffer_v, kv_cache_init_value));
-    text_decoder_inference_context.decode_input_buffers[cache_v23] =
-        std::move(buffer_v);
-  } else if (text_decoder_inference_context.prefill_input_buffers.contains(
-                 cache_k17)) {
-    // Tiny Gemma 270M specific fix:
-    ABSL_LOG_IF(INFO, enable_npu_debug_logging)
-        << "Applying Tiny Gemma layer 17 KV cache workaround.";
-    LITERT_ASSIGN_OR_RETURN(auto buffer_k,
-                            text_decoder_compiled_model.CreateInputBuffer(
-                                kDecodeSignature, cache_k17));
-    LITERT_RETURN_IF_ERROR(FillKVCacheBuffer(buffer_k, kv_cache_init_value));
-    text_decoder_inference_context.decode_input_buffers[cache_k17] =
-        std::move(buffer_k);
-    LITERT_ASSIGN_OR_RETURN(auto buffer_v,
-                            text_decoder_compiled_model.CreateInputBuffer(
-                                kDecodeSignature, cache_v17));
-    LITERT_RETURN_IF_ERROR(FillKVCacheBuffer(buffer_v, kv_cache_init_value));
-    text_decoder_inference_context.decode_input_buffers[cache_v17] =
-        std::move(buffer_v);
+  // Workaround for mismatched prefill KV cache buffer sizes (e.g. float32
+  // tensors in prefill signature for unconnected layers in Gemma3 and Gemma3n):
+  auto correct_mismatched_prefill_buffers = [&]() -> absl::Status {
+    for (auto& [key, buffer] :
+         text_decoder_inference_context.prefill_input_buffers) {
+      auto input_tensor_type = text_decoder_compiled_model.GetInputTensorType(
+          prefill_signature, key);
+      if (input_tensor_type.HasValue()) {
+        auto input_tensor_size = input_tensor_type->Bytes();
+        if (input_tensor_size.HasValue()) {
+          LITERT_ASSIGN_OR_RETURN(auto input_buffer_size, buffer.Size());
+          if (*input_tensor_size != input_buffer_size) {
+            ABSL_LOG_IF(INFO, enable_npu_debug_logging)
+                << "Correcting mismatched prefill KV cache buffer for " << key;
+            LITERT_ASSIGN_OR_RETURN(
+                auto corrected_input_buffer,
+                text_decoder_compiled_model.CreateInputBuffer(prefill_signature,
+                                                              key));
+            corrected_input_buffer.Clear();
+            buffer = std::move(corrected_input_buffer);
+          }
+        }
+      }
+    }
+    return absl::OkStatus();
+  };
+
+  if (is_gemma3) {
+    LITERT_RETURN_IF_ERROR(correct_mismatched_prefill_buffers());
+    if (text_decoder_inference_context.prefill_input_buffers.contains(
+            cache_k25)) {
+      // Gemma3 specific fix:
+      //
+      // TODO(b/416702118): Buffers kv_cache_{k,v}_25 have float element type
+      // for the prefill signature but int16_t for the decode signature.
+      // Therefore, unlike for the other KV cache tensors, we can not re-use the
+      // same tensor during prefill and decode (because trying to register a
+      // tensor of element type float for the decode signature that expects it
+      // in int16_t will fail). Luckily these buffers are not used, so we can
+      // simply create new ones to satisfy the compiled model run API.  We can
+      // remove this workaround once we have a model that removes these buffers.
+      ABSL_LOG_IF(INFO, enable_npu_debug_logging)
+          << "Applying Gemma3 layer 25 KV cache workaround.";
+      LITERT_ASSIGN_OR_RETURN(auto buffer_k,
+                              text_decoder_compiled_model.CreateInputBuffer(
+                                  kDecodeSignature, cache_k25));
+      LITERT_RETURN_IF_ERROR(FillKVCacheBuffer(buffer_k, kv_cache_init_value));
+      text_decoder_inference_context.decode_input_buffers[cache_k25] =
+          std::move(buffer_k);
+      LITERT_ASSIGN_OR_RETURN(auto buffer_v,
+                              text_decoder_compiled_model.CreateInputBuffer(
+                                  kDecodeSignature, cache_v25));
+      LITERT_RETURN_IF_ERROR(FillKVCacheBuffer(buffer_v, kv_cache_init_value));
+      text_decoder_inference_context.decode_input_buffers[cache_v25] =
+          std::move(buffer_v);
+    }
+  } else if (is_gemma3n) {
+    LITERT_RETURN_IF_ERROR(correct_mismatched_prefill_buffers());
+  } else if (is_fast_vlm) {
+    LITERT_RETURN_IF_ERROR(correct_mismatched_prefill_buffers());
+    if (text_decoder_inference_context.prefill_input_buffers.contains(
+            cache_k23)) {
+      // Fast VLM model specific fix:
+      ABSL_LOG_IF(INFO, enable_npu_debug_logging)
+          << "Applying Fast VLM layer 23 KV cache workaround.";
+      LITERT_ASSIGN_OR_RETURN(auto buffer_k,
+                              text_decoder_compiled_model.CreateInputBuffer(
+                                  kDecodeSignature, cache_k23));
+      LITERT_RETURN_IF_ERROR(FillKVCacheBuffer(buffer_k, kv_cache_init_value));
+      text_decoder_inference_context.decode_input_buffers[cache_k23] =
+          std::move(buffer_k);
+      LITERT_ASSIGN_OR_RETURN(auto buffer_v,
+                              text_decoder_compiled_model.CreateInputBuffer(
+                                  kDecodeSignature, cache_v23));
+      LITERT_RETURN_IF_ERROR(FillKVCacheBuffer(buffer_v, kv_cache_init_value));
+      text_decoder_inference_context.decode_input_buffers[cache_v23] =
+          std::move(buffer_v);
+    }
   }
 
   return absl::OkStatus();
@@ -2697,8 +2706,9 @@ LlmLiteRtNpuCompiledModelExecutor::Create(
   }
 
   LITERT_RETURN_IF_ERROR(ApplyLegacyKvCacheWorkarounds(
-      text_decoder_compiled_model, llm_metadata, sorted_supported_context_sizes,
-      has_per_layer_embeddings, kv_cache_init_value, enable_npu_debug_logging,
+      text_decoder_compiled_model, context_groups[0].prefill_signatures.prefill,
+      llm_metadata, sorted_supported_context_sizes, has_per_layer_embeddings,
+      kv_cache_init_value, enable_npu_debug_logging,
       context_groups[0].text_decoder_inference_context));
 
   LITERT_ASSIGN_OR_RETURN(auto npu_auxiliary_lrt_model,
