@@ -135,7 +135,7 @@ absl::Status HWKVCacheUpdate(
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& in_buffers,
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& out_buffers,
     const absl::flat_hash_map<absl::string_view, HWQuantParams>& quant_params,
-    bool enable_swa) {
+    bool enable_ringbuffer) {
   static constexpr absl::string_view kInputPos = "input_pos";
   if (!in_buffers.contains(kInputPos)) {
     return absl::InvalidArgumentError("Missing input_pos buffer");
@@ -303,10 +303,10 @@ absl::Status HWKVCacheUpdate(
           absl::StrCat("input_pos must be non-negative: ", start_pos));
     }
 
-    int64_t wp = enable_swa ? (start_pos % cache_seq) : start_pos;
+    int64_t wp = enable_ringbuffer ? (start_pos % cache_seq) : start_pos;
 
     if (wp + real_len > cache_seq) {
-      if (!enable_swa) {
+      if (!enable_ringbuffer) {
         return absl::OutOfRangeError("KV-cache update out of range");
       }
     }
@@ -684,13 +684,13 @@ absl::StatusOr<NpuKVCache> NpuKVCache::CreateForTest(
     KVCacheUpdateMethod method, const ::litert::CompiledModel* compiled_model,
     InferenceContext cache_update_context,
     absl::flat_hash_map<absl::string_view, HWQuantParams> kv_quant_params,
-    bool has_sliding_window_attention, int64_t kv_cache_init_value) {
+    bool uses_ringbuffer, int64_t kv_cache_init_value) {
   if (method == KVCacheUpdateMethod::kModel && compiled_model == nullptr) {
     return absl::InvalidArgumentError(
         "Compiled model is required when using kModel cache update method.");
   }
   return NpuKVCache(method, compiled_model, std::move(cache_update_context),
-                    std::move(kv_quant_params), has_sliding_window_attention,
+                    std::move(kv_quant_params), uses_ringbuffer,
                     kv_cache_init_value);
 }
 
@@ -708,7 +708,7 @@ absl::StatusOr<NpuKVCache> NpuKVCache::Create(
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
         verify_output_kv_cache_slice_buffers,
     absl::flat_hash_map<absl::string_view, HWQuantParams> kv_quant_params,
-    bool has_sliding_window_attention, int64_t kv_cache_init_value) {
+    bool uses_ringbuffer, int64_t kv_cache_init_value) {
   RET_CHECK(npu_auxiliary_compiled_model != nullptr)
       << "Auxiliary compiled model cannot be null for NpuKVCache";
 
@@ -819,7 +819,7 @@ absl::StatusOr<NpuKVCache> NpuKVCache::Create(
       std::move(verify_input_buffers), std::move(verify_output_buffers));
   return NpuKVCache(method, npu_auxiliary_compiled_model,
                     std::move(cache_update_context), std::move(kv_quant_params),
-                    has_sliding_window_attention, kv_cache_init_value);
+                    uses_ringbuffer, kv_cache_init_value);
 }
 
 absl::Status NpuKVCache::SetPrefillPositions(
@@ -887,7 +887,7 @@ absl::Status NpuKVCache::RunPrefill(absl::string_view signature) {
   if (method_ == KVCacheUpdateMethod::kWH) {
     return HWKVCacheUpdate(cache_update_context_.prefill_input_buffers,
                            cache_update_context_.prefill_output_buffers,
-                           kv_quant_params_, has_sliding_window_attention_);
+                           kv_quant_params_, uses_ringbuffer_);
   }
   absl::string_view sig =
       signature.empty() ? kPrefillCacheUpdateBase : signature;
@@ -903,7 +903,7 @@ absl::Status NpuKVCache::RunDecode(absl::string_view signature) {
   if (method_ == KVCacheUpdateMethod::kWH) {
     return HWKVCacheUpdate(cache_update_context_.decode_input_buffers,
                            cache_update_context_.decode_output_buffers,
-                           kv_quant_params_, has_sliding_window_attention_);
+                           kv_quant_params_, uses_ringbuffer_);
   }
   absl::string_view sig =
       signature.empty() ? CacheUpdateSignatures::kDecodeCacheUpdate : signature;
@@ -939,7 +939,7 @@ absl::Status NpuKVCache::CommitVerifiedKVCache(int start_step,
   if (method_ == KVCacheUpdateMethod::kWH) {
     return HWKVCacheUpdate(cache_update_context_.verify_input_buffers,
                            cache_update_context_.verify_output_buffers,
-                           kv_quant_params_, has_sliding_window_attention_);
+                           kv_quant_params_, uses_ringbuffer_);
   }
   absl::string_view sig =
       signature.empty() ? CacheUpdateSignatures::kVerifyCacheUpdate : signature;

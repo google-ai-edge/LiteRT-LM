@@ -314,7 +314,8 @@ TEST_F(NpuKVCacheTest, HWKVCacheUpdateSWADecode) {
   absl::flat_hash_map<absl::string_view, TensorBuffer> out_buffers;
 
   ASSERT_TRUE(
-      HWKVCacheUpdate(in_buffers, out_buffers, {}, /*enable_swa=*/true).ok());
+      HWKVCacheUpdate(in_buffers, out_buffers, {}, /*enable_ringbuffer=*/true)
+          .ok());
 
   auto lock_expected = TensorBufferScopedLock::Create<float>(
       in_buffers.at("kv_cache_k_0"), TensorBuffer::LockMode::kRead);
@@ -360,7 +361,8 @@ TEST_F(NpuKVCacheTest, HWKVCacheUpdateSWADecodeTransposed) {
   absl::flat_hash_map<absl::string_view, TensorBuffer> out_buffers;
 
   ASSERT_TRUE(
-      HWKVCacheUpdate(in_buffers, out_buffers, {}, /*enable_swa=*/true).ok());
+      HWKVCacheUpdate(in_buffers, out_buffers, {}, /*enable_ringbuffer=*/true)
+          .ok());
 
   auto lock_expected = TensorBufferScopedLock::Create<float>(
       in_buffers.at("kv_cache_k_0"), TensorBuffer::LockMode::kRead);
@@ -411,7 +413,8 @@ TEST_F(NpuKVCacheTest, HWKVCacheUpdateSWAPrefillWrap) {
   absl::flat_hash_map<absl::string_view, TensorBuffer> out_buffers;
 
   ASSERT_TRUE(
-      HWKVCacheUpdate(in_buffers, out_buffers, {}, /*enable_swa=*/true).ok());
+      HWKVCacheUpdate(in_buffers, out_buffers, {}, /*enable_ringbuffer=*/true)
+          .ok());
 
   auto lock_expected = TensorBufferScopedLock::Create<float>(
       in_buffers.at("kv_cache_k_0"), TensorBuffer::LockMode::kRead);
@@ -473,7 +476,8 @@ TEST_F(NpuKVCacheTest, HWKVCacheUpdateSWAPrefillWrapTransposed) {
   absl::flat_hash_map<absl::string_view, TensorBuffer> out_buffers;
 
   ASSERT_TRUE(
-      HWKVCacheUpdate(in_buffers, out_buffers, {}, /*enable_swa=*/true).ok());
+      HWKVCacheUpdate(in_buffers, out_buffers, {}, /*enable_ringbuffer=*/true)
+          .ok());
 
   auto lock_expected = TensorBufferScopedLock::Create<float>(
       in_buffers.at("kv_cache_k_0"), TensorBuffer::LockMode::kRead);
@@ -558,7 +562,8 @@ TEST_F(NpuKVCacheTest, HWKVCacheUpdateSWAPrefillWithValidMask) {
   absl::flat_hash_map<absl::string_view, TensorBuffer> out_buffers;
 
   ASSERT_TRUE(
-      HWKVCacheUpdate(in_buffers, out_buffers, {}, /*enable_swa=*/true).ok());
+      HWKVCacheUpdate(in_buffers, out_buffers, {}, /*enable_ringbuffer=*/true)
+          .ok());
 
   auto lock_expected = TensorBufferScopedLock::Create<float>(
       in_buffers.at("kv_cache_k_0"), TensorBuffer::LockMode::kRead);
@@ -959,7 +964,7 @@ TEST_F(NpuKVCacheTest, SingleHeadCopyAndClearKVCache) {
       auto kv_cache,
       NpuKVCache::CreateForTest(KVCacheUpdateMethod::kWH, nullptr,
                                 std::move(dummy_ctx), /*kv_quant_params=*/{},
-                                /*has_sliding_window_attention=*/false,
+                                /*uses_ringbuffer=*/false,
                                 /*kv_cache_init_value=*/kInitVal));
 
   LITERT_ASSERT_OK(
@@ -1106,7 +1111,7 @@ TEST_F(NpuKVCacheTest, CascadingMultiTierCopyKVCache) {
       auto kv_cache,
       NpuKVCache::CreateForTest(KVCacheUpdateMethod::kWH, nullptr,
                                 std::move(dummy_ctx), /*kv_quant_params=*/{},
-                                /*has_sliding_window_attention=*/false,
+                                /*uses_ringbuffer=*/false,
                                 /*kv_cache_init_value=*/kInitVal));
 
   // 4. Migrate Tier 0 (640) -> Tier 1 (1024)
@@ -1271,7 +1276,7 @@ TEST_F(NpuKVCacheTest, PartialMidBucketCopyKVCache) {
       auto kv_cache,
       NpuKVCache::CreateForTest(KVCacheUpdateMethod::kWH, nullptr,
                                 std::move(dummy_ctx), /*kv_quant_params=*/{},
-                                /*has_sliding_window_attention=*/false,
+                                /*uses_ringbuffer=*/false,
                                 /*kv_cache_init_value=*/kInitVal));
 
   LITERT_ASSERT_OK(kv_cache.CopyKVCache(src_map, dst_map,

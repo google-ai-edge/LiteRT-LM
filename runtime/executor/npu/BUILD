@@ -101,6 +101,7 @@ cc_test(
     deps = [
         ":llm_litert_npu_compiled_model_executor_utils",
         "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/log:absl_check",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings:string_view",

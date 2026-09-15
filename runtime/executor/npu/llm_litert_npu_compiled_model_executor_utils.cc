@@ -770,8 +770,9 @@ absl::StatusOr<std::vector<uint8_t>> CopyRawBytesFromTensorBuffer(
   }
 }
 
-bool DetectIsSwa(const absl::flat_hash_map<absl::string_view, TensorBuffer>&
-                     input_kv_cache_buffers) {
+bool DetectUsesRingbuffer(
+    const absl::flat_hash_map<absl::string_view, TensorBuffer>&
+        input_kv_cache_buffers) {
   std::set<int64_t> cache_seqs;
   for (const auto& [name, buffer] : input_kv_cache_buffers) {
     if (name.starts_with(kKvCacheKRootName) ||

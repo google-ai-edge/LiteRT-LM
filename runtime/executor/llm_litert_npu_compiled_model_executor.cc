@@ -2780,8 +2780,8 @@ LlmLiteRtNpuCompiledModelExecutor::Create(
                       first_verify_aux_sigs.rope, first_prefill_in,
                       first_decode_in, first_verify_in));
 
-  const bool has_sliding_window_attention =
-      DetectIsSwa(context_groups[0].input_kv_cache_buffers);
+  const bool uses_ringbuffer =
+      DetectUsesRingbuffer(context_groups[0].input_kv_cache_buffers);
 
   LITERT_ASSIGN_OR_RETURN(
       auto main_cache,
@@ -2797,7 +2797,7 @@ LlmLiteRtNpuCompiledModelExecutor::Create(
               .text_decoder_inference_context.decode_output_buffers,
           context_groups[0]
               .text_decoder_inference_context.verify_output_buffers,
-          kv_quant_params, has_sliding_window_attention, kv_cache_init_value));
+          kv_quant_params, uses_ringbuffer, kv_cache_init_value));
 
   // Initialize NpuEmbedder (encapsulating all PLE parsing and embedding lookup
   // manager).

@@ -186,9 +186,10 @@ absl::Status Fill(::litert::TensorBuffer& tensor_buffer, uint16_t value);
 absl::StatusOr<std::vector<uint8_t>> CopyRawBytesFromTensorBuffer(
     const ::litert::TensorBuffer& buffer);
 
-// Detect if the model uses Sliding Window Attention (SWA) by checking if
-// there are different KV cache sizes (mixed local/global attention).
-bool DetectIsSwa(
+// Detect if the model uses ringbuffer KV caches by checking if
+// there are different KV cache sizes across layers (mixed local/global
+// attention).
+bool DetectUsesRingbuffer(
     const absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
         input_kv_cache_buffers);
 

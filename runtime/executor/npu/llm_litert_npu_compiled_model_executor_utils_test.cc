@@ -24,6 +24,7 @@
 #include <vector>
 
 #include <gtest/gtest.h>
+#include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/log/absl_check.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_element_type.h"  // from @litert
@@ -480,6 +481,58 @@ TEST(ExecutorUtilsFormatFirstNTest, FormatFirstNFloat) {
   EXPECT_EQ(FormatFirstN<float>(data, 2), "[1.5, 2.5, ...]");
 }
 
+TEST_F(ExecutorUtilsTest, DetectUsesRingbuffer_UniformCacheSizesReturnsFalse) {
+  absl::flat_hash_map<absl::string_view, TensorBuffer> buffers;
+  std::vector<float> data(64, 0.0f);
+  TensorBuffer k0 =
+      CreateTensorBufferWithDims(data, ElementType::Float32, {1, 1, 16, 4});
+  TensorBuffer v0 =
+      CreateTensorBufferWithDims(data, ElementType::Float32, {1, 1, 16, 4});
+  TensorBuffer k1 =
+      CreateTensorBufferWithDims(data, ElementType::Float32, {1, 1, 16, 4});
+  TensorBuffer v1 =
+      CreateTensorBufferWithDims(data, ElementType::Float32, {1, 1, 16, 4});
+  buffers.emplace("kv_cache_k_0", std::move(k0));
+  buffers.emplace("kv_cache_v_0", std::move(v0));
+  buffers.emplace("kv_cache_k_1", std::move(k1));
+  buffers.emplace("kv_cache_v_1", std::move(v1));
+
+  EXPECT_FALSE(DetectUsesRingbuffer(buffers));
+}
+
+TEST_F(ExecutorUtilsTest, DetectUsesRingbuffer_MixedCacheSizesReturnsTrue) {
+  absl::flat_hash_map<absl::string_view, TensorBuffer> buffers;
+  std::vector<float> data_16(64, 0.0f);
+  std::vector<float> data_8(32, 0.0f);
+  TensorBuffer k0 =
+      CreateTensorBufferWithDims(data_16, ElementType::Float32, {1, 1, 16, 4});
+  TensorBuffer v0 =
+      CreateTensorBufferWithDims(data_16, ElementType::Float32, {1, 1, 16, 4});
+  TensorBuffer k1 =
+      CreateTensorBufferWithDims(data_8, ElementType::Float32, {1, 1, 8, 4});
+  TensorBuffer v1 =
+      CreateTensorBufferWithDims(data_8, ElementType::Float32, {1, 1, 8, 4});
+  buffers.emplace("kv_cache_k_0", std::move(k0));
+  buffers.emplace("kv_cache_v_0", std::move(v0));
+  buffers.emplace("kv_cache_k_1", std::move(k1));
+  buffers.emplace("kv_cache_v_1", std::move(v1));
+
+  EXPECT_TRUE(DetectUsesRingbuffer(buffers));
+}
+
+TEST_F(ExecutorUtilsTest, DetectUsesRingbuffer_IgnoresNonKvBuffers) {
+  absl::flat_hash_map<absl::string_view, TensorBuffer> buffers;
+  std::vector<float> data_16(64, 0.0f);
+  std::vector<float> data_8(32, 0.0f);
+  TensorBuffer k0 =
+      CreateTensorBufferWithDims(data_16, ElementType::Float32, {1, 1, 16, 4});
+  TensorBuffer non_kv =
+      CreateTensorBufferWithDims(data_8, ElementType::Float32, {1, 1, 8, 4});
+  buffers.emplace("kv_cache_k_0", std::move(k0));
+  buffers.emplace("other_buffer_0", std::move(non_kv));
+
+  EXPECT_FALSE(DetectUsesRingbuffer(buffers));
+}
 
 }  // namespace
 }  // namespace litert::lm

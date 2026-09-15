@@ -49,7 +49,7 @@ absl::Status HWKVCacheUpdate(
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& out_buffers,
     const absl::flat_hash_map<absl::string_view, HWQuantParams>& quant_params =
         {},
-    bool enable_swa = false);
+    bool enable_ringbuffer = false);
 
 enum class KVCacheUpdateMethod {
   kModel,
@@ -114,16 +114,14 @@ class NpuKVCache {
           verify_output_kv_cache_slice_buffers,
       absl::flat_hash_map<absl::string_view, HWQuantParams> kv_quant_params =
           {},
-      bool has_sliding_window_attention = false,
-      int64_t kv_cache_init_value = 0);
+      bool uses_ringbuffer = false, int64_t kv_cache_init_value = 0);
 
   static absl::StatusOr<NpuKVCache> CreateForTest(
       KVCacheUpdateMethod method, const ::litert::CompiledModel* compiled_model,
       InferenceContext cache_update_context,
       absl::flat_hash_map<absl::string_view, HWQuantParams> kv_quant_params =
           {},
-      bool has_sliding_window_attention = false,
-      int64_t kv_cache_init_value = 0);
+      bool uses_ringbuffer = false, int64_t kv_cache_init_value = 0);
 
   void SetCompiledModel(const ::litert::CompiledModel* compiled_model) {
     compiled_model_ = compiled_model;
@@ -190,19 +188,19 @@ class NpuKVCache {
       KVCacheUpdateMethod method, const ::litert::CompiledModel* compiled_model,
       InferenceContext cache_update_context,
       absl::flat_hash_map<absl::string_view, HWQuantParams> kv_quant_params,
-      bool has_sliding_window_attention, int64_t kv_cache_init_value = 0)
+      bool uses_ringbuffer, int64_t kv_cache_init_value = 0)
       : method_(method),
         compiled_model_(compiled_model),
         cache_update_context_(std::move(cache_update_context)),
         kv_quant_params_(std::move(kv_quant_params)),
-        has_sliding_window_attention_(has_sliding_window_attention),
+        uses_ringbuffer_(uses_ringbuffer),
         kv_cache_init_value_(kv_cache_init_value) {}
 
   KVCacheUpdateMethod method_ = KVCacheUpdateMethod::kModel;
   const ::litert::CompiledModel* compiled_model_ = nullptr;
   InferenceContext cache_update_context_;
   absl::flat_hash_map<absl::string_view, HWQuantParams> kv_quant_params_;
-  bool has_sliding_window_attention_ = false;
+  bool uses_ringbuffer_ = false;
   int64_t kv_cache_init_value_ = 0;
 };
 
