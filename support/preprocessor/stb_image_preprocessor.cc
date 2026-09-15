@@ -15,15 +15,13 @@
 #include "support/preprocessor/stb_image_preprocessor.h"
 
 #include <cstddef>
-#include <cstdint>
 #include <memory>
-#include <string>
 #include <utility>
 #include <vector>
 
-#include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
@@ -34,14 +32,7 @@
 #include "support/preprocessor/image_preprocessor.h"
 #include "support/preprocessor/image_preprocessor_utils.h"
 #include "support/util/io_types.h"
-#include "support/util/status_macros.h"  // IWYU pragma: keep
-#ifndef STB_IMAGE_IMPLEMENTATION
-#define STB_IMAGE_IMPLEMENTATION
-#endif
 #include "stb_image.h"  // from @stb
-#ifndef STB_IMAGE_RESIZE_IMPLEMENTATION
-#define STB_IMAGE_RESIZE_IMPLEMENTATION
-#endif
 #include "stb_image_resize2.h"  // from @stb
 
 namespace litert::support {
@@ -68,9 +59,9 @@ absl::Status MaybeResizeImageWithSameAspectRatio(
   const int patch_height = parameter.GetPatchifyConfig()->patch_height;
   const int max_num_patches = parameter.GetPatchifyConfig()->max_num_patches;
 
-  ASSIGN_OR_RETURN(auto size,
-                   GetAspectRatioPreservingSize(
-                       width, height, parameter.GetPatchifyConfig().value()));
+  ABSL_ASSIGN_OR_RETURN(
+      auto size, GetAspectRatioPreservingSize(
+                     width, height, parameter.GetPatchifyConfig().value()));
   int new_height = size.first;
   int new_width = size.second;
 
@@ -126,8 +117,8 @@ absl::Status MaybeResizeImageWithSameAspectRatio(
 absl::StatusOr<InputImage> StbImagePreprocessor::Preprocess(
     const InputImage& input_image, const ImagePreprocessParameter& parameter) {
   if (input_image.IsTensorBuffer()) {
-    ASSIGN_OR_RETURN(auto processed_image_tensor,
-                     input_image.GetPreprocessedImageTensor());
+    ABSL_ASSIGN_OR_RETURN(auto processed_image_tensor,
+                          input_image.GetPreprocessedImageTensor());
     LITERT_ASSIGN_OR_RETURN(auto processed_image_tensor_with_reference,
                             processed_image_tensor->Duplicate());
     InputImage processed_image(
@@ -135,8 +126,8 @@ absl::StatusOr<InputImage> StbImagePreprocessor::Preprocess(
     return processed_image;
   }
 
-  ASSIGN_OR_RETURN(absl::string_view input_image_bytes,
-                   input_image.GetRawImageBytes());
+  ABSL_ASSIGN_OR_RETURN(absl::string_view input_image_bytes,
+                        input_image.GetRawImageBytes());
 
   const Dimensions& target_dimensions = parameter.GetTargetDimensions();
 
@@ -174,7 +165,7 @@ absl::StatusOr<InputImage> StbImagePreprocessor::Preprocess(
         {1, original_height, original_width, kDesiredChannels});
     std::vector<unsigned char> image_data(decoded_image,
                                           decoded_image + num_elements);
-    RETURN_IF_ERROR(MaybeResizeImageWithSameAspectRatio(
+    ABSL_RETURN_IF_ERROR(MaybeResizeImageWithSameAspectRatio(
         image_data, resized_image, updated_parameter));
   } else {
     // Fixed target dimensions: resize directly to the requested size.

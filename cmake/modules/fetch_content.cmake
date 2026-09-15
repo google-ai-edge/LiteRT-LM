@@ -226,9 +226,28 @@ FetchContent_Declare(
   SOURCE_DIR ${LITERTLM_STB_SRC_DIR}
 )
 FetchContent_Populate(stb_lib)
+
+# An stb header only emits its implementation in a translation unit that
+# defines the matching STB_*_IMPLEMENTATION macro before including it. Generate
+# that single translation unit here so consumers can simply include the
+# headers; if two of them defined the macros themselves the link would fail
+# with duplicate symbols.
+set(LITERTLM_STB_IMPL_SRC ${CMAKE_CURRENT_BINARY_DIR}/stb_impl/stb_impl.cc)
+file(CONFIGURE
+  OUTPUT ${LITERTLM_STB_IMPL_SRC}
+  CONTENT [[
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb_image.h"
+
+#define STB_IMAGE_RESIZE_IMPLEMENTATION
+#include "stb_image_resize2.h"
+]]
+  @ONLY
+)
+
 if(NOT TARGET stb_lib)
-  add_library(stb_lib INTERFACE)
-  target_include_directories(stb_lib INTERFACE ${LITERTLM_STB_SRC_DIR})
+  add_library(stb_lib STATIC ${LITERTLM_STB_IMPL_SRC})
+  target_include_directories(stb_lib PUBLIC ${LITERTLM_STB_SRC_DIR})
 endif()
 
 # --- ZLIB ---
