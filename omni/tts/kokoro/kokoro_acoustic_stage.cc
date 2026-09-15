@@ -30,6 +30,7 @@
 #include "absl/strings/str_format.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "omni/base/model_resources.h"
 #include "omni/base/model_utils.h"
@@ -40,60 +41,6 @@
 #include "omni/tts/kokoro/phonemizer.h"
 
 namespace litert::omni::tts {
-
-namespace {
-
-// Slices long phoneme token sequences into manageable chunks fitting within
-// the model's sequence length capacity, breaking at whitespace or punctuation
-// boundaries.
-std::vector<std::vector<int>> SliceTokenIds(const std::vector<int>& token_ids,
-                                            int max_capacity) {
-  if (token_ids.size() <= static_cast<size_t>(max_capacity)) {
-    return {token_ids};
-  }
-
-  std::vector<std::vector<int>> slices;
-  size_t start = 0;
-  while (start < token_ids.size()) {
-    size_t end = std::min(start + max_capacity, token_ids.size());
-    if (end < token_ids.size()) {
-      size_t split = end;
-      // Search backwards for a natural break: whitespace (' ') or punctuation
-      // (; : , . ! ?).
-      while (split > start + (max_capacity / kokoro::kSplitCapacityDivisor)) {
-        int id = token_ids[split - 1];
-        if (id == kokoro::kSpaceTokenId ||
-            (id >= kokoro::kMinPunctuationTokenId &&
-             id <= kokoro::kMaxPunctuationTokenId)) {
-          break;
-        }
-        split--;
-      }
-      if (split > start + (max_capacity / kokoro::kSplitCapacityDivisor)) {
-        end = split;
-      }
-    }
-
-    std::vector<int> slice;
-    // Reserve space for at least 2 tokens (BOS and EOS).
-    slice.reserve(std::max(2, static_cast<int>(end - start)));
-    // Each slice begins with a BOS token.
-    slice.push_back(kokoro::kBosTokenId);
-    if (token_ids[start] == kokoro::kBosTokenId) {
-      ++start;
-    }
-    slice.insert(slice.end(), token_ids.begin() + start,
-                 token_ids.begin() + end);
-    if (slice.back() != kokoro::kEosTokenId) {
-      slice.push_back(kokoro::kEosTokenId);
-    }
-    slices.push_back(std::move(slice));
-    start = end;
-  }
-  return slices;
-}
-
-}  // namespace
 
 absl::StatusOr<std::unique_ptr<KokoroAcousticStage>>
 KokoroAcousticStage::Create(
@@ -166,6 +113,36 @@ KokoroAcousticStage::Create(
       KokoroPhonemizer::Create(espeak_dir, stage->config_.language,
                                stage->config_.custom_lexicon));
 
+  // Derive static sequence and frame capacities from allocated tensor buffers.
+  LITERT_ASSIGN_OR_RETURN(
+      auto ids_type,
+      stage->acoustic_input_buffers_[stage->input_indices_.phoneme_ids]
+          .TensorType());
+  if (ids_type.ElementType() != ElementType::Int64) {
+    return absl::UnimplementedError(
+        "Kokoro acoustic stage requires int64 phoneme_ids; GPU-exported "
+        "(int32) acoustic models are not supported yet.");
+  }
+
+  LITERT_ASSIGN_OR_RETURN(
+      size_t ids_buf_bytes,
+      stage->acoustic_input_buffers_[stage->input_indices_.phoneme_ids]
+          .PackedSize());
+  stage->model_capacity_ = static_cast<int>(ids_buf_bytes / sizeof(int64_t));
+  if (stage->model_capacity_ <= 0) {
+    return absl::InternalError("Invalid phoneme_ids buffer capacity");
+  }
+
+  LITERT_ASSIGN_OR_RETURN(
+      size_t asr_buf_bytes,
+      stage->acoustic_output_buffers_[stage->output_indices_.acoustic_features]
+          .PackedSize());
+  stage->frame_capacity_ =
+      kokoro::FrameCapacityFromPackedSize(asr_buf_bytes);
+  if (stage->frame_capacity_ <= 0) {
+    return absl::InternalError("Invalid acoustic_features frame capacity");
+  }
+
   return stage;
 }
 
@@ -186,35 +163,42 @@ absl::Status KokoroAcousticStage::ScheduleInternal() {
   LITERT_ASSIGN_OR_RETURN(std::vector<int> full_token_ids,
                           phonemizer_->TextToPhonemeIds(input_text));
 
+  // If token IDs contain no actual phonetic content (only BOS and EOS, or
+  // empty), skip acoustic inference to avoid generating empty noise/glitches.
+  if (full_token_ids.size() <= 2) {
+    ABSL_VLOG(2) << "Skipping empty phoneme chunk: " << input_text;
+    return absl::OkStatus();
+  }
+
   // Step 2: Determine bucketing capacity and slice token IDs into sentence
   // chunks.
-  LITERT_ASSIGN_OR_RETURN(
-      auto ids_buf_bytes,
-      acoustic_input_buffers_[input_indices_.phoneme_ids].PackedSize());
-  const int model_capacity = static_cast<int>(ids_buf_bytes / sizeof(int64_t));
   const int bucket_size = config_.target_bucket > 0
-                              ? std::min(config_.target_bucket, model_capacity)
-                              : model_capacity;
+                              ? std::min(config_.target_bucket, model_capacity_)
+                              : model_capacity_;
   // Reserve 4 tokens because each acoustic slice input:
   // 1) Must start with BOS token and end with EOS token.
   // 2) Reserve headroom for potential punctuation and delimiter spaces, at
   //    beginning and end of slice.
-  const int max_capacity = std::max(1, bucket_size - 4);
-  std::vector<std::vector<int>> slices =
-      SliceTokenIds(full_token_ids, max_capacity);
+  const int token_capacity = std::max(1, bucket_size - 4);
+  const int frame_bound_capacity =
+      std::max(1, frame_capacity_ / kokoro::kFramesPerTokenBudget);
+  const int max_capacity = std::min(token_capacity, frame_bound_capacity);
+  ABSL_VLOG(1) << "Kokoro acoustic slice capacity: bucket=" << bucket_size
+               << " token_capacity=" << token_capacity
+               << " frame_capacity=" << frame_capacity_
+               << " effective=" << max_capacity;
+  std::vector<kokoro::TokenSlice> slices =
+      kokoro::SliceTokenIds(full_token_ids, max_capacity);
 
   // Step 3: Process each phoneme chunk through unified acoustic prediction.
-  for (const auto& token_ids : slices) {
-    int num_tokens = static_cast<int>(token_ids.size());
-    if (num_tokens == 0) num_tokens = 1;
-
+  for (const auto& slice : slices) {
+    const std::vector<int>& token_ids = slice.token_ids;
+    const int num_tokens = static_cast<int>(token_ids.size());
     const int seq_len = std::min(bucket_size, num_tokens);
 
-    // Prepare padded phoneme token IDs buffer of shape [1, bucket_size].
-    std::vector<int64_t> ids_i64(bucket_size, 0);
-    for (int i = 0; i < seq_len && i < bucket_size &&
-                    i < static_cast<int>(token_ids.size());
-         ++i) {
+    // Prepare padded phoneme token IDs buffer of shape [1, model_capacity_].
+    std::vector<int64_t> ids_i64(model_capacity_, 0);
+    for (int i = 0; i < seq_len; ++i) {
       ids_i64[i] = static_cast<int64_t>(token_ids[i]);
     }
 
@@ -228,7 +212,7 @@ absl::Status KokoroAcousticStage::ScheduleInternal() {
     const float* ref_s_decoder_ptr = ref_s_ptr;
     const float* ref_s_prosody_ptr = ref_s_ptr + kokoro::kStyleSliceDim;
 
-    const int active_len = std::min(seq_len, bucket_size);
+    const int active_len = seq_len;
     std::vector<int64_t> seq_len_vec = {static_cast<int64_t>(active_len)};
 
     // Step 4: Write input buffers for acoustic model inference.
@@ -251,9 +235,20 @@ absl::Status KokoroAcousticStage::ScheduleInternal() {
     LITERT_RETURN_IF_ERROR(
         acoustic_output_buffers_[output_indices_.speech_frame_length]
             .Read<int64_t>(absl::MakeSpan(speech_len_vec)));
-    const int l_speech =
-        std::min<int>(kokoro::kMaxSpeechFrames,
-                      std::max<int>(1, static_cast<int>(speech_len_vec[0])));
+    const int l_speech = std::clamp<int>(
+        static_cast<int>(speech_len_vec[0]), 1, frame_capacity_);
+
+    // The graph clamps internally, so a prediction that lands exactly on the
+    // capacity means the slice was almost certainly cut short. Surface it
+    // rather than dropping the audio silently.
+    if (speech_len_vec[0] >= frame_capacity_) {
+      ABSL_LOG(WARNING) << "Kokoro acoustic output saturated its frame capacity"
+                        << " (" << frame_capacity_ << " frames) with "
+                        << num_tokens
+                        << " tokens; speech may be truncated. Consider lowering"
+                        << " kFramesPerTokenBudget headroom or exporting the"
+                        << " model with a larger max_frames.";
+    }
 
     LITERT_ASSIGN_OR_RETURN(
         auto asr_packed_size,
@@ -288,6 +283,8 @@ absl::Status KokoroAcousticStage::ScheduleInternal() {
     output.ref_s_decoder.assign(ref_s_decoder_ptr,
                                 ref_s_decoder_ptr + kokoro::kStyleSliceDim);
     output.l_speech = l_speech;
+    output.join_before = slice.join_before;
+    output.join_after = slice.join_after;
 
     PushOutput(std::move(output));
   }

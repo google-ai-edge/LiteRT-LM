@@ -54,6 +54,9 @@ class KokoroVocoderStage : public Vocoder {
 
   ~KokoroVocoderStage() override;
 
+  // Model-static frame capacity derived in Create() from tensor buffers.
+  int frame_capacity() const { return frame_capacity_; }
+
   // Flushes remaining buffered audio frames and synthesizes audio.
   //
   // returns
@@ -112,6 +115,11 @@ class KokoroVocoderStage : public Vocoder {
   kiss_fftr_cfg fft_cfg_ = nullptr;
   // Precomputed inverse Hann synthesis window with overlap-add normalization.
   std::vector<float> inv_window_;
+
+  // Model-static frame capacity and integer width of speech_frame_length
+  // derived in Create() from tensor buffers.
+  int frame_capacity_ = 0;
+  bool speech_frame_length_is_int32_ = false;
 };
 
 }  // namespace litert::omni::tts

@@ -57,6 +57,11 @@ class KokoroAcousticStage
 
   ~KokoroAcousticStage() override = default;
 
+  // Model-static sequence and frame capacities derived in Create() from
+  // tensor buffers.
+  int model_capacity() const { return model_capacity_; }
+  int frame_capacity() const { return frame_capacity_; }
+
  protected:
   bool NeedScheduleInternal() const override {
     return text_source_.HasOutput();
@@ -104,6 +109,11 @@ class KokoroAcousticStage
 
   std::vector<TensorBuffer> acoustic_input_buffers_;
   std::vector<TensorBuffer> acoustic_output_buffers_;
+
+  // Model-static sequence and frame capacities derived in Create() from
+  // tensor buffers.
+  int model_capacity_ = 0;
+  int frame_capacity_ = 0;
 };
 
 }  // namespace litert::omni::tts

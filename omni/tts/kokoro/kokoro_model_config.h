@@ -15,9 +15,11 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_OMNI_TTS_KOKORO_KOKORO_MODEL_CONFIG_H_
 #define THIRD_PARTY_ODML_LITERT_LM_OMNI_TTS_KOKORO_KOKORO_MODEL_CONFIG_H_
 
+#include <optional>
 #include <string>
 
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
+#include "runtime/executor/executor_settings_base.h"
 
 namespace litert::omni::tts {
 
@@ -37,6 +39,13 @@ struct KokoroModelConfig {
   // Model filenames under model directory.
   std::string acoustic_file = "kokoro_acoustic.tflite";
   std::string vocoder_file = "kokoro_vocoder.tflite";
+  // Optional explicit backend overrides for acoustic and vocoder stages.
+  // Note: The Kokoro acoustic model currently requires int64 phoneme_ids and
+  // is supported on CPU (GPU acoustic models are not supported yet); if not
+  // specified, acoustic defaults to CPU. The vocoder defaults to the engine
+  // backend (supporting GPU acceleration).
+  std::optional<lm::Backend> acoustic_backend;
+  std::optional<lm::Backend> vocoder_backend;
   // Optional custom dictionary / pronunciation overrides.
   absl::flat_hash_map<std::string, std::string> custom_lexicon;
 };

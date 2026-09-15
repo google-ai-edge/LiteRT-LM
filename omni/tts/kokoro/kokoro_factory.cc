@@ -23,6 +23,7 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/str_format.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
@@ -39,27 +40,64 @@
 
 namespace litert::omni::tts {
 
+namespace {
+
+ModelOptions MakeModelOptions(absl::string_view model_dir,
+                              absl::string_view cache_dir, lm::Backend backend,
+                              int num_threads) {
+  ModelOptions options;
+  options.model_dir = model_dir;
+  options.cache_dir = cache_dir;
+  options.backend = backend;
+  options.num_threads = num_threads;
+  return options;
+}
+
+}  // namespace
+
 absl::Status InitKokoroResources(const KokoroModelConfig& config,
                                  absl::string_view model_folder,
                                  absl::string_view cache_dir,
                                  lm::Backend backend, int num_threads,
                                  ::litert::Environment& env,
                                  ModelResources& resources) {
-  ModelOptions model_options;
-  model_options.model_dir = model_folder;
-  model_options.cache_dir = cache_dir;
-  model_options.backend = backend;
-  model_options.num_threads = num_threads;
+  // The acoustic model is slower on GPU than on CPU in practice, so a GPU
+  // engine backend still runs it on CPU unless explicitly configured; only the
+  // vocoder follows the engine backend.
+  const lm::Backend acoustic_backend = config.acoustic_backend.value_or(
+      backend == lm::Backend::GPU ? lm::Backend::CPU : backend);
+  const lm::Backend vocoder_backend = config.vocoder_backend.value_or(backend);
 
+  ModelOptions acoustic_options = MakeModelOptions(
+      model_folder, cache_dir, acoustic_backend, num_threads);
   LITERT_ASSIGN_OR_RETURN(
       auto acoustic,
-      CreateCompiledModel(env, model_options, config.acoustic_file));
-  ABSL_RETURN_IF_ERROR(resources.AddCompiledModel(
-      "kokoro_acoustic", std::make_shared<CompiledModel>(std::move(acoustic))));
+      CreateCompiledModel(env, acoustic_options, config.acoustic_file));
 
+  ModelOptions vocoder_options =
+      MakeModelOptions(model_folder, cache_dir, vocoder_backend, num_threads);
   LITERT_ASSIGN_OR_RETURN(
       auto vocoder,
-      CreateCompiledModel(env, model_options, config.vocoder_file));
+      CreateCompiledModel(env, vocoder_options, config.vocoder_file));
+
+  // Verify that acoustic and vocoder models agree on frame capacity.
+  auto acoustic_type = acoustic.GetOutputTensorType("acoustic_features");
+  auto vocoder_type = vocoder.GetInputTensorType("acoustic_features");
+  if (acoustic_type && vocoder_type) {
+    auto acoustic_dims = acoustic_type->Layout().Dimensions();
+    auto vocoder_dims = vocoder_type->Layout().Dimensions();
+    if (!acoustic_dims.empty() && !vocoder_dims.empty() &&
+        acoustic_dims.back() != vocoder_dims.back()) {
+      return absl::FailedPreconditionError(absl::StrFormat(
+          "Kokoro acoustic model frame capacity (%d) does not match vocoder "
+          "frame capacity (%d). Both models must be exported with the same "
+          "frame capacity.",
+          acoustic_dims.back(), vocoder_dims.back()));
+    }
+  }
+
+  ABSL_RETURN_IF_ERROR(resources.AddCompiledModel(
+      "kokoro_acoustic", std::make_shared<CompiledModel>(std::move(acoustic))));
   ABSL_RETURN_IF_ERROR(resources.AddCompiledModel(
       "kokoro_vocoder", std::make_shared<CompiledModel>(std::move(vocoder))));
 
@@ -87,6 +125,14 @@ absl::StatusOr<TtsSession::Components> CreateKokoroComponents(
   // Stage 2: Neural vocoder and iSTFT audio synthesis.
   LITERT_ASSIGN_OR_RETURN(
       auto vocoder, KokoroVocoderStage::Create(acoustic.get(), resources));
+
+  if (acoustic->frame_capacity() != vocoder->frame_capacity()) {
+    return absl::FailedPreconditionError(absl::StrFormat(
+        "Kokoro acoustic stage frame capacity (%d) does not match vocoder "
+        "stage frame capacity (%d). Both models must be exported with the "
+        "same frame capacity.",
+        acoustic->frame_capacity(), vocoder->frame_capacity()));
+  }
 
   components.intermediate_stages.push_back(std::move(acoustic));
   components.vocoder = std::move(vocoder);
