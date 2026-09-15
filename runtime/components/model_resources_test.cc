@@ -24,6 +24,7 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "litert/cc/litert_buffer_ref.h"  // from @litert
 #include "runtime/components/model_resources_litert_lm.h"
+#include "runtime/components/model_resources_litert_lm_google.h"
 #include "runtime/components/model_resources_task.h"
 #include "runtime/util/litert_lm_loader.h"
 #include "runtime/util/model_asset_bundle_resources.h"
@@ -214,25 +215,21 @@ TEST(ModelResourcesTest, GetTFLiteModelSectionFileRegion) {
                        ModelResourcesLitertLm::Create(std::move(loader)));
 
   // Success case: model is present.
-  ASSERT_OK_AND_ASSIGN(
-      auto file_region,
-      model_resources->GetTFLiteModelSectionFileRegion(
-          ModelType::kTfLitePrefillDecode));
+  ASSERT_OK_AND_ASSIGN(auto file_region,
+                       model_resources->GetTFLiteModelSectionFileRegion(
+                           ModelType::kTfLitePrefillDecode));
   EXPECT_GT(file_region.offset, 0);
   EXPECT_GT(file_region.size, 0);
 
   // Compare with the size from GetTFLiteModelBuffer.
-  ASSERT_OK_AND_ASSIGN(
-      auto model_buffer,
-      model_resources->GetTFLiteModelBuffer(
-          ModelType::kTfLitePrefillDecode));
+  ASSERT_OK_AND_ASSIGN(auto model_buffer, model_resources->GetTFLiteModelBuffer(
+                                              ModelType::kTfLitePrefillDecode));
   EXPECT_EQ(file_region.size, model_buffer.size());
 
   // Error case: model type not found in the loader.
-  EXPECT_THAT(
-      model_resources->GetTFLiteModelSectionFileRegion(
-          ModelType::kTfLiteEmbedder),
-      testing::status::StatusIs(absl::StatusCode::kNotFound));
+  EXPECT_THAT(model_resources->GetTFLiteModelSectionFileRegion(
+                  ModelType::kTfLiteEmbedder),
+              testing::status::StatusIs(absl::StatusCode::kNotFound));
 }
 
 TEST(ModelTypeConversionTest, StringToModelType) {
@@ -297,6 +294,52 @@ TEST(ModelTypeConversionTest, ModelTypeToString) {
   EXPECT_EQ(ModelTypeToString(ModelType::kTfLiteTextEncoder),
             "TF_LITE_TEXT_ENCODER");
   EXPECT_EQ(ModelTypeToString(ModelType::kUnknown), "UNKNOWN");
+}
+
+TEST(ModelResourcesGoogleTest, GetSharedArtisanModelDataNotFound) {
+  const auto model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm.litertlm";
+  ASSERT_OK_AND_ASSIGN(auto model_file, ScopedFile::Open(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto loader,
+                       LitertLmLoader::Create(std::move(model_file)));
+  ASSERT_OK_AND_ASSIGN(
+      auto google_resources,
+      ::litert::lm::ModelResourcesLitertLmGoogle::Create(std::move(loader)));
+
+  EXPECT_THAT(google_resources->GetSharedArtisanModeldata(),
+              testing::status::StatusIs(absl::StatusCode::kNotFound));
+}
+
+TEST(ModelResourcesGoogleTest, GetSharedArtisanModelDataWeakPtrLifecycle) {
+  const auto model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/e2e_tests/data/"
+      "tiny_gemma_audio_75m_200m_artisan.litertlm";
+  ASSERT_OK_AND_ASSIGN(auto model_file, ScopedFile::Open(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto loader,
+                       LitertLmLoader::Create(std::move(model_file)));
+  ASSERT_OK_AND_ASSIGN(
+      auto google_resources,
+      ::litert::lm::ModelResourcesLitertLmGoogle::Create(std::move(loader)));
+
+  {
+    ASSERT_OK_AND_ASSIGN(auto model_data_1,
+                         google_resources->GetSharedArtisanModeldata());
+    ASSERT_NE(model_data_1, nullptr);
+
+    // When a second caller asks for it while model_data_1 is still alive,
+    // they share the exact same underlying ModelData instance.
+    ASSERT_OK_AND_ASSIGN(auto model_data_2,
+                         google_resources->GetSharedArtisanModeldata());
+    EXPECT_EQ(model_data_1.get(), model_data_2.get());
+  }
+
+  // Once both shared_ptr holders are destructed, the ModelData is destroyed.
+  // A subsequent request safely creates a fresh ModelData.
+  ASSERT_OK_AND_ASSIGN(auto model_data_3,
+                       google_resources->GetSharedArtisanModeldata());
+  ASSERT_NE(model_data_3, nullptr);
 }
 
 }  // namespace
