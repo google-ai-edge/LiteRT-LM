@@ -409,6 +409,9 @@ class LlmExecutorSettings : public ExecutorSettingsBase {
   const std::optional<AdvancedSettings>& GetAdvancedSettings() const {
     return advanced_settings_;
   }
+  std::optional<AdvancedSettings>& GetMutableAdvancedSettings() {
+    return advanced_settings_;
+  }
   void SetAdvancedSettings(const AdvancedSettings& advanced_settings) {
     advanced_settings_ = advanced_settings;
   }
