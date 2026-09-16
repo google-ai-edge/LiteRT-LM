@@ -113,8 +113,17 @@ class LitertLmLoader {
 
   // Creates a LitertLmLoader from an already memory-mapped model file.
   // This is useful when the file is managed externally.
+  //
+  // `scoped_file` is optional and does not affect how sections are loaded:
+  // sections are still served directly out of `memory_mapped_model_file`. It
+  // only backs `GetScopedFile()`, which callers need when a section has to be
+  // referenced by file descriptor rather than by pointer - most notably
+  // external weights, which LiteRT loads via
+  // `Options::SetExternalWeightScopedFile`. Pass it whenever a path or
+  // descriptor for the same file is available.
   static absl::StatusOr<std::unique_ptr<LitertLmLoader>> Create(
-      std::shared_ptr<MemoryMappedFile> memory_mapped_model_file);
+      std::shared_ptr<MemoryMappedFile> memory_mapped_model_file,
+      std::shared_ptr<ScopedFile> scoped_file = nullptr);
 
   // Returns the tokenizer section buffer for the SentencePiece tokenizer
   // for a given ModelType. This enables loading multiple tokenizers
@@ -236,8 +245,10 @@ class LitertLmLoader {
       : model_source_(std::move(shared_scoped_file)) {}
 
   explicit LitertLmLoader(
-      std::shared_ptr<MemoryMappedFile> memory_mapped_model_file)
-      : model_source_(std::move(memory_mapped_model_file)) {}
+      std::shared_ptr<MemoryMappedFile> memory_mapped_model_file,
+      std::shared_ptr<ScopedFile> scoped_file = nullptr)
+      : model_source_(std::move(memory_mapped_model_file)),
+        scoped_file_(std::move(scoped_file)) {}
   // Initializes the LitertLmLoader. Includes reading the model header and
   // recording the section locations for on-demand loading later.
   absl::Status Initialize();
@@ -253,6 +264,12 @@ class LitertLmLoader {
   // memory-mapped file.
   std::variant<std::shared_ptr<ScopedFile>, std::shared_ptr<MemoryMappedFile>>
       model_source_;
+
+  // An optional descriptor for the same file as `model_source_`, set only when
+  // `model_source_` holds a MemoryMappedFile. Sections are never read through
+  // it; it exists so `GetScopedFile()` can still hand out a descriptor for
+  // features that require one (e.g. external weights).
+  std::shared_ptr<ScopedFile> scoped_file_;
 
   // The header of the model file. Use this to understand what sections are
   // available and their offsets.

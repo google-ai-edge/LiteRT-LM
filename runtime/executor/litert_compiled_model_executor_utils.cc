@@ -133,7 +133,14 @@ BuildModelResourcesFromLitertLmFormat(const ModelAssets& model_assets,
   if (model_assets.HasMemoryMappedFile()) {
     ABSL_ASSIGN_OR_RETURN(auto memory_mapped_file,
                           model_assets.GetMemoryMappedFile());
-    ABSL_ASSIGN_OR_RETURN(loader, LitertLmLoader::Create(memory_mapped_file));
+    // Sections are served from the mapping, but some features (external
+    // weights) additionally need a descriptor for the same file. Attach one
+    // when we can; it is optional, so a failure here is not fatal.
+    auto scoped_file = model_assets.GetOrCreateScopedFile();
+    ABSL_ASSIGN_OR_RETURN(
+        loader,
+        LitertLmLoader::Create(memory_mapped_file,
+                               scoped_file.ok() ? *scoped_file : nullptr));
   } else {
     ABSL_ASSIGN_OR_RETURN(auto scoped_file,
                           model_assets.GetOrCreateScopedFile());

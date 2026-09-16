@@ -171,6 +171,9 @@ LitertLmLoader::GetScopedFile() {
   if (std::holds_alternative<std::shared_ptr<ScopedFile>>(model_source_)) {
     return *std::get<std::shared_ptr<ScopedFile>>(model_source_);
   }
+  if (scoped_file_ != nullptr) {
+    return *scoped_file_;
+  }
   return absl::InvalidArgumentError(
       "Model source is not a ScopedFile, cannot get ScopedFile.");
 }
@@ -179,6 +182,9 @@ absl::StatusOr<std::shared_ptr<ScopedFile>>
 LitertLmLoader::GetSharedScopedFile() {
   if (std::holds_alternative<std::shared_ptr<ScopedFile>>(model_source_)) {
     return std::get<std::shared_ptr<ScopedFile>>(model_source_);
+  }
+  if (scoped_file_ != nullptr) {
+    return scoped_file_;
   }
   return absl::InvalidArgumentError(
       "Model source is not a ScopedFile, cannot get ScopedFile.");
@@ -200,9 +206,10 @@ absl::StatusOr<std::unique_ptr<LitertLmLoader>> LitertLmLoader::Create(
 }
 
 absl::StatusOr<std::unique_ptr<LitertLmLoader>> LitertLmLoader::Create(
-    std::shared_ptr<MemoryMappedFile> memory_mapped_model_file) {
-  auto loader =
-      absl::WrapUnique(new LitertLmLoader(std::move(memory_mapped_model_file)));
+    std::shared_ptr<MemoryMappedFile> memory_mapped_model_file,
+    std::shared_ptr<ScopedFile> scoped_file) {
+  auto loader = absl::WrapUnique(new LitertLmLoader(
+      std::move(memory_mapped_model_file), std::move(scoped_file)));
   ABSL_RETURN_IF_ERROR(loader->Initialize());
   return std::move(loader);
 }

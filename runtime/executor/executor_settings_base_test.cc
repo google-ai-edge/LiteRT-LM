@@ -186,6 +186,24 @@ TEST(LlmExecutorConfigTest, ModelAssetsMemoryMapped) {
   oss << *model_assets;
   EXPECT_THAT(oss.str(), testing::HasSubstr("model_file memory mapped file"));
   EXPECT_THAT(oss.str(), testing::HasSubstr("FAKE_WEIGHTS_NONE"));
+
+  // Without path, GetOrCreateScopedFile on MemoryMappedFile should fail.
+  EXPECT_FALSE(model_assets->GetOrCreateScopedFile().ok());
+}
+
+TEST(LlmExecutorConfigTest, ModelAssetsMemoryMappedWithPath) {
+  const auto model_path = GetTestModelPath();
+  ASSERT_OK_AND_ASSIGN(auto memory_mapped_file,
+                       MemoryMappedFile::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(
+      auto model_assets,
+      ModelAssets::Create(std::move(memory_mapped_file), model_path));
+  EXPECT_TRUE(model_assets.HasMemoryMappedFile());
+  EXPECT_OK(model_assets.GetPath());
+  // With path, GetOrCreateScopedFile should succeed by opening the path.
+  ASSERT_OK_AND_ASSIGN(auto scoped_file, model_assets.GetOrCreateScopedFile());
+  ASSERT_NE(scoped_file, nullptr);
+  EXPECT_TRUE(scoped_file->IsValid());
 }
 
 TEST(LlmExecutorConfigTest, ModelAssetsDataStream) {
