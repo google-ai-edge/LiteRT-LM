@@ -80,27 +80,11 @@ TEST(GenericDataProcessorTest, ToMessageDefault) {
             {"content", {{{"type", "text"}, {"text", "test response"}}}}}));
 }
 
-TEST(GenericDataProcessorTest, ToMessageModelRole) {
-  ASSERT_OK_AND_ASSIGN(auto processor,
-                       GenericDataProcessor::Create(
-                           GenericDataProcessorConfig{.model_role = "model"}));
-
-  ASSERT_OK_AND_ASSIGN(
-      const Message message,
-      processor->ToMessage(Responses(TaskState::kProcessing, {"test response"}),
-                           std::monostate{}));
-
-  EXPECT_EQ(
-      message,
-      json({{"role", "model"},
-            {"content", {{{"type", "text"}, {"text", "test response"}}}}}));
-}
-
 TEST(GenericDataProcessorTest, ToTemplateInputNormalizesStringToTypedContent) {
   ASSERT_OK_AND_ASSIGN(
       auto processor,
       GenericDataProcessor::Create(
-          GenericDataProcessorConfig{.model_role = "model"},
+          GenericDataProcessorConfig{},
           PromptTemplateCapabilities{.requires_typed_content = false}));
   ASSERT_OK_AND_ASSIGN(const json template_input_1,
                        processor->MessageToTemplateInput(json(
@@ -122,7 +106,7 @@ TEST(GenericDataProcessorTest, ToTemplateInputTypedContent) {
   ASSERT_OK_AND_ASSIGN(
       auto processor,
       GenericDataProcessor::Create(
-          GenericDataProcessorConfig{.model_role = "model"},
+          GenericDataProcessorConfig{},
           PromptTemplateCapabilities{.requires_typed_content = true}));
   ASSERT_OK_AND_ASSIGN(const json template_input_1,
                        processor->MessageToTemplateInput(json(

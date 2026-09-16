@@ -16,7 +16,6 @@
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_CONVERSATION_MODEL_DATA_PROCESSOR_GENERIC_DATA_PROCESSOR_CONFIG_H_
 
 #include <optional>
-#include <string>
 
 #include "runtime/conversation/model_data_processor/multimodal_processor_helper.h"
 #include "support/preprocessor/audio_preprocessor.h"
@@ -47,11 +46,6 @@ struct MultimodalConfig {
 };
 
 struct GenericDataProcessorConfig {
-  std::string model_role = "assistant";
-  // If true, force the content from the model to be a string instead of an
-  // array. Some legacy templates only support string content.
-  bool force_string_content = false;
-
   // When set, the generic processor operates in multimodal mode
   std::optional<MultimodalConfig> multimodal;
 };

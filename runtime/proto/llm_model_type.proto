@@ -38,11 +38,7 @@ message LlmModelType {
 
 // The default model type for the generic model.
 message GenericModel {
-  // The model role to use for the model.
-  optional string model_role = 1;
-  // If true, force the content from the model to be a string instead of an
-  // array. Some legacy templates only support string content.
-  optional bool force_string_content = 2;
+  reserved 1, 2;
 
   // --- Multimodal Configurations ---
 

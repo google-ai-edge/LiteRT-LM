@@ -303,13 +303,6 @@ absl::StatusOr<DataProcessorConfig> CreateGenericDataProcessorConfig(
   GenericDataProcessorConfig config;
   proto::GenericModel generic_model = model_type.generic_model();
 
-  if (generic_model.has_model_role()) {
-    config.model_role = generic_model.model_role();
-  }
-  if (generic_model.has_force_string_content()) {
-    config.force_string_content = generic_model.force_string_content();
-  }
-
   // Parse multimodal config if enabled
   if (generic_model.image_enabled() || generic_model.audio_enabled()) {
     MultimodalConfig multi_config;

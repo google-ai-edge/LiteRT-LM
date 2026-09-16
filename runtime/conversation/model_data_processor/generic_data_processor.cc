@@ -81,15 +81,11 @@ absl::StatusOr<Message> GenericDataProcessor::ToMessageImpl(
     const Responses& responses,
     const GenericDataProcessorArguments& args) const {
   absl::string_view response_text = responses.GetTexts()[0];
-  nlohmann::ordered_json content;
-  if (GetConfig().force_string_content) {
-    content = response_text;
-  } else {
-    content = nlohmann::ordered_json::array(
-        {{{"type", "text"}, {"text", std::string(response_text)}}});
-  }
   return nlohmann::ordered_json::object(
-      {{"role", GetConfig().model_role}, {"content", content}});
+      {{"role", "assistant"},
+       {"content",
+        nlohmann::ordered_json::array(
+            {{{"type", "text"}, {"text", std::string(response_text)}}})}});
 }
 
 absl::StatusOr<ModelDataProcessor::SingleTurnTemplateRenderResult>
