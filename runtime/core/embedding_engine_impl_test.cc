@@ -18,6 +18,7 @@
 #include <cstddef>
 #include <filesystem>  // NOLINT: Required for path manipulation.
 #include <functional>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -68,8 +69,8 @@ namespace litert::lm {
 namespace {
 
 using ::litert::Environment;
-using ::litert::support::ImagePreprocessParameter;
 using ::litert::support::ImagePreprocessor;
+using ::litert::support::ImagePreprocessParameter;
 using ::litert::support::Tokenizer;
 using ::litert::support::TokenizerType;
 using ::testing::Contains;
@@ -77,6 +78,7 @@ using ::testing::ElementsAre;
 using ::testing::HasSubstr;
 using ::testing::Key;
 using ::testing::Return;
+using ::testing::SizeIs;
 using ::testing::status::StatusIs;
 
 constexpr absl::string_view kTestEmbeddingModelPath =
@@ -289,6 +291,164 @@ TEST(EmbeddingEngineImplTest,
   for (int length : text_sig_info->signature_lengths) {
     EXPECT_EQ(length, 128);
   }
+}
+
+// Regression test: min_input_length must reach text encoder signature
+// auto-selection on the streaming path, which used to drop it entirely.
+TEST(EmbeddingEngineImplTest,
+     CreateStreamingWeightsWithMetadataMinInputLengthAutoSelectsSignatures) {
+  const std::string& model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                   std::string(kTestEmbeddingModelPath))
+                                      .string();
+  ASSERT_OK_AND_ASSIGN(auto file_stream, FileDataStream::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(std::move(file_stream)));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+  ASSERT_FALSE(settings.GetMinInputLength().has_value());
+  proto::EmbeddingMetadata metadata;
+  metadata.set_min_input_length(128);
+  settings.GetMutableEmbeddingMetadata() = metadata;
+
+  ASSERT_OK_AND_ASSIGN(auto engine, EmbeddingEngineImpl::CreateStreamingWeights(
+                                        std::move(settings)));
+  ASSERT_NE(engine, nullptr);
+  const auto& text_sig_info = engine->GetSelectedTextSignaturesInfo();
+  ASSERT_TRUE(text_sig_info.has_value());
+  EXPECT_FALSE(text_sig_info->signature_names.empty());
+  for (int length : text_sig_info->signature_lengths) {
+    EXPECT_GE(length, 128);
+  }
+}
+
+TEST(EmbeddingEngineImplTest,
+     CreateStreamingWeightsWithSettingsMinInputLengthAutoSelectsSignatures) {
+  const std::string& model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                   std::string(kTestEmbeddingModelPath))
+                                      .string();
+  ASSERT_OK_AND_ASSIGN(auto file_stream, FileDataStream::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(std::move(file_stream)));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+  settings.SetMinInputLength(128);
+
+  ASSERT_OK_AND_ASSIGN(auto engine, EmbeddingEngineImpl::CreateStreamingWeights(
+                                        std::move(settings)));
+  ASSERT_NE(engine, nullptr);
+  const auto& text_sig_info = engine->GetSelectedTextSignaturesInfo();
+  ASSERT_TRUE(text_sig_info.has_value());
+  EXPECT_FALSE(text_sig_info->signature_names.empty());
+  for (int length : text_sig_info->signature_lengths) {
+    EXPECT_GE(length, 128);
+  }
+}
+
+TEST(EmbeddingEngineImplTest,
+     CreateStreamingWeightsWithInvalidMinInputLengthReturnsError) {
+  const std::string& model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                   std::string(kTestEmbeddingModelPath))
+                                      .string();
+  ASSERT_OK_AND_ASSIGN(auto file_stream, FileDataStream::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(std::move(file_stream)));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+  settings.SetMinInputLength(-1);
+
+  EXPECT_THAT(EmbeddingEngineImpl::CreateStreamingWeights(std::move(settings)),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST(EmbeddingEngineImplTest,
+     CreateStreamingWeightsWithMinGreaterThanMaxReturnsError) {
+  const std::string& model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                   std::string(kTestEmbeddingModelPath))
+                                      .string();
+  ASSERT_OK_AND_ASSIGN(auto file_stream, FileDataStream::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(std::move(file_stream)));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+  settings.SetMinInputLength(512);
+  settings.SetMaxInputLength(128);
+
+  EXPECT_THAT(EmbeddingEngineImpl::CreateStreamingWeights(std::move(settings)),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST(EmbeddingEngineImplTest,
+     CreateStreamingWeightsWithInvalidMaxInputLengthReturnsError) {
+  const std::string& model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                   std::string(kTestEmbeddingModelPath))
+                                      .string();
+  ASSERT_OK_AND_ASSIGN(auto file_stream, FileDataStream::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(std::move(file_stream)));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+  settings.SetMaxInputLength(-1);
+
+  EXPECT_THAT(EmbeddingEngineImpl::CreateStreamingWeights(std::move(settings)),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+// max_num_signatures alone has to trigger auto-selection: the web bindings set
+// it without necessarily setting either input length bound.
+TEST(EmbeddingEngineImplTest,
+     CreateStreamingWeightsWithMaxNumSignaturesLimitsSelection) {
+  const std::string& model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                   std::string(kTestEmbeddingModelPath))
+                                      .string();
+  ASSERT_OK_AND_ASSIGN(auto file_stream, FileDataStream::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(std::move(file_stream)));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+  ASSERT_FALSE(settings.GetMaxInputLength().has_value());
+  ASSERT_FALSE(settings.GetMinInputLength().has_value());
+  settings.SetMaxNumSignatures(1);
+
+  ASSERT_OK_AND_ASSIGN(auto engine, EmbeddingEngineImpl::CreateStreamingWeights(
+                                        std::move(settings)));
+  ASSERT_NE(engine, nullptr);
+  const auto& text_sig_info = engine->GetSelectedTextSignaturesInfo();
+  ASSERT_TRUE(text_sig_info.has_value());
+  EXPECT_THAT(text_sig_info->signature_names, SizeIs(1));
+
+  // The signature that survives is the longest one, so the input length the
+  // engine accepts is the same as it would be with no cap at all.
+  ASSERT_OK_AND_ASSIGN(auto uncapped_stream,
+                       FileDataStream::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(auto uncapped_assets,
+                       ModelAssets::Create(std::move(uncapped_stream)));
+  ASSERT_OK_AND_ASSIGN(
+      auto uncapped_settings,
+      EmbeddingEngineSettings::CreateDefault(uncapped_assets, Backend::CPU));
+  uncapped_settings.SetMaxInputLength(std::numeric_limits<int>::max());
+  ASSERT_OK_AND_ASSIGN(auto uncapped_engine,
+                       EmbeddingEngineImpl::CreateStreamingWeights(
+                           std::move(uncapped_settings)));
+  const auto& uncapped_info = uncapped_engine->GetSelectedTextSignaturesInfo();
+  ASSERT_TRUE(uncapped_info.has_value());
+  EXPECT_EQ(text_sig_info->max_signature_length,
+            uncapped_info->max_signature_length);
+}
+
+TEST(EmbeddingEngineImplTest,
+     CreateStreamingWeightsWithInvalidMaxNumSignaturesReturnsError) {
+  const std::string& model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                   std::string(kTestEmbeddingModelPath))
+                                      .string();
+  ASSERT_OK_AND_ASSIGN(auto file_stream, FileDataStream::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(std::move(file_stream)));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+  settings.SetMaxNumSignatures(0);
+
+  EXPECT_THAT(EmbeddingEngineImpl::CreateStreamingWeights(std::move(settings)),
+              StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
 TEST(EmbeddingEngineImplTest,

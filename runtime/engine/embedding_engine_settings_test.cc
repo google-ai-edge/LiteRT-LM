@@ -247,5 +247,161 @@ TEST(EmbeddingEngineSettingsTest, ValidateInvalidCacheDir) {
   EXPECT_FALSE(settings.Validate().ok());
 }
 
+TEST(EmbeddingEngineSettingsTest, MaybeUpdateAndValidateAdoptsMetadata) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create("test_embedding_model.tflite"));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+  proto::EmbeddingMetadata metadata;
+  metadata.set_min_input_length(64);
+  metadata.set_max_input_length(512);
+
+  EXPECT_OK(settings.MaybeUpdateAndValidate(&metadata));
+
+  ASSERT_TRUE(settings.GetEmbeddingMetadata().has_value());
+  EXPECT_EQ(settings.GetMinInputLength(), 64);
+  EXPECT_EQ(settings.GetMaxInputLength(), 512);
+}
+
+TEST(EmbeddingEngineSettingsTest,
+     MaybeUpdateAndValidateCallerMetadataTakesPrecedence) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create("test_embedding_model.tflite"));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+  proto::EmbeddingMetadata caller_metadata;
+  caller_metadata.set_max_input_length(128);
+  settings.GetMutableEmbeddingMetadata() = caller_metadata;
+  proto::EmbeddingMetadata file_metadata;
+  file_metadata.set_max_input_length(512);
+
+  EXPECT_OK(settings.MaybeUpdateAndValidate(&file_metadata));
+
+  EXPECT_EQ(settings.GetMaxInputLength(), 128);
+}
+
+TEST(EmbeddingEngineSettingsTest,
+     MaybeUpdateAndValidateExplicitSettingTakesPrecedence) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create("test_embedding_model.tflite"));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+  settings.SetMaxInputLength(256);
+  settings.SetMinInputLength(32);
+  proto::EmbeddingMetadata metadata;
+  metadata.set_min_input_length(64);
+  metadata.set_max_input_length(512);
+
+  EXPECT_OK(settings.MaybeUpdateAndValidate(&metadata));
+
+  EXPECT_EQ(settings.GetMinInputLength(), 32);
+  EXPECT_EQ(settings.GetMaxInputLength(), 256);
+}
+
+TEST(EmbeddingEngineSettingsTest, MaybeUpdateAndValidateNullMetadataIsOk) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create("test_embedding_model.tflite"));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+
+  EXPECT_OK(settings.MaybeUpdateAndValidate(/*metadata_from_file=*/nullptr));
+
+  EXPECT_FALSE(settings.GetEmbeddingMetadata().has_value());
+  EXPECT_EQ(settings.GetMinInputLength(), std::nullopt);
+  EXPECT_EQ(settings.GetMaxInputLength(), std::nullopt);
+}
+
+TEST(EmbeddingEngineSettingsTest, MaybeUpdateAndValidateResolvesDefaults) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create("test_embedding_model.tflite"));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::GPU));
+
+  EXPECT_OK(settings.MaybeUpdateAndValidate(/*metadata_from_file=*/nullptr));
+
+  EXPECT_EQ(settings.GetMainExecutorSettings().GetActivationDataType(),
+            ActivationDataType::FLOAT16);
+}
+
+TEST(EmbeddingEngineSettingsTest, MaybeUpdateAndValidateValidatesBackend) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create("test_embedding_model.tflite"));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::GPU));
+
+  EXPECT_FALSE(settings
+                   .MaybeUpdateAndValidate(/*metadata_from_file=*/nullptr,
+                                           /*text_backend_constraint=*/"cpu")
+                   .ok());
+}
+
+TEST(EmbeddingEngineSettingsTest,
+     MaybeUpdateAndValidateRejectsNonPositiveMaxInputLength) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create("test_embedding_model.tflite"));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+  proto::EmbeddingMetadata metadata;
+  metadata.set_max_input_length(-1);
+
+  EXPECT_FALSE(settings.MaybeUpdateAndValidate(&metadata).ok());
+}
+
+TEST(EmbeddingEngineSettingsTest,
+     MaybeUpdateAndValidateRejectsNegativeMinInputLength) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create("test_embedding_model.tflite"));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+  settings.SetMinInputLength(-1);
+
+  EXPECT_FALSE(
+      settings.MaybeUpdateAndValidate(/*metadata_from_file=*/nullptr).ok());
+}
+
+TEST(EmbeddingEngineSettingsTest,
+     MaybeUpdateAndValidateRejectsMinGreaterThanMax) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create("test_embedding_model.tflite"));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+  settings.SetMinInputLength(512);
+  settings.SetMaxInputLength(128);
+
+  EXPECT_THAT(
+      settings.MaybeUpdateAndValidate(/*metadata_from_file=*/nullptr).message(),
+      HasSubstr("cannot be greater than max_input_length"));
+}
+
+TEST(EmbeddingEngineSettingsTest,
+     MaybeUpdateAndValidateRejectsNonPositiveMaxNumSignatures) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create("test_embedding_model.tflite"));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+  settings.SetMaxNumSignatures(0);
+
+  EXPECT_THAT(
+      settings.MaybeUpdateAndValidate(/*metadata_from_file=*/nullptr).message(),
+      HasSubstr("max_num_signatures must be positive"));
+}
+
+TEST(EmbeddingEngineSettingsTest, MaybeUpdateAndValidateIsIdempotent) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create("test_embedding_model.tflite"));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::GPU));
+  proto::EmbeddingMetadata metadata;
+  metadata.set_max_input_length(512);
+
+  // The streamed path calls this repeatedly as sections arrive.
+  EXPECT_OK(settings.MaybeUpdateAndValidate(&metadata));
+  EXPECT_OK(settings.MaybeUpdateAndValidate(&metadata));
+
+  EXPECT_EQ(settings.GetMaxInputLength(), 512);
+  EXPECT_EQ(settings.GetMainExecutorSettings().GetActivationDataType(),
+            ActivationDataType::FLOAT16);
+}
+
 }  // namespace
 }  // namespace litert::lm

@@ -21,6 +21,7 @@
 #include <utility>
 #include <vector>
 
+#include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/match.h"  // from @com_google_absl
@@ -90,6 +91,15 @@ std::optional<int> EmbeddingEngineSettings::GetMinInputLength() const {
 void EmbeddingEngineSettings::SetMinInputLength(
     std::optional<int> min_input_length) {
   min_input_length_ = min_input_length;
+}
+
+std::optional<int> EmbeddingEngineSettings::GetMaxNumSignatures() const {
+  return max_num_signatures_;
+}
+
+void EmbeddingEngineSettings::SetMaxNumSignatures(
+    std::optional<int> max_num_signatures) {
+  max_num_signatures_ = max_num_signatures;
 }
 
 std::optional<int> EmbeddingEngineSettings::GetVisionTokensPerImage() const {
@@ -228,7 +238,64 @@ absl::Status ValidateCacheDir(absl::string_view cache_dir) {
   return absl::OkStatus();
 }
 
+absl::Status ValidateSignatureSelection(std::optional<int> min_input_length,
+                                        std::optional<int> max_input_length,
+                                        std::optional<int> max_num_signatures) {
+  if (max_input_length.has_value() && *max_input_length <= 0) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "max_input_length must be positive, got: ", *max_input_length));
+  }
+  if (min_input_length.has_value() && *min_input_length < 0) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "min_input_length must be non-negative, got: ", *min_input_length));
+  }
+  if (min_input_length.has_value() && max_input_length.has_value() &&
+      *min_input_length > *max_input_length) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "min_input_length (", *min_input_length,
+        ") cannot be greater than max_input_length (", *max_input_length, ")"));
+  }
+  if (max_num_signatures.has_value() && *max_num_signatures <= 0) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "max_num_signatures must be positive, got: ", *max_num_signatures));
+  }
+  return absl::OkStatus();
+}
+
 }  // namespace
+
+absl::Status EmbeddingEngineSettings::MaybeUpdateAndValidate(
+    const proto::EmbeddingMetadata* absl_nullable metadata_from_file,
+    const std::optional<std::string>& text_backend_constraint,
+    const std::optional<std::string>& vision_backend_constraint,
+    const std::optional<std::string>& audio_backend_constraint,
+    const std::optional<std::string>& text_prefer_activation_type,
+    const std::optional<std::string>& vision_prefer_activation_type,
+    const std::optional<std::string>& audio_prefer_activation_type) {
+  // Unlike the LLM engine, metadata supplied by the caller wins over the
+  // model's, so only adopt the latter when nothing has been set yet.
+  if (metadata_from_file != nullptr && !metadata_.has_value()) {
+    metadata_ = *metadata_from_file;
+  }
+
+  // Default the input length bounds from metadata when not set in code.
+  if (metadata_.has_value()) {
+    if (!min_input_length_.has_value() && metadata_->has_min_input_length()) {
+      min_input_length_ = metadata_->min_input_length();
+    }
+    if (!max_input_length_.has_value() && metadata_->has_max_input_length()) {
+      max_input_length_ = metadata_->max_input_length();
+    }
+  }
+  LITERT_RETURN_IF_ERROR(ValidateSignatureSelection(
+      min_input_length_, max_input_length_, max_num_signatures_));
+
+  LITERT_RETURN_IF_ERROR(ResolveDefaults(text_prefer_activation_type,
+                                         vision_prefer_activation_type,
+                                         audio_prefer_activation_type));
+  return Validate(text_backend_constraint, vision_backend_constraint,
+                  audio_backend_constraint);
+}
 
 absl::Status EmbeddingEngineSettings::ResolveDefaults(
     const std::optional<std::string>& text_prefer_activation_type,
