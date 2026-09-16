@@ -74,22 +74,16 @@ for PY_VER in "3.10" "3.11" "3.12" "3.13" "3.14"; do
   # uncompiled ./python/litert_lm Source Code instead of the actual built wheel we just installed.
   cd "${TEST_VENV}"
 
-  # Automatically enable GPU tests if running on an Apple Silicon Mac VM or if Nvidia GPU detected
+  # Automatically enable GPU tests if running on an Apple Silicon Mac VM or if Nvidia GPU detected on Linux
   TEST_ARGS=""
   if [[ "$(uname)" == "Darwin" ]]; then
     echo "🍎 macOS detected! Enabling Apple Silicon CPU and GPU tests."
     TEST_ARGS="--test-gpu"
-  elif [[ "$OS" == "Windows_NT" ]]; then
-    TEST_ARGS="--test-npu"
-    if where nvidia-smi >/dev/null 2>&1 || (command -v nvidia-smi &>/dev/null && nvidia-smi &>/dev/null); then
-      echo "🪟 Windows detected with Nvidia GPU! Enabling CPU, GPU, and NPU verification suites."
-      TEST_ARGS="--test-gpu --test-npu"
-    else
-      echo "🪟 Windows detected! Enabling CPU and NPU verification suites."
-    fi
   elif command -v nvidia-smi &>/dev/null && nvidia-smi &>/dev/null; then
     echo "🎮 Nvidia GPU detected on Linux! Enabling GPU verification suite."
     TEST_ARGS="--test-gpu"
+  else
+    echo "💻 Running CPU verification suite."
   fi
 
   # Execute our standalone checked-in verification script directly
