@@ -90,6 +90,7 @@ class Engine(val engineConfig: EngineConfig) : AutoCloseable {
           mainBackendNumThreads,
           audioBackendNumThreads,
           @OptIn(ExperimentalApi::class) ExperimentalFlags.visualTokenBudget ?: -1,
+          engineConfig.activationDataType?.value ?: -1,
         )
     }
   }

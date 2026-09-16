@@ -160,7 +160,16 @@ sealed class Backend(val name: String) {
   class GOOGLE_TENSOR : Backend("GOOGLE_TENSOR_ARTISAN")
 }
 
-/** Activation data type for inference. */
+/**
+ * Supported activation data types for inference.
+ *
+ * Note: Support depends on the specific model architecture and target backend/delegate. Most models
+ * support [FLOAT16] and [FLOAT32] (when not overriding, GPU backends typically default to [FLOAT16]
+ * to optimize throughput and memory bandwidth, while CPU backends typically default to [FLOAT32]).
+ * Setting an activation data type not supported by the model or backend (e.g., [INT8] on a standard
+ * float model) will cause [Engine.initialize] to fail with an exception (e.g., tensor type mismatch
+ * or unsupported sampler).
+ */
 enum class ActivationDataType(val value: Int) {
   FLOAT32(0),
   FLOAT16(1),
@@ -184,8 +193,15 @@ enum class ActivationDataType(val value: Int) {
  * @property cacheDir The directory for placing cache files. It should be a directory with write
  *   access. If not set, it uses the directory of the [modelPath]. Set to ":nocache" to disable
  *   caching at all.
+ * @property activationDataType Optional activation data type override for inference (e.g., FLOAT32,
+ *   FLOAT16). When `null`, use the default value from the model or the engine (typically [FLOAT16]
+ *   for GPU backends and [FLOAT32] for CPU backends). Note: If the specified activation data type is
+ *   not supported by the model or backend, [Engine.initialize] will fail with an exception at
+ *   initialization time.
  */
-data class EngineConfig(
+data class EngineConfig
+@JvmOverloads
+constructor(
   val modelPath: String,
   val backend: Backend = Backend.CPU(),
   val visionBackend: Backend? = null,
@@ -193,6 +209,7 @@ data class EngineConfig(
   val maxNumTokens: Int? = null,
   val maxNumImages: Int? = null,
   val cacheDir: String? = null,
+  val activationDataType: ActivationDataType? = null,
 ) {
   init {
     require(maxNumTokens == null || maxNumTokens > 0) {
