@@ -263,6 +263,34 @@ TEST(EmbeddingEngineImplTest, CreateStreamingWeightsSuccess) {
   EXPECT_OK(EmbeddingEngineImpl::CreateStreamingWeights(std::move(settings)));
 }
 
+// Regression test: max_input_length coming from the embedding metadata must
+// reach text encoder signature auto-selection on the streaming path.
+TEST(EmbeddingEngineImplTest,
+     CreateStreamingWeightsWithMetadataMaxInputLengthAutoSelectsSignatures) {
+  const std::string& model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                   std::string(kTestEmbeddingModelPath))
+                                      .string();
+  ASSERT_OK_AND_ASSIGN(auto file_stream, FileDataStream::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(std::move(file_stream)));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+  ASSERT_FALSE(settings.GetMaxInputLength().has_value());
+  proto::EmbeddingMetadata metadata;
+  metadata.set_max_input_length(128);
+  settings.GetMutableEmbeddingMetadata() = metadata;
+
+  ASSERT_OK_AND_ASSIGN(auto engine, EmbeddingEngineImpl::CreateStreamingWeights(
+                                        std::move(settings)));
+  ASSERT_NE(engine, nullptr);
+  const auto& text_sig_info = engine->GetSelectedTextSignaturesInfo();
+  ASSERT_TRUE(text_sig_info.has_value());
+  EXPECT_FALSE(text_sig_info->signature_names.empty());
+  for (int length : text_sig_info->signature_lengths) {
+    EXPECT_EQ(length, 128);
+  }
+}
+
 TEST(EmbeddingEngineImplTest,
      CreateWithNullTokenizerAndTokenStrInMetadataSuccess) {
   const std::string& model_path = (std::filesystem::path(::testing::SrcDir()) /

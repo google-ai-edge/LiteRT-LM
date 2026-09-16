@@ -503,6 +503,17 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
         if (!settings.GetEmbeddingMetadata().has_value()) {
           settings.GetMutableEmbeddingMetadata() = embedding_metadata;
         }
+        // Default max_input_length from metadata if not explicitly set in
+        // settings, mirroring EmbeddingEngineImpl::Create. Read it back from
+        // settings rather than from the section we just parsed, so that
+        // caller-supplied metadata keeps taking precedence over the bundle's.
+        const std::optional<proto::EmbeddingMetadata>& resolved_metadata =
+            settings.GetEmbeddingMetadata();
+        if (!settings.GetMaxInputLength().has_value() &&
+            resolved_metadata.has_value() &&
+            resolved_metadata->max_input_length() != 0) {
+          settings.SetMaxInputLength(resolved_metadata->max_input_length());
+        }
         ABSL_LOG(INFO) << "EmbeddingMetadataProto processed.";
         break;
       }
@@ -738,6 +749,11 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
   if (!compiled_text_encoder_info.has_value()) {
     if (settings.GetMaxInputLength().has_value() &&
         !selected_text_signatures_info.has_value()) {
+      if (*settings.GetMaxInputLength() <= 0) {
+        return absl::InvalidArgumentError(
+            absl::StrCat("max_input_length must be positive, got: ",
+                         *settings.GetMaxInputLength()));
+      }
       ABSL_ASSIGN_OR_RETURN(
           auto text_sig_info,
           SelectTextEncoderSignatures(*streaming_resources,
