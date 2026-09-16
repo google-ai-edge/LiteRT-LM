@@ -201,6 +201,55 @@ absl::StatusOr<uint64_t> GetNumTokens(const ExecutorInputs& executor_inputs) {
   return span.size();
 }
 
+// Resolves metadata-derived defaults and validates `settings` against the
+// model, pulling the backend constraints and preferred activation types out of
+// `resources`. `metadata_from_file` may be null. Idempotent, so the streamed
+// path can call it again as each section arrives.
+absl::Status MaybeUpdateAndValidateSettings(
+    ModelResources& resources, EmbeddingEngineSettings& settings,
+    const proto::EmbeddingMetadata* metadata_from_file) {
+  return settings.MaybeUpdateAndValidate(
+      metadata_from_file,
+      resources.GetTFLiteModelBackendConstraint(ModelType::kTfLiteTextEncoder),
+      resources.GetTFLiteModelBackendConstraint(
+          ModelType::kTfLiteVisionEncoder),
+      resources.GetTFLiteModelBackendConstraint(
+          ModelType::kTfLiteAudioEncoderHw),
+      resources.GetTFLiteModelPreferActivationType(
+          ModelType::kTfLiteTextEncoder),
+      resources.GetTFLiteModelPreferActivationType(
+          ModelType::kTfLiteVisionEncoder),
+      resources.GetTFLiteModelPreferActivationType(
+          ModelType::kTfLiteAudioEncoderHw));
+}
+
+// Auto-selects the text encoder signatures to load when an input length bound
+// or a signature count cap is set, records them in the executor settings, and
+// returns what was selected. Returns nullopt when none of those is set, which
+// leaves every signature in the model loaded.
+//
+// Assumes the settings have already been validated by
+// EmbeddingEngineSettings::MaybeUpdateAndValidate.
+absl::StatusOr<std::optional<SelectedTextSignaturesInfo>>
+MaybeSelectTextEncoderSignatures(ModelResources& resources,
+                                 EmbeddingEngineSettings& settings) {
+  if (!settings.GetMaxInputLength().has_value() &&
+      !settings.GetMinInputLength().has_value() &&
+      !settings.GetMaxNumSignatures().has_value()) {
+    return std::nullopt;
+  }
+  const int target_max_length =
+      settings.GetMaxInputLength().value_or(std::numeric_limits<int>::max());
+  LITERT_ASSIGN_OR_RETURN(
+      auto text_sig_info,
+      SelectTextEncoderSignatures(resources, target_max_length,
+                                  settings.GetMinInputLength(),
+                                  settings.GetMaxNumSignatures()));
+  settings.GetMutableMainExecutorSettings().SetSelectedSignatures(
+      text_sig_info.signature_names);
+  return text_sig_info;
+}
+
 }  // namespace
 
 // static
@@ -234,27 +283,17 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
     }
   }
 
-  // Initialize metadata.
+  // Resolve metadata-derived defaults and validate, then read the resolved
+  // metadata back out of the settings.
+  const proto::EmbeddingMetadata* metadata_from_file = nullptr;
+  auto resources_metadata = resources->GetEmbeddingMetadata();
+  if (resources_metadata.ok()) {
+    metadata_from_file = *resources_metadata;
+  }
+  LITERT_RETURN_IF_ERROR(
+      MaybeUpdateAndValidateSettings(*resources, settings, metadata_from_file));
   std::optional<proto::EmbeddingMetadata> metadata =
       settings.GetEmbeddingMetadata();
-  if (!metadata.has_value()) {
-    auto resources_metadata = resources->GetEmbeddingMetadata();
-    if (resources_metadata.ok() && *resources_metadata != nullptr) {
-      metadata = **resources_metadata;
-    }
-  }
-
-  // Default min_input_length from metadata if not explicitly set in settings.
-  if (!settings.GetMinInputLength().has_value() && metadata.has_value() &&
-      metadata->has_min_input_length()) {
-    settings.SetMinInputLength(metadata->min_input_length());
-  }
-
-  // Default max_input_length from metadata if not explicitly set in settings.
-  if (!settings.GetMaxInputLength().has_value() && metadata.has_value() &&
-      metadata->has_max_input_length()) {
-    settings.SetMaxInputLength(metadata->max_input_length());
-  }
 
   // Default vision_tokens_per_image from metadata if not explicitly set in
   // settings.
@@ -267,56 +306,9 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
     }
   }
 
-  // Resolve defaults and metadata preferences, then validate settings.
-  LITERT_RETURN_IF_ERROR(
-      settings.ResolveDefaults(resources->GetTFLiteModelPreferActivationType(
-                                   ModelType::kTfLiteTextEncoder),
-                               resources->GetTFLiteModelPreferActivationType(
-                                   ModelType::kTfLiteVisionEncoder),
-                               resources->GetTFLiteModelPreferActivationType(
-                                   ModelType::kTfLiteAudioEncoderHw)));
-  LITERT_RETURN_IF_ERROR(settings.Validate(
-      resources->GetTFLiteModelBackendConstraint(ModelType::kTfLiteTextEncoder),
-      resources->GetTFLiteModelBackendConstraint(
-          ModelType::kTfLiteVisionEncoder),
-      resources->GetTFLiteModelBackendConstraint(
-          ModelType::kTfLiteAudioEncoderHw)));
-  // Auto-select text encoder signatures if max_input_length or
-  // min_input_length is set.
-  std::optional<SelectedTextSignaturesInfo> selected_text_signatures_info =
-      std::nullopt;
-  if (settings.GetMaxInputLength().has_value() ||
-      settings.GetMinInputLength().has_value()) {
-    if (settings.GetMaxInputLength().has_value() &&
-        *settings.GetMaxInputLength() <= 0) {
-      return absl::InvalidArgumentError(
-          absl::StrCat("max_input_length must be positive, got: ",
-                       *settings.GetMaxInputLength()));
-    }
-    if (settings.GetMinInputLength().has_value() &&
-        *settings.GetMinInputLength() < 0) {
-      return absl::InvalidArgumentError(
-          absl::StrCat("min_input_length must be non-negative, got: ",
-                       *settings.GetMinInputLength()));
-    }
-    if (settings.GetMaxInputLength().has_value() &&
-        settings.GetMinInputLength().has_value() &&
-        *settings.GetMinInputLength() > *settings.GetMaxInputLength()) {
-      return absl::InvalidArgumentError(
-          absl::StrCat("min_input_length (", *settings.GetMinInputLength(),
-                       ") cannot be greater than max_input_length (",
-                       *settings.GetMaxInputLength(), ")"));
-    }
-    const int target_max_length =
-        settings.GetMaxInputLength().value_or(std::numeric_limits<int>::max());
-    LITERT_ASSIGN_OR_RETURN(
-        auto text_sig_info,
-        SelectTextEncoderSignatures(*resources, target_max_length,
-                                    settings.GetMinInputLength()));
-    settings.GetMutableMainExecutorSettings().SetSelectedSignatures(
-        text_sig_info.signature_names);
-    selected_text_signatures_info = std::move(text_sig_info);
-  }
+  LITERT_ASSIGN_OR_RETURN(
+      std::optional<SelectedTextSignaturesInfo> selected_text_signatures_info,
+      MaybeSelectTextEncoderSignatures(*resources, settings));
 
   // Auto-select vision encoder and adapter signatures if
   // vision_tokens_per_image is set.
@@ -478,6 +470,7 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
   ABSL_LOG(INFO) << "Header loaded. Processing sections...";
 
   proto::EmbeddingMetadata embedding_metadata;
+  bool set_embedding_metadata = false;
   std::unique_ptr<Tokenizer> tokenizer;
   std::unique_ptr<OwnedEnvironment> owned_env;
   std::unique_ptr<EmbeddingLookupManager> embedding_lookup;
@@ -492,6 +485,19 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
   }
 
   auto streaming_resources = std::make_unique<ModelResourcesStreaming>();
+
+  // Mirrors `maybe_set_engine_settings` in EngineAdvancedLegacyImpl: settings
+  // cannot be resolved up front the way EmbeddingEngineImpl::Create does it,
+  // because the metadata they depend on only shows up partway through the
+  // stream. Instead this runs every time a section that feeds into the settings
+  // arrives, and again right before anything consumes them. It is idempotent.
+  auto maybe_update_settings = [&settings, &streaming_resources,
+                                &embedding_metadata,
+                                &set_embedding_metadata]() -> absl::Status {
+    return MaybeUpdateAndValidateSettings(
+        *streaming_resources, settings,
+        set_embedding_metadata ? &embedding_metadata : nullptr);
+  };
 
   for (;;) {
     ABSL_ASSIGN_OR_RETURN(auto section, loader.GetNextSection());
@@ -520,20 +526,8 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
           return absl::InternalError("Failed to parse EmbeddingMetadataProto");
         }
         streaming_resources->SetEmbeddingMetadata(embedding_metadata);
-        if (!settings.GetEmbeddingMetadata().has_value()) {
-          settings.GetMutableEmbeddingMetadata() = embedding_metadata;
-        }
-        // Default max_input_length from metadata if not explicitly set in
-        // settings, mirroring EmbeddingEngineImpl::Create. Read it back from
-        // settings rather than from the section we just parsed, so that
-        // caller-supplied metadata keeps taking precedence over the bundle's.
-        const std::optional<proto::EmbeddingMetadata>& resolved_metadata =
-            settings.GetEmbeddingMetadata();
-        if (!settings.GetMaxInputLength().has_value() &&
-            resolved_metadata.has_value() &&
-            resolved_metadata->max_input_length() != 0) {
-          settings.SetMaxInputLength(resolved_metadata->max_input_length());
-        }
+        set_embedding_metadata = true;
+        ABSL_RETURN_IF_ERROR(maybe_update_settings());
         ABSL_LOG(INFO) << "EmbeddingMetadataProto processed.";
         break;
       }
@@ -670,20 +664,13 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
           if (streaming_resources->GetTFLiteModel(ModelType::kTfLiteTextEncoder)
                   .ok()) {
             ABSL_LOG(INFO) << "Compiling text_encoder on stream...";
-            if (settings.GetMaxInputLength().has_value()) {
-              if (*settings.GetMaxInputLength() <= 0) {
-                return absl::InvalidArgumentError(
-                    absl::StrCat("max_input_length must be positive, got: ",
-                                 *settings.GetMaxInputLength()));
-              }
-              ABSL_ASSIGN_OR_RETURN(
-                  auto text_sig_info,
-                  SelectTextEncoderSignatures(*streaming_resources,
-                                              *settings.GetMaxInputLength()));
-              settings.GetMutableMainExecutorSettings().SetSelectedSignatures(
-                  text_sig_info.signature_names);
-              selected_text_signatures_info = std::move(text_sig_info);
-            }
+            // Last chance to resolve settings: compilation freezes them, and
+            // unlike LlmExecutor there is no UpdateExecutorSettings to push a
+            // later change into the compiled executor.
+            ABSL_RETURN_IF_ERROR(maybe_update_settings());
+            ABSL_ASSIGN_OR_RETURN(selected_text_signatures_info,
+                                  MaybeSelectTextEncoderSignatures(
+                                      *streaming_resources, settings));
             ABSL_ASSIGN_OR_RETURN(
                 compiled_text_encoder_info,
                 EmbeddingLiteRtCompiledModelExecutor::CompileTextEncoder(
@@ -748,6 +735,11 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
     }
   }
 
+  // Covers bundles that never hit a resolution point in the loop, e.g. ones
+  // with no metadata section, so that everything below still sees resolved and
+  // validated settings.
+  ABSL_RETURN_IF_ERROR(maybe_update_settings());
+
   if (tokenizer == nullptr) {
     return absl::InvalidArgumentError("Tokenizer cannot be null.");
   }
@@ -767,20 +759,10 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
   }
 
   if (!compiled_text_encoder_info.has_value()) {
-    if (settings.GetMaxInputLength().has_value() &&
-        !selected_text_signatures_info.has_value()) {
-      if (*settings.GetMaxInputLength() <= 0) {
-        return absl::InvalidArgumentError(
-            absl::StrCat("max_input_length must be positive, got: ",
-                         *settings.GetMaxInputLength()));
-      }
+    if (!selected_text_signatures_info.has_value()) {
       ABSL_ASSIGN_OR_RETURN(
-          auto text_sig_info,
-          SelectTextEncoderSignatures(*streaming_resources,
-                                      *settings.GetMaxInputLength()));
-      settings.GetMutableMainExecutorSettings().SetSelectedSignatures(
-          text_sig_info.signature_names);
-      selected_text_signatures_info = std::move(text_sig_info);
+          selected_text_signatures_info,
+          MaybeSelectTextEncoderSignatures(*streaming_resources, settings));
     }
     ABSL_ASSIGN_OR_RETURN(
         compiled_text_encoder_info,

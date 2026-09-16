@@ -19,6 +19,7 @@
 #include <ostream>
 #include <string>
 
+#include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
@@ -43,6 +44,31 @@ class EmbeddingEngineSettings {
       std::optional<Backend> vision_backend = std::nullopt,
       std::optional<Backend> audio_backend = std::nullopt);
 
+  // Updates the settings from the embedding metadata, resolves default values,
+  // and validates the result. This is the single entry point that both the
+  // resources-based and the streamed creation paths use, mirroring
+  // EngineSettings::MaybeUpdateAndValidate on the LLM side.
+  //
+  // `metadata_from_file` is adopted only when the caller has not already
+  // supplied metadata, so metadata set in code keeps taking precedence over the
+  // model's. Passing nullptr is fine, and leaves any existing metadata alone.
+  //
+  // Safe to call more than once. The streamed path relies on that, calling it
+  // again as each section arrives, because it has to resolve settings before
+  // the text encoder is compiled mid-stream.
+  absl::Status MaybeUpdateAndValidate(
+      const proto::EmbeddingMetadata* absl_nullable metadata_from_file,
+      const std::optional<std::string>& text_backend_constraint = std::nullopt,
+      const std::optional<std::string>& vision_backend_constraint =
+          std::nullopt,
+      const std::optional<std::string>& audio_backend_constraint = std::nullopt,
+      const std::optional<std::string>& text_prefer_activation_type =
+          std::nullopt,
+      const std::optional<std::string>& vision_prefer_activation_type =
+          std::nullopt,
+      const std::optional<std::string>& audio_prefer_activation_type =
+          std::nullopt);
+
   // Maximum sequence length (in tokens) for text encoder signatures. If set,
   // EmbeddingEngine will automatically select signatures up to this length.
   std::optional<int> GetMaxInputLength() const;
@@ -52,6 +78,20 @@ class EmbeddingEngineSettings {
   // EmbeddingEngine will exclude signatures shorter than this length.
   std::optional<int> GetMinInputLength() const;
   void SetMinInputLength(std::optional<int> min_input_length);
+
+  // Upper bound on how many text encoder signatures EmbeddingEngine prepares.
+  // Unset loads every signature the input length bounds allow.
+  //
+  // Each signature is a full private copy of the graph, so a bundle shipping
+  // one variant per supported sequence length costs that multiple in subgraphs
+  // and tensors. On wasm32 that is enough to exhaust the 4GB address space
+  // during compilation, which is why the web bindings cap this by default.
+  //
+  // The longest signature is always among those prepared, so capping never
+  // reduces the input length the engine accepts. Inputs that would have fit a
+  // dropped signature are padded up to the next one that survived.
+  std::optional<int> GetMaxNumSignatures() const;
+  void SetMaxNumSignatures(std::optional<int> max_num_signatures);
 
   // Desired number of vision tokens generated per image. If set,
   // EmbeddingEngine will automatically select the smallest vision encoder
@@ -121,6 +161,7 @@ class EmbeddingEngineSettings {
   std::optional<proto::BenchmarkParams> benchmark_params_;
   std::optional<int> max_input_length_;
   std::optional<int> min_input_length_;
+  std::optional<int> max_num_signatures_;
   std::optional<int> vision_tokens_per_image_;
 };
 

@@ -838,6 +838,10 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
                 &litert::lm::EmbeddingEngineSettings::GetMaxInputLength)
       .function("setMaxInputLength",
                 &litert::lm::EmbeddingEngineSettings::SetMaxInputLength)
+      .function("getMaxNumSignatures",
+                &litert::lm::EmbeddingEngineSettings::GetMaxNumSignatures)
+      .function("setMaxNumSignatures",
+                &litert::lm::EmbeddingEngineSettings::SetMaxNumSignatures)
       .function("getVisionTokensPerImage",
                 &litert::lm::EmbeddingEngineSettings::GetVisionTokensPerImage)
       .function("setVisionTokensPerImage",
