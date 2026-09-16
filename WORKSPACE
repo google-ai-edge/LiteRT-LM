@@ -2,11 +2,15 @@
 
 workspace(name = "litert_lm")
 
-# UPDATED = 2026-09-05
-LITERT_REF = "761d99cb90e20c67efcb3fe1119a60c92381bd1a"
+# UPDATED = 2026-09-15
+LITERT_REF = "1901301fd93a6c9d8dbfa5a06bcf3ec07dd68289"
 
-LITERT_SHA256 = "d3d754ee80454011b1600dc372ef8f501a3575dbe8b0a115ec74c7805c0e0658"
+LITERT_SHA256 = "a92ceb33698dc16eca0f33a1df4027bbe04b86aa2a3aa7c1652d35c3fc2c2d83"
 
+# Keep TensorFlow at this commit for now. Newer commits load
+# `compatibility_proxy_repo` from `@rules_cc//cc:extensions.bzl` in
+# `tensorflow/workspace1.bzl`, which the rules_cc version resolved by this
+# WORKSPACE does not provide, breaking the bazel build (as of 2026-09-15).
 TENSORFLOW_REF = "d9a8da74b4c3de28a39ab34ad007838d6bc30c67"
 
 TENSORFLOW_SHA256 = "cd46b37c0f722d5a48c0accc9618cc5684c553332b913091023703461f318d9b"
