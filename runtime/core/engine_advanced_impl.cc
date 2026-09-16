@@ -255,6 +255,7 @@ class EngineAdvancedImpl : public Engine {
 // Method to create Engine.
 absl::StatusOr<std::unique_ptr<Engine>> EngineAdvancedImpl::Create(
     EngineSettings engine_settings, absl::string_view input_prompt_as_hint) {
+
   std::optional<BenchmarkInfo> benchmark_info =
       engine_settings.IsBenchmarkEnabled()
           ? std::make_optional<BenchmarkInfo>(
