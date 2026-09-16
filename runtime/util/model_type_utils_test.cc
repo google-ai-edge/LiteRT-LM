@@ -219,6 +219,9 @@ TEST(ModelTypeUtilsTest, GetModelTypeName) {
 
   model_type.mutable_minicpm5();
   EXPECT_EQ(GetModelTypeName(model_type), "minicpm5");
+
+  model_type.mutable_minicpmv4();
+  EXPECT_EQ(GetModelTypeName(model_type), "minicpmv4");
 }
 
 }  // namespace

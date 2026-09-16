@@ -361,6 +361,31 @@ target_link_libraries(runtime_conversation_model_data_processor_minicpm5_data_pr
 )
 
 # ==============================================================================
+# MiniCpmV Data Processor
+# ==============================================================================
+add_litertlm_library(runtime_conversation_model_data_processor_minicpmv_data_processor STATIC
+  minicpmv_data_processor.cc
+)
+add_library(LiteRTLM::Runtime::Conversation::ModelDataProcessor::MiniCpmVDataProcessor
+    ALIAS runtime_conversation_model_data_processor_minicpmv_data_processor)
+
+target_include_directories(runtime_conversation_model_data_processor_minicpmv_data_processor
+  PRIVATE
+    "${LITERTLM_INCLUDE_PATHS}"
+)
+
+target_link_libraries(runtime_conversation_model_data_processor_minicpmv_data_processor
+  PUBLIC
+    LiteRTLM::Runtime::Util
+    LiteRTLM::Runtime::Engine
+    LiteRTLM::Runtime::Components
+    LiteRTLM::Runtime::Components::Preprocessor::MiniCpmVImagePreprocess
+    LiteRTLM::Runtime::Conversation::ModelDataProcessor::DataUtils
+    LiteRTLM::Runtime::Conversation::IoTypes
+    LITERTLM_DEPS
+)
+
+# ==============================================================================
 # LFM2 Data Processor
 # ==============================================================================
 add_litertlm_library(runtime_conversation_model_data_processor_lfm2_data_processor STATIC
@@ -406,5 +431,6 @@ target_link_libraries(runtime_conversation_model_data_processor_libs INTERFACE
   LiteRTLM::Runtime::Conversation::ModelDataProcessor::Qwen3Config
   LiteRTLM::Runtime::Conversation::ModelDataProcessor::MultimodalProcessorHelper
   LiteRTLM::Runtime::Conversation::ModelDataProcessor::Minicpm5DataProcessor
+  LiteRTLM::Runtime::Conversation::ModelDataProcessor::MiniCpmVDataProcessor
   LiteRTLM::Runtime::Conversation::ModelDataProcessor::Lfm2DataProcessor
 )

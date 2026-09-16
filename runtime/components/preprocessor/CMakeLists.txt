@@ -66,6 +66,45 @@ target_include_directories(runtime_components_preprocessor_image_preprocessor
 )
 
 # ==============================================================================
+# PIL-faithful Bicubic Resize
+# ==============================================================================
+add_litertlm_library(runtime_components_preprocessor_pil_resize STATIC
+  pil_resize.cc
+)
+add_library(LiteRTLM::Runtime::Components::Preprocessor::PilResize
+  ALIAS runtime_components_preprocessor_pil_resize)
+
+target_include_directories(runtime_components_preprocessor_pil_resize
+  PUBLIC
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+target_link_libraries(runtime_components_preprocessor_pil_resize
+  PUBLIC
+    LITERTLM_DEPS
+)
+
+# ==============================================================================
+# MiniCPM-V Image Preprocess
+# ==============================================================================
+add_litertlm_library(runtime_components_preprocessor_minicpmv_image_preprocess STATIC
+  minicpmv_image_preprocess.cc
+)
+add_library(LiteRTLM::Runtime::Components::Preprocessor::MiniCpmVImagePreprocess
+  ALIAS runtime_components_preprocessor_minicpmv_image_preprocess)
+
+target_include_directories(runtime_components_preprocessor_minicpmv_image_preprocess
+  PUBLIC
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+target_link_libraries(runtime_components_preprocessor_minicpmv_image_preprocess
+  PUBLIC
+    LiteRTLM::Runtime::Components::Preprocessor::PilResize
+    LITERTLM_DEPS
+)
+
+# ==============================================================================
 # Signal Vector Util Interface
 # ==============================================================================
 add_litertlm_library(runtime_components_preprocessor_signal_vector_util INTERFACE)
@@ -90,5 +129,7 @@ target_link_libraries(runtime_components_preprocessor_libs INTERFACE
   LiteRTLM::Runtime::Components::Preprocessor::AudioBypassInterface
   LiteRTLM::Runtime::Components::Preprocessor::BypassImageInterface
   LiteRTLM::Runtime::Components::Preprocessor::ImageInterface
+  LiteRTLM::Runtime::Components::Preprocessor::MiniCpmVImagePreprocess
+  LiteRTLM::Runtime::Components::Preprocessor::PilResize
   LiteRTLM::Runtime::Components::Preprocessor::SignalVectorUtilInterface
 )

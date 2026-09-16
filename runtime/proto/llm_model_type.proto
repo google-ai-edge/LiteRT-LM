@@ -33,6 +33,7 @@ message LlmModelType {
     FastVlm fast_vlm = 9;
     Lfm2 lfm2 = 11;
     MiniCPM5 minicpm5 = 12;
+    MiniCpmV4 minicpmv4 = 13;
   }
 }
 
@@ -366,3 +367,9 @@ message MiniCPM5 {
   // An optional regex to match each line of the tool code block.
   optional string tool_code_regex = 4;
 }
+
+// MiniCPM-V-4 multimodal model (fused SigLIP + Resampler vision + Llama LLM).
+// The slice geometry and the soft-token count per slice are fixed by the fused
+// vision tflite bundled with the model and by compile-time constants in the
+// runtime, so there are no per-bundle configuration fields.
+message MiniCpmV4 {}

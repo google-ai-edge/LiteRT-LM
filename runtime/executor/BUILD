@@ -1120,6 +1120,7 @@ cc_library(
     srcs = ["vision/vision_executor_utils.cc"],
     hdrs = ["vision/vision_executor_utils.h"],
     deps = [
+        "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",

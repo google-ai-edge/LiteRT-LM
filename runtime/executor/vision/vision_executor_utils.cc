@@ -16,6 +16,7 @@
 
 #include <optional>
 
+#include "absl/algorithm/container.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
@@ -31,6 +32,7 @@
 namespace litert::lm {
 
 constexpr absl::string_view kFeatures = "features";
+constexpr absl::string_view kPositionsXy = "positions_xy";
 
 absl::StatusOr<VisionExecutorProperties>
 GetVisionExecutorPropertiesFromModelResources(ModelResources& model_resources) {
@@ -84,20 +86,61 @@ GetVisionExecutorPropertiesFromModelResources(ModelResources& model_resources) {
 
   LITERT_ASSIGN_OR_RETURN(auto encoder_input_names,
                           vision_encoder_model->GetSignatureInputNames(0));
-  // Deduce the patch shrink factor from the encoder's image input tensor.
-  // Transformer (ViT) encoders expose two inputs (image patches +
-  // positions_xy), while single input encoders (e.g. LFM2 VL) expose only the
-  // image patches tensor. In both cases the image patches tensor is the first
-  // input, so this works as long as the encoder has at least one input.
+  // Deduce patch_num_shrink_factor, i.e. the number of input patches consumed
+  // per output vision token.
+  //
+  // - Transformer (ViT) encoders paired with a separate adapter expose the
+  //   image patches as input 0, so the factor is input_patches /
+  //   num_tokens_per_image.
+  // - Single input encoders (e.g. LFM2 VL) expose only the image patches
+  //   tensor, so the same formula applies.
+  // - Fused encoders without an adapter that emit a fixed number of soft
+  //   tokens (e.g. MiniCPM-V) do not scale their output with the number of
+  //   valid patches. For those, the positions_xy capacity is the quantity the
+  //   data processor has to pad the patch count up to.
   if (!encoder_input_names.empty()) {
-    // The image patches tensor has shape [batch_size, num_patches, patch_dim],
-    // so the second-to-last dimension is the number of input patches.
-    LITERT_ASSIGN_OR_RETURN(auto encoder_input_tensor_type,
-                            vision_encoder_model->GetInputTensorType(0, 0));
-    properties.patch_num_shrink_factor =
-        encoder_input_tensor_type.Layout().Dimensions()
-            [encoder_input_tensor_type.Layout().Dimensions().size() - 2] /
-        properties.num_tokens_per_image;
+    if (properties.num_tokens_per_image <= 0) {
+      return absl::FailedPreconditionError(
+          "Vision encoder num_tokens_per_image must be positive.");
+    }
+    const auto positions_input =
+        absl::c_find(encoder_input_names, kPositionsXy);
+    if (vision_adapter_model == nullptr &&
+        positions_input != encoder_input_names.end()) {
+      // positions_xy is not necessarily input 1, so look it up by name. Fused
+      // graphs may take extra inputs (e.g. vit_positions).
+      LITERT_ASSIGN_OR_RETURN(
+          auto positions_tensor_type,
+          vision_encoder_model->GetInputTensorType(
+              0,
+              static_cast<int>(positions_input - encoder_input_names.begin())));
+      const auto& dims = positions_tensor_type.Layout().Dimensions();
+      if (dims.size() < 2) {
+        return absl::FailedPreconditionError(
+            "positions_xy tensor must have at least 2 dimensions.");
+      }
+      const int shrink_factor =
+          dims[dims.size() - 2] / properties.num_tokens_per_image;
+      if (shrink_factor <= 0) {
+        return absl::FailedPreconditionError(
+            "Fused vision encoder positions capacity is smaller than "
+            "num_tokens_per_image.");
+      }
+      properties.patch_num_shrink_factor = shrink_factor;
+    } else {
+      // The image patches tensor has shape [batch_size, num_patches,
+      // patch_dim], so the second-to-last dimension is the number of input
+      // patches.
+      LITERT_ASSIGN_OR_RETURN(auto encoder_input_tensor_type,
+                              vision_encoder_model->GetInputTensorType(0, 0));
+      const auto& dims = encoder_input_tensor_type.Layout().Dimensions();
+      if (dims.size() < 2) {
+        return absl::FailedPreconditionError(
+            "Vision encoder input tensor must have at least 2 dimensions.");
+      }
+      properties.patch_num_shrink_factor =
+          dims[dims.size() - 2] / properties.num_tokens_per_image;
+    }
   }
   return properties;
 }
