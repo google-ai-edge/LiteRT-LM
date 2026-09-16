@@ -72,7 +72,7 @@ ABSL_FLAG(std::string, output_embedding_path, "",
           "Optional path to save the full embedding vector as a JSON file.");
 ABSL_FLAG(bool, normalize, true,
           "Whether to L2-normalize the output embedding vector.");
-ABSL_FLAG(bool, use_mmap, false,
+ABSL_FLAG(bool, use_mmap, true,
           "Whether to use memory-mapped file for model loading.");
 ABSL_FLAG(std::string, dispatch_library_dir, "",
           "Path to directory containing LiteRT dispatch libraries.");
