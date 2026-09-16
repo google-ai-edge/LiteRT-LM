@@ -336,6 +336,10 @@ cc_binary(
 cc_binary(
     name = "embedding_litert_lm_main",
     srcs = ["embedding_litert_lm_main.cc"],
+    linkopts = select({
+        "@platforms//os:android": ["-lEGL", "-lGLESv3"],
+        "//conditions:default": [],
+    }),
     deps = [
         ":embedding_engine",
         ":embedding_engine_settings",
@@ -350,8 +354,10 @@ cc_binary(
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/time",
+        "@litert//litert/cc:litert_profiler",
         "//runtime/components:model_resources",
         "//runtime/core:embedding_engine_impl",
+        "//runtime/executor:default_static_gpu_accelerator",
         "//runtime/executor:embedding_executor_base",
         "//runtime/executor:executor_settings_base",
         "//runtime/executor:litert_compiled_model_executor_utils",
