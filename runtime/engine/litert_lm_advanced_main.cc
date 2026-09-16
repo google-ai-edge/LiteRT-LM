@@ -294,6 +294,7 @@ absl::Status MainHelper(int argc, char** argv) {
   settings.num_logits_to_print_after_decode =
       absl::GetFlag(FLAGS_num_logits_to_print_after_decode);
   settings.score_target_text = absl::GetFlag(FLAGS_score_target_text);
+
   settings.gpu_madvise_original_shared_tensors =
       absl::GetFlag(FLAGS_gpu_madvise_original_shared_tensors);
   settings.gpu_enable_metal_residency_set =
