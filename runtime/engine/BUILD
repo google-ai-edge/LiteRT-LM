@@ -359,6 +359,7 @@ cc_binary(
         "//runtime/util:litert_util",
         "//runtime/util:memory_mapped_file",
         "//runtime/util:scoped_file",
+        "//support/preprocessor:audio_preprocessor_miniaudio",  # buildcleaner: keep
         "//support/preprocessor:image_preprocessor_impl",  # buildcleaner: keep
         "@litert//tflite/profiling:memory_info",
     ],

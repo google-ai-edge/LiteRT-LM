@@ -21,7 +21,9 @@
 // 4) Computes an embedding for --input_prompt and prints the result.
 
 #include <algorithm>
+#include <cstddef>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <iterator>
 #include <memory>
@@ -66,6 +68,8 @@ ABSL_FLAG(std::string, image_path, "",
 ABSL_FLAG(
     std::string, audio_path, "",
     "Optional path to an audio file (.wav) to compute the embedding for.");
+ABSL_FLAG(std::string, output_embedding_path, "",
+          "Optional path to save the full embedding vector as a JSON file.");
 ABSL_FLAG(bool, normalize, true,
           "Whether to L2-normalize the output embedding vector.");
 ABSL_FLAG(bool, use_mmap, false,
@@ -450,6 +454,28 @@ absl::Status MainHelper(int argc, char** argv) {
   }
   std::cout << "]" << std::endl;
   std::cout << "========================================" << std::endl;
+
+  if (const std::string output_path =
+          absl::GetFlag(FLAGS_output_embedding_path);
+      !output_path.empty()) {
+    std::ofstream out_file(output_path);
+    if (!out_file.is_open()) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("Failed to open output embedding file: ", output_path));
+    }
+    out_file << "[\n";
+    for (size_t i = 0; i < response.embedding.size(); ++i) {
+      out_file << "  " << std::setprecision(8) << response.embedding[i];
+      if (i + 1 < response.embedding.size()) {
+        out_file << ",\n";
+      } else {
+        out_file << "\n";
+      }
+    }
+    out_file << "]\n";
+    std::cout << "Saved full embedding vector (" << response.embedding.size()
+              << " dimensions) to: " << output_path << std::endl;
+  }
 
   // Print benchmark info if enabled.
   if (auto benchmark_info = engine->GetBenchmarkInfo()) {
