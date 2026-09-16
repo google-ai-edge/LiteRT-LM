@@ -16,6 +16,7 @@
 
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>  // NOLINT: Required for path manipulation.
 #include <functional>
 #include <memory>
@@ -30,9 +31,13 @@
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "flatbuffers/buffer.h"  // from @flatbuffers
+#include "flatbuffers/flatbuffer_builder.h"  // from @flatbuffers
+#include "litert/cc/litert_buffer_ref.h"  // from @litert
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_layout.h"  // from @litert
@@ -41,6 +46,7 @@
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
+#include "litert/test/matchers.h"  // from @litert
 #include "runtime/components/model_resources.h"
 #include "runtime/components/model_resources_litert_lm.h"
 #include "runtime/engine/embedding_engine.h"
@@ -63,6 +69,7 @@
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
 #include "support/preprocessor/image_preprocessor.h"
 #include "support/tokenizer/tokenizer.h"
+#include "tflite/schema/schema_generated.h"  // from @litert
 
 namespace litert::lm {
 namespace {
@@ -101,17 +108,31 @@ class FakeModelResources : public ModelResources {
   explicit FakeModelResources(
       std::unique_ptr<ModelResources> delegate, bool has_vision = false,
       bool has_audio = false,
-      std::optional<const proto::EmbeddingMetadata*> metadata = std::nullopt)
+      std::optional<const proto::EmbeddingMetadata*> metadata = std::nullopt,
+      const litert::Model* vision_model = nullptr,
+      const litert::Model* vision_adapter_model = nullptr)
       : delegate_(std::move(delegate)),
         has_vision_(has_vision),
         has_audio_(has_audio),
-        metadata_(metadata) {}
+        metadata_(metadata),
+        vision_model_(vision_model),
+        vision_adapter_model_(vision_adapter_model) {}
   ~FakeModelResources() override = default;
 
   absl::StatusOr<const litert::Model*> GetTFLiteModel(
       ModelType model_type) override {
-    if (model_type == ModelType::kTfLiteVisionEncoder && has_vision_) {
-      return nullptr;
+    if (model_type == ModelType::kTfLiteVisionEncoder) {
+      if (vision_model_ != nullptr) {
+        return vision_model_;
+      }
+      if (has_vision_) {
+        return nullptr;
+      }
+    }
+    if (model_type == ModelType::kTfLiteVisionAdapter) {
+      if (vision_adapter_model_ != nullptr) {
+        return vision_adapter_model_;
+      }
     }
     if ((model_type == ModelType::kTfLiteAudioEncoderHw ||
          model_type == ModelType::kTfLiteAudioFrontend) &&
@@ -176,7 +197,78 @@ class FakeModelResources : public ModelResources {
   bool has_vision_;
   bool has_audio_;
   std::optional<const proto::EmbeddingMetadata*> metadata_;
+  const litert::Model* vision_model_ = nullptr;
+  const litert::Model* vision_adapter_model_ = nullptr;
 };
+
+std::vector<uint8_t> BuildDummyVisionModelBuffer(
+    const std::vector<std::string>& signature_keys,
+    const std::vector<int32_t>& num_tokens_vec, int feature_dim) {
+  flatbuffers::FlatBufferBuilder builder;
+
+  auto opcode =
+      tflite::CreateOperatorCode(builder, tflite::BuiltinOperator_ABS);
+  auto opcodes_vec = builder.CreateVector({opcode});
+
+  std::vector<flatbuffers::Offset<tflite::SubGraph>> subgraphs;
+  std::vector<flatbuffers::Offset<tflite::SignatureDef>> sig_defs;
+
+  for (size_t i = 0; i < signature_keys.size(); ++i) {
+    int32_t num_tokens = num_tokens_vec[i];
+    std::vector<int32_t> image_dims = {1, num_tokens * 4, 3};
+    std::vector<int32_t> output_dims = {1, num_tokens, feature_dim};
+
+    auto image_tensor = tflite::CreateTensor(
+        builder, builder.CreateVector(image_dims), tflite::TensorType_FLOAT32,
+        /*buffer=*/0, builder.CreateString(absl::StrCat("images_", i)));
+    auto features_tensor = tflite::CreateTensor(
+        builder, builder.CreateVector(output_dims), tflite::TensorType_FLOAT32,
+        /*buffer=*/0, builder.CreateString(absl::StrCat("features_", i)));
+    auto tensors_vec = builder.CreateVector({image_tensor, features_tensor});
+
+    std::vector<int32_t> op_inputs = {0};
+    std::vector<int32_t> op_outputs = {1};
+    auto op = tflite::CreateOperator(builder, /*opcode_index=*/0,
+                                     builder.CreateVector(op_inputs),
+                                     builder.CreateVector(op_outputs));
+    auto ops_vec = builder.CreateVector({op});
+
+    std::vector<int32_t> sg_inputs = {0};
+    std::vector<int32_t> sg_outputs = {1};
+    auto subgraph = tflite::CreateSubGraph(
+        builder, tensors_vec, builder.CreateVector(sg_inputs),
+        builder.CreateVector(sg_outputs), ops_vec,
+        builder.CreateString(absl::StrCat("subgraph_", i)));
+    subgraphs.push_back(subgraph);
+
+    auto image_map =
+        tflite::CreateTensorMap(builder, builder.CreateString("images"), 0);
+    auto features_map =
+        tflite::CreateTensorMap(builder, builder.CreateString("features"), 1);
+    auto inputs_map_vec = builder.CreateVector({image_map});
+    auto outputs_map_vec = builder.CreateVector({features_map});
+
+    auto sig_def = tflite::CreateSignatureDef(
+        builder, inputs_map_vec, outputs_map_vec,
+        builder.CreateString(signature_keys[i]), /*subgraph_index=*/i);
+    sig_defs.push_back(sig_def);
+  }
+
+  auto subgraphs_vec = builder.CreateVector(subgraphs);
+  auto sig_defs_vec = builder.CreateVector(sig_defs);
+
+  auto buffer = tflite::CreateBuffer(builder);
+  auto buffers_vec = builder.CreateVector({buffer});
+
+  auto model = tflite::CreateModel(
+      builder, /*version=*/3, opcodes_vec, subgraphs_vec,
+      builder.CreateString("dummy_vision_model"), buffers_vec,
+      /*metadata_buffer=*/0, /*metadata=*/0, sig_defs_vec);
+  tflite::FinishModelBuffer(builder, model);
+
+  return std::vector<uint8_t>(builder.GetBufferPointer(),
+                              builder.GetBufferPointer() + builder.GetSize());
+}
 
 absl::StatusOr<std::unique_ptr<ModelResources>> CreateTestModelResources(
     absl::string_view model_path) {
@@ -289,6 +381,89 @@ TEST(EmbeddingEngineImplTest,
   for (int length : text_sig_info->signature_lengths) {
     EXPECT_EQ(length, 128);
   }
+}
+
+TEST(EmbeddingEngineImplTest,
+     CreateStreamingWeightsWithMinInputLengthAutoSelectsSignatures) {
+  const std::string& model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                   std::string(kTestEmbeddingModelPath))
+                                      .string();
+  ASSERT_OK_AND_ASSIGN(auto file_stream, FileDataStream::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(std::move(file_stream)));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+  settings.SetMinInputLength(128);
+
+  ASSERT_OK_AND_ASSIGN(auto engine, EmbeddingEngineImpl::CreateStreamingWeights(
+                                        std::move(settings)));
+  ASSERT_NE(engine, nullptr);
+  const auto& text_sig_info = engine->GetSelectedTextSignaturesInfo();
+  ASSERT_TRUE(text_sig_info.has_value());
+  EXPECT_FALSE(text_sig_info->signature_names.empty());
+  for (int length : text_sig_info->signature_lengths) {
+    EXPECT_GE(length, 128);
+  }
+}
+
+TEST(EmbeddingEngineImplTest,
+     CreateStreamingWeightsWithMetadataMinInputLengthAutoSelectsSignatures) {
+  const std::string& model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                   std::string(kTestEmbeddingModelPath))
+                                      .string();
+  ASSERT_OK_AND_ASSIGN(auto file_stream, FileDataStream::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(std::move(file_stream)));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+  ASSERT_FALSE(settings.GetMinInputLength().has_value());
+  proto::EmbeddingMetadata metadata;
+  metadata.set_min_input_length(128);
+  settings.GetMutableEmbeddingMetadata() = metadata;
+
+  ASSERT_OK_AND_ASSIGN(auto engine, EmbeddingEngineImpl::CreateStreamingWeights(
+                                        std::move(settings)));
+  ASSERT_NE(engine, nullptr);
+  const auto& text_sig_info = engine->GetSelectedTextSignaturesInfo();
+  ASSERT_TRUE(text_sig_info.has_value());
+  EXPECT_FALSE(text_sig_info->signature_names.empty());
+  for (int length : text_sig_info->signature_lengths) {
+    EXPECT_GE(length, 128);
+  }
+}
+
+TEST(EmbeddingEngineImplTest,
+     CreateStreamingWeightsWithMaxInputLengthExceedingSignaturesReturnsError) {
+  const std::string& model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                   std::string(kTestEmbeddingModelPath))
+                                      .string();
+  ASSERT_OK_AND_ASSIGN(auto file_stream, FileDataStream::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(std::move(file_stream)));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+  settings.SetMaxInputLength(1000);
+
+  EXPECT_THAT(
+      EmbeddingEngineImpl::CreateStreamingWeights(std::move(settings)),
+      StatusIs(absl::StatusCode::kInvalidArgument,
+               HasSubstr("exceeds maximum available signature length")));
+}
+
+TEST(EmbeddingEngineImplTest,
+     CreateStreamingWeightsWithMinInputLengthExceedingSignaturesReturnsError) {
+  const std::string& model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                   std::string(kTestEmbeddingModelPath))
+                                      .string();
+  ASSERT_OK_AND_ASSIGN(auto file_stream, FileDataStream::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(std::move(file_stream)));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+  settings.SetMinInputLength(1000);
+
+  EXPECT_THAT(EmbeddingEngineImpl::CreateStreamingWeights(std::move(settings)),
+              StatusIs(absl::StatusCode::kNotFound));
 }
 
 TEST(EmbeddingEngineImplTest,
@@ -1892,9 +2067,9 @@ TEST(EmbeddingEngineImplTest,
   ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
                                           model_assets, Backend::CPU));
   proto::EmbeddingMetadata metadata;
-  metadata.set_max_input_length(128);
+  metadata.set_max_input_length(64);
   settings.GetMutableEmbeddingMetadata() = metadata;
-  settings.SetMaxInputLength(256);
+  settings.SetMaxInputLength(128);
 
   ASSERT_OK_AND_ASSIGN(
       auto engine,
@@ -2239,6 +2414,106 @@ TEST(EmbeddingEngineImplTest,
   EXPECT_EQ(recorded_info->GetTotalPrefillTurns(), 1);
   ASSERT_OK_AND_ASSIGN(auto turn, recorded_info->GetPrefillTurn(0));
   EXPECT_EQ(turn.num_tokens, 9);
+}
+
+TEST(EmbeddingEngineImplTest,
+     CreateWithMaxInputLengthExceedingAvailableSignaturesReturnsError) {
+  const std::string& model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                   std::string(kTestEmbeddingModelPath))
+                                      .string();
+  ASSERT_OK_AND_ASSIGN(auto model_assets, ModelAssets::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(auto resources, CreateTestModelResources(model_path));
+  ASSERT_OK_AND_ASSIGN(auto env, CreateTestEnvironment());
+  auto tokenizer = std::make_unique<MockTokenizer>();
+
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+  settings.SetMaxInputLength(1000);
+
+  EXPECT_THAT(
+      EmbeddingEngineImpl::Create(std::move(resources), std::move(env),
+                                  std::move(tokenizer), std::move(settings)),
+      StatusIs(absl::StatusCode::kInvalidArgument,
+               HasSubstr("exceeds maximum available signature length")));
+}
+
+TEST(EmbeddingEngineImplTest,
+     CreateWithVisionTokensExceedingVisionEncoderSignaturesReturnsError) {
+  const std::string& model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                   std::string(kTestEmbeddingModelPath))
+                                      .string();
+  ASSERT_OK_AND_ASSIGN(auto model_assets, ModelAssets::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(auto real_resources,
+                       CreateTestModelResources(model_path));
+  ASSERT_OK_AND_ASSIGN(auto env, CreateTestEnvironment());
+  auto tokenizer = std::make_unique<MockTokenizer>();
+
+  auto vision_buffer =
+      BuildDummyVisionModelBuffer({"vision_70"}, {70}, /*feature_dim=*/64);
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto vision_model,
+      ::litert::Model::CreateFromBuffer(
+          env->env, ::litert::BufferRef<uint8_t>(vision_buffer.data(),
+                                                 vision_buffer.size())));
+
+  auto resources = std::make_unique<FakeModelResources>(
+      std::move(real_resources), /*has_vision=*/false, /*has_audio=*/false,
+      /*metadata=*/std::nullopt, /*vision_model=*/&vision_model);
+
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU,
+                                          Backend::CPU, std::nullopt));
+  settings.SetVisionTokensPerImage(100);
+
+  EXPECT_THAT(
+      EmbeddingEngineImpl::Create(std::move(resources), std::move(env),
+                                  std::move(tokenizer), std::move(settings)),
+      StatusIs(absl::StatusCode::kInvalidArgument,
+               HasSubstr("exceeds maximum available signature length")));
+}
+
+TEST(EmbeddingEngineImplTest,
+     CreateWithVisionTokensExceedingVisionAdapterSignaturesReturnsError) {
+  const std::string& model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                   std::string(kTestEmbeddingModelPath))
+                                      .string();
+  ASSERT_OK_AND_ASSIGN(auto model_assets, ModelAssets::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(auto real_resources,
+                       CreateTestModelResources(model_path));
+  ASSERT_OK_AND_ASSIGN(auto env, CreateTestEnvironment());
+  auto tokenizer = std::make_unique<MockTokenizer>();
+
+  auto vision_buffer =
+      BuildDummyVisionModelBuffer({"vision_280"}, {280}, /*feature_dim=*/64);
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto vision_model,
+      ::litert::Model::CreateFromBuffer(
+          env->env, ::litert::BufferRef<uint8_t>(vision_buffer.data(),
+                                                 vision_buffer.size())));
+
+  auto adapter_buffer =
+      BuildDummyVisionModelBuffer({"adapter_70"}, {70}, /*feature_dim=*/64);
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto adapter_model,
+      ::litert::Model::CreateFromBuffer(
+          env->env, ::litert::BufferRef<uint8_t>(adapter_buffer.data(),
+                                                 adapter_buffer.size())));
+
+  auto resources = std::make_unique<FakeModelResources>(
+      std::move(real_resources), /*has_vision=*/false, /*has_audio=*/false,
+      /*metadata=*/std::nullopt, /*vision_model=*/&vision_model,
+      /*vision_adapter_model=*/&adapter_model);
+
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU,
+                                          Backend::CPU, std::nullopt));
+  settings.SetVisionTokensPerImage(100);
+
+  EXPECT_THAT(
+      EmbeddingEngineImpl::Create(std::move(resources), std::move(env),
+                                  std::move(tokenizer), std::move(settings)),
+      StatusIs(absl::StatusCode::kInvalidArgument,
+               HasSubstr("exceeds maximum available signature length")));
 }
 }  // namespace
 }  // namespace litert::lm

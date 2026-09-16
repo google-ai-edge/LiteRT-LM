@@ -18,7 +18,6 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -307,11 +306,9 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
                        ") cannot be greater than max_input_length (",
                        *settings.GetMaxInputLength(), ")"));
     }
-    const int target_max_length =
-        settings.GetMaxInputLength().value_or(std::numeric_limits<int>::max());
     LITERT_ASSIGN_OR_RETURN(
         auto text_sig_info,
-        SelectTextEncoderSignatures(*resources, target_max_length,
+        SelectTextEncoderSignatures(*resources, settings.GetMaxInputLength(),
                                     settings.GetMinInputLength()));
     settings.GetMutableMainExecutorSettings().SetSelectedSignatures(
         text_sig_info.signature_names);
@@ -523,12 +520,18 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
         if (!settings.GetEmbeddingMetadata().has_value()) {
           settings.GetMutableEmbeddingMetadata() = embedding_metadata;
         }
-        // Default max_input_length from metadata if not explicitly set in
-        // settings, mirroring EmbeddingEngineImpl::Create. Read it back from
-        // settings rather than from the section we just parsed, so that
-        // caller-supplied metadata keeps taking precedence over the bundle's.
+        // Default min_input_length and max_input_length from metadata if not
+        // explicitly set in settings, mirroring EmbeddingEngineImpl::Create.
+        // Read it back from settings rather than from the section we just
+        // parsed, so that caller-supplied metadata keeps taking precedence over
+        // the bundle's.
         const std::optional<proto::EmbeddingMetadata>& resolved_metadata =
             settings.GetEmbeddingMetadata();
+        if (!settings.GetMinInputLength().has_value() &&
+            resolved_metadata.has_value() &&
+            resolved_metadata->has_min_input_length()) {
+          settings.SetMinInputLength(resolved_metadata->min_input_length());
+        }
         if (!settings.GetMaxInputLength().has_value() &&
             resolved_metadata.has_value() &&
             resolved_metadata->max_input_length() != 0) {
@@ -670,16 +673,34 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
           if (streaming_resources->GetTFLiteModel(ModelType::kTfLiteTextEncoder)
                   .ok()) {
             ABSL_LOG(INFO) << "Compiling text_encoder on stream...";
-            if (settings.GetMaxInputLength().has_value()) {
-              if (*settings.GetMaxInputLength() <= 0) {
+            if (settings.GetMaxInputLength().has_value() ||
+                settings.GetMinInputLength().has_value()) {
+              if (settings.GetMaxInputLength().has_value() &&
+                  *settings.GetMaxInputLength() <= 0) {
                 return absl::InvalidArgumentError(
                     absl::StrCat("max_input_length must be positive, got: ",
                                  *settings.GetMaxInputLength()));
               }
+              if (settings.GetMinInputLength().has_value() &&
+                  *settings.GetMinInputLength() < 0) {
+                return absl::InvalidArgumentError(
+                    absl::StrCat("min_input_length must be non-negative, got: ",
+                                 *settings.GetMinInputLength()));
+              }
+              if (settings.GetMaxInputLength().has_value() &&
+                  settings.GetMinInputLength().has_value() &&
+                  *settings.GetMinInputLength() >
+                      *settings.GetMaxInputLength()) {
+                return absl::InvalidArgumentError(absl::StrCat(
+                    "min_input_length (", *settings.GetMinInputLength(),
+                    ") cannot be greater than max_input_length (",
+                    *settings.GetMaxInputLength(), ")"));
+              }
               ABSL_ASSIGN_OR_RETURN(
                   auto text_sig_info,
                   SelectTextEncoderSignatures(*streaming_resources,
-                                              *settings.GetMaxInputLength()));
+                                              settings.GetMaxInputLength(),
+                                              settings.GetMinInputLength()));
               settings.GetMutableMainExecutorSettings().SetSelectedSignatures(
                   text_sig_info.signature_names);
               selected_text_signatures_info = std::move(text_sig_info);
@@ -767,17 +788,34 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
   }
 
   if (!compiled_text_encoder_info.has_value()) {
-    if (settings.GetMaxInputLength().has_value() &&
+    if ((settings.GetMaxInputLength().has_value() ||
+         settings.GetMinInputLength().has_value()) &&
         !selected_text_signatures_info.has_value()) {
-      if (*settings.GetMaxInputLength() <= 0) {
+      if (settings.GetMaxInputLength().has_value() &&
+          *settings.GetMaxInputLength() <= 0) {
         return absl::InvalidArgumentError(
             absl::StrCat("max_input_length must be positive, got: ",
                          *settings.GetMaxInputLength()));
       }
+      if (settings.GetMinInputLength().has_value() &&
+          *settings.GetMinInputLength() < 0) {
+        return absl::InvalidArgumentError(
+            absl::StrCat("min_input_length must be non-negative, got: ",
+                         *settings.GetMinInputLength()));
+      }
+      if (settings.GetMaxInputLength().has_value() &&
+          settings.GetMinInputLength().has_value() &&
+          *settings.GetMinInputLength() > *settings.GetMaxInputLength()) {
+        return absl::InvalidArgumentError(
+            absl::StrCat("min_input_length (", *settings.GetMinInputLength(),
+                         ") cannot be greater than max_input_length (",
+                         *settings.GetMaxInputLength(), ")"));
+      }
       ABSL_ASSIGN_OR_RETURN(
           auto text_sig_info,
           SelectTextEncoderSignatures(*streaming_resources,
-                                      *settings.GetMaxInputLength()));
+                                      settings.GetMaxInputLength(),
+                                      settings.GetMinInputLength()));
       settings.GetMutableMainExecutorSettings().SetSelectedSignatures(
           text_sig_info.signature_names);
       selected_text_signatures_info = std::move(text_sig_info);

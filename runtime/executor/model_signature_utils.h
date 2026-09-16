@@ -81,34 +81,38 @@ absl::StatusOr<std::vector<SignatureInfo>> GetAvailableSignatures(
 // Selects signatures to load based on the target capacity range. Loads
 // signatures for lengths in [`min_capacity`, `target_capacity`], plus the
 // smallest signature that can accommodate `target_capacity`. If
-// `target_capacity` exceeds all available signatures, loads all signatures
-// >= `min_capacity`. If `min_capacity` is not set, all signatures up to
-// `target_capacity` (inclusive) are loaded. Returns metadata describing the
-// loaded signatures.
+// `target_capacity` is set and exceeds all available signatures, returns an
+// error. If `target_capacity` is not set, all signatures >= `min_capacity` are
+// loaded. Returns metadata describing the loaded signatures.
 absl::StatusOr<SelectedTextSignaturesInfo> SelectSignaturesByCapacity(
-    const std::vector<SignatureInfo>& signatures, int target_capacity,
+    const std::vector<SignatureInfo>& signatures,
+    std::optional<int> target_capacity = std::nullopt,
     std::optional<int> min_capacity = std::nullopt);
 
 // Selects the text encoder signatures to load based on the expected maximum
 // input length and optional minimum input length. Loads signatures for all
 // lengths in [`min_input_length`, `max_input_length`], plus the smallest
 // signature that can accommodate `max_input_length`. If `max_input_length`
-// exceeds all available signatures, loads all signatures >= `min_input_length`.
+// is set and exceeds all available signatures, returns an error. If
+// `max_input_length` is not set, all signatures >= `min_input_length` are
+// loaded.
 absl::StatusOr<SelectedTextSignaturesInfo> SelectTextEncoderSignatures(
-    const std::vector<SignatureInfo>& signatures, int max_input_length,
+    const std::vector<SignatureInfo>& signatures,
+    std::optional<int> max_input_length = std::nullopt,
     std::optional<int> min_input_length = std::nullopt);
 
 // Convenience overload that retrieves text encoder signatures from
 // ModelResources.
 absl::StatusOr<SelectedTextSignaturesInfo> SelectTextEncoderSignatures(
-    ModelResources& resources, int max_input_length,
+    ModelResources& resources,
+    std::optional<int> max_input_length = std::nullopt,
     std::optional<int> min_input_length = std::nullopt);
 
 // Selects the vision encoder signatures to load based on
 // `vision_tokens_per_image`. Loads signatures for all lengths up to
 // `vision_tokens_per_image`, plus the smallest signature that can accommodate
 // `vision_tokens_per_image`. If `vision_tokens_per_image` exceeds all
-// available signatures, loads all of them.
+// available signatures, returns an error.
 absl::StatusOr<SelectedTextSignaturesInfo> SelectVisionEncoderSignatures(
     const std::vector<SignatureInfo>& signatures, int vision_tokens_per_image);
 
@@ -121,7 +125,7 @@ absl::StatusOr<SelectedTextSignaturesInfo> SelectVisionEncoderSignatures(
 // `vision_tokens_per_image`. Loads signatures for all lengths up to
 // `vision_tokens_per_image`, plus the smallest signature that can accommodate
 // `vision_tokens_per_image`. If `vision_tokens_per_image` exceeds all
-// available signatures, loads all of them. Returns nullopt if no adapter
+// available signatures, returns an error. Returns nullopt if no adapter
 // signatures are present.
 absl::StatusOr<std::optional<SelectedTextSignaturesInfo>>
 SelectVisionAdapterSignatures(const std::vector<SignatureInfo>& signatures,

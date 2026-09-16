@@ -86,7 +86,7 @@ class EmbeddingEngineTests: XCTestCase {
     let config = EmbeddingEngineConfig(
       modelPath: modelPath,
       backend: .cpu(),
-      maxInputLength: 512
+      maxInputLength: 128
     )
     let engine = EmbeddingEngine(config: config)
     try await engine.initialize()

@@ -174,22 +174,26 @@ absl::StatusOr<std::vector<SignatureInfo>> GetAvailableSignatures(
 }
 
 absl::StatusOr<SelectedTextSignaturesInfo> SelectSignaturesByCapacity(
-    const std::vector<SignatureInfo>& signatures, int target_capacity,
-    std::optional<int> min_capacity) {
-  if (target_capacity <= 0) {
+    const std::vector<SignatureInfo>& signatures,
+    std::optional<int> target_capacity, std::optional<int> min_capacity) {
+  if (target_capacity.has_value() && *target_capacity <= 0) {
     return absl::InvalidArgumentError(absl::StrCat(
-        "Target capacity must be positive, got: ", target_capacity));
+        "Target capacity must be positive, got: ", *target_capacity));
   }
   if (min_capacity.has_value()) {
     if (*min_capacity < 0) {
       return absl::InvalidArgumentError(absl::StrCat(
           "min_capacity must be non-negative, got: ", *min_capacity));
     }
-    if (*min_capacity > target_capacity) {
+    if (target_capacity.has_value() && *min_capacity > *target_capacity) {
       return absl::InvalidArgumentError(absl::StrCat(
           "min_capacity (", *min_capacity,
-          ") cannot be greater than target_capacity (", target_capacity, ")"));
+          ") cannot be greater than target_capacity (", *target_capacity, ")"));
     }
+  }
+  if (!target_capacity.has_value() && !min_capacity.has_value()) {
+    return absl::InvalidArgumentError(
+        "At least one of target_capacity or min_capacity must be set.");
   }
   if (signatures.empty()) {
     return absl::NotFoundError("No signatures found in model.");
@@ -209,7 +213,7 @@ absl::StatusOr<SelectedTextSignaturesInfo> SelectSignaturesByCapacity(
     }
     result.signature_names.push_back(sig.signature_name);
     result.signature_lengths.push_back(sig.length);
-    if (sig.length >= target_capacity) {
+    if (target_capacity.has_value() && sig.length >= *target_capacity) {
       break;
     }
   }
@@ -222,15 +226,23 @@ absl::StatusOr<SelectedTextSignaturesInfo> SelectSignaturesByCapacity(
     return absl::NotFoundError("No signatures could be selected.");
   }
 
+  if (target_capacity.has_value() &&
+      *target_capacity > result.max_signature_length) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Requested target capacity (", *target_capacity,
+                     ") exceeds maximum available signature length (",
+                     result.max_signature_length, ")."));
+  }
+
   return result;
 }
 
 absl::StatusOr<SelectedTextSignaturesInfo> SelectTextEncoderSignatures(
-    const std::vector<SignatureInfo>& signatures, int max_input_length,
-    std::optional<int> min_input_length) {
-  if (max_input_length <= 0) {
+    const std::vector<SignatureInfo>& signatures,
+    std::optional<int> max_input_length, std::optional<int> min_input_length) {
+  if (max_input_length.has_value() && *max_input_length <= 0) {
     return absl::InvalidArgumentError(absl::StrCat(
-        "max_input_length must be positive, got: ", max_input_length));
+        "max_input_length must be positive, got: ", *max_input_length));
   }
   if (min_input_length.has_value() && *min_input_length < 0) {
     return absl::InvalidArgumentError(absl::StrCat(
@@ -244,7 +256,7 @@ absl::StatusOr<SelectedTextSignaturesInfo> SelectTextEncoderSignatures(
 }
 
 absl::StatusOr<SelectedTextSignaturesInfo> SelectTextEncoderSignatures(
-    ModelResources& resources, int max_input_length,
+    ModelResources& resources, std::optional<int> max_input_length,
     std::optional<int> min_input_length) {
   LITERT_ASSIGN_OR_RETURN(
       auto signatures,
@@ -285,10 +297,7 @@ SelectVisionAdapterSignatures(const std::vector<SignatureInfo>& signatures,
         absl::StrCat("vision_tokens_per_image must be positive, got: ",
                      vision_tokens_per_image));
   }
-  LITERT_ASSIGN_OR_RETURN(
-      auto result,
-      SelectSignaturesByCapacity(signatures, vision_tokens_per_image));
-  return result;
+  return SelectSignaturesByCapacity(signatures, vision_tokens_per_image);
 }
 
 absl::StatusOr<std::optional<SelectedTextSignaturesInfo>>

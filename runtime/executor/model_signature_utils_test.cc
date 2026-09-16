@@ -44,6 +44,7 @@ namespace {
 
 using ::testing::_;  // NOLINT: Required by ASSERT_OK_AND_ASSIGN().
 using ::testing::ElementsAre;
+using ::testing::HasSubstr;
 using ::testing::SizeIs;
 using ::testing::status::StatusIs;
 
@@ -394,14 +395,11 @@ TEST(ModelSignatureUtilsTest, SelectTextEncoderSignatures_Success) {
   EXPECT_THAT(result_exact.signature_lengths, ElementsAre(256));
   EXPECT_EQ(result_exact.max_signature_length, 256);
 
-  // Exceeds all signatures -> loads all
-  ASSERT_OK_AND_ASSIGN(
-      auto result_all,
-      SelectTextEncoderSignatures(signatures, /*max_input_length=*/2000));
-  EXPECT_THAT(result_all.signature_names,
-              ElementsAre("encoder_256", "encoder_512", "encoder_1024"));
-  EXPECT_THAT(result_all.signature_lengths, ElementsAre(256, 512, 1024));
-  EXPECT_EQ(result_all.max_signature_length, 1024);
+  // Exceeds all signatures -> returns error
+  EXPECT_THAT(
+      SelectTextEncoderSignatures(signatures, /*max_input_length=*/2000),
+      StatusIs(absl::StatusCode::kInvalidArgument,
+               HasSubstr("exceeds maximum available signature length")));
 
   // min_input_length filtering
   ASSERT_OK_AND_ASSIGN(
@@ -444,6 +442,17 @@ TEST(ModelSignatureUtilsTest, SelectTextEncoderSignatures_Success) {
   EXPECT_THAT(SelectTextEncoderSignatures(signatures, /*max_input_length=*/512,
                                           /*min_input_length=*/1024),
               StatusIs(absl::StatusCode::kInvalidArgument));
+
+  // min_input_length only (no max_input_length) loads all signatures >=
+  // min_input_length
+  ASSERT_OK_AND_ASSIGN(
+      auto result_min_only,
+      SelectTextEncoderSignatures(signatures, /*max_input_length=*/std::nullopt,
+                                  /*min_input_length=*/512));
+  EXPECT_THAT(result_min_only.signature_names,
+              ElementsAre("encoder_512", "encoder_1024"));
+  EXPECT_THAT(result_min_only.signature_lengths, ElementsAre(512, 1024));
+  EXPECT_EQ(result_min_only.max_signature_length, 1024);
 }
 
 TEST(ModelSignatureUtilsTest,
@@ -488,13 +497,11 @@ TEST(ModelSignatureUtilsTest, SelectVisionEncoderSignatures_Success) {
   EXPECT_THAT(result_100.signature_lengths, ElementsAre(70, 140));
   EXPECT_EQ(result_100.max_signature_length, 140);
 
-  // Exceeds all capacities -> loads all
-  ASSERT_OK_AND_ASSIGN(auto result_all,
-                       SelectVisionEncoderSignatures(signatures, 500));
-  EXPECT_THAT(result_all.signature_names,
-              ElementsAre("vision_70", "vision_140", "vision_280"));
-  EXPECT_THAT(result_all.signature_lengths, ElementsAre(70, 140, 280));
-  EXPECT_EQ(result_all.max_signature_length, 280);
+  // Exceeds all capacities -> returns error
+  EXPECT_THAT(
+      SelectVisionEncoderSignatures(signatures, 500),
+      StatusIs(absl::StatusCode::kInvalidArgument,
+               HasSubstr("exceeds maximum available signature length")));
 }
 
 TEST(ModelSignatureUtilsTest,
@@ -539,15 +546,12 @@ TEST(ModelSignatureUtilsTest, SelectVisionAdapterSignatures_Success) {
   EXPECT_THAT(result_100->signature_lengths, ElementsAre(70, 140));
   EXPECT_EQ(result_100->max_signature_length, 140);
 
-  // Exceeds all capacities -> loads all
-  ASSERT_OK_AND_ASSIGN(auto result_all,
-                       SelectVisionAdapterSignatures(
-                           signatures, /*vision_tokens_per_image=*/500));
-  ASSERT_TRUE(result_all.has_value());
-  EXPECT_THAT(result_all->signature_names,
-              ElementsAre("adapter_70", "adapter_140", "adapter_280"));
-  EXPECT_THAT(result_all->signature_lengths, ElementsAre(70, 140, 280));
-  EXPECT_EQ(result_all->max_signature_length, 280);
+  // Exceeds all capacities -> returns error
+  EXPECT_THAT(
+      SelectVisionAdapterSignatures(signatures,
+                                    /*vision_tokens_per_image=*/500),
+      StatusIs(absl::StatusCode::kInvalidArgument,
+               HasSubstr("exceeds maximum available signature length")));
 }
 
 TEST(ModelSignatureUtilsTest,

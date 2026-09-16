@@ -196,7 +196,7 @@ TEST(EmbeddingEngineCTest, ComputeEmbeddingWithMaxInputLengthSuccess) {
   auto* settings = litert_lm_embedding_engine_settings_create(
       kTestEmbeddingModelPath, "cpu", nullptr, nullptr);
   ASSERT_NE(settings, nullptr);
-  litert_lm_embedding_engine_settings_set_max_input_length(settings, 512);
+  litert_lm_embedding_engine_settings_set_max_input_length(settings, 128);
 
   auto* engine = litert_lm_embedding_engine_create(settings);
   litert_lm_embedding_engine_settings_delete(settings);
@@ -222,6 +222,18 @@ TEST(EmbeddingEngineCTest, ComputeEmbeddingWithMaxInputLengthSuccess) {
   litert_lm_embedding_options_delete(options);
   litert_lm_input_data_delete(input_data);
   litert_lm_embedding_engine_delete(engine);
+}
+
+TEST(EmbeddingEngineCTest,
+     ComputeEmbeddingWithMaxInputLengthExceedingCapacityFails) {
+  auto* settings = litert_lm_embedding_engine_settings_create(
+      kTestEmbeddingModelPath, "cpu", nullptr, nullptr);
+  ASSERT_NE(settings, nullptr);
+  litert_lm_embedding_engine_settings_set_max_input_length(settings, 512);
+
+  auto* engine = litert_lm_embedding_engine_create(settings);
+  litert_lm_embedding_engine_settings_delete(settings);
+  EXPECT_EQ(engine, nullptr);
 }
 
 TEST(EmbeddingEngineCTest, ComputeEmbeddingBatchSuccess) {
