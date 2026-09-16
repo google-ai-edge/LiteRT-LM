@@ -39,6 +39,25 @@ public enum Backend: Equatable, Hashable, Sendable {
   }
 }
 
+/// Activation data type for inference.
+///
+/// Note: Support depends on the specific model architecture and target backend. Most models
+/// support `.float16` and `.float32` (when not overriding, GPU backends typically default to
+/// `.float16` to optimize throughput, while CPU backends typically default to `.float32`).
+/// Setting an activation data type not supported by the model or backend (e.g., `.int8` on a
+/// standard float model) will cause `Engine.initialize()` to fail with an error (e.g. tensor
+/// type mismatch or unsupported sampler).
+public enum ActivationDataType: Int32, Equatable, Hashable, Sendable {
+  /// 32-bit floating point activation data type.
+  case float32 = 0
+  /// 16-bit floating point activation data type.
+  case float16 = 1
+  /// 16-bit integer activation data type.
+  case int16 = 2
+  /// 8-bit integer activation data type.
+  case int8 = 3
+}
+
 /// Configuration for the LiteRT-LM engine.
 public struct EngineConfig: Hashable, Sendable {
   /// The file path to the LiteRT-LM model.
@@ -61,6 +80,12 @@ public struct EngineConfig: Hashable, Sendable {
   public let loraRank: Int?
   /// The rank of the audio LoRA weights. If 0 or nil, audio LoRA is disabled.
   public let audioLoraRank: Int?
+  /// Optional activation data type override for inference (e.g., `.float32`, `.float16`).
+  /// When `nil`, use the default value from the model or the engine (typically `.float16` for
+  /// GPU backends to optimize throughput and memory bandwidth, and `.float32` for CPU backends).
+  /// Note: If the specified activation data type is not supported by the model or backend,
+  /// `Engine.initialize()` will fail with an error at initialization time.
+  public let activationDataType: ActivationDataType?
 
   /// - Parameters:
   ///   - modelPath: The file path to the LiteRT-LM model.
@@ -76,6 +101,10 @@ public struct EngineConfig: Hashable, Sendable {
   ///     application has write access. If `nil`, it uses the directory of the `modelPath`.
   ///   - loraRank: The rank of the text LoRA weights.
   ///   - audioLoraRank: The rank of the audio LoRA weights.
+  ///   - activationDataType: Optional activation data type override for inference. When `nil`,
+  ///     defaults to the model/engine default (typically `.float16` for GPU and `.float32` for
+  ///     CPU). Note: If the specified type is not supported by the model or backend,
+  ///     `Engine.initialize()` will fail.
   /// - Throws: `LiteRTLMError` if `maxNumTokens` is less than or equal to 0.
   public init(
     modelPath: String, backend: Backend = .cpu(), visionBackend: Backend? = nil,
@@ -83,7 +112,8 @@ public struct EngineConfig: Hashable, Sendable {
     maxNumTokens: Int? = nil,
     cacheDir: String? = nil,
     loraRank: Int? = nil,
-    audioLoraRank: Int? = nil
+    audioLoraRank: Int? = nil,
+    activationDataType: ActivationDataType? = nil
   ) throws {
     if let maxNumTokens, maxNumTokens <= 0 {
       throw LiteRTLMError.config(.invalidMaxNumTokens)
@@ -96,6 +126,7 @@ public struct EngineConfig: Hashable, Sendable {
     self.cacheDir = cacheDir
     self.loraRank = loraRank
     self.audioLoraRank = audioLoraRank
+    self.activationDataType = activationDataType
   }
 }
 
