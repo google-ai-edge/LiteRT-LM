@@ -59,10 +59,6 @@ class Gemma4DataProcessor
     return config_;
   }
 
-  // Formats tool declarations.
-  absl::StatusOr<nlohmann::ordered_json> FormatTools(
-      const nlohmann::ordered_json& tools) const override;
-
   absl::StatusOr<std::unique_ptr<Constraint>> CreateConstraint(
       const nlohmann::ordered_json& tools) const override;
 
@@ -114,14 +110,6 @@ class Gemma4DataProcessor
   absl::StatusOr<Message> ToMessageImpl(
       const Responses& responses,
       const Gemma4DataProcessorArguments& args) const override;
-
-  absl::Status CloneStateImpl(
-      const TypeSafeModelDataProcessor<Gemma4DataProcessorConfig,
-                                       Gemma4DataProcessorArguments>& other)
-      override {
-    ABSL_VLOG(1) << "Gemma4DataProcessor::CloneStateImpl is a no-op.";
-    return absl::OkStatus();
-  }
 
 #if !defined(LITERT_LM_FST_CONSTRAINTS_DISABLED)
   std::unique_ptr<LiteRtLmGemmaModelConstraintProvider,

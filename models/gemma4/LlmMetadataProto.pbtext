@@ -48,7 +48,6 @@ llm_model_type {
     open_quote: "<|\"|>"
     close_quote: "<|\"|>"
     function_response_start: "<|tool_response>"
-    use_template_for_fc_format: true
   }
 }
 prompt_templates {

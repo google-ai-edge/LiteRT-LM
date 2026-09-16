@@ -36,11 +36,12 @@ namespace litert::lm {
 //
 // const json user_message{
 //     {"role", "user"},
-//     {"content", "I need help"},
+//     {"content", {{{"type", "text"}, {"text", "I need help"}}}},
 // };
 // const json assistant_message{
 //     {"role", "assistant"},
-//     {"content", "Hi, what can I do for you?"},
+//     {"content", {{{"type", "text"}, {"text", "Hi, what can I do for
+//     you?"}}}},
 // };
 // const json tools = json::parse(R"({
 //   "type": "function",
@@ -62,7 +63,7 @@ namespace litert::lm {
 //
 // PromptTemplateInput input;
 // input.messages = json::array({user_message,
-//                                message_assistant_text});
+//                                assistant_message});
 // input.tools = tools;
 // input.add_generation_prompt = false;
 // input.extra_context = json::object({{"extra_key", "extra_value"}});
@@ -109,10 +110,6 @@ struct PromptTemplateCapabilities {
   bool supports_parallel_tool_calls = false;
   // Whether the template supports tool call id.
   bool supports_tool_call_id = false;
-
-  // Whether the template requires typed content. {"type": "text"}, {"type":
-  // "image"}, {"type": "audio"}, {"type": "video"} etc.
-  bool requires_typed_content = false;
 
   // Whether the template supports single turn, i.e. appending to the prefill
   // without repeating the whole history.

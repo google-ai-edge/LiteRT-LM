@@ -25,7 +25,6 @@ mod ffi {
         supports_system_role: bool,
         supports_parallel_tool_calls: bool,
         supports_tool_call_id: bool,
-        requires_typed_content: bool,
         supports_single_turn: bool,
     }
 
@@ -80,30 +79,6 @@ fn detect_capabilities(source: &str) -> ffi::ChatTemplateCapabilities {
         let undeclared = tmpl.undeclared_variables(true);
         if undeclared.contains("tools") {
             caps.supports_tools = true;
-        }
-
-        let test_content = "test content";
-        let test_str_user_msg = json!({ "role": "user", "content": test_content });
-        let test_typed_user_msg = json!({
-            "role": "user",
-            "content": [{ "type": "text", "text": test_content }]
-        });
-
-        let try_render = |msg: Value| -> bool {
-            let ctx = json!({
-                "messages": [msg],
-                "add_generation_prompt": false,
-                "tools": [],
-                "extra_context": {}
-            });
-            tmpl.render(ctx).map(|s| s.contains(test_content)).unwrap_or(false)
-        };
-
-        let str_works = try_render(test_str_user_msg);
-        let typed_works = try_render(test_typed_user_msg);
-
-        if !str_works && typed_works {
-            caps.requires_typed_content = true;
         }
     }
 
@@ -339,20 +314,6 @@ mod tests {
         let res = wrapper.apply(inputs.to_string());
         assert!(res.is_ok);
         assert_eq!(res.content, "Hello World");
-    }
-
-    #[test]
-    fn test_requires_typed_content() {
-        // Template that expects content to be a list of dicts.
-        let source_requires_typed_content = "{% for m in messages %}{% for block in m.content %}{{ block.text }}{% endfor %}{% endfor %}";
-        let wrapper_requires_typed_content =
-            new_minijinja_template(source_requires_typed_content.to_string());
-        assert!(wrapper_requires_typed_content.caps.requires_typed_content);
-
-        // Template that works with string content.
-        let source_any_content = "{{ messages[0].content }}";
-        let wrapper_any_content = new_minijinja_template(source_any_content.to_string());
-        assert!(!wrapper_any_content.caps.requires_typed_content);
     }
 
     #[test]

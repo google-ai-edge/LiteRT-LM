@@ -207,12 +207,28 @@ TEST(PromptTemplateCustomTest, Qwen3MultiTurnTemplateRenderingTest) {
                        GetContents(test_file_path));
   PromptTemplate prompt_template(template_content);
 
+  const json msg_system = {
+      {"role", "system"},
+      {"content", {{{"type", "text"}, {"text", "I am The System!"}}}},
+  };
+  const json msg_user_1 = {
+      {"role", "user"},
+      {"content", {{{"type", "text"}, {"text", "I need help"}}}},
+  };
+  const json msg_assistant = {
+      {"role", "assistant"},
+      {"content", {{{"type", "text"}, {"text", "Hi, what can I do for you?"}}}},
+  };
+  const json msg_user_2 = {
+      {"role", "user"},
+      {"content", {{{"type", "text"}, {"text", "Write a poem about a cat"}}}},
+  };
+
   for (bool enable_thinking : {true, false}) {
     json extra_context = json::object({{"enable_thinking", enable_thinking}});
 
     PromptTemplateInput old_input{
-        .messages = json::array({GetMessageSystem(), GetMessageUserTextTurn1(),
-                                 GetMessageAssistantText()}),
+        .messages = json::array({msg_system, msg_user_1, msg_assistant}),
         .tools = json::array({GetTools()}),
         .add_generation_prompt = false,
         .extra_context = extra_context,
@@ -222,8 +238,7 @@ TEST(PromptTemplateCustomTest, Qwen3MultiTurnTemplateRenderingTest) {
 
     PromptTemplateInput new_input{
         .messages =
-            json::array({GetMessageSystem(), GetMessageUserTextTurn1(),
-                         GetMessageAssistantText(), GetMessageUserTextTurn2()}),
+            json::array({msg_system, msg_user_1, msg_assistant, msg_user_2}),
         .tools = json::array({GetTools()}),
         .add_generation_prompt = true,
         .extra_context = extra_context,

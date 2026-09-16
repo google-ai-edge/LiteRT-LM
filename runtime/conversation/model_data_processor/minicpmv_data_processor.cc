@@ -34,11 +34,8 @@
 #include "litert/cc/litert_layout.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/preprocessor/minicpmv_image_preprocess.h"
-#include "runtime/components/prompt_template.h"
-#include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/data_utils.h"
 #include "runtime/conversation/model_data_processor/minicpmv_data_processor_config.h"
-#include "runtime/conversation/model_data_processor/model_data_processor.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/memory_mapped_file.h"
@@ -196,14 +193,8 @@ void AppendText(absl::string_view text, std::vector<InputData>& output) {
 }  // namespace
 
 absl::StatusOr<std::unique_ptr<MiniCpmVDataProcessor>>
-MiniCpmVDataProcessor::Create(MiniCpmVDataProcessorConfig config,
-                              const PromptTemplateCapabilities& capabilities) {
-  return absl::WrapUnique(new MiniCpmVDataProcessor(config, capabilities));
-}
-
-absl::StatusOr<ordered_json> MiniCpmVDataProcessor::FormatTools(
-    const ordered_json& tools) const {
-  return tools;
+MiniCpmVDataProcessor::Create(MiniCpmVDataProcessorConfig config) {
+  return absl::WrapUnique(new MiniCpmVDataProcessor(config));
 }
 
 absl::StatusOr<std::vector<InputData>>
@@ -294,21 +285,6 @@ MiniCpmVDataProcessor::ToInputDataVectorImpl(
   AppendText(absl::string_view(rendered_template_prompt).substr(text_cursor),
              output);
   return output;
-}
-
-absl::StatusOr<Message> MiniCpmVDataProcessor::ToMessageImpl(
-    const Responses& responses,
-    const MiniCpmVDataProcessorArguments& args) const {
-  absl::string_view response_text = responses.GetTexts()[0];
-  ordered_json content = ordered_json::array(
-      {{{"type", "text"}, {"text", std::string(response_text)}}});
-  return ordered_json::object({{"role", "assistant"}, {"content", content}});
-}
-
-absl::Status MiniCpmVDataProcessor::CloneStateImpl(
-    const TypeSafeModelDataProcessor<MiniCpmVDataProcessorConfig,
-                                     MiniCpmVDataProcessorArguments>& other) {
-  return absl::OkStatus();
 }
 
 }  // namespace litert::lm

@@ -104,14 +104,6 @@ class FunctionGemmaDataProcessor
       const Responses& responses,
       const FunctionGemmaDataProcessorArguments& args) const override;
 
-  absl::Status CloneStateImpl(
-      const TypeSafeModelDataProcessor<FunctionGemmaDataProcessorConfig,
-                                       FunctionGemmaDataProcessorArguments>&
-          other) override {
-    ABSL_VLOG(1) << "FunctionGemmaDataProcessor::CloneStateImpl is a no-op.";
-    return absl::OkStatus();
-  }
-
 #if !defined(LITERT_LM_FST_CONSTRAINTS_DISABLED)
   std::unique_ptr<LiteRtLmGemmaModelConstraintProvider,
                   decltype(&LiteRtLmGemmaModelConstraintProvider_Destroy)>

@@ -200,13 +200,6 @@ absl::StatusOr<Message> Lfm2DataProcessor::ToMessageImpl(
   return message;
 }
 
-absl::Status Lfm2DataProcessor::CloneStateImpl(
-    const TypeSafeModelDataProcessor<Lfm2DataProcessorConfig,
-                                     Lfm2DataProcessorArguments>& other) {
-  // LFM2 has no state to clone (image_preprocessor_ is ignored as requested).
-  return absl::OkStatus();
-}
-
 absl::StatusOr<ModelDataProcessor::SingleTurnTemplateRenderResult>
 Lfm2DataProcessor::RenderSingleTurnTemplate(
     std::vector<Message>& history, const Preface& preface,
