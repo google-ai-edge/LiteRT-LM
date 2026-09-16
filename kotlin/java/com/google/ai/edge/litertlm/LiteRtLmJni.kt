@@ -530,6 +530,25 @@ internal object LiteRtLmJni {
    */
   external fun nativeModalitySocName(modelInfoPointer: Long, modality: Int): String?
 
+  /**
+   * Returns the model type integer value (0 = Unknown, 1 = LLM, 2 = Embedding).
+   *
+   * @param modelInfoPointer A pointer to the native model info instance.
+   * @return The model type integer value.
+   */
+  external fun nativeModelType(modelInfoPointer: Long): Int
+
+  /** Returns the output embedding dimension, or -1 if not defined. */
+  external fun nativeEmbeddingDimension(modelInfoPointer: Long): Int
+
+  /**
+   * Returns the list of embedding signature selection choices, or null if not defined.
+   *
+   * @param modelInfoPointer A pointer to the native model info instance.
+   * @return An IntArray of supported lengths, or null.
+   */
+  external fun nativeEmbeddingSignatureSelection(modelInfoPointer: Long): IntArray?
+
   /** Creates a new LiteRT-LM embedding engine. */
   external fun nativeCreateEmbeddingEngine(
     modelFd: Int,
