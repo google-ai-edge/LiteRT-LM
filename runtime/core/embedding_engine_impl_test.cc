@@ -2240,6 +2240,5 @@ TEST(EmbeddingEngineImplTest,
   ASSERT_OK_AND_ASSIGN(auto turn, recorded_info->GetPrefillTurn(0));
   EXPECT_EQ(turn.num_tokens, 9);
 }
-
 }  // namespace
 }  // namespace litert::lm

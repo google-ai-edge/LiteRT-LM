@@ -127,6 +127,15 @@ ExtractImagePreprocessParameter(const proto::EmbeddingMetadata& metadata) {
   return std::nullopt;
 }
 
+std::optional<int> GetVisionTokensPerImageFromMetadata(
+    const proto::EmbeddingMetadata& metadata) {
+  if (!metadata.has_embedding_model_type()) {
+    return std::nullopt;
+  }
+  const auto& model_type = metadata.embedding_model_type();
+  return std::nullopt;
+}
+
 absl::StatusOr<std::unique_ptr<::litert::support::AudioPreprocessor>>
 ExtractAudioPreprocessor(const proto::EmbeddingMetadata& metadata) {
   if (metadata.has_audio_preprocessor()) {
@@ -245,6 +254,17 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
   if (!settings.GetMaxInputLength().has_value() && metadata.has_value() &&
       metadata->has_max_input_length()) {
     settings.SetMaxInputLength(metadata->max_input_length());
+  }
+
+  // Default vision_tokens_per_image from metadata if not explicitly set in
+  // settings.
+  if (settings.GetVisionExecutorSettings().has_value() &&
+      !settings.GetVisionTokensPerImage().has_value() && metadata.has_value()) {
+    auto vision_tokens_per_image =
+        GetVisionTokensPerImageFromMetadata(*metadata);
+    if (vision_tokens_per_image.has_value() && *vision_tokens_per_image > 0) {
+      settings.SetVisionTokensPerImage(*vision_tokens_per_image);
+    }
   }
 
   // Resolve defaults and metadata preferences, then validate settings.
@@ -769,6 +789,18 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
             *streaming_resources));
     ABSL_RETURN_IF_ERROR(
         ClearStoredWeightsStream(ModelType::kTfLiteTextEncoder));
+  }
+
+  // Default vision_tokens_per_image from metadata if not explicitly set in
+  // settings.
+  if (settings.GetVisionExecutorSettings().has_value() &&
+      !settings.GetVisionTokensPerImage().has_value() &&
+      settings.GetEmbeddingMetadata().has_value()) {
+    auto vision_tokens_per_image =
+        GetVisionTokensPerImageFromMetadata(*settings.GetEmbeddingMetadata());
+    if (vision_tokens_per_image.has_value() && *vision_tokens_per_image > 0) {
+      settings.SetVisionTokensPerImage(*vision_tokens_per_image);
+    }
   }
 
   // Auto-select vision encoder and adapter signatures if
