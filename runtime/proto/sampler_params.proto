@@ -58,4 +58,10 @@ message SamplerParameters {
   // The specific backend used for sampling. If not specified, the default
   // backend will be used.
   Backend backend = 6;
+
+  // Whether to compute exact full-vocabulary token log-probabilities on CPU
+  // (log-softmax over all vocabulary logits). If false (default), reuses the
+  // candidate probability from the Top-K/Top-P filter, avoiding an expensive
+  // full-vocabulary softmax pass on CPU.
+  bool compute_exact_log_probs = 7;
 }

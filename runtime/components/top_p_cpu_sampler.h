@@ -34,12 +34,14 @@ class TopPSampler : public Sampler {
   // - p: The top-p probability mass to consider.
   // - batch_size: The batch size of the input logits.
   // - sequence_size: The sequence length of the input logits.
-  // - seed: The seed for the random number generator.
-  static absl::StatusOr<std::unique_ptr<TopPSampler>> Create(int k, float p,
-                                                             float temperature,
-                                                             int batch_size,
-                                                             int sequence_size,
-                                                             int seed);
+  // - compute_exact_log_probs: Optional. If true, computes exact
+  //   full-vocabulary token log-probabilities (log-softmax over all vocabulary
+  //   logits). If false (default), reuses the candidate probability from the
+  //   Top-K/Top-P filter, avoiding an expensive full-vocabulary softmax pass
+  //   on CPU.
+  static absl::StatusOr<std::unique_ptr<TopPSampler>> Create(
+      int k, float p, float temperature, int batch_size, int sequence_size,
+      int seed, bool compute_exact_log_probs = false);
 
   // Given a batch of logits, samples a batch of token ids.
   // The expected shape of the logits is [batch_size, sequence_size,
@@ -57,14 +59,22 @@ class TopPSampler : public Sampler {
       const proto::SamplerParameters& sampler_params, int batch_size,
       std::shared_ptr<std::default_random_engine> rand_gen) override;
 
+  // Sets whether to compute exact full-vocabulary token log-probabilities.
+  void SetComputeExactLogProbs(bool compute_exact_log_probs) {
+    compute_exact_log_probs_ = compute_exact_log_probs;
+  }
+  bool ComputeExactLogProbs() const { return compute_exact_log_probs_; }
+
  private:
   explicit TopPSampler(int k, float p, float temperature, int batch_size,
-                       int sequence_size, int seed)
+                       int sequence_size, int seed,
+                       bool compute_exact_log_probs = false)
       : k_(k),
         p_(p),
         temperature_(temperature),
         batch_size_(batch_size),
-        sequence_size_(sequence_size) {
+        sequence_size_(sequence_size),
+        compute_exact_log_probs_(compute_exact_log_probs) {
     generator_ = std::make_shared<std::default_random_engine>(seed);
   }
 
@@ -74,6 +84,7 @@ class TopPSampler : public Sampler {
   float temperature_;
   int batch_size_;
   int sequence_size_;
+  bool compute_exact_log_probs_ = false;
   std::shared_ptr<std::default_random_engine> generator_;
 
   // The logits data to be used for sampling. Having it as a member to avoid

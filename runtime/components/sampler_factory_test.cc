@@ -46,6 +46,24 @@ TEST(SamplerFactoryTest, CreateSamplerForCpuWorksCorrectly) {
   // Make sure the factory creates the correct sampler.
   TopPSampler* top_p_sampler = dynamic_cast<TopPSampler*>(sampler.get());
   EXPECT_NE(top_p_sampler, nullptr);
+  EXPECT_FALSE(top_p_sampler->ComputeExactLogProbs());
+}
+
+TEST(SamplerFactoryTest, CreateSamplerForCpuWithComputeExactLogProbs) {
+  proto::SamplerParameters sampler_params;
+  sampler_params.set_k(1);
+  sampler_params.set_p(0.0);
+  sampler_params.set_temperature(1.0);
+  sampler_params.set_seed(12345);
+  sampler_params.set_type(proto::SamplerParameters::TOP_P);
+  sampler_params.set_compute_exact_log_probs(true);
+  ASSERT_OK_AND_ASSIGN(
+      auto sampler, CreateSampler(Backend::CPU,
+                                  /*batch_size=*/1, std::move(sampler_params)));
+  EXPECT_NE(sampler, nullptr);
+  TopPSampler* top_p_sampler = dynamic_cast<TopPSampler*>(sampler.get());
+  ASSERT_NE(top_p_sampler, nullptr);
+  EXPECT_TRUE(top_p_sampler->ComputeExactLogProbs());
 }
 
 TEST(SamplerFactoryTest, CreateSamplerForCpuWithUnsupportedSamplerTypeFails) {
