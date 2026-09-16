@@ -843,6 +843,15 @@ LiteRtLmEngine* litert_lm_engine_create(const LiteRtLmEngineSettings* settings);
 LITERT_LM_C_API_EXPORT
 void litert_lm_engine_delete(LiteRtLmEngine* engine);
 
+// Counts the number of tokens the engine's tokenizer produces for `text`.
+// Returns -1 on failure (null engine, null text, or tokenizer error).
+//
+// @param engine The engine whose tokenizer is used.
+// @param text UTF-8 null-terminated string to tokenize.
+// @return The number of tokens, or -1 on failure.
+LITERT_LM_C_API_EXPORT
+int litert_lm_engine_count_tokens(LiteRtLmEngine* engine, const char* text);
+
 // Creates a LiteRT LM Session. The caller is responsible for destroying the
 // session using `litert_lm_session_delete`.
 //
