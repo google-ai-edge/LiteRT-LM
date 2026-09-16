@@ -54,6 +54,20 @@ class EmbeddingEngineSettings {
   std::optional<int> GetMinInputLength() const;
   void SetMinInputLength(std::optional<int> min_input_length);
 
+  // Upper bound on how many text encoder signatures EmbeddingEngine prepares.
+  // Unset loads every signature the input length bounds allow.
+  //
+  // Each signature is a full private copy of the graph, so a bundle shipping
+  // one variant per supported sequence length costs that multiple in subgraphs
+  // and tensors. On wasm32 that is enough to exhaust the 4GB address space
+  // during compilation, which is why the web bindings cap this by default.
+  //
+  // The longest signature is always among those prepared, so capping never
+  // reduces the input length the engine accepts. Inputs that would have fit a
+  // dropped signature are padded up to the next one that survived.
+  std::optional<int> GetMaxNumSignatures() const;
+  void SetMaxNumSignatures(std::optional<int> max_num_signatures);
+
   // Desired number of vision tokens generated per image. If set,
   // EmbeddingEngine will automatically select the smallest vision encoder
   // (and adapter) signatures and configure patch metadata accordingly.
@@ -146,6 +160,7 @@ class EmbeddingEngineSettings {
   std::optional<proto::BenchmarkParams> benchmark_params_;
   std::optional<int> max_input_length_;
   std::optional<int> min_input_length_;
+  std::optional<int> max_num_signatures_;
   std::optional<int> vision_tokens_per_image_;
   bool lazy_load_multimodal_encoders_ = false;
 };

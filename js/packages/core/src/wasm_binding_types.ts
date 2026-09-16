@@ -581,6 +581,8 @@ export declare interface EmbeddingEngineSettings extends Deletable {
   [EmbeddingEngineSettingsBrand]: void;
   getMaxInputLength(): number | undefined;
   setMaxInputLength(maxInputLength?: number): void;
+  getMaxNumSignatures(): number | undefined;
+  setMaxNumSignatures(maxNumSignatures?: number): void;
   getVisionTokensPerImage(): number | undefined;
   setVisionTokensPerImage(visionTokensPerImage?: number): void;
   getMutableMainExecutorSettings(): EmbeddingExecutorSettings;

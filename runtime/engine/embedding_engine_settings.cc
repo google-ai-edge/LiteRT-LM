@@ -93,6 +93,15 @@ void EmbeddingEngineSettings::SetMinInputLength(
   min_input_length_ = min_input_length;
 }
 
+std::optional<int> EmbeddingEngineSettings::GetMaxNumSignatures() const {
+  return max_num_signatures_;
+}
+
+void EmbeddingEngineSettings::SetMaxNumSignatures(
+    std::optional<int> max_num_signatures) {
+  max_num_signatures_ = max_num_signatures;
+}
+
 std::optional<int> EmbeddingEngineSettings::GetVisionTokensPerImage() const {
   return vision_tokens_per_image_;
 }
@@ -241,8 +250,9 @@ absl::Status ValidateCacheDir(absl::string_view cache_dir) {
   return absl::OkStatus();
 }
 
-absl::Status ValidateInputLengths(std::optional<int> min_input_length,
-                                  std::optional<int> max_input_length) {
+absl::Status ValidateSignatureSelection(std::optional<int> min_input_length,
+                                        std::optional<int> max_input_length,
+                                        std::optional<int> max_num_signatures) {
   if (max_input_length.has_value() && *max_input_length <= 0) {
     return absl::InvalidArgumentError(absl::StrCat(
         "max_input_length must be positive, got: ", *max_input_length));
@@ -256,6 +266,10 @@ absl::Status ValidateInputLengths(std::optional<int> min_input_length,
     return absl::InvalidArgumentError(absl::StrCat(
         "min_input_length (", *min_input_length,
         ") cannot be greater than max_input_length (", *max_input_length, ")"));
+  }
+  if (max_num_signatures.has_value() && *max_num_signatures <= 0) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "max_num_signatures must be positive, got: ", *max_num_signatures));
   }
   return absl::OkStatus();
 }
@@ -322,8 +336,8 @@ absl::Status EmbeddingEngineSettings::Validate(
         ValidateCacheDir(audio_executor_settings_->GetCacheDir()));
   }
 
-  LITERT_RETURN_IF_ERROR(
-      ValidateInputLengths(min_input_length_, max_input_length_));
+  LITERT_RETURN_IF_ERROR(ValidateSignatureSelection(
+      min_input_length_, max_input_length_, max_num_signatures_));
 
   return absl::OkStatus();
 }

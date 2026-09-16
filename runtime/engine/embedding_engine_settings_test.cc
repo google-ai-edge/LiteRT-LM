@@ -370,6 +370,17 @@ TEST(EmbeddingEngineSettingsTest, ValidateRejectsMinGreaterThanMax) {
               HasSubstr("cannot be greater than max_input_length"));
 }
 
+TEST(EmbeddingEngineSettingsTest, ValidateRejectsNonPositiveMaxNumSignatures) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create("test_embedding_model.tflite"));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+  settings.SetMaxNumSignatures(0);
+
+  EXPECT_THAT(settings.Validate().message(),
+              HasSubstr("max_num_signatures must be positive"));
+}
+
 TEST(EmbeddingEngineSettingsTest, ResolveDefaultsIsIdempotent) {
   ASSERT_OK_AND_ASSIGN(auto model_assets,
                        ModelAssets::Create("test_embedding_model.tflite"));

@@ -47,6 +47,43 @@ std::vector<int> ToIntVector(const DimensionsT& dimensions) {
   return shape;
 }
 
+// Reduces `candidates` (ascending by length, non-empty) to at most
+// `max_num_signatures` entries, preserving order.
+//
+// The last candidate is always kept: it is the one that bounds the longest
+// input the executor will accept, so dropping it would silently shrink the
+// model's usable input length rather than just costing padding. The remaining
+// budget is spread over the other candidates by splitting them into equal
+// sized buckets and taking the middle of each, which keeps the retained
+// lengths roughly evenly spaced instead of clustering at one end. With
+// 128/256/512/1024/2048 available, a budget of 2 keeps 512 and 2048, and a
+// budget of 3 keeps 256, 1024, and 2048.
+std::vector<const SignatureInfo*> ThinCandidates(
+    const std::vector<const SignatureInfo*>& candidates,
+    std::optional<int> max_num_signatures) {
+  const int num_candidates = static_cast<int>(candidates.size());
+  if (!max_num_signatures.has_value() ||
+      *max_num_signatures >= num_candidates) {
+    return candidates;
+  }
+
+  // Number of slots left for candidates other than the last one, and the
+  // number of candidates competing for them.
+  const int num_kept = *max_num_signatures - 1;
+  const int num_remaining = num_candidates - 1;
+
+  std::vector<const SignatureInfo*> result;
+  result.reserve(*max_num_signatures);
+  for (int i = 0; i < num_kept; ++i) {
+    // Midpoint of the i-th bucket: floor((i + 0.5) * num_remaining / num_kept),
+    // computed without floating point.
+    const int index = ((2 * i + 1) * num_remaining) / (2 * num_kept);
+    result.push_back(candidates[index]);
+  }
+  result.push_back(candidates.back());
+  return result;
+}
+
 absl::StatusOr<std::vector<SignatureInfo>> GetTextEncoderSignatures(
     const litert::Model& model) {
   std::vector<SignatureInfo> signature_infos;
@@ -175,7 +212,8 @@ absl::StatusOr<std::vector<SignatureInfo>> GetAvailableSignatures(
 
 absl::StatusOr<SelectedTextSignaturesInfo> SelectSignaturesByCapacity(
     const std::vector<SignatureInfo>& signatures,
-    std::optional<int> target_capacity, std::optional<int> min_capacity) {
+    std::optional<int> target_capacity, std::optional<int> min_capacity,
+    std::optional<int> max_num_signatures) {
   if (target_capacity.has_value() && *target_capacity <= 0) {
     return absl::InvalidArgumentError(absl::StrCat(
         "Target capacity must be positive, got: ", *target_capacity));
@@ -191,9 +229,20 @@ absl::StatusOr<SelectedTextSignaturesInfo> SelectSignaturesByCapacity(
           ") cannot be greater than target_capacity (", *target_capacity, ")"));
     }
   }
-  if (!target_capacity.has_value() && !min_capacity.has_value()) {
+  if (max_num_signatures.has_value() && *max_num_signatures <= 0) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "max_num_signatures must be positive, got: ", *max_num_signatures));
+  }
+  // A cap on its own is a selection intent too: callers that only care about
+  // how many signatures get compiled (the web bindings, which bound wasm
+  // address space without knowing the model's length range) set it and leave
+  // both capacity bounds unset. Only a call that constrains nothing at all is
+  // meaningless.
+  if (!target_capacity.has_value() && !min_capacity.has_value() &&
+      !max_num_signatures.has_value()) {
     return absl::InvalidArgumentError(
-        "At least one of target_capacity or min_capacity must be set.");
+        "At least one of target_capacity, min_capacity, or max_num_signatures "
+        "must be set.");
   }
   if (signatures.empty()) {
     return absl::NotFoundError("No signatures found in model.");
@@ -206,25 +255,28 @@ absl::StatusOr<SelectedTextSignaturesInfo> SelectSignaturesByCapacity(
               return a.length < b.length;
             });
 
-  SelectedTextSignaturesInfo result;
+  std::vector<const SignatureInfo*> candidates;
   for (const auto& sig : sorted_signatures) {
     if (min_capacity.has_value() && sig.length < *min_capacity) {
       continue;
     }
-    result.signature_names.push_back(sig.signature_name);
-    result.signature_lengths.push_back(sig.length);
+    candidates.push_back(&sig);
     if (target_capacity.has_value() && sig.length >= *target_capacity) {
       break;
     }
   }
 
-  if (!result.signature_lengths.empty()) {
-    result.max_signature_length = result.signature_lengths.back();
-  }
-
-  if (result.signature_names.empty()) {
+  if (candidates.empty()) {
     return absl::NotFoundError("No signatures could be selected.");
   }
+
+  SelectedTextSignaturesInfo result;
+  for (const SignatureInfo* sig :
+       ThinCandidates(candidates, max_num_signatures)) {
+    result.signature_names.push_back(sig->signature_name);
+    result.signature_lengths.push_back(sig->length);
+  }
+  result.max_signature_length = result.signature_lengths.back();
 
   if (target_capacity.has_value() &&
       *target_capacity > result.max_signature_length) {
@@ -239,7 +291,8 @@ absl::StatusOr<SelectedTextSignaturesInfo> SelectSignaturesByCapacity(
 
 absl::StatusOr<SelectedTextSignaturesInfo> SelectTextEncoderSignatures(
     const std::vector<SignatureInfo>& signatures,
-    std::optional<int> max_input_length, std::optional<int> min_input_length) {
+    std::optional<int> max_input_length, std::optional<int> min_input_length,
+    std::optional<int> max_num_signatures) {
   if (max_input_length.has_value() && *max_input_length <= 0) {
     return absl::InvalidArgumentError(absl::StrCat(
         "max_input_length must be positive, got: ", *max_input_length));
@@ -252,17 +305,18 @@ absl::StatusOr<SelectedTextSignaturesInfo> SelectTextEncoderSignatures(
     return absl::NotFoundError("No text encoder signatures found in model.");
   }
   return SelectSignaturesByCapacity(signatures, max_input_length,
-                                    min_input_length);
+                                    min_input_length, max_num_signatures);
 }
 
 absl::StatusOr<SelectedTextSignaturesInfo> SelectTextEncoderSignatures(
     ModelResources& resources, std::optional<int> max_input_length,
-    std::optional<int> min_input_length) {
+    std::optional<int> min_input_length,
+    std::optional<int> max_num_signatures) {
   LITERT_ASSIGN_OR_RETURN(
       auto signatures,
       GetAvailableSignatures(resources, ModelType::kTfLiteTextEncoder));
   return SelectTextEncoderSignatures(signatures, max_input_length,
-                                     min_input_length);
+                                     min_input_length, max_num_signatures);
 }
 
 absl::StatusOr<SelectedTextSignaturesInfo> SelectVisionEncoderSignatures(
