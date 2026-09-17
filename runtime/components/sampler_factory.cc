@@ -404,8 +404,8 @@ class TopKOpenClCApiSampler : public TopKCApiSampler {
         return capi_or.status();
       }
       ABSL_LOG(WARNING) << "OpenCL sampler not available, falling back to "
-                           "statically linked C API: "
-                        << capi_or.status();
+                           "statically linked C API.";
+      ABSL_VLOG(1) << "Reason: " << capi_or.status();
       auto static_capi_or = GetStaticTopKOpenClSamplerCApi();
       if (!static_capi_or.ok()) {
         return capi_or.status();
@@ -488,8 +488,8 @@ class TopKWebGpuCApiSampler : public TopKCApiSampler {
         return capi_or.status();
       }
       ABSL_LOG(WARNING) << "WebGPU sampler not available, falling back to "
-                           "statically linked C API: "
-                        << capi_or.status();
+                           "statically linked C API.";
+      ABSL_VLOG(1) << "Reason: " << capi_or.status();
       auto static_capi_or = GetStaticTopKWebGpuSamplerCApi();
       if (!static_capi_or.ok()) {
         return capi_or.status();
@@ -568,8 +568,8 @@ class TopKMetalCApiSampler : public TopKCApiSampler {
         return capi_or.status();
       }
       ABSL_LOG(WARNING) << "Metal sampler not available, falling back to "
-                           "statically linked C API: "
-                        << capi_or.status();
+                           "statically linked C API.";
+      ABSL_VLOG(1) << "Reason: " << capi_or.status();
       auto static_capi_or = GetStaticTopKMetalSamplerCApi();
       if (!static_capi_or.ok()) {
         return capi_or.status();
