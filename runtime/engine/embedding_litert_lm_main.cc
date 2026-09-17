@@ -21,7 +21,9 @@
 // 4) Computes an embedding for --input_prompt and prints the result.
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
+#include <cstdlib>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -38,11 +40,14 @@
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/log/globals.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/str_format.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/time/clock.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
+#include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "runtime/components/model_resources.h"
 #include "runtime/core/embedding_engine_impl.h"
 #include "runtime/engine/embedding_engine.h"
@@ -70,6 +75,10 @@ ABSL_FLAG(
     "Optional path to an audio file (.wav) to compute the embedding for.");
 ABSL_FLAG(std::string, output_embedding_path, "",
           "Optional path to save the full embedding vector as a JSON file.");
+ABSL_FLAG(
+    std::string, compare_embedding_path, "",
+    "Optional path to a vector JSON file (e.g. golden reference) to compute "
+    "and display Cosine Similarity against the current run's output vector.");
 ABSL_FLAG(bool, normalize, true,
           "Whether to L2-normalize the output embedding vector.");
 ABSL_FLAG(bool, use_mmap, false,
@@ -79,8 +88,6 @@ ABSL_FLAG(std::string, dispatch_library_dir, "",
 ABSL_FLAG(int, num_warmup, 2, "Number of warmup iterations for benchmarking.");
 ABSL_FLAG(std::string, input_overflow_strategy, "truncate",
           "Input overflow strategy: error, truncate, or chunk_and_average.");
-// Note: the `benchmark` flag is provided by
-// //runtime/engine:shared_flags.
 ABSL_FLAG(
     int, max_input_length, 0,
     "Maximum input length for embedding execution. If greater than 0, "
@@ -146,6 +153,68 @@ absl::StatusOr<InputOverflowStrategy> ParseInputOverflowStrategy(
   return absl::InvalidArgumentError(
       absl::StrCat("Invalid --input_overflow_strategy: ", strategy_str,
                    ". Must be 'error', 'truncate', or 'chunk_and_average'."));
+}
+
+absl::StatusOr<double> ComputeCosineSimilarity(absl::Span<const float> v1,
+                                               absl::Span<const float> v2) {
+  if (v1.size() != v2.size()) {
+    return absl::InvalidArgumentError(absl::StrFormat(
+        "Vector dimension mismatch: %d vs %d", v1.size(), v2.size()));
+  }
+  double dot = 0.0;
+  double norm1 = 0.0;
+  double norm2 = 0.0;
+  for (size_t i = 0; i < v1.size(); ++i) {
+    dot += static_cast<double>(v1[i]) * static_cast<double>(v2[i]);
+    norm1 += static_cast<double>(v1[i]) * static_cast<double>(v1[i]);
+    norm2 += static_cast<double>(v2[i]) * static_cast<double>(v2[i]);
+  }
+  if (norm1 > 0.0 && norm2 > 0.0) {
+    return dot / (std::sqrt(norm1) * std::sqrt(norm2));
+  }
+  return 0.0;
+}
+
+absl::StatusOr<std::vector<float>> LoadEmbeddingFromJsonFile(
+    absl::string_view file_path) {
+  std::string path_str(file_path);
+  std::ifstream file(path_str);
+  if (!file.is_open()) {
+    const char* build_working_dir = std::getenv("BUILD_WORKING_DIRECTORY");
+    if (build_working_dir != nullptr) {
+      path_str = absl::StrCat(build_working_dir, "/", file_path);
+      file.open(path_str);
+    }
+  }
+  if (!file.is_open()) {
+    const char* build_workspace_dir = std::getenv("BUILD_WORKSPACE_DIRECTORY");
+    if (build_workspace_dir != nullptr) {
+      path_str = absl::StrCat(build_workspace_dir, "/", file_path);
+      file.open(path_str);
+    }
+  }
+  if (!file.is_open()) {
+    return absl::NotFoundError(
+        absl::StrCat("Failed to open embedding file: ", file_path));
+  }
+  std::string content((std::istreambuf_iterator<char>(file)),
+                      std::istreambuf_iterator<char>());
+  nlohmann::json json_data =
+      nlohmann::json::parse(content, nullptr, /*allow_exceptions=*/false);
+  if (json_data.is_discarded() || !json_data.is_array()) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Invalid JSON array in embedding file: ", file_path));
+  }
+  std::vector<float> vec;
+  vec.reserve(json_data.size());
+  for (const auto& elem : json_data) {
+    if (!elem.is_number()) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "JSON array contains non-numeric element in: ", file_path));
+    }
+    vec.push_back(elem.get<float>());
+  }
+  return vec;
 }
 
 absl::Status MainHelper(int argc, char** argv) {
@@ -419,6 +488,17 @@ absl::Status MainHelper(int argc, char** argv) {
     }
     std::cout << "Embedding vector dimension: "
               << last_response.embedding.size() << std::endl;
+    if (const std::string compare_path =
+            absl::GetFlag(FLAGS_compare_embedding_path);
+        !compare_path.empty()) {
+      LITERT_ASSIGN_OR_RETURN(std::vector<float> golden_vec,
+                              LoadEmbeddingFromJsonFile(compare_path));
+      LITERT_ASSIGN_OR_RETURN(
+          double cos_sim,
+          ComputeCosineSimilarity(last_response.embedding, golden_vec));
+      std::cout << absl::StrFormat("Cosine similarity with %s: %.10f\n",
+                                   compare_path, cos_sim);
+    }
     std::cout << "=================================================="
               << std::endl;
     return absl::OkStatus();
@@ -454,6 +534,18 @@ absl::Status MainHelper(int argc, char** argv) {
   }
   std::cout << "]" << std::endl;
   std::cout << "========================================" << std::endl;
+
+  if (const std::string compare_path =
+          absl::GetFlag(FLAGS_compare_embedding_path);
+      !compare_path.empty()) {
+    LITERT_ASSIGN_OR_RETURN(std::vector<float> golden_vec,
+                            LoadEmbeddingFromJsonFile(compare_path));
+    LITERT_ASSIGN_OR_RETURN(
+        double cos_sim,
+        ComputeCosineSimilarity(response.embedding, golden_vec));
+    std::cout << absl::StrFormat("Cosine similarity with %s: %.10f\n",
+                                 compare_path, cos_sim);
+  }
 
   if (const std::string output_path =
           absl::GetFlag(FLAGS_output_embedding_path);
