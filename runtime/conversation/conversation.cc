@@ -59,6 +59,7 @@
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/proto/llm_model_type.pb.h"
 #include "runtime/util/model_type_utils.h"
+#include "runtime/util/perfetto_profiling.h"
 #include "runtime/util/status_macros.h"
 
 namespace litert::lm {
@@ -513,6 +514,7 @@ void Conversation::AddTaskController(
 
 absl::StatusOr<Message> Conversation::SendMessage(const Message& message,
                                                   OptionalArgs optional_args) {
+  LITERT_LM_PERFETTO_TRACE_EVENT("Conversation::SendMessage");
   absl::Notification done;
   absl::Status error_status;
   bool appending = false;
@@ -572,6 +574,7 @@ absl::Status Conversation::SendMessageAsync(
     const Message& message,
     absl::AnyInvocable<void(absl::StatusOr<Message>)> user_callback,
     OptionalArgs optional_args) {
+  LITERT_LM_PERFETTO_TRACE_EVENT("Conversation::SendMessageAsync");
   if (optional_args.args.has_value() &&
       engine_.GetEngineSettings().GetMaxVisionTokensPerImage().has_value()) {
     ABSL_RETURN_IF_ERROR(ValidateVisualTokenBudget(
