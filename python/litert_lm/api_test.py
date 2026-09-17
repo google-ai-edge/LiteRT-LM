@@ -134,67 +134,69 @@ def verify_comprehensive_e2e_suite(model_path: pathlib.Path):
   # 6. Multi-Modal Vision Preface Test
   print("\n6️⃣ Testing Multi-Modal Vision Preface (Image History)...")
   repo_root = pathlib.Path(__file__).resolve().parent.parent.parent
-  apple_img = (
-      repo_root / "runtime/components/preprocessor/testdata/apple.png"
-  )
-  if apple_img.exists():
-    messages = [
-        litert_lm.Message.user(
-            litert_lm.Contents.of(
-                litert_lm.Content.ImageFile(str(apple_img)),
-                "Describe this image.",
-            )
-        ),
-        litert_lm.Message.model(
-            litert_lm.Contents.of("This is an image of an apple.")
-        ),
-    ]
-    with (
-        litert_lm.Engine(
-            str(model_path),
-            vision_backend=litert_lm.Backend.CPU(),
-            max_num_tokens=4096,
-        ) as engine,
-        engine.create_conversation(messages=messages) as conversation,
-    ):
-      resp_vision = conversation.send_message(
-          "How many apples are there in the image?"
-      )
-      text_vision = resp_vision["content"][0]["text"]
-      print(f"   Vision Preface Output: '{text_vision.strip()}'")
-      assert re.search(
-          r"two|2|one|1|apple", text_vision.lower()
-      ), f"Vision Preface Failure: Got '{text_vision}'"
-  else:
-    print(
-        f"   ⚠️ Skipping Vision Preface test (image not found at {apple_img})"
+  apple_img = repo_root / "support/preprocessor/testdata/apple.png"
+  if not apple_img.exists():
+    raise FileNotFoundError(
+        f"❌ Vision test image location changed or missing at {apple_img}. "
+        "Failing remaining tests."
     )
+
+  messages = [
+      litert_lm.Message.user(
+          litert_lm.Contents.of(
+              litert_lm.Content.ImageFile(str(apple_img)),
+              "Describe this image.",
+          )
+      ),
+      litert_lm.Message.model(
+          litert_lm.Contents.of("This is an image of an apple.")
+      ),
+  ]
+  with (
+      litert_lm.Engine(
+          str(model_path),
+          vision_backend=litert_lm.Backend.CPU(),
+          max_num_tokens=4096,
+      ) as engine,
+      engine.create_conversation(messages=messages) as conversation,
+  ):
+    resp_vision = conversation.send_message(
+        "How many apples are there in the image?"
+    )
+    text_vision = resp_vision["content"][0]["text"]
+    print(f"   Vision Preface Output: '{text_vision.strip()}'")
+    assert re.search(
+        r"two|2|one|1|apple", text_vision.lower()
+    ), f"Vision Preface Failure: Got '{text_vision}'"
 
   # 7. Multi-Modal Audio Transcription Test
   print("\n7️⃣ Testing Multi-Modal Audio Transcription...")
   audio_wav = repo_root / "runtime/testdata/have_a_wonderful_day.wav"
-  if audio_wav.exists():
-    with (
-        litert_lm.Engine(
-            str(model_path),
-            audio_backend=litert_lm.Backend.CPU(),
-            max_num_tokens=4096,
-        ) as engine,
-        engine.create_conversation() as conversation,
-    ):
-      resp_audio = conversation.send_message(
-          litert_lm.Contents.of(
-              litert_lm.Content.AudioFile(str(audio_wav)),
-              "Transcribe this audio.",
-          )
-      )
-      text_audio = resp_audio["content"][0]["text"]
-      print(f"   Audio Transcription Output: '{text_audio.strip()}'")
-      assert (
-          "wonderful" in text_audio.lower() and "day" in text_audio.lower()
-      ), f"Audio Failure: Got '{text_audio}'"
-  else:
-    print(f"   ⚠️ Skipping Audio test (file not found at {audio_wav})")
+  if not audio_wav.exists():
+    raise FileNotFoundError(
+        f"❌ Audio test file location changed or missing at {audio_wav}. "
+        "Failing remaining tests."
+    )
+
+  with (
+      litert_lm.Engine(
+          str(model_path),
+          audio_backend=litert_lm.Backend.CPU(),
+          max_num_tokens=4096,
+      ) as engine,
+      engine.create_conversation() as conversation,
+  ):
+    resp_audio = conversation.send_message(
+        litert_lm.Contents.of(
+            litert_lm.Content.AudioFile(str(audio_wav)),
+            "Transcribe this audio.",
+        )
+    )
+    text_audio = resp_audio["content"][0]["text"]
+    print(f"   Audio Transcription Output: '{text_audio.strip()}'")
+    assert (
+        "wonderful" in text_audio.lower() and "day" in text_audio.lower()
+    ), f"Audio Failure: Got '{text_audio}'"
 
   print(
       "\n🎉 ALL 7 COMPREHENSIVE ENTERPRISE VERIFICATION GATES PASSED 100%"
