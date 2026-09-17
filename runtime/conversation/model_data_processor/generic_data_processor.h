@@ -45,9 +45,7 @@ class GenericDataProcessor
                                         GenericDataProcessorArguments> {
  public:
   static absl::StatusOr<std::unique_ptr<ModelDataProcessor>> Create(
-      GenericDataProcessorConfig config = GenericDataProcessorConfig(),
-      const PromptTemplateCapabilities& capabilities =
-          PromptTemplateCapabilities());
+      GenericDataProcessorConfig config = GenericDataProcessorConfig());
 
   // Return the same tools as the input for generic models.
   absl::StatusOr<nlohmann::ordered_json> FormatTools(
@@ -77,11 +75,9 @@ class GenericDataProcessor
  private:
   explicit GenericDataProcessor(
       GenericDataProcessorConfig config,
-      const PromptTemplateCapabilities& capabilities,
       std::unique_ptr<ImagePreprocessor> image_preprocessor = nullptr,
       std::unique_ptr<AudioPreprocessor> audio_preprocessor = nullptr)
       : config_(config),
-        capabilities_(capabilities),
         image_preprocessor_(std::move(image_preprocessor)),
         audio_preprocessor_(std::move(audio_preprocessor)) {};
 
@@ -100,7 +96,6 @@ class GenericDataProcessor
       override;
 
   GenericDataProcessorConfig config_;
-  PromptTemplateCapabilities capabilities_;
   std::unique_ptr<ImagePreprocessor> image_preprocessor_;
   std::unique_ptr<AudioPreprocessor> audio_preprocessor_;
 };

@@ -36,8 +36,7 @@ class FastVlmDataProcessor
  public:
   // Creates a FastVlmDataProcessor instance.
   static absl::StatusOr<std::unique_ptr<FastVlmDataProcessor>> Create(
-      FastVlmDataProcessorConfig config,
-      const PromptTemplateCapabilities& capabilities);
+      FastVlmDataProcessorConfig config);
 
   // Returns the config of the FastVlmDataProcessor.
   const FastVlmDataProcessorConfig& GetConfig() const override {
@@ -57,11 +56,8 @@ class FastVlmDataProcessor
  private:
   explicit FastVlmDataProcessor(
       FastVlmDataProcessorConfig config,
-      const PromptTemplateCapabilities& capabilities,
       std::unique_ptr<ImagePreprocessor> image_preprocessor)
-      : config_(config),
-        capabilities_(capabilities),
-        image_preprocessor_(std::move(image_preprocessor)) {}
+      : config_(config), image_preprocessor_(std::move(image_preprocessor)) {}
 
   absl::StatusOr<std::vector<InputData>> ToInputDataVectorImpl(
       const std::string& rendered_template_prompt,
@@ -78,7 +74,6 @@ class FastVlmDataProcessor
       override;
 
   FastVlmDataProcessorConfig config_;
-  PromptTemplateCapabilities capabilities_;
   std::unique_ptr<ImagePreprocessor> image_preprocessor_;
 };
 

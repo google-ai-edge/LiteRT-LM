@@ -48,7 +48,6 @@ class MiniCpmVDataProcessor
   // the platform default ImagePreprocessor::Create() is used.
   static absl::StatusOr<std::unique_ptr<MiniCpmVDataProcessor>> Create(
       MiniCpmVDataProcessorConfig config,
-      const PromptTemplateCapabilities& capabilities,
       std::unique_ptr<ImagePreprocessor> image_preprocessor = nullptr);
 
   // Returns the config of the MiniCpmVDataProcessor.
@@ -68,10 +67,8 @@ class MiniCpmVDataProcessor
 
  private:
   MiniCpmVDataProcessor(MiniCpmVDataProcessorConfig config,
-                        const PromptTemplateCapabilities& capabilities,
                         std::unique_ptr<ImagePreprocessor> image_preprocessor)
       : config_(config),
-        capabilities_(capabilities),
         image_preprocessor_(std::move(image_preprocessor)) {}
 
   absl::StatusOr<std::vector<InputData>> ToInputDataVectorImpl(
@@ -89,7 +86,6 @@ class MiniCpmVDataProcessor
       override;
 
   MiniCpmVDataProcessorConfig config_;
-  PromptTemplateCapabilities capabilities_;
   // Decodes image bytes for PreprocessImageSliced. Held here so that the
   // backing image codec is set up once per model, not once per image.
   std::unique_ptr<ImagePreprocessor> image_preprocessor_;

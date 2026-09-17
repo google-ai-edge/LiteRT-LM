@@ -39,8 +39,7 @@
 namespace litert::lm {
 
 absl::StatusOr<std::unique_ptr<ModelDataProcessor>>
-GenericDataProcessor::Create(GenericDataProcessorConfig config,
-                             const PromptTemplateCapabilities& capabilities) {
+GenericDataProcessor::Create(GenericDataProcessorConfig config) {
   std::unique_ptr<ImagePreprocessor> image_preprocessor = nullptr;
   std::unique_ptr<AudioPreprocessor> audio_preprocessor = nullptr;
 
@@ -56,8 +55,7 @@ GenericDataProcessor::Create(GenericDataProcessorConfig config,
   }
 
   return absl::WrapUnique(new GenericDataProcessor(
-      config, capabilities, std::move(image_preprocessor),
-      std::move(audio_preprocessor)));
+      config, std::move(image_preprocessor), std::move(audio_preprocessor)));
 }
 
 absl::StatusOr<std::vector<InputData>>

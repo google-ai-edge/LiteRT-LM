@@ -25,6 +25,9 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "litert/cc/litert_layout.h"  // from @litert
+#include "runtime/components/preprocessor/audio_preprocessor.h"
+#include "runtime/components/preprocessor/audio_preprocessor_miniaudio.h"
+#include "runtime/components/preprocessor/image_preprocessor.h"
 #include "runtime/components/prompt_template.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/generic_data_processor_config.h"
@@ -32,9 +35,6 @@
 #include "runtime/conversation/model_data_processor/test_utils.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/util/test_utils.h"  // NOLINT
-#include "support/preprocessor/audio_preprocessor.h"
-#include "support/preprocessor/audio_preprocessor_miniaudio.h"
-#include "support/preprocessor/image_preprocessor.h"
 
 namespace litert::lm {
 namespace {
@@ -81,33 +81,7 @@ TEST(GenericDataProcessorTest, ToMessageDefault) {
 }
 
 TEST(GenericDataProcessorTest, ToTemplateInputNormalizesStringToTypedContent) {
-  ASSERT_OK_AND_ASSIGN(
-      auto processor,
-      GenericDataProcessor::Create(
-          GenericDataProcessorConfig{},
-          PromptTemplateCapabilities{.requires_typed_content = false}));
-  ASSERT_OK_AND_ASSIGN(const json template_input_1,
-                       processor->MessageToTemplateInput(json(
-                           {{"role", "user"}, {"content", "test prompt"}})));
-  EXPECT_EQ(template_input_1,
-            json({{"role", "user"},
-                  {"content", {{{"type", "text"}, {"text", "test prompt"}}}}}));
-  ASSERT_OK_AND_ASSIGN(
-      const json template_input_2,
-      processor->MessageToTemplateInput(
-          json({{"role", "user"},
-                {"content", {{{"type", "text"}, {"text", "test prompt"}}}}})));
-  EXPECT_EQ(template_input_2,
-            json({{"role", "user"},
-                  {"content", {{{"type", "text"}, {"text", "test prompt"}}}}}));
-}
-
-TEST(GenericDataProcessorTest, ToTemplateInputTypedContent) {
-  ASSERT_OK_AND_ASSIGN(
-      auto processor,
-      GenericDataProcessor::Create(
-          GenericDataProcessorConfig{},
-          PromptTemplateCapabilities{.requires_typed_content = true}));
+  ASSERT_OK_AND_ASSIGN(auto processor, GenericDataProcessor::Create());
   ASSERT_OK_AND_ASSIGN(const json template_input_1,
                        processor->MessageToTemplateInput(json(
                            {{"role", "user"}, {"content", "test prompt"}})));

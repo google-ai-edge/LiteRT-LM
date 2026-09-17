@@ -24,7 +24,6 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "litert/cc/litert_layout.h"  // from @litert
-#include "runtime/components/prompt_template.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/fastvlm_data_processor_config.h"
 #include "runtime/conversation/model_data_processor/model_data_processor.h"
@@ -40,10 +39,9 @@ using ::nlohmann::ordered_json;
 }  // namespace
 
 absl::StatusOr<std::unique_ptr<FastVlmDataProcessor>>
-FastVlmDataProcessor::Create(FastVlmDataProcessorConfig config,
-                             const PromptTemplateCapabilities& capabilities) {
+FastVlmDataProcessor::Create(FastVlmDataProcessorConfig config) {
   return absl::WrapUnique(new FastVlmDataProcessor(
-      config, capabilities, std::make_unique<StbImagePreprocessor>()));
+      config, std::make_unique<StbImagePreprocessor>()));
 }
 
 absl::StatusOr<ordered_json> FastVlmDataProcessor::FormatTools(

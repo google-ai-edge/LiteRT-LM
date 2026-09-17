@@ -58,7 +58,6 @@
 #include "runtime/engine/io_types.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/proto/llm_model_type.pb.h"
-#include "runtime/proto/token.pb.h"
 #include "runtime/util/model_type_utils.h"
 #include "runtime/util/status_macros.h"
 
@@ -434,8 +433,7 @@ absl::StatusOr<std::unique_ptr<Conversation>> Conversation::Create(
       CreateModelDataProcessor(config.GetProcessorConfig(), config.GetPreface(),
                                &engine.GetTokenizer(),
                                session->GetSessionConfig().GetStopTokenIds(),
-                               config.constrained_decoding_enabled(),
-                               config.GetPromptTemplate().GetCapabilities()));
+                               config.constrained_decoding_enabled()));
   std::unique_ptr<ConstraintProvider> constraint_provider;
   if (config.constraint_provider_config().has_value()) {
     ABSL_ASSIGN_OR_RETURN(
@@ -909,8 +907,7 @@ absl::StatusOr<std::unique_ptr<Conversation>> Conversation::Clone() {
       CreateModelDataProcessor(config_.GetProcessorConfig(),
                                config_.GetPreface(), &engine_.GetTokenizer(),
                                session->GetSessionConfig().GetStopTokenIds(),
-                               config_.constrained_decoding_enabled(),
-                               config_.GetPromptTemplate().GetCapabilities()));
+                               config_.constrained_decoding_enabled()));
   auto status = model_data_processor->CloneState(*model_data_processor_);
   if (!status.ok() && !absl::IsUnimplemented(status)) {
     return status;

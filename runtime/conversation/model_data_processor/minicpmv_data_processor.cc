@@ -35,7 +35,6 @@
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/preprocessor/image_preprocessor.h"
 #include "runtime/components/preprocessor/minicpmv_image_preprocess.h"
-#include "runtime/components/prompt_template.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/data_utils.h"
 #include "runtime/conversation/model_data_processor/minicpmv_data_processor_config.h"
@@ -199,13 +198,12 @@ void AppendText(absl::string_view text, std::vector<InputData>& output) {
 absl::StatusOr<std::unique_ptr<MiniCpmVDataProcessor>>
 MiniCpmVDataProcessor::Create(
     MiniCpmVDataProcessorConfig config,
-    const PromptTemplateCapabilities& capabilities,
     std::unique_ptr<ImagePreprocessor> image_preprocessor) {
   if (image_preprocessor == nullptr) {
     image_preprocessor = ImagePreprocessor::Create();
   }
-  return absl::WrapUnique(new MiniCpmVDataProcessor(
-      config, capabilities, std::move(image_preprocessor)));
+  return absl::WrapUnique(
+      new MiniCpmVDataProcessor(config, std::move(image_preprocessor)));
 }
 
 absl::StatusOr<ordered_json> MiniCpmVDataProcessor::FormatTools(
