@@ -432,6 +432,7 @@ cc_library(
         "@litert//litert/cc:litert_layout",
         "@litert//litert/cc:litert_tensor_buffer",
         "//runtime/components:prompt_template",
+        "//runtime/components/preprocessor:image_preprocessor",
         "//runtime/components/preprocessor:minicpmv_image_preprocess",
         "//runtime/conversation:io_types",
         "//runtime/engine:io_types",

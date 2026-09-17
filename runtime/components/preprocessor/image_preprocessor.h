@@ -6,6 +6,7 @@
 namespace litert::lm {
 using ImagePreprocessor = ::litert::support::ImagePreprocessor;
 using ImagePreprocessParameter = ::litert::support::ImagePreprocessParameter;
+using DecodedImage = ::litert::support::DecodedImage;
 }  // namespace litert::lm
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_RUNTIME_COMPONENTS_PREPROCESSOR_IMAGE_PREPROCESSOR_H_

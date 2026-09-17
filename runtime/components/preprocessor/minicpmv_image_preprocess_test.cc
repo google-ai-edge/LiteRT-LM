@@ -16,10 +16,13 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
 
 #include <gtest/gtest.h>
 #include "absl/status/status_matchers.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "runtime/components/preprocessor/image_preprocessor.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
 
 namespace litert::lm {
@@ -40,7 +43,7 @@ void AppendLe16(uint16_t value, std::string& out) {
 }
 
 // Encodes an uncompressed 24-bit BMP. BMP is used rather than PNG because it
-// needs no compressor, and stb_image (the decoder under test) reads it.
+// needs no compressor, and every ImagePreprocessor decode backend reads it.
 // The pixel at (x, y) is a deterministic function of its coordinates unless
 // `solid` is true, in which case every pixel is mid-white.
 std::string MakeBmp(int width, int height, bool solid) {
@@ -100,9 +103,20 @@ void ExpectSliceIsWellFormed(const MiniCpmVSlice& slice) {
   }
 }
 
-TEST(MiniCpmVImagePreprocessTest, SmallImageProducesThumbnailOnly) {
+class MiniCpmVImagePreprocessTest : public ::testing::Test {
+ protected:
+  // Mirrors production use: one decoder, reused for every image.
+  absl::StatusOr<MiniCpmVSliced> Preprocess(const std::string& image_bytes) {
+    return PreprocessImageSliced(image_bytes, *image_preprocessor_);
+  }
+
+  std::unique_ptr<ImagePreprocessor> image_preprocessor_ =
+      ImagePreprocessor::Create();
+};
+
+TEST_F(MiniCpmVImagePreprocessTest, SmallImageProducesThumbnailOnly) {
   // 280x280 is well under scale_resolution^2, so no slicing grid is chosen.
-  const auto sliced = PreprocessImageSliced(MakeBmp(280, 280, /*solid=*/false));
+  const auto sliced = Preprocess(MakeBmp(280, 280, /*solid=*/false));
   ASSERT_OK(sliced);
   EXPECT_EQ(sliced->grid_x, 0);
   EXPECT_EQ(sliced->grid_y, 0);
@@ -110,10 +124,9 @@ TEST(MiniCpmVImagePreprocessTest, SmallImageProducesThumbnailOnly) {
   ExpectSliceIsWellFormed(sliced->slices[0]);
 }
 
-TEST(MiniCpmVImagePreprocessTest, LargeImageIsSlicedIntoThumbnailPlusGrid) {
+TEST_F(MiniCpmVImagePreprocessTest, LargeImageIsSlicedIntoThumbnailPlusGrid) {
   // A wide image large enough to trigger the multi-slice path.
-  const auto sliced =
-      PreprocessImageSliced(MakeBmp(1400, 500, /*solid=*/false));
+  const auto sliced = Preprocess(MakeBmp(1400, 500, /*solid=*/false));
   ASSERT_OK(sliced);
   EXPECT_GT(sliced->grid_x, 0);
   EXPECT_GT(sliced->grid_y, 0);
@@ -127,10 +140,10 @@ TEST(MiniCpmVImagePreprocessTest, LargeImageIsSlicedIntoThumbnailPlusGrid) {
   }
 }
 
-TEST(MiniCpmVImagePreprocessTest, NormalizationMapsWhiteToOne) {
+TEST_F(MiniCpmVImagePreprocessTest, NormalizationMapsWhiteToOne) {
   // With mean 0.5 and std 0.5, a saturated pixel normalizes to exactly 1.0,
   // and resampling a constant field cannot introduce any other value.
-  const auto sliced = PreprocessImageSliced(MakeBmp(300, 300, /*solid=*/true));
+  const auto sliced = Preprocess(MakeBmp(300, 300, /*solid=*/true));
   ASSERT_OK(sliced);
   ASSERT_FALSE(sliced->slices.empty());
   for (const float value : sliced->slices[0].strip) {
@@ -138,8 +151,8 @@ TEST(MiniCpmVImagePreprocessTest, NormalizationMapsWhiteToOne) {
   }
 }
 
-TEST(MiniCpmVImagePreprocessTest, PositionIdsAreRowMajorOnTheViTGrid) {
-  const auto sliced = PreprocessImageSliced(MakeBmp(280, 280, /*solid=*/false));
+TEST_F(MiniCpmVImagePreprocessTest, PositionIdsAreRowMajorOnTheViTGrid) {
+  const auto sliced = Preprocess(MakeBmp(280, 280, /*solid=*/false));
   ASSERT_OK(sliced);
   ASSERT_EQ(sliced->slices.size(), 1);
   const MiniCpmVSlice& slice = sliced->slices[0];
@@ -155,14 +168,13 @@ TEST(MiniCpmVImagePreprocessTest, PositionIdsAreRowMajorOnTheViTGrid) {
   }
 }
 
-TEST(MiniCpmVImagePreprocessTest, RejectsUndecodableBytes) {
-  EXPECT_FALSE(PreprocessImageSliced("not an image").ok());
+TEST_F(MiniCpmVImagePreprocessTest, RejectsUndecodableBytes) {
+  EXPECT_FALSE(Preprocess("not an image").ok());
 }
 
-TEST(MiniCpmVImagePreprocessTest,
-     ExtremeAspectRatioClampedToSignatureCapacity) {
-  const std::string bmp = MakeBmp(4000, 50, /*solid=*/false);
-  const auto sliced = PreprocessImageSliced(bmp);
+TEST_F(MiniCpmVImagePreprocessTest,
+       ExtremeAspectRatioClampedToSignatureCapacity) {
+  const auto sliced = Preprocess(MakeBmp(4000, 50, /*solid=*/false));
   ASSERT_OK(sliced);
   ASSERT_FALSE(sliced->slices.empty());
   for (const auto& slice : sliced->slices) {
@@ -171,11 +183,10 @@ TEST(MiniCpmVImagePreprocessTest,
   }
 }
 
-TEST(MiniCpmVImagePreprocessTest, EnsureDivideRoundsHalfToEven) {
+TEST_F(MiniCpmVImagePreprocessTest, EnsureDivideRoundsHalfToEven) {
   // For 212x448, upscaled height before EnsureDivide is 651:
   //   651 / 14 = 46.5 -> round-half-to-even gives 46 (lround would give 47).
-  const std::string bmp = MakeBmp(212, 448, /*solid=*/false);
-  const auto sliced = PreprocessImageSliced(bmp);
+  const auto sliced = Preprocess(MakeBmp(212, 448, /*solid=*/false));
   ASSERT_OK(sliced);
   ASSERT_EQ(sliced->slices.size(), 1);
   EXPECT_EQ(sliced->slices[0].tgt_w, 22);

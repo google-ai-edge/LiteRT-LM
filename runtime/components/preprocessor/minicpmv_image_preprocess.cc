@@ -24,10 +24,10 @@
 #include <vector>
 
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "absl/strings/str_format.h"  // from @com_google_absl
+#include "runtime/components/preprocessor/image_preprocessor.h"
 #include "runtime/components/preprocessor/pil_resize.h"
-#include "stb_image.h"  // from @stb
 
 namespace litert::lm {
 namespace {
@@ -224,22 +224,19 @@ std::vector<int64_t> ComputePositionIds(int tgt_h, int tgt_w,
 }  // namespace
 
 absl::StatusOr<MiniCpmVSliced> PreprocessImageSliced(
-    const std::string& image_bytes, const MiniCpmVSliceConfig& config) {
-  int width = 0;
-  int height = 0;
-  int channels = 0;
-  unsigned char* pixels = stbi_load_from_memory(
-      reinterpret_cast<const unsigned char*>(image_bytes.data()),
-      static_cast<int>(image_bytes.size()), &width, &height, &channels,
-      /*desired_channels=*/3);
-  if (pixels == nullptr) {
-    const char* reason = stbi_failure_reason();
-    return absl::InvalidArgumentError(absl::StrFormat(
-        "stb_image failed to decode image: %s", reason ? reason : "unknown"));
+    const std::string& image_bytes, const ImagePreprocessor& image_decoder,
+    const MiniCpmVSliceConfig& config) {
+  ABSL_ASSIGN_OR_RETURN(const DecodedImage decoded,
+                        image_decoder.Decode(image_bytes));
+  const int width = decoded.width;
+  const int height = decoded.height;
+  // The decoder contract is 3 interleaved 8-bit channels, HWC.
+  if (width <= 0 || height <= 0 ||
+      decoded.pixels.size() != static_cast<size_t>(width) * height * 3) {
+    return absl::InternalError(
+        "Image decoder returned pixels inconsistent with its reported size.");
   }
-  const std::vector<uint8_t> src(
-      pixels, pixels + static_cast<size_t>(width) * height * 3);
-  stbi_image_free(pixels);
+  const std::vector<uint8_t>& src = decoded.pixels;
 
   const int scale = config.scale_resolution;
   const int patch = config.patch_size;

@@ -381,6 +381,7 @@ target_link_libraries(runtime_conversation_model_data_processor_minicpmv_data_pr
     LiteRTLM::Runtime::Components
     LiteRTLM::Runtime::Components::Preprocessor::MiniCpmVImagePreprocess
     LiteRTLM::Runtime::Conversation::ModelDataProcessor::DataUtils
+    LiteRTLM::Runtime::Conversation::ModelDataProcessor::Interface
     LiteRTLM::Runtime::Conversation::IoTypes
     LITERTLM_DEPS
 )

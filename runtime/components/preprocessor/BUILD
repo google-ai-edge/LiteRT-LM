@@ -78,11 +78,11 @@ cc_library(
     srcs = ["minicpmv_image_preprocess.cc"],
     hdrs = ["minicpmv_image_preprocess.h"],
     deps = [
+        ":image_preprocessor",
         ":pil_resize",
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/strings:str_format",
-        "@stb//:stblib",
     ],
 )
 
@@ -99,9 +99,12 @@ cc_test(
     name = "minicpmv_image_preprocess_test",
     srcs = ["minicpmv_image_preprocess_test.cc"],
     deps = [
+        ":image_preprocessor",
         ":minicpmv_image_preprocess",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status:status_matchers",
+        "@com_google_absl//absl/status:statusor",
         "//runtime/util:test_utils",
+        "//support/preprocessor:image_preprocessor_impl",
     ],
 )

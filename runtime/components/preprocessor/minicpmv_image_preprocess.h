@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "runtime/components/preprocessor/image_preprocessor.h"
 
 namespace litert::lm {
 
@@ -79,8 +80,16 @@ struct MiniCpmVSliced {
 
 // Slices raw image bytes into a thumbnail plus sub-images. Bit-faithful to the
 // Hugging Face MiniCPMVImageProcessor (PIL bicubic, integer grid math).
+//
+// `image_decoder` only decodes `image_bytes` into raw RGB pixels; it keeps this
+// function free of any image codec dependency so the codec stays swappable per
+// platform. Resampling is deliberately not delegated to it: it has to
+// reproduce PIL exactly, which no general purpose backend does. Creating an
+// ImagePreprocessor is not free, so callers should hold one and pass it in on
+// every call rather than creating one per image.
 absl::StatusOr<MiniCpmVSliced> PreprocessImageSliced(
-    const std::string& image_bytes, const MiniCpmVSliceConfig& config = {});
+    const std::string& image_bytes, const ImagePreprocessor& image_decoder,
+    const MiniCpmVSliceConfig& config = {});
 
 }  // namespace litert::lm
 

@@ -101,6 +101,7 @@ target_include_directories(runtime_components_preprocessor_minicpmv_image_prepro
 target_link_libraries(runtime_components_preprocessor_minicpmv_image_preprocess
   PUBLIC
     LiteRTLM::Runtime::Components::Preprocessor::PilResize
+    LiteRTLM::Runtime::Components::Preprocessor::ImageInterface
     LITERTLM_DEPS
 )
 

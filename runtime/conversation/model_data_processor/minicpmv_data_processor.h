@@ -17,12 +17,14 @@
 
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
+#include "runtime/components/preprocessor/image_preprocessor.h"
 #include "runtime/components/prompt_template.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/minicpmv_data_processor_config.h"
@@ -42,10 +44,12 @@ class MiniCpmVDataProcessor
     : public TypeSafeModelDataProcessor<MiniCpmVDataProcessorConfig,
                                         MiniCpmVDataProcessorArguments> {
  public:
-  // Creates a MiniCpmVDataProcessor instance.
+  // Creates a MiniCpmVDataProcessor instance. If `image_preprocessor` is null,
+  // the platform default ImagePreprocessor::Create() is used.
   static absl::StatusOr<std::unique_ptr<MiniCpmVDataProcessor>> Create(
       MiniCpmVDataProcessorConfig config,
-      const PromptTemplateCapabilities& capabilities);
+      const PromptTemplateCapabilities& capabilities,
+      std::unique_ptr<ImagePreprocessor> image_preprocessor = nullptr);
 
   // Returns the config of the MiniCpmVDataProcessor.
   const MiniCpmVDataProcessorConfig& GetConfig() const override {
@@ -63,9 +67,12 @@ class MiniCpmVDataProcessor
   absl::string_view CodeFenceEnd() const override { return ""; }
 
  private:
-  explicit MiniCpmVDataProcessor(MiniCpmVDataProcessorConfig config,
-                                 const PromptTemplateCapabilities& capabilities)
-      : config_(config), capabilities_(capabilities) {}
+  MiniCpmVDataProcessor(MiniCpmVDataProcessorConfig config,
+                        const PromptTemplateCapabilities& capabilities,
+                        std::unique_ptr<ImagePreprocessor> image_preprocessor)
+      : config_(config),
+        capabilities_(capabilities),
+        image_preprocessor_(std::move(image_preprocessor)) {}
 
   absl::StatusOr<std::vector<InputData>> ToInputDataVectorImpl(
       const std::string& rendered_template_prompt,
@@ -83,6 +90,9 @@ class MiniCpmVDataProcessor
 
   MiniCpmVDataProcessorConfig config_;
   PromptTemplateCapabilities capabilities_;
+  // Decodes image bytes for PreprocessImageSliced. Held here so that the
+  // backing image codec is set up once per model, not once per image.
+  std::unique_ptr<ImagePreprocessor> image_preprocessor_;
 };
 
 }  // namespace litert::lm

@@ -256,4 +256,30 @@ absl::StatusOr<InputImage> StbImagePreprocessor::Preprocess(
   return processed_image;
 }
 
+absl::StatusOr<DecodedImage> StbImagePreprocessor::Decode(
+    absl::string_view image_bytes) const {
+  int width = 0;
+  int height = 0;
+  int channels = 0;
+  unsigned char* decoded_image = stbi_load_from_memory(
+      reinterpret_cast<const stbi_uc*>(image_bytes.data()),
+      static_cast<int>(image_bytes.size()), &width, &height, &channels,
+      kDesiredChannels);
+  if (decoded_image == nullptr) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Failed to decode image. Reason: ", stbi_failure_reason()));
+  }
+  // Use a unique_ptr to ensure the decoded image is freed.
+  std::unique_ptr<unsigned char[], void (*)(void*)> decoded_image_ptr(
+      decoded_image, stbi_image_free);
+
+  DecodedImage image;
+  image.width = width;
+  image.height = height;
+  image.pixels.assign(
+      decoded_image,
+      decoded_image + static_cast<size_t>(width) * height * kDesiredChannels);
+  return image;
+}
+
 }  // namespace litert::support

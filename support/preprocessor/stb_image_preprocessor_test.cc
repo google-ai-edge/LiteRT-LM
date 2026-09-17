@@ -434,5 +434,31 @@ TEST(StbImagePreprocessorTest, PreprocessWithPatchifyResize) {
       << "B at (111,111)";
 }
 
+TEST(StbImagePreprocessorTest, DecodeSuccess) {
+  StbImagePreprocessor preprocessor;
+
+  const std::string image_path =
+      (std::filesystem::path(::testing::SrcDir()) / kTestdataDir / "apple.png")
+          .string();
+  std::ifstream file_stream(image_path, std::ios::binary);
+  ASSERT_TRUE(file_stream.is_open())
+      << "Failed to open image file: " << image_path;
+  std::stringstream buffer;
+  buffer << file_stream.rdbuf();
+  const std::string image_bytes = buffer.str();
+
+  ASSERT_OK_AND_ASSIGN(const DecodedImage decoded,
+                       preprocessor.Decode(image_bytes));
+  EXPECT_EQ(decoded.width, 1024);
+  EXPECT_EQ(decoded.height, 1024);
+  EXPECT_EQ(decoded.pixels.size(), 1024 * 1024 * 3);
+}
+
+TEST(StbImagePreprocessorTest, DecodeFailedWithInvalidImage) {
+  StbImagePreprocessor preprocessor;
+  EXPECT_THAT(preprocessor.Decode("invalid image data"),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
 }  // namespace
 }  // namespace litert::support
