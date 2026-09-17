@@ -42,11 +42,6 @@ class MiniCpm5DataProcessor
       MiniCpm5DataProcessorConfig config,
       std::optional<Preface> preface = std::nullopt);
 
-  absl::StatusOr<nlohmann::ordered_json> FormatTools(
-      const nlohmann::ordered_json& tools) const override {
-    return tools;
-  }
-
   absl::string_view CodeFenceStart() const override;
 
   absl::string_view CodeFenceEnd() const override;
@@ -68,14 +63,6 @@ class MiniCpm5DataProcessor
   absl::StatusOr<Message> ToMessageImpl(
       const Responses& responses,
       const MiniCpm5DataProcessorArguments& args) const override;
-
-  absl::Status CloneStateImpl(
-      const TypeSafeModelDataProcessor<MiniCpm5DataProcessorConfig,
-                                       MiniCpm5DataProcessorArguments>& other)
-      override {
-    ABSL_VLOG(1) << "MiniCpm5DataProcessor::CloneStateImpl is a no-op.";
-    return absl::OkStatus();
-  }
 
   MiniCpm5DataProcessorConfig config_;
   std::optional<Preface> preface_;

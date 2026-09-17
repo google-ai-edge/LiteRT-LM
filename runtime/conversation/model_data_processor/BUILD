@@ -331,7 +331,6 @@ cc_library(
         "@com_google_absl//absl/memory",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/strings:string_view",
         "@nlohmann_json//:json",
         "@litert//litert/cc:litert_layout",
         "//runtime/components:prompt_template",

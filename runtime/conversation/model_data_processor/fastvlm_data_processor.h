@@ -43,16 +43,6 @@ class FastVlmDataProcessor
     return config_;
   }
 
-  // Formats tool declarations.
-  absl::StatusOr<nlohmann::ordered_json> FormatTools(
-      const nlohmann::ordered_json& tools) const override;
-
-  // Returns the start of tool call blocks.
-  absl::string_view CodeFenceStart() const override { return ""; }
-
-  // Returns the end of tool call blocks.
-  absl::string_view CodeFenceEnd() const override { return ""; }
-
  private:
   explicit FastVlmDataProcessor(
       FastVlmDataProcessorConfig config,
@@ -63,15 +53,6 @@ class FastVlmDataProcessor
       const std::string& rendered_template_prompt,
       const nlohmann::ordered_json& messages,
       const FastVlmDataProcessorArguments& args) const override;
-
-  absl::StatusOr<Message> ToMessageImpl(
-      const Responses& responses,
-      const FastVlmDataProcessorArguments& args) const override;
-
-  absl::Status CloneStateImpl(
-      const TypeSafeModelDataProcessor<FastVlmDataProcessorConfig,
-                                       FastVlmDataProcessorArguments>& other)
-      override;
 
   FastVlmDataProcessorConfig config_;
   std::unique_ptr<ImagePreprocessor> image_preprocessor_;

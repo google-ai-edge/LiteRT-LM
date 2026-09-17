@@ -47,12 +47,6 @@ class GenericDataProcessor
   static absl::StatusOr<std::unique_ptr<ModelDataProcessor>> Create(
       GenericDataProcessorConfig config = GenericDataProcessorConfig());
 
-  // Return the same tools as the input for generic models.
-  absl::StatusOr<nlohmann::ordered_json> FormatTools(
-      const nlohmann::ordered_json& tools) const override {
-    return tools;
-  }
-
   // Renders a single turn template for the given message and history. Only the
   // prompt template supporting single turn is valid for this method.
   absl::StatusOr<SingleTurnTemplateRenderResult> RenderSingleTurnTemplate(
@@ -60,12 +54,6 @@ class GenericDataProcessor
       const Message& message, const PromptTemplate& prompt_template,
       bool current_is_appending_message, bool append_message,
       std::optional<nlohmann::ordered_json> extra_context) const override;
-
-  // No-op for generic models.
-  absl::string_view CodeFenceStart() const override { return ""; }
-
-  // No-op for generic models.
-  absl::string_view CodeFenceEnd() const override { return ""; }
 
   // Returns the config of the model data processor.
   const GenericDataProcessorConfig& GetConfig() const override {
@@ -84,10 +72,6 @@ class GenericDataProcessor
   absl::StatusOr<std::vector<InputData>> ToInputDataVectorImpl(
       const std::string& rendered_template_prompt,
       const nlohmann::ordered_json& messages,
-      const GenericDataProcessorArguments& args) const override;
-
-  absl::StatusOr<Message> ToMessageImpl(
-      const Responses& responses,
       const GenericDataProcessorArguments& args) const override;
 
   absl::Status CloneStateImpl(

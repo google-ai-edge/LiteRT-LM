@@ -122,7 +122,9 @@ class ModelDataProcessor {
   // Formats the provided tools to be inserted into the system/developer
   // instruction of the prompt.
   virtual absl::StatusOr<nlohmann::ordered_json> FormatTools(
-      const nlohmann::ordered_json& tools) const = 0;
+      const nlohmann::ordered_json& tools) const {
+    return tools;
+  }
 
   // Creates a constraint from the given tools. The constraint is used for
   // constrained decoding. It is created from the tools defined in the preface,
@@ -133,10 +135,10 @@ class ModelDataProcessor {
   };
 
   // Returns the start of tool call blocks.
-  virtual absl::string_view CodeFenceStart() const = 0;
+  virtual absl::string_view CodeFenceStart() const { return ""; }
 
   // Returns the end of tool call blocks.
-  virtual absl::string_view CodeFenceEnd() const = 0;
+  virtual absl::string_view CodeFenceEnd() const { return ""; }
 
   // Clones the state of the other model data processor.
   virtual absl::Status CloneState(const ModelDataProcessor& other) = 0;
@@ -218,11 +220,19 @@ class TypeSafeModelDataProcessor : public ModelDataProcessor {
       const ExpectedArgsT& typed_args) const = 0;
 
   virtual absl::StatusOr<Message> ToMessageImpl(
-      const Responses& responses, const ExpectedArgsT& typed_args) const = 0;
+      const Responses& responses, const ExpectedArgsT& typed_args) const {
+    absl::string_view response_text = responses.GetTexts()[0];
+    return nlohmann::ordered_json::object(
+        {{"role", "assistant"},
+         {"content",
+          nlohmann::ordered_json::array(
+              {{{"type", "text"}, {"text", std::string(response_text)}}})}});
+  }
 
   virtual absl::Status CloneStateImpl(
-      const TypeSafeModelDataProcessor<ExpectedConfigT, ExpectedArgsT>&
-          other) = 0;
+      const TypeSafeModelDataProcessor<ExpectedConfigT, ExpectedArgsT>& other) {
+    return absl::OkStatus();
+  }
 };
 
 }  // namespace litert::lm

@@ -55,16 +55,6 @@ class MiniCpmVDataProcessor
     return config_;
   }
 
-  // Formats tool declarations.
-  absl::StatusOr<nlohmann::ordered_json> FormatTools(
-      const nlohmann::ordered_json& tools) const override;
-
-  // Returns the start of tool call blocks.
-  absl::string_view CodeFenceStart() const override { return ""; }
-
-  // Returns the end of tool call blocks.
-  absl::string_view CodeFenceEnd() const override { return ""; }
-
  private:
   MiniCpmVDataProcessor(MiniCpmVDataProcessorConfig config,
                         std::unique_ptr<ImagePreprocessor> image_preprocessor)
@@ -75,15 +65,6 @@ class MiniCpmVDataProcessor
       const std::string& rendered_template_prompt,
       const nlohmann::ordered_json& messages,
       const MiniCpmVDataProcessorArguments& args) const override;
-
-  absl::StatusOr<Message> ToMessageImpl(
-      const Responses& responses,
-      const MiniCpmVDataProcessorArguments& args) const override;
-
-  absl::Status CloneStateImpl(
-      const TypeSafeModelDataProcessor<MiniCpmVDataProcessorConfig,
-                                       MiniCpmVDataProcessorArguments>& other)
-      override;
 
   MiniCpmVDataProcessorConfig config_;
   // Decodes image bytes for PreprocessImageSliced. Held here so that the

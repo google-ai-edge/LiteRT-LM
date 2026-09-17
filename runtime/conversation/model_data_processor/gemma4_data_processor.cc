@@ -186,11 +186,6 @@ Gemma4DataProcessor::RenderSingleTurnTemplate(
       /*push_dummy_user_message_to_preface=*/false);
 }
 
-absl::StatusOr<nlohmann::ordered_json> Gemma4DataProcessor::FormatTools(
-    const nlohmann::ordered_json& tools) const {
-  return tools;
-}
-
 absl::StatusOr<std::unique_ptr<Constraint>>
 Gemma4DataProcessor::CreateConstraint(
     const nlohmann::ordered_json& tools) const {

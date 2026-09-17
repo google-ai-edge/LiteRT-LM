@@ -25,7 +25,6 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "nlohmann/json_fwd.hpp"  // from @nlohmann_json
 #include "runtime/components/prompt_template.h"
 #include "runtime/conversation/io_types.h"
@@ -73,17 +72,6 @@ GenericDataProcessor::ToInputDataVectorImpl(
       rendered_template_prompt, messages, image_preprocessor_.get(),
       audio_preprocessor_.get(), config_.multimodal->processing_config,
       config_.multimodal->image_preprocess_parameter, args.visual_token_budget);
-}
-
-absl::StatusOr<Message> GenericDataProcessor::ToMessageImpl(
-    const Responses& responses,
-    const GenericDataProcessorArguments& args) const {
-  absl::string_view response_text = responses.GetTexts()[0];
-  return nlohmann::ordered_json::object(
-      {{"role", "assistant"},
-       {"content",
-        nlohmann::ordered_json::array(
-            {{{"type", "text"}, {"text", std::string(response_text)}}})}});
 }
 
 absl::StatusOr<ModelDataProcessor::SingleTurnTemplateRenderResult>

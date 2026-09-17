@@ -20,7 +20,7 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include "nlohmann/json_fwd.hpp"  // from @nlohmann_json
+#include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/qwen3_data_processor_config.h"
 #include "runtime/engine/io_types.h"
@@ -37,10 +37,11 @@ MATCHER_P(HasInputText, text_input, "") {
     return false;
   }
   auto text_bytes = std::get<InputText>(arg).GetRawTextString();
-  if (!text_bytes.ok()) {
+  auto expected_bytes = text_input->GetRawTextString();
+  if (!text_bytes.ok() || !expected_bytes.ok()) {
     return false;
   }
-  return text_bytes.value() == text_input->GetRawTextString().value();
+  return *text_bytes == *expected_bytes;
 }
 
 TEST(Qwen3DataProcessorTest, ToInputDataVector) {
@@ -82,7 +83,7 @@ TEST(Qwen3DataProcessorTest, ToMessageDefault) {
             {"content", {{{"type", "text"}, {"text", "test response"}}}}}));
 }
 
-TEST(Qwen3DataProcessorTest, ToMessageModelRole) {
+TEST(Qwen3DataProcessorTest, ToMessageWithToolCall) {
   JsonPreface preface;
   preface.tools = nlohmann::ordered_json::array();
   preface.tools.push_back(
