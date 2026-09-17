@@ -180,5 +180,14 @@ class ModelInfoTests: XCTestCase {
     }
     XCTAssertEqual(lengths, [5])
   }
-}
 
+  func testChainedCapabilityAccess_RetainsOwnerDuringCall() {
+    // swift-format-ignore
+    let modelResource =
+      "runtime/testdata/test_lm.litertlm"
+    let modelPath = testDataPath(forResource: modelResource)
+
+    XCTAssertEqual(ModelInfo(modelPath: modelPath)?.llm?.hasSpeculativeDecodingSupport(), false)
+    XCTAssertEqual(ModelInfo(modelPath: modelPath)?.llm?.supportsThinking(), false)
+  }
+}

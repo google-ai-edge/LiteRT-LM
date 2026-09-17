@@ -78,9 +78,11 @@ public struct SamplerParameters: Equatable {
 /// Capabilities specific to Large Language Models (LLM).
 public class LLMCapability {
   private let handle: OpaquePointer
+  private let owner: AnyObject
 
-  internal init(handle: OpaquePointer) {
+  internal init(handle: OpaquePointer, owner: AnyObject) {
     self.handle = handle
+    self.owner = owner
   }
 
   /// Checks if the loaded LiteRT-LM file supports speculative decoding.
@@ -150,9 +152,11 @@ public typealias LlmCapability = LLMCapability
 /// Capabilities specific to Embedding models.
 public class EmbeddingCapability {
   private let handle: OpaquePointer
+  private let owner: AnyObject
 
-  internal init(handle: OpaquePointer) {
+  internal init(handle: OpaquePointer, owner: AnyObject) {
     self.handle = handle
+    self.owner = owner
   }
 
   /// Returns the output embedding dimension for the model.
@@ -300,14 +304,14 @@ public class ModelInfo {
   }
 
   /// LLM-specific capabilities, or nil if the model is not an LLM.
-  public private(set) lazy var llm: LLMCapability? = {
-    return isLlmModel() ? LLMCapability(handle: handle) : nil
-  }()
+  public var llm: LLMCapability? {
+    return isLlmModel() ? LLMCapability(handle: handle, owner: self) : nil
+  }
 
   /// Embedding-specific capabilities, or nil if the model is not an embedding model.
-  public private(set) lazy var embedding: EmbeddingCapability? = {
-    return isEmbeddingModel() ? EmbeddingCapability(handle: handle) : nil
-  }()
+  public var embedding: EmbeddingCapability? {
+    return isEmbeddingModel() ? EmbeddingCapability(handle: handle, owner: self) : nil
+  }
 
   /// Returns the supported input modalities.
   public var inputModalities: SupportedModalities {
