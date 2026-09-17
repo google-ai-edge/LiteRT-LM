@@ -59,6 +59,22 @@ class EmbeddingEngineSettings {
   std::optional<int> GetVisionTokensPerImage() const;
   void SetVisionTokensPerImage(std::optional<int> vision_tokens_per_image);
 
+  // Whether the vision and audio encoders bundled in the model are compiled
+  // on demand instead of at engine creation time.
+  // - false (default): every configured encoder is compiled while the engine
+  //   is created.
+  // - true: the vision encoder is compiled on the first request carrying an
+  //   image input, and the audio encoder on the first request carrying an
+  //   audio input. This keeps engine creation time and memory footprint down
+  //   for text-only workloads, at the cost of a one-time initialization
+  //   latency on the first multimodal request.
+  // Lazy loading is not supported when the engine is created from a data
+  // stream (see EmbeddingEngineImpl::CreateStreamingWeights), because the
+  // weights of all submodels are consumed in a single pass over the stream. In
+  // that case the flag is ignored and the encoders are compiled eagerly.
+  bool GetLazyLoadMultimodalEncoders() const;
+  void SetLazyLoadMultimodalEncoders(bool lazy_load_multimodal_encoders);
+
   // Returns the EmbeddingExecutorSettings for the embedding model.
   const EmbeddingExecutorSettings& GetMainExecutorSettings() const;
   EmbeddingExecutorSettings& GetMutableMainExecutorSettings();
@@ -122,6 +138,7 @@ class EmbeddingEngineSettings {
   std::optional<int> max_input_length_;
   std::optional<int> min_input_length_;
   std::optional<int> vision_tokens_per_image_;
+  bool lazy_load_multimodal_encoders_ = false;
 };
 
 std::ostream& operator<<(std::ostream& os,

@@ -82,6 +82,7 @@ TEST(EmbeddingEngineSettingsTest, StreamOutputFormatting) {
   std::ostringstream os;
   os << settings;
   EXPECT_THAT(os.str(), HasSubstr("EmbeddingEngineSettings:"));
+  EXPECT_THAT(os.str(), HasSubstr("LazyLoadMultimodalEncoders: false"));
 }
 
 TEST(EmbeddingEngineSettingsTest, ModifyMainExecutorSettings) {

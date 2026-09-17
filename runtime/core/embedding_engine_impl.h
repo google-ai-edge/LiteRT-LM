@@ -27,10 +27,11 @@
 #include "runtime/engine/embedding_engine_settings.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/audio/audio_executor.h"
+#include "runtime/executor/audio/audio_executor_settings.h"
 #include "runtime/executor/embedding/embedding_executor_base.h"
-#include "runtime/executor/executor_stats.h"
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/vision/vision_executor.h"
+#include "runtime/executor/vision/vision_executor_settings.h"
 #include "runtime/proto/embedding_metadata.pb.h"
 #include "runtime/util/litert_util.h"
 #include "support/preprocessor/audio_preprocessor.h"
@@ -48,6 +49,33 @@ struct SpecialTokens {
   std::vector<int> end_of_audio_token_ids;
   bool has_end_of_vision_model = false;
   bool has_end_of_audio_model = false;
+};
+
+// Everything `EmbeddingEngineImpl` needs to compile the vision and audio
+// encoders after the engine has been created, when lazy loading of the
+// multimodal encoders is enabled (see
+// `EmbeddingEngineSettings::SetLazyLoadMultimodalEncoders`).
+struct LazyMultimodalLoadingConfig {
+  // Non-owning pointer to the model resources holding the vision and audio
+  // encoder models. The resources are owned by the embedding executor, which
+  // is destroyed after the lazily created encoders.
+  ModelResources* resources = nullptr;
+
+  // Settings used to compile the vision encoder. Nullopt if the vision
+  // modality is not configured, in which case image inputs are rejected.
+  std::optional<VisionExecutorSettings> vision_executor_settings;
+
+  // Settings used to compile the audio encoder. Nullopt if the audio modality
+  // is not configured, in which case audio inputs are rejected.
+  std::optional<AudioExecutorSettings> audio_executor_settings;
+
+  // Number of vision tokens to generate per image. If set, the vision encoder
+  // and adapter signatures are selected accordingly when the encoder is
+  // compiled.
+  std::optional<int> vision_tokens_per_image;
+
+  // Number of image patches corresponding to `vision_tokens_per_image`.
+  int vision_max_num_patches = 0;
 };
 
 class EmbeddingEngineImpl : public EmbeddingEngine {
@@ -96,7 +124,9 @@ class EmbeddingEngineImpl : public EmbeddingEngine {
       std::optional<SelectedTextSignaturesInfo> selected_text_signatures_info =
           std::nullopt,
       std::optional<SelectedVisionSignatureInfo>
-          selected_vision_signature_info = std::nullopt);
+          selected_vision_signature_info = std::nullopt,
+      std::optional<LazyMultimodalLoadingConfig>
+          lazy_multimodal_loading_config = std::nullopt);
 
   ~EmbeddingEngineImpl() override = default;
 
@@ -147,7 +177,9 @@ class EmbeddingEngineImpl : public EmbeddingEngine {
   }
 
   // Returns the selected vision signature info if auto-selection was performed
-  // during engine creation, or nullopt otherwise.
+  // (during engine creation, or deferred to when the first image input is
+  // processed if `lazy_load_multimodal_encoders` is enabled), or nullopt
+  // otherwise.
   const std::optional<SelectedVisionSignatureInfo>&
   GetSelectedVisionSignatureInfo() const override {
     return selected_vision_signature_info_;
@@ -166,6 +198,18 @@ class EmbeddingEngineImpl : public EmbeddingEngine {
   absl::StatusOr<EmbeddingResponse> ComputeEmbeddingInternal(
       const ExecutorInputs& inputs, const EmbeddingOptions& options);
 
+  // Compiles the vision encoder if it has not been compiled yet. Returns a
+  // FailedPreconditionError if the engine cannot serve image inputs at all,
+  // i.e. if the vision modality was not configured or if the model does not
+  // bundle a vision encoder.
+  absl::Status EnsureVisionExecutorLoaded();
+
+  // Compiles the audio encoder if it has not been compiled yet. Returns a
+  // FailedPreconditionError if the engine cannot serve audio inputs at all,
+  // i.e. if the audio modality was not configured or if the model does not
+  // bundle an audio encoder.
+  absl::Status EnsureAudioExecutorLoaded();
+
   std::unique_ptr<OwnedEnvironment> env_;
   std::unique_ptr<::litert::support::Tokenizer> tokenizer_;
   std::unique_ptr<EmbeddingExecutorBase> embedding_executor_;
@@ -180,6 +224,10 @@ class EmbeddingEngineImpl : public EmbeddingEngine {
   std::optional<proto::EmbeddingMetadata> metadata_;
   std::optional<SelectedTextSignaturesInfo> selected_text_signatures_info_;
   std::optional<SelectedVisionSignatureInfo> selected_vision_signature_info_;
+  // Set only when lazy loading of the multimodal encoders is enabled. The
+  // vision and audio settings it holds are mutated when the corresponding
+  // encoder is compiled, to record the selected signatures.
+  std::optional<LazyMultimodalLoadingConfig> lazy_multimodal_loading_config_;
 };
 
 }  // namespace litert::lm

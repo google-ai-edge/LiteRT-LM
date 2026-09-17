@@ -121,6 +121,7 @@ class FakeModelResources : public ModelResources {
 
   absl::StatusOr<const litert::Model*> GetTFLiteModel(
       ModelType model_type) override {
+    ++get_tflite_model_call_counts_[model_type];
     if (model_type == ModelType::kTfLiteVisionEncoder) {
       if (vision_model_ != nullptr) {
         return vision_model_;
@@ -140,6 +141,12 @@ class FakeModelResources : public ModelResources {
       return nullptr;
     }
     return delegate_->GetTFLiteModel(model_type);
+  }
+
+  // Returns how many times GetTFLiteModel() was called for `model_type`.
+  int GetTFLiteModelCallCount(ModelType model_type) const {
+    const auto it = get_tflite_model_call_counts_.find(model_type);
+    return it == get_tflite_model_call_counts_.end() ? 0 : it->second;
   }
 
   absl::StatusOr<absl::string_view> GetTFLiteModelBuffer(
@@ -197,6 +204,7 @@ class FakeModelResources : public ModelResources {
   bool has_vision_;
   bool has_audio_;
   std::optional<const proto::EmbeddingMetadata*> metadata_;
+  absl::flat_hash_map<ModelType, int> get_tflite_model_call_counts_;
   const litert::Model* vision_model_ = nullptr;
   const litert::Model* vision_adapter_model_ = nullptr;
 };
@@ -1109,6 +1117,165 @@ TEST(EmbeddingEngineImplTest,
   EXPECT_THAT(engine->ComputeEmbedding(contents, options),
               StatusIs(absl::StatusCode::kInternal,
                        HasSubstr("Audio executor is not available")));
+}
+
+TEST(EmbeddingEngineImplTest, MultimodalEncodersAreReadDuringCreateByDefault) {
+  const std::string& model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                   std::string(kTestEmbeddingModelPath))
+                                      .string();
+  ASSERT_OK_AND_ASSIGN(auto real_resources,
+                       CreateTestModelResources(model_path));
+  auto resources = std::make_unique<FakeModelResources>(
+      std::move(real_resources), /*has_vision=*/false, /*has_audio=*/false);
+  FakeModelResources* resources_ptr = resources.get();
+  ASSERT_OK_AND_ASSIGN(auto env, CreateTestEnvironment());
+  auto tokenizer = std::make_unique<MockTokenizer>();
+
+  ASSERT_OK_AND_ASSIGN(auto model_assets, ModelAssets::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU,
+                                          /*vision_backend=*/Backend::CPU,
+                                          /*audio_backend=*/Backend::CPU));
+
+  ASSERT_OK_AND_ASSIGN(
+      auto engine,
+      EmbeddingEngineImpl::Create(std::move(resources), std::move(env),
+                                  std::move(tokenizer), std::move(settings)));
+
+  EXPECT_GT(
+      resources_ptr->GetTFLiteModelCallCount(ModelType::kTfLiteVisionEncoder),
+      0);
+  EXPECT_GT(
+      resources_ptr->GetTFLiteModelCallCount(ModelType::kTfLiteAudioEncoderHw),
+      0);
+}
+
+TEST(EmbeddingEngineImplTest,
+     LazyLoadMultimodalEncodersDefersEncoderLoadToFirstUse) {
+  const std::string& model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                   std::string(kTestEmbeddingModelPath))
+                                      .string();
+  ASSERT_OK_AND_ASSIGN(auto real_resources,
+                       CreateTestModelResources(model_path));
+  auto resources = std::make_unique<FakeModelResources>(
+      std::move(real_resources), /*has_vision=*/false, /*has_audio=*/false);
+  FakeModelResources* resources_ptr = resources.get();
+  ASSERT_OK_AND_ASSIGN(auto env, CreateTestEnvironment());
+  auto tokenizer = std::make_unique<MockTokenizer>();
+
+  ASSERT_OK_AND_ASSIGN(auto model_assets, ModelAssets::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU,
+                                          /*vision_backend=*/Backend::CPU,
+                                          /*audio_backend=*/Backend::CPU));
+  settings.SetLazyLoadMultimodalEncoders(true);
+
+  ASSERT_OK_AND_ASSIGN(
+      auto engine,
+      EmbeddingEngineImpl::Create(std::move(resources), std::move(env),
+                                  std::move(tokenizer), std::move(settings)));
+
+  // Neither encoder is read while the engine is created.
+  EXPECT_EQ(
+      resources_ptr->GetTFLiteModelCallCount(ModelType::kTfLiteVisionEncoder),
+      0);
+  EXPECT_EQ(
+      resources_ptr->GetTFLiteModelCallCount(ModelType::kTfLiteAudioEncoderHw),
+      0);
+
+  EmbeddingOptions options;
+  options.normalize = false;
+
+  // The first image input triggers the load of the vision encoder. The test
+  // model does not bundle one, so the request fails, but only after the engine
+  // attempted to read the vision encoder.
+  std::vector<InputData> image_contents;
+  image_contents.push_back(InputImage("dummy"));
+  EXPECT_THAT(engine->ComputeEmbedding(image_contents, options),
+              StatusIs(absl::StatusCode::kInternal,
+                       HasSubstr("Vision executor is not available")));
+  EXPECT_GT(
+      resources_ptr->GetTFLiteModelCallCount(ModelType::kTfLiteVisionEncoder),
+      0);
+  EXPECT_EQ(
+      resources_ptr->GetTFLiteModelCallCount(ModelType::kTfLiteAudioEncoderHw),
+      0);
+
+  // Likewise, the first audio input triggers the load of the audio encoder.
+  std::vector<InputData> audio_contents;
+  audio_contents.push_back(InputAudio(std::string("dummy")));
+  EXPECT_THAT(engine->ComputeEmbedding(audio_contents, options),
+              StatusIs(absl::StatusCode::kInternal,
+                       HasSubstr("Audio executor is not available")));
+  EXPECT_GT(
+      resources_ptr->GetTFLiteModelCallCount(ModelType::kTfLiteAudioEncoderHw),
+      0);
+}
+
+TEST(EmbeddingEngineImplTest,
+     LazyLoadMultimodalEncodersSuccessfullyCompilesVisionOnFirstImage) {
+  const std::string& model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                   std::string(kTestEmbeddingModelPath))
+                                      .string();
+  ASSERT_OK_AND_ASSIGN(auto real_resources,
+                       CreateTestModelResources(model_path));
+  ASSERT_OK_AND_ASSIGN(auto env, CreateTestEnvironment());
+  auto tokenizer = std::make_unique<MockTokenizer>();
+
+  auto vision_buffer =
+      BuildDummyVisionModelBuffer({"vision_70"}, {70}, /*feature_dim=*/64);
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto vision_model,
+      ::litert::Model::CreateFromBuffer(
+          env->env, ::litert::BufferRef<uint8_t>(vision_buffer.data(),
+                                                 vision_buffer.size())));
+
+  auto resources = std::make_unique<FakeModelResources>(
+      std::move(real_resources), /*has_vision=*/false, /*has_audio=*/false,
+      /*metadata=*/std::nullopt, /*vision_model=*/&vision_model);
+  FakeModelResources* resources_ptr = resources.get();
+
+  ASSERT_OK_AND_ASSIGN(auto model_assets, ModelAssets::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU,
+                                          /*vision_backend=*/Backend::CPU,
+                                          /*audio_backend=*/Backend::CPU));
+  settings.SetVisionTokensPerImage(70);
+  settings.SetLazyLoadMultimodalEncoders(true);
+
+  ASSERT_OK_AND_ASSIGN(
+      auto engine,
+      EmbeddingEngineImpl::Create(std::move(resources), std::move(env),
+                                  std::move(tokenizer), std::move(settings)));
+
+  // Right after Create(), the vision encoder is not compiled and signature info
+  // is std::nullopt.
+  EXPECT_EQ(
+      resources_ptr->GetTFLiteModelCallCount(ModelType::kTfLiteVisionEncoder),
+      0);
+  EXPECT_FALSE(engine->GetSelectedVisionSignatureInfo().has_value());
+
+  EmbeddingOptions options;
+  options.normalize = false;
+
+  // Process the first image. The vision encoder is lazily loaded and compiled,
+  // and the signature info becomes populated.
+  std::vector<InputData> image_contents;
+  image_contents.push_back(InputImage("dummy"));
+  (void)engine->ComputeEmbedding(image_contents, options);
+
+  EXPECT_TRUE(engine->GetSelectedVisionSignatureInfo().has_value());
+  EXPECT_EQ(engine->GetSelectedVisionSignatureInfo()->max_num_patches, 70);
+  const int call_count_after_first =
+      resources_ptr->GetTFLiteModelCallCount(ModelType::kTfLiteVisionEncoder);
+  EXPECT_GT(call_count_after_first, 0);
+
+  // Subsequent image inputs reuse the compiled vision executor without
+  // reloading.
+  (void)engine->ComputeEmbedding(image_contents, options);
+  EXPECT_EQ(
+      resources_ptr->GetTFLiteModelCallCount(ModelType::kTfLiteVisionEncoder),
+      call_count_after_first);
 }
 
 class FakeEmbeddingExecutor : public EmbeddingExecutorBase {

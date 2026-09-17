@@ -51,6 +51,7 @@
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/model_signature_utils.h"
 #include "runtime/executor/vision/vision_executor.h"
+#include "runtime/executor/vision/vision_executor_settings.h"
 #include "runtime/executor/vision_litert_compiled_model_executor.h"
 #include "runtime/proto/embedding_metadata.pb.h"
 #include "runtime/proto/embedding_model_type.pb.h"
@@ -200,6 +201,43 @@ absl::StatusOr<uint64_t> GetNumTokens(const ExecutorInputs& executor_inputs) {
   return span.size();
 }
 
+// Selects the vision encoder and adapter signatures that produce
+// `vision_tokens_per_image` soft tokens per image, records them in
+// `vision_executor_settings` and returns the selection. `max_num_patches` is
+// the number of image patches matching `vision_tokens_per_image`, and is only
+// reported back in the returned info.
+absl::StatusOr<SelectedVisionSignatureInfo> SelectAndApplyVisionSignatures(
+    ModelResources& resources, int vision_tokens_per_image, int max_num_patches,
+    VisionExecutorSettings& vision_executor_settings) {
+  LITERT_ASSIGN_OR_RETURN(
+      auto vision_sig_info,
+      SelectVisionEncoderSignatures(resources, vision_tokens_per_image));
+  vision_executor_settings.SetEncoderSelectedSignatures(
+      vision_sig_info.signature_names);
+
+  LITERT_ASSIGN_OR_RETURN(
+      auto adapter_sig_info,
+      SelectVisionAdapterSignatures(resources, vision_tokens_per_image));
+  if (adapter_sig_info.has_value()) {
+    vision_executor_settings.SetAdapterSelectedSignatures(
+        adapter_sig_info->signature_names);
+  }
+
+  SelectedVisionSignatureInfo selected_vision_info;
+  selected_vision_info.signature_names = vision_sig_info.signature_names;
+  selected_vision_info.signature_lengths = vision_sig_info.signature_lengths;
+  selected_vision_info.max_signature_length =
+      vision_sig_info.max_signature_length;
+  if (adapter_sig_info.has_value()) {
+    selected_vision_info.adapter_signature_names =
+        adapter_sig_info->signature_names;
+    selected_vision_info.adapter_signature_lengths =
+        adapter_sig_info->signature_lengths;
+  }
+  selected_vision_info.max_num_patches = max_num_patches;
+  return selected_vision_info;
+}
+
 }  // namespace
 
 // static
@@ -317,8 +355,11 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
 
   // Auto-select vision encoder and adapter signatures if
   // vision_tokens_per_image is set.
+  const bool lazy_load_multimodal_encoders =
+      settings.GetLazyLoadMultimodalEncoders();
   std::optional<SelectedVisionSignatureInfo> selected_vision_signature_info =
       std::nullopt;
+  int vision_max_num_patches = 0;
   if (settings.GetVisionTokensPerImage().has_value()) {
     if (!settings.GetVisionExecutorSettings().has_value()) {
       return absl::FailedPreconditionError(
@@ -336,36 +377,18 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
 
     const int patch_num_shrink_factor =
         pooling_kernel_size * pooling_kernel_size;
-    const int max_num_patches =
-        vision_tokens_per_image * patch_num_shrink_factor;
+    vision_max_num_patches = vision_tokens_per_image * patch_num_shrink_factor;
 
-    LITERT_ASSIGN_OR_RETURN(
-        auto vision_sig_info,
-        SelectVisionEncoderSignatures(*resources, vision_tokens_per_image));
-    settings.GetMutableVisionExecutorSettings()->SetEncoderSelectedSignatures(
-        vision_sig_info.signature_names);
-
-    LITERT_ASSIGN_OR_RETURN(
-        auto adapter_sig_info,
-        SelectVisionAdapterSignatures(*resources, vision_tokens_per_image));
-    if (adapter_sig_info.has_value()) {
-      settings.GetMutableVisionExecutorSettings()->SetAdapterSelectedSignatures(
-          adapter_sig_info->signature_names);
+    // Selecting the signatures requires reading the vision encoder model. When
+    // lazy loading is enabled this is deferred to the first image input, and
+    // performed together with the compilation of the vision encoder.
+    if (!lazy_load_multimodal_encoders) {
+      LITERT_ASSIGN_OR_RETURN(
+          selected_vision_signature_info,
+          SelectAndApplyVisionSignatures(
+              *resources, vision_tokens_per_image, vision_max_num_patches,
+              *settings.GetMutableVisionExecutorSettings()));
     }
-
-    SelectedVisionSignatureInfo selected_vision_info;
-    selected_vision_info.signature_names = vision_sig_info.signature_names;
-    selected_vision_info.signature_lengths = vision_sig_info.signature_lengths;
-    selected_vision_info.max_signature_length =
-        vision_sig_info.max_signature_length;
-    if (adapter_sig_info.has_value()) {
-      selected_vision_info.adapter_signature_names =
-          adapter_sig_info->signature_names;
-      selected_vision_info.adapter_signature_lengths =
-          adapter_sig_info->signature_lengths;
-    }
-    selected_vision_info.max_num_patches = max_num_patches;
-    selected_vision_signature_info = std::move(selected_vision_info);
   }
 
   SpecialTokens special_tokens;
@@ -399,7 +422,8 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
 
   // Initialize the vision executor.
   std::unique_ptr<VisionExecutor> vision_executor = nullptr;
-  if (resources->GetTFLiteModel(ModelType::kTfLiteVisionEncoder).ok() &&
+  if (!lazy_load_multimodal_encoders &&
+      resources->GetTFLiteModel(ModelType::kTfLiteVisionEncoder).ok() &&
       settings.GetVisionExecutorSettings().has_value()) {
     LITERT_ASSIGN_OR_RETURN(
         vision_executor,
@@ -409,7 +433,8 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
 
   // Initialize the audio executor.
   std::unique_ptr<AudioExecutor> audio_executor = nullptr;
-  if ((resources->GetTFLiteModel(ModelType::kTfLiteAudioEncoderHw).ok()) &&
+  if (!lazy_load_multimodal_encoders &&
+      (resources->GetTFLiteModel(ModelType::kTfLiteAudioEncoderHw).ok()) &&
       settings.GetAudioExecutorSettings().has_value()) {
     LITERT_ASSIGN_OR_RETURN(
         audio_executor,
@@ -428,6 +453,21 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
       nullptr;
   if (image_preprocess_parameter.has_value()) {
     image_preprocessor = ::litert::support::ImagePreprocessor::Create();
+  }
+
+  // Capture what is needed to compile the vision and audio encoders on their
+  // first use. The model resources are moved into the embedding executor
+  // below, which is destroyed after the lazily created encoders.
+  std::optional<LazyMultimodalLoadingConfig> lazy_multimodal_loading_config =
+      std::nullopt;
+  if (lazy_load_multimodal_encoders) {
+    lazy_multimodal_loading_config = LazyMultimodalLoadingConfig{
+        .resources = resources.get(),
+        .vision_executor_settings = settings.GetVisionExecutorSettings(),
+        .audio_executor_settings = settings.GetAudioExecutorSettings(),
+        .vision_tokens_per_image = settings.GetVisionTokensPerImage(),
+        .vision_max_num_patches = vision_max_num_patches,
+    };
   }
 
   // Initialize the embedding model executor.
@@ -451,7 +491,8 @@ absl::StatusOr<std::unique_ptr<EmbeddingEngine>> EmbeddingEngineImpl::Create(
       std::move(image_preprocessor), std::move(image_preprocess_parameter),
       std::move(audio_preprocessor), std::move(metadata),
       std::move(selected_text_signatures_info),
-      std::move(selected_vision_signature_info));
+      std::move(selected_vision_signature_info),
+      std::move(lazy_multimodal_loading_config));
 }
 
 // static
@@ -463,6 +504,14 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
     if (!status.ok()) {
       ABSL_LOG(WARNING) << "Failed to set CPU affinity: " << status;
     }
+  }
+
+  if (settings.GetLazyLoadMultimodalEncoders()) {
+    // The weights of every submodel are consumed in a single pass over the
+    // data stream, so the encoders cannot be compiled after creation.
+    ABSL_LOG(WARNING) << "Lazy loading of the vision and audio encoders is not "
+                         "supported when streaming model weights; the "
+                         "encoders will be loaded at creation time.";
   }
 
   ABSL_ASSIGN_OR_RETURN(
@@ -864,33 +913,11 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
     const int max_num_patches =
         vision_tokens_per_image * patch_num_shrink_factor;
 
-    LITERT_ASSIGN_OR_RETURN(auto vision_sig_info,
-                            SelectVisionEncoderSignatures(
-                                *streaming_resources, vision_tokens_per_image));
-    settings.GetMutableVisionExecutorSettings()->SetEncoderSelectedSignatures(
-        vision_sig_info.signature_names);
-
-    LITERT_ASSIGN_OR_RETURN(auto adapter_sig_info,
-                            SelectVisionAdapterSignatures(
-                                *streaming_resources, vision_tokens_per_image));
-    if (adapter_sig_info.has_value()) {
-      settings.GetMutableVisionExecutorSettings()->SetAdapterSelectedSignatures(
-          adapter_sig_info->signature_names);
-    }
-
-    SelectedVisionSignatureInfo selected_vision_info;
-    selected_vision_info.signature_names = vision_sig_info.signature_names;
-    selected_vision_info.signature_lengths = vision_sig_info.signature_lengths;
-    selected_vision_info.max_signature_length =
-        vision_sig_info.max_signature_length;
-    if (adapter_sig_info.has_value()) {
-      selected_vision_info.adapter_signature_names =
-          adapter_sig_info->signature_names;
-      selected_vision_info.adapter_signature_lengths =
-          adapter_sig_info->signature_lengths;
-    }
-    selected_vision_info.max_num_patches = max_num_patches;
-    selected_vision_signature_info = std::move(selected_vision_info);
+    LITERT_ASSIGN_OR_RETURN(
+        selected_vision_signature_info,
+        SelectAndApplyVisionSignatures(
+            *streaming_resources, vision_tokens_per_image, max_num_patches,
+            *settings.GetMutableVisionExecutorSettings()));
   }
 
   SpecialTokens special_tokens;
@@ -1059,7 +1086,8 @@ EmbeddingEngineImpl::EmbeddingEngineImpl(
     std::unique_ptr<::litert::support::AudioPreprocessor> audio_preprocessor,
     std::optional<proto::EmbeddingMetadata> metadata,
     std::optional<SelectedTextSignaturesInfo> selected_text_signatures_info,
-    std::optional<SelectedVisionSignatureInfo> selected_vision_signature_info)
+    std::optional<SelectedVisionSignatureInfo> selected_vision_signature_info,
+    std::optional<LazyMultimodalLoadingConfig> lazy_multimodal_loading_config)
     : env_(std::move(env)),
       tokenizer_(std::move(tokenizer)),
       embedding_executor_(std::move(embedding_executor)),
@@ -1073,7 +1101,77 @@ EmbeddingEngineImpl::EmbeddingEngineImpl(
       metadata_(std::move(metadata)),
       selected_text_signatures_info_(std::move(selected_text_signatures_info)),
       selected_vision_signature_info_(
-          std::move(selected_vision_signature_info)) {}
+          std::move(selected_vision_signature_info)),
+      lazy_multimodal_loading_config_(
+          std::move(lazy_multimodal_loading_config)) {}
+
+absl::Status EmbeddingEngineImpl::EnsureVisionExecutorLoaded() {
+  if (vision_executor_ != nullptr) {
+    return absl::OkStatus();
+  }
+  if (!lazy_multimodal_loading_config_.has_value() ||
+      lazy_multimodal_loading_config_->resources == nullptr ||
+      !lazy_multimodal_loading_config_->vision_executor_settings.has_value()) {
+    return absl::FailedPreconditionError(
+        "Vision executor is not available for image input.");
+  }
+  LazyMultimodalLoadingConfig& config = *lazy_multimodal_loading_config_;
+  ModelResources& resources = *config.resources;
+  if (!resources.GetTFLiteModel(ModelType::kTfLiteVisionEncoder).ok()) {
+    return absl::FailedPreconditionError(
+        "Vision executor is not available for image input: the model does not "
+        "contain a vision encoder.");
+  }
+
+  ABSL_LOG(INFO) << "Loading the vision encoder on first image input.";
+  if (config.vision_tokens_per_image.has_value() &&
+      !selected_vision_signature_info_.has_value()) {
+    LITERT_ASSIGN_OR_RETURN(
+        selected_vision_signature_info_,
+        SelectAndApplyVisionSignatures(
+            resources, *config.vision_tokens_per_image,
+            config.vision_max_num_patches, *config.vision_executor_settings));
+  }
+  LITERT_ASSIGN_OR_RETURN(
+      vision_executor_,
+      VisionLiteRtCompiledModelExecutor::Create(
+          *config.vision_executor_settings, env_->env, resources));
+  if (benchmark_info_.has_value()) {
+    // Profiling of this request was started before the executor existed.
+    ABSL_RETURN_IF_ERROR(vision_executor_->StartProfiling());
+  }
+  return absl::OkStatus();
+}
+
+absl::Status EmbeddingEngineImpl::EnsureAudioExecutorLoaded() {
+  if (audio_executor_ != nullptr) {
+    return absl::OkStatus();
+  }
+  if (!lazy_multimodal_loading_config_.has_value() ||
+      lazy_multimodal_loading_config_->resources == nullptr ||
+      !lazy_multimodal_loading_config_->audio_executor_settings.has_value()) {
+    return absl::FailedPreconditionError(
+        "Audio executor is not available for audio input.");
+  }
+  LazyMultimodalLoadingConfig& config = *lazy_multimodal_loading_config_;
+  ModelResources& resources = *config.resources;
+  if (!resources.GetTFLiteModel(ModelType::kTfLiteAudioEncoderHw).ok()) {
+    return absl::FailedPreconditionError(
+        "Audio executor is not available for audio input: the model does not "
+        "contain an audio encoder.");
+  }
+
+  ABSL_LOG(INFO) << "Loading the audio encoder on first audio input.";
+  LITERT_ASSIGN_OR_RETURN(
+      audio_executor_,
+      AudioLiteRtCompiledModelExecutor::Create(*config.audio_executor_settings,
+                                               env_->env, resources));
+  if (benchmark_info_.has_value()) {
+    // Profiling of this request was started before the executor existed.
+    ABSL_RETURN_IF_ERROR(audio_executor_->StartProfiling());
+  }
+  return absl::OkStatus();
+}
 
 absl::StatusOr<std::vector<InputData>> EmbeddingEngineImpl::InsertSpecialTokens(
     const std::vector<InputData>& contents) const {
@@ -1186,10 +1284,8 @@ absl::StatusOr<ExecutorInputs> EmbeddingEngineImpl::ProcessAndCombineContents(
         }
       }
     } else if (const auto* input_image = std::get_if<InputImage>(&content)) {
-      if (vision_executor_ == nullptr) {
-        return absl::FailedPreconditionError(
-            "Vision executor is not available for image input.");
-      }
+      // Compiles the vision encoder here if it is loaded lazily.
+      ABSL_RETURN_IF_ERROR(EnsureVisionExecutorLoaded());
       ExecutorVisionData single_image_data;
       if (input_image->IsTensorBuffer()) {
         LITERT_ASSIGN_OR_RETURN(auto tensor_buffer,
@@ -1301,10 +1397,8 @@ absl::StatusOr<ExecutorInputs> EmbeddingEngineImpl::ProcessAndCombineContents(
                    std::get_if<InputImageEnd>(&content)) {
       combined_token_ids.push_back(ExecutorVisionData::kEndToken);
     } else if (const auto* input_audio = std::get_if<InputAudio>(&content)) {
-      if (audio_executor_ == nullptr) {
-        return absl::FailedPreconditionError(
-            "Audio executor is not available for audio input.");
-      }
+      // Compiles the audio encoder here if it is loaded lazily.
+      ABSL_RETURN_IF_ERROR(EnsureAudioExecutorLoaded());
       const ::litert::TensorBuffer* spectrogram_tensor = nullptr;
       std::optional<InputAudio> preprocessed_audio;
       if (input_audio->IsTensorBuffer()) {

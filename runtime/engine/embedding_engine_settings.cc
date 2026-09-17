@@ -101,6 +101,15 @@ void EmbeddingEngineSettings::SetVisionTokensPerImage(
   vision_tokens_per_image_ = vision_tokens_per_image;
 }
 
+bool EmbeddingEngineSettings::GetLazyLoadMultimodalEncoders() const {
+  return lazy_load_multimodal_encoders_;
+}
+
+void EmbeddingEngineSettings::SetLazyLoadMultimodalEncoders(
+    bool lazy_load_multimodal_encoders) {
+  lazy_load_multimodal_encoders_ = lazy_load_multimodal_encoders;
+}
+
 const EmbeddingExecutorSettings&
 EmbeddingEngineSettings::GetMainExecutorSettings() const {
   return main_executor_settings_;
@@ -286,6 +295,9 @@ std::ostream& operator<<(std::ostream& os,
   if (settings.GetAudioExecutorSettings().has_value()) {
     os << *settings.GetAudioExecutorSettings() << std::endl;
   }
+  os << "LazyLoadMultimodalEncoders: "
+     << (settings.GetLazyLoadMultimodalEncoders() ? "true" : "false")
+     << std::endl;
   return os;
 }
 
