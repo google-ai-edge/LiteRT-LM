@@ -24,7 +24,6 @@
 #include "absl/strings/escaping.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "runtime/components/preprocessor/minicpmv_image_preprocess.h"
-#include "runtime/components/prompt_template.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/minicpmv_data_processor_config.h"
 #include "runtime/engine/io_types.h"
@@ -126,8 +125,7 @@ void ExpectSliceTensors(const InputData& data) {
 
 TEST(MiniCpmVDataProcessorTest, SmallImageEmitsThumbnailOnly) {
   ASSERT_OK_AND_ASSIGN(auto processor, MiniCpmVDataProcessor::Create(
-                                           MiniCpmVDataProcessorConfig{},
-                                           PromptTemplateCapabilities{}));
+                                           MiniCpmVDataProcessorConfig{}));
   ASSERT_OK_AND_ASSIGN(
       const std::vector<InputData> input_data,
       processor->ToInputDataVector("before<image_soft_token>after",
@@ -144,8 +142,7 @@ TEST(MiniCpmVDataProcessorTest, SmallImageEmitsThumbnailOnly) {
 
 TEST(MiniCpmVDataProcessorTest, LargeImageEmitsThumbnailAndSlices) {
   ASSERT_OK_AND_ASSIGN(auto processor, MiniCpmVDataProcessor::Create(
-                                           MiniCpmVDataProcessorConfig{},
-                                           PromptTemplateCapabilities{}));
+                                           MiniCpmVDataProcessorConfig{}));
   ASSERT_OK_AND_ASSIGN(
       const std::vector<InputData> input_data,
       processor->ToInputDataVector("<image_soft_token>",
@@ -169,8 +166,7 @@ TEST(MiniCpmVDataProcessorTest, LargeImageEmitsThumbnailAndSlices) {
 
 TEST(MiniCpmVDataProcessorTest, TextOnlyMessageEmitsPlainText) {
   ASSERT_OK_AND_ASSIGN(auto processor, MiniCpmVDataProcessor::Create(
-                                           MiniCpmVDataProcessorConfig{},
-                                           PromptTemplateCapabilities{}));
+                                           MiniCpmVDataProcessorConfig{}));
   const json messages = json::array(
       {json::object({{"role", "user"}, {"content", "no image here"}})});
   ASSERT_OK_AND_ASSIGN(const std::vector<InputData> input_data,
@@ -181,8 +177,7 @@ TEST(MiniCpmVDataProcessorTest, TextOnlyMessageEmitsPlainText) {
 
 TEST(MiniCpmVDataProcessorTest, MarkerWithoutImageInMessagesIsRejected) {
   ASSERT_OK_AND_ASSIGN(auto processor, MiniCpmVDataProcessor::Create(
-                                           MiniCpmVDataProcessorConfig{},
-                                           PromptTemplateCapabilities{}));
+                                           MiniCpmVDataProcessorConfig{}));
   const json messages = json::array(
       {json::object({{"role", "user"}, {"content", "no image here"}})});
   EXPECT_FALSE(
@@ -191,8 +186,7 @@ TEST(MiniCpmVDataProcessorTest, MarkerWithoutImageInMessagesIsRejected) {
 
 TEST(MiniCpmVDataProcessorTest, Base64BlobImageIsSupported) {
   ASSERT_OK_AND_ASSIGN(auto processor, MiniCpmVDataProcessor::Create(
-                                           MiniCpmVDataProcessorConfig{},
-                                           PromptTemplateCapabilities{}));
+                                           MiniCpmVDataProcessorConfig{}));
   const json content = json::array(
       {json::object({{"type", "image"},
                      {"blob", absl::Base64Escape(MakeBmp(280, 280))}}),
@@ -208,8 +202,7 @@ TEST(MiniCpmVDataProcessorTest, Base64BlobImageIsSupported) {
 
 TEST(MiniCpmVDataProcessorTest, NonExistentImagePathIsRejected) {
   ASSERT_OK_AND_ASSIGN(auto processor, MiniCpmVDataProcessor::Create(
-                                           MiniCpmVDataProcessorConfig{},
-                                           PromptTemplateCapabilities{}));
+                                           MiniCpmVDataProcessorConfig{}));
   const json content = json::array(
       {json::object(
            {{"type", "image"}, {"path", "/nonexistent/path/to/image.bmp"}}),
@@ -222,8 +215,7 @@ TEST(MiniCpmVDataProcessorTest, NonExistentImagePathIsRejected) {
 
 TEST(MiniCpmVDataProcessorTest, ToMessageWrapsResponseText) {
   ASSERT_OK_AND_ASSIGN(auto processor, MiniCpmVDataProcessor::Create(
-                                           MiniCpmVDataProcessorConfig{},
-                                           PromptTemplateCapabilities{}));
+                                           MiniCpmVDataProcessorConfig{}));
   ASSERT_OK_AND_ASSIGN(
       const Message message,
       processor->ToMessage(Responses(TaskState::kProcessing, {"a cat"}),
@@ -235,8 +227,7 @@ TEST(MiniCpmVDataProcessorTest, ToMessageWrapsResponseText) {
 
 TEST(MiniCpmVDataProcessorTest, MultiImageEmitsIndexedImageIdsAndSlices) {
   ASSERT_OK_AND_ASSIGN(auto processor, MiniCpmVDataProcessor::Create(
-                                           MiniCpmVDataProcessorConfig{},
-                                           PromptTemplateCapabilities{}));
+                                           MiniCpmVDataProcessorConfig{}));
   const json content = json::array(
       {json::object({{"type", "image"}, {"bytes", MakeBmp(280, 280)}}),
        json::object({{"type", "image"}, {"bytes", MakeBmp(280, 280)}}),
@@ -262,8 +253,7 @@ TEST(MiniCpmVDataProcessorTest, MultiImageEmitsIndexedImageIdsAndSlices) {
 
 TEST(MiniCpmVDataProcessorTest, MissingSoftTokenMarkerIsRejected) {
   ASSERT_OK_AND_ASSIGN(auto processor, MiniCpmVDataProcessor::Create(
-                                           MiniCpmVDataProcessorConfig{},
-                                           PromptTemplateCapabilities{}));
+                                           MiniCpmVDataProcessorConfig{}));
   EXPECT_FALSE(processor
                    ->ToInputDataVector("prompt without marker",
                                        MessagesWithImage(280, 280), {})
@@ -272,8 +262,7 @@ TEST(MiniCpmVDataProcessorTest, MissingSoftTokenMarkerIsRejected) {
 
 TEST(MiniCpmVDataProcessorTest, MismatchedImageAndMarkerCountIsRejected) {
   ASSERT_OK_AND_ASSIGN(auto processor, MiniCpmVDataProcessor::Create(
-                                           MiniCpmVDataProcessorConfig{},
-                                           PromptTemplateCapabilities{}));
+                                           MiniCpmVDataProcessorConfig{}));
   EXPECT_FALSE(
       processor
           ->ToInputDataVector("<image_soft_token> and <image_soft_token>",

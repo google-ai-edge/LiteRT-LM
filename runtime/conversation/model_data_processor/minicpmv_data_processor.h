@@ -44,45 +44,23 @@ class MiniCpmVDataProcessor
  public:
   // Creates a MiniCpmVDataProcessor instance.
   static absl::StatusOr<std::unique_ptr<MiniCpmVDataProcessor>> Create(
-      MiniCpmVDataProcessorConfig config,
-      const PromptTemplateCapabilities& capabilities);
+      MiniCpmVDataProcessorConfig config);
 
   // Returns the config of the MiniCpmVDataProcessor.
   const MiniCpmVDataProcessorConfig& GetConfig() const override {
     return config_;
   }
 
-  // Formats tool declarations.
-  absl::StatusOr<nlohmann::ordered_json> FormatTools(
-      const nlohmann::ordered_json& tools) const override;
-
-  // Returns the start of tool call blocks.
-  absl::string_view CodeFenceStart() const override { return ""; }
-
-  // Returns the end of tool call blocks.
-  absl::string_view CodeFenceEnd() const override { return ""; }
-
  private:
-  explicit MiniCpmVDataProcessor(MiniCpmVDataProcessorConfig config,
-                                 const PromptTemplateCapabilities& capabilities)
-      : config_(config), capabilities_(capabilities) {}
+  explicit MiniCpmVDataProcessor(MiniCpmVDataProcessorConfig config)
+      : config_(config) {}
 
   absl::StatusOr<std::vector<InputData>> ToInputDataVectorImpl(
       const std::string& rendered_template_prompt,
       const nlohmann::ordered_json& messages,
       const MiniCpmVDataProcessorArguments& args) const override;
 
-  absl::StatusOr<Message> ToMessageImpl(
-      const Responses& responses,
-      const MiniCpmVDataProcessorArguments& args) const override;
-
-  absl::Status CloneStateImpl(
-      const TypeSafeModelDataProcessor<MiniCpmVDataProcessorConfig,
-                                       MiniCpmVDataProcessorArguments>& other)
-      override;
-
   MiniCpmVDataProcessorConfig config_;
-  PromptTemplateCapabilities capabilities_;
 };
 
 }  // namespace litert::lm

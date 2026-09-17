@@ -36,49 +36,25 @@ class FastVlmDataProcessor
  public:
   // Creates a FastVlmDataProcessor instance.
   static absl::StatusOr<std::unique_ptr<FastVlmDataProcessor>> Create(
-      FastVlmDataProcessorConfig config,
-      const PromptTemplateCapabilities& capabilities);
+      FastVlmDataProcessorConfig config);
 
   // Returns the config of the FastVlmDataProcessor.
   const FastVlmDataProcessorConfig& GetConfig() const override {
     return config_;
   }
 
-  // Formats tool declarations.
-  absl::StatusOr<nlohmann::ordered_json> FormatTools(
-      const nlohmann::ordered_json& tools) const override;
-
-  // Returns the start of tool call blocks.
-  absl::string_view CodeFenceStart() const override { return ""; }
-
-  // Returns the end of tool call blocks.
-  absl::string_view CodeFenceEnd() const override { return ""; }
-
  private:
   explicit FastVlmDataProcessor(
       FastVlmDataProcessorConfig config,
-      const PromptTemplateCapabilities& capabilities,
       std::unique_ptr<ImagePreprocessor> image_preprocessor)
-      : config_(config),
-        capabilities_(capabilities),
-        image_preprocessor_(std::move(image_preprocessor)) {}
+      : config_(config), image_preprocessor_(std::move(image_preprocessor)) {}
 
   absl::StatusOr<std::vector<InputData>> ToInputDataVectorImpl(
       const std::string& rendered_template_prompt,
       const nlohmann::ordered_json& messages,
       const FastVlmDataProcessorArguments& args) const override;
 
-  absl::StatusOr<Message> ToMessageImpl(
-      const Responses& responses,
-      const FastVlmDataProcessorArguments& args) const override;
-
-  absl::Status CloneStateImpl(
-      const TypeSafeModelDataProcessor<FastVlmDataProcessorConfig,
-                                       FastVlmDataProcessorArguments>& other)
-      override;
-
   FastVlmDataProcessorConfig config_;
-  PromptTemplateCapabilities capabilities_;
   std::unique_ptr<ImagePreprocessor> image_preprocessor_;
 };
 

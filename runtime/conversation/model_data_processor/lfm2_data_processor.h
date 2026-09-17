@@ -92,10 +92,6 @@ class Lfm2DataProcessor
       const Responses& responses,
       const Lfm2DataProcessorArguments& args) const override;
 
-  absl::Status CloneStateImpl(
-      const TypeSafeModelDataProcessor<
-          Lfm2DataProcessorConfig, Lfm2DataProcessorArguments>& other) override;
-
   Lfm2DataProcessorConfig config_;
   std::optional<Preface> preface_;
   std::unique_ptr<::litert::support::ImagePreprocessor> image_preprocessor_;

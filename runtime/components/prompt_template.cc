@@ -87,7 +87,6 @@ PromptTemplate::PromptTemplate(absl::string_view template_content)
       .supports_system_role = caps.supports_system_role,
       .supports_parallel_tool_calls = caps.supports_parallel_tool_calls,
       .supports_tool_call_id = caps.supports_tool_call_id,
-      .requires_typed_content = caps.requires_typed_content,
       .supports_single_turn = caps.supports_single_turn};
 }
 

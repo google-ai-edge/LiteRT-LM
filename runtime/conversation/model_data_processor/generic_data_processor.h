@@ -45,15 +45,7 @@ class GenericDataProcessor
                                         GenericDataProcessorArguments> {
  public:
   static absl::StatusOr<std::unique_ptr<ModelDataProcessor>> Create(
-      GenericDataProcessorConfig config = GenericDataProcessorConfig(),
-      const PromptTemplateCapabilities& capabilities =
-          PromptTemplateCapabilities());
-
-  // Return the same tools as the input for generic models.
-  absl::StatusOr<nlohmann::ordered_json> FormatTools(
-      const nlohmann::ordered_json& tools) const override {
-    return tools;
-  }
+      GenericDataProcessorConfig config = GenericDataProcessorConfig());
 
   // Renders a single turn template for the given message and history. Only the
   // prompt template supporting single turn is valid for this method.
@@ -63,12 +55,6 @@ class GenericDataProcessor
       bool current_is_appending_message, bool append_message,
       std::optional<nlohmann::ordered_json> extra_context) const override;
 
-  // No-op for generic models.
-  absl::string_view CodeFenceStart() const override { return ""; }
-
-  // No-op for generic models.
-  absl::string_view CodeFenceEnd() const override { return ""; }
-
   // Returns the config of the model data processor.
   const GenericDataProcessorConfig& GetConfig() const override {
     return config_;
@@ -77,11 +63,9 @@ class GenericDataProcessor
  private:
   explicit GenericDataProcessor(
       GenericDataProcessorConfig config,
-      const PromptTemplateCapabilities& capabilities,
       std::unique_ptr<ImagePreprocessor> image_preprocessor = nullptr,
       std::unique_ptr<AudioPreprocessor> audio_preprocessor = nullptr)
       : config_(config),
-        capabilities_(capabilities),
         image_preprocessor_(std::move(image_preprocessor)),
         audio_preprocessor_(std::move(audio_preprocessor)) {};
 
@@ -90,17 +74,12 @@ class GenericDataProcessor
       const nlohmann::ordered_json& messages,
       const GenericDataProcessorArguments& args) const override;
 
-  absl::StatusOr<Message> ToMessageImpl(
-      const Responses& responses,
-      const GenericDataProcessorArguments& args) const override;
-
   absl::Status CloneStateImpl(
       const TypeSafeModelDataProcessor<GenericDataProcessorConfig,
                                        GenericDataProcessorArguments>& other)
       override;
 
   GenericDataProcessorConfig config_;
-  PromptTemplateCapabilities capabilities_;
   std::unique_ptr<ImagePreprocessor> image_preprocessor_;
   std::unique_ptr<AudioPreprocessor> audio_preprocessor_;
 };
