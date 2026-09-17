@@ -314,11 +314,14 @@ cc_library(
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/types:span",
+        "//third_party/ml_drift/webgpu:spatial_tensor",
+        "//third_party/ml_drift/webgpu:webgpu_headers",
         "@litert//litert/c:litert_common",  # buildcleaner: keep
         "@litert//litert/c/internal:litert_external_litert_buffer_context",  # buildcleaner: keep
         "@litert//litert/cc:litert_compiled_model",
         "@litert//litert/cc:litert_element_type",
         "@litert//litert/cc:litert_environment",
+        "@litert//litert/cc:litert_environment_options",
         "@litert//litert/cc:litert_expected",
         "@litert//litert/cc:litert_layout",
         "@litert//litert/cc:litert_macros",
@@ -330,7 +333,6 @@ cc_library(
         "@litert//litert/cc:litert_tensor_buffer",
         "@litert//litert/cc:litert_tensor_buffer_types",
         "@litert//litert/cc/internal:litert_handle",  # buildcleaner: keep
-        "@litert//litert/cc/options:litert_cpu_options",
         "@litert//litert/cc/options:litert_google_tensor_options",
         "@litert//litert/cc/options:litert_gpu_options",
         "@litert//litert/cc/options:litert_intel_openvino_options",
@@ -343,6 +345,8 @@ cc_library(
         "//runtime/components:sampler_factory",
         "//runtime/components/constrained_decoding:constrained_decoder",
         "//runtime/components/constrained_decoding:constraint",
+        "//runtime/components/constrained_decoding:logit_mask",
+        "//runtime/components/constrained_decoding:repetition_penalty_constraint",
         "//runtime/components/embedding_lookup:embedding_lookup_manager",
         "//runtime/executor/litert:state",
         "//runtime/proto:executor_metadata_cc_proto",
@@ -395,12 +399,16 @@ cc_test(
         "//runtime/components:model_resources_litert_lm",
         "//runtime/components:sampler",
         "//runtime/components/constrained_decoding:constrained_decoder",
+        "//runtime/components/constrained_decoding:constraint",
         "//runtime/components/constrained_decoding:fake_constraint",
+        "//runtime/components/constrained_decoding:logit_mask",
+        "//runtime/components/constrained_decoding:repetition_penalty_constraint",
         "//runtime/util:convert_tensor_buffer",
         "//runtime/util:litert_lm_loader",
         "//runtime/util:litert_status_util",
         "//runtime/util:scoped_file",
         "//runtime/util:test_utils",
+        "@litert//tflite/types:half",
     ],
 )
 
