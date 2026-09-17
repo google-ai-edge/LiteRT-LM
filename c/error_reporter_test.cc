@@ -29,7 +29,7 @@ using ::testing::HasSubstr;
 
 TEST(ErrorReporterTest, InitialStateOrClearedState) {
   litert_lm_clear_last_error();
-  EXPECT_EQ(litert_lm_get_last_error_code(), 0);
+  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusOk);
   EXPECT_EQ(litert_lm_get_last_error_message(), nullptr);
 }
 
@@ -37,24 +37,23 @@ TEST(ErrorReporterTest, SetAndGetErrorInternal) {
   litert_lm_clear_last_error();
   litert::lm::c::SetLastError(
       absl::InvalidArgumentError("test argument error"));
-  EXPECT_EQ(litert_lm_get_last_error_code(),
-            static_cast<int>(absl::StatusCode::kInvalidArgument));
+  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   ASSERT_NE(litert_lm_get_last_error_message(), nullptr);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               HasSubstr("test argument error"));
 
   litert_lm_clear_last_error();
-  EXPECT_EQ(litert_lm_get_last_error_code(), 0);
+  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusOk);
   EXPECT_EQ(litert_lm_get_last_error_message(), nullptr);
 }
 
 TEST(ErrorReporterTest, SetLastErrorOkClearsError) {
   litert::lm::c::SetLastError(absl::InternalError("internal failure"));
-  EXPECT_NE(litert_lm_get_last_error_code(), 0);
+  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInternal);
   EXPECT_NE(litert_lm_get_last_error_message(), nullptr);
 
   litert::lm::c::SetLastError(absl::OkStatus());
-  EXPECT_EQ(litert_lm_get_last_error_code(), 0);
+  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusOk);
   EXPECT_EQ(litert_lm_get_last_error_message(), nullptr);
 }
 
@@ -66,8 +65,7 @@ TEST(ErrorReporterTest, ApiCallSetsErrorAndManualClear) {
   LiteRtLmEngineSettings* invalid_settings = litert_lm_engine_settings_create(
       /*model_path=*/nullptr, "cpu", nullptr, nullptr);
   EXPECT_EQ(invalid_settings, nullptr);
-  EXPECT_EQ(litert_lm_get_last_error_code(),
-            static_cast<int>(absl::StatusCode::kInvalidArgument));
+  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   ASSERT_NE(litert_lm_get_last_error_message(), nullptr);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               HasSubstr("model_path cannot be null"));
@@ -77,14 +75,13 @@ TEST(ErrorReporterTest, ApiCallSetsErrorAndManualClear) {
   LiteRtLmEngineSettings* valid_settings = litert_lm_engine_settings_create(
       "dummy_model_path", "cpu", nullptr, nullptr);
   ASSERT_NE(valid_settings, nullptr);
-  EXPECT_EQ(litert_lm_get_last_error_code(),
-            static_cast<int>(absl::StatusCode::kInvalidArgument));
+  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
   EXPECT_THAT(litert_lm_get_last_error_message(),
               HasSubstr("model_path cannot be null"));
 
   // litert_lm_clear_last_error explicitly clears the error.
   litert_lm_clear_last_error();
-  EXPECT_EQ(litert_lm_get_last_error_code(), 0);
+  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusOk);
   EXPECT_EQ(litert_lm_get_last_error_message(), nullptr);
 
   litert_lm_engine_settings_delete(valid_settings);
@@ -92,16 +89,15 @@ TEST(ErrorReporterTest, ApiCallSetsErrorAndManualClear) {
 
 TEST(ErrorReporterTest, ThreadIsolation) {
   litert_lm_clear_last_error();
-  EXPECT_EQ(litert_lm_get_last_error_code(), 0);
+  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusOk);
   EXPECT_EQ(litert_lm_get_last_error_message(), nullptr);
 
   std::thread worker([]() {
-    EXPECT_EQ(litert_lm_get_last_error_code(), 0);
+    EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusOk);
     EXPECT_EQ(litert_lm_get_last_error_message(), nullptr);
 
     litert::lm::c::SetLastError(absl::NotFoundError("error on worker thread"));
-    EXPECT_EQ(litert_lm_get_last_error_code(),
-              static_cast<int>(absl::StatusCode::kNotFound));
+    EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusNotFound);
     ASSERT_NE(litert_lm_get_last_error_message(), nullptr);
     EXPECT_THAT(litert_lm_get_last_error_message(),
                 HasSubstr("error on worker thread"));
@@ -111,7 +107,7 @@ TEST(ErrorReporterTest, ThreadIsolation) {
 
   // Main thread's error state should remain clean / unaffected by worker
   // thread.
-  EXPECT_EQ(litert_lm_get_last_error_code(), 0);
+  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusOk);
   EXPECT_EQ(litert_lm_get_last_error_message(), nullptr);
 }
 

@@ -17,8 +17,18 @@
 
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "c/error_reporter.h"
 
 namespace litert::lm::c {
+
+// Maps a canonical `absl::StatusCode` to the corresponding
+// `LiteRtLmStatusCode`. Any value outside the canonical range is mapped to
+// `kLiteRtLmStatusUnknown`.
+//
+// This is the single conversion point between the C++ and C status domains.
+// Prefer it over an open-coded `static_cast`, so that C API entry points return
+// a value that is statically known to be a valid `LiteRtLmStatusCode`.
+LiteRtLmStatusCode ToLiteRtLmStatusCode(absl::StatusCode code);
 
 // Sets the thread-local last error from an absl::Status.
 // If status is OK, clears the thread-local error.
@@ -26,9 +36,6 @@ void SetLastError(const absl::Status& status);
 
 // Sets the thread-local last error with a specific StatusCode and message.
 void SetLastError(absl::StatusCode code, absl::string_view message);
-
-// Sets the thread-local last error with an integer error code and message.
-void SetLastError(int code, absl::string_view message);
 
 }  // namespace litert::lm::c
 

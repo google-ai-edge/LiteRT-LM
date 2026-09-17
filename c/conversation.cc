@@ -27,6 +27,7 @@
 #include "c/conversation_internal.h"
 #include "c/engine.h"
 #include "c/engine_internal.h"  // IWYU pragma: keep
+#include "c/error_reporter.h"
 #include "c/error_reporter_internal.h"
 #include "runtime/components/constrained_decoding/llg_constraint_config.h"
 #include "runtime/components/prompt_template.h"
@@ -144,6 +145,7 @@ using ::litert::lm::ConversationConfig;
 using ::litert::lm::OptionalArgs;
 using ::litert::lm::SessionConfig;
 using ::litert::lm::c::SetLastError;
+using ::litert::lm::c::ToLiteRtLmStatusCode;
 
 extern "C" {
 
@@ -590,7 +592,7 @@ int litert_lm_conversation_send_message_stream(
     LiteRtLmStreamCallback callback, void* callback_data) {
   if (!conversation || !conversation->conversation) {
     SetLastError(absl::StatusCode::kInvalidArgument, "Invalid conversation.");
-    return -1;
+    return kLiteRtLmStatusInvalidArgument;
   }
   nlohmann::json json_message =
       nlohmann::json::parse(message_json, /*cb=*/nullptr,
@@ -599,7 +601,7 @@ int litert_lm_conversation_send_message_stream(
     ABSL_LOG(ERROR) << "Failed to parse message JSON.";
     SetLastError(absl::StatusCode::kInvalidArgument,
                  "Failed to parse message JSON.");
-    return -1;
+    return kLiteRtLmStatusInvalidArgument;
   }
 
   litert::lm::OptionalArgs litert_lm_optional_args = CreateOptionalArgs(
@@ -612,9 +614,9 @@ int litert_lm_conversation_send_message_stream(
   if (!status.ok()) {
     ABSL_LOG(ERROR) << "Failed to start message stream: " << status;
     SetLastError(status);
-    return static_cast<int>(status.code());
+    return ToLiteRtLmStatusCode(status.code());
   }
-  return 0;
+  return kLiteRtLmStatusOk;
 }
 
 const char* litert_lm_conversation_render_message_to_string(

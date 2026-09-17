@@ -30,6 +30,7 @@
 #include "c/conversation.h"
 #include "c/conversation_internal.h"
 #include "c/engine_internal.h"
+#include "c/error_reporter.h"
 #include "c/experimental.h"
 #include "runtime/conversation/conversation.h"
 #include "runtime/conversation/io_types.h"
@@ -515,10 +516,10 @@ TEST(EngineCTest, CreateConversationConfig) {
                                                                true);
   EXPECT_EQ(litert_lm_experimental_engine_update_gpu_enable_metal_residency_set(
                 engine.get(), true),
-            0);
+            kLiteRtLmStatusOk);
   EXPECT_EQ(litert_lm_experimental_engine_update_gpu_enable_metal_residency_set(
                 engine.get(), false),
-            0);
+            kLiteRtLmStatusOk);
 }
 
 TEST(EngineCTest, CreateConversationConfigWithNoSamplerParams) {
@@ -1016,7 +1017,8 @@ TEST(EngineCTest, TokenizerTest) {
       const int* ids;
       size_t num_ids;
       EXPECT_EQ(
-          litert_lm_token_union_get_ids(start_token.get(), &ids, &num_ids), 0);
+          litert_lm_token_union_get_ids(start_token.get(), &ids, &num_ids),
+          kLiteRtLmStatusOk);
       EXPECT_GT(num_ids, 0);
     } else {
       EXPECT_NE(litert_lm_token_union_get_string(start_token.get()), nullptr);
@@ -1038,7 +1040,8 @@ TEST(EngineCTest, TokenizerTest) {
         const int* ids;
         size_t num_ids;
         EXPECT_EQ(
-            litert_lm_token_union_get_ids(stop_token.get(), &ids, &num_ids), 0);
+            litert_lm_token_union_get_ids(stop_token.get(), &ids, &num_ids),
+            kLiteRtLmStatusOk);
         EXPECT_GT(num_ids, 0);
       } else {
         EXPECT_NE(litert_lm_token_union_get_string(stop_token.get()), nullptr);
@@ -1599,7 +1602,7 @@ TEST(EngineCTest, GenerateContentStream) {
   StreamCallbackData callback_data;
   int result = litert_lm_session_generate_content_stream(
       session.get(), inputs, 1, &StreamCallback, &callback_data);
-  ASSERT_EQ(result, 0);
+  ASSERT_EQ(result, kLiteRtLmStatusOk);
 
   callback_data.done.WaitForNotification();
 
@@ -1646,7 +1649,7 @@ TEST(EngineCTest, SessionGenerateContentStreamAndCancel) {
   StreamCallbackData callback_data;
   int result = litert_lm_session_generate_content_stream(
       session.get(), inputs, 1, &StreamCallback, &callback_data);
-  ASSERT_EQ(result, 0);
+  ASSERT_EQ(result, kLiteRtLmStatusOk);
 
   litert_lm_session_cancel_process(session.get());
 
@@ -1685,7 +1688,7 @@ TEST(EngineCTest, ConversationSendMessageStream) {
   int result = litert_lm_conversation_send_message_stream(
       conversation.get(), message_json, /*extra_context=*/nullptr,
       /*optional_args=*/nullptr, &StreamCallback, &callback_data);
-  ASSERT_EQ(result, 0);
+  ASSERT_EQ(result, kLiteRtLmStatusOk);
 
   callback_data.done.WaitForNotification();
   EXPECT_GT(callback_data.response.length(), 0);
@@ -1720,7 +1723,7 @@ TEST(EngineCTest, ConversationSendMessageStreamWithExtraContext) {
   int result = litert_lm_conversation_send_message_stream(
       conversation.get(), message_json, /*extra_context=*/extra_context,
       /*optional_args=*/nullptr, &StreamCallback, &callback_data);
-  ASSERT_EQ(result, 0);
+  ASSERT_EQ(result, kLiteRtLmStatusOk);
 
   callback_data.done.WaitForNotification();
   EXPECT_GT(callback_data.response.length(), 0);
@@ -1798,7 +1801,7 @@ TEST(EngineCTest, ConversationSendMessageStreamWithOptionalArgs) {
   int result = litert_lm_conversation_send_message_stream(
       conversation.get(), message_json, /*extra_context=*/nullptr,
       optional_args.get(), &StreamCallback, &callback_data);
-  ASSERT_EQ(result, 0);
+  ASSERT_EQ(result, kLiteRtLmStatusOk);
 
   callback_data.done.WaitForNotification();
   EXPECT_GT(callback_data.response.length(), 0);
@@ -1832,7 +1835,7 @@ TEST(EngineCTest, ConversationSendMessageStreamAndCancel) {
   int result = litert_lm_conversation_send_message_stream(
       conversation.get(), message_json, /*extra_context=*/nullptr,
       /*optional_args=*/nullptr, &StreamCallback, &callback_data);
-  ASSERT_EQ(result, 0);
+  ASSERT_EQ(result, kLiteRtLmStatusOk);
 
   litert_lm_conversation_cancel_process(conversation.get());
 
@@ -1947,7 +1950,7 @@ TEST(EngineCTest, RunPrefillSuccess) {
   const LiteRtLmInputData* inputs[] = {input_data.get()};
 
   int prefill_result = litert_lm_session_run_prefill(session.get(), inputs, 1);
-  EXPECT_EQ(prefill_result, 0);
+  EXPECT_EQ(prefill_result, kLiteRtLmStatusOk);
 }
 
 TEST(EngineCTest, RunPrefillAndDecode) {
@@ -2161,6 +2164,124 @@ TEST(EngineCTest, ConversationOptionalArgsTest) {
   EXPECT_GT(text.length(), 0);
   EXPECT_LT(text.length(), 5);
   EXPECT_EQ(text, "\xE6\xB2\xBF");
+}
+
+// Wrapper so that this unusually long function name still fits within the line
+// limit when referenced from the case table below.
+int UpdateGpuMetalResidencySetWithNullEngine() {
+  return litert_lm_experimental_engine_update_gpu_enable_metal_residency_set(
+      nullptr, true);
+}
+
+// Every status-returning entry point must reject invalid arguments with
+// kLiteRtLmStatusInvalidArgument, record the same code in the thread-local
+// error state, and never return the pre-0.2.0 `-1` sentinel.
+TEST(EngineCTest, InvalidArgumentsReturnCanonicalStatus) {
+  struct StatusCase {
+    const char* name;
+    int (*call)();
+  };
+
+  // All lambdas are captureless so they convert to plain function pointers.
+  static const StatusCase kCases[] = {
+      {"session_config_set_lora_path",
+       [] { return litert_lm_session_config_set_lora_path(nullptr, "path"); }},
+      {"session_config_set_audio_lora_path",
+       [] {
+         return litert_lm_session_config_set_audio_lora_path(nullptr, "path");
+       }},
+      {"engine_settings_set_supported_lora_ranks",
+       [] {
+         return litert_lm_engine_settings_set_supported_lora_ranks(nullptr,
+                                                                   nullptr, 0);
+       }},
+      {"engine_settings_set_supported_audio_lora_ranks",
+       [] {
+         return litert_lm_engine_settings_set_supported_audio_lora_ranks(
+             nullptr, nullptr, 0);
+       }},
+      {"session_save_checkpoint",
+       [] { return litert_lm_session_save_checkpoint(nullptr, "label"); }},
+      {"session_rewind_to_checkpoint",
+       [] { return litert_lm_session_rewind_to_checkpoint(nullptr, "label"); }},
+      {"session_rewind_to_step",
+       [] { return litert_lm_session_rewind_to_step(nullptr, 0); }},
+      {"session_run_prefill",
+       [] { return litert_lm_session_run_prefill(nullptr, nullptr, 0); }},
+      {"session_run_decode_async",
+       [] {
+         return litert_lm_session_run_decode_async(nullptr, nullptr, nullptr);
+       }},
+      {"session_generate_content_stream",
+       [] {
+         return litert_lm_session_generate_content_stream(nullptr, nullptr, 0,
+                                                          nullptr, nullptr);
+       }},
+      {"token_union_get_ids",
+       [] { return litert_lm_token_union_get_ids(nullptr, nullptr, nullptr); }},
+      {"conversation_send_message_stream",
+       [] {
+         return litert_lm_conversation_send_message_stream(
+             nullptr, "{}", nullptr, nullptr, nullptr, nullptr);
+       }},
+      {"experimental_engine_update_gpu_enable_metal_residency_set",
+       &UpdateGpuMetalResidencySetWithNullEngine},
+  };
+
+  for (const StatusCase& test_case : kCases) {
+    SCOPED_TRACE(test_case.name);
+    litert_lm_clear_last_error();
+
+    const int status = test_case.call();
+
+    EXPECT_EQ(status, kLiteRtLmStatusInvalidArgument);
+    // Regression guard for the 0.1.0 -> 0.2.0 behavior change: failures are
+    // canonical positive codes now, never the old -1 sentinel.
+    EXPECT_NE(status, -1);
+    // The returned code and the recorded code must always agree.
+    EXPECT_EQ(litert_lm_get_last_error_code(), status);
+    EXPECT_NE(litert_lm_get_last_error_message(), nullptr);
+  }
+}
+
+TEST(EngineCTest, MissingLoraFileReturnsMappedStatus) {
+  litert_lm_clear_last_error();
+
+  SessionConfigPtr session_config(litert_lm_session_config_create(),
+                                  &litert_lm_session_config_delete);
+  ASSERT_NE(session_config, nullptr);
+
+  const int status = litert_lm_session_config_set_lora_path(
+      session_config.get(), "/nonexistent/lora/path");
+
+  // The exact code comes from ScopedFile::Open. A missing file maps to
+  // kLiteRtLmStatusNotFound; tolerate kLiteRtLmStatusPermissionDenied, which
+  // some sandboxed environments report for an unreadable absolute path. The
+  // point of the test is that a non-OK absl::Status is propagated as its own
+  // canonical code rather than being flattened to a single sentinel.
+  EXPECT_THAT(status, ::testing::AnyOf(kLiteRtLmStatusNotFound,
+                                       kLiteRtLmStatusPermissionDenied));
+  EXPECT_EQ(litert_lm_get_last_error_code(), status);
+}
+
+TEST(EngineCTest, UnconfiguredAudioExecutorReturnsFailedPrecondition) {
+  litert_lm_clear_last_error();
+
+  const std::string task_path = GetTestdataPath(
+      "litert_lm/runtime/testdata/test_lm_new_metadata.task");
+  EngineSettingsPtr settings(
+      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
+                                       /* vision_backend_str */ nullptr,
+                                       /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+
+  int ranks[] = {32};
+  const int status = litert_lm_engine_settings_set_supported_audio_lora_ranks(
+      settings.get(), ranks, 1);
+
+  EXPECT_EQ(status, kLiteRtLmStatusFailedPrecondition);
+  EXPECT_EQ(litert_lm_get_last_error_code(), status);
 }
 
 }  // namespace
