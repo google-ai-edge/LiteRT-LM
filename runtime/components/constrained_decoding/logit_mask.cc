@@ -15,6 +15,7 @@
 #include "runtime/components/constrained_decoding/logit_mask.h"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -54,27 +55,27 @@ absl::Status ApplyBitmapImpl(absl::Span<const uint64_t> words, int vocab_size,
       // All 64 tokens in this word are allowed, skip to next word.
       continue;
     }
+    const int count = std::min(64, limit - base_token);
     if (word == 0) {
       // All tokens in this word are disallowed.
-      const int count = std::min(64, limit - base_token);
-      for (int bit = 0; bit < count; ++bit) {
-        logits[base_token + bit] = min_val;
-      }
+      std::fill_n(logits.data() + base_token, count, min_val);
       continue;
     }
 
-    const uint64_t disallowed_bits = ~word;
-    const int count = std::min(64, limit - base_token);
-    for (int bit = 0; bit < count; ++bit) {
-      if ((disallowed_bits >> bit) & 1) {
-        logits[base_token + bit] = min_val;
-      }
+    uint64_t disallowed_bits = ~word;
+    if (count < 64) {
+      disallowed_bits &= (uint64_t{1} << count) - 1;
+    }
+    while (disallowed_bits != 0) {
+      const int bit = std::countr_zero(disallowed_bits);
+      logits[base_token + bit] = min_val;
+      disallowed_bits &= disallowed_bits - 1;
     }
   }
 
   // Any logits beyond vocab_size (e.g. padding) are disallowed.
-  for (int i = vocab_size; i < static_cast<int>(logits.size()); ++i) {
-    logits[i] = min_val;
+  if (vocab_size < static_cast<int>(logits.size())) {
+    std::fill(logits.begin() + std::max(0, vocab_size), logits.end(), min_val);
   }
 
   return absl::OkStatus();
@@ -178,25 +179,26 @@ absl::Status ApplyCompositeImpl(
       if (fused_word == ~uint64_t{0} && base_token + 64 <= limit) {
         continue;
       }
+      const int count = std::min(64, limit - base_token);
       if (fused_word == 0) {
-        const int count = std::min(64, limit - base_token);
-        for (int bit = 0; bit < count; ++bit) {
-          logits[base_token + bit] = min_val;
-        }
+        std::fill_n(logits.data() + base_token, count, min_val);
         continue;
       }
 
-      const uint64_t disallowed_bits = ~fused_word;
-      const int count = std::min(64, limit - base_token);
-      for (int bit = 0; bit < count; ++bit) {
-        if ((disallowed_bits >> bit) & 1) {
-          logits[base_token + bit] = min_val;
-        }
+      uint64_t disallowed_bits = ~fused_word;
+      if (count < 64) {
+        disallowed_bits &= (uint64_t{1} << count) - 1;
+      }
+      while (disallowed_bits != 0) {
+        const int bit = std::countr_zero(disallowed_bits);
+        logits[base_token + bit] = min_val;
+        disallowed_bits &= disallowed_bits - 1;
       }
     }
 
-    for (int i = min_vocab_size; i < static_cast<int>(logits.size()); ++i) {
-      logits[i] = min_val;
+    if (min_vocab_size < static_cast<int>(logits.size())) {
+      std::fill(logits.begin() + std::max(0, min_vocab_size), logits.end(),
+                min_val);
     }
   }
 
