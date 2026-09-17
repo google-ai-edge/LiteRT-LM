@@ -242,6 +242,20 @@ void litert_lm_embedding_engine_settings_set_vision_tokens_per_image(
   }
 }
 
+void litert_lm_embedding_engine_settings_set_activation_data_type(
+    LiteRtLmEmbeddingEngineSettings* settings,
+    LiteRtLmActivationDataType activation_data_type) {
+  if (settings && settings->settings) {
+    settings->settings->GetMutableMainExecutorSettings().SetActivationDataType(
+        static_cast<litert::lm::ActivationDataType>(activation_data_type));
+    if (settings->settings->GetVisionExecutorSettings().has_value()) {
+      settings->settings->GetMutableVisionExecutorSettings()
+          ->SetActivationDataType(static_cast<litert::lm::ActivationDataType>(
+              activation_data_type));
+    }
+  }
+}
+
 LiteRtLmEmbeddingOptions* litert_lm_embedding_options_create(void) {
   return new LiteRtLmEmbeddingOptions{litert::lm::EmbeddingOptions{}};
 }

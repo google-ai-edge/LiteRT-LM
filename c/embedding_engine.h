@@ -189,6 +189,18 @@ LITERT_LM_C_API_EXPORT
 void litert_lm_embedding_engine_settings_set_vision_tokens_per_image(
     LiteRtLmEmbeddingEngineSettings* settings, int vision_tokens_per_image);
 
+// Sets the activation data type for the embedding engine settings.
+//
+// @param settings The embedding engine settings.
+// @param activation_data_type The activation data type (FLOAT32, FLOAT16,
+// etc.).
+//
+// Added in version 0.2.0.
+LITERT_LM_C_API_EXPORT
+void litert_lm_embedding_engine_settings_set_activation_data_type(
+    LiteRtLmEmbeddingEngineSettings* settings,
+    LiteRtLmActivationDataType activation_data_type);
+
 // Creates LiteRT LM Embedding Options with default values (`normalize = true`,
 // `insert_special_tokens = true`). The caller is responsible for destroying
 // options using `litert_lm_embedding_options_delete`.
