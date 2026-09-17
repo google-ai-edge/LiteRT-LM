@@ -252,5 +252,14 @@ TEST(PromptTemplateCustomTest, Qwen3MultiTurnTemplateRenderingTest) {
   }
 }
 
+TEST(PromptTemplateCustomTest, CapabilitiesTest) {
+  PromptTemplate standard_template("{{ messages[0].content }}");
+  EXPECT_FALSE(standard_template.GetCapabilities().supports_single_turn);
+
+  PromptTemplate single_turn_template(
+      "{% if is_appending_to_prefill %}{{ message.content }}{% endif %}");
+  EXPECT_TRUE(single_turn_template.GetCapabilities().supports_single_turn);
+}
+
 }  // namespace
 }  // namespace litert::lm

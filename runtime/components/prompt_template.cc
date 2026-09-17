@@ -82,11 +82,6 @@ PromptTemplate::PromptTemplate(absl::string_view template_content)
           new_minijinja_template(EditTemplateForMinijinja(template_content))) {
   const auto caps = minijinja_template_->get_capabilities();
   capabilities_ = PromptTemplateCapabilities{
-      .supports_tools = caps.supports_tools,
-      .supports_tool_calls = caps.supports_tool_calls,
-      .supports_system_role = caps.supports_system_role,
-      .supports_parallel_tool_calls = caps.supports_parallel_tool_calls,
-      .supports_tool_call_id = caps.supports_tool_call_id,
       .supports_single_turn = caps.supports_single_turn};
 }
 

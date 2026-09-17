@@ -100,17 +100,6 @@ struct PromptTemplateInput {
 
 // The capabilities of the prompt template.
 struct PromptTemplateCapabilities {
-  // Whether the template supports tools.
-  bool supports_tools = false;
-  // Whether the template supports tool calls.
-  bool supports_tool_calls = false;
-  // Whether the template supports system role.
-  bool supports_system_role = false;
-  // Whether the template supports parallel tool calls.
-  bool supports_parallel_tool_calls = false;
-  // Whether the template supports tool call id.
-  bool supports_tool_call_id = false;
-
   // Whether the template supports single turn, i.e. appending to the prefill
   // without repeating the whole history.
   bool supports_single_turn = false;

@@ -20,11 +20,6 @@ use serde_json::{json, Value};
 mod ffi {
     #[derive(Clone, Copy, Default)]
     struct ChatTemplateCapabilities {
-        supports_tools: bool,
-        supports_tool_calls: bool,
-        supports_system_role: bool,
-        supports_parallel_tool_calls: bool,
-        supports_tool_call_id: bool,
         supports_single_turn: bool,
     }
 
@@ -72,39 +67,9 @@ pub struct MinijinjaTemplate {
 }
 
 fn detect_capabilities(source: &str) -> ffi::ChatTemplateCapabilities {
-    let mut caps = ffi::ChatTemplateCapabilities::default();
-    let env = create_env();
-
-    if let Ok(tmpl) = env.template_from_str(source) {
-        let undeclared = tmpl.undeclared_variables(true);
-        if undeclared.contains("tools") {
-            caps.supports_tools = true;
-        }
+    ffi::ChatTemplateCapabilities {
+        supports_single_turn: source.contains("is_appending_to_prefill"),
     }
-
-    if source.contains("tool_calls") {
-        caps.supports_tool_calls = true;
-    }
-    if source.contains("tool_call_id") {
-        caps.supports_tool_call_id = true;
-    }
-    if !caps.supports_tools && source.contains("tools") {
-        caps.supports_tools = true;
-    }
-
-    if source.contains("system") {
-        caps.supports_system_role = true;
-    }
-
-    if caps.supports_tool_calls && source.contains("for") && source.contains("tool_calls") {
-        caps.supports_parallel_tool_calls = true;
-    }
-
-    if source.contains("is_appending_to_prefill") {
-        caps.supports_single_turn = true;
-    }
-
-    caps
 }
 
 fn new_minijinja_template(source: String) -> Box<MinijinjaTemplate> {
