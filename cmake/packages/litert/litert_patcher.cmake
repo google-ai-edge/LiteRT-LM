@@ -48,6 +48,11 @@ patch_file_content("${ROOT_LIST}"
     "# Add TFLite as a subdirectory\nif(FALSE)"
     FALSE
 )
+patch_file_content("${ROOT_LIST}" 
+    "CMAKE_CROSSCOMPILING"
+    "FALSE"
+    FALSE
+)
 
 patch_file_content("${ROOT_LIST}"
     "add_subdirectory(compiler_plugin)"
@@ -175,10 +180,21 @@ set(GPU_INJECTION_STR
     \${LITERTLM_TFLITE_SOURCE_DIR}/delegates/gpu/cl/util.cc
     \${LITERTLM_TFLITE_SOURCE_DIR}/delegates/gpu/api.cc
     \${LITERTLM_TFLITE_SOURCE_DIR}/delegates/gpu/cl/cl_kernel.cc)"
-)
+    )
+    # \${LITERTLM_TFLITE_SOURCE_DIR}/delegates/gpu/gl/egl_environment.cc
+    # \${LITERTLM_TFLITE_SOURCE_DIR}/delegates/gpu/gl/gl_texture.cc
+    # \${LITERTLM_TFLITE_SOURCE_DIR}/delegates/gpu/gl/object_manager.cc
+    # \${LITERTLM_TFLITE_SOURCE_DIR}/delegates/gpu/gl/request_gpu_info.cc)"
+
 patch_file_content("${LITERTLM_LITERT_SRC_DIR}/c/CMakeLists.txt"
     "\${LITERTLM_TFLITE_SOURCE_DIR}/delegates/gpu/cl/gl_interop.cc)"
     "${GPU_INJECTION_STR}"
+    FALSE
+)
+
+patch_file_content("${LITERTLM_LITERT_SRC_DIR}/c/CMakeLists.txt"
+    "if(LITERT_PLATFORM_ANDROID)"
+    "if(LITERT_PLATFORM_ANDROID AND LITERT_ENABLE_GPU)"
     FALSE
 )
 
@@ -257,3 +273,6 @@ foreach(_tensor_cmakelist IN LISTS _tensor_example_cmakelists)
 endforeach()
 
 message(STATUS "[LiteRTLM] Patching Phase Complete.")
+
+file(COPY_FILE "${LITERTLM_LITERT_SHIMS_DIR}/CMakeLists_gated-delta-net.txt" 
+    "${LITERTLM_LITERT_SRC_DIR}/experimental/custom_ops/gated_delta_net/CMakeLists.txt")

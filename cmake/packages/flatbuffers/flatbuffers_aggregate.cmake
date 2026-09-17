@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-include("${LITERTLM_FLATBUFFERS_PACKAGE_DIR}/flatbuffers_target_map.cmake")
+include("${LITERTLM_FLATBUFFERS_TARGET_MAP_PATH}")
 
 macro(generate_flatbuffers_aggregate)
     if(NOT TARGET LiteRTLM::flatbuffers::flatbuffers)
@@ -69,17 +69,6 @@ macro(generate_flatc_aggregate)
         set_target_properties(LiteRTLM::flatc::shim PROPERTIES
             INTERFACE_INCLUDE_DIRECTORIES "${LITERTLM_FLATC_INCLUDE_DIR}"
         )
-
-        set(_flatc_lib_names "")
-        set(_flatc_lib_paths "")
-        kvp_parse_map("${LITERTLM_FLATC_TARGET_MAP}" _flatc_lib_names _flatc_lib_paths)
-
-        foreach(_comp_target IN LISTS ${_flatc_lib_names})
-            if(NOT TARGET ${_comp_target})
-                add_library(${_comp_target} ALIAS LiteRTLM::flatc::shim)
-                message(VERBOSE "[LiteRTLM] Redirected ${_comp_target} to aggregate")
-            endif()
-        endforeach()
 
         set(FlatC_FOUND TRUE CACHE INTERNAL "Forced by LiteRTLM" FORCE)
         set(flatc_FOUND TRUE CACHE INTERNAL "Forced by LiteRTLM" FORCE)

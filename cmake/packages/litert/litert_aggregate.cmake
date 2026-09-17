@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-include("${LITERTLM_LITERT_PACKAGE_DIR}/litert_target_map.cmake")
+include("${LITERTLM_LITERT_TARGET_MAP_PATH}")
 
 macro(generate_litert_aggregate)
     if(NOT TARGET LiteRTLM::litert::litert)

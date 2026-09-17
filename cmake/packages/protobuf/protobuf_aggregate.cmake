@@ -63,4 +63,3 @@ macro(generate_protobuf_aggregate)
         message(STATUS "[LiteRTLM] Protobuf aggregate has been generated.")
     endif()
 endmacro()
-

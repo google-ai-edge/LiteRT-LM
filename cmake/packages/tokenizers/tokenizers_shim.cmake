@@ -15,16 +15,11 @@
 include("${LITERTLM_MODULES_DIR}/utils.cmake")
 include("${LITERTLM_MODULES_DIR}/generators/generate_protobuf.cmake")
 
-set(_tflite_shims_dir "${LITERTLM_TFLITE_PACKAGE_DIR}/shims")
-include("${_tflite_shims_dir}/build_tree_shim.cmake")
-
 # --- Abseil ---
 include("${LITERTLM_ABSL_CONFIG_PATH}")
 include("${LITERTLM_ABSL_AGGREGATE_PATH}")
 generate_absl_aggregate()
 
-include("${LITERTLM_GTEST_CONFIG_PATH}")
-include("${LITERTLM_TFLITE_CONFIG_PATH}")
 
 # --- Protobuf ---
 include("${LITERTLM_PROTOBUF_CONFIG_PATH}")
@@ -60,7 +55,6 @@ set(FLATC_TARGET                 "${FIXED_FLATC}" CACHE INTERNAL "Forced" FORCE)
 set(FLATC_BIN                    "${FIXED_FLATC}" CACHE INTERNAL "Forced" FORCE)
 set(FLATBUFFERS_FLATC_EXECUTABLE "${FIXED_FLATC}" CACHE INTERNAL "Forced" FORCE)
 set(flatbuffers_FLATC_EXECUTABLE "${FIXED_FLATC}" CACHE INTERNAL "Forced" FORCE)
-set(TFLITE_HOST_TOOLS_DIR        "${FIXED_FLATC}" CACHE PATH     "Forced" FORCE)
 set(FLATC_PATHS                  "${FIXED_FLATC}" CACHE STRING   "Forced" FORCE)
 set(flatbuffers_FOUND            TRUE             CACHE INTERNAL "Forced" FORCE)
 set(FlatBuffers_FOUND            TRUE             CACHE INTERNAL "Forced" FORCE)
@@ -79,56 +73,47 @@ if(NOT TARGET flatc)
     )
 endif()
 
+include("${LITERTLM_TOKENIZERS_CONFIG_PATH}")
+include("${LITERTLM_TOKENIZERS_AGGREGATE_PATH}")
+# generate_tokenizers_aggregate()
+
 include_directories(
     "${LITERTLM_ABSL_INCLUDE_DIR}"
     "${LITERTLM_PROTOBUF_INCLUDE_DIR}"
     "${LITERTLM_PROTOBUF_INSTALL_DIR}/include"
     "${LITERTLM_FLATBUFFERS_INCLUDE_DIR}"
-    "${LITERTLM_TENSORFLOW_SRC_DIR}"
-    "${LITERTLM_TFLITE_SRC_DIR}"
-)
+    "${LITERTLM_TOKENIZERS_SRC_DIR}"
+    "${LITERTLM_TOKENIZERS_INCLUDE_DIR}"
+    "${LITERTLM_SENTENCEPIECE_SRC_DIR}")
 
-message(STATUS "[LiteRTLM] Injecting missing CMakeLists into profiling/...")
+set(_LITERTLM_LINK_MULTIDEF "")
+set(_LITERTLM_LINK_GROUP_START "")
+set(_LITERTLM_LINK_GROUP_END "")
+set(_LITERTLM_SYSLIBS "")
 
-file(GLOB PROFILING_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/profiling/*.cc")
-list(FILTER PROFILING_SRCS EXCLUDE REGEX "_test\\.cc$")
-
-set(STATS_CALC_SRC 
-    "${LITERTLM_TENSORFLOW_SRC_DIR}/third_party/xla/xla/tsl/util/stats_calculator.cc")
-
-if(EXISTS "${STATS_CALC_SRC}")
-    message(STATUS "[LiteRTLM] Found stats_calculator at: ${STATS_CALC_SRC}")
-    list(APPEND PROFILING_SRCS "${STATS_CALC_SRC}")
-else()
-    set(STATS_CALC_FALLBACK 
-        "${LITERTLM_TENSORFLOW_SRC_DIR}/tensorflow/core/util/stats_calculator.cc")
-    if(EXISTS "${STATS_CALC_FALLBACK}")
-         list(APPEND PROFILING_SRCS "${STATS_CALC_FALLBACK}")
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    if(APPLE)
+        # AppleClang / Mach-O Linker
+        set(_LITERTLM_LINK_MULTIDEF "-Wl,-multiply_defined,suppress")
+        set(_LITERTLM_SYSLIBS "-lz -lpthread -ldl")
+    elseif(ANDROID)
+        # Android / Bionic (NO standalone rt or pthread)
+        set(_LITERTLM_LINK_MULTIDEF "-Wl,--allow-multiple-definition")
+        set(_LITERTLM_LINK_GROUP_START "-Wl,--start-group")
+        set(_LITERTLM_LINK_GROUP_END "-Wl,--end-group")
+        set(_LITERTLM_SYSLIBS "-lz -ldl -llog")
     else()
-         message(FATAL_ERROR "[LiteRT-LM] CRITICAL: Could not find stats_calculator.cc in XLA or Core paths.\nChecked:\n  ${STATS_CALC_SRC}\n  ${STATS_CALC_FALLBACK}")
+        # Linux / ELF Linker (GNU ld or LLD)
+        set(_LITERTLM_LINK_MULTIDEF "-Wl,--allow-multiple-definition")
+        set(_LITERTLM_LINK_GROUP_START "-Wl,--start-group")
+        set(_LITERTLM_LINK_GROUP_END "-Wl,--end-group")
+        set(_LITERTLM_SYSLIBS "-lz -lrt -lpthread -ldl")
     endif()
+elseif(MSVC)
+    # MSVC Linker
+    set(_LITERTLM_LINK_MULTIDEF "/FORCE:MULTIPLE")
+    set(_LITERTLM_SYSLIBS "")
 endif()
-
-set(LITERTLM_PROTO_FILES
-    "${LITERTLM_TFLITE_SRC_DIR}/profiling/proto/profiling_info.proto"
-    "${LITERTLM_TFLITE_SRC_DIR}/profiling/proto/model_runtime_info.proto"
-)
-
-add_library(tflite_profiling STATIC ${PROFILING_SRCS})
-generate_protobuf(tflite_profiling ${LITERTLM_TENSORFLOW_SRC_DIR})
-
-target_link_libraries(tflite_profiling PRIVATE
-    LiteRTLM::absl::absl
-    LiteRTLM::protobuf::libprotobuf
-)
-
-target_include_directories(tflite_profiling PUBLIC
-    "${CMAKE_BINARY_DIR}"
-    "${LITERTLM_TENSORFLOW_SRC_DIR}"
-    "${LITERTLM_ABSL_INCLUDE_DIR}"
-    "${LITERTLM_PROTOBUF_INCLUDE_DIR}"
-)
-
-install(TARGETS tflite_profiling
-    ARCHIVE DESTINATION lib
+set(CMAKE_CXX_STANDARD_LIBRARIES "${CMAKE_CXX_STANDARD_LIBRARIES} ${_LITERTLM_LINK_MULTIDEF} ${_LITERTLM_LINK_GROUP_START} ${_SENTENCEPIECE_PAYLOAD} ${_FLATBUFFERS_PAYLOAD} ${_PROTOBUF_PAYLOAD} ${_ABSL_PAYLOAD} ${_LITERTLM_SYSLIBS} ${_LITERTLM_LINK_GROUP_END}"
+    CACHE STRING "" FORCE
 )

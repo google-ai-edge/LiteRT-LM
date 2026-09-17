@@ -25,8 +25,6 @@ add_library(LiteRTLM::Runtime::Executor::LlmNpuCompiledModelUtils
 
 target_include_directories(runtime_executor_npu_llm_litert_npu_compiled_model_executor_utils
   PRIVATE
-    ${LITERTLM_GENERATED_SRC_DIR}
-    ${LITERT_INCLUDE_DIR}
     ${LITERTLM_INCLUDE_PATHS}
 )
 
@@ -42,7 +40,30 @@ target_link_libraries(runtime_executor_npu_llm_litert_npu_compiled_model_executo
     LiteRTLM::Runtime::Components::EmbeddingLookup::Manager
     LiteRTLM::Runtime::Executor::LlmExecutorProcessedTokens
     LiteRTLM::Runtime::Util::ConvertTensorBuffer
-    runtime_util_litert_status_util
+    LiteRTLM::Runtime::Util::LitertUtil
+
+    LITERTLM_DEPS
+)
+
+# ==============================================================================
+# LLM LiteRT NPU Dynamism
+# ==============================================================================
+add_litertlm_library(runtime_executor_llm_litert_npu_dynamism STATIC
+  llm_litert_npu_dynamism.cc
+)
+add_library(LiteRTLM::Runtime::Executor::Npu::Dynamism
+  ALIAS runtime_executor_llm_litert_npu_dynamism)
+
+target_include_directories(runtime_executor_llm_litert_npu_dynamism
+  PRIVATE
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+target_link_libraries(runtime_executor_llm_litert_npu_dynamism
+  PUBLIC
+    LiteRTLM::Runtime::Components
+    LiteRTLM::Runtime::Executor
+    LiteRTLM::Runtime::Util
 
     LITERTLM_DEPS
 )
@@ -66,7 +87,7 @@ target_include_directories(runtime_executor_npu_llm_litert_npu_rope
 target_link_libraries(runtime_executor_npu_llm_litert_npu_rope
   PUBLIC
     LiteRTLM::Runtime::Executor::Npu::CompiledModelExecutorUtils
-    runtime_util_litert_status_util
+    LiteRTLM::Runtime::Util::LitertUtil
 
     LITERTLM_DEPS
 )
@@ -90,7 +111,7 @@ target_include_directories(runtime_executor_npu_llm_litert_npu_mask
 target_link_libraries(runtime_executor_npu_llm_litert_npu_mask
   PUBLIC
     LiteRTLM::Runtime::Executor::Npu::CompiledModelExecutorUtils
-    runtime_util_litert_status_util
+    LiteRTLM::Runtime::Util::LitertUtil
 
     LITERTLM_DEPS
 )
@@ -116,7 +137,7 @@ target_link_libraries(runtime_executor_npu_llm_litert_npu_kv_cache
     LiteRTLM::Runtime::Executor::Npu::CompiledModelExecutorUtils
     LiteRTLM::Runtime::Components::ModelResourcesInterface
     LiteRTLM::Generated::Protobuf
-    runtime_util_litert_status_util
+    LiteRTLM::Runtime::Util::LitertUtil
 
     LITERTLM_DEPS
 )
@@ -146,7 +167,7 @@ target_link_libraries(runtime_executor_npu_llm_litert_npu_embedder
     LiteRTLM::Runtime::Executor::LlmExecutorProcessedTokens
     LiteRTLM::Runtime::Executor::LlmExecutorSettings
     LiteRTLM::Runtime::Util::ConvertTensorBuffer
-    runtime_util_litert_status_util
+    LiteRTLM::Runtime::Util::LitertUtil
 
     LITERTLM_DEPS
 )
