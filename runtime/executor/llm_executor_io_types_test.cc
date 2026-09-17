@@ -834,6 +834,22 @@ TEST(LlmExecutorIoTypesTest, ExecutorDecodeParamsGetSetConstrainedDecoder) {
   EXPECT_EQ(params.GetConstrainedDecoder(), nullptr);
 }
 
+TEST(LlmExecutorIoTypesTest, ExecutorDecodeParamsMaxOutputTokens) {
+  ExecutorDecodeParams params;
+  EXPECT_FALSE(params.GetMaxOutputTokens().has_value());
+  std::ostringstream unset;
+  unset << params;
+  EXPECT_THAT(unset.str(), testing::HasSubstr("MaxOutputTokens: not set"));
+
+  params.SetMaxOutputTokens(4);
+  EXPECT_EQ(params.GetMaxOutputTokens(), 4);
+  params.SetMaxOutputTokens(1);
+  EXPECT_EQ(params.GetMaxOutputTokens(), 1);
+  std::ostringstream set;
+  set << params;
+  EXPECT_THAT(set.str(), testing::HasSubstr("MaxOutputTokens: 1"));
+}
+
 TEST(LlmExecutorIoTypesTest, ExecutorVisionDataDuplicate) {
   struct alignas(LITERT_HOST_MEMORY_BUFFER_ALIGNMENT) {
     float d[2] = {31.0f, 32.0f};

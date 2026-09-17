@@ -471,10 +471,22 @@ class ExecutorDecodeParams {
     return enable_speculative_decoding_;
   }
 
+  // Limits the number of tokens returned per output candidate by this Decode
+  // call. A supplied budget must be positive; unset leaves the choice to the
+  // executor. Speculative executors must account for their complete batch.
+  void SetMaxOutputTokens(int max_output_tokens) {
+    max_output_tokens_ = max_output_tokens;
+  }
+
+  const std::optional<int>& GetMaxOutputTokens() const {
+    return max_output_tokens_;
+  }
+
  private:
   ConstrainedDecoder* constrained_decoder_ = nullptr;
   const std::atomic<bool>* cancelled_ = nullptr;
   std::optional<bool> enable_speculative_decoding_ = std::nullopt;
+  std::optional<int> max_output_tokens_ = std::nullopt;
 };
 std::ostream& operator<<(std::ostream& os, const ExecutorDecodeParams& params);
 

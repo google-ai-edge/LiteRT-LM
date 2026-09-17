@@ -660,6 +660,12 @@ std::ostream& operator<<(std::ostream& os, const ExecutorDecodeParams& params) {
   } else {
     os << "not set";
   }
+  os << "\n" << kFieldIndent << "MaxOutputTokens: ";
+  if (params.GetMaxOutputTokens().has_value()) {
+    os << *params.GetMaxOutputTokens();
+  } else {
+    os << "not set";
+  }
   os << "\n"
      << "}";
   return os;
