@@ -16,7 +16,6 @@
 
 #include <unistd.h>
 
-#include <algorithm>
 #include <cstddef>
 #include <filesystem>  // NOLINT: Required for path manipulation.
 #include <memory>
@@ -33,6 +32,7 @@
 #include "absl/strings/ascii.h"  // from @com_google_absl
 #include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/str_format.h"  // from @com_google_absl
 #include "absl/strings/str_replace.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
@@ -117,17 +117,71 @@ const absl::flat_hash_map<std::string_view, int>& GetKokoroVocabMap() {
   return *vocab_map;
 }
 
-std::string NormalizeMisakiPhonemes(absl::string_view raw_ipa) {
+MisakiFlavor FlavorForLanguage(absl::string_view espeak_voice) {
+  std::string normalized = NormalizeLanguageCode(espeak_voice);
+  if (normalized == "en-us") {
+    return MisakiFlavor::kEnglishUs;
+  }
+  if (normalized == "en-gb") {
+    return MisakiFlavor::kEnglishGb;
+  }
+  return MisakiFlavor::kEspeakGeneric;
+}
+
+std::string NormalizeMisakiPhonemes(absl::string_view raw_ipa,
+                                    MisakiFlavor flavor) {
   // Step 1: Remove the Unicode tie-bar accent (U+0361 COMBINING DOUBLE INVERTED
-  // BREVE, encoded in UTF-8 as 2 bytes: 0xCD 0xA1).
+  // BREVE, encoded in UTF-8 as 2 bytes: 0xCD 0xA1) and '^' tie marker.
   // eSpeak-ng uses this tie bar to connect multi-character affricates (e.g.,
   // "t͡ʃ", "d͡ʒ"). Kokoro vocabulary uses individual characters ("ʧ", "ʤ"), so
   // stripping the tie bar enables clean mapping in Step 2.
-  std::string clean_ipa =
-      absl::StrReplaceAll(raw_ipa, {{"\u0361", ""}, {"\xCD\xA1", ""}});
+  std::string clean_ipa = absl::StrReplaceAll(
+      raw_ipa, {{"\u0361", ""}, {"\xCD\xA1", ""}, {"^", ""}});
+
+  if (flavor == MisakiFlavor::kEspeakGeneric) {
+    // misaki.espeak.EspeakG2P.E2M rules (used for es, fr-fr, hi, it, pt-br):
+    // Preserves Spanish jota ('x'), trill ('r'), and vowel length marker ('ː').
+    return absl::StrReplaceAll(clean_ipa, {
+                                              {"aɪ", "I"},
+                                              {"aʊ", "W"},
+                                              {"dz", "ʣ"},
+                                              {"dʒ", "ʤ"},
+                                              {"eɪ", "A"},
+                                              {"oʊ", "O"},
+                                              {"əʊ", "Q"},
+                                              {"ss", "S"},
+                                              {"ts", "ʦ"},
+                                              {"tʃ", "ʧ"},
+                                              {"ɔɪ", "Y"},
+                                              {"-", ""},
+                                          });
+  }
+
+  if (flavor == MisakiFlavor::kEnglishGb) {
+    // misaki.espeak.EspeakFallback (british=True):
+    return absl::StrReplaceAll(clean_ipa, {
+                                              {"aɪ", "I"},
+                                              {"aʊ", "W"},
+                                              {"eɪ", "A"},
+                                              {"ɔɪ", "Y"},
+                                              {"eə", "ɛː"},
+                                              {"iə", "ɪə"},
+                                              {"əʊ", "Q"},
+                                              {"tʃ", "ʧ"},
+                                              {"dʒ", "ʤ"},
+                                              {"əl", "ᵊl"},
+                                              {"ɚ", "əɹ"},
+                                              {"r", "ɹ"},
+                                              {"x", "k"},
+                                              {"ç", "k"},
+                                              {"ɐ", "ə"},
+                                              {"ɬ", "l"},
+                                              {"o", "ɔ"},
+                                          });
+  }
 
   // Step 2: Apply Misaki G2P normalization rules to convert raw IPA sequences
-  // into Kokoro's compact vocabulary representations:
+  // into Kokoro's compact vocabulary representations (English US):
   // - English diphthongs -> single uppercase characters (e.g. "aɪ" -> 'I', "aʊ"
   // -> 'W',
   //   "eɪ" -> 'A', "ɔɪ" -> 'Y', "oʊ" -> 'O', "əʊ" -> 'Q').
@@ -157,29 +211,86 @@ std::string NormalizeMisakiPhonemes(absl::string_view raw_ipa) {
                                         });
 }
 
+// Decodes the UTF-8 codepoint starting at `text[pos]`, advancing `char_len`.
+char32_t DecodeUtf8Char(absl::string_view text, size_t pos, size_t* char_len) {
+  if (pos >= text.size()) {
+    *char_len = 0;
+    return 0;
+  }
+  const unsigned char c0 = static_cast<unsigned char>(text[pos]);
+  if ((c0 & 0x80) == 0) {
+    *char_len = 1;
+    return c0;
+  }
+  if ((c0 & 0xE0) == 0xC0 && pos + 1 < text.size()) {
+    *char_len = 2;
+    const unsigned char c1 = static_cast<unsigned char>(text[pos + 1]);
+    return (static_cast<char32_t>(c0 & 0x1F) << 6) |
+           static_cast<char32_t>(c1 & 0x3F);
+  }
+  if ((c0 & 0xF0) == 0xE0 && pos + 2 < text.size()) {
+    *char_len = 3;
+    const unsigned char c1 = static_cast<unsigned char>(text[pos + 1]);
+    const unsigned char c2 = static_cast<unsigned char>(text[pos + 2]);
+    return (static_cast<char32_t>(c0 & 0x0F) << 12) |
+           (static_cast<char32_t>(c1 & 0x3F) << 6) |
+           static_cast<char32_t>(c2 & 0x3F);
+  }
+  if ((c0 & 0xF8) == 0xF0 && pos + 3 < text.size()) {
+    *char_len = 4;
+    const unsigned char c1 = static_cast<unsigned char>(text[pos + 1]);
+    const unsigned char c2 = static_cast<unsigned char>(text[pos + 2]);
+    const unsigned char c3 = static_cast<unsigned char>(text[pos + 3]);
+    return (static_cast<char32_t>(c0 & 0x07) << 18) |
+           (static_cast<char32_t>(c1 & 0x3F) << 12) |
+           (static_cast<char32_t>(c2 & 0x3F) << 6) |
+           static_cast<char32_t>(c3 & 0x3F);
+  }
+  *char_len = 1;
+  return c0;
+}
+
+bool IsWordCodePoint(char32_t cp) {
+  // ASCII Alphanumeric, apostrophe, hyphen
+  if ((cp >= 'a' && cp <= 'z') || (cp >= 'A' && cp <= 'Z') ||
+      (cp >= '0' && cp <= '9') || cp == '\'' || cp == '-') {
+    return true;
+  }
+  // Latin-1 Letters (accented letters like á, é, í, ó, ú, ñ, ç): 0x00C0..0x00FF
+  // (excluding × and ÷)
+  if (cp >= 0x00C0 && cp <= 0x00FF) {
+    return cp != 0x00D7 && cp != 0x00F7;
+  }
+  // Latin Extended (A, B, Additional)
+  if ((cp >= 0x0100 && cp <= 0x024F) || (cp >= 0x1E00 && cp <= 0x1EFF)) {
+    return true;
+  }
+  // Devanagari (Hindi): U+0900..U+097F (excluding dandas U+0964, U+0965)
+  if (cp >= 0x0900 && cp <= 0x097F) {
+    return cp != 0x0964 && cp != 0x0965;
+  }
+  // CJK Unified Ideographs: U+4E00..U+9FFF
+  if (cp >= 0x4E00 && cp <= 0x9FFF) {
+    return true;
+  }
+  // Hiragana & Katakana: U+3040..U+30FF
+  if (cp >= 0x3040 && cp <= 0x30FF) {
+    return true;
+  }
+  // Fullwidth Latin & Digits
+  if ((cp >= 0xFF21 && cp <= 0xFF3A) || (cp >= 0xFF41 && cp <= 0xFF5A) ||
+      (cp >= 0xFF10 && cp <= 0xFF19)) {
+    return true;
+  }
+  return false;
+}
+
 // Returns the byte length of the UTF-8 sequence starting at `text[pos]`,
 // clamped so it never runs past the end of `text`.
-//
-// - 0xxxxxxx                -> 1 byte  (ASCII: 0x00..0x7F)
-// - 110xxxxx (& 0xE0==0xC0) -> 2 bytes (IPA letters: ɑ, ə, ɪ, ð, ʃ; accented
-// Latin: 0xC0..0xDF)
-// - 1110xxxx (& 0xF0==0xE0) -> 3 bytes (punctuation: —, …, curly quotes;
-// modifiers: ᵊ)
-// - 11110xxx (& 0xF8==0xF0) -> 4 bytes (rare symbols: ꭧ)
 size_t Utf8SequenceLength(absl::string_view text, size_t pos) {
-  if (pos >= text.size()) return 0;
-  const unsigned char c = static_cast<unsigned char>(text[pos]);
-  size_t char_len = 1;
-  if ((c & 0x80) == 0) {
-    char_len = 1;
-  } else if ((c & 0xE0) == 0xC0) {
-    char_len = 2;
-  } else if ((c & 0xF0) == 0xE0) {
-    char_len = 3;
-  } else if ((c & 0xF8) == 0xF0) {
-    char_len = 4;
-  }
-  return std::min(char_len, text.size() - pos);
+  size_t len = 0;
+  DecodeUtf8Char(text, pos, &len);
+  return len;
 }
 
 // Multi-byte Unicode punctuation that Kokoro's vocabulary or phonetic mapping
@@ -188,8 +299,9 @@ const absl::flat_hash_map<absl::string_view, absl::string_view>&
 GetUnicodePunctuationMap() {
   static const auto* kMap =
       new absl::flat_hash_map<absl::string_view, absl::string_view>{
-          {"—", "—"},  {"–", "—"},  {"…", "…"},  {"“", "“"},  {"”", "”"},
-          {"，", ","}, {"。", "."}, {"！", "!"}, {"？", "?"},
+          {"—", "—"},  {"–", "—"},  {"…", "…"},  {"“", "“"},
+          {"”", "”"},  {"，", ","}, {"。", "."}, {"！", "!"},
+          {"？", "?"}, {"।", "."},  {"॥", "."},
       };
   return *kMap;
 }
@@ -216,6 +328,9 @@ std::string ResolveEspeakDataDir(absl::string_view path) {
 std::string NormalizeLanguageCode(absl::string_view language_code) {
   if (language_code.empty()) return "en-us";
   std::string lower = absl::AsciiStrToLower(language_code);
+  for (char& c : lower) {
+    if (c == '_') c = '-';
+  }
 
   static const absl::NoDestructor<absl::flat_hash_map<std::string, std::string>>
       kLanguageMap({
@@ -223,25 +338,25 @@ std::string NormalizeLanguageCode(absl::string_view language_code) {
           {"a", "en-us"},
           {"en", "en-us"},
           {"en-us", "en-us"},
-          {"en_us", "en-us"},
           {"american", "en-us"},
           {"english", "en-us"},
           {"american english", "en-us"},
           // British English ('b')
           {"b", "en-gb"},
           {"en-gb", "en-gb"},
-          {"en_gb", "en-gb"},
+          {"en-uk", "en-gb"},
           {"british", "en-gb"},
           {"british english", "en-gb"},
           // Spanish ('e')
           {"e", "es"},
           {"es", "es"},
+          {"es-es", "es"},
+          {"es-419", "es"},
           {"spanish", "es"},
           // French ('f')
           {"f", "fr-fr"},
           {"fr", "fr-fr"},
           {"fr-fr", "fr-fr"},
-          {"fr_fr", "fr-fr"},
           {"french", "fr-fr"},
           // Hindi ('h')
           {"h", "hi"},
@@ -255,7 +370,6 @@ std::string NormalizeLanguageCode(absl::string_view language_code) {
           {"p", "pt-br"},
           {"pt", "pt-br"},
           {"pt-br", "pt-br"},
-          {"pt_br", "pt-br"},
           {"portuguese", "pt-br"},
           // Japanese ('j')
           {"j", "ja"},
@@ -266,6 +380,10 @@ std::string NormalizeLanguageCode(absl::string_view language_code) {
           {"zh", "cmn"},
           {"cmn", "cmn"},
           {"zh-cmn", "cmn"},
+          {"zh-cn", "cmn"},
+          {"zh-tw", "cmn"},
+          {"zh-hans", "cmn"},
+          {"zh-hant", "cmn"},
           {"chinese", "cmn"},
           {"mandarin", "cmn"},
       });
@@ -274,7 +392,97 @@ std::string NormalizeLanguageCode(absl::string_view language_code) {
   if (it != kLanguageMap->end()) {
     return it->second;
   }
+  size_t dash = lower.find('-');
+  if (dash != std::string::npos) {
+    it = kLanguageMap->find(lower.substr(0, dash));
+    if (it != kLanguageMap->end()) {
+      return it->second;
+    }
+  }
   return lower;
+}
+
+std::string EspeakVoiceForLanguage(absl::string_view language_code) {
+  // `espeak_SetVoiceByName` resolves a name against the voice file identifier
+  // (e.g. "roa/es", "gmw/en-US"), never against the `language` attributes
+  // declared inside the file. French is the only Kokoro language whose file
+  // name differs from its misaki code: `roa/fr` declares "fr-fr" as a language
+  // attribute only, so "fr-fr" resolves to nothing and every French word fails
+  // to phonemize.
+  if (language_code == "fr-fr") {
+    return "fr";
+  }
+  if (language_code == "en-gb") {
+    return "en";
+  }
+  return std::string(language_code);
+}
+
+std::string LanguageForVoiceName(absl::string_view voice_name) {
+  if (voice_name.empty()) return "";
+  // Extract filename stem: strip directory and extension.
+  absl::string_view filename = voice_name;
+  size_t last_slash = filename.find_last_of("/\\");
+  if (last_slash != absl::string_view::npos) {
+    filename = filename.substr(last_slash + 1);
+  }
+  if (absl::EndsWith(filename, ".bin")) {
+    filename = filename.substr(0, filename.size() - 4);
+  }
+
+  // Kokoro voice naming convention: 2-character prefix + '_' + name
+  // First char indicates language:
+  // 'a' -> "en-us"
+  // 'b' -> "en-gb"
+  // 'e' -> "es"
+  // 'f' -> "fr-fr"
+  // 'h' -> "hi"
+  // 'i' -> "it"
+  // 'p' -> "pt-br"
+  // 'j' -> "ja"
+  // 'z' -> "cmn"
+  if (filename.size() >= 3 && filename[2] == '_') {
+    char lang_char = absl::ascii_tolower(filename[0]);
+    switch (lang_char) {
+      case 'a':
+        return "en-us";
+      case 'b':
+        return "en-gb";
+      case 'e':
+        return "es";
+      case 'f':
+        return "fr-fr";
+      case 'h':
+        return "hi";
+      case 'i':
+        return "it";
+      case 'p':
+        return "pt-br";
+      case 'j':
+        return "ja";
+      case 'z':
+        return "cmn";
+      default:
+        break;
+    }
+  }
+  return "";
+}
+
+absl::StatusOr<std::string> ResolveAndValidateLanguage(
+    absl::string_view voice_name, absl::string_view language) {
+  std::string voice_lang = LanguageForVoiceName(voice_name);
+  if (language.empty()) {
+    return voice_lang.empty() ? "en-us" : voice_lang;
+  }
+  std::string normalized_lang = NormalizeLanguageCode(language);
+  if (!voice_lang.empty() && normalized_lang != voice_lang) {
+    return absl::InvalidArgumentError(absl::StrFormat(
+        "Voice '%s' (language: %s) conflicts with requested language '%s' "
+        "(normalized: %s)",
+        voice_name, voice_lang, language, normalized_lang));
+  }
+  return normalized_lang;
 }
 
 absl::StatusOr<std::unique_ptr<KokoroPhonemizer>> KokoroPhonemizer::Create(
@@ -335,6 +543,7 @@ absl::StatusOr<std::unique_ptr<KokoroPhonemizer>> KokoroPhonemizer::Create(
 
 void KokoroPhonemizer::SetLanguage(absl::string_view language) {
   language_ = NormalizeLanguageCode(language);
+  espeak_voice_ = EspeakVoiceForLanguage(language_);
 }
 
 absl::StatusOr<std::string> KokoroPhonemizer::WordToIpa(
@@ -350,9 +559,10 @@ absl::StatusOr<std::string> KokoroPhonemizer::WordToIpa(
 
   absl::MutexLock lock(espeak_mutex_);
   // Ensure active espeak voice matches this phonemizer's target language.
-  if (espeak_SetVoiceByName(language_.c_str()) != EE_OK) {
-    return absl::InternalError(
-        absl::StrCat("Failed to set espeak voice for language: ", language_));
+  if (espeak_SetVoiceByName(espeak_voice_.c_str()) != EE_OK) {
+    return absl::InternalError(absl::StrCat("Failed to set espeak voice '",
+                                            espeak_voice_,
+                                            "' for language: ", language_));
   }
 
   std::string word_str(word);
@@ -416,7 +626,8 @@ absl::StatusOr<std::string> KokoroPhonemizer::TextToIpa(
 
   size_t i = 0;
   while (i < text.size()) {
-    const size_t char_len = Utf8SequenceLength(text, i);
+    size_t char_len = 0;
+    const char32_t cp = DecodeUtf8Char(text, i, &char_len);
     const unsigned char c = static_cast<unsigned char>(text[i]);
     absl::string_view symbol = text.substr(i, char_len);
     i += char_len;
@@ -447,12 +658,8 @@ absl::StatusOr<std::string> KokoroPhonemizer::TextToIpa(
       continue;
     }
 
-    // 4. Word characters:
-    // - ASCII alphanumeric
-    // - ASCII apostrophe or hyphen (when inside words)
-    // - 2-byte UTF-8 letters (accented Latin, e.g. café, español: 0xC0..0xDF)
-    if ((char_len == 1 && (absl::ascii_isalnum(c) || c == '\'' || c == '-')) ||
-        (char_len == 2 && (c & 0xE0) == 0xC0)) {
+    // 4. Word characters (ASCII alnum, Latin Extended, Devanagari, CJK, Kana)
+    if (IsWordCodePoint(cp)) {
       current_word.append(symbol.data(), symbol.size());
       continue;
     }
@@ -465,7 +672,7 @@ absl::StatusOr<std::string> KokoroPhonemizer::TextToIpa(
   LITERT_RETURN_IF_ERROR(FlushWordToIpa(current_word, combined_ipa));
 
   // Normalize IPA output to match Kokoro's vocabulary symbols.
-  return NormalizeMisakiPhonemes(combined_ipa);
+  return NormalizeMisakiPhonemes(combined_ipa, FlavorForLanguage(language_));
 }
 
 absl::StatusOr<std::vector<int>> KokoroPhonemizer::TextToPhonemeIds(

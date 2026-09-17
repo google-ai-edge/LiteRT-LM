@@ -44,7 +44,7 @@ struct TextChunkConfig {
   // Default delimiters: sentence terminals (".", "?", "!"), clause breaks (";",
   // "—"), and newline ("\n").
   std::vector<std::string> delimiters = {
-      ".", "?", "!", ";", "\n", "—", "，", "。", "！", "？",
+      ".", "?", "!", ";", "\n", "—", "，", "。", "！", "？", "।", "॥",
   };
 
   // Whether to include the matching delimiter in the extracted output chunk.

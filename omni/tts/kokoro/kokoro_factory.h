@@ -16,6 +16,8 @@
 #define THIRD_PARTY_ODML_LITERT_LM_OMNI_TTS_KOKORO_KOKORO_FACTORY_H_
 
 #include <memory>
+#include <string>
+#include <vector>
 
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
@@ -65,6 +67,33 @@ absl::StatusOr<TtsSession::Components> CreateKokoroComponents(
     const KokoroModelConfig& config, absl::string_view model_folder,
     const TextChunkConfig& text_chunk_config,
     std::shared_ptr<ModelResources> resources);
+
+// Returns the list of available Kokoro voice profile names (e.g. "af_heart",
+// "ef_dora") discovered from voice files (*.bin) in `model_folder/voices` or
+// `model_folder`.
+std::vector<std::string> GetAvailableKokoroVoices(
+    absl::string_view model_folder = "");
+
+// Returns the canonical espeak language code corresponding to a Kokoro voice
+// identifier (e.g. "ef_dora" -> "es", "if_sara" -> "it", "af_heart" ->
+// "en-us").
+std::string GetKokoroVoiceLanguage(absl::string_view voice_name);
+
+// Returns the default Kokoro voice profile name for a given language code (e.g.
+// "es" -> "ef_dora", "it" -> "if_sara", "en-us" -> "af_heart").
+std::string GetDefaultKokoroVoice(absl::string_view language_code = "");
+
+// Converts a BCP-47 language tag or language name (e.g. "en-US", "en-GB", "es",
+// "zh-CN", "pt-BR") into the corresponding canonical Kokoro (`espeak-ng`)
+// language code (e.g. "en-us", "en-gb", "es", "cmn", "pt-br"). Returns an empty
+// string if `language` is empty or not supported by Kokoro.
+std::string ToKokoroLanguageCode(absl::string_view language);
+
+// Converts a canonical Kokoro (`espeak-ng`) language code (e.g. "en-us",
+// "en-gb", "es", "cmn", "pt-br") to its canonical BCP-47 language tag (e.g.
+// "en-US", "en-GB", "es", "zh-CN", "pt-BR"). Returns an empty string if
+// unrecognized.
+std::string KokoroCodeToBcp47(absl::string_view kokoro_code);
 
 }  // namespace litert::omni::tts
 

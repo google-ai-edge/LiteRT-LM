@@ -50,11 +50,14 @@ KokoroAcousticStage::Create(
   auto stage = std::unique_ptr<KokoroAcousticStage>(new KokoroAcousticStage(
       text_source, config, model_folder, std::move(resources)));
 
-  // Load the voice pack embedding table (510 token positions x 256 embedding
-  // dimensions).
+  // Resolve voice identifier and validate language compatibility.
   std::string voice_req = stage->config_.voice_name.empty()
                               ? stage->config_.voice_file
                               : stage->config_.voice_name;
+  LITERT_ASSIGN_OR_RETURN(
+      stage->config_.language,
+      ResolveAndValidateLanguage(voice_req, stage->config_.language));
+
   LITERT_ASSIGN_OR_RETURN(
       stage->voice_pack_,
       kokoro::LoadVoiceEmbedding(stage->model_folder_, voice_req));

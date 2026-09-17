@@ -15,8 +15,10 @@
 #include "omni/tts/kokoro/kokoro_factory.h"
 
 #include <algorithm>
+#include <filesystem>  // NOLINT
 #include <memory>
 #include <string>
+#include <system_error>  // NOLINT
 #include <utility>
 #include <vector>
 
@@ -33,6 +35,7 @@
 #include "omni/tts/kokoro/kokoro_acoustic_stage.h"
 #include "omni/tts/kokoro/kokoro_model_config.h"
 #include "omni/tts/kokoro/kokoro_vocoder_stage.h"
+#include "omni/tts/kokoro/phonemizer.h"
 #include "omni/tts/stream_text_source.h"
 #include "omni/tts/text_chunk_utils.h"
 #include "omni/tts/tts_session.h"
@@ -68,8 +71,8 @@ absl::Status InitKokoroResources(const KokoroModelConfig& config,
       backend == lm::Backend::GPU ? lm::Backend::CPU : backend);
   const lm::Backend vocoder_backend = config.vocoder_backend.value_or(backend);
 
-  ModelOptions acoustic_options = MakeModelOptions(
-      model_folder, cache_dir, acoustic_backend, num_threads);
+  ModelOptions acoustic_options =
+      MakeModelOptions(model_folder, cache_dir, acoustic_backend, num_threads);
   LITERT_ASSIGN_OR_RETURN(
       auto acoustic,
       CreateCompiledModel(env, acoustic_options, config.acoustic_file));
@@ -138,6 +141,75 @@ absl::StatusOr<TtsSession::Components> CreateKokoroComponents(
   components.vocoder = std::move(vocoder);
 
   return components;
+}
+
+std::vector<std::string> GetAvailableKokoroVoices(
+    absl::string_view model_folder) {
+  std::vector<std::string> voices;
+  if (!model_folder.empty()) {
+    std::filesystem::path base_path = std::string(model_folder);
+    std::filesystem::path voices_dir = base_path / "voices";
+    std::error_code ec;
+    if (std::filesystem::is_directory(voices_dir, ec)) {
+      for (const auto& entry :
+           std::filesystem::directory_iterator(voices_dir, ec)) {
+        if (entry.is_regular_file(ec) && entry.path().extension() == ".bin") {
+          voices.push_back(entry.path().stem().string());
+        }
+      }
+    } else if (std::filesystem::is_directory(base_path, ec)) {
+      for (const auto& entry :
+           std::filesystem::directory_iterator(base_path, ec)) {
+        if (entry.is_regular_file(ec) && entry.path().extension() == ".bin") {
+          voices.push_back(entry.path().stem().string());
+        }
+      }
+    }
+  }
+  std::sort(voices.begin(), voices.end());
+  voices.erase(std::unique(voices.begin(), voices.end()), voices.end());
+  return voices;
+}
+
+std::string GetKokoroVoiceLanguage(absl::string_view voice_name) {
+  return LanguageForVoiceName(voice_name);
+}
+
+std::string GetDefaultKokoroVoice(absl::string_view language_code) {
+  std::string normalized = NormalizeLanguageCode(language_code);
+  if (normalized == "es") return "ef_dora";
+  if (normalized == "fr-fr") return "ff_siwis";
+  if (normalized == "hi") return "hf_alpha";
+  if (normalized == "it") return "if_sara";
+  if (normalized == "pt-br") return "pf_dora";
+  if (normalized == "en-gb") return "bf_alice";
+  if (normalized == "ja") return "jf_alpha";
+  if (normalized == "cmn") return "zf_xiaobei";
+  return "af_heart";
+}
+
+std::string ToKokoroLanguageCode(absl::string_view language) {
+  if (language.empty()) return "";
+  std::string normalized = NormalizeLanguageCode(language);
+  if (normalized == "en-us" || normalized == "en-gb" || normalized == "es" ||
+      normalized == "fr-fr" || normalized == "hi" || normalized == "it" ||
+      normalized == "pt-br" || normalized == "ja" || normalized == "cmn") {
+    return normalized;
+  }
+  return "";
+}
+
+std::string KokoroCodeToBcp47(absl::string_view kokoro_code) {
+  if (kokoro_code == "en-us") return "en-US";
+  if (kokoro_code == "en-gb") return "en-GB";
+  if (kokoro_code == "es") return "es";
+  if (kokoro_code == "fr-fr") return "fr";
+  if (kokoro_code == "hi") return "hi";
+  if (kokoro_code == "it") return "it";
+  if (kokoro_code == "pt-br") return "pt-BR";
+  if (kokoro_code == "ja") return "ja";
+  if (kokoro_code == "cmn") return "zh-CN";
+  return "";
 }
 
 }  // namespace litert::omni::tts

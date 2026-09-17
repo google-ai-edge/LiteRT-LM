@@ -33,14 +33,51 @@ namespace litert::omni::tts {
 // - Const reference to flat_hash_map of phoneme strings to integer token IDs.
 const absl::flat_hash_map<std::string_view, int>& GetKokoroVocabMap();
 
-// Normalizes raw IPA phonemes to Kokoro-compatible vocabulary symbols.
+// Normalization flavors corresponding to Misaki G2P post-processing modes.
+enum class MisakiFlavor {
+  // Misaki English US fallback normalization (lang_code 'a', voice prefix
+  // "af"/"am").
+  kEnglishUs,
+  // Misaki English GB fallback normalization (lang_code 'b', voice prefix
+  // "bf"/"bm").
+  kEnglishGb,
+  // Misaki generic EspeakG2P normalization (es, fr-fr, hi, it, pt-br).
+  // Preserves Spanish jota, trills, and vowel length markers.
+  kEspeakGeneric,
+};
+
+// Maps a canonical espeak voice name ("en-us", "en-gb", "es", etc.) to its
+// corresponding Misaki normalization flavor.
+MisakiFlavor FlavorForLanguage(absl::string_view espeak_voice);
+
+// Normalizes raw IPA phonemes to Kokoro-compatible vocabulary symbols according
+// to the target language's Misaki flavor.
 //
 // args
 // - raw_ipa: Raw IPA phoneme string view.
+// - flavor: Target normalization flavor (default: kEnglishUs).
 //
 // returns
 // - Normalized IPA string matching Kokoro phoneme vocabulary.
-std::string NormalizeMisakiPhonemes(absl::string_view raw_ipa);
+std::string NormalizeMisakiPhonemes(
+    absl::string_view raw_ipa, MisakiFlavor flavor = MisakiFlavor::kEnglishUs);
+
+// Resolves the canonical espeak voice name implied by a Kokoro voice identifier
+// (e.g. "ef_dora" -> "es", "am_adam" -> "en-us", "hf_alpha.bin" -> "hi").
+// Returns empty string if the voice does not match the Kokoro prefix
+// convention.
+std::string LanguageForVoiceName(absl::string_view voice_name);
+
+// Validates that the requested language matches the voice's language.
+// If `language` is empty, auto-detects from `voice_name` (or defaults to
+// "en-us"). If `language` is specified and conflicts with `voice_name`, returns
+// an InvalidArgumentError.
+absl::StatusOr<std::string> ResolveAndValidateLanguage(
+    absl::string_view voice_name, absl::string_view language);
+
+// Checks whether a Unicode codepoint forms part of a spoken word across
+// supported languages (ASCII alnum, Latin Extended, Devanagari, CJK, Kana).
+bool IsWordCodePoint(char32_t cp);
 
 // Resolves the espeak-ng data directory path from a given directory.
 // Checks if `path` or `path/espeak-ng-data` contains valid espeak-ng data
@@ -64,7 +101,7 @@ std::string ResolveEspeakDataDir(absl::string_view path);
 // - "i", "it", "italian" -> "it"
 // - "p", "pt", "pt-br" -> "pt-br"
 // - "j", "ja", "japanese" -> "ja"
-// - "z", "zh", "chinese" -> "zh"
+// - "z", "zh", "zh-CN", "chinese" -> "cmn"
 //
 // args
 // - language_code: Language identifier or single-letter code.
@@ -72,6 +109,25 @@ std::string ResolveEspeakDataDir(absl::string_view path);
 // returns
 // - Canonical espeak-ng voice name.
 std::string NormalizeLanguageCode(absl::string_view language_code);
+
+// Maps a canonical language code (as returned by NormalizeLanguageCode) to the
+// voice name that `espeak_SetVoiceByName` actually resolves.
+//
+// espeak-ng matches a requested voice name against the last path component of
+// the voice file identifier, so most Kokoro codes map to themselves
+// ("en-us" -> gmw/en-US, "es" -> roa/es, "pt-br" -> roa/pt-BR, "hi" -> inc/hi).
+// French and British English are the exceptions:
+// - French voice file is `roa/fr` (declares "fr-fr" only as an attribute) ->
+// "fr".
+// - British English voice file is `gmw/en` (declares "en-gb" only as an
+// attribute) -> "en".
+//
+// args
+// - language_code: Canonical language code (e.g. "fr-fr", "en-gb").
+//
+// returns
+// - espeak-ng voice name (e.g. "fr", "en").
+std::string EspeakVoiceForLanguage(absl::string_view language_code);
 
 // Encapsulates the espeak-ng G2P (Grapheme-to-Phoneme) engine and Misaki
 // phoneme normalizer for phonemization and token ID encoding across languages.
@@ -177,6 +233,9 @@ class KokoroPhonemizer {
 
   std::string data_dir_;
   std::string language_ = "en-us";
+  // Voice name handed to `espeak_SetVoiceByName`; derived from `language_` via
+  // EspeakVoiceForLanguage and usually identical to it.
+  std::string espeak_voice_ = "en-us";
   absl::flat_hash_map<std::string, std::string> merged_lexicon_;
 };
 
