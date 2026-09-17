@@ -99,6 +99,16 @@ class LitertState : public StateInterface {
   absl::StatusOr<StateBuffers> GetStateBuffers(
       CompiledModel& compiled_model, absl::string_view signature_name);
 
+  bool IsInplace() const { return !bank_2_state_buffers_.has_value(); }
+  int GetPingPongPhase() const {
+    return bank_2_state_buffers_.has_value() ? (bank_1_is_input_ ? 0 : 1) : 0;
+  }
+  void FlipPingPongPhase() {
+    if (bank_2_state_buffers_.has_value()) {
+      bank_1_is_input_ = !bank_1_is_input_;
+    }
+  }
+
  private:
   struct StateBuffer {
     TensorBuffer buffer;
