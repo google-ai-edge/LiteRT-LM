@@ -29,6 +29,8 @@
 
 namespace litert::lm {
 
+using DecoderState = Constraint::State;
+
 // Manages the state of constrained decoding for a batch of sequences.
 //
 // This class uses a `Constraint` object to validate tokens during
@@ -47,6 +49,8 @@ namespace litert::lm {
 //   }
 class ConstrainedDecoder {
  public:
+  using DecoderState = Constraint::State;
+
   // Creates a ConstrainedDecoder.
   //
   // @param constraint The constraint to apply during decoding. The caller
@@ -54,8 +58,8 @@ class ConstrainedDecoder {
   // @param batch_size The number of sequences in the batch.
   explicit ConstrainedDecoder(Constraint* constraint, int batch_size)
       : constraint_(constraint), batch_size_(batch_size) {
-    constraint_states_.reserve(batch_size_);
-    std::generate_n(std::back_inserter(constraint_states_), batch_size_,
+    states_.reserve(batch_size_);
+    std::generate_n(std::back_inserter(states_), batch_size_,
                     [&]() { return constraint_->Start(); });
   }
   ~ConstrainedDecoder() = default;
@@ -96,12 +100,18 @@ class ConstrainedDecoder {
   // Returns a pointer to the constraint.
   Constraint* GetConstraint() const { return constraint_; }
 
+  int GetBatchSize() const { return states_.size(); }
+
+  const DecoderState& GetState(int batch_index) const {
+    return *states_[batch_index];
+  }
+
  private:
   // The constraint to be applied.
   Constraint* constraint_;
   const int batch_size_;
   // The current constraint states.
-  std::vector<std::unique_ptr<Constraint::State>> constraint_states_;
+  std::vector<std::unique_ptr<DecoderState>> states_;
 };
 
 }  // namespace litert::lm

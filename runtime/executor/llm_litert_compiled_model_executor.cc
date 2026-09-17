@@ -25,6 +25,7 @@
 #include <random>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "absl/cleanup/cleanup.h"  // from @com_google_absl
@@ -43,6 +44,7 @@
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
+#include "litert/cc/litert_environment_options.h"  // from @litert
 #include "litert/cc/litert_expected.h"  // from @litert
 #include "litert/cc/litert_layout.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
@@ -53,11 +55,17 @@
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
+#if LITERT_HAS_WEBGPU_SUPPORT
+#include "third_party/ml_drift/webgpu/spatial_tensor.h"
+#include "third_party/ml_drift/webgpu/webgpu_headers.h"
+#endif  // LITERT_HAS_WEBGPU_SUPPORT
 #if defined(__APPLE__)
 #include "litert/cc/options/litert_gpu_options.h"  // from @litert
 #endif  // defined(__APPLE__)
 #include "runtime/components/constrained_decoding/constrained_decoder.h"
 #include "runtime/components/constrained_decoding/constraint.h"
+#include "runtime/components/constrained_decoding/logit_mask.h"
+#include "runtime/components/constrained_decoding/repetition_penalty_constraint.h"
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/components/sampler_factory.h"
@@ -1352,6 +1360,1304 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::Decode(
   return absl::OkStatus();
 }
 
+#if LITERT_HAS_WEBGPU_SUPPORT
+namespace {
+
+inline uint32_t FloatToBits(float v) {
+  uint32_t u;
+  std::memcpy(&u, &v, sizeof(u));
+  return u;
+}
+
+struct GpuLogitMaskParams {
+  uint32_t tensor_vocab_size;
+  uint32_t mask_vocab_size;
+  uint32_t num_bitmap_pairs;
+  uint32_t num_sparse_pairs;
+};
+
+struct GpuVec4U32 {
+  uint32_t x;
+  uint32_t y;
+  uint32_t z;
+  uint32_t w;
+};
+
+struct RawSparseOp {
+  int token_id;
+  // 0 = RepetitionPenalty, 1 = Sparse, 2 = SparseSignDependent
+  uint32_t op_type;
+  float param0;
+  float param1;
+};
+
+bool ExtractMasksForWebGpu(const LogitMask* mask,
+                           std::vector<const BitmapLogitMask*>& bitmap_masks,
+                           std::vector<RawSparseOp>& raw_ops) {
+  if (mask == nullptr) {
+    return true;
+  }
+  switch (mask->GetType()) {
+    case MaskType::kBitmap: {
+      bitmap_masks.push_back(static_cast<const BitmapLogitMask*>(mask));
+      return true;
+    }
+    case MaskType::kSparse: {
+      const auto* sparse_mask = static_cast<const SparseLogitMask*>(mask);
+      for (const auto& entry : sparse_mask->entries()) {
+        raw_ops.push_back({
+            .token_id = entry.token_id,
+            .op_type = entry.sign_dependent_weight ? 2u : 1u,
+            .param0 = entry.weight,
+            .param1 = entry.bias,
+        });
+      }
+      return true;
+    }
+    case MaskType::kComposite: {
+      const auto* comp_mask = static_cast<const CompositeLogitMask*>(mask);
+      std::vector<const LogitMask*> other_masks;
+      std::vector<const LogitMask*> sparse_masks;
+      for (const auto& child : comp_mask->masks()) {
+        if (!child) continue;
+        if (child->GetType() == MaskType::kBitmap) {
+          bitmap_masks.push_back(
+              static_cast<const BitmapLogitMask*>(child.get()));
+        } else if (child->GetType() == MaskType::kSparse) {
+          sparse_masks.push_back(child.get());
+        } else {
+          other_masks.push_back(child.get());
+        }
+      }
+      for (const auto* child : other_masks) {
+        if (!ExtractMasksForWebGpu(child, bitmap_masks, raw_ops)) {
+          return false;
+        }
+      }
+      for (const auto* child : sparse_masks) {
+        if (!ExtractMasksForWebGpu(child, bitmap_masks, raw_ops)) {
+          return false;
+        }
+      }
+      return true;
+    }
+    case MaskType::kCustom: {
+      const auto* rep_mask = dynamic_cast<const RepetitionPenaltyMask*>(mask);
+      if (rep_mask == nullptr) {
+        return false;
+      }
+      for (const auto& entry : rep_mask->entries()) {
+        raw_ops.push_back({
+            .token_id = entry.token_id,
+            .op_type = 0u,
+            .param0 = entry.repetition_penalty,
+            .param1 = entry.bias,
+        });
+      }
+      return true;
+    }
+  }
+  return false;
+}
+
+constexpr char kWgslBitmapFp16Source[] = R"(
+struct Params {
+  tensor_vocab_size: u32,
+  mask_vocab_size: u32,
+  num_bitmap_pairs: u32,
+  num_sparse_pairs: u32,
+};
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> bitmap: array<u32>;
+@group(0) @binding(2) var<storage, read_write> logits: array<u32>;
+
+fn is_token_allowed(token_id: u32) -> bool {
+  if (token_id >= params.mask_vocab_size) {
+    return false;
+  }
+  let word_idx = token_id >> 5u;
+  let bit_idx = token_id & 31u;
+  return ((bitmap[word_idx] >> bit_idx) & 1u) != 0u;
+}
+
+@compute @workgroup_size(64)
+fn main_bitmap(@builtin(global_invocation_id) global_id: vec3<u32>) {
+  let idx = global_id.x;
+  if (idx >= params.num_bitmap_pairs) {
+    return;
+  }
+  let token0 = idx * 2u;
+  let token1 = token0 + 1u;
+  let raw = logits[idx];
+  var out_raw = raw;
+  if (!is_token_allowed(token0)) {
+    out_raw = (out_raw & 0xffff0000u) | 0x0000fbffu;
+  }
+  if (!is_token_allowed(token1)) {
+    out_raw = (out_raw & 0x0000ffffu) | 0xfbff0000u;
+  }
+  if (out_raw != raw) {
+    logits[idx] = out_raw;
+  }
+}
+)";
+
+constexpr char kWgslSparseFp16Source[] = R"(
+struct Params {
+  tensor_vocab_size: u32,
+  mask_vocab_size: u32,
+  num_bitmap_pairs: u32,
+  num_sparse_pairs: u32,
+};
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> sparse_data: array<vec4<u32>>;
+@group(0) @binding(2) var<storage, read_write> logits: array<u32>;
+
+fn ieee754_f16_to_f32(h: u32) -> u32 {
+  let sign = (h & 0x8000u) << 16u;
+  let exp = (h >> 10u) & 0x1fu;
+  let mant = h & 0x03ffu;
+  if (exp == 0u) {
+    if (mant == 0u) {
+      return sign;
+    }
+    var m = mant;
+    var e = 113u;
+    while ((m & 0x0400u) == 0u) {
+      m = m << 1u;
+      e = e - 1u;
+    }
+    return sign | (e << 23u) | ((m & 0x03ffu) << 13u);
+  }
+  if (exp == 31u) {
+    return sign | 0x7f800000u | (mant << 13u);
+  }
+  return sign | ((exp + 112u) << 23u) | (mant << 13u);
+}
+
+fn ieee754_f32_to_f16(x: u32) -> u32 {
+  let sign = (x >> 16u) & 0x8000u;
+  let abs_x = x & 0x7fffffffu;
+  if (abs_x >= 0x47800000u) {
+    if (abs_x > 0x7f800000u) {
+      return sign | 0x7e00u | ((abs_x >> 13u) & 0x03ffu);
+    }
+    return sign | 0x7c00u;
+  }
+  if (abs_x < 0x33000000u) {
+    return sign;
+  }
+  if (abs_x < 0x38800000u) {
+    let exp32 = i32(abs_x >> 23u);
+    let mant32 = (abs_x & 0x7fffffu) | 0x800000u;
+    let shift = u32(126 - exp32);
+    var mant16 = mant32 >> shift;
+    let round_bit = (mant32 >> (shift - 1u)) & 1u;
+    let sticky_mask = (1u << (shift - 1u)) - 1u;
+    let sticky_bit = select(0u, 1u, (mant32 & sticky_mask) != 0u);
+    if (round_bit == 1u && (sticky_bit == 1u || (mant16 & 1u) == 1u)) {
+      mant16 = mant16 + 1u;
+    }
+    return sign | mant16;
+  }
+  let exp16 = ((abs_x >> 23u) - 112u) << 10u;
+  let mant16 = (abs_x >> 13u) & 0x03ffu;
+  let round_bit = (abs_x >> 12u) & 1u;
+  let sticky_bit = select(0u, 1u, (abs_x & 0x0fffu) != 0u);
+  var res = exp16 | mant16;
+  if (round_bit == 1u && (sticky_bit == 1u || (res & 1u) == 1u)) {
+    res = res + 1u;
+  }
+  return sign | res;
+}
+
+fn ieee754_div(ua: u32, ub: u32) -> u32 {
+  let sign = (ua ^ ub) & 0x80000000u;
+  let abs_a = ua & 0x7fffffffu;
+  let abs_b = ub & 0x7fffffffu;
+  if (abs_a == 0u) {
+    return sign;
+  }
+  if (abs_b == 0u) {
+    return sign | 0x7f800000u;
+  }
+  var exp_a = i32(abs_a >> 23u);
+  var mant_a = abs_a & 0x7fffffu;
+  if (exp_a == 0) {
+    exp_a = 1;
+    while ((mant_a & 0x800000u) == 0u) {
+      mant_a = mant_a << 1u;
+      exp_a = exp_a - 1;
+    }
+  } else {
+    mant_a = mant_a | 0x800000u;
+  }
+  var exp_b = i32(abs_b >> 23u);
+  var mant_b = abs_b & 0x7fffffu;
+  if (exp_b == 0) {
+    exp_b = 1;
+    while ((mant_b & 0x800000u) == 0u) {
+      mant_b = mant_b << 1u;
+      exp_b = exp_b - 1;
+    }
+  } else {
+    mant_b = mant_b | 0x800000u;
+  }
+  var exp_out = exp_a - exp_b + 127;
+  var rem = mant_a;
+  if (rem < mant_b) {
+    rem = rem << 1u;
+    exp_out = exp_out - 1;
+  }
+  var q = 0u;
+  for (var bit = 0u; bit < 25u; bit = bit + 1u) {
+    q = q << 1u;
+    if (rem >= mant_b) {
+      rem = rem - mant_b;
+      q = q | 1u;
+    }
+    rem = rem << 1u;
+  }
+  var sig = q >> 1u;
+  let round_bit = q & 1u;
+  let sticky_bit = select(0u, 1u, rem != 0u);
+  if (round_bit == 1u && (sticky_bit == 1u || (sig & 1u) == 1u)) {
+    sig = sig + 1u;
+    if (sig == 0x1000000u) {
+      sig = 0x800000u;
+      exp_out = exp_out + 1;
+    }
+  }
+  if (exp_out >= 255) {
+    return sign | 0x7f800000u;
+  }
+  if (exp_out <= 0) {
+    let shift = u32(1 - exp_out);
+    if (shift > 24u) {
+      return sign;
+    }
+    let full_rem_sticky = select(0u, 1u, (rem != 0u) || (round_bit != 0u));
+    let sub_sig = sig >> shift;
+    let sub_round = (sig >> (shift - 1u)) & 1u;
+    let sub_mask = (1u << (shift - 1u)) - 1u;
+    let sub_sticky = select(0u, 1u, ((sig & sub_mask) != 0u) || (full_rem_sticky != 0u));
+    var final_sub = sub_sig;
+    if (sub_round == 1u && (sub_sticky == 1u || (final_sub & 1u) == 1u)) {
+      final_sub = final_sub + 1u;
+    }
+    return sign | final_sub;
+  }
+  return sign | (u32(exp_out) << 23u) | (sig & 0x7fffffu);
+}
+
+fn ieee754_mul(ua: u32, ub: u32) -> u32 {
+  let sign = (ua ^ ub) & 0x80000000u;
+  let abs_a = ua & 0x7fffffffu;
+  let abs_b = ub & 0x7fffffffu;
+  if (abs_a == 0u || abs_b == 0u) {
+    return sign;
+  }
+  var exp_a = i32(abs_a >> 23u);
+  var mant_a = abs_a & 0x7fffffu;
+  if (exp_a == 0) {
+    exp_a = 1;
+    while ((mant_a & 0x800000u) == 0u) {
+      mant_a = mant_a << 1u;
+      exp_a = exp_a - 1;
+    }
+  } else {
+    mant_a = mant_a | 0x800000u;
+  }
+  var exp_b = i32(abs_b >> 23u);
+  var mant_b = abs_b & 0x7fffffu;
+  if (exp_b == 0) {
+    exp_b = 1;
+    while ((mant_b & 0x800000u) == 0u) {
+      mant_b = mant_b << 1u;
+      exp_b = exp_b - 1;
+    }
+  } else {
+    mant_b = mant_b | 0x800000u;
+  }
+  let a_lo = mant_a & 0xfffu;
+  let a_hi = mant_a >> 12u;
+  let b_lo = mant_b & 0xfffu;
+  let b_hi = mant_b >> 12u;
+  let p0 = a_lo * b_lo;
+  let p1 = a_hi * b_lo + a_lo * b_hi;
+  let p2 = a_hi * b_hi;
+  let lo_part = p0 + ((p1 & 0xfffu) << 12u);
+  let exact_lo24 = lo_part & 0xffffffu;
+  let exact_hi24 = p2 + (p1 >> 12u) + (lo_part >> 24u);
+
+  var exp_out = exp_a + exp_b - 127;
+  var sig = 0u;
+  var round_bit = 0u;
+  var sticky_bit = 0u;
+  if ((exact_hi24 & 0x800000u) != 0u) {
+    exp_out = exp_out + 1;
+    sig = exact_hi24;
+    round_bit = (exact_lo24 >> 23u) & 1u;
+    sticky_bit = select(0u, 1u, (exact_lo24 & 0x7fffffu) != 0u);
+  } else {
+    sig = (exact_hi24 << 1u) | (exact_lo24 >> 23u);
+    round_bit = (exact_lo24 >> 22u) & 1u;
+    sticky_bit = select(0u, 1u, (exact_lo24 & 0x3fffffu) != 0u);
+  }
+  if (round_bit == 1u && (sticky_bit == 1u || (sig & 1u) == 1u)) {
+    sig = sig + 1u;
+    if (sig == 0x1000000u) {
+      sig = 0x800000u;
+      exp_out = exp_out + 1;
+    }
+  }
+  if (exp_out >= 255) {
+    return sign | 0x7f800000u;
+  }
+  if (exp_out <= 0) {
+    let shift = u32(1 - exp_out);
+    if (shift > 24u) {
+      return sign;
+    }
+    let full_sticky = select(0u, 1u, (sticky_bit != 0u) || (round_bit != 0u));
+    let sub_sig = sig >> shift;
+    let sub_round = (sig >> (shift - 1u)) & 1u;
+    let sub_mask = (1u << (shift - 1u)) - 1u;
+    let sub_sticky = select(0u, 1u, ((sig & sub_mask) != 0u) || (full_sticky != 0u));
+    var final_sub = sub_sig;
+    if (sub_round == 1u && (sub_sticky == 1u || (final_sub & 1u) == 1u)) {
+      final_sub = final_sub + 1u;
+    }
+    return sign | final_sub;
+  }
+  return sign | (u32(exp_out) << 23u) | (sig & 0x7fffffu);
+}
+
+fn ieee754_add(ua: u32, ub: u32) -> u32 {
+  let abs_a = ua & 0x7fffffffu;
+  let abs_b = ub & 0x7fffffffu;
+  if (abs_a == 0u) {
+    if (abs_b == 0u) {
+      return ua & ub & 0x80000000u;
+    }
+    return ub;
+  }
+  if (abs_b == 0u) {
+    return ua;
+  }
+  var a_u = ua;
+  var b_u = ub;
+  if (abs_b > abs_a) {
+    a_u = ub;
+    b_u = ua;
+  }
+  let sign_a = a_u & 0x80000000u;
+  let sign_b = b_u & 0x80000000u;
+  var exp_a = i32((a_u >> 23u) & 0xffu);
+  var mant_a = a_u & 0x7fffffu;
+  if (exp_a == 0) {
+    exp_a = 1;
+  } else {
+    mant_a = mant_a | 0x800000u;
+  }
+  var exp_b = i32((b_u >> 23u) & 0xffu);
+  var mant_b = b_u & 0x7fffffu;
+  if (exp_b == 0) {
+    exp_b = 1;
+  } else {
+    mant_b = mant_b | 0x800000u;
+  }
+  let ma = mant_a << 3u;
+  var mb = mant_b << 3u;
+  let diff = u32(exp_a - exp_b);
+  if (diff > 0u) {
+    if (diff >= 27u) {
+      mb = select(0u, 1u, mb != 0u);
+    } else {
+      let sticky = select(0u, 1u, (mb & ((1u << diff) - 1u)) != 0u);
+      mb = (mb >> diff) | sticky;
+    }
+  }
+  var res_exp = exp_a;
+  var res_sig = 0u;
+  if (sign_a == sign_b) {
+    res_sig = ma + mb;
+    if ((res_sig & 0x8000000u) != 0u) {
+      let sticky = res_sig & 1u;
+      res_sig = (res_sig >> 1u) | sticky;
+      res_exp = res_exp + 1;
+    }
+  } else {
+    res_sig = ma - mb;
+    if (res_sig == 0u) {
+      return 0u;
+    }
+    while ((res_sig & 0x4000000u) == 0u && res_exp > 1) {
+      res_sig = res_sig << 1u;
+      res_exp = res_exp - 1;
+    }
+  }
+  var sig24 = res_sig >> 3u;
+  let round_bit = (res_sig >> 2u) & 1u;
+  let sticky_bit = select(0u, 1u, (res_sig & 3u) != 0u);
+  if (round_bit == 1u && (sticky_bit == 1u || (sig24 & 1u) == 1u)) {
+    sig24 = sig24 + 1u;
+    if (sig24 == 0x1000000u) {
+      sig24 = 0x800000u;
+      res_exp = res_exp + 1;
+    }
+  }
+  if (res_exp >= 255) {
+    return sign_a | 0x7f800000u;
+  }
+  if ((sig24 & 0x800000u) == 0u) {
+    return sign_a | (sig24 & 0x7fffffu);
+  }
+  return sign_a | (u32(res_exp) << 23u) | (sig24 & 0x7fffffu);
+}
+
+@compute @workgroup_size(64)
+fn main_sparse(@builtin(global_invocation_id) global_id: vec3<u32>) {
+  let idx = global_id.x;
+  if (idx >= params.num_sparse_pairs) {
+    return;
+  }
+  let pair = sparse_data[idx];
+  let pair_idx = pair.x;
+  let op_start = pair.y;
+  let op_count = pair.z;
+
+  let raw = logits[pair_idx];
+  var bits0 = raw & 0xffffu;
+  var bits1 = (raw >> 16u) & 0xffffu;
+  var val0_bits = ieee754_f16_to_f32(bits0);
+  var val1_bits = ieee754_f16_to_f32(bits1);
+
+  for (var i = 0u; i < op_count; i = i + 1u) {
+    let op = sparse_data[op_start + i];
+    let op_type = op.x;
+    let token_id = op.y;
+    let param0_bits = op.z;
+    let param1_bits = op.w;
+    let param0 = bitcast<f32>(param0_bits);
+
+    let is_odd = (token_id & 1u) != 0u;
+    let cur_bits = select(bits0, bits1, is_odd);
+    var val_bits = select(val0_bits, val1_bits, is_odd);
+    let val = bitcast<f32>(val_bits);
+
+    if (cur_bits == 0xfbffu || cur_bits == 0xfc00u || val <= -65504.0) {
+      continue;
+    }
+
+    if (op_type == 0u) {
+      if (param0 > 1.0) {
+        if (val > 0.0) {
+          val_bits = ieee754_div(val_bits, param0_bits);
+        } else {
+          val_bits = ieee754_mul(val_bits, param0_bits);
+        }
+      }
+      val_bits = ieee754_add(val_bits, param1_bits);
+    } else if (op_type == 1u) {
+      let prod_bits = ieee754_mul(val_bits, param0_bits);
+      val_bits = ieee754_add(prod_bits, param1_bits);
+    } else if (op_type == 2u) {
+      if (val > 0.0) {
+        let prod_bits = ieee754_mul(val_bits, param0_bits);
+        val_bits = ieee754_add(prod_bits, param1_bits);
+      } else {
+        if (param0 != 0.0) {
+          let div_bits = ieee754_div(val_bits, param0_bits);
+          val_bits = ieee754_add(div_bits, param1_bits);
+        } else {
+          val_bits = ieee754_add(val_bits, param1_bits);
+        }
+      }
+    }
+
+    let new_bits = ieee754_f32_to_f16(val_bits);
+    let rounded_val_bits = ieee754_f16_to_f32(new_bits);
+
+    if (is_odd) {
+      bits1 = new_bits;
+      val1_bits = rounded_val_bits;
+    } else {
+      bits0 = new_bits;
+      val0_bits = rounded_val_bits;
+    }
+  }
+
+  logits[pair_idx] = bits0 | (bits1 << 16u);
+}
+)";
+
+constexpr char kWgslBitmapFp32Source[] = R"(
+struct Params {
+  tensor_vocab_size: u32,
+  mask_vocab_size: u32,
+  num_bitmap_pairs: u32,
+  num_sparse_pairs: u32,
+};
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> bitmap: array<u32>;
+@group(0) @binding(2) var<storage, read_write> logits_f32: array<f32>;
+
+fn is_token_allowed(token_id: u32) -> bool {
+  if (token_id >= params.mask_vocab_size) {
+    return false;
+  }
+  let word_idx = token_id >> 5u;
+  let bit_idx = token_id & 31u;
+  return ((bitmap[word_idx] >> bit_idx) & 1u) != 0u;
+}
+
+@compute @workgroup_size(64)
+fn main_bitmap_f32(@builtin(global_invocation_id) global_id: vec3<u32>) {
+  let idx = global_id.x;
+  if (idx >= params.num_bitmap_pairs) {
+    return;
+  }
+  let token0 = idx * 2u;
+  let token1 = token0 + 1u;
+  let min_val = -0.7 * 3.402823466e+38;
+  if (!is_token_allowed(token0)) {
+    logits_f32[token0] = min_val;
+  }
+  if (!is_token_allowed(token1)) {
+    logits_f32[token1] = min_val;
+  }
+}
+)";
+
+constexpr char kWgslSparseFp32Source[] = R"(
+struct Params {
+  tensor_vocab_size: u32,
+  mask_vocab_size: u32,
+  num_bitmap_pairs: u32,
+  num_sparse_pairs: u32,
+};
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> sparse_data: array<vec4<u32>>;
+@group(0) @binding(2) var<storage, read_write> logits_f32: array<f32>;
+
+fn ieee754_div(ua: u32, ub: u32) -> u32 {
+  let sign = (ua ^ ub) & 0x80000000u;
+  let abs_a = ua & 0x7fffffffu;
+  let abs_b = ub & 0x7fffffffu;
+  if (abs_a == 0u) {
+    return sign;
+  }
+  if (abs_b == 0u) {
+    return sign | 0x7f800000u;
+  }
+  var exp_a = i32(abs_a >> 23u);
+  var mant_a = abs_a & 0x7fffffu;
+  if (exp_a == 0) {
+    exp_a = 1;
+    while ((mant_a & 0x800000u) == 0u) {
+      mant_a = mant_a << 1u;
+      exp_a = exp_a - 1;
+    }
+  } else {
+    mant_a = mant_a | 0x800000u;
+  }
+  var exp_b = i32(abs_b >> 23u);
+  var mant_b = abs_b & 0x7fffffu;
+  if (exp_b == 0) {
+    exp_b = 1;
+    while ((mant_b & 0x800000u) == 0u) {
+      mant_b = mant_b << 1u;
+      exp_b = exp_b - 1;
+    }
+  } else {
+    mant_b = mant_b | 0x800000u;
+  }
+  var exp_out = exp_a - exp_b + 127;
+  var rem = mant_a;
+  if (rem < mant_b) {
+    rem = rem << 1u;
+    exp_out = exp_out - 1;
+  }
+  var q = 0u;
+  for (var bit = 0u; bit < 25u; bit = bit + 1u) {
+    q = q << 1u;
+    if (rem >= mant_b) {
+      rem = rem - mant_b;
+      q = q | 1u;
+    }
+    rem = rem << 1u;
+  }
+  var sig = q >> 1u;
+  let round_bit = q & 1u;
+  let sticky_bit = select(0u, 1u, rem != 0u);
+  if (round_bit == 1u && (sticky_bit == 1u || (sig & 1u) == 1u)) {
+    sig = sig + 1u;
+    if (sig == 0x1000000u) {
+      sig = 0x800000u;
+      exp_out = exp_out + 1;
+    }
+  }
+  if (exp_out >= 255) {
+    return sign | 0x7f800000u;
+  }
+  if (exp_out <= 0) {
+    let shift = u32(1 - exp_out);
+    if (shift > 24u) {
+      return sign;
+    }
+    let full_rem_sticky = select(0u, 1u, (rem != 0u) || (round_bit != 0u));
+    let sub_sig = sig >> shift;
+    let sub_round = (sig >> (shift - 1u)) & 1u;
+    let sub_mask = (1u << (shift - 1u)) - 1u;
+    let sub_sticky = select(0u, 1u, ((sig & sub_mask) != 0u) || (full_rem_sticky != 0u));
+    var final_sub = sub_sig;
+    if (sub_round == 1u && (sub_sticky == 1u || (final_sub & 1u) == 1u)) {
+      final_sub = final_sub + 1u;
+    }
+    return sign | final_sub;
+  }
+  return sign | (u32(exp_out) << 23u) | (sig & 0x7fffffu);
+}
+
+fn ieee754_mul(ua: u32, ub: u32) -> u32 {
+  let sign = (ua ^ ub) & 0x80000000u;
+  let abs_a = ua & 0x7fffffffu;
+  let abs_b = ub & 0x7fffffffu;
+  if (abs_a == 0u || abs_b == 0u) {
+    return sign;
+  }
+  var exp_a = i32(abs_a >> 23u);
+  var mant_a = abs_a & 0x7fffffu;
+  if (exp_a == 0) {
+    exp_a = 1;
+    while ((mant_a & 0x800000u) == 0u) {
+      mant_a = mant_a << 1u;
+      exp_a = exp_a - 1;
+    }
+  } else {
+    mant_a = mant_a | 0x800000u;
+  }
+  var exp_b = i32(abs_b >> 23u);
+  var mant_b = abs_b & 0x7fffffu;
+  if (exp_b == 0) {
+    exp_b = 1;
+    while ((mant_b & 0x800000u) == 0u) {
+      mant_b = mant_b << 1u;
+      exp_b = exp_b - 1;
+    }
+  } else {
+    mant_b = mant_b | 0x800000u;
+  }
+  let a_lo = mant_a & 0xfffu;
+  let a_hi = mant_a >> 12u;
+  let b_lo = mant_b & 0xfffu;
+  let b_hi = mant_b >> 12u;
+  let p0 = a_lo * b_lo;
+  let p1 = a_hi * b_lo + a_lo * b_hi;
+  let p2 = a_hi * b_hi;
+  let lo_part = p0 + ((p1 & 0xfffu) << 12u);
+  let exact_lo24 = lo_part & 0xffffffu;
+  let exact_hi24 = p2 + (p1 >> 12u) + (lo_part >> 24u);
+
+  var exp_out = exp_a + exp_b - 127;
+  var sig = 0u;
+  var round_bit = 0u;
+  var sticky_bit = 0u;
+  if ((exact_hi24 & 0x800000u) != 0u) {
+    exp_out = exp_out + 1;
+    sig = exact_hi24;
+    round_bit = (exact_lo24 >> 23u) & 1u;
+    sticky_bit = select(0u, 1u, (exact_lo24 & 0x7fffffu) != 0u);
+  } else {
+    sig = (exact_hi24 << 1u) | (exact_lo24 >> 23u);
+    round_bit = (exact_lo24 >> 22u) & 1u;
+    sticky_bit = select(0u, 1u, (exact_lo24 & 0x3fffffu) != 0u);
+  }
+  if (round_bit == 1u && (sticky_bit == 1u || (sig & 1u) == 1u)) {
+    sig = sig + 1u;
+    if (sig == 0x1000000u) {
+      sig = 0x800000u;
+      exp_out = exp_out + 1;
+    }
+  }
+  if (exp_out >= 255) {
+    return sign | 0x7f800000u;
+  }
+  if (exp_out <= 0) {
+    let shift = u32(1 - exp_out);
+    if (shift > 24u) {
+      return sign;
+    }
+    let full_sticky = select(0u, 1u, (sticky_bit != 0u) || (round_bit != 0u));
+    let sub_sig = sig >> shift;
+    let sub_round = (sig >> (shift - 1u)) & 1u;
+    let sub_mask = (1u << (shift - 1u)) - 1u;
+    let sub_sticky = select(0u, 1u, ((sig & sub_mask) != 0u) || (full_sticky != 0u));
+    var final_sub = sub_sig;
+    if (sub_round == 1u && (sub_sticky == 1u || (final_sub & 1u) == 1u)) {
+      final_sub = final_sub + 1u;
+    }
+    return sign | final_sub;
+  }
+  return sign | (u32(exp_out) << 23u) | (sig & 0x7fffffu);
+}
+
+fn ieee754_add(ua: u32, ub: u32) -> u32 {
+  let abs_a = ua & 0x7fffffffu;
+  let abs_b = ub & 0x7fffffffu;
+  if (abs_a == 0u) {
+    if (abs_b == 0u) {
+      return ua & ub & 0x80000000u;
+    }
+    return ub;
+  }
+  if (abs_b == 0u) {
+    return ua;
+  }
+  var a_u = ua;
+  var b_u = ub;
+  if (abs_b > abs_a) {
+    a_u = ub;
+    b_u = ua;
+  }
+  let sign_a = a_u & 0x80000000u;
+  let sign_b = b_u & 0x80000000u;
+  var exp_a = i32((a_u >> 23u) & 0xffu);
+  var mant_a = a_u & 0x7fffffu;
+  if (exp_a == 0) {
+    exp_a = 1;
+  } else {
+    mant_a = mant_a | 0x800000u;
+  }
+  var exp_b = i32((b_u >> 23u) & 0xffu);
+  var mant_b = b_u & 0x7fffffu;
+  if (exp_b == 0) {
+    exp_b = 1;
+  } else {
+    mant_b = mant_b | 0x800000u;
+  }
+  let ma = mant_a << 3u;
+  var mb = mant_b << 3u;
+  let diff = u32(exp_a - exp_b);
+  if (diff > 0u) {
+    if (diff >= 27u) {
+      mb = select(0u, 1u, mb != 0u);
+    } else {
+      let sticky = select(0u, 1u, (mb & ((1u << diff) - 1u)) != 0u);
+      mb = (mb >> diff) | sticky;
+    }
+  }
+  var res_exp = exp_a;
+  var res_sig = 0u;
+  if (sign_a == sign_b) {
+    res_sig = ma + mb;
+    if ((res_sig & 0x8000000u) != 0u) {
+      let sticky = res_sig & 1u;
+      res_sig = (res_sig >> 1u) | sticky;
+      res_exp = res_exp + 1;
+    }
+  } else {
+    res_sig = ma - mb;
+    if (res_sig == 0u) {
+      return 0u;
+    }
+    while ((res_sig & 0x4000000u) == 0u && res_exp > 1) {
+      res_sig = res_sig << 1u;
+      res_exp = res_exp - 1;
+    }
+  }
+  var sig24 = res_sig >> 3u;
+  let round_bit = (res_sig >> 2u) & 1u;
+  let sticky_bit = select(0u, 1u, (res_sig & 3u) != 0u);
+  if (round_bit == 1u && (sticky_bit == 1u || (sig24 & 1u) == 1u)) {
+    sig24 = sig24 + 1u;
+    if (sig24 == 0x1000000u) {
+      sig24 = 0x800000u;
+      res_exp = res_exp + 1;
+    }
+  }
+  if (res_exp >= 255) {
+    return sign_a | 0x7f800000u;
+  }
+  if ((sig24 & 0x800000u) == 0u) {
+    return sign_a | (sig24 & 0x7fffffu);
+  }
+  return sign_a | (u32(res_exp) << 23u) | (sig24 & 0x7fffffu);
+}
+
+@compute @workgroup_size(64)
+fn main_sparse_f32(@builtin(global_invocation_id) global_id: vec3<u32>) {
+  let idx = global_id.x;
+  if (idx >= params.num_sparse_pairs) {
+    return;
+  }
+  let pair = sparse_data[idx];
+  let op_start = pair.y;
+  let op_count = pair.z;
+
+  for (var i = 0u; i < op_count; i = i + 1u) {
+    let op = sparse_data[op_start + i];
+    let op_type = op.x;
+    let token_id = op.y;
+    let param0_bits = op.z;
+    let param1_bits = op.w;
+    let param0 = bitcast<f32>(param0_bits);
+
+    var val_bits = bitcast<u32>(logits_f32[token_id]);
+    let val = bitcast<f32>(val_bits);
+
+    if (val_bits == 0xff800000u || val <= -0.7 * 3.402823466e+38) {
+      continue;
+    }
+
+    if (op_type == 0u) {
+      if (param0 > 1.0) {
+        if (val > 0.0) {
+          val_bits = ieee754_div(val_bits, param0_bits);
+        } else {
+          val_bits = ieee754_mul(val_bits, param0_bits);
+        }
+      }
+      val_bits = ieee754_add(val_bits, param1_bits);
+    } else if (op_type == 1u) {
+      let prod_bits = ieee754_mul(val_bits, param0_bits);
+      val_bits = ieee754_add(prod_bits, param1_bits);
+    } else if (op_type == 2u) {
+      if (val > 0.0) {
+        let prod_bits = ieee754_mul(val_bits, param0_bits);
+        val_bits = ieee754_add(prod_bits, param1_bits);
+      } else {
+        if (param0 != 0.0) {
+          let div_bits = ieee754_div(val_bits, param0_bits);
+          val_bits = ieee754_add(div_bits, param1_bits);
+        } else {
+          val_bits = ieee754_add(val_bits, param1_bits);
+        }
+      }
+    }
+
+    logits_f32[token_id] = bitcast<f32>(val_bits);
+  }
+}
+)";
+
+wgpu::ComputePipeline CompileComputePipeline(wgpu::Device& device,
+                                             wgpu::PipelineLayout& layout,
+                                             const char* wgsl_source,
+                                             const char* entry_point) {
+  wgpu::ShaderSourceWGSL wgsl_desc;
+  wgsl_desc.code = wgsl_source;
+  wgpu::ShaderModuleDescriptor sm_desc;
+  sm_desc.nextInChain = &wgsl_desc;
+  wgpu::ShaderModule module = device.CreateShaderModule(&sm_desc);
+  if (!module) return nullptr;
+
+  wgpu::ComputePipelineDescriptor cp_desc;
+  cp_desc.layout = layout;
+  cp_desc.compute.module = module;
+  cp_desc.compute.entryPoint = entry_point;
+  return device.CreateComputePipeline(&cp_desc);
+}
+
+}  // namespace
+#endif  // LITERT_HAS_WEBGPU_SUPPORT
+
+bool LlmLiteRtCompiledModelExecutorBase::TryProcessLogitsWebGpu(
+    Environment& env, ConstrainedDecoder* constrained_decoder,
+    TensorBuffer& output_logits) {
+#if !LITERT_HAS_WEBGPU_SUPPORT
+  return false;
+#else
+  if (constrained_decoder == nullptr ||
+      constrained_decoder->GetBatchSize() != 1) {
+    return false;
+  }
+  if (!output_logits.IsWebGpuMemory()) {
+    return false;
+  }
+  auto tensor_type_or = output_logits.TensorType();
+  if (!tensor_type_or.HasValue()) {
+    return false;
+  }
+  const auto element_type = tensor_type_or->ElementType();
+  if (element_type != ElementType::Float16 &&
+      element_type != ElementType::Float32) {
+    return false;
+  }
+  const auto dims = tensor_type_or->Layout().Dimensions();
+  if (dims.size() != 3 || dims[0] != 1 || dims[1] != 1) {
+    return false;
+  }
+  const int vocab_size = dims[2];
+  if (vocab_size <= 0 || vocab_size > 262144 || (vocab_size % 2) != 0) {
+    return false;
+  }
+
+  auto env_options_or = env.GetOptions();
+  if (!env_options_or.HasValue()) {
+    return false;
+  }
+  auto wgpu_device_res =
+      env_options_or->GetOption(EnvironmentOptions::Tag::kWebGpuDevice);
+  if (!wgpu_device_res.HasValue()) {
+    return false;
+  }
+  const void* device_handle = nullptr;
+  if (std::holds_alternative<int64_t>(*wgpu_device_res)) {
+    device_handle =
+        reinterpret_cast<const void*>(std::get<int64_t>(*wgpu_device_res));
+  } else if (std::holds_alternative<const void*>(*wgpu_device_res)) {
+    device_handle = std::get<const void*>(*wgpu_device_res);
+  }
+  if (device_handle == nullptr) {
+    return false;
+  }
+
+  auto wgpu_buf_res = output_logits.GetWebGpuBuffer();
+  if (!wgpu_buf_res.HasValue()) {
+    return false;
+  }
+  const auto* spatial_tensor =
+      reinterpret_cast<const ::ml_drift::webgpu::SpatialTensor*>(
+          wgpu_buf_res.Value());
+  if (spatial_tensor == nullptr) {
+    return false;
+  }
+  wgpu::Buffer logits_buf = spatial_tensor->GetBufferHandle();
+  if (!logits_buf) {
+    return false;
+  }
+  const uint64_t logits_byte_size = spatial_tensor->GetMemorySizeInBytes();
+
+  Constraint* constraint = constrained_decoder->GetConstraint();
+  if (constraint == nullptr) {
+    return true;
+  }
+  auto mask_or = constraint->ComputeMask(constrained_decoder->GetState(0));
+  if (!mask_or.ok()) {
+    return false;
+  }
+  const std::unique_ptr<LogitMask>& mask = *mask_or;
+  if (mask == nullptr) {
+    return true;
+  }
+
+  std::vector<const BitmapLogitMask*> bitmap_masks;
+  std::vector<RawSparseOp> raw_ops;
+  if (!ExtractMasksForWebGpu(mask.get(), bitmap_masks, raw_ops)) {
+    return false;
+  }
+
+  const bool has_bitmap = !bitmap_masks.empty();
+  std::vector<uint32_t> bitmap_u32;
+  int mask_vocab_size = vocab_size;
+  if (has_bitmap) {
+    mask_vocab_size = bitmap_masks[0]->vocab_size();
+    for (size_t i = 1; i < bitmap_masks.size(); ++i) {
+      mask_vocab_size =
+          std::min(mask_vocab_size, bitmap_masks[i]->vocab_size());
+    }
+    mask_vocab_size = std::max(0, std::min(mask_vocab_size, vocab_size));
+    const int num_words64 =
+        (mask_vocab_size > 0) ? (mask_vocab_size + 63) / 64 : 0;
+    bitmap_u32.resize(std::max(1, num_words64 * 2), 0u);
+    for (int w = 0; w < num_words64; ++w) {
+      uint64_t fused_word = ~uint64_t{0};
+      for (const auto* bm : bitmap_masks) {
+        fused_word &= bm->words()[w];
+        if (fused_word == 0) break;
+      }
+      if (w == num_words64 - 1 && (mask_vocab_size % 64) != 0) {
+        const int valid_bits = mask_vocab_size % 64;
+        fused_word &= (uint64_t{1} << valid_bits) - 1;
+      }
+      bitmap_u32[w * 2] = static_cast<uint32_t>(fused_word & 0xFFFFFFFFu);
+      bitmap_u32[w * 2 + 1] = static_cast<uint32_t>(fused_word >> 32);
+    }
+  }
+
+  struct IndexedOp {
+    uint32_t pair_idx;
+    uint32_t original_order;
+    uint32_t op_type;
+    uint32_t token_id;
+    float param0;
+    float param1;
+  };
+  std::vector<IndexedOp> indexed_ops;
+  indexed_ops.reserve(raw_ops.size());
+  for (size_t i = 0; i < raw_ops.size(); ++i) {
+    const auto& op = raw_ops[i];
+    if (op.token_id < 0 || op.token_id >= vocab_size) {
+      continue;
+    }
+    indexed_ops.push_back({
+        .pair_idx = static_cast<uint32_t>(op.token_id / 2),
+        .original_order = static_cast<uint32_t>(i),
+        .op_type = op.op_type,
+        .token_id = static_cast<uint32_t>(op.token_id),
+        .param0 = op.param0,
+        .param1 = op.param1,
+    });
+  }
+
+  const bool has_sparse = !indexed_ops.empty();
+  if (!has_bitmap && !has_sparse) {
+    return true;
+  }
+
+  std::vector<GpuVec4U32> sparse_buffer_data;
+  uint32_t num_sparse_pairs = 0;
+  if (has_sparse) {
+    std::sort(indexed_ops.begin(), indexed_ops.end(),
+              [](const IndexedOp& a, const IndexedOp& b) {
+                if (a.pair_idx != b.pair_idx) return a.pair_idx < b.pair_idx;
+                return a.original_order < b.original_order;
+              });
+
+    std::vector<GpuVec4U32> pairs;
+    std::vector<GpuVec4U32> ops;
+    ops.reserve(indexed_ops.size());
+
+    size_t i = 0;
+    while (i < indexed_ops.size()) {
+      const uint32_t pair_idx = indexed_ops[i].pair_idx;
+      const uint32_t op_start_offset = static_cast<uint32_t>(ops.size());
+      uint32_t op_count = 0;
+      while (i < indexed_ops.size() && indexed_ops[i].pair_idx == pair_idx) {
+        ops.push_back({
+            .x = indexed_ops[i].op_type,
+            .y = indexed_ops[i].token_id,
+            .z = FloatToBits(indexed_ops[i].param0),
+            .w = FloatToBits(indexed_ops[i].param1),
+        });
+        ++op_count;
+        ++i;
+      }
+      pairs.push_back({
+          .x = pair_idx,
+          .y = op_start_offset,
+          .z = op_count,
+          .w = 0u,
+      });
+    }
+
+    num_sparse_pairs = static_cast<uint32_t>(pairs.size());
+    for (auto& pair : pairs) {
+      pair.y += num_sparse_pairs;
+    }
+
+    sparse_buffer_data.reserve(pairs.size() + ops.size());
+    sparse_buffer_data.insert(sparse_buffer_data.end(), pairs.begin(),
+                              pairs.end());
+    sparse_buffer_data.insert(sparse_buffer_data.end(), ops.begin(), ops.end());
+  }
+
+  wgpu::Device device(reinterpret_cast<WGPUDevice>(  // NOLINT
+      const_cast<void*>(device_handle)));
+  wgpu::Queue queue = device.GetQueue();
+  if (!queue) {
+    return false;
+  }
+
+  if (!webgpu_logit_mask_state_ ||
+      webgpu_logit_mask_state_->device_handle != device_handle) {
+    auto new_state = std::make_unique<WebGpuLogitMaskState>();
+    new_state->device_handle = device_handle;
+
+    wgpu::BindGroupLayoutEntry bgl_entries[3];
+    bgl_entries[0].binding = 0;
+    bgl_entries[0].visibility = wgpu::ShaderStage::Compute;
+    bgl_entries[0].buffer.type = wgpu::BufferBindingType::Uniform;
+    bgl_entries[0].buffer.minBindingSize = sizeof(GpuLogitMaskParams);
+
+    bgl_entries[1].binding = 1;
+    bgl_entries[1].visibility = wgpu::ShaderStage::Compute;
+    bgl_entries[1].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
+    bgl_entries[1].buffer.minBindingSize = 0;
+
+    bgl_entries[2].binding = 2;
+    bgl_entries[2].visibility = wgpu::ShaderStage::Compute;
+    bgl_entries[2].buffer.type = wgpu::BufferBindingType::Storage;
+    bgl_entries[2].buffer.minBindingSize = 0;
+
+    wgpu::BindGroupLayoutDescriptor bgl_desc;
+    bgl_desc.entryCount = 3;
+    bgl_desc.entries = bgl_entries;
+
+    new_state->bitmap_bgl = device.CreateBindGroupLayout(&bgl_desc);
+    new_state->sparse_bgl = device.CreateBindGroupLayout(&bgl_desc);
+    if (!new_state->bitmap_bgl || !new_state->sparse_bgl) {
+      return false;
+    }
+
+    wgpu::PipelineLayoutDescriptor bitmap_pl_desc;
+    bitmap_pl_desc.bindGroupLayoutCount = 1;
+    bitmap_pl_desc.bindGroupLayouts = &new_state->bitmap_bgl;
+    wgpu::PipelineLayout bitmap_pl =
+        device.CreatePipelineLayout(&bitmap_pl_desc);
+
+    wgpu::PipelineLayoutDescriptor sparse_pl_desc;
+    sparse_pl_desc.bindGroupLayoutCount = 1;
+    sparse_pl_desc.bindGroupLayouts = &new_state->sparse_bgl;
+    wgpu::PipelineLayout sparse_pl =
+        device.CreatePipelineLayout(&sparse_pl_desc);
+
+    new_state->bitmap_pipeline_f16 = CompileComputePipeline(
+        device, bitmap_pl, kWgslBitmapFp16Source, "main_bitmap");
+    new_state->sparse_pipeline_f16 = CompileComputePipeline(
+        device, sparse_pl, kWgslSparseFp16Source, "main_sparse");
+    new_state->bitmap_pipeline_f32 = CompileComputePipeline(
+        device, bitmap_pl, kWgslBitmapFp32Source, "main_bitmap_f32");
+    new_state->sparse_pipeline_f32 = CompileComputePipeline(
+        device, sparse_pl, kWgslSparseFp32Source, "main_sparse_f32");
+
+    if (!new_state->bitmap_pipeline_f16 || !new_state->sparse_pipeline_f16 ||
+        !new_state->bitmap_pipeline_f32 || !new_state->sparse_pipeline_f32) {
+      return false;
+    }
+
+    for (int i = 0; i < 2; ++i) {
+      wgpu::BufferDescriptor params_desc;
+      params_desc.size = sizeof(GpuLogitMaskParams);
+      params_desc.usage =
+          wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
+      new_state->params_buf[i] = device.CreateBuffer(&params_desc);
+
+      wgpu::BufferDescriptor bm_desc;
+      bm_desc.size = 32768;
+      bm_desc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+      new_state->bitmap_buf[i] = device.CreateBuffer(&bm_desc);
+      new_state->bitmap_buf_size[i] = bm_desc.size;
+
+      wgpu::BufferDescriptor sp_desc;
+      sp_desc.size = 4096;
+      sp_desc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+      new_state->sparse_buf[i] = device.CreateBuffer(&sp_desc);
+      new_state->sparse_buf_size[i] = sp_desc.size;
+    }
+
+    webgpu_logit_mask_state_ = std::move(new_state);
+  }
+
+  auto* state = webgpu_logit_mask_state_.get();
+
+  const int slot = state->buf_slot;
+  state->buf_slot = (slot + 1) % 2;
+
+  const uint32_t num_bitmap_pairs = static_cast<uint32_t>(vocab_size / 2);
+  GpuLogitMaskParams params = {
+      .tensor_vocab_size = static_cast<uint32_t>(vocab_size),
+      .mask_vocab_size = static_cast<uint32_t>(mask_vocab_size),
+      .num_bitmap_pairs = num_bitmap_pairs,
+      .num_sparse_pairs = num_sparse_pairs,
+  };
+  queue.WriteBuffer(state->params_buf[slot], 0, &params, sizeof(params));
+
+  if (has_bitmap) {
+    const uint64_t required_bm_bytes =
+        static_cast<uint64_t>(bitmap_u32.size() * sizeof(uint32_t));
+    if (required_bm_bytes > state->bitmap_buf_size[slot]) {
+      wgpu::BufferDescriptor bm_desc;
+      bm_desc.size = (required_bm_bytes + 255) & ~uint64_t{255};
+      bm_desc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+      state->bitmap_buf[slot] = device.CreateBuffer(&bm_desc);
+      state->bitmap_buf_size[slot] = bm_desc.size;
+    }
+    queue.WriteBuffer(state->bitmap_buf[slot], 0, bitmap_u32.data(),
+                      required_bm_bytes);
+  }
+
+  if (has_sparse) {
+    const uint64_t required_sp_bytes =
+        static_cast<uint64_t>(sparse_buffer_data.size() * sizeof(GpuVec4U32));
+    if (required_sp_bytes > state->sparse_buf_size[slot]) {
+      wgpu::BufferDescriptor sp_desc;
+      sp_desc.size = (required_sp_bytes + 255) & ~uint64_t{255};
+      sp_desc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+      state->sparse_buf[slot] = device.CreateBuffer(&sp_desc);
+      state->sparse_buf_size[slot] = sp_desc.size;
+    }
+    queue.WriteBuffer(state->sparse_buf[slot], 0, sparse_buffer_data.data(),
+                      required_sp_bytes);
+  }
+
+  const bool is_f16 = (element_type == ElementType::Float16);
+  wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
+
+  if (has_bitmap) {
+    wgpu::BindGroupEntry entries[3];
+    entries[0].binding = 0;
+    entries[0].buffer = state->params_buf[slot];
+    entries[0].offset = 0;
+    entries[0].size = sizeof(GpuLogitMaskParams);
+
+    entries[1].binding = 1;
+    entries[1].buffer = state->bitmap_buf[slot];
+    entries[1].offset = 0;
+    entries[1].size = state->bitmap_buf_size[slot];
+
+    entries[2].binding = 2;
+    entries[2].buffer = logits_buf;
+    entries[2].offset = 0;
+    entries[2].size = logits_byte_size;
+
+    wgpu::BindGroupDescriptor bg_desc;
+    bg_desc.layout = state->bitmap_bgl;
+    bg_desc.entryCount = 3;
+    bg_desc.entries = entries;
+    wgpu::BindGroup bg = device.CreateBindGroup(&bg_desc);
+
+    wgpu::ComputePassEncoder pass = encoder.BeginComputePass();
+    pass.SetPipeline(is_f16 ? state->bitmap_pipeline_f16
+                            : state->bitmap_pipeline_f32);
+    pass.SetBindGroup(0, bg);
+    pass.DispatchWorkgroups((num_bitmap_pairs + 63) / 64);
+    pass.End();
+  }
+
+  if (has_sparse) {
+    wgpu::BindGroupEntry entries[3];
+    entries[0].binding = 0;
+    entries[0].buffer = state->params_buf[slot];
+    entries[0].offset = 0;
+    entries[0].size = sizeof(GpuLogitMaskParams);
+
+    entries[1].binding = 1;
+    entries[1].buffer = state->sparse_buf[slot];
+    entries[1].offset = 0;
+    entries[1].size = state->sparse_buf_size[slot];
+
+    entries[2].binding = 2;
+    entries[2].buffer = logits_buf;
+    entries[2].offset = 0;
+    entries[2].size = logits_byte_size;
+
+    wgpu::BindGroupDescriptor bg_desc;
+    bg_desc.layout = state->sparse_bgl;
+    bg_desc.entryCount = 3;
+    bg_desc.entries = entries;
+    wgpu::BindGroup bg = device.CreateBindGroup(&bg_desc);
+
+    wgpu::ComputePassEncoder pass = encoder.BeginComputePass();
+    pass.SetPipeline(is_f16 ? state->sparse_pipeline_f16
+                            : state->sparse_pipeline_f32);
+    pass.SetBindGroup(0, bg);
+    pass.DispatchWorkgroups((num_sparse_pairs + 63) / 64);
+    pass.End();
+  }
+
+  wgpu::CommandBuffer cb = encoder.Finish();
+  queue.Submit(1, &cb);
+  return true;
+#endif  // LITERT_HAS_WEBGPU_SUPPORT
+}
+
 absl::StatusOr<TensorBuffer> LlmLiteRtCompiledModelExecutorBase::DecodeLogits(
     const ExecutorInputs& inputs) {
   return DecodeLogits(inputs, ExecutorDecodeParams());
@@ -1383,7 +2689,9 @@ absl::StatusOr<TensorBuffer> LlmLiteRtCompiledModelExecutorBase::DecodeLogits(
           constrained_decoder->UpdateState(absl::MakeSpan(current_token_ids)));
     }
     // Process logits based on the current constraint state.
-    ABSL_RETURN_IF_ERROR(constrained_decoder->ProcessLogits(output_logits));
+    if (!TryProcessLogitsWebGpu(env_, constrained_decoder, output_logits)) {
+      ABSL_RETURN_IF_ERROR(constrained_decoder->ProcessLogits(output_logits));
+    }
   }
 
   ++llm_context_->runtime_state().current_step;
