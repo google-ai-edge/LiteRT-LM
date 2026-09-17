@@ -110,6 +110,50 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest,
 }
 
 TEST(LlmLiteRtCompiledModelExecutorStaticTest,
+     CreateExecutorTest_SelectedSignatures) {
+  struct SelectionCase {
+    std::vector<std::string> keys;
+    bool valid;
+  };
+  const SelectionCase cases[] = {
+      {{}, true},
+      {{"decode", "prefill_16"}, true},
+      {{"prefill_64", "decode"}, true},
+      {{"decode"}, false},
+      {{"prefill_16"}, false},
+      {{"decode", "missing"}, false},
+      {{"decode", "prefill_16", "decode"}, false},
+  };
+  for (const auto& test_case : cases) {
+    SCOPED_TRACE(::testing::PrintToString(test_case.keys));
+    auto model_path =
+        std::filesystem::path(::testing::SrcDir()) / kTestStaticModelPath;
+    ASSERT_OK_AND_ASSIGN(
+        auto model_resources,
+        CreateExecutorModelResourcesLitertLm(model_path.string()));
+    ASSERT_OK_AND_ASSIGN(auto model_assets,
+                         ModelAssets::Create(model_path.string()));
+    ASSERT_OK_AND_ASSIGN(auto settings, LlmExecutorSettings::CreateDefault(
+                                            model_assets, Backend::CPU));
+    settings.SetCacheDir(":nocache");
+    settings.SetMaxNumTokens(kMaxNumTokens);
+    settings.SetSelectedSignatures(test_case.keys);
+    CpuConfig config;
+    config.number_of_threads = kNumThreads;
+    settings.SetBackendConfig(config);
+    LITERT_ASSERT_OK_AND_ASSIGN(auto env, Environment::Create({}));
+    auto executor = LlmLiteRtCompiledModelExecutorStatic::Create(
+        settings, env, *model_resources);
+    if (test_case.valid) {
+      ASSERT_OK(executor);
+      ASSERT_NE(*executor, nullptr);
+    } else {
+      EXPECT_THAT(executor, StatusIs(absl::StatusCode::kInvalidArgument));
+    }
+  }
+}
+
+TEST(LlmLiteRtCompiledModelExecutorStaticTest,
      CreateExecutorTest_WithProfiling) {
   auto model_path =
       std::filesystem::path(::testing::SrcDir()) / kTestStaticModelPath;
