@@ -68,6 +68,8 @@ ABSL_FLAG(std::string, backend, "cpu",
 ABSL_FLAG(std::string, model_path, "", "Path to the embedding .litertlm file.");
 ABSL_FLAG(std::string, input_prompt, "",
           "Input string to compute the embedding for.");
+ABSL_FLAG(std::string, input_prompt_file, "",
+          "Optional file path to the input prompt.");
 ABSL_FLAG(std::string, image_path, "",
           "Optional path to an image file to compute the embedding for.");
 ABSL_FLAG(
@@ -175,30 +177,35 @@ absl::StatusOr<double> ComputeCosineSimilarity(absl::Span<const float> v1,
   return 0.0;
 }
 
-absl::StatusOr<std::vector<float>> LoadEmbeddingFromJsonFile(
-    absl::string_view file_path) {
+absl::StatusOr<std::string> ReadFileToString(
+    absl::string_view file_path, std::ios_base::openmode mode = std::ios::in) {
   std::string path_str(file_path);
-  std::ifstream file(path_str);
+  std::ifstream file(path_str, mode);
   if (!file.is_open()) {
     const char* build_working_dir = std::getenv("BUILD_WORKING_DIRECTORY");
     if (build_working_dir != nullptr) {
       path_str = absl::StrCat(build_working_dir, "/", file_path);
-      file.open(path_str);
+      file.open(path_str, mode);
     }
   }
   if (!file.is_open()) {
     const char* build_workspace_dir = std::getenv("BUILD_WORKSPACE_DIRECTORY");
     if (build_workspace_dir != nullptr) {
       path_str = absl::StrCat(build_workspace_dir, "/", file_path);
-      file.open(path_str);
+      file.open(path_str, mode);
     }
   }
   if (!file.is_open()) {
     return absl::NotFoundError(
-        absl::StrCat("Failed to open embedding file: ", file_path));
+        absl::StrCat("Failed to open file: ", file_path));
   }
-  std::string content((std::istreambuf_iterator<char>(file)),
-                      std::istreambuf_iterator<char>());
+  return std::string((std::istreambuf_iterator<char>(file)),
+                     std::istreambuf_iterator<char>());
+}
+
+absl::StatusOr<std::vector<float>> LoadEmbeddingFromJsonFile(
+    absl::string_view file_path) {
+  LITERT_ASSIGN_OR_RETURN(std::string content, ReadFileToString(file_path));
   nlohmann::json json_data =
       nlohmann::json::parse(content, nullptr, /*allow_exceptions=*/false);
   if (json_data.is_discarded() || !json_data.is_array()) {
@@ -348,6 +355,15 @@ absl::Status MainHelper(int argc, char** argv) {
                                   std::move(settings)));
 
   std::string prompt = absl::GetFlag(FLAGS_input_prompt);
+  const std::string input_prompt_file = absl::GetFlag(FLAGS_input_prompt_file);
+  if (!prompt.empty() && !input_prompt_file.empty()) {
+    return absl::InvalidArgumentError(
+        "Only one of --input_prompt and --input_prompt_file can be specified.");
+  }
+  if (!input_prompt_file.empty()) {
+    LITERT_ASSIGN_OR_RETURN(prompt, ReadFileToString(input_prompt_file));
+  }
+
   const std::string image_path = absl::GetFlag(FLAGS_image_path);
   const std::string audio_path = absl::GetFlag(FLAGS_audio_path);
   const int benchmark_prefill_tokens =
@@ -357,11 +373,11 @@ absl::Status MainHelper(int argc, char** argv) {
     if (!is_benchmark || benchmark_prefill_tokens <= 0) {
       return absl::InvalidArgumentError(
           is_benchmark
-              ? "At least one of --input_prompt, --image_path, --audio_path, "
-                "or --benchmark_prefill_tokens must be provided in benchmark "
-                "mode."
-              : "At least one of --input_prompt, --image_path, or "
-                "--audio_path must be provided.");
+              ? "At least one of --input_prompt, --input_prompt_file, "
+                "--image_path, --audio_path, or --benchmark_prefill_tokens "
+                "must be provided in benchmark mode."
+              : "At least one of --input_prompt, --input_prompt_file, "
+                "--image_path, or --audio_path must be provided.");
     }
   }
 
@@ -370,38 +386,31 @@ absl::Status MainHelper(int argc, char** argv) {
     if (prompt.empty()) {
       prompt = "benchmark";
     }
+    const std::string display_prompt =
+        prompt.size() > 100 ? absl::StrCat(prompt.substr(0, 100), "...")
+                            : prompt;
     if (benchmark_prefill_tokens > 0) {
-      std::cout << "Computing embedding for input prompt: \"" << prompt
+      std::cout << "Computing embedding for input prompt: \"" << display_prompt
                 << "\" (fixed to " << benchmark_prefill_tokens
                 << " prefill tokens)" << std::endl;
     } else {
-      std::cout << "Computing embedding for input prompt: \"" << prompt << "\""
-                << std::endl;
+      std::cout << "Computing embedding for input prompt: \"" << display_prompt
+                << "\"" << std::endl;
     }
     contents.emplace_back(InputText(prompt));
   }
 
   if (!image_path.empty()) {
     std::cout << "Loading image from: " << image_path << std::endl;
-    std::ifstream file(image_path, std::ios::binary);
-    if (!file.is_open()) {
-      return absl::NotFoundError(
-          absl::StrCat("Failed to open image file: ", image_path));
-    }
-    std::string image_bytes((std::istreambuf_iterator<char>(file)),
-                            std::istreambuf_iterator<char>());
+    LITERT_ASSIGN_OR_RETURN(std::string image_bytes,
+                            ReadFileToString(image_path, std::ios::binary));
     contents.emplace_back(InputImage(std::move(image_bytes)));
   }
 
   if (!audio_path.empty()) {
     std::cout << "Loading audio from: " << audio_path << std::endl;
-    std::ifstream file(audio_path, std::ios::binary);
-    if (!file.is_open()) {
-      return absl::NotFoundError(
-          absl::StrCat("Failed to open audio file: ", audio_path));
-    }
-    std::string audio_bytes((std::istreambuf_iterator<char>(file)),
-                            std::istreambuf_iterator<char>());
+    LITERT_ASSIGN_OR_RETURN(std::string audio_bytes,
+                            ReadFileToString(audio_path, std::ios::binary));
     contents.emplace_back(InputAudio(std::move(audio_bytes)));
   }
 
