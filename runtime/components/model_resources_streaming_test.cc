@@ -24,6 +24,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
+#include "litert/cc/litert_model.h"  // from @litert
 #include "runtime/components/model_resources.h"
 #include "runtime/proto/embedding_metadata.pb.h"
 #include "runtime/proto/llm_metadata.pb.h"
@@ -215,6 +216,94 @@ TEST(ModelResourcesStreamingTest, WeightsCanBeSetAgainAfterRelease) {
   EXPECT_EQ(std::string(reinterpret_cast<const char*>(model_it->second.data()),
                         model_it->second.size()),
             second_data);
+}
+
+// Minimal valid TFL3 FlatBuffer (232 bytes) with 1 subgraph, 1 input tensor,
+// 1 empty buffer, and 1 SignatureDef ("serving_default"). Bytes 208..223 hold
+// the 4-byte length + 12-byte padded input name string.
+std::string MakeDummyTFLiteModel(absl::string_view input_name) {
+  static constexpr uint8_t kBaseModel[232] = {
+      0x1c, 0x00, 0x00, 0x00, 0x54, 0x46, 0x4c, 0x33, 0x14, 0x00, 0x14, 0x00,
+      0x10, 0x00, 0x00, 0x00, 0x0c, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x04, 0x00, 0x14, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00,
+      0x58, 0x00, 0x00, 0x00, 0x64, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00,
+      0x01, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0a, 0x00,
+      0x0c, 0x00, 0x08, 0x00, 0x00, 0x00, 0x04, 0x00, 0x0a, 0x00, 0x00, 0x00,
+      0x08, 0x00, 0x00, 0x00, 0x18, 0x00, 0x00, 0x00, 0x0f, 0x00, 0x00, 0x00,
+      0x73, 0x65, 0x72, 0x76, 0x69, 0x6e, 0x67, 0x5f, 0x64, 0x65, 0x66, 0x61,
+      0x75, 0x6c, 0x74, 0x00, 0x01, 0x00, 0x00, 0x00, 0x0c, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x06, 0x00, 0x08, 0x00, 0x04, 0x00, 0x06, 0x00, 0x00, 0x00,
+      0x58, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
+      0x04, 0x00, 0x04, 0x00, 0x04, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+      0x0c, 0x00, 0x00, 0x00, 0x08, 0x00, 0x0c, 0x00, 0x08, 0x00, 0x04, 0x00,
+      0x08, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x0c, 0x00, 0x00, 0x00,
+      0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+      0x10, 0x00, 0x00, 0x00, 0x0c, 0x00, 0x0c, 0x00, 0x08, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x04, 0x00, 0x0c, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
+      0x14, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x66, 0x65, 0x61, 0x74,
+      0x75, 0x72, 0x65, 0x73, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+      0x01, 0x00, 0x00, 0x00,
+  };
+  std::string buf(reinterpret_cast<const char*>(kBaseModel),
+                  sizeof(kBaseModel));
+  buf[208] = static_cast<char>(input_name.size());
+  std::memset(&buf[212], 0, 12);
+  std::memcpy(&buf[212], input_name.data(), input_name.size());
+  return buf;
+}
+
+TEST(ModelResourcesStreamingTest,
+     AddTFLiteModelBufferTwiceReturnsModelFromNewBuffer) {
+  ModelResourcesStreaming model_resources;
+  std::string model1_str = MakeDummyTFLiteModel("features");
+  std::string model2_str = MakeDummyTFLiteModel("src_inputs");
+  const std::string expected_model2 = model2_str;
+
+  ASSERT_OK(model_resources.AddTFLiteModelBuffer(
+      ModelType::kTfLiteVisionEncoder, std::move(model1_str)));
+  ASSERT_OK_AND_ASSIGN(
+      const litert::Model* model1_ptr,
+      model_resources.GetTFLiteModel(ModelType::kTfLiteVisionEncoder));
+  ASSERT_NE(model1_ptr, nullptr);
+  auto input_names1_or = model1_ptr->GetSignatureInputNames("serving_default");
+  ASSERT_TRUE(input_names1_or.HasValue());
+  ASSERT_EQ(input_names1_or->size(), 1);
+  EXPECT_EQ((*input_names1_or)[0], "features");
+
+  ASSERT_OK(model_resources.AddTFLiteModelBuffer(
+      ModelType::kTfLiteVisionEncoder, std::move(model2_str)));
+  ASSERT_OK_AND_ASSIGN(auto buf2, model_resources.GetTFLiteModelBuffer(
+                                      ModelType::kTfLiteVisionEncoder));
+  EXPECT_EQ(buf2, expected_model2);
+
+  ASSERT_OK_AND_ASSIGN(
+      const litert::Model* model2_ptr,
+      model_resources.GetTFLiteModel(ModelType::kTfLiteVisionEncoder));
+  ASSERT_NE(model2_ptr, nullptr);
+  auto input_names2_or = model2_ptr->GetSignatureInputNames("serving_default");
+  ASSERT_TRUE(input_names2_or.HasValue());
+  ASSERT_EQ(input_names2_or->size(), 1);
+  EXPECT_EQ((*input_names2_or)[0], "src_inputs");
+}
+
+TEST(ModelResourcesStreamingTest,
+     ReleaseTFLiteModelBufferClearsModelAndBuffer) {
+  ModelResourcesStreaming model_resources;
+  ASSERT_OK(model_resources.AddTFLiteModelBuffer(
+      ModelType::kTfLiteEndOfVision, MakeDummyTFLiteModel("features")));
+  ASSERT_OK(model_resources.GetTFLiteModel(ModelType::kTfLiteEndOfVision));
+
+  model_resources.ReleaseTFLiteModelBuffer(ModelType::kTfLiteEndOfVision);
+  EXPECT_EQ(model_resources.GetTFLiteModel(ModelType::kTfLiteEndOfVision)
+                .status()
+                .code(),
+            absl::StatusCode::kNotFound);
+  EXPECT_EQ(model_resources.GetTFLiteModelBuffer(ModelType::kTfLiteEndOfVision)
+                .status()
+                .code(),
+            absl::StatusCode::kNotFound);
+  model_resources.ReleaseTFLiteModelBuffer(ModelType::kTfLiteEndOfVision);
+  model_resources.ReleaseTFLiteModelBuffer(ModelType::kUnknown);
 }
 
 }  // namespace
