@@ -22,6 +22,7 @@
 #include "c/conversation_internal.h"  // IWYU pragma: keep
 #include "c/engine.h"
 #include "c/engine_internal.h"  // IWYU pragma: keep
+#include "c/error_reporter.h"
 #include "c/error_reporter_internal.h"
 #include "c/experimental_internal.h"  // IWYU pragma: keep
 #include "runtime/conversation/conversation.h"
@@ -35,7 +36,7 @@ int litert_lm_experimental_engine_update_gpu_enable_metal_residency_set(
     ABSL_LOG(ERROR) << "Engine is null.";
     litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
                                 "Engine is null.");
-    return -1;
+    return kLiteRtLmStatusInvalidArgument;
   }
   auto status = engine->engine->UpdateGpuEnableMetalResidencySet(
       enable_metal_residency_set);
@@ -43,9 +44,9 @@ int litert_lm_experimental_engine_update_gpu_enable_metal_residency_set(
     ABSL_LOG(ERROR) << "Failed to update GPU enable metal residency set: "
                     << status;
     litert::lm::c::SetLastError(status);
-    return -1;
+    return litert::lm::c::ToLiteRtLmStatusCode(status.code());
   }
-  return 0;
+  return kLiteRtLmStatusOk;
 }
 
 // TODO(b/549220913): Migrate debugger from build-time macro to runtime

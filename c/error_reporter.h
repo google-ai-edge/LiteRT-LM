@@ -17,15 +17,14 @@
 
 #include <stdint.h>
 
-#ifdef __cplusplus
-extern "C" {
+#if defined(__APPLE__)
+#include "api_export.h"  // NOLINT
+#else
+#include "c/api_export.h"
 #endif
 
-// For Windows, __declspec( dllexport ) is required to export function in .dll.
-#if defined(_WIN32)
-#define LITERT_LM_C_API_EXPORT __declspec(dllexport)
-#else
-#define LITERT_LM_C_API_EXPORT __attribute__((visibility("default")))
+#ifdef __cplusplus
+extern "C" {
 #endif
 
 // =============================================================================
@@ -79,6 +78,90 @@ extern "C" {
 //      thread-local error message memory on long-lived threads.
 // =============================================================================
 
+// =============================================================================
+// Status Codes
+// =============================================================================
+//
+// Canonical status codes returned by `litert_lm_get_last_error_code()` and by
+// every `litert_lm_*` function that returns a status as an `int`.
+//
+// These values are 1:1 identical to Google canonical error codes
+// (`absl::StatusCode` / `google.rpc.Code`).
+//
+// ABI stability:
+//   - These numeric values are frozen. They MUST NOT be renumbered or
+//     reordered.
+//   - This is a closed set mirroring the canonical error codes; no new
+//     enumerators are expected. Callers that switch on the value SHOULD
+//     nevertheless provide a `default:` branch and treat any unrecognized value
+//     as `kLiteRtLmStatusUnknown`, so that a consumer built against this header
+//     stays forward compatible with a newer shared library.
+//   - Values always cross the ABI as a non-negative `int`. Do not test for
+//     negative values: a C enum whose enumerators are all non-negative may be
+//     given an unsigned underlying type, which makes `value < 0` always false.
+//
+// Naming: unlike the other enums in this API (for example
+// `LiteRtLmSamplerType` / `kLiteRtLmSamplerTypeTopK`), the enumerators here are
+// deliberately prefixed with `kLiteRtLmStatus` rather than the full type name
+// `kLiteRtLmStatusCode`, to keep the very frequently used constants readable.
+// This is an intentional exception; do not "fix" it, as renaming would be a
+// source-breaking change for all consumers.
+//
+// Added in version 0.2.0.
+typedef enum LiteRtLmStatusCode {
+  kLiteRtLmStatusOk = 0,
+  kLiteRtLmStatusCancelled = 1,
+  kLiteRtLmStatusUnknown = 2,
+  kLiteRtLmStatusInvalidArgument = 3,
+  kLiteRtLmStatusDeadlineExceeded = 4,
+  kLiteRtLmStatusNotFound = 5,
+  kLiteRtLmStatusAlreadyExists = 6,
+  kLiteRtLmStatusPermissionDenied = 7,
+  kLiteRtLmStatusResourceExhausted = 8,
+  kLiteRtLmStatusFailedPrecondition = 9,
+  kLiteRtLmStatusAborted = 10,
+  kLiteRtLmStatusOutOfRange = 11,
+  kLiteRtLmStatusUnimplemented = 12,
+  kLiteRtLmStatusInternal = 13,
+  kLiteRtLmStatusUnavailable = 14,
+  kLiteRtLmStatusDataLoss = 15,
+  kLiteRtLmStatusUnauthenticated = 16,
+} LiteRtLmStatusCode;
+
+// =============================================================================
+// BREAKING BEHAVIOR CHANGE IN 1.0.0
+// =============================================================================
+//
+// Up to and including 0.2.0, the `int`-returning functions below reported ALL
+// failures as `-1`. As of 1.0.0, they return a canonical `LiteRtLmStatusCode`
+// instead, so a failure is now reported as a POSITIVE value (1-16) and `-1` is
+// never returned.
+//
+// Their signatures are unchanged, so this does NOT produce a compile or link
+// error. Code that tests `ret == -1` will silently stop detecting failures.
+//
+//   MIGRATE:  if (ret == -1) { ... }
+//   TO:       if (ret != kLiteRtLmStatusOk) { ... }
+//
+// Affected functions:
+//   - litert_lm_session_config_set_lora_path
+//   - litert_lm_session_config_set_audio_lora_path
+//   - litert_lm_engine_settings_set_supported_lora_ranks
+//   - litert_lm_engine_settings_set_supported_audio_lora_ranks
+//   - litert_lm_session_save_checkpoint
+//   - litert_lm_session_rewind_to_checkpoint
+//   - litert_lm_session_rewind_to_step
+//   - litert_lm_session_run_prefill
+//   - litert_lm_session_run_decode_async
+//   - litert_lm_session_generate_content_stream
+//   - litert_lm_token_union_get_ids
+//   - litert_lm_conversation_send_message_stream
+//   - litert_lm_experimental_engine_update_gpu_enable_metal_residency_set
+//
+// Functions that return a VALUE rather than a status (for example
+// `litert_lm_conversation_get_token_count`) are unaffected.
+// =============================================================================
+
 // Returns the last error message recorded on the calling thread.
 //
 // Extraction Precondition & Expectations:
@@ -123,16 +206,21 @@ const char* litert_lm_get_last_error_message(void);
 // from the same thread that executed the failed API function.
 //
 // Returns:
-// The integer error code for the last failure on the calling thread, or 0 (kOk)
-// if no error has occurred on this thread or if the error state has been
-// cleared.
+// The status code for the last failure on the calling thread, or
+// `kLiteRtLmStatusOk` (0) if no error has occurred on this thread or if the
+// error state has been cleared. The returned value is always one of the
+// `LiteRtLmStatusCode` enumerators.
+//
+// The return type is `int` rather than `LiteRtLmStatusCode` so that the ABI
+// does not depend on the compiler's choice of underlying type for the enum,
+// which keeps this function easy to bind from other languages.
 //
 // Added in version 0.2.0.
 LITERT_LM_C_API_EXPORT
 int litert_lm_get_last_error_code(void);
 
 // Clears the last error recorded on the calling thread, resetting the error
-// message to NULL and the error code to 0 (kOk).
+// message to NULL and the error code to `kLiteRtLmStatusOk` (0).
 //
 // Clearing Logic & Expectations:
 // Calling this function is optional during normal API usage since return

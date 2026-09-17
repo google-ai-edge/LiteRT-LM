@@ -436,7 +436,8 @@ const char* litert_lm_json_response_get_string(
 // @param callback The callback function to receive response chunks.
 // @param callback_data A pointer to user data that will be passed to the
 // callback.
-// @return 0 on success, non-zero on failure to start the stream.
+// @return kLiteRtLmStatusOk (0) on success, or a LiteRtLmStatusCode error code
+//   on failure to start the stream.
 //
 // Added in version 0.1.0.
 LITERT_LM_C_API_EXPORT
