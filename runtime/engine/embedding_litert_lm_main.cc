@@ -479,7 +479,7 @@ absl::Status MainHelper(int argc, char** argv) {
     if (absl::GetFlag(FLAGS_report_peak_memory_footprint)) {
       auto mem_usage = tflite::profiling::memory::GetMemoryUsage();
       if (mem_usage.IsSupported()) {
-        double peak_ram_mb = mem_usage.mem_footprint_kb / 1024.0;
+        double peak_ram_mb = mem_usage.private_footprint_bytes / 1024.0;
         ABSL_LOG(INFO) << absl::StrFormat("Peak system ram usage: %.2f MB",
                                           peak_ram_mb);
         std::cout << absl::StrFormat("Peak system ram usage: %.2f MB\n",
