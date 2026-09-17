@@ -19,6 +19,12 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#if defined(__APPLE__)
+#include "error_reporter.h"  // NOLINT
+#else
+#include "c/error_reporter.h"
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -29,6 +35,9 @@ extern "C" {
 // _WIN32 is defined as 1 when the compilation target is 32-bit ARM, 64-bit ARM,
 // x86, x64, or ARM64EC. Otherwise, undefined.
 // https://learn.microsoft.com/en-us/cpp/preprocessor/predefined-macros
+//
+// Guarded because `error_reporter.h`, included above, defines the same macro.
+#ifndef LITERT_LM_C_API_EXPORT
 #if defined(_WIN32)
 #define LITERT_LM_C_API_EXPORT __declspec(dllexport)
 #else
@@ -36,6 +45,7 @@ extern "C" {
 // -fvisibility=hidden.
 #define LITERT_LM_C_API_EXPORT __attribute__((visibility("default")))
 #endif
+#endif  // LITERT_LM_C_API_EXPORT
 
 // Opaque pointer for the LiteRT LM Engine.
 //
@@ -259,7 +269,8 @@ void litert_lm_session_config_delete(LiteRtLmSessionConfig* config);
 // Sets the path to the LoRA weights file.
 // @param config The config to modify.
 // @param lora_path The path to the text LoRA weights file.
-// @return 0 on success, non-zero on failure.
+// @return kLiteRtLmStatusOk (0) on success, or a LiteRtLmStatusCode error code
+//   on failure.
 //
 // Added in version 0.1.0.
 LITERT_LM_C_API_EXPORT
@@ -269,7 +280,8 @@ int litert_lm_session_config_set_lora_path(LiteRtLmSessionConfig* config,
 // Sets the path to the Audio LoRA weights file.
 // @param config The config to modify.
 // @param audio_lora_path The path to the audio LoRA weights file.
-// @return 0 on success, non-zero on failure.
+// @return kLiteRtLmStatusOk (0) on success, or a LiteRtLmStatusCode error code
+//   on failure.
 //
 // Added in version 0.1.0.
 LITERT_LM_C_API_EXPORT
@@ -777,7 +789,8 @@ void litert_lm_engine_settings_set_lora_rank(LiteRtLmEngineSettings* settings,
 // @param settings The engine settings.
 // @param lora_ranks An array of supported LoRA ranks.
 // @param num_ranks The number of ranks in the array.
-// @return 0 on success, non-zero on failure.
+// @return kLiteRtLmStatusOk (0) on success, or a LiteRtLmStatusCode error code
+//   on failure.
 //
 // Added in version 0.1.0.
 LITERT_LM_C_API_EXPORT
@@ -799,7 +812,8 @@ void litert_lm_engine_settings_set_audio_lora_rank(
 // @param settings The engine settings.
 // @param lora_ranks An array of supported Audio LoRA ranks.
 // @param num_ranks The number of ranks in the array.
-// @return 0 on success, non-zero on failure.
+// @return kLiteRtLmStatusOk (0) on success, or a LiteRtLmStatusCode error code
+//   on failure.
 //
 // Added in version 0.1.0.
 LITERT_LM_C_API_EXPORT
@@ -876,7 +890,8 @@ void litert_lm_session_cancel_process(LiteRtLmSession* session);
 //
 // @param session The session to save checkpoint for.
 // @param label Label for the checkpoint.
-// @return 0 on success, non-zero on failure.
+// @return kLiteRtLmStatusOk (0) on success, or a LiteRtLmStatusCode error code
+//   on failure.
 LITERT_LM_C_API_EXPORT
 int litert_lm_session_save_checkpoint(LiteRtLmSession* session,
                                       const char* label);
@@ -885,7 +900,8 @@ int litert_lm_session_save_checkpoint(LiteRtLmSession* session,
 //
 // @param session The session to rewind.
 // @param label Label of the checkpoint to rewind to.
-// @return 0 on success, non-zero on failure.
+// @return kLiteRtLmStatusOk (0) on success, or a LiteRtLmStatusCode error code
+//   on failure.
 LITERT_LM_C_API_EXPORT
 int litert_lm_session_rewind_to_checkpoint(LiteRtLmSession* session,
                                            const char* label);
@@ -894,7 +910,8 @@ int litert_lm_session_rewind_to_checkpoint(LiteRtLmSession* session,
 //
 // @param session The session to rewind.
 // @param step The step number to rewind to.
-// @return 0 on success, non-zero on failure.
+// @return kLiteRtLmStatusOk (0) on success, or a LiteRtLmStatusCode error code
+//   on failure.
 LITERT_LM_C_API_EXPORT
 int litert_lm_session_rewind_to_step(LiteRtLmSession* session, int step);
 
@@ -906,7 +923,8 @@ int litert_lm_session_rewind_to_step(LiteRtLmSession* session, int step);
 // @param inputs An array of InputData structs representing the multimodal
 //   input.
 // @param num_inputs The number of InputData structs in the array.
-// @return 0 on success, non-zero on failure.
+// @return kLiteRtLmStatusOk (0) on success, or a LiteRtLmStatusCode error code
+//   on failure.
 //
 // Added in version 0.1.0.
 LITERT_LM_C_API_EXPORT
@@ -1228,7 +1246,8 @@ typedef void (*LiteRtLmStreamCallback)(void* callback_data,
 // @param callback The callback function to receive response chunks.
 // @param callback_data A pointer to user data that will be passed to the
 // callback.
-// @return 0 on success, non-zero on failure.
+// @return kLiteRtLmStatusOk (0) on success, or a LiteRtLmStatusCode error code
+//   on failure.
 //
 // Added in version 0.1.0.
 LITERT_LM_C_API_EXPORT
@@ -1248,7 +1267,8 @@ int litert_lm_session_run_decode_async(LiteRtLmSession* session,
 // @param callback The callback function to receive response chunks.
 // @param callback_data A pointer to user data that will be passed to the
 // callback.
-// @return 0 on success, non-zero on failure to start the stream.
+// @return kLiteRtLmStatusOk (0) on success, or a LiteRtLmStatusCode error code
+//   on failure to start the stream.
 //
 // Added in version 0.1.0.
 LITERT_LM_C_API_EXPORT
@@ -1369,7 +1389,8 @@ const char* litert_lm_token_union_get_string(
 //   The received pointer is valid only for the lifetime of the `token_union`
 //   object.
 // @param out_num_tokens A pointer to receive the number of token ids.
-// @return 0 on success, non-zero if the type is not kLiteRtLmTokenUnionTypeIds.
+// @return kLiteRtLmStatusOk (0) on success, or kLiteRtLmStatusInvalidArgument
+//   if the type is not kLiteRtLmTokenUnionTypeIds or arguments are invalid.
 //
 // Added in version 0.1.0.
 LITERT_LM_C_API_EXPORT
