@@ -715,6 +715,40 @@ class EngineTest(LiteRtLmTestBase):
       for score in scoring_responses.token_scores[0]:
         self.assertIsInstance(score, float)
 
+  @parameterized.parameters(
+      ("Hello", " world", " again"),
+      ("The", " sky", " is blue"),
+      ("The capital of France", " is", " Paris"),
+  )
+  def test_session_api_scoring_matches_prefill(self, prefix, middle, target):
+    with self._create_engine(max_num_tokens=32) as engine:
+      prefix_ids = engine.tokenize(prefix)
+      middle_ids = engine.tokenize(middle)
+      target_ids = engine.tokenize(target)
+      self.assertEqual(
+          engine.tokenize(prefix + middle), prefix_ids + middle_ids
+      )
+      self.assertEqual(
+          engine.tokenize(middle + target), middle_ids + target_ids
+      )
+
+      with engine.create_session(apply_prompt_template=False) as session:
+        session.run_prefill([prefix])
+        responses = session.run_text_scoring([middle + target])
+        expected_scores = responses.token_scores[0][len(middle_ids) :]
+      self.assertLen(expected_scores, len(target_ids))
+
+      # Moving context from scoring to prefill must preserve the target scores.
+      for context in ([prefix + middle], [prefix, middle]):
+        with self.subTest(context=context):
+          with engine.create_session(apply_prompt_template=False) as session:
+            for text in context:
+              session.run_prefill([text])
+            responses = session.run_text_scoring([target])
+          self.assertSequenceAlmostEqual(
+              responses.token_scores[0], expected_scores, places=5
+          )
+
   def test_session_api_run_text_scoring_no_token_lengths(self):
     with (
         self._create_engine() as engine,

@@ -353,17 +353,7 @@ class LockedLlmExecutor : public LlmExecutor {
 
   absl::StatusOr<TensorBuffer> DecodeLogits(
       const ExecutorInputs& inputs) override {
-    ABSL_ASSIGN_OR_RETURN(int current_step, llm_executor_->GetCurrentStep());
-    ABSL_ASSIGN_OR_RETURN(const ProcessedTokens* processed_tokens,
-                          llm_executor_->GetProcessedTokens());
-    // If the current step is pointing at right after the pending token, set
-    // the current step to the previous step. This ensures that the current
-    // step points to the token to be processed, as expected by
-    // llm_executor_->DecodeLogits().
-    if (current_step == processed_tokens->TokenCount() &&
-        !processed_tokens->GetNextUnprocessedToken().token.empty()) {
-      ABSL_RETURN_IF_ERROR(llm_executor_->SetCurrentStep(current_step - 1));
-    }
+    // The executor already accounts for the pending token's position.
     ABSL_RETURN_IF_ERROR(MaybeTruncateProcessedTokens());
     return llm_executor_->DecodeLogits(inputs);
   }
