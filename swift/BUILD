@@ -111,6 +111,7 @@ swift_library(
 )
 
 C_LITERT_LM_PUBLIC_HDRS = [
+    "//c:api_export.h",
     "//c:conversation.h",
     "//c:embedding_engine.h",
     "//c:engine.h",
@@ -189,6 +190,7 @@ genrule(
        # Copy the universal dylib
        cp $(location :CLiteRTLM_universal) CLiteRTLM_mac/libCLiteRTLM_mac.dylib
        # Copy the headers
+       cp $(location //c:api_export.h) CLiteRTLM_mac/Headers/
        cp $(location //c:conversation.h) CLiteRTLM_mac/Headers/
        cp $(location //c:embedding_engine.h) CLiteRTLM_mac/Headers/
        cp $(location //c:engine.h) CLiteRTLM_mac/Headers/
@@ -198,6 +200,7 @@ genrule(
        # Create module map
        cat << 'EOF' > CLiteRTLM_mac/Headers/module.modulemap
 module CLiteRTLM {
+   header "api_export.h"
    header "conversation.h"
    header "embedding_engine.h"
    header "engine.h"

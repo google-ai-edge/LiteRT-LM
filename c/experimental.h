@@ -18,8 +18,10 @@
 #include <stdbool.h>
 
 #if defined(__APPLE__)
-#include "engine.h"  // NOLINT
+#include "api_export.h"  // NOLINT
+#include "engine.h"      // NOLINT
 #else
+#include "c/api_export.h"
 #include "c/engine.h"
 #endif
 
@@ -69,6 +71,10 @@ typedef struct LiteRtLmSessionDebugInfo LiteRtLmSessionDebugInfo;
 // tracing backend enabled (LITERT_LM_DEBUGGER_ENABLED=1).
 //
 // @return 1 if debugger is enabled at compile-time, 0 otherwise.
+//
+// NOTE: this is a boolean predicate, NOT a `LiteRtLmStatusCode`. Unlike the
+// status-returning functions in this API, 0 here means "debugger disabled",
+// not "success".
 //
 // Added in version 0.2.0.
 LITERT_LM_C_API_EXPORT

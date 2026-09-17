@@ -30,6 +30,7 @@
 #include "c/conversation.h"
 #include "c/conversation_internal.h"
 #include "c/engine_internal.h"
+#include "c/error_reporter.h"
 #include "c/experimental.h"
 #include "runtime/conversation/conversation.h"
 #include "runtime/conversation/io_types.h"
@@ -515,10 +516,10 @@ TEST(EngineCTest, CreateConversationConfig) {
                                                                true);
   EXPECT_EQ(litert_lm_experimental_engine_update_gpu_enable_metal_residency_set(
                 engine.get(), true),
-            0);
+            kLiteRtLmStatusOk);
   EXPECT_EQ(litert_lm_experimental_engine_update_gpu_enable_metal_residency_set(
                 engine.get(), false),
-            0);
+            kLiteRtLmStatusOk);
 }
 
 TEST(EngineCTest, CreateConversationConfigWithNoSamplerParams) {
@@ -1016,7 +1017,8 @@ TEST(EngineCTest, TokenizerTest) {
       const int* ids;
       size_t num_ids;
       EXPECT_EQ(
-          litert_lm_token_union_get_ids(start_token.get(), &ids, &num_ids), 0);
+          litert_lm_token_union_get_ids(start_token.get(), &ids, &num_ids),
+          kLiteRtLmStatusOk);
       EXPECT_GT(num_ids, 0);
     } else {
       EXPECT_NE(litert_lm_token_union_get_string(start_token.get()), nullptr);
@@ -1038,7 +1040,8 @@ TEST(EngineCTest, TokenizerTest) {
         const int* ids;
         size_t num_ids;
         EXPECT_EQ(
-            litert_lm_token_union_get_ids(stop_token.get(), &ids, &num_ids), 0);
+            litert_lm_token_union_get_ids(stop_token.get(), &ids, &num_ids),
+            kLiteRtLmStatusOk);
         EXPECT_GT(num_ids, 0);
       } else {
         EXPECT_NE(litert_lm_token_union_get_string(stop_token.get()), nullptr);
@@ -1599,7 +1602,7 @@ TEST(EngineCTest, GenerateContentStream) {
   StreamCallbackData callback_data;
   int result = litert_lm_session_generate_content_stream(
       session.get(), inputs, 1, &StreamCallback, &callback_data);
-  ASSERT_EQ(result, 0);
+  ASSERT_EQ(result, kLiteRtLmStatusOk);
 
   callback_data.done.WaitForNotification();
 
@@ -1646,7 +1649,7 @@ TEST(EngineCTest, SessionGenerateContentStreamAndCancel) {
   StreamCallbackData callback_data;
   int result = litert_lm_session_generate_content_stream(
       session.get(), inputs, 1, &StreamCallback, &callback_data);
-  ASSERT_EQ(result, 0);
+  ASSERT_EQ(result, kLiteRtLmStatusOk);
 
   litert_lm_session_cancel_process(session.get());
 
@@ -1685,7 +1688,7 @@ TEST(EngineCTest, ConversationSendMessageStream) {
   int result = litert_lm_conversation_send_message_stream(
       conversation.get(), message_json, /*extra_context=*/nullptr,
       /*optional_args=*/nullptr, &StreamCallback, &callback_data);
-  ASSERT_EQ(result, 0);
+  ASSERT_EQ(result, kLiteRtLmStatusOk);
 
   callback_data.done.WaitForNotification();
   EXPECT_GT(callback_data.response.length(), 0);
@@ -1720,7 +1723,7 @@ TEST(EngineCTest, ConversationSendMessageStreamWithExtraContext) {
   int result = litert_lm_conversation_send_message_stream(
       conversation.get(), message_json, /*extra_context=*/extra_context,
       /*optional_args=*/nullptr, &StreamCallback, &callback_data);
-  ASSERT_EQ(result, 0);
+  ASSERT_EQ(result, kLiteRtLmStatusOk);
 
   callback_data.done.WaitForNotification();
   EXPECT_GT(callback_data.response.length(), 0);
@@ -1798,7 +1801,7 @@ TEST(EngineCTest, ConversationSendMessageStreamWithOptionalArgs) {
   int result = litert_lm_conversation_send_message_stream(
       conversation.get(), message_json, /*extra_context=*/nullptr,
       optional_args.get(), &StreamCallback, &callback_data);
-  ASSERT_EQ(result, 0);
+  ASSERT_EQ(result, kLiteRtLmStatusOk);
 
   callback_data.done.WaitForNotification();
   EXPECT_GT(callback_data.response.length(), 0);
@@ -1832,7 +1835,7 @@ TEST(EngineCTest, ConversationSendMessageStreamAndCancel) {
   int result = litert_lm_conversation_send_message_stream(
       conversation.get(), message_json, /*extra_context=*/nullptr,
       /*optional_args=*/nullptr, &StreamCallback, &callback_data);
-  ASSERT_EQ(result, 0);
+  ASSERT_EQ(result, kLiteRtLmStatusOk);
 
   litert_lm_conversation_cancel_process(conversation.get());
 
@@ -1947,7 +1950,7 @@ TEST(EngineCTest, RunPrefillSuccess) {
   const LiteRtLmInputData* inputs[] = {input_data.get()};
 
   int prefill_result = litert_lm_session_run_prefill(session.get(), inputs, 1);
-  EXPECT_EQ(prefill_result, 0);
+  EXPECT_EQ(prefill_result, kLiteRtLmStatusOk);
 }
 
 TEST(EngineCTest, RunPrefillAndDecode) {

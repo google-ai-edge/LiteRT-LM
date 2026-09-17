@@ -19,22 +19,14 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#ifdef __cplusplus
-extern "C" {
+#if defined(__APPLE__)
+#include "api_export.h"  // NOLINT
+#else
+#include "c/api_export.h"
 #endif
 
-// For Windows, __declspec( dllexport ) is required to export function in .dll.
-// https://learn.microsoft.com/en-us/cpp/cpp/using-dllimport-and-dllexport-in-cpp-classes?view=msvc-170
-//
-// _WIN32 is defined as 1 when the compilation target is 32-bit ARM, 64-bit ARM,
-// x86, x64, or ARM64EC. Otherwise, undefined.
-// https://learn.microsoft.com/en-us/cpp/preprocessor/predefined-macros
-#if defined(_WIN32)
-#define LITERT_LM_C_API_EXPORT __declspec(dllexport)
-#else
-// Ensure symbols are exported when building the shared library with
-// -fvisibility=hidden.
-#define LITERT_LM_C_API_EXPORT __attribute__((visibility("default")))
+#ifdef __cplusplus
+extern "C" {
 #endif
 
 // Opaque pointer for the LiteRT LM Engine.
