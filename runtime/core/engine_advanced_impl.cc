@@ -49,9 +49,7 @@
 #include "runtime/framework/resource_management/serial_execution_manager.h"
 #include "runtime/framework/resource_management/threaded_execution_manager.h"
 #include "runtime/proto/llm_metadata.pb.h"
-#include "runtime/proto/sampler_params.pb.h"
 #include "runtime/util/litert_util.h"
-#include "runtime/util/logging.h"
 #include "runtime/util/status_macros.h"  // NOLINT
 #include "support/tokenizer/tokenizer.h"
 
@@ -72,9 +70,9 @@ std::optional<int> GetVisionTokensPerImageFromMetadata(
   int pooling_kernel_size = 1;
   if (model_type.has_gemma4()) {
     max_num_patches = model_type.gemma4().max_num_patches();
-    if (model_type.gemma4().pooling_kernel_size() > 0) {
-      pooling_kernel_size = model_type.gemma4().pooling_kernel_size();
-    }
+    pooling_kernel_size = model_type.gemma4().pooling_kernel_size() > 0
+                              ? model_type.gemma4().pooling_kernel_size()
+                              : 3;
   } else if (model_type.has_generic_model()) {
     max_num_patches = model_type.generic_model().max_num_patches();
     if (model_type.generic_model().pooling_kernel_size() > 0) {
@@ -82,9 +80,9 @@ std::optional<int> GetVisionTokensPerImageFromMetadata(
     }
   } else if (model_type.has_lfm2()) {
     max_num_patches = model_type.lfm2().max_num_patches();
-    if (model_type.lfm2().pooling_kernel_size() > 0) {
-      pooling_kernel_size = model_type.lfm2().pooling_kernel_size();
-    }
+    pooling_kernel_size = model_type.lfm2().pooling_kernel_size() > 0
+                              ? model_type.lfm2().pooling_kernel_size()
+                              : 2;
   }
   if (max_num_patches <= 0) {
     return std::nullopt;
