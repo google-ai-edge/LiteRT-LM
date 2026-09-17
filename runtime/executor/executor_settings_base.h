@@ -26,6 +26,7 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "litert/cc/litert_common.h"  // from @litert
 #include "runtime/util/data_stream.h"
 #include "runtime/util/memory_mapped_file.h"
 #include "runtime/util/scoped_file.h"
@@ -59,6 +60,12 @@ std::ostream& operator<<(std::ostream& os, const Backend& backend);
 absl::StatusOr<Backend> GetBackendFromString(absl::string_view backend_str);
 // Returns the string representation of the backend enum.
 std::string GetBackendString(Backend backend);
+
+// Returns the LiteRT hardware accelerator that matches `backend`, for use when
+// compiling auxiliary subgraphs (e.g. logit masking) that must run on the same
+// device as the model. Returns HwAccelerators::kNone for backends that have no
+// LiteRT accelerator equivalent.
+::litert::HwAccelerators GetHwAcceleratorForBackend(Backend backend);
 
 enum class ActivationDataType {
   // Use float32 as the activation data type.

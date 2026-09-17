@@ -41,6 +41,7 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "litert/cc/litert_common.h"  // from @litert
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_layout.h"  // from @litert
@@ -747,8 +748,10 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest, ConstrainedDecodeTest) {
   ExecutorDecodeParams params;
 
   auto constraint = FakeConstraint({2, 3}, /*vocabulary_size=*/262144);
-  ConstrainedDecoder constrained_decoder(&constraint, /*batch_size=*/1);
-  params.SetConstrainedDecoder(&constrained_decoder);
+  ASSERT_OK_AND_ASSIGN(auto constrained_decoder,
+                       ConstrainedDecoder::Create(&constraint, /*batch_size=*/1,
+                                                  env, HwAccelerators::kCpu));
+  params.SetConstrainedDecoder(constrained_decoder.get());
 
   {
     ASSERT_OK_AND_ASSIGN(auto output_tokens, executor->Decode(params));
