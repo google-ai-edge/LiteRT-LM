@@ -14,6 +14,7 @@
 
 #include "runtime/engine/litert_lm_lib.h"
 
+#include <algorithm>
 #include <filesystem>  // NOLINT
 #include <fstream>
 #include <iostream>
@@ -25,9 +26,11 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "absl/log/absl_check.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/strings/escaping.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/time/time.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
@@ -202,6 +205,131 @@ TEST(LiteRtLmLibTest, RunLiteRtLmWithEmptyModelPathReturnsError) {
   settings.model_path = "";
   EXPECT_THAT(RunLiteRtLm(settings),
               StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+// Returns a LitertLmMetrics with one prefill and one decode turn, an "Init
+// Executor" phase of `init_phase` and the given peak memory usage.
+LitertLmMetrics CreateMetrics(absl::Duration init_phase, float peak_mem_mb,
+                              float peak_private_mb) {
+  BenchmarkInfo benchmark_info((proto::BenchmarkParams()));
+  ABSL_CHECK_OK(benchmark_info.InitPhaseRecord(
+      BenchmarkInfo::InitPhase::kExecutor, init_phase));
+  ABSL_CHECK_OK(benchmark_info.TimePrefillTurnStart());
+  ABSL_CHECK_OK(benchmark_info.TimePrefillTurnEnd(/*num_prefill_tokens=*/128));
+  ABSL_CHECK_OK(benchmark_info.TimeDecodeTurnStart());
+  ABSL_CHECK_OK(benchmark_info.TimeDecodeTurnEnd(/*num_decode_tokens=*/32));
+
+  LitertLmMetrics metrics;
+  metrics.benchmark_info = benchmark_info;
+  metrics.peak_mem_mb = peak_mem_mb;
+  metrics.peak_private_mb = peak_private_mb;
+  return metrics;
+}
+
+// Returns the median of the given values, computed independently from the
+// implementation under test.
+double MedianOf(std::vector<double> values) {
+  std::sort(values.begin(), values.end());
+  return values.size() % 2 == 1
+             ? values[values.size() / 2]
+             : (values[values.size() / 2 - 1] + values[values.size() / 2]) / 2;
+}
+
+TEST(ComputeMedianMetricsTest, NoMetrics) {
+  const AggregatedLitertLmMetrics aggregated = ComputeMedianMetrics({});
+
+  EXPECT_EQ(aggregated.num_iterations, 0);
+  EXPECT_THAT(aggregated.init_phases, testing::IsEmpty());
+  EXPECT_THAT(aggregated.prefill_tokens_per_sec, testing::IsEmpty());
+  EXPECT_THAT(aggregated.decode_tokens_per_sec, testing::IsEmpty());
+  EXPECT_FALSE(aggregated.time_to_first_token_sec.has_value());
+  EXPECT_FALSE(aggregated.peak_mem_mb.has_value());
+  EXPECT_FALSE(aggregated.peak_private_mb.has_value());
+}
+
+TEST(ComputeMedianMetricsTest, OddNumberOfIterations) {
+  const std::vector<LitertLmMetrics> metrics = {
+      CreateMetrics(absl::Milliseconds(300), /*peak_mem_mb=*/300.0f,
+                    /*peak_private_mb=*/30.0f),
+      CreateMetrics(absl::Milliseconds(100), /*peak_mem_mb=*/100.0f,
+                    /*peak_private_mb=*/10.0f),
+      CreateMetrics(absl::Milliseconds(200), /*peak_mem_mb=*/200.0f,
+                    /*peak_private_mb=*/20.0f),
+  };
+
+  const AggregatedLitertLmMetrics aggregated = ComputeMedianMetrics(metrics);
+
+  EXPECT_EQ(aggregated.num_iterations, 3);
+  EXPECT_THAT(
+      aggregated.init_phases,
+      testing::ElementsAre(testing::Pair(
+          BenchmarkInfo::InitPhaseToString(BenchmarkInfo::InitPhase::kExecutor),
+          absl::Milliseconds(200))));
+  EXPECT_EQ(aggregated.peak_mem_mb, 200.0f);
+  EXPECT_EQ(aggregated.peak_private_mb, 20.0f);
+
+  std::vector<double> prefill_speeds;
+  std::vector<double> decode_speeds;
+  std::vector<double> times_to_first_token;
+  for (const LitertLmMetrics& metric : metrics) {
+    prefill_speeds.push_back(metric.benchmark_info->GetPrefillTokensPerSec(0));
+    decode_speeds.push_back(metric.benchmark_info->GetDecodeTokensPerSec(0));
+    times_to_first_token.push_back(
+        metric.benchmark_info->GetTimeToFirstToken());
+  }
+  EXPECT_THAT(aggregated.prefill_tokens_per_sec,
+              testing::ElementsAre(MedianOf(prefill_speeds)));
+  EXPECT_THAT(aggregated.decode_tokens_per_sec,
+              testing::ElementsAre(MedianOf(decode_speeds)));
+  ASSERT_TRUE(aggregated.time_to_first_token_sec.has_value());
+  EXPECT_EQ(*aggregated.time_to_first_token_sec,
+            MedianOf(times_to_first_token));
+}
+
+TEST(ComputeMedianMetricsTest, EvenNumberOfIterationsAveragesMiddleValues) {
+  const std::vector<LitertLmMetrics> metrics = {
+      CreateMetrics(absl::Milliseconds(100), /*peak_mem_mb=*/100.0f,
+                    /*peak_private_mb=*/10.0f),
+      CreateMetrics(absl::Milliseconds(400), /*peak_mem_mb=*/400.0f,
+                    /*peak_private_mb=*/40.0f),
+      CreateMetrics(absl::Milliseconds(200), /*peak_mem_mb=*/200.0f,
+                    /*peak_private_mb=*/20.0f),
+      CreateMetrics(absl::Milliseconds(300), /*peak_mem_mb=*/300.0f,
+                    /*peak_private_mb=*/30.0f),
+  };
+
+  const AggregatedLitertLmMetrics aggregated = ComputeMedianMetrics(metrics);
+
+  EXPECT_EQ(aggregated.num_iterations, 4);
+  EXPECT_THAT(
+      aggregated.init_phases,
+      testing::ElementsAre(testing::Pair(
+          BenchmarkInfo::InitPhaseToString(BenchmarkInfo::InitPhase::kExecutor),
+          absl::Milliseconds(250))));
+  EXPECT_EQ(aggregated.peak_mem_mb, 250.0f);
+  EXPECT_EQ(aggregated.peak_private_mb, 25.0f);
+}
+
+TEST(ComputeMedianMetricsTest, MetricsWithoutBenchmarkInfoAreSkipped) {
+  std::vector<LitertLmMetrics> metrics = {
+      CreateMetrics(absl::Milliseconds(100), /*peak_mem_mb=*/0.0f,
+                    /*peak_private_mb=*/0.0f),
+      CreateMetrics(absl::Milliseconds(200), /*peak_mem_mb=*/0.0f,
+                    /*peak_private_mb=*/0.0f),
+  };
+  metrics.push_back(LitertLmMetrics());
+
+  const AggregatedLitertLmMetrics aggregated = ComputeMedianMetrics(metrics);
+
+  EXPECT_EQ(aggregated.num_iterations, 3);
+  EXPECT_THAT(
+      aggregated.init_phases,
+      testing::ElementsAre(testing::Pair(
+          BenchmarkInfo::InitPhaseToString(BenchmarkInfo::InitPhase::kExecutor),
+          absl::Milliseconds(150))));
+  // Peak memory is not reported unless --report_peak_memory_footprint is set.
+  EXPECT_FALSE(aggregated.peak_mem_mb.has_value());
+  EXPECT_FALSE(aggregated.peak_private_mb.has_value());
 }
 
 // Following tests are for various model file metadata and tokenizer types.

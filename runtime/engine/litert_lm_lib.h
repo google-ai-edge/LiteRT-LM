@@ -26,11 +26,13 @@
 #include <vector>
 
 #include "absl/base/log_severity.h"  // from @com_google_absl
+#include "absl/container/btree_map.h"  // from @com_google_absl
 #include "absl/log/log_entry.h"  // from @com_google_absl
 #include "absl/log/log_sink.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
+#include "absl/time/time.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "runtime/components/constrained_decoding/no_repeat_ngram_config.h"
 #include "runtime/components/constrained_decoding/repetition_penalty_config.h"
@@ -152,6 +154,33 @@ struct LitertLmMetrics {
   float peak_mem_mb = 0.0f;
   float peak_private_mb = 0.0f;
 };
+
+// Aggregated (median) statistics of the metrics collected over multiple
+// iterations of the same benchmark. Metrics which were not reported by any
+// iteration are left empty / unset.
+struct AggregatedLitertLmMetrics {
+  // The number of iterations the statistics are computed from.
+  int num_iterations = 0;
+  // Median duration of each initialization phase, keyed by the phase name.
+  absl::btree_map<std::string, absl::Duration> init_phases;
+  // Median duration of each profiling mark, keyed by the mark name.
+  absl::btree_map<std::string, absl::Duration> mark_durations;
+  // Median time to the first token, in seconds.
+  std::optional<double> time_to_first_token_sec;
+  // Median prefill / decode speed, in tokens per second, indexed by the turn
+  // index within an iteration.
+  std::vector<double> prefill_tokens_per_sec;
+  std::vector<double> decode_tokens_per_sec;
+  // Median peak memory usage, in MB.
+  std::optional<float> peak_mem_mb;
+  std::optional<float> peak_private_mb;
+};
+
+// Computes the median of each benchmark metric across the per-iteration
+// metrics collected by RunLiteRtLm. For an even number of values, the median is
+// the average of the two middle values.
+AggregatedLitertLmMetrics ComputeMedianMetrics(
+    const std::vector<LitertLmMetrics>& metrics);
 
 // Builds the content list from the input data.
 absl::StatusOr<nlohmann::json> BuildContentList(
