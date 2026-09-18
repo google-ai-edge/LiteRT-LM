@@ -18,6 +18,7 @@
 #include <fstream>
 #include <ios>
 #include <memory>
+#include <optional>
 #include <string>
 
 #include <gmock/gmock.h>
@@ -25,6 +26,8 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
+#include "runtime/components/tool_use/parser_utils.h"
+#include "runtime/conversation/io_types.h"
 #include "runtime/util/memory_mapped_file.h"
 #include "runtime/util/test_utils.h"  // NOLINT
 
@@ -186,6 +189,40 @@ TEST(DataUtilsTest, NormalizeMessageContent_ObjectContent) {
   const ordered_json expected = {
       {"role", "user"}, {"content", {{{"type", "text"}, {"text", "Hello"}}}}};
   EXPECT_EQ(NormalizeMessageContent(msg), expected);
+}
+
+TEST(DataUtilsTest, ResponseTextToMessage_WithoutTools) {
+  ASSERT_OK_AND_ASSIGN(
+      const ordered_json message,
+      ResponseTextToMessage("Hello world", /*preface=*/std::nullopt,
+                            "```tool_code", "```", SyntaxType::kJson,
+                            /*options=*/{}));
+  const ordered_json expected = {
+      {"role", "assistant"},
+      {"content", {{{"type", "text"}, {"text", "Hello world"}}}}};
+  EXPECT_EQ(message, expected);
+}
+
+TEST(DataUtilsTest, ResponseTextToMessage_WithTools) {
+  Preface preface = JsonPreface{
+      .tools = ordered_json::array(
+          {{{"type", "function"}, {"function", {{"name", "get_weather"}}}}}),
+  };
+  ASSERT_OK_AND_ASSIGN(
+      const ordered_json message,
+      ResponseTextToMessage(
+          R"(Let me check that.```tool_code
+{"name": "get_weather", "arguments": {"city": "Mountain View"}}
+```)",
+          preface, "```tool_code", "```", SyntaxType::kJson, /*options=*/{}));
+  EXPECT_EQ(message["role"], "assistant");
+  ASSERT_TRUE(message.contains("content"));
+  EXPECT_EQ(message["content"],
+            ordered_json::array(
+                {{{"type", "text"}, {"text", "Let me check that."}}}));
+  ASSERT_TRUE(message.contains("tool_calls"));
+  ASSERT_EQ(message["tool_calls"].size(), 1);
+  EXPECT_EQ(message["tool_calls"][0]["function"]["name"], "get_weather");
 }
 
 }  // namespace

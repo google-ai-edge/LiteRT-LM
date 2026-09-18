@@ -16,9 +16,13 @@
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_CONVERSATION_MODEL_DATA_PROCESSOR_DATA_UTILS_H_
 
 #include <memory>
+#include <optional>
 
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "nlohmann/json_fwd.hpp"  // from @nlohmann_json
+#include "runtime/components/tool_use/parser_utils.h"
+#include "runtime/conversation/io_types.h"
 #include "runtime/util/memory_mapped_file.h"
 
 namespace litert::lm {
@@ -70,6 +74,15 @@ nlohmann::ordered_json NormalizeContent(const nlohmann::ordered_json& content);
 // unchanged.
 nlohmann::ordered_json NormalizeMessageContent(
     const nlohmann::ordered_json& message);
+
+// Converts a raw model response text into an assistant Message JSON object.
+// If `preface` contains non-empty tools, parses text and tool calls using the
+// provided syntax and parser options; otherwise, wraps the response text into a
+// standard text content array.
+absl::StatusOr<nlohmann::ordered_json> ResponseTextToMessage(
+    absl::string_view response_text, const std::optional<Preface>& preface,
+    absl::string_view code_fence_start, absl::string_view code_fence_end,
+    SyntaxType syntax_type, const ParserOptions& options);
 
 }  // namespace litert::lm
 

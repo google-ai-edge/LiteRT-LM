@@ -54,9 +54,14 @@ cc_library(
     hdrs = ["data_utils.h"],
     deps = [
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
         "@nlohmann_json//:json",
+        "//runtime/components/tool_use:parser_utils",
+        "//runtime/conversation:io_types",
+        "//runtime/util:litert_status_util",
         "//runtime/util:memory_mapped_file",
     ],
 )
@@ -70,6 +75,8 @@ cc_test(
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings:string_view",
         "@nlohmann_json//:json",
+        "//runtime/components/tool_use:parser_utils",
+        "//runtime/conversation:io_types",
         "//runtime/util:memory_mapped_file",
         "//runtime/util:test_utils",
     ],
@@ -346,19 +353,18 @@ cc_library(
     srcs = ["qwen3_data_processor.cc"],
     hdrs = ["qwen3_data_processor.h"],
     deps = [
+        ":data_utils",
         ":model_data_processor",
         ":qwen3_data_processor_config",
         "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/memory",
         "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings:string_view",
         "@nlohmann_json//:json",
         "//runtime/components/tool_use:parser_utils",
         "//runtime/conversation:io_types",
         "//runtime/engine:io_types",
-        "//runtime/util:litert_status_util",
     ],
 )
 
@@ -523,6 +529,7 @@ cc_library(
     deps = [
         ":data_utils",
         ":gemma3_data_processor_config",
+        ":generic_data_processor_config",
         ":model_data_processor",
         ":multimodal_processor_helper",
         "@com_google_absl//absl/log:absl_log",

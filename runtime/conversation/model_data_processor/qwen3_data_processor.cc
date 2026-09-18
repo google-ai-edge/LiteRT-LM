@@ -16,22 +16,18 @@
 
 #include <memory>
 #include <optional>
-#include <string>
 #include <utility>
-#include <variant>
 #include <vector>
 
 #include "absl/memory/memory.h"  // from @com_google_absl
-#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
-#include "nlohmann/json_fwd.hpp"  // from @nlohmann_json
 #include "runtime/components/tool_use/parser_utils.h"
 #include "runtime/conversation/io_types.h"
+#include "runtime/conversation/model_data_processor/data_utils.h"
 #include "runtime/conversation/model_data_processor/model_data_processor.h"
 #include "runtime/conversation/model_data_processor/qwen3_data_processor_config.h"
 #include "runtime/engine/io_types.h"
-#include "runtime/util/status_macros.h"
 
 namespace litert::lm {
 
@@ -43,29 +39,12 @@ absl::StatusOr<std::unique_ptr<ModelDataProcessor>> Qwen3DataProcessor::Create(
 
 absl::StatusOr<Message> Qwen3DataProcessor::ToMessageImpl(
     const Responses& responses, const Qwen3DataProcessorArguments& args) const {
-  absl::string_view response_text = responses.GetTexts()[0];
-  nlohmann::ordered_json message = {{"role", "assistant"}};
-  if (preface_.has_value() && std::holds_alternative<JsonPreface>(*preface_) &&
-      !std::get<JsonPreface>(*preface_).tools.empty()) {
-    ABSL_ASSIGN_OR_RETURN(
-        nlohmann::ordered_json content_and_tool_calls,
-        ParseTextAndToolCalls(
-            response_text, config_.code_fence_start, config_.code_fence_end,
-            SyntaxType::kJson,
-            {.escape_fence_strings = config_.escape_fence_strings,
-             .tool_code_regex = config_.tool_code_regex,
-             .return_error_on_parse_failure = ReturnErrorOnParseFailure()}));
-    if (content_and_tool_calls.contains("content")) {
-      message["content"] = content_and_tool_calls["content"];
-    }
-    if (content_and_tool_calls.contains("tool_calls")) {
-      message["tool_calls"] = content_and_tool_calls["tool_calls"];
-    }
-  } else {
-    message["content"] = nlohmann::ordered_json::array(
-        {{{"type", "text"}, {"text", std::string(response_text)}}});
-  }
-  return message;
+  return ResponseTextToMessage(
+      responses.GetTexts()[0], preface_, config_.code_fence_start,
+      config_.code_fence_end, SyntaxType::kJson,
+      {.escape_fence_strings = config_.escape_fence_strings,
+       .tool_code_regex = config_.tool_code_regex,
+       .return_error_on_parse_failure = ReturnErrorOnParseFailure()});
 }
 
 absl::string_view Qwen3DataProcessor::CodeFenceStart() const {

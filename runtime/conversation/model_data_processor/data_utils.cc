@@ -15,13 +15,20 @@
 #include "runtime/conversation/model_data_processor/data_utils.h"
 
 #include <memory>
+#include <optional>
 #include <string>
+#include <variant>
 
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/escaping.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
+#include "runtime/components/tool_use/parser_utils.h"
+#include "runtime/conversation/io_types.h"
 #include "runtime/util/memory_mapped_file.h"
+#include "runtime/util/status_macros.h"
 
 namespace litert::lm {
 
@@ -74,6 +81,30 @@ ordered_json NormalizeMessageContent(const ordered_json& message) {
   ordered_json result = message;
   result["content"] = NormalizeContent(message["content"]);
   return result;
+}
+
+absl::StatusOr<ordered_json> ResponseTextToMessage(
+    absl::string_view response_text, const std::optional<Preface>& preface,
+    absl::string_view code_fence_start, absl::string_view code_fence_end,
+    SyntaxType syntax_type, const ParserOptions& options) {
+  ordered_json message = {{"role", "assistant"}};
+  if (preface.has_value() && std::holds_alternative<JsonPreface>(*preface) &&
+      !std::get<JsonPreface>(*preface).tools.empty()) {
+    ABSL_ASSIGN_OR_RETURN(
+        ordered_json content_and_tool_calls,
+        ParseTextAndToolCalls(response_text, code_fence_start, code_fence_end,
+                              syntax_type, options));
+    if (content_and_tool_calls.contains("content")) {
+      message["content"] = content_and_tool_calls["content"];
+    }
+    if (content_and_tool_calls.contains("tool_calls")) {
+      message["tool_calls"] = content_and_tool_calls["tool_calls"];
+    }
+  } else {
+    message["content"] = ordered_json::array(
+        {{{"type", "text"}, {"text", std::string(response_text)}}});
+  }
+  return message;
 }
 
 }  // namespace litert::lm
