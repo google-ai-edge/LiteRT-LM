@@ -281,6 +281,15 @@ class _SectionObject:
   source_path: str | None = None
 
 
+def _get_model_type(section: _SectionObject) -> str | None:
+  values = [item.value for item in section.metadata if item.key == "model_type"]
+  if not values:
+    return None
+  if len(values) != 1 or not isinstance(values[0], str) or not values[0]:
+    raise ValueError("Section must have exactly one string model_type")
+  return values[0]
+
+
 LitertLmFileBuilderT = TypeVar(
     "LitertLmFileBuilderT", bound="LitertLmFileBuilder"
 )

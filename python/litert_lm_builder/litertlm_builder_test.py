@@ -364,6 +364,35 @@ class LitertlmBuilderTest(parameterized.TestCase):
           backend_constraint="foo, bar",
       )
 
+  def test_set_and_remove_backend_constraint(self):
+    """Tests mutating and clearing backend_constraint on an existing section."""
+    tflite_path = self._create_dummy_file(
+        "model.tflite", b"dummy tflite content"
+    )
+    builder = litertlm_builder.LitertLmFileBuilder()
+    self._add_system_metadata(builder)
+    builder.add_tflite_model(
+        tflite_path,
+        litertlm_builder.TfLiteModelType.AUDIO_ENCODER_HW,
+        backend_constraint="cpu",
+    )
+
+    builder.set_backend_constraint("audio_encoder_hw", "npu")
+    ss = self._build_and_read_litertlm(builder)
+    self.assertIn("Key: backend_constraint, Value (String): npu", ss)
+
+    builder.remove_backend_constraint(
+        litertlm_builder.TfLiteModelType.AUDIO_ENCODER_HW
+    )
+    ss = self._build_and_read_litertlm(builder)
+    self.assertNotIn("Key: backend_constraint", ss)
+
+    with self.assertRaises(KeyError):
+      builder.remove_backend_constraint("vision_encoder")
+
+    with self.assertRaisesRegex(ValueError, "Invalid backend constraint"):
+      builder.set_backend_constraint("audio_encoder_hw", "invalid_backend")
+
   def test_add_tflite_model_with_prefer_activation_type(self):
     """Tests that a TFLite model with prefer_activation_type added correctly."""
     tflite_path = self._create_dummy_file(
