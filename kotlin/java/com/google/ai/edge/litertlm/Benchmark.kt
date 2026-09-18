@@ -77,6 +77,9 @@ fun benchmark(
     )
 
   try {
+    // Keep backward compatibility with deprecated ExperimentalFlags.overwritePromptTemplate;
+    // this fallback will be removed when the deprecated property is deleted.
+    @Suppress("DEPRECATION")
     val conversationHandle =
       LiteRtLmJni.nativeCreateConversation(
         enginePointer,

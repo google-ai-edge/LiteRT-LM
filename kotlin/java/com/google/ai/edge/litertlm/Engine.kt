@@ -147,6 +147,9 @@ class Engine(val engineConfig: EngineConfig) : AutoCloseable {
         }
 
       @OptIn(ExperimentalApi::class) // opt-in experimental flags
+      // Keep backward compatibility with deprecated ExperimentalFlags.overwritePromptTemplate;
+      // this fallback will be removed when the deprecated property is deleted.
+      @Suppress("DEPRECATION")
       return Conversation(
         LiteRtLmJni.nativeCreateConversation(
           handle!!, // Using !! is okay. Checked initialization already.
