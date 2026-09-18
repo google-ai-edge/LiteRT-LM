@@ -35,6 +35,7 @@ message LlmModelType {
     MiniCPM5 minicpm5 = 12;
     MiniCpmV4 minicpmv4 = 13;
   }
+  reserved 6, 10;
 }
 
 // The default model type for the generic model.

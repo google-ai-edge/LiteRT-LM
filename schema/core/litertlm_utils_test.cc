@@ -40,6 +40,10 @@ TEST(LitertLmUtilsTest, AnySectionDataTypeToString) {
   EXPECT_EQ(
       AnySectionDataTypeToString(AnySectionDataType_EmbeddingMetadataProto),
       "AnySectionDataType_EmbeddingMetadataProto");
+  EXPECT_EQ(AnySectionDataTypeToString(AnySectionDataType_TtsMetadataProto),
+            "AnySectionDataType_TtsMetadataProto");
+  EXPECT_EQ(AnySectionDataTypeToString(AnySectionDataType_AsrMetadataProto),
+            "AnySectionDataType_AsrMetadataProto");
 }
 
 }  // namespace

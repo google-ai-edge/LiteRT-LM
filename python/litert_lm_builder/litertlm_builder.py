@@ -981,19 +981,7 @@ class LitertLmFileBuilder:
       generic_binary_data_path: str,
       additional_metadata: Optional[list[Metadata]] = None,
   ) -> LitertLmFileBuilderT:
-    """Adds generic binary data to the litertlm file.
-
-    Args:
-      generic_binary_data_path: The path to the generic binary data file.
-      additional_metadata: Additional metadata to add to the sentencepiece
-        tokenizer.
-
-    Returns:
-      The current LitertLmFileBuilder object.
-
-    Raises:
-      FileNotFoundError: If the generic binary data file is not found.
-    """
+    """Adds generic binary data to the litertlm file."""
     if not litertlm_core.path_exists(generic_binary_data_path):
       raise FileNotFoundError(
           f"Generic binary data file not found: {generic_binary_data_path}"
