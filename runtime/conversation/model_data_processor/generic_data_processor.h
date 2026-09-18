@@ -47,14 +47,6 @@ class GenericDataProcessor
   static absl::StatusOr<std::unique_ptr<ModelDataProcessor>> Create(
       GenericDataProcessorConfig config = GenericDataProcessorConfig());
 
-  // Renders a single turn template for the given message and history. Only the
-  // prompt template supporting single turn is valid for this method.
-  absl::StatusOr<SingleTurnTemplateRenderResult> RenderSingleTurnTemplate(
-      std::vector<Message>& history, const Preface& preface,
-      const Message& message, const PromptTemplate& prompt_template,
-      bool current_is_appending_message, bool append_message,
-      std::optional<nlohmann::ordered_json> extra_context) const override;
-
   // Returns the config of the model data processor.
   const GenericDataProcessorConfig& GetConfig() const override {
     return config_;

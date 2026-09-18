@@ -79,13 +79,11 @@ absl::Status FillPrefaceForPromptTemplateInput(
   return absl::OkStatus();
 }
 
-absl::StatusOr<ModelDataProcessor::SingleTurnTemplateRenderResult>
-RenderSingleTurnTemplateCommon(
+absl::StatusOr<SingleTurnTemplateRenderResult> RenderSingleTurnTemplate(
     const ModelDataProcessor& processor, std::vector<Message>& history,
     const Preface& preface, const Message& message,
     const PromptTemplate& prompt_template, bool current_is_appending_message,
-    bool append_message, std::optional<nlohmann::ordered_json> extra_context,
-    bool push_dummy_user_message_to_preface) {
+    bool append_message, std::optional<nlohmann::ordered_json> extra_context) {
   const auto& json_preface = std::get<JsonPreface>(preface);
   std::string prefill_text = "";
   bool is_first_part = false;
@@ -138,9 +136,11 @@ RenderSingleTurnTemplateCommon(
         json_preface, &processor, preface_tmpl_input));
     if (!json_preface.messages.empty() || !json_preface.tools.empty() ||
         !json_preface.extra_context.is_null()) {
-      if (push_dummy_user_message_to_preface) {
-        preface_tmpl_input.messages.push_back(
-            Message{{"role", "user"}, {"content", ""}});
+      if (processor.PushDummyUserMessageToPreface()) {
+        ABSL_ASSIGN_OR_RETURN(nlohmann::ordered_json dummy_message,
+                              processor.MessageToTemplateInput(
+                                  Message{{"role", "user"}, {"content", ""}}));
+        preface_tmpl_input.messages.push_back(dummy_message);
       }
       preface_tmpl_input.add_generation_prompt = false;
 
@@ -177,8 +177,7 @@ RenderSingleTurnTemplateCommon(
                           prompt_template.Apply(tmpl_input));
     prefill_text += new_text;
   }
-  return ModelDataProcessor::SingleTurnTemplateRenderResult{
-      prefill_text, new_is_appending_message};
+  return SingleTurnTemplateRenderResult{prefill_text, new_is_appending_message};
 }
 
 void StripBlobsFromTemplateInput(PromptTemplateInput& input) {

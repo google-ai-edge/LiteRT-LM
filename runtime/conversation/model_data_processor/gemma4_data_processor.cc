@@ -29,7 +29,6 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "runtime/components/constrained_decoding/constraint.h"
-#include "runtime/components/prompt_template.h"
 #include "runtime/conversation/model_data_processor/model_data_processor.h"
 #include "runtime/conversation/model_data_processor/multimodal_processor_helper.h"
 #if !defined(LITERT_LM_FST_CONSTRAINTS_DISABLED)
@@ -39,7 +38,6 @@
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/data_utils.h"
 #include "runtime/conversation/model_data_processor/gemma4_data_processor_config.h"
-#include "runtime/conversation/prompt_utils.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/util/status_macros.h"
 #include "support/preprocessor/audio_preprocessor.h"
@@ -155,18 +153,6 @@ absl::StatusOr<Message> Gemma4DataProcessor::ToMessageImpl(
       {.escape_fence_strings = config_.escape_fence_strings,
        .tool_code_regex = config_.tool_code_regex,
        .return_error_on_parse_failure = ReturnErrorOnParseFailure()});
-}
-
-absl::StatusOr<ModelDataProcessor::SingleTurnTemplateRenderResult>
-Gemma4DataProcessor::RenderSingleTurnTemplate(
-    std::vector<Message>& history, const Preface& preface,
-    const Message& message, const PromptTemplate& prompt_template,
-    bool current_is_appending_message, bool append_message,
-    std::optional<nlohmann::ordered_json> extra_context) const {
-  return RenderSingleTurnTemplateCommon(
-      *this, history, preface, message, prompt_template,
-      current_is_appending_message, append_message, extra_context,
-      /*push_dummy_user_message_to_preface=*/false);
 }
 
 absl::StatusOr<std::unique_ptr<Constraint>>

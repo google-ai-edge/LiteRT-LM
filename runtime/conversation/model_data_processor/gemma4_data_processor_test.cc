@@ -34,6 +34,7 @@
 #include "runtime/conversation/model_data_processor/gemma4_data_processor_config.h"
 #include "runtime/conversation/model_data_processor/model_data_processor.h"
 #include "runtime/conversation/model_data_processor/test_utils.h"
+#include "runtime/conversation/prompt_utils.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/util/test_utils.h"  // NOLINT
 #include "support/tokenizer/tokenizer.h"

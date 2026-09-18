@@ -14,9 +14,15 @@
 
 #include "runtime/conversation/prompt_utils.h"
 
+#include <vector>
+
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "runtime/components/prompt_template.h"
+#include "runtime/conversation/io_types.h"
+#include "runtime/conversation/model_data_processor/gemma3_data_processor.h"
+#include "runtime/util/test_utils.h"  // NOLINT
 
 namespace litert::lm {
 namespace {
@@ -72,6 +78,24 @@ TEST(PromptUtilsTest, StripBlobsFromTemplateInput_ExtraContextMessage) {
   const auto& content = input.extra_context["message"]["content"];
   EXPECT_EQ(content[0]["type"], "image");
   EXPECT_FALSE(content[0].contains("blob"));
+}
+
+TEST(PromptUtilsTest, RenderSingleTurnTemplate_DummyUserMessageNormalized) {
+  ASSERT_OK_AND_ASSIGN(auto processor, Gemma3DataProcessor::Create());
+  PromptTemplate prompt_template(
+      "{% for msg in messages %}"
+      "{{ msg.role }}:{% for part in msg.content %}[{{ part.type }}:{{ "
+      "part.text }}]{% endfor %}|"
+      "{% endfor %}");
+  std::vector<Message> history;
+  Preface preface = JsonPreface{
+      .messages = {{{"role", "system"}, {"content", "System prompt"}}}};
+  ASSERT_OK_AND_ASSIGN(
+      auto result, RenderSingleTurnTemplate(
+                       *processor, history, preface, Message(), prompt_template,
+                       /*current_is_appending_message=*/false,
+                       /*append_message=*/false));
+  EXPECT_EQ(result.text, "system:[text:System prompt]|user:[text:]|");
 }
 
 }  // namespace

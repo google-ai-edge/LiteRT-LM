@@ -36,14 +36,12 @@
 #if !defined(LITERT_LM_FST_CONSTRAINTS_DISABLED)
 #include "runtime/components/constrained_decoding/gemma_model_constraint_provider.h"
 #endif
-#include "runtime/components/prompt_template.h"
 #include "runtime/components/tool_use/parser_utils.h"
 #include "runtime/components/tool_use/python_tool_format_utils.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/data_utils.h"
 #include "runtime/conversation/model_data_processor/gemma3_data_processor_config.h"
 #include "runtime/conversation/model_data_processor/model_data_processor.h"
-#include "runtime/conversation/prompt_utils.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/util/status_macros.h"
 #include "sentencepiece_model.pb.h"  // from @sentencepiece
@@ -261,18 +259,6 @@ Gemma3DataProcessor::ToInputDataVectorImpl(
   return ProcessMultimodalPrompt(
       rendered_template_prompt, messages, image_preprocessor_.get(),
       audio_preprocessor_.get(), multi_config, image_preprocess_parameter);
-}
-
-absl::StatusOr<ModelDataProcessor::SingleTurnTemplateRenderResult>
-Gemma3DataProcessor::RenderSingleTurnTemplate(
-    std::vector<Message>& history, const Preface& preface,
-    const Message& message, const PromptTemplate& prompt_template,
-    bool current_is_appending_message, bool append_message,
-    std::optional<nlohmann::ordered_json> extra_context) const {
-  return RenderSingleTurnTemplateCommon(
-      *this, history, preface, message, prompt_template,
-      current_is_appending_message, append_message, extra_context,
-      /*push_dummy_user_message_to_preface=*/true);
 }
 
 absl::StatusOr<Message> Gemma3DataProcessor::ToMessageImpl(

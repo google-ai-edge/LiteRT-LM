@@ -29,7 +29,6 @@
 #include "nlohmann/json.hpp"  // from @nlohmann_json            // from @nlohmann_json
 #include "litert/cc/litert_layout.h"  // from @litert
 #include "runtime/components/constrained_decoding/constraint.h"
-#include "runtime/components/prompt_template.h"
 #include "runtime/components/tool_use/parser_utils.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/data_utils.h"
@@ -183,92 +182,4 @@ absl::StatusOr<Message> Lfm2DataProcessor::ToMessageImpl(
        .return_error_on_parse_failure = ReturnErrorOnParseFailure()});
 }
 
-absl::StatusOr<ModelDataProcessor::SingleTurnTemplateRenderResult>
-Lfm2DataProcessor::RenderSingleTurnTemplate(
-    std::vector<Message>& history, const Preface& preface,
-    const Message& message, const PromptTemplate& prompt_template,
-    bool current_is_appending_message, bool append_message,
-    std::optional<nlohmann::ordered_json> extra_context) const {
-  const auto& json_preface = std::get<JsonPreface>(preface);
-  std::string prefill_text = "";
-  bool is_first_part = false;
-  bool is_last_part = false;
-  if (!current_is_appending_message) {
-    is_first_part = true;
-  }
-  if (!append_message) {
-    is_last_part = true;
-  }
-  bool new_is_appending_message = current_is_appending_message;
-  if (is_first_part) {
-    new_is_appending_message = true;
-  }
-  if (is_last_part) {
-    new_is_appending_message = false;
-  }
-  bool is_role_changed = false;
-  if (!history.empty()) {
-    const auto& last_message = history.back();
-    // If the last message is in appending state and the current message is
-    // different role, then we need to add a closing message to the prefill.
-    if (current_is_appending_message &&
-        (last_message["role"] != message["role"] &&
-         last_message["role"] != "system")) {
-      is_role_changed = true;
-      PromptTemplateInput closing_tmpl_input;
-      nlohmann::ordered_json closing_message = {
-          {"role", last_message["role"]},
-          {"content", ""},
-      };
-      ABSL_ASSIGN_OR_RETURN(nlohmann::ordered_json message_tmpl_input,
-                            MessageToTemplateInput(closing_message));
-      closing_tmpl_input.extra_context["message"] = message_tmpl_input;
-      closing_tmpl_input.extra_context["is_appending_to_prefill"] = true;
-      closing_tmpl_input.extra_context["is_first_part"] = false;
-      closing_tmpl_input.extra_context["is_last_part"] = true;
-      closing_tmpl_input.add_generation_prompt = false;
-      ABSL_ASSIGN_OR_RETURN(std::string closing_text,
-                            prompt_template.Apply(closing_tmpl_input));
-      prefill_text += closing_text;
-    }
-  } else {
-    PromptTemplateInput preface_tmpl_input;
-    if (!json_preface.messages.empty() || !json_preface.tools.empty() ||
-        !json_preface.extra_context.is_null()) {
-      preface_tmpl_input.messages.push_back(
-          Message{{"role", "user"},
-                  {"content",
-                   ordered_json::array({{{"type", "text"}, {"text", ""}}})}});
-      preface_tmpl_input.add_generation_prompt = false;
-      if (extra_context.has_value()) {
-        for (const auto& [key, value] : extra_context.value().items()) {
-          preface_tmpl_input.extra_context[key] = value;
-        }
-      }
-      ABSL_ASSIGN_OR_RETURN(std::string preface_text,
-                            prompt_template.Apply(preface_tmpl_input));
-      prefill_text += preface_text;
-    }
-  }
-  if (message.is_object()) {
-    PromptTemplateInput tmpl_input;
-    ABSL_ASSIGN_OR_RETURN(tmpl_input.extra_context["message"],
-                          MessageToTemplateInput(message));
-    tmpl_input.extra_context["is_appending_to_prefill"] = true;
-    tmpl_input.extra_context["is_first_part"] =
-        is_first_part || is_role_changed;
-    tmpl_input.extra_context["is_last_part"] = is_last_part;
-    tmpl_input.add_generation_prompt = !new_is_appending_message;
-    if (extra_context.has_value()) {
-      for (const auto& [key, value] : extra_context.value().items()) {
-        tmpl_input.extra_context[key] = value;
-      }
-    }
-    ABSL_ASSIGN_OR_RETURN(std::string new_text,
-                          prompt_template.Apply(tmpl_input));
-    prefill_text += new_text;
-  }
-  return ModelDataProcessor::SingleTurnTemplateRenderResult{
-      prefill_text, new_is_appending_message};
-}
 }  // namespace litert::lm

@@ -38,32 +38,36 @@ absl::Status FillPrefaceForPromptTemplateInput(
     const Preface& preface, const ModelDataProcessor* model_data_processor,
     PromptTemplateInput& tmpl_input);
 
-// A utility function to render a single turn template for both incremental
-// difference and appending logics.
+// The result of rendering a single turn template.
+struct SingleTurnTemplateRenderResult {
+  // The rendered text.
+  std::string text;
+  // The new state of is_appending_message of Conversation should be updated to.
+  bool is_appending_message;
+};
+
+// Renders a single turn template for both incremental difference and appending
+// logics.
 // Args:
 // - `processor`: The model data processor to be used.
 // - `history`: The history of messages.
 // - `preface`: The preface to be used.
 // - `message`: The message to be rendered.
 // - `prompt_template`: The prompt template to be used.
-// - `current_is_appending_message`: Whether the data processor is in appending
+// - `current_is_appending_message`: Whether the conversation is in appending
 //     state.
 // - `append_message`: Whether the message is for appending. If false, the
 //     message is either for incremental difference or the last part of
 //     appending message.
-// - `extra_context`: The extra context to be used.
-// - `push_dummy_user_message_to_preface`: Whether to push a dummy user message
-//     to the preface. It is used for Gemma3 templates.
+// - `extra_context`: Optional extra context to merge into the template input.
 // Returns:
 // - The single turn template render result.
-absl::StatusOr<ModelDataProcessor::SingleTurnTemplateRenderResult>
-RenderSingleTurnTemplateCommon(
-    const ModelDataProcessor& processor,
-    std::vector<Message>& history, const Preface& preface,
-    const Message& message, const PromptTemplate& prompt_template,
-    bool current_is_appending_message, bool append_message,
-    std::optional<nlohmann::ordered_json> extra_context,
-    bool push_dummy_user_message_to_preface);
+absl::StatusOr<SingleTurnTemplateRenderResult> RenderSingleTurnTemplate(
+    const ModelDataProcessor& processor, std::vector<Message>& history,
+    const Preface& preface, const Message& message,
+    const PromptTemplate& prompt_template, bool current_is_appending_message,
+    bool append_message,
+    std::optional<nlohmann::ordered_json> extra_context = std::nullopt);
 
 // Strips blobs from PromptTemplateInput to avoid copying/formatting large data
 // during template rendering. The input is modified in-place.

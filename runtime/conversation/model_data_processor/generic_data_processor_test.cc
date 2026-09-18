@@ -33,6 +33,7 @@
 #include "runtime/conversation/model_data_processor/generic_data_processor_config.h"
 #include "runtime/conversation/model_data_processor/multimodal_processor_helper.h"
 #include "runtime/conversation/model_data_processor/test_utils.h"
+#include "runtime/conversation/prompt_utils.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/util/test_utils.h"  // NOLINT
 
@@ -245,12 +246,13 @@ TEST(GenericDataProcessorTest, RenderSingleTurnTemplateAppendUser) {
   // 1. Append user message (first part)
   Message message1 = {{"role", "user"}, {"content", "Hello"}};
   {
-    ASSERT_OK_AND_ASSIGN(auto result,
-                         processor->RenderSingleTurnTemplate(
-                             history, preface, message1, prompt_template,
-                             /*current_is_appending_message=*/false,
-                             /*append_message=*/true,
-                             /*extra_context=*/std::nullopt));
+    ASSERT_OK_AND_ASSIGN(
+        auto result,
+        RenderSingleTurnTemplate(*processor, history, preface, message1,
+                                 prompt_template,
+                                 /*current_is_appending_message=*/false,
+                                 /*append_message=*/true,
+                                 /*extra_context=*/std::nullopt));
     EXPECT_EQ(
         result.text,
         "<start_of_turn>system\nYou are a helpful assistant.<end_of_turn>\n"
@@ -262,12 +264,12 @@ TEST(GenericDataProcessorTest, RenderSingleTurnTemplateAppendUser) {
   // 2. Append user message (last part)
   Message message2 = {{"role", "user"}, {"content", " world!"}};
   {
-    ASSERT_OK_AND_ASSIGN(auto result,
-                         processor->RenderSingleTurnTemplate(
-                             history, preface, message2, prompt_template,
-                             /*current_is_appending_message=*/true,
-                             /*append_message=*/false,
-                             /*extra_context=*/std::nullopt));
+    ASSERT_OK_AND_ASSIGN(auto result, RenderSingleTurnTemplate(
+                                          *processor, history, preface,
+                                          message2, prompt_template,
+                                          /*current_is_appending_message=*/true,
+                                          /*append_message=*/false,
+                                          /*extra_context=*/std::nullopt));
     EXPECT_EQ(result.text, " world!<end_of_turn>\n<start_of_turn>model\n");
     EXPECT_FALSE(result.is_appending_message);
   }

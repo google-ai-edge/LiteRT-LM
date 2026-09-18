@@ -26,12 +26,9 @@
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "nlohmann/json_fwd.hpp"  // from @nlohmann_json
-#include "runtime/components/prompt_template.h"
-#include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/generic_data_processor_config.h"
 #include "runtime/conversation/model_data_processor/model_data_processor.h"
 #include "runtime/conversation/model_data_processor/multimodal_processor_helper.h"
-#include "runtime/conversation/prompt_utils.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/util/status_macros.h"
 
@@ -72,18 +69,6 @@ GenericDataProcessor::ToInputDataVectorImpl(
       rendered_template_prompt, messages, image_preprocessor_.get(),
       audio_preprocessor_.get(), config_.multimodal->processing_config,
       config_.multimodal->image_preprocess_parameter, args.visual_token_budget);
-}
-
-absl::StatusOr<ModelDataProcessor::SingleTurnTemplateRenderResult>
-GenericDataProcessor::RenderSingleTurnTemplate(
-    std::vector<Message>& history, const Preface& preface,
-    const Message& message, const PromptTemplate& prompt_template,
-    bool current_is_appending_message, bool append_message,
-    std::optional<nlohmann::ordered_json> extra_context) const {
-  return RenderSingleTurnTemplateCommon(
-      *this, history, preface, message, prompt_template,
-      current_is_appending_message, append_message, extra_context,
-      /*push_dummy_user_message_to_preface=*/false);
 }
 
 absl::Status GenericDataProcessor::CloneStateImpl(
