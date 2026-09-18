@@ -27,6 +27,7 @@ import litert_lm
 from litert_lm_cli import config as cli_config
 from litert_lm_cli import model
 from litert_lm_cli.commands.serve import openai_handler
+from litert_lm_cli.commands.serve import openai_models
 from litert_lm_cli.commands.serve import util
 
 
@@ -204,7 +205,7 @@ class ServeOpenAIStreamingTest(absltest.TestCase):
 
     self.enter_context(
         mock.patch.object(
-            openai_handler.os.path, "getmtime", return_value=123456789
+            openai_models.os.path, "getmtime", return_value=123456789
         )
     )
 
