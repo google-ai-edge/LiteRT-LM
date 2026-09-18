@@ -381,7 +381,6 @@ cc_library(
     deps = [
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/container:flat_hash_set",
-        "@com_google_absl//absl/functional:any_invocable",
         "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
@@ -394,7 +393,6 @@ cc_library(
         "//runtime/core:version",
         "//runtime/executor:audio_executor_settings",
         "//runtime/executor:executor_settings_base",
-        "//runtime/executor:llm_executor_io_types",
         "//runtime/executor:llm_executor_settings",
         "//runtime/executor:vision_executor_settings",
         "//runtime/proto:engine_cc_proto",

@@ -139,6 +139,9 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
           LITERT_ASSIGN_OR_RETURN(std::string metadata_id,
                                   GetFileCacheIdentifier(**model_scoped_file));
           cache_key = absl::StrCat(model_name, "_", metadata_id);
+        } else if (executor_settings.GetModelAssets()
+                       .HasModelResourcesFactory()) {
+          cache_key = std::string(model_name);
         } else {
           return metadata_id_or.status();
         }
