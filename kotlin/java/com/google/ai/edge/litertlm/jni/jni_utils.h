@@ -20,6 +20,7 @@
 #include <jni.h>
 
 #include <string>
+#include <vector>
 
 namespace litert::lm::jni {
 
@@ -62,6 +63,10 @@ std::string JStringToString(JNIEnv* env, jstring jstr);
 
 // Replacement of env->NewStringUTF(str.c_str()) to handle standard UTF-8.
 jstring NewStringStandardUTF(JNIEnv* env, const std::string& standard_utf8_str);
+
+// Converts a vector of standard UTF-8 strings to a Java String[] array.
+jobjectArray ToJavaStringArray(JNIEnv* env,
+                               const std::vector<std::string>& strings);
 
 // Helper to get JNIEnv and attach to the current thread if necessary.
 JNIEnv* GetJniEnvAndAttach(JavaVM* jvm, bool* attached);

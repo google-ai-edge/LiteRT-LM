@@ -18,7 +18,9 @@
 
 #include <jni.h>
 
+#include <cstddef>
 #include <string>
+#include <vector>
 
 #include "absl/log/absl_log.h"  // from @com_google_absl
 
@@ -85,6 +87,30 @@ jstring NewStringStandardUTF(JNIEnv* env,
   env->DeleteLocalRef(charset_name);
 
   return result;
+}
+
+jobjectArray ToJavaStringArray(JNIEnv* env,
+                               const std::vector<std::string>& strings) {
+  jclass string_class = env->FindClass("java/lang/String");
+  if (string_class == nullptr) {
+    return nullptr;
+  }
+  ScopedLocalRef<jclass> scoped_string_class(env, string_class);
+  jobjectArray array =
+      env->NewObjectArray(static_cast<jsize>(strings.size()), string_class,
+                          /*initialElement=*/nullptr);
+  if (array == nullptr) {
+    return nullptr;
+  }
+  ScopedLocalRef<jobjectArray> scoped_array(env, array);
+  for (size_t i = 0; i < strings.size(); ++i) {
+    ScopedLocalRef<jstring> jstr(env, NewStringStandardUTF(env, strings[i]));
+    if (jstr.get() == nullptr) {
+      return nullptr;
+    }
+    env->SetObjectArrayElement(array, static_cast<jsize>(i), jstr.get());
+  }
+  return scoped_array.release();
 }
 
 JNIEnv* GetJniEnvAndAttach(JavaVM* jvm, bool* attached) {
