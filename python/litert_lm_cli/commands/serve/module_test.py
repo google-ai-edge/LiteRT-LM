@@ -108,7 +108,12 @@ if "litert_lm_cli" in sys.modules:
   ].model = mock_model_mod
 
 from litert_lm_cli.commands.serve import gemini_handler
+from litert_lm_cli.commands.serve import openai_chat_completions
+from litert_lm_cli.commands.serve import openai_common
+from litert_lm_cli.commands.serve import openai_embeddings
 from litert_lm_cli.commands.serve import openai_handler
+from litert_lm_cli.commands.serve import openai_models
+from litert_lm_cli.commands.serve import openai_responses
 from litert_lm_cli.commands.serve import util
 
 # pylint: enable=g-import-not-at-top
@@ -991,6 +996,21 @@ class ServeTest(parameterized.TestCase):
           body={"model": "gemma", "input": "hello", "dimensions": -5},
           err_code=400,
       ),
+      dict(
+          testcase_name="non_int_dimensions",
+          body={"model": "gemma", "input": "hello", "dimensions": "invalid"},
+          err_code=400,
+      ),
+      dict(
+          testcase_name="bool_dimensions",
+          body={"model": "gemma", "input": "hello", "dimensions": True},
+          err_code=400,
+      ),
+      dict(
+          testcase_name="invalid_model_parameter",
+          body={"model": "gemma,gpu,-1", "input": "hello"},
+          err_code=400,
+      ),
   )
   def test_openai_embeddings_errors(self, body, err_code):
     server = util.LiteRTLMServer(("127.0.0.1", 0), openai_handler.OpenAIHandler)
@@ -1012,6 +1032,460 @@ class ServeTest(parameterized.TestCase):
     finally:
       server.shutdown()
       thread.join()
+
+  def test_openai_embeddings_dimensions_exceed_vector_and_inference_error(self):
+    mock_emb_engine = mock.MagicMock()
+    mock_emb_engine.compute_embedding_batch.return_value = [
+        mock.MagicMock(embedding=[0.1, 0.2, 0.3]),
+    ]
+    mock_get_engine = self.enter_context(
+        mock.patch.object(
+            openai_handler.OpenAIHandler, "_get_embedding_engine", autospec=True
+        )
+    )
+    mock_get_engine.return_value = mock_emb_engine
+
+    server = util.LiteRTLMServer(("127.0.0.1", 0), openai_handler.OpenAIHandler)
+    port = server.server_port
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+      data = json.dumps({
+          "model": "embedding-gemma",
+          "input": "hello",
+          "dimensions": 10,
+      }).encode("utf-8")
+      req = urllib.request.Request(
+          f"http://127.0.0.1:{port}/v1/embeddings",
+          data=data,
+          headers={"Content-Type": "application/json"},
+      )
+      with self.assertRaises(urllib.error.HTTPError) as cm:
+        urllib.request.urlopen(req)
+      self.assertEqual(cm.exception.code, 400)
+
+      mock_emb_engine.compute_embedding_batch.side_effect = RuntimeError("boom")
+      data_ok = json.dumps({
+          "model": "embedding-gemma",
+          "input": "hello",
+      }).encode("utf-8")
+      req_err = urllib.request.Request(
+          f"http://127.0.0.1:{port}/v1/embeddings",
+          data=data_ok,
+          headers={"Content-Type": "application/json"},
+      )
+      with self.assertRaises(urllib.error.HTTPError) as cm_err:
+        urllib.request.urlopen(req_err)
+      self.assertEqual(cm_err.exception.code, 500)
+    finally:
+      server.shutdown()
+      thread.join()
+
+  def test_handle_responses_non_streaming_headers_and_body(self):
+    handler = mock.MagicMock()
+    handler.headers_sent = False
+    conv = mock.MagicMock()
+    conv.send_message.return_value = {
+        "content": [{"type": "text", "text": "Hello from responses"}]
+    }
+
+    openai_responses._handle_responses(
+        handler,
+        conv,
+        "Say hello",
+        False,
+        now_str="20260918",
+        created_ts=1234567890,
+        model_id="gemma3",
+    )
+
+    self.assertTrue(handler.headers_sent)
+    handler.send_response.assert_called_once_with(200)
+    handler.send_header.assert_called_once_with(
+        "Content-Type", "application/json"
+    )
+    handler.end_headers.assert_called_once_with()
+    written_bytes = handler.wfile.write.call_args[0][0]
+    parsed = json.loads(written_bytes.decode("utf-8"))
+    self.assertEqual(parsed["id"], "resp_20260918")
+    self.assertEqual(
+        parsed["output"][0]["content"][0]["text"], "Hello from responses"
+    )
+
+  def test_openai_responses_non_streaming_and_streaming(self):
+    mock_conv = mock.MagicMock()
+    mock_conv.__enter__.return_value = mock_conv
+    mock_conv.__exit__.return_value = False
+    mock_conv.send_message.return_value = {
+        "content": [{"type": "text", "text": "Non-streaming answer"}]
+    }
+    mock_conv.send_message_async.return_value = [
+        {"content": [{"type": "text", "text": "Streamed "}]},
+        {"content": [{"type": "text", "text": "answer"}]},
+    ]
+    mock_engine_instance = mock.MagicMock()
+    mock_engine_instance.create_conversation.return_value = mock_conv
+    self.enter_context(
+        mock.patch.object(
+            openai_handler.OpenAIHandler,
+            "_get_engine",
+            return_value=mock_engine_instance,
+        )
+    )
+
+    server = util.LiteRTLMServer(("127.0.0.1", 0), openai_handler.OpenAIHandler)
+    port = server.server_port
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+      # 1. Non-streaming with dict input
+      data = json.dumps({
+          "model": "gemma3",
+          "input": {"role": "user", "content": "Hello"},
+          "stream": False,
+      }).encode("utf-8")
+      req = urllib.request.Request(
+          f"http://127.0.0.1:{port}/v1/responses",
+          data=data,
+          headers={"Content-Type": "application/json"},
+      )
+      with urllib.request.urlopen(req) as resp:
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(resp.getheader("Content-Type"), "application/json")
+        body = json.loads(resp.read().decode("utf-8"))
+        self.assertEqual(
+            body["output"][0]["content"][0]["text"], "Non-streaming answer"
+        )
+
+      # 2. Streaming
+      data_stream = json.dumps({
+          "model": "gemma3",
+          "input": "Hello",
+          "stream": True,
+      }).encode("utf-8")
+      req_stream = urllib.request.Request(
+          f"http://127.0.0.1:{port}/v1/responses",
+          data=data_stream,
+          headers={"Content-Type": "application/json"},
+      )
+      with urllib.request.urlopen(req_stream) as resp:
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(resp.getheader("Content-Type"), "text/event-stream")
+        raw = resp.read().decode("utf-8")
+        self.assertIn("event: response.created", raw)
+        self.assertIn("event: response.output_text.delta", raw)
+        self.assertIn("event: response.completed", raw)
+        self.assertIn("data: [DONE]", raw)
+    finally:
+      server.shutdown()
+      thread.join()
+
+  @parameterized.named_parameters(
+      dict(
+          testcase_name="missing_model",
+          body={"input": "hello"},
+          err_code=400,
+      ),
+      dict(
+          testcase_name="missing_input",
+          body={"model": "gemma3"},
+          err_code=400,
+      ),
+      dict(
+          testcase_name="invalid_model_parameter",
+          body={"model": "gemma3,gpu,-1", "input": "hello"},
+          err_code=400,
+      ),
+      dict(
+          testcase_name="invalid_dict_input",
+          body={
+              "model": "gemma3",
+              "input": {"role": "tool", "tool_call_id": "missing"},
+          },
+          err_code=400,
+      ),
+      dict(
+          testcase_name="invalid_thinking_config",
+          body={
+              "model": "gemma3",
+              "input": "hello",
+              "reasoning_effort": "bogus",
+          },
+          err_code=400,
+      ),
+      dict(
+          testcase_name="invalid_response_format",
+          body={
+              "model": "gemma3",
+              "input": "hello",
+              "response_format": "bogus",
+          },
+          err_code=400,
+      ),
+  )
+  def test_openai_responses_errors(self, body, err_code):
+    mock_engine_instance = mock.MagicMock()
+    self.enter_context(
+        mock.patch.object(
+            openai_handler.OpenAIHandler,
+            "_get_engine",
+            return_value=mock_engine_instance,
+        )
+    )
+    server = util.LiteRTLMServer(("127.0.0.1", 0), openai_handler.OpenAIHandler)
+    port = server.server_port
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+      data = json.dumps(body).encode("utf-8")
+      req = urllib.request.Request(
+          f"http://127.0.0.1:{port}/v1/responses",
+          data=data,
+          headers={"Content-Type": "application/json"},
+      )
+      with self.assertRaises(urllib.error.HTTPError) as cm:
+        urllib.request.urlopen(req)
+      self.assertEqual(cm.exception.code, err_code)
+    finally:
+      server.shutdown()
+      thread.join()
+
+  def test_openai_chat_completions_formatter_and_proxy_tool(self):
+    formatter = openai_chat_completions._OpenAIChatCompletionsFormatter(
+        now_str="20260918",
+        created_ts=1234567890,
+        model_id="gemma3",
+        include_usage=True,
+    )
+    tool_delta_bytes = formatter.format_tool_call_delta([{
+        "function": {
+            "name": "get_weather",
+            "arguments": {"location": "NYC"},
+        }
+    }])
+    tool_delta_str = tool_delta_bytes.decode("utf-8")
+    self.assertIn("data: ", tool_delta_str)
+    payload = json.loads(tool_delta_str[len("data: ") :])
+    self.assertEqual(
+        payload["choices"][0]["delta"]["tool_calls"][0]["function"]["name"],
+        "get_weather",
+    )
+
+    usage_bytes = formatter.format_usage(
+        {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8}
+    )
+    self.assertIn('"total_tokens": 8', usage_bytes.decode("utf-8"))
+
+    tool_def = {"type": "function", "function": {"name": "fn"}}
+    proxy_tool = openai_chat_completions._ProxyTool(tool_def)
+    self.assertEqual(proxy_tool.get_tool_description(), tool_def)
+    with self.assertRaises(NotImplementedError):
+      proxy_tool.execute({})
+
+  def test_openai_chat_completions_non_streaming_and_streaming(self):
+    mock_conv = mock.MagicMock()
+    mock_conv.__enter__.return_value = mock_conv
+    mock_conv.__exit__.return_value = False
+    mock_conv.get_benchmark_info.return_value = mock.MagicMock(
+        last_prefill_token_count=10, last_decode_token_count=5
+    )
+    mock_conv.send_message_async.return_value = [
+        {"channels": {"thought": "thinking..."}},
+        {"content": [{"type": "text", "text": "Hello world"}]},
+        {
+            "tool_calls": [{
+                "function": {
+                    "name": "get_weather",
+                    "arguments": {"location": "NYC"},
+                }
+            }]
+        },
+    ]
+    mock_engine_instance = mock.MagicMock()
+    mock_engine_instance.create_conversation.return_value = mock_conv
+    self.enter_context(
+        mock.patch.object(
+            openai_handler.OpenAIHandler,
+            "_get_engine",
+            return_value=mock_engine_instance,
+        )
+    )
+
+    server = util.LiteRTLMServer(("127.0.0.1", 0), openai_handler.OpenAIHandler)
+    port = server.server_port
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+      # 1. Non-streaming with tools and input fallback (no messages array)
+      data = json.dumps({
+          "model": "gemma3",
+          "input": {"role": "user", "content": "Weather in NYC?"},
+          "tools": [{"type": "function", "function": {"name": "get_weather"}}],
+          "stream": False,
+      }).encode("utf-8")
+      req = urllib.request.Request(
+          f"http://127.0.0.1:{port}/v1/chat/completions",
+          data=data,
+          headers={"Content-Type": "application/json"},
+      )
+      with urllib.request.urlopen(req) as resp:
+        self.assertEqual(resp.status, 200)
+        body = json.loads(resp.read().decode("utf-8"))
+        self.assertEqual(body["choices"][0]["finish_reason"], "tool_calls")
+        self.assertEqual(
+            body["choices"][0]["message"]["tool_calls"][0]["function"]["name"],
+            "get_weather",
+        )
+
+      # 2. Streaming with messages array and include_usage
+      data_stream = json.dumps({
+          "model": "gemma3",
+          "messages": [{"role": "user", "content": "Hi"}],
+          "stream": True,
+          "stream_options": {"include_usage": True},
+      }).encode("utf-8")
+      req_stream = urllib.request.Request(
+          f"http://127.0.0.1:{port}/v1/chat/completions",
+          data=data_stream,
+          headers={"Content-Type": "application/json"},
+      )
+      with urllib.request.urlopen(req_stream) as resp:
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(resp.getheader("Content-Type"), "text/event-stream")
+        raw = resp.read().decode("utf-8")
+        self.assertIn("Hello world", raw)
+        self.assertIn("get_weather", raw)
+        self.assertIn("data: [DONE]", raw)
+    finally:
+      server.shutdown()
+      thread.join()
+
+  @parameterized.named_parameters(
+      dict(
+          testcase_name="missing_model",
+          body={"messages": [{"role": "user", "content": "hi"}]},
+          err_code=400,
+      ),
+      dict(
+          testcase_name="invalid_model_parameter",
+          body={
+              "model": "gemma3,gpu,-1",
+              "messages": [{"role": "user", "content": "hi"}],
+          },
+          err_code=400,
+      ),
+      dict(
+          testcase_name="invalid_messages",
+          body={
+              "model": "gemma3",
+              "messages": [{"role": "tool", "tool_call_id": "missing"}],
+          },
+          err_code=400,
+      ),
+      dict(
+          testcase_name="invalid_input_dict",
+          body={
+              "model": "gemma3",
+              "input": {"role": "tool", "tool_call_id": "missing"},
+          },
+          err_code=400,
+      ),
+      dict(
+          testcase_name="missing_messages_and_input",
+          body={"model": "gemma3"},
+          err_code=400,
+      ),
+      dict(
+          testcase_name="bool_max_completion_tokens",
+          body={
+              "model": "gemma3",
+              "messages": [{"role": "user", "content": "hi"}],
+              "max_completion_tokens": True,
+          },
+          err_code=400,
+      ),
+      dict(
+          testcase_name="invalid_sampler_config",
+          body={
+              "model": "gemma3",
+              "messages": [{"role": "user", "content": "hi"}],
+              "temperature": -1.0,
+          },
+          err_code=400,
+      ),
+      dict(
+          testcase_name="invalid_thinking_config",
+          body={
+              "model": "gemma3",
+              "messages": [{"role": "user", "content": "hi"}],
+              "reasoning_effort": "bogus",
+          },
+          err_code=400,
+      ),
+      dict(
+          testcase_name="invalid_response_format",
+          body={
+              "model": "gemma3",
+              "messages": [{"role": "user", "content": "hi"}],
+              "response_format": "bogus",
+          },
+          err_code=400,
+      ),
+  )
+  def test_openai_chat_completions_errors(self, body, err_code):
+    mock_engine_instance = mock.MagicMock()
+    self.enter_context(
+        mock.patch.object(
+            openai_handler.OpenAIHandler,
+            "_get_engine",
+            return_value=mock_engine_instance,
+        )
+    )
+    server = util.LiteRTLMServer(("127.0.0.1", 0), openai_handler.OpenAIHandler)
+    port = server.server_port
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+      data = json.dumps(body).encode("utf-8")
+      req = urllib.request.Request(
+          f"http://127.0.0.1:{port}/v1/chat/completions",
+          data=data,
+          headers={"Content-Type": "application/json"},
+      )
+      with self.assertRaises(urllib.error.HTTPError) as cm:
+        urllib.request.urlopen(req)
+      self.assertEqual(cm.exception.code, err_code)
+    finally:
+      server.shutdown()
+      thread.join()
+
+  def test_openai_handler_headers_sent_and_inference_error(self):
+    handler = object.__new__(openai_handler.OpenAIHandler)
+    handler._headers_sent = False
+    handler.wfile = mock.MagicMock()
+    handler.wfile.closed = False
+    handler.send_error = mock.MagicMock()
+
+    self.assertFalse(handler.headers_sent)
+    handler.headers_sent = True
+    self.assertTrue(handler.headers_sent)
+
+    # When headers_sent is False, handle_inference_error sends 500
+    handler.headers_sent = False
+    handler.handle_inference_error(RuntimeError("failure"), "gemma3", "hi")
+    handler.send_error.assert_called_once()
+    self.assertEqual(handler.send_error.call_args[0][0], 500)
+
+    # When headers_sent is True, handle_inference_error does not call send_error
+    handler.send_error.reset_mock()
+    handler.headers_sent = True
+    handler.handle_inference_error(RuntimeError("failure"), "gemma3", "hi")
+    handler.send_error.assert_not_called()
 
   def test_get_or_initialize_server_embedding_engine(self):
     mock_m = mock.Mock(spec_set=["exists", "model_path", "model_id"])
@@ -1045,6 +1519,193 @@ class ServeTest(parameterized.TestCase):
       )
       self.assertEqual(engine2, mock_emb_engine_instance)
       self.assertEqual(mock_emb_engine_cls.call_count, 1)
+
+  def test_openai_models_listing_and_errors(self):
+    m1 = mock.Mock(spec_set=["model_id", "model_path"])
+    m1.model_id = "m1"
+    m1.model_path = "/path/to/m1"
+    m2 = mock.Mock(spec_set=["model_id", "model_path"])
+    m2.model_id = "m2"
+    m2.model_path = "/path/to/m2"
+    mock_model_mod.Model.get_all_models.return_value = [m1, m2]
+
+    def _getmtime_side_effect(p):
+      if p == "/path/to/m1":
+        return 1000
+      raise OSError("missing")
+
+    self.enter_context(
+        mock.patch.object(
+            openai_models.os.path, "getmtime", side_effect=_getmtime_side_effect
+        )
+    )
+
+    server = util.LiteRTLMServer(("127.0.0.1", 0), openai_handler.OpenAIHandler)
+    port = server.server_port
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+      req = urllib.request.Request(f"http://127.0.0.1:{port}/v1/models")
+      with urllib.request.urlopen(req) as resp:
+        self.assertEqual(resp.status, 200)
+        body = json.loads(resp.read().decode("utf-8"))
+        self.assertEqual(body["data"][0]["created"], 1000)
+        self.assertEqual(body["data"][1]["created"], 0)
+
+      # GET 404
+      with self.assertRaises(urllib.error.HTTPError) as cm_get:
+        urllib.request.urlopen(f"http://127.0.0.1:{port}/v1/unknown")
+      self.assertEqual(cm_get.exception.code, 404)
+
+      # POST 404
+      req_post_404 = urllib.request.Request(
+          f"http://127.0.0.1:{port}/v1/unknown", data=b"{}"
+      )
+      with self.assertRaises(urllib.error.HTTPError) as cm_post:
+        urllib.request.urlopen(req_post_404)
+      self.assertEqual(cm_post.exception.code, 404)
+
+      # POST invalid JSON -> 400
+      req_bad_json = urllib.request.Request(
+          f"http://127.0.0.1:{port}/v1/responses",
+          data=b"not-json",
+          headers={"Content-Type": "application/json"},
+      )
+      with self.assertRaises(urllib.error.HTTPError) as cm_json:
+        urllib.request.urlopen(req_bad_json)
+      self.assertEqual(cm_json.exception.code, 400)
+
+      # GET /v1/models exception -> 500
+      mock_model_mod.Model.get_all_models.side_effect = RuntimeError("fail")
+      with self.assertRaises(urllib.error.HTTPError) as cm_500:
+        urllib.request.urlopen(f"http://127.0.0.1:{port}/v1/models")
+      self.assertEqual(cm_500.exception.code, 500)
+    finally:
+      mock_model_mod.Model.get_all_models.side_effect = None
+      server.shutdown()
+      server.server_close()
+      thread.join()
+
+  def test_openai_embeddings_multimodal_content_parts(self):
+    self.assertEqual(openai_embeddings.l2_normalize([0.0, 0.0]), [0.0, 0.0])
+    self.assertIsNotNone(
+        openai_embeddings._parse_embedding_content_part({
+            "type": "image_url",
+            "image_url": {"url": "data:image/png;base64,aGVsbG8="},
+        })
+    )
+    self.assertIsNotNone(
+        openai_embeddings._parse_embedding_content_part(
+            {"type": "image_url", "image_url": {"url": "file:///tmp/test.png"}}
+        )
+    )
+    with self.assertRaises(ValueError):
+      openai_embeddings._parse_embedding_content_part(
+          {"type": "image_url", "image_url": {"url": "data:image/png,raw"}}
+      )
+    self.assertIsNotNone(
+        openai_embeddings._parse_embedding_content_part(
+            {"type": "input_audio", "input_audio": {"data": "aGVsbG8="}}
+        )
+    )
+    self.assertIsNotNone(
+        openai_embeddings._parse_embedding_content_part(
+            {"type": "image", "blob": "aGVsbG8="}
+        )
+    )
+    self.assertIsNotNone(
+        openai_embeddings._parse_embedding_content_part(
+            {"type": "image", "path": "/tmp/a.png"}
+        )
+    )
+    self.assertIsNotNone(
+        openai_embeddings._parse_embedding_content_part(
+            {"type": "audio", "blob": "aGVsbG8="}
+        )
+    )
+    self.assertIsNotNone(
+        openai_embeddings._parse_embedding_content_part(
+            {"type": "audio", "path": "/tmp/a.wav"}
+        )
+    )
+    with self.assertRaises(ValueError):
+      openai_embeddings._parse_embedding_content_part({"type": "unknown"})
+    with self.assertRaises(ValueError):
+      openai_embeddings._parse_embedding_content_part(12.34)
+    self.assertEqual(
+        openai_embeddings.normalize_embedding_input([[1, 2], [3, 4]]),
+        [["1", "2"], ["3", "4"]],
+    )
+    with self.assertRaises(ValueError):
+      openai_embeddings.normalize_embedding_input(12345)
+
+  def test_openai_common_multimodal_and_thinking(self):
+    self.assertIsNotNone(
+        openai_common.parse_thinking_config({"reasoning_effort": "none"})
+    )
+    for effort in ("minimal", "low", "medium", "high", "xhigh"):
+      self.assertIsNotNone(
+          openai_common.parse_thinking_config({"reasoning_effort": effort})
+      )
+    with self.assertRaises(ValueError):
+      openai_common.parse_thinking_config({"reasoning_effort": 123})
+
+    assistant_msg = {
+        "role": "assistant",
+        "content": "thinking",
+        "tool_calls": [{
+            "id": "call_1",
+            "function": {"name": "search", "arguments": '{"q": "test"}'},
+        }],
+    }
+    translated_assistant = openai_common.translate_openai_message(assistant_msg)
+    self.assertEqual(
+        translated_assistant["tool_calls"][0]["function"]["arguments"],
+        {"q": "test"},
+    )
+
+    multimodal_msg = {
+        "role": "user",
+        "content": [
+            "raw_string_part",
+            {"type": "text", "text": "Look at this"},
+            {
+                "type": "image_url",
+                "image_url": {"url": "data:image/png;base64,aGVsbG8="},
+            },
+            {
+                "type": "image_url",
+                "image_url": {"url": "file:///tmp/test.png"},
+            },
+            {
+                "type": "input_audio",
+                "input_audio": {"data": "aGVsbG8="},
+            },
+            {"type": "custom", "value": 42},
+        ],
+    }
+    translated_user = openai_common.translate_openai_message(multimodal_msg)
+    self.assertLen(translated_user["content"], 6)
+    self.assertEqual(
+        translated_user["content"][2], {"type": "image", "blob": "aGVsbG8="}
+    )
+    self.assertEqual(
+        translated_user["content"][3],
+        {"type": "image", "path": "/tmp/test.png"},
+    )
+    self.assertEqual(
+        translated_user["content"][4], {"type": "audio", "blob": "aGVsbG8="}
+    )
+
+    with self.assertRaises(ValueError):
+      openai_common.translate_openai_message({
+          "role": "user",
+          "content": [{
+              "type": "image_url",
+              "image_url": {"url": "data:image/png,notbase64"},
+          }],
+      })
 
 
 if __name__ == "__main__":
