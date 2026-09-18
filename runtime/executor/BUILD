@@ -199,11 +199,17 @@ config_setting(
     define_values = {"LITERT_GPU_ACCELERATOR": "webgpu"},
 )
 
+config_setting(
+    name = "gpu_accelerator_webgpu_copt",
+    values = {"copt": "-DLITERT_USE_WEBGPU_ACCELERATOR"},
+)
+
 selects.config_setting_group(
     name = "gpu_accelerator_webgpu_requested",
     match_any = [
         ":gpu_accelerator_webgpu_setting",
         ":gpu_accelerator_webgpu_define",
+        ":gpu_accelerator_webgpu_copt",
     ],
 )
 
@@ -225,6 +231,15 @@ selects.config_setting_group(
         ":gpu_accelerator_metal_setting",
         ":gpu_accelerator_metal_define",
     ],
+)
+
+selects.config_setting_group(
+    name = "android_webgpu",
+    match_all = [
+        "@platforms//os:android",
+        ":gpu_accelerator_webgpu_requested",
+    ],
+    visibility = ["//visibility:public"],
 )
 
 selects.config_setting_group(
@@ -414,39 +429,62 @@ cc_library(
     ],
 )
 
+LLM_LITERT_COMPILED_MODEL_EXECUTOR_FACTORY_COMMON_DEPS = [
+    ":executor_settings_base",
+    ":litert_compiled_model_executor_utils",
+    ":llm_executor",
+    ":llm_executor_settings",
+    ":llm_litert_compiled_model_executor",
+    "@com_google_absl//absl/algorithm:container",
+    "@com_google_absl//absl/status",
+    "@com_google_absl//absl/status:status_macros",
+    "@com_google_absl//absl/status:statusor",
+    "@com_google_absl//absl/strings",
+    "@com_google_absl//absl/strings:string_view",
+    "@litert//litert/cc:litert_environment",
+    "@litert//litert/cc:litert_macros",
+    "@litert//litert/cc:litert_model",
+    "@litert//litert/cc:litert_model_types",
+    "@litert//litert/cc:litert_ranked_tensor_type",
+    "//runtime/components:model_resources",
+    "//runtime/proto:executor_metadata_cc_proto",
+    "//runtime/util:litert_status_util",
+]
+
 cc_library(
     name = "llm_litert_compiled_model_executor_factory",
     srcs = ["llm_litert_compiled_model_executor_factory.cc"],
     hdrs = ["llm_litert_compiled_model_executor_factory.h"],
-    defines = select({
-        "@platforms//os:ios": ["LITERT_DISABLE_NPU"],
+    defines = selects.with_or({
+        (
+            "@platforms//os:ios",
+            "@litert//litert/build_common:build_include_cpu_only",
+        ): ["LITERT_DISABLE_NPU"],
+        "//conditions:default": [],
+    }) + select({
         "//conditions:default": [],
     }),
-    deps = [
-        ":executor_settings_base",
-        ":litert_compiled_model_executor_utils",
-        ":llm_executor",
-        ":llm_executor_settings",
-        ":llm_litert_compiled_model_executor",
-        "@com_google_absl//absl/algorithm:container",
-        "@com_google_absl//absl/log:absl_log",
-        "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:status_macros",
-        "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/strings",
-        "@com_google_absl//absl/strings:string_view",
-        "@litert//litert/cc:litert_environment",
-        "@litert//litert/cc:litert_macros",
-        "@litert//litert/cc:litert_model",
-        "@litert//litert/cc:litert_model_types",
-        "@litert//litert/cc:litert_ranked_tensor_type",
-        "//runtime/components:model_resources",
-        "//runtime/proto:executor_metadata_cc_proto",
-        "//runtime/util:litert_status_util",
-    ] + select({
-        "@platforms//os:ios": [],
-        "//conditions:default": [":llm_litert_npu_compiled_model_executor"],
+    deps = LLM_LITERT_COMPILED_MODEL_EXECUTOR_FACTORY_COMMON_DEPS + select({
+    }) + selects.with_or({
+        (
+            "@platforms//os:ios",
+            "@litert//litert/build_common:build_include_cpu_only",
+        ): [],
+        "//conditions:default": [
+            ":llm_litert_npu_compiled_model_executor",
+            "@com_google_absl//absl/log:absl_log",
+        ],
     }),
+)
+
+cc_library(
+    name = "llm_litert_compiled_model_executor_factory_cpu_only",
+    srcs = ["llm_litert_compiled_model_executor_factory.cc"],
+    hdrs = ["llm_litert_compiled_model_executor_factory.h"],
+    defines = [
+        "LITERT_DISABLE_NPU",
+    ],
+    deps = LLM_LITERT_COMPILED_MODEL_EXECUTOR_FACTORY_COMMON_DEPS,
 )
 
 cc_test(
