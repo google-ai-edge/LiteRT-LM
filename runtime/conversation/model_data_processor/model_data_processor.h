@@ -217,7 +217,11 @@ class TypeSafeModelDataProcessor : public ModelDataProcessor {
   virtual absl::StatusOr<std::vector<InputData>> ToInputDataVectorImpl(
       const std::string& rendered_template_prompt,
       const nlohmann::ordered_json& messages,
-      const ExpectedArgsT& typed_args) const = 0;
+      const ExpectedArgsT& typed_args) const {
+    std::vector<InputData> input_data;
+    input_data.emplace_back(InputText(rendered_template_prompt));
+    return input_data;
+  }
 
   virtual absl::StatusOr<Message> ToMessageImpl(
       const Responses& responses, const ExpectedArgsT& typed_args) const {

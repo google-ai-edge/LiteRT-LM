@@ -42,21 +42,10 @@ constexpr size_t kMinCdataLength = kCdataPrefix.size() + kCdataSuffix.size();
 }  // namespace
 
 absl::StatusOr<std::unique_ptr<ModelDataProcessor>>
-
 MiniCpm5DataProcessor::Create(MiniCpm5DataProcessorConfig config,
                               std::optional<Preface> preface) {
   return absl::WrapUnique(
       new MiniCpm5DataProcessor(std::move(config), std::move(preface)));
-}
-
-absl::StatusOr<std::vector<InputData>>
-MiniCpm5DataProcessor::ToInputDataVectorImpl(
-    const std::string& rendered_template_prompt,
-    const nlohmann::ordered_json& messages,
-    const MiniCpm5DataProcessorArguments& args) const {
-  std::vector<InputData> input_data;
-  input_data.emplace_back(InputText(rendered_template_prompt));
-  return input_data;
 }
 
 absl::StatusOr<Message> MiniCpm5DataProcessor::ToMessageImpl(

@@ -95,11 +95,6 @@ class FunctionGemmaDataProcessor
         preface_(preface) {};
 #endif
 
-  absl::StatusOr<std::vector<InputData>> ToInputDataVectorImpl(
-      const std::string& rendered_template_prompt,
-      const nlohmann::ordered_json& messages,
-      const FunctionGemmaDataProcessorArguments& args) const override;
-
   absl::StatusOr<Message> ToMessageImpl(
       const Responses& responses,
       const FunctionGemmaDataProcessorArguments& args) const override;

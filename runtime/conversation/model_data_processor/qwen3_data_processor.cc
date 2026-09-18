@@ -41,16 +41,6 @@ absl::StatusOr<std::unique_ptr<ModelDataProcessor>> Qwen3DataProcessor::Create(
       new Qwen3DataProcessor(std::move(config), std::move(preface)));
 }
 
-absl::StatusOr<std::vector<InputData>>
-Qwen3DataProcessor::ToInputDataVectorImpl(
-    const std::string& rendered_template_prompt,
-    const nlohmann::ordered_json& messages,
-    const Qwen3DataProcessorArguments& args) const {
-  std::vector<InputData> input_data;
-  input_data.emplace_back(InputText(rendered_template_prompt));
-  return input_data;
-}
-
 absl::StatusOr<Message> Qwen3DataProcessor::ToMessageImpl(
     const Responses& responses, const Qwen3DataProcessorArguments& args) const {
   absl::string_view response_text = responses.GetTexts()[0];

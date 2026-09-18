@@ -59,11 +59,6 @@ class Qwen3DataProcessor
                               std::optional<Preface> preface)
       : config_(std::move(config)), preface_(std::move(preface)) {};
 
-  absl::StatusOr<std::vector<InputData>> ToInputDataVectorImpl(
-      const std::string& rendered_template_prompt,
-      const nlohmann::ordered_json& messages,
-      const Qwen3DataProcessorArguments& args) const override;
-
   absl::StatusOr<Message> ToMessageImpl(
       const Responses& responses,
       const Qwen3DataProcessorArguments& args) const override;

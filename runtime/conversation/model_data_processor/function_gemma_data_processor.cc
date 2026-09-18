@@ -293,16 +293,6 @@ FunctionGemmaDataProcessor::MessageToTemplateInput(
   return template_input;
 }
 
-absl::StatusOr<std::vector<InputData>>
-FunctionGemmaDataProcessor::ToInputDataVectorImpl(
-    const std::string& rendered_template_prompt,
-    const nlohmann::ordered_json& messages,
-    const FunctionGemmaDataProcessorArguments& args) const {
-  std::vector<InputData> input_data;
-  input_data.push_back(InputText(rendered_template_prompt));
-  return input_data;
-}
-
 absl::StatusOr<Message> FunctionGemmaDataProcessor::ToMessageImpl(
     const Responses& responses,
     const FunctionGemmaDataProcessorArguments& args) const {
