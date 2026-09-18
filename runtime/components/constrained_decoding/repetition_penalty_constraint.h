@@ -19,13 +19,10 @@
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
-#include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "absl/types/span.h"  // from @com_google_absl
 #include "runtime/components/constrained_decoding/constraint.h"
 #include "runtime/components/constrained_decoding/logit_mask.h"
 #include "runtime/components/constrained_decoding/repetition_penalty_config.h"
-#include "tflite/types/half.h"  // from @litert
 
 namespace litert::lm {
 
@@ -36,7 +33,15 @@ namespace litert::lm {
 //   if z_i <= 0: z'_i = z_i * repetition_penalty
 // Additive presence and frequency penalties:
 //   z'_i += bias (where bias = -(presence_penalty + count * frequency_penalty))
-class RepetitionPenaltyMask : public LogitMask {
+//
+// The penalties are encoded as sign-dependent SparseLogitMask entries with
+// weight = 1 / repetition_penalty, which is exactly the definition above.
+// Reusing the sparse representation instead of a custom mask is what lets
+// LiteRtLogitMaskRunner fold these penalties into its accelerated masking
+// graphs; a custom mask can only be evaluated on host memory. `entries()`
+// therefore returns the converted SparseLogitMask::Entry values, not the
+// RepetitionPenaltyMask::Entry values the mask was constructed from.
+class RepetitionPenaltyMask : public SparseLogitMask {
  public:
   struct Entry {
     int token_id;
@@ -50,18 +55,14 @@ class RepetitionPenaltyMask : public LogitMask {
     }
   };
 
-  explicit RepetitionPenaltyMask(std::vector<Entry> entries)
-      : entries_(std::move(entries)) {}
-
-  MaskType GetType() const override { return MaskType::kCustom; }
-
-  absl::Span<const Entry> entries() const { return entries_; }
-
-  absl::Status Apply(absl::Span<float> logits) const override;
-  absl::Status Apply(absl::Span<tflite::half> logits) const override;
+  explicit RepetitionPenaltyMask(const std::vector<Entry>& entries)
+      : SparseLogitMask(ToSparseEntries(entries)) {}
 
  private:
-  std::vector<Entry> entries_;
+  // Converts repetition penalty entries into their sign-dependent sparse
+  // equivalents.
+  static std::vector<SparseLogitMask::Entry> ToSparseEntries(
+      const std::vector<Entry>& entries);
 };
 
 // A constraint that applies soft repetition, presence, and frequency penalties.

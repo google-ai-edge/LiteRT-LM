@@ -123,6 +123,37 @@ target_include_directories(runtime_components_constrained_decoding_fst_constrain
 )
 
 # ==============================================================================
+# LiteRT Logit Mask Runner
+# ==============================================================================
+add_litertlm_library(runtime_components_constrained_decoding_litert_logit_mask_runner STATIC
+  litert_logit_mask_runner.cc
+  ${LITERTLM_LITERT_SRC_DIR}/../tensor/buffer.cc
+  ${LITERTLM_LITERT_SRC_DIR}/../tensor/tensor.cc
+  ${LITERTLM_LITERT_SRC_DIR}/../tensor/backends/tflite/arithmetic_tflite.cc
+  ${LITERTLM_LITERT_SRC_DIR}/../tensor/backends/tflite/tflite_flatbuffer_conversion.cc
+  ${LITERTLM_LITERT_SRC_DIR}/../tensor/internal/graph.cc
+  ${LITERTLM_LITERT_SRC_DIR}/../tensor/internal/graph_probe.cc
+  ${LITERTLM_LITERT_SRC_DIR}/../tensor/internal/graph_traversal.cc
+  ${LITERTLM_LITERT_SRC_DIR}/../tensor/internal/shape.cc
+)
+add_library(LiteRTLM::Runtime::Components::ConstrainedDecoding::LiteRtLogitMaskRunner
+  ALIAS runtime_components_constrained_decoding_litert_logit_mask_runner)
+
+target_include_directories(runtime_components_constrained_decoding_litert_logit_mask_runner
+  PUBLIC
+    ${PKG_ROOT}
+    ${LITERTLM_INCLUDE_PATHS}
+    ${LITERTLM_LITERT_INCLUDE_PATHS}
+)
+
+target_link_libraries(runtime_components_constrained_decoding_litert_logit_mask_runner
+  PUBLIC
+    LiteRTLM::Runtime::Util
+    LiteRTLM::Runtime::Components::ConstrainedDecoding::LogitMask
+    LITERTLM_DEPS
+)
+
+# ==============================================================================
 # Constraint Decoder
 # ==============================================================================
 add_litertlm_library(runtime_components_constrained_decoding_constrained_decoder STATIC
@@ -141,6 +172,7 @@ target_link_libraries(runtime_components_constrained_decoding_constrained_decode
   PUBLIC
     LiteRTLM::Runtime::Util
     LiteRTLM::Runtime::Components::ConstrainedDecoding::ConstraintInterface
+    LiteRTLM::Runtime::Components::ConstrainedDecoding::LiteRtLogitMaskRunner
     LITERTLM_DEPS
 )
 
@@ -537,6 +569,7 @@ add_library(LiteRTLM::Runtime::Components::ConstrainedDecoding
 target_link_libraries(runtime_components_constrained_decoding_libs INTERFACE
   LiteRTLM::Runtime::Components::ConstrainedDecoding::Bitmap
   LiteRTLM::Runtime::Components::ConstrainedDecoding::LogitMask
+  LiteRTLM::Runtime::Components::ConstrainedDecoding::LiteRtLogitMaskRunner
   LiteRTLM::Runtime::Components::ConstrainedDecoding::ConstraintInterface
   LiteRTLM::Runtime::Components::ConstrainedDecoding::ConstraintConfig
   LiteRTLM::Runtime::Components::ConstrainedDecoding::FstConstraint

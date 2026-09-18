@@ -425,6 +425,10 @@ class LockedLlmExecutor : public LlmExecutor {
     return llm_executor_->GetVocabSize();
   }
 
+  ::litert::Environment* GetEnvironment() const override {
+    return llm_executor_->GetEnvironment();
+  }
+
  private:
   absl::Status MaybeTruncateProcessedTokens() {
     if (current_handler_ == nullptr) {
