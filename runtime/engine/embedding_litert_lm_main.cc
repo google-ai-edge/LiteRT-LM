@@ -103,6 +103,13 @@ ABSL_FLAG(
     int, min_input_length, 0,
     "Minimum input length for embedding execution. If greater than 0, "
     "text encoder signatures smaller than this capacity will be excluded.");
+ABSL_FLAG(
+    bool, lazy_load_multimodal_encoders, true,
+    "Whether to compile the vision and audio encoders bundled in the model on "
+    "their first use instead of at engine creation time. Text-only runs never "
+    "pay for the encoders; a run passing --image_path or --audio_path pays a "
+    "one-time initialization cost on the first such request. Set to false to "
+    "restore eager compilation of every bundled encoder.");
 
 namespace {
 
@@ -324,6 +331,13 @@ absl::Status MainHelper(int argc, char** argv) {
   if (min_input_length > 0) {
     settings.SetMinInputLength(min_input_length);
   }
+
+  // Defer compiling the vision and audio encoders bundled in the model until a
+  // request actually carries an image or audio input. Otherwise a text-only
+  // run pays the compilation latency and the resident memory of encoder graphs
+  // it never executes.
+  settings.SetLazyLoadMultimodalEncoders(
+      absl::GetFlag(FLAGS_lazy_load_multimodal_encoders));
 
   const std::string activation_data_type_str =
       absl::GetFlag(FLAGS_activation_data_type);
