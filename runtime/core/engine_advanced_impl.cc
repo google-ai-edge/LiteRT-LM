@@ -310,7 +310,9 @@ absl::StatusOr<std::unique_ptr<Engine>> EngineAdvancedImpl::Create(
             absl::StrCat("max_vision_tokens_per_image must be positive, got: ",
                          max_vision_tokens_per_image));
       }
-      vision_token_limit = max_vision_tokens_per_image;
+      if (GetVisionTokensPerImageFromMetadata(llm_metadata).has_value()) {
+        vision_token_limit = max_vision_tokens_per_image;
+      }
     } else {
       vision_token_limit = GetVisionTokensPerImageFromMetadata(llm_metadata);
       if (vision_token_limit.has_value() && *vision_token_limit > 0) {

@@ -481,6 +481,25 @@ TEST(EngineTest,
   EXPECT_NE(llm, nullptr);
 }
 
+TEST(EngineTest,
+     CreateEngine_MaxVisionTokensPerImageIgnoredForUnsupportedModel) {
+  auto task_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm_new_metadata.task";
+  auto model_assets = ModelAssets::Create(task_path.string());
+  ASSERT_OK(model_assets);
+  auto engine_settings = EngineSettings::CreateDefault(
+      *model_assets, Backend::CPU, /*vision_backend=*/Backend::CPU);
+  ASSERT_OK(engine_settings);
+  engine_settings->GetMutableMainExecutorSettings().SetMaxNumTokens(
+      kMaxNumTokens);
+  engine_settings->GetMutableMainExecutorSettings().SetCacheDir(":nocache");
+  engine_settings->SetMaxVisionTokensPerImage(280);
+
+  ASSERT_OK_AND_ASSIGN(auto llm, CreateEngine(*engine_settings));
+  EXPECT_NE(llm, nullptr);
+}
+
 // TODO (b/397975034): Add more tests for Engine.
 
 TEST(EngineTest, UpdateGpuEnableMetalResidencySet) {
