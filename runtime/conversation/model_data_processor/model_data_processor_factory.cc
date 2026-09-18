@@ -110,24 +110,6 @@ absl::StatusOr<DataProcessorConfig> CreateGemma3DataProcessorConfig(
     if (gemma3.image_tensor_width() != default_gemma3.image_tensor_width()) {
       config.image_tensor_width = gemma3.image_tensor_width();
     }
-  } else if (model_type.has_gemma4()) {
-    proto::Gemma4 gemma4 = model_type.gemma4();
-    if (gemma4.has_start_of_image_token()) {
-      ABSL_ASSIGN_OR_RETURN(config.boi_token,
-                            GetTokenString(gemma4.start_of_image_token()));
-    }
-    if (gemma4.has_end_of_image_token()) {
-      ABSL_ASSIGN_OR_RETURN(config.eoi_token,
-                            GetTokenString(gemma4.end_of_image_token()));
-    }
-    if (gemma4.has_start_of_audio_token()) {
-      ABSL_ASSIGN_OR_RETURN(config.boa_token,
-                            GetTokenString(gemma4.start_of_audio_token()));
-    }
-    if (gemma4.has_end_of_audio_token()) {
-      ABSL_ASSIGN_OR_RETURN(config.eoa_token,
-                            GetTokenString(gemma4.end_of_audio_token()));
-    }
   } else {
     return absl::InvalidArgumentError(
         "Gemma3N or Gemma3 LlmModelType is required to create "
@@ -169,6 +151,16 @@ absl::StatusOr<DataProcessorConfig> CreateFunctionGemmaDataProcessorConfig(
       default_function_gemma.use_template_for_fc_format()) {
     config.use_template_for_fc_format =
         function_gemma.use_template_for_fc_format();
+  }
+  if (function_gemma.open_quote() != default_function_gemma.open_quote()) {
+    config.open_quote = function_gemma.open_quote();
+  }
+  if (function_gemma.close_quote() != default_function_gemma.close_quote()) {
+    config.close_quote = function_gemma.close_quote();
+  }
+  if (function_gemma.function_response_start() !=
+      default_function_gemma.function_response_start()) {
+    config.function_response_start = function_gemma.function_response_start();
   }
   if (function_gemma.constraint_mode() !=
       default_function_gemma.constraint_mode()) {
