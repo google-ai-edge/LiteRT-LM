@@ -50,6 +50,7 @@ cc_library(
     srcs = ["embedding_engine_settings.cc"],
     hdrs = ["embedding_engine_settings.h"],
     deps = [
+        "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",

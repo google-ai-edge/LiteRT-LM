@@ -19,6 +19,7 @@
 #include <ostream>
 #include <string>
 
+#include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
@@ -106,7 +107,13 @@ class EmbeddingEngineSettings {
   // 2. prefer_activation_type from model metadata / TOML (supports "fp32_fp16"
   //    for mixed precision).
   // 3. Fallback to FLOAT16 if the backend is GPU.
+  //
+  // `metadata_from_file` (may be null) is adopted only when the caller has not
+  // supplied metadata of its own, and fills in the input length bounds. Safe to
+  // call more than once, which the streamed path relies on.
   absl::Status ResolveDefaults(
+      const proto::EmbeddingMetadata* absl_nullable metadata_from_file =
+          nullptr,
       const std::optional<std::string>& text_prefer_activation_type =
           std::nullopt,
       const std::optional<std::string>& vision_prefer_activation_type =
@@ -114,8 +121,10 @@ class EmbeddingEngineSettings {
       const std::optional<std::string>& audio_prefer_activation_type =
           std::nullopt);
 
-  // Validates the engine settings to ensure cache directories and backend
-  // constraints are valid. Returns an error if validation fails.
+  // Validates the engine settings to ensure cache directories, backend
+  // constraints, and input length bounds are valid. Returns an error if
+  // validation fails. Call after ResolveDefaults, so that bounds inherited from
+  // the model's metadata are validated too.
   absl::Status Validate(
       const std::optional<std::string>& text_backend_constraint = std::nullopt,
       const std::optional<std::string>& vision_backend_constraint =

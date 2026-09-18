@@ -23,7 +23,6 @@
 #include "runtime/executor/embedding/embedding_executor_settings.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/proto/embedding_metadata.pb.h"
-#include "runtime/proto/embedding_model_type.pb.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
 
 namespace litert::lm {
@@ -134,7 +133,8 @@ TEST(EmbeddingEngineSettingsTest, ResolveDefaultsUserSettingTakesPrecedence) {
 
   // Even though prefer_activation_type is fp16 and backend is GPU, user setting
   // wins.
-  EXPECT_OK(settings.ResolveDefaults(/*text_prefer_activation_type=*/"fp16"));
+  EXPECT_OK(settings.ResolveDefaults(/*metadata_from_file=*/nullptr,
+                                     /*text_prefer_activation_type=*/"fp16"));
   EXPECT_EQ(settings.GetMainExecutorSettings().GetActivationDataType(),
             ActivationDataType::FLOAT32);
 }
@@ -147,7 +147,8 @@ TEST(EmbeddingEngineSettingsTest,
                                           model_assets, Backend::GPU));
 
   // User did not set it in code. prefer_activation_type is set to "fp32".
-  EXPECT_OK(settings.ResolveDefaults(/*text_prefer_activation_type=*/"fp32"));
+  EXPECT_OK(settings.ResolveDefaults(/*metadata_from_file=*/nullptr,
+                                     /*text_prefer_activation_type=*/"fp32"));
   EXPECT_EQ(settings.GetMainExecutorSettings().GetActivationDataType(),
             ActivationDataType::FLOAT32);
 }
@@ -161,8 +162,9 @@ TEST(EmbeddingEngineSettingsTest,
 
   // prefer_activation_type "fp32_fp16" should set FLOAT32 and enable mixed
   // precision.
-  EXPECT_OK(
-      settings.ResolveDefaults(/*text_prefer_activation_type=*/"fp32_fp16"));
+  EXPECT_OK(settings.ResolveDefaults(
+      /*metadata_from_file=*/nullptr,
+      /*text_prefer_activation_type=*/"fp32_fp16"));
   EXPECT_EQ(settings.GetMainExecutorSettings().GetActivationDataType(),
             ActivationDataType::FLOAT32);
   EXPECT_TRUE(settings.GetMainExecutorSettings().IsMixedPrecisionEnabled());
@@ -176,8 +178,9 @@ TEST(EmbeddingEngineSettingsTest, ResolveDefaultsGpuFallbackToFloat16) {
 
   // Neither user set nor prefer_activation_type provided. Falls back to FLOAT16
   // on GPU.
-  EXPECT_OK(
-      settings.ResolveDefaults(/*text_prefer_activation_type=*/std::nullopt));
+  EXPECT_OK(settings.ResolveDefaults(
+      /*metadata_from_file=*/nullptr,
+      /*text_prefer_activation_type=*/std::nullopt));
   EXPECT_EQ(settings.GetMainExecutorSettings().GetActivationDataType(),
             ActivationDataType::FLOAT16);
 }
@@ -190,8 +193,9 @@ TEST(EmbeddingEngineSettingsTest, ResolveDefaultsCpuNoDefaultActivationType) {
 
   // On CPU with no prefer_activation_type, activation data type remains
   // nullopt.
-  EXPECT_OK(
-      settings.ResolveDefaults(/*text_prefer_activation_type=*/std::nullopt));
+  EXPECT_OK(settings.ResolveDefaults(
+      /*metadata_from_file=*/nullptr,
+      /*text_prefer_activation_type=*/std::nullopt));
   EXPECT_EQ(settings.GetMainExecutorSettings().GetActivationDataType(),
             std::nullopt);
 }
@@ -205,6 +209,7 @@ TEST(EmbeddingEngineSettingsTest, ResolveDefaultsMultimodal) {
                                           Backend::CPU, Backend::GPU));
 
   EXPECT_OK(settings.ResolveDefaults(
+      /*metadata_from_file=*/nullptr,
       /*text_prefer_activation_type=*/"fp16",
       /*vision_prefer_activation_type=*/"fp32",
       /*audio_prefer_activation_type=*/std::nullopt));
@@ -246,6 +251,141 @@ TEST(EmbeddingEngineSettingsTest, ValidateInvalidCacheDir) {
       "/non_existent_directory_for_test/invalid");
 
   EXPECT_FALSE(settings.Validate().ok());
+}
+
+TEST(EmbeddingEngineSettingsTest, ResolveDefaultsAdoptsMetadata) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create("test_embedding_model.tflite"));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+  proto::EmbeddingMetadata metadata;
+  metadata.set_min_input_length(64);
+  metadata.set_max_input_length(512);
+
+  EXPECT_OK(settings.ResolveDefaults(&metadata));
+
+  ASSERT_TRUE(settings.GetEmbeddingMetadata().has_value());
+  EXPECT_EQ(settings.GetMinInputLength(), 64);
+  EXPECT_EQ(settings.GetMaxInputLength(), 512);
+}
+
+TEST(EmbeddingEngineSettingsTest,
+     ResolveDefaultsCallerMetadataTakesPrecedence) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create("test_embedding_model.tflite"));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+  proto::EmbeddingMetadata caller_metadata;
+  caller_metadata.set_max_input_length(128);
+  settings.GetMutableEmbeddingMetadata() = caller_metadata;
+  proto::EmbeddingMetadata file_metadata;
+  file_metadata.set_max_input_length(512);
+
+  EXPECT_OK(settings.ResolveDefaults(&file_metadata));
+
+  EXPECT_EQ(settings.GetMaxInputLength(), 128);
+}
+
+TEST(EmbeddingEngineSettingsTest,
+     ResolveDefaultsExplicitSettingTakesPrecedence) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create("test_embedding_model.tflite"));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+  settings.SetMaxInputLength(256);
+  settings.SetMinInputLength(32);
+  proto::EmbeddingMetadata metadata;
+  metadata.set_min_input_length(64);
+  metadata.set_max_input_length(512);
+
+  EXPECT_OK(settings.ResolveDefaults(&metadata));
+
+  EXPECT_EQ(settings.GetMinInputLength(), 32);
+  EXPECT_EQ(settings.GetMaxInputLength(), 256);
+}
+
+TEST(EmbeddingEngineSettingsTest, ResolveDefaultsNullMetadataIsOk) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create("test_embedding_model.tflite"));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+
+  EXPECT_OK(settings.ResolveDefaults(/*metadata_from_file=*/nullptr));
+
+  EXPECT_FALSE(settings.GetEmbeddingMetadata().has_value());
+  EXPECT_EQ(settings.GetMinInputLength(), std::nullopt);
+  EXPECT_EQ(settings.GetMaxInputLength(), std::nullopt);
+}
+
+TEST(EmbeddingEngineSettingsTest,
+     ValidateRejectsNonPositiveMaxInputLengthFromMetadata) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create("test_embedding_model.tflite"));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+  proto::EmbeddingMetadata metadata;
+  metadata.set_max_input_length(-1);
+
+  EXPECT_OK(settings.ResolveDefaults(&metadata));
+  EXPECT_FALSE(settings.Validate().ok());
+}
+
+// A zero is called out separately from the negative case above because it is
+// the value whose handling changed: the streamed path used to treat an explicit
+// `max_input_length: 0` as "unset" and silently fall back to auto-selection,
+// while `Create` rejected it. Both paths now reject it.
+TEST(EmbeddingEngineSettingsTest,
+     ValidateRejectsZeroMaxInputLengthFromMetadata) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create("test_embedding_model.tflite"));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+  proto::EmbeddingMetadata metadata;
+  metadata.set_max_input_length(0);
+
+  EXPECT_OK(settings.ResolveDefaults(&metadata));
+  EXPECT_THAT(settings.Validate().message(),
+              HasSubstr("max_input_length must be positive"));
+}
+
+TEST(EmbeddingEngineSettingsTest, ValidateRejectsNegativeMinInputLength) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create("test_embedding_model.tflite"));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+  settings.SetMinInputLength(-1);
+
+  EXPECT_FALSE(settings.Validate().ok());
+}
+
+TEST(EmbeddingEngineSettingsTest, ValidateRejectsMinGreaterThanMax) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create("test_embedding_model.tflite"));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+  settings.SetMinInputLength(512);
+  settings.SetMaxInputLength(128);
+
+  EXPECT_THAT(settings.Validate().message(),
+              HasSubstr("cannot be greater than max_input_length"));
+}
+
+TEST(EmbeddingEngineSettingsTest, ResolveDefaultsIsIdempotent) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create("test_embedding_model.tflite"));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::GPU));
+  proto::EmbeddingMetadata metadata;
+  metadata.set_max_input_length(512);
+
+  // The streamed path calls this repeatedly as sections arrive.
+  EXPECT_OK(settings.ResolveDefaults(&metadata));
+  EXPECT_OK(settings.ResolveDefaults(&metadata));
+  EXPECT_OK(settings.Validate());
+
+  EXPECT_EQ(settings.GetMaxInputLength(), 512);
+  EXPECT_EQ(settings.GetMainExecutorSettings().GetActivationDataType(),
+            ActivationDataType::FLOAT16);
 }
 
 }  // namespace
