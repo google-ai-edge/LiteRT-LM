@@ -79,6 +79,7 @@ cc_library(
         "@litert//litert/cc/options:litert_mediatek_options",
         "@litert//litert/cc/options:litert_qualcomm_options",
         "@litert//litert/cc/options:litert_samsung_options",
+        "@litert//litert/experimental/custom_ops/bidirectional_lstm:bidirectional_lstm_custom_op",
         "//runtime/components:model_resources",
         "//runtime/components:model_resources_litert_lm",
         "//runtime/components:model_resources_task",

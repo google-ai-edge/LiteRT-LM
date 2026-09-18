@@ -47,6 +47,7 @@
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/cc/options/litert_cpu_options.h"  // from @litert
 #include "litert/cc/options/litert_gpu_options.h"  // from @litert
+#include "litert/experimental/custom_ops/bidirectional_lstm/bidirectional_lstm_custom_op.h"  // from @litert
 #include "omni/base/litert_lm_engine_runner.h"
 #include "omni/base/litert_lm_runner.h"
 #include "runtime/components/model_resources.h"
@@ -254,6 +255,12 @@ absl::StatusOr<CompiledModel> CreateCompiledModel(
           lm::SetCpuCacheOptions(cache_variant, model_filename, cpu_options));
     }
   }
+
+  // Register custom bidirectional LSTM op.
+  // Must happen before CompiledModel::Create: the op resolver is built there,
+  // so a kernel added afterwards is never seen.
+  LITERT_RETURN_IF_ERROR(
+      litert::custom_ops::RegisterBidirectionalLstmCustomOp(comp_options));
 
   std::string path = JoinPath(options.model_dir, model_filename);
   ABSL_RETURN_IF_ERROR(CheckFileReadable(path));
