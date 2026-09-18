@@ -13,20 +13,17 @@
 // limitations under the License.
 #include "runtime/conversation/model_data_processor/lfm2_data_processor.h"
 
-#include <deque>
 #include <memory>
 #include <optional>
 #include <string>
 #include <utility>
-#include <variant>
 #include <vector>
 
-#include "absl/memory/memory.h"  // from @com_google_absl         // from @com_google_absl
-#include "absl/status/status.h"  // from @com_google_absl         // from @com_google_absl
-#include "absl/status/status_macros.h"  // from @com_google_absl  // from @com_google_absl
-#include "absl/status/statusor.h"  // from @com_google_absl       // from @com_google_absl
-#include "absl/strings/string_view.h"  // from @com_google_absl   // from @com_google_absl
-#include "nlohmann/json.hpp"  // from @nlohmann_json            // from @nlohmann_json
+#include "absl/memory/memory.h"  // from @com_google_absl        // from @com_google_absl
+#include "absl/status/status.h"  // from @com_google_absl        // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl      // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl  // from @com_google_absl
+#include "nlohmann/json.hpp"  // from @nlohmann_json           // from @nlohmann_json
 #include "litert/cc/litert_layout.h"  // from @litert
 #include "runtime/components/constrained_decoding/constraint.h"
 #include "runtime/components/tool_use/parser_utils.h"
@@ -34,12 +31,11 @@
 #include "runtime/conversation/model_data_processor/data_utils.h"
 #include "runtime/conversation/model_data_processor/lfm2_data_processor_config.h"
 #include "runtime/conversation/model_data_processor/model_data_processor.h"
+#include "runtime/conversation/model_data_processor/multimodal_processor_helper.h"
 #include "runtime/engine/io_types.h"
-#include "runtime/util/memory_mapped_file.h"
-#include "runtime/util/status_macros.h"
 #include "support/preprocessor/image_preprocessor.h"
 #include "support/preprocessor/stb_image_preprocessor.h"  // IWYU pragma: keep
-#include "re2/re2.h"  // from @com_googlesource_code_re2  // from @com_googlesource_code_re2
+
 namespace litert::lm {
 
 namespace {
@@ -62,15 +58,6 @@ absl::StatusOr<std::unique_ptr<Lfm2DataProcessor>> Lfm2DataProcessor::Create(
       std::move(config), preface, std::make_unique<StbImagePreprocessor>()));
 }
 
-absl::StatusOr<ordered_json> Lfm2DataProcessor::FormatTools(
-    const ordered_json& tools) const {
-  if (!tools.is_array()) {
-    return absl::InvalidArgumentError("Tools must be an array.");
-  }
-  // For LFM2, return tools as-is without formatting.
-  return tools;
-}
-
 absl::StatusOr<std::unique_ptr<Constraint>> Lfm2DataProcessor::CreateConstraint(
     const ordered_json& tools) const {
   return absl::FailedPreconditionError(
@@ -88,28 +75,13 @@ absl::string_view Lfm2DataProcessor::CodeFenceEnd() const {
 absl::StatusOr<std::vector<InputData>> Lfm2DataProcessor::ToInputDataVectorImpl(
     const std::string& rendered_template_prompt, const ordered_json& messages,
     const Lfm2DataProcessorArguments& args) const {
-  std::vector<InputData> input_data;
-  std::deque<std::unique_ptr<MemoryMappedFile>> image_files;
-  // Find all images contained in the messages.
-  for (const auto& message : messages) {
-    if (message.contains("content") && message["content"].is_array()) {
-      for (const auto& item : message["content"]) {
-        if (item.is_string()) {
-          continue;
-        }
-        if (item["type"] == "image") {
-          ABSL_ASSIGN_OR_RETURN(std::unique_ptr<MemoryMappedFile> mmap_file,
-                                LoadItemData(item));
-          image_files.push_back(std::move(mmap_file));
-        }
-      }
-    }
-  }
-  // Use the boi_token as the delimiter to find image placeholders in the
-  // prompt. The placeholder in the prompt is "<image>".
-  absl::string_view prompt_view(rendered_template_prompt);
-  const char* start = prompt_view.data();
-  std::string part;
+  MultimodalPromptProcessingConfig multi_config{
+      .delimiter_regex = R"regex((<\|image_start\|>|<image>))regex",
+      .image_token_regex = R"regex((<\|image_start\|>|<image>))regex",
+      .boi_token = config_.boi_token,
+      .image_suffix = config_.eoi_token,
+      .add_image_end = false,
+  };
   using ImageParam = ::litert::support::ImagePreprocessParameter;
   ImageParam image_params;
   image_params.SetPatchifyConfig(ImageParam::PatchifyConfig{
@@ -126,51 +98,9 @@ absl::StatusOr<std::vector<InputData>> Lfm2DataProcessor::ToInputDataVectorImpl(
       .mean = config_.normalization_mean,
       .std = config_.normalization_std,
       .rescale_factor = config_.normalization_rescale_factor});
-
-  RE2 re_delimiter(R"regex((<\|image_start\|>|<image>))regex");
-  // Replace the "<image>" placeholder with the actual image data.
-  // Note: We need to find "<image>" but not "<image|>" (eoi_token).
-  // The placeholder is specifically "<image>" which is the boi_token.
-  while (RE2::FindAndConsume(&prompt_view, re_delimiter, &part)) {
-    absl::string_view text_part(start, prompt_view.data() - part.size());
-    start = prompt_view.data();
-    input_data.emplace_back(
-        InputText(std::string(text_part) + config_.boi_token));
-    if (image_files.empty()) {
-      return absl::InvalidArgumentError(
-          "Provided less images than expected in the prompt.");
-    }
-    auto image_file = std::move(image_files.front());
-    image_files.pop_front();
-
-    auto process_status =
-        image_preprocessor_
-            ? image_preprocessor_->Preprocess(
-                  InputImage(
-                      std::string(static_cast<const char*>(image_file->data()),
-                                  image_file->length())),
-                  image_params)
-            : InputImage(
-                  std::string(static_cast<const char*>(image_file->data()),
-                              image_file->length()));
-    if (!process_status.ok()) {
-      return process_status.status();
-    }
-    auto preprocessed_image = std::move(*process_status);
-
-    input_data.emplace_back(InputImage(std::move(preprocessed_image)));
-    input_data.emplace_back(InputText(config_.eoi_token));
-  }
-  if (!image_files.empty()) {
-    return absl::InvalidArgumentError(
-        "Provided more images than expected in the prompt.");
-  }
-  // Add the remaining text in the prompt.
-  if (!prompt_view.empty()) {
-    input_data.push_back(InputText(std::string(prompt_view)));
-  }
-
-  return input_data;
+  return ProcessMultimodalPrompt(
+      rendered_template_prompt, messages, image_preprocessor_.get(),
+      /*audio_preprocessor=*/nullptr, multi_config, image_params);
 }
 
 absl::StatusOr<Message> Lfm2DataProcessor::ToMessageImpl(

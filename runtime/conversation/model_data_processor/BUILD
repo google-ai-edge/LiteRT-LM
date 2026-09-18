@@ -483,9 +483,9 @@ cc_library(
         ":data_utils",
         ":lfm2_data_processor_config",
         ":model_data_processor",
+        ":multimodal_processor_helper",
         "@com_google_absl//absl/memory",
         "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings:string_view",
         "@nlohmann_json//:json",
@@ -495,11 +495,8 @@ cc_library(
         "//runtime/components/tool_use:parser_utils",
         "//runtime/conversation:io_types",
         "//runtime/engine:io_types",
-        "//runtime/util:litert_status_util",
-        "//runtime/util:memory_mapped_file",
         "//support/preprocessor:image_preprocessor",
         "//support/preprocessor:stb_image_preprocessor",
-        "@com_googlesource_code_re2//:re2",
     ],
 )
 
