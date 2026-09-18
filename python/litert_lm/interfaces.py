@@ -664,7 +664,7 @@ class AbstractConversation(abc.ABC):
       max_output_tokens: int | None = None,
       thinking_config: ThinkingConfig | None = None,
       response_format: ResponseFormat | None = None,
-  ) -> collections.abc.Mapping[str, Any]:
+  ) -> Message:
     """Sends a message and returns the response.
 
     Args:
@@ -686,8 +686,7 @@ class AbstractConversation(abc.ABC):
           response will be constrained to this format.
 
     Returns:
-        A dictionary containing the model's response. The structure is:
-        {"role": "assistant", "content": [{"type": "text", "text": "..."}]}
+        A Message containing the model's response.
     """
 
   @abc.abstractmethod
@@ -701,7 +700,7 @@ class AbstractConversation(abc.ABC):
       max_output_tokens: int | None = None,
       thinking_config: ThinkingConfig | None = None,
       response_format: ResponseFormat | None = None,
-  ) -> collections.abc.Iterator[collections.abc.Mapping[str, Any]]:
+  ) -> collections.abc.Iterator[Message]:
     """Sends a message and streams the response.
 
     Args:
@@ -723,8 +722,7 @@ class AbstractConversation(abc.ABC):
           response will be constrained to this format.
 
     Returns:
-        An iterator yielding dictionaries containing chunks of the model's
-        response.
+        An iterator yielding Message chunks of the model's response.
     """
 
   @abc.abstractmethod

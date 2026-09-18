@@ -39,6 +39,7 @@ def verify_comprehensive_e2e_suite(model_path: pathlib.Path):
       engine.create_conversation() as conversation,
   ):
     msg1 = conversation.send_message("What is the capital of France?")
+    assert isinstance(msg1, litert_lm.Message)
     text1 = msg1["content"][0]["text"]
     print(f"   Turn 1 Response: '{text1.strip()}'")
     assert (
@@ -46,6 +47,7 @@ def verify_comprehensive_e2e_suite(model_path: pathlib.Path):
     ), f"Turn 1 Failure: Expected 'Paris', got '{text1}'"
 
     msg2 = conversation.send_message("And what country is that city in?")
+    assert isinstance(msg2, litert_lm.Message)
     text2 = msg2["content"][0]["text"]
     print(f"   Turn 2 Response: '{text2.strip()}'")
     assert (
@@ -61,6 +63,7 @@ def verify_comprehensive_e2e_suite(model_path: pathlib.Path):
     stream = conversation.send_message_async("What is 2 + 2?")
     chunks = []
     for chunk in stream:
+      assert isinstance(chunk, litert_lm.Message)
       if (
           isinstance(chunk, dict)
           and "content" in chunk

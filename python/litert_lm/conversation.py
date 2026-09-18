@@ -270,7 +270,6 @@ class Conversation(interfaces.AbstractConversation):
     if ptr:
       self._lib.litert_lm_conversation_optional_args_delete(ptr)
 
-  # TODO: b/482060476 - Change the return type to "Message".
   def send_message(
       self,
       message: str | Contents | Message | collections.abc.Mapping[str, Any],
@@ -283,7 +282,7 @@ class Conversation(interfaces.AbstractConversation):
       max_output_tokens: int | None = None,
       thinking_config: interfaces.ThinkingConfig | None = None,
       response_format: interfaces.ResponseFormat | None = None,
-  ) -> collections.abc.Mapping[str, Any]:
+  ) -> Message:
     """See base class."""
     if response_format:
       if (
@@ -338,11 +337,11 @@ class Conversation(interfaces.AbstractConversation):
         self._delete_optional_args(optional_args_ptr)
 
       if not self.automatic_tool_calling:
-        return response_dict
+        return Message.from_json(response_dict)
 
       tool_responses = self._handle_tool_calls(response_dict)
       if not tool_responses:
-        return response_dict
+        return Message.from_json(response_dict)
 
       current_message = tool_responses
 
@@ -358,7 +357,7 @@ class Conversation(interfaces.AbstractConversation):
       max_output_tokens: int | None = None,
       thinking_config: interfaces.ThinkingConfig | None = None,
       response_format: interfaces.ResponseFormat | None = None,
-  ) -> collections.abc.Iterator[collections.abc.Mapping[str, Any]]:
+  ) -> collections.abc.Iterator[Message]:
     """See base class."""
     if response_format:
       if (
@@ -451,14 +450,14 @@ class Conversation(interfaces.AbstractConversation):
               if is_tool_call:
                 full_response_for_tools = msg_dict
               else:
-                yield msg_dict
+                yield Message.from_json(msg_dict)
             else:
-              yield msg_dict
+              yield Message.from_json(msg_dict)
           except json.JSONDecodeError:
-            yield {
+            yield Message.from_json({
                 "role": "assistant",
                 "content": [{"type": "text", "text": chunk_str}],
-            }
+            })
         if is_final:
           break
 

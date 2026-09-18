@@ -342,6 +342,8 @@ class EngineTest(LiteRtLmTestBase):
       self.assertIsNotNone(engine)
       self.assertIsNotNone(conversation)
       message = conversation.send_message("Hello world!")
+      self.assertIsInstance(message, litert_lm.Message)
+      self.assertEqual(str(message), self._EXPECTED_RESPONSE)
 
       expected_message = {
           "role": "assistant",
