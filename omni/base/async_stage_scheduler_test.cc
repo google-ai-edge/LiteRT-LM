@@ -24,6 +24,7 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/synchronization/notification.h"  // from @com_google_absl
+#include "absl/time/clock.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "omni/base/stage.h"
 #include "runtime/framework/threadpool.h"
@@ -149,6 +150,93 @@ TEST(AsyncStageSchedulerTest, StopSafely) {
 
   ASSERT_TRUE(scheduler.Start().ok());
   EXPECT_TRUE(scheduler.Stop(absl::Seconds(1)).ok());
+}
+
+class IdleSourceStage : public SingleThreadedStageWithDeque<int> {
+ protected:
+  bool NeedScheduleInternal() const override { return false; }
+  absl::Status ScheduleInternal() override { return absl::OkStatus(); }
+};
+
+TEST(AsyncStageSchedulerTest, StopWhileWaitingForIdleStageDoesNotDeadlock) {
+  IdleSourceStage stage1;
+  TestTransformStage stage2(&stage1);
+
+  ::litert::lm::ThreadPool pool("test_pool", 4);
+  std::vector<internal::StageBase*> stages = {&stage1, &stage2};
+
+  AsyncStageScheduler<std::string> scheduler(
+      stages, &stage2, &pool,
+      [](absl::StatusOr<std::string> res) -> absl::Status {
+        return absl::OkStatus();
+      });
+
+  ASSERT_TRUE(scheduler.Start().ok());
+  // Give worker thread time to enter WaitForAnyStagesReadyOrStopped().
+  absl::SleepFor(absl::Milliseconds(20));
+
+  absl::Time start_time = absl::Now();
+  EXPECT_TRUE(scheduler.Stop(absl::Seconds(5)).ok());
+  EXPECT_LT(absl::Now() - start_time, absl::Seconds(1));
+}
+
+class BlockingSourceStage : public SingleThreadedStageWithDeque<int> {
+ public:
+  void NotifyTaskStarted() { task_started_.Notify(); }
+  void WaitForTaskStarted() { task_started_.WaitForNotification(); }
+  void AllowTaskFinish() { allow_finish_.Notify(); }
+  bool IsTaskFinished() const { return task_finished_.HasBeenNotified(); }
+
+ protected:
+  bool NeedScheduleInternal() const override { return !scheduled_; }
+
+  absl::Status ScheduleInternal() override {
+    absl::Cleanup cleanup = [this] {
+      SetState(State::kIdle);
+      task_finished_.Notify();
+    };
+    scheduled_ = true;
+    task_started_.Notify();
+    allow_finish_.WaitForNotification();
+    PushOutput(42);
+    return absl::OkStatus();
+  }
+
+ private:
+  bool scheduled_ = false;
+  absl::Notification task_started_;
+  absl::Notification allow_finish_;
+  absl::Notification task_finished_;
+};
+
+TEST(AsyncStageSchedulerTest, StopWaitsForInFlightTaskCompletion) {
+  BlockingSourceStage stage1;
+  TestTransformStage stage2(&stage1);
+
+  ::litert::lm::ThreadPool pool("test_pool", 4);
+  std::vector<internal::StageBase*> stages = {&stage1, &stage2};
+
+  AsyncStageScheduler<std::string> scheduler(
+      stages, &stage2, &pool,
+      [](absl::StatusOr<std::string> res) -> absl::Status {
+        return absl::OkStatus();
+      });
+
+  ASSERT_TRUE(scheduler.Start().ok());
+  stage1.WaitForTaskStarted();
+
+  // Unblock stage1 shortly after calling Stop() on another thread.
+  ::litert::lm::ThreadPool helper_pool("helper_pool", 1);
+  ASSERT_TRUE(helper_pool
+                  .Schedule([&stage1]() {
+                    absl::SleepFor(absl::Milliseconds(50));
+                    stage1.AllowTaskFinish();
+                  })
+                  .ok());
+
+  EXPECT_TRUE(scheduler.Stop(absl::Seconds(5)).ok());
+  // By the time Stop() returns, the in-flight stage task must have completed.
+  EXPECT_TRUE(stage1.IsTaskFinished());
 }
 
 }  // namespace

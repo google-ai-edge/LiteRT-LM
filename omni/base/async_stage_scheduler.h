@@ -71,21 +71,25 @@ class AsyncStageScheduler {
   // Returns absl::DeadlineExceededError if the timeout is reached before all
   // stages finish.
   absl::Status Stop(absl::Duration timeout) {
-    absl::MutexLock lock(mutex_);
-    if (state_ != State::kRunning && state_ != State::kStopping) {
-      state_ = State::kStopped;
-      return absl::OkStatus();
-    }
-    state_ = State::kStopping;
+    {
+      absl::MutexLock lock(mutex_);
+      if (state_ != State::kRunning && state_ != State::kStopping) {
+        state_ = State::kStopped;
+        return absl::OkStatus();
+      }
+      state_ = State::kStopping;
 
-    auto condition = [this] {
-      mutex_.AssertHeld();
-      return !IsAnyStageRunning();
-    };
-    if (!mutex_.AwaitWithTimeout(absl::Condition(&condition), timeout)) {
-      return absl::DeadlineExceededError(
-          "Timeout reached while waiting for stages to finish.");
+      auto condition = [this] {
+        mutex_.AssertHeld();
+        return !IsAnyStageRunning();
+      };
+      if (!mutex_.AwaitWithTimeout(absl::Condition(&condition), timeout)) {
+        return absl::DeadlineExceededError(
+            "Timeout reached while waiting for stages to finish.");
+      }
     }
+    ABSL_RETURN_IF_ERROR(thread_pool_.WaitUntilDone(timeout));
+    absl::MutexLock lock(mutex_);
     state_ = State::kStopped;
     return absl::OkStatus();
   }
