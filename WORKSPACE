@@ -2,10 +2,10 @@
 
 workspace(name = "litert_lm")
 
-# UPDATED = 2026-09-17
-LITERT_REF = "0da36b31be45720a2f729d329739f32eb3e17e99"
+# UPDATED = 2026-09-18
+LITERT_REF = "91a1116da3a44f94d51608e6cc159030a748bdb5"
 
-LITERT_SHA256 = "5df05b04075124753941d303b15c6cbe50d82d30456096477d8010fd6821fd70"
+LITERT_SHA256 = "21f99efc846dea8fb5a36bebd2e21d6b5e225f6fcdf1c206f254cd39a66ffbaf"
 
 # Keep TensorFlow at this commit for now. Newer commits load
 # `compatibility_proxy_repo` from `@rules_cc//cc:extensions.bzl` in
