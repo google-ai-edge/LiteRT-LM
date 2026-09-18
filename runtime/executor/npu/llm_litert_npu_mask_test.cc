@@ -84,16 +84,18 @@ class NpuMaskTest : public ::testing::Test {
 
 TEST_F(NpuMaskTest, NpuMaskCreateFailsWhenCompiledModelNullForModelMethod) {
   InferenceContext ctx;
-  auto mask_or =
-      NpuMask::CreateForTest(MaskUpdateMethod::kModel, nullptr, std::move(ctx));
+  NpuModelGeometry geometry;
+  auto mask_or = NpuMask::CreateForTest(MaskUpdateMethod::kModel, nullptr,
+                                        std::move(ctx), &geometry);
   EXPECT_FALSE(mask_or.ok());
 }
 
 TEST_F(NpuMaskTest, NpuMaskCreateSucceedsForHwMethodWithoutCompiledModel) {
   InferenceContext ctx;
+  NpuModelGeometry geometry;
   LITERT_ASSERT_OK_AND_ASSIGN(
-      auto mask,
-      NpuMask::CreateForTest(MaskUpdateMethod::kWH, nullptr, std::move(ctx)));
+      auto mask, NpuMask::CreateForTest(MaskUpdateMethod::kWH, nullptr,
+                                        std::move(ctx), &geometry));
   EXPECT_EQ(mask.GetMethod(), MaskUpdateMethod::kWH);
 }
 
@@ -120,9 +122,10 @@ TEST_F(NpuMaskTest, NpuMaskSettersAndAccessors) {
       CreateTensorBufferWithDims(std::vector<int32_t>{0}, ElementType::Int32,
                                  {1});
 
+  NpuModelGeometry geometry;
   LITERT_ASSERT_OK_AND_ASSIGN(
-      auto mask,
-      NpuMask::CreateForTest(MaskUpdateMethod::kWH, nullptr, std::move(ctx)));
+      auto mask, NpuMask::CreateForTest(MaskUpdateMethod::kWH, nullptr,
+                                        std::move(ctx), &geometry));
 
   // Test SetDecodeInput.
   EXPECT_TRUE(mask.SetDecodeInput(42, 101).ok());
@@ -166,10 +169,11 @@ TEST_F(NpuMaskTest, NpuMaskCreateForDrafter) {
   in_bufs[MaskSignatures::kMaskInputTokens] = CreateTensorBufferWithDims(
       std::vector<int32_t>{0}, ElementType::Int32, {1});
 
+  NpuModelGeometry geometry;
   LITERT_ASSERT_OK_AND_ASSIGN(
-      auto mask,
-      NpuMask::CreateForDrafter(MaskUpdateMethod::kWH, nullptr,
-                                std::move(in_bufs), std::move(out_bufs)));
+      auto mask, NpuMask::CreateForDrafter(MaskUpdateMethod::kWH, nullptr,
+                                           std::move(in_bufs),
+                                           std::move(out_bufs), &geometry));
   EXPECT_TRUE(mask.SetDecodeInput(77, 88).ok());
 
   auto step_lock = TensorBufferScopedLock::Create<int32_t>(
@@ -198,9 +202,10 @@ TEST_F(NpuMaskTest, NpuMaskSetPrefillInput) {
       CreateTensorBufferWithDims(std::vector<uint8_t>{0, 0, 0, 0, 0},
                                  ElementType::Bool, {1, 5});
 
+  NpuModelGeometry geometry;
   LITERT_ASSERT_OK_AND_ASSIGN(
-      auto mask,
-      NpuMask::CreateForTest(MaskUpdateMethod::kWH, nullptr, std::move(ctx)));
+      auto mask, NpuMask::CreateForTest(MaskUpdateMethod::kWH, nullptr,
+                                        std::move(ctx), &geometry));
 
   std::vector<int> tokens = {101, -5, 202};
   EXPECT_TRUE(mask.SetPrefillInput(15, tokens).ok());
@@ -932,6 +937,41 @@ TEST_F(NpuMaskTest, HWMaskUpdateBFloat16) {
       EXPECT_EQ(global_lock.second[k], valid_val) << "k=" << k;
     } else {
       EXPECT_EQ(global_lock.second[k], masked_val) << "k=" << k;
+    }
+  }
+}
+
+TEST_F(NpuMaskTest, HWMaskUpdateCustomSlidingWindowSize) {
+  int seq_q = 1;
+  int seq_k = 256;
+  int time_step = 100;
+  int64_t custom_window = 32;
+
+  absl::flat_hash_map<absl::string_view, TensorBuffer> in_buffers;
+  std::vector<int32_t> time_step_data = {time_step};
+  in_buffers.emplace("time_step",
+                     CreateTensorBuffer(time_step_data, ElementType::Int32));
+
+  absl::flat_hash_map<absl::string_view, TensorBuffer> out_buffers;
+  std::vector<int8_t> mask_data(seq_q * seq_k, 0);
+  out_buffers.emplace("mask_local",
+                      CreateTensorBufferWithDims(mask_data, ElementType::Int8,
+                                                 {1, seq_q, seq_k}));
+
+  LITERT_ASSERT_OK(HWMaskUpdate(in_buffers, out_buffers, custom_window));
+
+  auto local_lock_expected = TensorBufferScopedLock::Create<int8_t>(
+      out_buffers.at("mask_local"), TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(local_lock_expected.HasValue());
+  auto& local_lock = *local_lock_expected;
+
+  // Window is 32 tokens: for effective_pos = 100, attends to [100 - 32 + 1,
+  // 100] = [69, 100]
+  for (int k = 0; k < seq_k; ++k) {
+    if (k >= 100 - custom_window + 1 && k <= 100) {
+      EXPECT_EQ(local_lock.second[k], 127) << "k=" << k;
+    } else {
+      EXPECT_EQ(local_lock.second[k], -128) << "k=" << k;
     }
   }
 }

@@ -70,6 +70,7 @@
 #include "runtime/executor/npu/llm_litert_npu_kv_cache.h"
 #include "runtime/executor/npu/llm_litert_npu_mask.h"
 #include "runtime/executor/npu/llm_litert_npu_rope.h"
+#include "runtime/proto/executor_metadata.pb.h"
 #include "runtime/proto/llm_model_type.pb.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/status_macros.h"  // NOLINT
@@ -686,7 +687,7 @@ absl::StatusOr<DrafterAuxContext> DrafterAuxContext::Create(
     ::litert::Environment& env, const litert::Model& mtp_aux_model,
     const absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
         drafter_aux_output_buffers,
-    MaskUpdateMethod mtp_mask_update_method) {
+    MaskUpdateMethod mtp_mask_update_method, const NpuModelGeometry* geometry) {
   LITERT_ASSIGN_OR_RETURN(
       auto mtp_aux_compiled_model,
       CompiledModelWrapper::Create(env, mtp_aux_model.Get(),
@@ -745,7 +746,7 @@ absl::StatusOr<DrafterAuxContext> DrafterAuxContext::Create(
       auto drafter_mask,
       NpuMask::CreateForDrafter(mtp_mask_update_method, &mtp_aux_compiled_model,
                                 std::move(mask_input_buffers),
-                                std::move(mask_output_buffers)));
+                                std::move(mask_output_buffers), geometry));
 
   return DrafterAuxContext(std::move(mtp_aux_compiled_model),
                            std::move(drafter_rope), std::move(drafter_mask));
@@ -1235,6 +1236,11 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::SwitchContextSizeIfRequired(
 
   active_context_group_index_ = new_index;
   const auto& active_group = context_groups_[new_index];
+  main_mask_.SetGeometry(&active_group.geometry);
+  main_cache_.SetGeometry(&active_group.geometry);
+  if (drafter_aux_context_.has_value()) {
+    drafter_aux_context_->drafter_mask.SetGeometry(&active_group.geometry);
+  }
   LITERT_RETURN_IF_ERROR(main_cache_.UpdateKVCacheBuffers(
       active_group.input_kv_cache_buffers,
       active_group.text_decoder_inference_context.prefill_output_buffers,
@@ -2177,6 +2183,14 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::Reset() {
   current_step_ = 0;
   ran_decode_ = false;
   active_context_group_index_ = 0;
+  if (!context_groups_.empty()) {
+    const auto& active_group = context_groups_[0];
+    main_mask_.SetGeometry(&active_group.geometry);
+    main_cache_.SetGeometry(&active_group.geometry);
+    if (drafter_aux_context_.has_value()) {
+      drafter_aux_context_->drafter_mask.SetGeometry(&active_group.geometry);
+    }
+  }
   LITERT_RETURN_IF_ERROR(processed_tokens_.RollBackToStep(0));
   latency_stats_ = {};
   last_verify_activations_.clear();
@@ -2286,6 +2300,11 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::RestoreContext(
 
   // 3. Re-bind all modular sub-components to the restored active context group.
   auto& active_group = ActiveContextGroup();
+  main_mask_.SetGeometry(&active_group.geometry);
+  main_cache_.SetGeometry(&active_group.geometry);
+  if (drafter_aux_context_.has_value()) {
+    drafter_aux_context_->drafter_mask.SetGeometry(&active_group.geometry);
+  }
   LITERT_RETURN_IF_ERROR(main_cache_.UpdateKVCacheBuffers(
       active_group.input_kv_cache_buffers,
       active_group.text_decoder_inference_context.prefill_output_buffers,
@@ -2542,6 +2561,12 @@ LlmLiteRtNpuCompiledModelExecutor::Create(
     requested_context_size = mutable_settings.GetMaxNumTokens();
   }
 
+  const proto::ExecutorMetadata* executor_metadata = nullptr;
+  auto executor_metadata_or = resources.GetExecutorMetadata();
+  if (executor_metadata_or.ok()) {
+    executor_metadata = *executor_metadata_or;
+  }
+
   std::vector<ContextGroup> context_groups;
   context_groups.resize(sorted_supported_context_sizes.size());
 
@@ -2626,6 +2651,9 @@ LlmLiteRtNpuCompiledModelExecutor::Create(
     group.verify_signature = max_verify_sig;
     group.input_kv_cache_buffers = std::move(master_kv_cache_buffers);
     group.text_decoder_inference_context = std::move(max_inference_context);
+    group.geometry =
+        ResolveModelGeometry(prefill_size, max_context_size,
+                             group.input_kv_cache_buffers, executor_metadata);
     context_groups[largest_group_idx] = std::move(group);
   }
 
@@ -2702,6 +2730,9 @@ LlmLiteRtNpuCompiledModelExecutor::Create(
     group.verify_signature = group_verify_sig;
     group.input_kv_cache_buffers = std::move(aliased_kv_buffers);
     group.text_decoder_inference_context = std::move(group_inference_context);
+    group.geometry =
+        ResolveModelGeometry(prefill_size, ctx_size,
+                             group.input_kv_cache_buffers, executor_metadata);
     context_groups[i] = std::move(group);
   }
 
@@ -2771,7 +2802,8 @@ LlmLiteRtNpuCompiledModelExecutor::Create(
                       &npu_auxiliary_context.npu_auxiliary_compiled_model,
                       first_prefill_sigs.mask, first_decode_aux_sigs.mask,
                       first_verify_aux_sigs.mask, first_prefill_in,
-                      first_decode_in, first_verify_in));
+                      first_decode_in, first_verify_in,
+                      &context_groups[0].geometry));
 
   LITERT_ASSIGN_OR_RETURN(
       auto main_rope,
@@ -2779,9 +2811,6 @@ LlmLiteRtNpuCompiledModelExecutor::Create(
                       first_prefill_sigs.rope, first_decode_aux_sigs.rope,
                       first_verify_aux_sigs.rope, first_prefill_in,
                       first_decode_in, first_verify_in));
-
-  const bool uses_ringbuffer =
-      DetectUsesRingbuffer(context_groups[0].input_kv_cache_buffers);
 
   LITERT_ASSIGN_OR_RETURN(
       auto main_cache,
@@ -2797,7 +2826,7 @@ LlmLiteRtNpuCompiledModelExecutor::Create(
               .text_decoder_inference_context.decode_output_buffers,
           context_groups[0]
               .text_decoder_inference_context.verify_output_buffers,
-          kv_quant_params, uses_ringbuffer, kv_cache_init_value));
+          kv_quant_params, &context_groups[0].geometry, kv_cache_init_value));
 
   // Initialize NpuEmbedder (encapsulating all PLE parsing and embedding lookup
   // manager).
@@ -2842,9 +2871,9 @@ LlmLiteRtNpuCompiledModelExecutor::Create(
       }
       LITERT_ASSIGN_OR_RETURN(
           drafter_aux_context,
-          DrafterAuxContext::Create(env, **mtp_aux_model,
-                                    drafter_context->mtp_input_buffers,
-                                    mtp_mask_update_method));
+          DrafterAuxContext::Create(
+              env, **mtp_aux_model, drafter_context->mtp_input_buffers,
+              mtp_mask_update_method, &context_groups[0].geometry));
       speculative_decoding_type = SpeculativeDecodingType::kMTP;
 
       LITERT_RETURN_IF_ERROR(WarmupDrafterInference(
@@ -2857,6 +2886,7 @@ LlmLiteRtNpuCompiledModelExecutor::Create(
       npu_auxiliary_context.npu_auxiliary_compiled_model, main_rope.Context(),
       main_mask.Context(), main_cache.Context()));
 
+  NpuModelGeometry initial_geometry = context_groups[0].geometry;
   return absl::WrapUnique(new LlmLiteRtNpuCompiledModelExecutor(
       mutable_settings, env, std::move(npu_auxiliary_context),
       std::move(text_decoder_compiled_model), std::move(context_groups),
@@ -2864,7 +2894,8 @@ LlmLiteRtNpuCompiledModelExecutor::Create(
       first_prefill_sigs, quantization_params, kv_cache_init_value,
       speculative_decoding_type, std::move(drafter_context),
       std::move(drafter_aux_context), std::move(main_embedder),
-      std::move(main_rope), std::move(main_mask), std::move(main_cache)));
+      std::move(main_rope), std::move(main_mask), std::move(main_cache),
+      std::move(initial_geometry)));
 }
 
 absl::Status LlmLiteRtNpuCompiledModelExecutor::ClearKVCache(

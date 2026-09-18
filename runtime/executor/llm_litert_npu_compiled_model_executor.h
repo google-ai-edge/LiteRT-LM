@@ -88,7 +88,8 @@ struct DrafterAuxContext {
       ::litert::Environment& env, const litert::Model& mtp_aux_model,
       const absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
           drafter_aux_output_buffers,
-      MaskUpdateMethod mtp_mask_update_method);
+      MaskUpdateMethod mtp_mask_update_method,
+      const NpuModelGeometry* geometry);
 };
 
 // Component intended to be used with an NPU variant of Gemma3.
@@ -193,9 +194,10 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
       std::optional<DrafterContext> drafter_context,
       std::optional<DrafterAuxContext> drafter_aux_context,
       NpuEmbedder main_embedder, NpuRope main_rope, NpuMask main_mask,
-      NpuKVCache main_cache)
+      NpuKVCache main_cache, NpuModelGeometry geometry = {})
       : executor_settings_(std::move(executor_settings)),
         env_(llm_env),
+        geometry_(std::move(geometry)),
         main_embedder_(std::move(main_embedder)),
         main_rope_(std::move(main_rope)),
         main_mask_(std::move(main_mask)),
@@ -221,6 +223,10 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
       latency_stats_.prefill_embedder_per_layer_inference_latency_us = 0;
       latency_stats_.decode_embedder_per_layer_inference_latency_us = 0;
     }
+    const NpuModelGeometry* active_geom =
+        !context_groups_.empty() ? &context_groups_[0].geometry : &geometry_;
+    main_mask_.SetGeometry(active_geom);
+    main_cache_.SetGeometry(active_geom);
     main_rope_.SetCompiledModel(
         &npu_auxiliary_context_.npu_auxiliary_compiled_model);
     main_mask_.SetCompiledModel(
@@ -228,6 +234,7 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
     main_cache_.SetCompiledModel(
         &npu_auxiliary_context_.npu_auxiliary_compiled_model);
     if (drafter_aux_context_.has_value()) {
+      drafter_aux_context_->drafter_mask.SetGeometry(active_geom);
       drafter_aux_context_->drafter_rope.SetCompiledModel(
           &drafter_aux_context_->mtp_aux_compiled_model);
       drafter_aux_context_->drafter_mask.SetCompiledModel(
@@ -423,6 +430,7 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
 
   LlmExecutorSettings executor_settings_;
   ::litert::Environment& env_;
+  NpuModelGeometry geometry_;
   NpuConfig npu_config_;
   NpuEmbedder main_embedder_;
   NpuRope main_rope_;

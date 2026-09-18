@@ -47,11 +47,16 @@ void FillMasksInternal(T* mask_local, T* mask_global, int64_t seq_q,
                        int64_t seq_k, int32_t time_step,
                        const int32_t* input_tokens, int64_t input_tokens_size,
                        const bool* valid_mask, int64_t valid_mask_size,
-                       T valid_val, T masked_val) {
+                       T valid_val, T masked_val,
+                       int64_t sliding_window_size = 512,
+                       int64_t global_capacity = 0) {
   // Detection logic for capacity and batch_size.
   int64_t kv_cache_capacity = seq_k;
   bool has_batch_suffix = false;
-  if (seq_k > seq_q) {
+  if (global_capacity > 0 && global_capacity < seq_k) {
+    kv_cache_capacity = global_capacity;
+    has_batch_suffix = true;
+  } else if (seq_k > seq_q) {
     int64_t candidate_cap = seq_k - seq_q;
     // We assume capacity is a multiple of 64 for all models.
     // If it's not a multiple of 64, it might still be a regular mask
@@ -96,8 +101,8 @@ void FillMasksInternal(T* mask_local, T* mask_global, int64_t seq_q,
         has_batch_suffix ? time_step : (time_step + 1);
     for (int64_t k = 0; k < std::min(kv_valid_limit, kv_cache_capacity); ++k) {
       if (global_row) global_row[k] = valid_val;
-      // Sliding window (512 tokens).
-      if (local_row && k >= effective_pos - 511) {
+      // Sliding window (sliding_window_size tokens).
+      if (local_row && k >= effective_pos - (sliding_window_size - 1)) {
         local_row[k] = valid_val;
       }
     }
@@ -243,18 +248,23 @@ absl::Status UpdateInterleavedSWAMasks(
     void* local_ptr, void* global_ptr, ::litert::ElementType element_type,
     int64_t seq_q, int64_t seq_k_local, int64_t seq_k_global, int32_t time_step,
     const int32_t* input_tokens, int64_t input_tokens_size,
-    const bool* valid_mask, int64_t valid_mask_size) {
-  // The physical capacity of the local KV cache buffer (excluding current
-  // batch/draft).
-  int64_t local_capacity = seq_k_local - seq_q;
-  // The physical capacity of the global KV cache buffer (excluding current
-  // batch/draft).
-  int64_t global_capacity = seq_k_global - seq_q;
+    const bool* valid_mask, int64_t valid_mask_size,
+    int64_t sliding_window_size = 0, int64_t local_capacity = 0,
+    int64_t global_capacity = 0) {
+  // If capacities are not explicitly provided, fall back to calculating from
+  // tensor dimensions (seq_k - seq_q).
+  if (local_capacity <= 0) {
+    local_capacity = seq_k_local - seq_q;
+  }
+  if (global_capacity <= 0) {
+    global_capacity = seq_k_global - seq_q;
+  }
   // The attention window size (how far back a token can attend).
   // In practice, this is optimized to match the local cache capacity to save
   // memory, but we keep them conceptually separate for flexibility and
   // clarity in FillMaskSingle.
-  int64_t local_window_size = local_capacity;
+  int64_t local_window_size =
+      (sliding_window_size > 0) ? sliding_window_size : local_capacity;
 
   if (element_type == ::litert::ElementType::Int8) {
     if (local_ptr) {
@@ -332,8 +342,9 @@ absl::Status UpdateInterleavedSWAMasks(
 
 absl::Status HWMaskUpdate(
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& in_buffers,
-    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-        out_buffers) {
+    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& out_buffers,
+    int64_t sliding_window_size, bool uses_ringbuffer, int64_t global_capacity,
+    int64_t local_capacity) {
   static constexpr absl::string_view kMaskLocal = "mask_local";
   static constexpr absl::string_view kMaskGlobal = "mask_global";
   static constexpr absl::string_view kInputTimeStep = "time_step";
@@ -399,13 +410,12 @@ absl::Status HWMaskUpdate(
     seq_k_global = dims[rank - 1];
   }
 
-  // Detect if local and global masks use different KV cache sizes. If so,
-  // we assume the local mask uses a ring buffer (wrap-around logic). Once
-  // the 'Executor Metadata' design is implemented, we can remove this
-  // heuristic because the metadata will inform the execution behavior on
-  // regular vs ring buffer attention mask.
-  bool is_interleaved_swa = false;
-  if (mask_local_buf && mask_global_buf && seq_k_local != seq_k_global) {
+  // Detect if local and global masks use different KV cache sizes.
+  // Prefer explicit uses_ringbuffer flag if set, otherwise fallback to tensor
+  // shapes.
+  bool is_interleaved_swa = uses_ringbuffer;
+  if (!is_interleaved_swa && mask_local_buf && mask_global_buf &&
+      seq_k_local != seq_k_global) {
     is_interleaved_swa = true;
   }
 
@@ -461,7 +471,8 @@ absl::Status HWMaskUpdate(
     return UpdateInterleavedSWAMasks(
         local_ptr, global_ptr, mask_type.ElementType(), seq_q_local,
         seq_k_local, seq_k_global, time_step, input_tokens, input_tokens_size,
-        valid_mask, valid_mask_size);
+        valid_mask, valid_mask_size, sliding_window_size, local_capacity,
+        global_capacity);
   }
 
   // If we made it here, all layers use the same KV cache size.
@@ -474,19 +485,22 @@ absl::Status HWMaskUpdate(
                               static_cast<int8_t*>(global_ptr), seq_q, seq_k,
                               time_step, input_tokens, input_tokens_size,
                               valid_mask, valid_mask_size,
-                              /*valid_val=*/127, /*masked_val=*/-128);
+                              /*valid_val=*/127, /*masked_val=*/-128,
+                              sliding_window_size, global_capacity);
   } else if (mask_type.ElementType() == ::litert::ElementType::Int16) {
     FillMasksInternal<int16_t>(static_cast<int16_t*>(local_ptr),
                                static_cast<int16_t*>(global_ptr), seq_q, seq_k,
                                time_step, input_tokens, input_tokens_size,
                                valid_mask, valid_mask_size,
-                               /*valid_val=*/0, /*masked_val=*/-32767);
+                               /*valid_val=*/0, /*masked_val=*/-32767,
+                               sliding_window_size, global_capacity);
   } else if (mask_type.ElementType() == ::litert::ElementType::Float32) {
     FillMasksInternal<float>(static_cast<float*>(local_ptr),
                              static_cast<float*>(global_ptr), seq_q, seq_k,
                              time_step, input_tokens, input_tokens_size,
                              valid_mask, valid_mask_size,
-                             /*valid_val=*/0.0f, /*masked_val=*/-1e9f);
+                             /*valid_val=*/0.0f, /*masked_val=*/-1e9f,
+                             sliding_window_size, global_capacity);
   } else if (mask_type.ElementType() == ::litert::ElementType::Float16) {
     // Opaque uint16_t representation of IEEE 754 Float16.
     // valid_val is 0.0f (0x0000) and masked_val is -infinity (0xFC00).
@@ -494,7 +508,8 @@ absl::Status HWMaskUpdate(
                                 static_cast<uint16_t*>(global_ptr), seq_q,
                                 seq_k, time_step, input_tokens,
                                 input_tokens_size, valid_mask, valid_mask_size,
-                                /*valid_val=*/0x0000, /*masked_val=*/0xFC00);
+                                /*valid_val=*/0x0000, /*masked_val=*/0xFC00,
+                                sliding_window_size, global_capacity);
   } else if (mask_type.ElementType() == ::litert::ElementType::BFloat16) {
     // Opaque uint16_t representation of Brain Float16.
     // valid_val is 0.0f (0x0000) and masked_val is -infinity (0xFF80).
@@ -502,7 +517,8 @@ absl::Status HWMaskUpdate(
                                 static_cast<uint16_t*>(global_ptr), seq_q,
                                 seq_k, time_step, input_tokens,
                                 input_tokens_size, valid_mask, valid_mask_size,
-                                /*valid_val=*/0x0000, /*masked_val=*/0xFF80);
+                                /*valid_val=*/0x0000, /*masked_val=*/0xFF80,
+                                sliding_window_size, global_capacity);
   } else {
     return absl::InvalidArgumentError("Unsupported mask element type");
   }
@@ -510,14 +526,26 @@ absl::Status HWMaskUpdate(
   return absl::OkStatus();
 }
 
+absl::Status HWMaskUpdate(
+    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& in_buffers,
+    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& out_buffers,
+    const NpuModelGeometry& geometry) {
+  int64_t local_capacity =
+      geometry.local_cache_length.value_or(geometry.global_cache_length);
+  return HWMaskUpdate(in_buffers, out_buffers, geometry.sliding_window_size,
+                      geometry.uses_ringbuffer, geometry.global_cache_length,
+                      local_capacity);
+}
+
 absl::StatusOr<NpuMask> NpuMask::CreateForTest(
     MaskUpdateMethod method, const ::litert::CompiledModel* compiled_model,
-    InferenceContext mask_context) {
+    InferenceContext mask_context, const NpuModelGeometry* geometry) {
+  RET_CHECK(geometry != nullptr) << "geometry must not be null for NpuMask";
   if (method == MaskUpdateMethod::kModel && compiled_model == nullptr) {
     return absl::InvalidArgumentError(
         "Compiled model must be provided when MaskUpdateMethod is kModel.");
   }
-  return NpuMask(method, compiled_model, std::move(mask_context));
+  return NpuMask(method, compiled_model, std::move(mask_context), geometry);
 }
 
 absl::StatusOr<NpuMask> NpuMask::Create(
@@ -530,7 +558,9 @@ absl::StatusOr<NpuMask> NpuMask::Create(
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
         text_decoder_decode_input_buffers,
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-        text_decoder_verify_input_buffers) {
+        text_decoder_verify_input_buffers,
+    const NpuModelGeometry* geometry) {
+  RET_CHECK(geometry != nullptr) << "geometry must not be null for NpuMask";
   RET_CHECK(npu_auxiliary_compiled_model != nullptr)
       << "Auxiliary compiled model cannot be null for NpuMask";
   absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
@@ -612,7 +642,8 @@ absl::StatusOr<NpuMask> NpuMask::Create(
       std::move(prefill_input_buffers), std::move(prefill_output_buffers),
       std::move(decode_input_buffers), std::move(decode_output_buffers),
       std::move(verify_input_buffers), std::move(verify_output_buffers));
-  return NpuMask(method, npu_auxiliary_compiled_model, std::move(mask_context));
+  return NpuMask(method, npu_auxiliary_compiled_model, std::move(mask_context),
+                 geometry);
 }
 
 absl::StatusOr<NpuMask> NpuMask::CreateForDrafter(
@@ -620,7 +651,9 @@ absl::StatusOr<NpuMask> NpuMask::CreateForDrafter(
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
         mask_input_buffers,
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
-        mask_output_buffers) {
+        mask_output_buffers,
+    const NpuModelGeometry* geometry) {
+  RET_CHECK(geometry != nullptr) << "geometry must not be null for NpuMask";
   if (method == MaskUpdateMethod::kModel && compiled_model == nullptr) {
     return absl::InvalidArgumentError(
         "Compiled model must be provided when MaskUpdateMethod is kModel.");
@@ -628,7 +661,7 @@ absl::StatusOr<NpuMask> NpuMask::CreateForDrafter(
   InferenceContext ctx;
   ctx.decode_input_buffers = std::move(mask_input_buffers);
   ctx.decode_output_buffers = std::move(mask_output_buffers);
-  return NpuMask(method, compiled_model, std::move(ctx));
+  return NpuMask(method, compiled_model, std::move(ctx), geometry);
 }
 
 absl::Status NpuMask::UpdateOutputBuffers(
@@ -661,13 +694,15 @@ absl::Status NpuMask::UpdateOutputBuffers(
 
 absl::Status NpuMask::RunPrefill(absl::string_view signature) const {
   if (method_ == MaskUpdateMethod::kWH) {
+    RET_CHECK(geometry_ != nullptr) << "geometry must not be null for kWH";
     return HWMaskUpdate(
         const_cast<
             absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&>(
             mask_context_.prefill_input_buffers),
         const_cast<
             absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&>(
-            mask_context_.prefill_output_buffers));
+            mask_context_.prefill_output_buffers),
+        *geometry_);
   }
   RET_CHECK(compiled_model_ != nullptr)
       << "Compiled model must be provided for kModel mask update.";
@@ -687,13 +722,15 @@ absl::Status NpuMask::RunPrefill(absl::string_view signature) const {
 
 absl::Status NpuMask::RunDecode(absl::string_view signature) const {
   if (method_ == MaskUpdateMethod::kWH) {
+    RET_CHECK(geometry_ != nullptr) << "geometry must not be null for kWH";
     return HWMaskUpdate(
         const_cast<
             absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&>(
             mask_context_.decode_input_buffers),
         const_cast<
             absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&>(
-            mask_context_.decode_output_buffers));
+            mask_context_.decode_output_buffers),
+        *geometry_);
   }
   RET_CHECK(compiled_model_ != nullptr)
       << "Compiled model must be provided for kModel mask update.";
@@ -714,13 +751,15 @@ absl::Status NpuMask::RunDecode(absl::string_view signature) const {
 
 absl::Status NpuMask::RunVerify(absl::string_view signature) const {
   if (method_ == MaskUpdateMethod::kWH) {
+    RET_CHECK(geometry_ != nullptr) << "geometry must not be null for kWH";
     return HWMaskUpdate(
         const_cast<
             absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&>(
             mask_context_.verify_input_buffers),
         const_cast<
             absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&>(
-            mask_context_.verify_output_buffers));
+            mask_context_.verify_output_buffers),
+        *geometry_);
   }
   RET_CHECK(compiled_model_ != nullptr)
       << "Compiled model must be provided for kModel mask update.";
@@ -741,13 +780,15 @@ absl::Status NpuMask::RunVerify(absl::string_view signature) const {
 
 absl::Status NpuMask::RunDrafter() const {
   if (method_ == MaskUpdateMethod::kWH) {
+    RET_CHECK(geometry_ != nullptr) << "geometry must not be null for kWH";
     return HWMaskUpdate(
         const_cast<
             absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&>(
             mask_context_.decode_input_buffers),
         const_cast<
             absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&>(
-            mask_context_.decode_output_buffers));
+            mask_context_.decode_output_buffers),
+        *geometry_);
   }
   RET_CHECK(compiled_model_ != nullptr)
       << "Compiled model must be provided for kModel mask update.";

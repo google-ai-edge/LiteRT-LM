@@ -34,6 +34,7 @@
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
 #include "litert/test/matchers.h"  // from @litert
+#include "runtime/proto/executor_metadata.pb.h"
 
 namespace litert::lm {
 namespace {
@@ -520,18 +521,145 @@ TEST_F(ExecutorUtilsTest, DetectUsesRingbuffer_MixedCacheSizesReturnsTrue) {
   EXPECT_TRUE(DetectUsesRingbuffer(buffers));
 }
 
-TEST_F(ExecutorUtilsTest, DetectUsesRingbuffer_IgnoresNonKvBuffers) {
+TEST_F(ExecutorUtilsTest, DetectUsesRingbuffer_MetadataLocalCacheReturnsTrue) {
+  absl::flat_hash_map<absl::string_view, TensorBuffer> buffers;
+  std::vector<float> data(64, 0.0f);
+  TensorBuffer k0 =
+      CreateTensorBufferWithDims(data, ElementType::Float32, {1, 1, 16, 4});
+  buffers.emplace("kv_cache_k_0", std::move(k0));
+
+  proto::ExecutorMetadata metadata;
+  auto* sb = metadata.mutable_llm_executor_metadata()->add_state_buffers();
+  sb->set_type(proto::StateBuffer::TYPE_LOCAL_KEY_CACHE);
+
+  EXPECT_TRUE(DetectUsesRingbuffer(buffers, &metadata));
+}
+
+TEST_F(ExecutorUtilsTest,
+       DetectUsesRingbuffer_MetadataGlobalCacheReturnsFalse) {
   absl::flat_hash_map<absl::string_view, TensorBuffer> buffers;
   std::vector<float> data_16(64, 0.0f);
   std::vector<float> data_8(32, 0.0f);
   TensorBuffer k0 =
       CreateTensorBufferWithDims(data_16, ElementType::Float32, {1, 1, 16, 4});
-  TensorBuffer non_kv =
+  TensorBuffer k1 =
       CreateTensorBufferWithDims(data_8, ElementType::Float32, {1, 1, 8, 4});
   buffers.emplace("kv_cache_k_0", std::move(k0));
-  buffers.emplace("other_buffer_0", std::move(non_kv));
+  buffers.emplace("kv_cache_k_1", std::move(k1));
 
-  EXPECT_FALSE(DetectUsesRingbuffer(buffers));
+  proto::ExecutorMetadata metadata;
+  auto* sb = metadata.mutable_llm_executor_metadata()->add_state_buffers();
+  sb->set_type(proto::StateBuffer::TYPE_GLOBAL_KEY_CACHE);
+
+  // Even though buffer sizes are mixed (16 vs 8), metadata says global, so
+  // returns false.
+  EXPECT_FALSE(DetectUsesRingbuffer(buffers, &metadata));
+}
+
+TEST_F(ExecutorUtilsTest,
+       DetectUsesRingbuffer_MetadataNullFallsBackToHeuristic) {
+  absl::flat_hash_map<absl::string_view, TensorBuffer> uniform_buffers;
+  std::vector<float> data(64, 0.0f);
+  uniform_buffers.emplace(
+      "kv_cache_k_0",
+      CreateTensorBufferWithDims(data, ElementType::Float32, {1, 1, 16, 4}));
+  uniform_buffers.emplace(
+      "kv_cache_k_1",
+      CreateTensorBufferWithDims(data, ElementType::Float32, {1, 1, 16, 4}));
+
+  EXPECT_FALSE(DetectUsesRingbuffer(uniform_buffers, nullptr));
+
+  absl::flat_hash_map<absl::string_view, TensorBuffer> mixed_buffers;
+  std::vector<float> data_8(32, 0.0f);
+  mixed_buffers.emplace(
+      "kv_cache_k_0",
+      CreateTensorBufferWithDims(data, ElementType::Float32, {1, 1, 16, 4}));
+  mixed_buffers.emplace(
+      "kv_cache_k_1",
+      CreateTensorBufferWithDims(data_8, ElementType::Float32, {1, 1, 8, 4}));
+
+  EXPECT_TRUE(DetectUsesRingbuffer(mixed_buffers, nullptr));
+}
+
+TEST_F(ExecutorUtilsTest, ResolveModelGeometry_Tier3FullMetadata) {
+  absl::flat_hash_map<absl::string_view, TensorBuffer> buffers;
+  proto::ExecutorMetadata metadata;
+  auto* llm_meta = metadata.mutable_llm_executor_metadata();
+  auto* sb = llm_meta->add_state_buffers();
+  sb->set_type(proto::StateBuffer::TYPE_LOCAL_KEY_CACHE);
+  sb->set_minimum_sequence_length(256);
+  sb->set_maximum_sequence_length(1024);
+  llm_meta->mutable_attention_mask_settings()->set_sliding_window_size(256);
+
+  NpuModelGeometry geometry =
+      ResolveModelGeometry(128, 1024, buffers, &metadata);
+  EXPECT_EQ(geometry.prefill_chunk_size, 128);
+  EXPECT_EQ(geometry.global_cache_length, 1024);
+  EXPECT_TRUE(geometry.uses_ringbuffer);
+  ASSERT_TRUE(geometry.local_cache_length.has_value());
+  EXPECT_EQ(*geometry.local_cache_length, 256);
+  EXPECT_EQ(geometry.sliding_window_size, 256);
+}
+
+TEST_F(ExecutorUtilsTest,
+       ResolveModelGeometry_Tier2PartialMetadataMissingMaskSettings) {
+  absl::flat_hash_map<absl::string_view, TensorBuffer> buffers;
+  proto::ExecutorMetadata metadata;
+  auto* llm_meta = metadata.mutable_llm_executor_metadata();
+  auto* sb = llm_meta->add_state_buffers();
+  sb->set_type(proto::StateBuffer::TYPE_LOCAL_VALUE_CACHE);
+  sb->set_minimum_sequence_length(768);
+  sb->set_maximum_sequence_length(2048);
+
+  NpuModelGeometry geometry =
+      ResolveModelGeometry(512, 2048, buffers, &metadata);
+  EXPECT_EQ(geometry.prefill_chunk_size, 512);
+  EXPECT_EQ(geometry.global_cache_length, 2048);
+  EXPECT_TRUE(geometry.uses_ringbuffer);
+  ASSERT_TRUE(geometry.local_cache_length.has_value());
+  EXPECT_EQ(*geometry.local_cache_length, 768);
+  // Default sliding window to local cache length when attention_mask_settings
+  // is omitted
+  EXPECT_EQ(geometry.sliding_window_size, 768);
+}
+
+TEST_F(ExecutorUtilsTest,
+       ResolveModelGeometry_Tier1NoMetadataHeuristicFallback) {
+  absl::flat_hash_map<absl::string_view, TensorBuffer> buffers;
+  std::vector<float> data_global(64, 0.0f);
+  std::vector<float> data_local(16, 0.0f);
+  buffers.emplace("kv_cache_k_0",
+                  CreateTensorBufferWithDims(data_global, ElementType::Float32,
+                                             {1, 1, 16, 4}));
+  buffers.emplace("kv_cache_k_1",
+                  CreateTensorBufferWithDims(data_local, ElementType::Float32,
+                                             {1, 1, 4, 4}));
+
+  NpuModelGeometry geometry = ResolveModelGeometry(256, 16, buffers, nullptr);
+  EXPECT_EQ(geometry.prefill_chunk_size, 256);
+  EXPECT_EQ(geometry.global_cache_length, 16);
+  EXPECT_TRUE(geometry.uses_ringbuffer);
+  ASSERT_TRUE(geometry.local_cache_length.has_value());
+  EXPECT_EQ(*geometry.local_cache_length, 4);
+  EXPECT_EQ(geometry.sliding_window_size, 4);
+}
+
+TEST_F(ExecutorUtilsTest, ResolveModelGeometry_UniformNoRingbuffer) {
+  absl::flat_hash_map<absl::string_view, TensorBuffer> buffers;
+  std::vector<float> data(64, 0.0f);
+  buffers.emplace(
+      "kv_cache_k_0",
+      CreateTensorBufferWithDims(data, ElementType::Float32, {1, 1, 16, 4}));
+  buffers.emplace(
+      "kv_cache_k_1",
+      CreateTensorBufferWithDims(data, ElementType::Float32, {1, 1, 16, 4}));
+
+  NpuModelGeometry geometry = ResolveModelGeometry(256, 16, buffers, nullptr);
+  EXPECT_EQ(geometry.prefill_chunk_size, 256);
+  EXPECT_EQ(geometry.global_cache_length, 16);
+  EXPECT_FALSE(geometry.uses_ringbuffer);
+  EXPECT_FALSE(geometry.local_cache_length.has_value());
+  EXPECT_EQ(geometry.sliding_window_size, 512);
 }
 
 }  // namespace

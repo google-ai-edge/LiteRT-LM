@@ -111,7 +111,8 @@ TEST_F(NpuKVCacheTest, HWKVCacheUpdateBasic) {
 
   absl::flat_hash_map<absl::string_view, TensorBuffer> out_buffers;
 
-  ASSERT_TRUE(HWKVCacheUpdate(in_buffers, out_buffers).ok());
+  NpuModelGeometry geometry = ResolveModelGeometry(0, 0, in_buffers, nullptr);
+  ASSERT_TRUE(HWKVCacheUpdate(in_buffers, out_buffers, &geometry).ok());
 
   auto lock_expected = TensorBufferScopedLock::Create<float>(
       in_buffers.at("kv_cache_k_0"), TensorBuffer::LockMode::kRead);
@@ -150,7 +151,8 @@ TEST_F(NpuKVCacheTest, HWKVCacheUpdateTransposedInt8) {
 
   absl::flat_hash_map<absl::string_view, TensorBuffer> out_buffers;
 
-  ASSERT_TRUE(HWKVCacheUpdate(in_buffers, out_buffers).ok());
+  NpuModelGeometry geometry = ResolveModelGeometry(0, 0, in_buffers, nullptr);
+  ASSERT_TRUE(HWKVCacheUpdate(in_buffers, out_buffers, &geometry).ok());
 
   auto lock_expected = TensorBufferScopedLock::Create<int8_t>(
       in_buffers.at("kv_cache_k_0"), TensorBuffer::LockMode::kRead);
@@ -189,7 +191,8 @@ TEST_F(NpuKVCacheTest, HWKVCacheUpdateTransposedInt16) {
 
   absl::flat_hash_map<absl::string_view, TensorBuffer> out_buffers;
 
-  ASSERT_TRUE(HWKVCacheUpdate(in_buffers, out_buffers).ok());
+  NpuModelGeometry geometry = ResolveModelGeometry(0, 0, in_buffers, nullptr);
+  ASSERT_TRUE(HWKVCacheUpdate(in_buffers, out_buffers, &geometry).ok());
 
   auto lock_expected = TensorBufferScopedLock::Create<int16_t>(
       in_buffers.at("kv_cache_k_0"), TensorBuffer::LockMode::kRead);
@@ -228,7 +231,8 @@ TEST_F(NpuKVCacheTest, HWKVCacheUpdateOutOfRange) {
 
   absl::flat_hash_map<absl::string_view, TensorBuffer> out_buffers;
 
-  EXPECT_FALSE(HWKVCacheUpdate(in_buffers, out_buffers).ok());
+  NpuModelGeometry geometry = ResolveModelGeometry(0, 0, in_buffers, nullptr);
+  EXPECT_FALSE(HWKVCacheUpdate(in_buffers, out_buffers, &geometry).ok());
 }
 
 TEST_F(NpuKVCacheTest, HWKVCacheUpdateGemma3nPrefill) {
@@ -260,7 +264,8 @@ TEST_F(NpuKVCacheTest, HWKVCacheUpdateGemma3nPrefill) {
 
   absl::flat_hash_map<absl::string_view, TensorBuffer> out_buffers;
 
-  ASSERT_TRUE(HWKVCacheUpdate(in_buffers, out_buffers).ok());
+  NpuModelGeometry geometry = ResolveModelGeometry(0, 0, in_buffers, nullptr);
+  ASSERT_TRUE(HWKVCacheUpdate(in_buffers, out_buffers, &geometry).ok());
 
   auto k_lock_expected = TensorBufferScopedLock::Create<int16_t>(
       in_buffers.at("kv_cache_k_0"), TensorBuffer::LockMode::kRead);
@@ -313,9 +318,9 @@ TEST_F(NpuKVCacheTest, HWKVCacheUpdateSWADecode) {
 
   absl::flat_hash_map<absl::string_view, TensorBuffer> out_buffers;
 
-  ASSERT_TRUE(
-      HWKVCacheUpdate(in_buffers, out_buffers, {}, /*enable_ringbuffer=*/true)
-          .ok());
+  NpuModelGeometry geometry = ResolveModelGeometry(0, 0, in_buffers, nullptr);
+  geometry.uses_ringbuffer = true;
+  ASSERT_TRUE(HWKVCacheUpdate(in_buffers, out_buffers, &geometry).ok());
 
   auto lock_expected = TensorBufferScopedLock::Create<float>(
       in_buffers.at("kv_cache_k_0"), TensorBuffer::LockMode::kRead);
@@ -360,9 +365,9 @@ TEST_F(NpuKVCacheTest, HWKVCacheUpdateSWADecodeTransposed) {
 
   absl::flat_hash_map<absl::string_view, TensorBuffer> out_buffers;
 
-  ASSERT_TRUE(
-      HWKVCacheUpdate(in_buffers, out_buffers, {}, /*enable_ringbuffer=*/true)
-          .ok());
+  NpuModelGeometry geometry = ResolveModelGeometry(0, 0, in_buffers, nullptr);
+  geometry.uses_ringbuffer = true;
+  ASSERT_TRUE(HWKVCacheUpdate(in_buffers, out_buffers, &geometry).ok());
 
   auto lock_expected = TensorBufferScopedLock::Create<float>(
       in_buffers.at("kv_cache_k_0"), TensorBuffer::LockMode::kRead);
@@ -412,9 +417,9 @@ TEST_F(NpuKVCacheTest, HWKVCacheUpdateSWAPrefillWrap) {
 
   absl::flat_hash_map<absl::string_view, TensorBuffer> out_buffers;
 
-  ASSERT_TRUE(
-      HWKVCacheUpdate(in_buffers, out_buffers, {}, /*enable_ringbuffer=*/true)
-          .ok());
+  NpuModelGeometry geometry = ResolveModelGeometry(0, 0, in_buffers, nullptr);
+  geometry.uses_ringbuffer = true;
+  ASSERT_TRUE(HWKVCacheUpdate(in_buffers, out_buffers, &geometry).ok());
 
   auto lock_expected = TensorBufferScopedLock::Create<float>(
       in_buffers.at("kv_cache_k_0"), TensorBuffer::LockMode::kRead);
@@ -475,9 +480,9 @@ TEST_F(NpuKVCacheTest, HWKVCacheUpdateSWAPrefillWrapTransposed) {
 
   absl::flat_hash_map<absl::string_view, TensorBuffer> out_buffers;
 
-  ASSERT_TRUE(
-      HWKVCacheUpdate(in_buffers, out_buffers, {}, /*enable_ringbuffer=*/true)
-          .ok());
+  NpuModelGeometry geometry = ResolveModelGeometry(0, 0, in_buffers, nullptr);
+  geometry.uses_ringbuffer = true;
+  ASSERT_TRUE(HWKVCacheUpdate(in_buffers, out_buffers, &geometry).ok());
 
   auto lock_expected = TensorBufferScopedLock::Create<float>(
       in_buffers.at("kv_cache_k_0"), TensorBuffer::LockMode::kRead);
@@ -561,9 +566,9 @@ TEST_F(NpuKVCacheTest, HWKVCacheUpdateSWAPrefillWithValidMask) {
 
   absl::flat_hash_map<absl::string_view, TensorBuffer> out_buffers;
 
-  ASSERT_TRUE(
-      HWKVCacheUpdate(in_buffers, out_buffers, {}, /*enable_ringbuffer=*/true)
-          .ok());
+  NpuModelGeometry geometry = ResolveModelGeometry(0, 0, in_buffers, nullptr);
+  geometry.uses_ringbuffer = true;
+  ASSERT_TRUE(HWKVCacheUpdate(in_buffers, out_buffers, &geometry).ok());
 
   auto lock_expected = TensorBufferScopedLock::Create<float>(
       in_buffers.at("kv_cache_k_0"), TensorBuffer::LockMode::kRead);
@@ -611,7 +616,8 @@ TEST_F(NpuKVCacheTest, HWKVCacheUpdateInvalidPos) {
                                          {1, slice_seq, hidden_dim}));
 
   absl::flat_hash_map<absl::string_view, TensorBuffer> out_buffers;
-  EXPECT_FALSE(HWKVCacheUpdate(in_buffers, out_buffers).ok());
+  NpuModelGeometry geometry = ResolveModelGeometry(0, 0, in_buffers, nullptr);
+  EXPECT_FALSE(HWKVCacheUpdate(in_buffers, out_buffers, &geometry).ok());
 }
 
 TEST_F(NpuKVCacheTest, HWKVCacheUpdateMismatchedOuterDims) {
@@ -641,7 +647,8 @@ TEST_F(NpuKVCacheTest, HWKVCacheUpdateMismatchedOuterDims) {
                                          {1, slice_seq, hidden_dim}));
 
   absl::flat_hash_map<absl::string_view, TensorBuffer> out_buffers;
-  EXPECT_FALSE(HWKVCacheUpdate(in_buffers, out_buffers).ok());
+  NpuModelGeometry geometry = ResolveModelGeometry(0, 0, in_buffers, nullptr);
+  EXPECT_FALSE(HWKVCacheUpdate(in_buffers, out_buffers, &geometry).ok());
 }
 
 TEST_F(NpuKVCacheTest, HWKVCacheUpdateMismatchedElementTypes) {
@@ -671,7 +678,8 @@ TEST_F(NpuKVCacheTest, HWKVCacheUpdateMismatchedElementTypes) {
                                                 {1, slice_seq, hidden_dim}));
 
   absl::flat_hash_map<absl::string_view, TensorBuffer> out_buffers;
-  EXPECT_FALSE(HWKVCacheUpdate(in_buffers, out_buffers).ok());
+  NpuModelGeometry geometry = ResolveModelGeometry(0, 0, in_buffers, nullptr);
+  EXPECT_FALSE(HWKVCacheUpdate(in_buffers, out_buffers, &geometry).ok());
 }
 
 TEST_F(NpuKVCacheTest, HWKVCacheUpdateDequantizeInt16ToFloat32) {
@@ -716,7 +724,9 @@ TEST_F(NpuKVCacheTest, HWKVCacheUpdateDequantizeInt16ToFloat32) {
   v_params.zero_point = 100;
   quant_params["kv_slice_v_0"] = v_params;
 
-  ASSERT_TRUE(HWKVCacheUpdate(in_buffers, out_buffers, quant_params).ok());
+  NpuModelGeometry geometry = ResolveModelGeometry(0, 0, in_buffers, nullptr);
+  ASSERT_TRUE(
+      HWKVCacheUpdate(in_buffers, out_buffers, &geometry, quant_params).ok());
 
   auto k_lock_expected = TensorBufferScopedLock::Create<float>(
       in_buffers.at("kv_cache_k_0"), TensorBuffer::LockMode::kRead);
@@ -759,7 +769,8 @@ TEST_F(NpuKVCacheTest, HWKVCacheUpdateConvolution) {
 
   absl::flat_hash_map<absl::string_view, TensorBuffer> out_buffers;
 
-  ASSERT_TRUE(HWKVCacheUpdate(in_buffers, out_buffers).ok());
+  NpuModelGeometry geometry = ResolveModelGeometry(0, 0, in_buffers, nullptr);
+  ASSERT_TRUE(HWKVCacheUpdate(in_buffers, out_buffers, &geometry).ok());
 
   auto lock_expected = TensorBufferScopedLock::Create<float>(
       in_buffers.at("kv_cache_c_0"), TensorBuffer::LockMode::kRead);
@@ -794,7 +805,8 @@ TEST_F(NpuKVCacheTest, HWKVCacheUpdateConvolutionOutBuffer) {
                                           out_cache_data, ElementType::Float32,
                                           {1, cache_seq, hidden_dim}));
 
-  ASSERT_TRUE(HWKVCacheUpdate(in_buffers, out_buffers).ok());
+  NpuModelGeometry geometry2 = ResolveModelGeometry(0, 0, in_buffers, nullptr);
+  ASSERT_TRUE(HWKVCacheUpdate(in_buffers, out_buffers, &geometry2).ok());
 
   {
     auto lock_expected = TensorBufferScopedLock::Create<float>(
@@ -820,17 +832,21 @@ TEST_F(NpuKVCacheTest, HWKVCacheUpdateConvolutionOutBuffer) {
 TEST_F(NpuKVCacheTest,
        NpuKVCacheCreateFailsWhenCompiledModelNullForModelMethod) {
   InferenceContext ctx;
+  NpuModelGeometry geometry;
   auto update_or = NpuKVCache::CreateForTest(KVCacheUpdateMethod::kModel,
-                                             nullptr, std::move(ctx));
+                                             nullptr, std::move(ctx),
+                                             /*kv_quant_params=*/{}, &geometry);
   EXPECT_FALSE(update_or.ok());
 }
 
 TEST_F(NpuKVCacheTest,
        NpuKVCacheCreateSucceedsForHwMethodWithoutCompiledModel) {
   InferenceContext ctx;
+  NpuModelGeometry geometry;
   LITERT_ASSERT_OK_AND_ASSIGN(
-      auto update, NpuKVCache::CreateForTest(KVCacheUpdateMethod::kWH, nullptr,
-                                             std::move(ctx)));
+      auto update, NpuKVCache::CreateForTest(
+                       KVCacheUpdateMethod::kWH, nullptr, std::move(ctx),
+                       /*kv_quant_params=*/{}, &geometry));
   EXPECT_EQ(update.GetMethod(), KVCacheUpdateMethod::kWH);
 }
 
@@ -840,9 +856,11 @@ TEST_F(NpuKVCacheTest, NpuKVCacheCommitVerifiedKVCacheSetsPosition) {
       CreateTensorBufferWithDims(std::vector<int32_t>{0, 0, 0},
                                  ElementType::Int32, {3});
 
+  NpuModelGeometry geometry;
   LITERT_ASSERT_OK_AND_ASSIGN(
-      auto update, NpuKVCache::CreateForTest(KVCacheUpdateMethod::kWH, nullptr,
-                                             std::move(ctx)));
+      auto update, NpuKVCache::CreateForTest(
+                       KVCacheUpdateMethod::kWH, nullptr, std::move(ctx),
+                       /*kv_quant_params=*/{}, &geometry));
 
   EXPECT_TRUE(update.SetVerifyPos(100).ok());
 
@@ -960,11 +978,12 @@ TEST_F(NpuKVCacheTest, SingleHeadCopyAndClearKVCache) {
   dst_map.emplace("kv_cache_v_10", std::move(master_v_dst));
 
   InferenceContext dummy_ctx;
+  NpuModelGeometry geometry;
   LITERT_ASSERT_OK_AND_ASSIGN(
       auto kv_cache,
       NpuKVCache::CreateForTest(KVCacheUpdateMethod::kWH, nullptr,
                                 std::move(dummy_ctx), /*kv_quant_params=*/{},
-                                /*uses_ringbuffer=*/false,
+                                /*geometry=*/&geometry,
                                 /*kv_cache_init_value=*/kInitVal));
 
   LITERT_ASSERT_OK(
@@ -1107,11 +1126,12 @@ TEST_F(NpuKVCacheTest, CascadingMultiTierCopyKVCache) {
   }
 
   InferenceContext dummy_ctx;
+  NpuModelGeometry geometry;
   LITERT_ASSERT_OK_AND_ASSIGN(
       auto kv_cache,
       NpuKVCache::CreateForTest(KVCacheUpdateMethod::kWH, nullptr,
                                 std::move(dummy_ctx), /*kv_quant_params=*/{},
-                                /*uses_ringbuffer=*/false,
+                                /*geometry=*/&geometry,
                                 /*kv_cache_init_value=*/kInitVal));
 
   // 4. Migrate Tier 0 (640) -> Tier 1 (1024)
@@ -1272,11 +1292,12 @@ TEST_F(NpuKVCacheTest, PartialMidBucketCopyKVCache) {
   dst_map.emplace("kv_cache_v_10", std::move(master_v_dst));
 
   InferenceContext dummy_ctx;
+  NpuModelGeometry geometry;
   LITERT_ASSERT_OK_AND_ASSIGN(
       auto kv_cache,
       NpuKVCache::CreateForTest(KVCacheUpdateMethod::kWH, nullptr,
                                 std::move(dummy_ctx), /*kv_quant_params=*/{},
-                                /*uses_ringbuffer=*/false,
+                                /*geometry=*/&geometry,
                                 /*kv_cache_init_value=*/kInitVal));
 
   LITERT_ASSERT_OK(kv_cache.CopyKVCache(src_map, dst_map,
@@ -1319,6 +1340,118 @@ TEST_F(NpuKVCacheTest, PartialMidBucketCopyKVCache) {
         EXPECT_EQ(v_lock->second[d * kNewSeqLen + t], kInitVal);
       }
     }
+  }
+}
+
+TEST_F(NpuKVCacheTest, HWKVCacheUpdate_WithKVCacheBufferInfo_LocalAndGlobal) {
+  int hidden_dim = 4;
+  int cache_seq = 10;
+  int slice_seq = 2;
+
+  // Layer 0 is local (ringbuffer), Layer 1 is global (linear).
+  // K shape: [1, 1, seq, dim] -> sequence_axis = 2
+  // V shape: [1, 1, dim, seq] -> sequence_axis = 3
+  NpuModelGeometry geometry;
+  auto& buffer_info_map = geometry.kv_buffer_info;
+  buffer_info_map["kv_cache_k_0"] =
+      KVCacheBufferInfo{.sequence_axis = 2, .is_local = true};
+  buffer_info_map["kv_cache_v_0"] =
+      KVCacheBufferInfo{.sequence_axis = 3, .is_local = true};
+  buffer_info_map["kv_slice_k_0"] =
+      KVCacheBufferInfo{.sequence_axis = 2, .is_local = true};
+  buffer_info_map["kv_slice_v_0"] =
+      KVCacheBufferInfo{.sequence_axis = 3, .is_local = true};
+
+  buffer_info_map["kv_cache_k_1"] =
+      KVCacheBufferInfo{.sequence_axis = 2, .is_local = false};
+  buffer_info_map["kv_cache_v_1"] =
+      KVCacheBufferInfo{.sequence_axis = 3, .is_local = false};
+  buffer_info_map["kv_slice_k_1"] =
+      KVCacheBufferInfo{.sequence_axis = 2, .is_local = false};
+  buffer_info_map["kv_slice_v_1"] =
+      KVCacheBufferInfo{.sequence_axis = 3, .is_local = false};
+
+  std::vector<float> k_cache_data(cache_seq * hidden_dim, 0.0f);
+  std::vector<float> v_cache_data(hidden_dim * cache_seq, 0.0f);
+  std::vector<float> k_slice_data(slice_seq * hidden_dim, 1.0f);
+  std::vector<float> v_slice_data(hidden_dim * slice_seq, 2.0f);
+
+  // 1. Within capacity: start_pos = 7
+  {
+    absl::flat_hash_map<absl::string_view, TensorBuffer> in_buffers;
+    std::vector<int32_t> pos_data = {7};
+    in_buffers.emplace("input_pos",
+                       CreateTensorBuffer(pos_data, ElementType::Int32));
+    in_buffers.emplace("kv_cache_k_0", CreateTensorBufferWithDims(
+                                           k_cache_data, ElementType::Float32,
+                                           {1, 1, cache_seq, hidden_dim}));
+    in_buffers.emplace("kv_cache_v_0", CreateTensorBufferWithDims(
+                                           v_cache_data, ElementType::Float32,
+                                           {1, 1, hidden_dim, cache_seq}));
+    in_buffers.emplace("kv_slice_k_0", CreateTensorBufferWithDims(
+                                           k_slice_data, ElementType::Float32,
+                                           {1, 1, slice_seq, hidden_dim}));
+    in_buffers.emplace("kv_slice_v_0", CreateTensorBufferWithDims(
+                                           v_slice_data, ElementType::Float32,
+                                           {1, 1, hidden_dim, slice_seq}));
+
+    in_buffers.emplace("kv_cache_k_1", CreateTensorBufferWithDims(
+                                           k_cache_data, ElementType::Float32,
+                                           {1, 1, cache_seq, hidden_dim}));
+    in_buffers.emplace("kv_cache_v_1", CreateTensorBufferWithDims(
+                                           v_cache_data, ElementType::Float32,
+                                           {1, 1, hidden_dim, cache_seq}));
+    in_buffers.emplace("kv_slice_k_1", CreateTensorBufferWithDims(
+                                           k_slice_data, ElementType::Float32,
+                                           {1, 1, slice_seq, hidden_dim}));
+    in_buffers.emplace("kv_slice_v_1", CreateTensorBufferWithDims(
+                                           v_slice_data, ElementType::Float32,
+                                           {1, 1, hidden_dim, slice_seq}));
+
+    absl::flat_hash_map<absl::string_view, TensorBuffer> out_buffers;
+    LITERT_ASSERT_OK(HWKVCacheUpdate(in_buffers, out_buffers, &geometry));
+  }
+
+  // 2. Beyond capacity: start_pos = 11.
+  // Local layer 0 should wrap to 11 % 10 = 1.
+  // Global layer 1 should fail because 11 + 2 > 10.
+  {
+    absl::flat_hash_map<absl::string_view, TensorBuffer> in_buffers;
+    std::vector<int32_t> pos_data = {11};
+    in_buffers.emplace("input_pos",
+                       CreateTensorBuffer(pos_data, ElementType::Int32));
+    in_buffers.emplace("kv_cache_k_0", CreateTensorBufferWithDims(
+                                           k_cache_data, ElementType::Float32,
+                                           {1, 1, cache_seq, hidden_dim}));
+    in_buffers.emplace("kv_cache_v_0", CreateTensorBufferWithDims(
+                                           v_cache_data, ElementType::Float32,
+                                           {1, 1, hidden_dim, cache_seq}));
+    in_buffers.emplace("kv_slice_k_0", CreateTensorBufferWithDims(
+                                           k_slice_data, ElementType::Float32,
+                                           {1, 1, slice_seq, hidden_dim}));
+    in_buffers.emplace("kv_slice_v_0", CreateTensorBufferWithDims(
+                                           v_slice_data, ElementType::Float32,
+                                           {1, 1, hidden_dim, slice_seq}));
+
+    absl::flat_hash_map<absl::string_view, TensorBuffer> out_buffers;
+    // Layer 0 alone succeeds because it wraps
+    LITERT_ASSERT_OK(HWKVCacheUpdate(in_buffers, out_buffers, &geometry));
+
+    // Adding global layer 1 should cause an error
+    in_buffers.emplace("kv_cache_k_1", CreateTensorBufferWithDims(
+                                           k_cache_data, ElementType::Float32,
+                                           {1, 1, cache_seq, hidden_dim}));
+    in_buffers.emplace("kv_cache_v_1", CreateTensorBufferWithDims(
+                                           v_cache_data, ElementType::Float32,
+                                           {1, 1, hidden_dim, cache_seq}));
+    in_buffers.emplace("kv_slice_k_1", CreateTensorBufferWithDims(
+                                           k_slice_data, ElementType::Float32,
+                                           {1, 1, slice_seq, hidden_dim}));
+    in_buffers.emplace("kv_slice_v_1", CreateTensorBufferWithDims(
+                                           v_slice_data, ElementType::Float32,
+                                           {1, 1, hidden_dim, slice_seq}));
+
+    EXPECT_FALSE(HWKVCacheUpdate(in_buffers, out_buffers, &geometry).ok());
   }
 }
 

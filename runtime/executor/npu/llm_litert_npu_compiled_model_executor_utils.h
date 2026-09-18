@@ -52,6 +52,7 @@
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/llm_executor_processed_tokens.h"
 #include "runtime/executor/llm_executor_settings.h"
+#include "runtime/proto/executor_metadata.pb.h"
 #include "runtime/util/status_macros.h"
 
 namespace litert::lm {
@@ -186,12 +187,50 @@ absl::Status Fill(::litert::TensorBuffer& tensor_buffer, uint16_t value);
 absl::StatusOr<std::vector<uint8_t>> CopyRawBytesFromTensorBuffer(
     const ::litert::TensorBuffer& buffer);
 
-// Detect if the model uses ringbuffer KV caches by checking if
-// there are different KV cache sizes across layers (mixed local/global
-// attention).
+// Stores metadata describing a KV cache buffer (e.g. sequence axis, ringbuffer
+// capacity).
+struct KVCacheBufferInfo {
+  int sequence_axis = -1;
+  bool is_local = false;
+  int min_sequence_length = 0;
+  int max_sequence_length = 0;
+};
+
+// Extracts KV cache buffer info from executor metadata, falling back to
+// tensor shape heuristics for any buffers missing metadata.
+absl::flat_hash_map<std::string, KVCacheBufferInfo> ExtractKVCacheBufferInfoMap(
+    const absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+        input_kv_cache_buffers,
+    int global_cache_length, const proto::ExecutorMetadata* executor_metadata);
+
+// Model geometry parameters resolved from executor metadata or tensor
+// heuristics.
+struct NpuModelGeometry {
+  int prefill_chunk_size = 0;
+  int global_cache_length = 0;
+  std::optional<int> local_cache_length = std::nullopt;
+  int sliding_window_size = 512;
+  bool uses_ringbuffer = false;
+  absl::flat_hash_map<std::string, KVCacheBufferInfo> kv_buffer_info;
+};
+
+// Resolves model geometry giving preference to ExecutorMetadata when present
+// and falling back to LlmMetadata / tensor shapes.
+NpuModelGeometry ResolveModelGeometry(
+    int prefill_chunk_size, int global_cache_length,
+    const absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+        input_kv_cache_buffers,
+    const proto::ExecutorMetadata* executor_metadata = nullptr);
+
+// Detect if the model uses ringbuffer KV caches.
+// If executor_metadata is provided and contains state buffers, it checks
+// whether any buffer is TYPE_LOCAL_KEY_CACHE or TYPE_LOCAL_VALUE_CACHE.
+// Otherwise, it falls back to checking if there are different KV cache sizes
+// across layers (mixed local/global attention).
 bool DetectUsesRingbuffer(
     const absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-        input_kv_cache_buffers);
+        input_kv_cache_buffers,
+    const proto::ExecutorMetadata* executor_metadata = nullptr);
 
 // Builds a prefill signature name from its base and the prefill length, e.g.
 // PrefillSig("prefill_mask", 256) -> "prefill_mask_256".
@@ -390,6 +429,7 @@ struct ContextGroup {
   absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
       input_kv_cache_buffers;
   InferenceContext text_decoder_inference_context;
+  NpuModelGeometry geometry;
 };
 
 ResolvedAuxiliarySignatures BuildResolvedDecodeAuxiliarySignatures(

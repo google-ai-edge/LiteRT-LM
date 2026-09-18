@@ -770,9 +770,332 @@ absl::StatusOr<std::vector<uint8_t>> CopyRawBytesFromTensorBuffer(
   }
 }
 
+absl::flat_hash_map<std::string, KVCacheBufferInfo> ExtractKVCacheBufferInfoMap(
+    const absl::flat_hash_map<absl::string_view, TensorBuffer>&
+        input_kv_cache_buffers,
+    int global_cache_length, const proto::ExecutorMetadata* executor_metadata) {
+  absl::flat_hash_map<std::string, KVCacheBufferInfo> buffer_info_map;
+  if (executor_metadata != nullptr &&
+      executor_metadata->has_llm_executor_metadata()) {
+    for (const auto& sb :
+         executor_metadata->llm_executor_metadata().state_buffers()) {
+      KVCacheBufferInfo info;
+      if (sb.has_sequence_axis()) {
+        info.sequence_axis = sb.sequence_axis();
+      }
+      info.is_local = (sb.type() == proto::StateBuffer::TYPE_LOCAL_KEY_CACHE ||
+                       sb.type() == proto::StateBuffer::TYPE_LOCAL_VALUE_CACHE);
+      if (sb.has_minimum_sequence_length()) {
+        info.min_sequence_length = sb.minimum_sequence_length();
+      }
+      if (sb.has_maximum_sequence_length()) {
+        info.max_sequence_length = sb.maximum_sequence_length();
+      }
+
+      // Check the actual tensor buffer to determine the true physical sequence
+      // length.
+      auto find_buf = [&](absl::string_view buf_name) -> const TensorBuffer* {
+        if (buf_name.empty()) return nullptr;
+        auto it = input_kv_cache_buffers.find(buf_name);
+        return (it != input_kv_cache_buffers.end()) ? &it->second : nullptr;
+      };
+      const TensorBuffer* buf = find_buf(sb.decode_input_name());
+      if (!buf) buf = find_buf(sb.prefill_input_name());
+      if (buf) {
+        auto type = buf->TensorType();
+        if (type.HasValue()) {
+          auto dims = type->Layout().Dimensions();
+          int rank = dims.size();
+          if (info.sequence_axis >= 0 && info.sequence_axis < rank) {
+            info.min_sequence_length = dims[info.sequence_axis];
+          } else if (rank >= 2) {
+            info.min_sequence_length = std::max(dims[rank - 1], dims[rank - 2]);
+          }
+        }
+      }
+      if (global_cache_length > 0 && info.min_sequence_length > 0 &&
+          info.min_sequence_length < global_cache_length) {
+        info.is_local = true;
+      }
+
+      auto register_name = [&](absl::string_view name) {
+        if (!name.empty()) {
+          buffer_info_map[name] = info;
+          int64_t hidden_dim = -1;
+          if (buf) {
+            auto type = buf->TensorType();
+            if (type.HasValue()) {
+              auto dims = type->Layout().Dimensions();
+              int rank = dims.size();
+              if (rank >= 2) {
+                int seq_axis =
+                    (info.sequence_axis >= 0 && info.sequence_axis < rank)
+                        ? info.sequence_axis
+                        : ((dims[rank - 1] >= dims[rank - 2]) ? rank - 1
+                                                              : rank - 2);
+                int hidden_axis = (seq_axis == rank - 1) ? rank - 2 : rank - 1;
+                hidden_dim = dims[hidden_axis];
+              }
+            }
+          }
+          auto make_slice_info = [&](absl::string_view slice_name) {
+            KVCacheBufferInfo slice_info = info;
+            auto it = input_kv_cache_buffers.find(slice_name);
+            if (it != input_kv_cache_buffers.end()) {
+              auto type = it->second.TensorType();
+              if (type.HasValue()) {
+                auto dims = type->Layout().Dimensions();
+                int s_rank = dims.size();
+                if (s_rank >= 2) {
+                  if (hidden_dim > 0 && dims[s_rank - 1] == hidden_dim) {
+                    slice_info.sequence_axis = s_rank - 2;
+                  } else if (hidden_dim > 0 && dims[s_rank - 2] == hidden_dim) {
+                    slice_info.sequence_axis = s_rank - 1;
+                  }
+                }
+              }
+            }
+            return slice_info;
+          };
+          if (absl::StartsWith(name, "kv_cache_k_")) {
+            std::string s1 = absl::StrCat("kv_slice_k_", name.substr(11));
+            buffer_info_map[s1] = make_slice_info(s1);
+            std::string s2 = absl::StrCat("kv_cache_slice_k_", name.substr(11));
+            buffer_info_map[s2] = make_slice_info(s2);
+          } else if (absl::StartsWith(name, "kv_cache_v_")) {
+            std::string s1 = absl::StrCat("kv_slice_v_", name.substr(11));
+            buffer_info_map[s1] = make_slice_info(s1);
+            std::string s2 = absl::StrCat("kv_cache_slice_v_", name.substr(11));
+            buffer_info_map[s2] = make_slice_info(s2);
+          } else if (absl::StartsWith(name, "kv_cache_c_")) {
+            std::string s1 = absl::StrCat("kv_slice_c_", name.substr(11));
+            buffer_info_map[s1] = make_slice_info(s1);
+            std::string s2 = absl::StrCat("kv_cache_slice_c_", name.substr(11));
+            buffer_info_map[s2] = make_slice_info(s2);
+          }
+        }
+      };
+      register_name(sb.prefill_input_name());
+      register_name(sb.prefill_output_name());
+      register_name(sb.decode_input_name());
+      register_name(sb.decode_output_name());
+    }
+  }
+
+  // Fallback: Populate buffer info from tensor dimensions for any buffer
+  // missing metadata.
+  for (const auto& [name, buffer] : input_kv_cache_buffers) {
+    if (absl::StartsWith(name, "kv_slice_") ||
+        absl::StartsWith(name, "kv_cache_slice_")) {
+      continue;
+    }
+    std::string name_str(name);
+    if (buffer_info_map.contains(name_str)) {
+      continue;
+    }
+    auto type_expected = buffer.TensorType();
+    if (!type_expected.HasValue()) {
+      continue;
+    }
+    auto dims = type_expected->Layout().Dimensions();
+    int rank = dims.size();
+    if (rank < 2) {
+      continue;
+    }
+    int last_dim = dims[rank - 1];
+    int second_last_dim = dims[rank - 2];
+    int cache_seq = std::max(last_dim, second_last_dim);
+    int cache_seq_dim = (last_dim == cache_seq) ? rank - 1 : rank - 2;
+    int hidden_dim_axis = (cache_seq_dim == rank - 1) ? rank - 2 : rank - 1;
+    int64_t hidden_dim = dims[hidden_dim_axis];
+
+    KVCacheBufferInfo info;
+    info.sequence_axis = cache_seq_dim;
+    info.min_sequence_length = cache_seq;
+    info.max_sequence_length = global_cache_length;
+    info.is_local =
+        (global_cache_length > 0 && cache_seq < global_cache_length);
+
+    auto make_slice_info = [&](absl::string_view slice_name) {
+      KVCacheBufferInfo slice_info = info;
+      auto it = input_kv_cache_buffers.find(slice_name);
+      if (it != input_kv_cache_buffers.end()) {
+        auto type = it->second.TensorType();
+        if (type.HasValue()) {
+          auto s_dims = type->Layout().Dimensions();
+          int s_rank = s_dims.size();
+          if (s_rank >= 2) {
+            if (s_dims[s_rank - 1] == hidden_dim) {
+              slice_info.sequence_axis = s_rank - 2;
+            } else if (s_dims[s_rank - 2] == hidden_dim) {
+              slice_info.sequence_axis = s_rank - 1;
+            }
+          }
+        }
+      }
+      return slice_info;
+    };
+
+    buffer_info_map[name_str] = info;
+    if (absl::StartsWith(name_str, "kv_cache_k_")) {
+      std::string s1 = absl::StrCat("kv_slice_k_", name_str.substr(11));
+      buffer_info_map[s1] = make_slice_info(s1);
+      std::string s2 = absl::StrCat("kv_cache_slice_k_", name_str.substr(11));
+      buffer_info_map[s2] = make_slice_info(s2);
+    } else if (absl::StartsWith(name_str, "kv_cache_v_")) {
+      std::string s1 = absl::StrCat("kv_slice_v_", name_str.substr(11));
+      buffer_info_map[s1] = make_slice_info(s1);
+      std::string s2 = absl::StrCat("kv_cache_slice_v_", name_str.substr(11));
+      buffer_info_map[s2] = make_slice_info(s2);
+    } else if (absl::StartsWith(name_str, "kv_cache_c_")) {
+      std::string s1 = absl::StrCat("kv_slice_c_", name_str.substr(11));
+      buffer_info_map[s1] = make_slice_info(s1);
+      std::string s2 = absl::StrCat("kv_cache_slice_c_", name_str.substr(11));
+      buffer_info_map[s2] = make_slice_info(s2);
+    }
+  }
+
+  // Ensure any remaining slice buffers in input_kv_cache_buffers have an entry.
+  for (const auto& [name, buffer] : input_kv_cache_buffers) {
+    if (!absl::StartsWith(name, "kv_slice_") &&
+        !absl::StartsWith(name, "kv_cache_slice_")) {
+      continue;
+    }
+    std::string name_str(name);
+    if (buffer_info_map.contains(name_str)) {
+      continue;
+    }
+    auto type_expected = buffer.TensorType();
+    if (!type_expected.HasValue()) {
+      continue;
+    }
+    auto dims = type_expected->Layout().Dimensions();
+    int rank = dims.size();
+    if (rank < 2) {
+      continue;
+    }
+    KVCacheBufferInfo info;
+    info.sequence_axis = rank - 2;
+    buffer_info_map[name_str] = info;
+  }
+
+  return buffer_info_map;
+}
+
+NpuModelGeometry ResolveModelGeometry(
+    int prefill_chunk_size, int global_cache_length,
+    const absl::flat_hash_map<absl::string_view, TensorBuffer>&
+        input_kv_cache_buffers,
+    const proto::ExecutorMetadata* executor_metadata) {
+  NpuModelGeometry geometry;
+  geometry.prefill_chunk_size = prefill_chunk_size;
+  geometry.global_cache_length = global_cache_length;
+  geometry.uses_ringbuffer =
+      DetectUsesRingbuffer(input_kv_cache_buffers, executor_metadata);
+  geometry.kv_buffer_info = ExtractKVCacheBufferInfoMap(
+      input_kv_cache_buffers, global_cache_length, executor_metadata);
+
+  // 1. Try resolving local_cache_length from ExecutorMetadata state buffers.
+  if (executor_metadata != nullptr &&
+      executor_metadata->has_llm_executor_metadata()) {
+    const auto& llm_meta = executor_metadata->llm_executor_metadata();
+    for (const auto& sb : llm_meta.state_buffers()) {
+      if (sb.type() == proto::StateBuffer::TYPE_LOCAL_KEY_CACHE ||
+          sb.type() == proto::StateBuffer::TYPE_LOCAL_VALUE_CACHE) {
+        // Check actual physical tensor buffer first if present.
+        auto find_buf = [&](absl::string_view buf_name) -> const TensorBuffer* {
+          if (buf_name.empty()) return nullptr;
+          auto it = input_kv_cache_buffers.find(buf_name);
+          return (it != input_kv_cache_buffers.end()) ? &it->second : nullptr;
+        };
+        const TensorBuffer* buf = find_buf(sb.decode_input_name());
+        if (!buf) buf = find_buf(sb.prefill_input_name());
+        if (buf) {
+          auto type = buf->TensorType();
+          if (type.HasValue()) {
+            auto dims = type->Layout().Dimensions();
+            int rank = dims.size();
+            if (sb.has_sequence_axis() && sb.sequence_axis() >= 0 &&
+                sb.sequence_axis() < rank) {
+              geometry.local_cache_length = dims[sb.sequence_axis()];
+              break;
+            } else if (rank >= 2) {
+              geometry.local_cache_length =
+                  std::max(dims[rank - 1], dims[rank - 2]);
+              break;
+            }
+          }
+        }
+        // Fallback to metadata sequence length fields (< global_cache_length).
+        if (sb.has_minimum_sequence_length() &&
+            sb.minimum_sequence_length() > 0 &&
+            sb.minimum_sequence_length() < global_cache_length) {
+          geometry.local_cache_length = sb.minimum_sequence_length();
+          break;
+        } else if (sb.has_maximum_sequence_length() &&
+                   sb.maximum_sequence_length() > 0 &&
+                   sb.maximum_sequence_length() < global_cache_length) {
+          geometry.local_cache_length = sb.maximum_sequence_length();
+          break;
+        } else if (sb.has_minimum_sequence_length() &&
+                   sb.minimum_sequence_length() > 0) {
+          geometry.local_cache_length = sb.minimum_sequence_length();
+          break;
+        }
+      }
+    }
+  }
+
+  // 2. If local_cache_length was not found in metadata, inspect
+  // geometry.kv_buffer_info.
+  if (!geometry.local_cache_length.has_value() && geometry.uses_ringbuffer) {
+    for (const auto& [name, info] : geometry.kv_buffer_info) {
+      if (info.is_local && info.min_sequence_length > 0 &&
+          info.min_sequence_length < global_cache_length) {
+        if (!geometry.local_cache_length.has_value() ||
+            info.min_sequence_length < *geometry.local_cache_length) {
+          geometry.local_cache_length = info.min_sequence_length;
+        }
+      }
+    }
+  }
+
+  // 3. Resolve attention mask sliding window size.
+  if (executor_metadata != nullptr &&
+      executor_metadata->has_llm_executor_metadata()) {
+    const auto& llm_meta = executor_metadata->llm_executor_metadata();
+    if (llm_meta.has_attention_mask_settings() &&
+        llm_meta.attention_mask_settings().sliding_window_size() > 0) {
+      geometry.sliding_window_size =
+          llm_meta.attention_mask_settings().sliding_window_size();
+    } else if (geometry.local_cache_length.has_value()) {
+      geometry.sliding_window_size = *geometry.local_cache_length;
+    }
+  } else if (geometry.local_cache_length.has_value()) {
+    geometry.sliding_window_size = *geometry.local_cache_length;
+  }
+
+  return geometry;
+}
+
 bool DetectUsesRingbuffer(
     const absl::flat_hash_map<absl::string_view, TensorBuffer>&
-        input_kv_cache_buffers) {
+        input_kv_cache_buffers,
+    const proto::ExecutorMetadata* executor_metadata) {
+  if (executor_metadata != nullptr &&
+      executor_metadata->has_llm_executor_metadata()) {
+    const auto& llm_meta = executor_metadata->llm_executor_metadata();
+    if (!llm_meta.state_buffers().empty()) {
+      for (const auto& sb : llm_meta.state_buffers()) {
+        if (sb.type() == proto::StateBuffer::TYPE_LOCAL_KEY_CACHE ||
+            sb.type() == proto::StateBuffer::TYPE_LOCAL_VALUE_CACHE) {
+          return true;
+        }
+      }
+      return false;
+    }
+  }
+
   std::set<int64_t> cache_seqs;
   for (const auto& [name, buffer] : input_kv_cache_buffers) {
     if (name.starts_with(kKvCacheKRootName) ||

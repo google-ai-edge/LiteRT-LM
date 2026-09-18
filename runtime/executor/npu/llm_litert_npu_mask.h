@@ -26,6 +26,7 @@
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/executor/npu/llm_litert_npu_compiled_model_executor_utils.h"
+#include "runtime/proto/executor_metadata.pb.h"
 
 namespace litert::lm {
 
@@ -96,22 +97,27 @@ class NpuMask {
       absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
           text_decoder_decode_input_buffers,
       absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-          text_decoder_verify_input_buffers);
+          text_decoder_verify_input_buffers,
+      const NpuModelGeometry* geometry);
 
   static absl::StatusOr<NpuMask> CreateForDrafter(
       MaskUpdateMethod method, const ::litert::CompiledModel* compiled_model,
       absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
           mask_input_buffers,
       absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
-          mask_output_buffers);
+          mask_output_buffers,
+      const NpuModelGeometry* geometry);
 
   static absl::StatusOr<NpuMask> CreateForTest(
       MaskUpdateMethod method, const ::litert::CompiledModel* compiled_model,
-      InferenceContext mask_context);
+      InferenceContext mask_context, const NpuModelGeometry* geometry);
 
   void SetCompiledModel(const ::litert::CompiledModel* compiled_model) {
     compiled_model_ = compiled_model;
   }
+
+  void SetGeometry(const NpuModelGeometry* geometry) { geometry_ = geometry; }
+  const NpuModelGeometry* GetGeometry() const { return geometry_; }
 
   // Updates the internal Mask output buffer bindings (e.g. mask_local,
   // mask_global) to point to the newly active context group's text decoder
@@ -147,21 +153,30 @@ class NpuMask {
  private:
   explicit NpuMask(MaskUpdateMethod method,
                    const ::litert::CompiledModel* compiled_model,
-                   InferenceContext mask_context)
+                   InferenceContext mask_context,
+                   const NpuModelGeometry* geometry)
       : method_(method),
         compiled_model_(compiled_model),
-        mask_context_(std::move(mask_context)) {}
+        mask_context_(std::move(mask_context)),
+        geometry_(geometry) {}
 
   MaskUpdateMethod method_ = MaskUpdateMethod::kModel;
   const ::litert::CompiledModel* compiled_model_ = nullptr;
   InferenceContext mask_context_;
+  const NpuModelGeometry* geometry_ = nullptr;
 };
 
 // Performs manual attention mask update (CPU fallback).
 absl::Status HWMaskUpdate(
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& in_buffers,
-    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-        out_buffers);
+    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& out_buffers,
+    const NpuModelGeometry& geometry);
+
+absl::Status HWMaskUpdate(
+    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& in_buffers,
+    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& out_buffers,
+    int64_t sliding_window_size = 512, bool uses_ringbuffer = false,
+    int64_t global_capacity = 0, int64_t local_capacity = 0);
 
 }  // namespace litert::lm
 

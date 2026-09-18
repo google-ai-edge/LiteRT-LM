@@ -134,8 +134,12 @@ absl::Status ClearKVCacheBuffers(
 absl::Status HWKVCacheUpdate(
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& in_buffers,
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& out_buffers,
-    const absl::flat_hash_map<absl::string_view, HWQuantParams>& quant_params,
-    bool enable_ringbuffer) {
+    const NpuModelGeometry* geometry,
+    const absl::flat_hash_map<absl::string_view, HWQuantParams>& quant_params) {
+  RET_CHECK(geometry != nullptr) << "geometry must not be null";
+  const auto* info_map = &geometry->kv_buffer_info;
+  bool enable_ringbuffer = geometry->uses_ringbuffer;
+
   static constexpr absl::string_view kInputPos = "input_pos";
   if (!in_buffers.contains(kInputPos)) {
     return absl::InvalidArgumentError("Missing input_pos buffer");
@@ -218,35 +222,27 @@ absl::Status HWKVCacheUpdate(
       return absl::InvalidArgumentError("Cache layout has 0 elements");
     }
 
-    // Assume hidden_dim is the smaller of the last two dimensions of cache.
-    int cache_last_dim = cache_dims[cache_rank - 1];
-    int cache_second_last_dim = cache_dims[cache_rank - 2];
-    int64_t hidden_dim = std::min(cache_last_dim, cache_second_last_dim);
-    int64_t cache_seq = std::max(cache_last_dim, cache_second_last_dim);
-
-    int cache_seq_dim = (cache_dims[cache_rank - 1] == cache_seq)
-                            ? cache_rank - 1
-                            : cache_rank - 2;
-
-    int slice_seq_dim = -1;
-    int slice_hidden_dim = -1;
-    int64_t slice_seq = -1;
-
-    // Find dimensions in slice
-    if (slice_dims[slice_rank - 1] == hidden_dim) {
-      slice_hidden_dim = slice_rank - 1;
-      slice_seq_dim = slice_rank - 2;
-      slice_seq = slice_dims[slice_seq_dim];
-    } else if (slice_dims[slice_rank - 2] == hidden_dim) {
-      slice_hidden_dim = slice_rank - 2;
-      slice_seq_dim = slice_rank - 1;
-      slice_seq = slice_dims[slice_seq_dim];
+    auto it = info_map->find(cache_name);
+    if (it == info_map->end() || it->second.sequence_axis < 0 ||
+        it->second.sequence_axis >= cache_rank) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "Missing or invalid buffer info for cache buffer: ", cache_name));
     }
+    int cache_seq_dim = it->second.sequence_axis;
+    int64_t cache_seq = cache_dims[cache_seq_dim];
+    int hidden_dim_axis =
+        (cache_seq_dim == cache_rank - 1) ? cache_rank - 2 : cache_rank - 1;
+    int64_t hidden_dim = cache_dims[hidden_dim_axis];
+    bool is_layer_ringbuffer = it->second.is_local || enable_ringbuffer;
 
-    if (slice_hidden_dim == -1) {
-      return absl::InternalError(
-          "Failed to identify hidden dimension in slice");
+    auto slice_it = info_map->find(slice_name);
+    if (slice_it == info_map->end() || slice_it->second.sequence_axis < 0 ||
+        slice_it->second.sequence_axis >= slice_rank) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "Missing or invalid buffer info for slice buffer: ", slice_name));
     }
+    int slice_seq_dim = slice_it->second.sequence_axis;
+    int64_t slice_seq = slice_dims[slice_seq_dim];
 
     if (slice_seq > cache_seq) {
       return absl::InvalidArgumentError(
@@ -303,10 +299,10 @@ absl::Status HWKVCacheUpdate(
           absl::StrCat("input_pos must be non-negative: ", start_pos));
     }
 
-    int64_t wp = enable_ringbuffer ? (start_pos % cache_seq) : start_pos;
+    int64_t wp = is_layer_ringbuffer ? (start_pos % cache_seq) : start_pos;
 
     if (wp + real_len > cache_seq) {
-      if (!enable_ringbuffer) {
+      if (!is_layer_ringbuffer) {
         return absl::OutOfRangeError("KV-cache update out of range");
       }
     }
@@ -684,14 +680,14 @@ absl::StatusOr<NpuKVCache> NpuKVCache::CreateForTest(
     KVCacheUpdateMethod method, const ::litert::CompiledModel* compiled_model,
     InferenceContext cache_update_context,
     absl::flat_hash_map<absl::string_view, HWQuantParams> kv_quant_params,
-    bool uses_ringbuffer, int64_t kv_cache_init_value) {
+    const NpuModelGeometry* geometry, int64_t kv_cache_init_value) {
+  RET_CHECK(geometry != nullptr) << "geometry must not be null";
   if (method == KVCacheUpdateMethod::kModel && compiled_model == nullptr) {
     return absl::InvalidArgumentError(
         "Compiled model is required when using kModel cache update method.");
   }
   return NpuKVCache(method, compiled_model, std::move(cache_update_context),
-                    std::move(kv_quant_params), uses_ringbuffer,
-                    kv_cache_init_value);
+                    std::move(kv_quant_params), geometry, kv_cache_init_value);
 }
 
 absl::StatusOr<NpuKVCache> NpuKVCache::Create(
@@ -708,7 +704,8 @@ absl::StatusOr<NpuKVCache> NpuKVCache::Create(
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
         verify_output_kv_cache_slice_buffers,
     absl::flat_hash_map<absl::string_view, HWQuantParams> kv_quant_params,
-    bool uses_ringbuffer, int64_t kv_cache_init_value) {
+    const NpuModelGeometry* geometry, int64_t kv_cache_init_value) {
+  RET_CHECK(geometry != nullptr) << "geometry must not be null for NpuKVCache";
   RET_CHECK(npu_auxiliary_compiled_model != nullptr)
       << "Auxiliary compiled model cannot be null for NpuKVCache";
 
@@ -819,7 +816,7 @@ absl::StatusOr<NpuKVCache> NpuKVCache::Create(
       std::move(verify_input_buffers), std::move(verify_output_buffers));
   return NpuKVCache(method, npu_auxiliary_compiled_model,
                     std::move(cache_update_context), std::move(kv_quant_params),
-                    uses_ringbuffer, kv_cache_init_value);
+                    geometry, kv_cache_init_value);
 }
 
 absl::Status NpuKVCache::SetPrefillPositions(
@@ -887,7 +884,7 @@ absl::Status NpuKVCache::RunPrefill(absl::string_view signature) {
   if (method_ == KVCacheUpdateMethod::kWH) {
     return HWKVCacheUpdate(cache_update_context_.prefill_input_buffers,
                            cache_update_context_.prefill_output_buffers,
-                           kv_quant_params_, uses_ringbuffer_);
+                           geometry_, kv_quant_params_);
   }
   absl::string_view sig =
       signature.empty() ? kPrefillCacheUpdateBase : signature;
@@ -903,7 +900,7 @@ absl::Status NpuKVCache::RunDecode(absl::string_view signature) {
   if (method_ == KVCacheUpdateMethod::kWH) {
     return HWKVCacheUpdate(cache_update_context_.decode_input_buffers,
                            cache_update_context_.decode_output_buffers,
-                           kv_quant_params_, uses_ringbuffer_);
+                           geometry_, kv_quant_params_);
   }
   absl::string_view sig =
       signature.empty() ? CacheUpdateSignatures::kDecodeCacheUpdate : signature;
@@ -939,7 +936,7 @@ absl::Status NpuKVCache::CommitVerifiedKVCache(int start_step,
   if (method_ == KVCacheUpdateMethod::kWH) {
     return HWKVCacheUpdate(cache_update_context_.verify_input_buffers,
                            cache_update_context_.verify_output_buffers,
-                           kv_quant_params_, uses_ringbuffer_);
+                           geometry_, kv_quant_params_);
   }
   absl::string_view sig =
       signature.empty() ? CacheUpdateSignatures::kVerifyCacheUpdate : signature;
