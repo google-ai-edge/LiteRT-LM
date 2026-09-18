@@ -229,21 +229,36 @@ load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
 load("//:version.bzl", "VERSION")
 load("//python/litert_lm:cc_runfiles.bzl", "cc_runfiles")
 
-_PREBUILT_LIBS = [
+_LITERT_LM_PREBUILT_SO_LIBS = [
     "libGemmaModelConstraintProvider",
-    "libLiteRtWebGpuAccelerator",
     "libLiteRtTopKWebGpuSampler",
+]
+
+_LITERT_PREBUILT_SO_LIBS = [
+    "libLiteRtWebGpuAccelerator",
     "libLiteRt",
 ]
 
 genrule(
     name = "copy_prebuilt_libs_so",
     srcs = select({
-        "//build_config:linux_x86_64": ["//prebuilt/linux_x86_64:" + lib + ".so" for lib in _PREBUILT_LIBS],
-        "//build_config:linux_arm64": ["//prebuilt/linux_arm64:" + lib + ".so" for lib in _PREBUILT_LIBS],
+        "//build_config:linux_x86_64": [
+            "//prebuilt/linux_x86_64:" + lib + ".so"
+            for lib in _LITERT_LM_PREBUILT_SO_LIBS
+        ] + [
+            "@litert//litert/prebuilt:linux_x86_64/" + lib + ".so"
+            for lib in _LITERT_PREBUILT_SO_LIBS
+        ],
+        "//build_config:linux_arm64": [
+            "//prebuilt/linux_arm64:" + lib + ".so"
+            for lib in _LITERT_LM_PREBUILT_SO_LIBS
+        ] + [
+            "@litert//litert/prebuilt:linux_arm64/" + lib + ".so"
+            for lib in _LITERT_PREBUILT_SO_LIBS
+        ],
         "//conditions:default": [],
     }),
-    outs = [lib + ".so" for lib in _PREBUILT_LIBS],
+    outs = [lib + ".so" for lib in _LITERT_LM_PREBUILT_SO_LIBS + _LITERT_PREBUILT_SO_LIBS],
     cmd = """
         SRCS_ARRAY=($(SRCS))
         OUTS_ARRAY=($(OUTS))
@@ -263,13 +278,29 @@ genrule(
     tools = ["//build_config:patchelf_exe"],
 )
 
+_LITERT_LM_PREBUILT_DYLIBS = [
+    "libGemmaModelConstraintProvider",
+    "libLiteRtWebGpuAccelerator",
+    "libLiteRtTopKWebGpuSampler",
+]
+
+_LITERT_PREBUILT_DYLIBS = [
+    "libLiteRt",
+]
+
 genrule(
     name = "copy_prebuilt_libs_dylib",
     srcs = select({
-        "@platforms//os:macos": ["//prebuilt/macos_arm64:" + lib + ".dylib" for lib in _PREBUILT_LIBS],
+        "@platforms//os:macos": [
+            "//prebuilt/macos_arm64:" + lib + ".dylib"
+            for lib in _LITERT_LM_PREBUILT_DYLIBS
+        ] + [
+            "@litert//litert/prebuilt:macos_arm64/" + lib + ".dylib"
+            for lib in _LITERT_PREBUILT_DYLIBS
+        ],
         "//conditions:default": [],
     }),
-    outs = [lib + ".dylib" for lib in _PREBUILT_LIBS],
+    outs = [lib + ".dylib" for lib in _LITERT_LM_PREBUILT_DYLIBS + _LITERT_PREBUILT_DYLIBS],
     cmd = """
         SRCS_ARRAY=($(SRCS))
         OUTS_ARRAY=($(OUTS))
