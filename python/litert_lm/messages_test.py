@@ -91,14 +91,18 @@ class MessagesTest(parameterized.TestCase):
 
   def test_contents_of_empty(self):
     contents = litert_lm.Contents.empty()
-    self.assertEmpty(contents.contents)
+    self.assertIsInstance(contents, list)
+    self.assertEmpty(contents)
+    self.assertFalse(bool(contents))
     self.assertEqual(contents.to_json(), [])
     self.assertEqual(str(contents), "")
 
   def test_contents_of_string(self):
     contents = litert_lm.Contents.of("hello")
-    self.assertLen(contents.contents, 1)
-    content = contents.contents[0]
+    self.assertIsInstance(contents, list)
+    self.assertLen(contents, 1)
+    self.assertTrue(bool(contents))
+    content = contents[0]
     self.assertIsInstance(content, litert_lm.Content.Text)
     self.assertEqual(content.text, "hello")
     self.assertEqual(str(contents), "hello")
@@ -106,16 +110,19 @@ class MessagesTest(parameterized.TestCase):
   def test_contents_of_content(self):
     c = litert_lm.Content.Text("hello")
     contents = litert_lm.Contents.of(c)
-    self.assertLen(contents.contents, 1)
-    self.assertEqual(contents.contents[0], c)
+    self.assertLen(contents, 1)
+    self.assertEqual(contents[0], c)
 
   def test_contents_of_sequence(self):
     c1 = litert_lm.Content.Text("hello")
     c2 = litert_lm.Content.Text(" world")
     contents = litert_lm.Contents.of([c1, c2])
-    self.assertLen(contents.contents, 2)
-    self.assertEqual(contents.contents[0], c1)
-    self.assertEqual(contents.contents[1], c2)
+    self.assertLen(contents, 2)
+    self.assertEqual(contents, [c1, c2])
+    self.assertEqual(contents[0], c1)
+    self.assertEqual(contents[1], c2)
+    self.assertEqual(contents[1:], [c2])
+    self.assertIs(contents.contents, contents)
     self.assertEqual(str(contents), "hello world")
 
   def test_contents_of_varargs(self):

@@ -158,25 +158,31 @@ Content.AudioFile = AudioFile
 Content.ToolResponse = ToolResponse
 
 
-class Contents:
+class Contents(list[Content]):
   """Represents a list of Content in a Message."""
 
-  def __init__(self, contents: Sequence[Content]):
-    self.contents = list(contents)
+  def __init__(self, contents: Sequence[Content] = ()):
+    super().__init__(contents)
+
+  @property
+  def contents(self) -> list[Content]:
+    """Returns self for backward compatibility.
+
+    Note:
+      `Contents` now inherits from `list[Content]` directly. Callers should
+      iterate or index `message.contents` directly instead of
+      `message.contents.contents`.
+    """
+    return self
 
   def to_json(self) -> list[dict[str, Any]]:
-    return [c.to_json() for c in self.contents]
+    return [c.to_json() for c in self]
 
   def __str__(self) -> str:
-    return "".join(str(c) for c in self.contents if isinstance(c, Text))
-
-  def __eq__(self, other: Any) -> bool:
-    if isinstance(other, Contents):
-      return self.contents == other.contents
-    return NotImplemented
+    return "".join(str(c) for c in self if isinstance(c, Text))
 
   def __repr__(self) -> str:
-    return f"Contents({self.contents!r})"
+    return f"Contents({super().__repr__()})"
 
   @classmethod
   def empty(cls) -> Contents:
@@ -243,7 +249,9 @@ class Message(dict[str, Any]):
     super().__setattr__("_raw_content", None)
     super().__setattr__("_extra_fields", {})
     super().__setattr__("role", role)
-    super().__setattr__("contents", contents or Contents.empty())
+    super().__setattr__(
+        "contents", contents if contents is not None else Contents.empty()
+    )
     super().__setattr__("tool_calls", list(tool_calls))
     super().__setattr__(
         "channels", dict(channels) if channels is not None else {}
