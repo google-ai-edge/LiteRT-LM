@@ -19,6 +19,7 @@ import json
 import socket
 import sys
 import threading
+from typing import Any
 from unittest import mock
 import urllib.request
 
@@ -61,12 +62,13 @@ sys.modules["litert_lm.session"] = (
 
 # 2. Now we can import the real litert_lm safely. It will use our mocked
 # extension.
+# pylint: disable=g-import-not-at-top
 import litert_lm as mock_litert_lm
 from litert_lm import interfaces
 
-# 3. Explicitly override Engine and other classes with Mocks to ensure they don't
-# point to the mocked extension's classes which might not behave like standard
-# mocks.
+# 3. Explicitly override Engine and other classes with Mocks to ensure they
+# don't point to the mocked extension's classes which might not behave like
+# standard mocks.
 mock_litert_lm.Engine = mock_engine.Engine
 mock_litert_lm.set_min_log_severity = mock_ffi.set_min_log_severity
 
@@ -81,10 +83,16 @@ mock_model_mod.Model = mock.Mock(
         "get_all_models",
     ]
 )
+
+
+def _from_model_reference(ref: Any) -> Any:
+  return mock_model_mod.Model.from_model_id(ref)
+
+
 mock_model_mod.Model.from_model_id = mock.Mock()
 mock_model_mod.Model.from_model_path = mock.Mock()
 mock_model_mod.Model.from_model_reference = mock.Mock(
-    side_effect=lambda ref: mock_model_mod.Model.from_model_id(ref)
+    side_effect=_from_model_reference
 )
 mock_model_mod.Model.get_all_models = mock.Mock()
 mock_model_mod.parse_backend = mock.Mock()
@@ -99,9 +107,11 @@ if "litert_lm_cli" in sys.modules:
       "litert_lm_cli"
   ].model = mock_model_mod
 
-from litert_lm_cli.commands import gemini_handler
-from litert_lm_cli.commands import openai_handler
-from litert_lm_cli.commands import serve_util
+from litert_lm_cli.commands.serve import gemini_handler
+from litert_lm_cli.commands.serve import openai_handler
+from litert_lm_cli.commands.serve import util
+
+# pylint: enable=g-import-not-at-top
 
 
 class ServeTest(parameterized.TestCase):
@@ -109,13 +119,13 @@ class ServeTest(parameterized.TestCase):
   def setUp(self):
     super().setUp()
     # Reset mocks.
-    mock_litert_lm.set_min_log_severity.reset_mock()  # pytype: disable=attribute-error
-    mock_litert_lm.Engine.reset_mock()  # pytype: disable=attribute-error
+    mock_litert_lm.set_min_log_severity.reset_mock()  # pyrefly: ignore[missing-attribute]
+    mock_litert_lm.Engine.reset_mock()  # pyrefly: ignore[missing-attribute]
     mock_model_mod.Model.from_model_id.reset_mock()
     mock_model_mod.Model.from_model_id.side_effect = None
     mock_model_mod.Model.from_model_reference.reset_mock()
     mock_model_mod.Model.from_model_reference.side_effect = (
-        lambda ref: mock_model_mod.Model.from_model_id(ref)
+        _from_model_reference
     )
     mock_model_mod.Model.get_all_models.reset_mock()
     mock_model_mod.Model.get_all_models.side_effect = None
@@ -296,25 +306,25 @@ class ServeTest(parameterized.TestCase):
     mock_engine_instance.__exit__.return_value = False
     mock_litert_lm.Engine.return_value = mock_engine_instance
 
-    server = mock.MagicMock(spec=serve_util.LiteRTLMServer)
+    server = mock.MagicMock(spec=util.LiteRTLMServer)
     server.litert_lm_engine = None
     server.model_id = None
 
     # First call creates the engine.
-    engine1 = serve_util.get_or_initialize_server_engine(
+    engine1 = util.get_or_initialize_server_engine(
         server, model_id="test-model"
     )
     self.assertEqual(engine1, mock_engine_instance)
-    mock_litert_lm.Engine.assert_called_once()  # pytype: disable=attribute-error
+    mock_litert_lm.Engine.assert_called_once()  # pyrefly: ignore[missing-attribute]
     self.assertEqual(server.litert_lm_engine, mock_engine_instance)
     self.assertEqual(server.model_id, "test-model")
 
     # Second call with same ID - returns cached engine.
-    engine2 = serve_util.get_or_initialize_server_engine(
+    engine2 = util.get_or_initialize_server_engine(
         server, model_id="test-model"
     )
     self.assertEqual(engine2, mock_engine_instance)
-    self.assertEqual(mock_litert_lm.Engine.call_count, 1)  # pytype: disable=attribute-error
+    self.assertEqual(mock_litert_lm.Engine.call_count, 1)  # pyrefly: ignore[missing-attribute]
 
   def test_get_engine_switching_reinitializes(self):
     mock_model_a = mock.Mock(spec_set=["exists", "model_path"])
@@ -351,7 +361,7 @@ class ServeTest(parameterized.TestCase):
 
     mock_litert_lm.Engine.side_effect = engine_side_effect
 
-    server = mock.MagicMock(spec=serve_util.LiteRTLMServer)
+    server = mock.MagicMock(spec=util.LiteRTLMServer)
     server.litert_lm_engine = None
     server.model_id = None
     server.backend = None
@@ -359,13 +369,13 @@ class ServeTest(parameterized.TestCase):
     server.activation_data_type = None
 
     # Initialize with model A.
-    engine1 = serve_util.get_or_initialize_server_engine(server, model_id="A")
+    engine1 = util.get_or_initialize_server_engine(server, model_id="A")
     self.assertEqual(engine1, mock_engine_a)
     self.assertEqual(server.model_id, "A")
     mock_engine_a.__exit__.assert_not_called()
 
     # Switching to model B re-initializes (closes A, opens B).
-    engine2 = serve_util.get_or_initialize_server_engine(server, model_id="B")
+    engine2 = util.get_or_initialize_server_engine(server, model_id="B")
     self.assertEqual(engine2, mock_engine_b)
     self.assertEqual(server.model_id, "B")
     mock_engine_a.__exit__.assert_called_once_with(None, None, None)
@@ -410,7 +420,7 @@ class ServeTest(parameterized.TestCase):
 
   @mock.patch.object(http.server.HTTPServer, "__init__", autospec=True)
   def test_litert_lm_server_ipv6(self, mock_super_init):
-    serve_util.LiteRTLMServer(("::1", 8000), mock.MagicMock())
+    util.LiteRTLMServer(("::1", 8000), mock.MagicMock())
     mock_super_init.assert_called_once()
     args, _ = mock_super_init.call_args
     self_arg, _, _ = args
@@ -418,7 +428,7 @@ class ServeTest(parameterized.TestCase):
 
   @mock.patch.object(http.server.HTTPServer, "__init__", autospec=True)
   def test_litert_lm_server_ipv4(self, mock_super_init):
-    serve_util.LiteRTLMServer(("127.0.0.1", 8000), mock.MagicMock())
+    util.LiteRTLMServer(("127.0.0.1", 8000), mock.MagicMock())
     mock_super_init.assert_called_once()
     args, _ = mock_super_init.call_args
     self_arg, _, _ = args
@@ -512,9 +522,7 @@ class ServeTest(parameterized.TestCase):
       openai_handler._translate_openai_message(message, None)
 
   def test_cors_headers_disabled_by_default(self):
-    server = serve_util.LiteRTLMServer(
-        ("127.0.0.1", 0), openai_handler.OpenAIHandler
-    )
+    server = util.LiteRTLMServer(("127.0.0.1", 0), openai_handler.OpenAIHandler)
     port = server.server_port
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -544,7 +552,7 @@ class ServeTest(parameterized.TestCase):
       thread.join()
 
   def test_cors_headers_wildcard(self):
-    server = serve_util.LiteRTLMServer(
+    server = util.LiteRTLMServer(
         ("127.0.0.1", 0), openai_handler.OpenAIHandler, allowed_origins=("*",)
     )
     port = server.server_port
@@ -580,7 +588,7 @@ class ServeTest(parameterized.TestCase):
 
   def test_cors_headers_restricted(self):
     allowed = ("http://localhost:3000", "http://example.com")
-    server = serve_util.LiteRTLMServer(
+    server = util.LiteRTLMServer(
         ("127.0.0.1", 0), openai_handler.OpenAIHandler, allowed_origins=allowed
     )
     port = server.server_port
@@ -771,7 +779,7 @@ class ServeTest(parameterized.TestCase):
     mock_engine_instance.__enter__.return_value = mock_engine_instance
     mock_litert_lm.Engine.return_value = mock_engine_instance
 
-    server = mock.MagicMock(spec=serve_util.LiteRTLMServer)
+    server = mock.MagicMock(spec=util.LiteRTLMServer)
     server.litert_lm_engine = None
     server.model_id = None
     server.backend = None
@@ -780,12 +788,12 @@ class ServeTest(parameterized.TestCase):
     server.audio_backend = None
     server.activation_data_type = None
 
-    engine = serve_util.get_or_initialize_server_engine(
+    engine = util.get_or_initialize_server_engine(
         server, model_id="gemma3-1b", backend="gpu", max_num_tokens=32768
     )
     self.assertEqual(engine, mock_engine_instance)
-    mock_litert_lm.Engine.assert_called_once()  # pytype: disable=attribute-error
-    _, kwargs = mock_litert_lm.Engine.call_args  # pytype: disable=attribute-error
+    mock_litert_lm.Engine.assert_called_once()  # pyrefly: ignore[missing-attribute]
+    _, kwargs = mock_litert_lm.Engine.call_args  # pyrefly: ignore[missing-attribute]
     self.assertEqual(kwargs.get("max_num_tokens"), 32768)
     self.assertTrue(kwargs.get("use_ringbuffers_local_attention"))
     self.assertEqual(server.max_num_tokens, 32768)
@@ -812,7 +820,7 @@ class ServeTest(parameterized.TestCase):
     mock_engine_instance.__enter__.return_value = mock_engine_instance
     mock_litert_lm.Engine.return_value = mock_engine_instance
 
-    server = mock.MagicMock(spec=serve_util.LiteRTLMServer)
+    server = mock.MagicMock(spec=util.LiteRTLMServer)
     server.litert_lm_engine = None
     server.model_id = None
     server.backend = None
@@ -821,12 +829,10 @@ class ServeTest(parameterized.TestCase):
     server.audio_backend = None
     server.activation_data_type = None
 
-    engine = serve_util.get_or_initialize_server_engine(
-        server, model_id="gemma3-1b"
-    )
+    engine = util.get_or_initialize_server_engine(server, model_id="gemma3-1b")
     self.assertEqual(engine, mock_engine_instance)
-    mock_litert_lm.Engine.assert_called_once()  # pytype: disable=attribute-error
-    _, kwargs = mock_litert_lm.Engine.call_args  # pytype: disable=attribute-error
+    mock_litert_lm.Engine.assert_called_once()  # pyrefly: ignore[missing-attribute]
+    _, kwargs = mock_litert_lm.Engine.call_args  # pyrefly: ignore[missing-attribute]
     self.assertEqual(
         kwargs.get("activation_data_type"),
         mock_litert_lm.ActivationDataType.FLOAT16,
@@ -875,8 +881,8 @@ class ServeTest(parameterized.TestCase):
 
   def test_openai_embeddings_success(self):
     endpoint = "/v1/embeddings"
-    mock_engine = mock.MagicMock()
-    mock_engine.compute_embedding_batch.return_value = [
+    mock_emb_engine = mock.MagicMock()
+    mock_emb_engine.compute_embedding_batch.return_value = [
         mock.MagicMock(embedding=[0.1, 0.2, 0.3]),
         mock.MagicMock(embedding=[0.4, 0.5, 0.6]),
     ]
@@ -885,11 +891,9 @@ class ServeTest(parameterized.TestCase):
             openai_handler.OpenAIHandler, "_get_embedding_engine", autospec=True
         )
     )
-    mock_get_engine.return_value = mock_engine
+    mock_get_engine.return_value = mock_emb_engine
 
-    server = serve_util.LiteRTLMServer(
-        ("127.0.0.1", 0), openai_handler.OpenAIHandler
-    )
+    server = util.LiteRTLMServer(("127.0.0.1", 0), openai_handler.OpenAIHandler)
     port = server.server_port
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -911,7 +915,7 @@ class ServeTest(parameterized.TestCase):
         res_body = json.loads(response.read().decode("utf-8"))
         self.assertEqual(res_body["object"], "list")
         self.assertEqual(res_body["model"], "embedding-gemma")
-        self.assertEqual(len(res_body["data"]), 2)
+        self.assertLen(res_body["data"], 2)
         self.assertEqual(res_body["data"][0]["object"], "embedding")
         self.assertEqual(res_body["data"][0]["index"], 0)
         self.assertEqual(res_body["data"][0]["embedding"], [0.1, 0.2, 0.3])
@@ -923,8 +927,8 @@ class ServeTest(parameterized.TestCase):
       thread.join()
 
   def test_openai_embeddings_base64_and_dimensions(self):
-    mock_engine = mock.MagicMock()
-    mock_engine.compute_embedding_batch.return_value = [
+    mock_emb_engine = mock.MagicMock()
+    mock_emb_engine.compute_embedding_batch.return_value = [
         mock.MagicMock(embedding=[3.0, 4.0, 0.0]),
     ]
     mock_get_engine = self.enter_context(
@@ -932,11 +936,9 @@ class ServeTest(parameterized.TestCase):
             openai_handler.OpenAIHandler, "_get_embedding_engine", autospec=True
         )
     )
-    mock_get_engine.return_value = mock_engine
+    mock_get_engine.return_value = mock_emb_engine
 
-    server = serve_util.LiteRTLMServer(
-        ("127.0.0.1", 0), openai_handler.OpenAIHandler
-    )
+    server = util.LiteRTLMServer(("127.0.0.1", 0), openai_handler.OpenAIHandler)
     port = server.server_port
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -960,7 +962,8 @@ class ServeTest(parameterized.TestCase):
         res_body = json.loads(response.read().decode("utf-8"))
         emb = res_body["data"][0]["embedding"]
         self.assertIsInstance(emb, str)
-        # Expected vector after slicing to 2 and L2-normalizing [3.0, 4.0] is [0.6, 0.8]
+        # Expected vector after slicing to 2 and L2-normalizing [3.0, 4.0] is
+        # [0.6, 0.8].
         expected_b64 = openai_handler._embedding_to_base64([0.6, 0.8])
         self.assertEqual(emb, expected_b64)
     finally:
@@ -990,9 +993,7 @@ class ServeTest(parameterized.TestCase):
       ),
   )
   def test_openai_embeddings_errors(self, body, err_code):
-    server = serve_util.LiteRTLMServer(
-        ("127.0.0.1", 0), openai_handler.OpenAIHandler
-    )
+    server = util.LiteRTLMServer(("127.0.0.1", 0), openai_handler.OpenAIHandler)
     port = server.server_port
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -1024,7 +1025,7 @@ class ServeTest(parameterized.TestCase):
     with mock.patch.object(
         mock_litert_lm, "EmbeddingEngine", return_value=mock_emb_engine_instance
     ) as mock_emb_engine_cls:
-      server = mock.MagicMock(spec=serve_util.LiteRTLMServer)
+      server = mock.MagicMock(spec=util.LiteRTLMServer)
       server.litert_lm_embedding_engine = None
       server.embedding_model_id = None
       server.embedding_backend = None
@@ -1032,14 +1033,14 @@ class ServeTest(parameterized.TestCase):
       server.embedding_audio_backend = None
 
       # First call initializes engine
-      engine1 = serve_util.get_or_initialize_server_embedding_engine(
+      engine1 = util.get_or_initialize_server_embedding_engine(
           server, model_id="embedding-model"
       )
       self.assertEqual(engine1, mock_emb_engine_instance)
       mock_emb_engine_cls.assert_called_once()
 
       # Second call returns cached engine
-      engine2 = serve_util.get_or_initialize_server_embedding_engine(
+      engine2 = util.get_or_initialize_server_embedding_engine(
           server, model_id="embedding-model"
       )
       self.assertEqual(engine2, mock_emb_engine_instance)

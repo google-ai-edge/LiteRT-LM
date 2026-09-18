@@ -31,8 +31,8 @@ from litert_lm_cli.commands import list as _list_module
 from litert_lm_cli.commands import pack as _pack_module
 from litert_lm_cli.commands import rename as _rename_module
 from litert_lm_cli.commands import run as _run_module
-from litert_lm_cli.commands import serve as _serve_module
 from litert_lm_cli.commands import unpack as _unpack_module
+from litert_lm_cli.commands.serve import module as _serve_module
 
 # Import 'import' subcommand dynamically to bypass Python keyword restriction.
 _import_module = importlib.import_module(

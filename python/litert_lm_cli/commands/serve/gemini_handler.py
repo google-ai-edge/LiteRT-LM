@@ -30,7 +30,7 @@ from typing import Any, NamedTuple
 import click
 
 import litert_lm
-from litert_lm_cli.commands import serve_util
+from litert_lm_cli.commands.serve import util
 
 GEN_CONTENT_RE = re.compile(r"/v1beta/models/([^/\\:]+):generateContent")
 STREAM_GEN_CONTENT_RE = re.compile(
@@ -154,7 +154,7 @@ class ParsedRequest:
   error_msg: str | None = None
 
 
-class GeminiHandler(serve_util.CORSRequestHandler):
+class GeminiHandler(util.CORSRequestHandler):
   """Handler for Gemini API requests."""
 
   def __init__(
@@ -216,8 +216,8 @@ class GeminiHandler(serve_util.CORSRequestHandler):
       The LiteRT-LM Engine instance, or None if failed.
     """
     try:
-      assert isinstance(self.server, serve_util.LiteRTLMServer)
-      return serve_util.get_or_initialize_server_engine(
+      assert isinstance(self.server, util.LiteRTLMServer)
+      return util.get_or_initialize_server_engine(
           self.server,
           model_id=req.model_id,
       )

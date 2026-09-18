@@ -1,3 +1,5 @@
+# Copyright 2026 The ODML Authors.
+#
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -39,6 +41,16 @@ class LiteRTLMServer(http.server.HTTPServer):
     audio_backend: The hardware backend used for audio encoding, or None.
     activation_data_type: The activation data type used for model execution, or
       None.
+    litert_lm_embedding_engine: The LiteRT-LM embedding engine instance, or None
+      if not initialized.
+    embedding_model_id: The identifier of the embedding model currently loaded,
+      or None.
+    embedding_backend: The hardware backend used by the embedding engine, or
+      None.
+    embedding_vision_backend: The hardware backend used for embedding vision
+      encoding, or None.
+    embedding_audio_backend: The hardware backend used for embedding audio
+      encoding, or None.
     allowed_origins: Allowed CORS origins.
     address_family: Socket address family (e.g. AF_INET or AF_INET6).
   """

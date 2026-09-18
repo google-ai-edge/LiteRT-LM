@@ -1,3 +1,5 @@
+# Copyright 2026 The ODML Authors.
+#
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -36,14 +38,13 @@ from typing import Any
 import urllib.request
 
 import click
-
 # Migrate to built-in "typing" when min python version is 3.12.
 from typing_extensions import override
 
 import litert_lm
 from litert_lm_cli import config as cli_config
 from litert_lm_cli import model as cli_model
-from litert_lm_cli.commands import serve_util
+from litert_lm_cli.commands.serve import util
 
 
 def _dump_json(data: Any, *, indent: int | None = None) -> str:
@@ -803,6 +804,10 @@ def _translate_openai_message(
   }
 
 
+build_name_by_tool_call_id_map = _build_name_by_tool_call_id_map
+translate_openai_message = _translate_openai_message
+
+
 @dataclasses.dataclass
 class _ProxyTool(litert_lm.Tool):
   """A proxy tool for OpenAPI definitions without implementation.
@@ -824,7 +829,7 @@ class _ProxyTool(litert_lm.Tool):
     raise NotImplementedError("Proxy tools are not executable.")
 
 
-class OpenAIHandler(serve_util.CORSRequestHandler):
+class OpenAIHandler(util.CORSRequestHandler):
   """Handler for OpenAI API requests.
 
   Responses API:
@@ -1197,8 +1202,8 @@ class OpenAIHandler(serve_util.CORSRequestHandler):
       The LiteRT-LM Engine instance, or None if initialization failed.
     """
     try:
-      assert isinstance(self.server, serve_util.LiteRTLMServer)
-      return serve_util.get_or_initialize_server_engine(
+      assert isinstance(self.server, util.LiteRTLMServer)
+      return util.get_or_initialize_server_engine(
           self.server,
           model_id=model_id,
           backend=backend,
@@ -1489,8 +1494,8 @@ class OpenAIHandler(serve_util.CORSRequestHandler):
       The LiteRT-LM EmbeddingEngine instance, or None if initialization failed.
     """
     try:
-      assert isinstance(self.server, serve_util.LiteRTLMServer)
-      return serve_util.get_or_initialize_server_embedding_engine(
+      assert isinstance(self.server, util.LiteRTLMServer)
+      return util.get_or_initialize_server_embedding_engine(
           self.server,
           model_id=model_id,
           backend=backend,
@@ -1581,8 +1586,8 @@ class OpenAIHandler(serve_util.CORSRequestHandler):
             "embedding": formatted_embedding,
         })
 
-      # TODO: Populate prompt_tokens accurately once EmbeddingEngine exposes token
-      # count metadata from tokenization.
+      # TODO: b/562598581 - Populate prompt_tokens accurately once
+      # EmbeddingEngine exposes token count metadata from tokenization.
       resp_body = {
           "object": "list",
           "data": data_list,

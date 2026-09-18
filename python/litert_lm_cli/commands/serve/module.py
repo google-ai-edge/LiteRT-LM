@@ -26,9 +26,9 @@ import click
 import litert_lm
 from litert_lm_cli import common
 from litert_lm_cli import help_formatter
-from litert_lm_cli.commands import gemini_handler
-from litert_lm_cli.commands import openai_handler
-from litert_lm_cli.commands import serve_util
+from litert_lm_cli.commands.serve import gemini_handler
+from litert_lm_cli.commands.serve import openai_handler
+from litert_lm_cli.commands.serve import util
 
 
 def run_server(
@@ -49,7 +49,7 @@ def run_server(
   """
   server_address = (host, port)
   try:
-    with serve_util.LiteRTLMServer(
+    with util.LiteRTLMServer(
         server_address, handler_class, cors_origins
     ) as server:
       click.echo(

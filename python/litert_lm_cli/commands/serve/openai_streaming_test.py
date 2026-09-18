@@ -26,8 +26,8 @@ from absl.testing import absltest
 import litert_lm
 from litert_lm_cli import config as cli_config
 from litert_lm_cli import model
-from litert_lm_cli.commands import openai_handler
-from litert_lm_cli.commands import serve_util
+from litert_lm_cli.commands.serve import openai_handler
+from litert_lm_cli.commands.serve import util
 
 
 def _parse_sse_events(
@@ -51,7 +51,7 @@ class ServeOpenAIStreamingTest(absltest.TestCase):
   def setUp(self):
     super().setUp()
 
-    self.server = serve_util.LiteRTLMServer(
+    self.server = util.LiteRTLMServer(
         ("localhost", 0), openai_handler.OpenAIHandler
     )
     self.port = self.server.server_port
