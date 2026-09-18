@@ -203,30 +203,11 @@ absl::StatusOr<ordered_json> Gemma3DataProcessor::MessageToTemplateInput(
   // If the message contains tool calls, then convert them to Python and
   // add them to the template input.
   if (message.contains("tool_calls")) {
-    template_input["tool_calls"] = ordered_json::array();
-    for (const auto& tool_call : message["tool_calls"]) {
-      if (!tool_call.contains("function")) {
-        continue;
-      }
-      const nlohmann::ordered_json& function = tool_call["function"];
-      ordered_json tool_call_input = ordered_json::object();
-      tool_call_input["type"] = "function";
-      tool_call_input["function"]["name"] = function["name"];
-
-      if (function.contains("arguments")) {
-        if (function["arguments"].is_object()) {
-          for (const auto& [key, value] : function["arguments"].items()) {
-            ABSL_ASSIGN_OR_RETURN(std::string formatted_value,
-                                  FormatValueAsPython(value));
-            tool_call_input["function"]["arguments"][key] = formatted_value;
-          }
-        } else {
-          tool_call_input["function"]["arguments"] = function["arguments"];
-        }
-      }
-
-      template_input["tool_calls"].push_back(tool_call_input);
-    }
+    ABSL_ASSIGN_OR_RETURN(template_input["tool_calls"],
+                          FormatToolCalls(message["tool_calls"],
+                                          [](const nlohmann::ordered_json& v) {
+                                            return FormatValueAsPython(v);
+                                          }));
   }
 
   return template_input;
@@ -274,15 +255,9 @@ absl::StatusOr<Message> Gemma3DataProcessor::ToMessageImpl(
 
 absl::StatusOr<ordered_json> Gemma3DataProcessor::FormatTools(
     const ordered_json& tools) const {
-  if (!tools.is_array()) {
-    return absl::InvalidArgumentError("Tools must be an array.");
-  }
-  ordered_json formatted_tools = ordered_json::array();
-  for (const auto& tool : tools) {
-    ABSL_ASSIGN_OR_RETURN(std::string formatted_tool, FormatToolAsPython(tool));
-    formatted_tools.push_back(formatted_tool);
-  }
-  return formatted_tools;
+  return FormatToolsArray(tools, [](const nlohmann::ordered_json& t) {
+    return FormatToolAsPython(t);
+  });
 }
 
 absl::StatusOr<std::unique_ptr<Constraint>>

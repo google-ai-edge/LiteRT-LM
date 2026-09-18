@@ -206,10 +206,17 @@ TEST_F(ModelDataProcessorFactoryTest, CreateFunctionGemmaDataProcessor) {
   ASSERT_OK(tokenizer);
 
   proto::LlmModelType llm_model_type;
-  llm_model_type.mutable_function_gemma();
+  auto* function_gemma = llm_model_type.mutable_function_gemma();
+  function_gemma->set_open_quote("<<");
+  function_gemma->set_close_quote(">>");
+  function_gemma->set_function_response_start("<resp>");
   ASSERT_OK_AND_ASSIGN(
       auto config, CreateDataProcessorConfigFromLlmModelType(llm_model_type));
   ASSERT_TRUE(std::holds_alternative<FunctionGemmaDataProcessorConfig>(config));
+  const auto& fg_config = std::get<FunctionGemmaDataProcessorConfig>(config);
+  EXPECT_EQ(fg_config.open_quote, "<<");
+  EXPECT_EQ(fg_config.close_quote, ">>");
+  EXPECT_EQ(fg_config.function_response_start, "<resp>");
   ASSERT_OK_AND_ASSIGN(
       auto processor,
       CreateModelDataProcessor(config, /*preface=*/std::nullopt,

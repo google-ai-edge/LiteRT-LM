@@ -19,6 +19,7 @@
 #include <string>
 #include <variant>
 
+#include "absl/functional/function_ref.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
@@ -105,6 +106,52 @@ absl::StatusOr<ordered_json> ResponseTextToMessage(
         {{{"type", "text"}, {"text", std::string(response_text)}}});
   }
   return message;
+}
+
+absl::StatusOr<ordered_json> FormatToolCalls(
+    const ordered_json& tool_calls,
+    absl::FunctionRef<absl::StatusOr<std::string>(const ordered_json&)>
+        format_value) {
+  ordered_json formatted_tool_calls = ordered_json::array();
+  for (const auto& tool_call : tool_calls) {
+    if (!tool_call.contains("function")) {
+      continue;
+    }
+    const ordered_json& function = tool_call["function"];
+    ordered_json tool_call_input = ordered_json::object();
+    tool_call_input["type"] = "function";
+    tool_call_input["function"]["name"] = function["name"];
+
+    if (function.contains("arguments")) {
+      if (function["arguments"].is_object()) {
+        for (const auto& [key, value] : function["arguments"].items()) {
+          ABSL_ASSIGN_OR_RETURN(std::string formatted_value,
+                                format_value(value));
+          tool_call_input["function"]["arguments"][key] = formatted_value;
+        }
+      } else {
+        tool_call_input["function"]["arguments"] = function["arguments"];
+      }
+    }
+
+    formatted_tool_calls.push_back(tool_call_input);
+  }
+  return formatted_tool_calls;
+}
+
+absl::StatusOr<ordered_json> FormatToolsArray(
+    const ordered_json& tools,
+    absl::FunctionRef<absl::StatusOr<std::string>(const ordered_json&)>
+        format_tool) {
+  if (!tools.is_array()) {
+    return absl::InvalidArgumentError("Tools must be an array.");
+  }
+  ordered_json formatted_tools = ordered_json::array();
+  for (const auto& tool : tools) {
+    ABSL_ASSIGN_OR_RETURN(std::string formatted_tool, format_tool(tool));
+    formatted_tools.push_back(formatted_tool);
+  }
+  return formatted_tools;
 }
 
 }  // namespace litert::lm
