@@ -54,10 +54,6 @@ class Lfm2DataProcessor
   // Returns the config of the Lfm2DataProcessor.
   const Lfm2DataProcessorConfig& GetConfig() const override { return config_; }
 
-  // Formats tool declarations.
-  absl::StatusOr<nlohmann::ordered_json> FormatTools(
-      const nlohmann::ordered_json& tools) const override;
-
   absl::StatusOr<std::unique_ptr<Constraint>> CreateConstraint(
       const nlohmann::ordered_json& tools) const override;
 
