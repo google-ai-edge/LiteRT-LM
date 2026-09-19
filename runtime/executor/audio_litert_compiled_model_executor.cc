@@ -1321,18 +1321,17 @@ AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::CreateNewContext() {
       LITERT_ASSIGN_OR_RETURN(auto prev_mask_type, buffer.TensorType());
       LITERT_ASSIGN_OR_RETURN(int prev_mask_size,
                               prev_mask_type.Layout().NumElements());
-      input_buffers_map_[kPrevMaskName].Write<uint8_t>(
-          std::vector<uint8_t>(prev_mask_size, 1));
+      std::vector<uint8_t> all_ones(prev_mask_size, 1);
+      buffer.Write<uint8_t>(all_ones);
+      new_buffer.Write<uint8_t>(all_ones);
     } else {
       LITERT_RETURN_IF_ERROR(InitializeBuffer(new_buffer));
     }
     state_buffers[name] = std::move(new_buffer);
   }
+  buffered_spectrogram_.clear();
   auto audio_streaming_context =
       std::make_unique<AudioStreamingContext>(std::move(state_buffers));
-  if (executor_settings_.GetAudioBufferingEnabled()) {
-    audio_streaming_context->buffered_spectrogram() = buffered_spectrogram_;
-  }
   return audio_streaming_context;
 }
 
