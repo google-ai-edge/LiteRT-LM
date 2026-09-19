@@ -90,7 +90,7 @@ http_archive(
         # Replace @googletest with @com_google_googletest.
         "sed -i -e 's|@googletest|@com_google_googletest|g' absl/*/BUILD* absl/*/*/BUILD* absl/*/*/*/BUILD*",
     ],
-    patches = ["@//:PATCH.abseil"],
+    patches = ["@//third_party/abseil:abseil.patch"],
     sha256 = "6e1aee535473414164bf83e4ebc40240dec71a4701f8a642d906e95bea1aea0c",
     strip_prefix = "abseil-cpp-20260526.0",
     url = "https://github.com/abseil/abseil-cpp/archive/20260526.0.tar.gz",
@@ -139,7 +139,7 @@ go_rules_dependencies()
 # TensorFlow
 http_archive(
     name = "org_tensorflow",
-    patches = ["@//:PATCH.tensorflow"],
+    patches = ["@//third_party/tensorflow:tensorflow.patch"],
     sha256 = TENSORFLOW_SHA256,
     strip_prefix = "tensorflow-" + TENSORFLOW_REF,
     url = "https://github.com/tensorflow/tensorflow/archive/" + TENSORFLOW_REF + ".tar.gz",
@@ -304,7 +304,7 @@ kt_register_toolchains()  # to use the default toolchain, otherwise see toolchai
 # Rust (for HuggingFace Tokenizers)
 http_archive(
     name = "rules_rust",
-    patches = ["@//:PATCH.rules_rust"],
+    patches = ["@//third_party/rules_rust:rules_rust.patch"],
     sha256 = "53c1bac7ec48f7ce48c4c1c6aa006f27515add2aeb05725937224e6e00ec7cea",
     url = "https://github.com/bazelbuild/rules_rust/releases/download/0.61.0/rules_rust-0.61.0.tar.gz",
 )
@@ -332,6 +332,11 @@ crate_universe_dependencies()
 load("@rules_rust//crate_universe:defs.bzl", "crate", "crates_repository")
 load("@rules_rust//rust/platform:triple_mappings.bzl", "SUPPORTED_PLATFORM_TRIPLES")
 
+# NOTE: llguidance's build file and the llguidance/toktrie patches below live at
+# the repository root rather than under third_party/ with the other dependencies.
+# rules_rust hashes these label strings into the checked-in cargo-bazel-lock.json,
+# so renaming them requires re-pinning the lockfile with
+# `CARGO_BAZEL_REPIN=1 bazel sync --only=crate_index`.
 crates_repository(
     name = "crate_index",
     annotations = {
@@ -393,7 +398,7 @@ cxxbridge_cmd_deps()
 http_archive(
     name = "minizip",
     add_prefix = "minizip",
-    build_file = "@//:BUILD.minizip",
+    build_file = "@//third_party/minizip:minizip.BUILD",
     sha256 = "9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23",
     strip_prefix = "zlib-1.3.1/contrib/minizip",
     urls = [
@@ -405,7 +410,7 @@ http_archive(
 
 http_archive(
     name = "sentencepiece",
-    build_file = "@//:BUILD.sentencepiece",
+    build_file = "@//third_party/sentencepiece:sentencepiece.BUILD",
     patch_cmds = [
         "printf '#ifndef CONFIG_H_\\n#define CONFIG_H_\\n#define VERSION \"0.2.2\"\\n#define PACKAGE \"sentencepiece\"\\n#define PACKAGE_STRING \"sentencepiece\"\\n#define INSTALL_DATADIR \"\"\\n#endif\\n' > config.h",
         "mv src/* .",
@@ -434,7 +439,7 @@ http_archive(
 
 http_archive(
     name = "tokenizers_cpp",
-    build_file = "@//:BUILD.tokenizers_cpp",
+    build_file = "@//third_party/tokenizers_cpp:tokenizers_cpp.BUILD",
     sha256 = "3e0b9ec325a326b0a2cef5cf164ee94a74ac372c5881ae5af634036db0441823",
     strip_prefix = "tokenizers-cpp-0.1.1",
     url = "https://github.com/mlc-ai/tokenizers-cpp/archive/refs/tags/v0.1.1.tar.gz",
@@ -456,8 +461,8 @@ http_archive(
 
 http_archive(
     name = "minja",
-    build_file = "@//:BUILD.minja",
-    patches = ["@//:PATCH.minja"],
+    build_file = "@//third_party/minja:minja.BUILD",
+    patches = ["@//third_party/minja:minja.patch"],
     sha256 = "752f47dd2a2f4920a66f497c952785073c1983f12f084b99e5c12bf89f96acfe",
     strip_prefix = "minja-58568621432715b0ed38efd16238b0e7ff36c3ba",
     url = "https://github.com/google/minja/archive/58568621432715b0ed38efd16238b0e7ff36c3ba.zip",
@@ -465,7 +470,7 @@ http_archive(
 
 http_archive(
     name = "miniaudio",
-    build_file = "@//:BUILD.miniaudio",
+    build_file = "@//third_party/miniaudio:miniaudio.BUILD",
     sha256 = "bcb07bfb27e6fa94d34da73ba2d5642d4940b208ec2a660dbf4e52e6b7cd492f",
     strip_prefix = "miniaudio-0.11.22",
     url = "https://github.com/mackron/miniaudio/archive/refs/tags/0.11.22.tar.gz",
@@ -473,7 +478,7 @@ http_archive(
 
 http_archive(
     name = "stb",
-    build_file = "@//:BUILD.stb",
+    build_file = "@//third_party/stb:stb.BUILD",
     sha256 = "119b9f3cca3e50225dc946ed1acd1b7a160943bc8bf549760109cea4e4e7c836",
     strip_prefix = "stb-f58f558c120e9b32c217290b80bad1a0729fbb2c",
     url = "https://github.com/nothings/stb/archive/f58f558c120e9b32c217290b80bad1a0729fbb2c.zip",
@@ -492,7 +497,7 @@ http_archive(
         # Replace <jpeglib.h> with "jpeglib.h".
         "sed -i -e 's|#include <jpeglib.h>|#include \"jpeglib.h\"|g' */*.cpp */*.h */*/*.cpp */*/*.h",
     ],
-    patches = ["@//:PATCH.skia"],
+    patches = ["@//third_party/skia:skia.patch"],
     repo_mapping = {
         "@libpng": "@png",
     },
@@ -504,7 +509,7 @@ http_archive(
 http_archive(
     name = "skia_user_config",
     patch_args = ["-p1"],
-    patches = ["@//:PATCH.skia_user_config"],
+    patches = ["@//third_party/skia:skia_user_config.patch"],
     sha256 = "2fe28173428f8eebf2aa8a665bad32136086cc065f50c7154678a96250d1cde1",
     strip_prefix = "skia-226ae9d866748a2e68b6dbf114b37129c380a298/include/config",
     urls = ["https://github.com/google/skia/archive/226ae9d866748a2e68b6dbf114b37129c380a298.zip"],
@@ -512,7 +517,7 @@ http_archive(
 
 http_archive(
     name = "espeak_ng",
-    build_file = "@//:BUILD.espeak_ng",
+    build_file = "@//third_party/espeak_ng:espeak_ng.BUILD",
     sha256 = "bb4338102ff3b49a81423da8a1a158b420124b055b60fa76cfb4b18677130a23",
     strip_prefix = "espeak-ng-1.52.0",
     urls = ["https://github.com/espeak-ng/espeak-ng/archive/refs/tags/1.52.0.tar.gz"],
@@ -593,8 +598,8 @@ exynos_ai_litecore()
 
 http_archive(
     name = "nanobind_json",
-    build_file = "@//:BUILD.nanobind_json",
-    patches = ["@//:PATCH.nanobind_json"],
+    build_file = "@//third_party/nanobind_json:nanobind_json.BUILD",
+    patches = ["@//third_party/nanobind_json:nanobind_json.patch"],
     sha256 = "72cb4cdbf8108c7dd2dc669347669f2cc1acf4f943588f96661701f27f778912",
     strip_prefix = "nanobind_json-e1953530697f61cbca9dc9b4f51561ea785cb09d",
     urls = ["https://github.com/ianhbell/nanobind_json/archive/e1953530697f61cbca9dc9b4f51561ea785cb09d.zip"],
@@ -615,7 +620,7 @@ install_custom_deps()
 # DirectX Shader Compiler DLLs for Windows
 http_archive(
     name = "directx_shader_compiler",
-    build_file = "@//:BUILD.directx_shader_compiler",
+    build_file = "@//third_party/directx_shader_compiler:directx_shader_compiler.BUILD",
     sha256 = "a1e89031421cf3c1fca6627766ab3020ca4f962ac7e2caa7fab2b33a8436151e",
     url = "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2602/dxc_2026_02_20.zip",
 )
