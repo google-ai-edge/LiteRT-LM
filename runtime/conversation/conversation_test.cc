@@ -1586,10 +1586,133 @@ TEST_P(ConversationTest, RenderMessageIntoString) {
 
   Message user_message = {{"role", "user"}, {"content", "Hello world!"}};
 
-  ASSERT_OK_AND_ASSIGN(std::string rendered,
-                       conversation->RenderMessageIntoString(user_message, {}));
+  // Verify const access and idempotency.
+  const Conversation& const_conversation = *conversation;
+  ASSERT_OK_AND_ASSIGN(
+      std::string rendered1,
+      const_conversation.RenderMessageIntoString(user_message));
+  ASSERT_OK_AND_ASSIGN(
+      std::string rendered2,
+      const_conversation.RenderMessageIntoString(user_message));
 
-  EXPECT_EQ(rendered, "<start_of_turn>user\nHello world!<end_of_turn>\n");
+  EXPECT_EQ(rendered1, "<start_of_turn>user\nHello world!<end_of_turn>\n");
+  EXPECT_EQ(rendered2, rendered1);
+}
+
+TEST_P(ConversationTest, RenderMessageIntoStringWithNonEmptyHistory) {
+  // Set up mock Session.
+  auto mock_session = CreateMockSession();
+  auto mock_session_ptr = mock_session.get();
+  auto mock_engine = CreateMockEngine(std::move(mock_session));
+
+  // Create Conversation.
+  ASSERT_OK_AND_ASSIGN(
+      auto conversation_config,
+      ConversationConfig::Builder()
+          .SetSessionConfig(session_config_)
+          .SetOverwritePromptTemplate(PromptTemplate(kTestJinjaPromptTemplate))
+          .Build(*mock_engine));
+  ASSERT_OK_AND_ASSIGN(auto conversation,
+                       Conversation::Create(*mock_engine, conversation_config));
+
+  Message user_message_1 = {{"role", "user"}, {"content", "Hello!"}};
+  EXPECT_CALL(*mock_session_ptr, RunPrefillAsync(testing::_, testing::_))
+      .WillOnce([](const std::vector<InputData>& contents,
+                   absl::AnyInvocable<void(absl::StatusOr<Responses>)>
+                       user_callback) {
+        user_callback(Responses(TaskState::kDone));
+        return nullptr;
+      });
+  EXPECT_CALL(*mock_session_ptr, RunDecodeAsync(testing::_, testing::_))
+      .WillOnce(
+          [](absl::AnyInvocable<void(absl::StatusOr<Responses>)> user_callback,
+             const DecodeConfig& decode_config) {
+            user_callback(Responses(TaskState::kProcessing, {"Hi there!"}));
+            user_callback(Responses(TaskState::kDone));
+            return nullptr;
+          });
+
+  // Send turn 1.
+  ASSERT_OK_AND_ASSIGN(const Message response,
+                       conversation->SendMessage(user_message_1));
+  EXPECT_EQ(conversation->GetHistory().size(), 2);
+
+  // Render turn 2 message with non-empty history.
+  Message user_message_2 = {{"role", "user"},
+                            {"content", "What is the weather?"}};
+  const Conversation& const_conversation = *conversation;
+  ASSERT_OK_AND_ASSIGN(
+      std::string rendered1,
+      const_conversation.RenderMessageIntoString(user_message_2));
+  ASSERT_OK_AND_ASSIGN(
+      std::string rendered2,
+      const_conversation.RenderMessageIntoString(user_message_2));
+
+  EXPECT_EQ(rendered1,
+            "<start_of_turn>user\nWhat is the weather?<end_of_turn>\n");
+  EXPECT_EQ(rendered2, rendered1);
+  // Verify history was not mutated by RenderMessageIntoString.
+  EXPECT_EQ(conversation->GetHistory().size(), 2);
+}
+
+TEST_P(ConversationTest, RenderMessageIntoStringGemma4) {
+  // Set up mock Session.
+  auto mock_session = CreateMockSession();
+  auto mock_session_ptr = mock_session.get();
+  auto mock_engine = CreateMockEngine(std::move(mock_session));
+
+  std::string template_text = ReadFile(GetTestdataPath(kGemma4TemplatePath));
+
+  JsonPreface preface;
+  preface.messages = {
+      {{"role", "system"}, {"content", "You are a helpful assistant."}}};
+
+  ASSERT_OK_AND_ASSIGN(
+      auto conversation_config,
+      ConversationConfig::Builder()
+          .SetSessionConfig(session_config_)
+          .SetOverwritePromptTemplate(PromptTemplate(template_text))
+          .SetPreface(preface)
+          .Build(*mock_engine));
+  ASSERT_OK_AND_ASSIGN(auto conversation,
+                       Conversation::Create(*mock_engine, conversation_config));
+
+  // Render preface.
+  ASSERT_OK_AND_ASSIGN(std::string rendered_preface,
+                       conversation->RenderPrefaceIntoString());
+  EXPECT_EQ(rendered_preface,
+            "<|turn>system\nYou are a helpful assistant.<turn|>\n");
+
+  // Render message with empty history.
+  Message user_message_1 = {{"role", "user"}, {"content", "Hello!"}};
+  ASSERT_OK_AND_ASSIGN(std::string rendered_msg1,
+                       conversation->RenderMessageIntoString(user_message_1));
+  EXPECT_EQ(rendered_msg1, "<|turn>user\nHello!<turn|>\n");
+
+  // Send turn 1.
+  EXPECT_CALL(*mock_session_ptr, RunPrefillAsync(testing::_, testing::_))
+      .WillOnce([](const std::vector<InputData>& contents,
+                   absl::AnyInvocable<void(absl::StatusOr<Responses>)>
+                       user_callback) {
+        user_callback(Responses(TaskState::kDone));
+        return nullptr;
+      });
+  EXPECT_CALL(*mock_session_ptr, RunDecodeAsync(testing::_, testing::_))
+      .WillOnce(
+          [](absl::AnyInvocable<void(absl::StatusOr<Responses>)> user_callback,
+             const DecodeConfig& decode_config) {
+            user_callback(Responses(TaskState::kProcessing, {"Hi there!"}));
+            user_callback(Responses(TaskState::kDone));
+            return nullptr;
+          });
+  ASSERT_OK_AND_ASSIGN(const Message response,
+                       conversation->SendMessage(user_message_1));
+
+  // Render message with non-empty history.
+  Message user_message_2 = {{"role", "user"}, {"content", "How are you?"}};
+  ASSERT_OK_AND_ASSIGN(std::string rendered_msg2,
+                       conversation->RenderMessageIntoString(user_message_2));
+  EXPECT_EQ(rendered_msg2, "<|turn>user\nHow are you?<turn|>\n");
 }
 
 TEST_P(ConversationTest, RenderPrefaceIntoString) {

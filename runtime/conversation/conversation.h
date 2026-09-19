@@ -658,11 +658,12 @@ class Conversation {
   // `SendMessage` and `SendMessageAsync` functions will handle rendering
   // internally.
   absl::StatusOr<std::string> RenderMessageIntoString(
-      const Message& message, OptionalArgs optional_args);
+      const Message& message,
+      const OptionalArgs& optional_args = OptionalArgs()) const;
 
   // Renders the preface into a string for testing and logging purposes.
   absl::StatusOr<std::string> RenderPrefaceIntoString(
-      OptionalArgs optional_args);
+      const OptionalArgs& optional_args = OptionalArgs()) const;
 
   // Returns debug info for this conversation's underlying session.
   std::optional<SessionDebugInfo> GetSessionDebugInfo() const {
@@ -746,7 +747,7 @@ class Conversation {
       absl::Span<const Message> old_messages,
       absl::Span<const Message> new_messages,
       const OptionalArgs& optional_args = OptionalArgs(),
-      bool include_preface = true);
+      bool include_preface = true) const;
 
   // Returns the input data vector for the given messages.
   //
@@ -763,7 +764,7 @@ class Conversation {
       absl::Span<const Message> old_messages,
       absl::Span<const Message> new_messages,
       const OptionalArgs& optional_args = OptionalArgs(),
-      bool include_preface = true);
+      bool include_preface = true) const;
 
   // Rewinds the session to the checkpoint after the most recent channel content
   // and return the input data vector for all messages from that point onward.
@@ -772,7 +773,7 @@ class Conversation {
 
   // Applies the prompt template to the given input. This function will strip
   // heavy blobs from the input before applying the template.
-  absl::StatusOr<std::string> ApplyTemplate(PromptTemplateInput& input);
+  absl::StatusOr<std::string> ApplyTemplate(PromptTemplateInput& input) const;
 
   // Keep a reference to the creator engine to enable access to the shared
   // resources that might be required for features like cloning.
