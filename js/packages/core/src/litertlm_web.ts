@@ -32,7 +32,7 @@ export async function setupDefaultWebGpuDevice() {
  */
 export class LiteRtLm {
   readonly liteRtLmWasm: LiteRtLmWasm;
-  static DEFAULT_WASM_PATH = 'https://cdn.jsdelivr.net/npm/@litert-lm/core@0.12.1/wasm';
+  static DEFAULT_WASM_PATH = 'https://cdn.jsdelivr.net/npm/@litert-lm/core@0.13.1/wasm';
 
   constructor(wasmModule: WasmModule) {
     this.liteRtLmWasm = wasmModule as LiteRtLmWasm;
