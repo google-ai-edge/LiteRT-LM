@@ -40,7 +40,7 @@ def verify_comprehensive_e2e_suite(model_path: pathlib.Path):
   ):
     msg1 = conversation.send_message("What is the capital of France?")
     assert isinstance(msg1, litert_lm.Message)
-    text1 = msg1["content"][0]["text"]
+    text1 = str(msg1)
     print(f"   Turn 1 Response: '{text1.strip()}'")
     assert (
         "paris" in text1.lower()
@@ -48,7 +48,7 @@ def verify_comprehensive_e2e_suite(model_path: pathlib.Path):
 
     msg2 = conversation.send_message("And what country is that city in?")
     assert isinstance(msg2, litert_lm.Message)
-    text2 = msg2["content"][0]["text"]
+    text2 = str(msg2)
     print(f"   Turn 2 Response: '{text2.strip()}'")
     assert (
         "france" in text2.lower()
@@ -64,13 +64,8 @@ def verify_comprehensive_e2e_suite(model_path: pathlib.Path):
     chunks = []
     for chunk in stream:
       assert isinstance(chunk, litert_lm.Message)
-      if (
-          isinstance(chunk, dict)
-          and "content" in chunk
-          and chunk["content"]
-          and "text" in chunk["content"][0]
-      ):
-        chunks.append(chunk["content"][0]["text"])
+      if str(chunk):
+        chunks.append(str(chunk))
     full_async_text = "".join(chunks)
     print(f"   Async Stream Output: '{full_async_text.strip()}'")
     assert (
@@ -84,7 +79,7 @@ def verify_comprehensive_e2e_suite(model_path: pathlib.Path):
       engine.create_conversation() as conversation,
   ):
     resp_emoji = conversation.send_message("What is the emoji of strawberry?")
-    text_emoji = resp_emoji["content"][0]["text"]
+    text_emoji = str(resp_emoji)
     print(f"   Emoji Output: '{text_emoji.strip()}'")
     assert (
         "🍓" in text_emoji or "strawberry" in text_emoji.lower()
@@ -109,7 +104,7 @@ def verify_comprehensive_e2e_suite(model_path: pathlib.Path):
       engine.create_conversation(tools=[get_weather]) as conversation,
   ):
     resp_tool = conversation.send_message("What's the weather in London?")
-    text_tool = resp_tool["content"][0]["text"]
+    text_tool = str(resp_tool)
     print(f"   Tool Execution Response: '{text_tool.strip()}'")
     assert (
         "sunny" in text_tool.lower() and "london" in text_tool.lower()
@@ -166,7 +161,7 @@ def verify_comprehensive_e2e_suite(model_path: pathlib.Path):
     resp_vision = conversation.send_message(
         "How many apples are there in the image?"
     )
-    text_vision = resp_vision["content"][0]["text"]
+    text_vision = str(resp_vision)
     print(f"   Vision Preface Output: '{text_vision.strip()}'")
     assert re.search(
         r"two|2|one|1|apple", text_vision.lower()
@@ -195,7 +190,7 @@ def verify_comprehensive_e2e_suite(model_path: pathlib.Path):
             "Transcribe this audio.",
         )
     )
-    text_audio = resp_audio["content"][0]["text"]
+    text_audio = str(resp_audio)
     print(f"   Audio Transcription Output: '{text_audio.strip()}'")
     assert (
         "wonderful" in text_audio.lower() and "day" in text_audio.lower()
@@ -221,7 +216,7 @@ def verify_gpu_suite(model_path: pathlib.Path):
       engine.create_conversation() as conversation,
   ):
     msg = conversation.send_message("What is the capital of France?")
-    text = msg["content"][0]["text"]
+    text = str(msg)
     print(f"   GPU Response: '{text.strip()}'")
     assert "paris" in text.lower(), f"GPU Failure: Got '{text}'"
   print("   ✅ GPU Hardware Acceleration Passed!")

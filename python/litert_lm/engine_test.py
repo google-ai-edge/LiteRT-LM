@@ -50,13 +50,7 @@ class LiteRtLmTestBase(parameterized.TestCase):
 
   @classmethod
   def _extract_text(cls, stream):
-    text_pieces = []
-    for chunk in stream:
-      content_list = chunk.get("content", [])
-      for item in content_list:
-        if item.get("type") == "text":
-          text_pieces.append(item.get("text", ""))
-    return text_pieces
+    return [str(chunk) for chunk in stream if str(chunk)]
 
 
 class EngineTest(LiteRtLmTestBase):
@@ -384,10 +378,8 @@ class EngineTest(LiteRtLmTestBase):
 
       text_pieces = []
       for chunk in stream:
-        content_list = chunk.get("content", [])
-        for item in content_list:
-          if item.get("type") == "text":
-            text_pieces.append(item.get("text", ""))
+        if str(chunk):
+          text_pieces.append(str(chunk))
 
         # Cancel the process after receiving the first chunk.
         conversation.cancel_process()
@@ -580,7 +572,7 @@ class EngineTest(LiteRtLmTestBase):
     ):
       user_message = litert_lm.Message.user("Hello world!")
       message = conversation.send_message(user_message)
-      self.assertEqual(message["role"], "assistant")
+      self.assertEqual(message.role, litert_lm.Role.MODEL)
 
   def test_conversation_send_contents_object(self):
     with (
@@ -589,7 +581,7 @@ class EngineTest(LiteRtLmTestBase):
     ):
       user_contents = litert_lm.Contents.of("Hello world!")
       message = conversation.send_message(user_contents)
-      self.assertEqual(message["role"], "assistant")
+      self.assertEqual(message.role, litert_lm.Role.MODEL)
 
   def test_conversation_send_dict_message(self):
     with (
@@ -598,7 +590,7 @@ class EngineTest(LiteRtLmTestBase):
     ):
       user_message = {"role": "user", "content": "Hello world!"}
       message = conversation.send_message(user_message)
-      self.assertEqual(message["role"], "assistant")
+      self.assertEqual(message.role, litert_lm.Role.MODEL)
 
   def test_conversation_with_thinking_config(self):
     thinking_config = litert_lm.ThinkingConfig(
@@ -785,8 +777,7 @@ class EngineTest(LiteRtLmTestBase):
           "Hello world!",
           repetition_penalty_config=repetition_penalty_config,
       )
-      self.assertIn("role", message)
-      self.assertEqual(message["role"], "assistant")
+      self.assertEqual(message.role, litert_lm.Role.MODEL)
 
   def test_conversation_send_message_async_with_repetition_penalty_config(self):
     repetition_penalty_config = litert_lm.RepetitionPenaltyConfig(
@@ -819,8 +810,7 @@ class EngineTest(LiteRtLmTestBase):
           "Hello world!",
           no_repeat_ngram_config=no_repeat_ngram_config,
       )
-      self.assertIn("role", message)
-      self.assertEqual(message["role"], "assistant")
+      self.assertEqual(message.role, litert_lm.Role.MODEL)
 
   def test_conversation_send_message_async_with_no_repeat_ngram_config(self):
     no_repeat_ngram_config = litert_lm.NoRepeatNgramConfig(
@@ -850,8 +840,7 @@ class EngineTest(LiteRtLmTestBase):
           "Hello world!",
           suppress_tokens_config=suppress_tokens_config,
       )
-      self.assertIn("role", message)
-      self.assertEqual(message["role"], "assistant")
+      self.assertEqual(message.role, litert_lm.Role.MODEL)
 
   def test_conversation_send_message_async_with_suppress_tokens_config(self):
     suppress_tokens_config = litert_lm.SuppressTokensConfig(
@@ -874,10 +863,9 @@ class EngineTest(LiteRtLmTestBase):
         engine.create_conversation() as conversation,
     ):
       message = conversation.send_message("Hello world!", max_output_tokens=1)
-      self.assertIn("role", message)
-      self.assertEqual(message["role"], "assistant")
+      self.assertEqual(message.role, litert_lm.Role.MODEL)
       # Response should be shorter because of max_output_tokens=1
-      text = "".join([c.get("text", "") for c in message.get("content", [])])
+      text = str(message)
       self.assertLess(len(text), 15)
 
   def test_conversation_send_message_async_with_max_output_tokens(self):

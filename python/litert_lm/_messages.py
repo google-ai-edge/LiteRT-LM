@@ -329,7 +329,7 @@ class Message(dict[str, Any]):
       )
     if self._raw_content is not None:
       res["content"] = self._raw_content
-    elif self.contents.contents:
+    elif self.contents:
       res["content"] = self.contents.to_json()
     if self.tool_calls:
       res["tool_calls"] = [tc.to_json() for tc in self.tool_calls]

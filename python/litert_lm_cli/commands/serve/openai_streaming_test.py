@@ -454,9 +454,9 @@ class ServeOpenAIStreamingTest(absltest.TestCase):
     mock_get_engine.return_value = mock_engine
 
     mock_conv.send_message_async.return_value = [
-        {"role": "assistant", "channels": {"thought": "Thinking..."}},
-        {"role": "assistant", "channels": {"thought": "more"}},
-        {"role": "assistant", "content": [{"type": "text", "text": "Hi"}]},
+        litert_lm.Message.model(channels={"thought": "Thinking..."}),
+        litert_lm.Message.model(channels={"thought": "more"}),
+        litert_lm.Message.model(litert_lm.Contents.of("Hi")),
     ]
     mock_conv.get_benchmark_info.return_value = litert_lm.BenchmarkInfo(
         init_time_in_second=0.1,

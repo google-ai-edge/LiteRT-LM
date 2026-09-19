@@ -339,19 +339,13 @@ class MessagesTest(parameterized.TestCase):
         }],
     }
     msg = litert_lm.Message.from_json(raw_dict)
-    self.assertLen(msg.contents.contents, 6)
-    self.assertIsInstance(msg.contents.contents[0], litert_lm.Content.Text)
-    self.assertIsInstance(msg.contents.contents[1], litert_lm.Content.ImageFile)
-    self.assertIsInstance(
-        msg.contents.contents[2], litert_lm.Content.ImageBytes
-    )
-    self.assertIsInstance(msg.contents.contents[3], litert_lm.Content.AudioFile)
-    self.assertIsInstance(
-        msg.contents.contents[4], litert_lm.Content.AudioBytes
-    )
-    self.assertIsInstance(
-        msg.contents.contents[5], litert_lm.Content.ToolResponse
-    )
+    self.assertLen(msg.contents, 6)
+    self.assertIsInstance(msg.contents[0], litert_lm.Content.Text)
+    self.assertIsInstance(msg.contents[1], litert_lm.Content.ImageFile)
+    self.assertIsInstance(msg.contents[2], litert_lm.Content.ImageBytes)
+    self.assertIsInstance(msg.contents[3], litert_lm.Content.AudioFile)
+    self.assertIsInstance(msg.contents[4], litert_lm.Content.AudioBytes)
+    self.assertIsInstance(msg.contents[5], litert_lm.Content.ToolResponse)
     self.assertLen(msg.tool_calls, 1)
     self.assertEqual(msg.tool_calls[0].name, "get_weather")
     self.assertEqual(msg.tool_calls[0].arguments, {"city": "Paris"})

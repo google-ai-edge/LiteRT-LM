@@ -235,13 +235,11 @@ def _handle_chat_completions(
         max_output_tokens=max_completion_tokens,
         response_format=response_format,
     ):
-      if chunk.get("channels"):
+      if chunk.channels:
         reasoning_tokens += 1
-      for item in chunk.get("content", []):
-        if item.get("type") == "text":
-          text_parts.append(item.get("text", ""))
-      if chunk.get("tool_calls"):
-        tool_calls.extend(chunk.get("tool_calls", []))
+      text_parts.append(str(chunk))
+      if chunk.tool_calls:
+        tool_calls.extend(chunk.tool_calls)
 
     text_output = "".join(text_parts)
 
@@ -250,10 +248,8 @@ def _handle_chat_completions(
             "id": f"call_{now_str}_{i}",
             "type": "function",
             "function": {
-                "name": tc.get("function", {}).get("name"),
-                "arguments": json.dumps(
-                    tc.get("function", {}).get("arguments", {})
-                ),
+                "name": tc.name,
+                "arguments": json.dumps(dict(tc.arguments)),
             },
         }
         for i, tc in enumerate(tool_calls)

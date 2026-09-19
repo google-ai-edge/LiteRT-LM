@@ -233,7 +233,7 @@ class LitertLmModelRunner(LM):
 
       with self.engine.create_conversation(messages=history) as conversation:
         response = conversation.send_message(last_msg)
-        text_response = self._extract_text(response.get("content", []))
+        text_response = str(response)
 
         if until:
           stop_indices = [

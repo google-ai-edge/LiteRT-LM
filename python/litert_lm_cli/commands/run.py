@@ -106,14 +106,12 @@ def _execute_prompt(
 
   try:
     for chunk in stream:
-      content_list = chunk.get("content", [])
-      for item in content_list:
-        if item.get("type") == "text":
-          state.close_channel()
-          click.echo(click.style(item.get("text", ""), fg="yellow"), nl=False)
+      text = str(chunk)
+      if text:
+        state.close_channel()
+        click.echo(click.style(text, fg="yellow"), nl=False)
 
-      channels = chunk.get("channels", {})
-      for channel_name, channel_content in channels.items():
+      for channel_name, channel_content in chunk.channels.items():
         if state.active_channel != channel_name:
           state.close_channel()
           click.echo(click.style(f"[{channel_name}] ", fg="blue"), nl=False)

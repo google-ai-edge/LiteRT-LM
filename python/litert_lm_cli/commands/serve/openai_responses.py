@@ -140,11 +140,7 @@ def _handle_responses(
   """
   if not stream:
     response = conv.send_message(prompt, response_format=response_format)
-    text_output = "".join(
-        item.get("text", "")
-        for item in response.get("content", [])
-        if item.get("type") == "text"
-    )
+    text_output = str(response)
     resp_body = OpenAIResponse(
         id=f"resp_{now_str}",
         output=[

@@ -123,22 +123,21 @@ class OpenAIHandler(util.CORSRequestHandler):
           max_output_tokens=max_completion_tokens,
           response_format=response_format,
       ):
-        if chunk.get("channels"):
+        if chunk.channels:
           reasoning_tokens += 1
-        text_output = "".join(
-            item.get("text", "")
-            for item in chunk.get("content", [])
-            if item.get("type") == "text"
-        )
+        text_output = str(chunk)
         if text_output:
           self.wfile.write(formatter.format_delta(text_output))
           self.wfile.flush()
 
-        tool_calls = chunk.get("tool_calls", [])
-        if tool_calls:
+        if chunk.tool_calls:
           has_tool_calls = True
           if hasattr(formatter, "format_tool_call_delta"):
-            self.wfile.write(formatter.format_tool_call_delta(tool_calls))
+            self.wfile.write(
+                formatter.format_tool_call_delta(
+                    [tc.to_json() for tc in chunk.tool_calls]
+                )
+            )
             self.wfile.flush()
 
       finish_reason = "tool_calls" if has_tool_calls else "stop"

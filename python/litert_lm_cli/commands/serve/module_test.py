@@ -216,10 +216,9 @@ class ServeTest(parameterized.TestCase):
   @parameterized.named_parameters(
       dict(
           testcase_name="assistant_text",
-          litertlm_response={
-              "role": "assistant",
-              "content": [{"type": "text", "text": "Response text"}],
-          },
+          litertlm_response=mock_litert_lm.Message.model(
+              mock_litert_lm.Contents.of("Response text")
+          ),
           finish_reason="STOP",
           expected={
               "candidates": [{
@@ -234,15 +233,14 @@ class ServeTest(parameterized.TestCase):
       ),
       dict(
           testcase_name="tool_calls",
-          litertlm_response={
-              "role": "assistant",
-              "tool_calls": [{
-                  "function": {
-                      "name": "get_weather",
-                      "arguments": {"location": "London"},
-                  }
-              }],
-          },
+          litertlm_response=mock_litert_lm.Message.model(
+              tool_calls=[
+                  mock_litert_lm.ToolCall(
+                      name="get_weather",
+                      arguments={"location": "London"},
+                  )
+              ]
+          ),
           finish_reason="STOP",
           expected={
               "candidates": [{
@@ -262,7 +260,9 @@ class ServeTest(parameterized.TestCase):
       ),
       dict(
           testcase_name="streaming",
-          litertlm_response={"content": [{"type": "text", "text": "Chunk"}]},
+          litertlm_response=mock_litert_lm.Message.model(
+              mock_litert_lm.Contents.of("Chunk")
+          ),
           finish_reason="",
           expected={
               "candidates": [{
@@ -276,7 +276,9 @@ class ServeTest(parameterized.TestCase):
       ),
       dict(
           testcase_name="custom_finish_reason",
-          litertlm_response={"content": [{"type": "text", "text": "Text"}]},
+          litertlm_response=mock_litert_lm.Message.model(
+              mock_litert_lm.Contents.of("Text")
+          ),
           finish_reason="MAX_TOKENS",
           expected={
               "candidates": [{
@@ -1086,9 +1088,9 @@ class ServeTest(parameterized.TestCase):
     handler = mock.MagicMock()
     handler.headers_sent = False
     conv = mock.MagicMock()
-    conv.send_message.return_value = {
-        "content": [{"type": "text", "text": "Hello from responses"}]
-    }
+    conv.send_message.return_value = mock_litert_lm.Message.from_json(
+        {"content": [{"type": "text", "text": "Hello from responses"}]}
+    )
 
     openai_responses._handle_responses(
         handler,
@@ -1117,12 +1119,16 @@ class ServeTest(parameterized.TestCase):
     mock_conv = mock.MagicMock()
     mock_conv.__enter__.return_value = mock_conv
     mock_conv.__exit__.return_value = False
-    mock_conv.send_message.return_value = {
-        "content": [{"type": "text", "text": "Non-streaming answer"}]
-    }
+    mock_conv.send_message.return_value = mock_litert_lm.Message.from_json(
+        {"content": [{"type": "text", "text": "Non-streaming answer"}]}
+    )
     mock_conv.send_message_async.return_value = [
-        {"content": [{"type": "text", "text": "Streamed "}]},
-        {"content": [{"type": "text", "text": "answer"}]},
+        mock_litert_lm.Message.from_json(
+            {"content": [{"type": "text", "text": "Streamed "}]}
+        ),
+        mock_litert_lm.Message.from_json(
+            {"content": [{"type": "text", "text": "answer"}]}
+        ),
     ]
     mock_engine_instance = mock.MagicMock()
     mock_engine_instance.create_conversation.return_value = mock_conv
@@ -1293,16 +1299,20 @@ class ServeTest(parameterized.TestCase):
         last_prefill_token_count=10, last_decode_token_count=5
     )
     mock_conv.send_message_async.return_value = [
-        {"channels": {"thought": "thinking..."}},
-        {"content": [{"type": "text", "text": "Hello world"}]},
-        {
+        mock_litert_lm.Message.from_json(
+            {"channels": {"thought": "thinking..."}}
+        ),
+        mock_litert_lm.Message.from_json(
+            {"content": [{"type": "text", "text": "Hello world"}]}
+        ),
+        mock_litert_lm.Message.from_json({
             "tool_calls": [{
                 "function": {
                     "name": "get_weather",
                     "arguments": {"location": "NYC"},
                 }
             }]
-        },
+        }),
     ]
     mock_engine_instance = mock.MagicMock()
     mock_engine_instance.create_conversation.return_value = mock_conv

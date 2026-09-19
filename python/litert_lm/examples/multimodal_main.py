@@ -55,7 +55,7 @@ def main(argv: Sequence[str]) -> None:
     }
 
     message = conversation.send_message(user_message)
-    print(f"Response: {message['content'][0]['text']}")
+    print(f"Response: {message}")
 
 
 if __name__ == "__main__":

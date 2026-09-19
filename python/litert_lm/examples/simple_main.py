@@ -23,4 +23,4 @@ with (
     engine.create_conversation() as conversation,
 ):
   message = conversation.send_message("Hello!")
-  print(message["content"][0]["text"])
+  print(message)

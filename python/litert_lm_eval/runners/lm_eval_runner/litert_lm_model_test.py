@@ -48,12 +48,13 @@ class LitertLmModelTest(parameterized.TestCase):
     # Mock the conversation to return a payload with multiple stop sequences.
     # Notice that '\n\n' appears before 'User:'.
     mock_conversation = mock.MagicMock()
-    mock_conversation.send_message.return_value = {
-        "content": [{
-            "type": "text",
-            "text": "The answer is 42.\n\nUser: What is next? Question:",
-        }]
-    }
+    mock_conversation.send_message.return_value = (
+        litert_lm_model.litert_lm.Message.model(
+            litert_lm_model.litert_lm.Contents.of(
+                "The answer is 42.\n\nUser: What is next? Question:"
+            )
+        )
+    )
 
     # Context manager setup.
     model.engine.create_conversation.return_value.__enter__.return_value = (  # pyrefly: ignore[missing-attribute]
@@ -352,9 +353,11 @@ class LitertLmModelTest(parameterized.TestCase):
     model = litert_lm_model.LitertLmModelRunner(model_path="dummy_path")
 
     mock_conversation = mock.MagicMock()
-    mock_conversation.send_message.return_value = {
-        "content": [{"type": "text", "text": "response text"}]
-    }
+    mock_conversation.send_message.return_value = (
+        litert_lm_model.litert_lm.Message.model(
+            litert_lm_model.litert_lm.Contents.of("response text")
+        )
+    )
 
     model.engine.create_conversation.return_value.__enter__.return_value = (  # pyrefly: ignore[missing-attribute]
         mock_conversation

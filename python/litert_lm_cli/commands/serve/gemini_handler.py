@@ -110,22 +110,21 @@ def litertlm_message_from_gemini(
 
 
 def gemini_response_from_litertlm(
-    litertlm_response: collections.abc.Mapping[str, Any],
+    litertlm_response: litert_lm.Message,
     finish_reason: str = "STOP",
 ) -> dict[str, Any]:
   """Converts a LiteRT-LM response to a Gemini API response."""
   parts = []
-  for item in litertlm_response.get("content", []):
-    if item.get("type") == "text":
-      parts.append({"text": item.get("text")})
+  text = str(litertlm_response)
+  if text:
+    parts.append({"text": text})
 
-  for tc in litertlm_response.get("tool_calls", []):
-    f = tc.get("function", {})
+  for tc in litertlm_response.tool_calls:
     parts.append(
         {
             "functionCall": {
-                "name": f.get("name"),
-                "args": f.get("arguments"),
+                "name": tc.name,
+                "args": tc.arguments,
             }
         }
     )
@@ -416,7 +415,7 @@ class GeminiHandler(util.CORSRequestHandler):
 
         # Final chunk to signal completion
         final_resp = gemini_response_from_litertlm(
-            {"content": []}, finish_reason="STOP"
+            litert_lm.Message.model(), finish_reason="STOP"
         )
         click.echo(click.style("Final Stream Response:", fg="magenta"))
         click.echo(json.dumps(final_resp, ensure_ascii=False))
