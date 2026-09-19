@@ -84,9 +84,10 @@ jobs:
           Add-Content -Path $env:GITHUB_PATH -Value "C:\Program Files (x86)\Google\Cloud SDK\google-cloud-sdk\bin"
 
       - name: Checkout code
-        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           lfs: true
+          persist-credentials: false
 
       - name: Test GCloud Storage
         run: |
@@ -156,11 +157,11 @@ jobs:
 
           $BAZEL_OUTPUT_BASE = "B:\job"
 
-          $CACHE_RESTORE_KEY_2="$env:GH_WORKFLOW"
-          $CACHE_RESTORE_KEY_1="$CACHE_RESTORE_KEY_2-$env:HASH_WORKSPACE"
-          $CACHE_RESTORE_KEY_0="$CACHE_RESTORE_KEY_1-$env:HASH_BUILD"
-          $CACHE_RESTORE_KEY_HEAD="$CACHE_RESTORE_KEY_0-$env:BASE_SHA"
-          $CACHE_KEY="$CACHE_RESTORE_KEY_0-$env:HEAD_SHA"
+          $CACHE_RESTORE_KEY_2="$env:GITHUB_WORKFLOW"
+          $CACHE_RESTORE_KEY_1="$CACHE_RESTORE_KEY_2-${{ hashFiles('**/WORKSPACE', '**/.bazelrc') }}"
+          $CACHE_RESTORE_KEY_0="$CACHE_RESTORE_KEY_1-${{ hashFiles('**/BUILD*') }}"
+          $CACHE_RESTORE_KEY_HEAD="$CACHE_RESTORE_KEY_0-${{ github.event.pull_request.base.sha }}"
+          $CACHE_KEY="$CACHE_RESTORE_KEY_0-${{ github.sha }}"
 
           echo "CACHE_RESTORE_KEY_2=$CACHE_RESTORE_KEY_2" >> $env:GITHUB_OUTPUT
           echo "CACHE_RESTORE_KEY_1=$CACHE_RESTORE_KEY_1" >> $env:GITHUB_OUTPUT
@@ -184,18 +185,24 @@ jobs:
           KEY_0: ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_0 }}
           KEY_1: ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_1 }}
           KEY_2: ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_2 }}
+          STEPS_CACHE_KEYS_OUTPUTS_CACHE_KEY: ${{ steps.cache-keys.outputs.CACHE_KEY }}
+          STEPS_CACHE_KEYS_OUTPUTS_CACHE_RESTORE_KEY_HEAD: ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_HEAD }}
+          STEPS_CACHE_KEYS_OUTPUTS_CACHE_RESTORE_KEY_0: ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_0 }}
+          STEPS_CACHE_KEYS_OUTPUTS_CACHE_RESTORE_KEY_1: ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_1 }}
+          STEPS_CACHE_KEYS_OUTPUTS_CACHE_RESTORE_KEY_2: ${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_2 }}
+
         run: |
           $TARGET_DIR = "$HOME/.cache/bazel"
           $BUCKET_URL = "gs://litert-lm-cicd/caches/windows/bazel"
 
-          Add-Content -Path $env:GITHUB_OUTPUT -Value "cache-primary-key=$env:KEY"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "cache-primary-key=$env:STEPS_CACHE_KEYS_OUTPUTS_CACHE_KEY"
 
           $CACHE_KEYS = @(
-              $env:KEY,
-              $env:KEY_HEAD,
-              $env:KEY_0,
-              $env:KEY_1,
-              $env:KEY_2
+              "$env:STEPS_CACHE_KEYS_OUTPUTS_CACHE_KEY",
+              "$env:STEPS_CACHE_KEYS_OUTPUTS_CACHE_RESTORE_KEY_HEAD",
+              "$env:STEPS_CACHE_KEYS_OUTPUTS_CACHE_RESTORE_KEY_0",
+              "$env:STEPS_CACHE_KEYS_OUTPUTS_CACHE_RESTORE_KEY_1",
+              "$env:STEPS_CACHE_KEYS_OUTPUTS_CACHE_RESTORE_KEY_2"
           )
 
           $FOUND_BLOB = ""
@@ -248,10 +255,14 @@ jobs:
           CACHE_HIT: ${{ steps.bazel-cache.outputs.cache-hit }}
           CACHE_PRIMARY: ${{ steps.bazel-cache.outputs.cache-primary-key }}
           CACHE_MATCHED: ${{ steps.bazel-cache.outputs.cache-matched-key }}
+          STEPS_BAZEL_CACHE_OUTPUTS_CACHE_HIT: ${{ steps.bazel-cache.outputs.cache-hit }}
+          STEPS_BAZEL_CACHE_OUTPUTS_CACHE_PRIMARY_KEY: ${{ steps.bazel-cache.outputs.cache-primary-key }}
+          STEPS_BAZEL_CACHE_OUTPUTS_CACHE_MATCHED_KEY: ${{ steps.bazel-cache.outputs.cache-matched-key }}
+
         run: |
-          echo "Cache Hit: $env:CACHE_HIT"
-          echo "Cache Primary Key: $env:CACHE_PRIMARY"
-          echo "Cache Matched Key: $env:CACHE_MATCHED"
+          echo "Cache Hit: $env:STEPS_BAZEL_CACHE_OUTPUTS_CACHE_HIT"
+          echo "Cache Primary Key: $env:STEPS_BAZEL_CACHE_OUTPUTS_CACHE_PRIMARY_KEY"
+          echo "Cache Matched Key: $env:STEPS_BAZEL_CACHE_OUTPUTS_CACHE_MATCHED_KEY"
 
       - name: Download Model
         env:
@@ -311,6 +322,7 @@ jobs:
           cp bazel-bin/runtime/engine/litert_lm_main.exe litert_lm_main.windows_x86_64.exe
           gh release upload $env:GITHUB_REF_NAME litert_lm_main.windows_x86_64.exe --clobber
 
+
       - name: Run bazel test on Windows
         continue-on-error: true
         run: |
@@ -333,7 +345,7 @@ jobs:
 
       - name: Upload bazel test logs
         if: always()
-        uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874 # v4.4.0
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: bazel-test-logs-windows
           path: bazel-testlogs/**/test.log
@@ -360,8 +372,10 @@ jobs:
         continue-on-error: true  # Keeps the build moving if the file wasn't there to begin with
         env:
           CACHE_KEY: ${{ steps.cache-keys.outputs.CACHE_KEY }}
+          STEPS_CACHE_KEYS_OUTPUTS_CACHE_KEY: ${{ steps.cache-keys.outputs.CACHE_KEY }}
+
         run: |
-          $CacheKey = $env:CACHE_KEY
+          $CacheKey = "$env:STEPS_CACHE_KEYS_OUTPUTS_CACHE_KEY"
           $BucketUrl = "gs://litert-lm-cicd/caches/windows/bazel"
 
           Write-Host "REFRESH_CACHE is true. Removing existing cache from GCS: $BucketUrl/$CacheKey.tar.gz"
@@ -373,9 +387,10 @@ jobs:
         if: env.REFRESH_CACHE == 'true' || steps.bazel-cache.outputs.cache-hit != 'true'
         env:
           CACHE_KEY: ${{ steps.cache-keys.outputs.CACHE_KEY }}
+          STEPS_CACHE_KEYS_OUTPUTS_CACHE_KEY: ${{ steps.cache-keys.outputs.CACHE_KEY }}
         run: |
           $TargetDir = "$HOME/.cache/bazel"
-          $CacheKey = $env:CACHE_KEY
+          $CacheKey = "$env:STEPS_CACHE_KEYS_OUTPUTS_CACHE_KEY"
           $BucketUrl = "gs://litert-lm-cicd/caches/windows/bazel"
           $ArchiveName = "cache.tar.gz"
 
