@@ -839,6 +839,18 @@ void litert_lm_engine_settings_set_gpu_enable_metal_residency_set(
   }
 }
 
+void litert_lm_engine_settings_set_enable_profiling(
+    LiteRtLmEngineSettings* settings, bool enable_profiling) {
+  if (settings && settings->settings) {
+    auto advanced_settings = settings->settings->GetMainExecutorSettings()
+                                 .GetAdvancedSettings()
+                                 .value_or(litert::lm::AdvancedSettings());
+    advanced_settings.enable_profiling = enable_profiling;
+    settings->settings->GetMutableMainExecutorSettings().SetAdvancedSettings(
+        advanced_settings);
+  }
+}
+
 LiteRtLmEngine* litert_lm_engine_create(
     const LiteRtLmEngineSettings* settings) {
   if (!settings || !settings->settings) {
@@ -1277,6 +1289,16 @@ double litert_lm_benchmark_info_get_decode_tokens_per_sec_at(
     return 0.0;
   }
   return benchmark_info->benchmark_info.GetDecodeTokensPerSec(index);
+}
+
+const char* litert_lm_benchmark_info_get_profile_summary(
+    const LiteRtLmBenchmarkInfo* benchmark_info) {
+  if (!benchmark_info) {
+    return nullptr;
+  }
+  // The string is owned by the BenchmarkInfo and stays valid as long as the
+  // benchmark info object is alive.
+  return benchmark_info->benchmark_info.GetProfileSummary().c_str();
 }
 
 LiteRtLmTokenizeResult* litert_lm_engine_tokenize(LiteRtLmEngine* engine,

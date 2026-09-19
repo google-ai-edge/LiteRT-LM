@@ -1920,6 +1920,85 @@ TEST(EngineCTest, Benchmark) {
   }
 }
 
+namespace {
+
+BenchmarkInfoPtr RunBenchmarkTurn(bool enable_profiling, EnginePtr* engine_out,
+                                  SessionPtr* session_out,
+                                  ResponsesPtr* responses_out) {
+  const std::string task_path = GetTestdataPath(
+      "litert_lm/runtime/testdata/test_lm_new_metadata.task");
+
+  EngineSettingsPtr settings(
+      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
+                                       /* vision_backend_str */ nullptr,
+                                       /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  EXPECT_NE(settings, nullptr);
+  litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
+  litert_lm_engine_settings_enable_benchmark(settings.get());
+  litert_lm_engine_settings_set_enable_profiling(settings.get(),
+                                                 enable_profiling);
+
+  *engine_out = EnginePtr(litert_lm_engine_create(settings.get()),
+                          &litert_lm_engine_delete);
+  EXPECT_NE(*engine_out, nullptr);
+
+  *session_out = SessionPtr(
+      litert_lm_engine_create_session(engine_out->get(),
+                                      /* session_config */ nullptr),
+      &litert_lm_session_delete);
+  EXPECT_NE(*session_out, nullptr);
+
+  const char* prompt = "Hello world!";
+  InputDataPtr input_data(
+      litert_lm_input_data_create(kLiteRtLmInputDataTypeText, prompt,
+                                  strlen(prompt)),
+      &litert_lm_input_data_delete);
+  EXPECT_NE(input_data, nullptr);
+  const LiteRtLmInputData* inputs[] = {input_data.get()};
+  *responses_out = ResponsesPtr(
+      litert_lm_session_generate_content(session_out->get(), inputs, 1),
+      &litert_lm_responses_delete);
+  EXPECT_NE(*responses_out, nullptr);
+
+  return BenchmarkInfoPtr(
+      litert_lm_session_get_benchmark_info(session_out->get()),
+      &litert_lm_benchmark_info_delete);
+}
+
+}  // namespace
+
+TEST(EngineCTest, BenchmarkProfileSummary) {
+  EnginePtr engine(nullptr, &litert_lm_engine_delete);
+  SessionPtr session(nullptr, &litert_lm_session_delete);
+  ResponsesPtr responses(nullptr, &litert_lm_responses_delete);
+  BenchmarkInfoPtr benchmark_info = RunBenchmarkTurn(
+      /* enable_profiling */ true, &engine, &session, &responses);
+  ASSERT_NE(benchmark_info, nullptr);
+
+  const char* summary =
+      litert_lm_benchmark_info_get_profile_summary(benchmark_info.get());
+  ASSERT_NE(summary, nullptr);
+  // The CPU executor implements profiling, so a turn run with it enabled
+  // carries a non-empty per-op summary.
+  EXPECT_STRNE(summary, "");
+}
+
+TEST(EngineCTest, BenchmarkProfileSummaryEmptyWithoutProfiling) {
+  EnginePtr engine(nullptr, &litert_lm_engine_delete);
+  SessionPtr session(nullptr, &litert_lm_session_delete);
+  ResponsesPtr responses(nullptr, &litert_lm_responses_delete);
+  BenchmarkInfoPtr benchmark_info = RunBenchmarkTurn(
+      /* enable_profiling */ false, &engine, &session, &responses);
+  ASSERT_NE(benchmark_info, nullptr);
+
+  const char* summary =
+      litert_lm_benchmark_info_get_profile_summary(benchmark_info.get());
+  ASSERT_NE(summary, nullptr);
+  EXPECT_STREQ(summary, "");
+  EXPECT_EQ(litert_lm_benchmark_info_get_profile_summary(nullptr), nullptr);
+}
+
 TEST(EngineCTest, RunPrefillSuccess) {
   const std::string task_path = GetTestdataPath(
       "litert_lm/runtime/testdata/test_lm_new_metadata.task");
