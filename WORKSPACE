@@ -15,9 +15,7 @@ TENSORFLOW_REF = "d9a8da74b4c3de28a39ab34ad007838d6bc30c67"
 
 TENSORFLOW_SHA256 = "cd46b37c0f722d5a48c0accc9618cc5684c553332b913091023703461f318d9b"
 
-# buildifier: disable=load-on-top
-
-load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive", "http_jar")
+load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
 http_archive(
     name = "rules_shell",
@@ -171,12 +169,6 @@ load("@xla//third_party/py:python_init_repositories.bzl", "python_init_repositor
 
 python_init_repositories(
     default_python_version = "system",
-    local_wheel_dist_folder = "dist",
-    local_wheel_inclusion_list = [
-        "tensorflow*",
-        "tf_nightly*",
-    ],
-    local_wheel_workspaces = ["@org_tensorflow//:WORKSPACE"],
     requirements = {
         "3.10": "@org_tensorflow//:requirements_lock_3_10.txt",
         "3.11": "@org_tensorflow//:requirements_lock_3_11.txt",
@@ -276,20 +268,6 @@ load(
 )
 
 cuda_configure(name = "local_config_cuda")
-
-load(
-    "@rules_ml_toolchain//gpu/nccl:nccl_redist_init_repository.bzl",
-    "nccl_redist_init_repository",
-)
-
-nccl_redist_init_repository()
-
-load(
-    "@rules_ml_toolchain//gpu/nccl:nccl_configure.bzl",
-    "nccl_configure",
-)
-
-nccl_configure(name = "local_config_nccl")
 
 # Kotlin rules
 
@@ -460,15 +438,6 @@ http_archive(
 )
 
 http_archive(
-    name = "minja",
-    build_file = "@//third_party/minja:minja.BUILD",
-    patches = ["@//third_party/minja:minja.patch"],
-    sha256 = "752f47dd2a2f4920a66f497c952785073c1983f12f084b99e5c12bf89f96acfe",
-    strip_prefix = "minja-58568621432715b0ed38efd16238b0e7ff36c3ba",
-    url = "https://github.com/google/minja/archive/58568621432715b0ed38efd16238b0e7ff36c3ba.zip",
-)
-
-http_archive(
     name = "miniaudio",
     build_file = "@//third_party/miniaudio:miniaudio.BUILD",
     sha256 = "bcb07bfb27e6fa94d34da73ba2d5642d4940b208ec2a660dbf4e52e6b7cd492f",
@@ -482,12 +451,6 @@ http_archive(
     sha256 = "119b9f3cca3e50225dc946ed1acd1b7a160943bc8bf549760109cea4e4e7c836",
     strip_prefix = "stb-f58f558c120e9b32c217290b80bad1a0729fbb2c",
     url = "https://github.com/nothings/stb/archive/f58f558c120e9b32c217290b80bad1a0729fbb2c.zip",
-)
-
-http_jar(
-    name = "javax_json",
-    sha256 = "0e1dec40a1ede965941251eda968aeee052cc4f50378bc316cc48e8159bdbeb4",
-    url = "https://jcenter.bintray.com/org/glassfish/javax.json/1.0.4/javax.json-1.0.4.jar",
 )
 
 http_archive(
@@ -595,15 +558,6 @@ openvino_configure()
 load("@litert//third_party/exynos_ai_litecore:workspace.bzl", "exynos_ai_litecore")
 
 exynos_ai_litecore()
-
-http_archive(
-    name = "nanobind_json",
-    build_file = "@//third_party/nanobind_json:nanobind_json.BUILD",
-    patches = ["@//third_party/nanobind_json:nanobind_json.patch"],
-    sha256 = "72cb4cdbf8108c7dd2dc669347669f2cc1acf4f943588f96661701f27f778912",
-    strip_prefix = "nanobind_json-e1953530697f61cbca9dc9b4f51561ea785cb09d",
-    urls = ["https://github.com/ianhbell/nanobind_json/archive/e1953530697f61cbca9dc9b4f51561ea785cb09d.zip"],
-)
 
 load("@rules_python//python:pip.bzl", "pip_parse")
 
