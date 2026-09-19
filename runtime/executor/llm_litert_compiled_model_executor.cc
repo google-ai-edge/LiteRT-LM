@@ -1860,7 +1860,9 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
   auto activation_data_type = ActivationDataType::FLOAT16;
   // TODO: b/433590109 - Some GPUs do not support FP16, so we need to check the
   // capabilities of the GPU and set the activation data type accordingly.
-  if (executor_settings.GetActivationDataType().has_value()) {
+  if (executor_settings.IsMixedPrecisionEnabled()) {
+    activation_data_type = ActivationDataType::FLOAT32;
+  } else if (executor_settings.GetActivationDataType().has_value()) {
     activation_data_type = executor_settings.GetActivationDataType().value();
   }
   const Backend backend = executor_settings.GetBackend();
