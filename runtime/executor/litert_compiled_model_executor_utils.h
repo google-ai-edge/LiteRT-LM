@@ -111,10 +111,13 @@ absl::Status GetKVCacheRootNames(std::vector<absl::string_view> input_names,
 // signature_name_base is the prefix of the prefill signature names, e.g.
 // "prefill".
 // input_tokens_name is the name of the input tokens signature, e.g. "token_ids"
-// for Gemma2 JAX and "tokens" for Gemma2 PyTorch.
+// for Gemma2 JAX and "tokens" for Gemma2 PyTorch. A nonempty
+// selected_signatures limits the result to active signatures; empty keeps the
+// existing behavior.
 absl::StatusOr<SortedPrefillSignatureMap> GetPrefillRunnerSetFromModel(
     const ::litert::Model& model, absl::string_view signature_name_base,
-    absl::string_view input_positions_name);
+    absl::string_view input_positions_name,
+    absl::Span<const std::string> selected_signatures = {});
 
 // Get a list of prefill work groups, each of which contains the signature
 // runner and prefill length for a single prefill call.

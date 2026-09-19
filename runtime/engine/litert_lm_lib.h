@@ -91,6 +91,8 @@ struct LiteRtLmSettings {
   int visual_token_budget = -1;
   absl::LogSeverity min_log_level = absl::LogSeverity::kInfo;
   std::set<int> prefill_batch_sizes;
+  // Empty preserves the model's default signature set.
+  std::vector<std::string> selected_signatures;
   int num_output_candidates = 1;
   bool benchmark = false;
   bool enable_profiling = false;

@@ -698,6 +698,10 @@ absl::StatusOr<EngineSettings> CreateEngineSettings(
     engine_settings.GetMutableMainExecutorSettings().SetLitertDispatchLibDir(
         settings.litert_dispatch_lib_dir);
   }
+  if (!settings.selected_signatures.empty()) {
+    engine_settings.GetMutableMainExecutorSettings().SetSelectedSignatures(
+        settings.selected_signatures);
+  }
   if (backend == Backend::CPU) {
     auto& executor_settings = engine_settings.GetMutableMainExecutorSettings();
     ABSL_ASSIGN_OR_RETURN(
