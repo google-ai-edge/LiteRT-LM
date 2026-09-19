@@ -48,6 +48,7 @@ target_include_directories(runtime_util_data_stream
 
 target_link_libraries(runtime_util_data_stream
   PUBLIC
+    LiteRTLM::Runtime::Util::StreamedWeightsManager
     LiteRTLM::Runtime::Util::ConvertTensorBuffer
     LiteRTLM::Runtime::Util::TensorBufferUtil
     runtime_executor_llm_executor_io_types

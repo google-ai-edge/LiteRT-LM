@@ -21,6 +21,14 @@ string(APPEND LITERTLM_TFLITE_TARGET_MAP
     ";LiteRTLM::tflite::profiling=${LITERTLM_TFLITE_BUILD_DIR}/libtflite_profiling.a"
 )
 
+if((CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64|armv8|armv9" OR ANDROID_ABI MATCHES "arm64-v8a")
+   AND NOT LITERT_DISABLE_KLEIDIAI
+   AND NOT LITERTLM_TFLITE_TARGET_MAP MATCHES "kleidiai")
+    string(APPEND LITERTLM_TFLITE_TARGET_MAP
+        ";LiteRTLM::tflite::kleidiai=${LITERTLM_TFLITE_LIB_DIR}/libkleidiai.a"
+    )
+endif()
+
 macro(generate_tflite_aggregate)
     if(NOT TARGET LiteRTLM::tflite::tflite)
         message(STATUS "[LiteRTLM] Generating the TFLite aggregate...")

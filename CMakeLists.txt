@@ -252,11 +252,20 @@ ExternalProject_Add(
   INSTALL_DIR  "${LITERTLM_INSTALL_DIR}"
   LIST_SEPARATOR "|"
   PATCH_COMMAND
-      ${CMAKE_COMMAND} -E echo "[LiteRTLM] Generating FlatBuffers headers for LiteRT-LM..."
+      ${CMAKE_COMMAND} -E make_directory "${LITERTLM_DIR}/generated/include/schema/core"
+      COMMAND ${CMAKE_COMMAND} -E echo "[LiteRTLM] Generating FlatBuffers headers for LiteRT-LM..."
       COMMAND ${LITERTLM_HOST_FLATC} --cpp
       --gen-object-api --reflect-names
-      --gen-mutable -o "${LITERTLM_FBS_DIR}"
+      --gen-mutable -o "${LITERTLM_DIR}/generated/include/schema/core"
       "${LITERTLM_FBS_DIR}/${LITERTLM_FLATBUFFERS_FILES}"
+      COMMAND ${CMAKE_COMMAND} -E make_directory "${LITERTLM_DIR}/generated/include/schema/core"
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${LITERTLM_DIR}/generated/include/schema/core/litertlm_header_schema_generated.h"
+          "${LITERTLM_DIR}/generated/include/schema/core/litertlm_header_schema_generated.h"
+      COMMAND ${CMAKE_COMMAND} -E make_directory "${LITERTLM_DIR}/generated/include/third_party/schema/core"
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${LITERTLM_DIR}/generated/include/schema/core/litertlm_header_schema_generated.h"
+          "${LITERTLM_DIR}/generated/include/third_party/schema/core/litertlm_header_schema_generated.h"
   CONFIGURE_COMMAND
       ${CMAKE_COMMAND} -E env
         CC=${LITERTLM_TARGET_CC_COMPILER}
@@ -292,7 +301,9 @@ ExternalProject_Add(
       "-DLITERTLM_BUILD_EXTERNAL_PROJECTS=ON"
       "-DLITERTLM_BUILD_TARGETS=ON"
       "-DLITERTLM_GENERATE_TARGET_MAP=ON"
-      "-DCMAKE_CXX_FLAGS=-w"
+      "-DCMAKE_CXX_FLAGS=-w -I${LITERTLM_DIR}/generated/include"
+      "-DCMAKE_CXX_STANDARD_INCLUDE_DIRECTORIES=${LITERTLM_DIR}/generated/include"
+      "-DCMAKE_C_STANDARD_INCLUDE_DIRECTORIES=${LITERTLM_DIR}/generated/include"
       "-DLITERTLM_BIN_EXT=${LITERTLM_BIN_EXT}"
       "-DLITERTLM_STATIC_LIB_EXT=${LITERTLM_STATIC_LIB_EXT}"
       "-DLITERTLM_DYN_LIB_EXT=${LITERTLM_DYN_LIB_EXT}"

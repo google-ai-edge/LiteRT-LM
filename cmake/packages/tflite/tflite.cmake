@@ -19,7 +19,7 @@ setup_external_install_structure("${LITERTLM_TFLITE_INSTALL_PREFIX}")
 
 set(LITERTLM_TFLITE_TAG "master" CACHE STRING "TFLite git tag")
 
-if(NOT EXISTS "${LITERTLM_LITERTLM_TFLITE_STATIC_LIB}")
+if(NOT EXISTS "${LITERTLM_TFLITE_STATIC_LIB}")
     message(STATUS "TFLite not found. Configuring external build...")
 
     ExternalProject_Add(

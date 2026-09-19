@@ -184,6 +184,7 @@ target_include_directories(runtime_core_engine_advanced_impl
 
 target_link_libraries(runtime_core_engine_advanced_impl
   PUBLIC
+    LiteRTLM::Runtime::Core::AudioSessionAdvanced
     LiteRTLM::Runtime::Components
     LiteRTLM::Runtime::Engine
     LiteRTLM::Runtime::Executor

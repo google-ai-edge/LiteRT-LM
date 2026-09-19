@@ -52,6 +52,13 @@ macro(generate_absl_aggregate)
             endif()
         endforeach()
 
+        if(NOT TARGET absl::hardening)
+            add_library(absl::hardening ALIAS LiteRTLM::absl::shim)
+        endif()
+        if(NOT TARGET absl::base_cpu_detect)
+            add_library(absl::base_cpu_detect ALIAS LiteRTLM::absl::shim)
+        endif()
+
         set(absl_FOUND TRUE CACHE BOOL "" FORCE)
         set(Abseil_FOUND TRUE CACHE BOOL "" FORCE)
         set(absl_DIR "Abseil merged archive" CACHE PATH "" FORCE)

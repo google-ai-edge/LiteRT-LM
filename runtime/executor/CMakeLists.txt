@@ -87,6 +87,7 @@ target_include_directories(runtime_executor_executor_settings_base
 
 target_link_libraries(runtime_executor_executor_settings_base
   PUBLIC
+    LiteRTLM::Runtime::Executor::ExecutorStats
     LiteRTLM::Runtime::Util
     LITERTLM_DEPS
 )
@@ -447,6 +448,7 @@ target_include_directories(runtime_executor_llm_litert_npu_compiled_model_execut
 
 target_link_libraries(runtime_executor_llm_litert_npu_compiled_model_executor
   PUBLIC
+    LiteRTLM::Runtime::Executor::Npu::Dynamism
     LiteRTLM::Runtime::Executor::ExecutorSettingsBase
     LiteRTLM::Runtime::Executor::LlmExecutorIoTypes
     LiteRTLM::Runtime::Executor::LlmExecutorSettings
