@@ -158,13 +158,17 @@ class EngineTest(LiteRtLmTestBase):
     )
     mock_set_enable_ynnpack.assert_not_called()
 
-    # enable_ynnpack=True
-    litert_lm.Engine(
-        self.model_path,
-        backend=litert_lm.Backend.CPU(),
-        enable_ynnpack=True,
-        cache_dir=":nocache",
-    )
+    # enable_ynnpack=True (succeeds if YNNPACK is compiled into the build,
+    # or raises RuntimeError when YNNPACK is excluded at build time).
+    try:
+      litert_lm.Engine(
+          self.model_path,
+          backend=litert_lm.Backend.CPU(),
+          enable_ynnpack=True,
+          cache_dir=":nocache",
+      )
+    except RuntimeError:
+      pass
     mock_set_enable_ynnpack.assert_called_once_with(mock.ANY, True)
     mock_set_enable_ynnpack.reset_mock()
 
