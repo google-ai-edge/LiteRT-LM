@@ -984,6 +984,418 @@ min_runtime_version = "0.12.3"
     ss = self._build_and_read_litertlm(builder)
     self.assertIn("min_runtime_version: \"0.12.3\"", ss)
 
+  def test_add_llm_metadata_with_thinking_and_function_calling(self):
+    """Tests supports_thinking and supports_function_calling in llm metadata."""
+    meta_path = self._create_dummy_file(
+        "metadata.pb", llm_metadata_pb2.LlmMetadata().SerializeToString()
+    )
+    builder = litertlm_builder.LitertLmFileBuilder()
+    self._add_system_metadata(builder)
+    builder.add_llm_metadata(
+        meta_path,
+        supports_thinking=True,
+        supports_function_calling=False,
+    )
+    ss = self._build_and_read_litertlm(builder)
+    self.assertIn("supports_thinking: true", ss)
+    self.assertIn("supports_function_calling: false", ss)
+
+  def test_from_toml_file_with_thinking_and_function_calling(self):
+    """Tests supports_thinking and supports_function_calling from TOML."""
+    metadata_path = self._create_dummy_file("metadata.pbtext", b"")
+    metadata_filename = os.path.basename(metadata_path)
+    toml_content = f"""
+[[section]]
+section_type = "LlmMetadata"
+data_path = "{metadata_filename}"
+supports_thinking = true
+supports_function_calling = true
+"""
+    toml_path = self._create_dummy_file(
+        "capabilities.toml", toml_content.encode()
+    )
+    builder = litertlm_builder.LitertLmFileBuilder.from_toml_file(toml_path)
+    ss = self._build_and_read_litertlm(builder)
+    self.assertIn("supports_thinking: true", ss)
+    self.assertIn("supports_function_calling: true", ss)
+
+  def test_from_toml_file_with_vision_patch_metadata(self):
+    """Tests max_num_patches and pooling_kernel_size from TOML."""
+    metadata_path = self._create_dummy_file("metadata.pbtext", b"")
+    metadata_filename = os.path.basename(metadata_path)
+    toml_content = f"""
+[[section]]
+section_type = "LlmMetadata"
+data_path = "{metadata_filename}"
+supports_thinking = true
+supports_function_calling = true
+max_num_patches = 4
+pooling_kernel_size = 2
+"""
+    toml_path = self._create_dummy_file(
+        "capabilities_vision.toml", toml_content.encode()
+    )
+    builder = litertlm_builder.LitertLmFileBuilder.from_toml_file(toml_path)
+    ss = self._build_and_read_litertlm(builder)
+    self.assertIn("supports_thinking: true", ss)
+    self.assertIn("supports_function_calling: true", ss)
+    self.assertIn("max_num_patches: 4", ss)
+    self.assertIn("pooling_kernel_size: 2", ss)
+
+  def test_is_llm_model(self):
+    """Tests is_llm_model property detection."""
+    builder = litertlm_builder.LitertLmFileBuilder()
+    self.assertFalse(builder.is_llm_model)
+
+    dummy_tflite = self._create_dummy_file("model.tflite", b"dummy")
+    builder.add_tflite_model(
+        dummy_tflite, litertlm_builder.TfLiteModelType.PREFILL_DECODE
+    )
+    self.assertTrue(builder.is_llm_model)
+
+  def test_validate_metadata_llm_missing_fields(self):
+    """Tests validate_metadata raises ValueError when LLM fields are missing."""
+    dummy_tflite = self._create_dummy_file("model.tflite", b"dummy")
+    meta_path = self._create_dummy_file(
+        "metadata.pb", llm_metadata_pb2.LlmMetadata().SerializeToString()
+    )
+
+    # Missing both supports_thinking and supports_function_calling
+    builder = litertlm_builder.LitertLmFileBuilder()
+    builder.add_tflite_model(
+        dummy_tflite, litertlm_builder.TfLiteModelType.PREFILL_DECODE
+    )
+    builder.add_llm_metadata(meta_path)
+    with self.assertRaisesRegex(ValueError, "supports_thinking"):
+      builder.validate_metadata()
+
+    # Missing supports_function_calling
+    builder2 = litertlm_builder.LitertLmFileBuilder()
+    builder2.add_tflite_model(
+        dummy_tflite, litertlm_builder.TfLiteModelType.PREFILL_DECODE
+    )
+    builder2.add_llm_metadata(meta_path, supports_thinking=True)
+    with self.assertRaisesRegex(ValueError, "supports_function_calling"):
+      builder2.validate_metadata()
+
+    # Valid LLM metadata passes validation
+    builder3 = litertlm_builder.LitertLmFileBuilder()
+    builder3.add_tflite_model(
+        dummy_tflite, litertlm_builder.TfLiteModelType.PREFILL_DECODE
+    )
+    builder3.add_llm_metadata(
+        meta_path,
+        supports_thinking=False,
+        supports_function_calling=True,
+    )
+    builder3.validate_metadata()
+
+  def test_validate_metadata_requires_llm_metadata(self):
+    """Tests validate_metadata raises when an LLM model has no LlmMetadata."""
+    dummy_tflite = self._create_dummy_file("model.tflite", b"dummy")
+    builder = litertlm_builder.LitertLmFileBuilder()
+    builder.add_tflite_model(
+        dummy_tflite, litertlm_builder.TfLiteModelType.PREFILL_DECODE
+    )
+    with self.assertRaisesRegex(ValueError, "LlmMetadata"):
+      builder.validate_metadata()
+
+  def test_validate_metadata_skipped_for_non_llm_model(self):
+    """Tests validate_metadata is a no-op when no LLM model is present."""
+    dummy_tflite = self._create_dummy_file("model.tflite", b"dummy")
+    builder = litertlm_builder.LitertLmFileBuilder()
+    builder.add_tflite_model(
+        dummy_tflite, litertlm_builder.TfLiteModelType.VISION_ADAPTER
+    )
+    self.assertFalse(builder.is_llm_model)
+    builder.validate_metadata()
+
+  def test_is_vision_model(self):
+    """Tests is_vision_model property detection."""
+    builder = litertlm_builder.LitertLmFileBuilder()
+    self.assertFalse(builder.is_vision_model)
+
+    dummy_tflite = self._create_dummy_file("model.tflite", b"dummy")
+    builder.add_tflite_model(
+        dummy_tflite, litertlm_builder.TfLiteModelType.VISION_ADAPTER
+    )
+    self.assertTrue(builder.is_vision_model)
+
+  def test_is_vision_transformer_model(self):
+    """Tests is_vision_transformer_model property detection."""
+    builder = litertlm_builder.LitertLmFileBuilder()
+    self.assertFalse(builder.is_vision_transformer_model)
+
+    dummy_tflite = self._create_dummy_file("model.tflite", b"dummy")
+    builder.add_tflite_model(
+        dummy_tflite, litertlm_builder.TfLiteModelType.PREFILL_DECODE
+    )
+    builder.add_tflite_model(
+        dummy_tflite, litertlm_builder.TfLiteModelType.VISION_ADAPTER
+    )
+
+    # Gemma3N is not a vision transformer
+    meta_gemma3n = llm_metadata_pb2.LlmMetadata()
+    meta_gemma3n.llm_model_type.gemma3n.SetInParent()
+    path_gemma3n = self._create_dummy_file(
+        "meta_gemma3n.pb", meta_gemma3n.SerializeToString()
+    )
+    builder.add_llm_metadata(path_gemma3n)
+    self.assertFalse(builder.is_vision_transformer_model)
+
+    # Gemma4 is a vision transformer
+    builder2 = litertlm_builder.LitertLmFileBuilder()
+    builder2.add_tflite_model(
+        dummy_tflite, litertlm_builder.TfLiteModelType.PREFILL_DECODE
+    )
+    builder2.add_tflite_model(
+        dummy_tflite, litertlm_builder.TfLiteModelType.VISION_ADAPTER
+    )
+    meta_gemma4 = llm_metadata_pb2.LlmMetadata()
+    meta_gemma4.llm_model_type.gemma4.SetInParent()
+    path_gemma4 = self._create_dummy_file(
+        "meta_gemma4.pb", meta_gemma4.SerializeToString()
+    )
+    builder2.add_llm_metadata(path_gemma4)
+    self.assertTrue(builder2.is_vision_transformer_model)
+
+  def test_validate_metadata_vision_missing_fields(self):
+    """Tests validate_metadata raises for missing Vision Transformer fields."""
+    dummy_tflite = self._create_dummy_file("model.tflite", b"dummy")
+    meta = llm_metadata_pb2.LlmMetadata()
+    meta.llm_model_type.gemma4.SetInParent()
+    meta_path = self._create_dummy_file(
+        "metadata_gemma4.pb", meta.SerializeToString()
+    )
+
+    # Missing max_num_patches and pooling_kernel_size
+    builder = litertlm_builder.LitertLmFileBuilder()
+    builder.add_tflite_model(
+        dummy_tflite, litertlm_builder.TfLiteModelType.PREFILL_DECODE
+    )
+    builder.add_tflite_model(
+        dummy_tflite, litertlm_builder.TfLiteModelType.VISION_ADAPTER
+    )
+    builder.add_llm_metadata(
+        meta_path,
+        supports_thinking=True,
+        supports_function_calling=True,
+    )
+    with self.assertRaisesRegex(ValueError, "max_num_patches"):
+      builder.validate_metadata()
+
+    # Missing pooling_kernel_size
+    builder2 = litertlm_builder.LitertLmFileBuilder()
+    builder2.add_tflite_model(
+        dummy_tflite, litertlm_builder.TfLiteModelType.PREFILL_DECODE
+    )
+    builder2.add_tflite_model(
+        dummy_tflite, litertlm_builder.TfLiteModelType.VISION_ADAPTER
+    )
+    builder2.add_llm_metadata(
+        meta_path,
+        supports_thinking=True,
+        supports_function_calling=True,
+        max_num_patches=4,
+    )
+    with self.assertRaisesRegex(ValueError, "pooling_kernel_size"):
+      builder2.validate_metadata()
+
+    # Valid vision transformer metadata passes validation
+    builder3 = litertlm_builder.LitertLmFileBuilder()
+    builder3.add_tflite_model(
+        dummy_tflite, litertlm_builder.TfLiteModelType.PREFILL_DECODE
+    )
+    builder3.add_tflite_model(
+        dummy_tflite, litertlm_builder.TfLiteModelType.VISION_ADAPTER
+    )
+    builder3.add_llm_metadata(
+        meta_path,
+        supports_thinking=True,
+        supports_function_calling=True,
+        max_num_patches=4,
+        pooling_kernel_size=2,
+    )
+    builder3.validate_metadata()
+
+  def test_validate_metadata_vision_non_transformer_passes(self):
+    """Tests non-vision-transformer models (e.g. Gemma3N) pass validation."""
+    dummy_tflite = self._create_dummy_file("model.tflite", b"dummy")
+    meta = llm_metadata_pb2.LlmMetadata()
+    meta.llm_model_type.gemma3n.image_tensor_height = 768
+    meta.llm_model_type.gemma3n.image_tensor_width = 768
+    meta_path = self._create_dummy_file(
+        "metadata_gemma3n.pb", meta.SerializeToString()
+    )
+
+    # Missing supports_thinking raises
+    builder_missing_thinking = litertlm_builder.LitertLmFileBuilder()
+    builder_missing_thinking.add_tflite_model(
+        dummy_tflite, litertlm_builder.TfLiteModelType.PREFILL_DECODE
+    )
+    builder_missing_thinking.add_tflite_model(
+        dummy_tflite, litertlm_builder.TfLiteModelType.VISION_ADAPTER
+    )
+    builder_missing_thinking.add_llm_metadata(meta_path)
+    with self.assertRaisesRegex(ValueError, "supports_thinking"):
+      builder_missing_thinking.validate_metadata()
+
+    # Valid Gemma3N vision model passes without patch parameters
+    builder = litertlm_builder.LitertLmFileBuilder()
+    builder.add_tflite_model(
+        dummy_tflite, litertlm_builder.TfLiteModelType.PREFILL_DECODE
+    )
+    builder.add_tflite_model(
+        dummy_tflite, litertlm_builder.TfLiteModelType.VISION_ADAPTER
+    )
+    builder.add_tflite_model(
+        dummy_tflite, litertlm_builder.TfLiteModelType.VISION_ENCODER
+    )
+    builder.add_llm_metadata(
+        meta_path,
+        supports_thinking=True,
+        supports_function_calling=True,
+    )
+    self.assertTrue(builder.is_llm_model)
+    self.assertTrue(builder.is_vision_model)
+    self.assertFalse(builder.is_vision_transformer_model)
+    builder.validate_metadata()
+
+    path = os.path.join(self.temp_dir, "gemma3n.litertlm")
+    with litertlm_core.open_file(path, "wb") as f:
+      builder.build(f, validate_metadata=True)
+    stream = io.StringIO()
+    litertlm_peek.peek_litertlm_file(path, self.temp_dir, stream)
+    ss = stream.getvalue()
+    self.assertIn("image_tensor_height: 768", ss)
+    self.assertIn("supports_thinking: true", ss)
+
+  def test_gemma3n_from_toml_file_with_validation(self):
+    """Tests loading Gemma3N model from TOML and building with validation."""
+    meta = llm_metadata_pb2.LlmMetadata()
+    meta.llm_model_type.gemma3n.image_tensor_height = 768
+    meta.llm_model_type.gemma3n.image_tensor_width = 768
+    meta_path = self._create_dummy_file(
+        "gemma3n_meta.pb", meta.SerializeToString()
+    )
+    meta_filename = os.path.basename(meta_path)
+    dummy_tflite = self._create_dummy_file("model.tflite", b"dummy")
+    dummy_filename = os.path.basename(dummy_tflite)
+
+    toml_content = f"""
+[[section]]
+section_type = "LlmMetadata"
+data_path = "{meta_filename}"
+supports_thinking = true
+supports_function_calling = false
+
+[[section]]
+section_type = "TFLiteModel"
+model_type = "PREFILL_DECODE"
+data_path = "{dummy_filename}"
+
+[[section]]
+section_type = "TFLiteModel"
+model_type = "VISION_ADAPTER"
+data_path = "{dummy_filename}"
+
+[[section]]
+section_type = "TFLiteModel"
+model_type = "VISION_ENCODER"
+data_path = "{dummy_filename}"
+"""
+    toml_path = self._create_dummy_file(
+        "gemma3n_model.toml", toml_content.encode()
+    )
+    builder = litertlm_builder.LitertLmFileBuilder.from_toml_file(toml_path)
+    self.assertTrue(builder.is_llm_model)
+    self.assertTrue(builder.is_vision_model)
+    self.assertFalse(builder.is_vision_transformer_model)
+    builder.validate_metadata()
+    path = os.path.join(self.temp_dir, "gemma3n_toml.litertlm")
+    with litertlm_core.open_file(path, "wb") as f:
+      builder.build(f, validate_metadata=True)
+    stream = io.StringIO()
+    litertlm_peek.peek_litertlm_file(path, self.temp_dir, stream)
+    ss = stream.getvalue()
+    self.assertIn("supports_thinking: true", ss)
+    self.assertIn("supports_function_calling: false", ss)
+    self.assertIn("image_tensor_height: 768", ss)
+
+  def test_validate_metadata_vision_generic_model(self):
+    """Tests validation for GenericModel with and without patch parameters."""
+    dummy_tflite = self._create_dummy_file("model.tflite", b"dummy")
+    meta = llm_metadata_pb2.LlmMetadata()
+    meta.llm_model_type.generic_model.image_tensor_height = 256
+    meta.llm_model_type.generic_model.image_tensor_width = 256
+    meta_path = self._create_dummy_file(
+        "metadata_generic.pb", meta.SerializeToString()
+    )
+
+    # GenericModel without patchify passes
+    builder = litertlm_builder.LitertLmFileBuilder()
+    builder.add_tflite_model(
+        dummy_tflite, litertlm_builder.TfLiteModelType.PREFILL_DECODE
+    )
+    builder.add_tflite_model(
+        dummy_tflite, litertlm_builder.TfLiteModelType.VISION_ADAPTER
+    )
+    builder.add_llm_metadata(
+        meta_path,
+        supports_thinking=True,
+        supports_function_calling=True,
+    )
+    builder.validate_metadata()
+
+    # GenericModel with max_num_patches but missing pooling_kernel_size raises
+    builder2 = litertlm_builder.LitertLmFileBuilder()
+    builder2.add_tflite_model(
+        dummy_tflite, litertlm_builder.TfLiteModelType.PREFILL_DECODE
+    )
+    builder2.add_tflite_model(
+        dummy_tflite, litertlm_builder.TfLiteModelType.VISION_ADAPTER
+    )
+    builder2.add_llm_metadata(
+        meta_path,
+        supports_thinking=True,
+        supports_function_calling=True,
+        max_num_patches=4,
+    )
+    with self.assertRaisesRegex(ValueError, "pooling_kernel_size"):
+      builder2.validate_metadata()
+
+    # GenericModel with both passes
+    builder3 = litertlm_builder.LitertLmFileBuilder()
+    builder3.add_tflite_model(
+        dummy_tflite, litertlm_builder.TfLiteModelType.PREFILL_DECODE
+    )
+    builder3.add_tflite_model(
+        dummy_tflite, litertlm_builder.TfLiteModelType.VISION_ADAPTER
+    )
+    builder3.add_llm_metadata(
+        meta_path,
+        supports_thinking=True,
+        supports_function_calling=True,
+        max_num_patches=4,
+        pooling_kernel_size=2,
+    )
+    builder3.validate_metadata()
+
+  def test_build_with_validate_metadata(self):
+    """Tests that builder.build(stream, validate_metadata=True) triggers validation."""
+    dummy_tflite = self._create_dummy_file("model.tflite", b"dummy")
+    builder = litertlm_builder.LitertLmFileBuilder()
+    builder.add_tflite_model(
+        dummy_tflite, litertlm_builder.TfLiteModelType.PREFILL_DECODE
+    )
+    # validate_metadata=False (default) does not raise
+    with io.BytesIO() as buf:
+      builder.build(buf)
+    # validate_metadata=True triggers validation and raises ValueError
+    with io.BytesIO() as buf:
+      with self.assertRaisesRegex(ValueError, "LlmMetadata"):
+        builder.build(buf, validate_metadata=True)
+
   def test_add_multiple_tokenizers(self):
     """Tests that multiple tokenizers with different model types can be added."""
     sp_prefill = self._create_dummy_file(

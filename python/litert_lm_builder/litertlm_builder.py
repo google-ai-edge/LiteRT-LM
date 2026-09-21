@@ -290,6 +290,59 @@ def _get_model_type(section: _SectionObject) -> str | None:
   return values[0]
 
 
+def _get_active_model_type_message(
+    msg: llm_metadata_pb2.LlmMetadata,
+) -> message.Message:
+  """Returns the active sub-message inside llm_model_type, or generic_model."""
+  field = msg.llm_model_type.WhichOneof("model_type")
+  if field is not None:
+    return getattr(msg.llm_model_type, field)
+  return msg.llm_model_type.generic_model
+
+
+def _has_max_num_patches(msg: llm_metadata_pb2.LlmMetadata) -> bool:
+  """Returns True if max_num_patches > 0 is set on the active model type."""
+  sub_msg = _get_active_model_type_message(msg)
+  field_desc = sub_msg.DESCRIPTOR.fields_by_name.get("max_num_patches")
+  if field_desc is None:
+    return False
+  if field_desc.has_presence and not sub_msg.HasField("max_num_patches"):
+    return False
+  return getattr(sub_msg, "max_num_patches", 0) > 0
+
+
+def _has_pooling_kernel_size(msg: llm_metadata_pb2.LlmMetadata) -> bool:
+  """Returns True if pooling_kernel_size > 0 is set on the active model type."""
+  sub_msg = _get_active_model_type_message(msg)
+  field_desc = sub_msg.DESCRIPTOR.fields_by_name.get("pooling_kernel_size")
+  if field_desc is None:
+    return False
+  if field_desc.has_presence and not sub_msg.HasField("pooling_kernel_size"):
+    return False
+  return getattr(sub_msg, "pooling_kernel_size", 0) > 0
+
+
+def _set_vision_patch_metadata(
+    msg: llm_metadata_pb2.LlmMetadata,
+    max_num_patches: int | None,
+    pooling_kernel_size: int | None,
+) -> None:
+  """Sets max_num_patches and pooling_kernel_size on the active model type."""
+  if max_num_patches is None and pooling_kernel_size is None:
+    return
+  sub_msg = _get_active_model_type_message(msg)
+  if (
+      max_num_patches is not None
+      and "max_num_patches" in sub_msg.DESCRIPTOR.fields_by_name
+  ):
+    setattr(sub_msg, "max_num_patches", max_num_patches)
+  if (
+      pooling_kernel_size is not None
+      and "pooling_kernel_size" in sub_msg.DESCRIPTOR.fields_by_name
+  ):
+    setattr(sub_msg, "pooling_kernel_size", pooling_kernel_size)
+
+
 LitertLmFileBuilderT = TypeVar(
     "LitertLmFileBuilderT", bound="LitertLmFileBuilder"
 )
@@ -326,13 +379,106 @@ class LitertLmFileBuilder:
     self._system_metadata: list[Metadata] = []
     self._sections: list[_SectionObject] = []
     self._has_llm_metadata = False
+    self._llm_metadata: llm_metadata_pb2.LlmMetadata | None = None
     self._has_executor_metadata = False
     self._has_embedding_metadata = False
+    self._embedding_metadata: (
+        embedding_metadata_pb2.EmbeddingMetadata | None
+    ) = None
     self._tokenizers_by_model_type: set[str | None] = set()
 
   @property
   def _has_tokenizer(self) -> bool:
     return bool(self._tokenizers_by_model_type)
+
+  @property
+  def is_llm_model(self) -> bool:
+    """Returns True if the builder contains an LLM model or LLM metadata."""
+    if self._has_llm_metadata:
+      return True
+    return any(
+        _get_model_type(s)
+        in (
+            TfLiteModelType.PREFILL_DECODE.value,
+            TfLiteModelType.ARTISAN_TEXT_DECODER.value,
+        )
+        for s in self._sections
+    )
+
+  _VISION_TRANSFORMER_MODEL_TYPES = frozenset({"gemma4", "lfm2"})
+
+  @property
+  def is_vision_model(self) -> bool:
+    """Returns True if the builder contains a vision adapter/encoder model."""
+    return any(
+        _get_model_type(s)
+        in (
+            TfLiteModelType.VISION_ADAPTER.value,
+            TfLiteModelType.VISION_ENCODER.value,
+            TfLiteModelType.END_OF_VISION.value,
+        )
+        for s in self._sections
+    )
+
+  @property
+  def is_llm_vision_transformer_model(self) -> bool:
+    """Returns True if the LLM model is a vision transformer (patch-based) model."""
+    if not self.is_vision_model or self._llm_metadata is None:
+      return False
+    active_type = self._llm_metadata.llm_model_type.WhichOneof("model_type")
+    if active_type in self._VISION_TRANSFORMER_MODEL_TYPES:
+      return True
+    if active_type == "generic_model" or active_type is None:
+      if self._llm_metadata.llm_model_type.HasField("generic_model"):
+        gm = self._llm_metadata.llm_model_type.generic_model
+        return (
+            gm.HasField("max_num_patches")
+            or gm.HasField("pooling_kernel_size")
+            or gm.HasField("patch_width")
+            or gm.HasField("patch_height")
+        )
+    return False
+
+  @property
+  def is_vision_transformer_model(self) -> bool:
+    """Returns True if the model is a vision transformer (patch-based) model."""
+    return (
+        self.is_llm_vision_transformer_model
+    )
+
+  def validate_metadata(self) -> None:
+    """Validates mandatory LLM and Vision fields before conversion/packaging.
+
+    Raises:
+      ValueError: If mandatory fields for LLM (`supports_thinking`,
+        `supports_function_calling`) or Vision Transformer (`max_num_patches`,
+        `pooling_kernel_size`) models are missing.
+    """
+    if self.is_llm_model:
+      if self._llm_metadata is None:
+        raise ValueError(
+            "LLM model conversion requires `LlmMetadata` to be added."
+        )
+      if not self._llm_metadata.HasField("supports_thinking"):
+        raise ValueError(
+            "LLM model conversion error: `supports_thinking` is mandatory."
+        )
+      if not self._llm_metadata.HasField("supports_function_calling"):
+        raise ValueError(
+            "LLM model conversion error: `supports_function_calling` is"
+            " mandatory."
+        )
+      if self.is_llm_vision_transformer_model:
+        if not _has_max_num_patches(self._llm_metadata):
+          raise ValueError(
+              "Vision model conversion error: `max_num_patches` is mandatory"
+              " when vision transformer model is present."
+          )
+        if not _has_pooling_kernel_size(self._llm_metadata):
+          raise ValueError(
+              "Vision model conversion error: `pooling_kernel_size` is"
+              " mandatory when vision transformer model is present."
+          )
 
   @classmethod
   def from_toml_str(
@@ -399,6 +545,12 @@ class LitertLmFileBuilder:
               additional_metadata=additional_metadata,
               jinja_prompt_template_path=jinja_prompt_template_path,
               min_runtime_version=section.get("min_runtime_version", None),
+              supports_thinking=section.get("supports_thinking", None),
+              supports_function_calling=section.get(
+                  "supports_function_calling", None
+              ),
+              max_num_patches=section.get("max_num_patches", None),
+              pooling_kernel_size=section.get("pooling_kernel_size", None),
           )
         elif section["section_type"] == "ExecutorMetadata":
           builder.add_executor_metadata(
@@ -534,6 +686,10 @@ class LitertLmFileBuilder:
       additional_metadata: Optional[list[Metadata]] = None,
       jinja_prompt_template_path: Optional[str] = None,
       min_runtime_version: Optional[str] = None,
+      supports_thinking: Optional[bool] = None,
+      supports_function_calling: Optional[bool] = None,
+      max_num_patches: Optional[int] = None,
+      pooling_kernel_size: Optional[int] = None,
   ) -> LitertLmFileBuilderT:
     """Adds llm metadata to the litertlm file.
 
@@ -544,6 +700,10 @@ class LitertLmFileBuilder:
       jinja_prompt_template_path: Optional path to a Jinja file to overwrite
         jinja_prompt_template.
       min_runtime_version: The minimum LiteRT-LM runtime version required.
+      supports_thinking: Whether the model supports thinking/reasoning.
+      supports_function_calling: Whether the model supports function calling.
+      max_num_patches: Maximum number of vision patches (for vision models).
+      pooling_kernel_size: Spatial pooling kernel size (for vision models).
 
     Returns:
       The currentLitertLmFileBuilder object.
@@ -566,37 +726,46 @@ class LitertLmFileBuilder:
           f"Jinja template file not found: {jinja_prompt_template_path}"
       )
 
+    msg = llm_metadata_pb2.LlmMetadata()
     if _is_binary_proto(llm_metadata_path):
+      with litertlm_core.open_file(llm_metadata_path, "rb") as f:
+        msg.ParseFromString(f.read())
+    else:
+      with litertlm_core.open_file(llm_metadata_path, "r") as f:
+        text_format.Parse(f.read(), msg)
+
+    if jinja_prompt_template_path:
+      with litertlm_core.open_file(jinja_prompt_template_path, "r") as f_jinja:
+        msg.jinja_prompt_template = f_jinja.read()
+    if min_runtime_version:
+      msg.min_runtime_version = min_runtime_version
+    if supports_thinking is not None:
+      msg.supports_thinking = supports_thinking
+    if supports_function_calling is not None:
+      msg.supports_function_calling = supports_function_calling
+    _set_vision_patch_metadata(msg, max_num_patches, pooling_kernel_size)
+    self._llm_metadata = msg
+
+    has_overrides = (
+        jinja_prompt_template_path
+        or min_runtime_version
+        or supports_thinking is not None
+        or supports_function_calling is not None
+        or max_num_patches is not None
+        or pooling_kernel_size is not None
+    )
+
+    if _is_binary_proto(llm_metadata_path) and not has_overrides:
 
       def data_writer(stream: BinaryIO):
         with litertlm_core.open_file(llm_metadata_path, "rb") as f:
-          if jinja_prompt_template_path or min_runtime_version:
-            msg = llm_metadata_pb2.LlmMetadata()
-            msg.ParseFromString(f.read())
-            if jinja_prompt_template_path:
-              with litertlm_core.open_file(
-                  jinja_prompt_template_path, "r"
-              ) as f_jinja:
-                msg.jinja_prompt_template = f_jinja.read()
-            if min_runtime_version:
-              msg.min_runtime_version = min_runtime_version
-            stream.write(msg.SerializeToString())
-          else:
-            _copy_file_to_stream(f, stream)
+          _copy_file_to_stream(f, stream)
 
     else:
 
       def data_writer(stream: BinaryIO):
-        with litertlm_core.open_file(llm_metadata_path, "r") as f:
-          msg = text_format.Parse(f.read(), llm_metadata_pb2.LlmMetadata())
-          if jinja_prompt_template_path:
-            with litertlm_core.open_file(
-                jinja_prompt_template_path, "r"
-            ) as f_jinja:
-              msg.jinja_prompt_template = f_jinja.read()
-          if min_runtime_version:
-            msg.min_runtime_version = min_runtime_version
-          stream.write(msg.SerializeToString())
+        assert self._llm_metadata is not None
+        stream.write(self._llm_metadata.SerializeToString())
 
     section_object = _SectionObject(
         metadata=additional_metadata if additional_metadata else [],
@@ -681,23 +850,20 @@ class LitertLmFileBuilder:
           f"Embedding metadata file not found: {embedding_metadata_path}"
       )
 
+    msg = embedding_metadata_pb2.EmbeddingMetadata()
     if _is_binary_proto(
         embedding_metadata_path,
         embedding_metadata_pb2.EmbeddingMetadata,
     ):
-
-      def data_writer(stream: BinaryIO):
-        with litertlm_core.open_file(embedding_metadata_path, "rb") as f:
-          _copy_file_to_stream(f, stream)
-
+      with litertlm_core.open_file(embedding_metadata_path, "rb") as f:
+        msg.ParseFromString(f.read())
     else:
+      with litertlm_core.open_file(embedding_metadata_path, "r") as f:
+        text_format.Parse(f.read(), msg)
+    self._embedding_metadata = msg
 
-      def data_writer(stream: BinaryIO):
-        with litertlm_core.open_file(embedding_metadata_path, "r") as f:
-          data = text_format.Parse(
-              f.read(), embedding_metadata_pb2.EmbeddingMetadata()
-          ).SerializeToString()
-          stream.write(data)
+    def data_writer(stream: BinaryIO):
+      stream.write(msg.SerializeToString())
 
     section_object = _SectionObject(
         metadata=additional_metadata if additional_metadata else [],
@@ -1002,8 +1168,12 @@ class LitertLmFileBuilder:
   def build(
       self,
       stream: BinaryIO,
+      *,
+      validate_metadata: bool = False,
   ) -> ExternalizationSummary | None:
     """Builds the litertlm into the given stream."""
+    if validate_metadata:
+      self.validate_metadata()
     self._build_sections(stream, self._sections)
     return None
 

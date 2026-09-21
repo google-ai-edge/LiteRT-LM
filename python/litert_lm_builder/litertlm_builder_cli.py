@@ -353,6 +353,12 @@ def _add_output_path_parser(subparsers) -> None:
       help="The path to the output LiteRT-LM file.",
   )
 
+  output_path_parser.add_argument(
+      "--validate-metadata",
+      action="store_true",
+      help="Validate mandatory LLM and Vision metadata fields.",
+  )
+
 
 def _add_unpack_parser(subparsers) -> None:
   """Adds a parser for unpacking a LiteRT-LM file to the subparsers."""
@@ -600,6 +606,7 @@ def _build_litertlm_file(parsed_args: list[argparse.Namespace]) -> None:
         f" (TOML configuration saved at {toml_path})"
     )
     return
+  validate_metadata = False
   if "toml" in [pa.command for pa in parsed_args]:
     toml_path = None
     output_path = None
@@ -607,6 +614,7 @@ def _build_litertlm_file(parsed_args: list[argparse.Namespace]) -> None:
       match parsed_arg.command:
         case "output":
           output_path = parsed_arg.path
+          validate_metadata = parsed_arg.validate_metadata
         case "toml":
           toml_path = parsed_arg.path
         case _:
@@ -622,6 +630,7 @@ def _build_litertlm_file(parsed_args: list[argparse.Namespace]) -> None:
       builder = litertlm_builder.LitertLmFileBuilder.from_toml_file(toml_path)
       builder.build(
           cast(BinaryIO, f),
+          validate_metadata=validate_metadata,
       )
   else:
     builder = litertlm_builder.LitertLmFileBuilder()
@@ -646,6 +655,7 @@ def _build_litertlm_file(parsed_args: list[argparse.Namespace]) -> None:
           _build_hf_tokenizer(parsed_arg, builder)
         case "output":
           output_path = parsed_arg.path
+          validate_metadata = parsed_arg.validate_metadata
         case _:
           raise ValueError(f"Unknown subcommand: {parsed_arg.command}")
     assert output_path, "Output path is required."
@@ -655,6 +665,7 @@ def _build_litertlm_file(parsed_args: list[argparse.Namespace]) -> None:
     with litertlm_core.open_file(output_path, "wb") as f:
       builder.build(
           cast(BinaryIO, f),
+          validate_metadata=validate_metadata,
       )
 
   print(f"LiteRT-LM file successfully created at {output_path}")
