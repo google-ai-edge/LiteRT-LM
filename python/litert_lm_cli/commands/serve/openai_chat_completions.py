@@ -23,6 +23,8 @@ import json
 import traceback
 from typing import Any
 
+import click
+
 # Migrate to built-in "typing" when min python version is 3.12.
 from typing_extensions import override
 
@@ -200,7 +202,7 @@ def _handle_chat_completions(
     max_completion_tokens: int | None = None,
     stream_options: dict[str, Any] | None = None,
     response_format: litert_lm.ResponseFormat | None = None,
-) -> None:
+) -> dict[str, Any] | None:
   """Generates responses for the OpenAI Chat Completions endpoint.
 
   Endpoint: `/v1/chat/completions` (and `/chat/completions`).
@@ -225,6 +227,10 @@ def _handle_chat_completions(
     max_completion_tokens: The maximum number of tokens to generate.
     stream_options: Options for streaming, such as include_usage.
     response_format: Optional response format for constrained decoding.
+
+  Returns:
+    The generated OpenAI assistant message dictionary on success, or None if
+    an error occurred during streaming.
   """
   if not stream:
     text_parts = []
@@ -255,6 +261,12 @@ def _handle_chat_completions(
         for i, tc in enumerate(tool_calls)
     ]
 
+    assistant_message = {
+        "role": "assistant",
+        "content": text_output or None,
+        **({"tool_calls": openai_tool_calls} if openai_tool_calls else {}),
+    }
+
     resp_body = {
         "id": f"chatcmpl_{now_str}",
         "object": "chat.completion",
@@ -262,29 +274,22 @@ def _handle_chat_completions(
         "model": model_id,
         "choices": [{
             "index": 0,
-            "message": {
-                "role": "assistant",
-                "content": text_output or None,
-                **(
-                    {"tool_calls": openai_tool_calls}
-                    if openai_tool_calls
-                    else {}
-                ),
-            },
+            "message": assistant_message,
             "finish_reason": "tool_calls" if openai_tool_calls else "stop",
         }],
         "usage": openai_common.compute_token_usage(
             conv, reasoning_tokens=reasoning_tokens
         ),
     }
+    encoded_body = (openai_common.dump_json(resp_body, indent=2) + "\n").encode(
+        "utf-8"
+    )
     handler.headers_sent = True
     handler.send_response(200)
     handler.send_header("Content-Type", "application/json")
     handler.end_headers()
-    handler.wfile.write(
-        (openai_common.dump_json(resp_body, indent=2) + "\n").encode("utf-8")
-    )
-    return
+    handler.wfile.write(encoded_body)
+    return assistant_message
 
   include_usage = bool(
       stream_options and stream_options.get("include_usage", False)
@@ -292,7 +297,7 @@ def _handle_chat_completions(
   formatter = _OpenAIChatCompletionsFormatter(
       now_str, created_ts, model_id, include_usage=include_usage
   )
-  handler.stream_response(
+  return handler.stream_response(
       conv,
       prompt,
       formatter,
@@ -414,12 +419,15 @@ def handle_post_chat_completions(handler: Any) -> None:
 
   # Parse tools if this is a chat completions request.
   tools_data = body.get("tools")
-  tools = (
-      [_ProxyTool(t) for t in tools_data if t.get("type") == "function"]
+  tool_defs = (
+      [t for t in tools_data if t.get("type") == "function"]
       if tools_data
       else []
   )
+  tools = [_ProxyTool(t) for t in tool_defs]
 
+  server = getattr(handler, "server", None)
+  conv = None
   try:
     context_messages = translated_messages[:-1] if translated_messages else []
     provider = (
@@ -431,33 +439,91 @@ def handle_post_chat_completions(handler: Any) -> None:
         enable=True,
         provider=provider,
     )
-    with engine.create_conversation(
-        messages=context_messages,
-        tools=tools or None,
-        automatic_tool_calling=False,
-        sampler_config=sampler_config,
-        thinking_config=thinking_config,
-        constrained_decoding_config=constrained_decoding_config,
-    ) as conv:
-      now = datetime.datetime.now(datetime.timezone.utc)
-      now_str = now.strftime("%Y%m%d%H%M%S%f")
-      created_ts = int(now.timestamp())
 
-      stream_options = body.get("stream_options")
-      if not isinstance(stream_options, dict):
-        stream_options = {}
-
-      _handle_chat_completions(
-          handler,
-          conv,  # pyrefly: ignore[bad-argument-type]
-          prompt,
-          raw_model_str,
-          stream,
-          now_str=now_str,
-          created_ts=created_ts,
-          max_completion_tokens=max_completion_tokens,
-          stream_options=stream_options,
-          response_format=response_format,
+    if (
+        server is not None
+        and getattr(server, "litert_lm_conversation", None) is not None
+        and server.conversation_messages == context_messages
+        and server.conversation_tools == tool_defs
+        and server.conversation_sampler_config == sampler_config
+        and server.conversation_thinking_config == thinking_config
+        and server.conversation_constrained_decoding_config
+        == constrained_decoding_config
+    ):
+      click.echo(
+          click.style(
+              "Conversation cache hit (reusing conversation with"
+              f" {len(context_messages)} context messages)",
+              fg="green",
+          )
       )
+      conv = server.litert_lm_conversation
+    else:
+      click.echo(
+          click.style(
+              "Conversation cache miss (initializing new conversation with"
+              f" {len(context_messages)} context messages)",
+              fg="cyan",
+          )
+      )
+      if server is not None and hasattr(server, "close_conversation"):
+        server.close_conversation()
+      conv = engine.create_conversation(
+          messages=context_messages,
+          tools=tools or None,
+          automatic_tool_calling=False,
+          sampler_config=sampler_config,
+          thinking_config=thinking_config,
+          constrained_decoding_config=constrained_decoding_config,
+      ).__enter__()
+      if server is not None and hasattr(server, "close_conversation"):
+        server.litert_lm_conversation = conv
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    now_str = now.strftime("%Y%m%d%H%M%S%f")
+    created_ts = int(now.timestamp())
+
+    stream_options = body.get("stream_options")
+    if not isinstance(stream_options, dict):
+      stream_options = {}
+
+    assert conv is not None
+    assistant_message = _handle_chat_completions(
+        handler,
+        conv,
+        prompt,
+        raw_model_str,
+        stream,
+        now_str=now_str,
+        created_ts=created_ts,
+        max_completion_tokens=max_completion_tokens,
+        stream_options=stream_options,
+        response_format=response_format,
+    )
+
+    if server is not None and hasattr(server, "close_conversation"):
+      if assistant_message is not None:
+        translated_assistant = openai_common.translate_openai_message(
+            assistant_message
+        )
+        server.conversation_messages = [
+            *context_messages,
+            prompt,
+            translated_assistant,
+        ]
+        server.conversation_tools = tool_defs
+        server.conversation_sampler_config = sampler_config
+        server.conversation_thinking_config = thinking_config
+        server.conversation_constrained_decoding_config = (
+            constrained_decoding_config
+        )
+      else:
+        server.close_conversation()
+    else:
+      conv.__exit__(None, None, None)
   except Exception as e:  # pylint: disable=broad-exception-caught
+    if server is not None and hasattr(server, "close_conversation"):
+      server.close_conversation()
+    elif conv is not None:
+      conv.__exit__(None, None, None)
     handler.handle_inference_error(e, raw_model_str, prompt)
