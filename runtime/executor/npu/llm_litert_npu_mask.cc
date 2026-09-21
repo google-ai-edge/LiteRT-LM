@@ -259,6 +259,35 @@ absl::Status UpdateInterleavedSWAMasks(
   if (global_capacity <= 0) {
     global_capacity = seq_k_global - seq_q;
   }
+
+  // The fill loops index [0, capacity) for the history slots and
+  // [capacity, capacity + seq_q) for the current batch, so the mask has to be
+  // at least capacity + seq_q wide. Capacities arrive from NpuModelGeometry
+  // rather than being derived from the tensor dimensions, so a capacity that
+  // does not fit the bound buffer means the geometry and the graph disagree.
+  // That is an internal invariant violation, not bad caller input, hence
+  // RET_CHECK. Clamping instead would silently produce a mask for a cache that
+  // is not the one the model is using.
+  //
+  // The non-negative lower bound has to be stated separately: the batch loop
+  // writes row[capacity + k_rel] and only guards the upper end, so a negative
+  // capacity indexes before the buffer. The width check alone does not catch
+  // that, because the seq_k - seq_q fallback above reduces it to the tautology
+  // seq_k <= seq_k whenever it is the source of the negative value.
+  if (local_ptr != nullptr) {
+    RET_CHECK(local_capacity >= 0 && local_capacity + seq_q <= seq_k_local)
+        << "Local mask capacity (" << local_capacity << ") plus query length ("
+        << seq_q << ") does not fit the local mask key dimension ("
+        << seq_k_local << ").";
+  }
+  if (global_ptr != nullptr) {
+    RET_CHECK(global_capacity >= 0 && global_capacity + seq_q <= seq_k_global)
+        << "Global mask capacity (" << global_capacity
+        << ") plus query length (" << seq_q
+        << ") does not fit the global mask key dimension (" << seq_k_global
+        << ").";
+  }
+
   // The attention window size (how far back a token can attend).
   // In practice, this is optimized to match the local cache capacity to save
   // memory, but we keep them conceptually separate for flexibility and
@@ -410,6 +439,19 @@ absl::Status HWMaskUpdate(
     seq_k_global = dims[rank - 1];
   }
 
+  // Both masks describe the same set of queries, so a single query length
+  // governs the fill. seq_q_local / seq_q_global are only assigned when the
+  // corresponding buffer is bound, so take whichever one is present: reading
+  // seq_q_local unconditionally yields 0 whenever a model binds only the
+  // global mask, which would bound every fill loop below at zero iterations
+  // and leave the buffer holding whatever it held before.
+  if (mask_local_buf && mask_global_buf) {
+    RET_CHECK(seq_q_local == seq_q_global)
+        << "Local and global masks disagree on the query length ("
+        << seq_q_local << " vs " << seq_q_global << ").";
+  }
+  const int64_t seq_q = mask_local_buf ? seq_q_local : seq_q_global;
+
   // Detect if local and global masks use different KV cache sizes.
   // Prefer explicit uses_ringbuffer flag if set, otherwise fallback to tensor
   // shapes.
@@ -469,14 +511,12 @@ absl::Status HWMaskUpdate(
 
   if (is_interleaved_swa) {
     return UpdateInterleavedSWAMasks(
-        local_ptr, global_ptr, mask_type.ElementType(), seq_q_local,
-        seq_k_local, seq_k_global, time_step, input_tokens, input_tokens_size,
-        valid_mask, valid_mask_size, sliding_window_size, local_capacity,
-        global_capacity);
+        local_ptr, global_ptr, mask_type.ElementType(), seq_q, seq_k_local,
+        seq_k_global, time_step, input_tokens, input_tokens_size, valid_mask,
+        valid_mask_size, sliding_window_size, local_capacity, global_capacity);
   }
 
   // If we made it here, all layers use the same KV cache size.
-  int64_t seq_q = seq_q_global ? seq_q_global : seq_q_local;
   int64_t seq_k = seq_k_global ? seq_k_global : seq_k_local;
 
   // Dispatch by Dtype

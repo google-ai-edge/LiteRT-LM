@@ -24,6 +24,7 @@
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/log/absl_check.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
@@ -974,6 +975,534 @@ TEST_F(NpuMaskTest, HWMaskUpdateCustomSlidingWindowSize) {
       EXPECT_EQ(local_lock.second[k], -128) << "k=" << k;
     }
   }
+}
+
+// =============================================================================
+// Ringbuffer mask corner cases.
+//
+// The configurations below mirror the two lightweight verification models:
+//   Config A: gemma3_1b_1024global_256local_128prefill
+//   Config B: gemma3_1b_2048global_768local_512prefill
+//
+// The local mask is indexed by *physical* ring slot while the attention window
+// is defined over *logical* token positions, so the mask has to invert the same
+// slot = token % capacity mapping that HWKVCacheUpdate uses on the writer side.
+// RingSlotToken below is an independent statement of that mapping: if the mask
+// and the cache update ever disagree, these tests fail.
+// =============================================================================
+
+constexpr float kValidMaskValue = 0.0f;
+constexpr float kMaskedMaskValue = -1e9f;
+
+// Returns the logical token index held in physical ring slot `slot` after
+// tokens [0, time_step) have been written to a ring of `capacity` slots, or -1
+// if the slot has never been written.
+int64_t RingSlotToken(int64_t slot, int64_t time_step, int64_t capacity) {
+  int64_t token = -1;
+  for (int64_t t = slot; t < time_step; t += capacity) {
+    token = t;
+  }
+  return token;
+}
+
+struct SwaConfig {
+  absl::string_view name;
+  int local_capacity;
+  int global_capacity;
+};
+
+// Sweeps the time step across several ring wraps and checks every physical slot
+// of the local mask against the ring reference model. The interesting time
+// steps are the ones on either side of a wrap, where the mapping from slot to
+// token changes discontinuously.
+TEST_F(NpuMaskTest, HWMaskUpdateRingMaskMatchesPhysicalCacheSlots) {
+  const SwaConfig kConfigs[] = {
+      {"1024global_256local", 256, 1024},
+      {"2048global_768local", 768, 2048},
+  };
+
+  for (const SwaConfig& config : kConfigs) {
+    SCOPED_TRACE(config.name);
+    const int64_t window = config.local_capacity;
+    const int capacity = config.local_capacity;
+
+    for (int time_step : {1, capacity - 1, capacity, capacity + 1, 2 * capacity,
+                          2 * capacity + 1, 3 * capacity + 7}) {
+      if (time_step >= config.global_capacity) {
+        continue;  // Beyond the global cache the session would have ended.
+      }
+      SCOPED_TRACE(absl::StrCat("time_step=", time_step));
+
+      constexpr int kSeqQ = 1;
+      const int seq_k_local = capacity + kSeqQ;
+      const int seq_k_global = config.global_capacity + kSeqQ;
+
+      absl::flat_hash_map<absl::string_view, TensorBuffer> in_buffers;
+      const std::vector<int32_t> time_step_data = {time_step};
+      in_buffers.emplace(
+          "time_step", CreateTensorBuffer(time_step_data, ElementType::Int32));
+
+      absl::flat_hash_map<absl::string_view, TensorBuffer> out_buffers;
+      out_buffers.emplace("mask_local",
+                          CreateTensorBufferWithDims(
+                              std::vector<float>(kSeqQ * seq_k_local, 0.0f),
+                              ElementType::Float32, {1, kSeqQ, seq_k_local}));
+      out_buffers.emplace("mask_global",
+                          CreateTensorBufferWithDims(
+                              std::vector<float>(kSeqQ * seq_k_global, 0.0f),
+                              ElementType::Float32, {1, kSeqQ, seq_k_global}));
+
+      LITERT_ASSERT_OK(HWMaskUpdate(in_buffers, out_buffers, window));
+
+      auto local_lock_expected = TensorBufferScopedLock::Create<float>(
+          out_buffers.at("mask_local"), TensorBuffer::LockMode::kRead);
+      ASSERT_TRUE(local_lock_expected.HasValue());
+      const float* local_ptr = local_lock_expected->second;
+
+      for (int k = 0; k < capacity; ++k) {
+        const int64_t token = RingSlotToken(k, time_step, capacity);
+        const bool expect_valid = token >= 0 && token >= time_step - window + 1;
+        EXPECT_EQ(local_ptr[k],
+                  expect_valid ? kValidMaskValue : kMaskedMaskValue)
+            << "local slot " << k << " holds token " << token;
+      }
+      // The token being decoded lives in the batch slot appended after the
+      // ring and is always attended to.
+      EXPECT_EQ(local_ptr[capacity], kValidMaskValue);
+
+      auto global_lock_expected = TensorBufferScopedLock::Create<float>(
+          out_buffers.at("mask_global"), TensorBuffer::LockMode::kRead);
+      ASSERT_TRUE(global_lock_expected.HasValue());
+      const float* global_ptr = global_lock_expected->second;
+      for (int k = 0; k < config.global_capacity; ++k) {
+        EXPECT_EQ(global_ptr[k],
+                  k < time_step ? kValidMaskValue : kMaskedMaskValue)
+            << "global slot " << k;
+      }
+      EXPECT_EQ(global_ptr[config.global_capacity], kValidMaskValue);
+    }
+  }
+}
+
+// A local cache buffer padded beyond the attention window: 768 physical slots
+// but only the newest 512 tokens may be attended to. Nothing in the tensor
+// shapes expresses this, so the window has to come from the metadata
+// (attention_mask_settings.sliding_window_size, or the local state buffer's
+// minimum_sequence_length). Without it the window defaults to the full
+// capacity and 256 stale tokens leak into the attention.
+TEST_F(NpuMaskTest, HWMaskUpdateWindowSmallerThanLocalRingCapacity) {
+  constexpr int kLocalCapacity = 768;
+  constexpr int kGlobalCapacity = 2048;
+  constexpr int64_t kWindow = 512;
+  constexpr int kTimeStep = 1000;
+  constexpr int kSeqQ = 1;
+
+  const int seq_k_local = kLocalCapacity + kSeqQ;
+  const int seq_k_global = kGlobalCapacity + kSeqQ;
+
+  absl::flat_hash_map<absl::string_view, TensorBuffer> in_buffers;
+  const std::vector<int32_t> time_step_data = {kTimeStep};
+  in_buffers.emplace("time_step",
+                     CreateTensorBuffer(time_step_data, ElementType::Int32));
+
+  absl::flat_hash_map<absl::string_view, TensorBuffer> out_buffers;
+  out_buffers.emplace("mask_local",
+                      CreateTensorBufferWithDims(
+                          std::vector<float>(kSeqQ * seq_k_local, 0.0f),
+                          ElementType::Float32, {1, kSeqQ, seq_k_local}));
+  out_buffers.emplace("mask_global",
+                      CreateTensorBufferWithDims(
+                          std::vector<float>(kSeqQ * seq_k_global, 0.0f),
+                          ElementType::Float32, {1, kSeqQ, seq_k_global}));
+
+  LITERT_ASSERT_OK(HWMaskUpdate(in_buffers, out_buffers, kWindow));
+
+  auto local_lock_expected = TensorBufferScopedLock::Create<float>(
+      out_buffers.at("mask_local"), TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(local_lock_expected.HasValue());
+  const float* local_ptr = local_lock_expected->second;
+
+  for (int k = 0; k < kLocalCapacity; ++k) {
+    const int64_t token = RingSlotToken(k, kTimeStep, kLocalCapacity);
+    const bool expect_valid = token >= kTimeStep - kWindow + 1;
+    EXPECT_EQ(local_ptr[k], expect_valid ? kValidMaskValue : kMaskedMaskValue)
+        << "local slot " << k << " holds token " << token;
+  }
+
+  // Slots 0..231 hold tokens 768..999 and slots 232..767 hold tokens 232..767,
+  // so the in window range [489, 999] covers slots [0, 231] and [489, 767]. The
+  // 257 slots in between are physically resident but out of window.
+  EXPECT_EQ(local_ptr[231], kValidMaskValue);   // token 999
+  EXPECT_EQ(local_ptr[232], kMaskedMaskValue);  // token 232
+  EXPECT_EQ(local_ptr[488], kMaskedMaskValue);  // token 488
+  EXPECT_EQ(local_ptr[489], kValidMaskValue);   // token 489
+}
+
+// A prefill chunk issued after the ring has already wrapped. Each query row has
+// its own window, so the oldest visible slot moves as the row advances, and it
+// does not sit at slot 0.
+TEST_F(NpuMaskTest, HWMaskUpdateRingMaskDuringPrefillChunkAfterWrap) {
+  constexpr int kLocalCapacity = 768;
+  constexpr int kGlobalCapacity = 2048;
+  constexpr int kPrefillSeq = 512;
+  constexpr int64_t kWindow = kLocalCapacity;
+  // Two 512 token chunks have already been prefilled, so the 768 slot ring has
+  // wrapped once and holds tokens 256..1023.
+  constexpr int kTimeStep = 1024;
+
+  const int seq_k_local = kLocalCapacity + kPrefillSeq;
+  const int seq_k_global = kGlobalCapacity + kPrefillSeq;
+
+  absl::flat_hash_map<absl::string_view, TensorBuffer> in_buffers;
+  const std::vector<int32_t> time_step_data = {kTimeStep};
+  in_buffers.emplace("time_step",
+                     CreateTensorBuffer(time_step_data, ElementType::Int32));
+
+  absl::flat_hash_map<absl::string_view, TensorBuffer> out_buffers;
+  out_buffers.emplace("mask_local",
+                      CreateTensorBufferWithDims(
+                          std::vector<float>(kPrefillSeq * seq_k_local, 0.0f),
+                          ElementType::Float32, {1, kPrefillSeq, seq_k_local}));
+  out_buffers.emplace(
+      "mask_global", CreateTensorBufferWithDims(
+                         std::vector<float>(kPrefillSeq * seq_k_global, 0.0f),
+                         ElementType::Float32, {1, kPrefillSeq, seq_k_global}));
+
+  LITERT_ASSERT_OK(HWMaskUpdate(in_buffers, out_buffers, kWindow));
+
+  auto local_lock_expected = TensorBufferScopedLock::Create<float>(
+      out_buffers.at("mask_local"), TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(local_lock_expected.HasValue());
+  const float* local_ptr = local_lock_expected->second;
+
+  for (int q : {0, 255, kPrefillSeq - 1}) {
+    SCOPED_TRACE(absl::StrCat("q=", q));
+    const int64_t logical_pos = kTimeStep + q;
+    const float* row = local_ptr + q * seq_k_local;
+
+    for (int k = 0; k < kLocalCapacity; ++k) {
+      const int64_t token = RingSlotToken(k, kTimeStep, kLocalCapacity);
+      const bool expect_valid =
+          token >= 0 && token >= logical_pos - kWindow + 1;
+      EXPECT_EQ(row[k], expect_valid ? kValidMaskValue : kMaskedMaskValue)
+          << "local slot " << k << " holds token " << token;
+    }
+    // Causal within the chunk being prefilled.
+    for (int k_rel = 0; k_rel < kPrefillSeq; ++k_rel) {
+      EXPECT_EQ(row[kLocalCapacity + k_rel],
+                k_rel <= q ? kValidMaskValue : kMaskedMaskValue)
+          << "batch slot " << k_rel;
+    }
+  }
+
+  // For the first row of the chunk the oldest in window token is 257, which
+  // lives in slot 257. Slot 256 still holds token 256 and must be masked, even
+  // though slot 0 (holding token 768) is visible.
+  EXPECT_EQ(local_ptr[0], kValidMaskValue);
+  EXPECT_EQ(local_ptr[256], kMaskedMaskValue);
+  EXPECT_EQ(local_ptr[257], kValidMaskValue);
+}
+
+// =============================================================================
+// NpuModelGeometry overload coverage.
+//
+// Production code reaches HWMaskUpdate exclusively through the
+// NpuModelGeometry overload, but every other test in this file calls the
+// explicit-parameter overload, so the unpacking in the geometry overload is
+// otherwise unexercised.
+// =============================================================================
+
+// The geometry overload must be a pure repackaging of the explicit parameters.
+// Running both against identical inputs and comparing the full mask pins that
+// equivalence, so a future change to the unpacking cannot silently alter
+// behaviour for production callers while leaving every existing test green.
+TEST_F(NpuMaskTest, HWMaskUpdateGeometryOverloadMatchesExplicitParameters) {
+  constexpr int kLocalCapacity = 256;
+  constexpr int kGlobalCapacity = 1024;
+  constexpr int kWindow = 256;
+  constexpr int kTimeStep = 300;
+  constexpr int kSeqQ = 1;
+
+  const int seq_k_local = kLocalCapacity + kSeqQ;
+  const int seq_k_global = kGlobalCapacity + kSeqQ;
+
+  // Builds a fresh input/output buffer pair so the two invocations cannot
+  // observe each other's writes.
+  auto make_buffers =
+      [&](absl::flat_hash_map<absl::string_view, TensorBuffer>& in_buffers,
+          absl::flat_hash_map<absl::string_view, TensorBuffer>& out_buffers) {
+        const std::vector<int32_t> time_step_data = {kTimeStep};
+        in_buffers.emplace("time_step", CreateTensorBuffer(time_step_data,
+                                                           ElementType::Int32));
+        out_buffers.emplace("mask_local",
+                            CreateTensorBufferWithDims(
+                                std::vector<float>(kSeqQ * seq_k_local, 0.0f),
+                                ElementType::Float32, {1, kSeqQ, seq_k_local}));
+        out_buffers.emplace(
+            "mask_global", CreateTensorBufferWithDims(
+                               std::vector<float>(kSeqQ * seq_k_global, 0.0f),
+                               ElementType::Float32, {1, kSeqQ, seq_k_global}));
+      };
+
+  auto read_mask =
+      [](absl::flat_hash_map<absl::string_view, TensorBuffer>& out_buffers,
+         absl::string_view name, int count) {
+        auto lock_expected = TensorBufferScopedLock::Create<float>(
+            out_buffers.at(name), TensorBuffer::LockMode::kRead);
+        ABSL_CHECK(lock_expected.HasValue());
+        return std::vector<float>(lock_expected->second,
+                                  lock_expected->second + count);
+      };
+
+  absl::flat_hash_map<absl::string_view, TensorBuffer> explicit_in;
+  absl::flat_hash_map<absl::string_view, TensorBuffer> explicit_out;
+  make_buffers(explicit_in, explicit_out);
+  LITERT_ASSERT_OK(HWMaskUpdate(explicit_in, explicit_out, kWindow,
+                                /*uses_ringbuffer=*/true, kGlobalCapacity,
+                                kLocalCapacity));
+
+  NpuModelGeometry geometry;
+  geometry.global_cache_length = kGlobalCapacity;
+  geometry.local_cache_length = kLocalCapacity;
+  geometry.sliding_window_size = kWindow;
+  geometry.uses_ringbuffer = true;
+
+  absl::flat_hash_map<absl::string_view, TensorBuffer> geometry_in;
+  absl::flat_hash_map<absl::string_view, TensorBuffer> geometry_out;
+  make_buffers(geometry_in, geometry_out);
+  LITERT_ASSERT_OK(HWMaskUpdate(geometry_in, geometry_out, geometry));
+
+  EXPECT_EQ(read_mask(geometry_out, "mask_local", kSeqQ * seq_k_local),
+            read_mask(explicit_out, "mask_local", kSeqQ * seq_k_local));
+  EXPECT_EQ(read_mask(geometry_out, "mask_global", kSeqQ * seq_k_global),
+            read_mask(explicit_out, "mask_global", kSeqQ * seq_k_global));
+}
+
+// A geometry with no resolved local cache length falls back to the global
+// cache length for the local capacity. This happens whenever
+// ResolveModelGeometry cannot find a local state buffer, and it silently
+// claims the local ring is as large as the global cache, so the behaviour is
+// worth pinning explicitly rather than leaving it implied by
+// `local_cache_length.value_or(global_cache_length)`.
+TEST_F(NpuMaskTest,
+       HWMaskUpdateGeometryUnsetLocalCacheLengthFallsBackToGlobal) {
+  constexpr int kGlobalCapacity = 512;
+  constexpr int kTimeStep = 100;
+  constexpr int kSeqQ = 1;
+
+  // Both masks are sized for the global capacity, which is what the fallback
+  // assumes the local ring to be.
+  const int seq_k = kGlobalCapacity + kSeqQ;
+
+  absl::flat_hash_map<absl::string_view, TensorBuffer> in_buffers;
+  const std::vector<int32_t> time_step_data = {kTimeStep};
+  in_buffers.emplace("time_step",
+                     CreateTensorBuffer(time_step_data, ElementType::Int32));
+
+  absl::flat_hash_map<absl::string_view, TensorBuffer> out_buffers;
+  out_buffers.emplace(
+      "mask_local",
+      CreateTensorBufferWithDims(std::vector<float>(kSeqQ * seq_k, 0.0f),
+                                 ElementType::Float32, {1, kSeqQ, seq_k}));
+  out_buffers.emplace(
+      "mask_global",
+      CreateTensorBufferWithDims(std::vector<float>(kSeqQ * seq_k, 0.0f),
+                                 ElementType::Float32, {1, kSeqQ, seq_k}));
+
+  NpuModelGeometry geometry;
+  geometry.global_cache_length = kGlobalCapacity;
+  geometry.local_cache_length = std::nullopt;
+  geometry.sliding_window_size = kGlobalCapacity;
+  geometry.uses_ringbuffer = true;
+
+  LITERT_ASSERT_OK(HWMaskUpdate(in_buffers, out_buffers, geometry));
+
+  auto local_lock_expected = TensorBufferScopedLock::Create<float>(
+      out_buffers.at("mask_local"), TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(local_lock_expected.HasValue());
+  const float* local_ptr = local_lock_expected->second;
+
+  // Treated as a 512 slot ring that has not yet wrapped at time step 100.
+  for (int k = 0; k < kGlobalCapacity; ++k) {
+    EXPECT_EQ(local_ptr[k], k < kTimeStep ? kValidMaskValue : kMaskedMaskValue)
+        << "local slot " << k;
+  }
+  EXPECT_EQ(local_ptr[kGlobalCapacity], kValidMaskValue);
+}
+
+// =============================================================================
+// Regression tests.
+//
+// Each test below pins a failure mode that HWMaskUpdate and
+// UpdateInterleavedSWAMasks have to keep ruling out: a mask that is silently
+// left unwritten, and a write past the end of the mask tensor. Neither
+// announces itself in production -- no error is returned and no sanitizer
+// fires -- so both are asserted explicitly here.
+// =============================================================================
+
+// A model whose geometry says uses_ringbuffer = true but which only binds a
+// single mask buffer (MTP/drafter and global-only signatures both do this).
+//
+// HWMaskUpdate sets `is_interleaved_swa = uses_ringbuffer` without checking
+// whether a local mask buffer actually exists, so it routes to
+// UpdateInterleavedSWAMasks even when only the global mask is bound. The query
+// length it forwards therefore has to come from whichever mask is present:
+// reading it from the local mask alone leaves it at 0, because seq_q_local is
+// only assigned inside `if (mask_local_buf)`. Every fill loop is bounded by
+// seq_q, so a zero there writes nothing at all and returns OkStatus over
+// whatever the buffer previously held. This test seeds the buffer with a
+// sentinel so that outcome is visible rather than silent.
+TEST_F(NpuMaskTest,
+       HWMaskUpdateGeometryRingbufferWithOnlyGlobalMaskStillWrites) {
+  constexpr int kGlobalCapacity = 1024;
+  constexpr int kLocalCapacity = 256;
+  constexpr int kTimeStep = 300;
+  constexpr int kSeqQ = 1;
+  constexpr float kSentinel = 42.0f;
+
+  const int seq_k_global = kGlobalCapacity + kSeqQ;
+
+  absl::flat_hash_map<absl::string_view, TensorBuffer> in_buffers;
+  const std::vector<int32_t> time_step_data = {kTimeStep};
+  in_buffers.emplace("time_step",
+                     CreateTensorBuffer(time_step_data, ElementType::Int32));
+
+  absl::flat_hash_map<absl::string_view, TensorBuffer> out_buffers;
+  out_buffers.emplace("mask_global",
+                      CreateTensorBufferWithDims(
+                          std::vector<float>(kSeqQ * seq_k_global, kSentinel),
+                          ElementType::Float32, {1, kSeqQ, seq_k_global}));
+
+  NpuModelGeometry geometry;
+  geometry.global_cache_length = kGlobalCapacity;
+  geometry.local_cache_length = kLocalCapacity;
+  geometry.sliding_window_size = kLocalCapacity;
+  geometry.uses_ringbuffer = true;
+
+  LITERT_ASSERT_OK(HWMaskUpdate(in_buffers, out_buffers, geometry));
+
+  auto global_lock_expected = TensorBufferScopedLock::Create<float>(
+      out_buffers.at("mask_global"), TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(global_lock_expected.HasValue());
+  const float* global_ptr = global_lock_expected->second;
+
+  // The global mask must have been populated, not left at the sentinel.
+  for (int k = 0; k < kGlobalCapacity; ++k) {
+    EXPECT_EQ(global_ptr[k], k < kTimeStep ? kValidMaskValue : kMaskedMaskValue)
+        << "global slot " << k;
+  }
+  EXPECT_EQ(global_ptr[kGlobalCapacity], kValidMaskValue);
+}
+
+// A capacity that exceeds the mask tensor must not be written past the end of
+// that tensor.
+//
+// The ring branch of FillMaskSingle iterates `for (k = 0; k < capacity; ++k)`
+// and writes `row[k]` with no clamp against seq_k; only the batch loop below it
+// guards with `if (k >= seq_k) break;`. The capacity it trusts comes from
+// NpuModelGeometry -- UpdateInterleavedSWAMasks substitutes `seq_k - seq_q`
+// only when the supplied capacity is <= 0 -- and geometry.global_cache_length
+// is a token budget rather than a tensor dimension, so it can legitimately
+// exceed the mask width. UpdateInterleavedSWAMasks therefore has to reject a
+// capacity that does not fit the bound buffer instead of trusting it.
+//
+// To demonstrate that safely, the local mask is backed by an allocation far
+// larger than its declared tensor width and the slack is filled with a
+// sentinel. A correct implementation touches only the first seq_k elements, so
+// the sentinel must survive. Note that a sanitizer does NOT catch this: the
+// backing store is a LiteRT managed host buffer, not an instrumented malloc,
+// so the overrun is invisible to ASAN and has to be asserted explicitly.
+TEST_F(NpuMaskTest, HWMaskUpdateGeometryRejectsCapacityLargerThanMaskTensor) {
+  constexpr int kLocalCapacity = 4096;  // Far wider than the mask below.
+  constexpr int kGlobalCapacity = 4096;
+  // Must be >= kLocalCapacity so FillMaskSingle takes the aging branch. Below
+  // capacity the `t_k < time_step` causality guard suppresses every write past
+  // the time step, which masks the missing bound.
+  constexpr int kTimeStep = 5000;
+  constexpr int kSeqQ = 1;
+
+  constexpr int kSeqKLocal = 513;  // Declared local mask: 512 slots + 1 batch.
+  constexpr int kLocalAllocation = 8192;  // Backing store, with slack.
+  constexpr float kSentinel = 42.0f;
+  const int seq_k_global = kGlobalCapacity + kSeqQ;
+
+  absl::flat_hash_map<absl::string_view, TensorBuffer> in_buffers;
+  const std::vector<int32_t> time_step_data = {kTimeStep};
+  in_buffers.emplace("time_step",
+                     CreateTensorBuffer(time_step_data, ElementType::Int32));
+
+  // Declared as {1, 1, 513} but backed by 8192 floats of sentinel, so any write
+  // beyond the declared width lands in the slack instead of corrupting the
+  // heap, and is directly observable.
+  absl::flat_hash_map<absl::string_view, TensorBuffer> out_buffers;
+  out_buffers.emplace("mask_local",
+                      CreateTensorBufferWithDims(
+                          std::vector<float>(kLocalAllocation, kSentinel),
+                          ElementType::Float32, {1, kSeqQ, kSeqKLocal}));
+  out_buffers.emplace("mask_global",
+                      CreateTensorBufferWithDims(
+                          std::vector<float>(kSeqQ * seq_k_global, 0.0f),
+                          ElementType::Float32, {1, kSeqQ, seq_k_global}));
+
+  NpuModelGeometry geometry;
+  geometry.global_cache_length = kGlobalCapacity;
+  geometry.local_cache_length = kLocalCapacity;
+  geometry.sliding_window_size = kLocalCapacity;
+  geometry.uses_ringbuffer = true;
+
+  // Either reject the mismatch outright or clamp to the tensor; silently
+  // writing past the declared width is not acceptable.
+  EXPECT_FALSE(HWMaskUpdate(in_buffers, out_buffers, geometry).ok());
+
+  auto local_lock_expected = TensorBufferScopedLock::Create<float>(
+      out_buffers.at("mask_local"), TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(local_lock_expected.HasValue());
+  const float* local_ptr = local_lock_expected->second;
+
+  for (int k = kSeqKLocal; k < kLocalAllocation; ++k) {
+    ASSERT_EQ(local_ptr[k], kSentinel)
+        << "wrote past the declared mask width at index " << k;
+  }
+}
+
+// A mask whose key dimension is narrower than its query dimension must be
+// rejected rather than turned into a negative capacity.
+//
+// When the geometry supplies no capacity, UpdateInterleavedSWAMasks falls back
+// to `seq_k - seq_q`, which goes negative for such a mask. The width check
+// alone cannot catch that: substituting the fallback reduces
+// `capacity + seq_q <= seq_k` to `seq_k <= seq_k`, which always holds. A
+// negative capacity then reaches FillMaskSingle, whose batch loop writes
+// `row[capacity + k_rel]` and only guards the upper end with
+// `if (k >= seq_k) break;`, so the first row is written *below* the start of
+// the buffer.
+//
+// Such a mask is malformed, but that is exactly what these checks are for, and
+// the write is upstream of the allocation rather than merely past its end.
+TEST_F(NpuMaskTest, HWMaskUpdateGeometryRejectsKeyDimNarrowerThanQueryDim) {
+  constexpr int kSeqQ = 8;
+  constexpr int kSeqKLocal = 4;  // Narrower than the query dimension.
+  constexpr int kTimeStep = 3;
+
+  absl::flat_hash_map<absl::string_view, TensorBuffer> in_buffers;
+  const std::vector<int32_t> time_step_data = {kTimeStep};
+  in_buffers.emplace("time_step",
+                     CreateTensorBuffer(time_step_data, ElementType::Int32));
+
+  absl::flat_hash_map<absl::string_view, TensorBuffer> out_buffers;
+  out_buffers.emplace("mask_local",
+                      CreateTensorBufferWithDims(
+                          std::vector<float>(kSeqQ * kSeqKLocal, 0.0f),
+                          ElementType::Float32, {1, kSeqQ, kSeqKLocal}));
+
+  // No local capacity, so UpdateInterleavedSWAMasks takes the seq_k - seq_q
+  // fallback.
+  NpuModelGeometry geometry;
+  geometry.local_cache_length = 0;
+  geometry.sliding_window_size = 0;
+  geometry.uses_ringbuffer = true;
+
+  EXPECT_FALSE(HWMaskUpdate(in_buffers, out_buffers, geometry).ok());
 }
 
 }  // namespace
