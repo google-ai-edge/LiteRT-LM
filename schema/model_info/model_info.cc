@@ -1468,7 +1468,7 @@ std::ostream& operator<<(std::ostream& os,
      << "  Max Vision Token Budget: "
      << llm_cap.max_vision_token_budget << "\n"
      << "  Min Runtime Version:    "
-     << (llm_cap.min_runtime_version.empty() ? "-1"
+     << (llm_cap.min_runtime_version.empty() ? "NOT SET"
                                              : llm_cap.min_runtime_version)
      << "\n";
 
@@ -1514,7 +1514,7 @@ std::ostream& operator<<(std::ostream& os,
      << "\n";
 
   if (embed_cap.supported_signature_lengths.has_value()) {
-    os << "  Supported Signature Lengths: [";
+    os << "  Text Signature Selection: [";
     const auto& lengths = *embed_cap.supported_signature_lengths;
     for (size_t i = 0; i < lengths.size(); ++i) {
       os << lengths[i];
@@ -1522,11 +1522,23 @@ std::ostream& operator<<(std::ostream& os,
     }
     os << "]\n";
   } else {
-    os << "  Supported Signature Lengths: -1\n";
+    os << "  Text Signature Selection: -1\n";
+  }
+
+  if (embed_cap.vision_signature_selection.has_value()) {
+    os << "  Vision Signature Selection: [";
+    const auto& lengths = *embed_cap.vision_signature_selection;
+    for (size_t i = 0; i < lengths.size(); ++i) {
+      os << lengths[i];
+      if (i + 1 < lengths.size()) os << ", ";
+    }
+    os << "]\n";
+  } else {
+    os << "  Vision Signature Selection: -1\n";
   }
 
   os << "  Min Runtime Version:    "
-     << (embed_cap.min_runtime_version.empty() ? "-1"
+     << (embed_cap.min_runtime_version.empty() ? "NOT SET"
                                                : embed_cap.min_runtime_version)
      << "\n"
      << "  Input Modalities:       " << embed_cap.input_modalities << "\n";

@@ -152,7 +152,8 @@ def describe_model(
         f"  Max Vision Token Budget: {llm.max_vision_token_budget}"
     )
     click.echo(
-        f"  Min Runtime Version:    {model_info.min_runtime_version or '-1'}"
+        "  Min Runtime Version:    "
+        f"{model_info.min_runtime_version or 'NOT SET'}"
     )
     lengths = llm.vision_signature_selection
     lengths_str = str(lengths) if lengths is not None else "-1"
@@ -192,9 +193,15 @@ def describe_model(
     )
     lengths = embed.signature_selection
     lengths_str = str(lengths) if lengths is not None else "-1"
-    click.echo(f"  Supported Signature Lengths: {lengths_str}")
+    click.echo(f"  Text Signature Selection: {lengths_str}")
+    vision_lengths = embed.vision_signature_selection
+    vision_lengths_str = (
+        str(vision_lengths) if vision_lengths is not None else "-1"
+    )
+    click.echo(f"  Vision Signature Selection: {vision_lengths_str}")
     click.echo(
-        f"  Min Runtime Version:    {model_info.min_runtime_version or '-1'}"
+        "  Min Runtime Version:    "
+        f"{model_info.min_runtime_version or 'NOT SET'}"
     )
     click.echo(f"  Input Modalities:       {modalities_str}")
     _print_modality_backends(model_info)

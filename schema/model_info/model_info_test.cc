@@ -1409,6 +1409,7 @@ TEST(ModelInfoFileTest, GetModelInfo_EmbeddingModel_StreamFormatting) {
   embed_cap.max_vision_token_budget = 280;
   embed_cap.min_runtime_version = "0.12.0";
   embed_cap.supported_signature_lengths = std::vector<int>{128, 256, 512};
+  embed_cap.vision_signature_selection = std::vector<int>{140, 280};
   embed_cap.input_modalities.text = true;
   embed_cap.input_modalities.vision = true;
   embed_cap.input_modalities.audio = true;
@@ -1439,8 +1440,11 @@ TEST(ModelInfoFileTest, GetModelInfo_EmbeddingModel_StreamFormatting) {
   EXPECT_THAT(output, ::testing::HasSubstr("Embedding Dimension:    768"));
   EXPECT_THAT(output, ::testing::HasSubstr("Max Context Tokens:     512"));
   EXPECT_THAT(output, ::testing::HasSubstr("Max Vision Token Budget: 280"));
-  EXPECT_THAT(output, ::testing::HasSubstr(
-                          "Supported Signature Lengths: [128, 256, 512]"));
+  EXPECT_THAT(
+      output,
+      ::testing::HasSubstr("Text Signature Selection: [128, 256, 512]"));
+  EXPECT_THAT(output,
+              ::testing::HasSubstr("Vision Signature Selection: [140, 280]"));
   EXPECT_THAT(output, ::testing::HasSubstr("Min Runtime Version:    0.12.0"));
   EXPECT_THAT(
       output,

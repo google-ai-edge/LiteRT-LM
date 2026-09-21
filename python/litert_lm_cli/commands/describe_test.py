@@ -148,7 +148,7 @@ class DescribeTest(absltest.TestCase):
     self.assertIn("Vision Backends:        CPU GPU", result.output)
     self.assertIn("Audio Backends:         CPU GPU", result.output)
     self.assertIn("Video Backends:         CPU GPU", result.output)
-    self.assertIn("Min Runtime Version:    -1", result.output)
+    self.assertIn("Min Runtime Version:    NOT SET", result.output)
     self.assertIn("Vision Signature Selection: -1", result.output)
 
   def test_describe_model_default_sampler_params_top_k_none(self):
@@ -365,9 +365,10 @@ class DescribeTest(absltest.TestCase):
     self.mock_model_info.embedding = self.mock_embedding
     self.mock_embedding.dimension = 768
     self.mock_embedding.signature_selection = [128, 256]
+    self.mock_embedding.vision_signature_selection = [70, 140]
     self.mock_model_info.max_context_tokens = 512
     self.mock_model_info.is_dynamic_context = False
-    self.mock_embedding.max_vision_token_budget = -1
+    self.mock_embedding.max_vision_token_budget = 140
     self.mock_model_info.min_runtime_version = "0.12.3"
     self.mock_model_info.input_modalities = litert_lm.SupportedModalities(
         text=True, vision=False, audio=False, video=False
@@ -387,8 +388,9 @@ class DescribeTest(absltest.TestCase):
     self.assertIn("Embedding Dimension:    768", result.output)
     self.assertIn("Max Context Tokens:     512", result.output)
     self.assertIn("Is Dynamic Context:     NO", result.output)
-    self.assertIn("Max Vision Token Budget: -1", result.output)
-    self.assertIn("Supported Signature Lengths: [128, 256]", result.output)
+    self.assertIn("Max Vision Token Budget: 140", result.output)
+    self.assertIn("Text Signature Selection: [128, 256]", result.output)
+    self.assertIn("Vision Signature Selection: [70, 140]", result.output)
     self.assertIn("Min Runtime Version:    0.12.3", result.output)
     self.assertIn("Input Modalities:       Text", result.output)
     self.assertIn("Text Backends:          CPU", result.output)
@@ -411,6 +413,7 @@ class DescribeTest(absltest.TestCase):
     self.mock_llm.is_dynamic_context = False
     self.mock_embedding.dimension = 512
     self.mock_embedding.signature_selection = [128]
+    self.mock_embedding.vision_signature_selection = None
     self.mock_embedding.max_vision_token_budget = -1
     self.mock_model_info.max_context_tokens = 256
     self.mock_model_info.is_dynamic_context = False

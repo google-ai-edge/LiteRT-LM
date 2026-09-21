@@ -75,6 +75,26 @@ public struct SamplerParameters: Equatable {
   public let topP: Float
 }
 
+/// Helper to fetch an array of Int32 values from a two-pass C API function.
+private func fetchIntArray(
+  handle: OpaquePointer,
+  cFunction: (OpaquePointer?, UnsafeMutablePointer<Int32>?, Int32) -> Int32
+) -> [Int]? {
+  let count = cFunction(handle, nil, 0)
+  guard count >= 0 else {
+    return nil
+  }
+  if count == 0 {
+    return []
+  }
+  var values = [Int32](repeating: 0, count: Int(count))
+  let written = cFunction(handle, &values, count)
+  guard written > 0 else {
+    return []
+  }
+  return values[0..<Int(written)].map { Int($0) }
+}
+
 /// Capabilities specific to Large Language Models (LLM).
 public class LLMCapability {
   private let handle: OpaquePointer
@@ -127,23 +147,10 @@ public class LLMCapability {
   /// Returns the list of vision signature selection choices, or nil if
   /// vision is not supported.
   public func visionSignatureSelection() -> [Int]? {
-    let count = litert_lm_loaded_file_vision_signature_selection(
-      handle, nil, 0
+    return fetchIntArray(
+      handle: handle,
+      cFunction: litert_lm_loaded_file_vision_signature_selection
     )
-    if count == -1 {
-      return nil
-    }
-    if count == 0 {
-      return []
-    }
-    var lengths = [Int32](repeating: 0, count: Int(count))
-    let written = litert_lm_loaded_file_vision_signature_selection(
-      handle, &lengths, count
-    )
-    guard written > 0 else {
-      return []
-    }
-    return lengths[0..<Int(written)].map { Int($0) }
   }
 }
 
@@ -169,18 +176,10 @@ public class EmbeddingCapability {
   /// Returns the list of supported embedding signature lengths, or nil if
   /// not defined.
   public func signatureSelection() -> [Int]? {
-    let count = litert_lm_loaded_file_embedding_signature_selection(
-      handle, nil, 0
+    return fetchIntArray(
+      handle: handle,
+      cFunction: litert_lm_loaded_file_embedding_signature_selection
     )
-    guard count >= 0 else {
-      return nil
-    }
-    var lengths = [Int32](repeating: 0, count: Int(count))
-    let written = litert_lm_loaded_file_embedding_signature_selection(
-      handle, &lengths, count
-    )
-    let validCount = max(0, Int(written))
-    return lengths[0..<validCount].map { Int($0) }
   }
 
   /// Returns the maximum vision token budget for the model.
@@ -192,23 +191,10 @@ public class EmbeddingCapability {
   /// Returns the list of vision signature selection choices, or nil if
   /// vision is not supported.
   public func visionSignatureSelection() -> [Int]? {
-    let count = litert_lm_loaded_file_vision_signature_selection(
-      handle, nil, 0
+    return fetchIntArray(
+      handle: handle,
+      cFunction: litert_lm_loaded_file_vision_signature_selection
     )
-    if count == -1 {
-      return nil
-    }
-    if count == 0 {
-      return []
-    }
-    var lengths = [Int32](repeating: 0, count: Int(count))
-    let written = litert_lm_loaded_file_vision_signature_selection(
-      handle, &lengths, count
-    )
-    guard written > 0 else {
-      return []
-    }
-    return lengths[0..<Int(written)].map { Int($0) }
   }
 }
 
@@ -354,23 +340,10 @@ public class ModelInfo {
   /// Returns the list of vision signature selection choices, or nil if
   /// vision is not supported.
   public func visionSignatureSelection() -> [Int]? {
-    let count = litert_lm_loaded_file_vision_signature_selection(
-      handle, nil, 0
+    return fetchIntArray(
+      handle: handle,
+      cFunction: litert_lm_loaded_file_vision_signature_selection
     )
-    if count == -1 {
-      return nil
-    }
-    if count == 0 {
-      return []
-    }
-    var lengths = [Int32](repeating: 0, count: Int(count))
-    let written = litert_lm_loaded_file_vision_signature_selection(
-      handle, &lengths, count
-    )
-    guard written > 0 else {
-      return []
-    }
-    return lengths[0..<Int(written)].map { Int($0) }
   }
 
   /// Returns the type of the loaded LiteRT-LM model.
