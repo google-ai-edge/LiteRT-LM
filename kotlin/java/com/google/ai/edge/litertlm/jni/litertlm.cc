@@ -102,6 +102,8 @@ using litert::lm::SessionConfig;
 using litert::lm::proto::SamplerParameters;
 
 using litert::lm::jni::GetJniEnvAndAttach;
+using litert::lm::jni::JStringToString;
+using litert::lm::jni::ScopedLocalRef;
 using litert::lm::jni::NewStringStandardUTF;
 
 void ThrowLiteRtLmJniException(JNIEnv* env, const std::string& message) {
@@ -742,12 +744,16 @@ JNI_METHOD(nativeDeleteEngine)(JNIEnv* env, jclass thiz, jlong engine_pointer) {
 LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateSession)(
     JNIEnv* env, jclass thiz, jlong engine_pointer, jobject sampler_config_obj,
     jstring lora_path_str, jstring audio_lora_path_str,
-    jobject enable_speculative_decoding) {
+    jobject enable_speculative_decoding, jobject apply_prompt_template) {
   auto session_config = SessionConfig::CreateDefault();
   if (auto enable_spec_dec =
           GetOptionalBoolean(env, enable_speculative_decoding);
       enable_spec_dec.has_value()) {
     session_config.SetEnableSpeculativeDecoding(*enable_spec_dec);
+  }
+  if (auto apply_template = GetOptionalBoolean(env, apply_prompt_template);
+      apply_template.has_value()) {
+    session_config.SetApplyPromptTemplateInSession(*apply_template);
   }
 
   if (sampler_config_obj != nullptr) {
@@ -844,6 +850,134 @@ JNI_METHOD(nativeRunDecode)(JNIEnv* env, jclass thiz, jlong session_pointer) {
   }
 
   return NewStringStandardUTF(env, responses->GetTexts()[0]);
+}
+
+LITERTLM_JNIEXPORT jobject JNICALL JNI_METHOD(nativeRunTextScoring)(
+    JNIEnv* env, jclass thiz, jlong session_pointer, jobjectArray target_texts,
+    jboolean store_token_lengths) {
+  Engine::Session* session =
+      reinterpret_cast<Engine::Session*>(session_pointer);
+  if (session == nullptr) {
+    ThrowLiteRtLmJniException(env, "Session pointer is null.");
+    return nullptr;
+  }
+
+  const jsize num_targets = env->GetArrayLength(target_texts);
+  std::vector<std::string> owned_targets;
+  owned_targets.reserve(num_targets);
+  for (jsize i = 0; i < num_targets; ++i) {
+    ScopedLocalRef<jstring> target(
+        env, static_cast<jstring>(env->GetObjectArrayElement(target_texts, i)));
+    owned_targets.push_back(JStringToString(env, target.get()));
+  }
+  std::vector<absl::string_view> targets(owned_targets.begin(),
+                                         owned_targets.end());
+
+  auto responses =
+      session->RunTextScoring(targets, store_token_lengths == JNI_TRUE);
+  if (!responses.ok()) {
+    ThrowLiteRtLmJniException(
+        env, "Failed to run text scoring: " + responses.status().ToString());
+    return nullptr;
+  }
+
+  const std::vector<float>& scores = responses->GetScores();
+  ScopedLocalRef<jfloatArray> j_scores(env, env->NewFloatArray(scores.size()));
+  if (j_scores.get() == nullptr) {
+    ThrowLiteRtLmJniException(env, "Failed to allocate the scores array.");
+    return nullptr;
+  }
+  if (!scores.empty()) {
+    env->SetFloatArrayRegion(j_scores.get(), 0, scores.size(), scores.data());
+  }
+  ScopedLocalRef<jintArray> j_lengths(env, nullptr);
+  if (responses->GetTokenLengths().has_value()) {
+    const std::vector<int>& lengths = *responses->GetTokenLengths();
+    j_lengths.reset(env->NewIntArray(lengths.size()));
+    if (j_lengths.get() == nullptr) {
+      ThrowLiteRtLmJniException(env,
+                                "Failed to allocate the token lengths array.");
+      return nullptr;
+    }
+    if (!lengths.empty()) {
+      env->SetIntArrayRegion(j_lengths.get(), 0, lengths.size(),
+                             lengths.data());
+    }
+  }
+
+  ScopedLocalRef<jclass> response_cls(
+      env, env->FindClass("com/google/ai/edge/litertlm/TextScoringResponse"));
+  if (response_cls.get() == nullptr) {
+    return nullptr;  // ClassNotFoundException is pending.
+  }
+  jmethodID ctor = env->GetMethodID(response_cls.get(), "<init>", "([F[I)V");
+  if (ctor == nullptr) {
+    return nullptr;  // NoSuchMethodError is pending.
+  }
+  return env->NewObject(response_cls.get(), ctor, j_scores.get(),
+                        j_lengths.get());
+}
+
+LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeSaveCheckpoint)(
+    JNIEnv* env, jclass thiz, jlong session_pointer, jstring label) {
+  Engine::Session* session =
+      reinterpret_cast<Engine::Session*>(session_pointer);
+  if (session == nullptr) {
+    ThrowLiteRtLmJniException(env, "Session pointer is null.");
+    return;
+  }
+  auto status = session->SaveCheckpoint(JStringToString(env, label));
+  if (!status.ok()) {
+    ThrowLiteRtLmJniException(
+        env, "Failed to save checkpoint: " + status.ToString());
+  }
+}
+
+LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeRewindToCheckpoint)(
+    JNIEnv* env, jclass thiz, jlong session_pointer, jstring label) {
+  Engine::Session* session =
+      reinterpret_cast<Engine::Session*>(session_pointer);
+  if (session == nullptr) {
+    ThrowLiteRtLmJniException(env, "Session pointer is null.");
+    return;
+  }
+  auto status = session->RewindToCheckpoint(JStringToString(env, label));
+  if (!status.ok()) {
+    ThrowLiteRtLmJniException(
+        env, "Failed to rewind to checkpoint: " + status.ToString());
+  }
+}
+
+LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeRewindToStep)(
+    JNIEnv* env, jclass thiz, jlong session_pointer, jint step) {
+  Engine::Session* session =
+      reinterpret_cast<Engine::Session*>(session_pointer);
+  if (session == nullptr) {
+    ThrowLiteRtLmJniException(env, "Session pointer is null.");
+    return;
+  }
+  auto status = session->RewindToStep(step);
+  if (!status.ok()) {
+    ThrowLiteRtLmJniException(env,
+                              "Failed to rewind to step: " + status.ToString());
+  }
+}
+
+LITERTLM_JNIEXPORT jint JNICALL JNI_METHOD(nativeGetCurrentStep)(
+    JNIEnv* env, jclass thiz, jlong session_pointer) {
+  Engine::Session* session =
+      reinterpret_cast<Engine::Session*>(session_pointer);
+  if (session == nullptr) {
+    ThrowLiteRtLmJniException(env, "Session pointer is null.");
+    return 0;  // Ignored: an exception is pending.
+  }
+  auto step = session->GetCurrentStep();
+  if (!step.ok()) {
+    ThrowLiteRtLmJniException(
+        env, "Failed to get the current step: " + step.status().ToString());
+    return 0;  // Ignored: an exception is pending.
+  }
+  return *step;
 }
 
 LITERTLM_JNIEXPORT jstring JNICALL JNI_METHOD(nativeGenerateContent)(
