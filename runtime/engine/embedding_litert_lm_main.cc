@@ -61,7 +61,7 @@
 #include "runtime/util/memory_mapped_file.h"
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/status_macros.h"
-#include "tflite/profiling/memory_info.h"  // from @litert
+#include "tflite/profiling/memory_usage_monitor.h"  // from @litert
 
 ABSL_FLAG(std::string, backend, "cpu",
           "Executor backend to use for embedding execution (cpu, gpu, etc.)");
@@ -130,6 +130,10 @@ using ::litert::lm::ModelAssets;
 using ::litert::lm::ModelType;
 using ::litert::lm::OwnedEnvironment;
 using ::litert::lm::ScopedFile;
+
+// Interval at which the memory usage monitor samples the process memory
+// footprint to estimate the peak usage.
+constexpr int kMemoryCheckIntervalMs = 50;
 
 absl::StatusOr<ModelAssets> CreateModelAssets(bool use_mmap,
                                               absl::string_view model_path) {
@@ -231,6 +235,25 @@ absl::StatusOr<std::vector<float>> LoadEmbeddingFromJsonFile(
   return vec;
 }
 
+// Stops `mem_monitor` and reports the peak memory footprint observed since it
+// was started. Does nothing if peak memory reporting was not requested, i.e. if
+// `mem_monitor` is null.
+void StopAndReportPeakMemoryUsage(
+    tflite::profiling::memory::MemoryUsageMonitor* mem_monitor) {
+  if (mem_monitor == nullptr) {
+    return;
+  }
+  mem_monitor->Stop();
+  const float peak_ram_mb = mem_monitor->GetPeakPrivateFootprintInMB();
+  if (peak_ram_mb ==
+      tflite::profiling::memory::MemoryUsageMonitor::kInvalidMemUsageMB) {
+    return;
+  }
+  ABSL_LOG(INFO) << absl::StrFormat("Peak system ram usage: %.2f MB",
+                                    peak_ram_mb);
+  std::cout << absl::StrFormat("Peak system ram usage: %.2f MB\n", peak_ram_mb);
+}
+
 absl::Status MainHelper(int argc, char** argv) {
   absl::ParseCommandLine(argc, argv);
   absl::SetMinLogLevel(absl::LogSeverityAtLeast::kError);
@@ -253,6 +276,17 @@ absl::Status MainHelper(int argc, char** argv) {
         << "NPU backend selected. Disabling memory mapping to ensure "
            "file-backed model loading is used.";
     use_mmap = false;
+  }
+
+  // Start monitoring the memory usage before loading the model so that the
+  // reported footprint covers the whole run, including model loading and
+  // engine initialization.
+  std::unique_ptr<tflite::profiling::memory::MemoryUsageMonitor> mem_monitor;
+  if (absl::GetFlag(FLAGS_report_peak_memory_footprint)) {
+    mem_monitor =
+        std::make_unique<tflite::profiling::memory::MemoryUsageMonitor>(
+            kMemoryCheckIntervalMs);
+    mem_monitor->Start();
   }
 
   LITERT_ASSIGN_OR_RETURN(auto model_assets,
@@ -499,17 +533,7 @@ absl::Status MainHelper(int argc, char** argv) {
                      "Average Latency: %.2f ms (min: %.2f ms, max: %.2f ms)\n",
                      avg_ms, min_ms, max_ms);
 
-    if (absl::GetFlag(FLAGS_report_peak_memory_footprint)) {
-      auto mem_usage = tflite::profiling::memory::GetMemoryUsage();
-      if (mem_usage.IsSupported()) {
-        double peak_ram_mb =
-            mem_usage.private_footprint_bytes / 1024.0 / 1024.0;
-        ABSL_LOG(INFO) << absl::StrFormat("Peak system ram usage: %.2f MB",
-                                          peak_ram_mb);
-        std::cout << absl::StrFormat("Peak system ram usage: %.2f MB\n",
-                                     peak_ram_mb);
-      }
-    }
+    StopAndReportPeakMemoryUsage(mem_monitor.get());
     std::cout << "Embedding vector dimension: "
               << last_response.embedding.size() << std::endl;
     if (const std::string compare_path =
@@ -537,6 +561,7 @@ absl::Status MainHelper(int argc, char** argv) {
   EmbeddingResponse response = *std::move(response_result);
 
   std::cout << "\n================ RESULT ================" << std::endl;
+  StopAndReportPeakMemoryUsage(mem_monitor.get());
   std::cout << "Input length: " << response.input_length << std::endl;
   if (response.truncated_length.has_value()) {
     std::cout << "Truncated length: " << *response.truncated_length
