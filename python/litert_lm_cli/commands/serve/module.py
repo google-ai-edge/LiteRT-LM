@@ -62,6 +62,7 @@ def run_server(
       try:
         server.serve_forever()
       finally:
+        server.close_conversation()
         if server.litert_lm_engine is not None:
           server.litert_lm_engine.__exit__(None, None, None)
         emb_engine = server.litert_lm_embedding_engine
