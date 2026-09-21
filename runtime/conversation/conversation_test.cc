@@ -1418,6 +1418,44 @@ TEST_P(ConversationTest, SendMessageWithParserErrorSoftError) {
   EXPECT_TRUE((*response)["content"][0].contains("error"));
 }
 
+TEST_P(ConversationTest, WaitUntilDoneForwardsToSession) {
+  auto mock_session = CreateMockSession();
+  MockSession* mock_session_ptr = mock_session.get();
+  auto mock_engine = CreateMockEngine(std::move(mock_session));
+  ASSERT_OK_AND_ASSIGN(
+      auto conversation_config,
+      ConversationConfig::Builder()
+          .SetSessionConfig(session_config_)
+          .SetOverwritePromptTemplate(PromptTemplate(kTestJinjaPromptTemplate))
+          .Build(*mock_engine));
+  ASSERT_OK_AND_ASSIGN(auto conversation,
+                       Conversation::Create(*mock_engine, conversation_config));
+
+  EXPECT_CALL(*mock_session_ptr, WaitUntilDone())
+      .WillOnce(Return(absl::OkStatus()));
+  EXPECT_OK(conversation->WaitUntilDone());
+}
+
+TEST_P(ConversationTest, WaitUntilDonePropagatesSessionError) {
+  auto mock_session = CreateMockSession();
+  MockSession* mock_session_ptr = mock_session.get();
+  auto mock_engine = CreateMockEngine(std::move(mock_session));
+  ASSERT_OK_AND_ASSIGN(
+      auto conversation_config,
+      ConversationConfig::Builder()
+          .SetSessionConfig(session_config_)
+          .SetOverwritePromptTemplate(PromptTemplate(kTestJinjaPromptTemplate))
+          .Build(*mock_engine));
+  ASSERT_OK_AND_ASSIGN(auto conversation,
+                       Conversation::Create(*mock_engine, conversation_config));
+
+  EXPECT_CALL(*mock_session_ptr, WaitUntilDone())
+      .WillOnce(Return(absl::InternalError("session failed")));
+  absl::Status status = conversation->WaitUntilDone();
+  EXPECT_EQ(status.code(), absl::StatusCode::kInternal);
+  EXPECT_THAT(status.message(), HasSubstr("session failed"));
+}
+
 TEST_P(ConversationTest, SendMultipleMessages) {
   // Set up mock Session.
   auto mock_session = CreateMockSession();

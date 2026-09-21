@@ -669,6 +669,20 @@ void litert_lm_conversation_cancel_process(LiteRtLmConversation* conversation) {
   conversation->conversation->CancelProcess();
 }
 
+int litert_lm_conversation_wait_until_done(LiteRtLmConversation* conversation) {
+  if (!conversation || !conversation->conversation) {
+    SetLastError(absl::StatusCode::kInvalidArgument, "Invalid conversation.");
+    return -1;
+  }
+  absl::Status status = conversation->conversation->WaitUntilDone();
+  if (!status.ok()) {
+    ABSL_LOG(ERROR) << "Failed to wait until done: " << status;
+    SetLastError(status);
+    return static_cast<int>(status.code());
+  }
+  return 0;
+}
+
 LiteRtLmBenchmarkInfo* litert_lm_conversation_get_benchmark_info(
     LiteRtLmConversation* conversation) {
   if (!conversation || !conversation->conversation) {
