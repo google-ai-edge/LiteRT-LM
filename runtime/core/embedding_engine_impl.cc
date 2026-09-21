@@ -261,20 +261,22 @@ absl::Status ResolveAndValidateSettings(
 }
 
 // Selects the text encoder signatures to load from the (already validated)
-// input length bounds in `settings`, records them there, and returns the
-// selection. Returns nullopt when neither bound is set, which leaves every
-// signature in the model loaded.
+// input length bounds and signature count cap in `settings`, records them
+// there, and returns the selection. Returns nullopt when none of those is set,
+// which leaves every signature in the model loaded.
 absl::StatusOr<std::optional<SelectedTextSignaturesInfo>>
 SetTextEncoderSignaturesFromSettings(ModelResources& resources,
                                      EmbeddingEngineSettings& settings) {
   if (!settings.GetMaxInputLength().has_value() &&
-      !settings.GetMinInputLength().has_value()) {
+      !settings.GetMinInputLength().has_value() &&
+      !settings.GetMaxNumSignatures().has_value()) {
     return std::nullopt;
   }
   LITERT_ASSIGN_OR_RETURN(
       auto text_sig_info,
       SelectTextEncoderSignatures(resources, settings.GetMaxInputLength(),
-                                  settings.GetMinInputLength()));
+                                  settings.GetMinInputLength(),
+                                  settings.GetMaxNumSignatures()));
   settings.GetMutableMainExecutorSettings().SetSelectedSignatures(
       text_sig_info.signature_names);
   return text_sig_info;

@@ -473,6 +473,124 @@ TEST(ModelSignatureUtilsTest,
               StatusIs(absl::StatusCode::kNotFound));
 }
 
+TEST(ModelSignatureUtilsTest, SelectTextEncoderSignatures_MaxNumSignatures) {
+  std::vector<SignatureInfo> signatures = {
+      {.signature_name = "encoder_128", .length = 128},
+      {.signature_name = "encoder_256", .length = 256},
+      {.signature_name = "encoder_512", .length = 512},
+      {.signature_name = "encoder_1024", .length = 1024},
+      {.signature_name = "encoder_2048", .length = 2048},
+  };
+
+  // A budget of one keeps only the longest, which is what bounds the accepted
+  // input length.
+  ASSERT_OK_AND_ASSIGN(
+      auto one, SelectTextEncoderSignatures(signatures,
+                                            /*max_input_length=*/2048,
+                                            /*min_input_length=*/std::nullopt,
+                                            /*max_num_signatures=*/1));
+  EXPECT_THAT(one.signature_names, ElementsAre("encoder_2048"));
+  EXPECT_EQ(one.max_signature_length, 2048);
+
+  // Remaining slots are spread over the shorter signatures rather than
+  // clustering at either end.
+  ASSERT_OK_AND_ASSIGN(
+      auto two, SelectTextEncoderSignatures(signatures,
+                                            /*max_input_length=*/2048,
+                                            /*min_input_length=*/std::nullopt,
+                                            /*max_num_signatures=*/2));
+  EXPECT_THAT(two.signature_lengths, ElementsAre(512, 2048));
+
+  ASSERT_OK_AND_ASSIGN(
+      auto three, SelectTextEncoderSignatures(signatures,
+                                              /*max_input_length=*/2048,
+                                              /*min_input_length=*/std::nullopt,
+                                              /*max_num_signatures=*/3));
+  EXPECT_THAT(three.signature_lengths, ElementsAre(256, 1024, 2048));
+
+  // The cap applies after the length bounds, so it thins what those selected.
+  ASSERT_OK_AND_ASSIGN(auto bounded,
+                       SelectTextEncoderSignatures(signatures,
+                                                   /*max_input_length=*/1024,
+                                                   /*min_input_length=*/256,
+                                                   /*max_num_signatures=*/2));
+  EXPECT_THAT(bounded.signature_lengths, ElementsAre(512, 1024));
+}
+
+TEST(ModelSignatureUtilsTest,
+     SelectTextEncoderSignatures_MaxNumSignaturesAboveCandidateCountKeepsAll) {
+  std::vector<SignatureInfo> signatures = {
+      {.signature_name = "encoder_256", .length = 256},
+      {.signature_name = "encoder_512", .length = 512},
+  };
+  ASSERT_OK_AND_ASSIGN(auto result, SelectTextEncoderSignatures(
+                                        signatures,
+                                        /*max_input_length=*/512,
+                                        /*min_input_length=*/std::nullopt,
+                                        /*max_num_signatures=*/10));
+  EXPECT_THAT(result.signature_names,
+              ElementsAre("encoder_256", "encoder_512"));
+}
+
+TEST(ModelSignatureUtilsTest,
+     SelectTextEncoderSignatures_MaxNumSignaturesWithoutLengthBounds) {
+  // The web bindings cap how many signatures get compiled without knowing the
+  // model's length range, so a cap on its own has to be enough to trigger
+  // selection. With no bounds every signature is a candidate and the cap thins
+  // them, always keeping the longest.
+  std::vector<SignatureInfo> signatures = {
+      {.signature_name = "encoder_128", .length = 128},
+      {.signature_name = "encoder_256", .length = 256},
+      {.signature_name = "encoder_512", .length = 512},
+  };
+  ASSERT_OK_AND_ASSIGN(
+      auto one, SelectTextEncoderSignatures(signatures,
+                                            /*max_input_length=*/std::nullopt,
+                                            /*min_input_length=*/std::nullopt,
+                                            /*max_num_signatures=*/1));
+  EXPECT_THAT(one.signature_names, ElementsAre("encoder_512"));
+  EXPECT_EQ(one.max_signature_length, 512);
+
+  ASSERT_OK_AND_ASSIGN(
+      auto two, SelectTextEncoderSignatures(signatures,
+                                            /*max_input_length=*/std::nullopt,
+                                            /*min_input_length=*/std::nullopt,
+                                            /*max_num_signatures=*/2));
+  EXPECT_THAT(two.signature_lengths, ElementsAre(256, 512));
+}
+
+TEST(ModelSignatureUtilsTest,
+     SelectTextEncoderSignatures_NoConstraintsAtAllReturnsError) {
+  std::vector<SignatureInfo> signatures = {
+      {.signature_name = "encoder_256", .length = 256},
+  };
+  EXPECT_THAT(
+      SelectTextEncoderSignatures(signatures,
+                                  /*max_input_length=*/std::nullopt,
+                                  /*min_input_length=*/std::nullopt,
+                                  /*max_num_signatures=*/std::nullopt),
+      StatusIs(absl::StatusCode::kInvalidArgument,
+               HasSubstr("At least one of target_capacity, min_capacity, or "
+                         "max_num_signatures must be set.")));
+}
+
+TEST(ModelSignatureUtilsTest,
+     SelectTextEncoderSignatures_InvalidMaxNumSignaturesReturnsError) {
+  std::vector<SignatureInfo> signatures = {
+      {.signature_name = "encoder_256", .length = 256},
+  };
+  EXPECT_THAT(SelectTextEncoderSignatures(signatures,
+                                          /*max_input_length=*/256,
+                                          /*min_input_length=*/std::nullopt,
+                                          /*max_num_signatures=*/0),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(SelectTextEncoderSignatures(signatures,
+                                          /*max_input_length=*/256,
+                                          /*min_input_length=*/std::nullopt,
+                                          /*max_num_signatures=*/-1),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
 TEST(ModelSignatureUtilsTest, SelectVisionEncoderSignatures_Success) {
   std::vector<SignatureInfo> signatures = {
       {.signature_name = "vision_280",
