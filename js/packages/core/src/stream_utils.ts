@@ -14,8 +14,6 @@
  * limitations under the License.
  */
 
-import {LiteRtLmWasm} from './wasm_binding_types.js';
-
 /**
  * Converts a model source (URL string, Blob, or ReadableStream) into a ReadableStream.
  */
@@ -37,77 +35,4 @@ export async function modelToStream(
     throw new Error(`Failed to fetch model file from ${modelUrl}`);
   }
   return response.body!;
-}
-
-/**
- * Sets up the callback that streams model weights directly into WebGPU buffers.
- */
-export function setupStreamWeightsCallback(wasm: LiteRtLmWasm): void {
-  const gpuDevice = wasm.preinitializedWebGPUDevice;
-  if (!gpuDevice) {
-    throw new Error('WebGPU device not initialized');
-  }
-
-  wasm.registerStreamWeightsCallback(async (
-      tflIds: Int32Array,
-      wgpuBufferIds: Uint32Array,
-      offsets: Float64Array,
-      lengths: Float64Array,
-  ) => {
-    const requests = [];
-    if (tflIds.length !== wgpuBufferIds.length) {
-      throw new Error(
-          `Stream weights callback received arrays of different lengths: ` +
-          `tflIds=${tflIds.length}, wgpuBufferIds=${wgpuBufferIds.length}`);
-    }
-    for (let i = 0; i < tflIds.length; i++) {
-      requests.push({
-        id: tflIds[i],
-        wgpuBufferId: wgpuBufferIds[i],
-        offset: offsets[i],
-        length: lengths[i],
-      });
-    }
-    requests.sort((a, b) => a.offset - b.offset);
-
-    const CHUNK_SIZE = 4 * 1024 * 1024;
-    // `_malloc` returns a signed i32, which reads back negative once the heap
-    // grows past 2GB. Reinterpret it as unsigned before using it to index the
-    // heap, or the `Uint8Array` view below throws a `RangeError`.
-    const tempPtr = wasm._malloc(CHUNK_SIZE) >>> 0;
-    if (tempPtr === 0) {
-      throw new Error('Failed to allocate Wasm memory for streaming weights');
-    }
-    try {
-      for (const req of requests) {
-        const gpuBuffer = wasm.WebGPU.getJsObject(req.wgpuBufferId) as GPUBuffer;
-        if (!gpuBuffer) {
-          throw new Error(`Failed to find GPUBuffer for ID: ${req.wgpuBufferId}`);
-        }
-        const modelType = wasm.getCurrentlyCompilingModel();
-        let bytesUploaded = 0;
-        while (bytesUploaded < req.length) {
-          const chunkSize = Math.min(CHUNK_SIZE, req.length - bytesUploaded);
-          await wasm.readStoredWeights(
-              modelType, req.offset + bytesUploaded, chunkSize, tempPtr);
-
-          let chunkData = new Uint8Array(wasm.HEAPU8.buffer, tempPtr, chunkSize);
-          if (chunkData.byteLength % 4 !== 0 &&
-              bytesUploaded + chunkSize === req.length) {
-            const paddedSize = (chunkData.byteLength + 3) & ~3;
-            const paddedData = new Uint8Array(paddedSize);
-            paddedData.set(chunkData);
-            chunkData = paddedData;
-          }
-
-          gpuDevice.queue.writeBuffer(
-              gpuBuffer, bytesUploaded,
-              chunkData as unknown as BufferSource);
-          bytesUploaded += chunkSize;
-        }
-      }
-    } finally {
-      wasm._free(tempPtr);
-    }
-  });
 }

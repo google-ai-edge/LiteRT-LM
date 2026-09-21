@@ -14,6 +14,16 @@
 
 #include "runtime/util/streamed_weights_manager.h"
 
+#ifdef __EMSCRIPTEN__
+#include <algorithm>
+#include <cstring>
+#include <vector>
+
+#include "absl/types/span.h"  // from @com_google_absl
+#include <webgpu/webgpu_cpp.h>
+#include "weight_loader/external_weight_loader_litert.h"  // from @litert
+#endif  // __EMSCRIPTEN__
+
 #include <cstdint>
 #include <memory>
 #include <unordered_map>
@@ -37,6 +47,49 @@ GetStoredWeightsStreams() {
   return *m;
 }
 
+#ifdef __EMSCRIPTEN__
+absl::Status UploadStoredWeightsOnWeb(
+    const wgpu::Queue& queue,
+    absl::Span<const weight_loader::WebWeightUploadRequest> requests) {
+  std::vector<weight_loader::WebWeightUploadRequest> sorted_requests(
+      requests.begin(), requests.end());
+  // Requests should be sorted so we can efficiently discard chunks.
+  // Otherwise, DataStream caches any weight we skip over while reading until
+  // we eventually come back and read it.
+  std::sort(sorted_requests.begin(), sorted_requests.end(),
+            [](const auto& a, const auto& b) { return a.offset < b.offset; });
+
+  constexpr size_t kChunkSize = 4 * 1024 * 1024;  // 4 MB
+  std::vector<uint8_t> chunk_buf(kChunkSize);
+  const int model_type_int = static_cast<int>(GetCurrentlyCompilingModel());
+
+  for (const auto& req : sorted_requests) {
+    uint64_t bytes_uploaded = 0;
+    while (bytes_uploaded < req.length) {
+      const size_t chunk_size =
+          std::min<uint64_t>(kChunkSize, req.length - bytes_uploaded);
+      absl::Status status =
+          ReadStoredWeights(model_type_int, req.offset + bytes_uploaded,
+                            chunk_size, chunk_buf.data());
+      if (!status.ok()) {
+        return status;
+      }
+
+      // WebGPU writeBuffer requires data size to be a multiple of 4 bytes.
+      const size_t aligned_size = (chunk_size + 3) & ~static_cast<size_t>(3);
+      if (aligned_size > chunk_size) {
+        std::memset(chunk_buf.data() + chunk_size, 0,
+                    aligned_size - chunk_size);
+      }
+      queue.WriteBuffer(req.buffer, bytes_uploaded, chunk_buf.data(),
+                        aligned_size);
+      bytes_uploaded += chunk_size;
+    }
+  }
+  return absl::OkStatus();
+}
+#endif  // __EMSCRIPTEN__
+
 }  // namespace
 
 void SetCurrentlyCompilingModel(ModelType model_type) {
@@ -47,6 +100,9 @@ ModelType GetCurrentlyCompilingModel() { return g_currently_compiling_model; }
 
 void StoreWeightsStream(ModelType model_type,
                         std::shared_ptr<DataStream> stream) {
+#ifdef __EMSCRIPTEN__
+  weight_loader::RegisterWebWeightUploadCallback(&UploadStoredWeightsOnWeb);
+#endif  // __EMSCRIPTEN__
   GetStoredWeightsStreams()[model_type] = std::move(stream);
 }
 

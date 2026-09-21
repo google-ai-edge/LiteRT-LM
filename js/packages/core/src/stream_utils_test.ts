@@ -14,8 +14,7 @@
  * limitations under the License.
  */
 
-import {modelToStream, setupStreamWeightsCallback} from './stream_utils.js';
-import {LiteRtLmWasm} from './wasm_binding_types.js';
+import {modelToStream} from './stream_utils.js';
 
 describe('stream_utils', () => {
   it('converts a Blob to a ReadableStream', async () => {
@@ -36,53 +35,5 @@ describe('stream_utils', () => {
     });
     const stream = await modelToStream(existingStream);
     expect(stream).toBe(existingStream);
-  });
-
-  it('throws an error if WebGPU device is not initialized', () => {
-    const fakeWasm = {
-      preinitializedWebGPUDevice: undefined,
-    } as unknown as LiteRtLmWasm;
-
-    expect(() => setupStreamWeightsCallback(fakeWasm))
-        .toThrowError('WebGPU device not initialized');
-  });
-
-  it('throws an error if wasm._malloc returns 0', async () => {
-    let callback: Function | undefined;
-    const fakeFree = jasmine.createSpy('freeSpy');
-    const fakeDevice = {
-      queue: {
-        writeBuffer: () => {},
-      },
-    };
-    const fakeWasm = {
-      preinitializedWebGPUDevice: fakeDevice,
-      registerStreamWeightsCallback: (cb: Function) => {
-        callback = cb;
-      },
-      _malloc: () => 0,
-      _free: fakeFree,
-    } as unknown as LiteRtLmWasm;
-
-    setupStreamWeightsCallback(fakeWasm);
-    expect(callback).toBeDefined();
-
-    const invokeCallback = callback as (
-        tflIds: Int32Array,
-        wgpuBufferIds: Uint32Array,
-        offsets: Float64Array,
-        lengths: Float64Array,
-    ) => Promise<void>;
-
-    await expectAsync(
-        invokeCallback(
-            new Int32Array([1]),
-            new Uint32Array([1]),
-            new Float64Array([0]),
-            new Float64Array([100]),
-        ),
-    ).toBeRejectedWithError(
-        'Failed to allocate Wasm memory for streaming weights');
-    expect(fakeFree).not.toHaveBeenCalled();
   });
 });

@@ -53,8 +53,12 @@ cc_library(
         ":data_stream",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/types:span",
+        "@litert//weight_loader:external_weight_loader",
         "//runtime/components:model_resources",
-    ],
+    ] + select({
+        "//conditions:default": [],
+    }),
 )
 
 cc_test(

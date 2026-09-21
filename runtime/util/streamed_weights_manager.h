@@ -33,17 +33,16 @@ namespace litert::lm {
 // sets the active `ModelType` via `SetCurrentlyCompilingModel()` prior to
 // invoking `litert::CompiledModel::Create()`.
 //
-// When LiteRT's WebGPU delegate compiles the model, it invokes a JavaScript
-// callback (`setupStreamWeightsCallback` in `stream_utils.ts`), which queries
-// `GetCurrentlyCompilingModel()` and calls `ReadStoredWeights()` across the
-// WASM boundary to stream weight chunks directly into WebGPU buffers.
+// When LiteRT's WebGPU delegate compiles the model, it invokes the registered
+// C++ WebGPU weight upload callback (`UploadStoredWeightsOnWeb`), which queries
+// `GetCurrentlyCompilingModel()`, calls `ReadStoredWeights()` in chunks, and
+// writes directly to `wgpu::Queue::WriteBuffer`.
 
-// Sets the ModelType of the submodel currently being compiled so the JavaScript
-// WebGPU weight streaming callback knows which stored stream to read from.
+// Sets the ModelType of the submodel currently being compiled so the WebGPU
+// weight streaming callback knows which stored stream to read from.
 void SetCurrentlyCompilingModel(ModelType model_type);
 
-// Returns the ModelType of the submodel currently being compiled. Called by
-// JavaScript during WebGPU model compilation.
+// Returns the ModelType of the submodel currently being compiled.
 ModelType GetCurrentlyCompilingModel();
 
 // Registers a DataStream containing external weights for `model_type` so that
@@ -53,8 +52,6 @@ void StoreWeightsStream(ModelType model_type,
 
 // Reads `size` bytes at `offset` from the stored weights stream for
 // `model_type_int` into `buffer`, discarding the read bytes from the stream.
-// Called by JavaScript (`wasm.readStoredWeights`) as part of streamed WebGPU
-// model loading to upload weights directly into GPUBuffers.
 absl::Status ReadStoredWeights(int model_type_int, uint64_t offset,
                                uint64_t size, void* buffer);
 

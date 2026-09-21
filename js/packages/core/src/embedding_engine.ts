@@ -20,7 +20,7 @@ import {EmbeddingEngineSettings, fillWasmEmbeddingEngineSettingsFromEmbeddingEng
 import {getOrLoadGlobalLiteRtLm} from './load_litertlm.js';
 import {Mutex} from './mutex.js';
 import {ReadableStreamDataStreamWrapper} from './readable_stream_data_stream_wrapper.js';
-import {modelToStream, setupStreamWeightsCallback} from './stream_utils.js';
+import {modelToStream} from './stream_utils.js';
 import {Backend, Deletable, EmbeddingEngine as WasmEmbeddingEngine, EmbeddingEngineSettings as WasmEmbeddingEngineSettings, EmbeddingOptions, InputOverflowStrategy} from './wasm_binding_types.js';
 import {consumeEmscriptenVectorToArray} from './wasm_utils.js';
 
@@ -175,16 +175,11 @@ export class EmbeddingEngine implements Deletable {
       fillWasmEmbeddingEngineSettingsFromEmbeddingEngineSettings(
           wasmSettings, settings, resolvedBackend);
 
-      if (resolvedBackend === Backend.GPU) {
-        setupStreamWeightsCallback(wasm);
-      }
-
       try {
         engine = await wasm.EmbeddingEngine.createEngine(wasmSettings);
       } finally {
         if (resolvedBackend === Backend.GPU) {
           try {
-            wasm.registerStreamWeightsCallback(undefined);
             await wasm.clearStoredWeightsStreams();
           } catch (cleanupError) {
             console.error('Error during cleanup:', cleanupError);
