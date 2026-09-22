@@ -477,6 +477,93 @@ TEST_P(ConversationTest, SendMessage) {
               testing::ElementsAre(user_message, expected_message));
 }
 
+TEST_P(ConversationTest, CountTokens) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(GetTestdataPath(kTestLlmPath)));
+  ASSERT_OK_AND_ASSIGN(auto engine_settings, EngineSettings::CreateDefault(
+                                                 model_assets, Backend::CPU));
+  engine_settings.GetMutableMainExecutorSettings().SetCacheDir(":nocache");
+  engine_settings.GetMutableMainExecutorSettings().SetMaxNumTokens(50);
+  ASSERT_OK_AND_ASSIGN(auto engine,
+                       EngineFactory::CreateDefault(engine_settings));
+
+  ASSERT_OK_AND_ASSIGN(
+      auto config,
+      ConversationConfig::Builder()
+          .SetEnableConstrainedDecoding(enable_constrained_decoding_)
+          .SetPrefillPrefaceOnInit(prefill_preface_on_init_)
+          .Build(*engine));
+  ASSERT_OK_AND_ASSIGN(auto conversation,
+                       Conversation::Create(*engine, config));
+
+  Message user_message = {{"role", "user"}, {"content", "Hello"}};
+  ASSERT_OK_AND_ASSIGN(int tokens, conversation->CountTokens(user_message));
+  EXPECT_GT(tokens, 0);
+
+  // Verify that CountTokens did not mutate the conversation or prefill the
+  // session.
+  ASSERT_OK_AND_ASSIGN(int current_tokens, conversation->GetTokenCount());
+  EXPECT_EQ(current_tokens, 0);
+  EXPECT_TRUE(conversation->GetHistory().empty());
+
+  // Message array input
+  Message array_message = nlohmann::ordered_json::array({
+      {{"role", "user"}, {"content", "Hello"}},
+      {{"role", "model"}, {"content", "Hi"}},
+      {{"role", "user"}, {"content", "How are you?"}},
+  });
+  ASSERT_OK_AND_ASSIGN(int array_tokens,
+                       conversation->CountTokens(array_message));
+  EXPECT_GT(array_tokens, tokens);
+
+  // Multi-turn history: send first turn and count prospective next turn
+  ASSERT_OK(conversation->SendMessage(user_message).status());
+  Message next_message = {{"role", "user"}, {"content", "Next question"}};
+  ASSERT_OK_AND_ASSIGN(int next_tokens,
+                       conversation->CountTokens(next_message));
+  EXPECT_GT(next_tokens, 0);
+}
+
+TEST_P(ConversationTest, CountTokensWithPreface) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(GetTestdataPath(kTestLlmPath)));
+  ASSERT_OK_AND_ASSIGN(auto engine_settings, EngineSettings::CreateDefault(
+                                                 model_assets, Backend::CPU));
+  engine_settings.GetMutableMainExecutorSettings().SetCacheDir(":nocache");
+  engine_settings.GetMutableMainExecutorSettings().SetMaxNumTokens(50);
+  ASSERT_OK_AND_ASSIGN(auto engine,
+                       EngineFactory::CreateDefault(engine_settings));
+
+  JsonPreface preface;
+  preface.messages = {
+      {{"role", "system"}, {"content", "You are a helpful assistant."}}};
+
+  ASSERT_OK_AND_ASSIGN(
+      auto config,
+      ConversationConfig::Builder()
+          .SetEnableConstrainedDecoding(enable_constrained_decoding_)
+          .SetPrefillPrefaceOnInit(prefill_preface_on_init_)
+          .SetPreface(preface)
+          .Build(*engine));
+  ASSERT_OK_AND_ASSIGN(auto conversation,
+                       Conversation::Create(*engine, config));
+
+  Message user_message = {{"role", "user"}, {"content", "Hello"}};
+  ASSERT_OK_AND_ASSIGN(int tokens, conversation->CountTokens(user_message));
+  EXPECT_GT(tokens, 0);
+
+  // When prefill_preface_on_init is enabled, the preface tokens were already
+  // prefilled on init, so CountTokens only counts the user turn. When disabled,
+  // CountTokens includes the preface tokens on turn 1.
+  if (prefill_preface_on_init_) {
+    ASSERT_OK_AND_ASSIGN(int init_tokens, conversation->GetTokenCount());
+    EXPECT_GT(init_tokens, 0);
+  } else {
+    ASSERT_OK_AND_ASSIGN(int init_tokens, conversation->GetTokenCount());
+    EXPECT_EQ(init_tokens, 0);
+  }
+}
+
 TEST_P(ConversationTest, GetTokenCount) {
   ASSERT_OK_AND_ASSIGN(auto model_assets,
                        ModelAssets::Create(GetTestdataPath(kTestLlmPath)));

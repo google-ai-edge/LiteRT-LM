@@ -618,6 +618,18 @@ class Conversation {
   // decode).
   absl::StatusOr<int> GetTokenCount() const;
 
+  // Returns the number of tokens the given message would consume if added
+  // to the conversation, including template tokens and media (vision/audio)
+  // soft tokens. This does not mutate the conversation or the KV cache.
+  //
+  // Args:
+  // - `message`: The message to count tokens for. Can be a single message
+  //   or an array of messages.
+  // - `optional_args`: Optional arguments for template rendering.
+  absl::StatusOr<int> CountTokens(
+      const Message& message,
+      const OptionalArgs& optional_args = OptionalArgs()) const;
+
   // Returns the benchmark info for the conversation. Under the hood, this
   // method triggers the benchmark info collection from the Session. Returns:
   // - The benchmark info for the conversation.

@@ -14,6 +14,8 @@
 
 #include "runtime/core/session_utils.h"
 
+#include <algorithm>
+#include <cstddef>
 #include <optional>
 #include <string>
 #include <utility>
@@ -26,6 +28,8 @@
 #include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "litert/cc/litert_macros.h"  // from @litert
+#include "runtime/engine/engine.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/util/status_macros.h"  // IWYU pragma: keep
@@ -219,6 +223,114 @@ absl::StatusOr<std::vector<InputData>> PreprocessContents(
     }
   }
   return preprocessed_contents;
+}
+
+absl::StatusOr<int> CalculateInputDataTokens(
+    const std::vector<InputData>& contents, const Engine& engine) {
+  int total_tokens = 0;
+  std::optional<VisionExecutorProperties> vision_props;
+  std::optional<AudioExecutorProperties> audio_props;
+
+  for (size_t i = 0; i < contents.size(); ++i) {
+    const auto& input = contents[i];
+    if (const auto* text = std::get_if<InputText>(&input)) {
+      if (auto raw_str = text->GetRawTextString(); raw_str.ok()) {
+        ABSL_ASSIGN_OR_RETURN(auto token_ids, const_cast<support::Tokenizer&>(
+                                                  engine.GetTokenizer())
+                                                  .TextToTokenIds(*raw_str));
+        total_tokens += token_ids.size();
+      } else if (auto tensor = text->GetPreprocessedTextTensor(); tensor.ok()) {
+        ABSL_ASSIGN_OR_RETURN(
+            auto ids_vec, support::Tokenizer::TensorBufferToTokenIds(**tensor));
+        for (const auto& ids : ids_vec) {
+          total_tokens += ids.size();
+        }
+      }
+    } else if (const auto* image = std::get_if<InputImage>(&input)) {
+      if (!vision_props.has_value()) {
+        ABSL_ASSIGN_OR_RETURN(vision_props,
+                              engine.GetVisionExecutorProperties());
+      }
+      int token_length = vision_props->num_tokens_per_image;
+      if (vision_props->patch_num_shrink_factor.has_value() &&
+          image->IsTensorBufferMap()) {
+        ABSL_ASSIGN_OR_RETURN(const auto* map,
+                              image->GetPreprocessedImageTensorMap());
+        auto it = map->find("positions_xy");
+        if (it != map->end()) {
+          LITERT_ASSIGN_OR_RETURN(auto type, it->second.TensorType());
+          auto dims = type.Layout().Dimensions();
+          if (dims.size() >= 2) {
+            int num_patches = dims[1];
+            int shrink = vision_props->patch_num_shrink_factor.value();
+            if (shrink <= 0) {
+              return absl::InvalidArgumentError(
+                  "vision_properties.patch_num_shrink_factor must be strictly "
+                  "positive.");
+            }
+            token_length = (num_patches + shrink - 1) / shrink;
+          }
+        }
+      }
+      total_tokens += token_length;
+    } else if (const auto* audio = std::get_if<InputAudio>(&input)) {
+      if (!audio_props.has_value()) {
+        ABSL_ASSIGN_OR_RETURN(audio_props, engine.GetAudioExecutorProperties());
+      }
+      ABSL_ASSIGN_OR_RETURN(const auto* buffer,
+                            audio->GetPreprocessedAudioTensor());
+      LITERT_ASSIGN_OR_RETURN(auto type, buffer->TensorType());
+      auto dims = type.Layout().Dimensions();
+      int input_sequence_length = 0;
+      if (dims.size() >= 2) {
+        input_sequence_length = dims[dims.size() - 2];
+      }
+      if (input_sequence_length <= 0) {
+        return absl::InvalidArgumentError(
+            "Invalid or empty audio sequence length in TensorBuffer.");
+      }
+      int shrink = audio_props->audio_shrink_factor;
+      if (shrink <= 0) {
+        return absl::InvalidArgumentError(
+            "audio_properties.audio_shrink_factor must be strictly positive.");
+      }
+      if (audio_props->is_streaming_model) {
+        int window_size = audio_props->streaming_chunk_size;
+        int overlap_size = audio_props->streaming_chunk_overlap_size;
+        int stride = window_size - overlap_size;
+        if (stride <= 0 || window_size <= overlap_size) {
+          return absl::InvalidArgumentError(
+              "Invalid audio streaming chunk/overlap size.");
+        }
+        int chunk_output_tokens = stride / shrink;
+        bool is_flush = i + 1 < contents.size() &&
+                        std::holds_alternative<InputAudioEnd>(contents[i + 1]);
+        if (!is_flush) {
+          if (input_sequence_length >= window_size) {
+            int num_full_chunks =
+                (input_sequence_length - overlap_size) / stride;
+            total_tokens += num_full_chunks * chunk_output_tokens;
+          }
+        } else if (input_sequence_length > overlap_size) {
+          int num_chunks =
+              (input_sequence_length - overlap_size + stride - 1) / stride;
+          int last_chunk_len = std::min(
+              window_size, input_sequence_length - (num_chunks - 1) * stride);
+          int last_chunk_tokens = std::min(
+              chunk_output_tokens, (last_chunk_len + shrink - 1) / shrink);
+          total_tokens +=
+              (num_chunks - 1) * chunk_output_tokens + last_chunk_tokens;
+        }
+      } else {
+        total_tokens += (input_sequence_length + shrink - 1) / shrink;
+      }
+    } else if (std::holds_alternative<InputImageEnd>(input) ||
+               std::holds_alternative<InputAudioEnd>(input)) {
+      total_tokens += 1;
+    }
+  }
+
+  return total_tokens;
 }
 
 }  // namespace litert::lm
