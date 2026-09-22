@@ -333,7 +333,7 @@ std::string CreateTestLiteRTLM(
 
 // Tests that the parser successfully extracts explicit capabilities and
 // metadata when the LlmMetadata proto is fully populated.
-TEST(ModelInfoFileTest, GetModelInfo_ExtractsSystemMetadataAndLlmCapabilities) {
+TEST(ModelInfoFileTest, InspectModel_ExtractsSystemMetadataAndLlmCapabilities) {
   proto::LlmMetadata proto_meta;
   proto_meta.set_supports_thinking(true);
   proto_meta.set_supports_function_calling(true);
@@ -351,7 +351,7 @@ TEST(ModelInfoFileTest, GetModelInfo_ExtractsSystemMetadataAndLlmCapabilities) {
                          &proto_meta);
 
   std::istringstream stream(file_data, std::ios::binary);
-  auto result_or = GetModelInfo(stream);
+  auto result_or = InspectModel(stream);
   ASSERT_OK(result_or);
   ModelInfo result = std::move(*result_or);
   ASSERT_TRUE(result.llm_capability.has_value());
@@ -380,7 +380,7 @@ TEST(ModelInfoFileTest, GetModelInfo_ExtractsSystemMetadataAndLlmCapabilities) {
   EXPECT_FALSE(llm.output_modalities.video);
 }
 
-TEST(ModelInfoFileTest, GetModelInfo_ExtractsMaxVisionTokenBudget) {
+TEST(ModelInfoFileTest, InspectModel_ExtractsMaxVisionTokenBudget) {
   proto::LlmMetadata proto_meta;
   auto* model_type = proto_meta.mutable_llm_model_type();
   auto* gemma4 = model_type->mutable_gemma4();
@@ -391,7 +391,7 @@ TEST(ModelInfoFileTest, GetModelInfo_ExtractsMaxVisionTokenBudget) {
       "IT", "google/gemma-4-2b-it", {"tf_lite_vision_adapter"}, &proto_meta);
 
   std::istringstream stream(file_data, std::ios::binary);
-  auto result_or = GetModelInfo(stream);
+  auto result_or = InspectModel(stream);
   ASSERT_OK(result_or);
   ModelInfo result = std::move(*result_or);
   ASSERT_TRUE(result.llm_capability.has_value());
@@ -400,7 +400,7 @@ TEST(ModelInfoFileTest, GetModelInfo_ExtractsMaxVisionTokenBudget) {
 }
 
 TEST(ModelInfoFileTest,
-     GetModelInfo_ExtractsMaxVisionTokenBudget_GenericModel) {
+     InspectModel_ExtractsMaxVisionTokenBudget_GenericModel) {
   proto::LlmMetadata proto_meta;
   auto* model_type = proto_meta.mutable_llm_model_type();
   auto* generic = model_type->mutable_generic_model();
@@ -411,7 +411,7 @@ TEST(ModelInfoFileTest,
       "IT", "google/generic-it", {"tf_lite_vision_adapter"}, &proto_meta);
 
   std::istringstream stream(file_data, std::ios::binary);
-  auto result_or = GetModelInfo(stream);
+  auto result_or = InspectModel(stream);
   ASSERT_OK(result_or);
   ModelInfo result = std::move(*result_or);
   ASSERT_TRUE(result.llm_capability.has_value());
@@ -420,7 +420,7 @@ TEST(ModelInfoFileTest,
 }
 
 TEST(ModelInfoFileTest,
-     GetModelInfo_ExtractsMaxVisionTokenBudget_GenericModel_DefaultPooling) {
+     InspectModel_ExtractsMaxVisionTokenBudget_GenericModel_DefaultPooling) {
   proto::LlmMetadata proto_meta;
   auto* model_type = proto_meta.mutable_llm_model_type();
   auto* generic = model_type->mutable_generic_model();
@@ -430,7 +430,7 @@ TEST(ModelInfoFileTest,
       "IT", "google/generic-it", {"tf_lite_vision_adapter"}, &proto_meta);
 
   std::istringstream stream(file_data, std::ios::binary);
-  auto result_or = GetModelInfo(stream);
+  auto result_or = InspectModel(stream);
   ASSERT_OK(result_or);
   ModelInfo result = std::move(*result_or);
   ASSERT_TRUE(result.llm_capability.has_value());
@@ -438,7 +438,7 @@ TEST(ModelInfoFileTest,
   EXPECT_EQ(llm.max_vision_token_budget, 100);  // Defaults to 1
 }
 
-TEST(ModelInfoFileTest, GetModelInfo_ExtractsMaxVisionTokenBudget_Lfm2) {
+TEST(ModelInfoFileTest, InspectModel_ExtractsMaxVisionTokenBudget_Lfm2) {
   proto::LlmMetadata proto_meta;
   auto* model_type = proto_meta.mutable_llm_model_type();
   auto* lfm2 = model_type->mutable_lfm2();
@@ -449,7 +449,7 @@ TEST(ModelInfoFileTest, GetModelInfo_ExtractsMaxVisionTokenBudget_Lfm2) {
       "IT", "google/lfm2-it", {"tf_lite_vision_adapter"}, &proto_meta);
 
   std::istringstream stream(file_data, std::ios::binary);
-  auto result_or = GetModelInfo(stream);
+  auto result_or = InspectModel(stream);
   ASSERT_OK(result_or);
   ModelInfo result = std::move(*result_or);
   ASSERT_TRUE(result.llm_capability.has_value());
@@ -458,7 +458,7 @@ TEST(ModelInfoFileTest, GetModelInfo_ExtractsMaxVisionTokenBudget_Lfm2) {
 }
 
 TEST(ModelInfoFileTest,
-     GetModelInfo_ExtractsMaxVisionTokenBudget_Lfm2_DefaultPooling) {
+     InspectModel_ExtractsMaxVisionTokenBudget_Lfm2_DefaultPooling) {
   proto::LlmMetadata proto_meta;
   auto* model_type = proto_meta.mutable_llm_model_type();
   auto* lfm2 = model_type->mutable_lfm2();
@@ -468,7 +468,7 @@ TEST(ModelInfoFileTest,
       "IT", "google/lfm2-it", {"tf_lite_vision_adapter"}, &proto_meta);
 
   std::istringstream stream(file_data, std::ios::binary);
-  auto result_or = GetModelInfo(stream);
+  auto result_or = InspectModel(stream);
   ASSERT_OK(result_or);
   ModelInfo result = std::move(*result_or);
   ASSERT_TRUE(result.llm_capability.has_value());
@@ -477,7 +477,7 @@ TEST(ModelInfoFileTest,
 }
 
 TEST(ModelInfoFileTest,
-     GetModelInfo_ExtractsMaxVisionTokenBudget_Gemma4_DefaultPooling) {
+     InspectModel_ExtractsMaxVisionTokenBudget_Gemma4_DefaultPooling) {
   proto::LlmMetadata proto_meta;
   auto* model_type = proto_meta.mutable_llm_model_type();
   auto* gemma4 = model_type->mutable_gemma4();
@@ -487,7 +487,7 @@ TEST(ModelInfoFileTest,
       "IT", "google/gemma-4-2b-it", {"tf_lite_vision_adapter"}, &proto_meta);
 
   std::istringstream stream(file_data, std::ios::binary);
-  auto result_or = GetModelInfo(stream);
+  auto result_or = InspectModel(stream);
   ASSERT_OK(result_or);
   ModelInfo result = std::move(*result_or);
   ASSERT_TRUE(result.llm_capability.has_value());
@@ -497,7 +497,7 @@ TEST(ModelInfoFileTest,
 
 // Tests that unconfigured capability flags return std::nullopt for
 // older models.
-TEST(ModelInfoFileTest, GetModelInfo_NoExplicitCapabilities_ReturnsFalse) {
+TEST(ModelInfoFileTest, InspectModel_NoExplicitCapabilities_ReturnsFalse) {
   proto::LlmMetadata proto_meta;
   proto_meta.set_max_num_tokens(2048);  // Non-prime number
   // Do not set explicit supports_thinking/supports_function_calling
@@ -506,7 +506,7 @@ TEST(ModelInfoFileTest, GetModelInfo_NoExplicitCapabilities_ReturnsFalse) {
       "IT", "google/gemma-3-1b-it", {"tf_lite_audio_adapter"}, &proto_meta);
 
   std::istringstream stream(file_data, std::ios::binary);
-  auto result_or = GetModelInfo(stream);
+  auto result_or = InspectModel(stream);
   ASSERT_OK(result_or);
   ModelInfo result = std::move(*result_or);
   ASSERT_TRUE(result.llm_capability.has_value());
@@ -530,14 +530,14 @@ TEST(ModelInfoFileTest, GetModelInfo_NoExplicitCapabilities_ReturnsFalse) {
 
 // Tests that standard defaults and FlatBuffer scanner fallbacks are filled
 // correctly when no LlmMetadata proto is packed in the container file.
-TEST(ModelInfoFileTest, GetModelInfo_NoLlmProto_FillsDefaultsAndScanning) {
+TEST(ModelInfoFileTest, InspectModel_NoLlmProto_FillsDefaultsAndScanning) {
   std::string file_data =
       CreateTestLiteRTLM("IT", "google/gemma-3-1b-it",
                          {"tf_lite_vision_adapter", "tf_lite_mtp_drafter"},
                          /*llm_metadata_proto=*/nullptr);
 
   std::istringstream stream(file_data, std::ios::binary);
-  auto result_or = GetModelInfo(stream);
+  auto result_or = InspectModel(stream);
   ASSERT_OK(result_or);
   ModelInfo result = std::move(*result_or);
   ASSERT_TRUE(result.llm_capability.has_value());
@@ -560,7 +560,7 @@ TEST(ModelInfoFileTest, GetModelInfo_NoLlmProto_FillsDefaultsAndScanning) {
 }
 
 // Tests that explicit false capability values in the proto are parsed as false.
-TEST(ModelInfoFileTest, GetModelInfo_ExplicitFalseCapabilities_ReturnsFalse) {
+TEST(ModelInfoFileTest, InspectModel_ExplicitFalseCapabilities_ReturnsFalse) {
   proto::LlmMetadata proto_meta;
   proto_meta.set_supports_thinking(false);
   proto_meta.set_supports_function_calling(false);
@@ -569,7 +569,7 @@ TEST(ModelInfoFileTest, GetModelInfo_ExplicitFalseCapabilities_ReturnsFalse) {
       "IT", "google/gemma-3-1b-it", {}, &proto_meta);
 
   std::istringstream stream(file_data, std::ios::binary);
-  auto result_or = GetModelInfo(stream);
+  auto result_or = InspectModel(stream);
   ASSERT_OK(result_or);
   ModelInfo result = std::move(*result_or);
   ASSERT_TRUE(result.llm_capability.has_value());
@@ -580,13 +580,13 @@ TEST(ModelInfoFileTest, GetModelInfo_ExplicitFalseCapabilities_ReturnsFalse) {
 
 // Tests that the parser returns an invalid argument status if the input
 // stream is corrupted.
-TEST(ModelInfoFileTest, GetModelInfo_InvalidStream_ReturnsError) {
+TEST(ModelInfoFileTest, InspectModel_InvalidStream_ReturnsError) {
   std::istringstream stream("invalid_data");
-  EXPECT_THAT(GetModelInfo(stream),
+  EXPECT_THAT(InspectModel(stream),
               StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
-TEST(ModelInfoFileTest, GetModelInfo_ExtractsSupportedVisionTokenLengths) {
+TEST(ModelInfoFileTest, InspectModel_ExtractsSupportedVisionTokenLengths) {
   // Generate a mock TFLite model with 3 vision signatures of sizes 1024, 64,
   // 256.
   std::string tflite_model = CreateMinimalTFLiteModel({1024, 64, 256});
@@ -596,7 +596,7 @@ TEST(ModelInfoFileTest, GetModelInfo_ExtractsSupportedVisionTokenLengths) {
       /*llm_metadata_proto=*/nullptr, {tflite_model});
 
   std::istringstream stream(file_data, std::ios::binary);
-  auto result_or = GetModelInfo(stream);
+  auto result_or = InspectModel(stream);
   ASSERT_OK(result_or);
   ModelInfo result = std::move(*result_or);
   ASSERT_TRUE(result.llm_capability.has_value());
@@ -611,13 +611,13 @@ TEST(ModelInfoFileTest, GetModelInfo_ExtractsSupportedVisionTokenLengths) {
               ::testing::ElementsAre(64, 256, 1024));
 }
 
-TEST(ModelInfoFileTest, GetModelInfo_NoVision_ReturnsNullopt) {
+TEST(ModelInfoFileTest, InspectModel_NoVision_ReturnsNullopt) {
   // Text-only model (no vision section)
   std::string file_data = CreateTestLiteRTLM("IT", "google/gemma-3-1b-it",
                                              {"tf_lite_audio_adapter"});
 
   std::istringstream stream(file_data, std::ios::binary);
-  auto result_or = GetModelInfo(stream);
+  auto result_or = InspectModel(stream);
   ASSERT_OK(result_or);
   ModelInfo result = std::move(*result_or);
   ASSERT_TRUE(result.llm_capability.has_value());
@@ -628,7 +628,7 @@ TEST(ModelInfoFileTest, GetModelInfo_NoVision_ReturnsNullopt) {
   EXPECT_FALSE(llm.vision_signature_selection.has_value());
 }
 
-TEST(ModelInfoFileTest, GetModelInfo_VisionModelNoSignatures_ReturnsNullopt) {
+TEST(ModelInfoFileTest, InspectModel_VisionModelNoSignatures_ReturnsNullopt) {
   // Vision model without signature defs (e.g. legacy model or adapter).
   std::string tflite_model = CreateMinimalTFLiteModel({});
 
@@ -637,7 +637,7 @@ TEST(ModelInfoFileTest, GetModelInfo_VisionModelNoSignatures_ReturnsNullopt) {
       /*llm_metadata_proto=*/nullptr, {tflite_model});
 
   std::istringstream stream(file_data, std::ios::binary);
-  auto result_or = GetModelInfo(stream);
+  auto result_or = InspectModel(stream);
   ASSERT_OK(result_or);
   ModelInfo result = std::move(*result_or);
   ASSERT_TRUE(result.llm_capability.has_value());
@@ -647,7 +647,7 @@ TEST(ModelInfoFileTest, GetModelInfo_VisionModelNoSignatures_ReturnsNullopt) {
   EXPECT_FALSE(llm.vision_signature_selection.has_value());
 }
 
-TEST(ModelInfoFileTest, GetModelInfo_CorruptVisionModel_ReturnsError) {
+TEST(ModelInfoFileTest, InspectModel_CorruptVisionModel_ReturnsError) {
   // We specify we have a vision adapter, but we pass invalid dummy payload
   // (corrupt).
   std::string file_data = CreateTestLiteRTLM(
@@ -656,18 +656,18 @@ TEST(ModelInfoFileTest, GetModelInfo_CorruptVisionModel_ReturnsError) {
       {"corrupt_dummy_data_not_a_flatbuffer"});
 
   std::istringstream stream(file_data, std::ios::binary);
-  auto result_or = GetModelInfo(stream);
+  auto result_or = InspectModel(stream);
   // Should fail-fast and return error status (Strict check)
   EXPECT_THAT(result_or, StatusIs(absl::StatusCode::kInternal));
 }
 
-TEST(ModelInfoFileTest, GetModelInfo_NoBackendConstraints_DefaultsToCpuAndGpu) {
+TEST(ModelInfoFileTest, InspectModel_NoBackendConstraints_DefaultsToCpuAndGpu) {
   std::string file_data = CreateTestLiteRTLMWithConfigs(
       /*model_class=*/"", /*tf_hub_model_id=*/"",
       {{"tf_lite_prefill_decode", "", "main_payload"}});
 
   std::istringstream stream(file_data, std::ios::binary);
-  auto result_or = GetModelInfo(stream);
+  auto result_or = InspectModel(stream);
   ASSERT_OK(result_or);
   ModelInfo result = std::move(*result_or);
   ASSERT_TRUE(result.llm_capability.has_value());
@@ -679,13 +679,13 @@ TEST(ModelInfoFileTest, GetModelInfo_NoBackendConstraints_DefaultsToCpuAndGpu) {
   EXPECT_EQ(llm.text_supported_backends.default_backend, BackendType::kCpu);
 }
 
-TEST(ModelInfoFileTest, GetModelInfo_CpuBackendConstraint_CpuOnly) {
+TEST(ModelInfoFileTest, InspectModel_CpuBackendConstraint_CpuOnly) {
   std::string file_data = CreateTestLiteRTLMWithConfigs(
       /*model_class=*/"", /*tf_hub_model_id=*/"",
       {{"tf_lite_prefill_decode", "cpu", "main_payload"}});
 
   std::istringstream stream(file_data, std::ios::binary);
-  auto result_or = GetModelInfo(stream);
+  auto result_or = InspectModel(stream);
   ASSERT_OK(result_or);
   ModelInfo result = std::move(*result_or);
   ASSERT_TRUE(result.llm_capability.has_value());
@@ -697,13 +697,13 @@ TEST(ModelInfoFileTest, GetModelInfo_CpuBackendConstraint_CpuOnly) {
   EXPECT_EQ(llm.text_supported_backends.default_backend, BackendType::kCpu);
 }
 
-TEST(ModelInfoFileTest, GetModelInfo_GpuBackendConstraint_GpuOnly) {
+TEST(ModelInfoFileTest, InspectModel_GpuBackendConstraint_GpuOnly) {
   std::string file_data = CreateTestLiteRTLMWithConfigs(
       /*model_class=*/"", /*tf_hub_model_id=*/"",
       {{"tf_lite_prefill_decode", "gpu_artisan", "main_payload"}});
 
   std::istringstream stream(file_data, std::ios::binary);
-  auto result_or = GetModelInfo(stream);
+  auto result_or = InspectModel(stream);
   ASSERT_OK(result_or);
   ModelInfo result = std::move(*result_or);
   ASSERT_TRUE(result.llm_capability.has_value());
@@ -715,13 +715,13 @@ TEST(ModelInfoFileTest, GetModelInfo_GpuBackendConstraint_GpuOnly) {
   EXPECT_EQ(llm.text_supported_backends.default_backend, BackendType::kGpu);
 }
 
-TEST(ModelInfoFileTest, GetModelInfo_GpuAndNpuBackendConstraints_GpuAndNpu) {
+TEST(ModelInfoFileTest, InspectModel_GpuAndNpuBackendConstraints_GpuAndNpu) {
   std::string file_data = CreateTestLiteRTLMWithConfigs(
       /*model_class=*/"", /*tf_hub_model_id=*/"",
       {{"tf_lite_prefill_decode", "gpu, npu", "main_payload"}});
 
   std::istringstream stream(file_data, std::ios::binary);
-  auto result_or = GetModelInfo(stream);
+  auto result_or = InspectModel(stream);
   ASSERT_OK(result_or);
   ModelInfo result = std::move(*result_or);
   ASSERT_TRUE(result.llm_capability.has_value());
@@ -733,14 +733,14 @@ TEST(ModelInfoFileTest, GetModelInfo_GpuAndNpuBackendConstraints_GpuAndNpu) {
   EXPECT_EQ(llm.text_supported_backends.default_backend, BackendType::kGpu);
 }
 
-TEST(ModelInfoFileTest, GetModelInfo_AuxModelPresent_ForcesNpu) {
+TEST(ModelInfoFileTest, InspectModel_AuxModelPresent_ForcesNpu) {
   std::string file_data = CreateTestLiteRTLMWithConfigs(
       /*model_class=*/"", /*tf_hub_model_id=*/"",
       {{"tf_lite_prefill_decode", "cpu", "main_payload"},
        {"tf_lite_aux", "", "aux_payload"}});
 
   std::istringstream stream(file_data, std::ios::binary);
-  auto result_or = GetModelInfo(stream);
+  auto result_or = InspectModel(stream);
   ASSERT_OK(result_or);
   ModelInfo result = std::move(*result_or);
   ASSERT_TRUE(result.llm_capability.has_value());
@@ -752,7 +752,7 @@ TEST(ModelInfoFileTest, GetModelInfo_AuxModelPresent_ForcesNpu) {
   EXPECT_EQ(llm.text_supported_backends.default_backend, BackendType::kCpu);
 }
 
-TEST(ModelInfoFileTest, GetModelInfo_MinRuntimeVersionExposed) {
+TEST(ModelInfoFileTest, InspectModel_MinRuntimeVersionExposed) {
   proto::LlmMetadata llm_metadata;
   llm_metadata.set_min_runtime_version("0.12.3");
 
@@ -762,7 +762,7 @@ TEST(ModelInfoFileTest, GetModelInfo_MinRuntimeVersionExposed) {
       &llm_metadata);
 
   std::istringstream stream(file_data, std::ios::binary);
-  auto result_or = GetModelInfo(stream);
+  auto result_or = InspectModel(stream);
   ASSERT_OK(result_or);
   ModelInfo result = std::move(*result_or);
   ASSERT_TRUE(result.llm_capability.has_value());
@@ -771,13 +771,13 @@ TEST(ModelInfoFileTest, GetModelInfo_MinRuntimeVersionExposed) {
   EXPECT_EQ(llm.min_runtime_version, "0.12.3");
 }
 
-TEST(ModelInfoFileTest, GetModelInfo_ArtisanModelType_GpuOnly) {
+TEST(ModelInfoFileTest, InspectModel_ArtisanModelType_GpuOnly) {
   std::string file_data = CreateTestLiteRTLMWithConfigs(
       /*model_class=*/"", /*tf_hub_model_id=*/"",
       {{"tf_lite_artisan_text_decoder", "gpu_artisan", "main_payload"}});
 
   std::istringstream stream(file_data, std::ios::binary);
-  auto result_or = GetModelInfo(stream);
+  auto result_or = InspectModel(stream);
   ASSERT_OK(result_or);
   ModelInfo result = std::move(*result_or);
   ASSERT_TRUE(result.llm_capability.has_value());
@@ -788,14 +788,14 @@ TEST(ModelInfoFileTest, GetModelInfo_ArtisanModelType_GpuOnly) {
   EXPECT_FALSE(llm.text_supported_backends.npu);
 }
 
-TEST(ModelInfoFileTest, GetModelInfo_ArtisanModelType_NpuOnly) {
+TEST(ModelInfoFileTest, InspectModel_ArtisanModelType_NpuOnly) {
   std::string file_data = CreateTestLiteRTLMWithConfigs(
       /*model_class=*/"", /*tf_hub_model_id=*/"",
       {{"tf_lite_artisan_text_decoder", "google_tensor_artisan",
         "main_payload"}});
 
   std::istringstream stream(file_data, std::ios::binary);
-  auto result_or = GetModelInfo(stream);
+  auto result_or = InspectModel(stream);
   ASSERT_OK(result_or);
   ModelInfo result = std::move(*result_or);
   ASSERT_TRUE(result.llm_capability.has_value());
@@ -808,14 +808,14 @@ TEST(ModelInfoFileTest, GetModelInfo_ArtisanModelType_NpuOnly) {
   EXPECT_EQ(llm.text_supported_backends.default_backend, BackendType::kNpu);
 }
 
-TEST(ModelInfoFileTest, GetModelInfo_BackendConstraintPreference) {
+TEST(ModelInfoFileTest, InspectModel_BackendConstraintPreference) {
   // "gpu,cpu" should default to GPU
   {
     std::string file_data = CreateTestLiteRTLMWithConfigs(
         /*model_class=*/"", /*tf_hub_model_id=*/"",
         {{"tf_lite_prefill_decode", "gpu,cpu", "main_payload"}});
     std::istringstream stream(file_data, std::ios::binary);
-    auto result_or = GetModelInfo(stream);
+    auto result_or = InspectModel(stream);
     ASSERT_OK(result_or);
     const auto& llm = *result_or->llm_capability;
     EXPECT_TRUE(llm.text_supported_backends.cpu);
@@ -829,7 +829,7 @@ TEST(ModelInfoFileTest, GetModelInfo_BackendConstraintPreference) {
         /*model_class=*/"", /*tf_hub_model_id=*/"",
         {{"tf_lite_prefill_decode", "cpu,gpu", "main_payload"}});
     std::istringstream stream(file_data, std::ios::binary);
-    auto result_or = GetModelInfo(stream);
+    auto result_or = InspectModel(stream);
     ASSERT_OK(result_or);
     const auto& llm = *result_or->llm_capability;
     EXPECT_TRUE(llm.text_supported_backends.cpu);
@@ -1002,7 +1002,7 @@ TEST(ModelInfoFileTest, DetectsNpuBrandFromAuxModel) {
             {.model_type = "tf_lite_aux", .payload = aux_payload}
         });
     std::stringstream stream(litertlm_data);
-    auto cap_or = GetModelInfo(stream);
+    auto cap_or = InspectModel(stream);
     ASSERT_OK(cap_or.status());
     EXPECT_TRUE(cap_or->llm_capability->text_supported_backends.npu);
     EXPECT_EQ(cap_or->llm_capability->text_supported_backends.npu_brand,
@@ -1020,7 +1020,7 @@ TEST(ModelInfoFileTest, DetectsNpuBrandFromAuxModel) {
             {.model_type = "tf_lite_aux", .payload = aux_payload}
         });
     std::stringstream stream(litertlm_data);
-    auto cap_or = GetModelInfo(stream);
+    auto cap_or = InspectModel(stream);
     ASSERT_OK(cap_or.status());
     EXPECT_TRUE(cap_or->llm_capability->text_supported_backends.npu);
     EXPECT_EQ(cap_or->llm_capability->text_supported_backends.npu_brand,
@@ -1038,7 +1038,7 @@ TEST(ModelInfoFileTest, DetectsNpuBrandFromAuxModel) {
             {.model_type = "tf_lite_aux", .payload = aux_payload}
         });
     std::stringstream stream(litertlm_data);
-    auto cap_or = GetModelInfo(stream);
+    auto cap_or = InspectModel(stream);
     ASSERT_OK(cap_or.status());
     EXPECT_TRUE(cap_or->llm_capability->text_supported_backends.npu);
     EXPECT_EQ(cap_or->llm_capability->text_supported_backends.npu_brand,
@@ -1054,7 +1054,7 @@ TEST(ModelInfoFileTest, DetectsNpuBrandFromAuxModel) {
           .backend_constraint = "cpu,gpu"},
          {.model_type = "tf_lite_aux", .payload = aux_payload}});
     std::stringstream stream(litertlm_data);
-    auto cap_or = GetModelInfo(stream);
+    auto cap_or = InspectModel(stream);
     ASSERT_OK(cap_or.status());
     EXPECT_TRUE(cap_or->llm_capability->text_supported_backends.npu);
     EXPECT_EQ(cap_or->llm_capability->text_supported_backends.npu_brand,
@@ -1070,7 +1070,7 @@ TEST(ModelInfoFileTest, DetectsNpuBrandFromAuxModel) {
           .backend_constraint = "cpu,gpu"},
          {.model_type = "tf_lite_aux", .payload = aux_payload}});
     std::stringstream stream(litertlm_data);
-    auto cap_or = GetModelInfo(stream);
+    auto cap_or = InspectModel(stream);
     ASSERT_OK(cap_or.status());
     EXPECT_TRUE(cap_or->llm_capability->text_supported_backends.npu);
     EXPECT_EQ(cap_or->llm_capability->text_supported_backends.npu_brand,
@@ -1078,14 +1078,14 @@ TEST(ModelInfoFileTest, DetectsNpuBrandFromAuxModel) {
   }
 }
 
-TEST(ModelInfoFileTest, GetModelInfo_ExtractsSocNameFromSectionItems) {
+TEST(ModelInfoFileTest, InspectModel_ExtractsSocNameFromSectionItems) {
   std::string litertlm_data =
       CreateTestLiteRTLMWithConfigs("gemma", "gemma4",
                                     {{.model_type = "tf_lite_prefill_decode",
                                       .backend_constraint = "npu",
                                       .soc_name = "SM8850"}});
   std::stringstream stream(litertlm_data);
-  auto cap_or = GetModelInfo(stream);
+  auto cap_or = InspectModel(stream);
   ASSERT_OK(cap_or.status());
   const auto& llm = *cap_or->llm_capability;
   EXPECT_TRUE(llm.text_supported_backends.npu);
@@ -1093,21 +1093,21 @@ TEST(ModelInfoFileTest, GetModelInfo_ExtractsSocNameFromSectionItems) {
   EXPECT_EQ(llm.text_supported_backends.default_backend, BackendType::kNpu);
 }
 
-TEST(ModelInfoFileTest, GetModelInfo_ExtractsSocNameFromSystemMetadata) {
+TEST(ModelInfoFileTest, InspectModel_ExtractsSocNameFromSystemMetadata) {
   std::string litertlm_data = CreateTestLiteRTLMWithConfigs(
       "gemma", "gemma3",
       {{.model_type = "tf_lite_prefill_decode", .backend_constraint = "npu"}},
       /*llm_metadata_proto=*/nullptr,
       /*extra_system_entries=*/{{"target_soc", "SM8750"}});
   std::stringstream stream(litertlm_data);
-  auto cap_or = GetModelInfo(stream);
+  auto cap_or = InspectModel(stream);
   ASSERT_OK(cap_or.status());
   const auto& llm = *cap_or->llm_capability;
   EXPECT_TRUE(llm.text_supported_backends.npu);
   EXPECT_EQ(llm.text_supported_backends.soc_name, "SM8750");
 }
 
-TEST(ModelInfoFileTest, GetModelInfo_ExtractsNpuBrandAndSocFromLiteRtStamp) {
+TEST(ModelInfoFileTest, InspectModel_ExtractsNpuBrandAndSocFromLiteRtStamp) {
   // Test Qualcomm stamp
   {
     std::string aux_payload = CreateMockNpuTfliteModelWithStamp(
@@ -1117,7 +1117,7 @@ TEST(ModelInfoFileTest, GetModelInfo_ExtractsNpuBrandAndSocFromLiteRtStamp) {
         {{.model_type = "tf_lite_prefill_decode", .backend_constraint = "npu"},
          {.model_type = "tf_lite_aux", .payload = aux_payload}});
     std::stringstream stream(litertlm_data);
-    auto cap_or = GetModelInfo(stream);
+    auto cap_or = InspectModel(stream);
     ASSERT_OK(cap_or.status());
     const auto& llm = *cap_or->llm_capability;
     EXPECT_TRUE(llm.text_supported_backends.npu);
@@ -1135,7 +1135,7 @@ TEST(ModelInfoFileTest, GetModelInfo_ExtractsNpuBrandAndSocFromLiteRtStamp) {
         {{.model_type = "tf_lite_prefill_decode", .backend_constraint = "npu"},
          {.model_type = "tf_lite_aux", .payload = aux_payload}});
     std::stringstream stream(litertlm_data);
-    auto cap_or = GetModelInfo(stream);
+    auto cap_or = InspectModel(stream);
     ASSERT_OK(cap_or.status());
     const auto& llm = *cap_or->llm_capability;
     EXPECT_TRUE(llm.text_supported_backends.npu);
@@ -1153,7 +1153,7 @@ TEST(ModelInfoFileTest, GetModelInfo_ExtractsNpuBrandAndSocFromLiteRtStamp) {
         {{.model_type = "tf_lite_prefill_decode", .backend_constraint = "npu"},
          {.model_type = "tf_lite_aux", .payload = aux_payload}});
     std::stringstream stream(litertlm_data);
-    auto cap_or = GetModelInfo(stream);
+    auto cap_or = InspectModel(stream);
     ASSERT_OK(cap_or.status());
     const auto& llm = *cap_or->llm_capability;
     EXPECT_TRUE(llm.text_supported_backends.npu);
@@ -1163,7 +1163,7 @@ TEST(ModelInfoFileTest, GetModelInfo_ExtractsNpuBrandAndSocFromLiteRtStamp) {
   }
 }
 
-TEST(ModelInfoFileTest, GetModelInfo_ExtractsSocNameFromDispatchOpFlexbuffers) {
+TEST(ModelInfoFileTest, InspectModel_ExtractsSocNameFromDispatchOpFlexbuffers) {
   std::string aux_payload = CreateMockNpuTfliteModelWithSocFlexbuffer(
       "Partition_0", "Dimensity 9400");
   std::string litertlm_data = CreateTestLiteRTLMWithConfigs(
@@ -1172,7 +1172,7 @@ TEST(ModelInfoFileTest, GetModelInfo_ExtractsSocNameFromDispatchOpFlexbuffers) {
         .backend_constraint = "cpu,gpu"},
        {.model_type = "tf_lite_aux", .payload = aux_payload}});
   std::stringstream stream(litertlm_data);
-  auto cap_or = GetModelInfo(stream);
+  auto cap_or = InspectModel(stream);
   ASSERT_OK(cap_or.status());
   const auto& llm = *cap_or->llm_capability;
   EXPECT_TRUE(llm.text_supported_backends.npu);
@@ -1180,7 +1180,7 @@ TEST(ModelInfoFileTest, GetModelInfo_ExtractsSocNameFromDispatchOpFlexbuffers) {
   EXPECT_EQ(llm.text_supported_backends.soc_name, "Dimensity 9400");
 }
 
-TEST(ModelInfoFileTest, GetModelInfo_ModalitySpecificSupportedBackends) {
+TEST(ModelInfoFileTest, InspectModel_ModalitySpecificSupportedBackends) {
   std::string aux_payload = CreateMockNpuTfliteModel("qnn_partition_0");
   std::string litertlm_data = CreateTestLiteRTLMWithConfigs(
       /*model_class=*/"", /*tf_hub_model_id=*/"",
@@ -1191,7 +1191,7 @@ TEST(ModelInfoFileTest, GetModelInfo_ModalitySpecificSupportedBackends) {
           {.model_type = "tf_lite_aux", .payload = aux_payload}
       });
   std::stringstream stream(litertlm_data);
-  auto cap_or = GetModelInfo(stream);
+  auto cap_or = InspectModel(stream);
   ASSERT_OK(cap_or.status());
   const auto& llm = *cap_or->llm_capability;
 
@@ -1268,7 +1268,7 @@ TEST(ModelInfoFileTest, StreamOperators_BackendTypeAndSupportedBackends) {
   }
 }
 
-TEST(ModelInfoFileTest, GetModelInfo_OddCompositeTokens_NotDynamicContext) {
+TEST(ModelInfoFileTest, InspectModel_OddCompositeTokens_NotDynamicContext) {
   proto::LlmMetadata proto_meta;
   // 2025 is an odd composite number (45 * 45). Tests prime search divisor loop.
   proto_meta.set_max_num_tokens(2025);
@@ -1277,14 +1277,14 @@ TEST(ModelInfoFileTest, GetModelInfo_OddCompositeTokens_NotDynamicContext) {
       "IT", "google/gemma-3-1b-it", {"tf_lite_audio_adapter"}, &proto_meta);
 
   std::istringstream stream(file_data, std::ios::binary);
-  auto result_or = GetModelInfo(stream);
+  auto result_or = InspectModel(stream);
   ASSERT_OK(result_or);
   ASSERT_TRUE(result_or->llm_capability.has_value());
   EXPECT_EQ(result_or->llm_capability->max_context_tokens, 2025);
   EXPECT_FALSE(result_or->llm_capability->is_dynamic_context);
 }
 
-TEST(ModelInfoFileTest, GetModelInfo_DetectsNpuFromRawBufferFallbackScan) {
+TEST(ModelInfoFileTest, InspectModel_DetectsNpuFromRawBufferFallbackScan) {
   // Create a raw payload that is not a valid TFLite flatbuffer, but contains
   // the LiteRtStamp magic window and length prefix.
   std::string raw_payload(5000, 'x');
@@ -1308,7 +1308,7 @@ TEST(ModelInfoFileTest, GetModelInfo_DetectsNpuFromRawBufferFallbackScan) {
       {{.model_type = "tf_lite_prefill_decode", .backend_constraint = "npu"},
        {.model_type = "tf_lite_aux", .payload = raw_payload}});
   std::stringstream stream(litertlm_data);
-  auto cap_or = GetModelInfo(stream);
+  auto cap_or = InspectModel(stream);
   ASSERT_OK(cap_or.status());
   const auto& llm = *cap_or->llm_capability;
   EXPECT_TRUE(llm.text_supported_backends.npu);
@@ -1317,14 +1317,14 @@ TEST(ModelInfoFileTest, GetModelInfo_DetectsNpuFromRawBufferFallbackScan) {
 }
 
 TEST(ModelInfoFileTest,
-     GetModelInfo_UnrecognizedModelType_TreatedAsMainTfliteFallback) {
+     InspectModel_UnrecognizedModelType_TreatedAsMainTfliteFallback) {
   std::string litertlm_data = CreateTestLiteRTLMWithConfigs(
       /*model_class=*/"", /*tf_hub_model_id=*/"",
       {{.model_type = "custom_graph",
         .backend_constraint = "cpu",
         .payload = "payload"}});
   std::stringstream stream(litertlm_data);
-  auto cap_or = GetModelInfo(stream);
+  auto cap_or = InspectModel(stream);
   ASSERT_OK(cap_or.status());
   EXPECT_TRUE(cap_or->llm_capability.has_value());
 }
