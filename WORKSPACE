@@ -217,6 +217,24 @@ maven_install(
     ],
 )
 
+# cpuinfo override to fix MSVC build error C2143 in src/arm/cache.c on Windows ARM64.
+# Defined before tf_workspace2() so this definition takes precedence.
+http_archive(
+    name = "cpuinfo",
+    patch_cmds = [
+        "sed -i -e 's|\\[restrict static 1\\]|[RESTRICT_STATIC 1]|g' src/arm/cache.c",
+    ],
+    patch_cmds_win = [
+        "(Get-Content -Raw src/arm/cache.c).Replace('[restrict static 1]', '[RESTRICT_STATIC 1]') | Set-Content src/arm/cache.c",
+    ],
+    sha256 = "fe2aa43254838a2eb5658d1742696473a1d834a57f2a0b38d533346bcd212482",
+    strip_prefix = "cpuinfo-8ce83db858065145192c97af90cb668ad72a12e9",
+    urls = [
+        "https://mirror.bazel.build/github.com/pytorch/cpuinfo/archive/8ce83db858065145192c97af90cb668ad72a12e9.zip",
+        "https://github.com/pytorch/cpuinfo/archive/8ce83db858065145192c97af90cb668ad72a12e9.zip",
+    ],
+)
+
 load("@org_tensorflow//tensorflow:workspace2.bzl", "tf_workspace2")
 
 tf_workspace2()
@@ -380,6 +398,11 @@ crates_repository(
     name = "cxxbridge_cmd_deps",
     cargo_lockfile = "//cxxbridge_cmd:Cargo.lock",
     manifests = ["@cxxbridge_cmd//:Cargo.toml"],
+    # Without an explicit list these crates resolve only for the default
+    # platform set, and every target is then generated as
+    # target_compatible_with = ["@platforms//:incompatible"] on hosts outside
+    # that set -- which is what a Windows ARM64 host hits.
+    supported_platform_triples = SUPPORTED_PLATFORM_TRIPLES,
 )
 
 load("@cxxbridge_cmd_deps//:defs.bzl", cxxbridge_cmd_deps = "crate_repositories")
