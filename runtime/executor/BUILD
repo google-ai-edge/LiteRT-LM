@@ -176,6 +176,9 @@ cc_library(
 # Flags to configure the static GPU accelerator backend for Apple targets (iOS and macOS).
 # By default, iOS uses Metal ("metal") and macOS uses WebGPU ("webgpu").
 # Pass --//runtime/executor:gpu_accelerator=webgpu or =metal to override.
+# This flag selects both the inference accelerator (below) and the GPU sampler linked by
+# //runtime/components:default_static_gpu_samplers; the two must always
+# agree on the backend.
 string_flag(
     name = "gpu_accelerator",
     build_setting_default = "default",

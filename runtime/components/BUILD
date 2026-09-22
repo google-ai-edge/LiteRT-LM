@@ -237,6 +237,13 @@ cc_library(
 
 # This is the target to link all the static GPU samplers. If you plan to enable GPU sampling, this
 # target should be linked.
+#
+# The sampler backend has to match the inference backend linked by
+# //runtime/executor:default_static_gpu_accelerator: the sampler is
+# created from the device published by the accelerator, so linking a sampler for a different
+# backend makes GPU sampler creation fail and silently degrades to CPU sampling. That is why the
+# Apple conditions below follow the same
+# //runtime/executor:gpu_accelerator flag.
 cc_library(
     name = "default_static_gpu_samplers",
     deps = select({

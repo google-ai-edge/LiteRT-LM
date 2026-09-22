@@ -771,9 +771,12 @@ absl::StatusOr<std::unique_ptr<Sampler>> CreateSampler(
       // For a failure due to GPU sampler unavailable, fall back to CPU.
       ABSL_LOG(WARNING)
           << "GPU sampler unavailable. Falling back to CPU sampling. To use "
-             "GPU sampling, please make sure libLiteRtTopKWebGpuSampler.so or "
-             "libLiteRtTopKOpenClSampler.so is available at LD_LIBRARY_PATH "
-             "on device. You can find the shared library under prebuilt/";
+             "GPU sampling, please make sure the sampler library matching the "
+             "inference backend (libLiteRtTopKWebGpuSampler.so, "
+             "libLiteRtTopKOpenClSampler.so, or "
+             "libLiteRtTopKMetalSampler.dylib on Apple platforms) is linked in "
+             "or available at LD_LIBRARY_PATH on device. You can find the "
+             "shared library under prebuilt/";
       ABSL_FALLTHROUGH_INTENDED;
     }
     case Backend::CPU:
