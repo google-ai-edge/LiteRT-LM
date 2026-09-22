@@ -462,7 +462,7 @@ cc_library(
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/types:span",
         "@minizip//:zlib_minizip",
-        "@zlib//:zlib",
+        "@zlib",
     ],
 )
 
