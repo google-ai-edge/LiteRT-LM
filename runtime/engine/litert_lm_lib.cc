@@ -502,9 +502,12 @@ void LogMemoryUsage(const LiteRtLmSettings& settings, float peak_mem_mb,
   }
 }
 
-// Returns the median of `values`, which must not be empty. For an even number
-// of values, the average of the two middle values is returned.
+// Returns the median of `values`, or zero if there is nothing to aggregate. For
+// an even number of values, the average of the two middle values is returned.
 double Median(std::vector<double> values) {
+  if (values.empty()) {
+    return 0.0;
+  }
   std::sort(values.begin(), values.end());
   const size_t middle = values.size() / 2;
   if (values.size() % 2 == 1) {
@@ -515,6 +518,9 @@ double Median(std::vector<double> values) {
 
 // Same as above, for durations.
 absl::Duration MedianDuration(std::vector<absl::Duration> values) {
+  if (values.empty()) {
+    return absl::ZeroDuration();
+  }
   std::sort(values.begin(), values.end());
   const size_t middle = values.size() / 2;
   if (values.size() % 2 == 1) {
