@@ -26,7 +26,7 @@
 #include <variant>
 #include <vector>
 
-#include "absl/log/absl_check.h"  // from @com_google_absl
+#include "absl/hash/hash.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/memory/memory.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
@@ -67,7 +67,71 @@ absl::StatusOr<std::unique_ptr<MemoryMappedFile>> CreateMemoryMapFromScopedFile(
                                               /*key=*/"");
 }
 
+bool IsValidTfLiteModelTypeWireString(absl::string_view model_type_str) {
+  const std::string upper = absl::AsciiStrToUpper(model_type_str);
+  proto::LlmMetadata::TfLiteModelType llm_type;
+  if (proto::LlmMetadata::TfLiteModelType_Parse(upper, &llm_type) &&
+      llm_type != proto::LlmMetadata::TF_LITE_MODEL_TYPE_UNSPECIFIED) {
+    return true;
+  }
+  proto::EmbeddingMetadata::TfLiteModelType emb_type;
+  if (proto::EmbeddingMetadata::TfLiteModelType_Parse(upper, &emb_type) &&
+      emb_type != proto::EmbeddingMetadata::TF_LITE_MODEL_TYPE_UNSPECIFIED) {
+    return true;
+  }
+  proto::TtsMetadata::TfLiteModelType tts_type;
+  if (proto::TtsMetadata::TfLiteModelType_Parse(upper, &tts_type) &&
+      tts_type != proto::TtsMetadata::TF_LITE_MODEL_TYPE_UNSPECIFIED) {
+    return true;
+  }
+  proto::AsrMetadata::TfLiteModelType asr_type;
+  if (proto::AsrMetadata::TfLiteModelType_Parse(upper, &asr_type) &&
+      asr_type != proto::AsrMetadata::TF_LITE_MODEL_TYPE_UNSPECIFIED) {
+    return true;
+  }
+  return StringToModelType(model_type_str).ok();
+}
+
 }  // namespace
+
+BufferKey::BufferKey(schema::AnySectionDataType type)
+    : data_type(type), model_type(std::nullopt) {}
+
+BufferKey::BufferKey(schema::AnySectionDataType type,
+                     absl::string_view model_type_str)
+    : data_type(type),
+      model_type(type == schema::AnySectionDataType_GenericBinaryData
+                     ? (model_type_str.empty()
+                            ? std::nullopt
+                            : std::optional<std::string>(model_type_str))
+                     : std::optional<std::string>(
+                           absl::AsciiStrToLower(model_type_str))) {
+  if (type != schema::AnySectionDataType_TFLiteModel &&
+      type != schema::AnySectionDataType_TFLiteWeights &&
+      type != schema::AnySectionDataType_SP_Tokenizer &&
+      type != schema::AnySectionDataType_HF_Tokenizer_Zlib &&
+      type != schema::AnySectionDataType_GenericBinaryData) {
+    ABSL_LOG(ERROR) << "model_type should only be provided for TFLiteModel, "
+                       "TFLiteWeights, SP_Tokenizer, HF_Tokenizer_Zlib, or "
+                       "GenericBinaryData";
+  }
+}
+
+BufferKey::BufferKey(schema::AnySectionDataType type, ModelType model_type_enum)
+    : BufferKey(type, TfLiteModelTypeToWireString(model_type_enum)) {}
+
+bool BufferKey::operator==(const BufferKey& other) const {
+  return data_type == other.data_type && model_type == other.model_type;
+}
+
+size_t BufferKeyHash::operator()(const BufferKey& k) const {
+  size_t h1 = std::hash<schema::AnySectionDataType>{}(k.data_type);
+  size_t h2 = 0;
+  if (k.model_type.has_value()) {
+    h2 = absl::HashOf(*k.model_type);
+  }
+  return h1 ^ (h2 << 1);
+}
 
 absl::StatusOr<std::pair<BufferKey, TfLiteSectionHint>>
 ExtractBufferKeyAndTfLiteSectionHint(const schema::SectionObject* section) {
@@ -106,17 +170,33 @@ ExtractBufferKeyAndTfLiteSectionHint(const schema::SectionObject* section) {
     }
     if (found_model_type) {
       ABSL_VLOG(1) << "model_type: " << model_type;
-      ABSL_ASSIGN_OR_RETURN(ModelType model_type_enum,
-                            StringToModelType(model_type));
-      buffer_key = BufferKey(section->data_type(), model_type_enum);
+      if (!IsValidTfLiteModelTypeWireString(model_type)) {
+        return absl::InvalidArgumentError(
+            absl::StrFormat("Unknown model type: %s", model_type));
+      }
+      buffer_key = BufferKey(section->data_type(), model_type);
     } else {
       if (section->data_type() == schema::AnySectionDataType_TFLiteModel ||
           section->data_type() == schema::AnySectionDataType_TFLiteWeights) {
-        ABSL_LOG(WARNING) << "model_type not found, use kTfLitePrefillDecode";
+        ABSL_LOG(WARNING)
+            << "model_type not found, use tf_lite_prefill_decode";
         // For backward compatibility, we will use the default model type if
         // model_type is not found.
         buffer_key =
-            BufferKey(section->data_type(), ModelType::kTfLitePrefillDecode);
+            BufferKey(section->data_type(), "tf_lite_prefill_decode");
+      }
+    }
+  } else if (section->data_type() ==
+                 schema::AnySectionDataType_GenericBinaryData &&
+             items != nullptr) {
+    for (size_t j = 0; j < items->size(); ++j) {
+      auto item = items->Get(j);
+      if (item->key() && item->key()->str() == "name" && item->value() &&
+          item->value_type() == schema::VData_StringValue &&
+          item->value_as_StringValue()->value() != nullptr) {
+        buffer_key = BufferKey(section->data_type(),
+                               item->value_as_StringValue()->value()->str());
+        break;
       }
     }
   }
@@ -334,12 +414,34 @@ absl::StatusOr<std::pair<size_t, size_t>> LitertLmLoader::GetSectionLocation(
   return section_location_it->second;
 }
 
+std::optional<litert::BufferRef<uint8_t>>
+LitertLmLoader::GetSentencePieceTokenizer(ModelType model_type) {
+  return GetSentencePieceTokenizer(TfLiteModelTypeToWireString(model_type));
+}
+
+std::optional<litert::BufferRef<uint8_t>>
+LitertLmLoader::GetSentencePieceTokenizer(absl::string_view model_type_str) {
+  std::string key = absl::AsciiStrToLower(model_type_str);
+  auto buf = GetSectionBuffer(
+      BufferKey(schema::AnySectionDataType_SP_Tokenizer, key));
+  if (!buf.has_value() && key == "tf_lite_prefill_decode") {
+    buf = GetSectionBuffer(BufferKey(schema::AnySectionDataType_SP_Tokenizer));
+  }
+  return buf;
+}
+
 std::optional<litert::OwningBufferRef<uint8_t>>
 LitertLmLoader::GetHuggingFaceTokenizer(ModelType model_type) {
+  return GetHuggingFaceTokenizer(TfLiteModelTypeToWireString(model_type));
+}
+
+std::optional<litert::OwningBufferRef<uint8_t>>
+LitertLmLoader::GetHuggingFaceTokenizer(absl::string_view model_type_str) {
+  std::string key = absl::AsciiStrToLower(model_type_str);
   auto optional_section_buffer = GetSectionBuffer(
-      BufferKey(schema::AnySectionDataType_HF_Tokenizer_Zlib, model_type));
+      BufferKey(schema::AnySectionDataType_HF_Tokenizer_Zlib, key));
   if (!optional_section_buffer.has_value() &&
-      model_type == ModelType::kTfLitePrefillDecode) {
+      key == "tf_lite_prefill_decode") {
     optional_section_buffer = GetSectionBuffer(
         BufferKey(schema::AnySectionDataType_HF_Tokenizer_Zlib));
   }
@@ -360,6 +462,107 @@ LitertLmLoader::GetHuggingFaceTokenizer(ModelType model_type) {
   return OwningBufferRef<uint8_t>{
       static_cast<const uint8_t*>(hf_tokenizer_data.data()),
       hf_tokenizer_data.size()};
+}
+
+litert::BufferRef<uint8_t> LitertLmLoader::GetTFLiteModel(
+    ModelType model_type) {
+  return GetTFLiteModel(TfLiteModelTypeToWireString(model_type));
+}
+
+litert::BufferRef<uint8_t> LitertLmLoader::GetTFLiteModel(
+    absl::string_view model_type_str) {
+  auto optional_section_buffer = GetSectionBuffer(
+      BufferKey(schema::AnySectionDataType_TFLiteModel, model_type_str));
+  if (optional_section_buffer.has_value()) {
+    return optional_section_buffer.value();
+  }
+  ABSL_LOG(WARNING) << "TFLite model for type: " << model_type_str
+                    << " not found. Skipping.";
+  return litert::BufferRef<uint8_t>();
+}
+
+litert::BufferRef<uint8_t> LitertLmLoader::GetTFLiteWeights(
+    ModelType model_type) {
+  return GetTFLiteWeights(TfLiteModelTypeToWireString(model_type));
+}
+
+litert::BufferRef<uint8_t> LitertLmLoader::GetTFLiteWeights(
+    absl::string_view model_type_str) {
+  auto optional_section_buffer = GetSectionBuffer(
+      BufferKey(schema::AnySectionDataType_TFLiteWeights, model_type_str));
+  if (optional_section_buffer.has_value()) {
+    return optional_section_buffer.value();
+  }
+  ABSL_LOG(WARNING) << "TFLite weights for type: " << model_type_str
+                    << " not found. Skipping.";
+  return litert::BufferRef<uint8_t>();
+}
+
+std::optional<std::string> LitertLmLoader::GetTFLiteModelBackendConstraint(
+    ModelType model_type) {
+  return GetTFLiteModelBackendConstraint(
+      TfLiteModelTypeToWireString(model_type));
+}
+
+std::optional<std::string> LitertLmLoader::GetTFLiteModelBackendConstraint(
+    absl::string_view model_type_str) {
+  BufferKey key(schema::AnySectionDataType_TFLiteModel, model_type_str);
+  auto it = section_hints_map_.find(key);
+  if (it != section_hints_map_.end()) {
+    return it->second.backend_constraint;
+  }
+  ABSL_LOG(WARNING) << "TFLite model type: " << model_type_str
+                    << " not found for backend constraints. Skipping.";
+  return std::nullopt;
+}
+
+std::optional<std::string> LitertLmLoader::GetTFLiteModelPreferActivationType(
+    ModelType model_type) {
+  return GetTFLiteModelPreferActivationType(
+      TfLiteModelTypeToWireString(model_type));
+}
+
+std::optional<std::string> LitertLmLoader::GetTFLiteModelPreferActivationType(
+    absl::string_view model_type_str) {
+  BufferKey key(schema::AnySectionDataType_TFLiteModel, model_type_str);
+  auto it = section_hints_map_.find(key);
+  if (it != section_hints_map_.end()) {
+    return it->second.prefer_activation_type;
+  }
+  ABSL_LOG(WARNING)
+      << "TFLite model type: " << model_type_str
+      << " not found for prefer activation type. Use system's "
+         "default backend activation type. System's default activation "
+         "type for Text decoder is fp16. Vision encoder and audio encoder "
+         "default is fp32.";
+  return std::nullopt;
+}
+
+std::optional<litert::BufferRef<uint8_t>> LitertLmLoader::GetTtsMetadata() {
+  return GetSectionBuffer(
+      BufferKey(schema::AnySectionDataType_TtsMetadataProto));
+}
+
+std::optional<litert::BufferRef<uint8_t>> LitertLmLoader::GetAsrMetadata() {
+  return GetSectionBuffer(
+      BufferKey(schema::AnySectionDataType_AsrMetadataProto));
+}
+
+std::optional<litert::BufferRef<uint8_t>> LitertLmLoader::GetGenericBinaryData(
+    absl::string_view name) {
+  return GetSectionBuffer(
+      BufferKey(schema::AnySectionDataType_GenericBinaryData, name));
+}
+
+std::vector<std::string> LitertLmLoader::GetGenericBinaryDataNames() const {
+  std::vector<std::string> result;
+  for (const auto& [key, location] : section_locations_) {
+    if (key.data_type == schema::AnySectionDataType_GenericBinaryData &&
+        key.model_type.has_value()) {
+      result.push_back(*key.model_type);
+    }
+  }
+  return result;
 }
 
 }  // namespace litert::lm

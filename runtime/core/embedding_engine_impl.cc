@@ -631,22 +631,21 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
         break;
       }
       case schema::AnySectionDataType_TFLiteModel: {
-        std::optional<ModelType> model_type = section->buffer_key.model_type;
-        if (!model_type.has_value()) {
+        if (!section->buffer_key.model_type.has_value()) {
           return absl::InvalidArgumentError(
               "Model type is not set for TFLiteModel section.");
         }
-        if (*model_type == ModelType::kUnknown) {
-          return absl::UnimplementedError("kUnknown is not implemented");
-        }
+        ABSL_ASSIGN_OR_RETURN(
+            const ModelType model_type,
+            StringToModelType(*section->buffer_key.model_type));
         ABSL_LOG(INFO) << "Caching model from stream for type: "
-                       << static_cast<int>(*model_type);
+                       << static_cast<int>(model_type);
         std::vector<char> buffer(section_metadata->end_offset() -
                                  section_metadata->begin_offset());
         ABSL_RETURN_IF_ERROR(section->data_stream->ReadAndDiscard(
             buffer.data(), 0, buffer.size()));
-        streaming_resources->SetModelBuffer(*model_type, std::move(buffer));
-        if (*model_type == ModelType::kTfLiteTextEncoder &&
+        streaming_resources->SetModelBuffer(model_type, std::move(buffer));
+        if (model_type == ModelType::kTfLiteTextEncoder &&
             owned_env == nullptr) {
           ABSL_ASSIGN_OR_RETURN(
               auto temp_owned_env,
@@ -657,18 +656,20 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
         break;
       }
       case schema::AnySectionDataType_TFLiteWeights: {
-        std::optional<ModelType> model_type = section->buffer_key.model_type;
-        if (!model_type.has_value()) {
+        if (!section->buffer_key.model_type.has_value()) {
           return absl::InvalidArgumentError(
               "Model type is not set for TFLiteWeights section.");
         }
-        if (*model_type == ModelType::kTfLitePerLayerEmbedder) {
+        ABSL_ASSIGN_OR_RETURN(
+            const ModelType model_type,
+            StringToModelType(*section->buffer_key.model_type));
+        if (model_type == ModelType::kTfLitePerLayerEmbedder) {
           size_t size =
               section_metadata->end_offset() - section_metadata->begin_offset();
           ABSL_RETURN_IF_ERROR(
               streaming_resources->SetPerLayerWeightsFromStream(
                   *section->data_stream, size));
-        } else if (*model_type == ModelType::kTfLiteEmbedder) {
+        } else if (model_type == ModelType::kTfLiteEmbedder) {
           size_t size =
               section_metadata->end_offset() - section_metadata->begin_offset();
           ABSL_LOG(INFO) << "Reading embedder weights (" << size
@@ -692,8 +693,8 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
                 per_layer_embedding_lookup));
             ABSL_LOG(INFO) << "embedding_lookup compiled on CPU.";
           }
-        } else if (*model_type == ModelType::kTfLiteTextEncoder) {
-          StoreWeightsStream(*model_type, std::move(section->data_stream));
+        } else if (model_type == ModelType::kTfLiteTextEncoder) {
+          StoreWeightsStream(model_type, std::move(section->data_stream));
           if (owned_env == nullptr) {
             ABSL_ASSIGN_OR_RETURN(
                 auto temp_owned_env,
@@ -717,9 +718,9 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
                     *streaming_resources));
             ABSL_LOG(INFO) << "text_encoder compiled.";
           }
-        } else if (*model_type == ModelType::kTfLiteVisionEncoder ||
-                   *model_type == ModelType::kTfLiteVisionAdapter) {
-          if (*model_type == ModelType::kTfLiteVisionAdapter ||
+        } else if (model_type == ModelType::kTfLiteVisionEncoder ||
+                   model_type == ModelType::kTfLiteVisionAdapter) {
+          if (model_type == ModelType::kTfLiteVisionAdapter ||
               (settings.GetVisionExecutorSettings().has_value() &&
                settings.GetVisionExecutorSettings()->GetBackend() ==
                    Backend::CPU)) {
@@ -727,20 +728,20 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
                           section_metadata->begin_offset();
             ABSL_LOG(INFO) << "Reading vision weights (" << size
                            << " bytes) for model type "
-                           << static_cast<int>(*model_type)
+                           << static_cast<int>(model_type)
                            << " into host memory...";
             ABSL_RETURN_IF_ERROR(
                 streaming_resources->SetVisionWeightsFromStream(
-                    *model_type, *section->data_stream, size));
+                    model_type, *section->data_stream, size));
             ABSL_LOG(INFO) << "Vision weights read.";
           } else {
             ABSL_LOG(INFO)
                 << "Storing TFLiteWeights section stream for model type: "
-                << static_cast<int>(*model_type);
-            StoreWeightsStream(*model_type, std::move(section->data_stream));
+                << static_cast<int>(model_type);
+            StoreWeightsStream(model_type, std::move(section->data_stream));
           }
-        } else if (*model_type == ModelType::kTfLiteAudioEncoderHw ||
-                   *model_type == ModelType::kTfLiteAudioAdapter) {
+        } else if (model_type == ModelType::kTfLiteAudioEncoderHw ||
+                   model_type == ModelType::kTfLiteAudioAdapter) {
           if (settings.GetAudioExecutorSettings().has_value() &&
               settings.GetAudioExecutorSettings()->GetBackend() ==
                   Backend::CPU) {
@@ -748,22 +749,22 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
                           section_metadata->begin_offset();
             ABSL_LOG(INFO) << "Reading audio weights (" << size
                            << " bytes) for model type "
-                           << static_cast<int>(*model_type)
+                           << static_cast<int>(model_type)
                            << " into host memory...";
             ABSL_RETURN_IF_ERROR(streaming_resources->SetAudioWeightsFromStream(
-                *model_type, *section->data_stream, size));
+                model_type, *section->data_stream, size));
             ABSL_LOG(INFO) << "Audio weights read.";
           } else {
             ABSL_LOG(INFO)
                 << "Storing TFLiteWeights section stream for model type: "
-                << static_cast<int>(*model_type);
-            StoreWeightsStream(*model_type, std::move(section->data_stream));
+                << static_cast<int>(model_type);
+            StoreWeightsStream(model_type, std::move(section->data_stream));
           }
         } else {
           ABSL_LOG(INFO)
               << "Storing TFLiteWeights section stream for model type: "
-              << static_cast<int>(*model_type);
-          StoreWeightsStream(*model_type, std::move(section->data_stream));
+              << static_cast<int>(model_type);
+          StoreWeightsStream(model_type, std::move(section->data_stream));
         }
         break;
       }

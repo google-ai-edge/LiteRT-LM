@@ -20,20 +20,23 @@ add_subdirectory(preprocessor)
 add_subdirectory(tool_use)
 
 # ==============================================================================
-# Model Resources Interface
+# Model Resources
 # ==============================================================================
-add_litertlm_library(runtime_components_model_resources INTERFACE)
+add_litertlm_library(runtime_components_model_resources STATIC
+  model_resources.cc
+)
 add_library(LiteRTLM::Runtime::Components::ModelResourcesInterface
   ALIAS runtime_components_model_resources)
 
 target_include_directories(runtime_components_model_resources
-  INTERFACE
+  PUBLIC
     ${LITERTLM_GENERATED_SRC_DIR}
+    ${CMAKE_BINARY_DIR}
     ${LITERTLM_INCLUDE_PATHS}
 )
 
 target_link_libraries(runtime_components_model_resources
-  INTERFACE
+  PUBLIC
     LiteRTLM::Runtime::Components::TokenizerInterface
     LITERTLM_DEPS
 )

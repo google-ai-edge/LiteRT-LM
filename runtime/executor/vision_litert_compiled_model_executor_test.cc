@@ -88,7 +88,7 @@ TEST(VisionLiteRtCompiledModelExecutorTest, CreateExecutorTest) {
       VisionLiteRtCompiledModelExecutor::Create(settings, env);
   EXPECT_THAT(vision_executor,
               StatusIs(absl::StatusCode::kNotFound,
-                       "TF_LITE_VISION_ENCODER not found in the model."));
+                       "tf_lite_vision_encoder not found in the model."));
 }
 
 template <typename T>

@@ -22,7 +22,9 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <type_traits>
 #include <utility>
+#include <vector>
 
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
@@ -38,9 +40,11 @@
 #ifdef ENABLE_SENTENCEPIECE_TOKENIZER
 #include "support/tokenizer/sentencepiece_tokenizer.h"
 #endif  // ENABLE_SENTENCEPIECE_TOKENIZER
+#include "runtime/proto/asr_metadata.pb.h"
 #include "runtime/proto/embedding_metadata.pb.h"
 #include "runtime/proto/executor_metadata.pb.h"
 #include "runtime/proto/llm_metadata.pb.h"
+#include "runtime/proto/tts_metadata.pb.h"
 #include "runtime/util/scoped_file.h"
 #include "support/tokenizer/tokenizer.h"
 
@@ -156,6 +160,18 @@ inline std::string ModelTypeToString(ModelType model_type) {
   }
 }
 
+// LITE_RUNTIME compatible helper functions converting capability-scoped
+// Protobuf TfLiteModelType enums to canonical lowercase wire strings.
+std::string TfLiteModelTypeToWireString(
+    proto::LlmMetadata::TfLiteModelType model_type);
+std::string TfLiteModelTypeToWireString(
+    proto::EmbeddingMetadata::TfLiteModelType model_type);
+std::string TfLiteModelTypeToWireString(
+    proto::TtsMetadata::TfLiteModelType model_type);
+std::string TfLiteModelTypeToWireString(
+    proto::AsrMetadata::TfLiteModelType model_type);
+std::string TfLiteModelTypeToWireString(ModelType model_type);
+
 // Describes the location of a contiguous region of bytes in a file.
 struct FileRegion {
   size_t offset;
@@ -180,6 +196,26 @@ class ModelResources {
   virtual absl::StatusOr<const litert::Model*> GetTFLiteModel(
       ModelType model_type) = 0;
 
+  // Returns the litert model for the given model type string, for LLM Engine.
+  virtual absl::StatusOr<const litert::Model*> GetTFLiteModel(
+      absl::string_view model_type_str);
+
+  // Returns the litert model for the given TfLiteModelTypeT, for supported
+  // capability-scoped Engines. Here TfLiteModelTypeT is an enum type defined in
+  // the capability-scoped metadata proto, e.g.
+  // - proto::LlmMetadata::TfLiteModelType,
+  // - proto::EmbeddingMetadata::TfLiteModelType,
+  // - proto::TtsMetadata::TfLiteModelType
+  // - proto::AsrMetadata::TfLiteModelType.
+  template <
+      typename TfLiteModelTypeT,
+      typename = std::enable_if_t<std::is_enum_v<TfLiteModelTypeT> &&
+                                  !std::is_same_v<TfLiteModelTypeT, ModelType>>>
+  absl::StatusOr<const litert::Model*> GetTFLiteModel(
+      TfLiteModelTypeT model_type) {
+    return GetTFLiteModel(TfLiteModelTypeToWireString(model_type));
+  }
+
   // Returns the TFLite model buffer. Note that the returned string_view is
   // valid only until the ModelResources is destroyed.
   // When there is no model for the given model type, it will return an error
@@ -188,6 +224,27 @@ class ModelResources {
   // the model lifecycle management to the caller.
   virtual absl::StatusOr<absl::string_view> GetTFLiteModelBuffer(
       ModelType model_type) = 0;
+
+  // Returns the TFLite model buffer for the given model type string, for LLM
+  // Engine.
+  virtual absl::StatusOr<absl::string_view> GetTFLiteModelBuffer(
+      absl::string_view model_type_str);
+
+  // Returns the TFLite model buffer for the given TfLiteModelTypeT, for
+  // supported capability-scoped Engines. Here TfLiteModelTypeT is an enum type
+  // defined in the capability-scoped metadata proto, e.g.
+  // - proto::LlmMetadata::TfLiteModelType,
+  // - proto::EmbeddingMetadata::TfLiteModelType,
+  // - proto::TtsMetadata::TfLiteModelType
+  // - proto::AsrMetadata::TfLiteModelType.
+  template <
+      typename TfLiteModelTypeT,
+      typename = std::enable_if_t<std::is_enum_v<TfLiteModelTypeT> &&
+                                  !std::is_same_v<TfLiteModelTypeT, ModelType>>>
+  absl::StatusOr<absl::string_view> GetTFLiteModelBuffer(
+      TfLiteModelTypeT model_type) {
+    return GetTFLiteModelBuffer(TfLiteModelTypeToWireString(model_type));
+  }
 
   // Returns the reference to the ScopedFile. This is used for the getting the
   // external weights that should not be mmapped into the memory.
@@ -250,6 +307,28 @@ class ModelResources {
   GetEmbeddingMetadata() {
     return absl::UnimplementedError("GetEmbeddingMetadata is not implemented.");
   }
+
+  // Returns the TTS metadata.
+  virtual absl::StatusOr<const proto::TtsMetadata*> GetTtsMetadata() {
+    return absl::UnimplementedError("GetTtsMetadata is not implemented.");
+  }
+
+  // Returns the ASR metadata.
+  virtual absl::StatusOr<const proto::AsrMetadata*> GetAsrMetadata() {
+    return absl::UnimplementedError("GetAsrMetadata is not implemented.");
+  }
+
+  // Returns a zero-copy buffer for a GenericBinaryData section matching the
+  // given name.
+  virtual absl::StatusOr<absl::string_view> GetGenericBinaryDataBuffer(
+      absl::string_view name) {
+    return absl::UnimplementedError(
+        "GetGenericBinaryDataBuffer is not implemented.");
+  }
+
+  // Returns the names of all named GenericBinaryData sections in the model
+  // container.
+  virtual std::vector<std::string> GetGenericBinaryDataNames() const;
 
   // Returns in-memory weights for a specific model type if available.
   // Used by the streaming weights API when running a model on CPU.

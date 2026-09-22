@@ -27,11 +27,14 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
+#include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/memory/memory.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/ascii.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_buffer_ref.h"  // from @litert
@@ -88,7 +91,13 @@ absl::StatusOr<std::unique_ptr<ModelResources>> ModelResourcesLitertLm::Create(
 
 absl::StatusOr<const litert::Model*> ModelResourcesLitertLm::GetTFLiteModel(
     ModelType model_type) {
-  auto it = model_map_.find(model_type);
+  return GetTFLiteModel(TfLiteModelTypeToWireString(model_type));
+}
+
+absl::StatusOr<const litert::Model*> ModelResourcesLitertLm::GetTFLiteModel(
+    absl::string_view model_type_str) {
+  std::string key = absl::AsciiStrToLower(model_type_str);
+  auto it = model_map_.find(key);
   if (it != model_map_.end()) {
     return it->second.get();
   }
@@ -96,7 +105,7 @@ absl::StatusOr<const litert::Model*> ModelResourcesLitertLm::GetTFLiteModel(
   if (enable_file_backed_model_loading_) {
     auto scoped_file = litert_lm_loader_->GetScopedFile();
     auto section_location = litert_lm_loader_->GetSectionLocation(
-        BufferKey(schema::AnySectionDataType_TFLiteModel, model_type));
+        BufferKey(schema::AnySectionDataType_TFLiteModel, key));
     if (scoped_file.ok() && section_location.ok()) {
       auto model_from_section = CreateModelFromFileSection(
           scoped_file->get(), section_location->first,
@@ -109,7 +118,7 @@ absl::StatusOr<const litert::Model*> ModelResourcesLitertLm::GetTFLiteModel(
         ABSL_VLOG(1) << "File-backed LiteRT model loading is unsupported; "
                         "falling back to buffer-backed loading.";
       } else {
-        auto& model = model_map_[model_type];
+        auto& model = model_map_[key];
         model = std::make_unique<litert::Model>(
             std::move(model_from_section).value());
         return model.get();
@@ -118,16 +127,16 @@ absl::StatusOr<const litert::Model*> ModelResourcesLitertLm::GetTFLiteModel(
   }
 
   litert::BufferRef<uint8_t> buffer_ref =
-      litert_lm_loader_->GetTFLiteModel(model_type);
-  ABSL_VLOG(1) << "model_type: " << ModelTypeToString(model_type);
+      litert_lm_loader_->GetTFLiteModel(key);
+  ABSL_VLOG(1) << "model_type: " << key;
   ABSL_VLOG(1) << "litert model size: " << buffer_ref.Size();
   if (buffer_ref.Size() == 0) {
-    return absl::NotFoundError(absl::StrCat(ModelTypeToString(model_type),
-                                            " not found in the model."));
+    return absl::NotFoundError(
+        absl::StrCat(model_type_str, " not found in the model."));
   }
   LITERT_ASSIGN_OR_RETURN(auto model, Model::CreateFromBuffer(buffer_ref));
-  model_map_[model_type] = std::make_unique<litert::Model>(std::move(model));
-  return model_map_[model_type].get();
+  model_map_[key] = std::make_unique<litert::Model>(std::move(model));
+  return model_map_[key].get();
 }
 
 std::optional<std::string>
@@ -143,17 +152,23 @@ ModelResourcesLitertLm::GetTFLiteModelPreferActivationType(
 
 absl::StatusOr<absl::string_view> ModelResourcesLitertLm::GetTFLiteModelBuffer(
     ModelType model_type) {
-  litert::BufferRef<uint8_t> buffer_ref =
-      litert_lm_loader_->GetTFLiteModel(model_type);
+  return GetTFLiteModelBuffer(TfLiteModelTypeToWireString(model_type));
+}
 
-  ABSL_VLOG(1) << "model_type: " << ModelTypeToString(model_type);
+absl::StatusOr<absl::string_view> ModelResourcesLitertLm::GetTFLiteModelBuffer(
+    absl::string_view model_type_str) {
+  std::string key = absl::AsciiStrToLower(model_type_str);
+  litert::BufferRef<uint8_t> buffer_ref =
+      litert_lm_loader_->GetTFLiteModel(key);
+
+  ABSL_VLOG(1) << "model_type: " << key;
   ABSL_VLOG(1) << "litert model size: " << buffer_ref.Size();
   if (buffer_ref.Size() == 0) {
-    return absl::NotFoundError(absl::StrCat(ModelTypeToString(model_type),
-                                            " not found in the model."));
+    return absl::NotFoundError(
+        absl::StrCat(model_type_str, " not found in the model."));
   }
   return buffer_ref.StrView();
-};
+}
 
 absl::StatusOr<std::unique_ptr<Tokenizer>>
 ModelResourcesLitertLm::GetTokenizer() {
@@ -257,6 +272,55 @@ ModelResourcesLitertLm::GetEmbeddingMetadata() {
   }
   return embedding_metadata_.get();
 };
+
+absl::StatusOr<const proto::TtsMetadata*>
+ModelResourcesLitertLm::GetTtsMetadata() {
+  if (tts_metadata_ == nullptr) {
+    auto buffer_ref = litert_lm_loader_->GetTtsMetadata();
+    if (!buffer_ref.has_value()) {
+      return absl::NotFoundError("No TtsMetadata found in the model.");
+    }
+    auto tts_metadata = std::make_unique<proto::TtsMetadata>();
+    if (!tts_metadata->ParseFromArray(buffer_ref->Data(),
+                                      buffer_ref->Size())) {
+      return absl::InternalError("Failed to parse TtsMetadata");
+    }
+    tts_metadata_ = std::move(tts_metadata);
+  }
+  return tts_metadata_.get();
+}
+
+absl::StatusOr<const proto::AsrMetadata*>
+ModelResourcesLitertLm::GetAsrMetadata() {
+  if (asr_metadata_ == nullptr) {
+    auto buffer_ref = litert_lm_loader_->GetAsrMetadata();
+    if (!buffer_ref.has_value()) {
+      return absl::NotFoundError("No AsrMetadata found in the model.");
+    }
+    auto asr_metadata = std::make_unique<proto::AsrMetadata>();
+    if (!asr_metadata->ParseFromArray(buffer_ref->Data(),
+                                      buffer_ref->Size())) {
+      return absl::InternalError("Failed to parse AsrMetadata");
+    }
+    asr_metadata_ = std::move(asr_metadata);
+  }
+  return asr_metadata_.get();
+}
+
+absl::StatusOr<absl::string_view>
+ModelResourcesLitertLm::GetGenericBinaryDataBuffer(absl::string_view name) {
+  auto buffer_ref = litert_lm_loader_->GetGenericBinaryData(name);
+  if (!buffer_ref.has_value() || buffer_ref->Size() == 0) {
+    return absl::NotFoundError(
+        "GenericBinaryData section not found in the model.");
+  }
+  return buffer_ref->StrView();
+}
+
+std::vector<std::string> ModelResourcesLitertLm::GetGenericBinaryDataNames()
+    const {
+  return litert_lm_loader_->GetGenericBinaryDataNames();
+}
 
 absl::StatusOr<std::reference_wrapper<ScopedFile>>
 ModelResourcesLitertLm::GetScopedFile() {

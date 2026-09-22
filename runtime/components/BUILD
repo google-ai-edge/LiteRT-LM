@@ -300,8 +300,10 @@ cc_library(
         "@litert//litert/cc:litert_buffer_ref",
         "@litert//litert/cc:litert_macros",
         "@litert//litert/cc:litert_model",
+        "//runtime/proto:asr_metadata_cc_proto",
         "//runtime/proto:embedding_metadata_cc_proto",
         "//runtime/proto:llm_metadata_cc_proto",
+        "//runtime/proto:tts_metadata_cc_proto",
         "//runtime/util:litert_lm_loader",
         "//runtime/util:litert_status_util",
         "//runtime/util:scoped_file",
@@ -311,6 +313,7 @@ cc_library(
 
 cc_library(
     name = "model_resources",
+    srcs = ["model_resources.cc"],
     hdrs = ["model_resources.h"],
     deps = [
         "@com_google_absl//absl/container:flat_hash_map",
@@ -320,9 +323,11 @@ cc_library(
         "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/types:span",
         "@litert//litert/cc:litert_model",
+        "//runtime/proto:asr_metadata_cc_proto",
         "//runtime/proto:embedding_metadata_cc_proto",
         "//runtime/proto:executor_metadata_cc_proto",
         "//runtime/proto:llm_metadata_cc_proto",
+        "//runtime/proto:tts_metadata_cc_proto",
         "//runtime/util:scoped_file",
         "//support/tokenizer",
     ] + select({
