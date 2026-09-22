@@ -32,7 +32,7 @@
 namespace litert::omni::asr {
 
 absl::StatusOr<std::unique_ptr<AsrSession>> AsrSession::Create(
-    Components components) {
+    Components components, ::litert::lm::ThreadPool* thread_pool) {
   if (components.audio_source == nullptr) {
     return absl::InvalidArgumentError("AudioSource component is required.");
   }
@@ -50,11 +50,13 @@ absl::StatusOr<std::unique_ptr<AsrSession>> AsrSession::Create(
   if (components.text_merger == nullptr) {
     return absl::InvalidArgumentError("TextMerger component is required.");
   }
-  return std::unique_ptr<AsrSession>(new AsrSession(std::move(components)));
+  return std::unique_ptr<AsrSession>(
+      new AsrSession(std::move(components), thread_pool));
 }
 
-AsrSession::AsrSession(Components components)
-    : components_(std::move(components)) {}
+AsrSession::AsrSession(Components components,
+                       ::litert::lm::ThreadPool* thread_pool)
+    : components_(std::move(components)), thread_pool_(thread_pool) {}
 
 AsrSession::~AsrSession() { ResetAsyncScheduler(); }
 
@@ -98,8 +100,10 @@ absl::StatusOr<TextMerger::MergeResult> AsrSession::ProcessNextChunk() {
   return components_.text_merger->GetOutput();
 }
 
-absl::Status AsrSession::ProcessAsync(::litert::lm::ThreadPool& thread_pool,
-                                      AsyncCallback callback) {
+absl::Status AsrSession::ProcessAsync(AsyncCallback callback) {
+  if (thread_pool_ == nullptr) {
+    return absl::FailedPreconditionError("ThreadPool is null.");
+  }
   absl::MutexLock lock(mutex_);
   if (async_scheduler_ != nullptr) {
     if (async_scheduler_->IsRunning()) {
@@ -125,7 +129,7 @@ absl::Status AsrSession::ProcessAsync(::litert::lm::ThreadPool& thread_pool,
   };
   async_scheduler_ =
       std::make_unique<AsyncStageScheduler<TextMerger::MergeResult>>(
-          std::move(stages), components_.text_merger.get(), &thread_pool,
+          std::move(stages), components_.text_merger.get(), thread_pool_,
           std::move(callback_with_flush_on_eos));
   return async_scheduler_->Start();
 }

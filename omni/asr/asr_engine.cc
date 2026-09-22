@@ -58,6 +58,7 @@
 #include "omni/base/model_utils.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/framework/threadpool.h"
 #include "support/tokenizer/huggingface_tokenizer.h"
 #include "support/tokenizer/tokenizer.h"
 
@@ -130,6 +131,9 @@ absl::StatusOr<std::unique_ptr<AsrEngine>> AsrEngine::Create(
   LITERT_RETURN_IF_ERROR(options.SetHardwareAccelerators(
       static_cast<::litert::HwAccelerators>(accelerators)));
 
+  auto thread_pool = std::make_unique<::litert::lm::ThreadPool>(
+      "asr_engine_pool", config.num_threads);
+
   bool use_litert_lm =
       config.decoder_type == AsrEngineConfig::DecoderType::kLm ||
       absl::EndsWith(config.model_path, ".litertlm");
@@ -148,7 +152,8 @@ absl::StatusOr<std::unique_ptr<AsrEngine>> AsrEngine::Create(
     return std::unique_ptr<AsrEngine>(new AsrEngine(
         std::move(config), std::move(tokenizer),
         std::make_unique<::litert::Environment>(std::move(environment)),
-        std::make_unique<::litert::CompiledModel>(std::move(compiled_model))));
+        std::make_unique<::litert::CompiledModel>(std::move(compiled_model)),
+        std::move(thread_pool)));
   }
 
   config.decoder_type = AsrEngineConfig::DecoderType::kLm;
@@ -219,7 +224,7 @@ absl::StatusOr<std::unique_ptr<AsrEngine>> AsrEngine::Create(
   return std::unique_ptr<AsrEngine>(new AsrEngine(
       std::move(config), std::move(tokenizer),
       std::make_unique<::litert::Environment>(std::move(environment)),
-      std::move(compiled_model), std::move(lm_runner),
+      std::move(compiled_model), std::move(thread_pool), std::move(lm_runner),
       std::move(lm_engine_runner)));
 }
 
@@ -227,12 +232,14 @@ AsrEngine::AsrEngine(AsrEngineConfig config,
                      std::unique_ptr<::litert::support::Tokenizer> tokenizer,
                      std::unique_ptr<::litert::Environment> environment,
                      std::unique_ptr<::litert::CompiledModel> compiled_model,
+                     std::unique_ptr<::litert::lm::ThreadPool> thread_pool,
                      std::unique_ptr<LiteRtLmRunner> lm_runner,
                      std::unique_ptr<LiteRtLmEngineRunner> lm_engine_runner)
     : config_(std::move(config)),
       tokenizer_(std::move(tokenizer)),
       environment_(std::move(environment)),
       compiled_model_(std::move(compiled_model)),
+      thread_pool_(std::move(thread_pool)),
       lm_runner_(std::move(lm_runner)),
       lm_engine_runner_(std::move(lm_engine_runner)) {}
 
@@ -334,7 +341,7 @@ absl::StatusOr<std::unique_ptr<AsrSession>> AsrEngine::CreateSession(
   components.detokenizer = std::move(detokenizer);
   components.text_merger = std::move(text_merger);
 
-  return AsrSession::Create(std::move(components));
+  return AsrSession::Create(std::move(components), thread_pool_.get());
 }
 
 }  // namespace litert::omni::asr
