@@ -33,6 +33,13 @@
 
 namespace litert::lm {
 
+// NOTE: `Backend` currently conflates the target hardware accelerator (`CPU`,
+// `GPU`, `NPU`) with the executor implementation (`CPU_ARTISAN`, `GPU_ARTISAN`,
+// `TENSOR_LLM`, and dynamically registered custom executors such as
+// `gemma_cpp`). To support running a custom executor across multiple hardware
+// backends (e.g., `gemma_cpp` on `CPU` vs. `GPU`), we should decouple the
+// executor implementation selector (e.g., an `executor_type` / custom executor
+// name in `ExecutorSettingsBase`) from the hardware `Backend` enum.
 enum class Backend {
   // Unspecified backend.
   UNSPECIFIED,
@@ -56,6 +63,13 @@ enum class Backend {
   NPU,
 };
 std::ostream& operator<<(std::ostream& os, const Backend& backend);
+// Registers a custom/dynamic backend name (case-insensitive) and returns its
+// assigned Backend identifier. If the name is already registered or matches a
+// built-in backend, returns the existing Backend identifier.
+Backend RegisterCustomBackend(absl::string_view backend_name);
+// Returns true if `backend` was dynamically registered via
+// `RegisterCustomBackend`.
+bool IsCustomBackend(Backend backend);
 // Returns the backend enum from the string. Case-insensitive.
 absl::StatusOr<Backend> GetBackendFromString(absl::string_view backend_str);
 // Returns the string representation of the backend enum.
