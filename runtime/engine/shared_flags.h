@@ -58,6 +58,7 @@ ABSL_DECLARE_FLAG(bool, disable_weight_cache);
 ABSL_DECLARE_FLAG(bool, disable_gpu_program_cache);
 ABSL_DECLARE_FLAG(std::string, cache_dir);
 ABSL_DECLARE_FLAG(std::string, preferred_device_substr);
+ABSL_DECLARE_FLAG(std::string, gpu_backend);
 ABSL_DECLARE_FLAG(int, num_threads_to_upload);
 ABSL_DECLARE_FLAG(int, num_threads_to_compile);
 ABSL_DECLARE_FLAG(bool, convert_weights_on_gpu);

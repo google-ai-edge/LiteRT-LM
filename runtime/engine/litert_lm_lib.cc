@@ -781,6 +781,10 @@ absl::StatusOr<EngineSettings> CreateEngineSettings(
   } else if (settings.conv_type == ConvType::kInt8) {
     advanced_settings.allow_src_quantized_fc_conv_ops = true;
   }
+  if (!settings.gpu_backend.empty()) {
+    ABSL_ASSIGN_OR_RETURN(advanced_settings.gpu_backend,
+                          GpuBackendFromString(settings.gpu_backend));
+  }
   if (advanced_settings != AdvancedSettings()) {
     engine_settings.GetMutableMainExecutorSettings().SetAdvancedSettings(
         advanced_settings);
