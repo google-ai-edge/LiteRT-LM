@@ -21,6 +21,7 @@
 #include <variant>
 #include <vector>
 
+#include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
@@ -107,15 +108,35 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
                                 *model_scoped_file != nullptr &&
                                 (*model_scoped_file)->IsValid();
 
+      // Qualify the GPU cache by an explicitly requested delegate so
+      // OpenCL/OpenGL/WebGPU never reuse each other's compiled artifacts for
+      // the same model. kDefault is left untagged so existing cache file names
+      // (and the stale-cache cleanup that relies on them) are unchanged for
+      // callers that do not opt in to a specific delegate.
+      absl::string_view gpu_cache_tag;
+      switch (advanced_settings.gpu_backend) {
+        case GpuBackend::kOpenCl:
+          gpu_cache_tag = "_cl";
+          break;
+        case GpuBackend::kOpenGl:
+          gpu_cache_tag = "_gl";
+          break;
+        case GpuBackend::kWebGpu:
+          gpu_cache_tag = "_webgpu";
+          break;
+        case GpuBackend::kDefault:
+          break;
+      }
+
       auto program_cache_file = executor_settings.GetProgramCacheFile(
-          absl::StrCat(cache_suffix.value_or(""),
+          absl::StrCat(cache_suffix.value_or(""), gpu_cache_tag,
                        ExecutorSettingsBase::kMlDriftCacheSuffix),
           /*check_and_clean=*/true);
       bool has_valid_program_cache_fd =
           program_cache_file.ok() &&
           !std::holds_alternative<std::string>(*program_cache_file);
       auto weight_cache_file = executor_settings.GetWeightCacheFile(
-          absl::StrCat(cache_suffix.value_or(""),
+          absl::StrCat(cache_suffix.value_or(""), gpu_cache_tag,
                        ExecutorSettingsBase::kMlDriftWeightCacheSuffix),
           /*check_and_clean=*/true);
       bool has_valid_weight_cache_fd =
@@ -149,6 +170,11 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
         LITERT_ASSIGN_OR_RETURN(std::string metadata_id,
                                 GetFileCacheIdentifier(**model_scoped_file));
         cache_key = absl::StrCat("fd_", metadata_id);
+      }
+      if (!cache_key.empty()) {
+        // Delegate-qualify the cache key for the same reason as the cache
+        // files.
+        absl::StrAppend(&cache_key, gpu_cache_tag);
       }
       if (cache_suffix.has_value() && !cache_suffix->empty() &&
           !cache_key.empty()) {
@@ -233,10 +259,40 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
       }
       gpu_compilation_options.DisableShaderOptimization(
           !advanced_settings.optimize_shader_compilation);
-      // TODO b/441627719 - Select backend by runtime options.
+      // Select the GPU delegate. OpenCL/OpenGL are the always-linked baseline;
+      // WebGPU is linked only with LITERT_USE_WEBGPU_ACCELERATOR, and
+      // requesting it in a build without it returns a clear error instead of
+      // silently falling back. kDefault uses the build-preferred delegate:
+      // WebGPU when linked, otherwise LiteRT's baseline (OpenCL/OpenGL) default
+      // is left in place (no runtime capability probe or fallback).
+      switch (advanced_settings.gpu_backend) {
+        case GpuBackend::kOpenCl:
+          gpu_compilation_options.SetBackend(GpuOptions::Backend::kOpenCl);
+          break;
+        case GpuBackend::kOpenGl:
+          gpu_compilation_options.SetBackend(GpuOptions::Backend::kOpenGl);
+          break;
+        case GpuBackend::kWebGpu:
 #if defined(LITERT_USE_WEBGPU_ACCELERATOR)
-      gpu_compilation_options.SetBackend(GpuOptions::Backend::kWebGpu);
+          gpu_compilation_options.SetBackend(GpuOptions::Backend::kWebGpu);
+#else
+          return absl::InvalidArgumentError(
+              "GPU backend 'webgpu' is not included in this build. Rebuild "
+              "with "
+              "-DLITERT_USE_WEBGPU_ACCELERATOR to ship the WebGPU backend.");
 #endif  // defined(LITERT_USE_WEBGPU_ACCELERATOR)
+          break;
+        case GpuBackend::kDefault:
+#if defined(LITERT_USE_WEBGPU_ACCELERATOR)
+          gpu_compilation_options.SetBackend(GpuOptions::Backend::kWebGpu);
+          ABSL_LOG(INFO)
+              << "Using build-preferred default GPU backend: WebGPU.";
+#else
+          ABSL_LOG(INFO) << "Using build-preferred default GPU backend: "
+                            "LiteRT baseline (OpenCL/OpenGL).";
+#endif  // defined(LITERT_USE_WEBGPU_ACCELERATOR)
+          break;
+      }
       // Prepare WebGPU or Vulkan command buffers ahead to reduce the overhead
       // of command buffer preparation. 2 steps ahead are needed because
       //   1) KV caches when single_kv_cache_buffer is false

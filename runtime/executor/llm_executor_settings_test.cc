@@ -124,6 +124,72 @@ TEST(LlmExecutorConfigTest, StringToBackend) {
   EXPECT_EQ(backend, Backend::NPU);
 }
 
+TEST(LlmExecutorConfigTest, StringToGpuBackend) {
+  ASSERT_OK_AND_ASSIGN(auto gpu_backend, GpuBackendFromString(""));
+  EXPECT_EQ(gpu_backend, GpuBackend::kDefault);
+  ASSERT_OK_AND_ASSIGN(gpu_backend, GpuBackendFromString("default"));
+  EXPECT_EQ(gpu_backend, GpuBackend::kDefault);
+  ASSERT_OK_AND_ASSIGN(gpu_backend, GpuBackendFromString("auto"));
+  EXPECT_EQ(gpu_backend, GpuBackend::kDefault);
+  ASSERT_OK_AND_ASSIGN(gpu_backend, GpuBackendFromString("Automatic"));
+  EXPECT_EQ(gpu_backend, GpuBackend::kDefault);
+  ASSERT_OK_AND_ASSIGN(gpu_backend, GpuBackendFromString("opencl"));
+  EXPECT_EQ(gpu_backend, GpuBackend::kOpenCl);
+  ASSERT_OK_AND_ASSIGN(gpu_backend, GpuBackendFromString("CL"));
+  EXPECT_EQ(gpu_backend, GpuBackend::kOpenCl);
+  ASSERT_OK_AND_ASSIGN(gpu_backend, GpuBackendFromString("opengl"));
+  EXPECT_EQ(gpu_backend, GpuBackend::kOpenGl);
+  ASSERT_OK_AND_ASSIGN(gpu_backend, GpuBackendFromString("gl"));
+  EXPECT_EQ(gpu_backend, GpuBackend::kOpenGl);
+  ASSERT_OK_AND_ASSIGN(gpu_backend, GpuBackendFromString("WebGpu"));
+  EXPECT_EQ(gpu_backend, GpuBackend::kWebGpu);
+  EXPECT_EQ(GpuBackendFromString("vulkan").status(),
+            absl::InvalidArgumentError(
+                "Unsupported GPU backend: vulkan. Supported backends are: "
+                "[default/auto, opencl, opengl, webgpu]"));
+}
+
+TEST(LlmExecutorConfigTest, ResolveBackendString) {
+  // Hardware names resolve with the GPU delegate left at kDefault (auto).
+  ASSERT_OK_AND_ASSIGN(auto r, ResolveBackendString("cpu"));
+  EXPECT_EQ(r.first, Backend::CPU);
+  EXPECT_EQ(r.second, GpuBackend::kDefault);
+  ASSERT_OK_AND_ASSIGN(r, ResolveBackendString("gpu"));
+  EXPECT_EQ(r.first, Backend::GPU);
+  EXPECT_EQ(r.second, GpuBackend::kDefault);
+  ASSERT_OK_AND_ASSIGN(r, ResolveBackendString("npu"));
+  EXPECT_EQ(r.first, Backend::NPU);
+  EXPECT_EQ(r.second, GpuBackend::kDefault);
+  // GPU delegate names select the GPU backend with that specific delegate.
+  ASSERT_OK_AND_ASSIGN(r, ResolveBackendString("webgpu"));
+  EXPECT_EQ(r.first, Backend::GPU);
+  EXPECT_EQ(r.second, GpuBackend::kWebGpu);
+  ASSERT_OK_AND_ASSIGN(r, ResolveBackendString("opencl"));
+  EXPECT_EQ(r.first, Backend::GPU);
+  EXPECT_EQ(r.second, GpuBackend::kOpenCl);
+  ASSERT_OK_AND_ASSIGN(r, ResolveBackendString("opengl"));
+  EXPECT_EQ(r.first, Backend::GPU);
+  EXPECT_EQ(r.second, GpuBackend::kOpenGl);
+  // The auto aliases select the GPU backend with the default (build-preferred)
+  // delegate, i.e. the same result as "gpu".
+  ASSERT_OK_AND_ASSIGN(r, ResolveBackendString("auto"));
+  EXPECT_EQ(r.first, Backend::GPU);
+  EXPECT_EQ(r.second, GpuBackend::kDefault);
+  ASSERT_OK_AND_ASSIGN(r, ResolveBackendString("automatic"));
+  EXPECT_EQ(r.first, Backend::GPU);
+  EXPECT_EQ(r.second, GpuBackend::kDefault);
+  ASSERT_OK_AND_ASSIGN(r, ResolveBackendString("default"));
+  EXPECT_EQ(r.first, Backend::GPU);
+  EXPECT_EQ(r.second, GpuBackend::kDefault);
+  // Unknown or empty names error with a single message that lists both the
+  // hardware backends and the GPU delegate/auto aliases.
+  auto unknown = ResolveBackendString("vulkan");
+  EXPECT_FALSE(unknown.ok());
+  EXPECT_NE(unknown.status().message().find("npu"), absl::string_view::npos);
+  EXPECT_NE(unknown.status().message().find("webgpu"), absl::string_view::npos);
+  EXPECT_FALSE(ResolveBackendString("").ok());
+}
+
 TEST(LlmExecutorConfigTest, ActivationDataType) {
   ActivationDataType act;
   std::stringstream oss;
@@ -362,6 +428,7 @@ enable_speculative_decoding: 0
 disable_delegate_clustering: 0
 hint_kernel_batch_size: 10
 error_on_invalid_sampled_token_id: 0
+gpu_backend: default
 
 )");  // Original output string.
   EXPECT_EQ(oss.str(), expected_output);

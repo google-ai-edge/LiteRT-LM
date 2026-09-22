@@ -52,8 +52,13 @@
 #include "runtime/util/metrics_util.h"
 #include "runtime/util/status_macros.h"
 
-ABSL_FLAG(std::string, backend, "cpu",
-          "Executor backend to use for LLM execution (cpu, gpu, etc.)");
+ABSL_FLAG(
+    std::string, backend, "cpu",
+    "Executor backend to use for LLM execution: cpu, gpu, npu. For the "
+    "GPU path, 'gpu' (or 'auto') uses the build-preferred default "
+    "delegate; pass 'opencl', 'opengl', or 'webgpu' to force a specific "
+    "one. WebGPU can only be selected in a build that links it. Applies to "
+    "the main text executor only.");
 ABSL_FLAG(std::string, model_path, "", "Model path to use for LLM execution.");
 ABSL_FLAG(
     std::optional<std::string>, model_name, std::nullopt,

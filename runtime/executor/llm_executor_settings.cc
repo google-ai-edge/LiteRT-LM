@@ -24,8 +24,10 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/str_join.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/util/logging.h"
 #include "runtime/util/status_macros.h"  // NOLINT
@@ -72,6 +74,70 @@ std::ostream& operator<<(std::ostream& os, const NpuConfig& config) {
      << "\n";
   os << "enable_npu_debug_logging: " << config.enable_npu_debug_logging << "\n";
   return os;
+}
+
+std::ostream& operator<<(std::ostream& os, GpuBackend backend) {
+  switch (backend) {
+    case GpuBackend::kDefault:
+      return os << "default";
+    case GpuBackend::kOpenCl:
+      return os << "opencl";
+    case GpuBackend::kOpenGl:
+      return os << "opengl";
+    case GpuBackend::kWebGpu:
+      return os << "webgpu";
+    default:
+      return os << "unknown";
+  }
+}
+
+absl::StatusOr<GpuBackend> GpuBackendFromString(absl::string_view name) {
+  if (name.empty() || absl::EqualsIgnoreCase(name, "default") ||
+      absl::EqualsIgnoreCase(name, "auto") ||
+      absl::EqualsIgnoreCase(name, "automatic")) {
+    // "auto"/"automatic" are self-documenting aliases for the default, which
+    // selects the build-preferred GPU delegate.
+    return GpuBackend::kDefault;
+  } else if (absl::EqualsIgnoreCase(name, "opencl") ||
+             absl::EqualsIgnoreCase(name, "cl")) {
+    return GpuBackend::kOpenCl;
+  } else if (absl::EqualsIgnoreCase(name, "opengl") ||
+             absl::EqualsIgnoreCase(name, "gl")) {
+    return GpuBackend::kOpenGl;
+  } else if (absl::EqualsIgnoreCase(name, "webgpu")) {
+    return GpuBackend::kWebGpu;
+  } else {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Unsupported GPU backend: ", name,
+        ". Supported backends are: [default/auto, opencl, opengl, webgpu]"));
+  }
+}
+
+absl::StatusOr<std::pair<Backend, GpuBackend>> ResolveBackendString(
+    absl::string_view name) {
+  if (!name.empty()) {
+    // A hardware backend name (cpu/gpu/npu/...) selects that backend; for the
+    // GPU backend the delegate is left at kDefault (the build-preferred one).
+    auto hw_backend = GetBackendFromString(name);
+    if (hw_backend.ok()) {
+      return std::make_pair(*hw_backend, GpuBackend::kDefault);
+    }
+    // Otherwise the string may name a GPU delegate (opencl/opengl/webgpu) or an
+    // auto alias (auto/automatic/default). All imply the GPU backend: a
+    // delegate name forces that delegate, while the auto aliases keep kDefault.
+    auto gpu_backend = GpuBackendFromString(name);
+    if (gpu_backend.ok()) {
+      return std::make_pair(Backend::GPU, *gpu_backend);
+    }
+  }
+  // Unknown value: return a single message listing every accepted user-facing
+  // value (hardware backends, GPU delegate names with their aliases, and the
+  // auto aliases).
+  return absl::InvalidArgumentError(absl::StrCat(
+      "Unsupported backend: ", name,
+      ". Use a hardware backend (cpu, gpu, npu) or, for the GPU path, a "
+      "delegate (opencl, opengl, webgpu); gpu/auto uses the build-preferred "
+      "delegate."));
 }
 
 std::ostream& operator<<(std::ostream& os, const AdvancedSettings& settings) {
@@ -132,6 +198,7 @@ std::ostream& operator<<(std::ostream& os, const AdvancedSettings& settings) {
   }
   os << "error_on_invalid_sampled_token_id: "
      << settings.error_on_invalid_sampled_token_id << "\n";
+  os << "gpu_backend: " << settings.gpu_backend << "\n";
   return os;
 }
 
