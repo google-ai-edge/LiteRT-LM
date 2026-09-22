@@ -24,6 +24,9 @@
 
 namespace litert::lm::jni {
 
+// Helper to get JNIEnv and attach to the current thread if necessary.
+JNIEnv* GetJniEnvAndAttach(JavaVM* jvm, bool* attached);
+
 // RAII wrapper for JNI local references.
 template <typename T>
 class ScopedLocalRef {
@@ -57,6 +60,68 @@ class ScopedLocalRef {
   T local_ref_;
 };
 
+// RAII wrapper for JNI global references that safely attaches to JavaVM if
+// destroyed on a native worker thread.
+template <typename T>
+class ScopedGlobalRef {
+ public:
+  ScopedGlobalRef(JavaVM* jvm, T global_ref)
+      : jvm_(jvm), global_ref_(global_ref) {}
+
+  ScopedGlobalRef(JNIEnv* env, T local_or_global_ref) {
+    env->GetJavaVM(&jvm_);
+    global_ref_ =
+        local_or_global_ref != nullptr
+            ? reinterpret_cast<T>(env->NewGlobalRef(local_or_global_ref))
+            : nullptr;
+  }
+
+  ~ScopedGlobalRef() { reset(); }
+
+  void reset(T ptr = nullptr) {
+    if (ptr != global_ref_) {
+      if (global_ref_ != nullptr && jvm_ != nullptr) {
+        bool attached = false;
+        JNIEnv* env = GetJniEnvAndAttach(jvm_, &attached);
+        if (env != nullptr) {
+          env->DeleteGlobalRef(global_ref_);
+        }
+        if (attached) {
+          jvm_->DetachCurrentThread();
+        }
+      }
+      global_ref_ = ptr;
+    }
+  }
+
+  T release() {
+    T ref = global_ref_;
+    global_ref_ = nullptr;
+    return ref;
+  }
+
+  T get() const { return global_ref_; }
+
+  ScopedGlobalRef(ScopedGlobalRef&& other) noexcept
+      : jvm_(other.jvm_), global_ref_(other.release()) {}
+
+  ScopedGlobalRef& operator=(ScopedGlobalRef&& other) noexcept {
+    if (this != &other) {
+      reset();
+      jvm_ = other.jvm_;
+      global_ref_ = other.release();
+    }
+    return *this;
+  }
+
+  ScopedGlobalRef(const ScopedGlobalRef&) = delete;
+  ScopedGlobalRef& operator=(const ScopedGlobalRef&) = delete;
+
+ private:
+  JavaVM* jvm_ = nullptr;
+  T global_ref_ = nullptr;
+};
+
 // Converts a jstring to a standard std::string, handling null and freeing
 // chars.
 std::string JStringToString(JNIEnv* env, jstring jstr);
@@ -67,9 +132,6 @@ jstring NewStringStandardUTF(JNIEnv* env, const std::string& standard_utf8_str);
 // Converts a vector of standard UTF-8 strings to a Java String[] array.
 jobjectArray ToJavaStringArray(JNIEnv* env,
                                const std::vector<std::string>& strings);
-
-// Helper to get JNIEnv and attach to the current thread if necessary.
-JNIEnv* GetJniEnvAndAttach(JavaVM* jvm, bool* attached);
 
 }  // namespace litert::lm::jni
 
