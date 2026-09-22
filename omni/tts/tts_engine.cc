@@ -33,18 +33,24 @@
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "omni/base/model_resources.h"
+#include "omni/base/model_utils.h"
 #include "omni/tts/kokoro/kokoro_factory.h"
 #include "omni/tts/kokoro/kokoro_model_config.h"
 #include "omni/tts/qwen3_tts/qwen3_tts_factory.h"
 #include "omni/tts/qwen3_tts/qwen3_tts_model_config.h"
 #include "omni/tts/tts_session.h"
+#include "runtime/components/model_resources.h"
 #include "runtime/framework/threadpool.h"
+#include "runtime/proto/tts_metadata.pb.h"
+#include "runtime/proto/tts_model_type.pb.h"
 
 namespace litert::omni::tts {
 namespace {
 
 // Extension shared by all LiteRT model files.
 constexpr absl::string_view kTfLiteExtension = ".tflite";
+// Extension of single-file LiteRT-LM container files.
+constexpr absl::string_view kLitertLmExtension = ".litertlm";
 // Filename prefix of the Kokoro model files (e.g. "kokoro_acoustic.tflite").
 constexpr absl::string_view kKokoroFilePrefix = "kokoro";
 // Filename prefixes of the Qwen3-TTS model files (e.g. "talker_int4.tflite",
@@ -52,12 +58,60 @@ constexpr absl::string_view kKokoroFilePrefix = "kokoro";
 constexpr absl::string_view kQwen3TalkerFilePrefix = "talker";
 constexpr absl::string_view kQwen3CodecFilePrefix = "codec_";
 
+std::string ResolveLitertLmPath(absl::string_view model_folder) {
+  std::filesystem::path path{std::string(model_folder)};
+  std::error_code ec;
+  if (std::filesystem::is_regular_file(path, ec) &&
+      path.extension().string() == kLitertLmExtension) {
+    return path.string();
+  }
+  if (std::filesystem::is_directory(path, ec)) {
+    for (const auto& entry : std::filesystem::directory_iterator(path, ec)) {
+      if (entry.is_regular_file(ec) &&
+          entry.path().extension().string() == kLitertLmExtension) {
+        return entry.path().string();
+      }
+    }
+  }
+  return "";
+}
+
+absl::StatusOr<ModelType> DetectModelTypeFromLitertLm(
+    lm::ModelResources& lm_resources) {
+  auto tts_metadata = lm_resources.GetTtsMetadata();
+  if (tts_metadata.ok() && *tts_metadata != nullptr) {
+    if ((*tts_metadata)->tts_model_type().has_kokoro()) {
+      return ModelType::KOKORO;
+    }
+    if ((*tts_metadata)->tts_model_type().has_qwen3_tts()) {
+      return ModelType::QWEN3_TTS;
+    }
+  }
+  if (lm_resources
+          .GetTFLiteModelBuffer(lm::proto::TtsMetadata::TF_LITE_ACOUSTIC)
+          .ok()) {
+    return ModelType::KOKORO;
+  }
+  return ModelType::UNSPECIFIED;
+}
+
 }  // namespace
 
 absl::StatusOr<ModelType> DetectModelType(absl::string_view model_folder) {
   if (model_folder.empty()) {
     return absl::InvalidArgumentError(
         "TtsEngineSettings::model_folder must not be empty.");
+  }
+
+  const std::string litertlm_path = ResolveLitertLmPath(model_folder);
+  if (!litertlm_path.empty()) {
+    LITERT_ASSIGN_OR_RETURN(auto lm_resources,
+                            CreateLmModelResources(litertlm_path));
+    LITERT_ASSIGN_OR_RETURN(const ModelType from_litertlm,
+                            DetectModelTypeFromLitertLm(*lm_resources));
+    if (from_litertlm != ModelType::UNSPECIFIED) {
+      return from_litertlm;
+    }
   }
 
   std::error_code ec;
@@ -102,9 +156,24 @@ absl::StatusOr<ModelType> DetectModelType(absl::string_view model_folder) {
 absl::StatusOr<std::unique_ptr<TtsEngine>> TtsEngine::Create(
     const TtsEngineSettings& settings) {
   TtsEngineSettings resolved_settings = settings;
+  std::shared_ptr<lm::ModelResources> lm_resources = nullptr;
+  const std::string litertlm_path =
+      ResolveLitertLmPath(resolved_settings.model_folder);
+  if (!litertlm_path.empty()) {
+    LITERT_ASSIGN_OR_RETURN(lm_resources,
+                            CreateLmModelResources(litertlm_path));
+  }
+
   if (resolved_settings.GetModelType() == ModelType::UNSPECIFIED) {
-    LITERT_ASSIGN_OR_RETURN(const ModelType model_type,
-                            DetectModelType(resolved_settings.model_folder));
+    ModelType model_type = ModelType::UNSPECIFIED;
+    if (lm_resources != nullptr) {
+      LITERT_ASSIGN_OR_RETURN(model_type,
+                              DetectModelTypeFromLitertLm(*lm_resources));
+    }
+    if (model_type == ModelType::UNSPECIFIED) {
+      LITERT_ASSIGN_OR_RETURN(model_type,
+                              DetectModelType(resolved_settings.model_folder));
+    }
     switch (model_type) {
       case ModelType::KOKORO:
         resolved_settings.model_config = KokoroModelConfig{};
@@ -122,6 +191,9 @@ absl::StatusOr<std::unique_ptr<TtsEngine>> TtsEngine::Create(
   LITERT_ASSIGN_OR_RETURN(auto env, Environment::Create({}));
   auto shared_env = std::make_shared<Environment>(std::move(env));
   auto resources = std::make_shared<ModelResources>(shared_env);
+  if (lm_resources != nullptr) {
+    resources->SetLmModelResources(lm_resources);
+  }
 
   std::vector<std::string> available_voices;
   if (auto* config =
@@ -130,7 +202,8 @@ absl::StatusOr<std::unique_ptr<TtsEngine>> TtsEngine::Create(
         *config, resolved_settings.model_folder, resolved_settings.cache_dir,
         resolved_settings.backend, resolved_settings.num_threads, *shared_env,
         *resources));
-    available_voices = GetAvailableKokoroVoices(resolved_settings.model_folder);
+    available_voices = GetAvailableKokoroVoices(resolved_settings.model_folder,
+                                                lm_resources.get());
   } else if (auto* config = std::get_if<Qwen3TtsModelConfig>(
                  &resolved_settings.model_config)) {
     LITERT_RETURN_IF_ERROR(InitQwen3TtsResources(

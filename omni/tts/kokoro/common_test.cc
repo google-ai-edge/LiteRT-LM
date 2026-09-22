@@ -15,13 +15,101 @@
 #include "omni/tts/kokoro/common.h"
 
 #include <cstddef>
+#include <cstring>
+#include <functional>
+#include <memory>
+#include <optional>
+#include <string>
+#include <utility>
 #include <vector>
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
+#include "litert/cc/litert_model.h"  // from @litert
 #include "omni/tts/kokoro/kokoro_io_types.h"
+#include "runtime/components/model_resources.h"
+#include "runtime/util/scoped_file.h"
+#include "support/util/test_utils.h"  // IWYU pragma: keep
 
 namespace litert::omni::tts {
 namespace {
+
+// ModelResources stub serving a single named GenericBinaryData section.
+class FakeModelResources : public lm::ModelResources {
+ public:
+  FakeModelResources(std::string section_name, std::string section_data)
+      : section_name_(std::move(section_name)),
+        section_data_(std::move(section_data)) {}
+
+  absl::StatusOr<absl::string_view> GetGenericBinaryDataBuffer(
+      absl::string_view name) override {
+    if (name != section_name_) {
+      return absl::NotFoundError(
+          absl::StrCat("No GenericBinaryData section named ", name));
+    }
+    return absl::string_view(section_data_);
+  }
+
+  std::vector<std::string> GetGenericBinaryDataNames() const override {
+    return {section_name_};
+  }
+
+  // Unused parts of the interface.
+  absl::StatusOr<const litert::Model*> GetTFLiteModel(
+      lm::ModelType model_type) override {
+    return absl::UnimplementedError("");
+  }
+  absl::StatusOr<absl::string_view> GetTFLiteModelBuffer(
+      lm::ModelType model_type) override {
+    return absl::UnimplementedError("");
+  }
+  absl::StatusOr<std::reference_wrapper<lm::ScopedFile>> GetScopedFile()
+      override {
+    return absl::UnimplementedError("");
+  }
+  absl::StatusOr<std::pair<size_t, size_t>> GetWeightsSectionOffset(
+      lm::ModelType model_type) override {
+    return absl::UnimplementedError("");
+  }
+  absl::StatusOr<lm::FileRegion> GetTFLiteModelSectionFileRegion(
+      lm::ModelType model_type) override {
+    return absl::UnimplementedError("");
+  }
+  std::optional<std::string> GetTFLiteModelBackendConstraint(
+      lm::ModelType model_type) override {
+    return std::nullopt;
+  }
+  std::optional<std::string> GetTFLiteModelPreferActivationType(
+      lm::ModelType model_type) override {
+    return std::nullopt;
+  }
+  absl::StatusOr<std::unique_ptr<lm::Tokenizer>> GetTokenizer() override {
+    return absl::UnimplementedError("");
+  }
+  absl::StatusOr<const lm::proto::LlmMetadata*> GetLlmMetadata() override {
+    return absl::UnimplementedError("");
+  }
+  absl::StatusOr<const lm::proto::ExecutorMetadata*> GetExecutorMetadata()
+      override {
+    return absl::UnimplementedError("");
+  }
+
+ private:
+  std::string section_name_;
+  std::string section_data_;
+};
+
+// Serializes a full-size voice pack whose every element is `value`.
+std::string MakeVoicePackBytes(float value) {
+  const std::vector<float> floats(kokoro::kVoicePackSize, value);
+  std::string bytes(floats.size() * sizeof(float), '\0');
+  std::memcpy(bytes.data(), floats.data(), bytes.size());
+  return bytes;
+}
 
 TEST(CommonTest, ConstantsSanity) {
   EXPECT_EQ(kokoro::kMaxTokens, 256);
@@ -145,6 +233,51 @@ TEST(CommonTest, TrimSliceJoinSilencePunctuationPausePreservedOnTail) {
       500 + 1 + static_cast<size_t>(kokoro::kSlicePunctuationPauseSamples);
   EXPECT_EQ(pcm.size(), expected_size);
   EXPECT_EQ(pcm[500], 1.0f);
+}
+
+TEST(CommonTest, VoiceNameFromIdentifierStripsDirectoryAndExtension) {
+  EXPECT_EQ(kokoro::VoiceNameFromIdentifier("af_heart"), "af_heart");
+  EXPECT_EQ(kokoro::VoiceNameFromIdentifier("af_heart.bin"), "af_heart");
+  EXPECT_EQ(kokoro::VoiceNameFromIdentifier("voices/af_bella.bin"),
+            "af_bella");
+  EXPECT_EQ(kokoro::VoiceNameFromIdentifier("/tmp/voices/am_adam"), "am_adam");
+  EXPECT_EQ(kokoro::VoiceNameFromIdentifier(""), "");
+}
+
+TEST(CommonTest, LoadVoiceEmbeddingReadsRequestedContainerSection) {
+  FakeModelResources resources("af_bella", MakeVoicePackBytes(0.25f));
+
+  ASSERT_OK_AND_ASSIGN(
+      const std::vector<float> embed,
+      kokoro::LoadVoiceEmbedding("/non_existent_dir", "voices/af_bella.bin",
+                                 &resources));
+
+  ASSERT_EQ(embed.size(), kokoro::kVoicePackSize);
+  EXPECT_EQ(embed.front(), 0.25f);
+  EXPECT_EQ(embed.back(), 0.25f);
+}
+
+TEST(CommonTest, LoadVoiceEmbeddingFallsBackToDefaultContainerVoice) {
+  FakeModelResources resources(std::string(kokoro::kDefaultVoiceName),
+                               MakeVoicePackBytes(0.5f));
+
+  ASSERT_OK_AND_ASSIGN(
+      const std::vector<float> embed,
+      kokoro::LoadVoiceEmbedding("/non_existent_dir", "voice_not_in_model",
+                                 &resources));
+
+  ASSERT_EQ(embed.size(), kokoro::kVoicePackSize);
+  EXPECT_EQ(embed.front(), 0.5f);
+}
+
+TEST(CommonTest, LoadVoiceEmbeddingRejectsUndersizedContainerSection) {
+  FakeModelResources resources(std::string(kokoro::kDefaultVoiceName),
+                               "too-short");
+
+  auto embed = kokoro::LoadVoiceEmbedding(
+      "/non_existent_dir", kokoro::kDefaultVoiceName, &resources);
+
+  EXPECT_FALSE(embed.ok());
 }
 
 }  // namespace

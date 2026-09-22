@@ -34,6 +34,7 @@ cc_library(
         "@com_google_absl//absl/strings",
         "@litert//litert/cc:litert_compiled_model",
         "@litert//litert/cc:litert_environment",
+        "//runtime/components:model_resources",
     ],
 )
 
@@ -64,6 +65,7 @@ cc_library(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/types:span",
+        "@litert//litert/cc:litert_buffer_ref",
         "@litert//litert/cc:litert_common",
         "@litert//litert/cc:litert_compiled_model",
         "@litert//litert/cc:litert_element_type",

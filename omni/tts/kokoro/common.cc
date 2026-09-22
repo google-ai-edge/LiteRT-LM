@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstring>
 #include <filesystem>  // NOLINT: Required for path manipulation.
 #include <fstream>
 #include <ios>
@@ -27,10 +28,12 @@
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "omni/tts/kokoro/kokoro_io_types.h"
+#include "runtime/components/model_resources.h"
 
 namespace litert::omni::tts::kokoro {
 
@@ -179,12 +182,54 @@ void TrimSliceJoinSilence(std::vector<float>& pcm, SliceJoin join_before,
                        TailKeepSamples(join_after));
 }
 
+std::string VoiceNameFromIdentifier(absl::string_view voice_identifier) {
+  if (voice_identifier.empty()) return "";
+  const size_t last_separator = voice_identifier.find_last_of("/\\");
+  if (last_separator != absl::string_view::npos) {
+    voice_identifier = voice_identifier.substr(last_separator + 1);
+  }
+  if (absl::EndsWith(voice_identifier, ".bin")) {
+    voice_identifier = voice_identifier.substr(0, voice_identifier.size() - 4);
+  }
+  return std::string(voice_identifier);
+}
+
 absl::StatusOr<std::vector<float>> LoadVoiceEmbedding(
-    absl::string_view model_dir, absl::string_view voice_identifier) {
+    absl::string_view model_dir, absl::string_view voice_identifier,
+    lm::ModelResources* lm_resources) {
   std::vector<float> embed(kVoicePackSize, 0.0f);
+
+  if (lm_resources != nullptr) {
+    // Voice packs inside a .litertlm container are GenericBinaryData sections
+    // whose "name" item holds the voice name (e.g. "af_heart").
+    std::vector<std::string> candidate_names;
+    std::string voice_name = VoiceNameFromIdentifier(voice_identifier);
+    if (!voice_name.empty()) {
+      candidate_names.push_back(voice_name);
+      candidate_names.push_back(absl::StrCat(voice_name, ".bin"));
+    }
+    if (voice_name != kDefaultVoiceName) {
+      candidate_names.emplace_back(kDefaultVoiceName);
+      candidate_names.push_back(absl::StrCat(kDefaultVoiceName, ".bin"));
+    }
+
+    for (const auto& name : candidate_names) {
+      auto buffer = lm_resources->GetGenericBinaryDataBuffer(name);
+      if (buffer.ok() &&
+          buffer->size() >= kVoicePackSize * sizeof(float)) {
+        std::memcpy(embed.data(), buffer->data(),
+                    kVoicePackSize * sizeof(float));
+        ABSL_LOG(INFO) << "Loaded voice pack embedding (" << kVoicePackSize
+                       << " floats) from GenericBinaryData section '" << name
+                       << "'";
+        return embed;
+      }
+    }
+  }
 
   std::vector<std::filesystem::path> candidate_paths;
   std::filesystem::path base_path = std::string(model_dir);
+  std::filesystem::path parent_path = base_path.parent_path();
   if (!voice_identifier.empty()) {
     std::string voice_str(voice_identifier);
     candidate_paths.push_back(voice_str);
@@ -192,9 +237,23 @@ absl::StatusOr<std::vector<float>> LoadVoiceEmbedding(
     candidate_paths.push_back((base_path / "voices" / voice_str));
     candidate_paths.push_back(
         (base_path / "voices" / absl::StrCat(voice_identifier, ".bin")));
+    if (!parent_path.empty()) {
+      candidate_paths.push_back((parent_path / voice_str));
+      candidate_paths.push_back((parent_path / "voices" / voice_str));
+      candidate_paths.push_back(
+          (parent_path / "voices" / absl::StrCat(voice_identifier, ".bin")));
+    }
   }
-  candidate_paths.push_back((base_path / "voices" / "af_heart"));
-  candidate_paths.push_back((base_path / "voices" / "af_heart.bin"));
+  candidate_paths.push_back(
+      (base_path / "voices" / std::string(kDefaultVoiceName)));
+  candidate_paths.push_back(
+      (base_path / "voices" / absl::StrCat(kDefaultVoiceName, ".bin")));
+  if (!parent_path.empty()) {
+    candidate_paths.push_back(
+        (parent_path / "voices" / std::string(kDefaultVoiceName)));
+    candidate_paths.push_back(
+        (parent_path / "voices" / absl::StrCat(kDefaultVoiceName, ".bin")));
+  }
 
   for (const auto& path : candidate_paths) {
     std::ifstream file(path, std::ios::binary);

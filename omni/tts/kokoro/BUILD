@@ -39,6 +39,7 @@ cc_library(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/types:span",
+        "//runtime/components:model_resources",
     ],
 )
 
@@ -49,6 +50,13 @@ cc_test(
         ":common",
         ":kokoro_io_types",
         "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@litert//litert/cc:litert_model",
+        "//runtime/components:model_resources",
+        "//runtime/util:scoped_file",
+        "//support/util:test_utils",
     ],
 )
 
@@ -124,6 +132,7 @@ cc_library(
         "//omni/base:model_resources",
         "//omni/base:model_utils",
         "//omni/base:stage",
+        "//runtime/components:model_resources",
     ],
 )
 
@@ -186,10 +195,45 @@ cc_test(
 )
 
 cc_library(
+    name = "espeak_assets",
+    srcs = ["espeak_assets.cc"],
+    hdrs = ["espeak_assets.h"],
+    deps = [
+        "@com_google_absl//absl/cleanup",
+        "@com_google_absl//absl/log:absl_log",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "//runtime/components:model_resources",
+        "//runtime/util:zip_utils",
+    ],
+)
+
+cc_test(
+    name = "espeak_assets_test",
+    srcs = ["espeak_assets_test.cc"],
+    deps = [
+        ":espeak_assets",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@litert//litert/cc:litert_model",
+        "//runtime/components:model_resources",
+        "//runtime/util:scoped_file",
+        "//support/util:test_utils",
+    ],
+)
+
+cc_library(
     name = "kokoro_factory",
     srcs = ["kokoro_factory.cc"],
     hdrs = ["kokoro_factory.h"],
     deps = [
+        ":common",
+        ":espeak_assets",
         ":kokoro_acoustic_stage",
         ":kokoro_model_config",
         ":kokoro_vocoder_stage",
@@ -207,6 +251,30 @@ cc_library(
         "//omni/tts:stream_text_source",
         "//omni/tts:text_chunk_utils",
         "//omni/tts:tts_session",
+        "//runtime/components:model_resources",
         "//runtime/executor:executor_settings_base",
+        "//runtime/proto:tts_metadata_cc_proto",
+    ],
+)
+
+cc_test(
+    name = "kokoro_factory_test",
+    srcs = ["kokoro_factory_test.cc"],
+    deps = [
+        ":espeak_assets",
+        ":kokoro_factory",
+        ":kokoro_model_config",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+        "@litert//litert/cc:litert_environment",
+        "@litert//litert/cc:litert_model",
+        "//omni/base:model_resources",
+        "//omni/tts:text_chunk_utils",
+        "//runtime/components:model_resources",
+        "//runtime/executor:executor_settings_base",
+        "//runtime/util:scoped_file",
+        "//support/util:test_utils",
     ],
 )

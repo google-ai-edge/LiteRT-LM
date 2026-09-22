@@ -15,12 +15,15 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_OMNI_TTS_KOKORO_COMMON_H_
 #define THIRD_PARTY_ODML_LITERT_LM_OMNI_TTS_KOKORO_COMMON_H_
 
+#include <cstddef>
+#include <string>
 #include <vector>
 
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "omni/tts/kokoro/kokoro_io_types.h"
+#include "runtime/components/model_resources.h"
 
 namespace litert::omni::tts::kokoro {
 
@@ -200,17 +203,30 @@ int HeadKeepSamples(SliceJoin join);
 // Silence budget for the trailing edge of a slice.
 int TailKeepSamples(SliceJoin join);
 
-// Loads a 510x256 voice style embedding vector from binary file.
+// Voice used when no voice is requested, or when the requested voice is
+// missing from the model.
+constexpr absl::string_view kDefaultVoiceName = "af_heart";
+
+// Reduces a voice identifier to its bare voice name by dropping any directory
+// components and a trailing ".bin" extension, so that "voices/af_heart.bin"
+// and "af_heart" both resolve to "af_heart".
+std::string VoiceNameFromIdentifier(absl::string_view voice_identifier);
+
+// Loads a 510x256 voice style embedding vector from a .litertlm container or
+// binary file.
 //
 // args
-// - model_dir: Base model directory containing voice files.
+// - model_dir: Base model directory or .litertlm file path.
 // - voice_identifier: Voice name (e.g. "af_heart") or binary filename.
+// - lm_resources: Optional ModelResources container to load GenericBinaryData
+//   voice sections from. Sections are keyed by voice name.
 //
 // returns
 // - Float vector containing 130,560 elements on success, or error status.
 absl::StatusOr<std::vector<float>> LoadVoiceEmbedding(
     absl::string_view model_dir,
-    absl::string_view voice_identifier = "af_heart");
+    absl::string_view voice_identifier = kDefaultVoiceName,
+    lm::ModelResources* lm_resources = nullptr);
 
 }  // namespace litert::omni::tts::kokoro
 

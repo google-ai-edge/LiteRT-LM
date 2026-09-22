@@ -28,6 +28,7 @@
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "omni/base/litert_lm_engine_runner.h"
 #include "omni/base/litert_lm_runner.h"
+#include "runtime/components/model_resources.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/llm_executor_io_types.h"
 
@@ -109,6 +110,10 @@ absl::StatusOr<std::string> LoadFile(absl::string_view path);
 absl::StatusOr<std::string> LoadFile(absl::string_view model_dir,
                                      absl::string_view filename);
 
+// Creates a shared lm::ModelResources from a .litertlm container file path.
+absl::StatusOr<std::shared_ptr<lm::ModelResources>> CreateLmModelResources(
+    absl::string_view model_path);
+
 // Creates and compiles a LiteRT model from filesystem path.
 //
 // args
@@ -121,6 +126,20 @@ absl::StatusOr<std::string> LoadFile(absl::string_view model_dir,
 absl::StatusOr<CompiledModel> CreateCompiledModel(
     Environment& env, const ModelOptions& options,
     absl::string_view model_filename);
+
+// Creates and compiles a LiteRT model from an in-memory buffer.
+//
+// args
+// - env: LiteRT environment instance.
+// - options: ModelOptions containing cache_dir, backend, etc.
+// - model_buffer: In-memory TFLite flatbuffer bytes.
+// - model_name: Logical model name used for cache naming / logging.
+//
+// returns
+// - CompiledModel instance on success, or error status on failure.
+absl::StatusOr<CompiledModel> CreateCompiledModelFromBuffer(
+    Environment& env, const ModelOptions& options,
+    absl::string_view model_buffer, absl::string_view model_name);
 
 // Creates and compiles a LiteRT model for use with StatefulLiteRtRunner,
 // automatically declaring the recurrent state tensors as external tensors for

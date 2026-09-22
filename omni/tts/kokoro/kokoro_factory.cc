@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <filesystem>  // NOLINT
 #include <memory>
+#include <optional>
 #include <string>
 #include <system_error>  // NOLINT
 #include <utility>
@@ -32,6 +33,8 @@
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "omni/base/model_resources.h"
 #include "omni/base/model_utils.h"
+#include "omni/tts/kokoro/common.h"
+#include "omni/tts/kokoro/espeak_assets.h"
 #include "omni/tts/kokoro/kokoro_acoustic_stage.h"
 #include "omni/tts/kokoro/kokoro_model_config.h"
 #include "omni/tts/kokoro/kokoro_vocoder_stage.h"
@@ -39,6 +42,7 @@
 #include "omni/tts/stream_text_source.h"
 #include "omni/tts/text_chunk_utils.h"
 #include "omni/tts/tts_session.h"
+#include "runtime/components/model_resources.h"
 #include "runtime/executor/executor_settings_base.h"
 
 namespace litert::omni::tts {
@@ -58,7 +62,7 @@ ModelOptions MakeModelOptions(absl::string_view model_dir,
 
 }  // namespace
 
-absl::Status InitKokoroResources(const KokoroModelConfig& config,
+absl::Status InitKokoroResources(KokoroModelConfig& config,
                                  absl::string_view model_folder,
                                  absl::string_view cache_dir,
                                  lm::Backend backend, int num_threads,
@@ -73,15 +77,57 @@ absl::Status InitKokoroResources(const KokoroModelConfig& config,
 
   ModelOptions acoustic_options =
       MakeModelOptions(model_folder, cache_dir, acoustic_backend, num_threads);
-  LITERT_ASSIGN_OR_RETURN(
-      auto acoustic,
-      CreateCompiledModel(env, acoustic_options, config.acoustic_file));
-
   ModelOptions vocoder_options =
       MakeModelOptions(model_folder, cache_dir, vocoder_backend, num_threads);
-  LITERT_ASSIGN_OR_RETURN(
-      auto vocoder,
-      CreateCompiledModel(env, vocoder_options, config.vocoder_file));
+
+  std::optional<CompiledModel> acoustic_opt;
+  std::optional<CompiledModel> vocoder_opt;
+  if (resources.HasLmModelResources()) {
+    auto lm_resources = resources.GetLmModelResources();
+    LITERT_ASSIGN_OR_RETURN(
+        absl::string_view acoustic_buffer,
+        lm_resources->GetTFLiteModelBuffer(
+            lm::proto::TtsMetadata::TF_LITE_ACOUSTIC));
+    LITERT_ASSIGN_OR_RETURN(
+        auto acoustic_compiled,
+        CreateCompiledModelFromBuffer(env, acoustic_options, acoustic_buffer,
+                                      "kokoro_acoustic"));
+    LITERT_ASSIGN_OR_RETURN(
+        absl::string_view vocoder_buffer,
+        lm_resources->GetTFLiteModelBuffer(
+            lm::proto::TtsMetadata::TF_LITE_VOCODER));
+    LITERT_ASSIGN_OR_RETURN(
+        auto vocoder_compiled,
+        CreateCompiledModelFromBuffer(env, vocoder_options, vocoder_buffer,
+                                      "kokoro_vocoder"));
+    acoustic_opt.emplace(std::move(acoustic_compiled));
+    vocoder_opt.emplace(std::move(vocoder_compiled));
+
+    // espeak-ng only reads its data from the filesystem, so data shipped in
+    // the container has to be unpacked before the phonemizer starts. A
+    // container without espeak-ng data is fine: the phonemizer then falls back
+    // to data next to the model.
+    if (config.espeak_data_dir.empty()) {
+      absl::StatusOr<std::string> espeak_data_dir =
+          kokoro::UnpackEspeakDataFromLitertLm(*lm_resources, cache_dir);
+      if (espeak_data_dir.ok()) {
+        config.espeak_data_dir = *std::move(espeak_data_dir);
+      } else if (!absl::IsNotFound(espeak_data_dir.status())) {
+        return espeak_data_dir.status();
+      }
+    }
+  } else {
+    LITERT_ASSIGN_OR_RETURN(
+        auto acoustic_compiled,
+        CreateCompiledModel(env, acoustic_options, config.acoustic_file));
+    LITERT_ASSIGN_OR_RETURN(
+        auto vocoder_compiled,
+        CreateCompiledModel(env, vocoder_options, config.vocoder_file));
+    acoustic_opt.emplace(std::move(acoustic_compiled));
+    vocoder_opt.emplace(std::move(vocoder_compiled));
+  }
+  CompiledModel acoustic = std::move(*acoustic_opt);
+  CompiledModel vocoder = std::move(*vocoder_opt);
 
   // Verify that acoustic and vocoder models agree on frame capacity.
   auto acoustic_type = acoustic.GetOutputTensorType("acoustic_features");
@@ -144,12 +190,26 @@ absl::StatusOr<TtsSession::Components> CreateKokoroComponents(
 }
 
 std::vector<std::string> GetAvailableKokoroVoices(
-    absl::string_view model_folder) {
+    absl::string_view model_folder, const lm::ModelResources* lm_resources) {
   std::vector<std::string> voices;
+  if (lm_resources != nullptr) {
+    for (const auto& name : lm_resources->GetGenericBinaryDataNames()) {
+      // Not every GenericBinaryData section is a voice pack.
+      if (name == kokoro::kEspeakNgSectionName) continue;
+      std::string voice = kokoro::VoiceNameFromIdentifier(name);
+      if (!voice.empty()) {
+        voices.push_back(std::move(voice));
+      }
+    }
+  }
   if (!model_folder.empty()) {
     std::filesystem::path base_path = std::string(model_folder);
-    std::filesystem::path voices_dir = base_path / "voices";
     std::error_code ec;
+    if (std::filesystem::is_regular_file(base_path, ec) &&
+        !base_path.parent_path().empty()) {
+      base_path = base_path.parent_path();
+    }
+    std::filesystem::path voices_dir = base_path / "voices";
     if (std::filesystem::is_directory(voices_dir, ec)) {
       for (const auto& entry :
            std::filesystem::directory_iterator(voices_dir, ec)) {

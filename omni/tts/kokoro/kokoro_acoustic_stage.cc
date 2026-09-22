@@ -39,6 +39,7 @@
 #include "omni/tts/kokoro/kokoro_io_types.h"
 #include "omni/tts/kokoro/kokoro_model_config.h"
 #include "omni/tts/kokoro/phonemizer.h"
+#include "runtime/components/model_resources.h"
 
 namespace litert::omni::tts {
 
@@ -58,9 +59,14 @@ KokoroAcousticStage::Create(
       stage->config_.language,
       ResolveAndValidateLanguage(voice_req, stage->config_.language));
 
+  lm::ModelResources* lm_resources =
+      stage->resources_->HasLmModelResources()
+          ? stage->resources_->GetLmModelResources().get()
+          : nullptr;
   LITERT_ASSIGN_OR_RETURN(
       stage->voice_pack_,
-      kokoro::LoadVoiceEmbedding(stage->model_folder_, voice_req));
+      kokoro::LoadVoiceEmbedding(stage->model_folder_, voice_req,
+                                 lm_resources));
 
   // Retrieve the compiled unified acoustic predictor model.
   LITERT_ASSIGN_OR_RETURN(
@@ -110,7 +116,10 @@ KokoroAcousticStage::Create(
       ResolveOutputIndex(*stage->acoustic_model_, "speech_frame_length"));
 
   // Initialize the phonemizer once during acoustic stage creation.
-  std::string espeak_dir = ResolveEspeakDataDir(stage->model_folder_);
+  std::string espeak_dir =
+      ResolveEspeakDataDir(stage->config_.espeak_data_dir.empty()
+                               ? stage->model_folder_
+                               : stage->config_.espeak_data_dir);
   LITERT_ASSIGN_OR_RETURN(
       stage->phonemizer_,
       KokoroPhonemizer::Create(espeak_dir, stage->config_.language,

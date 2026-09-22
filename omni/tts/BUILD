@@ -164,12 +164,16 @@ cc_library(
         "@litert//litert/cc:litert_macros",
         "//omni/base:io_types",
         "//omni/base:model_resources",
+        "//omni/base:model_utils",
         "//omni/tts/kokoro:kokoro_factory",
         "//omni/tts/kokoro:kokoro_model_config",
         "//omni/tts/qwen3_tts:qwen3_tts_factory",
         "//omni/tts/qwen3_tts:qwen3_tts_model_config",
+        "//runtime/components:model_resources",
         "//runtime/executor:executor_settings_base",
         "//runtime/framework:threadpool",
+        "//runtime/proto:tts_metadata_cc_proto",
+        "//runtime/proto:tts_model_type_cc_proto",
     ],
 )
 

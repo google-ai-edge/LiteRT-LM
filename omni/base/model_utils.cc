@@ -37,6 +37,7 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "litert/cc/litert_buffer_ref.h"  // from @litert
 #include "litert/cc/litert_common.h"  // from @litert
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_element_type.h"  // from @litert
@@ -215,9 +216,21 @@ absl::StatusOr<std::string> LoadFile(absl::string_view model_dir,
   return LoadFile(JoinPath(model_dir, filename));
 }
 
-absl::StatusOr<CompiledModel> CreateCompiledModel(
-    Environment& env, const ModelOptions& options,
-    absl::string_view model_filename) {
+absl::StatusOr<std::shared_ptr<lm::ModelResources>> CreateLmModelResources(
+    absl::string_view model_path) {
+  ABSL_RETURN_IF_ERROR(CheckFileReadable(model_path));
+  ABSL_ASSIGN_OR_RETURN(auto scoped_file, lm::ScopedFile::Open(model_path));
+  ABSL_ASSIGN_OR_RETURN(auto loader,
+                        lm::LitertLmLoader::Create(std::move(scoped_file)));
+  ABSL_ASSIGN_OR_RETURN(auto resources,
+                        lm::ModelResourcesLitertLm::Create(std::move(loader)));
+  return std::shared_ptr<lm::ModelResources>(std::move(resources));
+}
+
+namespace {
+
+absl::StatusOr<Options> CreateCompilationOptions(const ModelOptions& options,
+                                                 absl::string_view model_name) {
   LITERT_ASSIGN_OR_RETURN(auto comp_options, Options::Create());
   bool target_gpu = options.backend == lm::Backend::GPU;
 
@@ -247,19 +260,46 @@ absl::StatusOr<CompiledModel> CreateCompiledModel(
 
     if (!options.cache_dir.empty()) {
       std::string cache_path = JoinPath(
-          options.cache_dir, absl::StrCat(model_filename, ".xnnpack_cache"));
+          options.cache_dir, absl::StrCat(model_name, ".xnnpack_cache"));
       absl::StatusOr<std::variant<std::string, std::shared_ptr<lm::ScopedFile>>>
           cache_variant(cache_path);
       ABSL_RETURN_IF_ERROR(
-          lm::SetCpuCacheOptions(cache_variant, model_filename, cpu_options));
+          lm::SetCpuCacheOptions(cache_variant, model_name, cpu_options));
     }
   }
 
+  return comp_options;
+}
+
+}  // namespace
+
+absl::StatusOr<CompiledModel> CreateCompiledModel(
+    Environment& env, const ModelOptions& options,
+    absl::string_view model_filename) {
+  ABSL_ASSIGN_OR_RETURN(auto comp_options,
+                        CreateCompilationOptions(options, model_filename));
+  bool target_gpu = options.backend == lm::Backend::GPU;
   std::string path = JoinPath(options.model_dir, model_filename);
   ABSL_RETURN_IF_ERROR(CheckFileReadable(path));
   LITERT_ASSIGN_OR_RETURN(auto compiled_model,
                           CompiledModel::Create(env, path, comp_options));
   ABSL_VLOG(2) << absl::StrCat("Compiled model created successfully with ",
+                               target_gpu ? "GPU" : "CPU", " backend");
+  return std::move(compiled_model);
+}
+
+absl::StatusOr<CompiledModel> CreateCompiledModelFromBuffer(
+    Environment& env, const ModelOptions& options,
+    absl::string_view model_buffer, absl::string_view model_name) {
+  ABSL_ASSIGN_OR_RETURN(auto comp_options,
+                        CreateCompilationOptions(options, model_name));
+  bool target_gpu = options.backend == lm::Backend::GPU;
+  BufferRef<uint8_t> buffer_ref(
+      reinterpret_cast<const uint8_t*>(model_buffer.data()),
+      model_buffer.size());
+  LITERT_ASSIGN_OR_RETURN(auto compiled_model,
+                          CompiledModel::Create(env, buffer_ref, comp_options));
+  ABSL_VLOG(2) << absl::StrCat("Compiled model created from buffer with ",
                                target_gpu ? "GPU" : "CPU", " backend");
   return std::move(compiled_model);
 }

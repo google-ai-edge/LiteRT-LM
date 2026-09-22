@@ -27,6 +27,7 @@
 #include "omni/tts/kokoro/kokoro_model_config.h"
 #include "omni/tts/text_chunk_utils.h"
 #include "omni/tts/tts_session.h"
+#include "runtime/components/model_resources.h"
 #include "runtime/executor/executor_settings_base.h"
 
 namespace litert::omni::tts {
@@ -34,8 +35,14 @@ namespace litert::omni::tts {
 // Compiles and populates all Kokoro-82M LiteRT models into shared
 // ModelResources.
 //
+// When `resources` carries a .litertlm container, the models are compiled from
+// the container's TF_LITE_ACOUSTIC / TF_LITE_VOCODER sections, and espeak-ng
+// data packaged in the container is unpacked into `cache_dir` and recorded in
+// `config.espeak_data_dir`.
+//
 // args
-// - config: Kokoro model configuration.
+// - config: Kokoro model configuration. `espeak_data_dir` is populated when
+//   espeak-ng data is unpacked from the model container.
 // - model_folder: Path to the directory containing the Kokoro models.
 // - cache_dir: Path to the directory for caching model data.
 // - backend: Backend to use for model execution.
@@ -45,7 +52,7 @@ namespace litert::omni::tts {
 //
 // returns
 // - absl::OkStatus on success, or error status on failure.
-absl::Status InitKokoroResources(const KokoroModelConfig& config,
+absl::Status InitKokoroResources(KokoroModelConfig& config,
                                  absl::string_view model_folder,
                                  absl::string_view cache_dir,
                                  lm::Backend backend, int num_threads,
@@ -69,10 +76,11 @@ absl::StatusOr<TtsSession::Components> CreateKokoroComponents(
     std::shared_ptr<ModelResources> resources);
 
 // Returns the list of available Kokoro voice profile names (e.g. "af_heart",
-// "ef_dora") discovered from voice files (*.bin) in `model_folder/voices` or
-// `model_folder`.
+// "ef_dora") discovered from GenericBinaryData sections in `lm_resources` or
+// voice files (*.bin) in `model_folder/voices` / `model_folder`.
 std::vector<std::string> GetAvailableKokoroVoices(
-    absl::string_view model_folder = "");
+    absl::string_view model_folder = "",
+    const lm::ModelResources* lm_resources = nullptr);
 
 // Returns the canonical espeak language code corresponding to a Kokoro voice
 // identifier (e.g. "ef_dora" -> "es", "if_sara" -> "it", "af_heart" ->

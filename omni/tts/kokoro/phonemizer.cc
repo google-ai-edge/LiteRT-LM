@@ -14,12 +14,11 @@
 
 #include "omni/tts/kokoro/phonemizer.h"
 
-#include <unistd.h>
-
 #include <cstddef>
 #include <filesystem>  // NOLINT: Required for path manipulation.
 #include <memory>
 #include <string>
+#include <system_error>  // NOLINT: Required by std::filesystem.
 #include <vector>
 
 #include "absl/base/attributes.h"  // from @com_google_absl
@@ -309,16 +308,21 @@ GetUnicodePunctuationMap() {
 std::string ResolveEspeakDataDir(absl::string_view path) {
   if (path.empty()) return "";
 
-  // Check candidate paths: the path itself or a subfolder named
-  // "espeak-ng-data".
+  // Check candidate paths: the path itself, a subfolder named
+  // "espeak-ng-data", or the parent directory's "espeak-ng-data" when `path`
+  // is a `.litertlm` model file.
   std::filesystem::path base_path = std::string(path);
   std::vector<std::filesystem::path> candidates = {
       base_path,
       base_path / "espeak-ng-data",
   };
+  std::error_code ec;
+  if (std::filesystem::is_regular_file(base_path, ec) && !ec) {
+    candidates.push_back(base_path.parent_path() / "espeak-ng-data");
+  }
   for (const auto& candidate : candidates) {
     // A valid espeak-ng data directory MUST contain the "phontab" table file.
-    if (std::filesystem::exists(candidate / "phontab")) {
+    if (std::filesystem::exists(candidate / "phontab", ec) && !ec) {
       return candidate.string();
     }
   }

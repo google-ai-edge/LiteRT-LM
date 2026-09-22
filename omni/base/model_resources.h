@@ -25,12 +25,13 @@
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "omni/base/litert_lm_runner.h"
+#include "runtime/components/model_resources.h"
 
 namespace litert::omni {
 
 // Generic key-value container for shared heavy resources (such as LiteRT
-// CompiledModel, LiteRtLmRunner instances, and Environment) used across Omni
-// pipeline sessions.
+// CompiledModel, LiteRtLmRunner instances, Environment, and .litertlm
+// lm::ModelResources) used across Omni pipeline sessions.
 class ModelResources {
  public:
   ModelResources() = default;
@@ -60,6 +61,16 @@ class ModelResources {
   // Checks if a LiteRtLmRunner exists under the given string key.
   bool HasLmRunner(absl::string_view key) const;
 
+  // Sets the shared LiteRT-LM container ModelResources (when loaded from a
+  // single .litertlm file).
+  void SetLmModelResources(std::shared_ptr<lm::ModelResources> lm_resources);
+
+  // Returns the shared LiteRT-LM container ModelResources, or nullptr if unset.
+  std::shared_ptr<lm::ModelResources> GetLmModelResources() const;
+
+  // Returns true if a LiteRT-LM container ModelResources is attached.
+  bool HasLmModelResources() const;
+
   // Sets the shared LiteRT Environment.
   void SetEnvironment(std::shared_ptr<Environment> env);
 
@@ -68,6 +79,7 @@ class ModelResources {
 
  private:
   std::shared_ptr<Environment> env_;
+  std::shared_ptr<lm::ModelResources> lm_resources_;
   absl::flat_hash_map<std::string, std::shared_ptr<CompiledModel>> models_;
   absl::flat_hash_map<std::string, std::shared_ptr<LiteRtLmRunner>> lm_runners_;
 };

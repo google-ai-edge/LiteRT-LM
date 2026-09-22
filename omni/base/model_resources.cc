@@ -25,6 +25,7 @@
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "omni/base/litert_lm_runner.h"
+#include "runtime/components/model_resources.h"
 
 namespace litert::omni {
 
@@ -77,6 +78,20 @@ absl::StatusOr<std::shared_ptr<LiteRtLmRunner>> ModelResources::GetLmRunner(
 
 bool ModelResources::HasLmRunner(absl::string_view key) const {
   return lm_runners_.contains(key);
+}
+
+void ModelResources::SetLmModelResources(
+    std::shared_ptr<lm::ModelResources> lm_resources) {
+  lm_resources_ = std::move(lm_resources);
+}
+
+std::shared_ptr<lm::ModelResources> ModelResources::GetLmModelResources()
+    const {
+  return lm_resources_;
+}
+
+bool ModelResources::HasLmModelResources() const {
+  return lm_resources_ != nullptr;
 }
 
 void ModelResources::SetEnvironment(std::shared_ptr<Environment> env) {
