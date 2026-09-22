@@ -53,6 +53,7 @@ fi
 if [[ "${IS_STABLE_RELEASE}" == "true" || "${IS_STAGE_RELEASE}" == "true" ]]; then
   echo "Mode: Stable Release or Staging Release (Strict)"
   API_WHEELS_GCS_DIR="gs://litert-lm-api/macos/stable_wheels"
+  BUILDER_WHEELS_GCS_DIR="gs://litert-lm-builder/stable_wheels"
   API_PREFIX="litert_lm_api"
   EXPECTED_VERSION="${LITERT_LM_VERSION}"
   ALLOW_FALLBACK=false
@@ -60,6 +61,7 @@ if [[ "${IS_STABLE_RELEASE}" == "true" || "${IS_STAGE_RELEASE}" == "true" ]]; th
 elif [[ "${IS_NIGHTLY_RELEASE}" == "true" ]]; then
   echo "Mode: Nightly Release (Strict)"
   API_WHEELS_GCS_DIR="gs://litert-lm-api/macos/nightly_wheels"
+  BUILDER_WHEELS_GCS_DIR="gs://litert-lm-builder/nightly_wheels"
   API_PREFIX="litert_lm_api_nightly"
   EXPECTED_VERSION="${LITERT_LM_VERSION}.dev${TODAY_DATE}"
   ALLOW_FALLBACK=false
@@ -67,6 +69,7 @@ elif [[ "${IS_NIGHTLY_RELEASE}" == "true" ]]; then
 else
   echo "Mode: Presubmit or Local Developer Build (Fallback Allowed)"
   API_WHEELS_GCS_DIR="gs://litert-lm-api/macos/nightly_wheels"
+  BUILDER_WHEELS_GCS_DIR="gs://litert-lm-builder/nightly_wheels"
   API_PREFIX="litert_lm_api_nightly"
   EXPECTED_VERSION="${LITERT_LM_VERSION}.dev${TODAY_DATE}"
   ALLOW_FALLBACK=true
@@ -150,6 +153,34 @@ if ! ls "${API_WHEELS_DIR}"/*.whl > /dev/null 2>&1; then
   fi
 fi
 
+# Fetch same version builder wheel (from KOKORO_GFILE_DIR or GCS)
+if [[ -n "${KOKORO_GFILE_DIR:-}" ]]; then
+  echo "Checking KOKORO_GFILE_DIR (${KOKORO_GFILE_DIR}) for pre-fetched Builder wheels..."
+  find "${KOKORO_GFILE_DIR}" -name "*litert_lm_builder*${EXPECTED_VERSION}*.whl" -exec cp {} "${API_WHEELS_DIR}/" \; 2>/dev/null || true
+fi
+
+if ! ls "${API_WHEELS_DIR}"/*litert_lm_builder*.whl > /dev/null 2>&1; then
+  echo "Fetching matching Builder wheel from GCS..."
+  gcloud storage cp "${BUILDER_WHEELS_GCS_DIR}/*${EXPECTED_VERSION}*.whl" "${API_WHEELS_DIR}/" 2>/dev/null || true
+fi
+
+# If exact version was not found in fallback/continuous/presubmit mode, fetch latest available builder wheel
+if [[ "${ALLOW_FALLBACK}" == "true" ]] && ! ls "${API_WHEELS_DIR}"/*litert_lm_builder*.whl > /dev/null 2>&1; then
+  echo "Trying fallback for Builder wheel..."
+  if [[ -n "${KOKORO_GFILE_DIR:-}" ]]; then
+    LATEST_BUILDER=$(find "${KOKORO_GFILE_DIR}" -name "*litert_lm_builder*.whl" 2>/dev/null | sort -V | tail -n 1 || true)
+    if [[ -n "${LATEST_BUILDER}" ]]; then
+      cp "${LATEST_BUILDER}" "${API_WHEELS_DIR}/"
+    fi
+  fi
+  if ! ls "${API_WHEELS_DIR}"/*litert_lm_builder*.whl > /dev/null 2>&1; then
+    LATEST_BUILDER_GCS=$(gcloud storage ls --sort-by="~updated" --limit=1 "${BUILDER_WHEELS_GCS_DIR}/*litert_lm_builder*.whl" 2>/dev/null | head -n 1 || true)
+    if [[ -n "${LATEST_BUILDER_GCS}" ]]; then
+      gcloud storage cp "${LATEST_BUILDER_GCS}" "${API_WHEELS_DIR}/" 2>/dev/null || true
+    fi
+  fi
+fi
+
 echo "Building wheel using Bazelisk..."
 bazelisk build //python/litert_lm_cli:wheel "$@" ${EXTRA_BAZEL_ARGS}
 
@@ -173,7 +204,7 @@ for PY_VER in "3.10" "3.11" "3.12" "3.13" "3.14"; do
     PY_EXE="python3"
   fi
 
-  echo "Installing the freshly built CLI wheel and the GCS API wheels..."
+  echo "Installing the freshly built CLI wheel and the GCS API/Builder wheels..."
   uv pip install --index-url https://pypi.org/simple --find-links "${API_WHEELS_DIR}" "${WHEEL_DIR}"/*.whl
 
   cd "${TEST_VENV}"
