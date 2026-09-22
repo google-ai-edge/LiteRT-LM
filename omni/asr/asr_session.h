@@ -43,9 +43,11 @@ class AsrSession {
     std::unique_ptr<TextMerger> text_merger;
   };
 
-  // Creates an AsrSession instance taking ownership of configured components.
+  // Creates an AsrSession instance taking ownership of configured components
+  // and an optional pointer to the ThreadPool (owned by client, e.g.
+  // AsrEngine).
   static absl::StatusOr<std::unique_ptr<AsrSession>> Create(
-      Components components);
+      Components components, ::litert::lm::ThreadPool* thread_pool = nullptr);
 
   ~AsrSession();
 
@@ -56,14 +58,14 @@ class AsrSession {
   // Returns absl::OutOfRangeError when audio stream ends.
   absl::StatusOr<TextMerger::MergeResult> ProcessNextChunk();
 
-  // Processes the audio stream asynchronously using the provided thread pool.
-  // Returns absl::AlreadyExistsError if async processing is already active.
+  // Processes the audio stream asynchronously using the session's thread pool.
+  // Returns absl::FailedPreconditionError if `thread_pool_` is null, or
+  // absl::AlreadyExistsError if async processing is already active.
   // Schedules asr session stages on the thread pool to execute concurrently and
   // passes results to `callback` until `callback` returns an error status.
   using AsyncCallback =
       absl::AnyInvocable<absl::Status(absl::StatusOr<TextMerger::MergeResult>)>;
-  absl::Status ProcessAsync(::litert::lm::ThreadPool& thread_pool,
-                            AsyncCallback callback);
+  absl::Status ProcessAsync(AsyncCallback callback);
 
   // Flushes remaining unconfirmed text at stream end.
   absl::StatusOr<TextMerger::MergeResult> Flush();
@@ -71,11 +73,12 @@ class AsrSession {
   const Components& components() const { return components_; }
 
  private:
-  explicit AsrSession(Components components);
+  AsrSession(Components components, ::litert::lm::ThreadPool* thread_pool);
 
   void ResetAsyncScheduler();
 
   Components components_;
+  ::litert::lm::ThreadPool* const thread_pool_ = nullptr;
 
   mutable absl::Mutex mutex_;
   std::unique_ptr<AsyncStageScheduler<TextMerger::MergeResult>> async_scheduler_

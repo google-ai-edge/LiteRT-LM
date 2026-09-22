@@ -200,6 +200,32 @@ TEST(AsrSessionTest, FullSessionEndToEndFlow) {
   EXPECT_EQ(res_flush->unconfirmed_text, "");
 }
 
+TEST(AsrSessionTest, ProcessAsyncFailsWithoutThreadPool) {
+  std::vector<std::vector<float>> chunks = {{1.0f, 2.0f}};
+  auto audio_source = std::make_unique<DummyAudioSource>(chunks);
+  auto preprocessor =
+      std::make_unique<DummyAudioPreprocessor>(audio_source.get());
+  auto speech_recognizer =
+      std::make_unique<DummySpeechRecognizer>(preprocessor.get());
+  auto detokenizer =
+      std::make_unique<DummyDetokenizer>(speech_recognizer.get());
+  auto text_merger = std::make_unique<LevenshteinTextMerger>(detokenizer.get());
+
+  AsrSession::Components components;
+  components.audio_source = std::move(audio_source);
+  components.preprocessor = std::move(preprocessor);
+  components.speech_recognizer = std::move(speech_recognizer);
+  components.detokenizer = std::move(detokenizer);
+  components.text_merger = std::move(text_merger);
+
+  auto session_status =
+      AsrSession::Create(std::move(components), /*thread_pool=*/nullptr);
+  ASSERT_OK(session_status);
+  auto session = std::move(*session_status);
+  EXPECT_TRUE(absl::IsFailedPrecondition(
+      session->ProcessAsync([](auto) { return absl::OkStatus(); })));
+}
+
 TEST(AsrSessionTest, ProcessAsyncFlow) {
   std::vector<std::vector<float>> chunks = {
       {1.0f, 2.0f},
@@ -222,24 +248,23 @@ TEST(AsrSessionTest, ProcessAsyncFlow) {
   components.detokenizer = std::move(detokenizer);
   components.text_merger = std::move(text_merger);
 
-  auto session_status = AsrSession::Create(std::move(components));
+  ::litert::lm::ThreadPool pool("test_pool", 4);
+  auto session_status = AsrSession::Create(std::move(components), &pool);
   ASSERT_OK(session_status);
   auto session = std::move(*session_status);
 
-  ::litert::lm::ThreadPool pool("test_pool", 4);
   std::vector<TextMerger::MergeResult> results;
   absl::Notification done;
 
   ASSERT_TRUE(session
-                  ->ProcessAsync(pool,
-                                 [&results, &done](auto res) -> absl::Status {
-                                   if (!res.ok()) {
-                                     done.Notify();
-                                     return res.status();
-                                   }
-                                   results.push_back(*res);
-                                   return absl::OkStatus();
-                                 })
+                  ->ProcessAsync([&results, &done](auto res) -> absl::Status {
+                    if (!res.ok()) {
+                      done.Notify();
+                      return res.status();
+                    }
+                    results.push_back(*res);
+                    return absl::OkStatus();
+                  })
                   .ok());
 
   done.WaitForNotification();
@@ -274,23 +299,21 @@ TEST(AsrSessionTest, MultipleProcessAsyncCallsInSequence) {
   components.detokenizer = std::move(detokenizer);
   components.text_merger = std::move(text_merger);
 
-  auto session_status = AsrSession::Create(std::move(components));
+  ::litert::lm::ThreadPool pool("test_pool", 4);
+  auto session_status = AsrSession::Create(std::move(components), &pool);
   ASSERT_OK(session_status);
   auto session = std::move(*session_status);
-
-  ::litert::lm::ThreadPool pool("test_pool", 4);
 
   // First run
   absl::Notification done1;
   ASSERT_TRUE(session
-                  ->ProcessAsync(pool,
-                                 [&done1](auto res) -> absl::Status {
-                                   if (!res.ok()) {
-                                     done1.Notify();
-                                     return res.status();
-                                   }
-                                   return absl::OkStatus();
-                                 })
+                  ->ProcessAsync([&done1](auto res) -> absl::Status {
+                    if (!res.ok()) {
+                      done1.Notify();
+                      return res.status();
+                    }
+                    return absl::OkStatus();
+                  })
                   .ok());
   done1.WaitForNotification();
 
@@ -298,14 +321,13 @@ TEST(AsrSessionTest, MultipleProcessAsyncCallsInSequence) {
   session->Reset();
   absl::Notification done2;
   ASSERT_TRUE(session
-                  ->ProcessAsync(pool,
-                                 [&done2](auto res) -> absl::Status {
-                                   if (!res.ok()) {
-                                     done2.Notify();
-                                     return res.status();
-                                   }
-                                   return absl::OkStatus();
-                                 })
+                  ->ProcessAsync([&done2](auto res) -> absl::Status {
+                    if (!res.ok()) {
+                      done2.Notify();
+                      return res.status();
+                    }
+                    return absl::OkStatus();
+                  })
                   .ok());
   done2.WaitForNotification();
 }
@@ -331,27 +353,25 @@ TEST(AsrSessionTest, RejectsConcurrentProcessAsyncCalls) {
   components.detokenizer = std::move(detokenizer);
   components.text_merger = std::move(text_merger);
 
-  auto session_status = AsrSession::Create(std::move(components));
+  ::litert::lm::ThreadPool pool("test_pool", 4);
+  auto session_status = AsrSession::Create(std::move(components), &pool);
   ASSERT_OK(session_status);
   auto session = std::move(*session_status);
 
-  ::litert::lm::ThreadPool pool("test_pool", 4);
-
   absl::Notification done;
   ASSERT_TRUE(session
-                  ->ProcessAsync(pool,
-                                 [&done](auto res) -> absl::Status {
-                                   if (!res.ok()) {
-                                     done.Notify();
-                                     return res.status();
-                                   }
-                                   return absl::OkStatus();
-                                 })
+                  ->ProcessAsync([&done](auto res) -> absl::Status {
+                    if (!res.ok()) {
+                      done.Notify();
+                      return res.status();
+                    }
+                    return absl::OkStatus();
+                  })
                   .ok());
 
   // Second call while first is running should fail
   auto status2 = session->ProcessAsync(
-      pool, [](auto res) -> absl::Status { return absl::OkStatus(); });
+      [](auto res) -> absl::Status { return absl::OkStatus(); });
   EXPECT_FALSE(status2.ok());
 
   done.WaitForNotification();
@@ -379,18 +399,16 @@ TEST(AsrSessionTest, DestroySessionSafelyDuringProcessAsync) {
   components.detokenizer = std::move(detokenizer);
   components.text_merger = std::move(text_merger);
 
-  auto session_status = AsrSession::Create(std::move(components));
+  ::litert::lm::ThreadPool pool("test_pool", 4);
+  auto session_status = AsrSession::Create(std::move(components), &pool);
   ASSERT_OK(session_status);
   auto session = std::move(*session_status);
 
-  ::litert::lm::ThreadPool pool("test_pool", 4);
-
   // Return error on callback to stop, then destroy session immediately.
   ASSERT_TRUE(session
-                  ->ProcessAsync(pool,
-                                 [](auto res) -> absl::Status {
-                                   return absl::InternalError("Stop requested");
-                                 })
+                  ->ProcessAsync([](auto res) -> absl::Status {
+                    return absl::InternalError("Stop requested");
+                  })
                   .ok());
 
   // Destroy session immediately while worker tasks may be in flight
