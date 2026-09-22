@@ -173,7 +173,7 @@ absl::StatusOr<LlmExecutorSettings> LlmExecutorSettings::CreateDefault(
     ModelAssets model_assets, Backend backend,
     std::optional<Backend> sampler_backend) {
   LlmExecutorSettings settings(std::move(model_assets));
-  if (backend == Backend::CPU) {
+  if (backend == Backend::CPU || IsCustomBackend(backend)) {
     CpuConfig config;
     config.kv_increment_size = 16;
     config.prefill_chunk_size = -1;
