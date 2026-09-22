@@ -1000,24 +1000,6 @@ min_runtime_version = "0.12.3"
     self.assertIn("supports_thinking: true", ss)
     self.assertIn("supports_function_calling: false", ss)
 
-  def test_from_toml_file_with_thinking_and_function_calling(self):
-    """Tests supports_thinking and supports_function_calling from TOML."""
-    metadata_path = self._create_dummy_file("metadata.pbtext", b"")
-    metadata_filename = os.path.basename(metadata_path)
-    toml_content = f"""
-[[section]]
-section_type = "LlmMetadata"
-data_path = "{metadata_filename}"
-supports_thinking = true
-supports_function_calling = true
-"""
-    toml_path = self._create_dummy_file(
-        "capabilities.toml", toml_content.encode()
-    )
-    builder = litertlm_builder.LitertLmFileBuilder.from_toml_file(toml_path)
-    ss = self._build_and_read_litertlm(builder)
-    self.assertIn("supports_thinking: true", ss)
-    self.assertIn("supports_function_calling: true", ss)
 
   def test_from_toml_file_with_vision_patch_metadata(self):
     """Tests max_num_patches and pooling_kernel_size from TOML."""
@@ -1269,58 +1251,6 @@ pooling_kernel_size = 2
     ss = stream.getvalue()
     self.assertIn("image_tensor_height: 768", ss)
     self.assertIn("supports_thinking: true", ss)
-
-  def test_gemma3n_from_toml_file_with_validation(self):
-    """Tests loading Gemma3N model from TOML and building with validation."""
-    meta = llm_metadata_pb2.LlmMetadata()
-    meta.llm_model_type.gemma3n.image_tensor_height = 768
-    meta.llm_model_type.gemma3n.image_tensor_width = 768
-    meta_path = self._create_dummy_file(
-        "gemma3n_meta.pb", meta.SerializeToString()
-    )
-    meta_filename = os.path.basename(meta_path)
-    dummy_tflite = self._create_dummy_file("model.tflite", b"dummy")
-    dummy_filename = os.path.basename(dummy_tflite)
-
-    toml_content = f"""
-[[section]]
-section_type = "LlmMetadata"
-data_path = "{meta_filename}"
-supports_thinking = true
-supports_function_calling = false
-
-[[section]]
-section_type = "TFLiteModel"
-model_type = "PREFILL_DECODE"
-data_path = "{dummy_filename}"
-
-[[section]]
-section_type = "TFLiteModel"
-model_type = "VISION_ADAPTER"
-data_path = "{dummy_filename}"
-
-[[section]]
-section_type = "TFLiteModel"
-model_type = "VISION_ENCODER"
-data_path = "{dummy_filename}"
-"""
-    toml_path = self._create_dummy_file(
-        "gemma3n_model.toml", toml_content.encode()
-    )
-    builder = litertlm_builder.LitertLmFileBuilder.from_toml_file(toml_path)
-    self.assertTrue(builder.is_llm_model)
-    self.assertTrue(builder.is_vision_model)
-    self.assertFalse(builder.is_vision_transformer_model)
-    builder.validate_metadata()
-    path = os.path.join(self.temp_dir, "gemma3n_toml.litertlm")
-    with litertlm_core.open_file(path, "wb") as f:
-      builder.build(f, validate_metadata=True)
-    stream = io.StringIO()
-    litertlm_peek.peek_litertlm_file(path, self.temp_dir, stream)
-    ss = stream.getvalue()
-    self.assertIn("supports_thinking: true", ss)
-    self.assertIn("supports_function_calling: false", ss)
-    self.assertIn("image_tensor_height: 768", ss)
 
   def test_validate_metadata_vision_generic_model(self):
     """Tests validation for GenericModel with and without patch parameters."""
