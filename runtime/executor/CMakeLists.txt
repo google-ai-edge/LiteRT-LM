@@ -92,6 +92,31 @@ target_link_libraries(runtime_executor_executor_settings_base
 )
 
 # ==============================================================================
+# Executor Backend Registry
+# ==============================================================================
+add_litertlm_library(runtime_executor_executor_backend_registry STATIC
+  executor_backend_registry.cc
+)
+add_library(LiteRTLM::Runtime::Executor::ExecutorBackendRegistry
+ALIAS runtime_executor_executor_backend_registry)
+
+target_include_directories(runtime_executor_executor_backend_registry
+  PUBLIC
+    ${LITERTLM_GENERATED_SRC_DIR}
+    ${LITERT_INCLUDE_DIR}
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+target_link_libraries(runtime_executor_executor_backend_registry
+  PUBLIC
+    LiteRTLM::Runtime::Components::ModelResourcesInterface
+    LiteRTLM::Runtime::Executor::ExecutorSettingsBase
+    LiteRTLM::Runtime::Executor::LlmExecutorInterface
+    LiteRTLM::Support::Tokenizer
+    LITERTLM_DEPS
+)
+
+# ==============================================================================
 # Executor Stats
 # ==============================================================================
 add_litertlm_library(runtime_executor_executor_stats STATIC
@@ -613,6 +638,7 @@ target_link_libraries(runtime_executor_libs INTERFACE
   LiteRTLM::Runtime::Executor::LlmExecutorInterface
   LiteRTLM::Runtime::Executor::AudioLitertCompiledModelExecutor
   LiteRTLM::Runtime::Executor::CommonUtils
+  LiteRTLM::Runtime::Executor::ExecutorBackendRegistry
   LiteRTLM::Runtime::Executor::ExecutorSettingsBase
   LiteRTLM::Runtime::Executor::ExecutorStats
   LiteRTLM::Runtime::Executor::FakeLlmExecutor
