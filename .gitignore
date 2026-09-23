@@ -1,2 +1,4 @@
 /MODULE.bazel.lock
 /bazel-*
+/js/packages/core/wasm/
+node_modules/
