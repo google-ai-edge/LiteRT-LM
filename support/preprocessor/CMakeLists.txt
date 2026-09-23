@@ -102,9 +102,30 @@ add_library(LiteRTLM::Support::Preprocessor::StbImage ALIAS support_preprocessor
 target_include_directories(support_preprocessor_stb_image_preprocessor
   PUBLIC
     ${LITERTLM_INCLUDE_PATHS}
+    ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
 target_link_libraries(support_preprocessor_stb_image_preprocessor
+  PUBLIC
+    LiteRTLM::Support::Util::IoTypes
+    LITERTLM_DEPS
+)
+
+# ==============================================================================
+# Stub Image Preprocessor
+# ==============================================================================
+add_litertlm_library(support_preprocessor_stub_image_preprocessor STATIC
+  stub_image_preprocessor.cc
+)
+add_library(LiteRTLM::Support::Preprocessor::StubImage ALIAS support_preprocessor_stub_image_preprocessor)
+
+target_include_directories(support_preprocessor_stub_image_preprocessor
+  PUBLIC
+    ${LITERTLM_INCLUDE_PATHS}
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_link_libraries(support_preprocessor_stub_image_preprocessor
   PUBLIC
     LiteRTLM::Support::Util::IoTypes
     LITERTLM_DEPS
@@ -122,5 +143,5 @@ target_link_libraries(support_processor_libs INTERFACE
   LiteRTLM::Support::Preprocessor::AudioUtils
   LiteRTLM::Support::Preprocessor::ImagePreprocessorUtils
   LiteRTLM::Support::Preprocessor::MelFilterBank
-  LiteRTLM::Support::Preprocessor::StbImage  
+  LiteRTLM::Support::Preprocessor::StbImage
 )

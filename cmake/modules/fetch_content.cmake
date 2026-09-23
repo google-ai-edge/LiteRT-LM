@@ -245,9 +245,9 @@ file(CONFIGURE
   @ONLY
 )
 
-if(NOT TARGET stb_lib)
-  add_library(stb_lib STATIC ${LITERTLM_STB_IMPL_SRC})
-  target_include_directories(stb_lib PUBLIC ${LITERTLM_STB_SRC_DIR})
+if(NOT TARGET stb_impl)
+  add_litertlm_library(stb_impl STATIC ${LITERTLM_STB_IMPL_SRC})
+  target_include_directories(stb_impl PUBLIC ${LITERTLM_STB_SRC_DIR})
 endif()
 
 # --- ZLIB ---
@@ -306,6 +306,6 @@ add_dependencies(fetch_content_complete
     minizip_lib
     minja_lib
     json_lib
-    stb_lib
+    stb_impl
     zlib_lib
 )

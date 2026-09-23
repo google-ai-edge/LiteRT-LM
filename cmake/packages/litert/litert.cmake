@@ -43,7 +43,7 @@ include(ExternalProject)
         minizip_lib
         minja_lib
         json_lib
-        stb_lib
+        stb_impl
         zlib_lib
 
       GIT_REPOSITORY
