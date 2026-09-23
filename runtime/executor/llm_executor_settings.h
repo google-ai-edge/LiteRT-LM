@@ -26,11 +26,13 @@
 #include <variant>
 #include <vector>
 
+#include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/log/log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "runtime/proto/sampler_params.pb.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/mtp_gating_policy.h"
@@ -175,6 +177,31 @@ struct NpuConfig {
   bool use_lazy_warmup_for_npu = false;
 };
 std::ostream& operator<<(std::ostream& os, const NpuConfig& config);
+
+// Key-value configuration for dynamically registered custom executor backends.
+// Unlike built-in backend configs, `CustomBackendConfig` starts empty so
+// user-specified options are forwarded directly to the custom backend without
+// intermediate core overrides.
+struct CustomBackendConfig {
+  absl::flat_hash_map<std::string, std::string> options;
+
+  void SetOption(absl::string_view key, absl::string_view value) {
+    options[std::string(key)] = std::string(value);
+  }
+
+  std::optional<absl::string_view> GetOption(absl::string_view key) const {
+    auto it = options.find(key);
+    if (it == options.end()) {
+      return std::nullopt;
+    }
+    return it->second;
+  }
+
+  // Parses "key=value" entries and inserts them into `options`.
+  absl::Status SetOptionsFromStrings(
+      const std::vector<std::string>& key_value_pairs);
+};
+std::ostream& operator<<(std::ostream& os, const CustomBackendConfig& config);
 
 // Optional advanced settings for the LLM executor.
 struct AdvancedSettings {
@@ -399,10 +426,31 @@ class LlmExecutorSettings : public ExecutorSettingsBase {
     return absl::InvalidArgumentError("Backend config is not valid.");
   }
 
-  void SetBackendConfig(const std::variant<GpuArtisanConfig, GpuConfig,
-                                           CpuConfig, NpuConfig>& config) {
+  void SetBackendConfig(
+      const std::variant<GpuArtisanConfig, GpuConfig, CpuConfig, NpuConfig,
+                         CustomBackendConfig>& config) {
     backend_config_ = config;
   }
+
+  // Validates that `key` is prefixed with `<backend>.<option>` matching this
+  // executor's `GetBackend()`, strips the `<backend>.` prefix, and stores the
+  // unqualified `<option>` in `CustomBackendConfig`. Returns
+  // `InvalidArgumentError` if this `LlmExecutorSettings` is not configured for
+  // a custom backend, if `key` is not in `<backend>.<option>` format, or if
+  // `<backend>` does not match `GetBackend()`.
+  absl::Status SetCustomBackendOption(absl::string_view key,
+                                      absl::string_view value);
+
+  // Parses "<backend>.<option>=<value>" entries and applies them via
+  // `SetCustomBackendOption`.
+  absl::Status SetCustomBackendOptionsFromStrings(
+      const std::vector<std::string>& key_value_pairs);
+
+  // Returns the value for `key` if `backend_config_` holds
+  // `CustomBackendConfig` and contains `key` (supports both unqualified
+  // `<option>` and `<backend>.<option>` lookup).
+  std::optional<absl::string_view> GetCustomBackendOption(
+      absl::string_view key) const;
 
   Backend GetSamplerBackend() const { return sampler_backend_; }
   void SetSamplerBackend(Backend sampler_backend) {
@@ -475,7 +523,8 @@ class LlmExecutorSettings : public ExecutorSettingsBase {
   int32_t pad_token_id_ = -1;
 
   // Backend specific config.
-  std::variant<GpuArtisanConfig, GpuConfig, CpuConfig, NpuConfig>
+  std::variant<GpuArtisanConfig, GpuConfig, CpuConfig, NpuConfig,
+               CustomBackendConfig>
       backend_config_;
 
   // Backend to use for sampling.

@@ -28,6 +28,7 @@
 
 #include "absl/base/log_severity.h"  // from @com_google_absl
 #include "absl/container/btree_map.h"  // from @com_google_absl
+#include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/log/log_entry.h"  // from @com_google_absl
 #include "absl/log/log_sink.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
@@ -180,6 +181,7 @@ struct LiteRtLmSettings {
   bool enable_npu_debug_logging = false;
   bool use_lazy_warmup_for_npu = false;
   bool disable_input_prompt_as_hint = false;
+  absl::flat_hash_map<std::string, std::string> custom_backend_options;
 };
 
 struct LitertLmMetrics {
