@@ -85,7 +85,7 @@ def run_server(
     ),
 )
 @common.config_option
-@click.option("--host", default="0.0.0.0", type=str, help="Host to listen on")
+@click.option("--host", default="127.0.0.1", type=str, help="Host to listen on")
 @click.option("--port", default=9379, type=int, help="Port to listen on")
 @click.option(
     "--api",
