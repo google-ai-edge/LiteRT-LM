@@ -99,4 +99,4 @@ jinja_prompt_template:
   "    {{- '<|im_start|>assistant\\n' -}}\n"
   "{%- endif -%}\n"
 
-min_runtime_version = "0.18.0"
+min_runtime_version: "0.18.0"
