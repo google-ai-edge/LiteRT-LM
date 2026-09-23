@@ -24,7 +24,7 @@ const __dirname = path.dirname(__filename);
 export default defineConfig({
   base: './',
   build: {
-    emptyOutDir: false,
+    emptyOutDir: true,
     sourcemap: false,
   },
   server: {
@@ -43,22 +43,6 @@ export default defineConfig({
       closeBundle() {
         const outDir = path.resolve(__dirname, 'dist');
         if (!fs.existsSync(outDir)) return;
-
-        // Copy WASM files to dist/wasm/
-        const require = createRequire(import.meta.url);
-        const coreDir = path.dirname(require.resolve('@litert-lm/core/package.json'));
-        const wasmSrcDir = path.resolve(coreDir, 'wasm');
-        const wasmDstDir = path.resolve(outDir, 'wasm');
-        if (fs.existsSync(wasmSrcDir)) {
-          if (!fs.existsSync(wasmDstDir)) {
-            fs.mkdirSync(wasmDstDir, { recursive: true });
-          }
-          const files = fs.readdirSync(wasmSrcDir);
-          for (const file of files) {
-            fs.copyFileSync(path.resolve(wasmSrcDir, file), path.resolve(wasmDstDir, file));
-          }
-          console.log('[Vite] Copied @litert-lm/core wasm files to dist/wasm/');
-        }
 
         // Symlink all model files from models/ to dist/models/ to save disk space during local builds
         const modelSrcDir = path.resolve(__dirname, 'models');
