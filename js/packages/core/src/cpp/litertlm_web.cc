@@ -46,31 +46,6 @@ using emscripten::val;
 
 namespace litertlm_web {
 
-// Stored callback for streaming weights.
-static std::optional<emscripten::val> stream_weights_callback;
-
-void RegisterStreamWeightsCallback(emscripten::val callback) {
-  if (callback.isNull() || callback.isUndefined()) {
-    stream_weights_callback = std::nullopt;
-  } else {
-    stream_weights_callback = callback;
-  }
-}
-
-/**
- * Get the callback that, when called, will stream weights to WebGPU.
- *
- * This is used by litert/weight_loader/external_weights_loader.cc
- */
-emscripten::val GetStreamWeightsCallback() {
-  // TODO: b/555784020 - Use a better approach to identifying which model is
-  // being loaded.
-  if (!stream_weights_callback.has_value()) {
-    return emscripten::val::undefined();
-  }
-  return stream_weights_callback.value();
-}
-
 void SetupLogging() { drishti::wasm::InitializeLog(); }
 
 /**
@@ -231,28 +206,10 @@ static absl::StatusOr<std::vector<litert::lm::InputData>> ParseInputData(
 EMSCRIPTEN_BINDINGS(litertlm_web) {
   emscripten::function("setupLogging", &SetupLogging);
   emscripten::function("setErrorReporter", &litert_web::SetErrorReporter);
-  emscripten::function("registerStreamWeightsCallback",
-                       &RegisterStreamWeightsCallback);
-  emscripten::function("getStreamWeightsCallback", &GetStreamWeightsCallback);
-  emscripten::function(
-      "readStoredWeights",
-      optional_override([](int model_type, double offset_double,
-                           double size_double, uintptr_t dest_address) {
-        uint64_t offset = static_cast<uint64_t>(offset_double);
-        uint64_t size = static_cast<uint64_t>(size_double);
-        void* buffer = reinterpret_cast<void*>(dest_address);
-        UnwrapStatus(
-            litert::lm::ReadStoredWeights(model_type, offset, size, buffer));
-      }),
-      emscripten::async());
   emscripten::function("clearStoredWeightsStreams", optional_override([]() {
                          UnwrapStatus(litert::lm::ClearStoredWeightsStreams());
                        }),
                        emscripten::async());
-  emscripten::function(
-      "getCurrentlyCompilingModel", optional_override([]() {
-        return static_cast<int>(litert::lm::GetCurrentlyCompilingModel());
-      }));
 
   emscripten::enum_<litert::lm::Backend>("Backend")
       .value("UNSPECIFIED", litert::lm::Backend::UNSPECIFIED)
