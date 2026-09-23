@@ -20,6 +20,7 @@
 #include <utility>
 
 #include "absl/base/nullability.h"  // from @com_google_absl
+#include "absl/log/absl_check.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
@@ -156,10 +157,14 @@ absl::StatusOr<std::unique_ptr<OmniSessionFactory>> CreateSessionFactory(
 }  // namespace
 
 OmniEngine::OmniEngine(
-    std::string model_name,
-    std::unique_ptr<OmniSessionFactory> absl_nonnull session_factory)
+    std::string model_name, std::unique_ptr<OmniSessionFactory> session_factory,
+    std::unique_ptr<OmniStreamingSessionFactory> streaming_session_factory)
     : model_name_(std::move(model_name)),
-      session_factory_(std::move(session_factory)) {}
+      session_factory_(std::move(session_factory)),
+      streaming_session_factory_(std::move(streaming_session_factory)) {
+  ABSL_CHECK(session_factory_ != nullptr ||
+             streaming_session_factory_ != nullptr);
+}
 
 absl::StatusOr<std::unique_ptr<OmniEngine>> OmniEngine::Create(
     absl::string_view model_name, const Options& options) {
@@ -174,16 +179,46 @@ absl::StatusOr<std::unique_ptr<OmniEngine>> OmniEngine::Create(
 
 absl::StatusOr<std::unique_ptr<OmniEngine>> OmniEngine::Create(
     absl::string_view model_name,
-    std::unique_ptr<OmniSessionFactory> absl_nonnull session_factory) {
+    std::unique_ptr<OmniSessionFactory> absl_nonnull factory) {
   if (model_name.empty()) {
     return absl::InvalidArgumentError("model_name must not be empty.");
   }
+  if (factory == nullptr) {
+    return absl::InvalidArgumentError("factory must not be null.");
+  }
   return std::unique_ptr<OmniEngine>(
-      new OmniEngine(std::string(model_name), std::move(session_factory)));
+      new OmniEngine(std::string(model_name), std::move(factory), nullptr));
+}
+
+absl::StatusOr<std::unique_ptr<OmniEngine>> OmniEngine::Create(
+    absl::string_view model_name,
+    std::unique_ptr<OmniStreamingSessionFactory> absl_nonnull factory) {
+  if (model_name.empty()) {
+    return absl::InvalidArgumentError("model_name must not be empty.");
+  }
+  if (factory == nullptr) {
+    return absl::InvalidArgumentError("factory must not be null.");
+  }
+  return std::unique_ptr<OmniEngine>(
+      new OmniEngine(std::string(model_name), nullptr, std::move(factory)));
 }
 
 absl::StatusOr<std::unique_ptr<OmniSession>> OmniEngine::CreateSession() {
+  if (session_factory_ == nullptr) {
+    return absl::FailedPreconditionError(
+        "OmniSessionFactory is not configured on this OmniEngine.");
+  }
   return session_factory_->Create();
+}
+
+absl::StatusOr<std::unique_ptr<OmniStreamingSession>>
+OmniEngine::CreateStreamingSession(
+    OmniStreamingSessionFactory::OutputCallback callback) {
+  if (streaming_session_factory_ == nullptr) {
+    return absl::FailedPreconditionError(
+        "OmniStreamingSessionFactory is not configured on this OmniEngine.");
+  }
+  return streaming_session_factory_->Create(std::move(callback));
 }
 
 }  // namespace litert::omni

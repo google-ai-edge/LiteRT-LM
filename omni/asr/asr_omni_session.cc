@@ -162,7 +162,7 @@ class AsrOmniSession : public OmniSession {
 
   void Reset() override { asr_session_->Reset(); }
 
-  absl::StatusOr<Output> Process(const Input& input) override {
+  absl::StatusOr<Output> Process(Input input) override {
     const auto* audio_input = std::get_if<AudioInput>(&input);
     if (audio_input == nullptr) {
       return absl::InvalidArgumentError(
@@ -180,8 +180,7 @@ class AsrOmniSession : public OmniSession {
     return Output(std::move(combined_output));
   }
 
-  absl::Status ProcessAsync(const Input& input,
-                            AsyncCallback callback) override {
+  absl::Status ProcessAsync(Input input, OutputCallback callback) override {
     const auto* audio_input = std::get_if<AudioInput>(&input);
     if (audio_input == nullptr) {
       return absl::InvalidArgumentError(

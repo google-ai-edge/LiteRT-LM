@@ -37,7 +37,7 @@ class TtsOmniSession : public OmniSession {
 
   void Reset() override { tts_session_->Reset(); }
 
-  absl::StatusOr<Output> Process(const Input& input) override {
+  absl::StatusOr<Output> Process(Input input) override {
     const auto* text_input = std::get_if<TextInput>(&input);
     if (text_input == nullptr) {
       return absl::InvalidArgumentError(
@@ -48,8 +48,7 @@ class TtsOmniSession : public OmniSession {
     return Output(std::move(audio_out));
   }
 
-  absl::Status ProcessAsync(const Input& input,
-                            AsyncCallback callback) override {
+  absl::Status ProcessAsync(Input input, OutputCallback callback) override {
     const auto* text_input = std::get_if<TextInput>(&input);
     if (text_input == nullptr) {
       return absl::InvalidArgumentError(

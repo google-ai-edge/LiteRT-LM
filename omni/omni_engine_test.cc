@@ -177,6 +177,43 @@ class FakeOmniSessionFactory : public OmniSessionFactory {
   ::litert::lm::ThreadPool pool_{"fake_factory_pool", 1};
 };
 
+class FakeOmniStreamingSession : public OmniStreamingSession {
+ public:
+  explicit FakeOmniStreamingSession(
+      OmniStreamingSessionFactory::OutputCallback callback)
+      : callback_(std::move(callback)) {}
+
+  void Reset() override { buffered_text_.clear(); }
+
+  absl::Status PushInput(OmniSession::Input input) override {
+    const auto* text_input = std::get_if<TextInput>(&input);
+    if (text_input == nullptr) {
+      return absl::InvalidArgumentError("Expected TextInput.");
+    }
+    buffered_text_ += text_input->text;
+    return callback_(
+        Output(AudioOutput{.pcm_samples = {0.5f}, .sample_rate_hz = 24000}));
+  }
+
+  absl::StatusOr<Output> Flush() override {
+    TextOutput flushed{.confirmed_text = std::move(buffered_text_)};
+    buffered_text_.clear();
+    return Output(std::move(flushed));
+  }
+
+ private:
+  OmniStreamingSessionFactory::OutputCallback callback_;
+  std::string buffered_text_;
+};
+
+class FakeOmniStreamingSessionFactory : public OmniStreamingSessionFactory {
+ public:
+  absl::StatusOr<std::unique_ptr<OmniStreamingSession>> Create(
+      OutputCallback callback) override {
+    return std::make_unique<FakeOmniStreamingSession>(std::move(callback));
+  }
+};
+
 TEST(OmniEngineTest, CreateSessionDelegatesToFactory) {
   auto engine = OmniEngine::Create("test-model",
                                    std::make_unique<FakeOmniSessionFactory>());
@@ -187,6 +224,29 @@ TEST(OmniEngineTest, CreateSessionDelegatesToFactory) {
   auto out = (*session)->Process(OmniSession::TextInput{.text = "Hello."});
   ASSERT_OK(out);
   EXPECT_TRUE(std::holds_alternative<AudioOutput>(*out));
+}
+
+TEST(OmniEngineTest, CreateStreamingSessionDelegatesToFactory) {
+  auto engine = OmniEngine::Create(
+      "test-model", std::make_unique<FakeOmniStreamingSessionFactory>());
+  ASSERT_OK(engine);
+  std::vector<AudioOutput> outputs;
+  auto streaming_session = (*engine)->CreateStreamingSession(
+      [&](absl::StatusOr<OmniStreamingSession::Output> res) {
+        if (res.ok()) {
+          outputs.push_back(std::get<AudioOutput>(*res));
+        }
+        return absl::OkStatus();
+      });
+  ASSERT_OK(streaming_session);
+  ASSERT_OK(
+      (*streaming_session)->PushInput(OmniSession::TextInput{.text = "Hello"}));
+  EXPECT_EQ(outputs.size(), 1);
+  auto flushed = (*streaming_session)->Flush();
+  ASSERT_OK(flushed);
+  ASSERT_TRUE(std::holds_alternative<OmniSession::TextOutput>(*flushed));
+  EXPECT_EQ(std::get<OmniSession::TextOutput>(*flushed).confirmed_text,
+            "Hello");
 }
 
 TEST(OmniEngineTest, ResolvesAsrModelAndForwardsOptions) {
