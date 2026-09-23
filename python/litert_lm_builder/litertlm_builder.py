@@ -1165,6 +1165,62 @@ class LitertLmFileBuilder:
     self._sections.append(section_object)
     return self  # pyrefly: ignore[bad-return]
 
+  def set_backend_constraint(
+      self,
+      model_type: TfLiteModelType | str,
+      backend_constraint: str | None,
+  ) -> LitertLmFileBuilderT:
+    """Sets or clears the backend_constraint metadata on matching sections.
+
+    Useful after post-processing an unpacked package (e.g. NPU compilation)
+    where a section previously constrained to CPU can now run elsewhere.
+
+    Args:
+      model_type: Target section model type (enum or TF-free string such as
+        'audio_encoder_hw').
+      backend_constraint: New constraint string (e.g. 'npu', 'cpu, gpu'), or
+        None to remove the constraint entirely.
+
+    Returns:
+      The current LitertLmFileBuilder object.
+
+    Raises:
+      KeyError: If no section with the given model_type exists.
+      ValueError: If backend_constraint is not a valid backend string.
+    """
+    target_enum = (
+        model_type
+        if isinstance(model_type, TfLiteModelType)
+        else TfLiteModelType.get_enum_from_tf_free_value(model_type)
+    )
+    if backend_constraint is not None:
+      _validate_backend_constraints(backend_constraint)
+
+    matched = False
+    for section in self._sections:
+      if _get_model_type(section) == target_enum.value:
+        matched = True
+        section.metadata = [
+            m for m in section.metadata if m.key != "backend_constraint"
+        ]
+        if backend_constraint is not None:
+          section.metadata.append(
+              Metadata(
+                  key="backend_constraint",
+                  value=backend_constraint.lower(),
+                  dtype=DType.STRING,
+              )
+          )
+    if not matched:
+      raise KeyError(f"No section found with model_type {target_enum.value}")
+    return self  # pyrefly: ignore[bad-return]
+
+  def remove_backend_constraint(
+      self, model_type: TfLiteModelType | str
+  ) -> LitertLmFileBuilderT:
+    """Removes the backend_constraint metadata from matching sections."""
+    return self.set_backend_constraint(model_type, None)
+
   def build(
       self,
       stream: BinaryIO,
