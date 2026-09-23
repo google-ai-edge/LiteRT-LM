@@ -152,6 +152,11 @@ class AsyncStageScheduler {
         return;
       }
       absl::Status status = stage.Schedule();
+      {
+        // Touch mutex_ so WaitForAnyStagesReadyOrStopped() and Stop()
+        // immediately re-evaluate their absl::Condition upon stage completion.
+        absl::MutexLock lock(mutex_);
+      }
       if (!status.ok() && !absl::IsNotFound(status)) {
         CallCallbackOnError(status);
       }

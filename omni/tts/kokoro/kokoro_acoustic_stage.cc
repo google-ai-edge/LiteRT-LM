@@ -200,6 +200,11 @@ absl::Status KokoroAcousticStage::ScheduleInternal() {
 
   // Step 2: Determine bucketing capacity and slice token IDs into sentence
   // chunks.
+  LITERT_ASSIGN_OR_RETURN(
+      auto ids_tensor_type,
+      acoustic_input_buffers_[input_indices_.phoneme_ids].TensorType());
+  const bool ids_is_int32 =
+      (ids_tensor_type.ElementType() == ElementType::Int32);
   const int bucket_size = config_.target_bucket > 0
                               ? std::min(config_.target_bucket, model_capacity_)
                               : model_capacity_;
@@ -236,12 +241,6 @@ absl::Status KokoroAcousticStage::ScheduleInternal() {
     const int num_tokens = static_cast<int>(token_ids.size());
     const int seq_len = std::min(bucket_size, num_tokens);
 
-    // Prepare padded phoneme token IDs buffer of shape [1, model_capacity_].
-    std::vector<int64_t> ids_i64(model_capacity_, 0);
-    for (int i = 0; i < seq_len; ++i) {
-      ids_i64[i] = static_cast<int64_t>(token_ids[i]);
-    }
-
     // Extract voice style embedding corresponding to token sequence length.
     // Index is bounded to 0..kMaxVoiceTokens in the 510x256 voice pack
     // embedding table.
@@ -252,43 +251,76 @@ absl::Status KokoroAcousticStage::ScheduleInternal() {
     const float* ref_s_decoder_ptr = ref_s_ptr;
     const float* ref_s_prosody_ptr = ref_s_ptr + kokoro::kStyleSliceDim;
 
-    const int active_len = seq_len;
-    std::vector<int64_t> seq_len_vec = {static_cast<int64_t>(active_len)};
+    const int active_len = std::min(seq_len, bucket_size);
 
     // Step 4: Write input buffers for acoustic model inference.
-    LITERT_RETURN_IF_ERROR(
-        acoustic_input_buffers_[input_indices_.phoneme_ids].Write<int64_t>(
-            absl::MakeConstSpan(ids_i64)));
+    // IMPORTANT: Always zero-pad the full `model_capacity_` buffer so static
+    // EMBEDDING_LOOKUP nodes never read uninitialized memory at indices
+    // [bucket_size .. model_capacity_ - 1].
+    if (ids_is_int32) {
+      std::vector<int32_t> ids_i32(model_capacity_, 0);
+      for (int i = 0; i < seq_len && i < model_capacity_ &&
+                      i < static_cast<int>(token_ids.size());
+           ++i) {
+        ids_i32[i] = static_cast<int32_t>(token_ids[i]);
+      }
+      LITERT_RETURN_IF_ERROR(
+          acoustic_input_buffers_[input_indices_.phoneme_ids].Write<int32_t>(
+              absl::MakeConstSpan(ids_i32)));
+    } else {
+      std::vector<int64_t> ids_i64(model_capacity_, 0);
+      for (int i = 0; i < seq_len && i < model_capacity_ &&
+                      i < static_cast<int>(token_ids.size());
+           ++i) {
+        ids_i64[i] = static_cast<int64_t>(token_ids[i]);
+      }
+      LITERT_RETURN_IF_ERROR(
+          acoustic_input_buffers_[input_indices_.phoneme_ids].Write<int64_t>(
+              absl::MakeConstSpan(ids_i64)));
+    }
     LITERT_RETURN_IF_ERROR(
         acoustic_input_buffers_[input_indices_.speaker_style].Write<float>(
             absl::MakeConstSpan(ref_s_prosody_ptr, kokoro::kStyleSliceDim)));
-    LITERT_RETURN_IF_ERROR(
-        acoustic_input_buffers_[input_indices_.phoneme_length].Write<int64_t>(
-            absl::MakeConstSpan(seq_len_vec)));
+
+    LITERT_ASSIGN_OR_RETURN(
+        auto len_tensor_type,
+        acoustic_input_buffers_[input_indices_.phoneme_length].TensorType());
+    if (len_tensor_type.ElementType() == ElementType::Int32) {
+      std::vector<int32_t> seq_len_vec = {static_cast<int32_t>(active_len)};
+      LITERT_RETURN_IF_ERROR(
+          acoustic_input_buffers_[input_indices_.phoneme_length].Write<int32_t>(
+              absl::MakeConstSpan(seq_len_vec)));
+    } else {
+      std::vector<int64_t> seq_len_vec = {static_cast<int64_t>(active_len)};
+      LITERT_RETURN_IF_ERROR(
+          acoustic_input_buffers_[input_indices_.phoneme_length].Write<int64_t>(
+              absl::MakeConstSpan(seq_len_vec)));
+    }
 
     // Step 5: Execute unified acoustic model inference.
     LITERT_RETURN_IF_ERROR(acoustic_model_->Run(acoustic_input_buffers_,
                                                 acoustic_output_buffers_));
 
     // Step 6: Read speech frame length and acoustic output tensors.
-    std::vector<int64_t> speech_len_vec(1, 0);
-    LITERT_RETURN_IF_ERROR(
+    int l_speech_raw = 1;
+    LITERT_ASSIGN_OR_RETURN(
+        auto speech_len_type,
         acoustic_output_buffers_[output_indices_.speech_frame_length]
-            .Read<int64_t>(absl::MakeSpan(speech_len_vec)));
-    const int l_speech = std::clamp<int>(
-        static_cast<int>(speech_len_vec[0]), 1, frame_capacity_);
-
-    // The graph clamps internally, so a prediction that lands exactly on the
-    // capacity means the slice was almost certainly cut short. Surface it
-    // rather than dropping the audio silently.
-    if (speech_len_vec[0] >= frame_capacity_) {
-      ABSL_LOG(WARNING) << "Kokoro acoustic output saturated its frame capacity"
-                        << " (" << frame_capacity_ << " frames) with "
-                        << num_tokens
-                        << " tokens; speech may be truncated. Consider lowering"
-                        << " kFramesPerTokenBudget headroom or exporting the"
-                        << " model with a larger max_frames.";
+            .TensorType());
+    if (speech_len_type.ElementType() == ElementType::Int32) {
+      std::vector<int32_t> speech_len_vec(1, 0);
+      LITERT_RETURN_IF_ERROR(
+          acoustic_output_buffers_[output_indices_.speech_frame_length]
+              .Read<int32_t>(absl::MakeSpan(speech_len_vec)));
+      l_speech_raw = static_cast<int>(speech_len_vec[0]);
+    } else {
+      std::vector<int64_t> speech_len_vec(1, 0);
+      LITERT_RETURN_IF_ERROR(
+          acoustic_output_buffers_[output_indices_.speech_frame_length]
+              .Read<int64_t>(absl::MakeSpan(speech_len_vec)));
+      l_speech_raw = static_cast<int>(speech_len_vec[0]);
     }
+    const int l_speech = std::clamp<int>(l_speech_raw, 1, frame_capacity_);
 
     LITERT_ASSIGN_OR_RETURN(
         auto asr_packed_size,
