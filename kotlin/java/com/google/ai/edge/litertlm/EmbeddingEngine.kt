@@ -16,6 +16,9 @@
 package com.google.ai.edge.litertlm
 
 import kotlin.jvm.Volatile
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.asExecutor
+import kotlinx.coroutines.withContext
 
 /**
  * Manages the lifecycle of a LiteRT-LM Embedding Engine, providing an interface for interacting
@@ -23,17 +26,21 @@ import kotlin.jvm.Volatile
  *
  * Example usage:
  * ```
- * val config = EmbeddingEngineConfig(modelPath = "...")
- * val engine = EmbeddingEngine(config)
- * engine.initialize()
- * val response = engine.computeEmbedding(listOf(InputData.Text("Hello world")))
- * engine.close()
+ * suspend fun runEmbedding() {
+ *   val config = EmbeddingEngineConfig(modelPath = "...")
+ *   val engine = EmbeddingEngine(config)
+ *   engine.initialize()
+ *   val response = engine.computeEmbedding(listOf(InputData.Text("Hello world")))
+ *   val asyncResponse = engine.computeEmbeddingAsync(listOf(InputData.Text("Hello world")))
+ *   engine.close()
+ * }
  * ```
  *
  * @param config The configuration for the embedding engine.
  */
 class EmbeddingEngine(val config: EmbeddingEngineConfig) : AutoCloseable {
   private val lock = Any()
+  private val asyncExecutor = Dispatchers.Default.asExecutor()
 
   @Volatile private var handle: Long? = null
 
@@ -90,9 +97,9 @@ class EmbeddingEngine(val config: EmbeddingEngineConfig) : AutoCloseable {
     options: EmbeddingOptions = EmbeddingOptions(),
   ): EmbeddingResponse {
     synchronized(lock) {
-      checkInitialized()
+      val currentHandle = checkInitialized()
       return LiteRtLmJni.nativeComputeEmbedding(
-        handle!!,
+        currentHandle,
         contents.toTypedArray(),
         options.normalize,
         options.insertSpecialTokens,
@@ -116,10 +123,10 @@ class EmbeddingEngine(val config: EmbeddingEngineConfig) : AutoCloseable {
     options: EmbeddingOptions = EmbeddingOptions(),
   ): List<EmbeddingResponse> {
     synchronized(lock) {
-      checkInitialized()
+      val currentHandle = checkInitialized()
       val nativeBatch = contentsBatch.map { it.toTypedArray() }.toTypedArray()
       return LiteRtLmJni.nativeComputeEmbeddingBatch(
-          handle!!,
+          currentHandle,
           nativeBatch,
           options.normalize,
           options.insertSpecialTokens,
@@ -131,21 +138,129 @@ class EmbeddingEngine(val config: EmbeddingEngineConfig) : AutoCloseable {
   }
 
   /**
+   * Computes embedding for multimodal input contents asynchronously.
+   *
+   * @param contents The list of [InputData] items to compute embeddings for.
+   * @param options Additional options for embedding generation.
+   * @return The [EmbeddingResponse] containing the calculated embedding vector(s).
+   * @throws IllegalStateException if the engine is not initialized.
+   */
+  suspend fun computeEmbeddingAsync(
+    contents: List<InputData>,
+    options: EmbeddingOptions = EmbeddingOptions(),
+  ): EmbeddingResponse {
+    val unused = checkInitialized()
+    val contentsCopy = contents.toList()
+    return withContext(Dispatchers.Default) { computeEmbedding(contentsCopy, options) }
+  }
+
+  /**
+   * Computes embedding for multimodal input contents asynchronously with a callback.
+   *
+   * @param contents The list of [InputData] items to compute embeddings for.
+   * @param callback The callback to receive the computed [EmbeddingResponse] or error.
+   * @param options Additional options for embedding generation.
+   * @throws IllegalStateException if the engine is not initialized.
+   */
+  @JvmOverloads
+  fun computeEmbeddingAsync(
+    contents: List<InputData>,
+    callback: EmbeddingCallback<EmbeddingResponse>,
+    options: EmbeddingOptions = EmbeddingOptions(),
+  ) {
+    val unused = checkInitialized()
+    val contentsCopy = contents.toList()
+    asyncExecutor.execute {
+      val result =
+        try {
+          computeEmbedding(contentsCopy, options)
+        } catch (t: Throwable) {
+          callback.onError(t)
+          return@execute
+        }
+      callback.onSuccess(result)
+    }
+  }
+
+  /**
+   * Computes embeddings for a batch of multimodal input requests asynchronously.
+   *
+   * @param contentsBatch A list of input requests, where each request is a list of [InputData].
+   * @param options Additional options for embedding generation.
+   * @return A list of [EmbeddingResponse] objects for each request in the batch.
+   * @throws IllegalStateException if the engine is not initialized.
+   */
+  suspend fun computeEmbeddingBatchAsync(
+    contentsBatch: List<List<InputData>>,
+    options: EmbeddingOptions = EmbeddingOptions(),
+  ): List<EmbeddingResponse> {
+    val unused = checkInitialized()
+    val contentsBatchCopy = contentsBatch.map { it.toList() }
+    return withContext(Dispatchers.Default) { computeEmbeddingBatch(contentsBatchCopy, options) }
+  }
+
+  /**
+   * Computes embeddings for a batch of multimodal input requests asynchronously with a callback.
+   *
+   * @param contentsBatch A list of input requests, where each request is a list of [InputData].
+   * @param callback The callback to receive the computed list of [EmbeddingResponse] objects or
+   *   error.
+   * @param options Additional options for embedding generation.
+   * @throws IllegalStateException if the engine is not initialized.
+   */
+  @JvmOverloads
+  fun computeEmbeddingBatchAsync(
+    contentsBatch: List<List<InputData>>,
+    callback: EmbeddingCallback<List<EmbeddingResponse>>,
+    options: EmbeddingOptions = EmbeddingOptions(),
+  ) {
+    val unused = checkInitialized()
+    val contentsBatchCopy = contentsBatch.map { it.toList() }
+    asyncExecutor.execute {
+      val result =
+        try {
+          computeEmbeddingBatch(contentsBatchCopy, options)
+        } catch (t: Throwable) {
+          callback.onError(t)
+          return@execute
+        }
+      callback.onSuccess(result)
+    }
+  }
+
+  /**
    * Closes the engine and releases the native embedding engine's resources.
    *
    * @throws IllegalStateException if the engine is not initialized.
    */
   override fun close() {
     synchronized(lock) {
-      checkInitialized()
+      val currentHandle = checkInitialized()
 
-      LiteRtLmJni.nativeDeleteEmbeddingEngine(handle!!)
+      LiteRtLmJni.nativeDeleteEmbeddingEngine(currentHandle)
       handle = null
     }
   }
 
-  /** Throws [IllegalStateException] if the engine is not initialized. */
-  private fun checkInitialized() {
-    check(isInitialized()) { "EmbeddingEngine is not initialized." }
+  /** Returns the native handle, or throws [IllegalStateException] if not initialized. */
+  private fun checkInitialized(): Long {
+    return checkNotNull(handle) { "EmbeddingEngine is not initialized." }
   }
+}
+
+/** A callback for receiving asynchronous embedding computation results. */
+interface EmbeddingCallback<T> {
+  /**
+   * Called when the embedding computation completes successfully.
+   *
+   * @param result The computed embedding result.
+   */
+  fun onSuccess(result: T)
+
+  /**
+   * Called when an error occurs during the embedding computation.
+   *
+   * @param throwable The error that occurred.
+   */
+  fun onError(throwable: Throwable)
 }
