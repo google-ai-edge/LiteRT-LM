@@ -92,8 +92,9 @@ fetch the latest prebuilt binaries.
 >
 > 1.  Add `--define=litert_runtime_link_mode=dynamic` in the build command.
 > 1.  `mkdir -p <test_dir>; cp <your litert_lm_main> <test_dir>; cp
->     ./prebuilt/<your OS>/<shared libaries> <test_dir>/` and make sure the
->     prebuilt .so/.dll/.dylib files are in the same directory as
+>     ./prebuilt/<your OS>/* $(bazel info
+>     output_base)/external/litert/litert/prebuilt/<your OS>/* <test_dir>/` and
+>     make sure the prebuilt .so/.dll/.dylib files are in the same directory as
 >     `litert_lm_main` binary
 > 1.  Running GPU on Windows needs DirectXShaderCompiler. See
 >     [this Note](../../README.md#windows_gpu) for more details.
@@ -317,14 +318,16 @@ adb shell $DEVICE_FOLDER/litert_lm_main \
     --model_path=$DEVICE_FOLDER/model.litertlm
 ```
 
-To run with **GPU** backend, we need additional `.so` files. They are located in
-the `prebuilt/` subfolder in the repo (we currently only support `arm64`).
+To run with **GPU** backend, we need additional `.so` files from the `prebuilt/`
+subfolder in the repo and the `@litert` external repository (we currently only
+support `arm64`).
 
 ```
 # Skip model push if it is already there
 adb push $MODEL_PATH $DEVICE_FOLDER/model.litertlm
 
 adb push prebuilt/android_arm64/*.so $DEVICE_FOLDER
+adb push $(bazel info output_base)/external/litert/litert/prebuilt/android_arm64/*.so $DEVICE_FOLDER
 adb push bazel-bin/runtime/engine/litert_lm_main $DEVICE_FOLDER
 
 adb shell LD_LIBRARY_PATH=$DEVICE_FOLDER \
