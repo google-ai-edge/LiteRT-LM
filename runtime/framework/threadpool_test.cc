@@ -21,6 +21,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
+#include "absl/synchronization/notification.h"  // from @com_google_absl
 #include "absl/time/clock.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "runtime/framework/thread_options.h"
@@ -58,6 +59,7 @@ TEST(ThreadPoolTest, SingleThread) {
 
 TEST(ThreadPoolTest, MultiThreadsScheduledFast) {
   std::atomic<int> n = 100;
+  absl::Notification proceed;
   {
     ThreadPool thread_pool("testpool", 10);
     EXPECT_EQ(thread_pool.max_num_threads(), 10);
@@ -65,10 +67,14 @@ TEST(ThreadPoolTest, MultiThreadsScheduledFast) {
 
     // Schedule 100 tasks back to back.
     for (int i = 0; i < 100; ++i) {
-      EXPECT_OK(thread_pool.Schedule([&n]() { --n; }));
+      EXPECT_OK(thread_pool.Schedule([&n, &proceed]() {
+        proceed.WaitForNotification();
+        --n;
+      }));
     }
     // Need more workers up to max, 10.
     EXPECT_EQ(thread_pool.num_threads(), 10);
+    proceed.Notify();
   }
   EXPECT_EQ(n, 0);
 }
