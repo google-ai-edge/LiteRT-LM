@@ -76,6 +76,7 @@ class AsrSession {
   AsrSession(Components components, ::litert::lm::ThreadPool* thread_pool);
 
   void ResetAsyncScheduler();
+  void WaitForIdleOrStopped();
 
   Components components_;
   ::litert::lm::ThreadPool* const thread_pool_ = nullptr;

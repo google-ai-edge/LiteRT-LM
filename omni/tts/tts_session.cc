@@ -72,6 +72,17 @@ void TtsSession::ResetAsyncScheduler() {
   }
 }
 
+void TtsSession::WaitForIdleOrStopped() {
+  absl::MutexLock lock(mutex_);
+  if (async_scheduler_) {
+    absl::Status status =
+        async_scheduler_->WaitForIdleOrStopped(absl::Seconds(3));
+    if (!status.ok()) {
+      ABSL_LOG(ERROR) << "Failed to wait for async scheduler: " << status;
+    }
+  }
+}
+
 void TtsSession::Reset() {
   ResetAsyncScheduler();
   components_.text_source->Reset();
@@ -129,6 +140,7 @@ absl::StatusOr<AudioOutput> TtsSession::Flush() {
   if (stream_text_source != nullptr) {
     stream_text_source->Finish();
   }
+  WaitForIdleOrStopped();
   ABSL_RETURN_IF_ERROR(components_.vocoder->Flush());
   auto result = components_.vocoder->GetOutput();
   if (absl::IsNotFound(result.status())) {

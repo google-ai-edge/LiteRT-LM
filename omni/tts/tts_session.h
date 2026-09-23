@@ -73,6 +73,7 @@ class TtsSession {
   absl::Status ProcessAsync(AsyncCallback callback);
 
   void ResetAsyncScheduler();
+  void WaitForIdleOrStopped();
 
   Components components_;
   ::litert::lm::ThreadPool* thread_pool_ = nullptr;

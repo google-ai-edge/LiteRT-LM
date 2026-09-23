@@ -600,6 +600,25 @@ cc_library(
     ],
 )
 
+cc_library(
+    name = "asr_omni_session",
+    srcs = ["asr_omni_session.cc"],
+    hdrs = ["asr_omni_session.h"],
+    deps = [
+        ":asr_engine",
+        ":asr_session",
+        ":audio_source",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/cleanup",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/synchronization",
+        "//omni:omni_session",
+    ],
+)
+
 cc_binary(
     name = "asr_runner",
     srcs = ["asr_runner.cc"],

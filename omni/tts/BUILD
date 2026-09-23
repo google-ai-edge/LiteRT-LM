@@ -177,6 +177,20 @@ cc_library(
     ],
 )
 
+cc_library(
+    name = "tts_omni_session",
+    srcs = ["tts_omni_session.cc"],
+    hdrs = ["tts_omni_session.h"],
+    deps = [
+        ":tts_engine",
+        ":tts_session",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "//omni:omni_session",
+    ],
+)
+
 cc_test(
     name = "tts_engine_test",
     srcs = ["tts_engine_test.cc"],

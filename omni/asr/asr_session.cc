@@ -69,6 +69,13 @@ void AsrSession::ResetAsyncScheduler() {
   }
 }
 
+void AsrSession::WaitForIdleOrStopped() {
+  absl::MutexLock lock(mutex_);
+  if (async_scheduler_) {
+    ABSL_CHECK_OK(async_scheduler_->WaitForIdleOrStopped(absl::Seconds(3)));
+  }
+}
+
 void AsrSession::Reset() {
   ResetAsyncScheduler();
   components_.audio_source->Reset();
@@ -79,6 +86,7 @@ void AsrSession::Reset() {
 }
 
 absl::StatusOr<TextMerger::MergeResult> AsrSession::ProcessNextChunk() {
+  ResetAsyncScheduler();
   ABSL_RETURN_IF_ERROR(components_.audio_source->Schedule());
 
   if (components_.preprocessor->NeedSchedule()) {
@@ -135,6 +143,7 @@ absl::Status AsrSession::ProcessAsync(AsyncCallback callback) {
 }
 
 absl::StatusOr<TextMerger::MergeResult> AsrSession::Flush() {
+  WaitForIdleOrStopped();
   ABSL_RETURN_IF_ERROR(components_.text_merger->Flush());
   return components_.text_merger->GetOutput();
 }
