@@ -17,17 +17,22 @@
 #include <iostream>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <variant>
 
+#include "absl/base/no_destructor.h"  // from @com_google_absl
+#include "absl/base/thread_annotations.h"  // from @com_google_absl
 #include "absl/container/flat_hash_set.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/ascii.h"  // from @com_google_absl
 #include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "runtime/util/data_stream.h"
 #include "runtime/util/file_util.h"
 #include "runtime/util/memory_mapped_file.h"
@@ -35,6 +40,45 @@
 #include "runtime/util/status_macros.h"  // NOLINT
 
 namespace litert::lm {
+namespace {
+
+struct CustomBackendNameTable {
+  absl::Mutex mu;
+  int next_id ABSL_GUARDED_BY(mu) = 1000;
+  std::unordered_map<std::string, Backend> name_to_backend ABSL_GUARDED_BY(mu);
+  std::unordered_map<Backend, std::string> backend_to_name ABSL_GUARDED_BY(mu);
+};
+
+CustomBackendNameTable& GetCustomBackendNameTable() {
+  static absl::NoDestructor<CustomBackendNameTable> table;
+  return *table;
+}
+
+}  // namespace
+
+Backend RegisterCustomBackend(absl::string_view backend_name) {
+  auto existing = GetBackendFromString(backend_name);
+  if (existing.ok()) {
+    return *existing;
+  }
+  auto& table = GetCustomBackendNameTable();
+  absl::MutexLock lock(table.mu);
+  const std::string lower_name = absl::AsciiStrToLower(backend_name);
+  auto it = table.name_to_backend.find(lower_name);
+  if (it != table.name_to_backend.end()) {
+    return it->second;
+  }
+  const Backend backend = static_cast<Backend>(table.next_id++);
+  table.name_to_backend[lower_name] = backend;
+  table.backend_to_name[backend] = absl::AsciiStrToUpper(backend_name);
+  return backend;
+}
+
+bool IsCustomBackend(Backend backend) {
+  auto& table = GetCustomBackendNameTable();
+  absl::MutexLock lock(table.mu);
+  return table.backend_to_name.contains(backend);
+}
 
 std::string GetBackendString(Backend backend) {
   switch (backend) {
@@ -50,8 +94,15 @@ std::string GetBackendString(Backend backend) {
       return "GOOGLE_TENSOR_ARTISAN";
     case Backend::NPU:
       return "NPU";
-    default:
+    default: {
+      auto& table = GetCustomBackendNameTable();
+      absl::MutexLock lock(table.mu);
+      auto it = table.backend_to_name.find(backend);
+      if (it != table.backend_to_name.end()) {
+        return it->second;
+      }
       return "UNSPECIFIED";
+    }
   }
 }
 
@@ -73,6 +124,14 @@ absl::StatusOr<Backend> GetBackendFromString(absl::string_view backend_str) {
   } else if (absl::EqualsIgnoreCase(backend_str, "google_tensor_artisan")) {
     return Backend::GOOGLE_TENSOR_ARTISAN;
   } else {
+    {
+      auto& table = GetCustomBackendNameTable();
+      absl::MutexLock lock(table.mu);
+      auto it = table.name_to_backend.find(absl::AsciiStrToLower(backend_str));
+      if (it != table.name_to_backend.end()) {
+        return it->second;
+      }
+    }
     return absl::InvalidArgumentError(
       absl::StrCat("Unsupported backend: ", backend_str,
                    ". Supported backends are: [CPU, GPU, NPU, GPU_ARTISAN, "
