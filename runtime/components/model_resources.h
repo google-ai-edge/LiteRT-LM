@@ -259,6 +259,16 @@ class ModelResources {
   virtual absl::StatusOr<FileRegion> GetTFLiteModelSectionFileRegion(
       ModelType model_type) = 0;
 
+  // Returns true if the requested TFLite model is present in the model
+  // resources. Implementations should avoid materializing or unpacking the
+  // TFLite FlatBuffer when presence can be determined from section metadata or
+  // file region locations.
+  virtual bool HasTFLiteModel(ModelType model_type) {
+    return GetTFLiteModelBackendConstraint(model_type).has_value() ||
+           GetTFLiteModelSectionFileRegion(model_type).ok() ||
+           GetTFLiteModel(model_type).ok();
+  }
+
   // Returns the TFLite model backend constraint. When there is no constraint
   // for the given model type, it will return an nullopt.
   virtual std::optional<std::string> GetTFLiteModelBackendConstraint(
