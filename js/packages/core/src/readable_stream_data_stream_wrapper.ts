@@ -78,9 +78,31 @@ class Slice {
 }
 
 /**
+ * Result returned by ReadableStreamDataStreamWrapper methods to C++ Emval.
+ */
+export declare interface ReadableStreamDataStreamResult {
+  error?: Error;
+}
+
+/**
+ * Extern interface for ReadableStreamDataStreamWrapper methods invoked by C++.
+ */
+export declare interface ReadableStreamDataStreamWrapperInterface {
+  readAndDiscard(
+      destAddress: number, offset: number|bigint,
+      count: number|bigint): Promise<ReadableStreamDataStreamResult>;
+  readAndPreserve(
+      destAddress: number, offset: number|bigint,
+      count: number|bigint): Promise<ReadableStreamDataStreamResult>;
+  discard(offset: number|bigint, count: number|bigint):
+      ReadableStreamDataStreamResult;
+}
+
+/**
  * Wraps a ReadableStream for use in LiteRT LM C++ streamed model loading.
  */
-export class ReadableStreamDataStreamWrapper {
+export class ReadableStreamDataStreamWrapper implements
+    ReadableStreamDataStreamWrapperInterface {
   private slices: Slice[] = [];
   private streamDone = false;
   private globalPosition = 0;
@@ -327,7 +349,7 @@ export class ReadableStreamDataStreamWrapper {
 
   async readAndDiscard(
       destAddress: number, offset: number|bigint,
-      count: number|bigint): Promise<{error?: Error}> {
+      count: number|bigint): Promise<ReadableStreamDataStreamResult> {
     try {
       await this.readInternal(
           destAddress >>> 0, toNumber(offset), toNumber(count), true);
@@ -339,7 +361,7 @@ export class ReadableStreamDataStreamWrapper {
 
   async readAndPreserve(
       destAddress: number, offset: number|bigint,
-      count: number|bigint): Promise<{error?: Error}> {
+      count: number|bigint): Promise<ReadableStreamDataStreamResult> {
     try {
       await this.readInternal(
           destAddress >>> 0, toNumber(offset), toNumber(count), false);
@@ -349,7 +371,8 @@ export class ReadableStreamDataStreamWrapper {
     }
   }
 
-  discard(offset: number|bigint, count: number|bigint): {error?: Error} {
+  discard(offset: number|bigint, count: number|bigint):
+      ReadableStreamDataStreamResult {
     try {
       this.doDiscard(toNumber(offset), toNumber(count));
       return {};

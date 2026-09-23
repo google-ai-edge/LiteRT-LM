@@ -531,7 +531,7 @@ export type InputOverflowStrategy =
 /**
  * Options for configuring the embedding computation.
  */
-export interface EmbeddingOptions {
+export declare interface EmbeddingOptions {
   normalize?: boolean;
   insertSpecialTokens?: boolean;
   inputOverflowStrategy?: InputOverflowStrategy;
@@ -542,7 +542,7 @@ export interface EmbeddingOptions {
 /**
  * Wasm-level result of an embedding computation.
  */
-export interface WasmEmbeddingResponse {
+export declare interface WasmEmbeddingResponse {
   embedding: EmscriptenVector<number>;
   inputLength: number;
   truncatedLength?: number;

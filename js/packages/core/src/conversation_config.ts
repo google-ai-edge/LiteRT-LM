@@ -64,7 +64,7 @@ export type ContentPart = TextContentPart|ImageContentPart|AudioContentPart|
 /**
  * Text content part of a message.
  */
-export interface TextContentPart {
+export declare interface TextContentPart {
   type: 'text';
   text: string;
   [key: string]: JsonValue|undefined;
@@ -101,7 +101,7 @@ export const SUPPORTED_AUDIO_MIME_TYPES: ReadonlySet<string> = new Set([
 /**
  * Image content part of a message.
  */
-export interface ImageContentPart {
+export declare interface ImageContentPart {
   type: 'image';
   // 'string' is base64 encoded
   data: Uint8Array | ArrayBuffer | string | Blob;
@@ -110,7 +110,7 @@ export interface ImageContentPart {
 /**
  * Audio content part of a message.
  */
-export interface AudioContentPart {
+export declare interface AudioContentPart {
   type: 'audio';
   // 'string' is base64 encoded
   data: Uint8Array | ArrayBuffer | string | Blob;
