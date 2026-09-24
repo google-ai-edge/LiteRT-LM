@@ -174,13 +174,9 @@ absl::Status Qwen3TtsVocoderStage::ScheduleInternal() {
 }
 
 absl::Status Qwen3TtsVocoderStage::Flush() {
-  {
-    absl::MutexLock lock(mutex_);
-    if (state_ != State::kIdle) {
-      return absl::FailedPreconditionError(
-          "Flush() called while Schedule() is in progress.");
-    }
-    state_ = State::kRunning;
+  if (!SetStateIfState(State::kIdle, State::kRunning)) {
+    return absl::FailedPreconditionError(
+        "Flush() called while Schedule() is in progress.");
   }
   while (true) {
     auto latent_out = latent_decoder_.GetOutput();

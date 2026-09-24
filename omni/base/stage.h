@@ -101,13 +101,9 @@ class SingleThreadedStageWithDeque : public Stage<T> {
   }
 
   absl::Status Schedule() override {
-    {
-      absl::MutexLock lock(mutex_);
-      if (state_ != State::kIdle) {
-        return absl::NotFoundError(
-            "This stage is already running or being scheduled.");
-      }
-      state_ = State::kScheduling;
+    if (!SetStateIfState(State::kIdle, State::kScheduling)) {
+      return absl::NotFoundError(
+          "This stage is already running or being scheduled.");
     }
     return ScheduleInternal();
   }
@@ -155,6 +151,15 @@ class SingleThreadedStageWithDeque : public Stage<T> {
   void SetState(State state) {
     absl::MutexLock lock(mutex_);
     state_ = state;
+  }
+
+  bool SetStateIfState(State expected_state, State new_state) {
+    absl::MutexLock lock(mutex_);
+    if (state_ != expected_state) {
+      return false;
+    }
+    state_ = new_state;
+    return true;
   }
 
   void WaitForStateThenSetState(State expected_state, State new_state) {

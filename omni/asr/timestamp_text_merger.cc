@@ -280,13 +280,9 @@ absl::Status TimestampTextMerger::Execute() {
 }
 
 absl::Status TimestampTextMerger::Flush() {
-  {
-    absl::MutexLock lock(mutex_);
-    if (state_ != State::kIdle) {
-      return absl::FailedPreconditionError(
-          "Flush() called while Schedule() is in progress.");
-    }
-    state_ = State::kRunning;
+  if (!SetStateIfState(State::kIdle, State::kRunning)) {
+    return absl::FailedPreconditionError(
+        "Flush() called while Schedule() is in progress.");
   }
 
   if (!prev_words_.empty()) {

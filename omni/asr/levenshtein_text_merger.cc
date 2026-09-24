@@ -111,13 +111,9 @@ absl::Status LevenshteinTextMerger::Execute() {
 }
 
 absl::Status LevenshteinTextMerger::Flush() {
-  {
-    absl::MutexLock lock(mutex_);
-    if (state_ != State::kIdle) {
-      return absl::FailedPreconditionError(
-          "Flush() called while Schedule() is in progress.");
-    }
-    state_ = State::kRunning;
+  if (!SetStateIfState(State::kIdle, State::kRunning)) {
+    return absl::FailedPreconditionError(
+        "Flush() called while Schedule() is in progress.");
   }
 
   if (!unconfirmed_words_.empty()) {
