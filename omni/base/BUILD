@@ -255,7 +255,6 @@ cc_library(
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/types:span",
         "@litert//litert/cc:litert_tensor_buffer",
         "//runtime/executor:llm_executor_io_types",
     ],
@@ -265,7 +264,6 @@ cc_test(
     name = "litert_lm_runner_test",
     srcs = ["litert_lm_runner_test.cc"],
     deps = [
-        ":litert_lm_runner",
         ":mock_litert_lm_runner",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
@@ -317,7 +315,6 @@ cc_library(
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/strings",
         "@com_google_absl//absl/types:span",
         "@litert//litert/cc:litert_tensor_buffer",
     ],

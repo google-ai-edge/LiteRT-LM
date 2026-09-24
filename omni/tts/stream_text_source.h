@@ -60,6 +60,9 @@ class StreamTextSource : public TextSource {
   const TextChunkConfig& config() const { return config_; }
 
  protected:
+  // Appends a text fragment directly to the internal buffer for subclasses.
+  void AppendText(absl::string_view text) { buffer_.append(text); }
+
   // Resets stream state and buffers for a new session.
   void ResetInternal() override;
 

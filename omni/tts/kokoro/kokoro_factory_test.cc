@@ -32,6 +32,7 @@
 #include "omni/base/model_resources.h"
 #include "omni/tts/kokoro/espeak_assets.h"
 #include "omni/tts/kokoro/kokoro_model_config.h"
+#include "omni/tts/stream_text_source.h"
 #include "omni/tts/text_chunk_utils.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/executor/executor_settings_base.h"
@@ -127,8 +128,9 @@ TEST(KokoroFactoryTest, CreateKokoroComponentsRejectsMissingModels) {
 
   // Since ModelResources does not have compiled models loaded,
   // CreateKokoroComponents should propagate the error.
-  auto components =
-      CreateKokoroComponents(config, "/tmp", chunk_config, resources);
+  auto components = CreateKokoroComponents(
+      config, "/tmp", std::make_unique<StreamTextSource>(chunk_config),
+      resources);
   EXPECT_FALSE(components.ok());
 }
 

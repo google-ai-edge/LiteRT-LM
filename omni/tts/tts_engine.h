@@ -122,7 +122,8 @@ class TtsEngine {
 
   // Creates a lightweight TtsSession for a synthesis stream.
   absl::StatusOr<std::unique_ptr<TtsSession>> CreateSession(
-      const TtsSessionConfig& session_config = {});
+      const TtsSessionConfig& session_config = {},
+      std::unique_ptr<StreamTextSource> text_source = nullptr);
 
   // Returns the list of available languages in BCP-47 format (e.g., "en-US",
   // "es", "zh-CN") supported by the engine and its available voices.

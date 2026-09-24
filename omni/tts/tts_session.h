@@ -19,14 +19,13 @@
 #include <vector>
 
 #include "absl/base/thread_annotations.h"  // from @com_google_absl
-#include "absl/functional/any_invocable.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "omni/base/async_stage_scheduler.h"
 #include "omni/base/io_types.h"
 #include "omni/base/stage.h"
+#include "omni/omni_session.h"
 #include "omni/tts/stream_text_source.h"
 #include "omni/tts/vocoder.h"
 #include "runtime/framework/threadpool.h"
@@ -34,7 +33,7 @@
 namespace litert::omni::tts {
 
 // Orchestrates component pipeline execution for TTS speech synthesis streams.
-class TtsSession {
+class TtsSession : public OmniSession {
  public:
   struct Components {
     std::unique_ptr<StreamTextSource> text_source;
@@ -42,35 +41,34 @@ class TtsSession {
     std::unique_ptr<Vocoder> vocoder;
   };
 
-  using AsyncCallback =
-      absl::AnyInvocable<absl::Status(absl::StatusOr<AudioOutput>)>;
-
   // Creates a TtsSession instance taking ownership of configured components
   // and reference to the ThreadPool (owned by TtsEngine).
   static absl::StatusOr<std::unique_ptr<TtsSession>> Create(
       Components components, ::litert::lm::ThreadPool* thread_pool);
 
-  ~TtsSession();
+  ~TtsSession() override;
 
   // Resets session and component state for a new synthesis stream.
-  void Reset();
+  void Reset() override;
 
   // Flushes remaining synthesized audio at stream end.
-  absl::StatusOr<AudioOutput> Flush();
+  absl::StatusOr<Output> Flush() override;
 
-  // Synchronously synthesizes input text as a whole chunk.
-  absl::StatusOr<AudioOutput> Synthesize(absl::string_view text);
+  // Processes the next synthesized audio chunk synchronously from `text_source`
+  // and returns `OmniSession::Output` (`AudioOutput`).
+  // Returns absl::OutOfRangeError when synthesis stream ends.
+  absl::StatusOr<Output> ProcessNext() override;
 
-  // Asynchronously synthesizes input text using session's thread pool.
-  absl::Status SynthesizeAsync(absl::string_view text, AsyncCallback callback);
+  // Processes the TTS stream asynchronously using the session's thread pool and
+  // emits `OmniSession::Output` (`AudioOutput`) chunks to `callback`.
+  absl::Status ProcessAsync(OutputCallback callback) override;
+
+  // Returns the session's `StreamTextSource` stage.
+  StreamTextSource& text_source() { return *components_.text_source; }
 
  private:
   explicit TtsSession(Components components,
                       ::litert::lm::ThreadPool* thread_pool);
-
-  // Processes the TTS stream asynchronously using the session's thread pool.
-  // Returns absl::AlreadyExistsError if async processing is already active.
-  absl::Status ProcessAsync(AsyncCallback callback);
 
   void ResetAsyncScheduler();
   void WaitForIdleOrStopped();

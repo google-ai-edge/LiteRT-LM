@@ -28,12 +28,13 @@
 #include "omni/asr/speech_recognizer.h"
 #include "omni/asr/text_merger.h"
 #include "omni/base/async_stage_scheduler.h"
+#include "omni/omni_session.h"
 #include "runtime/framework/threadpool.h"
 
 namespace litert::omni::asr {
 
 // Orchestrates component pipeline execution for ASR speech recognition streams.
-class AsrSession {
+class AsrSession : public OmniSession {
  public:
   struct Components {
     std::unique_ptr<AudioSource> audio_source;
@@ -49,26 +50,26 @@ class AsrSession {
   static absl::StatusOr<std::unique_ptr<AsrSession>> Create(
       Components components, ::litert::lm::ThreadPool* thread_pool = nullptr);
 
-  ~AsrSession();
+  ~AsrSession() override;
 
   // Resets session and component state for a new audio stream.
-  void Reset();
+  void Reset() override;
 
-  // Processes the next audio chunk from AudioSource synchronously.
+  // Flushes remaining unconfirmed text at stream end.
+  absl::StatusOr<Output> Flush() override;
+
+  // Processes the next audio chunk from AudioSource synchronously and returns
+  // `OmniSession::Output` (`TextOutput`).
   // Returns absl::OutOfRangeError when audio stream ends.
-  absl::StatusOr<TextMerger::MergeResult> ProcessNextChunk();
+  absl::StatusOr<Output> ProcessNext() override;
 
   // Processes the audio stream asynchronously using the session's thread pool.
   // Returns absl::FailedPreconditionError if `thread_pool_` is null, or
   // absl::AlreadyExistsError if async processing is already active.
   // Schedules asr session stages on the thread pool to execute concurrently and
   // passes results to `callback` until `callback` returns an error status.
-  using AsyncCallback =
-      absl::AnyInvocable<absl::Status(absl::StatusOr<TextMerger::MergeResult>)>;
-  absl::Status ProcessAsync(AsyncCallback callback);
-
-  // Flushes remaining unconfirmed text at stream end.
-  absl::StatusOr<TextMerger::MergeResult> Flush();
+  using AsyncCallback = OutputCallback;
+  absl::Status ProcessAsync(OutputCallback callback) override;
 
   const Components& components() const { return components_; }
 

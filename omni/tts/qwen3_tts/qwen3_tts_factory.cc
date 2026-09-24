@@ -19,6 +19,7 @@
 #include <utility>
 #include <vector>
 
+#include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
@@ -33,7 +34,6 @@
 #include "omni/tts/qwen3_tts/qwen3_tts_model_config.h"
 #include "omni/tts/qwen3_tts/qwen3_tts_vocoder_stage.h"
 #include "omni/tts/stream_text_source.h"
-#include "omni/tts/text_chunk_utils.h"
 #include "omni/tts/tts_session.h"
 #include "runtime/executor/executor_settings_base.h"
 
@@ -101,11 +101,10 @@ absl::Status InitQwen3TtsResources(const Qwen3TtsModelConfig& config,
 
 absl::StatusOr<TtsSession::Components> CreateQwen3TtsComponents(
     const Qwen3TtsModelConfig& config, const std::string& model_folder,
-    const TextChunkConfig& text_chunk_config,
+    std::unique_ptr<StreamTextSource> absl_nonnull text_source,
     std::shared_ptr<ModelResources> resources) {
   TtsSession::Components components;
-  components.text_source =
-      std::make_unique<StreamTextSource>(text_chunk_config);
+  components.text_source = std::move(text_source);
 
   LITERT_ASSIGN_OR_RETURN(
       auto frontend, Qwen3TtsFrontendStage::Create(components.text_source.get(),

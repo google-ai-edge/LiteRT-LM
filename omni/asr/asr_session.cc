@@ -27,6 +27,7 @@
 #include "omni/asr/text_merger.h"
 #include "omni/base/async_stage_scheduler.h"
 #include "omni/base/stage.h"
+#include "omni/omni_session.h"
 #include "runtime/framework/threadpool.h"
 
 namespace litert::omni::asr {
@@ -85,7 +86,7 @@ void AsrSession::Reset() {
   components_.text_merger->Reset();
 }
 
-absl::StatusOr<TextMerger::MergeResult> AsrSession::ProcessNextChunk() {
+absl::StatusOr<OmniSession::Output> AsrSession::ProcessNext() {
   ResetAsyncScheduler();
   ABSL_RETURN_IF_ERROR(components_.audio_source->Schedule());
 
@@ -108,7 +109,7 @@ absl::StatusOr<TextMerger::MergeResult> AsrSession::ProcessNextChunk() {
   return components_.text_merger->GetOutput();
 }
 
-absl::Status AsrSession::ProcessAsync(AsyncCallback callback) {
+absl::Status AsrSession::ProcessAsync(OutputCallback callback) {
   if (thread_pool_ == nullptr) {
     return absl::FailedPreconditionError("ThreadPool is null.");
   }
@@ -142,7 +143,7 @@ absl::Status AsrSession::ProcessAsync(AsyncCallback callback) {
   return async_scheduler_->Start();
 }
 
-absl::StatusOr<TextMerger::MergeResult> AsrSession::Flush() {
+absl::StatusOr<OmniSession::Output> AsrSession::Flush() {
   WaitForIdleOrStopped();
   ABSL_RETURN_IF_ERROR(components_.text_merger->Flush());
   return components_.text_merger->GetOutput();

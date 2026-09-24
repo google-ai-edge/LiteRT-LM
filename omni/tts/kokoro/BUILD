@@ -238,6 +238,7 @@ cc_library(
         ":kokoro_model_config",
         ":kokoro_vocoder_stage",
         ":phonemizer",
+        "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
@@ -250,10 +251,10 @@ cc_library(
         "//omni/base:model_utils",
         "//omni/tts:stream_text_source",
         "//omni/tts:text_chunk_utils",
+        "//omni/tts:text_source",
         "//omni/tts:tts_session",
         "//runtime/components:model_resources",
         "//runtime/executor:executor_settings_base",
-        "//runtime/proto:tts_metadata_cc_proto",
     ],
 )
 
@@ -271,6 +272,7 @@ cc_test(
         "@litert//litert/cc:litert_environment",
         "@litert//litert/cc:litert_model",
         "//omni/base:model_resources",
+        "//omni/tts:stream_text_source",
         "//omni/tts:text_chunk_utils",
         "//runtime/components:model_resources",
         "//runtime/executor:executor_settings_base",

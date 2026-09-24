@@ -20,6 +20,7 @@
 #include <sstream>
 #include <string>
 #include <utility>
+#include <variant>
 
 #include "absl/flags/flag.h"  // from @com_google_absl
 #include "absl/flags/parse.h"  // from @com_google_absl
@@ -35,6 +36,7 @@
 #include "omni/asr/asr_engine.h"
 #include "omni/asr/file_audio_source.h"
 #include "omni/asr/model_metadata.h"
+#include "omni/omni_session.h"
 
 ABSL_FLAG(std::string, model_name, "parakeet-tdt-0.6b-v3",
           "ASR model name as defined in metadata JSON.");
@@ -167,20 +169,27 @@ absl::Status RunAsrRunner(
 
   ABSL_LOG(INFO) << "Starting speech recognition on " << audio_path << "...";
   while (true) {
-    auto result = session->ProcessNextChunk();
+    auto result = session->ProcessNext();
     if (!result.ok()) {
       if (absl::IsOutOfRange(result.status())) {
         auto flush_result = session->Flush();
-        if (flush_result.ok() && !flush_result->confirmed_text.empty()) {
-          std::cout << flush_result->confirmed_text;
+        if (flush_result.ok()) {
+          const auto* text_out =
+              std::get_if<litert::omni::OmniSession::TextOutput>(
+                  &*flush_result);
+          if (text_out != nullptr && !text_out->confirmed_text.empty()) {
+            std::cout << text_out->confirmed_text;
+          }
         }
         std::cout << std::endl;
         break;
       }
       return result.status();
     }
-    if (!result->confirmed_text.empty()) {
-      std::cout << result->confirmed_text << " " << std::flush;
+    const auto* text_out =
+        std::get_if<litert::omni::OmniSession::TextOutput>(&*result);
+    if (text_out != nullptr && !text_out->confirmed_text.empty()) {
+      std::cout << text_out->confirmed_text << " " << std::flush;
     }
   }
   ABSL_LOG(INFO) << "Finished speech recognition.";

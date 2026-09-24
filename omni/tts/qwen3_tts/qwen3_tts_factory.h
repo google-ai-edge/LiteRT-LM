@@ -18,12 +18,13 @@
 #include <memory>
 #include <string>
 
+#include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "omni/base/model_resources.h"
 #include "omni/tts/qwen3_tts/qwen3_tts_model_config.h"
-#include "omni/tts/text_chunk_utils.h"
+#include "omni/tts/text_source.h"
 #include "omni/tts/tts_session.h"
 #include "runtime/executor/executor_settings_base.h"
 
@@ -54,7 +55,7 @@ absl::Status InitQwen3TtsResources(const Qwen3TtsModelConfig& config,
 // args
 // - config: Qwen3-TTS model configuration.
 // - model_folder: Path to the directory containing the Qwen3-TTS models.
-// - text_chunk_config: Configuration for text chunk processing.
+// - text_source: StreamTextSource providing text chunks for the session.
 // - resources: Shared ModelResources container with compiled models.
 //
 // returns
@@ -62,7 +63,7 @@ absl::Status InitQwen3TtsResources(const Qwen3TtsModelConfig& config,
 // error status on failure.
 absl::StatusOr<TtsSession::Components> CreateQwen3TtsComponents(
     const Qwen3TtsModelConfig& config, const std::string& model_folder,
-    const TextChunkConfig& text_chunk_config,
+    std::unique_ptr<StreamTextSource> absl_nonnull text_source,
     std::shared_ptr<ModelResources> resources);
 
 }  // namespace litert::omni::tts

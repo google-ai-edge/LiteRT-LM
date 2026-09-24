@@ -16,20 +16,21 @@
 
 #include <memory>
 #include <utility>
+#include <variant>
 #include <vector>
 
+#include "absl/cleanup/cleanup.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "absl/synchronization/notification.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "omni/base/async_stage_scheduler.h"
 #include "omni/base/io_types.h"
 #include "omni/base/stage.h"
-#include "omni/tts/stream_text_source.h"
+#include "omni/omni_session.h"
 #include "omni/tts/vocoder.h"
 #include "runtime/framework/threadpool.h"
 
@@ -92,7 +93,54 @@ void TtsSession::Reset() {
   components_.vocoder->Reset();
 }
 
-absl::Status TtsSession::ProcessAsync(AsyncCallback callback) {
+absl::StatusOr<OmniSession::Output> TtsSession::ProcessNext() {
+  // TODO(byungchul): Remove Finish() and Reset() here.
+  absl::Cleanup reset_cleanup = [this] { Reset(); };
+  components_.text_source->Finish();
+
+  AudioOutput result;
+  absl::Notification done;
+  absl::Status final_status;
+  absl::Mutex mutex;
+
+  ABSL_RETURN_IF_ERROR(
+      ProcessAsync([&](absl::StatusOr<Output> output) -> absl::Status {
+        if (absl::IsOutOfRange(output.status())) {
+          if (result.pcm_samples.empty()) {
+            final_status = output.status();
+          }
+          done.Notify();
+          return output.status();
+        }
+        if (absl::IsNotFound(output.status())) {
+          return absl::OkStatus();
+        }
+        if (!output.ok()) {
+          final_status = output.status();
+          done.Notify();
+          return output.status();
+        }
+        const auto* audio = std::get_if<AudioOutput>(&*output);
+        if (audio != nullptr) {
+          absl::MutexLock lock(mutex);
+          if (result.sample_rate_hz == 0) {
+            result.sample_rate_hz = audio->sample_rate_hz;
+          }
+          result.pcm_samples.insert(result.pcm_samples.end(),
+                                    audio->pcm_samples.begin(),
+                                    audio->pcm_samples.end());
+        }
+        return absl::OkStatus();
+      }));
+
+  done.WaitForNotification();
+  if (!final_status.ok()) {
+    return final_status;
+  }
+  return result;
+}
+
+absl::Status TtsSession::ProcessAsync(OutputCallback callback) {
   if (thread_pool_ == nullptr) {
     return absl::FailedPreconditionError("ThreadPool is null.");
   }
@@ -134,12 +182,8 @@ absl::Status TtsSession::ProcessAsync(AsyncCallback callback) {
   return async_scheduler_->Start();
 }
 
-absl::StatusOr<AudioOutput> TtsSession::Flush() {
-  StreamTextSource* stream_text_source =
-      dynamic_cast<StreamTextSource*>(components_.text_source.get());
-  if (stream_text_source != nullptr) {
-    stream_text_source->Finish();
-  }
+absl::StatusOr<OmniSession::Output> TtsSession::Flush() {
+  components_.text_source->Finish();
   WaitForIdleOrStopped();
   ABSL_RETURN_IF_ERROR(components_.vocoder->Flush());
   auto result = components_.vocoder->GetOutput();
@@ -147,69 +191,6 @@ absl::StatusOr<AudioOutput> TtsSession::Flush() {
     return AudioOutput();
   }
   return result;
-}
-
-absl::StatusOr<AudioOutput> TtsSession::Synthesize(absl::string_view text) {
-  Reset();
-  ABSL_RETURN_IF_ERROR(components_.text_source->PushText(text));
-  components_.text_source->Finish();
-
-  AudioOutput result;
-  absl::Notification done;
-  absl::Status final_status;
-  absl::Mutex mutex;
-
-  ABSL_RETURN_IF_ERROR(
-      ProcessAsync([&](absl::StatusOr<AudioOutput> output) -> absl::Status {
-        if (absl::IsOutOfRange(output.status())) {
-          done.Notify();
-          return output.status();
-        }
-        if (absl::IsNotFound(output.status())) {
-          return absl::OkStatus();
-        }
-        if (!output.ok()) {
-          final_status = output.status();
-          done.Notify();
-          return output.status();
-        }
-        absl::MutexLock lock(mutex);
-        if (result.sample_rate_hz == 0) {
-          result.sample_rate_hz = output->sample_rate_hz;
-        }
-        result.pcm_samples.insert(result.pcm_samples.end(),
-                                  output->pcm_samples.begin(),
-                                  output->pcm_samples.end());
-        return absl::OkStatus();
-      }));
-
-  done.WaitForNotification();
-  if (!final_status.ok()) {
-    return final_status;
-  }
-  return result;
-}
-
-absl::Status TtsSession::SynthesizeAsync(absl::string_view text,
-                                         AsyncCallback callback) {
-  bool should_reset = false;
-  {
-    absl::MutexLock lock(mutex_);
-    // If the previous stream already finished, reset the stages so new text can
-    // be pushed.
-    if (async_scheduler_ != nullptr && !async_scheduler_->IsRunning()) {
-      should_reset = true;
-    }
-  }
-  if (should_reset) {
-    Reset();
-  }
-  ABSL_RETURN_IF_ERROR(components_.text_source->PushText(text));
-  absl::Status status = ProcessAsync(std::move(callback));
-  if (absl::IsAlreadyExists(status)) {
-    return absl::OkStatus();
-  }
-  return status;
 }
 
 }  // namespace litert::omni::tts

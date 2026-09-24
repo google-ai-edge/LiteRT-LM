@@ -17,9 +17,16 @@
 
 #include <memory>
 
+#include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "omni/omni_session.h"
+#include "omni/tts/stream_text_source.h"
+#include "omni/tts/text_chunk_utils.h"
 #include "omni/tts/tts_engine.h"
+
+namespace litert::omni {
+class OmniSessionTest;
+}  // namespace litert::omni
 
 namespace litert::omni::tts {
 
@@ -30,10 +37,19 @@ class TtsOmniSessionFactory : public OmniSessionFactory {
       TtsEngineSettings settings);
   ~TtsOmniSessionFactory() override = default;
 
-  absl::StatusOr<std::unique_ptr<OmniSession>> Create() override;
+  absl::StatusOr<std::unique_ptr<OmniSession>> Create(
+      std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source)
+      override;
 
  private:
-  explicit TtsOmniSessionFactory(std::unique_ptr<TtsEngine> tts_engine);
+  friend class ::litert::omni::OmniSessionTest;
+
+  static std::unique_ptr<StreamTextSource> CreateTextInputSource(
+      std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source,
+      TextChunkConfig config = {});
+
+  explicit TtsOmniSessionFactory(
+      std::unique_ptr<TtsEngine> absl_nonnull tts_engine);
 
   std::unique_ptr<TtsEngine> tts_engine_;
 };

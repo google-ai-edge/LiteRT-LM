@@ -26,7 +26,6 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_matchers.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "absl/synchronization/notification.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "omni/asr/audio_preprocessor.h"
@@ -36,6 +35,7 @@
 #include "omni/asr/speech_recognizer.h"
 #include "omni/asr/text_merger.h"
 #include "omni/base/stage.h"
+#include "omni/omni_session.h"
 #include "runtime/framework/threadpool.h"
 #include "support/util/test_utils.h"  // IWYU pragma: keep for ASSERT_OK
 
@@ -178,26 +178,29 @@ TEST(AsrSessionTest, FullSessionEndToEndFlow) {
   auto session = std::move(*session_status);
 
   // Process Chunk 1: "w_1 w_2"
-  auto res1 = session->ProcessNextChunk();
+  auto res1 = session->ProcessNext();
   ASSERT_OK(res1);
-  EXPECT_EQ(res1->confirmed_text, "");
-  EXPECT_EQ(res1->unconfirmed_text, "w_1 w_2");
+  const auto& text1 = std::get<OmniSession::TextOutput>(*res1);
+  EXPECT_EQ(text1.confirmed_text, "");
+  EXPECT_EQ(text1.unconfirmed_text, "w_1 w_2");
 
   // Process Chunk 2: "w_2 w_3" (overlaps at w_2)
-  auto res2 = session->ProcessNextChunk();
+  auto res2 = session->ProcessNext();
   ASSERT_OK(res2);
-  EXPECT_EQ(res2->confirmed_text, "w_1");
-  EXPECT_EQ(res2->unconfirmed_text, "w_2 w_3");
+  const auto& text2 = std::get<OmniSession::TextOutput>(*res2);
+  EXPECT_EQ(text2.confirmed_text, "w_1");
+  EXPECT_EQ(text2.unconfirmed_text, "w_2 w_3");
 
   // Stream End returns OutOfRange error
-  auto res3 = session->ProcessNextChunk();
+  auto res3 = session->ProcessNext();
   EXPECT_TRUE(absl::IsOutOfRange(res3.status()));
 
   // Flush remaining
   auto res_flush = session->Flush();
   ASSERT_OK(res_flush);
-  EXPECT_EQ(res_flush->confirmed_text, "w_2 w_3");
-  EXPECT_EQ(res_flush->unconfirmed_text, "");
+  const auto& text_flush = std::get<OmniSession::TextOutput>(*res_flush);
+  EXPECT_EQ(text_flush.confirmed_text, "w_2 w_3");
+  EXPECT_EQ(text_flush.unconfirmed_text, "");
 }
 
 TEST(AsrSessionTest, ProcessAsyncFailsWithoutThreadPool) {
@@ -262,7 +265,7 @@ TEST(AsrSessionTest, ProcessAsyncFlow) {
                       done.Notify();
                       return res.status();
                     }
-                    results.push_back(*res);
+                    results.push_back(std::get<OmniSession::TextOutput>(*res));
                     return absl::OkStatus();
                   })
                   .ok());

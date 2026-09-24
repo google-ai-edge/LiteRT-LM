@@ -17,21 +17,27 @@
 
 #include <memory>
 #include <string>
+#include <utility>
 #include <variant>
 #include <vector>
 
+#include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/functional/any_invocable.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "omni/asr/text_merger.h"
 #include "omni/base/io_types.h"
+#include "omni/base/stage.h"
 
 namespace litert::omni {
-namespace internal {
 
-// Base interface for OmniSession and OmniStreamingSession.
-class OmniSessionBase {
+// Pure interface for a unified session processing multimodal inputs (`Input`)
+// and producing multimodal outputs (`Output`).
+class OmniSession {
  public:
+  // Sentinel input indicating the end of the input stream.
+  struct EndOfInput {};
+
   // Text input payload for TTS synthesis.
   struct TextInput {
     std::string text;
@@ -44,16 +50,25 @@ class OmniSessionBase {
     int num_channels = 1;
   };
 
-  // Unified input variant for Process and ProcessAsync.
-  using Input = std::variant<TextInput, AudioInput>;
+  // Unified input variant for InputSource.
+  using Input = std::variant<EndOfInput, TextInput, AudioInput>;
+
+  // Base stage producing `Input` items for an `OmniSession`.
+  class InputSource : public SingleThreadedStageWithDeque<Input> {
+   public:
+    ~InputSource() override = default;
+  };
+
+  // Sentinel output indicating the end of the output stream.
+  struct EndOfOutput {};
 
   using TextOutput = asr::TextMerger::MergeResult;
   using AudioOutput = ::litert::omni::AudioOutput;
-  using Output = std::variant<std::monostate, TextOutput, AudioOutput>;
+  using Output = std::variant<EndOfOutput, TextOutput, AudioOutput>;
   using OutputCallback =
       absl::AnyInvocable<absl::Status(absl::StatusOr<Output>)>;
 
-  virtual ~OmniSessionBase() = default;
+  virtual ~OmniSession() = default;
 
   // Resets session state for a new stream, just like the state created by the
   // factory.
@@ -62,74 +77,48 @@ class OmniSessionBase {
   // Flushes remaining buffered output at the end of a stream. It's different
   // from `Reset()` in that it does not reset the session's internal state.
   virtual absl::StatusOr<Output> Flush() = 0;
+
+  // Synchronously processes the next available output chunk from the session's
+  // `InputSource`. Returns `absl::OutOfRangeError` when the input source is
+  // exhausted and no further output can be produced without new inputs.
+  virtual absl::StatusOr<Output> ProcessNext() = 0;
+
+  // Asynchronously processes inputs from the session's `InputSource` using the
+  // underlying session's thread pool and emits `Output` chunks to `callback`.
+  virtual absl::Status ProcessAsync(OutputCallback callback) = 0;
 };
 
-}  // namespace internal
-
-// Pure interface for a unified session processing multimodal inputs (`Input`)
-// and producing multimodal outputs (`Output`).
-class OmniSession : public internal::OmniSessionBase {
+// An `OmniSession::InputSource` implementation that pushes `OmniSession::Input`
+// chunks to an `OmniSession`.
+class PushInputSource : public OmniSession::InputSource {
  public:
-  using TextInput = internal::OmniSessionBase::TextInput;
-  using AudioInput = internal::OmniSessionBase::AudioInput;
-  using Input = internal::OmniSessionBase::Input;
+  PushInputSource() = default;
+  ~PushInputSource() override = default;
 
-  using TextOutput = internal::OmniSessionBase::TextOutput;
-  using AudioOutput = internal::OmniSessionBase::AudioOutput;
-  using Output = internal::OmniSessionBase::Output;
-  using OutputCallback = internal::OmniSessionBase::OutputCallback;
+  // Appends an `OmniSession::Input` chunk to be consumed by the session.
+  absl::Status PushInput(OmniSession::Input input) {
+    PushOutput(std::move(input));
+    return absl::OkStatus();
+  }
 
-  ~OmniSession() override = default;
+ protected:
+  // Data has already been pushed into the output queue in PushInput().
+  bool NeedScheduleInternal() const override { return false; }
 
-  // Processes `input` synchronously. For example, `AudioInput` -> `TextOutput`
-  // for ASR, `TextInput` -> `AudioOutput` for TTS.
-  virtual absl::StatusOr<Output> Process(Input input) = 0;
-
-  // Processes `input` asynchronously using the underlying session's thread
-  // pool and emits `Output` chunks (for example, `TextOutput` for ASR,
-  // `AudioOutput` for TTS) to `callback`.
-  virtual absl::Status ProcessAsync(Input input, OutputCallback callback) = 0;
+  absl::Status ScheduleInternal() override {
+    SetState(State::kIdle);
+    return absl::OkStatus();
+  }
 };
 
-// Pure interface for creating `OmniSession` instances.
+// Pure interface for creating `OmniSession` instances bound to an
+// `OmniSession::InputSource`.
 class OmniSessionFactory {
  public:
   virtual ~OmniSessionFactory() = default;
 
-  virtual absl::StatusOr<std::unique_ptr<OmniSession>> Create() = 0;
-};
-
-// Pure interface for a streaming session that accepts multimodal inputs via
-// `PushInput()`, emits `OmniSession::Output` chunks asynchronously to the
-// callback provided at creation. `Flush()` is used to inform the end of the
-// input stream.
-class OmniStreamingSession : public internal::OmniSessionBase {
- public:
-  using TextInput = internal::OmniSessionBase::TextInput;
-  using AudioInput = internal::OmniSessionBase::AudioInput;
-  using Input = internal::OmniSessionBase::Input;
-
-  using TextOutput = internal::OmniSessionBase::TextOutput;
-  using AudioOutput = internal::OmniSessionBase::AudioOutput;
-  using Output = internal::OmniSessionBase::Output;
-  using OutputCallback = internal::OmniSessionBase::OutputCallback;
-
-  ~OmniStreamingSession() override = default;
-
-  // Pushes an input chunk (`AudioInput` for ASR, `TextInput` for TTS) into the
-  // streaming session and schedules asynchronous processing.
-  virtual absl::Status PushInput(OmniSession::Input input) = 0;
-};
-
-// Pure interface for creating `OmniStreamingSession` instances.
-class OmniStreamingSessionFactory {
- public:
-  using OutputCallback = internal::OmniSessionBase::OutputCallback;
-
-  virtual ~OmniStreamingSessionFactory() = default;
-
-  virtual absl::StatusOr<std::unique_ptr<OmniStreamingSession>> Create(
-      OutputCallback callback) = 0;
+  virtual absl::StatusOr<std::unique_ptr<OmniSession>> Create(
+      std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source) = 0;
 };
 
 }  // namespace litert::omni

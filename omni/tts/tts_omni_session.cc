@@ -18,72 +18,87 @@
 #include <utility>
 #include <variant>
 
+#include "absl/base/nullability.h"  // from @com_google_absl
+#include "absl/base/thread_annotations.h"  // from @com_google_absl
+#include "absl/cleanup/cleanup.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "omni/omni_session.h"
+#include "omni/tts/kokoro/kokoro_factory.h"
+#include "omni/tts/kokoro/kokoro_model_config.h"
+#include "omni/tts/stream_text_source.h"
+#include "omni/tts/text_chunk_utils.h"
 #include "omni/tts/tts_engine.h"
-#include "omni/tts/tts_session.h"
 
 namespace litert::omni::tts {
 namespace {
 
-// `OmniSession` implementation backed by `TtsSession`.
-class TtsOmniSession : public OmniSession {
+// StreamTextSource subclass that pulls `TextInput` payloads from an
+// `OmniSession::InputSource` and yields text chunks to a `TtsSession`.
+class TextInputSource : public StreamTextSource {
  public:
-  explicit TtsOmniSession(std::unique_ptr<TtsSession> tts_session)
-      : tts_session_(std::move(tts_session)) {}
-  ~TtsOmniSession() override = default;
+  explicit TextInputSource(
+      std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source,
+      TextChunkConfig config = {})
+      : StreamTextSource(std::move(config)),
+        input_source_(std::move(input_source)) {}
 
-  void Reset() override { tts_session_->Reset(); }
+  ~TextInputSource() override = default;
 
-  absl::StatusOr<Output> Process(Input input) override {
-    const auto* text_input = std::get_if<TextInput>(&input);
-    if (text_input == nullptr) {
-      return absl::InvalidArgumentError(
-          "TTS OmniSession::Process() requires TextInput.");
-    }
-    ABSL_ASSIGN_OR_RETURN(AudioOutput audio_out,
-                          tts_session_->Synthesize(text_input->text));
-    return Output(std::move(audio_out));
+ protected:
+  void ResetInternal() override {
+    input_source_->Reset();
+    StreamTextSource::ResetInternal();
   }
 
-  absl::Status ProcessAsync(Input input, OutputCallback callback) override {
-    const auto* text_input = std::get_if<TextInput>(&input);
-    if (text_input == nullptr) {
-      return absl::InvalidArgumentError(
-          "TTS OmniSession::ProcessAsync() requires TextInput.");
-    }
-    return tts_session_->SynthesizeAsync(
-        text_input->text,
-        [cb = std::move(callback)](
-            absl::StatusOr<AudioOutput> result) mutable -> absl::Status {
-          if (!result.ok()) {
-            return cb(result.status());
-          }
-          return cb(Output(*std::move(result)));
-        });
+  bool NeedScheduleInternal() const
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_) override {
+    return input_source_->NeedSchedule() || input_source_->HasOutput() ||
+           StreamTextSource::NeedScheduleInternal();
   }
 
-  absl::StatusOr<Output> Flush() override {
-    ABSL_ASSIGN_OR_RETURN(AudioOutput audio_out, tts_session_->Flush());
-    return Output(std::move(audio_out));
+  absl::Status ScheduleInternal() ABSL_NO_THREAD_SAFETY_ANALYSIS override {
+    SetState(State::kRunning);
+    absl::Cleanup cleanup = [this] { SetState(State::kIdle); };
+
+    while (!StreamTextSource::NeedScheduleInternal()) {
+      if (input_source_->NeedSchedule()) {
+        ABSL_RETURN_IF_ERROR(input_source_->Schedule());
+      }
+      if (!input_source_->HasOutput()) {
+        return absl::OutOfRangeError("End of text stream reached.");
+      }
+      ABSL_ASSIGN_OR_RETURN(OmniSession::Input input,
+                            input_source_->GetOutput());
+      if (std::holds_alternative<OmniSession::EndOfInput>(input)) {
+        Finish();
+        if (!StreamTextSource::NeedScheduleInternal()) {
+          return absl::OutOfRangeError("End of text stream reached.");
+        }
+        break;
+      }
+      const auto* text_input = std::get_if<OmniSession::TextInput>(&input);
+      if (text_input == nullptr) {
+        return absl::InvalidArgumentError("TTS Session requires TextInput.");
+      }
+      AppendText(text_input->text);
+    }
+
+    return StreamTextSource::ScheduleInternal();
   }
 
  private:
-  std::unique_ptr<TtsSession> tts_session_;
+  std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source_;
 };
 
 }  // namespace
 
-struct TtsOmniSessionTestingPeer {
-  static std::unique_ptr<OmniSession> CreateSession(
-      std::unique_ptr<TtsSession> tts_session);
-};
-
-std::unique_ptr<OmniSession> TtsOmniSessionTestingPeer::CreateSession(
-    std::unique_ptr<TtsSession> tts_session) {
-  return std::make_unique<TtsOmniSession>(std::move(tts_session));
+std::unique_ptr<StreamTextSource> TtsOmniSessionFactory::CreateTextInputSource(
+    std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source,
+    TextChunkConfig config) {
+  return std::make_unique<TextInputSource>(std::move(input_source),
+                                           std::move(config));
 }
 
 absl::StatusOr<std::unique_ptr<OmniSessionFactory>>
@@ -95,13 +110,21 @@ TtsOmniSessionFactory::CreateFactory(TtsEngineSettings settings) {
 }
 
 TtsOmniSessionFactory::TtsOmniSessionFactory(
-    std::unique_ptr<TtsEngine> tts_engine)
+    std::unique_ptr<TtsEngine> absl_nonnull tts_engine)
     : tts_engine_(std::move(tts_engine)) {}
 
-absl::StatusOr<std::unique_ptr<OmniSession>> TtsOmniSessionFactory::Create() {
-  ABSL_ASSIGN_OR_RETURN(auto tts_session,
-                        tts_engine_->CreateSession(TtsSessionConfig{}));
-  return std::make_unique<TtsOmniSession>(std::move(tts_session));
+absl::StatusOr<std::unique_ptr<OmniSession>> TtsOmniSessionFactory::Create(
+    std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source) {
+  TtsSessionConfig session_config;
+  TextChunkConfig text_chunk_config = session_config.text_chunk_config;
+  if (const auto* kokoro_config = std::get_if<KokoroModelConfig>(
+          &tts_engine_->settings().model_config)) {
+    text_chunk_config =
+        ReviseTextChunkConfigForKokoro(*kokoro_config, text_chunk_config);
+  }
+  auto text_source = CreateTextInputSource(std::move(input_source),
+                                           std::move(text_chunk_config));
+  return tts_engine_->CreateSession(session_config, std::move(text_source));
 }
 
 }  // namespace litert::omni::tts

@@ -17,9 +17,15 @@
 
 #include <memory>
 
+#include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "omni/asr/asr_engine.h"
+#include "omni/asr/audio_source.h"
 #include "omni/omni_session.h"
+
+namespace litert::omni {
+class OmniSessionTest;
+}  // namespace litert::omni
 
 namespace litert::omni::asr {
 
@@ -30,10 +36,20 @@ class AsrOmniSessionFactory : public OmniSessionFactory {
       AsrEngineConfig config);
   ~AsrOmniSessionFactory() override = default;
 
-  absl::StatusOr<std::unique_ptr<OmniSession>> Create() override;
+  absl::StatusOr<std::unique_ptr<OmniSession>> Create(
+      std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source)
+      override;
 
  private:
-  explicit AsrOmniSessionFactory(std::unique_ptr<AsrEngine> asr_engine);
+  friend class ::litert::omni::OmniSessionTest;
+
+  static std::unique_ptr<AudioSource> CreateAudioInputSource(
+      std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source,
+      int sample_rate_hz, int num_channels, int samples_per_interval,
+      int overlap_samples);
+
+  explicit AsrOmniSessionFactory(
+      std::unique_ptr<AsrEngine> absl_nonnull asr_engine);
 
   std::unique_ptr<AsrEngine> asr_engine_;
 };

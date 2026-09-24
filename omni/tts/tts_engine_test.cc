@@ -34,6 +34,7 @@
 #include "omni/base/io_types.h"
 #include "omni/base/model_resources.h"
 #include "omni/base/stage.h"
+#include "omni/omni_session.h"
 #include "omni/tts/kokoro/kokoro_factory.h"
 #include "omni/tts/kokoro/kokoro_model_config.h"
 #include "omni/tts/qwen3_tts/qwen3_tts_model_config.h"
@@ -297,7 +298,10 @@ TEST(TtsEngineTest, SynthesizeSyncForceFlushOnSession) {
   ASSERT_OK_AND_ASSIGN(
       auto session, TtsSession::Create(CreateDummyComponents(), &thread_pool));
 
-  ASSERT_OK_AND_ASSIGN(auto audio, session->Synthesize("Hello world "));
+  ASSERT_OK(session->text_source().PushText("Hello world "));
+  ASSERT_OK_AND_ASSIGN(auto out, session->ProcessNext());
+  ASSERT_TRUE(std::holds_alternative<AudioOutput>(out));
+  const auto& audio = std::get<AudioOutput>(out);
   EXPECT_EQ(audio.sample_rate_hz, 24000);
   EXPECT_GE(audio.pcm_samples.size(), 3);
 }
@@ -311,14 +315,19 @@ TEST(TtsEngineTest, SynthesizeAsyncStreamingOnSession) {
   int chunk_count = 0;
   absl::Status final_status;
 
-  absl::Status status = session->SynthesizeAsync(
-      "Hello world.", [&](absl::StatusOr<AudioOutput> result) -> absl::Status {
+  ASSERT_OK(session->text_source().PushText("Hello world."));
+  session->text_source().Finish();
+  absl::Status status = session->ProcessAsync(
+      [&](absl::StatusOr<OmniSession::Output> result) -> absl::Status {
         if (!result.ok()) {
           final_status = result.status();
           done.Notify();
           return result.status();
         }
-        chunk_count++;
+        if (std::holds_alternative<AudioOutput>(*result) &&
+            !std::get<AudioOutput>(*result).pcm_samples.empty()) {
+          chunk_count++;
+        }
         return absl::OkStatus();
       });
   ASSERT_OK(status);
@@ -334,11 +343,15 @@ TEST(TtsEngineTest, SequentialSynthesizeCallsOnSession) {
   ASSERT_OK_AND_ASSIGN(
       auto session, TtsSession::Create(CreateDummyComponents(), &thread_pool));
 
-  ASSERT_OK_AND_ASSIGN(auto audio1, session->Synthesize("First chunk "));
-  EXPECT_GE(audio1.pcm_samples.size(), 3);
+  ASSERT_OK(session->text_source().PushText("First chunk "));
+  ASSERT_OK_AND_ASSIGN(auto out1, session->ProcessNext());
+  ASSERT_TRUE(std::holds_alternative<AudioOutput>(out1));
+  EXPECT_GE(std::get<AudioOutput>(out1).pcm_samples.size(), 3);
 
-  ASSERT_OK_AND_ASSIGN(auto audio2, session->Synthesize("Second chunk "));
-  EXPECT_GE(audio2.pcm_samples.size(), 3);
+  ASSERT_OK(session->text_source().PushText("Second chunk "));
+  ASSERT_OK_AND_ASSIGN(auto out2, session->ProcessNext());
+  ASSERT_TRUE(std::holds_alternative<AudioOutput>(out2));
+  EXPECT_GE(std::get<AudioOutput>(out2).pcm_samples.size(), 3);
 }
 
 TEST(TtsEngineTest, TtsSessionConfigDefault) {

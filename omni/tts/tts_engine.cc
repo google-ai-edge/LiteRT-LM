@@ -38,6 +38,8 @@
 #include "omni/tts/kokoro/kokoro_model_config.h"
 #include "omni/tts/qwen3_tts/qwen3_tts_factory.h"
 #include "omni/tts/qwen3_tts/qwen3_tts_model_config.h"
+#include "omni/tts/stream_text_source.h"
+#include "omni/tts/text_chunk_utils.h"
 #include "omni/tts/tts_session.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/framework/threadpool.h"
@@ -318,7 +320,8 @@ std::string TtsEngine::GetDefaultVoice(absl::string_view language) const {
 }
 
 absl::StatusOr<std::unique_ptr<TtsSession>> TtsEngine::CreateSession(
-    const TtsSessionConfig& session_config) {
+    const TtsSessionConfig& session_config,
+    std::unique_ptr<StreamTextSource> text_source) {
   if (session_config.language.empty()) {
     return absl::InvalidArgumentError(
         "TtsSessionConfig::language must not be empty.");
@@ -363,10 +366,16 @@ absl::StatusOr<std::unique_ptr<TtsSession>> TtsEngine::CreateSession(
     session_model_config.voice_name = resolved_voice;
     session_model_config.language = kokoro_lang;
 
+    if (text_source == nullptr) {
+      text_source =
+          std::make_unique<StreamTextSource>(ReviseTextChunkConfigForKokoro(
+              session_model_config, session_config.text_chunk_config));
+    }
+
     LITERT_ASSIGN_OR_RETURN(
-        components, CreateKokoroComponents(
-                        session_model_config, settings_.model_folder,
-                        session_config.text_chunk_config, model_resources_));
+        components,
+        CreateKokoroComponents(session_model_config, settings_.model_folder,
+                               std::move(text_source), model_resources_));
   } else if (auto* config =
                  std::get_if<Qwen3TtsModelConfig>(&settings_.model_config)) {
     Qwen3TtsModelConfig session_model_config = *config;
@@ -382,10 +391,14 @@ absl::StatusOr<std::unique_ptr<TtsSession>> TtsEngine::CreateSession(
     if (!resolved_voice.empty()) {
       session_model_config.speaker_file = resolved_voice;
     }
+    if (text_source == nullptr) {
+      text_source =
+          std::make_unique<StreamTextSource>(session_config.text_chunk_config);
+    }
     LITERT_ASSIGN_OR_RETURN(
-        components, CreateQwen3TtsComponents(
-                        session_model_config, settings_.model_folder,
-                        session_config.text_chunk_config, model_resources_));
+        components,
+        CreateQwen3TtsComponents(session_model_config, settings_.model_folder,
+                                 std::move(text_source), model_resources_));
   } else {
     return absl::InvalidArgumentError(
         absl::StrCat("Unsupported model_config in TtsEngineSettings: ",

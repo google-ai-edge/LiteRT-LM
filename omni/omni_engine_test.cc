@@ -22,11 +22,12 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
-#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/status_matchers.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/synchronization/notification.h"  // from @com_google_absl
+#include "omni/asr/asr_omni_session.h"
 #include "omni/asr/asr_session.h"
 #include "omni/asr/audio_preprocessor.h"
 #include "omni/asr/audio_source.h"
@@ -37,6 +38,9 @@
 #include "omni/base/stage.h"
 #include "omni/omni_session.h"
 #include "omni/tts/stream_text_source.h"
+#include "omni/tts/text_chunk_utils.h"
+#include "omni/tts/text_source.h"
+#include "omni/tts/tts_omni_session.h"
 #include "omni/tts/tts_session.h"
 #include "omni/tts/vocoder.h"
 #include "runtime/framework/threadpool.h"
@@ -44,22 +48,24 @@
 
 namespace litert::omni {
 
-namespace asr {
-struct AsrOmniSessionTestingPeer {
-  static std::unique_ptr<AudioSource> CreateAudioInputSource(
+class OmniSessionTest : public ::testing::Test {
+ public:
+  static std::unique_ptr<asr::AudioSource> CreateAudioInputSource(
+      std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source,
       int sample_rate_hz, int num_channels, int samples_per_interval,
-      int overlap_samples);
-  static std::unique_ptr<OmniSession> CreateSession(
-      std::unique_ptr<AsrSession> asr_session);
-};
-}  // namespace asr
+      int overlap_samples) {
+    return asr::AsrOmniSessionFactory::CreateAudioInputSource(
+        std::move(input_source), sample_rate_hz, num_channels,
+        samples_per_interval, overlap_samples);
+  }
 
-namespace tts {
-struct TtsOmniSessionTestingPeer {
-  static std::unique_ptr<OmniSession> CreateSession(
-      std::unique_ptr<TtsSession> tts_session);
+  static std::unique_ptr<tts::StreamTextSource> CreateTextInputSource(
+      std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source,
+      tts::TextChunkConfig config = {}) {
+    return tts::TtsOmniSessionFactory::CreateTextInputSource(
+        std::move(input_source), std::move(config));
+  }
 };
-}  // namespace tts
 
 namespace {
 
@@ -133,7 +139,7 @@ class FakeDetokenizer : public asr::Detokenizer {
 
 class FakeVocoder : public tts::Vocoder {
  public:
-  explicit FakeVocoder(tts::StreamTextSource* text_source)
+  explicit FakeVocoder(tts::TextSource* text_source)
       : text_source_(text_source) {}
   absl::Status Flush() override { return absl::OkStatus(); }
 
@@ -155,98 +161,63 @@ class FakeVocoder : public tts::Vocoder {
   }
 
  private:
-  tts::StreamTextSource* text_source_;
+  tts::TextSource* text_source_;
 };
 
 class FakeOmniSessionFactory : public OmniSessionFactory {
  public:
-  absl::StatusOr<std::unique_ptr<OmniSession>> Create() override {
-    auto text_source = std::make_unique<tts::StreamTextSource>();
+  absl::StatusOr<std::unique_ptr<OmniSession>> Create(
+      std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source)
+      override {
+    auto text_source =
+        OmniSessionTest::CreateTextInputSource(std::move(input_source));
     auto vocoder = std::make_unique<FakeVocoder>(text_source.get());
     tts::TtsSession::Components components{
         .text_source = std::move(text_source),
         .vocoder = std::move(vocoder),
     };
-    ABSL_ASSIGN_OR_RETURN(auto tts_session, tts::TtsSession::Create(
-                                                std::move(components), &pool_));
-    return tts::TtsOmniSessionTestingPeer::CreateSession(
-        std::move(tts_session));
+    return tts::TtsSession::Create(std::move(components), &pool_);
   }
 
  private:
   ::litert::lm::ThreadPool pool_{"fake_factory_pool", 1};
 };
 
-class FakeOmniStreamingSession : public OmniStreamingSession {
- public:
-  explicit FakeOmniStreamingSession(
-      OmniStreamingSessionFactory::OutputCallback callback)
-      : callback_(std::move(callback)) {}
+TEST(PushInputSourceTest, PushScheduleAndReset) {
+  PushInputSource source;
+  EXPECT_FALSE(source.NeedSchedule());
+  ASSERT_OK(source.Schedule());
 
-  void Reset() override { buffered_text_.clear(); }
+  ASSERT_OK(source.PushInput(OmniSession::TextInput{.text = "First"}));
+  ASSERT_OK(source.PushInput(OmniSession::TextInput{.text = "Second"}));
+  EXPECT_FALSE(source.NeedSchedule());
 
-  absl::Status PushInput(OmniSession::Input input) override {
-    const auto* text_input = std::get_if<TextInput>(&input);
-    if (text_input == nullptr) {
-      return absl::InvalidArgumentError("Expected TextInput.");
-    }
-    buffered_text_ += text_input->text;
-    return callback_(
-        Output(AudioOutput{.pcm_samples = {0.5f}, .sample_rate_hz = 24000}));
-  }
+  ASSERT_TRUE(source.HasOutput());
+  auto out = source.GetOutput();
+  ASSERT_OK(out);
+  EXPECT_EQ(std::get<OmniSession::TextInput>(*out).text, "First");
 
-  absl::StatusOr<Output> Flush() override {
-    TextOutput flushed{.confirmed_text = std::move(buffered_text_)};
-    buffered_text_.clear();
-    return Output(std::move(flushed));
-  }
-
- private:
-  OmniStreamingSessionFactory::OutputCallback callback_;
-  std::string buffered_text_;
-};
-
-class FakeOmniStreamingSessionFactory : public OmniStreamingSessionFactory {
- public:
-  absl::StatusOr<std::unique_ptr<OmniStreamingSession>> Create(
-      OutputCallback callback) override {
-    return std::make_unique<FakeOmniStreamingSession>(std::move(callback));
-  }
-};
+  source.Reset();
+  EXPECT_FALSE(source.NeedSchedule());
+  EXPECT_FALSE(source.HasOutput());
+}
 
 TEST(OmniEngineTest, CreateSessionDelegatesToFactory) {
   auto engine = OmniEngine::Create("test-model",
                                    std::make_unique<FakeOmniSessionFactory>());
   ASSERT_OK(engine);
   EXPECT_EQ((*engine)->model_name(), "test-model");
-  auto session = (*engine)->CreateSession();
+
+  auto input_source = std::make_unique<PushInputSource>();
+  PushInputSource* raw_input_source = input_source.get();
+  auto session = (*engine)->CreateSession(std::move(input_source));
   ASSERT_OK(session);
-  auto out = (*session)->Process(OmniSession::TextInput{.text = "Hello."});
+
+  ASSERT_OK(
+      raw_input_source->PushInput(OmniSession::TextInput{.text = "Hello."}));
+  auto out = (*session)->ProcessNext();
   ASSERT_OK(out);
   EXPECT_TRUE(std::holds_alternative<AudioOutput>(*out));
-}
-
-TEST(OmniEngineTest, CreateStreamingSessionDelegatesToFactory) {
-  auto engine = OmniEngine::Create(
-      "test-model", std::make_unique<FakeOmniStreamingSessionFactory>());
-  ASSERT_OK(engine);
-  std::vector<AudioOutput> outputs;
-  auto streaming_session = (*engine)->CreateStreamingSession(
-      [&](absl::StatusOr<OmniStreamingSession::Output> res) {
-        if (res.ok()) {
-          outputs.push_back(std::get<AudioOutput>(*res));
-        }
-        return absl::OkStatus();
-      });
-  ASSERT_OK(streaming_session);
-  ASSERT_OK(
-      (*streaming_session)->PushInput(OmniSession::TextInput{.text = "Hello"}));
-  EXPECT_EQ(outputs.size(), 1);
-  auto flushed = (*streaming_session)->Flush();
-  ASSERT_OK(flushed);
-  ASSERT_TRUE(std::holds_alternative<OmniSession::TextOutput>(*flushed));
-  EXPECT_EQ(std::get<OmniSession::TextOutput>(*flushed).confirmed_text,
-            "Hello");
 }
 
 TEST(OmniEngineTest, ResolvesAsrModelAndForwardsOptions) {
@@ -277,10 +248,13 @@ TEST(OmniEngineTest, RejectsUnknownModel) {
       StatusIs(absl::StatusCode::kNotFound, HasSubstr("unknown-model-xyz")));
 }
 
-TEST(OmniSessionTest, AsrOmniSessionProcessAndFlushWithAudioInput) {
-  auto audio_source = asr::AsrOmniSessionTestingPeer::CreateAudioInputSource(
-      /*sample_rate_hz=*/16000, /*num_channels=*/1,
-      /*samples_per_interval=*/2, /*overlap_samples=*/0);
+TEST_F(OmniSessionTest, AsrSessionProcessNextAndFlushWithAudioInput) {
+  auto input_source = std::make_unique<PushInputSource>();
+  PushInputSource* raw_input_source = input_source.get();
+  auto audio_source =
+      CreateAudioInputSource(std::move(input_source),
+                             /*sample_rate_hz=*/16000, /*num_channels=*/1,
+                             /*samples_per_interval=*/2, /*overlap_samples=*/0);
   auto preprocessor =
       std::make_unique<FakeAudioPreprocessor>(audio_source.get());
   auto recognizer = std::make_unique<FakeSpeechRecognizer>(preprocessor.get());
@@ -297,14 +271,18 @@ TEST(OmniSessionTest, AsrOmniSessionProcessAndFlushWithAudioInput) {
   };
   auto asr_session = asr::AsrSession::Create(std::move(components));
   ASSERT_OK(asr_session);
-  std::unique_ptr<OmniSession> omni_session =
-      asr::AsrOmniSessionTestingPeer::CreateSession(*std::move(asr_session));
+  std::unique_ptr<OmniSession> omni_session = *std::move(asr_session);
 
-  EXPECT_THAT(omni_session->Process(OmniSession::TextInput{.text = "hello"}),
+  ASSERT_OK(
+      raw_input_source->PushInput(OmniSession::TextInput{.text = "hello"}));
+  EXPECT_THAT(omni_session->ProcessNext(),
               StatusIs(absl::StatusCode::kInvalidArgument));
 
-  auto chunk = omni_session->Process(OmniSession::AudioInput{
-      .pcm_samples = {1.0f, 2.0f}, .sample_rate_hz = 16000, .num_channels = 1});
+  ASSERT_OK(raw_input_source->PushInput(
+      OmniSession::AudioInput{.pcm_samples = {1.0f, 2.0f},
+                              .sample_rate_hz = 16000,
+                              .num_channels = 1}));
+  auto chunk = omni_session->ProcessNext();
   ASSERT_OK(chunk);
   ASSERT_TRUE(std::holds_alternative<OmniSession::TextOutput>(*chunk));
   EXPECT_EQ(std::get<OmniSession::TextOutput>(*chunk).unconfirmed_text,
@@ -317,10 +295,13 @@ TEST(OmniSessionTest, AsrOmniSessionProcessAndFlushWithAudioInput) {
             "w_1 w_2");
 }
 
-TEST(OmniSessionTest, AsrOmniSessionProcessAsyncWithAudioInput) {
-  auto audio_source = asr::AsrOmniSessionTestingPeer::CreateAudioInputSource(
-      /*sample_rate_hz=*/16000, /*num_channels=*/1,
-      /*samples_per_interval=*/2, /*overlap_samples=*/0);
+TEST_F(OmniSessionTest, AsrSessionProcessAsyncWithAudioInput) {
+  auto input_source = std::make_unique<PushInputSource>();
+  PushInputSource* raw_input_source = input_source.get();
+  auto audio_source =
+      CreateAudioInputSource(std::move(input_source),
+                             /*sample_rate_hz=*/16000, /*num_channels=*/1,
+                             /*samples_per_interval=*/2, /*overlap_samples=*/0);
   auto preprocessor =
       std::make_unique<FakeAudioPreprocessor>(audio_source.get());
   auto recognizer = std::make_unique<FakeSpeechRecognizer>(preprocessor.get());
@@ -338,21 +319,22 @@ TEST(OmniSessionTest, AsrOmniSessionProcessAsyncWithAudioInput) {
   ::litert::lm::ThreadPool pool("test_asr_pool", 2);
   auto asr_session = asr::AsrSession::Create(std::move(components), &pool);
   ASSERT_OK(asr_session);
-  std::unique_ptr<OmniSession> omni_session =
-      asr::AsrOmniSessionTestingPeer::CreateSession(*std::move(asr_session));
+  std::unique_ptr<OmniSession> omni_session = *std::move(asr_session);
+
+  ASSERT_OK(raw_input_source->PushInput(
+      OmniSession::AudioInput{.pcm_samples = {1.0f, 2.0f},
+                              .sample_rate_hz = 16000,
+                              .num_channels = 1}));
 
   absl::Notification done;
   std::vector<OmniSession::TextOutput> outputs;
   ASSERT_OK(omni_session->ProcessAsync(
-      OmniSession::AudioInput{.pcm_samples = {1.0f, 2.0f},
-                              .sample_rate_hz = 16000,
-                              .num_channels = 1},
       [&](absl::StatusOr<OmniSession::Output> res) {
         if (absl::IsOutOfRange(res.status())) {
           done.Notify();
           return res.status();
         }
-        if (res.ok()) {
+        if (res.ok() && std::holds_alternative<OmniSession::TextOutput>(*res)) {
           outputs.push_back(std::get<OmniSession::TextOutput>(*res));
         }
         return absl::OkStatus();
@@ -362,8 +344,10 @@ TEST(OmniSessionTest, AsrOmniSessionProcessAsyncWithAudioInput) {
   EXPECT_EQ(outputs.back().confirmed_text, "w_1 w_2");
 }
 
-TEST(OmniSessionTest, TtsOmniSessionProcessAndFlushWithTextInput) {
-  auto text_source = std::make_unique<tts::StreamTextSource>();
+TEST_F(OmniSessionTest, TtsSessionProcessNextAndFlushWithTextInput) {
+  auto input_source = std::make_unique<PushInputSource>();
+  PushInputSource* raw_input_source = input_source.get();
+  auto text_source = CreateTextInputSource(std::move(input_source));
   auto vocoder = std::make_unique<FakeVocoder>(text_source.get());
   tts::TtsSession::Components components{
       .text_source = std::move(text_source),
@@ -372,15 +356,16 @@ TEST(OmniSessionTest, TtsOmniSessionProcessAndFlushWithTextInput) {
   ::litert::lm::ThreadPool pool("test_tts_pool", 1);
   auto tts_session = tts::TtsSession::Create(std::move(components), &pool);
   ASSERT_OK(tts_session);
-  std::unique_ptr<OmniSession> omni_session =
-      tts::TtsOmniSessionTestingPeer::CreateSession(*std::move(tts_session));
+  std::unique_ptr<OmniSession> omni_session = *std::move(tts_session);
 
-  EXPECT_THAT(omni_session->Process(
-                  OmniSession::AudioInput{.pcm_samples = {1.0f, 2.0f}}),
+  ASSERT_OK(raw_input_source->PushInput(
+      OmniSession::AudioInput{.pcm_samples = {1.0f, 2.0f}}));
+  EXPECT_THAT(omni_session->ProcessNext(),
               StatusIs(absl::StatusCode::kInvalidArgument));
 
-  auto audio_out =
-      omni_session->Process(OmniSession::TextInput{.text = "Hello world."});
+  ASSERT_OK(raw_input_source->PushInput(
+      OmniSession::TextInput{.text = "Hello world."}));
+  auto audio_out = omni_session->ProcessNext();
   ASSERT_OK(audio_out);
   ASSERT_TRUE(std::holds_alternative<AudioOutput>(*audio_out));
   EXPECT_FALSE(std::get<AudioOutput>(*audio_out).pcm_samples.empty());

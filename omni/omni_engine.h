@@ -71,33 +71,20 @@ class OmniEngine {
       absl::string_view model_name,
       std::unique_ptr<OmniSessionFactory> absl_nonnull factory);
 
-  // Creates an OmniEngine for the specified `model_name` with a custom
-  // `OmniStreamingSessionFactory`.
-  static absl::StatusOr<std::unique_ptr<OmniEngine>> Create(
-      absl::string_view model_name,
-      std::unique_ptr<OmniStreamingSessionFactory> absl_nonnull factory);
-
   ~OmniEngine() = default;
 
   absl::string_view model_name() const { return model_name_; }
 
   // Creates a new OmniSession using the engine's `OmniSessionFactory`.
-  absl::StatusOr<std::unique_ptr<OmniSession>> CreateSession();
-
-  // Creates a new OmniStreamingSession using the engine's
-  // `OmniStreamingSessionFactory`.
-  absl::StatusOr<std::unique_ptr<OmniStreamingSession>> CreateStreamingSession(
-      OmniStreamingSessionFactory::OutputCallback callback);
+  absl::StatusOr<std::unique_ptr<OmniSession>> CreateSession(
+      std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source);
 
  private:
-  OmniEngine(
-      std::string model_name,
-      std::unique_ptr<OmniSessionFactory> session_factory,
-      std::unique_ptr<OmniStreamingSessionFactory> streaming_session_factory);
+  OmniEngine(std::string model_name,
+             std::unique_ptr<OmniSessionFactory> absl_nonnull session_factory);
 
   std::string model_name_;
-  std::unique_ptr<OmniSessionFactory> session_factory_;
-  std::unique_ptr<OmniStreamingSessionFactory> streaming_session_factory_;
+  std::unique_ptr<OmniSessionFactory> absl_nonnull session_factory_;
 };
 
 }  // namespace litert::omni

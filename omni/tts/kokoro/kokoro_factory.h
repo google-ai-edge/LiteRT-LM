@@ -19,13 +19,14 @@
 #include <string>
 #include <vector>
 
+#include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "omni/base/model_resources.h"
 #include "omni/tts/kokoro/kokoro_model_config.h"
-#include "omni/tts/text_chunk_utils.h"
+#include "omni/tts/text_source.h"
 #include "omni/tts/tts_session.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/executor/executor_settings_base.h"
@@ -59,12 +60,16 @@ absl::Status InitKokoroResources(KokoroModelConfig& config,
                                  ::litert::Environment& env,
                                  ModelResources& resources);
 
+// Revises `text_chunk_config` for Kokoro's target bucket capacity.
+TextChunkConfig ReviseTextChunkConfigForKokoro(
+    const KokoroModelConfig& config, TextChunkConfig text_chunk_config);
+
 // Instantiates all stage components for a Kokoro TTS inference session.
 //
 // args
 // - config: Kokoro model configuration.
 // - model_folder: Path to the directory containing the Kokoro models.
-// - text_chunk_config: Configuration for text chunk processing.
+// - text_source: StreamTextSource providing text chunks for the session.
 // - resources: Shared ModelResources container with compiled models.
 //
 // returns
@@ -72,7 +77,7 @@ absl::Status InitKokoroResources(KokoroModelConfig& config,
 // error status on failure.
 absl::StatusOr<TtsSession::Components> CreateKokoroComponents(
     const KokoroModelConfig& config, absl::string_view model_folder,
-    const TextChunkConfig& text_chunk_config,
+    std::unique_ptr<StreamTextSource> absl_nonnull text_source,
     std::shared_ptr<ModelResources> resources);
 
 // Returns the list of available Kokoro voice profile names (e.g. "af_heart",

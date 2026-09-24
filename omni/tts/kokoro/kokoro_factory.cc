@@ -23,6 +23,7 @@
 #include <utility>
 #include <vector>
 
+#include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
@@ -153,19 +154,21 @@ absl::Status InitKokoroResources(KokoroModelConfig& config,
   return absl::OkStatus();
 }
 
-absl::StatusOr<TtsSession::Components> CreateKokoroComponents(
-    const KokoroModelConfig& config, absl::string_view model_folder,
-    const TextChunkConfig& text_chunk_config,
-    std::shared_ptr<ModelResources> resources) {
-  TextChunkConfig local_chunk_config = text_chunk_config;
-  if (config.target_bucket > 0 && local_chunk_config.max_buffer_size == 0) {
-    local_chunk_config.max_buffer_size =
+TextChunkConfig ReviseTextChunkConfigForKokoro(
+    const KokoroModelConfig& config, TextChunkConfig text_chunk_config) {
+  if (config.target_bucket > 0 && text_chunk_config.max_buffer_size == 0) {
+    text_chunk_config.max_buffer_size =
         std::min(120, static_cast<int>(config.target_bucket * 0.9));
   }
+  return text_chunk_config;
+}
 
+absl::StatusOr<TtsSession::Components> CreateKokoroComponents(
+    const KokoroModelConfig& config, absl::string_view model_folder,
+    std::unique_ptr<StreamTextSource> absl_nonnull text_source,
+    std::shared_ptr<ModelResources> resources) {
   TtsSession::Components components;
-  components.text_source =
-      std::make_unique<StreamTextSource>(local_chunk_config);
+  components.text_source = std::move(text_source);
 
   // Stage 1: Text frontend, phonemization, and unified acoustic prediction.
   LITERT_ASSIGN_OR_RETURN(auto acoustic, KokoroAcousticStage::Create(

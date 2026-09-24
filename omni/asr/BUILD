@@ -21,7 +21,10 @@ package(default_visibility = ["//visibility:public"])
 cc_library(
     name = "audio_source",
     hdrs = ["audio_source.h"],
-    deps = ["//omni/base:stage"],
+    deps = [
+        "@com_google_absl//absl/status",
+        "//omni/base:stage",
+    ],
 )
 
 cc_library(
@@ -522,6 +525,7 @@ cc_library(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/time",
+        "//omni:omni_session",
         "//omni/base:async_stage_scheduler",
         "//omni/base:stage",
         "//runtime/framework:threadpool",
@@ -547,6 +551,7 @@ cc_test(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/time",
+        "//omni:omni_session",
         "//omni/base:stage",
         "//runtime/framework:threadpool",
         "//support/util:test_utils",
@@ -606,15 +611,12 @@ cc_library(
     hdrs = ["asr_omni_session.h"],
     deps = [
         ":asr_engine",
-        ":asr_session",
         ":audio_source",
-        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/cleanup",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/strings",
-        "@com_google_absl//absl/synchronization",
         "//omni:omni_session",
     ],
 )
@@ -635,6 +637,7 @@ cc_binary(
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/time",
+        "//omni:omni_session",
         "//runtime/executor:default_static_gpu_accelerator",
     ],
 )

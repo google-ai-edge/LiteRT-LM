@@ -28,7 +28,11 @@ cc_library(
 cc_library(
     name = "text_source",
     hdrs = ["text_source.h"],
-    deps = ["//omni/base:stage"],
+    deps = [
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/strings:string_view",
+        "//omni/base:stage",
+    ],
 )
 
 cc_library(
@@ -78,14 +82,14 @@ cc_library(
         ":stream_text_source",
         ":vocoder",
         "@com_google_absl//absl/base:core_headers",
-        "@com_google_absl//absl/functional:any_invocable",
+        "@com_google_absl//absl/cleanup",
         "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/strings",
         "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/time",
+        "//omni:omni_session",
         "//omni/base:async_stage_scheduler",
         "//omni/base:io_types",
         "//omni/base:stage",
@@ -106,6 +110,7 @@ cc_test(
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/synchronization",
+        "//omni:omni_session",
         "//omni/base:io_types",
         "//omni/base:stage",
         "//runtime/framework:threadpool",
@@ -153,6 +158,7 @@ cc_library(
     srcs = ["tts_engine.cc"],
     hdrs = ["tts_engine.h"],
     deps = [
+        ":stream_text_source",
         ":text_chunk_utils",
         ":tts_session",
         "@com_google_absl//absl/functional:any_invocable",
@@ -182,12 +188,18 @@ cc_library(
     srcs = ["tts_omni_session.cc"],
     hdrs = ["tts_omni_session.h"],
     deps = [
+        ":stream_text_source",
+        ":text_chunk_utils",
         ":tts_engine",
-        ":tts_session",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/base:nullability",
+        "@com_google_absl//absl/cleanup",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "//omni:omni_session",
+        "//omni/tts/kokoro:kokoro_factory",
+        "//omni/tts/kokoro:kokoro_model_config",
     ],
 )
 
@@ -209,6 +221,7 @@ cc_test(
         "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/synchronization",
         "@litert//litert/cc:litert_environment",
+        "//omni:omni_session",
         "//omni/base:io_types",
         "//omni/base:model_resources",
         "//omni/base:stage",

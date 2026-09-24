@@ -28,6 +28,7 @@
 #include "absl/synchronization/notification.h"  // from @com_google_absl
 #include "omni/base/io_types.h"
 #include "omni/base/stage.h"
+#include "omni/omni_session.h"
 #include "omni/tts/stream_text_source.h"
 #include "omni/tts/vocoder.h"
 #include "runtime/framework/threadpool.h"
@@ -202,7 +203,9 @@ TEST(TtsSessionTest, Synthesize) {
   ASSERT_OK_AND_ASSIGN(
       auto session, TtsSession::Create(CreateStreamComponents(), &thread_pool));
 
-  ASSERT_OK_AND_ASSIGN(auto audio, session->Synthesize("Hello world."));
+  ASSERT_OK(session->text_source().PushText("Hello world."));
+  ASSERT_OK_AND_ASSIGN(auto out, session->ProcessNext());
+  const auto& audio = std::get<AudioOutput>(out);
   EXPECT_EQ(audio.sample_rate_hz, 24000);
   EXPECT_FALSE(audio.pcm_samples.empty());
 }
@@ -216,8 +219,9 @@ TEST(TtsSessionTest, SynthesizeAsync) {
   int chunk_count = 0;
   absl::Status final_status;
 
-  absl::Status status = session->SynthesizeAsync(
-      "Hello world.", [&](absl::StatusOr<AudioOutput> result) -> absl::Status {
+  ASSERT_OK(session->text_source().PushText("Hello world."));
+  absl::Status status = session->ProcessAsync(
+      [&](absl::StatusOr<OmniSession::Output> result) -> absl::Status {
         if (!result.ok()) {
           final_status = result.status();
           done.Notify();
@@ -239,11 +243,13 @@ TEST(TtsSessionTest, SequentialSynthesizeCalls) {
   ASSERT_OK_AND_ASSIGN(
       auto session, TtsSession::Create(CreateStreamComponents(), &thread_pool));
 
-  ASSERT_OK_AND_ASSIGN(auto audio1, session->Synthesize("First chunk."));
-  EXPECT_FALSE(audio1.pcm_samples.empty());
+  ASSERT_OK(session->text_source().PushText("First chunk."));
+  ASSERT_OK_AND_ASSIGN(auto out1, session->ProcessNext());
+  EXPECT_FALSE(std::get<AudioOutput>(out1).pcm_samples.empty());
 
-  ASSERT_OK_AND_ASSIGN(auto audio2, session->Synthesize("Second chunk."));
-  EXPECT_FALSE(audio2.pcm_samples.empty());
+  ASSERT_OK(session->text_source().PushText("Second chunk."));
+  ASSERT_OK_AND_ASSIGN(auto out2, session->ProcessNext());
+  EXPECT_FALSE(std::get<AudioOutput>(out2).pcm_samples.empty());
 }
 
 TEST(TtsSessionTest, SequentialSynthesizeAsyncCalls) {
@@ -256,8 +262,9 @@ TEST(TtsSessionTest, SequentialSynthesizeAsyncCalls) {
     absl::Notification done;
     int chunk_count = 0;
     absl::Status final_status;
-    absl::Status status = session->SynthesizeAsync(
-        "First call.", [&](absl::StatusOr<AudioOutput> result) -> absl::Status {
+    ASSERT_OK(session->text_source().PushText("First call."));
+    absl::Status status = session->ProcessAsync(
+        [&](absl::StatusOr<OmniSession::Output> result) -> absl::Status {
           if (!result.ok()) {
             final_status = result.status();
             done.Notify();
@@ -274,12 +281,13 @@ TEST(TtsSessionTest, SequentialSynthesizeAsyncCalls) {
 
   // Second async call on the same session
   {
+    session->Reset();
     absl::Notification done;
     int chunk_count = 0;
     absl::Status final_status;
-    absl::Status status = session->SynthesizeAsync(
-        "Second call.",
-        [&](absl::StatusOr<AudioOutput> result) -> absl::Status {
+    ASSERT_OK(session->text_source().PushText("Second call."));
+    absl::Status status = session->ProcessAsync(
+        [&](absl::StatusOr<OmniSession::Output> result) -> absl::Status {
           if (!result.ok()) {
             final_status = result.status();
             done.Notify();
@@ -301,7 +309,8 @@ TEST(TtsSessionTest, ResetAndFlush) {
       auto session, TtsSession::Create(CreateStreamComponents(), &thread_pool));
 
   session->Reset();
-  ASSERT_OK_AND_ASSIGN(auto audio, session->Flush());
+  ASSERT_OK_AND_ASSIGN(auto flushed, session->Flush());
+  const auto& audio = std::get<OmniSession::AudioOutput>(flushed);
   EXPECT_TRUE(audio.pcm_samples.empty());
 }
 

@@ -21,11 +21,13 @@ cc_library(
     name = "omni_session",
     hdrs = ["omni_session.h"],
     deps = [
+        "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/functional:any_invocable",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "//omni/asr:text_merger",
         "//omni/base:io_types",
+        "//omni/base:stage",
     ],
 )
 
@@ -60,8 +62,8 @@ cc_test(
         ":omni_engine",
         ":omni_session",
         "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:status_matchers",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/synchronization",
@@ -75,6 +77,8 @@ cc_test(
         "//omni/base:io_types",
         "//omni/base:stage",
         "//omni/tts:stream_text_source",
+        "//omni/tts:text_chunk_utils",
+        "//omni/tts:text_source",
         "//omni/tts:tts_omni_session",
         "//omni/tts:tts_session",
         "//omni/tts:vocoder",
