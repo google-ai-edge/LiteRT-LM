@@ -81,21 +81,10 @@ build --announce_rc
 # TODO(mihaimaruseac): Document this option or remove if no longer needed
 build --define=grpc_no_ares=true
 
-# See https://github.com/bazelbuild/bazel/issues/7362 for information on what
-# --incompatible_remove_legacy_whole_archive flag does.
-# This flag is set to true in Bazel 1.0 and newer versions. We tried to migrate
-# Tensorflow to the default, however test coverage wasn't enough to catch the
-# errors.
-# There is ongoing work on Bazel team's side to provide support for transitive
-# shared libraries. As part of migrating to transitive shared libraries, we
-# hope to provide a better mechanism for control over symbol exporting, and
-# then tackle this issue again.
-#
-# TODO: Remove the following two lines once TF doesn't depend on Bazel wrapping
-# all library archives in -whole_archive -no_whole_archive.
-build --noincompatible_remove_legacy_whole_archive
-build --features=-force_no_whole_archive
-build --host_features=-force_no_whole_archive
+# Disable legacy whole archive so that cc_binary(..., linkshared = 1) targets
+# do not wrap all transitive static archives (such as Rust's
+# libprofiler_builtins) in -Wl,-whole-archive. See b/469455895.
+build --legacy_whole_archive=0
 
 # TODO(mihaimaruseac): Document this option or remove if no longer needed
 build --enable_platform_specific_config
@@ -404,9 +393,6 @@ build:avx_win --copt=/arch:AVX
 # Assume AVX2 x86_64 platforms for linux and windows.
 build:linux_x86_64 --copt=-mavx2
 build:windows --copt=/arch:AVX2
-
-# Disable whole archive on Windows to avoid symbol conflicts. See b/469455895.
-build:windows --legacy_whole_archive=0
 
 # Enable all targets in XLA
 build:cpu_cross --define=with_cross_compiler_support=true
