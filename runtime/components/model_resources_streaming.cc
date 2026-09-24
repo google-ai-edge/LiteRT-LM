@@ -171,4 +171,11 @@ absl::Status ModelResourcesStreaming::SetWeightsFromStream(ModelType model_type,
   return absl::OkStatus();
 }
 
+void ModelResourcesStreaming::ReleaseWeights(ModelType model_type) {
+  // Drop the spans before the storage they point into, so that no dangling
+  // span is observable at any point.
+  weights_in_memory_per_model_.erase(model_type);
+  weights_storage_.erase(model_type);
+}
+
 }  // namespace litert::lm

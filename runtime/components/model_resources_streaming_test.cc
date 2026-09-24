@@ -161,5 +161,61 @@ TEST(ModelResourcesStreamingTest, SetAndGetWeightsFromStream) {
             nullptr);
 }
 
+TEST(ModelResourcesStreamingTest, ReleaseWeightsDropsOnlyTheGivenModelType) {
+  ModelResourcesStreaming model_resources;
+
+  std::string vision_data = "vision_weights";
+  MemoryDataStream vision_stream(vision_data);
+  ASSERT_OK(model_resources.SetWeightsFromStream(
+      ModelType::kTfLiteVisionEncoder, vision_stream, vision_data.size()));
+
+  std::string adapter_data = "adapter_weights";
+  MemoryDataStream adapter_stream(adapter_data);
+  ASSERT_OK(model_resources.SetWeightsFromStream(
+      ModelType::kTfLiteVisionAdapter, adapter_stream, adapter_data.size()));
+
+  model_resources.ReleaseWeights(ModelType::kTfLiteVisionEncoder);
+
+  EXPECT_EQ(
+      model_resources.GetWeightInMemoryMap(ModelType::kTfLiteVisionEncoder),
+      nullptr);
+  EXPECT_NE(
+      model_resources.GetWeightInMemoryMap(ModelType::kTfLiteVisionAdapter),
+      nullptr);
+}
+
+TEST(ModelResourcesStreamingTest, ReleaseWeightsWithNothingStoredIsANoOp) {
+  ModelResourcesStreaming model_resources;
+  model_resources.ReleaseWeights(ModelType::kTfLiteVisionEncoder);
+  EXPECT_EQ(
+      model_resources.GetWeightInMemoryMap(ModelType::kTfLiteVisionEncoder),
+      nullptr);
+}
+
+TEST(ModelResourcesStreamingTest, WeightsCanBeSetAgainAfterRelease) {
+  ModelResourcesStreaming model_resources;
+
+  std::string first_data = "first_weights";
+  MemoryDataStream first_stream(first_data);
+  ASSERT_OK(model_resources.SetWeightsFromStream(
+      ModelType::kTfLiteVisionEncoder, first_stream, first_data.size()));
+  model_resources.ReleaseWeights(ModelType::kTfLiteVisionEncoder);
+
+  std::string second_data = "second_weights_which_are_longer";
+  MemoryDataStream second_stream(second_data);
+  ASSERT_OK(model_resources.SetWeightsFromStream(
+      ModelType::kTfLiteVisionEncoder, second_stream, second_data.size()));
+
+  const auto* model_map =
+      model_resources.GetWeightInMemoryMap(ModelType::kTfLiteVisionEncoder);
+  ASSERT_NE(model_map, nullptr);
+  auto model_it = model_map->find("tflite_weights");
+  ASSERT_NE(model_it, model_map->end());
+  ASSERT_EQ(model_it->second.size(), second_data.size());
+  EXPECT_EQ(std::string(reinterpret_cast<const char*>(model_it->second.data()),
+                        model_it->second.size()),
+            second_data);
+}
+
 }  // namespace
 }  // namespace litert::lm

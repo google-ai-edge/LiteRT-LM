@@ -181,6 +181,13 @@ class ModelResourcesStreaming : public ModelResources {
     return SetWeightsFromStream(model_type, stream, size);
   }
 
+  // Releases the host memory holding `model_type`'s external weights, and the
+  // spans over it returned by `GetWeightInMemoryMap`. Does nothing if no
+  // weights are stored for `model_type`.
+  //
+  // Only call this once you know the weights will not be read again.
+  void ReleaseWeights(ModelType model_type);
+
  private:
   std::optional<proto::LlmMetadata> llm_metadata_;
   std::optional<proto::EmbeddingMetadata> embedding_metadata_;
