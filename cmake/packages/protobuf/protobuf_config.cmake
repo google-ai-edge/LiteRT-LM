@@ -43,31 +43,42 @@ set(LITERTLM_PROTOBUF_LITE_LIBRARY
 set(LITERTLM_PROTOBUF_SHIM_PATH
   "${LITERTLM_PROTOBUF_PACKAGE_DIR}/protobuf_shim.cmake"
   CACHE PATH "")
-set(LITERTLM_PROTOBUF_BIN_DIR
-  "${LITERTLM_PROTOBUF_INSTALL_PREFIX}/bin"
-  CACHE PATH "")
+
+if("${LITERTLM_ORCHESTRATION_PHASE}" STREQUAL "litert_lm")
+  set(LITERTLM_PROTOBUF_BIN_DIR
+    "${LITERTLM_HOST_PROTOC_BIN_DIR}" 
+    CACHE PATH "Protobuf binary directory")
+  set(LITERTLM_PROTOC_EXECUTABLE 
+    "${LITERTLM_HOST_PROTOC}"
+    CACHE PATH "Host protoc")
+  set(LITERTLM_PROTOC_EXE
+    "${LITERTLM_HOST_PROTOC}"
+    CACHE PATH "")
+  set(protobuf_generate_PROTOC_EXE 
+      "${LITERTLM_HOST_PROTOC}"
+      CACHE PATH "Host protoc for generator module")
+else()
+  set(LITERTLM_PROTOBUF_BIN_DIR
+    "${LITERTLM_PROTOBUF_INSTALL_PREFIX}/bin"
+    CACHE PATH "Protobuf binary directory")
+  set(LITERTLM_PROTOC_EXECUTABLE
+    "${LITERTLM_PROTOBUF_BIN_DIR}/protoc"
+    CACHE PATH "")
+  set(LITERTLM_PROTOC_EXE
+    "${LITERTLM_PROTOBUF_BIN_DIR}/protoc"
+    CACHE PATH "")
+  set(protobuf_generate_PROTOC_EXE
+    "${LITERTLM_PROTOBUF_BIN_DIR}/protoc"
+    CACHE PATH "")
+endif()
+
 set(LITERTLM_PROTOBUF_TARGET_MAP_PATH 
   "${LITERTLM_PROTOBUF_PACKAGE_DIR}/protobuf_${LITERTLM_ORCHESTRATION_PHASE}_target_map.cmake" 
   CACHE PATH "")
 set(LITERTLM_PROTOBUF_AGGREGATE_PATH
   "${LITERTLM_PROTOBUF_PACKAGE_DIR}/protobuf_aggregate.cmake"
   CACHE PATH "")
-set(LITERTLM_PROTOC_EXECUTABLE
-  "${LITERTLM_PROTOBUF_BIN_DIR}/protoc"
-  CACHE PATH "")
-set(LITERTLM_PROTOC_EXE
-  "${LITERTLM_PROTOBUF_BIN_DIR}/protoc"
-  CACHE PATH "")
-set(protobuf_generate_PROTOC_EXE
-  "${LITERTLM_PROTOBUF_BIN_DIR}/protoc"
-  CACHE PATH "")
 
-if("${LITERTLM_ORCHESTRATION_PHASE}" STREQUAL "litert_lm")
-    message(STATUS "[LiteRTLM] Protobuf: Using host protoc at ${LITERTLM_HOST_PROTOC}")
-    set(LITERTLM_PROTOBUF_BIN_DIR "${LITERTLM_HOST_PROTOC_BIN_DIR}" CACHE PATH "Host Protobuf binary path")
-    set(LITERTLM_PROTOC_EXECUTABLE "${LITERTLM_HOST_PROTOC}" CACHE PATH "Host protoc")
-    set(protobuf_generate_PROTOC_EXE "${LITERTLM_HOST_PROTOC}" CACHE PATH "Host protoc for generator module")
-endif()
 set(LITERTLM_PROTOBUF_PACKAGE_DIR
     "${LITERTLM_CMAKE_PACKAGES_DIR}/protobuf"
     CACHE PATH "Path to Protobuf related build scripts")
