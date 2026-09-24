@@ -701,9 +701,14 @@ TEST_F(InternalCallbackChannelTest, SplitChannelEnd) {
 
 TEST_F(InternalCallbackChannelTest, ChannelAndText) {
   auto user_callback = CreateUserMessageCallback(output_, done_, status_);
-  auto callback =
-      CreateInternalCallback(*model_data_processor_, processor_args_, channels_,
-                             std::move(user_callback));
+  int channel_token_count = 0;
+  auto callback = CreateInternalCallback(
+      *model_data_processor_, processor_args_, channels_,
+      std::move(user_callback), /*cancel_callback=*/nullptr,
+      /*complete_message_callback=*/nullptr, /*open_channel_name=*/std::nullopt,
+      /*return_error_on_max_tokens_reached=*/false,
+      /*stream_tool_calls=*/false, /*tool_call_channel_name=*/"tool_call",
+      [&channel_token_count](int count) { channel_token_count += count; });
 
   callback(Responses(TaskState::kProcessing, {"some "}));
   callback(Responses(TaskState::kProcessing, {"text\n"}));
@@ -720,6 +725,7 @@ TEST_F(InternalCallbackChannelTest, ChannelAndText) {
                                    ChannelMessage("am ", "thought"),
                                    ChannelMessage("thinking", "thought"),
                                    TextMessage(" more text")));
+  EXPECT_EQ(channel_token_count, 6);
 }
 
 TEST_F(InternalCallbackChannelTest, IncompleteChannel) {
