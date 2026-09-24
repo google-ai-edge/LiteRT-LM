@@ -16,21 +16,22 @@
 
 #ifdef __EMSCRIPTEN__
 #include <algorithm>
-#include <cstring>
 #include <vector>
 
-#include "absl/types/span.h"  // from @com_google_absl
 #include <webgpu/webgpu_cpp.h>
 #include "weight_loader/external_weight_loader_litert.h"  // from @litert
 #endif  // __EMSCRIPTEN__
 
+#include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <unordered_map>
 #include <utility>
 
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "runtime/components/model_resources.h"
 #include "runtime/util/data_stream.h"
 
@@ -44,6 +45,16 @@ std::unordered_map<ModelType, std::shared_ptr<DataStream>>&
 GetStoredWeightsStreams() {
   static auto* const m =
       new std::unordered_map<ModelType, std::shared_ptr<DataStream>>();
+  return *m;
+}
+
+// Global map of stored in-memory weights sections, mapped by ModelType. Used
+// for submodels whose weights were loaded into host memory rather than
+// left on the stream. The spans are not owned; see `StoreWeightsBuffer()`.
+std::unordered_map<ModelType, absl::Span<const std::byte>>&
+GetStoredWeightsBuffers() {
+  static auto* const m =
+      new std::unordered_map<ModelType, absl::Span<const std::byte>>();
   return *m;
 }
 
@@ -106,16 +117,38 @@ void StoreWeightsStream(ModelType model_type,
   GetStoredWeightsStreams()[model_type] = std::move(stream);
 }
 
+void StoreWeightsBuffer(ModelType model_type,
+                        absl::Span<const std::byte> weights) {
+#ifdef __EMSCRIPTEN__
+  weight_loader::RegisterWebWeightUploadCallback(&UploadStoredWeightsOnWeb);
+#endif  // __EMSCRIPTEN__
+  GetStoredWeightsBuffers()[model_type] = weights;
+}
+
 absl::Status ReadStoredWeights(int model_type_int, uint64_t offset,
                                uint64_t size, void* buffer) {
   ModelType model_type = static_cast<ModelType>(model_type_int);
   auto& streams = GetStoredWeightsStreams();
   auto it = streams.find(model_type);
-  if (it == streams.end() || it->second == nullptr) {
+  if (it != streams.end() && it->second != nullptr) {
+    return it->second->ReadAndDiscard(buffer, offset, size);
+  }
+
+  auto& buffers = GetStoredWeightsBuffers();
+  auto buffer_it = buffers.find(model_type);
+  if (buffer_it == buffers.end()) {
     return absl::NotFoundError(absl::StrCat(
         "Stored weights stream not found for model type: ", model_type_int));
   }
-  return it->second->ReadAndDiscard(buffer, offset, size);
+  const absl::Span<const std::byte>& weights = buffer_it->second;
+  if (offset > weights.size() || size > weights.size() - offset) {
+    return absl::OutOfRangeError(absl::StrCat(
+        "Read of ", size, " bytes at offset ", offset,
+        " is out of range for the stored weights buffer of model type ",
+        model_type_int, ", which holds ", weights.size(), " bytes"));
+  }
+  std::memcpy(buffer, weights.data() + offset, size);
+  return absl::OkStatus();
 }
 
 absl::Status ClearStoredWeightsStream(ModelType model_type) {
@@ -127,6 +160,7 @@ absl::Status ClearStoredWeightsStream(ModelType model_type) {
     }
     streams.erase(it);
   }
+  GetStoredWeightsBuffers().erase(model_type);
   return absl::OkStatus();
 }
 
@@ -138,6 +172,7 @@ absl::Status ClearStoredWeightsStreams() {
     }
   }
   streams.clear();
+  GetStoredWeightsBuffers().clear();
   return absl::OkStatus();
 }
 

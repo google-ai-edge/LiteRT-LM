@@ -611,6 +611,7 @@ cc_library(
     hdrs = ["embedding_engine_impl.h"],
     visibility = [":engine_impl_users"],
     deps = [
+        "@com_google_absl//absl/cleanup",
         "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",

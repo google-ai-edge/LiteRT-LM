@@ -21,7 +21,7 @@ import {getOrLoadGlobalLiteRtLm} from './load_litertlm.js';
 import {Mutex} from './mutex.js';
 import {ReadableStreamDataStreamWrapper} from './readable_stream_data_stream_wrapper.js';
 import {modelToStream} from './stream_utils.js';
-import {Backend, Deletable, EmbeddingEngine as WasmEmbeddingEngine, EmbeddingEngineSettings as WasmEmbeddingEngineSettings, EmbeddingOptions, InputOverflowStrategy} from './wasm_binding_types.js';
+import {Backend, Deletable, EmbeddingEngine as WasmEmbeddingEngine, EmbeddingOptions, InputOverflowStrategy} from './wasm_binding_types.js';
 import {consumeEmscriptenVectorToArray} from './wasm_utils.js';
 
 export {
@@ -151,18 +151,14 @@ export class EmbeddingEngine implements Deletable {
         modelAssets.delete();
       });
 
-      let wasmSettings: WasmEmbeddingEngineSettings;
-      if (settings.visionBackend !== undefined ||
-          settings.audioBackend !== undefined) {
-        wasmSettings = wasm.EmbeddingEngineSettings.createDefaultMultimodal(
-            modelAssets, {value: backend},
-            settings.visionBackend ? {value: settings.visionBackend} :
-                                     undefined,
-            settings.audioBackend ? {value: settings.audioBackend} : undefined);
-      } else {
-        wasmSettings = wasm.EmbeddingEngineSettings.createDefault(
-            modelAssets, {value: backend});
-      }
+      const wasmSettings = wasm.EmbeddingEngineSettings.createDefaultMultimodal(
+          modelAssets, {value: backend},
+          settings.visionBackend !== undefined ?
+              {value: settings.visionBackend} :
+              undefined,  // Skip vision backend if not set.
+          settings.audioBackend !== undefined ?
+              {value: settings.audioBackend} :
+              undefined);  // Skip audio backend if not set.
       cleanupModelAssets();
 
       const cleanupWasmSettings = cleanup.add(() => {

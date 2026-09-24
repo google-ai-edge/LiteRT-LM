@@ -186,6 +186,9 @@ class ModelResourcesStreaming : public ModelResources {
   // weights are stored for `model_type`.
   //
   // Only call this once you know the weights will not be read again.
+  //
+  // Callers that also published the section via `StoreWeightsBuffer` must
+  // clear that registration first, since it holds a span into this storage.
   void ReleaseWeights(ModelType model_type);
 
  private:

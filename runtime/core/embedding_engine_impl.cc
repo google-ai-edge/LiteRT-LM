@@ -25,6 +25,7 @@
 #include <variant>
 #include <vector>
 
+#include "absl/cleanup/cleanup.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
@@ -526,6 +527,13 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
 
   auto streaming_resources = std::make_unique<ModelResourcesStreaming>();
 
+  // The registrations made below point into `streaming_resources`. Declared
+  // after it so that it destructs first, dropping them before the storage they
+  // point into goes away on any path out of this function.
+  absl::Cleanup clear_stored_weights = [] {
+    ClearStoredWeightsStreams().IgnoreError();
+  };
+
   // Unlike Create, the streamed path cannot resolve settings up front: the
   // metadata they depend on only arrives partway through the stream. Run this
   // whenever a section feeds into the settings, and before anything reads them.
@@ -720,25 +728,27 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
           }
         } else if (model_type == ModelType::kTfLiteVisionEncoder ||
                    model_type == ModelType::kTfLiteVisionAdapter) {
-          if (model_type == ModelType::kTfLiteVisionAdapter ||
-              (settings.GetVisionExecutorSettings().has_value() &&
-               settings.GetVisionExecutorSettings()->GetBackend() ==
-                   Backend::CPU)) {
-            size_t size = section_metadata->end_offset() -
-                          section_metadata->begin_offset();
-            ABSL_LOG(INFO) << "Reading vision weights (" << size
-                           << " bytes) for model type "
-                           << static_cast<int>(model_type)
-                           << " into host memory...";
-            ABSL_RETURN_IF_ERROR(
-                streaming_resources->SetVisionWeightsFromStream(
-                    model_type, *section->data_stream, size));
-            ABSL_LOG(INFO) << "Vision weights read.";
-          } else {
-            ABSL_LOG(INFO)
-                << "Storing TFLiteWeights section stream for model type: "
-                << static_cast<int>(model_type);
-            StoreWeightsStream(model_type, std::move(section->data_stream));
+          // Vision models often contain Float32 weights, which can't be
+          // streamed yet, so we always cache them in host memory even if
+          // running on GPU.
+          size_t size =
+              section_metadata->end_offset() - section_metadata->begin_offset();
+          ABSL_LOG(INFO) << "Reading vision weights (" << size
+                         << " bytes) for model type "
+                         << static_cast<int>(model_type)
+                         << " into host memory...";
+          ABSL_RETURN_IF_ERROR(streaming_resources->SetVisionWeightsFromStream(
+              model_type, *section->data_stream, size));
+          ABSL_LOG(INFO) << "Vision weights read.";
+          // Store the weights in the in-memory map so they can be loaded
+          // without streaming.
+          if (const auto* weight_map =
+                  streaming_resources->GetWeightInMemoryMap(model_type);
+              weight_map != nullptr) {
+            if (auto it = weight_map->find("tflite_weights");
+                it != weight_map->end()) {
+              StoreWeightsBuffer(model_type, it->second);
+            }
           }
         } else if (model_type == ModelType::kTfLiteAudioEncoderHw ||
                    model_type == ModelType::kTfLiteAudioAdapter) {
@@ -892,6 +902,15 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
                             VisionLiteRtCompiledModelExecutor::Create(
                                 *settings.GetVisionExecutorSettings(),
                                 owned_env->env, *streaming_resources));
+    // We only need to keep the weights in CPU memory when running on CPU.
+    if (settings.GetVisionExecutorSettings()->GetBackend() != Backend::CPU) {
+      // Drop the registration that points into the storage before freeing it.
+      ABSL_RETURN_IF_ERROR(
+          ClearStoredWeightsStream(ModelType::kTfLiteVisionEncoder));
+      streaming_resources->ReleaseWeights(ModelType::kTfLiteVisionEncoder);
+      // Don't clear the vision adapter. It always runs on CPU.
+      ABSL_LOG(INFO) << "Released host memory for vision encoder weights.";
+    }
   }
 
   // Initialize the audio executor.
@@ -929,8 +948,6 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
           std::move(streaming_resources), std::move(embedding_lookup),
           std::move(per_layer_embedding_lookup),
           std::move(*compiled_text_encoder_info)));
-
-  ABSL_RETURN_IF_ERROR(ClearStoredWeightsStreams());
 
   if (benchmark_info.has_value()) {
     ABSL_RETURN_IF_ERROR(

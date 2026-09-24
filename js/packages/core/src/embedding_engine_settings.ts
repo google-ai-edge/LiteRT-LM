@@ -28,8 +28,17 @@ export interface EmbeddingExecutorSettings {
  */
 export interface EmbeddingEngineSettings {
   model: string | Blob | ReadableStream<Uint8Array>;
+  /** Backend for the text encoder and embedder. Defaults to `Backend.GPU`. */
   backend?: Backend;
+  /**
+   * Backend for the vision encoder.
+   * Can be set to `Backend.CPU` or `Backend.GPU`. If unset, vision is disabled.
+   */
   visionBackend?: Backend;
+  /**
+   * Backend for the audio encoder.
+   * Can be set to `Backend.CPU` or `Backend.GPU`. If unset, audio is disabled.
+   */
   audioBackend?: Backend;
   /**
    * Longest input, in tokens, that the engine must accept. Defaults to 1024.

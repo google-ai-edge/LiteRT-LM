@@ -69,6 +69,7 @@ cc_test(
         ":streamed_weights_manager",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/types:span",
         "//runtime/components:model_resources",
     ],
 )

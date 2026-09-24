@@ -15,10 +15,12 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_UTIL_STREAMED_WEIGHTS_MANAGER_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_UTIL_STREAMED_WEIGHTS_MANAGER_H_
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "runtime/components/model_resources.h"
 #include "runtime/util/data_stream.h"
 
@@ -50,16 +52,29 @@ ModelType GetCurrentlyCompilingModel();
 void StoreWeightsStream(ModelType model_type,
                         std::shared_ptr<DataStream> stream);
 
-// Reads `size` bytes at `offset` from the stored weights stream for
-// `model_type_int` into `buffer`, discarding the read bytes from the stream.
+// Registers an in-memory external weights section for `model_type`
+// so that it can be read on demand during WebGPU model compilation, as an
+// alternative to `StoreWeightsStream()`. This is necessary for certain models
+// that can not yet be streamed.
+//
+// The caller retains ownership and must keep the underlying bytes alive until
+// the submodel has been compiled.
+void StoreWeightsBuffer(ModelType model_type,
+                        absl::Span<const std::byte> weights);
+
+// Reads `size` bytes at `offset` from the stored weights for `model_type_int`
+// into `buffer`. Reads are served from the stored DataStream if there is one,
+// discarding the read bytes from it, and otherwise from the stored in-memory
+// buffer.
 absl::Status ReadStoredWeights(int model_type_int, uint64_t offset,
                                uint64_t size, void* buffer);
 
 // Discards any remaining unread bytes and removes the stored weights stream
-// for `model_type`.
+// or buffer for `model_type`.
 absl::Status ClearStoredWeightsStream(ModelType model_type);
 
-// Discards any remaining unread bytes and clears all stored weight streams.
+// Discards any remaining unread bytes and clears all stored weight streams and
+// buffers.
 absl::Status ClearStoredWeightsStreams();
 
 }  // namespace litert::lm
