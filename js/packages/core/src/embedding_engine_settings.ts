@@ -31,10 +31,33 @@ export interface EmbeddingEngineSettings {
   backend?: Backend;
   visionBackend?: Backend;
   audioBackend?: Backend;
+  /**
+   * Longest input, in tokens, that the engine must accept. Defaults to 1024.
+   *
+   * The engine prepares every text encoder signature between `minInputLength`
+   * and this value, and rejects the model if no signature is long enough.
+   */
   maxInputLength?: number;
+  /**
+   * Shortest input, in tokens, to prepare a signature for. Defaults to
+   * `maxInputLength`, which prepares exactly one signature.
+   *
+   * Lowering this prepares additional shorter signatures, so that short inputs
+   * run on a tighter graph instead of being padded up to `maxInputLength`.
+   */
+  minInputLength?: number;
   visionTokensPerImage?: number;
   mainExecutorSettings?: EmbeddingExecutorSettings;
 }
+
+/**
+ * Longest input the engine accepts when the caller does not say.
+ *
+ * Together with defaulting `minInputLength` to `maxInputLength` this prepares
+ * a single signature, which keeps a default-configured engine inside the 4GB
+ * wasm32 address space.
+ */
+const DEFAULT_MAX_INPUT_LENGTH = 1024;
 
 /**
  * Fills a WasmEmbeddingEngineSettings with the values from an EmbeddingEngineSettings.
@@ -47,9 +70,9 @@ export function fillWasmEmbeddingEngineSettingsFromEmbeddingEngineSettings(
   const wasmExecutorSettings = wasmSettings.getMutableMainExecutorSettings();
   wasmExecutorSettings.setCacheDir(':nocache');
 
-  if (settings.maxInputLength !== undefined) {
-    wasmSettings.setMaxInputLength(settings.maxInputLength);
-  }
+  const maxInputLength = settings.maxInputLength ?? DEFAULT_MAX_INPUT_LENGTH;
+  wasmSettings.setMaxInputLength(maxInputLength);
+  wasmSettings.setMinInputLength(settings.minInputLength ?? maxInputLength);
   if (settings.visionTokensPerImage !== undefined) {
     wasmSettings.setVisionTokensPerImage(settings.visionTokensPerImage);
   }

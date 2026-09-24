@@ -401,6 +401,15 @@ TEST(ModelSignatureUtilsTest, SelectTextEncoderSignatures_Success) {
       StatusIs(absl::StatusCode::kInvalidArgument,
                HasSubstr("exceeds maximum available signature length")));
 
+  // Same, but with min_input_length filtering every signature out first. The
+  // error must still name the real ceiling instead of reporting that nothing
+  // could be selected.
+  EXPECT_THAT(
+      SelectTextEncoderSignatures(signatures, /*max_input_length=*/2000,
+                                  /*min_input_length=*/2000),
+      StatusIs(absl::StatusCode::kInvalidArgument,
+               HasSubstr("exceeds maximum available signature length (1024)")));
+
   // min_input_length filtering
   ASSERT_OK_AND_ASSIGN(
       auto result_min,

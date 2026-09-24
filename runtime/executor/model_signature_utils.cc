@@ -206,6 +206,15 @@ absl::StatusOr<SelectedTextSignaturesInfo> SelectSignaturesByCapacity(
               return a.length < b.length;
             });
 
+  // Early exit if no signature is long enough.
+  if (target_capacity.has_value() &&
+      *target_capacity > sorted_signatures.back().length) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Requested target capacity (", *target_capacity,
+                     ") exceeds maximum available signature length (",
+                     sorted_signatures.back().length, ")."));
+  }
+
   SelectedTextSignaturesInfo result;
   for (const auto& sig : sorted_signatures) {
     if (min_capacity.has_value() && sig.length < *min_capacity) {
@@ -218,21 +227,10 @@ absl::StatusOr<SelectedTextSignaturesInfo> SelectSignaturesByCapacity(
     }
   }
 
-  if (!result.signature_lengths.empty()) {
-    result.max_signature_length = result.signature_lengths.back();
-  }
-
   if (result.signature_names.empty()) {
     return absl::NotFoundError("No signatures could be selected.");
   }
-
-  if (target_capacity.has_value() &&
-      *target_capacity > result.max_signature_length) {
-    return absl::InvalidArgumentError(
-        absl::StrCat("Requested target capacity (", *target_capacity,
-                     ") exceeds maximum available signature length (",
-                     result.max_signature_length, ")."));
-  }
+  result.max_signature_length = result.signature_lengths.back();
 
   return result;
 }
