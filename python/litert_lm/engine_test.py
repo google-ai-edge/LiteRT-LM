@@ -633,9 +633,17 @@ class EngineTest(LiteRtLmTestBase):
         engine.create_conversation() as conversation,
     ):
       self.assertEqual(conversation.token_count, 0)
+      self.assertEqual(conversation.get_token_count(), 0)
+      self.assertEqual(
+          conversation.get_token_count(include_channel_content=False), 0
+      )
       user_message = {"role": "user", "content": "Hello world!"}
       conversation.send_message(user_message)
       self.assertEqual(conversation.token_count, 10)
+      self.assertEqual(conversation.get_token_count(), 10)
+      self.assertEqual(
+          conversation.get_token_count(include_channel_content=False), 10
+      )
 
   def test_conversation_get_benchmark_info(self):
     with (

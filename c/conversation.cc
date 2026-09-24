@@ -686,11 +686,18 @@ LiteRtLmBenchmarkInfo* litert_lm_conversation_get_benchmark_info(
 }
 
 int litert_lm_conversation_get_token_count(LiteRtLmConversation* conversation) {
+  return litert_lm_conversation_get_token_count_with_options(
+      conversation, /*include_channel_content=*/true);
+}
+
+int litert_lm_conversation_get_token_count_with_options(
+    LiteRtLmConversation* conversation, bool include_channel_content) {
   if (!conversation || !conversation->conversation) {
     SetLastError(absl::StatusCode::kInvalidArgument, "Invalid conversation.");
     return -1;
   }
-  absl::StatusOr<int> token_count = conversation->conversation->GetTokenCount();
+  absl::StatusOr<int> token_count =
+      conversation->conversation->GetTokenCount(include_channel_content);
   if (!token_count.ok()) {
     ABSL_LOG(ERROR) << "Failed to get token count: " << token_count.status();
     SetLastError(token_count.status());

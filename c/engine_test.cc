@@ -2164,6 +2164,15 @@ TEST(EngineCTest, ConversationOptionalArgsTest) {
   EXPECT_GT(text.length(), 0);
   EXPECT_LT(text.length(), 5);
   EXPECT_EQ(text, "\xE6\xB2\xBF");
+
+  int token_count = litert_lm_conversation_get_token_count(conversation.get());
+  EXPECT_GT(token_count, 0);
+  EXPECT_EQ(litert_lm_conversation_get_token_count_with_options(
+                conversation.get(), /*include_channel_content=*/true),
+            token_count);
+  EXPECT_EQ(litert_lm_conversation_get_token_count_with_options(
+                conversation.get(), /*include_channel_content=*/false),
+            token_count);
 }
 
 }  // namespace
