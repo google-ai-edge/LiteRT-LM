@@ -1389,6 +1389,15 @@ absl::StatusOr<ExecutorInputs> EmbeddingEngineImpl::ProcessAndCombineContents(
         } else if (!absl::IsUnimplemented(flushed_audio_data.status())) {
           return flushed_audio_data.status();
         }
+        // If underlying audio encoder is stateful, (e.g. streaming
+        // AudioEncoder), we must reset the state.
+        if (audio_preprocessor_ != nullptr) {
+          audio_preprocessor_->Reset();
+        }
+        auto reset_status = audio_executor_->Reset();
+        if (!reset_status.ok() && !absl::IsUnimplemented(reset_status)) {
+          return reset_status;
+        }
       }
       combined_token_ids.push_back(ExecutorAudioData::kEndToken);
     } else {
@@ -1461,15 +1470,6 @@ absl::StatusOr<EmbeddingResponse> EmbeddingEngineImpl::ComputeEmbeddingInternal(
   if (options.normalize) {
     response.embedding = L2Norm(response.embedding);
   }
-  if (audio_executor_ != nullptr) {
-    // If underlying audio encoder is stateful, (e.g. streaming AudioEncoder),
-    // we must reset the state.
-    auto reset_status = audio_executor_->Reset();
-    if (!reset_status.ok() && !absl::IsUnimplemented(reset_status)) {
-      return reset_status;
-    }
-  }
-
   return response;
 }
 
