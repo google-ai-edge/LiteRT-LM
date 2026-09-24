@@ -15,6 +15,7 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_CONVERSATION_CONVERSATION_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_CONVERSATION_CONVERSATION_H_
 
+#include <atomic>
 #include <memory>
 #include <optional>
 #include <string>
@@ -616,7 +617,18 @@ class Conversation {
 
   // Returns the number of tokens in the conversation KV Cache (prefill +
   // decode).
-  absl::StatusOr<int> GetTokenCount() const;
+  //
+  // Note: When `filter_channel_content_from_kv_cache` is enabled (the default),
+  // channel content (such as reasoning/thinking tokens) from the most recent
+  // turn remains in the KV cache until the next user message triggers a rewind
+  // and re-prefill.
+  // - If `include_channel_content` is true (default), returns the current KV
+  //   cache step (`session_->GetCurrentStep()`), which includes any channel
+  //   tokens from the latest turn that have not yet been rolled back.
+  // - If `include_channel_content` is false, excludes the token count of any
+  //   channel content that is pending removal from the KV cache on the next
+  //   user turn.
+  absl::StatusOr<int> GetTokenCount(bool include_channel_content = true) const;
 
   // Returns the benchmark info for the conversation. Under the hood, this
   // method triggers the benchmark info collection from the Session. Returns:
@@ -809,7 +821,11 @@ class Conversation {
   std::optional<int> checkpoint_message_index_ = std::nullopt;
 
   // Whether there is channel content present since the last user message.
-  bool channel_content_since_last_user_message_ = false;
+  std::atomic<bool> channel_content_since_last_user_message_{false};
+
+  // The number of channel tokens currently in the KV cache since the last user
+  // message that will be removed on the next user-turn rewind.
+  std::atomic<int> pending_channel_token_count_{0};
 };
 }  // namespace litert::lm
 
