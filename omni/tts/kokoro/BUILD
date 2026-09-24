@@ -278,3 +278,36 @@ cc_test(
         "//support/util:test_utils",
     ],
 )
+
+cc_library(
+    name = "cjk_blob",
+    srcs = ["cjk_blob.cc"],
+    hdrs = ["cjk_blob.h"],
+    deps = [
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+    ],
+)
+
+cc_test(
+    name = "cjk_blob_test",
+    srcs = ["cjk_blob_test.cc"],
+    deps = [
+        ":cjk_blob",
+        ":cjk_test_blobs",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/strings",
+        "//support/util:test_utils",
+    ],
+)
+
+cc_library(
+    name = "cjk_test_blobs",
+    testonly = True,
+    srcs = ["cjk_test_blobs.cc"],
+    hdrs = ["cjk_test_blobs.h"],
+)
