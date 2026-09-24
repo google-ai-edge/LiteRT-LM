@@ -1845,6 +1845,77 @@ TEST(EngineCTest, ConversationSendMessageStreamAndCancel) {
                                      testing::HasSubstr("CANCELLED")));
 }
 
+TEST(EngineCTest, ConversationSendMessageStreamAndWaitUntilDone) {
+  const std::string task_path = GetTestdataPath(
+      "litert_lm/runtime/testdata/test_lm_new_metadata.task");
+
+  EngineSettingsPtr settings(
+      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
+                                       /* vision_backend_str */ nullptr,
+                                       /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+  litert_lm_engine_settings_set_max_num_tokens(settings.get(), 512);
+
+  EnginePtr engine(litert_lm_engine_create(settings.get()),
+                   &litert_lm_engine_delete);
+  ASSERT_NE(engine, nullptr);
+
+  ConversationPtr conversation(
+      litert_lm_conversation_create(engine.get(),
+                                    /*conversation_config=*/nullptr),
+      &litert_lm_conversation_delete);
+  ASSERT_NE(conversation, nullptr);
+
+  const char* message_json =
+      R"({"role": "user", "content": [{"type": "text", "text": "Hello"}]})";
+  StreamCallbackData callback_data;
+  int result = litert_lm_conversation_send_message_stream(
+      conversation.get(), message_json, /*extra_context=*/nullptr,
+      /*optional_args=*/nullptr, &StreamCallback, &callback_data);
+  ASSERT_EQ(result, kLiteRtLmStatusOk);
+
+  EXPECT_EQ(litert_lm_conversation_wait_until_done(conversation.get()),
+            kLiteRtLmStatusOk);
+
+  // The stream has completed by the time the wait returns.
+  EXPECT_TRUE(callback_data.done.HasBeenNotified());
+  EXPECT_GT(callback_data.response.length(), 0);
+}
+
+TEST(EngineCTest, ConversationWaitUntilDoneWithInvalidConversationFails) {
+  EXPECT_NE(litert_lm_conversation_wait_until_done(/*conversation=*/nullptr),
+            kLiteRtLmStatusOk);
+  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
+  EXPECT_STREQ(litert_lm_get_last_error_message(), "Invalid conversation.");
+}
+
+TEST(EngineCTest, ConversationWaitUntilDoneOnIdleConversationSucceeds) {
+  const std::string task_path = GetTestdataPath(
+      "litert_lm/runtime/testdata/test_lm_new_metadata.task");
+
+  EngineSettingsPtr settings(
+      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
+                                       /* vision_backend_str */ nullptr,
+                                       /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+  litert_lm_engine_settings_set_max_num_tokens(settings.get(), 512);
+
+  EnginePtr engine(litert_lm_engine_create(settings.get()),
+                   &litert_lm_engine_delete);
+  ASSERT_NE(engine, nullptr);
+
+  ConversationPtr conversation(
+      litert_lm_conversation_create(engine.get(),
+                                    /*conversation_config=*/nullptr),
+      &litert_lm_conversation_delete);
+  ASSERT_NE(conversation, nullptr);
+
+  EXPECT_EQ(litert_lm_conversation_wait_until_done(conversation.get()),
+            kLiteRtLmStatusOk);
+}
+
 using BenchmarkInfoPtr =
     std::unique_ptr<LiteRtLmBenchmarkInfo,
                     decltype(&litert_lm_benchmark_info_delete)>;
