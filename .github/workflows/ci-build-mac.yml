@@ -35,7 +35,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read # requires permission
+  contents: read
 
 jobs:
   presubmit:
@@ -64,7 +64,6 @@ jobs:
 
       - name : Set up cache keys.
         id: cache-keys
-        # zizmor: ignore[template-injection]
         run: |
           CACHE_RESTORE_KEY_2="${GITHUB_WORKFLOW}"
           CACHE_RESTORE_KEY_1="$CACHE_RESTORE_KEY_2-${{ hashFiles('**/WORKSPACE', '**/.bazelrc') }}"

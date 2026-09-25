@@ -1,8 +1,5 @@
-# zizmor: ignore[concurrency-limits]
-# zizmor: ignore[template-injection]
 name: Zizmor
 
-# zizmor: ignore[concurrency-limits]
 on:
   push:
     branches: ["main"]
@@ -10,7 +7,7 @@ on:
     branches: ["main"]
 
 permissions:
-  contents: read # requires permission
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -21,9 +18,9 @@ jobs:
     name: Zizmor workflow security analysis
     runs-on: ubuntu-latest
     permissions:
-      security-events: write # requires permission
-      contents: read # requires permission
-      actions: read # requires permission
+      security-events: write
+      contents: read
+      actions: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -42,7 +39,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload SARIF file
-        uses: github/codeql-action/upload-sarif@f3712979fa5f215279b101dd0a2e3bdfb4353324 # v3
+        uses: github/codeql-action/upload-sarif@f3712979fa5f215279b101dd0a2e3bdfb4353324 # v3.37.7
         with:
           sarif_file: results.sarif
           category: zizmor

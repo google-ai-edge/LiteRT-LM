@@ -25,7 +25,7 @@ on:
   - cron: '30 1 * * *'
 
 permissions:
-  contents: read # requires permission
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -39,9 +39,9 @@ jobs:
       (github.event_name == 'schedule' && github.repository == 'google-ai-edge/LiteRT-LM')
     runs-on: ubuntu-latest
     permissions:
-      issues: write # requires permission
-      pull-requests: write # requires permission
-      actions: write # requires permission
+      issues: write
+      pull-requests: write
+      actions: write
 
     steps:
     - uses: actions/stale@5bef64f19d7facfb25b37b414482c7164d639639 # v9

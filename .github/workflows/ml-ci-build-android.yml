@@ -37,7 +37,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read # requires permission
+  contents: read
 
 jobs:
   presubmit:
@@ -62,7 +62,6 @@ jobs:
         env:
           DEBIAN_FRONTEND: noninteractive
           TZ: Etc/UTC
-        # zizmor: ignore[template-injection]
         run: |
           ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
           apt-get update && apt-get install -yq \
@@ -85,20 +84,17 @@ jobs:
         uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
 
       - name: Install Rust
-        # zizmor: ignore[template-injection]
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
       - name: Install Bazelisk
         # zizmor: ignore[adhoc-packages]
-        # zizmor: ignore[template-injection]
         run: |
           npm install -g @bazel/bazelisk
 
 
       - name: Install Android SDK
-        # zizmor: ignore[template-injection]
         run: |
           export ANDROID_HOME=/opt/android-sdk
           mkdir -p $ANDROID_HOME/cmdline-tools
@@ -141,7 +137,6 @@ jobs:
 
       - name : Set up cache keys.
         id: cache-keys
-        # zizmor: ignore[template-injection]
         run: |
           CACHE_RESTORE_KEY_2="${GITHUB_WORKFLOW}-"
           CACHE_RESTORE_KEY_1="$CACHE_RESTORE_KEY_2-${{ hashFiles('**/WORKSPACE', '**/.bazelrc') }}-"
@@ -162,7 +157,6 @@ jobs:
       - name: Restore bazel cache if cache is not being refreshed.
         id: bazel-cache
         if: env.REFRESH_CACHE != 'true'
-        # zizmor: ignore[template-injection]
         run: |
           TARGET_DIR="$HOME/.cache/bazel"
           BUCKET_URL="gs://litert-lm-cicd/caches/android/bazel"
@@ -228,7 +222,6 @@ jobs:
 
 
       - name: Check cache hit.
-        # zizmor: ignore[template-injection]
         run: |
           echo "Cache Hit: ${STEPS_BAZEL_CACHE_OUTPUTS_CACHE_HIT}"
           echo "Cache Primary Key: ${STEPS_BAZEL_CACHE_OUTPUTS_CACHE_PRIMARY_KEY}"
@@ -239,7 +232,6 @@ jobs:
           STEPS_BAZEL_CACHE_OUTPUTS_CACHE_MATCHED_KEY: ${{ steps.bazel-cache.outputs.cache-matched-key }}
 
       - name: Run bazel build for Android.
-        # zizmor: ignore[template-injection]
         run: |
           bazelisk build --disk_cache=~/.cache/bazel --repository_cache=~/.cache/bazel/repo --config=android_x86_64 \
             --deleted_packages=swift \
@@ -255,14 +247,12 @@ jobs:
 
       - name: Update litert_lm_main prebuilt for Android if new version tag is pushed.
         if: github.ref_type == 'tag'
-        # zizmor: ignore[template-injection]
         run: |
           cp bazel-bin/runtime/engine/litert_lm_main litert_lm_main.android_x86_64
           gh release upload ${GITHUB_REF_NAME} litert_lm_main.android_x86_64 --clobber
 
       - name: Save bazel cache if it's new or being refreshed.
         if: env.REFRESH_CACHE == 'true' || steps.bazel-cache.outputs.cache-hit != 'true'
-        # zizmor: ignore[template-injection]
         run: |
           TARGET_DIR="$HOME/.cache/bazel"
           CACHE_KEY="${STEPS_CACHE_KEYS_OUTPUTS_CACHE_KEY}"

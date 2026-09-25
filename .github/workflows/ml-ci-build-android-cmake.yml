@@ -46,7 +46,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read # requires permission
+  contents: read
 
 jobs:
   presubmit:
@@ -55,9 +55,9 @@ jobs:
     container:
       image: ubuntu:24.04@sha256:496754492fb28b4d3049432f2ca787449331e23fb14f0dd3fffea86bf5a93eb4
     permissions:
-      id-token: write # requires permission
-      actions: write # requires permission
-      contents: write # requires permission
+      id-token: write
+      actions: write
+      contents: write
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       MODEL_KEY: gemma-4-E2B-it.litertlm
@@ -107,7 +107,6 @@ jobs:
 
       - name: Generate Source Hash
         id: src-hash
-        # zizmor: ignore[template-injection]
         run: echo "hash=${{ hashFiles('c/**', 'runtime/**', 'schema/**', 'support/**') }}" >> $GITHUB_OUTPUT
 
       - name: Keys - CCache
@@ -156,7 +155,6 @@ jobs:
 
       - name: Install Android SDK
         if: steps.android-cache.outputs.cache-hit != 'true'
-        # zizmor: ignore[template-injection]
         run: |
           export ANDROID_HOME="${{ github.workspace }}/android-sdk"
           mkdir -p "$ANDROID_HOME/cmdline-tools"
@@ -174,7 +172,6 @@ jobs:
           set -o pipefail
 
       - name: Export SDK Environment Variables
-        # zizmor: ignore[template-injection]
         run: |
           echo "ANDROID_HOME=${{ github.workspace }}/android-sdk" >> $GITHUB_ENV
           echo "ANDROID_SDK_ROOT=${{ github.workspace }}/android-sdk" >> $GITHUB_ENV

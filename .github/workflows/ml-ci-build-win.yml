@@ -38,7 +38,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read # requires permission
+  contents: read
 
 jobs:
   presubmit:
@@ -149,7 +149,6 @@ jobs:
           HASH_BUILD: ${{ hashFiles('**/BUILD*') }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.sha }}
-        # zizmor: ignore[template-injection]
         run: |
           # Create a dedicated directory on the big drive for the B: mount
           $bigDrivePath = "C:\_w\_b"
