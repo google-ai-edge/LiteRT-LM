@@ -54,6 +54,7 @@ py_test(
     srcs = ["openai_streaming_test.py"],
     data = ["//runtime/e2e_tests/data:gemma3-1b-it-int4-litertlm"],
     tags = [
+        "guitar",
         "manual",
         "nomacos",
         "nowindows",
