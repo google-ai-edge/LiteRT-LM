@@ -67,6 +67,7 @@ using ::testing::HasSubstr;
 using ::testing::Not;
 using ::testing::Optional;
 using ::testing::Return;
+using ::testing::status::StatusIs;
 using ::testing::VariantWith;
 
 absl::string_view kTestLlmPath =
@@ -431,6 +432,28 @@ class ConversationTest : public testing::TestWithParam<ConversationTestParams> {
     EXPECT_CALL(*mock_engine, GetTokenizer())
         .WillRepeatedly(testing::ReturnRef(*tokenizer_));
     return mock_engine;
+  }
+
+  struct MockConversation {
+    std::unique_ptr<MockEngine> engine;
+    std::unique_ptr<Conversation> conversation;
+  };
+
+  absl::StatusOr<MockConversation> CreateMockConversation(
+      std::unique_ptr<MockSession> mock_session) {
+    std::unique_ptr<MockEngine> mock_engine =
+        CreateMockEngine(std::move(mock_session));
+    ABSL_ASSIGN_OR_RETURN(
+        ConversationConfig conversation_config,
+        ConversationConfig::Builder()
+            .SetSessionConfig(session_config_)
+            .SetOverwritePromptTemplate(
+                PromptTemplate(kTestJinjaPromptTemplate))
+            .Build(*mock_engine));
+    ABSL_ASSIGN_OR_RETURN(
+        std::unique_ptr<Conversation> conversation,
+        Conversation::Create(*mock_engine, conversation_config));
+    return MockConversation{std::move(mock_engine), std::move(conversation)};
   }
 
   std::unique_ptr<Tokenizer> tokenizer_;
@@ -1416,6 +1439,31 @@ TEST_P(ConversationTest, SendMessageWithParserErrorSoftError) {
   ASSERT_OK(response);
   EXPECT_TRUE(response->contains("content"));
   EXPECT_TRUE((*response)["content"][0].contains("error"));
+}
+
+TEST_P(ConversationTest, WaitUntilDoneForwardsToSession) {
+  std::unique_ptr<MockSession> mock_session = CreateMockSession();
+  MockSession& session = *mock_session;
+  ASSERT_OK_AND_ASSIGN(MockConversation mock_conv,
+                       CreateMockConversation(std::move(mock_session)));
+
+  EXPECT_CALL(session, WaitUntilDone()).WillOnce(Return(absl::OkStatus()));
+
+  EXPECT_OK(mock_conv.conversation->WaitUntilDone());
+}
+
+TEST_P(ConversationTest, WaitUntilDonePropagatesSessionError) {
+  std::unique_ptr<MockSession> mock_session = CreateMockSession();
+  MockSession& session = *mock_session;
+  ASSERT_OK_AND_ASSIGN(MockConversation mock_conv,
+                       CreateMockConversation(std::move(mock_session)));
+
+  EXPECT_CALL(session, WaitUntilDone())
+      .WillOnce(Return(absl::InternalError("session failed")));
+
+  EXPECT_THAT(mock_conv.conversation->WaitUntilDone(),
+              StatusIs(absl::StatusCode::kInternal,
+                       HasSubstr("session failed")));
 }
 
 TEST_P(ConversationTest, SendMultipleMessages) {

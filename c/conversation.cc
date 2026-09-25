@@ -27,6 +27,7 @@
 #include "c/conversation_internal.h"
 #include "c/engine.h"
 #include "c/engine_internal.h"  // IWYU pragma: keep
+#include "c/error_reporter.h"
 #include "c/error_reporter_internal.h"
 #include "runtime/components/constrained_decoding/llg_constraint_config.h"
 #include "runtime/components/prompt_template.h"
@@ -667,6 +668,20 @@ void litert_lm_conversation_cancel_process(LiteRtLmConversation* conversation) {
     return;
   }
   conversation->conversation->CancelProcess();
+}
+
+int litert_lm_conversation_wait_until_done(LiteRtLmConversation* conversation) {
+  if (!conversation || !conversation->conversation) {
+    SetLastError(absl::StatusCode::kInvalidArgument, "Invalid conversation.");
+    return kLiteRtLmStatusInvalidArgument;
+  }
+  absl::Status status = conversation->conversation->WaitUntilDone();
+  if (!status.ok()) {
+    ABSL_LOG(ERROR) << "Failed to wait until done: " << status;
+    SetLastError(status);
+    return static_cast<int>(status.code());
+  }
+  return 0;
 }
 
 LiteRtLmBenchmarkInfo* litert_lm_conversation_get_benchmark_info(

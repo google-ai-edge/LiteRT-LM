@@ -555,6 +555,16 @@ class Conversation {
       absl::AnyInvocable<void(absl::StatusOr<Message>)> user_callback,
       OptionalArgs optional_args = OptionalArgs());
 
+  // Triggers execution of, and waits for, all pending tasks in the session.
+  //
+  // This is required when the engine runs with single-threaded execution
+  // enabled: work queued by the asynchronous APIs above only makes progress
+  // while a caller drives it. With multi-threaded execution this simply blocks
+  // until the pending work completes.
+  absl::Status WaitUntilDone() {
+    return session_->WaitUntilDone();
+  }
+
   // Scores the target text after the prefill process is done. This function
   // will run the decode process (with the existing context history) by feeding
   // in the provided target text tokens and fetch the decode output logits that

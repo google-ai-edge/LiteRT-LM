@@ -21,6 +21,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -40,6 +41,13 @@
 #include "runtime/executor/llm_executor_settings.h"
 
 namespace {
+
+using ::absl_testing::IsOk;
+using ::absl_testing::StatusIs;
+using ::testing::AnyOf;
+using ::testing::HasSubstr;
+using ::testing::IsEmpty;
+using ::testing::Not;
 
 std::string GetTestdataPath(const std::string& filename) {
   std::string srcdir = ::testing::SrcDir();
@@ -1239,7 +1247,7 @@ TEST(EngineCTest, ConversationRenderPreface) {
   const char* rendered =
       litert_lm_conversation_render_preface_to_string(conversation.get());
   ASSERT_NE(rendered, nullptr);
-  EXPECT_THAT(rendered, testing::HasSubstr("You are a helpful assistant."));
+  EXPECT_THAT(rendered, HasSubstr("You are a helpful assistant."));
 }
 
 TEST(EngineCTest, ConversationSendMessageWithConfig) {
@@ -1610,10 +1618,8 @@ TEST(EngineCTest, GenerateContentStream) {
   // either success or failure due to maximum kv-cache size reached.
   EXPECT_THAT(
       callback_data.status,
-      testing::AnyOf(absl_testing::IsOk(),
-                     absl_testing::StatusIs(
-                         absl::StatusCode::kInternal,
-                         testing::HasSubstr("Max number of tokens reached."))));
+      AnyOf(IsOk(), StatusIs(absl::StatusCode::kInternal,
+                             HasSubstr("Max number of tokens reached."))));
   EXPECT_GT(callback_data.response.length(), 0);
 }
 
@@ -1656,8 +1662,7 @@ TEST(EngineCTest, SessionGenerateContentStreamAndCancel) {
   callback_data.done.WaitForNotification();
 
   EXPECT_THAT(callback_data.status,
-              absl_testing::StatusIs(absl::StatusCode::kInternal,
-                                     testing::HasSubstr("CANCELLED")));
+              StatusIs(absl::StatusCode::kInternal, HasSubstr("CANCELLED")));
 }
 
 TEST(EngineCTest, ConversationSendMessageStream) {
@@ -1841,8 +1846,107 @@ TEST(EngineCTest, ConversationSendMessageStreamAndCancel) {
 
   callback_data.done.WaitForNotification();
   EXPECT_THAT(callback_data.status,
-              absl_testing::StatusIs(absl::StatusCode::kInternal,
-                                     testing::HasSubstr("CANCELLED")));
+              StatusIs(absl::StatusCode::kInternal, HasSubstr("CANCELLED")));
+}
+
+struct EngineAndConversation {
+  EnginePtr engine;
+  ConversationPtr conversation;
+};
+
+EngineAndConversation CreateTestEngineAndConversation(
+    int max_num_tokens = 512) {
+  const std::string task_path = GetTestdataPath(
+      "litert_lm/runtime/testdata/test_lm_new_metadata.task");
+
+  EngineSettingsPtr settings(
+      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
+                                       /* vision_backend_str */ nullptr,
+                                       /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  if (settings) {
+    litert_lm_engine_settings_set_max_num_tokens(settings.get(),
+                                                 max_num_tokens);
+  }
+
+  EnginePtr engine(settings ? litert_lm_engine_create(settings.get()) : nullptr,
+                   &litert_lm_engine_delete);
+
+  ConversationPtr conversation(
+      engine ? litert_lm_conversation_create(engine.get(),
+                                             /*conversation_config=*/nullptr)
+             : nullptr,
+      &litert_lm_conversation_delete);
+
+  return {std::move(engine), std::move(conversation)};
+}
+
+TEST(EngineCTest, ConversationSendMessageStreamAndWaitUntilDone) {
+  auto [engine, conversation] = CreateTestEngineAndConversation();
+  ASSERT_NE(engine, nullptr);
+  ASSERT_NE(conversation, nullptr);
+
+  const char* message_json =
+      R"({"role": "user", "content": [{"type": "text", "text": "Hello"}]})";
+  StreamCallbackData callback_data;
+  int result = litert_lm_conversation_send_message_stream(
+      conversation.get(), message_json, /*extra_context=*/nullptr,
+      /*optional_args=*/nullptr, &StreamCallback, &callback_data);
+  ASSERT_EQ(result, kLiteRtLmStatusOk);
+
+  EXPECT_EQ(litert_lm_conversation_wait_until_done(conversation.get()),
+            kLiteRtLmStatusOk);
+
+  // The stream has completed by the time the wait returns.
+  EXPECT_TRUE(callback_data.done.HasBeenNotified());
+  EXPECT_THAT(callback_data.response, Not(IsEmpty()));
+}
+
+TEST(EngineCTest, ConversationWaitUntilDoneWithInvalidConversationFails) {
+  EXPECT_EQ(litert_lm_conversation_wait_until_done(/*conversation=*/nullptr),
+            kLiteRtLmStatusInvalidArgument);
+  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusInvalidArgument);
+  EXPECT_STREQ(litert_lm_get_last_error_message(), "Invalid conversation.");
+}
+
+TEST(EngineCTest, ConversationWaitUntilDonePropagatesError) {
+  const std::string task_path = GetTestdataPath(
+      "litert_lm/runtime/testdata/test_lm_new_metadata.task");
+
+  EngineSettingsPtr settings(
+      litert_lm_engine_settings_create(task_path.c_str(), "cpu",
+                                       /* vision_backend_str */ nullptr,
+                                       /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+  litert_lm_engine_settings_set_max_num_tokens(settings.get(), 512);
+
+  ConversationPtr conversation(nullptr, &litert_lm_conversation_delete);
+  {
+    EnginePtr engine(litert_lm_engine_create(settings.get()),
+                     &litert_lm_engine_delete);
+    ASSERT_NE(engine, nullptr);
+
+    conversation.reset(litert_lm_conversation_create(
+        engine.get(), /*conversation_config=*/nullptr));
+    ASSERT_NE(conversation, nullptr);
+  }
+  // The engine has been deleted, so the underlying execution manager is no
+  // longer available. WaitUntilDone() must propagate this error.
+  EXPECT_EQ(litert_lm_conversation_wait_until_done(conversation.get()),
+            kLiteRtLmStatusFailedPrecondition);
+  EXPECT_EQ(litert_lm_get_last_error_code(), kLiteRtLmStatusFailedPrecondition);
+  EXPECT_THAT(litert_lm_get_last_error_message(),
+              HasSubstr("Execution manager is not available."));
+}
+
+TEST(EngineCTest, ConversationWaitUntilDoneOnIdleConversationSucceeds) {
+  auto [engine, conversation] = CreateTestEngineAndConversation();
+  ASSERT_NE(engine, nullptr);
+  ASSERT_NE(conversation, nullptr);
+
+  EXPECT_EQ(litert_lm_conversation_wait_until_done(conversation.get()),
+            kLiteRtLmStatusOk);
 }
 
 using BenchmarkInfoPtr =

@@ -484,6 +484,22 @@ const char* litert_lm_conversation_render_preface_to_string(
 LITERT_LM_C_API_EXPORT
 void litert_lm_conversation_cancel_process(LiteRtLmConversation* conversation);
 
+// Triggers execution of, and waits for, all pending tasks in the conversation
+// session to complete.
+//
+// This must be called after `litert_lm_conversation_send_message_stream` when
+// the engine was created with single threaded execution enabled (see
+// `litert_lm_engine_settings_set_single_threaded_execution`): in that mode the
+// queued work only makes progress while a caller drives it, so the streaming
+// callback is invoked from within this call.
+//
+// @param conversation The conversation to wait for.
+// @return 0 on success, or a LiteRtLmStatusCode on failure.
+//
+// Added in version 0.2.0.
+LITERT_LM_C_API_EXPORT
+int litert_lm_conversation_wait_until_done(LiteRtLmConversation* conversation);
+
 // Retrieves the benchmark information from the conversation. The caller is
 // responsible for destroying the benchmark info using
 // `litert_lm_benchmark_info_delete`.
