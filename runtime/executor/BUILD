@@ -371,7 +371,7 @@ cc_test(
         "nomsan",
         "notap",
         "notsan",
-        "requires-gpu-nvidia",
+        "requires-gpu-sm90-full",
     ],
     deps = [
         ":default_static_gpu_accelerator",
