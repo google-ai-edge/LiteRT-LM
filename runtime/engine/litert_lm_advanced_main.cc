@@ -45,6 +45,7 @@
 #include "runtime/components/constrained_decoding/no_repeat_ngram_config.h"
 #include "runtime/components/constrained_decoding/repetition_penalty_config.h"
 #include "runtime/components/constrained_decoding/suppress_tokens_config.h"
+#include "runtime/engine/dmabuf_util.h"
 #include "runtime/engine/litert_lm_lib.h"
 #include "runtime/engine/shared_flags.h"
 #include "runtime/proto/litert_lm_metrics.pb.h"

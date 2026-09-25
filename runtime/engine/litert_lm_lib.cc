@@ -23,6 +23,8 @@
 
 #include "runtime/engine/litert_lm_lib.h"
 
+#include "runtime/engine/dmabuf_util.h"
+
 #if defined(_WIN32)
 #include <io.h>
 #else
@@ -500,6 +502,10 @@ void LogMemoryUsage(const LiteRtLmSettings& settings, float peak_mem_mb,
           memory_usage.private_footprint_bytes / 1000.0 / 1000.0);
     }
   }
+
+#if defined(__ANDROID__)
+  LogDmaBufUsage(GetProcessDmaBufUsage());
+#endif
 }
 
 // Returns the median of `values`, which must not be empty. For an even number
@@ -577,6 +583,10 @@ void LogAggregatedMetrics(const AggregatedLitertLmMetrics& aggregated,
       ss << "  Peak private footprint: " << *aggregated.peak_private_mb << "MB."
          << std::endl;
     }
+    if (aggregated.peak_dmabuf_mb.has_value()) {
+      ss << "  Peak DMA-BUF hardware usage: " << *aggregated.peak_dmabuf_mb
+         << " MB." << std::endl;
+    }
     std::string line;
     bool is_first_line = true;
     while (std::getline(ss, line)) {
@@ -617,6 +627,10 @@ void LogAggregatedMetrics(const AggregatedLitertLmMetrics& aggregated,
     if (aggregated.peak_private_mb.has_value()) {
       ABSL_LOG(INFO) << absl::StrFormat("Peak private footprint: %.2f MB",
                                         *aggregated.peak_private_mb);
+    }
+    if (aggregated.peak_dmabuf_mb.has_value()) {
+      ABSL_LOG(INFO) << absl::StrFormat("Peak DMA-BUF hardware usage: %.2f MB",
+                                        *aggregated.peak_dmabuf_mb);
     }
   }
 }
@@ -875,6 +889,7 @@ AggregatedLitertLmMetrics ComputeMedianMetrics(
   std::vector<std::vector<double>> decode_tokens_per_sec;
   std::vector<double> peak_mem_mb;
   std::vector<double> peak_private_mb;
+  std::vector<double> peak_dmabuf_mb;
 
   for (const LitertLmMetrics& metric : metrics) {
     // Memory usage is only reported when --report_peak_memory_footprint is set.
@@ -883,6 +898,9 @@ AggregatedLitertLmMetrics ComputeMedianMetrics(
     }
     if (metric.peak_private_mb > 0.0f) {
       peak_private_mb.push_back(metric.peak_private_mb);
+    }
+    if (metric.peak_dmabuf_mb > 0.0f) {
+      peak_dmabuf_mb.push_back(metric.peak_dmabuf_mb);
     }
     if (!metric.benchmark_info.has_value()) {
       continue;
@@ -938,6 +956,9 @@ AggregatedLitertLmMetrics ComputeMedianMetrics(
   }
   if (!peak_private_mb.empty()) {
     aggregated.peak_private_mb = static_cast<float>(Median(peak_private_mb));
+  }
+  if (!peak_dmabuf_mb.empty()) {
+    aggregated.peak_dmabuf_mb = static_cast<float>(Median(peak_dmabuf_mb));
   }
   return aggregated;
 }
@@ -1131,6 +1152,14 @@ absl::Status RunLiteRtLm(const LiteRtLmSettings& settings,
         metric.peak_mem_mb = peak_mem_mb;
         metric.peak_private_mb = peak_private_mb;
       }
+#if defined(__ANDROID__)
+      DmaBufSummary dmabuf = GetProcessDmaBufUsage();
+      if (dmabuf.total_bytes > 0) {
+        metric.peak_dmabuf_mb =
+            static_cast<float>(static_cast<double>(dmabuf.total_bytes) /
+                               (1024.0 * 1024.0));
+      }
+#endif
       LogMemoryUsage(settings, peak_mem_mb, peak_private_mb);
     }
     iteration_metrics.push_back(std::move(metric));
