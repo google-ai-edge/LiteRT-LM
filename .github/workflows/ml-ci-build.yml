@@ -41,7 +41,7 @@ jobs:
     name: "Presubmit-Linux"
     runs-on: "linux-x86-c4-16"
     container:
-      image: ubuntu:24.04
+      image: ubuntu:24.04@sha256:496754492fb28b4d3049432f2ca787449331e23fb14f0dd3fffea86bf5a93eb4
     permissions:
       id-token: write     # Required to get the OIDC token for WIF
       actions: write  # For gh cache delete.
@@ -144,10 +144,10 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.sha }}
         run: |
-          CACHE_RESTORE_KEY_2="${GITHUB_WORKFLOW}"
-          CACHE_RESTORE_KEY_1="$CACHE_RESTORE_KEY_2-${{ hashFiles('**/WORKSPACE', '**/.bazelrc') }}"
-          CACHE_RESTORE_KEY_0="$CACHE_RESTORE_KEY_1-${{ hashFiles('**/BUILD*') }}"
-          CACHE_RESTORE_KEY_HEAD="$CACHE_RESTORE_KEY_0-${{ github.event.pull_request.base.sha }}"
+          CACHE_RESTORE_KEY_2="${GH_WORKFLOW}"
+          CACHE_RESTORE_KEY_1="$CACHE_RESTORE_KEY_2-${HASH_WORKSPACE}"
+          CACHE_RESTORE_KEY_0="$CACHE_RESTORE_KEY_1-${HASH_BUILD}"
+          CACHE_RESTORE_KEY_HEAD="$CACHE_RESTORE_KEY_0-${BASE_SHA}"
 
           CACHE_KEY="$CACHE_RESTORE_KEY_0-$HEAD_SHA"
           echo "CACHE_RESTORE_KEY_2=$CACHE_RESTORE_KEY_2" >> "$GITHUB_OUTPUT"

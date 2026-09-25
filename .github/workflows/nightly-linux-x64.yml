@@ -57,7 +57,7 @@ jobs:
         # version on Ubuntu 22.04 does not support -mavxvnniint8. Ubuntu 22.04
         # is used to maintain compatibility with Google Colab environments.
         run: |
-          PYTHON_VERSION=${{ matrix.python-version }}
+          PYTHON_VERSION=$MATRIX_PYTHON_VERSION
           DATE=$(TZ=America/Los_Angeles date +'%Y%m%d')
           bazel build \
             --repo_env=HERMETIC_PYTHON_VERSION=${PYTHON_VERSION} \
@@ -72,8 +72,10 @@ jobs:
         uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
 
       - name: Test Python Wheel
+        env:
+          MATRIX_PYTHON_VERSION: ${{ matrix.python-version }}
         run: |
-          PYTHON_VERSION=${{ matrix.python-version }}
+          PYTHON_VERSION=$MATRIX_PYTHON_VERSION
           uv venv --python=${PYTHON_VERSION}
 
           # Install the built wheel

@@ -33,7 +33,7 @@ jobs:
     name: "[Deprecated] Presubmit-CMake-Linux"
     runs-on: LiteRT_Linux_x64
     container:
-      image: ubuntu:24.04
+      image: ubuntu:24.04@sha256:496754492fb28b4d3049432f2ca787449331e23fb14f0dd3fffea86bf5a93eb4
 
     steps:
       - name: Install System Dependencies

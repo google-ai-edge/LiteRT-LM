@@ -41,7 +41,7 @@ jobs:
     name: "Presubmit-Android"
     runs-on: "linux-x86-c4-16"
     container:
-      image: ubuntu:24.04
+      image: ubuntu:24.04@sha256:496754492fb28b4d3049432f2ca787449331e23fb14f0dd3fffea86bf5a93eb4
     permissions:
       id-token: write     # Required to get the OIDC token for WIF
       actions: write  # For gh cache delete.
