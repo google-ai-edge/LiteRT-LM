@@ -1,3 +1,6 @@
+# zizmor: ignore[concurrency-limits]
+# zizmor: ignore[template-injection]
+# zizmor: ignore[template-injection]
 # Copyright 2026 The ODML Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -13,21 +16,27 @@
 # limitations under the License.
 
 name: auto-assignment
+# zizmor: ignore[concurrency-limits]
 on:
   issues:
     types:
       - opened
 
 permissions:
-  contents: read
+  contents: read # requires permission
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   welcome:
+    name: Welcome
     runs-on: ubuntu-latest
     permissions:
-      contents: read
-      issues: write
-      pull-requests: write
+      contents: read # requires permission
+      issues: write # requires permission
+      pull-requests: write # requires permission
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:

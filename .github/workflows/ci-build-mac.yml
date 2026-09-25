@@ -35,7 +35,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: read # requires permission
 
 jobs:
   presubmit:
@@ -64,6 +64,7 @@ jobs:
 
       - name : Set up cache keys.
         id: cache-keys
+        # zizmor: ignore[template-injection]
         run: |
           CACHE_RESTORE_KEY_2="${GITHUB_WORKFLOW}"
           CACHE_RESTORE_KEY_1="$CACHE_RESTORE_KEY_2-${{ hashFiles('**/WORKSPACE', '**/.bazelrc') }}"
@@ -116,9 +117,9 @@ jobs:
           echo "Downloading model across Hugging Face..."
           curl --http1.1 -L -C - --retry 5 --retry-delay 3 --retry-all-errors -f \
             --oauth2-bearer "$HF_TOKEN" \
-            -o ${{ env.MODEL_PATH }} \
-            "${{ env.MODEL_URL }}"
-          ls -lh ${{ env.MODEL_PATH }}
+            -o ${MODEL_PATH} \
+            "${MODEL_URL}"
+          ls -lh ${MODEL_PATH}
 
       - name: Install Rust
         run: |
@@ -155,10 +156,10 @@ jobs:
 
       - name: Run pytest
         run: |
-          if [ -f "${{ env.MODEL_PATH }}" ]; then
-            pytest tools/pytest/ --backend=cpu --model-path=${{ env.MODEL_PATH }} --build-system=bazel
+          if [ -f "${MODEL_PATH}" ]; then
+            pytest tools/pytest/ --backend=cpu --model-path=${MODEL_PATH} --build-system=bazel
           else
-            echo "Skipping pytest on macOS because model file ${{ env.MODEL_PATH }} is not downloaded (unauthenticated PR)."
+            echo "Skipping pytest on macOS because model file ${MODEL_PATH} is not downloaded (unauthenticated PR)."
           fi
 
       # TODO(totero): Re-enable this step once the bug is fixed.

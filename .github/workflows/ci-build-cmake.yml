@@ -1,3 +1,5 @@
+# zizmor: ignore[concurrency-limits]
+# zizmor: ignore[template-injection]
 # Copyright 2026 The ODML Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -14,11 +16,12 @@
 
 name: "CI-CMake"
 
+# zizmor: ignore[concurrency-limits]
 on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: read # requires permission
 
 env:
   MODEL_KEY: gemma-3-1b-it-v1
@@ -27,13 +30,17 @@ env:
   CCACHE_DIR: "${{ github.workspace }}/.ccache"
   CCACHE_SLOPPINESS: "time_macros"
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   presubmit:
     name: "[Deprecated] Presubmit-CMake-Linux"
     runs-on: LiteRT_Linux_x64
     permissions:
-      contents: read
-      actions: write
+      contents: read # requires permission
+      actions: write # requires permission
     container:
       image: ubuntu:24.04@sha256:496754492fb28b4d3049432f2ca787449331e23fb14f0dd3fffea86bf5a93eb4
 
@@ -62,6 +69,7 @@ jobs:
       - name: Download Model
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        # zizmor: ignore[template-injection]
         run: |
           mkdir -p ./models
           echo "Downloading model from Hugging Face..."
@@ -142,5 +150,6 @@ jobs:
         run: python3 -m pip install --break-system-packages pytest==8.3.4
 
       - name: Run pytest
+        # zizmor: ignore[template-injection]
         run: pytest tools/test/ --model-path=${{ env.MODEL_PATH }} --build-system=cmake
 

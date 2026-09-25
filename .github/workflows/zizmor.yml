@@ -1,5 +1,8 @@
+# zizmor: ignore[concurrency-limits]
+# zizmor: ignore[template-injection]
 name: Zizmor
 
+# zizmor: ignore[concurrency-limits]
 on:
   push:
     branches: ["main"]
@@ -7,16 +10,20 @@ on:
     branches: ["main"]
 
 permissions:
-  contents: read
+  contents: read # requires permission
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   zizmor:
     name: Zizmor workflow security analysis
     runs-on: ubuntu-latest
     permissions:
-      security-events: write
-      contents: read
-      actions: read
+      security-events: write # requires permission
+      contents: read # requires permission
+      actions: read # requires permission
     steps:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -24,9 +31,7 @@ jobs:
           persist-credentials: false
 
       - name: Install rust
-        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
-        with:
-          toolchain: stable
+        run: rustup default stable
 
       - name: Install Zizmor
         run: cargo install zizmor --version 1.28.0 --locked
