@@ -24,8 +24,16 @@ on:
   # Scheduled to run at 1.30 UTC everyday
   - cron: '30 1 * * *'
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   stale:
+    name: mark_stale
     if: |
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'schedule' && github.repository == 'google-ai-edge/LiteRT-LM')
@@ -36,7 +44,7 @@ jobs:
       actions: write
 
     steps:
-    - uses: actions/stale@v9
+    - uses: actions/stale@5bef64f19d7facfb25b37b414482c7164d639639 # v9
       with:
         days-before-issue-stale: 7
         days-before-issue-close: 7
