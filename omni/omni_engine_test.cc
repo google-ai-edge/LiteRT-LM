@@ -278,10 +278,10 @@ TEST_F(OmniSessionTest, AsrSessionProcessNextAndFlushWithAudioInput) {
   EXPECT_THAT(omni_session->ProcessNext(),
               StatusIs(absl::StatusCode::kInvalidArgument));
 
+  ASSERT_OK(raw_input_source->PushInput(OmniSession::AudioInputMetadata{
+      .sample_rate_hz = 16000, .num_channels = 1}));
   ASSERT_OK(raw_input_source->PushInput(
-      OmniSession::AudioInput{.pcm_samples = {1.0f, 2.0f},
-                              .sample_rate_hz = 16000,
-                              .num_channels = 1}));
+      OmniSession::AudioInput{.pcm_samples = {1.0f, 2.0f}}));
   auto chunk = omni_session->ProcessNext();
   ASSERT_OK(chunk);
   ASSERT_TRUE(std::holds_alternative<OmniSession::TextOutput>(*chunk));
@@ -321,10 +321,10 @@ TEST_F(OmniSessionTest, AsrSessionProcessAsyncWithAudioInput) {
   ASSERT_OK(asr_session);
   std::unique_ptr<OmniSession> omni_session = *std::move(asr_session);
 
+  ASSERT_OK(raw_input_source->PushInput(OmniSession::AudioInputMetadata{
+      .sample_rate_hz = 16000, .num_channels = 1}));
   ASSERT_OK(raw_input_source->PushInput(
-      OmniSession::AudioInput{.pcm_samples = {1.0f, 2.0f},
-                              .sample_rate_hz = 16000,
-                              .num_channels = 1}));
+      OmniSession::AudioInput{.pcm_samples = {1.0f, 2.0f}}));
 
   absl::Notification done;
   std::vector<OmniSession::TextOutput> outputs;

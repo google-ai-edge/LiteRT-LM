@@ -43,15 +43,21 @@ class OmniSession {
     std::string text;
   };
 
-  // Audio input payload for ASR transcription.
-  struct AudioInput {
-    std::vector<float> pcm_samples;
+  // Audio input metadata for ASR transcription applied to all following
+  // AudioInput until another AudioInputMetadata is pushed.
+  struct AudioInputMetadata {
     int sample_rate_hz = 16000;
     int num_channels = 1;
   };
 
+  // Audio input payload for ASR transcription.
+  struct AudioInput {
+    std::vector<float> pcm_samples;
+  };
+
   // Unified input variant for InputSource.
-  using Input = std::variant<EndOfInput, TextInput, AudioInput>;
+  using Input =
+      std::variant<EndOfInput, TextInput, AudioInputMetadata, AudioInput>;
 
   // Base stage producing `Input` items for an `OmniSession`.
   class InputSource : public SingleThreadedStageWithDeque<Input> {

@@ -88,19 +88,25 @@ class AudioInputSource : public AudioSource {
         PushOutput(std::move(output));
         return absl::OkStatus();
       }
+      if (const auto* metadata =
+              std::get_if<OmniSession::AudioInputMetadata>(&input)) {
+        if (metadata->sample_rate_hz > 0 &&
+            metadata->sample_rate_hz != sample_rate_hz_) {
+          return absl::InvalidArgumentError(
+              "AudioInputMetadata sample_rate_hz does not match "
+              "AudioInputSource.");
+        }
+        if (metadata->num_channels > 0 &&
+            metadata->num_channels != num_channels_) {
+          return absl::InvalidArgumentError(
+              "AudioInputMetadata num_channels does not match "
+              "AudioInputSource.");
+        }
+        continue;
+      }
       auto* audio_input = std::get_if<OmniSession::AudioInput>(&input);
       if (audio_input == nullptr) {
         return absl::InvalidArgumentError("ASR Session requires AudioInput.");
-      }
-      if (audio_input->sample_rate_hz > 0 &&
-          audio_input->sample_rate_hz != sample_rate_hz_) {
-        return absl::InvalidArgumentError(
-            "AudioInput sample_rate_hz does not match AudioInputSource.");
-      }
-      if (audio_input->num_channels > 0 &&
-          audio_input->num_channels != num_channels_) {
-        return absl::InvalidArgumentError(
-            "AudioInput num_channels does not match AudioInputSource.");
       }
       if (buffer_.empty()) {
         std::swap(buffer_, audio_input->pcm_samples);
