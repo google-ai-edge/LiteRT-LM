@@ -19,7 +19,6 @@ on:
 
 permissions:
   contents: read
-  actions: write
 
 env:
   MODEL_KEY: gemma-3-1b-it-v1
@@ -32,6 +31,9 @@ jobs:
   presubmit:
     name: "[Deprecated] Presubmit-CMake-Linux"
     runs-on: LiteRT_Linux_x64
+    permissions:
+      contents: read
+      actions: write
     container:
       image: ubuntu:24.04@sha256:496754492fb28b4d3049432f2ca787449331e23fb14f0dd3fffea86bf5a93eb4
 
