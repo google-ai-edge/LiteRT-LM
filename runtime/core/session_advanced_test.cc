@@ -264,9 +264,10 @@ CreateAudioExecutorSettings(const std::string& model_path,
   auto model_file_ptr = std::make_shared<ScopedFile>(std::move(model_file));
   ABSL_ASSIGN_OR_RETURN(auto model_assets, ModelAssets::Create(model_file_ptr));
   // Create the audio executor settings.
-  ABSL_ASSIGN_OR_RETURN(auto audio_executor_settings,
-                        AudioExecutorSettings::CreateDefault(
-                            model_assets, max_sequence_length, backend));
+  ABSL_ASSIGN_OR_RETURN(
+      auto audio_executor_settings,
+      AudioExecutorSettings::CreateDefault(model_assets, max_sequence_length,
+                                           backend, backend));
   return std::make_unique<AudioExecutorSettings>(
       std::move(audio_executor_settings));
 }

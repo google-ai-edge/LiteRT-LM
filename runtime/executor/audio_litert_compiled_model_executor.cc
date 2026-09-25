@@ -580,7 +580,10 @@ absl::Status AudioLiteRtCompiledModelExecutor::AudioAdapter::Initialize() {
       absl::StrCat(AudioExecutorSettings::kAdapterName,
                    ExecutorSettingsBase::kXnnpackCacheSuffix),
       /*check_and_clean=*/true);
-  if (executor_settings_.GetBackend() == Backend::GPU) {
+  // The adapter is not necessarily on the encoder's backend. Bundles that pin
+  // `AUDIO_ADAPTER` to CPU while leaving `AUDIO_ENCODER_HW` free rely on this.
+  const Backend backend = executor_settings_.GetAdapterBackend();
+  if (backend == Backend::GPU) {
     LITERT_ASSIGN_OR_RETURN(auto& gpu_options,
                             options.GetOptions<::litert::GpuOptions>());
     ABSL_ASSIGN_OR_RETURN(
@@ -600,7 +603,7 @@ absl::Status AudioLiteRtCompiledModelExecutor::AudioAdapter::Initialize() {
     gpu_options.SetBackend(GpuOptions::Backend::kWebGpu);
 #endif  // defined(LITERT_USE_WEBGPU_ACCELERATOR)
     options.SetHardwareAccelerators(litert::HwAccelerators::kGpu);
-  } else if (executor_settings_.GetBackend() == Backend::CPU) {
+  } else if (backend == Backend::CPU) {
     LITERT_ASSIGN_OR_RETURN(auto& cpu_options,
                             options.GetOptions<::litert::CpuOptions>());
     ABSL_RETURN_IF_ERROR(SetCpuOptions(executor_settings_, cpu_options));
@@ -610,7 +613,7 @@ absl::Status AudioLiteRtCompiledModelExecutor::AudioAdapter::Initialize() {
 
     options.SetHardwareAccelerators(litert::HwAccelerators::kCpu);
 #if !defined(LITERT_DISABLE_NPU)
-  } else if (executor_settings_.GetBackend() == Backend::NPU) {
+  } else if (backend == Backend::NPU) {
     LITERT_ASSIGN_OR_RETURN(
         auto& google_tensor_options,
         options.GetOptions<google_tensor::GoogleTensorOptions>());
@@ -620,8 +623,7 @@ absl::Status AudioLiteRtCompiledModelExecutor::AudioAdapter::Initialize() {
 #endif  // !defined(LITERT_DISABLE_NPU)
   } else {
     return absl::InvalidArgumentError(
-        absl::StrCat("Unsupported backend for AudioAdapter: ",
-                     executor_settings_.GetBackend()));
+        absl::StrCat("Unsupported backend for AudioAdapter: ", backend));
   }
   ABSL_RETURN_IF_ERROR(SetExternalWeightOptions(
       resources_, ModelType::kTfLiteAudioAdapter, options));

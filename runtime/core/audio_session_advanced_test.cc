@@ -174,9 +174,10 @@ class AudioSessionAdvancedTest : public ::testing::Test {
 
     ASSERT_OK_AND_ASSIGN(auto model_assets,
                          ModelAssets::Create("test_model_path_audio"));
-    ASSERT_OK_AND_ASSIGN(auto audio_settings,
-                         AudioExecutorSettings::CreateDefault(
-                             model_assets, 128, Backend::GPU_ARTISAN));
+    ASSERT_OK_AND_ASSIGN(
+        auto audio_settings,
+        AudioExecutorSettings::CreateDefault(
+            model_assets, 128, Backend::GPU_ARTISAN, Backend::GPU_ARTISAN));
 
     auto fake_audio_executor = std::make_unique<FakeAudioExecutor>();
     fake_audio_executor_ = fake_audio_executor.get();
@@ -233,9 +234,10 @@ class AudioSessionAdvancedTest : public ::testing::Test {
 
     ABSL_ASSIGN_OR_RETURN(auto model_assets,
                           ModelAssets::Create("test_model_path_audio"));
-    ABSL_ASSIGN_OR_RETURN(auto audio_settings,
-                          AudioExecutorSettings::CreateDefault(
-                              model_assets, 128, Backend::GPU_ARTISAN));
+    ABSL_ASSIGN_OR_RETURN(
+        auto audio_settings,
+        AudioExecutorSettings::CreateDefault(
+            model_assets, 128, Backend::GPU_ARTISAN, Backend::GPU_ARTISAN));
     auto fake_audio_executor = std::make_unique<FakeAudioExecutor>();
 
     return ThreadedExecutionManager::Create(

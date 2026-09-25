@@ -31,10 +31,22 @@
 
 namespace litert::lm {
 
+// The AudioExecutorSettings class is used to configure the AudioExecutor. It is
+// used to configure the audio encoder and audio adapter models.
+// Args:
+//   - model_assets: The model assets to use for the audio encoder and audio
+//   adapter models.
+//   - max_sequence_length: The maximum sequence length of the audio encoder
+//   model.
+//   - encoder_backend: The backend to use for the audio encoder model.
+//   - adapter_backend: The backend to use for the audio adapter model.
+//   - bundled_with_main_model: Whether the audio encoder and audio adapter
+//   models are bundled with the main model.
 class AudioExecutorSettings : public ExecutorSettingsBase {
  public:
   static absl::StatusOr<AudioExecutorSettings> CreateDefault(
-      const ModelAssets& model_assets, int max_sequence_length, Backend backend,
+      const ModelAssets& model_assets, int max_sequence_length,
+      Backend encoder_backend, Backend adapter_backend,
       bool bundled_with_main_model = true);
 
   // Suffix constants
@@ -55,7 +67,13 @@ class AudioExecutorSettings : public ExecutorSettingsBase {
   // Setter for bundled_with_main_model.
   void SetBundledWithMainModel(bool bundled_with_main_model);
 
+  // Setter for the backend used by the audio encoder.
   absl::Status SetBackend(const Backend& backend) override;
+
+  // Getter for adapter_backend.
+  Backend GetAdapterBackend() const;
+  // Setter for adapter_backend.
+  absl::Status SetAdapterBackend(const Backend& backend);
 
   // Getter for num_threads for CPU backend.
   int GetNumThreads() const { return num_threads_; }
@@ -151,6 +169,7 @@ class AudioExecutorSettings : public ExecutorSettingsBase {
 
   int max_sequence_length_;
   bool bundled_with_main_model_;
+  Backend adapter_backend_;
   int num_threads_ = 4;
   bool audio_buffering_enabled_ = false;
   uint32_t lora_rank_ = 0;

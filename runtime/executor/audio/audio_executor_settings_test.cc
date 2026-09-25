@@ -30,9 +30,10 @@ using ::testing::status::StatusIs;
 
 TEST(AudioExecutorSettingsTest, GetModelAssets) {
   ASSERT_OK_AND_ASSIGN(ModelAssets model_assets, ModelAssets::Create("/tmp"));
-  ASSERT_OK_AND_ASSIGN(AudioExecutorSettings settings,
-                       AudioExecutorSettings::CreateDefault(
-                           model_assets, 10, Backend::GPU_ARTISAN));
+  ASSERT_OK_AND_ASSIGN(
+      AudioExecutorSettings settings,
+      AudioExecutorSettings::CreateDefault(
+          model_assets, 10, Backend::GPU_ARTISAN, Backend::GPU_ARTISAN));
   auto new_model_assets = settings.GetModelAssets();
   ASSERT_OK_AND_ASSIGN(auto path, new_model_assets.GetPath());
   EXPECT_EQ(path, "/tmp");
@@ -40,9 +41,10 @@ TEST(AudioExecutorSettingsTest, GetModelAssets) {
 
 TEST(AudioExecutorSettingsTest, GetAndSetMaxSequenceLength) {
   ASSERT_OK_AND_ASSIGN(ModelAssets model_assets, ModelAssets::Create(""));
-  ASSERT_OK_AND_ASSIGN(AudioExecutorSettings settings,
-                       AudioExecutorSettings::CreateDefault(
-                           model_assets, 10, Backend::GPU_ARTISAN));
+  ASSERT_OK_AND_ASSIGN(
+      AudioExecutorSettings settings,
+      AudioExecutorSettings::CreateDefault(
+          model_assets, 10, Backend::GPU_ARTISAN, Backend::GPU_ARTISAN));
   EXPECT_EQ(settings.GetMaxSequenceLength(), 10);
   settings.SetMaxSequenceLength(20);
   EXPECT_EQ(settings.GetMaxSequenceLength(), 20);
@@ -50,19 +52,45 @@ TEST(AudioExecutorSettingsTest, GetAndSetMaxSequenceLength) {
 
 TEST(AudioExecutorSettingsTest, GetAndSetBackend) {
   ASSERT_OK_AND_ASSIGN(ModelAssets model_assets, ModelAssets::Create(""));
-  ASSERT_OK_AND_ASSIGN(AudioExecutorSettings settings,
-                       AudioExecutorSettings::CreateDefault(
-                           model_assets, 10, Backend::GPU_ARTISAN));
+  ASSERT_OK_AND_ASSIGN(
+      AudioExecutorSettings settings,
+      AudioExecutorSettings::CreateDefault(
+          model_assets, 10, Backend::GPU_ARTISAN, Backend::GPU_ARTISAN));
   EXPECT_EQ(settings.GetBackend(), Backend::GPU_ARTISAN);
   EXPECT_OK(settings.SetBackend(Backend::GPU_ARTISAN));
   EXPECT_EQ(settings.GetBackend(), Backend::GPU_ARTISAN);
 }
 
+TEST(AudioExecutorSettingsTest, GetAndSetAdapterBackend) {
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets, ModelAssets::Create(""));
+  ASSERT_OK_AND_ASSIGN(AudioExecutorSettings settings,
+                       AudioExecutorSettings::CreateDefault(
+                           model_assets, 10, Backend::GPU, Backend::CPU));
+  EXPECT_EQ(settings.GetBackend(), Backend::GPU);
+  EXPECT_EQ(settings.GetAdapterBackend(), Backend::CPU);
+  EXPECT_OK(settings.SetAdapterBackend(Backend::GPU));
+  EXPECT_EQ(settings.GetAdapterBackend(), Backend::GPU);
+  EXPECT_OK(settings.SetBackend(Backend::GPU_ARTISAN));
+  EXPECT_EQ(settings.GetAdapterBackend(), Backend::GPU);
+}
+
+TEST(AudioExecutorSettingsTest, SetAdapterBackendRejectsUnsupportedBackend) {
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets, ModelAssets::Create(""));
+  ASSERT_OK_AND_ASSIGN(AudioExecutorSettings settings,
+                       AudioExecutorSettings::CreateDefault(
+                           model_assets, 10, Backend::GPU, Backend::CPU));
+  EXPECT_THAT(settings.SetAdapterBackend(Backend::CPU_ARTISAN),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(AudioExecutorSettings::CreateDefault(
+                  model_assets, 10, Backend::GPU, Backend::CPU_ARTISAN),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
 TEST(AudioExecutorSettingsTest, GetAndSetNumThreads) {
   ASSERT_OK_AND_ASSIGN(ModelAssets model_assets, ModelAssets::Create(""));
-  ASSERT_OK_AND_ASSIGN(
-      AudioExecutorSettings settings,
-      AudioExecutorSettings::CreateDefault(model_assets, 10, Backend::CPU));
+  ASSERT_OK_AND_ASSIGN(AudioExecutorSettings settings,
+                       AudioExecutorSettings::CreateDefault(
+                           model_assets, 10, Backend::CPU, Backend::CPU));
   EXPECT_EQ(settings.GetNumThreads(), 4);
   settings.SetNumThreads(8);
   EXPECT_EQ(settings.GetNumThreads(), 8);
@@ -70,19 +98,21 @@ TEST(AudioExecutorSettingsTest, GetAndSetNumThreads) {
 
 TEST(AudioExecutorSettingsTest, CreateDefaultWithInvalidBackend) {
   ASSERT_OK_AND_ASSIGN(ModelAssets model_assets, ModelAssets::Create(""));
-  EXPECT_THAT(AudioExecutorSettings::CreateDefault(model_assets, 10,
-                                                   Backend::CPU_ARTISAN),
-              StatusIs(absl::StatusCode::kInvalidArgument));
   EXPECT_THAT(AudioExecutorSettings::CreateDefault(
-                  model_assets, 10, Backend::GOOGLE_TENSOR_ARTISAN),
+                  model_assets, 10, Backend::CPU_ARTISAN, Backend::CPU),
               StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(
+      AudioExecutorSettings::CreateDefault(
+          model_assets, 10, Backend::GOOGLE_TENSOR_ARTISAN, Backend::CPU),
+      StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
 TEST(AudioExecutorSettingsTest, GetAndSetBundledWithMainModel) {
   ASSERT_OK_AND_ASSIGN(ModelAssets model_assets, ModelAssets::Create(""));
-  ASSERT_OK_AND_ASSIGN(AudioExecutorSettings settings,
-                       AudioExecutorSettings::CreateDefault(
-                           model_assets, 10, Backend::GPU_ARTISAN));
+  ASSERT_OK_AND_ASSIGN(
+      AudioExecutorSettings settings,
+      AudioExecutorSettings::CreateDefault(
+          model_assets, 10, Backend::GPU_ARTISAN, Backend::GPU_ARTISAN));
   EXPECT_TRUE(settings.GetBundledWithMainModel());
   settings.SetBundledWithMainModel(false);
   EXPECT_FALSE(settings.GetBundledWithMainModel());
@@ -90,9 +120,10 @@ TEST(AudioExecutorSettingsTest, GetAndSetBundledWithMainModel) {
 
 TEST(AudioExecutorSettingsTest, GetAndSetScopedFiles) {
   ASSERT_OK_AND_ASSIGN(ModelAssets model_assets, ModelAssets::Create(""));
-  ASSERT_OK_AND_ASSIGN(AudioExecutorSettings settings,
-                       AudioExecutorSettings::CreateDefault(
-                           model_assets, 10, Backend::GPU_ARTISAN));
+  ASSERT_OK_AND_ASSIGN(
+      AudioExecutorSettings settings,
+      AudioExecutorSettings::CreateDefault(
+          model_assets, 10, Backend::GPU_ARTISAN, Backend::GPU_ARTISAN));
 
   auto encoder_cache = std::make_shared<litert::ScopedFile>();
   auto adapter_cache = std::make_shared<litert::ScopedFile>();
@@ -112,9 +143,10 @@ TEST(AudioExecutorSettingsTest, GetAndSetScopedFiles) {
 
 TEST(AudioExecutorSettingsTest, GetWeightCacheFile) {
   ASSERT_OK_AND_ASSIGN(ModelAssets model_assets, ModelAssets::Create(""));
-  ASSERT_OK_AND_ASSIGN(AudioExecutorSettings settings,
-                       AudioExecutorSettings::CreateDefault(
-                           model_assets, 10, Backend::GPU_ARTISAN));
+  ASSERT_OK_AND_ASSIGN(
+      AudioExecutorSettings settings,
+      AudioExecutorSettings::CreateDefault(
+          model_assets, 10, Backend::GPU_ARTISAN, Backend::GPU_ARTISAN));
 
   auto encoder_cache = std::make_shared<litert::ScopedFile>();
   auto adapter_cache = std::make_shared<litert::ScopedFile>();
@@ -137,9 +169,10 @@ TEST(AudioExecutorSettingsTest, GetWeightCacheFile) {
 
 TEST(AudioExecutorSettingsTest, GetProgramCacheFile) {
   ASSERT_OK_AND_ASSIGN(ModelAssets model_assets, ModelAssets::Create(""));
-  ASSERT_OK_AND_ASSIGN(AudioExecutorSettings settings,
-                       AudioExecutorSettings::CreateDefault(
-                           model_assets, 10, Backend::GPU_ARTISAN));
+  ASSERT_OK_AND_ASSIGN(
+      AudioExecutorSettings settings,
+      AudioExecutorSettings::CreateDefault(
+          model_assets, 10, Backend::GPU_ARTISAN, Backend::GPU_ARTISAN));
 
   auto encoder_program = std::make_shared<litert::ScopedFile>();
   auto adapter_program = std::make_shared<litert::ScopedFile>();

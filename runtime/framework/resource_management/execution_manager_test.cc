@@ -335,9 +335,10 @@ TEST_P(ExecutionManagerTest, AddPrefillTaskWithAudioModality) {
 
   ASSERT_OK_AND_ASSIGN(auto model_assets,
                        ModelAssets::Create("test_model_path_2"));
-  ASSERT_OK_AND_ASSIGN(auto audio_settings,
-                       AudioExecutorSettings::CreateDefault(
-                           model_assets, 128, Backend::GPU_ARTISAN));
+  ASSERT_OK_AND_ASSIGN(
+      auto audio_settings,
+      AudioExecutorSettings::CreateDefault(
+          model_assets, 128, Backend::GPU_ARTISAN, Backend::GPU_ARTISAN));
 
   CreateExecutionManager(
       std::move(fake_llm_executor),
@@ -375,9 +376,10 @@ TEST_P(ExecutionManagerTest, EncodeAudioWithSessionInfo) {
 
   ASSERT_OK_AND_ASSIGN(auto model_assets,
                        ModelAssets::Create("test_model_path_2"));
-  ASSERT_OK_AND_ASSIGN(auto audio_settings,
-                       AudioExecutorSettings::CreateDefault(
-                           model_assets, 128, Backend::GPU_ARTISAN));
+  ASSERT_OK_AND_ASSIGN(
+      auto audio_settings,
+      AudioExecutorSettings::CreateDefault(
+          model_assets, 128, Backend::GPU_ARTISAN, Backend::GPU_ARTISAN));
 
   auto fake_audio_executor = std::make_unique<FakeAudioExecutor>();
   auto* fake_audio_executor_ptr = fake_audio_executor.get();
@@ -419,9 +421,10 @@ TEST_P(ExecutionManagerTest, EncodeAudioWithNonStreamingAudioExecutor) {
 
   ASSERT_OK_AND_ASSIGN(auto model_assets,
                        ModelAssets::Create("test_model_path_2"));
-  ASSERT_OK_AND_ASSIGN(auto audio_settings,
-                       AudioExecutorSettings::CreateDefault(
-                           model_assets, 128, Backend::GPU_ARTISAN));
+  ASSERT_OK_AND_ASSIGN(
+      auto audio_settings,
+      AudioExecutorSettings::CreateDefault(
+          model_assets, 128, Backend::GPU_ARTISAN, Backend::GPU_ARTISAN));
 
   auto fake_audio_executor = std::make_unique<NonStreamingFakeAudioExecutor>();
   auto* fake_audio_executor_ptr = fake_audio_executor.get();
@@ -476,9 +479,10 @@ TEST_P(ExecutionManagerTest, AddPrefillTaskWithPrecomputedAudioEmbeddings) {
 
   ASSERT_OK_AND_ASSIGN(auto model_assets,
                        ModelAssets::Create("test_model_path_2"));
-  ASSERT_OK_AND_ASSIGN(auto audio_settings,
-                       AudioExecutorSettings::CreateDefault(
-                           model_assets, 128, Backend::GPU_ARTISAN));
+  ASSERT_OK_AND_ASSIGN(
+      auto audio_settings,
+      AudioExecutorSettings::CreateDefault(
+          model_assets, 128, Backend::GPU_ARTISAN, Backend::GPU_ARTISAN));
 
   CreateExecutionManager(
       std::move(fake_llm_executor),
