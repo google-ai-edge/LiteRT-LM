@@ -2,10 +2,10 @@
 
 workspace(name = "litert_lm")
 
-# UPDATED = 2026-09-18
-LITERT_REF = "ccff78483e972a975b5300242084a6e2147c9776"
+# UPDATED = 2026-09-25
+LITERT_REF = "311f9fde8141d44d0e98910269558f7f1726e79c"
 
-LITERT_SHA256 = "130650f9e23ab215f232d2295f1bb959c11b3fadf62cf418837ea8de24631212"
+LITERT_SHA256 = "441d40976e9aaab142696c971fc7d8240ea41d414fab0f4627be360fa3294f21"
 
 # Keep TensorFlow at this commit for now. Newer commits load
 # `compatibility_proxy_repo` from `@rules_cc//cc:extensions.bzl` in
@@ -422,7 +422,8 @@ http_archive(
     name = "litert",
     patch_cmds = [
         # Replace @//third_party with @litert//third_party in files under third_party/.
-        "sed -i -e 's|\"@//third_party/|\"@litert//third_party/|g' third_party/*/*",
+        # Skip non-regular files (e.g. directories like third_party/py/numpy).
+        "for f in third_party/*/*; do if [ -f \"$f\" ]; then sed -i -e 's|\"@//third_party/|\"@litert//third_party/|g' \"$f\"; fi; done",
     ],
     sha256 = LITERT_SHA256,
     strip_prefix = "LiteRT-" + LITERT_REF,
