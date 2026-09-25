@@ -90,9 +90,10 @@ CreateAudioExecutor(Environment& env, const std::string& model_path,
   ABSL_ASSIGN_OR_RETURN(auto model_assets,
                         litert::lm::ModelAssets::Create(model_file_ptr));
   // Create the audio executor settings.
-  ABSL_ASSIGN_OR_RETURN(auto audio_executor_settings,
-                        litert::lm::AudioExecutorSettings::CreateDefault(
-                            model_assets, max_sequence_length, backend));
+  ABSL_ASSIGN_OR_RETURN(
+      auto audio_executor_settings,
+      litert::lm::AudioExecutorSettings::CreateDefault(
+          model_assets, max_sequence_length, backend, backend));
   audio_executor_settings.SetAudioBufferingEnabled(audio_buffering_enabled);
   // Create the audio executor.
   return litert::lm::AudioLiteRtCompiledModelExecutor::Create(

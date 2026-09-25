@@ -55,10 +55,11 @@ absl::StatusOr<EmbeddingEngineSettings> EmbeddingEngineSettings::CreateDefault(
   }
   std::optional<AudioExecutorSettings> audio_executor_settings;
   if (audio_backend.has_value()) {
-    LITERT_ASSIGN_OR_RETURN(
-        audio_executor_settings,
-        AudioExecutorSettings::CreateDefault(
-            model_assets, /*max_sequence_length=*/30, *audio_backend));
+    LITERT_ASSIGN_OR_RETURN(audio_executor_settings,
+                            AudioExecutorSettings::CreateDefault(
+                                model_assets, /*max_sequence_length=*/30,
+                                /*encoder_backend=*/*audio_backend,
+                                /*adapter_backend=*/Backend::CPU));
   }
   return EmbeddingEngineSettings(std::move(embedding_executor_settings),
                                  std::move(vision_executor_settings),

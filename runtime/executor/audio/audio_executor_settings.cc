@@ -36,6 +36,7 @@ std::ostream& operator<<(std::ostream& os,
   os << "ModelAssets: " << settings.GetModelAssets() << std::endl;
   os << "MaxSequenceLength: " << settings.GetMaxSequenceLength() << std::endl;
   os << "Backend: " << settings.GetBackend() << std::endl;
+  os << "AdapterBackend: " << settings.GetAdapterBackend() << std::endl;
   os << "BundledWithMainModel: " << settings.GetBundledWithMainModel()
      << std::endl;
   os << "NumThreads(CPU only): " << settings.GetNumThreads() << std::endl;
@@ -43,11 +44,13 @@ std::ostream& operator<<(std::ostream& os,
 }
 
 absl::StatusOr<AudioExecutorSettings> AudioExecutorSettings::CreateDefault(
-    const ModelAssets& model_assets, int max_sequence_length, Backend backend,
+    const ModelAssets& model_assets, int max_sequence_length,
+    Backend encoder_backend, Backend adapter_backend,
     bool bundled_with_main_model) {
   AudioExecutorSettings settings(model_assets, max_sequence_length,
                                  /*num_threads=*/4);
-  ABSL_RETURN_IF_ERROR(settings.SetBackend(backend));
+  ABSL_RETURN_IF_ERROR(settings.SetBackend(encoder_backend));
+  ABSL_RETURN_IF_ERROR(settings.SetAdapterBackend(adapter_backend));
   settings.SetBundledWithMainModel(bundled_with_main_model);
   return settings;
 }
@@ -68,6 +71,21 @@ absl::Status AudioExecutorSettings::SetBackend(const Backend& backend) {
         " NPU.");
   }
   backend_ = backend;
+  return absl::OkStatus();
+}
+
+Backend AudioExecutorSettings::GetAdapterBackend() const {
+  return adapter_backend_;
+}
+
+absl::Status AudioExecutorSettings::SetAdapterBackend(const Backend& backend) {
+  if (backend != Backend::CPU && backend != Backend::GPU &&
+      backend != Backend::GPU_ARTISAN && backend != Backend::NPU) {
+    return absl::InvalidArgumentError(
+        "Currently the audio adapter only supports CPU, GPU, GPU_ARTISAN, and"
+        " NPU.");
+  }
+  adapter_backend_ = backend;
   return absl::OkStatus();
 }
 

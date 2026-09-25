@@ -228,7 +228,8 @@ absl::StatusOr<EngineSettings> EngineSettings::CreateDefault(
     ABSL_ASSIGN_OR_RETURN(audio_executor_settings,
                           AudioExecutorSettings::CreateDefault(
                               model_assets, executor_settings.GetMaxNumTokens(),
-                              audio_backend.value()));
+                              /*encoder_backend=*/audio_backend.value(),
+                              /*adapter_backend=*/Backend::CPU));
   }
   return EngineSettings(std::move(executor_settings),
                         std::move(vision_executor_settings),
