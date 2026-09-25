@@ -2,10 +2,10 @@
 
 workspace(name = "litert_lm")
 
-# UPDATED = 2026-09-18
-LITERT_REF = "ccff78483e972a975b5300242084a6e2147c9776"
+# UPDATED = 2026-09-25
+LITERT_REF = "26895c9fbcc25c43faa8c1a98cd1fd28951602c3"
 
-LITERT_SHA256 = "130650f9e23ab215f232d2295f1bb959c11b3fadf62cf418837ea8de24631212"
+LITERT_SHA256 = "698811a8ec56f6a9bd7705ffaa75ff792cae03a67d3a759dbc84f2023493ee6f"
 
 # Keep TensorFlow at this commit for now. Newer commits load
 # `compatibility_proxy_repo` from `@rules_cc//cc:extensions.bzl` in
@@ -422,7 +422,10 @@ http_archive(
     name = "litert",
     patch_cmds = [
         # Replace @//third_party with @litert//third_party in files under third_party/.
-        "sed -i -e 's|\"@//third_party/|\"@litert//third_party/|g' third_party/*/*",
+        # Only regular files are passed to `sed -i`, which fails on directories such as
+        # third_party/py/numpy. Uses a shell loop rather than `find`, which may resolve
+        # to find.exe on Windows.
+        "for f in third_party/*/*; do if [ -f \"$f\" ]; then sed -i -e 's|\"@//third_party/|\"@litert//third_party/|g' \"$f\" || exit 1; fi; done",
     ],
     sha256 = LITERT_SHA256,
     strip_prefix = "LiteRT-" + LITERT_REF,
