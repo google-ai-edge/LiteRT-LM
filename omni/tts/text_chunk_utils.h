@@ -42,9 +42,9 @@ struct DelimiterMatch {
 struct TextChunkConfig {
   // List of delimiter strings used to split text into synthesis chunks.
   // Default delimiters: sentence terminals (".", "?", "!"), clause breaks (";",
-  // "—"), and newline ("\n").
+  // "—"), newline ("\n"), and their CJK and Devanagari equivalents.
   std::vector<std::string> delimiters = {
-      ".", "?", "!", ";", "\n", "—", "，", "。", "！", "？", "।", "॥",
+      ".", "?", "!", ";", "\n", "—", "。", "！", "？", "।", "॥", "；",
   };
 
   // Whether to include the matching delimiter in the extracted output chunk.

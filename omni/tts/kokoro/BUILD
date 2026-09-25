@@ -65,12 +65,15 @@ cc_library(
     srcs = ["phonemizer.cc"],
     hdrs = ["phonemizer.h"],
     deps = [
+        ":chinese_g2p",
+        ":cjk_blob",
         ":common",
         "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/base:no_destructor",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:str_format",
@@ -78,7 +81,6 @@ cc_library(
         "@espeak_ng//:espeak_ng_base_headers",
         "@espeak_ng//:espeak_ng_speak_lib_header",
         "@espeak_ng//:libespeak_ng_la_sources",  # buildcleaner: keep
-        "@litert//litert/cc:litert_macros",
     ],
 )
 
@@ -91,8 +93,12 @@ cc_test(
         "@espeak_ng//:espeak_ng_data",
         "@espeak_ng//:fr_dictionary",
         "@espeak_ng//:hi_dictionary",
+        "@espeak_ng//:it_dictionary",
+        "@espeak_ng//:pt_dictionary",
+        "@espeak_ng//:zh_dictionary",
     ],
     deps = [
+        ":cjk_test_blobs",
         ":phonemizer",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/container:flat_hash_map",
@@ -312,4 +318,31 @@ cc_library(
     testonly = True,
     srcs = ["cjk_test_blobs.cc"],
     hdrs = ["cjk_test_blobs.h"],
+)
+
+cc_library(
+    name = "chinese_g2p",
+    srcs = ["chinese_g2p.cc"],
+    hdrs = ["chinese_g2p.h"],
+    deps = [
+        ":cjk_blob",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@cppjieba",
+    ],
+)
+
+cc_test(
+    name = "chinese_g2p_test",
+    srcs = ["chinese_g2p_test.cc"],
+    deps = [
+        ":chinese_g2p",
+        ":cjk_blob",
+        ":cjk_test_blobs",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "//support/util:test_utils",
+    ],
 )

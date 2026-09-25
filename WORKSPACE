@@ -500,6 +500,15 @@ http_archive(
     urls = ["https://github.com/espeak-ng/espeak-ng/archive/refs/tags/1.52.0.tar.gz"],
 )
 
+http_archive(
+    name = "cppjieba",
+    build_file = "@//third_party/cppjieba:cppjieba.BUILD",
+    patches = ["@//third_party/cppjieba:cppjieba.patch"],
+    sha256 = "8b27931630abab1136b7c3ee920e4a95e78cb84a3cab4670198172bc82104844",
+    strip_prefix = "OpenCC-025f371dc76b598d77384fbdab90c937471844d8/plugins/jieba/deps/cppjieba",
+    urls = ["https://github.com/BYVoid/OpenCC/archive/025f371dc76b598d77384fbdab90c937471844d8.tar.gz"],
+)
+
 # Android rules ####################################################################################
 
 # Android SDK

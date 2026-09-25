@@ -16,6 +16,10 @@
 
 #include <unistd.h>
 
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <cstring>
 #include <memory>
 #include <string>
 #include <thread>  // NOLINT
@@ -29,6 +33,8 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
+#include "omni/tts/kokoro/cjk_test_blobs.h"
 #include "support/util/test_utils.h"  // IWYU pragma: keep
 
 namespace litert::omni::tts {
@@ -181,7 +187,7 @@ TEST(PhonemizerTest, MultilingualPhonemization) {
   ASSERT_OK_AND_ASSIGN(
       auto phonemizer_us,
       KokoroPhonemizer::Create(GetTestEspeakDataDir(), "en-us"));
-  EXPECT_EQ(phonemizer_us->language(), "en-us");
+  EXPECT_EQ(phonemizer_us->Language(), "en-us");
   ASSERT_OK_AND_ASSIGN(std::string us_ipa,
                        phonemizer_us->TextToIpa("Hello world"));
   EXPECT_FALSE(us_ipa.empty());
@@ -194,7 +200,7 @@ TEST(PhonemizerTest, MultilingualPhonemization) {
   ASSERT_OK_AND_ASSIGN(
       auto phonemizer_es,
       KokoroPhonemizer::Create(GetTestEspeakDataDir(), "es", spanish_lexicon));
-  EXPECT_EQ(phonemizer_es->language(), "es");
+  EXPECT_EQ(phonemizer_es->Language(), "es");
   ASSERT_OK_AND_ASSIGN(std::string hola_ipa, phonemizer_es->WordToIpa("hola"));
   EXPECT_EQ(hola_ipa, "ˈola");
   ASSERT_OK_AND_ASSIGN(std::string mundo_ipa,
@@ -203,6 +209,29 @@ TEST(PhonemizerTest, MultilingualPhonemization) {
   ASSERT_OK_AND_ASSIGN(std::string es_ipa,
                        phonemizer_es->TextToIpa("hola mundo"));
   EXPECT_FALSE(es_ipa.empty());
+}
+
+TEST(PhonemizerTest, EspeakVoiceIsReselectedWhenLanguageChangesBack) {
+  // The active espeak voice is cached process-wide so that WordToIpa does not
+  // reselect it for every word (each selection reloads the dictionary and leaks
+  // a voice_t inside libespeak-ng). A stale cache would silently phonemize in
+  // whichever language was used last, so exercise an A -> B -> A cycle and
+  // require that the two A results agree and that B differs from both.
+  ASSERT_OK_AND_ASSIGN(
+      auto phonemizer_en,
+      KokoroPhonemizer::Create(GetTestEspeakDataDir(), "en-us"));
+  ASSERT_OK_AND_ASSIGN(auto phonemizer_es,
+                       KokoroPhonemizer::Create(GetTestEspeakDataDir(), "es"));
+
+  ASSERT_OK_AND_ASSIGN(std::string en_first,
+                       phonemizer_en->WordToIpa("animal"));
+  ASSERT_OK_AND_ASSIGN(std::string es_ipa, phonemizer_es->WordToIpa("animal"));
+  ASSERT_OK_AND_ASSIGN(std::string en_again,
+                       phonemizer_en->WordToIpa("animal"));
+
+  EXPECT_FALSE(en_first.empty());
+  EXPECT_EQ(en_first, en_again);
+  EXPECT_NE(en_first, es_ipa);
 }
 
 TEST(PhonemizerTest, EspeakVoiceForLanguage) {
@@ -215,6 +244,8 @@ TEST(PhonemizerTest, EspeakVoiceForLanguage) {
   EXPECT_EQ(EspeakVoiceForLanguage("hi"), "hi");
   EXPECT_EQ(EspeakVoiceForLanguage("it"), "it");
   EXPECT_EQ(EspeakVoiceForLanguage("pt-br"), "pt-br");
+  EXPECT_EQ(EspeakVoiceForLanguage("cmn"), "cmn");
+  EXPECT_EQ(EspeakVoiceForLanguage("zh"), "cmn");
 }
 
 TEST(PhonemizerTest, BritishEnglishPhonemization) {
@@ -222,7 +253,7 @@ TEST(PhonemizerTest, BritishEnglishPhonemization) {
   // resolve to "en" via EspeakVoiceForLanguage.
   ASSERT_OK_AND_ASSIGN(auto phonemizer, KokoroPhonemizer::Create(
                                             GetTestEspeakDataDir(), "en-gb"));
-  EXPECT_EQ(phonemizer->language(), "en-gb");
+  EXPECT_EQ(phonemizer->Language(), "en-gb");
 
   ASSERT_OK_AND_ASSIGN(std::string ipa,
                        phonemizer->TextToIpa("Good afternoon!"));
@@ -239,7 +270,7 @@ TEST(PhonemizerTest, DevanagariDandaPunctuation) {
   // glued to the preceding word.
   ASSERT_OK_AND_ASSIGN(auto phonemizer,
                        KokoroPhonemizer::Create(GetTestEspeakDataDir(), "hi"));
-  EXPECT_EQ(phonemizer->language(), "hi");
+  EXPECT_EQ(phonemizer->Language(), "hi");
 
   ASSERT_OK_AND_ASSIGN(std::string ipa, phonemizer->TextToIpa("नमस्ते।"));
   EXPECT_FALSE(ipa.empty());
@@ -251,7 +282,7 @@ TEST(PhonemizerTest, FrenchPhonemization) {
   // French used to fail on every word and produce no phonemes at all.
   ASSERT_OK_AND_ASSIGN(auto phonemizer, KokoroPhonemizer::Create(
                                             GetTestEspeakDataDir(), "fr-fr"));
-  EXPECT_EQ(phonemizer->language(), "fr-fr");
+  EXPECT_EQ(phonemizer->Language(), "fr-fr");
 
   ASSERT_OK_AND_ASSIGN(std::string ipa, phonemizer->TextToIpa("Bonjour !"));
   EXPECT_FALSE(ipa.empty());
@@ -293,7 +324,7 @@ TEST(PhonemizerTest, ConcurrentInitialization) {
   }
   for (int i = 0; i < 8; ++i) {
     ASSERT_OK_AND_ASSIGN(auto result, std::move(results[i]));
-    EXPECT_EQ(result->language(), "en-us");
+    EXPECT_EQ(result->Language(), "en-us");
   }
 }
 
@@ -310,25 +341,34 @@ TEST(PhonemizerTest, ResolveEspeakDataDirNotFound) {
 TEST(PhonemizerTest, SetLanguageDynamically) {
   ASSERT_OK_AND_ASSIGN(auto phonemizer, KokoroPhonemizer::Create(
                                             GetTestEspeakDataDir(), "en-us"));
-  EXPECT_EQ(phonemizer->language(), "en-us");
+  EXPECT_EQ(phonemizer->Language(), "en-us");
 
   // Dynamically update to British English using 1-letter voice code.
   phonemizer->SetLanguage("b");
-  EXPECT_EQ(phonemizer->language(), "en-gb");
+  EXPECT_EQ(phonemizer->Language(), "en-gb");
   ASSERT_OK_AND_ASSIGN(std::string gb_ipa,
                        phonemizer->TextToIpa("Hello world"));
   EXPECT_FALSE(gb_ipa.empty());
 
+  // An unavailable language returns an error without falling back silently.
+  phonemizer->SetLanguage("unsupported-lang");
+  auto invalid_status = phonemizer->TextToIpa("Hello world");
+  EXPECT_FALSE(invalid_status.ok());
+  EXPECT_TRUE(absl::StrContains(invalid_status.status().message(),
+                                "Failed to set espeak voice for language: "
+                                "unsupported-lang"))
+      << invalid_status.status().message();
+
   // Dynamically update using full name alias "english".
   phonemizer->SetLanguage("english");
-  EXPECT_EQ(phonemizer->language(), "en-us");
+  EXPECT_EQ(phonemizer->Language(), "en-us");
   ASSERT_OK_AND_ASSIGN(std::string en_ipa,
                        phonemizer->TextToIpa("Hello world"));
   EXPECT_FALSE(en_ipa.empty());
 
   // Dynamically update to Spanish.
   phonemizer->SetLanguage("spanish");
-  EXPECT_EQ(phonemizer->language(), "es");
+  EXPECT_EQ(phonemizer->Language(), "es");
 }
 
 TEST(PhonemizerTest, PhonemeTokensDiagnostic) {
@@ -555,6 +595,16 @@ TEST(PhonemizerTest, IsWordCodePoint) {
   EXPECT_TRUE(IsWordCodePoint(U'好'));
   EXPECT_TRUE(IsWordCodePoint(U'あ'));
   EXPECT_TRUE(IsWordCodePoint(U'ア'));
+  // U+30FC prolonged sound mark lengthens the preceding vowel, so it belongs
+  // to the word.
+  EXPECT_TRUE(IsWordCodePoint(U'ー'));
+  // U+30FB katakana middle dot separates words and must not be glued to one.
+  EXPECT_FALSE(IsWordCodePoint(U'・'));
+  // CJK punctuation is never part of a word.
+  EXPECT_FALSE(IsWordCodePoint(U'、'));
+  EXPECT_FALSE(IsWordCodePoint(U'。'));
+  EXPECT_FALSE(IsWordCodePoint(U'「'));
+  EXPECT_FALSE(IsWordCodePoint(U'」'));
 }
 
 TEST(PhonemizerTest, NormalizeMisakiPhonemesFlavors) {
@@ -573,7 +623,7 @@ TEST(PhonemizerTest, NormalizeMisakiPhonemesFlavors) {
 TEST(PhonemizerTest, SpanishPhonemization) {
   ASSERT_OK_AND_ASSIGN(auto phonemizer,
                        KokoroPhonemizer::Create(GetTestEspeakDataDir(), "es"));
-  EXPECT_EQ(phonemizer->language(), "es");
+  EXPECT_EQ(phonemizer->Language(), "es");
 
   std::string text = "El zorro y el gato en el ojo.";
   ASSERT_OK_AND_ASSIGN(std::string ipa, phonemizer->TextToIpa(text));
@@ -596,7 +646,7 @@ TEST(PhonemizerTest, SpanishPhonemization) {
 TEST(PhonemizerTest, HindiPhonemization) {
   ASSERT_OK_AND_ASSIGN(auto phonemizer,
                        KokoroPhonemizer::Create(GetTestEspeakDataDir(), "hi"));
-  EXPECT_EQ(phonemizer->language(), "hi");
+  EXPECT_EQ(phonemizer->Language(), "hi");
 
   std::string text = "नमस्ते भारत";
   ASSERT_OK_AND_ASSIGN(std::string ipa, phonemizer->TextToIpa(text));
@@ -610,6 +660,206 @@ TEST(PhonemizerTest, HindiPhonemization) {
   // Verify that phoneme tokens were produced between BOS and EOS.
   EXPECT_GT(tokens.size(), 2)
       << "Expected non-empty phoneme sequence for Hindi text.";
+}
+
+TEST(PhonemizerTest, ItalianPhonemization) {
+  ASSERT_OK_AND_ASSIGN(auto phonemizer,
+                       KokoroPhonemizer::Create(GetTestEspeakDataDir(), "it"));
+  EXPECT_EQ(phonemizer->Language(), "it");
+
+  std::string text = "Ciao, questo è un test in italiano.";
+  ASSERT_OK_AND_ASSIGN(std::string ipa, phonemizer->TextToIpa(text));
+  EXPECT_FALSE(ipa.empty()) << "Italian IPA should not be empty.";
+
+  ASSERT_OK_AND_ASSIGN(std::vector<int> tokens,
+                       phonemizer->TextToPhonemeIds(text));
+  EXPECT_GE(tokens.size(), 2);
+  EXPECT_EQ(tokens.front(), 0);  // BOS
+  EXPECT_EQ(tokens.back(), 0);   // EOS
+  EXPECT_GT(tokens.size(), 2);
+}
+
+TEST(PhonemizerTest, PortuguesePhonemization) {
+  ASSERT_OK_AND_ASSIGN(auto phonemizer, KokoroPhonemizer::Create(
+                                            GetTestEspeakDataDir(), "pt-br"));
+  EXPECT_EQ(phonemizer->Language(), "pt-br");
+
+  std::string text = "Olá, este é um teste em português.";
+  ASSERT_OK_AND_ASSIGN(std::string ipa, phonemizer->TextToIpa(text));
+  EXPECT_FALSE(ipa.empty()) << "Portuguese IPA should not be empty.";
+
+  ASSERT_OK_AND_ASSIGN(std::vector<int> tokens,
+                       phonemizer->TextToPhonemeIds(text));
+  EXPECT_GE(tokens.size(), 2);
+  EXPECT_EQ(tokens.front(), 0);  // BOS
+  EXPECT_EQ(tokens.back(), 0);   // EOS
+  EXPECT_GT(tokens.size(), 2);
+}
+
+void AppendDouble(double value, std::string& out) {
+  char buf[sizeof(double)];
+  std::memcpy(buf, &value, sizeof(double));
+  out.append(buf, sizeof(double));
+}
+
+void PackSortedMap(std::vector<std::pair<std::string, std::string>> items,
+                   std::string& k_idx, std::string& k_blob, std::string& v_idx,
+                   std::string& v_blob) {
+  using ::litert::omni::tts::kokoro::AppendUint32;
+  std::sort(items.begin(), items.end());
+  for (const auto& [k, v] : items) {
+    AppendUint32(static_cast<uint32_t>(k_blob.size()), k_idx);
+    k_blob.append(k);
+    k_blob.push_back('\0');
+    AppendUint32(static_cast<uint32_t>(v_blob.size()), v_idx);
+    v_blob.append(v);
+    v_blob.push_back('\0');
+  }
+  AppendUint32(static_cast<uint32_t>(k_blob.size()), k_idx);
+  AppendUint32(static_cast<uint32_t>(v_blob.size()), v_idx);
+}
+
+std::string BuildMinimalChineseBlobForPhonemizerTest() {
+  using ::litert::omni::tts::kokoro::AppendUint32;
+  using ::litert::omni::tts::kokoro::BuildCjkBlob;
+
+  std::vector<std::pair<std::string, uint32_t>> words = {
+      {"你好", 2000},  {"世界", 1800},  {"我", 2500},      {"喜欢", 1500},
+      {"编程", 1200},  {"他", 2000},    {"买", 1500},      {"了", 3000},
+      {"手机", 1500},  {"技术", 1600},  {"二〇二六", 500}, {"年", 2000},
+      {"百分之", 800}, {"摄氏度", 600}, {"点", 1000},      {"一四", 400},
+  };
+  std::sort(words.begin(), words.end());
+  std::string w_idx;
+  std::string w_key;
+  std::string w_frq;
+  for (const auto& [w, f] : words) {
+    AppendUint32(static_cast<uint32_t>(w_key.size()), w_idx);
+    w_key.append(w);
+    w_key.push_back('\0');
+    AppendUint32(f, w_frq);
+  }
+  AppendUint32(static_cast<uint32_t>(w_key.size()), w_idx);
+  std::string w_tot;
+  AppendDouble(std::log(30000.0), w_tot);
+
+  std::string hmm_st;
+  for (double p : {-0.26, -3.14e100, -3.14e100, -1.46}) {
+    AppendDouble(p, hmm_st);
+  }
+  std::string hmm_tr(16 * sizeof(double), '\0');
+  std::string hmm_en(4 * sizeof(uint32_t), '\0');
+
+  std::string p_idx, p_key, p_vidx, p_val;
+  PackSortedMap(
+      {
+          {"你好", "ni↗xau↓"},
+          {"世界", "ʂɨ↘ʨje↘"},
+          {"喜欢", "ɕi↓xwan"},
+          {"编程", "pjɛ→nꭧʰə↗ŋ"},
+          {"手机", "ʂou↓ʨi→"},
+          {"技术", "ʨi↘ʂu↘"},
+          {"百分之", "pai↓fə→nꭧɨ→"},
+          {"摄氏度", "ʂɤ↘ʂɨ↘tu↘"},
+      },
+      p_idx, p_key, p_vidx, p_val);
+
+  std::string c_idx, c_key, c_vidx, c_val;
+  PackSortedMap(
+      {
+          {"你", "ni↓"},
+          {"好", "xau↓"},
+          {"世", "ʂɨ↘"},
+          {"界", "ʨje↘"},
+          {"我", "wo↓"},
+          {"他", "tʰa→"},
+          {"买", "mai↓"},
+          {"了", "lə"},
+          {"二", "ɚ↘"},
+          {"〇", "li↗ŋ"},
+          {"六", "ljou↘"},
+          {"年", "njɛ↗n"},
+          {"点", "tjɛ↓n"},
+          {"一", "i→"},
+          {"四", "sɨ↘"},
+          {"五", "wu↓"},
+          {"十", "ʂɨ↗"},
+          {"千", "ʨʰjɛ→n"},
+      },
+      c_idx, c_key, c_vidx, c_val);
+
+  return BuildCjkBlob({
+      {"w-idx", w_idx},
+      {"w-key", w_key},
+      {"w-frq", w_frq},
+      {"w-tot", w_tot},
+      {"hmm-st", hmm_st},
+      {"hmm-tr", hmm_tr},
+      {"hmm-en", hmm_en},
+      {"hmm-ec", ""},
+      {"hmm-ep", ""},
+      {"p-idx", p_idx},
+      {"p-key", p_key},
+      {"p-vidx", p_vidx},
+      {"p-val", p_val},
+      {"c-idx", c_idx},
+      {"c-key", c_key},
+      {"c-vidx", c_vidx},
+      {"c-val", c_val},
+  });
+}
+
+TEST(PhonemizerTest, ChineseWithoutLexiconFailsWithPrecondition) {
+  ASSERT_OK_AND_ASSIGN(auto phonemizer,
+                       KokoroPhonemizer::Create(GetTestEspeakDataDir(), "cmn"));
+  EXPECT_THAT(
+      phonemizer->TextToIpa("你好，世界！"),
+      ::testing::status::StatusIs(absl::StatusCode::kFailedPrecondition));
+  EXPECT_THAT(
+      phonemizer->WordToIpa("你好"),
+      ::testing::status::StatusIs(absl::StatusCode::kFailedPrecondition));
+}
+
+TEST(PhonemizerTest, ChineseWithBundledLexiconAndPunctuation) {
+  const std::string zh_blob = BuildMinimalChineseBlobForPhonemizerTest();
+  ASSERT_OK_AND_ASSIGN(
+      auto phonemizer,
+      KokoroPhonemizer::Create(GetTestEspeakDataDir(), "cmn", {}, zh_blob));
+
+  ASSERT_OK_AND_ASSIGN(std::string full_ipa,
+                       phonemizer->TextToIpa("你好，世界！"));
+  EXPECT_EQ(full_ipa, "ni↗xau↓, ʂɨ↘ʨje↘!");
+
+  // CJK punctuation marks map onto Kokoro vocabulary tokens.
+  ASSERT_OK_AND_ASSIGN(std::string pause_ipa,
+                       phonemizer->TextToIpa("你好、世界；你好：世界「你好」"));
+  EXPECT_THAT(pause_ipa, ::testing::HasSubstr(","));
+  EXPECT_THAT(pause_ipa, ::testing::HasSubstr(";"));
+  EXPECT_THAT(pause_ipa, ::testing::HasSubstr(":"));
+  EXPECT_THAT(pause_ipa, ::testing::HasSubstr("“"));
+  EXPECT_THAT(pause_ipa, ::testing::HasSubstr("”"));
+
+  // Embedded English inside Chinese is phonemized with en-us.
+  ASSERT_OK_AND_ASSIGN(std::string mixed_ipa,
+                       phonemizer->TextToIpa("我喜欢 Python 编程"));
+  EXPECT_THAT(mixed_ipa, ::testing::HasSubstr("pjɛ→nꭧʰə↗ŋ"));
+  EXPECT_THAT(mixed_ipa, ::testing::Not(::testing::HasSubstr("(en)")));
+
+  // Initializing with zh_blob under en-us and switching to cmn via SetLanguage
+  // retains chinese_g2p_.
+  ASSERT_OK_AND_ASSIGN(
+      auto switched_phonemizer,
+      KokoroPhonemizer::Create(GetTestEspeakDataDir(), "en-us", {}, zh_blob));
+  switched_phonemizer->SetLanguage("cmn");
+  EXPECT_THAT(switched_phonemizer->TextToIpa("你好，世界！"),
+              ::testing::status::IsOkAndHolds("ni↗xau↓, ʂɨ↘ʨje↘!"));
+}
+
+TEST(PhonemizerTest, StripLanguageSwitches) {
+  EXPECT_EQ(StripLanguageSwitches("ni↓xau↓"), "ni↓xau↓");
+  EXPECT_EQ(StripLanguageSwitches("(en)tʃˈaɪniːz(ja)lˈe̞tə"), "tʃˈaɪniːzlˈe̞tə");
+  EXPECT_EQ(StripLanguageSwitches("a(pt-br)b"), "ab");
+  EXPECT_EQ(StripLanguageSwitches("(hello)"), "(hello)");
 }
 
 }  // namespace
