@@ -26,6 +26,7 @@
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "omni/tts/kokoro/chinese_g2p.h"
 #include "omni/tts/kokoro/cjk_blob.h"
+#include "omni/tts/text_normalizer.h"
 
 namespace litert::omni::tts {
 
@@ -211,8 +212,8 @@ std::string EspeakVoiceForLanguage(absl::string_view language_code);
 class KokoroPhonemizer {
  public:
   // Creates and initializes a KokoroPhonemizer instance using the specified
-  // data directory, target language, custom lexicon, and packed CJK lexicon
-  // blob.
+  // data directory, target language, custom lexicon, text normalization rules,
+  // and packed CJK lexicon blob.
   //
   // args
   // - espeak_data_dir: Path to espeak-ng-data directory or model directory.
@@ -220,6 +221,10 @@ class KokoroPhonemizer {
   //   "fr-fr", "hi", "it", "pt-br", "ja", "zh", "cmn", "a", "b", "e", etc.).
   //   Defaults to "en-us".
   // - custom_lexicon: Custom dictionary mapping words to IPA pronunciations.
+  // - text_norm_rules: Optional text normalization rule table for `language`,
+  //   in the format documented in omni/tts/text_normalizer.h. Applied to text
+  //   before phonemization. The table is bound to `language`, so it stops
+  //   being applied if SetLanguage later switches to another language.
   // - cjk_lexicon: Optional raw bytes of a packed `LCJK` binary container
   //   (e.g. the `"zh-lexicon"` section from the `.litertlm` package). Must
   //   remain mapped and valid for the lifetime of the returned
@@ -227,11 +232,13 @@ class KokoroPhonemizer {
   //
   // returns
   // - Unique pointer to `KokoroPhonemizer` on success, or an error status if
-  //   `espeak_data_dir` is missing (for espeak-backed languages) or
-  //   `cjk_lexicon` is missing/corrupt for a CJK language.
+  //   `espeak_data_dir` is missing (for espeak-backed languages),
+  //   `text_norm_rules` is malformed, or `cjk_lexicon` is missing/corrupt for a
+  //   CJK language.
   static absl::StatusOr<std::unique_ptr<KokoroPhonemizer>> Create(
       absl::string_view espeak_data_dir, absl::string_view language = "en-us",
       const absl::flat_hash_map<std::string, std::string>& custom_lexicon = {},
+      absl::string_view text_norm_rules = "",
       absl::string_view cjk_lexicon = "");
 
   // Overload for creating KokoroPhonemizer with default "en-us" language and
@@ -326,6 +333,13 @@ class KokoroPhonemizer {
   // EspeakVoiceForLanguage and usually identical to it.
   std::string espeak_voice_ = "en-us";
   absl::flat_hash_map<std::string, std::string> merged_lexicon_;
+  // Applied to text before phonemization. Null when no rule table was given.
+  std::unique_ptr<TextNormalizer> text_normalizer_;
+  // Normalized language the rule table was written for. SetLanguage can move
+  // `language_` away from it, and normalizing English with, say, Mandarin
+  // rules would corrupt the text, so the two must agree for the normalizer to
+  // run.
+  std::string text_norm_language_;
   // Section directory of the bundled CJK lexicon blob, plus the language
   // front end built over it (`ja-lexicon` -> `japanese_g2p_`, `zh-lexicon` ->
   // `chinese_g2p_`).

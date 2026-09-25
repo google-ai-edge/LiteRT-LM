@@ -20,6 +20,9 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <fstream>
+#include <ios>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <thread>  // NOLINT
@@ -66,6 +69,27 @@ std::string GetTestEspeakDataDir() {
     }
   }
   return candidate_paths[0];
+}
+
+// Reads the Mandarin text normalization rule table that ships with the model,
+// so that the tests below exercise the data we actually serve.
+std::string ReadMandarinRuleTable() {
+  const std::string base_dir = ::testing::SrcDir();
+  const std::vector<std::string> candidate_paths = {
+      "omni/tts/data/zh_textnorm.txt",
+      absl::StrCat(base_dir, "/",
+                   "odml/litert_lm/omni/tts/data/zh_textnorm.txt"),
+      absl::StrCat(base_dir,
+                   "/litert_lm/omni/tts/data/"
+                   "zh_textnorm.txt"),
+  };
+  for (const std::string& path : candidate_paths) {
+    std::ifstream file(path, std::ios::binary);
+    if (!file.good()) continue;
+    return std::string(std::istreambuf_iterator<char>(file),
+                       std::istreambuf_iterator<char>());
+  }
+  return "";
 }
 
 TEST(PhonemizerTest, EmptyPathFails) {
@@ -767,24 +791,13 @@ std::string BuildMinimalChineseBlobForPhonemizerTest() {
   std::string c_idx, c_key, c_vidx, c_val;
   PackSortedMap(
       {
-          {"你", "ni↓"},
-          {"好", "xau↓"},
-          {"世", "ʂɨ↘"},
-          {"界", "ʨje↘"},
-          {"我", "wo↓"},
-          {"他", "tʰa→"},
-          {"买", "mai↓"},
-          {"了", "lə"},
-          {"二", "ɚ↘"},
-          {"〇", "li↗ŋ"},
-          {"六", "ljou↘"},
-          {"年", "njɛ↗n"},
-          {"点", "tjɛ↓n"},
-          {"一", "i→"},
-          {"四", "sɨ↘"},
-          {"五", "wu↓"},
-          {"十", "ʂɨ↗"},
-          {"千", "ʨʰjɛ→n"},
+          {"你", "ni↓"},    {"好", "xau↓"},  {"世", "ʂɨ↘"},   {"界", "ʨje↘"},
+          {"我", "wo↓"},    {"他", "tʰa→"},  {"买", "mai↓"},  {"了", "lə"},
+          {"二", "ɚ↘"},     {"〇", "li↗ŋ"},  {"零", "li↗ŋ"},  {"三", "san→"},
+          {"六", "ljou↘"},  {"九", "ʨjou↓"}, {"年", "njɛ↗n"}, {"月", "ɥe↘"},
+          {"日", "ʐɨ↘"},    {"號", "xau↘"},  {"点", "tjɛ↓n"}, {"一", "i→"},
+          {"四", "sɨ↘"},    {"五", "wu↓"},   {"十", "ʂɨ↗"},   {"百", "pai↓"},
+          {"千", "ʨʰjɛ→n"}, {"万", "wan↘"},
       },
       c_idx, c_key, c_vidx, c_val);
 
@@ -824,7 +837,7 @@ TEST(PhonemizerTest, ChineseWithBundledLexiconAndPunctuation) {
   const std::string zh_blob = BuildMinimalChineseBlobForPhonemizerTest();
   ASSERT_OK_AND_ASSIGN(
       auto phonemizer,
-      KokoroPhonemizer::Create(GetTestEspeakDataDir(), "cmn", {}, zh_blob));
+      KokoroPhonemizer::Create(GetTestEspeakDataDir(), "cmn", {}, "", zh_blob));
 
   ASSERT_OK_AND_ASSIGN(std::string full_ipa,
                        phonemizer->TextToIpa("你好，世界！"));
@@ -847,12 +860,79 @@ TEST(PhonemizerTest, ChineseWithBundledLexiconAndPunctuation) {
 
   // Initializing with zh_blob under en-us and switching to cmn via SetLanguage
   // retains chinese_g2p_.
-  ASSERT_OK_AND_ASSIGN(
-      auto switched_phonemizer,
-      KokoroPhonemizer::Create(GetTestEspeakDataDir(), "en-us", {}, zh_blob));
+  ASSERT_OK_AND_ASSIGN(auto switched_phonemizer,
+                       KokoroPhonemizer::Create(GetTestEspeakDataDir(), "en-us",
+                                                {}, "", zh_blob));
   switched_phonemizer->SetLanguage("cmn");
   EXPECT_THAT(switched_phonemizer->TextToIpa("你好，世界！"),
               ::testing::status::IsOkAndHolds("ni↗xau↓, ʂɨ↘ʨje↘!"));
+}
+
+TEST(PhonemizerTest, ChineseTextNormalizationMatchesTheWrittenOutForm) {
+  const std::string rules = ReadMandarinRuleTable();
+  ASSERT_FALSE(rules.empty()) << "could not locate zh_textnorm.txt";
+  const std::string zh_blob = BuildMinimalChineseBlobForPhonemizerTest();
+  ASSERT_OK_AND_ASSIGN(auto phonemizer,
+                       KokoroPhonemizer::Create(GetTestEspeakDataDir(), "cmn",
+                                                {}, rules, zh_blob));
+
+  ASSERT_OK_AND_ASSIGN(std::string year, phonemizer->TextToIpa("2026年"));
+  ASSERT_OK_AND_ASSIGN(std::string year_zero,
+                       phonemizer->TextToIpa("二零二六年"));
+  ASSERT_OK_AND_ASSIGN(std::string year_circle,
+                       phonemizer->TextToIpa("二〇二六年"));
+  EXPECT_EQ(year, year_zero);
+  EXPECT_EQ(year, year_circle);
+  EXPECT_THAT(year, ::testing::HasSubstr("li↗ŋ"));
+  EXPECT_THAT(year, ::testing::Not(::testing::HasSubstr("〇")));
+
+  ASSERT_OK_AND_ASSIGN(std::string full_date,
+                       phonemizer->TextToIpa("2026年9月24號"));
+  ASSERT_OK_AND_ASSIGN(std::string full_date_written,
+                       phonemizer->TextToIpa("二零二六年九月二十四號"));
+  EXPECT_EQ(full_date, full_date_written);
+
+  ASSERT_OK_AND_ASSIGN(std::string decimal, phonemizer->TextToIpa("3.14"));
+  ASSERT_OK_AND_ASSIGN(std::string decimal_written,
+                       phonemizer->TextToIpa("三点一四"));
+  EXPECT_EQ(decimal, decimal_written);
+
+  ASSERT_OK_AND_ASSIGN(std::string percent, phonemizer->TextToIpa("50%"));
+  ASSERT_OK_AND_ASSIGN(std::string percent_written,
+                       phonemizer->TextToIpa("百分之五十"));
+  EXPECT_EQ(percent, percent_written);
+
+  ASSERT_OK_AND_ASSIGN(std::string celsius, phonemizer->TextToIpa("25℃"));
+  ASSERT_OK_AND_ASSIGN(std::string celsius_written,
+                       phonemizer->TextToIpa("二十五摄氏度"));
+  EXPECT_EQ(celsius, celsius_written);
+}
+
+TEST(PhonemizerTest, RuleTableStopsApplyingAfterSwitchingLanguage) {
+  const std::string rules = ReadMandarinRuleTable();
+  ASSERT_FALSE(rules.empty()) << "could not locate zh_textnorm.txt";
+  const std::string zh_blob = BuildMinimalChineseBlobForPhonemizerTest();
+  ASSERT_OK_AND_ASSIGN(auto phonemizer,
+                       KokoroPhonemizer::Create(GetTestEspeakDataDir(), "cmn",
+                                                {}, rules, zh_blob));
+  ASSERT_OK_AND_ASSIGN(
+      auto plain_english,
+      KokoroPhonemizer::Create(GetTestEspeakDataDir(), "en-us"));
+
+  phonemizer->SetLanguage("en-us");
+  ASSERT_OK_AND_ASSIGN(std::string switched,
+                       phonemizer->TextToIpa("50% in 2026"));
+  ASSERT_OK_AND_ASSIGN(std::string expected,
+                       plain_english->TextToIpa("50% in 2026"));
+  EXPECT_EQ(switched, expected);
+}
+
+TEST(PhonemizerTest, MalformedRuleTableIsAnError) {
+  EXPECT_THAT(KokoroPhonemizer::Create(GetTestEspeakDataDir(), "cmn", {},
+                                       "not-a-record\n")
+                  .status(),
+              ::testing::Property(&absl::Status::code,
+                                  absl::StatusCode::kInvalidArgument));
 }
 
 TEST(PhonemizerTest, StripLanguageSwitches) {

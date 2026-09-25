@@ -43,6 +43,7 @@
 #include "omni/tts/kokoro/chinese_g2p.h"
 #include "omni/tts/kokoro/cjk_blob.h"
 #include "omni/tts/kokoro/common.h"
+#include "omni/tts/text_normalizer.h"
 
 namespace litert::omni::tts {
 
@@ -121,8 +122,8 @@ const absl::flat_hash_map<std::string_view, int>& GetKokoroVocabMap() {
 }
 
 bool IsHanziCodePoint(char32_t cp) {
-  return (cp >= 0x4E00 && cp <= 0x9FFF) || (cp >= 0x3400 && cp <= 0x4DBF) ||
-         (cp >= 0x20000 && cp <= 0x2A6DF);
+  return cp == 0x3007 || (cp >= 0x4E00 && cp <= 0x9FFF) ||
+         (cp >= 0x3400 && cp <= 0x4DBF) || (cp >= 0x20000 && cp <= 0x2A6DF);
 }
 
 MisakiFlavor FlavorForLanguage(absl::string_view espeak_voice) {
@@ -354,8 +355,9 @@ bool IsWordCodePoint(char32_t cp) {
   if (cp >= 0x0900 && cp <= 0x097F) {
     return cp != 0x0964 && cp != 0x0965;
   }
-  // CJK Unified Ideographs: U+4E00..U+9FFF
-  if (cp >= 0x4E00 && cp <= 0x9FFF) {
+  // CJK Unified Ideographs (U+4E00 to U+9FFF) and Ideographic Number Zero 〇
+  // (U+3007)
+  if (cp == 0x3007 || (cp >= 0x4E00 && cp <= 0x9FFF)) {
     return true;
   }
   // Hiragana & Katakana: U+3040..U+30FF, excluding the katakana middle dot
@@ -630,7 +632,7 @@ absl::StatusOr<std::string> ResolveAndValidateLanguage(
 absl::StatusOr<std::unique_ptr<KokoroPhonemizer>> KokoroPhonemizer::Create(
     absl::string_view espeak_data_dir, absl::string_view language,
     const absl::flat_hash_map<std::string, std::string>& custom_lexicon,
-    absl::string_view cjk_lexicon) {
+    absl::string_view text_norm_rules, absl::string_view cjk_lexicon) {
   if (espeak_data_dir.empty()) {
     return absl::InvalidArgumentError("espeak_data_dir cannot be empty");
   }
@@ -645,6 +647,12 @@ absl::StatusOr<std::unique_ptr<KokoroPhonemizer>> KokoroPhonemizer::Create(
   auto phonemizer = std::unique_ptr<KokoroPhonemizer>(new KokoroPhonemizer());
   phonemizer->data_dir_ = data_dir;
   phonemizer->language_ = NormalizeLanguageCode(language);
+
+  if (!text_norm_rules.empty()) {
+    ABSL_ASSIGN_OR_RETURN(phonemizer->text_normalizer_,
+                          TextNormalizer::Create(text_norm_rules));
+    phonemizer->text_norm_language_ = phonemizer->language_;
+  }
 
   // Determine the parent cache directory path expected by espeak_Initialize
   // and ChineseG2p (which unpacks the cppjieba HMM model file into cache_dir).
@@ -825,6 +833,14 @@ absl::Status KokoroPhonemizer::FlushWordToIpa(std::string& current_word,
 
 absl::StatusOr<std::string> KokoroPhonemizer::TextToIpa(
     absl::string_view text) const {
+  // Rewrite digits and symbols into pronounceable words before tokenizing, so
+  // that the rules can see a number whole rather than one word at a time.
+  std::string normalized_text;
+  if (text_normalizer_ != nullptr && language_ == text_norm_language_) {
+    normalized_text = text_normalizer_->Normalize(text);
+    text = normalized_text;
+  }
+
   if (language_ == "cmn" && chinese_g2p_ == nullptr) {
     return absl::FailedPreconditionError(
         "Chinese TTS requires a bundled 'zh-lexicon' section in the "

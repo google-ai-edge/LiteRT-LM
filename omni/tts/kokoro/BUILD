@@ -24,6 +24,7 @@ cc_library(
     hdrs = ["kokoro_model_config.h"],
     deps = [
         "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/strings",
         "//runtime/executor:executor_settings_base",
     ],
 )
@@ -81,6 +82,7 @@ cc_library(
         "@espeak_ng//:espeak_ng_base_headers",
         "@espeak_ng//:espeak_ng_speak_lib_header",
         "@espeak_ng//:libespeak_ng_la_sources",  # buildcleaner: keep
+        "//omni/tts:text_normalizer",
     ],
 )
 
@@ -96,6 +98,7 @@ cc_test(
         "@espeak_ng//:it_dictionary",
         "@espeak_ng//:pt_dictionary",
         "@espeak_ng//:zh_dictionary",
+        "//omni/tts:text_normalizer_rule_tables",
     ],
     deps = [
         ":cjk_test_blobs",
@@ -127,6 +130,7 @@ cc_library(
         "@com_google_absl//absl/cleanup",
         "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:str_format",
@@ -248,6 +252,7 @@ cc_library(
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/strings:string_view",
         "@litert//litert/cc:litert_compiled_model",

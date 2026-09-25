@@ -19,6 +19,7 @@
 #include <string>
 
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "runtime/executor/executor_settings_base.h"
 
 namespace litert::omni::tts {
@@ -53,6 +54,15 @@ struct KokoroModelConfig {
   // is unpacked from a .litertlm container; when empty, the data is looked up
   // relative to the model folder.
   std::string espeak_data_dir;
+  // Text normalization rule tables, keyed by normalized language code (e.g.
+  // "cmn"). Populated automatically from the "<language>-textnorm"
+  // GenericBinaryData sections of a .litertlm container. A language with no
+  // table is not normalized. See omni/tts/text_normalizer.h for the format.
+  absl::flat_hash_map<std::string, std::string> text_norm_rules;
+  // Zero-copy slices into the bundled "<language>-lexicon" GenericBinaryData
+  // sections (e.g. "ja-lexicon" -> key "ja", "zh-lexicon" -> key "cmn"),
+  // backed by the ModelResources loader.
+  absl::flat_hash_map<std::string, absl::string_view> cjk_lexicons;
 };
 
 }  // namespace litert::omni::tts

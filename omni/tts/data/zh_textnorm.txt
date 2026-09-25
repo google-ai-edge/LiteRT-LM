@@ -1,0 +1,62 @@
+# Mandarin Chinese text normalization for the TTS front end.
+#
+# Format is documented in omni/tts/text_normalizer.h. Records are
+# tab-separated, and `rule` records apply in the order they appear here.
+#
+# `ChineseG2p` (`zh-lexicon`) only phonemizes Hanzi characters, while
+# `espeak-ng`'s `cmn` voice emits incompatible Pinyin tone digits. This table
+# therefore rewrites all numbers, dates, decimals, percentages, currencies, and
+# symbols into spoken Chinese characters before segmentation and G2P:
+#   * four-digit years and decimal fractional parts are read digit-by-digit
+#     (`#1`), e.g. 2026年 -> 二零二六年, 3.14 -> 三点一四;
+#   * cardinal integers (`@1`), e.g. 9月24號 -> 九月二十四號, 50% -> 百分之五十,
+#     10000年 -> 一万年;
+#   * symbols (℃, °F, %, ￥, $, €) and fractions/ranges.
+
+digit	0	零
+digit	1	一
+digit	2	二
+digit	3	三
+digit	4	四
+digit	5	五
+digit	6	六
+digit	7	七
+digit	8	八
+digit	9	九
+unit	十	百	千	万	亿
+
+# Normalize ideographic number zero 〇 (U+3007) to 零 (U+96F6).
+rule	〇	零
+
+# Fractions: 3/4 -> 4分之3 -> 四分之三.
+rule	(\d+)/(\d+)	\2分之\1
+
+# Currency. The symbol precedes the amount but the Chinese unit follows it, so
+# these have to run while the amount is still a bare run of digits.
+rule	[￥¥]\s*(\d+(?:\.\d+)?)	\1元
+rule	\$\s*(\d+(?:\.\d+)?)	\1美元
+rule	€\s*(\d+(?:\.\d+)?)	\1欧元
+
+# Percent. Also a prefix in Chinese: 50% -> 百分之50 -> 百分之五十.
+rule	(-?\d+(?:\.\d+)?)\s*%	百分之\1
+
+# Temperature and angles.
+rule	(-?\d+(?:\.\d+)?)\s*(?:°C|℃)	\1摄氏度
+rule	(-?\d+(?:\.\d+)?)\s*(?:°F|℉)	\1华氏度
+rule	(?:°C|℃)	摄氏度
+rule	(?:°F|℉)	华氏度
+rule	(-?\d+(?:\.\d+)?)\s*°	\1度
+
+# A four-digit year is read one digit at a time: 2026年 -> 二零二六年.
+# Anchored with \b so 5+ digit cardinals like 10000年 fall through to @1 below.
+rule	\b(\d{4})\s*年	#1年
+
+# Negative numbers: -5 -> 负5 -> 负五.
+rule	-(\d+)	负\1
+
+# The fractional part of a decimal is read one digit at a time while the
+# integer part is read as a cardinal: 3.14 -> 三点一四.
+rule	(\d+)\.(\d+)	@1点#2
+
+# Remaining integers are read as cardinals: 9月24號 -> 九月二十四號, 10000年 -> 一万年.
+rule	(\d+)	@1

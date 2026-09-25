@@ -26,6 +26,7 @@
 #include "absl/cleanup/cleanup.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_format.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
@@ -120,10 +121,25 @@ KokoroAcousticStage::Create(
       ResolveEspeakDataDir(stage->config_.espeak_data_dir.empty()
                                ? stage->model_folder_
                                : stage->config_.espeak_data_dir);
-  LITERT_ASSIGN_OR_RETURN(
+  // A language with no rule table in the container is left unnormalized.
+  const std::string normalized_lang =
+      NormalizeLanguageCode(stage->config_.language);
+  absl::string_view text_norm_rules;
+  if (const auto rules_it =
+          stage->config_.text_norm_rules.find(normalized_lang);
+      rules_it != stage->config_.text_norm_rules.end()) {
+    text_norm_rules = rules_it->second;
+  }
+  absl::string_view cjk_lexicon;
+  if (const auto lex_it = stage->config_.cjk_lexicons.find(normalized_lang);
+      lex_it != stage->config_.cjk_lexicons.end()) {
+    cjk_lexicon = lex_it->second;
+  }
+  ABSL_ASSIGN_OR_RETURN(
       stage->phonemizer_,
       KokoroPhonemizer::Create(espeak_dir, stage->config_.language,
-                               stage->config_.custom_lexicon));
+                               stage->config_.custom_lexicon, text_norm_rules,
+                               cjk_lexicon));
 
   // Derive static sequence and frame capacities from allocated tensor buffers.
   LITERT_ASSIGN_OR_RETURN(
@@ -201,6 +217,18 @@ absl::Status KokoroAcousticStage::ScheduleInternal() {
                << " effective=" << max_capacity;
   std::vector<kokoro::TokenSlice> slices =
       kokoro::SliceTokenIds(full_token_ids, max_capacity);
+  // Kokoro's Chinese and Japanese voices emit ~400 ms of leading silence at BOS
+  // and ~750 ms of trailing silence at EOS (~1.16 s between sentences, versus
+  // ~430 ms trailing in English). Marking CJK chunk edges as `kPunctuation`
+  // caps each chunk's leading silence to `kSliceJoinMarginSamples` (5 ms) and
+  // trailing silence to `kSlicePunctuationPauseSamples` (400 ms), matching the
+  // inter-sentence pause of the other languages.
+  const std::string normalized_lang = NormalizeLanguageCode(config_.language);
+  if (!slices.empty() &&
+      (normalized_lang == "cmn" || normalized_lang == "ja")) {
+    slices.front().join_before = SliceJoin::kPunctuation;
+    slices.back().join_after = SliceJoin::kPunctuation;
+  }
 
   // Step 3: Process each phoneme chunk through unified acoustic prediction.
   for (const auto& slice : slices) {

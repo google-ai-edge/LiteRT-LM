@@ -33,17 +33,29 @@
 
 namespace litert::omni::tts {
 
+// Suffix of a GenericBinaryData section holding a text normalization rule
+// table. What precedes it is the language code, so the Mandarin table ships as
+// the "cmn-textnorm" section. See omni/tts/text_normalizer.h for the format.
+constexpr absl::string_view kTextNormSectionSuffix = "-textnorm";
+
+// Suffix of a GenericBinaryData section holding a packed CJK lexicon blob
+// (e.g. "ja-lexicon", "zh-lexicon").
+constexpr absl::string_view kLexiconSectionSuffix = "-lexicon";
+
 // Compiles and populates all Kokoro-82M LiteRT models into shared
 // ModelResources.
 //
 // When `resources` carries a .litertlm container, the models are compiled from
-// the container's TF_LITE_ACOUSTIC / TF_LITE_VOCODER sections, and espeak-ng
-// data packaged in the container is unpacked into `cache_dir` and recorded in
-// `config.espeak_data_dir`.
+// the container's TF_LITE_ACOUSTIC / TF_LITE_VOCODER sections, espeak-ng data
+// packaged in the container is unpacked into `cache_dir` and recorded in
+// `config.espeak_data_dir`, and any `<lang>-textnorm` or `<lang>-lexicon`
+// sections are recorded as zero-copy views in `config.text_norm_rules` and
+// `config.cjk_lexicons`.
 //
 // args
-// - config: Kokoro model configuration. `espeak_data_dir` is populated when
-//   espeak-ng data is unpacked from the model container.
+// - config: Kokoro model configuration. `espeak_data_dir`, `text_norm_rules`,
+//   and `cjk_lexicons` are populated when the corresponding sections are
+//   present in the model container.
 // - model_folder: Path to the directory containing the Kokoro models.
 // - cache_dir: Path to the directory for caching model data.
 // - backend: Backend to use for model execution.
@@ -81,31 +93,68 @@ absl::StatusOr<TtsSession::Components> CreateKokoroComponents(
     std::shared_ptr<ModelResources> resources);
 
 // Returns the list of available Kokoro voice profile names (e.g. "af_heart",
-// "ef_dora") discovered from GenericBinaryData sections in `lm_resources` or
-// voice files (*.bin) in `model_folder/voices` / `model_folder`.
+// "ef_dora", "zf_xiaobei") discovered from GenericBinaryData sections in
+// `lm_resources` or voice files (*.bin) in `model_folder/voices` /
+// `model_folder`.
+//
+// args
+// - model_folder: Optional path to the directory containing voice `.bin` files.
+// - lm_resources: Optional pointer to a loaded `.litertlm` `ModelResources`
+//   container to inspect for embedded voice sections.
+//
+// returns
+// - Sorted vector of discovered Kokoro voice identifiers (without `.bin`
+//   suffixes).
 std::vector<std::string> GetAvailableKokoroVoices(
     absl::string_view model_folder = "",
     const lm::ModelResources* lm_resources = nullptr);
 
-// Returns the canonical espeak language code corresponding to a Kokoro voice
-// identifier (e.g. "ef_dora" -> "es", "if_sara" -> "it", "af_heart" ->
-// "en-us").
+// Returns the canonical Kokoro (`espeak-ng`) language code corresponding to a
+// Kokoro voice identifier (e.g. "ef_dora" -> "es", "if_sara" -> "it",
+// "af_heart" -> "en-us", "zf_xiaobei" -> "cmn").
+//
+// args
+// - voice_name: Kokoro voice identifier (e.g. "af_heart", "zf_xiaobei").
+//
+// returns
+// - Canonical language code (e.g. "en-us", "es", "cmn"), or an empty string if
+//   `voice_name` does not match a known Kokoro voice prefix.
 std::string GetKokoroVoiceLanguage(absl::string_view voice_name);
 
 // Returns the default Kokoro voice profile name for a given language code (e.g.
-// "es" -> "ef_dora", "it" -> "if_sara", "en-us" -> "af_heart").
+// "es" -> "ef_dora", "it" -> "if_sara", "cmn" -> "zf_xiaobei",
+// "en-us" -> "af_heart").
+//
+// args
+// - language_code: Canonical Kokoro language code or BCP-47 tag (defaults to
+//   English US when empty).
+//
+// returns
+// - Default voice identifier for the specified language (e.g. "af_heart").
 std::string GetDefaultKokoroVoice(absl::string_view language_code = "");
 
 // Converts a BCP-47 language tag or language name (e.g. "en-US", "en-GB", "es",
 // "zh-CN", "pt-BR") into the corresponding canonical Kokoro (`espeak-ng`)
-// language code (e.g. "en-us", "en-gb", "es", "cmn", "pt-br"). Returns an empty
-// string if `language` is empty or not supported by Kokoro.
+// language code (e.g. "en-us", "en-gb", "es", "cmn", "pt-br").
+//
+// args
+// - language: BCP-47 language tag, ISO code, or language name.
+//
+// returns
+// - Canonical Kokoro language code, or an empty string if `language` is empty
+//   or not supported by Kokoro.
 std::string ToKokoroLanguageCode(absl::string_view language);
 
 // Converts a canonical Kokoro (`espeak-ng`) language code (e.g. "en-us",
 // "en-gb", "es", "cmn", "pt-br") to its canonical BCP-47 language tag (e.g.
-// "en-US", "en-GB", "es", "zh-CN", "pt-BR"). Returns an empty string if
-// unrecognized.
+// "en-US", "en-GB", "es", "zh-CN", "pt-BR").
+//
+// args
+// - kokoro_code: Canonical Kokoro language code (e.g. "cmn", "en-us").
+//
+// returns
+// - Canonical BCP-47 language tag (e.g. "zh-CN", "en-US"), or an empty string
+//   if `kokoro_code` is unrecognized.
 std::string KokoroCodeToBcp47(absl::string_view kokoro_code);
 
 }  // namespace litert::omni::tts

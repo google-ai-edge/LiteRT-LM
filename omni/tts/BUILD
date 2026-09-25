@@ -25,6 +25,39 @@ cc_library(
     deps = ["@com_google_absl//absl/strings"],
 )
 
+# Rule tables consumed by :text_normalizer. These ship as data alongside the
+# model, so that language-specific normalization stays out of the binary.
+filegroup(
+    name = "text_normalizer_rule_tables",
+    srcs = ["data/zh_textnorm.txt"],
+)
+
+cc_library(
+    name = "text_normalizer",
+    srcs = ["text_normalizer.cc"],
+    hdrs = ["text_normalizer.h"],
+    deps = [
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/types:span",
+        "@com_googlesource_code_re2//:re2",
+    ],
+)
+
+cc_test(
+    name = "text_normalizer_test",
+    srcs = ["text_normalizer_test.cc"],
+    data = [":text_normalizer_rule_tables"],
+    deps = [
+        ":text_normalizer",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/strings",
+        "//support/util:test_utils",
+    ],
+)
+
 cc_library(
     name = "text_source",
     hdrs = ["text_source.h"],

@@ -27,8 +27,10 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_format.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/strings/strip.h"  // from @com_google_absl
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
@@ -117,6 +119,27 @@ absl::Status InitKokoroResources(KokoroModelConfig& config,
         return espeak_data_dir.status();
       }
     }
+
+    // Text normalization rule tables and CJK lexicon blobs ride along as data
+    // so that language-specific tables stay out of the binary.
+    for (const std::string& name : lm_resources->GetGenericBinaryDataNames()) {
+      absl::string_view language(name);
+      if (absl::ConsumeSuffix(&language, kTextNormSectionSuffix) &&
+          !language.empty()) {
+        ABSL_ASSIGN_OR_RETURN(absl::string_view rules,
+                              lm_resources->GetGenericBinaryDataBuffer(name));
+        config.text_norm_rules[NormalizeLanguageCode(language)] =
+            std::string(rules);
+        continue;
+      }
+      language = name;
+      if (absl::ConsumeSuffix(&language, kLexiconSectionSuffix) &&
+          !language.empty()) {
+        ABSL_ASSIGN_OR_RETURN(absl::string_view blob,
+                              lm_resources->GetGenericBinaryDataBuffer(name));
+        config.cjk_lexicons[NormalizeLanguageCode(language)] = blob;
+      }
+    }
   } else {
     LITERT_ASSIGN_OR_RETURN(
         auto acoustic_compiled,
@@ -171,12 +194,12 @@ absl::StatusOr<TtsSession::Components> CreateKokoroComponents(
   components.text_source = std::move(text_source);
 
   // Stage 1: Text frontend, phonemization, and unified acoustic prediction.
-  LITERT_ASSIGN_OR_RETURN(auto acoustic, KokoroAcousticStage::Create(
-                                             components.text_source.get(),
-                                             config, model_folder, resources));
+  ABSL_ASSIGN_OR_RETURN(auto acoustic, KokoroAcousticStage::Create(
+                                           components.text_source.get(), config,
+                                           model_folder, resources));
   // Stage 2: Neural vocoder and iSTFT audio synthesis.
-  LITERT_ASSIGN_OR_RETURN(
-      auto vocoder, KokoroVocoderStage::Create(acoustic.get(), resources));
+  ABSL_ASSIGN_OR_RETURN(auto vocoder,
+                        KokoroVocoderStage::Create(acoustic.get(), resources));
 
   if (acoustic->frame_capacity() != vocoder->frame_capacity()) {
     return absl::FailedPreconditionError(absl::StrFormat(
@@ -198,13 +221,18 @@ std::vector<std::string> GetAvailableKokoroVoices(
   if (lm_resources != nullptr) {
     for (const auto& name : lm_resources->GetGenericBinaryDataNames()) {
       // Not every GenericBinaryData section is a voice pack.
-      if (name == kokoro::kEspeakNgSectionName) continue;
+      if (name == kokoro::kEspeakNgSectionName ||
+          absl::EndsWith(name, kTextNormSectionSuffix) ||
+          absl::EndsWith(name, kLexiconSectionSuffix)) {
+        continue;
+      }
       std::string voice = kokoro::VoiceNameFromIdentifier(name);
       if (!voice.empty()) {
         voices.push_back(std::move(voice));
       }
     }
   }
+
   if (!model_folder.empty()) {
     std::filesystem::path base_path = std::string(model_folder);
     std::error_code ec;
