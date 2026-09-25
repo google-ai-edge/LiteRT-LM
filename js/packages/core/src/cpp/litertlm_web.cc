@@ -203,13 +203,18 @@ static absl::StatusOr<std::vector<litert::lm::InputData>> ParseInputData(
   return contents;
 }
 
+#ifdef LITERTLM_WASM_JSPI
+#define LITERTLM_EM_ASYNC , emscripten::async()
+#else
+#define LITERTLM_EM_ASYNC
+#endif
+
 EMSCRIPTEN_BINDINGS(litertlm_web) {
   emscripten::function("setupLogging", &SetupLogging);
   emscripten::function("setErrorReporter", &litert_web::SetErrorReporter);
   emscripten::function("clearStoredWeightsStreams", optional_override([]() {
                          UnwrapStatus(litert::lm::ClearStoredWeightsStreams());
-                       }),
-                       emscripten::async());
+                       }) LITERTLM_EM_ASYNC);
 
   emscripten::enum_<litert::lm::Backend>("Backend")
       .value("UNSPECIFIED", litert::lm::Backend::UNSPECIFIED)
@@ -399,8 +404,7 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
                     kAdvancedLiteRTCompiledModel,
                 engine_settings, input_prompt_as_hint));
           }),
-          emscripten::return_value_policy::take_ownership(),
-          emscripten::async())
+          emscripten::return_value_policy::take_ownership() LITERTLM_EM_ASYNC)
       .class_function(
           "createStreaming",
           optional_override([](litert::lm::EngineSettings& engine_settings,
@@ -409,8 +413,7 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
                 litert::lm::EngineFactory::EngineType::kAdvancedLegacyTfLite,
                 engine_settings, input_prompt_as_hint));
           }),
-          emscripten::return_value_policy::take_ownership(),
-          emscripten::async())
+          emscripten::return_value_policy::take_ownership() LITERTLM_EM_ASYNC)
       // We intentionally copy this value since embind does not handle const
       // references well.
       .function("getEngineSettings", &litert::lm::Engine::GetEngineSettings)
@@ -418,8 +421,7 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
           "waitUntilDone", optional_override([](litert::lm::Engine& engine) {
             UnwrapStatus(
                 engine.WaitUntilDone(litert::lm::Engine::kDefaultTimeout));
-          }),
-          emscripten::async())
+          }) LITERTLM_EM_ASYNC)
       .function(
           "createSession",
           optional_override([](litert::lm::Engine& engine,
@@ -524,13 +526,11 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
               inputs.push_back(std::move(input_text));
             }
             return UnwrapStatus(session.RunPrefill(inputs));
-          }),
-          emscripten::async())
+          }) LITERTLM_EM_ASYNC)
       .function("runDecode",
                 optional_override([](litert::lm::Engine::Session& session) {
                   return UnwrapStatusOr(session.RunDecode());
-                }),
-                emscripten::async())
+                }) LITERTLM_EM_ASYNC)
       .function("cancelProcess", &litert::lm::Engine::Session::CancelProcess)
       .function("clone",
                 optional_override([](litert::lm::Engine::Session& session) {
@@ -602,16 +602,14 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
             return UnwrapStatusOr(
                 litert::lm::Conversation::Create(engine, config));
           }),
-          emscripten::return_value_policy::take_ownership(),
-          emscripten::async())
+          emscripten::return_value_policy::take_ownership() LITERTLM_EM_ASYNC)
       .function("sendMessage",
                 optional_override([](litert::lm::Conversation& conversation,
                                      std::string message_json) {
                   auto message = nlohmann::ordered_json::parse(message_json);
                   auto result = conversation.SendMessage(message);
                   return UnwrapStatusOr(result).dump();
-                }),
-                emscripten::async())
+                }) LITERTLM_EM_ASYNC)
       .function(
           "sendMessageAsync",
           optional_override([](litert::lm::Conversation& conversation,
@@ -636,8 +634,7 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
                   }
                 });
             UnwrapStatus(status);
-          }),
-          emscripten::async())
+          }) LITERTLM_EM_ASYNC)
       .function(
           "getHistory",
           optional_override([](const litert::lm::Conversation& conversation) {
@@ -815,8 +812,7 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
             return UnwrapStatusOr(
                 litert::lm::EmbeddingEngineImpl::Create(std::move(settings)));
           }),
-          emscripten::return_value_policy::take_ownership(),
-          emscripten::async())
+          emscripten::return_value_policy::take_ownership() LITERTLM_EM_ASYNC)
       .function(
           "computeEmbedding",
           optional_override([](litert::lm::EmbeddingEngine& engine,
@@ -825,8 +821,7 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
             auto options = ParseEmbeddingOptions(options_val);
             auto contents = UnwrapStatusOr(ParseInputData(input_val));
             return UnwrapStatusOr(engine.ComputeEmbedding(contents, options));
-          }),
-          emscripten::async())
+          }) LITERTLM_EM_ASYNC)
       .function(
           "computeEmbeddingBatch",
           optional_override([](litert::lm::EmbeddingEngine& engine,
@@ -847,8 +842,7 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
             }
             return UnwrapStatusOr(
                 engine.ComputeEmbeddingBatch(batch_contents, options));
-          }),
-          emscripten::async());
+          }) LITERTLM_EM_ASYNC);
 }
 }  // namespace litertlm_web
 #endif  // __EMSCRIPTEN__
