@@ -54,13 +54,19 @@ class TtsSession : public OmniSession {
   // Flushes remaining synthesized audio at stream end.
   absl::StatusOr<Output> Flush() override;
 
-  // Processes the next synthesized audio chunk synchronously from `text_source`
-  // and returns `OmniSession::Output` (`AudioOutput`).
-  // Returns absl::OutOfRangeError when synthesis stream ends.
+  // Synchronously synthesizes pending text from `text_source` using the
+  // session's thread pool and returns the concatenated `OmniSession::Output`
+  // (`AudioOutput`), then resets the session.
+  // TODO(b/538727793): Drive stages inline chunk-by-chunk without calling
+  // `Finish()` and `Reset()` inside `ProcessNext()`.
+  // Returns `absl::OutOfRangeError` when no audio is produced.
   absl::StatusOr<Output> ProcessNext() override;
 
   // Processes the TTS stream asynchronously using the session's thread pool and
   // emits `OmniSession::Output` (`AudioOutput`) chunks to `callback`.
+  // Returns `absl::AlreadyExistsError` if async processing is already active
+  // (in which case newly pushed text is synthesized into the active stream's
+  // callback).
   absl::Status ProcessAsync(OutputCallback callback) override;
 
   // Returns the session's `StreamTextSource` stage.

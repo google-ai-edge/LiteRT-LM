@@ -94,7 +94,8 @@ void TtsSession::Reset() {
 }
 
 absl::StatusOr<OmniSession::Output> TtsSession::ProcessNext() {
-  // TODO(byungchul): Remove Finish() and Reset() here.
+  // TODO(b/538727793): Remove Finish() and Reset() here and drive stages
+  // inline.
   absl::Cleanup reset_cleanup = [this] { Reset(); };
   components_.text_source->Finish();
 

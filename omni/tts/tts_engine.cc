@@ -24,6 +24,7 @@
 #include <variant>
 #include <vector>
 
+#include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/match.h"  // from @com_google_absl
@@ -319,9 +320,25 @@ std::string TtsEngine::GetDefaultVoice(absl::string_view language) const {
   return "";
 }
 
+TextChunkConfig TtsEngine::ResolveTextChunkConfig(
+    const TtsSessionConfig& session_config) const {
+  if (const auto* config =
+          std::get_if<KokoroModelConfig>(&settings_.model_config)) {
+    KokoroModelConfig session_model_config = *config;
+    const std::string kokoro_lang =
+        ToKokoroLanguageCode(session_config.language);
+    if (!kokoro_lang.empty()) {
+      session_model_config.language = kokoro_lang;
+    }
+    return ReviseTextChunkConfigForKokoro(session_model_config,
+                                          session_config.text_chunk_config);
+  }
+  return session_config.text_chunk_config;
+}
+
 absl::StatusOr<std::unique_ptr<TtsSession>> TtsEngine::CreateSession(
     const TtsSessionConfig& session_config,
-    std::unique_ptr<StreamTextSource> text_source) {
+    std::unique_ptr<StreamTextSource> absl_nullable text_source) {
   if (session_config.language.empty()) {
     return absl::InvalidArgumentError(
         "TtsSessionConfig::language must not be empty.");
@@ -330,6 +347,11 @@ absl::StatusOr<std::unique_ptr<TtsSession>> TtsEngine::CreateSession(
   if (kokoro_lang.empty()) {
     return absl::InvalidArgumentError(
         absl::StrCat("Unsupported language: '", session_config.language, "'"));
+  }
+
+  if (text_source == nullptr) {
+    text_source = std::make_unique<StreamTextSource>(
+        ResolveTextChunkConfig(session_config));
   }
 
   TtsSession::Components components;
@@ -366,12 +388,6 @@ absl::StatusOr<std::unique_ptr<TtsSession>> TtsEngine::CreateSession(
     session_model_config.voice_name = resolved_voice;
     session_model_config.language = kokoro_lang;
 
-    if (text_source == nullptr) {
-      text_source =
-          std::make_unique<StreamTextSource>(ReviseTextChunkConfigForKokoro(
-              session_model_config, session_config.text_chunk_config));
-    }
-
     LITERT_ASSIGN_OR_RETURN(
         components,
         CreateKokoroComponents(session_model_config, settings_.model_folder,
@@ -390,10 +406,6 @@ absl::StatusOr<std::unique_ptr<TtsSession>> TtsEngine::CreateSession(
     const std::string resolved_voice = session_config.voice.value_or("");
     if (!resolved_voice.empty()) {
       session_model_config.speaker_file = resolved_voice;
-    }
-    if (text_source == nullptr) {
-      text_source =
-          std::make_unique<StreamTextSource>(session_config.text_chunk_config);
     }
     LITERT_ASSIGN_OR_RETURN(
         components,

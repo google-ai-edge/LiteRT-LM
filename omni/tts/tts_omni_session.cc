@@ -25,8 +25,6 @@
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "omni/omni_session.h"
-#include "omni/tts/kokoro/kokoro_factory.h"
-#include "omni/tts/kokoro/kokoro_model_config.h"
 #include "omni/tts/stream_text_source.h"
 #include "omni/tts/text_chunk_utils.h"
 #include "omni/tts/tts_engine.h"
@@ -62,6 +60,15 @@ class TextInputSource : public StreamTextSource {
     SetState(State::kRunning);
     absl::Cleanup cleanup = [this] { SetState(State::kIdle); };
 
+    // TODO(b/538727793): Handle two edge cases between `TextInputSource` and
+    // `StreamTextSource`:
+    // 1. Streaming partial fragments in `ProcessAsync()` without a sentence
+    //    delimiter before `EndOfInput` is pushed, so
+    //    `!input_source_->HasOutput()` waits for more `TextInput`s instead of
+    //    returning `OutOfRangeError`.
+    // 2. Coalescing multiple consecutive `TextInput`s before `ProcessNext()`
+    //    (where `TtsSession::ProcessNext()` currently calls `Finish()`
+    //    upfront).
     while (!StreamTextSource::NeedScheduleInternal()) {
       if (input_source_->NeedSchedule()) {
         ABSL_RETURN_IF_ERROR(input_source_->Schedule());
@@ -116,14 +123,9 @@ TtsOmniSessionFactory::TtsOmniSessionFactory(
 absl::StatusOr<std::unique_ptr<OmniSession>> TtsOmniSessionFactory::Create(
     std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source) {
   TtsSessionConfig session_config;
-  TextChunkConfig text_chunk_config = session_config.text_chunk_config;
-  if (const auto* kokoro_config = std::get_if<KokoroModelConfig>(
-          &tts_engine_->settings().model_config)) {
-    text_chunk_config =
-        ReviseTextChunkConfigForKokoro(*kokoro_config, text_chunk_config);
-  }
-  auto text_source = CreateTextInputSource(std::move(input_source),
-                                           std::move(text_chunk_config));
+  auto text_source = CreateTextInputSource(
+      std::move(input_source),
+      tts_engine_->ResolveTextChunkConfig(session_config));
   return tts_engine_->CreateSession(session_config, std::move(text_source));
 }
 

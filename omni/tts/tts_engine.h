@@ -22,6 +22,7 @@
 #include <variant>
 #include <vector>
 
+#include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/functional/any_invocable.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
@@ -120,10 +121,19 @@ class TtsEngine {
 
   ~TtsEngine() = default;
 
+  // Resolves the `TextChunkConfig` for `session_config`, applying any
+  // model-specific revisions (such as Kokoro delimiter/buffer size defaults).
+  TextChunkConfig ResolveTextChunkConfig(
+      const TtsSessionConfig& session_config = {}) const;
+
   // Creates a lightweight TtsSession for a synthesis stream.
+  // If `text_source` is null, a `StreamTextSource` is created using
+  // `ResolveTextChunkConfig(session_config)`. If a custom `text_source` is
+  // provided, its `TextChunkConfig` is used as-is (callers can use
+  // `ResolveTextChunkConfig()` when constructing `text_source`).
   absl::StatusOr<std::unique_ptr<TtsSession>> CreateSession(
       const TtsSessionConfig& session_config = {},
-      std::unique_ptr<StreamTextSource> text_source = nullptr);
+      std::unique_ptr<StreamTextSource> absl_nullable text_source = nullptr);
 
   // Returns the list of available languages in BCP-47 format (e.g., "en-US",
   // "es", "zh-CN") supported by the engine and its available voices.

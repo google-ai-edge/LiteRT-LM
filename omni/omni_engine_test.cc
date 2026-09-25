@@ -190,12 +190,21 @@ TEST(PushInputSourceTest, PushScheduleAndReset) {
 
   ASSERT_OK(source.PushInput(OmniSession::TextInput{.text = "First"}));
   ASSERT_OK(source.PushInput(OmniSession::TextInput{.text = "Second"}));
+  source.Finish();
   EXPECT_FALSE(source.NeedSchedule());
 
   ASSERT_TRUE(source.HasOutput());
-  auto out = source.GetOutput();
-  ASSERT_OK(out);
-  EXPECT_EQ(std::get<OmniSession::TextInput>(*out).text, "First");
+  auto out1 = source.GetOutput();
+  ASSERT_OK(out1);
+  EXPECT_EQ(std::get<OmniSession::TextInput>(*out1).text, "First");
+
+  auto out2 = source.GetOutput();
+  ASSERT_OK(out2);
+  EXPECT_EQ(std::get<OmniSession::TextInput>(*out2).text, "Second");
+
+  auto out3 = source.GetOutput();
+  ASSERT_OK(out3);
+  EXPECT_TRUE(std::holds_alternative<OmniSession::EndOfInput>(*out3));
 
   source.Reset();
   EXPECT_FALSE(source.NeedSchedule());

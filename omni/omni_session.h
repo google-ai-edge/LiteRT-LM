@@ -55,7 +55,8 @@ class OmniSession {
     std::vector<float> pcm_samples;
   };
 
-  // Unified input variant for InputSource.
+  // Unified input variant for InputSource. Note that `EndOfInput` is the first
+  // alternative, so a default-constructed `Input` represents `EndOfInput`.
   using Input =
       std::variant<EndOfInput, TextInput, AudioInputMetadata, AudioInput>;
 
@@ -66,6 +67,10 @@ class OmniSession {
   };
 
   // Sentinel output indicating the end of the output stream.
+  // TODO(b/538727793): Define synchronous/streaming `EndOfOutput` semantics.
+  // Currently sessions signal end-of-stream via `absl::OutOfRangeError`. Note
+  // that `EndOfOutput` is the first alternative of `Output`, so a
+  // default-constructed `Output` represents `EndOfOutput`.
   struct EndOfOutput {};
 
   using TextOutput = asr::TextMerger::MergeResult;
@@ -85,27 +90,38 @@ class OmniSession {
   virtual absl::StatusOr<Output> Flush() = 0;
 
   // Synchronously processes the next available output chunk from the session's
-  // `InputSource`. Returns `absl::OutOfRangeError` when the input source is
-  // exhausted and no further output can be produced without new inputs.
+  // `InputSource`. Returns `absl::NotFoundError` when no output is ready yet
+  // (more input is needed), and `absl::OutOfRangeError` when the input source
+  // is exhausted and the stream has ended.
   virtual absl::StatusOr<Output> ProcessNext() = 0;
 
   // Asynchronously processes inputs from the session's `InputSource` using the
   // underlying session's thread pool and emits `Output` chunks to `callback`.
+  // Returns `absl::AlreadyExistsError` if async processing is already active.
   virtual absl::Status ProcessAsync(OutputCallback callback) = 0;
 };
 
-// An `OmniSession::InputSource` implementation that pushes `OmniSession::Input`
-// chunks to an `OmniSession`.
+// An `OmniSession::InputSource` implementation that queues `OmniSession::Input`
+// chunks for consumption by an `OmniSession`.
+//
+// Note: When used with `ProcessAsync()`, callers should push initial inputs
+// before starting `ProcessAsync()`, as an empty input queue with no running
+// stages signals `absl::OutOfRangeError` (end of stream) to the scheduler.
 class PushInputSource : public OmniSession::InputSource {
  public:
   PushInputSource() = default;
   ~PushInputSource() override = default;
 
   // Appends an `OmniSession::Input` chunk to be consumed by the session.
+  // Always returns `absl::OkStatus()` for an unbounded in-memory queue
+  // (returns `absl::Status` to allow future bounded-queue / validation errors).
   absl::Status PushInput(OmniSession::Input input) {
     PushOutput(std::move(input));
     return absl::OkStatus();
   }
+
+  // Signals the end of the input stream by pushing `OmniSession::EndOfInput`.
+  void Finish() { PushOutput(OmniSession::EndOfInput{}); }
 
  protected:
   // Data has already been pushed into the output queue in PushInput().

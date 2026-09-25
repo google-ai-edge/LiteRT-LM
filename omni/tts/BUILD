@@ -194,6 +194,7 @@ cc_library(
         ":stream_text_source",
         ":text_chunk_utils",
         ":tts_session",
+        "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/functional:any_invocable",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
@@ -231,8 +232,6 @@ cc_library(
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "//omni:omni_session",
-        "//omni/tts/kokoro:kokoro_factory",
-        "//omni/tts/kokoro:kokoro_model_config",
     ],
 )
 

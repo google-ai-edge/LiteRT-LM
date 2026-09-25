@@ -132,7 +132,9 @@ absl::Status AsrSession::ProcessAsync(OutputCallback callback) {
       -> absl::Status {
     if (absl::IsOutOfRange(result.status())) {
       ABSL_RETURN_IF_ERROR(components_.text_merger->Flush());
-      ABSL_RETURN_IF_ERROR(callback(components_.text_merger->GetOutput()));
+      if (components_.text_merger->HasOutput()) {
+        ABSL_RETURN_IF_ERROR(callback(components_.text_merger->GetOutput()));
+      }
     }
     return callback(std::move(result));
   };

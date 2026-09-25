@@ -14,6 +14,7 @@
 
 #include "omni/asr/asr_omni_session.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <memory>
 #include <utility>
@@ -43,9 +44,11 @@ class AudioInputSource : public AudioSource {
       : input_source_(std::move(input_source)),
         sample_rate_hz_(sample_rate_hz),
         num_channels_(num_channels),
-        samples_per_interval_(static_cast<size_t>(samples_per_interval)),
+        samples_per_interval_(
+            static_cast<size_t>(std::max(1, samples_per_interval))),
         overlap_samples_(overlap_samples > 0 &&
-                                 overlap_samples < samples_per_interval
+                                 static_cast<size_t>(overlap_samples) <
+                                     samples_per_interval_
                              ? static_cast<size_t>(overlap_samples)
                              : 0) {}
 
@@ -82,6 +85,10 @@ class AudioInputSource : public AudioSource {
         if (buffer_.empty()) {
           return absl::OutOfRangeError("End of audio stream reached.");
         }
+        // Zero-pad any remaining samples in `buffer_` (including retained
+        // overlap samples from the previous chunk) to `samples_per_interval_`
+        // and emit a final chunk so the recognizer can process the tail with
+        // trailing silence context.
         buffer_.resize(samples_per_interval_, 0.0f);
         std::vector<float> output;
         std::swap(output, buffer_);
