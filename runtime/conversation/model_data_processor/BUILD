@@ -53,6 +53,7 @@ cc_library(
     srcs = ["data_utils.cc"],
     hdrs = ["data_utils.h"],
     deps = [
+        "@com_google_absl//absl/functional:function_ref",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",

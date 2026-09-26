@@ -17,7 +17,9 @@
 
 #include <memory>
 #include <optional>
+#include <string>
 
+#include "absl/functional/function_ref.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "nlohmann/json_fwd.hpp"  // from @nlohmann_json
@@ -83,6 +85,22 @@ absl::StatusOr<nlohmann::ordered_json> ResponseTextToMessage(
     absl::string_view response_text, const std::optional<Preface>& preface,
     absl::string_view code_fence_start, absl::string_view code_fence_end,
     SyntaxType syntax_type, const ParserOptions& options);
+
+// Formats a message's "tool_calls" array by applying `format_value` to each
+// argument value in each function call object.
+absl::StatusOr<nlohmann::ordered_json> FormatToolCalls(
+    const nlohmann::ordered_json& tool_calls,
+    absl::FunctionRef<
+        absl::StatusOr<std::string>(const nlohmann::ordered_json&)>
+        format_value);
+
+// Validates that `tools` is a JSON array and formats each tool entry using
+// `format_tool`.
+absl::StatusOr<nlohmann::ordered_json> FormatToolsArray(
+    const nlohmann::ordered_json& tools,
+    absl::FunctionRef<
+        absl::StatusOr<std::string>(const nlohmann::ordered_json&)>
+        format_tool);
 
 }  // namespace litert::lm
 
