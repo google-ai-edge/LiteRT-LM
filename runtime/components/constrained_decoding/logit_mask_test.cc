@@ -512,6 +512,81 @@ TEST_P(LogitMaskParamTest, NestedCompositeMaskWorks) {
   });
 }
 
+TEST_P(LogitMaskParamTest, BitmapApplyMultiWordMixedZeroAndPartial) {
+  constexpr int kVocabSize = 150;
+  constexpr int kLogitsSize = 160;
+  // Word 0 (0..63): all disallowed (word == 0)
+  // Word 1 (64..127): tokens 64, 100, and 127 (bit 63 of word 1) allowed
+  // Word 2 (128..149, count=22): tokens 130 and 149 allowed
+  std::vector<int> allowed = {64, 100, 127, 130, 149};
+  auto mask = BitmapLogitMask::CreateFromAllowedTokens(
+      kVocabSize, absl::MakeConstSpan(allowed));
+
+  RunWithParam([&](auto dummy_type) {
+    using T = decltype(dummy_type);
+    std::vector<T> logits(kLogitsSize);
+    for (int i = 0; i < kLogitsSize; ++i) {
+      logits[i] = static_cast<T>(static_cast<float>(i + 1));
+    }
+
+    EXPECT_OK(mask->Apply(absl::MakeSpan(logits)));
+
+    for (int i = 0; i < kLogitsSize; ++i) {
+      bool is_allowed =
+          (i == 64 || i == 100 || i == 127 || i == 130 || i == 149);
+      if (is_allowed) {
+        EXPECT_FLOAT_EQ(static_cast<float>(logits[i]),
+                        static_cast<float>(i + 1));
+      } else if constexpr (std::is_same_v<T, float>) {
+        EXPECT_TRUE(std::isinf(logits[i]) && logits[i] < 0.0f) << "i=" << i;
+      } else {
+        EXPECT_EQ(logits[i], tflite::half::min()) << "i=" << i;
+      }
+    }
+  });
+}
+
+TEST_P(LogitMaskParamTest, CompositeApplyMultiWordMixedZeroAndPartial) {
+  constexpr int kVocabSize = 150;
+  constexpr int kLogitsSize = 160;
+  // Mask 1 allows {64, 100, 127, 130, 149}
+  std::vector<int> allowed1 = {64, 100, 127, 130, 149};
+  auto bm1 = BitmapLogitMask::CreateFromAllowedTokens(
+      kVocabSize, absl::MakeConstSpan(allowed1));
+
+  // Mask 2 allows {10, 100, 127, 149} -> intersection is {100, 127, 149}
+  // Word 0 has fused_word == 0.
+  std::vector<int> allowed2 = {10, 100, 127, 149};
+  auto bm2 = BitmapLogitMask::CreateFromAllowedTokens(
+      kVocabSize, absl::MakeConstSpan(allowed2));
+
+  CompositeLogitMask composite;
+  composite.AddMask(std::move(bm1));
+  composite.AddMask(std::move(bm2));
+
+  RunWithParam([&](auto dummy_type) {
+    using T = decltype(dummy_type);
+    std::vector<T> logits(kLogitsSize);
+    for (int i = 0; i < kLogitsSize; ++i) {
+      logits[i] = static_cast<T>(static_cast<float>(i + 1));
+    }
+
+    EXPECT_OK(composite.Apply(absl::MakeSpan(logits)));
+
+    for (int i = 0; i < kLogitsSize; ++i) {
+      bool is_allowed = (i == 100 || i == 127 || i == 149);
+      if (is_allowed) {
+        EXPECT_FLOAT_EQ(static_cast<float>(logits[i]),
+                        static_cast<float>(i + 1));
+      } else if constexpr (std::is_same_v<T, float>) {
+        EXPECT_TRUE(std::isinf(logits[i]) && logits[i] < 0.0f) << "i=" << i;
+      } else {
+        EXPECT_EQ(logits[i], tflite::half::min()) << "i=" << i;
+      }
+    }
+  });
+}
+
 INSTANTIATE_TEST_SUITE_P(LogitMaskParamTests, LogitMaskParamTest,
                          ::testing::Values(LogitsVariant::kFloat,
                                            LogitsVariant::kHalf));
