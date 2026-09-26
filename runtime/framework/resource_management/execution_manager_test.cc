@@ -1551,6 +1551,66 @@ TEST_P(ExecutionManagerTest, AddTextScoringTask) {
   EXPECT_FLOAT_EQ(scores[0], 0.0f);
 }
 
+TEST_P(ExecutionManagerTest, AddTextScoringTaskStepProgression) {
+  CreateExecutionManager(CreateDefaultFakeLlmExecutor());
+  ASSERT_OK_AND_ASSIGN(auto session_config, CreateDefaultSessionConfig());
+  ASSERT_OK_AND_ASSIGN(const SessionId session_id,
+                       execution_manager_->RegisterNewSession(session_config));
+  ASSERT_OK_AND_ASSIGN(auto session_info,
+                       execution_manager_->GetSessionInfo(session_id));
+
+  // Prefill 3 tokens.
+  std::vector<InputData> inputs;
+  ASSERT_OK_AND_ASSIGN(auto input_text,
+                       tokenizer_->TokenIdsToTensorBuffer({1, 2, 3}));
+  inputs.push_back(InputText(std::move(input_text)));
+  ASSERT_OK_AND_ASSIGN(const TaskId prefill_task_id,
+                       execution_manager_->GetNewTaskId());
+  ASSERT_OK(execution_manager_->AddPrefillTask(
+      session_id, prefill_task_id, std::move(inputs),
+      /*dependency_task_ids=*/{},
+      /*cancelled=*/std::make_shared<std::atomic<bool>>(false),
+      /*callback=*/[](absl::StatusOr<Responses> responses) {}));
+  ASSERT_OK(
+      execution_manager_->WaitUntilDone(prefill_task_id, absl::Seconds(3)));
+
+  // After prefill, current step must be 3.
+  ASSERT_OK_AND_ASSIGN(int step_after_prefill,
+                       execution_manager_->GetCurrentStep(*session_info));
+  EXPECT_EQ(step_after_prefill, 3);
+
+  // Score candidate "45" (2 tokens: 4 and 5).
+  ASSERT_OK_AND_ASSIGN(const TaskId scoring_task_id,
+                       execution_manager_->GetNewTaskId());
+  const std::vector<absl::string_view> target_text = {"45"};
+  EXPECT_CALL(*tokenizer_, TextToTokenIds("45"))
+      .WillOnce(Return(std::vector<int>({4, 5})));
+
+  std::vector<float> scores;
+  ASSERT_OK(execution_manager_->AddTextScoringTask(
+      session_id, scoring_task_id,
+      /*dep_tasks=*/{}, target_text,
+      /*store_token_lengths=*/false,
+      /*cancelled=*/std::make_shared<std::atomic<bool>>(false),
+      [&scores](absl::StatusOr<Responses> responses) {
+        ASSERT_OK(responses);
+        if (!responses->GetScores().empty()) {
+          scores.push_back(responses->GetScores()[0]);
+        }
+      }));
+  EXPECT_OK(
+      execution_manager_->WaitUntilDone(scoring_task_id, absl::Seconds(3)));
+
+  ASSERT_EQ(scores.size(), 1);
+  EXPECT_FLOAT_EQ(scores[0], 0.0f);
+
+  // After scoring 2 tokens, current step must progress to 5 without
+  // double-rewind.
+  ASSERT_OK_AND_ASSIGN(int step_after_scoring,
+                       execution_manager_->GetCurrentStep(*session_info));
+  EXPECT_EQ(step_after_scoring, 5);
+}
+
 TEST_P(ExecutionManagerTest, GetCurrentStep) {
   CreateExecutionManager(CreateDefaultFakeLlmExecutor());
   ASSERT_OK_AND_ASSIGN(auto session_config, CreateDefaultSessionConfig());
