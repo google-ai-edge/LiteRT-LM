@@ -119,6 +119,27 @@ cc_library(
 )
 
 cc_library(
+    name = "dmabuf_util",
+    srcs = ["dmabuf_util.cc"],
+    hdrs = ["dmabuf_util.h"],
+    deps = [
+        "@com_google_absl//absl/log:absl_log",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
+    ],
+)
+
+cc_test(
+    name = "dmabuf_util_test",
+    srcs = ["dmabuf_util_test.cc"],
+    deps = [
+        ":dmabuf_util",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/strings",
+    ],
+)
+
+cc_library(
     name = "io_types",
     srcs = ["io_types.cc"],
     hdrs = ["io_types.h"],
@@ -166,6 +187,7 @@ cc_library(
     srcs = ["litert_lm_lib.cc"],
     hdrs = ["litert_lm_lib.h"],
     deps = [
+        ":dmabuf_util",
         ":engine_factory",
         ":engine_impl_selected",
         ":engine_interface",
@@ -304,6 +326,7 @@ cc_binary(
         "//conditions:default": [],
     }),
     deps = [
+        ":dmabuf_util",
         ":io_types",
         ":litert_lm_lib",
         ":shared_flags",
@@ -341,6 +364,7 @@ cc_library(
     srcs = ["embedding_litert_lm_lib.cc"],
     hdrs = ["embedding_litert_lm_lib.h"],
     deps = [
+        ":dmabuf_util",
         ":embedding_engine",
         ":embedding_engine_settings",
         ":io_types",
@@ -368,6 +392,16 @@ cc_library(
         "//support/preprocessor:audio_preprocessor_miniaudio",  # buildcleaner: keep
         "//support/preprocessor:image_preprocessor_impl",  # buildcleaner: keep
         "@litert//tflite/profiling:memory_usage_monitor",
+    ],
+)
+
+cc_test(
+    name = "embedding_litert_lm_lib_test",
+    srcs = ["embedding_litert_lm_lib_test.cc"],
+    deps = [
+        ":embedding_litert_lm_lib",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
     ],
 )
 

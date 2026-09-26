@@ -22,6 +22,16 @@
 
 #include "runtime/engine/embedding_litert_lm_lib.h"
 
+#if defined(__ANDROID__)
+#include <dirent.h>
+#include <sys/stat.h>
+#include <unordered_map>
+
+#include "absl/strings/ascii.h"  // from @com_google_absl
+#include "absl/strings/match.h"  // from @com_google_absl
+#include "runtime/engine/dmabuf_util.h"
+#endif
+
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -53,6 +63,7 @@
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "runtime/components/model_resources.h"
 #include "runtime/core/embedding_engine_impl.h"
+
 #include "runtime/engine/embedding_engine.h"
 #include "runtime/engine/embedding_engine_settings.h"
 #include "runtime/engine/io_types.h"
@@ -70,7 +81,6 @@ namespace {
 
 using ::litert::lm::ActivationDataType;
 using ::litert::lm::Backend;
-using ::litert::lm::BuildLiteRtCompiledModelResources;
 using ::litert::lm::EmbeddingEngineImpl;
 using ::litert::lm::EmbeddingEngineSettings;
 using ::litert::lm::EmbeddingOptions;
@@ -208,20 +218,25 @@ bool ParseBool(absl::string_view value) {
 
 void StopAndReportPeakMemoryUsage(
     tflite::profiling::memory::MemoryUsageMonitor* mem_monitor,
-    std::string* report_out) {
-  if (mem_monitor == nullptr) {
+    bool report_peak_memory_footprint, std::string* report_out) {
+  if (!report_peak_memory_footprint) {
     return;
   }
-  mem_monitor->Stop();
-  const float peak_ram_mb = mem_monitor->GetPeakPrivateFootprintInMB();
-  if (peak_ram_mb ==
-      tflite::profiling::memory::MemoryUsageMonitor::kInvalidMemUsageMB) {
-    return;
+  if (mem_monitor != nullptr) {
+    mem_monitor->Stop();
+    const float peak_ram_mb = mem_monitor->GetPeakPrivateFootprintInMB();
+    if (peak_ram_mb !=
+        tflite::profiling::memory::MemoryUsageMonitor::kInvalidMemUsageMB) {
+      ABSL_LOG(INFO) << absl::StrFormat("Peak system ram usage: %.2f MB",
+                                        peak_ram_mb);
+      Emit(report_out,
+           absl::StrFormat("Peak system ram usage: %.2f MB", peak_ram_mb));
+    }
   }
-  ABSL_LOG(INFO) << absl::StrFormat("Peak system ram usage: %.2f MB",
-                                    peak_ram_mb);
-  Emit(report_out,
-       absl::StrFormat("Peak system ram usage: %.2f MB", peak_ram_mb));
+
+#if defined(__ANDROID__)
+  LogDmaBufUsage(GetProcessDmaBufUsage(), report_out);
+#endif  // defined(__ANDROID__)
 }
 
 }  // namespace
@@ -510,6 +525,9 @@ absl::Status RunEmbedding(const EmbeddingLiteRtLmSettings& run_settings,
       .normalize = run_settings.normalize,
       .input_overflow_strategy = overflow_strategy,
   };
+  if (run_settings.visual_token_budget > 0) {
+    options.vision_tokens_per_image = run_settings.visual_token_budget;
+  }
 
   if (is_benchmark) {
     const int num_warmup = run_settings.num_warmup;
@@ -574,7 +592,9 @@ absl::Status RunEmbedding(const EmbeddingLiteRtLmSettings& run_settings,
         absl::StrFormat("Average Latency: %.2f ms (min: %.2f ms, max: %.2f ms)",
                         avg_ms, min_ms, max_ms));
 
-    StopAndReportPeakMemoryUsage(mem_monitor.get(), report_out);
+    StopAndReportPeakMemoryUsage(mem_monitor.get(),
+                                 run_settings.report_peak_memory_footprint,
+                                 report_out);
     Emit(report_out, absl::StrCat("Embedding vector dimension: ",
                                   last_response.embedding.size()));
     if (const std::string compare_path = run_settings.compare_embedding_path;
@@ -600,7 +620,8 @@ absl::Status RunEmbedding(const EmbeddingLiteRtLmSettings& run_settings,
   EmbeddingResponse response = *std::move(response_result);
 
   Emit(report_out, "\n================ RESULT ================");
-  StopAndReportPeakMemoryUsage(mem_monitor.get(), report_out);
+  StopAndReportPeakMemoryUsage(
+      mem_monitor.get(), run_settings.report_peak_memory_footprint, report_out);
   Emit(report_out, absl::StrCat("Input length: ", response.input_length));
   if (response.truncated_length.has_value()) {
     Emit(report_out,
