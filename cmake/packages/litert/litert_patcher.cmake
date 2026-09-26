@@ -266,11 +266,32 @@ set(_tensor_example_cmakelists
 foreach(_tensor_cmakelist IN LISTS _tensor_example_cmakelists)
     set(_cmakelist_path "${_tensor_cmakelist}")
     if(EXISTS "${_cmakelist_path}")
-        message(STATUS "[LiteRTLM] Neutralizing ${_tensor_cmakelist}")
         file(READ "${_cmakelist_path}" CONTENT)
-        file(WRITE "${_cmakelist_path}" "return()\n${CONTENT}")
+        if(NOT CONTENT MATCHES "^return\\(\\)")
+            message(STATUS "[LiteRTLM] Neutralizing ${_tensor_cmakelist}")
+            file(WRITE "${_cmakelist_path}" "return()\n${CONTENT}")
+        endif()
     endif()
 endforeach()
+
+set(_samsung_mgr_hdr "${LITERTLM_LITERT_SRC_DIR}/vendors/samsung/ai_litecore_manager.h")
+if(EXISTS "${_samsung_mgr_hdr}")
+    file(READ "${_samsung_mgr_hdr}" _samsung_content)
+    if(NOT _samsung_content MATCHES "namespace samsung_graphgen")
+        string(FIND "${_samsung_content}" "namespace {\n// Avoid enum name warning\n#include \"graphgen_c.h\"\n}  // namespace" _samsung_pos)
+        if(_samsung_pos EQUAL -1)
+            message(WARNING "[LiteRTLM] Notice: Target graphgen_c.h pattern not found in ${_samsung_mgr_hdr}; skipping patch.")
+        else()
+            string(REPLACE "namespace {\n// Avoid enum name warning\n#include \"graphgen_c.h\"\n}  // namespace"
+                           "namespace samsung_graphgen {\n// Avoid enum name warning\n#include \"graphgen_c.h\"\n}  // namespace samsung_graphgen\nusing GraphGenResult = samsung_graphgen::GraphGenResult;\nusing NNCBuffer = samsung_graphgen::NNCBuffer;"
+                           _samsung_content "${_samsung_content}")
+            string(REPLACE "namespace litert::samsung {"
+                           "namespace litert::samsung {\nusing samsung_graphgen::graphgen_create;\nusing samsung_graphgen::graphgen_release;\nusing samsung_graphgen::graphgen_initialize_context;\nusing samsung_graphgen::graphgen_generate;\nusing samsung_graphgen::graphgen_release_buffer;"
+                           _samsung_content "${_samsung_content}")
+            file(WRITE "${_samsung_mgr_hdr}" "${_samsung_content}")
+        endif()
+    endif()
+endif()
 
 message(STATUS "[LiteRTLM] Patching Phase Complete.")
 

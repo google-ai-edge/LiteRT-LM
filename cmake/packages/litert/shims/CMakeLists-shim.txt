@@ -109,56 +109,8 @@ if(LITERT_DISABLE_KLEIDIAI)
 endif()
 
 if(CMAKE_CROSSCOMPILING)
-  # Build or reuse a host flatc for cross compilation.
   if(NOT TFLITE_HOST_TOOLS_DIR)
-    set(_root_host_flatc_dir "${CMAKE_CURRENT_SOURCE_DIR}/../host_flatc_build")
-    if(EXISTS "${_root_host_flatc_dir}/_deps/flatbuffers-build/flatc")
-      set(TFLITE_HOST_TOOLS_DIR "${_root_host_flatc_dir}/_deps/flatbuffers-build" CACHE PATH "Host tools directory" FORCE)
-      message(STATUS "Reusing host flatc from ${TFLITE_HOST_TOOLS_DIR}")
-    else()
-      file(MAKE_DIRECTORY "${_root_host_flatc_dir}")
-      file(WRITE "${_root_host_flatc_dir}/CMakeLists.txt" "cmake_minimum_required(VERSION 3.16)\nproject(HostFlatc LANGUAGES C CXX)\ninclude(FetchContent)\n# [LiteRTLM] Suppressed: External fetch prohibited\nset(FLATBUFFERS_BUILD_TESTS OFF CACHE BOOL \"\" FORCE)\n# [LiteRTLM] Suppressed: Using Global Manifest\n")
-      set(_litert_host_flatc_cmake_args -S . -B . -DCMAKE_BUILD_TYPE=Release)
-      set(_litert_host_c_compiler "${LITERT_HOST_C_COMPILER}")
-      if(NOT _litert_host_c_compiler)
-        if(EXISTS "/usr/bin/clang")
-          set(_litert_host_c_compiler "/usr/bin/clang")
-        else()
-          find_program(_litert_host_c_compiler NAMES clang cc gcc)
-        endif()
-      endif()
-      if(_litert_host_c_compiler)
-        list(APPEND _litert_host_flatc_cmake_args -DCMAKE_C_COMPILER=${_litert_host_c_compiler})
-      endif()
-      set(_litert_host_cxx_compiler "${LITERT_HOST_CXX_COMPILER}")
-      if(NOT _litert_host_cxx_compiler)
-        if(EXISTS "/usr/bin/clang++")
-          set(_litert_host_cxx_compiler "/usr/bin/clang++")
-        else()
-          find_program(_litert_host_cxx_compiler NAMES clang++ c++ g++)
-        endif()
-      endif()
-      if(_litert_host_cxx_compiler)
-        list(APPEND _litert_host_flatc_cmake_args -DCMAKE_CXX_COMPILER=${_litert_host_cxx_compiler})
-      endif()
-      execute_process(
-        COMMAND ${CMAKE_COMMAND} ${_litert_host_flatc_cmake_args}
-        WORKING_DIRECTORY "${_root_host_flatc_dir}"
-        RESULT_VARIABLE HOSTCFG_RC
-        ERROR_VARIABLE HOSTCFG_ERR)
-      if(NOT HOSTCFG_RC EQUAL 0)
-        message(FATAL_ERROR "Failed to configure host flatbuffers:\n${HOSTCFG_ERR}")
-      endif()
-      execute_process(
-        COMMAND ${CMAKE_COMMAND} --build . --target flatc -- -j${CMAKE_BUILD_PARALLEL_LEVEL}
-        WORKING_DIRECTORY "${_root_host_flatc_dir}"
-        RESULT_VARIABLE HOSTBUILD_RC
-        ERROR_VARIABLE HOSTBUILD_ERR)
-      if(NOT HOSTBUILD_RC EQUAL 0)
-        message(FATAL_ERROR "Failed to build host flatc:\n${HOSTBUILD_ERR}")
-      endif()
-      set(TFLITE_HOST_TOOLS_DIR "${_root_host_flatc_dir}/_deps/flatbuffers-build" CACHE PATH "Host tools directory")
-    endif()
+    set(TFLITE_HOST_TOOLS_DIR "${FLATC_PATHS}" CACHE PATH "Host tools directory" FORCE)
   endif()
 endif()
 

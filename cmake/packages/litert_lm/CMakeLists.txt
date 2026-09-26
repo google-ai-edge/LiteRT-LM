@@ -319,7 +319,11 @@ if("${LITERTLM_ORCHESTRATION_PHASE}" STREQUAL "litert_lm")
             set(_LITERTLM_LINK_GROUP_END "-Wl,--end-group")
             set(_LITERTLM_LINK_WHOLE_START "-Wl,--whole-archive")
             set(_LITERTLM_LINK_WHOLE_END "-Wl,--no-whole-archive")
-            set(_LITERTLM_SYSLIBS "-lz" "-lrt" "-lpthread" "-ldl")
+            if(TARGET zlib_lib)
+                set(_LITERTLM_SYSLIBS "-lrt" "-lpthread" "-ldl")
+            else()
+                set(_LITERTLM_SYSLIBS "-lz" "-lrt" "-lpthread" "-ldl")
+            endif()
         endif()
     elseif(MSVC)
         # Windows Linker
@@ -351,6 +355,49 @@ if("${LITERTLM_ORCHESTRATION_PHASE}" STREQUAL "litert_lm")
             minja_lib
             zlib_lib
             antlr_lib
+            stb_lib
+            LiteRTLM::nlohmann_json::nlohmann_json
+            opencl_headers_lib
+
+            ${PYTHON3_LIB}
+
+            ${_LITERTLM_SYSLIBS}
+            ${_LITERTLM_LINK_GROUP_END}
+    )
+
+    add_executable(embedding_litert_lm_main
+        "${LITERTLM_GENERATED_SRC_DIR}/runtime/engine/embedding_litert_lm_main.cc")
+
+    if(TARGET litertlm_anchor)
+        add_dependencies(embedding_litert_lm_main litertlm_anchor)
+    endif()
+
+    target_include_directories(embedding_litert_lm_main PUBLIC
+        ${LITERTLM_INCLUDE_PATHS})
+
+    target_link_options(embedding_litert_lm_main PRIVATE
+        "LINKER:--export-dynamic-symbol=LiteRt*")
+
+    target_link_libraries(embedding_litert_lm_main
+        PUBLIC
+            ${_LITERTLM_LINK_MULTIDEF}
+            ${_LITERTLM_LINK_GROUP_START}
+
+            ${_LITERTLM_LINK_WHOLE_START}
+
+            ${_LITERTLM_ODML_EXPANDED_LIST}
+            ${_LITERTLM_CORE_EXPANDED_LIST}
+
+            ${_LITERTLM_LINK_WHOLE_END}
+
+            libpng_lib
+            kissfft_lib
+            miniaudio_lib
+            minizip_lib
+            minja_lib
+            zlib_lib
+            antlr_lib
+            stb_lib
             LiteRTLM::nlohmann_json::nlohmann_json
             opencl_headers_lib
 
