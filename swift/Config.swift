@@ -240,6 +240,8 @@ public struct ConversationConfig {
   ///   - enableToolCallStreaming: Whether to enable conversation tool call streaming.
   ///   - thinkingConfig: Optional configuration for thinking/reasoning generation.
   ///   - automaticToolCalling: Whether to enable automatic tool calling. Default is true.
+  ///   - toolsJsonOverride: Tool descriptions as one JSON array, passed through in place of the
+  ///     array `ToolManager` builds from `tools`. Default is nil.
   ///   - enableResponseFormat: Whether to enable response format (constrained decoding). Default
   ///     is false.
   ///   - visualTokenBudget: Visual token budget.

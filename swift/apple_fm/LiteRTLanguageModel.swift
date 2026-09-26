@@ -97,6 +97,11 @@
     /// an empty message, which Foundation Models reports as "Session ended
     /// without producing a response". The budget forces `</think>` after this
     /// many thinking tokens. Zero or negative disables the cap.
+    ///
+    /// The runtime installs the cap only with thinking enabled, so a budget
+    /// above zero also hands `enable_thinking` to the chat template. A template
+    /// that acts on it — gemma-4-E2B-it's does — then thinks on every plain
+    /// turn, within the cap; LFM2.5's template ignores the flag.
     public let thinkingTokenBudget: Int
 
     /// Build from an `EngineConfig` (the primary initializer). The whole config is
@@ -514,8 +519,8 @@
       let toolRounds: Int
     }
 
-    /// Chained tool calls allowed per user question before the model is made
-    /// to answer with what it has.
+    /// Tool calls allowed per user question — the first call and one chained
+    /// call — before the model is made to answer with what it has.
     static let maxToolRoundsPerQuestion = 2
 
     /// KV room a turn needs: its prompt, its generation, and the thinking
@@ -807,8 +812,9 @@
         // Cap invisible reasoning. Never `enableThinking: false` here: the
         // runtime only installs the budget constraint when thinking is
         // enabled — disabling it removes the cap and leaves the model free
-        // to think, unseen and unbounded (this template ignores the
-        // `enable_thinking` flag).
+        // to think, unseen and unbounded (LFM2.5's template ignores the
+        // `enable_thinking` flag; gemma-4's acts on it, see
+        // `thinkingTokenBudget`).
         thinkingConfig: model.thinkingTokenBudget > 0
           ? ThinkingConfig(enableThinking: true, thinkingTokenBudget: model.thinkingTokenBudget)
           : nil,
