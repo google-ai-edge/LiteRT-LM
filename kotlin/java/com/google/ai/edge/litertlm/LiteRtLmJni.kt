@@ -116,6 +116,7 @@ internal object LiteRtLmJni {
     loraPath: String?,
     audioLoraPath: String?,
     enableSpeculativeDecoding: Boolean?,
+    applyPromptTemplate: Boolean?,
   ): Long
 
   /**
@@ -142,6 +143,52 @@ internal object LiteRtLmJni {
    * @throws LiteRtLmJniException if the underlying native method fails.
    */
   external fun nativeRunDecode(sessionPointer: Long): String
+
+  /**
+   * Scores target texts as continuations of the input added by [nativeRunPrefill]. The runtime
+   * scores one target per call today and reports an error for more. Scoring consumes the target's
+   * tokens; rewind to score another target from the same position.
+   *
+   * @param sessionPointer A pointer to the native session instance.
+   * @param targetTexts The target texts to score.
+   * @param storeTokenLengths Whether to also return the token length of each target.
+   * @return One score per target (the target's log probability after the prefilled input) and,
+   *   when requested, the token lengths.
+   * @throws LiteRtLmJniException if the underlying native method fails.
+   */
+  external fun nativeRunTextScoring(
+    sessionPointer: Long,
+    targetTexts: Array<String>,
+    storeTokenLengths: Boolean,
+  ): TextScoringResponse
+
+  /**
+   * Saves the session's current step under [label]; an existing label is overwritten.
+   *
+   * @throws LiteRtLmJniException if the underlying native method fails.
+   */
+  external fun nativeSaveCheckpoint(sessionPointer: Long, label: String)
+
+  /**
+   * Rewinds the session to the step saved under [label]; checkpoints after that step are removed.
+   *
+   * @throws LiteRtLmJniException if the label does not exist or the native method fails.
+   */
+  external fun nativeRewindToCheckpoint(sessionPointer: Long, label: String)
+
+  /**
+   * Rewinds the session to a step number.
+   *
+   * @throws LiteRtLmJniException if the underlying native method fails.
+   */
+  external fun nativeRewindToStep(sessionPointer: Long, step: Int)
+
+  /**
+   * Returns the session's current step.
+   *
+   * @throws LiteRtLmJniException if the underlying native method fails.
+   */
+  external fun nativeGetCurrentStep(sessionPointer: Long): Int
 
   /**
    * Generates content from the given input data.

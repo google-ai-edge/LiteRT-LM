@@ -195,6 +195,7 @@ class Engine(val engineConfig: EngineConfig) : AutoCloseable {
           sessionConfig.loraConfig?.loraPath,
           sessionConfig.loraConfig?.audioLoraPath,
           sessionConfig.enableSpeculativeDecoding,
+          sessionConfig.applyPromptTemplate,
         )
       )
     }
