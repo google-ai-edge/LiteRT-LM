@@ -24,8 +24,10 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/str_join.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/util/logging.h"
 #include "runtime/util/status_macros.h"  // NOLINT
@@ -72,6 +74,39 @@ std::ostream& operator<<(std::ostream& os, const NpuConfig& config) {
      << "\n";
   os << "enable_npu_debug_logging: " << config.enable_npu_debug_logging << "\n";
   return os;
+}
+
+std::ostream& operator<<(std::ostream& os, GpuBackend backend) {
+  switch (backend) {
+    case GpuBackend::kDefault:
+      return os << "default";
+    case GpuBackend::kOpenCl:
+      return os << "opencl";
+    case GpuBackend::kOpenGl:
+      return os << "opengl";
+    case GpuBackend::kWebGpu:
+      return os << "webgpu";
+    default:
+      return os << "unknown";
+  }
+}
+
+absl::StatusOr<GpuBackend> GpuBackendFromString(absl::string_view name) {
+  if (name.empty() || absl::EqualsIgnoreCase(name, "default")) {
+    return GpuBackend::kDefault;
+  } else if (absl::EqualsIgnoreCase(name, "opencl") ||
+             absl::EqualsIgnoreCase(name, "cl")) {
+    return GpuBackend::kOpenCl;
+  } else if (absl::EqualsIgnoreCase(name, "opengl") ||
+             absl::EqualsIgnoreCase(name, "gl")) {
+    return GpuBackend::kOpenGl;
+  } else if (absl::EqualsIgnoreCase(name, "webgpu")) {
+    return GpuBackend::kWebGpu;
+  } else {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Unsupported GPU backend: ", name,
+        ". Supported backends are: [default, opencl, opengl, webgpu]"));
+  }
 }
 
 std::ostream& operator<<(std::ostream& os, const AdvancedSettings& settings) {
@@ -132,6 +167,7 @@ std::ostream& operator<<(std::ostream& os, const AdvancedSettings& settings) {
   }
   os << "error_on_invalid_sampled_token_id: "
      << settings.error_on_invalid_sampled_token_id << "\n";
+  os << "gpu_backend: " << settings.gpu_backend << "\n";
   return os;
 }
 

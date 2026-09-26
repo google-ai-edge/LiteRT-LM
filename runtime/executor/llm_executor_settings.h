@@ -31,6 +31,7 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "runtime/proto/sampler_params.pb.h"
 #include "runtime/executor/executor_settings_base.h"
 
@@ -162,6 +163,26 @@ struct NpuConfig {
   bool enable_npu_debug_logging = false;
 };
 std::ostream& operator<<(std::ostream& os, const NpuConfig& config);
+
+// Selects the GPU delegate backend at runtime for the GPU path.
+// kDefault preserves the build-time behavior: the WebGPU backend is used when
+// the binary is compiled with LITERT_USE_WEBGPU_ACCELERATOR, otherwise LiteRT's
+// default GPU backend is used. The other values force a specific backend
+// regardless of build flags, so a single binary can select CL / GL / WebGPU
+// via runtime options.
+enum class GpuBackend {
+  kDefault,
+  kOpenCl,
+  kOpenGl,
+  kWebGpu,
+};
+std::ostream& operator<<(std::ostream& os, GpuBackend backend);
+
+// Parses a GPU backend name (case-insensitive) into a GpuBackend value.
+// Accepts: "default"/"" -> kDefault, "opencl"/"cl" -> kOpenCl,
+// "opengl"/"gl" -> kOpenGl, "webgpu" -> kWebGpu. Returns InvalidArgumentError
+// for anything else.
+absl::StatusOr<GpuBackend> GpuBackendFromString(absl::string_view name);
 
 // Optional advanced settings for the LLM executor.
 struct AdvancedSettings {
@@ -310,6 +331,11 @@ struct AdvancedSettings {
   // to true if they want to ensure the quality of the decoded output.
   bool error_on_invalid_sampled_token_id = false;
 
+  // Selects the GPU delegate backend at runtime. Only meaningful for the GPU
+  // backend; ignored for CPU/NPU. Defaults to kDefault, which keeps the
+  // build-time behavior (see GpuBackend).
+  GpuBackend gpu_backend = GpuBackend::kDefault;
+
   bool operator==(const AdvancedSettings& other) const {
     return prefill_batch_sizes == other.prefill_batch_sizes &&
            num_output_candidates == other.num_output_candidates &&
@@ -343,7 +369,8 @@ struct AdvancedSettings {
            disable_delegate_clustering == other.disable_delegate_clustering &&
            hint_kernel_batch_size == other.hint_kernel_batch_size &&
            error_on_invalid_sampled_token_id ==
-               other.error_on_invalid_sampled_token_id;
+               other.error_on_invalid_sampled_token_id &&
+           gpu_backend == other.gpu_backend;
   }
 };
 std::ostream& operator<<(std::ostream& os, const AdvancedSettings& settings);

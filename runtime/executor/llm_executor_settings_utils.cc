@@ -227,10 +227,26 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
       }
       gpu_compilation_options.DisableShaderOptimization(
           !advanced_settings.optimize_shader_compilation);
-      // TODO b/441627719 - Select backend by runtime options.
+      // Select the GPU delegate backend at runtime. An explicit choice always
+      // wins so a single binary can pick CL / GL / WebGPU. When left unset
+      // (kDefault) we preserve the build-time behavior: WebGPU when compiled
+      // with LITERT_USE_WEBGPU_ACCELERATOR, otherwise LiteRT's default backend.
+      switch (advanced_settings.gpu_backend) {
+        case GpuBackend::kOpenCl:
+          gpu_compilation_options.SetBackend(GpuOptions::Backend::kOpenCl);
+          break;
+        case GpuBackend::kOpenGl:
+          gpu_compilation_options.SetBackend(GpuOptions::Backend::kOpenGl);
+          break;
+        case GpuBackend::kWebGpu:
+          gpu_compilation_options.SetBackend(GpuOptions::Backend::kWebGpu);
+          break;
+        case GpuBackend::kDefault:
 #if defined(LITERT_USE_WEBGPU_ACCELERATOR)
-      gpu_compilation_options.SetBackend(GpuOptions::Backend::kWebGpu);
+          gpu_compilation_options.SetBackend(GpuOptions::Backend::kWebGpu);
 #endif  // defined(LITERT_USE_WEBGPU_ACCELERATOR)
+          break;
+      }
       // Prepare WebGPU or Vulkan command buffers ahead to reduce the overhead
       // of command buffer preparation. 2 steps ahead are needed because
       //   1) KV caches when single_kv_cache_buffer is false

@@ -124,6 +124,27 @@ TEST(LlmExecutorConfigTest, StringToBackend) {
   EXPECT_EQ(backend, Backend::NPU);
 }
 
+TEST(LlmExecutorConfigTest, StringToGpuBackend) {
+  ASSERT_OK_AND_ASSIGN(auto gpu_backend, GpuBackendFromString(""));
+  EXPECT_EQ(gpu_backend, GpuBackend::kDefault);
+  ASSERT_OK_AND_ASSIGN(gpu_backend, GpuBackendFromString("default"));
+  EXPECT_EQ(gpu_backend, GpuBackend::kDefault);
+  ASSERT_OK_AND_ASSIGN(gpu_backend, GpuBackendFromString("opencl"));
+  EXPECT_EQ(gpu_backend, GpuBackend::kOpenCl);
+  ASSERT_OK_AND_ASSIGN(gpu_backend, GpuBackendFromString("CL"));
+  EXPECT_EQ(gpu_backend, GpuBackend::kOpenCl);
+  ASSERT_OK_AND_ASSIGN(gpu_backend, GpuBackendFromString("opengl"));
+  EXPECT_EQ(gpu_backend, GpuBackend::kOpenGl);
+  ASSERT_OK_AND_ASSIGN(gpu_backend, GpuBackendFromString("gl"));
+  EXPECT_EQ(gpu_backend, GpuBackend::kOpenGl);
+  ASSERT_OK_AND_ASSIGN(gpu_backend, GpuBackendFromString("WebGpu"));
+  EXPECT_EQ(gpu_backend, GpuBackend::kWebGpu);
+  EXPECT_EQ(GpuBackendFromString("vulkan").status(),
+            absl::InvalidArgumentError(
+                "Unsupported GPU backend: vulkan. Supported backends are: "
+                "[default, opencl, opengl, webgpu]"));
+}
+
 TEST(LlmExecutorConfigTest, ActivationDataType) {
   ActivationDataType act;
   std::stringstream oss;
@@ -362,6 +383,7 @@ enable_speculative_decoding: 0
 disable_delegate_clustering: 0
 hint_kernel_batch_size: 10
 error_on_invalid_sampled_token_id: 0
+gpu_backend: default
 
 )");  // Original output string.
   EXPECT_EQ(oss.str(), expected_output);

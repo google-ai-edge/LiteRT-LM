@@ -223,6 +223,7 @@ absl::Status MainHelper(int argc, char** argv) {
            "[--gpu_madvise_original_shared_tensors=<true|false>] "
            "[--gpu_enable_metal_residency_set=<true|false>] "
            "[--preferred_device_substr=<device_substr>] "
+           "[--gpu_backend=<opencl|opengl|webgpu>] "
            "[--num_threads_to_upload=<num_threads_to_upload>] "
            "[--num_threads_to_compile=<num_threads_to_compile>] "
            "[--convert_weights_on_gpu=<true|false>] "
@@ -313,6 +314,7 @@ absl::Status MainHelper(int argc, char** argv) {
       absl::GetFlag(FLAGS_cache_compiled_shaders_only);
   settings.preferred_device_substr =
       absl::GetFlag(FLAGS_preferred_device_substr);
+  settings.gpu_backend = absl::GetFlag(FLAGS_gpu_backend);
   settings.num_threads_to_upload = absl::GetFlag(FLAGS_num_threads_to_upload);
   settings.num_threads_to_compile = absl::GetFlag(FLAGS_num_threads_to_compile);
   settings.convert_weights_on_gpu = absl::GetFlag(FLAGS_convert_weights_on_gpu);
