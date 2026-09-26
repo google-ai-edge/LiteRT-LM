@@ -30,12 +30,16 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "litert/c/litert_common.h"  // from @litert
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
 #include "litert/cc/litert_options.h"  // from @litert
 #include "litert/cc/litert_profiler.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#if LITERT_HAS_WEBGPU_SUPPORT
+#include "third_party/ml_drift/webgpu/webgpu_headers.h"
+#endif  // LITERT_HAS_WEBGPU_SUPPORT
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/components/sampler.h"
@@ -200,6 +204,13 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
     return pre_graph_run_callback_ != nullptr ||
            post_graph_run_callback_ != nullptr;
   }
+
+  // Applies constrained decoding logit masks directly on WebGPU storage buffers
+  // without CPU readback. Returns false if WebGPU is not used or mask/layout is
+  // unsupported, allowing fallback to CPU ProcessLogits.
+  bool TryProcessLogitsWebGpu(Environment& env,
+                              ConstrainedDecoder* constrained_decoder,
+                              TensorBuffer& output_logits);
 
  protected:
   LlmLiteRtCompiledModelExecutorBase(
@@ -442,6 +453,26 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
   // Pointer to model resources for lazy loading of components (e.g. MTP
   // drafter).
   ModelResources* resources_ = nullptr;
+
+ private:
+  struct WebGpuLogitMaskState {
+#if LITERT_HAS_WEBGPU_SUPPORT
+    const void* device_handle = nullptr;
+    wgpu::ComputePipeline bitmap_pipeline_f16;
+    wgpu::ComputePipeline sparse_pipeline_f16;
+    wgpu::ComputePipeline bitmap_pipeline_f32;
+    wgpu::ComputePipeline sparse_pipeline_f32;
+    wgpu::BindGroupLayout bitmap_bgl;
+    wgpu::BindGroupLayout sparse_bgl;
+    wgpu::Buffer bitmap_buf[2];
+    wgpu::Buffer sparse_buf[2];
+    wgpu::Buffer params_buf[2];
+    uint64_t bitmap_buf_size[2] = {0, 0};
+    uint64_t sparse_buf_size[2] = {0, 0};
+    int buf_slot = 0;
+#endif  // LITERT_HAS_WEBGPU_SUPPORT
+  };
+  std::unique_ptr<WebGpuLogitMaskState> webgpu_logit_mask_state_;
 };
 
 // The static executor for the prefill-decode compiled model.

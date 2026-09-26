@@ -17,9 +17,11 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>  // NOLINT: Required for path manipulation.
 #include <fstream>
 #include <functional>
+#include <ios>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -49,7 +51,10 @@
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/test/matchers.h"  // from @litert
 #include "runtime/components/constrained_decoding/constrained_decoder.h"
+#include "runtime/components/constrained_decoding/constraint.h"
 #include "runtime/components/constrained_decoding/fake_constraint.h"
+#include "runtime/components/constrained_decoding/logit_mask.h"
+#include "runtime/components/constrained_decoding/repetition_penalty_constraint.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/components/model_resources_litert_lm.h"
 #include "runtime/components/sampler.h"
@@ -61,6 +66,7 @@
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/status_macros.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
+#include "tflite/types/half.h"  // from @litert
 
 namespace litert::lm {
 namespace {
