@@ -274,19 +274,21 @@
       // without one it emitted its native call, which the router could not read.
       // So the tools go to the engine as tool definitions, and the model answers
       // in the form it was trained for.
-      // Reused across turns. Building one costs the tokenisation and KV setup of
-      // the whole prefix — measured at 15-19s a turn on a phone, against 0.4-1.4s
-      // of actual generation — and it was being paid twice per beat. Tools stay
-      // attached for every turn; the tool-output message already tells the model
-      // to answer rather than call again.
-      // Keyed by the system text and the conversation's kind. A guided turn
-      // needs a conversation that accepts a response format and carries no
-      // tool menu; a tool session's conversation is neither, so the two kinds
-      // never share one.
-      let kind: ConversationKind = guided || tools.isEmpty ? .open : .tooled
-      let resumeKey = plan.systemText + "\u{1F}" + kind.rawValue
+      //
+      // The conversation is reused across turns. Building one costs the
+      // tokenisation and KV setup of the whole prefix — measured at 15-19s a
+      // turn on a phone, against 0.4-1.4s of actual generation — and it was
+      // being paid twice per question. The key names the system text, the
+      // conversation's kind and the tool list it carries. A guided turn needs a
+      // conversation that accepts a response format and carries no tool menu; a
+      // tool session's conversation is neither, so the two kinds never share
+      // one — and a tool session's conversation carries its tools on every
+      // turn, the turn that answers a tool result included, because the next
+      // question reuses it.
+      let spec = Self.conversationSpec(
+        for: plan, guided: guided, tools: tools, model: model, options: request.generationOptions)
       var reusable: Conversation?
-      if let reused = cache.take(for: resumeKey, consumed: plan.triggerIndex) {
+      if let reused = cache.take(for: spec.key, consumed: plan.triggerIndex) {
         // A conversation is reused only while its KV has room for another
         // turn. Every fix that makes turns *succeed* also makes the KV grow
         // monotonically — the first fully green demo run died on beat 5 with
@@ -308,41 +310,11 @@
       } else {
         LiteRTFMTrace.timing(
           "cache MISS, prompt \(plan.promptText.count) chars, history \(plan.history.count)"
-            + ", system \(plan.systemText.count) chars")
-        conversation = try await Self.build(
-        ConversationConfig(
-          systemMessage: plan.systemMessage,
-          initialMessages: plan.history,
-          samplerConfig: Self.sampler(for: request.generationOptions, structured: structured),
-          // Cap invisible reasoning. Never `enableThinking: false` here: the
-          // runtime only installs the budget constraint when thinking is
-          // enabled — disabling it removes the cap and leaves the model free
-          // to think, unseen and unbounded (this template ignores the
-          // `enable_thinking` flag).
-          thinkingConfig: model.thinkingTokenBudget > 0
-            ? ThinkingConfig(enableThinking: true, thinkingTokenBudget: model.thinkingTokenBudget)
-            : nil,
-          // Off: FM runs the tools and re-invokes this executor with the result.
-          // Letting the runtime run them too would execute everything twice.
-          automaticToolCalling: false,
-          // Not offered on the turn that answers a tool result. FM re-invokes
-          // the executor after every tool, and a model still holding the menu
-          // orders again: translate was called four times in a row off one OCR
-          // result. A chained call the model writes anyway is honored below,
-          // behind a per-question round limit.
-          toolsJsonOverride: offerTools
-            ? Self.toolsJson(tools, style: model.toolListStyle) : nil,
-          // On for every open conversation, not only the turn that carries a
-          // schema: the conversation is reused across turns, and one built
-          // without it refuses a later guided turn (`responseFormatNotEnabled`).
-          // Tooled conversations keep it off — with it on, the runtime derives a
-          // tool-call grammar from the preface where the model's data processor
-          // has one, and the native-format tool path here was measured without.
-          enableResponseFormat: kind == .open && model.guidedGeneration == .constrained,
-          visualTokenBudget: model.visualTokenBudget),
-          on: engine)
+            + ", system \(plan.systemText.count) chars"
+            + ", tools \(spec.kind == .tooled ? tools.count : 0)")
+        conversation = try await Self.build(spec.config, on: engine)
       }
-      defer { cache.keep(conversation, for: resumeKey, consumed: plan.triggerIndex) }
+      defer { cache.keep(conversation, for: spec.key, consumed: plan.triggerIndex) }
 
       if guided {
         // Buffered: FM parses the structure out of the text it is handed, and
@@ -798,6 +770,71 @@
       }.joined(separator: ", ")
     }
 
+    /// The conversation a request runs on: its kind, what it is built with,
+    /// and the cache key that stands for both. Strings only, no engine call,
+    /// so it is computed on every turn before the cache is asked.
+    struct ConversationSpec {
+      let kind: ConversationKind
+      let config: ConversationConfig
+      /// The system text, the kind, and the tool list the conversation carries.
+      let key: String
+    }
+
+    static func conversationSpec(
+      for plan: Plan, guided: Bool, tools: [Transcript.ToolDefinition], model: Model,
+      options: GenerationOptions
+    ) -> ConversationSpec {
+      let kind: ConversationKind = guided || tools.isEmpty ? .open : .tooled
+      let config = conversationConfig(
+        for: plan, kind: kind, tools: tools, structured: guided || !tools.isEmpty, model: model,
+        options: options)
+      let key = [plan.systemText, kind.rawValue, config.toolsJsonOverride ?? ""]
+        .joined(separator: "\u{1F}")
+      return ConversationSpec(kind: kind, config: config, key: key)
+    }
+
+    /// What a conversation of this `kind` is built with. Kept apart from the
+    /// build so the rebuild path — a cache miss — can be checked without an
+    /// engine.
+    static func conversationConfig(
+      for plan: Plan, kind: ConversationKind, tools: [Transcript.ToolDefinition],
+      structured: Bool, model: Model, options: GenerationOptions
+    ) -> ConversationConfig {
+      ConversationConfig(
+        systemMessage: plan.systemMessage,
+        initialMessages: plan.history,
+        samplerConfig: Self.sampler(for: options, structured: structured),
+        // Cap invisible reasoning. Never `enableThinking: false` here: the
+        // runtime only installs the budget constraint when thinking is
+        // enabled — disabling it removes the cap and leaves the model free
+        // to think, unseen and unbounded (this template ignores the
+        // `enable_thinking` flag).
+        thinkingConfig: model.thinkingTokenBudget > 0
+          ? ThinkingConfig(enableThinking: true, thinkingTokenBudget: model.thinkingTokenBudget)
+          : nil,
+        // Off: FM runs the tools and re-invokes this executor with the result.
+        // Letting the runtime run them too would execute everything twice.
+        automaticToolCalling: false,
+        // The tool list rides on the conversation, so a tool session's
+        // conversation carries it on every turn, the turn that answers a tool
+        // result included: the next question reuses that conversation and can
+        // only call what it holds. What keeps a model that still sees the menu
+        // from ordering again — translate was called four times in a row off
+        // one OCR result — is the tool-output message, which tells it to
+        // answer, and the per-question round limit on a chained call it writes
+        // anyway.
+        toolsJsonOverride: kind == .tooled
+          ? Self.toolsJson(tools, style: model.toolListStyle) : nil,
+        // On for every open conversation, not only the turn that carries a
+        // schema: the conversation is reused across turns, and one built
+        // without it refuses a later guided turn (`responseFormatNotEnabled`).
+        // Tooled conversations keep it off — with it on, the runtime derives a
+        // tool-call grammar from the preface where the model's data processor
+        // has one, and the native-format tool path here was measured without.
+        enableResponseFormat: kind == .open && model.guidedGeneration == .constrained,
+        visualTokenBudget: model.visualTokenBudget)
+    }
+
     static func build(_ config: ConversationConfig, on engine: Engine) async throws
       -> Conversation
     {
@@ -1100,9 +1137,14 @@
 
   /// Holds a conversation between turns so its prefix is prefilled once.
   ///
-  /// Reusable while the prefix is the same string and this turn continues where
-  /// the last one stopped. Anything else — a new session, a different tool set,
-  /// a branched transcript — misses, and a fresh conversation is built.
+  /// One slot. Reusable while the key — the system text, the conversation's
+  /// kind and the tool list it carries — is the same string and this turn's
+  /// trigger comes after the last one fed. A different tool set, a guided turn
+  /// on a tool session, or a transcript rewound behind the last trigger
+  /// misses, and a fresh conversation is built; the guided turn also evicts
+  /// the tooled conversation, so the next tool turn rebuilds it. A conversation
+  /// keeps the sampler and thinking settings it was built with — a later
+  /// turn's generation options are not part of the key.
   @available(iOS 27.0, macOS 27.0, *)
   final class ConversationCache: @unchecked Sendable {
     private let lock = NSLock()

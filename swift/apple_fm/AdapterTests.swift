@@ -400,6 +400,66 @@
       XCTAssertTrue(guided.prompt.toString.contains(schema))
     }
 
+    /// A tool session's question turn and the turn that answers its tool
+    /// result resolve to the same conversation — one key, the tools carried by
+    /// both — so a conversation rebuilt on the answer turn serves the next
+    /// question with its tools. A guided turn on the same session and another
+    /// tool set are other keys; an open conversation carries no tools and
+    /// accepts a response format. The key is the same string every time.
+    func testAnswerTurnAndQuestionTurnShareOneTooledConversation() throws {
+      let tools = try Self.toolDefinitions()
+      let model = LiteRTLanguageModel(
+        engineConfig: try EngineConfig(modelPath: Self.modelPath, backend: .cpu()),
+        toolListStyle: .bare)
+      let instructions = Transcript.Entry.instructions(
+        Transcript.Instructions(
+          segments: [.text(.init(content: "Be brief."))], toolDefinitions: tools))
+      let prompt = Transcript.Entry.prompt(
+        Transcript.Prompt(segments: [.text(.init(content: "Weather?"))]))
+      let output = Transcript.Entry.toolOutput(
+        Transcript.ToolOutput(
+          id: "1", toolName: "get_temperature", segments: [.text(.init(content: "21°C"))]))
+      let question = Transcript(entries: [instructions, prompt])
+      let answer = Transcript(entries: [instructions, prompt, output])
+      func spec(
+        _ transcript: Transcript, schema: String? = nil, guided: Bool = false,
+        tools: [Transcript.ToolDefinition]
+      ) throws -> LiteRTLMExecutor.ConversationSpec {
+        let plan = try LiteRTLMExecutor.plan(
+          from: transcript, schemaJSON: schema, guided: guided, tools: tools)
+        return LiteRTLMExecutor.conversationSpec(
+          for: plan, guided: guided, tools: tools, model: model, options: GenerationOptions())
+      }
+
+      let asked = try spec(question, tools: tools)
+      let answering = try spec(answer, tools: tools)
+      XCTAssertEqual(asked.kind, .tooled)
+      XCTAssertEqual(answering.kind, .tooled)
+      XCTAssertEqual(answering.key, asked.key)
+      XCTAssertEqual(
+        answering.config.toolsJsonOverride, LiteRTLMExecutor.toolsJson(tools, style: .bare))
+      XCTAssertEqual(asked.config.toolsJsonOverride, answering.config.toolsJsonOverride)
+      XCTAssertFalse(answering.config.enableResponseFormat)
+      XCTAssertFalse(answering.config.automaticToolCalling)
+      XCTAssertEqual(
+        answering.config.initialMessages.map(\.toString),
+        try LiteRTLMExecutor.plan(from: answer, schemaJSON: nil, tools: tools).history
+          .map(\.toString))
+
+      let guided = try spec(question, schema: #"{"type":"object"}"#, guided: true, tools: tools)
+      XCTAssertEqual(guided.kind, .open)
+      XCTAssertNotEqual(guided.key, asked.key)
+      XCTAssertNil(guided.config.toolsJsonOverride)
+      XCTAssertTrue(guided.config.enableResponseFormat)
+
+      let fewer = Array(tools.prefix(1))
+      XCTAssertNotEqual(try spec(question, tools: fewer).key, asked.key)
+
+      for _ in 0..<16 {
+        XCTAssertEqual(try spec(question, tools: tools).key, asked.key)
+      }
+    }
+
     /// Under the grammar the prompt names only the keys, in declared order:
     /// the engine holds the types and the enum values, and every further word
     /// in the hint was something the model copied into a value.
