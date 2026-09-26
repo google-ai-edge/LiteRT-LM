@@ -92,7 +92,7 @@ TEST(EmbeddingEngineCTest, OptionsInputOverflowStrategy) {
   auto* options = litert_lm_embedding_options_create();
   ASSERT_NE(options, nullptr);
   EXPECT_EQ(litert_lm_embedding_options_get_input_overflow_strategy(options),
-            kLiteRtLmInputOverflowStrategyError);
+            kLiteRtLmInputOverflowStrategyChunkAndAverage);
 
   litert_lm_embedding_options_set_input_overflow_strategy(
       options, kLiteRtLmInputOverflowStrategyTruncate);
@@ -100,9 +100,9 @@ TEST(EmbeddingEngineCTest, OptionsInputOverflowStrategy) {
             kLiteRtLmInputOverflowStrategyTruncate);
 
   litert_lm_embedding_options_set_input_overflow_strategy(
-      options, kLiteRtLmInputOverflowStrategyChunkAndAverage);
+      options, kLiteRtLmInputOverflowStrategyError);
   EXPECT_EQ(litert_lm_embedding_options_get_input_overflow_strategy(options),
-            kLiteRtLmInputOverflowStrategyChunkAndAverage);
+            kLiteRtLmInputOverflowStrategyError);
 
   litert_lm_embedding_options_delete(options);
 }
