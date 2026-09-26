@@ -88,4 +88,21 @@ class MessageTests: XCTestCase {
     XCTAssertEqual(message.role, .model)
     XCTAssertEqual(message.toString, "Hello Message")
   }
+
+  /// The runtime's `tool_calls` entries become `ToolCall`s; an entry without a
+  /// function name or arguments is skipped rather than failing the message.
+  func testToolCallsFromRuntimeEntries() throws {
+    let entries: [[String: Any]] = [
+      ["id": "call-1", "function": ["name": "get_temperature", "arguments": ["city": "Tokyo"]]],
+      ["function": ["name": "no_arguments_key"]],
+      ["function": ["name": "set_torch", "arguments": ["on": true]]],
+    ]
+    let calls = Conversation.toolCalls(from: entries)
+    XCTAssertEqual(calls.map(\.name), ["get_temperature", "set_torch"])
+    XCTAssertEqual(calls[0].id, "call-1")
+    XCTAssertEqual(calls[0].arguments["city"] as? String, "Tokyo")
+    XCTAssertEqual(calls[1].id, "")
+    XCTAssertEqual(calls[1].arguments["on"] as? Bool, true)
+    XCTAssertTrue(Conversation.toolCalls(from: []).isEmpty)
+  }
 }

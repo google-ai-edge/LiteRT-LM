@@ -78,6 +78,18 @@ let package = Package(
         "AdapterTests.swift",
       ]
     ),
+    // Headless macOS driver for the adapter (swift/apple_fm/main.swift), so the
+    // same Swift path an iOS app takes can be run without a device.
+    .executableTarget(
+      name: "fmtest",
+      dependencies: ["LiteRTLM", "LiteRTLMFoundationModels"],
+      path: "swift/apple_fm",
+      exclude: [
+        "AdapterTests.swift", "BUILD", "CGImagePNG.swift", "LiteRTLanguageModel.swift",
+        "LiteRTSegments.swift",
+      ],
+      sources: ["main.swift"]
+    ),
     // Separate test targets for each file to avoid naming conflicts:
     .testTarget(
       name: "ModelInfoTests",
@@ -114,6 +126,12 @@ let package = Package(
       dependencies: ["LiteRTLM"],
       path: "swift",
       sources: ["MessageTests.swift"]
+    ),
+    .testTarget(
+      name: "AdapterTests",
+      dependencies: ["LiteRTLM", "LiteRTLMFoundationModels"],
+      path: "swift/apple_fm",
+      sources: ["AdapterTests.swift"]
     ),
   ]
 )
