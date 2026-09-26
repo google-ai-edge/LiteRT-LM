@@ -153,17 +153,20 @@ class NpuKVCache {
   //   guaranteed safe (copies in reverse order).
   // - Copies all buffers present in `src_buffers` that start with "kv_cache_k",
   //   "kv_cache_v", or "kv_cache_c".
+  // - Requirement: The caller must ensure `dst` capacity >= `src` capacity.
+  // - Padding: Newly exposed strided slots [active_seq_len, dst_capacity) are
+  //   cleanly reset to `kv_cache_init_value_` (e.g. quantization zero-point) to
+  //   overwrite stale leftover data from adjacent slices.
+  // - The sequence axis of each buffer is taken from
+  //   `NpuModelGeometry::kv_buffer_info`. Buffers the geometry does not
+  //   describe fall back to inferring the axis from the `src`/`dst` shape
+  //   difference (see `CopySingleKVCacheBuffer`).
   absl::Status CopyKVCache(
       const absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
           src_buffers,
       absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
           dst_buffers,
       int active_seq_len);
-
-  static absl::Status CopySingleKVCacheBuffer(const ::litert::TensorBuffer& src,
-                                              ::litert::TensorBuffer& dst,
-                                              int active_seq_len,
-                                              int64_t kv_cache_init_value = 0);
 
   // Updates the internal cache update context's buffer mappings to point to
   // the new context group's KV cache and slice buffers.
@@ -176,6 +179,28 @@ class NpuKVCache {
           decode_output_kv_cache_slice_buffers,
       const absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
           verify_output_kv_cache_slice_buffers);
+
+  // Migrates a single KV cache buffer from `src` to `dst`.
+  //
+  // `sequence_axis` is the axis to migrate along and should come from
+  // `NpuModelGeometry::kv_buffer_info`. Pass -1 when it is unknown, in which
+  // case it is inferred from the `src`/`dst` shape difference; that inference
+  // only works if the buffer was actually resized, so identically shaped
+  // buffers are then assumed to alias and are skipped.
+  //
+  // With a known axis the behavior is:
+  // - `dst` larger than `src`: copy [0, active_seq_len) and reset the newly
+  //   exposed tail to `kv_cache_init_value`.
+  // - Same extent, same allocation (aliased context groups): no-op.
+  // - Same extent, distinct allocations (e.g. a fixed-capacity layer during a
+  //   dynamic KV cache grow): copy the buffer verbatim, so that content which
+  //   does not live in a [0, active_seq_len) prefix, such as wrapped
+  //   ring-buffer entries, survives the migration.
+  static absl::Status CopySingleKVCacheBuffer(const ::litert::TensorBuffer& src,
+                                              ::litert::TensorBuffer& dst,
+                                              int active_seq_len,
+                                              int64_t kv_cache_init_value = 0,
+                                              int sequence_axis = -1);
 
   // --- Accessors ---
   KVCacheUpdateMethod GetMethod() const { return method_; }

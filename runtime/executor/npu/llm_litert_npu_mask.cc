@@ -732,6 +732,46 @@ absl::Status NpuMask::UpdateOutputBuffers(
   return absl::OkStatus();
 }
 
+absl::Status NpuMask::RecreateContextLengthInputBuffers(
+    absl::string_view prefill_signature, absl::string_view decode_signature,
+    absl::string_view verify_signature) {
+  RET_CHECK(compiled_model_ != nullptr)
+      << "Compiled model must be set to recreate mask context length inputs.";
+  auto recreate =
+      [&](absl::string_view signature,
+          absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+              in_buffers) -> absl::Status {
+    if (signature.empty() || in_buffers.empty()) {
+      return absl::OkStatus();
+    }
+    for (absl::string_view name : {MaskSignatures::kMaskLocalContextLength,
+                                   MaskSignatures::kMaskGlobalContextLength}) {
+      if (!in_buffers.contains(name)) {
+        continue;
+      }
+      LITERT_ASSIGN_OR_RETURN(
+          auto new_buffer, compiled_model_->CreateInputBuffer(signature, name));
+      LITERT_ASSIGN_OR_RETURN(auto new_type, new_buffer.TensorType());
+      LITERT_ASSIGN_OR_RETURN(auto old_type, in_buffers[name].TensorType());
+      if (absl::c_equal(new_type.Layout().Dimensions(),
+                        old_type.Layout().Dimensions())) {
+        // The shape of this input does not depend on the resized dimension.
+        continue;
+      }
+      new_buffer.Clear();
+      in_buffers[name] = std::move(new_buffer);
+    }
+    return absl::OkStatus();
+  };
+  LITERT_RETURN_IF_ERROR(
+      recreate(prefill_signature, mask_context_.prefill_input_buffers));
+  LITERT_RETURN_IF_ERROR(
+      recreate(decode_signature, mask_context_.decode_input_buffers));
+  LITERT_RETURN_IF_ERROR(
+      recreate(verify_signature, mask_context_.verify_input_buffers));
+  return absl::OkStatus();
+}
+
 absl::Status NpuMask::RunPrefill(absl::string_view signature) const {
   if (method_ == MaskUpdateMethod::kWH) {
     RET_CHECK(geometry_ != nullptr) << "geometry must not be null for kWH";

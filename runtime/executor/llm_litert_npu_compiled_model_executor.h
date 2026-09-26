@@ -194,7 +194,10 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
       std::optional<DrafterContext> drafter_context,
       std::optional<DrafterAuxContext> drafter_aux_context,
       NpuEmbedder main_embedder, NpuRope main_rope, NpuMask main_mask,
-      NpuKVCache main_cache, NpuModelGeometry geometry = {})
+      NpuKVCache main_cache, const litert::Model* text_decoder_model,
+      const proto::LlmMetadata* llm_metadata,
+      const proto::ExecutorMetadata* executor_metadata, bool is_dynamic_model,
+      int dynamic_kv_cache_capacity, NpuModelGeometry geometry = {})
       : executor_settings_(std::move(executor_settings)),
         env_(llm_env),
         geometry_(std::move(geometry)),
@@ -214,7 +217,12 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
         drafter_aux_context_(std::move(drafter_aux_context)),
         per_tensor_logits_scale_(quantization_params.scale),
         per_tensor_logits_zero_point_(quantization_params.zero_point),
-        kv_cache_init_value_(kv_cache_init_value) {
+        kv_cache_init_value_(kv_cache_init_value),
+        text_decoder_model_(text_decoder_model),
+        llm_metadata_(llm_metadata),
+        executor_metadata_(executor_metadata),
+        is_dynamic_model_(is_dynamic_model),
+        dynamic_kv_cache_capacity_(dynamic_kv_cache_capacity) {
     auto npu_config_status = executor_settings_.GetBackendConfig<NpuConfig>();
     if (npu_config_status.ok()) {
       npu_config_ = *npu_config_status;
@@ -252,7 +260,27 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
   ContextGroup& MutableActiveContextGroup() {
     return context_groups_[active_context_group_index_];
   }
+
+  // Ensures that the active context group can hold `required_tokens` tokens.
+  // - Static multi-context models: switches to the smallest context group that
+  //   fits (copying the KV cache if needed).
+  // - Dynamic models: grows the KV cache on demand (see
+  //   GrowDynamicKVCache).
   absl::Status SwitchContextSizeIfRequired(int required_tokens);
+
+  // Dynamic models only; returns an error if called for a static model.
+  // No-op if `required_tokens` fits in the currently allocated capacity.
+  // Otherwise re-allocates the single context group for at least
+  // `required_tokens` tokens (growing by at least the configured dynamic KV
+  // cache growth step and at most up to
+  // `max_num_tokens`), migrates the processed KV cache entries, re-resolves the
+  // geometry, resizes the auxiliary mask signatures and re-binds all
+  // sub-components.
+  absl::Status GrowDynamicKVCache(int required_tokens);
+
+  // Re-binds the KV cache, mask, RoPE, embedder and drafter sub-components to
+  // the buffers of the active context group.
+  absl::Status RebindActiveContextGroup();
 
   // Prefill internal implementation, for one prefill call to the Interpreter
   // with a certain length.
@@ -329,11 +357,12 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
   // Commit the verified KV cache for MTP.
   absl::Status CommitVerifiedKVCache(int start_step);
 
-  // Determines the sequence length to use for the NPU model.
+  // Determines the logical maximum sequence length (`max_num_tokens`) for the
+  // NPU model.
   //
-  // - For dynamic models (e.g. dynamic shape models), requires
-  // `executor_settings.GetMaxNumTokens()`
-  //   to be set, and clamps it to `LlmMetadata` limits if defined.
+  // - For dynamic models, uses `executor_settings.GetMaxNumTokens()` if set,
+  //   clamped to the `LlmMetadata` limit if defined. If unset, falls back to
+  //   the `LlmMetadata` limit. Fails if neither is available.
   // - For static models, inspects `LlmMetadata`, falls back to model KV cache
   //   tensor dimensions, and clamps user-provided limits.
   static absl::StatusOr<int> DetermineSequenceLength(
@@ -349,6 +378,66 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
   // LlmMetadata.
   static std::optional<int> DetermineMaxSequenceLengthDynamicModel(
       ModelResources& resources);
+
+  // A context group together with the context size the hardware actually
+  // allocated for it (may be larger than requested due to bucketing; 0 when
+  // unknown, e.g. static models without context-size suffixed signatures).
+  struct BuiltContextGroup {
+    ContextGroup group;
+    int resolved_context_size = 0;
+  };
+
+  // Allocates all text decoder buffers for one set of prefill/decode/verify
+  // signatures and assembles them into a ContextGroup.
+  // - context_size: Recorded in `ContextGroup::context_size` (used to resolve
+  //   context-size suffixed signature names; 0 for unsuffixed signatures).
+  // - input_kv_cache_buffers: If non-empty, used as the persistent KV cache
+  //   (e.g. aliases of a master group's buffers) instead of fresh allocations.
+  // - requested_context_size: Dynamic models only; the text decoder signatures
+  //   are resized to this many tokens before buffers are allocated.
+  // - executor_metadata: Used to resolve `ContextGroup::geometry`; may be null,
+  //   in which case the geometry is derived from the allocated buffers alone.
+  //
+  // The group's geometry is resolved here, against the buffers that were
+  // actually allocated, so that it always describes the group it belongs to.
+  static absl::StatusOr<BuiltContextGroup> BuildContextGroup(
+      ::litert::Environment& env, const litert::Model* text_decoder_model,
+      ::litert::CompiledModel& text_decoder_compiled_model,
+      const ResolvedPrefillSignatures& prefill_signatures,
+      absl::string_view decode_signature, absl::string_view verify_signature,
+      int context_size,
+      absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
+          input_kv_cache_buffers,
+      absl::flat_hash_map<absl::string_view, HWQuantParams>& kv_quant_params,
+      int64_t kv_cache_init_value, std::optional<int> requested_context_size,
+      const proto::ExecutorMetadata* executor_metadata);
+
+  // Creates the context groups for a static model: the largest context size
+  // owns the master hardware buffers, smaller context sizes (if any) alias
+  // into them. Groups are ordered like `sorted_supported_context_sizes`.
+  static absl::StatusOr<std::vector<ContextGroup>> CreateStaticContextGroups(
+      ::litert::Environment& env, const litert::Model* text_decoder_model,
+      ::litert::CompiledModel& text_decoder_compiled_model,
+      const std::vector<int>& sorted_supported_context_sizes, int prefill_size,
+      absl::flat_hash_map<absl::string_view, HWQuantParams>& kv_quant_params,
+      int64_t kv_cache_init_value,
+      const proto::ExecutorMetadata* executor_metadata);
+
+  // Creates the single context group of a dynamic model, resized to hold
+  // `requested_context_size` tokens. Dynamic models have exactly one set of
+  // unsuffixed signatures; the KV cache size is selected by resizing.
+  static absl::StatusOr<BuiltContextGroup> CreateDynamicContextGroup(
+      ::litert::Environment& env, const litert::Model* text_decoder_model,
+      ::litert::CompiledModel& text_decoder_compiled_model, int prefill_size,
+      absl::flat_hash_map<absl::string_view, HWQuantParams>& kv_quant_params,
+      int64_t kv_cache_init_value, int requested_context_size,
+      const proto::ExecutorMetadata* executor_metadata);
+
+  // Resizes the dynamic mask inputs of the auxiliary model's prefill, decode
+  // and (if present) verify mask signatures of `group` to `context_size`.
+  static absl::Status ResizeAuxiliaryMaskInputs(
+      ::litert::CompiledModel& npu_auxiliary_compiled_model,
+      const ContextGroup& group, int context_size);
 
   // Creates the context for the text decoder model.
   static absl::StatusOr<InferenceContext> CreateTextDecoderInferenceContext(
@@ -473,6 +562,25 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
   // constraint state.
   bool ran_decode_ = false;
   int64_t kv_cache_init_value_ = 0;
+
+  // The text decoder model (owned by ModelResources, which outlives the
+  // executor). Needed to re-allocate buffers when the dynamic KV cache grows.
+  const litert::Model* text_decoder_model_ = nullptr;
+  // LlmMetadata of the model (owned by ModelResources); may be null.
+  const proto::LlmMetadata* llm_metadata_ = nullptr;
+  // ExecutorMetadata of the model (owned by ModelResources); may be null.
+  // Retained so that the model geometry can be re-resolved when the dynamic KV
+  // cache is re-allocated, using exactly the same inputs as `Create()`.
+  const proto::ExecutorMetadata* executor_metadata_ = nullptr;
+  // Whether the text decoder has a resizable (dynamic) KV cache.
+  bool is_dynamic_model_ = false;
+  // Dynamic models only: the number of tokens the KV cache is currently
+  // allocated for. This is the physical capacity, as opposed to the logical
+  // limit `executor_settings_.GetMaxNumTokens()`. Note that
+  // `ContextGroup::context_size` stays 0 for dynamic models because it selects
+  // context-size suffixed signature names, which dynamic models do not have.
+  int dynamic_kv_cache_capacity_ = 0;
+
   absl::Mutex execution_mutex_;
 };
 

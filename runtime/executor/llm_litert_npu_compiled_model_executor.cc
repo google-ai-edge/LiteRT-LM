@@ -116,6 +116,46 @@ constexpr char cache_k25[] = "kv_cache_k_25";
 constexpr char cache_v25[] = "kv_cache_v_25";
 constexpr char cache_k23[] = "kv_cache_k_23";
 constexpr char cache_v23[] = "kv_cache_v_23";
+
+// Dynamic (resizable) KV cache allocation settings. These only apply to models
+// exported with a dynamic KV cache and are ignored for static models.
+// TODO: b/565760564 - For now these are read from environment variables; read
+// them from `NpuConfig` once the corresponding config fields are available.
+constexpr char kDynamicKvCacheInitialSizeEnvVar[] =
+    "LITERT_LM_NPU_DYNAMIC_KV_CACHE_INITIAL_SIZE";
+constexpr char kDynamicKvCacheGrowthStepEnvVar[] =
+    "LITERT_LM_NPU_DYNAMIC_KV_CACHE_GROWTH_STEP";
+
+// Returns the integer value of the environment variable `name`, or
+// `default_value` if it is unset or not a valid integer.
+int GetIntFromEnvOrDefault(const char* name, int default_value) {
+  const char* value = std::getenv(name);
+  if (value == nullptr || *value == '\0') {
+    return default_value;
+  }
+  int parsed = 0;
+  if (!absl::SimpleAtoi(value, &parsed)) {
+    ABSL_LOG(WARNING) << "Ignoring invalid value '" << value << "' for " << name
+                      << "; using " << default_value << ".";
+    return default_value;
+  }
+  return parsed;
+}
+
+// Number of tokens the dynamic KV cache is allocated for when the executor is
+// created. 0 (default) allocates the full `max_num_tokens` up front; a positive
+// value allocates only this many tokens and grows the KV cache on demand.
+int GetDynamicKvCacheInitialSize() {
+  return GetIntFromEnvOrDefault(kDynamicKvCacheInitialSizeEnvVar,
+                                /*default_value=*/0);
+}
+
+// Minimum number of tokens by which the dynamic KV cache is grown whenever it
+// runs out of capacity.
+int GetDynamicKvCacheGrowthStep() {
+  return GetIntFromEnvOrDefault(kDynamicKvCacheGrowthStepEnvVar,
+                                /*default_value=*/512);
+}
 }  // namespace
 
 LlmLiteRtNpuCompiledModelExecutor::~LlmLiteRtNpuCompiledModelExecutor() {
@@ -798,6 +838,14 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::Prefill(
   LITERT_ASSIGN_OR_RETURN(
       auto work_groups,
       GetOptimizedPrefillWorkGroups(prefill_signature_map_, ids.size()));
+
+  if (is_dynamic_model_) {
+    // Grow the KV cache once for the whole request rather than chunk by chunk
+    // inside PrefillInternal. Padding of the last chunk up to its signature
+    // size is still covered by the per-chunk capacity check in PrefillInternal.
+    LITERT_RETURN_IF_ERROR(GrowDynamicKVCache(current_step_ + ids.size()));
+  }
+
   for (const auto& [prefill_signature, prefill_length] : work_groups) {
     LITERT_RETURN_IF_ERROR(PrefillInternal(
         prefill_signature, ids.subspan(/*pos=*/0, prefill_length)));
@@ -1195,6 +1243,9 @@ LlmLiteRtNpuCompiledModelExecutor::Decode(
 
 absl::Status LlmLiteRtNpuCompiledModelExecutor::SwitchContextSizeIfRequired(
     int required_tokens) {
+  if (is_dynamic_model_) {
+    return GrowDynamicKVCache(required_tokens);
+  }
   if (sorted_supported_context_sizes_.empty() || context_groups_.size() <= 1) {
     return absl::OkStatus();
   }
@@ -1235,39 +1286,98 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::SwitchContextSizeIfRequired(
   }
 
   active_context_group_index_ = new_index;
-  const auto& active_group = context_groups_[new_index];
-  main_mask_.SetGeometry(&active_group.geometry);
-  main_cache_.SetGeometry(&active_group.geometry);
-  if (drafter_aux_context_.has_value()) {
-    drafter_aux_context_->drafter_mask.SetGeometry(&active_group.geometry);
-  }
-  LITERT_RETURN_IF_ERROR(main_cache_.UpdateKVCacheBuffers(
-      active_group.input_kv_cache_buffers,
-      active_group.text_decoder_inference_context.prefill_output_buffers,
-      active_group.text_decoder_inference_context.decode_output_buffers,
-      active_group.text_decoder_inference_context.verify_output_buffers));
-  LITERT_RETURN_IF_ERROR(main_mask_.UpdateOutputBuffers(
-      active_group.text_decoder_inference_context.prefill_input_buffers,
-      active_group.text_decoder_inference_context.decode_input_buffers,
-      active_group.text_decoder_inference_context.verify_input_buffers));
-  LITERT_RETURN_IF_ERROR(main_rope_.UpdateOutputBuffers(
-      active_group.text_decoder_inference_context.prefill_input_buffers,
-      active_group.text_decoder_inference_context.decode_input_buffers,
-      active_group.text_decoder_inference_context.verify_input_buffers));
-  LITERT_RETURN_IF_ERROR(main_embedder_.UpdateOutputBuffers(
-      active_group.text_decoder_inference_context.prefill_input_buffers,
-      active_group.text_decoder_inference_context.decode_input_buffers,
-      active_group.text_decoder_inference_context.verify_input_buffers));
-  if (drafter_context_.has_value()) {
-    LITERT_RETURN_IF_ERROR(drafter_context_->UpdateKVCacheBuffers(
-        active_group.input_kv_cache_buffers));
-  }
+  LITERT_RETURN_IF_ERROR(RebindActiveContextGroup());
 
   ABSL_LOG(INFO) << "Switched context size from " << old_size << " to "
                  << new_size << ". Selected prefill signature: \""
                  << ActiveContextGroup().prefill_signatures.prefill
                  << "\", decode signature: \""
                  << ActiveContextGroup().decode_signature << "\".";
+  return absl::OkStatus();
+}
+
+absl::Status LlmLiteRtNpuCompiledModelExecutor::GrowDynamicKVCache(
+    int required_tokens) {
+  RET_CHECK(is_dynamic_model_)
+      << "GrowDynamicKVCache must only be called for dynamic models.";
+  if (required_tokens <= dynamic_kv_cache_capacity_) {
+    return absl::OkStatus();
+  }
+  const int max_num_tokens = executor_settings_.GetMaxNumTokens();
+  if (required_tokens > max_num_tokens) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Required tokens (", required_tokens,
+                     ") exceeds max_num_tokens (", max_num_tokens, ")."));
+  }
+  RET_CHECK(text_decoder_model_ != nullptr);
+  RET_CHECK_EQ(context_groups_.size(), 1)
+      << "Dynamic models are expected to have exactly one context group.";
+  // Grow by at least the configured step to amortize re-allocations, but never
+  // beyond the logical limit.
+  const int growth_step = std::max(GetDynamicKvCacheGrowthStep(), 1);
+  const int target_context_size = std::min(
+      std::max(required_tokens, dynamic_kv_cache_capacity_ + growth_step),
+      max_num_tokens);
+  const auto start = absl::Now();
+  const int old_capacity = dynamic_kv_cache_capacity_;
+  ContextGroup& old_group = context_groups_[0];
+
+  // 1. Resize the text decoder signatures and allocate a fresh context group.
+  // The KV quantization parameters do not change with the context size, so the
+  // ones collected here are discarded. `BuildContextGroup` also re-resolves the
+  // group's geometry against the newly allocated buffers, so the cache length
+  // and per-buffer info the mask and KV cache components read stay in sync with
+  // the hardware allocation.
+  absl::flat_hash_map<absl::string_view, HWQuantParams> unused_kv_quant_params;
+  BuiltContextGroup built;
+  {
+    LITERT_ASSIGN_OR_RETURN(
+        built,
+        CreateDynamicContextGroup(
+            env_, text_decoder_model_, text_decoder_compiled_model_,
+            prefill_signatures_.size, unused_kv_quant_params,
+            kv_cache_init_value_, target_context_size, executor_metadata_));
+  }
+  built.group.decode_aux_signatures = old_group.decode_aux_signatures;
+  built.group.verify_aux_signatures = old_group.verify_aux_signatures;
+
+  // 2. Resize the auxiliary mask signatures to the new context size.
+  LITERT_RETURN_IF_ERROR(ResizeAuxiliaryMaskInputs(
+      npu_auxiliary_context_.npu_auxiliary_compiled_model, built.group,
+      built.resolved_context_size));
+  // Dynamic mask signatures take extra `local_context_length` /
+  // `global_context_length` inputs whose values are never read: they only carry
+  // the context size through their shape so that the mask outputs can be
+  // resized. After resizing the signatures above, the existing buffers no
+  // longer match the signature's expected shape, and the compiled model rejects
+  // them on Run(). Re-create only the ones whose shape changed.
+  LITERT_RETURN_IF_ERROR(main_mask_.RecreateContextLengthInputBuffers(
+      built.group.prefill_signatures.mask,
+      built.group.decode_aux_signatures.mask,
+      built.group.verify_aux_signatures.mask));
+
+  // 3. Migrate the processed tokens into the new KV cache. The destination
+  // buffers are fresh allocations rather than aliases, so every KV cache buffer
+  // is migrated, including any whose shape did not change.
+  if (current_step_ > 0) {
+    LITERT_RETURN_IF_ERROR(main_cache_.CopyKVCache(
+        old_group.input_kv_cache_buffers, built.group.input_kv_cache_buffers,
+        current_step_));
+  }
+
+  // 4. Swap in the new group and re-bind all sub-components. The old group is
+  // kept alive until re-binding is complete.
+  ContextGroup retired_group = std::move(old_group);
+  context_groups_[0] = std::move(built.group);
+  active_context_group_index_ = 0;
+  LITERT_RETURN_IF_ERROR(RebindActiveContextGroup());
+  dynamic_kv_cache_capacity_ = built.resolved_context_size;
+
+  ABSL_LOG(INFO) << "Dynamic KV cache grown from " << old_capacity << " to "
+                 << dynamic_kv_cache_capacity_
+                 << " tokens (requested: " << target_context_size
+                 << ", migrated " << current_step_ << " tokens) in "
+                 << absl::ToDoubleMilliseconds(absl::Now() - start) << " ms.";
   return absl::OkStatus();
 }
 
@@ -2278,14 +2388,30 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::RestoreContext(
       }
     }
     active_context_group_index_ = target_group_idx;
+    // Dynamic models: make sure the (single) group can hold the restored
+    // context.
+    if (is_dynamic_model_) {
+      LITERT_RETURN_IF_ERROR(GrowDynamicKVCache(current_step_));
+    }
     auto& active_group = context_groups_[target_group_idx];
 
     // 2. Restore KV cache buffers into the target active context group.
+    // The saved buffers are always distinct allocations (they were copied out
+    // in GetContext), so they are migrated even when their shape matches the
+    // target buffer. The sequence axis comes from the active group's geometry;
+    // buffers the geometry does not describe fall back to shape inference.
+    const auto& geometry = active_group.geometry;
     for (const auto& [name, saved_buffer] : saved_kv_buffers) {
       if (active_group.input_kv_cache_buffers.contains(name)) {
         auto& target_buffer = active_group.input_kv_cache_buffers[name];
+        int sequence_axis = -1;
+        if (auto it = geometry.kv_buffer_info.find(name);
+            it != geometry.kv_buffer_info.end()) {
+          sequence_axis = it->second.sequence_axis;
+        }
         LITERT_RETURN_IF_ERROR(NpuKVCache::CopySingleKVCacheBuffer(
-            saved_buffer, target_buffer, current_step_, kv_cache_init_value_));
+            saved_buffer, target_buffer, current_step_, kv_cache_init_value_,
+            sequence_axis));
       }
     }
   } else {
@@ -2299,6 +2425,10 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::RestoreContext(
   }
 
   // 3. Re-bind all modular sub-components to the restored active context group.
+  return RebindActiveContextGroup();
+}
+
+absl::Status LlmLiteRtNpuCompiledModelExecutor::RebindActiveContextGroup() {
   auto& active_group = ActiveContextGroup();
   main_mask_.SetGeometry(&active_group.geometry);
   main_cache_.SetGeometry(&active_group.geometry);
@@ -2326,7 +2456,6 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::RestoreContext(
     LITERT_RETURN_IF_ERROR(drafter_context_->UpdateKVCacheBuffers(
         active_group.input_kv_cache_buffers));
   }
-
   return absl::OkStatus();
 }
 
@@ -2418,14 +2547,22 @@ absl::StatusOr<int> LlmLiteRtNpuCompiledModelExecutor::DetermineSequenceLength(
     const litert::Model& text_decoder_model) {
   if (NpuDynamismHelper::HasDynamicKVCache(text_decoder_model)) {
     const int requested_tokens = executor_settings.GetMaxNumTokens();
-    if (requested_tokens <= 0) {
-      return absl::InvalidArgumentError(
-          "Dynamic KV cache models require max_num_tokens to be specified in "
-          "executor settings to determine resize target.");
-    }
-
     std::optional<int> model_max_limit =
         DetermineMaxSequenceLengthDynamicModel(resources);
+
+    if (requested_tokens <= 0) {
+      if (!model_max_limit.has_value()) {
+        return absl::InvalidArgumentError(
+            "Dynamic KV cache models require max_num_tokens to be specified in "
+            "executor settings (or LlmMetadata.max_num_tokens in the model) to "
+            "determine the maximum context size.");
+      }
+      ABSL_LOG(INFO) << "max_num_tokens not specified for dynamic KV cache "
+                        "model; using model limit ("
+                     << *model_max_limit << ").";
+      return *model_max_limit;
+    }
+
     if (model_max_limit.has_value() && requested_tokens > *model_max_limit) {
       ABSL_LOG(WARNING) << "Passed in max_num_tokens (" << requested_tokens
                         << ") is larger than what the dynamic model supports ("
@@ -2438,6 +2575,198 @@ absl::StatusOr<int> LlmLiteRtNpuCompiledModelExecutor::DetermineSequenceLength(
 
   return DetermineMaxSequenceLengthStaticModel(executor_settings, resources,
                                                text_decoder_model);
+}
+
+// static
+absl::StatusOr<LlmLiteRtNpuCompiledModelExecutor::BuiltContextGroup>
+LlmLiteRtNpuCompiledModelExecutor::BuildContextGroup(
+    Environment& env, const litert::Model* text_decoder_model,
+    CompiledModel& text_decoder_compiled_model,
+    const ResolvedPrefillSignatures& prefill_signatures,
+    absl::string_view decode_signature, absl::string_view verify_signature,
+    int context_size,
+    absl::flat_hash_map<absl::string_view, TensorBuffer> input_kv_cache_buffers,
+    absl::flat_hash_map<absl::string_view, HWQuantParams>& kv_quant_params,
+    int64_t kv_cache_init_value, std::optional<int> requested_context_size,
+    const proto::ExecutorMetadata* executor_metadata) {
+  absl::flat_hash_map<absl::string_view, TensorBuffer> prefill_in;
+  absl::flat_hash_map<absl::string_view, TensorBuffer> decode_in;
+  absl::flat_hash_map<absl::string_view, TensorBuffer> verify_in;
+  absl::flat_hash_map<absl::string_view, TensorBuffer> prefill_out_slices;
+  absl::flat_hash_map<absl::string_view, TensorBuffer> decode_out_slices;
+  absl::flat_hash_map<absl::string_view, TensorBuffer> verify_out_slices;
+
+  LITERT_ASSIGN_OR_RETURN(
+      const int resolved_context_size,
+      AllocateTextDecoderBuffers(
+          env, text_decoder_model, text_decoder_compiled_model,
+          prefill_signatures, decode_signature, verify_signature, prefill_in,
+          decode_in, verify_in, input_kv_cache_buffers, prefill_out_slices,
+          decode_out_slices, verify_out_slices, kv_quant_params,
+          kv_cache_init_value, requested_context_size));
+
+  LITERT_ASSIGN_OR_RETURN(
+      auto inference_context,
+      CreateTextDecoderInferenceContext(
+          env, text_decoder_compiled_model, prefill_signatures,
+          decode_signature, verify_signature, input_kv_cache_buffers,
+          prefill_out_slices, decode_out_slices, verify_out_slices, prefill_in,
+          decode_in, verify_in));
+
+  BuiltContextGroup built;
+  built.group.context_size = context_size;
+  built.group.prefill_signatures = prefill_signatures;
+  built.group.decode_signature = std::string(decode_signature);
+  built.group.verify_signature = std::string(verify_signature);
+  built.group.input_kv_cache_buffers = std::move(input_kv_cache_buffers);
+  built.group.text_decoder_inference_context = std::move(inference_context);
+  built.resolved_context_size = resolved_context_size;
+
+  // Resolve the geometry against the buffers this group actually owns. For
+  // dynamic models the hardware buckets the request, so `resolved_context_size`
+  // (not the requested size) is the real cache length; static models report 0
+  // here and use their nominal `context_size`.
+  const int geometry_cache_length =
+      resolved_context_size > 0 ? resolved_context_size : context_size;
+  built.group.geometry = ResolveModelGeometry(
+      prefill_signatures.size, geometry_cache_length,
+      built.group.input_kv_cache_buffers, executor_metadata);
+  return built;
+}
+
+// static
+absl::StatusOr<std::vector<ContextGroup>>
+LlmLiteRtNpuCompiledModelExecutor::CreateStaticContextGroups(
+    Environment& env, const litert::Model* text_decoder_model,
+    CompiledModel& text_decoder_compiled_model,
+    const std::vector<int>& sorted_supported_context_sizes, int prefill_size,
+    absl::flat_hash_map<absl::string_view, HWQuantParams>& kv_quant_params,
+    int64_t kv_cache_init_value,
+    const proto::ExecutorMetadata* executor_metadata) {
+  RET_CHECK(!sorted_supported_context_sizes.empty());
+  const bool multi_context = sorted_supported_context_sizes.size() > 1;
+  auto decode_signature_for = [&](int context_size) {
+    return multi_context ? absl::StrCat("decode_cache_", context_size)
+                         : std::string(kDecodeSignature);
+  };
+  auto verify_signature_for = [&](int context_size) {
+    return multi_context ? absl::StrCat("verify_cache_", context_size)
+                         : std::string(TextDecoderSignatures::kVerify);
+  };
+
+  std::vector<ContextGroup> context_groups(
+      sorted_supported_context_sizes.size());
+
+  // =========================================================================
+  // Phase 1: Allocate Largest Context Group (Owns All Master Hardware Buffers)
+  // =========================================================================
+  const int largest_group_idx = sorted_supported_context_sizes.size() - 1;
+  const int max_context_size = sorted_supported_context_sizes.back();
+  {
+    const std::string decode_sig = decode_signature_for(max_context_size);
+    const std::string verify_sig = verify_signature_for(max_context_size);
+    LITERT_ASSIGN_OR_RETURN(
+        BuiltContextGroup built,
+        BuildContextGroup(
+            env, text_decoder_model, text_decoder_compiled_model,
+            BuildResolvedPrefillSignatures(prefill_size, max_context_size),
+            decode_sig, verify_sig, max_context_size,
+            /*input_kv_cache_buffers=*/{}, kv_quant_params, kv_cache_init_value,
+            /*requested_context_size=*/std::nullopt, executor_metadata));
+    context_groups[largest_group_idx] = std::move(built.group);
+  }
+
+  // =========================================================================
+  // Phase 2: Create Aliased Context Groups for Smaller Context Sizes
+  // =========================================================================
+  const auto& master_kv_buffers =
+      context_groups[largest_group_idx].input_kv_cache_buffers;
+
+  for (size_t i = 0; i + 1 < sorted_supported_context_sizes.size(); ++i) {
+    const int ctx_size = sorted_supported_context_sizes[i];
+    const std::string decode_sig = decode_signature_for(ctx_size);
+    const std::string verify_sig = verify_signature_for(ctx_size);
+
+    LITERT_ASSIGN_OR_RETURN(auto decode_signature,
+                            text_decoder_model->FindSignature(decode_sig));
+
+    // Alias all KV cache tensors from the master buffers.
+    absl::flat_hash_map<absl::string_view, TensorBuffer> aliased_kv_buffers;
+    for (const auto& [name, master_buf] : master_kv_buffers) {
+      auto input_tensor = decode_signature.InputTensor(name);
+      if (!input_tensor.HasValue()) {
+        continue;
+      }
+      LITERT_ASSIGN_OR_RETURN(auto target_type,
+                              input_tensor->RankedTensorType());
+      LITERT_ASSIGN_OR_RETURN(auto alias_buf,
+                              CreateAliasBuffer(env, master_buf, target_type));
+      aliased_kv_buffers[name] = std::move(alias_buf);
+    }
+
+    LITERT_ASSIGN_OR_RETURN(
+        BuiltContextGroup built,
+        BuildContextGroup(
+            env, text_decoder_model, text_decoder_compiled_model,
+            BuildResolvedPrefillSignatures(prefill_size, ctx_size), decode_sig,
+            verify_sig, ctx_size, std::move(aliased_kv_buffers),
+            kv_quant_params, kv_cache_init_value,
+            /*requested_context_size=*/std::nullopt, executor_metadata));
+    context_groups[i] = std::move(built.group);
+  }
+
+  return context_groups;
+}
+
+// static
+absl::StatusOr<LlmLiteRtNpuCompiledModelExecutor::BuiltContextGroup>
+LlmLiteRtNpuCompiledModelExecutor::CreateDynamicContextGroup(
+    Environment& env, const litert::Model* text_decoder_model,
+    CompiledModel& text_decoder_compiled_model, int prefill_size,
+    absl::flat_hash_map<absl::string_view, HWQuantParams>& kv_quant_params,
+    int64_t kv_cache_init_value, int requested_context_size,
+    const proto::ExecutorMetadata* executor_metadata) {
+  RET_CHECK_GT(requested_context_size, 0);
+  // Dynamic models expose a single set of signatures without a context-size
+  // suffix (hence `context_size` 0 for signature resolution); the KV cache size
+  // is selected by resizing the signatures' dynamic inputs.
+  //
+  // Note on local (sliding-window) layers: when no ExecutorMetadata is
+  // available, `ResolveModelGeometry` classifies a KV cache buffer as local
+  // only if it is physically smaller than the global cache length. That is a
+  // statement about the allocation, not about the attention pattern: a layer
+  // can use a local mask to restrict what it attends to while still being
+  // allocated at full context length. The dynamic (fabric) models we currently
+  // run allocate every layer at the same size, so no buffer is classified as
+  // local and every buffer grows together on resize.
+  // TODO: Add coverage for a dynamic model that has physically smaller local
+  // layers, where a resize grows only a subset of the KV cache buffers.
+  return BuildContextGroup(
+      env, text_decoder_model, text_decoder_compiled_model,
+      BuildResolvedPrefillSignatures(prefill_size, /*context_size=*/0),
+      kDecodeSignature, TextDecoderSignatures::kVerify, /*context_size=*/0,
+      /*input_kv_cache_buffers=*/{}, kv_quant_params, kv_cache_init_value,
+      requested_context_size, executor_metadata);
+}
+
+// static
+absl::Status LlmLiteRtNpuCompiledModelExecutor::ResizeAuxiliaryMaskInputs(
+    CompiledModel& npu_auxiliary_compiled_model, const ContextGroup& group,
+    int context_size) {
+  LITERT_RETURN_IF_ERROR(NpuDynamismHelper::ResizeDynamicMaskInputs(
+      npu_auxiliary_compiled_model, group.prefill_signatures.mask,
+      context_size));
+  LITERT_RETURN_IF_ERROR(NpuDynamismHelper::ResizeDynamicMaskInputs(
+      npu_auxiliary_compiled_model, group.decode_aux_signatures.mask,
+      context_size));
+  if (!group.verify_aux_signatures.mask.empty() &&
+      npu_auxiliary_compiled_model.FindSignature(
+          group.verify_aux_signatures.mask)) {
+    LITERT_RETURN_IF_ERROR(NpuDynamismHelper::ResizeDynamicMaskInputs(
+        npu_auxiliary_compiled_model, group.verify_aux_signatures.mask,
+        context_size));
+  }
+  return absl::OkStatus();
 }
 
 // static
@@ -2552,15 +2881,11 @@ LlmLiteRtNpuCompiledModelExecutor::Create(
       CompiledModel text_decoder_compiled_model,
       CompiledModel::Create(env, text_decoder_model->Get(), options));
 
-  absl::flat_hash_map<absl::string_view, TensorBuffer> input_kv_cache_buffers;
   absl::flat_hash_map<absl::string_view, HWQuantParams> kv_quant_params;
 
+  // For dynamic models: the number of tokens the KV cache is allocated for.
+  // Stays 0 for static models.
   int resolved_context_size = 0;
-  std::optional<int> requested_context_size;
-  if (is_dynamic_model) {
-    requested_context_size = mutable_settings.GetMaxNumTokens();
-  }
-
   const proto::ExecutorMetadata* executor_metadata = nullptr;
   auto executor_metadata_or = resources.GetExecutorMetadata();
   if (executor_metadata_or.ok()) {
@@ -2568,172 +2893,57 @@ LlmLiteRtNpuCompiledModelExecutor::Create(
   }
 
   std::vector<ContextGroup> context_groups;
-  context_groups.resize(sorted_supported_context_sizes.size());
 
-  // =========================================================================
-  // Phase 1: Allocate Largest Context Group (Owns All Master Hardware Buffers)
-  // =========================================================================
-  const int largest_group_idx = sorted_supported_context_sizes.size() - 1;
-  {
-    const ResolvedPrefillSignatures max_prefill_sigs =
-        BuildResolvedPrefillSignatures(prefill_size, max_context_size);
-    const std::string max_decode_sig =
-        sorted_supported_context_sizes.size() > 1
-            ? absl::StrCat("decode_cache_", max_context_size)
-            : std::string(kDecodeSignature);
-    const std::string max_verify_sig =
-        sorted_supported_context_sizes.size() > 1
-            ? absl::StrCat("verify_cache_", max_context_size)
-            : std::string(TextDecoderSignatures::kVerify);
-
-    absl::flat_hash_map<absl::string_view, TensorBuffer>
-        master_kv_cache_buffers;
-    absl::flat_hash_map<absl::string_view, TensorBuffer> group_prefill_in;
-    absl::flat_hash_map<absl::string_view, TensorBuffer> group_decode_in;
-    absl::flat_hash_map<absl::string_view, TensorBuffer> group_verify_in;
-    absl::flat_hash_map<absl::string_view, TensorBuffer>
-        group_prefill_out_slices;
-    absl::flat_hash_map<absl::string_view, TensorBuffer>
-        group_decode_out_slices;
-    absl::flat_hash_map<absl::string_view, TensorBuffer>
-        group_verify_out_slices;
+  if (is_dynamic_model) {
+    // Dynamic models have a single set of signatures and choose the KV cache
+    // size by resizing. Two allocation modes are supported:
+    // - Full: allocate the whole logical limit (`max_num_tokens`) at creation
+    //   time so that all allocation cost is paid during initialization.
+    // - Deferred: allocate only the configured initial size (see
+    //   GetDynamicKvCacheInitialSize) now and grow on demand once the actual
+    //   prefill/decode length is known (see GrowDynamicKVCache).
+    const int logical_max_tokens = mutable_settings.GetMaxNumTokens();
+    // The initial capacity must at least hold one (padded) prefill chunk.
+    const int configured_initial_size = GetDynamicKvCacheInitialSize();
+    const int initial_size =
+        configured_initial_size > 0
+            ? std::max(configured_initial_size, prefill_size)
+            : 0;
+    const bool deferred_allocation =
+        initial_size > 0 && initial_size < logical_max_tokens;
+    const int requested_context_size =
+        deferred_allocation ? initial_size : logical_max_tokens;
 
     LITERT_ASSIGN_OR_RETURN(
-        resolved_context_size,
-        AllocateTextDecoderBuffers(
-            env, text_decoder_model, text_decoder_compiled_model,
-            max_prefill_sigs, max_decode_sig, max_verify_sig, group_prefill_in,
-            group_decode_in, group_verify_in, master_kv_cache_buffers,
-            group_prefill_out_slices, group_decode_out_slices,
-            group_verify_out_slices, kv_quant_params, kv_cache_init_value,
-            requested_context_size));
+        BuiltContextGroup built,
+        CreateDynamicContextGroup(env, text_decoder_model,
+                                  text_decoder_compiled_model, prefill_size,
+                                  kv_quant_params, kv_cache_init_value,
+                                  requested_context_size, executor_metadata));
+    resolved_context_size = built.resolved_context_size;
+    context_groups.push_back(std::move(built.group));
 
-    if (requested_context_size.has_value() &&
-        resolved_context_size != *requested_context_size) {
+    if (deferred_allocation) {
+      ABSL_LOG(INFO) << "Dynamic KV cache: deferred allocation. Allocated "
+                     << resolved_context_size
+                     << " tokens (requested: " << requested_context_size
+                     << ") of logical max_num_tokens " << logical_max_tokens
+                     << "; the KV cache grows on demand during prefill/decode.";
+    } else if (resolved_context_size != requested_context_size) {
+      // Fully allocated up front: the bucketed hardware size becomes the
+      // effective limit.
       ABSL_LOG(INFO) << "Dynamic KV cache resized to bucket size: "
                      << resolved_context_size
-                     << " (requested: " << *requested_context_size << ").";
+                     << " (requested: " << requested_context_size << ").";
       mutable_settings.SetMaxNumTokens(resolved_context_size);
     }
-
-    // Dynamic HostMemory workaround: ensure all KV buffers in the master group
-    // are on NPU memory (e.g. layer 19 in Gemma3n or other layers unconnected
-    // in prefill)
-    for (auto& [name, buf] : master_kv_cache_buffers) {
-      if (absl::StartsWith(name, kv_cache_k_root_name) ||
-          absl::StartsWith(name, kv_cache_v_root_name) ||
-          absl::StartsWith(name, kv_cache_c_root_name)) {
-        auto buf_type = buf.BufferType();
-        if (buf_type.HasValue() &&
-            buf_type.Value() == ::litert::TensorBufferType::kHostMemory) {
-          LITERT_ASSIGN_OR_RETURN(auto new_buf,
-                                  text_decoder_compiled_model.CreateInputBuffer(
-                                      max_decode_sig, name));
-          LITERT_RETURN_IF_ERROR(
-              FillKVCacheBuffer(new_buf, kv_cache_init_value));
-          buf = std::move(new_buf);
-        }
-      }
-    }
-
+  } else {
     LITERT_ASSIGN_OR_RETURN(
-        auto max_inference_context,
-        CreateTextDecoderInferenceContext(
-            env, text_decoder_compiled_model, max_prefill_sigs, max_decode_sig,
-            max_verify_sig, master_kv_cache_buffers, group_prefill_out_slices,
-            group_decode_out_slices, group_verify_out_slices, group_prefill_in,
-            group_decode_in, group_verify_in));
-
-    ContextGroup group;
-    group.context_size = max_context_size;
-    group.prefill_signatures = max_prefill_sigs;
-    group.decode_signature = max_decode_sig;
-    group.verify_signature = max_verify_sig;
-    group.input_kv_cache_buffers = std::move(master_kv_cache_buffers);
-    group.text_decoder_inference_context = std::move(max_inference_context);
-    group.geometry =
-        ResolveModelGeometry(prefill_size, max_context_size,
-                             group.input_kv_cache_buffers, executor_metadata);
-    context_groups[largest_group_idx] = std::move(group);
-  }
-
-  // =========================================================================
-  // Phase 2: Create Aliased Context Groups for Smaller Context Sizes
-  // =========================================================================
-  const auto& master_kv_buffers =
-      context_groups[largest_group_idx].input_kv_cache_buffers;
-
-  for (size_t i = 0; i + 1 < sorted_supported_context_sizes.size(); ++i) {
-    int ctx_size = sorted_supported_context_sizes[i];
-    const ResolvedPrefillSignatures group_prefill_sigs =
-        BuildResolvedPrefillSignatures(prefill_size, ctx_size);
-    const std::string group_decode_sig =
-        sorted_supported_context_sizes.size() > 1
-            ? absl::StrCat("decode_cache_", ctx_size)
-            : std::string(kDecodeSignature);
-    const std::string group_verify_sig =
-        sorted_supported_context_sizes.size() > 1
-            ? absl::StrCat("verify_cache_", ctx_size)
-            : std::string(TextDecoderSignatures::kVerify);
-
-    LITERT_ASSIGN_OR_RETURN(
-        auto decode_signature,
-        text_decoder_model->FindSignature(group_decode_sig));
-
-    absl::flat_hash_map<absl::string_view, TensorBuffer> aliased_kv_buffers;
-    // Alias all KV cache tensors from the master buffer
-    for (const auto& [name, master_buf] : master_kv_buffers) {
-      auto input_tensor = decode_signature.InputTensor(name);
-      if (!input_tensor.HasValue()) {
-        continue;
-      }
-      LITERT_ASSIGN_OR_RETURN(auto target_type,
-                              input_tensor->RankedTensorType());
-      LITERT_ASSIGN_OR_RETURN(auto alias_buf,
-                              CreateAliasBuffer(env, master_buf, target_type));
-      aliased_kv_buffers[name] = std::move(alias_buf);
-    }
-
-    absl::flat_hash_map<absl::string_view, TensorBuffer> group_prefill_in;
-    absl::flat_hash_map<absl::string_view, TensorBuffer> group_decode_in;
-    absl::flat_hash_map<absl::string_view, TensorBuffer> group_verify_in;
-    absl::flat_hash_map<absl::string_view, TensorBuffer>
-        group_prefill_out_slices;
-    absl::flat_hash_map<absl::string_view, TensorBuffer>
-        group_decode_out_slices;
-    absl::flat_hash_map<absl::string_view, TensorBuffer>
-        group_verify_out_slices;
-
-    LITERT_RETURN_IF_ERROR(
-        AllocateTextDecoderBuffers(
+        context_groups,
+        CreateStaticContextGroups(
             env, text_decoder_model, text_decoder_compiled_model,
-            group_prefill_sigs, group_decode_sig, group_verify_sig,
-            group_prefill_in, group_decode_in, group_verify_in,
-            aliased_kv_buffers, group_prefill_out_slices,
-            group_decode_out_slices, group_verify_out_slices, kv_quant_params,
-            kv_cache_init_value)
-            .status());
-
-    LITERT_ASSIGN_OR_RETURN(
-        auto group_inference_context,
-        CreateTextDecoderInferenceContext(
-            env, text_decoder_compiled_model, group_prefill_sigs,
-            group_decode_sig, group_verify_sig, aliased_kv_buffers,
-            group_prefill_out_slices, group_decode_out_slices,
-            group_verify_out_slices, group_prefill_in, group_decode_in,
-            group_verify_in));
-
-    ContextGroup group;
-    group.context_size = ctx_size;
-    group.prefill_signatures = group_prefill_sigs;
-    group.decode_signature = group_decode_sig;
-    group.verify_signature = group_verify_sig;
-    group.input_kv_cache_buffers = std::move(aliased_kv_buffers);
-    group.text_decoder_inference_context = std::move(group_inference_context);
-    group.geometry =
-        ResolveModelGeometry(prefill_size, ctx_size,
-                             group.input_kv_cache_buffers, executor_metadata);
-    context_groups[i] = std::move(group);
+            sorted_supported_context_sizes, prefill_size, kv_quant_params,
+            kv_cache_init_value, executor_metadata));
   }
 
   LITERT_RETURN_IF_ERROR(ApplyLegacyKvCacheWorkarounds(
@@ -2780,20 +2990,10 @@ LlmLiteRtNpuCompiledModelExecutor::Create(
   auto& first_verify_in =
       context_groups[0].text_decoder_inference_context.verify_input_buffers;
 
-  if (requested_context_size.has_value()) {
-    LITERT_RETURN_IF_ERROR(NpuDynamismHelper::ResizeDynamicMaskInputs(
-        npu_auxiliary_context.npu_auxiliary_compiled_model,
-        first_prefill_sigs.mask, resolved_context_size));
-    LITERT_RETURN_IF_ERROR(NpuDynamismHelper::ResizeDynamicMaskInputs(
-        npu_auxiliary_context.npu_auxiliary_compiled_model,
-        first_decode_aux_sigs.mask, resolved_context_size));
-    if (!first_verify_aux_sigs.mask.empty() &&
-        npu_auxiliary_context.npu_auxiliary_compiled_model.FindSignature(
-            first_verify_aux_sigs.mask)) {
-      LITERT_RETURN_IF_ERROR(NpuDynamismHelper::ResizeDynamicMaskInputs(
-          npu_auxiliary_context.npu_auxiliary_compiled_model,
-          first_verify_aux_sigs.mask, resolved_context_size));
-    }
+  if (is_dynamic_model) {
+    LITERT_RETURN_IF_ERROR(ResizeAuxiliaryMaskInputs(
+        npu_auxiliary_context.npu_auxiliary_compiled_model, context_groups[0],
+        resolved_context_size));
   }
 
   LITERT_ASSIGN_OR_RETURN(
@@ -2895,7 +3095,8 @@ LlmLiteRtNpuCompiledModelExecutor::Create(
       speculative_decoding_type, std::move(drafter_context),
       std::move(drafter_aux_context), std::move(main_embedder),
       std::move(main_rope), std::move(main_mask), std::move(main_cache),
-      std::move(initial_geometry)));
+      text_decoder_model, llm_metadata, executor_metadata, is_dynamic_model,
+      resolved_context_size, std::move(initial_geometry)));
 }
 
 absl::Status LlmLiteRtNpuCompiledModelExecutor::ClearKVCache(

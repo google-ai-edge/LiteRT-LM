@@ -179,7 +179,8 @@ absl::Status NpuDynamismHelper::ResizeDynamicMaskInputs(
           auto layout, aux_compiled_model.GetInputTensorLayout(sig_idx, i));
       auto dims = layout.Dimensions();
       std::vector<int32_t> new_dims(dims.begin(), dims.end());
-      if (new_dims.size() == 1 && new_dims[0] == -1) {
+      if (new_dims.size() == 1 &&
+          (new_dims[0] == -1 || new_dims[0] != resolved_context_size)) {
         new_dims[0] = resolved_context_size;
         auto res =
             aux_compiled_model.ResizeInputTensor(sig_idx, name, new_dims);

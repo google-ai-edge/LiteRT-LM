@@ -77,6 +77,16 @@ struct MaskSignatures {
 //        active_group.text_decoder_inference_context.prefill_input_buffers,
 //        active_group.text_decoder_inference_context.decode_input_buffers,
 //        active_group.text_decoder_inference_context.verify_input_buffers);
+//
+// 6. Dynamic KV Cache Resizing (dynamic models only):
+//    After the auxiliary model's mask signatures have been resized to the new
+//    context size, re-create the shape-only context-length inputs so that the
+//    buffers match the resized signatures, then point the mask at the new
+//    group's geometry and rebind its output buffers as in (5):
+//    mask_.RecreateContextLengthInputBuffers(
+//        prefill_mask_signature, decode_mask_signature, verify_mask_signature);
+//    mask_.SetGeometry(&new_group.geometry);
+//    mask_.UpdateOutputBuffers(...);
 // =============================================================================
 class NpuMask {
  public:
@@ -129,6 +139,20 @@ class NpuMask {
           text_decoder_decode_input_buffers,
       const absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
           text_decoder_verify_input_buffers);
+
+  // Re-creates the context-length input buffers (`local_context_length`,
+  // `global_context_length`) of the prefill/decode/verify mask signatures.
+  //
+  // Dynamic mask signatures take these as extra inputs whose values are never
+  // read: they only carry the context size through their shape, so that the
+  // mask output shape can follow a resized KV cache. After the auxiliary
+  // model's mask signatures have been resized, the compiled model rejects the
+  // old buffers because their shape no longer matches the signature. Only
+  // buffers whose expected shape actually changed are replaced; all other
+  // input buffers (and signatures without these inputs) are left untouched.
+  absl::Status RecreateContextLengthInputBuffers(
+      absl::string_view prefill_signature, absl::string_view decode_signature,
+      absl::string_view verify_signature);
 
   // --- Stage 1: Prefill ---
   absl::Status SetPrefillInput(int32_t start_step,

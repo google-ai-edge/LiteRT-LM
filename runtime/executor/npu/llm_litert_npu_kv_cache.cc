@@ -948,7 +948,7 @@ absl::Status NpuKVCache::CommitVerifiedKVCache(int start_step,
 
 absl::Status NpuKVCache::CopySingleKVCacheBuffer(
     const ::litert::TensorBuffer& src, ::litert::TensorBuffer& dst,
-    int active_seq_len, int64_t kv_cache_init_value) {
+    int active_seq_len, int64_t kv_cache_init_value, int sequence_axis) {
   if (active_seq_len <= 0) {
     return absl::OkStatus();
   }
@@ -958,16 +958,25 @@ absl::Status NpuKVCache::CopySingleKVCacheBuffer(
   auto src_dims = src_type.Layout().Dimensions();
   auto dst_dims = dst_type.Layout().Dimensions();
 
-  int seq_dim_idx = -1;
-  for (int i = 0; i < src_dims.size(); ++i) {
-    if (src_dims[i] != dst_dims[i]) {
-      seq_dim_idx = i;
-      break;
+  int seq_dim_idx = sequence_axis;
+  if (seq_dim_idx < 0) {
+    // No geometry information for this buffer: fall back to inferring the
+    // sequence axis from the shape difference.
+    for (int i = 0; i < src_dims.size(); ++i) {
+      if (src_dims[i] != dst_dims[i]) {
+        seq_dim_idx = i;
+        break;
+      }
     }
-  }
-
-  if (seq_dim_idx == -1) {
-    return absl::OkStatus();
+    if (seq_dim_idx < 0) {
+      // Identical shapes and no axis to fall back on: assume `src` and `dst`
+      // alias the same allocation, so there is nothing to migrate.
+      return absl::OkStatus();
+    }
+  } else if (seq_dim_idx >= static_cast<int>(src_dims.size())) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "KV cache sequence axis ", seq_dim_idx, " is out of range for a rank-",
+        src_dims.size(), " buffer."));
   }
 
   for (int i = 0; i < src_dims.size(); ++i) {
@@ -994,6 +1003,15 @@ absl::Status NpuKVCache::CopySingleKVCacheBuffer(
 
   const char* src_ptr = static_cast<const char*>(src_lock.second);
   char* dst_ptr = static_cast<char*>(dst_lock.second);
+
+  size_t S_src = src_dims[seq_dim_idx];
+  size_t S_dst = dst_dims[seq_dim_idx];
+
+  if (src_ptr == dst_ptr && S_src == S_dst) {
+    // `src` and `dst` alias the same allocation and were not resized, so the
+    // data is already where it needs to be.
+    return absl::OkStatus();
+  }
 
   auto clear_range = [&](size_t element_offset, size_t num_elements) {
     size_t byte_offset = byte_width.NumBytes(element_offset);
@@ -1030,9 +1048,14 @@ absl::Status NpuKVCache::CopySingleKVCacheBuffer(
     inner_count *= src_dims[i];
   }
 
-  size_t S_src = src_dims[seq_dim_idx];
-  size_t S_dst = dst_dims[seq_dim_idx];
-  size_t valid_seq_len = std::min(static_cast<size_t>(active_seq_len), S_src);
+  // When the buffer grew we only need the active prefix; the rest of the
+  // destination is padding. When it did not grow, `dst` is a distinct
+  // allocation that must end up byte-identical to `src`, so everything is
+  // copied. This matters for layers whose useful content is not confined to a
+  // [0, active_seq_len) prefix, such as wrapped ring buffers.
+  size_t valid_seq_len =
+      S_dst > S_src ? std::min(static_cast<size_t>(active_seq_len), S_src)
+                    : std::min(S_src, S_dst);
   size_t copy_elements_per_seq = valid_seq_len * inner_count;
   size_t bytes_to_copy = byte_width.NumBytes(copy_elements_per_seq);
 
@@ -1066,14 +1089,28 @@ absl::Status NpuKVCache::CopyKVCache(
   }
 
   for (const auto& [name, src_buf] : src_buffers) {
-    if (name.starts_with(kKvCacheKRootName) ||
-        name.starts_with(kKvCacheVRootName) ||
-        name.starts_with(kKvCacheCRootName)) {
-      if (dst_buffers.contains(name)) {
-        LITERT_RETURN_IF_ERROR(CopySingleKVCacheBuffer(
-            src_buf, dst_buffers[name], active_seq_len, kv_cache_init_value_));
+    if (!name.starts_with(kKvCacheKRootName) &&
+        !name.starts_with(kKvCacheVRootName) &&
+        !name.starts_with(kKvCacheCRootName)) {
+      continue;
+    }
+    auto dst_it = dst_buffers.find(name);
+    if (dst_it == dst_buffers.end()) {
+      continue;
+    }
+    // Prefer the sequence axis recorded in the model geometry. Buffers the
+    // geometry does not describe fall back to shape-based inference inside
+    // CopySingleKVCacheBuffer.
+    int sequence_axis = -1;
+    if (geometry_ != nullptr) {
+      if (auto info = geometry_->kv_buffer_info.find(name);
+          info != geometry_->kv_buffer_info.end()) {
+        sequence_axis = info->second.sequence_axis;
       }
     }
+    LITERT_RETURN_IF_ERROR(
+        CopySingleKVCacheBuffer(src_buf, dst_it->second, active_seq_len,
+                                kv_cache_init_value_, sequence_axis));
   }
 
   return absl::OkStatus();
