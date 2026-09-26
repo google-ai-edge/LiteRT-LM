@@ -194,6 +194,13 @@ build:ios_x86_64 --platforms=@build_bazel_apple_support//platforms:ios_x86_64
 build:ios_fat --config=ios
 build:ios_fat --ios_multi_cpus=armv7,arm64,i386,x86_64
 
+# Windows ARM64 build configuration using clang-cl.
+build:windows_arm64 --extra_execution_platforms=//tools/windows_arm64:windows_arm64_clang_cl
+build:windows_arm64 --host_platform=//tools/windows_arm64:windows_arm64_clang_cl
+build:windows_arm64 --platforms=//tools/windows_arm64:windows_arm64_clang_cl
+build:windows_arm64 --extra_toolchains=@local_config_cc//:cc-toolchain-arm64_windows-clang-cl
+build:windows_arm64 --compiler=clang-cl
+
 # Config to use a mostly-static build and disable modular op registration
 # support (this will revert to loading TensorFlow with RTLD_GLOBAL in Python).
 # By default, TensorFlow will build with a dependence on
@@ -392,7 +399,9 @@ build:avx_win --copt=/arch:AVX
 
 # Assume AVX2 x86_64 platforms for linux and windows.
 build:linux_x86_64 --copt=-mavx2
-build:windows --copt=/arch:AVX2
+# /arch:AVX2 is an x86-only flag; cl.exe targeting ARM64 rejects it. Scope it to
+# the x86_64 Windows config instead of every Windows build.
+build:windows_x86_64 --copt=/arch:AVX2
 
 # Enable all targets in XLA
 build:cpu_cross --define=with_cross_compiler_support=true

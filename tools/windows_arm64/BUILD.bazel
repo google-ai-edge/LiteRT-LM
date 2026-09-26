@@ -1,0 +1,53 @@
+# Windows ARM64 support for the Bazel build.
+#
+# See README.md in this directory for the full procedure.
+
+load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
+
+package(default_visibility = ["//visibility:public"])
+
+# Execution/target platform that selects the clang-cl C++ toolchain.
+#
+# @local_config_cc//:cc-toolchain-arm64_windows-clang-cl declares
+#   exec_compatible_with = [
+#       "@platforms//os:windows",
+#       "@bazel_tools//tools/cpp:clang-cl",
+#   ]
+# The default host platform carries no compiler constraint, so that toolchain
+# can never be selected there, and --compiler=clang-cl is ignored under Bazel
+# 7's platform-based resolution. Pass this platform as --host_platform,
+# --platforms and --extra_execution_platforms, together with
+# --extra_toolchains=@local_config_cc//:cc-toolchain-arm64_windows-clang-cl
+# (the cl.exe toolchain matches this platform too and is registered first).
+platform(
+    name = "windows_arm64_clang_cl",
+    constraint_values = [
+        "@platforms//cpu:arm64",
+        "@platforms//os:windows",
+        "@bazel_tools//tools/cpp:clang-cl",
+    ],
+)
+
+# Qualcomm NPU dispatch library.
+#
+# LiteRT builds it on Windows as LiteRtDispatch_Qualcomm.dll, but the runtime
+# only loads dispatch libraries whose name starts with "libLiteRtDispatch"
+# (litert/core/dynamic_loading.h), so the upstream output is never found.
+# Same approach as python/litert_lm:copy_openvino_dispatch_dll.
+copy_file(
+    name = "qualcomm_dispatch_dll",
+    src = "@litert//litert/vendors/qualcomm/dispatch:LiteRtDispatch_Qualcomm",
+    out = "libLiteRtDispatch_Qualcomm.dll",
+)
+
+# Everything needed to run a model on the NPU that is built from source: the
+# two runtime binaries plus the dispatch library. The QNN runtime itself
+# (QnnHtp.dll, the Hexagon skels, ...) is Qualcomm's prebuilt SDK.
+filegroup(
+    name = "npu",
+    srcs = [
+        ":qualcomm_dispatch_dll",
+        "//runtime/engine:litert_lm_advanced_main",
+        "//runtime/engine:litert_lm_main",
+    ],
+)

@@ -179,6 +179,22 @@ alias(
     actual = ":gemma_model_constraint_provider_shared_lib",
 )
 
+config_setting(
+    name = "windows_x86_64",
+    constraint_values = [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:windows",
+    ],
+)
+
+config_setting(
+    name = "windows_arm64",
+    constraint_values = [
+        "@platforms//cpu:arm64",
+        "@platforms//os:windows",
+    ],
+)
+
 cc_import(
     name = "gemma_model_constraint_provider_dll_import",
     interface_library = "//prebuilt/windows_x86_64:libGemmaModelConstraintProvider.lib",
@@ -196,12 +212,21 @@ cc_library(
         "//build_config:ios_sim_arm64": ["//prebuilt/ios_sim_arm64:libGemmaModelConstraintProvider.dylib"],
         "//build_config:ios_arm64": ["//prebuilt/ios_arm64:libGemmaModelConstraintProvider.dylib"],
         "@platforms//os:macos": ["//prebuilt/macos_arm64:libGemmaModelConstraintProvider.dylib"],
+        # prebuilt/ has no windows_arm64 variant, so fall back to the same stub
+        # the CMake build uses rather than linking the x86_64 import library.
+        ":windows_arm64": ["//cmake/patches/stubs:gemma_model_constraint_provider.cc"],
         "@platforms//os:windows": [],
         "//conditions:default": [],
     }),
     hdrs = [
         "gemma_model_constraint_provider.h",
     ],
+    defines = select({
+        # The provider's C API defaults to __declspec(dllimport); the stub is
+        # linked statically, so callers must not emit __imp_ references.
+        ":windows_arm64": ["GEMMA_MODEL_CONSTRAINT_PROVIDER_EXPORT="],
+        "//conditions:default": [],
+    }),
     linkopts = select({
         "@platforms//os:ios": ["-Wl,-rpath,@loader_path"],
         "@platforms//os:macos": ["-Wl,-rpath,@loader_path"],
@@ -218,7 +243,8 @@ cc_library(
         "@nlohmann_json//:json",
         "@sentencepiece//:sentencepiece_processor",
     ] + select({
-        "@platforms//os:windows": [":gemma_model_constraint_provider_dll_import"],
+        # Only windows_x86_64 has a prebuilt import library.
+        ":windows_x86_64": [":gemma_model_constraint_provider_dll_import"],
         "//conditions:default": [],
     }),
 )
