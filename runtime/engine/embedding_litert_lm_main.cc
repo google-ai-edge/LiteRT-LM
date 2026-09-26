@@ -49,7 +49,7 @@ ABSL_FLAG(
     "and display Cosine Similarity against the current run's output vector.");
 ABSL_FLAG(bool, normalize, true,
           "Whether to L2-normalize the output embedding vector.");
-ABSL_FLAG(bool, use_mmap, false,
+ABSL_FLAG(bool, use_mmap, true,
           "Whether to use memory-mapped file for model loading.");
 ABSL_FLAG(std::string, dispatch_library_dir, "",
           "Path to directory containing LiteRT dispatch libraries.");
