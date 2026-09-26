@@ -67,6 +67,18 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
         set(_LITERTLM_LINK_GROUP_START "-Wl,--start-group")
         set(_LITERTLM_LINK_GROUP_END "-Wl,--end-group")
         set(_LITERTLM_SYSLIBS "-lz -ldl -llog")
+    elseif(WIN32)
+        if(MSVC)
+            # Clang-cl targeting MSVC ABI (uses lld-link.exe)
+            set(_LITERTLM_LINK_MULTIDEF "/FORCE:MULTIPLE")
+            set(_LITERTLM_SYSLIBS "") 
+        else()
+            # Clang targeting GNU ABI / MinGW (uses ld or lld)
+            set(_LITERTLM_LINK_MULTIDEF "-Wl,--allow-multiple-definition")
+            set(_LITERTLM_LINK_GROUP_START "-Wl,--start-group")
+            set(_LITERTLM_LINK_GROUP_END "-Wl,--end-group")
+            set(_LITERTLM_SYSLIBS "-lz") # No -lrt or -ldl on Windows
+        endif()
     else()
         # Linux / ELF Linker (GNU ld or LLD)
         set(_LITERTLM_LINK_MULTIDEF "-Wl,--allow-multiple-definition")
@@ -80,6 +92,6 @@ elseif(MSVC)
     set(_LITERTLM_SYSLIBS "") 
 endif()
 
-set(CMAKE_CXX_STANDARD_LIBRARIES "${CMAKE_CXX_STANDARD_LIBRARIES} ${_LITERTLM_LINK_MULTIDEF} ${_LITERTLM_LINK_GROUP_START} ${_PROTOBUF_PAYLOAD} ${_ABSL_PAYLOAD} ${_LITERTLM_SYSLIBS} ${_LITERTLM_LINK_GROUP_END}"
+set(CMAKE_CXX_STANDARD_LIBRARIES "${CMAKE_CXX_STANDARD_LIBRARIES} ${_LITERTLM_LINK_MULTIDEF} ${_LITERTLM_LINK_GROUP_START} ${_PROTOBUF_LINK_FLAGS} ${_ABSL_LINK_FLAGS} ${_LITERTLM_SYSLIBS} ${_LITERTLM_LINK_GROUP_END}"
     CACHE STRING "" FORCE
 )

@@ -54,7 +54,7 @@ macro(generate_absl_aggregate)
 
         set(absl_FOUND TRUE CACHE BOOL "" FORCE)
         set(Abseil_FOUND TRUE CACHE BOOL "" FORCE)
-        set(absl_DIR "Abseil merged archive" CACHE PATH "" FORCE)
+        set(absl_DIR "${LITERTLM_ABSL_INSTALL_PREFIX}/lib/cmake/absl" CACHE PATH "" FORCE)
 
         get_target_property(_ABSL_PAYLOAD LiteRTLM::absl::absl INTERFACE_LINK_LIBRARIES)
         string(REPLACE ";" " " _ABSL_LINK_FLAGS "${_ABSL_PAYLOAD}")
