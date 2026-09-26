@@ -22,6 +22,15 @@
 
 #include "runtime/engine/embedding_litert_lm_lib.h"
 
+#if defined(__ANDROID__)
+#include <dirent.h>
+#include <sys/stat.h>
+#include <unordered_map>
+
+#include "absl/strings/ascii.h"  // from @com_google_absl
+#include "absl/strings/match.h"  // from @com_google_absl
+#endif
+
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -70,7 +79,6 @@ namespace {
 
 using ::litert::lm::ActivationDataType;
 using ::litert::lm::Backend;
-using ::litert::lm::BuildLiteRtCompiledModelResources;
 using ::litert::lm::EmbeddingEngineImpl;
 using ::litert::lm::EmbeddingEngineSettings;
 using ::litert::lm::EmbeddingOptions;
@@ -206,22 +214,147 @@ bool ParseBool(absl::string_view value) {
   return value == "true" || value == "True" || value == "1";
 }
 
+#if defined(__ANDROID__)
+struct DmaBufSummary {
+  uint64_t total_bytes = 0;
+  struct Entry {
+    uint64_t inode = 0;
+    uint64_t size_bytes = 0;
+    std::string name;
+    std::string exp_name;
+  };
+  std::vector<Entry> entries;
+};
+
+DmaBufSummary GetProcessDmaBufUsage() {
+  DmaBufSummary summary;
+  DIR* dir = opendir("/proc/self/fdinfo");
+  if (dir == nullptr) {
+    return summary;
+  }
+
+  struct dirent* de = nullptr;
+  struct DmaBufItem {
+    uint64_t size = 0;
+    std::string name;
+    std::string exp_name;
+  };
+  std::unordered_map<uint64_t, DmaBufItem> buffers;
+
+  while ((de = readdir(dir)) != nullptr) {
+    if (de->d_name[0] == '.') {
+      continue;
+    }
+    std::string fd_path = absl::StrCat("/proc/self/fdinfo/", de->d_name);
+    std::ifstream file(fd_path);
+    if (!file.is_open()) {
+      continue;
+    }
+
+    uint64_t cur_ino = 0;
+    uint64_t cur_size = 0;
+    std::string cur_name;
+    std::string cur_exp;
+    std::string line;
+
+    while (std::getline(file, line)) {
+      if (absl::StartsWith(line, "size:\t") ||
+          absl::StartsWith(line, "size: ")) {
+        (void)absl::SimpleAtoi(line.substr(line.find_first_of(" \t") + 1),
+                               &cur_size);
+      } else if (absl::StartsWith(line, "ino:\t") ||
+                 absl::StartsWith(line, "ino: ")) {
+        (void)absl::SimpleAtoi(line.substr(line.find_first_of(" \t") + 1),
+                               &cur_ino);
+      } else if (absl::StartsWith(line, "exp_name:\t") ||
+                 absl::StartsWith(line, "exp_name: ")) {
+        cur_exp = std::string(absl::StripTrailingAsciiWhitespace(
+            line.substr(line.find_first_of(" \t") + 1)));
+      } else if (absl::StartsWith(line, "name:\t") ||
+                 absl::StartsWith(line, "name: ")) {
+        cur_name = std::string(absl::StripTrailingAsciiWhitespace(
+            line.substr(line.find_first_of(" \t") + 1)));
+      }
+    }
+
+    if (cur_size != 0 && !cur_exp.empty()) {
+      if (cur_ino == 0) {
+        struct stat st;
+        if (stat(absl::StrCat("/proc/self/fd/", de->d_name).c_str(), &st) ==
+            0) {
+          cur_ino = st.st_ino;
+        } else {
+          (void)absl::SimpleAtoi(de->d_name, &cur_ino);
+        }
+      }
+      buffers[cur_ino] = DmaBufItem{
+          .size = cur_size,
+          .name = cur_name.empty() ? cur_exp : cur_name,
+          .exp_name = cur_exp,
+      };
+    }
+  }
+  closedir(dir);
+
+  for (const auto& [ino, item] : buffers) {
+    summary.total_bytes += item.size;
+    summary.entries.push_back({
+        .inode = ino,
+        .size_bytes = item.size,
+        .name = item.name,
+        .exp_name = item.exp_name,
+    });
+  }
+
+  std::sort(
+      summary.entries.begin(), summary.entries.end(),
+      [](const auto& a, const auto& b) { return a.size_bytes > b.size_bytes; });
+  return summary;
+}
+#endif  // defined(__ANDROID__)
+
 void StopAndReportPeakMemoryUsage(
     tflite::profiling::memory::MemoryUsageMonitor* mem_monitor,
-    std::string* report_out) {
-  if (mem_monitor == nullptr) {
+    bool report_peak_memory_footprint, std::string* report_out) {
+  if (!report_peak_memory_footprint) {
     return;
   }
-  mem_monitor->Stop();
-  const float peak_ram_mb = mem_monitor->GetPeakPrivateFootprintInMB();
-  if (peak_ram_mb ==
-      tflite::profiling::memory::MemoryUsageMonitor::kInvalidMemUsageMB) {
-    return;
+  if (mem_monitor != nullptr) {
+    mem_monitor->Stop();
+    const float peak_ram_mb = mem_monitor->GetPeakPrivateFootprintInMB();
+    if (peak_ram_mb !=
+        tflite::profiling::memory::MemoryUsageMonitor::kInvalidMemUsageMB) {
+      ABSL_LOG(INFO) << absl::StrFormat("Peak system ram usage: %.2f MB",
+                                        peak_ram_mb);
+      Emit(report_out,
+           absl::StrFormat("Peak system ram usage: %.2f MB", peak_ram_mb));
+    }
   }
-  ABSL_LOG(INFO) << absl::StrFormat("Peak system ram usage: %.2f MB",
-                                    peak_ram_mb);
-  Emit(report_out,
-       absl::StrFormat("Peak system ram usage: %.2f MB", peak_ram_mb));
+
+#if defined(__ANDROID__)
+  DmaBufSummary dmabuf = GetProcessDmaBufUsage();
+  if (dmabuf.total_bytes > 0) {
+    const double total_mb =
+        static_cast<double>(dmabuf.total_bytes) / (1024.0 * 1024.0);
+    ABSL_LOG(INFO) << absl::StrFormat(
+        "Peak DMA-BUF hardware usage: %.2f MB (%zu unique buffers)", total_mb,
+        dmabuf.entries.size());
+    Emit(report_out,
+         absl::StrFormat(
+             "Peak DMA-BUF hardware usage: %.2f MB (%zu unique buffers)",
+             total_mb, dmabuf.entries.size()));
+
+    for (const auto& entry : dmabuf.entries) {
+      if (entry.size_bytes >= 1024 * 1024) {
+        double sz_mb =
+            static_cast<double>(entry.size_bytes) / (1024.0 * 1024.0);
+        Emit(report_out,
+             absl::StrFormat("  - %-28s: %6.2f MB (Inode %llu)", entry.name,
+                             sz_mb, static_cast<uint64_t>(entry.inode)));
+      }
+    }
+  }
+#endif  // defined(__ANDROID__)
 }
 
 }  // namespace
@@ -510,6 +643,9 @@ absl::Status RunEmbedding(const EmbeddingLiteRtLmSettings& run_settings,
       .normalize = run_settings.normalize,
       .input_overflow_strategy = overflow_strategy,
   };
+  if (run_settings.visual_token_budget > 0) {
+    options.vision_tokens_per_image = run_settings.visual_token_budget;
+  }
 
   if (is_benchmark) {
     const int num_warmup = run_settings.num_warmup;
@@ -574,7 +710,9 @@ absl::Status RunEmbedding(const EmbeddingLiteRtLmSettings& run_settings,
         absl::StrFormat("Average Latency: %.2f ms (min: %.2f ms, max: %.2f ms)",
                         avg_ms, min_ms, max_ms));
 
-    StopAndReportPeakMemoryUsage(mem_monitor.get(), report_out);
+    StopAndReportPeakMemoryUsage(mem_monitor.get(),
+                                 run_settings.report_peak_memory_footprint,
+                                 report_out);
     Emit(report_out, absl::StrCat("Embedding vector dimension: ",
                                   last_response.embedding.size()));
     if (const std::string compare_path = run_settings.compare_embedding_path;
@@ -600,7 +738,8 @@ absl::Status RunEmbedding(const EmbeddingLiteRtLmSettings& run_settings,
   EmbeddingResponse response = *std::move(response_result);
 
   Emit(report_out, "\n================ RESULT ================");
-  StopAndReportPeakMemoryUsage(mem_monitor.get(), report_out);
+  StopAndReportPeakMemoryUsage(
+      mem_monitor.get(), run_settings.report_peak_memory_footprint, report_out);
   Emit(report_out, absl::StrCat("Input length: ", response.input_length));
   if (response.truncated_length.has_value()) {
     Emit(report_out,
