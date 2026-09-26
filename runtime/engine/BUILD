@@ -100,6 +100,7 @@ cc_library(
 cc_library(
     name = "engine_impl_selected",
     deps = select({
+        "@litert//litert/build_common:build_include_cpu_only": ["//runtime/core:engine_advanced_impl_cpu_only"],
         "//conditions:default": ["//runtime/core:engine_advanced_impl"],
     }),
     alwayslink = 1,

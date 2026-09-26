@@ -80,7 +80,6 @@ ENGINE_IMPL_COMMON_DEPS = [
     "//runtime/executor:llm_executor",
     "//runtime/executor:llm_executor_settings",
     "//runtime/executor:llm_litert_compiled_model_executor",
-    "//runtime/executor:llm_litert_compiled_model_executor_factory",
     "//runtime/executor:magic_number_configs_helper",
     "//runtime/executor:model_signature_utils",
     "//runtime/executor:vision_executor",
@@ -89,8 +88,6 @@ ENGINE_IMPL_COMMON_DEPS = [
     "//runtime/executor:vision_litert_compiled_model_executor",
     "//runtime/framework:threadpool",
     "//runtime/framework/resource_management:execution_manager",
-    "//runtime/framework/resource_management:serial_execution_manager",
-    "//runtime/framework/resource_management:threaded_execution_manager",
     "//runtime/proto:llm_metadata_cc_proto",
     "//runtime/proto:sampler_params_cc_proto",
     "//runtime/util:file_format_util",
@@ -115,6 +112,9 @@ cc_library(
     deps = ENGINE_IMPL_COMMON_DEPS + [
         "//runtime/components:default_static_gpu_samplers",
         "//runtime/executor:default_static_gpu_accelerator",
+        "//runtime/executor:llm_litert_compiled_model_executor_factory",
+        "//runtime/framework/resource_management:serial_execution_manager",
+        "//runtime/framework/resource_management:threaded_execution_manager",
     ] + select({
         "//conditions:default": [],
     }) + select({
@@ -135,7 +135,11 @@ cc_library(
         ],
         "//conditions:default": [],
     }),
-    deps = ENGINE_IMPL_COMMON_DEPS + select({
+    deps = ENGINE_IMPL_COMMON_DEPS + [
+        "//runtime/executor:llm_litert_compiled_model_executor_factory_cpu_only",
+        "//runtime/framework/resource_management:serial_execution_manager_cpu_only",
+        "//runtime/framework/resource_management:threaded_execution_manager_cpu_only",
+    ] + select({
         "//runtime/util:litert_lm_debugger_enabled": [
             "//runtime/util:runtime_debugger",
         ],
