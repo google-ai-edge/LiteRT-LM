@@ -239,5 +239,55 @@ TEST(AsyncStageSchedulerTest, StopWaitsForInFlightTaskCompletion) {
   EXPECT_TRUE(stage1.IsTaskFinished());
 }
 
+class DelayedSourceStage : public SingleThreadedStageWithDeque<int> {
+ protected:
+  bool NeedScheduleInternal() const override { return !emitted_; }
+
+  absl::Status ScheduleInternal() override {
+    absl::Cleanup cleanup = [this] { SetState(State::kIdle); };
+    // Sleep briefly so the scheduler thread enters
+    // WaitForAnyStagesReadyOrStopped() while this stage is kScheduled.
+    absl::SleepFor(absl::Milliseconds(40));
+    emitted_ = true;
+    PushOutput(42);
+    return absl::OkStatus();
+  }
+
+ private:
+  bool emitted_ = false;
+};
+
+TEST(AsyncStageSchedulerTest, StageCompletionWakesSchedulerWithoutTimeoutStall) {
+  DelayedSourceStage stage1;
+  TestTransformStage stage2(&stage1);
+
+  ::litert::lm::ThreadPool pool("test_pool", 4);
+  std::vector<std::string> results;
+  absl::Notification done;
+
+  std::vector<internal::StageBase*> stages = {&stage1, &stage2};
+  AsyncStageScheduler<std::string> scheduler(
+      stages, &stage2, &pool,
+      [&results, &done](absl::StatusOr<std::string> res) -> absl::Status {
+        if (!res.ok()) {
+          done.Notify();
+          return res.status();
+        }
+        results.push_back(*res);
+        return absl::OkStatus();
+      });
+
+  absl::Time start_time = absl::Now();
+  ASSERT_TRUE(scheduler.Start().ok());
+  done.WaitForNotification();
+  absl::Duration elapsed = absl::Now() - start_time;
+
+  ASSERT_EQ(results.size(), 1);
+  EXPECT_EQ(results[0], "item_42");
+  // Must wake immediately on stage completion (~40ms) rather than stalling for
+  // the 1-second AwaitWithTimeout fallback.
+  EXPECT_LT(elapsed, absl::Milliseconds(500));
+}
+
 }  // namespace
 }  // namespace litert::omni

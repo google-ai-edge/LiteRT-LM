@@ -246,12 +246,13 @@ absl::StatusOr<Options> CreateCompilationOptions(const ModelOptions& options,
     gpu_compilation_options.EnableConstantTensorSharing(true);
     gpu_compilation_options.SetMadviseOriginalSharedTensors(true);
     gpu_compilation_options.SetConvertWeightsOnGpu(true);
-    gpu_compilation_options.SetHintFullyDelegatedToSingleDelegate(true);
+    gpu_compilation_options.SetHintFullyDelegatedToSingleDelegate(false);
     for (const auto& pattern : options.external_tensor_patterns) {
       gpu_compilation_options.AddExternalTensorPattern(pattern.c_str());
       gpu_compilation_options.AddBufferStorageTensorPattern(pattern.c_str());
     }
-    comp_options.SetHardwareAccelerators(HwAccelerators::kGpu);
+    comp_options.SetHardwareAccelerators(HwAccelerators::kGpu |
+                                         HwAccelerators::kCpu);
   } else {
     comp_options.SetHardwareAccelerators(HwAccelerators::kCpu);
     LITERT_ASSIGN_OR_RETURN(auto& cpu_options,
