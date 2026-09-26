@@ -106,9 +106,15 @@ enum class FileFormat {
 };
 std::ostream& operator<<(std::ostream& os, const FileFormat& file_format);
 
+class ModelResources;
+
 // Class to host the model assets, including base models and lora models.
 class ModelAssets {
  public:
+  using ModelResourcesFactory =
+      std::function<absl::StatusOr<std::unique_ptr<ModelResources>>(
+          bool enable_file_backed_model_loading)>;
+
   static absl::StatusOr<ModelAssets> Create(
       std::shared_ptr<ScopedFile> model_file);
   static absl::StatusOr<ModelAssets> Create(absl::string_view model_path);
@@ -119,6 +125,9 @@ class ModelAssets {
       absl::string_view model_path);
   static absl::StatusOr<ModelAssets> Create(
       std::shared_ptr<DataStream> data_stream);
+  static absl::StatusOr<ModelAssets> Create(
+      ModelResourcesFactory resources_factory,
+      absl::string_view model_path = "");
 
   // Convenience factory function to create a ModelAssets with both a model
   // path and file. Will use the scoped file if both are provided.
@@ -128,6 +137,9 @@ class ModelAssets {
   bool HasScopedFile() const { return scoped_file_ != nullptr; }
   bool HasMemoryMappedFile() const { return memory_mapped_file_ != nullptr; }
   bool HasDataStream() const { return data_stream_ != nullptr; }
+  bool HasModelResourcesFactory() const {
+    return resources_factory_ != nullptr;
+  }
 
   // Returns the model file if it was created with the respective variant,
   // otherwise returns an error.
@@ -135,6 +147,8 @@ class ModelAssets {
   absl::StatusOr<std::shared_ptr<ScopedFile>> GetScopedFile() const;
   absl::StatusOr<std::shared_ptr<MemoryMappedFile>> GetMemoryMappedFile() const;
   absl::StatusOr<std::shared_ptr<DataStream>> GetDataStream() const;
+  absl::StatusOr<std::unique_ptr<ModelResources>> CreateModelResources(
+      bool enable_file_backed_model_loading = false) const;
 
   // Convenience method to get a read-only scoped file to the model file
   // regardless of whether this instance was created from a path or scoped file.
@@ -154,6 +168,8 @@ class ModelAssets {
   explicit ModelAssets(std::shared_ptr<MemoryMappedFile> model_file,
                        absl::string_view model_path);
   explicit ModelAssets(std::shared_ptr<DataStream> data_stream);
+  explicit ModelAssets(ModelResourcesFactory resources_factory,
+                       absl::string_view model_path);
 
   // TODO: b/417814685 - Consider supporting multiple model files if the need
   // case arises.
@@ -161,6 +177,7 @@ class ModelAssets {
   std::shared_ptr<ScopedFile> scoped_file_;
   std::shared_ptr<MemoryMappedFile> memory_mapped_file_;
   std::shared_ptr<DataStream> data_stream_;
+  ModelResourcesFactory resources_factory_;
 
   FakeWeightsMode fake_weights_mode_ = FakeWeightsMode::FAKE_WEIGHTS_NONE;
 };
