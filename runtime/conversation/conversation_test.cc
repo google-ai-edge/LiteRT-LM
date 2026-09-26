@@ -173,6 +173,7 @@ class MockSession : public SessionInterface {
               (override));
   MOCK_METHOD(absl::Status, RewindToCheckpoint, (absl::string_view label),
               (override));
+  MOCK_METHOD(absl::StatusOr<int>, GetCurrentStep, (), (const, override));
   MOCK_METHOD(const SessionConfig&, GetSessionConfig, (), (const, override));
 };
 
@@ -1898,6 +1899,107 @@ TEST_P(ConversationTest, SendMessageWithChannelContentFiltering) {
   // Send the second user message.
   Message user_message_2 = {{"role", "user"}, {"content", "That's great."}};
   ASSERT_OK(conversation->SendMessage(user_message_2));
+}
+
+TEST_P(ConversationTest, GetTokenCountWithChannelContentFiltering) {
+  auto mock_session = CreateMockSession();
+  MockSession* mock_session_ptr = mock_session.get();
+  auto mock_engine = CreateMockEngine(std::move(mock_session));
+
+  ASSERT_OK_AND_ASSIGN(
+      auto conversation_config,
+      ConversationConfig::Builder()
+          .SetSessionConfig(session_config_)
+          .SetEnableConstrainedDecoding(enable_constrained_decoding_)
+          .SetOverwritePromptTemplate(PromptTemplate(kTestJinjaPromptTemplate))
+          .SetPrefillPrefaceOnInit(prefill_preface_on_init_)
+          .SetFilterChannelContentFromKvCache(true)
+          .SetChannels({litert::lm::Channel{
+              .channel_name = "thought",
+              .start = "<|channel>thought\n",
+              .end = "<channel|>",
+          }})
+          .Build(*mock_engine));
+  ASSERT_OK_AND_ASSIGN(auto conversation,
+                       Conversation::Create(*mock_engine, conversation_config));
+
+  EXPECT_CALL(*mock_session_ptr, SaveCheckpoint("channel_content_checkpoint"))
+      .WillOnce(Return(absl::OkStatus()));
+  EXPECT_CALL(*mock_session_ptr, RunPrefillAsync(testing::_, testing::_))
+      .WillOnce([](const std::vector<InputData>& contents,
+                   absl::AnyInvocable<void(absl::StatusOr<Responses>)>
+                       user_callback) {
+        user_callback(Responses(TaskState::kDone));
+        return nullptr;
+      });
+  EXPECT_CALL(*mock_session_ptr, RunDecodeAsync(testing::_, testing::_))
+      .WillOnce(
+          [](absl::AnyInvocable<void(absl::StatusOr<Responses>)> user_callback,
+             const DecodeConfig& decode_config) {
+            user_callback(
+                Responses(TaskState::kProcessing, {"<|channel>thought\n"}));
+            user_callback(Responses(TaskState::kProcessing, {"hmm"}));
+            user_callback(Responses(TaskState::kProcessing, {"<channel|>"}));
+            user_callback(Responses(TaskState::kProcessing, {"I am good."}));
+            user_callback(Responses(TaskState::kDone));
+            return nullptr;
+          });
+
+  Message user_message_1 = {{"role", "user"}, {"content", "How are you?"}};
+  ASSERT_OK(conversation->SendMessage(user_message_1));
+
+  // 3 channel steps were emitted ("<|channel>thought\n", "hmm", "<channel|>").
+  const int expected_thought_token_count = 3;
+
+  EXPECT_CALL(*mock_session_ptr, GetCurrentStep()).WillRepeatedly(Return(100));
+
+  // Default (include_channel_content = true) returns the raw KV cache step.
+  ASSERT_OK_AND_ASSIGN(int raw_token_count, conversation->GetTokenCount());
+  EXPECT_EQ(raw_token_count, 100);
+
+  // When include_channel_content = false, pending-removal channel tokens are
+  // excluded.
+  ASSERT_OK_AND_ASSIGN(
+      int filtered_token_count,
+      conversation->GetTokenCount(/*include_channel_content=*/false));
+  EXPECT_EQ(filtered_token_count, 100 - expected_thought_token_count);
+
+  // On the next user turn, the channel content is rewound and re-prefilled
+  // without thoughts, and the new response has no channel content.
+  EXPECT_CALL(*mock_session_ptr,
+              RewindToCheckpoint("channel_content_checkpoint"))
+      .WillOnce(Return(absl::OkStatus()));
+  EXPECT_CALL(*mock_session_ptr, RunPrefillAsync(testing::_, testing::_))
+      .Times(2)
+      .WillRepeatedly([](const std::vector<InputData>& contents,
+                         absl::AnyInvocable<void(absl::StatusOr<Responses>)>
+                             user_callback) {
+        user_callback(Responses(TaskState::kDone));
+        return nullptr;
+      });
+  EXPECT_CALL(*mock_session_ptr, SaveCheckpoint("channel_content_checkpoint"))
+      .WillOnce(Return(absl::OkStatus()));
+  EXPECT_CALL(*mock_session_ptr, RunDecodeAsync(testing::_, testing::_))
+      .WillOnce(
+          [](absl::AnyInvocable<void(absl::StatusOr<Responses>)> user_callback,
+             const DecodeConfig& decode_config) {
+            user_callback(Responses(TaskState::kProcessing, {"Thank you."}));
+            user_callback(Responses(TaskState::kDone));
+            return nullptr;
+          });
+
+  Message user_message_2 = {{"role", "user"}, {"content", "That's great."}};
+  ASSERT_OK(conversation->SendMessage(user_message_2));
+
+  EXPECT_CALL(*mock_session_ptr, GetCurrentStep()).WillRepeatedly(Return(110));
+  ASSERT_OK_AND_ASSIGN(
+      int turn2_raw_count,
+      conversation->GetTokenCount(/*include_channel_content=*/true));
+  ASSERT_OK_AND_ASSIGN(
+      int turn2_filtered_count,
+      conversation->GetTokenCount(/*include_channel_content=*/false));
+  EXPECT_EQ(turn2_raw_count, 110);
+  EXPECT_EQ(turn2_filtered_count, 110);
 }
 
 TEST_P(ConversationTest, SendMultipleMessagesWithHistory) {
