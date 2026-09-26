@@ -54,6 +54,10 @@ data class BenchmarkInfo(
  * @param prompt The custom prompt string to tokenize and run. If the tokenized prompt is shorter
  *   than [prefillTokens], the remaining tokens are padded with zero. If it is longer, the prompt is
  *   truncated to [prefillTokens].
+ * @param repetitionPenalty Applies a multiplicative repetition penalty to every decode step. This
+ *   installs a `RepetitionPenaltyConstraint`, whose sparse mask goes through the same logit-mask
+ *   runner as grammar constraints, so it is a cheap way to make a benchmark exercise the masking
+ *   path. Must be >= 1.0; `null` disables the penalty.
  * @return The benchmark info.
  */
 @ExperimentalApi
@@ -64,6 +68,7 @@ fun benchmark(
   decodeTokens: Int = 256,
   cacheDir: String? = null,
   prompt: String = "How are you",
+  repetitionPenalty: Float? = null,
 ): BenchmarkInfo {
   val enginePointer =
     LiteRtLmJni.nativeCreateBenchmark(
@@ -101,7 +106,12 @@ fun benchmark(
       )
 
     Conversation(conversationHandle).use { conversation ->
-      val unused = conversation.sendMessage(prompt)
+      val unused =
+        conversation.sendMessage(
+          prompt,
+          repetitionPenaltyConfig =
+            repetitionPenalty?.let { RepetitionPenaltyConfig(repetitionPenalty = it) },
+        )
       return conversation.getBenchmarkInfo()
     }
   } finally {

@@ -33,6 +33,7 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "litert/cc/litert_common.h"  // from @litert
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
@@ -50,11 +51,11 @@
 #include "runtime/components/scoring_cpu_util.h"
 #include "runtime/components/stop_token_detector.h"
 #include "runtime/engine/io_types.h"
+#include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/llm_executor.h"
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/llm_litert_compiled_model_executor.h"
-#include "runtime/proto/sampler_params.pb.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/status_macros.h"  //NOLINT
 #include "support/tokenizer/buffered_streaming_detokenizer.h"
@@ -266,8 +267,22 @@ class DecodeOneStep {
     }
     std::unique_ptr<ConstrainedDecoder> constrained_decoder;
     if (!composite_constraint->empty()) {
-      constrained_decoder = std::make_unique<ConstrainedDecoder>(
-          composite_constraint.get(), num_output_candidates);
+      ABSL_ASSIGN_OR_RETURN(const auto settings,
+                            executor->GetExecutorSettings());
+      const litert::HwAccelerators accelerator =
+          GetHwAcceleratorForBackend(settings.GetBackend());
+      auto* env = executor->GetEnvironment();
+      if (env == nullptr || accelerator == litert::HwAccelerators::kNone) {
+        ABSL_ASSIGN_OR_RETURN(
+            constrained_decoder,
+            ConstrainedDecoder::CreateForHost(composite_constraint.get(),
+                                              num_output_candidates));
+      } else {
+        ABSL_ASSIGN_OR_RETURN(constrained_decoder,
+                              ConstrainedDecoder::Create(
+                                  composite_constraint.get(),
+                                  num_output_candidates, *env, accelerator));
+      }
     }
     std::optional<litert::TensorBuffer> scores_tensor;
     if (sampler.has_value()) {  // External sampling setup

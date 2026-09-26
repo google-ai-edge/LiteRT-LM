@@ -35,6 +35,7 @@
 #include "absl/strings/str_join.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "litert/cc/litert_common.h"  // from @litert
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
@@ -44,9 +45,9 @@
 #include "litert/cc/litert_options.h"  // from @litert
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
-#include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
 #include "litert/cc/options/litert_gpu_options.h"  // from @litert
 #include "runtime/components/constrained_decoding/constraint.h"
+#include "runtime/components/constrained_decoding/litert_logit_mask_runner.h"
 #include "runtime/components/constrained_decoding/logit_mask.h"
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
 #include "runtime/components/model_resources.h"
@@ -60,7 +61,6 @@
 #include "runtime/executor/state_interface.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/status_macros.h"
-#include "tflite/types/half.h"  // from @litert
 
 namespace litert::lm {
 
@@ -177,93 +177,6 @@ absl::StatusOr<int> GetVocabSizeFromLogitsTensor(TensorBuffer& logits_tensor) {
   RET_CHECK_EQ(logits_tensor_type.Layout().Dimensions().size(), 3);
   // logits tensor shape is [batch, seq, vocab].
   return logits_tensor_type.Layout().Dimensions()[2];
-}
-
-template <typename T>
-absl::Status ApplyMaskToLogitsTyped(TensorBuffer& logits_buffer,
-                                    TensorBufferType buffer_type,
-                                    const LogitMask& mask, int vocab_size) {
-  if (buffer_type == TensorBufferType::kHostMemory) {
-    LITERT_ASSIGN_OR_RETURN(auto span,
-                            ReferTensorBufferAsSpan<T>(logits_buffer));
-    RET_CHECK_GE(static_cast<int>(span.size()), vocab_size);
-    return mask.Apply(span.subspan(0, vocab_size));
-  } else {
-    LITERT_ASSIGN_OR_RETURN(auto vec, CopyFromTensorBuffer<T>(logits_buffer));
-    RET_CHECK_GE(static_cast<int>(vec.size()), vocab_size);
-    ABSL_RETURN_IF_ERROR(
-        mask.Apply(absl::MakeSpan(vec).subspan(0, vocab_size)));
-    LITERT_RETURN_IF_ERROR(logits_buffer.Write(absl::MakeConstSpan(vec)));
-    return absl::OkStatus();
-  }
-}
-
-absl::Status ApplyMaskToLogits(TensorBuffer& logits_buffer,
-                               const LogitMask* mask, int vocab_size) {
-  if (mask == nullptr) {
-    return absl::OkStatus();
-  }
-  LITERT_ASSIGN_OR_RETURN(auto logits_type, logits_buffer.TensorType());
-  LITERT_ASSIGN_OR_RETURN(auto buffer_type, logits_buffer.BufferType());
-
-  if (logits_type.ElementType() == ElementType::Float32) {
-    return ApplyMaskToLogitsTyped<float>(logits_buffer, buffer_type, *mask,
-                                         vocab_size);
-  } else if (logits_type.ElementType() == ElementType::Float16) {
-    return ApplyMaskToLogitsTyped<tflite::half>(logits_buffer, buffer_type,
-                                                *mask, vocab_size);
-  }
-  return absl::InvalidArgumentError("Unsupported logits element type.");
-}
-
-template <typename T>
-absl::Status ApplyMasksToLogitsSequenceTyped(
-    TensorBuffer& logits_buffer, TensorBufferType buffer_type,
-    absl::Span<const std::unique_ptr<LogitMask>> masks, int vocab_size) {
-  if (buffer_type == TensorBufferType::kHostMemory) {
-    LITERT_ASSIGN_OR_RETURN(auto span,
-                            ReferTensorBufferAsSpan<T>(logits_buffer));
-    RET_CHECK_GE(static_cast<int>(span.size()),
-                 static_cast<int>(masks.size()) * vocab_size);
-    for (size_t i = 0; i < masks.size(); ++i) {
-      if (masks[i] != nullptr) {
-        ABSL_RETURN_IF_ERROR(
-            masks[i]->Apply(span.subspan(i * vocab_size, vocab_size)));
-      }
-    }
-    return absl::OkStatus();
-  } else {
-    LITERT_ASSIGN_OR_RETURN(auto vec, CopyFromTensorBuffer<T>(logits_buffer));
-    RET_CHECK_GE(static_cast<int>(vec.size()),
-                 static_cast<int>(masks.size()) * vocab_size);
-    for (size_t i = 0; i < masks.size(); ++i) {
-      if (masks[i] != nullptr) {
-        ABSL_RETURN_IF_ERROR(masks[i]->Apply(
-            absl::MakeSpan(vec).subspan(i * vocab_size, vocab_size)));
-      }
-    }
-    LITERT_RETURN_IF_ERROR(logits_buffer.Write(absl::MakeConstSpan(vec)));
-    return absl::OkStatus();
-  }
-}
-
-absl::Status ApplyMasksToLogitsSequence(
-    TensorBuffer& logits_buffer,
-    absl::Span<const std::unique_ptr<LogitMask>> masks, int vocab_size) {
-  if (masks.empty()) {
-    return absl::OkStatus();
-  }
-  LITERT_ASSIGN_OR_RETURN(auto logits_type, logits_buffer.TensorType());
-  LITERT_ASSIGN_OR_RETURN(auto buffer_type, logits_buffer.BufferType());
-
-  if (logits_type.ElementType() == ElementType::Float32) {
-    return ApplyMasksToLogitsSequenceTyped<float>(logits_buffer, buffer_type,
-                                                  masks, vocab_size);
-  } else if (logits_type.ElementType() == ElementType::Float16) {
-    return ApplyMasksToLogitsSequenceTyped<tflite::half>(
-        logits_buffer, buffer_type, masks, vocab_size);
-  }
-  return absl::InvalidArgumentError("Unsupported logits element type.");
 }
 
 }  // namespace
@@ -511,6 +424,12 @@ LlmLiteRtMtpDrafter::Create(
                                              verify_signature.OutputNames(),
                                              /*strict=*/false));
 
+  const HwAccelerators accelerator = GetHwAcceleratorForBackend(backend);
+  ABSL_ASSIGN_OR_RETURN(auto drafter_mask_runner,
+                        LiteRtLogitMaskRunner::Create(env, accelerator));
+  ABSL_ASSIGN_OR_RETURN(auto verifier_mask_runner,
+                        LiteRtLogitMaskRunner::Create(env, accelerator));
+
   return absl::WrapUnique(new LlmLiteRtMtpDrafter(
       std::move(mtp_drafter_model), std::move(drafter_signature), base_model,
       std::move(verify_signature), base_model_desc, embedding_manager,
@@ -520,7 +439,8 @@ LlmLiteRtMtpDrafter::Create(
       std::move(verifier_output_buffers), std::move(drafter_id_tensor),
       std::move(verifier_id_tensor), num_draft_steps,
       std::move(drafter_model_signatures), std::move(verifier_model_signatures),
-      vocab_size, GetAttentionMaskParams(executor_metadata)));
+      vocab_size, GetAttentionMaskParams(executor_metadata),
+      std::move(drafter_mask_runner), std::move(verifier_mask_runner)));
 }
 
 absl::Status LlmLiteRtMtpDrafter::PrepareDrafterInputBuffers(
@@ -615,8 +535,8 @@ LlmLiteRtMtpDrafter::RunDraftingLoop(
     if (constraint != nullptr && current_draft_state != nullptr) {
       ABSL_ASSIGN_OR_RETURN(auto mask,
                             constraint->ComputeMask(*current_draft_state));
-      ABSL_RETURN_IF_ERROR(ApplyMaskToLogits(
-          active_drafter_output_buffers_["logits"], mask.get(), vocab_size_));
+      ABSL_RETURN_IF_ERROR(drafter_mask_runner_->Apply(
+          active_drafter_output_buffers_["logits"], mask.get()));
     }
 
     ABSL_RETURN_IF_ERROR(drafter_sampler_->SampleToIdAndScoreBuffer(
@@ -761,8 +681,8 @@ absl::StatusOr<std::vector<int>> LlmLiteRtMtpDrafter::RunVerification(
         masks.push_back(nullptr);
       }
     }
-    ABSL_RETURN_IF_ERROR(ApplyMasksToLogitsSequence(
-        active_verifier_output_buffers_.at("logits"), masks, vocab_size_));
+    ABSL_RETURN_IF_ERROR(verifier_mask_runner_->ApplySequence(
+        active_verifier_output_buffers_.at("logits"), masks));
   }
 
   ABSL_RETURN_IF_ERROR(verifier_sampler_->SampleToIdAndScoreBuffer(
