@@ -62,7 +62,7 @@ public final class Conversation: Sendable {
 
   private let handle: CConversationHandle?
   private let toolManager: ToolManager
-  private let automaticToolCalling: Bool
+  fileprivate let automaticToolCalling: Bool
   private let engine: Engine
   private let enableResponseFormat: Bool
   private let visualTokenBudget: Int32?
@@ -708,15 +708,7 @@ public final class Conversation: Sendable {
 
     var toolCalls: [ToolCall] = []
     if let toolCallsArray = jsonObject["tool_calls"] as? [[String: Any]] {
-      for item in toolCallsArray {
-        if let function = item["function"] as? [String: Any],
-          let name = function["name"] as? String,
-          let args = function["arguments"] as? [String: Any]
-        {
-          let id = item["id"] as? String ?? ""
-          toolCalls.append(ToolCall(name: name, id: id, arguments: args))
-        }
-      }
+      toolCalls = Conversation.toolCalls(from: toolCallsArray)
     }
 
     if contents.isEmpty && channels.isEmpty && toolCalls.isEmpty {
@@ -738,6 +730,18 @@ public final class Conversation: Sendable {
       channels: channels,
       toolCalls: toolCalls
     )
+  }
+
+  /// The runtime's `tool_calls` entries as `ToolCall`s; entries without a
+  /// function name or arguments are skipped.
+  static func toolCalls(from array: [[String: Any]]) -> [ToolCall] {
+    array.compactMap { item in
+      guard let function = item["function"] as? [String: Any],
+        let name = function["name"] as? String,
+        let args = function["arguments"] as? [String: Any]
+      else { return nil }
+      return ToolCall(name: name, id: item["id"] as? String ?? "", arguments: args)
+    }
   }
 
   /// Context object to bridge the C callback to the Swift AsyncThrowingStream.
@@ -820,6 +824,18 @@ private func streamCallback(
 
   if isFinal {
     if !context.pendingToolCalls.isEmpty {
+      // The caller runs the tools itself: hand the calls over as the last
+      // message of the stream, as `sendMessage` returns them, and stop.
+      if !context.conversation.automaticToolCalling {
+        let toolCalls = Conversation.toolCalls(from: context.pendingToolCalls)
+        context.pendingToolCalls = []
+        if !toolCalls.isEmpty {
+          context.continuation.yield(Message(contents: [], role: .model, toolCalls: toolCalls))
+        }
+        context.continuation.finish()
+        Unmanaged<Conversation.StreamContext>.fromOpaque(userData).release()
+        return
+      }
       if context.toolCallCount >= recurringToolCallLimit {
         context.continuation.finish(
           throwing: LiteRTLMError.conversation(

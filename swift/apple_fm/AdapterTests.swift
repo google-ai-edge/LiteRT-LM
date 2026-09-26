@@ -460,6 +460,23 @@
       }
     }
 
+    /// A call the runtime parsed (gemma-4-E2B-it's arrive that way) is
+    /// forwarded in the same shape as one read from the text: the
+    /// name, and the arguments as a JSON object. None parsed → nil, so the text
+    /// parsers get their turn.
+    func testParsedToolCallTakesTheTextParsersShape() throws {
+      XCTAssertNil(LiteRTLMExecutor.toolCall([]))
+      let call = try XCTUnwrap(
+        LiteRTLMExecutor.toolCall([
+          ToolCall(name: "set_torch", id: "1", arguments: ["on": true, "level": 3])
+        ]))
+      XCTAssertEqual(call.name, "set_torch")
+      let data = try XCTUnwrap(call.arguments.data(using: .utf8))
+      let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+      XCTAssertEqual(object["on"] as? Bool, true)
+      XCTAssertEqual(object["level"] as? Int, 3)
+    }
+
     /// Under the grammar the prompt names only the keys, in declared order:
     /// the engine holds the types and the enum values, and every further word
     /// in the hint was something the model copied into a value.

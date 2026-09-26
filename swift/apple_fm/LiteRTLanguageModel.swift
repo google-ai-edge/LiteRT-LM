@@ -273,12 +273,17 @@
       let offerTools = !tools.isEmpty && !plan.respondingToTool && !guided
 
       // LFM2.5 has its own tool-call format — `<|tool_call_start|>[name(args)]
-      // <|tool_call_end|>` — and LiteRT-LM parses it. The JSON router this used
-      // to impose fought that: under a grammar for the router's shape the model
-      // could not emit the tokens it wanted and produced nothing at all, and
-      // without one it emitted its native call, which the router could not read.
-      // So the tools go to the engine as tool definitions, and the model answers
-      // in the form it was trained for.
+      // <|tool_call_end|>` — and writes it whenever the tool list is in its
+      // prompt. Whether a call arrives parsed or as text depends on the bundle
+      // and the runtime: on gemma-4-E2B-it the runtime parses the call and the
+      // stream carries it as `toolCalls`; on the LFM2.5 bundle measured here the
+      // markers arrive as text and `parseNativeToolCall` reads them. The JSON
+      // router this used to impose
+      // fought that: under a grammar for the router's shape the model could not
+      // emit the tokens it wanted and produced nothing at all, and without one
+      // it emitted its native call, which the router could not read. So the
+      // tools go to the engine as tool definitions, and the model answers in
+      // the form it was trained for.
       //
       // The conversation is reused across turns. Building one costs the
       // tokenisation and KV setup of the whole prefix — measured at 15-19s a
@@ -356,11 +361,11 @@
       } else if offerTools {
         LiteRTFMTrace.emit("\u{00B7} \(tools.count) tools offered\n")
         // Streamed, unconstrained. The non-streaming call took the app down on
-        // the first turn; and since this bundle's metadata does not declare the
-        // tool-call delimiters, the runtime hands the markers through as text
-        // either way — so they are read here.
+        // the first turn. A call the runtime parsed arrives on `toolCalls`; one
+        // it did not arrives as text, markers included, and is read below.
         var replyText = ""
         var thought = ""
+        var parsedCalls: [ToolCall] = []
         let sent = Date()
         var firstToken: Date?
         for try await chunk in conversation.sendMessageStream(plan.prompt) {
@@ -368,6 +373,7 @@
           if firstToken == nil, !piece.isEmpty { firstToken = Date() }
           replyText += piece
           thought += chunk.channels.values.joined()
+          parsedCalls += chunk.toolCalls
           LiteRTFMTrace.emit(piece)
         }
         let done = Date()
@@ -375,10 +381,14 @@
         LiteRTFMTrace.timing(
           "call turn: ttft \(String(format: "%.1f", (firstToken ?? done).timeIntervalSince(sent)))s"
             + ", decode \(String(format: "%.1f", done.timeIntervalSince(firstToken ?? done)))s"
-            + ", \(replyText.count) chars, \(thought.count) thought")
-        // The visible text first; a model that spent its whole turn inside the
-        // think block sometimes leaves the call — or the answer — in there.
-        let native = Self.parseNativeToolCall(replyText) ?? Self.parseNativeToolCall(thought)
+            + ", \(replyText.count) chars, \(thought.count) thought"
+            + ", \(parsedCalls.count) parsed calls")
+        // A parsed call first; then the visible text; then the think block — a
+        // model that spent its whole turn in there sometimes leaves the call, or
+        // the answer, inside it.
+        let native =
+          Self.toolCall(parsedCalls) ?? Self.parseNativeToolCall(replyText)
+          ?? Self.parseNativeToolCall(thought)
         if let call = native {
           let arguments = call.arguments
           LiteRTFMTrace.emit("\(call.name) \(arguments)\n")
@@ -402,6 +412,7 @@
         // as text, which is what a streamed answer turn did to that beat.
         var replyText = ""
         var thought = ""
+        var parsedCalls: [ToolCall] = []
         let sent = Date()
         var firstToken: Date?
         for try await chunk in conversation.sendMessageStream(plan.prompt) {
@@ -409,6 +420,7 @@
           if firstToken == nil, !piece.isEmpty { firstToken = Date() }
           replyText += piece
           thought += chunk.channels.values.joined()
+          parsedCalls += chunk.toolCalls
           LiteRTFMTrace.emit(piece)
         }
         let done = Date()
@@ -416,8 +428,11 @@
         LiteRTFMTrace.timing(
           "answer turn: ttft \(String(format: "%.1f", (firstToken ?? done).timeIntervalSince(sent)))s"
             + ", decode \(String(format: "%.1f", done.timeIntervalSince(firstToken ?? done)))s"
-            + ", \(replyText.count) chars, \(thought.count) thought, round \(plan.toolRounds)")
-        let native = Self.parseNativeToolCall(replyText) ?? Self.parseNativeToolCall(thought)
+            + ", \(replyText.count) chars, \(thought.count) thought, round \(plan.toolRounds)"
+            + ", \(parsedCalls.count) parsed calls")
+        let native =
+          Self.toolCall(parsedCalls) ?? Self.parseNativeToolCall(replyText)
+          ?? Self.parseNativeToolCall(thought)
         if let call = native, plan.toolRounds < Self.maxToolRoundsPerQuestion {
           LiteRTFMTrace.emit("\(call.name) \(call.arguments)\n")
           await channel.send(
@@ -675,6 +690,12 @@
         toolResult: triggerToolResult,
         toolRounds: toolRounds
       )
+    }
+
+    /// The first call the runtime parsed out of the reply, in the shape the
+    /// text parser returns: the name and the arguments as a JSON object.
+    static func toolCall(_ parsed: [ToolCall]) -> (name: String, arguments: String)? {
+      parsed.first.map { (name: $0.name, arguments: argumentsJSON($0.arguments)) }
     }
 
     /// `<|tool_call_start|>[name(key=value, key='text')]<|tool_call_end|>` —
