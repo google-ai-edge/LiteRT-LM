@@ -131,6 +131,7 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
   absl::Status UpdateRuntimeConfig(
       const RuntimeConfig& runtime_config) override {
     llm_context_->runtime_config() = runtime_config;
+    InvalidateDecodeCache();
     return absl::OkStatus();
   }
 
@@ -142,6 +143,7 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
   // Updates the runtime state.
   absl::Status UpdateRuntimeState(const RuntimeState& runtime_state) override {
     llm_context_->runtime_state() = runtime_state;
+    InvalidateDecodeCache();
     return absl::OkStatus();
   }
 
@@ -190,10 +192,12 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
 
   void UpdatePreGraphRunCallback(GraphRunCallback callback) {
     pre_graph_run_callback_ = std::move(callback);
+    InvalidateDecodeCache();
   }
 
   void UpdatePostGraphRunCallback(GraphRunCallback callback) {
     post_graph_run_callback_ = std::move(callback);
+    InvalidateDecodeCache();
   }
 
   bool HasGraphRunCallbacks() const {
@@ -367,6 +371,10 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
 
   absl::Status RestoreState(std::unique_ptr<StateInterface> state);
 
+  // Invalidates cached decode vector bindings and incremental causal mask
+  // state.
+  virtual void InvalidateDecodeCache();
+
   // Gets the LiteRT run options based on the current executor settings.
   litert::Options GetRunOptions() const;
 
@@ -442,6 +450,21 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
   // Pointer to model resources for lazy loading of components (e.g. MTP
   // drafter).
   ModelResources* resources_ = nullptr;
+
+  // Cached ping-pong decode input/output tensor vectors for fast
+  // Run(size_t, vector, vector).
+  std::vector<TensorBuffer> cached_decode_inputs_[2];
+  std::vector<TensorBuffer> cached_decode_outputs_[2];
+  bool decode_vec_cache_valid_[2] = {false, false};
+  size_t cached_decode_sig_idx_ = 0;
+  int cached_logits_output_idx_ = -1;
+
+  // Incremental causal attention mask state for O(1) decode step updates.
+  int last_causal_mask_step_ = -1;
+  void* last_causal_mask_ptr_ = nullptr;
+
+  // Reusable output tokens TensorBuffer for Decode().
+  std::optional<TensorBuffer> cached_output_tokens_buffer_;
 };
 
 // The static executor for the prefill-decode compiled model.
@@ -563,8 +586,11 @@ class LlmLiteRtCompiledModelExecutorDynamic
       const std::vector<std::shared_ptr<TokenData>>& token,
       TensorBuffer& output_logits) override;
 
+  void InvalidateDecodeCache() override;
+
   int prefill_chunk_size_;
   uint32_t kv_increament_size_;
+  int last_resolved_kv_len_ = -1;
 };
 
 }  // namespace litert::lm
