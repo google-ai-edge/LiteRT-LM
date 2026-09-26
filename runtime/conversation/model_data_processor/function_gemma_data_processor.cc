@@ -14,14 +14,12 @@
 
 #include "runtime/conversation/model_data_processor/function_gemma_data_processor.h"
 
-#include <cstddef>
 #include <memory>
 #include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/memory/memory.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
@@ -41,7 +39,6 @@
 #include "runtime/conversation/model_data_processor/model_data_processor.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/util/status_macros.h"
-#include "sentencepiece_model.pb.h"  // from @sentencepiece
 
 namespace litert::lm {
 namespace {
@@ -191,39 +188,12 @@ FunctionGemmaDataProcessor::Create(
   }
   return absl::WrapUnique(new FunctionGemmaDataProcessor(config, preface));
 #else
-  std::unique_ptr<LiteRtLmGemmaModelConstraintProvider,
-                  decltype(&LiteRtLmGemmaModelConstraintProvider_Destroy)>
-      constraint_provider(nullptr,
-                          &LiteRtLmGemmaModelConstraintProvider_Destroy);
+  GemmaModelConstraintProviderPtr constraint_provider(
+      nullptr, &LiteRtLmGemmaModelConstraintProvider_Destroy);
   if (enable_constrained_decoding) {
-    if (tokenizer->GetTokenizerType() != TokenizerType::kSentencePiece) {
-      ABSL_LOG(WARNING)
-          << "Constrained decoding is only supported for SentencePiece "
-             "tokenizer.";
-    } else {
-      std::vector<const int*> stop_token_ids_ptrs;
-      std::vector<size_t> stop_token_lengths;
-      stop_token_ids_ptrs.reserve(stop_token_ids.size());
-      stop_token_lengths.reserve(stop_token_ids.size());
-      for (const auto& stop_tokens : stop_token_ids) {
-        stop_token_ids_ptrs.push_back(stop_tokens.data());
-        stop_token_lengths.push_back(stop_tokens.size());
-      }
-      auto sp_tokenizer =
-          reinterpret_cast<const SentencePieceTokenizer*>(tokenizer);
-      auto serialized_model_proto =
-          sp_tokenizer->GetProcessor().model_proto().SerializeAsString();
-      LiteRtLmGemmaModelConstraintProvider* provider =
-          LiteRtLmGemmaModelConstraintProvider_Create(
-              serialized_model_proto.data(), serialized_model_proto.size(),
-              stop_token_ids_ptrs.data(), stop_token_lengths.data(),
-              stop_token_ids.size());
-      if (provider == nullptr) {
-        return absl::InternalError(
-            "Failed to create GemmaModelConstraintProvider.");
-      }
-      constraint_provider.reset(provider);
-    }
+    ABSL_ASSIGN_OR_RETURN(
+        constraint_provider,
+        CreateGemmaModelConstraintProvider(tokenizer, stop_token_ids));
   }
   return absl::WrapUnique(new FunctionGemmaDataProcessor(
       std::move(constraint_provider), config, preface));
@@ -328,21 +298,6 @@ FunctionGemmaDataProcessor::CreateConstraint(
       "Constrained decoding is disabled at build time, but it was requested "
       "for inference.");
 #else
-  if (constraint_provider_c_ == nullptr) {
-    return nullptr;
-  }
-  if (!tools.is_array()) {
-    return absl::InvalidArgumentError("Tools must be an array.");
-  }
-  nlohmann::ordered_json functions = nlohmann::ordered_json::array();
-  for (const auto& tool : tools) {
-    if (tool.contains("function")) {
-      functions.push_back(tool["function"]);
-    } else {
-      functions.push_back(tool);
-    }
-  }
-
   LiteRtLmGemmaModelConstraintOptions gemma_options = {
       .funcall_format = kLiteRtLmGemmaFuncallFormatFcStyle,
       .code_fence_start = config_.code_fence_start.c_str(),
@@ -360,14 +315,8 @@ FunctionGemmaDataProcessor::CreateConstraint(
       gemma_options.constraint_mode = kLiteRtLmGemmaConstraintModeTextAndOr;
       break;
   }
-  std::string functions_str = functions.dump();
-  LiteRtLmConstraint* constraint =
-      LiteRtLmGemmaModelConstraintProvider_CreateConstraintFromTools(
-          constraint_provider_c_.get(), functions_str.c_str(), &gemma_options);
-  if (constraint == nullptr) {
-    return absl::InternalError("Failed to create constraint with tools.");
-  }
-  return absl::WrapUnique(reinterpret_cast<Constraint*>(constraint));
+  return CreateGemmaConstraintFromTools(constraint_provider_c_.get(), tools,
+                                        gemma_options);
 #endif
 }
 

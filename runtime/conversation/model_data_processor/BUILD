@@ -52,18 +52,33 @@ cc_library(
     name = "data_utils",
     srcs = ["data_utils.cc"],
     hdrs = ["data_utils.h"],
+    defines = select({
+        ":litert_lm_fst_constraints_disabled": ["LITERT_LM_FST_CONSTRAINTS_DISABLED"],
+        "//conditions:default": [],
+    }),
     deps = [
+        "@com_google_absl//absl/log:absl_log",
+        "@com_google_absl//absl/memory",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
         "@nlohmann_json//:json",
+        "//runtime/components/constrained_decoding:constraint",
         "//runtime/components/tool_use:parser_utils",
         "//runtime/conversation:io_types",
         "//runtime/util:litert_status_util",
         "//runtime/util:memory_mapped_file",
-    ],
+        "//support/tokenizer",
+        "//support/tokenizer:sentencepiece_tokenizer",
+        "@sentencepiece//:sentencepiece_model_cc_proto",
+    ] + select({
+        ":litert_lm_fst_constraints_disabled": [],
+        "//conditions:default": [
+            "//runtime/components/constrained_decoding:gemma_model_constraint_provider_lib",
+        ],
+    }),
 )
 
 cc_test(
