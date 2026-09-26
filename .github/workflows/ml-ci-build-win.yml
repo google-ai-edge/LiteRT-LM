@@ -99,8 +99,11 @@ jobs:
 
       - name: Patch MSVC Linker for Long Paths
         run: |
-          $linkPath = (Get-ChildItem -Path "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\*\bin\HostX64\x64\link.exe" -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
-          if (-not $linkPath) { throw "Could not locate MSVC link.exe" }
+          # Patch the linker Bazel actually uses (BAZEL_VC is set by the runner image),
+          # falling back to any installed VS 2022 edition.
+          $vcRoot = if ($env:BAZEL_VC) { $env:BAZEL_VC } else { "C:\Program Files\Microsoft Visual Studio\2022\*\VC" }
+          $linkPath = (Get-ChildItem -Path "$vcRoot\Tools\MSVC\*\bin\HostX64\x64\link.exe" -ErrorAction SilentlyContinue | Sort-Object FullName -Descending | Select-Object -First 1).FullName
+          if (-not $linkPath) { throw "Could not locate MSVC link.exe under $vcRoot" }
 
           $manifestContent = @"
           <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
