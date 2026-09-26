@@ -281,6 +281,30 @@ SetTextEncoderSignaturesFromSettings(ModelResources& resources,
   return text_sig_info;
 }
 
+// Stores a model's weight section into host memory instead of leaving it to be
+// streamed on demand, and publishes it so the GPU weight upload callback can be
+// served from that buffer.
+//
+// Used for Image and Audio Embedding models.
+absl::Status StoreWeightsInHostMemory(ModelResourcesStreaming& resources,
+                                            ModelType model_type,
+                                            DataStream& stream, size_t size) {
+  ABSL_LOG(INFO) << "Reading weights (" << size << " bytes) for model type "
+                 << static_cast<int>(model_type) << " into host memory...";
+  ABSL_RETURN_IF_ERROR(
+      resources.SetWeightsFromStream(model_type, stream, size));
+  ABSL_LOG(INFO) << "Weights read.";
+
+  // The bytes stay owned by `resources`.
+  if (const auto* weight_map = resources.GetWeightInMemoryMap(model_type);
+      weight_map != nullptr) {
+    if (auto it = weight_map->find("tflite_weights"); it != weight_map->end()) {
+      StoreWeightsBuffer(model_type, it->second);
+    }
+  }
+  return absl::OkStatus();
+}
+
 }  // namespace
 
 // static
@@ -727,49 +751,16 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
             ABSL_LOG(INFO) << "text_encoder compiled.";
           }
         } else if (model_type == ModelType::kTfLiteVisionEncoder ||
-                   model_type == ModelType::kTfLiteVisionAdapter) {
-          // Vision models often contain Float32 weights, which can't be
-          // streamed yet, so we always cache them in host memory even if
-          // running on GPU.
-          size_t size =
-              section_metadata->end_offset() - section_metadata->begin_offset();
-          ABSL_LOG(INFO) << "Reading vision weights (" << size
-                         << " bytes) for model type "
-                         << static_cast<int>(model_type)
-                         << " into host memory...";
-          ABSL_RETURN_IF_ERROR(streaming_resources->SetVisionWeightsFromStream(
-              model_type, *section->data_stream, size));
-          ABSL_LOG(INFO) << "Vision weights read.";
-          // Store the weights in the in-memory map so they can be loaded
-          // without streaming.
-          if (const auto* weight_map =
-                  streaming_resources->GetWeightInMemoryMap(model_type);
-              weight_map != nullptr) {
-            if (auto it = weight_map->find("tflite_weights");
-                it != weight_map->end()) {
-              StoreWeightsBuffer(model_type, it->second);
-            }
-          }
-        } else if (model_type == ModelType::kTfLiteAudioEncoderHw ||
+                   model_type == ModelType::kTfLiteVisionAdapter ||
+                   model_type == ModelType::kTfLiteAudioEncoderHw ||
                    model_type == ModelType::kTfLiteAudioAdapter) {
-          if (settings.GetAudioExecutorSettings().has_value() &&
-              settings.GetAudioExecutorSettings()->GetBackend() ==
-                  Backend::CPU) {
-            size_t size = section_metadata->end_offset() -
-                          section_metadata->begin_offset();
-            ABSL_LOG(INFO) << "Reading audio weights (" << size
-                           << " bytes) for model type "
-                           << static_cast<int>(model_type)
-                           << " into host memory...";
-            ABSL_RETURN_IF_ERROR(streaming_resources->SetAudioWeightsFromStream(
-                model_type, *section->data_stream, size));
-            ABSL_LOG(INFO) << "Audio weights read.";
-          } else {
-            ABSL_LOG(INFO)
-                << "Storing TFLiteWeights section stream for model type: "
-                << static_cast<int>(model_type);
-            StoreWeightsStream(model_type, std::move(section->data_stream));
-          }
+          // Vision and audio weights are always stored in host memory before
+          // being loaded, even when their encoder runs on GPU, due to an issue
+          // with streaming float32 weights.
+          ABSL_RETURN_IF_ERROR(StoreWeightsInHostMemory(
+              *streaming_resources, model_type, *section->data_stream,
+              section_metadata->end_offset() -
+                  section_metadata->begin_offset()));
         } else {
           ABSL_LOG(INFO)
               << "Storing TFLiteWeights section stream for model type: "
@@ -928,6 +919,15 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
                             AudioLiteRtCompiledModelExecutor::Create(
                                 *settings.GetAudioExecutorSettings(),
                                 owned_env->env, *streaming_resources));
+    // Same as vision encoder above, we only need to keep the weights in CPU
+    // memory when running on CPU.
+    if (settings.GetAudioExecutorSettings()->GetBackend() != Backend::CPU) {
+      ABSL_RETURN_IF_ERROR(
+          ClearStoredWeightsStream(ModelType::kTfLiteAudioEncoderHw));
+      streaming_resources->ReleaseWeights(ModelType::kTfLiteAudioEncoderHw);
+      // Don't clear the audio adapter. It always runs on CPU.
+      ABSL_LOG(INFO) << "Released host memory for audio encoder weights.";
+    }
   }
 
   special_tokens.has_end_of_vision_model =
