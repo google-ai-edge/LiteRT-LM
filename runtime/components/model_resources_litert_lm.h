@@ -54,6 +54,8 @@ class ModelResourcesLitertLm : public ModelResources {
   absl::StatusOr<absl::string_view> GetTFLiteModelBuffer(
       absl::string_view model_type_str) override;
 
+  bool HasTFLiteModel(ModelType model_type) override;
+
   std::optional<std::string> GetTFLiteModelBackendConstraint(
       ModelType model_type) override;
 

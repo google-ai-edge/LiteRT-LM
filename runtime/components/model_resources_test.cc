@@ -240,6 +240,22 @@ TEST(ModelResourcesTest, GetTFLiteModelSectionFileRegion) {
       testing::status::StatusIs(absl::StatusCode::kNotFound));
 }
 
+TEST(ModelResourcesTest, HasTFLiteModelChecksSectionWithoutUnpacking) {
+  const auto model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm.litertlm";
+  ASSERT_OK_AND_ASSIGN(auto model_file, ScopedFile::Open(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto loader,
+                       LitertLmLoader::Create(std::move(model_file)));
+  ASSERT_OK_AND_ASSIGN(auto model_resources,
+                       ModelResourcesLitertLm::Create(std::move(loader)));
+
+  EXPECT_TRUE(model_resources->HasTFLiteModel(ModelType::kTfLitePrefillDecode));
+  EXPECT_FALSE(
+      model_resources->HasTFLiteModel(ModelType::kTfLiteVisionEncoder));
+  EXPECT_FALSE(model_resources->HasTFLiteModel(ModelType::kTfLiteEmbedder));
+}
+
 TEST(ModelTypeConversionTest, StringToModelType) {
   auto result = StringToModelType("tf_lite_prefill_decode");
   ASSERT_OK(result);
