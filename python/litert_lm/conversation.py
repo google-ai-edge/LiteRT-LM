@@ -54,6 +54,7 @@ class Conversation(interfaces.AbstractConversation):
       max_output_tokens=None,
       chat_template=None,
       constrained_decoding_config=None,
+      vision_tokens_per_image=None,
   ):
     super().__init__(
         messages=messages,
@@ -72,6 +73,9 @@ class Conversation(interfaces.AbstractConversation):
     self._engine = engine  # Keep engine alive
     self._tools_map = tools_map or {}
     self.constrained_decoding_config = constrained_decoding_config
+    # Per-image visual token budget inherited from the engine. Applied to every
+    # message so images are downscaled to fit the engine's selected signatures.
+    self._vision_tokens_per_image = vision_tokens_per_image
     # Keep the active ctypes callback alive to prevent SIGSEGV if the C++ thread
     # calls it after the local variable is garbage collected during
     # cancellation.
@@ -174,6 +178,7 @@ class Conversation(interfaces.AbstractConversation):
         and max_output_tokens is None
         and thinking_config is None
         and not response_format
+        and self._vision_tokens_per_image is None
     ):
       return None
     optional_args_ptr = self._lib.litert_lm_conversation_optional_args_create()
@@ -238,6 +243,10 @@ class Conversation(interfaces.AbstractConversation):
         finally:
           if st_ptr:
             self._lib.litert_lm_suppress_tokens_config_delete(st_ptr)
+      if self._vision_tokens_per_image is not None:
+        self._lib.litert_lm_conversation_optional_args_set_visual_token_budget(
+            optional_args_ptr, self._vision_tokens_per_image
+        )
       if max_output_tokens is not None:
         self._lib.litert_lm_conversation_optional_args_set_max_output_tokens(
             optional_args_ptr, max_output_tokens

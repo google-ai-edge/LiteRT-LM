@@ -199,6 +199,10 @@ def _setup_lib_signatures(lib):
       ctypes.c_void_p,
       ctypes.c_int,
   ]
+  lib.litert_lm_engine_settings_set_max_vision_tokens_per_image.argtypes = [
+      ctypes.c_void_p,
+      ctypes.c_int,
+  ]
   lib.litert_lm_engine_settings_set_num_threads.argtypes = [
       ctypes.c_void_p,
       ctypes.c_int,
@@ -490,6 +494,10 @@ def _setup_lib_signatures(lib):
   lib.litert_lm_conversation_optional_args_set_suppress_tokens_config.argtypes = [
       ctypes.c_void_p,
       ctypes.c_void_p,
+  ]
+  lib.litert_lm_conversation_optional_args_set_visual_token_budget.argtypes = [
+      ctypes.c_void_p,
+      ctypes.c_int,
   ]
   lib.litert_lm_conversation_optional_args_set_max_output_tokens.argtypes = [
       ctypes.c_void_p,

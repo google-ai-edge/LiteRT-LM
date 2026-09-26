@@ -403,6 +403,12 @@ class AbstractEngine(abc.ABC):
         instant rewinding at higher memory cost.
       enable_ynnpack: Whether YNNPACK should delegate supported operations
         before XNNPACK. If None, use the native engine's default.
+      vision_tokens_per_image: Maximum number of vision tokens per image. When
+        set, the engine only loads the vision encoder/adapter signatures that
+        fit this budget, and conversations created by the engine downscale
+        each input image to fit it. Image downscaling is currently only
+        supported by Gemma4 models, whose budget options are 70, 140, 280, 560,
+        or 1120. If None, use the model's default.
   """
 
   model_path: str
@@ -417,6 +423,7 @@ class AbstractEngine(abc.ABC):
   activation_data_type: ActivationDataType | None = None
   use_ringbuffers_local_attention: bool | None = None
   enable_ynnpack: bool | None = None
+  vision_tokens_per_image: int | None = None
 
   def __enter__(self) -> AbstractEngine:
     """Initializes the engine resources."""
