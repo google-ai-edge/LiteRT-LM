@@ -37,6 +37,7 @@
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/audio/audio_executor_settings.h"
 #include "runtime/executor/audio/audio_executor_utils.h"
+#include "runtime/executor/executor_backend_registry.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/executor/llm_executor.h"
@@ -145,7 +146,9 @@ class EngineAdvancedImpl : public Engine {
     // class.
     ABSL_RETURN_IF_ERROR(config.MaybeUpdateAndValidate(engine_settings_));
 
-    if (litert_model_resources_ == nullptr) {
+    if (litert_model_resources_ == nullptr &&
+        !ExecutorBackendRegistry::Instance().IsRegistered(
+            engine_settings_.GetMainExecutorSettings().GetBackend())) {
       return absl::FailedPreconditionError(
           "Model resources are not initialized.");
     }
@@ -259,6 +262,67 @@ absl::StatusOr<std::unique_ptr<Engine>> EngineAdvancedImpl::Create(
           ? std::make_optional<BenchmarkInfo>(
                 engine_settings.GetBenchmarkParams().value())
           : std::nullopt;
+
+  const Backend registered_backend =
+      engine_settings.GetMainExecutorSettings().GetBackend();
+  if (ExecutorBackendRegistry::Instance().IsRegistered(registered_backend)) {
+    if (benchmark_info.has_value()) {
+      ABSL_RETURN_IF_ERROR(
+          benchmark_info->TimeInitPhaseStart(BenchmarkInfo::InitPhase::kTotal));
+      ABSL_RETURN_IF_ERROR(benchmark_info->TimeInitPhaseStart(
+          BenchmarkInfo::InitPhase::kExecutor));
+    }
+    ABSL_ASSIGN_OR_RETURN(BackendInstance backend_instance,
+                          ExecutorBackendRegistry::Instance().Create(
+                              registered_backend, engine_settings));
+    if (benchmark_info.has_value()) {
+      ABSL_RETURN_IF_ERROR(benchmark_info->TimeInitPhaseEnd(
+          BenchmarkInfo::InitPhase::kExecutor));
+    }
+    ABSL_RETURN_IF_ERROR(engine_settings.MaybeUpdateAndValidate(
+        backend_instance.tokenizer.get(), backend_instance.llm_metadata.get(),
+        input_prompt_as_hint));
+    ABSL_RETURN_IF_ERROR(backend_instance.llm_executor->UpdateExecutorSettings(
+        engine_settings.GetMainExecutorSettings()));
+
+    std::shared_ptr<RuntimeDebugger> runtime_debugger = nullptr;
+#if defined(LITERT_LM_DEBUGGER_ENABLED)
+    runtime_debugger = RuntimeDebugger::Create(
+        engine_settings.GetMainExecutorSettings().GetCacheDir());
+#endif  // defined(LITERT_LM_DEBUGGER_ENABLED)
+
+    std::unique_ptr<ExecutionManager> execution_manager;
+    if (!engine_settings.GetSingleThreadedExecution()) {
+      ABSL_ASSIGN_OR_RETURN(execution_manager,
+                            ThreadedExecutionManager::Create(
+                                backend_instance.tokenizer.get(),
+                                backend_instance.model_resources.get(),
+                                std::move(backend_instance.llm_executor),
+                                /*vision_executor_settings=*/nullptr,
+                                /*audio_executor_settings=*/nullptr,
+                                /*litert_env=*/nullptr,
+                                /*audio_executor=*/nullptr, runtime_debugger));
+    } else {
+      ABSL_ASSIGN_OR_RETURN(execution_manager,
+                            SerialExecutionManager::Create(
+                                backend_instance.tokenizer.get(),
+                                backend_instance.model_resources.get(),
+                                std::move(backend_instance.llm_executor),
+                                /*vision_executor_settings=*/nullptr,
+                                /*audio_executor_settings=*/nullptr,
+                                /*litert_env=*/nullptr,
+                                /*audio_executor=*/nullptr, runtime_debugger));
+    }
+
+    if (benchmark_info.has_value()) {
+      ABSL_RETURN_IF_ERROR(
+          benchmark_info->TimeInitPhaseEnd(BenchmarkInfo::InitPhase::kTotal));
+    }
+    return std::make_unique<EngineAdvancedImpl>(
+        std::move(engine_settings), std::move(backend_instance.model_resources),
+        /*owned_env=*/nullptr, std::move(backend_instance.tokenizer),
+        std::move(execution_manager), std::move(benchmark_info));
+  }
 
   const auto& advanced_settings =
       engine_settings.GetMainExecutorSettings().GetAdvancedSettings();

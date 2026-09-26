@@ -33,10 +33,11 @@
 #include "absl/strings/str_format.h"  // from @com_google_absl
 #include "absl/strings/str_split.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
-#include "runtime/core/version.h"
 #include "runtime/components/constrained_decoding/suppress_tokens_config.h"
 #include "runtime/components/model_resources.h"
+#include "runtime/core/version.h"
 #include "runtime/executor/audio/audio_executor_settings.h"
+#include "runtime/executor/executor_backend_registry.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/vision/vision_executor_settings.h"
@@ -401,13 +402,19 @@ absl::Status EngineSettings::MaybeUpdateAndValidate(
         backend == Backend::GPU_ARTISAN
     ) {
       sampler_params.set_type(proto::SamplerParameters::TYPE_UNSPECIFIED);
-    } else if (backend == Backend::CPU || backend == Backend::GPU
+    } else if (backend == Backend::CPU || backend == Backend::GPU ||
+               (ExecutorBackendRegistry::Instance().GetTraits(backend) &&
+                ExecutorBackendRegistry::Instance()
+                    .GetTraits(backend)
+                    ->use_external_sampler)
     ) {
       sampler_params.set_type(proto::SamplerParameters::TOP_P);
       sampler_params.set_k(1);
       sampler_params.set_p(0.95f);
       sampler_params.set_temperature(1.0f);
       sampler_params.set_seed(0);
+    } else if (ExecutorBackendRegistry::Instance().GetTraits(backend)) {
+      sampler_params.set_type(proto::SamplerParameters::TYPE_UNSPECIFIED);
     } else {
       return absl::InvalidArgumentError(
           absl::StrCat("Not recognized backend: ", backend));
@@ -416,7 +423,11 @@ absl::Status EngineSettings::MaybeUpdateAndValidate(
 
   if (metadata.sampler_params().type() ==
           proto::SamplerParameters::TYPE_UNSPECIFIED &&
-      (backend == Backend::CPU || backend == Backend::GPU)) {
+      (backend == Backend::CPU || backend == Backend::GPU ||
+       (ExecutorBackendRegistry::Instance().GetTraits(backend) &&
+        ExecutorBackendRegistry::Instance()
+            .GetTraits(backend)
+            ->use_external_sampler))) {
     metadata.mutable_sampler_params()->set_type(
         proto::SamplerParameters::TOP_P);
   }
@@ -763,15 +774,26 @@ absl::Status SessionConfig::MaybeUpdateAndValidate(
         num_output_candidates_));
   }
 
+  const Backend main_backend =
+      engine_settings.GetMainExecutorSettings().GetBackend();
+  const auto registered_traits =
+      ExecutorBackendRegistry::Instance().GetTraits(main_backend);
+
   // If the sampler backend is not specified, then use the same backend as the
   // main executor settings.
   if (sampler_backend_ == Backend::UNSPECIFIED) {
-    if (engine_settings.GetMainExecutorSettings().GetBackend() ==
-        Backend::GPU) {
+    if (registered_traits.has_value() &&
+        registered_traits->default_sampler_backend != Backend::UNSPECIFIED) {
+      sampler_backend_ = registered_traits->default_sampler_backend;
+    } else if (main_backend == Backend::GPU) {
       sampler_backend_ = Backend::GPU;
     } else {
       sampler_backend_ = Backend::CPU;
     }
+  }
+
+  if (registered_traits.has_value()) {
+    use_external_sampler_ = registered_traits->use_external_sampler;
   }
 
   ABSL_VLOG(5) << "The validated session config: " << *this;
