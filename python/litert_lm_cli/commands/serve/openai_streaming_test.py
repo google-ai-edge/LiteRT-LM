@@ -368,7 +368,10 @@ class ServeOpenAIStreamingTest(absltest.TestCase):
       self.assertEqual(
           usage["completion_tokens_details"], {"reasoning_tokens": 0}
       )
-      self.assertNotIn("prompt_tokens_details", usage)
+      self.assertIn("prompt_tokens_details", usage)
+      self.assertEqual(
+          usage["prompt_tokens_details"], {"cached_tokens": 0}
+      )
 
   def test_openai_chat_completions_streaming_usage(self):
     mock_from_id = self.enter_context(
@@ -408,6 +411,10 @@ class ServeOpenAIStreamingTest(absltest.TestCase):
       self.assertIn("prompt_tokens", usage)
       self.assertIn("completion_tokens", usage)
       self.assertIn("total_tokens", usage)
+      self.assertIn("prompt_tokens_details", usage)
+      self.assertEqual(
+          usage["prompt_tokens_details"], {"cached_tokens": 0}
+      )
       self.assertIn("completion_tokens_details", usage)
       self.assertEqual(
           usage["completion_tokens_details"], {"reasoning_tokens": 0}
@@ -428,15 +435,23 @@ class ServeOpenAIStreamingTest(absltest.TestCase):
     self.assertEqual(usage["prompt_tokens"], 15)
     self.assertEqual(usage["completion_tokens"], 10)
     self.assertEqual(usage["total_tokens"], 25)
+    self.assertEqual(usage["prompt_tokens_details"], {"cached_tokens": 0})
     self.assertEqual(
         usage["completion_tokens_details"], {"reasoning_tokens": 0}
     )
 
-    usage_with_reasoning = openai_handler._compute_token_usage(
+    mock_conv.token_count = 45
+    usage_with_cache = openai_handler._compute_token_usage(
         mock_conv, reasoning_tokens=4
     )
+    self.assertEqual(usage_with_cache["prompt_tokens"], 35)
+    self.assertEqual(usage_with_cache["completion_tokens"], 10)
+    self.assertEqual(usage_with_cache["total_tokens"], 45)
     self.assertEqual(
-        usage_with_reasoning["completion_tokens_details"],
+        usage_with_cache["prompt_tokens_details"], {"cached_tokens": 20}
+    )
+    self.assertEqual(
+        usage_with_cache["completion_tokens_details"],
         {"reasoning_tokens": 4},
     )
 

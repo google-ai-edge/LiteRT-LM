@@ -229,11 +229,16 @@ def compute_token_usage(
   """Computes token usage statistics for the completed conversation turn."""
   prompt_tokens = 0
   completion_tokens = 0
+  cached_tokens = 0
 
   try:
     info = conv.get_benchmark_info()
-    prompt_tokens = info.last_prefill_token_count
+    prefill_tokens = info.last_prefill_token_count
     completion_tokens = info.last_decode_token_count
+    token_count = getattr(conv, "token_count", None)
+    if isinstance(token_count, int) and not isinstance(token_count, bool):
+      cached_tokens = max(0, token_count - prefill_tokens - completion_tokens)
+    prompt_tokens = cached_tokens + prefill_tokens
   except Exception:  # pylint: disable=broad-exception-caught
     pass
 
@@ -243,6 +248,9 @@ def compute_token_usage(
       "prompt_tokens": prompt_tokens,
       "completion_tokens": completion_tokens,
       "total_tokens": total_tokens,
+      "prompt_tokens_details": {
+          "cached_tokens": cached_tokens,
+      },
       "completion_tokens_details": {
           "reasoning_tokens": reasoning_tokens,
       },
@@ -256,6 +264,11 @@ class OpenAIStreamFormatter(abc.ABC):
     self._now_str = now_str
     self._created_ts = created_ts
     self._model_id = model_id
+
+  @property
+  def now_str(self) -> str:
+    """Returns the formatted timestamp string for the stream."""
+    return self._now_str
 
   @abc.abstractmethod
   def format_initial(self) -> bytes:

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import http.server
 import socket
+from typing import Any
 
 import click
 
@@ -41,6 +42,17 @@ class LiteRTLMServer(http.server.HTTPServer):
     audio_backend: The hardware backend used for audio encoding, or None.
     activation_data_type: The activation data type used for model execution, or
       None.
+    litert_lm_conversation: The currently cached conversation instance, or None.
+    conversation_messages: The accumulated message history of the cached
+      conversation, or None.
+    conversation_tools: The tool definitions associated with the cached
+      conversation, or None.
+    conversation_sampler_config: The sampler config associated with the cached
+      conversation, or None.
+    conversation_thinking_config: The thinking config associated with the cached
+      conversation, or None.
+    conversation_constrained_decoding_config: The constrained decoding config
+      associated with the cached conversation, or None.
     litert_lm_embedding_engine: The LiteRT-LM embedding engine instance, or None
       if not initialized.
     embedding_model_id: The identifier of the embedding model currently loaded,
@@ -73,11 +85,30 @@ class LiteRTLMServer(http.server.HTTPServer):
     self.vision_backend: litert_lm.Backend | None = None
     self.audio_backend: litert_lm.Backend | None = None
     self.activation_data_type: litert_lm.ActivationDataType | None = None
+    self.litert_lm_conversation: litert_lm.Conversation | None = None
+    self.conversation_messages: list[dict[str, Any]] | None = None
+    self.conversation_tools: list[dict[str, Any]] | None = None
+    self.conversation_sampler_config: litert_lm.SamplerConfig | None = None
+    self.conversation_thinking_config: litert_lm.ThinkingConfig | None = None
+    self.conversation_constrained_decoding_config: (
+        litert_lm.ConstrainedDecodingConfig | None
+    ) = None
     self.litert_lm_embedding_engine: litert_lm.EmbeddingEngine | None = None
     self.embedding_model_id: str | None = None
     self.embedding_backend: litert_lm.Backend | None = None
     self.embedding_vision_backend: litert_lm.Backend | None = None
     self.embedding_audio_backend: litert_lm.Backend | None = None
+
+  def close_conversation(self) -> None:
+    """Closes and resets the currently cached conversation, if any."""
+    if self.litert_lm_conversation is not None:
+      self.litert_lm_conversation.__exit__(None, None, None)
+      self.litert_lm_conversation = None
+    self.conversation_messages = None
+    self.conversation_tools = None
+    self.conversation_sampler_config = None
+    self.conversation_thinking_config = None
+    self.conversation_constrained_decoding_config = None
 
 
 class CORSRequestHandler(http.server.BaseHTTPRequestHandler):
@@ -198,6 +229,7 @@ def get_or_initialize_server_engine(
     )
     # TODO: b/513076049 - Support multiple concurrent engines instead of
     # re-initializing (which is disruptive to other clients).
+    server.close_conversation()
     server.litert_lm_engine.__exit__(None, None, None)
     server.litert_lm_engine = None
     server.model_id = None

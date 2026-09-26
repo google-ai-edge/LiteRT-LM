@@ -126,6 +126,7 @@ class ServeTest(parameterized.TestCase):
     # Reset mocks.
     mock_litert_lm.set_min_log_severity.reset_mock()  # pyrefly: ignore[missing-attribute]
     mock_litert_lm.Engine.reset_mock()  # pyrefly: ignore[missing-attribute]
+    mock_litert_lm.Engine.side_effect = None  # pyrefly: ignore[missing-attribute]
     mock_model_mod.Model.from_model_id.reset_mock()
     mock_model_mod.Model.from_model_id.side_effect = None
     mock_model_mod.Model.from_model_reference.reset_mock()
@@ -1716,6 +1717,338 @@ class ServeTest(parameterized.TestCase):
               "image_url": {"url": "data:image/png,notbase64"},
           }],
       })
+
+  def test_openai_chat_completions_conversation_cache_hit_non_streaming(self):
+    mock_m = mock.Mock(spec_set=["exists", "model_path", "model_id"])
+    mock_m.exists.return_value = True
+    mock_m.model_path = "/path/to/gemma"
+    mock_m.model_id = "gemma"
+    mock_model_mod.Model.from_model_id.return_value = mock_m
+
+    mock_engine_instance = mock.MagicMock()
+    mock_conv = mock.MagicMock()
+    mock_conv.get_benchmark_info.return_value.last_prefill_token_count = 10
+    mock_conv.get_benchmark_info.return_value.last_decode_token_count = 5
+    type(mock_conv).token_count = mock.PropertyMock(side_effect=[15, 30])
+    mock_engine_instance.create_conversation.return_value.__enter__.return_value = (
+        mock_conv
+    )
+    mock_conv.send_message_async.side_effect = [
+        iter([
+            mock_litert_lm.Message.from_json({
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Hi there!"}],
+            })
+        ]),
+        iter([
+            mock_litert_lm.Message.from_json({
+                "role": "assistant",
+                "content": [{"type": "text", "text": "I am doing great!"}],
+            })
+        ]),
+    ]
+    mock_litert_lm.Engine.return_value = mock_engine_instance
+
+    server = util.LiteRTLMServer(("127.0.0.1", 0), openai_handler.OpenAIHandler)
+    port = server.server_port
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+      # Turn 1: initial message
+      req1 = urllib.request.Request(
+          f"http://127.0.0.1:{port}/v1/chat/completions",
+          data=json.dumps({
+              "model": "gemma",
+              "messages": [{"role": "user", "content": "Hello"}],
+          }).encode("utf-8"),
+          headers={"Content-Type": "application/json"},
+      )
+      with urllib.request.urlopen(req1) as response:
+        self.assertEqual(response.getcode(), 200)
+        res1 = json.loads(response.read().decode("utf-8"))
+        self.assertEqual(res1["choices"][0]["message"]["content"], "Hi there!")
+        self.assertEqual(res1["usage"]["prompt_tokens"], 10)
+        self.assertEqual(
+            res1["usage"]["prompt_tokens_details"], {"cached_tokens": 0}
+        )
+
+      self.assertEqual(mock_engine_instance.create_conversation.call_count, 1)
+      self.assertIs(server.litert_lm_conversation, mock_conv)
+      mock_conv.__exit__.assert_not_called()
+
+      # Turn 2: continuing the same conversation
+      req2 = urllib.request.Request(
+          f"http://127.0.0.1:{port}/v1/chat/completions",
+          data=json.dumps({
+              "model": "gemma",
+              "messages": [
+                  {"role": "user", "content": "Hello"},
+                  {"role": "assistant", "content": "Hi there!"},
+                  {"role": "user", "content": "How are you?"},
+              ],
+          }).encode("utf-8"),
+          headers={"Content-Type": "application/json"},
+      )
+      with urllib.request.urlopen(req2) as response:
+        self.assertEqual(response.getcode(), 200)
+        res2 = json.loads(response.read().decode("utf-8"))
+        self.assertEqual(
+            res2["choices"][0]["message"]["content"], "I am doing great!"
+        )
+        self.assertEqual(res2["usage"]["prompt_tokens"], 25)
+        self.assertEqual(
+            res2["usage"]["prompt_tokens_details"], {"cached_tokens": 15}
+        )
+
+      # Reused cached conversation without creating a second one.
+      self.assertEqual(mock_engine_instance.create_conversation.call_count, 1)
+      self.assertEqual(mock_conv.send_message_async.call_count, 2)
+      self.assertEqual(
+          mock_conv.send_message_async.call_args_list[1].args[0],
+          {"role": "user", "content": "How are you?"},
+      )
+    finally:
+      server.close_conversation()
+      server.shutdown()
+      thread.join()
+
+  def test_openai_chat_completions_conversation_cache_hit_streaming(self):
+    mock_m = mock.Mock(spec_set=["exists", "model_path", "model_id"])
+    mock_m.exists.return_value = True
+    mock_m.model_path = "/path/to/gemma"
+    mock_m.model_id = "gemma"
+    mock_model_mod.Model.from_model_id.return_value = mock_m
+
+    mock_engine_instance = mock.MagicMock()
+    mock_conv = mock.MagicMock()
+    mock_conv.get_benchmark_info.return_value.last_prefill_token_count = 10
+    mock_conv.get_benchmark_info.return_value.last_decode_token_count = 5
+    mock_engine_instance.create_conversation.return_value.__enter__.return_value = (
+        mock_conv
+    )
+    mock_conv.send_message_async.side_effect = [
+        iter([
+            mock_litert_lm.Message.from_json({
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Streamed "}],
+            }),
+            mock_litert_lm.Message.from_json({
+                "role": "assistant",
+                "content": [{"type": "text", "text": "reply"}],
+            }),
+        ]),
+        iter([
+            mock_litert_lm.Message.from_json({
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Second streamed reply"}],
+            })
+        ]),
+    ]
+    mock_litert_lm.Engine.return_value = mock_engine_instance
+
+    server = util.LiteRTLMServer(("127.0.0.1", 0), openai_handler.OpenAIHandler)
+    port = server.server_port
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+      req1 = urllib.request.Request(
+          f"http://127.0.0.1:{port}/v1/chat/completions",
+          data=json.dumps({
+              "model": "gemma",
+              "stream": True,
+              "messages": [{"role": "user", "content": "Hi"}],
+          }).encode("utf-8"),
+          headers={"Content-Type": "application/json"},
+      )
+      with urllib.request.urlopen(req1) as response:
+        self.assertEqual(response.getcode(), 200)
+        _ = response.read().decode("utf-8")
+
+      req2 = urllib.request.Request(
+          f"http://127.0.0.1:{port}/v1/chat/completions",
+          data=json.dumps({
+              "model": "gemma",
+              "stream": True,
+              "messages": [
+                  {"role": "user", "content": "Hi"},
+                  {"role": "assistant", "content": "Streamed reply"},
+                  {"role": "user", "content": "Follow up"},
+              ],
+          }).encode("utf-8"),
+          headers={"Content-Type": "application/json"},
+      )
+      with urllib.request.urlopen(req2) as response:
+        self.assertEqual(response.getcode(), 200)
+        _ = response.read().decode("utf-8")
+
+      self.assertEqual(mock_engine_instance.create_conversation.call_count, 1)
+      self.assertEqual(mock_conv.send_message_async.call_count, 2)
+    finally:
+      server.close_conversation()
+      server.shutdown()
+      thread.join()
+
+  def test_openai_chat_completions_conversation_cache_hit_tool_calling(self):
+    mock_m = mock.Mock(spec_set=["exists", "model_path", "model_id"])
+    mock_m.exists.return_value = True
+    mock_m.model_path = "/path/to/gemma"
+    mock_m.model_id = "gemma"
+    mock_model_mod.Model.from_model_id.return_value = mock_m
+
+    mock_engine_instance = mock.MagicMock()
+    mock_conv = mock.MagicMock()
+    mock_conv.get_benchmark_info.return_value.last_prefill_token_count = 10
+    mock_conv.get_benchmark_info.return_value.last_decode_token_count = 5
+    mock_engine_instance.create_conversation.return_value.__enter__.return_value = (
+        mock_conv
+    )
+    mock_conv.send_message_async.side_effect = [
+        iter([
+            mock_litert_lm.Message.from_json({
+                "role": "assistant",
+                "tool_calls": [{
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": {"city": "Taipei"},
+                    }
+                }],
+            })
+        ]),
+        iter([
+            mock_litert_lm.Message.from_json({
+                "role": "assistant",
+                "content": [{"type": "text", "text": "It is sunny in Taipei."}],
+            })
+        ]),
+    ]
+    mock_litert_lm.Engine.return_value = mock_engine_instance
+
+    tools_spec = [{
+        "type": "function",
+        "function": {"name": "get_weather", "parameters": {}},
+    }]
+
+    server = util.LiteRTLMServer(("127.0.0.1", 0), openai_handler.OpenAIHandler)
+    port = server.server_port
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+      req1 = urllib.request.Request(
+          f"http://127.0.0.1:{port}/v1/chat/completions",
+          data=json.dumps({
+              "model": "gemma",
+              "tools": tools_spec,
+              "messages": [{"role": "user", "content": "Weather in Taipei?"}],
+          }).encode("utf-8"),
+          headers={"Content-Type": "application/json"},
+      )
+      with urllib.request.urlopen(req1) as response:
+        res1 = json.loads(response.read().decode("utf-8"))
+        assistant_msg = res1["choices"][0]["message"]
+        tc_id = assistant_msg["tool_calls"][0]["id"]
+
+      req2 = urllib.request.Request(
+          f"http://127.0.0.1:{port}/v1/chat/completions",
+          data=json.dumps({
+              "model": "gemma",
+              "tools": tools_spec,
+              "messages": [
+                  {"role": "user", "content": "Weather in Taipei?"},
+                  assistant_msg,
+                  {
+                      "role": "tool",
+                      "tool_call_id": tc_id,
+                      "content": "Sunny, 28C",
+                  },
+              ],
+          }).encode("utf-8"),
+          headers={"Content-Type": "application/json"},
+      )
+      with urllib.request.urlopen(req2) as response:
+        res2 = json.loads(response.read().decode("utf-8"))
+        self.assertEqual(
+            res2["choices"][0]["message"]["content"], "It is sunny in Taipei."
+        )
+
+      self.assertEqual(mock_engine_instance.create_conversation.call_count, 1)
+      self.assertEqual(mock_conv.send_message_async.call_count, 2)
+    finally:
+      server.close_conversation()
+      server.shutdown()
+      thread.join()
+
+  def test_openai_chat_completions_conversation_cache_miss_closes_old(self):
+    mock_m = mock.Mock(spec_set=["exists", "model_path", "model_id"])
+    mock_m.exists.return_value = True
+    mock_m.model_path = "/path/to/gemma"
+    mock_m.model_id = "gemma"
+    mock_model_mod.Model.from_model_id.return_value = mock_m
+
+    mock_engine_instance = mock.MagicMock()
+    mock_conv1 = mock.MagicMock()
+    mock_conv1.get_benchmark_info.return_value.last_prefill_token_count = 10
+    mock_conv1.get_benchmark_info.return_value.last_decode_token_count = 5
+    mock_conv2 = mock.MagicMock()
+    mock_conv2.get_benchmark_info.return_value.last_prefill_token_count = 10
+    mock_conv2.get_benchmark_info.return_value.last_decode_token_count = 5
+    cm1 = mock.MagicMock()
+    cm1.__enter__.return_value = mock_conv1
+    cm2 = mock.MagicMock()
+    cm2.__enter__.return_value = mock_conv2
+    mock_engine_instance.create_conversation.side_effect = [cm1, cm2]
+
+    mock_conv1.send_message_async.return_value = iter([
+        mock_litert_lm.Message.from_json({
+            "role": "assistant",
+            "content": [{"type": "text", "text": "First"}],
+        })
+    ])
+    mock_conv2.send_message_async.return_value = iter([
+        mock_litert_lm.Message.from_json({
+            "role": "assistant",
+            "content": [{"type": "text", "text": "Second"}],
+        })
+    ])
+    mock_litert_lm.Engine.return_value = mock_engine_instance
+
+    server = util.LiteRTLMServer(("127.0.0.1", 0), openai_handler.OpenAIHandler)
+    port = server.server_port
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+      req1 = urllib.request.Request(
+          f"http://127.0.0.1:{port}/v1/chat/completions",
+          data=json.dumps({
+              "model": "gemma",
+              "messages": [{"role": "user", "content": "Topic A"}],
+          }).encode("utf-8"),
+          headers={"Content-Type": "application/json"},
+      )
+      with urllib.request.urlopen(req1) as response:
+        self.assertEqual(response.getcode(), 200)
+
+      req2 = urllib.request.Request(
+          f"http://127.0.0.1:{port}/v1/chat/completions",
+          data=json.dumps({
+              "model": "gemma",
+              "messages": [{"role": "user", "content": "Unrelated Topic B"}],
+          }).encode("utf-8"),
+          headers={"Content-Type": "application/json"},
+      )
+      with urllib.request.urlopen(req2) as response:
+        self.assertEqual(response.getcode(), 200)
+
+      self.assertEqual(mock_engine_instance.create_conversation.call_count, 2)
+      mock_conv1.__exit__.assert_called_once_with(None, None, None)
+      self.assertIs(server.litert_lm_conversation, mock_conv2)
+    finally:
+      server.close_conversation()
+      server.shutdown()
+      thread.join()
 
 
 if __name__ == "__main__":
