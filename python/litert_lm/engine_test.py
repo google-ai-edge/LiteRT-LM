@@ -181,6 +181,77 @@ class EngineTest(LiteRtLmTestBase):
     )
     mock_set_enable_ynnpack.assert_called_once_with(mock.ANY, False)
 
+  def test_engine_init_with_vision_tokens_per_image(self):
+    lib = litert_lm._ffi._get_lib()
+    orig_fn = lib.litert_lm_engine_settings_set_max_vision_tokens_per_image
+
+    mock_set_max_vision_tokens = self.enter_context(
+        mock.patch.object(
+            lib,
+            "litert_lm_engine_settings_set_max_vision_tokens_per_image",
+            autospec=True,
+            side_effect=orig_fn,
+        )
+    )
+
+    # Default should not call set_max_vision_tokens_per_image.
+    with litert_lm.Engine(
+        self.model_path,
+        backend=litert_lm.Backend.CPU(),
+        cache_dir=":nocache",
+    ) as engine:
+      self.assertIsNone(engine.vision_tokens_per_image)
+    mock_set_max_vision_tokens.assert_not_called()
+
+    with litert_lm.Engine(
+        self.model_path,
+        backend=litert_lm.Backend.CPU(),
+        vision_tokens_per_image=70,
+        cache_dir=":nocache",
+    ) as engine:
+      self.assertEqual(engine.vision_tokens_per_image, 70)
+    mock_set_max_vision_tokens.assert_called_once_with(mock.ANY, 70)
+
+  def test_conversation_uses_engine_vision_tokens_per_image(self):
+    lib = litert_lm._ffi._get_lib()
+    orig_fn = lib.litert_lm_conversation_optional_args_set_visual_token_budget
+
+    mock_set_visual_token_budget = self.enter_context(
+        mock.patch.object(
+            lib,
+            "litert_lm_conversation_optional_args_set_visual_token_budget",
+            autospec=True,
+            side_effect=orig_fn,
+        )
+    )
+
+    with self.subTest("unset_budget_is_not_sent"):
+      with (
+          self._create_engine() as engine,
+          engine.create_conversation() as conversation,
+      ):
+        conversation.send_message("Hello world!")
+      mock_set_visual_token_budget.assert_not_called()
+
+    with litert_lm.Engine(
+        self.model_path,
+        litert_lm.Backend.CPU(),
+        max_num_tokens=10,
+        vision_tokens_per_image=70,
+        cache_dir=":nocache",
+    ) as engine:
+      with self.subTest("send_message"):
+        mock_set_visual_token_budget.reset_mock()
+        with engine.create_conversation() as conversation:
+          conversation.send_message("Hello world!")
+        mock_set_visual_token_budget.assert_called_once_with(mock.ANY, 70)
+
+      with self.subTest("send_message_async"):
+        mock_set_visual_token_budget.reset_mock()
+        with engine.create_conversation() as conversation:
+          self._extract_text(conversation.send_message_async("Hello world!"))
+        mock_set_visual_token_budget.assert_called_once_with(mock.ANY, 70)
+
   @mock.patch("sys.platform", "win32")
   def test_engine_init_with_npu_backend(self):
     lib = litert_lm._ffi._get_lib()
