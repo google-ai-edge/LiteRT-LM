@@ -388,6 +388,56 @@ cc_binary(
     ],
 )
 
+cc_binary(
+    name = "embedding_benchmark_main",
+    srcs = ["embedding_benchmark_main.cc"],
+    linkopts = select({
+        "@platforms//os:android": ["-lEGL", "-lGLESv3"],
+        "//conditions:default": [],
+    }),
+    # Note: this target must not depend on ":shared_flags". It declares its own
+    # --vision_backend and --audio_backend, and linking both would register the
+    # same flag names twice.
+    deps = [
+        ":embedding_engine",
+        ":embedding_engine_settings",
+        ":io_types",
+        "@com_google_absl//absl/base:log_severity",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/flags:flag",
+        "@com_google_absl//absl/flags:parse",
+        "@com_google_absl//absl/log:absl_log",
+        "@com_google_absl//absl/log:globals",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/time",
+        "@com_google_absl//absl/types:span",
+        "@litert//litert/cc:litert_element_type",
+        "@litert//litert/cc:litert_layout",
+        "@litert//litert/cc:litert_model",
+        "@litert//litert/cc:litert_tensor_buffer",
+        "//runtime/components:model_resources",
+        "//runtime/core:embedding_engine_impl",
+        "//runtime/executor:default_static_gpu_accelerator",
+        "//runtime/executor:embedding_executor_base",
+        "//runtime/executor:executor_settings_base",
+        "//runtime/executor:litert_compiled_model_executor_utils",
+        "//runtime/executor:model_signature_utils",
+        "//runtime/util:convert_tensor_buffer",
+        "//runtime/util:litert_status_util",
+        "//runtime/util:litert_util",
+        "//runtime/util:memory_mapped_file",
+        "//runtime/util:scoped_file",
+        "//support/preprocessor:audio_preprocessor_miniaudio",  # buildcleaner: keep
+        "//support/preprocessor:image_preprocessor",
+        "//support/preprocessor:image_preprocessor_impl",  # buildcleaner: keep
+        "//support/tokenizer",
+        "@litert//tflite/profiling:memory_info",
+    ],
+)
+
 cc_library(
     name = "engine_settings",
     srcs = ["engine_settings.cc"],
