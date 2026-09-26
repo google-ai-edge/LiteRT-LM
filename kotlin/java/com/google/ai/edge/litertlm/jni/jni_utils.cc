@@ -20,6 +20,7 @@
 
 #include <cstddef>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "absl/log/absl_log.h"  // from @com_google_absl
@@ -111,6 +112,39 @@ jobjectArray ToJavaStringArray(JNIEnv* env,
     env->SetObjectArrayElement(array, static_cast<jsize>(i), jstr.get());
   }
   return scoped_array.release();
+}
+
+ClassAndMethod GetClassAndMethod(JNIEnv* env, const char* class_name,
+                                 const char* method_name,
+                                 const char* signature) {
+  jclass cls = env->FindClass(class_name);
+  if (cls == nullptr) {
+    return {ScopedLocalRef<jclass>(env, nullptr), nullptr};
+  }
+  ScopedLocalRef<jclass> scoped_cls(env, cls);
+  jmethodID method_id = env->GetMethodID(cls, method_name, signature);
+  if (method_id == nullptr) {
+    return {ScopedLocalRef<jclass>(env, nullptr), nullptr};
+  }
+  return {std::move(scoped_cls), method_id};
+}
+
+std::vector<float> JFloatArrayToVector(JNIEnv* env, jfloatArray array) {
+  jsize length = array != nullptr ? env->GetArrayLength(array) : 0;
+  std::vector<float> result(length);
+  if (length > 0) {
+    env->GetFloatArrayRegion(array, 0, length, result.data());
+  }
+  return result;
+}
+
+jfloatArray ToJavaFloatArray(JNIEnv* env, const std::vector<float>& values) {
+  jfloatArray array = env->NewFloatArray(static_cast<jsize>(values.size()));
+  if (array != nullptr && !values.empty()) {
+    env->SetFloatArrayRegion(array, 0, static_cast<jsize>(values.size()),
+                             values.data());
+  }
+  return array;
 }
 
 JNIEnv* GetJniEnvAndAttach(JavaVM* jvm, bool* attached) {

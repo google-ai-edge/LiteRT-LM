@@ -52,11 +52,23 @@ class ScopedLocalRef {
 
   T get() const { return local_ref_; }
 
+  ScopedLocalRef(ScopedLocalRef&& other) noexcept
+      : env_(other.env_), local_ref_(other.release()) {}
+
+  ScopedLocalRef& operator=(ScopedLocalRef&& other) noexcept {
+    if (this != &other) {
+      reset();
+      env_ = other.env_;
+      local_ref_ = other.release();
+    }
+    return *this;
+  }
+
   ScopedLocalRef(const ScopedLocalRef&) = delete;
   ScopedLocalRef& operator=(const ScopedLocalRef&) = delete;
 
  private:
-  JNIEnv* const env_;
+  JNIEnv* env_;
   T local_ref_;
 };
 
@@ -122,6 +134,19 @@ class ScopedGlobalRef {
   T global_ref_ = nullptr;
 };
 
+// Holds a scoped local jclass reference and a resolved method/constructor ID.
+struct ClassAndMethod {
+  ScopedLocalRef<jclass> clazz;
+  jmethodID method_id = nullptr;
+};
+
+// Finds a JNI class and resolves a method or constructor ID on it.
+// On error (e.g., class or method not found), both `clazz.get()` and
+// `method_id` will be nullptr.
+ClassAndMethod GetClassAndMethod(JNIEnv* env, const char* class_name,
+                                 const char* method_name,
+                                 const char* signature);
+
 // Converts a jstring to a standard std::string, handling null and freeing
 // chars.
 std::string JStringToString(JNIEnv* env, jstring jstr);
@@ -132,6 +157,12 @@ jstring NewStringStandardUTF(JNIEnv* env, const std::string& standard_utf8_str);
 // Converts a vector of standard UTF-8 strings to a Java String[] array.
 jobjectArray ToJavaStringArray(JNIEnv* env,
                                const std::vector<std::string>& strings);
+
+// Converts a jfloatArray to a std::vector<float>, handling null.
+std::vector<float> JFloatArrayToVector(JNIEnv* env, jfloatArray array);
+
+// Converts a vector of floats to a Java float[] array.
+jfloatArray ToJavaFloatArray(JNIEnv* env, const std::vector<float>& values);
 
 }  // namespace litert::lm::jni
 
